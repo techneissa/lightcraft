@@ -229,6 +229,11 @@ pub struct Session {
     /// Auto Sync: edits to the active photo also change the other selected photos (the settings
     /// that changed, nothing else).
     pub auto_sync: bool,
+    /// What Auto Sync is for a library that has no saved choice: the host's default (off for the CLI and
+    /// MCP, on for the desktop app: [`Session::set_auto_sync_default`]).
+    auto_sync_default: bool,
+    /// The user's saved Auto Sync choice for the open library (`prefs.json`), if they made one.
+    auto_sync_chosen: Option<bool>,
     pub catalog: Catalog,
     pub source: LibrarySource,
     pub filter: Filter,
@@ -448,6 +453,8 @@ impl Session {
         Session {
             library_generation: LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             auto_sync: false,
+            auto_sync_default: false,
+            auto_sync_chosen: None,
             catalog: Catalog::new(),
             source: LibrarySource::All,
             filter: Filter::default(),
