@@ -9,7 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, PoisonError, mpsc};
 
-use lightcraft_catalog::PhotoId;
+use lightcraft_catalog::{Op, PhotoId};
 use lightcraft_denoise::archive;
 use lightcraft_denoise::hash::sha256_file;
 use lightcraft_denoise::known::{self, Known};
@@ -538,7 +538,7 @@ fn status_json(s: &Session, photo: Option<PhotoId>) -> Value {
     v
 }
 
-/// A per-photo switch, independent of the selection and Auto Sync. Turning on starts at 50%.
+/// A per-photo switch: it follows the selection only through Auto Sync. Turning on starts at 50%.
 fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "denoise.toggle";
     let id = match p.get("id") {
@@ -570,8 +570,22 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
         s.end_interaction()?;
         d.enhance.denoise = amount;
         d.enhance.denoise_on = Some(on);
-        let op = s.develop_op(id, d, "AI Denoise").ok_or_else(|| bad(C, "no such photo"))?;
+        // With Auto Sync on, the other selected photos get the same switch and Amount in the same undo step
+        let mut ops = vec![s.develop_op(id, d.clone(), "AI Denoise").ok_or_else(|| bad(C, "no such photo"))?];
+        ops.extend(s.auto_sync_ops(id, &d, "AI Denoise"));
+        let synced = ops.len() > 1;
+        let op = if synced { Op::Batch { ops } } else { ops.remove(0) };
         s.commit("AI Denoise", op)?;
+        if synced {
+            let others: Vec<PhotoId> = s.selection.ids.iter().copied().filter(|x| *x != id).collect();
+            for other in others {
+                if on {
+                    s.denoise_enqueue(&[other], false, false);
+                } else {
+                    s.denoise_cancel(Some(other), false);
+                }
+            }
+        }
     }
     if on {
         s.denoise_enqueue(&[id], true, false);

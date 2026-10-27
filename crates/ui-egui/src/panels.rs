@@ -9,6 +9,7 @@ pub mod crop_overlay;
 pub mod denoise;
 pub mod detail;
 pub mod edit;
+pub mod edit_all;
 pub mod empty_library;
 pub mod filterbar;
 pub mod grid;

@@ -253,6 +253,8 @@ struct PrefsFile {
     slide_titles: crate::slide_title::TitleSettings,
     /// A view holds the photos it shows until it is refreshed (`library.holdView`).
     hold_view: bool,
+    /// Auto Sync as the user last set it (missing = the host's default).
+    auto_sync: Option<bool>,
 }
 
 fn presets_json(s: &Session) -> String {
@@ -519,6 +521,8 @@ impl Session {
         self.slide_titles = prefs.slide_titles.sanitized();
         self.forget_local_days = prefs.forget_local_days.unwrap_or(lightcraft_catalog::DEFAULT_FORGET_DAYS);
         self.hold_view = prefs.hold_view;
+        self.auto_sync_chosen = prefs.auto_sync;
+        self.auto_sync = prefs.auto_sync.unwrap_or(self.auto_sync_default);
         self.refresh_view();
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
         if let Some(d) = &self.smart_previews_dir {
@@ -789,6 +793,7 @@ impl Session {
             slide_overlays: self.slide_overlays.clone(),
             slide_titles: self.slide_titles.clone(),
             hold_view: self.hold_view,
+            auto_sync: self.auto_sync_chosen,
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
@@ -798,6 +803,26 @@ impl Session {
             ));
         }
         lib.files.write_atomic("prefs.json", &v).map_err(|e| EngineError::Other(format!("prefs: {e}")))
+    }
+
+    /// Turn Auto Sync on or off as the user's choice: it is kept in the library's preferences, so it
+    /// survives a restart. A preferences file that can't be written is logged; the choice still
+    /// holds for this session.
+    pub fn set_auto_sync(&mut self, on: bool) {
+        self.auto_sync = on;
+        self.auto_sync_chosen = Some(on);
+        if let Err(e) = self.save_prefs() {
+            log::error!("library: auto sync: {e}");
+        }
+    }
+
+    /// What Auto Sync is where the user has not chosen yet (the desktop app starts it on, so editing
+    /// a selection edits every selected photo). A choice already saved for the open library stays.
+    pub fn set_auto_sync_default(&mut self, on: bool) {
+        self.auto_sync_default = on;
+        if self.auto_sync_chosen.is_none() {
+            self.auto_sync = on;
+        }
     }
 
     /// Warnings about the open library not handed out yet: its settings files, and a lock that

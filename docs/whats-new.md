@@ -25,6 +25,14 @@
   Return or a click to run it, and Esc to close it. Commands that cannot run right now are greyed out. Print… no
   longer uses ⌘P; its menu item is unchanged, and you can give it a shortcut in Keyboard Shortcuts.
 
+### Edit All Selected Photos at Once
+- With two or more photos selected, the Edit panel opens with an "Edit All N Selected" switch, and it is on: moving a
+  slider or changing a setting changes every selected photo, one undo step for all of them. This is Auto Sync, which now
+  starts on in the app (Edit ▸ Auto Sync is the same switch) and remembers your choice per library. Spot removal and red
+  eye stay with their own photo.
+- The AI Denoise switch and its Amount now reach every selected photo too. Before, the switch changed only the photo you
+  were editing even with Auto Sync on.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

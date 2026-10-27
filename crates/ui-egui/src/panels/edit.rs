@@ -104,20 +104,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
     }
     let n = app.session.selection.ids.len();
+    if n > 1 {
+        super::edit_all::switch(app, ui, n);
+    }
     if n > 1 && matches!(app.ui.view, crate::state::ViewMode::PhotoGrid | crate::state::ViewMode::SquareGrid) {
         quick_develop(app, ui, n);
-    }
-    if app.session.auto_sync && n > 1 {
-        egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(crate::i18n::tr_format!("Auto Sync: edits apply to {n} photos", n = n)).color(t.accent).size(12.0));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if text_button(ui, "autoSyncOff", crate::i18n::tr("Turn Off"), false).clicked() {
-                        let _ = app.run("develop.autoSync", json!({"on": false}));
-                    }
-                });
-            });
-        });
     }
     divider(ui);
     // profile row

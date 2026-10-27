@@ -20,6 +20,8 @@ impl LightcraftApp {
     pub fn new(mut session: Session, services: Services) -> Self {
         // AI mask requests run on the model's worker; frames apply their results (never wait)
         session.segmenter.background = true;
+        // editing a selection edits every selected photo, unless the user turned Auto Sync off
+        session.set_auto_sync_default(true);
         Self {
             session,
             ui: UiState::default(),

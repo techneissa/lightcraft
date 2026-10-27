@@ -999,10 +999,10 @@ pub fn specs() -> Vec<CommandSpec> {
             "Auto Sync",
             ["Edit"],
             Some("Cmd+Alt+Shift+A"),
-            "{on?: bool} (toggles when omitted) — edits to the active photo also change the other selected photos (only the settings that changed; not spot removal / red eye) → {on}",
+            "{on?: bool} (toggles when omitted) — edits to the active photo also change the other selected photos (only the settings that changed; not spot removal / red eye); saved with the library, and on by default in the desktop app → {on}",
             always,
             |s, p| {
-                s.auto_sync = p.get("on").and_then(Value::as_bool).unwrap_or(!s.auto_sync);
+                s.set_auto_sync(p.get("on").and_then(Value::as_bool).unwrap_or(!s.auto_sync));
                 Ok(json!({"on": s.auto_sync}))
             }
         ),
