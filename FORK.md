@@ -25,6 +25,11 @@ publishes it as the release [`custom-build`](https://github.com/techneissa/light
 (its notes name the commit). The update script downloads it when that commit is the one it would build. A run
 that hits a merge clash fails and changes nothing; GitHub emails the failure.
 
+A daily agent (the T3 thread "Daily LightCraft Update", Grok 4.5 on Cursor, 09:00) runs the update without
+installing; when GitHub's run stopped on a clash, it merges by hand, runs the feature tests and pushes, and GitHub
+builds again. It follows the "Daily run" section of the `craftupdate` skill. To stop it: switch it off under
+Scheduled Tasks in T3, or ask any agent to "turn off the daily LightCraft update".
+
 The official project's own workflows (CI, Nix, Packaging lint, SonarCloud) are switched off in this fork:
 the official project runs them. A workflow the official project adds later starts switched on; switch it off
 in Actions unless it is wanted here.

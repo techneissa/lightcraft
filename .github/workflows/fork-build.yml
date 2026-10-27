@@ -9,7 +9,7 @@ name: Fork build
 
 on:
   schedule:
-    - cron: "17 8 * * *" # daily
+    - cron: "17 5 * * *" # daily, 08:17 on techneissa's Mac (UTC+3), before the 09:00 daily agent
   push:
     branches: [custom]
   workflow_dispatch:
