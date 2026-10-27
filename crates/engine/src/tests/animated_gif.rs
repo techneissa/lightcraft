@@ -91,10 +91,10 @@ fn every_parameter_is_checked() {
 }
 
 #[test]
-fn the_selection_becomes_one_frame_per_photo_in_view_order() {
+fn the_selection_becomes_one_frame_per_photo_in_selection_order() {
     let dir = Scratch::new("sel");
     let (mut s, ids) = session(3);
-    // selected last to first: the GIF still follows the view
+    // picked third, first, second: the frames follow the picking
     s.execute("library.select", &json!({"ids": [ids[2], ids[0], ids[1]]})).unwrap();
     let path = dir.path("sel.gif");
     let r = export(&mut s, json!({"path": path, "size": 120, "seconds": 0.5}));
@@ -107,10 +107,13 @@ fn the_selection_becomes_one_frame_per_photo_in_view_order() {
     let bytes = std::fs::read(&path).unwrap();
     assert_eq!(r["bytes"].as_u64(), Some(bytes.len() as u64));
     assert!(bytes.windows(11).any(|x| x == b"NETSCAPE2.0"), "loops by default");
-    // the same three as explicit ids in view order give the same file
+    // the same three as explicit ids in that order give the same file; in grid order, another
     let again = dir.path("ids.gif");
-    export(&mut s, json!({"path": again, "size": 120, "seconds": 0.5, "ids": ids}));
+    export(&mut s, json!({"path": again, "size": 120, "seconds": 0.5, "ids": [ids[2], ids[0], ids[1]]}));
     assert_eq!(std::fs::read(&again).unwrap(), bytes);
+    let grid = dir.path("grid.gif");
+    export(&mut s, json!({"path": grid, "size": 120, "seconds": 0.5, "ids": ids}));
+    assert_ne!(std::fs::read(&grid).unwrap(), bytes);
     assert!(dir.files().iter().all(|f| !f.ends_with(".part")));
 }
 

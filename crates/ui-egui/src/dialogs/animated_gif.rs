@@ -88,7 +88,7 @@ pub(super) fn animated_gif_body(app: &mut LightcraftApp, ui: &mut egui::Ui, sett
     crate::widgets::register(ui, "check:animatedGifDither", r.rect);
     ui.label(
         egui::RichText::new(crate::i18n::tr(
-            "One frame per selected photo, in grid order, with its edits; raw files are rendered directly. Photos of another shape sit on black.",
+            "One frame per selected photo, in the order you selected them (the numbers on the thumbnails), with its edits; raw files are rendered directly. Photos of another shape sit on black.",
         ))
         .color(t.text_dim),
     );

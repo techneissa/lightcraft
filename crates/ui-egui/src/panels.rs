@@ -26,6 +26,7 @@ pub mod presets;
 pub mod profiles;
 pub mod right;
 pub mod second;
+pub mod selection_order;
 pub mod slideshow;
 pub mod strip;
 pub mod topbar;

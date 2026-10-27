@@ -874,6 +874,9 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
             Flag::None => {}
         }
         let mut right = bar.right();
+        if let Some(n) = super::selection_order::number(&app.session, id) {
+            right -= super::selection_order::paint(p, right - 6.0, bar.center().y, n, &t) + 8.0;
+        }
         if photo.is_edited() {
             paint(p, Rect::from_min_size(pos2(right - 20.0, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::Sliders, t.text_label);
             right -= 20.0;

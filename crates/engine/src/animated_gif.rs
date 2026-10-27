@@ -1,4 +1,5 @@
-//! File ▸ Export Animated GIF: the selected photos, in view order, as the frames of one GIF. Each
+//! File ▸ Export Animated GIF: the selected photos, in the order they were selected (the numbers
+//! the grid shows on them), as the frames of one GIF. Each
 //! photo is rendered with its edits straight from the original (a raw included: no JPEG in
 //! between), fitted on black on a canvas whose shape is the first photo's, and quantised to its
 //! own 256 colours, dithered by default ([`lightcraft_codecs::animated_gif`]).
@@ -129,21 +130,14 @@ pub struct Prepared {
     pub warnings: Vec<String>,
 }
 
-/// `ids` in the order the view shows them; ids it doesn't show keep their order, after them.
-fn in_view_order(s: &mut Session, mut ids: Vec<PhotoId>) -> Vec<PhotoId> {
-    let rank: std::collections::HashMap<PhotoId, usize> = s.visible_cloned().into_iter().enumerate().map(|(i, id)| (id, i)).collect();
-    ids.sort_by_key(|id| rank.get(id).copied().unwrap_or(usize::MAX));
-    ids.dedup();
-    ids
-}
-
 /// Read the session: the photos (the request's `ids`, else the selection), their render jobs and
 /// the canvas size.
 pub fn prepare(s: &mut Session, p: &Value) -> Result<Prepared, String> {
     let request = Request::parse(p)?;
     let ids = match &request.ids {
         Some(ids) => ids.clone(),
-        None => in_view_order(s, s.selected()),
+        // the order they were selected in (Select All: the grid's)
+        None => s.selected(),
     };
     if ids.is_empty() {
         return Err("select the photos for the GIF first".into());
