@@ -7,10 +7,12 @@ plus the features listed below. The installed app is built from `custom`.
 
 1. Click **Update LightCraft** in Applications. (Same thing in Terminal:
    `~/Documents/workspace/gitClones/update-lightcraft.sh`; `update-craft-apps.sh` updates every ArtCraft app.)
-2. It gets the official update, merges it into `custom` and backs `custom` up to this fork. Then it installs the
-   app: a download of seconds when GitHub has already built that version (below), else a build on the Mac
-   (1 to 10 minutes).
-3. If it stops with "the update touches the same code as your edits", nothing was changed. Ask an agent to
+2. It downloads the newest app GitHub built (below; seconds), when that build has everything the Mac's `custom`
+   has. Official changes made since that build come with the next one (daily at 08:17, and after every push).
+3. Otherwise, or with `update-lightcraft.sh --latest`, it gets the official update, merges it into `custom` and
+   backs `custom` up to this fork. Then it installs the app: a download of seconds when GitHub has already built
+   that version, else a build on the Mac (1 to 10 minutes).
+4. If it stops with "the update touches the same code as your edits", nothing was changed. Ask an agent to
    "update LightCraft" (it follows the `craftupdate` skill).
 
 The script is `update-craft.sh` in the same folder, shared by every ArtCraft app; it keeps your edits in any
@@ -22,8 +24,10 @@ the official app without these features.
 The workflow `.github/workflows/fork-build.yml` (Actions ▸ Fork build) runs daily, on every push to `custom`, and
 by hand. It merges the official update into `custom` the same way the script does, builds the Mac app, and
 publishes it as the release [`custom-build`](https://github.com/techneissa/lightcraft/releases/tag/custom-build)
-(its notes name the commit). The update script downloads it when that commit is the one it would build. A run
-that hits a merge clash fails and changes nothing; GitHub emails the failure.
+(its notes name the commit). The update script downloads it (above). A run that hits a merge clash fails and
+changes nothing; GitHub emails the failure. The run pushes its merge with the secret `FORK_PUSH_TOKEN`, a
+fine-grained token for this repo only (Contents and Workflows: read and write): GitHub's own token may not push an
+official update that changes a workflow file. Without the secret it uses GitHub's own token.
 
 A daily agent (the T3 thread "Daily LightCraft Update", Grok 4.5 on Cursor, 09:00) runs the update without
 installing; when GitHub's run stopped on a clash, it merges by hand, runs the feature tests and pushes, and GitHub
