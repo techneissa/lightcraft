@@ -43,7 +43,7 @@ jobs:
           ref: custom
           fetch-depth: 0
           # the merge's push needs a token that may change workflow files (an official update can touch
-          # them); FORK_PUSH_TOKEN is a fine-grained token for this repo only (Contents, Workflows: write)
+          # them); FORK_PUSH_TOKEN is the fine-grained token "BuildCraft forks" (the Craft forks; Contents, Workflows: write)
           token: ${{ secrets.FORK_PUSH_TOKEN || github.token }}
 
       - name: Merge the official update into custom
