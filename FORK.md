@@ -6,14 +6,15 @@ plus the features listed below. The installed app is built from `custom`.
 ## Update the app
 
 1. Click **Update LightCraft** in Applications. (Same thing in Terminal:
-   `~/Documents/workspace/gitClones/update-lightcraft-custom.sh`.)
+   `~/Documents/workspace/gitClones/update-lightcraft.sh`; `update-craft-apps.sh` updates every ArtCraft app.)
 2. It gets the official update, merges it into `custom`, builds and installs the app (about 5 to 10 minutes), and
    backs `custom` up to this fork.
-3. If it stops with "the update touches the same code as your features", nothing was changed. Ask an agent to
-   "update LightCraft" (it follows the `lightcraft-update` skill).
+3. If it stops with "the update touches the same code as your edits", nothing was changed. Ask an agent to
+   "update LightCraft" (it follows the `craftupdate` skill).
 
-Use only that button or script. The official release download and `update-lightcraft.sh` install the official
-app without these features.
+The script is `update-craft.sh` in the same folder, shared by every ArtCraft app; it keeps your edits in any
+app whose repo has a `custom` branch. The official release download (`update-lightcraft-release.sh`) installs
+the official app without these features.
 
 ## Where things are
 
