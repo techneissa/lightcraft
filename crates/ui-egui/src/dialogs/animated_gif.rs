@@ -269,6 +269,11 @@ mod tests {
         h.app.run("dialog.animatedGif", json!({})).unwrap();
         h.settle(t);
         assert_eq!(order(&h), all);
+        // a click on the preview pauses it; the button shows on it while the pointer is there
+        assert!(h.app.widgets.iter().all(|(w, _)| w != "icon:animatedGifPlay"), "hidden until hovered");
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "preview:animatedGif"}), t)["ok"], true);
+        h.settle(t);
+        assert!(rect(&h, "preview:animatedGif").contains_rect(rect(&h, "icon:animatedGifPlay")));
 
         // click photo 2, then its ✕
         assert_eq!(h.request("ui.clickWidget", json!({"id": "animatedGifFrame:1"}), t)["ok"], true);
