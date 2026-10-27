@@ -7,11 +7,12 @@
   selected photos into one GIF, a frame per photo with your edits, in the order you selected them: with two or more
   photos selected, each thumbnail shows its number (1, 2, 3…) at the right of its badge bar, and ⌘-click adds the next
   one. Raw files are rendered straight from the raw, with no JPEG in between. The window plays a preview at the chosen
-  speed, with the photos in order, numbered, in a strip below. Choose the size (480, 800 or 1200 px on the long side,
-  the first photo's own size, or any size from 64 to 4096 px), how long each photo stays up, whether it loops forever,
-  and dithering, which keeps skies and other gradients smooth in a GIF's 256 colours. The frame takes the first photo's
-  shape; photos of another shape sit on black. It runs in the background with a row in the activity stack (✕ stops it
-  and leaves no file). Agents use `export.animatedGif`.
+  speed (Play / Pause, ‹ › or Space), with the photos in order, numbered, in a strip below that the mouse wheel
+  scrolls sideways: click a photo to pick it, drag it to move it, ✕ or Delete takes it out. Choose the size (480, 800
+  or 1200 px on the long side, the first photo's own size, or any size from 64 to 4096 px), how long each photo stays
+  up (down to 0.02 s), whether it loops forever, and dithering, which keeps skies and other gradients smooth in a
+  GIF's 256 colours. The frame takes the first photo's shape; photos of another shape sit on black. It runs in the
+  background with a row in the activity stack (✕ stops it and leaves no file). Agents use `export.animatedGif`.
 
 ### Drag the Before/After split line
 - In View ▸ Before/After Split (Shift+Y) and Split Top/Bottom the line between Before and After is now a divider you
