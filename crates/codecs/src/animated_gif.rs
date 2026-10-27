@@ -50,6 +50,25 @@ impl<W: Write> GifWriter<W> {
             return Err(err(format!("a frame of {} pixels for a {}×{} animation", pixels.len(), self.width, self.height)));
         }
         let (palette, indices) = quantize(pixels, self.width, dither);
+        self.add_quantized(palette, indices, delay)
+    }
+
+    /// Append a frame already quantised by [`quantize`] (several frames can be quantised side by
+    /// side, then written in order).
+    pub fn add_quantized(&mut self, palette: Vec<u8>, indices: Vec<u8>, delay: u16) -> Result<()> {
+        if Some(indices.len()) != self.width.checked_mul(self.height)
+            || palette.is_empty()
+            || palette.len() > 256 * 3
+            || !palette.len().is_multiple_of(3)
+        {
+            return Err(err(format!(
+                "a frame of {} pixels and {} palette bytes for a {}×{} animation",
+                indices.len(),
+                palette.len(),
+                self.width,
+                self.height
+            )));
+        }
         let frame = gif::Frame {
             delay,
             width: self.width as u16,
@@ -130,6 +149,9 @@ mod tests {
         assert!(GifWriter::new(Vec::new(), MAX_SIDE + 1, 10, true).is_err());
         let mut g = GifWriter::new(Vec::new(), 4, 4, true).unwrap();
         assert!(g.add(&[[0; 4]; 15], 10, true).is_err());
+        assert!(g.add_quantized(vec![0; 3], vec![0; 15], 10).is_err());
+        assert!(g.add_quantized(Vec::new(), vec![0; 16], 10).is_err());
+        assert!(g.add_quantized(vec![0; 257 * 3], vec![0; 16], 10).is_err());
         assert_eq!(g.frames(), 0);
         // a 1-pixel frame quantises
         let mut one = GifWriter::new(Vec::new(), 1, 1, false).unwrap();

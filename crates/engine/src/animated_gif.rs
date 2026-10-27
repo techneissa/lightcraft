@@ -195,20 +195,35 @@ impl Prepared {
         let total = self.frames.len() as u64;
         let mut warnings = std::mem::take(&mut self.warnings);
         let mut skipped = 0;
-        for (i, frame) in std::mem::take(&mut self.frames).into_iter().enumerate() {
-            if cancel.load(Ordering::Relaxed) {
-                return Err(CANCELLED.into());
-            }
-            progress(i as u64, total, &frame.name);
-            let img = match frame.job.run().rendered {
-                Ok(r) => fit(r.image, w, h),
-                Err(e) => {
-                    warnings.push(format!("{}: {e}; skipped", frame.name));
-                    skipped += 1;
-                    continue;
+        // photos render one after another (each render already uses every core), then a batch
+        // of them is quantised side by side (quantising one frame is single-threaded), then
+        // written in order
+        let batch = std::thread::available_parallelism().map_or(1, |n| n.get() / 2).clamp(1, 6);
+        let mut pending = std::mem::take(&mut self.frames).into_iter().enumerate().peekable();
+        while pending.peek().is_some() {
+            let mut rendered = Vec::with_capacity(batch);
+            for (i, frame) in pending.by_ref().take(batch) {
+                if cancel.load(Ordering::Relaxed) {
+                    return Err(CANCELLED.into());
                 }
-            };
-            gif.add(&img.data, st.delay(), st.dither).map_err(|e| e.to_string())?;
+                progress(i as u64, total, &frame.name);
+                match frame.job.run().rendered {
+                    Ok(r) => rendered.push(fit(r.image, w, h)),
+                    Err(e) => {
+                        warnings.push(format!("{}: {e}; skipped", frame.name));
+                        skipped += 1;
+                    }
+                }
+            }
+            let quantised: Vec<Result<(Vec<u8>, Vec<u8>), String>> = std::thread::scope(|sc| {
+                let handles: Vec<_> =
+                    rendered.iter().map(|img| sc.spawn(move || lightcraft_codecs::animated_gif::quantize(&img.data, w, st.dither))).collect();
+                handles.into_iter().map(|h| h.join().map_err(|_| "quantising a frame failed unexpectedly".to_string())).collect()
+            });
+            for q in quantised {
+                let (palette, indices) = q?;
+                gif.add_quantized(palette, indices, st.delay()).map_err(|e| e.to_string())?;
+            }
         }
         if cancel.load(Ordering::Relaxed) {
             return Err(CANCELLED.into());
