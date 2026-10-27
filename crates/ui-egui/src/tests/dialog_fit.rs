@@ -96,10 +96,11 @@ fn export_dialog_is_unchanged_in_a_tall_window() {
     // (846 tall as before #781: the whole dialog, nothing scrolled away, plus the Export to row
     // since #956; 615 wide since the format row gained JPEG XL, #780. On macOS the dialog has one
     // more row, "Add to Apple Photos" (#236), so it is 30 taller there. 8 more since its footer's
-    // buttons are the button component's medium size, 30 points, as the welcome's and every dialog's)
+    // buttons are the button component's medium size, 30 points, as the welcome's and every dialog's;
+    // 656 wide since the format row ends with GIF, which opens Export Animated GIF)
     let height = if cfg!(target_os = "macos") { 916.0 } else { 886.0 };
     assert!((dialog.height() - height).abs() <= 1.0, "{dialog:?}");
-    assert!((dialog.width() - 615.2).abs() <= 1.0, "{dialog:?}");
+    assert!((dialog.width() - 656.2).abs() <= 1.0, "{dialog:?}");
 }
 
 // Scenario: other long dialogs fit a short window too, with their buttons on screen

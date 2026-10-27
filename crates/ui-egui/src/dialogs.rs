@@ -713,10 +713,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                     let before = opts.format;
                     // "Rendered DNG" is a DNG option (below), not a format of its own in this list
                     let mut shown = if opts.format == F::RenderedDng { F::Dng } else { opts.format };
-                    choices(
+                    // (GIF at the row's end opens Export Animated GIF: animated_gif.rs)
+                    animated_gif::export_formats(
+                        app,
                         ui,
-                        "Format",
-                        "exportFormat",
                         &[(F::Jpeg, "JPEG"), (F::Png, "PNG"), (F::Tiff, "TIFF"), (F::Psd, "PSD"), (F::Webp, "WebP"), (F::Avif, "AVIF"), (F::Jxl, "JPEG XL"), (F::Dng, "DNG"), (F::Original, "Original files")],
                         &mut shown,
                     );

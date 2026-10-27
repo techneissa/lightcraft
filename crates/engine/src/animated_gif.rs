@@ -130,6 +130,31 @@ pub struct Prepared {
     pub warnings: Vec<String>,
 }
 
+/// The frames' size for `ids` at `size` px on the long side: the first photo's shape (the others
+/// fit inside it).
+pub fn canvas(s: &Session, ids: &[PhotoId], size: usize) -> (usize, usize) {
+    let ratio = ids.iter().find_map(|id| s.slide_photo_aspect(*id)).unwrap_or(1.5);
+    sized(ratio, size)
+}
+
+/// The first photo's long side as it renders (cropped), within [`SIZE_MIN`]..=[`SIZE_MAX`]: the
+/// dialog's Original size. None when none of `ids` is in the library.
+pub fn original_size(s: &Session, ids: &[PhotoId]) -> Option<usize> {
+    ids.iter().find_map(|id| {
+        let p = s.catalog.photo(*id)?;
+        let f = lightcraft_pipeline::geometry::Frame::with_lens(
+            p.width.max(1) as usize,
+            p.height.max(1) as usize,
+            &p.develop,
+            true,
+            p.embedded_lens.as_ref(),
+        );
+        let r = f.crop.rect_px(f.ow, f.oh);
+        let long = r.width().max(r.height());
+        (long.is_finite() && long >= 1.0).then(|| (long.round() as usize).clamp(SIZE_MIN, SIZE_MAX))
+    })
+}
+
 /// Read the session: the photos (the request's `ids`, else the selection), their render jobs and
 /// the canvas size.
 pub fn prepare(s: &mut Session, p: &Value) -> Result<Prepared, String> {
@@ -145,9 +170,7 @@ pub fn prepare(s: &mut Session, p: &Value) -> Result<Prepared, String> {
     if ids.len() > MAX_FRAMES {
         return Err(format!("an animated GIF takes at most {MAX_FRAMES} photos; {} are selected", ids.len()));
     }
-    // the canvas takes the first photo's shape; the others fit inside it
-    let ratio = ids.iter().find_map(|id| s.slide_photo_aspect(*id)).unwrap_or(1.5);
-    let (width, height) = sized(ratio, request.settings.size);
+    let (width, height) = canvas(s, &ids, request.settings.size);
     let mut warnings = Vec::new();
     let mut frames = Vec::with_capacity(ids.len());
     for id in ids {
