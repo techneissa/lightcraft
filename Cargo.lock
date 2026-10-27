@@ -3356,7 +3356,9 @@ version = "0.14.0"
 dependencies = [
  "avif-serialize",
  "bytemuck",
+ "color_quant",
  "dhat",
+ "gif",
  "image",
  "image-webp",
  "jixel",
@@ -3442,6 +3444,7 @@ dependencies = [
  "ab_glyph",
  "chrono",
  "craft-docpath",
+ "gif",
  "harfrust 0.13.3",
  "jxl-oxide",
  "libc",

@@ -25,6 +25,8 @@ jpeg-encoder = { workspace = true }
 png = { workspace = true }
 tiff = { workspace = true }
 image-webp = { workspace = true }
+gif = { workspace = true }
+color_quant = { workspace = true }
 moxcms = { workspace = true }
 jxl-oxide = { workspace = true, optional = true }
 

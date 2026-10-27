@@ -12,12 +12,14 @@
 //! - [`encode`] writes JPEG, PNG, TIFF, lossless WebP and, on native targets, AVIF (feature `avif`) and
 //!   JPEG XL ([`encode_jxl`], feature `jxl`), embedding
 //!   ICC/EXIF/XMP. [`icc::write_matrix_trc`] builds profiles for export.
+//! - [`animated_gif`] writes animated GIFs (a 256-colour palette per frame, dithered).
 //! - [`video`] encodes AV1 video (native, feature `avif`) and writes it as MP4 or WebM.
 //!
 //! No decoder panics on malformed input (property-tested).
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+pub mod animated_gif;
 mod convert;
 pub mod display;
 pub mod encode;

@@ -15,6 +15,7 @@
 extern crate lightcraft_denoise_core as lightcraft_denoise;
 
 pub mod activity;
+pub mod animated_gif;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod apple_photos;
 pub mod availability;
@@ -387,6 +388,8 @@ pub struct Session {
     pub activity: activity::Activity,
     /// The last (or running) slideshow export (`slideshow.export`).
     pub slideshow_export: Option<std::sync::Arc<slideshow_export::ExportRun>>,
+    /// The last (or running) animated GIF export (`export.animatedGif`).
+    pub animated_gif: Option<std::sync::Arc<slideshow_export::ExportRun>>,
     /// The last (or running) Build Previews.
     pub preview_build: Option<std::sync::Arc<cmd::previews::PreviewBuild>>,
     /// Develop defaults applied on import (persisted in prefs.json).
@@ -526,6 +529,7 @@ impl Session {
             activity: Default::default(),
             preview_build: None,
             slideshow_export: None,
+            animated_gif: None,
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,
             slideshow: slideshow::PlaybackSettings::default(),

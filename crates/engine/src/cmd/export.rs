@@ -38,7 +38,7 @@ impl Session {
         }
         // the preset's depth is judged against the format written, known only now (`path`); a
         // depth the call passes itself is the caller's, and validated as such
-        if !p.get("bitDepth").is_some_and(|d| !d.is_null()) {
+        if p.get("bitDepth").is_none_or(|d| d.is_null()) {
             crate::export::ExportOptions::drop_unfit_depth(&mut out, fallback);
         }
         Ok(out)
@@ -168,6 +168,62 @@ fn photos_imports(s: &mut Session, p: &Value) -> Result<Value> {
     }
 }
 
+/// `export.animatedGif`: prepare on this thread, run on a worker (or here with `wait`).
+fn animated_gif(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "export.animatedGif";
+    if cfg!(target_arch = "wasm32") {
+        return Err(bad(C, "animated GIF export needs the desktop app or lightcraft-cli"));
+    }
+    if s.animated_gif.as_ref().is_some_and(|r| r.running()) {
+        return Err(bad(C, "an animated GIF export is already running (activity.cancel stops it)"));
+    }
+    let prepared = crate::animated_gif::prepare(s, p).map_err(|e| bad(C, e))?;
+    let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(false);
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let task = s.activity.start("export", "Exporting animated GIF", crate::activity::Cancel::Flag(cancel.clone()));
+    let total = prepared.len() as u64;
+    task.progress(0, total);
+    task.detail(&prepared.request.path);
+    let run = std::sync::Arc::new(crate::slideshow_export::ExportRun {
+        task_id: task.id(),
+        format: "gif".into(),
+        path: prepared.request.path.clone(),
+        total: total.into(),
+        cancel,
+        ..Default::default()
+    });
+    s.animated_gif = Some(run.clone());
+    let started = json!({
+        "taskId": task.id(),
+        "background": !wait,
+        "format": "gif",
+        "path": prepared.request.path,
+        "frames": prepared.len(),
+        "width": prepared.width,
+        "height": prepared.height,
+        "warnings": prepared.warnings,
+    });
+    if wait {
+        crate::animated_gif::run_to_end(prepared, &run, &task);
+        drop(task);
+        return match run.result() {
+            Some(Ok(v)) => Ok(v),
+            Some(Err(e)) => Err(bad(C, e)),
+            None => Err(bad(C, "the export did not finish")),
+        };
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        // the row goes when the worker ends, however it ends
+        let r = run.clone();
+        std::thread::Builder::new()
+            .name("lc-animated-gif".into())
+            .spawn(move || crate::animated_gif::run_to_end(prepared, &r, &task))
+            .map_err(|e| bad(C, format!("could not start: {e}")))?;
+    }
+    Ok(started)
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     #[allow(unused_mut)]
     let mut v = vec![
@@ -213,6 +269,24 @@ pub fn specs() -> Vec<CommandSpec> {
                 s.check_write_target(path).map_err(|e| bad("export.checkTarget", e))?;
                 Ok(json!({"path": path}))
             }
+        ),
+        cmd!(
+            query "export.animatedGif",
+            "Export Animated GIF",
+            [],
+            None,
+            "{path: the .gif file, ids?: photo ids (default the selection, in view order), size?: the frames' long side in pixels (64–4096, default 800), seconds?: how long each photo stays up (0.02–60, default 1), loop?: bool (play forever, default true; false plays once), dither?: bool (smooth gradients, default true), wait?: bool (run here and reply with the result)} — one frame per photo, rendered with its edits from the original (raw included), fitted on black on a canvas shaped like the first photo, 256 colours per frame. Runs in the background with a row in the activity stack (activity.cancel {id: taskId} stops it; the file is written as .part and renamed when complete); a photo that can't be rendered is skipped with a warning → {taskId, background, format: \"gif\", path, frames, width, height, warnings}; with wait: the result (export.animatedGifStatus)",
+            always,
+            animated_gif
+        ),
+        cmd!(
+            query "export.animatedGifStatus",
+            "Animated GIF Export Status",
+            [],
+            None,
+            "{} → the last animated GIF export: {taskId, format: \"gif\", path, running, done, total (photos), cancelled, result?: {format, path, width, height, frames, skipped, seconds, loop, dither, bytes, warnings}, error?} | {running: false} when there was none",
+            always,
+            |s, _| Ok(s.animated_gif.as_ref().map_or_else(|| json!({"running": false}), |r| r.json()))
         ),
     ];
     // Apple Events to Photos' import command (macOS); not in the web build. Not journaled: a
