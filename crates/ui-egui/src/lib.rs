@@ -53,6 +53,7 @@ use serde_json::Value;
 
 pub use command_error::CommandError;
 pub use control::{ControlRequest, ControlResponse};
+pub use dialogs::animated_gif;
 pub use dialogs::credits;
 pub use dialogs::import;
 pub use dialogs::lightroom_destination;
@@ -313,6 +314,8 @@ pub struct LightcraftApp {
     pub last_export_result: Option<Value>,
     /// The last slideshow export's end has been told (a toast).
     pub slideshow_export_reported: bool,
+    /// The last animated GIF export's end has been told (a toast).
+    pub animated_gif_reported: bool,
     /// The look the loupe shows while the pointer rests on a preset or profile (set by the
     /// panels each frame; nothing is committed, no history entry).
     pub hover_preview: Option<HoverPreview>,

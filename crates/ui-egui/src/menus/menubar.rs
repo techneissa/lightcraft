@@ -150,6 +150,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "dialog.export",
             "app.exportPrevious",
             "@Export with Preset",
+            "dialog.animatedGif",
             "---",
             "library.toggleAutoWriteXmp",
             "@Previews",

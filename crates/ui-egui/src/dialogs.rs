@@ -14,6 +14,7 @@ mod frame;
 mod rename;
 mod sam_model;
 
+use animated_gif::animated_gif_body;
 pub(crate) use confirm::album_entries;
 pub use confirm::confirm_dialog;
 pub use cull::{MAX_BURST_GAP, clamp_cull_burst, cull_params, fmt_gap, parse_gap};
@@ -32,6 +33,7 @@ pub(crate) use sam_model::show_model_folder;
 use sam_model::{sam_by_hand, sam_model_body};
 use slideshow_export::slideshow_export_body;
 
+pub mod animated_gif;
 pub mod credits;
 pub mod faces;
 pub mod import;
@@ -144,6 +146,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         Dialog::Export { .. } => "Export",
         Dialog::ContactSheet { .. } => "Contact Sheet PDF",
         Dialog::SlideshowExport { .. } => "Export Slideshow",
+        Dialog::AnimatedGif { .. } => "Export Animated GIF",
         Dialog::Print => "Print",
         Dialog::Merge { opts } => opts.title(),
         Dialog::Settings { .. } => "Settings",
@@ -655,6 +658,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                     group_checklist(ui, "pasteGroup", groups);
                 }
                 Dialog::SlideshowExport { settings } => slideshow_export_body(app, ui, settings),
+                Dialog::AnimatedGif { settings } => animated_gif_body(app, ui, settings),
                 Dialog::ContactSheet { options } => {
                     options.columns = options.columns.clamp(1, 8);
                     options.rows = options.rows.clamp(1, 10);
@@ -1295,7 +1299,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                     }
                     Dialog::LightroomResult { first: Some(_), .. } => "Show in Library",
                     Dialog::ContactSheet { .. } => "Choose PDF…",
-                    Dialog::SlideshowExport { .. } => "Export…",
+                    Dialog::SlideshowExport { .. } | Dialog::AnimatedGif { .. } => "Export…",
                     Dialog::Print => "Print to PDF…",
                     Dialog::Merge { .. } => "Merge",
                     Dialog::DenoiseModel { info, .. } if info["download"].is_string() => "Accept & Download",
@@ -1421,6 +1425,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                         | Dialog::Export { .. }
                         | Dialog::ContactSheet { .. }
                         | Dialog::SlideshowExport { .. }
+                        | Dialog::AnimatedGif { .. }
                         | Dialog::Print
                         | Dialog::NewAlbum { .. }
                         | Dialog::NewSmartAlbum { .. }

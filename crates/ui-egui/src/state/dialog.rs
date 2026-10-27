@@ -39,6 +39,10 @@ pub enum Dialog {
     ContactSheet {
         options: lightcraft_engine::contact_sheet::Options,
     },
+    /// File ▸ Export Animated GIF…: size, seconds per photo, loop, dithering.
+    AnimatedGif {
+        settings: lightcraft_engine::animated_gif::GifSettings,
+    },
     /// View ▸ Export Slideshow…: format, size, quality, frame rate, container.
     SlideshowExport {
         settings: lightcraft_engine::slideshow_export::ExportSettings,

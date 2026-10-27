@@ -34,6 +34,9 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         "dialog.contactSheet" | "app.contactSheet" | "dialog.print" | "app.print" => {
             !cfg!(target_arch = "wasm32") && app.session.active().is_some() && app.export.is_none()
         }
+        "dialog.animatedGif" | "app.animatedGif" => {
+            !cfg!(target_arch = "wasm32") && !app.session.selected().is_empty() && !app.session.animated_gif.as_ref().is_some_and(|r| r.running())
+        }
         "dialog.slideshowExport" | "app.slideshowExport" => {
             !cfg!(target_arch = "wasm32") && !app.session.slideshow_export.as_ref().is_some_and(|r| r.running())
         }

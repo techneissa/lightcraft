@@ -1225,6 +1225,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             Ok(Value::Null)
         }
         "app.slideshowExport" => crate::slideshow_export::start(app, id, p),
+        "dialog.animatedGif" => {
+            app.ui.dialog = Some(Dialog::AnimatedGif { settings: lightcraft_engine::animated_gif::GifSettings::default() });
+            Ok(Value::Null)
+        }
+        "app.animatedGif" => crate::animated_gif::start(app, id, p),
         "dialog.contactSheet" => {
             app.ui.dialog = Some(Dialog::ContactSheet { options: lightcraft_engine::contact_sheet::Options::default() });
             Ok(Value::Null)

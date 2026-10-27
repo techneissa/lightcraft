@@ -108,6 +108,7 @@ impl LightcraftApp {
             tasks: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,
+            animated_gif_reported: true,
             hover_preview: None,
             window_is_fullscreen: false,
             gpu_applied: None,

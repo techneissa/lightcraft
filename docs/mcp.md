@@ -231,6 +231,9 @@ sequence in a folder, or an AV1 video (no audio). It runs in the background and 
 `cmd_activity_list` shows its progress, `cmd_activity_cancel {id: taskId}` stops it (nothing is left on disk) and
 `cmd_slideshow_exportStatus` gives the result (`pages`, `files`, or `frames` / `samples` / `seconds` for video) or the
 error. With `wait: true` the call blocks and replies with the result.
+`cmd_export_animatedGif {path, ids?, size?, seconds?, loop?, dither?, wait?}` makes one animated GIF of the selected
+photos (or `ids`), a frame per photo rendered with its edits, raws included; it runs in the background the same way,
+and `cmd_export_animatedGifStatus` gives the result (`frames`, `seconds`, `bytes`) or the error.
 
 ### Preview-only raws after an update
 
