@@ -1,8 +1,9 @@
 //! The order of a multi-photo selection, shown as a number in each selected thumbnail's badge
-//! bar (1 = the first photo picked; ⌘-click adds at the end, Shift-click adds the range in grid
-//! order). File ▸ Export Animated GIF… takes the photos in this order.
+//! bar (1 = the first photo picked; ⌘-click adds at the end, Shift-click adds the range from the
+//! last photo picked towards the clicked one). File ▸ Export Animated GIF… takes the photos in this
+//! order.
 
-use egui::{Color32, Rect, pos2, vec2};
+use egui::{Color32, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 
 use crate::theme::Tokens;
@@ -16,13 +17,17 @@ pub fn number(session: &lightcraft_engine::Session, id: PhotoId) -> Option<usize
     ids.iter().position(|x| *x == id).map(|i| i + 1)
 }
 
-/// Paint `n` as a pill whose right edge is at `right`, centred on `y`; the width it took.
+/// Paint `n` as plain white text whose right edge is at `right`, centred on `y`, with a dark
+/// outline so it reads on any photo; the width it took.
 pub fn paint(p: &egui::Painter, right: f32, y: f32, n: usize, t: &Tokens) -> f32 {
-    let g = p.layout_no_wrap(n.to_string(), t.semibold(10.5), Color32::WHITE);
-    let w = (g.size().x + 10.0).max(18.0);
-    let r = Rect::from_min_max(pos2(right - w, y - 9.0), pos2(right, y + 9.0));
-    p.rect_filled(r, 9.0, t.accent);
-    p.galley(r.center() - g.size() / 2.0 + vec2(0.0, 0.5), g, Color32::WHITE);
+    let g = p.layout_no_wrap(n.to_string(), t.semibold(12.0), Color32::WHITE);
+    let pos = pos2(right - g.size().x, y - g.size().y / 2.0);
+    let outline = p.layout_no_wrap(n.to_string(), t.semibold(12.0), Color32::from_black_alpha(200));
+    for d in [vec2(-1.0, 0.0), vec2(1.0, 0.0), vec2(0.0, -1.0), vec2(0.0, 1.0), vec2(1.0, 1.0)] {
+        p.galley(pos + d, outline.clone(), Color32::from_black_alpha(200));
+    }
+    let w = g.size().x;
+    p.galley(pos, g, Color32::WHITE);
     w
 }
 
@@ -44,5 +49,15 @@ mod tests {
         // taking one out moves the later ones up
         s.execute("library.select", &json!({"ids": [v[0]], "mode": "toggle"})).unwrap();
         assert_eq!(number(&s, PhotoId(v[3])), Some(2));
+    }
+
+    #[test]
+    fn shift_click_back_numbers_outward_from_the_first_pick() {
+        let mut s = lightcraft_engine::Session::with_demo();
+        let v: Vec<u64> = s.visible_cloned().into_iter().take(4).map(|x| x.0).collect();
+        s.execute("library.select", &json!({"ids": [v[3]]})).unwrap();
+        s.execute("library.select", &json!({"ids": [v[0]], "mode": "range"})).unwrap();
+        // the clicked photo comes last; the one next to the first pick is 2
+        assert_eq!([v[0], v[1], v[2], v[3]].map(|x| number(&s, PhotoId(x))), [Some(4), Some(3), Some(2), Some(1)]);
     }
 }
