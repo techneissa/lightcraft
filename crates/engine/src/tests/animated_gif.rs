@@ -149,6 +149,28 @@ fn photos_of_other_shapes_fit_on_black() {
     assert!(corner[0] < 8 && corner[1] < 8 && corner[2] < 8, "black beside the strip: {corner:?}");
 }
 
+/// The dialog's Original size is the first photo's long side as cropped, within the export's
+/// range; the canvas at a size has the first photo's shape.
+#[test]
+fn original_size_is_the_first_photos_cropped_long_side() {
+    let (mut s, ids) = session(1);
+    let id = lightcraft_catalog::PhotoId(ids[0]);
+    let p = s.catalog.photo(id).unwrap();
+    let long = p.width.max(p.height) as usize;
+    let mut half = Photo::clone(p);
+    half.id = s.catalog.alloc_photo_id();
+    std::sync::Arc::make_mut(&mut half.develop).crop.geometry.rect = lightcraft_geom::Rect { x0: 0.0, y0: 0.0, x1: 0.5, y1: 0.5 };
+    let half_id = half.id;
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(half) }).unwrap();
+    use crate::animated_gif::{SIZE_MAX, SIZE_MIN, canvas, original_size};
+    assert_eq!(original_size(&s, &[id]), Some(long.clamp(SIZE_MIN, SIZE_MAX)));
+    let cropped = original_size(&s, &[half_id, id]).unwrap();
+    assert!(cropped.abs_diff(long / 2) <= 1, "{cropped} vs {long}");
+    assert_eq!(original_size(&s, &[lightcraft_catalog::PhotoId(u64::MAX)]), None);
+    let (w, h) = canvas(&s, &[id], 500);
+    assert_eq!(w.max(h), 500);
+}
+
 fn wait_for(s: &Session) -> Value {
     let deadline = Instant::now() + Duration::from_secs(120);
     loop {

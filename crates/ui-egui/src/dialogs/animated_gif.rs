@@ -5,10 +5,12 @@
 
 use serde_json::{Value, json};
 
-use super::frame::{choices, field};
+use super::frame::field;
 use super::*;
 use crate::LightcraftApp;
 use crate::pick::{PickRequest, Picked};
+
+mod preview;
 
 /// `app.animatedGif {size?, seconds?, loop?, dither?, path?}`: without a path, a save dialog asks
 /// for one first.
@@ -60,16 +62,20 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     app.toast(ctx, msg);
 }
 
-/// File ▸ Export Animated GIF…: how big, how fast, looping and dithering; where comes after (a
-/// save dialog).
+/// File ▸ Export Animated GIF…: a preview playing the frames, how big, how fast, looping and
+/// dithering; where comes after (a save dialog).
 pub(super) fn animated_gif_body(app: &mut LightcraftApp, ui: &mut egui::Ui, settings: &mut lightcraft_engine::animated_gif::GifSettings) {
-    use lightcraft_engine::animated_gif::SECONDS_MAX;
+    use lightcraft_engine::animated_gif::{SECONDS_MAX, SIZE_MAX, SIZE_MIN, canvas, original_size};
     let t = Tokens::get(ui.ctx());
-    let photos = app.session.selected().len();
-    let seconds = photos as f64 * f64::from(settings.delay()) / 100.0;
+    let ids = app.session.selected();
+    let (w, h) = canvas(&app.session, &ids, settings.size);
+    preview::show(app, ui, &ids, (w, h), settings.seconds);
+    let seconds = ids.len() as f64 * f64::from(settings.delay()) / 100.0;
     let summary = crate::i18n::tr_format!(
-        "{n} photos selected · {time}",
-        n = photos,
+        "{n} photos · {w} × {h} px · {time}",
+        n = ids.len(),
+        w = w,
+        h = h,
         time = if seconds < 60.0 {
             format!("{} s", (seconds * 10.0).round() / 10.0)
         } else {
@@ -77,7 +83,25 @@ pub(super) fn animated_gif_body(app: &mut LightcraftApp, ui: &mut egui::Ui, sett
         }
     );
     ui.label(egui::RichText::new(summary).color(t.text_dim));
-    choices(ui, "Size", "animatedGifSize", &[(480, "480 px"), (800, "800 px"), (1200, "1200 px")], &mut settings.size);
+    let original = original_size(&app.session, &ids);
+    field(ui, "Size", |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (i, (v, l)) in [(480, "480 px"), (800, "800 px"), (1200, "1200 px")].into_iter().enumerate() {
+            if crate::widgets::text_button(ui, &format!("animatedGifSize-{i}"), l, settings.size == v).clicked() {
+                settings.size = v;
+            }
+        }
+        if let Some(o) = original
+            && crate::widgets::text_button(ui, "animatedGifSize-original", "Original", settings.size == o)
+                .on_hover_text(crate::i18n::tr_format!("The first photo's size: {o} px on the long side (at most {max})", o = o, max = SIZE_MAX))
+                .clicked()
+        {
+            settings.size = o;
+        }
+        // any size in the export's range, typed or dragged
+        let r = ui.add(egui::DragValue::new(&mut settings.size).range(SIZE_MIN..=SIZE_MAX).speed(4.0).suffix(" px"));
+        crate::widgets::register(ui, "drag:animatedGifSize", r.rect);
+    });
     field(ui, "Each photo", |ui| {
         let r = ui.add(egui::Slider::new(&mut settings.seconds, 0.1..=SECONDS_MAX.min(10.0)).logarithmic(true).suffix(" s").max_decimals(2));
         crate::widgets::register(ui, "slider:animatedGifSeconds", r.rect);
@@ -86,15 +110,36 @@ pub(super) fn animated_gif_body(app: &mut LightcraftApp, ui: &mut egui::Ui, sett
     crate::widgets::register(ui, "check:animatedGifLoop", r.rect);
     let r = ui.checkbox(&mut settings.dither, crate::i18n::tr("Smooth gradients (dithering)"));
     crate::widgets::register(ui, "check:animatedGifDither", r.rect);
-    ui.label(
-        egui::RichText::new(crate::i18n::tr(
-            "One frame per selected photo, in the order you selected them (the numbers on the thumbnails), with its edits; raw files are rendered directly. Photos of another shape sit on black.",
-        ))
-        .color(t.text_dim),
-    );
-    ui.label(
-        egui::RichText::new(crate::i18n::tr("A GIF has 256 colours per frame and gets big fast: keep the size small for sharing.")).color(t.text_dim),
-    );
+    ui.label(egui::RichText::new(crate::i18n::tr("One frame per selected photo, in the order you selected them.")).color(t.text_dim));
+}
+
+/// The photo context menu's Export Animated GIF…, below Export with Preset.
+pub fn context_menu_item(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let r = ui.add_enabled(crate::menus::ui_enabled(app, "dialog.animatedGif"), egui::Button::new(crate::i18n::tr("Export Animated GIF…")));
+    crate::widgets::register(ui, "menu:exportAnimatedGif", r.rect);
+    if r.clicked() {
+        let _ = app.run("dialog.animatedGif", json!({}));
+    }
+}
+
+/// The Export dialog's Format row (ids `button:exportFormat-{index}`), with GIF at its end: GIF
+/// makes one animation of all the photos, not a file each, so it swaps the dialog for Export
+/// Animated GIF (`button:exportFormat-gif`).
+pub(super) fn export_formats<V: PartialEq + Copy>(app: &mut LightcraftApp, ui: &mut egui::Ui, options: &[(V, &str)], value: &mut V) {
+    field(ui, "Format", |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (i, (v, l)) in options.iter().enumerate() {
+            if crate::widgets::text_button(ui, &format!("exportFormat-{i}"), l, *value == *v).clicked() {
+                *value = *v;
+            }
+        }
+        if crate::widgets::text_button(ui, "exportFormat-gif", "GIF", false)
+            .on_hover_text(crate::i18n::tr("One animated GIF of the selected photos"))
+            .clicked()
+        {
+            let _ = app.run("dialog.animatedGif", json!({}));
+        }
+    });
 }
 
 #[cfg(test)]
@@ -163,6 +208,33 @@ mod tests {
         let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
         assert!(toast.contains("Animated GIF exported: 3 frames"), "{toast}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Export dialog's GIF button and the photo context menu's item both open Export
+    /// Animated GIF (it was only in the File menu).
+    #[test]
+    fn export_dialog_and_context_menu_open_it() {
+        let t = Duration::from_secs(60);
+        let (_files, mut app, _) = app_answering("gif-entry", String::new());
+        app.ui.view = crate::state::ViewMode::PhotoGrid;
+        let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
+        h.app.run("dialog.export", json!({})).unwrap();
+        h.settle(t);
+        let r = h.request("ui.clickWidget", json!({"id": "button:exportFormat-gif"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(t);
+        assert!(matches!(h.app.ui.dialog, Some(Dialog::AnimatedGif { .. })), "GIF in Export opens it");
+
+        h.app.ui.dialog = None;
+        h.settle(t);
+        let thumb = h.app.widgets.iter().find(|(w, _)| w.starts_with("thumb:")).map(|(w, _)| w.clone()).expect("a grid photo");
+        let r = h.request("ui.clickWidget", json!({"id": thumb, "button": "right"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(t);
+        let r = h.request("ui.clickWidget", json!({"id": "menu:exportAnimatedGif"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(t);
+        assert!(matches!(h.app.ui.dialog, Some(Dialog::AnimatedGif { .. })), "the context menu opens it");
     }
 
     #[test]

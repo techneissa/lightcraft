@@ -1439,6 +1439,7 @@ pub fn context_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         }
     });
+    crate::animated_gif::context_menu_item(app, ui);
     ui.separator();
     if crate::menubar::selection_deleted(app) {
         if ui.button(crate::i18n::tr("Restore")).clicked() {
