@@ -1,0 +1,121 @@
+# techneissa's fork only (see FORK.md): keep `custom` (the official LightCraft plus techneissa's features)
+# merged with the official main, and build it, so the Mac's update script downloads the app instead of
+# building it. The build is published as the release `custom-build` (prerelease), its notes naming the commit.
+#
+# Daily, on a push to `custom`, or by hand (Actions ▸ Fork build ▸ Run workflow). A merge that clashes
+# outside the two docs files fails the run, changes nothing, and the Mac's script then merges and builds
+# locally (or an agent merges: the `craftupdate` skill).
+name: Fork build
+
+on:
+  schedule:
+    - cron: "17 8 * * *" # daily
+  push:
+    branches: [custom]
+  workflow_dispatch:
+    inputs:
+      force:
+        description: Build even if this commit is already built
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fork-build
+  cancel-in-progress: false
+
+jobs:
+  build:
+    # never in the official repo, should this file ever travel upstream
+    if: github.repository == 'techneissa/lightcraft'
+    runs-on: macos-15
+    timeout-minutes: 240
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_INCREMENTAL: 0
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: custom
+          fetch-depth: 0
+
+      - name: Merge the official update into custom
+        id: sync
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream https://github.com/storytold/lightcraft.git
+          git fetch --quiet upstream main
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Nothing new upstream."
+          else
+            if ! git merge --no-edit upstream/main; then
+              left="$(git diff --name-only --diff-filter=U)"
+              others="$(printf '%s\n' "$left" | grep -vxE 'docs/whats-new\.md|docs/parity-checklist\.md' || true)"
+              if [ -n "$others" ]; then
+                git merge --abort
+                echo "::error::The official update and techneissa's features both changed: $(echo $others). Nothing was changed; run the update on the Mac (it builds there) or ask an agent to update LightCraft."
+                exit 1
+              fi
+              # docs only: keep both sides, the update's first (the parity "Last updated" line: the update's)
+              for f in $left; do
+                python3 - "$f" <<'PY'
+          import re, sys
+          path = sys.argv[1]
+          s = open(path).read()
+          def fix(m):
+              ours, theirs = m.group(1), m.group(2)
+              if ours.startswith('> **Last reviewed:**') and theirs.startswith('> **Last reviewed:**'):
+                  return theirs
+              return theirs + ('\n' if path.endswith('whats-new.md') else '') + ours
+          s = re.sub(r'^<<<<<<< [^\n]*\n(.*?)^=======\n(.*?)^>>>>>>> [^\n]*\n', fix, s, flags=re.S | re.M)
+          open(path, 'w').write(s)
+          PY
+              done
+              if grep -q '^<<<<<<<' $left; then git merge --abort; echo "::error::Could not merge the docs."; exit 1; fi
+              git add -A docs
+              git commit --no-edit
+            fi
+            git push origin HEAD:custom
+          fi
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Already built?
+        id: built
+        run: |
+          built="$(gh release view custom-build --json body -q .body 2>/dev/null | sed -n 's/^commit: //p' || true)"
+          if [ "$built" = "${{ steps.sync.outputs.sha }}" ] && [ "${{ inputs.force }}" != "true" ]; then
+            echo "custom-build is already ${built}; nothing to build."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8 # v1
+        if: steps.built.outputs.skip != 'true'
+        with:
+          toolchain: stable
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: steps.built.outputs.skip != 'true'
+        with:
+          key: fork-macos-aarch64
+
+      - name: Build the app
+        if: steps.built.outputs.skip != 'true'
+        run: packaging/macos/package.sh --arch aarch64
+
+      - name: Publish as custom-build
+        if: steps.built.outputs.skip != 'true'
+        run: |
+          sha="${{ steps.sync.outputs.sha }}"
+          dmg="$(ls -t dist/release/lightcraft-*-macos-aarch64.dmg | sed -n 1p)"
+          name="$(basename "$dmg")"
+          ver="${name#lightcraft-}"; ver="${ver%-macos-aarch64.dmg}"
+          (cd dist/release && shasum -a 256 "$name" > SHA256SUMS.txt)
+          gh release delete custom-build --yes --cleanup-tag 2>/dev/null || true
+          gh release create custom-build "$dmg" dist/release/SHA256SUMS.txt \
+            --target "$sha" --prerelease --latest=false \
+            --title "LightCraft $ver with techneissa's features (${sha:0:8})" \
+            --notes "commit: $sha"

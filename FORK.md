@@ -7,14 +7,27 @@ plus the features listed below. The installed app is built from `custom`.
 
 1. Click **Update LightCraft** in Applications. (Same thing in Terminal:
    `~/Documents/workspace/gitClones/update-lightcraft.sh`; `update-craft-apps.sh` updates every ArtCraft app.)
-2. It gets the official update, merges it into `custom`, builds and installs the app (about 5 to 10 minutes), and
-   backs `custom` up to this fork.
+2. It gets the official update, merges it into `custom` and backs `custom` up to this fork. Then it installs the
+   app: a download of seconds when GitHub has already built that version (below), else a build on the Mac
+   (1 to 10 minutes).
 3. If it stops with "the update touches the same code as your edits", nothing was changed. Ask an agent to
    "update LightCraft" (it follows the `craftupdate` skill).
 
 The script is `update-craft.sh` in the same folder, shared by every ArtCraft app; it keeps your edits in any
 app whose repo has a `custom` branch. The official release download (`update-lightcraft-release.sh`) installs
 the official app without these features.
+
+## GitHub builds the app
+
+The workflow `.github/workflows/fork-build.yml` (Actions ▸ Fork build) runs daily, on every push to `custom`, and
+by hand. It merges the official update into `custom` the same way the script does, builds the Mac app, and
+publishes it as the release [`custom-build`](https://github.com/techneissa/lightcraft/releases/tag/custom-build)
+(its notes name the commit). The update script downloads it when that commit is the one it would build. A run
+that hits a merge clash fails and changes nothing; GitHub emails the failure.
+
+The official project's own workflows (CI, Nix, Packaging lint, SonarCloud) are switched off in this fork:
+the official project runs them. A workflow the official project adds later starts switched on; switch it off
+in Actions unless it is wanted here.
 
 ## Where things are
 
@@ -23,7 +36,8 @@ the official app without these features.
 | `origin` | the official repo, where updates come from (never pushed to) |
 | `mine` | this fork, [techneissa/lightcraft](https://github.com/techneissa/lightcraft), the backup |
 | `main` | a plain copy of the official `main`, kept in step by the update script |
-| `custom` | the official code plus every feature below: the app is built from it |
+| `custom` | the official code plus every feature below: the app is built from it (the default branch here) |
+| `custom-build` | the release holding the app GitHub built from `custom` |
 | `feat/…`, `fix/…` | one feature each, based on the official code, kept for reference |
 
 Local folder: `~/Documents/workspace/gitClones/lightcraft`. Git remembers how a merge conflict was fixed
