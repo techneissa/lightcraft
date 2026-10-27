@@ -36,6 +36,7 @@ jobs:
       CARGO_TERM_COLOR: always
       CARGO_INCREMENTAL: 0
       GH_TOKEN: ${{ github.token }}
+      # every gh call names this repo: with the `upstream` remote added, gh would pick the official one
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -86,7 +87,7 @@ jobs:
       - name: Already built?
         id: built
         run: |
-          built="$(gh release view custom-build --json body -q .body 2>/dev/null | sed -n 's/^commit: //p' || true)"
+          built="$(gh release view custom-build --repo "$GITHUB_REPOSITORY" --json body -q .body 2>/dev/null | sed -n 's/^commit: //p' || true)"
           if [ "$built" = "${{ steps.sync.outputs.sha }}" ] && [ "${{ inputs.force }}" != "true" ]; then
             echo "custom-build is already ${built}; nothing to build."
             echo "skip=true" >> "$GITHUB_OUTPUT"
@@ -114,8 +115,8 @@ jobs:
           name="$(basename "$dmg")"
           ver="${name#lightcraft-}"; ver="${ver%-macos-aarch64.dmg}"
           (cd dist/release && shasum -a 256 "$name" > SHA256SUMS.txt)
-          gh release delete custom-build --yes --cleanup-tag 2>/dev/null || true
-          gh release create custom-build "$dmg" dist/release/SHA256SUMS.txt \
+          gh release delete custom-build --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
+          gh release create custom-build --repo "$GITHUB_REPOSITORY" "$dmg" dist/release/SHA256SUMS.txt \
             --target "$sha" --prerelease --latest=false \
             --title "LightCraft $ver with techneissa's features (${sha:0:8})" \
             --notes "commit: $sha"
