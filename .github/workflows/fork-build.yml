@@ -109,14 +109,25 @@ jobs:
 
       - name: Publish as custom-build
         if: steps.built.outputs.skip != 'true'
+        # The release and its tag exist once (made from the Mac); this step only swaps the app in it and
+        # names the commit, because the workflow's token may not create tags.
         run: |
+          R="$GITHUB_REPOSITORY"
           sha="${{ steps.sync.outputs.sha }}"
           dmg="$(ls -t dist/release/lightcraft-*-macos-aarch64.dmg | sed -n 1p)"
           name="$(basename "$dmg")"
           ver="${name#lightcraft-}"; ver="${ver%-macos-aarch64.dmg}"
           (cd dist/release && shasum -a 256 "$name" > SHA256SUMS.txt)
-          gh release delete custom-build --repo "$GITHUB_REPOSITORY" --yes --cleanup-tag 2>/dev/null || true
-          gh release create custom-build --repo "$GITHUB_REPOSITORY" "$dmg" dist/release/SHA256SUMS.txt \
-            --target "$sha" --prerelease --latest=false \
+          if ! gh release view custom-build --repo "$R" >/dev/null 2>&1; then
+            echo "::error::The release custom-build is missing. Make it once from the Mac: gh release create custom-build --repo $R --target custom --prerelease --latest=false --notes 'commit: none'"
+            exit 1
+          fi
+          # no commit in the notes while the files change, so no Mac downloads a half-swapped release
+          gh release edit custom-build --repo "$R" --notes "commit: updating"
+          for a in $(gh release view custom-build --repo "$R" --json assets -q '.assets[].name'); do
+            gh release delete-asset custom-build "$a" --repo "$R" --yes
+          done
+          gh release upload custom-build "$dmg" dist/release/SHA256SUMS.txt --repo "$R" --clobber
+          gh release edit custom-build --repo "$R" \
             --title "LightCraft $ver with techneissa's features (${sha:0:8})" \
             --notes "commit: $sha"
