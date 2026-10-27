@@ -377,17 +377,36 @@ impl SizeHold {
 /// Fit that is the photo's middle; zoomed in, the photo's own middle is mostly off screen, and a
 /// line there left the whole view to one side (#1351).
 pub fn wipe_line(img: egui::Rect, canvas: egui::Rect) -> egui::Pos2 {
+    wipe_line_at(img, canvas, 0.5)
+}
+
+/// [`wipe_line`] moved to `at`, a fraction (0..=1) of the part of the photo that is on screen,
+/// from its left (top): the line the user dragged to (`panels::split_divider`).
+pub fn wipe_line_at(img: egui::Rect, canvas: egui::Rect, at: f32) -> egui::Pos2 {
     let shown = img.intersect(canvas);
-    if shown.is_positive() { shown.center() } else { img.center() }
+    let at = if at.is_finite() { at.clamp(0.0, 1.0) } else { 0.5 };
+    if shown.is_positive() { shown.min + shown.size() * at } else { img.center() }
 }
 
 /// Where a window of one side of a Before/After view may be drawn: its own pane in side by side
 /// and stacked views (a window carries margin beyond what its pane shows, which would otherwise
 /// spill into the neighbour), its side of the line in a wipe, else the canvas.
 pub fn window_clip(mode: crate::state::BeforeAfter, before_side: bool, pane: egui::Rect, canvas: egui::Rect, img: egui::Rect) -> egui::Rect {
+    window_clip_at(mode, before_side, pane, canvas, img, 0.5)
+}
+
+/// [`window_clip`] with the line of a wipe at `at` (see [`wipe_line_at`]).
+pub fn window_clip_at(
+    mode: crate::state::BeforeAfter,
+    before_side: bool,
+    pane: egui::Rect,
+    canvas: egui::Rect,
+    img: egui::Rect,
+    at: f32,
+) -> egui::Rect {
     use crate::state::BeforeAfter;
     let (min, max) = (canvas.min, canvas.max);
-    let line = wipe_line(img, canvas);
+    let line = wipe_line_at(img, canvas, at);
     let clip = match (mode, before_side) {
         (BeforeAfter::Split, true) => egui::Rect::from_min_max(min, egui::pos2(line.x, max.y)),
         (BeforeAfter::SplitTopBottom, true) => egui::Rect::from_min_max(min, egui::pos2(max.x, line.y)),

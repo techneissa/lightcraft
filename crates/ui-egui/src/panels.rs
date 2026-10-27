@@ -27,6 +27,7 @@ pub mod profiles;
 pub mod right;
 pub mod second;
 pub mod slideshow;
+pub mod split_divider;
 pub mod strip;
 pub mod topbar;
 pub mod unnamed;

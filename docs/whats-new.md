@@ -1,5 +1,15 @@
 # What's new in LightCraft
 
+## 2026-10-27
+
+### Drag the Before/After split line
+- In View ▸ Before/After Split (Shift+Y) and Split Top/Bottom the line between Before and After is now a divider you
+  can move: hover it for the resize cursor, then drag it anywhere across the photo. Before is left of the line (above
+  it in Top/Bottom), After is right of it (below). A round grip with ‹ › shows where to grab, small Before and After
+  labels sit in the corners, and a double-click on the line puts it back in the middle. The position follows zoom, pan
+  and window size, and dragging the line never pans the photo or paints with a tool. The bottom bar has a Split button
+  beside Before/After.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

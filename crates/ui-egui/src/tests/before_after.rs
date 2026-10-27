@@ -301,7 +301,7 @@ fn before_after_region_tiles_use_the_animated_rect_top_bottom() {
 }
 
 /// Mean (r, g, b) of the 41 × 41 screen pixels around `at`.
-fn mean_around(shot: &egui::ColorImage, at: egui::Pos2) -> [f32; 3] {
+pub(super) fn mean_around(shot: &egui::ColorImage, at: egui::Pos2) -> [f32; 3] {
     let mut sum = [0.0f32; 3];
     let mut n = 0.0;
     for y in (at.y as usize - 20)..=(at.y as usize + 20) {

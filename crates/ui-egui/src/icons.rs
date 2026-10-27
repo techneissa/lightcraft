@@ -44,6 +44,8 @@ pub enum Icon {
     Gear,
     Filmstrip,
     BeforeAfter,
+    /// Before/After Split: one photo, a movable line between the two.
+    BeforeAfterSplit,
     ChevronDown,
     ChevronRight,
     ChevronLeft,
@@ -422,6 +424,11 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.rect(3.0, 4.0, 17.0, 16.0, 1.0);
             pen.line(&[(10.0, 2.5), (10.0, 17.5)]);
             pen.rect_fill(10.0, 4.0, 17.0, 16.0, 0.5);
+        }
+        BeforeAfterSplit => {
+            pen.rect(3.0, 4.0, 17.0, 16.0, 1.0);
+            pen.line(&[(10.0, 2.5), (10.0, 17.5)]);
+            pen.circle(10.0, 10.0, 2.6);
         }
         ChevronDown => pen.line(&[(5.0, 7.5), (10.0, 12.5), (15.0, 7.5)]),
         Forward | ChevronRight => pen.line(&[(7.5, 5.0), (12.5, 10.0), (7.5, 15.0)]),

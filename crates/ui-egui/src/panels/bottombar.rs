@@ -198,6 +198,20 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
         {
             let _ = app.run("view.beforeAfter", json!({}));
         }
+        // (right to left: this one sits left of the Before/After button)
+        if icon_button(
+            &mut child,
+            "beforeAfterSplit",
+            Icon::BeforeAfterSplit,
+            vec2(30.0, 30.0),
+            matches!(app.ui.before_after, crate::state::BeforeAfter::Split | crate::state::BeforeAfter::SplitTopBottom),
+            true,
+            "Before/After Split (Shift+Y)",
+        )
+        .clicked()
+        {
+            let _ = app.run("view.beforeAfterSplit", json!({}));
+        }
         if app.ui.view == ViewMode::Detail
             && icon_button(&mut child, "faceBoxes", Icon::FaceBox, vec2(30.0, 30.0), app.ui.face_boxes, true, "Face boxes").clicked()
         {

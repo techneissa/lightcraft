@@ -69,6 +69,10 @@ pub struct UiState {
     #[serde(skip)]
     pub zoom_anim: bool,
     pub before_after: BeforeAfter,
+    /// Where the line of the Before/After split views is, as a fraction of the part of the photo on
+    /// screen (`None`: the middle); both splits share it, and a session starts with it centred.
+    #[serde(skip)]
+    pub split_at: Option<f32>,
     pub thumb_size: f32,
     /// Open Edit sections by id.
     pub open_sections: Vec<String>,
@@ -379,6 +383,7 @@ impl Default for UiState {
             click_zoom: 100,
             zoom_anim: false,
             before_after: BeforeAfter::Off,
+            split_at: None,
             thumb_size: 220.0,
             open_sections: vec!["light".into()],
             open_flyouts: vec![],
