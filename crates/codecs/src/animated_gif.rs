@@ -1,16 +1,17 @@
 //! Animated GIF writing: frames of 8-bit sRGB pixels, each with its own 256-colour palette
-//! (NeuQuant, from `color_quant`) and optional Floyd–Steinberg dithering, streamed to any writer
-//! one frame at a time. Photos keep smooth gradients only when dithered: 256 colours band skies.
+//! ([`quantize`]: median cut and k-means in Oklab) and optional Floyd–Steinberg dithering,
+//! streamed to any writer one frame at a time. Photos keep smooth gradients only when dithered:
+//! 256 colours band skies.
 
 use std::io::Write;
 
 use crate::{Error, Result};
 
+mod quantize;
+pub use quantize::quantize;
+
 /// The largest frame side a GIF can describe.
 pub const MAX_SIDE: usize = u16::MAX as usize;
-
-/// NeuQuant's sample factor: 1 (every pixel, slowest) – 30; 10 is its documented compromise.
-const SAMPLE_FACTOR: i32 = 10;
 
 fn err(e: impl std::fmt::Display) -> Error {
     Error::Encode(format!("GIF: {e}"))
@@ -71,54 +72,6 @@ impl<W: Write> GifWriter<W> {
     pub fn finish(self) -> Result<W> {
         self.enc.into_inner().map_err(err)
     }
-}
-
-/// A 256-colour palette (`[r, g, b, …]`) for `pixels` (rows of `width`) and each pixel's index
-/// in it, dithered (Floyd–Steinberg, serpentine) when `dither`.
-pub fn quantize(pixels: &[[u8; 4]], width: usize, dither: bool) -> (Vec<u8>, Vec<u8>) {
-    let opaque: Vec<u8> = pixels.iter().flat_map(|p| [p[0], p[1], p[2], 255]).collect();
-    let nq = color_quant::NeuQuant::new(SAMPLE_FACTOR, 256, &opaque);
-    let palette = nq.color_map_rgb();
-    let index = |c: [u8; 3]| nq.index_of(&[c[0], c[1], c[2], 255]).min(255) as u8;
-    if !dither || width == 0 {
-        return (palette, pixels.iter().map(|p| index([p[0], p[1], p[2]])).collect());
-    }
-    let colour = |i: u8| {
-        let k = usize::from(i) * 3;
-        palette.get(k..k + 3).map_or([0.0; 3], |c| [f32::from(c[0]), f32::from(c[1]), f32::from(c[2])])
-    };
-    let mut out = vec![0u8; pixels.len()];
-    // the error carried into this row and the next, one entry per pixel plus a margin each side
-    let mut here = vec![[0f32; 3]; width + 2];
-    let mut next = vec![[0f32; 3]; width + 2];
-    for (y, (row, dst)) in pixels.chunks(width).zip(out.chunks_mut(width)).enumerate() {
-        let rtl = y % 2 == 1;
-        for i in 0..row.len() {
-            let x = if rtl { row.len() - 1 - i } else { i };
-            let (Some(p), Some(e)) = (row.get(x), here.get(x + 1).copied()) else { continue };
-            let want = [0, 1, 2].map(|c| (f32::from(p[c]) + e[c]).clamp(0.0, 255.0));
-            let idx = index(want.map(|v| v.round() as u8));
-            if let Some(d) = dst.get_mut(x) {
-                *d = idx;
-            }
-            let got = colour(idx);
-            let q = [0, 1, 2].map(|c| want[c] - got[c]);
-            // ahead in this row, then below-behind, below, below-ahead (7, 3, 5, 1 sixteenths)
-            let (ahead, behind) = if rtl { (x, x + 2) } else { (x + 2, x) };
-            let spread = |buf: &mut [[f32; 3]], at: usize, w: f32| {
-                if let Some(v) = buf.get_mut(at) {
-                    v.iter_mut().zip(q).for_each(|(v, q)| *v += q * w);
-                }
-            };
-            spread(&mut here, ahead, 7.0 / 16.0);
-            spread(&mut next, behind, 3.0 / 16.0);
-            spread(&mut next, x + 1, 5.0 / 16.0);
-            spread(&mut next, ahead, 1.0 / 16.0);
-        }
-        std::mem::swap(&mut here, &mut next);
-        next.iter_mut().for_each(|v| *v = [0.0; 3]);
-    }
-    (palette, out)
 }
 
 #[cfg(test)]

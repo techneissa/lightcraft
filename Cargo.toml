@@ -76,7 +76,7 @@ png = "0.18"
 tiff = "0.11"
 image-webp = "0.2"
 gif = { version = "0.14", default-features = false, features = ["std", "raii_no_panic"] } # MIT OR Apache-2.0, animated GIF export
-color_quant = "1.1" # MIT, NeuQuant palettes for GIF export
+color_quant = "1.1" # MIT, NeuQuant (a test baseline for the GIF quantiser)
 moxcms = { version = "0.9", default-features = false, features = ["lut"] }
 jxl-oxide = { version = "0.12", default-features = false }
 jixel = "=0.3.4" # BSD-3-Clause OR Apache-2.0, pure-Rust JPEG XL encoder (export; port of libjxl-tiny)

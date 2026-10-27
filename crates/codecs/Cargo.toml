@@ -26,7 +26,6 @@ png = { workspace = true }
 tiff = { workspace = true }
 image-webp = { workspace = true }
 gif = { workspace = true }
-color_quant = { workspace = true }
 moxcms = { workspace = true }
 jxl-oxide = { workspace = true, optional = true }
 
@@ -55,6 +54,8 @@ lightcraft-testkit = { workspace = true }
 # JPEG XL tests read encoded samples without our colour conversion
 jxl-oxide = { workspace = true }
 proptest = { workspace = true }
+# the GIF quantiser's quality test compares against NeuQuant
+color_quant = { workspace = true }
 # Lossless synthetic HEIC files for the `heif` feature's tests.
 lightcraft-heif = { workspace = true, features = ["testdata"] }
 
