@@ -187,6 +187,9 @@ pub struct UiState {
     /// Focus the search field on the next frame (Edit → Find…).
     #[serde(skip)]
     pub focus_search: bool,
+    /// The Command Palette (⌘P) while it is open.
+    #[serde(skip)]
+    pub palette: Option<crate::panels::command_palette::State>,
     /// Put the cursor in the Keywords panel's Add keyword box (Add Keywords): the egui pass it was
     /// asked on. A box drawn more than [`FOCUS_KEYWORDS_PASSES`] passes later doesn't take it, so
     /// a request made while the panel can't show expires.
@@ -431,6 +434,7 @@ impl Default for UiState {
             known_cards: None,
             search: String::new(),
             focus_search: false,
+            palette: None,
             focus_keywords: None,
             renaming_mask: None,
             describe: None,
