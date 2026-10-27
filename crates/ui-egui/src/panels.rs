@@ -28,6 +28,7 @@ pub mod right;
 pub mod second;
 pub mod selection_order;
 pub mod slideshow;
+pub mod split_divider;
 pub mod strip;
 pub mod topbar;
 pub mod unnamed;

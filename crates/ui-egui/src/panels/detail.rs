@@ -484,7 +484,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     app.loupe_shown = Some((id, shown));
     // a wipe shows the Before whole-frame render on its side of the line…
-    let line = crate::region::wipe_line(img_rect, canvas);
+    // (the line can be dragged: it, and so each side, follows the divider)
+    let divider = super::split_divider::interact(app, ui, canvas, img_rect);
+    let line = divider.line;
     if app.ui.before_after == BeforeAfter::Split
         && let Some(tex) = app.renderer.textures.get(&Slot::Before).filter(|t| t.photo == id)
     {
@@ -506,7 +508,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     for (v, view) in &windows {
         // (holding `\` in a wipe shows the Before everywhere: it is the Before view alone then)
         let mode = if show_before { BeforeAfter::Original } else { app.ui.before_after };
-        let clip = crate::region::window_clip(mode, v.before, v.visible, canvas, img_rect);
+        let clip = crate::region::window_clip_at(mode, v.before, v.visible, canvas, img_rect, divider.at);
         draw_window(&p.with_clip_rect(clip), app, &window_ctx, v, view);
     }
     if let Some((bg, g)) = before_badge {
@@ -521,6 +523,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if app.ui.before_after == BeforeAfter::SplitTopBottom {
         p.line_segment([pos2(img_rect.left(), line.y), pos2(img_rect.right(), line.y)], Stroke::new(1.5, Color32::WHITE));
     }
+    divider.paint(&p, &t);
     if app.ui.show_clipping && !show_before && !fullscreen {
         clipping_overlay(app, &p, img_rect);
     }
