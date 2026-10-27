@@ -65,7 +65,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
 /// File ▸ Export Animated GIF…: a preview playing the frames, how big, how fast, looping and
 /// dithering; where comes after (a save dialog).
 pub(super) fn animated_gif_body(app: &mut LightcraftApp, ui: &mut egui::Ui, settings: &mut lightcraft_engine::animated_gif::GifSettings) {
-    use lightcraft_engine::animated_gif::{SECONDS_MAX, SIZE_MAX, SIZE_MIN, canvas, original_size};
+    use lightcraft_engine::animated_gif::{SECONDS_MAX, SECONDS_MIN, SIZE_MAX, SIZE_MIN, canvas, original_size};
     let t = Tokens::get(ui.ctx());
     let ids = app.session.selected();
     let (w, h) = canvas(&app.session, &ids, settings.size);
@@ -103,7 +103,7 @@ pub(super) fn animated_gif_body(app: &mut LightcraftApp, ui: &mut egui::Ui, sett
         crate::widgets::register(ui, "drag:animatedGifSize", r.rect);
     });
     field(ui, "Each photo", |ui| {
-        let r = ui.add(egui::Slider::new(&mut settings.seconds, 0.1..=SECONDS_MAX.min(10.0)).logarithmic(true).suffix(" s").max_decimals(2));
+        let r = ui.add(egui::Slider::new(&mut settings.seconds, SECONDS_MIN..=SECONDS_MAX.min(10.0)).logarithmic(true).suffix(" s").max_decimals(2));
         crate::widgets::register(ui, "slider:animatedGifSeconds", r.rect);
     });
     let r = ui.checkbox(&mut settings.loop_forever, crate::i18n::tr("Loop forever"));
@@ -235,6 +235,91 @@ mod tests {
         assert_eq!(r["ok"], true, "{r}");
         h.settle(t);
         assert!(matches!(h.app.ui.dialog, Some(Dialog::AnimatedGif { .. })), "the context menu opens it");
+    }
+
+    fn rect(h: &crate::headless::Headless, widget: &str) -> egui::Rect {
+        h.app.widgets.iter().find(|(w, _)| w == widget).map(|(_, r)| *r).unwrap_or_else(|| panic!("no {widget} on screen"))
+    }
+
+    fn order(h: &crate::headless::Headless) -> Vec<u64> {
+        h.app.session.selection.ids.iter().map(|id| id.0).collect()
+    }
+
+    /// The preview's strip edits the frames, which are the selection in order: a click picks a
+    /// photo, ✕ and Delete take it out, a drag moves it, and the mouse wheel scrolls the strip
+    /// sideways.
+    #[test]
+    fn the_strip_removes_moves_and_scrolls_photos() {
+        let t = Duration::from_secs(60);
+        let (_files, app, _) = app_answering("gif-strip", String::new());
+        let mut h = crate::headless::Headless::new(app, [1400.0, 1000.0], 1.0);
+        let photos: Vec<u64> = h.app.session.visible_cloned().into_iter().map(|id| id.0).collect();
+        // twelve photos, so the strip scrolls: three files, each added three more times
+        let mut more = Vec::new();
+        for id in &photos {
+            for _ in 0..3 {
+                let mut p = lightcraft_catalog::Photo::clone(h.app.session.catalog.photo(lightcraft_catalog::PhotoId(*id)).unwrap());
+                p.id = h.app.session.catalog.alloc_photo_id();
+                more.push(p.id.0);
+                h.app.session.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+            }
+        }
+        let all: Vec<u64> = photos.iter().chain(&more).copied().collect();
+        h.app.session.execute("library.select", &json!({"ids": all})).unwrap();
+        h.app.run("dialog.animatedGif", json!({})).unwrap();
+        h.settle(t);
+        assert_eq!(order(&h), all);
+
+        // click photo 2, then its ✕
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "animatedGifFrame:1"}), t)["ok"], true);
+        h.settle(t);
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "animatedGifRemove:1"}), t)["ok"], true);
+        h.settle(t);
+        let mut want = all.clone();
+        want.remove(1);
+        assert_eq!(order(&h), want, "✕ took photo 2 out");
+        // Delete takes out the photo picked next (the one that moved into its place)
+        h.request("ui.key", json!({"key": "Delete"}), t);
+        h.settle(t);
+        want.remove(1);
+        assert_eq!(order(&h), want, "Delete took the next one out");
+        assert!(matches!(h.app.ui.dialog, Some(Dialog::AnimatedGif { .. })), "the dialog stays open");
+
+        // drag the first photo to after the third
+        let (a, b) = (rect(&h, "animatedGifFrame:0").center(), rect(&h, "animatedGifFrame:2").right_center() + egui::vec2(3.0, 0.0));
+        let press =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        h.app.synthetic.push(egui::Event::PointerMoved(a));
+        h.step();
+        h.app.synthetic.push(press(a, true));
+        h.step();
+        for k in 1..=10 {
+            h.app.synthetic.push(egui::Event::PointerMoved(a + (b - a) * (k as f32 / 10.0)));
+            h.step();
+        }
+        h.app.synthetic.push(press(b, false));
+        h.settle(t);
+        let first = want.remove(0);
+        want.insert(2, first);
+        assert_eq!(order(&h), want, "the first photo moved to third");
+
+        // the wheel's up/down scrolls the strip sideways
+        let before = rect(&h, "animatedGifFrame:0");
+        h.app.synthetic.push(egui::Event::PointerMoved(rect(&h, "animatedGifFrame:3").center()));
+        h.step();
+        for _ in 0..5 {
+            h.app.synthetic.push(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -60.0),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+        }
+        h.settle(t);
+        let after = h.app.widgets.iter().find(|(w, _)| w == "animatedGifFrame:0").map(|(_, r)| r.left());
+        assert!(after.is_none_or(|x| x < before.left() - 50.0), "the strip scrolled: {before:?} → {after:?}");
     }
 
     #[test]
