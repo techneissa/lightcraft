@@ -1,7 +1,8 @@
 //! Export Animated GIF's preview: the photos playing at the chosen speed on a canvas shaped like
-//! the GIF (photos of another shape on black), with ‹ Play/Pause › below it, and every photo in
-//! frame order, numbered, in a strip that scrolls sideways (the mouse wheel scrolls it too).
-//! Library thumbnails stand in for the frames.
+//! the GIF (photos of another shape on black; a click or Space plays and pauses, and a button at
+//! its bottom shows which while the pointer is over it), and every photo in frame order,
+//! numbered, in a strip below it that scrolls sideways (the mouse wheel scrolls it too). Library
+//! thumbnails stand in for the frames.
 //!
 //! The strip edits the GIF: a click picks a photo (and pauses on it), a drag moves it, ✕ or
 //! Delete takes it out. The frames are the selection in the order it was made, so these change
@@ -14,6 +15,7 @@ use lightcraft_catalog::PhotoId;
 use serde_json::json;
 
 use crate::LightcraftApp;
+use crate::icons::Icon;
 use crate::theme::Tokens;
 
 /// The largest the playing canvas gets, in points.
@@ -74,8 +76,23 @@ pub(super) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, ids: &[PhotoId], 
 
     let ratio = w as f32 / h.max(1) as f32;
     let size = if ratio >= PLAY_W / PLAY_H { vec2(PLAY_W, PLAY_W / ratio) } else { vec2(PLAY_H * ratio, PLAY_H) };
-    let play = ui.vertical_centered(|ui| ui.allocate_exact_size(size, Sense::hover()).0).inner;
+    let (play, resp) = ui.vertical_centered(|ui| ui.allocate_exact_size(size, Sense::click())).inner;
     crate::widgets::register(ui, "preview:animatedGif", play);
+    // a click on the preview, or Space when nothing has the keyboard, plays and pauses
+    let free_keys = ui.memory(|m| m.focused().is_none());
+    let space = free_keys && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
+    let current = if resp.clicked() || space {
+        if st.paused {
+            st.paused = false;
+            st.from_frame = current;
+            st.from_time = now;
+        } else {
+            st.pause_on(current, now);
+        }
+        st.current(now, n)
+    } else {
+        current
+    };
     let p = ui.painter();
     p.rect_filled(play, 0.0, Color32::BLACK);
     if let Some(id) = ids.get(current) {
@@ -85,33 +102,14 @@ pub(super) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, ids: &[PhotoId], 
     let at = play.right_bottom() - g.size() - vec2(6.0, 4.0);
     p.rect_filled(Rect::from_min_size(at - vec2(4.0, 1.0), g.size() + vec2(8.0, 2.0)), 3.0, Color32::from_black_alpha(160));
     p.galley(at, g, Color32::WHITE);
-
-    // ‹ Play/Pause ›; Space plays and pauses when nothing has the keyboard
-    let free_keys = ui.memory(|m| m.focused().is_none());
-    ui.vertical_centered(|ui| {
-        ui.horizontal(|ui| {
-            ui.spacing_mut().item_spacing.x = 4.0;
-            let width = 3.0 * 4.0 + 2.0 * 28.0 + 64.0;
-            ui.add_space(((ui.available_width() - width) / 2.0).max(0.0));
-            if crate::widgets::text_button(ui, "animatedGifPrev", "‹", false).on_hover_text(crate::i18n::tr("Previous photo")).clicked() {
-                st.pause_on((current + n - 1) % n, now);
-            }
-            let label = if st.paused { "Play" } else { "Pause" };
-            let space = free_keys && ui.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
-            if crate::widgets::text_button(ui, "animatedGifPlay", label, false).clicked() || space {
-                if st.paused {
-                    st.paused = false;
-                    st.from_frame = current;
-                    st.from_time = now;
-                } else {
-                    st.pause_on(current, now);
-                }
-            }
-            if crate::widgets::text_button(ui, "animatedGifNext", "›", false).on_hover_text(crate::i18n::tr("Next photo")).clicked() {
-                st.pause_on((current + 1) % n, now);
-            }
-        });
-    });
+    // the button shows what a click does, at the bottom centre while the pointer is over the preview
+    if resp.hovered() {
+        let button = Rect::from_center_size(pos2(play.center().x, play.bottom() - 26.0), vec2(36.0, 36.0));
+        crate::widgets::register(ui, "icon:animatedGifPlay", button);
+        p.circle_filled(button.center(), 18.0, Color32::from_black_alpha(170));
+        let icon = if st.paused { Icon::Play } else { Icon::Pause };
+        crate::icons::paint(p, Rect::from_center_size(button.center(), vec2(20.0, 20.0)), icon, Color32::WHITE);
+    }
 
     let mut edit = None;
     let mut area = egui::ScrollArea::horizontal().id_salt("animatedGifStrip").max_width(PLAY_W);
@@ -141,7 +139,11 @@ pub(super) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, ids: &[PhotoId], 
             if st.dragging == Some(i) {
                 p.rect_filled(cell, 0.0, Color32::from_black_alpha(150));
             }
-            crate::panels::selection_order::paint(p, cell.right() - 4.0, cell.top() + 9.0, i + 1, &t);
+            // the number at the bottom right, as on the grid's thumbnails, on a soft dark backing
+            let digits = p.layout_no_wrap((i + 1).to_string(), t.semibold(12.0), Color32::WHITE).size();
+            let back = Rect::from_min_max(cell.right_bottom() - digits - vec2(8.0, 5.0), cell.right_bottom() - vec2(1.0, 1.0));
+            p.rect_filled(back, 4.0, Color32::from_black_alpha(110));
+            crate::panels::selection_order::paint(p, cell.right() - 4.5, back.center().y, i + 1, &t);
             if st.picked == Some(*id) {
                 p.rect_stroke(cell, 0.0, Stroke::new(2.0, t.accent), StrokeKind::Inside);
             } else if i == current {
