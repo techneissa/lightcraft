@@ -859,3 +859,57 @@ fn denoise_row_while_queue_is_busy() {
     assert!(rows(&x.s).is_empty(), "the row goes once the photo is made");
     let _ = std::fs::remove_dir_all(&x.dir);
 }
+
+/// Two more raw photos beside the first, so a selection can hold several. Returns all three ids.
+fn three_photos(x: &mut Setup) -> Vec<lightcraft_catalog::PhotoId> {
+    let originals = x.dir.join("originals");
+    let mut paths = vec![];
+    for (name, cfa) in [("two.dng", "GRBG"), ("three.dng", "BGGR")] {
+        std::fs::write(originals.join(name), ramp_dng(192, 160, cfa)).unwrap();
+        paths.push(originals.join(name).to_string_lossy().into_owned());
+    }
+    x.s.execute("library.import", &json!({"paths": paths})).unwrap();
+    let mut ids: Vec<_> = x.s.catalog.photos().map(|p| p.id).collect();
+    ids.sort();
+    assert_eq!(ids.len(), 3);
+    ids
+}
+
+#[test]
+fn with_auto_sync_the_denoise_switch_and_amount_reach_every_selected_photo_in_one_undo_step() {
+    let mut x = setup("sync", true);
+    let ids = three_photos(&mut x);
+    // two of the three are selected, the first is the one being edited
+    x.s.execute("library.select", &json!({"ids": [ids[0].0, ids[1].0]})).unwrap();
+    x.s.selection.active = Some(ids[0]);
+    x.s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    let on = |s: &Session, i: usize| s.develop_of(ids[i]).unwrap().enhance.denoise_enabled();
+    let amount = |s: &Session, i: usize| s.develop_of(ids[i]).unwrap().enhance.denoise;
+    let undo = x.s.undo.len();
+    x.s.execute("denoise.toggle", &json!({"id": ids[0].0, "enabled": true})).unwrap();
+    assert_eq!(x.s.undo.len(), undo + 1, "one undo step for the whole selection");
+    assert!(on(&x.s, 0) && on(&x.s, 1), "the switch reaches the other selected photo");
+    assert_eq!((amount(&x.s, 0), amount(&x.s, 1)), (50.0, 50.0));
+    assert_eq!((on(&x.s, 2), amount(&x.s, 2)), (false, 0.0), "a photo outside the selection is left alone");
+    for i in [0, 1] {
+        assert!(matches!(x.s.denoise_photo_state(ids[i]), PhotoState::Queued { .. } | PhotoState::Running { .. }), "photo {i} is queued");
+    }
+    // the Amount slider follows, a drag being one step
+    x.s.begin_interaction("Amount").unwrap();
+    set_amount(&mut x.s, 70.0);
+    x.s.end_interaction().unwrap();
+    assert_eq!((amount(&x.s, 0), amount(&x.s, 1), amount(&x.s, 2)), (70.0, 70.0, 0.0));
+    assert_eq!(x.s.undo.len(), undo + 2);
+    // switching it off reaches both too, and keeps their Amount
+    x.s.execute("denoise.toggle", &json!({"id": ids[0].0, "enabled": false})).unwrap();
+    assert!(!on(&x.s, 0) && !on(&x.s, 1));
+    assert_eq!((amount(&x.s, 0), amount(&x.s, 1)), (70.0, 70.0));
+    x.s.execute("edit.undo", &json!({})).unwrap();
+    assert!(on(&x.s, 0) && on(&x.s, 1), "undo brings the switch back on both photos");
+    // with Auto Sync off only the photo asked for changes
+    x.s.execute("develop.autoSync", &json!({"on": false})).unwrap();
+    x.s.execute("denoise.toggle", &json!({"id": ids[0].0, "enabled": false})).unwrap();
+    assert!(!on(&x.s, 0) && on(&x.s, 1));
+    drop(x.s);
+    let _ = std::fs::remove_dir_all(x.dir);
+}
