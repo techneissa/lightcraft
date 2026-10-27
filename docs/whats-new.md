@@ -1,5 +1,13 @@
 # What's new in LightCraft
 
+## 2026-10-27
+
+### A Command Palette on ⌘P
+- Press ⌘P (Ctrl+P on Windows and Linux), or choose View ▸ Command Palette…, and type to find any command in the
+  menus by its name or its menu: the best matches come first, each with its menu and shortcut. Use ↑ and ↓ to move,
+  Return or a click to run it, and Esc to close it. Commands that cannot run right now are greyed out. Print… no
+  longer uses ⌘P; its menu item is unchanged, and you can give it a shortcut in Keyboard Shortcuts.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock

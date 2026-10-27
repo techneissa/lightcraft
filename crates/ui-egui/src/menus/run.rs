@@ -1204,6 +1204,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
             app.ui.dialog = Some(Dialog::PasteSettings { groups });
             Ok(Value::Null)
         }
+        "view.commandPalette" => {
+            crate::panels::command_palette::toggle(app);
+            Ok(Value::Null)
+        }
         "view.focusSearch" => {
             // the search field lives in the top bar of the library and detail views alike
             app.ui.focus_search = true;
