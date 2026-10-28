@@ -26,6 +26,10 @@
 - Two commands can share a key while their conditions never hold together (X is Reject Photo outside the Crop Tool and
   Swap Aspect inside it). When they could both apply, the key is amber with the reason under the list.
 - Saved in your settings; settings from before load unchanged. `app.setShortcut` takes `when`.
+- Two small icons at the top of the window, **Export Shortcuts…** and **Import Shortcuts…**, save all your shortcuts
+  (both keys, chords and conditions) to a JSON file as a backup and read them back. A file that isn't a LightCraft
+  shortcuts file, or comes from a newer LightCraft, is refused with a clear message; entries that don't fit this
+  version are skipped and listed under the list.
 
 ### Your Own Camera Profiles in the Profile Picker
 - A camera profile of your own (a file in the camera-profiles folder, made with `lightcraft-cli calibrate --name "A7 V

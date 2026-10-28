@@ -70,7 +70,20 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             register(ui, "button:shortcutsResetAll", r.rect);
             if r.clicked() {
                 let _ = app.run("app.resetShortcuts", serde_json::json!({}));
+                app.keybinds.import_notes.clear();
                 capture::close(app);
+            }
+            // Import first, so Export sits to its left: Export, Import, then Reset All
+            let icon = vec2(28.0, 24.0);
+            if app.services.pick_shortcuts_file.is_some()
+                && crate::widgets::icon_button(ui, "shortcutsImport", crate::icons::Icon::Import, icon, false, true, "Import Shortcuts…").clicked()
+            {
+                super::backup::import_dialog(app, ui.ctx());
+            }
+            if app.services.save_shortcuts_file.is_some()
+                && crate::widgets::icon_button(ui, "shortcutsExport", crate::icons::Icon::Export, icon, false, true, "Export Shortcuts…").clicked()
+            {
+                super::backup::export_dialog(app, ui.ctx());
             }
         });
     });
@@ -111,6 +124,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         fixed_keys(ui, t, mac, &needle, &keymap);
     });
     when_cell::damaged_note(app, ui, t);
+    super::backup::notes(app, ui, t);
     clash_note(ui, t, &clashes, &keymap, mac);
 }
 

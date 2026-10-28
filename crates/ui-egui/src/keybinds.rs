@@ -8,8 +8,12 @@
 //!   Esc, a wrong key or the timeout cancels), and [`overlay`] shows what is pending.
 //! - [`capture`]: the "Assign Shortcut" box (press the keys, Enter saves), opened from the Keyboard
 //!   Shortcuts window, a right-click ([`context`]) or the `app.assignShortcut` command.
+//! - [`when`]: conditions (VS Code's "when"): context keys, parser, autocomplete; [`blocked`] lets the
+//!   ones that ask for a dialog or text box fire inside it.
+//! - [`backup`]: Export / Import of the whole keymap as a JSON file.
 //! - [`window`]: the Keyboard Shortcuts window itself.
 
+pub mod backup;
 pub mod blocked;
 pub mod capture;
 pub mod chord;
@@ -31,6 +35,8 @@ pub struct State {
     pub when_edit: Option<window::WhenEdit>,
     /// The notice about conditions that could not be read was shown.
     pub damage_noticed: bool,
+    /// What the last Import skipped or dropped, shown under the list until dismissed.
+    pub import_notes: Vec<String>,
 }
 
 /// `app.assignShortcut {id, slot?}`: open the Assign Shortcut box for a command (`slot` 1 or 2; the

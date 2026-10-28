@@ -105,6 +105,10 @@ pub enum Icon {
     Sun,
     /// Appearance Mode ▸ Dark: a crescent moon.
     Moon,
+    /// Export a file: a tray with an arrow leaving it (up).
+    Export,
+    /// Import a file: a tray with an arrow going into it (down).
+    Import,
 }
 
 struct Pen<'a> {
@@ -596,6 +600,16 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.line(&[(15.5, 3.5), (15.5, 16.5)]);
             pen.line(&[(13.5, 5.5), (15.5, 3.5), (17.5, 5.5)]);
             pen.line(&[(13.5, 14.5), (15.5, 16.5), (17.5, 14.5)]);
+        }
+        Export => {
+            pen.line(&[(3.5, 11.5), (3.5, 16.5), (16.5, 16.5), (16.5, 11.5)]);
+            pen.line(&[(10.0, 12.5), (10.0, 3.0)]);
+            pen.line(&[(6.5, 6.5), (10.0, 3.0), (13.5, 6.5)]);
+        }
+        Import => {
+            pen.line(&[(3.5, 11.5), (3.5, 16.5), (16.5, 16.5), (16.5, 11.5)]);
+            pen.line(&[(10.0, 3.0), (10.0, 12.5)]);
+            pen.line(&[(6.5, 9.0), (10.0, 12.5), (13.5, 9.0)]);
         }
     }
 }

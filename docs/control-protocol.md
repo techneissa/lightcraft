@@ -390,6 +390,16 @@ A shortcut is one key (`Cmd+Shift+K`, `F5`, `Delete`) or a chord of two keys sep
   (Reject Photo `tool != crop` and Swap Aspect `tool == crop` share X). A condition that needs `textFocus`,
   `dialogOpen` or `paletteOpen` also fires while a text box, a dialog or the palette has the keyboard. Stored in the
   keymap as the entry `<id>?when`.
+- **Backup.** `app.exportShortcuts {path}` writes every customised binding as JSON and replies `{path, commands}`;
+  `app.importShortcuts {path}` reads such a file and replaces the customisations of the commands it names (what the file
+  does not mention goes back to its declared value; entries for commands this build doesn't know are kept) and replies
+  `{imported, notices}`. The file is `{"kind": "lightcraft-shortcuts", "version": 1, "shortcuts": {"<id>": {"shortcut":
+  "K", "shortcut2": "Cmd+K S", "when": "view == detail"}}}`; a field that is absent was not customised, `null` means the
+  shortcut was removed (or the condition set to always). A file that is not ours (`kind`), is newer than the build
+  (`version`) or isn't readable JSON is an error and changes nothing; an unknown command, a shortcut that doesn't parse
+  or is reserved for the app menu, and a condition that doesn't parse are skipped, each with a line in `notices`
+  (the window shows them under the list). Both commands need `path`. The window's icons are `icon:shortcutsExport` and
+  `icon:shortcutsImport` (they use the host's save and open panels), the notices' button `button:shortcutsNotesDismiss`.
 - In the Keyboard Shortcuts window the When cell of a command is `button:shortcutWhen-<id>` (click to type; the box is
   `field:shortcutWhen`, the autocomplete rows `menu:whenSuggestion-<n>`) and `button:shortcutWhenAdd-<id>` opens the builder
   (`menu:whenKey-<key>`, `menu:whenIs` / `menu:whenIsNot`, `menu:whenValue-<value>`, `menu:whenBack`).

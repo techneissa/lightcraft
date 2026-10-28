@@ -179,7 +179,7 @@ pub fn conflicts(keymap: &Keymap, id: &str, steps: &[Step]) -> Vec<Holder> {
 
 /// Store `sc` in `slot` of `id` without checking anything: an entry that equals the declared
 /// shortcut is dropped, and "none" is kept as an empty entry where a declared shortcut exists.
-fn put(keymap: &mut Keymap, id: &str, slot: usize, sc: Option<&str>) {
+pub(crate) fn put(keymap: &mut Keymap, id: &str, slot: usize, sc: Option<&str>) {
     if slot == 0 {
         shortcuts::set(keymap, id, sc);
     } else if let Some(sc) = sc {

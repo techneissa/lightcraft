@@ -249,3 +249,27 @@ fn tab_walks_the_right_panels_top_to_bottom() {
         }
     }
 }
+
+/// The Keyboard Shortcuts window's controls all have names, among them the Export and Import icons
+/// and the When column's cells (fork feature `feat/shortcut-when`).
+#[test]
+fn the_shortcuts_window_names_its_icon_buttons_and_condition_cells() {
+    let services =
+        Services { png: None, save_shortcuts_file: Some(Box::new(|_| None)), pick_shortcuts_file: Some(Box::new(Vec::new)), ..Default::default() };
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    app.ui.dialog = Some(lightcraft_ui_egui::state::Dialog::Shortcuts);
+    let mut h = Harness::builder().with_size(vec2(1500.0, 950.0)).build_ui_state(
+        |ui, app: &mut LightcraftApp| {
+            app.logic(&ui.ctx().clone());
+            app.ui(ui);
+        },
+        app,
+    );
+    h.run_steps(10);
+    let names: Vec<String> = h.root().children_recursive().filter_map(|n| n.accesskit_node().label()).collect();
+    for want in ["Export Shortcuts…", "Import Shortcuts…", "Condition", "Add Condition"] {
+        assert!(names.iter().any(|n| n == want), "{want} is not announced: {names:?}");
+    }
+    let problems: Vec<String> = audit(&h, "Keyboard Shortcuts").into_iter().filter(|p| p.contains("unnamed")).collect();
+    assert!(problems.is_empty(), "{problems:#?}");
+}

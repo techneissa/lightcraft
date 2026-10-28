@@ -340,7 +340,13 @@ fn when_pictures() {
     let png = |img: &lightcraft_raster::Rgba8| {
         lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
     };
-    let services = Services { png: Some(Box::new(png)), write_new: Some(Box::new(lightcraft_engine::export::write_file_new)), ..Default::default() };
+    let services = Services {
+        png: Some(Box::new(png)),
+        write_new: Some(Box::new(lightcraft_engine::export::write_file_new)),
+        save_shortcuts_file: Some(Box::new(|_| None)),
+        pick_shortcuts_file: Some(Box::new(Vec::new)),
+        ..Default::default()
+    };
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1500.0, 950.0], 1.0);
     h.settle(SETTLE);
@@ -349,7 +355,6 @@ fn when_pictures() {
     h.step();
     click(&mut h, "field:shortcutsSearch");
     type_text(&mut h, "view");
-    shot(&mut h, "when-before.png");
     for (id, when) in [
         ("view.beforeAfter", Some("view == detail && hasPhoto")),
         ("view.cropOverlay", Some("tool == crop")),

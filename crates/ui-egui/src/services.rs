@@ -129,4 +129,8 @@ pub struct Services {
     pub restore_library: Option<HostAction>,
     /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.
     pub system_theme: Option<SystemThemeFn>,
+    /// Save dialog for the Keyboard Shortcuts window's Export… (a `.json` file; desktop only).
+    pub save_shortcuts_file: Option<SaveFile>,
+    /// Open dialog for its Import… (one `.json` file; desktop only).
+    pub pick_shortcuts_file: Option<PickFiles>,
 }

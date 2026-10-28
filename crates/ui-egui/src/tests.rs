@@ -71,6 +71,7 @@ mod rename_person;
 mod rules_editor;
 mod sam_setup;
 mod scroll;
+mod shortcut_backup;
 mod shortcut_editing;
 mod shortcut_when;
 mod slider_reset;
