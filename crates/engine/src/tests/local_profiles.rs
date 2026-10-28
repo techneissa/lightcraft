@@ -119,7 +119,7 @@ fn a_dng_describes_a_local_profile_photo_as_camera_matching() {
     assert!(matches!(crate::export::for_dng(&plain), Cow::Borrowed(_)), "a photo on neither is written as it is");
 }
 
-/// Choosing a local profile for a photo is named in the history, like the Switch step; Camera Matching keeps its name.
+/// Choosing a local profile for a photo is named in the history, like the Switch step; so is each other colour source.
 #[test]
 fn the_history_names_the_local_profile_a_photo_is_set_to() {
     let dir = std::env::temp_dir().join(format!("lc-local-label-{}", std::process::id()));
@@ -135,6 +135,10 @@ fn the_history_names_the_local_profile_a_photo_is_set_to() {
     assert_eq!(label(&s).as_deref(), Some("Profile: A7 V Chart"));
     s.execute("develop.profile", &json!({"camera_colour": "auto"})).unwrap();
     assert_eq!(label(&s).as_deref(), Some("Camera Matching"));
+    s.execute("develop.profile", &json!({"camera_colour": "macos"})).unwrap();
+    assert_eq!(label(&s).as_deref(), Some("macOS Colour"), "each colour source is named (review fix 7)");
+    s.execute("develop.profile", &json!({"camera_colour": "colorimetric"})).unwrap();
+    assert_eq!(label(&s).as_deref(), Some("No Camera Matching"));
     s.execute("develop.profile", &json!({"camera_colour": "local", "camera_profile": "gone"})).unwrap();
     assert_eq!(label(&s).as_deref(), Some("Profile: gone"), "a file that is not there is named by its id");
     let _ = std::fs::remove_dir_all(&dir);

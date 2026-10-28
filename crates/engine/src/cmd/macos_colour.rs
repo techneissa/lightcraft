@@ -107,6 +107,15 @@ pub(crate) fn leaving_as_shot(s: &Session, colour: Option<CameraColour>) -> Opti
     (from_macos && to_relative).then(|| crate::files::macos_as_shot(s, photo)).flatten()
 }
 
+/// The history's name for a colour-source change (`develop.profile` with `camera_colour` alone): the picker's row.
+pub(crate) fn colour_label(colour: Option<CameraColour>) -> &'static str {
+    match colour {
+        Some(CameraColour::Macos) => "macOS Colour",
+        Some(CameraColour::Colorimetric) => "No Camera Matching",
+        _ => "Camera Matching",
+    }
+}
+
 /// Moves the planned photos to macOS Colour in one undo step; returns how many moved.
 pub(crate) fn apply(s: &mut Session, plan: &Plan) -> crate::Result<usize> {
     let label = "Profile: macOS Colour";

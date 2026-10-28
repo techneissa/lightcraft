@@ -530,7 +530,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         let name = crate::camera_profiles::local_profile(file).map_or_else(|| file.to_owned(), |l| l.name.clone());
                         format!("Profile: {name}")
                     }
-                    (None, None) => "Camera Matching".to_owned(),
+                    (None, None) => super::macos_colour::colour_label(colour).to_owned(),
                     (Some(_), None) => "Profile".to_owned(),
                 };
                 let leaving_macos = super::macos_colour::leaving_as_shot(s, colour);
