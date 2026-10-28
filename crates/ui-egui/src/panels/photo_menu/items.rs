@@ -121,6 +121,21 @@ pub fn split_on(app: &LightcraftApp) -> bool {
 pub fn draw(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: PhotoId) {
     let text = label(b);
     match b.id {
+        "openInDetail" | "beforeAfterSplit" | "editIn" | "findSimilar" | "setReference" => draw_open_items(app, ui, b, id, &text),
+        "rating" | "flag" | "colorLabel" | "addToAlbum" | "removeFromAlbum" | "setAlbumCover" => draw_meta_items(app, ui, b, id, &text),
+        "rename" | "moveToFolder" | "reload" | "virtualCopy" | "createVersion" | "stack" => draw_file_items(app, ui, b, id, &text),
+        "copySettings" | "pasteSettings" | "pasteSelected" | "resetEdits" | "photoMerge" | "rotateLeft" | "rotateRight" => {
+            draw_edit_items(app, ui, b, &text)
+        }
+        "locateMissing" | "showInFinder" | "showInFolders" | "export" | "exportWithPreset" | "exportAnimatedGif" | "delete" | "customize" => {
+            draw_export_items(app, ui, b, id, &text)
+        }
+        _ => {}
+    }
+}
+
+fn draw_open_items(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: PhotoId, text: &str) {
+    match b.id {
         "openInDetail" => {
             if ui.button(text).clicked() {
                 let _ = app.run("view.detail", json!({}));
@@ -193,6 +208,12 @@ pub fn draw(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: PhotoId
                 app.toast(ui.ctx(), e);
             }
         }
+        _ => {}
+    }
+}
+
+fn draw_meta_items(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: PhotoId, text: &str) {
+    match b.id {
         "rating" => {
             crate::widgets::menu_button(ui, text, |ui| {
                 for r in 0..=5 {
@@ -214,7 +235,7 @@ pub fn draw(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: PhotoId
         "colorLabel" => {
             crate::widgets::menu_button(ui, text, |ui| label_menu(app, ui));
         }
-        "addToAlbum" => add_to_album(app, ui, text),
+        "addToAlbum" => add_to_album(app, ui, text.to_string()),
         "removeFromAlbum" => {
             if let Some(aid) = normal_album(app)
                 && ui.button(text).clicked()
@@ -229,6 +250,12 @@ pub fn draw(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: PhotoId
                 let _ = app.run("album.setCover", json!({"id": aid, "photo": id.0}));
             }
         }
+        _ => {}
+    }
+}
+
+fn draw_file_items(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: PhotoId, text: &str) {
+    match b.id {
         "rename" => {
             if ui.button(text).clicked() {
                 let _ = app.run("dialog.rename", json!({}));
@@ -257,7 +284,13 @@ pub fn draw(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: PhotoId
                 let _ = app.run("version.create", json!({}));
             }
         }
-        "stack" => stack_menu(app, ui, text, id),
+        "stack" => stack_menu(app, ui, text.to_string(), id),
+        _ => {}
+    }
+}
+
+fn draw_edit_items(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, text: &str) {
+    match b.id {
         "copySettings" => {
             if ui.button(text).clicked() {
                 let _ = app.run("develop.copy", json!({}));
@@ -289,16 +322,18 @@ pub fn draw(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: PhotoId
                 }
             });
         }
-        "rotateLeft" => {
-            if ui.button(text).clicked() {
-                let _ = app.run("photo.rotateLeft", json!({}));
-            }
+        "rotateLeft" if ui.button(text).clicked() => {
+            let _ = app.run("photo.rotateLeft", json!({}));
         }
-        "rotateRight" => {
-            if ui.button(text).clicked() {
-                let _ = app.run("photo.rotateRight", json!({}));
-            }
+        "rotateRight" if ui.button(text).clicked() => {
+            let _ = app.run("photo.rotateRight", json!({}));
         }
+        _ => {}
+    }
+}
+
+fn draw_export_items(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: PhotoId, text: &str) {
+    match b.id {
         // the original moved or its drive is gone: point the photo at the file again
         "locateMissing" => {
             if ui.button(text).clicked() {
@@ -322,9 +357,9 @@ pub fn draw(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: PhotoId
                 let _ = app.run("dialog.export", json!({}));
             }
         }
-        "exportWithPreset" => export_with_preset(app, ui, text),
+        "exportWithPreset" => export_with_preset(app, ui, text.to_string()),
         "exportAnimatedGif" => crate::animated_gif::context_menu_item(app, ui),
-        "delete" => delete(app, ui, text),
+        "delete" => delete(app, ui, text.to_string()),
         "customize" => {
             let r = ui.button(text);
             register(ui, "button:contextCustomizeMenu", r.rect);

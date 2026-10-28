@@ -17,7 +17,7 @@
 //! the setting (`denoise.settings` → `autoOpen`, off unless the user turns it on). Such a photo is not recorded, so it is
 //! handled the first time it is opened once the model is installed.
 
-use super::*;
+use super::{Deserialize, Duration, HashSet, PhotoId, Serialize, Session, Value, eligible, json};
 use crate::{EngineError, Result};
 
 /// The library file holding the handled photos.
