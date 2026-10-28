@@ -98,7 +98,8 @@ fn a_chord_fires_its_command_after_the_leader_and_shows_a_hint() {
     assert!(h.app.keybinds.pending.is_some());
     assert!(has(&h, "chordHint"), "the hint shows while the chord waits");
     let shown = text(&h);
-    assert!(shown.contains("was pressed"), "{shown}");
+    assert!(!shown.contains("was pressed"), "the leader shows as a key, not a sentence: {shown}");
+    assert!(shown.contains("Esc"), "Esc is shown as the way out: {shown}");
     assert!(shown.contains("Survey"), "the hint lists what the next key does: {shown}");
     key(&mut h, "S");
     assert_eq!(h.app.ui.view, ViewMode::Survey);
