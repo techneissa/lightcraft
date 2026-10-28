@@ -953,7 +953,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
         }
         app.ui.dragging_photos = Some(app.session.selection.ids.iter().map(|p| p.0).collect());
     }
-    crate::widgets::context_menu(&resp, |ui| context_menu(app, ui, id));
+    crate::widgets::context_menu(&resp, |ui| super::photo_menu::show(app, ui, id));
 }
 
 /// The header of a Local folder view: the path as a breadcrumb (each part opens that folder),

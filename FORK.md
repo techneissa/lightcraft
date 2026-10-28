@@ -72,6 +72,7 @@ Local folder: `~/Documents/workspace/gitClones/lightcraft`. Git remembers how a 
 | Command Palette on ⌘P (Print has no shortcut) | `feat/command-palette` | `crates/ui-egui/src/panels/command_palette.rs` and its `tests.rs` | `panels.rs`, `state.rs`, `menus/run.rs`, `menus/ui_commands.rs`, `shortcuts.rs`, `app/frame.rs` | `command_palette` |
 | Edit All N Selected (Auto Sync on by default; AI Denoise follows it) | `fix/edit-all-selected` | `crates/ui-egui/src/panels/edit_all.rs` | engine `cmd/denoise.rs`, `lib.rs`, `library.rs`, `cmd/develop.rs`; UI `app.rs`, `panels.rs`, `panels/edit.rs` | `edit_all`, `denoise`, `prefs` |
 | Taller, resizable open and save windows on macOS (at least 520 pt) | `feat/larger-file-dialogs` | `crates/filepanel` (the second crate allowed `unsafe`) | `apps/lightcraft/src/platform.rs` (1 call in `file_dialog`), app and workspace `Cargo.toml`, `xtask/src/layers.rs`, `AGENTS.md` / `CLAUDE.md` (the `unsafe` line) | `lightcraft-filepanel` |
+| Arrange the photo menu (Settings ▸ Photo Menu), Before/After Split in it, one photo hides what needs several | `feat/photo-menu` (on `feat/animated-gif-export`) | `crates/ui-egui/src/panels/photo_menu.rs` and `photo_menu/` (`items.rs`, `editor.rs`, `tests.rs`) | `panels.rs` (module), `state/settings.rs` (`photo_menu` field), `dialogs/settings.rs` (tab), `menus/run.rs` + `menus/ui_commands.rs` (`photoMenu.*`), one call each in `panels/grid.rs`, `detail.rs`, `detail/filmstrip.rs`, `compare.rs` (2); `grid::context_menu` stays as the reference | `photo_menu` (its test fails when an update adds an item to the official menu: add it to `items::BUILTINS` and `DEFAULT`) |
 
 Every feature also has an entry in `docs/whats-new.md` and a row in `docs/parity-checklist.md`; clashes there are
 fixed by the update script (both sides kept).
@@ -82,7 +83,7 @@ The tests of every feature, after a merge:
 cargo test -p lightcraft-codecs --lib animated_gif
 cargo test -p lightcraft-filepanel
 cargo test -p lightcraft-engine --lib -- animated_gif denoise prefs
-cargo test -p lightcraft-ui-egui --lib -- animated_gif selection_order split_divider before_after command_palette edit_all
+cargo test -p lightcraft-ui-egui --lib -- animated_gif selection_order split_divider before_after command_palette edit_all photo_menu
 ```
 
 ## Known failures on this Mac (not caused by the fork)

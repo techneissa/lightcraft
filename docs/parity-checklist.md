@@ -49,13 +49,13 @@ cited here still exists. Formerly docs/parity.md.
 | U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
 | V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
-| X. Cross-cutting behaviours (BEHAV) | 24 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
+| X. Cross-cutting behaviours (BEHAV) | 25 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 25 | 21 | 8 | — | 24/26 (92%) |
-| **Total** | 423 | 65 | 57 | 35 | 196/203 (97%) | 146/161 (91%) |
+| **Total** | 424 | 65 | 57 | 35 | 196/203 (97%) | 146/161 (91%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.6%** of 545 in-scope rows — P0 98.3% of 203 · P1 94.4% of 161 · P2 57.2% of 180.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.6%** of 546 in-scope rows — P0 98.3% of 203 · P1 94.4% of 161 · P2 57.5% of 181.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -488,6 +488,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-BEHAV-AI-EA | Early-access badges | P2 | ⬜ | | |
 | LR-BEHAV-TITLEBAR | Title bar drag and double-click zoom (macOS) | P2 | 🟡 | `crates/ui-egui/src/panels/topbar.rs`, `crates/ui-egui/src/tests/titlebar.rs` | the native title bar is hidden on macOS, so the top bar's empty space (including the traffic-light margin) moves the window and a double-click does what System Settings › “Double-click a window's title bar to” says (zoom or restore, minimize, nothing; craft-window's `title_bar`); buttons and the search field keep their clicks; ignored in full screen, where the traffic lights are gone and the bar's left buttons move into their space (#1763). A press that starts on a button, the search field or a panel floating over the bar never moves the window (AppKit's `movable` is off while the pointer is there). Known gap: egui-winit reads the zoomed state only at start-up and after our own `Maximized` command, so a window zoomed another way (green button, Window ▸ Zoom, snapping) makes the first double-click a no-op before the toggle catches up. Checked by hand on a real macOS window (drag, zoom, restore) |
 | LR-BEHAV-COMMAND-PALETTE | Command Palette (beyond Lightroom) | P2 | ✅ | `cmd:view.commandPalette`, `crates/ui-egui/src/panels/command_palette.rs`, `crates/ui-egui/src/panels/command_palette/tests.rs` | ⌘P (Ctrl+P on Windows and Linux) or View ▸ Command Palette… opens a search box over every command in the menus: typing filters by label and menu path (word prefixes first, then substrings and loose letters), each row shows its menu path and shortcut, ↑/↓ move, Return or a click runs it through the menu's own path (undo, dialogs and enabled state as from the menu), Esc closes; a command that is disabled right now is greyed and does not run. Print… no longer has ⌘P |
+| LR-BEHAV-PHOTO-MENU | Arrange the photo's right-click menu (beyond Lightroom) | P2 | ✅ | `cmd:photoMenu.get`, `cmd:photoMenu.set`, `cmd:photoMenu.reset`, `cmd:app.settings`, `crates/ui-egui/src/panels/photo_menu.rs`, `crates/ui-egui/src/panels/photo_menu/editor.rs`, `crates/ui-egui/src/panels/photo_menu/tests.rs` | Settings ▸ Photo Menu (also the menu's Customize Menu… item, which an emptied menu still shows) lists the menu's rows: drag one to move it (the list scrolls at its edges), × or Delete takes it out, ↑ / ↓ pick a row and ⌥↑ / ⌥↓ move it; a saved command this build doesn't have shows as not available; the list beside it, with a search box, offers the built-in items not in the menu and every menu-bar command (+, a double-click or a drag adds one), Add Separator and Reset to Default; changes apply at once and are kept in the app settings (`photoMenu`). The default adds Before/After Split (from a grid it opens the photo with the split on; a check mark when on) and Customize Menu… to the official items. With one photo selected, items that need several (Photo Merge, Export Animated GIF…, Group into Stack, such commands) are left out, and separators are tidied. A test keeps the default equal to the official menu, so an item an update adds is noticed |
 
 ## Y. Menus
 
