@@ -15,6 +15,27 @@ pub fn list_auto_import_folder(folder: &str) -> std::result::Result<Vec<(String,
         .collect())
 }
 
+/// What one poll of the auto-import folder found.
+pub struct AutoImportPoll {
+    /// the folder's modification time when polled (`None` where the file system has none)
+    pub stamp: Option<std::time::SystemTime>,
+    /// its files, when they were listed: not when the folder's time is `last` and `force` is off
+    pub listing: Option<Vec<(String, u64)>>,
+}
+
+/// Poll the auto-import folder: one `stat` of the folder, and its files only when its modification
+/// time differs from `last` (a new file bumps it) or `force` is set (a file still being copied grows
+/// without bumping it, and a subfolder's change doesn't bump its parent). Keeps an idle watch of a
+/// big folder from listing it every few seconds. The time is read before the listing, so a file
+/// added in between shows up in the next poll.
+pub fn poll_auto_import_folder(folder: &str, last: Option<std::time::SystemTime>, force: bool) -> std::result::Result<AutoImportPoll, String> {
+    let stamp = std::fs::metadata(folder).and_then(|m| m.modified()).ok();
+    if !force && stamp.is_some() && stamp == last {
+        return Ok(AutoImportPoll { stamp, listing: None });
+    }
+    Ok(AutoImportPoll { stamp, listing: Some(list_auto_import_folder(folder)?) })
+}
+
 /// `library.import`'s params, checked (no file-system calls).
 pub struct ImportRequest {
     pub paths: Vec<String>,

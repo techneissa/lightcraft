@@ -234,6 +234,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let se = app.ui.settings.stand_in_edge(want, texture_side);
     let (sw, sh) = if aspect >= 1.0 { (se, short(se, aspect)) } else { (short(se, 1.0 / aspect), se) };
     let ask = LoupeAsk { id, with_crop: !crop_tool, interacting, fit_px, overlay };
+    app.renderer.loupe_drawn();
     request_main(app, ui, &ask, [rw, rh], plan.window_edge.is_none());
     // hovering a preset or profile: the photo with that look, shown instead of the loupe render
     // once it is ready (nothing is committed)
@@ -336,7 +337,7 @@ fn loupe_paint_and_finish(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
         window_ctx,
     } = v;
     let p = ui.painter_at(canvas);
-    let draw = |slot: Slot, r: Rect, clip: Rect| draw_slot(app, &p, id, ppp, slot, r, clip);
+    let draw = |slot: Slot, r: Rect, clip: Rect| draw_slot(app, &p, (id, !crop_tool), ppp, slot, [r, clip]);
     // soft proofing: a paper-white surround and the proof's name, as Lightroom shows it
     if app.ui.soft_proof && !fullscreen {
         proof_surround(app, &p, t, canvas);
@@ -372,9 +373,6 @@ fn loupe_paint_and_finish(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
         }
     }
     app.loupe_shown = Some((id, shown));
-    if shown == "render" {
-        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(HELD_RECT), (id, img_rect)));
-    }
     // a wipe shows the Before whole-frame render on its side of the line…
     // (the line can be dragged: it, and so each side, follows the divider)
     let divider = super::split_divider::interact(app, ui, canvas, img_rect);
@@ -878,27 +876,41 @@ fn request_before(app: &mut LightcraftApp, a: &LoupeAsk, [sw, sh]: [usize; 2]) {
     }
 }
 
-/// What a view slot shows: its own render of this photo, else the stand-ins (no blank frame
-/// between photos, and the full render replaces them in place). Returns what it drew.
-fn draw_slot(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, ppp: f32, slot: Slot, r: Rect, clip: Rect) -> &'static str {
+/// What a view slot shows: its own render of this photo, else (the main view only) a stand-in that
+/// is this photo with its current look: a cached render or a thumbnail made from its settings as
+/// they are now, scaled to fit (no blank frame between photos, and the full render replaces it in
+/// place). Never another photo's pixels, an older look, or the camera's JPEG (another look than the
+/// render's, which then shifted on screen); with none of those, a plain placeholder the size of the
+/// photo's frame ("none": the loupe says "Rendering…"). Returns what it drew.
+///
+/// A raw that can't be rendered at all has nothing else, so its camera JPEG stands in (the loupe
+/// says the render failed).
+fn draw_slot(app: &LightcraftApp, p: &egui::Painter, (id, with_crop): (PhotoId, bool), ppp: f32, slot: Slot, [r, clip]: [Rect; 2]) -> &'static str {
     let unrenderable = app.renderer.failure_of(Slot::Main, id).is_some();
-    let stand_in = |t: &&crate::render::Tex| unrenderable || t.quick != Some(QuickSource::Embedded);
-    let held = held_rect(p.ctx());
     let mine = |s: Slot| app.renderer.textures.get(&s).filter(|t| t.photo == id);
-    let (tex, what, draw_at) = if let Some(t) = mine(slot) {
-        (t, "render", r)
-    } else if let Some(t) = mine(Slot::Preview).filter(|t| stand_in(t)) {
-        (t, t.quick.map(quick_name).unwrap_or("preview"), r)
-    } else if let Some(t) = app.renderer.thumb(id).filter(|t| stand_in(t)) {
-        (t, "thumb", r)
-    } else if let Some(t) = app.renderer.textures.get(&Slot::Main).filter(|_| slot == Slot::Main && !unrenderable)
-        && let Some((_, at)) = held.filter(|(photo, _)| *photo == t.photo)
-    {
-        (t, "held", at)
-    } else {
-        return "none";
+    let stand_in = || {
+        // (the Before view's stand-in would be the After look)
+        if slot != Slot::Main {
+            return None;
+        }
+        // the camera's JPEG, or a stand-in made for settings the photo no longer has
+        let look = app.session.quick_view_key(id, with_crop, unrenderable);
+        let preview = mine(Slot::Preview).filter(|t| t.quick != Some(QuickSource::Embedded) || unrenderable).filter(|t| Some(t.key) == look);
+        let thumb = || {
+            let photo = app.session.catalog.photo(id)?;
+            app.renderer.thumb_of_current_look(photo).or_else(|| app.renderer.thumb(id).filter(|_| unrenderable))
+        };
+        preview.map(|t| (t, t.quick.map(quick_name).unwrap_or("preview"))).or_else(|| thumb().map(|t| (t, "thumb")))
     };
-    let image_rect = snap_fit_rect(fit_texture_rect(draw_at, tex.size), tex.size, ppp);
+    let (tex, what) = match mine(slot).map(|t| (t, "render")).or_else(stand_in) {
+        Some(found) => found,
+        None => {
+            let t = Tokens::get(p.ctx());
+            p.with_clip_rect(clip).rect_filled(r, 0.0, t.skeleton);
+            return "none";
+        }
+    };
+    let image_rect = snap_fit_rect(fit_texture_rect(r, tex.size), tex.size, ppp);
     p.with_clip_rect(clip).image(tex.tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     what
 }
@@ -988,15 +1000,6 @@ fn request_stand_in(app: &mut LightcraftApp, id: PhotoId, edge: usize, with_crop
     {
         app.renderer.request_quick(Slot::Preview, q, 110);
     }
-}
-
-/// Where the loupe last drew a photo's own render: `(photo, image rect)`, egui temp data. A photo
-/// switched to with nothing of its own to show yet keeps that one on screen ("held").
-const HELD_RECT: &str = "loupe-held-rect";
-
-/// The photo the loupe last drew a render of, and where ([`HELD_RECT`]).
-pub(crate) fn held_rect(ctx: &egui::Context) -> Option<(PhotoId, Rect)> {
-    ctx.data(|d| d.get_temp::<(PhotoId, Rect)>(egui::Id::unique(HELD_RECT)))
 }
 
 /// Neighbour prefetch: below on-screen thumbnails, above background thumbnail refreshes.

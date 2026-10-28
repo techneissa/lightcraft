@@ -792,3 +792,16 @@ fn deferred_writes_are_bounded_and_drain_to_disk() {
     assert!(keys.iter().all(|k| cache.get(*k).is_some()));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A worker calls the waker after each job it finishes, once the result can be received.
+#[test]
+fn the_waker_is_called_when_a_job_finishes() {
+    let mut p: JobPool<u8, u8> = JobPool::new(1);
+    let (tx, rx) = std::sync::mpsc::channel();
+    p.set_waker(Arc::new(move || {
+        let _ = tx.send(());
+    }));
+    p.submit(1, 1, 0, Box::new(|| 42));
+    rx.recv_timeout(std::time::Duration::from_secs(5)).expect("woken");
+    assert_eq!(p.try_recv().map(|d| d.result), Some(42), "the result is there when the waker runs");
+}

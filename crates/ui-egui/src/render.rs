@@ -196,6 +196,14 @@ pub(crate) fn stage_trim_order(sizes: &[(Slot, usize)], budget: usize) -> Vec<Sl
 /// engine's own caches do not count.
 const STAGE_BUDGET_SHARE: usize = 4;
 
+/// How long the loupe stays closed before its stage cache is freed (it is 250 MB or so on a big
+/// raw): a quick trip to the grid and back finds it warm, and a long one gives the memory back.
+pub const LOUPE_RELEASE: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// How often a window with renders pending looks at them when nothing woke it ([`Renderer::pending_poll`]).
+const PENDING_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+const PENDING_POLL_OFFLOAD: std::time::Duration = std::time::Duration::from_millis(16);
+
 /// Variant thumbnails kept as textures (LRU), when nothing asks for more.
 pub const VARIANT_TEXTURES: usize = 96;
 /// The most a view can raise that to ([`Renderer::want_variants`]): a screenful of small faces is a few hundred pictures of
@@ -236,6 +244,12 @@ pub struct Renderer {
     /// The last [`Slot::HdrHistogram`] result: (photo, job key, histogram).
     pub live_hdr_histogram: Option<(PhotoId, u64, Histogram)>,
     pub last_main_ms: f64,
+    /// The last loupe render's time by kind, in ms (`ui.inspect` → `perf`): a drag's draft has a
+    /// 16 ms budget, the full-quality render a longer one, and one number mixed them.
+    pub last_draft_ms: Option<f64>,
+    pub last_full_ms: Option<f64>,
+    /// Keys of the draft renders asked for (a result is a draft when its key is here).
+    draft_keys: std::collections::HashSet<u64>,
     /// Jobs finished since start (for inspect/perf).
     pub completed: u64,
     /// Finished jobs thrown away because a newer request for their slot had replaced them.
@@ -262,10 +276,16 @@ pub struct Renderer {
     variant_want: usize,
     /// Frames polled so far.
     frame: u64,
+    /// The pool's workers wake the window when a job finishes (set on the first poll).
+    waker_set: bool,
     /// Slideshow slides may be held ([`Self::release_slides`] has something to do).
     slides_live: bool,
     /// Stage caches cleared to stay in budget (see [`stage_trim_order`]).
     stages_trimmed: u64,
+    /// The frame the loupe last drew in ([`Self::loupe_drawn`]).
+    loupe_frame: u64,
+    /// Since when the loupe has not been drawn (see [`LOUPE_RELEASE`]).
+    loupe_gone: Option<std::time::Instant>,
     /// A budget other than the memory budget's share (tests).
     #[cfg(test)]
     pub(crate) stage_budget_override: Option<usize>,
@@ -320,6 +340,9 @@ impl Renderer {
             textures: HashMap::new(),
             live_hdr_histogram: None,
             last_main_ms: 0.0,
+            last_draft_ms: None,
+            last_full_ms: None,
+            draft_keys: Default::default(),
             completed: 0,
             discarded: 0,
             keep_pixels: false,
@@ -333,6 +356,9 @@ impl Renderer {
             frame: 0,
             slides_live: false,
             stages_trimmed: 0,
+            loupe_frame: 0,
+            loupe_gone: None,
+            waker_set: false,
             #[cfg(test)]
             stage_budget_override: None,
             display: None,
@@ -547,6 +573,38 @@ impl Renderer {
         self.stages.remove(&slot);
     }
 
+    /// The loupe drew a frame (called from its paint, so a frame without the loupe is a closed one).
+    pub fn loupe_drawn(&mut self) {
+        self.loupe_frame = self.frame;
+    }
+
+    /// Free the loupe's stage cache once the loupe has been closed for [`LOUPE_RELEASE`] (the
+    /// stages were never released otherwise: the open photo's views are never trimmed). `now` is
+    /// the clock; a frame after a long idle spell with the loupe open counts the loupe as open.
+    /// Returns when to look again, if it is waiting.
+    fn release_closed_loupe(&mut self, now: std::time::Instant) -> Option<std::time::Duration> {
+        // (called at the start of a frame, before the loupe draws: it drew in the last one)
+        if self.loupe_frame + 1 >= self.frame || !self.stages.contains_key(&Slot::Main) {
+            self.loupe_gone = None;
+            return None;
+        }
+        let since = *self.loupe_gone.get_or_insert(now);
+        let waited = now.saturating_duration_since(since);
+        if waited < LOUPE_RELEASE {
+            return Some(LOUPE_RELEASE - waited);
+        }
+        if self.is_pending(Slot::Main) {
+            return Some(LOUPE_RELEASE);
+        }
+        self.stages.remove(&Slot::Main);
+        // (let the idle trim give the GPU's recycled buffers back too)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.idle = None;
+        }
+        None
+    }
+
     /// Run jobs through `offload` from now on (instead of the job pool / inline).
     pub fn set_offload(&mut self, offload: Box<dyn RenderOffload>) {
         self.offload = Some(offload);
@@ -576,6 +634,12 @@ impl Renderer {
             return;
         }
         self.pending.insert(slot, (job.key, priority));
+        if slot == Slot::Main && job.request.quality == lightcraft_engine::pipeline::Quality::Draft {
+            if self.draft_keys.len() >= 64 {
+                self.draft_keys.clear();
+            }
+            self.draft_keys.insert(job.key);
+        }
         job.request_id = lightcraft_preview::next_tick();
         self.requests.insert(
             slot,
@@ -710,6 +774,7 @@ impl Renderer {
         self.preview_generation = None;
         self.pool.reprioritize(|_, _| None);
         self.thumb_inputs.clear();
+        self.embedded_thumbs.clear();
         self.textures.clear();
         self.stages.clear();
         self.quick_tried.clear();
@@ -737,6 +802,20 @@ impl Renderer {
     }
 
     /// The texture to show for a grid/filmstrip thumbnail: the rendered one, else its stand-in.
+    /// The grid thumbnail of `photo` made from its settings as they are now, never an older look
+    /// still on screen while its replacement renders, and never the camera's embedded JPEG (another
+    /// look than the render's). Known only for the request the grid last made for the photo.
+    pub fn thumb_of_current_look(&self, photo: &Arc<lightcraft_catalog::Photo>) -> Option<&Tex> {
+        let &(ref old, _, key, _, _) = self.thumb_inputs.get(&photo.id)?;
+        if old.as_ptr() != Arc::as_ptr(photo) {
+            return None;
+        }
+        [Slot::Thumb(photo.id), Slot::ThumbQuick(photo.id)]
+            .iter()
+            .filter_map(|s| self.textures.get(s))
+            .find(|t| t.key == key && t.quick != Some(QuickSource::Embedded))
+    }
+
     pub fn thumb(&self, id: PhotoId) -> Option<&Tex> {
         self.textures.get(&Slot::Thumb(id)).or_else(|| self.textures.get(&Slot::ThumbQuick(id)))
     }
@@ -902,9 +981,17 @@ impl Renderer {
             self.forget_all();
         }
         self.preview_generation = Some((Arc::downgrade(cache), generation));
+        if !self.waker_set {
+            self.waker_set = true;
+            let wake = ctx.clone();
+            self.pool.set_waker(Arc::new(move || wake.request_repaint()));
+        }
         self.catalog_rev = session.catalog.revision;
         self.frame += 1;
         self.trim_stages();
+        if let Some(wait) = self.release_closed_loupe(std::time::Instant::now()) {
+            ctx.request_repaint_after(wait);
+        }
         // wasm: run one job per frame on this thread, timed with the host clock
         #[cfg(target_arch = "wasm32")]
         let inline_ms = {
@@ -919,9 +1006,16 @@ impl Renderer {
         #[cfg(not(target_arch = "wasm32"))]
         self.trim_when_idle(ctx);
         if !self.pending.is_empty() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            ctx.request_repaint_after(self.pending_poll());
         }
         changed
+    }
+
+    /// How soon to look at pending renders again. The pool's workers wake the window when one
+    /// finishes, so a slow poll is only the safety net (a render waiting in a queue costs no frames);
+    /// an offload (the browser's workers, tests) has no such wake-up and is polled per frame.
+    fn pending_poll(&self) -> std::time::Duration {
+        if self.offload.is_some() { PENDING_POLL_OFFLOAD } else { PENDING_POLL }
     }
 
     /// In a slider drag, give the loupe's draft (just requested) until `budget` to finish, so that it
@@ -1074,6 +1168,11 @@ impl Renderer {
             }
             if slot == Slot::Main {
                 self.last_main_ms = ms;
+                if self.draft_keys.contains(&r.key) {
+                    self.last_draft_ms = Some(ms);
+                } else {
+                    self.last_full_ms = Some(ms);
+                }
             }
             changed = true;
         }
@@ -1156,6 +1255,9 @@ impl Renderer {
     /// thumbnail jobs for photos that scrolled out of `keep`.
     pub fn evict_thumbs(&mut self, keep: &std::collections::HashSet<PhotoId>, max: usize) {
         self.thumb_inputs.retain(|id, _| keep.contains(id));
+        self.embedded_thumbs.retain(|id, _| keep.contains(id));
+        // (a thumbnail that failed is tried again when its photo comes back on screen)
+        self.failed.retain(|s, _| !matches!(s, Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id)));
         let dropped = self.pool.reprioritize(|s, p| match s {
             Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id) && p <= 11 => None,
             _ => Some(p),
@@ -1296,6 +1398,41 @@ mod stage_budget_tests {
         assert_eq!(r.stages_trimmed, 1, "and nothing is trimmed again");
     }
 
+    // Given the loupe closed, its stage cache (the open photo's views are never trimmed) is freed
+    // after a few seconds, not at once; open again, it is kept however long the idle spell was
+    #[test]
+    fn the_loupes_stage_cache_goes_when_the_loupe_has_been_closed_a_while() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let mut r = Renderer::default();
+        r.stages.insert(Slot::Main, Default::default());
+        // frames with the loupe drawn in each
+        for _ in 0..3 {
+            r.frame += 1;
+            assert_eq!(r.release_closed_loupe(t0), None);
+            r.loupe_drawn();
+        }
+        // a frame after a long idle spell, loupe open: kept
+        r.frame += 1;
+        assert_eq!(r.release_closed_loupe(t0 + Duration::from_secs(600)), None);
+        assert!(r.stages.contains_key(&Slot::Main));
+        // the loupe is not drawn any more: the first such frame starts the wait
+        r.frame += 1;
+        assert_eq!(r.release_closed_loupe(t0), Some(LOUPE_RELEASE));
+        r.frame += 1;
+        assert!(r.release_closed_loupe(t0 + LOUPE_RELEASE / 2).is_some());
+        assert!(r.stages.contains_key(&Slot::Main), "a quick trip to the grid and back stays warm");
+        // back for a frame: the wait starts over
+        r.loupe_drawn();
+        r.frame += 1;
+        assert_eq!(r.release_closed_loupe(t0 + LOUPE_RELEASE), None);
+        r.frame += 1;
+        r.release_closed_loupe(t0 + LOUPE_RELEASE);
+        r.frame += 1;
+        assert_eq!(r.release_closed_loupe(t0 + LOUPE_RELEASE * 3), None);
+        assert!(!r.stages.contains_key(&Slot::Main), "closed for the wait: freed");
+    }
+
     // The renderer counts and trims what it holds, and says so
     #[test]
     fn the_renderer_reports_its_stage_budget() {
@@ -1351,6 +1488,107 @@ mod color_image_tests {
         assert_eq!(ok.color.map(|c| c.pixels.clone()), Some(color_image(&image).pixels));
         let failed = Renderer::run_for(|| result(Err("unreadable".into())), &None);
         assert!(failed.color.is_none());
+    }
+
+    // Given a render pending in the pool, the window is woken when it finishes, and the timer behind
+    // it is only the slow safety net (it was a 60 Hz redraw for as long as anything was pending)
+    #[test]
+    fn a_finished_render_wakes_the_window_and_the_poll_is_slow() {
+        let ctx = egui::Context::default();
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        ctx.set_request_repaint_callback(move |_| {
+            let _ = tx.send(());
+        });
+        let mut session = Session::new();
+        let mut r = Renderer::default();
+        r.poll(&ctx, &mut session);
+        while rx.try_recv().is_ok() {}
+        r.pending.insert(Slot::Main, (1, 100));
+        r.pool.submit(
+            Slot::Main,
+            1,
+            100,
+            Box::new(|| {
+                let result = RenderResult {
+                    request_id: 1,
+                    source_key: None,
+                    photo: PhotoId(1),
+                    level: lightcraft_engine::SourceLevel::Preview,
+                    key: 1,
+                    rendered: Err("unreadable".into()),
+                    gpu_fallback: None,
+                    loaded: None,
+                    quick: None,
+                    display: None,
+                };
+                Renderer::run_for(|| result, &None)
+            }),
+        );
+        rx.recv_timeout(std::time::Duration::from_secs(10)).expect("a finished job wakes the window");
+        assert!(r.pending_poll() >= std::time::Duration::from_millis(100), "{:?}", r.pending_poll());
+        r.set_offload(Box::new(NoWork));
+        assert!(r.pending_poll() <= std::time::Duration::from_millis(16), "an offload has no wake-up: polled per frame");
+    }
+
+    // Given loupe renders of both kinds, the draft's time and the full render's are kept apart
+    // (one number mixed them, so the 16 ms draft budget could not be checked)
+    #[test]
+    fn draft_and_full_loupe_renders_are_timed_apart() {
+        let ctx = egui::Context::default();
+        let mut session = Session::new();
+        let mut r = Renderer::default();
+        let job = |key: u64, id: u64, ms: u64| {
+            let result = RenderResult {
+                request_id: id,
+                source_key: None,
+                photo: PhotoId(1),
+                level: lightcraft_engine::SourceLevel::Preview,
+                key,
+                rendered: Ok(lightcraft_pipeline::Rendered {
+                    image: lightcraft_raster::Rgba8::new(2, 2),
+                    histogram: Histogram::of_srgb8(&lightcraft_raster::Rgba8::new(2, 2)),
+                    deep: None,
+                }),
+                gpu_fallback: None,
+                loaded: None,
+                quick: None,
+                display: None,
+            };
+            Box::new(move || {
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+                Renderer::run_for(|| result, &None)
+            })
+        };
+        let mut run = |r: &mut Renderer, key: u64, id: u64, ms: u64| {
+            r.requests.insert(Slot::Main, Requested { look: None, id, source: None });
+            r.pending.insert(Slot::Main, (key, 100));
+            r.pool.submit(Slot::Main, key, 100, job(key, id, ms));
+            let t0 = std::time::Instant::now();
+            while r.pending.contains_key(&Slot::Main) && t0.elapsed() < std::time::Duration::from_secs(10) {
+                r.poll(&ctx, &mut session);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            assert!(!r.pending.contains_key(&Slot::Main), "the render landed");
+        };
+        assert_eq!((r.last_draft_ms, r.last_full_ms), (None, None));
+        r.draft_keys.insert(11);
+        run(&mut r, 11, 1, 30);
+        assert!(r.last_draft_ms.is_some_and(|ms| ms >= 30.0), "{:?}", r.last_draft_ms);
+        assert_eq!(r.last_full_ms, None, "a draft is not a full render");
+        run(&mut r, 12, 2, 80);
+        assert!(r.last_full_ms.is_some_and(|ms| ms >= 80.0), "{:?}", r.last_full_ms);
+        assert!(r.last_draft_ms.is_some_and(|ms| ms < 80.0), "the draft's time stays its own: {:?}", r.last_draft_ms);
+        assert_eq!(r.last_main_ms, r.last_full_ms.unwrap_or(0.0), "lastRenderMs is whichever came last");
+    }
+
+    struct NoWork;
+    impl RenderOffload for NoWork {
+        fn try_start(&mut self, _: Slot, job: RenderJob) -> Option<RenderJob> {
+            Some(job)
+        }
+        fn finished(&mut self) -> Vec<(Slot, RenderResult, f64)> {
+            vec![]
+        }
     }
 
     #[test]

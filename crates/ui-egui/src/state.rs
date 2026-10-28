@@ -170,6 +170,9 @@ pub struct UiState {
     /// scanning).
     #[serde(skip)]
     pub auto_import_at: f64,
+    /// what the watched folder's last polls found (see [`crate::auto_import_watch`])
+    #[serde(skip)]
+    pub auto_watch: crate::auto_import_watch::Watch,
     /// When the automatic XMP writes that failed were last tried again (monotonic app time), and how
     /// many were waiting then.
     #[serde(skip)]
@@ -429,6 +432,7 @@ impl Default for UiState {
             external_edits: Vec::new(),
             was_focused: true,
             auto_import_at: 0.0,
+            auto_watch: Default::default(),
             sidecar_retry_at: 0.0,
             sidecars_waiting: 0,
             known_cards: None,

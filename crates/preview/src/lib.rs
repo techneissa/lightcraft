@@ -25,7 +25,7 @@ pub use disk::{DiskCache, decode_jpeg, encode_jpeg};
 pub use hash::{Hash128, Hasher128, hash_bytes};
 use lightcraft_raster::Rgba8;
 pub use lru::{Lru, next_tick};
-pub use pool::JobPool;
+pub use pool::{JobPool, Waker};
 
 /// Images that deferred disk writes ([`PreviewCache::put_deferred`]) may hold waiting for the writer, in bytes. A
 /// write that would go past it is skipped (the image stays in memory; a later render writes it), so renders that
