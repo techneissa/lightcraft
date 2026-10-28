@@ -73,6 +73,7 @@ fn click(h: &mut Headless, id: &str) {
 
 #[test]
 fn camera_matching_is_chosen_in_the_profile_menu() {
+    let _dir = no_local_profiles("chosen");
     let (mut h, seen) = edit_panel(true);
     assert!(widget(&h, "label:profile.cameraColour"), "the Edit panel says which way the colour starts");
     assert_eq!(colour(&h), CameraColour::Auto, "Camera Matching is the default");
@@ -91,10 +92,19 @@ fn camera_matching_is_chosen_in_the_profile_menu() {
 
 #[test]
 fn camera_matching_is_not_offered_where_the_colour_is_not_matched() {
+    let _dir = no_local_profiles("not-offered");
     let (mut h, _) = edit_panel(false);
     assert!(!widget(&h, "label:profile.cameraColour"));
     click(&mut h, "dropdown:profile");
     assert!(!widget(&h, "profileMenu:cameraColour:auto") && !widget(&h, "profileMenu:cameraColour:colorimetric"));
+}
+
+/// An empty profiles folder for the test's thread, so the profiles of the machine it runs on neither add rows nor
+/// start the switch question.
+fn no_local_profiles(tag: &str) -> lightcraft_engine::camera_profiles::DirGuard {
+    let dir = std::env::temp_dir().join(format!("lc-ui-no-profiles-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    lightcraft_engine::camera_profiles::use_dir_for_tests(&dir)
 }
 
 /// A folder of profile files: one for the photo's camera (named "A7 V Chart"), one for another body.
