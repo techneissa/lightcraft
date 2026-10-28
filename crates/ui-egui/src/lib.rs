@@ -20,6 +20,7 @@ pub mod headless;
 pub mod i18n;
 pub mod icons;
 pub mod keybinds;
+pub mod layers_task;
 pub mod lightroom_import;
 pub mod links;
 mod local_profile_offer;
@@ -313,6 +314,8 @@ pub struct LightcraftApp {
     pub shown_library: Option<u64>,
     /// A background export in progress.
     pub export: Option<export_task::ExportTask>,
+    /// Open as Layers in PhotoCraft, rendering in the background.
+    pub layers: Option<layers_task::LayersTask>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).

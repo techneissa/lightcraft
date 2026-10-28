@@ -170,6 +170,15 @@ fn draw_open_items(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: 
                     if ui.button(crate::i18n::tr("Edit in Other Editor")).clicked() {
                         let _ = app.run("photo.editInExternal", json!({}));
                     }
+                    if ui
+                        .add_enabled(
+                            crate::menus::ui_enabled(app, "photo.openAsLayersInPhotocraft"),
+                            egui::Button::new(crate::i18n::tr("Open as Layers in PhotoCraft…")),
+                        )
+                        .clicked()
+                    {
+                        let _ = app.run("photo.openAsLayersInPhotocraft", json!({}));
+                    }
                     // the raw itself, unrendered: for a raw developer set as the other editor
                     if ui
                         .add_enabled(

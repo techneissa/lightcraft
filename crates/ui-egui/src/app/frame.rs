@@ -431,6 +431,7 @@ impl LightcraftApp {
         updates_ui::show(self, &ctx);
         panels::library_problem::show(self, &ctx, notice_blocks);
         export_task::poll(self, &ctx);
+        crate::layers_task::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
         animated_gif::poll(self, &ctx);
         panels::activity::show(self, &ctx);

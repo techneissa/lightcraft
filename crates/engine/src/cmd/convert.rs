@@ -144,6 +144,22 @@ fn edit_external(s: &mut Session, p: &Value) -> Result<Value> {
     if ids.len() > MAX_EDIT_COPIES {
         return Err(bad(C, format!("{} photos selected: edit at most {MAX_EDIT_COPIES} at a time", ids.len())));
     }
+    let opts = edit_options(p, "{name}-Edit")?;
+    let mut copies = Vec::new();
+    for id in ids {
+        copies.push(edit_copy(s, p, id, &opts)?);
+    }
+    let new: Vec<lightcraft_catalog::PhotoId> = copies.iter().filter_map(|c| c["id"].as_u64()).map(lightcraft_catalog::PhotoId).collect();
+    s.selection = crate::Selection { active: new.first().copied(), ids: new };
+    let first = copies.first().cloned().unwrap_or(Value::Null);
+    Ok(json!({"path": first["path"], "id": first["id"], "original": first["original"], "copies": copies}))
+}
+
+/// The options of an edit copy (`format` tiff or psd, `colorSpace`, `bitDepth` 8 or 16; the
+/// defaults a 16-bit Adobe RGB TIFF), named by `naming`: a free name, never over a file. Shared by
+/// Edit In and Open as Layers ([`crate::layers`]).
+pub(crate) fn edit_options(p: &Value, naming: &str) -> Result<crate::export::ExportOptions> {
+    const C: &str = "photo.editExternal";
     let space = match super::str_param(p, "colorSpace").unwrap_or("adobeRgb") {
         "srgb" => lightcraft_pipeline::OutputSpace::Srgb,
         "displayP3" => lightcraft_pipeline::OutputSpace::DisplayP3,
@@ -160,22 +176,14 @@ fn edit_external(s: &mut Session, p: &Value) -> Result<Value> {
         16 => 16,
         d => return Err(bad(C, format!("bitDepth {d}: use 8 or 16"))),
     };
-    let opts = crate::export::ExportOptions {
+    Ok(crate::export::ExportOptions {
         format,
         bit_depth: Some(bit_depth),
         color_space: space,
-        naming: "{name}-Edit".into(),
+        naming: naming.into(),
         conflict: crate::export::Conflict::Unique,
         ..Default::default()
-    };
-    let mut copies = Vec::new();
-    for id in ids {
-        copies.push(edit_copy(s, p, id, &opts)?);
-    }
-    let new: Vec<lightcraft_catalog::PhotoId> = copies.iter().filter_map(|c| c["id"].as_u64()).map(lightcraft_catalog::PhotoId).collect();
-    s.selection = crate::Selection { active: new.first().copied(), ids: new };
-    let first = copies.first().cloned().unwrap_or(Value::Null);
-    Ok(json!({"path": first["path"], "id": first["id"], "original": first["original"], "copies": copies}))
+    })
 }
 
 /// Most photos one Edit In renders (each becomes a full-size file on disk and a library photo).

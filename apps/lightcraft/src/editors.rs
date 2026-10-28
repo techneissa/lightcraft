@@ -28,6 +28,28 @@ pub fn check(app: &str) -> Result<(), String> {
     launcher(app).map(|_| ())
 }
 
+/// Whether `app` opens a `.pcstack` layer list (Open as Layers in PhotoCraft): the PhotoCraft fork
+/// lists `pcstack` among its document types. Only the macOS app bundle is looked at; elsewhere, and
+/// for any other editor, the answer is no and the files open one by one.
+pub fn supports_layers(app: &str) -> bool {
+    match launcher(app) {
+        Ok(Launcher::MacApp(bundle)) if cfg!(target_os = "macos") => bundle_lists_pcstack(Path::new(&bundle)),
+        _ => false,
+    }
+}
+
+/// Whether the application bundle's `Info.plist` lists `pcstack` as a document type. The plist is
+/// converted to XML by `plutil` (it is binary in most bundles); an unreadable one says no.
+fn bundle_lists_pcstack(bundle: &Path) -> bool {
+    let plist = bundle.join("Contents").join("Info.plist");
+    let converted = Command::new("plutil").args(["-convert", "xml1", "-o", "-", "--"]).arg(&plist).output().ok().filter(|o| o.status.success());
+    let text = match converted {
+        Some(o) => String::from_utf8_lossy(&o.stdout).to_string(),
+        None => std::fs::read(&plist).map(|b| String::from_utf8_lossy(&b).to_string()).unwrap_or_default(),
+    };
+    lightcraft_engine::layers::plist_lists_pcstack(&text)
+}
+
 /// Open `path` in `app` (see [`check`]). Spawned, never waited for: the editor runs alongside.
 pub fn open_with(path: &str, app: &str) -> Result<(), String> {
     let mut c = match launcher(app)? {
@@ -308,6 +330,30 @@ mod tests {
         let c = all_command(Launcher::Flatpak, &paths).unwrap();
         assert_eq!(args(&c), ["run", "--file-forwarding", PHOTOCRAFT_ID, "@@", &paths[0], &paths[1], "@@"]);
         assert!(all_command(Launcher::Default, &paths).is_none(), "the system default opens them one by one");
+    }
+
+    /// An app bundle whose `Info.plist` lists `pcstack` opens layer lists; one without (the
+    /// official PhotoCraft) or without a readable plist does not.
+    #[test]
+    fn a_bundle_is_checked_for_the_pcstack_document_type() {
+        let root = std::env::temp_dir().join(format!("lc-editors-plist-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let bundle = |name: &str, extensions: &str| {
+            let contents = root.join(name).join("Contents");
+            std::fs::create_dir_all(&contents).unwrap();
+            let plist = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+                 <plist version=\"1.0\"><dict><key>CFBundleName</key><string>PhotoCraft</string>\n\
+                 <key>CFBundleDocumentTypes</key><array><dict><key>CFBundleTypeExtensions</key><array>{extensions}</array></dict></array>\n\
+                 </dict></plist>"
+            );
+            std::fs::write(contents.join("Info.plist"), plist).unwrap();
+            root.join(name)
+        };
+        assert!(bundle_lists_pcstack(&bundle("Fork.app", "<string>psd</string><string>pcstack</string>")));
+        assert!(!bundle_lists_pcstack(&bundle("Official.app", "<string>psd</string><string>tif</string>")));
+        assert!(!bundle_lists_pcstack(&root.join("Missing.app")), "no plist: no support, no panic");
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

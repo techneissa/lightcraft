@@ -39,6 +39,11 @@ pub type ScreenProfileFn = Box<dyn FnMut() -> Option<Vec<u8>>>;
 /// error says why not and what to do (e.g. PhotoCraft isn't installed).
 pub type CheckEditorFn = Box<dyn Fn(&str) -> Result<(), String>>;
 
+/// Whether the installed editor (its name as in [`Services::open_with`]) opens a layer list
+/// (`.pcstack`), so Open as Layers hands it one document. The official PhotoCraft doesn't: it is
+/// given the files one by one.
+pub type LayersSupportFn = Box<dyn Fn(&str) -> bool>;
+
 /// Something the host does with the session (web: back up or restore the library in browser
 /// storage); the work may finish asynchronously.
 pub type HostAction = Box<dyn FnMut(&mut Session) -> Result<Value, String>>;
@@ -121,6 +126,9 @@ pub struct Services {
     /// Checked before Edit In renders a copy, so a missing editor leaves no copy behind (none =
     /// assume it can).
     pub check_editor: Option<CheckEditorFn>,
+    /// Whether the editor opens a `.pcstack` layer list (Open as Layers in PhotoCraft). None =
+    /// it doesn't, and the files open one by one.
+    pub layers_support: Option<LayersSupportFn>,
     /// File ▸ Back Up Library…: save the whole library (catalog and originals) as one file the
     /// user keeps (web only: there the library lives in browser storage, which the browser may
     /// clear; on the desktop it is a folder backed up like any other).

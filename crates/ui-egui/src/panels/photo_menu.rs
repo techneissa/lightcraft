@@ -44,8 +44,16 @@ const COMMAND: &str = "cmd:";
 pub const SETTINGS_TAB: &str = "menu";
 
 /// Commands that work on two or more photos: hidden with one selected.
-const NEEDS_SEVERAL: &[&str] =
-    &["dialog.animatedGif", "app.animatedGif", "dialog.mergeHdr", "dialog.mergePanorama", "dialog.mergeHdrPanorama", "stack.group", "develop.sync"];
+const NEEDS_SEVERAL: &[&str] = &[
+    "dialog.animatedGif",
+    "app.animatedGif",
+    "dialog.mergeHdr",
+    "dialog.mergePanorama",
+    "dialog.mergeHdrPanorama",
+    "stack.group",
+    "develop.sync",
+    "photo.openAsLayersInPhotocraft",
+];
 
 /// Menu-bar submenus listing what is there right now: not offered.
 const TRANSIENT: &[&str] = &["Open Recent Library", "Import from Device"];
