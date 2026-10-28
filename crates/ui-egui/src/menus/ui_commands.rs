@@ -283,6 +283,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // its three presets ({slot} 1 to 3) and the .json backup ({path}; a dialog asks without one)
     ("photoMenu.savePreset", "Save Photo Menu to Preset", None, ""),
     ("photoMenu.switchPreset", "Switch Photo Menu Preset", None, ""),
+    ("photoMenu.clearPreset", "Clear Photo Menu Preset", None, ""),
     ("photoMenu.undoPreset", "Undo Photo Menu Preset Switch", None, ""),
     ("photoMenu.export", "Export Right-Click Menu…", None, ""),
     ("photoMenu.import", "Import Right-Click Menu…", None, ""),

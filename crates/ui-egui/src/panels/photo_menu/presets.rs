@@ -7,7 +7,7 @@
 //! when the menu no longer equals what that slot holds.
 //!
 //! Commands (slot numbers count from 1, as the buttons do): `photoMenu.savePreset {slot}`,
-//! `photoMenu.switchPreset {slot}` and `photoMenu.undoPreset`.
+//! `photoMenu.switchPreset {slot}`, `photoMenu.clearPreset {slot}` and `photoMenu.undoPreset`.
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -139,6 +139,25 @@ pub fn save_to(app: &mut LightcraftApp, slot: usize) -> Result<(), String> {
     Ok(())
 }
 
+/// Empty `slot` (counting from 0); the menu stays as it is. An empty slot is an error.
+pub fn clear(app: &mut LightcraftApp, slot: usize) -> Result<(), String> {
+    if slot >= COUNT {
+        return Err(bad_slot());
+    }
+    let presets = &mut app.ui.settings.photo_menu_presets;
+    if presets.get(slot).is_none() {
+        return Err(format!("Preset {} is already empty", slot + 1));
+    }
+    presets.put(slot, None);
+    if presets.active == Some(slot) {
+        presets.active = None;
+    }
+    if presets.undo.as_ref().is_some_and(|u| u.active == Some(slot)) {
+        presets.undo = presets.undo.take().map(|u| Undo { active: None, ..u });
+    }
+    Ok(())
+}
+
 /// Switch the menu to what `slot` holds. The menu it replaces can be brought back with [`undo`].
 pub fn switch_to(app: &mut LightcraftApp, slot: usize) -> Result<(), String> {
     if slot >= COUNT {
@@ -184,11 +203,12 @@ fn slot_param(id: &str, p: &Value) -> Result<usize, String> {
         .ok_or_else(|| format!("{id}: {}", bad_slot()))
 }
 
-/// `photoMenu.savePreset` / `switchPreset` / `undoPreset`.
+/// `photoMenu.savePreset` / `switchPreset` / `clearPreset` / `undoPreset`.
 pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<(), String> {
     match id {
         "photoMenu.savePreset" => save_to(app, slot_param(id, p)?),
         "photoMenu.switchPreset" => switch_to(app, slot_param(id, p)?),
+        "photoMenu.clearPreset" => clear(app, slot_param(id, p)?),
         _ => undo(app),
     }
 }

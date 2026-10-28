@@ -345,33 +345,72 @@ mod headless {
         assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "a right-click does not run the row");
     }
 
-    #[test]
-    fn the_presets_row_saves_switches_and_undoes() {
-        let mut h = demo(json!({"view": "photoGrid"}));
+    fn open_menu_tab(h: &mut Headless) {
         let r = h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "menu"}}), T);
         assert_eq!(r["ok"], true, "{r}");
         h.step();
         h.step();
+    }
+
+    /// Open the presets dropdown, then click an entry of its menu (`path` = submenu buttons first).
+    fn pick(h: &mut Headless, path: &[&str]) {
+        let r = h.request("ui.clickWidget", json!({"id": "dropdown:photoMenuPreset"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        for id in path {
+            click(h, id);
+        }
+    }
+
+    #[test]
+    fn the_presets_dropdown_saves_switches_clears_and_undoes() {
+        let mut h = demo(json!({"view": "photoGrid"}));
+        open_menu_tab(&mut h);
         // Preset 1 holds the default; the menu is then edited and kept in Preset 2
-        click(&mut h, "button:photoMenuSavePreset-1");
+        pick(&mut h, &["button:photoMenuSaveMenu", "button:photoMenuSavePreset-1"]);
         click(&mut h, "photoMenuRow:0");
         click(&mut h, "button:photoMenuRemove:0");
         assert_eq!(menu(&h)[0], "beforeAfterSplit");
-        click(&mut h, "button:photoMenuSavePreset-2");
+        pick(&mut h, &["button:photoMenuSaveMenu", "button:photoMenuSavePreset-2"]);
         assert_eq!(h.app.ui.settings.photo_menu_presets.active, Some(1));
         // switching is at once; an empty slot only says so
-        click(&mut h, "button:photoMenuPreset-1");
+        pick(&mut h, &["button:photoMenuPreset-1"]);
         assert_eq!(h.app.ui.settings.photo_menu, None);
         assert_eq!(h.app.ui.settings.photo_menu_presets.active, Some(0));
-        click(&mut h, "button:photoMenuPreset-3");
+        pick(&mut h, &["button:photoMenuPreset-3"]);
         assert_eq!(h.app.ui.settings.photo_menu_presets.active, Some(0), "an empty slot changes nothing");
         assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("Preset 3 is empty")));
-        click(&mut h, "button:photoMenuPreset-2");
+        pick(&mut h, &["button:photoMenuPreset-2"]);
         assert_eq!(menu(&h)[0], "beforeAfterSplit");
-        // Undo Switch brings the default back
-        click(&mut h, "button:photoMenuUndoPreset");
+        // Undo brings the default back
+        pick(&mut h, &["button:photoMenuUndoPreset"]);
+        assert_eq!(h.app.ui.settings.photo_menu, None);
+        // Clear empties a slot and keeps the menu
+        pick(&mut h, &["button:photoMenuClearMenu", "button:photoMenuClearPreset-2"]);
+        assert!(h.app.ui.settings.photo_menu_presets.get(1).is_none());
         assert_eq!(h.app.ui.settings.photo_menu, None);
         assert!(has(&h, "button:photoMenuExport") && has(&h, "button:photoMenuImport"));
+    }
+
+    #[test]
+    fn the_presets_control_is_one_line_with_the_heading() {
+        let mut h = demo(json!({"view": "photoGrid"}));
+        open_menu_tab(&mut h);
+        let (drop, export, import, list) = (
+            widget(&h, "dropdown:photoMenuPreset"),
+            widget(&h, "button:photoMenuExport"),
+            widget(&h, "button:photoMenuImport"),
+            widget(&h, "photoMenu:list"),
+        );
+        assert!(
+            (drop.center().y - export.center().y).abs() < 4.0 && (export.center().y - import.center().y).abs() < 4.0,
+            "{drop:?} {export:?} {import:?}"
+        );
+        assert!(drop.right() < export.left() && export.right() <= import.left(), "dropdown, then export, then import");
+        // no rows of buttons: the entries exist only while the menu is open
+        assert!(!has(&h, "button:photoMenuSaveMenu") && !has(&h, "button:photoMenuPreset-1") && !has(&h, "button:photoMenuUndoPreset"));
+        // the control sits on the heading's line: close to the top, with the lists just below the hint
+        assert!(list.top() - drop.bottom() < 60.0, "{drop:?} {list:?}");
     }
 
     /// The height of the menu's list and where the buttons under the lists end, with the page's room.

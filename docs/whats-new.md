@@ -3,8 +3,9 @@
 ## 2026-10-28
 
 ### Right-Click Menu: Three Presets, a Backup File, Lists that Fill the Page
-- **Settings ▸ Photo Menu** has three presets. **Save to Preset 1 / 2 / 3** keeps the menu as arranged; a click on **Preset
-  1 / 2 / 3** switches to it at once (an empty one says it is empty). **Undo Switch** brings the old menu back.
+- **Settings ▸ Photo Menu** has three presets in one small dropdown beside the heading. It shows the active preset (a dot
+  when the menu changed since). Pick **Preset 1 / 2 / 3** to switch at once (an empty one says it is empty), **Save to
+  Preset** or **Clear Preset** to keep or empty one, and **Undo** right after a switch to bring the old menu back.
 - Two icon buttons next to it, **Export Right-Click Menu…** and **Import Right-Click Menu…**, save and load the menu and its
   three presets as a `.json` file. A file of another kind, from a newer LightCraft, or broken is refused with a message and
   changes nothing; items this version doesn't have are skipped and named.

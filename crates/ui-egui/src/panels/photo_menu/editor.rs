@@ -136,10 +136,12 @@ pub fn tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
     let commands = menu_commands(app);
 
-    heading(ui, t, "Photo Menu");
+    ui.horizontal(|ui| {
+        heading(ui, t, "Photo Menu");
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| super::presets_ui::show(app, ui, t));
+    });
     hint(ui, t, "What a right-click on a photo shows. Items marked \"2+ Photos\" show only when two or more photos are selected.");
     ui.add_space(4.0);
-    super::presets_ui::show(app, ui, t);
 
     view.list_h = list_height(ui.clip_rect().height(), ui.cursor().top() - origin);
     let width = ui.available_width() - 2.0;

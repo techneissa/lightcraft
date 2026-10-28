@@ -296,3 +296,21 @@ fn get_reports_the_presets() {
     assert_eq!(r["presets"][1], json!({"slot": 2, "saved": true, "active": true, "edited": false, "items": ["rename"]}));
     assert_eq!(r["presets"][0], json!({"slot": 1, "saved": false, "active": false, "edited": false, "items": null}));
 }
+
+#[test]
+fn clear_empties_a_slot_and_keeps_the_menu() {
+    let mut app = app();
+    set(&mut app, &["rename"]);
+    app.run("photoMenu.savePreset", json!({"slot": 2})).unwrap();
+    app.run("photoMenu.savePreset", json!({"slot": 3})).unwrap();
+    let r = app.run("photoMenu.clearPreset", json!({"slot": 3})).unwrap();
+    assert_eq!(menu(&app), ["rename"]);
+    assert_eq!(r["presets"][2]["saved"], false);
+    assert_eq!(r["presets"][2]["active"], false, "the active slot, once cleared, is no longer active");
+    assert_eq!(r["presets"][1]["saved"], true);
+    // already empty, or no such slot
+    assert!(app.run("photoMenu.clearPreset", json!({"slot": 3})).unwrap_err().contains("already empty"));
+    for bad in [json!({}), json!({"slot": 0}), json!({"slot": 4})] {
+        assert!(app.run("photoMenu.clearPreset", bad).is_err());
+    }
+}
