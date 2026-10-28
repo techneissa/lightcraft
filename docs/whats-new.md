@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-28
+
+### Taller file windows on the Mac
+- The windows that ask where to save a file or which file to open (Export Animated GIF…, Import, Open Library and
+  the rest) now open at least 520 points tall instead of about 360, so more of the folder list shows. Drag any edge
+  to make them bigger or smaller; the next one opens at the size you left.
+
 ## 2026-10-24
 
 ### Relative-date filters and smart albums follow the clock
