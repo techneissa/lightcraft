@@ -1,6 +1,6 @@
 # RAW parity: cameras, formats, demosaic, colour and lens profiles
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-28 · **Change:** patch (your own chart-built camera profiles are Profile choices, Camera Matching no longer reads them); before: minor (Minolta MRW decoded, 6 bodies verified; lossy JPEG XL DNG tiles with a non-linear declared transfer curve decode; Canon ColorData Kelvin; X-Trans CMOS 4 bodies take the X-T3's spectral matrices) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-28 · **Change:** patch (macOS Colour, the Mac's own raw colours, is a Profile choice; your own chart-built camera profiles are Profile choices, Camera Matching no longer reads them); before: minor (Minolta MRW decoded, 6 bodies verified; lossy JPEG XL DNG tiles with a non-linear declared transfer curve decode; Canon ColorData Kelvin; X-Trans CMOS 4 bodies take the X-T3's spectral matrices) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7)
 
 Raw processing is the deepest single dimension of Lightroom parity: a photographer whose camera
 does not decode, or decodes with the wrong colour, cannot switch. This document measures it model by
@@ -214,6 +214,7 @@ sample files. A pointer for contributors, not legal advice.
 
 | Item | Adobe | LightCraft |
 |---|---|---|
+| macOS Colour (Mac only, own, beyond Lightroom) | – | the Mac's own raw decoder (Core Image `CIRAWFilter`) makes the colours, LightCraft keeps tone and white balance; the default for an A7 V ARW (an A7 IV ARW is offered too; a 14-file survey found the decoder reading CR3, NEF, RAF, RW2, PEF, ORF and DNG files of 12 other bodies at LightCraft's size, none offered yet); judged against Camera Matching, not against Adobe (`docs/camera-preview-colour.md`, macOS Colour) |
 | Default profile per model | Adobe Standard for every model (1,500 profile names in the bundle) | the DNG's own matrices; else a pooled profile (**5 bundled**: ILCA-99M2, ILCE-7CR, ILCE-7M4, X-H2S, X-T4); else a guarded per-file fit to the camera's embedded JPEG; else spectral matrices (**52 models**, rawtoaces-data, and the bodies sharing their sensors: 6 X-Trans CMOS 4 Fujifilm bodies take the X-T3's); else a neutral matrix. A scene too dull for its own fit takes, in its partial look, the profile's colour, else the spectral prior (the body's own matrices or the mean of the 51 stills bodies', rows summing to 1), never the identity |
 | Camera Matching looks | 481 models (plus phone-maker looks) | none (the per-file JPEG fit imitates the camera's own look) |
 | Creative profiles | Adobe Color, Portrait, Landscape, Vivid, Monochrome… | our own looks (Color, Neutral, Vivid, Landscape, Portrait, Monochrome) |
@@ -296,6 +297,7 @@ Beyond decoding:
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | patch | Camera colour: new row for macOS Colour, the Mac's own raw decoder as a Profile choice (A7 V ARW default; survey of 14 CC0 raws from 12 other bodies); no score changes |
 | 2026-10-28 | patch | Camera colour row: your own chart-built profiles are Profile choices of their own; Camera Matching reads only the bundled profiles (`docs/camera-preview-colour.md`); no score changes |
 | 2026-10-18 | patch | X-T30, X-T30 II, X-Pro3, X100V, X-S10 and X-E4 take the X-T3's spectral matrices (same 26.1 MP X-Trans CMOS 4 sensor): an X-T30 raw with a black-and-white (Acros) camera JPEG no longer opens in the muted neutral fallback |
 | 2026-10-16 | minor | Kelvin white balance from Canon CR2 `ColorData` presets (PowerShot G1 X Mark III) |

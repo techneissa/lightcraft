@@ -124,6 +124,9 @@ says `"scale": "kelvin"`; a partial settings JSON given to `develop.merge` or a 
 **without** `scale` keeps the relative meaning it always had (6500 = as shot) on every raw, so agents that mean
 Kelvin on a Kelvin raw pass `"scale": "kelvin"` or use `develop.set` / `develop.wb`.
 
+A raw set to macOS Colour (below) is also in Kelvin, from the Mac decoder's as-shot white, whatever scale its camera uses
+under Camera Matching; switching the choice converts a Custom white balance between the two scales.
+
 Image navigation is also available directly as the UI command `view.navigate`, with
 `{zoom?: "fit" | "fill" | {"percent": number}, pan?: [x, y]}`. Percentage zoom accepts fractional
 values greater than 0 and at most 800; pan is the normalized image centre, with coordinates from 0 to 1.
@@ -418,6 +421,28 @@ are not items. `topBar.get` returns `{items, hidden, custom}` (`items`: `{id, la
 being the menu-bar path of the command, so a hidden item can still be found), `topBar.set {hidden}` replaces the list,
 `topBar.setItem {item, shown}` turns one on or off, `topBar.reset` shows every item; an unknown id is refused and
 nothing changes; all four return the same answer. Settings ▸ Top Bar is `app.settings {"tab": "topbar"}`.
+
+## macOS Colour and Starting Colour
+
+`develop.profile {camera_colour}` takes `"auto"` (Camera Matching), `"colorimetric"` (No Camera Matching), `"local"` (with
+`camera_profile`: the id of a profile file, see `profiles.local`) and `"macos"` (macOS Colour: the Mac's own raw decoder
+makes the colours; where it can't, the photo renders as Camera Matching and the Edit panel says why, the setting is kept).
+One undo step; the Profile group of presets, Copy / Paste and sync carries it.
+
+- `library.preferences {import: {startingColour: "macos" | "cameraMatching" | "noCameraMatching"}}`: the colour new raw
+  photos start on (default `macos`; Settings ▸ Import ▸ Raw defaults), kept in the library's `prefs.json`. `macos` applies
+  only to a photo that takes the fitted look, on a Mac whose decoder lists its camera and reads it at LightCraft's size (ARW
+  only so far); any other photo, and every photo on another system, starts on Camera Matching. A default preset with a
+  Profile group wins. Photos already imported never change. The reply's `import` has the value.
+- `profiles.macosForCameraCount {photo?}` → `{camera, photos, skipped, notMac, cameraNotRead, otherSize}`: what moving every
+  photo of that photo's camera (the active photo without `photo`) to macOS Colour would do. `photos` is how many would move;
+  `skipped` is the rest, by reason (`notMac`: not a Mac or the decoder lacks a setting it needs; `cameraNotRead`: not a raw
+  macOS Colour applies to, a camera macOS does not list, or a format that has no verified type yet; `otherSize`: macOS reads
+  it at another size or can't read it). Photos already on macOS Colour are not counted.
+- `profiles.macosForCamera {photo?}` → `{camera, changed, skipped, notMac, cameraNotRead, otherSize}`: does it, in one undo
+  step (the Profile menu's Apply macOS Colour to All Photos from This Camera…). Never runs by itself.
+- `preset.apply {id, amount?, ids?}` → `{macosFallback}`: how many of the photos are on macOS Colour but use Camera Matching
+  colours on this computer after the preset (the stored value stays `macos`).
 
 ## Panel docking
 
