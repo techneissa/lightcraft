@@ -316,7 +316,10 @@ impl crate::Session {
     /// The embedded preview of an unedited raw (path, loader), when the app installed a loader.
     fn embedded_of(&self, p: &Photo) -> Option<(String, PreviewLoader)> {
         match (&p.source, &self.media.preview_loader) {
-            (Source::File { path }, Some(l)) if p.kind == MediaKind::Raw && crate::import::has_import_look(p) => Some((path.clone(), l.clone())),
+            // (never for a photo on macOS Colour that this Mac makes: its colours are not the camera's, so it waits)
+            (Source::File { path }, Some(l)) if p.kind == MediaKind::Raw && crate::import::has_import_look(p) && !crate::files::macos_shows(p) => {
+                Some((path.clone(), l.clone()))
+            }
             _ => None,
         }
     }

@@ -50,9 +50,13 @@ impl Target {
             Target::RawAbsolute
         }
     }
-    /// The target for a photo in the catalog.
+    /// The target for a photo in the catalog. A raw on macOS Colour that this Mac's decoder makes edits in Kelvin
+    /// (`files::relative_wb`), so it takes `Temperature` as Kelvin, whatever its camera's own scale.
     pub fn for_photo(p: &lightcraft_catalog::Photo) -> Target {
-        Target::for_file(p.kind, &p.format, p.preview_only.is_some(), &p.meta.camera)
+        match Target::for_file(p.kind, &p.format, p.preview_only.is_some(), &p.meta.camera) {
+            Target::RawRelative if !crate::files::relative_wb(p) => Target::RawAbsolute,
+            t => t,
+        }
     }
 }
 

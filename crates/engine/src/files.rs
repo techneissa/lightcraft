@@ -30,6 +30,12 @@ pub fn relative_wb(p: &lightcraft_catalog::Photo) -> bool {
     p.relative_wb_on(macos_lists(p))
 }
 
+/// Whether photo `p` shows macOS Colour on this computer: it is set to it and this Mac's decoder lists its camera. Such
+/// a photo never shows the camera's JPEG while it renders (grid, filmstrip, loupe): it waits for the macOS picture.
+pub fn macos_shows(p: &lightcraft_catalog::Photo) -> bool {
+    p.develop.profile.camera_colour == lightcraft_develop::CameraColour::Macos && macos_lists(p)
+}
+
 /// What the Mac's raw decoder adds to the cache keys of a photo on macOS Colour (`lightcraft_macraw::cache_key`: the
 /// OS build and LightCraft's recipe), so a render made by another macOS build is made again. 0 where macOS Colour is
 /// unavailable (the photo renders as Camera Matching there).

@@ -1186,6 +1186,7 @@ fn export_format_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, op
         };
         ui.label(egui::RichText::new(note).color(t.text_dim));
     }
+    crate::macos_colour::show(ui, t, "label:exportMacosColour", crate::macos_colour::export_line(app, opts.format));
     if opts.format != before {
         // each format starts at its own default depth (TIFF 16-bit, others 8-bit)
         opts.bit_depth = None;

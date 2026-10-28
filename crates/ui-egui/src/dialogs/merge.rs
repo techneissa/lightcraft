@@ -526,6 +526,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
                     crate::i18n::tr_format!("{n} of these photos use a local camera profile. The merge uses Camera Matching colours.", n = local);
                 ui.add(egui::Label::new(egui::RichText::new(note).color(t.text_dim)).wrap());
             }
+            crate::macos_colour::show(ui, &t, "label:mergeMacosColour", crate::macos_colour::merge_line(app, &app.merge.ids));
         });
     });
 }
