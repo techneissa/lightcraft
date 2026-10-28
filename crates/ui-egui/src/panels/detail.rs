@@ -234,6 +234,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let se = app.ui.settings.stand_in_edge(want, texture_side);
     let (sw, sh) = if aspect >= 1.0 { (se, short(se, aspect)) } else { (short(se, 1.0 / aspect), se) };
     let ask = LoupeAsk { id, with_crop: !crop_tool, interacting, fit_px, overlay };
+    app.renderer.loupe_drawn();
     request_main(app, ui, &ask, [rw, rh], plan.window_edge.is_none());
     // hovering a preset or profile: the photo with that look, shown instead of the loupe render
     // once it is ready (nothing is committed)

@@ -196,6 +196,10 @@ pub(crate) fn stage_trim_order(sizes: &[(Slot, usize)], budget: usize) -> Vec<Sl
 /// engine's own caches do not count.
 const STAGE_BUDGET_SHARE: usize = 4;
 
+/// How long the loupe stays closed before its stage cache is freed (it is 250 MB or so on a big
+/// raw): a quick trip to the grid and back finds it warm, and a long one gives the memory back.
+pub const LOUPE_RELEASE: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// Variant thumbnails kept as textures (LRU), when nothing asks for more.
 pub const VARIANT_TEXTURES: usize = 96;
 /// The most a view can raise that to ([`Renderer::want_variants`]): a screenful of small faces is a few hundred pictures of
@@ -266,6 +270,10 @@ pub struct Renderer {
     slides_live: bool,
     /// Stage caches cleared to stay in budget (see [`stage_trim_order`]).
     stages_trimmed: u64,
+    /// The frame the loupe last drew in ([`Self::loupe_drawn`]).
+    loupe_frame: u64,
+    /// Since when the loupe has not been drawn (see [`LOUPE_RELEASE`]).
+    loupe_gone: Option<std::time::Instant>,
     /// A budget other than the memory budget's share (tests).
     #[cfg(test)]
     pub(crate) stage_budget_override: Option<usize>,
@@ -333,6 +341,8 @@ impl Renderer {
             frame: 0,
             slides_live: false,
             stages_trimmed: 0,
+            loupe_frame: 0,
+            loupe_gone: None,
             #[cfg(test)]
             stage_budget_override: None,
             display: None,
@@ -545,6 +555,38 @@ impl Renderer {
     pub fn release(&mut self, slot: Slot) {
         self.textures.remove(&slot);
         self.stages.remove(&slot);
+    }
+
+    /// The loupe drew a frame (called from its paint, so a frame without the loupe is a closed one).
+    pub fn loupe_drawn(&mut self) {
+        self.loupe_frame = self.frame;
+    }
+
+    /// Free the loupe's stage cache once the loupe has been closed for [`LOUPE_RELEASE`] (the
+    /// stages were never released otherwise: the open photo's views are never trimmed). `now` is
+    /// the clock; a frame after a long idle spell with the loupe open counts the loupe as open.
+    /// Returns when to look again, if it is waiting.
+    fn release_closed_loupe(&mut self, now: std::time::Instant) -> Option<std::time::Duration> {
+        // (called at the start of a frame, before the loupe draws: it drew in the last one)
+        if self.loupe_frame + 1 >= self.frame || !self.stages.contains_key(&Slot::Main) {
+            self.loupe_gone = None;
+            return None;
+        }
+        let since = *self.loupe_gone.get_or_insert(now);
+        let waited = now.saturating_duration_since(since);
+        if waited < LOUPE_RELEASE {
+            return Some(LOUPE_RELEASE - waited);
+        }
+        if self.is_pending(Slot::Main) {
+            return Some(LOUPE_RELEASE);
+        }
+        self.stages.remove(&Slot::Main);
+        // (let the idle trim give the GPU's recycled buffers back too)
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.idle = None;
+        }
+        None
     }
 
     /// Run jobs through `offload` from now on (instead of the job pool / inline).
@@ -919,6 +961,9 @@ impl Renderer {
         self.catalog_rev = session.catalog.revision;
         self.frame += 1;
         self.trim_stages();
+        if let Some(wait) = self.release_closed_loupe(std::time::Instant::now()) {
+            ctx.request_repaint_after(wait);
+        }
         // wasm: run one job per frame on this thread, timed with the host clock
         #[cfg(target_arch = "wasm32")]
         let inline_ms = {
@@ -1308,6 +1353,41 @@ mod stage_budget_tests {
         assert!(r.stages[&Slot::Main].bytes() > 0, "the open photo's view is never trimmed");
         r.trim_stages();
         assert_eq!(r.stages_trimmed, 1, "and nothing is trimmed again");
+    }
+
+    // Given the loupe closed, its stage cache (the open photo's views are never trimmed) is freed
+    // after a few seconds, not at once; open again, it is kept however long the idle spell was
+    #[test]
+    fn the_loupes_stage_cache_goes_when_the_loupe_has_been_closed_a_while() {
+        use std::time::{Duration, Instant};
+        let t0 = Instant::now();
+        let mut r = Renderer::default();
+        r.stages.insert(Slot::Main, Default::default());
+        // frames with the loupe drawn in each
+        for _ in 0..3 {
+            r.frame += 1;
+            assert_eq!(r.release_closed_loupe(t0), None);
+            r.loupe_drawn();
+        }
+        // a frame after a long idle spell, loupe open: kept
+        r.frame += 1;
+        assert_eq!(r.release_closed_loupe(t0 + Duration::from_secs(600)), None);
+        assert!(r.stages.contains_key(&Slot::Main));
+        // the loupe is not drawn any more: the first such frame starts the wait
+        r.frame += 1;
+        assert_eq!(r.release_closed_loupe(t0), Some(LOUPE_RELEASE));
+        r.frame += 1;
+        assert!(r.release_closed_loupe(t0 + LOUPE_RELEASE / 2).is_some());
+        assert!(r.stages.contains_key(&Slot::Main), "a quick trip to the grid and back stays warm");
+        // back for a frame: the wait starts over
+        r.loupe_drawn();
+        r.frame += 1;
+        assert_eq!(r.release_closed_loupe(t0 + LOUPE_RELEASE), None);
+        r.frame += 1;
+        r.release_closed_loupe(t0 + LOUPE_RELEASE);
+        r.frame += 1;
+        assert_eq!(r.release_closed_loupe(t0 + LOUPE_RELEASE * 3), None);
+        assert!(!r.stages.contains_key(&Slot::Main), "closed for the wait: freed");
     }
 
     // The renderer counts and trims what it holds, and says so
