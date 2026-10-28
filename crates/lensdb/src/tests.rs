@@ -331,3 +331,26 @@ fn a_named_profile_is_found_behind_a_tie() {
     assert_eq!(db.find_lens_named(None, &name, None).unwrap().maker, "Testcam");
     assert!(db.find_lens_named(None, "70-200mm f/4", None).is_none());
 }
+
+/// A profile for the first generation of a lens is not the second's: the FE 70-200mm F4 G OSS profile put 0.7 EV of
+/// corner gain on photos from the F4 Macro G OSS II, whose own camera JPEG shows 0.15 EV of falloff.
+#[test]
+fn a_lens_generation_must_agree() {
+    let lens = |model: &str| {
+        format!(
+            r#"<lens><maker>Sony</maker><model>{model}</model><mount>Sony E</mount><cropfactor>1</cropfactor>
+              <calibration><distortion model="poly3" focal="70" k1="-0.01" /></calibration></lens>"#
+        )
+    };
+    let first = LensDb::parse(&format!(r#"<lensdatabase version="2">{}</lensdatabase>"#, lens("FE 70-200mm f/4 G OSS"))).unwrap();
+    let both = LensDb::parse(&format!(
+        r#"<lensdatabase version="2">{}{}</lensdatabase>"#,
+        lens("FE 70-200mm f/4 G OSS"),
+        lens("FE 70-200mm f/4 Macro G OSS II")
+    ))
+    .unwrap();
+    assert!(first.find_lens(Some("Sony"), "FE 70-200mm F4 G OSS", None).is_some());
+    assert!(first.find_lens(Some("Sony"), "FE 70-200mm F4 Macro G OSS II", None).is_none(), "another generation");
+    assert!(both.find_lens(Some("Sony"), "FE 70-200mm F4 Macro G OSS II", None).unwrap().models[0].ends_with("II"));
+    assert!(both.find_lens(Some("Sony"), "FE 70-200mm F4 G OSS", None).unwrap().models[0].ends_with("OSS"));
+}
