@@ -317,7 +317,25 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
 /// vendor raws and DNGs (whose tone can come from their preview); only those proxies go stale when
 /// the fit changes; an older encoding makes any proxy stale).
 #[cfg(not(target_arch = "wasm32"))]
-type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool);
+type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool, crate::smart::LocalWant);
+
+/// What a photo's smart preview should say about local camera profiles, and how to load the original for it: a photo on
+/// a usable local profile builds its proxy with that profile's colour (the proxy stands in for the original, so it
+/// must look like it); every other photo keeps Camera Matching, whatever it is set to.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn smart_local(photo: &lightcraft_catalog::Photo) -> (Option<crate::media::LoadOptions>, crate::smart::LocalWant) {
+    use crate::smart::LocalWant;
+    let on_local = photo.develop.profile.camera_colour == lightcraft_develop::CameraColour::Local && photo.fitted_look();
+    let id = photo.develop.profile.camera_profile.as_deref().filter(|_| on_local);
+    match id.and_then(|id| crate::camera_profiles::local_profile(id).map(|l| (id, l))) {
+        Some((id, l)) if l.is_for_camera(&photo.meta.camera) => {
+            let options = crate::media::LoadOptions::of(&photo.develop);
+            (Some(options), LocalWant::Is(crate::smart::local_stamp(id, options.profile_key.unwrap_or_default())))
+        }
+        _ if on_local => (None, LocalWant::Keep),
+        _ => (None, LocalWant::No),
+    }
+}
 
 /// DNG tone fits also go stale, although DNGs keep their own matrix and Kelvin white-balance scale.
 #[cfg(not(target_arch = "wasm32"))]
@@ -384,7 +402,7 @@ fn smart_run(
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
     }
-    for (id, path, source, look) in jobs {
+    for (id, path, source, look, local) in jobs {
         if state.is_some_and(|(st, _)| st.cancel.load(Ordering::Relaxed)) {
             break;
         }
@@ -402,7 +420,7 @@ fn smart_run(
             // fit (see `smart::ENCODE_VERSION` and `camera_preview::LOOK_VERSION`) when its
             // original can be read
             let damaged = path.exists();
-            let stale = damaged && crate::smart::is_stale_for(&path, look);
+            let stale = damaged && (crate::smart::is_stale_for(&path, look) || crate::smart::is_local_stale(&path, &local));
             if damaged && !stale && crate::smart::is_valid(&path) {
                 n.built += 1;
             } else {
@@ -417,7 +435,11 @@ fn smart_run(
                     .and_then(|s| s.load_source())
                     .and_then(|src| {
                         let info = src.info_or(Default::default());
-                        crate::smart::encode(&src.image, Some(&info))
+                        let stamp = match &local {
+                            crate::smart::LocalWant::Is(stamp) => Some(stamp.as_str()),
+                            _ => None,
+                        };
+                        crate::smart::encode_stamped(&src.image, Some(&info), stamp)
                     })
                     .and_then(|b| {
                         let parent = path.parent().ok_or_else(|| format!("{}: no parent folder", path.display()))?;
@@ -482,9 +504,11 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
             continue;
         }
         let path = crate::smart::sharded_file_path(&dir, &ph);
-        // (a smart preview keeps the camera matching whatever the photo is set to: it stands in for the original)
-        let source = (!discard).then(|| s.media.source_ref_for(&ph, crate::media::SourceLevel::Preview, Default::default()));
-        jobs.push((id, path, source, preview_fitted_look(&ph)));
+        // (a smart preview keeps the camera matching whatever the photo is set to, except for a local camera profile:
+        // it stands in for the original)
+        let (options, local) = smart_local(&ph);
+        let source = (!discard).then(|| s.media.source_ref_for(&ph, crate::media::SourceLevel::Preview, options.unwrap_or_default()));
+        jobs.push((id, path, source, preview_fitted_look(&ph), local));
     }
     let custom = s.smart_previews_dir.is_some();
     if background {
@@ -529,7 +553,15 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
     let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. })).collect();
     let jobs: Vec<SmartJob> = photos
         .iter()
-        .map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref(&p.source, max_edge)), preview_fitted_look(p)))
+        .map(|p| {
+            // (a photo on a local profile is rebuilt with that profile's colour; any other from the original at preview size)
+            let (options, local) = smart_local(p);
+            let mut source = s.media.origin_ref(&p.source, max_edge);
+            if let (Some(o), crate::media::SourceRef::File { options, .. }) = (options, &mut source) {
+                *options = o;
+            }
+            (p.id, crate::smart::sharded_file_path(&dir, p), Some(source), preview_fitted_look(p), local)
+        })
         .collect();
     std::thread::Builder::new()
         .name("lc-smart-look".into())
@@ -543,8 +575,8 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
 fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
     let stale: Vec<SmartJob> = jobs
         .into_iter()
-        .map(|(id, path, source, look)| (id, crate::smart::existing_file_path(dir, path), source, look))
-        .filter(|(_, path, _, look)| crate::smart::is_stale_for(path, *look))
+        .map(|(id, path, source, look, local)| (id, crate::smart::existing_file_path(dir, path), source, look, local))
+        .filter(|(_, path, _, look, local)| crate::smart::is_stale_for(path, *look) || crate::smart::is_local_stale(path, local))
         .collect();
     if !stale.is_empty() {
         // `custom`: the folder is there already, and must not be recreated if it went away since

@@ -192,6 +192,95 @@ fn bad_crc_is_still_a_torn_tail() {
     assert!(r.torn_bytes > 0 && r.damaged.is_none(), "{r:?}");
 }
 
+/// LT1 / T20 (fork): local camera profiles. A v10 library holds develop settings with `camera_colour` `local` (plus
+/// `camera_profile`) and `macos`. A build that only knows the older enum (a mirror of it here) cannot read those
+/// bodies, which is why the header says 10: such a build refuses the library as "newer", never as damaged.
+#[test]
+fn local_and_macos_colour_need_format_v10_and_older_builds_get_newer_not_corrupt() {
+    /// The `camera_colour` of v9: what an older build's settings parser accepts.
+    #[derive(serde::Deserialize)]
+    #[allow(dead_code)]
+    #[serde(rename_all = "lowercase")]
+    enum V9Colour {
+        Auto,
+        Colorimetric,
+    }
+    /// The newest format an older build reads.
+    const OLDEST_BUILD_MAX: u32 = 9;
+    // (a library with `local` or `macos` must carry a version an older build refuses)
+    const _: () = assert!(VERSION > OLDEST_BUILD_MAX);
+
+    let mut c = Catalog::new();
+    let mut ids = Vec::new();
+    for (colour, profile) in [("local", Some("A7 V Chart")), ("macos", None), ("colorimetric", None)] {
+        let op = photo(&mut c);
+        c.apply(op).unwrap();
+        let id = c.photos().last().unwrap().id;
+        let mut s = lightcraft_develop::DevelopSettings::default();
+        s.profile.camera_colour = serde_json::from_value(serde_json::json!(colour)).unwrap();
+        s.profile.camera_profile = profile.map(Into::into);
+        c.apply(Op::SetDevelop { id, settings: Arc::new(s), label: "Profile".into(), edited: None }).unwrap();
+        ids.push(id);
+    }
+    let m = MemStore::new();
+    let (mut j, _, _) = Journal::open(Box::new(m.clone())).unwrap();
+    j.snapshot(&c).unwrap();
+    drop(j);
+    assert_eq!(snapshot_version(&m), 10, "local camera profiles are catalog format v10");
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, None);
+    for (id, want) in ids.iter().zip(["local", "macos", "colorimetric"]) {
+        let p = &loaded.photo(*id).unwrap().develop.profile;
+        assert_eq!(serde_json::to_value(p.camera_colour).unwrap(), serde_json::json!(want));
+    }
+    assert_eq!(loaded.photo(ids[0]).unwrap().develop.profile.camera_profile.as_deref(), Some("A7 V Chart"));
+    // what an older build would do with the bodies: fail to parse them (so the header is what keeps it out)
+    assert!(serde_json::from_value::<V9Colour>(serde_json::json!("local")).is_err());
+    assert!(serde_json::from_value::<V9Colour>(serde_json::json!("macos")).is_err());
+    // a reader limited to the older format: the header check fires first, on a body it could not parse either
+    let v: serde_json::Value = serde_json::from_slice(&m.get(SNAPSHOT).unwrap()).unwrap();
+    assert!(v["version"].as_u64().unwrap() > u64::from(OLDEST_BUILD_MAX), "header above the older maximum: Newer, not Corrupt");
+    // and this build, given a snapshot one above itself that holds a colour it does not know, says Newer too
+    let m = MemStore::new();
+    m.set(
+        SNAPSHOT,
+        format!(
+            "{{\"format\":\"lightcraft-catalog\",\"version\":{},\"seq\":0,\"catalog\":{{\"photos\":[{{\"profile\":{{\"camera_colour\":\"fromTheFuture\"}}}}]}}}}\n",
+            VERSION + 1
+        )
+        .into_bytes(),
+    );
+    assert_refused_untouched(&m);
+}
+
+/// A v9 library (written before local profiles and macOS Colour) opens as it was, with its Camera Matching and
+/// Colorimetric photos untouched and no profile id, and is rewritten in the current format.
+#[test]
+fn v9_library_loads_and_is_upgraded() {
+    let mut c = Catalog::new();
+    let mut ids = Vec::new();
+    for colour in ["auto", "colorimetric"] {
+        let op = photo(&mut c);
+        c.apply(op).unwrap();
+        let id = c.photos().last().unwrap().id;
+        let mut s = lightcraft_develop::DevelopSettings::default();
+        s.profile.camera_colour = serde_json::from_value(serde_json::json!(colour)).unwrap();
+        c.apply(Op::SetDevelop { id, settings: Arc::new(s), label: "Profile".into(), edited: None }).unwrap();
+        ids.push(id);
+    }
+    let snap = c.to_snapshot();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":2,\"catalog\":{snap}}}\n").into_bytes());
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.replayed, r.upgraded_from), (0, Some(9)));
+    assert_eq!(loaded.to_snapshot(), snap, "nothing about the photos changes");
+    for (id, want) in ids.iter().zip(["auto", "colorimetric"]) {
+        let p = &loaded.photo(*id).unwrap().develop.profile;
+        assert_eq!((serde_json::to_value(p.camera_colour).unwrap(), p.camera_profile.clone()), (serde_json::json!(want), None));
+    }
+    assert_eq!(snapshot_version(&m), u64::from(VERSION), "rewritten in the current format");
+}
+
 /// Guard for the version rule (see `journal` → *Format versions*): adding an [`Op`] variant breaks
 /// this match. When it does, bump `journal::VERSION`, add a row to the format table, and add the
 /// variant here under the new version. A version that only adds serialized fields raises
@@ -238,8 +327,8 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v9: `Photo.preview_checked` and `Op::SetContent.preview_checked`.
-    const NEWEST_FIELDS: u32 = 9;
+    /// v10: `profile.camera_colour = local | macos` and `profile.camera_profile` in the develop settings.
+    const NEWEST_FIELDS: u32 = 10;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

@@ -131,7 +131,7 @@ opcodes keep their binned proxy.
 
 One photo can show too little of a colour for its own fit to learn it: in a second shot of the lime shirt only a few dozen proxy pixels show it, next to a hillside of foliage at the same hue that the camera renders differently, and the shirt stayed yellow (hue 68° against the JPEG's 82°; a 192-pixel proxy only reached 74°). `lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS…` therefore pools the colour pairs of many ARWs, NEFs or RAFs per camera model — each against its own embedded JPEG, at a 192-pixel proxy, at most 4000 pairs per photo, files spread evenly over the folders — and fits one matrix (from white-balanced camera RGB, so no single photo's white point is baked in) and one hue/saturation/value table. Models need at least 5 usable photos.
 
-Profiles are JSON files `<model>.json` in `$LIGHTCRAFT_CAMERA_PROFILES`, else `<config>/camera-profiles` (macOS `~/Library/Application Support/LightCraft/camera-profiles`); a local profile replaces a built-in one. Built-in profiles live in `assets/camera-profiles/` (listed in `assets/ATTRIBUTION.md`) and are compiled in, so the app, CLI and web build share them: ILCE-7M4, fitted to 597 photos (2.2 million colour pairs) shot in 2026, mostly with the Standard creative style and DRO Auto; ILCE-7CR, 125 photos, and ILCA-99M2, 144 photos (both below); X-H2S, 201 photos; X-T4, 545 photos; NIKON Z 6_2, 296 photos; NIKON Z 8, 261 photos; NIKON D5300, 264 photos (below). They hold aggregate colour statistics only. A photo of a profiled model takes its colour from the profile and fits only its own tone and chroma curves (picture styles vary per shot; with Sony's DRO on, that tone curve is then lowered as described below); the acceptance gates still apply. A rejected profile fit retries the photo's own colour and tone fit before falling back to neutral rendering. `calibrate` fits the pooled matrix with every row summing to 1 (`fit_matrix_neutral`, the exact constrained least-squares solution), so grey camera RGB stays grey at the same value and no profile it writes carries a colour cast on every grey wall and white shirt; the free fit gave the A7 V row sums 1.007 / 0.992 / 1.062. Files are read once per process and validated (version, bounded invertible matrix, table shape and finite data); a damaged file is ignored with a warning. The profiles folder's contents are part of the render cache keys, so thumbnails rendered before a profile existed are redone; smart previews built before keep their colour until rebuilt.
+Camera Matching reads only the built-in profiles. Profiles of your own are JSON files in `$LIGHTCRAFT_CAMERA_PROFILES`, else `<config>/camera-profiles` (macOS `~/Library/Application Support/LightCraft/camera-profiles`); they are their own choices in the Profile picker and never replace a built-in one (below, "Local camera profiles"). Built-in profiles live in `assets/camera-profiles/` (listed in `assets/ATTRIBUTION.md`) and are compiled in, so the app, CLI and web build share them: ILCE-7M4, fitted to 597 photos (2.2 million colour pairs) shot in 2026, mostly with the Standard creative style and DRO Auto; ILCE-7CR, 125 photos, and ILCA-99M2, 144 photos (both below); X-H2S, 201 photos; X-T4, 545 photos; NIKON Z 6_2, 296 photos; NIKON Z 8, 261 photos; NIKON D5300, 264 photos (below). They hold aggregate colour statistics only. A photo of a profiled model takes its colour from the profile and fits only its own tone and chroma curves (picture styles vary per shot; with Sony's DRO on, that tone curve is then lowered as described below); the acceptance gates still apply. A rejected profile fit retries the photo's own colour and tone fit before falling back to neutral rendering. `calibrate` fits the pooled matrix with every row summing to 1 (`fit_matrix_neutral`, the exact constrained least-squares solution), so grey camera RGB stays grey at the same value and no profile it writes carries a colour cast on every grey wall and white shirt; the free fit gave the A7 V row sums 1.007 / 0.992 / 1.062. Files are read and validated (version, bounded invertible matrix, table shape and finite data); a damaged file is ignored with a warning. The built-in profiles are part of every render cache key (`camera_profiles::cache_key`); the user's folder is not, so adding a local profile re-renders nothing on Camera Matching.
 
 
 ### Sony ILCE-7CR
@@ -225,7 +225,7 @@ vendor white-balance multipliers give through the same matrices. No number comes
 A raw starts from the first of these that is available (`camera_preview::starting_colour`):
 
 1. the file's own colour matrices (DNG);
-2. a camera profile for its model (bundled or local), with tone and chroma fitted to the file's JPEG (also the colour of the partial look);
+2. a built-in camera profile for its model, with tone and chroma fitted to the file's JPEG (also the colour of the partial look);
 3. the file-local fit to its own JPEG described above;
 4. the model's spectral matrices, with LightCraft's default tone curve and no JPEG fit;
 5. the neutral fallback.
@@ -289,14 +289,60 @@ that has no such choice (`Photo::is_edited` ignores it for a JPEG or a DNG paste
 
 Not done yet, and open in [#1207](https://github.com/storytold/lightcraft/issues/1207): a look of its own for No Camera
 Matching (it has no camera tone curve, so on the Nikon Z f frames measured there it renders about 0.75–1.75 stop darker
-and 10–20 % less saturated than the fit), matching the exposure between the two, and the option in DNG export /
-Convert to DNG and Photo Merge, which keep the Camera Matching colour.
+and 10–20 % less saturated than the fit), matching the exposure between the two, and the option in Photo Merge, which
+keeps the Camera Matching colour (DNG export and Convert to DNG write a local profile's colour, below).
+
+### Local camera profiles (your own profile files)
+
+A profile file in the camera-profiles folder (made by `lightcraft-cli calibrate --name "A7 V Chart" FOLDERS…`, which writes
+`A7 V Chart.json` with the name inside, or any valid profile JSON; it holds aggregate colour statistics only and is never
+bundled) is a choice in the Profile picker of every raw whose camera it is made for (the file's `model` equals the
+photo's Exif model). Before this, a file `<model>.json` silently replaced the built-in profile inside Camera Matching.
+Now it does not: Camera Matching reads the built-in profiles alone.
+
+- **Names.** The picker shows the file's `name` (trimmed, at most 60 characters), else its file name without `.json`.
+  The file stem is the **id** a photo stores (`profile.camera_profile`), next to `profile.camera_colour: "local"`;
+  `develop.profile {camera_colour: "local", camera_profile: id}` sets both in one undo step, any other colour clears the id,
+  and the Profile group (presets, Copy / Paste, sync) carries both. `profiles.local {camera?}` lists the files.
+- **Colour.** The profile's matrix and hue/saturation table are the base colour (relative to the camera transform, as
+  Camera Matching uses a built-in profile); tone and chroma curves are fitted to the file's JPEG with the colour held
+  fixed (`camera_preview/local.rs`, the profile attempts of the Camera Matching search over the same tone fits, edge
+  filter and clipped-pixel refit, and a black-and-white JPEG's tone alone). There is **no retry with the photo's own colour and
+  no partial look**: if no tone fit passes the profile's colour is kept with LightCraft's default tone. Sony DRO is lowered
+  out of the tone as in Camera Matching. White balance keeps Camera Matching's scale. AI Denoise works unchanged.
+- **A file that can't be used** (missing, damaged, or made for another camera) renders the photo as Camera Matching, keeps
+  the setting and the id, and says so under the Profile picker for as long as it is so (`SourceInfo::colour_note`). The
+  picker lists the stored profile greyed. When the file is back the photo uses it again.
+- **Caches.** A decoded source records the profile's key (`LoadOptions::profile_key`: a 128-bit hash of the id and the file's
+  content, read with no shortcut by size or time, `camera_profiles::local_key`; `None` for a photo that is not on a local
+  profile). A registry keeps each key's profile for the decoder, and a key it has lost is found again by scanning the
+  folder, so a changed, replaced, removed or restored file decodes again. Only a photo on a local
+  profile has that key in its thumbnail, variant and view keys; every other photo's keys are what they were. A smart
+  preview records the colour base baked into its pixels (`base`: `auto` or `local`); one of a photo on a local profile is
+  built with the profile and records `local_profile: "<id>:<key>"` in its header too, and goes
+  stale only when that stamp differs (the file changed, or the photo left the profile) and the original can be read, and
+  a missing or unusable file keeps the proxy.
+- **DNG.** Export as DNG and Convert / Copy as DNG write the profile's matrix, table and (when fitted) tone into the DNG's
+  colour tags; the DNG's settings say Camera Matching (a DNG has matrices of its own, so the choice is not offered on it).
+  Photo Merge keeps Camera Matching; its dialog says how many of the photos are on a local profile.
+- **Catalog.** `local` and the reserved `macos` (rendered as Camera Matching until the macOS Colour track lands) are
+  catalog format v10; a build that only knows v9 refuses the library as "newer version", untouched, never as damaged.
+- **Existing photos.** For a file named after its camera (`ILCE-7M5.json`, the name Camera Matching used to read) a
+  question is put when the library opens, until it is answered: "N photos were rendered with your local profile 'X'. Switch them to it
+  to keep their look?" **Switch** moves the Camera Matching photos of that camera to the profile in one undo step;
+  **Leave on Camera Matching** leaves them. Never automatic. Only those two answer it (kept in the library's preferences,
+  `localProfileAsked`); closing the window with Esc or a click outside asks again at the next opening, and undoing a
+  Switch puts the question back (redo answers it again).
 
 ## Smart previews and the look version
 
 A smart preview keeps the result of the fit twice: the colour matrix is baked into its pixels and the tone and chroma curves are stored in its header. When the fit changes, a preview built earlier keeps the old look until it is rebuilt, and the render cache version does not reach it (renders are keyed on the library's files, proxies are files of their own).
 
 The fit therefore has a version, `LOOK_VERSION` in `crates/engine/src/camera_preview.rs`, and every smart preview records the version that wrote it in its header line (`look_version`). **Bump the constant in any change that makes the fit give a different result for the same file**: the matrix, hue/saturation, tone or chroma fit, their gates and fallbacks, or how a camera profile feeds them. Changes that leave the fitted look alone don't need it. A header without the field (everything built before it existed) counts as version 0, and so does a value that is not a non-negative integer; a value from a newer build is left alone.
+
+`LOOK_VERSION` 14 also adds the header field `base` (`auto` for Camera Matching, `local` for a local profile). A proxy of
+a raw with the fitted look that has no `base`, or an older version, is stale: before 14 a file named after the camera
+changed Camera Matching silently, so those proxies carry a colour Camera Matching no longer gives.
 
 A proxy older than the constant is brought up to date by the existing Build Smart Previews path (`smart_run`), which also repairs damaged proxies:
 

@@ -39,7 +39,8 @@ impl crate::Session {
         } else {
             source_edge_needed(&p, &settings, apply_crop, max_w.max(max_h))
         });
-        let source = self.media.source_ref_for(&p, level, LoadOptions::of(&settings));
+        let options = LoadOptions::of(&settings);
+        let source = self.media.source_ref_for(&p, level, options);
         let request = RenderRequest { apply_crop, ..RenderRequest::fit(max_w, max_h) };
         // the photo id is part of the key: two photos with the same settings and size must not
         // share a result (a view slot showing photo A would otherwise look current for photo B)
@@ -57,10 +58,16 @@ impl crate::Session {
             ^ (level as u64) << 60
             ^ id.0.wrapping_mul(0x9e37_79b9_7f4a_7c15)
             ^ content.rotate_left(17)
-            ^ salt;
+            ^ salt
+            // (a local profile's file: nothing, so no change, for every other photo)
+            ^ options.profile_key.map_or(0, |k| (k as u64) ^ ((k >> 64) as u64)).rotate_left(29);
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
             k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key());
+            // (only a photo on a local profile has its file in its key, so every other thumbnail stays valid)
+            if let Some(local) = options.profile_key {
+                k.u64(local as u64).u64((local >> 64) as u64);
+            }
             // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
             if salt != 0 {
                 k.u64(salt);
@@ -95,19 +102,24 @@ impl crate::Session {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
         job.settings = Arc::new(settings.clone());
         job.key = settings.hash64() ^ ((max_w as u64) << 40) ^ ((max_h as u64) << 20) ^ (apply_crop as u64) ^ (job.level as u64) << 60;
+        // (a hover over a local profile follows its file, as every other render of it does)
+        job.key ^= LoadOptions::of(settings).profile_key.map_or(0, |k| (k as u64) ^ ((k >> 64) as u64)).rotate_left(29);
         Some(job)
     }
 
     /// Cache key of a variant thumbnail ([`Self::variant_job`]).
     pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize) -> Hash128 {
-        Hasher128::new()
-            .str(&content_key(p))
+        let mut k = Hasher128::new();
+        k.str(&content_key(p))
             .str("variant")
             .u64(settings.hash64())
             .u64(edge as u64)
             .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key())
-            .finish()
+            .u64(crate::camera_profiles::cache_key());
+        if let Some(local) = LoadOptions::of(settings).profile_key {
+            k.u64(local as u64).u64((local >> 64) as u64);
+        }
+        k.finish()
     }
 
     /// A thumbnail of `id` rendered with `settings` instead of its own (profile and preset
@@ -215,15 +227,18 @@ impl crate::Session {
     }
 
     /// Size-independent cache key of a photo's view render (loupe) for its current settings.
-    fn view_key(p: &Photo, apply_crop: bool) -> Hash128 {
-        Hasher128::new()
-            .str(&content_key(p))
+    pub(super) fn view_key(p: &Photo, apply_crop: bool) -> Hash128 {
+        let mut k = Hasher128::new();
+        k.str(&content_key(p))
             .str("view")
             .u64(p.develop.hash64())
             .u64(apply_crop as u64)
             .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key())
-            .finish()
+            .u64(crate::camera_profiles::cache_key());
+        if let Some(local) = LoadOptions::of(&p.develop).profile_key {
+            k.u64(local as u64).u64((local >> 64) as u64);
+        }
+        k.finish()
     }
 
     /// The loupe's render job: like [`Self::render_job`], and a full-quality result is kept as the

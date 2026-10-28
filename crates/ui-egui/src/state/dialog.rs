@@ -306,6 +306,16 @@ pub enum Dialog {
     ConfirmDelete {
         count: usize,
     },
+    /// Once per profile file: its camera's photos were rendered with it inside Camera Matching, which no longer reads
+    /// the folder. Switch them to its own Profile choice, or leave them on Camera Matching
+    /// (`profiles.localSwitch`; [`crate::local_profile_offer`]).
+    LocalProfileSwitch {
+        /// The profile file's name without `.json`.
+        id: String,
+        /// What the Profile picker calls it.
+        name: String,
+        count: usize,
+    },
     /// Confirm moving photos dropped on a Folders row into that folder on disk
     /// (`photo.moveToFolder`). `name`: the folder's name, as the question says it.
     MovePhotos {

@@ -118,12 +118,19 @@ fn load_bytes_now(
         // (whether the photo's Profile option can change its starting colour: decided before the colour is chosen)
         let colorimetric = crate::camera_preview::colour_choice_offered(&raw);
         // the source's segmentation mattes (DNG semantic masks), read while the starting colour is fitted
-        let ((xy, t, camera_look), mattes) = rayon::join(
+        let ((xy, t, camera_look, local), mattes) = rayon::join(
             || {
                 let removed = dng_lens_ops.map(|ops| std::mem::replace(&mut raw.opcodes.list3, ops));
                 // With the opcodes restored, the proxy already includes vignetting; do not apply it twice.
                 let embedded = if removed.is_some() { None } else { lens.as_ref() };
-                let colour = crate::camera_preview::starting_colour(&mut raw, &bytes, lens_geometry.as_ref(), embedded, options.colour);
+                let colour = crate::camera_preview::starting_colour_choice(
+                    &mut raw,
+                    &bytes,
+                    lens_geometry.as_ref(),
+                    embedded,
+                    options.colour,
+                    options.profile_key,
+                );
                 if let Some(ops) = removed {
                     raw.opcodes.list3 = ops;
                 }
@@ -205,7 +212,12 @@ fn load_bytes_now(
                 let tags = lightcraft_raw::ColorData { profile: Default::default(), ..raw.color.clone() };
                 Arc::new(lightcraft_pipeline::CameraColor { tags, developed_for: xy })
             });
-        let camera_tone = camera_look.as_ref().map(|p| p.tone).or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve));
+        // (a local profile whose tone fit failed keeps LightCraft's default tone: its look carries a placeholder curve)
+        let camera_tone = camera_look
+            .as_ref()
+            .filter(|_| !local.default_tone)
+            .map(|p| p.tone)
+            .or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve));
         let local_tone = local_tone(&raw);
         let (temp, tint) = scale.as_shot(xy);
         return Ok((
@@ -225,6 +237,7 @@ fn load_bytes_now(
                 // (the catalog knows the original's size: `media::source_info`)
                 native_long: None,
                 colorimetric,
+                colour_note: local.note,
             },
             used_reduced,
         ));

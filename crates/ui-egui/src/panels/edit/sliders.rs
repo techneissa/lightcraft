@@ -92,18 +92,21 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
         ui.label(egui::RichText::new(crate::i18n::tr(s)).font(t.semibold(11.5)).color(t.text_dim));
     };
     // Camera Matching: how a raw's colour starts, whatever profile look is applied on top
-    let mut colour_pick: (Option<lightcraft_develop::CameraColour>, Option<lightcraft_develop::CameraColour>) = (None, None);
+    let mut colour_pick: (Option<crate::panels::camera_colour::Row>, Option<crate::panels::camera_colour::Row>) = (None, None);
     if let Some(photo) = app.session.active()
         && crate::panels::camera_colour::offered(app, photo)
     {
-        for (colour, label, tip) in crate::panels::camera_colour::CHOICES {
-            let r = ui.selectable_label(d.profile.camera_colour == colour, crate::i18n::tr(label)).on_hover_text(crate::i18n::tr(tip));
-            register(ui, format!("profileMenu:cameraColour:{}", crate::panels::camera_colour::value(colour)), r.rect);
+        for row in crate::panels::camera_colour::rows(app, photo, d) {
+            // (a local profile's name is the user's own: it is not translated; a greyed row is a stored profile this
+            // computer can't use for the photo)
+            let shown = if row.profile.is_some() { row.label.clone() } else { crate::i18n::tr(&row.label).to_string() };
+            let r = ui.add_enabled(row.enabled, egui::Button::selectable(row.applied(d), shown)).on_hover_text(row.tip.clone());
+            register(ui, format!("profileMenu:cameraColour:{}", row.key()), r.rect);
             if r.clicked() {
-                colour_pick.0 = Some(colour);
+                colour_pick.0 = Some(row.clone());
             }
             if r.hovered() {
-                colour_pick.1 = Some(colour);
+                colour_pick.1 = Some(row);
             }
         }
         ui.separator();
@@ -182,16 +185,14 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
         app.hover_preview =
             Some(crate::HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::profile_label(hovered_id, name)), settings: s });
     }
-    if let Some(colour) = colour_pick.1
-        && colour != d.profile.camera_colour
+    if let Some(row) = &colour_pick.1
+        && !row.applied(d)
     {
-        app.hover_preview = Some(crate::HoverPreview {
-            label: crate::i18n::tr_format!("Profile: {}", crate::i18n::tr(crate::panels::camera_colour::label(colour))),
-            settings: crate::panels::camera_colour::with(d, colour),
-        });
+        let shown = if row.profile.is_some() { row.label.clone() } else { crate::i18n::tr(&row.label).to_string() };
+        app.hover_preview = Some(crate::HoverPreview { label: crate::i18n::tr_format!("Profile: {}", shown), settings: row.with(d) });
     }
-    if let Some(colour) = colour_pick.0 {
-        let _ = app.run("develop.profile", json!({"camera_colour": crate::panels::camera_colour::value(colour)}));
+    if let Some(row) = colour_pick.0 {
+        let _ = app.run("develop.profile", row.params());
     }
     if let Some(id) = pick.0 {
         let _ = app.run("develop.profile", json!({"id": id}));

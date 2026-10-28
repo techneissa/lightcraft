@@ -10,7 +10,7 @@
 //! lightcraft-cli denoise-serve [--model ID] [--models DIR] [--listen ADDR] [--token-env VAR] [--run-on auto|gpu|cpu]
 //! lightcraft-cli commands [--json]
 //! lightcraft-cli controls [--json]
-//! lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
+//! lightcraft-cli calibrate [--max N] [--out DIR] [--name NAME] FOLDERS/FILES…
 //! ```
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -104,12 +104,13 @@ USAGE:
         --max-connections N   concurrent clients (default 8)
   lightcraft-cli commands [--json]   list every command id with its parameters
   lightcraft-cli controls [--json]   list every develop control id with its range
-  lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
+  lightcraft-cli calibrate [--max N] [--out DIR] [--name NAME] FOLDERS/FILES…
       Fit a colour profile per camera model from raw files and their embedded camera JPEGs
       (Sony ARW, Nikon NEF, Fujifilm RAF): up to N files spread over the folders (default 300; 0 = all), pooled per
       model, written as <model>.json to DIR (default: the profiles folder LightCraft reads,
-      <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). Raws of a profiled model then
-      take their colour from the profile and only their tone from their own JPEG.
+      <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). The result is a local profile: it appears as its own
+      choice in the Profile picker of that camera's raws (it no longer changes Camera Matching). With --name it is
+      written as NAME.json and shown as NAME (one camera model only).
   lightcraft-cli --version | --help
 ";
 
@@ -212,12 +213,14 @@ fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>, depth: usize) {
 fn calibrate(args: &[String]) -> Result<(), String> {
     let mut max = 300usize;
     let mut out: Option<std::path::PathBuf> = None;
+    let mut name: Option<String> = None;
     let mut inputs = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--max" => max = take_value(args, &mut i, "--max")?.parse().map_err(|_| "--max needs a number".to_string())?,
             "--out" => out = Some(take_value(args, &mut i, "--out")?.into()),
+            "--name" => name = Some(take_value(args, &mut i, "--name")?.to_string()),
             a if a.starts_with("--") => return Err(format!("unknown option `{a}`")),
             f => inputs.push(f.to_string()),
         }
@@ -267,10 +270,17 @@ fn calibrate(args: &[String]) -> Result<(), String> {
         pool.merge(p);
     }
     let mut written = 0;
-    for result in pool.fit(5) {
+    let fitted = pool.fit(5);
+    if name.is_some() && fitted.iter().filter(|r| r.is_ok()).count() > 1 {
+        return Err("--name names one profile, but the photos are of several camera models: calibrate each camera on its own".into());
+    }
+    for result in fitted {
         match result {
             Ok(profile) => {
-                let path = lightcraft_engine::camera_profiles::save(&profile, &dir)?;
+                let path = match &name {
+                    Some(name) => lightcraft_engine::camera_profiles::save_named(&profile, &dir, name)?,
+                    None => lightcraft_engine::camera_profiles::save(&profile, &dir)?,
+                };
                 println!(
                     "{}: {} photos, {} colour pairs, hue/saturation table {} → {}",
                     profile.model,
@@ -292,6 +302,7 @@ fn calibrate(args: &[String]) -> Result<(), String> {
     if written == 0 {
         return Err("no profile written".into());
     }
+    eprintln!("calibrate: the profile is now a choice in the Profile picker of that camera's raws; Camera Matching no longer uses it");
     Ok(())
 }
 

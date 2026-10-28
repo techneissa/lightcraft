@@ -214,42 +214,59 @@ fn cell_ui(
 /// [`super::camera_colour`]): the current look with and without the match to the camera's JPEG.
 fn camera_cells(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
+    let rows = super::camera_colour::rows(app, id, d);
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
-    ui.painter().text(pos2(r.left() + 24.0, r.center().y), Align2::LEFT_CENTER, crate::i18n::tr("Camera Matching"), t.semibold(13.0), t.text_label);
+    // (a local profile is not a way of matching the camera: the heading names the colour source then)
+    let heading = if rows.len() > 2 { "Camera Colour" } else { "Camera Matching" };
+    ui.painter().text(pos2(r.left() + 24.0, r.center().y), Align2::LEFT_CENTER, crate::i18n::tr(heading), t.semibold(13.0), t.text_label);
     let gap = 8.0;
     let cw = ((ui.available_width() - 44.0 - gap * (COLUMNS as f32 - 1.0)) / COLUMNS as f32).max(40.0);
     let th = (cw * 0.75).round();
-    let (rr, _) = ui.allocate_exact_size(vec2(ui.available_width(), th + 30.0), Sense::hover());
-    for (i, (colour, label, tip)) in super::camera_colour::CHOICES.into_iter().enumerate() {
-        let cell = Rect::from_min_size(pos2(rr.left() + 22.0 + i as f32 * (cw + gap), rr.top()), vec2(cw, th + 24.0));
-        let key = format!("cameraColourCell:{}", super::camera_colour::value(colour));
-        let resp = ui.interact(cell, egui::Id::unique(&key), Sense::click());
+    let lines = rows.len().div_ceil(COLUMNS).max(1);
+    let (rr, _) = ui.allocate_exact_size(vec2(ui.available_width(), (th + 30.0) * lines as f32), Sense::hover());
+    for (i, row) in rows.iter().enumerate() {
+        let (label, tip, colour) = (row.label.as_str(), row.tip.as_str(), row.colour);
+        let (line, column) = (i / COLUMNS, i % COLUMNS);
+        let cell =
+            Rect::from_min_size(pos2(rr.left() + 22.0 + column as f32 * (cw + gap), rr.top() + line as f32 * (th + 30.0)), vec2(cw, th + 24.0));
+        let key = format!("cameraColourCell:{}", row.key());
+        let resp = ui.interact(cell, egui::Id::unique(&key), if row.enabled { Sense::click() } else { Sense::hover() });
         crate::widgets::announce(&resp, label.to_string());
         register(ui, key, cell);
         let thumb = Rect::from_min_size(cell.min, vec2(cell.width(), th));
-        let s = super::camera_colour::with(d, colour);
+        let s = row.with(d);
         let painter = ui.painter();
         painter.rect_filled(thumb, 3.0, t.canvas);
-        if let Some(job) = app.session.variant_job(id, &s, THUMB_EDGE)
+        if row.enabled
+            && let Some(job) = app.session.variant_job(id, &s, THUMB_EDGE)
             && let Some(tex) = app.renderer.variant(job)
         {
             painter.image(tex.tex.id(), thumb, cover_uv(thumb, tex.size), Color32::WHITE);
         }
-        let applied = d.profile.camera_colour == colour;
+        let applied = row.applied(d);
         if applied {
             painter.rect_stroke(thumb.expand(1.0), 4.0, Stroke::new(2.0, t.pick), egui::StrokeKind::Outside);
         } else if resp.hovered() {
             painter.rect_stroke(thumb, 3.0, Stroke::new(1.0, t.text_dim), egui::StrokeKind::Outside);
         }
-        let name_color = if applied { t.text } else { t.text_label };
-        let g = one_line(painter, crate::i18n::tr(label), t.font(12.0), name_color, cell.width() - 2.0);
+        let name_color = if applied {
+            t.text
+        } else if row.enabled {
+            t.text_label
+        } else {
+            t.text_dim
+        };
+        // (a local profile's name is the user's own: it is not translated)
+        let shown = if colour == lightcraft_develop::CameraColour::Local { label.to_string() } else { crate::i18n::tr(label).to_string() };
+        let g = one_line(painter, &shown, t.font(12.0), name_color, cell.width() - 2.0);
         painter.galley(pos2(cell.left() + 2.0, thumb.bottom() + 12.0 - g.size().y / 2.0), g, name_color);
-        if resp.hovered() && !applied {
-            app.hover_preview = Some(HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::tr(label)), settings: s });
+        if resp.hovered() && !applied && row.enabled {
+            let shown = if colour == lightcraft_develop::CameraColour::Local { label.to_string() } else { crate::i18n::tr(label).to_string() };
+            app.hover_preview = Some(HoverPreview { label: crate::i18n::tr_format!("Profile: {}", shown), settings: s });
         }
-        let resp = resp.on_hover_text(crate::i18n::tr(tip));
-        if resp.clicked() && !applied {
-            let _ = app.run("develop.profile", json!({"camera_colour": super::camera_colour::value(colour)}));
+        let resp = resp.on_hover_text(tip.to_string());
+        if resp.clicked() && !applied && row.enabled {
+            let _ = app.run("develop.profile", row.params());
         }
     }
     ui.add_space(6.0);

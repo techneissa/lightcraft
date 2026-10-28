@@ -103,6 +103,28 @@ pub struct SourceInfo {
     /// spectral sensitivities, so the photo's Profile option can start from them instead of the
     /// look fitted to its JPEG (`lightcraft_develop::CameraColour`).
     pub colorimetric: bool,
+    /// The photo chose a local camera profile that its source could not use, so it was decoded as Camera Matching: what
+    /// the Edit panel says under the Profile picker, for as long as it is so (the panel words and translates it).
+    pub colour_note: Option<ColourNote>,
+}
+
+/// Why a photo cannot use its local camera profile, and so renders as Camera Matching.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LocalUnavailable {
+    /// No file of that name in the folder (the folder is empty, on another computer, or the file was renamed).
+    Missing,
+    /// The file is not a usable profile.
+    Invalid,
+    /// The file is a profile for another camera.
+    OtherCamera,
+}
+
+/// The permanent note under the Profile picker for a local profile the photo cannot use (the setting stays as it is).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ColourNote {
+    pub why: LocalUnavailable,
+    /// The profile's id (its file name without `.json`), as the photo stores it.
+    pub profile: String,
 }
 
 impl Default for SourceInfo {
@@ -120,6 +142,7 @@ impl Default for SourceInfo {
             local_tone: None,
             native_long: None,
             colorimetric: false,
+            colour_note: None,
         }
     }
 }

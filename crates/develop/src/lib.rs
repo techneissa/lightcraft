@@ -192,6 +192,40 @@ mod tests {
         assert!(back.camera_colour.is_auto());
     }
 
+    /// T2 / LT1 (guard): the serde names of the Camera colour are exactly these four; the catalog stores them in the
+    /// develop settings, so a change here needs a new catalog format version (`lightcraft_catalog::journal` →
+    /// *Format versions*). `Local` and `Macos` round-trip, `Auto` stays out of the JSON, and so does an absent local
+    /// profile (settings that never chose keep their hash).
+    #[test]
+    fn camera_colour_names_are_pinned_and_local_profiles_round_trip() {
+        let names: Vec<_> = [CameraColour::Auto, CameraColour::Colorimetric, CameraColour::Local, CameraColour::Macos]
+            .iter()
+            .map(|c| serde_json::to_value(c).unwrap())
+            .collect();
+        assert_eq!(names, [json!("auto"), json!("colorimetric"), json!("local"), json!("macos")]);
+        // an exhaustive match: a new value breaks this test and points at the catalog version rule
+        for c in [CameraColour::Auto, CameraColour::Colorimetric, CameraColour::Local, CameraColour::Macos] {
+            match c {
+                CameraColour::Auto | CameraColour::Colorimetric | CameraColour::Local | CameraColour::Macos => {}
+            }
+        }
+        let auto = DevelopSettings::default();
+        assert!(!auto.to_json().to_string().contains("camera_profile"), "no profile chosen stores nothing");
+        let mut local = auto.clone();
+        local.profile.camera_colour = CameraColour::Local;
+        local.profile.camera_profile = Some("A7 V Chart".into());
+        let v = local.to_json();
+        assert_eq!((&v["profile"]["camera_colour"], &v["profile"]["camera_profile"]), (&json!("local"), &json!("A7 V Chart")));
+        assert_eq!(DevelopSettings::from_json(&v).unwrap(), local);
+        assert_ne!(local.hash64(), auto.hash64());
+        let mut macos = auto.clone();
+        macos.profile.camera_colour = CameraColour::Macos;
+        assert_eq!(DevelopSettings::from_json(&macos.to_json()).unwrap(), macos);
+        // `null` is no profile (a preset below the choice clears the id this way)
+        let back: Profile = serde_json::from_value(json!({"camera_colour": "auto", "camera_profile": null})).unwrap();
+        assert_eq!(back.camera_profile, None);
+    }
+
     /// A preset or sync of the Profile group carries the Camera colour both ways: Colorimetric onto an Auto photo,
     /// and Auto back onto a Colorimetric one.
     #[test]

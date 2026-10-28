@@ -1,6 +1,6 @@
 # RAW parity: cameras, formats, demosaic, colour and lens profiles
 
-> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-18 · **Change:** minor (Minolta MRW decoded, 6 bodies verified; lossy JPEG XL DNG tiles with a non-linear declared transfer curve decode; Canon ColorData Kelvin; X-Trans CMOS 4 bodies take the X-T3's spectral matrices) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7)
+> **Last reviewed:** 2026-10-10 · **Last updated:** 2026-10-28 · **Change:** patch (your own chart-built camera profiles are Profile choices, Camera Matching no longer reads them); before: minor (Minolta MRW decoded, 6 bodies verified; lossy JPEG XL DNG tiles with a non-linear declared transfer curve decode; Canon ColorData Kelvin; X-Trans CMOS 4 bodies take the X-T3's spectral matrices) · **Target:** Adobe Lightroom Classic 15.5 / Lightroom 9.6 (Camera Raw 18.7)
 
 Raw processing is the deepest single dimension of Lightroom parity: a photographer whose camera
 does not decode, or decodes with the wrong colour, cannot switch. This document measures it model by
@@ -22,7 +22,7 @@ ranked in [gaps.md](gaps.md). Details per format: [cr3.md](cr3.md),
 | Models added since 2017 (Camera Raw 10+): verified / unverified / preview / unsupported | 182 / 542 / 22 / 8 of 754 | measured |
 | **Share of photographers whose camera fully works** (decodes from sensor data), use-weighted | **~94%** | estimated: measured classes × written usage weights × per-format confidence |
 | …of which on a body we have verified | **~85%** | estimated, same weights |
-| Camera colour: Adobe profiles vs ours | 1,500 Adobe Standard profiles, 481 models with Camera Matching profiles vs **5 bundled profiles** + per-file fits + 52 spectral matrices (plus same-sensor aliases) | measured (bundle listing, Adobe list, `assets/camera-profiles`) |
+| Camera colour: Adobe profiles vs ours | 1,500 Adobe Standard profiles, 481 models with Camera Matching profiles vs **5 bundled profiles** + per-file fits + 52 spectral matrices (plus same-sensor aliases) | measured (bundle listing, Adobe list, `assets/camera-profiles`); your own chart-built profiles are Profile choices (`docs/camera-preview-colour.md`, Local camera profiles) |
 | Lens profiles: Adobe vs ours | **3,635 vs 0** (in-file corrections only) | measured |
 | **RAW readiness** (decoding 60%, colour 25%, lens 15%) | **~60%** (range 54–64%) | estimated, see [Scores](#scores) |
 
@@ -296,6 +296,7 @@ Beyond decoding:
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-28 | patch | Camera colour row: your own chart-built profiles are Profile choices of their own; Camera Matching reads only the bundled profiles (`docs/camera-preview-colour.md`); no score changes |
 | 2026-10-18 | patch | X-T30, X-T30 II, X-Pro3, X100V, X-S10 and X-E4 take the X-T3's spectral matrices (same 26.1 MP X-Trans CMOS 4 sensor): an X-T30 raw with a black-and-white (Acros) camera JPEG no longer opens in the muted neutral fallback |
 | 2026-10-16 | minor | Kelvin white balance from Canon CR2 `ColorData` presets (PowerShot G1 X Mark III) |
 | 2026-10-15 | minor | DNGs with a look table and no tone curve (Lightroom-written, Adobe Standard) fit their tone to the embedded preview, also Lightroom's 1024 px one: two lossy ILCE-7CM2 DNGs no longer render 0.8 EV dark and flat |
