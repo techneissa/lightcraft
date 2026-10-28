@@ -162,6 +162,14 @@ pub fn slots(app: &LightcraftApp) -> Vec<Slot> {
     }
 }
 
+/// The saved menu, read leniently: a list keeps its text entries (anything else in it, from a
+/// hand-edited file, is skipped); a value that isn't a list is the default menu. The rest of the
+/// settings file is read either way.
+pub fn read_saved<'de, D: serde::Deserializer<'de>>(d: D) -> Result<Option<Vec<String>>, D::Error> {
+    let value = <Value as serde::Deserialize>::deserialize(d)?;
+    Ok(value.as_array().map(|list| list.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()))
+}
+
 /// Save `slots` as the menu; the default arrangement is saved as None, so it keeps following the
 /// default.
 pub fn save(app: &mut LightcraftApp, slots: &[Slot]) {
@@ -311,7 +319,12 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, St
                 }
             }
             let commands = menu_commands(app);
+            let mut seen = std::collections::HashSet::new();
             for s in &slots {
+                // each item once (separators as often as wanted)
+                if *s != Slot::Separator && !seen.insert(s.key()) {
+                    unknown.push(format!("{} (twice)", s.key()));
+                }
                 if let Slot::Command { id, params } = s
                     && command_row(&commands, id, params).is_none()
                 {
@@ -319,7 +332,7 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, St
                 }
             }
             if !unknown.is_empty() {
-                return Err(format!("photoMenu.set: unknown items {} (see photoMenu.get's `available`)", unknown.join(", ")));
+                return Err(format!("photoMenu.set: unknown or repeated items {} (see photoMenu.get's `available`)", unknown.join(", ")));
             }
             save(app, &slots);
         }

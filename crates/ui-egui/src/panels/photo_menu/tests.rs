@@ -74,7 +74,7 @@ fn the_default_arrangement_is_saved_as_none() {
 }
 
 #[test]
-fn rows_move_insert_and_go() {
+fn rows_move_insert_and_are_removed() {
     let s = |k: &str| Slot::parse(k).unwrap();
     let mut menu = vec![s("rename"), s("reload"), s("delete")];
     let mut view = View::default();
@@ -102,8 +102,9 @@ fn rows_move_insert_and_go() {
 }
 
 /// The official menu ([`crate::panels::grid::context_menu`]) and this one in its default
-/// arrangement show the same items in the same order, but for the two this one adds. An item the
-/// official menu gains in an update fails this test: add it to `items::BUILTINS` and `DEFAULT`.
+/// arrangement show the same top-level rows in the same order, but for the two this one adds. A
+/// row the official menu gains in an update fails this test: add it to `items::BUILTINS` and
+/// `DEFAULT`. (Submenus are closed here: a change inside one is not seen.)
 #[test]
 fn the_default_menu_is_the_official_one_plus_before_after_and_customize() {
     let mut app = app();
@@ -157,12 +158,27 @@ fn set_refuses_unknown_items_and_reset_restores_the_default() {
     let e = app.run("photoMenu.set", json!({"items": ["rename", "cmd:no.suchCommand"]})).unwrap_err();
     assert!(e.contains("no.suchCommand"), "{e}");
     assert_eq!(app.ui.settings.photo_menu, None, "nothing changed");
+    let e = app.run("photoMenu.set", json!({"items": ["rename", "---", "---", "rename"]})).unwrap_err();
+    assert!(e.contains("rename (twice)"), "{e}");
+    assert_eq!(app.ui.settings.photo_menu, None, "nothing changed");
     assert!(app.run("photoMenu.set", json!({})).is_err());
     app.run("photoMenu.set", json!({"items": ["rename"]})).unwrap();
     assert_eq!(app.ui.settings.photo_menu, Some(vec!["rename".to_string()]));
     let r = app.run("photoMenu.reset", json!({})).unwrap();
     assert_eq!(r["custom"], false);
     assert_eq!(app.ui.settings.photo_menu, None);
+}
+
+#[test]
+fn group_into_stack_needs_two_photos() {
+    let labels = |several, stacked| items::stack_rows(several, stacked).into_iter().map(|(l, _, on)| (l, on)).collect::<Vec<_>>();
+    assert!(!labels(false, false).iter().any(|(l, _)| *l == "Group into Stack"));
+    assert!(!labels(false, true).iter().any(|(l, _)| *l == "Group into Stack"));
+    assert_eq!(labels(true, false).first(), Some(&("Group into Stack", true)));
+    // the rest stay, enabled when the photo is in a stack
+    assert_eq!(labels(false, true).len(), 7);
+    assert!(labels(false, true).iter().all(|(_, on)| *on));
+    assert!(labels(true, false).iter().skip(1).all(|(_, on)| !*on));
 }
 
 #[test]
@@ -174,7 +190,7 @@ fn an_emptied_menu_still_offers_customize() {
 }
 
 #[test]
-fn the_arrangement_survives_the_settings_file() {
+fn the_arrangement_round_trips_through_saved_settings() {
     let mut app = app();
     app.run("photoMenu.set", json!({"items": ["delete", "---", "cmd:view.compare"]})).unwrap();
     let saved = serde_json::to_value(&app.ui.settings).unwrap();
@@ -186,8 +202,12 @@ fn the_arrangement_survives_the_settings_file() {
     assert!(default.get("photoMenu").is_none());
     let mut broken = default;
     broken["photoMenu"] = json!(42);
-    let back: crate::state::AppSettings = serde_json::from_value(broken).unwrap();
+    let back: crate::state::AppSettings = serde_json::from_value(broken.clone()).unwrap();
     assert_eq!(back.photo_menu, None);
+    // one stray entry in a list costs only that entry
+    broken["photoMenu"] = json!(["rename", 5, null, "---", "delete"]);
+    let back: crate::state::AppSettings = serde_json::from_value(broken).unwrap();
+    assert_eq!(back.photo_menu, Some(vec!["rename".to_string(), "---".to_string(), "delete".to_string()]));
 }
 
 mod headless {
@@ -299,6 +319,17 @@ mod headless {
         key(&mut h, "ArrowUp", false);
         key(&mut h, "delete", false);
         assert_eq!(&menu(&h)[..2], ["openInDetail", "editIn"]);
+    }
+
+    #[test]
+    fn a_menu_command_in_the_photo_menu_runs() {
+        let mut h = demo(json!({"view": "photoGrid"}));
+        let r = h.request("engine.execute", json!({"command": "photoMenu.set", "params": {"items": ["openInDetail", "cmd:view.compare"]}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        let photo = h.app.session.visible_cloned()[0];
+        right_click(&mut h, &format!("thumb:{}", photo.0));
+        click(&mut h, "button:contextCommand:view.compare");
+        assert_eq!(h.app.ui.view, ViewMode::Compare);
     }
 
     #[test]
