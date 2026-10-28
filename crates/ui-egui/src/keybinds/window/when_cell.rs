@@ -332,6 +332,12 @@ fn editor(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, id: &'static s
         edit.tried = false;
     }
     let field_rect = out.response.rect;
+    // Tab and the arrows belong to the list while it is open (egui would move the focus with them
+    // at the start of the next pass); the text box set its own filter just now, so this goes after it
+    if out.editing && count > 0 {
+        let filter = egui::EventFilter { tab: true, horizontal_arrows: true, vertical_arrows: true, escape: false };
+        ctx.memory_mut(|m| m.set_focus_lock_filter(field, filter));
+    }
 
     // the list under the box
     let mut clicked: Option<usize> = None;
@@ -388,7 +394,11 @@ fn editor(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, id: &'static s
     // how the edit ended
     let in_list = |edit: &Edit| edit.list.zip(ctx.input(|i| i.pointer.interact_pos().or(i.pointer.latest_pos()))).is_some_and(|(r, p)| r.contains(p));
     match out.ending {
-        Some(Ending::Escape) => return,
+        Some(Ending::Escape) => {
+            // Esc ends the edit; the window stays
+            crate::widgets::take_escape(&ctx);
+            return;
+        }
         Some(Ending::Return | Ending::Away) if in_list(&edit) || clicked.is_some() => {
             ctx.memory_mut(|m| m.request_focus(field));
         }
