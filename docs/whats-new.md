@@ -44,6 +44,8 @@
   menus by its name or its menu: the best matches come first, each with its menu and shortcut. Use ↑ and ↓ to move,
   Return or a click to run it, and Esc to close it. Commands that cannot run right now are greyed out. Print… no
   longer uses ⌘P; its menu item is unchanged, and you can give it a shortcut in Keyboard Shortcuts.
+- The list shows up to 12 matches and scrolls for more. It no longer stays as short as the shortest list since it
+  opened, and ↑ and ↓ keep the highlighted command in view.
 
 ### Edit All Selected Photos at Once
 - With two or more photos selected, the Edit panel opens with an "Edit All N Selected" switch, and it is on: moving a
