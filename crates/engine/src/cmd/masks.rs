@@ -793,7 +793,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let c = "spot.findDust";
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
                 // the uncropped photo, so positions are the spots' own coordinates
-                let job = s.render_job(id, 1600, 1600, false, false).ok_or_else(|| bad(c, "no photo"))?;
+                let mut job = s.render_job(id, 1600, 1600, false, false).ok_or_else(|| bad(c, "no photo"))?;
+                // (the photo's own pixels, never a smart preview's)
+                s.original_job(&mut job);
                 let img = job.run().rendered.map_err(|e| bad(c, e))?.image;
                 let found = lightcraft_pipeline::dust::detect(&img, f64_or(p, "sensitivity", 50.0) as f32);
                 let out: Vec<Value> = found.iter().map(|d| json!({"x": d.x, "y": d.y, "size": d.radius})).collect();
@@ -830,7 +832,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
                 let detector = super::face_detect::detector(s).map_err(|e| e.into_error(c))?;
                 // the uncropped photo, so positions are the spots' own coordinates
-                let job = s.render_job(id, 1600, 1600, false, false).ok_or_else(|| bad(c, "no photo"))?;
+                let mut job = s.render_job(id, 1600, 1600, false, false).ok_or_else(|| bad(c, "no photo"))?;
+                s.original_job(&mut job);
                 let img = job.run().rendered.map_err(|e| bad(c, e))?.image;
                 let rgb: Vec<u8> = img.data.iter().flat_map(|px| [px[0], px[1], px[2]]).collect();
                 let faces =

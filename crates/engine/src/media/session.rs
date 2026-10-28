@@ -17,7 +17,7 @@ impl crate::Session {
         let b = thumb_bucket(long_edge);
         let mut job = self.build_job(id, b, b, false, true, Some(b))?;
         // (a thumbnail may develop a smaller copy of the raw image that the file keeps)
-        if let SourceRef::File { reduced, .. } = &mut job.source {
+        if let Some(reduced) = job.source.reduced_mut() {
             reduced.clone_from(&self.media.reduced_loader);
         }
         Some(job)
@@ -467,6 +467,8 @@ impl crate::Session {
         depth: lightcraft_pipeline::OutputDepth,
     ) -> Result<RenderJob, String> {
         let mut job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
+        // (never from a smart preview: Use Smart Previews instead of Originals is for viewing and editing)
+        self.original_job(&mut job);
         // An export renders the full image: never a thumbnail's source developed from a smaller copy of the raw
         // image that the file keeps (Lightroom's merged DNGs)
         let reduced = match &job.source {

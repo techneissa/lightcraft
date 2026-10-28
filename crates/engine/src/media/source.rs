@@ -163,6 +163,9 @@ pub struct DecodedSource {
     /// These pixels came from the photo's smart preview (an offline original), not from its file.
     /// A refresh must never rebuild a proxy from itself: that would stamp its older look as current.
     pub from_proxy: bool,
+    /// ...and by choice, the original being online (Use Smart Previews instead of Originals for editing): the source
+    /// was read for `options` only, and is dropped when the setting or the photo's colour no longer allows it.
+    pub edit_proxy: bool,
     /// Developed from a smaller copy of the raw image that the file keeps ([`ReducedLoader`]), not from the image
     /// itself: good for a thumbnail, never for an export.
     pub reduced: bool,
@@ -172,13 +175,22 @@ pub struct DecodedSource {
 
 impl DecodedSource {
     pub fn new(image: Arc<Rgb32f>, info: Option<SourceInfo>) -> Self {
-        DecodedSource { image, info, camera_tone: None, denoised: None, from_proxy: false, reduced: false, options: LoadOptions::default() }
+        DecodedSource {
+            image,
+            info,
+            camera_tone: None,
+            denoised: None,
+            from_proxy: false,
+            edit_proxy: false,
+            reduced: false,
+            options: LoadOptions::default(),
+        }
     }
 
     /// Whether these pixels are what decoding with `options` gives: decoded with them, or from a source the options
     /// don't change (a raw whose starting colour is not fitted to its JPEG, a smart preview, a demo scene).
     pub fn serves(&self, options: LoadOptions) -> bool {
-        self.options == options || self.from_proxy || !self.info.as_ref().is_some_and(|i| i.colorimetric)
+        self.options == options || (self.from_proxy && !self.edit_proxy) || !self.info.as_ref().is_some_and(|i| i.colorimetric)
     }
 
     /// The picture to develop for a Denoise `amount` (0 to 1, see [`DevelopSettings::denoise_amount`]): the plain one,
@@ -258,6 +270,16 @@ pub enum SourceRef {
     Smart {
         path: std::path::PathBuf,
     },
+    /// Use Smart Previews instead of Originals for editing: the photo's smart preview when it has a current one (the
+    /// worker checks the file), else `otherwise`, the original's source ([`super::smart_editing`]).
+    Preferred {
+        proxy: Box<super::Proxy>,
+        /// The settings the picture is wanted for (the proxy's source is kept with them, see [`DecodedSource::edit_proxy`]).
+        options: LoadOptions,
+        /// The longest edge wanted; the preview-size proxy is shrunk to it for a thumbnail.
+        max_edge: usize,
+        otherwise: Box<SourceRef>,
+    },
 }
 
 impl SourceRef {
@@ -310,6 +332,7 @@ impl SourceRef {
                                     camera_tone: None,
                                     denoised: twin.map(|t| Arc::new(Twin::new(Arc::new(t)))),
                                     from_proxy: false,
+                                    edit_proxy: false,
                                     reduced: false,
                                     options: *options,
                                 })
@@ -328,6 +351,9 @@ impl SourceRef {
                     }
                     (r, _) => r,
                 };
+            }
+            SourceRef::Preferred { proxy, options, max_edge, otherwise } => {
+                return super::smart_editing::load_preferred(proxy, *options, *max_edge, otherwise);
             }
             #[cfg(not(target_arch = "wasm32"))]
             SourceRef::Smart { path } => return crate::smart::load(path),

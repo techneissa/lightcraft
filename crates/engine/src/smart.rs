@@ -149,10 +149,12 @@ const ENC_FIELD: &str = "enc";
 /// settings or stored facts change, so proxies an older build wrote are rebuilt: a missing field
 /// reads as 0, which makes every proxy from before this version stale. Version 2 is the first to
 /// record the field at all (a version 1 proxy is stored at JPEG quality 92, which this build
-/// raises to [`JPEG_QUALITY`]); version 3 is the first to store the decoder facts in the tail. A
-/// stale proxy whose original is offline is kept as it is (see [`is_stale`]).
+/// raises to [`JPEG_QUALITY`]); version 3 is the first to store the decoder facts in the tail; version 4 (this fork's,
+/// `FORK.md`: Smart Previews for editing) adds the two flags the Profile picker needs ([`SmartFacts::colorimetric`],
+/// [`SmartFacts::macos_offered`]), so a photo edited from its proxy offers the same Profile choices as from its original.
+/// A stale proxy whose original is offline is kept as it is (see [`is_stale`]).
 /// Crate-visible so the look-marker test pins the marker format to it instead of to a literal.
-pub(crate) const ENCODE_VERSION: u64 = 3;
+pub(crate) const ENCODE_VERSION: u64 = 4;
 
 /// The decoder facts a render interprets its settings against, stored with the proxy's pixels so
 /// an offline original edits like it did online (the catalog's header facts cannot carry them).
@@ -171,6 +173,13 @@ struct SmartFacts {
     /// The semantic mattes whose bytes follow the facts, in this order.
     #[serde(default)]
     mattes: Vec<StoredMatte>,
+    /// The original's [`SourceInfo::colorimetric`] and [`SourceInfo::macos_offered`]: what the Profile picker offers. A
+    /// proxy standing in for an offline original does not use them (its colour can't change); one a photo is edited
+    /// from while the original is online does ([`load_for_editing`]).
+    #[serde(default)]
+    colorimetric: bool,
+    #[serde(default)]
+    macos_offered: bool,
 }
 
 /// One stored matte's shape; its `len` bytes of 0..255 alpha follow the facts.
@@ -293,6 +302,8 @@ pub fn encode_for(img: &Rgb32f, info: Option<&SourceInfo>, want: &LocalWant) -> 
             camera_color: i.camera_color.as_deref().cloned(),
             local_tone: i.local_tone.as_deref().cloned(),
             mattes: matte_list,
+            colorimetric: i.colorimetric,
+            macos_offered: i.macos_offered,
         };
         let facts = serde_json::to_vec(&facts).map_err(|e| e.to_string())?;
         let n = u32::try_from(facts.len()).map_err(|_| "smart preview facts too large")?;
@@ -315,6 +326,12 @@ pub fn encode_for(img: &Rgb32f, info: Option<&SourceInfo>, want: &LocalWant) -> 
 /// Decode a smart preview back into a source image, its stored camera tone curve and the stored
 /// decoder facts (an invalid curve or tail is ignored, like a missing one).
 pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<SourceInfo>), String> {
+    decode_with_offer(bytes).map(|(img, tone, info, _)| (img, tone, info))
+}
+
+/// [`decode`], also giving the original's Profile-picker flags the proxy stored (`colorimetric`, `macos_offered`);
+/// `None` when it stored no facts.
+fn decode_with_offer(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<SourceInfo>, Option<(bool, bool)>), String> {
     let rest = bytes.strip_prefix(MAGIC).ok_or("not a smart preview")?;
     let nl = rest.iter().position(|b| *b == b'\n').ok_or("bad smart preview")?;
     let head: serde_json::Value = serde_json::from_slice(&rest[..nl]).map_err(|e| e.to_string())?;
@@ -330,7 +347,9 @@ pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<Source
     // the decoder undoes the sRGB encoding; the values are the source's own primaries
     let mut img = d.image;
     img.data.iter_mut().for_each(|c| *c = c.map(|v| v * scale));
-    let info = stored_facts(&head, bytes).map(|(f, mattes)| SourceInfo {
+    let facts = stored_facts(&head, bytes);
+    let offer = facts.as_ref().map(|(f, _)| (f.colorimetric, f.macos_offered));
+    let info = facts.map(|(f, mattes)| SourceInfo {
         raw: f.raw,
         as_shot_temp: f.as_shot_temp,
         as_shot_tint: f.as_shot_tint,
@@ -348,7 +367,7 @@ pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<Source
         macos_offered: false,
         macos_note: None,
     });
-    Ok((img, tone, info))
+    Ok((img, tone, info, offer))
 }
 
 /// Where a library keeps its smart previews.
@@ -561,6 +580,13 @@ pub fn is_stale(path: &Path) -> bool {
     is_stale_for(path, true)
 }
 
+/// Whether the proxy at `path` can stand in for a photo's online original while it is edited (Smart Previews for editing):
+/// complete, written by the current encoding and camera-look fit (`look`: the photo takes the per-file look), and made
+/// with the colour `want` names. A stale proxy is not one: unlike an offline original's, it is never used, only rebuilt.
+pub fn current_for(path: &Path, look: bool, want: &LocalWant) -> bool {
+    !matches!(want, LocalWant::Keep | LocalWant::MacosElsewhere) && is_valid(path) && !is_stale_for(path, look) && !is_local_stale(path, want)
+}
+
 /// The marker file in a smart previews folder: the camera-look fit version and encode version its
 /// proxies were last checked at ([`look_checked`]).
 const LOOK_MARKER: &str = "look-version";
@@ -593,6 +619,29 @@ pub fn mark_look_checked(dir: &Path) -> Result<(), String> {
     lightcraft_catalog::safe_file::write_atomic(&path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Load the proxy at `path` to edit from it while its original can be read (Smart Previews for editing): like [`load`],
+/// with the Profile-picker flags of the original, so the photo is offered the same Profile choices. A proxy that stored
+/// none (written before [`ENCODE_VERSION`] 4) is an error: it is not used for editing.
+pub fn load_for_editing(path: &Path) -> Result<crate::media::DecodedSource, String> {
+    let b = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (image, camera_tone, info, offer) = decode_with_offer(&b)?;
+    let (Some(mut info), Some((colorimetric, macos_offered))) = (info, offer) else {
+        return Err(format!("{}: no stored facts", path.display()));
+    };
+    info.colorimetric = colorimetric;
+    info.macos_offered = macos_offered;
+    Ok(crate::media::DecodedSource {
+        image: Arc::new(image),
+        info: Some(info),
+        camera_tone,
+        denoised: None,
+        from_proxy: true,
+        edit_proxy: true,
+        reduced: false,
+        options: Default::default(),
+    })
+}
+
 /// Load the proxy at `path`.
 pub fn load(path: &Path) -> Result<crate::media::DecodedSource, String> {
     let b = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -602,6 +651,7 @@ pub fn load(path: &Path) -> Result<crate::media::DecodedSource, String> {
         camera_tone,
         denoised: None,
         from_proxy: true,
+        edit_proxy: false,
         reduced: false,
         options: Default::default(),
     })

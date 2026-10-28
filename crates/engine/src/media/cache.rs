@@ -66,6 +66,7 @@ impl Default for MediaCache {
             preview_loader: None,
             file_bytes: None,
             smart_dir: None,
+            smart_edit: Default::default(),
             availability: Default::default(),
             scenes: Vec::new(),
             rendered: Arc::new(PreviewCache::memory(rendered_budget(budget))),
@@ -304,13 +305,17 @@ impl MediaCache {
 
     fn source_ref_with(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: LoadOptions) -> SourceRef {
         let mut r = self.source_ref_plain(p, level, cached, wanted);
+        // (a source read from the smart preview that the setting or the photo's colour no longer allows is read again)
+        if self.smart_source_vetoed(&r, p, level, wanted) {
+            r = self.source_ref_plain(p, level, false, wanted);
+        }
         if let SourceRef::File { options, .. } = &mut r {
             *options = wanted;
         }
         if let (SourceRef::File { denoise, .. }, Some((spec, loader))) = (&mut r, self.denoise.get(p.id)) {
             *denoise = Some((spec.clone(), loader.clone()));
         }
-        r
+        self.choose_smart(p, level, cached, wanted, r)
     }
 
     fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: LoadOptions) -> SourceRef {
