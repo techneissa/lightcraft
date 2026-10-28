@@ -97,25 +97,26 @@ impl LightcraftApp {
                 let (last, force) = self.ui.auto_watch.ask(&folder, now);
                 let watched = folder.clone();
                 let work = move || lightcraft_engine::cmd::library::poll_auto_import_folder(&folder, last, force);
-                let done = move |app: &mut LightcraftApp, _ctx: &egui::Context, poll: Result<lightcraft_engine::cmd::library::AutoImportPoll, String>| {
-                    let poll = match poll {
-                        Ok(p) => p,
-                        Err(e) => return log::debug!("auto import: {e}"),
+                let done =
+                    move |app: &mut LightcraftApp, _ctx: &egui::Context, poll: Result<lightcraft_engine::cmd::library::AutoImportPoll, String>| {
+                        let poll = match poll {
+                            Ok(p) => p,
+                            Err(e) => return log::debug!("auto import: {e}"),
+                        };
+                        app.ui.auto_watch.polled(&watched, poll.stamp, poll.listing.is_some(), now);
+                        let Some(listing) = poll.listing else { return };
+                        let p = serde_json::json!({"listing": listing, "start": false});
+                        let Ok(r) = app.session.execute("library.autoImportScan", &p) else { return };
+                        app.ui.auto_watch.scanned(r.get("waiting").and_then(serde_json::Value::as_bool).unwrap_or(false));
+                        let Some(mut params) = r.get("import").cloned().filter(|_| app.import.is_none()) else { return };
+                        let paths: Vec<String> =
+                            params["paths"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+                        if let Some(o) = params.as_object_mut() {
+                            o.remove("paths");
+                        }
+                        let undo0 = app.session.undo.len();
+                        app.import = Some(import::ImportTask::new(paths, params, undo0, false).auto());
                     };
-                    app.ui.auto_watch.polled(&watched, poll.stamp, poll.listing.is_some(), now);
-                    let Some(listing) = poll.listing else { return };
-                    let p = serde_json::json!({"listing": listing, "start": false});
-                    let Ok(r) = app.session.execute("library.autoImportScan", &p) else { return };
-                    app.ui.auto_watch.scanned(r.get("waiting").and_then(serde_json::Value::as_bool).unwrap_or(false));
-                    let Some(mut params) = r.get("import").cloned().filter(|_| app.import.is_none()) else { return };
-                    let paths: Vec<String> =
-                        params["paths"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
-                    if let Some(o) = params.as_object_mut() {
-                        o.remove("paths");
-                    }
-                    let undo0 = app.session.undo.len();
-                    app.import = Some(import::ImportTask::new(paths, params, undo0, false).auto());
-                };
                 // polled every few seconds: quiet, no row in the activity stack
                 if let Err(e) = tasks::spawn(self, LABEL, None, work, done) {
                     log::warn!("{e}");
