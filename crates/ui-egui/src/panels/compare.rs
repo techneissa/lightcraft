@@ -288,9 +288,7 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
     } else {
         p.rect_filled(img.intersect(img_area), 0.0, Tokens::get(ui.ctx()).skeleton);
     }
-    if photo.flag == Flag::Reject {
-        p.rect_filled(display, 0.0, Color32::from_black_alpha(110));
-    }
+    // (a rejected photo is not dimmed: Compare and Survey show it as the loupe does, and its flag says it is rejected)
     if app.ui.settings.focus_point {
         super::detail::draw_focus_point(&p, display, &photo, &format!("compare:focusPoint:{}", id.0));
     }

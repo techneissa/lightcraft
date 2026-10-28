@@ -791,9 +791,7 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     if let Some(why) = &photo.preview_only {
         paint_preview_pill(ui, p, &t, id, why, img_rect);
     }
-    if photo.flag == Flag::Reject {
-        p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
-    }
+    // (a rejected photo is not dimmed: every view shows it as the loupe does, and its flag says it is rejected)
     cell_interaction(app, ui, &resp, id, &photo);
 }
 

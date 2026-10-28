@@ -2,6 +2,10 @@
 
 ## 2026-10-28
 
+### Rejected Photos Keep Their Look
+- The grid, Compare and Survey no longer dim a photo flagged as rejected. Every view now shows a photo with the same
+  colours and brightness as the loupe and the filmstrip; the red reject flag on the photo says it is rejected.
+
 ### Use Smart Previews for Viewing and Editing
 - **Settings ▸ Performance** has a new switch next to the Smart Previews folder: **Use Smart Previews for viewing and
   editing** (off by default; Lightroom's "Use Smart Previews instead of Originals for image editing"). With it on, the
