@@ -128,11 +128,11 @@ fn view(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, id: &'static str
         None => crate::i18n::tr("Works everywhere. Click to limit it to a context.").to_string(),
     };
     if never {
-        tip.push_str("\n");
-        tip.push_str(&crate::i18n::tr("This condition can never be true, so the shortcut never works."));
+        tip.push('\n');
+        tip.push_str(crate::i18n::tr("This condition can never be true, so the shortcut never works."));
     }
     if let Some(note) = note {
-        tip.push_str("\n");
+        tip.push('\n');
         tip.push_str(note);
     }
     let r = r.on_hover_text(tip);

@@ -56,9 +56,8 @@ pub fn saved<'a>(keymap: &'a Keymap, id: &str) -> Option<&'a str> {
 /// The condition of `id` now, as canonical text (`None` = it always works). A saved condition that
 /// doesn't parse is ignored, as if there were none ([`damaged`] lists them).
 pub fn text(keymap: &Keymap, id: &str) -> Option<String> {
-    match saved(keymap, id).map(when::parse) {
-        Some(Ok(parsed)) => return parsed.map(|e| e.text()),
-        Some(Err(_)) | None => {}
+    if let Some(Ok(parsed)) = saved(keymap, id).map(when::parse) {
+        return parsed.map(|e| e.text());
     }
     declared(id).filter(|_| declared_applies(keymap, id)).map(str::to_string)
 }

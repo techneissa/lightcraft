@@ -163,7 +163,7 @@ pub fn overlap(a: Option<&Expr>, b: Option<&Expr>) -> Option<Context> {
         }
         let mut i = 0;
         loop {
-            let Some(slot) = counter.get_mut(i) else { return None };
+            let slot = counter.get_mut(i)?;
             let size = used.get(i).and_then(|k| KEYS.get(*k)).map_or(1, |d| d.size());
             *slot += 1;
             if *slot < size {
