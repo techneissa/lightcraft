@@ -17,31 +17,37 @@ pub struct Builtin {
     pub label: &'static str,
     pub several: bool,
     pub when: Option<&'static str>,
+    /// It opens a submenu (the editor shows ›).
+    pub submenu: bool,
 }
 
 const fn item(id: &'static str, label: &'static str) -> Builtin {
-    Builtin { id, label, several: false, when: None }
+    Builtin { id, label, several: false, when: None, submenu: false }
 }
 
-const fn several(id: &'static str, label: &'static str) -> Builtin {
-    Builtin { id, label, several: true, when: None }
+const fn several_submenu(id: &'static str, label: &'static str) -> Builtin {
+    Builtin { id, label, several: true, when: None, submenu: true }
+}
+
+const fn sub(id: &'static str, label: &'static str) -> Builtin {
+    Builtin { id, label, several: false, when: None, submenu: true }
 }
 
 const fn only(id: &'static str, label: &'static str, when: &'static str) -> Builtin {
-    Builtin { id, label, several: false, when: Some(when) }
+    Builtin { id, label, several: false, when: Some(when), submenu: false }
 }
 
 /// Every built-in item, in the default menu's order.
 pub const BUILTINS: &[Builtin] = &[
     item("openInDetail", "Open in Detail"),
     item("beforeAfterSplit", "Before/After Split"),
-    item("editIn", "Edit In"),
+    sub("editIn", "Edit In"),
     item("findSimilar", "Find Similar Photos"),
     item("setReference", "Set as Reference Photo"),
-    item("rating", "Set Rating"),
-    item("flag", "Set Flag"),
-    item("colorLabel", "Set Color Label"),
-    item("addToAlbum", "Add to Album"),
+    sub("rating", "Set Rating"),
+    sub("flag", "Set Flag"),
+    sub("colorLabel", "Set Color Label"),
+    sub("addToAlbum", "Add to Album"),
     only("removeFromAlbum", "Remove from Album", "in an album"),
     only("setAlbumCover", "Set as Album Cover", "in an album"),
     item("rename", "Rename…"),
@@ -49,20 +55,20 @@ pub const BUILTINS: &[Builtin] = &[
     item("reload", "Reload from Disk"),
     item("virtualCopy", "Create Virtual Copy"),
     item("createVersion", "Create Version"),
-    item("stack", "Stack"),
+    sub("stack", "Stack"),
     item("copySettings", "Copy Edit Settings"),
     item("pasteSettings", "Paste Edit Settings"),
     item("pasteSelected", "Paste Selected Settings…"),
     item("resetEdits", "Reset Edits"),
-    several("photoMerge", "Photo Merge"),
+    several_submenu("photoMerge", "Photo Merge"),
     item("rotateLeft", "Rotate Left"),
     item("rotateRight", "Rotate Right"),
     only("locateMissing", "Locate Missing File…", "when the file is missing"),
     item("showInFinder", "Show in Finder"),
     item("showInFolders", "Show in Folders"),
     item("export", "Export…"),
-    item("exportWithPreset", "Export with Preset"),
-    several("exportAnimatedGif", "Export Animated GIF…"),
+    sub("exportWithPreset", "Export with Preset"),
+    Builtin { id: "exportAnimatedGif", label: "Export Animated GIF…", several: true, when: None, submenu: false },
     item("delete", "Delete Photo"),
     item("customize", "Customize Menu…"),
 ];
@@ -70,11 +76,6 @@ pub const BUILTINS: &[Builtin] = &[
 /// The built-in item `id`.
 pub fn builtin(id: &str) -> Option<&'static Builtin> {
     BUILTINS.iter().find(|b| b.id == id)
-}
-
-/// Items that open a submenu (the menu shows ›).
-pub fn has_submenu(id: &str) -> bool {
-    matches!(id, "editIn" | "rating" | "flag" | "colorLabel" | "addToAlbum" | "stack" | "photoMerge" | "exportWithPreset")
 }
 
 /// What the item is called here: Show in Finder is Show in Explorer on Windows, and so on.
@@ -136,8 +137,10 @@ pub fn draw(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: PhotoId
                 if matches!(app.ui.view, ViewMode::Detail | ViewMode::Compare) {
                     let _ = app.run("view.beforeAfterSplit", json!({}));
                 } else {
-                    let _ = app.run("view.detail", json!({}));
-                    app.ui.before_after = BeforeAfter::Split;
+                    match app.run("view.detail", json!({})) {
+                        Ok(_) => app.ui.before_after = BeforeAfter::Split,
+                        Err(e) => app.toast(ui.ctx(), e),
+                    }
                 }
             }
         }

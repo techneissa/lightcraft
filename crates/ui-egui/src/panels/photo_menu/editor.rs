@@ -5,7 +5,7 @@
 //! - × on a row takes it out; + on the right (or a double-click) adds the item below the row
 //!   picked on the left, or at the end. Add Separator does the same with a line.
 //! - Keys, with a row picked and no text box in use: ↑ / ↓ pick another, ⌥↑ / ⌥↓ move it, Delete
-//!   or Backspace takes it out.
+//!   or Backspace takes it out. Reopening the tab picks nothing.
 //! - Reset to Default puts the menu back as it came.
 //!
 //! Changes apply at once, as everywhere in Settings. The search text and the picked row live in
@@ -40,6 +40,10 @@ pub(super) struct View {
     pub(super) picked: Option<usize>,
     /// Scroll the picked row into view on the next draw (it was just added or moved by key).
     pub(super) reveal: bool,
+    /// The pass the tab was last drawn in, and the menu as it left it: when the tab opens again,
+    /// or the menu changed elsewhere (`photoMenu.set`), the picked row no longer means anything.
+    drawn: u64,
+    menu: Vec<String>,
 }
 
 /// One thing the right-hand list offers.
@@ -53,19 +57,19 @@ pub struct Available {
 
 /// What can be added to a menu holding `in_menu`, matching `query` (every word in the label or
 /// path, any case): the built-in items not in it, then the menu-bar commands not in it.
-pub fn available(app: &LightcraftApp, in_menu: &[Slot], query: &str) -> Vec<Available> {
+pub fn available(commands: &[(crate::menus::menubar::MenuNode, String)], in_menu: &[Slot], query: &str) -> Vec<Available> {
     let mut out: Vec<Available> = items::BUILTINS
         .iter()
         .filter(|b| !in_menu.iter().any(|s| matches!(s, Slot::Item(i) if i.id == b.id)))
         .map(|b| Available { slot: Slot::Item(b), label: items::label(b), path: crate::i18n::tr("Photo menu item").to_string() })
         .collect();
-    for (node, path) in menu_commands(app) {
+    for (node, path) in commands {
         if let crate::menus::menubar::MenuNode::Item { id, params, label, .. } = node {
             let slot = Slot::Command { id: id.clone(), params: params.clone() };
             if in_menu.contains(&slot) {
                 continue;
             }
-            out.push(Available { label: crate::menus::menubar::display_item_label(&id, &params, &label).to_string(), slot, path });
+            out.push(Available { label: crate::menus::menubar::display_item_label(id, params, label).to_string(), slot, path: path.clone() });
         }
     }
     let words: Vec<String> = query.to_lowercase().split_whitespace().map(str::to_string).collect();
@@ -77,9 +81,12 @@ pub fn available(app: &LightcraftApp, in_menu: &[Slot], query: &str) -> Vec<Avai
 }
 
 /// The note a row carries: when it hides.
-fn note(slot: &Slot) -> Option<String> {
+fn note(slot: &Slot, commands: &[(crate::menus::menubar::MenuNode, String)]) -> Option<String> {
     let when = match slot {
         Slot::Item(b) => b.when,
+        Slot::Command { id, params } if super::command_row(commands, id, params).is_none() => {
+            return Some(crate::i18n::tr("not available").to_string());
+        }
         _ => None,
     };
     match (slot.several(), when) {
@@ -106,6 +113,10 @@ pub fn tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let mut view: View = ui.ctx().data(|d| d.get_temp(view_id)).unwrap_or_default();
     let mut menu = slots(app);
     let before: Vec<String> = menu.iter().map(Slot::key).collect();
+    let pass = ui.ctx().cumulative_pass_nr();
+    if pass > view.drawn.saturating_add(1) || view.menu != before {
+        view.picked = None;
+    }
     let commands = menu_commands(app);
 
     heading(ui, t, "Photo Menu");
@@ -128,7 +139,7 @@ pub fn tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         });
         ui.vertical(|ui| {
             ui.set_width(right_w);
-            add_list(app, ui, t, &mut menu, &mut view, right_w);
+            add_list(ui, t, &mut menu, &commands, &mut view, right_w);
         });
     });
     ui.add_space(6.0);
@@ -151,6 +162,8 @@ pub fn tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     if menu.iter().map(Slot::key).ne(before.iter().cloned()) {
         save(app, &menu);
     }
+    view.drawn = pass;
+    view.menu = slots(app).iter().map(Slot::key).collect();
     ui.ctx().data_mut(|d| d.insert_temp(view_id, view));
 }
 
@@ -234,18 +247,22 @@ fn menu_list(
                         let y = rect.center().y;
                         p.line_segment([pos2(rect.left() + 22.0, y), pos2(text_right, y)], Stroke::new(1.0, t.text_dim.gamma_multiply(0.6 * dim)));
                     } else {
-                        if matches!(slot, Slot::Item(b) if items::has_submenu(b.id)) {
+                        if matches!(slot, Slot::Item(b) if b.submenu) {
                             let c = Rect::from_center_size(pos2(text_right - 7.0, rect.center().y), vec2(12.0, 12.0));
                             paint(p, c, Icon::ChevronRight, t.text_dim.gamma_multiply(dim));
                             text_right -= 16.0;
                         }
-                        if let Some(n) = note(slot) {
+                        if let Some(n) = note(slot, commands) {
                             let g = p.layout_no_wrap(n, t.font(10.5), t.text_dim.gamma_multiply(dim));
                             text_right -= g.size().x;
                             p.galley(pos2(text_right, rect.center().y - g.size().y / 2.0), g, t.text_dim);
                             text_right -= 6.0;
                         }
-                        let color = if matches!(slot, Slot::Command { .. }) { t.text_label } else { t.text };
+                        let color = match slot {
+                            Slot::Command { id, params } if super::command_row(commands, id, params).is_none() => t.text_disabled,
+                            Slot::Command { .. } => t.text_label,
+                            _ => t.text,
+                        };
                         let label = row_label(slot, commands);
                         let max = (text_right - rect.left() - 22.0).max(10.0);
                         let mut job = egui::text::LayoutJob::single_section(label, egui::TextFormat::simple(t.font(12.5), color.gamma_multiply(dim)));
@@ -253,7 +270,7 @@ fn menu_list(
                         let g = ui.fonts_mut(|f| f.layout_job(job));
                         ui.painter().galley(pos2(rect.left() + 22.0, rect.center().y - g.size().y / 2.0), g, color);
                     }
-                    if r.hovered() || picked {
+                    if ui.rect_contains_pointer(rect) || picked {
                         let xr = ui.interact(x_rect, ui.scope_id().with(("photoMenuRemove", i)), Sense::click());
                         register(ui, format!("button:photoMenuRemove:{i}"), x_rect);
                         let c = if xr.hovered() { t.text } else { t.text_dim };
@@ -266,6 +283,10 @@ fn menu_list(
                         }
                         xr.on_hover_text(crate::i18n::tr("Take out of the menu"));
                     }
+                    crate::widgets::announce(
+                        &r,
+                        if *slot == Slot::Separator { crate::i18n::tr("Separator").to_string() } else { row_label(slot, commands) },
+                    );
                     if r.clicked() {
                         action = action.or(Some((i, false)));
                     }
@@ -377,23 +398,31 @@ fn drop_into(
     }
 }
 
-fn add_list(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, menu: &mut Vec<Slot>, view: &mut View, width: f32) {
+fn add_list(
+    ui: &mut egui::Ui,
+    t: &Tokens,
+    menu: &mut Vec<Slot>,
+    commands: &[(crate::menus::menubar::MenuNode, String)],
+    view: &mut View,
+    width: f32,
+) {
     crate::widgets::text_field::TextField::singleline("field:photoMenuSearch", &mut view.query)
         .hint(crate::i18n::tr("Search items and commands"))
         .width(width)
         .show(ui);
-    let offered = available(app, menu, &view.query);
+    let offered = available(commands, menu, &view.query);
     let frame = egui::Frame::new().fill(t.inset).stroke(Stroke::new(1.0, t.divider)).corner_radius(6.0).inner_margin(4.0);
     let mut add: Option<Slot> = None;
     frame.show(ui, |ui| {
         ui.set_width(width - 10.0);
+        // (before the scroll area: show_rows spaces its rows by the spacing it is given)
+        ui.spacing_mut().item_spacing.y = 0.0;
         let h = LIST_H - ROW_H - 2.0;
         egui::ScrollArea::vertical().id_salt("photo-menu-add").max_height(h).min_scrolled_height(h).auto_shrink([false, false]).show_rows(
             ui,
             ROW_H + 8.0,
             offered.len(),
             |ui, range| {
-                ui.spacing_mut().item_spacing.y = 0.0;
                 if offered.is_empty() {
                     ui.label(egui::RichText::new(crate::i18n::tr("Nothing matches")).color(t.text_dim));
                 }
@@ -422,6 +451,8 @@ fn add_list(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, menu: &mut Vec<S
                         ui.painter().rect_filled(plus, 4.0, t.pressed);
                     }
                     paint(ui.painter(), plus.shrink(3.0), Icon::Plus, if pr.hovered() || r.hovered() { t.text } else { t.text_dim });
+                    crate::widgets::announce(&pr, crate::i18n::tr_format!("Add {label}", label = a.label));
+                    crate::widgets::announce(&r, a.label.clone());
                     if pr.on_hover_text(crate::i18n::tr("Add to the menu")).clicked() || r.double_clicked() {
                         add = Some(a.slot.clone());
                     }

@@ -3,9 +3,10 @@
 ## 2026-10-28
 
 ### Arrange the photo menu
-- The menu a right-click on a photo opens can be arranged in Settings ▸ Photo Menu (or Customize Menu… at its end):
+- The menu a right-click on a photo opens can be arranged in Settings ▸ Photo Menu (or its Customize Menu… item):
   drag a row to move it, × takes it out, and the list beside it adds any item back, or any command from the menu bar,
-  with a search box to find it. Add Separator and Reset to Default are below. Changes apply at once.
+  with a search box to find it. With a row picked, ↑ / ↓ pick another, ⌥↑ / ⌥↓ move it and Delete takes it out. Add
+  Separator and Reset to Default are below. Changes apply at once.
 - The menu now has Before/After Split under Open in Detail: from the grid it opens the photo with the split on.
 - With one photo selected, the menu leaves out what needs several: Photo Merge, Export Animated GIF… and Group into
   Stack.

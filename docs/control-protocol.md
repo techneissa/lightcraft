@@ -380,7 +380,8 @@ The photo's right-click menu is a list of slots in the app settings (`photoMenu`
 built-in item's id (`openInDetail`, `beforeAfterSplit`, `exportAnimatedGif`, …), `cmd:` and a menu-bar command
 (`cmd:view.compare`, with parameters after a `|`: `cmd:photo.rate|{"rating":3}`), or `---` for a separator.
 `photoMenu.get` returns `{items, custom, available}` (`available`: what can be added, `{item, label, path}`),
-`photoMenu.set {items}` replaces the list (unknown items are refused and nothing changes), `photoMenu.reset` puts the
+`photoMenu.set {items}` replaces the list (an unknown built-in id, or a command the menu bar doesn't have, is refused
+and nothing changes), `photoMenu.reset` puts the
 default back; all three return the same answer. Settings ▸ Photo Menu is `app.settings {"tab": "menu"}`.
 
 ## Panel docking

@@ -154,6 +154,8 @@ fn set_refuses_unknown_items_and_reset_restores_the_default() {
     let mut app = app();
     let e = app.run("photoMenu.set", json!({"items": ["rename", "bogus"]})).unwrap_err();
     assert!(e.contains("bogus"), "{e}");
+    let e = app.run("photoMenu.set", json!({"items": ["rename", "cmd:no.suchCommand"]})).unwrap_err();
+    assert!(e.contains("no.suchCommand"), "{e}");
     assert_eq!(app.ui.settings.photo_menu, None, "nothing changed");
     assert!(app.run("photoMenu.set", json!({})).is_err());
     app.run("photoMenu.set", json!({"items": ["rename"]})).unwrap();
@@ -161,6 +163,14 @@ fn set_refuses_unknown_items_and_reset_restores_the_default() {
     let r = app.run("photoMenu.reset", json!({})).unwrap();
     assert_eq!(r["custom"], false);
     assert_eq!(app.ui.settings.photo_menu, None);
+}
+
+#[test]
+fn an_emptied_menu_still_offers_customize() {
+    let mut app = app();
+    app.run("photoMenu.set", json!({"items": []})).unwrap();
+    let id = select(&mut app, 1);
+    assert_eq!(painted(&mut app, |app, ui| show(app, ui, id)), ["Customize Menu…"]);
 }
 
 #[test]

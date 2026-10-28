@@ -5,10 +5,11 @@
 //! The arrangement is a list of slots in the app settings ([`AppSettings::photo_menu`]): a
 //! built-in item's id, `cmd:` and a menu item's key (`cmd:view.compare`, or with its parameters
 //! after a `|`), or [`SEPARATOR`]. None means the default menu ([`default_slots`]), so a person who
-//! never changed it gets new items as they come. Ids this version doesn't know are skipped.
+//! never changed it gets new items as they come. Ids this version doesn't know (saved by a newer
+//! one) are skipped, and dropped when the menu is next changed here.
 //!
 //! With one photo selected, items that need several (Photo Merge, Export Animated GIF…, Group into
-//! Stack, Sync Settings…) are left out, and so are items that don't apply (Locate Missing File…
+//! Stack, Sync Settings) are left out, and so are items that don't apply (Locate Missing File…
 //! for a photo that is not missing). Separators that would then start or end the menu, or follow
 //! one another, are dropped.
 //!
@@ -36,16 +37,8 @@ const COMMAND: &str = "cmd:";
 pub const SETTINGS_TAB: &str = "menu";
 
 /// Commands that work on two or more photos: hidden with one selected.
-const NEEDS_SEVERAL: &[&str] = &[
-    "dialog.animatedGif",
-    "app.animatedGif",
-    "dialog.mergeHdr",
-    "dialog.mergePanorama",
-    "dialog.mergeHdrPanorama",
-    "stack.group",
-    "develop.sync",
-    "dialog.syncSettings",
-];
+const NEEDS_SEVERAL: &[&str] =
+    &["dialog.animatedGif", "app.animatedGif", "dialog.mergeHdr", "dialog.mergePanorama", "dialog.mergeHdrPanorama", "stack.group", "develop.sync"];
 
 /// Menu-bar submenus listing what is there right now: not offered.
 const TRANSIENT: &[&str] = &["Open Recent Library", "Import from Device"];
@@ -194,7 +187,7 @@ pub fn tidy(slots: Vec<Slot>) -> Vec<Slot> {
 /// Every menu-bar item, flattened in menu order, with the path to it (`View › Before/After`),
 /// but for the [`TRANSIENT`] lists.
 pub fn menu_commands(app: &LightcraftApp) -> Vec<(MenuNode, String)> {
-    fn walk(nodes: &[MenuNode], path: &mut Vec<String>, out: &mut Vec<(MenuNode, String)>) {
+    fn walk(nodes: &[MenuNode], path: &mut Vec<String>, seen: &mut std::collections::HashSet<String>, out: &mut Vec<(MenuNode, String)>) {
         for node in nodes {
             match node {
                 MenuNode::Separator => {}
@@ -203,14 +196,11 @@ pub fn menu_commands(app: &LightcraftApp) -> Vec<(MenuNode, String)> {
                 MenuNode::Submenu { label, .. } if TRANSIENT.contains(&label.as_str()) => {}
                 MenuNode::Submenu { label, children } => {
                     path.push(crate::i18n::tr(label).to_string());
-                    walk(children, path, out);
+                    walk(children, path, seen, out);
                     path.pop();
                 }
                 MenuNode::Item { id, params, label, .. } => {
-                    let key = MenuNode::key(id, params);
-                    if label.trim().is_empty()
-                        || out.iter().any(|(n, _)| matches!(n, MenuNode::Item { id, params, .. } if MenuNode::key(id, params) == key))
-                    {
+                    if label.trim().is_empty() || !seen.insert(MenuNode::key(id, params)) {
                         continue;
                     }
                     out.push((node.clone(), path.join(" › ")));
@@ -219,8 +209,9 @@ pub fn menu_commands(app: &LightcraftApp) -> Vec<(MenuNode, String)> {
         }
     }
     let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for (title, nodes) in menu_bar(app) {
-        walk(&nodes, &mut vec![crate::i18n::tr(&title).to_string()], &mut out);
+        walk(&nodes, &mut vec![crate::i18n::tr(&title).to_string()], &mut seen, &mut out);
     }
     out
 }
@@ -264,7 +255,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
     }
     let custom_commands = slots(app).iter().any(|s| matches!(s, Slot::Command { .. }));
     let commands = if custom_commands { menu_commands(app) } else { Vec::new() };
-    for slot in visible(app, photo, &commands) {
+    let rows = visible(app, photo, &commands);
+    // everything taken out (or hidden here): the way back to the editor, rather than nothing
+    if rows.is_empty()
+        && let Some(b) = items::builtin("customize")
+    {
+        items::draw(app, ui, b, photo);
+        return;
+    }
+    for slot in rows {
         match slot {
             Slot::Separator => {
                 ui.separator();
@@ -311,6 +310,14 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, St
                     None => unknown.push(v.to_string()),
                 }
             }
+            let commands = menu_commands(app);
+            for s in &slots {
+                if let Slot::Command { id, params } = s
+                    && command_row(&commands, id, params).is_none()
+                {
+                    unknown.push(s.key());
+                }
+            }
             if !unknown.is_empty() {
                 return Err(format!("photoMenu.set: unknown items {} (see photoMenu.get's `available`)", unknown.join(", ")));
             }
@@ -319,7 +326,9 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, St
         _ => return Err(format!("unknown command `{id}`")),
     }
     let items: Vec<String> = slots(app).iter().map(Slot::key).collect();
-    let available: Vec<Value> =
-        editor::available(app, &slots(app), "").into_iter().map(|a| json!({"item": a.slot.key(), "label": a.label, "path": a.path})).collect();
+    let available: Vec<Value> = editor::available(&menu_commands(app), &slots(app), "")
+        .into_iter()
+        .map(|a| json!({"item": a.slot.key(), "label": a.label, "path": a.path}))
+        .collect();
     Ok(json!({"items": items, "custom": app.ui.settings.photo_menu.is_some(), "available": available}))
 }
