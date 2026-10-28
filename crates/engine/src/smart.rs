@@ -59,6 +59,49 @@ const HEADER_MAX: u64 = 4096;
 /// wrote the proxy's pixels (colour matrix and profile are baked into them) and stored tone curve.
 const LOOK_FIELD: &str = "look_version";
 
+/// The header field that names the local camera profile whose colour is baked into the proxy's pixels
+/// (`<id>:<key>`, [`local_stamp`]); absent for every other proxy.
+const LOCAL_FIELD: &str = "local_profile";
+
+/// What a photo's smart preview should say about local camera profiles.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LocalWant {
+    /// The photo is not on a local profile: a proxy that has the colour of one is out of date.
+    No,
+    /// On a profile whose file is missing or unusable: whatever the proxy has is kept (it may be the only copy).
+    Keep,
+    /// On this profile as the file is now: a proxy made with another profile or another content is out of date.
+    Is(String),
+}
+
+/// The header stamp of local profile `id` as its file is now: `<id>:<key>`.
+pub fn local_stamp(id: &str, key: u64) -> String {
+    format!("{id}:{key:016x}")
+}
+
+/// Whether the proxy at `path` has the wrong local-profile colour for what the photo wants ([`LocalWant`]). An
+/// unreadable proxy is not stale here ([`is_valid`]'s business), and a missing file never makes one stale.
+pub fn is_local_stale(path: &Path, want: &LocalWant) -> bool {
+    use std::io::Read;
+    if *want == LocalWant::Keep || !is_valid(path) {
+        return false;
+    }
+    let Ok(f) = std::fs::File::open(path) else { return false };
+    let mut head = Vec::with_capacity(1024);
+    if f.take(HEADER_MAX).read_to_end(&mut head).is_err() {
+        return false;
+    }
+    let Some(rest) = head.strip_prefix(MAGIC) else { return false };
+    let Some(nl) = rest.iter().position(|b| *b == b'\n') else { return false };
+    let Some(header) = rest.get(..nl).and_then(|h| serde_json::from_slice::<serde_json::Value>(h).ok()) else { return false };
+    let has = header.get(LOCAL_FIELD).and_then(serde_json::Value::as_str);
+    match want {
+        LocalWant::No => has.is_some(),
+        LocalWant::Is(stamp) => has != Some(stamp.as_str()),
+        LocalWant::Keep => false,
+    }
+}
+
 /// The JPEG quality a smart preview's pixels are stored at. The original 92 left the 8×8 DCT's
 /// quantised DC — each block's own mean, luma and chroma — visible as block steps across the frame
 /// and as a small constant colour shift; that is the largest part of what a proxy gets wrong
@@ -141,6 +184,12 @@ fn stored_facts(head: &serde_json::Value, bytes: &[u8]) -> Option<(SmartFacts, M
 /// Encode a source image and its decoder facts (the camera tone curve and the [`SourceInfo`] the
 /// render interprets settings against, if given) as a smart preview.
 pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String> {
+    encode_stamped(img, info, None)
+}
+
+/// [`encode`] for a photo on a local camera profile: `local_profile` (`<id>:<key>`, [`local_stamp`]) is recorded in the
+/// header, because the proxy's pixels carry that profile's colour.
+pub fn encode_stamped(img: &Rgb32f, info: Option<&SourceInfo>, local_profile: Option<&str>) -> Result<Vec<u8>, String> {
     // scale so all but the brightest 0.05 % fit into 0..1
     let mut lum: Vec<f32> = img.data.iter().map(|c| c[0].max(c[1]).max(c[2])).filter(|v| v.is_finite()).collect();
     let scale = if lum.is_empty() {
@@ -175,6 +224,9 @@ pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String
         LOOK_FIELD: crate::camera_preview::LOOK_VERSION,
         ENC_FIELD: ENCODE_VERSION,
     });
+    if let Some(stamp) = local_profile {
+        head[LOCAL_FIELD] = serde_json::Value::String(stamp.to_owned());
+    }
     // The tail: the decoder facts (and the file's semantic mattes) after the JPEG, so the header
     // stays small. `tail` records its byte count from the end of the file, so a header rewritten
     // in place (an edited look version) keeps pointing at it.

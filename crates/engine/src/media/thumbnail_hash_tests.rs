@@ -199,3 +199,66 @@ fn a_render_that_panics_fails_instead_of_never_answering() {
     assert_eq!((r.request_id, r.key), (7, 9));
     assert_eq!(r.rendered.err().as_deref(), Some("the render failed unexpectedly: preview reader bug"));
 }
+
+/// LT8 / LT4 (photo half): a photo on a local camera profile decodes again when its profile file changes, and its
+/// three render keys follow the file; a photo on Camera Matching is untouched by the file (same keys, same decode).
+#[test]
+fn a_local_profile_file_decodes_and_renders_the_photo_afresh_when_it_changes() {
+    use lightcraft_develop::CameraColour;
+    let dir = std::env::temp_dir().join(format!("lc-local-source-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let _dir = crate::camera_profiles::use_dir_for_tests(&dir);
+    let write = |files: usize| {
+        let table = lightcraft_raw::profile::HsvTable { hue_divisions: 4, sat_divisions: 2, val_divisions: 1, data: vec![[5.0, 1.2, 1.0]; 8], srgb_value: false };
+        let p = crate::camera_profiles::CameraProfile::new("ILCE-7M5", files, 100, lightcraft_color::Mat3::IDENTITY, Some(table));
+        std::fs::write(dir.join("A7 V Chart.json"), serde_json::to_vec(&p).unwrap()).unwrap();
+    };
+    write(10);
+    let mut s = session();
+    let seen = Arc::new(std::sync::Mutex::new(Vec::<LoadOptions>::new()));
+    let log = seen.clone();
+    s.media.file_loader = Some(Arc::new(move |_, _, options| {
+        log.lock().unwrap().push(options);
+        Ok((Rgb32f::new(8, 8), SourceInfo { raw: true, colorimetric: true, ..SourceInfo::default() }))
+    }));
+    let keys = |s: &mut crate::Session| {
+        let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+        let job = s.thumb_job(PhotoId(1), 256).unwrap();
+        (job.key, job.cache.unwrap().1, crate::Session::variant_key(&p, &p.develop, 256), crate::Session::view_key(&p, true))
+    };
+    let render = |s: &mut crate::Session| {
+        let r = s.render_job(PhotoId(1), 64, 64, false, true).unwrap().run();
+        s.accept(&r);
+    };
+    let auto_keys = keys(&mut s);
+    render(&mut s);
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    // the photo chooses the profile
+    let mut d = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+    d.profile.camera_colour = CameraColour::Local;
+    d.profile.camera_profile = Some("A7 V Chart".into());
+    s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(d), label: "edit".into(), edited: None }).unwrap();
+    render(&mut s);
+    let (n, first) = (seen.lock().unwrap().len(), keys(&mut s));
+    assert_eq!(n, 2, "a new choice decodes again");
+    let used = *seen.lock().unwrap().last().unwrap();
+    assert_eq!(used.colour, CameraColour::Local);
+    assert_ne!(used.profile_key, 0);
+    assert_eq!(used.profile_key, crate::camera_profiles::local_key("A7 V Chart"));
+    render(&mut s);
+    assert_eq!(seen.lock().unwrap().len(), n, "and the source is reused while the file stays");
+    // the file changes: decoded again, new keys
+    write(11);
+    render(&mut s);
+    assert_eq!(seen.lock().unwrap().len(), n + 1, "a changed profile file decodes the photo again");
+    let second = keys(&mut s);
+    assert!(first.0 != second.0 && first.1 != second.1 && first.2 != second.2 && first.3 != second.3, "every render key follows the file");
+    // back to Camera Matching: the keys are what they were before the profile existed, whatever the folder holds
+    let mut d = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+    d.profile.camera_colour = CameraColour::Auto;
+    d.profile.camera_profile = None;
+    s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(d), label: "edit".into(), edited: None }).unwrap();
+    assert_eq!(keys(&mut s), auto_keys);
+    let _ = std::fs::remove_dir_all(&dir);
+}

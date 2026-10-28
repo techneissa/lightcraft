@@ -45,6 +45,7 @@ mod segment;
 mod settings_files;
 mod slide;
 mod slideshow_export;
+mod smart_local;
 mod spots;
 mod sync;
 mod view_follow;
