@@ -6,6 +6,7 @@ pub mod chips;
 pub mod compare;
 pub mod crop_overlay;
 pub mod denoise;
+pub mod denoise_auto;
 pub mod detail;
 pub mod edit;
 pub mod empty_library;

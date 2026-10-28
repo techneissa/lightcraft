@@ -6,6 +6,7 @@
 //!   catalog.snap   catalog.log      (lightcraft-catalog journal)
 //!   presets.json   view.json        (user presets + favourites; last source/sort/selection)
 //!   prefs.json     (library preferences: XMP sidecars, import defaults, cache size, last export)
+//!   auto-denoise.json  (photos Auto AI Denoise handled when they were opened; see `denoise/auto.rs`)
 //!   thumbs/        (rendered thumbnail cache, safe to delete)
 //!   Originals/     (photos imported with "copy into library")
 //! ```
@@ -103,6 +104,18 @@ pub struct Library {
     /// Keeps other processes out of this library while it's open (last: released after the
     /// journal's background snapshot has landed).
     lock: Option<LibraryLock>,
+}
+
+impl Library {
+    /// A small file of the library's own beside `prefs.json`; `None` if it is missing or cannot be read.
+    pub(crate) fn read_file(&mut self, name: &str) -> Option<Vec<u8>> {
+        self.files.read(name).ok().flatten()
+    }
+
+    /// Replace such a file (atomically).
+    pub(crate) fn write_file(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        self.files.write_atomic(name, data)
+    }
 }
 
 /// Where a library's files live (see [`Session::open_library_in`]).

@@ -199,9 +199,25 @@ the tile's samples as little-endian half floats, byte-shuffled (low bytes, then 
 ← {"ok":false,"error":"…"}
 ```
 
+## Auto AI Denoise when a photo is opened
+
+Settings ▸ AI Denoise ▸ **Auto AI Denoise** (off by default): **Denoise High-ISO Photos When Opened** and an
+**ISO Threshold** (default 6400, "and above"). When a raw photo with a known ISO at or above the threshold becomes
+the open photo in the Detail view, AI Denoise is switched on for it as one undo step named "Auto AI Denoise"
+(`denoise.autoOpen`, the same switch as `denoise.toggle`, so it is stored on the photo, shows in History and survives
+a restart). Its picture is made by the usual queue under the batch row in the activity stack, whose ✕ stops it.
+
+It acts **once per photo**: the photos it handled (and photos whose AI Denoise switch or Amount was already set) are
+recorded in `auto-denoise.json` in the library folder, so an undo, a Reset or a switch-off is never undone by the next
+open. Without a model nothing is changed or recorded (the photo is handled the first time it is opened once a model
+is installed), and the app says so once per session. Settings: `denoise.settings {autoOpen, autoIso}`.
+
+This is the open-time counterpart of Settings ▸ Import ▸ **AI Denoise from**, which switches it on for new photos at
+import (`library.preferences {import: {denoiseAboveIso}}`, per library); both can be on.
+
 ## Commands and limits
 
-UI, CLI, control channel and MCP dispatch `denoise.toggle`, `denoise.settings`,
+UI, CLI, control channel and MCP dispatch `denoise.toggle`, `denoise.autoOpen`, `denoise.settings`,
 `denoise.queue`, `.cancel`, `.status`, `.pump`, `.clear`, and `denoise.models.*`
 (`list`, `install`, `download`, `downloads`, `downloadCancel`, `test`, `remove`,
 `select`). The develop control is `enhance.denoise`.

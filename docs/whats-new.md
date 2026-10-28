@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-10-28
+
+### Auto AI Denoise when a photo is opened
+- Settings ▸ AI Denoise ▸ **Auto AI Denoise** (off by default) switches AI Denoise on for a raw photo shot at your
+  **ISO Threshold** (default 6400) or above when you open it in Detail. It is one undo step, stays on the photo, and
+  is never applied again to a photo you undid or switched off.
+
 ## 2026-10-25
 
 ### AI Denoise for a whole shoot

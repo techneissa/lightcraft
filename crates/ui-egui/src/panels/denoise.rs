@@ -37,6 +37,8 @@ pub struct Ui {
     list: Option<(u64, f64, Value)>,
     /// Why the last file picked with Install from file… was refused, shown under the button.
     rejected: Option<String>,
+    /// Auto AI Denoise: the photo last opened and the missing-model note.
+    pub(super) auto: super::denoise_auto::State,
 }
 
 impl Ui {
@@ -75,6 +77,7 @@ pub fn pump_ui_input(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
 
 /// Worker results and pacing on monotonic deadlines; safe in `logic`, including while hidden.
 pub fn pump_background(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
+    super::denoise_auto::pump(app, ctx);
     watch_downloads(app, ctx);
     if now < app.caches.denoise.next_pump {
         return;
@@ -332,6 +335,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         hint(ui, t, "AI Denoise is off: press Use on a model.");
     }
     hint(ui, t, "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.");
+    super::denoise_auto::section(app, ui, t, &list);
     work_section(app, ui, t, &list);
 }
 

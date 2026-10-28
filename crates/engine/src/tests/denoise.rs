@@ -1083,3 +1083,5 @@ fn ai_denoise_above_an_iso_is_switched_on_at_import() {
     drop(x.s);
     let _ = std::fs::remove_dir_all(x.dir);
 }
+
+mod auto;

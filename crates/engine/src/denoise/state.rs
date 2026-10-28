@@ -133,6 +133,9 @@ pub(crate) struct State {
     pub(super) backlog: VecDeque<PhotoId>,
     /// How many photos the queue holds (tests make it small).
     pub(crate) queue_cap: usize,
+    /// The photos AI Denoise was switched on for when they were opened (`auto-denoise.json` in the library); `None`
+    /// until read. See [`super::auto`].
+    pub(super) auto_done: Option<HashSet<PhotoId>>,
 }
 
 impl Default for State {
@@ -157,6 +160,7 @@ impl Default for State {
             held: HashSet::new(),
             backlog: VecDeque::new(),
             queue_cap: MAX_QUEUE,
+            auto_done: None,
         }
     }
 }
@@ -180,6 +184,7 @@ impl State {
         self.backlog.clear();
         self.failed.clear();
         self.held.clear();
+        self.auto_done = None;
         self.dirty = true;
         self.generation += 1;
     }

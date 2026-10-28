@@ -17,7 +17,9 @@ use lightcraft_denoise::manifest::{self, DenoiserManifest, MAX_MANIFEST_BYTES, M
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, bool_or, cmd, str_param};
-use crate::denoise::{Pace, RunOn, Settings, forget_gpu_set_ups, installed_models, read_capped, read_settings, write_atomic, write_settings};
+use crate::denoise::{
+    AUTO_ISO_RANGE, Pace, RunOn, Settings, forget_gpu_set_ups, installed_models, read_capped, read_settings, write_atomic, write_settings,
+};
 use crate::model_download::State;
 use crate::{EngineError, Result, Session};
 
@@ -76,6 +78,8 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
         // whether this build can run denoise models (the `denoise` feature: our pure-Rust CPU/GPU runners)
         "runtime": cfg!(feature = "denoise"),
         "auto": st.auto(),
+        "autoOpen": st.auto_open(),
+        "autoIso": st.auto_iso(),
         "cacheGb": st.cache_bytes() >> 30,
         "threads": st.threads,
         "runOn": st.run_on().name(),
@@ -478,6 +482,16 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(v) = p.get("auto") {
         st.auto = Some(v.as_bool().ok_or_else(|| bad(C, "`auto` must be true or false"))?);
     }
+    if let Some(v) = p.get("autoOpen") {
+        st.auto_open = Some(v.as_bool().ok_or_else(|| bad(C, "`autoOpen` must be true or false"))?);
+    }
+    if let Some(v) = p.get("autoIso") {
+        let n = v
+            .as_u64()
+            .filter(|n| AUTO_ISO_RANGE.contains(&u32::try_from(*n).unwrap_or(0)))
+            .ok_or_else(|| bad(C, format!("`autoIso` must be a whole ISO from {} to {}", AUTO_ISO_RANGE.start(), AUTO_ISO_RANGE.end())))?;
+        st.auto_iso = Some(n as u32);
+    }
     if let Some(v) = p.get("cacheGb") {
         let n =
             v.as_u64().filter(|n| (1..=10_000).contains(n)).ok_or_else(|| bad(C, "`cacheGb` must be a whole number of gigabytes from 1 to 10000"))?;
@@ -510,7 +524,14 @@ fn settings(s: &mut Session, p: &Value) -> Result<Value> {
     s.denoise_refresh_active(true);
     // a smaller limit takes effect now
     s.denoise_evict(None);
-    Ok(json!({"auto": st.auto(), "cacheGb": st.cache_bytes() >> 30, "threads": st.threads, "runOn": st.run_on().name()}))
+    Ok(json!({
+        "auto": st.auto(),
+        "autoOpen": st.auto_open(),
+        "autoIso": st.auto_iso(),
+        "cacheGb": st.cache_bytes() >> 30,
+        "threads": st.threads,
+        "runOn": st.run_on().name()
+    }))
 }
 
 fn status_json(s: &Session, photo: Option<PhotoId>) -> Value {
@@ -527,6 +548,8 @@ fn status_json(s: &Session, photo: Option<PhotoId>) -> Value {
         "ready": s.media.denoise.len(),
         "made": s.denoise_made(),
         "auto": st.auto(),
+        "autoOpen": st.auto_open(),
+        "autoIso": st.auto_iso(),
         "runOn": st.run_on().name(),
         "device": s.denoise_device(),
         "cache": {"files": files, "bytes": bytes, "limitBytes": st.cache_bytes()},
@@ -546,6 +569,11 @@ const MAX_TOGGLE: usize = 50_000;
 /// on starts a photo that never had an Amount at 50 %, and queues the pictures in the background (the active photo first)
 /// under one batch row in the activity stack.
 fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
+    switch(s, p, "AI Denoise")
+}
+
+/// [`toggle`] with the undo step named `label` (Auto AI Denoise's is "Auto AI Denoise").
+pub(crate) fn switch(s: &mut Session, p: &Value, label: &str) -> Result<Value> {
     const C: &str = "denoise.toggle";
     let (ids, explicit) = match (p.get("ids"), p.get("id")) {
         (Some(Value::Array(_)), _) => (s.targets(p).map_err(|_| bad(C, "`ids` must be photo ids"))?, true),
@@ -597,13 +625,13 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
         if d.enhance.denoise != amount || d.enhance.denoise_on != Some(on) {
             d.enhance.denoise = amount;
             d.enhance.denoise_on = Some(on);
-            ops.extend(s.develop_op(*id, d, "AI Denoise"));
+            ops.extend(s.develop_op(*id, d, label));
         }
     }
     if !ops.is_empty() {
         s.end_interaction()?;
         let op = if ops.len() == 1 { ops.remove(0) } else { lightcraft_catalog::Op::Batch { ops } };
-        s.commit("AI Denoise", op)?;
+        s.commit(label, op)?;
     }
     if on {
         s.denoise_release(&raws);
@@ -620,6 +648,15 @@ fn toggle(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(
         json!({"id": raws[0].0, "ids": raws.iter().map(|i| i.0).collect::<Vec<_>>(), "enabled": on, "amount": amount, "skipped": ids.len() - raws.len()}),
     )
+}
+
+fn auto_open(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "denoise.autoOpen";
+    let id = match p.get("id") {
+        Some(v) => PhotoId(v.as_u64().ok_or_else(|| bad(C, "`id` must be a photo id"))?),
+        None => s.active().ok_or_else(|| bad(C, "no photo is open"))?,
+    };
+    s.denoise_auto_open(id)
 }
 
 fn queue(s: &mut Session, p: &Value) -> Result<Value> {
@@ -691,7 +728,7 @@ fn clear(s: &mut Session, _: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(query "denoise.models.list", "Denoise Models", [], None, "{} → {dir, productsDir, model, runtime, auto, cacheGb, threads, runOn, models: [{id, name, version, licence{name, commercial, url, notice}, provenance, source, sizeBytes, sha256, tile, known, downloadHost, installed, selected, accepted}]}", always, list),
+        cmd!(query "denoise.models.list", "Denoise Models", [], None, "{} → {dir, productsDir, model, runtime, auto, autoOpen, autoIso, cacheGb, threads, runOn, models: [{id, name, version, licence{name, commercial, url, notice}, provenance, source, sizeBytes, sha256, tile, known, downloadHost, installed, selected, accepted}]}", always, list),
         cmd!(query "denoise.models.inspect", "Inspect Denoise Model", [], None, "{path} → model terms from an adjacent manifest; never executes the file", always, inspect),
         cmd!(query "denoise.models.install", "Install Denoise Model", [], None, "{path, acknowledged: true, activate?: true, background?: false} → {installed, model} or {started} — install a denoise model from a file: an .onnx with a denoise-model.json beside it, or an archive LightCraft knows (the darktable `.dtmodel`). `acknowledged` must be true: the user has been shown the model's licence and accepted it. Unless `activate` is false it becomes the model in use", always, install),
         cmd!(query "denoise.models.download", "Download Denoise Model", [], None, "{id, acknowledged: true} → {started, from} — fetch a model LightCraft has a pinned address for (see `downloadHost` in the list) in the background over HTTPS with lightcraft-fetch. `acknowledged` must be true: the user has been shown the model's terms and accepted them. It is checked against its size and SHA-256, installed and chosen by itself; `denoise.models.downloads` shows how far it is", always, download),
@@ -700,7 +737,7 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "denoise.models.test", "Test Denoise Model", [], None, "{id} → {ok, result} — load an installed model and check it gives sensible pictures; needs the denoise runtime", always, test),
         cmd!(query "denoise.models.remove", "Remove Denoise Model", [], None, "{id} → {removed, model} — delete an installed model (its cached pictures stay until they are evicted)", always, remove),
         cmd!(query "denoise.models.select", "Choose Denoise Model", [], None, "{id: installed model | null} → {model} — null switches denoise off", always, select),
-        cmd!(query "denoise.settings", "Denoise Settings", [], None, "{auto?: bool, cacheGb?: 1..10000, threads?: 1..64 | null, runOn?: auto | gpu | cpu} → the settings — `auto`: make the picture of the photos being looked at that have a Denoise amount; `cacheGb`: how much the cached pictures may take; `threads`: most tiles run at once; `runOn`: where the model runs — `auto` (the default) the graphics card where it is faster than the processor (both timed on this computer when the card is set up), `gpu` the card whenever it can run the model, `cpu` the processor. Setting `runOn` also lets the card be tried again after a set-up that failed or closed LightCraft", always, settings),
+        cmd!(query "denoise.settings", "Denoise Settings", [], None, "{auto?: bool, autoOpen?: bool, autoIso?: 50..6553600, cacheGb?: 1..10000, threads?: 1..64 | null, runOn?: auto | gpu | cpu} → the settings — `autoOpen`: turn AI Denoise on by itself for a raw photo at or above `autoIso` (default 6400) when it is opened (off by default; see `denoise.autoOpen`); `auto`: make the picture of the photos being looked at that have a Denoise amount; `cacheGb`: how much the cached pictures may take; `threads`: most tiles run at once; `runOn`: where the model runs — `auto` (the default) the graphics card where it is faster than the processor (both timed on this computer when the card is set up), `gpu` the card whenever it can run the model, `cpu` the processor. Setting `runOn` also lets the card be tried again after a set-up that failed or closed LightCraft", always, settings),
         cmd!(
             "denoise.toggle",
             "AI Denoise",
@@ -709,6 +746,15 @@ pub fn specs() -> Vec<CommandSpec> {
             "{id?: photoId, ids?: [photoId], enabled?: bool} → {id, ids, enabled, amount, skipped} — turn AI Denoise on (50% initially) or off, in one undo step. Without `id` / `ids` it follows the Develop sliders: the active photo, and with Auto Sync on every selected photo. Photos that are not raw are skipped (`skipped`). Turning on queues their denoised pictures in the background (one batch row in the activity stack, the active photo first); `enabled` omitted flips the first photo's switch and sets the others the same. Needs an installed model to turn on",
             always,
             toggle
+        ),
+        cmd!(
+            "denoise.autoOpen",
+            "Auto AI Denoise",
+            [],
+            None,
+            "{id?: photoId} → {id, applied, reason, iso?, threshold?, amount?} — the photo `id` (default: the active one) was opened: when Settings ▸ AI Denoise ▸ Auto AI Denoise is on and the raw photo's ISO is at or above `autoIso`, turn AI Denoise on for it as one undo step named \"Auto AI Denoise\" (its picture is made in the background like any other). It acts once per photo: a photo handled before (also when the user undid it or turned it off) is never touched again. `reason`: applied | off | notApplicable | noIso | belowThreshold | alreadySet | alreadyDone | noModel | noLibraryFolder. The app calls it when a photo becomes the open one in the Detail view",
+            always,
+            auto_open
         ),
         cmd!(query "denoise.queue", "Denoise Photos", [], None, "{ids?: [photoId], scope?: selected | visible | withAmount, retry?: false} → {added, …status} — make the denoised pictures of raw photos that have none, in the background. `retry` tries photos that failed before", always, queue),
         cmd!(query "denoise.cancel", "Cancel Denoise", [], None, "{id?, all?} → {cancelled} — stop the photo being made and/or forget the ones waiting (all of them when `id` is omitted)", always, cancel),
