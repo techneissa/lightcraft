@@ -88,22 +88,27 @@ pub use crate::config::config_dir;
 
 /// Where camera profiles are read from and written to.
 pub fn dir() -> Option<PathBuf> {
+    #[cfg(any(test, feature = "test-hooks"))]
     if let Some(dir) = DIR_OVERRIDE.with(|d| d.borrow().clone()) {
         return Some(dir);
     }
     std::env::var_os("LIGHTCRAFT_CAMERA_PROFILES").map(PathBuf::from).or_else(|| config_dir().map(|d| d.join("camera-profiles")))
 }
 
+#[cfg(any(test, feature = "test-hooks"))]
 thread_local! {
     /// The folder tests read profiles from on this thread, instead of [`dir`]'s (so they never touch the user's own,
     /// and a test that chooses one never shows its folder to another test running at the same time).
     static DIR_OVERRIDE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Makes [`dir`] return `dir` on this thread until the guard is dropped. For tests: whatever reads the folder must
-/// run on the test's own thread (the key of a profile is found again from the process-wide registry, not the folder).
+/// Makes [`dir`] return `dir` on this thread until the guard is dropped. Tests only: it exists in the engine's own
+/// tests and in builds with the `test-hooks` feature (a dev-dependency of the crates whose tests choose a folder), never
+/// in the app. Whatever reads the folder must run on the test's own thread.
+#[cfg(any(test, feature = "test-hooks"))]
 pub struct DirGuard(());
 
+#[cfg(any(test, feature = "test-hooks"))]
 impl Drop for DirGuard {
     fn drop(&mut self) {
         DIR_OVERRIDE.with(|d| *d.borrow_mut() = None);
@@ -111,6 +116,7 @@ impl Drop for DirGuard {
 }
 
 /// See [`DirGuard`].
+#[cfg(any(test, feature = "test-hooks"))]
 pub fn use_dir_for_tests(dir: &Path) -> DirGuard {
     DIR_OVERRIDE.with(|d| *d.borrow_mut() = Some(dir.to_owned()));
     DirGuard(())

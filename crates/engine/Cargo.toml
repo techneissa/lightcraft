@@ -50,6 +50,8 @@ lightcraft-fetch = { workspace = true }
 chrono = { workspace = true }
 
 [features]
+# Test-only hooks for the crates that test against the engine (a dev-dependency feature; never enabled in a product build).
+test-hooks = []
 # AI masks with SAM 3 (Object / Describe). Off for the web and CLI builds.
 sam = ["dep:lightcraft-segment"]
 denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime", "lightcraft-gpu/denoise"]
