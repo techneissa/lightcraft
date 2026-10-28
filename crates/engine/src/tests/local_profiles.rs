@@ -78,3 +78,30 @@ fn the_offer_counts_the_photos_the_file_changed_and_moves_them_only_when_asked()
     assert_eq!(colour(&t, 1), (CameraColour::Auto, None));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// LT12 (settings half): a DNG written from a photo on a local profile (or macOS Colour) carries the colour in its own
+/// matrices, so the settings in its XMP say Camera Matching; a photo on neither is written as it is.
+#[test]
+fn a_dng_describes_a_local_profile_photo_as_camera_matching() {
+    use std::borrow::Cow;
+    let mut s = Session::new();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(raw(1, "ARW", "SONY ILCE-7M5")) }).unwrap();
+    s.execute("library.select", &json!({"ids": [1], "active": 1})).unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.5})).unwrap();
+    s.execute("develop.profile", &json!({"camera_colour": "local", "camera_profile": "A7 V Chart"})).unwrap();
+    let photo = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    let packet = crate::sidecar::sidecar_packet(&photo, &s.catalog);
+    assert!(packet.contains("A7 V Chart"), "the photo's own packet names the profile");
+    let described = crate::export::for_dng(&photo);
+    assert!(matches!(described, Cow::Owned(_)));
+    assert_eq!((described.develop.profile.camera_colour, described.develop.profile.camera_profile.clone()), (CameraColour::Auto, None));
+    assert_eq!(described.develop.light.exposure, 0.5, "the rest of the settings are kept");
+    let packet = crate::sidecar::sidecar_packet(&described, &s.catalog);
+    assert!(!packet.contains("A7 V Chart") && !packet.contains("\"local\""), "the DNG's settings name no colour source");
+    s.execute("develop.profile", &json!({"camera_colour": "macos"})).unwrap();
+    let macos = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    assert_eq!(crate::export::for_dng(&macos).develop.profile.camera_colour, CameraColour::Auto);
+    s.execute("develop.profile", &json!({"camera_colour": "colorimetric"})).unwrap();
+    let plain = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    assert!(matches!(crate::export::for_dng(&plain), Cow::Borrowed(_)), "a photo on neither is written as it is");
+}

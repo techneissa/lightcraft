@@ -31,12 +31,14 @@ fn panel(offered: bool, note: Option<&'static str>) -> (Headless, Arc<Mutex<Vec<
     session.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     let seen = Arc::new(Mutex::new(Vec::new()));
     let log = seen.clone();
+    // (found here, on the test's thread: the decoder runs on a worker thread that doesn't see the test's folder)
+    let usable_key = lightcraft_engine::camera_profiles::local_key("A7 V Chart");
     let loader: FileLoader = Arc::new(move |_, _, options| {
         log.lock().unwrap().push(options);
         let mut img = lightcraft_raster::Rgb32f::new(48, 32);
         img.data.fill([0.18; 3]);
         // (the decoder's note: only for a local profile other than the usable "A7 V Chart" of the test folder)
-        let usable = options.profile_key == lightcraft_engine::camera_profiles::local_key("A7 V Chart");
+        let usable = options.profile_key == usable_key;
         let colour_note = note.filter(|_| options.colour == CameraColour::Local && !usable).map(str::to_string);
         Ok((img, SourceInfo { raw: true, colorimetric: offered, colour_note, ..SourceInfo::default() }))
     });

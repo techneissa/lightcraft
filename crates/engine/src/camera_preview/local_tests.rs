@@ -2,7 +2,6 @@
 use super::local::{LocalOutcome, fit_local_look_with, local_colour_with};
 use super::*;
 use crate::camera_profiles::{self, CameraProfile};
-use lightcraft_develop::CameraColour;
 
 fn raw_of(format: RawFormat, model: &str, color: ColorData) -> RawImage {
     let area = lightcraft_raw::Rect::new(0, 0, 2, 2);
@@ -186,5 +185,57 @@ fn the_local_fit_never_retries_with_the_photos_own_colour() {
     }
     let with_clipped = fit_local_look_with(&sensor, &reference, &clipped, &(matrix, None), false).expect("a look");
     assert_eq!(with_clipped.matrix, matrix);
-    let _ = CameraColour::Local;
+}
+
+/// LT12: the colour tags of a DNG written from a photo on a local profile are the profile's: its matrix (as the one
+/// forward matrix, at unit white), its table, and the fitted tone (none when the tone fit failed and the photo keeps
+/// the default tone). Camera Matching's tags differ.
+#[test]
+fn a_dng_of_a_local_profile_photo_carries_the_profiles_colour() {
+    use super::colour::starting_colour_tags_with;
+    let d = dir("dng");
+    camera_profiles::save_named(&profile("ILCE-7M5"), &d, "A7 V Chart").unwrap();
+    let _d = camera_profiles::use_dir_for_tests(&d);
+    let key = camera_profiles::local_key("A7 V Chart");
+    let want = profile("ILCE-7M5");
+    let tone = profile_look().tone;
+    let tags = |fits: bool| {
+        let mut raw = raw_of(RawFormat::Arw, "ILCE-7M5", Default::default());
+        starting_colour_tags_with(&mut raw, |raw| {
+            local_colour_with(
+                raw,
+                key,
+                move |_, _, colour| fits.then(|| CameraLook { matrix: colour.0, tone, hue_sat: colour.1.clone() }),
+                never_matching,
+            )
+            .unwrap()
+        })
+        .expect("tags")
+    };
+    let fitted = tags(true);
+    assert_eq!(fitted.profile.hue_sat_map[0], want.hue_sat, "the profile's table");
+    assert!(fitted.profile.tone_curve.is_some(), "the fitted tone");
+    // the forward matrix is the profile's matrix with white at unit brightness, in XYZ D50
+    let m = want.matrix();
+    let white = m.apply([1.0; 3]);
+    let k = (white[0] + white[1] + white[2]) / 3.0;
+    let scaled = Mat3(m.0.map(|r| r.map(|v| v / k)));
+    let expected = bradford(D65, D50).mul(&REC2020.to_xyz()).mul(&scaled);
+    let got = fitted.forward_matrix[0].expect("a forward matrix");
+    for (a, b) in got.0.iter().flatten().zip(expected.0.iter().flatten()) {
+        assert!((a - b).abs() < 1e-9, "forward matrix {got:?} vs {expected:?}");
+    }
+    assert!(fitted.color_matrix[0].is_some(), "the DNG declares its own colour matrix");
+    // no tone fit passed: the same colour, no curve of its own
+    let plain = tags(false);
+    assert_eq!((plain.profile.hue_sat_map[0].clone(), plain.profile.tone_curve.is_none()), (want.hue_sat.clone(), true));
+    assert_eq!(plain.forward_matrix, fitted.forward_matrix);
+    // Camera Matching's tags (no look at all here) are not the profile's
+    let mut raw = raw_of(RawFormat::Arw, "ILCE-7M5", Default::default());
+    let xy = lightcraft_raw::color::as_shot_white_xy(&raw);
+    let t = lightcraft_raw::color::camera_transform(&raw, xy);
+    let matching = starting_colour_tags_with(&mut raw, |_| (xy, t, None, LocalOutcome::default())).expect("tags");
+    assert_ne!(matching.forward_matrix, fitted.forward_matrix);
+    assert!(matching.profile.hue_sat_map[0].is_none());
+    let _ = std::fs::remove_dir_all(&d);
 }

@@ -204,6 +204,15 @@ pub(super) fn starting_colour_with(
 /// Merge, issue #965): without them a merge of CR2s, whose colour comes from a look fitted to their JPEG, rendered
 /// green and dark. `None` when the file has colour matrices of its own (a DNG keeps them).
 pub(crate) fn starting_colour_tags(raw: &mut RawImage, bytes: &[u8]) -> Option<ColorData> {
+    starting_colour_tags_with(raw, |raw| super::local::starting_colour_choice(raw, bytes, None, None, CameraColour::Auto, 0))
+}
+
+/// [`starting_colour_tags`] with the colour the photo's Profile choice gives (`choice`, [`super::local::starting_colour_choice`]
+/// or a stand-in): a photo on a local camera profile is written with that profile's matrix and table.
+pub(super) fn starting_colour_tags_with(
+    raw: &mut RawImage,
+    choice: impl FnOnce(&mut RawImage) -> (Xy, CameraTransform, Option<CameraLook>, super::local::LocalOutcome),
+) -> Option<ColorData> {
     if lightcraft_raw::color::has_matrix(&raw.color) {
         return None;
     }
@@ -211,21 +220,29 @@ pub(crate) fn starting_colour_tags(raw: &mut RawImage, bytes: &[u8]) -> Option<C
     let scale = crate::files::WbScaleOf::new(raw.format, &raw.color, raw.wb_multipliers, &raw.metadata);
     let white = scale.dng_white(&raw.color, lightcraft_raw::color::as_shot_white_xy(raw));
     // (a merge frame arrives without its lens warp: `lightcraft_merge` removes it before calling)
-    let (_, t, look) = starting_colour(raw, bytes, None, None, CameraColour::Auto);
-    dng_colour(&raw.color, &white, &t, look.as_ref())
+    let (_, t, look, outcome) = choice(raw);
+    let mut tags = dng_colour(&raw.color, &white, &t, look.as_ref())?;
+    // a local profile whose tone fit failed has LightCraft's default tone: the DNG carries no curve of its own
+    if outcome.default_tone {
+        tags.profile.tone_curve = None;
+    }
+    Some(tags)
 }
 
 /// Give a raw about to be written as a DNG of its own (Export as DNG, Convert / Copy as DNG) the colour it opens
 /// with, when the file has no colour matrices (issue #1745: a Z 9 NEF's DNG had no `ColorMatrix1`, and other raw
 /// converters refused it). The lens corrections stay in the DNG; only the fit sees the raw without them, as when
 /// the photo opens.
-pub(crate) fn with_starting_colour(raw: &mut RawImage, bytes: &[u8]) {
+///
+/// `colour` is the photo's Profile choice: a photo on a local camera profile (`profile_key`,
+/// `camera_profiles::local_key`) is written with that profile's colour, any other with Camera Matching's.
+pub(crate) fn with_starting_colour_for(raw: &mut RawImage, bytes: &[u8], colour: CameraColour, profile_key: u64) {
     if lightcraft_raw::color::has_matrix(&raw.color) {
         return;
     }
     let list3 = raw.opcodes.list3.clone();
     raw.opcodes.list3.retain(|op| !op.is_lens_correction());
-    let tags = starting_colour_tags(raw, bytes);
+    let tags = starting_colour_tags_with(raw, |raw| super::local::starting_colour_choice(raw, bytes, None, None, colour, profile_key));
     raw.opcodes.list3 = list3;
     if let Some(tags) = tags {
         raw.color = tags;
