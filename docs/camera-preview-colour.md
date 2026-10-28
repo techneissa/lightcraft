@@ -259,6 +259,13 @@ a DNG with matrices, a smart preview, a demo scene). Renders, thumbnails, export
 decoded source, so they agree. A smart preview is always built with Camera Matching (it stands in for the original),
 so an offline original shows Camera Matching whatever it is set to until it is back online.
 
+Known limits: the web app's render worker (`apps/lightcraft-web/src/wire.rs`) decodes every photo as Camera Matching; a
+photo rendered from its smart preview (the original offline) always shows Camera Matching; the Before side of
+Before / After is always Camera Matching (it shows the import settings); and white balance As Shot reads the same source
+facts under both choices, so a Kelvin As Shot reading does not follow the colour model. A photo's grid thumbnail,
+loupe, export and profile-browser thumbnails all decode for the photo's own choice. The choice is not an edit on a photo
+that has no such choice (`Photo::is_edited` ignores it for a JPEG or a DNG pasted onto from a raw).
+
 Not done yet, and open in [#1207](https://github.com/storytold/lightcraft/issues/1207): a look of its own for No Camera
 Matching (it has no camera tone curve, so on the Nikon Z f frames measured there it renders about 0.75–1.75 stop darker
 and 10–20 % less saturated than the fit), matching the exposure between the two, and the option in DNG export /

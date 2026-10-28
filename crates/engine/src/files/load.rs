@@ -31,10 +31,9 @@ pub fn load_vec_with(bytes: Vec<u8>, max_edge: usize, options: LoadOptions) -> R
 /// [`load_vec`] for a thumbnail: a DNG that keeps reduced-resolution copies of its raw image (Lightroom's HDR and
 /// panorama merges) develops the smallest that covers `max_edge` instead of the whole image. The flag says whether
 /// it did: such a picture is not the full image, and an export never renders from it.
-pub fn load_vec_reduced(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo, bool), String> {
+pub fn load_vec_reduced(bytes: Vec<u8>, max_edge: usize, options: LoadOptions) -> Result<(Rgb32f, SourceInfo, bool), String> {
     rayon::scope(move |_| {
-        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, true, LoadOptions::default())
-            .map(|(img, _, info, reduced)| (img, info, reduced))
+        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, true, options).map(|(img, _, info, reduced)| (img, info, reduced))
     })
 }
 

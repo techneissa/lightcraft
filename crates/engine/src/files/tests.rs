@@ -1185,9 +1185,9 @@ fn exports_never_develop_a_dngs_reduced_copy() {
     let mean = |img: &lightcraft_raster::Rgba8| img.data.iter().map(|p| p[1] as f64).sum::<f64>() / img.data.len().max(1) as f64;
 
     // the loaders: only the thumbnail's develops the copy, and only when it covers the size
-    let (copy, _, used) = load_vec_reduced(bytes.clone(), 512).unwrap();
+    let (copy, _, used) = load_vec_reduced(bytes.clone(), 512, LoadOptions::default()).unwrap();
     assert!(used, "a thumbnail develops the copy");
-    assert!(!load_vec_reduced(bytes.clone(), 1024).unwrap().2, "no copy covers 1024 px");
+    assert!(!load_vec_reduced(bytes.clone(), 1024, LoadOptions::default()).unwrap().2, "no copy covers 1024 px");
     let (full, _) = load_vec(bytes.clone(), 512).unwrap();
     assert!(g(&copy) > 4.0 * g(&full), "the fixture's copy is much brighter: {} vs {}", g(&copy), g(&full));
 

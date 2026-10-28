@@ -504,6 +504,11 @@ impl Photo {
         if self.develop.wb.mode == WbMode::AsShot && defaults.wb.mode == WbMode::AsShot {
             defaults.wb = self.develop.wb;
         }
+        // Camera Matching is a choice only a raw fitted to its camera JPEG has: on any other photo (a JPEG or DNG
+        // pasted onto from such a raw) it changes nothing, so it is not an edit.
+        if !self.fitted_look() {
+            defaults.profile.camera_colour = self.develop.profile.camera_colour;
+        }
         *self.develop != defaults && !self.develop.is_unedited()
     }
     /// Capture time if known, else import time (sort key).
@@ -566,6 +571,26 @@ mod edited_tests {
         assert!(p.is_edited());
         p.develop = Arc::new(DevelopSettings::default());
         assert!(!p.is_edited(), "a full reset is unedited too");
+    }
+
+    /// No Camera Matching is an edit on a raw fitted to its camera JPEG, and nothing on a photo that has no such
+    /// choice (a JPEG, a DNG with its own matrices) that was pasted onto from one.
+    #[test]
+    fn camera_colour_is_an_edit_only_where_the_choice_exists() {
+        use lightcraft_develop::CameraColour;
+        for (name, format, kind, edited) in
+            [("a.arw", "ARW", MediaKind::Raw, true), ("a.dng", "DNG", MediaKind::Raw, false), ("a.jpg", "JPEG", MediaKind::Image, false)]
+        {
+            let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, name, format, 10, 10, "2026-10-01T00:00:00");
+            p.kind = kind;
+            p.as_shot_wb = Some((5200.0, 4.0));
+            p.develop = Arc::new(p.import_defaults());
+            assert!(!p.is_edited(), "{name}: as imported");
+            let mut d = (*p.develop).clone();
+            d.profile.camera_colour = CameraColour::Colorimetric;
+            p.develop = Arc::new(d);
+            assert_eq!(p.is_edited(), edited, "{name}");
+        }
     }
 
     #[test]

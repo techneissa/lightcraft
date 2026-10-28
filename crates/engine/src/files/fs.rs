@@ -89,7 +89,7 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
 
 /// The filesystem [`ReducedLoader`]: [`load_vec_reduced`] of the file, gated like [`fs_hooks`]' loader.
 pub fn fs_reduced_loader() -> ReducedLoader {
-    Arc::new(|path: &str, max_edge: usize| fs_load(path, max_edge, |bytes| load_vec_reduced(bytes, max_edge)))
+    Arc::new(|path: &str, max_edge: usize, options: LoadOptions| fs_load(path, max_edge, |bytes| load_vec_reduced(bytes, max_edge, options)))
 }
 
 /// Read `path` and `load` it, waiting on [`crate::memory::work_gate`] as [`fs_hooks`] explains.

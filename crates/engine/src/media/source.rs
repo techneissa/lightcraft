@@ -90,7 +90,7 @@ impl LoadOptions {
 /// [`FileLoader`] for a thumbnail: a raw file that keeps smaller copies of its raw image (Lightroom's merged DNGs)
 /// develops the smallest that covers `max_edge` (set by the app); the flag says it did. Never used for an export,
 /// which must render the full image.
-pub type ReducedLoader = Arc<dyn Fn(&str, usize) -> Result<(Rgb32f, SourceInfo, bool), String> + Send + Sync>;
+pub type ReducedLoader = Arc<dyn Fn(&str, usize, LoadOptions) -> Result<(Rgb32f, SourceInfo, bool), String> + Send + Sync>;
 
 /// A raw file's embedded (camera-rendered) preview as display sRGB, oriented, no larger than
 /// `max_edge` (set by the app). `None`: no usable preview.
@@ -263,9 +263,11 @@ impl SourceRef {
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
             SourceRef::File { path, max_edge, loader, fallback, denoise, reduced, options } => {
                 let plain = || match (reduced, loader) {
-                    (Some(l), _) => {
-                        l(path, *max_edge).map(|(image, info, reduced)| DecodedSource { reduced, ..DecodedSource::new(Arc::new(image), Some(info)) })
-                    }
+                    (Some(l), _) => l(path, *max_edge, *options).map(|(image, info, reduced)| DecodedSource {
+                        reduced,
+                        options: *options,
+                        ..DecodedSource::new(Arc::new(image), Some(info))
+                    }),
                     (None, Some(l)) => l(path, *max_edge, *options)
                         .map(|(image, info)| DecodedSource { options: *options, ..DecodedSource::new(Arc::new(image), Some(info)) }),
                     (None, None) => Err(format!("no decoder available for {path}")),

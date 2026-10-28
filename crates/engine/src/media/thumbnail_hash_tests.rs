@@ -144,6 +144,26 @@ fn camera_colour_decodes_again_only_when_it_changes_the_source() {
     assert_eq!(r.loaded.as_ref().map(|l| l.options.colour), Some(CameraColour::Auto));
     assert_eq!(seen.lock().unwrap().len(), n + 1);
 
+    // a grid thumbnail goes through the thumbnail ("reduced") loader, which decodes for the photo's choice too
+    let thumb_seen = Arc::new(std::sync::Mutex::new(Vec::<LoadOptions>::new()));
+    let log = thumb_seen.clone();
+    s.media.reduced_loader = Some(Arc::new(move |_, _, options| {
+        log.lock().unwrap().push(options);
+        Ok((Rgb32f::new(8, 8), SourceInfo { raw: true, colorimetric: true, ..SourceInfo::default() }, false))
+    }));
+    s.media.forget(PhotoId(1));
+    let r = s.thumb_job(PhotoId(1), 256).unwrap().run();
+    assert_eq!(
+        thumb_seen.lock().unwrap().as_slice(),
+        [LoadOptions { colour: CameraColour::Colorimetric }],
+        "the thumbnail decodes without the match"
+    );
+    assert_eq!(r.loaded.as_ref().map(|l| l.options.colour), Some(CameraColour::Colorimetric));
+    set(&mut s, CameraColour::Auto);
+    s.media.forget(PhotoId(1));
+    s.thumb_job(PhotoId(1), 256).unwrap().run();
+    assert_eq!(thumb_seen.lock().unwrap().last().map(|o| o.colour), Some(CameraColour::Auto));
+
     // a camera whose starting colour isn't fitted to its JPEG: the choice changes nothing, so the source is kept
     let mut s = session();
     let (loader, seen) = decodes(false);
