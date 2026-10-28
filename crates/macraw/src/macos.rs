@@ -9,8 +9,10 @@
 //! panic cannot start inside Apple's frames.
 
 use crate::copy::{BAND_ROWS, bands, rgba_to_rgb};
+use crate::gate::{model_listed, size_gate};
 use crate::size::{extent_size, scaled};
-use crate::{Error, Input, LinearImage, Request};
+use crate::slots::is_full;
+use crate::{Error, Input, LinearImage, Probe, RECIPE_VERSION, Request, SLOTS, key_of};
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyClass, AnyObject, NSObjectProtocol, Sel};
 use objc2::{ClassType, exception, msg_send, sel};
@@ -20,7 +22,7 @@ use objc2_core_image::{
     CIContext, CIFilter, CIImage, CIRAWFilter, kCIContextOutputColorSpace, kCIContextUseSoftwareRenderer, kCIContextWorkingColorSpace,
     kCIFormatRGBAf, kCIInputAspectRatioKey, kCIInputImageKey, kCIInputScaleKey,
 };
-use objc2_foundation::{NSData, NSDictionary, NSNumber, NSObjectNSKeyValueCoding, NSOperatingSystemVersion, NSProcessInfo, NSString, NSURL};
+use objc2_foundation::{NSArray, NSData, NSDictionary, NSNumber, NSObjectNSKeyValueCoding, NSOperatingSystemVersion, NSProcessInfo, NSString, NSURL};
 use std::panic::AssertUnwindSafe;
 use std::ptr::NonNull;
 use std::sync::OnceLock;
@@ -72,6 +74,35 @@ pub(crate) fn available() -> bool {
 /// The OS version and build ("Version 27.0.1 (Build 27A…)").
 pub(crate) fn os_build() -> String {
     autoreleasepool(|_| NSProcessInfo::processInfo().operatingSystemVersionString().to_string())
+}
+
+/// Apple's list of supported cameras (`Sony Alpha ILCE-7M5`, …), read once.
+fn cameras() -> &'static [String] {
+    static CAMERAS: OnceLock<Vec<String>> = OnceLock::new();
+    CAMERAS.get_or_init(|| {
+        autoreleasepool(|_| {
+            // SAFETY: a class property getter with no arguments, sent with an optional result.
+            let list: Result<Option<Retained<NSArray<NSString>>>, Error> =
+                guarded("reading the camera list", || unsafe { msg_send![CIRAWFilter::class(), supportedCameraModels] });
+            list.ok().flatten().map(|l| l.iter().map(|name| name.to_string()).collect()).unwrap_or_default()
+        })
+    })
+}
+
+pub(crate) fn supports(exif_model: &str) -> bool {
+    available() && model_listed(exif_model, cameras().iter().map(String::as_str))
+}
+
+pub(crate) fn probe(input: Input<'_>) -> Result<Probe, Error> {
+    if !available() {
+        return Err(Error::Unsupported);
+    }
+    autoreleasepool(|_| decode(input).map(|(_, _, native)| Probe { native_size: native }))
+}
+
+pub(crate) fn cache_key() -> u64 {
+    static KEY: OnceLock<u64> = OnceLock::new();
+    if available() { *KEY.get_or_init(|| key_of(&os_build(), RECIPE_VERSION)) } else { 0 }
 }
 
 /// Turn an Objective-C exception into an error at the call site.
@@ -196,9 +227,21 @@ struct Planned {
     decoder_version: String,
 }
 
-fn plan(input: Input<'_>, request: &Request) -> Result<Planned, Error> {
+/// The filter with the recipe applied, its picture and Apple's full upright size. Nothing is
+/// decoded yet: Core Image builds the picture lazily.
+fn decode(input: Input<'_>) -> Result<(Retained<CIRAWFilter>, Retained<CIImage>, (u32, u32)), Error> {
     let f = open(input)?;
     apply_recipe(&f)?;
+    // SAFETY: `outputImage` is required and was checked; the image is retained.
+    let image = guarded("decoding the raw", || unsafe { f.outputImage() })?.ok_or(Error::Undecodable)?;
+    // SAFETY: a getter on an image we own.
+    let extent = unsafe { image.extent() };
+    let native = extent_size(extent.size.width, extent.size.height).ok_or(Error::Undecodable)?;
+    Ok((f, image, native))
+}
+
+fn plan(input: Input<'_>, request: &Request) -> Result<Planned, Error> {
+    let (f, image, native) = decode(input)?;
     // SAFETY: getters on a filter we own; each selector is required and was checked. The binding
     // types `decoderVersion` as never null, but Core Image returns null for data it cannot read
     // (the binding would then panic), so it is sent with an optional result.
@@ -207,15 +250,14 @@ fn plan(input: Input<'_>, request: &Request) -> Result<Planned, Error> {
         (f.neutralChromaticity(), f.neutralTemperature(), f.neutralTint(), version)
     })?;
     let version = version.ok_or(Error::Undecodable)?;
-    // SAFETY: `outputImage` is required and was checked; the image is retained.
-    let image = guarded("decoding the raw", || unsafe { f.outputImage() })?.ok_or(Error::Undecodable)?;
-    // SAFETY: a getter on an image we own.
-    let extent = unsafe { image.extent() };
-    let native = extent_size(extent.size.width, extent.size.height).ok_or(Error::Undecodable)?;
     if !(white.x.is_finite() && white.y.is_finite() && white.x > 0.0 && white.y > 0.0) {
         return Err(Error::Undecodable);
     }
-    let size = scaled(native, request.long_edge)?;
+    let base = match request.expected_size {
+        Some(expected) => size_gate(native, expected)?,
+        None => native,
+    };
+    let size = scaled(base, request.long_edge)?;
     let image = if size == native { image } else { lanczos(&image, native, size)? };
     // SAFETY: a getter on an image we own.
     let out = unsafe { image.extent() };
@@ -326,6 +368,7 @@ pub(crate) fn render_bands(input: Input<'_>, request: &Request, cancel: &AtomicB
     if !available() {
         return Err(Error::Unsupported);
     }
+    let Some(_slot) = SLOTS.acquire(is_full(request.long_edge), cancel) else { return Err(Error::Cancelled) };
     let software = USE_SOFTWARE.load(Ordering::Relaxed);
     let out = match render_in_pool(input, request, software, band_rows) {
         Ok(img) => {

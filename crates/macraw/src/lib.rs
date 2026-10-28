@@ -15,11 +15,15 @@
 // The pure helpers are used only by the Core Image backend; their tests run everywhere.
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod copy;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod gate;
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod macos;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod size;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod slots;
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 mod stub;
 
@@ -28,8 +32,17 @@ use macos as imp;
 #[cfg(not(target_os = "macos"))]
 use stub as imp;
 
+pub use gate::uti_for_extension;
+pub use slots::weight_bytes;
+
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
+
+/// Bumped whenever the recipe changes what [`render`] returns (part of [`cache_key`]).
+pub const RECIPE_VERSION: u32 = 1;
+
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+static SLOTS: slots::Slots = slots::Slots::new();
 
 /// Where the raw comes from.
 #[derive(Debug, Clone, Copy)]
@@ -132,12 +145,12 @@ pub fn available() -> bool {
 /// True when macOS lists a camera with this EXIF model (`ILCE-7M5`, not LightCraft's joined
 /// `SONY ILCE-7M5`). Necessary, not sufficient: the size gate and the decode still decide.
 pub fn supports(exif_model: &str) -> bool {
-    stub::supports(exif_model)
+    imp::supports(exif_model)
 }
 
 /// Read Apple's upright size without decoding the picture.
 pub fn probe(input: Input<'_>) -> Result<Probe, Error> {
-    stub::probe(input)
+    imp::probe(input)
 }
 
 /// Render the base. Checks `cancel` before and after the (uninterruptible) Core Image call.
@@ -145,10 +158,21 @@ pub fn render(input: Input<'_>, request: &Request, cancel: &AtomicBool) -> Resul
     imp::render(input, request, cancel)
 }
 
-/// Changes when the result of [`render`] may change: the OS build and this crate's recipe. 0 where
-/// [`available`] is false.
+/// Changes when the result of [`render`] may change: the OS build (which ships Core Image's raw
+/// decoder) and [`RECIPE_VERSION`]. 0 where [`available`] is false. The decoder version a render used
+/// is in [`LinearImage::decoder_version`].
 pub fn cache_key() -> u64 {
-    stub::cache_key()
+    imp::cache_key()
+}
+
+/// FNV-1a over the OS build and the recipe version: stable across Rust releases, unlike std's hasher.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn key_of(os_build: &str, recipe: u32) -> u64 {
+    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+    for b in os_build.bytes().chain([0]).chain(recipe.to_le_bytes()) {
+        h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    h.max(1)
 }
 
 /// The OS version and build ("Version 27.0.1 (Build 27A…)"); empty off the Mac.

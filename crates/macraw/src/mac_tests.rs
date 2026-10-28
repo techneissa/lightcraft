@@ -143,3 +143,49 @@ fn thumbnails_do_not_leak() {
     .join()
     .unwrap();
 }
+
+/// T16: the exact type hint decodes the bytes like the path; a wrong or generic one is
+/// `Undecodable`, never an empty picture.
+#[test]
+fn bytes_need_the_exact_type_hint() {
+    let Some(file) = sample("LIGHTCRAFT_MACRAW_ARW", true) else { return };
+    let cancel = AtomicBool::new(false);
+    let bytes = std::fs::read(&file).unwrap();
+    let uti = crate::uti_for_extension("arw").unwrap();
+    let t = std::time::Instant::now();
+    let from_bytes = render(Input::Bytes { data: &bytes, uti }, &at(1600), &cancel).unwrap();
+    eprintln!("bytes path at 1600 px: {:.2} s", t.elapsed().as_secs_f64());
+    let from_path = render(Input::Path(&file), &at(1600), &cancel).unwrap();
+    assert_eq!((from_bytes.width, from_bytes.height, from_bytes.white_xy), (from_path.width, from_path.height, from_path.white_xy));
+    let worst = from_bytes.rgb.iter().zip(&from_path.rgb).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+    assert!(worst < 1e-3, "bytes and path differ by {worst}");
+    for hint in ["ARW", ".arw", "", "public.camera-raw-image"] {
+        assert_eq!(render(Input::Bytes { data: &bytes, uti: hint }, &at(512), &cancel), Err(Error::Undecodable), "hint {hint:?}");
+    }
+}
+
+/// T5b on Apple's real list, `probe` against `render`, and the size gate on a real file (T5c).
+#[test]
+fn gates_and_probe_on_a_real_file() {
+    let Some(file) = sample("LIGHTCRAFT_MACRAW_ARW", true) else { return };
+    assert!(super::supports("ILCE-7M5"));
+    assert!(!super::supports("SONY ILCE-7M5"));
+    assert!(!super::supports("NO-SUCH-CAMERA-1"));
+    assert_ne!(super::cache_key(), 0);
+    let t = std::time::Instant::now();
+    let probe = super::probe(Input::Path(&file)).unwrap();
+    eprintln!("probe {:?} in {:.2} s", probe.native_size, t.elapsed().as_secs_f64());
+    let cancel = AtomicBool::new(false);
+    let (w, h) = probe.native_size;
+    // 1 % smaller than Apple's: inside the gate, resampled to exactly that size (scaled to 800).
+    let expected = (w - w / 100, h - h / 100);
+    let req = Request { long_edge: Some(800), expected_size: Some(expected), ..Request::default() };
+    let img = render(Input::Path(&file), &req, &cancel).unwrap();
+    assert_eq!(img.native_size, probe.native_size);
+    let s = 800.0 / f64::from(expected.0.max(expected.1));
+    let want = ((f64::from(expected.0) * s).round() as u32, (f64::from(expected.1) * s).round() as u32);
+    assert_eq!((img.width, img.height), want);
+    let off = (w + w * 3 / 100, h);
+    let req = Request { long_edge: Some(800), expected_size: Some(off), ..Request::default() };
+    assert_eq!(render(Input::Path(&file), &req, &cancel), Err(Error::SizeMismatch { apple: (w, h), expected: off }));
+}

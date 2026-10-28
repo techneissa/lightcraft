@@ -40,3 +40,12 @@ fn every_error_has_a_message() {
         assert!(!e.to_string().is_empty(), "{e:?}");
     }
 }
+
+#[test]
+fn cache_key_follows_os_build_and_recipe() {
+    let a = super::key_of("Version 27.0.1 (Build 26A434)", 1);
+    assert_eq!(a, super::key_of("Version 27.0.1 (Build 26A434)", 1));
+    assert_ne!(a, super::key_of("Version 27.0.2 (Build 26A500)", 1));
+    assert_ne!(a, super::key_of("Version 27.0.1 (Build 26A434)", 2));
+    assert_ne!(super::key_of("", 0), 0, "0 means unavailable");
+}
