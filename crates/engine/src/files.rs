@@ -36,6 +36,11 @@ pub fn macos_shows(p: &lightcraft_catalog::Photo) -> bool {
     p.develop.profile.camera_colour == lightcraft_develop::CameraColour::Macos && macos_lists(p)
 }
 
+/// Whether this computer can make macOS Colour at all (a Mac whose raw decoder has every setting the recipe needs).
+pub fn macos_available() -> bool {
+    lightcraft_macraw::available()
+}
+
 /// What the Mac's raw decoder adds to the cache keys of a photo on macOS Colour (`lightcraft_macraw::cache_key`: the
 /// OS build and LightCraft's recipe), so a render made by another macOS build is made again. 0 where macOS Colour is
 /// unavailable (the photo renders as Camera Matching there).
@@ -54,7 +59,7 @@ thread_local! {
 }
 
 /// Whether this computer's raw decoder lists photo `p`'s camera (macOS Colour can make its picture), from the catalog.
-pub(crate) fn macos_lists(p: &lightcraft_catalog::Photo) -> bool {
+pub fn macos_lists(p: &lightcraft_catalog::Photo) -> bool {
     macos::lists(p)
 }
 

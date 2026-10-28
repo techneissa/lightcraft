@@ -37,6 +37,7 @@ mod defaults;
 mod files;
 mod job;
 mod scan;
+mod starting_colour;
 mod types;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -52,6 +53,10 @@ pub(crate) use scan::scan_files;
 pub use scan::{ScanInput, ScanOutput, ScanProgress, scan, scan_with};
 #[cfg(test)]
 use scan::{library_files, library_hashes};
+#[cfg(test)]
+pub(crate) use starting_colour::tests as starting_colour_tests;
+pub use starting_colour::{Skip as MacosSkip, StartingColour};
+pub(crate) use starting_colour::{macos_gates, with_gate as with_macos_gate};
 pub use types::{
     Duplicate, ImportCandidate, ImportMode, ImportOptions, ImportReport, ImportUprightMode, ImportWarning, ImportWarningCode, Kept, Moved, OnDeleted,
     Organize,

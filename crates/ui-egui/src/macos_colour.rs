@@ -9,6 +9,8 @@ use lightcraft_engine::export::ExportFormat;
 use crate::LightcraftApp;
 use crate::theme::Tokens;
 
+pub(crate) mod picker;
+
 /// Of `ids`, the photos set to macOS Colour, and of those the ones this computer can't make it for.
 pub(crate) fn counts(app: &LightcraftApp, ids: &[PhotoId]) -> (usize, usize) {
     ids.iter()

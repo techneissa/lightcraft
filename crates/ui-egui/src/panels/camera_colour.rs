@@ -1,6 +1,7 @@
 //! The colour source of a raw in the Profile picker: "Camera Matching" (the default: LightCraft's colours for the raw
 //! are matched to the camera's own JPEG), "No Camera Matching" (the JPEG is never read), and one row per local camera
-//! profile made for the photo's camera (the user's own files in the camera-profiles folder, named from the file).
+//! profile made for the photo's camera, and macOS Colour where this Mac's raw decoder reads the camera
+//! ([`crate::macos_colour::picker`]), (the user's own files in the camera-profiles folder, named from the file).
 //! Stored as `profile.camera_colour` (`auto` | `colorimetric` | `local`, with `profile.camera_profile` naming the file)
 //! and offered only for a raw whose starting colour is fitted to its JPEG (`SourceInfo::colorimetric`).
 
@@ -69,6 +70,7 @@ pub(crate) fn rows(app: &LightcraftApp, id: PhotoId, d: &DevelopSettings) -> Vec
         .iter()
         .map(|(colour, label, tip)| Row { colour: *colour, profile: None, label: (*label).into(), tip: (*tip).into(), enabled: true })
         .collect();
+    rows.extend(crate::macos_colour::picker::row(app, id, d));
     let camera = app.session.catalog.photo(id).map(|p| p.meta.camera.clone()).unwrap_or_default();
     for local in lightcraft_engine::camera_profiles::local_profiles_for_camera(&camera) {
         rows.push(Row {

@@ -27,6 +27,7 @@ mod import;
 mod libraries;
 mod performance;
 mod slideshow;
+pub(crate) mod starting_colour;
 mod widgets;
 
 pub use display::display_profile;

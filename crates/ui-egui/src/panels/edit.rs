@@ -158,6 +158,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             crate::widgets::register(ui, "label:profile.cameraColourNote", r.rect);
         });
     }
+    crate::macos_colour::picker::show_note(app, ui, &t, id, &d);
     if d.profile.id != "lc.color" {
         control(app, ui, &d, "profile.amount", true);
         ui.add_space(6.0);

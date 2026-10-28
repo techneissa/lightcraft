@@ -316,6 +316,14 @@ pub enum Dialog {
         name: String,
         count: usize,
     },
+    /// Apply macOS Colour to All Photos from This Camera… (`profiles.macosForCamera`; [`crate::macos_colour::picker`]):
+    /// `count` photos of `camera` would move, `skipped` can't use macOS Colour on this Mac.
+    MacosForCamera {
+        photo: u64,
+        camera: String,
+        count: usize,
+        skipped: usize,
+    },
     /// Confirm moving photos dropped on a Folders row into that folder on disk
     /// (`photo.moveToFolder`). `name`: the folder's name, as the question says it.
     MovePhotos {

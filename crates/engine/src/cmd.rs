@@ -25,6 +25,7 @@ pub mod keywords;
 pub mod library;
 pub mod local_profiles;
 pub mod lut_profiles;
+pub mod macos_colour;
 pub mod manage;
 pub mod mask_effect_files;
 pub mod mask_effects;
@@ -154,6 +155,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(previews::specs());
         v.extend(lut_profiles::specs());
         v.extend(local_profiles::specs());
+        v.extend(macos_colour::specs());
         v.extend(mask_effects::specs());
         v.extend(cull::specs());
         v.extend(convert::specs());

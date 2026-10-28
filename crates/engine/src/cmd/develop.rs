@@ -484,7 +484,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Profile",
             [],
             None,
-            "{id?: profile id (see profiles.list), amount?: 0..200, camera_colour?: \"auto\" (Camera Matching, the default) | \"colorimetric\" (No Camera Matching) | \"local\" (a local camera profile, named by camera_profile) | \"macos\" (reserved: renders as Camera Matching), camera_profile?: the local profile's id (the file name without .json; with camera_colour \"local\")} — at least `id` or `camera_colour`",
+            "{id?: profile id (see profiles.list), amount?: 0..200, camera_colour?: \"auto\" (Camera Matching, the default) | \"colorimetric\" (No Camera Matching) | \"local\" (a local camera profile, named by camera_profile) | \"macos\" (macOS Colour: the Mac's own raw decoder makes the colours; where it can't, the photo renders as Camera Matching and its source says why), camera_profile?: the local profile's id (the file name without .json; with camera_colour \"local\")} — at least `id` or `camera_colour`",
             has_active,
             |s, p| {
                 let id = str_param(p, "id").map(str::to_string);
