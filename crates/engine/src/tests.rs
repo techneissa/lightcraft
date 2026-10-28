@@ -46,6 +46,7 @@ mod process;
 mod recheck;
 mod segment;
 mod settings_files;
+mod sidecar_queue;
 mod slide;
 mod slideshow_export;
 mod smart_local;

@@ -75,6 +75,7 @@ pub mod proof;
 pub mod rename;
 pub mod segment;
 pub mod sidecar;
+pub mod sidecar_queue;
 pub mod slide;
 pub mod slide_overlay;
 pub mod slide_template;
@@ -290,6 +291,8 @@ pub struct Session {
     /// Photos whose automatic XMP sidecar write failed (their folder offline, read-only or full), written again by
     /// [`Session::retry_unsaved_sidecars`] once their file is reachable.
     pub(crate) unsaved_sidecars: std::collections::BTreeSet<PhotoId>,
+    /// Automatic sidecar writes on a worker ([`sidecar_queue`]; the desktop app turns it on).
+    pub(crate) sidecar_queue: Option<Box<sidecar_queue::SidecarQueue>>,
     /// AI denoise: the model in use, the photos that have their picture and the work in progress.
     pub(crate) denoise: denoise::State,
     /// Where the host keeps face models (one folder each); `None` where there is no file system (the web).
@@ -492,6 +495,7 @@ impl Session {
             skip_auto_write: false,
             reload_tickets: Default::default(),
             unsaved_sidecars: Default::default(),
+            sidecar_queue: None,
             denoise: Default::default(),
             face_models_dir: None,
             face_downloads: Default::default(),
@@ -885,6 +889,10 @@ impl Session {
     /// library follows them (a logged change outside the undo history), so none goes missing; the
     /// folder is only moved back when no file was left behind at its new path.
     fn apply_with_files(&mut self, entry: &mut UndoEntry, fs: &dyn rename::MoveFs) -> Result<Op> {
+        if entry.folder.is_some() || !entry.retry_sidecars.is_empty() || !self.file_moves(&entry.op).is_empty() {
+            // files and their sidecars move: the queued automatic writes land first, where the files are now
+            self.finish_sidecar_writes();
+        }
         // The entry is detached from self.undo/self.redo: include it before any global
         // repair can retire, then retry revalidates it before moving its own packets.
         rename::validate_sidecars(fs, &entry.retry_sidecars).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;

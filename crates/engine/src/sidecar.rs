@@ -422,7 +422,7 @@ pub const OWNED: &[&str] = &[
 pub const OWNED_IF_STATED: &[&str] = &["exif:DateTimeOriginal", "photoshop:DateCreated", "exif:GPSLatitude", "exif:GPSLongitude"];
 
 /// Write `data` to `path` atomically: a temp file next to it, synced, then renamed over it.
-fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
+pub(crate) fn write_atomic(path: &Path, data: &[u8]) -> std::io::Result<()> {
     lightcraft_catalog::safe_file::write_atomic(path, data)
 }
 
@@ -459,7 +459,7 @@ pub struct SidecarSaved {
 
 /// The new contents for the sidecar at `path`: `fresh` merged into the existing file, if any.
 /// Returns (contents, merged, backup).
-fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
+pub(crate) fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::io::Result<(String, bool, Option<PathBuf>)> {
     let bytes = match std::fs::read(path) {
         Ok(b) => b,
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok((fresh, false, None)),
@@ -515,7 +515,7 @@ fn stem_key_into(key: &mut String, original: &str) {
     }
 }
 
-fn file_path(p: &Photo) -> Option<&str> {
+pub(crate) fn file_path(p: &Photo) -> Option<&str> {
     match &p.source {
         Source::File { path } => Some(path),
         Source::Demo { .. } => None,
@@ -774,19 +774,23 @@ impl Session {
         }
     }
 
-    /// Write the photo's XMP sidecar, merged into an existing one (see the module docs).
+    /// Write the photo's XMP sidecar, merged into an existing one (see the module docs). Queued automatic writes
+    /// land first ([`crate::sidecar_queue`]), so this one is the last word.
     pub fn save_sidecar(&mut self, id: PhotoId) -> Result<SidecarSaved> {
+        self.finish_sidecar_writes();
         self.save_sidecar_with(id, &StemOwners::among(&self.catalog, &[id]))
     }
 
-    pub(crate) fn save_sidecar_with(&mut self, id: PhotoId, owners: &StemOwners) -> Result<SidecarSaved> {
+    /// Where photo `id`'s sidecar goes: its original (absolute), the name a new sidecar gets, and every name an
+    /// existing one may have (shared stems owned by another photo left out). No file is looked at.
+    pub(crate) fn sidecar_target(&self, id: PhotoId, owners: &StemOwners) -> Result<(String, PathBuf, Vec<PathBuf>)> {
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         if p.copy_of.is_some() {
             return Err(EngineError::Other(format!("{} is a virtual copy: its settings live only in the library", p.file_name)));
         }
         let orig = file_path(p).ok_or_else(|| EngineError::Other(format!("{} is not a file on disk", p.file_name)))?;
         // A relative path would be taken from the working directory.
-        if Path::new(orig).is_relative() || !Path::new(orig).is_file() {
+        if Path::new(orig).is_relative() {
             return Err(EngineError::Other(format!("{}: the original {orig} is missing; no XMP sidecar is written", p.file_name)));
         }
         let naming = owners.naming(p, self.xmp.naming);
@@ -800,6 +804,19 @@ impl Session {
                 [path.clone(), path.with_extension("XMP")]
             })
             .collect();
+        Ok((orig.to_owned(), preferred, candidates))
+    }
+
+    pub(crate) fn save_sidecar_with(&mut self, id: PhotoId, owners: &StemOwners) -> Result<SidecarSaved> {
+        // a write still queued for an older state lands first
+        if self.sidecar_writes_pending() > 0 {
+            self.finish_sidecar_writes();
+        }
+        let (orig, preferred, candidates) = self.sidecar_target(id, owners)?;
+        let name = self.catalog.photo(id).map(|p| p.file_name.clone()).unwrap_or_default();
+        if !Path::new(&orig).is_file() {
+            return Err(EngineError::Other(format!("{name}: the original {orig} is missing; no XMP sidecar is written")));
+        }
         // A separated packet is still the photo's metadata. Repair it before a fresh write
         // occupies its destination; a failure preserves the queue and both existing packets.
         self.repair_sidecars_for_paths(&candidates, &crate::rename::RealFs)
@@ -828,6 +845,8 @@ impl Session {
 
     /// Like [`Session::read_sidecar_op`], retaining transient diagnostics for the command report.
     pub fn read_sidecar_op_with_warnings(&self, id: PhotoId) -> Result<Option<(Op, PathBuf, Vec<crate::import::ImportWarning>)>> {
+        // the file as the library last wrote it, not as a queued write will leave it
+        self.wait_for_sidecar_writes();
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let Some(orig) = file_path(p) else { return Ok(None) };
         let Some((packet, from)) = read_packet(orig, p.kind, self.sidecar_naming(id)) else { return Ok(None) };
@@ -885,6 +904,16 @@ impl Session {
         let owners = StemOwners::among(&self.catalog, &ids);
         for id in ids {
             if self.catalog.photo(id).is_some_and(|p| file_path(p).is_some() && p.copy_of.is_none()) {
+                // on the desktop: written by the queue's worker, the result noted by `poll_sidecar_writes`
+                match self.queue_sidecar(id, &owners) {
+                    Ok(true) => continue,
+                    Ok(false) => {}
+                    Err(e) => {
+                        log::warn!("auto-write XMP: {e}");
+                        self.unsaved_sidecars.insert(id);
+                        continue;
+                    }
+                }
                 match self.save_sidecar_with(id, &owners) {
                     Ok(_) => {
                         self.unsaved_sidecars.remove(&id);
@@ -909,20 +938,8 @@ impl Session {
     /// touching the disk for the others); photos that are gone, or with auto-write off, are dropped from the wait.
     /// Returns how many were written.
     pub fn retry_unsaved_sidecars(&mut self) -> usize {
-        if !self.xmp.auto_write {
-            self.unsaved_sidecars.clear();
-            return 0;
-        }
-        let mut ready = Vec::new();
-        for id in self.unsaved_sidecars.clone() {
-            match self.catalog.photo(id).filter(|p| p.copy_of.is_none()).and_then(|p| file_path(p).map(str::to_owned)) {
-                None => {
-                    self.unsaved_sidecars.remove(&id);
-                }
-                Some(path) if self.media.availability.exists(&path) == Some(true) => ready.push(id),
-                Some(_) => {}
-            }
-        }
+        self.finish_sidecar_writes();
+        let ready = self.unsaved_ready();
         if ready.is_empty() {
             return 0;
         }
@@ -938,6 +955,39 @@ impl Session {
             }
         }
         written
+    }
+
+    /// [`Session::retry_unsaved_sidecars`] through the queue where it is on (the frame loop's retry: the window
+    /// doesn't wait for a share that is slow to answer); returns how many were queued or written.
+    pub fn queue_unsaved_sidecar_retries(&mut self) -> usize {
+        if !self.queueing_sidecars() {
+            return self.retry_unsaved_sidecars();
+        }
+        let ready = self.unsaved_ready();
+        if !ready.is_empty() {
+            self.auto_write_sidecar_ids(ready.clone());
+        }
+        ready.len()
+    }
+
+    /// The waiting photos whose originals are reachable again; the ones that are gone, or all with auto-write off,
+    /// leave the wait.
+    fn unsaved_ready(&mut self) -> Vec<PhotoId> {
+        if !self.xmp.auto_write {
+            self.unsaved_sidecars.clear();
+            return Vec::new();
+        }
+        let mut ready = Vec::new();
+        for id in self.unsaved_sidecars.clone() {
+            match self.catalog.photo(id).filter(|p| p.copy_of.is_none()).and_then(|p| file_path(p).map(str::to_owned)) {
+                None => {
+                    self.unsaved_sidecars.remove(&id);
+                }
+                Some(path) if self.media.availability.exists(&path) == Some(true) => ready.push(id),
+                Some(_) => {}
+            }
+        }
+        ready
     }
 }
 
