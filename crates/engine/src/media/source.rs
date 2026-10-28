@@ -79,11 +79,14 @@ pub type FileLoader = Arc<dyn Fn(&str, usize, LoadOptions) -> Result<(Rgb32f, So
 pub struct LoadOptions {
     /// Where a raw without colour matrices takes its starting colour from (`Profile::camera_colour`).
     pub colour: lightcraft_develop::CameraColour,
+    /// For [`CameraColour::Local`](lightcraft_develop::CameraColour::Local): the key of the local profile (its id and
+    /// its file's content, `camera_profiles::local_key`), so a changed file decodes the source again. `0` otherwise.
+    pub profile_key: u64,
 }
 
 impl LoadOptions {
     pub fn of(s: &DevelopSettings) -> LoadOptions {
-        LoadOptions { colour: s.profile.camera_colour }
+        LoadOptions { colour: s.profile.camera_colour, profile_key: 0 }
     }
 }
 

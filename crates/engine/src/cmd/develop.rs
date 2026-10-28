@@ -484,7 +484,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Profile",
             [],
             None,
-            "{id?: profile id (see profiles.list), amount?: 0..200, camera_colour?: \"auto\" (Camera Matching, the default) | \"colorimetric\" (No Camera Matching)} — at least `id` or `camera_colour`",
+            "{id?: profile id (see profiles.list), amount?: 0..200, camera_colour?: \"auto\" (Camera Matching, the default) | \"colorimetric\" (No Camera Matching) | \"local\" (a local camera profile, named by camera_profile) | \"macos\" (reserved: renders as Camera Matching), camera_profile?: the local profile's id (the file name without .json; with camera_colour \"local\")} — at least `id` or `camera_colour`",
             has_active,
             |s, p| {
                 let id = str_param(p, "id").map(str::to_string);
@@ -492,7 +492,28 @@ pub fn specs() -> Vec<CommandSpec> {
                     None => None,
                     Some("auto") => Some(lightcraft_develop::CameraColour::Auto),
                     Some("colorimetric") => Some(lightcraft_develop::CameraColour::Colorimetric),
-                    Some(other) => return Err(bad("develop.profile", format!("unknown camera_colour `{other}` (auto or colorimetric)"))),
+                    Some("local") => Some(lightcraft_develop::CameraColour::Local),
+                    Some("macos") => Some(lightcraft_develop::CameraColour::Macos),
+                    Some(other) => {
+                        return Err(bad("develop.profile", format!("unknown camera_colour `{other}` (auto, colorimetric, local or macos)")));
+                    }
+                };
+                // the local profile's id travels with `local` and with nothing else, so no stale id is left behind
+                let camera_profile = match (colour, str_param(p, "camera_profile")) {
+                    (Some(lightcraft_develop::CameraColour::Local), Some(name)) => {
+                        let name = name.trim();
+                        if !crate::camera_profiles::valid_id(name) {
+                            return Err(bad("develop.profile", format!("camera_profile `{name}` is not a profile id (a file name without .json)")));
+                        }
+                        Some(Some(name.to_string()))
+                    }
+                    (Some(lightcraft_develop::CameraColour::Local), None) => {
+                        return Err(bad("develop.profile", "camera_colour `local` needs camera_profile (the profile's id)"));
+                    }
+                    (Some(_), Some(_)) => return Err(bad("develop.profile", "camera_profile goes with camera_colour `local` only")),
+                    (Some(_), None) => Some(None),
+                    (None, Some(_)) => return Err(bad("develop.profile", "camera_profile needs camera_colour `local`")),
+                    (None, None) => None,
                 };
                 if id.is_none() && colour.is_none() {
                     return Err(bad("develop.profile", "missing id"));
@@ -513,6 +534,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     if let Some(colour) = colour {
                         d.profile.camera_colour = colour;
+                    }
+                    if let Some(camera_profile) = &camera_profile {
+                        d.profile.camera_profile.clone_from(camera_profile);
                     }
                     Ok(())
                 })?;

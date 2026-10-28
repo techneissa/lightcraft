@@ -155,7 +155,7 @@ fn camera_colour_decodes_again_only_when_it_changes_the_source() {
     let r = s.thumb_job(PhotoId(1), 256).unwrap().run();
     assert_eq!(
         thumb_seen.lock().unwrap().as_slice(),
-        [LoadOptions { colour: CameraColour::Colorimetric }],
+        [LoadOptions { colour: CameraColour::Colorimetric, ..LoadOptions::default() }],
         "the thumbnail decodes without the match"
     );
     assert_eq!(r.loaded.as_ref().map(|l| l.options.colour), Some(CameraColour::Colorimetric));

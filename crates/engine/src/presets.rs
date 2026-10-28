@@ -644,6 +644,46 @@ mod tests {
         }
     }
 
+    /// LT7 (command half): `develop.profile local` stores the colour and the profile id in one undo step, Reset clears
+    /// both, a later choice of another colour leaves no stale id, `macos` is accepted (reserved), and bad input is an
+    /// error, never a stored value.
+    #[test]
+    fn a_local_profile_is_set_by_develop_profile_undone_and_reset() {
+        use lightcraft_develop::CameraColour;
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        let hash = s.develop_of(id).unwrap().hash64();
+        s.execute("develop.profile", &json!({"camera_colour": "local", "camera_profile": "A7 V Chart"})).unwrap();
+        let d = s.develop_of(id).unwrap();
+        assert_eq!((d.profile.camera_colour, d.profile.camera_profile.as_deref()), (CameraColour::Local, Some("A7 V Chart")));
+        s.execute("edit.undo", &json!({})).unwrap();
+        let undone = s.develop_of(id).unwrap();
+        assert_eq!((undone.profile.camera_colour, undone.profile.camera_profile.clone()), (CameraColour::Auto, None), "one undo step");
+        assert_eq!(undone.hash64(), hash);
+        s.execute("develop.profile", &json!({"camera_colour": "local", "camera_profile": "A7 V Chart"})).unwrap();
+        s.execute("develop.profile", &json!({"camera_colour": "macos"})).unwrap();
+        let d = s.develop_of(id).unwrap();
+        assert_eq!((d.profile.camera_colour, d.profile.camera_profile.clone()), (CameraColour::Macos, None), "no stale id");
+        s.execute("develop.profile", &json!({"camera_colour": "local", "camera_profile": "A7 V Chart"})).unwrap();
+        s.execute("develop.reset", &json!({})).unwrap();
+        let reset = s.develop_of(id).unwrap();
+        assert_eq!((reset.profile.camera_colour, reset.profile.camera_profile.clone()), (CameraColour::Auto, None));
+        assert_eq!(reset.to_json()["profile"], undone.to_json()["profile"], "Reset returns to the default's profile settings");
+        assert!(!reset.to_json().to_string().contains("camera_profile"));
+        let hash = reset.hash64();
+        for bad in [
+            json!({"camera_colour": "local"}),
+            json!({"camera_colour": "local", "camera_profile": ""}),
+            json!({"camera_colour": "local", "camera_profile": "../etc/passwd"}),
+            json!({"camera_colour": "local", "camera_profile": "a\nb"}),
+            json!({"camera_colour": "auto", "camera_profile": "A7 V Chart"}),
+            json!({"camera_profile": "A7 V Chart"}),
+        ] {
+            assert!(s.execute("develop.profile", &bad).is_err(), "{bad}");
+            assert_eq!(s.develop_of(id).unwrap().hash64(), hash, "{bad} changed nothing");
+        }
+    }
+
     #[test]
     fn slugs() {
         assert_eq!(slug("Warm & Soft!"), "warm-soft");

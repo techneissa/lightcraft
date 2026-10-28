@@ -1001,6 +1001,9 @@ impl Session {
         // Auto is omitted too: going back to Camera Matching must reach the other selected photos
         old_json["profile"]["camera_colour"] = serde_json::json!(old.profile.camera_colour);
         new_json["profile"]["camera_colour"] = serde_json::json!(new.profile.camera_colour);
+        // and so is no local profile
+        old_json["profile"]["camera_profile"] = serde_json::json!(old.profile.camera_profile);
+        new_json["profile"]["camera_profile"] = serde_json::json!(new.profile.camera_profile);
         // Compare actual HDR leaves even when persisted defaults omit the whole HDR object.
         old_json["hdr"] = serde_json::json!(old.hdr);
         new_json["hdr"] = serde_json::json!(new.hdr);

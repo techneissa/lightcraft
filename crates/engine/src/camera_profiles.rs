@@ -85,6 +85,19 @@ pub fn file_name(model: &str) -> String {
     format!("{name}.json")
 }
 
+/// Most characters of a local profile's id (its file stem) and of its display name.
+const MAX_NAME: usize = 60;
+
+/// Whether `id` can be the stem of a local profile file: not empty, short, no path separators or control characters
+/// (it becomes `<dir>/<id>.json`, so a hostile id must never leave the folder).
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.chars().count() <= 2 * MAX_NAME
+        && id == id.trim()
+        && !id.starts_with('.')
+        && !id.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | ':'))
+}
+
 /// Read and validate a profile file.
 pub fn load(path: &Path) -> Result<CameraProfile, String> {
     let size = std::fs::metadata(path).map_err(|e| format!("{}: {e}", path.display()))?.len();

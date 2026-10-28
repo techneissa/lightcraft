@@ -203,11 +203,15 @@ pub struct Profile {
     /// it keep their JSON (and hash).
     #[serde(skip_serializing_if = "CameraColour::is_auto")]
     pub camera_colour: CameraColour,
+    /// The local camera profile ([`CameraColour::Local`]) the photo starts from: the file stem of a profile in
+    /// the user's `camera-profiles` folder. Omitted while none, so settings without it keep their JSON (and hash).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera_profile: Option<String>,
 }
 
 impl Default for Profile {
     fn default() -> Self {
-        Self { id: "lc.color".into(), amount: 100.0, camera_local_tone: false, camera_colour: CameraColour::Auto }
+        Self { id: "lc.color".into(), amount: 100.0, camera_local_tone: false, camera_colour: CameraColour::Auto, camera_profile: None }
     }
 }
 
@@ -222,6 +226,13 @@ pub enum CameraColour {
     /// The model's matrices from measured spectral sensitivities with LightCraft's default tone
     /// curve, never the embedded JPEG; [`CameraColour::Auto`] for a model without them.
     Colorimetric,
+    /// The user's own profile file for the photo's camera ([`Profile::camera_profile`]): its matrix and table are the
+    /// base colour, the tone is fitted to the file's JPEG. A missing, invalid or other-camera file renders as
+    /// [`CameraColour::Auto`] with a note, and the choice is kept.
+    Local,
+    /// The Mac's own raw decoder (reserved: renders as [`CameraColour::Auto`] until that track lands). Declared with
+    /// [`CameraColour::Local`] in catalog format v10, so a library that holds it is never read as corrupt.
+    Macos,
 }
 
 impl CameraColour {
