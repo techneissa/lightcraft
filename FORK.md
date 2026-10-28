@@ -73,6 +73,9 @@ Local folder: `~/Documents/workspace/gitClones/lightcraft`. Git remembers how a 
 | Edit All N Selected (Auto Sync on by default; AI Denoise follows it) | `fix/edit-all-selected` | `crates/ui-egui/src/panels/edit_all.rs` | engine `cmd/denoise.rs`, `lib.rs`, `library.rs`, `cmd/develop.rs`; UI `app.rs`, `panels.rs`, `panels/edit.rs` | `edit_all`, `denoise`, `prefs` |
 | Taller, resizable open and save windows on macOS (at least 520 pt) | `feat/larger-file-dialogs` | `crates/filepanel` (the second crate allowed `unsafe`) | `apps/lightcraft/src/platform.rs` (1 call in `file_dialog`), app and workspace `Cargo.toml`, `xtask/src/layers.rs`, `AGENTS.md` / `CLAUDE.md` (the `unsafe` line) | `lightcraft-filepanel` |
 | Arrange the photo menu (Settings ▸ Photo Menu), Before/After Split in it, one photo hides what needs several | `feat/photo-menu` (on `feat/animated-gif-export`) | `crates/ui-egui/src/panels/photo_menu.rs` and `photo_menu/` (`items.rs`, `editor.rs`, `tests.rs`) | `panels.rs` (module), `state/settings.rs` (`photo_menu` field), `dialogs/settings.rs` (tab), `menus/run.rs` + `menus/ui_commands.rs` (`photoMenu.*`), one call each in `panels/grid.rs`, `detail.rs`, `detail/filmstrip.rs`, `compare.rs` (2); `grid::context_menu` stays as the reference | `photo_menu` (its test fails when an update adds an item to the official menu: add it to `items::BUILTINS` and `DEFAULT`) |
+| No camera-JPEG flash in the loupe while a raw renders; lensfun distortion zoomed to fill the frame (no empty corners) | `fix/raw-view-colors` | `crates/ui-egui/src/headless/tests/loupe_stand_in.rs`, tests in `crates/lensdb/src/tests.rs` | `crates/ui-egui/src/panels/detail.rs` (the loupe keeps the previous photo up), `crates/engine/src/media/session.rs`, `crates/engine/src/lens_profiles.rs`, `crates/lensdb/src/lib.rs` (fill-frame scale) | `loupe_stand_in`, `the_loupe_says`, `lightcraft-lensdb`, `quick_jobs`, `lens_profiles` |
+| Auto AI Denoise on open: switches AI Denoise on once for a raw at or above an ISO (Settings ▸ AI Denoise, off by default); on top of upstream PRs #2929 / #2932 (own model, Auto Sync, one batch row) | `feat/auto-ai-denoise` | `crates/engine/src/denoise/auto.rs`, `crates/engine/src/tests/denoise/auto.rs`, `crates/ui-egui/src/panels/denoise_auto.rs`, `crates/ui-egui/src/tests/denoise_auto.rs` | engine `cmd/denoise.rs` (`denoise.autoOpen`, `switch`), `denoise/settings.rs`, `denoise/state.rs`, `library.rs`, `cmd/prefs.rs`; UI `panels.rs`, `panels/denoise.rs`, `dialogs/settings/import.rs`. Until #2929 / #2932 reach official `main`, the branch carries them; the merge into `custom` took upstream's Auto Sync for the AI Denoise switch (it replaces the `fix/edit-all-selected` hook in `cmd/denoise.rs`) | `denoise` in engine, `lightcraft-catalog`, `denoise settings` in ui-egui |
+| Show or hide top-bar items (Settings ▸ Top Bar, or right-click the bar); the Discord button is gone | `feat/topbar-items` | `crates/ui-egui/src/panels/topbar_items.rs` and `topbar_items/` (`editor.rs`, `tests.rs`) | `panels/topbar.rs`, `panels.rs` (module), `state/settings.rs` (field), `dialogs/settings.rs` (tab), `menus/run.rs` + `menus/ui_commands.rs`, `icons.rs` and `links.rs` (Discord removed), `docs/control-protocol.md` | `topbar_items` |
 
 Every feature also has an entry in `docs/whats-new.md` and a row in `docs/parity-checklist.md`; clashes there are
 fixed by the update script (both sides kept).
@@ -82,13 +85,13 @@ The tests of every feature, after a merge:
 ```bash
 cargo test -p lightcraft-codecs --lib animated_gif
 cargo test -p lightcraft-filepanel
-cargo test -p lightcraft-engine --lib -- animated_gif denoise prefs
-cargo test -p lightcraft-ui-egui --lib -- animated_gif selection_order split_divider before_after command_palette edit_all photo_menu
+cargo test -p lightcraft-engine --lib -- animated_gif denoise prefs quick_jobs lens_profiles
+cargo test -p lightcraft-lensdb
+cargo test -p lightcraft-catalog
+cargo test -p lightcraft-ui-egui --lib -- animated_gif selection_order split_divider before_after command_palette edit_all photo_menu topbar_items titlebar loupe_stand_in the_loupe_says denoise settings
 ```
 
 ## Known failures on this Mac (not caused by the fork)
 
-- `tests::titlebar::double_click_on_the_empty_bar_zooms_then_restores`: reads the macOS setting for double-clicking
-  a title bar, which is off here.
 - `accessibility::every_interactive_node_has_a_name_in_every_view_and_tool`: fails on official `main` too (a "▸" the
   test fonts can't draw).
