@@ -752,6 +752,7 @@ impl Renderer {
         self.preview_generation = None;
         self.pool.reprioritize(|_, _| None);
         self.thumb_inputs.clear();
+        self.embedded_thumbs.clear();
         self.textures.clear();
         self.stages.clear();
         self.quick_tried.clear();
@@ -1215,6 +1216,9 @@ impl Renderer {
     /// thumbnail jobs for photos that scrolled out of `keep`.
     pub fn evict_thumbs(&mut self, keep: &std::collections::HashSet<PhotoId>, max: usize) {
         self.thumb_inputs.retain(|id, _| keep.contains(id));
+        self.embedded_thumbs.retain(|id, _| keep.contains(id));
+        // (a thumbnail that failed is tried again when its photo comes back on screen)
+        self.failed.retain(|s, _| !matches!(s, Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id)));
         let dropped = self.pool.reprioritize(|s, p| match s {
             Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id) && p <= 11 => None,
             _ => Some(p),

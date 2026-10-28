@@ -1205,3 +1205,29 @@ fn undo_to_embedded_thumb_rejects_late_full_render() {
     assert_eq!(quick.pixels.as_ref().unwrap().pixels, pixels_a);
     assert!(!app.renderer.is_pending(full_slot));
 }
+
+/// The memo maps behind the grid's thumbnails (the embedded-preview records, failed thumbnail jobs) shrink
+/// with the visible set like the thumbnail inputs, and are emptied with everything else.
+#[test]
+fn thumbnail_memos_are_pruned_with_the_visible_set_and_cleared_by_forget_all() {
+    let mut r = Renderer::default();
+    let photos: Vec<Arc<Photo>> = (1..=3)
+        .map(|i| Arc::new(Photo::new(PhotoId(i), Source::File { path: format!("p{i}.jpg") }, "p.jpg", "JPEG", 600, 400, "2026-01-01")))
+        .collect();
+    for p in &photos {
+        r.remember_embedded_thumb(p, 256, 7, 10);
+        r.remember_thumb(p, 256, 8, false, 10);
+        r.failed.insert(Slot::Thumb(p.id), (8, "unreadable".into(), 0, p.id));
+        r.failed.insert(Slot::ThumbQuick(p.id), (8, "unreadable".into(), 0, p.id));
+    }
+    r.failed.insert(Slot::Main, (1, "the loupe's".into(), 0, PhotoId(3)));
+    let keep: std::collections::HashSet<PhotoId> = [PhotoId(1)].into_iter().collect();
+    r.evict_thumbs(&keep, 600);
+    assert_eq!(r.embedded_thumbs.keys().copied().collect::<Vec<_>>(), vec![PhotoId(1)]);
+    assert_eq!(r.thumb_inputs.keys().copied().collect::<Vec<_>>(), vec![PhotoId(1)]);
+    let mut left: Vec<Slot> = r.failed.keys().copied().collect();
+    left.sort_by_key(|s| format!("{s:?}"));
+    assert_eq!(left, vec![Slot::Main, Slot::Thumb(PhotoId(1)), Slot::ThumbQuick(PhotoId(1))], "only the thumbnails of photos off screen go");
+    r.forget_all();
+    assert!(r.embedded_thumbs.is_empty() && r.thumb_inputs.is_empty() && r.failed.is_empty());
+}
