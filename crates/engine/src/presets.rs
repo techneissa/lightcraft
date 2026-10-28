@@ -613,6 +613,37 @@ mod tests {
         assert_ne!(plain.as_bytes(), looked.as_bytes());
     }
 
+    /// Camera Matching (`auto`, the default) and No Camera Matching (`colorimetric`): an undoable `develop.profile`
+    /// edit by `camera_colour` alone (the profile look is untouched), Reset goes back to the default, and a photo that
+    /// never chose keeps its settings JSON and hash.
+    #[test]
+    fn camera_matching_is_set_by_develop_profile_undone_and_reset() {
+        use lightcraft_develop::CameraColour;
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        let default = s.develop_of(id).unwrap();
+        let (json, hash) = (default.to_json(), default.hash64());
+        assert_eq!(hash, lightcraft_develop::DevelopSettings::default().hash64(), "a photo that never chose hashes as before");
+        assert!(!json.to_string().contains("camera_colour"), "a photo that never chose stores nothing: {json}");
+        s.execute("develop.profile", &json!({"id": "lc.vivid", "amount": 80})).unwrap();
+        s.execute("develop.profile", &json!({"camera_colour": "colorimetric"})).unwrap();
+        let d = s.develop_of(id).unwrap();
+        assert_eq!((d.profile.id.as_str(), d.profile.amount, d.profile.camera_colour), ("lc.vivid", 80.0, CameraColour::Colorimetric));
+        assert_ne!(d.hash64(), hash);
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.develop_of(id).unwrap().profile.camera_colour, CameraColour::Auto, "one undo step");
+        assert_eq!(s.develop_of(id).unwrap().profile.id, "lc.vivid");
+        s.execute("develop.profile", &json!({"camera_colour": "colorimetric"})).unwrap();
+        s.execute("develop.reset", &json!({})).unwrap();
+        let reset = s.develop_of(id).unwrap();
+        assert_eq!(reset.profile.camera_colour, CameraColour::Auto, "Reset returns to Camera Matching");
+        assert_eq!(reset.to_json()["profile"], json["profile"], "the default's profile settings are unchanged");
+        assert!(!reset.to_json().to_string().contains("camera_colour"));
+        for bad in [json!({}), json!({"camera_colour": "sepia"}), json!({"id": "nope"})] {
+            assert!(s.execute("develop.profile", &bad).is_err(), "{bad}");
+        }
+    }
+
     #[test]
     fn slugs() {
         assert_eq!(slug("Warm & Soft!"), "warm-soft");

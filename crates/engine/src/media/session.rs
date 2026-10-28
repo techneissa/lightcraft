@@ -37,7 +37,7 @@ impl crate::Session {
         } else {
             source_edge_needed(&p, &settings, apply_crop, max_w.max(max_h))
         });
-        let source = self.media.source_ref(&p, level);
+        let source = self.media.source_ref_for(&p, level, LoadOptions::of(&settings));
         let request = RenderRequest { apply_crop, ..RenderRequest::fit(max_w, max_h) };
         // the photo id is part of the key: two photos with the same settings and size must not
         // share a result (a view slot showing photo A would otherwise look current for photo B)
@@ -117,7 +117,7 @@ impl crate::Session {
         let p = self.catalog.photo(id)?.clone();
         let edge = edge.clamp(16, SourceLevel::Thumb.max_edge());
         let level = SourceLevel::Thumb;
-        let source = self.media.source_ref(&p, level);
+        let source = self.media.source_ref_for(&p, level, LoadOptions::of(settings));
         let ck = Self::variant_key(&p, settings, edge);
         Some(RenderJob {
             request_id: 0,
@@ -171,7 +171,7 @@ impl crate::Session {
         // pixels along the long edge that leave `edge` across the crop
         let needed = (edge as f64 * w.max(h) / side).ceil().min(SourceLevel::Preview.max_edge() as f64);
         let level = SourceLevel::for_size(needed as usize);
-        let source = self.media.source_ref(&p, level);
+        let source = self.media.source_ref_for(&p, level, LoadOptions::of(&settings));
         let ck = Self::variant_key(&p, &settings, edge);
         let preview_cut = self.face_preview_cut(&p, rect, edge, needed as usize);
         Some(RenderJob {
@@ -375,6 +375,8 @@ impl crate::Session {
     pub fn accept(&mut self, r: &RenderResult) {
         if let Some(src) = &r.loaded
             && r.source_key.is_none_or(|key| self.catalog.photo(r.photo).is_some_and(|p| Hasher128::new().str(&content_key(p)).finish() == key))
+            // (not a source decoded with settings the photo no longer has: one decoded for them replaces it)
+            && self.catalog.photo(r.photo).is_none_or(|p| src.serves(LoadOptions::of(&p.develop)))
         {
             if let Some(info) = &src.info {
                 self.learn_as_shot_wb(r.photo, info);

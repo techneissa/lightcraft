@@ -479,19 +479,49 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(())
             })
         }),
-        cmd!("develop.profile", "Set Profile", [], None, "{id: profile id (see profiles.list), amount?: 0..200}", has_active, |s, p| {
-            let id = str_param(p, "id").ok_or_else(|| bad("develop.profile", "missing id"))?.to_string();
-            if !crate::presets::PROFILES.iter().any(|x| x.id == id) && !s.lut_profiles.iter().any(|x| x.id == id) {
-                return Err(bad("develop.profile", format!("unknown profile `{id}`")));
+        cmd!(
+            "develop.profile",
+            "Set Profile",
+            [],
+            None,
+            "{id?: profile id (see profiles.list), amount?: 0..200, camera_colour?: \"auto\" (Camera Matching, the default) | \"colorimetric\" (No Camera Matching)} — at least `id` or `camera_colour`",
+            has_active,
+            |s, p| {
+                let id = str_param(p, "id").map(str::to_string);
+                let colour = match str_param(p, "camera_colour") {
+                    None => None,
+                    Some("auto") => Some(lightcraft_develop::CameraColour::Auto),
+                    Some("colorimetric") => Some(lightcraft_develop::CameraColour::Colorimetric),
+                    Some(other) => return Err(bad("develop.profile", format!("unknown camera_colour `{other}` (auto or colorimetric)"))),
+                };
+                if id.is_none() && colour.is_none() {
+                    return Err(bad("develop.profile", "missing id"));
+                }
+                if let Some(id) = &id
+                    && !crate::presets::PROFILES.iter().any(|x| x.id == *id)
+                    && !s.lut_profiles.iter().any(|x| x.id == *id)
+                {
+                    return Err(bad("develop.profile", format!("unknown profile `{id}`")));
+                }
+                let label = if id.is_none() { "Camera Matching" } else { "Profile" };
+                edit(s, "develop.profile", label, |d| {
+                    if let Some(id) = &id {
+                        d.profile.id = id.clone();
+                        d.profile.amount = f64_or(p, "amount", d.profile.amount).clamp(0.0, 200.0);
+                    } else if p.get("amount").is_some() {
+                        d.profile.amount = f64_or(p, "amount", d.profile.amount).clamp(0.0, 200.0);
+                    }
+                    if let Some(colour) = colour {
+                        d.profile.camera_colour = colour;
+                    }
+                    Ok(())
+                })?;
+                if let Some(id) = &id {
+                    s.note_profile_used(id);
+                }
+                ok()
             }
-            edit(s, "develop.profile", "Profile", |d| {
-                d.profile.id = id.clone();
-                d.profile.amount = f64_or(p, "amount", d.profile.amount).clamp(0.0, 200.0);
-                Ok(())
-            })?;
-            s.note_profile_used(&id);
-            ok()
-        }),
+        ),
         cmd!("profile.favorite", "Favorite Profile", [], None, "{id, favorite?: bool} (toggles when omitted)", always, |s, p| {
             let id = str_param(p, "id").ok_or_else(|| bad("profile.favorite", "missing id"))?.to_string();
             if crate::presets::profile(&id).is_none() && !s.lut_profiles.iter().any(|x| x.id == id) {

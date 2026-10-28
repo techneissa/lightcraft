@@ -998,6 +998,9 @@ impl Session {
         // switching camera local tone mapping off is a change without copying untouched values.
         old_json["profile"]["camera_local_tone"] = Value::Bool(old.profile.camera_local_tone);
         new_json["profile"]["camera_local_tone"] = Value::Bool(new.profile.camera_local_tone);
+        // Auto is omitted too: going back to Camera Matching must reach the other selected photos
+        old_json["profile"]["camera_colour"] = serde_json::json!(old.profile.camera_colour);
+        new_json["profile"]["camera_colour"] = serde_json::json!(new.profile.camera_colour);
         // Compare actual HDR leaves even when persisted defaults omit the whole HDR object.
         old_json["hdr"] = serde_json::json!(old.hdr);
         new_json["hdr"] = serde_json::json!(new.hdr);

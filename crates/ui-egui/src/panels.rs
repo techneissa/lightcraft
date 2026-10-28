@@ -2,6 +2,7 @@
 
 pub mod activity;
 pub mod bottombar;
+pub mod camera_colour;
 pub mod chips;
 pub mod command_palette;
 pub mod compare;

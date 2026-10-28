@@ -1,5 +1,5 @@
 use super::settings_hash::SettingsHashes;
-use super::source::{DecodedSource, DenoiseSpec, PairLoader, RENDERED_MEM_BYTES, SourceLevel, SourceRef, THUMB_SOURCE_BYTES};
+use super::source::{DecodedSource, DenoiseSpec, LoadOptions, PairLoader, RENDERED_MEM_BYTES, SourceLevel, SourceRef, THUMB_SOURCE_BYTES};
 use super::*;
 
 /// The photos that have a cached denoised picture for the denoise model in use. Only memory: nothing here touches the
@@ -287,25 +287,35 @@ impl MediaCache {
     /// How to load photo `p` at `level`: from the cache when its source is there, else from its file (with its denoised
     /// picture beside it when it has one), its smart preview or the demo scene.
     pub fn source_ref(&mut self, p: &Photo, level: SourceLevel) -> SourceRef {
-        self.source_ref_with(p, level, true)
+        self.source_ref_for(p, level, LoadOptions::of(&p.develop))
+    }
+
+    /// [`Self::source_ref`] for settings other than the photo's own (the profile browser's variants, a face tile): a
+    /// cached source is used only when it was decoded with the same `options`.
+    pub fn source_ref_for(&mut self, p: &Photo, level: SourceLevel, options: LoadOptions) -> SourceRef {
+        self.source_ref_with(p, level, true, options)
     }
 
     /// [`Self::source_ref`] that never takes a decoded source from memory: for a job that needs something the cached
     /// one lacks (an export, whose denoised picture is made when it runs).
     pub fn source_ref_uncached(&mut self, p: &Photo, level: SourceLevel) -> SourceRef {
-        self.source_ref_with(p, level, false)
+        self.source_ref_with(p, level, false, LoadOptions::of(&p.develop))
     }
 
-    fn source_ref_with(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
-        let mut r = self.source_ref_plain(p, level, cached);
+    fn source_ref_with(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: LoadOptions) -> SourceRef {
+        let mut r = self.source_ref_plain(p, level, cached, wanted);
+        if let SourceRef::File { options, .. } = &mut r {
+            *options = wanted;
+        }
         if let (SourceRef::File { denoise, .. }, Some((spec, loader))) = (&mut r, self.denoise.get(p.id)) {
             *denoise = Some((spec.clone(), loader.clone()));
         }
         r
     }
 
-    fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
-        if cached && let Some(a) = self.get_source(p.id, level) {
+    fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: LoadOptions) -> SourceRef {
+        // (a source decoded with other settings is decoded again, and the new one replaces it in the cache)
+        if cached && let Some(a) = self.get_source(p.id, level).filter(|a| a.serves(wanted)) {
             return SourceRef::Loaded(Box::new(a));
         }
         // a thumbnail of a photo whose preview is decoded (the one in the loupe) is cut from it; not
@@ -313,7 +323,7 @@ impl MediaCache {
         if cached
             && level == SourceLevel::Thumb
             && self.denoise.spec(p.id).is_none()
-            && let Some(big) = self.get_source(p.id, SourceLevel::Preview)
+            && let Some(big) = self.get_source(p.id, SourceLevel::Preview).filter(|a| a.serves(wanted))
         {
             return SourceRef::Fit { from: Box::new(big), max_edge: level.max_edge() };
         }
@@ -354,12 +364,26 @@ impl MediaCache {
                 }
                 match self.scenes.iter().find(|s| s.id == *scene) {
                     Some(s) => SourceRef::Demo { scene: Box::new(s.clone()), max_edge },
-                    None => SourceRef::File { path: format!("demo:{scene}"), max_edge, loader: None, fallback: None, denoise: None, reduced: None },
+                    None => SourceRef::File {
+                        path: format!("demo:{scene}"),
+                        max_edge,
+                        loader: None,
+                        fallback: None,
+                        denoise: None,
+                        reduced: None,
+                        options: LoadOptions::default(),
+                    },
                 }
             }
-            Source::File { path } => {
-                SourceRef::File { path: path.clone(), max_edge, loader: self.file_loader.clone(), fallback: None, denoise: None, reduced: None }
-            }
+            Source::File { path } => SourceRef::File {
+                path: path.clone(),
+                max_edge,
+                loader: self.file_loader.clone(),
+                fallback: None,
+                denoise: None,
+                reduced: None,
+                options: LoadOptions::default(),
+            },
         }
     }
 }
