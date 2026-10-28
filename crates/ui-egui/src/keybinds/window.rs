@@ -35,6 +35,7 @@ const GAP: f32 = 10.0;
 const TOTAL_W: f32 = ACTION_W + 2.0 * SLOT_W + WHEN_W + RESET_W + 4.0 * GAP;
 
 /// A command as the list shows it.
+#[derive(Clone)]
 struct Row {
     b: &'static Bindable,
     slots: [Option<String>; model::SLOTS],
@@ -101,8 +102,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     ui.add_space(6.0);
 
     let needle = search.trim().to_lowercase();
-    let rows = rows(app, &keymap, &needle, show_all, mac);
-    let clashes = Clashes::of(&keymap);
+    let (rows, clashes) = listing(app, ui.ctx(), &keymap, &needle, show_all, mac);
     header(ui, t);
     // a fixed height, so the dialog doesn't jump around while the search narrows the list
     // (shorter on a short window, so the dialog fits it)
@@ -110,7 +110,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     egui::ScrollArea::vertical().max_height(h).min_scrolled_height(h).auto_shrink([false, false]).id_salt("shortcuts-list").show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 0.0;
         let mut group = "";
-        for row in &rows {
+        for row in rows.iter() {
             if row.group != group {
                 group = &row.group;
                 group_header(ui, t, group);
@@ -143,6 +143,68 @@ fn group_header(ui: &mut egui::Ui, t: &Tokens, group: &str) {
     ui.add_space(10.0);
     ui.label(RichText::new(crate::i18n::tr(group)).font(t.semibold(12.5)).color(t.accent));
     ui.add_space(2.0);
+}
+
+/// What the rows were built for: the list is rebuilt only when one of these changes, not each frame
+/// (building it lists every command's menu path and enablement).
+#[derive(Clone, PartialEq)]
+struct ListKey {
+    keymap: Keymap,
+    needle: String,
+    show_all: bool,
+    mac: bool,
+    capturing: Option<String>,
+    language: crate::i18n::Locale,
+}
+
+#[derive(Clone)]
+struct Listing {
+    key: ListKey,
+    rows: std::sync::Arc<Vec<Row>>,
+}
+
+#[derive(Clone)]
+struct ClashCache {
+    keymap: Keymap,
+    clashes: std::sync::Arc<Clashes>,
+}
+
+/// The rows and the clashes, kept in the context's memory and rebuilt when the keymap, the search,
+/// the capture or the language changes.
+fn listing(
+    app: &LightcraftApp,
+    ctx: &egui::Context,
+    keymap: &Keymap,
+    needle: &str,
+    show_all: bool,
+    mac: bool,
+) -> (std::sync::Arc<Vec<Row>>, std::sync::Arc<Clashes>) {
+    let (rows_id, clash_id) = (egui::Id::unique("shortcuts-rows"), egui::Id::unique("shortcuts-clashes"));
+    let key = ListKey {
+        keymap: keymap.clone(),
+        needle: needle.to_string(),
+        show_all,
+        mac,
+        capturing: app.keybinds.capture.as_ref().map(|c| c.id.clone()),
+        language: crate::i18n::language(),
+    };
+    let rows = match ctx.data(|d| d.get_temp::<Listing>(rows_id)).filter(|l| l.key == key) {
+        Some(l) => l.rows,
+        None => {
+            let rows = std::sync::Arc::new(rows(app, keymap, needle, show_all, mac));
+            ctx.data_mut(|d| d.insert_temp(rows_id, Listing { key, rows: rows.clone() }));
+            rows
+        }
+    };
+    let clashes = match ctx.data(|d| d.get_temp::<ClashCache>(clash_id)).filter(|c| &c.keymap == keymap) {
+        Some(c) => c.clashes,
+        None => {
+            let clashes = std::sync::Arc::new(Clashes::of(keymap));
+            ctx.data_mut(|d| d.insert_temp(clash_id, ClashCache { keymap: keymap.clone(), clashes: clashes.clone() }));
+            clashes
+        }
+    };
+    (rows, clashes)
 }
 
 /// The rows to show, grouped by menu in the menu bar's order, then by label.
@@ -198,6 +260,7 @@ fn clashes(keymap: &Keymap) -> HashMap<(&'static str, usize), Vec<&'static str>>
 }
 
 /// The clashes of a keymap, and why each command's is one.
+#[derive(Clone)]
 struct Clashes {
     slots: HashMap<(&'static str, usize), Vec<&'static str>>,
     /// Per command: the other command it clashes with and the reason, in words.

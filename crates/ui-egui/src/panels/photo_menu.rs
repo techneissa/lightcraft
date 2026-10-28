@@ -26,6 +26,7 @@ use crate::LightcraftApp;
 use crate::menus::menubar::{MenuNode, display_item_label, menu_bar, run_item};
 
 pub mod backup;
+mod cached;
 pub mod editor;
 pub mod items;
 pub mod presets;
@@ -277,7 +278,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
         let _ = app.run("library.select", json!({"ids": [photo.0]}));
     }
     let custom_commands = slots(app).iter().any(|s| matches!(s, Slot::Command { .. }));
-    let commands = if custom_commands { menu_commands(app) } else { Vec::new() };
+    let commands = if custom_commands { cached::commands(app, ui.ctx()) } else { Default::default() };
     let rows = visible(app, photo, &commands);
     // everything taken out (or hidden here): the way back to the editor, rather than nothing
     if rows.is_empty()
