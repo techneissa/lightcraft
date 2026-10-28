@@ -76,6 +76,7 @@ Local folder: `~/Documents/workspace/gitClones/lightcraft`. Git remembers how a 
 | No camera-JPEG flash in the loupe while a raw renders; lensfun distortion zoomed to fill the frame (no empty corners) | `fix/raw-view-colors` | `crates/ui-egui/src/headless/tests/loupe_stand_in.rs`, tests in `crates/lensdb/src/tests.rs` | `crates/ui-egui/src/panels/detail.rs` (the loupe keeps the previous photo up), `crates/engine/src/media/session.rs`, `crates/engine/src/lens_profiles.rs`, `crates/lensdb/src/lib.rs` (fill-frame scale) | `loupe_stand_in`, `the_loupe_says`, `lightcraft-lensdb`, `quick_jobs`, `lens_profiles` |
 | Auto AI Denoise on open: switches AI Denoise on once for a raw at or above an ISO (Settings ▸ AI Denoise, off by default); on top of upstream PRs #2929 / #2932 (own model, Auto Sync, one batch row) | `feat/auto-ai-denoise` | `crates/engine/src/denoise/auto.rs`, `crates/engine/src/tests/denoise/auto.rs`, `crates/ui-egui/src/panels/denoise_auto.rs`, `crates/ui-egui/src/tests/denoise_auto.rs` | engine `cmd/denoise.rs` (`denoise.autoOpen`, `switch`), `denoise/settings.rs`, `denoise/state.rs`, `library.rs`, `cmd/prefs.rs`; UI `panels.rs`, `panels/denoise.rs`, `dialogs/settings/import.rs`. Until #2929 / #2932 reach official `main`, the branch carries them; the merge into `custom` took upstream's Auto Sync for the AI Denoise switch (it replaces the `fix/edit-all-selected` hook in `cmd/denoise.rs`) | `denoise` in engine, `lightcraft-catalog`, `denoise settings` in ui-egui |
 | Show or hide top-bar items (Settings ▸ Top Bar, or right-click the bar); the Discord button is gone | `feat/topbar-items` | `crates/ui-egui/src/panels/topbar_items.rs` and `topbar_items/` (`editor.rs`, `tests.rs`) | `panels/topbar.rs`, `panels.rs` (module), `state/settings.rs` (field), `dialogs/settings.rs` (tab), `menus/run.rs` + `menus/ui_commands.rs`, `icons.rs` and `links.rs` (Discord removed), `docs/control-protocol.md` | `topbar_items` |
+| Camera Matching / No Camera Matching in the Profile picker, for cameras without measured matrices too; thumbnails follow the choice, Auto Sync carries it, no false "edited" flag. Carries upstream PR #2222 (`profile.camera_colour`) and extends it | `feat/camera-matching-profile` | `crates/ui-egui/src/panels/camera_colour.rs`, `crates/ui-egui/src/tests/camera_colour.rs` | `crates/develop` (`settings.rs` `CameraColour`, `lib.rs`, `presets.rs`), `crates/catalog/src/model.rs`, `crates/pipeline/src/lib.rs`; engine `camera_preview/colour.rs`, `cmd/develop.rs`, `cmd/previews.rs`, `files/load.rs` + `fs.rs`, `media/cache.rs` + `source.rs` + `session.rs` (thumbnail options), `presets.rs`, `smart.rs`; UI `panels/profiles.rs`, `panels/edit.rs` + `edit/sliders.rs`, `panels.rs`; `docs/camera-preview-colour.md` | `camera_preview`, `camera_colour`, `thumbnail`, `presets`, `lightcraft-develop` |
 
 Every feature also has an entry in `docs/whats-new.md` and a row in `docs/parity-checklist.md`; clashes there are
 fixed by the update script (both sides kept).
@@ -85,10 +86,11 @@ The tests of every feature, after a merge:
 ```bash
 cargo test -p lightcraft-codecs --lib animated_gif
 cargo test -p lightcraft-filepanel
-cargo test -p lightcraft-engine --lib -- animated_gif denoise prefs quick_jobs lens_profiles
+cargo test -p lightcraft-engine --lib -- animated_gif denoise prefs quick_jobs lens_profiles camera_preview media presets files auto_sync
 cargo test -p lightcraft-lensdb
+cargo test -p lightcraft-develop
 cargo test -p lightcraft-catalog
-cargo test -p lightcraft-ui-egui --lib -- animated_gif selection_order split_divider before_after command_palette edit_all photo_menu topbar_items titlebar loupe_stand_in the_loupe_says denoise settings
+cargo test -p lightcraft-ui-egui --lib -- animated_gif selection_order split_divider before_after command_palette edit_all photo_menu topbar_items titlebar loupe_stand_in the_loupe_says denoise settings profile camera_colour thumbnail
 ```
 
 ## Known failures on this Mac (not caused by the fork)
