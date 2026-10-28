@@ -313,10 +313,13 @@ Now it does not: Camera Matching reads the built-in profiles alone.
 - **A file that can't be used** (missing, damaged, or made for another camera) renders the photo as Camera Matching, keeps
   the setting and the id, and says so under the Profile picker for as long as it is so (`SourceInfo::colour_note`). The
   picker lists the stored profile greyed. When the file is back the photo uses it again.
-- **Caches.** A decoded source records the profile's key (`LoadOptions::profile_key`: the id and the file's content hash,
-  `camera_profiles::local_key`), so a changed, replaced, removed or restored file decodes again. Only a photo on a local
+- **Caches.** A decoded source records the profile's key (`LoadOptions::profile_key`: a 128-bit hash of the id and the file's
+  content, read with no shortcut by size or time, `camera_profiles::local_key`; `None` for a photo that is not on a local
+  profile). A registry keeps each key's profile for the decoder, and a key it has lost is found again by scanning the
+  folder, so a changed, replaced, removed or restored file decodes again. Only a photo on a local
   profile has that key in its thumbnail, variant and view keys; every other photo's keys are what they were. A smart
-  preview of such a photo is built with the profile and records `local_profile: "<id>:<key>"` in its header; it goes
+  preview records the colour base baked into its pixels (`base`: `auto` or `local`); one of a photo on a local profile is
+  built with the profile and records `local_profile: "<id>:<key>"` in its header too, and goes
   stale only when that stamp differs (the file changed, or the photo left the profile) and the original can be read, and
   a missing or unusable file keeps the proxy.
 - **DNG.** Export as DNG and Convert / Copy as DNG write the profile's matrix, table and (when fitted) tone into the DNG's
@@ -325,16 +328,21 @@ Now it does not: Camera Matching reads the built-in profiles alone.
 - **Catalog.** `local` and the reserved `macos` (rendered as Camera Matching until the macOS Colour track lands) are
   catalog format v10; a build that only knows v9 refuses the library as "newer version", untouched, never as damaged.
 - **Existing photos.** For a file named after its camera (`ILCE-7M5.json`, the name Camera Matching used to read) a
-  question is put once per library, when it opens: "N photos were rendered with your local profile 'X'. Switch them to it
+  question is put when the library opens, until it is answered: "N photos were rendered with your local profile 'X'. Switch them to it
   to keep their look?" **Switch** moves the Camera Matching photos of that camera to the profile in one undo step;
-  **Leave on Camera Matching** leaves them. Never automatic; the answer is kept in the library's preferences
-  (`localProfileAsked`).
+  **Leave on Camera Matching** leaves them. Never automatic. Only those two answer it (kept in the library's preferences,
+  `localProfileAsked`); closing the window with Esc or a click outside asks again at the next opening, and undoing a
+  Switch puts the question back (redo answers it again).
 
 ## Smart previews and the look version
 
 A smart preview keeps the result of the fit twice: the colour matrix is baked into its pixels and the tone and chroma curves are stored in its header. When the fit changes, a preview built earlier keeps the old look until it is rebuilt, and the render cache version does not reach it (renders are keyed on the library's files, proxies are files of their own).
 
 The fit therefore has a version, `LOOK_VERSION` in `crates/engine/src/camera_preview.rs`, and every smart preview records the version that wrote it in its header line (`look_version`). **Bump the constant in any change that makes the fit give a different result for the same file**: the matrix, hue/saturation, tone or chroma fit, their gates and fallbacks, or how a camera profile feeds them. Changes that leave the fitted look alone don't need it. A header without the field (everything built before it existed) counts as version 0, and so does a value that is not a non-negative integer; a value from a newer build is left alone.
+
+`LOOK_VERSION` 14 also adds the header field `base` (`auto` for Camera Matching, `local` for a local profile). A proxy of
+a raw with the fitted look that has no `base`, or an older version, is stale: before 14 a file named after the camera
+changed Camera Matching silently, so those proxies carry a colour Camera Matching no longer gives.
 
 A proxy older than the constant is brought up to date by the existing Build Smart Previews path (`smart_run`), which also repairs damaged proxies:
 
