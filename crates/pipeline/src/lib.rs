@@ -106,6 +106,25 @@ pub struct SourceInfo {
     /// The photo chose a local camera profile that its source could not use, so it was decoded as Camera Matching: what
     /// the Edit panel says under the Profile picker, for as long as it is so (the panel words and translates it).
     pub colour_note: Option<ColourNote>,
+    /// macOS Colour can be offered for this source on this computer: a raw whose Profile option is offered
+    /// (`colorimetric`), on a Mac whose raw decoder lists its camera and has not failed to read it.
+    pub macos_offered: bool,
+    /// The photo chose macOS Colour but this source was decoded as Camera Matching: why. The choice is kept; the Edit
+    /// panel says so for as long as it is so.
+    pub macos_note: Option<MacosUnavailable>,
+}
+
+/// Why a photo set to macOS Colour renders as Camera Matching.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MacosUnavailable {
+    /// Not a Mac, macOS older than 12, or its raw decoder lacks a setting the recipe needs.
+    System,
+    /// macOS does not list the camera, or LightCraft has no verified type for its raw format.
+    Camera,
+    /// macOS reads the raw at a size more than 2 % away from LightCraft's.
+    Size,
+    /// macOS could not read the raw.
+    Unreadable,
 }
 
 /// Why a photo cannot use its local camera profile, and so renders as Camera Matching.
@@ -143,6 +162,8 @@ impl Default for SourceInfo {
             native_long: None,
             colorimetric: false,
             colour_note: None,
+            macos_offered: false,
+            macos_note: None,
         }
     }
 }

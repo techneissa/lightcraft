@@ -2668,10 +2668,10 @@ fn a_narrow_black_and_white_curve_that_darkens_the_bright_areas_is_refused() {
     }
 }
 
-/// macOS Colour step 5: until the macOS loader lands, a photo set to macOS Colour gets exactly the Camera Matching
-/// colour (the same JPEG fit, matrices and white), so the stored choice never changes a picture on its own.
+/// A photo set to macOS Colour whose source the Mac's decoder cannot make (`files::macos`) gets exactly the Camera
+/// Matching colour (the same JPEG fit, matrices and white).
 #[test]
-fn macos_colour_renders_as_camera_matching_for_now() {
+fn macos_colour_falls_back_to_the_camera_matching_colour() {
     let fitted = dro_test_look(&std::array::from_fn(|i| 0.006 * 1.13f32.powi(i as i32)), &|x| x.sqrt());
     let run = |colour: CameraColour| {
         let mut raw = raw_of(RawFormat::Arw, "SONY", "ILCE-7M5", Default::default());

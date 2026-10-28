@@ -9,7 +9,7 @@
 //! All `unsafe` (the Objective-C calls) lives in the `macos` module; the API is safe. Elsewhere
 //! (Windows, Linux, wasm) everything compiles, [`available`] is false and [`render`] returns
 //! [`Error::Unsupported`]. With lightcraft-sysmem and lightcraft-filepanel this is one of the three
-//! crates allowed `unsafe` (AGENTS.md). It depends on no workspace crate: it returns plain `Vec<f32>`.
+//! crates allowed `unsafe` (AGENTS.md). It depends on no workspace crate: it returns plain `Vec<[f32; 3]>`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 // The pure helpers are used only by the Core Image backend; their tests run everywhere.
@@ -33,7 +33,7 @@ use macos as imp;
 use stub as imp;
 
 pub use gate::uti_for_extension;
-pub use slots::weight_bytes;
+pub use slots::{FLOOR_BYTES, weight_bytes};
 
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -76,8 +76,9 @@ pub struct Request {
 pub struct LinearImage {
     pub width: u32,
     pub height: u32,
-    /// Three floats per pixel, row-major, ≥ 0 and finite (values above 1 are kept).
-    pub rgb: Vec<f32>,
+    /// One pixel per entry, row-major, ≥ 0 and finite (values above 1 are kept): the layout of
+    /// LightCraft's `Rgb32f`, so the engine takes the buffer without copying it.
+    pub rgb: Vec<[f32; 3]>,
     /// The camera's as-shot white, CIE 1931 xy (`neutralChromaticity`).
     pub white_xy: [f64; 2],
     /// Core Image's own reading of that white, in Kelvin and tint.

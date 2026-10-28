@@ -5,8 +5,8 @@
 pub(crate) const BAND_ROWS: u32 = 256;
 
 /// Drop alpha; non-finite and negative values become 0 (measured minimum −0.005).
-pub(crate) fn rgba_to_rgb(src: &[f32], dst: &mut [f32]) {
-    for (s, d) in src.chunks_exact(4).zip(dst.chunks_exact_mut(3)) {
+pub(crate) fn rgba_to_rgb(src: &[f32], dst: &mut [[f32; 3]]) {
+    for (s, d) in src.chunks_exact(4).zip(dst.iter_mut()) {
         for (o, v) in d.iter_mut().zip(s) {
             *o = if v.is_finite() && *v > 0.0 { *v } else { 0.0 };
         }
@@ -29,9 +29,9 @@ mod tests {
     #[test]
     fn alpha_dropped_and_values_cleaned() {
         let src = [0.5, 1.0, 3.25, 1.0, -0.005, f32::NAN, f32::INFINITY, 0.0];
-        let mut dst = [9.0; 6];
+        let mut dst = [[9.0; 3]; 2];
         rgba_to_rgb(&src, &mut dst);
-        assert_eq!(dst, [0.5, 1.0, 3.25, 0.0, 0.0, 0.0]);
+        assert_eq!(dst, [[0.5, 1.0, 3.25], [0.0, 0.0, 0.0]]);
     }
 
     #[test]

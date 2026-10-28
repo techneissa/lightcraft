@@ -12,11 +12,17 @@ pub(crate) const PREVIEW_EDGE: u32 = 2560;
 pub(crate) const FULL_SLOTS: u32 = 1;
 pub(crate) const SMALL_SLOTS: u32 = 2;
 
-/// The memory gate weight of one render with this output size, in bytes: Core Image's working set
-/// plus the float result. Fits the measured 213 MB at 512 px and 347 MB at 2560 px and
-/// over-estimates the 826 MB of a full 7008 × 4672 render (1.12 GB), on purpose.
+/// Peak footprint a render may reach whatever its output size: measured 471–773 MB at 512 px (draft),
+/// 374–759 MB at 2560 px and 578–687 MB at full size on A7 V files (macOS 27.0.1). Core Image's own
+/// buffers dominate, so a small render costs about as much as a large one.
+pub const FLOOR_BYTES: u64 = 800_000_000;
+
+/// The memory gate weight of one render with this output size, in bytes: macOS's peak footprint (what
+/// it counts against the app), not resident memory. A flat [`FLOOR_BYTES`] up to 2560 px and at the
+/// A7 V's full 7008 × 4672 (200 MB + 16 B a pixel = 724 MB, under the floor); larger sensors grow
+/// with their pixels (the float RGBA bands and the float result).
 pub fn weight_bytes(width: u32, height: u32) -> u64 {
-    200_000_000 + 28 * u64::from(width) * u64::from(height)
+    FLOOR_BYTES.max(200_000_000 + 16 * u64::from(width) * u64::from(height))
 }
 
 pub(crate) struct Slots {
@@ -111,12 +117,14 @@ mod tests {
         assert!(slots.acquire(true, &AtomicBool::new(false)).is_some(), "the slot came back");
     }
 
-    /// T16d: the weight is 200 MB + 28 B per output pixel.
+    /// T16d: the weight follows the measured peak footprint: 800 MB up to full A7 V size, more above.
     #[test]
     fn weight_formula() {
-        assert_eq!(weight_bytes(0, 0), 200_000_000);
-        assert_eq!(weight_bytes(512, 341), 200_000_000 + 28 * 512 * 341);
-        assert_eq!(weight_bytes(7008, 4672), 1_116_758_528);
+        assert_eq!(weight_bytes(0, 0), 800_000_000);
+        assert_eq!(weight_bytes(512, 341), 800_000_000);
+        assert_eq!(weight_bytes(2560, 1707), 800_000_000);
+        assert_eq!(weight_bytes(7008, 4672), 800_000_000, "the A7 V's measured 687 MB fits under the floor");
+        assert_eq!(weight_bytes(9504, 6336), 200_000_000 + 16 * 9504 * 6336);
         assert!(is_full(None) && is_full(Some(2561)) && !is_full(Some(2560)) && !is_full(Some(512)));
     }
 }

@@ -61,9 +61,9 @@ fn renders_a_raw_at_1600_px() {
     let (nw, nh) = a.native_size;
     let aspect = |w: u32, h: u32| f64::from(w) / f64::from(h);
     assert!((aspect(a.width, a.height) - aspect(nw, nh)).abs() < 2.0 / 1600.0, "aspect kept");
-    assert_eq!(a.rgb.len(), a.width as usize * a.height as usize * 3);
-    assert!(a.rgb.iter().all(|v| v.is_finite() && *v >= 0.0));
-    let max = a.rgb.iter().copied().fold(0f32, f32::max);
+    assert_eq!(a.rgb.len(), a.width as usize * a.height as usize);
+    assert!(a.rgb.iter().flatten().all(|v| v.is_finite() && *v >= 0.0));
+    let max = a.rgb.iter().flatten().copied().fold(0f32, f32::max);
     eprintln!("max linear value {max}");
     let [x, y] = a.white_xy;
     assert!((0.30..=0.46).contains(&x) && (0.30..=0.42).contains(&y), "as-shot white xy {x}, {y}");
@@ -109,9 +109,9 @@ fn bands_join_seamlessly() {
     assert_eq!((one.width, one.height), (many.width, many.height));
     // Core Image tiles each band on its own, so values agree to float noise, not bit for bit
     // (measured: largest difference 0.0015 on values up to 3). A one-row shift would be far larger.
-    let diffs = || one.rgb.iter().zip(&many.rgb).map(|(a, b)| f64::from((a - b).abs()));
+    let diffs = || one.rgb.iter().flatten().zip(many.rgb.iter().flatten()).map(|(a, b)| f64::from((a - b).abs()));
     let worst = diffs().fold(0f64, f64::max);
-    let mean = diffs().sum::<f64>() / one.rgb.len() as f64;
+    let mean = diffs().sum::<f64>() / (one.rgb.len() * 3) as f64;
     eprintln!("bands: largest difference {worst}, mean {mean}");
     assert!(worst < 0.01 && mean < 1e-4, "largest difference {worst}, mean {mean}");
 }
@@ -157,7 +157,7 @@ fn bytes_need_the_exact_type_hint() {
     eprintln!("bytes path at 1600 px: {:.2} s", t.elapsed().as_secs_f64());
     let from_path = render(Input::Path(&file), &at(1600), &cancel).unwrap();
     assert_eq!((from_bytes.width, from_bytes.height, from_bytes.white_xy), (from_path.width, from_path.height, from_path.white_xy));
-    let worst = from_bytes.rgb.iter().zip(&from_path.rgb).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+    let worst = from_bytes.rgb.iter().flatten().zip(from_path.rgb.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
     assert!(worst < 1e-3, "bytes and path differ by {worst}");
     for hint in ["ARW", ".arw", "", "public.camera-raw-image"] {
         assert_eq!(render(Input::Bytes { data: &bytes, uti: hint }, &at(512), &cancel), Err(Error::Undecodable), "hint {hint:?}");
@@ -260,16 +260,16 @@ fn delta_e00_reference_pair() {
 fn mean_delta_e(a: &crate::LinearImage, b: &crate::LinearImage) -> f64 {
     assert_eq!((a.width, a.height), (b.width, b.height));
     let (w, h) = (a.width as usize, a.height as usize);
-    let mut ys: Vec<f32> = a.rgb.chunks_exact(3).map(|p| 0.2627 * p[0] + 0.6780 * p[1] + 0.0593 * p[2]).collect();
+    let mut ys: Vec<f32> = a.rgb.iter().map(|p| 0.2627 * p[0] + 0.6780 * p[1] + 0.0593 * p[2]).collect();
     ys.sort_by(f32::total_cmp);
     let gain = 1.0 / f64::from(ys[ys.len() * 99 / 100].max(1e-6));
     let block = |img: &crate::LinearImage, bx: usize, by: usize| {
         let mut sum = [0f64; 3];
         for y in by * 8..by * 8 + 8 {
             for x in bx * 8..bx * 8 + 8 {
-                let i = (y * w + x) * 3;
+                let i = y * w + x;
                 for c in 0..3 {
-                    sum[c] += f64::from(img.rgb[i + c]) * gain / 64.0;
+                    sum[c] += f64::from(img.rgb[i][c]) * gain / 64.0;
                 }
             }
         }

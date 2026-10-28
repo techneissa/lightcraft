@@ -16,6 +16,7 @@ use crate::media::{DenoiseSpec, FileLoader, FileProbe, LoadOptions, PairLoader, 
 mod colour;
 mod fs;
 mod load;
+mod macos;
 mod preview;
 mod probe;
 

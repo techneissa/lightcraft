@@ -329,11 +329,11 @@ fn lanczos(image: &CIImage, from: (u32, u32), to: (u32, u32)) -> Result<Retained
 }
 
 /// Render `planned` into a new 3-float buffer, band by band through one RGBA scratch.
-fn draw(planned: &Planned, ctx: &CIContext, band_rows: u32) -> Result<Vec<f32>, Error> {
+fn draw(planned: &Planned, ctx: &CIContext, band_rows: u32) -> Result<Vec<[f32; 3]>, Error> {
     let (w, h) = planned.size;
     let too_large = || Error::TooLarge { width: w, height: h };
     let px = usize::try_from(u64::from(w) * u64::from(h)).map_err(|_| too_large())?;
-    let mut rgb = vec![0f32; px.checked_mul(3).ok_or_else(too_large)?];
+    let mut rgb = vec![[0f32; 3]; px];
     let band_rows = band_rows.clamp(1, h.max(1));
     let row = usize::try_from(w).map_err(|_| too_large())?;
     let mut scratch = vec![0f32; row.checked_mul(4).and_then(|r| r.checked_mul(band_rows as usize)).ok_or_else(too_large)?];
@@ -355,8 +355,8 @@ fn draw(planned: &Planned, ctx: &CIContext, band_rows: u32) -> Result<Vec<f32>, 
             // Image writes inside it; it stays borrowed mutably (and alive) for the whole call.
             unsafe { ctx.render_toBitmap_rowBytes_bounds_format_colorSpace(&planned.image, ptr, row_bytes, bounds, format, Some(&space)) }
         }
-        let start = row * 3 * top as usize;
-        let Some(dst) = rgb.get_mut(start..start + row * 3 * rows as usize) else { return Err(too_large()) };
+        let start = row * top as usize;
+        let Some(dst) = rgb.get_mut(start..start + row * rows as usize) else { return Err(too_large()) };
         rgba_to_rgb(band, dst);
     }
     Ok(rgb)

@@ -56,7 +56,8 @@ pub(super) fn quick_image_srgb(header: &[u8], window: &[u8], adobe_rgb: bool, ma
 pub fn fs_pair_loader() -> PairLoader {
     Arc::new(|path: &str, max_edge: usize, spec: &DenoiseSpec, options: LoadOptions| {
         let len = std::fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
-        let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 4 } else { 10 };
+        let weight = len.saturating_mul(if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 4 } else { 10 });
+        let weight = load_weight(weight, options, lightcraft_macraw::available());
         let gate = crate::memory::work_gate();
         let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
@@ -74,8 +75,9 @@ pub fn fs_pair_loader() -> PairLoader {
 /// interactive loads (the loupe, exports) never wait — they are counted, so background work
 /// yields to them.
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
-    let loader: FileLoader =
-        Arc::new(|path: &str, max_edge: usize, options: LoadOptions| fs_load(path, max_edge, |bytes| load_vec_with(bytes, max_edge, options)));
+    let loader: FileLoader = Arc::new(|path: &str, max_edge: usize, options: LoadOptions| {
+        fs_load(path, max_edge, options, |bytes| load_vec_with(bytes, max_edge, options))
+    });
     let probe: FileProbe = Arc::new(|path: &str| {
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let _permit = crate::memory::work_gate().acquire(len);
@@ -89,13 +91,14 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
 
 /// The filesystem [`ReducedLoader`]: [`load_vec_reduced`] of the file, gated like [`fs_hooks`]' loader.
 pub fn fs_reduced_loader() -> ReducedLoader {
-    Arc::new(|path: &str, max_edge: usize, options: LoadOptions| fs_load(path, max_edge, |bytes| load_vec_reduced(bytes, max_edge, options)))
+    Arc::new(|path: &str, max_edge: usize, options: LoadOptions| fs_load(path, max_edge, options, |bytes| load_vec_reduced(bytes, max_edge, options)))
 }
 
 /// Read `path` and `load` it, waiting on [`crate::memory::work_gate`] as [`fs_hooks`] explains.
-fn fs_load<T>(path: &str, max_edge: usize, load: impl FnOnce(Vec<u8>) -> Result<T, String>) -> Result<T, String> {
+fn fs_load<T>(path: &str, max_edge: usize, options: LoadOptions, load: impl FnOnce(Vec<u8>) -> Result<T, String>) -> Result<T, String> {
     let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
     let weight = len.saturating_mul(if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 6 });
+    let weight = load_weight(weight, options, lightcraft_macraw::available());
     let gate = crate::memory::work_gate();
     let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
@@ -103,6 +106,17 @@ fn fs_load<T>(path: &str, max_edge: usize, load: impl FnOnce(Vec<u8>) -> Result<
     // the file, the samples and the intermediate images are gone: give their pages back
     crate::memory::release();
     r
+}
+
+/// The memory gate weight of a load that would weigh `own` without macOS Colour: a photo on macOS Colour (on a Mac
+/// that can render it) weighs Core Image's peak footprint, about 800 MB at any size (`lightcraft_macraw::weight_bytes`),
+/// far more than its file size times the decode's expansion. That is above the gate's limit on most machines, so such
+/// a load runs alone; if the decoder then fails, the Camera Matching decode that replaces it fits in the same weight.
+pub(crate) fn load_weight(own: usize, options: LoadOptions, macos_available: bool) -> usize {
+    if options.colour != lightcraft_develop::CameraColour::Macos || !macos_available {
+        return own;
+    }
+    own.max(usize::try_from(lightcraft_macraw::FLOOR_BYTES).unwrap_or(usize::MAX))
 }
 
 /// `path`'s modification time as ISO 8601 (see [`ProbeInfo::file_modified`]); `None` when the

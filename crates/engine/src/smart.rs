@@ -308,6 +308,8 @@ pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<Source
         // (a smart preview keeps the colour it was made with: the option can't change it)
         colorimetric: false,
         colour_note: None,
+        macos_offered: false,
+        macos_note: None,
     });
     Ok((img, tone, info))
 }
