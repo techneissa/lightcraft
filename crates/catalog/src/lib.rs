@@ -22,6 +22,7 @@ pub mod local;
 pub mod lock;
 pub mod model;
 pub mod query;
+pub mod quick_filter;
 pub mod rules;
 pub mod safe_file;
 pub mod stacks;
@@ -1206,6 +1207,8 @@ mod tests_journal;
 mod tests_local;
 #[cfg(test)]
 mod tests_lock;
+#[cfg(test)]
+mod tests_quick_filter;
 #[cfg(test)]
 mod tests_repair;
 #[cfg(test)]

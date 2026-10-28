@@ -42,6 +42,7 @@ mod persist;
 mod prefs;
 mod presets_scale;
 mod print;
+mod quick_filters;
 mod process;
 mod recheck;
 mod segment;

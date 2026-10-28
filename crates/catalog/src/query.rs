@@ -25,6 +25,14 @@ pub struct Filter {
     pub rating: u8,
     pub rating_op: RatingOp,
     pub flag: Option<Flag>,
+    /// Any of these star ratings (0 = unrated; the bottom bar's quick filters and the filter bar's
+    /// stars); empty = no constraint. Together with `rating` / `ratingOp` both must let a photo
+    /// through, see [`crate::quick_filter`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ratings: Vec<u8>,
+    /// Any of these flags; empty = no constraint. ANDs with `flag`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub flags: Vec<Flag>,
     pub label: Option<ColorLabel>,
     /// Only these photos (Find Similar results…); empty = no constraint.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -274,6 +282,12 @@ impl Filter {
         if let Some(f) = self.flag {
             v.push(format!("flag {}", format!("{f:?}").to_lowercase()));
         }
+        if !self.ratings.is_empty() {
+            v.push(format!("rating {}", self.ratings.iter().map(ToString::to_string).collect::<Vec<_>>().join(" or ")));
+        }
+        if !self.flags.is_empty() {
+            v.push(format!("flag {}", self.flags.iter().map(|f| format!("{f:?}").to_lowercase()).collect::<Vec<_>>().join(" or ")));
+        }
         if let Some(l) = self.label {
             v.push(format!("label {}", format!("{l:?}").to_lowercase()));
         }
@@ -374,6 +388,9 @@ impl Filter {
             if !ok {
                 return false;
             }
+        }
+        if !self.ratings.is_empty() && !self.ratings.contains(&p.rating) || !self.flags.is_empty() && !self.flags.contains(&p.flag) {
+            return false;
         }
         if self.flag.is_some_and(|f| f != p.flag) || self.label.is_some_and(|l| Some(l) != p.label) || self.kind.is_some_and(|k| k != p.kind) {
             return false;
