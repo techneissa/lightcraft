@@ -120,7 +120,7 @@ mod tests {
     use serde_json::json;
 
     use crate::Session;
-    use crate::import::starting_colour_tests::{checked, mac, raw};
+    use crate::import::starting_colour_tests::{checked, raw, slow_mac};
 
     fn colour(s: &Session, id: u64) -> CameraColour {
         s.catalog.photo(PhotoId(id)).unwrap().develop.profile.camera_colour
@@ -130,7 +130,8 @@ mod tests {
     /// move lands as one undo step; a photo edited while the move ran keeps its edit.
     #[test]
     fn the_count_and_the_move_run_off_the_ui_thread() {
-        let (_, _g) = mac(true, true, Some((7008, 4672)));
+        // the size check takes a while, so the first move is sure to find it still running
+        let (_, _g) = slow_mac(Some((7008, 4672)), std::time::Duration::from_secs(2), true, true);
         let mut s = Session::new();
         for i in 1..=3 {
             s.catalog.apply(Op::AddPhoto { photo: Box::new(raw(i, "SONY ILCE-7M5")) }).unwrap();
