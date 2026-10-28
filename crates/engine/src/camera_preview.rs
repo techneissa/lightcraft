@@ -17,6 +17,7 @@ use lightcraft_raw::{
 };
 
 mod colour;
+pub(crate) mod colour_transfer;
 mod hue_sat;
 mod local;
 mod look_fit;
@@ -48,7 +49,7 @@ use look_fit::{
     FIT_PREVIEW_MAX_PIXELS, SENSOR_CLIP, at_most, clips_more, correct_vignetting, fit_look, fit_look_with, sony_dro_off_tone, with_dro_off_tone,
     without_clipped,
 };
-pub(crate) use macos_base::{base_reference, fit_base_tone};
+pub(crate) use macos_base::{BaseReference, base_reference, fit_base_tone};
 #[cfg(test)]
 use mono::{fit_dark_tone, fit_tone_only, monochrome, monochrome_look, to_prophoto};
 #[cfg(test)]

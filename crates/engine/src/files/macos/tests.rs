@@ -42,6 +42,8 @@ pub(crate) enum Answer {
     Grey([f64; 2]),
     Fail(Error),
     Empty,
+    /// This picture (resized to the request), with this as-shot white.
+    Picture(lightcraft_raster::Rgb32f, [f64; 2]),
 }
 
 pub(crate) struct Fake {
@@ -95,6 +97,23 @@ impl Backend for Fake {
                     decoder_version: "8".into(),
                 })
             }
+            Answer::Picture(img, white) => {
+                let img = if (img.width, img.height) == (w as usize, h as usize) {
+                    img.clone()
+                } else {
+                    lightcraft_raster::resample::fit(img, w as usize, h as usize, lightcraft_raster::resample::Filter::Box)
+                };
+                Ok(LinearImage {
+                    width: img.width as u32,
+                    height: img.height as u32,
+                    rgb: img.data,
+                    white_xy: *white,
+                    white_kelvin: 0.0,
+                    white_tint: 0.0,
+                    native_size: (ew, eh),
+                    decoder_version: "8".into(),
+                })
+            }
             Answer::Fail(e) => Err(e.clone()),
             Answer::Empty => Ok(LinearImage {
                 width: 0,
@@ -119,7 +138,7 @@ pub(crate) fn load(bytes: &[u8], max_edge: usize, colour: CameraColour, backend:
 }
 
 /// D50's chromaticity: about 5000 K.
-const D50: [f64; 2] = [0.3457, 0.3585];
+pub(crate) const D50: [f64; 2] = [0.3457, 0.3585];
 
 /// T4: a photo on macOS Colour is the decoder's picture (with the fixed gain: this file has no camera JPEG to fit the
 /// tone to, T6), its as-shot white is the

@@ -125,6 +125,10 @@ pub enum MacosUnavailable {
     Size,
     /// macOS could not read the raw.
     Unreadable,
+    /// AI Denoise is on and the photo's colours could not be carried over to macOS's (too little colour variety, or
+    /// the fit did not reproduce macOS's picture): both the plain and the denoised picture use Camera Matching. The
+    /// Edit panel's line: "AI Denoise uses Camera Matching colours on this photo".
+    Transfer,
 }
 
 /// Why a photo cannot use its local camera profile, and so renders as Camera Matching.

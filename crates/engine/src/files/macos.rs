@@ -15,6 +15,7 @@ use lightcraft_pipeline::MacosUnavailable;
 use lightcraft_raw::{RawFormat, RawInfo};
 
 use super::{Rgb32f, SourceInfo, xy_to_temp_tint};
+use crate::camera_preview::colour_transfer::{self, Refused, Transfer};
 
 /// The base's exposure scale, in stops, for LightCraft's default tone curve (a refused tone fit, [`toned`]): Core
 /// Image's linear output with the pinned recipe is darker than the camera JPEG. Measured on the 16 A7 V photos of the
@@ -198,5 +199,64 @@ pub(super) fn source_info(base: &Base, lens: Option<lightcraft_develop::Embedded
     }
 }
 
+/// The long edge of macOS's picture the AI Denoise colour transfer is fitted to (plan §6.6: about 0.5 s and at most
+/// 0.3 GB, rendered before LightCraft's develop so the two never hold memory together; never a full-size render).
+pub(super) const TRANSFER_EDGE: usize = 1024;
+
+/// What a macOS Colour photo with AI Denoise needs before LightCraft develops it: macOS's small picture (the
+/// transfer's target, and its white) and the camera JPEG the tone is fitted to.
+pub(super) struct TransferTarget {
+    base: Base,
+    reference: Option<crate::camera_preview::BaseReference>,
+}
+
+/// The [`TransferTarget`] of the raw in `bytes`; why not, when macOS cannot make its picture.
+pub(super) fn transfer_target(bytes: &[u8], backend: &dyn Backend) -> Result<TransferTarget, MacosUnavailable> {
+    let info = lightcraft_raw::probe_info(bytes).map_err(|_| MacosUnavailable::Unreadable)?;
+    let reference = crate::camera_preview::base_reference(bytes);
+    let base = base(bytes, &info, TRANSFER_EDGE, backend)?;
+    Ok(TransferTarget { base, reference })
+}
+
+/// The transfer from LightCraft's developed camera RGB `camera` (sensor orientation `orientation`, before highlight
+/// reconstruction and white balance; `mask` its binned clip mask) white-balanced by `wb`, to macOS's colours: both
+/// block-averaged to one upright grid and fitted (`camera_preview::colour_transfer`).
+pub(super) fn transfer_for(
+    target: &TransferTarget,
+    camera: &Rgb32f,
+    mask: Option<&[u8]>,
+    wb: [f32; 3],
+    orientation: lightcraft_geom::Orientation,
+) -> Result<Transfer, Refused> {
+    let apple = &target.base.image;
+    let swaps = orientation.swaps_axes();
+    let (w, h) = if swaps { (camera.height, camera.width) } else { (camera.width, camera.height) };
+    let (cols, rows) = colour_transfer::grid(w.min(apple.width), h.min(apple.height));
+    let (sensor_cols, sensor_rows) = if swaps { (rows, cols) } else { (cols, rows) };
+    let blocks = colour_transfer::camera_blocks(camera, mask, wb, sensor_cols, sensor_rows).into_oriented(orientation);
+    colour_transfer::fit_transfer(&blocks, &colour_transfer::apple_blocks(apple, cols, rows))
+}
+
+/// The source of a macOS Colour photo with AI Denoise, from its `plain` and denoised (`twin`) pictures already through
+/// the transfer (upright): the tone fitted to the camera JPEG on the plain picture, the same for both (the fixed gain
+/// on both when the fit is refused), and the facts of a macOS base (Kelvin from macOS's white).
+pub(super) fn transferred(
+    target: TransferTarget,
+    plain: Rgb32f,
+    twin: Option<Rgb32f>,
+    lens: Option<lightcraft_develop::EmbeddedLens>,
+    orientation: lightcraft_geom::Orientation,
+) -> (Rgb32f, Option<Rgb32f>, SourceInfo) {
+    let look = target.reference.as_ref().and_then(|r| crate::camera_preview::fit_base_tone(r, orientation, &plain));
+    let (plain, camera_tone) = toned(plain, look);
+    let twin = twin.map(|t| if camera_tone.is_some() { t } else { toned(t, None).0 });
+    let info = source_info(&target.base, lens);
+    (plain, twin, SourceInfo { camera_tone, ..info })
+}
+
+#[cfg(all(test, target_os = "macos"))]
+mod real_tests;
 #[cfg(test)]
 pub(crate) mod tests;
+#[cfg(test)]
+mod transfer_tests;

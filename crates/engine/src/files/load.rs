@@ -94,12 +94,18 @@ pub(super) fn load_bytes_now(
     if lightcraft_raw::probe(&bytes).is_some() {
         // macOS Colour: the Mac's decoder makes the picture from the file's header alone (the mosaic is never
         // unpacked); when it cannot, the photo is decoded as Camera Matching below and says why
-        let macos_note = match options.colour {
+        // (with AI Denoise on, the denoised picture can only come from LightCraft's develop: both pictures are then
+        // developed here and carried over to macOS's colours, fitted to a small picture of macOS's, `macos::transfer_for`)
+        let (macos_note, target) = match options.colour {
+            lightcraft_develop::CameraColour::Macos if denoise.is_some() => match macos::transfer_target(&bytes, backend) {
+                Ok(target) => (None, Some(target)),
+                Err(why) => (Some(why), None),
+            },
             lightcraft_develop::CameraColour::Macos => match macos_source(&bytes, max_edge, backend) {
                 Ok(found) => return Ok(found),
-                Err(why) => Some(why),
+                Err(why) => (Some(why), None),
             },
-            _ => None,
+            _ => (None, None),
         };
         // a thumbnail (`allow_reduced`, never an export) of a DNG that keeps smaller copies of its raw image
         // (Lightroom's merges) develops the smallest that covers it; a denoised photo's twin needs the full mosaic
@@ -191,17 +197,25 @@ pub(super) fn load_bytes_now(
             tables: tables.as_ref(),
             hue_sat: hue_sat.as_ref(),
         };
+        // macOS Colour with AI Denoise: the transfer to macOS's colours, fitted on the plain picture, replaces the colour
+        // model for both pictures; refused, both stay on Camera Matching and the photo says so
+        let transfer = target.as_ref().map(|target| macos::transfer_for(target, &img, clip_mask.as_deref(), colour.wb, raw.orientation));
+        let transferred = match &transfer {
+            Some(Ok(t)) => Some(CameraColourModel { wb: colour.wb, matrix: t.matrix, gain: t.gain, tables: None, hue_sat: None }),
+            _ => None,
+        };
+        let model = transferred.as_ref().unwrap_or(&colour);
         // camera RGB → what the pipeline takes: clipped highlights rebuilt, white balance and the colour model applied,
         // fitted to `max_edge` and upright (the same for the plain and the denoised picture)
         let finish = |mut img: Rgb32f| {
             let mut stages = vec![("develop", t0.elapsed())];
             stages.push(("transform", t0.elapsed()));
             match &clip_mask {
-                Some(mask) => colour.rebuild_highlights_masked(&mut img, mask),
-                None => colour.rebuild_highlights(&mut img),
+                Some(mask) => model.rebuild_highlights_masked(&mut img, mask),
+                None => model.rebuild_highlights(&mut img),
             }
             stages.push(("highlights", t0.elapsed()));
-            colour.apply(&mut img);
+            model.apply(&mut img);
             stages.push(("colour", t0.elapsed()));
             // a full-size render keeps the picture (fitting it to its own size would copy it, ~390 MB at 33 MP)
             let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Box) } else { img };
@@ -224,6 +238,16 @@ pub(super) fn load_bytes_now(
             eprintln!("[profile] raw source {}×{} (max {max_edge}, ms after decode): {}", img.width, img.height, parts.join(", "));
         }
         let twin = twin.map(|picture| finish(picture).0);
+        if lightcraft_pipeline::profiling()
+            && let Some(transfer) = &transfer
+        {
+            eprintln!("[profile] macOS Colour with AI Denoise: transfer {transfer:?}");
+        }
+        let macos_note = if matches!(transfer, Some(Err(_))) { Some(lightcraft_pipeline::MacosUnavailable::Transfer) } else { macos_note };
+        if let (Some(target), Some(Ok(_))) = (target, &transfer) {
+            let (img, twin, info) = macos::transferred(target, img, twin, lens, raw.orientation);
+            return Ok((img, twin, SourceInfo { mattes, ..info }, used_reduced));
+        }
         // White balance re-evaluates the file's own colour model (when it has one and no file-local look matrix sits
         // on top of it). A model's measured matrices never do: they only give the Kelvin scale its numbers, and the
         // picture is adapted from the as-shot white as every fitted look is (so settings from before that scale
