@@ -75,6 +75,7 @@ mod scroll;
 mod shortcut_backup;
 mod shortcut_editing;
 mod shortcut_when;
+mod sidecar_queue;
 mod slider_reset;
 mod slideshow;
 mod solo_sections;

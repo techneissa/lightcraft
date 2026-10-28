@@ -278,6 +278,8 @@ pub(crate) fn open_session(in_memory: bool, launch: &Launch, seed_demo: bool) ->
     s.slide_templates_dir = lightcraft_engine::config::config_dir().map(|d| d.join(lightcraft_engine::slide_template::DIR_NAME));
     // Control requests are answered on the UI thread: Add to Apple Photos must not wait there
     s.apple_photos_background = true;
+    // automatic XMP sidecars are written on a worker: a bulk edit mustn't wait for hundreds of files
+    s.queue_sidecar_writes(true);
     (s, problem)
 }
 
