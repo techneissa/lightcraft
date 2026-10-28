@@ -42,6 +42,7 @@ mod query;
 pub mod recheck;
 pub mod reload;
 mod slideshow;
+pub mod smart_editing;
 mod sync;
 mod xmp;
 
@@ -153,6 +154,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(keywords::specs());
         v.extend(manage::specs());
         v.extend(previews::specs());
+        v.extend(smart_editing::specs());
         v.extend(lut_profiles::specs());
         v.extend(local_profiles::specs());
         v.extend(macos_colour::specs());

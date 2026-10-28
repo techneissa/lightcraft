@@ -48,6 +48,7 @@ impl LightcraftApp {
             let _ = self.session.execute("app.memoryBudget", &serde_json::json!({"mb": mb}));
         }
         self.memory_applied = Some(mb);
+        crate::smart_editing::sync(self);
         // the monitor profile (Settings ▸ Display): previews follow it from the next frame
         if self.display_applied.as_ref() != Some(&self.ui.settings.display_profile) {
             let path = self.ui.settings.display_profile.clone();

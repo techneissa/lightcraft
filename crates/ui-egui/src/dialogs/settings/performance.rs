@@ -182,4 +182,6 @@ fn smart_previews(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     }
     hint(ui, t, crate::i18n::tr("Keep it on a drive with room: smart previews are about 1 MB per photo. The thumbnail cache stays in the library."));
+    check(ui, "settings.smartPreviewsForEditing", &mut app.ui.settings.smart_previews_for_editing, "Use Smart Previews for viewing and editing");
+    hint(ui, t, crate::i18n::tr("Faster with photos on a network or external drive; the original is read when you zoom to 100 % or export"));
 }

@@ -70,7 +70,7 @@ pub(crate) fn jobs_for(s: &mut Session, id: lightcraft_catalog::PhotoId, edge: O
 }
 
 /// The build's row in the activity stack (`what` as in [`PreviewBuild::what`]).
-fn task_for(s: &Session, state: &PreviewBuild) -> TaskGuard {
+pub(crate) fn task_for(s: &Session, state: &PreviewBuild) -> TaskGuard {
     let (kind, label) = match state.what {
         "" => ("previews", "Building previews"),
         "smart previews" => ("smartPreviews", "Building smart previews"),
@@ -321,7 +321,7 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
 /// vendor raws and DNGs (whose tone can come from their preview); only those proxies go stale when
 /// the fit changes; an older encoding makes any proxy stale).
 #[cfg(not(target_arch = "wasm32"))]
-type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool, crate::smart::LocalWant);
+pub(crate) type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool, crate::smart::LocalWant);
 
 /// What a photo's smart preview should say about local camera profiles and macOS Colour, and how to load the original
 /// for it: a photo on a usable local profile builds its proxy with that profile's colour, and one on macOS Colour with
@@ -353,7 +353,7 @@ pub(crate) fn smart_colour(photo: &lightcraft_catalog::Photo, macos_here: bool) 
 
 /// DNG tone fits also go stale, although DNGs keep their own matrix and Kelvin white-balance scale.
 #[cfg(not(target_arch = "wasm32"))]
-fn preview_fitted_look(photo: &lightcraft_catalog::Photo) -> bool {
+pub(crate) fn preview_fitted_look(photo: &lightcraft_catalog::Photo) -> bool {
     photo.fitted_look() || (photo.develops_raw() && photo.format.eq_ignore_ascii_case("DNG"))
 }
 
@@ -365,7 +365,7 @@ static SMART_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// What Build / Discard Smart Previews did.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
-struct SmartCounts {
+pub(crate) struct SmartCounts {
     /// Proxies there now (complete ones kept, missing or damaged ones written).
     built: usize,
     /// Of those, damaged ones (cut short by a crash or a full drive) that were rebuilt.
@@ -392,6 +392,8 @@ fn original_only(source: crate::media::SourceRef) -> Option<crate::media::Source
             Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, reduced: None, options })
         }
         SourceRef::Loaded(d) if d.info.is_some() && !d.from_proxy && !d.reduced => Some(SourceRef::Loaded(d)),
+        // (Use Smart Previews for editing: the original behind the preferred proxy)
+        SourceRef::Preferred { otherwise, .. } => original_only(*otherwise),
         _ => None,
     }
 }
@@ -400,7 +402,7 @@ fn original_only(source: crate::media::SourceRef) -> Option<crate::media::Source
 /// `custom`: the folder was chosen (on another drive, perhaps): it must be there, it is never
 /// recreated. With `state`, progress and cancel.
 #[cfg(not(target_arch = "wasm32"))]
-fn smart_run(
+pub(crate) fn smart_run(
     dir: &std::path::Path,
     custom: bool,
     discard: bool,

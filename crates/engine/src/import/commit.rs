@@ -325,6 +325,10 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
             s.denoise_enqueue_all(&on);
         }
     }
+    // Use Smart Previews instead of Originals for editing: the new photos get theirs in the background
+    if !opts.local {
+        crate::cmd::smart_editing::after_import(s, &report.imported);
+    }
     Ok(report)
 }
 

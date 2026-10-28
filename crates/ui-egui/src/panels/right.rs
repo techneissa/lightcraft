@@ -14,6 +14,8 @@ use crate::widgets::{divider, register, slider, text_button};
 mod crop;
 mod history;
 mod info;
+#[cfg(test)]
+pub(crate) use info::smart_line;
 mod keywords;
 
 #[cfg(test)]

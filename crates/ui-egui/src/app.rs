@@ -127,6 +127,7 @@ impl LightcraftApp {
             gpu_applied: None,
             gpu_notice: false,
             memory_applied: None,
+            smart_editing_applied: None,
             display_applied: None,
             display_error: None,
             screen_profile: None,

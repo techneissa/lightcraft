@@ -316,6 +316,11 @@ pub enum Dialog {
         name: String,
         count: usize,
     },
+    /// Once, when Use Smart Previews for viewing and editing is first switched on: build the `missing` smart previews of the
+    /// library in the background (`library.smartPreviewsForEditing {build}`; [`crate::smart_editing`]).
+    SmartPreviewsForEditing {
+        missing: usize,
+    },
     /// Apply macOS Colour to All Photos from This Camera… (`profiles.macosForCamera`; [`crate::macos_colour::picker`]):
     /// `count` photos of `camera` would move, `skipped` can't use macOS Colour on this Mac.
     MacosForCamera {
