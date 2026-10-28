@@ -360,21 +360,27 @@ one pixel.
 
 ## Keyboard shortcuts
 
-`engine.commands` lists each command's `shortcut` (the primary one, shown in menus) and `shortcut2`.
+`engine.commands` lists each command's `shortcut` (the primary one, shown in menus) and `shortcut2` (the second
+one, or `null`); the `app.setShortcut` reply carries both too, as `shortcut` and `shortcut2`. A few commands have a
+declared second shortcut (`library.selectNone` ⌘D, `view.filmstrip` F6, `view.leftPanel` F7, `view.rightPanel` F8,
+`dialog.export` ⇧E, `app.exportPrevious` ⌘E, `view.zoomToggle` Space, `version.create` ⇧M, `view.thumbSizeUp` +,
+`brush.featherLess` ⇧{, `brush.featherMore` ⇧}).
 A shortcut is one key (`Cmd+Shift+K`, `F5`, `Delete`) or a chord of two keys separated by a space (`Cmd+K C`).
 
 - `app.setShortcut {id, shortcut, slot?}`: `slot` 1 (the default) or 2; `shortcut` `null` or `""` removes it.
   Another command that had the keys (or a single key that leads the chord, or a chord the single key leads) loses
   them; the reply names it in `removedFrom`. `app.setShortcut {id, reset: true}` restores both slots of a command.
 - `app.assignShortcut {id, slot?}`: opens the Assign Shortcut box (the first free slot by default). Press the keys
-  with `ui.key` (two presses make a chord) and `ui.key {key: "Enter"}` to save; widgets `button:assignShortcut.save`,
+  with `ui.key` (two presses make a chord) and `ui.key {key: "Enter"}` to save (Enter before any key does nothing;
+  `app.setShortcut` can give a command the Enter key); widgets `button:assignShortcut.save`,
   `.remove`, `.cancel`, `.slot1`, `.slot2`, `assignShortcut:keys`.
 - `app.resetShortcuts` restores every command.
 - In the Keyboard Shortcuts window the cells are `button:shortcut-<id>` (Shortcut 1) and `button:shortcut2-<id>`,
   removed with `button:shortcutClear-<id>` / `button:shortcutClear2-<id>`, restored with `button:shortcutReset-<id>`.
 - While the first key of a chord is waiting, the hint card is the widget `chordHint`.
 - A right-click on an icon or button that runs a command opens a menu whose item is `menu:assignShortcut`; a
-  right-click on a menu item or a palette row opens the box directly.
+  right-click on a menu item, a photo-menu row or a palette row opens the box directly. A chord may not contain
+  ⌘, or ⌘Q (the app menu's).
 
 ## Import album picker
 
