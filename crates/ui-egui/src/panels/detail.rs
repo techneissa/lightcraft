@@ -242,7 +242,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     // until the loupe has this photo: show its cached render / embedded preview / a thumbnail
     request_stand_in(app, id, want, !crop_tool);
-    let show_before = app.ui.before_after == BeforeAfter::Original || ui.input(|i| i.key_down(egui::Key::Backslash));
+    let show_before = app.ui.before_after == BeforeAfter::Original
+        || (ui.input(|i| i.key_down(egui::Key::Backslash)) && !crate::widgets::dropdown_search::list_open(ui.ctx()));
     if split || show_before || split_view {
         request_before(app, &ask, [sw, sh]);
     }

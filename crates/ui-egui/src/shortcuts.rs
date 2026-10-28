@@ -382,6 +382,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     if app.recording_shortcut.is_none() && app.ui.name_edit.is_none() && crate::panels::person::handle_bulk_key(app, ctx) {
         return;
     }
+    // an open dropdown list owns the keyboard: typed letters are its search, not shortcuts
+    if crate::widgets::dropdown_search::list_open(ctx) {
+        return;
+    }
     // don't steal keys from text fields or from the keymap editor recording a shortcut
     if keyboard_owned(app, ctx) || app.recording_shortcut.is_some() || app.ui.name_edit.is_some() {
         return;
