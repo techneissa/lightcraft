@@ -70,7 +70,7 @@ fn hash_cache_is_bounded_weak_and_shared_settings_remain_independent() {
 #[test]
 fn source_from_before_content_reload_is_not_accepted() {
     let mut s = session();
-    s.media.file_loader = Some(Arc::new(|_, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
     let old = s.thumb_job(PhotoId(1), 256).unwrap().run();
     assert!(old.loaded.is_some());
     s.catalog
@@ -88,13 +88,79 @@ fn source_from_before_content_reload_is_not_accepted() {
     s.accept(&old);
     assert_eq!(s.media.source_usage().0, 0);
 }
+/// The photo's Camera Matching choice is part of the decode: a source decoded with another choice is decoded again
+/// (and a late render of the old one is not taken back into the cache); one the choice doesn't change is reused.
+#[test]
+fn camera_colour_decodes_again_only_when_it_changes_the_source() {
+    use lightcraft_develop::CameraColour;
+    let decodes = |colorimetric: bool| {
+        let seen = Arc::new(std::sync::Mutex::new(Vec::<LoadOptions>::new()));
+        let log = seen.clone();
+        let loader: FileLoader = Arc::new(move |_, _, options| {
+            log.lock().unwrap().push(options);
+            Ok((Rgb32f::new(8, 8), SourceInfo { raw: true, colorimetric, ..SourceInfo::default() }))
+        });
+        (loader, seen)
+    };
+    let set = |s: &mut crate::Session, colour: CameraColour| {
+        let mut d = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+        d.profile.camera_colour = colour;
+        s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(d), label: "edit".into(), edited: None }).unwrap();
+    };
+    let render = |s: &mut crate::Session| {
+        let r = s.render_job(PhotoId(1), 64, 64, false, true).unwrap().run();
+        s.accept(&r);
+    };
+
+    let mut s = session();
+    let (loader, seen) = decodes(true);
+    s.media.file_loader = Some(loader);
+    render(&mut s);
+    // a job made before the choice changes, finishing after it
+    let late = s.render_job(PhotoId(1), 64, 64, false, true).unwrap();
+    render(&mut s);
+    assert_eq!(seen.lock().unwrap().len(), 1, "the decoded source is reused while the choice stays");
+    set(&mut s, CameraColour::Colorimetric);
+    render(&mut s);
+    assert_eq!(seen.lock().unwrap().len(), 2, "a new choice decodes again");
+    assert_eq!(seen.lock().unwrap()[1].colour, CameraColour::Colorimetric, "with the choice");
+    render(&mut s);
+    assert_eq!(seen.lock().unwrap().len(), 2, "and the new source is reused");
+    // the late job decodes with the old choice from the file
+    let mut late = late;
+    late.source = s.media.origin_ref(&Source::File { path: "hash-fixture.jpg".into() }, 64);
+    let late = late.run();
+    assert_eq!(late.loaded.as_ref().map(|l| l.options.colour), Some(CameraColour::Auto));
+    s.accept(&late);
+    let n = seen.lock().unwrap().len();
+    render(&mut s);
+    assert_eq!(seen.lock().unwrap().len(), n, "the No Camera Matching source stayed in the cache");
+
+    // a variant (the profile browser's thumbnail of the other choice) is decoded for that choice, not the photo's
+    let mut other = (*s.catalog.photo(PhotoId(1)).unwrap().develop).clone();
+    other.profile.camera_colour = CameraColour::Auto;
+    let n = seen.lock().unwrap().len();
+    let r = s.variant_job(PhotoId(1), &other, 128).unwrap().run();
+    assert_eq!(r.loaded.as_ref().map(|l| l.options.colour), Some(CameraColour::Auto));
+    assert_eq!(seen.lock().unwrap().len(), n + 1);
+
+    // a camera whose starting colour isn't fitted to its JPEG: the choice changes nothing, so the source is kept
+    let mut s = session();
+    let (loader, seen) = decodes(false);
+    s.media.file_loader = Some(loader);
+    render(&mut s);
+    set(&mut s, CameraColour::Colorimetric);
+    render(&mut s);
+    assert_eq!(seen.lock().unwrap().len(), 1, "no second decode where the choice has no effect");
+}
+
 /// A panic while rendering (here in the decoder) used to end the pool's worker thread without
 /// an answer, so the view that asked showed "Rendering…" forever. It is the job's failure now,
 /// for renders and for stand-ins, answering the request it came from.
 #[test]
 fn a_render_that_panics_fails_instead_of_never_answering() {
     let mut s = session();
-    s.media.file_loader = Some(Arc::new(|_, _| panic!("decoder bug")));
+    s.media.file_loader = Some(Arc::new(|_, _, _| panic!("decoder bug")));
     let mut job = s.thumb_job(PhotoId(1), 256).unwrap();
     job.request_id = 42;
     let (key, level, source_key) = (job.key, job.level, job.source_key);

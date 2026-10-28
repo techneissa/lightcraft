@@ -88,6 +88,23 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
     let heading = |ui: &mut egui::Ui, s: &str| {
         ui.label(egui::RichText::new(crate::i18n::tr(s)).font(t.semibold(11.5)).color(t.text_dim));
     };
+    // Camera Matching: how a raw's colour starts, whatever profile look is applied on top
+    let mut colour_pick: (Option<lightcraft_develop::CameraColour>, Option<lightcraft_develop::CameraColour>) = (None, None);
+    if let Some(photo) = app.session.active()
+        && crate::panels::camera_colour::offered(app, photo)
+    {
+        for (colour, label, tip) in crate::panels::camera_colour::CHOICES {
+            let r = ui.selectable_label(d.profile.camera_colour == colour, crate::i18n::tr(label)).on_hover_text(crate::i18n::tr(tip));
+            register(ui, format!("profileMenu:cameraColour:{}", crate::panels::camera_colour::value(colour)), r.rect);
+            if r.clicked() {
+                colour_pick.0 = Some(colour);
+            }
+            if r.hovered() {
+                colour_pick.1 = Some(colour);
+            }
+        }
+        ui.separator();
+    }
     for (title, key, ids) in [("Favorites", "fav", app.session.profile_favorites.clone()), ("Recent", "recent", app.session.profile_recent.clone())] {
         let list: Vec<_> = ids.iter().filter_map(|id| app.session.profile_info(id).map(|(name, _)| (id.as_str(), name))).collect();
         if list.is_empty() {
@@ -161,6 +178,17 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
         s.profile.amount = 100.0;
         app.hover_preview =
             Some(crate::HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::profile_label(hovered_id, name)), settings: s });
+    }
+    if let Some(colour) = colour_pick.1
+        && colour != d.profile.camera_colour
+    {
+        app.hover_preview = Some(crate::HoverPreview {
+            label: crate::i18n::tr_format!("Profile: {}", crate::i18n::tr(crate::panels::camera_colour::label(colour))),
+            settings: crate::panels::camera_colour::with(d, colour),
+        });
+    }
+    if let Some(colour) = colour_pick.0 {
+        let _ = app.run("develop.profile", json!({"camera_colour": crate::panels::camera_colour::value(colour)}));
     }
     if let Some(id) = pick.0 {
         let _ = app.run("develop.profile", json!({"id": id}));

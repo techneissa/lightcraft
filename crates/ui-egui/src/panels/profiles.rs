@@ -43,6 +43,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.add_space(6.0);
     }
     divider(ui);
+    if super::camera_colour::offered(app, id) {
+        camera_cells(app, ui, &d, id);
+    }
     // (title, cell tag, imported LUT folder, profiles)
     let mut sections: Vec<(&str, &str, bool, Vec<(String, String, String)>)> = Vec::new();
     let favs: Vec<(String, String, String)> = app
@@ -205,4 +208,50 @@ fn cell_ui(
             ui.data_mut(|m| m.remove::<(PhotoId, String)>(egui::Id::unique("last-profile-hover")));
         }
     }
+}
+
+/// The Camera Matching choice of a raw as two live thumbnails above the profile groups (see
+/// [`super::camera_colour`]): the current look with and without the match to the camera's JPEG.
+fn camera_cells(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, id: PhotoId) {
+    let t = Tokens::get(ui.ctx());
+    let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 32.0), Sense::hover());
+    ui.painter().text(pos2(r.left() + 24.0, r.center().y), Align2::LEFT_CENTER, crate::i18n::tr("Camera Matching"), t.semibold(13.0), t.text_label);
+    let gap = 8.0;
+    let cw = ((ui.available_width() - 44.0 - gap * (COLUMNS as f32 - 1.0)) / COLUMNS as f32).max(40.0);
+    let th = (cw * 0.75).round();
+    let (rr, _) = ui.allocate_exact_size(vec2(ui.available_width(), th + 30.0), Sense::hover());
+    for (i, (colour, label, tip)) in super::camera_colour::CHOICES.into_iter().enumerate() {
+        let cell = Rect::from_min_size(pos2(rr.left() + 22.0 + i as f32 * (cw + gap), rr.top()), vec2(cw, th + 24.0));
+        let key = format!("cameraColourCell:{}", super::camera_colour::value(colour));
+        let resp = ui.interact(cell, egui::Id::unique(&key), Sense::click());
+        crate::widgets::announce(&resp, label.to_string());
+        register(ui, key, cell);
+        let thumb = Rect::from_min_size(cell.min, vec2(cell.width(), th));
+        let s = super::camera_colour::with(d, colour);
+        let painter = ui.painter();
+        painter.rect_filled(thumb, 3.0, t.canvas);
+        if let Some(job) = app.session.variant_job(id, &s, THUMB_EDGE)
+            && let Some(tex) = app.renderer.variant(job)
+        {
+            painter.image(tex.tex.id(), thumb, cover_uv(thumb, tex.size), Color32::WHITE);
+        }
+        let applied = d.profile.camera_colour == colour;
+        if applied {
+            painter.rect_stroke(thumb.expand(1.0), 4.0, Stroke::new(2.0, t.pick), egui::StrokeKind::Outside);
+        } else if resp.hovered() {
+            painter.rect_stroke(thumb, 3.0, Stroke::new(1.0, t.text_dim), egui::StrokeKind::Outside);
+        }
+        let name_color = if applied { t.text } else { t.text_label };
+        let g = one_line(painter, crate::i18n::tr(label), t.font(12.0), name_color, cell.width() - 2.0);
+        painter.galley(pos2(cell.left() + 2.0, thumb.bottom() + 12.0 - g.size().y / 2.0), g, name_color);
+        if resp.hovered() && !applied {
+            app.hover_preview = Some(HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::tr(label)), settings: s });
+        }
+        let resp = resp.on_hover_text(crate::i18n::tr(tip));
+        if resp.clicked() && !applied {
+            let _ = app.run("develop.profile", json!({"camera_colour": super::camera_colour::value(colour)}));
+        }
+    }
+    ui.add_space(6.0);
+    divider(ui);
 }

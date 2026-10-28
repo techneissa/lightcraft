@@ -221,6 +221,49 @@ still pools the uncorrected camera colour of covered models, so a profile can be
 No colour-difference measurement of the spectral matrices against the camera JPEG, or against the file-local fit,
 is recorded here yet. Whether they should come before the file-local fit for these models is open until one is.
 
+### Camera Matching and No Camera Matching (the photo's choice)
+
+The order above is what a photo gets by default, and the Profile picker calls it **Camera Matching**: LightCraft matches
+the raw's colours to the camera's own picture. For a raw without colour matrices of its own ([`file_local_look`]
+formats: ARW, NEF, RAF, CR3 …) the Profile menu (and the profile browser, as two live thumbnails) offers the other
+choice, **No Camera Matching**: the JPEG is never read. It is stored as `profile.camera_colour` (`auto` | `colorimetric`,
+left out of the settings while `auto`, so existing edits keep their JSON and hash, and an unedited photo is not
+"edited"). The field and the decode plumbing (`media::LoadOptions`) are those of
+[#2222](https://github.com/storytold/lightcraft/pull/2222) (*Calibrated camera colour*, which offered it only as a
+checkbox for models with measured matrices); the **extension** here is that the choice is offered for every such raw,
+because the models that need it most (the Sony ILCE-7M5 / A7 V and every other body without a row in
+`lightcraft_raw::spectral`) were the ones it did nothing for.
+
+What No Camera Matching starts from:
+
+- a model with measured spectral matrices: those matrices, with LightCraft's default tone curve (step 4 above, taken
+  first). The same file starts the same way whatever its JPEG shows (Picture Control, Active D-Lighting, DRO);
+- a model without them: the generic camera model (camera RGB taken as linear sRGB with the file's white balance,
+  `matrix_is_fallback`), with the default tone curve. It is what the photo gets when the JPEG fit is refused, and it is
+  darker and less colourful than Camera Matching (about one stop and a third of the colourfulness on the samples above);
+- in both: no per-photo fit, no camera profile's tone, no black-and-white tone, no dark-tone fallback. White balance
+  keeps the same scale as Camera Matching (relative, or Kelvin through the measured matrices or presets), so a white
+  balance edit made under one choice means the same under the other.
+
+How it is stored and applied: `develop.profile` takes an optional `camera_colour` (`{"camera_colour": "colorimetric"}`;
+`id` is optional when it is given), so it is one undo step; Reset and Reset Edits go back to `auto`; Copy / Paste and
+Sync of the Profile group and presets of it carry the choice both ways (`presets::extract_groups` writes it even while
+`auto`), so a per-camera Raw Default preset can give every new photo of a camera No Camera Matching. The Edit panel shows
+which way the colour starts under the profile row. The #2222 checkbox is not kept: it would repeat the menu.
+
+The choice is part of the decode: a decoded source records the options it was made with (`DecodedSource::options`), and
+one made with others is decoded again (and replaces it, so memory stays at one source per photo and level) when the
+photo, a profile-browser thumbnail or a face tile asks for the other choice. A late render of the old one is not taken
+back into the cache (`Session::accept`). A source the choice can't change is reused (`SourceInfo::colorimetric` false:
+a DNG with matrices, a smart preview, a demo scene). Renders, thumbnails, exports and the GPU path read the same
+decoded source, so they agree. A smart preview is always built with Camera Matching (it stands in for the original),
+so an offline original shows Camera Matching whatever it is set to until it is back online.
+
+Not done yet, and open in [#1207](https://github.com/storytold/lightcraft/issues/1207): a look of its own for No Camera
+Matching (it has no camera tone curve, so on the Nikon Z f frames measured there it renders about 0.75–1.75 stop darker
+and 10–20 % less saturated than the fit), matching the exposure between the two, and the option in DNG export /
+Convert to DNG and Photo Merge, which keep the Camera Matching colour.
+
 ## Smart previews and the look version
 
 A smart preview keeps the result of the fit twice: the colour matrix is baked into its pixels and the tone and chroma curves are stored in its header. When the fit changes, a preview built earlier keeps the old look until it is rebuilt, and the render cache version does not reach it (renders are keyed on the library's files, proxies are files of their own).

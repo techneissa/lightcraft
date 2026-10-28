@@ -147,6 +147,14 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 }
             });
         });
+        // a raw whose colour is matched to the camera's JPEG: say which way it starts (the choice is in the menu)
+        if super::camera_colour::offered(app, id) {
+            let colour = d.profile.camera_colour;
+            let tip = super::camera_colour::CHOICES.iter().find(|c| c.0 == colour).map_or("", |c| c.2);
+            let r = ui.label(egui::RichText::new(crate::i18n::tr(super::camera_colour::label(colour))).font(t.font(12.0)).color(t.text_dim));
+            crate::widgets::register(ui, "label:profile.cameraColour", r.rect);
+            r.on_hover_text(crate::i18n::tr(tip));
+        }
     });
     if d.profile.id != "lc.color" {
         control(app, ui, &d, "profile.amount", true);
