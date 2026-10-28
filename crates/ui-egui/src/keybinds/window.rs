@@ -225,7 +225,8 @@ fn clash_note(ui: &mut egui::Ui, t: &Tokens, clashes: &Clashes, keymap: &Keymap,
         .unwrap_or_default();
     let more = clashes.reasons.len().saturating_sub(2);
     ui.add_space(4.0);
-    let mut line = crate::i18n::tr_format!("{} and {} share {}: {}. Give one of them a condition to tell them apart.", name(id), name(other), key, why);
+    let mut line =
+        crate::i18n::tr_format!("{} and {} share {}: {}. Give one of them a condition to tell them apart.", name(id), name(other), key, why);
     if more > 0 {
         line.push_str(&crate::i18n::tr_format!(" {} more conflicts.", more));
     }
@@ -233,15 +234,7 @@ fn clash_note(ui: &mut egui::Ui, t: &Tokens, clashes: &Clashes, keymap: &Keymap,
 }
 
 /// One command: its name, two shortcut cells, the menu it is in and a restore button.
-fn draw_row(
-    app: &mut LightcraftApp,
-    ui: &mut egui::Ui,
-    t: &Tokens,
-    row: &Row,
-    keymap: &Keymap,
-    clashes: &Clashes,
-    mac: bool,
-) {
+fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, row: &Row, keymap: &Keymap, clashes: &Clashes, mac: bool) {
     let b = row.b;
     let (rect, _) = ui.allocate_exact_size(vec2(TOTAL_W, ROW_H), Sense::hover());
     let hovered = ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| rect.contains(p)) && !egui::Popup::is_any_open(ui.ctx());

@@ -168,11 +168,9 @@ fn negated_conditions_decide_what_clashes() {
 #[test]
 fn a_command_with_a_condition_has_no_native_menu_key() {
     let mut keymap = km();
-    let (label, key) =
-        crate::menubar::native_item_presentation(&keymap, "view.survey", &serde_json::Value::Null, "Survey", Some("Cmd+J"));
+    let (label, key) = crate::menubar::native_item_presentation(&keymap, "view.survey", &serde_json::Value::Null, "Survey", Some("Cmd+J"));
     assert_eq!((label.as_str(), key), ("Survey", Some("Cmd+J")), "no condition: AppKit owns the key");
     set(&mut keymap, "view.survey", Some("view == detail")).unwrap();
-    let (label, key) =
-        crate::menubar::native_item_presentation(&keymap, "view.survey", &serde_json::Value::Null, "Survey", Some("Cmd+J"));
+    let (label, key) = crate::menubar::native_item_presentation(&keymap, "view.survey", &serde_json::Value::Null, "Survey", Some("Cmd+J"));
     assert!(label.starts_with("Survey (") && key.is_none(), "{label} {key:?}: egui must see the key to check the condition");
 }

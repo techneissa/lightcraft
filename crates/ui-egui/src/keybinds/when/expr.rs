@@ -9,7 +9,11 @@ pub enum Expr {
     /// An on / off key is on (`textFocus`).
     Key(usize),
     /// An enumeration key equals (`==`) or differs from (`!=`) a value.
-    Is { key: usize, value: usize, equal: bool },
+    Is {
+        key: usize,
+        value: usize,
+        equal: bool,
+    },
     /// `!x`: negation of anything, a key, a comparison or a whole group.
     Not(Box<Expr>),
     And(Vec<Expr>),

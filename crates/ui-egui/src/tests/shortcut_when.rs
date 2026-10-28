@@ -199,7 +199,11 @@ fn arrows_and_enter_take_the_highlighted_suggestion() {
     key(&mut h, "ArrowDown");
     key(&mut h, "ArrowDown");
     key(&mut h, "Enter");
-    assert_eq!(h.app.keybinds.when_edit.as_ref().map(|e| e.text.as_str()), Some("tool != crop "), "Enter took the highlighted value, it did not save");
+    assert_eq!(
+        h.app.keybinds.when_edit.as_ref().map(|e| e.text.as_str()),
+        Some("tool != crop "),
+        "Enter took the highlighted value, it did not save"
+    );
     assert_eq!(when_of(&h, "view.survey"), None);
     key(&mut h, "Enter");
     assert_eq!(when_of(&h, "view.survey").as_deref(), Some("tool != crop"), "a second Enter saves");
@@ -336,11 +340,7 @@ fn when_pictures() {
     let png = |img: &lightcraft_raster::Rgba8| {
         lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
     };
-    let services = Services {
-        png: Some(Box::new(png)),
-        write_new: Some(Box::new(lightcraft_engine::export::write_file_new)),
-        ..Default::default()
-    };
+    let services = Services { png: Some(Box::new(png)), write_new: Some(Box::new(lightcraft_engine::export::write_file_new)), ..Default::default() };
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1500.0, 950.0], 1.0);
     h.settle(SETTLE);

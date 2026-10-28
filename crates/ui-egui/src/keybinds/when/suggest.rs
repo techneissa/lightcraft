@@ -53,7 +53,9 @@ fn next_after(tokens: &[super::parse::Token]) -> (Next, usize) {
                 depth += 1;
                 Next::Operand
             }
-            (Next::Operand, Tok::Ident(n)) => keys::key_index(n).map_or(Next::Invalid, |k| if KEYS[k].is_bool() { Next::AfterValue } else { Next::AfterKey(k) }),
+            (Next::Operand, Tok::Ident(n)) => {
+                keys::key_index(n).map_or(Next::Invalid, |k| if KEYS[k].is_bool() { Next::AfterValue } else { Next::AfterKey(k) })
+            }
             (Next::AfterKey(k), Tok::Eq | Tok::Ne) => Next::AfterOp(k),
             (Next::AfterOp(_), Tok::Ident(_)) => Next::AfterValue,
             (Next::AfterValue, Tok::And | Tok::Or) => Next::Operand,

@@ -95,12 +95,7 @@ pub const KEYS: &[KeyDef] = &[
             ("people", "People View", "A card for each person named on faces"),
         ]),
     },
-    KeyDef {
-        name: "gridView",
-        title: "Library Grid",
-        desc: "The view is Photo Grid or Square Grid",
-        kind: Kind::Bool { chip: "Library Grid" },
-    },
+    KeyDef { name: "gridView", title: "Library Grid", desc: "The view is Photo Grid or Square Grid", kind: Kind::Bool { chip: "Library Grid" } },
     KeyDef {
         name: "tool",
         title: "Tool",
@@ -118,12 +113,7 @@ pub const KEYS: &[KeyDef] = &[
             ("info", "Info Panel", "Metadata of the photo"),
         ]),
     },
-    KeyDef {
-        name: "brush",
-        title: "Brush",
-        desc: "The brush is the tool in use on the photo",
-        kind: Kind::Bool { chip: "Brush Active" },
-    },
+    KeyDef { name: "brush", title: "Brush", desc: "The brush is the tool in use on the photo", kind: Kind::Bool { chip: "Brush Active" } },
     KeyDef {
         name: "textFocus",
         title: "Typing",
@@ -142,36 +132,16 @@ pub const KEYS: &[KeyDef] = &[
         desc: "The Command Palette is open (shortcuts normally wait for it)",
         kind: Kind::Bool { chip: "Palette Open" },
     },
-    KeyDef {
-        name: "hasPhoto",
-        title: "Active Photo",
-        desc: "There is an active photo",
-        kind: Kind::Bool { chip: "Active Photo" },
-    },
-    KeyDef {
-        name: "hasSelection",
-        title: "Selection",
-        desc: "At least one photo is selected",
-        kind: Kind::Bool { chip: "Photo Selected" },
-    },
+    KeyDef { name: "hasPhoto", title: "Active Photo", desc: "There is an active photo", kind: Kind::Bool { chip: "Active Photo" } },
+    KeyDef { name: "hasSelection", title: "Selection", desc: "At least one photo is selected", kind: Kind::Bool { chip: "Photo Selected" } },
     KeyDef {
         name: "multiSelection",
         title: "Several Selected",
         desc: "Two or more photos are selected",
         kind: Kind::Bool { chip: "Several Selected" },
     },
-    KeyDef {
-        name: "fullscreen",
-        title: "Full Screen",
-        desc: "The full-screen preview is showing",
-        kind: Kind::Bool { chip: "Full Screen" },
-    },
-    KeyDef {
-        name: "slideshow",
-        title: "Slideshow",
-        desc: "A slideshow is playing",
-        kind: Kind::Bool { chip: "Slideshow" },
-    },
+    KeyDef { name: "fullscreen", title: "Full Screen", desc: "The full-screen preview is showing", kind: Kind::Bool { chip: "Full Screen" } },
+    KeyDef { name: "slideshow", title: "Slideshow", desc: "A slideshow is playing", kind: Kind::Bool { chip: "Slideshow" } },
 ];
 
 /// The index of the key called `name`.
@@ -306,7 +276,13 @@ impl Context {
     pub fn chip(&self, key: usize) -> String {
         match KEYS.get(key).map(|k| &k.kind) {
             Some(Kind::Enum(values)) => values.get(self.get(key)).map_or("", |v| v.chip).to_string(),
-            Some(Kind::Bool { chip }) => if self.flag(key) { chip.to_string() } else { format!("Not {chip}") },
+            Some(Kind::Bool { chip }) => {
+                if self.flag(key) {
+                    chip.to_string()
+                } else {
+                    format!("Not {chip}")
+                }
+            }
             None => String::new(),
         }
     }
