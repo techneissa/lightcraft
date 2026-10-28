@@ -11,9 +11,8 @@ description = "LightCraft macraw (L0): macOS's own raw decoder (Core Image CIRAW
 workspace = true
 
 [target.'cfg(target_os = "macos")'.dependencies]
-# `exception`: Objective-C exceptions are caught at the call site (`objc2::exception::catch`), never
-# unwound through Core Image or Metal.
-objc2 = { workspace = true, features = ["exception"] }
+# No `exception` feature: it compiles an Objective-C helper with `cc` (README.md).
+objc2 = { workspace = true }
 objc2-foundation = { workspace = true, features = ["NSString", "NSURL", "NSData", "NSDictionary", "NSArray", "NSEnumerator", "NSProcessInfo", "NSValue", "NSKeyValueCoding", "NSAutoreleasePool"] }
 objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "objc2", "CFCGTypes", "CFString"] }
 objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "objc2", "CGColorSpace"] }

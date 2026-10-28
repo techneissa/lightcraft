@@ -4,9 +4,17 @@
 //! Objective-C object a render touches is created and dropped inside it, so a rayon worker that
 //! lives for the whole process leaks nothing; one `CIRAWFilter` per render, never shared; one shared
 //! `CIContext` (Core Image documents contexts as thread-safe, and objc2 marks `CIContext`
-//! `Send + Sync`); Objective-C exceptions are caught at each call site by `objc2::exception::catch`,
-//! never unwound through Core Image or Metal. No Rust callback is handed to Core Image, so a Rust
-//! panic cannot start inside Apple's frames.
+//! `Send + Sync`). No Rust callback is handed to Core Image, so a Rust panic cannot start inside
+//! Apple's frames.
+//!
+//! Objective-C exceptions are **not caught**: catching them needs `objc2`'s `exception` feature,
+//! which compiles an Objective-C helper with `cc`, and LightCraft is pure Rust (CLAUDE.md). Core
+//! Image is never given a reason to throw instead: `respondsToSelector:` before every setter and
+//! getter the recipe uses, only documented option and input keys with their documented value
+//! types, every object return sent as optional and checked for nil (the binding's non-null types
+//! would panic: `decoderVersion` came back nil on bad data), empty or non-finite extents and white
+//! points refused, and the name, size and pixel gates before any bitmap is drawn. README.md lists
+//! the checked calls.
 
 use crate::copy::{BAND_ROWS, bands, rgba_to_rgb};
 use crate::gate::{model_listed, size_gate};
@@ -15,7 +23,7 @@ use crate::slots::is_full;
 use crate::{Error, Input, LinearImage, Probe, RECIPE_VERSION, Request, SLOTS, key_of};
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyClass, AnyObject, NSObjectProtocol, Sel};
-use objc2::{ClassType, exception, msg_send, sel};
+use objc2::{ClassType, msg_send, sel};
 use objc2_core_foundation::{CFRetained, CFType, CGAffineTransform, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{CGColorSpace, kCGColorSpaceExtendedLinearITUR_2020};
 use objc2_core_image::{
@@ -23,7 +31,6 @@ use objc2_core_image::{
     kCIFormatRGBAf, kCIInputAspectRatioKey, kCIInputImageKey, kCIInputScaleKey,
 };
 use objc2_foundation::{NSArray, NSData, NSDictionary, NSNumber, NSObjectNSKeyValueCoding, NSOperatingSystemVersion, NSProcessInfo, NSString, NSURL};
-use std::panic::AssertUnwindSafe;
 use std::ptr::NonNull;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -71,6 +78,13 @@ pub(crate) fn available() -> bool {
         })
 }
 
+/// True when the class itself (not its instances) answers `sel`.
+fn class_responds(class: &AnyClass, sel: Sel) -> bool {
+    // SAFETY: `respondsToSelector:` is NSObject's, answered by every class object; it takes a
+    // selector and returns a BOOL.
+    unsafe { msg_send![class, respondsToSelector: sel] }
+}
+
 /// The OS version and build ("Version 27.0.1 (Build 27A…)").
 pub(crate) fn os_build() -> String {
     autoreleasepool(|_| NSProcessInfo::processInfo().operatingSystemVersionString().to_string())
@@ -81,10 +95,13 @@ fn cameras() -> &'static [String] {
     static CAMERAS: OnceLock<Vec<String>> = OnceLock::new();
     CAMERAS.get_or_init(|| {
         autoreleasepool(|_| {
-            // SAFETY: a class property getter with no arguments, sent with an optional result.
-            let list: Result<Option<Retained<NSArray<NSString>>>, Error> =
-                guarded("reading the camera list", || unsafe { msg_send![CIRAWFilter::class(), supportedCameraModels] });
-            list.ok().flatten().map(|l| l.iter().map(|name| name.to_string()).collect()).unwrap_or_default()
+            if !class_responds(CIRAWFilter::class(), sel!(supportedCameraModels)) {
+                return Vec::new();
+            }
+            // SAFETY: a class property getter with no arguments (checked above), sent with an
+            // optional result.
+            let list: Option<Retained<NSArray<NSString>>> = unsafe { msg_send![CIRAWFilter::class(), supportedCameraModels] };
+            list.map(|l| l.iter().map(|name| name.to_string()).collect()).unwrap_or_default()
         })
     })
 }
@@ -103,14 +120,6 @@ pub(crate) fn probe(input: Input<'_>) -> Result<Probe, Error> {
 pub(crate) fn cache_key() -> u64 {
     static KEY: OnceLock<u64> = OnceLock::new();
     if available() { *KEY.get_or_init(|| key_of(&os_build(), RECIPE_VERSION)) } else { 0 }
-}
-
-/// Turn an Objective-C exception into an error at the call site.
-fn guarded<R>(what: &str, f: impl FnOnce() -> R) -> Result<R, Error> {
-    exception::catch(AssertUnwindSafe(f)).map_err(|e| match e {
-        Some(e) => Error::Os(format!("{what}: {e:?}")),
-        None => Error::Os(format!("{what}: an Objective-C exception")),
-    })
 }
 
 // ---- contexts ----
@@ -145,9 +154,7 @@ fn make_context(software: bool) -> Option<Retained<CIContext>> {
     // SAFETY: the options are the documented key types: colour spaces are `CGColorSpace`, the
     // software flag an `NSNumber` boolean. Sent with an optional result, as the binding's
     // non-null type would panic on null.
-    let ctx: Option<Retained<CIContext>> =
-        guarded("creating the Core Image context", || unsafe { msg_send![CIContext::class(), contextWithOptions: &*options] }).ok()?;
-    ctx
+    unsafe { msg_send![CIContext::class(), contextWithOptions: &*options] }
 }
 
 fn context(software: bool) -> Option<&'static CIContext> {
@@ -162,13 +169,13 @@ fn open(input: Input<'_>) -> Result<Retained<CIRAWFilter>, Error> {
         Input::Path(path) => {
             let url = NSURL::from_file_path(path).ok_or(Error::Undecodable)?;
             // SAFETY: a plain class-method call with a valid `NSURL`; the result is retained.
-            guarded("opening the raw", || unsafe { CIRAWFilter::filterWithImageURL(&url) })?
+            unsafe { CIRAWFilter::filterWithImageURL(&url) }
         }
         Input::Bytes { data, uti } => {
             let data = NSData::with_bytes(data);
             let hint = NSString::from_str(uti);
             // SAFETY: a plain class-method call with a valid `NSData` (a copy of `data`) and hint.
-            guarded("opening the raw", || unsafe { CIRAWFilter::filterWithImageData_identifierHint(&data, Some(&hint)) })?
+            unsafe { CIRAWFilter::filterWithImageData_identifierHint(&data, Some(&hint)) }
         }
     };
     filter.ok_or(Error::Undecodable)
@@ -181,7 +188,7 @@ fn apply_recipe(f: &CIRAWFilter) -> Result<(), Error> {
         return Err(Error::Unsupported);
     }
     let has = |s: Sel| f.respondsToSelector(s);
-    guarded("setting up the raw decoder", || {
+    {
         // SAFETY: setters of float/bool properties on a filter we own; each selector was checked
         // above (required) or is checked right before the call (optional).
         unsafe {
@@ -211,7 +218,8 @@ fn apply_recipe(f: &CIRAWFilter) -> Result<(), Error> {
             // an `f32` (C `float`) and the setter returns nothing.
             let () = unsafe { msg_send![f, setDespeckleAmount: 0.0f32] };
         }
-    })
+    }
+    Ok(())
 }
 
 /// A picture Core Image will produce, with what LightCraft needs to know about it.
@@ -233,7 +241,7 @@ fn decode(input: Input<'_>) -> Result<(Retained<CIRAWFilter>, Retained<CIImage>,
     let f = open(input)?;
     apply_recipe(&f)?;
     // SAFETY: `outputImage` is required and was checked; the image is retained.
-    let image = guarded("decoding the raw", || unsafe { f.outputImage() })?.ok_or(Error::Undecodable)?;
+    let image = unsafe { f.outputImage() }.ok_or(Error::Undecodable)?;
     // SAFETY: a getter on an image we own.
     let extent = unsafe { image.extent() };
     let native = extent_size(extent.size.width, extent.size.height).ok_or(Error::Undecodable)?;
@@ -245,10 +253,10 @@ fn plan(input: Input<'_>, request: &Request) -> Result<Planned, Error> {
     // SAFETY: getters on a filter we own; each selector is required and was checked. The binding
     // types `decoderVersion` as never null, but Core Image returns null for data it cannot read
     // (the binding would then panic), so it is sent with an optional result.
-    let (white, kelvin, tint, version) = guarded("reading the white balance", || unsafe {
+    let (white, kelvin, tint, version) = unsafe {
         let version: Option<Retained<NSString>> = msg_send![&*f, decoderVersion];
         (f.neutralChromaticity(), f.neutralTemperature(), f.neutralTint(), version)
-    })?;
+    };
     let version = version.ok_or(Error::Undecodable)?;
     if !(white.x.is_finite() && white.y.is_finite() && white.x > 0.0 && white.y > 0.0) {
         return Err(Error::Undecodable);
@@ -285,8 +293,10 @@ fn downsample(image: &CIImage, from: (u32, u32), to: (u32, u32)) -> Result<Retai
     let matrix = CGAffineTransform { a: sx, b: 0.0, c: 0.0, d: sy, tx: 0.0, ty: 0.0 };
     // SAFETY: a method on an image we own, with a plain scale matrix; sent with an optional result
     // because the binding's non-null type would panic on null.
-    let out: Option<Retained<CIImage>> =
-        guarded("scaling the raw", || unsafe { msg_send![image, imageByApplyingTransform: matrix, highQualityDownsample: true] })?;
+    if !image.respondsToSelector(sel!(imageByApplyingTransform:highQualityDownsample:)) {
+        return lanczos(image, from, to);
+    }
+    let out: Option<Retained<CIImage>> = unsafe { msg_send![image, imageByApplyingTransform: matrix, highQualityDownsample: true] };
     out.ok_or(Error::Undecodable)
 }
 
@@ -298,11 +308,14 @@ fn lanczos(image: &CIImage, from: (u32, u32), to: (u32, u32)) -> Result<Retained
     let aspect = NSNumber::new_f64(sy / sx);
     // SAFETY: a class-method call with no arguments, sent with an optional result (the binding's
     // non-null type would panic on null); the new filter is retained and ours.
-    let lz: Option<Retained<CIFilter>> = guarded("scaling the raw", || unsafe { msg_send![CIFilter::class(), lanczosScaleTransformFilter] })?;
+    if !class_responds(CIFilter::class(), sel!(lanczosScaleTransformFilter)) {
+        return Err(Error::Unsupported);
+    }
+    let lz: Option<Retained<CIFilter>> = unsafe { msg_send![CIFilter::class(), lanczosScaleTransformFilter] };
     let lz = lz.ok_or_else(|| Error::Os("no Lanczos scale filter".into()))?;
     // SAFETY: reading immutable `NSString` key constants exported by Core Image.
     let (k_image, k_scale, k_aspect) = unsafe { (kCIInputImageKey, kCIInputScaleKey, kCIInputAspectRatioKey) };
-    guarded("scaling the raw", || {
+    {
         // SAFETY: key-value setters with the documented types of CILanczosScaleTransform (a
         // `CIImage` input, `NSNumber` scale and aspect ratio) on a filter we own.
         unsafe {
@@ -311,7 +324,7 @@ fn lanczos(image: &CIImage, from: (u32, u32), to: (u32, u32)) -> Result<Retained
             lz.setValue_forKey(Some(aspect.as_ref()), k_aspect);
             lz.outputImage()
         }
-    })?
+    }
     .ok_or(Error::Undecodable)
 }
 
@@ -336,12 +349,12 @@ fn draw(planned: &Planned, ctx: &CIContext, band_rows: u32) -> Result<Vec<f32>, 
         let y = planned.origin.1 + f64::from(h - top - rows);
         let bounds = CGRect::new(CGPoint::new(planned.origin.0, y), CGSize::new(f64::from(w), f64::from(rows)));
         let ptr = NonNull::from(&mut *band).cast();
-        guarded("rendering the raw", || {
+        {
             // SAFETY: `band` is `w × rows × 4` floats = `rows × row_bytes` bytes, exactly the
             // RGBAf bitmap of `bounds` (`w` wide, `rows` tall) with `row_bytes = w × 16`, so Core
             // Image writes inside it; it stays borrowed mutably (and alive) for the whole call.
             unsafe { ctx.render_toBitmap_rowBytes_bounds_format_colorSpace(&planned.image, ptr, row_bytes, bounds, format, Some(&space)) }
-        })?;
+        }
         let start = row * 3 * top as usize;
         let Some(dst) = rgb.get_mut(start..start + row * 3 * rows as usize) else { return Err(too_large()) };
         rgba_to_rgb(band, dst);
