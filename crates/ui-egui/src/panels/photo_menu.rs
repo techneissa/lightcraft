@@ -284,6 +284,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
                     check_mark(ui, r.rect);
                 }
                 crate::widgets::register(ui, format!("button:contextCommand:{}", MenuNode::key(&id, &params)), r.rect);
+                crate::keybinds::context::on_menu_item(ui, &r, &id);
                 if r.clicked()
                     && let Err(e) = run_item(app, &id, params)
                 {

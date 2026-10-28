@@ -59,7 +59,7 @@ pub fn find_bindable(id: &str) -> Option<&'static Bindable> {
 pub fn binding<'a>(keymap: &'a Keymap, id: &str, default: Option<&'a str>) -> Option<&'a str> {
     match keymap.get(id) {
         Some(sc) if sc.is_empty() => None,
-        Some(sc) if parse(sc).is_some() => Some(sc.as_str()),
+        Some(sc) if crate::keybinds::chord::is_valid(sc) => Some(sc.as_str()),
         _ => default.filter(|sc| !assigned_elsewhere(keymap, id, sc)),
     }
 }
@@ -88,43 +88,26 @@ pub fn shortcut_of<'a>(keymap: &'a Keymap, id: &str) -> Option<&'a str> {
 /// lock under the Crop panel).
 pub const CONTEXTUAL: &[(&str, &str)] = &[("photo.reject", "crop.rotateAspect"), ("view.visualizeSpots", "crop.lockAspect")];
 
-/// Commands other than `id` whose shortcut is the key `sc` (contextual partners excepted).
+/// Commands other than `id` whose first shortcut is `sc` or overlaps it (a chord and the key that
+/// leads it); contextual partners excepted. See [`crate::keybinds::model::conflicts`] for both slots.
 pub fn conflicts(keymap: &Keymap, id: &str, sc: &str) -> Vec<&'static str> {
-    let Some(key) = parse(sc) else { return vec![] };
-    bindable()
-        .iter()
-        .filter(|b| b.id != id && !CONTEXTUAL.iter().any(|(x, y)| (*x == id && *y == b.id) || (*y == id && *x == b.id)))
-        .filter(|b| binding(keymap, b.id, b.default).and_then(parse) == Some(key))
-        .map(|b| b.id)
-        .collect()
+    use crate::keybinds::{chord, model};
+    let Some(steps) = chord::parse_chord(sc) else { return vec![] };
+    let mut ids: Vec<&'static str> = model::conflicts(keymap, id, &steps).into_iter().map(|(other, _)| other).collect();
+    ids.dedup();
+    ids
 }
 
-/// Give `id` the shortcut `sc` (`None` = no shortcut), taking it away from commands that had the
-/// same key. Returns the commands that lost it.
+/// Give `id` the shortcut `sc` (`None` = no shortcut) in its first slot, taking it away from commands
+/// that had the same key. Returns the commands that lost it. A chord is `Cmd+K C`.
 pub fn assign(keymap: &mut Keymap, id: &str, sc: Option<&str>) -> Result<Vec<&'static str>, String> {
-    let b = find_bindable(id).ok_or_else(|| format!("unknown command: {id}"))?;
-    let sc = match sc.map(str::trim).filter(|s| !s.is_empty()) {
-        None => None,
-        Some(s) => {
-            let key = parse(s).ok_or_else(|| format!("not a shortcut: {s}"))?;
-            // store the canonical spelling so equal keys compare equal (menus, native accelerators)
-            let canonical = format(key.0, key.1).unwrap_or_else(|| s.to_string());
-            if RESERVED.iter().any(|r| parse(r) == Some(key)) {
-                return Err(format!("{canonical} is reserved for the app menu"));
-            }
-            Some(canonical)
-        }
-    };
-    let lost = sc.as_deref().map(|s| conflicts(keymap, id, s)).unwrap_or_default();
-    for other in &lost {
-        set(keymap, other, None);
-    }
-    set(keymap, b.id, sc.as_deref());
-    Ok(lost)
+    let mut ids: Vec<&'static str> = crate::keybinds::model::assign(keymap, id, 0, sc)?.into_iter().map(|(other, _)| other).collect();
+    ids.dedup();
+    Ok(ids)
 }
 
 /// Store `sc` for `id`, dropping the entry when it equals the declared shortcut.
-fn set(keymap: &mut Keymap, id: &str, sc: Option<&str>) {
+pub(crate) fn set(keymap: &mut Keymap, id: &str, sc: Option<&str>) {
     let default = find_bindable(id).and_then(|b| b.default);
     let same = match (sc, default) {
         (None, None) => true,
@@ -138,27 +121,44 @@ fn set(keymap: &mut Keymap, id: &str, sc: Option<&str>) {
     }
 }
 
-/// Restore the declared shortcut of `id`, taking it away from a command the user gave it to.
+/// Restore the declared shortcut of `id` (and drop its second one), taking the declared key away
+/// from a command the user gave it to.
 pub fn reset(keymap: &mut Keymap, id: &str) -> Result<Vec<&'static str>, String> {
-    let b = find_bindable(id).ok_or_else(|| format!("unknown command: {id}"))?;
-    assign(keymap, id, b.default)
+    let mut ids: Vec<&'static str> = crate::keybinds::model::reset(keymap, id)?.into_iter().map(|(other, _)| other).collect();
+    ids.dedup();
+    Ok(ids)
 }
 
-/// `app.setShortcut {id, shortcut?, reset?}`: `shortcut` null or `""` removes it.
+/// `app.setShortcut {id, shortcut?, slot?, reset?}`: `shortcut` null or `""` removes it; `slot` is 1
+/// (the primary shortcut, the default) or 2; a shortcut is one key (`Cmd+Shift+K`) or a chord of two
+/// (`Cmd+K C`). `reset` restores both slots of the command.
 pub fn set_shortcut(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    use crate::keybinds::model;
     let id = p.get("id").and_then(Value::as_str).ok_or("missing id")?;
     let keymap = &mut app.ui.settings.keymap;
     let lost = if p.get("reset").and_then(Value::as_bool).unwrap_or(false) {
-        reset(keymap, id)?
+        model::reset(keymap, id)?
     } else {
+        let slot = match p.get("slot") {
+            None | Some(Value::Null) => 0,
+            Some(v) => v
+                .as_u64()
+                .and_then(|n| usize::try_from(n).ok())
+                .and_then(|n| n.checked_sub(1))
+                .filter(|n| *n < model::SLOTS)
+                .ok_or("slot must be 1 or 2")?,
+        };
         match p.get("shortcut") {
             None => return Err("missing shortcut (null removes it)".into()),
-            Some(Value::Null) => assign(keymap, id, None)?,
-            Some(Value::String(s)) => assign(keymap, id, Some(s))?,
+            Some(Value::Null) => model::assign(keymap, id, slot, None)?,
+            Some(Value::String(s)) => model::assign(keymap, id, slot, Some(s))?,
             Some(_) => return Err("shortcut must be a string or null".into()),
         }
     };
-    Ok(json!({"id": id, "shortcut": shortcut_of(&app.ui.settings.keymap, id), "removedFrom": lost}))
+    let mut removed: Vec<&str> = lost.iter().map(|(other, _)| *other).collect();
+    removed.dedup();
+    let keymap = &app.ui.settings.keymap;
+    Ok(json!({"id": id, "shortcut": shortcut_of(keymap, id), "shortcut2": model::effective(keymap, id, 1), "removedFrom": removed}))
 }
 
 /// ⌘ / ⇧ / ⌥ / ⌃ themselves: they modify a shortcut's key, they can't be it.
@@ -286,7 +286,7 @@ pub fn parse(s: &str) -> Option<(Modifiers, Key)> {
     key.map(|k| (m, k))
 }
 
-fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
+pub(crate) fn matches(i: &egui::InputState, m: Modifiers, k: Key) -> bool {
     // the windowing layer turns ⌘C / ⌘X / ⌘V (with any other modifiers held) and the keyboard's
     // Copy / Cut / Paste keys into these on Windows and Linux (macOS's menu bar takes them first);
     // without ⌘/Ctrl held they came from a key that is the plain command (Windows' ⇧Insert pastes)
@@ -367,6 +367,10 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
 /// text field, name edit or shortcut recording owns input, then fires saved command bindings,
 /// aliases and fixed photo keys, respecting native menu ownership and open popups.
 pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
+    // the Assign Shortcut box reads its keys first: a dialog under it must not see its Esc
+    if crate::keybinds::capture::keys(app, ctx) {
+        return;
+    }
     if !matches!(app.ui.dialog, Some(crate::state::Dialog::Shortcuts)) {
         app.recording_shortcut = None;
     }
@@ -390,6 +394,15 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     if keyboard_owned(app, ctx) || app.recording_shortcut.is_some() || app.ui.name_edit.is_some() {
         return;
     }
+    // the first key of a chord waits for the next; the next one finishes it (or cancels it)
+    match crate::keybinds::runtime::poll(app, ctx) {
+        crate::keybinds::runtime::Poll::Pass => {}
+        crate::keybinds::runtime::Poll::Swallow => return,
+        crate::keybinds::runtime::Poll::Fire(id) => {
+            fire_command(app, ctx, id, false);
+            return;
+        }
+    }
     let (fire, aliased) = pressed_commands(app, ctx);
     for (id, params) in aliased {
         fire_alias(app, ctx, id, params);
@@ -412,7 +425,8 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
     // covers the grid: a key must not move the selection onto photos nobody can see.
     let grid_navigation = grid && !app.ui.fullscreen;
     // keys the user gave to a known command: the fixed bindings below (aliases, ratings) yield to them
-    let taken: Vec<(Modifiers, Key)> = saved_keys(keymap).map(|(_, k)| k).collect();
+    let taken: Vec<(Modifiers, Key)> = saved_keys(keymap).map(|(_, k)| k).chain(crate::keybinds::model::extra_taken(keymap)).collect();
+    let second = crate::keybinds::model::second_singles(keymap);
     // an open popup (a menu, a date picker's calendar) closes on Esc itself: Esc's command (Back,
     // which also closes dialogs) waits until nothing is open
     let popup_open = egui::Popup::is_any_open(ctx);
@@ -436,6 +450,15 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
                 && !(k == Key::Escape && popup_open)
                 && matches(i, m, k)
                 && let Some(id) = grid_key_command(keymap, grid, app.ui.fullscreen, b.id, (m, k))
+            {
+                fire.push(id.to_string());
+            }
+        }
+        // a command's second shortcut, when it is one key (a chord is [`crate::keybinds::runtime`]'s)
+        for (id, (m, k)) in &second {
+            if !(*k == Key::Escape && popup_open)
+                && matches(i, *m, *k)
+                && let Some(id) = grid_key_command(keymap, grid, app.ui.fullscreen, id, (*m, *k))
             {
                 fire.push(id.to_string());
             }

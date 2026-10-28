@@ -393,6 +393,7 @@ impl LightcraftApp {
             }
             panels::dialogs::show(self, &ctx, notice_blocks);
             panels::command_palette::show(self, &ctx);
+            crate::keybinds::overlay::show(self, &ctx);
             updates_ui::show(self, &ctx);
             panels::library_problem::show(self, &ctx, notice_blocks);
             panels::toast(self, &ctx);
@@ -425,6 +426,7 @@ impl LightcraftApp {
         }
         panels::dialogs::show(self, &ctx, notice_blocks);
         panels::command_palette::show(self, &ctx);
+        crate::keybinds::overlay::show(self, &ctx);
         updates_ui::show(self, &ctx);
         panels::library_problem::show(self, &ctx, notice_blocks);
         export_task::poll(self, &ctx);

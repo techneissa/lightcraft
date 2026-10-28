@@ -610,7 +610,11 @@ mod issue1771 {
             key(&mut h, "Enter", false);
             assert_eq!(h.app.ui.view, view, "shortcut dialog");
             assert!(matches!(h.app.ui.dialog, Some(Dialog::Shortcuts)));
-            h.app.recording_shortcut = Some("view.survey".into());
+            // the Assign Shortcut box owns Enter: the first press is the key, the next one saves it
+            h.app.run("app.assignShortcut", json!({"id": "view.survey", "slot": 1})).unwrap();
+            h.step();
+            h.step();
+            key(&mut h, "Enter", false);
             key(&mut h, "Enter", false);
             assert_eq!(h.app.ui.view, view, "recording owns Enter");
             assert_eq!(super::super::shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("Enter"));

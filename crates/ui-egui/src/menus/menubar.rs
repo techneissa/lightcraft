@@ -75,6 +75,10 @@ pub fn native_item_presentation<'a>(
     shortcut: Option<&'a str>,
 ) -> (String, Option<&'a str>) {
     let label = display_item_label(id, params, label);
+    // a chord is no key equivalent: the native menu gets its text in the label instead
+    if let Some(sc) = shortcut.filter(|sc| crate::keybinds::chord::is_chord(sc)) {
+        return (format!("{label} ({})", shortcut_text(sc, true)), None);
+    }
     let borrowed = matches!(id, "view.photoGrid" | "view.squareGrid") && shortcut != crate::shortcuts::shortcut_of(keymap, id);
     match shortcut.filter(|sc| borrowed && native_menu_delivers(sc)) {
         Some(sc) => (format!("{label} ({})", shortcut_text(sc, true)), None),
@@ -993,6 +997,10 @@ pub fn run_native_command(app: &mut LightcraftApp, id: &str, params: Value) -> N
 
 /// Human-readable shortcut text for menus: `Cmd+Shift+Z` → `⌘⇧Z` on macOS, `Ctrl+Shift+Z` elsewhere.
 pub fn shortcut_text(sc: &str, mac: bool) -> String {
+    // a chord (`Cmd+K C`): each step on its own
+    if crate::keybinds::chord::is_chord(sc) {
+        return crate::keybinds::chord::text(sc, mac);
+    }
     if mac {
         let mut mods = String::new();
         let mut key = "";
@@ -1172,6 +1180,7 @@ fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Opti
                 }
                 let r = ui.add_enabled(*enabled, b);
                 crate::widgets::register(ui, format!("menuitem:{id}"), r.rect);
+                crate::keybinds::context::on_menu_item(ui, &r, id);
                 if *checked == Some(true) {
                     let t = crate::theme::Tokens::get(ui.ctx());
                     let c = egui::Rect::from_center_size(egui::pos2(r.rect.left() + 11.0, r.rect.center().y), egui::vec2(13.0, 13.0));
