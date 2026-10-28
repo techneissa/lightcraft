@@ -189,3 +189,115 @@ fn gates_and_probe_on_a_real_file() {
     let req = Request { long_edge: Some(800), expected_size: Some(off), ..Request::default() };
     assert_eq!(render(Input::Path(&file), &req, &cancel), Err(Error::SizeMismatch { apple: (w, h), expected: off }));
 }
+
+/// Linear Rec.2020 → CIE Lab (D65), for colour checks only.
+fn lab(rgb: [f64; 3]) -> [f64; 3] {
+    let [r, g, b] = rgb;
+    let x = 0.636_958 * r + 0.144_617 * g + 0.168_881 * b;
+    let y = 0.262_700 * r + 0.677_998 * g + 0.059_302 * b;
+    let z = 0.028_073 * g + 1.060_985 * b;
+    let f = |t: f64| if t > 0.008_856 { t.cbrt() } else { 7.787 * t + 16.0 / 116.0 };
+    let (fx, fy, fz) = (f(x / 0.950_47), f(y), f(z / 1.088_83));
+    [116.0 * fy - 16.0, 500.0 * (fx - fy), 200.0 * (fy - fz)]
+}
+
+/// CIEDE2000 colour difference.
+fn delta_e00(a: [f64; 3], b: [f64; 3]) -> f64 {
+    use std::f64::consts::PI;
+    let (l1, a1, b1, l2, a2, b2) = (a[0], a[1], a[2], b[0], b[1], b[2]);
+    let c_bar = ((a1.hypot(b1)) + (a2.hypot(b2))) / 2.0;
+    let g = 0.5 * (1.0 - (c_bar.powi(7) / (c_bar.powi(7) + 25f64.powi(7))).sqrt());
+    let (a1p, a2p) = (a1 * (1.0 + g), a2 * (1.0 + g));
+    let (c1p, c2p) = (a1p.hypot(b1), a2p.hypot(b2));
+    let hue = |bb: f64, aa: f64| if bb == 0.0 && aa == 0.0 { 0.0 } else { bb.atan2(aa).rem_euclid(2.0 * PI) };
+    let (h1p, h2p) = (hue(b1, a1p), hue(b2, a2p));
+    let dl = l2 - l1;
+    let dc = c2p - c1p;
+    let dh = if c1p * c2p == 0.0 {
+        0.0
+    } else {
+        let d = h2p - h1p;
+        if d.abs() <= PI {
+            d
+        } else if d > PI {
+            d - 2.0 * PI
+        } else {
+            d + 2.0 * PI
+        }
+    };
+    let dhh = 2.0 * (c1p * c2p).sqrt() * (dh / 2.0).sin();
+    let l_bar = (l1 + l2) / 2.0;
+    let cp_bar = (c1p + c2p) / 2.0;
+    let hp_bar = if c1p * c2p == 0.0 {
+        h1p + h2p
+    } else if (h1p - h2p).abs() <= PI {
+        (h1p + h2p) / 2.0
+    } else if h1p + h2p < 2.0 * PI {
+        (h1p + h2p + 2.0 * PI) / 2.0
+    } else {
+        (h1p + h2p - 2.0 * PI) / 2.0
+    };
+    let t = 1.0 - 0.17 * (hp_bar - PI / 6.0).cos() + 0.24 * (2.0 * hp_bar).cos() + 0.32 * (3.0 * hp_bar + PI / 30.0).cos()
+        - 0.20 * (4.0 * hp_bar - 63.0 * PI / 180.0).cos();
+    let d_theta = 30f64.to_radians() * (-((hp_bar.to_degrees() - 275.0) / 25.0).powi(2)).exp();
+    let rc = 2.0 * (cp_bar.powi(7) / (cp_bar.powi(7) + 25f64.powi(7))).sqrt();
+    let sl = 1.0 + 0.015 * (l_bar - 50.0).powi(2) / (20.0 + (l_bar - 50.0).powi(2)).sqrt();
+    let sc = 1.0 + 0.045 * cp_bar;
+    let sh = 1.0 + 0.015 * cp_bar * t;
+    let rt = -(2.0 * d_theta).sin() * rc;
+    ((dl / sl).powi(2) + (dc / sc).powi(2) + (dhh / sh).powi(2) + rt * (dc / sc) * (dhh / sh)).sqrt()
+}
+
+#[test]
+fn delta_e00_reference_pair() {
+    // Sharma, Wu & Dalal (2005), pair 1: ΔE00 = 2.0425.
+    let d = delta_e00([50.0, 2.6772, -79.7751], [50.0, 0.0, -82.7485]);
+    assert!((d - 2.0425).abs() < 1e-4, "{d}");
+}
+
+/// Mean CIEDE2000 between two renders of one size, on 8 × 8 pixel block means (a colour check,
+/// not a sharpness check), both scaled by one gain so the full render's brightest 1 % sits at 1.
+fn mean_delta_e(a: &crate::LinearImage, b: &crate::LinearImage) -> f64 {
+    assert_eq!((a.width, a.height), (b.width, b.height));
+    let (w, h) = (a.width as usize, a.height as usize);
+    let mut ys: Vec<f32> = a.rgb.chunks_exact(3).map(|p| 0.2627 * p[0] + 0.6780 * p[1] + 0.0593 * p[2]).collect();
+    ys.sort_by(f32::total_cmp);
+    let gain = 1.0 / f64::from(ys[ys.len() * 99 / 100].max(1e-6));
+    let block = |img: &crate::LinearImage, bx: usize, by: usize| {
+        let mut sum = [0f64; 3];
+        for y in by * 8..by * 8 + 8 {
+            for x in bx * 8..bx * 8 + 8 {
+                let i = (y * w + x) * 3;
+                for c in 0..3 {
+                    sum[c] += f64::from(img.rgb[i + c]) * gain / 64.0;
+                }
+            }
+        }
+        lab(sum)
+    };
+    let mut total = 0.0;
+    let mut n = 0usize;
+    for by in 0..h / 8 {
+        for bx in 0..w / 8 {
+            total += delta_e00(block(a, bx, by), block(b, bx, by));
+            n += 1;
+        }
+    }
+    total / n as f64
+}
+
+/// T17: the draft decode used for thumbnails gives the colours of the full decode (mean ΔE00 < 0.5).
+#[test]
+fn draft_matches_the_full_decode() {
+    let Some(file) = sample("LIGHTCRAFT_MACRAW_ARW", true) else { return };
+    let cancel = AtomicBool::new(false);
+    let full = render(Input::Path(&file), &at(512), &cancel).unwrap();
+    let t = std::time::Instant::now();
+    let draft = render(Input::Path(&file), &Request { draft: true, ..at(512) }, &cancel).unwrap();
+    let secs = t.elapsed().as_secs_f64();
+    assert_eq!((draft.width, draft.height, draft.native_size), (full.width, full.height, full.native_size));
+    assert_eq!(draft.white_xy, full.white_xy);
+    let de = mean_delta_e(&full, &draft);
+    eprintln!("draft: {}×{} in {secs:.2} s, mean ΔE00 {de:.3} against the full decode", draft.width, draft.height);
+    assert!(de < 0.5, "mean ΔE00 {de}");
+}

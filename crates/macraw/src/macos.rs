@@ -16,7 +16,7 @@ use crate::{Error, Input, LinearImage, Probe, RECIPE_VERSION, Request, SLOTS, ke
 use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyClass, AnyObject, NSObjectProtocol, Sel};
 use objc2::{ClassType, exception, msg_send, sel};
-use objc2_core_foundation::{CFRetained, CFType, CGPoint, CGRect, CGSize};
+use objc2_core_foundation::{CFRetained, CFType, CGAffineTransform, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::{CGColorSpace, kCGColorSpaceExtendedLinearITUR_2020};
 use objc2_core_image::{
     CIContext, CIFilter, CIImage, CIRAWFilter, kCIContextOutputColorSpace, kCIContextUseSoftwareRenderer, kCIContextWorkingColorSpace,
@@ -258,7 +258,11 @@ fn plan(input: Input<'_>, request: &Request) -> Result<Planned, Error> {
         None => native,
     };
     let size = scaled(base, request.long_edge)?;
-    let image = if size == native { image } else { lanczos(&image, native, size)? };
+    let image = match (size == native, request.draft) {
+        (true, _) => image,
+        (false, false) => lanczos(&image, native, size)?,
+        (false, true) => downsample(&image, native, size)?,
+    };
     // SAFETY: a getter on an image we own.
     let out = unsafe { image.extent() };
     Ok(Planned {
@@ -271,6 +275,19 @@ fn plan(input: Input<'_>, request: &Request) -> Result<Planned, Error> {
         white_tint: tint,
         decoder_version: version.to_string(),
     })
+}
+
+/// The draft scaling for thumbnails: Core Image's high-quality affine downsample of the full
+/// decode instead of Lanczos (`imageByApplyingTransform:highQualityDownsample:`).
+fn downsample(image: &CIImage, from: (u32, u32), to: (u32, u32)) -> Result<Retained<CIImage>, Error> {
+    let sx = f64::from(to.0) / f64::from(from.0);
+    let sy = f64::from(to.1) / f64::from(from.1);
+    let matrix = CGAffineTransform { a: sx, b: 0.0, c: 0.0, d: sy, tx: 0.0, ty: 0.0 };
+    // SAFETY: a method on an image we own, with a plain scale matrix; sent with an optional result
+    // because the binding's non-null type would panic on null.
+    let out: Option<Retained<CIImage>> =
+        guarded("scaling the raw", || unsafe { msg_send![image, imageByApplyingTransform: matrix, highQualityDownsample: true] })?;
+    out.ok_or(Error::Undecodable)
 }
 
 /// Lanczos-resample `image` from `from` to exactly `to` pixels (`CILanczosScaleTransform`).

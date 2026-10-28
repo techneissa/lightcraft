@@ -59,7 +59,11 @@ pub enum Input<'a> {
 pub struct Request {
     /// The long edge of the result in pixels; `None` = full size.
     pub long_edge: Option<u32>,
-    /// Core Image's draft decode (faster, for thumbnails).
+    /// Thumbnails: scale with Core Image's high-quality affine downsample instead of Lanczos. Same
+    /// colours (T17: mean ΔE00 0.20–0.40 against Lanczos on 4 A7 V files), 60–520 MB less peak
+    /// footprint at 512 px, no faster (the full decode dominates). Core Image's own draft mode
+    /// changed nothing and its decode-time `scaleFactor` missed the colour bar (ΔE00 1.0 on a
+    /// portrait), so neither is used.
     pub draft: bool,
     /// The raw's oriented size as LightCraft reads it (its default crop). Apple's size must agree
     /// within 2 % on each edge ([`Error::SizeMismatch`] otherwise) and is resampled to exactly this
