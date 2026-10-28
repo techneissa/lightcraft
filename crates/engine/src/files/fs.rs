@@ -109,7 +109,7 @@ fn fs_load<T>(path: &str, max_edge: usize, options: LoadOptions, load: impl FnOn
 }
 
 /// The memory gate weight of a load that would weigh `own` without macOS Colour: a photo on macOS Colour (on a Mac
-/// that can render it) weighs Core Image's peak footprint, about 800 MB at any size (`lightcraft_macraw::weight_bytes`),
+/// that can render it) weighs Core Image's peak footprint, about 1 GB at any size (`lightcraft_macraw::weight_bytes`),
 /// far more than its file size times the decode's expansion. That is above the gate's limit on most machines, so such
 /// a load runs alone; if the decoder then fails, the Camera Matching decode that replaces it fits in the same weight.
 pub(crate) fn load_weight(own: usize, options: LoadOptions, macos_available: bool) -> usize {

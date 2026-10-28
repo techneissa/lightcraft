@@ -97,10 +97,22 @@ pub(super) fn load_bytes_now(
         // (with AI Denoise on, the denoised picture can only come from LightCraft's develop: both pictures are then
         // developed here and carried over to macOS's colours, fitted to a small picture of macOS's, `macos::transfer_for`)
         let (macos_note, target) = match options.colour {
-            lightcraft_develop::CameraColour::Macos if denoise.is_some() => match macos::transfer_target(&bytes, backend) {
-                Ok(target) => (None, Some(target)),
-                Err(why) => (Some(why), None),
-            },
+            lightcraft_develop::CameraColour::Macos if denoise.is_some() => {
+                let t = web_time::Instant::now();
+                match macos::transfer_target(&bytes, backend) {
+                    Ok(target) => {
+                        if lightcraft_pipeline::profiling() {
+                            eprintln!(
+                                "[profile] macOS Colour with AI Denoise: macOS picture at {} px {:.1} ms",
+                                macos::TRANSFER_EDGE,
+                                t.elapsed().as_secs_f64() * 1e3
+                            );
+                        }
+                        (None, Some(target))
+                    }
+                    Err(why) => (Some(why), None),
+                }
+            }
             lightcraft_develop::CameraColour::Macos => match macos_source(&bytes, max_edge, backend) {
                 Ok(found) => return Ok(found),
                 Err(why) => (Some(why), None),
@@ -199,7 +211,11 @@ pub(super) fn load_bytes_now(
         };
         // macOS Colour with AI Denoise: the transfer to macOS's colours, fitted on the plain picture, replaces the colour
         // model for both pictures; refused, both stay on Camera Matching and the photo says so
+        let fit_started = web_time::Instant::now();
         let transfer = target.as_ref().map(|target| macos::transfer_for(target, &img, clip_mask.as_deref(), colour.wb, raw.orientation));
+        if lightcraft_pipeline::profiling() && transfer.is_some() {
+            eprintln!("[profile] macOS Colour with AI Denoise: transfer fit {:.1} ms", fit_started.elapsed().as_secs_f64() * 1e3);
+        }
         let transferred = match &transfer {
             Some(Ok(t)) => Some(CameraColourModel { wb: colour.wb, matrix: t.matrix, gain: t.gain, tables: None, hue_sat: None }),
             _ => None,
