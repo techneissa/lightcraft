@@ -1835,11 +1835,10 @@ fn spectral_prior_keeps_white_and_is_the_bodys_own_when_covered() {
     assert_eq!(mean, prior_of("SONY", "No Such Body").0, "every unknown body gets the same mean");
 }
 
-/// The mean over the table's bodies is taken at one white, the file's own through the generic model, not at the white
-/// each body's matrices read from the file's multipliers (a Sony file's multipliers through a Nikon matrix are no
-/// temperature). A file's multipliers therefore reach the prior only through that one white.
+/// The mean over the table's bodies takes each body's matrix at the white its own matrices read from the file's
+/// multipliers. Taken at one white (the file's, through the generic model) it measured worse on held-out A7 V photos.
 #[test]
-fn spectral_prior_mean_is_taken_at_the_files_one_white() {
+fn spectral_prior_mean_takes_each_body_at_its_own_white() {
     let raw = raw_of(RawFormat::Arw, "SONY", "ILCE-7M5", Default::default());
     let xy = lightcraft_raw::color::as_shot_white_xy(&raw);
     let t = lightcraft_raw::color::camera_transform(&raw, xy);
@@ -1858,12 +1857,11 @@ fn spectral_prior_mean_is_taken_at_the_files_one_white() {
         let n = all.len() as f64;
         keep_white(Mat3(std::array::from_fn(|r| std::array::from_fn(|c| all.iter().map(|m| m.0[r][c]).sum::<f64>() / n))))
     };
-    let (one, each) = (mean_at(Some(xy)), mean_at(None));
-    let differ = one.0.iter().flatten().zip(each.0.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
-    assert!(differ > 1e-3, "the two ways of averaging are different pictures ({differ})");
+    let (own_whites, one_white) = (mean_at(None), mean_at(Some(xy)));
+    let gap = |a: &Mat3, b: &Mat3| a.0.iter().flatten().zip(b.0.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
+    assert!(gap(&own_whites, &one_white) > 1e-3, "the two ways of averaging are different pictures");
     let got = spectral_prior(&raw, &t).expect("a prior").mul(&t.matrix);
-    let off = got.0.iter().flatten().zip(one.0.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
-    assert!(off < 1e-9, "the prior is the mean at the file's white: off by {off}");
+    assert!(gap(&got, &own_whites) < 1e-9, "each body at its own white: off by {}", gap(&got, &own_whites));
 }
 
 /// A pooled fit keeps white: grey camera RGB stays grey at the same value. Free, the same pairs give a cast.
