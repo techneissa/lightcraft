@@ -83,7 +83,10 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &str) {
 
 /// The widest the Settings window's content gets, and the tallest its pages get: the window is
 /// one size on every tab, so it stays where it is as the tabs are gone through.
-const PAGE_SIZE: egui::Vec2 = egui::vec2(560.0, 640.0);
+const PAGE_SIZE: egui::Vec2 = egui::vec2(720.0, 640.0);
+
+/// The strip at the page's right edge that its content keeps clear, for the scroll handle.
+const SCROLL_HANDLE_STRIP: f32 = 8.0;
 
 /// The least room in which a page scrolls by itself. In a window with less (far below the
 /// desktop minimum), the tabs and the page scroll together in the dialog's own scroll area.
@@ -154,6 +157,8 @@ pub fn window(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &mut String, max_
         .auto_shrink([false, false])
         .show(ui, |ui| {
             ui.add_space(2.0);
+            // (the floating scroll handle needs its strip: wrapped text must not run under it)
+            ui.set_max_width((ui.available_width() - SCROLL_HANDLE_STRIP).max(0.0));
             if pinned {
                 slideshow_tab(app, ui, &Tokens::get(ui.ctx()), false);
             } else {
