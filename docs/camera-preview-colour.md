@@ -436,9 +436,18 @@ are medians of 2 to 3 runs, with `cm` for Camera Matching on the same files):
 | process peak, one full-size export: resident / footprint | 1.11 GB / 3.9 GB | 1.36 GB / 4.1 GB |
 | same, AI Denoise on | 2.4 GB / 5.5 GB | 2.3 GB / 5.0 GB |
 
-Core Image's own buffers dominate a render, so a 512 px render peaks at about the footprint of a full-size one; the gate
-weight is therefore a flat 1 GB up to the A7 V's full size (`macraw::FLOOR_BYTES`, set from these measurements) and
-grows with pixels above that. The thumbnail and the standard-preview build run one render at a time in the headless
+Core Image's own buffers dominate a render, so a 512 px render peaks at about the footprint of a full-size one. The
+gate weight (decided 2026-10-28) is `macraw::weight_bytes(w, h)` = the larger of 1 GB (`macraw::FLOOR_BYTES`) and
+200 MB + 16 B a pixel of the picture drawn: a flat 1 GB up to the A7 V's full 33 MP (16 B is the float RGBA band plus
+the float result per pixel; the plan's 28 B over-counted the full size by 0.5 GB against the 577–607 MB measured), more
+for larger sensors (a 60 MP picture weighs 1.16 GB). The plan's per-size targets (0.3 GB at 512 px, 0.45 GB at 2560 px)
+cannot be met by footprint, which is 370–990 MB at any size; they are met by resident size (234 and 274 MB). The loader
+reads the file, takes that weight from the file's header and the picture's long edge, and waits for it at the gate even
+for the loupe or an export (`files::fs`'s `macos_permit`), so an interactive render never stacks a second gigabyte on a
+thumbnail's; the AI Denoise path weighs the larger of its 1024 px Apple render and its own two pictures, which it holds
+one after the other. A load hands the decoder the file's path and lets its own copy of the raw go first (the camera JPEG,
+header and lens are read from it before), and a render still waiting for its slot gives up when the job is cancelled
+(building previews: ✕ in the activity stack). The thumbnail and the standard-preview build run one render at a time in the headless
 build: 3 274 photos at 0.35 to 0.47 s are about 19 to 26 minutes against about 7 to 8 with Camera Matching (the app's thumbnail
 workers run beside each other, up to the two preview-size slots; not measured here).
 

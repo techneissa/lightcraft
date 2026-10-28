@@ -17,6 +17,7 @@ mod colour;
 mod fs;
 mod load;
 mod macos;
+pub(crate) use macos::with_job_cancel;
 mod preview;
 mod probe;
 

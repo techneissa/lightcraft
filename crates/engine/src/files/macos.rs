@@ -5,9 +5,12 @@
 //! The base is linear Rec.2020 at the camera's as-shot white, upright, at LightCraft's own size (the decoder's size
 //! gate). Whenever it cannot be made (not a Mac, a camera macOS does not list, another size, an unreadable file) the
 //! photo is decoded as Camera Matching and its source says why ([`MacosUnavailable`]); the setting is kept.
+use std::borrow::Cow;
+use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
-use std::sync::{Mutex, PoisonError};
+use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use lightcraft_color::Xy;
 use lightcraft_macraw::{Error, Input, LinearImage, Request};
@@ -24,11 +27,24 @@ use crate::camera_preview::colour_transfer::{self, Refused, Transfer};
 /// which measured −0.06 L* (σ 2.86).
 pub(crate) const GAIN_STOPS: f32 = 0.33;
 
+/// Never set: the cancel flag of a load that has none.
+static NEVER: AtomicBool = AtomicBool::new(false);
+
 /// The Mac's raw decoder, or a stand-in in tests.
 pub(crate) trait Backend: Sync {
     fn available(&self) -> bool;
     fn supports(&self, exif_model: &str) -> bool;
     fn render(&self, input: Input<'_>, request: &Request, cancel: &AtomicBool) -> Result<LinearImage, Error>;
+    /// The file the load reads, when it has one: the decoder then reads it from disk and the load lets its bytes go
+    /// first (no copy of the raw is held while Core Image works).
+    fn path(&self) -> Option<&Path> {
+        None
+    }
+    /// The flag that cancels the load's render, also while it waits for a render slot (the render job's, else never
+    /// set).
+    fn cancel(&self) -> &AtomicBool {
+        &NEVER
+    }
 }
 
 /// [`lightcraft_macraw`] itself.
@@ -44,6 +60,56 @@ impl Backend for System {
     fn render(&self, input: Input<'_>, request: &Request, cancel: &AtomicBool) -> Result<LinearImage, Error> {
         lightcraft_macraw::render(input, request, cancel)
     }
+}
+
+/// [`System`] for one file load: its path and the cancel flag of the job it runs in ([`with_job_cancel`]).
+pub(crate) struct FileJob<'a> {
+    path: &'a Path,
+    cancel: Option<Arc<AtomicBool>>,
+}
+
+impl<'a> FileJob<'a> {
+    /// A load of `path` on this thread: it takes the cancel flag of the job around it, if any.
+    pub(crate) fn current(path: &'a Path) -> Self {
+        FileJob { path, cancel: JOB_CANCEL.with(|c| c.borrow().clone()) }
+    }
+}
+
+impl Backend for FileJob<'_> {
+    fn available(&self) -> bool {
+        System.available()
+    }
+    fn supports(&self, exif_model: &str) -> bool {
+        System.supports(exif_model)
+    }
+    fn render(&self, input: Input<'_>, request: &Request, cancel: &AtomicBool) -> Result<LinearImage, Error> {
+        System.render(input, request, cancel)
+    }
+    fn path(&self) -> Option<&Path> {
+        Some(self.path)
+    }
+    fn cancel(&self) -> &AtomicBool {
+        self.cancel.as_deref().unwrap_or(&NEVER)
+    }
+}
+
+thread_local! {
+    static JOB_CANCEL: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
+}
+
+/// Run `f` (a job's renders) with `cancel` as the flag that stops a macOS Colour render it starts on this thread,
+/// while that render waits for a slot or before it starts (Core Image's own call cannot be interrupted). Building
+/// previews passes its row's flag, so ✕ in the activity stack stops the photos still waiting.
+pub(crate) fn with_job_cancel<R>(cancel: &Arc<AtomicBool>, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<Arc<AtomicBool>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            let was = self.0.take();
+            JOB_CANCEL.with(|c| *c.borrow_mut() = was);
+        }
+    }
+    let _restore = Restore(JOB_CANCEL.with(|c| c.replace(Some(cancel.clone()))));
+    f()
 }
 
 /// Files the decoder failed on this session (by [`fingerprint`]), so a failing photo is not rendered again for every
@@ -128,6 +194,25 @@ fn request(expected: (u32, u32), max_edge: usize) -> Request {
     Request { long_edge, draft, expected_size: Some(expected) }
 }
 
+/// The memory gate weight of a macOS Colour load of the raw in `bytes` no larger than `max_edge`: Core Image's peak
+/// footprint for the picture it will draw (`lightcraft_macraw::weight_bytes`, 1 GB at any size up to the A7 V's full
+/// 33 MP, more for larger sensors); the floor when the header cannot be read.
+pub(crate) fn gate_weight(bytes: &[u8], max_edge: usize) -> usize {
+    let size = lightcraft_raw::probe_info(bytes).ok().as_ref().and_then(expected_size).map(|expected| {
+        let long = expected.0.max(expected.1);
+        match u32::try_from(max_edge).ok().filter(|&e| e < long) {
+            Some(edge) => {
+                let s = f64::from(edge) / f64::from(long);
+                let px = |v: u32| (f64::from(v) * s).round() as u32;
+                (px(expected.0), px(expected.1))
+            }
+            None => expected,
+        }
+    });
+    let weight = size.map_or(lightcraft_macraw::FLOOR_BYTES, |(w, h)| lightcraft_macraw::weight_bytes(w, h));
+    usize::try_from(weight).unwrap_or(usize::MAX)
+}
+
 /// A decoded base: the picture (linear Rec.2020, upright, gain not applied) and the camera's as-shot white.
 pub(super) struct Base {
     pub image: Rgb32f,
@@ -137,10 +222,35 @@ pub(super) struct Base {
 /// The macOS base of the raw in `bytes` (header `info`), no larger than `max_edge`; why not, when it cannot be made.
 /// A failure of this file is remembered for the session.
 pub(super) fn base(bytes: &[u8], info: &RawInfo, max_edge: usize, backend: &dyn Backend) -> Result<Base, MacosUnavailable> {
+    let ready = prepare(bytes, info, backend)?;
+    render_base(&ready, Input::Bytes { data: bytes, uti: ready.uti }, max_edge, backend)
+}
+
+/// A raw that passed the name checks ([`prepare`]): what [`render_base`] needs once its bytes may be gone.
+pub(super) struct Prepared {
+    uti: &'static str,
+    expected: (u32, u32),
+    fingerprint: u64,
+}
+
+impl Prepared {
+    /// The decoder's type for the raw's bytes.
+    pub(super) fn uti(&self) -> &'static str {
+        self.uti
+    }
+}
+
+/// The checks before the decoder runs: the name gates, LightCraft's size, and the file's fingerprint.
+pub(super) fn prepare(bytes: &[u8], info: &RawInfo, backend: &dyn Backend) -> Result<Prepared, MacosUnavailable> {
     let uti = gate(bytes, info, backend)?;
     let expected = expected_size(info).ok_or(MacosUnavailable::Unreadable)?;
-    let cancel = AtomicBool::new(false);
-    let rendered = backend.render(Input::Bytes { data: bytes, uti }, &request(expected, max_edge), &cancel);
+    Ok(Prepared { uti, expected, fingerprint: fingerprint(bytes) })
+}
+
+/// The decoder's base of a [`prepare`]d raw read from `input` (its bytes or its path), cancelled by the backend's
+/// flag. A failure is remembered for the session; a cancelled render is not (the photo is tried again next time).
+pub(super) fn render_base(ready: &Prepared, input: Input<'_>, max_edge: usize, backend: &dyn Backend) -> Result<Base, MacosUnavailable> {
+    let rendered = backend.render(input, &request(ready.expected, max_edge), backend.cancel());
     // Core Image's buffers are gone (the render's autorelease pool ended): give their pages back
     crate::memory::release();
     let why = match rendered {
@@ -153,8 +263,18 @@ pub(super) fn base(bytes: &[u8], info: &RawInfo, max_edge: usize, backend: &dyn 
         Err(Error::SizeMismatch { .. }) => MacosUnavailable::Size,
         Err(Error::Undecodable | Error::TooLarge { .. } | Error::NeedsDownload { .. } | Error::Os(_)) => MacosUnavailable::Unreadable,
     };
-    remember(fingerprint(bytes), why);
+    remember(ready.fingerprint, why);
     Err(why)
+}
+
+/// Whether the load's render was cancelled (the job's flag is set).
+pub(super) fn cancelled(backend: &dyn Backend) -> bool {
+    backend.cancel().load(Ordering::Relaxed)
+}
+
+/// The bytes of `path` again, after a render from the path failed and the Camera Matching decode needs them.
+pub(super) fn reread(path: &Path) -> Result<Cow<'static, [u8]>, String> {
+    std::fs::read(path).map(Cow::Owned).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// The decoder's picture as LightCraft's image; `None` when it is empty, the wrong length or its white is not a colour.
@@ -267,6 +387,8 @@ pub(super) fn transferred(
     (plain, twin, SourceInfo { camera_tone, ..info })
 }
 
+#[cfg(test)]
+mod file_tests;
 #[cfg(test)]
 mod preset_tests;
 #[cfg(all(test, target_os = "macos"))]

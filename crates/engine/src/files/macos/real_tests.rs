@@ -218,3 +218,21 @@ fn the_white_balance_slider_neutralises_a_grey_patch() {
     );
     assert!(after[1].abs() <= 1.0 && after[2].abs() <= 1.0, "a*b* after: {:.2} {:.2}", after[1], after[2]);
 }
+
+/// The filesystem loader renders a macOS Colour photo from its path (its own copy of the file let go first) to the same
+/// picture as from the file's bytes.
+#[test]
+fn the_file_loader_renders_from_the_path_like_the_bytes() {
+    let Some(path) = std::env::var_os("LIGHTCRAFT_MACRAW_ARW") else {
+        lightcraft_testkit::skip!(Input, "set LIGHTCRAFT_MACRAW_ARW to an A7 V ARW file");
+        return;
+    };
+    let path = std::path::PathBuf::from(path);
+    let bytes = std::fs::read(&path).unwrap();
+    let (from_bytes, _, a, _) = load_bytes_now(Cow::Borrowed(&bytes), 1600, None, false, options(CameraColour::Macos), &System).unwrap();
+    let (from_path, _, b, _) = super::super::load::load_file(&path, bytes, 1600, None, false, options(CameraColour::Macos)).unwrap();
+    assert!(a.macos_note.is_none() && b.macos_note.is_none());
+    assert_eq!((from_path.width, from_path.height), (from_bytes.width, from_bytes.height));
+    let worst = from_bytes.data.iter().flatten().zip(from_path.data.iter().flatten()).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max);
+    assert!(worst < 1e-3, "path and bytes differ by {worst}");
+}

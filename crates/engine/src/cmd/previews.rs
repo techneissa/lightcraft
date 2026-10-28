@@ -84,7 +84,7 @@ fn task_for(s: &Session, state: &PreviewBuild) -> TaskGuard {
 /// Render one photo's jobs in order. The source the first job decodes serves the ones after it
 /// (the grid thumbnail is made from the view's source instead of decoding the file again).
 /// `None` when `cancel` was asked for before a job started: that photo is not counted as done.
-fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>) -> Option<bool> {
+fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&Arc<AtomicBool>>) -> Option<bool> {
     let mut decoded: Option<crate::media::DecodedSource> = None;
     let mut ok = true;
     for mut j in jobs {
@@ -97,7 +97,11 @@ fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>) -> O
         {
             j.source = crate::media::SourceRef::Loaded(Box::new(src.clone()));
         }
-        let r = j.run();
+        // (a macOS Colour render still waiting for its slot gives up when the build is cancelled)
+        let r = match cancel {
+            Some(c) => crate::files::with_job_cancel(c, || j.run()),
+            None => j.run(),
+        };
         ok &= r.rendered.is_ok();
         if decoded.is_none() {
             decoded = r.loaded;

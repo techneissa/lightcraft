@@ -52,11 +52,25 @@ pub(crate) struct Fake {
     pub answer: Answer,
     pub calls: AtomicUsize,
     pub requests: Mutex<Vec<Request>>,
+    /// The file the load reads ([`Backend::path`]), and how each render was given the raw ("path" or "bytes").
+    pub path: Option<std::path::PathBuf>,
+    pub inputs: Mutex<Vec<&'static str>>,
+    /// The load's cancel flag ([`Backend::cancel`]).
+    pub cancel: AtomicBool,
 }
 
 impl Fake {
     pub(crate) fn new(answer: Answer) -> Fake {
-        Fake { available: true, listed: true, answer, calls: AtomicUsize::new(0), requests: Mutex::new(Vec::new()) }
+        Fake {
+            available: true,
+            listed: true,
+            answer,
+            calls: AtomicUsize::new(0),
+            requests: Mutex::new(Vec::new()),
+            path: None,
+            inputs: Mutex::new(Vec::new()),
+            cancel: AtomicBool::new(false),
+        }
     }
 }
 
@@ -70,10 +84,26 @@ impl Backend for Fake {
     fn supports(&self, _: &str) -> bool {
         self.listed
     }
+    fn path(&self) -> Option<&std::path::Path> {
+        self.path.as_deref()
+    }
+    fn cancel(&self) -> &AtomicBool {
+        &self.cancel
+    }
     fn render(&self, input: Input<'_>, request: &Request, _: &AtomicBool) -> Result<LinearImage, Error> {
         self.calls.fetch_add(1, Ordering::SeqCst);
         self.requests.lock().unwrap().push(*request);
-        assert!(matches!(input, Input::Bytes { uti: "com.sony.arw-raw-image", .. }), "bytes with the exact type");
+        let how = match input {
+            Input::Bytes { uti, .. } => {
+                assert_eq!(uti, "com.sony.arw-raw-image", "bytes with the exact type");
+                "bytes"
+            }
+            Input::Path(p) => {
+                assert_eq!(Some(p), self.path.as_deref(), "the load's own file");
+                "path"
+            }
+        };
+        self.inputs.lock().unwrap().push(how);
         let (ew, eh) = request.expected_size.unwrap();
         let (w, h) = match request.long_edge {
             Some(e) if e < ew.max(eh) => {
@@ -253,10 +283,12 @@ fn off_the_mac_the_system_decoder_falls_back() {
 fn a_macos_load_weighs_the_decoders_footprint() {
     use crate::files::fs::load_weight;
     let floor = lightcraft_macraw::FLOOR_BYTES as usize;
-    assert_eq!(load_weight(250_000_000, options(CameraColour::Macos), true), floor);
-    assert_eq!(load_weight(2_000_000_000, options(CameraColour::Macos), true), 2_000_000_000);
-    assert_eq!(load_weight(250_000_000, options(CameraColour::Macos), false), 250_000_000);
-    assert_eq!(load_weight(250_000_000, options(CameraColour::Auto), true), 250_000_000);
+    let a7v = arw("ILCE-7M5", 1);
+    assert_eq!(load_weight(250_000_000, &a7v, 1600, options(CameraColour::Macos), true), Some(floor));
+    assert_eq!(load_weight(2_000_000_000, &a7v, 1600, options(CameraColour::Macos), true), Some(2_000_000_000));
+    assert_eq!(load_weight(250_000_000, b"not a raw", usize::MAX, options(CameraColour::Macos), true), Some(floor), "the floor without a header");
+    assert_eq!(load_weight(250_000_000, &a7v, 1600, options(CameraColour::Macos), false), None);
+    assert_eq!(load_weight(250_000_000, &a7v, 1600, options(CameraColour::Auto), true), None);
 }
 
 /// T6: an accepted tone fit keeps the decoder's values (its curve maps them); a refused one scales them by the fixed

@@ -58,6 +58,21 @@ pub fn load_vec_pair(
     })
 }
 
+/// The filesystem loaders' decode of `path`, whose `bytes` were read: as [`load_vec_with`], [`load_vec_reduced`]
+/// (`allow_reduced`) and [`load_vec_pair`] (`denoise`), with the job's cancel flag and, for macOS Colour, the decoder
+/// reading the file itself once its bytes are let go (`macos::FileJob`).
+pub(crate) fn load_file(
+    path: &std::path::Path,
+    bytes: Vec<u8>,
+    max_edge: usize,
+    denoise: Option<&DenoiseSpec>,
+    allow_reduced: bool,
+    options: LoadOptions,
+) -> Result<Loaded, String> {
+    let job = macos::FileJob::current(path);
+    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, denoise, allow_reduced, options, &job))
+}
+
 /// The denoised camera RGB of `raw` from its cached product, as the plain development would have it: the default
 /// crop, and `factor` × `factor` blocks averaged into one pixel when the plain one was binned (plain means: the
 /// plain development's clip mask tells highlight reconstruction which of them held clipped samples). `None` when
@@ -84,7 +99,7 @@ fn denoised_camera_rgb(raw: &lightcraft_raw::RawImage, spec: &DenoiseSpec, facto
 pub(super) type Loaded = (Rgb32f, Option<Rgb32f>, SourceInfo, bool);
 
 pub(super) fn load_bytes_now(
-    bytes: std::borrow::Cow<'_, [u8]>,
+    mut bytes: std::borrow::Cow<'_, [u8]>,
     max_edge: usize,
     denoise: Option<&DenoiseSpec>,
     allow_reduced: bool,
@@ -110,12 +125,23 @@ pub(super) fn load_bytes_now(
                         }
                         (None, Some(target))
                     }
+                    Err(_) if macos::cancelled(backend) => return Err("cancelled".into()),
                     Err(why) => (Some(why), None),
                 }
             }
-            lightcraft_develop::CameraColour::Macos => match macos_source(&bytes, max_edge, backend) {
+            lightcraft_develop::CameraColour::Macos => match macos_source(std::mem::take(&mut bytes), max_edge, backend) {
                 Ok(found) => return Ok(found),
-                Err(why) => (Some(why), None),
+                Err((why, back)) => {
+                    if macos::cancelled(backend) {
+                        return Err("cancelled".into());
+                    }
+                    bytes = match (back, backend.path()) {
+                        (Some(back), _) => back,
+                        (None, Some(path)) => macos::reread(path)?,
+                        (None, None) => return Err("the raw's bytes are gone".into()),
+                    };
+                    (Some(why), None)
+                }
             },
             _ => (None, None),
         };
@@ -312,13 +338,35 @@ pub(super) fn load_bytes_now(
     Ok((img.into_oriented(Orientation::from_exif(d.orientation)), None, SourceInfo::default(), false))
 }
 
+/// Why a macOS Colour source was not made, and the raw's bytes when they are still here (`None` after the decoder read
+/// the file from its path: the caller reads it again for the Camera Matching decode).
+type NoMacos<'a> = (lightcraft_pipeline::MacosUnavailable, Option<std::borrow::Cow<'a, [u8]>>);
+
 /// The macOS Colour source of the raw in `bytes` (`files::macos`): its base fitted to `max_edge`, upright, no twin.
-fn macos_source(bytes: &[u8], max_edge: usize, backend: &dyn Backend) -> Result<Loaded, lightcraft_pipeline::MacosUnavailable> {
+/// Everything read from the bytes (header, camera JPEG, lens) is read first; a load with a path ([`Backend::path`])
+/// then lets its own copy of the file go and has the decoder read the file.
+fn macos_source<'a>(bytes: std::borrow::Cow<'a, [u8]>, max_edge: usize, backend: &dyn Backend) -> Result<Loaded, NoMacos<'a>> {
+    use lightcraft_pipeline::MacosUnavailable;
     let t0 = web_time::Instant::now();
-    let info = lightcraft_raw::probe_info(bytes).map_err(|_| lightcraft_pipeline::MacosUnavailable::Unreadable)?;
+    let Ok(info) = lightcraft_raw::probe_info(&bytes) else { return Err((MacosUnavailable::Unreadable, Some(bytes))) };
+    let ready = match macos::prepare(&bytes, &info, backend) {
+        Ok(ready) => ready,
+        Err(why) => return Err((why, Some(bytes))),
+    };
     // the camera JPEG the tone is fitted to, small, read before the decoder runs
-    let reference = crate::camera_preview::base_reference(bytes);
-    let base = macos::base(bytes, &info, max_edge, backend)?;
+    let reference = crate::camera_preview::base_reference(&bytes);
+    let lens = crate::lens_profiles::for_raw(&info, || lightcraft_meta::extract(&bytes));
+    let path = backend.path().filter(|_| matches!(bytes, std::borrow::Cow::Owned(_)));
+    let base = match path {
+        Some(path) => {
+            drop(bytes);
+            macos::render_base(&ready, lightcraft_macraw::Input::Path(path), max_edge, backend).map_err(|why| (why, None))?
+        }
+        None => match macos::render_base(&ready, lightcraft_macraw::Input::Bytes { data: &bytes, uti: ready.uti() }, max_edge, backend) {
+            Ok(base) => base,
+            Err(why) => return Err((why, Some(bytes))),
+        },
+    };
     let rendered = t0.elapsed();
     let look = reference.as_ref().and_then(|r| crate::camera_preview::fit_base_tone(r, info.orientation, &base.image));
     if lightcraft_pipeline::profiling() {
@@ -332,7 +380,6 @@ fn macos_source(bytes: &[u8], max_edge: usize, backend: &dyn Backend) -> Result<
             ms(t0.elapsed().saturating_sub(rendered))
         );
     }
-    let lens = crate::lens_profiles::for_raw(&info, || lightcraft_meta::extract(bytes));
     let source = macos::source_info(&base, lens);
     let (img, camera_tone) = macos::toned(base.image, look);
     let source = SourceInfo { camera_tone, ..source };
