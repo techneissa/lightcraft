@@ -3758,7 +3758,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-filepanel"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "block2 0.6.2",
  "objc2 0.6.5",
@@ -3829,7 +3829,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-macraw"
-version = "0.14.0"
+version = "0.15.0"
 dependencies = [
  "lightcraft-testkit",
  "objc2 0.6.5",
