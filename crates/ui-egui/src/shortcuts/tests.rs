@@ -433,6 +433,10 @@ fn parses_shortcuts() {
 #[test]
 fn aliases_parse_and_target_existing_commands() {
     let ui: Vec<&str> = crate::menus::ui_commands().map(|c| c.0).collect();
+    for (id, sc) in crate::keybinds::model::SECOND_DEFAULTS {
+        assert!(parse(sc).is_some(), "{id}: {sc}");
+        assert!(ui.contains(id) || lightcraft_engine::find_command(id).is_some(), "second shortcut {sc} → unknown command {id}");
+    }
     for (sc, id, params) in ALIASES {
         assert!(parse(sc).is_some(), "{id}: {sc}");
         assert!(ui.contains(id) || lightcraft_engine::find_command(id).is_some(), "alias {sc} → unknown command {id}");
@@ -520,6 +524,9 @@ fn no_conflicting_bindings() {
     for (sc, id, _) in ALIASES {
         ui.push((parse(sc).unwrap(), format!("alias {id}")));
     }
+    for (id, sc) in crate::keybinds::model::SECOND_DEFAULTS {
+        ui.push((parse(sc).unwrap(), format!("second {id}")));
+    }
     let mut engine: Vec<((Modifiers, Key), &str)> = Vec::new();
     for c in lightcraft_engine::command_specs() {
         if let Some(k) = c.shortcut.and_then(parse) {
@@ -529,6 +536,10 @@ fn no_conflicting_bindings() {
     for (sc, id, _) in ALIASES {
         let k = parse(sc).unwrap();
         assert!(!engine.iter().any(|(k2, _)| *k2 == k), "alias {sc} ({id}) shadows an engine shortcut");
+    }
+    for (id, sc) in crate::keybinds::model::SECOND_DEFAULTS {
+        let k = parse(sc).unwrap();
+        assert!(!engine.iter().any(|(k2, _)| *k2 == k), "second shortcut {sc} ({id}) shadows an engine shortcut");
     }
     for (i, (k, a)) in ui.iter().enumerate() {
         for (k2, b) in &ui[i + 1..] {
@@ -610,10 +621,16 @@ mod issue1771 {
             key(&mut h, "Enter", false);
             assert_eq!(h.app.ui.view, view, "shortcut dialog");
             assert!(matches!(h.app.ui.dialog, Some(Dialog::Shortcuts)));
-            h.app.recording_shortcut = Some("view.survey".into());
+            // the Assign Shortcut box owns Enter: before any key it does nothing (and the grid does not open)
+            h.app.run("app.assignShortcut", json!({"id": "view.survey", "slot": 1})).unwrap();
+            h.step();
+            h.step();
+            key(&mut h, "Enter", false);
             key(&mut h, "Enter", false);
             assert_eq!(h.app.ui.view, view, "recording owns Enter");
-            assert_eq!(super::super::shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("Enter"));
+            assert!(h.app.keybinds.capture.is_some(), "the box stays open");
+            assert_eq!(super::super::shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("N"));
+            assert_eq!(crate::keybinds::model::effective(&h.app.ui.settings.keymap, "view.survey", 1), None);
         }
     }
 

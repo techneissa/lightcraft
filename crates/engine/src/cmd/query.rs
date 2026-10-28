@@ -220,6 +220,16 @@ pub fn specs() -> Vec<CommandSpec> {
                 s.lut_profiles.iter().map(|p| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": favorite(&p.id), "imported": true}));
             Ok(Value::Array(builtin.chain(imported).collect()))
         }),
+        cmd!(query "profiles.local", "List Local Camera Profiles", [], None, "{camera?: a camera (`SONY ILCE-7M5` or just `ILCE-7M5`; only the usable profiles made for it)} — the profile files in the camera-profiles folder: [{id (the file name without .json), name (shown in the Profile picker), model (the Exif model it is for), valid, key (hex; changes with the file)}]. A photo uses one with `develop.profile {camera_colour: \"local\", camera_profile: id}`", always, |_, p| {
+            let camera = super::str_param(p, "camera").map(str::trim).filter(|c| !c.is_empty());
+            let list = match camera {
+                Some(camera) => crate::camera_profiles::local_profiles_for_camera(camera),
+                None => crate::camera_profiles::local_profiles(),
+            };
+            Ok(Value::Array(
+                list.iter().map(|l| json!({"id": l.id, "name": l.name, "model": l.model, "valid": l.valid(), "key": format!("{:032x}", l.key)})).collect(),
+            ))
+        }),
         cmd!(query "profiles.menu", "Profile Menu", [], None, "{} — favourites, recent (newest first) and groups", always, |s, _| Ok(s.profile_menu())),
         cmd!(query "history.list", "List History", [], None, "{id?} — returns {history: labels oldest first, cursor: index of the step the settings are at (later steps can be returned to), versions}", has_active, |s, p| {
             let id = photo_arg(s, p, "history.list")?;

@@ -333,6 +333,19 @@ mod headless {
     }
 
     #[test]
+    fn a_right_click_on_a_menu_command_row_opens_the_assign_shortcut_box() {
+        let mut h = demo(json!({"view": "photoGrid"}));
+        let r = h.request("engine.execute", json!({"command": "photoMenu.set", "params": {"items": ["openInDetail", "cmd:view.compare"]}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        let photo = h.app.session.visible_cloned()[0];
+        right_click(&mut h, &format!("thumb:{}", photo.0));
+        right_click(&mut h, "button:contextCommand:view.compare");
+        h.step();
+        assert_eq!(h.app.keybinds.capture.as_ref().map(|c| c.id.as_str()), Some("view.compare"));
+        assert_eq!(h.app.ui.view, ViewMode::PhotoGrid, "a right-click does not run the row");
+    }
+
+    #[test]
     fn customize_menu_opens_the_settings_tab() {
         let mut h = demo(json!({"view": "photoGrid"}));
         let photo = h.app.session.visible_cloned()[0];

@@ -63,8 +63,14 @@ fn top_bar_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, left: i8
     }
     let search_left = bar.center().x - sw / 2.0;
     let sr = Rect::from_center_size(pos2(bar.center().x, full.center().y), vec2(sw, 28.0));
-    let background =
-        if app.integrated_titlebar { window_handle(ui, bar) } else { ui.interact(bar, ui.scope_id().with("top_bar_background"), Sense::click()) };
+    let background = if app.integrated_titlebar {
+        window_handle(ui, bar)
+    } else {
+        // the bar's own click area (its right-click menu) has a name, like every interactive node
+        let resp = ui.interact(bar, ui.scope_id().with("top_bar_background"), Sense::click());
+        crate::widgets::announce(&resp, crate::i18n::tr("Top Bar"));
+        resp
+    };
     nav_buttons(app, ui, search_left);
     search_field(app, ui, t, sr);
     if shown(app, "filter") {

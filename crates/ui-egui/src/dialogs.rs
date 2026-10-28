@@ -20,8 +20,8 @@ pub(crate) use confirm::album_entries;
 pub use confirm::confirm_dialog;
 pub use cull::{MAX_BURST_GAP, clamp_cull_burst, cull_params, fmt_gap, parse_gap};
 use export::{
-    LIMIT_KB, QUALITY, START_NUMBER, WM_IMAGE_WIDTH, WM_INSET_X, WM_INSET_Y, WM_OPACITY, WM_POSITIONS, WM_SIZE, export_dialog_params, export_size,
-    group_checklist, watermark_preview,
+    LIMIT_KB, QUALITY, START_NUMBER, WM_IMAGE_WIDTH, WM_INSET_X, WM_INSET_Y, WM_OPACITY, WM_POSITIONS, WM_SIZE, colour_source_hint,
+    export_dialog_params, export_size, group_checklist, watermark_preview,
 };
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
 use frame::{
@@ -137,6 +137,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     let widest = if settings { ctx.data(|d| d.get_temp::<f32>(widest_id)).unwrap_or(0.0).min(screen.width() * 0.9) } else { 0.0 };
     let mut content_w = 0.0f32;
     let mut body_h = None;
+    let mut left_by_button = false;
     // before the window: drawing it closes a dropdown the click lands outside of
     let popup_was_open = egui::Popup::is_any_open(ctx);
     let shown = egui::Window::new(crate::i18n::tr(&title))
@@ -180,6 +181,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             let row_h = ui.spacing().interact_size.y;
             ui.allocate_ui_with_layout(egui::vec2(row_w, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 button_row(app, ui, &dlg, &mut close, &mut confirm);
+                // (the Cancel button only: Esc and a click outside close the window without answering)
+                left_by_button = close;
             });
             if import {
                 crate::import::note_dialog_bottom(ui);
@@ -215,6 +218,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     // the dialog, such as a date picker's calendar, takes it to close itself)
     if !raw_blocked && ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !crate::widgets::escape_taken(ctx) {
         close = true;
+    }
+    // Leave on Camera Matching answers the one-time local profile question; Switch does it in `confirmed`
+    if let (true, Dialog::LocalProfileSwitch { id, .. }) = (left_by_button, &dlg) {
+        let _ = app.run("profiles.localAsked", json!({"id": id}));
     }
     if !raw_blocked && confirm {
         close |= confirmed(app, ctx, &mut dlg);
@@ -272,6 +279,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::Merge { opts } => opts.title(),
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
+        Dialog::LocalProfileSwitch { .. } => "Local Camera Profile",
         Dialog::MovePhotos { .. } => "Move Photos",
         Dialog::LightroomCatalog { .. } => "Lightroom Classic Catalog",
         Dialog::LightroomDestination { .. } => "Import Lightroom Catalog",
@@ -326,6 +334,7 @@ fn cancel_label(dlg: &Dialog, sam: &SamState) -> &'static str {
         Dialog::SamModel { .. } if sam.running || sam.installed || sam.by_hand => "Close",
         Dialog::SamModel { .. } => "Not Now",
         Dialog::LightroomResult { .. } => "Close",
+        Dialog::LocalProfileSwitch { .. } => "Leave on Camera Matching",
         _ => "Cancel",
     }
 }
@@ -348,6 +357,7 @@ fn ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool, sam: &SamSta
         Dialog::FaceModel { info, .. } if !informational && info["download"].is_string() => "Download",
         Dialog::FaceModel { .. } if !informational => "Install",
         Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
+        Dialog::LocalProfileSwitch { .. } => "Switch",
         Dialog::SaveEffect { .. } => "Create",
         Dialog::MovePhotos { .. } => "Move",
         // (not "Merge": that is photo merging, HDR / panorama, in some languages)
@@ -1806,6 +1816,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             );
             ui.label(egui::RichText::new(crate::i18n::tr("Settings to include")).color(t.text_dim));
             group_checklist(ui, "presetInclude", groups);
+            colour_source_hint(app, ui, t, groups);
         }
         Dialog::CopySettings { groups } => group_checklist(ui, "copyGroup", groups),
         Dialog::PasteSettings { .. } => paste_settings_body(app, ui, t, dlg),
@@ -1837,6 +1848,25 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
                 if *count == 1 { crate::i18n::tr("this photo").to_string() } else { crate::i18n::tr_format!("these {count} photos", count = count) };
             ui.label(crate::i18n::tr_format!("Move {what} to Recently Deleted?", what = what));
             ui.label(egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
+        }
+        Dialog::LocalProfileSwitch { name, count, .. } => {
+            let question = if *count == 1 {
+                crate::i18n::tr_format!(
+                    "1 photo was rendered with your local profile '{name}'. Switch it to that profile to keep its look?",
+                    name = name
+                )
+            } else {
+                crate::i18n::tr_format!(
+                    "{count} photos were rendered with your local profile '{name}'. Switch them to it to keep their look?",
+                    count = count,
+                    name = name
+                )
+            };
+            ui.label(question);
+            ui.label(
+                egui::RichText::new(crate::i18n::tr("Camera Matching no longer uses it. Undo in the Edit menu takes the switch back."))
+                    .color(t.text_dim),
+            );
         }
         Dialog::MovePhotos { .. } => move_photos_body(ui, t, dlg),
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::body(app, ui, d),

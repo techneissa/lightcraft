@@ -6,10 +6,12 @@
 //! pools the colour pairs of many photos per model and fits one matrix and hue/saturation/value
 //! table; photos of that model then only fit their tone and chroma curves.
 //!
-//! Profiles are JSON files (`<model>.json`) in [`dir`]: `LIGHTCRAFT_CAMERA_PROFILES`, else
-//! `<config>/camera-profiles`; a local profile replaces the one built in ([`BUNDLED`], from
-//! `assets/camera-profiles/`). They are read once per process; a damaged or hostile file is
-//! ignored with a warning. They hold aggregate colour statistics only, never image content.
+//! Profiles are JSON files. Camera Matching reads the ones built in ([`BUNDLED`], from
+//! `assets/camera-profiles/`) through [`get`]. The files in [`dir`] (`LIGHTCRAFT_CAMERA_PROFILES`, else
+//! `<config>/camera-profiles`) are *local* profiles: each is its own choice in the Profile picker
+//! (`CameraColour::Local`) for the cameras it is made for, named from its `name` field or its file name, and never
+//! changes Camera Matching ([`local_profiles`]). A damaged or hostile file is ignored with a warning. Profiles hold
+//! aggregate colour statistics only, never image content.
 use lightcraft_color::Mat3;
 use lightcraft_raw::profile::HsvTable;
 use serde::{Deserialize, Serialize};
@@ -41,6 +43,9 @@ pub struct CameraProfile {
     pub version: u32,
     /// The camera model as the files report it (Exif `Model`), e.g. `ILCE-7M4`.
     pub model: String,
+    /// What a local profile is called in the Profile picker (file `name` field); the file name when absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Photos and colour pairs the profile was fitted on.
     pub files: usize,
     pub samples: usize,
@@ -52,7 +57,14 @@ pub struct CameraProfile {
 
 impl CameraProfile {
     pub fn new(model: &str, files: usize, samples: usize, matrix: Mat3, hue_sat: Option<HsvTable>) -> CameraProfile {
-        CameraProfile { version: VERSION, model: model.to_owned(), files, samples, matrix: matrix.0, hue_sat }
+        CameraProfile { version: VERSION, model: model.to_owned(), name: None, files, samples, matrix: matrix.0, hue_sat }
+    }
+
+    /// The profile under `name` in the Profile picker.
+    pub fn named(mut self, name: &str) -> CameraProfile {
+        let name = name.trim();
+        self.name = (!name.is_empty()).then(|| name.chars().take(MAX_NAME).collect());
+        self
     }
 
     pub fn matrix(&self) -> Mat3 {
@@ -76,13 +88,57 @@ pub use crate::config::config_dir;
 
 /// Where camera profiles are read from and written to.
 pub fn dir() -> Option<PathBuf> {
+    #[cfg(any(test, feature = "test-hooks"))]
+    if let Some(dir) = DIR_OVERRIDE.with(|d| d.borrow().clone()) {
+        return Some(dir);
+    }
     std::env::var_os("LIGHTCRAFT_CAMERA_PROFILES").map(PathBuf::from).or_else(|| config_dir().map(|d| d.join("camera-profiles")))
+}
+
+#[cfg(any(test, feature = "test-hooks"))]
+thread_local! {
+    /// The folder tests read profiles from on this thread, instead of [`dir`]'s (so they never touch the user's own,
+    /// and a test that chooses one never shows its folder to another test running at the same time).
+    static DIR_OVERRIDE: std::cell::RefCell<Option<PathBuf>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Makes [`dir`] return `dir` on this thread until the guard is dropped. Tests only: it exists in the engine's own
+/// tests and in builds with the `test-hooks` feature (a dev-dependency of the crates whose tests choose a folder), never
+/// in the app. Whatever reads the folder must run on the test's own thread.
+#[cfg(any(test, feature = "test-hooks"))]
+pub struct DirGuard(());
+
+#[cfg(any(test, feature = "test-hooks"))]
+impl Drop for DirGuard {
+    fn drop(&mut self) {
+        DIR_OVERRIDE.with(|d| *d.borrow_mut() = None);
+    }
+}
+
+/// See [`DirGuard`].
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn use_dir_for_tests(dir: &Path) -> DirGuard {
+    DIR_OVERRIDE.with(|d| *d.borrow_mut() = Some(dir.to_owned()));
+    DirGuard(())
 }
 
 /// File name of `model`'s profile: letters, digits, `-` and `_` kept, anything else `_`.
 pub fn file_name(model: &str) -> String {
     let name: String = model.trim().chars().map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' }).collect();
     format!("{name}.json")
+}
+
+/// Most characters of a local profile's id (its file stem) and of its display name.
+const MAX_NAME: usize = 60;
+
+/// Whether `id` can be the stem of a local profile file: not empty, short, no path separators or control characters
+/// (it becomes `<dir>/<id>.json`, so a hostile id must never leave the folder).
+pub fn valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.chars().count() <= 2 * MAX_NAME
+        && id == id.trim()
+        && !id.starts_with('.')
+        && !id.chars().any(|c| c.is_control() || matches!(c, '/' | '\\' | ':'))
 }
 
 /// Read and validate a profile file.
@@ -112,8 +168,23 @@ fn bundled(model: &str) -> Option<CameraProfile> {
 
 /// Write `profile` to `dir` (created if needed) as `<model>.json`; returns the path.
 pub fn save(profile: &CameraProfile, dir: &Path) -> Result<PathBuf, String> {
+    write_profile(profile, dir, &file_name(&profile.model))
+}
+
+/// Write `profile` to `dir` under `name`: the file is `<name>.json` (path separators and other unsafe characters
+/// become `_`) and the profile's `name` field is `name`, so it shows in the Profile picker as "name".
+pub fn save_named(profile: &CameraProfile, dir: &Path, name: &str) -> Result<PathBuf, String> {
+    let stem: String = name.trim().chars().take(MAX_NAME).map(|c| if c.is_control() || matches!(c, '/' | '\\' | ':') { '_' } else { c }).collect();
+    let stem = stem.trim_start_matches('.').trim().to_owned();
+    if !valid_id(&stem) {
+        return Err(format!("{name:?} can't be a profile name"));
+    }
+    write_profile(&profile.clone().named(name), dir, &format!("{stem}.json"))
+}
+
+fn write_profile(profile: &CameraProfile, dir: &Path, file: &str) -> Result<PathBuf, String> {
     std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let path = dir.join(file_name(&profile.model));
+    let path = dir.join(file);
     let json = serde_json::to_vec_pretty(profile).map_err(|e| e.to_string())?;
     let tmp = path.with_extension("json.tmp");
     std::fs::write(&tmp, json).map_err(|e| format!("{}: {e}", tmp.display()))?;
@@ -126,7 +197,8 @@ fn cache() -> &'static Mutex<HashMap<String, Option<Arc<CameraProfile>>>> {
     CACHE.get_or_init(Default::default)
 }
 
-/// The profile for camera `model`: from [`dir`], else built in; read once per process.
+/// The built-in profile for camera `model`, if any; read once per process. Camera Matching uses this and nothing
+/// else: the user's own files are [`local_profiles`].
 pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
     let model = model.trim();
     if model.is_empty() {
@@ -136,55 +208,256 @@ pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
     if let Some(hit) = cache.get(model) {
         return hit.clone();
     }
-    let path = dir().map(|d| d.join(file_name(model)));
-    let profile = match path {
-        Some(path) if path.is_file() => match load(&path) {
-            Ok(p) if p.model.trim() == model => Some(Arc::new(p)),
-            Ok(p) => {
-                eprintln!("lightcraft: ignoring camera profile {}: it is for {:?}, not {model:?}", path.display(), p.model);
-                None
-            }
-            Err(e) => {
-                eprintln!("lightcraft: ignoring camera profile {e}");
-                None
-            }
-        },
-        _ => None,
-    };
-    let profile = profile.or_else(|| bundled(model).map(Arc::new));
+    let profile = bundled(model).map(Arc::new);
     cache.insert(model.to_owned(), profile.clone());
     profile
 }
 
-/// Changes when the profiles folder's contents change (per process): part of the render cache
-/// keys, so thumbnails rendered before a profile existed are not reused after.
+/// Changes when the built-in profiles change: part of the render cache keys of every photo. The user's own profile
+/// files are not in it (they are [`local_key`]s of the photos that use them), so adding one never re-renders a
+/// photo on Camera Matching.
 pub fn cache_key() -> u64 {
     static KEY: OnceLock<u64> = OnceLock::new();
-    *KEY.get_or_init(|| cache_key_for(dir().as_deref()))
+    *KEY.get_or_init(bundled_key)
 }
 
-fn cache_key_for(directory: Option<&Path>) -> u64 {
-    let entries = directory.and_then(|d| std::fs::read_dir(d).ok());
-    let mut files: Vec<(String, u64, std::time::Duration)> = entries
-        .into_iter()
-        .flatten()
-        .flatten()
-        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
-        .filter_map(|e| {
-            let meta = e.metadata().ok()?;
-            let modified = meta.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?;
-            Some((e.file_name().to_string_lossy().into_owned(), meta.len(), modified))
-        })
-        .collect();
-    files.sort();
+/// [`cache_key`] without the once-per-process memo: nothing but the built-in profiles goes into it.
+fn bundled_key() -> u64 {
     let mut h = lightcraft_preview::Hasher128::new();
-    for (name, len, modified) in &files {
-        h.str(name).u64(*len).u64(modified.as_secs()).u64(u64::from(modified.subsec_nanos()));
-    }
     for (model, json) in BUNDLED {
         h.str(model).str(json);
     }
     h.finish().0 as u64
+}
+
+/// A profile file in [`dir`], read and checked: one choice in the Profile picker.
+#[derive(Debug)]
+pub struct LocalProfile {
+    /// The file name without `.json`: what a photo stores to name it.
+    pub id: String,
+    /// What the picker calls it: the file's `name`, else [`Self::id`].
+    pub name: String,
+    /// The Exif model of the cameras it is for (empty for a file that could not be read).
+    pub model: String,
+    /// Changes with the file's content (the full 128-bit hash of the id and the bytes): part of the render keys of the
+    /// photos on this profile.
+    pub key: u128,
+    /// The checked profile, or why the file is not usable.
+    pub profile: Result<Arc<CameraProfile>, String>,
+}
+
+impl LocalProfile {
+    pub fn valid(&self) -> bool {
+        self.profile.is_ok()
+    }
+
+    /// Whether the profile is for camera `model` (Exif `Model`, trimmed).
+    pub fn is_for(&self, model: &str) -> bool {
+        self.valid() && self.model.trim() == model.trim()
+    }
+
+    /// Whether the profile is for a photo whose catalog camera is `camera`: the Exif make and model joined
+    /// (`SONY ILCE-7M5`, `lightcraft_catalog::Meta::camera`), so the model is all of it or its last words.
+    pub fn is_for_camera(&self, camera: &str) -> bool {
+        let (camera, model) = (camera.trim(), self.model.trim());
+        self.valid() && !model.is_empty() && (camera == model || camera.strip_suffix(model).is_some_and(|rest| rest.ends_with(' ')))
+    }
+}
+
+pub use lightcraft_pipeline::LocalUnavailable;
+
+/// Most profile files read from the folder (a hostile folder must not make every refresh read gigabytes).
+const MAX_LOCAL: usize = 256;
+
+/// `(length, modified)` of a file as it was when it was read.
+type FileStamp = (u64, std::time::Duration);
+
+/// A profile file as it was read, with the stamp it had.
+struct Cached {
+    stamp: FileStamp,
+    local: Arc<LocalProfile>,
+}
+
+fn files() -> &'static Mutex<HashMap<PathBuf, Cached>> {
+    static FILES: OnceLock<Mutex<HashMap<PathBuf, Cached>>> = OnceLock::new();
+    FILES.get_or_init(Default::default)
+}
+
+/// A profile file. With `verify` the content is always read and hashed, so a replacement of the same length and
+/// modification time (a copy that keeps its time, a coarse file system clock) is seen too; without it a file whose
+/// length and time are unchanged is not read again (the listing the picker draws every frame). The file is read with no
+/// lock held. A file that is gone leaves no entry behind.
+fn read_local(path: &Path, id: &str, verify: bool) -> Option<Arc<LocalProfile>> {
+    let Some(meta) = std::fs::metadata(path).ok().filter(|m| m.is_file()) else {
+        files().lock().unwrap_or_else(PoisonError::into_inner).remove(path);
+        return None;
+    };
+    let modified = meta.modified().ok().and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).unwrap_or_default();
+    let stamp = (meta.len(), modified);
+    let cached = files().lock().unwrap_or_else(PoisonError::into_inner).get(path).filter(|c| c.local.id == id).map(|c| (c.stamp, c.local.clone()));
+    if !verify
+        && let Some((seen, hit)) = &cached
+        && *seen == stamp
+    {
+        return Some(hit.clone());
+    }
+    let read = if stamp.0 > MAX_FILE {
+        Err(format!("{}: {} bytes is too large for a camera profile", path.display(), stamp.0))
+    } else {
+        std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
+    };
+    let key = match &read {
+        Ok(bytes) => lightcraft_preview::Hasher128::new().str(id).update(bytes).finish().0,
+        Err(_) => lightcraft_preview::Hasher128::new().str(id).str("unreadable").finish().0,
+    };
+    if let Some((_, hit)) = &cached
+        && hit.key == key
+    {
+        // the same content under a new stamp: keep what was parsed
+        if let Some(entry) = files().lock().unwrap_or_else(PoisonError::into_inner).get_mut(path) {
+            entry.stamp = stamp;
+        }
+        return Some(hit.clone());
+    }
+    let profile = read.and_then(|bytes| parse(&bytes, &path.display().to_string()));
+    if let Err(e) = &profile {
+        eprintln!("lightcraft: ignoring camera profile {e}");
+    }
+    let (name, model) = match &profile {
+        Ok(p) => (
+            p.name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map_or_else(|| id.to_owned(), |n| n.chars().take(MAX_NAME).collect()),
+            p.model.trim().to_owned(),
+        ),
+        Err(_) => (id.to_owned(), String::new()),
+    };
+    let local = Arc::new(LocalProfile { id: id.to_owned(), name, model, key, profile: profile.map(Arc::new) });
+    let mut cache = files().lock().unwrap_or_else(PoisonError::into_inner);
+    if cache.len() >= 4 * MAX_LOCAL {
+        cache.clear();
+    }
+    cache.insert(path.to_owned(), Cached { stamp, local: local.clone() });
+    Some(local)
+}
+
+/// Every `*.json` directly in [`dir`], valid or not, by display name: the user's local profiles. The id is the file
+/// stem. Cheap to call often (a file is read again only when it changed).
+pub fn local_profiles() -> Vec<Arc<LocalProfile>> {
+    let Some(dir) = dir() else { return Vec::new() };
+    let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
+    let mut stems: Vec<(String, PathBuf)> = entries
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("json")))
+        .filter_map(|p| p.file_stem().and_then(|s| s.to_str()).filter(|s| valid_id(s)).map(|s| (s.to_owned(), p.clone())))
+        .collect();
+    stems.sort();
+    stems.truncate(MAX_LOCAL);
+    let mut out: Vec<Arc<LocalProfile>> = stems.iter().filter_map(|(id, path)| read_local(path, id, false)).collect();
+    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.id.cmp(&b.id)));
+    out
+}
+
+/// The local profiles that are for camera `model` and usable: the rows of its photos' Profile picker.
+pub fn local_profiles_for(model: &str) -> Vec<Arc<LocalProfile>> {
+    local_profiles().into_iter().filter(|p| p.is_for(model)).collect()
+}
+
+/// [`local_profiles_for`] by the catalog's camera string (`SONY ILCE-7M5`): what a photo's Profile picker lists.
+pub fn local_profiles_for_camera(camera: &str) -> Vec<Arc<LocalProfile>> {
+    local_profiles().into_iter().filter(|p| p.is_for_camera(camera)).collect()
+}
+
+/// The local profile file `<id>.json`, whether usable or not; `None` when there is no such file (or `id` is no file
+/// stem: a stored id is hostile input and never leaves the folder).
+pub fn local_profile(id: &str) -> Option<Arc<LocalProfile>> {
+    if !valid_id(id) {
+        return None;
+    }
+    let path = dir()?.join(format!("{id}.json"));
+    read_local(&path, id, true)
+}
+
+/// What a photo's [`LoadOptions`](crate::media::LoadOptions) remembers of its local profile.
+struct Registered {
+    id: String,
+    local: Option<Arc<LocalProfile>>,
+}
+
+/// The profiles keys were made for: the decoder gets only the key and finds the profile here. A key stays as long as
+/// the process runs, except that an id keeps its newest [`KEYS_PER_ID`] (a file edited that often while a render of an
+/// older version is still in flight does not happen); a key that is gone is found again from the folder.
+#[derive(Default)]
+struct Registry {
+    by_key: HashMap<u128, Arc<Registered>>,
+    by_id: HashMap<String, std::collections::VecDeque<u128>>,
+}
+
+/// Versions of one profile file the registry keeps.
+const KEYS_PER_ID: usize = 8;
+/// Most keys the registry holds (a catalog full of junk ids must not grow it without end).
+const MAX_REGISTERED: usize = 100_000;
+
+fn registry() -> &'static Mutex<Registry> {
+    static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
+    REGISTRY.get_or_init(Default::default)
+}
+
+fn register(key: u128, registered: Registered) {
+    let mut r = registry().lock().unwrap_or_else(PoisonError::into_inner);
+    if r.by_key.contains_key(&key) {
+        return;
+    }
+    if r.by_key.len() >= MAX_REGISTERED {
+        return;
+    }
+    let id = registered.id.clone();
+    r.by_key.insert(key, Arc::new(registered));
+    let keys = r.by_id.entry(id).or_default();
+    keys.push_back(key);
+    let old = if keys.len() > KEYS_PER_ID { keys.pop_front() } else { None };
+    if let Some(old) = old {
+        r.by_key.remove(&old);
+    }
+}
+
+/// The key of local profile `id` as it is now: a hash of the id and the file's content (a missing file has a key of
+/// its own), read from the file every time, so a replaced file is seen whatever its time says. It is part of the photo's
+/// [`LoadOptions`](crate::media::LoadOptions), so a changed, replaced, removed or restored file decodes the photo again,
+/// and of the render keys of the photos on the profile. The profile itself is found again from the key by
+/// [`resolve_local`].
+pub fn local_key(id: &str) -> u128 {
+    let local = local_profile(id);
+    let key = local.as_ref().map_or_else(|| lightcraft_preview::Hasher128::new().str(id).str("missing").finish().0, |l| l.key);
+    register(key, Registered { id: id.to_owned(), local });
+    key
+}
+
+/// The profile a photo's [`local_key`] stands for, for a photo of camera `model`; `Err(id, why)` when it cannot be
+/// used (the id is for the note). A key the registry no longer holds is looked for among the folder's files; one that is
+/// in neither counts as a missing file.
+pub fn resolve_local(key: u128, model: &str) -> Result<(String, Arc<CameraProfile>), (String, LocalUnavailable)> {
+    let held = registry().lock().unwrap_or_else(PoisonError::into_inner).by_key.get(&key).cloned();
+    let registered = held.or_else(|| {
+        let found = local_profiles().into_iter().find(|l| l.key == key)?;
+        register(key, Registered { id: found.id.clone(), local: Some(found.clone()) });
+        Some(Arc::new(Registered { id: found.id.clone(), local: Some(found) }))
+    });
+    let Some(registered) = registered else { return Err((String::new(), LocalUnavailable::Missing)) };
+    let id = registered.id.clone();
+    match registered.local.as_deref() {
+        None => Err((id, LocalUnavailable::Missing)),
+        Some(l) => match &l.profile {
+            Err(_) => Err((id, LocalUnavailable::Invalid)),
+            Ok(p) if l.is_for(model) => Ok((id, p.clone())),
+            Ok(_) => Err((id, LocalUnavailable::OtherCamera)),
+        },
+    }
+}
+
+/// Forget every key (tests: what a registry that lost a key looks like).
+#[cfg(test)]
+fn forget_registry() {
+    *registry().lock().unwrap_or_else(PoisonError::into_inner) = Registry::default();
 }
 
 /// Per camera model: the photos read and their pooled colour pairs.
@@ -246,102 +519,4 @@ impl Pool {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn profile() -> CameraProfile {
-        let table = HsvTable { hue_divisions: 4, sat_divisions: 2, val_divisions: 1, data: vec![[5.0, 1.2, 1.0]; 8], srgb_value: false };
-        CameraProfile::new("ILCE-7M4", 12, 3456, Mat3([[1.6, -0.5, -0.1], [-0.2, 1.3, -0.1], [-0.1, -0.2, 1.3]]), Some(table))
-    }
-
-    #[test]
-    fn profiles_round_trip_and_reject_bad_files() {
-        let dir = std::env::temp_dir().join(format!("lc-camera-profiles-{}", std::process::id()));
-        let path = save(&profile(), &dir).unwrap();
-        assert_eq!(path.file_name().unwrap(), "ILCE-7M4.json");
-        assert_eq!(load(&path).unwrap(), profile());
-        let bad = |p: CameraProfile| {
-            let path = dir.join("bad.json");
-            std::fs::write(&path, serde_json::to_vec(&p).unwrap()).unwrap();
-            load(&path).is_err()
-        };
-        let mut p = profile();
-        p.matrix[0][0] = f64::NAN;
-        assert!(bad(p), "non-finite matrix");
-        let mut p = profile();
-        p.matrix = [[0.0; 3]; 3];
-        assert!(bad(p), "singular matrix");
-        let mut p = profile();
-        if let Some(t) = p.hue_sat.as_mut() {
-            t.data.truncate(3);
-        }
-        assert!(bad(p), "table data doesn't match its shape");
-        let mut p = profile();
-        p.version = 99;
-        assert!(bad(p), "unknown version");
-        std::fs::write(dir.join("junk.json"), b"{not json").unwrap();
-        assert!(load(&dir.join("junk.json")).is_err());
-        assert!(load(&dir.join("missing.json")).is_err());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn bundled_profiles_are_valid_and_named_after_their_model() {
-        assert!(!BUNDLED.is_empty());
-        for (model, json) in BUNDLED {
-            let p = parse(json.as_bytes(), model).unwrap();
-            assert_eq!(p.model, *model);
-            assert!(p.files >= 5 && p.hue_sat.is_some(), "{model}: {} photos", p.files);
-            assert_eq!(bundled(model), Some(p));
-        }
-        assert!(bundled("No Such Camera").is_none());
-    }
-
-    #[test]
-    fn same_second_profile_replacement_changes_render_cache_key() {
-        let dir = std::env::temp_dir().join(format!("lc-camera-profile-cache-{}", std::process::id()));
-        let mut first = profile();
-        first.model = "ILCE-7CR".into();
-        let path = save(&first, &dir).unwrap();
-        let set_modified = |millis| {
-            let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000) + std::time::Duration::from_millis(millis);
-            let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
-            file.set_times(std::fs::FileTimes::new().set_modified(time)).unwrap();
-            file.metadata().unwrap()
-        };
-        let before = set_modified(100);
-        assert_eq!(load(&path).unwrap(), first);
-        let before_key = cache_key_for(Some(&dir));
-
-        let mut second = first;
-        second.matrix[0][0] = 1.7;
-        save(&second, &dir).unwrap();
-        let after = set_modified(350);
-        assert_eq!(load(&path).unwrap(), second);
-        assert_eq!(before.len(), after.len());
-        let before_time = before.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap();
-        let after_time = after.modified().unwrap().duration_since(std::time::UNIX_EPOCH).unwrap();
-        assert_eq!(before_time.as_secs(), after_time.as_secs());
-        assert_ne!(before_time.subsec_nanos(), after_time.subsec_nanos());
-        let after_key = cache_key_for(Some(&dir));
-        let _ = std::fs::remove_dir_all(dir);
-
-        assert_ne!(before_key, after_key, "a changed profile must not reuse the previous render cache");
-    }
-
-    #[test]
-    fn file_names_are_safe() {
-        assert_eq!(file_name("ILCE-7M4"), "ILCE-7M4.json");
-        assert_eq!(file_name(" DSC-RX100M3 "), "DSC-RX100M3.json");
-        assert_eq!(file_name("../../etc/passwd"), "______etc_passwd.json");
-        assert_eq!(file_name("Ω 1/2"), "__1_2.json");
-    }
-
-    #[test]
-    fn pool_skips_files_that_cannot_contribute() {
-        let mut pool = Pool::default();
-        assert!(pool.add(b"not a raw file").is_err());
-        assert!(pool.fit(1).is_empty());
-        assert!(pool.files().is_empty());
-    }
-}
+mod tests;

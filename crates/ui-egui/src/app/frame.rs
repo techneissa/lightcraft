@@ -272,6 +272,7 @@ impl LightcraftApp {
             return;
         }
         self.shown_library = Some(generation);
+        crate::local_profile_offer::check(self);
         if let Some(l) = self.session.library.as_ref().filter(|l| l.on_disk) {
             let path = l.dir.to_string_lossy().into_owned();
             panels::settings::remember_library(&mut self.ui.settings.recent_libraries, &path);
@@ -393,6 +394,7 @@ impl LightcraftApp {
             }
             panels::dialogs::show(self, &ctx, notice_blocks);
             panels::command_palette::show(self, &ctx);
+            crate::keybinds::overlay::show(self, &ctx);
             updates_ui::show(self, &ctx);
             panels::library_problem::show(self, &ctx, notice_blocks);
             panels::toast(self, &ctx);
@@ -425,6 +427,7 @@ impl LightcraftApp {
         }
         panels::dialogs::show(self, &ctx, notice_blocks);
         panels::command_palette::show(self, &ctx);
+        crate::keybinds::overlay::show(self, &ctx);
         updates_ui::show(self, &ctx);
         panels::library_problem::show(self, &ctx, notice_blocks);
         export_task::poll(self, &ctx);

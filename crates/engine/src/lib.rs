@@ -144,6 +144,9 @@ pub struct UndoEntry {
     pub(crate) retry_inverse: Vec<Op>,
     /// Sidecars still separated from their photo after a failed move or rollback.
     pub(crate) retry_sidecars: Vec<rename::SidecarMove>,
+    /// The local camera profile file whose one-time question this step answered (Switch): undoing the step puts the
+    /// question back (the file leaves `local_profile_asked`), redoing it answers it again.
+    pub(crate) answered_offer: Option<String>,
 }
 
 /// The one photo an undo step changes, when it changes exactly one through its edit, rating, flag,
@@ -380,6 +383,9 @@ pub struct Session {
     pub keyword_sets: Vec<cmd::keywords::KeywordSet>,
     pub keyword_set: Option<String>,
     pub recent_keywords: Vec<String>,
+    /// Local camera profile files (ids) this library has been asked about moving its photos to
+    /// (`cmd::local_profiles`); kept in the library's preferences, so each is asked about once.
+    pub local_profile_asked: Vec<String>,
     /// Before/After: the "before" settings chosen per photo (this session; default: the photo's
     /// import state). See `cmd/before.rs`.
     pub before: std::collections::HashMap<PhotoId, Arc<DevelopSettings>>,
@@ -530,6 +536,7 @@ impl Session {
             keyword_sets: Vec::new(),
             keyword_set: None,
             recent_keywords: Vec::new(),
+            local_profile_asked: Vec::new(),
             before: Default::default(),
             import_probes: Default::default(),
             folder_changes: None,
@@ -644,7 +651,14 @@ impl Session {
         let fwd = op.clone();
         let inv = self.apply_catalog(op)?;
         self.pending_log.push(fwd);
-        self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
+        self.undo.push(UndoEntry {
+            label: label.to_string(),
+            op: inv,
+            folder: None,
+            retry_inverse: Vec::new(),
+            retry_sidecars: Vec::new(),
+            answered_offer: None,
+        });
         self.commits = self.commits.wrapping_add(1);
         if self.undo.len() > 1000 {
             let mut dropped = self.undo.remove(0);
@@ -757,7 +771,7 @@ impl Session {
         }
         let Some(entries) = self.undo.get(self.undo.len() - n..) else { return };
         // Folder moves and partially applied file steps stay on their own.
-        if entries.iter().any(|e| e.folder.is_some() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty()) {
+        if entries.iter().any(|e| e.folder.is_some() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty() || e.answered_offer.is_some()) {
             return;
         }
         let tail = self.undo.split_off(self.undo.len() - n);
@@ -768,7 +782,21 @@ impl Session {
             folder: None,
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            answered_offer: None,
         });
+    }
+
+    /// A history step that answered the one-time local profile question was undone (`answered` false: the question is
+    /// open again) or redone (`answered` true).
+    fn offer_answered(&mut self, id: Option<&str>, answered: bool) {
+        let Some(id) = id else { return };
+        self.local_profile_asked.retain(|x| x != id);
+        if answered {
+            self.local_profile_asked.push(id.to_owned());
+        }
+        if let Err(e) = self.save_prefs() {
+            log::warn!("local camera profiles: {e}");
+        }
     }
 
     /// Apply without recording undo (interactive previews).
@@ -798,7 +826,9 @@ impl Session {
             folder: e.folder.as_ref().map(FolderMove::reversed),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            answered_offer: e.answered_offer.clone(),
         });
+        self.offer_answered(e.answered_offer.as_deref(), false);
         Ok(e.label)
     }
 
@@ -823,7 +853,9 @@ impl Session {
             folder: e.folder.as_ref().map(FolderMove::reversed),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            answered_offer: e.answered_offer.clone(),
         });
+        self.offer_answered(e.answered_offer.as_deref(), true);
         Ok(e.label)
     }
 
@@ -1001,6 +1033,9 @@ impl Session {
         // Auto is omitted too: going back to Camera Matching must reach the other selected photos
         old_json["profile"]["camera_colour"] = serde_json::json!(old.profile.camera_colour);
         new_json["profile"]["camera_colour"] = serde_json::json!(new.profile.camera_colour);
+        // and so is no local profile
+        old_json["profile"]["camera_profile"] = serde_json::json!(old.profile.camera_profile);
+        new_json["profile"]["camera_profile"] = serde_json::json!(new.profile.camera_profile);
         // Compare actual HDR leaves even when persisted defaults omit the whole HDR object.
         old_json["hdr"] = serde_json::json!(old.hdr);
         new_json["hdr"] = serde_json::json!(new.hdr);

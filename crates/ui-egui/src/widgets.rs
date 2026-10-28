@@ -896,6 +896,7 @@ pub fn text_button(ui: &mut Ui, id: &str, label: &str, active: bool) -> Response
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, true, active, label));
     register(ui, format!("button:{id}"), r);
+    crate::keybinds::context::attach(&resp, &format!("button:{id}"));
     let fill = if active {
         t.pressed
     } else if resp.hovered() {
@@ -953,6 +954,7 @@ pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: 
     let (r, resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, active, tooltip));
     register(ui, format!("icon:{id}"), r);
+    crate::keybinds::context::attach(&resp, &format!("icon:{id}"));
     let p = ui.painter();
     let sq = Rect::from_center_size(r.center(), vec2(32.0f32.min(size.x), 32.0f32.min(size.y)));
     if active {

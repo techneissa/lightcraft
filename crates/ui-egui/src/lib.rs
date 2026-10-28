@@ -19,8 +19,10 @@ mod frame_rate;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
+pub mod keybinds;
 pub mod lightroom_import;
 pub mod links;
+mod local_profile_offer;
 pub mod menus;
 mod model_setup;
 pub mod panels;
@@ -151,6 +153,8 @@ pub struct LightcraftApp {
     /// The keyboard shortcuts editor is waiting for a key press for this command: no shortcut
     /// fires (the native menu bar drops its accelerators too) until it gets one or is cancelled.
     pub recording_shortcut: Option<String>,
+    /// The shortcut editor's state: a chord waiting for its next key, the Assign Shortcut box.
+    pub keybinds: crate::keybinds::State,
     /// A text field had the keyboard at the end of the last frame. egui drops the focus as Esc
     /// arrives, before the shortcuts are read, so this is how Esc there stays the field's own.
     pub text_focus: bool,

@@ -508,6 +508,7 @@ impl Photo {
         // pasted onto from such a raw) it changes nothing, so it is not an edit.
         if !self.fitted_look() {
             defaults.profile.camera_colour = self.develop.profile.camera_colour;
+            defaults.profile.camera_profile.clone_from(&self.develop.profile.camera_profile);
         }
         *self.develop != defaults && !self.develop.is_unedited()
     }

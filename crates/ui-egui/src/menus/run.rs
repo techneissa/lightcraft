@@ -1265,6 +1265,7 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             Ok(Value::Null)
         }
         "app.setShortcut" => crate::shortcuts::set_shortcut(app, p),
+        "app.assignShortcut" => crate::keybinds::command(app, p),
         "app.resetShortcuts" => {
             app.ui.settings.keymap.clear();
             Ok(Value::Null)

@@ -68,6 +68,8 @@ enum Work {
         path: String,
         read: Option<crate::merge::ByteReader>,
         packet: String,
+        /// The photo's Profile choice: which colour a DNG is written with.
+        colour: crate::media::LoadOptions,
         dng: Option<DngCompression>,
         /// Lossy DNG: JPEG quality and the long edge to scale to (`None`: full size).
         quality: u8,
@@ -137,10 +139,14 @@ fn prepare_guarded(
         let dng = (o.format == ExportFormat::Dng).then_some(o.dng_compression);
         // the file's bytes; a DNG also decodes the raw data (16-bit samples) and writes it again
         let weight = (p.file_size as usize).saturating_add(if dng.is_some() { full_px.saturating_mul(6) } else { 0 });
+        // (a DNG has colour matrices of its own, so the settings it carries don't name a colour source)
+        let photo: &lightcraft_catalog::Photo = p;
+        let described = if dng.is_some() { for_dng(photo) } else { std::borrow::Cow::Borrowed(photo) };
         let work = Work::File {
             path: path.clone(),
             read: session.media.file_bytes.clone(),
-            packet: crate::sidecar::sidecar_packet_with(p, &session.catalog, removes_location(p, &session.catalog, o)),
+            packet: crate::sidecar::sidecar_packet_with(&described, &session.catalog, removes_location(p, &session.catalog, o)),
+            colour: crate::media::LoadOptions::of(&p.develop),
             dng,
             quality: o.quality,
             lossy_edge: o.resize.is_some().then(|| {
@@ -154,6 +160,21 @@ fn prepare_guarded(
         (work, weight)
     };
     Ok(PreparedExport { photo: id, file_name, source_dir, work, guard, weight })
+}
+
+/// `p` as a DNG written from it describes it: a photo on a local camera profile or macOS Colour is written with that
+/// colour in the DNG's own matrices (a DNG is not offered the choice), so its settings say Camera Matching.
+pub(crate) fn for_dng(p: &lightcraft_catalog::Photo) -> std::borrow::Cow<'_, lightcraft_catalog::Photo> {
+    use lightcraft_develop::CameraColour;
+    if matches!(p.develop.profile.camera_colour, CameraColour::Local | CameraColour::Macos) || p.develop.profile.camera_profile.is_some() {
+        let mut q = p.clone();
+        let mut d = (*q.develop).clone();
+        d.profile.camera_colour = CameraColour::Auto;
+        d.profile.camera_profile = None;
+        q.develop = std::sync::Arc::new(d);
+        return std::borrow::Cow::Owned(q);
+    }
+    std::borrow::Cow::Borrowed(p)
 }
 
 /// The folder a photo's original is in, for [`DestinationMode::SameAsOriginal`]. None for a demo
@@ -217,7 +238,7 @@ impl PreparedExport {
                 };
                 Ok(Exported { file_name, bytes, width: r.image.width, height: r.image.height, sidecars: Vec::new(), gpu_fallback })
             }
-            Work::File { path, read, packet, dng, quality, lossy_edge, label, size, remove_location } => {
+            Work::File { path, read, packet, colour, dng, quality, lossy_edge, label, size, remove_location } => {
                 let bytes = match &read {
                     Some(r) => r(&path)?,
                     None => std::fs::read(&path).map_err(|e| format!("{path}: {e}"))?,
@@ -246,7 +267,7 @@ impl PreparedExport {
                     return Err(format!("{label}: DNG export needs a raw photo"));
                 }
                 let mut raw = lightcraft_raw::decode(&bytes).map_err(|e| format!("{label}: {e}"))?;
-                crate::camera_preview::with_starting_colour(&mut raw, &bytes);
+                crate::camera_preview::with_starting_colour_for(&mut raw, &bytes, colour.colour, colour.profile_key);
                 drop(bytes);
                 let compression = match dng {
                     DngCompression::Lossless => lightcraft_raw::DngCompression::Lj92 { tile: 256 },

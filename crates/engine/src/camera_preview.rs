@@ -18,6 +18,7 @@ use lightcraft_raw::{
 
 mod colour;
 mod hue_sat;
+mod local;
 mod look_fit;
 mod mono;
 mod pairs;
@@ -29,13 +30,16 @@ use colour::colorimetric_camera;
 #[cfg(test)]
 use colour::spectral_prior;
 #[cfg(test)]
+pub(crate) use colour::starting_colour;
+#[cfg(test)]
 pub(crate) use colour::{PROFILE_PROXY, dng_colour, dng_tone_eligible};
 #[cfg(test)]
 use colour::{PROXY, starting_colour_with};
-pub(crate) use colour::{colour_choice_offered, file_local_look, starting_colour, starting_colour_tags, with_starting_colour};
+pub(crate) use colour::{colour_choice_offered, file_local_look, starting_colour_tags, with_starting_colour_for};
 pub(crate) use hue_sat::HueSat;
 #[cfg(test)]
 use hue_sat::{MIN_LUMINANCE_KEPT, NO_LUMINANCE_KEPT, fit_hue_sat, hue_saturation, restore_weight};
+pub(crate) use local::starting_colour_choice;
 #[cfg(test)]
 pub(crate) use look_fit::fit_preview;
 #[cfg(test)]
@@ -85,7 +89,10 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// stored with each smart preview.
 /// 13: a partial look takes the camera profile's colour (matrix and table), else a spectral prior, instead of the
 /// identity, and profiles are fitted with a white-keeping matrix.
-pub const LOOK_VERSION: u32 = 13;
+/// 14: a smart preview names the colour base baked into its pixels (`base`: `auto` Camera Matching, or `local`
+/// a local camera profile); a Camera Matching photo no longer takes a local profile's colour silently, so older
+/// proxies of those photos are rebuilt.
+pub const LOOK_VERSION: u32 = 14;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
@@ -95,5 +102,7 @@ pub(crate) struct CameraLook {
     pub hue_sat: Option<HsvTable>,
 }
 
+#[cfg(test)]
+mod local_tests;
 #[cfg(test)]
 mod tests;

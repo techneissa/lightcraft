@@ -644,6 +644,112 @@ mod tests {
         }
     }
 
+    /// LT7 (command half): `develop.profile local` stores the colour and the profile id in one undo step, Reset clears
+    /// both, a later choice of another colour leaves no stale id, `macos` is accepted (reserved), and bad input is an
+    /// error, never a stored value.
+    #[test]
+    fn a_local_profile_is_set_by_develop_profile_undone_and_reset() {
+        use lightcraft_develop::CameraColour;
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        let hash = s.develop_of(id).unwrap().hash64();
+        s.execute("develop.profile", &json!({"camera_colour": "local", "camera_profile": "A7 V Chart"})).unwrap();
+        let d = s.develop_of(id).unwrap();
+        assert_eq!((d.profile.camera_colour, d.profile.camera_profile.as_deref()), (CameraColour::Local, Some("A7 V Chart")));
+        s.execute("edit.undo", &json!({})).unwrap();
+        let undone = s.develop_of(id).unwrap();
+        assert_eq!((undone.profile.camera_colour, undone.profile.camera_profile.clone()), (CameraColour::Auto, None), "one undo step");
+        assert_eq!(undone.hash64(), hash);
+        s.execute("develop.profile", &json!({"camera_colour": "local", "camera_profile": "A7 V Chart"})).unwrap();
+        s.execute("develop.profile", &json!({"camera_colour": "macos"})).unwrap();
+        let d = s.develop_of(id).unwrap();
+        assert_eq!((d.profile.camera_colour, d.profile.camera_profile.clone()), (CameraColour::Macos, None), "no stale id");
+        s.execute("develop.profile", &json!({"camera_colour": "local", "camera_profile": "A7 V Chart"})).unwrap();
+        s.execute("develop.reset", &json!({})).unwrap();
+        let reset = s.develop_of(id).unwrap();
+        assert_eq!((reset.profile.camera_colour, reset.profile.camera_profile.clone()), (CameraColour::Auto, None));
+        assert_eq!(reset.to_json()["profile"], undone.to_json()["profile"], "Reset returns to the default's profile settings");
+        assert!(!reset.to_json().to_string().contains("camera_profile"));
+        let hash = reset.hash64();
+        for bad in [
+            json!({"camera_colour": "local"}),
+            json!({"camera_colour": "local", "camera_profile": ""}),
+            json!({"camera_colour": "local", "camera_profile": "../etc/passwd"}),
+            json!({"camera_colour": "local", "camera_profile": "a\nb"}),
+            json!({"camera_colour": "auto", "camera_profile": "A7 V Chart"}),
+            json!({"camera_profile": "A7 V Chart"}),
+        ] {
+            assert!(s.execute("develop.profile", &bad).is_err(), "{bad}");
+            assert_eq!(s.develop_of(id).unwrap().hash64(), hash, "{bad} changed nothing");
+        }
+    }
+
+    /// LT13 / LT14 / LT15: a preset made on a photo with a local profile stores the profile and applies it to another
+    /// photo in one undo step, with the rest of the preset, even where the file does not exist (the fallback is at render
+    /// time, the stored id stays); a `macos`, `auto` or Copy / Paste of another colour never leaves the old id behind.
+    #[test]
+    fn presets_carry_the_local_profile_and_never_leave_a_stale_id() {
+        use lightcraft_develop::CameraColour;
+        let mut s = Session::with_demo();
+        let ids: Vec<_> = s.catalog.photos().map(|p| p.id).take(3).collect();
+        let pick = |s: &mut Session, id: lightcraft_catalog::PhotoId| s.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+        let colour = |s: &Session, id| {
+            let p = s.develop_of(id).unwrap().profile.clone();
+            (p.camera_colour, p.camera_profile.clone())
+        };
+        let chart = (CameraColour::Local, Some("A7 V Chart".to_string()));
+        pick(&mut s, ids[0]);
+        s.execute("develop.profile", &json!({"camera_colour": "local", "camera_profile": "A7 V Chart"})).unwrap();
+        s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.6})).unwrap();
+        let made = s.execute("preset.create", &json!({"name": "Chart look"})).unwrap();
+        let chart_preset = made["id"].as_str().unwrap().to_string();
+        let stored = &s.presets.iter().find(|p| p.id == chart_preset).unwrap().settings;
+        assert_eq!((stored["profile"]["camera_colour"].as_str(), stored["profile"]["camera_profile"].as_str()), (Some("local"), Some("A7 V Chart")));
+
+        // LT13 / LT14: applied to another photo, both fields and the look land in one undo step; no profile file exists
+        // on this computer, and nothing is rewritten for that
+        pick(&mut s, ids[1]);
+        let before = s.develop_of(ids[1]).unwrap();
+        s.execute("preset.apply", &json!({"id": chart_preset})).unwrap();
+        let after = s.develop_of(ids[1]).unwrap();
+        assert_eq!(colour(&s, ids[1]), chart);
+        assert_eq!(after.light.exposure, 0.6, "the rest of the preset applies");
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(colour(&s, ids[1]), (CameraColour::Auto, None), "one undo step");
+        assert_eq!(s.develop_of(ids[1]).unwrap().light.exposure, before.light.exposure);
+
+        // LT15: another colour source clears the id, by preset and by Copy / Paste and Sync
+        s.execute("develop.profile", &json!({"camera_colour": "macos"})).unwrap();
+        let made = s.execute("preset.create", &json!({"name": "Mac look"})).unwrap();
+        let macos_preset = made["id"].as_str().unwrap().to_string();
+        s.execute("develop.profile", &json!({"camera_colour": "auto"})).unwrap();
+        let made = s.execute("preset.create", &json!({"name": "Plain look"})).unwrap();
+        let auto_preset = made["id"].as_str().unwrap().to_string();
+        pick(&mut s, ids[2]);
+        s.execute("develop.profile", &json!({"camera_colour": "local", "camera_profile": "A7 V Chart"})).unwrap();
+        s.execute("preset.apply", &json!({"id": macos_preset})).unwrap();
+        assert_eq!(colour(&s, ids[2]), (CameraColour::Macos, None), "a macOS Colour preset leaves no profile id");
+        s.execute("develop.profile", &json!({"camera_colour": "local", "camera_profile": "A7 V Chart"})).unwrap();
+        s.execute("preset.apply", &json!({"id": auto_preset})).unwrap();
+        assert_eq!(colour(&s, ids[2]), (CameraColour::Auto, None), "so does an Auto preset");
+        // …but a preset at less than half its amount leaves the photo's own colour source, id included
+        s.execute("develop.profile", &json!({"camera_colour": "local", "camera_profile": "A7 V Chart"})).unwrap();
+        s.execute("preset.apply", &json!({"id": auto_preset, "amount": 30})).unwrap();
+        assert_eq!(colour(&s, ids[2]), chart);
+        // Copy / Paste
+        pick(&mut s, ids[0]);
+        s.execute("develop.copy", &json!({})).unwrap();
+        pick(&mut s, ids[1]);
+        s.execute("develop.paste", &json!({})).unwrap();
+        assert_eq!(colour(&s, ids[1]), chart);
+        pick(&mut s, ids[1]);
+        s.execute("develop.profile", &json!({"camera_colour": "auto"})).unwrap();
+        s.execute("develop.copy", &json!({})).unwrap();
+        pick(&mut s, ids[0]);
+        s.execute("develop.paste", &json!({})).unwrap();
+        assert_eq!(colour(&s, ids[0]), (CameraColour::Auto, None), "pasting Camera Matching clears the id");
+    }
+
     #[test]
     fn slugs() {
         assert_eq!(slug("Warm & Soft!"), "warm-soft");
