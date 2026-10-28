@@ -176,3 +176,21 @@ fn starting_colour_is_a_setting_in_the_import_tab() {
     assert!(says(&h), "off the Mac the hint says so");
     crate::dialogs::settings::starting_colour::NOT_A_MAC_FOR_TESTS.with(|n| n.set(None));
 }
+
+/// T38 (summary): a preset applied to several photos says how many can't use macOS Colour here; nothing when none.
+#[test]
+fn a_preset_says_how_many_photos_cant_use_macos_colour_here() {
+    use crate::macos_colour::picker::fallback_line;
+    assert_eq!(fallback_line(&json!({"macosFallback": 3})).as_deref(), Some("3 photos can't use macOS Colour here and use Camera Matching."));
+    assert_eq!(fallback_line(&json!({"macosFallback": 1})).as_deref(), Some("1 photo can't use macOS Colour here and uses Camera Matching."));
+    assert_eq!(fallback_line(&json!({"macosFallback": 0})), None);
+    assert_eq!(fallback_line(&serde_json::Value::Null), None);
+}
+
+/// §6.8 rule 1: the Create Preset dialog includes the Profile group by default, so a preset made on macOS Colour
+/// carries it (and says so, `the_create_preset_dialog_says_when_it_includes_the_colour_source`).
+#[test]
+fn create_preset_includes_the_profile_group_by_default() {
+    let dialog = crate::state::Dialog::create_preset();
+    assert!(matches!(&dialog, crate::state::Dialog::CreatePreset { groups, .. } if groups.iter().any(|g| g == "profile")), "{dialog:?}");
+}

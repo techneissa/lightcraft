@@ -1079,20 +1079,29 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         // ---- presets
-        cmd!("preset.apply", "Apply Preset", [], None, "{id: presetId, amount?: 0..200 (percent), ids?}", has_selection, |s, p| {
-            let pid = str_param(p, "id").ok_or_else(|| bad("preset.apply", "missing id"))?;
-            let preset = s.presets.iter().find(|x| x.id == pid).cloned().ok_or_else(|| bad("preset.apply", format!("unknown preset `{pid}`")))?;
-            let amount = f64_or(p, "amount", 100.0).clamp(0.0, 200.0) / 100.0;
-            // `id` names the preset here: the photos are `ids`, else the selection
-            let ids = s.targets(&json!({"ids": p.get("ids")}))?;
-            let ops = ids
-                .iter()
-                .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                .filter_map(|(id, d)| s.develop_op(id, preset.apply(&d, amount), &format!("Preset: {}", preset.name)))
-                .collect::<Vec<_>>();
-            s.commit(&format!("Preset: {}", preset.name), Op::Batch { ops })?;
-            ok()
-        }),
+        cmd!(
+            "preset.apply",
+            "Apply Preset",
+            [],
+            None,
+            "{id: presetId, amount?: 0..200 (percent), ids?} → {macosFallback: how many of the photos are on macOS Colour but use Camera Matching colours on this computer}",
+            has_selection,
+            |s, p| {
+                let pid = str_param(p, "id").ok_or_else(|| bad("preset.apply", "missing id"))?;
+                let preset = s.presets.iter().find(|x| x.id == pid).cloned().ok_or_else(|| bad("preset.apply", format!("unknown preset `{pid}`")))?;
+                let amount = f64_or(p, "amount", 100.0).clamp(0.0, 200.0) / 100.0;
+                // `id` names the preset here: the photos are `ids`, else the selection
+                let ids = s.targets(&json!({"ids": p.get("ids")}))?;
+                let ops = ids
+                    .iter()
+                    .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
+                    .filter_map(|(id, d)| s.develop_op(id, preset.apply(&d, amount), &format!("Preset: {}", preset.name)))
+                    .collect::<Vec<_>>();
+                s.commit(&format!("Preset: {}", preset.name), Op::Batch { ops })?;
+                // photos the preset put on macOS Colour that this computer makes with Camera Matching colours
+                Ok(json!({"macosFallback": super::macos_colour::fallbacks(s, &ids)}))
+            }
+        ),
         cmd!("preset.create", "Create Preset", ["Photo"], None, "{name, group?, groups?: [settingsGroup]}", has_active, |s, p| {
             let c = "preset.create";
             let id = active(s, c)?;

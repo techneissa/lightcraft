@@ -99,6 +99,25 @@ pub(crate) fn ask(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId) {
     app.ui.dialog = Some(Dialog::MacosForCamera { photo: id.0, camera, count, skipped });
 }
 
+/// The line for photos a preset put on macOS Colour that this computer makes with Camera Matching colours
+/// (`preset.apply`'s `macosFallback`).
+pub(crate) fn fallback_line(applied: &serde_json::Value) -> Option<String> {
+    let n = applied.get("macosFallback").and_then(serde_json::Value::as_u64).filter(|n| *n > 0)?;
+    Some(if n == 1 {
+        crate::i18n::tr("1 photo can't use macOS Colour here and uses Camera Matching.").to_string()
+    } else {
+        crate::i18n::tr_format!("{n} photos can't use macOS Colour here and use Camera Matching.", n = n)
+    })
+}
+
+/// Says a preset was applied, and how many of its photos can't use macOS Colour here (longer, so it can be read).
+pub(crate) fn preset_applied(app: &mut LightcraftApp, ctx: &egui::Context, text: String, applied: &serde_json::Value) {
+    match fallback_line(applied) {
+        Some(line) => app.toast_for(ctx, format!("{text}. {line}"), 8.0),
+        None => app.toast(ctx, text),
+    }
+}
+
 /// The question's text.
 pub(crate) fn body(ui: &mut egui::Ui, t: &Tokens, camera: &str, count: usize, skipped: usize) {
     let question = if count == 1 {

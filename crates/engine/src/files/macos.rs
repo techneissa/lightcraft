@@ -267,6 +267,8 @@ pub(super) fn transferred(
     (plain, twin, SourceInfo { camera_tone, ..info })
 }
 
+#[cfg(test)]
+mod preset_tests;
 #[cfg(all(test, target_os = "macos"))]
 mod real_tests;
 #[cfg(test)]

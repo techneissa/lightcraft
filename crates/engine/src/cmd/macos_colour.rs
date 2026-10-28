@@ -60,6 +60,17 @@ pub(crate) fn plan(s: &Session, c: &str, p: &Value) -> crate::Result<Plan> {
     Ok(plan)
 }
 
+/// Of `ids`, the photos on macOS Colour that this computer makes with Camera Matching colours (not a Mac, a camera or
+/// format macOS doesn't read, another size): what a preset applied to several photos reports.
+pub(crate) fn fallbacks(s: &Session, ids: &[PhotoId]) -> usize {
+    crate::import::with_macos_gate(|gate, verdicts| {
+        ids.iter()
+            .filter_map(|id| s.catalog.photo(*id))
+            .filter(|p| p.develop.profile.camera_colour == CameraColour::Macos && crate::import::macos_gates(p, gate, verdicts).is_err())
+            .count()
+    })
+}
+
 /// Moves the planned photos to macOS Colour in one undo step; returns how many moved.
 pub(crate) fn apply(s: &mut Session, plan: &Plan) -> crate::Result<usize> {
     let label = "Profile: macOS Colour";
