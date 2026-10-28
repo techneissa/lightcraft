@@ -295,7 +295,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
 }
 
 /// A check mark at the right end of a row (a command that is on, like Before/After Split).
-pub(super) fn check_mark(ui: &egui::Ui, row: egui::Rect) {
+pub(crate) fn check_mark(ui: &egui::Ui, row: egui::Rect) {
     let t = crate::theme::Tokens::get(ui.ctx());
     let c = egui::Rect::from_center_size(egui::pos2(row.right() - 12.0, row.center().y), egui::vec2(13.0, 13.0));
     crate::icons::paint(ui.painter(), c, crate::icons::Icon::Check, t.text);

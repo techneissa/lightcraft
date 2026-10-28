@@ -79,3 +79,30 @@ fn failed_save_is_reported_and_shown_until_a_save_succeeds() {
     assert!(!has_indicator(&h));
     assert_eq!(h.app.ui.toast.clone().map(|t| t.0).as_deref(), Some("Library saved"));
 }
+
+// Scenario: the Library Status icon is hidden, and a failing save brings its warning back anyway
+#[test]
+fn a_hidden_library_status_icon_still_warns_about_unsaved_changes() {
+    let store = Flaky::default();
+    let mut s = lightcraft_engine::Session::new();
+    let stores = LibraryStores { dir: "flaky".into(), catalog: Box::new(store.clone()), files: Box::new(MemStore::new()), on_disk: false };
+    s.open_library_in(stores, false).unwrap();
+    let app = LightcraftApp::new(s, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    let r = h.request("engine.execute", json!({"command": "topBar.setItem", "params": {"item": "cloud", "shown": false}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let has = |h: &Headless, id: &str| h.app.widgets.iter().any(|(w, _)| w == id);
+    assert!(!has(&h, "icon:cloud"), "hidden while all is well");
+    store.fail.store(true, Ordering::SeqCst);
+    let r = h.request("engine.execute", json!({"command": "album.create", "params": {"name": "Kept"}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    h.step();
+    h.step();
+    assert!(has(&h, "indicator:unsaved") && has(&h, "icon:cloud"), "the warning is not hidden");
+    store.fail.store(false, Ordering::SeqCst);
+    h.request("engine.execute", json!({"command": "library.info"}), T);
+    h.step();
+    h.step();
+    assert!(!has(&h, "icon:cloud"), "and goes again with the problem");
+}

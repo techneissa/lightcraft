@@ -35,6 +35,7 @@ pub mod slideshow;
 pub mod split_divider;
 pub mod strip;
 pub mod topbar;
+pub mod topbar_items;
 pub mod unnamed;
 
 use egui::{Align2, Rect, pos2, vec2};

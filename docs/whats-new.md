@@ -2,6 +2,14 @@
 
 ## 2026-10-28
 
+### Choose what the top bar shows
+- Any button on the top bar can be turned off: Settings ▸ Top Bar has a check box for each (My Photos Panel, Back
+  and Forward, Filters, Appearance Mode, Activity, Import Photos, Export, Keyboard Shortcuts, Library Status), or
+  right-click an empty spot on the bar. A button that is off still works from the menu bar; each row says where.
+  Reset to Default shows them all. The search field and the menus stay. Library Status comes back, as a warning,
+  if saving fails.
+- The Discord button is gone from the top bar. Help ▸ Join the ArtCraft Discord… and the About window still have it.
+
 ### Arrange the photo menu
 - The menu a right-click on a photo opens can be arranged in Settings ▸ Photo Menu (or its Customize Menu… item):
   drag a row to move it, × takes it out, and the list beside it adds any item back, or any command from the menu bar,

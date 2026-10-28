@@ -1,4 +1,4 @@
-//! Community and project links (Help menu, About dialog, top-bar Discord button).
+//! Community and project links (Help menu, About dialog).
 
 /// The app's id in ArtCraft URLs.
 pub const APP: &str = "lightcraft";
