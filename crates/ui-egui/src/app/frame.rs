@@ -81,8 +81,8 @@ impl LightcraftApp {
         panels::faces::pump_background(self, ctx, now);
         model_setup::pump(self, ctx, now);
         focus_scan::pump(self, ctx, now);
-        // auto import: list the watched folder every few seconds (on a worker thread: it may be on
-        // a network share), then import what's new like any import (also on a worker thread)
+        // auto import: poll the watched folder every few seconds (on a worker thread: it may be on
+        // a network share), list it when it changed, then import what's new like any import (also on a worker thread)
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(folder) = self.session.import_defaults.auto_folder.clone() {
             const LABEL: &str = "Auto Import";
@@ -93,14 +93,20 @@ impl LightcraftApp {
                 && !self.tasks.is_running(LABEL)
             {
                 self.ui.auto_import_at = now;
-                let work = move || lightcraft_engine::cmd::library::list_auto_import_folder(&folder);
-                let done = |app: &mut LightcraftApp, _ctx: &egui::Context, listing: Result<Vec<(String, u64)>, String>| {
-                    let listing = match listing {
-                        Ok(l) => l,
+                // an idle folder costs one stat (see `auto_import_watch`), not a listing
+                let (last, force) = self.ui.auto_watch.ask(&folder, now);
+                let watched = folder.clone();
+                let work = move || lightcraft_engine::cmd::library::poll_auto_import_folder(&folder, last, force);
+                let done = move |app: &mut LightcraftApp, _ctx: &egui::Context, poll: Result<lightcraft_engine::cmd::library::AutoImportPoll, String>| {
+                    let poll = match poll {
+                        Ok(p) => p,
                         Err(e) => return log::debug!("auto import: {e}"),
                     };
+                    app.ui.auto_watch.polled(&watched, poll.stamp, poll.listing.is_some(), now);
+                    let Some(listing) = poll.listing else { return };
                     let p = serde_json::json!({"listing": listing, "start": false});
                     let Ok(r) = app.session.execute("library.autoImportScan", &p) else { return };
+                    app.ui.auto_watch.scanned(r.get("waiting").and_then(serde_json::Value::as_bool).unwrap_or(false));
                     let Some(mut params) = r.get("import").cloned().filter(|_| app.import.is_none()) else { return };
                     let paths: Vec<String> =
                         params["paths"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
@@ -110,7 +116,7 @@ impl LightcraftApp {
                     let undo0 = app.session.undo.len();
                     app.import = Some(import::ImportTask::new(paths, params, undo0, false).auto());
                 };
-                // listed every few seconds: quiet, no row in the activity stack
+                // polled every few seconds: quiet, no row in the activity stack
                 if let Err(e) = tasks::spawn(self, LABEL, None, work, done) {
                     log::warn!("{e}");
                 }

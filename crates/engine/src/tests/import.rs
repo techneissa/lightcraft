@@ -533,6 +533,36 @@ fn auto_import_watched_folder() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An idle watch lists the folder only when its modification time changed (or when forced), and the
+/// scan says `waiting` while a new file's size is still being confirmed, so the app keeps scanning
+/// then and only then.
+#[test]
+fn auto_import_polls_by_the_folders_time_and_says_when_it_waits() {
+    use crate::cmd::library::poll_auto_import_folder;
+    let dir = temp_dir("watch-poll");
+    let folder = dir.to_string_lossy().to_string();
+    let first = poll_auto_import_folder(&folder, None, false).unwrap();
+    assert!(first.listing.is_some(), "the first poll lists");
+    let idle = poll_auto_import_folder(&folder, first.stamp, false).unwrap();
+    assert!(idle.listing.is_none(), "nothing changed: not listed");
+    assert!(poll_auto_import_folder(&folder, first.stamp, true).unwrap().listing.is_some(), "forced: listed");
+    write_png(&dir.join("one.png"), 1);
+    let changed = poll_auto_import_folder(&folder, first.stamp, false).unwrap();
+    assert_eq!(changed.listing.map(|l| l.len()), Some(1), "a new file bumps the folder's time");
+    assert!(poll_auto_import_folder(&dir.join("nope").to_string_lossy(), None, false).is_err());
+
+    let mut s = Session::new().with_fs();
+    s.execute("library.autoImport", &json!({"folder": folder})).unwrap();
+    let scan = |s: &mut Session| s.execute("library.autoImportScan", &json!({})).unwrap();
+    let r = scan(&mut s);
+    assert_eq!((r["waiting"].clone(), r["imported"].clone()), (json!(true), json!([])), "first sight: confirm the size");
+    let r = scan(&mut s);
+    assert_eq!(r["imported"].as_array().map(Vec::len), Some(1), "{r}");
+    assert_eq!(r["waiting"], json!(false), "nothing left to confirm");
+    assert_eq!(scan(&mut s)["waiting"], json!(false));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Smart previews: with the original offline the photo still renders (and edits apply) from
 /// its proxy; without the proxy it can't be opened.
 #[test]

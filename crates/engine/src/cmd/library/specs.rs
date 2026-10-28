@@ -1145,40 +1145,50 @@ pub fn specs() -> Vec<CommandSpec> {
             "Auto Import Now",
             [],
             None,
-            "{listing?: [[path, size]] (the folder as listed by the caller, e.g. on a worker thread), start?: bool (false: return the `library.import` params as `import` instead of importing)} — add the watched folder's new photos (files the library doesn't have yet; partial / still-copying files wait for the next scan) → {imported, folder, warnings?: [{path, code, profile?, mode?, fields?}], import?}",
+            "{listing?: [[path, size]] (the folder as listed by the caller, e.g. on a worker thread), start?: bool (false: return the `library.import` params as `import` instead of importing)} — add the watched folder's new photos (files the library doesn't have yet; partial / still-copying files wait for the next scan) → {imported, folder, waiting (a file is new or still growing: scan again soon), warnings?: [{path, code, profile?, mode?, fields?}], import?}",
             always,
             |s, p| {
                 let Some(folder) = s.import_defaults.auto_folder.clone() else { return Ok(json!({"imported": [], "folder": null})) };
-                // only files that stopped growing: a file still being written is left for later
-                let known: std::collections::HashSet<String> = s
-                    .catalog
-                    .photos()
-                    .filter_map(|p| match &p.source {
-                        lightcraft_catalog::Source::File { path } => Some(path.clone()),
-                        _ => None,
-                    })
-                    .collect();
                 // the folder's files and sizes: listed here, or already listed on a worker thread (the app)
                 let listing: Vec<(String, u64)> = match p.get("listing").and_then(Value::as_array) {
                     Some(l) => l.iter().filter_map(|e| Some((e.get(0)?.as_str()?.to_string(), e.get(1)?.as_u64()?))).collect(),
                     None => list_auto_import_folder(&folder).map_err(|e| bad("library.autoImportScan", e))?,
                 };
+                // the library's file paths, collected only once a file turns up that was not tried yet
+                // (an idle watch of a big folder has none)
+                let mut known: Option<std::collections::HashSet<String>> = None;
+                // only files that stopped growing: a file still being written is left for later
                 let mut fresh = Vec::new();
+                // files seen for the first time or still growing: the caller scans again soon
+                let mut waiting = false;
                 for (ps, size) in listing {
-                    if known.contains(&ps) {
-                        continue;
-                    }
                     // each file is tried once (a non-photo isn't retried every scan)
                     if s.auto_import_seen.get(&ps) == Some(&u64::MAX) {
+                        continue;
+                    }
+                    let known = known.get_or_insert_with(|| {
+                        s.catalog
+                            .photos()
+                            .filter_map(|p| match &p.source {
+                                lightcraft_catalog::Source::File { path } => Some(path.clone()),
+                                _ => None,
+                            })
+                            .collect()
+                    });
+                    if known.contains(&ps) {
+                        // (the library has it: never tried again, so the set is not built for it again)
+                        s.auto_import_seen.insert(ps, u64::MAX);
                         continue;
                     }
                     let seen = s.auto_import_seen.insert(ps.clone(), size);
                     if size > 0 && seen == Some(size) {
                         fresh.push(ps);
+                    } else if size > 0 {
+                        waiting = true;
                     }
                 }
                 if fresh.is_empty() {
-                    return Ok(json!({"imported": [], "folder": folder}));
+                    return Ok(json!({"imported": [], "folder": folder, "waiting": waiting}));
                 }
                 let mode = if s.import_defaults.auto_copy { "copy" } else { "add" };
                 // a photo deleted from the library doesn't come back on its own because its file
@@ -1195,13 +1205,13 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 if p.get("start").and_then(Value::as_bool) == Some(false) {
                     // the caller imports them (the app: on a worker thread)
-                    return Ok(json!({"imported": [], "folder": folder, "import": params}));
+                    return Ok(json!({"imported": [], "folder": folder, "import": params, "waiting": waiting}));
                 }
                 let sel = s.selection.clone();
                 let r = s.execute("library.import", &params)?;
                 // arriving photos don't take over the selection
                 s.selection = sel;
-                let mut result = json!({"imported": r["imported"], "folder": folder});
+                let mut result = json!({"imported": r["imported"], "folder": folder, "waiting": waiting});
                 if let Some(warnings) = r.get("warnings") {
                     result["warnings"] = warnings.clone();
                 }
