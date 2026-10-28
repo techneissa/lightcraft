@@ -272,6 +272,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::Merge { opts } => opts.title(),
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
+        Dialog::LocalProfileSwitch { .. } => "Local Camera Profile",
         Dialog::MovePhotos { .. } => "Move Photos",
         Dialog::LightroomCatalog { .. } => "Lightroom Classic Catalog",
         Dialog::LightroomDestination { .. } => "Import Lightroom Catalog",
@@ -326,6 +327,7 @@ fn cancel_label(dlg: &Dialog, sam: &SamState) -> &'static str {
         Dialog::SamModel { .. } if sam.running || sam.installed || sam.by_hand => "Close",
         Dialog::SamModel { .. } => "Not Now",
         Dialog::LightroomResult { .. } => "Close",
+        Dialog::LocalProfileSwitch { .. } => "Leave on Camera Matching",
         _ => "Cancel",
     }
 }
@@ -348,6 +350,7 @@ fn ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool, sam: &SamSta
         Dialog::FaceModel { info, .. } if !informational && info["download"].is_string() => "Download",
         Dialog::FaceModel { .. } if !informational => "Install",
         Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
+        Dialog::LocalProfileSwitch { .. } => "Switch",
         Dialog::SaveEffect { .. } => "Create",
         Dialog::MovePhotos { .. } => "Move",
         // (not "Merge": that is photo merging, HDR / panorama, in some languages)
@@ -1837,6 +1840,16 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
                 if *count == 1 { crate::i18n::tr("this photo").to_string() } else { crate::i18n::tr_format!("these {count} photos", count = count) };
             ui.label(crate::i18n::tr_format!("Move {what} to Recently Deleted?", what = what));
             ui.label(egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
+        }
+        Dialog::LocalProfileSwitch { name, count, .. } => {
+            ui.label(crate::i18n::tr_format!(
+                "{count} photos were rendered with your local profile '{name}'. Switch them to it to keep their look?",
+                count = count,
+                name = name
+            ));
+            ui.label(
+                egui::RichText::new(crate::i18n::tr("Camera Matching no longer uses it. You can undo this with Edit ▸ Undo.")).color(t.text_dim),
+            );
         }
         Dialog::MovePhotos { .. } => move_photos_body(ui, t, dlg),
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::body(app, ui, d),

@@ -140,13 +140,23 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         });
         // a raw whose colour is matched to the camera's JPEG: say which way it starts (the choice is in the menu)
         if super::camera_colour::offered(app, id) {
-            let colour = d.profile.camera_colour;
-            let tip = super::camera_colour::CHOICES.iter().find(|c| c.0 == colour).map_or("", |c| c.2);
-            let r = ui.label(egui::RichText::new(crate::i18n::tr(super::camera_colour::label(colour))).font(t.font(12.0)).color(t.text_dim));
+            let row = super::camera_colour::current(app, id, &d);
+            let shown = if row.profile.is_some() { row.label.clone() } else { crate::i18n::tr(&row.label).to_string() };
+            let r = ui.label(egui::RichText::new(shown).font(t.font(12.0)).color(t.text_dim));
             crate::widgets::register(ui, "label:profile.cameraColour", r.rect);
-            r.on_hover_text(crate::i18n::tr(tip));
+            r.on_hover_text(row.tip);
         }
     });
+    // a local profile this photo can't use (the file is missing, damaged or for another camera): it renders as Camera
+    // Matching, and says so for as long as that is so
+    if d.profile.camera_colour == lightcraft_develop::CameraColour::Local
+        && let Some(note) = app.session.source_info(id).colour_note
+    {
+        egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 8 }).show(ui, |ui| {
+            let r = ui.add(egui::Label::new(egui::RichText::new(note).font(t.font(12.0)).color(t.text_dim)).wrap());
+            crate::widgets::register(ui, "label:profile.cameraColourNote", r.rect);
+        });
+    }
     if d.profile.id != "lc.color" {
         control(app, ui, &d, "profile.amount", true);
         ui.add_space(6.0);

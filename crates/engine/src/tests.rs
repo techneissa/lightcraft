@@ -31,6 +31,7 @@ mod keyword_list;
 mod libops;
 mod library;
 mod lightroom_folder;
+mod local_profiles;
 mod mask_effects;
 mod merge;
 mod move_to_share;

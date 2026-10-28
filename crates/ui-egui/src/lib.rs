@@ -21,6 +21,7 @@ pub mod i18n;
 pub mod icons;
 pub mod lightroom_import;
 pub mod links;
+mod local_profile_offer;
 pub mod menus;
 mod model_setup;
 pub mod panels;

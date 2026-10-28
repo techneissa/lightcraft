@@ -380,6 +380,9 @@ pub struct Session {
     pub keyword_sets: Vec<cmd::keywords::KeywordSet>,
     pub keyword_set: Option<String>,
     pub recent_keywords: Vec<String>,
+    /// Local camera profile files (ids) this library has been asked about moving its photos to
+    /// (`cmd::local_profiles`); kept in the library's preferences, so each is asked about once.
+    pub local_profile_asked: Vec<String>,
     /// Before/After: the "before" settings chosen per photo (this session; default: the photo's
     /// import state). See `cmd/before.rs`.
     pub before: std::collections::HashMap<PhotoId, Arc<DevelopSettings>>,
@@ -530,6 +533,7 @@ impl Session {
             keyword_sets: Vec::new(),
             keyword_set: None,
             recent_keywords: Vec::new(),
+            local_profile_asked: Vec::new(),
             before: Default::default(),
             import_probes: Default::default(),
             folder_changes: None,
