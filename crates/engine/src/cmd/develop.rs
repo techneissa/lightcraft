@@ -533,13 +533,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     (None, None) => "Camera Matching".to_owned(),
                     (Some(_), None) => "Profile".to_owned(),
                 };
-                // leaving macOS Colour for a relative-scale source: a white set in Kelvin is carried over to that scale
-                let leaving_macos = active(s, "develop.profile").ok().and_then(|photo| {
-                    let p = s.catalog.photo(photo)?;
-                    let from_macos = p.develop.profile.camera_colour == lightcraft_develop::CameraColour::Macos;
-                    let to_relative = colour.is_some_and(|c| c != lightcraft_develop::CameraColour::Macos) && p.relative_wb();
-                    (from_macos && to_relative).then(|| crate::files::macos_as_shot(s, photo)).flatten()
-                });
+                let leaving_macos = super::macos_colour::leaving_as_shot(s, colour);
                 edit(s, "develop.profile", &label, |d| {
                     if let Some(as_shot) = leaving_macos {
                         lightcraft_pipeline::local::leave_kelvin(d, as_shot);

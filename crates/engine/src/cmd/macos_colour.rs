@@ -71,6 +71,16 @@ pub(crate) fn fallbacks(s: &Session, ids: &[PhotoId]) -> usize {
     })
 }
 
+/// Leaving macOS Colour for `colour` on a relative-scale source: the as-shot white a white set in Kelvin is carried
+/// over from (`pipeline::local::leave_kelvin`), for the active photo; `None` when nothing is carried.
+pub(crate) fn leaving_as_shot(s: &Session, colour: Option<CameraColour>) -> Option<(f64, f64)> {
+    let photo = s.active()?;
+    let p = s.catalog.photo(photo)?;
+    let from_macos = p.develop.profile.camera_colour == CameraColour::Macos;
+    let to_relative = colour.is_some_and(|c| c != CameraColour::Macos) && p.relative_wb();
+    (from_macos && to_relative).then(|| crate::files::macos_as_shot(s, photo)).flatten()
+}
+
 /// Moves the planned photos to macOS Colour in one undo step; returns how many moved.
 pub(crate) fn apply(s: &mut Session, plan: &Plan) -> crate::Result<usize> {
     let label = "Profile: macOS Colour";
