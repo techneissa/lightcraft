@@ -95,7 +95,7 @@ fn an_unusable_local_profile_renders_as_camera_matching_with_a_note() {
     std::fs::write(d.join("broken.json"), b"{}").unwrap();
     let _d = camera_profiles::use_dir_for_tests(&d);
     let matching = CameraLook { matrix: Mat3::IDENTITY, ..profile_look() };
-    let run = |model: &str, key: u64| {
+    let run = |model: &str, key: u128| {
         let mut raw = raw_of(RawFormat::Arw, model, Default::default());
         local_colour_with(
             &mut raw,

@@ -140,11 +140,13 @@ fn the_render_key_of_camera_matching_ignores_the_users_folder() {
     };
     let dir = temp("key");
     let _dir = use_dir_for_tests(&dir);
-    let before = cache_key();
+    // (`bundled_key` is what `cache_key` remembers: computed afresh here, so a key that read the folder would differ)
+    let before = bundled_key();
     put(&dir, "A7 V Chart.json", &for_model("ILCE-7M5", Some("A7 V Chart")));
     put(&dir, "ILCE-7M4.json", &for_model("ILCE-7M4", None));
-    assert_eq!(cache_key(), before);
+    assert_eq!(bundled_key(), before, "adding local profiles does not move the key");
     assert_eq!(before, formula());
+    assert_eq!(cache_key(), before);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -231,4 +233,60 @@ fn pool_skips_files_that_cannot_contribute() {
     assert!(pool.add(b"not a raw file").is_err());
     assert!(pool.fit(1).is_empty());
     assert!(pool.files().is_empty());
+}
+
+/// A replacement with the same length and the same modification time (a copy that keeps its time, a coarse clock)
+/// still gives the profile a new key: the content is read and hashed, not only the stamp.
+#[test]
+fn a_replacement_with_the_same_length_and_time_is_seen() {
+    let dir = temp("same-stamp");
+    let _dir = use_dir_for_tests(&dir);
+    let path = put(&dir, "A7 V Chart.json", &for_model("ILCE-7M5", Some("A7 V Chart")));
+    let stamp = || {
+        let time = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_times(std::fs::FileTimes::new().set_modified(time)).unwrap();
+    };
+    stamp();
+    let first = local_key("A7 V Chart");
+    let mut second = for_model("ILCE-7M5", Some("A7 V Chart"));
+    second.files = 13;
+    let bytes = serde_json::to_vec(&second).unwrap();
+    assert_eq!(bytes.len(), serde_json::to_vec(&for_model("ILCE-7M5", Some("A7 V Chart"))).unwrap().len(), "same length");
+    std::fs::write(&path, bytes).unwrap();
+    stamp();
+    let replaced = local_key("A7 V Chart");
+    assert_ne!(replaced, first, "a new key for the new content");
+    assert_eq!(resolve_local(replaced, "ILCE-7M5").unwrap().1.files, 13, "and the new profile");
+    // the picker's listing (no hashing) catches up once the stamp moves
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The registry never drops a key that is in use: many profiles registered later leave the first resolvable, and a
+/// registry that lost a key (as after a restart of the process) finds the profile again from the folder.
+#[test]
+fn a_key_is_never_lost_to_other_profiles_and_is_found_again_from_the_folder() {
+    let dir = temp("registry");
+    let _dir = use_dir_for_tests(&dir);
+    put(&dir, "A7 V Chart.json", &for_model("ILCE-7M5", Some("A7 V Chart")));
+    let first = local_key("A7 V Chart");
+    let gone = local_key("Gone");
+    for i in 0..6000 {
+        local_key(&format!("junk {i}"));
+    }
+    assert!(resolve_local(first, "ILCE-7M5").is_ok(), "a later registration did not push it out");
+    assert_eq!(resolve_local(gone, "ILCE-7M5").unwrap_err(), ("Gone".to_owned(), LocalUnavailable::Missing), "with its id");
+    forget_registry();
+    assert_eq!(resolve_local(first, "ILCE-7M5").unwrap().0, "A7 V Chart", "found again from the folder");
+    // an id keeps its newest versions; the oldest of many are the ones that go
+    let mut keys = Vec::new();
+    for i in 0..=KEYS_PER_ID {
+        let mut p = for_model("ILCE-7M5", Some("A7 V Chart"));
+        p.files = 100 + i;
+        put(&dir, "A7 V Chart.json", &p);
+        keys.push(local_key("A7 V Chart"));
+    }
+    assert!(keys.windows(2).all(|w| w[0] != w[1]), "each version has its own key");
+    assert!(resolve_local(keys[KEYS_PER_ID], "ILCE-7M5").is_ok(), "the newest is held");
+    let _ = std::fs::remove_dir_all(&dir);
 }

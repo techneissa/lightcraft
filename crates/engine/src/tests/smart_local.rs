@@ -69,7 +69,7 @@ fn a_photo_is_built_with_its_local_profile_only_while_the_file_is_usable_for_its
     let _d = camera_profiles::use_dir_for_tests(&d);
     let (options, want) = smart_local(&raw_photo("SONY ILCE-7M5", Some("A7 V Chart")));
     let key = camera_profiles::local_key("A7 V Chart");
-    assert_eq!(options.map(|o| (o.colour, o.profile_key)), Some((CameraColour::Local, key)));
+    assert_eq!(options.map(|o| (o.colour, o.profile_key)), Some((CameraColour::Local, Some(key))));
     assert_eq!(want, LocalWant::Is(local_stamp("A7 V Chart", key)));
     // Camera Matching, whatever the photo is set to otherwise
     assert_eq!(smart_local(&raw_photo("SONY ILCE-7M5", None)), (None, LocalWant::No));

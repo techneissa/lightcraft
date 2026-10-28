@@ -59,14 +59,14 @@ impl crate::Session {
             ^ id.0.wrapping_mul(0x9e37_79b9_7f4a_7c15)
             ^ content.rotate_left(17)
             ^ salt
-            // (a local profile's file: 0, so no change, for every other photo)
-            ^ options.profile_key.rotate_left(29);
+            // (a local profile's file: nothing, so no change, for every other photo)
+            ^ options.profile_key.map_or(0, |k| (k as u64) ^ ((k >> 64) as u64)).rotate_left(29);
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
             k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key());
             // (only a photo on a local profile has its file in its key, so every other thumbnail stays valid)
-            if options.profile_key != 0 {
-                k.u64(options.profile_key);
+            if let Some(local) = options.profile_key {
+                k.u64(local as u64).u64((local >> 64) as u64);
             }
             // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
             if salt != 0 {
@@ -102,6 +102,8 @@ impl crate::Session {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
         job.settings = Arc::new(settings.clone());
         job.key = settings.hash64() ^ ((max_w as u64) << 40) ^ ((max_h as u64) << 20) ^ (apply_crop as u64) ^ (job.level as u64) << 60;
+        // (a hover over a local profile follows its file, as every other render of it does)
+        job.key ^= LoadOptions::of(settings).profile_key.map_or(0, |k| (k as u64) ^ ((k >> 64) as u64)).rotate_left(29);
         Some(job)
     }
 
@@ -114,9 +116,8 @@ impl crate::Session {
             .u64(edge as u64)
             .u64(RENDER_CACHE_VERSION)
             .u64(crate::camera_profiles::cache_key());
-        let local = LoadOptions::of(settings).profile_key;
-        if local != 0 {
-            k.u64(local);
+        if let Some(local) = LoadOptions::of(settings).profile_key {
+            k.u64(local as u64).u64((local >> 64) as u64);
         }
         k.finish()
     }
@@ -234,9 +235,8 @@ impl crate::Session {
             .u64(apply_crop as u64)
             .u64(RENDER_CACHE_VERSION)
             .u64(crate::camera_profiles::cache_key());
-        let local = LoadOptions::of(&p.develop).profile_key;
-        if local != 0 {
-            k.u64(local);
+        if let Some(local) = LoadOptions::of(&p.develop).profile_key {
+            k.u64(local as u64).u64((local >> 64) as u64);
         }
         k.finish()
     }

@@ -38,7 +38,7 @@ fn panel(offered: bool, note: Option<&'static str>) -> (Headless, Arc<Mutex<Vec<
         let mut img = lightcraft_raster::Rgb32f::new(48, 32);
         img.data.fill([0.18; 3]);
         // (the decoder's note: only for a local profile other than the usable "A7 V Chart" of the test folder)
-        let usable = options.profile_key == usable_key;
+        let usable = options.profile_key == Some(usable_key);
         let colour_note = note.filter(|_| options.colour == CameraColour::Local && !usable).map(str::to_string);
         Ok((img, SourceInfo { raw: true, colorimetric: offered, colour_note, ..SourceInfo::default() }))
     });
@@ -127,7 +127,7 @@ fn the_profile_menu_lists_the_local_profiles_of_the_photos_camera() {
     assert_eq!(stored(&h), (CameraColour::Local, Some("A7 V Chart".to_string())));
     let last = *seen.lock().unwrap().last().unwrap();
     assert_eq!(last.colour, CameraColour::Local);
-    assert_ne!(last.profile_key, 0, "decoded with the profile's file");
+    assert!(last.profile_key.is_some(), "decoded with the profile's file");
     assert!(!widget(&h, "label:profile.cameraColourNote"), "the profile is usable: no note");
     // one undo step back
     let r = h.request("engine.execute", json!({"command": "edit.undo"}), T);

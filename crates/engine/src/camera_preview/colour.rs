@@ -204,7 +204,7 @@ pub(super) fn starting_colour_with(
 /// Merge, issue #965): without them a merge of CR2s, whose colour comes from a look fitted to their JPEG, rendered
 /// green and dark. `None` when the file has colour matrices of its own (a DNG keeps them).
 pub(crate) fn starting_colour_tags(raw: &mut RawImage, bytes: &[u8]) -> Option<ColorData> {
-    starting_colour_tags_with(raw, |raw| super::local::starting_colour_choice(raw, bytes, None, None, CameraColour::Auto, 0))
+    starting_colour_tags_with(raw, |raw| super::local::starting_colour_choice(raw, bytes, None, None, CameraColour::Auto, None))
 }
 
 /// [`starting_colour_tags`] with the colour the photo's Profile choice gives (`choice`, [`super::local::starting_colour_choice`]
@@ -236,7 +236,7 @@ pub(super) fn starting_colour_tags_with(
 ///
 /// `colour` is the photo's Profile choice: a photo on a local camera profile (`profile_key`,
 /// `camera_profiles::local_key`) is written with that profile's colour, any other with Camera Matching's.
-pub(crate) fn with_starting_colour_for(raw: &mut RawImage, bytes: &[u8], colour: CameraColour, profile_key: u64) {
+pub(crate) fn with_starting_colour_for(raw: &mut RawImage, bytes: &[u8], colour: CameraColour, profile_key: Option<u128>) {
     if lightcraft_raw::color::has_matrix(&raw.color) {
         return;
     }

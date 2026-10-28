@@ -227,7 +227,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 None => crate::camera_profiles::local_profiles(),
             };
             Ok(Value::Array(
-                list.iter().map(|l| json!({"id": l.id, "name": l.name, "model": l.model, "valid": l.valid(), "key": format!("{:016x}", l.key)})).collect(),
+                list.iter().map(|l| json!({"id": l.id, "name": l.name, "model": l.model, "valid": l.valid(), "key": format!("{:032x}", l.key)})).collect(),
             ))
         }),
         cmd!(query "profiles.menu", "Profile Menu", [], None, "{} — favourites, recent (newest first) and groups", always, |s, _| Ok(s.profile_menu())),

@@ -75,8 +75,8 @@ pub enum LocalWant {
 }
 
 /// The header stamp of local profile `id` as its file is now: `<id>:<key>`.
-pub fn local_stamp(id: &str, key: u64) -> String {
-    format!("{id}:{key:016x}")
+pub fn local_stamp(id: &str, key: u128) -> String {
+    format!("{id}:{key:032x}")
 }
 
 /// Whether the proxy at `path` has the wrong local-profile colour for what the photo wants ([`LocalWant`]). An

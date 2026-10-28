@@ -218,13 +218,16 @@ pub fn get(model: &str) -> Option<Arc<CameraProfile>> {
 /// photo on Camera Matching.
 pub fn cache_key() -> u64 {
     static KEY: OnceLock<u64> = OnceLock::new();
-    *KEY.get_or_init(|| {
-        let mut h = lightcraft_preview::Hasher128::new();
-        for (model, json) in BUNDLED {
-            h.str(model).str(json);
-        }
-        h.finish().0 as u64
-    })
+    *KEY.get_or_init(bundled_key)
+}
+
+/// [`cache_key`] without the once-per-process memo: nothing but the built-in profiles goes into it.
+fn bundled_key() -> u64 {
+    let mut h = lightcraft_preview::Hasher128::new();
+    for (model, json) in BUNDLED {
+        h.str(model).str(json);
+    }
+    h.finish().0 as u64
 }
 
 /// A profile file in [`dir`], read and checked: one choice in the Profile picker.
@@ -236,8 +239,9 @@ pub struct LocalProfile {
     pub name: String,
     /// The Exif model of the cameras it is for (empty for a file that could not be read).
     pub model: String,
-    /// Changes with the file's content: part of the render keys of the photos on this profile.
-    pub key: u64,
+    /// Changes with the file's content (the full 128-bit hash of the id and the bytes): part of the render keys of the
+    /// photos on this profile.
+    pub key: u128,
     /// The checked profile, or why the file is not usable.
     pub profile: Result<Arc<CameraProfile>, String>,
 }
@@ -289,23 +293,35 @@ impl LocalUnavailable {
 /// Most profile files read from the folder (a hostile folder must not make every refresh read gigabytes).
 const MAX_LOCAL: usize = 256;
 
-/// `(length, modified)` of a file read once: the entry is read again when either changes.
+/// `(length, modified)` of a file as it was when it was read.
 type FileStamp = (u64, std::time::Duration);
 
-fn files() -> &'static Mutex<HashMap<PathBuf, (FileStamp, Arc<LocalProfile>)>> {
-    static FILES: OnceLock<Mutex<HashMap<PathBuf, (FileStamp, Arc<LocalProfile>)>>> = OnceLock::new();
+/// A profile file as it was read, with the stamp it had.
+struct Cached {
+    stamp: FileStamp,
+    local: Arc<LocalProfile>,
+}
+
+fn files() -> &'static Mutex<HashMap<PathBuf, Cached>> {
+    static FILES: OnceLock<Mutex<HashMap<PathBuf, Cached>>> = OnceLock::new();
     FILES.get_or_init(Default::default)
 }
 
-/// A profile file, read again only when its length or modification time changed.
-fn read_local(path: &Path, id: &str) -> Option<Arc<LocalProfile>> {
-    let meta = std::fs::metadata(path).ok().filter(|m| m.is_file())?;
+/// A profile file. With `verify` the content is always read and hashed, so a replacement of the same length and
+/// modification time (a copy that keeps its time, a coarse file system clock) is seen too; without it a file whose
+/// length and time are unchanged is not read again (the listing the picker draws every frame). The file is read with no
+/// lock held. A file that is gone leaves no entry behind.
+fn read_local(path: &Path, id: &str, verify: bool) -> Option<Arc<LocalProfile>> {
+    let Some(meta) = std::fs::metadata(path).ok().filter(|m| m.is_file()) else {
+        files().lock().unwrap_or_else(PoisonError::into_inner).remove(path);
+        return None;
+    };
     let modified = meta.modified().ok().and_then(|m| m.duration_since(std::time::UNIX_EPOCH).ok()).unwrap_or_default();
     let stamp = (meta.len(), modified);
-    let mut cache = files().lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some((seen, hit)) = cache.get(path)
+    let cached = files().lock().unwrap_or_else(PoisonError::into_inner).get(path).filter(|c| c.local.id == id).map(|c| (c.stamp, c.local.clone()));
+    if !verify
+        && let Some((seen, hit)) = &cached
         && *seen == stamp
-        && hit.id == id
     {
         return Some(hit.clone());
     }
@@ -314,10 +330,20 @@ fn read_local(path: &Path, id: &str) -> Option<Arc<LocalProfile>> {
     } else {
         std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))
     };
-    let (key, profile) = match read {
-        Ok(bytes) => (lightcraft_preview::Hasher128::new().str(id).update(&bytes).finish().0 as u64, parse(&bytes, &path.display().to_string())),
-        Err(e) => (lightcraft_preview::Hasher128::new().str(id).str("unreadable").finish().0 as u64, Err(e)),
+    let key = match &read {
+        Ok(bytes) => lightcraft_preview::Hasher128::new().str(id).update(bytes).finish().0,
+        Err(_) => lightcraft_preview::Hasher128::new().str(id).str("unreadable").finish().0,
     };
+    if let Some((_, hit)) = &cached
+        && hit.key == key
+    {
+        // the same content under a new stamp: keep what was parsed
+        if let Some(entry) = files().lock().unwrap_or_else(PoisonError::into_inner).get_mut(path) {
+            entry.stamp = stamp;
+        }
+        return Some(hit.clone());
+    }
+    let profile = read.and_then(|bytes| parse(&bytes, &path.display().to_string()));
     if let Err(e) = &profile {
         eprintln!("lightcraft: ignoring camera profile {e}");
     }
@@ -329,10 +355,11 @@ fn read_local(path: &Path, id: &str) -> Option<Arc<LocalProfile>> {
         Err(_) => (id.to_owned(), String::new()),
     };
     let local = Arc::new(LocalProfile { id: id.to_owned(), name, model, key, profile: profile.map(Arc::new) });
+    let mut cache = files().lock().unwrap_or_else(PoisonError::into_inner);
     if cache.len() >= 4 * MAX_LOCAL {
         cache.clear();
     }
-    cache.insert(path.to_owned(), (stamp, local.clone()));
+    cache.insert(path.to_owned(), Cached { stamp, local: local.clone() });
     Some(local)
 }
 
@@ -349,7 +376,7 @@ pub fn local_profiles() -> Vec<Arc<LocalProfile>> {
         .collect();
     stems.sort();
     stems.truncate(MAX_LOCAL);
-    let mut out: Vec<Arc<LocalProfile>> = stems.iter().filter_map(|(id, path)| read_local(path, id)).collect();
+    let mut out: Vec<Arc<LocalProfile>> = stems.iter().filter_map(|(id, path)| read_local(path, id, false)).collect();
     out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()).then_with(|| a.id.cmp(&b.id)));
     out
 }
@@ -371,7 +398,7 @@ pub fn local_profile(id: &str) -> Option<Arc<LocalProfile>> {
         return None;
     }
     let path = dir()?.join(format!("{id}.json"));
-    read_local(&path, id)
+    read_local(&path, id, true)
 }
 
 /// What a photo's [`LoadOptions`](crate::media::LoadOptions) remembers of its local profile.
@@ -380,30 +407,65 @@ struct Registered {
     local: Option<Arc<LocalProfile>>,
 }
 
-fn registry() -> &'static Mutex<HashMap<u64, Arc<Registered>>> {
-    static REGISTRY: OnceLock<Mutex<HashMap<u64, Arc<Registered>>>> = OnceLock::new();
+/// The profiles keys were made for: the decoder gets only the key and finds the profile here. A key stays as long as
+/// the process runs, except that an id keeps its newest [`KEYS_PER_ID`] (a file edited that often while a render of an
+/// older version is still in flight does not happen); a key that is gone is found again from the folder.
+#[derive(Default)]
+struct Registry {
+    by_key: HashMap<u128, Arc<Registered>>,
+    by_id: HashMap<String, std::collections::VecDeque<u128>>,
+}
+
+/// Versions of one profile file the registry keeps.
+const KEYS_PER_ID: usize = 8;
+/// Most keys the registry holds (a catalog full of junk ids must not grow it without end).
+const MAX_REGISTERED: usize = 100_000;
+
+fn registry() -> &'static Mutex<Registry> {
+    static REGISTRY: OnceLock<Mutex<Registry>> = OnceLock::new();
     REGISTRY.get_or_init(Default::default)
 }
 
-/// The key of local profile `id` as it is now: a hash of the id and the file's content (a missing file has a key of
-/// its own). It is part of the photo's [`LoadOptions`](crate::media::LoadOptions), so a changed, replaced, removed or
-/// restored file decodes the photo again, and of the render keys of the photos on the profile. The profile itself
-/// is found again from the key by [`resolve_local`].
-pub fn local_key(id: &str) -> u64 {
-    let local = local_profile(id);
-    let key = local.as_ref().map_or_else(|| lightcraft_preview::Hasher128::new().str(id).str("missing").finish().0 as u64, |l| l.key);
-    let mut registry = registry().lock().unwrap_or_else(PoisonError::into_inner);
-    if registry.len() >= 4096 {
-        registry.clear();
+fn register(key: u128, registered: Registered) {
+    let mut r = registry().lock().unwrap_or_else(PoisonError::into_inner);
+    if r.by_key.contains_key(&key) {
+        return;
     }
-    registry.insert(key, Arc::new(Registered { id: id.to_owned(), local }));
+    if r.by_key.len() >= MAX_REGISTERED {
+        return;
+    }
+    let id = registered.id.clone();
+    r.by_key.insert(key, Arc::new(registered));
+    let keys = r.by_id.entry(id).or_default();
+    keys.push_back(key);
+    let old = if keys.len() > KEYS_PER_ID { keys.pop_front() } else { None };
+    if let Some(old) = old {
+        r.by_key.remove(&old);
+    }
+}
+
+/// The key of local profile `id` as it is now: a hash of the id and the file's content (a missing file has a key of
+/// its own), read from the file every time, so a replaced file is seen whatever its time says. It is part of the photo's
+/// [`LoadOptions`](crate::media::LoadOptions), so a changed, replaced, removed or restored file decodes the photo again,
+/// and of the render keys of the photos on the profile. The profile itself is found again from the key by
+/// [`resolve_local`].
+pub fn local_key(id: &str) -> u128 {
+    let local = local_profile(id);
+    let key = local.as_ref().map_or_else(|| lightcraft_preview::Hasher128::new().str(id).str("missing").finish().0, |l| l.key);
+    register(key, Registered { id: id.to_owned(), local });
     key
 }
 
 /// The profile a photo's [`local_key`] stands for, for a photo of camera `model`; `Err(id, why)` when it cannot be
-/// used (the id is for the note). A key this process never made counts as a missing file.
-pub fn resolve_local(key: u64, model: &str) -> Result<(String, Arc<CameraProfile>), (String, LocalUnavailable)> {
-    let registered = registry().lock().unwrap_or_else(PoisonError::into_inner).get(&key).cloned();
+/// used (the id is for the note). A key the registry no longer holds is looked for among the folder's files; one that is
+/// in neither counts as a missing file.
+pub fn resolve_local(key: u128, model: &str) -> Result<(String, Arc<CameraProfile>), (String, LocalUnavailable)> {
+    let held = registry().lock().unwrap_or_else(PoisonError::into_inner).by_key.get(&key).cloned();
+    let registered = held.or_else(|| {
+        let found = local_profiles().into_iter().find(|l| l.key == key)?;
+        register(key, Registered { id: found.id.clone(), local: Some(found.clone()) });
+        Some(Arc::new(Registered { id: found.id.clone(), local: Some(found) }))
+    });
     let Some(registered) = registered else { return Err((String::new(), LocalUnavailable::Missing)) };
     let id = registered.id.clone();
     match registered.local.as_deref() {
@@ -414,6 +476,12 @@ pub fn resolve_local(key: u64, model: &str) -> Result<(String, Arc<CameraProfile
             Ok(_) => Err((id, LocalUnavailable::OtherCamera)),
         },
     }
+}
+
+/// Forget every key (tests: what a registry that lost a key looks like).
+#[cfg(test)]
+fn forget_registry() {
+    *registry().lock().unwrap_or_else(PoisonError::into_inner) = Registry::default();
 }
 
 /// Per camera model: the photos read and their pooled colour pairs.

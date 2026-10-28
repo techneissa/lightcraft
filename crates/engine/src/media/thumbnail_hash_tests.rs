@@ -250,8 +250,7 @@ fn a_local_profile_file_decodes_and_renders_the_photo_afresh_when_it_changes() {
     assert_eq!(n, 2, "a new choice decodes again");
     let used = *seen.lock().unwrap().last().unwrap();
     assert_eq!(used.colour, CameraColour::Local);
-    assert_ne!(used.profile_key, 0);
-    assert_eq!(used.profile_key, crate::camera_profiles::local_key("A7 V Chart"));
+    assert_eq!(used.profile_key, Some(crate::camera_profiles::local_key("A7 V Chart")));
     render(&mut s);
     assert_eq!(seen.lock().unwrap().len(), n, "and the source is reused while the file stays");
     // the file changes: decoded again, new keys

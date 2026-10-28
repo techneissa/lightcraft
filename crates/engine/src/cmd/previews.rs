@@ -330,7 +330,7 @@ pub(crate) fn smart_local(photo: &lightcraft_catalog::Photo) -> (Option<crate::m
     match id.and_then(|id| crate::camera_profiles::local_profile(id).map(|l| (id, l))) {
         Some((id, l)) if l.is_for_camera(&photo.meta.camera) => {
             let options = crate::media::LoadOptions::of(&photo.develop);
-            (Some(options), LocalWant::Is(crate::smart::local_stamp(id, options.profile_key)))
+            (Some(options), LocalWant::Is(crate::smart::local_stamp(id, options.profile_key.unwrap_or_default())))
         }
         _ if on_local => (None, LocalWant::Keep),
         _ => (None, LocalWant::No),

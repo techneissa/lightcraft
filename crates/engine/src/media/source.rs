@@ -80,8 +80,9 @@ pub struct LoadOptions {
     /// Where a raw without colour matrices takes its starting colour from (`Profile::camera_colour`).
     pub colour: lightcraft_develop::CameraColour,
     /// For [`CameraColour::Local`](lightcraft_develop::CameraColour::Local): the key of the local profile (its id and
-    /// its file's content, `camera_profiles::local_key`), so a changed file decodes the source again. `0` otherwise.
-    pub profile_key: u64,
+    /// its file's content, `camera_profiles::local_key`), so a changed file decodes the source again. `None` for a photo
+    /// that is not on a local profile.
+    pub profile_key: Option<u128>,
 }
 
 impl LoadOptions {
@@ -89,7 +90,7 @@ impl LoadOptions {
         let local = s.profile.camera_colour == lightcraft_develop::CameraColour::Local;
         LoadOptions {
             colour: s.profile.camera_colour,
-            profile_key: s.profile.camera_profile.as_deref().filter(|_| local).map_or(0, crate::camera_profiles::local_key),
+            profile_key: s.profile.camera_profile.as_deref().filter(|_| local).map(crate::camera_profiles::local_key),
         }
     }
 }

@@ -31,9 +31,11 @@ pub(crate) fn starting_colour_choice(
     lens: Option<&LensGeometry>,
     embedded: Option<&lightcraft_develop::EmbeddedLens>,
     colour: CameraColour,
-    profile_key: u64,
+    profile_key: Option<u128>,
 ) -> (Xy, CameraTransform, Option<CameraLook>, LocalOutcome) {
-    if colour == CameraColour::Local && colour_choice_offered(raw) {
+    if let (CameraColour::Local, Some(profile_key)) = (colour, profile_key)
+        && colour_choice_offered(raw)
+    {
         let local = local_colour_with(
             raw,
             profile_key,
@@ -52,7 +54,7 @@ pub(crate) fn starting_colour_choice(
 /// with them). `None`: the file has colour matrices of its own, so the choice does not apply.
 pub(super) fn local_colour_with(
     raw: &mut RawImage,
-    profile_key: u64,
+    profile_key: u128,
     fit: impl FnOnce(&RawImage, &CameraTransform, &(Mat3, Option<HsvTable>)) -> Option<CameraLook>,
     camera_matching: impl FnOnce(&mut RawImage) -> (Xy, CameraTransform, Option<CameraLook>),
 ) -> Option<(Xy, CameraTransform, Option<CameraLook>, LocalOutcome)> {
