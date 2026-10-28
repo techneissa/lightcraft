@@ -77,6 +77,7 @@ mod shortcut_editing;
 mod shortcut_when;
 mod slider_reset;
 mod slideshow;
+mod smart_editing;
 mod solo_sections;
 mod split_divider;
 mod switch_library;

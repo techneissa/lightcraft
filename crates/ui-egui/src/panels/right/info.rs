@@ -194,24 +194,9 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.label(egui::RichText::new(line).color(t.text_dim));
         }
         // offline originals / smart previews
-        // (cached answers, checked off the UI thread: unknown counts as online / no smart preview)
-        if let lightcraft_catalog::Source::File { path } = &p.source {
-            let avail = &app.session.media.availability;
-            let online = !avail.is_offline(path);
-            let smart = app.session.media.smart_dir.as_ref().is_some_and(|d| {
-                let shard = lightcraft_engine::smart::sharded_file_path(d, &p);
-                let legacy = d.join(lightcraft_engine::smart::file_name(&p));
-                avail.exists(&shard.to_string_lossy()) == Some(true) || avail.exists(&legacy.to_string_lossy()) == Some(true)
-            });
-            if !online || smart {
-                let text = match (online, smart) {
-                    (false, true) => "Original offline · editing the smart preview",
-                    (false, false) => "Original offline · no smart preview",
-                    _ => "Smart preview available",
-                };
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(crate::i18n::tr(text)).color(if online { t.text_dim } else { t.accent }));
-            }
+        if let Some((text, accent)) = smart_line(app, &p) {
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new(crate::i18n::tr(text)).color(if accent { t.accent } else { t.text_dim }));
         }
         ui.add_space(10.0);
         if text_button(ui, "allMetadata", crate::i18n::tr("All Metadata…"), false)
@@ -221,6 +206,28 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let _ = app.run("dialog.allMetadata", json!({}));
         }
     });
+}
+
+/// The Info panel's line about the photo's original and smart preview, and whether it is drawn in the accent colour:
+/// (cached answers, checked off the UI thread: unknown counts as online / no smart preview)
+pub(crate) fn smart_line(app: &LightcraftApp, p: &lightcraft_catalog::Photo) -> Option<(&'static str, bool)> {
+    let lightcraft_catalog::Source::File { path } = &p.source else { return None };
+    let avail = &app.session.media.availability;
+    let online = !avail.is_offline(path);
+    let smart = app.session.media.smart_dir.as_ref().is_some_and(|d| {
+        let shard = lightcraft_engine::smart::sharded_file_path(d, p);
+        let legacy = d.join(lightcraft_engine::smart::file_name(p));
+        avail.exists(&shard.to_string_lossy()) == Some(true) || avail.exists(&legacy.to_string_lossy()) == Some(true)
+    });
+    // Use Smart Previews instead of Originals: the picture on screen was read from the smart preview
+    let editing = online && smart && app.session.media.editing_from_smart_preview(p.id, p);
+    match (online, smart) {
+        (false, true) => Some(("Original offline · editing the smart preview", true)),
+        (false, false) => Some(("Original offline · no smart preview", true)),
+        (true, true) if editing => Some(("Editing from Smart Preview", true)),
+        (true, true) => Some(("Smart preview available", false)),
+        (true, false) => None,
+    }
 }
 
 /// The camera card at the top of Info: camera, lens, size · file size and format, then the

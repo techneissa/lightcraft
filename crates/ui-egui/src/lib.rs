@@ -38,6 +38,7 @@ pub mod reload;
 pub mod render;
 pub mod shortcuts;
 pub mod sidebar;
+mod smart_editing;
 pub mod softpaint;
 pub mod state;
 pub mod sync;
@@ -345,6 +346,8 @@ pub struct LightcraftApp {
     pub gpu_notice: bool,
     /// The memory budget setting last applied (MB, 0 = automatic).
     memory_applied: Option<u32>,
+    /// Use Smart Previews for viewing and editing, as last agreed between Settings and the engine ([`smart_editing`]).
+    smart_editing_applied: Option<bool>,
     /// The display profile setting last applied (`app.displayProfile`).
     pub(crate) display_applied: Option<String>,
     /// Why the display profile setting could not be applied (shown in Settings ▸ Display).

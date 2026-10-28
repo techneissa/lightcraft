@@ -151,6 +151,10 @@ pub struct AppSettings {
     pub photocraft_file: EditFile,
     /// Memory the caches may hold together, in MB (0 = automatic; `app.memoryBudget`).
     pub memory_mb: u32,
+    /// Use Smart Previews instead of Originals for viewing and editing (`library.smartPreviewsForEditing`).
+    pub smart_previews_for_editing: bool,
+    /// The question about building the missing smart previews was asked once, when the setting was first switched on.
+    pub smart_editing_offered: bool,
     /// The Info panel's metadata fields with several photos selected: true (the default) shows the
     /// values the selected photos share and marks each field where they differ (Selected Photos),
     /// false shows the active photo's values (Target Photo) (`view.infoSelectedPhotos`).
@@ -240,6 +244,8 @@ impl Default for AppSettings {
             photocraft_path: String::new(),
             photocraft_file: EditFile { format: EditFormat::Psd, ..EditFile::default() },
             memory_mb: 0,
+            smart_previews_for_editing: false,
+            smart_editing_offered: false,
             info_selected_photos: true,
             film_names: true,
             film_badges: true,
