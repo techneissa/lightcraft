@@ -200,6 +200,10 @@ const STAGE_BUDGET_SHARE: usize = 4;
 /// raw): a quick trip to the grid and back finds it warm, and a long one gives the memory back.
 pub const LOUPE_RELEASE: std::time::Duration = std::time::Duration::from_secs(5);
 
+/// How often a window with renders pending looks at them when nothing woke it ([`Renderer::pending_poll`]).
+const PENDING_POLL: std::time::Duration = std::time::Duration::from_millis(100);
+const PENDING_POLL_OFFLOAD: std::time::Duration = std::time::Duration::from_millis(16);
+
 /// Variant thumbnails kept as textures (LRU), when nothing asks for more.
 pub const VARIANT_TEXTURES: usize = 96;
 /// The most a view can raise that to ([`Renderer::want_variants`]): a screenful of small faces is a few hundred pictures of
@@ -266,6 +270,8 @@ pub struct Renderer {
     variant_want: usize,
     /// Frames polled so far.
     frame: u64,
+    /// The pool's workers wake the window when a job finishes (set on the first poll).
+    waker_set: bool,
     /// Slideshow slides may be held ([`Self::release_slides`] has something to do).
     slides_live: bool,
     /// Stage caches cleared to stay in budget (see [`stage_trim_order`]).
@@ -343,6 +349,7 @@ impl Renderer {
             stages_trimmed: 0,
             loupe_frame: 0,
             loupe_gone: None,
+            waker_set: false,
             #[cfg(test)]
             stage_budget_override: None,
             display: None,
@@ -959,6 +966,11 @@ impl Renderer {
             self.forget_all();
         }
         self.preview_generation = Some((Arc::downgrade(cache), generation));
+        if !self.waker_set {
+            self.waker_set = true;
+            let wake = ctx.clone();
+            self.pool.set_waker(Arc::new(move || wake.request_repaint()));
+        }
         self.catalog_rev = session.catalog.revision;
         self.frame += 1;
         self.trim_stages();
@@ -979,9 +991,16 @@ impl Renderer {
         #[cfg(not(target_arch = "wasm32"))]
         self.trim_when_idle(ctx);
         if !self.pending.is_empty() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+            ctx.request_repaint_after(self.pending_poll());
         }
         changed
+    }
+
+    /// How soon to look at pending renders again. The pool's workers wake the window when one
+    /// finishes, so a slow poll is only the safety net (a render waiting in a queue costs no frames);
+    /// an offload (the browser's workers, tests) has no such wake-up and is polled per frame.
+    fn pending_poll(&self) -> std::time::Duration {
+        if self.offload.is_some() { PENDING_POLL_OFFLOAD } else { PENDING_POLL }
     }
 
     /// In a slider drag, give the loupe's draft (just requested) until `budget` to finish, so that it
@@ -1449,6 +1468,56 @@ mod color_image_tests {
         assert_eq!(ok.color.map(|c| c.pixels.clone()), Some(color_image(&image).pixels));
         let failed = Renderer::run_for(|| result(Err("unreadable".into())), &None);
         assert!(failed.color.is_none());
+    }
+
+    // Given a render pending in the pool, the window is woken when it finishes, and the timer behind
+    // it is only the slow safety net (it was a 60 Hz redraw for as long as anything was pending)
+    #[test]
+    fn a_finished_render_wakes_the_window_and_the_poll_is_slow() {
+        let ctx = egui::Context::default();
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        ctx.set_request_repaint_callback(move |_| {
+            let _ = tx.send(());
+        });
+        let mut session = Session::new();
+        let mut r = Renderer::default();
+        r.poll(&ctx, &mut session);
+        while rx.try_recv().is_ok() {}
+        r.pending.insert(Slot::Main, (1, 100));
+        r.pool.submit(
+            Slot::Main,
+            1,
+            100,
+            Box::new(|| {
+                let result = RenderResult {
+                    request_id: 1,
+                    source_key: None,
+                    photo: PhotoId(1),
+                    level: lightcraft_engine::SourceLevel::Preview,
+                    key: 1,
+                    rendered: Err("unreadable".into()),
+                    gpu_fallback: None,
+                    loaded: None,
+                    quick: None,
+                    display: None,
+                };
+                Renderer::run_for(|| result, &None)
+            }),
+        );
+        rx.recv_timeout(std::time::Duration::from_secs(10)).expect("a finished job wakes the window");
+        assert!(r.pending_poll() >= std::time::Duration::from_millis(100), "{:?}", r.pending_poll());
+        r.set_offload(Box::new(NoWork));
+        assert!(r.pending_poll() <= std::time::Duration::from_millis(16), "an offload has no wake-up: polled per frame");
+    }
+
+    struct NoWork;
+    impl RenderOffload for NoWork {
+        fn try_start(&mut self, _: Slot, job: RenderJob) -> Option<RenderJob> {
+            Some(job)
+        }
+        fn finished(&mut self) -> Vec<(Slot, RenderResult, f64)> {
+            vec![]
+        }
     }
 
     #[test]

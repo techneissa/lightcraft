@@ -20,6 +20,9 @@ use std::time::Duration;
 
 pub type Job<R> = Box<dyn FnOnce() -> R + Send>;
 
+/// What a worker calls when a job has finished (a frontend's "repaint now").
+pub type Waker = Arc<dyn Fn() + Send + Sync>;
+
 struct Entry<S, R> {
     slot: S,
     key: u64,
@@ -36,6 +39,8 @@ struct Shared<S, R> {
     /// `queue`.
     busy: Mutex<Vec<S>>,
     cv: Condvar,
+    /// Called by a worker after each finished job (see [`JobPool::set_waker`]).
+    waker: Mutex<Option<Waker>>,
     shutdown: AtomicBool,
     /// The worker threads that have not ended yet, and the signal that one did.
     #[cfg(not(target_arch = "wasm32"))]
@@ -82,6 +87,7 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
                 queue: Mutex::new(Vec::new()),
                 busy: Mutex::new(Vec::new()),
                 cv: Condvar::new(),
+                waker: Mutex::new(None),
                 shutdown: AtomicBool::new(false),
                 #[cfg(not(target_arch = "wasm32"))]
                 live: Mutex::new(Vec::new()),
@@ -98,6 +104,12 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
             workers: Vec::new(),
             stopped: false,
         }
+    }
+
+    /// Have the workers call `wake` after every job they finish, so a frontend that sleeps between
+    /// frames wakes for the result instead of polling [`Self::try_recv`] on a timer.
+    pub fn set_waker(&self, wake: Waker) {
+        *self.shared.waker.lock().unwrap_or_else(|e| e.into_inner()) = Some(wake);
     }
 
     /// Workers for this machine: cores − 1, between 2 and 8.
@@ -134,6 +146,11 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
                         let done = Done { slot: e.slot, key: e.key, result, ms: t0.elapsed().as_secs_f64() * 1000.0 };
                         if tx.send(done).is_err() {
                             break;
+                        }
+                        // (the result is on the channel first: the woken frame finds it)
+                        let waker = shared.waker.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                        if let Some(wake) = waker {
+                            wake();
                         }
                     }
                 });
