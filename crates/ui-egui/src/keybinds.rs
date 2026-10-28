@@ -16,6 +16,7 @@ pub mod context;
 pub mod model;
 pub mod overlay;
 pub mod runtime;
+pub mod when;
 pub mod window;
 
 /// What the shortcut editor keeps between frames (a field of [`crate::LightcraftApp`]).
