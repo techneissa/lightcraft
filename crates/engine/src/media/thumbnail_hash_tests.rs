@@ -210,7 +210,13 @@ fn a_local_profile_file_decodes_and_renders_the_photo_afresh_when_it_changes() {
     std::fs::create_dir_all(&dir).unwrap();
     let _dir = crate::camera_profiles::use_dir_for_tests(&dir);
     let write = |files: usize| {
-        let table = lightcraft_raw::profile::HsvTable { hue_divisions: 4, sat_divisions: 2, val_divisions: 1, data: vec![[5.0, 1.2, 1.0]; 8], srgb_value: false };
+        let table = lightcraft_raw::profile::HsvTable {
+            hue_divisions: 4,
+            sat_divisions: 2,
+            val_divisions: 1,
+            data: vec![[5.0, 1.2, 1.0]; 8],
+            srgb_value: false,
+        };
         let p = crate::camera_profiles::CameraProfile::new("ILCE-7M5", files, 100, lightcraft_color::Mat3::IDENTITY, Some(table));
         std::fs::write(dir.join("A7 V Chart.json"), serde_json::to_vec(&p).unwrap()).unwrap();
     };

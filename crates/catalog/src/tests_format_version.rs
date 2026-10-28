@@ -207,7 +207,8 @@ fn local_and_macos_colour_need_format_v10_and_older_builds_get_newer_not_corrupt
     }
     /// The newest format an older build reads.
     const OLDEST_BUILD_MAX: u32 = 9;
-    assert!(VERSION > OLDEST_BUILD_MAX, "a library with `local` or `macos` must carry a version an older build refuses");
+    // (a library with `local` or `macos` must carry a version an older build refuses)
+    const _: () = assert!(VERSION > OLDEST_BUILD_MAX);
 
     let mut c = Catalog::new();
     let mut ids = Vec::new();

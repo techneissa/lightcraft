@@ -30,14 +30,16 @@ use colour::colorimetric_camera;
 #[cfg(test)]
 use colour::spectral_prior;
 #[cfg(test)]
+pub(crate) use colour::starting_colour;
+#[cfg(test)]
 pub(crate) use colour::{PROFILE_PROXY, dng_colour, dng_tone_eligible};
 #[cfg(test)]
 use colour::{PROXY, starting_colour_with};
-pub(crate) use colour::{colour_choice_offered, file_local_look, starting_colour, starting_colour_tags, with_starting_colour};
+pub(crate) use colour::{colour_choice_offered, file_local_look, starting_colour_tags, with_starting_colour};
 pub(crate) use hue_sat::HueSat;
-pub(crate) use local::starting_colour_choice;
 #[cfg(test)]
 use hue_sat::{MIN_LUMINANCE_KEPT, NO_LUMINANCE_KEPT, fit_hue_sat, hue_saturation, restore_weight};
+pub(crate) use local::starting_colour_choice;
 #[cfg(test)]
 pub(crate) use look_fit::fit_preview;
 #[cfg(test)]

@@ -108,7 +108,12 @@ impl crate::Session {
     /// Cache key of a variant thumbnail ([`Self::variant_job`]).
     pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize) -> Hash128 {
         let mut k = Hasher128::new();
-        k.str(&content_key(p)).str("variant").u64(settings.hash64()).u64(edge as u64).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key());
+        k.str(&content_key(p))
+            .str("variant")
+            .u64(settings.hash64())
+            .u64(edge as u64)
+            .u64(RENDER_CACHE_VERSION)
+            .u64(crate::camera_profiles::cache_key());
         let local = LoadOptions::of(settings).profile_key;
         if local != 0 {
             k.u64(local);
@@ -223,7 +228,12 @@ impl crate::Session {
     /// Size-independent cache key of a photo's view render (loupe) for its current settings.
     pub(super) fn view_key(p: &Photo, apply_crop: bool) -> Hash128 {
         let mut k = Hasher128::new();
-        k.str(&content_key(p)).str("view").u64(p.develop.hash64()).u64(apply_crop as u64).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key());
+        k.str(&content_key(p))
+            .str("view")
+            .u64(p.develop.hash64())
+            .u64(apply_crop as u64)
+            .u64(RENDER_CACHE_VERSION)
+            .u64(crate::camera_profiles::cache_key());
         let local = LoadOptions::of(&p.develop).profile_key;
         if local != 0 {
             k.u64(local);

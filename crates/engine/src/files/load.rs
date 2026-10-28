@@ -123,7 +123,14 @@ fn load_bytes_now(
                 let removed = dng_lens_ops.map(|ops| std::mem::replace(&mut raw.opcodes.list3, ops));
                 // With the opcodes restored, the proxy already includes vignetting; do not apply it twice.
                 let embedded = if removed.is_some() { None } else { lens.as_ref() };
-                let colour = crate::camera_preview::starting_colour_choice(&mut raw, &bytes, lens_geometry.as_ref(), embedded, options.colour, options.profile_key);
+                let colour = crate::camera_preview::starting_colour_choice(
+                    &mut raw,
+                    &bytes,
+                    lens_geometry.as_ref(),
+                    embedded,
+                    options.colour,
+                    options.profile_key,
+                );
                 if let Some(ops) = removed {
                     raw.opcodes.list3 = ops;
                 }
@@ -206,7 +213,11 @@ fn load_bytes_now(
                 Arc::new(lightcraft_pipeline::CameraColor { tags, developed_for: xy })
             });
         // (a local profile whose tone fit failed keeps LightCraft's default tone: its look carries a placeholder curve)
-        let camera_tone = camera_look.as_ref().filter(|_| !local.default_tone).map(|p| p.tone).or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve));
+        let camera_tone = camera_look
+            .as_ref()
+            .filter(|_| !local.default_tone)
+            .map(|p| p.tone)
+            .or_else(|| raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve));
         let local_tone = local_tone(&raw);
         let (temp, tint) = scale.as_shot(xy);
         return Ok((

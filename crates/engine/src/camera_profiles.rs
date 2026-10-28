@@ -273,7 +273,9 @@ impl LocalUnavailable {
                 format!("Edited with the profile '{id}', which isn't available on this computer. This picture uses Camera Matching.")
             }
             LocalUnavailable::Invalid => format!("Edited with the profile '{id}', whose file can't be used. This picture uses Camera Matching."),
-            LocalUnavailable::OtherCamera => format!("Edited with the profile '{id}', which is made for another camera. This picture uses Camera Matching."),
+            LocalUnavailable::OtherCamera => {
+                format!("Edited with the profile '{id}', which is made for another camera. This picture uses Camera Matching.")
+            }
         }
     }
 }
@@ -314,7 +316,10 @@ fn read_local(path: &Path, id: &str) -> Option<Arc<LocalProfile>> {
         eprintln!("lightcraft: ignoring camera profile {e}");
     }
     let (name, model) = match &profile {
-        Ok(p) => (p.name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map_or_else(|| id.to_owned(), |n| n.chars().take(MAX_NAME).collect()), p.model.trim().to_owned()),
+        Ok(p) => (
+            p.name.as_deref().map(str::trim).filter(|n| !n.is_empty()).map_or_else(|| id.to_owned(), |n| n.chars().take(MAX_NAME).collect()),
+            p.model.trim().to_owned(),
+        ),
         Err(_) => (id.to_owned(), String::new()),
     };
     let local = Arc::new(LocalProfile { id: id.to_owned(), name, model, key, profile: profile.map(Arc::new) });
