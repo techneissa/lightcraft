@@ -375,6 +375,24 @@ A shortcut is one key (`Cmd+Shift+K`, `F5`, `Delete`) or a chord of two keys sep
   `app.setShortcut` can give a command the Enter key); widgets `button:assignShortcut.save`,
   `.remove`, `.cancel`, `.slot1`, `.slot2`, `assignShortcut:keys`.
 - `app.resetShortcuts` restores every command.
+- **Conditions (When).** `app.setShortcut {id, when}` limits both shortcuts of a command to a context: `when` is a
+  condition (`view == detail && !textFocus`), `null` or `""` means always. It can come alone or with `shortcut`; the
+  condition is applied first. A condition that doesn't parse is an error (`not a condition: …`, with the position
+  in words) and changes nothing. The reply carries `when` (the canonical spelling, or `null`) and `conflictsWith`
+  (commands that share a key with this one while both conditions can hold; `removedFrom` is what the assigned key took
+  away). `engine.commands` lists each command's `when` too. A command that is `reset` loses its saved condition.
+- A condition uses `&&`, `||`, `!`, `==`, `!=` and parentheses over the context keys; `app.shortcutContexts` lists
+  them with their values and what each holds now: `view` (grid, square, detail, compare, survey, reference, people),
+  `gridView`, `tool` (none, edit, crop, remove, masking, redEye, versions, activity, keywords, info), `brush`,
+  `textFocus`, `dialogOpen`, `paletteOpen`, `hasPhoto`, `hasSelection`, `multiSelection`, `fullscreen`, `slideshow`.
+  On / off keys stand alone (`textFocus`, `!textFocus`) or compare with `true` / `false`; every condition has its
+  negation (`!(view == detail)`, `view != grid`). Two commands may share a key while their conditions can't both hold
+  (Reject Photo `tool != crop` and Swap Aspect `tool == crop` share X). A condition that needs `textFocus`,
+  `dialogOpen` or `paletteOpen` also fires while a text box, a dialog or the palette has the keyboard. Stored in the
+  keymap as the entry `<id>?when`.
+- In the Keyboard Shortcuts window the When cell of a command is `button:shortcutWhen-<id>` (click to type; the box is
+  `field:shortcutWhen`, the autocomplete rows `menu:whenSuggestion-<n>`) and `button:shortcutWhenAdd-<id>` opens the builder
+  (`menu:whenKey-<key>`, `menu:whenIs` / `menu:whenIsNot`, `menu:whenValue-<value>`, `menu:whenBack`).
 - In the Keyboard Shortcuts window the cells are `button:shortcut-<id>` (Shortcut 1) and `button:shortcut2-<id>`,
   removed with `button:shortcutClear-<id>` / `button:shortcutClear2-<id>`, restored with `button:shortcutReset-<id>`.
 - While the first key of a chord is waiting, the hint card is the widget `chordHint`.
