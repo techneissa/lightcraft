@@ -71,6 +71,7 @@ Local folder: `~/Documents/workspace/gitClones/lightcraft`. Git remembers how a 
 | Draggable Before/After split line, Split button | `feat/draggable-split` | `crates/ui-egui/src/panels/split_divider.rs` | `panels.rs`, `state.rs`, `region.rs`, `panels/detail.rs`, `icons.rs`, `panels/bottombar.rs` | `split_divider`, `before_after` |
 | Command Palette on ⌘P (Print has no shortcut) | `feat/command-palette` | `crates/ui-egui/src/panels/command_palette.rs` and its `tests.rs` | `panels.rs`, `state.rs`, `menus/run.rs`, `menus/ui_commands.rs`, `shortcuts.rs`, `app/frame.rs` | `command_palette` |
 | Edit All N Selected (Auto Sync on by default; AI Denoise follows it) | `fix/edit-all-selected` | `crates/ui-egui/src/panels/edit_all.rs` | engine `cmd/denoise.rs`, `lib.rs`, `library.rs`, `cmd/develop.rs`; UI `app.rs`, `panels.rs`, `panels/edit.rs` | `edit_all`, `denoise`, `prefs` |
+| Taller, resizable open and save windows on macOS (at least 520 pt) | `feat/larger-file-dialogs` | `crates/filepanel` (the second crate allowed `unsafe`) | `apps/lightcraft/src/platform.rs` (1 call in `file_dialog`), app and workspace `Cargo.toml`, `xtask/src/layers.rs`, `AGENTS.md` / `CLAUDE.md` (the `unsafe` line) | `lightcraft-filepanel` |
 
 Every feature also has an entry in `docs/whats-new.md` and a row in `docs/parity-checklist.md`; clashes there are
 fixed by the update script (both sides kept).
@@ -79,6 +80,7 @@ The tests of every feature, after a merge:
 
 ```bash
 cargo test -p lightcraft-codecs --lib animated_gif
+cargo test -p lightcraft-filepanel
 cargo test -p lightcraft-engine --lib -- animated_gif denoise prefs
 cargo test -p lightcraft-ui-egui --lib -- animated_gif selection_order split_divider before_after command_palette edit_all
 ```

@@ -52,6 +52,9 @@ pub(crate) fn explorer_select_command(path: &str) -> std::process::Command {
 pub(crate) static DIALOG_PARENT: std::sync::OnceLock<rfd::FileDialog> = std::sync::OnceLock::new();
 
 /// A file dialog owned by the app's window, or a plain one before the window exists.
+/// On macOS the panel it opens is resizable and at least `lightcraft_filepanel::MIN_HEIGHT` tall.
 pub(crate) fn file_dialog() -> rfd::FileDialog {
+    #[cfg(target_os = "macos")]
+    lightcraft_filepanel::fit_next_panel();
     DIALOG_PARENT.get().cloned().unwrap_or_default()
 }
