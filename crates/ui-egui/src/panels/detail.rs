@@ -4,6 +4,7 @@
 use egui::{Align2, Color32, Pos2, Rect, Sense, Stroke, StrokeKind, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::{DevelopSettings, MaskShape};
+use lightcraft_engine::media::QuickSource;
 use lightcraft_geom::{Affine, Point};
 use lightcraft_pipeline::geometry::Frame;
 use serde_json::json;
@@ -187,13 +188,18 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // A previous crop/rotation can stay visible while its replacement renders. Its pixels
     // must not override the current frame geometry, even when it is the same photo.
     let current_texture = |t: &&crate::render::Tex| t.photo == id && t.look == Some((crate::render::geometry_look(&d), !crop_tool));
+    // The camera's own JPEG (an unedited raw's grid thumbnail or embedded preview) has the camera's
+    // colours and lens correction, not LightCraft's: put up as a stand-in, the render replacing it
+    // made the photo change colour and shift. The loupe shows it only when the raw can't be rendered.
+    let unrenderable = app.renderer.failure_of(Slot::Main, id).is_some();
+    let stand_in = |t: &&crate::render::Tex| unrenderable || t.quick != Some(QuickSource::Embedded);
     let visible_texture_aspect = app
         .renderer
         .textures
         .get(&Slot::Main)
         .filter(current_texture)
-        .or_else(|| app.renderer.textures.get(&Slot::Preview).filter(current_texture))
-        .or_else(|| app.renderer.thumb(id).filter(current_texture))
+        .or_else(|| app.renderer.textures.get(&Slot::Preview).filter(current_texture).filter(stand_in))
+        .or_else(|| app.renderer.thumb(id).filter(current_texture).filter(stand_in))
         .map(|tex| tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32);
     // Follow the texture only where it really differs (an unsupported raw's embedded JPEG with
     // another crop): a texture's whole-pixel size is a little off the exact aspect, and the crop
@@ -340,9 +346,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         }
     }
-    // until the loupe has this photo: show its cached render / embedded preview / a thumbnail
+    // until the loupe has this photo: show its cached render / a thumbnail render (the embedded
+    // preview only for a raw that can't be rendered)
     if app.renderer.textures.get(&Slot::Main).is_none_or(|t| t.photo != id)
-        && let Some(q) = app.session.quick_view_job(id, want.max(8), !crop_tool)
+        && let Some(q) = app.session.quick_view_job(id, want.max(8), !crop_tool, unrenderable)
     {
         app.renderer.request_quick(Slot::Preview, q, 110);
     }
@@ -407,15 +414,21 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     let p = ui.painter_at(canvas);
     // what a view slot shows: its own render of this photo, else the stand-ins (no blank frame
-    // between photos, and the full render replaces them in place)
+    // between photos, and the full render replaces them in place); with none yet, the main view
+    // keeps the photo it showed, where it was, until this one's render is up
+    let held = held_rect(ui.ctx());
     let draw = |slot: Slot, r: Rect, clip: Rect| -> &'static str {
         let mine = |s: Slot| app.renderer.textures.get(&s).filter(|t| t.photo == id);
-        let (tex, what) = if let Some(t) = mine(slot) {
-            (t, "render")
-        } else if let Some(t) = mine(Slot::Preview) {
-            (t, t.quick.map(quick_name).unwrap_or("preview"))
-        } else if let Some(t) = app.renderer.thumb(id) {
-            (t, "thumb")
+        let (tex, what, r) = if let Some(t) = mine(slot) {
+            (t, "render", r)
+        } else if let Some(t) = mine(Slot::Preview).filter(stand_in) {
+            (t, t.quick.map(quick_name).unwrap_or("preview"), r)
+        } else if let Some(t) = app.renderer.thumb(id).filter(stand_in) {
+            (t, "thumb", r)
+        } else if let Some(t) = app.renderer.textures.get(&Slot::Main).filter(|_| slot == Slot::Main && !unrenderable)
+            && let Some((_, at)) = held.filter(|(p, _)| *p == t.photo)
+        {
+            (t, "held", at)
         } else {
             return "none";
         };
@@ -483,6 +496,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
     }
     app.loupe_shown = Some((id, shown));
+    if shown == "render" {
+        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(HELD_RECT), (id, img_rect)));
+    }
     // a wipe shows the Before whole-frame render on its side of the line…
     // (the line can be dragged: it, and so each side, follows the divider)
     let divider = super::split_divider::interact(app, ui, canvas, img_rect);
@@ -654,6 +670,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ui.separator();
         super::photo_menu::show(app, ui, id);
     });
+}
+
+/// Where the loupe last drew a photo's own render: `(photo, image rect)`, egui temp data. A photo
+/// switched to with nothing of its own to show yet keeps that one on screen ("held").
+const HELD_RECT: &str = "loupe-held-rect";
+
+/// The photo the loupe last drew a render of, and where ([`HELD_RECT`]).
+pub(crate) fn held_rect(ctx: &egui::Context) -> Option<(PhotoId, Rect)> {
+    ctx.data(|d| d.get_temp::<(PhotoId, Rect)>(egui::Id::unique(HELD_RECT)))
 }
 
 /// Neighbour prefetch: below on-screen thumbnails, above background thumbnail refreshes.

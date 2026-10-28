@@ -42,6 +42,13 @@ corrections: **Enable Profile Corrections** and its Distortion / Vignetting amou
 stage (one resample), orientation handling and DNG export. A conversion whose radial error exceeds 0.001 of the
 half diagonal, or that would fold the image, is not applied.
 
+Correcting pincushion distortion (most telephoto lenses) fetches the frame's edges from beyond the recorded image.
+The warp is therefore zoomed in just enough that every pixel of the frame shows the photo, as the camera's own
+correction and Lightroom's profile corrections do (`lightcraft_lensdb::fill_frame`); before, a FE 70-200mm F4 Macro
+G OSS II at 182 mm left light bands about 10 px wide along the sides of a 1600 px render. Barrel corrections, which
+cover the frame already, keep their framing. Photos imported before this keep their stored correction until
+**Reload from Disk**.
+
 Normalisation follows lensfun's documentation: distortion and TCA radii are 1 at half the shorter side of the
 calibration frame (its `cropfactor` and `aspect-ratio`), vignetting radii 1 at its corner; the optical centre is
 the image centre (lensfun's `<center>` offsets are not read).

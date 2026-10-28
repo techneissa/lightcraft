@@ -1149,7 +1149,7 @@ fn build_previews_fills_the_cache() {
     let cached = |s: &mut Session, id: u64| {
         let t = s.thumb_job(PhotoId(id), 512).unwrap();
         let (c, k) = t.cache.clone().unwrap();
-        let q = s.quick_view_job(PhotoId(id), 1024, true).unwrap();
+        let q = s.quick_view_job(PhotoId(id), 1024, true, false).unwrap();
         let (vc, vk) = q.cached[0].clone();
         (c.get(k).is_some(), vc.get(vk).is_some())
     };

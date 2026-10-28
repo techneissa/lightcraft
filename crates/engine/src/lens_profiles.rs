@@ -51,7 +51,9 @@ pub fn lookup(db: &LensDb, m: &lightcraft_meta::Metadata, w: f64, h: f64, orient
     };
     let crop = frame_crop_factor(camera.map(|c| c.crop_factor), focal, m.focal_length_35mm);
     let shot = Shot { focal, aperture: m.f_number, distance: None, crop_factor: crop, width: w, height: h };
-    let corr = lens.correction(&shot)?;
+    let mut corr = lens.correction(&shot)?;
+    // (a pincushion correction would leave blank bands along the frame's edges)
+    corr.warp = corr.warp.map(|warp| lightcraft_lensdb::fill_frame(warp, w, h));
     Some(lightcraft_pipeline::optics::reorient_lens(&corr, orientation, w, h))
 }
 
@@ -164,7 +166,12 @@ mod tests {
         };
         let at = |crop: f64, w: f64, h: f64| {
             let shot = Shot { focal: 70.0, aperture: Some(2.8), distance: None, crop_factor: Some(crop), width: w, height: h };
-            db.lenses[0].correction(&shot).unwrap()
+            let mut corr = db.lenses[0].correction(&shot).unwrap();
+            // (pincushion at 70 mm: zoomed to fill the frame)
+            let raw = corr.warp.unwrap();
+            corr.warp = Some(lightcraft_lensdb::fill_frame(raw, w, h));
+            assert_ne!(corr.warp, Some(raw));
+            corr
         };
         let aps_c = lookup(&db, &m(Some(105.0)), 5616.0, 3744.0, Orientation::Normal).unwrap();
         assert_eq!(aps_c, at(1.5, 5616.0, 3744.0));

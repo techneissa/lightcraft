@@ -1620,15 +1620,18 @@ fn quick_jobs_show_embedded_previews_then_cached_renders() {
     let mut s = crate::Session::new().with_fs();
     let r = s.execute("library.import", &serde_json::json!({"paths": [path.to_string_lossy()]})).unwrap();
     let id = lightcraft_catalog::PhotoId(r["imported"][0].as_u64().unwrap());
-    // loupe: an unedited raw opens on its embedded preview…
-    let q = s.quick_view_job(id, 1600, true).unwrap().run();
+    // loupe: an unedited raw opens on a render of its own, never the camera's JPEG (its colours and
+    // lens correction are the camera's: swapping it for the render made the photo flash and shift)…
+    assert_eq!(s.quick_view_job(id, 1600, true, false).unwrap().run().quick, Some(QuickSource::Small));
+    // …unless the raw can't be rendered: then the embedded preview is all there is
+    let q = s.quick_view_job(id, 1600, true, true).unwrap().run();
     assert_eq!(q.quick, Some(QuickSource::Embedded));
     let img = q.rendered.unwrap().image;
     assert_eq!((img.width, img.height), (96, 64));
     // …and once the loupe has rendered it, on that render (any size)
     let full = s.loupe_job(id, 48, 32, true).unwrap().run();
     assert!(full.rendered.is_ok() && full.quick.is_none());
-    let q = s.quick_view_job(id, 1600, true).unwrap().run();
+    let q = s.quick_view_job(id, 1600, true, false).unwrap().run();
     assert_eq!(q.quick, Some(QuickSource::Cached));
     assert_eq!(q.rendered.unwrap().image.width, 48);
     // grid: embedded first, then the real thumbnail (final, with the thumbnail job's key)
@@ -1642,7 +1645,7 @@ fn quick_jobs_show_embedded_previews_then_cached_renders() {
     s.execute("develop.set", &serde_json::json!({"control": "light.exposure", "value": 1.0})).unwrap();
     let job = s.thumb_job(id, 128).unwrap();
     assert!(s.quick_thumb_job(&job).is_none());
-    assert_eq!(s.quick_view_job(id, 1600, true).unwrap().run().quick, Some(QuickSource::Small));
+    assert_eq!(s.quick_view_job(id, 1600, true, true).unwrap().run().quick, Some(QuickSource::Small));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

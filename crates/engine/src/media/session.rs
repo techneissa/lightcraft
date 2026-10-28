@@ -333,15 +333,20 @@ impl crate::Session {
     }
 
     /// Something to show in the loupe right away for `id` (see [`QuickJob`]): its cached view
-    /// render, else the embedded preview of an unedited raw, else a cached or fresh thumbnail.
-    pub fn quick_view_job(&mut self, id: PhotoId, max_edge: usize, apply_crop: bool) -> Option<QuickJob> {
+    /// render, else (with `camera_jpeg`) the embedded preview of an unedited raw, else a cached or
+    /// fresh thumbnail.
+    ///
+    /// The loupe asks for the camera's JPEG only once the raw can't be rendered: its colours and
+    /// lens correction are the camera's, so swapping it for the render a moment later made the
+    /// photo change colour and shift on screen.
+    pub fn quick_view_job(&mut self, id: PhotoId, max_edge: usize, apply_crop: bool, camera_jpeg: bool) -> Option<QuickJob> {
         let p = self.catalog.photo(id)?.clone();
         let small = self.thumb_job(id, THUMB_SIZES[THUMB_SIZES.len() - 1])?;
         // (the thumbnail job itself starts with the cached thumbnail, after the sharper embedded preview)
         let cached = vec![(self.media.rendered.clone(), Self::view_key(&p, apply_crop))];
-        let h = Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).finish();
+        let h = Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).u64(camera_jpeg as u64).finish();
         let key = h.0 as u64;
-        let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
+        let embedded = self.embedded_of(&p).filter(|_| camera_jpeg).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
         Some(QuickJob { request_id: 0, photo: id, key, cached, embedded, small: apply_crop.then(|| Box::new(small)) })
     }
 
