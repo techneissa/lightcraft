@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use crate::Session;
 
-fn temp_dir(tag: &str) -> std::path::PathBuf {
+pub(super) fn temp_dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lc-import-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
@@ -18,7 +18,7 @@ fn temp_dir(tag: &str) -> std::path::PathBuf {
 }
 
 /// A small procedural PNG (distinct per seed).
-fn write_png(path: &Path, seed: u8) {
+pub(super) fn write_png(path: &Path, seed: u8) {
     let (w, h) = (48usize, 32usize);
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 5) as u8, (i / w * 7) as u8, seed, 255]).collect();
     let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
@@ -1661,7 +1661,7 @@ fn folder_import_picks_up_undecodable_raw_containers_as_preview_only() {
 }
 
 /// Rewrite the JSON header line of the smart preview at `file`.
-fn edit_smart_header(file: &Path, edit: impl FnOnce(&mut Value)) {
+pub(super) fn edit_smart_header(file: &Path, edit: impl FnOnce(&mut Value)) {
     let bytes = std::fs::read(file).unwrap();
     let start = b"LCSP1\n".len();
     let nl = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
@@ -1673,7 +1673,7 @@ fn edit_smart_header(file: &Path, edit: impl FnOnce(&mut Value)) {
     std::fs::write(file, out).unwrap();
 }
 
-fn smart_header(file: &Path) -> Value {
+pub(super) fn smart_header(file: &Path) -> Value {
     let bytes = std::fs::read(file).unwrap();
     let start = b"LCSP1\n".len();
     let nl = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();

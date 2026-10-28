@@ -89,7 +89,10 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// stored with each smart preview.
 /// 13: a partial look takes the camera profile's colour (matrix and table), else a spectral prior, instead of the
 /// identity, and profiles are fitted with a white-keeping matrix.
-pub const LOOK_VERSION: u32 = 13;
+/// 14: a smart preview names the colour base baked into its pixels (`base`: `auto` Camera Matching, or `local`
+/// a local camera profile); a Camera Matching photo no longer takes a local profile's colour silently, so older
+/// proxies of those photos are rebuilt.
+pub const LOOK_VERSION: u32 = 14;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
