@@ -737,6 +737,20 @@ impl Renderer {
     }
 
     /// The texture to show for a grid/filmstrip thumbnail: the rendered one, else its stand-in.
+    /// The grid thumbnail of `photo` made from its settings as they are now, never an older look
+    /// still on screen while its replacement renders, and never the camera's embedded JPEG (another
+    /// look than the render's). Known only for the request the grid last made for the photo.
+    pub fn thumb_of_current_look(&self, photo: &Arc<lightcraft_catalog::Photo>) -> Option<&Tex> {
+        let &(ref old, _, key, _, _) = self.thumb_inputs.get(&photo.id)?;
+        if old.as_ptr() != Arc::as_ptr(photo) {
+            return None;
+        }
+        [Slot::Thumb(photo.id), Slot::ThumbQuick(photo.id)]
+            .iter()
+            .filter_map(|s| self.textures.get(s))
+            .find(|t| t.key == key && t.quick != Some(QuickSource::Embedded))
+    }
+
     pub fn thumb(&self, id: PhotoId) -> Option<&Tex> {
         self.textures.get(&Slot::Thumb(id)).or_else(|| self.textures.get(&Slot::ThumbQuick(id)))
     }
