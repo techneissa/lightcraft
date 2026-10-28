@@ -291,11 +291,11 @@ fn downsample(image: &CIImage, from: (u32, u32), to: (u32, u32)) -> Result<Retai
     let sx = f64::from(to.0) / f64::from(from.0);
     let sy = f64::from(to.1) / f64::from(from.1);
     let matrix = CGAffineTransform { a: sx, b: 0.0, c: 0.0, d: sy, tx: 0.0, ty: 0.0 };
-    // SAFETY: a method on an image we own, with a plain scale matrix; sent with an optional result
-    // because the binding's non-null type would panic on null.
     if !image.respondsToSelector(sel!(imageByApplyingTransform:highQualityDownsample:)) {
         return lanczos(image, from, to);
     }
+    // SAFETY: a method on an image we own, with a plain scale matrix; sent with an optional result
+    // because the binding's non-null type would panic on null.
     let out: Option<Retained<CIImage>> = unsafe { msg_send![image, imageByApplyingTransform: matrix, highQualityDownsample: true] };
     out.ok_or(Error::Undecodable)
 }
@@ -306,11 +306,11 @@ fn lanczos(image: &CIImage, from: (u32, u32), to: (u32, u32)) -> Result<Retained
     let (scale, aspect) = lanczos_inputs(from, to).ok_or(Error::Undecodable)?;
     let scale = NSNumber::new_f64(scale);
     let aspect = NSNumber::new_f64(aspect);
-    // SAFETY: a class-method call with no arguments, sent with an optional result (the binding's
-    // non-null type would panic on null); the new filter is retained and ours.
     if !class_responds(CIFilter::class(), sel!(lanczosScaleTransformFilter)) {
         return Err(Error::Unsupported);
     }
+    // SAFETY: a class-method call with no arguments, sent with an optional result (the binding's
+    // non-null type would panic on null); the new filter is retained and ours.
     let lz: Option<Retained<CIFilter>> = unsafe { msg_send![CIFilter::class(), lanczosScaleTransformFilter] };
     let lz = lz.ok_or_else(|| Error::Os("no Lanczos scale filter".into()))?;
     // SAFETY: reading immutable `NSString` key constants exported by Core Image.

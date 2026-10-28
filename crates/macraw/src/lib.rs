@@ -9,7 +9,7 @@
 //! All `unsafe` (the Objective-C calls) lives in the `macos` module; the API is safe. Elsewhere
 //! (Windows, Linux, wasm) everything compiles, [`available`] is false and [`render`] returns
 //! [`Error::Unsupported`]. With lightcraft-sysmem and lightcraft-filepanel this is one of the three
-//! crates allowed `unsafe` (AGENTS.md). It depends on no workspace crate: it returns plain `Vec<[f32; 3]>`.
+//! crates allowed `unsafe` (AGENTS.md). It has no normal dependency on a workspace crate (tests use lightcraft-testkit): it returns plain `Vec<[f32; 3]>`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 // The pure helpers are used only by the Core Image backend; their tests run everywhere.

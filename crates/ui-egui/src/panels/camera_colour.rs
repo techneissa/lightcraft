@@ -1,8 +1,8 @@
 //! The colour source of a raw in the Profile picker: "Camera Matching" (the default: LightCraft's colours for the raw
-//! are matched to the camera's own JPEG), "No Camera Matching" (the JPEG is never read), and one row per local camera
-//! profile made for the photo's camera, and macOS Colour where this Mac's raw decoder reads the camera
-//! ([`crate::macos_colour::picker`]), (the user's own files in the camera-profiles folder, named from the file).
-//! Stored as `profile.camera_colour` (`auto` | `colorimetric` | `local`, with `profile.camera_profile` naming the file)
+//! are matched to the camera's own JPEG), "No Camera Matching" (the JPEG is never read), one row per local camera
+//! profile made for the photo's camera (the user's own files in the camera-profiles folder, named from the file), and
+//! macOS Colour where this Mac's raw decoder reads the camera ([`crate::macos_colour::picker`]).
+//! Stored as `profile.camera_colour` (`auto` | `colorimetric` | `local` | `macos`, with `profile.camera_profile` naming the file)
 //! and offered only for a raw whose starting colour is fitted to its JPEG (`SourceInfo::colorimetric`).
 
 use lightcraft_catalog::PhotoId;

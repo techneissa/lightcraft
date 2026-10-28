@@ -483,12 +483,12 @@ impl crate::Session {
         Ok(job)
     }
 
-    /// Prefer decoder facts to header-only metadata for pixel-statistics commands.
     /// The facts of photo `id`'s decoded source, when one is held (not the catalog's guess before a decode).
     pub(crate) fn decoded_source_info(&self, id: PhotoId) -> Option<SourceInfo> {
         Some(self.media.source_facts(id, SourceInfo { raw: false, ..SourceInfo::default() })).filter(|i| i.raw)
     }
 
+    /// Prefer decoder facts to header-only metadata for pixel-statistics commands.
     pub fn source_info(&self, id: PhotoId) -> SourceInfo {
         let header = self.catalog.photo(id).map(|p| source_info(p)).unwrap_or_default();
         self.media.source_facts(id, header)
