@@ -36,9 +36,21 @@ pub(crate) fn scaled(base: (u32, u32), long_edge: Option<u32>) -> Result<(u32, u
     Ok(size)
 }
 
+/// `CILanczosScaleTransform`'s `inputScale` and `inputAspectRatio` that take `from` to `to` pixels: the scale
+/// applies to both axes and the aspect ratio to the width once more (output height = height × scale, width =
+/// width × scale × aspect). `None` for an empty size.
+pub(crate) fn lanczos_inputs(from: (u32, u32), to: (u32, u32)) -> Option<(f64, f64)> {
+    if from.0 == 0 || from.1 == 0 || to.0 == 0 || to.1 == 0 {
+        return None;
+    }
+    let sx = f64::from(to.0) / f64::from(from.0);
+    let sy = f64::from(to.1) / f64::from(from.1);
+    Some((sy, sx / sy))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{MAX_EDGE, extent_size, scaled};
+    use super::{MAX_EDGE, extent_size, lanczos_inputs, scaled};
     use crate::Error;
 
     #[test]
@@ -65,5 +77,19 @@ mod tests {
     fn pixel_cap() {
         assert_eq!(scaled((20_000, 20_000), None), Err(Error::TooLarge { width: 20_000, height: 20_000 }));
         assert!(scaled((20_000, 20_000), Some(4000)).is_ok());
+    }
+
+    /// The Lanczos inputs give exactly the target size on each axis, also when only the width differs (the size
+    /// gate's resample of a 1 % wider or narrower Apple picture).
+    #[test]
+    fn lanczos_inputs_hit_both_edges() {
+        for (from, to) in [((7148, 4672), (7008, 4672)), ((7008, 4672), (1600, 1067)), ((4672, 7148), (4672, 7008)), ((7148, 4672), (800, 523))] {
+            let (scale, aspect) = lanczos_inputs(from, to).unwrap();
+            let h = f64::from(from.1) * scale;
+            let w = f64::from(from.0) * scale * aspect;
+            assert!((w - f64::from(to.0)).abs() < 1e-6 && (h - f64::from(to.1)).abs() < 1e-6, "{from:?} → {to:?}: {w}×{h}");
+        }
+        assert_eq!(lanczos_inputs((0, 10), (5, 5)), None);
+        assert_eq!(lanczos_inputs((10, 10), (5, 0)), None);
     }
 }

@@ -18,7 +18,7 @@
 
 use crate::copy::{BAND_ROWS, bands, rgba_to_rgb};
 use crate::gate::{model_listed, size_gate};
-use crate::size::{extent_size, scaled};
+use crate::size::{extent_size, lanczos_inputs, scaled};
 use crate::slots::is_full;
 use crate::{Error, Input, LinearImage, Probe, RECIPE_VERSION, Request, SLOTS, key_of};
 use objc2::rc::{Retained, autoreleasepool};
@@ -300,12 +300,12 @@ fn downsample(image: &CIImage, from: (u32, u32), to: (u32, u32)) -> Result<Retai
     out.ok_or(Error::Undecodable)
 }
 
-/// Lanczos-resample `image` from `from` to exactly `to` pixels (`CILanczosScaleTransform`).
+/// Lanczos-resample `image` from `from` to exactly `to` pixels (`CILanczosScaleTransform`: `inputScale`
+/// scales both axes, `inputAspectRatio` the width once more, so height × scale and width × scale × aspect).
 fn lanczos(image: &CIImage, from: (u32, u32), to: (u32, u32)) -> Result<Retained<CIImage>, Error> {
-    let sx = f64::from(to.0) / f64::from(from.0);
-    let sy = f64::from(to.1) / f64::from(from.1);
-    let scale = NSNumber::new_f64(sx);
-    let aspect = NSNumber::new_f64(sy / sx);
+    let (scale, aspect) = lanczos_inputs(from, to).ok_or(Error::Undecodable)?;
+    let scale = NSNumber::new_f64(scale);
+    let aspect = NSNumber::new_f64(aspect);
     // SAFETY: a class-method call with no arguments, sent with an optional result (the binding's
     // non-null type would panic on null); the new filter is retained and ours.
     if !class_responds(CIFilter::class(), sel!(lanczosScaleTransformFilter)) {

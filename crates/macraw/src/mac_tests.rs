@@ -190,6 +190,30 @@ fn gates_and_probe_on_a_real_file() {
     assert_eq!(render(Input::Path(&file), &req, &cancel), Err(Error::SizeMismatch { apple: (w, h), expected: off }));
 }
 
+/// The size gate's Lanczos resample when only the width differs by 1 %: every row and column of the picture is
+/// filled and it matches the affine (draft) resample of the same size, not a picture 1 % short with empty rows.
+#[test]
+fn width_only_mismatch_resamples_both_axes() {
+    let Some(file) = sample("LIGHTCRAFT_MACRAW_ARW", true) else { return };
+    let (w, h) = super::probe(Input::Path(&file)).unwrap().native_size;
+    let cancel = AtomicBool::new(false);
+    let expected = (w - w / 100, h);
+    let at = |draft: bool| Request { long_edge: Some(800), draft, expected_size: Some(expected) };
+    let lz = render(Input::Path(&file), &at(false), &cancel).unwrap();
+    let af = render(Input::Path(&file), &at(true), &cancel).unwrap();
+    assert_eq!((lz.width, lz.height), (af.width, af.height));
+    let (cols, rows) = (lz.width as usize, lz.height as usize);
+    let luma = |px: &[f32; 3]| px.iter().sum::<f32>();
+    let row_mean = |r: usize| lz.rgb[r * cols..(r + 1) * cols].iter().map(luma).sum::<f32>() / cols as f32;
+    let col_mean = |c: usize| (0..rows).map(|r| luma(&lz.rgb[r * cols + c])).sum::<f32>() / rows as f32;
+    let mean = lz.rgb.iter().map(luma).sum::<f32>() / lz.rgb.len() as f32;
+    for (edge, m) in [("top", row_mean(0)), ("bottom", row_mean(rows - 1)), ("left", col_mean(0)), ("right", col_mean(cols - 1))] {
+        assert!(m > mean * 0.05, "the {edge} edge is empty ({m} against a mean of {mean})");
+    }
+    let diff = lz.rgb.iter().flatten().zip(af.rgb.iter().flatten()).map(|(a, b)| (a - b).abs()).sum::<f32>() / (lz.rgb.len() * 3) as f32;
+    assert!(diff < mean / 3.0 * 0.05, "Lanczos and affine differ by {diff} (mean value {})", mean / 3.0);
+}
+
 /// Linear Rec.2020 → CIE Lab (D65), for colour checks only.
 fn lab(rgb: [f64; 3]) -> [f64; 3] {
     let [r, g, b] = rgb;
