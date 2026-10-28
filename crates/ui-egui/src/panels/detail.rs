@@ -372,9 +372,6 @@ fn loupe_paint_and_finish(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
         }
     }
     app.loupe_shown = Some((id, shown));
-    if shown == "render" {
-        ui.ctx().data_mut(|d| d.insert_temp(egui::Id::unique(HELD_RECT), (id, img_rect)));
-    }
     // a wipe shows the Before whole-frame render on its side of the line…
     // (the line can be dragged: it, and so each side, follows the divider)
     let divider = super::split_divider::interact(app, ui, canvas, img_rect);
@@ -878,12 +875,12 @@ fn request_before(app: &mut LightcraftApp, a: &LoupeAsk, [sw, sh]: [usize; 2]) {
     }
 }
 
-/// What a view slot shows: its own render of this photo, else the stand-ins (no blank frame
-/// between photos, and the full render replaces them in place). Returns what it drew.
+/// What a view slot shows: its own render of this photo, else its stand-ins (no blank frame
+/// between photos, and the full render replaces them in place). Never another photo's pixels: with
+/// nothing of its own it draws nothing ("none": the loupe says "Rendering…"). Returns what it drew.
 fn draw_slot(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, ppp: f32, slot: Slot, r: Rect, clip: Rect) -> &'static str {
     let unrenderable = app.renderer.failure_of(Slot::Main, id).is_some();
     let stand_in = |t: &&crate::render::Tex| unrenderable || t.quick != Some(QuickSource::Embedded);
-    let held = held_rect(p.ctx());
     let mine = |s: Slot| app.renderer.textures.get(&s).filter(|t| t.photo == id);
     let (tex, what, draw_at) = if let Some(t) = mine(slot) {
         (t, "render", r)
@@ -891,10 +888,6 @@ fn draw_slot(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, ppp: f32, slot
         (t, t.quick.map(quick_name).unwrap_or("preview"), r)
     } else if let Some(t) = app.renderer.thumb(id).filter(|t| stand_in(t)) {
         (t, "thumb", r)
-    } else if let Some(t) = app.renderer.textures.get(&Slot::Main).filter(|_| slot == Slot::Main && !unrenderable)
-        && let Some((_, at)) = held.filter(|(photo, _)| *photo == t.photo)
-    {
-        (t, "held", at)
     } else {
         return "none";
     };
@@ -988,15 +981,6 @@ fn request_stand_in(app: &mut LightcraftApp, id: PhotoId, edge: usize, with_crop
     {
         app.renderer.request_quick(Slot::Preview, q, 110);
     }
-}
-
-/// Where the loupe last drew a photo's own render: `(photo, image rect)`, egui temp data. A photo
-/// switched to with nothing of its own to show yet keeps that one on screen ("held").
-const HELD_RECT: &str = "loupe-held-rect";
-
-/// The photo the loupe last drew a render of, and where ([`HELD_RECT`]).
-pub(crate) fn held_rect(ctx: &egui::Context) -> Option<(PhotoId, Rect)> {
-    ctx.data(|d| d.get_temp::<(PhotoId, Rect)>(egui::Id::unique(HELD_RECT)))
 }
 
 /// Neighbour prefetch: below on-screen thumbnails, above background thumbnail refreshes.
