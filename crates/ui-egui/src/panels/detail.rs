@@ -337,7 +337,7 @@ fn loupe_paint_and_finish(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
         window_ctx,
     } = v;
     let p = ui.painter_at(canvas);
-    let draw = |slot: Slot, r: Rect, clip: Rect| draw_slot(app, &p, id, !crop_tool, ppp, slot, r, clip);
+    let draw = |slot: Slot, r: Rect, clip: Rect| draw_slot(app, &p, (id, !crop_tool), ppp, slot, [r, clip]);
     // soft proofing: a paper-white surround and the proof's name, as Lightroom shows it
     if app.ui.soft_proof && !fullscreen {
         proof_surround(app, &p, t, canvas);
@@ -885,7 +885,7 @@ fn request_before(app: &mut LightcraftApp, a: &LoupeAsk, [sw, sh]: [usize; 2]) {
 ///
 /// A raw that can't be rendered at all has nothing else, so its camera JPEG stands in (the loupe
 /// says the render failed).
-fn draw_slot(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, with_crop: bool, ppp: f32, slot: Slot, r: Rect, clip: Rect) -> &'static str {
+fn draw_slot(app: &LightcraftApp, p: &egui::Painter, (id, with_crop): (PhotoId, bool), ppp: f32, slot: Slot, [r, clip]: [Rect; 2]) -> &'static str {
     let unrenderable = app.renderer.failure_of(Slot::Main, id).is_some();
     let mine = |s: Slot| app.renderer.textures.get(&s).filter(|t| t.photo == id);
     let stand_in = || {

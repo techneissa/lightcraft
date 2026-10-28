@@ -130,23 +130,6 @@ fn toast_wake(left: f64) -> std::time::Duration {
     std::time::Duration::try_from_secs_f64(secs).unwrap_or_default()
 }
 
-#[cfg(test)]
-mod toast_tests {
-    use super::*;
-    use std::time::Duration;
-
-    // A toast is drawn once and left alone until it starts to fade, then redrawn every 30 ms
-    // (it redrew every 30 ms for its whole 1.4 s)
-    #[test]
-    fn a_toast_sleeps_until_its_fade_starts() {
-        assert_eq!(toast_wake(1.4), Duration::from_secs_f64(1.4 - TOAST_FADE_SECS));
-        assert_eq!(toast_wake(0.25 + 0.5), Duration::from_secs_f64(0.5));
-        assert_eq!(toast_wake(0.2), Duration::from_millis(30), "fading");
-        assert_eq!(toast_wake(0.0), Duration::from_millis(30));
-        assert_eq!(toast_wake(f64::NAN), Duration::from_millis(30), "a clock that is not a number never panics");
-    }
-}
-
 /// Paint a centred, dimmed message (empty states).
 pub fn empty_message(ui: &egui::Ui, rect: Rect, title: &str, body: &str) {
     let t = Tokens::get(ui.ctx());
@@ -222,4 +205,21 @@ pub fn empty_state(ui: &mut egui::Ui, rect: Rect, title: &str, body: &str, actio
         p.galley(pos2(rect.center().x, buttons_top + buttons_h + 12.0), g, t.text_dim);
     }
     clicked
+}
+
+#[cfg(test)]
+mod toast_tests {
+    use super::*;
+    use std::time::Duration;
+
+    // A toast is drawn once and left alone until it starts to fade, then redrawn every 30 ms
+    // (it redrew every 30 ms for its whole 1.4 s)
+    #[test]
+    fn a_toast_sleeps_until_its_fade_starts() {
+        assert_eq!(toast_wake(1.4), Duration::from_secs_f64(1.4 - TOAST_FADE_SECS));
+        assert_eq!(toast_wake(0.25 + 0.5), Duration::from_secs_f64(0.5));
+        assert_eq!(toast_wake(0.2), Duration::from_millis(30), "fading");
+        assert_eq!(toast_wake(0.0), Duration::from_millis(30));
+        assert_eq!(toast_wake(f64::NAN), Duration::from_millis(30), "a clock that is not a number never panics");
+    }
 }
