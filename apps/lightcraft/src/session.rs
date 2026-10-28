@@ -67,6 +67,7 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         open_with: Some(Box::new(editors::open_with)),
         open_all_with: Some(Box::new(editors::open_all_with)),
         check_editor: Some(Box::new(editors::check)),
+        layers_support: Some(Box::new(editors::supports_layers)),
         open_url: Some(Box::new(|url: &str| {
             if !url.starts_with("https://") {
                 return Err("only https links are opened".into());

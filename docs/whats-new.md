@@ -2,6 +2,19 @@
 
 ## 2026-10-28
 
+### Open Photos as Layers in PhotoCraft
+- **Photo ▸ Edit In ▸ Open as Layers in PhotoCraft…** (two or more photos selected; also in the right-click menu's list
+  of commands, and in its **Edit In** submenu) opens the selected photos as the layers of one new PhotoCraft document,
+  for double and multiple exposures. The active photo is the top layer; the others follow in the order you selected them.
+- Each photo is rendered with its edits, as for **Edit in PhotoCraft** (the same file format, colour space and bit depth
+  from Settings ▸ External Editing), into a folder beside the top photo named `<photo> + 2 Layers`. Each file is named
+  after its photo, so PhotoCraft names the layer the same. The files are not added to your library.
+- The progress shows in the activity stack with ✕ to stop; a stopped or failed run removes its files.
+- Needs the PhotoCraft that opens layer lists (on a Mac, its `Info.plist` lists `pcstack`). With the official PhotoCraft,
+  or on Windows and Linux, the photos open one by one and the toast says why.
+- Up to 256 photos; more is refused with a message. When you save the document in PhotoCraft, import it with File ▸
+  Import Photos… (or save it in a watched auto-import folder).
+
 ### Right-Click Menu: Three Presets, a Backup File, Lists that Fill the Page
 - **Settings ▸ Photo Menu** has three presets. **Save to Preset 1 / 2 / 3** keeps the menu as arranged; a click on **Preset
   1 / 2 / 3** switches to it at once (an empty one says it is empty). **Undo Switch** brings the old menu back.

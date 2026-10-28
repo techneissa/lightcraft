@@ -401,6 +401,7 @@ impl Headless {
             || self.app.sync_run.is_some()
             || self.app.import.is_some()
             || self.app.export.is_some()
+            || self.app.layers.is_some()
             || self.app.session.denoise_busy()
             || !self.app.tasks.is_empty()
             || !self.app.synthetic.is_empty()

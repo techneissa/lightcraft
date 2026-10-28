@@ -46,6 +46,30 @@ pub fn openable(path: &str, label: &str) -> Result<String, String> {
     Ok(absolute.to_string_lossy().into_owned())
 }
 
+/// [`openable`] for the layer list Open as Layers in PhotoCraft writes (a `.pcstack` file, which
+/// is data for PhotoCraft and not a photo): a regular file with that extension that is not a link
+/// to anything else.
+pub fn openable_stack(path: &str) -> Result<String, String> {
+    let p = Path::new(path);
+    let name = p.file_name().map_or_else(|| path.to_string(), |n| n.to_string_lossy().into_owned());
+    let is_stack = |p: &Path| p.extension().is_some_and(|e| e.eq_ignore_ascii_case(crate::layers::STACK_EXTENSION));
+    if !is_stack(p) {
+        return Err(format!("{name} isn't a layer list, so it isn't handed to another application"));
+    }
+    match std::fs::metadata(p) {
+        Ok(m) if m.is_file() => {}
+        Ok(_) => return Err(format!("{name} isn't a file, so it isn't handed to another application")),
+        Err(e) => return Err(format!("the layer list is missing: {path} ({e})")),
+    }
+    if let Ok(target) = p.canonicalize()
+        && !is_stack(&target)
+    {
+        return Err(format!("{name} points at {}, which isn't a layer list", target.display()));
+    }
+    let absolute = std::path::absolute(p).map_err(|e| format!("{name}: {e}"))?;
+    Ok(absolute.to_string_lossy().into_owned())
+}
+
 /// Whether `path`'s extension is one LightCraft reads (the Edit In copy formats included).
 pub fn is_media(path: &Path) -> bool {
     crate::import::is_supported(path)
@@ -82,6 +106,27 @@ mod tests {
         assert!(e.contains("isn't one of the file types") || e.contains("isn't a file"), "{e}");
         let e = openable(&dir.join("gone.jpg").to_string_lossy(), "").unwrap_err();
         assert!(e.contains("missing"), "{e}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The layer list is handed over; anything else named like it, or a link, is not.
+    #[test]
+    fn only_a_pcstack_file_is_handed_over_as_a_layer_list() {
+        let dir = std::env::temp_dir().join(format!("lc-openable-stack-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let ok = write(&dir, "A + 2.pcstack");
+        assert_eq!(openable_stack(&ok).unwrap(), ok);
+        assert!(openable_stack(&write(&dir, "a.exe")).unwrap_err().contains("isn't a layer list"));
+        assert!(openable_stack(&write(&dir, "a.jpg")).is_err());
+        assert!(openable_stack(&dir.join("gone.pcstack").to_string_lossy()).unwrap_err().contains("missing"));
+        #[cfg(unix)]
+        {
+            let target = write(&dir, "payload.command");
+            let link = dir.join("sneaky.pcstack");
+            std::os::unix::fs::symlink(&target, &link).unwrap();
+            assert!(openable_stack(&link.to_string_lossy()).unwrap_err().contains("points at"));
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 

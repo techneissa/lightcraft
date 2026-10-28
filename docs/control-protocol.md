@@ -418,6 +418,18 @@ left it. They return the answer above, which also carries `presets` (`{slot, sav
 `edited`: the active slot's menu has been changed since it was saved) and `canUndoPreset`. The presets are in the app
 settings (`photoMenuPresets`).
 
+`photo.openAsLayersInPhotocraft {ids?, app?, wait?, format?, colorSpace?, bitDepth?, dir?}` (Photo ▸ Edit In ▸ Open as
+Layers in PhotoCraft…) renders two or more photos (`ids`, else the selection) with their edits, the first (the active
+photo, or the first of `ids`) as the top layer, and opens them in PhotoCraft as one document. Fewer than two or more than
+256 photos is an error before anything is written. The files go in a new folder `<photo> + N Layers` beside the top photo
+(`dir` for a generated demo photo, which has no folder) in the format of Settings ▸ External Editing; they are not added
+to the library. A PhotoCraft that lists `pcstack` as a document type is given one `<name>.pcstack` layer list (`{kind:
+"photocraft-open-as-layers", version: 1, name, files: [absolute paths, top first]}`); any other gets the files one by
+one (`oneByOne`). Without `wait` it returns `{background: true, total, stack}` at once and the render shows in
+`activity.list` (kind `layers`, `activity.cancel` stops it and removes its files); with `wait: true` it returns `{name,
+dir, files, stack, opened, oneByOne, failed}` when done. An editor that won't start is reported in `failed`, not as an
+error, since the files are written.
+
 `photoMenu.export {path}` writes the menu and its presets as JSON, and `photoMenu.import {path}` reads such a file back.
 Without `path` they ask with the save / open panel (and return null at once; the command runs again when the panel
 closes), and on a platform without a panel they ask for `path`. The file:
