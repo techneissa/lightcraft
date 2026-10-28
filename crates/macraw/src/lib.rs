@@ -38,7 +38,8 @@ pub use slots::{FLOOR_BYTES, weight_bytes};
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
 
-/// Bumped whenever the recipe changes what [`render`] returns (part of [`cache_key`]).
+/// Bumped whenever the recipe changes what [`render`] returns (part of [`cache_key`], and of the engine's smart preview
+/// version, `MACOS_BASE_VERSION`, so a bump also rebuilds macOS Colour smart previews).
 pub const RECIPE_VERSION: u32 = 1;
 
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]

@@ -74,9 +74,14 @@ const LOCAL_FIELD: &str = "local_profile";
 /// makes one stale.
 const MACOS_FIELD: &str = "macos_base_version";
 
-/// The version of LightCraft's macOS base (the decoder recipe and the loader's tone fit, `files::macos`): bumped when
-/// either changes what a macOS Colour proxy looks like, so proxies made before are rebuilt from their online originals.
-pub const MACOS_BASE_VERSION: u64 = 1;
+/// The version of LightCraft's macOS base (the decoder recipe and the loader's tone fit, `files::macos`): it rises with
+/// either, so proxies made before a change are rebuilt from their online originals. The recipe's part is
+/// `lightcraft_macraw::RECIPE_VERSION` itself (one number, never bumped apart); bump [`MACOS_FIT_VERSION`] for the fit.
+pub const MACOS_BASE_VERSION: u64 = lightcraft_macraw::RECIPE_VERSION as u64 + MACOS_FIT_VERSION;
+
+/// The tone fit's part of [`MACOS_BASE_VERSION`] (`camera_preview::macos_base`): bumped when the fit changes what a macOS
+/// Colour picture looks like.
+pub const MACOS_FIT_VERSION: u64 = 0;
 
 /// What a photo's smart preview should say about local camera profiles and macOS Colour.
 #[derive(Clone, Debug, PartialEq, Eq)]

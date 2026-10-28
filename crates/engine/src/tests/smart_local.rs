@@ -188,3 +188,12 @@ fn a_macos_colour_photo_keeps_macos_pixels_in_its_smart_preview() {
     assert!(!is_local_stale(&macos, &LocalWant::Macos), "a newer build's proxy is left alone");
     let _ = std::fs::remove_dir_all(&d);
 }
+
+/// Review fix 8: the smart previews' macOS version rises with the decoder recipe, so a recipe change can't leave old
+/// macOS Colour proxies looking current, and it stays 1 today (proxies already made are kept).
+#[test]
+fn the_smart_preview_version_follows_the_recipe() {
+    use crate::smart::{MACOS_BASE_VERSION, MACOS_FIT_VERSION};
+    assert_eq!(MACOS_BASE_VERSION, u64::from(lightcraft_macraw::RECIPE_VERSION) + MACOS_FIT_VERSION);
+    assert_eq!(MACOS_BASE_VERSION, 1, "a bump rebuilds every macOS Colour smart preview: on purpose only");
+}
