@@ -320,6 +320,8 @@ pub struct LightcraftApp {
     pub layers: Option<layers_task::LayersTask>,
     /// Edit In's copies, rendering in the background.
     pub edit_in: Option<edit_in_task::EditInTask>,
+    /// Apply macOS Colour to All Photos from This Camera, counting or moving in the background.
+    pub(crate) macos_job: Option<macos_colour::job::MacosJob>,
     /// Files on their way to an external editor.
     pub handoffs: Vec<editor_handoff::Handoff>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).

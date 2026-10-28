@@ -404,6 +404,7 @@ impl Headless {
             || self.app.layers.is_some()
             || self.app.edit_in.is_some()
             || !self.app.handoffs.is_empty()
+            || self.app.macos_job.is_some()
             || self.app.session.denoise_busy()
             || !self.app.tasks.is_empty()
             || !self.app.synthetic.is_empty()

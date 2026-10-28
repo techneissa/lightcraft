@@ -29,7 +29,7 @@ pub(crate) struct Plan {
 }
 
 impl Plan {
-    fn json(&self) -> Value {
+    pub(crate) fn json(&self) -> Value {
         json!({
             "camera": self.camera,
             "photos": self.photos.len(),
@@ -44,20 +44,44 @@ impl Plan {
 
 /// The camera of `photo` (the active photo when absent) and what moving its photos would do.
 pub(crate) fn plan(s: &Session, c: &str, p: &Value) -> crate::Result<Plan> {
+    let (camera, photos) = candidates(s, c, p)?;
+    let gate = crate::import::macos_gate();
+    let (plan, unchecked) = plan_of(camera, &photos, &gate);
+    crate::import::check_macos_later(&s.activity, gate, unchecked);
+    Ok(plan)
+}
+
+/// The size checks [`plan_of`] found waiting: (camera, size) and a file to probe.
+pub(crate) type Unchecked = Vec<((String, (u32, u32)), String)>;
+
+/// The camera of `photo` (the active photo when absent) and its photos that are not on macOS Colour yet (a quick pass
+/// over the catalog: the gates, which ask the Mac's decoder, come in [`plan_of`]).
+pub(crate) fn candidates(s: &Session, c: &str, p: &Value) -> crate::Result<(String, Vec<std::sync::Arc<lightcraft_catalog::Photo>>)> {
     let id = match p.get("photo").and_then(Value::as_u64) {
         Some(id) => PhotoId(id),
         None => s.active().ok_or_else(|| bad(c, "no photo"))?,
     };
     let camera = s.catalog.photo(id).map(|p| p.meta.camera.trim().to_owned()).filter(|c| !c.is_empty()).ok_or_else(|| bad(c, "no camera"))?;
+    let photos = s
+        .catalog
+        .photos()
+        .filter(|ph| {
+            !ph.deleted
+                && ph.fitted_look()
+                && ph.meta.camera.trim().eq_ignore_ascii_case(&camera)
+                && ph.develop.profile.camera_colour != CameraColour::Macos
+        })
+        .cloned()
+        .collect();
+    Ok((camera, photos))
+}
+
+/// What moving `photos` (from [`candidates`]) would do, by the gates; needs no session, so it can run on a worker.
+pub(crate) fn plan_of(camera: String, photos: &[std::sync::Arc<lightcraft_catalog::Photo>], gate: &crate::import::MacosGate) -> (Plan, Unchecked) {
     let mut plan = Plan { camera, photos: Vec::new(), system: 0, unread: 0, size: 0, checking: 0 };
-    let gate = crate::import::macos_gate();
     let mut unchecked = Vec::new();
-    gate.clone().with_gate(|gate, verdicts| {
-        for ph in s.catalog.photos() {
-            let other = !ph.meta.camera.trim().eq_ignore_ascii_case(&plan.camera);
-            if ph.deleted || !ph.fitted_look() || other || ph.develop.profile.camera_colour == CameraColour::Macos {
-                continue;
-            }
+    gate.with_gate(|gate, verdicts| {
+        for ph in photos {
             match crate::import::macos_gates_known(ph, gate, verdicts) {
                 MacosKnown::Decided(Ok(())) => plan.photos.push(ph.id),
                 MacosKnown::Decided(Err(MacosSkip::System)) => plan.system += 1,
@@ -70,8 +94,7 @@ pub(crate) fn plan(s: &Session, c: &str, p: &Value) -> crate::Result<Plan> {
             }
         }
     });
-    crate::import::check_macos_later(&s.activity, gate, unchecked);
-    Ok(plan)
+    (plan, unchecked)
 }
 
 /// Of `ids`, the photos on macOS Colour that this computer makes with Camera Matching colours (not a Mac, a camera or

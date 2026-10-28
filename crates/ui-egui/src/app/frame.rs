@@ -434,6 +434,7 @@ impl LightcraftApp {
         crate::layers_task::poll(self, &ctx);
         crate::edit_in_task::poll(self, &ctx);
         crate::editor_handoff::poll(self, &ctx);
+        crate::macos_colour::job::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
         animated_gif::poll(self, &ctx);
         panels::activity::show(self, &ctx);

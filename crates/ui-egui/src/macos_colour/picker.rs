@@ -5,7 +5,6 @@
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::{CameraColour, DevelopSettings};
 use lightcraft_pipeline::MacosUnavailable;
-use serde_json::json;
 
 use crate::LightcraftApp;
 use crate::panels::camera_colour::Row;
@@ -85,12 +84,16 @@ pub(crate) fn menu_item(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
 }
 
 /// Counts the camera's photos first and asks; nothing to move says so instead, and so does a camera macOS is still
-/// being asked about (the count never waits for it: an activity row checks it, and the next click asks).
+/// being asked about (the count never waits for it: an activity row checks it, and the next click asks). The count runs
+/// on a worker ([`super::job`]); the question comes when it is done.
 pub(crate) fn ask(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId) {
-    let plan = match app.run("profiles.macosForCameraCount", json!({"photo": id.0})) {
-        Ok(plan) => plan,
-        Err(e) => return app.toast(ctx, e),
-    };
+    if let Err(e) = super::job::start(app, id.0, false) {
+        app.toast(ctx, e);
+    }
+}
+
+/// The count `plan` (`profiles.macosForCameraCount`'s answer) for photo `id` is in: ask, or say why not.
+pub(crate) fn asked(app: &mut LightcraftApp, ctx: &egui::Context, id: u64, plan: &serde_json::Value) {
     if plan["checking"].as_u64().unwrap_or(0) > 0 {
         return app.toast(ctx, crate::i18n::tr(lightcraft_engine::cmd::macos_colour::CHECKING));
     }
@@ -100,7 +103,7 @@ pub(crate) fn ask(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId) {
     if count == 0 {
         return app.toast(ctx, crate::i18n::tr_format!("Every photo from the {camera} that can use macOS Colour already does.", camera = camera));
     }
-    app.ui.dialog = Some(Dialog::MacosForCamera { photo: id.0, camera, count, skipped });
+    app.ui.dialog = Some(Dialog::MacosForCamera { photo: id, camera, count, skipped });
 }
 
 /// The line for photos a preset put on macOS Colour that this computer makes with Camera Matching colours
