@@ -1842,13 +1842,19 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             ui.label(egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
         }
         Dialog::LocalProfileSwitch { name, count, .. } => {
-            ui.label(crate::i18n::tr_format!(
-                "{count} photos were rendered with your local profile '{name}'. Switch them to it to keep their look?",
-                count = count,
-                name = name
-            ));
+            let question = if *count == 1 {
+                crate::i18n::tr_format!("1 photo was rendered with your local profile '{name}'. Switch it to that profile to keep its look?", name = name)
+            } else {
+                crate::i18n::tr_format!(
+                    "{count} photos were rendered with your local profile '{name}'. Switch them to it to keep their look?",
+                    count = count,
+                    name = name
+                )
+            };
+            ui.label(question);
             ui.label(
-                egui::RichText::new(crate::i18n::tr("Camera Matching no longer uses it. You can undo this with Edit ▸ Undo.")).color(t.text_dim),
+                egui::RichText::new(crate::i18n::tr("Camera Matching no longer uses it. Undo in the Edit menu takes the switch back."))
+                    .color(t.text_dim),
             );
         }
         Dialog::MovePhotos { .. } => move_photos_body(ui, t, dlg),
