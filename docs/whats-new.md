@@ -2,7 +2,7 @@
 
 ## 2026-10-28
 
-### Your own camera profiles in the Profile picker
+### Your Own Camera Profiles in the Profile Picker
 - A camera profile of your own (a file in the camera-profiles folder, made with `lightcraft-cli calibrate --name "A7 V
   Chart"`) is now its own choice in the Profile menu and browser, for the raws of the camera it is made for, under the name
   inside the file (else its file name). Camera Matching no longer changes when you add one. The profile gives the base
