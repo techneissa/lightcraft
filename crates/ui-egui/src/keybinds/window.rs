@@ -35,7 +35,7 @@ struct Row {
     slots: [Option<String>; model::SLOTS],
     /// The menu it sits in (`View`), or [`OTHER`].
     group: String,
-    /// The path inside the menu (`View ▸ Panels`), empty for a command that is in no menu.
+    /// The path inside the menu (`View › Panels`), empty for a command that is in no menu.
     path: String,
 }
 
@@ -134,7 +134,7 @@ fn rows(app: &LightcraftApp, keymap: &Keymap, needle: &str, show_all: bool, mac:
             let slots = model::effective_slots(keymap, b.id).map(|s| s.map(str::to_string));
             let path = paths.get(b.id).cloned().unwrap_or_default();
             let group = path.first().cloned().unwrap_or_else(|| OTHER.to_string());
-            Row { b, slots, group, path: path.join(" ▸ ") }
+            Row { b, slots, group, path: path.join(" › ") }
         })
         .filter(|r| show_all || r.slots.iter().any(Option::is_some) || capturing == Some(r.b.id))
         .filter(|r| {
