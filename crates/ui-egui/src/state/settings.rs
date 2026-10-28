@@ -197,6 +197,10 @@ pub struct AppSettings {
     /// None is the default menu (`panels::photo_menu`).
     #[serde(deserialize_with = "crate::panels::photo_menu::read_saved", skip_serializing_if = "Option::is_none")]
     pub photo_menu: Option<Vec<String>>,
+    /// The top bar's items turned off (Settings ▸ Top Bar): their ids; none is every item shown
+    /// (`panels::topbar_items`).
+    #[serde(deserialize_with = "crate::panels::topbar_items::read_saved", skip_serializing_if = "Vec::is_empty")]
+    pub top_bar_hidden: Vec<String>,
 }
 
 /// Where File ▸ Import Lightroom Catalog… puts a catalog (Settings ▸ General ▸ Library). Saved as
@@ -247,6 +251,7 @@ impl Default for AppSettings {
             loupe_info: LoupeInfo::default(),
             lightroom_import: LightroomImport::Ask,
             photo_menu: None,
+            top_bar_hidden: Vec::new(),
         }
     }
 }

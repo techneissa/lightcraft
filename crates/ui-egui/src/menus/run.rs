@@ -149,6 +149,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     if id.starts_with("photoMenu.") {
         return Some(crate::panels::photo_menu::command(app, id, p));
     }
+    if id.starts_with("topBar.") {
+        return Some(crate::panels::topbar_items::command(app, id, p));
+    }
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", p));
     }

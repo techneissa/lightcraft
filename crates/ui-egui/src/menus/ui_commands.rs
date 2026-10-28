@@ -275,6 +275,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("photoMenu.get", "Photo Menu Items", None, ""),
     ("photoMenu.set", "Set Photo Menu Items", None, ""),
     ("photoMenu.reset", "Reset Photo Menu", None, ""),
+    // the top bar's items (Settings ▸ Top Bar): {hidden} = the ids turned off; {item, shown} = one
+    ("topBar.get", "Top Bar Items", None, ""),
+    ("topBar.set", "Set Top Bar Items", None, ""),
+    ("topBar.setItem", "Show or Hide Top Bar Item", None, ""),
+    ("topBar.reset", "Reset Top Bar", None, ""),
     ("app.export", "Export Now", None, ""),
     ("app.showInFinder", "Show in Finder", Some("Cmd+R"), "Photo"),
     ("app.showInFolders", "Show in Folders", None, "Photo"),

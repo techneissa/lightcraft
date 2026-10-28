@@ -1,4 +1,4 @@
-//! The Settings dialog (⌘,): General, Import, Performance, Display, Interface, Photo Menu, Slideshow, Faces,
+//! The Settings dialog (⌘,): General, Import, Performance, Display, Interface, Photo Menu, Top Bar, Slideshow, Faces,
 //! AI Denoise.
 //!
 //! Changes apply immediately (no OK/Cancel). Where they are stored:
@@ -53,6 +53,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("display", "Display"),
     ("interface", "Interface"),
     ("menu", "Photo Menu"),
+    ("topbar", "Top Bar"),
     ("slideshow", "Slideshow"),
     ("faces", "Faces"),
     ("denoise", "AI Denoise"),
@@ -72,6 +73,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &str) {
         "display" => display_tab(app, ui, &t),
         "interface" => interface_tab(app, ui, &t),
         "menu" => crate::panels::photo_menu::editor::tab(app, ui, &t),
+        "topbar" => crate::panels::topbar_items::editor::tab(app, ui, &t),
         "slideshow" => slideshow_tab(app, ui, &t, true),
         "faces" => crate::panels::faces::settings_tab(app, ui, &t),
         "denoise" => crate::panels::denoise::settings_tab(app, ui, &t),

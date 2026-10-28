@@ -384,6 +384,17 @@ built-in item's id (`openInDetail`, `beforeAfterSplit`, `exportAnimatedGif`, …
 and nothing changes), `photoMenu.reset` puts the
 default back; all three return the same answer. Settings ▸ Photo Menu is `app.settings {"tab": "menu"}`.
 
+## Top bar items
+
+The top bar's buttons can be turned off one by one (Settings ▸ Top Bar, or a right-click on the bar). The app settings
+keep the ids turned off (`topBarHidden`; absent = every item shown). Item ids, in the bar's order: `sidebar`, `back`
+(Back and Forward), `filter`, `appearance`, `bell` (Activity), `import`, `share` (Export), `help` (Keyboard
+Shortcuts), `cloud` (Library Status, which shows anyway while saving is failing). The search field and the menus
+are not items. `topBar.get` returns `{items, hidden, custom}` (`items`: `{id, label, shown, command, reach}`, `reach`
+being the menu-bar path of the command, so a hidden item can still be found), `topBar.set {hidden}` replaces the list,
+`topBar.setItem {item, shown}` turns one on or off, `topBar.reset` shows every item; an unknown id is refused and
+nothing changes; all four return the same answer. Settings ▸ Top Bar is `app.settings {"tab": "topbar"}`.
+
 ## Panel docking
 
 Library, Tools, and Presets panels can be regrouped, split, floated within the app window, closed, and reopened. Tools keeps the current Edit/Crop/Masking mode; the photo view and filmstrip stay together. The document/session view is protected. Layouts, active tabs, panel visibility, and floating rectangles are saved with the app's existing UI preferences as a craft-ui docking workspace (`docking`: `version`, `layout`, `hidden`, `saved`, `locked`); settings written before workspaces had a `version` load as version 1. These operations do not edit document contents.
