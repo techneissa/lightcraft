@@ -489,5 +489,55 @@ impl Profile {
     }
 }
 
+/// `warp` (a centred [`Profile::correction`] warp of a `w × h` image) zoomed in just enough that every output pixel
+/// shows the photo. Correcting pincushion distortion (most telephotos) fetches the frame's edges from beyond the
+/// recorded image, which would leave blank bands along them; the camera's own correction and Lightroom's profile
+/// corrections fill the frame instead. A warp that already covers it is returned as it is (barrel corrections keep
+/// their framing), and so is one no zoom up to 2× can fill.
+///
+/// Zoom `z` maps output radius `r` to corrected radius `r / z`, so each plane's ratio becomes `f(r / z) / z`:
+/// coefficient `k_i` (of `r^(2i)`) becomes `k_i / z^(2i+1)`, exactly. A ray from the centre meets the frame's border
+/// at radius `r_b` and its source stays on that ray, so the border is covered when every plane's ratio at every
+/// border radius (half the shorter side to the half diagonal, `radius` = 1 at the latter) is at most 1.
+pub fn fill_frame(warp: EmbeddedWarp, w: f64, h: f64) -> EmbeddedWarp {
+    const SAMPLES: usize = 512;
+    if !(w >= 2.0 && h >= 2.0 && w.is_finite() && h.is_finite()) || warp.center != Point::new(0.5, 0.5) {
+        return warp;
+    }
+    let half_diagonal = w.hypot(h) / 2.0;
+    let unit = warp.radius * w.max(h);
+    if !(unit.is_finite() && unit > 0.0) {
+        return warp;
+    }
+    let (inner, outer) = (w.min(h) / 2.0 / unit, half_diagonal / unit);
+    let border_ratio = |zoom: f64| {
+        let mut worst: f64 = 0.0;
+        for j in 0..=SAMPLES {
+            let r = (inner + (outer - inner) * j as f64 / SAMPLES as f64) / zoom;
+            let r2 = r * r;
+            for [k0, k1, k2, k3, ..] in warp.planes {
+                worst = worst.max((k0 + r2 * (k1 + r2 * (k2 + r2 * k3))) / zoom);
+            }
+        }
+        worst
+    };
+    if border_ratio(1.0) <= 1.0 || border_ratio(2.0) > 1.0 {
+        return warp;
+    }
+    let (mut lo, mut hi) = (1.0, 2.0);
+    for _ in 0..50 {
+        let mid = (lo + hi) / 2.0;
+        if border_ratio(mid) > 1.0 {
+            lo = mid;
+        } else {
+            hi = mid;
+        }
+    }
+    // (the upper end: covered, never a hair short of it)
+    let zoom = hi;
+    let planes = warp.planes.map(|[k0, k1, k2, k3, t0, t1]| [k0 / zoom, k1 / zoom.powi(3), k2 / zoom.powi(5), k3 / zoom.powi(7), t0, t1]);
+    EmbeddedWarp { planes, ..warp }
+}
+
 #[cfg(test)]
 mod tests;

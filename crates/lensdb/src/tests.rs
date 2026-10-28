@@ -217,6 +217,50 @@ fn crop_factor_scales_the_profile() {
 }
 
 #[test]
+fn fill_frame_zooms_a_pincushion_correction_until_the_border_is_covered() {
+    let db = db();
+    let (w, h) = (6000.0, 4000.0);
+    // how far (px) the border's sources reach beyond the image: > 0 leaves a blank band there
+    let overshoot = |wp: &EmbeddedWarp| {
+        let mut worst = f64::MIN;
+        for i in 0..=600 {
+            let t = i as f64 / 600.0;
+            for (x, y) in [(t * w, 0.0), (t * w, h), (0.0, t * h), (w, t * h)] {
+                for ch in 0..3 {
+                    let (sx, sy) = dng_source(wp, ch, x, y, w, h);
+                    worst = worst.max((sx - w).max(-sx).max(sy - h).max(-sy));
+                }
+            }
+        }
+        worst
+    };
+    // 70 mm: poly3 k1 = 0.01 is pincushion, its correction reaches past the frame's corners
+    let pincushion = db.lenses[0].correction(&shot(70.0)).unwrap().warp.unwrap();
+    assert!(overshoot(&pincushion) > 10.0, "{}", overshoot(&pincushion));
+    let filled = fill_frame(pincushion, w, h);
+    let o = overshoot(&filled);
+    assert!((-0.5..=1e-6).contains(&o), "covered, and no more zoom than that needs: {o} px");
+    // a pure zoom, the same for every plane: the filled warp at p is the original one at p pulled to the centre
+    let zoom = pincushion.planes[1][0] / filled.planes[1][0];
+    assert!(zoom > 1.0 && zoom < 1.05, "{zoom}");
+    for (x, y) in [(w, h), (0.0, h / 2.0), (1234.0, 567.0)] {
+        for ch in 0..3 {
+            let (fx, fy) = dng_source(&filled, ch, x, y, w, h);
+            let (ox, oy) = dng_source(&pincushion, ch, w / 2.0 + (x - w / 2.0) / zoom, h / 2.0 + (y - h / 2.0) / zoom, w, h);
+            assert!((fx - ox).hypot(fy - oy) < 1e-6, "{ch} ({x}, {y})");
+        }
+    }
+    // the 50 mm (poly5 k1 = -0.02) is barrel-corrected: it covers the frame already and keeps its framing
+    let barrel = db.lenses[1].correction(&shot(50.0)).unwrap().warp.unwrap();
+    assert!(overshoot(&barrel) <= 0.0);
+    assert_eq!(fill_frame(barrel, w, h), barrel);
+    // nothing to do for an off-centre warp or a degenerate image
+    let off = EmbeddedWarp { center: Point::new(0.4, 0.5), ..pincushion };
+    assert_eq!(fill_frame(off, w, h), off);
+    assert_eq!(fill_frame(pincushion, f64::NAN, h), pincushion);
+}
+
+#[test]
 fn fisheyes_get_no_rectilinear_warp_and_bad_shots_none() {
     let db = db();
     assert!(db.lenses[2].correction(&shot(8.0)).is_none());
