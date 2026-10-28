@@ -1732,10 +1732,10 @@ fn test_profile_colour() -> (Mat3, Option<HsvTable>) {
 }
 
 /// A photo of a model with a camera profile whose own fit and profile fit both miss the gates (here the barrel
-/// distortion of a lens-corrected JPEG) gets the partial look on the profile's colour, matrix and table, not on the
-/// photo's damped own matrix.
+/// distortion of a lens-corrected JPEG) keeps its own matrix where it has colour to learn from, damped toward the
+/// profile's matrix (the identity without one), or toward the spectral prior when there is no profile either.
 #[test]
-fn partial_look_takes_the_profile_colour_when_the_full_look_misses_the_gates() {
+fn colourful_partial_look_damps_its_own_matrix_toward_the_base_colour() {
     let (w, h) = (96usize, 64usize);
     let scene = |u: f32, v: f32| -> [f32; 3] {
         let base = 0.1 * (1.0 + 0.6 * (0.05 * u + 0.04 * v).sin());
@@ -1757,11 +1757,18 @@ fn partial_look_takes_the_profile_colour_when_the_full_look_misses_the_gates() {
     let profile = test_profile_colour();
     assert!(fit_pairs_with(&sensor, &reference, Some(profile.clone())).is_none(), "neither fit passes the gates");
     let none = vec![false; w * h];
-    let own = fit_look(&sensor, &reference, &none, None).expect("the partial look without a profile");
-    assert_ne!(own.matrix, profile.0, "without a profile the photo's own damped matrix is used");
-    let look = fit_look(&sensor, &reference, &none, Some(profile.clone())).expect("the partial look on the profile's colour");
-    assert_eq!(look.matrix, profile.0);
-    assert_eq!(look.hue_sat, profile.1);
+    let damped = fit_look(&sensor, &reference, &none, None).expect("the partial look without a profile");
+    assert_ne!(damped.matrix, Mat3::IDENTITY, "a colourful scene gets its own matrix");
+    // the photo's own matrix, undone from half weight toward the identity
+    let own = Mat3(std::array::from_fn(|r| std::array::from_fn(|c| 2.0 * damped.matrix.0[r][c] - Mat3::IDENTITY.0[r][c])));
+    let toward = |base: Mat3| Mat3(std::array::from_fn(|r| std::array::from_fn(|c| base.0[r][c] + 0.5 * (own.0[r][c] - base.0[r][c]))));
+    let close = |a: &Mat3, b: &Mat3| a.0.iter().flatten().zip(b.0.iter().flatten()).all(|(x, y)| (x - y).abs() < 1e-9);
+    let look = fit_look(&sensor, &reference, &none, Some(profile.clone())).expect("the partial look toward the profile's colour");
+    assert!(close(&look.matrix, &toward(profile.0)), "{:?}", look.matrix);
+    assert!(look.hue_sat.is_none(), "the table belongs to the profile's matrix");
+    let prior = Mat3([[1.3, -0.2, -0.1], [-0.1, 1.2, -0.1], [-0.05, -0.25, 1.3]]);
+    let look = fit_look_with(&sensor, &reference, &none, None, &|| Some(prior), false).expect("the partial look toward the prior");
+    assert!(close(&look.matrix, &toward(prior)), "{:?}", look.matrix);
     let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
     assert!(tone.apply(0.05) < tone.apply(0.2) && tone.apply(0.2) < tone.apply(0.8));
 }
@@ -1798,13 +1805,13 @@ fn partial_look_is_never_the_identity_when_the_model_has_a_profile() {
     let without = fit_look(&sensor, &reference, &none, None).expect("a partial look");
     assert_eq!(without.matrix, Mat3::IDENTITY, "no profile, no prior, no colour to learn: the generic colour");
     let prior = Mat3([[1.3, -0.2, -0.1], [-0.1, 1.2, -0.1], [-0.05, -0.25, 1.3]]);
-    let look = fit_look_with(&sensor, &reference, &none, None, Some(prior), false).expect("a partial look on the spectral prior");
+    let look = fit_look_with(&sensor, &reference, &none, None, &|| Some(prior), false).expect("a partial look on the spectral prior");
     assert_eq!(look.matrix, prior);
     assert!(look.hue_sat.is_none());
     let look = fit_look(&sensor, &reference, &none, Some(profile.clone())).expect("a partial look on the profile's colour");
     assert_eq!(look.matrix, profile.0);
     assert_eq!(look.hue_sat, profile.1);
-    let look = fit_look_with(&sensor, &reference, &none, Some(profile.clone()), Some(prior), false).expect("a partial look");
+    let look = fit_look_with(&sensor, &reference, &none, Some(profile.clone()), &|| Some(prior), false).expect("a partial look");
     assert_eq!(look.matrix, profile.0, "a profile comes before the prior");
 }
 
@@ -1826,6 +1833,37 @@ fn spectral_prior_keeps_white_and_is_the_bodys_own_when_covered() {
     }
     assert_ne!(own, mean, "a covered body has its own matrix, an unknown one the mean");
     assert_eq!(mean, prior_of("SONY", "No Such Body").0, "every unknown body gets the same mean");
+}
+
+/// The mean over the table's bodies is taken at one white, the file's own through the generic model, not at the white
+/// each body's matrices read from the file's multipliers (a Sony file's multipliers through a Nikon matrix are no
+/// temperature). A file's multipliers therefore reach the prior only through that one white.
+#[test]
+fn spectral_prior_mean_is_taken_at_the_files_one_white() {
+    let raw = raw_of(RawFormat::Arw, "SONY", "ILCE-7M5", Default::default());
+    let xy = lightcraft_raw::color::as_shot_white_xy(&raw);
+    let t = lightcraft_raw::color::camera_transform(&raw, xy);
+    let keep_white = |m: Mat3| Mat3(m.0.map(|row| row.map(|v| v - (row.iter().sum::<f64>() - 1.0) / 3.0)));
+    let mean_at = |white: Option<Xy>| {
+        let all: Vec<Mat3> = lightcraft_raw::spectral::cameras()
+            .iter()
+            .filter(|c| !c.model.starts_with("Insta"))
+            .map(|c| {
+                let mut color = ColorData::default();
+                c.fill(&mut color);
+                let xy = white.unwrap_or_else(|| lightcraft_raw::color::as_shot_white_of(&color, raw.wb_multipliers));
+                lightcraft_raw::color::camera_transform_of(&color, xy).matrix
+            })
+            .collect();
+        let n = all.len() as f64;
+        keep_white(Mat3(std::array::from_fn(|r| std::array::from_fn(|c| all.iter().map(|m| m.0[r][c]).sum::<f64>() / n))))
+    };
+    let (one, each) = (mean_at(Some(xy)), mean_at(None));
+    let differ = one.0.iter().flatten().zip(each.0.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
+    assert!(differ > 1e-3, "the two ways of averaging are different pictures ({differ})");
+    let got = spectral_prior(&raw, &t).expect("a prior").mul(&t.matrix);
+    let off = got.0.iter().flatten().zip(one.0.iter().flatten()).map(|(a, b)| (a - b).abs()).fold(0.0, f64::max);
+    assert!(off < 1e-9, "the prior is the mean at the file's white: off by {off}");
 }
 
 /// A pooled fit keeps white: grey camera RGB stays grey at the same value. Free, the same pairs give a cast.
@@ -2005,7 +2043,7 @@ fn partial_look_only_when_clearly_better_than_the_neutral_fallback() {
     let mut reference = sensor.clone();
     reference.map_in_place(|p| displayed(p.map(f64::from), &neutral).map(|v| v as f32));
     let check = HighlightCheck { pairs: highlights(&sensor, &reference), dro: false, grey: false };
-    assert!(fit_partial(&sensor, &reference, &check, &None, None).is_none(), "no clear gain over the fallback");
+    assert!(fit_partial(&sensor, &reference, &check, &None, &|| None).is_none(), "no clear gain over the fallback");
     // an unrelated picture
     for (i, p) in reference.data.iter_mut().enumerate() {
         *p = [0.05 + (i % 7) as f32 * 0.07, 0.05 + (i % 19) as f32 * 0.02, 0.05 + (i % 29) as f32 * 0.01];
@@ -2511,7 +2549,7 @@ fn a_narrow_curve_is_checked_as_lowered_for_dro() {
         *dst = p.map(|v| v * (0.6 + (y - 0.07) * 0.25) / y);
     }
     let neutral = luma(displayed([0.9; 3], &ToneMap::new(0.0, 0.0, 0.0)));
-    if let Some(look) = fit_look_with(&sensor, &reference, &vec![false; sensor.data.len()], None, None, true) {
+    if let Some(look) = fit_look_with(&sensor, &reference, &vec![false; sensor.data.len()], None, &|| None, true) {
         let look = with_dro_off_tone(look);
         let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
         let correction = look.hue_sat.as_ref().and_then(HueSat::new);

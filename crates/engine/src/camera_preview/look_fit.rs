@@ -19,10 +19,10 @@ pub(crate) fn fit_preview(raw: &RawImage, bytes: &[u8], transform: &CameraTransf
     // Sony's Dynamic Range Optimizer (on by default) brightens the camera JPEG's darker regions,
     // not the raw: keep the colour fitted to the JPEG, take the tone curve without DRO.
     let dro = lightcraft_raw::embedded_preview_dynamic_range_optimized(bytes) == Some(true);
-    // For the partial look of a scene too dull to learn colour from, a model without a profile starts from the
-    // spectral prior rather than the identity.
-    let prior = if profile.is_none() { spectral_prior(raw, transform) } else { None };
-    let look = match fit_look_with(&sensor, &reference, &clipped, colour.clone(), prior, dro) {
+    // For the partial look, a model without a profile starts from the spectral prior rather than the identity; only
+    // the partial look asks for it.
+    let prior = || if colour.is_none() { spectral_prior(raw, transform) } else { None };
+    let look = match fit_look_with(&sensor, &reference, &clipped, colour.clone(), &prior, dro) {
         Some(look) => look,
         // A black-and-white JPEG has no colour to fit: the profile's colour and the JPEG's tone curve
         // (`monochrome_look` does it without a profile).
@@ -55,7 +55,7 @@ pub(super) const SENSOR_CLIP: f32 = 0.99;
 /// [`fit_look_with`] for a photo without Sony's DRO.
 #[cfg(test)]
 pub(super) fn fit_look(sensor: &Rgb32f, reference: &Rgb32f, clipped: &[bool], colour: Option<(Mat3, Option<HsvTable>)>) -> Option<CameraLook> {
-    fit_look_with(sensor, reference, clipped, colour, None, false)
+    fit_look_with(sensor, reference, clipped, colour, &|| None, false)
 }
 
 /// The photo's look, refitted without the proxy pixels whose sensor values are clipped.
@@ -81,7 +81,7 @@ pub(super) fn fit_look_with(
     reference: &Rgb32f,
     clipped: &[bool],
     colour: Option<(Mat3, Option<HsvTable>)>,
-    prior: Option<Mat3>,
+    prior: &dyn Fn() -> Option<Mat3>,
     dro: bool,
 ) -> Option<CameraLook> {
     let unclipped = without_clipped(sensor, clipped);

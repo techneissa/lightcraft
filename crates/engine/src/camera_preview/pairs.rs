@@ -463,10 +463,11 @@ pub(super) fn rank_correlation_ties(pairs: &[([f64; 3], [f64; 3])]) -> f64 {
 /// no pixel-exact registration and was the largest part of the neutral fallback's error (rendered
 /// 9–22 L* too dark), the chroma curve (the fallback kept about a third of the camera's
 /// colourfulness), and, when the scene has enough colour to learn one (the full look's condition),
-/// the photo's own colour matrix at [`PARTIAL_MATRIX_WEIGHT`]. No hue/saturation table, unless the model has a camera
-/// profile: its colour (matrix and table) replaces the own matrix. A scene too dull to learn colour from is exactly
-/// where the generic colour (the identity) turns skin grey-green, so there the colour is the profile's, else
-/// `prior` ([`spectral_prior`](super::colour::spectral_prior)), and the identity only when there is neither. Tried on
+/// the photo's own colour matrix at [`PARTIAL_MATRIX_WEIGHT`], damped toward the base colour below instead of the
+/// identity, with no hue/saturation table. The base colour is the camera profile's (matrix and table), else `prior`
+/// ([`spectral_prior`](super::colour::spectral_prior), called only here), and the identity only when there is neither:
+/// a scene too dull to learn colour from is exactly where the generic colour turns skin grey-green, so there the base
+/// colour is used whole. Tried on
 /// all pixels and then, like the full look, on the pixels away from edges; used only when it cuts
 /// the held-out squared error to below [`MIN_IMPROVEMENT`] of the neutral fallback's, in linear
 /// and in gamma-encoded display values, and when the JPEG shows the same picture
@@ -477,7 +478,7 @@ pub(super) fn fit_partial(
     reference: &Rgb32f,
     highlights: &HighlightCheck,
     profile: &Option<(Mat3, Option<HsvTable>)>,
-    prior: Option<Mat3>,
+    prior: &dyn Fn() -> Option<Mat3>,
 ) -> Option<CameraLook> {
     [None, Some(EDGE_CONTRAST)].into_iter().find_map(|edge_limit| fit_partial_on(sensor, reference, edge_limit, highlights, profile, prior))
 }
@@ -488,7 +489,7 @@ fn fit_partial_on(
     edge_limit: Option<f32>,
     highlights: &HighlightCheck,
     profile: &Option<(Mat3, Option<HsvTable>)>,
-    prior: Option<Mat3>,
+    prior: &dyn Fn() -> Option<Mat3>,
 ) -> Option<CameraLook> {
     // as for a known colour model: enough signal for the tone, but no monochrome reference
     let (pairs, bright) = collect_pairs(sensor, reference, 0.005, edge_limit, false)?;
@@ -499,22 +500,27 @@ fn fit_partial_on(
         }
         return None;
     }
-    // The camera profile's colour, whole: its pooled pairs know the colours this photo shows too little of, and the
-    // identity (the neutral fallback's generic camera) is what turned skin grey-green on a scene of grey walls.
-    let (matrix, hue_sat) = match profile {
-        Some((matrix, hue_sat)) => (*matrix, hue_sat.clone()),
-        None => {
-            let spread = |y: &[f64; 3]| y.iter().copied().fold(f64::NEG_INFINITY, f64::max) - y.iter().copied().fold(f64::INFINITY, f64::min);
-            let colourful = pairs.iter().filter(|(_, y)| spread(y) > 0.05).count() >= pairs.len() / 20;
-            let matrix = match colourful.then(|| fit_matrix(&pairs)).flatten() {
-                Some(own) => Mat3(std::array::from_fn(|r| {
-                    std::array::from_fn(|c| Mat3::IDENTITY.0[r][c] + PARTIAL_MATRIX_WEIGHT * (own.0[r][c] - Mat3::IDENTITY.0[r][c]))
-                })),
-                // too little colour to learn from: the spectral prior, never the identity
-                None => prior.unwrap_or(Mat3::IDENTITY),
-            };
-            (matrix, None)
-        }
+    // The colour a photo with too little of its own starts from: the camera profile's (matrix and table: its pooled pairs
+    // know the colours this photo shows too little of), else the spectral prior, and the identity (the neutral
+    // fallback's generic camera, which turned skin grey-green on a scene of grey walls) only when there is neither.
+    let (base, table, source) = match profile {
+        Some((matrix, table)) => (*matrix, table.clone(), "camera profile colour"),
+        None => match prior() {
+            Some(prior) => (prior, None, "spectral prior"),
+            None => (Mat3::IDENTITY, None, "identity"),
+        },
+    };
+    // A scene with colour to learn from keeps its own matrix, damped toward that colour (the table belongs to the
+    // base matrix, so it goes with it).
+    let spread = |y: &[f64; 3]| y.iter().copied().fold(f64::NEG_INFINITY, f64::max) - y.iter().copied().fold(f64::INFINITY, f64::min);
+    let colourful = pairs.iter().filter(|(_, y)| spread(y) > 0.05).count() >= pairs.len() / 20;
+    let (matrix, hue_sat, source) = match colourful.then(|| fit_matrix(&pairs)).flatten() {
+        Some(own) => (
+            Mat3(std::array::from_fn(|r| std::array::from_fn(|c| base.0[r][c] + PARTIAL_MATRIX_WEIGHT * (own.0[r][c] - base.0[r][c])))),
+            None,
+            "damped own matrix",
+        ),
+        None => (base, table, source),
     };
     let correction = hue_sat.as_ref().and_then(HueSat::new);
     let colour = |x: [f64; 3]| {
@@ -544,15 +550,8 @@ fn fit_partial_on(
     }
     if lightcraft_pipeline::profiling() {
         eprintln!(
-            "[profile] camera look partial (tone{}{}) holdout RMS {:.5} -> {:.5} ({samples} channels{})",
+            "[profile] camera look partial (tone{}, {source}) holdout RMS {:.5} -> {:.5} ({samples} channels{})",
             if look.tone.chroma().iter().any(|k| *k != 1.0) { ", chroma" } else { "" },
-            if profile.is_some() {
-                ", camera profile colour"
-            } else if matrix != Mat3::IDENTITY {
-                ", damped matrix"
-            } else {
-                ""
-            },
             (before / samples.max(1) as f64).sqrt(),
             (after / samples.max(1) as f64).sqrt(),
             if edge_limit.is_some() { ", away from edges" } else { "" }

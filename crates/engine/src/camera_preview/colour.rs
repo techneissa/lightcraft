@@ -69,25 +69,29 @@ pub(crate) fn starting_colour(
 }
 
 /// A generic colour model for a body without a camera profile, in the sensor proxy's space like a profile's: the body's
-/// own measured spectral matrices when `lightcraft_raw::spectral` covers it, else the mean over all the covered bodies'
-/// (a prior for a body nobody has measured), each taken at the file's as-shot white. Projected to keep white (every row
-/// sums to 1), so grey stays grey whatever the average did. It stands in for the identity in the partial look of a
-/// scene too dull to learn colour from; on 227 held-out A7 V photos (a body not in the table) it kept skin hue within
-/// 8.9° of the camera JPEG at worst, where a profile pooled from the photographer's own pictures was 23.9° off on its
-/// worst. `None` when no matrix can be built.
+/// own measured spectral matrices when `lightcraft_raw::spectral` covers it (at its own as-shot white, read through those
+/// matrices), else the mean over all the covered bodies' except the 360 camera. The mean is taken at one white, the
+/// file's as-shot white through the generic model the proxy itself was developed with: the file's multipliers read
+/// through another maker's matrices are no temperature at all, and averaging 51 matrices each blended at its own white
+/// mixes 51 different pictures of a neutral. Projected to keep white (every row sums to 1), so grey stays grey whatever
+/// the average did. It stands in for the identity in the partial look of a scene too dull to learn colour from; on
+/// 227 held-out A7 V photos (a body not in the table) it kept skin hue within 8.9° of the camera JPEG at worst, where a
+/// profile pooled from one photographer's own pictures was 23.9° off on its worst. `None` when no matrix can be built.
 pub(super) fn spectral_prior(raw: &RawImage, transform: &CameraTransform) -> Option<Mat3> {
-    let total = |camera: &lightcraft_raw::spectral::Camera| {
+    let own = raw.metadata.model.as_deref().and_then(|model| lightcraft_raw::spectral::find(raw.metadata.make.as_deref(), model));
+    let total = |camera: &lightcraft_raw::spectral::Camera, white: Option<Xy>| {
         let mut color = ColorData::default();
         camera.fill(&mut color);
-        let xy = lightcraft_raw::color::as_shot_white_of(&color, raw.wb_multipliers);
+        let xy = white.unwrap_or_else(|| lightcraft_raw::color::as_shot_white_of(&color, raw.wb_multipliers));
         lightcraft_raw::color::camera_transform_of(&color, xy).matrix
     };
-    let own = raw.metadata.model.as_deref().and_then(|model| lightcraft_raw::spectral::find(raw.metadata.make.as_deref(), model));
     let matrix = match own {
-        Some(camera) => total(camera),
+        Some(camera) => total(camera, None),
         None => {
+            let white = lightcraft_raw::color::as_shot_white_xy(raw);
             // (a 360 camera's lenses and sensors are no prior for a stills body)
-            let all: Vec<Mat3> = lightcraft_raw::spectral::cameras().iter().filter(|c| !c.model.starts_with("Insta")).map(total).collect();
+            let all: Vec<Mat3> =
+                lightcraft_raw::spectral::cameras().iter().filter(|c| !c.model.starts_with("Insta")).map(|c| total(c, Some(white))).collect();
             if all.is_empty() {
                 return None;
             }
@@ -100,7 +104,8 @@ pub(super) fn spectral_prior(raw: &RawImage, transform: &CameraTransform) -> Opt
         row.map(|v| v - shift)
     }));
     let prior = white.mul(&transform.matrix.inverse()?);
-    prior.0.iter().flatten().all(|v| v.is_finite() && v.abs() < 8.0).then_some(prior)
+    let usable = white.inverse().is_some() && prior.0.iter().flatten().all(|v| v.is_finite() && v.abs() < 8.0);
+    usable.then_some(prior)
 }
 
 /// Whether the profile's tone curve is absent or the identity (within 0.005 over the range).
