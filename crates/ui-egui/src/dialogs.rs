@@ -137,6 +137,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     let widest = if settings { ctx.data(|d| d.get_temp::<f32>(widest_id)).unwrap_or(0.0).min(screen.width() * 0.9) } else { 0.0 };
     let mut content_w = 0.0f32;
     let mut body_h = None;
+    let mut left_by_button = false;
     // before the window: drawing it closes a dropdown the click lands outside of
     let popup_was_open = egui::Popup::is_any_open(ctx);
     let shown = egui::Window::new(crate::i18n::tr(&title))
@@ -180,6 +181,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             let row_h = ui.spacing().interact_size.y;
             ui.allocate_ui_with_layout(egui::vec2(row_w, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
                 button_row(app, ui, &dlg, &mut close, &mut confirm);
+                // (the Cancel button only: Esc and a click outside close the window without answering)
+                left_by_button = close;
             });
             if import {
                 crate::import::note_dialog_bottom(ui);
@@ -215,6 +218,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     // the dialog, such as a date picker's calendar, takes it to close itself)
     if !raw_blocked && ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !crate::widgets::escape_taken(ctx) {
         close = true;
+    }
+    // Leave on Camera Matching answers the one-time local profile question; Switch does it in `confirmed`
+    if let (true, Dialog::LocalProfileSwitch { id, .. }) = (left_by_button, &dlg) {
+        let _ = app.run("profiles.localAsked", json!({"id": id}));
     }
     if !raw_blocked && confirm {
         close |= confirmed(app, ctx, &mut dlg);

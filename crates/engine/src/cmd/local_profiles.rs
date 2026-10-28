@@ -102,6 +102,10 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                 let changed = ops.len();
                 if changed > 0 {
                     s.commit(&label, Op::Batch { ops })?;
+                    // undoing the switch puts the question back
+                    if let Some(e) = s.undo.last_mut() {
+                        e.answered_offer = Some(id.clone());
+                    }
                 }
                 ask_done(s, &id);
                 Ok(json!({"changed": changed}))

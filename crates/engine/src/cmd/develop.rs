@@ -524,8 +524,16 @@ pub fn specs() -> Vec<CommandSpec> {
                 {
                     return Err(bad("develop.profile", format!("unknown profile `{id}`")));
                 }
-                let label = if id.is_none() { "Camera Matching" } else { "Profile" };
-                edit(s, "develop.profile", label, |d| {
+                // a local profile is named in the history (`Profile: A7 V Chart`), like the Switch step
+                let label = match (&id, camera_profile.as_ref().and_then(Option::as_deref)) {
+                    (_, Some(file)) => {
+                        let name = crate::camera_profiles::local_profile(file).map_or_else(|| file.to_owned(), |l| l.name.clone());
+                        format!("Profile: {name}")
+                    }
+                    (None, None) => "Camera Matching".to_owned(),
+                    (Some(_), None) => "Profile".to_owned(),
+                };
+                edit(s, "develop.profile", &label, |d| {
                     if let Some(id) = &id {
                         d.profile.id = id.clone();
                         d.profile.amount = f64_or(p, "amount", d.profile.amount).clamp(0.0, 200.0);

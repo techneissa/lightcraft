@@ -144,6 +144,9 @@ pub struct UndoEntry {
     pub(crate) retry_inverse: Vec<Op>,
     /// Sidecars still separated from their photo after a failed move or rollback.
     pub(crate) retry_sidecars: Vec<rename::SidecarMove>,
+    /// The local camera profile file whose one-time question this step answered (Switch): undoing the step puts the
+    /// question back (the file leaves `local_profile_asked`), redoing it answers it again.
+    pub(crate) answered_offer: Option<String>,
 }
 
 /// The one photo an undo step changes, when it changes exactly one through its edit, rating, flag,
@@ -648,7 +651,14 @@ impl Session {
         let fwd = op.clone();
         let inv = self.apply_catalog(op)?;
         self.pending_log.push(fwd);
-        self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
+        self.undo.push(UndoEntry {
+            label: label.to_string(),
+            op: inv,
+            folder: None,
+            retry_inverse: Vec::new(),
+            retry_sidecars: Vec::new(),
+            answered_offer: None,
+        });
         self.commits = self.commits.wrapping_add(1);
         if self.undo.len() > 1000 {
             let mut dropped = self.undo.remove(0);
@@ -761,7 +771,7 @@ impl Session {
         }
         let Some(entries) = self.undo.get(self.undo.len() - n..) else { return };
         // Folder moves and partially applied file steps stay on their own.
-        if entries.iter().any(|e| e.folder.is_some() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty()) {
+        if entries.iter().any(|e| e.folder.is_some() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty() || e.answered_offer.is_some()) {
             return;
         }
         let tail = self.undo.split_off(self.undo.len() - n);
@@ -772,7 +782,21 @@ impl Session {
             folder: None,
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            answered_offer: None,
         });
+    }
+
+    /// A history step that answered the one-time local profile question was undone (`answered` false: the question is
+    /// open again) or redone (`answered` true).
+    fn offer_answered(&mut self, id: Option<&str>, answered: bool) {
+        let Some(id) = id else { return };
+        self.local_profile_asked.retain(|x| x != id);
+        if answered {
+            self.local_profile_asked.push(id.to_owned());
+        }
+        if let Err(e) = self.save_prefs() {
+            log::warn!("local camera profiles: {e}");
+        }
     }
 
     /// Apply without recording undo (interactive previews).
@@ -802,7 +826,9 @@ impl Session {
             folder: e.folder.as_ref().map(FolderMove::reversed),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            answered_offer: e.answered_offer.clone(),
         });
+        self.offer_answered(e.answered_offer.as_deref(), false);
         Ok(e.label)
     }
 
@@ -827,7 +853,9 @@ impl Session {
             folder: e.folder.as_ref().map(FolderMove::reversed),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            answered_offer: e.answered_offer.clone(),
         });
+        self.offer_answered(e.answered_offer.as_deref(), true);
         Ok(e.label)
     }
 

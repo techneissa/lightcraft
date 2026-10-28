@@ -169,9 +169,10 @@ fn the_switch_question_is_asked_once_and_moves_nothing_by_itself() {
             |h: &Headless| matches!(&h.app.ui.dialog, Some(crate::state::Dialog::LocalProfileSwitch { id, count: 1, .. }) if id == "ILCE-7M5");
         assert!(asked(&h), "asked when the library opened: {:?}", h.app.ui.dialog);
         assert_eq!(stored(&h), (CameraColour::Auto, None), "asking moves nothing");
-        assert_eq!(h.app.session.local_profile_asked, ["ILCE-7M5"], "remembered as it is asked");
+        assert!(h.app.session.local_profile_asked.is_empty(), "asking is not answering");
         click(&mut h, if leave { "button:dialogCancel" } else { "button:dialogOk" });
         assert!(h.app.ui.dialog.is_none());
+        assert_eq!(h.app.session.local_profile_asked, ["ILCE-7M5"], "Switch and Leave both answer it");
         if leave {
             assert_eq!(stored(&h), (CameraColour::Auto, None), "Leave on Camera Matching");
         } else {
@@ -180,10 +181,39 @@ fn the_switch_question_is_asked_once_and_moves_nothing_by_itself() {
             assert_eq!(r["ok"], true, "{r}");
             h.settle(SETTLE);
             assert_eq!(stored(&h), (CameraColour::Auto, None), "one undo step");
+            assert!(h.app.session.local_profile_asked.is_empty(), "undoing the Switch puts the question back");
+            crate::local_profile_offer::check(&mut h.app);
+            assert!(asked(&h), "and it is asked again");
+            click(&mut h, "button:dialogCancel");
         }
         // not asked again
         crate::local_profile_offer::check(&mut h.app);
         assert!(h.app.ui.dialog.is_none(), "asked once");
     }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Closing the question with Esc is not an answer: nothing moves, nothing is remembered, and the next library opening
+/// asks again.
+#[test]
+fn closing_the_switch_question_with_esc_leaves_it_open_for_next_time() {
+    let dir = std::env::temp_dir().join(format!("lc-ui-local-esc-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let profile = lightcraft_engine::camera_profiles::CameraProfile::new("ILCE-7M5", 40, 9000, lightcraft_color::Mat3::IDENTITY, None);
+    lightcraft_engine::camera_profiles::save(&profile, &dir).unwrap();
+    let _dir = lightcraft_engine::camera_profiles::use_dir_for_tests(&dir);
+    let (mut h, _) = edit_panel(true);
+    for _ in 0..4 {
+        h.step();
+    }
+    assert!(matches!(&h.app.ui.dialog, Some(crate::state::Dialog::LocalProfileSwitch { .. })), "{:?}", h.app.ui.dialog);
+    let r = h.request("ui.key", json!({"key": "Escape"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(h.app.ui.dialog.is_none());
+    assert_eq!(stored(&h), (CameraColour::Auto, None), "nothing moved");
+    assert!(h.app.session.local_profile_asked.is_empty(), "Esc is not an answer");
+    crate::local_profile_offer::check(&mut h.app);
+    assert!(matches!(&h.app.ui.dialog, Some(crate::state::Dialog::LocalProfileSwitch { .. })), "asked again");
     let _ = std::fs::remove_dir_all(&dir);
 }
