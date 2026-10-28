@@ -115,9 +115,13 @@ fn contextual_pairs_may_share_a_key() {
 }
 
 #[test]
-fn a_chord_a_contextual_partner_shares_is_still_a_conflict() {
+fn a_chord_a_contextual_partner_leads_clashes_only_when_the_conditions_overlap() {
     let mut km = keymap();
-    // X is Reject's and the crop swap's on purpose; a chord that X leads would swallow it
+    // X is Reject's outside the Crop tool and the crop swap's inside it: a chord led by X in the
+    // crop tool never meets Reject, so they can share
+    assert_eq!(conflicts(&km, "crop.rotateAspect", &steps("X C")), vec![]);
+    // with the swap allowed everywhere (an empty condition is "always"), the chord would swallow X
+    conditions::set(&mut km, "crop.rotateAspect", None).unwrap();
     assert_eq!(conflicts(&km, "crop.rotateAspect", &steps("X C")), vec![("photo.reject", 0)]);
     let lost = assign(&mut km, "crop.rotateAspect", 1, Some("X C")).unwrap();
     assert_eq!(lost, vec![("photo.reject", 0)]);

@@ -68,8 +68,7 @@ pub fn binding<'a>(keymap: &'a Keymap, id: &str, default: Option<&'a str>) -> Op
 /// partner.
 fn assigned_elsewhere(keymap: &Keymap, id: &str, sc: &str) -> bool {
     let Some(key) = parse(sc) else { return false };
-    saved_keys(keymap)
-        .any(|(other, k)| other != id && k == key && !CONTEXTUAL.iter().any(|(x, y)| (*x == id && *y == other) || (*y == id && *x == other)))
+    saved_keys(keymap).any(|(other, k)| other != id && k == key && crate::keybinds::model::conditions::overlap(keymap, id, other).is_some())
 }
 
 /// The keys the keymap gives to known commands, with each command's id. Entries for commands this
@@ -83,9 +82,9 @@ pub fn shortcut_of<'a>(keymap: &'a Keymap, id: &str) -> Option<&'a str> {
     find_bindable(id).and_then(|b| binding(keymap, id, b.default))
 }
 
-/// Engine commands that intentionally share a key and are disambiguated by context in [`handle`]:
-/// the X pair by the Crop panel, A by whether it is open (Visualize Spots everywhere, the aspect
-/// lock under the Crop panel).
+/// Commands that intentionally share a key: the X pair and the A pair. Each has a declared condition
+/// ([`crate::keybinds::model::conditions::DECLARED`]) that excludes its partner's: Reject Photo and
+/// Visualize Spots work outside the Crop tool, Swap Aspect and Lock Aspect Ratio inside it.
 pub const CONTEXTUAL: &[(&str, &str)] = &[("photo.reject", "crop.rotateAspect"), ("view.visualizeSpots", "crop.lockAspect")];
 
 /// Commands other than `id` whose first shortcut is `sc` or overlaps it (a chord and the key that
@@ -129,15 +128,32 @@ pub fn reset(keymap: &mut Keymap, id: &str) -> Result<Vec<&'static str>, String>
     Ok(ids)
 }
 
-/// `app.setShortcut {id, shortcut?, slot?, reset?}`: `shortcut` null or `""` removes it; `slot` is 1
+/// `app.setShortcut {id, shortcut?, slot?, when?, reset?}`: `shortcut` null or `""` removes it; `slot` is 1
 /// (the primary shortcut, the default) or 2; a shortcut is one key (`Cmd+Shift+K`) or a chord of two
-/// (`Cmd+K C`). `reset` restores both slots of the command.
+/// (`Cmd+K C`). `when` is the condition of the command (`view == detail && !textFocus`; null or `""`
+/// = always), alone or with a shortcut; it limits both shortcuts. `reset` restores both slots and
+/// the condition of the command.
 pub fn set_shortcut(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
-    use crate::keybinds::model;
+    use crate::keybinds::model::{self, conditions};
     let id = p.get("id").and_then(Value::as_str).ok_or("missing id")?;
     let keymap = &mut app.ui.settings.keymap;
-    let lost = if p.get("reset").and_then(Value::as_bool).unwrap_or(false) {
-        model::reset(keymap, id)?
+    let reset = p.get("reset").and_then(Value::as_bool).unwrap_or(false);
+    // the condition goes first, so the shortcut that follows is checked against it
+    let when = match p.get("when") {
+        None => None,
+        Some(Value::Null) => Some(None),
+        Some(Value::String(s)) => Some(Some(s.as_str())),
+        Some(_) => return Err("when must be a string or null".into()),
+    };
+    if let Some(when) = when.filter(|_| !reset) {
+        conditions::set(keymap, id, when)?;
+    }
+    let lost = if reset {
+        let lost = model::reset(keymap, id)?;
+        if let Some(when) = when {
+            conditions::set(keymap, id, when)?;
+        }
+        lost
     } else {
         let slot = match p.get("slot") {
             None | Some(Value::Null) => 0,
@@ -149,6 +165,7 @@ pub fn set_shortcut(app: &mut LightcraftApp, p: &Value) -> Result<Value, String>
                 .ok_or("slot must be 1 or 2")?,
         };
         match p.get("shortcut") {
+            None if when.is_some() => Vec::new(),
             None => return Err("missing shortcut (null removes it)".into()),
             Some(Value::Null) => model::assign(keymap, id, slot, None)?,
             Some(Value::String(s)) => model::assign(keymap, id, slot, Some(s))?,
@@ -158,7 +175,23 @@ pub fn set_shortcut(app: &mut LightcraftApp, p: &Value) -> Result<Value, String>
     let mut removed: Vec<&str> = lost.iter().map(|(other, _)| *other).collect();
     removed.dedup();
     let keymap = &app.ui.settings.keymap;
-    Ok(json!({"id": id, "shortcut": shortcut_of(keymap, id), "shortcut2": model::effective(keymap, id, 1), "removedFrom": removed}))
+    // commands that share a key with this one while their conditions overlap (a condition set after
+    // the keys were given can make that so)
+    let mut clashing: Vec<&str> = (0..model::SLOTS)
+        .filter_map(|slot| model::effective(keymap, id, slot).and_then(crate::keybinds::chord::parse_chord))
+        .flat_map(|steps| model::conflicts(keymap, id, &steps))
+        .map(|(other, _)| other)
+        .collect();
+    clashing.sort_unstable();
+    clashing.dedup();
+    Ok(json!({
+        "id": id,
+        "shortcut": shortcut_of(keymap, id),
+        "shortcut2": model::effective(keymap, id, 1),
+        "when": conditions::text(keymap, id),
+        "removedFrom": removed,
+        "conflictsWith": clashing,
+    }))
 }
 
 /// ⌘ / ⇧ / ⌥ / ⌃ themselves: they modify a shortcut's key, they can't be it.
@@ -392,6 +425,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
         || crate::panels::library_problem::blocks_dialog_input(app)
     {
         app.keybinds.pending = None;
+        // a dialog or the palette owns the keys, except for shortcuts whose condition asks for it
+        if !crate::panels::notices::blocks_input(app) && !crate::panels::library_problem::blocks_dialog_input(app) {
+            fire_owned(app, ctx);
+        }
         return;
     }
     if app.recording_shortcut.is_none() && app.ui.name_edit.is_none() && crate::panels::person::handle_bulk_key(app, ctx) {
@@ -402,6 +439,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     // waiting for its next key is forgotten when something else takes the keyboard
     if keyboard_owned(app, ctx) || app.recording_shortcut.is_some() || app.ui.name_edit.is_some() {
         app.keybinds.pending = None;
+        if app.recording_shortcut.is_none() && app.ui.name_edit.is_none() {
+            fire_owned(app, ctx);
+        }
         return;
     }
     // the first key of a chord waits for the next; the next one finishes it (or cancels it)
@@ -409,7 +449,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
         crate::keybinds::runtime::Poll::Pass => {}
         crate::keybinds::runtime::Poll::Swallow => return,
         crate::keybinds::runtime::Poll::Fire(id) => {
-            fire_command(app, ctx, id, false);
+            fire_command(app, ctx, id);
             return;
         }
     }
@@ -417,9 +457,16 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
     for (id, params) in aliased {
         fire_alias(app, ctx, id, params);
     }
-    let rotate_fires = fire.iter().any(|f| f == "crop.rotateAspect");
     for f in fire {
-        fire_command(app, ctx, &f, rotate_fires);
+        fire_command(app, ctx, &f);
+    }
+}
+
+/// The shortcuts that still work while a dialog, the palette or a text box has the keyboard: the
+/// ones whose condition needs it (`textFocus`, `dialogOpen`, `paletteOpen`).
+fn fire_owned(app: &mut LightcraftApp, ctx: &egui::Context) {
+    for id in crate::keybinds::blocked::firing(app, ctx) {
+        fire_command(app, ctx, id);
     }
 }
 
@@ -435,7 +482,10 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
     // covers the grid: a key must not move the selection onto photos nobody can see.
     let grid_navigation = grid && !app.ui.fullscreen;
     // keys the user gave to a known command: the fixed bindings below (aliases, ratings) yield to them
-    let taken: Vec<(Modifiers, Key)> = saved_keys(keymap).map(|(_, k)| k).chain(crate::keybinds::model::extra_taken(keymap)).collect();
+    let cx = crate::keybinds::when::Context::of_app(app, ctx);
+    let holds = |id: &str| crate::keybinds::model::conditions::holds(keymap, id, &cx);
+    let taken: Vec<(Modifiers, Key)> =
+        saved_keys(keymap).filter(|(id, _)| holds(id)).map(|(_, k)| k).chain(crate::keybinds::model::extra_taken_in(keymap, &cx)).collect();
     let second = crate::keybinds::model::second_singles(keymap);
     // an open popup (a menu, a date picker's calendar) closes on Esc itself: Esc's command (Back,
     // which also closes dialogs) waits until nothing is open
@@ -459,6 +509,7 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
                 && !native(sc)
                 && !(k == Key::Escape && popup_open)
                 && matches(i, m, k)
+                && holds(b.id)
                 && let Some(id) = grid_key_command(keymap, grid, app.ui.fullscreen, b.id, (m, k))
             {
                 fire.push(id.to_string());
@@ -467,7 +518,7 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
         // a command's second shortcut, when it is one key (a chord is [`crate::keybinds::runtime`]'s):
         // a declared one runs as the fixed aliases always did, one the user chose like a first shortcut
         for (id, (m, k), sc, declared) in &second {
-            if *k == Key::Escape && popup_open || !matches(i, *m, *k) {
+            if *k == Key::Escape && popup_open || !matches(i, *m, *k) || !holds(id) {
                 continue;
             }
             if *declared {
@@ -578,7 +629,7 @@ fn flag_toast(app: &mut LightcraftApp, ctx: &egui::Context, flag: lightcraft_cat
 }
 
 /// Run one fired command.
-fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fires: bool) {
+fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) {
     // a slideshow: ←/→ step (a cut)
     if app.ui.slideshow.is_some() && matches!(f, "library.next" | "library.previous") {
         let _ = app.run(if f == "library.next" { "slideshow.next" } else { "slideshow.previous" }, json!({}));
@@ -592,7 +643,7 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str, rotate_fi
         let _ = app.run("view.infoOverlay", json!({}));
         return;
     }
-    if (f == "photo.delete" && delete_key(app, ctx)) || (f == "tool.brush" && brush_key(app, ctx)) || context_key_skipped(app, f, rotate_fires) {
+    if (f == "photo.delete" && delete_key(app, ctx)) || (f == "tool.brush" && brush_key(app, ctx)) || context_key_skipped(app, f) {
         return;
     }
     if matches!(f, "library.up" | "library.down") {
@@ -768,24 +819,13 @@ fn brush_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
     true
 }
 
-/// Keys that two bindings share, and that mean something only in one panel: whether `f` was used up (or ignored)
-/// here, so nothing else runs for it.
-fn context_key_skipped(app: &mut LightcraftApp, f: &str, rotate_fires: bool) -> bool {
+/// Keys that mean something else in one panel: whether `f` was used up here, so nothing else runs for it.
+fn context_key_skipped(app: &mut LightcraftApp, f: &str) -> bool {
     use crate::state::RightPanel as R;
     let right = app.ui.right;
     match f {
-        // X is both reject (library) and swap crop aspect (crop tool). When both bindings fire,
-        // swap once: twice would put the crop straight back (issue #1866).
-        "photo.reject" if right == R::Crop => {
-            if !rotate_fires {
-                let _ = app.run("crop.rotateAspect", json!({}));
-            }
-            true
-        }
-        "crop.rotateAspect" => right != R::Crop,
-        // A is both Visualize Spots and the crop aspect lock: each key only in its own context
-        "view.visualizeSpots" => right == R::Crop,
-        "crop.lockAspect" => right != R::Crop,
+        // X (reject / swap crop aspect) and A (Visualize Spots / aspect lock) are shared by
+        // conditions now: `keybinds::model::conditions::DECLARED`
         // / refreshes the selected spot's source in the Remove tool (the filmstrip elsewhere)
         "view.filmstrip" if right == R::Remove && app.session.active_spot.is_some() => {
             let _ = app.run("spot.refreshSource", json!({}));

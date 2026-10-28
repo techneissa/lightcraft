@@ -12,9 +12,9 @@ pub enum Icon {
     Filter,
     Bell,
     Share,
-    /// An open tray with an arrow leaving it (Export… in Settings ▸ Photo Menu).
+    /// An open tray with an arrow leaving it (the Export… buttons in Settings ▸ Photo Menu and the Keyboard Shortcuts window).
     TrayOut,
-    /// An open tray with an arrow going in (Import… in Settings ▸ Photo Menu).
+    /// An open tray with an arrow going in (the Import… buttons in Settings ▸ Photo Menu and the Keyboard Shortcuts window).
     TrayIn,
     Help,
     Cloud,

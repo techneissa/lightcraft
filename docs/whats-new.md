@@ -44,6 +44,20 @@
   highlight on a key two commands share, ↺ to restore one command and Reset All to Default. Settings from before load
   unchanged.
 
+### Keyboard Shortcuts: A Shortcut Can Work Only Where You Want It
+- The last column of Help ▸ Keyboard Shortcuts is now **When**. A shortcut can be limited to a context, such as the
+  Loupe View, the Crop Tool or "not while typing". It shows as small chips (Loupe View, Not Typing); click it to type the
+  condition with suggestions (context names, their opposites, `==`, `!=`, `&&`, `||`, `!`), or press **+** to build one
+  from menus (pick what, **Is** or **Is Not**, pick the value). A condition that does not make sense says why in red and
+  is not saved.
+- Two commands can share a key while their conditions never hold together (X is Reject Photo outside the Crop Tool and
+  Swap Aspect inside it). When they could both apply, the key is amber with the reason under the list.
+- Saved in your settings; settings from before load unchanged. `app.setShortcut` takes `when`.
+- Two small icons at the top of the window, **Export Shortcuts…** and **Import Shortcuts…**, save all your shortcuts
+  (both keys, chords and conditions) to a JSON file as a backup and read them back. A file that isn't a LightCraft
+  shortcuts file, or comes from a newer LightCraft, is refused with a clear message; entries that don't fit this
+  version are skipped and listed under the list.
+
 ### Your Own Camera Profiles in the Profile Picker
 - A camera profile of your own (a file in the camera-profiles folder, made with `lightcraft-cli calibrate --name "A7 V
   Chart"`) is now its own choice in the Profile menu and browser, for the raws of the camera it is made for, under the name

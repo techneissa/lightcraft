@@ -244,6 +244,23 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         backup_library: None,
         restore_library: None,
         system_theme: appearance::service(),
+        save_shortcuts_file: Some(Box::new(|name: &str| {
+            rfd::FileDialog::new()
+                .set_title(lightcraft_ui_egui::i18n::tr("Export Keyboard Shortcuts"))
+                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Keyboard Shortcuts"), &["json"])
+                .set_file_name(name)
+                .save_file()
+                .map(|p| p.to_string_lossy().to_string())
+        })),
+        pick_shortcuts_file: Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .set_title(lightcraft_ui_egui::i18n::tr("Import Keyboard Shortcuts"))
+                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Keyboard Shortcuts"), &["json"])
+                .pick_file()
+                .map(|p| p.to_string_lossy().to_string())
+                .into_iter()
+                .collect()
+        })),
     }
 }
 

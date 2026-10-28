@@ -11,8 +11,21 @@ use super::{capture, chord, context, runtime};
 /// Draw the box and the chord hint (one call per frame, after the dialogs).
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     context::publish_keymap(ctx, &app.ui.settings.keymap);
+    damaged_notice(app, ctx);
     capture::show(app, ctx);
     hint(app, ctx);
+}
+
+/// Once, when the keymap holds a condition that can't be read: say it is ignored.
+fn damaged_notice(app: &mut LightcraftApp, ctx: &egui::Context) {
+    if app.keybinds.damage_noticed {
+        return;
+    }
+    app.keybinds.damage_noticed = true;
+    let n = super::model::conditions::damaged(&app.ui.settings.keymap).len();
+    if n > 0 {
+        app.toast_for(ctx, crate::i18n::tr_format!("{} shortcut condition(s) in your settings could not be read and are ignored", n), 5.0);
+    }
 }
 
 /// A small card above the bottom bar while a chord waits for its next key: what was pressed and
@@ -33,7 +46,7 @@ fn hint(app: &mut LightcraftApp, ctx: &egui::Context) {
     let mac = ctx.os() == egui::os::OperatingSystem::Mac;
     let t = Tokens::get(ctx);
     let lead = chord::spell(&[p.first]).map(|s| chord::text(&s, mac)).unwrap_or_default();
-    let next = runtime::continuations(app, &p);
+    let next = runtime::continuations(app, ctx, &p);
     let area = egui::Area::new(egui::Id::unique("lightcraft-chord-hint"))
         .order(egui::Order::Tooltip)
         .anchor(Align2::CENTER_BOTTOM, [0.0, -64.0])

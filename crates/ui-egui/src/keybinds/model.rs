@@ -6,9 +6,12 @@
 //! second shortcut ([`SECOND_DEFAULTS`]: ⌘D for Select None, F6 for the filmstrip…), edited and
 //! reset like the first.
 
-use crate::shortcuts::{self, CONTEXTUAL, Keymap, RESERVED, find_bindable};
+use crate::shortcuts::{self, Keymap, RESERVED, find_bindable};
 
 use super::chord::{self, Step};
+use super::when::Context;
+
+pub mod conditions;
 
 /// Shortcuts a command can have.
 pub const SLOTS: usize = 2;
@@ -73,7 +76,13 @@ pub fn effective<'a>(keymap: &'a Keymap, id: &str, slot: usize) -> Option<&'a st
 /// Whether the keymap itself gives the one-step key `sc` to a known command other than `id`.
 fn saved_elsewhere(keymap: &Keymap, id: &str, sc: &str) -> bool {
     let Some(steps) = chord::parse_chord(sc) else { return false };
-    keymap.iter().any(|(k, v)| split_key(k).0 != id && find_bindable(split_key(k).0).is_some() && chord::parse_chord(v).is_some_and(|o| o == steps))
+    keymap.iter().any(|(k, v)| {
+        let other = split_key(k).0;
+        other != id
+            && find_bindable(other).is_some()
+            && chord::parse_chord(v).is_some_and(|o| o == steps)
+            && conditions::overlap(keymap, id, other).is_some()
+    })
 }
 
 /// Both slots of `id`.
@@ -85,13 +94,14 @@ pub fn effective_slots<'a>(keymap: &'a Keymap, id: &str) -> [Option<&'a str>; SL
 /// another command's.
 pub fn is_changed(keymap: &Keymap, id: &str) -> bool {
     (0..SLOTS).any(|s| keymap.contains_key(&slot_key(id, s)))
+        || keymap.contains_key(&conditions::key(id))
         || find_bindable(id).is_some_and(|b| b.default.is_some() && effective(keymap, id, 0).is_none())
         || (default2(id).is_some() && effective(keymap, id, 1) != default2(id))
 }
 
 /// Whether the keymap holds an entry for a command this build knows (what Reset All would drop).
 pub fn has_entries(keymap: &Keymap) -> bool {
-    keymap.keys().any(|k| find_bindable(split_key(k).0).is_some())
+    keymap.keys().any(|k| find_bindable(conditions::command_of(k)).is_some())
 }
 
 /// Every second shortcut that is one step, as the dispatcher matches it: command, key, its text and
@@ -135,6 +145,17 @@ pub fn extra_taken(keymap: &Keymap) -> Vec<Step> {
     second_singles(keymap).into_iter().map(|(_, s, ..)| s).chain(chords(keymap).into_iter().map(|(_, [first, _])| first)).collect()
 }
 
+/// [`extra_taken`] for the bindings whose condition holds in `cx`.
+pub fn extra_taken_in(keymap: &Keymap, cx: &Context) -> Vec<Step> {
+    let singles = second_singles(keymap).into_iter().filter(|(id, ..)| conditions::holds(keymap, id, cx)).map(|(_, s, ..)| s);
+    singles.chain(chords_in(keymap, cx).into_iter().map(|(_, [first, _])| first)).collect()
+}
+
+/// [`chords`] whose command's condition holds in `cx`.
+pub fn chords_in(keymap: &Keymap, cx: &Context) -> Vec<(&'static str, [Step; 2])> {
+    chords(keymap).into_iter().filter(|(id, _)| conditions::holds(keymap, id, cx)).collect()
+}
+
 /// The other bindings `steps` can't live next to: the same shortcut, a single key that leads a
 /// chord, or a chord led by the single key (contextual pairs excepted). `id` itself is skipped.
 pub fn conflicts(keymap: &Keymap, id: &str, steps: &[Step]) -> Vec<Holder> {
@@ -143,13 +164,12 @@ pub fn conflicts(keymap: &Keymap, id: &str, steps: &[Step]) -> Vec<Holder> {
         if b.id == id {
             continue;
         }
-        // contextual partners share the very same key on purpose, but not a chord it leads
-        let partner = CONTEXTUAL.iter().any(|(x, y)| (*x == id && *y == b.id) || (*y == id && *x == b.id));
+        // commands whose conditions exclude each other may share a key
+        if conditions::overlap(keymap, id, b.id).is_none() {
+            continue;
+        }
         for slot in 0..SLOTS {
-            if effective(keymap, b.id, slot)
-                .and_then(chord::parse_chord)
-                .is_some_and(|other| chord::overlaps(steps, &other) && !(partner && other == steps))
-            {
+            if effective(keymap, b.id, slot).and_then(chord::parse_chord).is_some_and(|other| chord::overlaps(steps, &other)) {
                 v.push((b.id, slot));
             }
         }
@@ -159,7 +179,7 @@ pub fn conflicts(keymap: &Keymap, id: &str, steps: &[Step]) -> Vec<Holder> {
 
 /// Store `sc` in `slot` of `id` without checking anything: an entry that equals the declared
 /// shortcut is dropped, and "none" is kept as an empty entry where a declared shortcut exists.
-fn put(keymap: &mut Keymap, id: &str, slot: usize, sc: Option<&str>) {
+pub(crate) fn put(keymap: &mut Keymap, id: &str, slot: usize, sc: Option<&str>) {
     if slot == 0 {
         shortcuts::set(keymap, id, sc);
     } else if let Some(sc) = sc {
@@ -220,6 +240,7 @@ pub fn assign(keymap: &mut Keymap, id: &str, slot: usize, sc: Option<&str>) -> R
 pub fn reset(keymap: &mut Keymap, id: &str) -> Result<Vec<Holder>, String> {
     let b = find_bindable(id).ok_or_else(|| format!("unknown command: {id}"))?;
     keymap.remove(&slot_key(id, 1));
+    conditions::clear(keymap, id);
     let mut lost = assign(keymap, id, 0, b.default)?;
     lost.extend(assign(keymap, id, 1, default2(id))?);
     Ok(lost)

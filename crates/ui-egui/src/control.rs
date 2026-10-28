@@ -96,6 +96,7 @@ pub fn all_commands(app: &LightcraftApp) -> Value {
             if let Some(o) = v.as_object_mut() {
                 o.insert("shortcut".into(), json!(crate::shortcuts::shortcut_of(keymap, c.id)));
                 o.insert("shortcut2".into(), json!(crate::keybinds::model::effective(keymap, c.id, 1)));
+                o.insert("when".into(), json!(crate::keybinds::model::conditions::text(keymap, c.id)));
             }
             v
         })
@@ -103,7 +104,8 @@ pub fn all_commands(app: &LightcraftApp) -> Value {
     for (id, label, sc, menu) in crate::menus::ui_commands() {
         let sc = crate::shortcuts::binding(keymap, id, *sc);
         let sc2 = crate::keybinds::model::effective(keymap, id, 1);
-        v.push(json!({"id": id, "label": label, "shortcut": sc, "shortcut2": sc2, "menu": [menu], "enabled": crate::menus::ui_enabled(app, id), "ui": true}));
+        let when = crate::keybinds::model::conditions::text(keymap, id);
+        v.push(json!({"id": id, "label": label, "shortcut": sc, "shortcut2": sc2, "when": when, "menu": [menu], "enabled": crate::menus::ui_enabled(app, id), "ui": true}));
     }
     Value::Array(v)
 }
