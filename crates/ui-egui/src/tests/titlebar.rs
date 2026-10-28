@@ -37,21 +37,27 @@ fn play(h: &mut Headless) {
     }
 }
 
-// Scenario: double-clicking the empty top bar zooms the window, and again restores it
+// Scenario: double-clicking the empty top bar does what the system setting says (zoom, then restore; or minimize; or nothing)
+//
+// craft-window reads the real `AppleActionOnDoubleClick` of the machine the test runs on (the lib's own
+// test switch is off in a dependent crate), so the expected commands follow that setting. On a Mac set to
+// "Do Nothing" the bar rightly sends nothing: that is not a broken double-click.
 #[test]
-fn double_click_on_the_empty_bar_zooms_then_restores() {
+fn double_click_on_the_empty_bar_follows_the_system_setting() {
     let mut h = integrated();
+    let action = craft_window::title_bar::action();
     let p = empty_spot(&h);
-    h.request("ui.click", json!({"x": p.x, "y": p.y, "count": 2}), T);
-    play(&mut h);
-    assert_eq!(h.window_commands, vec![ViewportCommand::Maximized(true)]);
-    // a pause longer than egui's multi-click window, or the second pair would count as a triple click
-    for _ in 0..30 {
-        h.step();
+    let mut expected = vec![];
+    for _ in 0..2 {
+        expected.extend(craft_window::title_bar::double_click_command(action, h.window_maximized));
+        h.request("ui.click", json!({"x": p.x, "y": p.y, "count": 2}), T);
+        play(&mut h);
+        assert_eq!(h.window_commands, expected, "{action:?}");
+        // a pause longer than egui's multi-click window, or the second pair would count as a triple click
+        for _ in 0..30 {
+            h.step();
+        }
     }
-    h.request("ui.click", json!({"x": p.x, "y": p.y, "count": 2}), T);
-    play(&mut h);
-    assert_eq!(h.window_commands, vec![ViewportCommand::Maximized(true), ViewportCommand::Maximized(false)]);
 }
 
 // Scenario: dragging the empty top bar starts a window move
