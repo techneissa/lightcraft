@@ -115,6 +115,7 @@ impl LightcraftApp {
             shown_library: None,
             export: None,
             layers: None,
+            edit_in: None,
             tasks: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,

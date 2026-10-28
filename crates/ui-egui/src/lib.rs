@@ -13,6 +13,7 @@ pub mod control;
 pub mod dialogs;
 pub mod docking;
 mod drop_overlay;
+pub mod edit_in_task;
 pub mod export_task;
 mod focus_scan;
 mod frame_rate;
@@ -316,6 +317,8 @@ pub struct LightcraftApp {
     pub export: Option<export_task::ExportTask>,
     /// Open as Layers in PhotoCraft, rendering in the background.
     pub layers: Option<layers_task::LayersTask>,
+    /// Edit In's copies, rendering in the background.
+    pub edit_in: Option<edit_in_task::EditInTask>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).

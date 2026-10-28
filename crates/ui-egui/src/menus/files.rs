@@ -129,11 +129,22 @@ fn edit_in_inner(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photoc
     }
     let mut params = file.params();
     if let (Some(o), Some(given)) = (params.as_object_mut(), p.as_object()) {
-        for (k, v) in given.iter().filter(|(k, _)| k.as_str() != "app") {
+        for (k, v) in given.iter().filter(|(k, _)| !matches!(k.as_str(), "app" | "wait")) {
             o.insert(k.clone(), v.clone());
         }
     }
+    // the window keeps drawing while the copies render (an agent may wait for them instead)
+    if app.services.write_shared.is_some() && p.get("wait").and_then(Value::as_bool) != Some(true) {
+        let plan = lightcraft_engine::edit_copies::prepare(&mut app.session, &params)?;
+        return crate::edit_in_task::start(app, plan, editor);
+    }
     let r = app.session.execute("photo.editExternal", &params).map_err(|e| e.to_string())?;
+    open_copies(app, ctx, r, &editor)
+}
+
+/// The copies in `r` (`photo.editExternal`'s result) are in the library: open each in `editor`
+/// and say so. An editor that won't open them is `failed` in the result and a toast, not an error.
+pub(crate) fn open_copies(app: &mut LightcraftApp, ctx: &egui::Context, r: Value, editor: &str) -> Result<Value, String> {
     // every selected photo got a copy (#920); each opens in the editor
     let copies: Vec<(String, Option<u64>)> = r["copies"]
         .as_array()
@@ -149,7 +160,7 @@ fn edit_in_inner(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photoc
         match lightcraft_engine::open_path::openable(path, "") {
             Err(e) => failed = Some(e),
             Ok(absolute) => {
-                if let Some(Err(e)) = app.services.open_with.as_mut().map(|f| f(&absolute, &editor)) {
+                if let Some(Err(e)) = app.services.open_with.as_mut().map(|f| f(&absolute, editor)) {
                     failed = Some(e);
                 }
             }
