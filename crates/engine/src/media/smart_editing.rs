@@ -29,6 +29,7 @@ pub struct State {
 
 /// A photo's smart preview as an editing source: where it may be, and what it must say to be current.
 #[derive(Clone, Debug)]
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 pub struct Proxy {
     /// The sharded location, then the pre-upgrade flat one (`smart::file_path`).
     paths: [PathBuf; 2],
@@ -40,12 +41,14 @@ pub struct Proxy {
 
 impl Proxy {
     /// The file to read, when one is there and current. Checks the file system: only for worker threads.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     fn current(&self) -> Option<&PathBuf> {
         self.paths.iter().find(|p| crate::smart::current_for(p, self.look, &self.want))
     }
 }
 
 /// Whether `p`'s proxy could show a different picture than its original would for `wanted`, so the original is used.
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn proxy_would_differ(p: &Photo, wanted: LoadOptions) -> bool {
     if !p.fitted_look() {
         return false;
@@ -172,10 +175,13 @@ pub(super) fn load_preferred(proxy: &Proxy, options: LoadOptions, max_edge: usiz
             Err(e) => log::warn!("smart preview not used for editing: {e}"),
         }
     }
+    #[cfg(target_arch = "wasm32")]
+    let _ = (proxy, options, max_edge);
     otherwise.load_source()
 }
 
 /// `d` shrunk to at most `max_edge` pixels long (the thumbnail level is cut from the preview-size proxy).
+#[cfg_attr(target_arch = "wasm32", allow(dead_code))]
 fn fit(d: DecodedSource, max_edge: usize) -> DecodedSource {
     if d.image.width.max(d.image.height) <= max_edge {
         return d;

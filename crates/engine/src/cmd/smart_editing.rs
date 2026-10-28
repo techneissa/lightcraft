@@ -70,6 +70,7 @@ fn for_editing(s: &mut Session, p: &Value) -> Result<Value> {
         s.media.set_smart_editing(on);
     }
     let photos = file_photos(s).len();
+    #[cfg_attr(target_arch = "wasm32", allow(unused_mut))]
     let mut out = json!({
         "enabled": s.media.smart_editing(),
         "available": s.media.smart_dir.is_some(),
