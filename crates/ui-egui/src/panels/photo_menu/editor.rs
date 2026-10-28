@@ -90,7 +90,7 @@ fn note(slot: &Slot, commands: &[(crate::menus::menubar::MenuNode, String)]) -> 
         _ => None,
     };
     match (slot.several(), when) {
-        (true, _) => Some(crate::i18n::tr("2+ photos").to_string()),
+        (true, _) => Some(crate::i18n::tr("2+ Photos").to_string()),
         (false, Some(w)) => Some(crate::i18n::tr(w).to_string()),
         _ => None,
     }
@@ -120,11 +120,7 @@ pub fn tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let commands = menu_commands(app);
 
     heading(ui, t, "Photo Menu");
-    hint(
-        ui,
-        t,
-        "What a right-click on a photo shows. Drag rows to reorder them, × takes one out, and + adds an item or any menu command from the right. Items marked 2+ show only when two or more photos are selected.",
-    );
+    hint(ui, t, "What a right-click on a photo shows. Items marked \"2+ Photos\" show only when two or more photos are selected.");
     ui.add_space(4.0);
 
     let width = ui.available_width() - 2.0;
