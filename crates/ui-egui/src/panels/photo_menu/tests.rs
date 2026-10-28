@@ -441,6 +441,29 @@ mod headless {
         }
     }
 
+    /// The list of what can be added sits under a search box taller than the menu list's heading:
+    /// it still ends level with the menu's list, at every window height.
+    #[test]
+    fn both_lists_end_level() {
+        for window_h in [760.0, 1000.0] {
+            let mut h = demo(json!({"view": "photoGrid"}));
+            let r = h.request("ui.resize", json!({"width": 1400.0, "height": window_h}), T);
+            assert_eq!(r["ok"], true, "{r}");
+            let r = h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "menu"}}), T);
+            assert_eq!(r["ok"], true, "{r}");
+            h.settle(Duration::from_secs(20));
+            h.step();
+            h.step();
+            let (left, right) = (widget(&h, "photoMenu:list"), widget(&h, "photoMenu:addList"));
+            assert!(
+                (left.bottom() - right.bottom()).abs() <= 1.0,
+                "at {window_h}: menu list ends at {}, add list at {}",
+                left.bottom(),
+                right.bottom()
+            );
+        }
+    }
+
     #[test]
     fn customize_menu_opens_the_settings_tab() {
         let mut h = demo(json!({"view": "photoGrid"}));

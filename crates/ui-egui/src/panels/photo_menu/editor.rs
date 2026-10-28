@@ -48,6 +48,8 @@ pub(super) struct View {
     pub(super) reveal: bool,
     /// The height of the menu's list, from the room the page has (set each pass by [`list_height`]).
     pub(super) list_h: f32,
+    /// Where the menu's list ends on screen this pass: the list of what can be added ends there too.
+    left_bottom: f32,
     /// The pass the tab was last drawn in, and the menu as it left it: when the tab opens again,
     /// or the menu changed elsewhere (`photoMenu.set`), the picked row no longer means anything.
     drawn: u64,
@@ -329,6 +331,7 @@ fn menu_list(
     });
     let rects = list.inner.inner;
     let list_rect = list.response.rect;
+    view.left_bottom = list_rect.bottom();
     crate::widgets::register_geometry(ui.ctx(), "photoMenu:list", list_rect);
     drop_into(ui, t, menu, commands, view, list_rect, &rects);
 }
@@ -433,11 +436,12 @@ fn add_list(
     let offered = available(commands, menu, &view.query);
     let frame = egui::Frame::new().fill(t.inset).stroke(Stroke::new(1.0, t.divider)).corner_radius(6.0).inner_margin(4.0);
     let mut add: Option<Slot> = None;
-    frame.show(ui, |ui| {
+    let shown = frame.show(ui, |ui| {
         ui.set_width(width - 10.0);
         // (before the scroll area: show_rows spaces its rows by the spacing it is given)
         ui.spacing_mut().item_spacing.y = 0.0;
-        let h = view.list_h - ROW_H - 2.0;
+        // end level with the menu's list (its heading is shorter than the search box above this one)
+        let h = if view.left_bottom > 0.0 { view.left_bottom - ui.cursor().top() - 5.0 } else { view.list_h - ROW_H - 2.0 }.max(ROW_H);
         egui::ScrollArea::vertical().id_salt("photo-menu-add").max_height(h).min_scrolled_height(h).auto_shrink([false, false]).show_rows(
             ui,
             ROW_H + 8.0,
@@ -483,6 +487,7 @@ fn add_list(
             },
         );
     });
+    crate::widgets::register_geometry(ui.ctx(), "photoMenu:addList", shown.response.rect);
     if let Some(slot) = add {
         insert(menu, view, slot);
     }
