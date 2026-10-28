@@ -277,6 +277,12 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("photoMenu.get", "Photo Menu Items", None, ""),
     ("photoMenu.set", "Set Photo Menu Items", None, ""),
     ("photoMenu.reset", "Reset Photo Menu", None, ""),
+    // its three presets ({slot} 1 to 3) and the .json backup ({path}; a dialog asks without one)
+    ("photoMenu.savePreset", "Save Photo Menu to Preset", None, ""),
+    ("photoMenu.switchPreset", "Switch Photo Menu Preset", None, ""),
+    ("photoMenu.undoPreset", "Undo Photo Menu Preset Switch", None, ""),
+    ("photoMenu.export", "Export Right-Click Menu…", None, ""),
+    ("photoMenu.import", "Import Right-Click Menu…", None, ""),
     // the top bar's items (Settings ▸ Top Bar): {hidden} = the ids turned off; {item, shown} = one
     ("topBar.get", "Top Bar Items", None, ""),
     ("topBar.set", "Set Top Bar Items", None, ""),

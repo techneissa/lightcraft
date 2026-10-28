@@ -21,7 +21,13 @@ use crate::theme::Tokens;
 use crate::widgets::register;
 
 const ROW_H: f32 = 26.0;
-const LIST_H: f32 = 430.0;
+/// The least height of the lists; in a window with less room the page scrolls.
+const MIN_LIST_H: f32 = 180.0;
+/// The most: the page itself is never taller than the Settings window's page height.
+const MAX_LIST_H: f32 = 1400.0;
+/// What the columns and the row of buttons under them take besides the list: the "In the Menu"
+/// label and the list's frame, the gap, the Add Separator row, and a line of margin at the end.
+const BELOW_LIST: f32 = 72.0;
 const GAP: f32 = 12.0;
 /// The share of the width the menu's list takes; the rest is the list to add from.
 const LEFT_SHARE: f32 = 0.54;
@@ -40,6 +46,8 @@ pub(super) struct View {
     pub(super) picked: Option<usize>,
     /// Scroll the picked row into view on the next draw (it was just added or moved by key).
     pub(super) reveal: bool,
+    /// The height of the menu's list, from the room the page has (set each pass by [`list_height`]).
+    pub(super) list_h: f32,
     /// The pass the tab was last drawn in, and the menu as it left it: when the tab opens again,
     /// or the menu changed elsewhere (`photoMenu.set`), the picked row no longer means anything.
     drawn: u64,
@@ -107,8 +115,17 @@ fn row_label(slot: &Slot, commands: &[(crate::menus::menubar::MenuNode, String)]
     }
 }
 
+/// The height of the lists: what the page's viewport has left below `used` (what the page holds
+/// above the lists) once the buttons under them are counted, never under [`MIN_LIST_H`]: a page
+/// with less room scrolls instead. The viewport is the one the page scrolls in, so the height does
+/// not change as the page is scrolled.
+pub fn list_height(viewport: f32, used: f32) -> f32 {
+    (viewport - used - BELOW_LIST).clamp(MIN_LIST_H, MAX_LIST_H)
+}
+
 /// The Photo Menu tab.
 pub fn tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    let origin = ui.min_rect().top();
     let view_id = egui::Id::unique("photo-menu-editor");
     let mut view: View = ui.ctx().data(|d| d.get_temp(view_id)).unwrap_or_default();
     let mut menu = slots(app);
@@ -122,7 +139,9 @@ pub fn tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, "Photo Menu");
     hint(ui, t, "What a right-click on a photo shows. Items marked \"2+ Photos\" show only when two or more photos are selected.");
     ui.add_space(4.0);
+    super::presets_ui::show(app, ui, t);
 
+    view.list_h = list_height(ui.clip_rect().height(), ui.cursor().top() - origin);
     let width = ui.available_width() - 2.0;
     let left_w = ((width - GAP) * LEFT_SHARE).floor();
     let right_w = (width - GAP - left_w).max(120.0);
@@ -215,9 +234,12 @@ fn menu_list(
     let frame = egui::Frame::new().fill(t.inset).stroke(Stroke::new(1.0, t.divider)).corner_radius(6.0).inner_margin(4.0);
     let list = frame.show(ui, |ui| {
         ui.set_width(width - 10.0);
-        egui::ScrollArea::vertical().id_salt("photo-menu-rows").max_height(LIST_H).min_scrolled_height(LIST_H).auto_shrink([false, false]).show(
-            ui,
-            |ui| {
+        egui::ScrollArea::vertical()
+            .id_salt("photo-menu-rows")
+            .max_height(view.list_h)
+            .min_scrolled_height(view.list_h)
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 let mut rects = Vec::with_capacity(menu.len());
                 let mut action: Option<(usize, bool)> = None; // (row, removed)
@@ -301,11 +323,11 @@ fn menu_list(
                     None => {}
                 }
                 rects
-            },
-        )
+            })
     });
     let rects = list.inner.inner;
     let list_rect = list.response.rect;
+    crate::widgets::register_geometry(ui.ctx(), "photoMenu:list", list_rect);
     drop_into(ui, t, menu, commands, view, list_rect, &rects);
 }
 
@@ -413,7 +435,7 @@ fn add_list(
         ui.set_width(width - 10.0);
         // (before the scroll area: show_rows spaces its rows by the spacing it is given)
         ui.spacing_mut().item_spacing.y = 0.0;
-        let h = LIST_H - ROW_H - 2.0;
+        let h = view.list_h - ROW_H - 2.0;
         egui::ScrollArea::vertical().id_salt("photo-menu-add").max_height(h).min_scrolled_height(h).auto_shrink([false, false]).show_rows(
             ui,
             ROW_H + 8.0,

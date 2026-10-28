@@ -197,6 +197,12 @@ pub struct AppSettings {
     /// None is the default menu (`panels::photo_menu`).
     #[serde(deserialize_with = "crate::panels::photo_menu::read_saved", skip_serializing_if = "Option::is_none")]
     pub photo_menu: Option<Vec<String>>,
+    /// The three presets of the photo menu (Settings ▸ Photo Menu ▸ Presets; `panels::photo_menu::presets`).
+    #[serde(
+        deserialize_with = "crate::panels::photo_menu::presets::read",
+        skip_serializing_if = "crate::panels::photo_menu::presets::Presets::is_empty"
+    )]
+    pub photo_menu_presets: crate::panels::photo_menu::presets::Presets,
     /// The top bar's items turned off (Settings ▸ Top Bar): their ids; none is every item shown
     /// (`panels::topbar_items`).
     #[serde(deserialize_with = "crate::panels::topbar_items::read_saved", skip_serializing_if = "Vec::is_empty")]
@@ -251,6 +257,7 @@ impl Default for AppSettings {
             loupe_info: LoupeInfo::default(),
             lightroom_import: LightroomImport::Ask,
             photo_menu: None,
+            photo_menu_presets: Default::default(),
             top_bar_hidden: Vec::new(),
         }
     }

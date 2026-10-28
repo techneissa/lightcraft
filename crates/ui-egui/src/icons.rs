@@ -12,6 +12,10 @@ pub enum Icon {
     Filter,
     Bell,
     Share,
+    /// An open tray with an arrow leaving it (Export… in Settings ▸ Photo Menu).
+    TrayOut,
+    /// An open tray with an arrow going in (Import… in Settings ▸ Photo Menu).
+    TrayIn,
     Help,
     Cloud,
     Sliders,
@@ -242,6 +246,16 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.line(&[(6.0, 8.0), (4.0, 8.0), (4.0, 17.0), (16.0, 17.0), (16.0, 8.0), (14.0, 8.0)]);
             pen.line(&[(10.0, 12.0), (10.0, 2.5)]);
             pen.line(&[(6.5, 6.0), (10.0, 2.5), (13.5, 6.0)]);
+        }
+        TrayOut => {
+            pen.line(&[(4.0, 12.0), (4.0, 16.5), (16.0, 16.5), (16.0, 12.0)]);
+            pen.line(&[(10.0, 13.0), (10.0, 3.5)]);
+            pen.line(&[(6.5, 7.0), (10.0, 3.5), (13.5, 7.0)]);
+        }
+        TrayIn => {
+            pen.line(&[(4.0, 12.0), (4.0, 16.5), (16.0, 16.5), (16.0, 12.0)]);
+            pen.line(&[(10.0, 3.5), (10.0, 13.0)]);
+            pen.line(&[(6.5, 9.5), (10.0, 13.0), (13.5, 9.5)]);
         }
         Help => {
             pen.circle(10.0, 10.0, 7.5);
