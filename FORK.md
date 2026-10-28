@@ -98,11 +98,6 @@ cargo test -p lightcraft-ui-egui --lib -- keybinds shortcut_editing tests::keyma
 
 ## Known failures on this Mac (not caused by the fork)
 
-- `accessibility::every_interactive_node_has_a_name_in_every_view_and_tool`: fails on official `main` too (a "▸" the
-  test fonts can't draw).
-
-## Known failures on this Mac (not caused by the fork)
-
 - `accessibility::every_interactive_node_has_a_name_in_every_view_and_tool`: fails the same way on official `main`
   (59a5d00c), with and without `CRAFT_FONTS_DIR=…/craft-fonts`: `No glyph for "▸" (U+25B8) in Proportional`, from the
   "▸" in official strings such as the Reference-view message. Neither the bundled Inter nor craft-fonts has that glyph,
