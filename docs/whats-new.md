@@ -2,6 +2,19 @@
 
 ## 2026-10-28
 
+### Your own camera profiles in the Profile picker
+- A camera profile of your own (a file in the camera-profiles folder, made with `lightcraft-cli calibrate --name "A7 V
+  Chart"`) is now its own choice in the Profile menu and browser, for the raws of the camera it is made for, under the name
+  inside the file (else its file name). Camera Matching no longer changes when you add one. The profile gives the base
+  colour; the tone still follows the camera's own picture.
+- A photo whose profile file is missing, damaged or made for another camera shows as Camera Matching and says so under
+  the picker. The choice is kept, so the photo uses the profile again when the file is back.
+- Photos you had already: if a file named after your camera (for example `ILCE-7M5.json`) used to change Camera Matching,
+  LightCraft asks once whether to switch those photos to it to keep their look. It never does so by itself, and one undo
+  step takes it back.
+- Presets, Copy and Paste, and sync carry the choice. Export as DNG and Convert to DNG keep the profile's colour.
+- Your library is saved in a new format (v10): an older LightCraft will say it is from a newer version and leave it alone.
+
 ### Choose what the top bar shows
 - Any button on the top bar can be turned off: Settings ▸ Top Bar has a check box for each (My Photos Panel, Back
   and Forward, Filters, Appearance Mode, Activity, Import Photos, Export, Keyboard Shortcuts, Library Status), or
