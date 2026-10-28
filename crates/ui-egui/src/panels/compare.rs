@@ -523,7 +523,7 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let _ = make_select(app);
             }
             ui.separator();
-            super::grid::context_menu(app, ui, id);
+            super::photo_menu::show(app, ui, id);
         });
     }
     let mid = area.center().x;
@@ -582,7 +582,7 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let _ = app.run("library.select", json!({"ids": [id.0], "mode": "toggle"}));
             }
         }
-        crate::widgets::context_menu(&resp, |ui| super::grid::context_menu(app, ui, *id));
+        crate::widgets::context_menu(&resp, |ui| super::photo_menu::show(app, ui, *id));
     }
     let n = photos.len();
     let msg = if app.session.selection.ids.len() > SURVEY_MAX {

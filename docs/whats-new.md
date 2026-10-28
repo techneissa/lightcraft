@@ -1,5 +1,15 @@
 # What's new in LightCraft
 
+## 2026-10-28
+
+### Arrange the photo menu
+- The menu a right-click on a photo opens can be arranged in Settings ▸ Photo Menu (or Customize Menu… at its end):
+  drag a row to move it, × takes it out, and the list beside it adds any item back, or any command from the menu bar,
+  with a search box to find it. Add Separator and Reset to Default are below. Changes apply at once.
+- The menu now has Before/After Split under Open in Detail: from the grid it opens the photo with the split on.
+- With one photo selected, the menu leaves out what needs several: Photo Merge, Export Animated GIF… and Group into
+  Stack.
+
 ## 2026-10-27
 
 ### Export the selected photos as an animated GIF

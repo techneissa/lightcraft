@@ -270,6 +270,10 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.shortcuts", "Keyboard Shortcuts", Some("Cmd+/"), "Help"),
     ("app.setShortcut", "Set Keyboard Shortcut", None, ""),
     ("app.resetShortcuts", "Reset All Keyboard Shortcuts", None, ""),
+    // the photo menu's arrangement (Settings ▸ Photo Menu): {items} = its slots in order
+    ("photoMenu.get", "Photo Menu Items", None, ""),
+    ("photoMenu.set", "Set Photo Menu Items", None, ""),
+    ("photoMenu.reset", "Reset Photo Menu", None, ""),
     ("app.export", "Export Now", None, ""),
     ("app.showInFinder", "Show in Finder", Some("Cmd+R"), "Photo"),
     ("app.showInFolders", "Show in Folders", None, "Photo"),

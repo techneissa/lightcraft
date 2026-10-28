@@ -374,6 +374,15 @@ or initializes that name, edited through `field:importAlbumName`. Choosing an ex
 the pending name. `ui.dialog.confirm` starts the same import into the selected album ID; engine
 `library.import` parameters `album` and `albumName` are unchanged.
 
+## Photo menu
+
+The photo's right-click menu is a list of slots in the app settings (`photoMenu`; absent = the default menu): a
+built-in item's id (`openInDetail`, `beforeAfterSplit`, `exportAnimatedGif`, …), `cmd:` and a menu-bar command
+(`cmd:view.compare`, with parameters after a `|`: `cmd:photo.rate|{"rating":3}`), or `---` for a separator.
+`photoMenu.get` returns `{items, custom, available}` (`available`: what can be added, `{item, label, path}`),
+`photoMenu.set {items}` replaces the list (unknown items are refused and nothing changes), `photoMenu.reset` puts the
+default back; all three return the same answer. Settings ▸ Photo Menu is `app.settings {"tab": "menu"}`.
+
 ## Panel docking
 
 Library, Tools, and Presets panels can be regrouped, split, floated within the app window, closed, and reopened. Tools keeps the current Edit/Crop/Masking mode; the photo view and filmstrip stay together. The document/session view is protected. Layouts, active tabs, panel visibility, and floating rectangles are saved with the app's existing UI preferences as a craft-ui docking workspace (`docking`: `version`, `layout`, `hidden`, `saved`, `locked`); settings written before workspaces had a `version` load as version 1. These operations do not edit document contents.

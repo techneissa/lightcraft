@@ -649,7 +649,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         });
         ui.separator();
-        super::grid::context_menu(app, ui, id);
+        super::photo_menu::show(app, ui, id);
     });
 }
 
