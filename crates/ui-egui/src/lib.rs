@@ -14,6 +14,8 @@ pub mod control;
 pub mod dialogs;
 pub mod docking;
 mod drop_overlay;
+pub mod edit_in_task;
+pub mod editor_handoff;
 pub mod export_task;
 mod focus_scan;
 mod frame_rate;
@@ -95,7 +97,7 @@ pub use services::{
 };
 use state::{GestureFrame, InjectedPress};
 
-const TOAST_SECONDS: f64 = 1.4;
+pub(crate) const TOAST_SECONDS: f64 = 1.4;
 /// The `path` of a display profile read from the screen rather than chosen as a file.
 pub const SCREEN_PROFILE: &str = "screen";
 
@@ -317,6 +319,12 @@ pub struct LightcraftApp {
     pub export: Option<export_task::ExportTask>,
     /// Open as Layers in PhotoCraft, rendering in the background.
     pub layers: Option<layers_task::LayersTask>,
+    /// Edit In's copies, rendering in the background.
+    pub edit_in: Option<edit_in_task::EditInTask>,
+    /// Apply macOS Colour to All Photos from This Camera, counting or moving in the background.
+    pub(crate) macos_job: Option<macos_colour::job::MacosJob>,
+    /// Files on their way to an external editor.
+    pub handoffs: Vec<editor_handoff::Handoff>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).

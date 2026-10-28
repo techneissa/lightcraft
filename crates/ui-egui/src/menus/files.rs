@@ -129,17 +129,31 @@ fn edit_in_inner(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photoc
     }
     let mut params = file.params();
     if let (Some(o), Some(given)) = (params.as_object_mut(), p.as_object()) {
-        for (k, v) in given.iter().filter(|(k, _)| k.as_str() != "app") {
+        for (k, v) in given.iter().filter(|(k, _)| !matches!(k.as_str(), "app" | "wait")) {
             o.insert(k.clone(), v.clone());
         }
     }
+    // the window keeps drawing while the copies render (an agent may wait for them instead)
+    if app.services.write_shared.is_some() && p.get("wait").and_then(Value::as_bool) != Some(true) {
+        let plan = lightcraft_engine::edit_copies::prepare(&mut app.session, &params)?;
+        return crate::edit_in_task::start(app, plan, editor);
+    }
     let r = app.session.execute("photo.editExternal", &params).map_err(|e| e.to_string())?;
+    open_copies(app, ctx, r, &editor, false)
+}
+
+/// The copies in `r` (`photo.editExternal`'s result) are in the library: open each in `editor`
+/// and say so. An editor that won't open them is `failed` in the result and a toast, not an error.
+/// With `background` (and a host that can) the editor is handed the files on a worker, so the
+/// frame doesn't wait for it to start; the toast comes when it has them.
+pub(crate) fn open_copies(app: &mut LightcraftApp, ctx: &egui::Context, r: Value, editor: &str, background: bool) -> Result<Value, String> {
     // every selected photo got a copy (#920); each opens in the editor
     let copies: Vec<(String, Option<u64>)> = r["copies"]
         .as_array()
         .map(|c| c.iter().map(|c| (c["path"].as_str().unwrap_or_default().to_string(), c["id"].as_u64())).collect())
         .unwrap_or_else(|| vec![(r["path"].as_str().unwrap_or_default().to_string(), r["id"].as_u64())]);
     let mut failed = None;
+    let mut handed = Vec::new();
     for (path, id) in &copies {
         if let Some(id) = id {
             app.ui.external_edits.push(*id);
@@ -148,14 +162,32 @@ fn edit_in_inner(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photoc
         // path handed to the system opener (#2135)
         match lightcraft_engine::open_path::openable(path, "") {
             Err(e) => failed = Some(e),
-            Ok(absolute) => {
-                if let Some(Err(e)) = app.services.open_with.as_mut().map(|f| f(&absolute, &editor)) {
-                    failed = Some(e);
-                }
-            }
+            Ok(absolute) => handed.push(absolute),
         }
     }
+    let done = match copies.as_slice() {
+        [(path, _)] => {
+            let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            crate::i18n::tr_format!("{name} opened for editing; it is stacked with the original", name = name)
+        }
+        _ => crate::i18n::tr_format!("{n} photos opened for editing; each is stacked with its original", n = copies.len()),
+    };
     let mut r = r;
+    if failed.is_none()
+        && background
+        && crate::editor_handoff::available(app)
+        && crate::editor_handoff::start(app, handed.clone(), editor, done.clone(), crate::TOAST_SECONDS)
+    {
+        if let Some(o) = r.as_object_mut() {
+            o.insert("failed".into(), Value::Null);
+        }
+        return Ok(r);
+    }
+    for absolute in &handed {
+        if let Some(Err(e)) = app.services.open_with.as_mut().map(|f| f(absolute, editor)) {
+            failed = Some(e);
+        }
+    }
     if let Some(o) = r.as_object_mut() {
         o.insert("failed".into(), json!(failed));
     }
@@ -165,13 +197,7 @@ fn edit_in_inner(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value, photoc
         app.toast(ctx, crate::i18n::tr_format!("Couldn't open the editor: {e}", e = e));
         return Ok(r);
     }
-    match copies.as_slice() {
-        [(path, _)] => {
-            let name = std::path::Path::new(path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-            app.toast(ctx, crate::i18n::tr_format!("{name} opened for editing; it is stacked with the original", name = name));
-        }
-        _ => app.toast(ctx, crate::i18n::tr_format!("{n} photos opened for editing; each is stacked with its original", n = copies.len())),
-    }
+    app.toast(ctx, done);
     Ok(r)
 }
 

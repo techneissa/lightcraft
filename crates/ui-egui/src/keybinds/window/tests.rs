@@ -33,3 +33,22 @@ fn contextual_pairs_are_not_clashes() {
     let map = clash_map(&[("crop.rotateAspect", "X")]);
     assert!(!map.contains_key(&("crop.rotateAspect", 0)), "{map:?}");
 }
+
+/// The list and its clash table are built once and reused frame after frame; a new shortcut or
+/// search builds them again.
+#[test]
+fn the_list_is_rebuilt_only_when_what_it_shows_changes() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), crate::Services::default());
+    let ctx = egui::Context::default();
+    let keymap = Keymap::new();
+    let (rows, clashes) = listing(&app, &ctx, &keymap, "", false, true);
+    let (again, clashes_again) = listing(&app, &ctx, &keymap, "", false, true);
+    assert!(std::sync::Arc::ptr_eq(&rows, &again), "the same frame's list is reused");
+    assert!(std::sync::Arc::ptr_eq(&clashes, &clashes_again));
+    let (narrowed, clashes_same) = listing(&app, &ctx, &keymap, "survey", false, true);
+    assert!(!std::sync::Arc::ptr_eq(&rows, &narrowed) && narrowed.len() < rows.len(), "a search narrows it");
+    assert!(std::sync::Arc::ptr_eq(&clashes, &clashes_same), "the clashes don't depend on the search");
+    let changed: Keymap = [("view.survey#2".to_string(), "D".to_string())].into_iter().collect();
+    let (_, new_clashes) = listing(&app, &ctx, &changed, "survey", false, true);
+    assert!(!std::sync::Arc::ptr_eq(&clashes, &new_clashes) && new_clashes.slots.contains_key(&("view.survey", 1)), "a new key is seen at once");
+}

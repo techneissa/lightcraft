@@ -8,7 +8,7 @@ use crate::LightcraftApp;
 use crate::pick::{PickRequest, Picked};
 use crate::state::{BeforeAfter, Dialog, RightPanel, ViewMode, Zoom};
 
-mod files;
+pub(crate) mod files;
 mod run;
 mod ui_commands;
 
@@ -45,7 +45,9 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
             app.session.active().is_some()
         }
         "photo.tagFromTracklog" => app.session.active().is_some() && app.services.pick_tracklog.is_some(),
-        "photo.editInPhotoCraft" | "photo.editInExternal" => app.session.active().is_some() && app.services.open_with.is_some(),
+        "photo.editInPhotoCraft" | "photo.editInExternal" => {
+            app.session.active().is_some() && app.services.open_with.is_some() && app.edit_in.is_none()
+        }
         "photo.openAsLayersInPhotocraft" => app.services.open_with.is_some() && app.session.selected().len() >= 2 && app.layers.is_none(),
         "app.exportPrevious" => app.session.active().is_some() && app.session.last_export.is_some(),
         "dialog.pasteSettings" => app.session.active().is_some() && app.session.clipboard.is_some(),

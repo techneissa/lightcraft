@@ -11,6 +11,8 @@ use serde_json::json;
 
 use crate::LightcraftApp;
 
+mod listing;
+
 /// The two built-in choices, in picker order: the value, its label and a plain-words tooltip.
 pub(crate) const CHOICES: [(CameraColour, &str, &str); 2] = [
     (CameraColour::Auto, "Camera Matching", "LightCraft matches this raw's colours to the camera's own picture. This is the default."),
@@ -72,7 +74,8 @@ pub(crate) fn rows(app: &LightcraftApp, id: PhotoId, d: &DevelopSettings) -> Vec
         .collect();
     rows.extend(crate::macos_colour::picker::row(app, id, d));
     let camera = app.session.catalog.photo(id).map(|p| p.meta.camera.clone()).unwrap_or_default();
-    for local in lightcraft_engine::camera_profiles::local_profiles_for_camera(&camera) {
+    // listed at most every 2 s: this runs on each frame the Profile menu is open
+    for local in listing::local_profiles().into_iter().filter(|p| p.is_for_camera(&camera)) {
         rows.push(Row {
             colour: CameraColour::Local,
             profile: Some(local.id.clone()),

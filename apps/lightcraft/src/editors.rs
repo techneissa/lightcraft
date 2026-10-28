@@ -10,7 +10,7 @@ const PHOTOCRAFT: &str = lightcraft_ui_egui::state::PHOTOCRAFT;
 const PHOTOCRAFT_ID: &str = "ai.storyteller.photocraft";
 
 /// How an editor is started.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Launcher {
     /// The system's default application for the file.
     Default,
@@ -141,9 +141,32 @@ fn launcher(app: &str) -> Result<Launcher, String> {
     if !app.eq_ignore_ascii_case(PHOTOCRAFT) {
         return Ok(if cfg!(target_os = "macos") { Launcher::MacApp(app.to_string()) } else { Launcher::Program(PathBuf::from(app)) });
     }
-    find_photocraft().ok_or_else(|| {
+    find_photocraft_cached().ok_or_else(|| {
         "PhotoCraft isn't installed. Get it from getartcraft.com/apps/photocraft, or give where it is in Settings ▸ External Editing.".to_string()
     })
+}
+
+/// How long a PhotoCraft lookup is reused. One Edit In asks several times (the check, layer
+/// support, each file), and on macOS the lookup may run Spotlight (`mdfind`).
+const LOOKUP_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// [`find_photocraft`], reused for [`LOOKUP_TTL`]: an install or removal shows within seconds.
+fn find_photocraft_cached() -> Option<Launcher> {
+    static CACHE: std::sync::Mutex<Option<(std::time::Instant, Option<Launcher>)>> = std::sync::Mutex::new(None);
+    cached(&CACHE, std::time::Instant::now(), find_photocraft)
+}
+
+/// The value in `cache` if it is younger than [`LOOKUP_TTL`] at `now`, else `find`'s (kept).
+fn cached<T: Clone>(cache: &std::sync::Mutex<Option<(std::time::Instant, T)>>, now: std::time::Instant, find: impl FnOnce() -> T) -> T {
+    let mut slot = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((at, v)) = slot.as_ref()
+        && now.saturating_duration_since(*at) < LOOKUP_TTL
+    {
+        return v.clone();
+    }
+    let v = find();
+    *slot = Some((now, v.clone()));
+    v
 }
 
 fn find_photocraft() -> Option<Launcher> {
@@ -416,6 +439,25 @@ mod tests {
         names.sort_by_key(|n| version_key(n));
         assert_eq!(names[2], "photocraft-1.10-x86_64.appimage");
         assert_eq!(names[0], "photocraft-1.2-x86_64.appimage");
+    }
+
+    /// The PhotoCraft lookup (Spotlight on macOS) runs once for the asks of one click, and again
+    /// once the cached answer is old.
+    #[test]
+    fn the_photocraft_lookup_is_reused_for_a_while() {
+        let cache = std::sync::Mutex::new(None);
+        let runs = std::cell::Cell::new(0);
+        let find = || {
+            runs.set(runs.get() + 1);
+            Some(Launcher::MacApp("/Applications/PhotoCraft.app".into()))
+        };
+        let t0 = std::time::Instant::now();
+        for _ in 0..4 {
+            assert_eq!(cached(&cache, t0, find), Some(Launcher::MacApp("/Applications/PhotoCraft.app".into())));
+        }
+        assert_eq!(runs.get(), 1, "one lookup for the check, the layer test and each file");
+        cached(&cache, t0 + LOOKUP_TTL, find);
+        assert_eq!(runs.get(), 2, "an old answer is looked up again");
     }
 
     #[test]

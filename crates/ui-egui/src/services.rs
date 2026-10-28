@@ -24,6 +24,9 @@ pub type OpenUrlFn = Box<dyn FnMut(&str) -> Result<(), String>>;
 /// Open a file in an application (`app` = "" for the system's default one).
 pub type OpenWithFn = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 
+/// [`OpenWithFn`] other threads can use, so an editor's slow start doesn't hold the frame.
+pub type SharedOpenWith = std::sync::Arc<dyn Fn(&str, &str) -> Result<(), String> + Send + Sync>;
+
 /// Open several files with one start of an application (`app` as for [`OpenWithFn`]).
 pub type OpenAllWithFn = Box<dyn FnMut(&[String], &str) -> Result<(), String>>;
 
@@ -117,6 +120,9 @@ pub struct Services {
     pub open_url: Option<OpenUrlFn>,
     /// Open a file in an external editor (Edit in External Editor; desktop only).
     pub open_with: Option<OpenWithFn>,
+    /// The same opener for a worker thread: with it, Edit In and Open as Layers hand their files
+    /// to the editor in the background (desktop only).
+    pub open_with_shared: Option<SharedOpenWith>,
     /// Open several files with one start of the editor (Open Original; desktop only): an editor
     /// that keeps one window takes them all. None = [`Services::open_with`] for each.
     pub open_all_with: Option<OpenAllWithFn>,

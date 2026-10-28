@@ -208,7 +208,8 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::Import { opts } => crate::import::start(app, opts),
         Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
         Dialog::LocalProfileSwitch { id, .. } => app.run("profiles.localSwitch", json!({"id": id})),
-        Dialog::MacosForCamera { photo, .. } => app.run("profiles.macosForCamera", json!({"photo": photo})),
+        // on a worker: a large library would freeze the window
+        Dialog::MacosForCamera { photo, .. } => crate::macos_colour::job::start(app, *photo, true),
         Dialog::MovePhotos { ids, folder, dont_ask, library, .. } => {
             // another library opened meanwhile (from the menu bar, an agent): these numbers are
             // other photos there
