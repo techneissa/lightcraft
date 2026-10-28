@@ -66,6 +66,7 @@ Local folder: `~/Documents/workspace/gitClones/lightcraft`. Git remembers how a 
 
 | Feature | Branch | Own files | Hooks in official files | Tests |
 |---|---|---|---|---|
+| Keyboard shortcuts, VS Code style: two shortcuts per command (the first is what menus and the Command Palette show), two-key chords with a hint (⌘K then C), right-click Assign Shortcut… on icons, buttons, menu items and palette rows, a wider Keyboard Shortcuts window (Action / Shortcut 1 / Shortcut 2 / Where, menu groups, conflict highlight, Reset to Default). Slot 2 is the keymap entry `<id>#2`, so an old `ui.json` loads unchanged | `feat/shortcut-editing` | `crates/ui-egui/src/keybinds.rs` and `keybinds/` (`chord.rs`, `model.rs`, `runtime.rs`, `capture.rs`, `context.rs`, `overlay.rs`, `window.rs`), `crates/ui-egui/src/tests/shortcut_editing.rs` | `shortcuts.rs` (`binding`, `conflicts`, `assign`, `reset`, `set_shortcut` delegate to `keybinds::model`; chord poll, second shortcuts and the box's keys in `handle` / `pressed_commands`), `dialogs/keymap.rs` (now one re-export of `keybinds::window::body`), `apps/lightcraft/src/native_menu.rs` (a waiting chord drops the accelerators), `panels/photo_menu.rs` (right-click on a command row), `shortcuts.rs` also trims `ALIASES` (plain second keys became `keybinds::model::SECOND_DEFAULTS`), `menus/menubar.rs` (`shortcut_text` and `native_item_presentation` take chords, right-click on a menu item), `menus/run.rs` + `menus/ui_commands.rs` (`app.assignShortcut`), `widgets.rs` (`icon_button` and `text_button` attach the menu), `panels/command_palette.rs` (right-click on a row), `app/frame.rs` (`keybinds::overlay::show`), `control.rs` (`shortcut2`), `lib.rs` + `app.rs` (module, `keybinds` field), `tests/keymap.rs` and `shortcuts/tests.rs` (a recorded key now waits for Enter), `docs/parity-checklist.md` | `keybinds`, `shortcut_editing`, `tests::keymap`, `shortcuts::` |
 | Export Animated GIF (File menu), quality above ffmpeg | `feat/animated-gif-export` | `crates/codecs/src/animated_gif.rs` and `animated_gif/quantize.rs`, `crates/engine/src/animated_gif.rs`, `crates/ui-egui/src/dialogs/animated_gif.rs` | engine `lib.rs` (module, session field), `cmd/export.rs` (two commands), `slideshow_export.rs` (helpers made `pub(crate)`); UI dialog, menu and frame-loop hooks; `Cargo.toml` (`gif`, `color_quant`) | `animated_gif` in codecs, engine and ui-egui |
 | Numbers 1, 2, 3 on selected photos (the GIF's order) | `feat/animated-gif-export` | `crates/ui-egui/src/panels/selection_order.rs` | `panels.rs`, `panels/grid.rs` (3 lines); engine `view.rs` (Shift-click adds the range from the anchor outward) | `selection_order` |
 | Draggable Before/After split line, Split button | `feat/draggable-split` | `crates/ui-egui/src/panels/split_divider.rs` | `panels.rs`, `state.rs`, `region.rs`, `panels/detail.rs`, `icons.rs`, `panels/bottombar.rs` | `split_divider`, `before_after` |
@@ -92,10 +93,21 @@ cargo test -p lightcraft-engine --lib -- animated_gif denoise prefs quick_jobs l
 cargo test -p lightcraft-lensdb
 cargo test -p lightcraft-develop
 cargo test -p lightcraft-catalog
-cargo test -p lightcraft-ui-egui --lib -- animated_gif selection_order split_divider before_after command_palette edit_all photo_menu topbar_items titlebar loupe_stand_in the_loupe_says denoise settings profile camera_colour thumbnail
+cargo test -p lightcraft-ui-egui --lib -- keybinds shortcut_editing tests::keymap shortcuts:: animated_gif selection_order split_divider before_after command_palette edit_all photo_menu topbar_items titlebar loupe_stand_in the_loupe_says denoise settings profile camera_colour thumbnail
 ```
 
 ## Known failures on this Mac (not caused by the fork)
 
 - `accessibility::every_interactive_node_has_a_name_in_every_view_and_tool`: fails on official `main` too (a "▸" the
   test fonts can't draw).
+
+## Known failures on this Mac (not caused by the fork)
+
+- `accessibility::every_interactive_node_has_a_name_in_every_view_and_tool`: fails the same way on official `main`
+  (59a5d00c), with and without `CRAFT_FONTS_DIR=…/craft-fonts`: `No glyph for "▸" (U+25B8) in Proportional`, from the
+  "▸" in official strings such as the Reference-view message. Neither the bundled Inter nor craft-fonts has that glyph,
+  so the fonts cannot fix it. Official strings are left alone (changing them would conflict on every update); when
+  official fixes them, this note can go. Checked 2026-10-28. In the fork the test would also have failed on the top
+  bar's unnamed click area; that one is fixed (`panels/topbar.rs`).
+- `cargo xtask ci` stops at its `test` step because of it; run the rest by hand (`cargo xtask parity`, `layers`,
+  `assets`).

@@ -40,6 +40,7 @@ impl LightcraftApp {
             native_menu: false,
             native_shortcuts: Default::default(),
             recording_shortcut: None,
+            keybinds: Default::default(),
             text_focus: false,
             headless_host: false,
             notices: vec![],

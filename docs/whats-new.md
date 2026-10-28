@@ -2,7 +2,22 @@
 
 ## 2026-10-28
 
-### Choose what the top bar shows
+### Keyboard Shortcuts: Two per Command, Chords, Right-Click to Assign
+- Every command can have **two shortcuts**. The first is the one menus, tooltips and the Command Palette show; the
+  second works too. Set either in Help ▸ Keyboard Shortcuts (⌘/): click a shortcut, press the keys, press Enter.
+  The old extra keys (⌘D for Select None, F6, F7 and F8 for the panels, Space for Zoom Toggle and the like) are now
+  declared Shortcut 2 values you can change or remove; ↺ brings them back.
+- A shortcut can be a **chord**, two keys one after the other (⌘K, then C). After the first key a small card
+  lists what each next key does; Esc, another key or a 4 second wait cancels it. A single key that is also the first
+  key of a chord counts as a conflict, like two commands with the same key.
+- **Right-click** an icon, a button, a menu item, a row of the photo menu or a Command Palette row and choose **Assign Shortcut…**: press the
+  keys, Enter saves, Esc cancels, Remove clears it. It says which command already has the keys and takes them over
+  when you save.
+- The Keyboard Shortcuts window is wider, with columns (Action, Shortcut 1, Shortcut 2, Where), a heading per menu, a
+  highlight on a key two commands share, ↺ to restore one command and Reset All to Default. Settings from before load
+  unchanged.
+
+### Choose What the Top Bar Shows
 - Any button on the top bar can be turned off: Settings ▸ Top Bar has a check box for each (My Photos Panel, Back
   and Forward, Filters, Appearance Mode, Activity, Import Photos, Export, Keyboard Shortcuts, Library Status), or
   right-click an empty spot on the bar. A button that is off still works from the menu bar; each row says where.
@@ -10,7 +25,7 @@
   if saving fails.
 - The Discord button is gone from the top bar. Help ▸ Join the ArtCraft Discord… and the About window still have it.
 
-### Arrange the photo menu
+### Arrange the Photo Menu
 - The menu a right-click on a photo opens can be arranged in Settings ▸ Photo Menu (or its Customize Menu… item):
   drag a row to move it, × takes it out, and the list beside it adds any item back, or any command from the menu bar,
   with a search box to find it. With a row picked, ↑ / ↓ pick another, ⌥↑ / ⌥↓ move it and Delete takes it out. Add
@@ -19,12 +34,12 @@
 - With one photo selected, the menu leaves out what needs several: Photo Merge, Export Animated GIF…, and Group into
   Stack in the Stack submenu.
 
-### Taller file windows on the Mac
+### Taller File Windows on the Mac
 - The windows that ask where to save a file or which file to open (Export Animated GIF…, Import, Open Library and
   the rest) now open at least 520 points tall instead of about 360, so more of the folder list shows. Drag any edge
   to make them bigger or smaller; the next one opens at the size you left.
 
-### Auto AI Denoise when a photo is opened
+### Auto AI Denoise When a Photo Is Opened
 - Settings ▸ AI Denoise ▸ **Auto AI Denoise** (off by default) switches AI Denoise on for a raw photo shot at your
   **ISO Threshold** (default 6400) or above when you open it in Detail. It is one undo step, stays on the photo, and
   is never applied again to a photo you undid or switched off.

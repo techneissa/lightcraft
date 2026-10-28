@@ -243,6 +243,8 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         state.reveal = true;
     }
     let mut run: Option<Entry> = None;
+    // a right-click on a row: the palette closes and the Assign Shortcut box opens for it
+    let mut assign: Option<String> = None;
     if enter {
         run = shown.get(state.selected).filter(|e| e.enabled).cloned();
     }
@@ -310,8 +312,12 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 scroll.show_rows(ui, ROW_H, shown.len(), |ui, range| {
                     for index in range {
                         let Some(entry) = shown.get(index) else { continue };
-                        if row(ui, &t, entry, index, &mut state.selected, moved).clicked() && entry.enabled {
+                        let r = row(ui, &t, entry, index, &mut state.selected, moved);
+                        if r.clicked() && entry.enabled {
                             run = Some(entry.clone());
+                        }
+                        if r.secondary_clicked() {
+                            assign = Some(entry.id.clone());
                         }
                     }
                 })
@@ -319,6 +325,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             state.scroll = out.inner.state.clamped_offset().y;
         });
     if modal.backdrop_response.clicked() {
+        return;
+    }
+    if let Some(id) = assign {
+        crate::keybinds::context::request(ctx, &id);
         return;
     }
     if let Some(entry) = run {
