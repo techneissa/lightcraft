@@ -320,3 +320,29 @@ impl Context {
         }
     }
 }
+
+/// `app.shortcutContexts`: every context key with its values and what it holds now (the keys of a
+/// condition, for agents and the control channel).
+pub fn listing(app: &LightcraftApp) -> serde_json::Value {
+    let ctx = egui::Context::default();
+    let now = Context::of_app(app, &ctx);
+    let keys: Vec<serde_json::Value> = KEYS
+        .iter()
+        .enumerate()
+        .map(|(i, k)| {
+            let values: Vec<serde_json::Value> = match &k.kind {
+                Kind::Enum(values) => values.iter().map(|v| serde_json::json!({"name": v.name, "chip": v.chip, "description": v.desc})).collect(),
+                Kind::Bool { .. } => vec![serde_json::json!("true"), serde_json::json!("false")],
+            };
+            serde_json::json!({
+                "key": k.name,
+                "title": k.title,
+                "description": k.desc,
+                "type": if k.is_bool() { "bool" } else { "enum" },
+                "values": values,
+                "now": now.value_name(i),
+            })
+        })
+        .collect();
+    serde_json::json!({"keys": keys, "grammar": "key, key == value, key != value, !x, x && y, x || y, (x)"})
+}

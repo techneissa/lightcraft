@@ -227,7 +227,7 @@ fn the_window_edits_both_slots() {
         assert!(has(&h, id), "{id}");
     }
     let shown = text(&h);
-    for title in ["Action", "Shortcut 1", "Shortcut 2", "Where"] {
+    for title in ["Action", "Shortcut 1", "Shortcut 2", "When"] {
         assert!(shown.contains(title), "{title}: {shown}");
     }
     click(&mut h, "button:shortcut2-view.survey");

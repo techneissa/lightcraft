@@ -10,6 +10,7 @@
 //!   Shortcuts window, a right-click ([`context`]) or the `app.assignShortcut` command.
 //! - [`window`]: the Keyboard Shortcuts window itself.
 
+pub mod blocked;
 pub mod capture;
 pub mod chord;
 pub mod context;
@@ -26,6 +27,10 @@ pub struct State {
     pub pending: Option<runtime::Pending>,
     /// The Assign Shortcut box, while it is open.
     pub capture: Option<capture::Capture>,
+    /// The condition being typed in the Keyboard Shortcuts window.
+    pub when_edit: Option<window::WhenEdit>,
+    /// The notice about conditions that could not be read was shown.
+    pub damage_noticed: bool,
 }
 
 /// `app.assignShortcut {id, slot?}`: open the Assign Shortcut box for a command (`slot` 1 or 2; the

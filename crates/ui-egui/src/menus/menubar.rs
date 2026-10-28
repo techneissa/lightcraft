@@ -76,7 +76,9 @@ pub fn native_item_presentation<'a>(
 ) -> (String, Option<&'a str>) {
     let label = display_item_label(id, params, label);
     // a chord is no key equivalent: the native menu gets its text in the label instead
-    if let Some(sc) = shortcut.filter(|sc| crate::keybinds::chord::is_chord(sc)) {
+    // a shortcut with a condition is no key equivalent either: AppKit would run it everywhere
+    let conditional = |sc: &str| native_menu_delivers(sc) && crate::keybinds::model::conditions::text(keymap, id).is_some();
+    if let Some(sc) = shortcut.filter(|sc| crate::keybinds::chord::is_chord(sc) || conditional(sc)) {
         return (format!("{label} ({})", shortcut_text(sc, true)), None);
     }
     let borrowed = matches!(id, "view.photoGrid" | "view.squareGrid") && shortcut != crate::shortcuts::shortcut_of(keymap, id);

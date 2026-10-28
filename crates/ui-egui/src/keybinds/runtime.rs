@@ -51,7 +51,8 @@ pub fn consume_keys(ctx: &egui::Context) {
 /// shortcuts, while nothing else owns the keyboard).
 pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) -> Poll {
     let now = ctx.input(|i| i.time);
-    let chords = model::chords(&app.ui.settings.keymap);
+    let cx = super::when::Context::of_app(app, ctx);
+    let chords = model::chords_in(&app.ui.settings.keymap, &cx);
     if let Some(p) = app.keybinds.pending {
         if now - p.since > TIMEOUT {
             app.keybinds.pending = None;
@@ -100,8 +101,9 @@ fn follow(app: &mut LightcraftApp, ctx: &egui::Context, p: Pending, chords: &[(&
 }
 
 /// The chords that continue the pending leader: the next step and its command.
-pub fn continuations(app: &LightcraftApp, p: &Pending) -> Vec<(Step, &'static str)> {
-    let mut v: Vec<(Step, &'static str)> = model::chords(&app.ui.settings.keymap)
+pub fn continuations(app: &LightcraftApp, ctx: &egui::Context, p: &Pending) -> Vec<(Step, &'static str)> {
+    let cx = super::when::Context::of_app(app, ctx);
+    let mut v: Vec<(Step, &'static str)> = model::chords_in(&app.ui.settings.keymap, &cx)
         .into_iter()
         .filter(|(_, [first, _])| *first == p.first)
         .map(|(id, [_, second])| (second, id))

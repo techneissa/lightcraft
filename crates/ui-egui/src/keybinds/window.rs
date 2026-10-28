@@ -1,33 +1,38 @@
-//! Help ▸ Keyboard Shortcuts (⌘/): every command with its two shortcuts, grouped by menu, searchable
-//! and editable. Click a shortcut to open the Assign Shortcut box ([`super::capture`]), × removes
-//! it, ↺ restores the declared one. A shortcut that another command also has is drawn in the
-//! caution colour. Changes go through `app.setShortcut`, the same path as the right-click menu.
+//! Help ▸ Keyboard Shortcuts (⌘/): every command with its two shortcuts and the condition ("When")
+//! they work under, grouped by menu, searchable and editable. Click a shortcut to open the Assign
+//! Shortcut box ([`super::capture`]), × removes it, ↺ restores the declared one; click a condition
+//! to type it with autocomplete, or press + to build one from menus ([`when_cell`]). A shortcut that
+//! another command also has while both conditions can hold is drawn in the caution colour, with the
+//! reason. Changes go through `app.setShortcut`, the same path as the right-click menu.
 
 use std::collections::HashMap;
 
 use egui::{Align, Layout, RichText, Sense, UiBuilder, vec2};
 
 use crate::LightcraftApp;
-use crate::shortcuts::{self, Bindable, CONTEXTUAL, Keymap};
+use crate::shortcuts::{self, Bindable, Keymap};
 use crate::theme::Tokens;
 use crate::widgets::register;
 
 use super::chord::{self, Step};
 use super::{capture, model};
 
+mod when_cell;
+pub use when_cell::Edit as WhenEdit;
+
 const SEARCH: &str = "field:shortcutsSearch";
 const SEARCH_ID: &str = "shortcuts-search";
 const SHOW_ALL_ID: &str = "shortcuts-show-all";
 
 const ROW_H: f32 = 30.0;
-const ACTION_W: f32 = 250.0;
+const ACTION_W: f32 = 230.0;
 const SLOT_BUTTON_W: f32 = 118.0;
 const CLEAR_W: f32 = 22.0;
 const SLOT_W: f32 = SLOT_BUTTON_W + CLEAR_W + 6.0;
-const WHERE_W: f32 = 150.0;
+const WHEN_W: f32 = 250.0;
 const RESET_W: f32 = 28.0;
 const GAP: f32 = 10.0;
-const TOTAL_W: f32 = ACTION_W + 2.0 * SLOT_W + WHERE_W + RESET_W + 4.0 * GAP;
+const TOTAL_W: f32 = ACTION_W + 2.0 * SLOT_W + WHEN_W + RESET_W + 4.0 * GAP;
 
 /// A command as the list shows it.
 struct Row {
@@ -84,7 +89,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
 
     let needle = search.trim().to_lowercase();
     let rows = rows(app, &keymap, &needle, show_all, mac);
-    let clashes = clashes(&keymap);
+    let clashes = Clashes::of(&keymap);
     header(ui, t);
     // a fixed height, so the dialog doesn't jump around while the search narrows the list
     // (shorter on a short window, so the dialog fits it)
@@ -105,13 +110,15 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
         fixed_keys(ui, t, mac, &needle, &keymap);
     });
+    when_cell::damaged_note(app, ui, t);
+    clash_note(ui, t, &clashes, &keymap, mac);
 }
 
 /// The column titles.
 fn header(ui: &mut egui::Ui, t: &Tokens) {
     let (rect, _) = ui.allocate_exact_size(vec2(TOTAL_W, 22.0), Sense::hover());
     let mut x = rect.left();
-    for (title, w) in [("Action", ACTION_W), ("Shortcut 1", SLOT_W), ("Shortcut 2", SLOT_W), ("Where", WHERE_W)] {
+    for (title, w) in [("Action", ACTION_W), ("Shortcut 1", SLOT_W), ("Shortcut 2", SLOT_W), ("When", WHEN_W)] {
         ui.painter().text(egui::pos2(x + 4.0, rect.center().y), egui::Align2::LEFT_CENTER, crate::i18n::tr(title), t.semibold(11.5), t.text_label);
         x += w + GAP;
     }
@@ -150,7 +157,8 @@ fn rows(app: &LightcraftApp, keymap: &Keymap, needle: &str, show_all: bool, mac:
     rows
 }
 
-/// For each binding that shares its key with another command's (contextual pairs excepted): who.
+/// For each binding that shares its key with another command's while the two conditions can hold
+/// together: who. Commands separated by conditions (the X pair) are no clash.
 fn clashes(keymap: &Keymap) -> HashMap<(&'static str, usize), Vec<&'static str>> {
     let mut by_first: HashMap<String, Vec<(&'static str, usize, Vec<Step>)>> = HashMap::new();
     for b in shortcuts::bindable() {
@@ -166,14 +174,62 @@ fn clashes(keymap: &Keymap) -> HashMap<(&'static str, usize), Vec<&'static str>>
     for group in by_first.values().filter(|g| g.len() > 1) {
         for (id, slot, steps) in group {
             for (other, _, theirs) in group {
-                let paired = CONTEXTUAL.iter().any(|(x, y)| (x == id && y == other) || (y == id && x == other));
-                if other != id && !paired && chord::overlaps(steps, theirs) {
+                if other != id && chord::overlaps(steps, theirs) && model::conditions::overlap(keymap, id, other).is_some() {
                     out.entry((*id, *slot)).or_default().push(other);
                 }
             }
         }
     }
     out
+}
+
+/// The clashes of a keymap, and why each command's is one.
+struct Clashes {
+    slots: HashMap<(&'static str, usize), Vec<&'static str>>,
+    /// Per command: the other command it clashes with and the reason, in words.
+    reasons: HashMap<&'static str, (&'static str, String)>,
+}
+
+impl Clashes {
+    fn of(keymap: &Keymap) -> Self {
+        let slots = clashes(keymap);
+        let mut reasons = HashMap::new();
+        for ((id, _), others) in &slots {
+            if let Some(other) = others.first() {
+                reasons.entry(*id).or_insert((*other, reason(keymap, id, other)));
+            }
+        }
+        Clashes { slots, reasons }
+    }
+}
+
+/// Why two commands on one key clash: when both work.
+fn reason(keymap: &Keymap, id: &str, other: &str) -> String {
+    use super::when::expr;
+    let (a, b) = (model::conditions::of(keymap, id), model::conditions::of(keymap, other));
+    match expr::overlap(a.as_ref(), b.as_ref()) {
+        _ if a.is_none() && b.is_none() => crate::i18n::tr("both always work").to_string(),
+        Some(cx) => crate::i18n::tr_format!("both work when {}", expr::describe(&cx, a.as_ref(), b.as_ref())),
+        None => String::new(),
+    }
+}
+
+/// Under the list: the first clash in words, in the caution colour.
+fn clash_note(ui: &mut egui::Ui, t: &Tokens, clashes: &Clashes, keymap: &Keymap, mac: bool) {
+    let Some((id, (other, why))) = clashes.reasons.iter().min_by_key(|(id, _)| **id) else { return };
+    let name = |id: &str| shortcuts::find_bindable(id).map_or(id.to_string(), |b| crate::i18n::tr(b.label).to_string());
+    let key = (0..model::SLOTS)
+        .find(|slot| clashes.slots.contains_key(&(*id, *slot)))
+        .and_then(|slot| model::effective(keymap, id, slot))
+        .map(|sc| chord::text(sc, mac))
+        .unwrap_or_default();
+    let more = clashes.reasons.len().saturating_sub(2);
+    ui.add_space(4.0);
+    let mut line = crate::i18n::tr_format!("{} and {} share {}: {}. Give one of them a condition to tell them apart.", name(id), name(other), key, why);
+    if more > 0 {
+        line.push_str(&crate::i18n::tr_format!(" {} more conflicts.", more));
+    }
+    ui.label(RichText::new(line).size(11.5).color(t.caution));
 }
 
 /// One command: its name, two shortcut cells, the menu it is in and a restore button.
@@ -183,7 +239,7 @@ fn draw_row(
     t: &Tokens,
     row: &Row,
     keymap: &Keymap,
-    clashes: &HashMap<(&'static str, usize), Vec<&'static str>>,
+    clashes: &Clashes,
     mac: bool,
 ) {
     let b = row.b;
@@ -208,6 +264,7 @@ fn draw_row(
             "view.softProof" => format!("{} — {}", b.id, crate::i18n::tr("In Photo Grid and Square Grid: expand or collapse the stack")),
             _ => b.id.to_string(),
         };
+        let hover = if row.path.is_empty() { hover } else { format!("{hover}\n{}", row.path) };
         ui.add(egui::Label::new(name).truncate()).on_hover_text(hover);
     });
     x += ACTION_W + GAP;
@@ -215,16 +272,17 @@ fn draw_row(
     for slot in 0..model::SLOTS {
         ui.scope_builder(UiBuilder::new().max_rect(column(x, SLOT_W)).layout(Layout::left_to_right(Align::Center)), |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            slot_cell(app, ui, t, row, slot, clashes, mac);
+            slot_cell(app, ui, t, row, slot, &clashes.slots, mac);
         });
         x += SLOT_W + GAP;
     }
 
-    ui.scope_builder(UiBuilder::new().max_rect(column(x, WHERE_W)).layout(Layout::left_to_right(Align::Center)), |ui| {
-        let text = if row.path.is_empty() { RichText::new("—") } else { RichText::new(&row.path) };
-        ui.add(egui::Label::new(text.size(11.5).color(t.text_dim)).truncate());
+    let reason = clashes.reasons.get(b.id).map(|(other, why)| {
+        let name = shortcuts::find_bindable(other).map_or(*other, |o| crate::i18n::tr(o.label));
+        crate::i18n::tr_format!("Same key as {}: {}.", name, why)
     });
-    x += WHERE_W + GAP;
+    when_cell::cell(app, ui, t, b.id, column(x, WHEN_W), reason.as_deref());
+    x += WHEN_W + GAP;
 
     ui.scope_builder(UiBuilder::new().max_rect(column(x, RESET_W)).layout(Layout::left_to_right(Align::Center)), |ui| {
         let r = ui.add_enabled(changed, egui::Button::new("↺").small()).on_hover_text(match b.default {
