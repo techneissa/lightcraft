@@ -49,7 +49,9 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     let cancel = Arc::new(AtomicBool::new(false));
     let (tx, rx) = channel();
     let (p, c) = (progress.clone(), cancel.clone());
-    let guard = app.session.activity.start("export", "Exporting", Cancel::Flag(cancel.clone()));
+    // one batch row: the photos done, the time left; the export says how it went itself
+    let guard = app.session.activity.start_batch("export", "Exporting", Cancel::Flag(cancel.clone()));
+    guard.reports_itself();
     guard.progress(0, total as u64);
     let row = guard.handle();
     // translated here: the language is the UI thread's, and the worker would show English
@@ -239,6 +241,14 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         Ok(r) => {
             let cancelled = matches!(&r, Ok((_, _, true)));
             let total = task.total;
+            // the batch's summary (`activity.list` → finished): photos placed, the failures and why
+            if let Ok((files, _, _)) = &r {
+                task.guard.progress(files.len() as u64, total as u64);
+                for f in files.iter().filter(|f| f.get("error").is_some()) {
+                    let name = f.get("file").and_then(Value::as_str).unwrap_or("");
+                    task.guard.count_failed(&format!("{name}: {}", f["error"].as_str().unwrap_or("error")));
+                }
+            }
             app.export = None;
             // Photos refused (permission, not installed…): leave the way out on screen longer
             let photos_failed = matches!(&r, Ok((_, Some(p), _)) if p.get("error").is_some());
@@ -282,6 +292,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             let (done, current) = task.progress.lock().map(|g| g.clone()).unwrap_or_default();
+            // `done` here counts photos placed, so the batch's time left follows finished photos
             task.guard.progress(done as u64, task.total as u64);
             task.guard.detail(&current);
         }

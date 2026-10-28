@@ -2,9 +2,17 @@
 
 Edit ▸ Detail ▸ **AI Denoise** is a per-photo switch above **Amount** (0–100).
 Turning it on starts at 50, or preserves an already positive Amount. Turning it off
-preserves Amount and mixes none of the cleaned picture. It affects only the requesting
-photo, independently of Auto Sync, and is undoable. Manual luminance and colour noise
-reduction remain separate controls.
+preserves Amount and mixes none of the cleaned picture. Like the sliders, it follows
+Auto Sync: with Auto Sync on, every selected raw photo switches with
+the active one, in one undo step, and their pictures are made in the background under
+one row in the activity stack ("AI Denoise · 37 of 200 · about 6 min left"; ✕ stops the
+batch, and its photos wait until they are asked for again). Agents pass `ids` to switch
+exactly those photos. Manual luminance and colour noise reduction remain separate
+controls.
+
+**At import:** Settings ▸ Import ▸ **AI Denoise from** (Off, ISO 800 … 12800;
+`library.preferences {import: {denoiseAboveIso}}`) switches AI Denoise on for new raw
+photos shot at that ISO or above, and queues their pictures after the import.
 
 If no model is selected, turning it on opens **Settings ▸ AI Denoise** without changing
 the photo. After installation, the pending request enables the original photo even if
@@ -16,12 +24,37 @@ An active slider gesture finishes before the pending action resumes.
 
 **No model weights are bundled.** Models live in the per-user `denoise-models` folder
 (override with `LIGHTCRAFT_DENOISE_MODELS`). Settings provides **Install from file…**
-for a user-supplied ONNX file with a `denoise-model.json` beside it. The default build
-offers no model downloads. The separate `rawnind-model` Cargo feature enables the
+for a user-supplied ONNX file with a `denoise-model.json` beside it. The default library build
+offers no model downloads (see LightCraft's own model below). The separate `rawnind-model` Cargo feature enables the
 pinned RawNIND offer only when a release's model policy permits it.
 Terms must be acknowledged before installation or
 download. Downloads use the shared pure-Rust `lightcraft-fetch` client, with resume,
 progress, cancellation, size limits and SHA-256 verification.
+
+### LightCraft's own model
+
+**LightCraft Denoise (Bayer) 0.1.0** is a U-Net (7.8 M weights, 31 MB `.onnx`) trained by LightCraft
+contributors with the open tools in `tools/denoise-train` on 705 clean low-ISO raws from raw.pixls.us, each
+CC0, with synthetic sensor noise calibrated on real cameras (numbers only). Its weights are licensed
+**MIT OR Apache-2.0**, like LightCraft, so any use, commercial work included, is allowed. The `lightcraft-model`
+Cargo feature offers it as a download (Settings ▸ AI Denoise); the desktop app turns that feature on.
+
+It is downloaded from two sources, tried in order (a decision of 2026-10-25):
+
+1. the project's release asset,
+   `https://github.com/storytold/lightcraft/releases/download/denoise-model-0.1.0/lightcraft-bayer-0.1.0.onnx`
+   (a maintainer uploads the file there: until then this source fails and the next one is used);
+2. `https://radfilms.com.au/lightcraft/models/lightcraft-bayer-0.1.0.onnx`, the trainer's site, with the same file.
+
+A source that can't be reached, refuses, or sends a file of another size or SHA-256 is passed over for the next;
+a wrong file is never kept, whichever source sent it, and with both failing the message names each. The pinned
+size (31,091,398 bytes) and SHA-256 (`abd3c4cd…3247dea9`) are checked wherever the file comes from. There is no
+third source: `LIGHTCRAFT_DENOISE_MODEL_URL` (an `https://` address) replaces both with that one address, for
+maintainers who host the same file themselves.
+
+Measured on held-out pictures (PSNR in tone space): ISO 800 43.4 dB, ISO 3200 42.4 dB, ISO 12800 40.6 dB, a dark
+ISO 25600 36.4 dB (demosaicing without noise reduction: 38.1 / 36.9 / 33.1 / 22.8 dB). On a 45 MP EOS R5 C photo
+with added noise it beat the best manual noise reduction by 9–15 dB.
 
 RawNIND's optional ONNX weights are **GPL-3.0**, as recorded in the pinned model catalog.
 They are downloaded separately after consent and read by our own Rust executor.
@@ -166,9 +199,26 @@ the tile's samples as little-endian half floats, byte-shuffled (low bytes, then 
 ← {"ok":false,"error":"…"}
 ```
 
+## Auto AI Denoise when a photo is opened
+
+Settings ▸ AI Denoise ▸ **Auto AI Denoise** (off by default): **Denoise High-ISO Photos When Opened** and an
+**ISO Threshold** (default 6400, "and above"). When a raw photo with a known ISO at or above the threshold becomes
+the open photo in the Detail view, AI Denoise is switched on for it as one undo step named "Auto AI Denoise"
+(`denoise.autoOpen`, the same switch as `denoise.toggle`, so it is stored on the photo, shows in History and survives
+a restart). Its picture is made by the usual queue under the batch row in the activity stack, whose ✕ stops it.
+
+It acts **once per photo**: the photos it handled (and photos whose AI Denoise switch or Amount was already set) are
+recorded in `auto-denoise.json` in the library folder (written a couple of seconds after the change and on close, once
+the catalog edit is saved), so an undo, a Reset or a switch-off is never undone by the next open. A file that is too
+large (8 MB) or damaged is left as it is and turns Auto AI Denoise off for the session (`recordUnreadable`). Without a model nothing is changed or recorded (the photo is handled the first time it is opened once a model
+is installed), and the app says so once per session. Settings: `denoise.settings {autoOpen, autoIso}`.
+
+This is the open-time counterpart of Settings ▸ Import ▸ **AI Denoise from**, which switches it on for new photos at
+import (`library.preferences {import: {denoiseAboveIso}}`, per library); both can be on.
+
 ## Commands and limits
 
-UI, CLI, control channel and MCP dispatch `denoise.toggle`, `denoise.settings`,
+UI, CLI, control channel and MCP dispatch `denoise.toggle`, `denoise.autoOpen`, `denoise.settings`,
 `denoise.queue`, `.cancel`, `.status`, `.pump`, `.clear`, and `denoise.models.*`
 (`list`, `install`, `download`, `downloads`, `downloadCancel`, `test`, `remove`,
 `select`). The develop control is `enhance.denoise`.

@@ -36,6 +36,7 @@ use crate::merge::ByteReader;
 use crate::model_download::Downloads;
 use crate::{Selection, Session};
 
+mod auto;
 mod gpu;
 mod model;
 mod products;
@@ -58,7 +59,7 @@ pub use model::{Serving, serving};
 pub(crate) use products::eligible;
 #[cfg(test)]
 pub(crate) use products::{JobSpec, MakeError, Progress, make_product};
-pub use settings::{DEFAULT_CACHE_GB, DIR, EXT};
+pub use settings::{AUTO_ISO_RANGE, DEFAULT_AUTO_ISO, DEFAULT_CACHE_GB, DIR, EXT};
 pub(crate) use settings::{Settings, forget_gpu_set_ups, installed_models, read_capped, read_settings, write_atomic, write_settings};
 pub(crate) use state::State;
 pub use state::{Pace, PhotoState};

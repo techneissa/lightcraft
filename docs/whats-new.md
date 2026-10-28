@@ -16,6 +16,11 @@
   the rest) now open at least 520 points tall instead of about 360, so more of the folder list shows. Drag any edge
   to make them bigger or smaller; the next one opens at the size you left.
 
+### Auto AI Denoise when a photo is opened
+- Settings ▸ AI Denoise ▸ **Auto AI Denoise** (off by default) switches AI Denoise on for a raw photo shot at your
+  **ISO Threshold** (default 6400) or above when you open it in Detail. It is one undo step, stays on the photo, and
+  is never applied again to a photo you undid or switched off.
+
 ## 2026-10-27
 
 ### Export the selected photos as an animated GIF
@@ -54,6 +59,25 @@
   eye stay with their own photo.
 - The AI Denoise switch and its Amount now reach every selected photo too. Before, the switch changed only the photo you
   were editing even with Auto Sync on.
+
+## 2026-10-25
+
+### AI Denoise for a whole shoot
+- **AI Denoise follows Auto Sync**, like the sliders: with Auto Sync on, the switch turns it on (or off) for every
+  selected raw photo in one undo step, and their denoised pictures are made in the background.
+- **AI Denoise at import:** Settings ▸ Import ▸ **AI Denoise from** (ISO 800 … 12800) switches it on for new raw photos
+  shot at that ISO or above.
+- **One progress row for a job over many photos.** AI Denoise and exports show one row in the activity stack:
+  "37 of 200 · about 6 min left · 2 failed". "Show each photo" opens the rows of the photos in progress. When the job
+  ends, a note says how it went ("AI Denoise: 198 done, 2 failed: …").
+
+### AI Denoise with LightCraft's own model
+- Settings ▸ AI Denoise offers **LightCraft Denoise (Bayer) 0.1.0**, a model trained by LightCraft contributors on
+  CC0 raw photos and licensed MIT OR Apache-2.0 like LightCraft, so commercial work is fine. It downloads once
+  (31 MB) after its terms are shown, from the project's release, or from the trainer's site when that fails; the
+  file is checked against its SHA-256 whichever site served it.
+- Without a model the panel says so plainly and points to Luminance and Color under Detail; a model you were
+  given installs with **Install from file…**.
 
 ## 2026-10-24
 
