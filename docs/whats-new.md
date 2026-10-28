@@ -2,6 +2,19 @@
 
 ## 2026-10-28
 
+### Keyboard shortcuts: two per command, chords, right-click to assign
+- Every command can have **two shortcuts**. The first is the one menus, tooltips and the Command Palette show; the
+  second works too. Set either in Help ▸ Keyboard Shortcuts (⌘/): click a shortcut, press the keys, press Enter.
+- A shortcut can be a **chord**, two keys one after the other (⌘K, then C). After the first key a small card
+  lists what each next key does; Esc, another key or a 4 second wait cancels it. A single key that is also the first
+  key of a chord counts as a conflict, like two commands with the same key.
+- **Right-click** an icon, a button, a menu item or a Command Palette row and choose **Assign Shortcut…**: press the
+  keys, Enter saves, Esc cancels, Remove clears it. It says which command already has the keys and takes them over
+  when you save.
+- The Keyboard Shortcuts window is wider, with columns (Action, Shortcut 1, Shortcut 2, Where), a heading per menu, a
+  highlight on a key two commands share, ↺ to restore one command and Reset All to Default. Settings from before load
+  unchanged.
+
 ### Choose what the top bar shows
 - Any button on the top bar can be turned off: Settings ▸ Top Bar has a check box for each (My Photos Panel, Back
   and Forward, Filters, Appearance Mode, Activity, Import Photos, Export, Keyboard Shortcuts, Library Status), or

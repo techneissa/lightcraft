@@ -358,6 +358,24 @@ one pixel.
   (clicks, keys, drags) has played out. Widget ids for `ui.clickWidget` come from `ui.widgets`
   (e.g. `button:upright-auto`). A 1600×1000 demo snapshot takes ~1–2 s (debug build).
 
+## Keyboard shortcuts
+
+`engine.commands` lists each command's `shortcut` (the primary one, shown in menus) and `shortcut2`.
+A shortcut is one key (`Cmd+Shift+K`, `F5`, `Delete`) or a chord of two keys separated by a space (`Cmd+K C`).
+
+- `app.setShortcut {id, shortcut, slot?}`: `slot` 1 (the default) or 2; `shortcut` `null` or `""` removes it.
+  Another command that had the keys (or a single key that leads the chord, or a chord the single key leads) loses
+  them; the reply names it in `removedFrom`. `app.setShortcut {id, reset: true}` restores both slots of a command.
+- `app.assignShortcut {id, slot?}`: opens the Assign Shortcut box (the first free slot by default). Press the keys
+  with `ui.key` (two presses make a chord) and `ui.key {key: "Enter"}` to save; widgets `button:assignShortcut.save`,
+  `.remove`, `.cancel`, `.slot1`, `.slot2`, `assignShortcut:keys`.
+- `app.resetShortcuts` restores every command.
+- In the Keyboard Shortcuts window the cells are `button:shortcut-<id>` (Shortcut 1) and `button:shortcut2-<id>`,
+  removed with `button:shortcutClear-<id>` / `button:shortcutClear2-<id>`, restored with `button:shortcutReset-<id>`.
+- While the first key of a chord is waiting, the hint card is the widget `chordHint`.
+- A right-click on an icon or button that runs a command opens a menu whose item is `menu:assignShortcut`; a
+  right-click on a menu item or a palette row opens the box directly.
+
 ## Import album picker
 
 In the Import Photos review, `albumPicker:import-album` opens the destination picker.
