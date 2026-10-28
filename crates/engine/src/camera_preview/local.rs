@@ -20,7 +20,7 @@ pub(crate) struct LocalOutcome {
     /// look's own tone is a placeholder).
     pub default_tone: bool,
     /// Why the photo renders as Camera Matching although it chose a local profile (permanent note under the picker).
-    pub note: Option<String>,
+    pub note: Option<lightcraft_pipeline::ColourNote>,
 }
 
 /// [`starting_colour`] for the photo's Profile choice: a local profile ([`CameraColour::Local`] with the key of its
@@ -66,7 +66,7 @@ pub(super) fn local_colour_with(
     let model = raw.metadata.model.as_deref().map(str::trim).unwrap_or_default().to_owned();
     let unavailable = |raw: &mut RawImage, id: &str, why: LocalUnavailable| {
         let (xy, t, look) = camera_matching(raw);
-        (xy, t, look, LocalOutcome { default_tone: false, note: Some(why.note(id)) })
+        (xy, t, look, LocalOutcome { default_tone: false, note: Some(lightcraft_pipeline::ColourNote { why, profile: id.to_owned() }) })
     };
     let (profile_id, profile) = match crate::camera_profiles::resolve_local(profile_key, &model) {
         Ok(found) => found,

@@ -194,7 +194,6 @@ fn a_local_profile_key_follows_the_file_and_resolves_to_the_profile() {
     assert_eq!(resolve_local(local_key("broken"), "ILCE-7M5").unwrap_err().1, LocalUnavailable::Invalid);
     assert_eq!(resolve_local(local_key("../A7 V Chart"), "ILCE-7M5").unwrap_err().1, LocalUnavailable::Missing);
     assert_eq!(resolve_local(0x5eed, "ILCE-7M5").unwrap_err().1, LocalUnavailable::Missing);
-    assert!(LocalUnavailable::Missing.note("A7 V Chart").contains("isn't available on this computer"));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

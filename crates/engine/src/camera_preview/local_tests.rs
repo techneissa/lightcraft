@@ -1,7 +1,8 @@
 //! LT5 / LT6: the local profile choice's colour (`super::local`).
 use super::local::{LocalOutcome, fit_local_look_with, local_colour_with};
 use super::*;
-use crate::camera_profiles::{self, CameraProfile};
+use crate::camera_profiles::{self, CameraProfile, LocalUnavailable};
+use lightcraft_pipeline::ColourNote;
 
 fn raw_of(format: RawFormat, model: &str, color: ColorData) -> RawImage {
     let area = lightcraft_raw::Rect::new(0, 0, 2, 2);
@@ -109,15 +110,14 @@ fn an_unusable_local_profile_renders_as_camera_matching_with_a_note() {
         .unwrap()
     };
     for (what, model, id, expect) in [
-        ("another camera", "ILCE-7M4", "A7 V Chart", "made for another camera"),
-        ("a missing file", "ILCE-7M5", "Gone", "isn't available on this computer"),
-        ("a damaged file", "ILCE-7M5", "broken", "can't be used"),
-        ("a hostile id", "ILCE-7M5", "../A7 V Chart", "isn't available on this computer"),
+        ("another camera", "ILCE-7M4", "A7 V Chart", LocalUnavailable::OtherCamera),
+        ("a missing file", "ILCE-7M5", "Gone", LocalUnavailable::Missing),
+        ("a damaged file", "ILCE-7M5", "broken", LocalUnavailable::Invalid),
+        ("a hostile id", "ILCE-7M5", "../A7 V Chart", LocalUnavailable::Missing),
     ] {
         let (_, _, look, outcome) = run(model, camera_profiles::local_key(id));
         assert_eq!(look.map(|l| l.matrix), Some(Mat3::IDENTITY), "{what}: Camera Matching's look");
-        let note = outcome.note.unwrap_or_default();
-        assert!(note.contains(expect) && note.contains("This picture uses Camera Matching"), "{what}: {note}");
+        assert_eq!(outcome.note, Some(ColourNote { why: expect, profile: id.to_owned() }), "{what}");
         assert!(!outcome.default_tone, "{what}");
     }
     // the file comes back: the profile is used again
@@ -237,5 +237,75 @@ fn a_dng_of_a_local_profile_photo_carries_the_profiles_colour() {
     let matching = starting_colour_tags_with(&mut raw, |_| (xy, t, None, LocalOutcome::default())).expect("tags");
     assert_ne!(matching.forward_matrix, fitted.forward_matrix);
     assert!(matching.profile.hue_sat_map[0].is_none());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// LT14: a preset that names a local profile, applied to a photo of another camera and to the same camera once the
+/// file is gone, applies the rest of the preset and keeps the stored id; the photo renders as Camera Matching with the
+/// note; with the file back it renders the profile again.
+#[test]
+fn a_preset_with_a_local_profile_falls_back_at_render_time_and_returns_with_the_file() {
+    use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
+    use lightcraft_develop::CameraColour;
+    use serde_json::json;
+    let d = dir("preset");
+    camera_profiles::save_named(&profile("ILCE-7M5"), &d, "A7 V Chart").unwrap();
+    let _d = camera_profiles::use_dir_for_tests(&d);
+    let mut s = crate::Session::new();
+    for (id, camera) in [(1, "SONY ILCE-7M5"), (2, "SONY ILCE-7M4"), (3, "SONY ILCE-7M5")] {
+        let mut p = Photo::new(PhotoId(id), Source::File { path: format!("/p/{id}.arw") }, &format!("{id}.arw"), "ARW", 6000, 4000, "2026-10-28");
+        p.kind = MediaKind::Raw;
+        p.meta.camera = camera.into();
+        s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
+    }
+    let pick = |s: &mut crate::Session, id: u64| s.execute("library.select", &json!({"ids": [id], "active": id})).unwrap();
+    pick(&mut s, 1);
+    s.execute("develop.profile", &json!({"camera_colour": "local", "camera_profile": "A7 V Chart"})).unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.6})).unwrap();
+    let preset = s.execute("preset.create", &json!({"name": "Chart look"})).unwrap()["id"].as_str().unwrap().to_owned();
+    for id in [2, 3] {
+        pick(&mut s, id);
+        s.execute("preset.apply", &json!({"id": preset})).unwrap();
+    }
+    // (the render of a photo as its decoder makes it: the stored settings pick the file by its key)
+    let matching = CameraLook { matrix: Mat3::IDENTITY, ..profile_look() };
+    let render = |s: &crate::Session, id: u64, model: &str| {
+        let key = crate::media::LoadOptions::of(&s.develop_of(PhotoId(id)).unwrap()).profile_key.unwrap();
+        let mut raw = raw_of(RawFormat::Arw, model, Default::default());
+        local_colour_with(
+            &mut raw,
+            key,
+            |_, _, _| None,
+            |_| {
+                let xy = Xy { x: 0.3127, y: 0.329 };
+                (xy, lightcraft_raw::color::camera_transform(&raw_of(RawFormat::Arw, model, Default::default()), xy), Some(matching.clone()))
+            },
+        )
+        .unwrap()
+    };
+    let stored = |s: &crate::Session, id: u64| {
+        let d = s.develop_of(PhotoId(id)).unwrap();
+        (d.profile.camera_colour, d.profile.camera_profile.clone(), d.light.exposure)
+    };
+    let chart = (CameraColour::Local, Some("A7 V Chart".to_string()), 0.6);
+    // the other camera: the rest of the preset is applied, the id stays, and the picture is Camera Matching with the note
+    assert_eq!(stored(&s, 2), chart);
+    let (_, _, look, outcome) = render(&s, 2, "ILCE-7M4");
+    assert_eq!(look.map(|l| l.matrix), Some(Mat3::IDENTITY));
+    assert_eq!(outcome.note, Some(ColourNote { why: LocalUnavailable::OtherCamera, profile: "A7 V Chart".into() }));
+    // the same camera with the file there: the profile
+    assert_eq!(stored(&s, 3), chart);
+    assert_eq!(render(&s, 3, "ILCE-7M5").3.note, None);
+    // the file removed: Camera Matching with the note; nothing stored changes
+    std::fs::remove_file(d.join("A7 V Chart.json")).unwrap();
+    let (_, _, look, outcome) = render(&s, 3, "ILCE-7M5");
+    assert_eq!(look.map(|l| l.matrix), Some(Mat3::IDENTITY));
+    assert_eq!(outcome.note, Some(ColourNote { why: LocalUnavailable::Missing, profile: "A7 V Chart".into() }));
+    assert_eq!(stored(&s, 3), chart, "the stored id stays");
+    // the file back: the profile again
+    camera_profiles::save_named(&profile("ILCE-7M5"), &d, "A7 V Chart").unwrap();
+    let (_, _, look, outcome) = render(&s, 3, "ILCE-7M5");
+    assert_eq!(outcome.note, None);
+    assert_ne!(look.map(|l| l.matrix), Some(Mat3::IDENTITY), "the profile's own colour");
     let _ = std::fs::remove_dir_all(&d);
 }

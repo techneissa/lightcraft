@@ -276,6 +276,28 @@ pub(super) const WM_INSET_X: ControlSpec =
 pub(super) const WM_INSET_Y: ControlSpec =
     ControlSpec { decimals: 1, ..spec("export.watermarkInsetY", "Vertical inset (% of short edge)", 0.0, 40.0, 2.5, 0.5) };
 
+/// Under the Create Preset checklist: the photo's colour source (macOS Colour, a local profile) goes into the preset with
+/// the Profile group, so say so while it does. Nothing for Camera Matching, which is the default.
+pub(super) fn colour_source_hint(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, groups: &[String]) {
+    use lightcraft_develop::CameraColour;
+    if !groups.iter().any(|g| g == "profile") {
+        return;
+    }
+    let Some(settings) = app.session.active().and_then(|id| app.session.develop_of(id)) else { return };
+    let source = match settings.profile.camera_colour {
+        CameraColour::Macos => crate::i18n::tr("macOS Colour").to_string(),
+        CameraColour::Local => {
+            let id = settings.profile.camera_profile.as_deref().unwrap_or_default();
+            let name = lightcraft_engine::camera_profiles::local_profile(id).map_or_else(|| id.to_owned(), |l| l.name.clone());
+            crate::i18n::tr_format!("local profile '{name}'", name = name)
+        }
+        CameraColour::Auto | CameraColour::Colorimetric => return,
+    };
+    let hint = crate::i18n::tr_format!("Includes the colour source ({source}).", source = source);
+    let r = ui.label(egui::RichText::new(hint).color(t.text_dim));
+    crate::widgets::register(ui, "label:presetColourSource", r.rect);
+}
+
 #[cfg(test)]
 mod watermark_position_tests {
     use super::WM_POSITIONS;

@@ -264,31 +264,7 @@ impl LocalProfile {
     }
 }
 
-/// Why a photo cannot use its local profile, and so renders as Camera Matching.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum LocalUnavailable {
-    /// No file of that name in the folder (the folder is empty, on another computer, or the file was renamed).
-    Missing,
-    /// The file is not a usable profile.
-    Invalid,
-    /// The file is a profile for another camera.
-    OtherCamera,
-}
-
-impl LocalUnavailable {
-    /// The permanent note under the Profile picker, in plain words (the setting stays as it is).
-    pub fn note(&self, id: &str) -> String {
-        match self {
-            LocalUnavailable::Missing => {
-                format!("Edited with the profile '{id}', which isn't available on this computer. This picture uses Camera Matching.")
-            }
-            LocalUnavailable::Invalid => format!("Edited with the profile '{id}', whose file can't be used. This picture uses Camera Matching."),
-            LocalUnavailable::OtherCamera => {
-                format!("Edited with the profile '{id}', which is made for another camera. This picture uses Camera Matching.")
-            }
-        }
-    }
-}
+pub use lightcraft_pipeline::LocalUnavailable;
 
 /// Most profile files read from the folder (a hostile folder must not make every refresh read gigabytes).
 const MAX_LOCAL: usize = 256;

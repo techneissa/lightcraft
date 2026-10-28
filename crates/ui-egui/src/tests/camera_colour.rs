@@ -23,7 +23,7 @@ fn edit_panel(offered: bool) -> (Headless, Arc<Mutex<Vec<LoadOptions>>>) {
 }
 
 /// [`edit_panel`] with a note the decoder gives a photo on a local profile it can't use.
-fn panel(offered: bool, note: Option<&'static str>) -> (Headless, Arc<Mutex<Vec<LoadOptions>>>) {
+fn panel(offered: bool, note: Option<lightcraft_pipeline::LocalUnavailable>) -> (Headless, Arc<Mutex<Vec<LoadOptions>>>) {
     let mut session = lightcraft_engine::Session::new();
     let mut p = Photo::new(PhotoId(1), Source::File { path: "/photos/A7V01320.ARW".into() }, "A7V01320.ARW", "ARW", 7008, 4672, "2026-10-26");
     p.kind = lightcraft_catalog::MediaKind::Raw;
@@ -39,7 +39,9 @@ fn panel(offered: bool, note: Option<&'static str>) -> (Headless, Arc<Mutex<Vec<
         img.data.fill([0.18; 3]);
         // (the decoder's note: only for a local profile other than the usable "A7 V Chart" of the test folder)
         let usable = options.profile_key == Some(usable_key);
-        let colour_note = note.filter(|_| options.colour == CameraColour::Local && !usable).map(str::to_string);
+        let colour_note = note
+            .filter(|_| options.colour == CameraColour::Local && !usable)
+            .map(|why| lightcraft_pipeline::ColourNote { why, profile: "Gone".to_string() });
         Ok((img, SourceInfo { raw: true, colorimetric: offered, colour_note, ..SourceInfo::default() }))
     });
     session.media.file_loader = Some(loader);
@@ -117,8 +119,7 @@ fn stored(h: &Headless) -> (CameraColour, Option<String>) {
 fn the_profile_menu_lists_the_local_profiles_of_the_photos_camera() {
     let dir = profiles_folder("menu");
     let _dir = lightcraft_engine::camera_profiles::use_dir_for_tests(&dir);
-    let (mut h, seen) =
-        panel(true, Some("Edited with the profile 'Gone', which isn't available on this computer. This picture uses Camera Matching."));
+    let (mut h, seen) = panel(true, Some(lightcraft_pipeline::LocalUnavailable::Missing));
     click(&mut h, "dropdown:profile");
     assert!(widget(&h, "profileMenu:cameraColour:local:A7 V Chart"), "the profile of the photo's camera is listed");
     assert!(!widget(&h, "profileMenu:cameraColour:local:Other Body"), "another body's is not");
@@ -215,5 +216,28 @@ fn closing_the_switch_question_with_esc_leaves_it_open_for_next_time() {
     assert!(h.app.session.local_profile_asked.is_empty(), "Esc is not an answer");
     crate::local_profile_offer::check(&mut h.app);
     assert!(matches!(&h.app.ui.dialog, Some(crate::state::Dialog::LocalProfileSwitch { .. })), "asked again");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// §6.8 rule 1: the Create Preset dialog says that the photo's colour source goes into the preset, while the Profile
+/// group is included and the photo is on a local profile (or macOS Colour); it says nothing for Camera Matching.
+#[test]
+fn the_create_preset_dialog_says_when_it_includes_the_colour_source() {
+    let dir = profiles_folder("preset-hint");
+    let _dir = lightcraft_engine::camera_profiles::use_dir_for_tests(&dir);
+    let (mut h, _) = edit_panel(true);
+    let open = |h: &mut Headless| {
+        h.app.ui.dialog = Some(crate::state::Dialog::create_preset());
+        h.settle(SETTLE);
+    };
+    open(&mut h);
+    assert!(!widget(&h, "label:presetColourSource"), "Camera Matching: nothing to say");
+    h.app.ui.dialog = None;
+    click(&mut h, "dropdown:profile");
+    click(&mut h, "profileMenu:cameraColour:local:A7 V Chart");
+    open(&mut h);
+    assert!(widget(&h, "label:presetColourSource"), "a local profile goes into the preset with the Profile group");
+    click(&mut h, "presetInclude:profile");
+    assert!(!widget(&h, "label:presetColourSource"), "without the Profile group it does not");
     let _ = std::fs::remove_dir_all(&dir);
 }

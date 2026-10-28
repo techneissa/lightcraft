@@ -20,8 +20,8 @@ pub(crate) use confirm::album_entries;
 pub use confirm::confirm_dialog;
 pub use cull::{MAX_BURST_GAP, clamp_cull_burst, cull_params, fmt_gap, parse_gap};
 use export::{
-    LIMIT_KB, QUALITY, START_NUMBER, WM_IMAGE_WIDTH, WM_INSET_X, WM_INSET_Y, WM_OPACITY, WM_POSITIONS, WM_SIZE, export_dialog_params, export_size,
-    group_checklist, watermark_preview,
+    LIMIT_KB, QUALITY, START_NUMBER, WM_IMAGE_WIDTH, WM_INSET_X, WM_INSET_Y, WM_OPACITY, WM_POSITIONS, WM_SIZE, colour_source_hint,
+    export_dialog_params, export_size, group_checklist, watermark_preview,
 };
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
 use frame::{
@@ -1816,6 +1816,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             );
             ui.label(egui::RichText::new(crate::i18n::tr("Settings to include")).color(t.text_dim));
             group_checklist(ui, "presetInclude", groups);
+            colour_source_hint(app, ui, t, groups);
         }
         Dialog::CopySettings { groups } => group_checklist(ui, "copyGroup", groups),
         Dialog::PasteSettings { .. } => paste_settings_body(app, ui, t, dlg),

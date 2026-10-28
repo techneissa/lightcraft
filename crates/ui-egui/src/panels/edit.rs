@@ -152,8 +152,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if d.profile.camera_colour == lightcraft_develop::CameraColour::Local
         && let Some(note) = app.session.source_info(id).colour_note
     {
+        let text = local_profile_note(&note);
         egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 8 }).show(ui, |ui| {
-            let r = ui.add(egui::Label::new(egui::RichText::new(note).font(t.font(12.0)).color(t.text_dim)).wrap());
+            let r = ui.add(egui::Label::new(egui::RichText::new(text).font(t.font(12.0)).color(t.text_dim)).wrap());
             crate::widgets::register(ui, "label:profile.cameraColourNote", r.rect);
         });
     }
@@ -395,5 +396,27 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // A pending numeric edit commits on blur before the explicit Reset takes precedence.
     if reset_clicked {
         let _ = app.run("develop.reset", json!({}));
+    }
+}
+
+/// The note under the Profile picker for a local profile the photo cannot use, in the app's language.
+fn local_profile_note(note: &lightcraft_pipeline::ColourNote) -> String {
+    use lightcraft_pipeline::LocalUnavailable;
+    let profile = note.profile.as_str();
+    match note.why {
+        LocalUnavailable::Missing => crate::i18n::tr_format!(
+            "Edited with the profile '{profile}', which isn't available on this computer. This picture uses Camera Matching.",
+            profile = profile
+        ),
+        LocalUnavailable::Invalid => {
+            crate::i18n::tr_format!(
+                "Edited with the profile '{profile}', whose file can't be used. This picture uses Camera Matching.",
+                profile = profile
+            )
+        }
+        LocalUnavailable::OtherCamera => crate::i18n::tr_format!(
+            "Edited with the profile '{profile}', which is made for another camera. This picture uses Camera Matching.",
+            profile = profile
+        ),
     }
 }
