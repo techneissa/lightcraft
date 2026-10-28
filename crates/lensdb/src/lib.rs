@@ -272,8 +272,18 @@ fn name_score(db: &[String], exif: &[String], maker: &[String]) -> f64 {
     if db.iter().any(|t| is_number(t) && !exif.contains(t)) || exif.iter().any(|t| is_number(t) && !db.contains(t)) {
         return 0.0;
     }
+    // A Mark II is another optical design than the lens it replaces, and its vignetting and distortion differ: a
+    // generation marker ("II") on one side only means the profile belongs to another lens.
+    if db.iter().filter(|t| is_generation(t)).ne(exif.iter().filter(|t| is_generation(t))) {
+        return 0.0;
+    }
     let common = db.iter().filter(|t| exif.contains(t)).count() as f64;
     common / db.len().max(exif.len()) as f64
+}
+
+/// A lens generation written as a Roman numeral ("FE 70-200mm F4 Macro G OSS II").
+fn is_generation(t: &str) -> bool {
+    matches!(t, "ii" | "iii" | "iv")
 }
 
 fn camera(n: &xml::Node) -> Option<Camera> {

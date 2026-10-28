@@ -19,7 +19,9 @@ changes.
 The lens is identified from EXIF: camera make / model (for the mount and crop factor; the 35 mm equivalent focal
 length is used when the camera isn't listed) and the lens model string. Lens names match on their words; every
 number (focal lengths, apertures) in the database name must appear in the EXIF name, and the lens maker must agree
-when the file names one.
+when the file names one. A generation marker (`II`, `III`, `IV`) must also agree: a profile for the first generation is
+not used for the second, which is another optical design (the FE 70-200mm F4 G OSS profile put 0.7 EV of corner gain on
+photos from the F4 Macro G OSS II, whose camera JPEG shows 0.15 EV; mean render 4–5 L* lighter than the JPEG).
 
 Some cameras record no lens model at all, only the lens specification: Nikon DSLRs write the lens's focal range and
 maximum apertures in their maker note (tag `0x0084`) and no Exif `LensModel`, whatever lens is mounted. For such a
