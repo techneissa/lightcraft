@@ -93,8 +93,3 @@ cargo test -p lightcraft-develop
 cargo test -p lightcraft-catalog
 cargo test -p lightcraft-ui-egui --lib -- keybinds shortcut_editing tests::keymap shortcuts:: animated_gif selection_order split_divider before_after command_palette edit_all photo_menu topbar_items titlebar loupe_stand_in the_loupe_says denoise settings profile camera_colour thumbnail
 ```
-
-## Known failures on this Mac (not caused by the fork)
-
-- `accessibility::every_interactive_node_has_a_name_in_every_view_and_tool`: fails on official `main` too (a "▸" the
-  test fonts can't draw).
