@@ -1843,7 +1843,10 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         }
         Dialog::LocalProfileSwitch { name, count, .. } => {
             let question = if *count == 1 {
-                crate::i18n::tr_format!("1 photo was rendered with your local profile '{name}'. Switch it to that profile to keep its look?", name = name)
+                crate::i18n::tr_format!(
+                    "1 photo was rendered with your local profile '{name}'. Switch it to that profile to keep its look?",
+                    name = name
+                )
             } else {
                 crate::i18n::tr_format!(
                     "{count} photos were rendered with your local profile '{name}'. Switch them to it to keep their look?",
