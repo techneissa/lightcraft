@@ -1662,7 +1662,11 @@ fn app_system_info_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, 
         "Frame update".into(),
         format!("{:.1} ms (logic {:.1} ms; slowest {:.0} ms)", app.perf.update_ms, app.perf.logic_ms, app.perf.max_update_ms),
     ));
-    rows.push(("Last loupe render".into(), format!("{:.0} ms", app.renderer.last_main_ms)));
+    let ms = |v: Option<f64>| v.map_or("–".to_string(), |v| format!("{v:.0} ms"));
+    rows.push((
+        "Last loupe render".into(),
+        format!("{:.0} ms (draft {}, full {})", app.renderer.last_main_ms, ms(app.renderer.last_draft_ms), ms(app.renderer.last_full_ms)),
+    ));
     if let Some(f) = lightcraft_engine::gpu::last_fallback() {
         rows.push(("Last GPU fallback".into(), f));
     }

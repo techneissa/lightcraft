@@ -244,6 +244,12 @@ pub struct Renderer {
     /// The last [`Slot::HdrHistogram`] result: (photo, job key, histogram).
     pub live_hdr_histogram: Option<(PhotoId, u64, Histogram)>,
     pub last_main_ms: f64,
+    /// The last loupe render's time by kind, in ms (`ui.inspect` → `perf`): a drag's draft has a
+    /// 16 ms budget, the full-quality render a longer one, and one number mixed them.
+    pub last_draft_ms: Option<f64>,
+    pub last_full_ms: Option<f64>,
+    /// Keys of the draft renders asked for (a result is a draft when its key is here).
+    draft_keys: std::collections::HashSet<u64>,
     /// Jobs finished since start (for inspect/perf).
     pub completed: u64,
     /// Finished jobs thrown away because a newer request for their slot had replaced them.
@@ -334,6 +340,9 @@ impl Renderer {
             textures: HashMap::new(),
             live_hdr_histogram: None,
             last_main_ms: 0.0,
+            last_draft_ms: None,
+            last_full_ms: None,
+            draft_keys: Default::default(),
             completed: 0,
             discarded: 0,
             keep_pixels: false,
@@ -625,6 +634,12 @@ impl Renderer {
             return;
         }
         self.pending.insert(slot, (job.key, priority));
+        if slot == Slot::Main && job.request.quality == lightcraft_engine::pipeline::Quality::Draft {
+            if self.draft_keys.len() >= 64 {
+                self.draft_keys.clear();
+            }
+            self.draft_keys.insert(job.key);
+        }
         job.request_id = lightcraft_preview::next_tick();
         self.requests.insert(
             slot,
@@ -1153,6 +1168,11 @@ impl Renderer {
             }
             if slot == Slot::Main {
                 self.last_main_ms = ms;
+                if self.draft_keys.contains(&r.key) {
+                    self.last_draft_ms = Some(ms);
+                } else {
+                    self.last_full_ms = Some(ms);
+                }
             }
             changed = true;
         }
@@ -1508,6 +1528,57 @@ mod color_image_tests {
         assert!(r.pending_poll() >= std::time::Duration::from_millis(100), "{:?}", r.pending_poll());
         r.set_offload(Box::new(NoWork));
         assert!(r.pending_poll() <= std::time::Duration::from_millis(16), "an offload has no wake-up: polled per frame");
+    }
+
+    // Given loupe renders of both kinds, the draft's time and the full render's are kept apart
+    // (one number mixed them, so the 16 ms draft budget could not be checked)
+    #[test]
+    fn draft_and_full_loupe_renders_are_timed_apart() {
+        let ctx = egui::Context::default();
+        let mut session = Session::new();
+        let mut r = Renderer::default();
+        let job = |key: u64, id: u64, ms: u64| {
+            let result = RenderResult {
+                request_id: id,
+                source_key: None,
+                photo: PhotoId(1),
+                level: lightcraft_engine::SourceLevel::Preview,
+                key,
+                rendered: Ok(lightcraft_pipeline::Rendered {
+                    image: lightcraft_raster::Rgba8::new(2, 2),
+                    histogram: Histogram::of_srgb8(&lightcraft_raster::Rgba8::new(2, 2)),
+                    deep: None,
+                }),
+                gpu_fallback: None,
+                loaded: None,
+                quick: None,
+                display: None,
+            };
+            Box::new(move || {
+                std::thread::sleep(std::time::Duration::from_millis(ms));
+                Renderer::run_for(|| result, &None)
+            })
+        };
+        let mut run = |r: &mut Renderer, key: u64, id: u64, ms: u64| {
+            r.requests.insert(Slot::Main, Requested { look: None, id, source: None });
+            r.pending.insert(Slot::Main, (key, 100));
+            r.pool.submit(Slot::Main, key, 100, job(key, id, ms));
+            let t0 = std::time::Instant::now();
+            while r.pending.contains_key(&Slot::Main) && t0.elapsed() < std::time::Duration::from_secs(10) {
+                r.poll(&ctx, &mut session);
+                std::thread::sleep(std::time::Duration::from_millis(2));
+            }
+            assert!(!r.pending.contains_key(&Slot::Main), "the render landed");
+        };
+        assert_eq!((r.last_draft_ms, r.last_full_ms), (None, None));
+        r.draft_keys.insert(11);
+        run(&mut r, 11, 1, 30);
+        assert!(r.last_draft_ms.is_some_and(|ms| ms >= 30.0), "{:?}", r.last_draft_ms);
+        assert_eq!(r.last_full_ms, None, "a draft is not a full render");
+        run(&mut r, 12, 2, 80);
+        assert!(r.last_full_ms.is_some_and(|ms| ms >= 80.0), "{:?}", r.last_full_ms);
+        assert!(r.last_draft_ms.is_some_and(|ms| ms < 80.0), "the draft's time stays its own: {:?}", r.last_draft_ms);
+        assert_eq!(r.last_main_ms, r.last_full_ms.unwrap_or(0.0), "lastRenderMs is whichever came last");
     }
 
     struct NoWork;
