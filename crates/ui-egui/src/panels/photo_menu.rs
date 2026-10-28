@@ -14,6 +14,8 @@
 //! one another, are dropped.
 //!
 //! Agents read and set it with `photoMenu.get`, `photoMenu.set {items}` and `photoMenu.reset`.
+//! Three presets keep arrangements to switch between ([`presets`]), and a `.json` backup holds the menu
+//! and the presets ([`backup`]).
 //!
 //! [`AppSettings::photo_menu`]: crate::state::AppSettings::photo_menu
 
@@ -23,9 +25,14 @@ use serde_json::{Value, json};
 use crate::LightcraftApp;
 use crate::menus::menubar::{MenuNode, display_item_label, menu_bar, run_item};
 
+pub mod backup;
 pub mod editor;
 pub mod items;
+pub mod presets;
+mod presets_ui;
 
+#[cfg(test)]
+mod presets_tests;
 #[cfg(test)]
 mod tests;
 
@@ -302,10 +309,17 @@ pub(crate) fn check_mark(ui: &egui::Ui, row: egui::Rect) {
     crate::icons::paint(ui.painter(), c, crate::icons::Icon::Check, t.text);
 }
 
-/// `photoMenu.get` / `photoMenu.set {items}` / `photoMenu.reset`.
+/// `photoMenu.get` / `photoMenu.set {items}` / `photoMenu.reset`, and the presets' and backup's commands.
 pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, String> {
+    let mut extra = Value::Null;
     match id {
         "photoMenu.get" => {}
+        "photoMenu.savePreset" | "photoMenu.switchPreset" | "photoMenu.undoPreset" => presets::command(app, id, p)?,
+        "photoMenu.export" | "photoMenu.import" => match file_command(app, id, p)? {
+            Some(done) => extra = done,
+            // the file dialog is up: the command runs again when it closes
+            None => return Ok(Value::Null),
+        },
         "photoMenu.reset" => app.ui.settings.photo_menu = None,
         "photoMenu.set" => {
             let Some(list) = p.get("items").and_then(Value::as_array) else {
@@ -344,5 +358,53 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, St
         .into_iter()
         .map(|a| json!({"item": a.slot.key(), "label": a.label, "path": a.path}))
         .collect();
-    Ok(json!({"items": items, "custom": app.ui.settings.photo_menu.is_some(), "available": available}))
+    let mut answer = json!({
+        "items": items,
+        "custom": app.ui.settings.photo_menu.is_some(),
+        "available": available,
+        "presets": presets::report(app),
+        "canUndoPreset": presets::can_undo(app),
+    });
+    if let (Some(answer), Some(extra)) = (answer.as_object_mut(), extra.as_object()) {
+        answer.extend(extra.iter().map(|(k, v)| (k.clone(), v.clone())));
+    }
+    Ok(answer)
+}
+
+/// `photoMenu.export` / `photoMenu.import`: the file is `path`, or one chosen in a dialog. None when
+/// the dialog is up (or was cancelled).
+fn file_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Option<Value>, String> {
+    use crate::pick::{PickRequest, Picked};
+    let exporting = id == "photoMenu.export";
+    let path = match p.get("path").and_then(Value::as_str) {
+        Some(path) => path.to_string(),
+        None => {
+            let (title, name) = (if exporting { "Export Right-Click Menu" } else { "Import Right-Click Menu" }, "Photo Menu.json");
+            let filter = crate::i18n::tr("Photo Menu Backup");
+            let req = if exporting {
+                PickRequest::save(crate::i18n::tr(title), filter, &["json"], name)
+            } else {
+                PickRequest::file(crate::i18n::tr(title), filter, &["json"])
+            };
+            match crate::pick::ask(app, id, p, "path", req, |_| None) {
+                Picked::Now(paths) => match paths.into_iter().next() {
+                    Some(path) => path,
+                    None => return Ok(None),
+                },
+                Picked::Later => return Ok(None),
+                Picked::Unavailable => return Err(format!("{id}: there is no file dialog on this platform; give `path`")),
+            }
+        }
+    };
+    let done = if exporting { backup::export(app, &path) } else { backup::import(app, &path) }?;
+    let ctx = app.tasks.repaint.clone().unwrap_or_default();
+    let skipped: Vec<String> = done["skipped"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+    let name = std::path::Path::new(&path).file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().to_string());
+    let verb = crate::i18n::tr(if exporting { "Exported the photo menu to" } else { "Imported the photo menu from" });
+    if skipped.is_empty() {
+        app.toast(&ctx, format!("{verb} {name}"));
+    } else {
+        app.toast_for(&ctx, format!("{verb} {name}. {}", backup::skipped_note(&skipped)), 8.0);
+    }
+    Ok(Some(done))
 }

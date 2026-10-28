@@ -346,6 +346,63 @@ mod headless {
     }
 
     #[test]
+    fn the_presets_row_saves_switches_and_undoes() {
+        let mut h = demo(json!({"view": "photoGrid"}));
+        let r = h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "menu"}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        h.step();
+        // Preset 1 holds the default; the menu is then edited and kept in Preset 2
+        click(&mut h, "button:photoMenuSavePreset-1");
+        click(&mut h, "photoMenuRow:0");
+        click(&mut h, "button:photoMenuRemove:0");
+        assert_eq!(menu(&h)[0], "beforeAfterSplit");
+        click(&mut h, "button:photoMenuSavePreset-2");
+        assert_eq!(h.app.ui.settings.photo_menu_presets.active, Some(1));
+        // switching is at once; an empty slot only says so
+        click(&mut h, "button:photoMenuPreset-1");
+        assert_eq!(h.app.ui.settings.photo_menu, None);
+        assert_eq!(h.app.ui.settings.photo_menu_presets.active, Some(0));
+        click(&mut h, "button:photoMenuPreset-3");
+        assert_eq!(h.app.ui.settings.photo_menu_presets.active, Some(0), "an empty slot changes nothing");
+        assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("Preset 3 is empty")));
+        click(&mut h, "button:photoMenuPreset-2");
+        assert_eq!(menu(&h)[0], "beforeAfterSplit");
+        // Undo Switch brings the default back
+        click(&mut h, "button:photoMenuUndoPreset");
+        assert_eq!(h.app.ui.settings.photo_menu, None);
+        assert!(has(&h, "button:photoMenuExport") && has(&h, "button:photoMenuImport"));
+    }
+
+    /// The height of the menu's list and where the buttons under the lists end, with the page's room.
+    fn list_at(window_h: f32) -> (f32, f32, f32) {
+        let mut h = demo(json!({"view": "photoGrid"}));
+        let r = h.request("ui.resize", json!({"width": 1400.0, "height": window_h}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        let r = h.request("engine.execute", json!({"command": "app.settings", "params": {"tab": "menu"}}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(Duration::from_secs(20));
+        h.step();
+        h.step();
+        (widget(&h, "photoMenu:list").height(), widget(&h, "button:photoMenuReset").bottom(), widget(&h, "settings:pageRoom").bottom())
+    }
+
+    #[test]
+    fn the_lists_grow_with_the_room_the_page_has() {
+        let (short, short_buttons, short_room) = list_at(760.0);
+        let (tall, tall_buttons, tall_room) = list_at(860.0);
+        let (taller, taller_buttons, taller_room) = list_at(1000.0);
+        // each 100 pt of window the page gets is 100 pt more list, up to the page height the
+        // Settings window allows
+        assert!(tall > short + 50.0, "{short} -> {tall}");
+        assert!(taller >= tall, "{tall} -> {taller}");
+        // the buttons stay under the lists and inside the page, filling it to its last few points
+        for (buttons, room) in [(short_buttons, short_room), (tall_buttons, tall_room), (taller_buttons, taller_room)] {
+            assert!(buttons <= room && buttons > room - 24.0, "{buttons} in a page ending at {room}");
+        }
+    }
+
+    #[test]
     fn customize_menu_opens_the_settings_tab() {
         let mut h = demo(json!({"view": "photoGrid"}));
         let photo = h.app.session.visible_cloned()[0];

@@ -2,6 +2,14 @@
 
 ## 2026-10-28
 
+### Right-Click Menu: Three Presets, a Backup File, Lists that Fill the Page
+- **Settings ▸ Photo Menu** has three presets. **Save to Preset 1 / 2 / 3** keeps the menu as arranged; a click on **Preset
+  1 / 2 / 3** switches to it at once (an empty one says it is empty). **Undo Switch** brings the old menu back.
+- Two icon buttons next to it, **Export Right-Click Menu…** and **Import Right-Click Menu…**, save and load the menu and its
+  three presets as a `.json` file. A file of another kind, from a newer LightCraft, or broken is refused with a message and
+  changes nothing; items this version doesn't have are skipped and named.
+- The two lists grow to the height of the page, down to the Add Separator row.
+
 ### macOS Colour: the Mac's Own Raw Colours in the Profile Picker
 - On a Mac, the Profile menu and browser have a third choice, **macOS Colour**: the raw decoder that Photos and Quick Look
   use makes the colours, and LightCraft keeps its tone curve, white balance and every slider. Skin and greys come out

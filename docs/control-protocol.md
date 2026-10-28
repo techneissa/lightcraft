@@ -411,6 +411,30 @@ built-in item's id (`openInDetail`, `beforeAfterSplit`, `exportAnimatedGif`, …
 and nothing changes), `photoMenu.reset` puts the
 default back; all three return the same answer. Settings ▸ Photo Menu is `app.settings {"tab": "menu"}`.
 
+The menu has three presets (Preset 1 to 3). `photoMenu.savePreset {slot}` keeps the menu as it is in a slot (1 to 3) and makes
+it the active one; `photoMenu.switchPreset {slot}` makes a saved slot the menu (an empty slot is an error and changes
+nothing); `photoMenu.undoPreset` brings back the menu the last switch replaced, for as long as the menu is as the switch
+left it. They return the answer above, which also carries `presets` (`{slot, saved, active, edited, items}` per slot;
+`edited`: the active slot's menu has been changed since it was saved) and `canUndoPreset`. The presets are in the app
+settings (`photoMenuPresets`).
+
+`photoMenu.export {path}` writes the menu and its presets as JSON, and `photoMenu.import {path}` reads such a file back.
+Without `path` they ask with the save / open panel (and return null at once; the command runs again when the panel
+closes), and on a platform without a panel they ask for `path`. The file:
+
+```json
+{"kind": "lightcraft-photo-menu", "version": 1,
+ "items": ["openInDetail", "---", "cmd:view.compare"],
+ "presets": {"slots": [["rename"], null, ["delete"]], "active": 0}}
+```
+
+`presets` is optional on import (without it the presets stay as they are). An import checks the whole file first and
+refuses, changing nothing, a file that is not JSON, not text, over 1 MiB, of another `kind`, without a `version` or
+from a newer one (`version` above 1), or without `items`. Items this build doesn't have (an unknown built-in id, a
+command the menu bar doesn't have, a repeated item) are left out; the answer's `skipped` lists them and a notice shows
+them. Both answer the same as `photoMenu.get`, plus `path`, `items` (how many), `presets` (how many are saved) and,
+for an import, `skipped`.
+
 ## Top bar items
 
 The top bar's buttons can be turned off one by one (Settings ▸ Top Bar, or a right-click on the bar). The app settings
