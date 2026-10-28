@@ -58,7 +58,12 @@ Local folder: `~/Documents/workspace/gitClones/lightcraft`. Git remembers how a 
 1. `git fetch origin && git switch -c feat/<name> origin/main`
 2. Put the code in new files; touch existing files only with small hooks (a `mod` line, a menu entry, a match arm,
    a state field). Never reformat, rename or move official code. This is what keeps updates conflict-free.
-3. Add tests, then `cargo xtask ci --quick`.
+3. Add tests. Check in batches:
+   - after each change: only the tests of the code it touched (`cargo test -p <crate> <filter>`, `cargo clippy -p <crate>`);
+   - once per round of work: `cargo xtask ci --quick`;
+   - once per merge into `custom`: the full `cargo xtask ci`.
+
+   This fork reads `CLAUDE.md`'s "before every commit" as once per round (techneissa, 2026-10-28).
 4. `git switch custom && git merge --no-ff feat/<name>`, then `git push mine custom feat/<name>`.
 5. Add a row to the table below, and run Update LightCraft to install it.
 
