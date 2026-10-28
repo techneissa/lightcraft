@@ -375,6 +375,10 @@ fn each_tab_remembers_how_far_it_was_scrolled() {
         h.step();
     }
     h.settle(T);
+    // (the smooth scroll's last frames: a page that doesn't stop at its end is still moving after the settle)
+    for _ in 0..60 {
+        h.step();
+    }
     let scrolled = rect(&h, "check:settings.perCamera").top();
     assert!(scrolled < top - 50.0);
     // When another tab is opened, it starts at its top

@@ -60,7 +60,8 @@ const HEADER_MAX: u64 = 4096;
 const LOOK_FIELD: &str = "look_version";
 
 /// The header field that names the colour base baked into the proxy's pixels: `auto` for Camera Matching, `local`
-/// for a local camera profile (then [`LOCAL_FIELD`] names it). A proxy of a photo with the fitted look that has none
+/// for a local camera profile (then [`LOCAL_FIELD`] names it), `macos` for macOS Colour (then [`MACOS_FIELD`] says
+/// which version of LightCraft's macOS base made it). A proxy of a photo with the fitted look that has none
 /// was written before Camera Matching stopped taking a local profile's colour silently: it is out of date.
 const BASE_FIELD: &str = "base";
 
@@ -68,7 +69,21 @@ const BASE_FIELD: &str = "base";
 /// (`<id>:<key>`, [`local_stamp`]); absent for every other proxy.
 const LOCAL_FIELD: &str = "local_profile";
 
-/// What a photo's smart preview should say about local camera profiles.
+/// The header field with the version of LightCraft's macOS base ([`MACOS_BASE_VERSION`]) a `macos` proxy was made with.
+/// The OS build is not recorded: a proxy may be the only copy while its original is offline, so a macOS update never
+/// makes one stale.
+const MACOS_FIELD: &str = "macos_base_version";
+
+/// The version of LightCraft's macOS base (the decoder recipe and the loader's tone fit, `files::macos`): it rises with
+/// either, so proxies made before a change are rebuilt from their online originals. The recipe's part is
+/// `lightcraft_macraw::RECIPE_VERSION` itself (one number, never bumped apart); bump [`MACOS_FIT_VERSION`] for the fit.
+pub const MACOS_BASE_VERSION: u64 = lightcraft_macraw::RECIPE_VERSION as u64 + MACOS_FIT_VERSION;
+
+/// The tone fit's part of [`MACOS_BASE_VERSION`] (`camera_preview::macos_base`): bumped when the fit changes what a macOS
+/// Colour picture looks like.
+pub const MACOS_FIT_VERSION: u64 = 0;
+
+/// What a photo's smart preview should say about local camera profiles and macOS Colour.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LocalWant {
     /// The photo is not on a local profile: a proxy that has the colour of one is out of date.
@@ -77,6 +92,12 @@ pub enum LocalWant {
     Keep,
     /// On this profile as the file is now: a proxy made with another profile or another content is out of date.
     Is(String),
+    /// On macOS Colour, which this computer can make: a proxy with another base, or an older macOS base
+    /// ([`MACOS_BASE_VERSION`]), is out of date.
+    Macos,
+    /// On macOS Colour, which this computer cannot make (not a Mac, a camera its decoder does not list): whatever the
+    /// proxy has is kept, and a missing one is not built (it would have Camera Matching's colours, not the photo's).
+    MacosElsewhere,
 }
 
 /// The header stamp of local profile `id` as its file is now: `<id>:<key>`.
@@ -88,7 +109,7 @@ pub fn local_stamp(id: &str, key: u128) -> String {
 /// unreadable proxy is not stale here ([`is_valid`]'s business), and a missing file never makes one stale.
 pub fn is_local_stale(path: &Path, want: &LocalWant) -> bool {
     use std::io::Read;
-    if *want == LocalWant::Keep || !is_valid(path) {
+    if matches!(want, LocalWant::Keep | LocalWant::MacosElsewhere) || !is_valid(path) {
         return false;
     }
     let Ok(f) = std::fs::File::open(path) else { return false };
@@ -100,10 +121,12 @@ pub fn is_local_stale(path: &Path, want: &LocalWant) -> bool {
     let Some(nl) = rest.iter().position(|b| *b == b'\n') else { return false };
     let Some(header) = rest.get(..nl).and_then(|h| serde_json::from_slice::<serde_json::Value>(h).ok()) else { return false };
     let has = header.get(LOCAL_FIELD).and_then(serde_json::Value::as_str);
+    let macos = header.get(BASE_FIELD).and_then(serde_json::Value::as_str) == Some("macos");
     match want {
-        LocalWant::No => has.is_some(),
+        LocalWant::No => has.is_some() || macos,
         LocalWant::Is(stamp) => has != Some(stamp.as_str()),
-        LocalWant::Keep => false,
+        LocalWant::Macos => !macos || header.get(MACOS_FIELD).and_then(serde_json::Value::as_u64).unwrap_or(0) < MACOS_BASE_VERSION,
+        LocalWant::Keep | LocalWant::MacosElsewhere => false,
     }
 }
 
@@ -195,6 +218,12 @@ pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String
 /// [`encode`] for a photo on a local camera profile: `local_profile` (`<id>:<key>`, [`local_stamp`]) is recorded in the
 /// header, because the proxy's pixels carry that profile's colour.
 pub fn encode_stamped(img: &Rgb32f, info: Option<&SourceInfo>, local_profile: Option<&str>) -> Result<Vec<u8>, String> {
+    encode_for(img, info, &local_profile.map_or(LocalWant::No, |stamp| LocalWant::Is(stamp.to_owned())))
+}
+
+/// [`encode`] with the colour base `want` names in the header: a local profile's stamp, or `macos` and
+/// [`MACOS_BASE_VERSION`] for a proxy made from the macOS base; `auto` otherwise.
+pub fn encode_for(img: &Rgb32f, info: Option<&SourceInfo>, want: &LocalWant) -> Result<Vec<u8>, String> {
     // scale so all but the brightest 0.05 % fit into 0..1
     let mut lum: Vec<f32> = img.data.iter().map(|c| c[0].max(c[1]).max(c[2])).filter(|v| v.is_finite()).collect();
     let scale = if lum.is_empty() {
@@ -229,10 +258,18 @@ pub fn encode_stamped(img: &Rgb32f, info: Option<&SourceInfo>, local_profile: Op
         LOOK_FIELD: crate::camera_preview::LOOK_VERSION,
         ENC_FIELD: ENCODE_VERSION,
     });
-    head[BASE_FIELD] = serde_json::Value::String(if local_profile.is_some() { "local" } else { "auto" }.to_owned());
-    if let Some(stamp) = local_profile {
-        head[LOCAL_FIELD] = serde_json::Value::String(stamp.to_owned());
-    }
+    let base = match want {
+        LocalWant::Is(stamp) => {
+            head[LOCAL_FIELD] = serde_json::Value::String(stamp.clone());
+            "local"
+        }
+        LocalWant::Macos => {
+            head[MACOS_FIELD] = serde_json::Value::from(MACOS_BASE_VERSION);
+            "macos"
+        }
+        LocalWant::No | LocalWant::Keep | LocalWant::MacosElsewhere => "auto",
+    };
+    head[BASE_FIELD] = serde_json::Value::String(base.to_owned());
     // The tail: the decoder facts (and the file's semantic mattes) after the JPEG, so the header
     // stays small. `tail` records its byte count from the end of the file, so a header rewritten
     // in place (an edited look version) keeps pointing at it.
@@ -308,6 +345,8 @@ pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<Source
         // (a smart preview keeps the colour it was made with: the option can't change it)
         colorimetric: false,
         colour_note: None,
+        macos_offered: false,
+        macos_note: None,
     });
     Ok((img, tone, info))
 }
@@ -479,9 +518,9 @@ fn header_look_version(head: &serde_json::Value) -> u64 {
     head.get(LOOK_FIELD).and_then(serde_json::Value::as_u64).unwrap_or(0)
 }
 
-/// Whether a header names its colour base ([`BASE_FIELD`]) as `auto` or `local`.
+/// Whether a header names its colour base ([`BASE_FIELD`]) as `auto`, `local` or `macos`.
 fn header_has_base(head: &serde_json::Value) -> bool {
-    matches!(head.get(BASE_FIELD).and_then(serde_json::Value::as_str), Some("auto" | "local"))
+    matches!(head.get(BASE_FIELD).and_then(serde_json::Value::as_str), Some("auto" | "local" | "macos"))
 }
 
 /// The encode version a header records: a missing, negative, fractional or otherwise malformed

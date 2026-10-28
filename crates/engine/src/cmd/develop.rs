@@ -484,7 +484,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Profile",
             [],
             None,
-            "{id?: profile id (see profiles.list), amount?: 0..200, camera_colour?: \"auto\" (Camera Matching, the default) | \"colorimetric\" (No Camera Matching) | \"local\" (a local camera profile, named by camera_profile) | \"macos\" (reserved: renders as Camera Matching), camera_profile?: the local profile's id (the file name without .json; with camera_colour \"local\")} — at least `id` or `camera_colour`",
+            "{id?: profile id (see profiles.list), amount?: 0..200, camera_colour?: \"auto\" (Camera Matching, the default) | \"colorimetric\" (No Camera Matching) | \"local\" (a local camera profile, named by camera_profile) | \"macos\" (macOS Colour: the Mac's own raw decoder makes the colours; where it can't, the photo renders as Camera Matching and its source says why), camera_profile?: the local profile's id (the file name without .json; with camera_colour \"local\")} — at least `id` or `camera_colour`",
             has_active,
             |s, p| {
                 let id = str_param(p, "id").map(str::to_string);
@@ -530,10 +530,14 @@ pub fn specs() -> Vec<CommandSpec> {
                         let name = crate::camera_profiles::local_profile(file).map_or_else(|| file.to_owned(), |l| l.name.clone());
                         format!("Profile: {name}")
                     }
-                    (None, None) => "Camera Matching".to_owned(),
+                    (None, None) => super::macos_colour::colour_label(colour).to_owned(),
                     (Some(_), None) => "Profile".to_owned(),
                 };
+                let leaving_macos = super::macos_colour::leaving_as_shot(s, colour);
                 edit(s, "develop.profile", &label, |d| {
+                    if let Some(as_shot) = leaving_macos {
+                        lightcraft_pipeline::local::leave_kelvin(d, as_shot);
+                    }
                     if let Some(id) = &id {
                         d.profile.id = id.clone();
                         d.profile.amount = f64_or(p, "amount", d.profile.amount).clamp(0.0, 200.0);
@@ -1069,20 +1073,29 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         // ---- presets
-        cmd!("preset.apply", "Apply Preset", [], None, "{id: presetId, amount?: 0..200 (percent), ids?}", has_selection, |s, p| {
-            let pid = str_param(p, "id").ok_or_else(|| bad("preset.apply", "missing id"))?;
-            let preset = s.presets.iter().find(|x| x.id == pid).cloned().ok_or_else(|| bad("preset.apply", format!("unknown preset `{pid}`")))?;
-            let amount = f64_or(p, "amount", 100.0).clamp(0.0, 200.0) / 100.0;
-            // `id` names the preset here: the photos are `ids`, else the selection
-            let ids = s.targets(&json!({"ids": p.get("ids")}))?;
-            let ops = ids
-                .iter()
-                .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                .filter_map(|(id, d)| s.develop_op(id, preset.apply(&d, amount), &format!("Preset: {}", preset.name)))
-                .collect::<Vec<_>>();
-            s.commit(&format!("Preset: {}", preset.name), Op::Batch { ops })?;
-            ok()
-        }),
+        cmd!(
+            "preset.apply",
+            "Apply Preset",
+            [],
+            None,
+            "{id: presetId, amount?: 0..200 (percent), ids?} → {macosFallback: how many of the photos are on macOS Colour but use Camera Matching colours on this computer}",
+            has_selection,
+            |s, p| {
+                let pid = str_param(p, "id").ok_or_else(|| bad("preset.apply", "missing id"))?;
+                let preset = s.presets.iter().find(|x| x.id == pid).cloned().ok_or_else(|| bad("preset.apply", format!("unknown preset `{pid}`")))?;
+                let amount = f64_or(p, "amount", 100.0).clamp(0.0, 200.0) / 100.0;
+                // `id` names the preset here: the photos are `ids`, else the selection
+                let ids = s.targets(&json!({"ids": p.get("ids")}))?;
+                let ops = ids
+                    .iter()
+                    .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
+                    .filter_map(|(id, d)| s.develop_op(id, preset.apply(&d, amount), &format!("Preset: {}", preset.name)))
+                    .collect::<Vec<_>>();
+                s.commit(&format!("Preset: {}", preset.name), Op::Batch { ops })?;
+                // photos the preset put on macOS Colour that this computer makes with Camera Matching colours
+                Ok(json!({"macosFallback": super::macos_colour::fallbacks(s, &ids)}))
+            }
+        ),
         cmd!("preset.create", "Create Preset", ["Photo"], None, "{name, group?, groups?: [settingsGroup]}", has_active, |s, p| {
             let c = "preset.create";
             let id = active(s, c)?;

@@ -101,7 +101,7 @@ fn camera_matching_is_not_offered_where_the_colour_is_not_matched() {
 
 /// An empty profiles folder for the test's thread, so the profiles of the machine it runs on neither add rows nor
 /// start the switch question.
-fn no_local_profiles(tag: &str) -> lightcraft_engine::camera_profiles::DirGuard {
+pub(super) fn no_local_profiles(tag: &str) -> lightcraft_engine::camera_profiles::DirGuard {
     let dir = std::env::temp_dir().join(format!("lc-ui-no-profiles-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
     lightcraft_engine::camera_profiles::use_dir_for_tests(&dir)

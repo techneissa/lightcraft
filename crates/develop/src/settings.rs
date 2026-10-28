@@ -230,8 +230,9 @@ pub enum CameraColour {
     /// base colour, the tone is fitted to the file's JPEG. A missing, invalid or other-camera file renders as
     /// [`CameraColour::Auto`] with a note, and the choice is kept.
     Local,
-    /// The Mac's own raw decoder (reserved: renders as [`CameraColour::Auto`] until that track lands). Declared with
-    /// [`CameraColour::Local`] in catalog format v10, so a library that holds it is never read as corrupt.
+    /// The Mac's own raw decoder (macOS Colour): a computer or camera it can't make it for renders as
+    /// [`CameraColour::Auto`] and says why. Declared with [`CameraColour::Local`] in catalog format v10, so a library that
+    /// holds it is never read as corrupt.
     Macos,
 }
 

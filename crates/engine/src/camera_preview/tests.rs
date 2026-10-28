@@ -2667,3 +2667,22 @@ fn a_narrow_black_and_white_curve_that_darkens_the_bright_areas_is_refused() {
         assert!(sky > 0.8, "an accepted curve must not darken what the camera renders at 0.93: {sky}");
     }
 }
+
+/// A photo set to macOS Colour whose source the Mac's decoder cannot make (`files::macos`) gets exactly the Camera
+/// Matching colour (the same JPEG fit, matrices and white).
+#[test]
+fn macos_colour_falls_back_to_the_camera_matching_colour() {
+    let fitted = dro_test_look(&std::array::from_fn(|i| 0.006 * 1.13f32.powi(i as i32)), &|x| x.sqrt());
+    let run = |colour: CameraColour| {
+        let mut raw = raw_of(RawFormat::Arw, "SONY", "ILCE-7M5", Default::default());
+        let (xy, t, look) = starting_colour_with(
+            &mut raw,
+            colour,
+            |_, _| (Some(fitted.clone()), false),
+            |_, _| panic!("no black-and-white JPEG fit after an accepted fit"),
+            |_, _| panic!("no dark tone fit after an accepted fit"),
+        );
+        (xy, t.matrix_is_fallback, look.map(|l| l.matrix), raw.color)
+    };
+    assert_eq!(run(CameraColour::Macos), run(CameraColour::Auto));
+}

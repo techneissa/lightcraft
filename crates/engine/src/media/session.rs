@@ -316,7 +316,10 @@ impl crate::Session {
     /// The embedded preview of an unedited raw (path, loader), when the app installed a loader.
     fn embedded_of(&self, p: &Photo) -> Option<(String, PreviewLoader)> {
         match (&p.source, &self.media.preview_loader) {
-            (Source::File { path }, Some(l)) if p.kind == MediaKind::Raw && crate::import::has_import_look(p) => Some((path.clone(), l.clone())),
+            // (never for a photo on macOS Colour that this Mac makes: its colours are not the camera's, so it waits)
+            (Source::File { path }, Some(l)) if p.kind == MediaKind::Raw && crate::import::has_import_look(p) && !crate::files::macos_shows(p) => {
+                Some((path.clone(), l.clone()))
+            }
             _ => None,
         }
     }
@@ -409,7 +412,7 @@ impl crate::Session {
     /// says and what a smart preview renders with. Only for raws edited in Kelvin.
     fn learn_as_shot_wb(&mut self, id: PhotoId, info: &SourceInfo) {
         let Some(p) = self.catalog.photo(id) else { return };
-        if !info.raw || info.relative_wb || !p.develops_raw() || p.relative_wb() {
+        if !info.raw || info.relative_wb || !p.develops_raw() || crate::files::relative_wb(p) {
             return;
         }
         let read = (info.as_shot_temp, info.as_shot_tint);
@@ -478,6 +481,11 @@ impl crate::Session {
         job.request.depth = depth;
         job.key ^= (space as u64 + 1).wrapping_mul(0xa076_1d64_78bd_642f) ^ (depth as u64 + 1).wrapping_mul(0xe703_7ed1_a0b4_28db);
         Ok(job)
+    }
+
+    /// The facts of photo `id`'s decoded source, when one is held (not the catalog's guess before a decode).
+    pub(crate) fn decoded_source_info(&self, id: PhotoId) -> Option<SourceInfo> {
+        Some(self.media.source_facts(id, SourceInfo { raw: false, ..SourceInfo::default() })).filter(|i| i.raw)
     }
 
     /// Prefer decoder facts to header-only metadata for pixel-statistics commands.

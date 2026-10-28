@@ -2,6 +2,25 @@
 
 ## 2026-10-28
 
+### macOS Colour: the Mac's Own Raw Colours in the Profile Picker
+- On a Mac, the Profile menu and browser have a third choice, **macOS Colour**: the raw decoder that Photos and Quick Look
+  use makes the colours, and LightCraft keeps its tone curve, white balance and every slider. Skin and greys come out
+  natural; the picture is not the camera's own look (saturated blues, such as a padel court, move towards violet), so
+  Camera Matching stays one click away.
+- New raw photos start on it: **Settings ▸ Import ▸ Starting Colour for Raw Photos** offers macOS Colour (the default),
+  Camera Matching and No Camera Matching. It applies to a Sony ARW from a camera your Mac's decoder lists and reads at
+  LightCraft's size (an A7 V, an A7 IV); anything else, and every computer that is not a Mac, starts on Camera Matching.
+  Photos already in your library are never changed by the setting.
+- **Apply macOS Colour to All Photos from This Camera…** in the Profile menu counts the photos first, then moves them in one
+  undo step, and says how many it left alone and why. It never runs by itself.
+- A photo set to macOS Colour that this computer can't make shows as Camera Matching and says why under the picker (not a
+  Mac, a camera or format that isn't offered, another size, a file macOS could not read); the choice is kept, so the photo
+  uses it again on a Mac. Presets and sync carry the choice, and applying a preset says how many photos fall back.
+- AI Denoise works on these photos: its picture is given the Mac's colours, so the Amount slider blends two pictures of the
+  same colour. White balance shows Kelvin. No camera JPEG flashes in the grid or loupe while the Mac's picture is made, so
+  thumbnails of macOS Colour photos fill in a little slower than before (about 0.4 s each).
+- DNG export, Convert to DNG and Photo Merge keep Camera Matching colours and their dialogs say so.
+
 ### Keyboard Shortcuts: Two per Command, Chords, Right-Click to Assign
 - Every command can have **two shortcuts**. The first is the one menus, tooltips and the Command Palette show; the
   second works too. Set either in Help ▸ Keyboard Shortcuts (⌘/): click a shortcut, press the keys, press Enter.

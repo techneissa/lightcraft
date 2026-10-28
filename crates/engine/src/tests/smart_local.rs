@@ -147,3 +147,53 @@ fn an_old_style_smart_preview_of_a_camera_matching_photo_is_rebuilt() {
     let _ = std::fs::remove_dir_all(&src);
     let _ = std::fs::remove_dir_all(&lib);
 }
+
+/// T12: the smart preview of a photo on macOS Colour is made from the macOS base where this computer can make it and
+/// says so (`base: macos` and the base's version). It goes stale for an older base version, never for a macOS update
+/// (the OS build is not recorded); a computer that can't make it keeps whatever proxy there is and builds none.
+#[test]
+fn a_macos_colour_photo_keeps_macos_pixels_in_its_smart_preview() {
+    use crate::cmd::previews::smart_colour;
+    use crate::smart::{MACOS_BASE_VERSION, encode_for};
+    let d = dir("macos");
+    let mut photo = raw_photo("SONY ILCE-7M5", None);
+    let mut dev = (*photo.develop).clone();
+    dev.profile.camera_colour = CameraColour::Macos;
+    photo.develop = std::sync::Arc::new(dev);
+    // which proxy the photo wants, and how its original loads
+    let (options, want) = smart_colour(&photo, true);
+    assert_eq!(want, LocalWant::Macos);
+    assert_eq!(options.map(|o| o.colour), Some(CameraColour::Macos), "built from the macOS base");
+    assert_eq!(smart_colour(&photo, false), (None, LocalWant::MacosElsewhere));
+    assert_eq!(smart_colour(&raw_photo("SONY ILCE-7M5", None), true), (None, LocalWant::No), "Camera Matching photos are unchanged");
+    // the header
+    let img = lightcraft_scenes::demo_library()[0].render(32, 20);
+    let macos = d.join("macos.lcsp");
+    let plain = d.join("plain.lcsp");
+    std::fs::write(&macos, encode_for(&img, None, &LocalWant::Macos).unwrap()).unwrap();
+    std::fs::write(&plain, encode(&img, None).unwrap()).unwrap();
+    let head = import::smart_header(&macos);
+    assert_eq!(head["base"], "macos");
+    assert_eq!(head["macos_base_version"], MACOS_BASE_VERSION);
+    assert!(head.get("os_build").is_none() && head.get("local_profile").is_none());
+    // staleness
+    assert!(!crate::smart::is_stale_for(&macos, true), "a current macOS proxy is current for the fit");
+    assert!(!is_local_stale(&macos, &LocalWant::Macos));
+    assert!(is_local_stale(&plain, &LocalWant::Macos), "a Camera Matching proxy is rebuilt on the Mac");
+    assert!(is_local_stale(&macos, &LocalWant::No), "the photo left macOS Colour");
+    assert!(!is_local_stale(&macos, &LocalWant::MacosElsewhere) && !is_local_stale(&plain, &LocalWant::MacosElsewhere), "kept off the Mac");
+    import::edit_smart_header(&macos, |h| h["macos_base_version"] = serde_json::Value::from(MACOS_BASE_VERSION - 1));
+    assert!(is_local_stale(&macos, &LocalWant::Macos), "an older macOS base is rebuilt");
+    import::edit_smart_header(&macos, |h| h["macos_base_version"] = serde_json::Value::from(MACOS_BASE_VERSION + 1));
+    assert!(!is_local_stale(&macos, &LocalWant::Macos), "a newer build's proxy is left alone");
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// Review fix 8: the smart previews' macOS version rises with the decoder recipe, so a recipe change can't leave old
+/// macOS Colour proxies looking current, and it stays 1 today (proxies already made are kept).
+#[test]
+fn the_smart_preview_version_follows_the_recipe() {
+    use crate::smart::{MACOS_BASE_VERSION, MACOS_FIT_VERSION};
+    assert_eq!(MACOS_BASE_VERSION, u64::from(lightcraft_macraw::RECIPE_VERSION) + MACOS_FIT_VERSION);
+    assert_eq!(MACOS_BASE_VERSION, 1, "a bump rebuilds every macOS Colour smart preview: on purpose only");
+}

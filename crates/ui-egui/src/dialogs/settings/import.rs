@@ -17,6 +17,7 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
             let _ = app.run("library.preferences", json!({"import": {"perCamera": per}}));
         }
     });
+    super::starting_colour::starting_colour_row(app, ui, t, &d);
     // AI Denoise for the high-ISO photos of a shoot, switched on as they come in
     let mut iso = d.denoise_above_iso.unwrap_or(0);
     row(ui, t, crate::i18n::tr("AI Denoise from"), |ui| {

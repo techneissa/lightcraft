@@ -280,6 +280,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
         Dialog::LocalProfileSwitch { .. } => "Local Camera Profile",
+        Dialog::MacosForCamera { .. } => "macOS Colour",
         Dialog::MovePhotos { .. } => "Move Photos",
         Dialog::LightroomCatalog { .. } => "Lightroom Classic Catalog",
         Dialog::LightroomDestination { .. } => "Import Lightroom Catalog",
@@ -358,6 +359,7 @@ fn ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool, sam: &SamSta
         Dialog::FaceModel { .. } if !informational => "Install",
         Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
         Dialog::LocalProfileSwitch { .. } => "Switch",
+        Dialog::MacosForCamera { .. } => "Apply",
         Dialog::SaveEffect { .. } => "Create",
         Dialog::MovePhotos { .. } => "Move",
         // (not "Merge": that is photo merging, HDR / panorama, in some languages)
@@ -1186,6 +1188,7 @@ fn export_format_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, op
         };
         ui.label(egui::RichText::new(note).color(t.text_dim));
     }
+    crate::macos_colour::show(ui, t, "label:exportMacosColour", crate::macos_colour::export_line(app, opts.format));
     if opts.format != before {
         // each format starts at its own default depth (TIFF 16-bit, others 8-bit)
         opts.bit_depth = None;
@@ -1849,6 +1852,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             ui.label(crate::i18n::tr_format!("Move {what} to Recently Deleted?", what = what));
             ui.label(egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
         }
+        Dialog::MacosForCamera { camera, count, skipped, .. } => crate::macos_colour::picker::body(ui, t, camera, *count, *skipped),
         Dialog::LocalProfileSwitch { name, count, .. } => {
             let question = if *count == 1 {
                 crate::i18n::tr_format!(

@@ -109,7 +109,7 @@ fn header_info(p: &Photo) -> SourceInfo {
     // A raw shown from its embedded preview is a rendered (display-referred) JPEG: relative white
     // balance and the display tone curve, like any other rendered file.
     if p.develops_raw() {
-        let relative = p.relative_wb();
+        let relative = crate::files::relative_wb(p);
         let (temp, tint) = if relative { (6500.0, 0.0) } else { p.as_shot_wb.unwrap_or((5500.0, 0.0)) };
         SourceInfo {
             raw: true,

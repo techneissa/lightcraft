@@ -109,6 +109,7 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
                 colour_pick.1 = Some(row);
             }
         }
+        crate::macos_colour::picker::menu_item(app, ui, photo);
         ui.separator();
     }
     for (title, key, ids) in [("Favorites", "fav", app.session.profile_favorites.clone()), ("Recent", "recent", app.session.profile_recent.clone())] {

@@ -23,6 +23,7 @@ pub mod keybinds;
 pub mod lightroom_import;
 pub mod links;
 mod local_profile_offer;
+mod macos_colour;
 pub mod menus;
 mod model_setup;
 pub mod panels;

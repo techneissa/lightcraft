@@ -16,11 +16,65 @@ use crate::media::{DenoiseSpec, FileLoader, FileProbe, LoadOptions, PairLoader, 
 mod colour;
 mod fs;
 mod load;
+mod macos;
+pub(crate) use macos::with_job_cancel;
 mod preview;
 mod probe;
 
 pub use colour::bin_factor;
 pub(crate) use colour::clipped_white;
+
+/// Whether photo `p` edits white balance on the relative scale on this computer ([`Photo::relative_wb_on`]): a photo
+/// set to macOS Colour whose raw this Mac's decoder lists edits in Kelvin. (The decoder can still refuse the file: its
+/// decoded source then says so, `SourceInfo::relative_wb`.)
+pub fn relative_wb(p: &lightcraft_catalog::Photo) -> bool {
+    p.relative_wb_on(macos_lists(p))
+}
+
+/// Whether photo `p` shows macOS Colour on this computer: it is set to it and this Mac's decoder lists its camera. Such
+/// a photo never shows the camera's JPEG while it renders (grid, filmstrip, loupe): it waits for the macOS picture.
+pub fn macos_shows(p: &lightcraft_catalog::Photo) -> bool {
+    p.develop.profile.camera_colour == lightcraft_develop::CameraColour::Macos && macos_lists(p)
+}
+
+/// Whether this computer can make macOS Colour at all (a Mac whose raw decoder has every setting the recipe needs).
+pub fn macos_available() -> bool {
+    lightcraft_macraw::available()
+}
+
+/// What the Mac's raw decoder adds to the cache keys of a photo on macOS Colour (`lightcraft_macraw::cache_key`: the
+/// OS build and LightCraft's recipe), so a render made by another macOS build is made again. 0 where macOS Colour is
+/// unavailable (the photo renders as Camera Matching there).
+pub(crate) fn macos_cache_key() -> u64 {
+    #[cfg(test)]
+    if let Some(k) = MACOS_KEY_FOR_TESTS.with(std::cell::Cell::get) {
+        return k;
+    }
+    lightcraft_macraw::cache_key()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A stand-in for [`macos_cache_key`] on this test's thread (another OS build).
+    pub(crate) static MACOS_KEY_FOR_TESTS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether this computer's raw decoder lists photo `p`'s camera (macOS Colour can make its picture), from the catalog.
+pub fn macos_lists(p: &lightcraft_catalog::Photo) -> bool {
+    macos::lists(p)
+}
+
+/// macOS's as-shot white of photo `id` (Kelvin, tint): from its decoded macOS Colour source, else the catalog's
+/// as-shot white when the photo edits in Kelvin here (learnt from such a source). `None` when neither is known: a white
+/// set in Kelvin then stays as it is (it renders as shot off macOS Colour, `pipeline::local::effective_wb`).
+pub(crate) fn macos_as_shot(s: &crate::Session, id: lightcraft_catalog::PhotoId) -> Option<(f64, f64)> {
+    let p = s.catalog.photo(id)?;
+    let decoded = s.decoded_source_info(id).filter(|i| !i.relative_wb && i.macos_note.is_none() && i.camera_color.is_none());
+    decoded
+        .map(|i| (i.as_shot_temp, i.as_shot_tint))
+        .or(p.as_shot_wb.filter(|_| !relative_wb(p)))
+        .filter(|(t, tint)| t.is_finite() && tint.is_finite())
+}
 #[cfg(test)]
 use fs::quick_image_srgb;
 pub use fs::{fs_hooks, fs_pair_loader, fs_reduced_loader};

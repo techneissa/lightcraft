@@ -73,6 +73,7 @@ pub fn effective_wb(info: &SourceInfo, s: &DevelopSettings) -> (f64, f64) {
         WbMode::AsShot => (info.as_shot_temp, info.as_shot_tint),
         _ if legacy_wb(info, s) => legacy_to_kelvin(s.wb.temp, s.wb.tint, (info.as_shot_temp, info.as_shot_tint)),
         m if info.raw && !info.relative_wb => m.preset().unwrap_or((s.wb.temp, s.wb.tint)),
+        _ if macos_kelvin_off_the_mac(info, s) => (info.as_shot_temp, info.as_shot_tint),
         _ => (s.wb.temp, s.wb.tint),
     }
 }
@@ -89,6 +90,18 @@ fn effective_white(info: &SourceInfo, s: &DevelopSettings) -> lightcraft_color::
     }
     let (t, tint) = effective_wb(info, s);
     temp_tint_to_xy(t, tint)
+}
+
+/// Whether `s` is a macOS Colour photo's white balance set in Kelvin (on a Mac, against macOS's as-shot white) on a
+/// source edited on the relative scale: the photo renders as Camera Matching here (not a Mac, or macOS cannot read
+/// it), and without macOS's as-shot white the Kelvin values cannot be carried over. It renders as shot rather than
+/// read the Kelvin numbers as relative ones (4 000 K would turn it deep blue); the values are kept, so the Mac shows
+/// them again.
+fn macos_kelvin_off_the_mac(info: &SourceInfo, s: &DevelopSettings) -> bool {
+    info.raw
+        && info.relative_wb
+        && s.wb.scale == lightcraft_develop::WbScale::Kelvin
+        && s.profile.camera_colour == lightcraft_develop::CameraColour::Macos
 }
 
 /// Whether `s` holds a white balance written on the relative scale for a source that is edited in Kelvin today.
@@ -138,6 +151,58 @@ pub fn legacy_to_kelvin(temp: f64, tint: f64, as_shot: (f64, f64)) -> (f64, f64)
         Some((t, tint)) if t.is_finite() && tint.is_finite() => (t, tint),
         _ => (temp, tint),
     }
+}
+
+/// The relative-scale temperature / tint (6500 K / 0 = as shot) that renders as the Kelvin white `(temp, tint)` does on
+/// a source whose as-shot white is `as_shot`: the inverse of [`legacy_to_kelvin`] (the same von Kries composition,
+/// [`legacy_white`], run backwards). A macOS Colour photo whose white balance was set in Kelvin keeps its look when it
+/// moves to a source edited on the relative scale (Camera Matching on a camera without measured matrices). As Shot
+/// (`as_shot` itself) gives 6500 K / 0 exactly. Unchanged when the arithmetic has nowhere to go.
+pub fn kelvin_to_legacy(temp: f64, tint: f64, as_shot: (f64, f64)) -> (f64, f64) {
+    use lightcraft_color::{BRADFORD, Xy};
+    if (temp, tint) == as_shot {
+        return (6500.0, 0.0);
+    }
+    if !(temp.is_finite() && tint.is_finite() && as_shot.0.is_finite() && as_shot.1.is_finite()) {
+        return (temp, tint);
+    }
+    let cones = |t: f64, tint: f64| BRADFORD.apply(temp_tint_to_xy(t, tint).to_xyz());
+    let (new, reference, shot) = (cones(temp, tint), cones(6500.0, 0.0), cones(as_shot.0, as_shot.1));
+    let Some(inverse) = BRADFORD.inverse() else { return (temp, tint) };
+    let mut old = [0.0; 3];
+    for i in 0..3 {
+        if shot[i].abs() < 1e-12 {
+            return (temp, tint);
+        }
+        old[i] = new[i] * reference[i] / shot[i];
+    }
+    let xy = Xy::from_xyz(inverse.apply(old));
+    if !(xy.x.is_finite() && xy.y.is_finite() && xy.y > 0.0) {
+        return (temp, tint);
+    }
+    match xy_to_temp_tint(xy) {
+        (t, tint) if t.is_finite() && tint.is_finite() => (t, tint),
+        _ => (temp, tint),
+    }
+}
+
+/// Move the white balance of `d`, a photo leaving macOS Colour for a source edited on the relative scale, off the
+/// Kelvin scale: a white set in Kelvin against macOS's as-shot white `as_shot` becomes the relative white that renders
+/// the same ([`kelvin_to_legacy`]; a preset becomes that Custom value, Auto keeps its mode). As Shot, and values already
+/// on the relative scale (never edited on macOS Colour), are left as they are.
+pub fn leave_kelvin(d: &mut DevelopSettings, as_shot: (f64, f64)) {
+    use lightcraft_develop::{WbMode, WbScale};
+    if d.wb.scale != WbScale::Kelvin || d.wb.mode == WbMode::AsShot {
+        return;
+    }
+    let (t, tint) = d.wb.mode.preset().unwrap_or((d.wb.temp, d.wb.tint));
+    let (t, tint) = kelvin_to_legacy(t, tint, as_shot);
+    d.wb.temp = t;
+    d.wb.tint = tint;
+    if d.wb.mode != WbMode::Auto {
+        d.wb.mode = WbMode::Custom;
+    }
+    d.wb.scale = WbScale::Legacy;
 }
 
 /// Bring the white balance of `d` onto the scale `info` is edited on, before a new value is written into it: on a

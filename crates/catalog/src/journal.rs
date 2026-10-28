@@ -52,7 +52,7 @@
 //! | 7 | Kelvin white balance for raws whose camera has matrices (#730) | `Op::SetAsShotWb`, `WhiteBalance.scale` |
 //! | 8 | History cursor: Go to History Step adds no step | `Op::SetHistoryCursor`, `Photo.history_cursor` |
 //! | 9 | preview-only recheck | `Photo.preview_checked`, `Op::SetContent.preview_checked` |
-//! | 10 | local camera profiles (fork) | develop settings `profile.camera_colour = local` / `macos` (`CameraColour::{Local, Macos}`) and `profile.camera_profile` |
+//! | 10 | local camera profiles and macOS Colour (fork) | develop settings `profile.camera_colour = local` / `macos` (`CameraColour::{Local, Macos}`) and `profile.camera_profile` |
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a

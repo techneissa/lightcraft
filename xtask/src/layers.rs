@@ -40,6 +40,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("tiff", Class::Layer(0)),
     ("sysmem", Class::Layer(0)),
     ("filepanel", Class::Layer(0)),
+    ("macraw", Class::Layer(0)),
     ("fetch", Class::Layer(0)),
     ("denoise-core", Class::Layer(1)),
     ("denoise", Class::Layer(1)),
@@ -341,6 +342,16 @@ mod tests {
         assert!(matches!(&v[..], [Violation::Unregistered { krate }] if krate == "lightcraft-mystery"));
         assert!(!check(&[c("lightcraft-pipeline", &[("lightcraft-testkit", Normal, true)])]).is_empty());
         assert!(check(&[c("lightcraft-pipeline", &[("lightcraft-testkit", Dev, true)])]).is_empty());
+    }
+
+    /// T18 (macOS Colour plan): macraw is a registered layer-0 crate, so the engine may use it and it
+    /// may use nothing above it.
+    #[test]
+    fn macraw_is_layer_zero() {
+        assert_eq!(classify("lightcraft-macraw"), Some(Class::Layer(0)));
+        assert!(check(&[c("lightcraft-engine", &[("lightcraft-macraw", Normal, true)])]).is_empty());
+        assert!(check(&[c("lightcraft-macraw", &[("objc2", Normal, false), ("lightcraft-testkit", Dev, true)])]).is_empty());
+        assert!(!check(&[c("lightcraft-macraw", &[("lightcraft-color", Normal, true)])]).is_empty());
     }
 
     #[test]

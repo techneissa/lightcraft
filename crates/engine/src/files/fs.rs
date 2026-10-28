@@ -1,4 +1,5 @@
-use super::load::{load_vec_pair, load_vec_reduced, load_vec_with};
+use std::path::Path;
+
 use super::preview::{fit_box, fs_preview_loader, preview_orientation};
 use super::probe::probe_bytes;
 use super::{Arc, DenoiseSpec, FileLoader, FileProbe, Filter, LoadOptions, PairLoader, ReducedLoader, fit};
@@ -56,11 +57,13 @@ pub(super) fn quick_image_srgb(header: &[u8], window: &[u8], adobe_rgb: bool, ma
 pub fn fs_pair_loader() -> PairLoader {
     Arc::new(|path: &str, max_edge: usize, spec: &DenoiseSpec, options: LoadOptions| {
         let len = std::fs::metadata(path).map(|m| m.len() as usize).unwrap_or(0);
-        let weight = len * if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 4 } else { 10 };
+        let weight = len.saturating_mul(if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 4 } else { 10 });
         let gate = crate::memory::work_gate();
-        let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
+        let permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
         let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
-        let r = load_vec_pair(bytes, max_edge, spec, options);
+        // (macOS's picture for the transfer is drawn before LightCraft develops both: the larger of the two weighs)
+        let _permit = macos_permit(gate, permit, weight, &bytes, super::macos::TRANSFER_EDGE, options);
+        let r = super::load::load_file(Path::new(path), bytes, max_edge, Some(spec), false, options).map(|(img, twin, info, _)| (img, twin, info));
         crate::memory::release();
         r
     })
@@ -74,8 +77,11 @@ pub fn fs_pair_loader() -> PairLoader {
 /// interactive loads (the loupe, exports) never wait — they are counted, so background work
 /// yields to them.
 pub fn fs_hooks() -> (FileLoader, FileProbe) {
-    let loader: FileLoader =
-        Arc::new(|path: &str, max_edge: usize, options: LoadOptions| fs_load(path, max_edge, |bytes| load_vec_with(bytes, max_edge, options)));
+    let loader: FileLoader = Arc::new(|path: &str, max_edge: usize, options: LoadOptions| {
+        fs_load(path, max_edge, options, |bytes| {
+            super::load::load_file(Path::new(path), bytes, max_edge, None, false, options).map(|(img, _, info, _)| (img, info))
+        })
+    });
     let probe: FileProbe = Arc::new(|path: &str| {
         let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
         let _permit = crate::memory::work_gate().acquire(len);
@@ -87,22 +93,57 @@ pub fn fs_hooks() -> (FileLoader, FileProbe) {
     (loader, probe)
 }
 
-/// The filesystem [`ReducedLoader`]: [`load_vec_reduced`] of the file, gated like [`fs_hooks`]' loader.
+/// The filesystem [`ReducedLoader`]: [`super::load::load_vec_reduced`] of the file, gated like [`fs_hooks`]' loader.
 pub fn fs_reduced_loader() -> ReducedLoader {
-    Arc::new(|path: &str, max_edge: usize, options: LoadOptions| fs_load(path, max_edge, |bytes| load_vec_reduced(bytes, max_edge, options)))
+    Arc::new(|path: &str, max_edge: usize, options: LoadOptions| {
+        fs_load(path, max_edge, options, |bytes| {
+            super::load::load_file(Path::new(path), bytes, max_edge, None, true, options).map(|(img, _, info, reduced)| (img, info, reduced))
+        })
+    })
 }
 
 /// Read `path` and `load` it, waiting on [`crate::memory::work_gate`] as [`fs_hooks`] explains.
-fn fs_load<T>(path: &str, max_edge: usize, load: impl FnOnce(Vec<u8>) -> Result<T, String>) -> Result<T, String> {
+fn fs_load<T>(path: &str, max_edge: usize, options: LoadOptions, load: impl FnOnce(Vec<u8>) -> Result<T, String>) -> Result<T, String> {
     let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
     let weight = len.saturating_mul(if max_edge <= crate::media::SourceLevel::Thumb.max_edge() { 3 } else { 6 });
     let gate = crate::memory::work_gate();
-    let _permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
+    let permit = if crate::memory::is_background() { gate.acquire(weight) } else { gate.acquire_urgent(weight) };
     let bytes = std::fs::read(path).map_err(|e| format!("{path}: {e}"))?;
+    let _permit = macos_permit(gate, permit, weight, &bytes, max_edge, options);
     let r = load(bytes);
     // the file, the samples and the intermediate images are gone: give their pages back
     crate::memory::release();
     r
+}
+
+/// The memory gate weight of a load that would weigh `own` without macOS Colour, once its `bytes` are read: a photo on
+/// macOS Colour (on a Mac that can render it) weighs Core Image's peak footprint for a picture no larger than
+/// `macos_edge` (`files::macos::gate_weight`: 1 GB at any size up to 33 MP, more for larger sensors), far more than
+/// its file size times the decode's expansion; `None` for any other load. If the decoder then fails, the Camera
+/// Matching decode that replaces it fits in the same weight.
+pub(crate) fn load_weight(own: usize, bytes: &[u8], macos_edge: usize, options: LoadOptions, macos_available: bool) -> Option<usize> {
+    let macos = options.colour == lightcraft_develop::CameraColour::Macos && macos_available;
+    macos.then(|| own.max(super::macos::gate_weight(bytes, macos_edge)))
+}
+
+/// The permit a load holds while it decodes: `permit` (its own weight, taken before the file was read), or for a
+/// macOS Colour load ([`load_weight`]) Core Image's weight instead, waited for even by an interactive load, so the
+/// loupe never stacks a second gigabyte on a thumbnail's render.
+pub(super) fn macos_permit<'g>(
+    gate: &'g crate::memory::WorkGate,
+    permit: crate::memory::Permit<'g>,
+    own: usize,
+    bytes: &[u8],
+    macos_edge: usize,
+    options: LoadOptions,
+) -> crate::memory::Permit<'g> {
+    match load_weight(own, bytes, macos_edge, options, lightcraft_macraw::available()) {
+        Some(weight) => {
+            drop(permit);
+            gate.acquire(weight)
+        }
+        None => permit,
+    }
 }
 
 /// `path`'s modification time as ISO 8601 (see [`ProbeInfo::file_modified`]); `None` when the

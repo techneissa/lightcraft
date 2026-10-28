@@ -64,6 +64,22 @@ fn a_photo_at_or_above_the_iso_gets_ai_denoise_as_one_undo_step() {
     finish(x);
 }
 
+/// T25: on a photo set to macOS Colour, Auto AI Denoise switches AI Denoise on as for any other (the loader carries the
+/// denoised picture over to macOS's colours, `files::macos` transfer tests); the colour source stays macOS Colour.
+#[test]
+fn a_macos_colour_photo_gets_auto_ai_denoise_too() {
+    let (mut x, id) = with_iso("auto-macos", true, 6400);
+    x.s.execute("develop.profile", &json!({"camera_colour": "macos"})).unwrap();
+    turn_on(&mut x.s);
+    let r = open(&mut x.s, id);
+    assert_eq!((r["applied"].clone(), r["reason"].clone()), (json!(true), json!("applied")), "{r}");
+    assert!(on(&x.s, id));
+    assert_eq!(x.s.develop_of(id).unwrap().profile.camera_colour, lightcraft_develop::CameraColour::Macos);
+    pump_until_ready(&mut x.s, 1);
+    assert_eq!(x.s.denoise_photo_state(id), crate::denoise::PhotoState::Ready);
+    finish(x);
+}
+
 #[test]
 fn below_the_threshold_without_an_iso_or_with_another_threshold() {
     let (mut x, id) = with_iso("auto-below", true, 3200);

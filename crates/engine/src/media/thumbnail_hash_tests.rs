@@ -267,3 +267,47 @@ fn a_local_profile_file_decodes_and_renders_the_photo_afresh_when_it_changes() {
     assert_eq!(keys(&mut s), auto_keys);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// T11: a photo on macOS Colour has the Mac decoder's key (OS build and recipe) in its thumbnail, variant, view and job
+/// keys, so a render made by another macOS build is made again; a Camera Matching photo's keys do not move with it and
+/// stay what they were before macOS Colour existed (the formula of the test above, which predates it).
+#[test]
+fn macos_colour_renders_follow_the_mac_decoder_and_camera_matching_keys_stay() {
+    use lightcraft_develop::CameraColour;
+    let set_key = |k: u64| crate::files::MACOS_KEY_FOR_TESTS.with(|c| c.set(Some(k)));
+    let mut s = session();
+    let keys = |s: &mut crate::Session| {
+        let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+        let job = s.thumb_job(PhotoId(1), 256).unwrap();
+        (job.key, job.cache.unwrap().1, crate::Session::variant_key(&p, &p.develop, 256), crate::Session::view_key(&p, true))
+    };
+    // Camera Matching: the same keys whatever the decoder's key, equal to the formula from before
+    set_key(11);
+    let auto = keys(&mut s);
+    set_key(22);
+    assert_eq!(keys(&mut s), auto, "a Camera Matching photo's keys never carry the macOS decoder");
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    let b = thumb_bucket(256);
+    let disk = Hasher128::new()
+        .str(&content_key(&p))
+        .u64(p.develop.hash64())
+        .u64(b as u64)
+        .u64(RENDER_CACHE_VERSION)
+        .u64(crate::camera_profiles::cache_key())
+        .finish();
+    assert_eq!(auto.1, disk);
+    // macOS Colour: every key follows the decoder's
+    let mut d = (*p.develop).clone();
+    d.profile.camera_colour = CameraColour::Macos;
+    s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(d), label: "edit".into(), edited: None }).unwrap();
+    set_key(11);
+    let first = keys(&mut s);
+    assert_eq!(keys(&mut s), first, "stable while the OS build stays");
+    set_key(22);
+    let second = keys(&mut s);
+    assert!(first.0 != second.0 && first.1 != second.1 && first.2 != second.2 && first.3 != second.3, "every render key follows the macOS decoder");
+    // the decoded source is cached with the key too (another OS build decodes again)
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    assert_eq!(LoadOptions::of(&p.develop).profile_key, Some(22));
+    crate::files::MACOS_KEY_FOR_TESTS.with(|c| c.set(None));
+}

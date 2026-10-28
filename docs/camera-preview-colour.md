@@ -277,8 +277,9 @@ one made with others is decoded again (and replaces it, so memory stays at one s
 photo, a profile-browser thumbnail or a face tile asks for the other choice. A late render of the old one is not taken
 back into the cache (`Session::accept`). A source the choice can't change is reused (`SourceInfo::colorimetric` false:
 a DNG with matrices, a smart preview, a demo scene). Renders, thumbnails, exports and the GPU path read the same
-decoded source, so they agree. A smart preview is always built with Camera Matching (it stands in for the original),
-so an offline original shows Camera Matching whatever it is set to until it is back online.
+decoded source, so they agree. A smart preview is built with Camera Matching (it stands in for the original),
+so an offline original shows Camera Matching whatever it is set to until it is back online; a macOS Colour photo's is
+built from the Mac's picture (below).
 
 Known limits: the web app's render worker (`apps/lightcraft-web/src/wire.rs`) decodes every photo as Camera Matching; a
 photo rendered from its smart preview (the original offline) always shows Camera Matching; the Before side of
@@ -325,7 +326,7 @@ Now it does not: Camera Matching reads the built-in profiles alone.
 - **DNG.** Export as DNG and Convert / Copy as DNG write the profile's matrix, table and (when fitted) tone into the DNG's
   colour tags; the DNG's settings say Camera Matching (a DNG has matrices of its own, so the choice is not offered on it).
   Photo Merge keeps Camera Matching; its dialog says how many of the photos are on a local profile.
-- **Catalog.** `local` and the reserved `macos` (rendered as Camera Matching until the macOS Colour track lands) are
+- **Catalog.** `local` and `macos` (see "macOS Colour" below) are
   catalog format v10; a build that only knows v9 refuses the library as "newer version", untouched, never as damaged.
 - **Existing photos.** For a file named after its camera (`ILCE-7M5.json`, the name Camera Matching used to read) a
   question is put when the library opens, until it is answered: "N photos were rendered with your local profile 'X'. Switch them to it
@@ -333,6 +334,157 @@ Now it does not: Camera Matching reads the built-in profiles alone.
   **Leave on Camera Matching** leaves them. Never automatic. Only those two answer it (kept in the library's preferences,
   `localProfileAsked`); closing the window with Esc or a click outside asks again at the next opening, and undoing a
   Switch puts the question back (redo answers it again).
+
+### macOS Colour (the Mac's own raw colours)
+
+The third choice in the Profile picker. On a Mac, the raw decoder the system itself uses (Core Image's `CIRAWFilter`, the
+one behind Photos and Quick Look) makes the picture's colours; LightCraft keeps its tone curve, white balance and every
+slider. It is stored as `profile.camera_colour: "macos"` (`develop.profile {camera_colour: "macos"}`, one undo step,
+carried by the Profile group of presets, Copy / Paste and Sync). All Apple calls live in `crates/macraw`, the third
+place allowed `unsafe` (`CLAUDE.md`); a stub keeps the crate building for every other system and the web.
+
+**The recipe.** `macraw::render` sets, each only after `respondsToSelector:` says the property exists: `boostAmount` 0,
+`shadowBias` 0 (the default 3 lifts deep shadows), `extendedDynamicRangeAmount` 1, gamut mapping and lens correction
+off (LightCraft applies lens profiles itself), noise reduction, despeckle, sharpness, contrast, detail and moiré
+reduction 0 (LightCraft owns them), local tone map 0. The result is a float picture in linear extended Rec.2020, upright,
+and a render never runs without the required selectors (`available()` is false instead of a half recipe). It is made in
+an autorelease pool per render, one full-size render at a time and at most two at preview size or below
+(`crates/macraw/src/slots.rs`), and the memory gate weighs it at Core Image's peak footprint (1 GB, below).
+
+**When a photo gets it.** All of: a Mac with the decoder (`macraw::available()`); an ARW, the one format with a verified
+type hint for bytes input (below: widening); a camera Apple lists, matched on the Exif model (`ILCE-7M5`, not the
+catalog's `SONY ILCE-7M5`) against the last words of Apple's names; and a decoder picture within 2 % of LightCraft's
+size on each edge (a picture within 2 % but not equal is resampled to exactly LightCraft's size, so crop, lens, spot and
+mask coordinates map one to one). A raw that fails any of them, or that the decoder then cannot read, renders as Camera
+Matching with the setting kept, and the Edit panel says why under the Profile picker:
+
+| Why | Line under the picker |
+|---|---|
+| not a Mac, or the camera or format is not offered | "Edited with macOS Colour. This picture uses Camera Matching, so colours differ." |
+| another size | "macOS reads this raw at a different size, so this picture uses Camera Matching." |
+| the decoder failed on the file (remembered for the session) | "macOS could not read this raw, so this picture uses Camera Matching." |
+| AI Denoise is on and the colour transfer was refused | "AI Denoise uses Camera Matching colours on this photo." |
+
+A camera macOS 27 can read only after downloading support for it (`macraw::Error::NeedsDownload`) gets the "could not
+read" line too, and is not remembered as failed. LightCraft does not start that download: the command for it was dropped
+for v1 (decided 2026-10-28), because the A7 V decodes without one and the path can't be tested here. Revisit when a
+camera that needs it shows up.
+
+A photo set to macOS Colour on a computer that cannot make it keeps its row in the picker, greyed. The photo's grid
+thumbnail, filmstrip and loupe never show the camera's JPEG first for a photo that does get macOS Colour: they wait for
+the macOS render (`QuickJob.embedded` is `None` for it), so there is no colour flash.
+
+**Tone, exposure, white.** Core Image's output is darker than the camera's JPEG and has no tone curve, so the tone and
+chroma curves are fitted to the file's JPEG with the colour held at identity (`camera_preview/macos_base.rs`, the gates
+of every other fit; DRO is lowered out of the tone as in Camera Matching; accepted on 66 of 68 A7 V photos, about 2 to
+3 ms). Only when that fit is refused (no JPEG, another frame, no attempt passes) does the base take a fixed gain of
++0.33 stops (`GAIN_STOPS`, measured on 16 A7 V photos: mean lightness against the camera JPEG −0.06 L*); an accepted fit
+is never multiplied again. White balance is done on the linear base with the Bradford adaptation Camera Matching uses,
+and its scale is **Kelvin** from Core Image's as-shot white (3970 K against Apple's own 3968 K on a measured file), not
+the relative 6500 K / 0 scale an A7 V uses under Camera Matching. A Custom white balance converts between the two scales
+when the choice changes (`legacy_to_kelvin`), and As Shot stays as shot. Big cool moves (−1500 K) differ visibly from
+Apple's own re-render (ΔE00 3 to 4.5). Lightroom's XMP Kelvin white balance is read as Kelvin on a macOS Colour photo.
+
+**AI Denoise.** Apple cannot denoise LightCraft's mosaic, so with AI Denoise on (and its product made) both the plain and
+the denoised picture are developed by LightCraft and carried to Apple's colours by one per-photo transfer, a white-keeping
+3×3 matrix and a gain fitted to a 1024 px Apple render over about 1 900 block averages (`camera_preview/colour_transfer.rs`).
+The same transfer finishes both pictures, so the Amount slider blends pictures of the same colour. Measured against Apple's
+own colours on 68 A7 V photos from ISO 100 to 12 800: median ΔE00 0.23 (worst 0.59), skin 0.20 (worst 0.84). A fit that
+fails its gates (500 valid blocks, matrix entries within ±3, gain 0.2 to 5, own median ΔE00 ≤ 1.5) makes both pictures
+Camera Matching, with the line above. No full-size Apple render is ever made on this path. With AI Denoise off, Apple's
+base is used directly. Turning AI Denoise on or off changes the colour by the transfer's residual and the detail by the
+demosaic, nothing else.
+
+**Caches, smart previews, exports.** A macOS Colour photo's thumbnail, variant and view render keys carry
+`macraw::cache_key()` (the OS build and decoder version); every other photo's keys are what they were. A smart preview of
+such a photo is built from the Apple base on a Mac and records `base: "macos"` and `macos_base_version` (1) in its header;
+it is stale only when that version is older and the original is online, never because the OS changed, so an offline
+photo keeps macOS pixels on any computer. A computer that cannot make the base never rebuilds such a proxy with Camera
+Matching. JPEG, TIFF and the other rendered exports use the macOS render; DNG export, Convert / Copy as DNG and Photo
+Merge keep Camera Matching colours (a DNG carries the mosaic and its own tags), their dialogs say so, and the DNG's
+settings say `auto`. Exporting a macOS Colour photo from a computer that cannot make it says how many photos use Camera
+Matching instead.
+
+**Starting Colour for Raw Photos.** Settings ▸ Import ▸ Raw defaults has the choices macOS Colour (default), Camera
+Matching and No Camera Matching (`library.preferences {import: {startingColour: "macos" | "cameraMatching" |
+"noCameraMatching"}}`, kept in the library's `prefs.json`, so a library keeps its choice across computers). At import a
+new raw gets the setting only if the photo takes the fitted look; macOS Colour additionally needs the gates above, and
+the size gate is checked with one `macraw::probe` per camera model and size per session (not per photo). Otherwise, and
+on a computer that is not a Mac (the setting's hint says so), the photo starts on Camera Matching. A default preset that
+names a colour source wins. The value is written into the photo's import look too, so a new photo is not "edited". Photos
+already in the library never change when the setting does; **Apply macOS Colour to All Photos from This Camera…** in
+the Profile menu moves them (`profiles.macosForCameraCount` says how many first, `profiles.macosForCamera` does it in
+one undo step and counts the photos it skipped by reason, never automatic). Applying a preset that carries macOS Colour
+reports how many of its photos cannot use it here (`preset.apply` → `macosFallback`) and the toast says so. Both run on
+the UI thread, so they use only the size verdicts already found and never wait for a probe (up to seconds on a slow
+disk): a camera and size not checked yet is probed on a thread of its own under the activity row **Checking macOS Raw
+Support**, the count says how many photos wait for it (`checking`) and the menu item answers "Checking which photos macOS
+can read. Try again in a moment." (the move refuses meanwhile); a preset's summary counts only the photos already known.
+A raw that check cannot read counts as another size until an import probes it again.
+
+**Catalog.** `macos` is part of catalog format v10 (with `local` and `profile.camera_profile`, `crates/catalog/src/journal.rs`
+table row 10); the official LightCraft refuses a library this build has opened as "newer version", files untouched.
+The number 10 is this fork's: if the official project reaches 10 with another meaning, the merge conflicts on `VERSION`
+and the table, and this feature takes the next free number.
+
+**Measured** (2026-10-28, macOS 27.0.1, Apple M4 Pro, A7 V ARW 7008×4672, the machine at load 4 to 13 while measuring; times
+are medians of 2 to 3 runs, with `cm` for Camera Matching on the same files):
+
+| What | macOS Colour | Camera Matching |
+|---|---|---|
+| first photo imported and shown at 1600 px | 0.91–0.92 s (the import's size probe about 0.4 s once per session) | 0.48–0.49 s |
+| import of 11 more photos of the same camera | 0.11 s | 0.05 s |
+| open at 2560 px | 0.43–0.62 s (first open of a launch 1.0 s) | 0.20–0.31 s (first 0.58 s) |
+| grid thumbnail (256 px) | 0.33–0.51 s | 0.10–0.16 s |
+| standard previews of 12 photos | 4.1–4.4 s | 1.4–1.9 s |
+| full-size JPEG export | 0.70–0.83 s | 0.59–0.87 s |
+| AI Denoise on: open at 2560 px | 1.2 s (1024 px Apple render 0.51 s, transfer fit 29 ms) | 0.68 s |
+| AI Denoise on: full-size export | 1.9 s | 1.3 s |
+| all photos of a camera to macOS Colour (12) | command 13 ms, then the 12 re-renders 4.5 s | – |
+| preset with macOS Colour on 11 photos | command 0.26 s, then the re-renders 4.0 s | – |
+| one Core Image render alone: peak resident / peak footprint at 512, 1024, 2560 px and full size | 234 / 830–990, 244 / 970, 274 / 370–675, 617 / 577–607 MB | – |
+| process peak, one full-size export: resident / footprint | 1.11 GB / 3.9 GB | 1.36 GB / 4.1 GB |
+| same, AI Denoise on | 2.4 GB / 5.5 GB | 2.3 GB / 5.0 GB |
+
+Core Image's own buffers dominate a render, so a 512 px render peaks at about the footprint of a full-size one. The
+gate weight (decided 2026-10-28) is `macraw::weight_bytes(w, h)` = the larger of 1 GB (`macraw::FLOOR_BYTES`) and
+200 MB + 16 B a pixel of the picture drawn: a flat 1 GB up to the A7 V's full 33 MP (16 B is the float RGBA band plus
+the float result per pixel; the plan's 28 B over-counted the full size by 0.5 GB against the 577–607 MB measured), more
+for larger sensors (a 60 MP picture weighs 1.16 GB). The plan's per-size targets (0.3 GB at 512 px, 0.45 GB at 2560 px)
+cannot be met by footprint, which is 370–990 MB at any size; they are met by resident size (234 and 274 MB). The loader
+reads the file, takes that weight from the file's header and the picture's long edge, and waits for it at the gate even
+for the loupe or an export (`files::fs`'s `macos_permit`), so an interactive render never stacks a second gigabyte on a
+thumbnail's; the AI Denoise path weighs the larger of its 1024 px Apple render and its own two pictures, which it holds
+one after the other. A load hands the decoder the file's path and lets its own copy of the raw go first (the camera JPEG,
+header and lens are read from it before), and a render still waiting for its slot gives up when the job is cancelled
+(building previews: ✕ in the activity stack). The thumbnail and the standard-preview build run one render at a time in the headless
+build: 3 274 photos at 0.35 to 0.47 s are about 19 to 26 minutes against about 7 to 8 with Camera Matching (the app's thumbnail
+workers run beside each other, up to the two preview-size slots; not measured here).
+
+**What it looks like.** Against the camera's JPEG, macOS Colour is the "natural" one on skin and greys (white-balance casts in
+greys 0.36 against 1.43, skin hue within 1°, measured on 60 A7 V photos) and it is not the camera's look: on the padel
+court photos of the A7 V sheet (6 photos: the camera JPEG, Camera Matching, macOS Colour, macOS Colour with AI Denoise) the saturated blue floor moves 8 to 16°
+towards violet and loses 0.07 to 0.17 of HSV saturation (hue 227° against 210°, saturation 0.48 against 0.65 on A7V02917),
+where Camera Matching stays within 2°. Highlights −50 darkens the brightest tenth of a photo more on macOS Colour
+(−4.6, −2.2 and −1.3 L* on the three bright photos of the Highlights sheet, against −3.1, −0.9 and −0.3), which is a
+property of the base, not a defect.
+
+**Other makers (survey, 2026-10-28).** The gate offers only ARW. Fourteen CC0 raws from raw.pixls.us (Canon CR3 ×2, Nikon
+NEF ×2, Fujifilm RAF, Panasonic RW2 ×2, Pentax PEF, Olympus ORF, Leica DNG ×2, Ricoh DNG, Sony ARW ×2) were run through
+the decoder directly. Eleven are listed by their Exif model (LightCraft's reader cannot open the Olympus compressed ORF, so its name was not checked), all 13 it can read have a decoder size equal to LightCraft's (a Leica M10 DNG
+differs by 0.4 %), all decode at 1600 px in 0.12 to 0.39 s with a plausible as-shot white (4 880 to 6 900 K), and a bytes
+input with the file's own type (`mdls` gives `com.canon.cr3-raw-image`, `com.nikon.raw-image`, `com.fuji.raw-image`,
+`com.panasonic.rw2-raw-image`, `com.pentax.raw-image`, `com.olympus.raw-image`, `com.adobe.raw-image`) returns pixels
+identical to a path input. The Nikon Z 6_2 and the Sony A7C II are not in Apple's list yet decode at the right size. What
+widening takes: (1) the format check in `import/starting_colour.rs::macos_gates`, `files/macos.rs::lists` and the `uti`
+table in `files/macos.rs` (add the types above after a per-format check against the real files); (2) the camera name: the
+catalog keeps `make model` joined, and splitting at the first space breaks makers with a multi-word make (`NIKON
+CORPORATION NIKON D850`, `Leica Camera AG LEICA M10`, `RICOH IMAGING COMPANY, LTD. RICOH GR III`), so the gate needs the
+Exif model (or every word suffix tried); (3) a DNG has matrices of its own, so `fitted_look` is false and the choice is not
+offered; offering it there is a separate decision; (4) per-camera checks of the tone fit against the camera JPEG (the
+Olympus compressed ORF that LightCraft cannot decode at all renders through the decoder; not tried in the product). One
+cost to know: the first probe or render of some cameras (Sony A7 IV, A7C II, Canon R6 Mark III, Fujifilm X-T50, Nikon D850
+and Z 6_2 here) took 5.1 to 5.3 s in a new process, then 50 to 65 ms. The A7 V and the other cameras above took 30 to 190 ms.
 
 ## Smart previews and the look version
 

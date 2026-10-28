@@ -1,0 +1,24 @@
+[package]
+name = "lightcraft-macraw"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft macraw (L0): macOS's own raw decoder (Core Image CIRAWFilter) as a linear Rec.2020 base. Allowed `unsafe` (the Objective-C calls), like lightcraft-sysmem and lightcraft-filepanel."
+
+# The workspace lints deny `unsafe_code`; only the `macos` module allows it (AGENTS.md, craftrules
+# standards/never-crash.md, "isolated helper library crate").
+[lints]
+workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# No `exception` feature: it compiles an Objective-C helper with `cc` (README.md).
+objc2 = { workspace = true }
+objc2-foundation = { workspace = true, features = ["NSString", "NSURL", "NSData", "NSDictionary", "NSArray", "NSEnumerator", "NSProcessInfo", "NSValue", "NSKeyValueCoding", "NSAutoreleasePool"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "objc2", "CFCGTypes", "CFString"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "objc2", "CGColorSpace"] }
+# Pinned: the CIRAWFilter setters this crate calls were checked against this exact binding
+# (plan/colour/macos-base-plan.md §2.1). It must use the workspace's objc2 0.6.
+objc2-core-image = { version = "=0.3.2", default-features = false, features = ["std", "objc2-core-foundation", "objc2-core-graphics", "CIRAWFilter", "CIContext", "CIImage", "CIFilter", "CIFilterBuiltins"] }
+
+[dev-dependencies]
+lightcraft-testkit = { workspace = true }

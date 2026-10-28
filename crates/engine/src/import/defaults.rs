@@ -45,6 +45,8 @@ pub struct ImportDefaults {
     /// pictures are queued after the import, under one row in the activity stack.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub denoise_above_iso: Option<u32>,
+    /// The colour source new raw photos start on (Starting Colour for Raw Photos; macOS Colour by default).
+    pub starting_colour: super::starting_colour::StartingColour,
 }
 
 impl ImportDefaults {
@@ -96,6 +98,7 @@ pub fn apply_import_defaults(s: &Session, p: &mut Photo) {
     // a raw shown from its embedded JPEG gets the rendered-file default, not the raw one
     let raw = p.develops_raw();
     let preset = s.import_defaults.preset_for(raw, &p.meta.camera).and_then(|id| s.presets.iter().find(|x| x.id == id));
+    let preset_colour = preset.is_some_and(|pr| pr.settings.pointer("/profile/camera_colour").is_some());
     match preset {
         Some(pr) => {
             let look = std::sync::Arc::new(pr.apply(&base, 1.0));
@@ -107,6 +110,8 @@ pub fn apply_import_defaults(s: &Session, p: &mut Photo) {
             p.import_look = None;
         }
     }
+    // Starting Colour for Raw Photos (Settings ▸ Import): a preset that names a colour source wins
+    super::starting_colour::with_gate(|gate, verdicts| super::starting_colour::apply(d.starting_colour, preset_colour, p, gate, verdicts));
     // AI Denoise above the ISO chosen (Settings ▸ Import): part of the look the photo starts from
     if s.import_defaults.denoise_on_import(p) && !p.develop.enhance.denoise_enabled() {
         let mut d = (*p.develop).clone();
