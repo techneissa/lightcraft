@@ -151,6 +151,57 @@ fn a_render_from_the_smart_preview_matches_the_original() {
     }
 }
 
+/// Spots, masks and the crop are in the photo's normalized coordinates: they land on the same pixels from either source
+/// (a crop tight enough to ask for a larger source level included: it reads the original, and still matches).
+#[test]
+fn spots_masks_and_crops_line_up_on_both_sources() {
+    use lightcraft_develop::{LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape, Spot, SpotMode};
+    use lightcraft_geom::{CropGeometry, Point, Rect};
+    let (mut s, id, src) = session_with_dng("coords", 2600, 1700);
+    s.execute("library.smartPreviews", &json!({})).unwrap();
+    let mut d = edited();
+    d.spots.push(Spot {
+        mode: SpotMode::Clone,
+        points: vec![Point::new(0.18, 0.70)],
+        size: 0.03,
+        source_offset: Some(Point::new(0.12, 0.0)),
+        ..Default::default()
+    });
+    d.spots.push(Spot {
+        mode: SpotMode::Heal,
+        points: vec![Point::new(0.71, 0.23)],
+        size: 0.02,
+        source_offset: Some(Point::new(-0.1, 0.12)),
+        ..Default::default()
+    });
+    d.masks.push(Mask {
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Radial { center: Point::new(0.4, 0.5), rx: 0.25, ry: 0.18, angle: 20.0, feather: 60.0, invert: false },
+        }],
+        adjust: LocalAdjustments { exposure: 1.1, ..Default::default() },
+        ..Default::default()
+    });
+    d.crop.geometry = CropGeometry { rect: Rect { x0: 0.08, y0: 0.1, x1: 0.92, y1: 0.86 }, angle: 2.5 };
+    s.set_develop(id, d.clone(), "spots, mask and crop").unwrap();
+    let (original, _) = render(&mut s, id, 1200, false);
+    let (proxy, from_proxy) = render(&mut s, id, 1200, true);
+    assert!(from_proxy);
+    let (median, p95, max) = delta_e(&original, &proxy);
+    eprintln!("smart preview vs original with spots, a mask and a crop: median dE00 {median:.3}, 95th {p95:.3}, max {max:.2}");
+    assert!(median < 1.0 && p95 < 3.0, "median dE00 {median:.3}, 95th {p95:.3}");
+    // a crop to a fifth of the frame at the same output size needs a source five times as large: the original
+    d.crop.geometry = CropGeometry { rect: Rect { x0: 0.3, y0: 0.3, x1: 0.5, y1: 0.5 }, angle: 0.0 };
+    s.set_develop(id, d, "tight crop").unwrap();
+    s.media.set_smart_editing(true);
+    let job = s.render_job(id, 1200, 1200, false, true).unwrap();
+    assert_eq!(job.level, SourceLevel::Full, "a tight crop asks for the Full level");
+    assert!(matches!(job.source, SourceRef::File { .. }), "and reads the original");
+    let _ = std::fs::remove_dir_all(src);
+}
+
 /// A real raw from the corpus (`raw/*.arw`), when there is one: the same comparison.
 #[test]
 fn a_render_from_the_smart_preview_matches_a_real_raw() {
@@ -264,4 +315,113 @@ fn a_missing_stale_or_other_coloured_smart_preview_counts_as_missing() {
     raw.develop = std::sync::Arc::new(d);
     assert!(s.media.smart_proxy(&raw, SourceLevel::Preview, LoadOptions::of(&raw.develop)).is_none(), "Colorimetric reads the original");
     let _ = std::fs::remove_dir_all(src);
+}
+
+/// The colour a proxy was made with decides whether a photo is edited from it: Camera Matching, a local profile as its
+/// file is now, or macOS Colour. Another colour, or one that can't be checked, reads the original.
+#[test]
+fn a_smart_preview_made_for_another_colour_is_not_current() {
+    use crate::smart::{LocalWant, current_for, encode_for};
+    let d = temp("colour");
+    let img = lightcraft_scenes::demo_library()[0].render(32, 20);
+    let info = lightcraft_pipeline::SourceInfo::default();
+    let make = |name: &str, want: LocalWant| {
+        let f = d.join(name);
+        std::fs::write(&f, encode_for(&img, Some(&info), &want).unwrap()).unwrap();
+        f
+    };
+    let is = |s: &str| LocalWant::Is(s.to_owned());
+    let (plain, local, macos) = (make("plain", LocalWant::No), make("local", is("A:1")), make("macos", LocalWant::Macos));
+    assert!(current_for(&plain, true, &LocalWant::No));
+    assert!(!current_for(&plain, true, &is("A:1")) && !current_for(&plain, true, &LocalWant::Macos));
+    assert!(current_for(&local, true, &is("A:1")));
+    assert!(!current_for(&local, true, &is("A:2")) && !current_for(&local, true, &LocalWant::No), "another profile, or its file changed");
+    assert!(current_for(&macos, true, &LocalWant::Macos));
+    assert!(!current_for(&macos, true, &LocalWant::No), "the photo left macOS Colour");
+    // a colour that can't be checked now: the original is read (the proxy may be the only copy only when it is offline)
+    for f in [&plain, &local, &macos] {
+        assert!(!current_for(f, true, &LocalWant::Keep) && !current_for(f, true, &LocalWant::MacosElsewhere));
+    }
+    // none, or one cut short
+    assert!(!current_for(&d.join("missing.lcsp"), true, &LocalWant::No));
+    std::fs::write(d.join("cut.lcsp"), b"LCSP1\n{}").unwrap();
+    assert!(!current_for(&d.join("cut.lcsp"), true, &LocalWant::No));
+    let _ = std::fs::remove_dir_all(d);
+}
+
+/// A photo edited from its proxy is offered the Profile choices its original offers; one standing in for an offline
+/// original is not (its colour can't change).
+#[test]
+fn a_proxy_keeps_what_the_profile_picker_offers() {
+    let d = temp("offer");
+    let img = lightcraft_scenes::demo_library()[0].render(32, 20);
+    let info = lightcraft_pipeline::SourceInfo { raw: true, colorimetric: true, macos_offered: true, ..Default::default() };
+    let f = d.join("a.lcsp");
+    std::fs::write(&f, crate::smart::encode(&img, Some(&info)).unwrap()).unwrap();
+    let editing = crate::smart::load_for_editing(&f).unwrap();
+    let i = editing.info.as_ref().unwrap();
+    assert!(editing.edit_proxy && i.colorimetric && i.macos_offered);
+    let offline = crate::smart::load(&f).unwrap();
+    assert!(!offline.edit_proxy && !offline.info.as_ref().unwrap().colorimetric);
+    // a proxy that kept no facts is not edited from
+    std::fs::write(&f, crate::smart::encode(&img, None).unwrap()).unwrap();
+    assert!(crate::smart::load_for_editing(&f).is_err());
+    let _ = std::fs::remove_dir_all(d);
+}
+
+/// A source read from the proxy is dropped when the photo's colour becomes one the proxy can't show, and when the
+/// setting goes off.
+#[test]
+fn a_kept_proxy_source_is_dropped_when_the_colour_or_the_setting_changes() {
+    let (mut s, id, src) = session_with_dng("veto", 1200, 800);
+    s.execute("library.smartPreviews", &json!({})).unwrap();
+    s.media.set_smart_editing(true);
+    let r = s.render_job(id, 600, 600, false, true).unwrap().run();
+    assert!(r.loaded.as_ref().is_some_and(|l| l.edit_proxy));
+    s.accept(&r);
+    let kept = s.render_job(id, 600, 600, false, true).unwrap();
+    assert!(matches!(kept.source, SourceRef::Loaded(_)), "the kept proxy source serves the next render");
+    // the photo asks for No Camera Matching (a raw on the fitted look)
+    let mut raw = (**s.catalog.photo(id).unwrap()).clone();
+    raw.format = "ARW".into();
+    let mut d = (*raw.develop).clone();
+    d.profile.camera_colour = CameraColour::Colorimetric;
+    raw.develop = std::sync::Arc::new(d);
+    let wanted = LoadOptions::of(&raw.develop);
+    let src_ref = s.media.source_ref_for(&raw, SourceLevel::Preview, wanted);
+    assert!(matches!(src_ref, SourceRef::File { .. }), "the proxy source is not used for it");
+    let _ = std::fs::remove_dir_all(src);
+}
+
+/// A photo on a local camera profile is edited from a proxy made with that profile's file as it is now; a profile that
+/// can't be used (its file is gone, or for another camera) reads the original.
+#[test]
+fn a_photo_on_a_local_profile_is_edited_from_a_proxy_made_with_it() {
+    use crate::camera_profiles::{self, CameraProfile};
+    use crate::smart::{LocalWant, local_stamp};
+    use lightcraft_catalog::{MediaKind, Photo, Source};
+    let d = temp("local");
+    camera_profiles::save_named(&CameraProfile::new("ILCE-7M5", 40, 9000, lightcraft_color::Mat3::IDENTITY, None), &d, "A7 V Chart").unwrap();
+    let _guard = camera_profiles::use_dir_for_tests(&d);
+    let mut s = Session::new();
+    s.media.smart_dir = Some(d.join("Smart Previews"));
+    s.media.set_smart_editing(true);
+    let photo = |camera: &str, profile: &str| {
+        let mut p = Photo::new(PhotoId(1), Source::File { path: "/p/a.arw".into() }, "a.arw", "ARW", 6000, 4000, "2026-10-28");
+        p.kind = MediaKind::Raw;
+        p.meta.camera = camera.into();
+        let mut dev = (*p.develop).clone();
+        dev.profile.camera_colour = CameraColour::Local;
+        dev.profile.camera_profile = Some(profile.into());
+        p.develop = std::sync::Arc::new(dev);
+        p
+    };
+    let ok = photo("SONY ILCE-7M5", "A7 V Chart");
+    let proxy = s.media.smart_proxy(&ok, SourceLevel::Preview, LoadOptions::of(&ok.develop)).expect("a usable local profile");
+    assert_eq!(proxy.want, LocalWant::Is(local_stamp("A7 V Chart", camera_profiles::local_key("A7 V Chart"))));
+    for (camera, profile) in [("SONY ILCE-7M5", "Gone"), ("SONY ILCE-7M4", "A7 V Chart")] {
+        let p = photo(camera, profile);
+        assert!(s.media.smart_proxy(&p, SourceLevel::Preview, LoadOptions::of(&p.develop)).is_none(), "{camera} {profile}: the original");
+    }
+    let _ = std::fs::remove_dir_all(d);
 }

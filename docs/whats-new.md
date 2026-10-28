@@ -2,6 +2,21 @@
 
 ## 2026-10-28
 
+### Use Smart Previews for Viewing and Editing
+- **Settings ▸ Performance** has a new switch next to the Smart Previews folder: **Use Smart Previews for viewing and
+  editing** (off by default; Lightroom's "Use Smart Previews instead of Originals for image editing"). With it on, the
+  grid, the loupe at fit and fill, Compare, Survey and every slider edit use a photo's Smart Preview even when its
+  original is right there. Photos on a network drive, an external drive or big 33 MP raws open and edit fast.
+- The original is still read when you zoom to 100 % or more, and for Export, Edit In, Open as Layers, print, the contact
+  sheet, DNG export, Photo Merge and AI Denoise. While it loads, the same photo with the same edit stays on screen from
+  the Smart Preview, so colour, tone and white balance don't flicker. The two renders match to a median ΔE00 of about 0.4.
+- A Smart Preview that is out of date, or was made for another colour than the photo's Profile (No Camera Matching, a
+  local camera profile, macOS Colour), counts as missing: that photo uses its original as before.
+- **Info** says "Editing from Smart Preview" when it applies. Switching the setting on asks once whether to build the
+  missing Smart Previews in the background; new imports build theirs. Agents set it with `library.smartPreviewsForEditing`.
+- Smart Previews now keep what the Profile picker offers, so existing ones are rebuilt once in the background when the
+  library opens (photos whose original is offline keep theirs).
+
 ### Open Photos as Layers in PhotoCraft
 - **Photo ▸ Edit In ▸ Open as Layers in PhotoCraft…** (two or more photos selected; also in the right-click menu's list
   of commands, and in its **Edit In** submenu) opens the selected photos as the layers of one new PhotoCraft document,
