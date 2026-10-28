@@ -80,17 +80,26 @@ pub struct LoadOptions {
     /// Where a raw without colour matrices takes its starting colour from (`Profile::camera_colour`).
     pub colour: lightcraft_develop::CameraColour,
     /// For [`CameraColour::Local`](lightcraft_develop::CameraColour::Local): the key of the local profile (its id and
-    /// its file's content, `camera_profiles::local_key`), so a changed file decodes the source again. `None` for a photo
-    /// that is not on a local profile.
+    /// its file's content, `camera_profiles::local_key`), so a changed file decodes the source again. For
+    /// [`CameraColour::Macos`](lightcraft_develop::CameraColour::Macos): the Mac's raw decoder key
+    /// (`files::macos_cache_key`, the OS build and the recipe), so renders cached by another macOS build are made again.
+    /// It is in every render key of the photo. `None` for any other photo, whose keys stay as they were.
     pub profile_key: Option<u128>,
 }
 
 impl LoadOptions {
     pub fn of(s: &DevelopSettings) -> LoadOptions {
         let local = s.profile.camera_colour == lightcraft_develop::CameraColour::Local;
+        let macos = s.profile.camera_colour == lightcraft_develop::CameraColour::Macos;
         LoadOptions {
             colour: s.profile.camera_colour,
-            profile_key: s.profile.camera_profile.as_deref().filter(|_| local).map(crate::camera_profiles::local_key),
+            profile_key: s
+                .profile
+                .camera_profile
+                .as_deref()
+                .filter(|_| local)
+                .map(crate::camera_profiles::local_key)
+                .or_else(|| macos.then(|| u128::from(crate::files::macos_cache_key()))),
         }
     }
 }

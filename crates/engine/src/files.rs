@@ -30,6 +30,23 @@ pub fn relative_wb(p: &lightcraft_catalog::Photo) -> bool {
     p.relative_wb_on(macos_lists(p))
 }
 
+/// What the Mac's raw decoder adds to the cache keys of a photo on macOS Colour (`lightcraft_macraw::cache_key`: the
+/// OS build and LightCraft's recipe), so a render made by another macOS build is made again. 0 where macOS Colour is
+/// unavailable (the photo renders as Camera Matching there).
+pub(crate) fn macos_cache_key() -> u64 {
+    #[cfg(test)]
+    if let Some(k) = MACOS_KEY_FOR_TESTS.with(std::cell::Cell::get) {
+        return k;
+    }
+    lightcraft_macraw::cache_key()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// A stand-in for [`macos_cache_key`] on this test's thread (another OS build).
+    pub(crate) static MACOS_KEY_FOR_TESTS: std::cell::Cell<Option<u64>> = const { std::cell::Cell::new(None) };
+}
+
 /// Whether this computer's raw decoder lists photo `p`'s camera (macOS Colour can make its picture), from the catalog.
 pub(crate) fn macos_lists(p: &lightcraft_catalog::Photo) -> bool {
     macos::lists(p)

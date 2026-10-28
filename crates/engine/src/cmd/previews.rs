@@ -319,12 +319,22 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
 #[cfg(not(target_arch = "wasm32"))]
 type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool, crate::smart::LocalWant);
 
-/// What a photo's smart preview should say about local camera profiles, and how to load the original for it: a photo on
-/// a usable local profile builds its proxy with that profile's colour (the proxy stands in for the original, so it
-/// must look like it); every other photo keeps Camera Matching, whatever it is set to.
+/// What a photo's smart preview should say about local camera profiles and macOS Colour, and how to load the original
+/// for it: a photo on a usable local profile builds its proxy with that profile's colour, and one on macOS Colour with
+/// the macOS base where this computer can make it (the proxy stands in for the original, so it must look like it);
+/// every other photo keeps Camera Matching, whatever it is set to.
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn smart_local(photo: &lightcraft_catalog::Photo) -> (Option<crate::media::LoadOptions>, crate::smart::LocalWant) {
+    smart_colour(photo, crate::files::macos_lists(photo))
+}
+
+/// [`smart_local`], told whether this computer's raw decoder lists the photo's camera.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn smart_colour(photo: &lightcraft_catalog::Photo, macos_here: bool) -> (Option<crate::media::LoadOptions>, crate::smart::LocalWant) {
     use crate::smart::LocalWant;
+    if photo.develop.profile.camera_colour == lightcraft_develop::CameraColour::Macos && photo.fitted_look() {
+        return if macos_here { (Some(crate::media::LoadOptions::of(&photo.develop)), LocalWant::Macos) } else { (None, LocalWant::MacosElsewhere) };
+    }
     let on_local = photo.develop.profile.camera_colour == lightcraft_develop::CameraColour::Local && photo.fitted_look();
     let id = photo.develop.profile.camera_profile.as_deref().filter(|_| on_local);
     match id.and_then(|id| crate::camera_profiles::local_profile(id).map(|l| (id, l))) {
@@ -423,6 +433,18 @@ fn smart_run(
             let stale = damaged && (crate::smart::is_stale_for(&path, look) || crate::smart::is_local_stale(&path, &local));
             if damaged && !stale && crate::smart::is_valid(&path) {
                 n.built += 1;
+            } else if local == crate::smart::LocalWant::MacosElsewhere {
+                // (a macOS Colour photo on a computer that can't make it: no proxy with other colours is written; an
+                // older one is kept, it may be the only copy; a missing or damaged one is left for a Mac)
+                if crate::smart::is_valid(&path) {
+                    n.built += 1;
+                    n.stale_kept += 1;
+                } else {
+                    n.failed.push(json!([id.0, "macOS Colour isn't available on this computer"]));
+                    if let Some((st, _)) = state {
+                        st.failed.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
             } else {
                 // a stale proxy is rebuilt from the original only: never from itself (the file
                 // fallback or a source decoded from a proxy would stamp the old look as current)
@@ -435,11 +457,7 @@ fn smart_run(
                     .and_then(|s| s.load_source())
                     .and_then(|src| {
                         let info = src.info_or(Default::default());
-                        let stamp = match &local {
-                            crate::smart::LocalWant::Is(stamp) => Some(stamp.as_str()),
-                            _ => None,
-                        };
-                        crate::smart::encode_stamped(&src.image, Some(&info), stamp)
+                        crate::smart::encode_for(&src.image, Some(&info), &local)
                     })
                     .and_then(|b| {
                         let parent = path.parent().ok_or_else(|| format!("{}: no parent folder", path.display()))?;
