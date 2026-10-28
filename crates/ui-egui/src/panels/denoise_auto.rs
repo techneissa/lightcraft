@@ -52,6 +52,7 @@ pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
             app.ui.status = text.to_string();
             app.toast_for(ctx, text, NOTE_SECONDS);
         }
+        Some("recordUnreadable") => app.ui.status = tr("Auto AI Denoise is off: the library's auto-denoise.json is damaged or too large").to_string(),
         _ => {}
     }
 }

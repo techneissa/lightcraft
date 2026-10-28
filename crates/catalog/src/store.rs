@@ -13,6 +13,14 @@ use std::sync::{Arc, Mutex};
 pub trait Store: Send {
     /// The whole file, or `None` if it doesn't exist.
     fn read(&mut self, name: &str) -> io::Result<Option<Vec<u8>>>;
+    /// [`Store::read`] for a file that must not be large: more than `max` bytes is an `InvalidData` error, and a
+    /// file system store never reads past `max + 1` bytes to find out.
+    fn read_capped(&mut self, name: &str, max: usize) -> io::Result<Option<Vec<u8>>> {
+        match self.read(name)? {
+            Some(b) if b.len() > max => Err(io::Error::new(io::ErrorKind::InvalidData, format!("{name} is larger than {max} bytes"))),
+            other => Ok(other),
+        }
+    }
     /// Replace a file atomically: after a crash either the old or the new content is visible,
     /// never a mix (native: write temp + fsync + rename + fsync directory).
     fn write_atomic(&mut self, name: &str, data: &[u8]) -> io::Result<()>;
@@ -102,6 +110,21 @@ impl Store for FsStore {
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
             Err(e) => Err(e),
         }
+    }
+
+    fn read_capped(&mut self, name: &str, max: usize) -> io::Result<Option<Vec<u8>>> {
+        use std::io::Read;
+        let file = match std::fs::File::open(self.path(name)) {
+            Ok(f) => f,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let mut buf = Vec::new();
+        file.take(max as u64 + 1).read_to_end(&mut buf)?;
+        if buf.len() > max {
+            return Err(io::Error::new(io::ErrorKind::InvalidData, format!("{name} is larger than {max} bytes")));
+        }
+        Ok(Some(buf))
     }
 
     fn write_atomic(&mut self, name: &str, data: &[u8]) -> io::Result<()> {

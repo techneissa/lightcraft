@@ -208,8 +208,9 @@ the open photo in the Detail view, AI Denoise is switched on for it as one undo 
 a restart). Its picture is made by the usual queue under the batch row in the activity stack, whose ✕ stops it.
 
 It acts **once per photo**: the photos it handled (and photos whose AI Denoise switch or Amount was already set) are
-recorded in `auto-denoise.json` in the library folder, so an undo, a Reset or a switch-off is never undone by the next
-open. Without a model nothing is changed or recorded (the photo is handled the first time it is opened once a model
+recorded in `auto-denoise.json` in the library folder (written a couple of seconds after the change and on close, once
+the catalog edit is saved), so an undo, a Reset or a switch-off is never undone by the next open. A file that is too
+large (8 MB) or damaged is left as it is and turns Auto AI Denoise off for the session (`recordUnreadable`). Without a model nothing is changed or recorded (the photo is handled the first time it is opened once a model
 is installed), and the app says so once per session. Settings: `denoise.settings {autoOpen, autoIso}`.
 
 This is the open-time counterpart of Settings ▸ Import ▸ **AI Denoise from**, which switches it on for new photos at

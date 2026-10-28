@@ -107,9 +107,10 @@ pub struct Library {
 }
 
 impl Library {
-    /// A small file of the library's own beside `prefs.json`; `None` if it is missing or cannot be read.
-    pub(crate) fn read_file(&mut self, name: &str) -> Option<Vec<u8>> {
-        self.files.read(name).ok().flatten()
+    /// A small file of the library's own beside `prefs.json`: `Ok(None)` if it is missing, an error if it cannot be read
+    /// or is larger than `max` bytes (never read whole).
+    pub(crate) fn read_file(&mut self, name: &str, max: usize) -> std::io::Result<Option<Vec<u8>>> {
+        self.files.read_capped(name, max)
     }
 
     /// Replace such a file (atomically).
@@ -474,6 +475,8 @@ impl Session {
         {
             log::error!("library: {e}");
         }
+        // what Auto AI Denoise recorded belongs to the library being left
+        self.denoise_auto_flush(true);
         // Photo ids belong to one library; denoise work must not carry into the next.
         self.denoise.library_changed();
         self.media.denoise.clear();
@@ -661,6 +664,10 @@ impl Session {
             log::error!("library: compaction: {e}");
             lib.last_error = Some(format!("compaction: {e}"));
         }
+        // what Auto AI Denoise recorded goes to disk once the catalog edits it belongs to are saved
+        if self.pending_log.is_empty() {
+            self.denoise_auto_flush(false);
+        }
         let due = self.library.as_ref().is_some_and(|l| l.presets_saved.differs(self) && !l.blocked.contains(&"presets.json"));
         if !due {
             return Ok(());
@@ -692,7 +699,7 @@ impl Session {
     pub fn persist_if_dirty(&mut self) {
         let backing_off = self.library.as_ref().and_then(|l| l.retry_at).is_some_and(|t| web_time::Instant::now() < t);
         let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some());
-        if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved) && !backing_off {
+        if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved || self.denoise_auto_pending()) && !backing_off {
             let _ = self.persist();
         } else if let Some(lib) = self.library.as_mut() {
             poll_compaction(lib);
@@ -721,6 +728,9 @@ impl Session {
         }
         let _ = self.end_interaction();
         let persisted = self.persist();
+        if persisted.is_ok() {
+            self.denoise_auto_flush(true);
+        }
         self.save_view();
         let unlogged = if persisted.is_err() { self.pending_log.len() as u64 } else { 0 };
         let Some(lib) = self.library.as_mut() else { return Ok(()) };

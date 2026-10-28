@@ -752,7 +752,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Auto AI Denoise",
             [],
             None,
-            "{id?: photoId} → {id, applied, reason, iso?, threshold?, amount?} — the photo `id` (default: the active one) was opened: when Settings ▸ AI Denoise ▸ Auto AI Denoise is on and the raw photo's ISO is at or above `autoIso`, turn AI Denoise on for it as one undo step named \"Auto AI Denoise\" (its picture is made in the background like any other). It acts once per photo: a photo handled before (also when the user undid it or turned it off) is never touched again. `reason`: applied | off | notApplicable | noIso | belowThreshold | alreadySet | alreadyDone | noModel | noLibraryFolder. The app calls it when a photo becomes the open one in the Detail view",
+            "{id?: photoId} → {id, applied, reason, iso?, threshold?, amount?} — the photo `id` (default: the active one) was opened: when Settings ▸ AI Denoise ▸ Auto AI Denoise is on and the raw photo's ISO is at or above `autoIso`, turn AI Denoise on for it as one undo step named \"Auto AI Denoise\" (its picture is made in the background like any other). It acts once per photo: a photo handled before (also when the user undid it or turned it off) is never touched again. `reason`: applied | off | notApplicable | noIso | belowThreshold | alreadySet | alreadyDone | recordUnreadable | noModel | noLibraryFolder. The app calls it when a photo becomes the open one in the Detail view",
             always,
             auto_open
         ),

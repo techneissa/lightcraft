@@ -103,7 +103,7 @@ fn it_is_never_applied_again_after_an_undo_or_a_switch_off() {
 /// The library of `x` opened again in a new session, as after a restart.
 fn restart(x: Setup) -> (Session, PhotoId, std::path::PathBuf) {
     let mut x = x;
-    x.s.persist().unwrap();
+    x.s.close_library().unwrap();
     let dir = x.dir.clone();
     drop(x.s);
     let mut s = Session::new().with_fs();
@@ -176,4 +176,93 @@ fn an_unknown_photo_is_an_error_not_a_panic() {
     assert!(x.s.execute("denoise.autoOpen", &json!({"id": 9_999_999})).is_err());
     assert!(x.s.execute("denoise.autoOpen", &json!({"id": "x"})).is_err());
     finish(x);
+}
+
+fn record_file(x: &Setup) -> std::path::PathBuf {
+    x.dir.join("library/auto-denoise.json")
+}
+
+#[test]
+fn the_record_is_written_after_the_catalog_edit_not_inside_the_command() {
+    let (mut x, id) = with_iso("auto-deferred", true, 12_800);
+    turn_on(&mut x.s);
+    assert_eq!(open(&mut x.s, id)["reason"], "applied");
+    assert!(!record_file(&x).exists(), "nothing is written while the photo is being opened");
+    x.s.persist().unwrap();
+    assert!(!record_file(&x).exists(), "and not before the wait is over");
+    assert!(x.s.denoise_auto_pending());
+    // once the wait is over the library's own save writes it (no command needed)
+    x.s.denoise.auto_flush_after = std::time::Duration::ZERO;
+    x.s.persist_if_dirty();
+    let text = std::fs::read_to_string(record_file(&x)).unwrap();
+    assert!(text.contains(&id.0.to_string()), "{text}");
+    assert!(!x.s.denoise_auto_pending());
+    finish(x);
+}
+
+#[test]
+fn closing_the_library_writes_the_record() {
+    let (mut x, id) = with_iso("auto-close", true, 12_800);
+    turn_on(&mut x.s);
+    assert_eq!(open(&mut x.s, id)["reason"], "applied");
+    x.s.close_library().unwrap();
+    assert!(record_file(&x).exists());
+    finish(x);
+}
+
+#[test]
+fn an_oversized_record_is_not_read_whole_and_not_overwritten() {
+    let (mut x, id) = with_iso("auto-huge", true, 12_800);
+    turn_on(&mut x.s);
+    // (sparse: nothing like 9 MB is written, and the check must not need it read)
+    let f = std::fs::File::create(record_file(&x)).unwrap();
+    f.set_len(9 << 20).unwrap();
+    drop(f);
+    let r = open(&mut x.s, id);
+    assert_eq!((r["applied"].clone(), r["reason"].clone()), (json!(false), json!("recordUnreadable")), "{r}");
+    assert!(!on(&x.s, id));
+    x.s.denoise.auto_flush_after = std::time::Duration::ZERO;
+    x.s.close_library().unwrap();
+    assert_eq!(std::fs::metadata(record_file(&x)).unwrap().len(), 9 << 20, "left as it was");
+    finish(x);
+}
+
+#[test]
+fn a_store_does_not_read_past_the_cap() {
+    use lightcraft_catalog::{FsStore, Store};
+    let dir = crate::tests_xmp::temp_dir("auto-cap");
+    let f = std::fs::File::create(dir.join("big.json")).unwrap();
+    f.set_len(1 << 30).unwrap();
+    drop(f);
+    let mut store = FsStore::open(&dir).unwrap();
+    let e = store.read_capped("big.json", 1024).unwrap_err();
+    assert_eq!(e.kind(), std::io::ErrorKind::InvalidData);
+    std::fs::write(dir.join("small.json"), b"{}").unwrap();
+    assert_eq!(store.read_capped("small.json", 1024).unwrap().as_deref(), Some(&b"{}"[..]));
+    assert!(store.read_capped("none.json", 1024).unwrap().is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_damaged_record_keeps_an_undone_photo_from_getting_it_again() {
+    let (mut x, id) = with_iso("auto-damaged", true, 12_800);
+    turn_on(&mut x.s);
+    assert_eq!(open(&mut x.s, id)["reason"], "applied");
+    x.s.execute("edit.undo", &json!({})).unwrap();
+    let file = record_file(&x);
+    let (mut s, id, dir) = restart(x);
+    drop(s.close_library());
+    drop(s);
+    std::fs::write(&file, b"{ not json").unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(dir.join("library"), false).unwrap();
+    s.set_denoise_models_dir(Some(dir.join("denoise-models")));
+    s.execute("denoise.settings", &json!({"autoOpen": true})).unwrap();
+    let r = open(&mut s, id);
+    assert_eq!((r["applied"].clone(), r["reason"].clone()), (json!(false), json!("recordUnreadable")), "{r}");
+    assert!(!on(&s, id), "the undone edit does not come back");
+    s.close_library().unwrap();
+    assert_eq!(std::fs::read(&file).unwrap(), b"{ not json", "the damaged file is not overwritten");
+    drop(s);
+    let _ = std::fs::remove_dir_all(dir);
 }

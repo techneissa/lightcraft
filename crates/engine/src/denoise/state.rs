@@ -135,7 +135,9 @@ pub(crate) struct State {
     pub(crate) queue_cap: usize,
     /// The photos AI Denoise was switched on for when they were opened (`auto-denoise.json` in the library); `None`
     /// until read. See [`super::auto`].
-    pub(super) auto_done: Option<HashSet<PhotoId>>,
+    pub(super) auto_done: Option<super::auto::Record>,
+    /// How long a record waits in memory before it is written (tests shorten it).
+    pub(crate) auto_flush_after: Duration,
 }
 
 impl Default for State {
@@ -161,6 +163,7 @@ impl Default for State {
             backlog: VecDeque::new(),
             queue_cap: MAX_QUEUE,
             auto_done: None,
+            auto_flush_after: super::auto::FLUSH_AFTER,
         }
     }
 }
