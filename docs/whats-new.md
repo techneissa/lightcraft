@@ -8,8 +8,8 @@
   with a search box to find it. With a row picked, ↑ / ↓ pick another, ⌥↑ / ⌥↓ move it and Delete takes it out. Add
   Separator and Reset to Default are below. Changes apply at once.
 - The menu now has Before/After Split under Open in Detail: from the grid it opens the photo with the split on.
-- With one photo selected, the menu leaves out what needs several: Photo Merge, Export Animated GIF… and Group into
-  Stack.
+- With one photo selected, the menu leaves out what needs several: Photo Merge, Export Animated GIF…, and Group into
+  Stack in the Stack submenu.
 
 ## 2026-10-27
 

@@ -386,24 +386,29 @@ fn move_to_folder(app: &mut LightcraftApp, ui: &egui::Ui) {
     }
 }
 
+/// The Stack submenu's rows above Auto-Stack (label, command, enabled): as the official menu's,
+/// but Group into Stack needs two photos, so with one selected it is not offered at all.
+pub(super) fn stack_rows(several: bool, stacked: bool) -> Vec<(&'static str, &'static str, bool)> {
+    [
+        ("Group into Stack", "stack.group", several),
+        ("Ungroup Stack", "stack.ungroup", stacked),
+        ("Remove from Stack", "stack.remove", stacked),
+        ("Set as Top of Stack", "stack.setTop", stacked),
+        ("Move Up in Stack", "stack.moveUp", stacked),
+        ("Move Down in Stack", "stack.moveDown", stacked),
+        ("Split Stack", "stack.split", stacked),
+        ("Expand/Collapse Stack", "stack.toggle", stacked),
+    ]
+    .into_iter()
+    .filter(|(_, cmd, _)| several || *cmd != "stack.group")
+    .collect()
+}
+
 fn stack_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, text: String, id: PhotoId) {
     crate::widgets::menu_button(ui, text, |ui| {
         let stacked = app.session.catalog.stack_of(id).is_some();
         let several = app.session.selection.ids.len() > 1;
-        for (label, cmd, on) in [
-            ("Group into Stack", "stack.group", several),
-            ("Ungroup Stack", "stack.ungroup", stacked),
-            ("Remove from Stack", "stack.remove", stacked),
-            ("Set as Top of Stack", "stack.setTop", stacked),
-            ("Move Up in Stack", "stack.moveUp", stacked),
-            ("Move Down in Stack", "stack.moveDown", stacked),
-            ("Split Stack", "stack.split", stacked),
-            ("Expand/Collapse Stack", "stack.toggle", stacked),
-        ] {
-            // grouping needs two photos: with one selected it is not offered at all
-            if cmd == "stack.group" && !several {
-                continue;
-            }
+        for (label, cmd, on) in stack_rows(several, stacked) {
             if ui.add_enabled(on, egui::Button::new(crate::i18n::tr(label))).clicked() {
                 let _ = app.run(cmd, json!({}));
             }

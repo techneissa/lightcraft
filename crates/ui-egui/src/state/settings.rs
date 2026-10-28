@@ -195,7 +195,7 @@ pub struct AppSettings {
     pub lightroom_import: LightroomImport,
     /// The photo menu as the person arranged it (Settings ▸ Photo Menu): its slots in order;
     /// None is the default menu (`panels::photo_menu`).
-    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::panels::photo_menu::read_saved", skip_serializing_if = "Option::is_none")]
     pub photo_menu: Option<Vec<String>>,
 }
 
