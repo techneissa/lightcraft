@@ -115,7 +115,8 @@ pub enum Error {
         width: u32,
         height: u32,
     },
-    /// macOS needs to download support for this camera first.
+    /// macOS needs to download support for this camera first. LightCraft never starts that download (dropped for v1,
+    /// `docs/camera-preview-colour.md`): the photo uses Camera Matching with the "could not read" note.
     NeedsDownload {
         camera: String,
     },

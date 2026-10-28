@@ -365,6 +365,11 @@ Matching with the setting kept, and the Edit panel says why under the Profile pi
 | the decoder failed on the file (remembered for the session) | "macOS could not read this raw, so this picture uses Camera Matching." |
 | AI Denoise is on and the colour transfer was refused | "AI Denoise uses Camera Matching colours on this photo." |
 
+A camera macOS 27 can read only after downloading support for it (`macraw::Error::NeedsDownload`) gets the "could not
+read" line too, and is not remembered as failed. LightCraft does not start that download: the command for it was dropped
+for v1 (decided 2026-10-28), because the A7 V decodes without one and the path can't be tested here. Revisit when a
+camera that needs it shows up.
+
 A photo set to macOS Colour on a computer that cannot make it keeps its row in the picker, greyed. The photo's grid
 thumbnail, filmstrip and loupe never show the camera's JPEG first for a photo that does get macOS Colour: they wait for
 the macOS render (`QuickJob.embedded` is `None` for it), so there is no colour flash.
