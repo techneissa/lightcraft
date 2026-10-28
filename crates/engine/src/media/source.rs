@@ -86,7 +86,8 @@ pub struct LoadOptions {
 
 impl LoadOptions {
     pub fn of(s: &DevelopSettings) -> LoadOptions {
-        LoadOptions { colour: s.profile.camera_colour, profile_key: 0 }
+        let local = s.profile.camera_colour == lightcraft_develop::CameraColour::Local;
+        LoadOptions { colour: s.profile.camera_colour, profile_key: s.profile.camera_profile.as_deref().filter(|_| local).map_or(0, crate::camera_profiles::local_key) }
     }
 }
 

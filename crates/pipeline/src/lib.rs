@@ -103,6 +103,9 @@ pub struct SourceInfo {
     /// spectral sensitivities, so the photo's Profile option can start from them instead of the
     /// look fitted to its JPEG (`lightcraft_develop::CameraColour`).
     pub colorimetric: bool,
+    /// The photo chose a local camera profile that its source could not use, so it was decoded as Camera Matching: what
+    /// the Edit panel says under the Profile picker, for as long as it is so (`camera_profiles::LocalUnavailable`).
+    pub colour_note: Option<String>,
 }
 
 impl Default for SourceInfo {
@@ -120,6 +123,7 @@ impl Default for SourceInfo {
             local_tone: None,
             native_long: None,
             colorimetric: false,
+            colour_note: None,
         }
     }
 }

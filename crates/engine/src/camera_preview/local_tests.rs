@@ -1,0 +1,190 @@
+//! LT5 / LT6: the local profile choice's colour (`super::local`).
+use super::local::{LocalOutcome, fit_local_look_with, local_colour_with};
+use super::*;
+use crate::camera_profiles::{self, CameraProfile};
+use lightcraft_develop::CameraColour;
+
+fn raw_of(format: RawFormat, model: &str, color: ColorData) -> RawImage {
+    let area = lightcraft_raw::Rect::new(0, 0, 2, 2);
+    RawImage {
+        format,
+        width: 2,
+        height: 2,
+        cpp: 1,
+        data: lightcraft_raw::RawData::U16(vec![0; 4]),
+        cfa: None,
+        bits: 14,
+        black: Default::default(),
+        white: vec![16383.0],
+        active_area: area,
+        crop: area,
+        orientation: Default::default(),
+        color,
+        wb_multipliers: Some([2.0, 1.0, 1.5]),
+        linearized: false,
+        pixel_aspect: 1.0,
+        opcodes: Default::default(),
+        metadata: lightcraft_raw::Metadata { make: Some("SONY".into()), model: Some(model.to_owned()), ..Default::default() },
+        lens_metadata: Default::default(),
+    }
+}
+
+fn dir(tag: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("lc-local-colour-{tag}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    dir
+}
+
+fn profile(model: &str) -> CameraProfile {
+    let table = HsvTable { hue_divisions: 4, sat_divisions: 2, val_divisions: 1, data: vec![[4.0, 1.1, 1.0]; 8], srgb_value: false };
+    CameraProfile::new(model, 40, 9000, Mat3([[1.5, -0.4, -0.1], [-0.2, 1.3, -0.1], [-0.05, -0.3, 1.35]]), Some(table)).named("A7 V Chart")
+}
+
+fn never_matching(_: &mut RawImage) -> (Xy, CameraTransform, Option<CameraLook>) {
+    panic!("a usable local profile never asks Camera Matching")
+}
+
+/// The profile's colour is the base, relative to the camera transform; the tone is the fitted one; Camera Matching is
+/// not consulted; a failed tone fit keeps the colour and marks the default tone.
+#[test]
+fn a_local_profile_gives_its_colour_and_a_fitted_tone_or_the_default_tone() {
+    let d = dir("colour");
+    camera_profiles::save_named(&profile("ILCE-7M5"), &d, "A7 V Chart").unwrap();
+    let _d = camera_profiles::use_dir_for_tests(&d);
+    let key = camera_profiles::local_key("A7 V Chart");
+    let mut raw = raw_of(RawFormat::Arw, "ILCE-7M5", Default::default());
+    let xy = lightcraft_raw::color::as_shot_white_xy(&raw);
+    let transform = lightcraft_raw::color::camera_transform(&raw, xy);
+    let want = profile("ILCE-7M5").matrix().mul(&transform.matrix.inverse().unwrap());
+    let fitted = CameraLook {
+        matrix: want,
+        tone: CameraTone::new(std::array::from_fn(|i| {
+            let x = 0.006 * 1.13f32.powi(i as i32);
+            [x, x.sqrt() * 0.9]
+        }))
+        .unwrap(),
+        hue_sat: profile("ILCE-7M5").hue_sat,
+    };
+    let (_, _, look, outcome) = local_colour_with(
+        &mut raw,
+        key,
+        |_, _, colour| {
+            assert_eq!(colour.0, want, "the fit is given the profile's colour, not the photo's own");
+            Some(fitted.clone())
+        },
+        never_matching,
+    )
+    .unwrap();
+    let look = look.unwrap();
+    assert_eq!((look.matrix, look.tone), (want, fitted.tone));
+    assert_eq!(outcome, LocalOutcome::default());
+    // no tone fit passed: the profile's colour with LightCraft's default tone
+    let (_, _, look, outcome) = local_colour_with(&mut raw, key, |_, _, _| None, never_matching).unwrap();
+    let look = look.unwrap();
+    assert_eq!((look.matrix, look.hue_sat.is_some()), (want, true));
+    assert_eq!(outcome, LocalOutcome { default_tone: true, note: None });
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+/// LT6: a missing, unusable or other-camera file renders as Camera Matching (the fit is not even tried), with the note
+/// that says why; a file with colour matrices of its own is not offered the choice at all.
+#[test]
+fn an_unusable_local_profile_renders_as_camera_matching_with_a_note() {
+    let d = dir("fallback");
+    camera_profiles::save_named(&profile("ILCE-7M5"), &d, "A7 V Chart").unwrap();
+    std::fs::write(d.join("broken.json"), b"{}").unwrap();
+    let _d = camera_profiles::use_dir_for_tests(&d);
+    let matching = CameraLook { matrix: Mat3::IDENTITY, ..profile_look() };
+    let run = |model: &str, key: u64| {
+        let mut raw = raw_of(RawFormat::Arw, model, Default::default());
+        local_colour_with(
+            &mut raw,
+            key,
+            |_, _, _| panic!("no tone fit without a usable profile"),
+            |_| {
+                let xy = Xy { x: 0.3127, y: 0.329 };
+                (xy, lightcraft_raw::color::camera_transform(&raw_of(RawFormat::Arw, model, Default::default()), xy), Some(matching.clone()))
+            },
+        )
+        .unwrap()
+    };
+    for (what, model, id, expect) in [
+        ("another camera", "ILCE-7M4", "A7 V Chart", "made for another camera"),
+        ("a missing file", "ILCE-7M5", "Gone", "isn't available on this computer"),
+        ("a damaged file", "ILCE-7M5", "broken", "can't be used"),
+        ("a hostile id", "ILCE-7M5", "../A7 V Chart", "isn't available on this computer"),
+    ] {
+        let (_, _, look, outcome) = run(model, camera_profiles::local_key(id));
+        assert_eq!(look.map(|l| l.matrix), Some(Mat3::IDENTITY), "{what}: Camera Matching's look");
+        let note = outcome.note.unwrap_or_default();
+        assert!(note.contains(expect) && note.contains("This picture uses Camera Matching"), "{what}: {note}");
+        assert!(!outcome.default_tone, "{what}");
+    }
+    // the file comes back: the profile is used again
+    assert!(camera_profiles::local_profiles_for("ILCE-7M5").iter().any(|p| p.id == "A7 V Chart"));
+    let (_, _, _, outcome) = {
+        let mut raw = raw_of(RawFormat::Arw, "ILCE-7M5", Default::default());
+        local_colour_with(&mut raw, camera_profiles::local_key("A7 V Chart"), |_, _, _| None, never_matching).unwrap()
+    };
+    assert_eq!(outcome.note, None);
+    // a file with colour matrices of its own keeps them: not offered
+    let own = lightcraft_raw::ColorData {
+        color_matrix: lightcraft_raw::spectral::find(Some("NIKON CORPORATION"), "NIKON Z f").unwrap().color_matrix.map(Some),
+        illuminant: [17, 21],
+        ..Default::default()
+    };
+    let mut raw = raw_of(RawFormat::Dng, "ILCE-7M5", own);
+    assert!(local_colour_with(&mut raw, camera_profiles::local_key("A7 V Chart"), |_, _, _| None, never_matching).is_none());
+    let _ = std::fs::remove_dir_all(&d);
+}
+
+fn profile_look() -> CameraLook {
+    CameraLook {
+        matrix: Mat3::IDENTITY,
+        tone: CameraTone::new(std::array::from_fn(|i| {
+            let x = 0.006 * 1.13f32.powi(i as i32);
+            [x, x.sqrt() * 0.9]
+        }))
+        .unwrap(),
+        hue_sat: None,
+    }
+}
+
+/// LT5 (fit half): the search takes the profile's colour as given and fits tone around it. Where Camera Matching would
+/// retry with the photo's own colour after a profile that does not fit (a wrong matrix), the local choice has no look
+/// at all: it keeps the profile's colour with the default tone instead.
+#[test]
+fn the_local_fit_never_retries_with_the_photos_own_colour() {
+    let matrix = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
+    let wrong = Mat3([[0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [1.0, 0.0, 0.0]]);
+    let mut sensor = Rgb32f::new(64, 64);
+    let mut reference = sensor.clone();
+    let mut seed = 0x2545_f491_u32;
+    for (src, dst) in sensor.data.iter_mut().zip(&mut reference.data) {
+        *src = std::array::from_fn(|_| {
+            seed ^= seed << 13;
+            seed ^= seed >> 17;
+            seed ^= seed << 5;
+            0.05 + (seed % 1000) as f32 * 0.0003
+        });
+        let p = matrix.apply_f32(*src);
+        let y = luminance_2020(p);
+        *dst = p.map(|v| (v * (1.0 - (-2.5 * y).exp()) / y).clamp(0.0, 0.999));
+    }
+    let clipped = vec![false; sensor.data.len()];
+    // the right colour: its look, with the profile's matrix untouched
+    let good = fit_local_look_with(&sensor, &reference, &clipped, &(matrix, None), false).expect("a look");
+    assert_eq!(good.matrix, matrix);
+    // a wrong colour: Camera Matching falls back to the photo's own fit, the local choice finds nothing
+    assert!(fit_look_with(&sensor, &reference, &clipped, Some((wrong, None)), &|| None, false).is_some_and(|l| l.matrix != wrong));
+    assert!(fit_local_look_with(&sensor, &reference, &clipped, &(wrong, None), false).is_none());
+    // a clipped sky: still the profile's colour
+    let mut clipped = clipped;
+    for c in clipped.iter_mut().take(300) {
+        *c = true;
+    }
+    let with_clipped = fit_local_look_with(&sensor, &reference, &clipped, &(matrix, None), false).expect("a look");
+    assert_eq!(with_clipped.matrix, matrix);
+    let _ = CameraColour::Local;
+}

@@ -18,6 +18,7 @@ use lightcraft_raw::{
 
 mod colour;
 mod hue_sat;
+mod local;
 mod look_fit;
 mod mono;
 mod pairs;
@@ -34,6 +35,7 @@ pub(crate) use colour::{PROFILE_PROXY, dng_colour, dng_tone_eligible};
 use colour::{PROXY, starting_colour_with};
 pub(crate) use colour::{colour_choice_offered, file_local_look, starting_colour, starting_colour_tags, with_starting_colour};
 pub(crate) use hue_sat::HueSat;
+pub(crate) use local::starting_colour_choice;
 #[cfg(test)]
 use hue_sat::{MIN_LUMINANCE_KEPT, NO_LUMINANCE_KEPT, fit_hue_sat, hue_saturation, restore_weight};
 #[cfg(test)]
@@ -95,5 +97,7 @@ pub(crate) struct CameraLook {
     pub hue_sat: Option<HsvTable>,
 }
 
+#[cfg(test)]
+mod local_tests;
 #[cfg(test)]
 mod tests;
