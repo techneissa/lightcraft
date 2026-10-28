@@ -22,3 +22,7 @@ pub(crate) fn render(_input: Input<'_>, _request: &Request, _cancel: &AtomicBool
 pub(crate) fn cache_key() -> u64 {
     0
 }
+
+pub(crate) fn os_build() -> String {
+    String::new()
+}

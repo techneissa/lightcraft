@@ -12,7 +12,21 @@
 //! crates allowed `unsafe` (AGENTS.md). It depends on no workspace crate: it returns plain `Vec<f32>`.
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
+// The pure helpers are used only by the Core Image backend; their tests run everywhere.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod copy;
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+mod macos;
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+mod size;
+#[cfg_attr(target_os = "macos", allow(dead_code))]
 mod stub;
+
+#[cfg(target_os = "macos")]
+use macos as imp;
+#[cfg(not(target_os = "macos"))]
+use stub as imp;
 
 use std::path::Path;
 use std::sync::atomic::AtomicBool;
@@ -112,7 +126,7 @@ impl std::error::Error for Error {}
 /// True when this machine can render the recipe: a Mac on macOS 12 or later whose Core Image has
 /// every required `CIRAWFilter` setting.
 pub fn available() -> bool {
-    stub::available()
+    imp::available()
 }
 
 /// True when macOS lists a camera with this EXIF model (`ILCE-7M5`, not LightCraft's joined
@@ -128,13 +142,18 @@ pub fn probe(input: Input<'_>) -> Result<Probe, Error> {
 
 /// Render the base. Checks `cancel` before and after the (uninterruptible) Core Image call.
 pub fn render(input: Input<'_>, request: &Request, cancel: &AtomicBool) -> Result<LinearImage, Error> {
-    stub::render(input, request, cancel)
+    imp::render(input, request, cancel)
 }
 
 /// Changes when the result of [`render`] may change: the OS build and this crate's recipe. 0 where
 /// [`available`] is false.
 pub fn cache_key() -> u64 {
     stub::cache_key()
+}
+
+/// The OS version and build ("Version 27.0.1 (Build 27A…)"); empty off the Mac.
+pub fn os_build() -> String {
+    imp::os_build()
 }
 
 #[cfg(test)]
