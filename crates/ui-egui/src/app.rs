@@ -116,6 +116,7 @@ impl LightcraftApp {
             export: None,
             layers: None,
             edit_in: None,
+            handoffs: Vec::new(),
             tasks: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,

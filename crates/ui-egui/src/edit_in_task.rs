@@ -66,9 +66,11 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     match task.rx.try_recv() {
         Ok(r) => {
             let editor = task.editor.clone();
+            // a ✕ while the last copy was written still means no copies
+            let stopped = task.cancel.load(Ordering::Relaxed);
             // dropping the task ends its row
             app.edit_in = None;
-            finish(app, ctx, r, &editor);
+            finish(app, ctx, r, &editor, stopped);
         }
         Err(std::sync::mpsc::TryRecvError::Empty) => {
             let (done, current) = task.progress.lock().map(|g| g.clone()).unwrap_or_default();
@@ -83,9 +85,8 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
 }
 
-fn finish(app: &mut LightcraftApp, ctx: &egui::Context, r: Rendered, editor: &str) {
-    let cancelled = r.error.as_deref() == Some(CANCELLED);
-    if cancelled {
+fn finish(app: &mut LightcraftApp, ctx: &egui::Context, r: Rendered, editor: &str, stopped: bool) {
+    if stopped || r.error.as_deref() == Some(CANCELLED) {
         // a stop means no copies: remove the ones already written (none is in the library yet)
         for (_, path) in &r.copies {
             let _ = std::fs::remove_file(path);
@@ -100,7 +101,7 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, r: Rendered, editor: &st
         .map_err(|e| e.to_string());
     match added {
         Ok(r) => {
-            let _ = crate::menus::files::open_copies(app, ctx, r, editor);
+            let _ = crate::menus::files::open_copies(app, ctx, r, editor, true);
         }
         Err(e) => app.toast(ctx, crate::i18n::tr_format!("Couldn't open the editor: {e}", e = e)),
     }

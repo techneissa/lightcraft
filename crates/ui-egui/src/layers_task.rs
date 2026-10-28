@@ -83,7 +83,7 @@ fn start(app: &mut LightcraftApp, ctx: &egui::Context, p: &Value) -> Result<Valu
     if p.get("wait").and_then(Value::as_bool) == Some(true) {
         let r = work();
         drop(guard);
-        return finish(app, ctx, r, &editor, stacked);
+        return finish(app, ctx, r, &editor, stacked, false);
     }
     let (tx, rx) = channel();
     #[cfg(not(target_arch = "wasm32"))]
@@ -121,18 +121,39 @@ fn run(
 
 /// The layers are written: open them in `editor` (the layer list, or the files one by one), and
 /// say how it went. Files the editor refuses are reported in `failed` and a toast, not as an error:
-/// the files are written and a retry would make another set.
-fn finish(app: &mut LightcraftApp, ctx: &egui::Context, r: Result<Layers, String>, editor: &str, stacked: bool) -> Result<Value, String> {
+/// the files are written and a retry would make another set. With `background` (and a host that
+/// can) the editor gets them on a worker, so the frame doesn't wait for it to start.
+fn finish(
+    app: &mut LightcraftApp,
+    ctx: &egui::Context,
+    r: Result<Layers, String>,
+    editor: &str,
+    stacked: bool,
+    background: bool,
+) -> Result<Value, String> {
     let layers = r?;
     let n = layers.files.len();
     let mut failed = None;
     let mut opened = Vec::new();
+    let handed: Vec<Result<String, String>> = match (&layers.stack, stacked) {
+        (Some(stack), true) => vec![lightcraft_engine::open_path::openable_stack(stack)],
+        _ => layers.files.iter().map(|f| lightcraft_engine::open_path::openable(f, "")).collect(),
+    };
+    let done = match stacked {
+        true => crate::i18n::tr_format!("{name} opened in PhotoCraft with {n} layers", name = layers.name, n = n),
+        false => crate::i18n::tr_format!("This PhotoCraft can't open photos as layers; the {n} photos opened one by one", n = n),
+    };
+    let ready: Option<Vec<String>> = handed.iter().cloned().collect::<Result<_, _>>().ok();
+    if let Some(paths) = ready.filter(|_| background && crate::editor_handoff::available(app))
+        && crate::editor_handoff::start(app, paths.clone(), editor, done.clone(), if stacked { crate::TOAST_SECONDS } else { 8.0 })
+    {
+        return Ok(json!({
+            "name": layers.name, "dir": layers.dir, "files": layers.files, "stack": layers.stack,
+            "opened": paths, "oneByOne": !stacked, "failed": null,
+        }));
+    }
     {
         let open = app.services.open_with.as_mut().ok_or("opening another application isn't available here")?;
-        let handed: Vec<Result<String, String>> = match (&layers.stack, stacked) {
-            (Some(stack), true) => vec![lightcraft_engine::open_path::openable_stack(stack)],
-            _ => layers.files.iter().map(|f| lightcraft_engine::open_path::openable(f, "")).collect(),
-        };
         for path in handed {
             match path {
                 Err(e) => failed = Some(e),
@@ -149,10 +170,8 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, r: Result<Layers, String
     });
     match (&failed, stacked) {
         (Some(e), _) => app.toast(ctx, crate::i18n::tr_format!("Couldn't open the editor: {e}", e = e)),
-        (None, true) => app.toast(ctx, crate::i18n::tr_format!("{name} opened in PhotoCraft with {n} layers", name = layers.name, n = n)),
-        (None, false) => {
-            app.toast_for(ctx, crate::i18n::tr_format!("This PhotoCraft can't open photos as layers; the {n} photos opened one by one", n = n), 8.0)
-        }
+        (None, true) => app.toast(ctx, done),
+        (None, false) => app.toast_for(ctx, done, 8.0),
     }
     Ok(result)
 }
@@ -165,7 +184,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
             let (editor, stacked) = (task.editor.clone(), task.stacked);
             // dropping the task ends its row
             app.layers = None;
-            if let Err(e) = finish(app, ctx, r, &editor, stacked) {
+            if let Err(e) = finish(app, ctx, r, &editor, stacked, true) {
                 match e.as_str() {
                     lightcraft_engine::layers::CANCELLED => app.toast(ctx, crate::i18n::tr("Open as Layers cancelled")),
                     _ => app.toast(ctx, crate::i18n::tr_format!("Couldn't open the layers: {e}", e = e)),

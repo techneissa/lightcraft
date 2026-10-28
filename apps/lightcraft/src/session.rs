@@ -65,6 +65,7 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
                 .and_then(|s| if s.success() { Ok(()) } else { Err(format!("opening folder failed: {s}")) })
         })),
         open_with: Some(Box::new(editors::open_with)),
+        open_with_shared: Some(std::sync::Arc::new(editors::open_with)),
         open_all_with: Some(Box::new(editors::open_all_with)),
         check_editor: Some(Box::new(editors::check)),
         layers_support: Some(Box::new(editors::supports_layers)),

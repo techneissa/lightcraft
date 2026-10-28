@@ -403,6 +403,7 @@ impl Headless {
             || self.app.export.is_some()
             || self.app.layers.is_some()
             || self.app.edit_in.is_some()
+            || !self.app.handoffs.is_empty()
             || self.app.session.denoise_busy()
             || !self.app.tasks.is_empty()
             || !self.app.synthetic.is_empty()
