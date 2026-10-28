@@ -139,8 +139,13 @@ pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
     // carries it, so that applying it turns a Colorimetric photo back to Auto
     if let Some(Value::Object(profile)) = out.get_mut("profile") {
         profile.entry("camera_colour").or_insert_with(|| serde_json::to_value(s.profile.camera_colour).unwrap_or(Value::Null));
-        // …with the local profile it names (`null` for any other colour), so applying it never leaves a stale id behind
-        profile.entry("camera_profile").or_insert_with(|| serde_json::to_value(&s.profile.camera_profile).unwrap_or(Value::Null));
+        // …with the local profile it names, `null` for any other colour (even if an old file still stores an id), so
+        // applying it never leaves a stale id behind
+        let id = match s.profile.camera_colour {
+            crate::CameraColour::Local => serde_json::to_value(&s.profile.camera_profile).unwrap_or(Value::Null),
+            _ => Value::Null,
+        };
+        profile.insert("camera_profile".to_string(), id);
     }
     Value::Object(out)
 }
@@ -298,6 +303,29 @@ mod tests {
             assert!((out.grain.amount - (40.0 * amount).min(100.0)).abs() < 1e-9, "{amount}: grain {}", out.grain.amount);
             assert_eq!(out.grain.seed, seed, "{amount}: seed");
         }
+    }
+
+    /// The Profile group carries the local profile's id with the colour it names, and `null` for any other colour, even
+    /// when the settings still hold an id (an old file): applying it never leaves a stale id behind.
+    #[test]
+    fn the_profile_group_writes_a_profile_id_only_for_a_local_colour() {
+        use crate::CameraColour;
+        let mut s = DevelopSettings::default();
+        s.profile.camera_profile = Some("A7 V Chart".into());
+        let id = |s: &DevelopSettings| extract_groups(s, &[SettingsGroup::Profile])["profile"]["camera_profile"].clone();
+        for colour in [CameraColour::Auto, CameraColour::Colorimetric, CameraColour::Macos] {
+            s.profile.camera_colour = colour;
+            assert_eq!(id(&s), Value::Null, "{colour:?} writes no id");
+        }
+        s.profile.camera_colour = CameraColour::Local;
+        assert_eq!(id(&s), json!("A7 V Chart"));
+        // …and applying the Camera Matching patch to settings on a profile clears the id
+        let mut on_local = DevelopSettings::default();
+        on_local.profile.camera_colour = CameraColour::Local;
+        on_local.profile.camera_profile = Some("A7 V Chart".into());
+        let patch = extract_groups(&DevelopSettings::default(), &[SettingsGroup::Profile]);
+        let applied = on_local.merged(&patch).unwrap();
+        assert_eq!((applied.profile.camera_colour, applied.profile.camera_profile), (CameraColour::Auto, None));
     }
 
     #[test]
