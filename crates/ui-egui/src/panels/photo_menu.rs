@@ -314,7 +314,7 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, St
     let mut extra = Value::Null;
     match id {
         "photoMenu.get" => {}
-        "photoMenu.savePreset" | "photoMenu.switchPreset" | "photoMenu.undoPreset" => presets::command(app, id, p)?,
+        "photoMenu.savePreset" | "photoMenu.switchPreset" | "photoMenu.clearPreset" | "photoMenu.undoPreset" => presets::command(app, id, p)?,
         "photoMenu.export" | "photoMenu.import" => match file_command(app, id, p)? {
             Some(done) => extra = done,
             // the file dialog is up: the command runs again when it closes

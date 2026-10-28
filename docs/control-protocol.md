@@ -413,10 +413,14 @@ default back; all three return the same answer. Settings ▸ Photo Menu is `app.
 
 The menu has three presets (Preset 1 to 3). `photoMenu.savePreset {slot}` keeps the menu as it is in a slot (1 to 3) and makes
 it the active one; `photoMenu.switchPreset {slot}` makes a saved slot the menu (an empty slot is an error and changes
-nothing); `photoMenu.undoPreset` brings back the menu the last switch replaced, for as long as the menu is as the switch
+nothing); `photoMenu.clearPreset {slot}` empties a saved slot and keeps the menu (an empty slot is an error);
+`photoMenu.undoPreset` brings back the menu the last switch replaced, for as long as the menu is as the switch
 left it. They return the answer above, which also carries `presets` (`{slot, saved, active, edited, items}` per slot;
 `edited`: the active slot's menu has been changed since it was saved) and `canUndoPreset`. The presets are in the app
-settings (`photoMenuPresets`).
+settings (`photoMenuPresets`). In Settings ▸ Photo Menu they are one dropdown (`dropdown:photoMenuPreset`) beside the
+heading, with Export and Import icon buttons (`button:photoMenuExport`, `button:photoMenuImport`) after it; its menu has
+`button:photoMenuPreset-N`, `button:photoMenuSaveMenu` ▸ `button:photoMenuSavePreset-N`, `button:photoMenuClearMenu` ▸
+`button:photoMenuClearPreset-N` and `button:photoMenuUndoPreset` (only right after a switch).
 
 `photoMenu.export {path}` writes the menu and its presets as JSON, and `photoMenu.import {path}` reads such a file back.
 Without `path` they ask with the save / open panel (and return null at once; the command runs again when the panel

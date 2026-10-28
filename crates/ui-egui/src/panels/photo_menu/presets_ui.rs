@@ -1,8 +1,10 @@
-//! The Presets rows of Settings ▸ Photo Menu: three slots to switch between, three buttons to save
-//! the menu into one, and a line with Undo Switch, two icon buttons for the backup file (Export and Import) and the status.
+//! The presets control of Settings ▸ Photo Menu: one small dropdown showing the active preset (a dot
+//! after its name when the menu has changes not saved to it), then the Export and Import icon buttons
+//! for the backup file. The dropdown's menu switches presets, saves the menu to one, clears one and
+//! undoes the last switch.
 //!
-//! Every button runs the command of the same name (`photoMenu.switchPreset`, `photoMenu.savePreset`,
-//! `photoMenu.undoPreset`, `photoMenu.export`, `photoMenu.import`), so the app and an agent do the same.
+//! Every entry runs the command of the same name (`photoMenu.switchPreset`, `savePreset`,
+//! `clearPreset`, `undoPreset`, `export`, `import`), so the app and an agent do the same.
 
 use serde_json::json;
 
@@ -10,19 +12,7 @@ use super::presets::{self, COUNT};
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
-use crate::widgets::{register, segmented};
-
-/// The row's status line.
-fn status(app: &LightcraftApp) -> String {
-    let states = presets::states(app);
-    match states.iter().position(|s| s.active) {
-        Some(i) if states[i].edited => {
-            format!("{} {} {}", crate::i18n::tr("Preset"), i + 1, crate::i18n::tr("is active, with changes not saved to it."))
-        }
-        Some(i) => format!("{} {} {}", crate::i18n::tr("Preset"), i + 1, crate::i18n::tr("is active.")),
-        None => crate::i18n::tr("No preset is active. Save the menu to a slot to keep it.").to_string(),
-    }
-}
+use crate::widgets::register;
 
 /// Run `command` and say how it went.
 fn run(app: &mut LightcraftApp, ui: &egui::Ui, command: &str, params: serde_json::Value, done: Option<String>) {
@@ -49,42 +39,82 @@ fn tray_button(ui: &mut egui::Ui, t: &Tokens, id: &str, icon: Icon, tip: &str) -
     r.on_hover_text(tip).clicked()
 }
 
-/// The Presets row.
-pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+/// The dropdown's label: the active preset, with a dot when its menu was changed since.
+fn label(app: &LightcraftApp) -> (String, bool) {
     let states = presets::states(app);
-    let switch: Vec<String> = (1..=COUNT)
-        .map(|n| {
-            let name = format!("{} {n}", crate::i18n::tr("Preset"));
-            if states[n - 1].saved { name } else { format!("{name} ({})", crate::i18n::tr("Empty")) }
-        })
-        .collect();
-    let items: Vec<(&str, &str)> = switch.iter().map(String::as_str).zip(["1", "2", "3"]).collect();
-    if let Some(i) = segmented(ui, "photoMenuPreset", &items, states.iter().position(|s| s.active), COUNT) {
-        let done = format!("{} {} {}", crate::i18n::tr("Switched to Preset"), i + 1, crate::i18n::tr("(Undo Switch brings the old menu back)"));
-        run(app, ui, "photoMenu.switchPreset", json!({"slot": i + 1}), Some(done));
+    match states.iter().position(|s| s.active) {
+        Some(i) => (format!("{} {}{}", crate::i18n::tr("Preset"), i + 1, if states[i].edited { " •" } else { "" }), states[i].edited),
+        None => (crate::i18n::tr("Presets").to_string(), false),
     }
-    ui.add_space(4.0);
-    let save: Vec<String> = (1..=COUNT).map(|n| format!("{} {} {n}", crate::i18n::tr("Save to"), crate::i18n::tr("Preset"))).collect();
-    let items: Vec<(&str, &str)> = save.iter().map(String::as_str).zip(["1", "2", "3"]).collect();
-    if let Some(i) = segmented(ui, "photoMenuSavePreset", &items, None, COUNT) {
-        let done = format!("{} {}", crate::i18n::tr("Saved the menu to Preset"), i + 1);
-        run(app, ui, "photoMenu.savePreset", json!({"slot": i + 1}), Some(done));
+}
+
+/// A menu entry `button:{id}` that runs when clicked; true when it was.
+fn entry(ui: &mut egui::Ui, id: &str, text: &str, checked: bool) -> bool {
+    let r = ui.add(egui::Button::new(text).right_text("    "));
+    register(ui, format!("button:{id}"), r.rect);
+    if checked {
+        super::check_mark(ui, r.rect);
     }
-    ui.add_space(4.0);
-    let text = status(app);
-    ui.horizontal(|ui| {
-        let r = ui.add_enabled(presets::can_undo(app), egui::Button::new(crate::i18n::tr("Undo Switch")));
-        register(ui, "button:photoMenuUndoPreset", r.rect);
-        if r.clicked() {
-            run(app, ui, "photoMenu.undoPreset", json!({}), None);
+    r.clicked()
+}
+
+/// The Save to Preset and Clear Preset submenus.
+fn manage(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let name = |n: usize| format!("{} {n}", crate::i18n::tr("Preset"));
+    let save = crate::widgets::menu_button(ui, crate::i18n::tr("Save to Preset"), |ui| {
+        for n in 1..=COUNT {
+            if entry(ui, &format!("photoMenuSavePreset-{n}"), &n.to_string(), false) {
+                let done = format!("{} {n}", crate::i18n::tr("Saved the menu to Preset"));
+                run(app, ui, "photoMenu.savePreset", json!({"slot": n}), Some(done));
+            }
         }
-        if tray_button(ui, t, "photoMenuExport", Icon::TrayOut, "Export Right-Click Menu…") {
-            run(app, ui, "photoMenu.export", json!({}), None);
-        }
-        if tray_button(ui, t, "photoMenuImport", Icon::TrayIn, "Import Right-Click Menu…") {
-            run(app, ui, "photoMenu.import", json!({}), None);
-        }
-        ui.label(egui::RichText::new(text).size(11.5).color(t.text_dim));
     });
-    ui.add_space(6.0);
+    register(ui, "button:photoMenuSaveMenu", save.response.rect);
+    let states = presets::states(app);
+    if states.iter().any(|s| s.saved) {
+        let clear = crate::widgets::menu_button(ui, crate::i18n::tr("Clear Preset"), |ui| {
+            for n in (1..=COUNT).filter(|n| states[n - 1].saved) {
+                if entry(ui, &format!("photoMenuClearPreset-{n}"), &name(n), false) {
+                    let done = format!("{} {n}", crate::i18n::tr("Cleared Preset"));
+                    run(app, ui, "photoMenu.clearPreset", json!({"slot": n}), Some(done));
+                }
+            }
+        });
+        register(ui, "button:photoMenuClearMenu", clear.response.rect);
+    }
+}
+
+/// The presets control, laid out right to left on the heading's line.
+pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
+    if tray_button(ui, t, "photoMenuImport", Icon::TrayIn, "Import Right-Click Menu…") {
+        run(app, ui, "photoMenu.import", json!({}), None);
+    }
+    if tray_button(ui, t, "photoMenuExport", Icon::TrayOut, "Export Right-Click Menu…") {
+        run(app, ui, "photoMenu.export", json!({}), None);
+    }
+    let (text, edited) = label(app);
+    let r = crate::widgets::dropdown(ui, "photoMenuPreset", &text, t.font(12.0), t.text);
+    let r = if edited { r.on_hover_text(crate::i18n::tr("Changed since saved")) } else { r };
+    egui::Popup::menu(&r).show(|ui| {
+        let states = presets::states(app);
+        for n in 1..=COUNT {
+            let s = states[n - 1];
+            let name = format!("{} {n}", crate::i18n::tr("Preset"));
+            let text = if s.saved { name } else { format!("{name} ({})", crate::i18n::tr("Empty")) };
+            if entry(ui, &format!("photoMenuPreset-{n}"), &text, s.active) {
+                let done = format!("{} {n}", crate::i18n::tr("Switched to Preset"));
+                run(app, ui, "photoMenu.switchPreset", json!({"slot": n}), Some(done));
+            }
+        }
+        ui.separator();
+        manage(app, ui);
+        if presets::can_undo(app) {
+            ui.separator();
+            let r = ui.button(crate::i18n::tr("Undo"));
+            register(ui, "button:photoMenuUndoPreset", r.rect);
+            if r.on_hover_text(crate::i18n::tr("Bring back the menu you had before switching")).clicked() {
+                run(app, ui, "photoMenu.undoPreset", json!({}), None);
+            }
+        }
+    });
 }
