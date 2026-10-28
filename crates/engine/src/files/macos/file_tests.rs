@@ -80,3 +80,15 @@ fn an_interactive_macos_load_waits_at_the_gate() {
     });
     assert!(done.load(Ordering::SeqCst));
 }
+
+/// A camera macOS must first download support for is not remembered as failed: the next load renders again.
+#[test]
+fn needs_download_is_tried_again() {
+    let bytes = arw("ILCE-DOWNLOAD1", 1);
+    let first = Fake::new(Answer::Fail(Error::NeedsDownload { camera: "ILCE-DOWNLOAD1".into() }));
+    let (_, _, info, _) = load_bytes_now(Cow::Borrowed(&bytes), 512, None, false, options(CameraColour::Macos), &first).unwrap();
+    assert_eq!(info.macos_note, Some(MacosUnavailable::Unreadable));
+    let fine = Fake::new(Answer::Grey(D50));
+    let (_, _, info, _) = load_bytes_now(Cow::Borrowed(&bytes), 512, None, false, options(CameraColour::Macos), &fine).unwrap();
+    assert_eq!((fine.calls.load(Ordering::SeqCst), info.macos_note), (1, None));
+}

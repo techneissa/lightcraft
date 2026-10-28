@@ -177,3 +177,18 @@ fn the_size_gate_probes_once_per_camera_and_size() {
     }
     assert_eq!(probes.load(Ordering::SeqCst), 1);
 }
+
+/// A probe that could not read the file gives no verdict: the next photo of the same camera and size is probed again
+/// and starts on macOS Colour when its file reads.
+#[test]
+fn a_failed_probe_is_not_remembered() {
+    let (probes, _g) = mac(true, true, None);
+    let s = Session::new();
+    assert_eq!(imported(&s, "SONY ILCE-7M5").develop.profile.camera_colour, CameraColour::Auto);
+    assert_eq!(imported(&s, "SONY ILCE-7M5").develop.profile.camera_colour, CameraColour::Auto);
+    assert_eq!(probes.load(Ordering::SeqCst), 2, "probed again");
+    let (_, _g) = mac(true, true, Some(SIZE));
+    let verdicts_kept = GATE_FOR_TESTS.with(|g| g.borrow().clone()).unwrap();
+    assert!(verdicts_kept.1.0.lock().unwrap().is_empty());
+    assert_eq!(imported(&s, "SONY ILCE-7M5").develop.profile.camera_colour, CameraColour::Macos);
+}

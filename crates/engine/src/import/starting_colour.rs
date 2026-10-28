@@ -79,7 +79,9 @@ thread_local! {
     pub(crate) static GATE_FOR_TESTS: std::cell::RefCell<Option<std::rc::Rc<(Box<dyn Gate>, Verdicts)>>> = const { std::cell::RefCell::new(None) };
 }
 
-/// Size-gate verdicts per (camera, size): one probe per camera model and size, not one per photo.
+/// Size-gate verdicts per (camera, size): one probe per camera model and size, not one per photo. Only a probe that
+/// read the file gives a verdict: one that failed (a truncated or unreadable file) is not kept, so the next photo of
+/// that camera and size is probed again instead of every one starting on Camera Matching for the session.
 #[derive(Default)]
 pub(crate) struct Verdicts(Mutex<HashMap<(String, (u32, u32)), bool>>);
 
@@ -87,11 +89,13 @@ pub(crate) struct Verdicts(Mutex<HashMap<(String, (u32, u32)), bool>>);
 static VERDICTS: std::sync::LazyLock<Verdicts> = std::sync::LazyLock::new(Verdicts::default);
 
 impl Verdicts {
-    fn get_or(&self, key: (String, (u32, u32)), probe: impl FnOnce() -> bool) -> bool {
+    /// The verdict for `key`, probing when there is none; `probe` answers `None` when it could not read the file
+    /// (not kept: no verdict, the photo fails the gate this time).
+    fn get_or(&self, key: (String, (u32, u32)), probe: impl FnOnce() -> Option<bool>) -> bool {
         if let Some(v) = self.0.lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
             return *v;
         }
-        let v = probe();
+        let Some(v) = probe() else { return false };
         self.0.lock().unwrap_or_else(PoisonError::into_inner).insert(key, v);
         v
     }
@@ -132,7 +136,7 @@ pub(crate) fn macos_gates(p: &Photo, gate: &dyn Gate, verdicts: &Verdicts) -> Re
     }
     let Source::File { path } = &p.source else { return Err(Skip::Camera) };
     let size = (p.width, p.height);
-    let fits = verdicts.get_or((camera.to_owned(), size), || gate.native_size(Path::new(path)).is_some_and(|n| same_size(n, size)));
+    let fits = verdicts.get_or((camera.to_owned(), size), || gate.native_size(Path::new(path)).map(|n| same_size(n, size)));
     if fits { Ok(()) } else { Err(Skip::Size) }
 }
 

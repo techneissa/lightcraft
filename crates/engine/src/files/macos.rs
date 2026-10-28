@@ -259,9 +259,10 @@ pub(super) fn render_base(ready: &Prepared, input: Input<'_>, max_edge: usize, b
             None => MacosUnavailable::Unreadable,
         },
         Err(Error::Unsupported) => return Err(MacosUnavailable::System),
-        Err(Error::Cancelled) => return Err(MacosUnavailable::Unreadable),
+        // (a cancelled render, and a camera macOS must first download support for, are tried again next time)
+        Err(Error::Cancelled | Error::NeedsDownload { .. }) => return Err(MacosUnavailable::Unreadable),
         Err(Error::SizeMismatch { .. }) => MacosUnavailable::Size,
-        Err(Error::Undecodable | Error::TooLarge { .. } | Error::NeedsDownload { .. } | Error::Os(_)) => MacosUnavailable::Unreadable,
+        Err(Error::Undecodable | Error::TooLarge { .. } | Error::Os(_)) => MacosUnavailable::Unreadable,
     };
     remember(ready.fingerprint, why);
     Err(why)
