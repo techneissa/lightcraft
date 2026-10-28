@@ -254,7 +254,7 @@ fn a_clash_is_shown_with_the_reason_until_conditions_tell_the_commands_apart() {
     h.step();
     h.step();
     let text = shown(&h);
-    assert!(text.contains("share D") && text.contains("both work when"), "{text}");
+    assert!(text.contains("share D") && text.contains("both work at the same time"), "{text}");
 }
 
 #[test]
@@ -333,18 +333,28 @@ fn a_damaged_condition_is_ignored_with_a_notice() {
 #[test]
 #[ignore = "writes pictures; run with LIGHTCRAFT_TEST_SHOTS"]
 fn when_pictures() {
-    let mut h = demo();
+    let png = |img: &lightcraft_raster::Rgba8| {
+        lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
+    };
+    let services = Services {
+        png: Some(Box::new(png)),
+        write_new: Some(Box::new(lightcraft_engine::export::write_file_new)),
+        ..Default::default()
+    };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut h = Headless::new(app, [1500.0, 950.0], 1.0);
+    h.settle(SETTLE);
     h.app.run("app.shortcuts", json!({})).unwrap();
     h.step();
     h.step();
     click(&mut h, "field:shortcutsSearch");
-    type_text(&mut h, "o");
+    type_text(&mut h, "view");
     shot(&mut h, "when-before.png");
     for (id, when) in [
-        ("view.survey", Some("view == detail && tool == crop")),
+        ("view.beforeAfter", Some("view == detail && hasPhoto")),
+        ("view.cropOverlay", Some("tool == crop")),
         ("view.compare", Some("!textFocus && view != grid")),
         ("view.detail", Some("!(view == compare || view == survey)")),
-        ("view.people", None),
     ] {
         set(&mut h, json!({"id": id, "when": when}));
     }
@@ -352,16 +362,17 @@ fn when_pictures() {
     h.step();
     shot(&mut h, "when-chips.png");
     click(&mut h, "button:shortcutWhen-view.compare");
+    assert_eq!(h.request("ui.key", json!({"key": "A", "cmd": true}), T)["ok"], true);
     type_text(&mut h, "!textFocus && ");
     shot(&mut h, "when-autocomplete.png");
     key(&mut h, "Escape");
-    click(&mut h, "button:shortcutWhenAdd-view.survey");
+    click(&mut h, "button:shortcutWhenAdd-view.compare");
     click(&mut h, "menu:whenKey-textFocus");
     click(&mut h, "menu:whenIsNot");
     shot(&mut h, "when-builder.png");
     key(&mut h, "Escape");
-    h.app.ui.settings.keymap.insert("view.survey#2".into(), "D".into());
-    set(&mut h, json!({"id": "view.survey", "when": null}));
+    h.app.ui.settings.keymap.insert("view.compare#2".into(), "D".into());
+    set(&mut h, json!({"id": "view.compare", "when": null}));
     h.step();
     h.step();
     shot(&mut h, "when-conflict.png");

@@ -209,7 +209,7 @@ fn reason(keymap: &Keymap, id: &str, other: &str) -> String {
     let (a, b) = (model::conditions::of(keymap, id), model::conditions::of(keymap, other));
     match expr::overlap(a.as_ref(), b.as_ref()) {
         _ if a.is_none() && b.is_none() => crate::i18n::tr("both always work").to_string(),
-        Some(cx) => crate::i18n::tr_format!("both work when {}", expr::describe(&cx, a.as_ref(), b.as_ref())),
+        Some(cx) => crate::i18n::tr_format!("both work at the same time, for example when {}", expr::describe(&cx, a.as_ref(), b.as_ref())),
         None => String::new(),
     }
 }
@@ -281,7 +281,10 @@ fn draw_row(
         let name = shortcuts::find_bindable(other).map_or(*other, |o| crate::i18n::tr(o.label));
         crate::i18n::tr_format!("Same key as {}: {}.", name, why)
     });
-    when_cell::cell(app, ui, t, b.id, column(x, WHEN_W), reason.as_deref());
+    let cell = column(x, WHEN_W);
+    ui.scope_builder(UiBuilder::new().max_rect(cell).layout(Layout::left_to_right(Align::Center)), |ui| {
+        when_cell::cell(app, ui, t, b.id, cell, reason.as_deref());
+    });
     x += WHEN_W + GAP;
 
     ui.scope_builder(UiBuilder::new().max_rect(column(x, RESET_W)).layout(Layout::left_to_right(Align::Center)), |ui| {

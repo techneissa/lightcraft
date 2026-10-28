@@ -18,7 +18,9 @@ use crate::widgets::register;
 /// The automation id of the text box.
 pub const FIELD: &str = "field:shortcutWhen";
 const PLUS_W: f32 = 22.0;
-const MAX_ITEMS: usize = 8;
+const MAX_ITEMS: usize = 40;
+/// Rows of the list that show before it scrolls.
+const LIST_ROWS: f32 = 10.0;
 const LIST_ROW_H: f32 = 22.0;
 
 /// A condition being typed.
@@ -359,25 +361,31 @@ fn editor(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, id: &'static s
                     ui.label(RichText::new(crate::i18n::tr("This condition can never be true.")).size(11.5).color(t.caution));
                     ui.add_space(3.0);
                 }
-                for (i, item) in sug.items.iter().take(count).enumerate() {
-                    let (row, r) = ui.allocate_exact_size(vec2(ui.available_width(), LIST_ROW_H), Sense::click());
-                    register(ui, format!("menu:whenSuggestion-{i}"), row);
-                    if i == edit.selected {
-                        ui.painter().rect_filled(row, 4.0, t.accent.gamma_multiply(0.30));
-                    } else if r.hovered() {
-                        ui.painter().rect_filled(row, 4.0, t.hover);
+                let list_h = (count as f32).min(LIST_ROWS) * LIST_ROW_H;
+                egui::ScrollArea::vertical().max_height(list_h).min_scrolled_height(list_h).auto_shrink([false, true]).id_salt("when-list-scroll").show(ui, |ui| {
+                    for (i, item) in sug.items.iter().take(count).enumerate() {
+                        let (row, r) = ui.allocate_exact_size(vec2(ui.available_width(), LIST_ROW_H), Sense::click());
+                        register(ui, format!("menu:whenSuggestion-{i}"), row);
+                        if i == edit.selected {
+                            ui.painter().rect_filled(row, 4.0, t.accent.gamma_multiply(0.30));
+                        } else if r.hovered() {
+                            ui.painter().rect_filled(row, 4.0, t.hover);
+                        }
+                        let tint = match item.kind {
+                            ItemKind::Key | ItemKind::Value => t.text,
+                            ItemKind::Operator | ItemKind::Group => t.accent,
+                        };
+                        ui.painter().text(pos2(row.left() + 8.0, row.center().y), Align2::LEFT_CENTER, &item.label, FontId::monospace(11.5), tint);
+                        let detail = ui.painter().with_clip_rect(row);
+                        detail.text(pos2(row.left() + 140.0, row.center().y), Align2::LEFT_CENTER, &item.detail, t.font(11.0), t.text_dim);
+                        if i == edit.selected && edit.navigated {
+                            r.scroll_to_me(None);
+                        }
+                        if r.clicked() {
+                            clicked = Some(i);
+                        }
                     }
-                    let tint = match item.kind {
-                        ItemKind::Key | ItemKind::Value => t.text,
-                        ItemKind::Operator | ItemKind::Group => t.accent,
-                    };
-                    ui.painter().text(pos2(row.left() + 8.0, row.center().y), Align2::LEFT_CENTER, &item.label, FontId::monospace(11.5), tint);
-                    let detail = ui.painter().with_clip_rect(row);
-                    detail.text(pos2(row.left() + 140.0, row.center().y), Align2::LEFT_CENTER, &item.detail, t.font(11.0), t.text_dim);
-                    if r.clicked() {
-                        clicked = Some(i);
-                    }
-                }
+                });
                 if sug.items.len() > count {
                     ui.label(RichText::new(crate::i18n::tr_format!("{} more…", sug.items.len() - count)).size(10.5).color(t.text_dim));
                 }
