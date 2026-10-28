@@ -16,7 +16,7 @@
 //! points refused, and the name, size and pixel gates before any bitmap is drawn. README.md lists
 //! the checked calls.
 
-use crate::copy::{BAND_ROWS, bands, rgba_to_rgb};
+use crate::copy::{BAND_ROWS, Rgba, bands, rgba_to_rgb, zeroed};
 use crate::gate::{model_listed, size_gate};
 use crate::size::{extent_size, lanczos_inputs, scaled};
 use crate::slots::is_full;
@@ -333,16 +333,16 @@ fn draw(planned: &Planned, ctx: &CIContext, band_rows: u32) -> Result<Vec<[f32; 
     let (w, h) = planned.size;
     let too_large = || Error::TooLarge { width: w, height: h };
     let px = usize::try_from(u64::from(w) * u64::from(h)).map_err(|_| too_large())?;
-    let mut rgb = vec![[0f32; 3]; px];
+    let mut rgb: Vec<[f32; 3]> = zeroed(px).ok_or_else(too_large)?;
     let band_rows = band_rows.clamp(1, h.max(1));
     let row = usize::try_from(w).map_err(|_| too_large())?;
-    let mut scratch = vec![0f32; row.checked_mul(4).and_then(|r| r.checked_mul(band_rows as usize)).ok_or_else(too_large)?];
+    let mut scratch: Vec<Rgba> = zeroed(row.checked_mul(band_rows as usize).ok_or_else(too_large)?).ok_or_else(too_large)?;
     let space = space().ok_or_else(|| Error::Os("no extended linear Rec.2020 colour space".into()))?;
     // SAFETY: reading an immutable constant exported by Core Image.
     let format = unsafe { kCIFormatRGBAf };
     let row_bytes = isize::try_from(row * 16).map_err(|_| too_large())?;
     for (top, rows) in bands(h, band_rows) {
-        let len = row * 4 * rows as usize;
+        let len = row * rows as usize;
         let Some(band) = scratch.get_mut(..len) else { return Err(too_large()) };
         // Core Image's y axis points up: the band `top..top + rows` (rows counted from the top)
         // starts `h - top - rows` above the bottom edge. The bitmap's first row is its top.
@@ -350,9 +350,9 @@ fn draw(planned: &Planned, ctx: &CIContext, band_rows: u32) -> Result<Vec<[f32; 
         let bounds = CGRect::new(CGPoint::new(planned.origin.0, y), CGSize::new(f64::from(w), f64::from(rows)));
         let ptr = NonNull::from(&mut *band).cast();
         {
-            // SAFETY: `band` is `w × rows × 4` floats = `rows × row_bytes` bytes, exactly the
-            // RGBAf bitmap of `bounds` (`w` wide, `rows` tall) with `row_bytes = w × 16`, so Core
-            // Image writes inside it; it stays borrowed mutably (and alive) for the whole call.
+            // SAFETY: `band` is `w × rows` 16-byte, 16-byte-aligned pixels = `rows × row_bytes` bytes, exactly
+            // the RGBAf bitmap of `bounds` (`w` wide, `rows` tall) with `row_bytes = w × 16`, so Core Image
+            // writes inside it; it stays borrowed mutably (and alive) for the whole call.
             unsafe { ctx.render_toBitmap_rowBytes_bounds_format_colorSpace(&planned.image, ptr, row_bytes, bounds, format, Some(&space)) }
         }
         let start = row * top as usize;
