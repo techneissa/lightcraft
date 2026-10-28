@@ -16,7 +16,7 @@ use lightcraft_raw::{RawFormat, RawInfo};
 
 use super::{Rgb32f, SourceInfo, xy_to_temp_tint};
 
-/// The base's exposure scale, in stops, for LightCraft's default tone curve (no curve fitted to the camera JPEG): Core
+/// The base's exposure scale, in stops, for LightCraft's default tone curve (a refused tone fit, [`toned`]): Core
 /// Image's linear output with the pinned recipe is darker than the camera JPEG. Measured on the 16 A7 V photos of the
 /// first calibration (2026-10-28, macOS 27.0.1, 1600 px, lens corrections off): at +0.44 stops the mean lightness
 /// against the camera JPEG was +1.03 L* (σ 2.71); at the first calibration's 9.4 L* a stop that puts zero at +0.33,
@@ -154,8 +154,23 @@ fn into_base(img: LinearImage) -> Option<Base> {
     usable.then(|| Base { image: Rgb32f { width, height, data: img.rgb }, white: Xy::new(x, y) })
 }
 
+/// The base and its tone: the curve fitted to the camera JPEG (`camera_preview::fit_base_tone`) on the base as the
+/// decoder made it, which maps this photo's own scene values, so nothing is scaled; when the fit is refused (no camera
+/// JPEG, another frame, the gates), LightCraft's default tone on the base scaled by [`GAIN_STOPS`]. One scale, never
+/// two (plan §3.2: on the 68-photo sample the fit on the unscaled base was accepted for 64, on the scaled one for 63,
+/// with the same colour against the camera JPEG and against macOS's own render).
+pub(super) fn toned(mut img: Rgb32f, look: Option<crate::camera_preview::CameraLook>) -> (Rgb32f, Option<lightcraft_pipeline::tone::CameraTone>) {
+    match look {
+        Some(look) => (img, Some(look.tone)),
+        None => {
+            apply_gain(&mut img, GAIN_STOPS);
+            (img, None)
+        }
+    }
+}
+
 /// Scale the base by `stops` (a refused tone fit's fixed gain), keeping it finite and non-negative.
-pub(super) fn apply_gain(img: &mut Rgb32f, stops: f32) {
+fn apply_gain(img: &mut Rgb32f, stops: f32) {
     let gain = 2f32.powf(stops);
     for px in &mut img.data {
         for v in px {

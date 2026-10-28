@@ -121,7 +121,8 @@ pub(crate) fn load(bytes: &[u8], max_edge: usize, colour: CameraColour, backend:
 /// D50's chromaticity: about 5000 K.
 const D50: [f64; 2] = [0.3457, 0.3585];
 
-/// T4: a photo on macOS Colour is the decoder's picture (with the fixed gain, no tone fit yet), its as-shot white is the
+/// T4: a photo on macOS Colour is the decoder's picture (with the fixed gain: this file has no camera JPEG to fit the
+/// tone to, T6), its as-shot white is the
 /// decoder's white in Kelvin, it has no camera colour model and is edited on the Kelvin scale.
 #[test]
 fn a_macos_photo_is_the_decoders_picture() {
@@ -237,4 +238,23 @@ fn a_macos_load_weighs_the_decoders_footprint() {
     assert_eq!(load_weight(2_000_000_000, options(CameraColour::Macos), true), 2_000_000_000);
     assert_eq!(load_weight(250_000_000, options(CameraColour::Macos), false), 250_000_000);
     assert_eq!(load_weight(250_000_000, options(CameraColour::Auto), true), 250_000_000);
+}
+
+/// T6: an accepted tone fit keeps the decoder's values (its curve maps them); a refused one scales them by the fixed
+/// gain, once.
+#[test]
+fn the_gain_is_applied_only_when_the_tone_fit_is_refused() {
+    let base = lightcraft_raster::Rgb32f { width: 2, height: 1, data: vec![[GREY; 3], [1.0, 0.5, 0.0]] };
+    let tone = lightcraft_pipeline::tone::CameraTone::new(std::array::from_fn(|i| {
+        let x = 2f32.powf(-12.0 + 12.0 * i as f32 / 31.0);
+        [x, x.sqrt().min(0.999)]
+    }))
+    .unwrap();
+    let look = crate::camera_preview::CameraLook { matrix: lightcraft_color::Mat3::IDENTITY, tone, hue_sat: None };
+    let (kept, fitted) = super::toned(base.clone(), Some(look));
+    assert_eq!((kept, fitted), (base.clone(), Some(tone)));
+    let (scaled, none) = super::toned(base, None);
+    let gain = 2f32.powf(super::GAIN_STOPS);
+    assert!(none.is_none());
+    assert_eq!(scaled.data, vec![[GREY * gain; 3], [gain, 0.5 * gain, 0.0]]);
 }

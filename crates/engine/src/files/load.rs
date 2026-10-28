@@ -276,19 +276,26 @@ pub(super) fn load_bytes_now(
 fn macos_source(bytes: &[u8], max_edge: usize, backend: &dyn Backend) -> Result<Loaded, lightcraft_pipeline::MacosUnavailable> {
     let t0 = web_time::Instant::now();
     let info = lightcraft_raw::probe_info(bytes).map_err(|_| lightcraft_pipeline::MacosUnavailable::Unreadable)?;
-    let mut base = macos::base(bytes, &info, max_edge, backend)?;
+    // the camera JPEG the tone is fitted to, small, read before the decoder runs
+    let reference = crate::camera_preview::base_reference(bytes);
+    let base = macos::base(bytes, &info, max_edge, backend)?;
+    let rendered = t0.elapsed();
+    let look = reference.as_ref().and_then(|r| crate::camera_preview::fit_base_tone(r, info.orientation, &base.image));
     if lightcraft_pipeline::profiling() {
+        let fit = if look.is_some() { "tone fit accepted" } else { "tone fit refused" };
+        let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
         eprintln!(
-            "[profile] raw source {}×{} (max {max_edge}): macos {:.1} ms",
+            "[profile] raw source {}×{} (max {max_edge}): macos {:.1} ms, {fit} {:.1} ms",
             base.image.width,
             base.image.height,
-            t0.elapsed().as_secs_f64() * 1e3
+            ms(rendered),
+            ms(t0.elapsed().saturating_sub(rendered))
         );
     }
-    macos::apply_gain(&mut base.image, macos::GAIN_STOPS);
     let lens = crate::lens_profiles::for_raw(&info, || lightcraft_meta::extract(bytes));
     let source = macos::source_info(&base, lens);
-    let img = base.image;
+    let (img, camera_tone) = macos::toned(base.image, look);
+    let source = SourceInfo { camera_tone, ..source };
     // (the decoder already scaled it; a size gate rounding can leave it a pixel long)
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Box) } else { img };
     Ok((img, None, source, false))
