@@ -108,6 +108,19 @@ fn every_item_can_be_hidden() {
     assert!(wide >= widget(&h, "field:search").width());
 }
 
+// Scenario: in a narrow window, hiding Filters gives its room to the search field (it left a gap)
+#[test]
+fn hiding_filters_widens_the_search_field_in_a_narrow_window() {
+    let mut h = Headless::new(app(), [900.0, 700.0], 1.0);
+    // the macOS layout: menus in the system menu bar, not left of the field
+    h.app.native_menu = true;
+    h.settle(Duration::from_secs(120));
+    let with_filters = widget(&h, "field:search").width();
+    run(&mut h, "topBar.setItem", json!({"item": "filter", "shown": false}));
+    let without = widget(&h, "field:search").width();
+    assert!(without > with_filters + 20.0, "{with_filters} -> {without}");
+}
+
 // Scenario: Reset to Default brings every item back
 #[test]
 fn reset_shows_every_item_again() {

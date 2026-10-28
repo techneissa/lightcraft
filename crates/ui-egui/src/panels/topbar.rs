@@ -56,9 +56,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 .into_iter()
                 .filter(|id| shown(app, id) || (*id == "cloud" && unsaved.is_some()))
                 .collect();
-            // The field stops short of the filter icon and the icons on the right; centred,
-            // it is twice the room between the window's centre and them.
-            let mut sw = 640.0f32.min(2.0 * (full.right() - 30.0 - 40.0 * right.len() as f32 - bar.center().x)).max(190.0);
+            // The field stops short of the filter icon (when shown) and the icons on the right;
+            // centred, it is twice the room between the window's centre and them.
+            let filter_room = if shown(app, "filter") { 30.0 } else { 0.0 };
+            let mut sw = 640.0f32.min(2.0 * (full.right() - filter_room - 40.0 * right.len() as f32 - bar.center().x)).max(190.0);
             if !app.native_menu {
                 // leave room for the in-window menus left of the (centred) search field
                 let menus_right = full.left() + 140.0 + crate::menubar::bar_width(ui) + 24.0;
