@@ -61,7 +61,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         let r = ui.checkbox(&mut show_all, crate::i18n::tr("Show commands without a shortcut"));
         register(ui, "check:shortcuts.showAll", r.rect);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let r = ui.add_enabled(!keymap.is_empty(), egui::Button::new(crate::i18n::tr("Reset All to Default")));
+            let r = ui.add_enabled(model::has_entries(&keymap), egui::Button::new(crate::i18n::tr("Reset All to Default")));
             register(ui, "button:shortcutsResetAll", r.rect);
             if r.clicked() {
                 let _ = app.run("app.resetShortcuts", serde_json::json!({}));
@@ -279,7 +279,7 @@ fn slot_cell(
     });
     let clear = if slot == 0 { format!("button:shortcutClear-{}", b.id) } else { format!("button:shortcutClear{}-{}", slot + 1, b.id) };
     let r =
-        ui.add_enabled(sc.is_some(), egui::Button::new("×").small().min_size(vec2(CLEAR_W, 0.0))).on_hover_text(crate::i18n::tr("Remove shortcut"));
+        ui.add_enabled(sc.is_some(), egui::Button::new("×").small().min_size(vec2(CLEAR_W, 0.0))).on_hover_text(crate::i18n::tr("Remove Shortcut"));
     register(ui, clear, r.rect);
     if r.clicked() {
         capture::apply(app, ui.ctx(), b.id, slot, None);
@@ -305,7 +305,7 @@ fn reset(app: &mut LightcraftApp, ctx: &egui::Context, id: &str) {
     }
 }
 
-/// Keys that aren't a command's own shortcut (ratings, labels, secondary keys): listed, not editable.
+/// Keys that aren't a command's own shortcut (ratings, labels, keys with parameters): listed, not editable.
 /// One the user gave to a command shows struck through.
 fn fixed_keys(ui: &mut egui::Ui, t: &Tokens, mac: bool, needle: &str, keymap: &Keymap) {
     let mut fixed: Vec<(String, &str)> = Vec::new();
@@ -365,3 +365,6 @@ fn fixed_keys(ui: &mut egui::Ui, t: &Tokens, mac: bool, needle: &str, keymap: &K
         }
     });
 }
+
+#[cfg(test)]
+mod tests;

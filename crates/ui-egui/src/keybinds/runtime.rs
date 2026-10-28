@@ -4,7 +4,7 @@
 use egui::{Key, Modifiers};
 
 use crate::LightcraftApp;
-use crate::shortcuts::matches;
+use crate::shortcuts::matches_ex;
 
 use super::chord::Step;
 use super::model;
@@ -31,9 +31,11 @@ pub enum Poll {
     Fire(&'static str),
 }
 
-/// Whether a key (not a lone modifier) was pressed this frame.
+/// Whether a key (not a lone modifier) was freshly pressed this frame: the repeats of a key still
+/// held down (the leader, usually) don't count.
 fn any_key(i: &egui::InputState) -> bool {
-    i.events.iter().any(|e| matches!(e, egui::Event::Key { key, pressed: true, .. } if !crate::shortcuts::is_modifier(*key)))
+    i.events.iter().any(|e| matches!(e, egui::Event::Key { key, pressed: true, repeat: false, .. } if !crate::shortcuts::is_modifier(*key)))
+        || i.events.iter().any(|e| matches!(e, egui::Event::Copy | egui::Event::Cut | egui::Event::Paste(_)))
 }
 
 /// Remove this frame's key presses, so nothing else sees the ones the chord took.
@@ -57,7 +59,8 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) -> Poll {
             return follow(app, ctx, p, &chords, now);
         }
     }
-    let leader = ctx.input(|i| chords.iter().find(|(_, [first, _])| matches(i, first.0, first.1)).map(|(_, [first, _])| *first));
+    let leader =
+        ctx.input(|i| chords.iter().find(|(_, [first, _])| matches_ex(i, first.0, first.1, true, Modifiers::NONE)).map(|(_, [first, _])| *first));
     let Some(first) = leader else { return Poll::Pass };
     consume_keys(ctx);
     app.keybinds.pending = Some(Pending { first, since: now });
@@ -72,8 +75,14 @@ fn follow(app: &mut LightcraftApp, ctx: &egui::Context, p: Pending, chords: &[(&
         return Poll::Swallow;
     }
     let (esc, hit) = ctx.input(|i| {
-        let hit = chords.iter().find(|(_, [first, second])| *first == p.first && matches(i, second.0, second.1)).map(|(id, _)| *id);
-        (matches(i, Modifiers::NONE, Key::Escape), hit)
+        let next = || chords.iter().filter(|(_, [first, _])| *first == p.first);
+        // the key as pressed first; failing that, with the modifiers of the leader still held taken
+        // off, so ⌘K then C works with ⌘ kept down
+        let hit = next()
+            .find(|(_, [_, second])| matches_ex(i, second.0, second.1, true, Modifiers::NONE))
+            .or_else(|| next().find(|(_, [_, second])| matches_ex(i, second.0, second.1, true, p.first.0)))
+            .map(|(id, _)| *id);
+        (matches_ex(i, Modifiers::NONE, Key::Escape, true, Modifiers::NONE), hit)
     });
     consume_keys(ctx);
     app.keybinds.pending = None;

@@ -311,3 +311,136 @@ fn a_right_click_on_a_palette_row_opens_the_box() {
     assert!(h.app.ui.palette.is_none(), "the palette made way");
     assert_eq!(h.app.keybinds.capture.as_ref().map(|c| c.id.as_str()), Some("view.survey"));
 }
+
+fn key_event(key: egui::Key, repeat: bool, modifiers: egui::Modifiers) -> egui::Event {
+    egui::Event::Key { key, physical_key: None, pressed: true, repeat, modifiers }
+}
+
+#[test]
+fn holding_the_leader_does_not_cancel_the_chord() {
+    let mut h = demo();
+    set(&mut h, "view.survey", 2, "Cmd+K S");
+    // ⌘K goes down and stays down (egui turns a key's later events into repeats while it is held)
+    h.app.synthetic.push(key_event(egui::Key::K, false, egui::Modifiers::COMMAND));
+    h.step();
+    h.step();
+    assert!(h.app.keybinds.pending.is_some());
+    for _ in 0..3 {
+        h.app.synthetic.push(key_event(egui::Key::K, true, egui::Modifiers::COMMAND));
+        h.step();
+        h.step();
+    }
+    assert!(h.app.keybinds.pending.is_some(), "the repeats of the leader kept the chord waiting");
+    assert!(h.app.ui.toast.is_none(), "no 'no shortcut continues' toast: {:?}", h.app.ui.toast);
+    // let go, then the second key
+    h.app.synthetic.push(egui::Event::Key {
+        key: egui::Key::K,
+        physical_key: None,
+        pressed: false,
+        repeat: false,
+        modifiers: egui::Modifiers::COMMAND,
+    });
+    h.step();
+    h.step();
+    key(&mut h, "S");
+    assert_eq!(h.app.ui.view, ViewMode::Survey);
+}
+
+#[test]
+fn cmd_may_stay_down_for_the_second_key() {
+    let mut h = demo();
+    set(&mut h, "view.survey", 2, "Cmd+K S");
+    // ⌘K, then ⌘ still held for S
+    press(&mut h, "K", true, false);
+    press(&mut h, "S", true, false);
+    assert_eq!(h.app.ui.view, ViewMode::Survey, "⌘K then ⌘S works for the chord ⌘K S");
+    assert!(h.app.keybinds.pending.is_none());
+    // a chord that names ⌘ on its second key takes it held, and not released
+    h.app.run("view.detail", json!({})).unwrap();
+    h.step();
+    set(&mut h, "view.compare", 2, "Cmd+K Cmd+J");
+    press(&mut h, "K", true, false);
+    key(&mut h, "J");
+    assert_eq!(h.app.ui.view, ViewMode::Detail, "J without ⌘ is not ⌘K ⌘J");
+    press(&mut h, "K", true, false);
+    press(&mut h, "J", true, false);
+    assert_eq!(h.app.ui.view, ViewMode::Compare);
+}
+
+#[test]
+fn a_field_taking_the_keyboard_or_a_dialog_forgets_the_chord() {
+    let mut h = demo();
+    set(&mut h, "view.survey", 2, "Cmd+K S");
+    press(&mut h, "K", true, false);
+    assert!(h.app.keybinds.pending.is_some());
+    click(&mut h, "field:search");
+    assert!(h.app.keybinds.pending.is_none(), "the search field took the keyboard");
+    key(&mut h, "S");
+    assert_ne!(h.app.ui.view, ViewMode::Survey, "S went into the field");
+    // a dialog opening does the same
+    key(&mut h, "Escape");
+    press(&mut h, "K", true, false);
+    assert!(h.app.keybinds.pending.is_some());
+    h.app.run("app.shortcuts", json!({})).unwrap();
+    h.step();
+    h.step();
+    assert!(h.app.keybinds.pending.is_none());
+}
+
+#[test]
+fn a_chord_may_not_use_an_app_menu_key() {
+    let mut h = demo();
+    let e = h.app.run("app.setShortcut", json!({"id": "view.survey", "slot": 2, "shortcut": "F9 Cmd+Q"})).unwrap_err();
+    assert!(e.contains("reserved"), "{e}");
+}
+
+#[test]
+fn a_chord_shows_as_text_in_the_native_menu_item() {
+    let (label, key) = crate::menubar::native_item_presentation(
+        &crate::shortcuts::Keymap::new(),
+        "view.survey",
+        &serde_json::Value::Null,
+        "Survey",
+        Some("Cmd+K S"),
+    );
+    assert!(label.ends_with("(⌘K S)"), "{label}");
+    assert_eq!(key, None, "a chord is no key equivalent");
+    let (label, key) =
+        crate::menubar::native_item_presentation(&crate::shortcuts::Keymap::new(), "view.survey", &serde_json::Value::Null, "Survey", Some("N"));
+    assert!(!label.contains('('), "{label}");
+    assert_eq!(key, Some("N"));
+}
+
+#[test]
+fn the_old_fixed_second_keys_are_editable_shortcuts() {
+    let mut h = demo();
+    let slots = |h: &Headless, id: &str| crate::keybinds::model::effective_slots(&h.app.ui.settings.keymap, id).map(|s| s.map(str::to_string));
+    assert_eq!(slots(&h, "view.filmstrip")[1].as_deref(), Some("F6"));
+    // F6 still works, as it did
+    let before = h.app.ui.filmstrip;
+    key(&mut h, "F6");
+    assert_ne!(h.app.ui.filmstrip, before);
+    // moving it to another key: F6 stops, the new key works
+    set(&mut h, "view.filmstrip", 2, "Shift+F9");
+    let before = h.app.ui.filmstrip;
+    key(&mut h, "F6");
+    assert_eq!(h.app.ui.filmstrip, before, "F6 no longer does it");
+    press(&mut h, "F9", false, true);
+    assert_ne!(h.app.ui.filmstrip, before);
+    // the window lists it under Shortcut 2 and no longer under Fixed Keys
+    h.app.run("app.shortcuts", json!({})).unwrap();
+    h.step();
+    h.step();
+    assert!(has(&h, "button:shortcut2-view.thumbSizeUp"));
+    assert!(!crate::shortcuts::ALIASES.iter().any(|(_, id, _)| *id == "view.filmstrip"));
+}
+
+#[test]
+fn the_box_ignores_enter_before_a_key() {
+    let mut h = demo();
+    h.app.run("app.assignShortcut", json!({"id": "view.survey", "slot": 2})).unwrap();
+    h.step();
+    key(&mut h, "Enter");
+    assert!(h.app.keybinds.capture.is_some(), "Enter with no keys does nothing");
+    assert!(h.app.keybinds.capture.as_ref().is_some_and(|c| c.steps.is_empty()));
+}

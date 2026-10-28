@@ -87,9 +87,14 @@ pub fn keys(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
             cancel = true;
             break;
         }
-        if k == Key::Enter && m.is_none() && !cap.steps.is_empty() {
-            save = true;
-            break;
+        if k == Key::Enter && m.is_none() {
+            // Enter saves what was pressed; before any key it does nothing (`app.setShortcut` can
+            // still give a command the Enter key)
+            save = !cap.steps.is_empty();
+            if save {
+                break;
+            }
+            continue;
         }
         let step = shortcuts::format(m, k).and_then(|s| shortcuts::parse(&s));
         match step {

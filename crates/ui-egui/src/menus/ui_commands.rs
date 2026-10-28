@@ -272,7 +272,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.setShortcut", "Set Keyboard Shortcut", None, ""),
     ("app.resetShortcuts", "Reset All Keyboard Shortcuts", None, ""),
     // opens the Assign Shortcut box for {id}, in {slot} 1 or 2 (the first free one by default)
-    ("app.assignShortcut", "Assign Keyboard Shortcut…", None, ""),
+    ("app.assignShortcut", "Assign Shortcut…", None, ""),
     // the photo menu's arrangement (Settings ▸ Photo Menu): {items} = its slots in order
     ("photoMenu.get", "Photo Menu Items", None, ""),
     ("photoMenu.set", "Set Photo Menu Items", None, ""),
