@@ -71,7 +71,7 @@ fn a_refused_file_changes_nothing_and_says_why() {
     let mut h = app_with(Services::default());
     customise(&mut h);
     let before = h.app.ui.settings.keymap.clone();
-    let mut run = |h: &mut Headless, name: &str, body: &str| {
+    let run = |h: &mut Headless, name: &str, body: &str| {
         let path = scratch(name);
         std::fs::write(&path, body).unwrap();
         h.app.run("app.importShortcuts", json!({"path": path.to_string_lossy()})).unwrap_err()
