@@ -212,13 +212,19 @@ pub(super) fn export_size(ui: &mut egui::Ui, full: &mut bool, r: &mut lightcraft
         field(ui, "Resize to", |ui| {
             let cur = MODES.iter().find(|m| m.0 == r.mode).map_or("Long Edge", |m| m.1);
             let before = r.mode;
-            let c = crate::widgets::combo_box("exportResizeMode").width(150.0).selected_text(crate::i18n::tr(cur)).show_ui(ui, |ui| {
-                for (m, l) in MODES {
-                    ui.selectable_value(&mut r.mode, m, crate::i18n::tr(l));
-                }
-            });
-            crate::widgets::name_combo(&c.response, crate::i18n::tr("Resize"));
-            crate::widgets::register(ui, "combo:exportResizeMode", c.response.rect);
+            let (c, chosen) = crate::widgets::dropdown_search::pick(
+                ui,
+                "exportResizeMode",
+                |c| c.width(150.0).selected_text(crate::i18n::tr(cur)),
+                &MODES,
+                |(m, _)| *m == r.mode,
+                |(_, l)| crate::i18n::tr(l).to_string(),
+            );
+            crate::widgets::name_combo(&c, crate::i18n::tr("Resize"));
+            crate::widgets::register(ui, "combo:exportResizeMode", c.rect);
+            if let Some((m, _)) = chosen.and_then(|i| MODES.get(i)) {
+                r.mode = *m;
+            }
             if r.mode != before {
                 // a sensible value for the new unit
                 r.value = match r.mode {

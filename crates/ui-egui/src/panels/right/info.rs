@@ -419,17 +419,22 @@ fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcr
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(crate::i18n::tr("Copyright Status")).size(11.5).color(t.text_dim));
     let shown = crate::i18n::tr(if mixed { MIXED } else { current.label() });
-    let r = crate::widgets::combo_box("info-copyright-status").selected_text(shown).show_ui(ui, |ui| {
-        for st in lightcraft_catalog::CopyrightStatus::ALL {
-            let on = !mixed && st == current;
-            if ui.selectable_label(on, crate::i18n::tr(st.label())).clicked() && !on {
-                let ids: Vec<u64> = targets.iter().map(|id| id.0).collect();
-                let _ = app.run("photo.setMeta", json!({"ids": ids, "copyrightStatus": st.id()}));
-            }
-        }
-    });
-    crate::widgets::name_combo(&r.response, crate::i18n::tr("Copyright Status"));
-    register(ui, "field:copyrightStatus", r.response.rect);
+    let (r, chosen) = crate::widgets::dropdown_search::pick(
+        ui,
+        "info-copyright-status",
+        |c| c.selected_text(shown),
+        &lightcraft_catalog::CopyrightStatus::ALL,
+        |st| !mixed && *st == current,
+        |st| crate::i18n::tr(st.label()).to_string(),
+    );
+    crate::widgets::name_combo(&r, crate::i18n::tr("Copyright Status"));
+    register(ui, "field:copyrightStatus", r.rect);
+    if let Some(st) = chosen.and_then(|i| lightcraft_catalog::CopyrightStatus::ALL.get(i))
+        && (mixed || *st != current)
+    {
+        let ids: Vec<u64> = targets.iter().map(|id| id.0).collect();
+        let _ = app.run("photo.setMeta", json!({"ids": ids, "copyrightStatus": st.id()}));
+    }
     ui.add_space(6.0);
 }
 

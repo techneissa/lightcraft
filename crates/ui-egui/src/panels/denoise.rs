@@ -422,12 +422,18 @@ fn cache_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &
         ui.label(RichText::new(crate::i18n::tr("Limit")).color(t.text_label));
         let current = list["cacheGb"].as_u64().unwrap_or(20) as u32;
         let mut choice = current;
-        let combo = crate::widgets::combo_box("denoise-cache-limit").selected_text(tr_format!("{size} GB", size = current)).show_ui(ui, |ui| {
-            for gb in CACHE_LIMITS {
-                ui.selectable_value(&mut choice, gb, tr_format!("{size} GB", size = gb));
-            }
-        });
-        crate::widgets::name_combo(&combo.response, tr("Cache limit"));
+        let (combo, chosen) = crate::widgets::dropdown_search::pick(
+            ui,
+            "denoise-cache-limit",
+            |c| c.selected_text(tr_format!("{size} GB", size = current)),
+            &CACHE_LIMITS,
+            |gb| *gb == choice,
+            |gb| tr_format!("{size} GB", size = gb).to_string(),
+        );
+        crate::widgets::name_combo(&combo, tr("Cache limit"));
+        if let Some(gb) = chosen.and_then(|i| CACHE_LIMITS.get(i)) {
+            choice = *gb;
+        }
         if choice != current {
             let _ = app.run("denoise.settings", json!({"cacheGb": choice}));
             app.caches.denoise.epoch += 1;

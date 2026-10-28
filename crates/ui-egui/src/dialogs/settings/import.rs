@@ -1,6 +1,8 @@
 use super::general::{cameras, preset_combo};
 use super::widgets::{button_width, check, choices, heading, hint, path_label, row};
 use super::{LightcraftApp, RichText, Tokens, json, register};
+use crate::widgets::dropdown_search::Searchable;
+use crate::widgets::dropdown_search::presets::{self, Choice};
 
 pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let d = app.session.import_defaults.clone();
@@ -45,15 +47,18 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
                             .unwrap_or_else(|| pid.to_string()),
                     };
                     let id = format!("settingsCamera-{i}");
-                    let r = crate::widgets::combo_box(&id).width(240.0).selected_text(label).show_ui(ui, |ui| {
-                        if ui.selectable_label(current == Some(RAW_DEFAULT), crate::i18n::tr("Same as raw default")).clicked() {
-                            pick = Some(json!({"camera": cam, "remove": true}));
-                        }
-                        if ui.selectable_label(current.is_none(), crate::i18n::tr("LightCraft Default")).clicked() {
-                            pick = Some(json!({"camera": cam, "preset": null}));
-                        }
-                        if let Some(pid) = crate::panels::presets::picker_rows(ui, &id, &app.session.presets, current) {
-                            pick = Some(json!({"camera": cam, "preset": pid}));
+                    let fixed = [
+                        (crate::i18n::tr("Same as raw default").to_string(), current == Some(RAW_DEFAULT)),
+                        (crate::i18n::tr("LightCraft Default").to_string(), current.is_none()),
+                    ];
+                    let names = [fixed[0].0.clone(), fixed[1].0.clone()];
+                    let find = presets::before(ui, &id, &names, &app.session.presets);
+                    let r = crate::widgets::combo_box(&id).width(240.0).selected_text(label).search(ui, &find, |ui| {
+                        match presets::list(ui, &find, &id, &fixed, &app.session.presets, current) {
+                            Some(Choice::Fixed(0)) => pick = Some(json!({"camera": cam, "remove": true})),
+                            Some(Choice::Fixed(_)) => pick = Some(json!({"camera": cam, "preset": null})),
+                            Some(Choice::Preset(pid)) => pick = Some(json!({"camera": cam, "preset": pid})),
+                            None => {}
                         }
                     });
                     crate::widgets::name_combo(&r.response, crate::i18n::tr("Camera"));
@@ -95,21 +100,21 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
         row(ui, t, crate::i18n::tr("Metadata preset"), |ui| {
             let cur = d.metadata_preset.clone();
             let mut pick = None;
-            let r = crate::widgets::combo_box("settingsMetaPreset")
-                .width(240.0)
-                .selected_text(cur.clone().unwrap_or_else(|| crate::i18n::tr("None").into()))
-                .show_ui(ui, |ui| {
-                    if ui.selectable_label(cur.is_none(), crate::i18n::tr("None")).clicked() {
-                        pick = Some(String::new());
-                    }
-                    for m in &app.session.metadata_presets {
-                        if ui.selectable_label(cur.as_deref() == Some(m.name.as_str()), &m.name).clicked() {
-                            pick = Some(m.name.clone());
-                        }
-                    }
-                });
-            crate::widgets::name_combo(&r.response, crate::i18n::tr("Metadata preset"));
-            register(ui, "combo:settingsMetaPreset", r.response.rect);
+            // "None" first, then the metadata presets
+            let names: Vec<Option<&str>> = std::iter::once(None).chain(app.session.metadata_presets.iter().map(|m| Some(m.name.as_str()))).collect();
+            let (r, chosen) = crate::widgets::dropdown_search::pick(
+                ui,
+                "settingsMetaPreset",
+                |c| c.width(240.0).selected_text(cur.clone().unwrap_or_else(|| crate::i18n::tr("None").into())),
+                &names,
+                |name| name.map(str::to_string) == cur,
+                |name| name.map_or_else(|| crate::i18n::tr("None").to_string(), str::to_string),
+            );
+            crate::widgets::name_combo(&r, crate::i18n::tr("Metadata preset"));
+            register(ui, "combo:settingsMetaPreset", r.rect);
+            if let Some(name) = chosen.and_then(|i| names.get(i)) {
+                pick = Some(name.map_or_else(String::new, str::to_string));
+            }
             if let Some(n) = pick {
                 let _ = app.run("library.preferences", json!({"import": {"metadataPreset": n}}));
             }

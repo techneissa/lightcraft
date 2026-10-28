@@ -253,6 +253,12 @@ impl Filter {
     pub fn row(&self, ui: &Ui, item: &egui::Response) {
         let at = self.row.get();
         self.row.set(at.saturating_add(1));
+        self.highlight(ui, item, at);
+    }
+
+    /// [`Self::row`] for a list that draws only the rows in view: `item` is the row at position `at`
+    /// among the matches.
+    pub fn highlight(&self, ui: &Ui, item: &egui::Response, at: usize) {
         if let Some(id) = self.salt("width") {
             ui.data_mut(|d| d.insert_temp(id, item.rect.width()));
         }
@@ -265,6 +271,22 @@ impl Filter {
         if found.moved {
             item.scroll_to_me(None);
         }
+    }
+
+    /// The options that match the typed text, best first (empty while nothing is typed).
+    pub fn matches(&self) -> Vec<usize> {
+        self.found.borrow().shown.clone()
+    }
+
+    /// The text or the highlight changed this frame.
+    pub fn moved(&self) -> bool {
+        self.found.borrow().moved
+    }
+
+    /// The highlighted position among [`Self::matches`], while text is typed.
+    pub fn active_pos(&self) -> Option<usize> {
+        let found = self.found.borrow();
+        (!found.query.is_empty()).then_some(found.active)
     }
 
     /// The dim line under the field when nothing matches.
@@ -280,7 +302,7 @@ impl Filter {
     /// `items`, which are the options `labels` of [`before`] named, in the same order). ↩ closes the
     /// list; a click closes it as the combo box always did.
     pub fn list<X>(&self, ui: &mut Ui, items: &[X], selected: impl Fn(&X) -> bool, label: impl Fn(&X) -> String) -> Option<usize> {
-        self.list_with(ui, items, selected, label, |_, _| {})
+        self.list_with(ui, items, selected, label, |_, _, _| {})
     }
 
     /// [`Self::list`], calling `on_row` with each item and its row as it is drawn (to register the
@@ -291,7 +313,7 @@ impl Filter {
         items: &[X],
         selected: impl Fn(&X) -> bool,
         label: impl Fn(&X) -> String,
-        mut on_row: impl FnMut(&X, &egui::Response),
+        mut on_row: impl FnMut(&Ui, &X, &egui::Response),
     ) -> Option<usize> {
         let mut chosen = self.picked(ui);
         if chosen.is_some() {
@@ -303,7 +325,7 @@ impl Filter {
             let Some(item) = items.get(i) else { continue };
             let row = ui.selectable_label(selected(item), label(item));
             self.row(ui, &row);
-            on_row(item, &row);
+            on_row(ui, item, &row);
             if row.clicked() {
                 chosen = Some(i);
             }
@@ -341,7 +363,7 @@ pub fn pick<X>(
     selected: impl Fn(&X) -> bool,
     label: impl Fn(&X) -> String,
 ) -> (egui::Response, Option<usize>) {
-    pick_with(ui, salt, set_up, items, selected, label, |_, _| {})
+    pick_with(ui, salt, set_up, items, selected, label, |_, _, _| {})
 }
 
 /// [`pick`], calling `on_row` with each item and its row as it is drawn.
@@ -352,10 +374,9 @@ pub fn pick_with<X>(
     items: &[X],
     selected: impl Fn(&X) -> bool,
     label: impl Fn(&X) -> String,
-    on_row: impl FnMut(&X, &egui::Response),
+    on_row: impl FnMut(&Ui, &X, &egui::Response),
 ) -> (egui::Response, Option<usize>) {
-    let labels: Vec<String> = items.iter().map(&label).collect();
-    let find = before(ui, salt, &labels);
+    let find = before_lazy(ui, salt, || items.iter().map(&label).collect(), &[]);
     let shown = set_up(crate::widgets::combo_box(salt)).search(ui, &find, |ui| find.list_with(ui, items, selected, label, on_row));
     (shown.response, shown.inner.flatten())
 }
@@ -371,6 +392,12 @@ pub fn before(ui: &mut Ui, salt: &str, labels: &[impl AsRef<str>]) -> Filter {
 /// [`before`], where `enabled[i] == false` keeps option `i` out of the matches (an option past the end
 /// of `enabled` is enabled).
 pub fn before_enabled(ui: &mut Ui, salt: &str, labels: &[impl AsRef<str>], enabled: &[bool]) -> Filter {
+    before_lazy(ui, salt, || labels.iter().map(|l| l.as_ref().to_owned()).collect(), enabled)
+}
+
+/// [`before_enabled`] with the labels made only while the list is open, for a long list or one that is
+/// costly to name.
+pub fn before_lazy(ui: &mut Ui, salt: &str, labels: impl FnOnce() -> Vec<String>, enabled: &[bool]) -> Filter {
     let id = ui.make_persistent_id(salt).with("search");
     let button = ui.make_persistent_id(egui::IdSalt::new(salt));
     // A list that is not open starts with nothing typed when it opens.
@@ -378,7 +405,7 @@ pub fn before_enabled(ui: &mut Ui, salt: &str, labels: &[impl AsRef<str>], enabl
         ui.data_mut(|d| d.remove::<Search>(id));
         return Filter::default();
     }
-    let labels: Vec<String> = labels.iter().map(|l| l.as_ref().to_owned()).collect();
+    let labels = labels();
     let texts: Vec<&str> = labels.iter().map(String::as_str).collect();
     let mut search: Search = ui.data(|d| d.get_temp(id)).unwrap_or_default();
     let before = search.clone();
@@ -435,6 +462,8 @@ fn input_of(event: &Event) -> Option<Input<'_>> {
         _ => None,
     }
 }
+
+pub mod presets;
 
 #[cfg(test)]
 mod tests;

@@ -379,3 +379,115 @@ fn keys_typed_in_an_open_list_never_reach_the_shortcuts() {
     h.run_steps(3);
     assert_ne!(h.state().ui.view, grid, "G works again once the list is closed");
 }
+
+fn many_presets() -> lightcraft_engine::presets::PresetList {
+    let mut items: Vec<lightcraft_develop::Preset> = (0..2000)
+        .map(|i| lightcraft_develop::Preset {
+            id: format!("p{i}"),
+            name: format!("Look {i:04}"),
+            group: "Looks".into(),
+            settings: serde_json::json!({}),
+            favorite: false,
+            builtin: false,
+        })
+        .collect();
+    items.push(lightcraft_develop::Preset {
+        id: "warm".into(),
+        name: "Golden Warm Portrait".into(),
+        group: "Portraits".into(),
+        settings: serde_json::json!({}),
+        favorite: false,
+        builtin: false,
+    });
+    lightcraft_engine::presets::PresetList::new(items)
+}
+
+/// The preset picker (settings, import): "None" first, then 2000 presets drawn lazily; typing finds
+/// one among them, and ↩ picks it.
+#[test]
+fn a_preset_picker_searches_its_fixed_rows_and_every_preset() {
+    use super::presets::{self, Choice};
+    let mut h = Harness::builder().with_size(egui::vec2(400.0, 500.0)).build_ui_state(
+        |ui, state: &mut (lightcraft_engine::presets::PresetList, Option<Choice>)| {
+            let fixed = [("None".to_string(), true)];
+            let find = presets::before(ui, "import-preset", &["None".to_string()], &state.0);
+            let r = crate::widgets::combo_box("import-preset").selected_text("None").search(ui, &find, |ui| {
+                if let Some(c) = presets::list(ui, &find, "import-preset", &fixed, &state.0, None) {
+                    state.1 = Some(c);
+                }
+            });
+            crate::widgets::name_combo(&r.response, "Preset");
+        },
+        (many_presets(), None),
+    );
+    h.get_by_role(Role::ComboBox).click();
+    h.run();
+    assert!(h.query_by_label("None").is_some(), "the fixed row shows before anything is typed");
+    h.event(egui::Event::Text("golden".into()));
+    h.run();
+    h.run();
+    assert!(h.query_by_label("Golden Warm Portrait").is_some() && h.query_by_label("None").is_none(), "typing narrows to the one preset");
+    assert!(h.query_by_label("Look 0001").is_none());
+    h.key_press(egui::Key::Enter);
+    h.run();
+    h.run();
+    assert_eq!(h.state().1, Some(Choice::Preset("warm".into())), "↩ picks the match, though 2000 presets are not all drawn");
+    // Opened again, "non" finds the fixed row, and a click picks it.
+    h.get_by_role(Role::ComboBox).click();
+    h.run();
+    h.event(egui::Event::Text("non".into()));
+    h.run();
+    h.run();
+    h.get_by_label("None").click();
+    h.run();
+    h.run();
+    assert_eq!(h.state().1, Some(Choice::Fixed(0)));
+}
+
+/// Down moves the highlight to a match far below the first rows: the list scrolls to it, and ↩ picks it.
+#[test]
+fn the_highlight_can_go_far_down_a_preset_list() {
+    use super::presets::{self, Choice};
+    let mut h = Harness::builder().with_size(egui::vec2(400.0, 500.0)).build_ui_state(
+        |ui, state: &mut (lightcraft_engine::presets::PresetList, Option<Choice>)| {
+            let find = presets::before(ui, "p", &[], &state.0);
+            let r = crate::widgets::combo_box("p").selected_text("-").search(ui, &find, |ui| {
+                if let Some(c) = presets::list(ui, &find, "p", &[], &state.0, None) {
+                    state.1 = Some(c);
+                }
+            });
+            crate::widgets::name_combo(&r.response, "Preset");
+        },
+        (many_presets(), None),
+    );
+    h.get_by_role(Role::ComboBox).click();
+    h.run();
+    h.event(egui::Event::Text("look".into()));
+    h.run();
+    for _ in 0..40 {
+        h.key_press(egui::Key::PageDown);
+        h.run();
+    }
+    h.key_press(egui::Key::Enter);
+    h.run();
+    h.run();
+    assert_eq!(h.state().1, Some(Choice::Preset("p200".into())), "forty pages of five rows down is the 201st match, Look 0200");
+}
+
+/// The Smart Album rule editor's field list searches the fields of its submenus too.
+#[test]
+fn the_rule_field_list_finds_a_field_inside_a_group() {
+    let mut rules = lightcraft_catalog::RuleSet { mode: lightcraft_catalog::Match::All, rules: vec![crate::dialogs::rules_editor::new_rule()] };
+    let env = crate::dialogs::rules_editor::Env::default();
+    let mut h = Harness::builder().with_size(egui::vec2(700.0, 500.0)).with_accessibility_check(false).build_ui(move |ui| {
+        crate::dialogs::rules_editor::edit(ui, &mut rules, "rules", 0, &[], &env);
+    });
+    h.run();
+    h.get_by_label("Field").click();
+    h.run();
+    h.event(egui::Event::Text("filen".into()));
+    h.run();
+    h.run();
+    assert!(h.query_by_label("Filename").is_some(), "Filename lives in the File submenu and is found by typing");
+    assert!(h.query_by_label("Rating").is_none());
+}
