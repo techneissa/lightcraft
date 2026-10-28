@@ -2,9 +2,11 @@
 
 ## 2026-10-28
 
-### Rejected Photos Keep Their Look
-- The grid, Compare and Survey no longer dim a photo flagged as rejected. Every view now shows a photo with the same
-  colours and brightness as the loupe and the filmstrip; the red reject flag on the photo says it is rejected.
+### Rejected Photos Keep Their Look in Compare and Survey
+- Compare and Survey no longer dim a photo flagged as rejected: they show it with the same colours and brightness as
+  the loupe and the filmstrip, so you compare photos as they are. The red reject flag says it is rejected.
+- The grid still dims rejected photos by default. **Settings ▸ Interface ▸ Grid ▸ Dim Rejected Photos** turns that
+  off (agents: `ui.set {"settings": {"dimRejected": false}}`).
 
 ### Use Smart Previews for Viewing and Editing
 - **Settings ▸ Performance** has a new switch next to the Smart Previews folder: **Use Smart Previews for viewing and

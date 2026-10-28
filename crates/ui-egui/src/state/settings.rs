@@ -165,6 +165,9 @@ pub struct AppSettings {
     pub film_badges: bool,
     /// Grid: when to show the rating / flag / edited badges.
     pub grid_badges: GridBadges,
+    /// Grid: a photo flagged as rejected is shown dimmed (Settings ▸ Interface ▸ Dim Rejected Photos; on by default, as
+    /// in Lightroom Classic). Compare, Survey, the loupe and the filmstrip never dim it.
+    pub dim_rejected: bool,
     /// View ▸ View Options ▸ Show message when loading or rendering photos: the loupe says
     /// "Rendering…" while the photo it shows is not the finished render.
     pub loupe_messages: bool,
@@ -250,6 +253,7 @@ impl Default for AppSettings {
             film_names: true,
             film_badges: true,
             grid_badges: GridBadges::Auto,
+            dim_rejected: true,
             loupe_messages: true,
             keymap: Default::default(),
             appearance_mode: AppearanceMode::Dark,

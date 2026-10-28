@@ -1,7 +1,8 @@
 //! Every view shows a photo with the look the loupe gives it. The grid, Compare and Survey drew a rejected
 //! photo under a dark veil: on an A7 V portrait on macOS Colour the wall went from L* 49.6 to 28.7 (median ΔE00
 //! 19 against the loupe), so the same photo looked darker, flatter and greyer there than in the loupe and the
-//! filmstrip. Its flag says it is rejected; its pixels are the photo's.
+//! filmstrip. Compare and Survey, where photos are compared, never dim it; the grid dims it only with Settings ▸
+//! Interface ▸ Dim Rejected Photos (on by default, as in Lightroom Classic).
 use super::*;
 use crate::state::ViewMode;
 use lightcraft_catalog::PhotoId;
@@ -117,10 +118,13 @@ fn median_de(a: &[[f64; 3]], b: &[[f64; 3]]) -> f64 {
     d[d.len() / 2]
 }
 
-/// Flags `ids` (two photos) as rejected, opens each view on them, and returns each view's median ΔE00 from the
-/// loupe's picture of the first one.
-fn rejected_views(h: &mut Headless, ids: [PhotoId; 2]) -> Vec<(ViewMode, f64)> {
+/// Flags `ids` (two photos) as rejected, sets Dim Rejected Photos to `dim`, opens each view on them, and returns
+/// each view's median ΔE00 from the loupe's picture of the first one.
+fn rejected_views(h: &mut Headless, ids: [PhotoId; 2], dim: bool) -> Vec<(ViewMode, f64)> {
     let t = Duration::from_secs(10);
+    let set = h.request("ui.set", json!({"settings": {"dimRejected": dim}}), t);
+    assert_eq!(set["ok"], true, "{set}");
+    assert_eq!(h.app.ui.settings.dim_rejected, dim, "ui.set reaches the setting");
     let flag = h.request("engine.execute", json!({"command": "photo.flag", "params": {"flag": "reject", "ids": [ids[0].0, ids[1].0]}}), t);
     assert_eq!(flag["ok"], true, "{flag}");
     let select = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [ids[0].0, ids[1].0], "active": ids[0].0}}), t);
@@ -142,14 +146,51 @@ fn rejected_views(h: &mut Headless, ids: [PhotoId; 2]) -> Vec<(ViewMode, f64)> {
     out
 }
 
+/// Compare and Survey show the loupe's look whatever the setting; the grid is dimmed (far from it) only with it on.
+fn assert_views(views: &[(ViewMode, f64)], dim: bool, what: &str) {
+    for (view, de) in views {
+        if *view == ViewMode::PhotoGrid && dim {
+            assert!(*de > 10.0, "{what}, dimming on: the grid dims the rejected photo: {views:.2?}");
+        } else {
+            assert!(*de < 2.0, "{what}, dimming {}: {view:?} shows the loupe's look: {views:.2?}", if dim { "on" } else { "off" });
+        }
+    }
+}
+
 #[test]
-fn a_rejected_photo_looks_the_same_in_the_grid_compare_and_survey_as_in_the_loupe() {
+fn a_rejected_photo_is_dimmed_only_in_the_grid_and_only_with_the_setting_on() {
     let mut h = demo([1200.0, 800.0]);
     let visible = h.app.session.visible_cloned();
     let ids = [visible[0], visible[1]];
-    let views = rejected_views(&mut h, ids);
-    eprintln!("median ΔE00 from the loupe {views:.2?}");
-    assert!(views.iter().all(|(_, de)| *de < 2.0), "median ΔE00 from the loupe (the rejected photo's veil): {views:.2?}");
+    for dim in [true, false] {
+        let views = rejected_views(&mut h, ids, dim);
+        eprintln!("dimming {dim}: median ΔE00 from the loupe {views:.2?}");
+        assert_views(&views, dim, "demo photo");
+    }
+}
+
+/// Dim Rejected Photos is on for new users and for a `ui.json` saved before it existed, survives a save, and is the
+/// Interface page's check box.
+#[test]
+fn dim_rejected_photos_is_on_by_default_saved_and_in_settings() {
+    assert!(crate::state::AppSettings::default().dim_rejected, "on by default, as in Lightroom Classic");
+    let old: crate::UiState = serde_json::from_str(r#"{"settings": {"gridBadges": "always"}}"#).unwrap();
+    assert!(old.settings.dim_rejected, "a ui.json from before the setting dims");
+    let mut off = old.clone();
+    off.settings.dim_rejected = false;
+    let saved = serde_json::to_string(&off).unwrap();
+    assert!(saved.contains("\"dimRejected\":false"), "saved under its name");
+    let read: crate::UiState = serde_json::from_str(&saved).unwrap();
+    assert!(!read.settings.dim_rejected, "off survives a restart");
+    // the check box on Settings ▸ Interface switches it
+    let mut h = demo([1200.0, 800.0]);
+    let t = Duration::from_secs(10);
+    h.app.ui.dialog = Some(crate::state::Dialog::Settings { tab: "interface".into() });
+    h.settle(SETTLE);
+    let r = h.request("ui.clickWidget", json!({"id": "check:settings.dimRejected"}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert!(!h.app.ui.settings.dim_rejected, "the check box turns it off");
 }
 
 /// The same on a real A7 V raw on its starting colour (macOS Colour on a Mac whose decoder reads it, else Camera
@@ -157,7 +198,7 @@ fn a_rejected_photo_looks_the_same_in_the_grid_compare_and_survey_as_in_the_loup
 /// (linked or copied twice into a temporary folder: Compare and Survey need two photos; the library takes the
 /// second as a duplicate, so there the second photo is a virtual copy).
 #[test]
-fn a_rejected_a7v_raw_looks_the_same_in_every_view_in_local_and_in_the_library() {
+fn a_rejected_a7v_raw_is_dimmed_only_in_the_grid_in_local_and_in_the_library() {
     let Some(arw) = std::env::var_os("LIGHTCRAFT_MACRAW_ARW") else {
         lightcraft_testkit::skip!(Input, "set LIGHTCRAFT_MACRAW_ARW to an A7 V ARW file");
         return;
@@ -194,9 +235,11 @@ fn a_rejected_a7v_raw_looks_the_same_in_every_view_in_local_and_in_the_library()
         assert_eq!(visible.len(), 2, "both copies are listed");
         let colour = h.app.session.catalog.photo(visible[0]).map(|p| p.develop.profile.camera_colour);
         eprintln!("local {local}: starting colour {colour:?}");
-        let views = rejected_views(&mut h, [visible[0], visible[1]]);
-        eprintln!("local {local}: median ΔE00 from the loupe {views:.2?}");
-        assert!(views.iter().all(|(_, de)| *de < 2.0), "local {local}: median ΔE00 from the loupe {views:.2?}");
+        for dim in [true, false] {
+            let views = rejected_views(&mut h, [visible[0], visible[1]], dim);
+            eprintln!("local {local}, dimming {dim}: median ΔE00 from the loupe {views:.2?}");
+            assert_views(&views, dim, &format!("A7 V raw, local {local}"));
+        }
     }
     let _ = std::fs::remove_dir_all(&dir);
 }
