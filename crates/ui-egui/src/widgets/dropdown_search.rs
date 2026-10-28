@@ -280,6 +280,19 @@ impl Filter {
     /// `items`, which are the options `labels` of [`before`] named, in the same order). ↩ closes the
     /// list; a click closes it as the combo box always did.
     pub fn list<X>(&self, ui: &mut Ui, items: &[X], selected: impl Fn(&X) -> bool, label: impl Fn(&X) -> String) -> Option<usize> {
+        self.list_with(ui, items, selected, label, |_, _| {})
+    }
+
+    /// [`Self::list`], calling `on_row` with each item and its row as it is drawn (to register the
+    /// row for the control channel).
+    pub fn list_with<X>(
+        &self,
+        ui: &mut Ui,
+        items: &[X],
+        selected: impl Fn(&X) -> bool,
+        label: impl Fn(&X) -> String,
+        mut on_row: impl FnMut(&X, &egui::Response),
+    ) -> Option<usize> {
         let mut chosen = self.picked(ui);
         if chosen.is_some() {
             ui.close();
@@ -290,6 +303,7 @@ impl Filter {
             let Some(item) = items.get(i) else { continue };
             let row = ui.selectable_label(selected(item), label(item));
             self.row(ui, &row);
+            on_row(item, &row);
             if row.clicked() {
                 chosen = Some(i);
             }
@@ -313,6 +327,37 @@ impl Searchable for craft_ui::ComboBox<'_> {
     fn search<R>(self, ui: &mut Ui, filter: &Filter, rows: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
         self.show_ui_with_header(ui, |ui| filter.header(ui), |ui, ()| rows(ui))
     }
+}
+
+/// The usual dropdown over `items`, with a search: a combo box (id salt `salt`, set up by `set_up`:
+/// width, selected text) whose open list holds a selectable row per item. Returns the combo box's
+/// response and the item a click or ↩ chose (an index into `items`). `selected` marks the current
+/// item, `label` names an item as displayed.
+pub fn pick<X>(
+    ui: &mut Ui,
+    salt: &str,
+    set_up: impl FnOnce(craft_ui::ComboBox<'static>) -> craft_ui::ComboBox<'static>,
+    items: &[X],
+    selected: impl Fn(&X) -> bool,
+    label: impl Fn(&X) -> String,
+) -> (egui::Response, Option<usize>) {
+    pick_with(ui, salt, set_up, items, selected, label, |_, _| {})
+}
+
+/// [`pick`], calling `on_row` with each item and its row as it is drawn.
+pub fn pick_with<X>(
+    ui: &mut Ui,
+    salt: &str,
+    set_up: impl FnOnce(craft_ui::ComboBox<'static>) -> craft_ui::ComboBox<'static>,
+    items: &[X],
+    selected: impl Fn(&X) -> bool,
+    label: impl Fn(&X) -> String,
+    on_row: impl FnMut(&X, &egui::Response),
+) -> (egui::Response, Option<usize>) {
+    let labels: Vec<String> = items.iter().map(&label).collect();
+    let find = before(ui, salt, &labels);
+    let shown = set_up(crate::widgets::combo_box(salt)).search(ui, &find, |ui| find.list_with(ui, items, selected, label, on_row));
+    (shown.response, shown.inner.flatten())
 }
 
 /// Searches the open list of dropdown `salt` (the id salt of its combo box): takes the typing and

@@ -6,6 +6,7 @@ use serde_json::json;
 use crate::LightcraftApp;
 use crate::state::Dialog;
 use crate::theme::Tokens;
+use crate::widgets::dropdown_search::{self, Searchable};
 use lightcraft_engine::export::{ExportOptions, Resize};
 
 mod confirm;
@@ -1059,11 +1060,19 @@ fn contact_sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dial
     let n = app.session.selected().len();
     ui.label(crate::i18n::tr_format!("{n} selected photos · {pages} pages", n = n, pages = n.div_ceil(options.columns * options.rows)));
     field(ui, "Paper", |ui| {
-        let c = crate::widgets::combo_box("contactSheetPaper").selected_text(&options.paper).show_ui(ui, |ui| {
-            ui.selectable_value(&mut options.paper, "a4".into(), "A4");
-            ui.selectable_value(&mut options.paper, "letter".into(), crate::i18n::tr("Letter"));
-        });
-        crate::widgets::name_combo(&c.response, crate::i18n::tr("Paper"));
+        let papers = [("a4", "A4".to_string()), ("letter", crate::i18n::tr("Letter").to_string())];
+        let (c, chosen) = dropdown_search::pick(
+            ui,
+            "contactSheetPaper",
+            |c| c.selected_text(&options.paper),
+            &papers,
+            |(id, _)| *id == options.paper,
+            |(_, label)| label.clone(),
+        );
+        crate::widgets::name_combo(&c, crate::i18n::tr("Paper"));
+        if let Some((id, _)) = chosen.and_then(|i| papers.get(i)) {
+            options.paper = (*id).into();
+        }
     });
     ui.checkbox(&mut options.landscape, crate::i18n::tr("Landscape"));
     field(ui, "Columns", |ui| {
@@ -1109,17 +1118,32 @@ fn export_preset_row(
     // Preset: load a built-in or saved set of options into the dialog
     field(ui, "Preset", |ui| {
         let mut chosen = None;
-        let c = crate::widgets::combo_box("exportPreset").width(220.0).selected_text(crate::i18n::tr("Choose…")).show_ui(ui, |ui| {
+        let presets = app.session.all_export_presets();
+        let labels: Vec<String> = presets.iter().map(|(p, b)| crate::i18n::builtin_label(&p.name, *b).to_string()).collect();
+        let find = dropdown_search::before(ui, "exportPreset", &labels);
+        let c = crate::widgets::combo_box("exportPreset").width(220.0).selected_text(crate::i18n::tr("Choose…")).search(ui, &find, |ui| {
+            // the separator between the built-in and the saved presets only shows while nothing is typed
             let mut builtin = true;
-            for (p, b) in app.session.all_export_presets() {
-                if builtin && !b {
+            let picked = find.picked(ui);
+            if let Some((p, _)) = picked.and_then(|i| presets.get(i)) {
+                chosen = Some(p.name.clone());
+                ui.close();
+            }
+            let all: Vec<usize> = (0..presets.len()).collect();
+            let rows = find.options(&all);
+            for &i in rows.iter() {
+                let Some((p, b)) = presets.get(i) else { continue };
+                if builtin && !b && !find.filtering() {
                     ui.separator();
                 }
-                builtin = b;
-                if ui.selectable_label(false, crate::i18n::builtin_label(&p.name, b)).clicked() {
-                    chosen = Some(p.name);
+                builtin = *b;
+                let row = ui.selectable_label(false, labels.get(i).map_or("", String::as_str));
+                find.row(ui, &row);
+                if row.clicked() {
+                    chosen = Some(p.name.clone());
                 }
             }
+            find.no_match(ui);
         });
         crate::widgets::name_combo(&c.response, crate::i18n::tr("Preset"));
         crate::widgets::register(ui, "combo:exportPreset", c.response.rect);

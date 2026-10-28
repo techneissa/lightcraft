@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use crate::album_picker::{AlbumEntry, AlbumPicker};
 use crate::date_picker::{DatePicker, PickedDate};
 use crate::theme::Tokens;
+use crate::widgets::dropdown_search::{self, Searchable};
 use crate::widgets::register;
 
 pub mod rules_move;
@@ -53,12 +54,19 @@ fn match_combo(ui: &mut egui::Ui, salt: &str, m: &mut Match) {
         Match::Any => "any",
         Match::None => "none",
     };
-    let combo = crate::widgets::combo_box(format!("{salt}-match")).width(64.0).selected_text(crate::i18n::tr(label(*m))).show_ui(ui, |ui| {
-        for x in [Match::All, Match::Any, Match::None] {
-            ui.selectable_value(m, x, crate::i18n::tr(label(x)));
-        }
-    });
-    crate::widgets::name_combo(&combo.response, crate::i18n::tr("Match"));
+    let current = *m;
+    let (combo, chosen) = dropdown_search::pick(
+        ui,
+        &format!("{salt}-match"),
+        |c| c.width(64.0).selected_text(crate::i18n::tr(label(current))),
+        &[Match::All, Match::Any, Match::None],
+        |x| *x == current,
+        |x| crate::i18n::tr(label(*x)).to_string(),
+    );
+    crate::widgets::name_combo(&combo, crate::i18n::tr("Match"));
+    if let Some(x) = chosen.and_then(|i| [Match::All, Match::Any, Match::None].get(i).copied()) {
+        *m = x;
+    }
 }
 
 fn text_value(ui: &mut egui::Ui, v: &mut Value, width: f32, hint: &str, salt: &str) {
@@ -152,15 +160,21 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
             let mut unit = stored_unit.to_lowercase();
             let mut changed =
                 ui.add(egui::DragValue::new(&mut n).range(1.0..=10_000.0).clamp_existing_to_range(false).speed(0.2).fixed_decimals(0)).changed();
-            let combo = crate::widgets::combo_box(format!("{salt}-unit")).width(70.0).selected_text(crate::i18n::tr(&unit)).show_ui(ui, |ui| {
-                for u in ["hours", "days", "weeks", "months", "years"] {
-                    if ui.selectable_label(unit.trim_end_matches('s') == u.trim_end_matches('s'), crate::i18n::tr(u)).clicked() {
-                        unit = u.to_string();
-                        changed = true;
-                    }
-                }
-            });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr("Unit"));
+            const UNITS: [&str; 5] = ["hours", "days", "weeks", "months", "years"];
+            let shown = unit.clone();
+            let (combo, chosen) = dropdown_search::pick(
+                ui,
+                &format!("{salt}-unit"),
+                |c| c.width(70.0).selected_text(crate::i18n::tr(&shown)),
+                &UNITS,
+                |u| shown.trim_end_matches('s') == u.trim_end_matches('s'),
+                |u| crate::i18n::tr(u).to_string(),
+            );
+            crate::widgets::name_combo(&combo, crate::i18n::tr("Unit"));
+            if let Some(u) = chosen.and_then(|i| UNITS.get(i)) {
+                unit = u.to_string();
+                changed = true;
+            }
             if changed {
                 *v = json!({"n": n.round(), "unit": unit});
             }
@@ -202,31 +216,36 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
         (Some(Kind::Number), _) => number_value(ui, v, field),
         (Some(Kind::Choice(c)), _) => {
             let cur = v.as_str().unwrap_or("").to_string();
-            let combo = crate::widgets::combo_box(format!("{salt}-choice"))
-                .width(120.0)
-                .selected_text(crate::i18n::choice_text(field, &cur))
-                .show_ui(ui, |ui| {
-                    for (id, _) in c.iter() {
-                        if ui.selectable_label(cur == *id, crate::i18n::choice_text(field, id)).clicked() {
-                            *v = json!(id);
-                        }
-                    }
-                });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr(field_label(field).unwrap_or(field)));
+            let (combo, chosen) = dropdown_search::pick(
+                ui,
+                &format!("{salt}-choice"),
+                |combo| combo.width(120.0).selected_text(crate::i18n::choice_text(field, &cur)),
+                c,
+                |(id, _)| cur == *id,
+                |(id, _)| crate::i18n::choice_text(field, id).to_string(),
+            );
+            crate::widgets::name_combo(&combo, crate::i18n::tr(field_label(field).unwrap_or(field)));
+            if let Some((id, _)) = chosen.and_then(|i| c.get(i)) {
+                *v = json!(id);
+            }
         }
         (Some(Kind::Bool), _) => {
             // the catalog's reading of the value ("false" is no); one that is neither yes nor no is
             // shown as written and kept until a choice replaces it, so the dialog reports it
             let cur = bool_value(v);
             let text = cur.map_or_else(|| v.to_string(), |b| crate::i18n::bool_text(b).to_string());
-            let combo = crate::widgets::combo_box(format!("{salt}-bool")).width(60.0).selected_text(text).show_ui(ui, |ui| {
-                for b in [true, false] {
-                    if ui.selectable_label(cur == Some(b), crate::i18n::bool_text(b)).clicked() {
-                        *v = json!(b);
-                    }
-                }
-            });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr(field_label(field).unwrap_or(field)));
+            let (combo, chosen) = dropdown_search::pick(
+                ui,
+                &format!("{salt}-bool"),
+                |c| c.width(60.0).selected_text(text),
+                &[true, false],
+                |b| cur == Some(*b),
+                |b| crate::i18n::bool_text(*b).to_string(),
+            );
+            crate::widgets::name_combo(&combo, crate::i18n::tr(field_label(field).unwrap_or(field)));
+            if let Some(b) = chosen.and_then(|i| [true, false].get(i)) {
+                *v = json!(b);
+            }
         }
         (Some(Kind::Date), _) => {
             text_value(ui, v, 120.0, "2026-04 or 2026-04-12", salt);
@@ -241,8 +260,17 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
 fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String, value: &mut Value) {
     let label = field_label(field).unwrap_or(field.as_str()).to_string();
     let current = field.clone();
-    let r = crate::widgets::combo_box(format!("{salt}-field")).width(150.0).height(400.0).selected_text(crate::i18n::tr(&label)).show_ui(ui, |ui| {
-        let mut pick = None;
+    // typing searches every field, the ones in the group submenus too
+    let mut every: Vec<&'static str> = TOP_LEVEL_FIELDS.to_vec();
+    every.extend(FIELD_GROUPS.iter().flat_map(|(_, ids)| ids.iter().copied()));
+    let names: Vec<String> = every.iter().map(|id| crate::i18n::tr(field_label(id).unwrap_or(id)).to_string()).collect();
+    let combo_salt = format!("{salt}-field");
+    let find = dropdown_search::before(ui, &combo_salt, &names);
+    let r = crate::widgets::combo_box(&combo_salt).width(150.0).height(400.0).selected_text(crate::i18n::tr(&label)).search(ui, &find, |ui| {
+        let mut pick = find.picked(ui).and_then(|i| every.get(i).copied());
+        if pick.is_some() {
+            ui.close();
+        }
         let mut item = |ui: &mut egui::Ui, id: &'static str| {
             let r = ui.selectable_label(current == id, crate::i18n::tr(field_label(id).unwrap_or(id)));
             register(ui, format!("ruleFieldItem:{id}:{salt}"), r.rect);
@@ -250,7 +278,19 @@ fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String
                 pick = Some(id);
                 ui.close();
             }
+            r
         };
+        if find.filtering() {
+            let all: Vec<usize> = (0..every.len()).collect();
+            for &i in find.options(&all).iter() {
+                if let Some(&id) = every.get(i) {
+                    let r = item(ui, id);
+                    find.row(ui, &r);
+                }
+            }
+            find.no_match(ui);
+            return pick;
+        }
         for id in TOP_LEVEL_FIELDS {
             item(ui, id);
         }
@@ -332,19 +372,25 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
                     field_menu(ui, &rsalt, field, op, value);
                     let kind = field_kind(field).unwrap_or(Kind::Text);
                     let op_label = ops_for(kind).iter().find(|o| o.0 == op.as_str()).map_or(op.as_str(), |o| o.1).to_string();
-                    let combo =
-                        crate::widgets::combo_box(format!("{rsalt}-op")).width(110.0).selected_text(crate::i18n::tr(&op_label)).show_ui(ui, |ui| {
-                            for (id, l) in ops_for(kind) {
-                                if ui.selectable_label(op == id, crate::i18n::tr(l)).clicked() && op != id {
-                                    let was_special = matches!(op.as_str(), "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty");
-                                    *op = id.to_string();
-                                    if was_special || matches!(*id, "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty") {
-                                        *value = default_value(field, op);
-                                    }
-                                }
-                            }
-                        });
-                    crate::widgets::name_combo(&combo.response, crate::i18n::tr("Operator"));
+                    let ops = ops_for(kind);
+                    let (combo, chosen) = dropdown_search::pick(
+                        ui,
+                        &format!("{rsalt}-op"),
+                        |c| c.width(110.0).selected_text(crate::i18n::tr(&op_label)),
+                        ops,
+                        |(id, _)| op == id,
+                        |(_, l)| crate::i18n::tr(l).to_string(),
+                    );
+                    crate::widgets::name_combo(&combo, crate::i18n::tr("Operator"));
+                    if let Some((id, _)) = chosen.and_then(|i| ops.get(i))
+                        && op != id
+                    {
+                        let was_special = matches!(op.as_str(), "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty");
+                        *op = id.to_string();
+                        if was_special || matches!(*id, "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty") {
+                            *value = default_value(field, op);
+                        }
+                    }
                     value_editor(ui, field, op, value, &rsalt, env);
                     // − and + at the end of the row, after the value however long it is: a
                     // right-to-left layout put them over the value when the row had no room left
