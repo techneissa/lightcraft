@@ -84,12 +84,16 @@ pub(crate) fn menu_item(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
     }
 }
 
-/// Counts the camera's photos first and asks; nothing to move says so instead.
+/// Counts the camera's photos first and asks; nothing to move says so instead, and so does a camera macOS is still
+/// being asked about (the count never waits for it: an activity row checks it, and the next click asks).
 pub(crate) fn ask(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId) {
     let plan = match app.run("profiles.macosForCameraCount", json!({"photo": id.0})) {
         Ok(plan) => plan,
         Err(e) => return app.toast(ctx, e),
     };
+    if plan["checking"].as_u64().unwrap_or(0) > 0 {
+        return app.toast(ctx, crate::i18n::tr(lightcraft_engine::cmd::macos_colour::CHECKING));
+    }
     let count = plan["photos"].as_u64().unwrap_or(0) as usize;
     let skipped = plan["skipped"].as_u64().unwrap_or(0) as usize;
     let camera = plan["camera"].as_str().unwrap_or_default().to_string();

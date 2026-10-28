@@ -1,7 +1,6 @@
 //! Starting Colour for Raw Photos (plan §6.7, T28–T35): each test fails before the setting exists.
 
 use std::path::Path;
-use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -22,6 +21,8 @@ pub(crate) struct FakeGate {
     pub listed: bool,
     pub size: Option<(u32, u32)>,
     pub probes: Arc<AtomicUsize>,
+    /// How long a probe takes (a slow disk or a big raw).
+    pub delay: std::time::Duration,
 }
 
 impl Gate for FakeGate {
@@ -32,6 +33,7 @@ impl Gate for FakeGate {
         self.listed && exif_model == "ILCE-7M5"
     }
     fn native_size(&self, _: &Path) -> Option<(u32, u32)> {
+        std::thread::sleep(self.delay);
         self.probes.fetch_add(1, Ordering::SeqCst);
         self.size
     }
@@ -40,9 +42,14 @@ impl Gate for FakeGate {
 /// A Mac whose decoder reads the A7 V at LightCraft's size, upright (portrait-agnostic), on this thread; returns the
 /// probe counter. Cleared when the returned guard drops.
 pub(crate) fn mac(available: bool, listed: bool, size: Option<(u32, u32)>) -> (Arc<AtomicUsize>, impl Drop) {
+    slow_mac(size, std::time::Duration::ZERO, available, listed)
+}
+
+/// [`mac`] whose probes take `delay`.
+pub(crate) fn slow_mac(size: Option<(u32, u32)>, delay: std::time::Duration, available: bool, listed: bool) -> (Arc<AtomicUsize>, impl Drop) {
     let probes = Arc::new(AtomicUsize::new(0));
-    let gate = FakeGate { available, listed, size, probes: probes.clone() };
-    GATE_FOR_TESTS.with(|g| *g.borrow_mut() = Some(Rc::new((Box::new(gate) as Box<dyn Gate>, Verdicts::default()))));
+    let gate = FakeGate { available, listed, size, probes: probes.clone(), delay };
+    GATE_FOR_TESTS.with(|g| *g.borrow_mut() = Some(Arc::new((Box::new(gate) as Box<dyn Gate>, Verdicts::default()))));
     struct Clear;
     impl Drop for Clear {
         fn drop(&mut self) {
@@ -189,6 +196,18 @@ fn a_failed_probe_is_not_remembered() {
     assert_eq!(probes.load(Ordering::SeqCst), 2, "probed again");
     let (_, _g) = mac(true, true, Some(SIZE));
     let verdicts_kept = GATE_FOR_TESTS.with(|g| g.borrow().clone()).unwrap();
-    assert!(verdicts_kept.1.0.lock().unwrap().is_empty());
+    assert!(verdicts_kept.1.known.lock().unwrap().is_empty());
     assert_eq!(imported(&s, "SONY ILCE-7M5").develop.profile.camera_colour, CameraColour::Macos);
+}
+
+/// Waits (up to 10 s) until no background size check runs; whether one ran.
+pub(crate) fn checked(s: &Session) -> bool {
+    let running = || s.activity.list().iter().any(|t| t.kind == "macosCheck" && t.label == super::CHECKING_LABEL);
+    let ran = running();
+    let t0 = std::time::Instant::now();
+    while running() && t0.elapsed() < std::time::Duration::from_secs(10) {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(!running(), "the check ends");
+    ran
 }

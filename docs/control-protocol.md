@@ -434,15 +434,18 @@ One undo step; the Profile group of presets, Copy / Paste and sync carries it.
   only to a photo that takes the fitted look, on a Mac whose decoder lists its camera and reads it at LightCraft's size (ARW
   only so far); any other photo, and every photo on another system, starts on Camera Matching. A default preset with a
   Profile group wins. Photos already imported never change. The reply's `import` has the value.
-- `profiles.macosForCameraCount {photo?}` → `{camera, photos, skipped, notMac, cameraNotRead, otherSize}`: what moving every
+- `profiles.macosForCameraCount {photo?}` → `{camera, photos, skipped, notMac, cameraNotRead, otherSize, checking}`: what moving every
   photo of that photo's camera (the active photo without `photo`) to macOS Colour would do. `photos` is how many would move;
   `skipped` is the rest, by reason (`notMac`: not a Mac or the decoder lacks a setting it needs; `cameraNotRead`: not a raw
   macOS Colour applies to, a camera macOS does not list, or a format that has no verified type yet; `otherSize`: macOS reads
-  it at another size or can't read it). Photos already on macOS Colour are not counted.
-- `profiles.macosForCamera {photo?}` → `{camera, changed, skipped, notMac, cameraNotRead, otherSize}`: does it, in one undo
-  step (the Profile menu's Apply macOS Colour to All Photos from This Camera…). Never runs by itself.
+  it at another size or can't read it). Photos already on macOS Colour are not counted. It never waits for macOS: `checking`
+  counts photos whose camera and size are being checked in the background (activity row `macosCheck`); ask again after it.
+- `profiles.macosForCamera {photo?}` → `{camera, changed, skipped, notMac, cameraNotRead, otherSize, checking}`: does it, in
+  one undo step (the Profile menu's Apply macOS Colour to All Photos from This Camera…). Never runs by itself. An error
+  while photos are still being checked.
 - `preset.apply {id, amount?, ids?}` → `{macosFallback}`: how many of the photos are on macOS Colour but use Camera Matching
-  colours on this computer after the preset (the stored value stays `macos`).
+  colours on this computer after the preset (the stored value stays `macos`); a photo whose camera and size are not checked
+  yet is not counted (its check starts in the background).
 
 ## Panel docking
 

@@ -42,7 +42,7 @@ impl StartingColour {
 }
 
 /// What the gates ask of the Mac's raw decoder, or a stand-in in tests.
-pub(crate) trait Gate {
+pub(crate) trait Gate: Send + Sync {
     fn available(&self) -> bool;
     fn supports(&self, exif_model: &str) -> bool;
     /// The decoder's upright full size of the raw at `path`, without decoding it.
@@ -66,37 +66,73 @@ impl Gate for System {
 
 /// Runs `f` with this computer's decoder and the session's verdicts (a test's stand-in on its own thread).
 pub(crate) fn with_gate<R>(f: impl FnOnce(&dyn Gate, &Verdicts) -> R) -> R {
+    current().with_gate(f)
+}
+
+/// The decoder and verdicts this thread checks with, to hand to a background check ([`check_later`]).
+#[derive(Clone)]
+pub(crate) struct GateRef(Option<std::sync::Arc<(Box<dyn Gate>, Verdicts)>>);
+
+impl GateRef {
+    pub(crate) fn with_gate<R>(&self, f: impl FnOnce(&dyn Gate, &Verdicts) -> R) -> R {
+        match &self.0 {
+            Some(t) => f(t.0.as_ref(), &t.1),
+            None => f(&System, &VERDICTS),
+        }
+    }
+}
+
+/// This computer's decoder, or this test thread's stand-in.
+pub(crate) fn current() -> GateRef {
     #[cfg(test)]
     if let Some(t) = GATE_FOR_TESTS.with(|g| g.borrow().clone()) {
-        return f(t.0.as_ref(), &t.1);
+        return GateRef(Some(t));
     }
-    f(&System, &VERDICTS)
+    GateRef(None)
 }
 
 #[cfg(test)]
 thread_local! {
-    /// A stand-in for the decoder and fresh verdicts on this test's thread.
-    pub(crate) static GATE_FOR_TESTS: std::cell::RefCell<Option<std::rc::Rc<(Box<dyn Gate>, Verdicts)>>> = const { std::cell::RefCell::new(None) };
+    /// A stand-in for the decoder and fresh verdicts on this test's thread (shared with its background checks).
+    pub(crate) static GATE_FOR_TESTS: std::cell::RefCell<Option<std::sync::Arc<(Box<dyn Gate>, Verdicts)>>> = const { std::cell::RefCell::new(None) };
 }
 
 /// Size-gate verdicts per (camera, size): one probe per camera model and size, not one per photo. Only a probe that
 /// read the file gives a verdict: one that failed (a truncated or unreadable file) is not kept, so the next photo of
 /// that camera and size is probed again instead of every one starting on Camera Matching for the session.
 #[derive(Default)]
-pub(crate) struct Verdicts(Mutex<HashMap<(String, (u32, u32)), bool>>);
+pub(crate) struct Verdicts {
+    known: Mutex<HashMap<Key, bool>>,
+    /// Keys a background check is probing now (one check per key at a time).
+    checking: Mutex<std::collections::HashSet<Key>>,
+    /// Keys a background check could not read: the cached path ([`macos_gates_known`]) counts them as another size
+    /// rather than asking again; a probing path still tries them, and a reading clears the mark.
+    unread: Mutex<std::collections::HashSet<Key>>,
+}
+
+/// A size verdict's key: the camera (make and model) and the raw's size.
+type Key = (String, (u32, u32));
 
 /// The verdicts of this session (a new OS build means a new session).
 static VERDICTS: std::sync::LazyLock<Verdicts> = std::sync::LazyLock::new(Verdicts::default);
 
 impl Verdicts {
+    fn known(&self, key: &Key) -> Option<bool> {
+        self.known.lock().unwrap_or_else(PoisonError::into_inner).get(key).copied()
+    }
+
     /// The verdict for `key`, probing when there is none; `probe` answers `None` when it could not read the file
     /// (not kept: no verdict, the photo fails the gate this time).
-    fn get_or(&self, key: (String, (u32, u32)), probe: impl FnOnce() -> Option<bool>) -> bool {
-        if let Some(v) = self.0.lock().unwrap_or_else(PoisonError::into_inner).get(&key) {
-            return *v;
+    fn get_or(&self, key: Key, probe: impl FnOnce() -> Option<bool>) -> bool {
+        if let Some(v) = self.known(&key) {
+            return v;
         }
-        let Some(v) = probe() else { return false };
-        self.0.lock().unwrap_or_else(PoisonError::into_inner).insert(key, v);
+        let Some(v) = probe() else {
+            self.unread.lock().unwrap_or_else(PoisonError::into_inner).insert(key);
+            return false;
+        };
+        self.unread.lock().unwrap_or_else(PoisonError::into_inner).remove(&key);
+        self.known.lock().unwrap_or_else(PoisonError::into_inner).insert(key, v);
         v
     }
 }
@@ -120,24 +156,99 @@ pub enum Skip {
     Size,
 }
 
-/// The gates for photo `p`, from the catalog and one probe per (camera, size) (`verdicts`).
-pub(crate) fn macos_gates(p: &Photo, gate: &dyn Gate, verdicts: &Verdicts) -> Result<(), Skip> {
+/// What the gates say of a photo from what is known: decided, or waiting for its (camera, size) to be probed.
+pub(crate) enum Known {
+    Decided(Result<(), Skip>),
+    /// The size gate needs a probe of this file (`check_later`).
+    Unchecked(Key, String),
+}
+
+/// The gates for photo `p` from the catalog and the verdicts already found, never probing.
+pub(crate) fn macos_gates_known(p: &Photo, gate: &dyn Gate, verdicts: &Verdicts) -> Known {
+    gates(p, gate, verdicts, true)
+}
+
+/// [`macos_gates_known`]; `unread_fails`: a pair a background check could not read fails the size gate (else it is
+/// unchecked, so a probing caller tries it again).
+fn gates(p: &Photo, gate: &dyn Gate, verdicts: &Verdicts, unread_fails: bool) -> Known {
     if !p.fitted_look() || !p.format.eq_ignore_ascii_case("ARW") {
-        return Err(Skip::Camera);
+        return Known::Decided(Err(Skip::Camera));
     }
     if !gate.available() {
-        return Err(Skip::System);
+        return Known::Decided(Err(Skip::System));
     }
     // the catalog joins make and model (`SONY ILCE-7M5`); macOS lists the EXIF model
     let camera = p.meta.camera.trim();
     let model = camera.split_once(' ').map_or(camera, |(_, model)| model.trim());
     if camera.is_empty() || !(gate.supports(model) || gate.supports(camera)) {
-        return Err(Skip::Camera);
+        return Known::Decided(Err(Skip::Camera));
     }
-    let Source::File { path } = &p.source else { return Err(Skip::Camera) };
-    let size = (p.width, p.height);
-    let fits = verdicts.get_or((camera.to_owned(), size), || gate.native_size(Path::new(path)).map(|n| same_size(n, size)));
-    if fits { Ok(()) } else { Err(Skip::Size) }
+    let Source::File { path } = &p.source else { return Known::Decided(Err(Skip::Camera)) };
+    let key = (camera.to_owned(), (p.width, p.height));
+    match verdicts.known(&key) {
+        Some(fits) => Known::Decided(if fits { Ok(()) } else { Err(Skip::Size) }),
+        None if unread_fails && verdicts.unread.lock().unwrap_or_else(PoisonError::into_inner).contains(&key) => Known::Decided(Err(Skip::Size)),
+        None => Known::Unchecked(key, path.clone()),
+    }
+}
+
+/// The gates for photo `p`, from the catalog and one probe per (camera, size) (`verdicts`). Probes (up to seconds a
+/// camera): never on the UI thread, which uses [`macos_gates_known`] and [`check_later`].
+pub(crate) fn macos_gates(p: &Photo, gate: &dyn Gate, verdicts: &Verdicts) -> Result<(), Skip> {
+    match gates(p, gate, verdicts, false) {
+        Known::Decided(r) => r,
+        Known::Unchecked(key, path) => {
+            let size = key.1;
+            if verdicts.get_or(key, || gate.native_size(Path::new(&path)).map(|n| same_size(n, size))) { Ok(()) } else { Err(Skip::Size) }
+        }
+    }
+}
+
+/// The activity row of a background size check.
+pub const CHECKING_LABEL: &str = "Checking macOS Raw Support";
+
+/// Probes the unchecked (camera, size) pairs on a thread of its own, under an activity row ([`CHECKING_LABEL`]), so the
+/// next count or summary knows them; a pair already being checked is not checked twice. Returns at once.
+pub(crate) fn check_later(activity: &crate::activity::Activity, gate: GateRef, unchecked: Vec<(Key, String)>) {
+    let todo: Vec<(Key, String)> = gate.with_gate(|_, verdicts| {
+        let mut checking = verdicts.checking.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut todo = Vec::new();
+        for (key, path) in unchecked {
+            if checking.insert(key.clone()) {
+                todo.push((key, path));
+            }
+        }
+        todo
+    });
+    if todo.is_empty() {
+        return;
+    }
+    let task = activity.start("macosCheck", CHECKING_LABEL, crate::activity::Cancel::No);
+    let keys: Vec<Key> = todo.iter().map(|(k, _)| k.clone()).collect();
+    let worker = gate.clone();
+    let spawned = std::thread::Builder::new().name("lc-macos-check".into()).spawn(move || {
+        // the row stays while this runs (it is dropped with the closure, however that ends)
+        let row = task;
+        let total = todo.len() as u64;
+        for (i, (key, path)) in todo.into_iter().enumerate() {
+            worker.with_gate(|gate, verdicts| {
+                let size = key.1;
+                verdicts.get_or(key.clone(), || gate.native_size(Path::new(&path)).map(|n| same_size(n, size)));
+                verdicts.checking.lock().unwrap_or_else(PoisonError::into_inner).remove(&key);
+            });
+            row.progress(i as u64 + 1, total);
+        }
+    });
+    // (not started: forget the keys, so the next count tries again)
+    if let Err(e) = spawned {
+        log::warn!("macOS Colour: could not check raw support: {e}");
+        gate.with_gate(|_, verdicts| {
+            let mut checking = verdicts.checking.lock().unwrap_or_else(PoisonError::into_inner);
+            keys.iter().for_each(|k| {
+                checking.remove(k);
+            });
+        });
+    }
 }
 
 /// The colour source a new photo starts on, from the setting and the gates.

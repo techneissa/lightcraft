@@ -410,7 +410,12 @@ names a colour source wins. The value is written into the photo's import look to
 already in the library never change when the setting does; **Apply macOS Colour to All Photos from This Camera…** in
 the Profile menu moves them (`profiles.macosForCameraCount` says how many first, `profiles.macosForCamera` does it in
 one undo step and counts the photos it skipped by reason, never automatic). Applying a preset that carries macOS Colour
-reports how many of its photos cannot use it here (`preset.apply` → `macosFallback`) and the toast says so.
+reports how many of its photos cannot use it here (`preset.apply` → `macosFallback`) and the toast says so. Both run on
+the UI thread, so they use only the size verdicts already found and never wait for a probe (up to seconds on a slow
+disk): a camera and size not checked yet is probed on a thread of its own under the activity row **Checking macOS Raw
+Support**, the count says how many photos wait for it (`checking`) and the menu item answers "Checking which photos macOS
+can read. Try again in a moment." (the move refuses meanwhile); a preset's summary counts only the photos already known.
+A raw that check cannot read counts as another size until an import probes it again.
 
 **Catalog.** `macos` is part of catalog format v10 (with `local` and `profile.camera_profile`, `crates/catalog/src/journal.rs`
 table row 10); the official LightCraft refuses a library this build has opened as "newer version", files untouched.
