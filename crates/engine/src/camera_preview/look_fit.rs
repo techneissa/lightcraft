@@ -84,11 +84,12 @@ pub(super) fn fit_look_with(
     // from the proxies as they are: the retries' filters (clipped pixels, edges) don't remove them
     let bright = HighlightCheck { pairs: highlights(sensor, reference), dro, grey: false };
     let Some((look, attempt)) = search_ordered(sensor, reference, colour.clone(), TONE_FITS, &bright) else {
+        let profile = colour.clone();
         return unclipped
             .as_ref()
             .and_then(|u| search_ordered(u, reference, colour, TONE_FITS, &bright))
             .map(|(look, _)| look)
-            .or_else(|| fit_partial(unclipped.as_ref().unwrap_or(sensor), reference, &bright));
+            .or_else(|| fit_partial(unclipped.as_ref().unwrap_or(sensor), reference, &bright, &profile));
     };
     let Some(unclipped) = unclipped else { return Some(look) };
     let refit = fit_attempt(&unclipped, reference, &colour, attempt, &bright);

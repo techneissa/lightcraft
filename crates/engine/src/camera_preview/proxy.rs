@@ -1,7 +1,7 @@
 use super::colour::{PROFILE_PROXY, PROXY, file_local_look};
 use super::hue_sat::fit_hue_sat;
 use super::look_fit::{FIT_PREVIEW_MAX_PIXELS, SENSOR_CLIP, clip_mask, without_clipped};
-use super::pairs::{collect_pairs, fit_matrix};
+use super::pairs::{collect_pairs, fit_matrix_neutral};
 use super::*;
 
 /// The embedded preview's long edge must be at least this share of the raw's (and 384 px): a DNG whose preview is a
@@ -328,9 +328,9 @@ pub(crate) fn profile_pairs(raw: &RawImage, bytes: &[u8], lens: Option<&LensGeom
 }
 
 /// A camera profile's colour model (matrix from white-balanced camera RGB, hue/saturation table)
-/// fitted to pairs pooled from many photos.
+/// fitted to pairs pooled from many photos. The matrix keeps white ([`fit_matrix_neutral`]).
 pub(crate) fn fit_profile(pairs: &[([f64; 3], [f64; 3])]) -> Option<(Mat3, Option<HsvTable>)> {
-    let matrix = fit_matrix(pairs)?;
+    let matrix = fit_matrix_neutral(pairs)?;
     Some((matrix, fit_hue_sat(pairs, &matrix)))
 }
 

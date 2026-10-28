@@ -363,11 +363,11 @@ fn chroma_curve_follows_highlight_bleaching() {
     assert!(b < 0.5 * a, "highlight error {a:.4} -> {b:.4}");
 }
 
-/// Pooled pairs of several "photos" recover the camera's matrix, and a photo given that
-/// colour model (a camera profile) keeps it, fitting only its own tone.
+/// Pooled pairs of several "photos" recover the camera's matrix (one that keeps white, as a white-balanced camera
+/// does), and a photo given that colour model (a camera profile) keeps it, fitting only its own tone.
 #[test]
 fn profile_colour_is_pooled_and_then_used_as_given() {
-    let known = Mat3([[1.8, -0.4, -0.1], [-0.2, 1.5, -0.1], [-0.05, -0.3, 1.7]]);
+    let known = Mat3([[1.5, -0.4, -0.1], [-0.2, 1.3, -0.1], [-0.05, -0.3, 1.35]]);
     let photo = |seed: usize, strength: f32| {
         let mut sensor = Rgb32f::new(64, 48);
         let mut reference = sensor.clone();
@@ -1725,6 +1725,116 @@ fn partial_look_when_a_lens_corrected_jpeg_misses_the_gates() {
     assert!(tone.apply(0.05) < tone.apply(0.2) && tone.apply(0.2) < tone.apply(0.8));
 }
 
+/// A camera profile's colour as the fit receives it: a white-keeping matrix and a hue/saturation table.
+fn test_profile_colour() -> (Mat3, Option<HsvTable>) {
+    let table = HsvTable { hue_divisions: 4, sat_divisions: 2, val_divisions: 1, data: vec![[4.0, 1.1, 1.0]; 8], srgb_value: false };
+    (Mat3([[1.5, -0.4, -0.1], [-0.2, 1.3, -0.1], [-0.05, -0.3, 1.35]]), Some(table))
+}
+
+/// A photo of a model with a camera profile whose own fit and profile fit both miss the gates (here the barrel
+/// distortion of a lens-corrected JPEG) gets the partial look on the profile's colour, matrix and table, not on the
+/// photo's damped own matrix.
+#[test]
+fn partial_look_takes_the_profile_colour_when_the_full_look_misses_the_gates() {
+    let (w, h) = (96usize, 64usize);
+    let scene = |u: f32, v: f32| -> [f32; 3] {
+        let base = 0.1 * (1.0 + 0.6 * (0.05 * u + 0.04 * v).sin());
+        let detail = 1.0 + 0.8 * (1.7 * u).sin() * (1.3 * v).sin();
+        let y = base * detail;
+        [y * (0.6 + 0.5 * (0.07 * u).sin().abs()), y, y * (0.5 + 0.6 * (0.09 * v + 0.03 * u).cos().abs())]
+    };
+    let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
+    let mut sensor = Rgb32f::new(w, h);
+    let mut reference = sensor.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let (dx, dy) = (x as f32 - cx, y as f32 - cy);
+            let k = 1.0 + 0.08 * (dx * dx + dy * dy) / (cx * cx);
+            sensor.data[y * w + x] = scene(x as f32, y as f32);
+            reference.data[y * w + x] = bright_camera(scene(cx + dx * k, cy + dy * k));
+        }
+    }
+    let profile = test_profile_colour();
+    assert!(fit_pairs_with(&sensor, &reference, Some(profile.clone())).is_none(), "neither fit passes the gates");
+    let none = vec![false; w * h];
+    let own = fit_look(&sensor, &reference, &none, None).expect("the partial look without a profile");
+    assert_ne!(own.matrix, profile.0, "without a profile the photo's own damped matrix is used");
+    let look = fit_look(&sensor, &reference, &none, Some(profile.clone())).expect("the partial look on the profile's colour");
+    assert_eq!(look.matrix, profile.0);
+    assert_eq!(look.hue_sat, profile.1);
+    let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
+    assert!(tone.apply(0.05) < tone.apply(0.2) && tone.apply(0.2) < tone.apply(0.8));
+}
+
+/// A scene too dull to teach any colour (grey walls, a white shirt) whose full fits fail: the partial look kept the
+/// identity matrix there, and skin came out grey-green. With a camera profile it takes the profile's colour.
+#[test]
+fn partial_look_is_never_the_identity_when_the_model_has_a_profile() {
+    let (w, h) = (96usize, 64usize);
+    let scene = |u: f32, v: f32| -> [f32; 3] {
+        let base = 0.1 * (1.0 + 0.6 * (0.05 * u + 0.04 * v).sin());
+        let detail = 1.0 + 0.8 * (1.7 * u).sin() * (1.3 * v).sin();
+        let y = base * detail;
+        [y * (1.0 + 0.03 * (0.07 * u).sin()), y, y * (1.0 + 0.03 * (0.09 * v + 0.03 * u).cos())]
+    };
+    let camera = |p: [f32; 3]| {
+        let y = luminance_2020(p);
+        p.map(|v| v * (1.0 - (-6.0 * y).exp()) / y)
+    };
+    let (cx, cy) = (w as f32 / 2.0, h as f32 / 2.0);
+    let mut sensor = Rgb32f::new(w, h);
+    let mut reference = sensor.clone();
+    for y in 0..h {
+        for x in 0..w {
+            let (dx, dy) = (x as f32 - cx, y as f32 - cy);
+            let k = 1.0 + 0.08 * (dx * dx + dy * dy) / (cx * cx);
+            sensor.data[y * w + x] = scene(x as f32, y as f32);
+            reference.data[y * w + x] = camera(scene(cx + dx * k, cy + dy * k));
+        }
+    }
+    let none = vec![false; w * h];
+    let profile = test_profile_colour();
+    assert!(fit_pairs(&sensor, &reference).is_none() && fit_pairs_with(&sensor, &reference, Some(profile.clone())).is_none());
+    let without = fit_look(&sensor, &reference, &none, None).expect("a partial look");
+    assert_eq!(without.matrix, Mat3::IDENTITY, "no profile, no colour to learn: the generic colour");
+    let look = fit_look(&sensor, &reference, &none, Some(profile.clone())).expect("a partial look on the profile's colour");
+    assert_eq!(look.matrix, profile.0);
+    assert_eq!(look.hue_sat, profile.1);
+}
+
+/// A pooled fit keeps white: grey camera RGB stays grey at the same value. Free, the same pairs give a cast.
+#[test]
+fn profile_matrix_keeps_white_where_the_free_fit_does_not() {
+    // a camera whose neutral is rendered with a magenta cast: the pairs themselves contradict neutral preservation
+    let cast = Mat3([[1.5, -0.4, 0.0], [-0.2, 1.25, -0.1], [-0.05, -0.3, 1.45]]);
+    let mut pairs = Vec::new();
+    for i in 0..3000usize {
+        let x = [0.2 + (i % 17) as f64 * 0.045, 0.3 + (i % 23) as f64 * 0.03, 0.15 + (i % 29) as f64 * 0.04];
+        pairs.push((x, cast.apply(x)));
+    }
+    let rows = |m: &Mat3| m.0.map(|r| r.iter().sum::<f64>());
+    let free = super::pairs::fit_matrix(&pairs).unwrap();
+    assert!((rows(&free)[2] - 1.0).abs() > 0.1, "the free fit carries the cast: {:?}", rows(&free));
+    let (matrix, _) = fit_profile(&pairs).unwrap();
+    for sum in rows(&matrix) {
+        assert!((sum - 1.0).abs() < 1e-9, "rows sum to 1: {:?}", rows(&matrix));
+    }
+    for grey in [0.02, 0.18, 0.7] {
+        assert!(matrix.apply([grey; 3]).iter().all(|v| (v - grey).abs() < 1e-9 * (1.0 + grey)), "grey {grey} stays grey");
+    }
+    // where the camera does keep white, the constraint costs nothing
+    // (rows sum to 1 and luminance is kept, the two things the chromaticity fit assumes of a camera)
+    let keeps = Mat3([[1.4, -0.3, -0.1], [-0.1, 1.2, -0.1], [-0.6287, -0.9577, 2.5864]]);
+    let pairs: Vec<_> = pairs.iter().map(|(x, _)| (*x, keeps.apply(*x))).collect();
+    let (matrix, _) = fit_profile(&pairs).unwrap();
+    // (luminance-normalised, as the pooled fit is: the tone curve sets brightness)
+    for x in [[0.8, 1.0, 0.75], [1.1, 1.0, 0.8], [0.75, 1.0, 1.2], [1.0; 3]] {
+        let (a, b) = (matrix.apply(x), keeps.apply(x));
+        let (la, lb) = (luma(a), luma(b));
+        assert!((0..3).all(|c| (a[c] / la - b[c] / lb).abs() < 0.01), "{x:?}: {a:?} vs {b:?}");
+    }
+}
+
 fn near_black_scene() -> (Rgb32f, Rgb32f) {
     let mut sensor = Rgb32f::new(96, 64);
     let mut reference = sensor.clone();
@@ -1869,7 +1979,7 @@ fn partial_look_only_when_clearly_better_than_the_neutral_fallback() {
     let mut reference = sensor.clone();
     reference.map_in_place(|p| displayed(p.map(f64::from), &neutral).map(|v| v as f32));
     let check = HighlightCheck { pairs: highlights(&sensor, &reference), dro: false, grey: false };
-    assert!(fit_partial(&sensor, &reference, &check).is_none(), "no clear gain over the fallback");
+    assert!(fit_partial(&sensor, &reference, &check, &None).is_none(), "no clear gain over the fallback");
     // an unrelated picture
     for (i, p) in reference.data.iter_mut().enumerate() {
         *p = [0.05 + (i % 7) as f32 * 0.07, 0.05 + (i % 19) as f32 * 0.02, 0.05 + (i % 29) as f32 * 0.01];
