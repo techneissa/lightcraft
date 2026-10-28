@@ -253,6 +253,34 @@ fn local_and_macos_colour_need_format_v10_and_older_builds_get_newer_not_corrupt
     assert_refused_untouched(&m);
 }
 
+/// A v9 library (written before local profiles and macOS Colour) opens as it was, with its Camera Matching and
+/// Colorimetric photos untouched and no profile id, and is rewritten in the current format.
+#[test]
+fn v9_library_loads_and_is_upgraded() {
+    let mut c = Catalog::new();
+    let mut ids = Vec::new();
+    for colour in ["auto", "colorimetric"] {
+        let op = photo(&mut c);
+        c.apply(op).unwrap();
+        let id = c.photos().last().unwrap().id;
+        let mut s = lightcraft_develop::DevelopSettings::default();
+        s.profile.camera_colour = serde_json::from_value(serde_json::json!(colour)).unwrap();
+        c.apply(Op::SetDevelop { id, settings: Arc::new(s), label: "Profile".into(), edited: None }).unwrap();
+        ids.push(id);
+    }
+    let snap = c.to_snapshot();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":9,\"seq\":2,\"catalog\":{snap}}}\n").into_bytes());
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.replayed, r.upgraded_from), (0, Some(9)));
+    assert_eq!(loaded.to_snapshot(), snap, "nothing about the photos changes");
+    for (id, want) in ids.iter().zip(["auto", "colorimetric"]) {
+        let p = &loaded.photo(*id).unwrap().develop.profile;
+        assert_eq!((serde_json::to_value(p.camera_colour).unwrap(), p.camera_profile.clone()), (serde_json::json!(want), None));
+    }
+    assert_eq!(snapshot_version(&m), u64::from(VERSION), "rewritten in the current format");
+}
+
 /// Guard for the version rule (see `journal` → *Format versions*): adding an [`Op`] variant breaks
 /// this match. When it does, bump `journal::VERSION`, add a row to the format table, and add the
 /// variant here under the new version. A version that only adds serialized fields raises

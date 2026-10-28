@@ -1,5 +1,6 @@
-//! LT11 (engine half): the one-time offer to move the photos a local profile file used to change inside Camera
-//! Matching to its own Profile choice: counted, never applied by itself, one undo step, asked once.
+//! The engine half of the local camera profile tests: LT11, the one-time offer to move the photos a local profile file
+//! used to change inside Camera Matching to its own Profile choice (counted, never applied by itself, one undo step,
+//! asked once); LT12's settings half; the history labels; and LT7's Auto Sync half.
 
 use lightcraft_catalog::{MediaKind, Op, Photo, PhotoId, Source};
 use lightcraft_develop::CameraColour;
@@ -137,4 +138,23 @@ fn the_history_names_the_local_profile_a_photo_is_set_to() {
     s.execute("develop.profile", &json!({"camera_colour": "local", "camera_profile": "gone"})).unwrap();
     assert_eq!(label(&s).as_deref(), Some("Profile: gone"), "a file that is not there is named by its id");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// LT7 (Auto Sync half): a local profile and its id reach the other selected photos, and going back to Camera Matching
+/// clears the id there too; a photo outside the selection is left alone.
+#[test]
+fn auto_sync_carries_a_local_profile_and_its_id() {
+    let mut s = Session::with_demo();
+    let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+    s.execute("library.select", &json!({"ids": [ids[0], ids[1]], "active": ids[0]})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    let chosen = |s: &Session, i: usize| {
+        let p = &s.develop_of(PhotoId(ids[i])).unwrap().profile;
+        (p.camera_colour, p.camera_profile.clone())
+    };
+    s.execute("develop.profile", &json!({"camera_colour": "local", "camera_profile": "A7 V Chart"})).unwrap();
+    let local = (CameraColour::Local, Some("A7 V Chart".to_string()));
+    assert_eq!((chosen(&s, 0), chosen(&s, 1), chosen(&s, 2)), (local.clone(), local, (CameraColour::Auto, None)));
+    s.execute("develop.profile", &json!({"camera_colour": "auto"})).unwrap();
+    assert_eq!((chosen(&s, 0), chosen(&s, 1), chosen(&s, 2)), ((CameraColour::Auto, None), (CameraColour::Auto, None), (CameraColour::Auto, None)));
 }
