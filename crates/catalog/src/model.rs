@@ -423,6 +423,13 @@ impl Photo {
     pub fn relative_wb(&self) -> bool {
         self.develops_raw() && relative_wb_camera(&self.format, &self.meta.camera)
     }
+    /// [`Photo::relative_wb`] where its colour choice is honoured: a photo set to macOS Colour on a computer whose
+    /// raw decoder makes its picture (`macos`, decided by the engine) edits white balance in Kelvin from macOS's
+    /// as-shot white; its [`Photo::as_shot_wb`] is then macOS's reading, learnt when the file is decoded (a camera on
+    /// the relative scale never stores another).
+    pub fn relative_wb_on(&self, macos: bool) -> bool {
+        self.relative_wb() && !(macos && self.develop.profile.camera_colour == lightcraft_develop::CameraColour::Macos)
+    }
     /// The develop settings import gave this photo: [`Photo::camera_defaults`], or the user's
     /// default preset applied on top of them ([`Photo::import_look`]). Like the camera defaults,
     /// in the photo's own rendering process.

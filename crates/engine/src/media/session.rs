@@ -409,7 +409,7 @@ impl crate::Session {
     /// says and what a smart preview renders with. Only for raws edited in Kelvin.
     fn learn_as_shot_wb(&mut self, id: PhotoId, info: &SourceInfo) {
         let Some(p) = self.catalog.photo(id) else { return };
-        if !info.raw || info.relative_wb || !p.develops_raw() || p.relative_wb() {
+        if !info.raw || info.relative_wb || !p.develops_raw() || crate::files::relative_wb(p) {
             return;
         }
         let read = (info.as_shot_temp, info.as_shot_tint);
@@ -481,6 +481,11 @@ impl crate::Session {
     }
 
     /// Prefer decoder facts to header-only metadata for pixel-statistics commands.
+    /// The facts of photo `id`'s decoded source, when one is held (not the catalog's guess before a decode).
+    pub(crate) fn decoded_source_info(&self, id: PhotoId) -> Option<SourceInfo> {
+        Some(self.media.source_facts(id, SourceInfo { raw: false, ..SourceInfo::default() })).filter(|i| i.raw)
+    }
+
     pub fn source_info(&self, id: PhotoId) -> SourceInfo {
         let header = self.catalog.photo(id).map(|p| source_info(p)).unwrap_or_default();
         self.media.source_facts(id, header)

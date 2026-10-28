@@ -174,3 +174,47 @@ fn a_real_denoised_picture_keeps_macos_colours() {
     }
     assert!(median(dn) <= 1.0);
 }
+
+/// Step 8: on a real A7 V file's macOS Colour source, the white balance the picker reads off a tinted near-grey patch
+/// (`pipeline::auto::auto_wb`), set as a Custom Kelvin white, renders that patch neutral within ±1 a* / b* (Bradford on
+/// the linear base from macOS's as-shot white, `pipeline::local::wb_matrix_for`).
+#[test]
+fn the_white_balance_slider_neutralises_a_grey_patch() {
+    use lightcraft_develop::{DevelopSettings, WbMode, WbScale};
+    let Some(bytes) = sample() else { return };
+    let (img, _, info, _) = load_bytes_now(Cow::Borrowed(&bytes), 1600, None, false, options(CameraColour::Macos), &System).unwrap();
+    assert!(info.macos_note.is_none() && !info.relative_wb && info.legacy_relative_wb);
+    let (cols, rows) = (img.width / 32, img.height / 32);
+    let blocks = super::colour_transfer::means(&img, cols, rows);
+    let luma = |p: &[f32; 3]| f64::from(lightcraft_color::luminance_2020(*p));
+    let mut ys: Vec<f64> = blocks.data.iter().map(luma).filter(|y| y.is_finite()).collect();
+    ys.sort_by(f64::total_cmp);
+    let k = 0.18 / ys.get(ys.len() / 2).copied().unwrap_or(0.18).max(1e-6);
+    let lab = |p: [f64; 3]| display_lab(p, k);
+    // the least saturated mid-tone block that still has a visible tint (chroma 3–20)
+    let chroma = |p: &[f32; 3]| {
+        let l = lab(p.map(f64::from));
+        (l[0], l[1].hypot(l[2]))
+    };
+    let (i, _) = blocks
+        .data
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| p[0].is_finite() && (25.0..=85.0).contains(&chroma(p).0) && (3.0..=20.0).contains(&chroma(p).1))
+        .min_by(|a, b| chroma(a.1).1.total_cmp(&chroma(b.1).1))
+        .expect("a tinted near-grey patch");
+    let patch = blocks.data[i];
+    let before = lab(patch.map(f64::from));
+    let (temp, tint) = lightcraft_pipeline::auto::auto_wb(&Rgb32f { width: 1, height: 1, data: vec![patch] }, &info);
+    let mut d = DevelopSettings::default();
+    (d.wb.mode, d.wb.temp, d.wb.tint, d.wb.scale) = (WbMode::Custom, temp, tint, WbScale::Kelvin);
+    let m = lightcraft_pipeline::local::wb_matrix_for(&info, &d).expect("a white away from as shot");
+    let p = patch.map(f64::from);
+    let out: [f64; 3] = std::array::from_fn(|r| (0..3).map(|c| f64::from(m[r][c]) * p[c]).sum());
+    let after = lab(out);
+    eprintln!(
+        "patch {i}: as shot {}K/{} → {temp}K/{tint}; a*b* {:.2},{:.2} → {:.2},{:.2}",
+        info.as_shot_temp, info.as_shot_tint, before[1], before[2], after[1], after[2]
+    );
+    assert!(after[1].abs() <= 1.0 && after[2].abs() <= 1.0, "a*b* after: {:.2} {:.2}", after[1], after[2]);
+}

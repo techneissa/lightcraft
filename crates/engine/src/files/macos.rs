@@ -82,6 +82,16 @@ pub(super) fn offered(bytes: &[u8], info: &RawInfo, backend: &dyn Backend) -> bo
     gate(bytes, info, backend).is_ok()
 }
 
+/// Whether this computer's decoder would make photo `p`'s picture, from the catalog alone: an ARW whose camera macOS
+/// lists (the catalog joins make and model, `SONY ILCE-7M5`; macOS lists the EXIF model). The gates at load decide.
+pub(super) fn lists(p: &lightcraft_catalog::Photo) -> bool {
+    let camera = p.meta.camera.trim();
+    let model = camera.split_once(' ').map_or(camera, |(_, model)| model.trim());
+    p.format.eq_ignore_ascii_case("ARW")
+        && lightcraft_macraw::available()
+        && (lightcraft_macraw::supports(model) || lightcraft_macraw::supports(camera))
+}
+
 /// The name checks, before anything is rendered.
 fn gate(bytes: &[u8], info: &RawInfo, backend: &dyn Backend) -> Result<&'static str, MacosUnavailable> {
     let offered = !lightcraft_raw::color::has_matrix(&info.color) && crate::camera_preview::file_local_look(info.format);
@@ -181,7 +191,10 @@ fn apply_gain(img: &mut Rgb32f, stops: f32) {
 }
 
 /// The source facts of a macOS base: the as-shot white on the Kelvin scale from the decoder's white (the slider reads
-/// Kelvin, never the relative scale), no camera colour model (white balance adapts the linear base, Bradford).
+/// Kelvin, never the relative scale), no camera colour model (white balance adapts the linear base, Bradford). A white
+/// balance still written on the relative scale (set on Camera Matching) renders as the Kelvin it composes to from
+/// macOS's as-shot white (`legacy_relative_wb`, `pipeline::local::legacy_to_kelvin`), so As Shot stays as shot and a
+/// Custom white keeps its shift, with nothing rewritten.
 pub(super) fn source_info(base: &Base, lens: Option<lightcraft_develop::EmbeddedLens>) -> SourceInfo {
     let (temp, tint) = xy_to_temp_tint(base.white);
     SourceInfo {
@@ -190,7 +203,7 @@ pub(super) fn source_info(base: &Base, lens: Option<lightcraft_develop::Embedded
         as_shot_tint: tint.round(),
         lens,
         relative_wb: false,
-        legacy_relative_wb: false,
+        legacy_relative_wb: true,
         camera_color: None,
         camera_tone: None,
         colorimetric: true,

@@ -156,7 +156,7 @@ fn a_macos_photo_is_the_decoders_picture() {
     let (t, tint) = lightcraft_color::cct::xy_to_temp_tint(lightcraft_color::Xy::new(D50[0], D50[1]));
     assert_eq!((info.as_shot_temp, info.as_shot_tint), (t.round(), tint.round()));
     assert!((info.as_shot_temp - 5003.0).abs() < 10.0, "{}", info.as_shot_temp);
-    assert!(info.raw && !info.relative_wb && !info.legacy_relative_wb && info.camera_color.is_none());
+    assert!(info.raw && !info.relative_wb && info.legacy_relative_wb && info.camera_color.is_none());
     assert!(info.macos_offered && info.macos_note.is_none() && info.colorimetric);
     let request = fake.requests.lock().unwrap()[0];
     assert_eq!(request, Request { long_edge: None, draft: false, expected_size: Some((72, 48)) });

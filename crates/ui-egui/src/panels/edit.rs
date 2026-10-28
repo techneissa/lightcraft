@@ -38,9 +38,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
     // a raw shown from its embedded JPEG (preview only) gets the rendered-file white balance scale
-    let raw = app.session.catalog.photo(id).is_some_and(|p| p.develops_raw() && !p.relative_wb());
+    let raw = app.session.catalog.photo(id).is_some_and(|p| p.develops_raw() && !lightcraft_engine::files::relative_wb(p));
     let mut d = d;
-    if d.wb.mode == WbMode::AsShot && app.session.catalog.photo(id).is_some_and(|p| p.relative_wb()) {
+    if d.wb.mode == WbMode::AsShot && app.session.catalog.photo(id).is_some_and(|p| lightcraft_engine::files::relative_wb(p)) {
         let wb = &mut std::sync::Arc::make_mut(&mut d).wb;
         wb.temp = 6500.0;
         wb.tint = 0.0;
