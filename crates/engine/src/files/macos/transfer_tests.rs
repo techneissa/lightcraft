@@ -64,7 +64,7 @@ fn worst(a: &Rgb32f, b: &Rgb32f) -> f32 {
 
 /// T23: with AI Denoise on, a macOS Colour photo's plain and denoised pictures are LightCraft's develop carried over
 /// to macOS's colours by one transfer (equal pictures stay equal, so the Amount slider blends one colour), close to
-/// macOS's own picture but not it, with the facts of a macOS base. T25b: without the product the photo is macOS's
+/// macOS's own picture but not it (T25: under 1 ΔE00), with the facts of a macOS base. T25b: without the product the photo is macOS's
 /// picture again.
 #[test]
 fn a_denoised_macos_photo_is_carried_over_to_macos_colours() {
@@ -85,6 +85,11 @@ fn a_denoised_macos_photo_is_carried_over_to_macos_colours() {
     let gain = 2f32.powf(GAIN_STOPS);
     let unscaled = Rgb32f { data: plain.data.iter().map(|p| p.map(|v| v / gain)).collect(), ..plain.clone() };
     assert!(worst(&unscaled, &apple) < 0.01, "macOS's colours: {}", worst(&unscaled, &apple));
+    // T25: the colour step from macOS's picture to the carried-over one, as a display shows it
+    use crate::camera_preview::colour_transfer::{de2000, display_lab};
+    let lab = |p: &[f32; 3]| display_lab(p.map(f64::from), 1.0);
+    let step = unscaled.data.iter().zip(&apple.data).map(|(p, q)| de2000(lab(p), lab(q))).fold(0.0, f64::max);
+    assert!(step < 1.0, "T25: colour step {step:.3} ΔE00");
     assert!(worst(&plain, &twin) < 0.002, "one transfer for both: {}", worst(&plain, &twin));
     let (direct, ..) = load(&bytes, 4096, CameraColour::Macos, &fake);
     assert_ne!(plain, direct, "LightCraft's develop, not macOS's picture");

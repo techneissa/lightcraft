@@ -49,3 +49,20 @@ fn lightroom_kelvin_is_read_as_kelvin_on_macos_colour() {
     let expected = if crate::files::macos_lists(&macos) { Target::RawAbsolute } else { Target::RawRelative };
     assert_eq!(Target::for_photo(&macos), expected);
 }
+
+/// T13 (export half): a JPEG export of a macOS Colour photo is rendered from macOS's base (its job asks the loader for
+/// macOS Colour; the loader's macOS path is tested with a stand-in decoder in `files::macos`), while a DNG written from
+/// it says Camera Matching in its XMP (its own matrices carry the colour).
+#[test]
+fn a_jpeg_export_renders_from_macos_and_a_dng_says_camera_matching() {
+    let mut s = Session::new();
+    s.catalog.apply(Op::AddPhoto { photo: Box::new(a7v(CameraColour::Macos)) }).unwrap();
+    let job = s.export_job(PhotoId(1), 1600, 1600, lightcraft_pipeline::OutputSpace::Srgb, lightcraft_pipeline::OutputDepth::U8).unwrap();
+    let crate::media::SourceRef::File { options, .. } = &job.source else { panic!("rendered from the file") };
+    assert_eq!(options.colour, CameraColour::Macos);
+
+    let photo = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    assert!(crate::sidecar::sidecar_packet(&photo, &s.catalog).contains("macos"), "the photo's own packet names it");
+    let packet = crate::sidecar::sidecar_packet(&crate::export::for_dng(&photo), &s.catalog);
+    assert!(!packet.contains("macos"), "the DNG's XMP names no colour source, so it reads as Camera Matching");
+}
