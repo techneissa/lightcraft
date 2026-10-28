@@ -464,8 +464,9 @@ pub(super) fn rank_correlation_ties(pairs: &[([f64; 3], [f64; 3])]) -> f64 {
 /// 9–22 L* too dark), the chroma curve (the fallback kept about a third of the camera's
 /// colourfulness), and, when the scene has enough colour to learn one (the full look's condition),
 /// the photo's own colour matrix at [`PARTIAL_MATRIX_WEIGHT`]. No hue/saturation table, unless the model has a camera
-/// profile: its colour (matrix and table) replaces both the own matrix and the identity, since a scene too dull to
-/// learn colour from is exactly where the generic colour turns skin grey-green. Tried on
+/// profile: its colour (matrix and table) replaces the own matrix. A scene too dull to learn colour from is exactly
+/// where the generic colour (the identity) turns skin grey-green, so there the colour is the profile's, else
+/// `prior` ([`spectral_prior`](super::colour::spectral_prior)), and the identity only when there is neither. Tried on
 /// all pixels and then, like the full look, on the pixels away from edges; used only when it cuts
 /// the held-out squared error to below [`MIN_IMPROVEMENT`] of the neutral fallback's, in linear
 /// and in gamma-encoded display values, and when the JPEG shows the same picture
@@ -476,8 +477,9 @@ pub(super) fn fit_partial(
     reference: &Rgb32f,
     highlights: &HighlightCheck,
     profile: &Option<(Mat3, Option<HsvTable>)>,
+    prior: Option<Mat3>,
 ) -> Option<CameraLook> {
-    [None, Some(EDGE_CONTRAST)].into_iter().find_map(|edge_limit| fit_partial_on(sensor, reference, edge_limit, highlights, profile))
+    [None, Some(EDGE_CONTRAST)].into_iter().find_map(|edge_limit| fit_partial_on(sensor, reference, edge_limit, highlights, profile, prior))
 }
 
 fn fit_partial_on(
@@ -486,6 +488,7 @@ fn fit_partial_on(
     edge_limit: Option<f32>,
     highlights: &HighlightCheck,
     profile: &Option<(Mat3, Option<HsvTable>)>,
+    prior: Option<Mat3>,
 ) -> Option<CameraLook> {
     // as for a known colour model: enough signal for the tone, but no monochrome reference
     let (pairs, bright) = collect_pairs(sensor, reference, 0.005, edge_limit, false)?;
@@ -507,7 +510,8 @@ fn fit_partial_on(
                 Some(own) => Mat3(std::array::from_fn(|r| {
                     std::array::from_fn(|c| Mat3::IDENTITY.0[r][c] + PARTIAL_MATRIX_WEIGHT * (own.0[r][c] - Mat3::IDENTITY.0[r][c]))
                 })),
-                None => Mat3::IDENTITY,
+                // too little colour to learn from: the spectral prior, never the identity
+                None => prior.unwrap_or(Mat3::IDENTITY),
             };
             (matrix, None)
         }

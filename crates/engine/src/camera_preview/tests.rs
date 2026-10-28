@@ -1796,10 +1796,36 @@ fn partial_look_is_never_the_identity_when_the_model_has_a_profile() {
     let profile = test_profile_colour();
     assert!(fit_pairs(&sensor, &reference).is_none() && fit_pairs_with(&sensor, &reference, Some(profile.clone())).is_none());
     let without = fit_look(&sensor, &reference, &none, None).expect("a partial look");
-    assert_eq!(without.matrix, Mat3::IDENTITY, "no profile, no colour to learn: the generic colour");
+    assert_eq!(without.matrix, Mat3::IDENTITY, "no profile, no prior, no colour to learn: the generic colour");
+    let prior = Mat3([[1.3, -0.2, -0.1], [-0.1, 1.2, -0.1], [-0.05, -0.25, 1.3]]);
+    let look = fit_look_with(&sensor, &reference, &none, None, Some(prior), false).expect("a partial look on the spectral prior");
+    assert_eq!(look.matrix, prior);
+    assert!(look.hue_sat.is_none());
     let look = fit_look(&sensor, &reference, &none, Some(profile.clone())).expect("a partial look on the profile's colour");
     assert_eq!(look.matrix, profile.0);
     assert_eq!(look.hue_sat, profile.1);
+    let look = fit_look_with(&sensor, &reference, &none, Some(profile.clone()), Some(prior), false).expect("a partial look");
+    assert_eq!(look.matrix, profile.0, "a profile comes before the prior");
+}
+
+/// The spectral prior keeps white (every row sums to 1 once the proxy's own matrix is put back), is the body's own
+/// matrix when the table has it and the mean of all of them when it does not.
+#[test]
+fn spectral_prior_keeps_white_and_is_the_bodys_own_when_covered() {
+    let prior_of = |make: &str, model: &str| {
+        let raw = raw_of(RawFormat::Arw, make, model, Default::default());
+        let t = lightcraft_raw::color::camera_transform(&raw, lightcraft_raw::color::as_shot_white_xy(&raw));
+        (spectral_prior(&raw, &t).expect("a prior").mul(&t.matrix), t)
+    };
+    let (own, _) = prior_of("SONY", "ILCE-7M3");
+    let (mean, _) = prior_of("SONY", "ILCE-7M5");
+    for matrix in [own, mean] {
+        for row in matrix.0 {
+            assert!((row.iter().sum::<f64>() - 1.0).abs() < 1e-9, "rows sum to 1: {row:?}");
+        }
+    }
+    assert_ne!(own, mean, "a covered body has its own matrix, an unknown one the mean");
+    assert_eq!(mean, prior_of("SONY", "No Such Body").0, "every unknown body gets the same mean");
 }
 
 /// A pooled fit keeps white: grey camera RGB stays grey at the same value. Free, the same pairs give a cast.
@@ -1979,7 +2005,7 @@ fn partial_look_only_when_clearly_better_than_the_neutral_fallback() {
     let mut reference = sensor.clone();
     reference.map_in_place(|p| displayed(p.map(f64::from), &neutral).map(|v| v as f32));
     let check = HighlightCheck { pairs: highlights(&sensor, &reference), dro: false, grey: false };
-    assert!(fit_partial(&sensor, &reference, &check, &None).is_none(), "no clear gain over the fallback");
+    assert!(fit_partial(&sensor, &reference, &check, &None, None).is_none(), "no clear gain over the fallback");
     // an unrelated picture
     for (i, p) in reference.data.iter_mut().enumerate() {
         *p = [0.05 + (i % 7) as f32 * 0.07, 0.05 + (i % 19) as f32 * 0.02, 0.05 + (i % 29) as f32 * 0.01];
@@ -2485,7 +2511,7 @@ fn a_narrow_curve_is_checked_as_lowered_for_dro() {
         *dst = p.map(|v| v * (0.6 + (y - 0.07) * 0.25) / y);
     }
     let neutral = luma(displayed([0.9; 3], &ToneMap::new(0.0, 0.0, 0.0)));
-    if let Some(look) = fit_look_with(&sensor, &reference, &vec![false; sensor.data.len()], None, true) {
+    if let Some(look) = fit_look_with(&sensor, &reference, &vec![false; sensor.data.len()], None, None, true) {
         let look = with_dro_off_tone(look);
         let tone = ToneMap::camera(&look.tone, 0.0, 0.0, 0.0);
         let correction = look.hue_sat.as_ref().and_then(HueSat::new);

@@ -25,6 +25,8 @@ mod proxy;
 mod tone;
 
 #[cfg(test)]
+use colour::spectral_prior;
+#[cfg(test)]
 pub(crate) use colour::{PROFILE_PROXY, dng_colour, dng_tone_eligible};
 #[cfg(test)]
 use colour::{PROXY, starting_colour_with};
@@ -79,8 +81,8 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// a tone-only fallback for near-black scenes with too few colour pairs (#1587); DNG tone fitting uses a
 /// lens-corrected proxy when the file carries lens opcodes; validated A7CR distortion, including the lens data
 /// stored with each smart preview.
-/// 13: a partial look takes the camera profile's colour (matrix and table) instead of the identity or a damped own
-/// matrix, and profiles are fitted with a white-keeping matrix (the A7 V profile).
+/// 13: a partial look takes the camera profile's colour (matrix and table), else a spectral prior, instead of the
+/// identity, and profiles are fitted with a white-keeping matrix.
 pub const LOOK_VERSION: u32 = 13;
 
 #[derive(Clone, Debug)]
