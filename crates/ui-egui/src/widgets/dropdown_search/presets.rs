@@ -100,7 +100,7 @@ pub fn list(ui: &mut Ui, find: &Filter, salt: &str, fixed: &[(String, bool)], pr
             }
         }
     });
-    ui.data_mut(|d| d.insert_temp(state, (shown_area.state.offset().y, shown_area.inner_rect.height())));
+    ui.data_mut(|d| d.insert_temp(state, (shown_area.state.clamped_offset().y, shown_area.inner_rect.height())));
     find.no_match(ui);
     out
 }
