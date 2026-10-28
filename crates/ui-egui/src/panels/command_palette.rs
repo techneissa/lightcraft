@@ -21,8 +21,16 @@ pub const COMMAND: &str = "view.commandPalette";
 pub const SEARCH_WIDGET: &str = "palette:search";
 
 const WIDTH: f32 = 580.0;
-const ROW_H: f32 = 28.0;
-const MAX_LIST_H: f32 = 400.0;
+/// A row's height, the gap to the next included: rows touch, so the list's arithmetic (its height,
+/// which rows a scroll shows) is in whole rows.
+const ROW_H: f32 = 34.0;
+/// The highlight's inset from the top and bottom of its row, which shows as the gap between rows.
+const ROW_INSET: f32 = 3.0;
+/// The most rows shown at once; more scroll.
+const MAX_ROWS: usize = 12;
+const MAX_LIST_H: f32 = ROW_H * MAX_ROWS as f32;
+/// The space kept free under the list in a window too short for a full one.
+const SCREEN_GAP: f32 = 24.0;
 /// How far PageUp / PageDown move the highlight.
 const PAGE: usize = 8;
 
@@ -156,6 +164,34 @@ fn step(selected: usize, delta: isize, len: usize) -> usize {
     usize::try_from(next).unwrap_or(0)
 }
 
+/// One row: the label, its menu path dimmed after it, and the shortcut at the right end. A pointer
+/// that moves onto it highlights it (`selected`).
+fn row(ui: &mut egui::Ui, t: &Tokens, entry: &Entry, index: usize, selected: &mut usize, moved: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
+    crate::widgets::register(ui, format!("palette:row:{}", entry.key()), rect);
+    if response.hovered() && moved {
+        *selected = index;
+    }
+    let painter = ui.painter();
+    if index == *selected {
+        painter.rect_filled(rect.shrink2(vec2(0.0, ROW_INSET)), 4.0, if entry.enabled { t.hover } else { t.inset });
+    }
+    let small = t.font(12.0);
+    let label_color = if entry.enabled { t.text } else { t.text_disabled };
+    let label = painter.text(rect.left_center() + vec2(10.0, 0.0), Align2::LEFT_CENTER, &entry.label, t.font(13.0), label_color);
+    let mut right = rect.right() - 10.0;
+    if let Some(sc) = &entry.shortcut {
+        let r = painter.text(egui::pos2(right, rect.center().y), Align2::RIGHT_CENTER, sc, small.clone(), t.text_dim);
+        right = r.left() - 14.0;
+    }
+    let left = label.right() + 12.0;
+    if right > left {
+        let clip = egui::Rect::from_min_max(egui::pos2(left, rect.top()), egui::pos2(right, rect.bottom()));
+        painter.with_clip_rect(clip).text(egui::pos2(left, rect.center().y), Align2::LEFT_CENTER, &entry.path, small, t.text_dim);
+    }
+    response
+}
+
 /// Draw the palette if it is open and handle its keys. A pick closes it first and then runs the
 /// command, so a command that opens a dialog (or the palette again) finds it gone.
 pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
@@ -250,8 +286,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
                 ui.add_space(6.0);
                 return;
             }
-            let height = (ROW_H * shown.len() as f32).min(MAX_LIST_H);
-            let mut scroll = egui::ScrollArea::vertical().max_height(height).auto_shrink([false, true]);
+            // as many rows as there are, up to MAX_LIST_H, and never past the bottom of the window
+            let room = (screen.bottom() - ui.cursor().top() - SCREEN_GAP).max(ROW_H * 3.0);
+            let height = (ROW_H * shown.len() as f32).min(MAX_LIST_H).min(room);
+            let mut scroll = egui::ScrollArea::vertical().max_height(height).auto_shrink([false, false]);
             if std::mem::take(&mut state.reveal) {
                 // the highlighted row stays inside the window of rows on show
                 let top = state.selected as f32 * ROW_H;
@@ -264,38 +302,21 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             }
             scroll = scroll.vertical_scroll_offset(state.scroll);
             let moved = ui.input(|i| i.pointer.delta() != egui::Vec2::ZERO);
-            let out = scroll.show_rows(ui, ROW_H, shown.len(), |ui, range| {
-                for index in range {
-                    let Some(entry) = shown.get(index) else { continue };
-                    let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
-                    crate::widgets::register(ui, format!("palette:row:{}", entry.key()), rect);
-                    if response.hovered() && moved {
-                        state.selected = index;
+            // The list gets its own height: the palette's window lays out inside the size it had
+            // last frame (an egui Area), so a list that took the room left would keep the height of
+            // the shortest list since the palette first opened.
+            let out = ui.allocate_ui(vec2(width, height), |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                scroll.show_rows(ui, ROW_H, shown.len(), |ui, range| {
+                    for index in range {
+                        let Some(entry) = shown.get(index) else { continue };
+                        if row(ui, &t, entry, index, &mut state.selected, moved).clicked() && entry.enabled {
+                            run = Some(entry.clone());
+                        }
                     }
-                    if index == state.selected {
-                        ui.painter().rect_filled(rect, 4.0, if entry.enabled { t.hover } else { t.inset });
-                    }
-                    let painter = ui.painter();
-                    let font = t.font(13.0);
-                    let small = t.font(12.0);
-                    let label_color = if entry.enabled { t.text } else { t.text_disabled };
-                    let label = painter.text(rect.left_center() + vec2(10.0, 0.0), Align2::LEFT_CENTER, &entry.label, font, label_color);
-                    let mut right = rect.right() - 10.0;
-                    if let Some(sc) = &entry.shortcut {
-                        let r = painter.text(egui::pos2(right, rect.center().y), Align2::RIGHT_CENTER, sc, small.clone(), t.text_dim);
-                        right = r.left() - 14.0;
-                    }
-                    let left = label.right() + 12.0;
-                    if right > left {
-                        let clip = egui::Rect::from_min_max(egui::pos2(left, rect.top()), egui::pos2(right, rect.bottom()));
-                        painter.with_clip_rect(clip).text(egui::pos2(left, rect.center().y), Align2::LEFT_CENTER, &entry.path, small, t.text_dim);
-                    }
-                    if response.clicked() && entry.enabled {
-                        run = Some(entry.clone());
-                    }
-                }
+                })
             });
-            state.scroll = out.state.clamped_offset().y;
+            state.scroll = out.inner.state.clamped_offset().y;
         });
     if modal.backdrop_response.clicked() {
         return;

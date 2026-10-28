@@ -184,3 +184,71 @@ fn shortcuts_wait_while_the_palette_is_open() {
     assert_eq!(h.app.ui.view, view, "a letter typed into the palette is not the grid shortcut");
     assert_eq!(h.app.ui.palette.as_ref().map(|s| s.query.as_str()), Some("g"));
 }
+
+/// The palette rows registered this frame, top to bottom.
+fn rows(h: &Headless) -> Vec<(String, egui::Rect)> {
+    let mut rows: Vec<(String, egui::Rect)> = h.app.widgets.iter().filter(|(id, _)| id.starts_with("palette:row:")).cloned().collect();
+    rows.sort_by(|a, b| a.1.top().total_cmp(&b.1.top()));
+    rows
+}
+
+/// How many rows a full list shows.
+fn full_list() -> usize {
+    MAX_ROWS
+}
+
+// Given a query that leaves two rows, when it is erased letter by letter, then the list grows back
+// to its full height (it used to keep the two-row height until the app quit).
+#[test]
+fn the_list_grows_back_after_a_query_that_left_few_rows() {
+    let mut h = demo();
+    open(&mut h);
+    let all = entries(&h.app, false).len();
+    assert!(all > full_list());
+    let narrow = "smart album from filter";
+    type_text(&mut h, narrow);
+    let few = filter(&entries(&h.app, false), narrow).len();
+    assert!((1..=2).contains(&few), "{few}");
+    assert_eq!(rows(&h).len(), few);
+    for typed in (0..narrow.len()).rev() {
+        key(&mut h, "Backspace", false);
+        let query = &narrow[..typed];
+        assert_eq!(h.app.ui.palette.as_ref().map(|s| s.query.as_str()), Some(query));
+        let want = filter(&entries(&h.app, false), query).len().min(full_list());
+        assert!(rows(&h).len() >= want, "{query:?}: {} rows shown, {want} expected", rows(&h).len());
+    }
+    let shown = rows(&h);
+    let height = shown.last().unwrap().1.bottom() - shown.first().unwrap().1.top();
+    assert!(height >= MAX_LIST_H - ROW_H, "the empty query shows a full list, {height} pt");
+}
+
+// Given a short list after a long one, when ↓ walks past the rows that fit, then the highlighted row
+// is always one of the rows shown, inside the list.
+#[test]
+fn the_arrow_keys_scroll_the_highlight_into_view() {
+    let mut h = demo();
+    open(&mut h);
+    type_text(&mut h, "smart album from filter");
+    for _ in 0.."smart album from filter".len() {
+        key(&mut h, "Backspace", false);
+    }
+    type_text(&mut h, "e");
+    let shown = filter(&entries(&h.app, false), "e");
+    assert!(shown.len() > full_list() + 2, "{}", shown.len());
+    for _ in 0..full_list() + 2 {
+        key(&mut h, "ArrowDown", false);
+    }
+    let selected = h.app.ui.palette.as_ref().map(|s| s.selected).unwrap();
+    assert_eq!(selected, full_list() + 2);
+    let key = format!("palette:row:{}", shown[selected].key());
+    let visible = rows(&h);
+    assert!(visible.iter().any(|(id, _)| *id == key), "{key} is on screen: {visible:?}");
+    assert!(visible.len() >= full_list(), "{} rows", visible.len());
+    // rows sit one under the other, a row apart, the highlighted one inside the list
+    for pair in visible.windows(2) {
+        assert_eq!(pair[1].1.top() - pair[0].1.top(), ROW_H, "{pair:?}");
+    }
+    let list_bottom = visible.first().unwrap().1.top() + MAX_LIST_H;
+    let row = visible.iter().find(|(id, _)| *id == key).unwrap().1;
+    assert!(row.bottom() <= list_bottom + 0.5, "{row:?} ends above the list's bottom {list_bottom}");
+}
