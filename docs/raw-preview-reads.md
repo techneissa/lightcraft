@@ -1,7 +1,9 @@
 # Reading a raw's preview without reading the raw
 
-A grid thumbnail and a loupe preview of an unedited raw both show the camera's embedded JPEG, not a
-decode of the sensor data. That JPEG lives near the *start* of the file, but the rest of the file is
+A grid thumbnail of an unedited raw shows the camera's embedded JPEG, not a decode of the sensor data.
+(The loupe used it as a stand-in too, until the raw's render replaced it. The camera's colours and lens
+correction are not LightCraft's, so the photo changed colour and shifted on screen. The loupe now keeps the
+previous photo up until the render arrives, and shows the camera JPEG only when the raw can't be rendered.) That JPEG lives near the *start* of the file, but the rest of the file is
 the sensor data — for a 24 MP Fuji RAF, **50 of 56 MB**. Until this change the preview loader called
 `std::fs::read` on the whole file and threw the sensor data away, so every preview paid for bytes
 nobody looked at.
@@ -117,7 +119,7 @@ render queue stayed empty.
 
 Many TIFF-based raws keep more than one embedded JPEG. A Sony A7R VI ARW holds a 1616 × 1080 one
 (0.3 MB) beside the 9984 × 6656 one (5.6 MB), and Nikon NEF and Panasonic RW2 files have mid-sized
-copies too. The loupe stand-in and the grid thumbnail (`embedded_preview_srgb`) decode the smallest
+copies too. The grid thumbnail and the loupe stand-in of an unrenderable raw (`embedded_preview_srgb`) decode the smallest
 JPEG whose long edge is at least the size asked for (`lightcraft_raw::embedded_preview_covering`).
 They take the largest one when no other JPEG is big enough. The plan route picks the same way
 (`preview_window` takes the size asked for), so a raw read through the plan gets the JPEG the whole
