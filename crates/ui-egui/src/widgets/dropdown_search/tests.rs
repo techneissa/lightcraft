@@ -491,3 +491,21 @@ fn the_rule_field_list_finds_a_field_inside_a_group() {
     assert!(h.query_by_label("Filename").is_some(), "Filename lives in the File submenu and is found by typing");
     assert!(h.query_by_label("Rating").is_none());
 }
+
+/// A click on the search field must not close the list (the combo box closes on a click in it).
+#[test]
+fn a_click_on_the_search_field_keeps_a_combo_list_open() {
+    let mut h = dropdown_harness();
+    open(&mut h);
+    type_text(&mut h, "dar");
+    h.get_by_label("Search").click();
+    h.run();
+    h.run();
+    assert!(shown(&h, "Darken") && super::list_open(&h.ctx), "the list is still open after a click in the field");
+    h.get_by_label("Darken").click();
+    h.run();
+    h.run();
+    h.run();
+    assert_eq!(*h.state(), 2);
+    assert!(!super::list_open(&h.ctx), "a click on a row closes it");
+}

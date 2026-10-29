@@ -159,6 +159,12 @@ fn open_id() -> Id {
     Id::unique("lc-dropdown-list-open")
 }
 
+/// Says a dropdown list is drawn in this pass ([`list_open`]).
+pub fn mark_open(ctx: &egui::Context) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| d.insert_temp(open_id(), pass));
+}
+
 /// Is a dropdown list open? It then owns the keyboard, like an open menu: a typed letter is for the
 /// list's search, not a shortcut, and a held key does nothing on the canvas.
 pub fn list_open(ctx: &egui::Context) -> bool {
@@ -217,9 +223,8 @@ impl Filter {
     pub fn header(&self, ui: &mut Ui) {
         let Some(id) = self.id else { return };
         // Marks the list open for the shortcuts and the held keys.
-        let pass = ui.ctx().cumulative_pass_nr();
-        ui.ctx().data_mut(|d| d.insert_temp(open_id(), pass));
-        if !(self.filtering() || self.composing) {
+        mark_open(ui.ctx());
+        if !self.field_shown() {
             return;
         }
         let width = ui.data(|d| d.get_temp::<f32>(id.with("width"))).unwrap_or(FIELD_WIDTH).max(FIELD_MIN);
@@ -271,6 +276,17 @@ impl Filter {
         if found.moved {
             item.scroll_to_me(None);
         }
+    }
+
+    /// Does the search field show? A click in it must not close the list.
+    pub fn field_shown(&self) -> bool {
+        self.filtering() || self.composing
+    }
+
+    /// When the list closes on a click: anywhere in it until the search field shows (a click on the
+    /// field must keep it open), then outside it only; the rows close it themselves.
+    pub fn close_behavior(&self) -> egui::PopupCloseBehavior {
+        if self.field_shown() { egui::PopupCloseBehavior::CloseOnClickOutside } else { egui::PopupCloseBehavior::CloseOnClick }
     }
 
     /// The options that match the typed text, best first (empty while nothing is typed).
@@ -328,6 +344,7 @@ impl Filter {
             on_row(ui, item, &row);
             if row.clicked() {
                 chosen = Some(i);
+                ui.close();
             }
         }
         self.no_match(ui);
@@ -347,7 +364,7 @@ pub trait Searchable {
 
 impl Searchable for craft_ui::ComboBox<'_> {
     fn search<R>(self, ui: &mut Ui, filter: &Filter, rows: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
-        self.show_ui_with_header(ui, |ui| filter.header(ui), |ui, ()| rows(ui))
+        self.close_behavior(filter.close_behavior()).show_ui_with_header(ui, |ui| filter.header(ui), |ui, ()| rows(ui))
     }
 }
 
@@ -381,6 +398,42 @@ pub fn pick_with<X>(
     (shown.response, shown.inner.flatten())
 }
 
+/// The menu of a dropdown button (`egui::Popup::menu(response)`) with the search above `rows`.
+pub fn menu<R>(response: &egui::Response, find: &Filter, rows: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    egui::Popup::menu(response)
+        .close_behavior(find.close_behavior())
+        .show(|ui| {
+            find.header(ui);
+            rows(ui)
+        })
+        .map(|shown| shown.inner)
+}
+
+/// [`pick`] for the menu of a dropdown button: a selectable row per item. Returns the item a click or
+/// ↩ chose (an index into `items`).
+pub fn menu_pick<X>(
+    ui: &mut Ui,
+    response: &egui::Response,
+    items: &[X],
+    selected: impl Fn(&X) -> bool,
+    label: impl Fn(&X) -> String,
+) -> Option<usize> {
+    menu_pick_with(ui, response, items, selected, label, |_, _, _| {})
+}
+
+/// [`menu_pick`], calling `on_row` with each item and its row as it is drawn.
+pub fn menu_pick_with<X>(
+    ui: &mut Ui,
+    response: &egui::Response,
+    items: &[X],
+    selected: impl Fn(&X) -> bool,
+    label: impl Fn(&X) -> String,
+    on_row: impl FnMut(&Ui, &X, &egui::Response),
+) -> Option<usize> {
+    let find = before_menu(ui, response, || items.iter().map(&label).collect());
+    menu(response, &find, |ui| find.list_with(ui, items, selected, label, on_row)).flatten()
+}
+
 /// Searches the open list of dropdown `salt` (the id salt of its combo box): takes the typing and
 /// the keys that belong to the search. Call it before the combo box is shown, because a focused combo
 /// box button takes ↩ to toggle its list before the list gets to see the key. `labels` are the
@@ -400,14 +453,27 @@ pub fn before_enabled(ui: &mut Ui, salt: &str, labels: &[impl AsRef<str>], enabl
 pub fn before_lazy(ui: &mut Ui, salt: &str, labels: impl FnOnce() -> Vec<String>, enabled: &[bool]) -> Filter {
     let id = ui.make_persistent_id(salt).with("search");
     let button = ui.make_persistent_id(egui::IdSalt::new(salt));
+    let open = craft_ui::ComboBox::is_open(ui.ctx(), button);
+    before_at(ui, id, open, labels, enabled)
+}
+
+/// [`before_lazy`] for the menu a dropdown button opens with `egui::Popup::menu(response)`.
+pub fn before_menu(ui: &mut Ui, response: &egui::Response, labels: impl FnOnce() -> Vec<String>) -> Filter {
+    let open = egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(response));
+    before_at(ui, response.id.with("search"), open, labels, &[])
+}
+
+fn before_at(ui: &mut Ui, id: Id, open: bool, labels: impl FnOnce() -> Vec<String>, enabled: &[bool]) -> Filter {
     // A list that is not open starts with nothing typed when it opens.
-    if !craft_ui::ComboBox::is_open(ui.ctx(), button) {
+    if !open {
         ui.data_mut(|d| d.remove::<Search>(id));
         return Filter::default();
     }
     let labels = labels();
     let texts: Vec<&str> = labels.iter().map(String::as_str).collect();
     let mut search: Search = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    // another text field in the list (the custom aspect ratio) keeps what is typed into it
+    let elsewhere = ui.ctx().text_edit_focused() && ui.memory(|m| m.focused()) != Some(crate::text_field::id(FIELD));
     let before = search.clone();
     let mut picked = None;
     // With text typed the field has the keyboard: it edits the text, and only the keys that move the
@@ -415,6 +481,9 @@ pub fn before_lazy(ui: &mut Ui, salt: &str, labels: impl FnOnce() -> Vec<String>
     let editing = search.is_active() || search.composing;
     ui.input_mut(|i| {
         i.events.retain(|event| {
+            if elsewhere {
+                return true;
+            }
             // An IME composing: the field shows from the next frame on, to show the preedit.
             if let Event::Ime(egui::ImeEvent::Preedit { text, .. }) = event {
                 search.composing = !text.is_empty();

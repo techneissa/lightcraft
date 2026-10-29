@@ -97,6 +97,7 @@ pub fn list(ui: &mut Ui, find: &Filter, salt: &str, fixed: &[(String, bool)], pr
             find.highlight(ui, &row, at);
             if row.clicked() {
                 out = Some(choice);
+                ui.close();
             }
         }
     });

@@ -460,13 +460,12 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Overlay")).color(t.text_dim));
         let r = crate::widgets::dropdown(ui, "maskOverlayMode", menu_label(view.label()), t.font(12.5), t.text_label);
-        egui::Popup::menu(&r).show(|ui| {
-            for v in MaskView::ALL {
-                if ui.selectable_label(v == view, menu_label(v.label())).clicked() {
-                    let _ = app.run("view.maskOverlayMode", json!({"mode": v.name()}));
-                }
-            }
-        });
+        if let Some(v) =
+            crate::widgets::dropdown_search::menu_pick(&mut *ui, &r, &MaskView::ALL, |v| *v == view, |v| menu_label(v.label()).to_string())
+                .and_then(|i| MaskView::ALL.get(i))
+        {
+            let _ = app.run("view.maskOverlayMode", json!({"mode": v.name()}));
+        }
     });
     let colored = matches!(view, MaskView::Color | MaskView::ColorOnBw);
     if colored {

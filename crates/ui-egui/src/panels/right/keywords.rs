@@ -257,6 +257,7 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     find.row(ui, &row);
                     if row.clicked() {
                         chosen = Some(i);
+                        ui.close();
                     }
                 }
                 find.no_match(ui);

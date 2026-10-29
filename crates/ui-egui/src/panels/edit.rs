@@ -21,6 +21,7 @@ mod curve;
 mod grading;
 mod histogram;
 mod mixer;
+mod profile_search;
 mod sliders;
 
 use curve::curve_editor;
@@ -130,7 +131,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let max = ui.available_width() - 28.0 - ui.spacing().item_spacing.x;
             let r = crate::widgets::dropdown_within(ui, "profile", crate::i18n::profile_label(&d.profile.id, name), t.font(15.0), t.text_label, max);
             let below = r.rect.bottom();
-            egui::Popup::menu(&r).show(|ui| profile_menu(app, ui, &d, below));
+            let profiles = profile_search::items(app);
+            let find = crate::widgets::dropdown_search::before_menu(ui, &r, || profiles.iter().map(|(_, name)| name.clone()).collect());
+            crate::widgets::dropdown_search::menu(&r, &find, |ui| profile_menu(app, ui, &d, below, &find, &profiles));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if crate::widgets::icon_button(
                     ui,
@@ -199,17 +202,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(crate::i18n::tr("White Balance")).font(t.font(13.0)).color(t.text_dim));
                 let r = crate::widgets::dropdown(ui, "wbMode", crate::i18n::tr(d.wb.mode.label()), t.font(14.0), t.text_label);
-                egui::Popup::menu(&r).show(|ui| {
-                    for m in WbMode::ALL {
-                        if m == WbMode::Custom {
-                            continue;
-                        }
-                        if ui.selectable_label(d.wb.mode == m, m.label()).clicked() {
-                            let mode = serde_json::to_value(m).unwrap_or_default();
-                            let _ = app.run("develop.wb", json!({"mode": mode}));
-                        }
-                    }
-                });
+                let modes: Vec<WbMode> = WbMode::ALL.into_iter().filter(|m| *m != WbMode::Custom).collect();
+                if let Some(m) = crate::widgets::dropdown_search::menu_pick(&mut *ui, &r, &modes, |m| d.wb.mode == *m, |m| m.label().to_string())
+                    .and_then(|i| modes.get(i))
+                {
+                    let mode = serde_json::to_value(m).unwrap_or_default();
+                    let _ = app.run("develop.wb", json!({"mode": mode}));
+                }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let active = app.ui.tool == "wbPicker";
                     if crate::widgets::icon_button(

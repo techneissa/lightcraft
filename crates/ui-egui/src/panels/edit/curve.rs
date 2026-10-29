@@ -403,17 +403,27 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
             let builtin = current.as_ref().is_none_or(|name| all_presets(&app.session).iter().any(|p| p.builtin && &p.name == name));
             let label = crate::i18n::builtin_label(current.as_deref().unwrap_or("Custom"), builtin);
             let r = crate::widgets::dropdown(ui, "curvePreset", label, t.font(12.0), t.text);
-            egui::Popup::menu(&r).show(|ui| {
+            let presets = all_presets(&app.session);
+            let find = crate::widgets::dropdown_search::before_menu(ui, &r, || {
+                presets.iter().map(|p| crate::i18n::builtin_label(&p.name, p.builtin).to_string()).collect()
+            });
+            crate::widgets::dropdown_search::menu(&r, &find, |ui| {
                 ui.set_min_width(180.0);
-                let presets = all_presets(&app.session);
                 let mut user_seen = false;
-                for p in &presets {
-                    if !p.builtin && !user_seen {
+                let all: Vec<usize> = (0..presets.len()).collect();
+                if let Some(p) = find.picked(ui).and_then(|i| presets.get(i)) {
+                    let _ = app.run("curve.applyPreset", json!({"name": p.name}));
+                    ui.close();
+                }
+                for &i in find.options(&all).iter() {
+                    let Some(p) = presets.get(i) else { continue };
+                    if !p.builtin && !user_seen && !find.filtering() {
                         user_seen = true;
                         ui.separator();
                     }
                     let r = ui.selectable_label(current.as_deref() == Some(p.name.as_str()), crate::i18n::builtin_label(&p.name, p.builtin));
                     register(ui, format!("curvePreset:{}", p.name), r.rect);
+                    find.row(ui, &r);
                     if r.clicked() {
                         let _ = app.run("curve.applyPreset", json!({"name": p.name}));
                         ui.close();
@@ -426,6 +436,11 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
                             }
                         });
                     }
+                }
+                find.no_match(ui);
+                // the actions below are not presets: they wait until the search is cleared
+                if find.filtering() {
+                    return;
                 }
                 ui.separator();
                 let shaped = current.as_deref() != Some("Linear");

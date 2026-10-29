@@ -989,6 +989,10 @@ pub fn dropdown_within(ui: &mut Ui, id: &str, text: &str, font: egui::FontId, co
     let (r, resp) = ui.allocate_exact_size(size, Sense::click());
     resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, true, text));
     register(ui, format!("dropdown:{id}"), r);
+    // the menu this button opens owns the keyboard while it is open (typed letters are no shortcuts)
+    if egui::Popup::is_id_open(ui.ctx(), egui::Popup::default_response_id(&resp)) {
+        dropdown_search::mark_open(ui.ctx());
+    }
     let c = if resp.hovered() { t.text } else { color };
     ui.painter().galley(pos2(r.left(), r.center().y - galley.size().y / 2.0), galley, c);
     paint(ui.painter(), Rect::from_center_size(pos2(r.right() - 10.0, r.center().y), vec2(16.0, 16.0)), Icon::ChevronDown, c);

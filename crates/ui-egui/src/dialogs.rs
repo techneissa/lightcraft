@@ -1141,6 +1141,7 @@ fn export_preset_row(
                 find.row(ui, &row);
                 if row.clicked() {
                     chosen = Some(p.name.clone());
+                    ui.close();
                 }
             }
             find.no_match(ui);
