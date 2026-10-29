@@ -38,6 +38,7 @@ pub mod face_tiles;
 mod faces_index;
 #[cfg(not(target_arch = "wasm32"))]
 mod faces_worker;
+pub mod file_trash;
 pub mod files;
 #[cfg(not(target_arch = "wasm32"))]
 mod focus_scan;
@@ -278,6 +279,8 @@ pub struct Session {
     /// Photos whose automatic XMP sidecar write failed (their folder offline, read-only or full), written again by
     /// [`Session::retry_unsaved_sidecars`] once their file is reachable.
     pub(crate) unsaved_sidecars: std::collections::BTreeSet<PhotoId>,
+    /// Moves files to the system Trash (Delete Permanently ▸ Move to Trash); tests swap in a fake.
+    pub(crate) trasher: Arc<dyn file_trash::Trasher>,
     /// AI denoise: the model in use, the photos that have their picture and the work in progress.
     pub(crate) denoise: denoise::State,
     /// Where the host keeps face models (one folder each); `None` where there is no file system (the web).
@@ -473,6 +476,7 @@ impl Session {
             skip_auto_write: false,
             reload_tickets: Default::default(),
             unsaved_sidecars: Default::default(),
+            trasher: Arc::new(file_trash::SystemTrash),
             denoise: Default::default(),
             face_models_dir: None,
             face_downloads: Default::default(),

@@ -59,6 +59,7 @@ proptest = "1"
 bytemuck = { version = "1", features = ["derive"] }
 crc32fast = "1"
 siphasher = "1"
+trash = "5.2" # MIT; moves files to the system Trash (Delete Permanently ▸ Move to Trash); NSFileManager on macOS, no C
 libc = "0.2" # dev-only: process CPU time in benches
 dhat = "0.3" # opt-in heap profiling (lightcraft-cli --features dhat-heap) and heap tests; never in product builds
 
