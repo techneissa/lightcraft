@@ -72,6 +72,12 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
     heading(ui, t, crate::i18n::tr("Culling"));
     check(ui, "settings.autoAdvance", &mut app.ui.auto_advance, "Auto Advance: move to the next photo after rating or flagging");
     check(ui, "settings.confirmDelete", &mut app.ui.settings.confirm_delete, "Confirm before moving photos to Recently Deleted");
+    ui.add_enabled_ui(app.ui.settings.confirm_delete, |ui| {
+        ui.indent("settingsConfirmDeletePickedOnly", |ui| {
+            check(ui, "settings.confirmDeletePickedOnly", &mut app.ui.settings.confirm_delete_picked_only, "Only for picked or starred photos");
+            hint(ui, t, "Rejected and unflagged photos without stars go to Recently Deleted at once; Undo brings them back.");
+        });
+    });
     check(ui, "settings.askBeforeMove", &mut app.ui.settings.ask_before_move, "Confirm before moving photos to another folder on disk");
     row(ui, t, crate::i18n::tr("Delete Permanently"), |ui| {
         use crate::state::DeleteFiles;

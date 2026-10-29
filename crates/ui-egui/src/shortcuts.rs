@@ -688,7 +688,7 @@ fn delete_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
     }
     // in an album, Delete takes the photos out of the album only, as in Lightroom: they
     // stay in the library and their folder (issue #1805)
-    crate::menus::delete_in_album(app, ctx) || crate::menus::confirm_delete(app)
+    crate::panels::dialogs::quick_delete::delete_key(app) || crate::menus::delete_in_album(app, ctx) || crate::menus::confirm_delete(app)
 }
 
 /// Delete removes the selected guide alone; with none selected it removes nothing (the photo itself is never deleted
