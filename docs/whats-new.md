@@ -2,13 +2,24 @@
 
 ## 2026-10-29
 
+### Delete Rejected Photos, and Local Photos Go to the Trash
+- **Photo ▸ Delete Rejected Photos (⌘⌫):** sends the rejected photos in the view you're in (the folder, album or
+  source, as filtered) to Recently Deleted in one go; rejected photos elsewhere stay. One Undo brings them all back. It
+  asks first while "Confirm before moving photos to Recently Deleted" is on, and is greyed out when nothing in view is
+  rejected. ⌫ still sends any selected photo to Recently Deleted, rejected or not.
+- **Photos from Local folders** (browsed, never added to the library) always have their files moved to the Trash when
+  you delete them permanently: keeping their files would only bring them back the next time you open the folder. With
+  Ask Each Time they get a short "Move 3 Photos to the Trash?" check.
+- The dialog's **Remove from Library** button, and the setting's **Remove from Library Only** choice, are now **Keep
+  Files**: LightCraft forgets library photos and their files stay in the folders.
+
 ### Delete Permanently Asks About the Files
 - Delete Permanently and Empty Recently Deleted used to remove photos from the library only: the files stayed in their
   folders, and opening a folder again showed them as new photos, so they looked restored.
 - Now a dialog asks: **Move to Trash** sends the photos' files and XMP sidecars to the system Trash (you can get them
-  back from there), **Remove from Library** keeps the files where they are, **Cancel** (or Esc) does nothing.
+  back from there), **Keep Files** keeps them where they are, **Cancel** (or Esc) does nothing.
 - Settings ▸ General ▸ Culling ▸ **Delete Permanently** picks the answer once: Ask Each Time (the default), Move Files
-  to Trash or Remove from Library Only.
+  to Trash or Keep Files.
 - A file another photo still uses stays: a virtual copy's file while its master stays, a raw + JPEG pair's shared
   sidecar while the other half stays. A file that can't be moved is reported and its photo stays in the library.
 - Undo brings back the photos, not the files: get the files back from the Trash. Agents pass `files: "trash"` to

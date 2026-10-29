@@ -3,7 +3,9 @@
 //!
 //! `photo.deletePermanently` and `library.emptyRecentlyDeleted` take `files: "keep" | "trash"`
 //! (default `keep`, so an agent never removes a file by accident). `trash` moves each photo's file
-//! and its XMP sidecars to the Trash, so they can be got back from Finder. A file that a photo
+//! and its XMP sidecars to the Trash, so they can be got back from Finder. `keep` still moves the
+//! files of Local photos (browsed from a folder, never added to the library): they have no library
+//! to be removed from, and the folder would show the file again. A file that a photo
 //! staying in the library still uses is never moved: a virtual copy shares its master's file, and
 //! the two halves of a raw + JPEG pair may share the stem sidecar (`IMG_0001.xmp`).
 //!
@@ -142,14 +144,21 @@ impl Session {
     }
 
     /// Remove photos `ids` from the library for good (one undo step), and with
-    /// [`FilesChoice::Trash`] move their files to the Trash first. A photo whose file could not be
+    /// [`FilesChoice::Trash`] move their files to the Trash first; Local photos' files always go
+    /// (see the module docs). A photo whose file could not be
     /// moved stays in the library. `{deleted, trashed: [path], failed: [[path, error]], note?}`.
     pub(crate) fn delete_permanently_with(&mut self, ids: &[PhotoId], files: FilesChoice, label: &str) -> Result<Value> {
         let mut trashed: Vec<String> = Vec::new();
         let mut failed: Vec<(String, String)> = Vec::new();
         let mut blocked: HashSet<PhotoId> = HashSet::new();
-        if files == FilesChoice::Trash {
-            for (file, owners) in plan(&self.catalog, ids) {
+        // `trash`: every photo's files; `keep`: only the Local photos' (a library photo's files stay, so they count
+        // as files of photos staying when `plan` looks for a shared one)
+        let to_trash: Vec<PhotoId> = match files {
+            FilesChoice::Trash => ids.to_vec(),
+            FilesChoice::Keep => ids.iter().copied().filter(|id| self.catalog.photo(*id).is_some_and(|p| p.local)).collect(),
+        };
+        if !to_trash.is_empty() {
+            for (file, owners) in plan(&self.catalog, &to_trash) {
                 // (a name spelt another way for the same file, such as `.XMP` for `.xmp` on a
                 // case-insensitive disk, went with the first)
                 let meta = match std::fs::symlink_metadata(&file) {

@@ -211,6 +211,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::SmartPreviewsForEditing { .. } => crate::smart_editing::build(app),
         // on a worker: a large library would freeze the window
         Dialog::MacosForCamera { photo, .. } => crate::macos_colour::job::start(app, *photo, true),
+        Dialog::ConfirmDeleteRejected { .. } => super::delete_rejected::confirm(app),
         d @ Dialog::DeletePermanently { .. } => super::delete_permanently::confirm(app, d),
         Dialog::MovePhotos { ids, folder, dont_ask, library, .. } => {
             // another library opened meanwhile (from the menu bar, an agent): these numbers are

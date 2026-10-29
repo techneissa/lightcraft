@@ -660,7 +660,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Empty Recently Deleted",
             ["Photo"],
             None,
-            "{files?: \"keep\" | \"trash\"} → {deleted, trashed: [path], failed: [[path, error]], note?} — removes every photo in Recently Deleted from the library; files: \"keep\" (default) leaves the files on disk, \"trash\" moves them and their XMP sidecars to the system Trash (not a file another photo in the library still uses; a photo whose file can't be moved stays; undo brings back the photos, not the files)",
+            "{files?: \"keep\" | \"trash\"} → {deleted, trashed: [path], failed: [[path, error]], note?} — removes every photo in Recently Deleted from the library; files: \"keep\" (default) leaves the files of library photos on disk, \"trash\" moves them and their XMP sidecars to the system Trash; the files of Local photos (browsed from a folder, never in the library) always go to the Trash, either way (not a file another photo in the library still uses; a photo whose file can't be moved stays; undo brings back the photos, not the files)",
             always,
             |s, p| {
                 let files = crate::file_trash::FilesChoice::from_params(p, "library.emptyRecentlyDeleted")?;
@@ -678,7 +678,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Delete Permanently",
             ["Photo"],
             None,
-            "{ids?, files?: \"keep\" | \"trash\"} → {deleted, trashed: [path], failed: [[path, error]], note?} — removes the photos from the library; files: \"keep\" (default) leaves the files on disk, \"trash\" moves them and their XMP sidecars to the system Trash (not a file another photo in the library still uses; a photo whose file can't be moved stays; undo brings back the photos, not the files)",
+            "{ids?, files?: \"keep\" | \"trash\"} → {deleted, trashed: [path], failed: [[path, error]], note?} — removes the photos from the library; files: \"keep\" (default) leaves the files of library photos on disk, \"trash\" moves them and their XMP sidecars to the system Trash; the files of Local photos (browsed from a folder, never in the library) always go to the Trash, either way (not a file another photo in the library still uses; a photo whose file can't be moved stays; undo brings back the photos, not the files)",
             has_selection,
             |s, p| {
                 let files = crate::file_trash::FilesChoice::from_params(p, "photo.deletePermanently")?;

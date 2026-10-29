@@ -303,9 +303,11 @@ pub enum Dialog {
         names: Vec<String>,
     },
     /// Delete Permanently / Empty Recently Deleted with Settings ▸ Delete Permanently on Ask Each
-    /// Time: `count` photos go from the library; `files` is "trash" (Move to Trash) or "keep".
+    /// Time: `count` photos go from the library, `local` of them Local (their files always go to the
+    /// Trash); `files` is "trash" (Move to Trash) or "keep" (Keep Files).
     DeletePermanently {
         count: usize,
+        local: usize,
         empty: bool,
         files: String,
     },
@@ -335,6 +337,10 @@ pub enum Dialog {
         camera: String,
         count: usize,
         skipped: usize,
+    },
+    /// Confirm Photo ▸ Delete Rejected Photos: the `count` rejected photos of the view.
+    ConfirmDeleteRejected {
+        count: usize,
     },
     /// Confirm moving photos dropped on a Folders row into that folder on disk
     /// (`photo.moveToFolder`). `name`: the folder's name, as the question says it.

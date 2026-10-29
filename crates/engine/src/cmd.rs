@@ -146,6 +146,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         let mut v = Vec::new();
         v.extend(edit::specs());
         v.extend(library::specs());
+        v.extend(library::delete_rejected_specs());
         v.extend(develop::specs());
         v.extend(color::specs());
         v.extend(curves::specs());

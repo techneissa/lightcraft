@@ -15,6 +15,7 @@ mod crop_rotate;
 mod crop_tool;
 mod curve;
 mod date_picker;
+mod delete_local_rejected;
 mod delete_permanently;
 mod denoise_auto;
 mod dialog_fit;

@@ -10,6 +10,7 @@ mod color;
 mod constrain_crop;
 mod crop_angle;
 mod crop_aspect;
+mod delete_local_rejected;
 mod denoise;
 mod export;
 mod face_models;

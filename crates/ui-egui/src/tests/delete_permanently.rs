@@ -1,5 +1,5 @@
 //! Delete Permanently asks what to do with the photos' files (Settings ▸ General ▸ Delete
-//! Permanently): Move to Trash, Remove from Library, or Cancel. A fake Trash stands in.
+//! Permanently): Move to Trash, Keep Files, or Cancel. A fake Trash stands in.
 
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -61,14 +61,14 @@ fn ask(h: &mut Headless, id: &str) {
 }
 
 #[test]
-fn it_asks_by_default_and_remove_from_library_leaves_the_files() {
+fn it_asks_by_default_and_keep_files_leaves_the_files() {
     let (mut h, fake, dir) = app("remove");
     assert_eq!(h.app.ui.settings.delete_files, DeleteFiles::Ask);
     ask(&mut h, "photo.deletePermanently");
-    assert_eq!(h.app.ui.dialog, Some(Dialog::DeletePermanently { count: 2, empty: false, files: "trash".into() }));
+    assert_eq!(h.app.ui.dialog, Some(Dialog::DeletePermanently { count: 2, local: 0, empty: false, files: "trash".into() }));
     assert_eq!(crate::panels::dialogs::delete_permanently::title(h.app.ui.dialog.as_ref().unwrap()), "Delete 2 Photos Permanently?");
     assert_eq!(h.app.session.catalog.len(), 2, "nothing happens before the answer");
-    click(&mut h, "button:dialogRemoveFromLibrary");
+    click(&mut h, "button:dialogKeepFiles");
     assert_eq!(h.app.ui.dialog, None);
     assert!(h.app.session.catalog.is_empty());
     assert!(dir.join("a.png").exists() && dir.join("b.png").exists());
@@ -109,7 +109,7 @@ fn cancel_and_escape_change_nothing() {
 fn empty_recently_deleted_asks_too() {
     let (mut h, fake, dir) = app("empty");
     ask(&mut h, "library.emptyRecentlyDeleted");
-    assert_eq!(h.app.ui.dialog, Some(Dialog::DeletePermanently { count: 2, empty: true, files: "trash".into() }));
+    assert_eq!(h.app.ui.dialog, Some(Dialog::DeletePermanently { count: 2, local: 0, empty: true, files: "trash".into() }));
     click(&mut h, "button:dialogOk");
     assert!(h.app.session.catalog.is_empty());
     assert_eq!(fake.0.lock().unwrap().len(), 2);

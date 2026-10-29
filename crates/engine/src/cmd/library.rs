@@ -7,12 +7,14 @@ use serde_json::{Value, json};
 use super::{CommandSpec, always, bad, bool_or, cmd, has_active, has_library_selection, has_selection, ok, str_param};
 use crate::{LibrarySource, Result, Selection, Session};
 
+mod delete_rejected;
 mod filters;
 mod gps;
 mod import;
 mod selection;
 mod specs;
 
+pub(crate) use delete_rejected::specs as delete_rejected_specs;
 pub(crate) use filters::covers_other_disks;
 pub use import::{AutoImportPoll, ImportRequest, import_batch_done, import_params, list_auto_import_folder, poll_auto_import_folder};
 pub use specs::specs;

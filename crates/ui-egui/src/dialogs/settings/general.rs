@@ -80,11 +80,17 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
         choices(
             ui,
             "settingsDeleteFiles",
-            &[(DeleteFiles::Ask, "Ask Each Time"), (DeleteFiles::Trash, "Move Files to Trash"), (DeleteFiles::Keep, "Remove from Library Only")],
+            &[(DeleteFiles::Ask, "Ask Each Time"), (DeleteFiles::Trash, "Move Files to Trash"), (DeleteFiles::Keep, "Keep Files")],
             &mut app.ui.settings.delete_files,
         );
     });
-    hint(ui, t, crate::i18n::tr("What Delete Permanently and Empty Recently Deleted do with the photos' files."));
+    hint(
+        ui,
+        t,
+        crate::i18n::tr(
+            "What Delete Permanently and Empty Recently Deleted do with the photos' files. Keep Files only forgets the photos; Local photos always go to the Trash.",
+        ),
+    );
     heading(ui, t, crate::i18n::tr("Dialogs"));
     check(ui, "settings.closeDialogsOutside", &mut app.ui.settings.close_dialogs_outside, "Close a dialog by clicking outside it");
     heading(ui, t, crate::i18n::tr("External Editing"));

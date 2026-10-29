@@ -291,6 +291,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "album.removePhotos",
             "photo.delete",
+            "photo.deleteRejected",
             "photo.restore",
             "photo.deletePermanently",
         ],
@@ -827,7 +828,14 @@ fn node(app: &LightcraftApp, e: &MenuEntry) -> MenuNode {
         "photo.delete" if matches!(app.session.source, lightcraft_engine::LibrarySource::Album(_)) => None,
         _ => shortcut,
     };
-    item(&e.id, Value::Null, live_label(app, &e.id, &e.label), shortcut, e.enabled, checked(app, &e.id))
+    item(
+        &e.id,
+        Value::Null,
+        live_label(app, &e.id, &e.label),
+        shortcut,
+        e.enabled && crate::panels::dialogs::delete_rejected::enabled(app, &e.id),
+        checked(app, &e.id),
+    )
 }
 
 /// Drop leading, trailing and doubled separators (also inside submenus) and empty submenus.
@@ -939,6 +947,9 @@ pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Valu
         crate::panels::compare::target_active(app, &mut params);
     }
     if let Some(r) = crate::panels::dialogs::delete_permanently::run_item(app, id, &mut params) {
+        return r;
+    }
+    if let Some(r) = crate::panels::dialogs::delete_rejected::run_item(app, id) {
         return r;
     }
     if id == "photo.delete" && crate::menus::confirm_delete(app) {
