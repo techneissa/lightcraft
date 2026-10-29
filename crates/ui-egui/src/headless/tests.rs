@@ -97,6 +97,7 @@ use super::*;
 use std::sync::Arc;
 
 mod loupe_stand_in;
+mod view_colour;
 
 /// The pretend host has a clipboard, as a desktop does: text the UI copies lands in it, and a
 /// cut, copy or paste request (from a context menu) comes back as that event on the next frame.

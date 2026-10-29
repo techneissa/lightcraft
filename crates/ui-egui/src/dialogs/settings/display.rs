@@ -91,6 +91,8 @@ pub(super) fn interface_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Toke
         );
     });
     check(ui, "settings.showFilenames", &mut app.ui.show_filenames, "Square Grid: show file names and formats");
+    check(ui, "settings.dimRejected", &mut app.ui.settings.dim_rejected, "Dim Rejected Photos");
+    hint(ui, t, crate::i18n::tr("Rejected photos are dimmed in the grid only; Compare, Survey and the Detail view show them as they are."));
     heading(ui, t, crate::i18n::tr("Keywords"));
     row(ui, t, crate::i18n::tr("Keywords of the selection"), |ui| {
         use crate::state::KeywordChips as K;
