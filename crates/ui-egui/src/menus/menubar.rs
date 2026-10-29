@@ -938,6 +938,9 @@ pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Valu
     if culling_cmd {
         crate::panels::compare::target_active(app, &mut params);
     }
+    if let Some(r) = crate::panels::dialogs::delete_permanently::run_item(app, id, &mut params) {
+        return r;
+    }
     if id == "photo.delete" && crate::menus::confirm_delete(app) {
         return Ok(Value::Null);
     }

@@ -129,6 +129,9 @@ pub struct AppSettings {
     /// Ask before photos dropped on a Folders row move there on disk (the dialog's "Don't ask
     /// again" turns it off).
     pub ask_before_move: bool,
+    /// What Delete Permanently does with the photos' files: ask, move them to the Trash, or leave them.
+    #[serde(deserialize_with = "lenient")]
+    pub delete_files: super::DeleteFiles,
     /// A click on the dimmed backdrop around a dialog closes it, like Esc (off: a stray click
     /// never throws away a dialog's choices).
     pub close_dialogs_outside: bool,
@@ -238,6 +241,7 @@ impl Default for AppSettings {
             startup_view: StartupView::Last,
             confirm_delete: true,
             ask_before_move: true,
+            delete_files: super::DeleteFiles::Ask,
             close_dialogs_outside: false,
             import_dropped_directly: false,
             gpu: true,

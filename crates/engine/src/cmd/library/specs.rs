@@ -660,29 +660,37 @@ pub fn specs() -> Vec<CommandSpec> {
             "Empty Recently Deleted",
             ["Photo"],
             None,
-            "{} → {deleted} — removes every photo in Recently Deleted from the library (files on disk stay)",
+            "{files?: \"keep\" | \"trash\"} → {deleted, trashed: [path], failed: [[path, error]], note?} — removes every photo in Recently Deleted from the library; files: \"keep\" (default) leaves the files on disk, \"trash\" moves them and their XMP sidecars to the system Trash (not a file another photo in the library still uses; a photo whose file can't be moved stays; undo brings back the photos, not the files)",
             always,
-            |s, _| {
+            |s, p| {
+                let files = crate::file_trash::FilesChoice::from_params(p, "library.emptyRecentlyDeleted")?;
                 let ids: Vec<PhotoId> = s.catalog.photos().filter(|p| p.deleted).map(|p| p.id).collect();
                 if ids.is_empty() {
-                    return Ok(json!({"deleted": 0}));
+                    return Ok(json!({"deleted": 0, "trashed": [], "failed": []}));
                 }
-                let op = s.catalog.delete_photos_permanently_ops(&ids);
-                s.commit("Empty Recently Deleted", op)?;
+                let r = s.delete_permanently_with(&ids, files, "Empty Recently Deleted")?;
                 s.selection = Selection::default();
-                Ok(json!({"deleted": ids.len()}))
+                Ok(r)
             }
         ),
-        cmd!("photo.deletePermanently", "Delete Permanently", ["Photo"], None, "{ids?}", has_selection, |s, p| {
-            let before = s.visible_cloned();
-            let t = s.targets(p)?;
-            // before the inverse ops are taken, so undo brings the photo back with its edit
-            s.end_interaction()?;
-            let op = s.catalog.delete_photos_permanently_ops(&t);
-            s.commit("Delete Permanently", op)?;
-            select_after_deletion(s, &before);
-            Ok(json!({"deleted": t.len()}))
-        }),
+        cmd!(
+            "photo.deletePermanently",
+            "Delete Permanently",
+            ["Photo"],
+            None,
+            "{ids?, files?: \"keep\" | \"trash\"} → {deleted, trashed: [path], failed: [[path, error]], note?} — removes the photos from the library; files: \"keep\" (default) leaves the files on disk, \"trash\" moves them and their XMP sidecars to the system Trash (not a file another photo in the library still uses; a photo whose file can't be moved stays; undo brings back the photos, not the files)",
+            has_selection,
+            |s, p| {
+                let files = crate::file_trash::FilesChoice::from_params(p, "photo.deletePermanently")?;
+                let before = s.visible_cloned();
+                let t = s.targets(p)?;
+                // before the inverse ops are taken, so undo brings the photo back with its edit
+                s.end_interaction()?;
+                let r = s.delete_permanently_with(&t, files, "Delete Permanently")?;
+                select_after_deletion(s, &before);
+                Ok(r)
+            }
+        ),
         // ---- metadata
         cmd!(
             "photo.setMeta",

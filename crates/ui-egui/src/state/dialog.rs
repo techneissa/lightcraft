@@ -302,6 +302,13 @@ pub enum Dialog {
     DeleteEffects {
         names: Vec<String>,
     },
+    /// Delete Permanently / Empty Recently Deleted with Settings ▸ Delete Permanently on Ask Each
+    /// Time: `count` photos go from the library; `files` is "trash" (Move to Trash) or "keep".
+    DeletePermanently {
+        count: usize,
+        empty: bool,
+        files: String,
+    },
     /// Confirm moving photos to Recently Deleted.
     ConfirmDelete {
         count: usize,

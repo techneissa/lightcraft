@@ -2,10 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
+mod delete_files;
 mod dialog;
 mod settings;
 mod view;
 
+pub use delete_files::DeleteFiles;
 pub use dialog::{Dialog, NameEdit, SyncCounts, default_preset_groups};
 pub use settings::{
     AppSettings, AppearanceMode, DarkTheme, EditFile, EditFormat, EditSpace, GridBadges, KeywordChips, LOUPE_EDGE_CEILING, LOUPE_EDGE_STEP,

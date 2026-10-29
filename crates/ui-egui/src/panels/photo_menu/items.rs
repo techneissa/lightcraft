@@ -487,7 +487,7 @@ fn delete(app: &mut LightcraftApp, ui: &mut egui::Ui, text: String) {
             let _ = app.run("photo.restore", json!({}));
         }
         if ui.button(crate::i18n::tr("Delete Permanently")).clicked() {
-            let _ = app.run("photo.deletePermanently", json!({}));
+            let _ = crate::menubar::run_item(app, "photo.deletePermanently", json!({}));
         }
     } else {
         let delete = ui.button(text);

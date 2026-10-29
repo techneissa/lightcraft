@@ -1532,8 +1532,10 @@ fn context_menu_delete(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if ui.button(crate::i18n::tr("Restore")).clicked() {
             let _ = app.run("photo.restore", json!({}));
         }
-        if ui.button(crate::i18n::tr("Delete Permanently")).clicked() {
-            let _ = app.run("photo.deletePermanently", json!({}));
+        let permanently = ui.button(crate::i18n::tr("Delete Permanently"));
+        register(ui, "button:contextDeletePermanently", permanently.rect);
+        if permanently.clicked() {
+            let _ = crate::menubar::run_item(app, "photo.deletePermanently", json!({}));
         }
     } else {
         let delete = ui.button(crate::i18n::tr("Delete Photo"));

@@ -2,6 +2,18 @@
 
 ## 2026-10-29
 
+### Delete Permanently Asks About the Files
+- Delete Permanently and Empty Recently Deleted used to remove photos from the library only: the files stayed in their
+  folders, and opening a folder again showed them as new photos, so they looked restored.
+- Now a dialog asks: **Move to Trash** sends the photos' files and XMP sidecars to the system Trash (you can get them
+  back from there), **Remove from Library** keeps the files where they are, **Cancel** (or Esc) does nothing.
+- Settings ▸ General ▸ Culling ▸ **Delete Permanently** picks the answer once: Ask Each Time (the default), Move Files
+  to Trash or Remove from Library Only.
+- A file another photo still uses stays: a virtual copy's file while its master stays, a raw + JPEG pair's shared
+  sidecar while the other half stays. A file that can't be moved is reported and its photo stays in the library.
+- Undo brings back the photos, not the files: get the files back from the Trash. Agents pass `files: "trash"` to
+  `photo.deletePermanently` or `library.emptyRecentlyDeleted` (the default, `"keep"`, never removes a file).
+
 ### Type to search in dropdown lists
 - Open a dropdown and start typing: the list narrows to the options that match, ignoring case (names that start with
   your letters first, then names with a word that starts with them, then names that contain them). ↑ and ↓ move over

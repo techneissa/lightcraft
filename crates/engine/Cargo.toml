@@ -49,6 +49,8 @@ lightcraft-segment = { workspace = true, optional = true }
 lightcraft-fetch = { workspace = true }
 # capture-time parsing for face recognition (native only)
 chrono = { workspace = true }
+# Delete Permanently can move the files to the system Trash (no Trash in the browser)
+trash = { workspace = true }
 
 [features]
 # Test-only hooks for the crates that test against the engine (a dev-dependency feature; never enabled in a product build).

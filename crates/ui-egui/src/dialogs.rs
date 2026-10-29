@@ -11,6 +11,7 @@ use lightcraft_engine::export::{ExportOptions, Resize};
 
 mod confirm;
 mod cull;
+pub(crate) mod delete_permanently;
 mod export;
 mod frame;
 mod rename;
@@ -157,6 +158,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             Dialog::Print => 1100.0,
             Dialog::FaceModel { .. } => 460.0,
             Dialog::LightroomCatalog { .. } => 440.0,
+            Dialog::DeletePermanently { .. } => 500.0,
             Dialog::LightroomDestination { .. } => 480.0,
             Dialog::ManageEffects { .. } => 560.0,
             _ => 380.0,
@@ -181,7 +183,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             let row_w = ui.available_width().max(ui.min_rect().width()).max(1.0);
             let row_h = ui.spacing().interact_size.y;
             ui.allocate_ui_with_layout(egui::vec2(row_w, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                button_row(app, ui, &dlg, &mut close, &mut confirm);
+                button_row(app, ui, &mut dlg, &mut close, &mut confirm);
                 // (the Cancel button only: Esc and a click outside close the window without answering)
                 left_by_button = close;
             });
@@ -240,6 +242,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
 
 /// The title of a dialog.
 fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
+    if matches!(dlg, Dialog::DeletePermanently { .. }) {
+        return delete_permanently::title(dlg);
+    }
     match dlg {
         Dialog::TextPrompt { title, .. } => title.as_str(),
         Dialog::NewAlbum { folder: true, .. } => "Create Folder",
@@ -283,6 +288,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::LocalProfileSwitch { .. } => "Local Camera Profile",
         Dialog::SmartPreviewsForEditing { .. } => "Smart Previews",
         Dialog::MacosForCamera { .. } => "macOS Colour",
+        Dialog::DeletePermanently { .. } => "Delete Permanently",
         Dialog::MovePhotos { .. } => "Move Photos",
         Dialog::LightroomCatalog { .. } => "Lightroom Classic Catalog",
         Dialog::LightroomDestination { .. } => "Import Lightroom Catalog",
@@ -364,6 +370,7 @@ fn ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool, sam: &SamSta
         Dialog::LocalProfileSwitch { .. } => "Switch",
         Dialog::SmartPreviewsForEditing { .. } => "Build Smart Previews",
         Dialog::MacosForCamera { .. } => "Apply",
+        Dialog::DeletePermanently { .. } => "Move to Trash",
         Dialog::SaveEffect { .. } => "Create",
         Dialog::MovePhotos { .. } => "Move",
         // (not "Merge": that is photo merging, HDR / panorama, in some languages)
@@ -414,7 +421,7 @@ fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
 }
 
 /// The row of buttons under a dialog: Cancel and the confirm; `close` and `confirm` are set when one is clicked.
-fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut bool, confirm: &mut bool) {
+fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog, close: &mut bool, confirm: &mut bool) {
     let informational = is_informational(dlg);
     let sam = SamState::of(app);
     let cancel = cancel_label(dlg, &sam);
@@ -442,10 +449,12 @@ fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut 
     if !ok.is_empty() {
         buttons_w += ok_button.desired_size(ui).x;
     }
+    buttons_w += delete_permanently::extra_width(ui, dlg);
     ui.add_space((ui.available_width() - buttons_w).max(0.0));
     if !informational && cancel_button.show(ui).clicked() {
         *close = true;
     }
+    delete_permanently::extra_button(ui, dlg, confirm);
     let r = (!ok.is_empty()).then(|| ok_button.show(ui));
     if r.is_some_and(|r| r.clicked()) {
         if informational {
@@ -1901,6 +1910,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
                     .color(t.text_dim),
             );
         }
+        Dialog::DeletePermanently { .. } => delete_permanently::body(ui, t, dlg),
         Dialog::MovePhotos { .. } => move_photos_body(ui, t, dlg),
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::body(app, ui, d),
         Dialog::LightroomCatalog { .. } => lightroom_catalog_body(app, ui, t, dlg),

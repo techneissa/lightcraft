@@ -130,6 +130,7 @@ fn permanently_deleting_photos_keeps_the_current_view_neighbour_in_sight() {
             let scroll = |h: &Headless| if view == "detail" { film_x(h) } else { grid_y(h) };
             let before = scroll(&h);
             assert!(before > 600.0, "selection is far from the beginning: {view}, {before}");
+            h.app.ui.settings.delete_files = crate::state::DeleteFiles::Keep;
             let r = h.request("ui.menu.invoke", json!({"id": "photo.deletePermanently"}), T);
             assert_eq!(r["ok"], true, "{r}");
             idle(&mut h, 60);
