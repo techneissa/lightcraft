@@ -17,9 +17,17 @@ pub(crate) fn run_item(app: &mut LightcraftApp, id: &str) -> Option<Result<Value
     if id != ID || !app.ui.settings.confirm_delete || app.session.source == lightcraft_engine::LibrarySource::RecentlyDeleted {
         return None;
     }
-    let count = app.session.rejected_in_view().len();
+    let rejected = app.session.rejected_in_view();
+    let count = rejected.len();
     if count == 0 {
         return None;
+    }
+    if super::quick_delete::skips_confirm(app, &rejected) {
+        let r = app.run(ID, json!({}));
+        if r.is_ok() {
+            super::quick_delete::say_moved(app, count);
+        }
+        return Some(r);
     }
     app.ui.dialog = Some(Dialog::ConfirmDeleteRejected { count });
     Some(Ok(Value::Null))

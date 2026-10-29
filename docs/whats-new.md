@@ -2,6 +2,14 @@
 
 ## 2026-10-29
 
+### Faster Deleting While You Cull
+- **⌫ in Recently Deleted** now deletes the selected photos permanently, with the same dialog and setting as Delete
+  Permanently (it used to offer to move them to Recently Deleted, where they already were).
+- **Settings ▸ General ▸ Culling ▸ Only for picked or starred photos** (under "Confirm before moving photos to Recently
+  Deleted", off by default): with it on, rejected and unflagged photos without stars go to Recently Deleted at once,
+  with a short message and Undo to bring them back. If any photo you delete is picked or has stars, the check still
+  shows. Delete Rejected Photos (⌘⌫) follows the same rule.
+
 ### Delete Rejected Photos, and Local Photos Go to the Trash
 - **Photo ▸ Delete Rejected Photos (⌘⌫):** sends the rejected photos in the view you're in (the folder, album or
   source, as filtered) to Recently Deleted in one go; rejected photos elsewhere stay. One Undo brings them all back. It

@@ -15,6 +15,7 @@ pub(crate) mod delete_permanently;
 pub(crate) mod delete_rejected;
 mod export;
 mod frame;
+pub(crate) mod quick_delete;
 mod rename;
 mod sam_model;
 

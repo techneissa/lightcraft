@@ -952,6 +952,9 @@ pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Valu
     if let Some(r) = crate::panels::dialogs::delete_rejected::run_item(app, id) {
         return r;
     }
+    if let Some(r) = crate::panels::dialogs::quick_delete::run_item(app, id) {
+        return r;
+    }
     if id == "photo.delete" && crate::menus::confirm_delete(app) {
         return Ok(Value::Null);
     }

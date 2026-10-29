@@ -36,6 +36,9 @@ pub fn confirm_delete(app: &mut LightcraftApp) -> bool {
     if count == 0 {
         return false;
     }
+    if crate::panels::dialogs::quick_delete::delete_selection_now(app) {
+        return true;
+    }
     app.ui.dialog = Some(Dialog::ConfirmDelete { count });
     true
 }

@@ -126,6 +126,8 @@ pub struct AppSettings {
     /// `confirmDelete: false` by default (#1239).
     #[serde(rename = "askBeforeDelete")]
     pub confirm_delete: bool,
+    /// With the delete confirmation on, ask only when a picked or starred photo is among those deleted.
+    pub confirm_delete_picked_only: bool,
     /// Ask before photos dropped on a Folders row move there on disk (the dialog's "Don't ask
     /// again" turns it off).
     pub ask_before_move: bool,
@@ -240,6 +242,7 @@ impl Default for AppSettings {
             at_launch: LaunchLibrary::Last,
             startup_view: StartupView::Last,
             confirm_delete: true,
+            confirm_delete_picked_only: false,
             ask_before_move: true,
             delete_files: super::DeleteFiles::Ask,
             close_dialogs_outside: false,
