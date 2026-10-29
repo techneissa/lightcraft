@@ -29,7 +29,7 @@ cited here still exists. Formerly docs/parity.md.
 | A. Import (IMP) | 12 | 4 | 1 | 1 | 4/6 (67%) | 5/6 (83%) |
 | B. Library management (LIB) | 22 | 2 | 1 | 2 | 9/9 (100%) | 9/9 (100%) |
 | C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
-| D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
+| D. Search & filter (FILT) | 12 | 1 | 1 | 0 | 4/4 (100%) | 5/5 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
 | F. Edit panel — global adjustments (EDIT) | 44 | 2 | 3 | 1 | 28/28 (100%) | 13/14 (93%) |
 | G. Profiles (PROF) | 7 | 4 | 3 | 0 | 3/4 (75%) | 3/6 (50%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 85 | 1 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 25 | 21 | 8 | — | 24/26 (92%) |
-| **Total** | 426 | 70 | 57 | 35 | 196/203 (97%) | 146/165 (88%) |
+| **Total** | 427 | 70 | 57 | 35 | 196/203 (97%) | 147/166 (89%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 553 in-scope rows — P0 98.3% of 203 · P1 93.3% of 165 · P2 57.9% of 184.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 554 in-scope rows — P0 98.3% of 203 · P1 93.4% of 166 · P2 57.9% of 184.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -149,8 +149,9 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 |---|---|---|---|---|---|
 | LR-FILT-SEARCH-META | Text search | P0 | ✅ | `cmd:library.filter` (`text`), `crates/ui-egui/src/panels/topbar.rs`, `crates/catalog/src/query.rs` | fielded tokens (`rating:3`, `iso:>800`, `camera:…`); plain words also match the people named on faces; double quotes keep several words in one token (`person:"Jane Doe"`, `"jane doe"`, issue #1449); no suggestions dropdown |
 | LR-FILT-SEARCH-AI | Natural-language search | P2 | ⬜ | | |
-| LR-FILT-RATING | Rating filter | P0 | ✅ | `cmd:library.filter` (`rating`, `ratingOp`), `crates/ui-egui/src/panels/filterbar.rs` | ≥ / = / ≤ stars in the filter bar (`cmd:view.filterBar`) |
-| LR-FILT-FLAG | Flag filter | P0 | ✅ | `cmd:library.filter` (`flag`), `crates/ui-egui/src/panels/filterbar.rs` | picked / rejected / unflagged (one at a time) |
+| LR-FILT-RATING | Rating filter | P0 | ✅ | `cmd:library.filter` (`rating`, `ratingOp`), `crates/ui-egui/src/panels/filterbar.rs` | ≥ / = / ≤ stars in the filter bar (`cmd:view.filterBar`); the bottom bar's Stars dropdown sets the `ratings` set (LR-FILT-QUICK) and the filter bar shows it beside its stars |
+| LR-FILT-FLAG | Flag filter | P0 | ✅ | `cmd:library.filter` (`flag`), `crates/ui-egui/src/panels/filterbar.rs` | picked / rejected / unflagged; several can be on at once (`flags`, LR-FILT-QUICK) |
+| LR-FILT-QUICK | Quick filters (bottom bar) | P1 | ✅ | `cmd:library.filter` (`ratings`, `flags`), `crates/ui-egui/src/panels/quick_filters.rs`, `crates/catalog/src/quick_filter.rs` | next to the thumbnail slider: a Stars dropdown (Unrated, 1★ … 5★ ticked in any mix, the menu stays open) and Picked / Rejected / Unflagged buttons; one group is OR, the groups AND, nothing chosen filters nothing; ✕ or right-click Clear Filters resets both; one button in a narrower bar and in Detail / Compare; same state as the filter bar (setting the range clears the set and the other way round); works in Local folders. Widget ids `quickfilter:stars`, `quickfilter:star:0..5`, `quickfilter:flag:pick|reject|none`, `quickfilter:clear`, `icon:quickFilters` |
 | LR-FILT-LABEL | Colour-label filter | P1 | ✅ | `cmd:library.filter` (`label`), `crates/ui-egui/src/panels/filterbar.rs` | one label at a time; no “no label” choice |
 | LR-FILT-TYPE | Type / edited filter | P1 | ✅ | `cmd:library.filter` (`kind`, `merged`, `edited`), `crates/ui-egui/src/panels/filterbar.rs`, `crates/catalog/src/query.rs` (`merged_kind`) | photos / raw / videos / HDR / panoramas / HDR panoramas (merge results by name), edited / unedited; no depth kind |
 | LR-FILT-KEYWORD | Keyword filter | P1 | ✅ | `cmd:library.filter` (`keyword`), `crates/ui-egui/src/panels/filterbar.rs` | keyword picker |
@@ -809,6 +810,7 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-10-29 | minor | LR-FILT-QUICK (✅, new): quick filters in the bottom bar — a Stars dropdown and flag buttons next to the thumbnail slider, `library.filter` `ratings` / `flags` sets that the filter bar shares |
 | 2026-10-29 | minor | LR-BEHAV-DROPDOWN-SEARCH (new): typing in an open dropdown list narrows it (label starts, word starts, substrings), ↑/↓ move over the matches, Return or a click picks, Esc clears then closes, "No match"; an open list owns the keyboard (shortcuts and the held Backslash stand down); preset pickers search all presets; the menus of the borderless dropdown buttons search too (Profile, White Balance, Aspect Ratio, Point Curve, Tool / Mask Overlay, Filter Presets, filter bar pickers); Zoom has no search but owns the keyboard while open; a click in the search field no longer closes a list |
 | 2026-10-28 | minor | LR-CLOUD-SMARTPREVIEW (✅, unchanged): Use Smart Previews for viewing and editing — the grid, loupe, Compare, Survey and edits render from a current smart preview when the original is reachable; the original is read for zoom to 100 % and export (`library.smartPreviewsForEditing`; smart preview encoding 4) |
 | 2026-10-28 | minor | MENU-FILE-PHOTOSHOP-LAYERS (new row, 🟡): Photo ▸ Edit In ▸ Open as Layers in PhotoCraft… opens two or more photos as the layers of one PhotoCraft document (the `.pcstack` layer list; the official PhotoCraft gets the files one by one) |

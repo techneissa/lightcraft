@@ -43,6 +43,7 @@ mod prefs;
 mod presets_scale;
 mod print;
 mod process;
+mod quick_filters;
 mod recheck;
 mod segment;
 mod settings_files;

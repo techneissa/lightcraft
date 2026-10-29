@@ -167,6 +167,23 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
     if let Some(fl) = f.flag {
         add(format!("Flag: {}", format!("{fl:?}").to_lowercase()), json!({"flag": Null}));
     }
+    if let Some(on) = f.ratings_shown().filter(|_| !f.ratings.is_empty()) {
+        let names: Vec<String> =
+            (0u8..).zip(on).filter(|(_, on)| *on).map(|(n, _)| if n == 0 { "Unrated".to_string() } else { format!("{n}★") }).collect();
+        add(format!("Rating: {}", if names.is_empty() { "none".into() } else { names.join(", ") }), json!({"ratings": []}));
+    }
+    if let Some(on) = f.flags_shown().filter(|_| !f.flags.is_empty()) {
+        let names: Vec<String> = on
+            .iter()
+            .map(|fl| match fl {
+                lightcraft_catalog::Flag::Pick => "Picked",
+                lightcraft_catalog::Flag::Reject => "Rejected",
+                lightcraft_catalog::Flag::None => "Unflagged",
+            })
+            .map(String::from)
+            .collect();
+        add(format!("Flag: {}", if names.is_empty() { "none".into() } else { names.join(", ") }), json!({"flags": []}));
+    }
     if let Some(shown) = f.labels_shown() {
         let or = |ls: &[lightcraft_catalog::ColorLabel]| ls.iter().map(|l| cat.label_name(*l)).collect::<Vec<_>>().join(" or ");
         // empty: `label` and `labels` exclude each other, so name both constraints

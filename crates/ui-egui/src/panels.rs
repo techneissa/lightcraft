@@ -29,6 +29,7 @@ pub mod person;
 pub mod photo_menu;
 pub mod presets;
 pub mod profiles;
+pub mod quick_filters;
 pub mod right;
 pub mod second;
 pub mod selection_order;

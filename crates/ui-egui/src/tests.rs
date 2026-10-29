@@ -66,6 +66,7 @@ mod print;
 mod profile_menu;
 mod profiles_layout;
 mod progress;
+mod quick_filters;
 mod quit_unsaved;
 mod rating;
 mod recheck;
