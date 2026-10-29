@@ -77,7 +77,6 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
     ui.add_enabled_ui(app.ui.settings.confirm_delete, |ui| {
         ui.indent("settingsConfirmDeletePickedOnly", |ui| {
             check(ui, "settings.confirmDeletePickedOnly", &mut app.ui.settings.confirm_delete_picked_only, "Only for picked or starred photos");
-            hint(ui, t, "Rejected and unflagged photos without stars go to Recently Deleted at once; Undo brings them back.");
         });
     });
     check(ui, "settings.askBeforeMove", &mut app.ui.settings.ask_before_move, "Confirm before moving photos to another folder on disk");
@@ -90,13 +89,6 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
             &mut app.ui.settings.delete_files,
         );
     });
-    hint(
-        ui,
-        t,
-        crate::i18n::tr(
-            "What Delete Permanently and Empty Recently Deleted do with the photos' files. Keep Files only forgets the photos; Local photos always go to the Trash.",
-        ),
-    );
     heading(ui, t, crate::i18n::tr("Dialogs"));
     check(ui, "settings.closeDialogsOutside", &mut app.ui.settings.close_dialogs_outside, "Close a dialog by clicking outside it");
     heading(ui, t, crate::i18n::tr("External Editing"));

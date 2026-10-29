@@ -3,7 +3,7 @@
 
 use lightcraft_engine::import::{ImportDefaults, StartingColour};
 
-use super::widgets::{choices, hint, row};
+use super::widgets::{choices, row};
 use super::{LightcraftApp, Tokens, json};
 
 /// The choices, in order, with their Title Case labels.
@@ -21,11 +21,6 @@ pub(super) fn starting_colour_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t:
             let _ = app.run("library.preferences", json!({"import": {"startingColour": value.value()}}));
         }
     });
-    hint(
-        ui,
-        t,
-        "New raw photos start with this colour. A camera macOS can't read, or a computer that isn't a Mac, starts on Camera Matching. Photos already in the library are not changed. A photo's own Profile choice overrides this.",
-    );
     if value == StartingColour::Macos && !lightcraft_macraw_available() {
         let line = crate::i18n::tr("This computer isn't a Mac: new raw photos start on Camera Matching.");
         let r = ui.label(egui::RichText::new(line).size(11.0).color(t.text_dim));

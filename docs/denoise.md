@@ -10,9 +10,9 @@ batch, and its photos wait until they are asked for again). Agents pass `ids` to
 exactly those photos. Manual luminance and colour noise reduction remain separate
 controls.
 
-**At import:** Settings ▸ Import ▸ **AI Denoise from** (Off, ISO 800 … 12800;
-`library.preferences {import: {denoiseAboveIso}}`) switches AI Denoise on for new raw
-photos shot at that ISO or above, and queues their pictures after the import.
+**At import:** agents can switch AI Denoise on for new raw photos shot at an ISO or above
+(`library.preferences {import: {denoiseAboveIso}}`; their pictures are queued after the import).
+This fork shows no Settings row for it (techneissa, 2026-10-29).
 
 If no model is selected, turning it on opens **Settings ▸ AI Denoise** without changing
 the photo. After installation, the pending request enables the original photo even if
@@ -213,8 +213,8 @@ the catalog edit is saved), so an undo, a Reset or a switch-off is never undone 
 large (8 MB) or damaged is left as it is and turns Auto AI Denoise off for the session (`recordUnreadable`). Without a model nothing is changed or recorded (the photo is handled the first time it is opened once a model
 is installed), and the app says so once per session. Settings: `denoise.settings {autoOpen, autoIso}`.
 
-This is the open-time counterpart of Settings ▸ Import ▸ **AI Denoise from**, which switches it on for new photos at
-import (`library.preferences {import: {denoiseAboveIso}}`, per library); both can be on.
+This is the open-time counterpart of `library.preferences {import: {denoiseAboveIso}}`, which switches it on for new
+photos at import (per library, no Settings row in this fork); both can be on.
 
 ## Commands and limits
 

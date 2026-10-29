@@ -95,9 +95,5 @@ pub fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &Va
         let range = lightcraft_engine::denoise::AUTO_ISO_RANGE;
         hint(ui, t, &tr_format!("Enter an ISO from {low} to {high}", low = range.start(), high = range.end()));
     }
-    hint(
-        ui,
-        t,
-        "When a raw photo at this ISO or above is opened in Detail, AI Denoise is switched on for it, once, as an edit you can undo. A photo you undo or switch off is left alone. New photos can get it at import in Settings, Import. Needs a denoise model.",
-    );
+    hint(ui, t, "Turns AI Denoise on once for raws at or above this ISO when opened in Detail.");
 }

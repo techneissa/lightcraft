@@ -2,6 +2,12 @@
 
 ## 2026-10-29
 
+### Shorter Settings
+- Settings drops help lines that only repeated their button: under Delete Permanently, Only for picked or starred
+  photos and Starting Colour for Raw Photos. The Auto AI Denoise line is one sentence.
+- Settings ▸ Import no longer has **AI Denoise from**: new photos no longer get AI Denoise at import. Auto AI Denoise
+  (Settings ▸ AI Denoise) still switches it on when a high-ISO raw opens in Detail.
+
 ### Faster Deleting While You Cull
 - **⌫ in Recently Deleted** now deletes the selected photos permanently, with the same dialog and setting as Delete
   Permanently (it used to offer to move them to Recently Deleted, where they already were).
