@@ -73,6 +73,16 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
     check(ui, "settings.autoAdvance", &mut app.ui.auto_advance, "Auto Advance: move to the next photo after rating or flagging");
     check(ui, "settings.confirmDelete", &mut app.ui.settings.confirm_delete, "Confirm before moving photos to Recently Deleted");
     check(ui, "settings.askBeforeMove", &mut app.ui.settings.ask_before_move, "Confirm before moving photos to another folder on disk");
+    row(ui, t, crate::i18n::tr("Delete Permanently"), |ui| {
+        use crate::state::DeleteFiles;
+        choices(
+            ui,
+            "settingsDeleteFiles",
+            &[(DeleteFiles::Ask, "Ask Each Time"), (DeleteFiles::Trash, "Move Files to Trash"), (DeleteFiles::Keep, "Remove from Library Only")],
+            &mut app.ui.settings.delete_files,
+        );
+    });
+    hint(ui, t, crate::i18n::tr("What Delete Permanently and Empty Recently Deleted do with the photos' files."));
     heading(ui, t, crate::i18n::tr("Dialogs"));
     check(ui, "settings.closeDialogsOutside", &mut app.ui.settings.close_dialogs_outside, "Close a dialog by clicking outside it");
     heading(ui, t, crate::i18n::tr("External Editing"));

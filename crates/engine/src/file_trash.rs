@@ -44,7 +44,7 @@ impl Trasher for SystemTrash {
             use ::trash::macos::{DeleteMethod, TrashContextExtMacos};
             let mut ctx = ctx;
             ctx.set_delete_method(DeleteMethod::NsFileManager);
-            return ctx.delete(path).map_err(|e| e.to_string());
+            ctx.delete(path).map_err(|e| e.to_string())
         }
         #[cfg(not(target_os = "macos"))]
         ctx.delete(path).map_err(|e| e.to_string())
