@@ -1,5 +1,7 @@
 use super::widgets::{check, choices, heading, hint, path_label, row};
 use super::{LightcraftApp, RichText, StartupView, Tokens, json, register};
+use crate::widgets::dropdown_search::Searchable;
+use crate::widgets::dropdown_search::presets::{self, Choice};
 
 // ------------------------------------------------------------------------------------- General
 
@@ -146,12 +148,13 @@ pub(super) fn preset_combo(
     };
     let text = current.map(name).unwrap_or_else(|| crate::i18n::tr(none_label).to_string());
     let mut out = None;
-    let r = crate::widgets::combo_box(id).width(240.0).selected_text(text).show_ui(ui, |ui| {
-        if ui.selectable_label(current.is_none(), crate::i18n::tr(none_label)).clicked() {
-            out = Some(None);
-        }
-        if let Some(pid) = crate::panels::presets::picker_rows(ui, id, &app.session.presets, current) {
-            out = Some(Some(pid));
+    let fixed = [(crate::i18n::tr(none_label).to_string(), current.is_none())];
+    let find = presets::before(ui, id, &[fixed[0].0.clone()], &app.session.presets);
+    let r = crate::widgets::combo_box(id).width(240.0).selected_text(text).search(ui, &find, |ui| {
+        match presets::list(ui, &find, id, &fixed, &app.session.presets, current) {
+            Some(Choice::Fixed(_)) => out = Some(None),
+            Some(Choice::Preset(pid)) => out = Some(Some(pid)),
+            None => {}
         }
     });
     crate::widgets::name_combo(&r.response, label);

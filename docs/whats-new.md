@@ -1,5 +1,21 @@
 # What's new in LightCraft
 
+## 2026-10-29
+
+### Type to search in dropdown lists
+- Open a dropdown and start typing: the list narrows to the options that match, ignoring case (names that start with
+  your letters first, then names with a word that starts with them, then names that contain them). ↑ and ↓ move over
+  the matches, Return or a click picks one, and Esc clears the text before it closes the list. Nothing matches shows
+  "No match". A slim Search field with a magnifier appears above the rows only once you type; a list you don't type
+  in looks as it did. The field takes pasted text and IME input.
+- While a list is open, the letters you type no longer run shortcuts (G, D, Space…) and a held Backslash no longer
+  shows the original. Preset pickers (Settings ▸ Import, the Import dialog) search "None", the default rows and every
+  preset together, and still draw only the rows in view.
+- The menus of the borderless dropdown buttons search too: Profile (every group at once, with the hover preview),
+  White Balance, Aspect Ratio, Point Curve, Tool Overlay, Mask Overlay, Filter Presets and the filter bar's pickers.
+  The rows that are not options (Save…, Import…, the custom ratio) wait until the text is cleared. The bottom bar's
+  Zoom menus have no search yet, but a letter typed over one no longer runs a shortcut. Clicking the search field
+  no longer closes the list.
 ## 2026-10-28
 
 ### Rejected Photos Keep Their Look in Compare and Survey

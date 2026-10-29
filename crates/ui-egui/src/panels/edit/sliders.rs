@@ -67,8 +67,22 @@ pub(super) fn rel_to_k(r: f64) -> f64 {
 /// Browse…. Like the menu bar's menus, the dropdown and each submenu stay inside the window and
 /// scroll when their rows don't fit (issue #2059: a folder of many imported profiles ran past the
 /// window's bottom edge). `below` is the dropdown's bottom edge, which the menu hangs from.
-pub(super) fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, below: f32) {
-    crate::menu_level::level(ui, 1, Some(below), |ui| profile_menu_rows(app, ui, d, below));
+pub(super) fn profile_menu(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    d: &DevelopSettings,
+    below: f32,
+    find: &crate::widgets::dropdown_search::Filter,
+    profiles: &[(String, String)],
+) {
+    crate::menu_level::level(ui, 1, Some(below), |ui| {
+        // typed text lists the matching profiles from every group instead
+        if find.filtering() || find.field_shown() {
+            super::profile_search::rows(app, ui, d, find, profiles);
+        } else {
+            profile_menu_rows(app, ui, d, below);
+        }
+    });
 }
 
 fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, below: f32) {

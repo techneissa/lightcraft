@@ -435,6 +435,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
         app.keybinds.pending = None;
         return;
     }
+    // an open dropdown list owns the keyboard: typed letters are its search, not shortcuts
+    if crate::widgets::dropdown_search::list_open(ctx) {
+        return;
+    }
     // don't steal keys from text fields or from the keymap editor recording a shortcut; a chord
     // waiting for its next key is forgotten when something else takes the keyboard
     if keyboard_owned(app, ctx) || app.recording_shortcut.is_some() || app.ui.name_edit.is_some() {

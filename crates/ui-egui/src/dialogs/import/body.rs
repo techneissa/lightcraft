@@ -1,5 +1,7 @@
 use super::tags::{tag_field_width, tag_help, tag_toggle, unknown_tags_warning};
 use super::{Align2, Color32, ImportDialog, LightcraftApp, Rect, Sense, Slot, Stroke, StrokeKind, Tokens, Vec2, pos2, register, vec2};
+use crate::widgets::dropdown_search::Searchable;
+use crate::widgets::dropdown_search::presets::{self, Choice};
 
 /// The review dialog's first size (points). It can be resized; the photo grid takes the height.
 pub(crate) const DIALOG_SIZE: [f32; 2] = [960.0, 720.0];
@@ -194,20 +196,23 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             ];
             let key = if d.organize.is_empty() { "date".to_string() } else { d.organize.clone() };
             let cur = opts.iter().find(|o| o.0 == key).map_or(opts[0].1, |o| o.1);
-            let combo = crate::widgets::combo_box("import-organize").selected_text(crate::i18n::tr(cur)).show_ui(ui, |ui| {
-                for (k, label) in opts {
-                    let r = ui.selectable_label(key == k, crate::i18n::tr(label));
-                    register(ui, format!("button:importOrganize-{k}"), r.rect);
-                    if r.clicked() {
-                        d.organize = k.to_string();
-                        if k == "custom" && d.folder_template.trim().is_empty() {
-                            d.folder_template = DEFAULT_FOLDER_TEMPLATE.into();
-                        }
-                    }
+            let (combo, chosen) = crate::widgets::dropdown_search::pick_with(
+                ui,
+                "import-organize",
+                |c| c.selected_text(crate::i18n::tr(cur)),
+                &opts,
+                |(k, _)| key == *k,
+                |(_, label)| crate::i18n::tr(label).to_string(),
+                |ui, (k, _), r| register(ui, format!("button:importOrganize-{k}"), r.rect),
+            );
+            crate::widgets::name_combo(&combo, crate::i18n::tr("Organize into"));
+            register(ui, "combo:importOrganize", combo.rect);
+            if let Some((k, _)) = chosen.and_then(|i| opts.get(i)) {
+                d.organize = k.to_string();
+                if *k == "custom" && d.folder_template.trim().is_empty() {
+                    d.folder_template = DEFAULT_FOLDER_TEMPLATE.into();
                 }
-            });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr("Organize into"));
-            register(ui, "combo:importOrganize", combo.response.rect);
+            }
         });
         if d.organize == "custom" {
             let folders_id = egui::Id::unique("import-folder-template");
@@ -278,14 +283,19 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
                 _ => "Leave them",
             };
             let mut pick = None;
-            let combo = crate::widgets::combo_box("import-on-deleted").selected_text(crate::i18n::tr(cur)).show_ui(ui, |ui| {
-                for (v, label) in [("restore", "Restore them"), ("fresh", "Import as new"), ("", "Leave them")] {
-                    if ui.selectable_label(d.on_deleted == v, crate::i18n::tr(label)).clicked() {
-                        pick = Some(v);
-                    }
-                }
-            });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr("Recently deleted files"));
+            const CHOICES: [(&str, &str); 3] = [("restore", "Restore them"), ("fresh", "Import as new"), ("", "Leave them")];
+            let (combo, chosen) = crate::widgets::dropdown_search::pick(
+                ui,
+                "import-on-deleted",
+                |c| c.selected_text(crate::i18n::tr(cur)),
+                &CHOICES,
+                |(v, _)| d.on_deleted == *v,
+                |(_, label)| crate::i18n::tr(label).to_string(),
+            );
+            crate::widgets::name_combo(&combo, crate::i18n::tr("Recently deleted files"));
+            if let Some((v, _)) = chosen.and_then(|i| CHOICES.get(i)) {
+                pick = Some(*v);
+            }
             if let Some(v) = pick {
                 d.set_on_deleted(v);
             }
@@ -349,31 +359,37 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &mut ImportDialog) {
             .find(|p| p.id == d.preset)
             .map(|p| crate::i18n::builtin_label(&p.name, p.builtin).to_string())
             .unwrap_or_else(|| crate::i18n::tr("None").into());
-        let combo = crate::widgets::combo_box("import-preset").selected_text(cur).height(300.0).show_ui(ui, |ui| {
-            if ui.selectable_label(d.preset.is_empty(), crate::i18n::tr("None")).clicked() {
-                d.preset.clear();
-            }
+        let fixed = [(crate::i18n::tr("None").to_string(), d.preset.is_empty())];
+        let find = presets::before(ui, "import-preset", &[fixed[0].0.clone()], &app.session.presets);
+        let mut chosen = None;
+        let combo = crate::widgets::combo_box("import-preset").selected_text(cur).height(300.0).search(ui, &find, |ui| {
             let selected = (!d.preset.is_empty()).then_some(d.preset.as_str());
-            if let Some(pid) = crate::panels::presets::picker_rows(ui, "import-preset", &app.session.presets, selected) {
-                d.preset = pid;
-            }
+            chosen = presets::list(ui, &find, "import-preset", &fixed, &app.session.presets, selected);
         });
+        match chosen {
+            Some(Choice::Fixed(_)) => d.preset.clear(),
+            Some(Choice::Preset(pid)) => d.preset = pid,
+            None => {}
+        }
         crate::widgets::name_combo(&combo.response, crate::i18n::tr("Preset"));
     });
     if !app.session.metadata_presets.is_empty() {
         field(ui, "Metadata", |ui| {
             let cur = if d.metadata_preset.is_empty() { crate::i18n::tr("None").to_string() } else { d.metadata_preset.clone() };
-            let combo = crate::widgets::combo_box("import-metadata").selected_text(cur).show_ui(ui, |ui| {
-                if ui.selectable_label(d.metadata_preset.is_empty(), crate::i18n::tr("None")).clicked() {
-                    d.metadata_preset.clear();
-                }
-                for m in &app.session.metadata_presets {
-                    if ui.selectable_label(d.metadata_preset == m.name, &m.name).clicked() {
-                        d.metadata_preset = m.name.clone();
-                    }
-                }
-            });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr("Metadata preset"));
+            // "None" first, then the metadata presets
+            let names: Vec<Option<&str>> = std::iter::once(None).chain(app.session.metadata_presets.iter().map(|m| Some(m.name.as_str()))).collect();
+            let (combo, chosen) = crate::widgets::dropdown_search::pick(
+                ui,
+                "import-metadata",
+                |c| c.selected_text(cur),
+                &names,
+                |name| name.unwrap_or_default() == d.metadata_preset,
+                |name| name.map_or_else(|| crate::i18n::tr("None").to_string(), str::to_string),
+            );
+            crate::widgets::name_combo(&combo, crate::i18n::tr("Metadata preset"));
+            if let Some(name) = chosen.and_then(|i| names.get(i)) {
+                d.metadata_preset = name.unwrap_or_default().to_string();
+            }
         });
     }
     field(ui, "Keywords", |ui| {

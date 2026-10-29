@@ -23,6 +23,7 @@ mod dialog_tab;
 mod dialogs;
 mod docking_acceptance;
 mod drop_import;
+mod dropdown_search_menus;
 mod edit_all;
 mod edit_layout;
 mod empty_library;

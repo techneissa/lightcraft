@@ -264,20 +264,38 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
             let device = app.ui.proof_profile.as_ref().map(|(_, n)| n.clone());
             let shown = device.clone().unwrap_or_else(|| cur.label().to_string());
             let mut pick = false;
-            let combo = crate::widgets::combo_box("proof-space").width(170.0).selected_text(shown).show_ui(ui, |ui| {
-                for s in OutputSpace::ALL {
-                    if ui.selectable_label(device.is_none() && cur == s, s.label()).clicked() {
-                        let _ = app.run("view.softProof", json!({"space": s}));
-                    }
+            enum Row {
+                Space(OutputSpace),
+                Device,
+                Other,
+            }
+            let mut rows: Vec<(Row, String)> = OutputSpace::ALL.iter().map(|s| (Row::Space(*s), s.label().to_string())).collect();
+            if let Some(n) = &device {
+                rows.push((Row::Device, n.clone()));
+            }
+            if app.services.pick_display_profile.is_some() {
+                rows.push((Row::Other, crate::i18n::tr("Other…").to_string()));
+            }
+            let (combo, chosen) = crate::widgets::dropdown_search::pick(
+                ui,
+                "proof-space",
+                |c| c.width(170.0).selected_text(shown),
+                &rows,
+                |(row, _)| match row {
+                    Row::Space(s) => device.is_none() && cur == *s,
+                    Row::Device => true,
+                    Row::Other => false,
+                },
+                |(_, label)| label.clone(),
+            );
+            crate::widgets::name_combo(&combo, crate::i18n::tr("Profile"));
+            match chosen.and_then(|i| rows.get(i)) {
+                Some((Row::Space(s), _)) => {
+                    let _ = app.run("view.softProof", json!({"space": s}));
                 }
-                if let Some(n) = &device {
-                    let _ = ui.selectable_label(true, n);
-                }
-                if app.services.pick_display_profile.is_some() && ui.selectable_label(false, crate::i18n::tr("Other…")).clicked() {
-                    pick = true;
-                }
-            });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr("Profile"));
+                Some((Row::Other, _)) => pick = true,
+                _ => {}
+            }
             if pick
                 && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next())
                 && let Err(e) = app.run("view.softProof", json!({"profile": path}))

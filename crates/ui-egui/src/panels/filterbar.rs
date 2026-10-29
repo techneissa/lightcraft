@@ -69,23 +69,17 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
         ui.painter().rect_stroke(r.rect.expand(2.0), 4.0, Stroke::new(1.0, t.accent.gamma_multiply(0.7)), StrokeKind::Outside);
     }
     let mut chosen = None;
-    egui::Popup::menu(&r).show(|ui| {
+    let shown = |(label, patch, _): &(String, Value, bool)| -> String {
+        if matches!(id, "camera" | "lens" | "keyword") && patch.get(id).is_some_and(|value| !value.is_null()) {
+            label.clone()
+        } else {
+            crate::i18n::tr(label).to_string()
+        }
+    };
+    let find = crate::widgets::dropdown_search::before_menu(ui, &r, || items.iter().map(shown).collect());
+    crate::widgets::dropdown_search::menu(&r, &find, |ui| {
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-            for (label, patch, sel) in &items {
-                if ui
-                    .selectable_label(
-                        *sel,
-                        if matches!(id, "camera" | "lens" | "keyword") && patch.get(id).is_some_and(|value| !value.is_null()) {
-                            label.as_str()
-                        } else {
-                            crate::i18n::tr(label)
-                        },
-                    )
-                    .clicked()
-                {
-                    chosen = Some(patch.clone());
-                }
-            }
+            chosen = find.list(ui, &items, |(_, _, sel)| *sel, shown).and_then(|i| items.get(i)).map(|(_, patch, _)| patch.clone());
         });
     });
     if let Some(p) = chosen {
@@ -266,12 +260,20 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // filter presets: apply one, save the current filter, delete
     let presets = crate::widgets::dropdown(ui, "filterPresets", crate::i18n::tr("Presets"), t.font(12.5), t.text);
     register(ui, "button:filterPresets", presets.rect);
-    egui::Popup::menu(&presets).show(|ui| {
-        let names: Vec<String> = app.session.filter_presets.iter().map(|f| f.name.clone()).collect();
-        for n in &names {
+    let names: Vec<String> = app.session.filter_presets.iter().map(|f| f.name.clone()).collect();
+    let find = crate::widgets::dropdown_search::before_menu(ui, &presets, || names.clone());
+    crate::widgets::dropdown_search::menu(&presets, &find, |ui| {
+        if let Some(n) = find.picked(ui).and_then(|i| names.get(i)) {
+            let _ = app.run("filter.applyPreset", json!({"name": n}));
+            ui.close();
+        }
+        let all: Vec<usize> = (0..names.len()).collect();
+        for n in find.options(&all).iter().filter_map(|&i| names.get(i)) {
             let r = ui.button(n);
+            find.row(ui, &r);
             if r.clicked() {
                 let _ = app.run("filter.applyPreset", json!({"name": n}));
+                ui.close();
             }
             crate::widgets::context_menu(&r, |ui| {
                 if ui.button(crate::i18n::tr("Delete Preset")).clicked() {
@@ -281,6 +283,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         if names.is_empty() {
             ui.label(egui::RichText::new(crate::i18n::tr("No filter presets yet")).color(t.text_dim));
+        }
+        find.no_match(ui);
+        // saving is not a preset: it waits until the search is cleared
+        if find.filtering() {
+            return;
         }
         ui.separator();
         if ui.add_enabled(filtering, egui::Button::new(crate::i18n::tr("Save Current Filter as Preset…"))).clicked() {

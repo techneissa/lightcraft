@@ -1,4 +1,5 @@
 use super::{HOLD, LightcraftApp, PhotoId, Rect, Tokens, fold_header, json, padded, register, text_button, vec2};
+use crate::widgets::dropdown_search::Searchable;
 
 pub(super) fn keywords(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     // (the box is the selection's: the active photo only says that there is one)
@@ -239,17 +240,33 @@ fn keyword_set(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let current = sets["current"].as_str().unwrap_or_default().to_string();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Keyword Set")).color(t.text_dim));
+        let names: Vec<&str> = sets["sets"].as_array().into_iter().flatten().map(|set| set["name"].as_str().unwrap_or_default()).collect();
+        let labels: Vec<String> =
+            names.iter().map(|name| crate::i18n::builtin_label(name, *name == lightcraft_engine::cmd::keywords::RECENT).to_string()).collect();
+        let find = crate::widgets::dropdown_search::before(ui, "kw-set", &labels);
         let combo = crate::widgets::combo_box("kw-set")
             .selected_text(crate::i18n::builtin_label(&current, current == lightcraft_engine::cmd::keywords::RECENT))
-            .show_ui(ui, |ui| {
-                for set in sets["sets"].as_array().into_iter().flatten() {
-                    let name = set["name"].as_str().unwrap_or_default();
-                    if ui
-                        .selectable_label(name == current, crate::i18n::builtin_label(name, name == lightcraft_engine::cmd::keywords::RECENT))
-                        .clicked()
-                    {
-                        let _ = app.run("keyword.useSet", json!({"name": name}));
+            .search(ui, &find, |ui| {
+                let mut chosen = find.picked(ui);
+                if chosen.is_some() {
+                    ui.close();
+                }
+                let all: Vec<usize> = (0..names.len()).collect();
+                for &i in find.options(&all).iter() {
+                    let row = ui.selectable_label(names.get(i).is_some_and(|name| *name == current), labels.get(i).map_or("", String::as_str));
+                    find.row(ui, &row);
+                    if row.clicked() {
+                        chosen = Some(i);
+                        ui.close();
                     }
+                }
+                find.no_match(ui);
+                if let Some(name) = chosen.and_then(|i| names.get(i)) {
+                    let _ = app.run("keyword.useSet", json!({"name": name}));
+                }
+                // the actions below are not sets: they wait until the search is cleared
+                if find.filtering() {
+                    return;
                 }
                 ui.separator();
                 // Edit Set…: the current nine, slot by slot (named, Recent Keywords becomes a set)

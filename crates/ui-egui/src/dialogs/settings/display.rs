@@ -133,21 +133,27 @@ pub(in super::super) fn view_options(app: &mut LightcraftApp, ui: &mut egui::Ui,
         let lines = if n == 1 { &mut app.ui.settings.loupe_info.info1 } else { &mut app.ui.settings.loupe_info.info2 };
         for (i, line) in lines.iter_mut().enumerate() {
             let id = format!("viewOptionsInfo{n}Line{}", i + 1);
-            let r = crate::widgets::combo_box(&id).width(220.0).selected_text(crate::i18n::tr(line.label())).show_ui(ui, |ui| {
-                for f in F::ALL {
+            let shown = *line;
+            let (r, chosen) = crate::widgets::dropdown_search::pick_with(
+                ui,
+                &id,
+                |c| c.width(220.0).selected_text(crate::i18n::tr(shown.label())),
+                F::ALL,
+                |f| shown == *f,
+                |f| crate::i18n::tr(f.label()).to_string(),
+                |ui, f, row| {
                     let key = serde_json::to_value(f).ok().and_then(|v| v.as_str().map(str::to_string)).unwrap_or_default();
-                    let r = ui.selectable_label(line == f, crate::i18n::tr(f.label()));
-                    register(ui, format!("button:{id}-{key}"), r.rect);
-                    if r.clicked() {
-                        *line = *f;
-                    }
-                }
-            });
+                    register(ui, format!("button:{id}-{key}"), row.rect);
+                },
+            );
+            if let Some(f) = chosen.and_then(|i| F::ALL.get(i)) {
+                *line = *f;
+            }
             crate::widgets::name_combo(
-                &r.response,
+                &r,
                 &crate::i18n::tr_format!("{title}: {line}", title = crate::i18n::tr(title), line = crate::i18n::tr(line.label())),
             );
-            register(ui, format!("combo:{id}"), r.response.rect);
+            register(ui, format!("combo:{id}"), r.rect);
         }
         let r = ui.add_enabled(*lines != defaults, egui::Button::new(crate::i18n::tr("Use Defaults")));
         register(ui, format!("button:viewOptionsDefaults{n}"), r.rect);
