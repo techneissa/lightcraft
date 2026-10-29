@@ -135,8 +135,13 @@ fn stars_button(ui: &mut egui::Ui, lit: bool, text: &str, tip: &str) -> egui::Re
         }
         p.rect_stroke(r, 5.0, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
     }
-    let ink = if lit { t.text } else if resp.hovered() { t.text } else { t.text_label };
-    paint(p, Rect::from_center_size(pos2(r.left() + 14.0, r.center().y), vec2(14.0, 14.0)), if lit { Icon::StarFilled } else { Icon::Star }, if lit { t.accent } else { t.icon });
+    let ink = if lit || resp.hovered() { t.text } else { t.text_label };
+    paint(
+        p,
+        Rect::from_center_size(pos2(r.left() + 14.0, r.center().y), vec2(14.0, 14.0)),
+        if lit { Icon::StarFilled } else { Icon::Star },
+        if lit { t.accent } else { t.icon },
+    );
     let text_area = Rect::from_min_max(pos2(r.left() + 26.0, r.top()), pos2(r.right() - 18.0, r.bottom()));
     let galley = p.layout_no_wrap(text.to_string(), t.font(12.5), ink);
     p.with_clip_rect(text_area).galley(pos2(text_area.left(), r.center().y - galley.size().y / 2.0), galley, ink);
@@ -162,7 +167,16 @@ fn flag_button(ui: &mut egui::Ui, id: &str, flag: Flag, on: bool, tip: &str) -> 
         Flag::Reject if on => (Icon::FlagReject, t.reject),
         Flag::Pick => (Icon::FlagPick, if resp.hovered() { t.text_label } else { t.icon }),
         Flag::Reject => (Icon::FlagReject, if resp.hovered() { t.text_label } else { t.icon }),
-        Flag::None => (Icon::Circle, if on { t.text } else if resp.hovered() { t.text_label } else { t.icon }),
+        Flag::None => (
+            Icon::Circle,
+            if on {
+                t.text
+            } else if resp.hovered() {
+                t.text_label
+            } else {
+                t.icon
+            },
+        ),
     };
     paint(p, r.shrink(5.0), icon, ink);
     resp.on_hover_text(tip)
@@ -200,19 +214,17 @@ fn full(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let lit = active(&f);
     let count = showing(app);
     let with_count = |tip: &str| if count.is_empty() { tip.to_string() } else { format!("{tip} — {count}") };
-    if let Some(x) = clear_button(ui, lit, &with_count(crate::i18n::tr("Clear Star and Flag Filters"))) {
-        if x.clicked() {
-            run(app, Filter::clear_quick_patch());
-        }
+    if let Some(x) = clear_button(ui, lit, &with_count(crate::i18n::tr("Clear Star and Flag Filters")))
+        && x.clicked()
+    {
+        run(app, Filter::clear_quick_patch());
     }
     let shown = f.flags_shown();
     let mut buttons = Vec::new();
     // right to left: Unflagged, Rejected, Picked reads Picked, Rejected, Unflagged
-    for (id, flag, tip) in [
-        ("none", Flag::None, "Show Unflagged Photos"),
-        ("reject", Flag::Reject, "Show Rejected Photos"),
-        ("pick", Flag::Pick, "Show Picked Photos"),
-    ] {
+    for (id, flag, tip) in
+        [("none", Flag::None, "Show Unflagged Photos"), ("reject", Flag::Reject, "Show Rejected Photos"), ("pick", Flag::Pick, "Show Picked Photos")]
+    {
         let on = shown.as_ref().is_some_and(|s| s.contains(&flag));
         let resp = flag_button(ui, id, flag, on, &with_count(crate::i18n::tr(tip)));
         if resp.clicked() {
@@ -254,7 +266,11 @@ fn compact(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let f = app.session.filter.clone();
     let lit = active(&f);
     let count = showing(app);
-    let tip = if count.is_empty() { crate::i18n::tr("Filter by Stars and Flags").to_string() } else { format!("{} — {count}", crate::i18n::tr("Filter by Stars and Flags")) };
+    let tip = if count.is_empty() {
+        crate::i18n::tr("Filter by Stars and Flags").to_string()
+    } else {
+        format!("{} — {count}", crate::i18n::tr("Filter by Stars and Flags"))
+    };
     let button = crate::widgets::icon_button(ui, "quickFilters", Icon::Filter, vec2(30.0, 30.0), lit, true, &tip);
     let mut star = None;
     let mut flag = None;

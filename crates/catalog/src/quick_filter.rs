@@ -53,12 +53,7 @@ impl Filter {
         if self.flag.is_none() && self.flags.is_empty() {
             return None;
         }
-        Some(
-            FLAG_ORDER
-                .into_iter()
-                .filter(|f| self.flag.is_none_or(|x| x == *f) && (self.flags.is_empty() || self.flags.contains(f)))
-                .collect(),
-        )
+        Some(FLAG_ORDER.into_iter().filter(|f| self.flag.is_none_or(|x| x == *f) && (self.flags.is_empty() || self.flags.contains(f))).collect())
     }
 
     /// The `library.filter` patch that shows exactly these ratings: none or all of them is no

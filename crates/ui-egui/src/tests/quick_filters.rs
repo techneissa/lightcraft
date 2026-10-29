@@ -141,7 +141,8 @@ fn the_bottom_bar_does_not_overlap_with_the_quick_filters() {
                     if filtering {
                         app.session.execute("library.filter", &json!({"ratings": [1, 2, 3], "flags": ["pick", "none"]})).unwrap();
                     }
-                    let mut input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(width, 100.0))), ..Default::default() };
+                    let mut input =
+                        egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(width, 100.0))), ..Default::default() };
                     input.viewports.entry(egui::ViewportId::ROOT).or_default().native_pixels_per_point = Some(scale);
                     let mut output = ctx.run_ui(input, |ui| crate::panels::bottombar::show(&mut app, ui));
                     output.textures_delta.clear();
@@ -150,7 +151,10 @@ fn the_bottom_bar_does_not_overlap_with_the_quick_filters() {
                     // the right group is the thumbnail slider in the grid views; the quick filters sit left of it
                     if matches!(view, ViewMode::PhotoGrid | ViewMode::SquareGrid | ViewMode::People) {
                         match mode(width - 24.0, false) {
-                            Mode::Full => assert!(has("quickfilter:stars") && has("quickfilter:flag:pick") && has("quickfilter:flag:none"), "{view:?} at {width}: {controls:?}"),
+                            Mode::Full => assert!(
+                                has("quickfilter:stars") && has("quickfilter:flag:pick") && has("quickfilter:flag:none"),
+                                "{view:?} at {width}: {controls:?}"
+                            ),
                             Mode::Compact => assert!(has("icon:quickFilters") && !has("quickfilter:stars"), "{view:?} at {width}"),
                             Mode::Hidden => assert!(!has("icon:quickFilters") && !has("quickfilter:stars"), "{view:?} at {width}"),
                         }
@@ -158,7 +162,10 @@ fn the_bottom_bar_does_not_overlap_with_the_quick_filters() {
                     for (index, (id, rect)) in controls.iter().enumerate() {
                         assert!(rect.left() >= 0.0 && rect.right() <= width, "{view:?} at {width}: {id} outside the bar: {rect:?}");
                         for (other_id, other) in controls.iter().skip(index + 1) {
-                            assert!(!rect.intersect(*other).is_positive(), "{view:?} at {width} filtering {filtering}: {id} overlaps {other_id}: {rect:?} / {other:?}");
+                            assert!(
+                                !rect.intersect(*other).is_positive(),
+                                "{view:?} at {width} filtering {filtering}: {id} overlaps {other_id}: {rect:?} / {other:?}"
+                            );
                         }
                     }
                 }

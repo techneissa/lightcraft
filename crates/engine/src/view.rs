@@ -168,7 +168,8 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
         add(format!("Flag: {}", format!("{fl:?}").to_lowercase()), json!({"flag": Null}));
     }
     if let Some(on) = f.ratings_shown().filter(|_| !f.ratings.is_empty()) {
-        let names: Vec<String> = (0u8..).zip(on).filter(|(_, on)| *on).map(|(n, _)| if n == 0 { "Unrated".to_string() } else { format!("{n}★") }).collect();
+        let names: Vec<String> =
+            (0u8..).zip(on).filter(|(_, on)| *on).map(|(n, _)| if n == 0 { "Unrated".to_string() } else { format!("{n}★") }).collect();
         add(format!("Rating: {}", if names.is_empty() { "none".into() } else { names.join(", ") }), json!({"ratings": []}));
     }
     if let Some(on) = f.flags_shown().filter(|_| !f.flags.is_empty()) {

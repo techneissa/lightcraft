@@ -106,7 +106,8 @@ fn a_smart_album_saved_before_the_sets_still_works() {
     let new = s.execute("album.createSmart", &json!({"name": "New", "rules": {"ratings": [1, 2], "flags": ["pick", "reject"]}})).unwrap()["id"]
         .as_u64()
         .unwrap();
-    for (id, ok) in [(old, (|r: u8, f: Flag| r == 4 && f == Flag::Pick) as fn(u8, Flag) -> bool), (new, |r, f| (r == 1 || r == 2) && f != Flag::None)] {
+    for (id, ok) in [(old, (|r: u8, f: Flag| r == 4 && f == Flag::Pick) as fn(u8, Flag) -> bool), (new, |r, f| (r == 1 || r == 2) && f != Flag::None)]
+    {
         s.execute("library.source", &json!({"kind": "album", "id": id})).unwrap();
         let got = shown(&mut s);
         assert!(!got.is_empty() && got.iter().all(|(r, f)| ok(*r, *f)), "album {id}: {got:?}");

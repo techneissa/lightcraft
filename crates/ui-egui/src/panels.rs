@@ -29,6 +29,7 @@ pub mod person;
 pub mod photo_menu;
 pub mod presets;
 pub mod profiles;
+pub mod quick_filters;
 pub mod right;
 pub mod second;
 pub mod selection_order;
@@ -36,7 +37,6 @@ pub mod slideshow;
 pub mod split_divider;
 pub mod strip;
 pub mod topbar;
-pub mod quick_filters;
 pub mod topbar_items;
 pub mod unnamed;
 
