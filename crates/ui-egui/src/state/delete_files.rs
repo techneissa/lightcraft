@@ -11,7 +11,8 @@ pub enum DeleteFiles {
     Ask,
     /// Move the files and their XMP sidecars to the system Trash.
     Trash,
-    /// Remove the photos from the library only; the files stay where they are.
+    /// Keep Files: remove the photos from the library only; their files stay where they are
+    /// (Local photos' files still go to the Trash). Saved as `"keep"`.
     Keep,
 }
 
