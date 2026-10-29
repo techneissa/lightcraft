@@ -30,6 +30,11 @@ fine-grained token "BuildCraft forks" (the LightCraft, PdfCraft and SolidCraft f
 read and write): GitHub's own token may not push an official update that changes a workflow file. Without the
 secret it uses GitHub's own token.
 
+The workflow `.github/workflows/fork-ci.yml` (Actions ▸ Fork CI) runs the official CI (`ci.yml`, `cargo xtask ci` on
+Linux) on `custom` after every push to it, the daily merge included, so the full suite runs on GitHub and not on
+this Mac. The official `CI` workflow must stay enabled on the fork for it (`gh workflow enable CI -R
+techneissa/lightcraft`).
+
 A daily agent (the T3 thread "Daily LightCraft Update", Grok 4.5 on Cursor, 09:00) runs the update without
 installing; when GitHub's run stopped on a clash, it merges by hand, runs the feature tests and pushes, and GitHub
 builds again. It follows the "Daily run" section of the `craftupdate` skill. To stop it: switch it off under
@@ -59,11 +64,17 @@ Local folder: `~/Documents/workspace/gitClones/lightcraft`. Git remembers how a 
 2. Put the code in new files; touch existing files only with small hooks (a `mod` line, a menu entry, a match arm,
    a state field). Never reformat, rename or move official code. This is what keeps updates conflict-free.
 3. Add tests. Check in batches:
-   - after each change: only the tests of the code it touched (`cargo test -p <crate> <filter>`, `cargo clippy -p <crate>`);
-   - once per round of work: `cargo xtask ci --quick`;
-   - once per merge into `custom`: the full `cargo xtask ci`.
+   - after each change, and once more at the end of the round: only the tests of the code it touched
+     (`cargo test -p <crate> <filter>`), `cargo clippy -p <crate> --all-targets -- -D warnings` for the crates it
+     touched, and `cargo fmt --all --check`;
+   - the full suite runs on GitHub, not on this Mac: a push to `custom` starts Fork CI (`fork-ci.yml`), which runs the
+     official CI (`cargo xtask ci`) on `custom`. Check it with `gh run list -R techneissa/lightcraft -w CI -b custom`
+     and fix a failure in the next round.
 
-   This fork reads `CLAUDE.md`'s "before every commit" as once per round (techneissa, 2026-10-28).
+   This fork reads `CLAUDE.md`'s "before every commit" and "run the full one locally before merging" as the above:
+   no `cargo xtask ci` or `ci --quick` on this Mac (techneissa, 2026-10-29: the same tests ran three times per
+   feature and loaded the Mac). The official CI runs on Linux, so macOS-only tests (`macraw`, macOS Colour) run
+   only in a lane's own filtered tests.
 4. `git switch custom && git merge --no-ff feat/<name>`, then `git push mine custom feat/<name>`.
 5. Add a row to the table below, and run Update LightCraft to install it.
 
