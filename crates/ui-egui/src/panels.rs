@@ -36,6 +36,7 @@ pub mod slideshow;
 pub mod split_divider;
 pub mod strip;
 pub mod topbar;
+pub mod quick_filters;
 pub mod topbar_items;
 pub mod unnamed;
 

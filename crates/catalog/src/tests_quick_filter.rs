@@ -151,3 +151,22 @@ fn local_folder_photos_are_filtered_too() {
     assert_eq!(got.len(), 1);
     assert_eq!(c.photo(got[0]).map(|p| p.rating), Some(1));
 }
+
+#[test]
+fn toggling_reads_what_the_filter_bar_set() {
+    // the bar's ≥ 4★ is 4★ and 5★ to the quick filters; ticking 2★ adds it, unticking 5★ removes it
+    let f = Filter { rating: 4, ..Default::default() };
+    assert_eq!(f.toggle_rating_patch(2)["ratings"], serde_json::json!([2, 4, 5]));
+    assert_eq!(f.toggle_rating_patch(5)["ratings"], serde_json::json!([4]));
+    // nothing set: the first tick is the only one
+    assert_eq!(Filter::default().toggle_rating_patch(0)["ratings"], serde_json::json!([0]));
+    // flags: one flag stays the plain `flag`, two make a set, none clears
+    let none = Filter::default();
+    assert_eq!(none.toggle_flag_patch(Flag::Pick), serde_json::json!({"flag": "pick"}));
+    let pick = Filter { flag: Some(Flag::Pick), ..Default::default() };
+    assert_eq!(pick.toggle_flag_patch(Flag::Reject), serde_json::json!({"flag": null, "flags": ["pick", "reject"]}));
+    assert_eq!(pick.toggle_flag_patch(Flag::Pick), serde_json::json!({"flag": null, "flags": []}));
+    let set = Filter { flags: vec![Flag::Pick, Flag::None], ..Default::default() };
+    assert_eq!(set.toggle_flag_patch(Flag::None), serde_json::json!({"flag": null, "flags": ["pick"]}));
+    assert_eq!(Filter::clear_quick_patch()["flags"], serde_json::json!([]));
+}

@@ -133,16 +133,20 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if let Some(r) = crate::rating::Rating::new("filter", f.rating).automation_ids("filter:star").show(ui) {
         filter(app, json!({"rating": r}));
     }
+    // the ratings ticked in the bottom bar's Stars dropdown (a set the stars can't show)
+    if !f.ratings.is_empty() {
+        ui.label(egui::RichText::new(super::quick_filters::stars_summary(&f)).font(t.font(12.0)).color(t.text));
+    }
     ui.add_space(14.0);
 
-    // flags (one at a time; click again to clear)
+    // flags (several can be on at once, like the bottom bar's flag buttons; one flag stays a plain `flag`)
     caption(ui, "Flag");
     for (id, icon, flag, tip) in [
         ("pick", Icon::FlagPick, Flag::Pick, "Picked"),
         ("reject", Icon::FlagReject, Flag::Reject, "Rejected"),
         ("none", Icon::Circle, Flag::None, "Unflagged"),
     ] {
-        let on = f.flag == Some(flag);
+        let on = super::quick_filters::flag_lit(&f, flag);
         let color = match flag {
             Flag::Pick if on => t.pick,
             Flag::Reject if on => t.reject,
@@ -151,7 +155,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let icon = if on && flag == Flag::Pick { Icon::FlagPickFilled } else { icon };
         let resp = toggle(ui, id, on, tip, |p, r, c| paint(p, r, icon, if color == Color32::TRANSPARENT { c } else { color }));
         if resp.clicked() {
-            filter(app, json!({"flag": if on { Value::Null } else { json!(id) }}));
+            filter(app, f.toggle_flag_patch(flag));
         }
     }
     ui.add_space(14.0);

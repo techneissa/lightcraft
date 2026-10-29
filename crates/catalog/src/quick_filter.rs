@@ -94,3 +94,36 @@ impl Filter {
         }
     }
 }
+
+impl Filter {
+    /// The `library.filter` patch that turns `flag` on or off in what the flag filter shows now. One
+    /// flag left and no set in use stays the plain `flag` the filter bar always wrote; anything
+    /// else is a `flags` set.
+    pub fn toggle_flag_patch(&self, flag: Flag) -> Value {
+        let mut on = self.flags_shown().unwrap_or_default();
+        if on.contains(&flag) {
+            on.retain(|f| *f != flag);
+        } else {
+            on.push(flag);
+        }
+        if let ([only], true) = (on.as_slice(), self.flags.is_empty()) {
+            return json!({"flag": flag_name(*only)});
+        }
+        Self::flags_patch(&on)
+    }
+
+    /// The `library.filter` patch that turns `stars` (0 = unrated … 5) on or off in what the rating
+    /// filter shows now (the filter bar's range counts as the stars it lets through).
+    pub fn toggle_rating_patch(&self, stars: u8) -> Value {
+        let mut on = self.ratings_shown().unwrap_or([false; 6]);
+        if let Some(slot) = on.get_mut(usize::from(stars)) {
+            *slot = !*slot;
+        }
+        Self::ratings_patch(&on)
+    }
+
+    /// The patch that clears both groups: the quick filters' ✕.
+    pub fn clear_quick_patch() -> Value {
+        json!({"rating": 0, "ratings": [], "flag": Value::Null, "flags": []})
+    }
+}

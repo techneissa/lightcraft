@@ -1,5 +1,19 @@
 # What's new in LightCraft
 
+## 2026-10-29
+
+### Quick Filters in the Bottom Bar
+- Next to the thumbnail size slider there is now a **Stars** dropdown and three flag buttons (Picked, Rejected,
+  Unflagged). Tick Unrated, 1★ … 5★ in any mix: the menu stays open while you tick, and the button shows your choice
+  (`2★, 4★`, or `All`). The flag buttons can be on together too.
+- Choices inside one group show photos that match any of them; the two groups together show photos that match both
+  (1★ + Picked = one-star picks). Nothing chosen filters nothing.
+- A small ✕ (or right-click ▸ Clear Filters) resets both groups. The grid header says `12 of 298 photos` while a filter
+  hides some. In a narrower bar, and in Detail and Compare (the filmstrip), one filter button holds the same choices.
+- The filter bar above the grid shows the same state: its flag buttons now work together, and the ratings ticked in the
+  dropdown appear beside its stars. Agents set them with `library.filter` (`ratings`, `flags`); old smart albums and
+  saved filters load as before.
+
 ## 2026-10-28
 
 ### Use Smart Previews for Viewing and Editing
