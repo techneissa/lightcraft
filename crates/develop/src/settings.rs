@@ -86,6 +86,8 @@ pub enum Process {
     V2,
     /// Contrast, Whites and Blacks are as strong on camera-look raws and display-referred files
     /// (JPEG, PNG) as they are on raws without a look: one slider model on every tone path.
+    /// Shadows reach the lower midtones and Highlights the upper ones (`shadows_highlights_delta`
+    /// in the pipeline's `finish`).
     V3,
 }
 

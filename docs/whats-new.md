@@ -12,7 +12,11 @@
   camera look and on JPEG / PNG files, matching the strength they already had on other raws. Contrast +100 is a firm
   S-curve, Whites +100 pushes bright tones into clipping while the midtones hold, and Blacks -100 crushes only the
   deepest tones. Neutral sliders still leave a photo exactly as it was.
+- In V3, **Shadows** +100 opens the lower midtones too, not only the deepest shadows, and **Highlights** reach
+  further into the upper midtones; Highlights +100 now rolls off towards white, so skies keep their clouds.
 - Photos you already edited keep their look. **Photo ▸ Update to Current Process** moves them to V3 (one Undo step).
+- While you drag Highlights or Shadows, the preview now matches the export on large photos (it used a smaller
+  radius before); exported photos are unchanged.
 
 ## 2026-10-29
 
