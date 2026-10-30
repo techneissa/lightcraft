@@ -254,6 +254,9 @@
 - The list shows up to 12 matches and scrolls for more. It no longer stays as short as the shortest list since it
   opened, and ↑ and ↓ keep the highlighted command in view.
 
+### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
+- Select Only Active Photo now sits under Deselect All, and Paste Settings from Previous under Paste Selected Settings…, instead of both after Settings…, near the end of the Edit menu. On macOS, where Settings… lives in the application menu, the Edit menu no longer shows two separator lines in a row.
+
 ### Edit All Selected Photos at Once
 - With two or more photos selected, the Edit panel opens with an "Edit All N Selected" switch, and it is on: moving a
   slider or changing a setting changes every selected photo, one undo step for all of them. This is Auto Sync, which now
@@ -280,6 +283,10 @@
   file is checked against its SHA-256 whichever site served it.
 - Without a model the panel says so plainly and points to Luminance and Color under Detail; a model you were
   given installs with **Install from file…**.
+
+### `>=` and `<=` work in the search box
+- Fielded search tokens now take inclusive comparisons: `rating:>=3`, `iso:<=400`, `f:>=2.8`, `focal:<=50`. Before,
+  the `=` was read as part of the number, so such a search quietly showed no photos at all.
 
 ## 2026-10-24
 
@@ -557,6 +564,13 @@
 - A crop ratio no longer flips to the photo's orientation (issue #2253): after X turns the crop portrait, picking
   another ratio (4 × 5, 2 × 3…) keeps it portrait, as in Lightroom, and a Custom ratio taller than wide gives a
   portrait crop.
+
+## 2026-10-17
+
+### Short Epson and Mamiya raws are refused
+- An Epson ERF or Mamiya MEF whose raw strip runs past the end of the file is now an error on import (issue #2119).
+  Before, the header probe trusted the declared strip length and sized its sample buffer from it, so a few KB of file
+  could make it allocate gigabytes.
 
 ## 2026-10-16
 
