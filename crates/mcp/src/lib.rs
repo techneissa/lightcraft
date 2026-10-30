@@ -15,6 +15,8 @@
 //! streams), and [`Server::handle_line`] (one message).
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
+// (the export tool's schema is one long `json!` literal, and it grew past the default of 128)
+#![recursion_limit = "256"]
 
 mod backend;
 mod base64;

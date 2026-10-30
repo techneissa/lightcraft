@@ -25,6 +25,7 @@ pub mod docking;
 mod drop_overlay;
 pub mod edit_in_task;
 pub mod editor_handoff;
+pub mod export_reveal;
 pub mod export_task;
 mod focus_scan;
 mod frame_rate;

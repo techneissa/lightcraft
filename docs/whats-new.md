@@ -9,6 +9,11 @@
 - A hidden section only leaves the panel: its adjustments stay on the photo and still apply. Choosing it from
   Window ▸ Edit Sections (⌘1 to ⌘5) brings it back.
 
+### Show in Finder After Export
+- The Export dialog has **Show in Finder** (File Explorer on Windows, your file manager on Linux): when the export
+  finishes, the first file it wrote is shown. It is saved with the export settings and presets, and off until you
+  turn it on.
+
 ### Sliders on One Row
 - Each Develop slider is one row: its name on the left, a groove with tick marks and a drop-shaped thumb, and the
   value on the right in a column of fixed width, so typing or dragging to `-100` never moves the slider.

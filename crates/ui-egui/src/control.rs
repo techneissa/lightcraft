@@ -583,7 +583,14 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
     } else {
         let w = app.services.write.as_mut().ok_or("no writer")?;
         let files = export_batch(&mut app.session, &ids, &opts, &to, &mut |path, bytes| w(path, bytes), &|path| std::path::Path::new(path).exists())?;
+        // the desktop app has the opener; a headless or CLI-driven run has none and shows nothing
+        let shown = crate::export_reveal::reveal_exported(app, opts.show_in_finder, &files);
         let mut out = json!({"files": files});
+        match shown {
+            Ok(true) => out["shownInFinder"] = json!(true),
+            Ok(false) => {}
+            Err(e) => out["showInFinderError"] = json!(e),
+        }
         // Photos may take minutes (and waits for the permission prompt): in the desktop app on a
         // worker, never on this (UI) thread; the app announces the outcome and
         // `export.photosImports` reports it. A window-less run (snapshot scripts) waits.

@@ -1142,6 +1142,13 @@ fn assert_export_options_round_trip() {
         assert!(ExportOptions::from_json(&on.to_json()).add_to_photos);
     }
     assert_eq!(ExportOptions::from_json(&json!({"photosAlbum": "  Trip  "})).photos_album, "Trip");
+    // Show in Finder: off by default, a switch that survives presets and Export with Previous
+    assert!(!ExportOptions::default().show_in_finder);
+    assert!(err(json!({"showInFinder": "yes"})).contains("`showInFinder` must be true or false"));
+    let shown = ExportOptions { show_in_finder: true, ..Default::default() };
+    assert_eq!(ExportOptions::from_params(&shown.to_json()).unwrap(), shown);
+    assert!(ExportOptions::from_json(&shown.to_json()).show_in_finder);
+    assert!(!ExportOptions::from_json(&json!({"quality": 80})).show_in_finder, "a preset saved before the option reads as off");
     assert_eq!(ExportOptions::from_params(&ExportOptions::default().to_json()).unwrap(), ExportOptions::default());
     // null is "not given", as a dropped key is
     ExportOptions::from_params(&json!({"quality": 92, "longEdge": null, "watermark": null})).unwrap();
