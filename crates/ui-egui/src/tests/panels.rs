@@ -2548,8 +2548,8 @@ fn new_album_can_leave_the_selected_photos_out() {
     assert!(photos(&h, "Nothing").is_empty());
 }
 
-/// Histogram corner controls stay usable even before a histogram is available, and each
-/// click invokes the same clipping-warning command as the J shortcut exactly once.
+/// Histogram corner controls stay usable even before a histogram is available; each triangle
+/// toggles only its own overlay, a click on the plot and J toggle both.
 #[test]
 fn histogram_corners_toggle_clipping_warnings() {
     let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
@@ -2557,22 +2557,75 @@ fn histogram_corners_toggle_clipping_warnings() {
         texture.histogram = None;
     }
     h.step();
-    h.app.ui.show_clipping = false;
+    h.app.ui.clip_shadows = false;
+    h.app.ui.clip_highlights = false;
     let histogram = h.app.widgets.iter().find(|(id, _)| id == "histogram").unwrap().1;
     for id in ["histogram:shadows", "histogram:highlights"] {
         let rect = h.app.widgets.iter().find(|(widget, _)| widget == id).unwrap().1;
         assert!(histogram.shrink(8.0).contains_rect(rect), "{id} keeps clear space to the histogram edges: {rect:?} in {histogram:?}");
     }
-    for (id, enabled) in [("histogram:shadows", true), ("histogram:highlights", false), ("histogram", true)] {
+    // (widget, shadows, highlights) after each click
+    for (id, shadows, highlights) in [
+        ("histogram:shadows", true, false),
+        ("histogram:highlights", true, true),
+        ("histogram:shadows", false, true),
+        ("histogram:highlights", false, false),
+        ("histogram", true, true),
+    ] {
         let r = h.request("ui.clickWidget", json!({"id": id}), T);
         assert_eq!(r["ok"], true, "{r}");
         h.step();
-        assert_eq!(h.app.ui.show_clipping, enabled, "{id} must toggle exactly once");
+        assert_eq!((h.app.ui.clip_shadows, h.app.ui.clip_highlights), (shadows, highlights), "{id} must toggle exactly once");
     }
     let r = h.request("ui.key", json!({"key": "J"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
-    assert!(!h.app.ui.show_clipping);
+    assert_eq!((h.app.ui.clip_shadows, h.app.ui.clip_highlights), (false, false), "J with both on turns both off");
+}
+
+/// J turns both sides on when either is off; the per-side commands set or toggle one side.
+#[test]
+fn clipping_commands_drive_each_side_and_j_both() {
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
+    h.app.ui.clip_shadows = true;
+    h.app.ui.clip_highlights = false;
+    h.app.run("view.clipping", json!({})).unwrap();
+    assert_eq!((h.app.ui.clip_shadows, h.app.ui.clip_highlights), (true, true), "one side on: J turns both on");
+    h.app.run("view.clipping", json!({})).unwrap();
+    assert_eq!((h.app.ui.clip_shadows, h.app.ui.clip_highlights), (false, false));
+    h.app.run("view.clippingHighlights", json!({})).unwrap();
+    assert_eq!((h.app.ui.clip_shadows, h.app.ui.clip_highlights), (false, true));
+    h.app.run("view.clippingShadows", json!({"on": true})).unwrap();
+    h.app.run("view.clippingShadows", json!({"on": true})).unwrap();
+    h.app.run("view.clippingHighlights", json!({"on": false})).unwrap();
+    assert_eq!((h.app.ui.clip_shadows, h.app.ui.clip_highlights), (true, false));
+}
+
+/// Settings saved with the single `showClipping` flag load as both sides; new settings save the two.
+#[test]
+fn old_clipping_setting_turns_both_sides_on() {
+    let old = serde_json::from_value::<crate::UiState>(json!({"showClipping": true})).unwrap().sanitized();
+    assert!(old.clip_shadows && old.clip_highlights);
+    let off = serde_json::from_value::<crate::UiState>(json!({"showClipping": false})).unwrap().sanitized();
+    assert!(!off.clip_shadows && !off.clip_highlights);
+    let mut now = crate::UiState::default();
+    now.clip_shadows = true;
+    let saved = serde_json::to_value(&now).unwrap();
+    assert!(saved.get("showClipping").is_none(), "the legacy flag is never written");
+    let back = serde_json::from_value::<crate::UiState>(saved).unwrap().sanitized();
+    assert!(back.clip_shadows && !back.clip_highlights);
+}
+
+/// A pointer resting on a triangle previews its side only while the hover is fresh.
+#[test]
+fn hovering_a_triangle_previews_its_overlay_briefly() {
+    let mut h = demo([1400.0, 1000.0], json!({"view": "detail", "right": "edit"}));
+    h.app.ui.clip_hover = ([false, true], 10);
+    assert_eq!(crate::panels::clipping::effective_sides(&h.app, 10), (false, true));
+    assert_eq!(crate::panels::clipping::effective_sides(&h.app, 11), (false, true));
+    assert_eq!(crate::panels::clipping::effective_sides(&h.app, 12), (false, false), "a stale hover is ignored");
+    h.app.ui.clip_shadows = true;
+    assert_eq!(crate::panels::clipping::effective_sides(&h.app, 99), (true, false));
 }
 
 #[test]

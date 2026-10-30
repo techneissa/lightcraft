@@ -74,7 +74,7 @@ fn modal_dialogs_block_background_shortcuts_and_keep_escape() {
     }
     assert_eq!(h.app.session.catalog.photo(active).unwrap().rating, rating);
     assert_eq!(h.app.session.active(), Some(active));
-    assert!(!h.app.ui.show_clipping);
+    assert!(!h.app.ui.clip_shadows && !h.app.ui.clip_highlights);
     let r = h.request("ui.key", json!({"key": "Escape"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
