@@ -11,7 +11,7 @@ use crate::colorops::ColorOps;
 use crate::geometry::Frame;
 use crate::local::log_lum;
 use crate::output::{DeepImage, DeepSamples, OutputDepth, OutputSpace, OutputTrc};
-use crate::tone::ToneMap;
+use crate::tone::{SliderModel, ToneMap};
 use crate::{Prepared, SourceInfo, for_rows};
 
 #[inline]
@@ -269,13 +269,16 @@ impl FinishParams {
 /// lifts its highlights past white ([`ToneMap::camera_hdr`]), so it matches the SDR render below them.
 pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
-    match s.process.process() {
+    let model = match s.process.process() {
         // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
-        Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw) {
-            Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak),
-            None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
-            None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
-        },
+        Process::V1 | Process::V2 => SliderModel::Legacy,
+        // V3: Contrast, Whites and Blacks as strong on every path as on `ToneMap::hdr`
+        Process::V3 => SliderModel::Unified,
+    };
+    match info.camera_tone.as_ref().filter(|_| info.raw) {
+        Some(curve) => ToneMap::camera_hdr_with(curve, l.contrast, l.whites, l.blacks, peak, model),
+        None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
+        None => ToneMap::display_hdr_with(l.contrast, l.whites, l.blacks, peak, model, crate::tone::GREY),
     }
 }
 
