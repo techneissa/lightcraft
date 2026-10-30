@@ -2,6 +2,12 @@
 
 ## 2026-10-30
 
+### Noise Reduction Contrast and Sharpening Detail Work
+- **Noise Reduction ▸ Contrast** now does something: higher values keep more texture that the luminance noise
+  reduction would smooth away. At 0, the default, photos look as before.
+- In process V3, **Sharpening ▸ Detail** sets how much fine detail and noise sharpening brings out (low: clean
+  edges; high: fine texture too). Sharpening is a little stronger overall.
+
 ### Sliders on One Row
 - Each Develop slider is one row: its name on the left, a groove with tick marks and a drop-shaped thumb, and the
   value on the right in a column of fixed width, so typing or dragging to `-100` never moves the slider.
