@@ -91,7 +91,7 @@ pub struct Tex {
     pub ms: f64,
     /// Set for stand-ins: where the image came from.
     pub quick: Option<QuickSource>,
-    /// CPU copy of the pixels (only with [`Renderer::keep_pixels`]; for headless screenshots).
+    /// CPU copy of the pixels (the loupe's always, for the clipping overlay; others only with [`Renderer::keep_pixels`], for headless screenshots).
     pub pixels: Option<std::sync::Arc<egui::ColorImage>>,
 }
 
@@ -257,6 +257,8 @@ pub struct Renderer {
     /// Keep a CPU copy of every texture so the UI can be rasterized headlessly (set when the app
     /// is driven by the control channel).
     pub keep_pixels: bool,
+    /// The clipping overlay's texture for the loupe photo.
+    pub clip_overlay: Option<crate::panels::clipping::ClipOverlay>,
     /// Per-view intermediate results (loupe and "before"), so slider drags redo only what changed.
     stages: HashMap<Slot, Arc<StageCache>>,
     /// Slot → key of the last quick job requested for it (each is tried once).
@@ -346,6 +348,7 @@ impl Renderer {
             completed: 0,
             discarded: 0,
             keep_pixels: false,
+            clip_overlay: None,
             stages: HashMap::new(),
             quick_tried: HashMap::new(),
             failed: HashMap::new(),
@@ -1134,7 +1137,8 @@ impl Renderer {
             }
             let img = &rendered.image;
             let color = color.unwrap_or_else(|| Arc::new(color_image(img)));
-            let pixels = self.keep_pixels.then(|| color.clone());
+            // the loupe keeps its pixels (a shared handle, no copy) for the clipping overlay
+            let pixels = (self.keep_pixels || slot == Slot::Main).then(|| color.clone());
             let name = format!("{slot:?}");
             match self.textures.get_mut(&slot) {
                 Some(t) => {
