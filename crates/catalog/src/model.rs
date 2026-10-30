@@ -204,6 +204,10 @@ pub struct Meta {
     /// written to XMP. Left out of the catalog JSON when unknown, so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<lightcraft_meta::FocusPoint>,
+    /// Camera and exposure values a person edited over the file's (`camera` .. `iso` above stay what
+    /// the file says). See [`crate::exif_override`]. Left out of the catalog JSON when none.
+    #[serde(default, skip_serializing_if = "crate::exif_override::ExifOverrides::is_empty")]
+    pub exif: crate::exif_override::ExifOverrides,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
