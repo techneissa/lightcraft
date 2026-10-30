@@ -447,7 +447,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             if (sm > 0.0) {
                 mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
             }
-            delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
+            if (pu(F_TONE_V3) != 0u) {
+                // process V3 (`finish::SHARPEN_GAIN_V3`, `finish::sharpen_mix`)
+                let sd = pf(F_SHARPEN_DETAIL);
+                let mixv = sd + (1.0 - sd) * sstep(0.04, 0.3, abs(det));
+                delta += sp * 3.0 * clamp(det, -0.8, 0.8) * mk * mixv;
+            } else {
+                delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
+            }
         }
     }
     // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
