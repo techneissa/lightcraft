@@ -154,6 +154,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     {
         return Some(r);
     }
+    if id.starts_with("lensDatabase.") {
+        return Some(crate::dialogs::settings::lens_database::command(app, id, p));
+    }
     if id.starts_with("topBar.") {
         return Some(crate::panels::topbar_items::command(app, id, p));
     }

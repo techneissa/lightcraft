@@ -14,6 +14,11 @@
   finishes, the first file it wrote is shown. It is saved with the export settings and presets, and off until you
   turn it on.
 
+### Lens Database Folder in Settings
+- **Settings ▸ Import ▸ Lens profiles** takes the folder of a lensfun lens database with **Choose…** and **Clear**, and
+  says how many lens profiles it found, or why none. The `LIGHTCRAFT_LENSFUN_DIR` variable still wins when it is set,
+  and the status line says so. Photos use the new profiles when they are imported or reloaded.
+
 ### Sliders on One Row
 - Each Develop slider is one row: its name on the left, a groove with tick marks and a drop-shaped thumb, and the
   value on the right in a column of fixed width, so typing or dragging to `-100` never moves the slider.

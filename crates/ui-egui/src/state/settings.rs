@@ -158,6 +158,9 @@ pub struct AppSettings {
     pub memory_mb: u32,
     /// Use Smart Previews instead of Originals for viewing and editing (`library.smartPreviewsForEditing`).
     pub smart_previews_for_editing: bool,
+    /// Folder of a lensfun-format lens database (Settings ▸ Import ▸ Lens profiles; empty = none;
+    /// `LIGHTCRAFT_LENSFUN_DIR` wins when set).
+    pub lens_database_dir: String,
     /// The question about building the missing smart previews was asked once, when the setting was first switched on.
     pub smart_editing_offered: bool,
     /// The Info panel's metadata fields with several photos selected: true (the default) shows the
@@ -255,6 +258,7 @@ impl Default for AppSettings {
             photocraft_file: EditFile { format: EditFormat::Psd, ..EditFile::default() },
             memory_mb: 0,
             smart_previews_for_editing: false,
+            lens_database_dir: String::new(),
             smart_editing_offered: false,
             info_selected_photos: true,
             film_names: true,

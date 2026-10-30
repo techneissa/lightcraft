@@ -9,9 +9,13 @@ stays a separate download. Adobe LCP profiles are never used.
 
 1. Get the lensfun database (the `data/db/*.xml` files of <https://github.com/lensfun/lensfun>, or the copy a Linux
    distribution installs under `/usr/share/lensfun/version_1/`).
-2. Point `LIGHTCRAFT_LENSFUN_DIR` at that directory and start the app (or the CLI).
+2. In the app, choose the directory in Settings ▸ Import ▸ Lens profiles (Choose…, Clear). The line under it says how
+   many lens profiles were found, or why none. Or point `LIGHTCRAFT_LENSFUN_DIR` at it and start the app (or the CLI);
+   the variable wins over the Settings folder when it is set.
 
-Files are read once per process. Invalid files are skipped with a warning in the log. Without the variable nothing
+The folder is read when it is first needed and again when it changes (agents: `lensDatabase.get`, `lensDatabase.set
+{dir}`, `lensDatabase.reload`). Photos keep the profile they were last read with; a photo imported or reloaded
+afterwards uses the new database. Invalid files are skipped with a warning in the log. Without a folder nothing
 changes.
 
 ## What is applied
