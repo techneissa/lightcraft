@@ -457,12 +457,12 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let sm = pf(F_SHARPEN_MASK);
         var mk = 1.0;
         if (sm > 0.0) {
-            mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
+            mk = sstep(sm * 0.08, sm * 0.08 + 0.08, abs(det)); // (V3: `finish::local_tone_delta`)
         }
-        // `finish::SHARPEN_GAIN_V3`, `finish::sharpen_mix`
+        // `finish::sharpen_gain` (SHARPEN_GAIN), `finish::sharpen_mix` (`SHARPEN_MIX_LO` / `_HI`)
         let sd = pf(F_SHARPEN_DETAIL);
-        let mixv = sd + (1.0 - sd) * sstep(0.04, 0.3, abs(det));
-        delta += sp * 1.5 * clamp(det, -0.8, 0.8) * mk * mixv;
+        let mixv = sd + (1.0 - sd) * sstep(0.03, 0.15, abs(det));
+        delta += sp * pf(F_SHARPEN_GAIN) * clamp(det, -0.8, 0.8) * mk * mixv;
     }
     // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
     if (l_noise != 0.0 && pu(F_HAS_TEX) != 0u) {

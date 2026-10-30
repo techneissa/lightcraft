@@ -187,6 +187,8 @@ pub struct FinishParams {
     pub sharpen_mask: f32,
     /// Sharpening Detail as 0..1 (process V3: how much of the finest, noise-sized detail is sharpened, see [`sharpen_mix`]).
     pub sharpen_detail: f32,
+    /// Process V3: the sharpening gain for the Radius slider ([`sharpen_gain`]).
+    pub sharpen_gain: f32,
     /// Airlight after and before exposure, exposure gain and EV (see [`crate::Prepared`]).
     pub air: f32,
     pub air_pre: f32,
@@ -259,6 +261,7 @@ impl FinishParams {
             sharpen: (s.detail.sharpen_amount / 150.0) as f32,
             sharpen_mask: (s.detail.sharpen_masking / 100.0) as f32,
             sharpen_detail: (s.detail.sharpen_detail / 100.0).clamp(0.0, 1.0) as f32,
+            sharpen_gain: sharpen_gain(s.detail.sharpen_radius),
             air: air_pre * gain,
             air_pre,
             gain,
@@ -713,8 +716,9 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
         && let Some(blur) = &p.sharpen_blur
     {
         let detail = p.log_l.data[index] - blur.data[index];
-        let mask = if fp.sharpen_mask > 0.0 { smooth(fp.sharpen_mask * 0.25, fp.sharpen_mask * 0.25 + 0.15, detail.abs()) } else { 1.0 };
-        delta += sharpen * SHARPEN_GAIN_V3 * detail.clamp(-0.8, 0.8) * mask * sharpen_mix(fp.sharpen_detail, detail);
+        // (the pixel-scale band's edges are a few hundredths of an EV, so the mask's range is a third of V1 / V2's)
+        let mask = if fp.sharpen_mask > 0.0 { smooth(fp.sharpen_mask * 0.08, fp.sharpen_mask * 0.08 + 0.08, detail.abs()) } else { 1.0 };
+        delta += sharpen * fp.sharpen_gain * detail.clamp(-0.8, 0.8) * mask * sharpen_mix(fp.sharpen_detail, detail);
     }
     if l_noise != 0.0
         && let Some(blur) = &p.texture_blur
@@ -725,15 +729,28 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
     delta
 }
 
-/// Process V3 sharpening gain (V1 / V2: 1.3). The WGSL kernel (`finish.wgsl`) carries the same constant.
-pub const SHARPEN_GAIN_V3: f32 = 1.5;
+/// Process V3 sharpening gain at Radius 1 and below (V1 / V2: 1.3).
+pub const SHARPEN_GAIN_V3: f32 = 2.4;
+
+/// Process V3 sharpening gain at Radius `radius`: [`SHARPEN_GAIN_V3`] up to Radius 1, then falling as `Radius^-0.7`
+/// (a wider band already moves an edge further per unit of gain and its halo is wider, so the gain gives way and
+/// Radius 3 stays strong without blowing a bright band). The WGSL kernel reads it as `SHARPEN_GAIN`.
+pub fn sharpen_gain(radius: f64) -> f32 {
+    let r = if radius.is_finite() { radius.clamp(0.1, 10.0) as f32 } else { 1.0 };
+    SHARPEN_GAIN_V3 * r.max(1.0).powf(-0.7)
+}
+
+/// Band detail (EV) below which only the Detail slider's share counts, and above which it all counts (the band is
+/// pixel-scale, so an edge of a real photo is a few hundredths of an EV from its blur). The WGSL kernel repeats them.
+pub const SHARPEN_MIX_LO: f32 = 0.03;
+pub const SHARPEN_MIX_HI: f32 = 0.15;
 
 /// Process V3: the share of the band detail `detail` (log2 luminance minus its fine blur) that sharpening
-/// boosts. Edges (more than ~0.3 EV from their blur) always count; finer, noise-sized detail only as much
-/// as the Detail slider (0..1) allows, so a low Detail sharpens edges without raising the noise.
+/// boosts. Edges (more than [`SHARPEN_MIX_HI`] EV from their blur) always count; finer, noise-sized detail only as
+/// much as the Detail slider (0..1) allows, so a low Detail sharpens edges without raising the noise.
 #[inline]
 pub fn sharpen_mix(sharpen_detail: f32, detail: f32) -> f32 {
-    sharpen_detail + (1.0 - sharpen_detail) * smooth(0.04, 0.3, detail.abs())
+    sharpen_detail + (1.0 - sharpen_detail) * smooth(SHARPEN_MIX_LO, SHARPEN_MIX_HI, detail.abs())
 }
 
 /// A colour needing more desaturation than this (scale < `GAMUT_WARN`) to fit is out of gamut for

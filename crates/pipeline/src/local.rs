@@ -640,17 +640,21 @@ pub struct PlaneSigmas {
     pub chroma: Option<f32>,
 }
 
-/// Process V3: the sigma (px) of the sharpening band for Radius `radius` (0.5..3): a fraction of the long edge,
-/// so a preview and an export sharpen at the same scale. Radius 1 is [`SHARPEN_RADIUS_V3`] of it.
-pub fn sharpen_sigma(radius: f64, px_per_long: f64) -> f32 {
-    let r = if radius.is_finite() { radius.clamp(0.1, 10.0) } else { 1.0 };
-    ((SHARPEN_RADIUS_V3 * r.powf(0.6) * px_per_long) as f32).max(0.6)
+/// Sigma of the process V3 sharpening band per unit of Radius, in pixels of the original photo: a Gaussian of 1.5 px
+/// sees the detail of a 1 to 1.5 px soft edge of a real photo that a 1 px one barely does.
+pub const SHARPEN_RADIUS_SCALE: f32 = 1.5;
+
+/// Process V3: the sigma (px) of the sharpening band for Radius `radius` (0.5..3): [`SHARPEN_RADIUS_SCALE`] times that many pixels of the original
+/// photo, so `detail_scale` (output pixels per original pixel, see [`detail_scale`]) keeps a
+/// preview and an export sharpening the same edges. Never below 0.6 px: [`gaussian`] makes no blur finer than that,
+/// so a small preview sharpens at its finest scale instead of not at all.
+pub fn sharpen_sigma(radius: f64, detail_scale: f32) -> f32 {
+    let r = if radius.is_finite() { radius.clamp(0.1, 10.0) as f32 } else { 1.0 };
+    let k = if detail_scale.is_finite() { detail_scale.clamp(0.0, 1.0) } else { 1.0 };
+    (r * k * SHARPEN_RADIUS_SCALE).max(0.6)
 }
 
-/// Sigma of the process V3 sharpening band at Radius 1, as a fraction of the long edge.
-pub const SHARPEN_RADIUS_V3: f64 = 0.0055;
-
-pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, _q: Quality) -> PlaneSigmas {
+pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, detail_scale: f32, _q: Quality) -> PlaneSigmas {
     let ppl = px_per_long as f32;
     // A hidden mask, or one with no components, does not change the picture. Its sliders must
     // not pick the tone base Clarity reads (#1214).
@@ -670,7 +674,8 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, _q: Quality) -> Plane
     // local Noise and Defringe read the fine detail band too
     // (from process V3 sharpening, global and local, has a band of its own at the Radius slider's scale)
     let v3 = s.process >= lightcraft_develop::Process::V3.version();
-    let sharpen = (v3 && (s.detail.sharpen_amount != 0.0 || local_any(|a| a.sharpness))).then(|| sharpen_sigma(s.detail.sharpen_radius, px_per_long));
+    let sharpen =
+        (v3 && (s.detail.sharpen_amount != 0.0 || local_any(|a| a.sharpness))).then(|| sharpen_sigma(s.detail.sharpen_radius, detail_scale));
     let texture = (s.effects.texture != 0.0
         || (!v3 && s.detail.sharpen_amount != 0.0)
         || local_any(|a| a.texture)
@@ -693,6 +698,7 @@ pub(crate) fn prepare(
     s: &DevelopSettings,
     frame: &Frame,
     px_per_long: f64,
+    detail_scale: f32,
     q: Quality,
     planes: &mut Planes,
     mattes: Option<&masks::Mattes>,
@@ -706,7 +712,7 @@ pub(crate) fn prepare(
         sharpen: sharpen_sigma,
         dark: dark_sigma,
         chroma: chroma_sigma,
-    } = plane_sigmas(s, px_per_long, q);
+    } = plane_sigmas(s, px_per_long, detail_scale, q);
 
     let Planes { base: sb, clarity: sc, texture: st, sharpen: ssh, dark: sd, chroma: sch, .. } = planes;
     let chroma_blur = chroma_sigma.map(|sg| match sch {
@@ -883,17 +889,17 @@ mod tests {
             adjust: lightcraft_develop::LocalAdjustments { highlights: 40.0, ..Default::default() },
             ..Default::default()
         });
-        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_none());
+        assert!(plane_sigmas(&s, 2000.0, 1.0, Quality::Full).base.is_none());
         s.masks[0].visible = true;
         s.masks[0].components.clear();
-        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_none());
+        assert!(plane_sigmas(&s, 2000.0, 1.0, Quality::Full).base.is_none());
         s.masks[0].components.push(MaskComponent {
             name: None,
             op: MaskOp::Add,
             invert: false,
             shape: MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(1.0, 0.0) },
         });
-        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_some());
+        assert!(plane_sigmas(&s, 2000.0, 1.0, Quality::Full).base.is_some());
     }
 
     #[test]

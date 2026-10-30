@@ -152,8 +152,8 @@ fn zero_highlights_and_shadows_render_without_the_base() {
     controls::set(&mut s, "effects.clarity", 40.0);
     // no base plane is computed or read (the per-pixel stage sees log luminance): the render is
     // the one it always was
-    assert_eq!(local::plane_sigmas(&s, 1200.0, Quality::Full).base, None);
-    assert!(local::plane_sigmas(&with("light.shadows", 1.0), 1200.0, Quality::Full).base.is_some());
+    assert_eq!(local::plane_sigmas(&s, 1200.0, 1.0, Quality::Full).base, None);
+    assert!(local::plane_sigmas(&with("light.shadows", 1.0), 1200.0, 1.0, Quality::Full).base.is_some());
 }
 
 #[test]
@@ -216,7 +216,7 @@ fn v1_keeps_the_base_it_always_had() {
     assert_eq!(ProcessVersion::legacy().process(), Process::V1);
     for ppl in [300.0, 1200.0, 5568.0, 1e6] {
         for q in [Quality::Full, Quality::Draft] {
-            let sig = local::plane_sigmas(&v1, ppl, q);
+            let sig = local::plane_sigmas(&v1, ppl, 1.0, q);
             assert!(sig.base.is_some());
             assert_eq!(sig.base_detail, 0, "V1 at {ppl} px");
             assert_eq!(local::tone_base_detail(&v1, ppl), 0);
@@ -229,8 +229,8 @@ fn v1_keeps_the_base_it_always_had() {
     }
     // V2 takes the median wherever the image is big enough for one
     let v2 = with("light.highlights", -100.0);
-    assert_eq!(local::plane_sigmas(&v2, 5568.0, Quality::Full).base_detail, local::base_detail_radius(5568.0));
-    assert_eq!(local::plane_sigmas(&v2, 300.0, Quality::Full).base_detail, 0);
+    assert_eq!(local::plane_sigmas(&v2, 5568.0, 1.0, Quality::Full).base_detail, local::base_detail_radius(5568.0));
+    assert_eq!(local::plane_sigmas(&v2, 300.0, 1.0, Quality::Full).base_detail, 0);
 }
 
 #[test]
@@ -259,7 +259,7 @@ fn the_base_plane_is_cached_per_process() {
         let warm = render_cached(&src, &info, s, &req, &cache).image;
         assert!(warm == render(&src, &info, s, &req).image, "process {:?}", s.process);
     }
-    let sig = local::plane_sigmas(&s2, W as f64, Quality::Full);
+    let sig = local::plane_sigmas(&s2, W as f64, 1.0, Quality::Full);
     let sg = sig.base.unwrap();
     assert_ne!(local::base_key(&s1, sg, 0), local::base_key(&s2, sg, 0), "the process is part of the key");
     assert_ne!(local::base_key(&s2, sg, 0), local::base_key(&s2, sg, sig.base_detail));
@@ -321,7 +321,7 @@ fn draft_and_full_agree_for_local_tone_on_large_images() {
 fn base_radius_is_the_same_fraction_of_the_image_at_every_quality() {
     let s = with("light.shadows", 100.0);
     for ppl in [800.0, 1600.0, 2400.0, 5568.0, 8000.0] {
-        let (d, f) = (local::plane_sigmas(&s, ppl, Quality::Draft).base, local::plane_sigmas(&s, ppl, Quality::Full).base);
+        let (d, f) = (local::plane_sigmas(&s, ppl, 1.0, Quality::Draft).base, local::plane_sigmas(&s, ppl, 1.0, Quality::Full).base);
         assert_eq!(d, f, "base sigma at {ppl} px");
     }
 }

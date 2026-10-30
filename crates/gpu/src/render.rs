@@ -888,7 +888,7 @@ struct Prep {
 fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, planes: &mut Planes) -> Prep {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
-    let sig = local::plane_sigmas(&plan.settings, plan.px_per_long, req.quality);
+    let sig = local::plane_sigmas(&plan.settings, plan.px_per_long, plan.detail_scale, req.quality);
     let log_l = match &planes.log_l {
         Some(b) => b.clone(),
         None => {

@@ -58,11 +58,11 @@ Lightroom; *similar*; *stronger*. The real comparison is still the fidelity suit
 | Sharpening Amount 40 / 100 / 150 (V1/V2) | edge slope x1.04 / x1.16 / x1.24; flat noise x1.31 / x1.78 / x2.18 | a visibly crisper soft edge | weaker on edges, noisy; unchanged (V1/V2 keep their look) |
 | Sharpening Amount 40 / 100 / 150 (V3 before the Radius band, Detail 25) | slope x1.04 / x1.12 / x1.20; noise x1.24 / x1.62 / x1.94 | same | slightly less noise per edge gain; still modest on a sigma-1.2 edge because the band is fixed at 0.18 % of the long edge |
 | Sharpening Radius 0.5 / 3.0 | identical to Radius 1 | wider halos / finer detail | **broken: not read** (V1/V2 still; fixed in V3, see below) |
-| Sharpening Amount 40 / 60 / 100 / 150 (V3 after the Radius change, Radius 1) | slope x1.20 / x1.32 / x1.56 / x1.88; overshoot 0.05 / 0.09 / 0.14 / 0.23; noise x1.13 / x1.20 / x1.33 / x1.50 | clear at 40-60, strong but without heavy halos at 150 | works |
-| Sharpening Radius 0.5 / 1 / 2 / 3 (V3, Amount 100) | slope x1.28 / x1.56 / x1.76 / x1.84; overshoot 0.02 / 0.14 / 0.30 / 0.36; halo 10 / 17 / 26 / 32 px on a 1000 px picture | halo widens with Radius | works |
+| Sharpening Amount 40 / 60 / 100 / 150 (V3 after the Radius change, Radius 1; a 400 px picture, edge blurred by 1.2 px) | slope x1.24 / x1.36 / x1.60 / x1.92; overshoot 0.04 / 0.05 / 0.09 / 0.19; noise x1.36 / x1.55 / x1.93 (white noise of 0.06 EV) / x2.41; on a 3000 px picture with a 1.5 px edge: slope x1.10 / x1.19 / - / x1.57 | clear at 40-60, strong but without heavy halos at 150 | works; an edge blurred by 2.5 px or more needs Radius 2-3 |
+| Sharpening Radius 0.5 / 1 / 2 / 3 (V3, Amount 100, 400 px, 1.2 px edge) | slope x1.20 / x1.60 / x1.68 / x1.64; overshoot 0.01 / 0.09 / 0.23 / 0.27; halo (3000 px picture, 1.5 px edge) 0 / 6 / 10 / 14 source px | halo widens with Radius | works |
 | Sharpening Detail 0 / 100 (V1/V2) | identical to Detail 25 | halo suppression / fine-detail emphasis | **broken: not read** |
 | Sharpening Detail 0 / 100 (V3, Amount 100; with the Radius band: slope x1.56 / x1.56, noise x1.13 / x1.96) | before the band: slope x1.04 / x1.36, noise x1.23 / x2.83 | 0 edges only, 100 also fine detail and noise | works (was a no-op) |
-| Sharpening Masking 0 / 100 | slope 1.16 / 1.00, noise 1.78 / 1.00 | flat areas unsharpened at 100 | similar |
+| Sharpening Masking 0 / 100 | slope 1.16 / 1.00, noise 1.78 / 1.00 | flat areas unsharpened at 100 | similar | (V1/V2; in V3 Masking 100 keeps the edges and cuts the noise: slope x1.60, noise x1.35 vs x1.93)
 | NR Luminance 50 / 100 | luma noise std x0.74 / x0.32, edge contrast kept 1.00 | heavy smoothing at 100, edges kept | similar |
 | NR Detail 0 / 100 (at 50) | x0.67 / x0.84 | higher keeps more detail | works |
 | NR Contrast (at Luminance 50) | x0.74 before, x0.79 at 100 now (was identical at every value) | higher keeps contrast, noisy blotches | was **broken: not read**; fixed |
@@ -91,12 +91,19 @@ and the HDR sliders are not covered yet.
   V2 render as before. Test: `sharpening_detail_trades_edges_for_noise`.
 - **Sharpening Radius** (`detail.sharpenRadius`) and the Amount response, process V3 only: sharpening has a band of
   its own (`PlaneSigmas::sharpen`, `Prepared::sharpen_blur`, `Planes::sharpen`; Texture, local Noise and Defringe
-  keep the fine texture band). Its Gaussian sigma is `local::sharpen_sigma`: `0.0055 * Radius^0.6` of the long
-  edge (Radius 1: 0.55 %, 0.5: 0.36 %, 3: 1.06 %), so a preview and an export sharpen at the same scale. The
-  old band was 0.18 % of the long edge, finer than a soft edge, which is why Amount barely sharpened one. The gain
-  is retuned to 1.5 (`SHARPEN_GAIN_V3`) for the wider band. On the GPU the sharpening band is a second plane in
-  the `tex` buffer at `SHARP_OFF` (the kernel has no free binding); `HAS_SHARP` gates it. V1 and V2 render as
-  before. Tests: `sharpening_radius_sets_the_band_scale`, `sharpening_radius_is_still_unread_before_v3`.
+  keep the fine texture band). It is pixel-scale: the Gaussian sigma is `local::sharpen_sigma` = `1.5 * Radius`
+  pixels of the original photo (`SHARPEN_RADIUS_SCALE`), times `Plan::detail_scale` (output pixels per original
+  pixel, at most 1), never below 0.6 px (`gaussian` makes no finer blur), so a preview and an export sharpen the
+  same edges. (An earlier attempt took 0.55 % of the long edge, about 33 px on a 6000 px photo: that is
+  local contrast, not sharpening.) Because the band is fine, an edge is only a few hundredths of an EV from its
+  blur: `sharpen_mix` now counts detail from 0.03 to 0.15 EV (was 0.04 to 0.3) and the Masking range is 0.08 EV
+  per 100 (was 0.25 and 0.15), and the gain is `sharpen_gain`: 2.4 up to Radius 1, then `Radius^-0.7`, so
+  Radius 3 stays strong without blowing a bright band (the CPU passes it as `FinishParams::sharpen_gain`, the
+  WGSL reads `SHARPEN_GAIN`). On the GPU the band is a second plane in the `tex` buffer at `SHARP_OFF` (the kernel
+  has no free binding); `HAS_SHARP` gates it. V1 and V2 render as before. Tests:
+  `sharpening_radius_sets_the_band_scale` (3000 px, 1.5 px edge: halo in source pixels and peak grow with Radius;
+  Amount 50 / 150 bounds on 3000 px and 400 px pictures; Radius 3 under 45 levels; a half-size preview matches the
+  export), `sharpening_radius_is_still_unread_before_v3`.
 - **Vignette** darkening, process V3 only: the multiplier `1 + amount * t` went black at -100 and was -1 stop at -50.
   V3 darkens by `2.75 * |amount|^1.2` stops at the full falloff (`finish::vignette_dark_factor`), blended in the
   log domain, and lightens by 0.40 of the way to white at +100 (was 0.85; +1.5 stops on grey instead of +2.3).

@@ -30,6 +30,7 @@ const FIELDS: &[(&str, usize)] = &[
     ("SHARPEN", 1),
     ("SHARPEN_MASK", 1),
     ("SHARPEN_DETAIL", 1),
+    ("SHARPEN_GAIN", 1),
     ("HAS_CLAR", 1),
     ("HAS_TEX", 1),
     ("HAS_SHARP", 1),
@@ -193,6 +194,7 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("SHARPEN", fp.sharpen);
     p.f("SHARPEN_MASK", fp.sharpen_mask);
     p.f("SHARPEN_DETAIL", fp.sharpen_detail);
+    p.f("SHARPEN_GAIN", fp.sharpen_gain);
     p.b("HAS_CLAR", present.clarity);
     p.b("HAS_TEX", present.texture);
     p.b("HAS_SHARP", present.sharpen);
