@@ -566,6 +566,8 @@ pub(crate) struct Planes {
     pub base: Option<(BaseKey, Arc<Plane>)>,
     pub clarity: Option<(u32, Arc<Plane>)>,
     pub texture: Option<(u32, Arc<Plane>)>,
+    /// Process V3: the sharpening band, blurred at the Radius slider's scale.
+    pub sharpen: Option<(u32, Arc<Plane>)>,
     /// Dark channel and its airlight.
     pub dark: Option<(u32, Arc<Plane>, f32)>,
     /// Blurred chromaticity (local Moiré / Noise).
@@ -577,7 +579,7 @@ impl Planes {
     /// enough for a draft: the wide blurs (base, clarity, dehaze, chromaticity). Its `key` matches
     /// no image, so only another draft takes them.
     pub fn for_other_nr(self) -> Planes {
-        Planes { key: 0, pre_nr: self.pre_nr, log_l: None, texture: None, ..self }
+        Planes { key: 0, pre_nr: self.pre_nr, log_l: None, texture: None, sharpen: None, ..self }
     }
 }
 
@@ -629,11 +631,24 @@ pub struct PlaneSigmas {
     pub clarity: Option<f32>,
     /// Texture / sharpening band (Gaussian).
     pub texture: Option<f32>,
+    /// Process V3: the sharpening band (Gaussian at the Radius slider's scale, [`sharpen_sigma`]); V1 / V2 sharpen on
+    /// the `texture` band.
+    pub sharpen: Option<f32>,
     /// Dehaze dark channel (Gaussian).
     pub dark: Option<f32>,
     /// Chromaticity blur for local Moiré / colour noise (Gaussian).
     pub chroma: Option<f32>,
 }
+
+/// Process V3: the sigma (px) of the sharpening band for Radius `radius` (0.5..3): a fraction of the long edge,
+/// so a preview and an export sharpen at the same scale. Radius 1 is [`SHARPEN_RADIUS_V3`] of it.
+pub fn sharpen_sigma(radius: f64, px_per_long: f64) -> f32 {
+    let r = if radius.is_finite() { radius.clamp(0.1, 10.0) } else { 1.0 };
+    ((SHARPEN_RADIUS_V3 * r.powf(0.6) * px_per_long) as f32).max(0.6)
+}
+
+/// Sigma of the process V3 sharpening band at Radius 1, as a fraction of the long edge.
+pub const SHARPEN_RADIUS_V3: f64 = 0.0055;
 
 pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, _q: Quality) -> PlaneSigmas {
     let ppl = px_per_long as f32;
@@ -653,17 +668,20 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, _q: Quality) -> Plane
     let base = tone_active.then(|| (0.015 * ppl).max(1.0));
     let clarity = (s.effects.clarity != 0.0 || local_any(|a| a.clarity)).then(|| (0.012 * ppl).max(1.0));
     // local Noise and Defringe read the fine detail band too
+    // (from process V3 sharpening, global and local, has a band of its own at the Radius slider's scale)
+    let v3 = s.process >= lightcraft_develop::Process::V3.version();
+    let sharpen = (v3 && (s.detail.sharpen_amount != 0.0 || local_any(|a| a.sharpness))).then(|| sharpen_sigma(s.detail.sharpen_radius, px_per_long));
     let texture = (s.effects.texture != 0.0
-        || s.detail.sharpen_amount != 0.0
+        || (!v3 && s.detail.sharpen_amount != 0.0)
         || local_any(|a| a.texture)
-        || local_any(|a| a.sharpness)
+        || (!v3 && local_any(|a| a.sharpness))
         || local_any(|a| a.noise)
         || s.masks.iter().filter(live).any(|m| m.adjust.defringe > 0.0))
     .then(|| (0.0018 * ppl).max(0.6));
     let dark = (s.effects.dehaze != 0.0 || local_any(|a| a.dehaze)).then(|| (0.02 * ppl).max(1.0));
     let chroma = (local_any(|a| a.moire) || s.masks.iter().filter(live).any(|m| m.adjust.noise > 0.0)).then(|| (CHROMA_SIGMA * ppl).max(1.0));
     let base_detail = if base.is_some() { tone_base_detail(s, px_per_long) } else { 0 };
-    PlaneSigmas { base, base_detail, clarity, texture, dark, chroma }
+    PlaneSigmas { base, base_detail, clarity, texture, sharpen, dark, chroma }
 }
 
 /// The spatial planes the per-pixel stage needs for `img` (white-balanced, before exposure),
@@ -680,10 +698,17 @@ pub(crate) fn prepare(
     mattes: Option<&masks::Mattes>,
 ) -> Prepared {
     let log_l = planes.log_l.get_or_insert_with(|| Arc::new(timed("log_l", || img.map(log_lum)))).clone();
-    let PlaneSigmas { base: base_sigma, base_detail, clarity: clarity_sigma, texture: texture_sigma, dark: dark_sigma, chroma: chroma_sigma } =
-        plane_sigmas(s, px_per_long, q);
+    let PlaneSigmas {
+        base: base_sigma,
+        base_detail,
+        clarity: clarity_sigma,
+        texture: texture_sigma,
+        sharpen: sharpen_sigma,
+        dark: dark_sigma,
+        chroma: chroma_sigma,
+    } = plane_sigmas(s, px_per_long, q);
 
-    let Planes { base: sb, clarity: sc, texture: st, dark: sd, chroma: sch, .. } = planes;
+    let Planes { base: sb, clarity: sc, texture: st, sharpen: ssh, dark: sd, chroma: sch, .. } = planes;
     let chroma_blur = chroma_sigma.map(|sg| match sch {
         Some((k, c)) if *k == sg.to_bits() => c.clone(),
         _ => {
@@ -693,7 +718,7 @@ pub(crate) fn prepare(
         }
     });
     let l = &log_l;
-    let (base, (clarity_blur, (texture_blur, dark))) = par_join(
+    let (base, (clarity_blur, (texture_blur, (sharpen_blur, dark)))) = par_join(
         || base_sigma.map(|sg| plane_at(sb, base_key(s, sg, base_detail), || timed("base", || tone_base(l, sg, base_detail)))),
         || {
             par_join(
@@ -702,15 +727,20 @@ pub(crate) fn prepare(
                     par_join(
                         || texture_sigma.map(|sg| plane_at(st, sg.to_bits(), || timed("texture", || gaussian(l, sg)))),
                         || {
-                            dark_sigma.map(|sg| match sd {
-                                Some((k, d, air)) if *k == sg.to_bits() => (d.clone(), *air),
-                                _ => {
-                                    let d = timed("dehaze", || Arc::new(gaussian(&img.map(dark_of), sg)));
-                                    let air = airlight(&d);
-                                    *sd = Some((sg.to_bits(), d.clone(), air));
-                                    (d, air)
-                                }
-                            })
+                            par_join(
+                                || sharpen_sigma.map(|sg| plane_at(ssh, sg.to_bits(), || timed("sharpen", || gaussian(l, sg)))),
+                                || {
+                                    dark_sigma.map(|sg| match sd {
+                                        Some((k, d, air)) if *k == sg.to_bits() => (d.clone(), *air),
+                                        _ => {
+                                            let d = timed("dehaze", || Arc::new(gaussian(&img.map(dark_of), sg)));
+                                            let air = airlight(&d);
+                                            *sd = Some((sg.to_bits(), d.clone(), air));
+                                            (d, air)
+                                        }
+                                    })
+                                },
+                            )
                         },
                     )
                 },
@@ -724,7 +754,7 @@ pub(crate) fn prepare(
     };
     let ev = s.light.exposure as f32;
     let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev, mattes));
-    Prepared { img, log_l, base, clarity_blur, texture_blur, dark, chroma_blur, air, masks, px_per_long }
+    Prepared { img, log_l, base, clarity_blur, texture_blur, sharpen_blur, dark, chroma_blur, air, masks, px_per_long }
 }
 
 /// The airlight of the whole output frame, estimated on a small render of it (`proxy_w` px wide):

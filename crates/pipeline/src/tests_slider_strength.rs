@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 use lightcraft_color::perceptual::{hsv_to_rgb, lab_to_lch, oklab_from_2020, oklab_to_2020};
 use lightcraft_color::transfer::srgb_to_linear;
 use lightcraft_color::{REC2020, SRGB};
-use lightcraft_develop::{DevelopSettings, MIXER_HUES, WbMode, WbScale, controls};
+use lightcraft_develop::{DevelopSettings, MIXER_HUES, ProcessVersion, WbMode, WbScale, controls};
 use lightcraft_raster::blur::gaussian;
 use lightcraft_raster::{Plane, Rgb32f, Rgba8};
 
@@ -241,6 +241,30 @@ fn edge_scene(w: usize, h: usize, noise: f32) -> Rgb32f {
     })
 }
 
+/// A soft vertical edge `w` px wide picture, its softness (σ = `w` / 333 px) scaling with the picture.
+fn scaled_edge_scene(w: usize) -> Rgb32f {
+    let h = w / 2;
+    let soft = gaussian(&Plane::from_fn(w, h, |x, _| if x > w / 2 { 0.4 } else { 0.1 }), w as f32 / 333.0);
+    Rgb32f::from_fn(w, h, |x, y| [soft.data[y * w + x]; 3])
+}
+
+/// What sharpening changes along the middle row of [`scaled_edge_scene`], in 8-bit levels, per pixel.
+fn sharpen_profile(w: usize, process: lightcraft_develop::ProcessVersion, ids: &[(&str, f64)]) -> Vec<f32> {
+    let src = scaled_edge_scene(w);
+    let info = SourceInfo::default();
+    let base = DevelopSettings { process, ..DevelopSettings::default() };
+    let mut s = settings(ids);
+    s.process = process;
+    let row = |img: &Rgba8| -> Vec<f32> { (0..w).map(|x| img.data[(w / 4) * w + x][1] as f32).collect() };
+    let (b, o) = (row(&render_with(&src, &info, &base)), row(&render_with(&src, &info, &s)));
+    b.iter().zip(&o).map(|(b, o)| o - b).collect()
+}
+
+/// Pixels whose level sharpening moves by 3 or more: the width of the halo.
+fn halo_width(profile: &[f32]) -> usize {
+    profile.iter().filter(|d| d.abs() >= 3.0).count()
+}
+
 /// Edge acutance and noise gain of sharpening: (peak edge slope ratio, overshoot as share of the step, noise std ratio).
 pub(crate) fn sharpen_effect(ids: &[(&str, f64)]) -> (f32, f32, f32) {
     let (w, h) = (400, 400);
@@ -403,9 +427,11 @@ fn report_spatial(r: &mut String) {
         row(r, &format!("{v:+}"), &format!("{s:.3} | {c:.3}"));
     }
     r.push_str("\n### Sharpening (peak edge slope ratio / overshoot share of step / flat-noise std ratio)\n\n| setting | slope | overshoot | noise |\n|---|---|---|---|\n");
-    let cases: [(&str, Vec<(&str, f64)>); 8] = [
+    let cases: [(&str, Vec<(&str, f64)>); 10] = [
         ("amount 40 (raw default: r 1.0, detail 25)", vec![("detail.sharpenAmount", 40.0)]),
+        ("amount 60", vec![("detail.sharpenAmount", 60.0)]),
         ("amount 150", vec![("detail.sharpenAmount", 150.0)]),
+        ("amount 100, radius 2.0", vec![("detail.sharpenAmount", 100.0), ("detail.sharpenRadius", 2.0)]),
         ("amount 100, radius 0.5", vec![("detail.sharpenAmount", 100.0), ("detail.sharpenRadius", 0.5)]),
         ("amount 100, radius 3.0", vec![("detail.sharpenAmount", 100.0), ("detail.sharpenRadius", 3.0)]),
         ("amount 100, detail 0", vec![("detail.sharpenAmount", 100.0), ("detail.sharpenDetail", 0.0)]),
@@ -437,9 +463,11 @@ fn report_spatial(r: &mut String) {
 
 fn report_effects(r: &mut String) {
     r.push_str("\n### Vignette (stops of luminance change at the corner / at the middle of the long edge, flat grey)\n\n| setting | corner | edge |\n|---|---|---|\n");
-    let cases: [(&str, Vec<(&str, f64)>); 8] = [
+    let cases: [(&str, Vec<(&str, f64)>); 10] = [
         ("-100 (mid 50, feather 50)", vec![("vignette.amount", -100.0)]),
         ("-50", vec![("vignette.amount", -50.0)]),
+        ("-20", vec![("vignette.amount", -20.0)]),
+        ("+50", vec![("vignette.amount", 50.0)]),
         ("+100", vec![("vignette.amount", 100.0)]),
         ("-100, midpoint 0", vec![("vignette.amount", -100.0), ("vignette.midpoint", 0.0)]),
         ("-100, midpoint 100", vec![("vignette.amount", -100.0), ("vignette.midpoint", 100.0)]),
@@ -501,7 +529,8 @@ fn sharpening_detail_trades_edges_for_noise() {
     let (slope0, _, noise0) = sharpen_effect(&[("detail.sharpenAmount", 100.0), ("detail.sharpenDetail", 0.0)]);
     let (slope100, _, noise100) = sharpen_effect(&[("detail.sharpenAmount", 100.0), ("detail.sharpenDetail", 100.0)]);
     assert!(noise100 > noise0 * 1.3, "noise {noise0} -> {noise100}");
-    assert!(slope100 > slope0 + 0.05, "edge slope {slope0} -> {slope100}");
+    // (the band is wide enough that an edge is far above the noise: Detail leaves its sharpening alone)
+    assert!(slope100 > slope0 - 0.02, "edge slope {slope0} -> {slope100}");
     assert!(slope0 > 1.02 && noise0 < 1.3, "Detail 0 still sharpens edges without much noise: {slope0} {noise0}");
     // Amount 40 (the raw default) is visible on an edge
     assert!(sharpen_effect(&[("detail.sharpenAmount", 40.0)]).0 > 1.03);
@@ -544,7 +573,93 @@ fn strong_sliders_stay_strong() {
     assert!(nr_effect(&[("detail.nrLuminance", 100.0)]).0 < 0.5);
     assert!(nr_effect(&[("detail.nrColor", 100.0)]).1 < 0.4);
     assert!(grain_std(&[("grain.amount", 100.0)]) > 8.0);
-    // vignette: strong darkening at -100, clearly lighter corners at +100
-    assert!(vignette_effect(&[("vignette.amount", -100.0)]).0 < -3.0);
+    // vignette: strong darkening at -100 (-2.75 stops), clearly lighter corners at +100
+    assert!(vignette_effect(&[("vignette.amount", -100.0)]).0 < -2.3);
     assert!(vignette_effect(&[("vignette.amount", 100.0)]).0 > 1.0);
+}
+
+/// Sharpening Radius (process V3) was read by nothing: it sets the scale of the sharpening band, so the halo
+/// widens and the edge gains more as it grows, and the same photo sharpens alike as a preview and as an export.
+#[test]
+fn sharpening_radius_sets_the_band_scale() {
+    let latest = ProcessVersion::LATEST;
+    let at = |amount: f64, radius: f64| sharpen_profile(1000, latest, &[("detail.sharpenAmount", amount), ("detail.sharpenRadius", radius)]);
+    let peak = |p: &[f32]| p.iter().fold(0.0f32, |a, b| a.max(b.abs()));
+    let radii = [0.5, 1.0, 2.0, 3.0];
+    let halos: Vec<usize> = radii.iter().map(|r| halo_width(&at(100.0, *r))).collect();
+    let peaks: Vec<f32> = radii.iter().map(|r| peak(&at(100.0, *r))).collect();
+    assert!(halos.windows(2).all(|w| w[0] < w[1]), "halo width grows with Radius: {halos:?}");
+    assert!(peaks.windows(2).all(|w| w[0] < w[1]), "the change grows with Radius: {peaks:?}");
+    // clearly visible at Radius 1, Amount 50 on a soft edge (the 400 px picture's edge is 1.2 px soft), and
+    // strong but not wild at Amount 150
+    let (slope50, over50, _) = sharpen_effect(&[("detail.sharpenAmount", 50.0)]);
+    assert!((1.15..1.5).contains(&slope50) && over50 < 0.12, "Amount 50: slope {slope50} overshoot {over50}");
+    let (slope150, over150, noise150) = sharpen_effect(&[("detail.sharpenAmount", 150.0)]);
+    assert!((1.6..2.2).contains(&slope150) && over150 < 0.35 && noise150 < 1.9, "Amount 150: {slope150} {over150} {noise150}");
+    // Radius 3 at Amount 100 is wide, not extreme
+    let (_, over_wide, _) = sharpen_effect(&[("detail.sharpenAmount", 100.0), ("detail.sharpenRadius", 3.0)]);
+    assert!(over_wide < 0.5, "overshoot {over_wide}");
+    // the band is a share of the picture: an export twice the preview's size sharpens the same way
+    let (small, big) =
+        (sharpen_profile(500, latest, &[("detail.sharpenAmount", 100.0)]), sharpen_profile(1000, latest, &[("detail.sharpenAmount", 100.0)]));
+    let (hs, hb) = (halo_width(&small) as f32 * 2.0, halo_width(&big) as f32);
+    let (ps, pb) = (peak(&small), peak(&big));
+    assert!((hs - hb).abs() <= 0.15 * hb && (ps - pb).abs() <= 0.25 * pb, "preview and export: halo {hs} vs {hb} px, peak {ps} vs {pb} levels");
+    let (a, b) = (crate::local::sharpen_sigma(1.0, 1000.0), crate::local::sharpen_sigma(1.0, 2000.0));
+    assert!((b / a - 2.0).abs() < 1e-4, "{a} {b}");
+}
+
+/// Processes V1 and V2 keep their look: Radius is still read by nothing there and Amount sharpens on the texture band.
+#[test]
+fn sharpening_radius_is_still_unread_before_v3() {
+    for process in [lightcraft_develop::Process::V1, lightcraft_develop::Process::V2] {
+        let v = process.version();
+        let narrow = sharpen_profile(400, v, &[("detail.sharpenAmount", 100.0), ("detail.sharpenRadius", 0.5)]);
+        let wide = sharpen_profile(400, v, &[("detail.sharpenAmount", 100.0), ("detail.sharpenRadius", 3.0)]);
+        assert_eq!(narrow, wide);
+        assert!(halo_width(&narrow) > 0 || narrow.iter().any(|d| d.abs() > 0.0));
+        let planes = crate::local::plane_sigmas(&settings_in(v, &[("detail.sharpenAmount", 100.0)]), 400.0, crate::Quality::Full);
+        assert!(planes.sharpen.is_none() && planes.texture.is_some());
+    }
+}
+
+fn settings_in(process: ProcessVersion, ids: &[(&str, f64)]) -> DevelopSettings {
+    let mut s = settings(ids);
+    s.process = process;
+    s
+}
+
+/// The vignette's darkening (process V3) is smooth: about -2.75 stops in the far corner at -100, -1.2 at -50,
+/// visible at -20; +100 lifts the corners by about 1.5 stops. V1 / V2 keep their uneven response.
+#[test]
+fn vignette_response_is_smooth_and_natural() {
+    let corner = |a: f64| vignette_effect(&[("vignette.amount", a)]).0;
+    let (m100, m50, m20, p100) = (corner(-100.0), corner(-50.0), corner(-20.0), corner(100.0));
+    assert!((-3.1..-2.4).contains(&m100), "-100: {m100}");
+    assert!((-1.5..-0.95).contains(&m50), "-50: {m50}");
+    assert!((-0.7..-0.25).contains(&m20), "-20: {m20}");
+    assert!((1.2..1.9).contains(&p100), "+100: {p100}");
+    // the middle of the long edge darkens, but much less than the corner
+    let edge = vignette_effect(&[("vignette.amount", -100.0)]).1;
+    assert!(edge < -0.1 && edge > m100 * 0.7, "edge {edge}");
+    // monotone in Amount
+    let steps: Vec<f32> = (0..=10).map(|i| corner(-(i as f64) * 10.0)).collect();
+    assert!(steps.windows(2).all(|w| w[1] < w[0] + 1e-3), "{steps:?}");
+    // Midpoint / Feather / Roundness still move it
+    assert!(vignette_effect(&[("vignette.amount", -100.0), ("vignette.midpoint", 100.0)]).0 > m100 + 1.0);
+    let boxy = vignette_effect(&[("vignette.amount", -100.0), ("vignette.roundness", -100.0)]).0;
+    assert!((-2.7..-1.8).contains(&boxy) && boxy > m100, "roundness -100: {boxy}");
+    // V1 / V2: as before (-100 is black, -50 is -1 stop)
+    for process in [lightcraft_develop::Process::V1, lightcraft_develop::Process::V2] {
+        let old = |a: f64| {
+            let (w, h) = (600, 400);
+            let src = Rgb32f::from_fn(w, h, |_, _| [0.18; 3]);
+            let info = SourceInfo::default();
+            let base = render_with(&src, &info, &settings_in(process.version(), &[]));
+            let out = render_with(&src, &info, &settings_in(process.version(), &[("vignette.amount", a)]));
+            let lin = |p: [u8; 4]| srgb_to_linear(p[1] as f32 / 255.0).max(1e-4);
+            (lin(out.data[2 * w + 2]) / lin(base.data[2 * w + 2])).log2()
+        };
+        assert!(old(-100.0) < -8.0 && (old(-50.0) + 1.0).abs() < 0.15 && old(100.0) > 2.0, "{:?}", process.version());
+    }
 }

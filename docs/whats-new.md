@@ -2,6 +2,15 @@
 
 ## 2026-10-30
 
+### Sharpening Radius Works, Vignette Is Smoother
+- In process V3, **Sharpening ▸ Radius** sets how wide the sharpening is: a small radius brings out fine edges,
+  a large one gives a broad, stronger crispness (and wider halos). It is measured against the picture size, so
+  the preview matches the export. **Amount** is also clearer on soft edges: 40 to 60 is a visible, natural
+  sharpening and 150 is strong without heavy halos.
+- In process V3, **Effects ▸ Vignette** darkens evenly: -100 takes the far corners down by about 2.75 stops (it
+  used to go to black), -50 by about 1.2 stops (it used to be 1) and -20 is visible; +100 lightens the corners by
+  about 1.5 stops. Photos edited earlier keep their look until you use Update to Current Process.
+
 ### Noise Reduction Contrast and Sharpening Detail Work
 - **Noise Reduction ▸ Contrast** now does something: higher values keep more texture that the luminance noise
   reduction would smooth away. At 0, the default, photos look as before.

@@ -437,25 +437,32 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let tx = pf(F_TEX) + lt[8];
     let sp = lt[13] * 0.6 + pf(F_SHARPEN);
-    if ((tx != 0.0 || sp != 0.0) && pu(F_HAS_TEX) != 0u) {
+    let v3 = pu(F_TONE_V3) != 0u;
+    if ((tx != 0.0 || (sp != 0.0 && !v3)) && pu(F_HAS_TEX) != 0u) {
         let det = l_pre - tex[i];
         let tame = 1.0 - 0.6 * sstep(0.4, 1.6, abs(det));
         delta += tx * 1.1 * clamp(det, -1.0, 1.0) * tame;
-        if (sp != 0.0) {
+        if (sp != 0.0 && !v3) {
             let sm = pf(F_SHARPEN_MASK);
             var mk = 1.0;
             if (sm > 0.0) {
                 mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
             }
-            if (pu(F_TONE_V3) != 0u) {
-                // process V3 (`finish::SHARPEN_GAIN_V3`, `finish::sharpen_mix`)
-                let sd = pf(F_SHARPEN_DETAIL);
-                let mixv = sd + (1.0 - sd) * sstep(0.04, 0.3, abs(det));
-                delta += sp * 3.0 * clamp(det, -0.8, 0.8) * mk * mixv;
-            } else {
-                delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
-            }
+            delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
         }
+    }
+    // process V3: sharpening has a band of its own at the Radius slider's scale (`finish::local_tone_delta`)
+    if (sp != 0.0 && v3 && pu(F_HAS_SHARP) != 0u) {
+        let det = l_pre - tex[pu(F_SHARP_OFF) + i];
+        let sm = pf(F_SHARPEN_MASK);
+        var mk = 1.0;
+        if (sm > 0.0) {
+            mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
+        }
+        // `finish::SHARPEN_GAIN_V3`, `finish::sharpen_mix`
+        let sd = pf(F_SHARPEN_DETAIL);
+        let mixv = sd + (1.0 - sd) * sstep(0.04, 0.3, abs(det));
+        delta += sp * 1.5 * clamp(det, -0.8, 0.8) * mk * mixv;
     }
     // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
     if (l_noise != 0.0 && pu(F_HAS_TEX) != 0u) {
@@ -517,17 +524,25 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let lum = clamp(lum2020(d), 0.0, 1.0);
             if (amount < 0.0) {
                 var f = 1.0 + amount * t;
+                if (pu(F_TONE_V3) != 0u) {
+                    // process V3 (`finish::vignette_dark_factor`)
+                    f = exp2(-2.75 * pow(-amount, 1.2) * t);
+                }
                 let style = pu(F_VIG_STYLE);
                 if (style == 1u) {
                     f += (1.0 - f) * pf(F_VIG_HL) * sstep(0.4, 1.0, lum);
                 }
-                if (style == 2u) {
+                if (style == 2u && pu(F_TONE_V3) == 0u) {
                     d = d * (1.0 - (-amount) * t) + 0.0;
                 } else {
                     d = d * f;
                 }
             } else {
-                d = d + (1.0 - d) * amount * t * 0.85;
+                var lk = 0.85;
+                if (pu(F_TONE_V3) != 0u) {
+                    lk = 0.40; // `finish::VIG_V3_LIGHT`
+                }
+                d = d + (1.0 - d) * amount * t * lk;
             }
         }
     }

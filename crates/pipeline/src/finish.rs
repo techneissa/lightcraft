@@ -55,6 +55,23 @@ pub struct Vig {
     pub power: f32,
     pub highlights: f32,
     pub style: VignetteStyle,
+    /// Process V3: the response is in stops ([`vignette_dark_factor`]) instead of a straight multiplier.
+    pub v3: bool,
+}
+
+/// Process V3 vignette: the darkening reaches `VIG_V3_DARK_STOPS * |amount|^VIG_V3_DARK_CURVE` stops at full strength
+/// of the falloff `t` (about -2.75 stops in the corner at Amount -100, -1.2 at -50, -0.4 at -20). V1 / V2 multiply
+/// by `1 + amount * t`, which is black at -100 and only -1 stop at -50. The WGSL kernel repeats the constants.
+pub const VIG_V3_DARK_STOPS: f32 = 2.75;
+pub const VIG_V3_DARK_CURVE: f32 = 1.2;
+/// Process V3 lightening: the share of the way to white at Amount +100 and full falloff (V1 / V2: 0.85, which
+/// takes a mid grey corner up 2.3 stops; this gives about 1.5).
+pub const VIG_V3_LIGHT: f32 = 0.40;
+
+/// The multiplier of a negative vignette `amount` (-1..0) at falloff `t` (0..1), process V3.
+#[inline]
+pub fn vignette_dark_factor(amount: f32, t: f32) -> f32 {
+    (-VIG_V3_DARK_STOPS * (-amount).powf(VIG_V3_DARK_CURVE) * t).exp2()
 }
 
 fn vignette(s: &DevelopSettings) -> Option<Vig> {
@@ -69,6 +86,7 @@ fn vignette(s: &DevelopSettings) -> Option<Vig> {
             power: if r >= 0.0 { 2.0 } else { 2.0 + (-r) * 6.0 },
             highlights: (v.highlights / 100.0) as f32,
             style: v.style,
+            v3: s.process >= Process::V3.version(),
         }
     })
 }
@@ -434,21 +452,22 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let t = smooth(v.start, v.start + v.width, dist);
                 if t > 0.0 {
                     let lum = luminance_2020(d).clamp(0.0, 1.0);
+                    let k = if v.v3 { VIG_V3_LIGHT } else { 0.85 };
                     if v.amount < 0.0 {
-                        let mut f = 1.0 + v.amount * t;
+                        let mut f = if v.v3 { vignette_dark_factor(v.amount, t) } else { 1.0 + v.amount * t };
                         if v.style == VignetteStyle::HighlightPriority {
                             f += (1.0 - f) * v.highlights * smooth(0.4, 1.0, lum);
                         }
-                        if v.style == VignetteStyle::PaintOverlay {
+                        if v.style == VignetteStyle::PaintOverlay && !v.v3 {
                             d = d.map(|c| c * (1.0 - (-v.amount) * t) + 0.0);
                         } else {
                             d = d.map(|c| c * f);
                         }
                     } else if hdr {
                         // lighten towards SDR white; never pull HDR highlights down to it
-                        d = d.map(|c| c + (1.0 - c).max(0.0) * v.amount * t * 0.85);
+                        d = d.map(|c| c + (1.0 - c).max(0.0) * v.amount * t * k);
                     } else {
-                        d = d.map(|c| c + (1.0 - c) * v.amount * t * 0.85);
+                        d = d.map(|c| c + (1.0 - c) * v.amount * t * k);
                     }
                 }
             }
@@ -677,20 +696,25 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
     }
     let texture = fp.tex + l_tex;
     let sharpen = l_sharp * 0.6 + fp.sharpen;
-    if (texture != 0.0 || sharpen != 0.0)
+    if (texture != 0.0 || (sharpen != 0.0 && !fp.tone_v3))
         && let Some(blur) = &p.texture_blur
     {
         let detail = p.log_l.data[index] - blur.data[index];
         let tame = 1.0 - 0.6 * smooth(0.4, 1.6, detail.abs());
         delta += texture * 1.1 * detail.clamp(-1.0, 1.0) * tame;
-        if sharpen != 0.0 {
+        if sharpen != 0.0 && !fp.tone_v3 {
             let mask = if fp.sharpen_mask > 0.0 { smooth(fp.sharpen_mask * 0.25, fp.sharpen_mask * 0.25 + 0.15, detail.abs()) } else { 1.0 };
-            delta += if fp.tone_v3 {
-                sharpen * SHARPEN_GAIN_V3 * detail.clamp(-0.8, 0.8) * mask * sharpen_mix(fp.sharpen_detail, detail)
-            } else {
-                sharpen * 1.3 * detail.clamp(-0.8, 0.8) * mask
-            };
+            delta += sharpen * 1.3 * detail.clamp(-0.8, 0.8) * mask;
         }
+    }
+    // process V3: sharpening has a band of its own, at the Radius slider's scale
+    if sharpen != 0.0
+        && fp.tone_v3
+        && let Some(blur) = &p.sharpen_blur
+    {
+        let detail = p.log_l.data[index] - blur.data[index];
+        let mask = if fp.sharpen_mask > 0.0 { smooth(fp.sharpen_mask * 0.25, fp.sharpen_mask * 0.25 + 0.15, detail.abs()) } else { 1.0 };
+        delta += sharpen * SHARPEN_GAIN_V3 * detail.clamp(-0.8, 0.8) * mask * sharpen_mix(fp.sharpen_detail, detail);
     }
     if l_noise != 0.0
         && let Some(blur) = &p.texture_blur
@@ -702,7 +726,7 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
 }
 
 /// Process V3 sharpening gain (V1 / V2: 1.3). The WGSL kernel (`finish.wgsl`) carries the same constant.
-pub const SHARPEN_GAIN_V3: f32 = 3.0;
+pub const SHARPEN_GAIN_V3: f32 = 1.5;
 
 /// Process V3: the share of the band detail `detail` (log2 luminance minus its fine blur) that sharpening
 /// boosts. Edges (more than ~0.3 EV from their blur) always count; finer, noise-sized detail only as much
