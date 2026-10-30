@@ -9,7 +9,7 @@ what was changed. It tracks gap 3 in [gaps.md](gaps.md) (render fidelity is unme
 ## Method
 
 `crates/pipeline/src/tests_slider_strength.rs` renders procedural images through `lightcraft_pipeline::render`
-(CPU reference, default settings except the one slider, process V2) and measures the 8-bit sRGB result.
+(CPU reference, default settings except the one slider, so the latest process, V3) and measures the 8-bit sRGB result.
 Re-run the whole table with
 
 ```
@@ -55,9 +55,11 @@ Lightroom; *similar*; *stronger*. The real comparison is still the fidelity suit
 | Texture -100 / +100 | fine band x0.31 / x1.84; medium x0.90 / x1.11 | clearly softer / crisper fine detail | similar |
 | Clarity -100 / +100 | medium band x0.22 / x1.80; coarse x0.68 / x1.35 | strongly softer / punchier midtone contrast | similar |
 | Dehaze -100 / 0 / +50 / +100 | spread 0.019 / 0.056 / 0.098 / 0.417, chroma 0.004 / 0.012 / 0.021 / 0.077 | strongly hazier / dramatic clearing | similar to stronger |
-| Sharpening Amount 40 / 100 / 150 | edge slope x1.04 / x1.16 / x1.24; flat noise x1.31 / x1.78 / x2.18 | a visibly crisper soft edge at the raw default 40 | **weaker** on edges, noisy: the single 0.18 %-of-edge band gains noise faster than edges. Not changed here, see below |
-| Sharpening Radius 0.5 / 3.0 | identical to Radius 1 (slope 1.16, noise 1.78) | wider halos / finer detail | **broken: not read** |
-| Sharpening Detail 0 / 100 | identical to Detail 25 | halo suppression / fine-detail emphasis | **broken: not read** |
+| Sharpening Amount 40 / 100 / 150 (V1/V2) | edge slope x1.04 / x1.16 / x1.24; flat noise x1.31 / x1.78 / x2.18 | a visibly crisper soft edge | weaker on edges, noisy; unchanged (V1/V2 keep their look) |
+| Sharpening Amount 40 / 100 / 150 (V3, Detail 25) | slope x1.04 / x1.12 / x1.20; noise x1.24 / x1.62 / x1.94 | same | slightly less noise per edge gain; still modest on a sigma-1.2 edge because the band is fixed at 0.18 % of the long edge |
+| Sharpening Radius 0.5 / 3.0 | identical to Radius 1 | wider halos / finer detail | **broken: not read** (needs its own blur plane; follow-up) |
+| Sharpening Detail 0 / 100 (V1/V2) | identical to Detail 25 | halo suppression / fine-detail emphasis | **broken: not read** |
+| Sharpening Detail 0 / 100 (V3, Amount 100) | slope x1.04 / x1.36, noise x1.23 / x2.83 | 0 edges only, 100 also fine detail and noise | works (was a no-op) |
 | Sharpening Masking 0 / 100 | slope 1.16 / 1.00, noise 1.78 / 1.00 | flat areas unsharpened at 100 | similar |
 | NR Luminance 50 / 100 | luma noise std x0.74 / x0.32, edge contrast kept 1.00 | heavy smoothing at 100, edges kept | similar |
 | NR Detail 0 / 100 (at 50) | x0.67 / x0.84 | higher keeps more detail | works |
@@ -80,16 +82,18 @@ and the HDR sliders are not covered yet.
   by the slider), so detail and contrast stay and noisy blotches come back. The GPU kernel `nr_lum` uses the
   same edges. 0 is an exact identity; the cache key (`Plan::lin_key`) includes it. Tests:
   `nr_contrast_keeps_more_of_the_noise_and_detail`.
+- **Sharpening Detail** (`detail.sharpenDetail`), process V3 only: read by nothing before. Sharpening now
+  weights the band detail by `finish::sharpen_mix` (edges above ~0.3 EV always, finer noise-sized detail by the
+  slider), with gain 3.0 (`SHARPEN_GAIN_V3`) instead of 1.3. The WGSL kernel carries the same constants. V1 and
+  V2 render as before. Test: `sharpening_detail_trades_edges_for_noise`.
 - Floors for the sliders found at Lightroom strength (`strong_sliders_stay_strong`), so a later retune cannot
   weaken them.
 
 ## Left, and why
 
-- **Sharpening Radius and Detail** are not read anywhere. Radius needs its own blur plane (the fine band is
-  shared with Texture) and Detail changes the edge gain; both sit in `plane_sigmas` and `local_tone_delta`, which
-  the Light-panel and draft-parity work is changing right now. Do them after that lands, with the Amount gain
-  (edges x1.16 at 100 while noise x1.78 means the band is too fine; Lightroom's Radius 1.0 acts at about 1 px
-  at 100 % view).
+- **Sharpening Radius** is not read anywhere. It needs its own blur plane (the fine band is shared with Texture):
+  `PlaneSigmas`, `Prepared`, the stage cache and the GPU `Prep` all take a new plane. The edge gain of Amount
+  (x1.12 at 100 on a soft edge) comes from the same too-fine band. Do both together as a V3 follow-up.
 - Colour grading wheel strength, Vibrance on skin, mixer Hue / Luminance: weaker or borderline, but without a
   Lightroom reference a retune would be guessing; they belong to the fidelity suite and a new process version
   ([process-versions.md](process-versions.md)).

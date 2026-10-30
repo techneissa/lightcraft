@@ -167,6 +167,8 @@ pub struct FinishParams {
     pub dehaze: f32,
     pub sharpen: f32,
     pub sharpen_mask: f32,
+    /// Sharpening Detail as 0..1 (process V3: how much of the finest, noise-sized detail is sharpened, see [`sharpen_mix`]).
+    pub sharpen_detail: f32,
     /// Airlight after and before exposure, exposure gain and EV (see [`crate::Prepared`]).
     pub air: f32,
     pub air_pre: f32,
@@ -238,6 +240,7 @@ impl FinishParams {
             dehaze,
             sharpen: (s.detail.sharpen_amount / 150.0) as f32,
             sharpen_mask: (s.detail.sharpen_masking / 100.0) as f32,
+            sharpen_detail: (s.detail.sharpen_detail / 100.0).clamp(0.0, 1.0) as f32,
             air: air_pre * gain,
             air_pre,
             gain,
@@ -682,7 +685,11 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
         delta += texture * 1.1 * detail.clamp(-1.0, 1.0) * tame;
         if sharpen != 0.0 {
             let mask = if fp.sharpen_mask > 0.0 { smooth(fp.sharpen_mask * 0.25, fp.sharpen_mask * 0.25 + 0.15, detail.abs()) } else { 1.0 };
-            delta += sharpen * 1.3 * detail.clamp(-0.8, 0.8) * mask;
+            delta += if fp.tone_v3 {
+                sharpen * SHARPEN_GAIN_V3 * detail.clamp(-0.8, 0.8) * mask * sharpen_mix(fp.sharpen_detail, detail)
+            } else {
+                sharpen * 1.3 * detail.clamp(-0.8, 0.8) * mask
+            };
         }
     }
     if l_noise != 0.0
@@ -692,6 +699,17 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
         delta -= l_noise.clamp(-1.0, 1.0) * 0.9 * detail * (1.0 - smooth(0.1, 0.5, detail.abs()));
     }
     delta
+}
+
+/// Process V3 sharpening gain (V1 / V2: 1.3). The WGSL kernel (`finish.wgsl`) carries the same constant.
+pub const SHARPEN_GAIN_V3: f32 = 3.0;
+
+/// Process V3: the share of the band detail `detail` (log2 luminance minus its fine blur) that sharpening
+/// boosts. Edges (more than ~0.3 EV from their blur) always count; finer, noise-sized detail only as much
+/// as the Detail slider (0..1) allows, so a low Detail sharpens edges without raising the noise.
+#[inline]
+pub fn sharpen_mix(sharpen_detail: f32, detail: f32) -> f32 {
+    sharpen_detail + (1.0 - sharpen_detail) * smooth(0.04, 0.3, detail.abs())
 }
 
 /// A colour needing more desaturation than this (scale < `GAMUT_WARN`) to fit is out of gamut for

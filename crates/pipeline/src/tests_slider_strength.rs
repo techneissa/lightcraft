@@ -494,6 +494,27 @@ fn nr_contrast_keeps_more_of_the_noise_and_detail() {
     assert!((off - 1.0).abs() < 1e-6, "{off}");
 }
 
+/// Sharpening Detail (process V3) was read by nothing: 0 sharpens edges only (little noise gain), 100 also the
+/// finest detail and noise.
+#[test]
+fn sharpening_detail_trades_edges_for_noise() {
+    let (slope0, _, noise0) = sharpen_effect(&[("detail.sharpenAmount", 100.0), ("detail.sharpenDetail", 0.0)]);
+    let (slope100, _, noise100) = sharpen_effect(&[("detail.sharpenAmount", 100.0), ("detail.sharpenDetail", 100.0)]);
+    assert!(noise100 > noise0 * 1.3, "noise {noise0} -> {noise100}");
+    assert!(slope100 > slope0 + 0.05, "edge slope {slope0} -> {slope100}");
+    assert!(slope0 > 1.02 && noise0 < 1.3, "Detail 0 still sharpens edges without much noise: {slope0} {noise0}");
+    // Amount 40 (the raw default) is visible on an edge
+    assert!(sharpen_effect(&[("detail.sharpenAmount", 40.0)]).0 > 1.03);
+    // V2 keeps its look: Detail does nothing there
+    let v2 = |d: f64| {
+        let mut s = settings(&[("detail.sharpenAmount", 100.0), ("detail.sharpenDetail", d)]);
+        s.process = lightcraft_develop::Process::V2.version();
+        let src = edge_scene(200, 200, 0.06);
+        render_with(&src, &SourceInfo::default(), &s)
+    };
+    assert_eq!(v2(0.0).data, v2(100.0).data);
+}
+
 /// Floors for sliders the audit found to be at Lightroom strength: a later retune must not weaken them.
 #[test]
 fn strong_sliders_stay_strong() {
