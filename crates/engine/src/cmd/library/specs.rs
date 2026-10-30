@@ -697,7 +697,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Info",
             [],
             None,
-            "{ids?, title?, caption?, altText?, extendedDescription?, copyright?, copyrightStatus?: unknown|copyrighted|publicDomain, usageTerms?, copyrightUrl?, creator?, location?, city?, state?, country?, gps?: \"lat, lon\" | [lat, lon] | null, keywords?: [..], addKeywords?: [..], removeKeywords?: [..]}",
+            "{ids?, title?, caption?, altText?, extendedDescription?, copyright?, copyrightStatus?: unknown|copyrighted|publicDomain, usageTerms?, copyrightUrl?, creator?, location?, city?, state?, country?, gps?: \"lat, lon\" | [lat, lon] | null, keywords?: [..], addKeywords?: [..], removeKeywords?: [..], camera?, lens?, focal?: \"35 mm\", aperture?: \"f/2.8\", shutter?: \"1/250\" | \"2.5\\\"\", iso?: 400 (the camera / lens / exposure values shown and exported; each is stored beside the file's value and null or \"\" resets it; a bad value refuses the call; see photo.resetExif)}",
             has_selection,
             |s, p| {
                 let strs =
@@ -773,6 +773,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         let k = clean(&k);
                         m.keywords.retain(|x| !same(&clean(x), &k));
                     }
+                    crate::cmd::exif_edit::apply_params("photo.setMeta", &mut m, p)?;
                     ops.push(Op::SetMeta { id, meta: Box::new(m) });
                 }
                 let n = ops.len();

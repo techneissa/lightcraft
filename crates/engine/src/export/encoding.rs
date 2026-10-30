@@ -296,7 +296,9 @@ pub fn removes_location(_photo: &lightcraft_catalog::Photo, _catalog: &lightcraf
 /// The metadata to embed for `photo` under `o.metadata` / `o.remove_location`. `None` = embed nothing.
 /// Keywords follow the catalog's keyword list (`Catalog::export_keywords`).
 pub fn export_metadata(photo: &lightcraft_catalog::Photo, catalog: &lightcraft_catalog::Catalog, o: &ExportOptions) -> Option<Metadata> {
-    let m = &photo.meta;
+    // what the person sees: edited camera and exposure values are written, never the original file's
+    let shown = photo.meta.shown();
+    let m = &*shown;
     let text = |s: &str| (!s.trim().is_empty()).then(|| s.to_string());
     // copyright info (also under "copyright only"): notice, creator, status, usage terms, info URL
     let mut out = Metadata {

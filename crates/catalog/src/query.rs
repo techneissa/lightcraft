@@ -235,7 +235,8 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
 /// Whether the lower-cased word `t` is in the file name, title, caption, camera, lens, location,
 /// format, a keyword or the name of a person (a named face) of `p`.
 fn text_matches(p: &Photo, t: &str) -> bool {
-    let hay: [&str; 7] = [&p.file_name, &p.meta.title, &p.meta.caption, p.meta.effective_camera(), p.meta.effective_lens(), &p.meta.location, &p.format];
+    let hay: [&str; 7] =
+        [&p.file_name, &p.meta.title, &p.meta.caption, p.meta.effective_camera(), p.meta.effective_lens(), &p.meta.location, &p.format];
     hay.iter().any(|h| h.to_lowercase().contains(t))
         || p.meta.keywords.iter().any(|k| k.to_lowercase().contains(t))
         || p.people().iter().any(|n| n.to_lowercase().contains(t))

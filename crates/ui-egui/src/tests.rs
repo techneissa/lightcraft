@@ -30,6 +30,7 @@ mod edit_all;
 mod edit_layout;
 mod empty_library;
 mod error_kinds;
+mod exif_edit;
 mod filmstrip;
 mod focus_point;
 mod folder_drop;

@@ -109,6 +109,8 @@ pub enum Icon {
     Sun,
     /// Appearance Mode ▸ Dark: a crescent moon.
     Moon,
+    /// Reset to the file's value (↺): an open circle with an arrowhead turning back.
+    Reset,
 }
 
 struct Pen<'a> {
@@ -224,6 +226,17 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
                 let (c, s) = (a.cos(), a.sin());
                 pen.line(&[(10.0 + 5.4 * c, 10.0 + 5.4 * s), (10.0 + 7.4 * c, 10.0 + 7.4 * s)]);
             }
+        }
+        Reset => {
+            // three quarters of a circle, an arrowhead at its start pointing the way back (anticlockwise)
+            let (cx, cy, rad, a0) = (10.0f32, 10.5f32, 5.8f32, 228.0f32.to_radians());
+            pen.arc(cx, cy, rad, 228.0, 505.0);
+            let (px, py) = (cx + rad * a0.cos(), cy + rad * a0.sin());
+            let (tx, ty) = (a0.sin(), -a0.cos());
+            let (nx, ny) = (a0.cos(), a0.sin());
+            let tip = (px + tx * 1.2, py + ty * 1.2);
+            let (bx, by) = (px - tx * 2.4, py - ty * 2.4);
+            pen.line(&[(bx + nx * 2.8, by + ny * 2.8), tip, (bx - nx * 2.8, by - ny * 2.8)]);
         }
         Moon => {
             // outer arc of the disc, then the inner arc of the bite, meeting at the horns

@@ -14,6 +14,7 @@ pub mod curves;
 pub(crate) mod denoise;
 mod develop;
 mod edit;
+mod exif_edit;
 mod export;
 pub(crate) mod face_detect;
 mod face_models;
@@ -147,6 +148,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(edit::specs());
         v.extend(library::specs());
         v.extend(library::delete_rejected_specs());
+        v.extend(exif_edit::specs());
         v.extend(develop::specs());
         v.extend(color::specs());
         v.extend(curves::specs());

@@ -29,7 +29,9 @@ fn an_override_shows_and_the_file_value_stays() {
 #[test]
 fn reset_one_field_and_all() {
     let mut m = meta();
-    for (f, t) in [(ExifField::Camera, "X"), (ExifField::Lens, "Y"), (ExifField::Focal, "50"), (ExifField::Aperture, "f/4"), (ExifField::Shutter, "1/60")] {
+    for (f, t) in
+        [(ExifField::Camera, "X"), (ExifField::Lens, "Y"), (ExifField::Focal, "50"), (ExifField::Aperture, "f/4"), (ExifField::Shutter, "1/60")]
+    {
         m.set_exif(f, Some(t)).unwrap();
     }
     m.reset_exif(ExifField::Lens);
@@ -54,6 +56,8 @@ fn a_value_equal_to_the_file_is_no_override() {
     m.set_exif(ExifField::Shutter, Some("1/250 s")).unwrap();
     m.set_exif(ExifField::Aperture, Some("F2.8")).unwrap();
     m.set_exif(ExifField::Camera, Some("SONY  ILCE-7M5")).unwrap();
+    m.set_exif(ExifField::Camera, Some("Sony ILCE-7M5")).unwrap();
+    m.set_exif(ExifField::Lens, Some("fe 24-70mm f2.8 gm ii")).unwrap();
     assert!(m.exif.is_empty(), "{:?}", m.exif);
 }
 
@@ -99,7 +103,8 @@ fn a_bad_value_changes_nothing() {
 #[test]
 fn hostile_text_never_panics() {
     let mut m = meta();
-    for t in ["ƒ/", "ƒ", "\"", "s", "sec", "1//2", "ℵ", "🦀/🦀", "1/١٢", "0x10", "1_000", "+", "-", ".", "e", "1e", "\u{202e}1/250", "∞"] {
+    for t in ["ƒ/", "ƒ", "\"", "s", "sec", "1//2", "ℵ", "🦀/🦀", "1/١٢", "0x10", "1_000", "+", "-", ".", "e", "1e", "\u{202e}1/250", "∞"]
+    {
         for f in ExifField::ALL {
             let _ = m.set_exif(f, Some(t));
             m.reset_exif(f);
@@ -240,4 +245,21 @@ fn filters_and_rules_follow_the_edit() {
     let rule = |field: &str, op: &str, value: &str| Rule::Field { field: field.into(), op: op.into(), value: serde_json::json!(value) };
     assert!(rule("camera", "contains", "Leica").matches(&p, &cat));
     assert!(!rule("camera", "contains", "SONY").matches(&p, &cat));
+}
+
+/// A manual lens: the body writes F-Number 0, Focal Length 0 and Lens Model `----`. They are no values.
+#[test]
+fn placeholders_are_no_value() {
+    let mut m = Meta { camera: "SONY ILCE-7M5".into(), lens: "----".into(), focal_mm: Some(0.0), aperture: Some(0.0), ..Default::default() };
+    assert_eq!((m.effective_lens(), m.effective_focal_mm(), m.effective_aperture()), ("", None, None));
+    assert_eq!((m.exif_text(ExifField::Lens, true), m.exif_text(ExifField::Aperture, false)), (String::new(), String::new()));
+    let shown = m.shown();
+    assert_eq!(shown.lens, "");
+    // an edit over a placeholder is an edit; its reset gives "no value" back
+    m.set_exif(ExifField::Lens, Some("Laowa 90mm f/2.8 2x Ultra Macro APO")).unwrap();
+    m.set_exif(ExifField::Aperture, Some("2.8")).unwrap();
+    assert_eq!((m.effective_lens(), m.effective_aperture()), ("Laowa 90mm f/2.8 2x Ultra Macro APO", Some(2.8)));
+    m.reset_exif(ExifField::Lens);
+    assert_eq!(m.effective_lens(), "");
+    assert!(is_placeholder("--") && is_placeholder(" ") && !is_placeholder("FE 50mm"));
 }

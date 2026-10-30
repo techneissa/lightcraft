@@ -127,16 +127,16 @@ impl Meta {
 
     /// The camera as shown: the edited name, else the file's.
     pub fn effective_camera(&self) -> &str {
-        self.exif.camera.as_deref().unwrap_or(&self.camera)
+        self.exif.camera.as_deref().unwrap_or_else(|| no_placeholder(&self.camera))
     }
     pub fn effective_lens(&self) -> &str {
-        self.exif.lens.as_deref().unwrap_or(&self.lens)
+        self.exif.lens.as_deref().unwrap_or_else(|| no_placeholder(&self.lens))
     }
     pub fn effective_focal_mm(&self) -> Option<f32> {
-        self.exif.focal_mm.or(self.focal_mm)
+        self.exif.focal_mm.or(self.focal_mm.filter(|v| v.is_finite() && *v > 0.0))
     }
     pub fn effective_aperture(&self) -> Option<f32> {
-        self.exif.aperture.or(self.aperture)
+        self.exif.aperture.or(self.aperture.filter(|v| v.is_finite() && *v > 0.0))
     }
     pub fn effective_shutter(&self) -> &str {
         self.exif.shutter.as_deref().unwrap_or(&self.shutter)
@@ -149,7 +149,9 @@ impl Meta {
     /// copy), else a copy whose camera and exposure fields hold the edited values. For display,
     /// search, filters, smart albums, rename and export; never for rendering.
     pub fn shown(&self) -> Cow<'_, Meta> {
-        if self.exif.is_empty() {
+        let clean = |n: &str| !n.is_empty() && !is_placeholder(n);
+        let plain = (self.focal_mm.is_none_or(|v| v > 0.0)) && self.aperture.is_none_or(|v| v > 0.0);
+        if self.exif.is_empty() && plain && (self.camera.is_empty() || clean(&self.camera)) && (self.lens.is_empty() || clean(&self.lens)) {
             return Cow::Borrowed(self);
         }
         let mut m = self.clone();
@@ -168,10 +170,10 @@ impl Meta {
     pub fn exif_text(&self, field: ExifField, file: bool) -> String {
         let ov = if file { &ExifOverrides::default() } else { &self.exif };
         match field {
-            ExifField::Camera => ov.camera.clone().unwrap_or_else(|| self.camera.clone()),
-            ExifField::Lens => ov.lens.clone().unwrap_or_else(|| self.lens.clone()),
-            ExifField::Focal => ov.focal_mm.or(self.focal_mm).map(format_focal).unwrap_or_default(),
-            ExifField::Aperture => ov.aperture.or(self.aperture).map(format_aperture).unwrap_or_default(),
+            ExifField::Camera => ov.camera.clone().unwrap_or_else(|| no_placeholder(&self.camera).to_string()),
+            ExifField::Lens => ov.lens.clone().unwrap_or_else(|| no_placeholder(&self.lens).to_string()),
+            ExifField::Focal => ov.focal_mm.or(self.focal_mm.filter(|v| *v > 0.0)).map(format_focal).unwrap_or_default(),
+            ExifField::Aperture => ov.aperture.or(self.aperture.filter(|v| *v > 0.0)).map(format_aperture).unwrap_or_default(),
             ExifField::Shutter => ov.shutter.clone().unwrap_or_else(|| self.shutter.clone()),
             ExifField::Iso => ov.iso.or(self.iso).map(|i| i.to_string()).unwrap_or_default(),
         }
@@ -187,8 +189,9 @@ impl Meta {
             return Ok(());
         };
         match field {
-            ExifField::Camera => self.exif.camera = Some(parse_name(text)?).filter(|v| *v != self.camera),
-            ExifField::Lens => self.exif.lens = Some(parse_name(text)?).filter(|v| *v != self.lens),
+            // (a name differing from the file's only in case, as the pickers' `Sony` for the file's `SONY`, is the file's)
+            ExifField::Camera => self.exif.camera = Some(parse_name(text)?).filter(|v| !v.eq_ignore_ascii_case(&self.camera)),
+            ExifField::Lens => self.exif.lens = Some(parse_name(text)?).filter(|v| !v.eq_ignore_ascii_case(&self.lens)),
             ExifField::Focal => self.exif.focal_mm = Some(parse_focal(text)?).filter(|v| Some(*v) != self.focal_mm),
             ExifField::Aperture => self.exif.aperture = Some(parse_aperture(text)?).filter(|v| Some(*v) != self.aperture),
             ExifField::Shutter => self.exif.shutter = Some(parse_shutter(text)?).filter(|v| *v != self.shutter),
@@ -201,6 +204,17 @@ impl Meta {
     pub fn reset_exif(&mut self, field: ExifField) {
         self.exif.clear(field);
     }
+}
+
+/// Whether a camera or lens name is a placeholder, not a name: empty, or only dashes (`----`, what a body writes
+/// for a manual lens).
+pub fn is_placeholder(name: &str) -> bool {
+    name.chars().all(|c| c.is_whitespace() || c == '-' || c == '?' || c == '\0')
+}
+
+/// `name`, or "" when it is a placeholder.
+fn no_placeholder(name: &str) -> &str {
+    if is_placeholder(name) { "" } else { name }
 }
 
 /// A camera or lens name: spaces collapsed, no control characters, at most [`MAX_NAME_CHARS`].

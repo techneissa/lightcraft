@@ -847,7 +847,8 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
 
 fn paint_cell_caption(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo: &lightcraft_catalog::Photo, r: Rect, square: bool) {
     if square && app.ui.show_filenames {
-        let m = &photo.meta;
+        let shown = photo.meta.shown();
+        let m = &*shown;
         let name = match app.ui.grid_info.as_str() {
             "exposure" => {
                 let parts: Vec<String> = [

@@ -4,7 +4,9 @@
 //!   least-squares conversion to the DNG opcode polynomials (`WarpRectilinear`, `FixVignetteRadial`) the pipeline
 //!   already applies in its single geometry resample.
 //! - [`LensDb`]: profiles read from lensfun-format XML files in a directory the user supplies. The lensfun database
-//!   is CC-BY-SA; it is never bundled with the code or the binary, only read at run time from where the user put it.
+//!   is CC-BY-SA; its profiles are never bundled with the code or the binary, only read at run time from where the user
+//!   put them. [`names`] is the one exception: lensfun's camera and lens *names* (no correction data), embedded for the
+//!   Info panel's pickers with the maintainer's approval and recorded in `assets/ATTRIBUTION.md`.
 //! - [`LensDb::find_camera`] / [`LensDb::find_lens`]: identification from EXIF make / model / lens model strings,
 //!   with mount and crop-factor handling.
 //! - [`Profile::correction`]: the profile at a shot's focal length (and aperture / distance for vignetting),
@@ -18,6 +20,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod model;
+pub mod names;
 mod xml;
 
 use std::path::Path;

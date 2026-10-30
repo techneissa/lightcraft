@@ -96,6 +96,8 @@ pub use errors::{AiModel, ErrorKind};
 pub use fonts::{CRAFT_FONTS, CraftFont};
 use lightcraft_catalog::{Catalog, Filter, Op, PhotoId, Sort};
 use lightcraft_develop::DevelopSettings;
+/// The known camera and lens names the Info panel's pickers search.
+pub use lightcraft_lensdb::names as camera_names;
 pub use media::{RenderJob, SourceLevel};
 use serde_json::Value;
 pub use view::{Browse, FilterChip, LibrarySource, Selection, SelectionState, filter_chips};
