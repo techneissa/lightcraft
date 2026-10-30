@@ -2608,8 +2608,7 @@ fn old_clipping_setting_turns_both_sides_on() {
     assert!(old.clip_shadows && old.clip_highlights);
     let off = serde_json::from_value::<crate::UiState>(json!({"showClipping": false})).unwrap().sanitized();
     assert!(!off.clip_shadows && !off.clip_highlights);
-    let mut now = crate::UiState::default();
-    now.clip_shadows = true;
+    let now = crate::UiState { clip_shadows: true, ..Default::default() };
     let saved = serde_json::to_value(&now).unwrap();
     assert!(saved.get("showClipping").is_none(), "the legacy flag is never written");
     let back = serde_json::from_value::<crate::UiState>(saved).unwrap().sanitized();
