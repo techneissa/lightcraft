@@ -330,6 +330,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         sub_title(ui, crate::i18n::tr("Noise Reduction"));
         for c in ["detail.nrLuminance", "detail.nrDetail", "detail.nrContrast", "detail.nrColor", "detail.nrColorDetail", "detail.nrColorSmoothness"]
         {
+            // a thin divider between the luminance group and the colour group
+            if c == "detail.nrColor" {
+                slider_group_divider(ui);
+            }
             control(app, ui, d, c, true);
         }
         ui.add_space(8.0);
@@ -419,4 +423,12 @@ fn local_profile_note(note: &lightcraft_pipeline::ColourNote) -> String {
             profile = profile
         ),
     }
+}
+
+/// A thin horizontal line between two groups of slider rows.
+fn slider_group_divider(ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    let (r, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 7.0), egui::Sense::hover());
+    let y = r.center().y.round() + 0.5;
+    ui.painter().line_segment([egui::pos2(r.left() + 24.0, y), egui::pos2(r.right() - 22.0, y)], egui::Stroke::new(1.0, t.divider));
 }

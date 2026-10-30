@@ -283,12 +283,26 @@ fn track_stops(track: &Track) -> Option<Vec<Color32>> {
     })
 }
 
-fn paint_track(ui: &Ui, rect: Rect, track: &Track, t: &Tokens, thumb_x: f32, ring: f32) {
+fn paint_track(ui: &Ui, rect: Rect, spec: &ControlSpec, t: &Tokens) {
     let p = ui.painter();
     let y = rect.center().y;
-    let h = 1.0;
-    if let Some(stops) = track_stops(track) {
-        // gradient: segments between stops
+    // tick marks above the groove: about eleven, the middle one taller on a slider that goes both ways
+    let tick_c = lerp(t.chrome, t.text_label, 0.45);
+    let bipolar = spec.min < 0.0 && spec.max > 0.0;
+    for i in 0..=10 {
+        let x = (rect.left() + rect.width() * i as f32 / 10.0).round() + 0.5;
+        let tall = bipolar && i == 5;
+        let top = y - if tall { 12.0 } else { 10.0 };
+        p.line_segment([pos2(x, top), pos2(x, y - 7.0)], Stroke::new(1.0, tick_c));
+    }
+    // the groove: thin, dark, recessed, rounded ends, a darker top edge
+    let groove = Rect::from_min_max(pos2(rect.left(), y - 2.5), pos2(rect.right(), y + 2.5));
+    let dark = lerp(t.chrome, Color32::BLACK, 0.55);
+    p.rect_filled(groove.expand2(vec2(0.5, 0.5)), 3.0, lerp(t.chrome, Color32::WHITE, 0.07));
+    let coloured = track_stops(&spec.track);
+    if let Some(stops) = &coloured {
+        // gradient inside the groove: segments between stops
+        let inner = groove.shrink2(vec2(0.0, 0.5));
         let n = stops.len().max(2) - 1;
         let steps = 48;
         for i in 0..steps {
@@ -296,15 +310,112 @@ fn paint_track(ui: &Ui, rect: Rect, track: &Track, t: &Tokens, thumb_x: f32, rin
             let seg = (a * n as f32).floor() as usize;
             let local = a * n as f32 - seg as f32;
             let c = lerp(stops[seg.min(n)], stops[(seg + 1).min(n)], local);
-            let x0 = rect.left() + rect.width() * a;
-            let x1 = rect.left() + rect.width() * b;
-            p.rect_filled(Rect::from_min_max(pos2(x0, y - h - 0.5), pos2(x1 + 0.5, y + h + 0.5)), 0.0, c);
+            let x0 = inner.left() + inner.width() * a;
+            let x1 = inner.left() + inner.width() * b;
+            let r = if i == 0 {
+                egui::CornerRadius { nw: 2, sw: 2, ne: 0, se: 0 }
+            } else if i == steps - 1 {
+                egui::CornerRadius { nw: 0, sw: 0, ne: 2, se: 2 }
+            } else {
+                egui::CornerRadius::ZERO
+            };
+            p.rect_filled(Rect::from_min_max(pos2(x0, inner.top()), pos2(x1 + 0.5, inner.bottom())), r, c);
         }
     } else {
-        p.rect_filled(Rect::from_min_max(pos2(rect.left(), y - h), pos2(rect.right(), y + h)), 1.0, t.track);
+        p.rect_filled(groove, 2.5, dark);
     }
-    // gap around the hollow thumb
-    p.rect_filled(Rect::from_center_size(pos2(thumb_x, y), vec2(ring * 2.0 + 4.0, 6.0)), 0.0, t.chrome);
+    // inner shadow: a darker line along the top edge (lighter over a gradient, so its colours
+    // stay as vivid as on the old track)
+    let shade = if coloured.is_some() { 70 } else { 150 };
+    p.line_segment(
+        [pos2(groove.left() + 2.0, groove.top() + 0.5), pos2(groove.right() - 2.0, groove.top() + 0.5)],
+        Stroke::new(1.0, Color32::from_black_alpha(shade)),
+    );
+}
+
+/// The thumb: a small teardrop pointing up, softly shaded, its round body on the groove at `c`.
+fn paint_thumb(p: &egui::Painter, c: egui::Pos2, fill: Color32, enabled: bool) {
+    let r = 5.5_f32;
+    let centre = pos2(c.x, c.y + 2.0);
+    let tip_d = 10.0_f32;
+    let alpha = (r / tip_d).acos();
+    let mut pts = vec![pos2(c.x, centre.y - tip_d)];
+    // the arc from the right tangent point round the bottom to the left one (angles from straight up)
+    let (a0, a1) = (alpha, std::f32::consts::TAU - alpha);
+    let n = 16;
+    for i in 0..=n {
+        let a = a0 + (a1 - a0) * i as f32 / n as f32;
+        pts.push(pos2(centre.x + r * a.sin(), centre.y - r * a.cos()));
+    }
+    let shadow: Vec<_> = pts.iter().map(|q| *q + vec2(0.0, 1.0)).collect();
+    p.add(egui::Shape::convex_polygon(shadow, Color32::from_black_alpha(90), Stroke::NONE));
+    p.add(egui::Shape::convex_polygon(pts, fill, Stroke::new(1.0, lerp(fill, Color32::BLACK, 0.45))));
+    // soft highlight on the upper body
+    let hi = if enabled { 0.35 } else { 0.15 };
+    p.circle_filled(pos2(centre.x - 1.2, centre.y - 1.6), 2.2, lerp(fill, Color32::WHITE, hi).gamma_multiply(0.6));
+}
+
+/// The row's three columns: the label (right-aligned against the track), the track, the value (right-aligned).
+fn slider_columns(row: Rect, wanted_label_w: f32, wanted_value_w: f32) -> (Rect, Rect, Rect) {
+    let w = row.width();
+    let pad = 10.0;
+    let value_w = (wanted_value_w + 2.0).clamp(24.0, (w * 0.3).max(24.0));
+    let label_w = (wanted_label_w + 2.0).clamp(52.0, (w * 0.41).max(52.0));
+    let gap = 7.0;
+    let top = row.top();
+    let h = row.height();
+    let label = Rect::from_min_size(pos2(row.left() + pad, top), vec2(label_w, h));
+    let value = Rect::from_min_max(pos2(row.right() - pad - value_w, top), pos2(row.right() - pad, top + h));
+    let track_l = label.right() + gap;
+    let track_r = (value.left() - gap).max(track_l + 20.0);
+    let cy = top + h * 0.62;
+    let track = Rect::from_min_max(pos2(track_l, cy - 8.0), pos2(track_r, cy + 8.0));
+    (label, track, value)
+}
+
+/// The size of the value figure.
+const VALUE_FONT: f32 = 14.5;
+
+/// The width of the widest text `spec` can show as its value (the ends of its range, every digit as a zero).
+fn widest_value_width(ui: &Ui, spec: &ControlSpec, font: &egui::FontId) -> f32 {
+    let mut widest = 0.0_f32;
+    for v in [spec.min, spec.max, spec.default] {
+        let text: String = shown_value(spec, v).chars().map(|c| if c.is_ascii_digit() { '0' } else { c }).collect();
+        widest = widest.max(ui.painter().layout_no_wrap(text, font.clone(), Color32::WHITE).size().x);
+    }
+    widest
+}
+
+/// The widest width (points) of a column among the sliders of the enclosing `Ui` this frame or the last, so the
+/// rows' columns line up.
+fn shared_column_width(ui: &Ui, name: &str, own: f32) -> f32 {
+    let key = ui.scope_id().with(name);
+    let frame = ui.ctx().cumulative_pass_nr();
+    let (f, prev, cur): (u64, f32, f32) = ui.data(|d| d.get_temp(key)).unwrap_or((frame, 0.0, 0.0));
+    let (prev, cur) = if f == frame { (prev, cur) } else { (cur, 0.0) };
+    let cur = cur.max(own);
+    ui.data_mut(|d| d.insert_temp(key, (frame, prev, cur)));
+    prev.max(cur)
+}
+
+/// `text` shortened with an ellipsis to fit `max_w`.
+fn fit_text(ui: &Ui, text: &str, font: &egui::FontId, max_w: f32) -> String {
+    let width = |s: &str| ui.painter().layout_no_wrap(s.to_string(), font.clone(), Color32::WHITE).size().x;
+    if width(text) <= max_w {
+        return text.to_string();
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let (mut lo, mut hi) = (0usize, chars.len());
+    while lo < hi {
+        let mid = (lo + hi).div_ceil(2);
+        let cand: String = chars.iter().take(mid).collect::<String>() + "\u{2026}";
+        if width(&cand) <= max_w {
+            lo = mid;
+        } else {
+            hi = mid - 1;
+        }
+    }
+    chars.iter().take(lo).collect::<String>() + "\u{2026}"
 }
 
 /// Result of a slider interaction this frame.
@@ -394,11 +505,17 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
     let (row, _) = ui.allocate_exact_size(vec2(w, t.slider_row_h), Sense::hover());
-    let pad_l = 24.0;
-    let pad_r = 22.0;
-    let label_rect = Rect::from_min_size(pos2(row.left() + pad_l, row.top() + 4.0), vec2(w - pad_l - pad_r, 18.0));
-    let track_rect = Rect::from_min_max(pos2(row.left() + pad_l, row.top() + 22.0), pos2(row.right() - pad_r, row.top() + 40.0));
-    let value_rect = Rect::from_min_max(pos2(label_rect.right() - 64.0, label_rect.top()), label_rect.max);
+    // the label column fits the longest label among this section's sliders (last frame's widest, or this one's)
+    let label_str: String = crate::i18n::tr(label_override.unwrap_or(spec.label)).to_string();
+    let label_font = t.font(12.5);
+    let own_w = ui.painter().layout_no_wrap(label_str.clone(), label_font.clone(), Color32::WHITE).size().x;
+    let label_w = shared_column_width(ui, "slider-label-w", own_w);
+    // the value column is as wide as the widest text the control can show (its range's ends, digits as the
+    // widest one) and shared by the section, so no value moves the track
+    let value_font = egui::FontId::new(VALUE_FONT, egui::FontFamily::Proportional);
+    let value_w = widest_value_width(ui, spec, &value_font);
+    let value_w = shared_column_width(ui, "slider-value-w", value_w);
+    let (label_rect, track_rect, value_rect) = slider_columns(row, label_w, value_w);
     let id = ui.scope_id().with(spec.id);
     let g = SliderLayout { spec, value, enabled, id, track_rect, value_rect };
     let resp = ui.interact(track_rect.expand2(vec2(8.0, 2.0)), id, if enabled { Sense::click_and_drag() } else { Sense::hover() });
@@ -455,28 +572,38 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     // paint
     let hovered = resp.hovered() || resp.dragged();
     let text_c = if enabled { t.text_label } else { t.text_disabled };
+    // a label too long for its column shrinks (down to 10 pt) before it is cut
+    let mut label_font = label_font;
+    while label_font.size > 9.5 && ui.painter().layout_no_wrap(label_str.clone(), label_font.clone(), Color32::WHITE).size().x > label_rect.width() {
+        label_font.size = (label_font.size - 0.5).max(9.5);
+    }
+    let shown_label = fit_text(ui, &label_str, &label_font, label_rect.width());
+    let truncated = shown_label != label_str;
     let p = ui.painter();
-    p.text(label_rect.left_center(), Align2::LEFT_CENTER, crate::i18n::tr(label_override.unwrap_or(spec.label)), t.font(12.5), text_c);
+    p.text(label_rect.right_center(), Align2::RIGHT_CENTER, &shown_label, label_font, text_c);
     if typing.is_none() {
-        p.text(label_rect.right_center(), Align2::RIGHT_CENTER, shown_value(spec, v), t.font(12.5), text_c);
+        let value_c = if enabled { t.text } else { t.text_disabled };
+        p.text(value_rect.right_center(), Align2::RIGHT_CENTER, shown_value(spec, v), value_font.clone(), value_c);
         // the scrub pointer, as over Lightroom's values: a drag here changes the value
         if enabled && (value_resp.hovered() || scrub.is_some()) {
             ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
         }
     }
-    let ring = THUMB_RING;
+    if truncated && !label_resp.hovered() {
+        label_resp.clone().on_hover_text(label_str.as_str());
+    }
     let tx = g.to_x(v);
-    paint_track(ui, track_rect, &spec.track, &t, tx, ring);
-    let p = ui.painter();
-    let ring_c = if !enabled {
+    paint_track(ui, track_rect, spec, &t);
+    let thumb_c = if !enabled {
         t.text_disabled
     } else if hovered {
         t.thumb_hover
     } else {
         t.thumb
     };
-    p.circle_filled(pos2(tx, track_rect.center().y), ring, t.chrome);
-    p.circle_stroke(pos2(tx, track_rect.center().y), ring, Stroke::new(2.0, ring_c));
+    paint_thumb(ui.painter(), pos2(tx, track_rect.center().y), thumb_c, enabled);
+    // the thumb's spot, for agents and tests (`sliderThumb:<id>`, centred on the value's position)
+    register(ui, format!("sliderThumb:{}", spec.id), Rect::from_center_size(pos2(tx, track_rect.center().y), vec2(11.0, 14.0)));
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
@@ -1244,3 +1371,7 @@ pub fn slider_has_focus(ctx: &egui::Context) -> bool {
     let focused = ctx.memory(|m| m.focused());
     focused.is_some() && focused == ctx.data(|d| d.get_temp::<egui::Id>(focused_slider_key()))
 }
+
+#[cfg(test)]
+#[path = "widgets/tests_slider_columns.rs"]
+mod slider_columns_tests;

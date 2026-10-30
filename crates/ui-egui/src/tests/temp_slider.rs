@@ -41,21 +41,12 @@ fn widget(h: &Headless, id: &str) -> egui::Rect {
     h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
 }
 
-/// Where the slider's thumb (the hollow ring on the track's centre line) is drawn, from 0 to 1 along the track.
+/// Where the slider's thumb (the teardrop on the track's centre line) is drawn, from 0 to 1 along the track.
 fn thumb(h: &Headless, control: &str) -> f32 {
     let track = widget(h, &format!("slider:{control}"));
-    let rings: Vec<f32> = h
-        .view
-        .painted_shapes()
-        .iter()
-        .filter_map(|s| match s {
-            egui::epaint::Shape::Circle(c) if c.radius == 7.0 && (c.center.y - track.center().y).abs() < 0.5 => Some(c.center.x),
-            _ => None,
-        })
-        .filter(|x| (track.left() - 0.5..=track.right() + 0.5).contains(x))
-        .collect();
-    assert!(!rings.is_empty() && rings.iter().all(|x| (x - rings[0]).abs() < 0.01), "one thumb on {control}: {rings:?}");
-    (rings[0] - track.left()) / track.width()
+    let thumbs: Vec<f32> = h.app.widgets.iter().filter(|(w, _)| *w == format!("sliderThumb:{control}")).map(|(_, r)| r.center().x).collect();
+    assert!(thumbs.len() == 1 && (track.left() - 0.5..=track.right() + 0.5).contains(&thumbs[0]), "one thumb on {control}: {thumbs:?}");
+    (thumbs[0] - track.left()) / track.width()
 }
 
 fn develop(h: &Headless) -> lightcraft_develop::DevelopSettings {
