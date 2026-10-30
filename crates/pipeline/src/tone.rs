@@ -111,8 +111,16 @@ impl ToneMap {
     /// gain map only lifts highlights), then the highlights gain up to `peak − 1` more as in
     /// [`ToneMap::hdr`].
     pub fn camera_hdr(curve: &CameraTone, contrast: f64, whites: f64, blacks: f64, peak: f32) -> ToneMap {
+        Self::camera_hdr_with(curve, contrast, whites, blacks, peak, SliderModel::Legacy)
+    }
+
+    /// [`ToneMap::camera_hdr`] with the Contrast / Whites / Blacks response of `model`.
+    pub fn camera_hdr_with(curve: &CameraTone, contrast: f64, whites: f64, blacks: f64, peak: f32, model: SliderModel) -> ToneMap {
         let peak = if peak.is_finite() { peak.max(1.0) } else { 1.0 };
-        let adjustment = Self::display(contrast, whites, blacks);
+        let adjustment = match model {
+            SliderModel::Legacy => Self::display(contrast, whites, blacks),
+            SliderModel::Unified => Self::display_hdr_with(contrast, whites, blacks, 1.0, SliderModel::Unified, curve.apply(GREY)),
+        };
         let neutral = contrast == 0.0 && whites == 0.0 && blacks == 0.0;
         let top = (2.9 - 1.6 * (whites as f32 / 100.0) + peak.log2() + 1.0).max(HDR_FROM_EV + 0.5);
         let lut = (0..LUT_N)
@@ -151,17 +159,7 @@ impl ToneMap {
                 // extended Reinhard with white point wl: y(1 + y/wl²)/(1 + y)
                 let mut o = y * (1.0 + y / (wl * wl)) / (1.0 + y);
                 o = o.min(1.0);
-                // Toe: blacks < 0 crushes, > 0 lifts.
-                if b < 0.0 {
-                    // Smooth max(0, o − k) (a soft knee), renormalized so 1 stays 1.
-                    let k = -b * 0.035;
-                    let e = 0.004;
-                    let soft = |v: f32| ((v - k) + ((v - k) * (v - k) + e * e).sqrt()) * 0.5;
-                    o = (soft(o) - soft(0.0)) / (soft(1.0) - soft(0.0));
-                } else if b > 0.0 {
-                    let k = b * 0.03;
-                    o = k + (1.0 - k) * o;
-                }
+                o = toe(o, b);
                 if peak > 1.0 {
                     let top = (white_ev + peak.log2() + 1.0).max(HDR_FROM_EV + 0.5);
                     o += (peak - 1.0) * smooth(HDR_FROM_EV, top, ev * slope);
@@ -181,6 +179,13 @@ impl ToneMap {
     /// source, e.g. a decoded gain-map image) pass through and roll off softly towards `peak`
     /// instead of clipping at 1; SDR sources (≤ 1) render as with [`ToneMap::display`].
     pub fn display_hdr(contrast: f64, whites: f64, blacks: f64, peak: f32) -> ToneMap {
+        Self::display_hdr_with(contrast, whites, blacks, peak, SliderModel::Legacy, GREY)
+    }
+
+    /// [`ToneMap::display_hdr`] with the response of `model`; `pivot` is the display luminance
+    /// Contrast turns around (middle grey for a display-referred file, the camera curve's output
+    /// at grey when the curve is a camera's look).
+    pub fn display_hdr_with(contrast: f64, whites: f64, blacks: f64, peak: f32, model: SliderModel, pivot: f32) -> ToneMap {
         let peak = if peak.is_finite() { peak.max(1.0) } else { 1.0 };
         let c = (contrast / 100.0) as f32;
         let w = (whites / 100.0) as f32;
@@ -189,10 +194,21 @@ impl ToneMap {
         // Neutral sliders are the identity up to white (issue #1945): the SDR shoulder below would
         // pull 1.0 down to 0.9875 (8-bit 255 to 254), so it only shapes an edited curve.
         let neutral = c == 0.0 && w == 0.0 && b == 0.0;
+        let sliders = Sliders::new(c, w, b, pivot);
         let lut = (0..LUT_N)
             .map(|i| {
                 let ev = LUT_MIN_EV + (LUT_MAX_EV - LUT_MIN_EV) * i as f32 / (LUT_N - 1) as f32;
                 let y = GREY * 2f32.powf(ev);
+                if model == SliderModel::Unified {
+                    let mut o = if neutral { y } else { sliders.apply(y) };
+                    if peak > 1.0 && o > 0.95 {
+                        let r = peak - 0.95;
+                        o = 0.95 + r * (1.0 - (-(o - 0.95) / r).exp());
+                    } else if !neutral {
+                        o = soft_clip(o);
+                    }
+                    return o.clamp(0.0, peak);
+                }
                 let mut p = y.powf(1.0 / 2.2);
                 if p <= 1.0 {
                     // S-curve anchored at 0, grey and 1
@@ -257,6 +273,89 @@ impl ToneMap {
         let v = self.lut[i] + (self.lut[i + 1] - self.lut[i]) * t;
         if ev < LUT_MIN_EV { v * (y / (GREY * 2f32.powf(LUT_MIN_EV))) } else { v }
     }
+}
+
+/// Which Contrast / Whites / Blacks response a tone map has. Raws without a camera look
+/// ([`ToneMap::hdr`]) have the same strong response under both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SliderModel {
+    /// Process V1 and V2: small weights in gamma space on camera-look raws and display-referred files.
+    Legacy,
+    /// Process V3: the strength of [`ToneMap::hdr`] on every path (see [`Sliders`]).
+    Unified,
+}
+
+/// Contrast, Whites and Blacks on display-linear luminance `o` (the base curve's output), with
+/// the strength of [`ToneMap::hdr`]: Contrast bends gamma-space tones about the pivot (an S-curve
+/// holding black and white, middle slope up to 1.55 / down to 0.6), Whites move the white point
+/// by up to 0.9 EV up / 0.7 EV down (blending in over the top 3 EV), Blacks crush or lift the toe
+/// exactly as `hdr` does. Neutral sliders are not applied at all (identity).
+#[derive(Clone, Copy, Debug)]
+pub struct Sliders {
+    g: f32,
+    w_ev: f32,
+    b: f32,
+    pivot_p: f32,
+}
+
+impl Sliders {
+    pub fn new(contrast: f32, whites: f32, blacks: f32, pivot: f32) -> Self {
+        let pivot = if pivot.is_finite() { pivot } else { GREY };
+        Self {
+            g: if contrast >= 0.0 { 1.0 + 0.55 * contrast } else { 1.0 + 0.4 * contrast },
+            w_ev: if whites >= 0.0 { 0.9 * whites } else { 0.7 * whites },
+            b: blacks,
+            pivot_p: pivot.clamp(0.0, 1.0).powf(1.0 / 2.2).clamp(0.05, 0.95),
+        }
+    }
+
+    pub fn apply(&self, o: f32) -> f32 {
+        if !o.is_finite() || o <= 0.0 {
+            return 0.0;
+        }
+        let mut o = o;
+        if self.g != 1.0 {
+            let (m, g) = (self.pivot_p, self.g);
+            let p = o.powf(1.0 / 2.2);
+            let q = if p <= m {
+                m * (p / m).powf(g)
+            } else if p <= 1.0 {
+                1.0 - (1.0 - m) * ((1.0 - p) / (1.0 - m)).powf(g)
+            } else {
+                p
+            };
+            o = q.powf(2.2);
+        }
+        if self.w_ev != 0.0 {
+            o *= 2f32.powf(self.w_ev * smooth(-3.0, 0.0, o.log2()));
+        }
+        toe(o, self.b)
+    }
+}
+
+/// The blacks toe of [`ToneMap::hdr`]: `b` < 0 crushes (a soft knee, 1 stays 1), > 0 lifts.
+fn toe(o: f32, b: f32) -> f32 {
+    if b < 0.0 {
+        let k = -b * 0.035;
+        let e = 0.004;
+        let soft = |v: f32| ((v - k) + ((v - k) * (v - k) + e * e).sqrt()) * 0.5;
+        (soft(o) - soft(0.0)) / (soft(1.0) - soft(0.0))
+    } else if b > 0.0 {
+        let k = b * 0.03;
+        k + (1.0 - k) * o
+    } else {
+        o
+    }
+}
+
+/// A short soft clip for edited curves: slope 1 up to 0.96, exactly 1.0 from 1.04 (so Whites can
+/// reach clipping); neutral sliders skip it.
+fn soft_clip(o: f32) -> f32 {
+    if o <= 0.96 {
+        return o;
+    }
+    let d = (o - 0.96).min(0.08);
+    0.96 + d - d * d / 0.16
 }
 
 fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
