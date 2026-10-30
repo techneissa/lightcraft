@@ -147,7 +147,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-FILT-SEARCH-META | Text search | P0 | ✅ | `cmd:library.filter` (`text`), `crates/ui-egui/src/panels/topbar.rs`, `crates/catalog/src/query.rs` | fielded tokens (`rating:3`, `iso:>800`, `camera:…`); plain words also match the people named on faces; double quotes keep several words in one token (`person:"Jane Doe"`, `"jane doe"`, issue #1449); no suggestions dropdown |
+| LR-FILT-SEARCH-META | Text search | P0 | ✅ | `cmd:library.filter` (`text`), `crates/ui-egui/src/panels/topbar.rs`, `crates/catalog/src/query.rs` | fielded tokens (`rating:3`, `iso:>800`, `rating:>=3` / `iso:<=400`, `camera:…`); plain words also match the people named on faces; double quotes keep several words in one token (`person:"Jane Doe"`, `"jane doe"`, issue #1449); no suggestions dropdown |
 | LR-FILT-SEARCH-AI | Natural-language search | P2 | ⬜ | | |
 | LR-FILT-RATING | Rating filter | P0 | ✅ | `cmd:library.filter` (`rating`, `ratingOp`), `crates/ui-egui/src/panels/filterbar.rs` | ≥ / = / ≤ stars in the filter bar (`cmd:view.filterBar`); the bottom bar's Stars dropdown sets the `ratings` set (LR-FILT-QUICK) and the filter bar shows it beside its stars |
 | LR-FILT-FLAG | Flag filter | P0 | ✅ | `cmd:library.filter` (`flag`), `crates/ui-egui/src/panels/filterbar.rs` | picked / rejected / unflagged; several can be on at once (`flags`, LR-FILT-QUICK) |
@@ -528,14 +528,14 @@ visible menu bar yet: the menu model is only exposed through the control channel
 | MENU-FILE-SHOWFINDER | Show in Finder | P0 | ✅ | `cmd:app.showInFinder` | ⌘R; Explorer on Windows, the folder on Linux; disabled for demo scenes and on the web |
 | MENU-PHOTO-SHOWFOLDERS | Show in Folders | P2 | ✅ | `cmd:app.showInFolders`, `crates/ui-egui/src/panels/left.rs` (`folder_row_of`), tests `show_in_folders_*` in `tests_panels.rs` | Photo ▸ Show in Folders and the photo right-click menu: selects the active photo's folder in the sidebar's Folders section, opens the rows above it and scrolls to it; opens the Library sidebar if it is behind another tab; disabled for demo scenes and photos outside a library folder |
 | MENU-FILE-OFFLINE | Store album locally | P2 | 🚫 | | not applicable: local-first |
-| MENU-FILE-CLOSE | Close Window | P1 | ✅ | `apps/lightcraft/src/native_menu.rs` | the system's Close Window item at the end of File (⌘W) |
+| MENU-FILE-CLOSE | Close Window | P1 | ✅ | `apps/lightcraft/src/native_menu.rs` | the system's Close Window item at the end of File (⌘W); closing the main window quits the app, after the check Quit makes (running tasks that can stop, changes not yet written); the second window just closes; kept on purpose, user page `docs/user/faq/closing-the-window.md` |
 | MENU-EDIT-UNDO | Undo | P0 | ✅ | `cmd:edit.undo` | label does not name the step |
 | MENU-EDIT-REDO | Redo | P0 | ✅ | `cmd:edit.redo` | |
 | MENU-EDIT-COPYPASTE | Copy / paste (edit settings) | P0 | ✅ | `cmd:develop.copy`, `cmd:develop.paste` | |
 | MENU-EDIT-CHOOSECOPY | Choose Edit Settings to Copy… | P0 | ✅ | `cmd:dialog.copySettings` | Return copies, Esc cancels |
-| MENU-EDIT-PASTESELECTED | Paste Selected Settings | P0 | ✅ | `cmd:dialog.pasteSettings`, `cmd:develop.paste` (`groups`) | checklist prefilled with the copied groups; only copied groups can be pasted; Return pastes, Esc cancels |
+| MENU-EDIT-PASTESELECTED | Paste Selected Settings | P0 | ✅ | `cmd:dialog.pasteSettings`, `cmd:develop.paste` (`groups`) | checklist prefilled with the copied groups; only copied groups can be pasted; Return pastes, Esc cancels; Paste Settings from Previous (⌥⌘V) follows it |
 | MENU-EDIT-SELECTALL | Select All | P0 | ✅ | `cmd:library.selectAll` | |
-| MENU-EDIT-SELECTNONE | Select None | P0 | ✅ | `cmd:library.selectNone` | |
+| MENU-EDIT-SELECTNONE | Select None | P0 | ✅ | `cmd:library.selectNone` | Select Only Active Photo (⇧⌘D) follows it |
 | MENU-EDIT-SELECTBY | Select by flag / rating | P1 | ✅ | `cmd:library.selectBy` | Edit → Select by: picks, rejects, unflagged, ★…★★★★★ and higher, unrated, colour labels; `add` extends the selection |
 | MENU-EDIT-FIND | Find… | P0 | ✅ | `cmd:view.focusSearch`, `crates/ui-egui/src/panels/topbar.rs` | ⌘F focuses the search field |
 | MENU-VIEW-PHOTOGRID | Photo Grid | P0 | ✅ | `cmd:view.photoGrid` | |
@@ -651,7 +651,7 @@ From `06-shortcuts.md` part 1. Evidence is our binding; conflicts are explained 
 | KEY-HIDE | Hide / hide others — ⌘H / ⌥⌘H | P1 | ✅ | `apps/lightcraft/src/native_menu.rs` | native app-menu items |
 | KEY-QUIT | Quit — ⌘Q | P0 | ✅ | `cmd:app.quit` | ⌘Q (Ctrl+Q off macOS) |
 | KEY-CREATEVERSION | Create version — ⇧M | P1 | ✅ | `cmd:version.create` | secondary binding (primary ⌘⇧S) |
-| KEY-CLOSEWINDOW | Close window — ⌘W | P1 | ✅ | `apps/lightcraft/src/native_menu.rs` | native File ▸ Close Window |
+| KEY-CLOSEWINDOW | Close window — ⌘W | P1 | ✅ | `apps/lightcraft/src/native_menu.rs` | native File ▸ Close Window; with the main window in front it quits the app like ⌘Q (see MENU-FILE-CLOSE); the second window just closes |
 | KEY-DELETE | Delete photo — ⌫ | P0 | ✅ | `cmd:photo.delete`, `cmd:album.removePhotos`, `cmd:photo.deletePermanently` | in a normal album ⌫ removes from the album only (`album.removePhotos`, issue #1805); in a smart album it does nothing; in Recently Deleted it is Delete Permanently (through the Delete Permanently setting and dialog); elsewhere it deletes (to Recently Deleted), asking first unless Settings ▸ General ▸ Culling ▸ "Only for picked or starred photos" is on and no photo in the set is picked or has stars |
 | KEY-DELETE-REJECTED | Delete rejected photos — ⌘⌫ / Ctrl+Backspace | P2 | ✅ | `cmd:photo.deleteRejected` | beyond Lightroom: the plain ⌫ stays Delete Photo; Cmd+Delete is bound to nothing else by default |
 | KEY-ADDPHOTOS | Import photos — ⇧⌘I | P0 | ✅ | `cmd:file.addPhotos` | |
@@ -997,3 +997,5 @@ Latin stays upright. Advanced Japanese composition remains open. Regression cove
 | 2026-10-23 | patch | LR-BEHAV-ACCESS: the name field of New Album, New Smart Album, Rename and the other one-field dialogs takes the keyboard focus once when the dialog opens instead of every frame, so Tab and Shift+Tab reach the check box, Cancel and OK; status unchanged (🟡) |
 | 2026-10-22 | minor | LR-CROP-AUTO: Auto straighten turns by at most 10° and only on at least 3 agreeing lines, and says when it finds nothing to level by; measured on 68 photos straightened by hand and 300 left as shot, unwanted turns of more than 1° fell from 79 to 19 of the 300. Downgraded ✅ → 🟡: it still leaves most tilted photos alone |
 | 2026-10-23 | patch | LRC-LIB-FILTERBAR: showing an album (`library.source`) while the filter holds an album drops the filter's album, as showing a library folder already dropped its folder filter; before, the old album stayed in the filter unseen (the filter bar has no album chip) and narrowed the next source such as All Photos; the row's note says so; status unchanged (✅) |
+| 2026-10-27 | patch | MENU-EDIT-SELECTNONE, MENU-EDIT-PASTESELECTED: Select Only Active Photo and Paste Settings from Previous were not in the Edit menu's layout and ended up after Settings…, near the end of the menu; they now sit with the other Select and Paste rows. On macOS the Edit menu no longer shows two separators in a row where Settings… moved to the app menu; status unchanged (✅) |
+| 2026-10-27 | patch | MENU-FILE-CLOSE, KEY-CLOSEWINDOW: the notes say that Close Window and the red close button of the main window quit the app, after the check Quit makes; kept on purpose; a user page says so; status unchanged (✅) |
