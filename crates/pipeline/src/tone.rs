@@ -288,8 +288,8 @@ pub enum SliderModel {
 /// Contrast, Whites and Blacks on display-linear luminance `o` (the base curve's output), with
 /// the strength of [`ToneMap::hdr`]: Contrast bends gamma-space tones about the pivot (an S-curve
 /// holding black and white, middle slope up to 1.55 / down to 0.6), Whites move the white point
-/// by up to 0.9 EV up / 0.7 EV down (blending in over the top 3 EV), Blacks crush or lift the toe
-/// exactly as `hdr` does. Neutral sliders are not applied at all (identity).
+/// by up to 0.75 EV up / 0.7 EV down (blending in over the top 3 EV), Blacks crush or lift the toe
+/// as `hdr` does (the crush at three quarters of its strength). Neutral sliders are not applied at all (identity).
 #[derive(Clone, Copy, Debug)]
 pub struct Sliders {
     g: f32,
@@ -303,8 +303,9 @@ impl Sliders {
         let pivot = if pivot.is_finite() { pivot } else { GREY };
         Self {
             g: if contrast >= 0.0 { 1.0 + 0.55 * contrast } else { 1.0 + 0.4 * contrast },
-            w_ev: if whites >= 0.0 { 0.9 * whites } else { 0.7 * whites },
-            b: blacks,
+            w_ev: if whites >= 0.0 { 0.75 * whites } else { 0.7 * whites },
+            // a little gentler than the raw map's toe: a dark ground keeps its shape at -100
+            b: if blacks < 0.0 { 0.75 * blacks } else { blacks },
             pivot_p: pivot.clamp(0.0, 1.0).powf(1.0 / 2.2).clamp(0.05, 0.95),
         }
     }

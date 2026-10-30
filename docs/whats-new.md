@@ -1,5 +1,14 @@
 # What's new in LightCraft
 
+## 2026-10-30
+
+### Stronger Contrast, Whites and Blacks
+- New and reset photos use **Process V3**, where Contrast, Whites and Blacks are clearly stronger on raws that have a
+  camera look and on JPEG / PNG files, matching the strength they already had on other raws. Contrast +100 is a firm
+  S-curve, Whites +100 pushes bright tones into clipping while the midtones hold, and Blacks -100 crushes only the
+  deepest tones. Neutral sliders still leave a photo exactly as it was.
+- Photos you already edited keep their look. **Photo ▸ Update to Current Process** moves them to V3 (one Undo step).
+
 ## 2026-10-29
 
 ### Shorter Settings
