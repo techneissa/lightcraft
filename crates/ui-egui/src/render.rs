@@ -64,6 +64,9 @@ pub enum Slot {
     /// A slider drag's live HDR histogram: a small full-quality render of an HDR edit, beside the
     /// drafts (which have no HDR histogram), with no texture ([`Renderer::live_hdr_histogram`]).
     HdrHistogram,
+    /// The brush tool's live preview: the photo with the active mask's brush covering everything
+    /// (or nothing, erasing), drawn under the stroke being painted ([`crate::brush_live`]).
+    BrushFull,
 }
 
 /// Settings that can change the rendered frame. Colour-only edits, including temporarily
@@ -257,6 +260,12 @@ pub struct Renderer {
     /// Keep a CPU copy of every texture so the UI can be rasterized headlessly (set when the app
     /// is driven by the control channel).
     pub keep_pixels: bool,
+    /// Keep a CPU copy of the loupe's and the brush preview's pixels (the brush tool is open: its
+    /// live stroke blends them, [`crate::brush_live`]).
+    pub keep_brush_pixels: bool,
+    /// The result key the brush preview ([`Slot::BrushFull`]) must have to match the photo's
+    /// current settings (`None`: no preview wanted now).
+    pub brush_target: Option<u64>,
     /// Per-view intermediate results (loupe and "before"), so slider drags redo only what changed.
     stages: HashMap<Slot, Arc<StageCache>>,
     /// Slot → key of the last quick job requested for it (each is tried once).
@@ -346,6 +355,8 @@ impl Renderer {
             completed: 0,
             discarded: 0,
             keep_pixels: false,
+            keep_brush_pixels: false,
+            brush_target: None,
             stages: HashMap::new(),
             quick_tried: HashMap::new(),
             failed: HashMap::new(),
@@ -1134,7 +1145,7 @@ impl Renderer {
             }
             let img = &rendered.image;
             let color = color.unwrap_or_else(|| Arc::new(color_image(img)));
-            let pixels = self.keep_pixels.then(|| color.clone());
+            let pixels = (self.keep_pixels || (self.keep_brush_pixels && matches!(slot, Slot::Main | Slot::BrushFull))).then(|| color.clone());
             let name = format!("{slot:?}");
             match self.textures.get_mut(&slot) {
                 Some(t) => {

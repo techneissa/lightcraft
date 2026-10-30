@@ -15,6 +15,7 @@ use crate::theme::Tokens;
 use crate::widgets::{register, register_geometry};
 use lightcraft_engine::media::QuickSource;
 
+mod brush_preview;
 mod crop;
 mod filmstrip;
 mod geometry;
@@ -236,6 +237,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let ask = LoupeAsk { id, with_crop: !crop_tool, interacting, fit_px, overlay };
     app.renderer.loupe_drawn();
     request_main(app, ui, &ask, [rw, rh], plan.window_edge.is_none());
+    let plain = overlay == lightcraft_pipeline::Overlay::None;
+    brush_preview::request(app, ui, &brush_preview::Ask { id, size: [rw, rh], with_crop: !crop_tool, fit_px, interacting, plain });
     // hovering a preset or profile: the photo with that look, shown instead of the loupe render
     // once it is ready (nothing is committed)
     let hover_key = request_hover(app, &ask, [sw, sh]);
@@ -839,7 +842,10 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
         // sampling (the render is up to a 64 px step larger, or the preview level)
         let job = if interacting { job } else { job.with_display_fit(fit_px[0], fit_px[1]) };
         let job = job.with_overlay(overlay).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
-        let job = job.with_hidden_grading(app.ui.grading_hidden_for(id));
+        let mut job = job.with_hidden_grading(app.ui.grading_hidden_for(id));
+        if app.renderer.keep_brush_pixels {
+            job.key ^= brush_preview::BRUSH_KEY_SALT;
+        }
         app.renderer.request(Slot::Main, job, 100);
         // a drag's draft that renders in a few ms (GPU) is drawn in this frame, not the next (zoomed
         // in, what changes on screen is the window's draft)

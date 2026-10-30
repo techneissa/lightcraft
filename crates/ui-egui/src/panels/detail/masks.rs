@@ -501,14 +501,31 @@ fn brush_tool(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response,
             color: app.ui.mask_overlay_color,
             opacity: opacity.clamp(0.0, 1.0),
         };
-        crate::brush_live::paint(&mut app.brush_live, ui.ctx(), p, params, &screen, pressure);
-    } else {
-        app.brush_live = None;
+        // zoomed in, the window render (not the whole-frame one the blend is made of) is on screen
+        let images = app
+            .session
+            .active()
+            .filter(|_| !app.renderer.textures.contains_key(&crate::render::Slot::Region))
+            .and_then(|id| super::brush_preview::images(app, id, map.rect));
+        let look = crate::brush_live::Look {
+            images: images.as_ref(),
+            overlay: images.is_none() || app.ui.mask_overlay,
+            auto: app.ui.brush_auto_mask,
+            now: ui.input(|i| i.time),
+        };
+        crate::brush_live::paint(&mut app.brush_live, ui.ctx(), p, params, &screen, pressure, &look);
+    } else if app.brush_live.is_some() {
+        // a stroke just committed keeps showing its adjustment until the render that has it arrives
+        let key = app.renderer.textures.get(&crate::render::Slot::Main).map(|t| t.key);
+        if crate::brush_live::paint_held(&mut app.brush_live, p, map.rect, key, ui.input(|i| i.time)) {
+            ui.ctx().request_repaint();
+        }
     }
     if (resp.drag_stopped() || resp.clicked())
         && let Some(Gesture::Brush { points, pressure }) = app.gesture.take()
     {
-        app.brush_live = None;
+        let key = app.renderer.textures.get(&crate::render::Slot::Main).map(|t| t.key);
+        crate::brush_live::hold(&mut app.brush_live, key, ui.input(|i| i.time));
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
         // holding ⌥ (Alt) paints with the other mode: Erase while adding, Add while erasing
         let (alt, shift) = resp.ctx.input(|i| (i.modifiers.alt, i.modifiers.shift));
