@@ -407,7 +407,7 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 => 0,
-        Process::V2 => base_detail_radius(px_per_long),
+        Process::V2 | Process::V3 => base_detail_radius(px_per_long),
     }
 }
 
@@ -425,12 +425,24 @@ pub fn guided_fast_step(sigma: f32) -> usize {
     (sigma / 3.0).floor().clamp(1.0, 16.0) as usize
 }
 
-/// Luminance noise reduction: guided filter of log luminance (`sigma` px, `eps`), blended by `k`.
+/// Luminance noise reduction: guided filter of log luminance (`sigma` px, `eps`), blended by `k`. `contrast`
+/// (0..1) keeps the part of the filter's change that is large (more than noise): higher values keep the picture's
+/// contrast and detail at the price of noisy blotches, as Lightroom's Contrast does ([`nr_keep`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NrLum {
     pub sigma: f32,
     pub eps: f32,
     pub k: f32,
+    pub contrast: f32,
+}
+
+/// The share of a luminance-NR change `d` (log2 luminance, filtered minus original) that Contrast takes back:
+/// 0 for changes below 0.08 EV (noise), rising to `contrast` at 0.4 EV and more (detail). The GPU kernel
+/// (`nr_lum`) uses the same edges.
+#[inline]
+pub fn nr_keep(contrast: f32, d: f32) -> f32 {
+    let t = ((d.abs() - 0.08) / 0.32).clamp(0.0, 1.0);
+    contrast * t * t * (3.0 - 2.0 * t)
 }
 
 /// Colour noise reduction: chromaticity blurred by `sigma` px, mixed in by `t`.
@@ -478,7 +490,7 @@ pub fn nr_params(s: &DevelopSettings, scale: f32) -> (Option<NrLum>, Option<NrCo
     let l = (lum > 0.0).then(|| nr_radius((1.0 + 2.5 * lum) * scale)).filter(|&(_, w)| w >= NR_MIN_BLEND).map(|(sigma, w)| {
         let detail = (s.detail.nr_detail / 100.0) as f32;
         let eps = ((0.002 + lum * lum * 0.25 * (1.0 - 0.7 * detail)) * scale * scale).max(1e-7);
-        NrLum { sigma, eps, k: lum.sqrt() * w }
+        NrLum { sigma, eps, k: lum.sqrt() * w, contrast: (s.detail.nr_contrast / 100.0).clamp(0.0, 1.0) as f32 }
     });
     let smooth = 1.0 + (s.detail.nr_color_smoothness / 100.0) as f32;
     let c = (col > 0.0).then(|| nr_radius((1.5 + 6.0 * col) * scale * smooth)).filter(|&(_, w)| w >= NR_MIN_BLEND).map(|(sigma, w)| {
@@ -506,7 +518,8 @@ pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
         for_rows(&mut img.data, w, |y, row| {
             for (x, p) in row.iter_mut().enumerate() {
                 let i = y * w + x;
-                let d = (f.data[i] - l.data[i]) * nr.k;
+                let change = f.data[i] - l.data[i];
+                let d = change * (1.0 - nr_keep(nr.contrast, change)) * nr.k;
                 let g = d.exp2();
                 *p = p.map(|v| v * g);
             }
@@ -622,7 +635,7 @@ pub struct PlaneSigmas {
     pub chroma: Option<f32>,
 }
 
-pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneSigmas {
+pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, _q: Quality) -> PlaneSigmas {
     let ppl = px_per_long as f32;
     // A hidden mask, or one with no components, does not change the picture. Its sliders must
     // not pick the tone base Clarity reads (#1214).
@@ -634,10 +647,10 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
     // Edge-aware base at ~1.5% of the long edge (EV² epsilon: edges of > ~0.6 EV are preserved)
     // From V2 it is taken of the median at 0.15%: lines and texture finer than that are detail,
     // not tone (#632).
-    let base = tone_active.then(|| {
-        let sigma = (0.015 * ppl).max(1.0);
-        if q == Quality::Draft { sigma.min(24.0) } else { sigma }
-    });
+    // The radius is the same fraction of the image at every quality: a draft capped in pixels
+    // looked different from the export on large previews. `guided_fast` subsamples by sigma / 3
+    // (at most 16), so a wide base is not dearer.
+    let base = tone_active.then(|| (0.015 * ppl).max(1.0));
     let clarity = (s.effects.clarity != 0.0 || local_any(|a| a.clarity)).then(|| (0.012 * ppl).max(1.0));
     // local Noise and Defringe read the fine detail band too
     let texture = (s.effects.texture != 0.0

@@ -400,9 +400,24 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let hh = pf(F_HL) + lt[4];
     let ss = pf(F_SH) + lt[5];
     if (hh != 0.0 || ss != 0.0) {
-        let ws = 1.0 - sstep(-4.8, 0.3, base);
-        let wh = sstep(-1.0, 2.8, base);
-        delta += ss * 1.7 * ws * sqrt(ws) + hh * 1.7 * wh;
+        if (pu(F_TONE_V3) != 0u) {
+            let ws = 1.0 - sstep(-5.0, 1.5, base);
+            let wh = sstep(-1.4, 2.8, base);
+            var lift = hh * 1.7 * wh;
+            if (lift > 0.0) {
+                // same shoulder as finish.rs (KNEE 1.0, WHITE 2.45)
+                let lifted = base + lift;
+                if (lifted > 1.0) {
+                    let shoulder = 1.0 + 1.45 * tanh((lifted - 1.0) / 1.45);
+                    lift = max(shoulder - base, 0.0);
+                }
+            }
+            delta += ss * 1.7 * ws + lift;
+        } else {
+            let ws = 1.0 - sstep(-4.8, 0.3, base);
+            let wh = sstep(-1.0, 2.8, base);
+            delta += ss * 1.7 * ws * sqrt(ws) + hh * 1.7 * wh;
+        }
     }
     if (lt[6] != 0.0) {
         delta += lt[6] * 0.8 * sstep(0.5, 3.0, l1);
@@ -432,7 +447,14 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             if (sm > 0.0) {
                 mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
             }
-            delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
+            if (pu(F_TONE_V3) != 0u) {
+                // process V3 (`finish::SHARPEN_GAIN_V3`, `finish::sharpen_mix`)
+                let sd = pf(F_SHARPEN_DETAIL);
+                let mixv = sd + (1.0 - sd) * sstep(0.04, 0.3, abs(det));
+                delta += sp * 3.0 * clamp(det, -0.8, 0.8) * mk * mixv;
+            } else {
+                delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
+            }
         }
     }
     // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
