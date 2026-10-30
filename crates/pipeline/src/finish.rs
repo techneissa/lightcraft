@@ -160,6 +160,8 @@ pub struct FinishParams {
     pub proof: Option<crate::output::ProofParams>,
     pub hl: f32,
     pub sh: f32,
+    /// Process V3 or later: the wider Shadows / Highlights weights ([`shadows_highlights_delta`]).
+    pub tone_v3: bool,
     pub clar: f32,
     pub tex: f32,
     pub dehaze: f32,
@@ -230,6 +232,7 @@ impl FinishParams {
             proof: None,
             hl: (s.light.highlights / 100.0) as f32,
             sh: (s.light.shadows / 100.0) as f32,
+            tone_v3: s.process >= Process::V3.version(),
             clar,
             tex,
             dehaze,
@@ -271,7 +274,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
     match s.process.process() {
         // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
-        Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw) {
+        Process::V1 | Process::V2 | Process::V3 => match info.camera_tone.as_ref().filter(|_| info.raw) {
             Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak),
             None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
             None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
@@ -612,14 +615,29 @@ fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 
     (color, log_luminance)
 }
 
+/// Change of log2 luminance from Shadows / Highlights (each -1..1) for a pixel whose edge-aware
+/// base is `base` (log2 of luminance over mid grey). `v3` selects the process V3 weights; V1 and V2
+/// keep theirs. The GPU shader (`finish.wgsl`) carries the same constants.
+pub(crate) fn shadows_highlights_delta(shadows: f32, highlights: f32, base: f32, v3: bool) -> f32 {
+    if v3 {
+        // Shadows reach from the deepest tones into the lower midtones (about 0.9 EV at 0.05 linear,
+        // 0.5 EV at 0.1, a little at mid grey) and stop before the highlights; Highlights mirror that
+        // from the upper midtones. Both slopes stay well under 1, so tones never cross.
+        let shadow_weight = 1.0 - smooth(-5.0, 1.5, base);
+        let highlight_weight = smooth(-1.4, 2.8, base);
+        return shadows * 1.7 * shadow_weight + highlights * 1.7 * highlight_weight;
+    }
+    let shadow_weight = 1.0 - smooth(-4.8, 0.3, base);
+    let highlight_weight = smooth(-1.0, 2.8, base);
+    shadows * 1.7 * shadow_weight * shadow_weight.sqrt() + highlights * 1.7 * highlight_weight
+}
+
 fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1: f32, local: &PixelLocalTerms) -> f32 {
     let [_, _, _, l_con, l_hl, l_sh, l_wh, l_bl, l_tex, l_clar, _, _, _, l_sharp, l_noise, _, _] = local.values;
     let mut delta = 0.0;
     let (highlights, shadows) = (fp.hl + l_hl, fp.sh + l_sh);
     if highlights != 0.0 || shadows != 0.0 {
-        let shadow_weight = 1.0 - smooth(-4.8, 0.3, base);
-        let highlight_weight = smooth(-1.0, 2.8, base);
-        delta += shadows * 1.7 * shadow_weight * shadow_weight.sqrt() + highlights * 1.7 * highlight_weight;
+        delta += shadows_highlights_delta(shadows, highlights, base, fp.tone_v3);
     }
     if l_wh != 0.0 {
         delta += l_wh * 0.8 * smooth(0.5, 3.0, l1);

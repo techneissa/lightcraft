@@ -264,3 +264,130 @@ fn the_base_plane_is_cached_per_process() {
     assert_ne!(local::base_key(&s1, sg, 0), local::base_key(&s2, sg, 0), "the process is part of the key");
     assert_ne!(local::base_key(&s2, sg, 0), local::base_key(&s2, sg, sig.base_detail));
 }
+
+/// Large soft structure (a ramp, a bright and a dark blob) with a hard edge, 2400 px long: past the
+/// size where the draft base used to be capped to 24 px.
+fn big_scene() -> Rgb32f {
+    const BW: usize = 2400;
+    const BH: usize = 1200;
+    Rgb32f::from_fn(BW, BH, |x, y| {
+        let (u, v) = (x as f32 / BW as f32, y as f32 / BH as f32);
+        let ramp = 0.004 * (7.0 * u).exp2() * (1.0 + 0.5 * v);
+        let blob = |cx: f32, cy: f32, r: f32, amp: f32| amp * (-(((u - cx) * 2.0).powi(2) + (v - cy).powi(2)) / (r * r)).exp();
+        let edge = if u > 0.62 { 0.35 } else { 0.0 };
+        let t = 1.0 + 0.03 * (((x * 7 + y * 13) % 5) as f32 - 2.0);
+        let c = (ramp + blob(0.3, 0.4, 0.12, 0.5) + blob(0.8, 0.7, 0.1, 0.02) + edge) * t;
+        [c, c * 0.95, c * 0.9]
+    })
+}
+
+fn max_and_mean_diff(a: &Rgba8, b: &Rgba8) -> (u8, f64) {
+    let mut max = 0u8;
+    let mut sum = 0.0f64;
+    for (p, q) in a.data.iter().zip(&b.data) {
+        for c in 0..3 {
+            let d = p[c].abs_diff(q[c]);
+            max = max.max(d);
+            sum += d as f64;
+        }
+    }
+    (max, sum / (3 * a.data.len()) as f64)
+}
+
+#[test]
+fn draft_and_full_agree_for_local_tone_on_large_images() {
+    let src = big_scene();
+    let info = SourceInfo::default();
+    for (name, settings) in [
+        ("highlights -100", with("light.highlights", -100.0)),
+        ("shadows +100", with("light.shadows", 100.0)),
+        ("clarity +100", with("effects.clarity", 100.0)),
+        ("all three", {
+            let mut s = with("light.highlights", -100.0);
+            controls::set(&mut s, "light.shadows", 100.0);
+            controls::set(&mut s, "effects.clarity", 100.0);
+            s
+        }),
+    ] {
+        let full = render(&src, &info, &settings, &RenderRequest::fit(2400, 1200)).image;
+        let draft = render(&src, &info, &settings, &RenderRequest { quality: Quality::Draft, ..RenderRequest::fit(2400, 1200) }).image;
+        let (max, mean) = max_and_mean_diff(&full, &draft);
+        eprintln!("{name}: max {max}, mean {mean:.4}");
+        assert!(max <= 1 && mean < 0.05, "{name}: the draft differs from the export (max {max}, mean {mean:.4})");
+    }
+}
+
+#[test]
+fn base_radius_is_the_same_fraction_of_the_image_at_every_quality() {
+    let s = with("light.shadows", 100.0);
+    for ppl in [800.0, 1600.0, 2400.0, 5568.0, 8000.0] {
+        let (d, f) = (local::plane_sigmas(&s, ppl, Quality::Draft).base, local::plane_sigmas(&s, ppl, Quality::Full).base);
+        assert_eq!(d, f, "base sigma at {ppl} px");
+    }
+}
+
+/// Lift in stops of Shadows +100 / Highlights -100 at a pixel of `linear` luminance (flat area).
+fn lift_ev(shadows: f32, highlights: f32, linear: f32, v3: bool) -> f32 {
+    crate::finish::shadows_highlights_delta(shadows, highlights, (linear / crate::tone::GREY).log2(), v3)
+}
+
+#[test]
+fn shadows_open_the_whole_lower_half_but_not_to_grey() {
+    // (linear level, least and most lift in stops at Shadows +100): clearly visible, never extreme
+    for (level, least, most) in [(0.005, 1.5, 1.8), (0.02, 1.2, 1.6), (0.05, 0.8, 1.3), (0.1, 0.4, 0.9), (0.18, 0.15, 0.4)] {
+        let lift = lift_ev(1.0, 0.0, level, true);
+        assert!((least..=most).contains(&lift), "Shadows +100 lifts {level} by {lift:.2} EV, want {least}..{most}");
+    }
+    // ... leaves the highlights alone, and the lift only falls as the tone gets brighter (no flat grey)
+    for level in [0.7, 1.0] {
+        assert!(lift_ev(1.0, 0.0, level, true).abs() < 0.05, "{level}");
+    }
+    let lifts: Vec<f32> = [0.005, 0.02, 0.05, 0.1, 0.18, 0.36].map(|l| lift_ev(1.0, 0.0, l, true)).to_vec();
+    assert!(lifts.windows(2).all(|w| w[0] >= w[1]), "{lifts:?}");
+}
+
+#[test]
+fn highlights_pull_down_the_upper_half_and_spare_the_shadows() {
+    for (level, least, most) in [(0.18, 0.3, 0.7), (0.36, 0.9, 1.4), (0.7, 1.3, 1.8)] {
+        let pull = -lift_ev(0.0, -1.0, level, true);
+        assert!((least..=most).contains(&pull), "Highlights -100 pulls {level} by {pull:.2} EV, want {least}..{most}");
+    }
+    for level in [0.005, 0.02, 0.05] {
+        assert!(lift_ev(0.0, -1.0, level, true).abs() < 0.02, "{level}");
+    }
+}
+
+#[test]
+fn local_tone_keeps_tones_in_order_on_a_flat_ramp() {
+    // output log luminance (input + delta) never decreases as the input rises
+    for v3 in [false, true] {
+        for (sh, hl) in [(1.0, 0.0), (0.0, -1.0), (1.0, -1.0), (-1.0, 1.0)] {
+            let mut prev = f32::NEG_INFINITY;
+            for i in 0..=1400 {
+                let base = -9.0 + i as f32 * 0.01;
+                let out = base + crate::finish::shadows_highlights_delta(sh, hl, base, v3);
+                assert!(out >= prev - 1e-6, "crosses at base {base} (shadows {sh}, highlights {hl}, v3 {v3})");
+                prev = out;
+            }
+        }
+    }
+}
+
+#[test]
+fn v1_and_v2_keep_their_shadows_and_highlights_weights() {
+    // the weights before process V3, spelled out: frozen
+    let smooth = |e0: f32, e1: f32, x: f32| {
+        let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);
+        t * t * (3.0 - 2.0 * t)
+    };
+    for i in 0..=1200 {
+        let base = -9.0 + i as f32 * 0.01;
+        let ws = 1.0 - smooth(-4.8, 0.3, base);
+        let want = 0.7 * 1.7 * ws * ws.sqrt() - 0.4 * 1.7 * smooth(-1.0, 2.8, base);
+        assert_eq!(crate::finish::shadows_highlights_delta(0.7, -0.4, base, false), want, "{base}");
+    }
+    // end to end: V2 and V3 renders differ under Shadows, agree without it
+    let (v2, v3) = (with_on(Process::V2, "light.shadows", 100.0), with_on(Process::V3, "light.shadows", 100.0));
+    assert_ne!(shot(&v2).data, shot(&v3).data);
+    assert_eq!(shot(&on(Process::V2)).data, shot(&on(Process::V3)).data);
+}
