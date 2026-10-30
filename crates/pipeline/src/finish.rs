@@ -625,7 +625,20 @@ pub(crate) fn shadows_highlights_delta(shadows: f32, highlights: f32, base: f32,
         // from the upper midtones. Both slopes stay well under 1, so tones never cross.
         let shadow_weight = 1.0 - smooth(-5.0, 1.5, base);
         let highlight_weight = smooth(-1.4, 2.8, base);
-        return shadows * 1.7 * shadow_weight + highlights * 1.7 * highlight_weight;
+        let mut lift = highlights * 1.7 * highlight_weight;
+        if lift > 0.0 {
+            // a positive lift rolls off towards white instead of clipping the sky: past `KNEE` the
+            // lifted base follows a tanh shoulder that never passes `WHITE` (0.98 linear), and a
+            // tone is never made darker than it was
+            const KNEE: f32 = 1.0;
+            const WHITE: f32 = 2.45;
+            let lifted = base + lift;
+            if lifted > KNEE {
+                let shoulder = KNEE + (WHITE - KNEE) * ((lifted - KNEE) / (WHITE - KNEE)).tanh();
+                lift = (shoulder - base).max(0.0);
+            }
+        }
+        return shadows * 1.7 * shadow_weight + lift;
     }
     let shadow_weight = 1.0 - smooth(-4.8, 0.3, base);
     let highlight_weight = smooth(-1.0, 2.8, base);

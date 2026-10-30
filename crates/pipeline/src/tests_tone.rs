@@ -391,3 +391,28 @@ fn v1_and_v2_keep_their_shadows_and_highlights_weights() {
     assert_ne!(shot(&v2).data, shot(&v3).data);
     assert_eq!(shot(&on(Process::V2)).data, shot(&on(Process::V3)).data);
 }
+
+/// Output linear luminance of a flat area at `linear` under Highlights `hl` (-1..1), process V3.
+fn highlights_out(hl: f32, linear: f32) -> f32 {
+    linear * lift_ev(0.0, hl, linear, true).exp2()
+}
+
+#[test]
+fn positive_highlights_brighten_the_upper_tones_but_roll_off_before_white() {
+    // clearly visible, even at +30
+    for (hl, level, least) in [(0.3, 0.18, 0.1), (0.3, 0.36, 0.25), (1.0, 0.18, 0.3), (1.0, 0.36, 0.5)] {
+        let lift = lift_ev(0.0, hl, level, true);
+        assert!(lift >= least, "Highlights {hl} lifts {level} by {lift:.2} EV, want at least {least}");
+    }
+    // not clipping: a 0.5..0.9 ramp (a bright sky with cloud texture) stays below white at +100 ...
+    let ramp: Vec<f32> = (0..=40).map(|i| 0.5 + 0.4 * i as f32 / 40.0).collect();
+    let out: Vec<f32> = ramp.iter().map(|&l| highlights_out(1.0, l)).collect();
+    let clipped = out.iter().filter(|&&v| v >= 0.99).count() as f32 / out.len() as f32;
+    assert!(clipped <= 0.05, "{:.0} % of the ramp reaches white at Highlights +100", clipped * 100.0);
+    // ... still brighter than it was, in order, and the texture across it survives
+    assert!(out.iter().zip(&ramp).all(|(o, r)| o >= r), "{out:?}");
+    assert!(out.windows(2).all(|w| w[1] >= w[0]), "{out:?}");
+    assert!(out[40] - out[0] >= 0.1, "ramp contrast {:.3} -> {:.3}", out[0], out[40]);
+    // tones already at white are left alone
+    assert!((highlights_out(1.0, 1.0) - 1.0).abs() < 0.02);
+}
