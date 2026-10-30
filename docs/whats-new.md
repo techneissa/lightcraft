@@ -1,5 +1,19 @@
 # What's new in LightCraft
 
+## 2026-10-30
+
+### Shadow and Highlight Clipping, Separately
+- The two triangles in the corners of the histogram are now two switches. The left one shows where the photo is
+  clipped to black (**blue**), the right one where it is clipped to white (**red**); each works alone, and hovering a
+  triangle previews its overlay for as long as the pointer rests there.
+- Where all three colour channels clip, the overlay is solid; where only some do, it is tinted with those channels'
+  colour (for example yellow where red and green are at black).
+- A triangle shows what clips even when its overlay is off: dim grey for nothing, white for all three channels, else
+  the colour of the clipping channel or channels.
+- **J** and a click on the histogram still switch both sides together (both off if both were on, otherwise both on).
+  View ▸ Shadow Clipping and View ▸ Highlight Clipping switch one side; agents use `view.clippingShadows` and
+  `view.clippingHighlights`. Settings saved with the old single switch load as both on.
+
 ## 2026-10-29
 
 ### Shorter Settings
