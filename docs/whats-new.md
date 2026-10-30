@@ -1,5 +1,23 @@
 # What's new in LightCraft
 
+## 2026-10-30
+
+### Sliders on One Row
+- Each Develop slider is one row: its name on the left, a groove with tick marks and a drop-shaped thumb, and the
+  value on the right in a column of fixed width, so typing or dragging to `-100` never moves the slider.
+- Long names such as Color Noise Reduction shrink to fit; Temp, Tint, Vibrance and Saturation keep their colours.
+
+### Stronger Contrast, Whites and Blacks
+- New and reset photos use **Process V3**, where Contrast, Whites and Blacks are clearly stronger on raws that have a
+  camera look and on JPEG / PNG files, matching the strength they already had on other raws. Contrast +100 is a firm
+  S-curve, Whites +100 pushes bright tones into clipping while the midtones hold, and Blacks -100 crushes only the
+  deepest tones. Neutral sliders still leave a photo exactly as it was.
+- In V3, **Shadows** +100 opens the lower midtones too, not only the deepest shadows, and **Highlights** reach
+  further into the upper midtones; Highlights +100 now rolls off towards white, so skies keep their clouds.
+- Photos you already edited keep their look. **Photo ▸ Update to Current Process** moves them to V3 (one Undo step).
+- While you drag Highlights or Shadows, the preview now matches the export on large photos (it used a smaller
+  radius before); exported photos are unchanged.
+
 ## 2026-10-29
 
 ### Shorter Settings

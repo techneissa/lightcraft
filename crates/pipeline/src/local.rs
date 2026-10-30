@@ -407,7 +407,7 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 => 0,
-        Process::V2 => base_detail_radius(px_per_long),
+        Process::V2 | Process::V3 => base_detail_radius(px_per_long),
     }
 }
 
@@ -635,7 +635,7 @@ pub struct PlaneSigmas {
     pub chroma: Option<f32>,
 }
 
-pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneSigmas {
+pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, _q: Quality) -> PlaneSigmas {
     let ppl = px_per_long as f32;
     // A hidden mask, or one with no components, does not change the picture. Its sliders must
     // not pick the tone base Clarity reads (#1214).
@@ -647,10 +647,10 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
     // Edge-aware base at ~1.5% of the long edge (EV² epsilon: edges of > ~0.6 EV are preserved)
     // From V2 it is taken of the median at 0.15%: lines and texture finer than that are detail,
     // not tone (#632).
-    let base = tone_active.then(|| {
-        let sigma = (0.015 * ppl).max(1.0);
-        if q == Quality::Draft { sigma.min(24.0) } else { sigma }
-    });
+    // The radius is the same fraction of the image at every quality: a draft capped in pixels
+    // looked different from the export on large previews. `guided_fast` subsamples by sigma / 3
+    // (at most 16), so a wide base is not dearer.
+    let base = tone_active.then(|| (0.015 * ppl).max(1.0));
     let clarity = (s.effects.clarity != 0.0 || local_any(|a| a.clarity)).then(|| (0.012 * ppl).max(1.0));
     // local Noise and Defringe read the fine detail band too
     let texture = (s.effects.texture != 0.0

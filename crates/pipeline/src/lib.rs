@@ -796,4 +796,6 @@ mod tests_slider_strength;
 #[cfg(test)]
 mod tests_tone;
 #[cfg(test)]
+mod tests_tone_sliders;
+#[cfg(test)]
 mod tests_window;
