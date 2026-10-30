@@ -425,12 +425,24 @@ pub fn guided_fast_step(sigma: f32) -> usize {
     (sigma / 3.0).floor().clamp(1.0, 16.0) as usize
 }
 
-/// Luminance noise reduction: guided filter of log luminance (`sigma` px, `eps`), blended by `k`.
+/// Luminance noise reduction: guided filter of log luminance (`sigma` px, `eps`), blended by `k`. `contrast`
+/// (0..1) keeps the part of the filter's change that is large (more than noise): higher values keep the picture's
+/// contrast and detail at the price of noisy blotches, as Lightroom's Contrast does ([`nr_keep`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NrLum {
     pub sigma: f32,
     pub eps: f32,
     pub k: f32,
+    pub contrast: f32,
+}
+
+/// The share of a luminance-NR change `d` (log2 luminance, filtered minus original) that Contrast takes back:
+/// 0 for changes below 0.08 EV (noise), rising to `contrast` at 0.4 EV and more (detail). The GPU kernel
+/// (`nr_lum`) uses the same edges.
+#[inline]
+pub fn nr_keep(contrast: f32, d: f32) -> f32 {
+    let t = ((d.abs() - 0.08) / 0.32).clamp(0.0, 1.0);
+    contrast * t * t * (3.0 - 2.0 * t)
 }
 
 /// Colour noise reduction: chromaticity blurred by `sigma` px, mixed in by `t`.
@@ -478,7 +490,7 @@ pub fn nr_params(s: &DevelopSettings, scale: f32) -> (Option<NrLum>, Option<NrCo
     let l = (lum > 0.0).then(|| nr_radius((1.0 + 2.5 * lum) * scale)).filter(|&(_, w)| w >= NR_MIN_BLEND).map(|(sigma, w)| {
         let detail = (s.detail.nr_detail / 100.0) as f32;
         let eps = ((0.002 + lum * lum * 0.25 * (1.0 - 0.7 * detail)) * scale * scale).max(1e-7);
-        NrLum { sigma, eps, k: lum.sqrt() * w }
+        NrLum { sigma, eps, k: lum.sqrt() * w, contrast: (s.detail.nr_contrast / 100.0).clamp(0.0, 1.0) as f32 }
     });
     let smooth = 1.0 + (s.detail.nr_color_smoothness / 100.0) as f32;
     let c = (col > 0.0).then(|| nr_radius((1.5 + 6.0 * col) * scale * smooth)).filter(|&(_, w)| w >= NR_MIN_BLEND).map(|(sigma, w)| {
@@ -506,7 +518,8 @@ pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
         for_rows(&mut img.data, w, |y, row| {
             for (x, p) in row.iter_mut().enumerate() {
                 let i = y * w + x;
-                let d = (f.data[i] - l.data[i]) * nr.k;
+                let change = f.data[i] - l.data[i];
+                let d = change * (1.0 - nr_keep(nr.contrast, change)) * nr.k;
                 let g = d.exp2();
                 *p = p.map(|v| v * g);
             }
