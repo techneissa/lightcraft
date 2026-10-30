@@ -126,6 +126,8 @@ pub struct UiState {
     pub face_boxes: bool,
     /// The left sidebar's sections: their order, which are hidden and which are folded shut.
     pub sidebar: crate::sidebar::SidebarLayout,
+    /// The Edit panel's sections: their order and which are hidden (`panels/edit_sections.rs`).
+    pub edit_sections: crate::panels::edit_sections::EditSectionLayout,
     /// What settings files said before [`UiState::sidebar`]: the ids of the folded sections. Read
     /// so they stay folded ([`UiState::sanitized`] moves them over), never written.
     #[serde(skip_serializing)]
@@ -418,6 +420,7 @@ impl Default for UiState {
             show_counts: true,
             face_boxes: true,
             sidebar: Default::default(),
+            edit_sections: Default::default(),
             collapsed_sidebar: Vec::new(),
             name_edit: None,
             person_page: None,

@@ -290,6 +290,12 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("photoMenu.undoPreset", "Undo Photo Menu Preset Switch", None, ""),
     ("photoMenu.export", "Export Right-Click Menu…", None, ""),
     ("photoMenu.import", "Import Right-Click Menu…", None, ""),
+    // the Edit panel's sections (header right-click menu): {order?, hidden?}; {section, show?};
+    // {section, direction: up | down | before}
+    ("view.editSections", "Arrange Edit Sections", None, ""),
+    ("view.editSectionShow", "Show or Hide Edit Section", None, ""),
+    ("view.editSectionMove", "Move Edit Section", None, ""),
+    ("view.editSectionsReset", "Reset Edit Sections", None, ""),
     // the top bar's items (Settings ▸ Top Bar): {hidden} = the ids turned off; {item, shown} = one
     ("topBar.get", "Top Bar Items", None, ""),
     ("topBar.set", "Set Top Bar Items", None, ""),

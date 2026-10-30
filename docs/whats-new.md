@@ -2,6 +2,13 @@
 
 ## 2026-10-30
 
+### Arrange the Edit Panel
+- Right-click a section header (Light, Color, Effects, Detail, Optics, Calibration) for **Move Up**, **Move Down** and
+  **Hide This Section**, a list of the sections to show or hide any of them, **Show All Sections** and **Reset to
+  Default**. The panel keeps your order and what you hid.
+- A hidden section only leaves the panel: its adjustments stay on the photo and still apply. Choosing it from
+  Window ▸ Edit Sections (⌘1 to ⌘5) brings it back.
+
 ### Sliders on One Row
 - Each Develop slider is one row: its name on the left, a groove with tick marks and a drop-shaped thumb, and the
   value on the right in a column of fixed width, so typing or dragging to `-100` never moves the slider.

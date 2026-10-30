@@ -249,6 +249,7 @@ pub(super) fn section(
             }
             ui.close();
         }
+        crate::panels::edit_sections::menu(app, ui, id);
     });
     if open {
         body(app, ui, d);

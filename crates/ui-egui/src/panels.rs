@@ -12,6 +12,7 @@ pub mod denoise_auto;
 pub mod detail;
 pub mod edit;
 pub mod edit_all;
+pub mod edit_sections;
 pub mod empty_library;
 pub mod filterbar;
 pub mod grid;

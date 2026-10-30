@@ -149,6 +149,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     if id.starts_with("photoMenu.") {
         return Some(crate::panels::photo_menu::command(app, id, p));
     }
+    if id.starts_with("view.editSection")
+        && let Some(r) = crate::panels::edit_sections::command(app, id, p)
+    {
+        return Some(r);
+    }
     if id.starts_with("topBar.") {
         return Some(crate::panels::topbar_items::command(app, id, p));
     }
@@ -988,6 +993,10 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                 return Err(format!("{s}: no such Edit section"));
             }
             let sec = &s["section.".len()..];
+            // a section taken off the panel comes back when it is asked for
+            if let Some(hidden) = crate::panels::edit_sections::EditSection::from_id(sec) {
+                app.ui.edit_sections.reveal(hidden);
+            }
             if app.ui.right != RightPanel::Edit {
                 app.ui.right = RightPanel::Edit;
             }
