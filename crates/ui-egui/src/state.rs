@@ -94,6 +94,12 @@ pub struct UiState {
     /// it was last seen on; see [`crate::panels::clipping::effective_sides`].
     #[serde(skip)]
     pub clip_hover: ([bool; 2], u64),
+    /// The Alt-drag preview a slider drag with ⌥ held asks for ([`crate::panels::clipping::sync_alt_preview`]).
+    #[serde(skip)]
+    pub alt_preview: Option<crate::panels::clipping::Preview>,
+    /// A preview `view.clippingPreview` holds until it is cleared (agents, tests, screenshots).
+    #[serde(skip)]
+    pub preview_forced: Option<crate::panels::clipping::Preview>,
     pub histogram: bool,
     /// Soft proofing (S in the loupe): render as `proof` would hold the photo.
     pub soft_proof: bool,
@@ -411,6 +417,8 @@ impl Default for UiState {
             clip_highlights: false,
             show_clipping: None,
             clip_hover: ([false; 2], 0),
+            alt_preview: None,
+            preview_forced: None,
             histogram: true,
             soft_proof: false,
             proof: lightcraft_engine::pipeline::Proof { dest_warning: false, ..Default::default() },

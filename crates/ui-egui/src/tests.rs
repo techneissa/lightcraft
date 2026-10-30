@@ -9,6 +9,7 @@ mod camera_colour;
 mod canvas_keys;
 mod canvas_pan;
 mod capture_time;
+mod clip_preview;
 mod compare;
 mod copy_paste_dialogs;
 mod crop_rotate;

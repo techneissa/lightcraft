@@ -673,6 +673,12 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     let mask = overlay_alpha(req.overlay, &plan, &prep);
     let masks = overlay_alphas_all(req.overlay, &plan, &prep);
     visualize::apply(&mut image, req.overlay, &plan, mask.as_ref(), masks.as_deref());
+    if req.overlay == Overlay::SharpenMask
+        && let Some(a) = visualize::sharpen_mask_alpha(&prep, plan.settings.detail.sharpen_masking)
+        && (a.width, a.height) == (image.width, image.height)
+    {
+        visualize::mask_view(&mut image, &a, MaskView::WhiteOnBlack, [255; 3], 100);
+    }
     let mut image = if plan.keep.is_some() { cut(&image) } else { image };
     if req.overlay == Overlay::HdrRange && edit.hdr.enabled {
         // the HDR rendition of the same request says how far above SDR white each pixel goes
@@ -781,6 +787,8 @@ pub(crate) fn for_rows<T: Send>(data: &mut [T], w: usize, f: impl Fn(usize, &mut
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_clip_preview;
 #[cfg(test)]
 mod tests_geometry;
 #[cfg(test)]

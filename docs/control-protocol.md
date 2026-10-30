@@ -138,6 +138,7 @@ views, and only apply over their image areas. Panning stops at the image edges.
 The camera's focus point ([focus-points.md](focus-points.md)) is `meta.focus` in `photo.inspect`: `{rect: {x0, y0,
 x1, y1}, mode?, area?, tracking?}`, normalized to the upright photo (absent when the file records none).
 `view.clippingShadows {on?}` / `view.clippingHighlights {on?}` switch the blue / red clipping overlays one at a time (no params toggles; reply `{on}`); `view.clipping` (J) switches both together.
+`view.clippingPreview {mode?, control?}` holds the ⌥-drag preview the loupe shows while ⌥ is held during a slider drag: `mode` is `highlights` (black image, pixels clipped at white), `shadows` (white image, crushed pixels), `sharpenMask` (the mask that limits sharpening) or `greyscale`; `control` takes a slider id (`light.exposure`, `detail.sharpenMasking`…) and picks its mode; no params or `mode: "off"` clears it. Reply `{mode}` (null when cleared).
 `view.focusPoint {on?}` shows it over the photo (no params toggles; replies `{on}`), and `view.zoomToFocus {on?}`
 (on by default) makes `view.zoomToggle` zoom in centred on it, replying `{focus: [x, y]}` (the `pan` it set).
 `photo.readFocusPoints {ids?, wait?}` reads the point for photos imported before it was read, from a few KB of each

@@ -726,6 +726,24 @@ fn ui_commands_5(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             app.ui.clip_highlights = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.clip_highlights);
             Ok(json!({"on": app.ui.clip_highlights}))
         }
+        "view.clippingPreview" => {
+            // {mode?, control?}: hold the Alt-drag preview a drag of `control` shows, or `mode`
+            // (highlights, shadows, sharpenMask, greyscale); none, "off" or null clears it
+            use crate::panels::clipping::Preview;
+            let named = p.get("mode").and_then(Value::as_str).filter(|m| *m != "off");
+            let from_control = p.get("control").and_then(Value::as_str);
+            let next = match (named, from_control) {
+                (Some(m), _) => {
+                    Preview::parse(m).ok_or_else(|| format!("unknown preview `{m}`: highlights, shadows, sharpenMask or greyscale")).map(Some)
+                }
+                (None, Some(c)) => Preview::for_control(c).ok_or_else(|| format!("`{c}` has no Alt-drag preview")).map(Some),
+                (None, None) => Ok(None),
+            };
+            next.map(|next| {
+                app.ui.preview_forced = next;
+                json!({"mode": next.map(Preview::name)})
+            })
+        }
         "view.visualizeHdr" => {
             // {on?}; no params toggles. Shown on photos edited in HDR (see `develop.hdr`).
             app.ui.hdr_visualize = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.hdr_visualize);

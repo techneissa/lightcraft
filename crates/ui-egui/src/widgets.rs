@@ -451,6 +451,10 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
         side_scroll_edit(ui, &g, pointer_in_row, &mut out);
         wheel_edit(ui, &g, wheel_armed, pointer_in_row, &mut out);
     }
+    if enabled && (resp.dragged() || scrub.is_some()) {
+        // ⌥ during the drag swaps the photo for a mask (Lightroom's Alt-drag preview)
+        crate::panels::clipping::note_drag(ui.ctx(), spec.id, ui.input(|i| i.modifiers.alt));
+    }
     let v = out.value.unwrap_or(value);
     // paint
     let hovered = resp.hovered() || resp.dragged();
