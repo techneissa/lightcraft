@@ -72,6 +72,87 @@ pub fn effective_sides(app: &crate::LightcraftApp, frame: u64) -> (bool, bool) {
     (app.ui.clip_shadows || (hovered && hover[0]), app.ui.clip_highlights || (hovered && hover[1]))
 }
 
+/// What the loupe shows in place of the photo while ⌥ is held during a slider drag (Lightroom's
+/// Alt-drag preview), or while `view.clippingPreview` holds one for an agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Preview {
+    /// Black image, only the pixels clipped at white (Exposure, Whites, Highlights).
+    Highlights,
+    /// White image, only the pixels crushed to black (Blacks, Shadows).
+    Shadows,
+    /// The black-and-white mask that limits sharpening (Sharpening Masking).
+    SharpenMask,
+    /// The photo in greyscale (Sharpening Amount, Radius, Detail).
+    Greyscale,
+}
+
+impl Preview {
+    /// Stable name (control channel).
+    pub fn name(self) -> &'static str {
+        match self {
+            Preview::Highlights => "highlights",
+            Preview::Shadows => "shadows",
+            Preview::SharpenMask => "sharpenMask",
+            Preview::Greyscale => "greyscale",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<Preview> {
+        [Preview::Highlights, Preview::Shadows, Preview::SharpenMask, Preview::Greyscale].into_iter().find(|p| p.name() == name)
+    }
+
+    /// The preview a slider's drag asks for.
+    pub fn for_control(id: &str) -> Option<Preview> {
+        match id {
+            "light.exposure" | "light.whites" | "light.highlights" => Some(Preview::Highlights),
+            "light.blacks" | "light.shadows" => Some(Preview::Shadows),
+            "detail.sharpenMasking" => Some(Preview::SharpenMask),
+            "detail.sharpenAmount" | "detail.sharpenRadius" | "detail.sharpenDetail" => Some(Preview::Greyscale),
+            _ => None,
+        }
+    }
+
+    /// The render's overlay that draws it.
+    pub fn overlay(self) -> lightcraft_pipeline::Overlay {
+        use lightcraft_pipeline::Overlay;
+        match self {
+            Preview::Highlights => Overlay::ClipHighlights,
+            Preview::Shadows => Overlay::ClipShadows,
+            Preview::SharpenMask => Overlay::SharpenMask,
+            Preview::Greyscale => Overlay::Greyscale,
+        }
+    }
+}
+
+/// A slider drag's last frame: which control, whether ⌥ was down, and the frame it was seen on.
+#[derive(Clone, Copy)]
+struct DragNote(&'static str, bool, u64);
+
+/// A slider reports each frame it is being dragged (by the thumb or by scrubbing its value).
+pub fn note_drag(ctx: &egui::Context, control: &'static str, alt: bool) {
+    let note = DragNote(control, alt, ctx.cumulative_frame_nr());
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("clipping-drag-note"), note));
+}
+
+/// Settle [`crate::state::UiState::alt_preview`] for this frame: the control being dragged, with
+/// ⌥ down on a drag seen this frame or the last. Anything else (the drag or ⌥ ended, the panel
+/// closed) clears it, so a preview can never stay up.
+pub fn sync_alt_preview(app: &mut crate::LightcraftApp, ctx: &egui::Context) {
+    let note = ctx.data(|d| d.get_temp::<DragNote>(egui::Id::unique("clipping-drag-note")));
+    let dragging = app.ui.dragging_control.as_deref();
+    app.ui.alt_preview = match note {
+        Some(DragNote(control, true, at)) if dragging == Some(control) && ctx.cumulative_frame_nr().saturating_sub(at) <= 1 => {
+            Preview::for_control(control)
+        }
+        _ => None,
+    };
+}
+
+/// The preview on show: the one a command holds, else the Alt-drag's.
+pub fn preview(app: &crate::LightcraftApp) -> Option<Preview> {
+    app.ui.preview_forced.or(app.ui.alt_preview)
+}
+
 /// A warning triangle pointing up, centred in `rect`.
 pub fn paint_triangle(p: &Painter, rect: Rect, color: Color32) {
     let c = rect.center();
@@ -110,6 +191,26 @@ mod tests {
         let highlights = overlay_image(&src, false, true);
         assert_eq!(highlights.pixels, vec![Color32::TRANSPARENT, HIGHLIGHT_SOLID, Color32::TRANSPARENT]);
         assert!(overlay_image(&src, false, false).pixels.iter().all(|c| *c == Color32::TRANSPARENT));
+    }
+
+    #[test]
+    fn each_slider_asks_for_its_preview() {
+        for id in ["light.exposure", "light.whites", "light.highlights"] {
+            assert_eq!(Preview::for_control(id), Some(Preview::Highlights), "{id}");
+        }
+        for id in ["light.blacks", "light.shadows"] {
+            assert_eq!(Preview::for_control(id), Some(Preview::Shadows), "{id}");
+        }
+        assert_eq!(Preview::for_control("detail.sharpenMasking"), Some(Preview::SharpenMask));
+        for id in ["detail.sharpenAmount", "detail.sharpenRadius", "detail.sharpenDetail"] {
+            assert_eq!(Preview::for_control(id), Some(Preview::Greyscale), "{id}");
+        }
+        for id in ["light.contrast", "color.vibrance", "detail.noiseLuminance", ""] {
+            assert_eq!(Preview::for_control(id), None, "{id}");
+        }
+        for p in [Preview::Highlights, Preview::Shadows, Preview::SharpenMask, Preview::Greyscale] {
+            assert_eq!(Preview::parse(p.name()), Some(p));
+        }
     }
 
     #[test]

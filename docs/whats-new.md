@@ -47,6 +47,15 @@
 - Photos you already edited keep their look. **Photo ▸ Update to Current Process** moves them to V3 (one Undo step).
 - While you drag Highlights or Shadows, the preview now matches the export on large photos (it used a smaller
   radius before); exported photos are unchanged.
+### Hold ⌥ While You Drag a Slider
+- Hold **⌥ (Alt)** while dragging **Exposure, Whites or Highlights**: the photo turns black and only what is clipped
+  to white shows (white where all channels clip, the channel's colour where only some do).
+- **Blacks or Shadows**: the photo turns white and what is crushed to black shows (black where all channels are at
+  zero, cyan, magenta or yellow where one is).
+- **Sharpening Masking**: the black-and-white mask that limits where sharpening acts. **Amount, Radius or Detail**:
+  the photo in greyscale, so you judge the sharpening without colour.
+- Let go of ⌥ or the slider and the photo is back. Agents use `view.clippingPreview`.
+
 ### Shadow and Highlight Clipping, Separately
 - The two triangles in the corners of the histogram are now two switches. The left one shows where the photo is
   clipped to black (**blue**), the right one where it is clipped to white (**red**); each works alone, and hovering a

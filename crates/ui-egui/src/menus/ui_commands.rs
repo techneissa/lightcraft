@@ -103,6 +103,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.clipping", "Clipping", Some("J"), "View"),
     ("view.clippingShadows", "Shadow Clipping", None, "View"),
     ("view.clippingHighlights", "Highlight Clipping", None, "View"),
+    ("view.clippingPreview", "Clipping Preview", None, "View"),
     ("view.visualizeHdr", "Visualize HDR", None, "View"),
     // in grids S expands/collapses stacks (the engine command it shadows)
     ("view.softProof", "Soft Proofing", Some("S"), "View"),

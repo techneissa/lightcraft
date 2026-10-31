@@ -651,6 +651,13 @@ pub(crate) fn shadows_highlights_delta(shadows: f32, highlights: f32, base: f32,
     shadows * 1.7 * shadow_weight * shadow_weight.sqrt() + highlights * 1.7 * highlight_weight
 }
 
+/// How much of the sharpening a pixel with local contrast `detail` (log luminance minus its blur) gets
+/// at Masking `masking` (0..1): everything at 0, and with more masking only the edges. Also what
+/// [`crate::Overlay::SharpenMask`] shows.
+pub(crate) fn sharpen_mask_weight(masking: f32, detail: f32) -> f32 {
+    if masking > 0.0 { smooth(masking * 0.25, masking * 0.25 + 0.15, detail.abs()) } else { 1.0 }
+}
+
 fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1: f32, local: &PixelLocalTerms) -> f32 {
     let [_, _, _, l_con, l_hl, l_sh, l_wh, l_bl, l_tex, l_clar, _, _, _, l_sharp, l_noise, _, _] = local.values;
     let mut delta = 0.0;
@@ -684,7 +691,7 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
         let tame = 1.0 - 0.6 * smooth(0.4, 1.6, detail.abs());
         delta += texture * 1.1 * detail.clamp(-1.0, 1.0) * tame;
         if sharpen != 0.0 {
-            let mask = if fp.sharpen_mask > 0.0 { smooth(fp.sharpen_mask * 0.25, fp.sharpen_mask * 0.25 + 0.15, detail.abs()) } else { 1.0 };
+            let mask = sharpen_mask_weight(fp.sharpen_mask, detail);
             delta += if fp.tone_v3 {
                 sharpen * SHARPEN_GAIN_V3 * detail.clamp(-0.8, 0.8) * mask * sharpen_mix(fp.sharpen_detail, detail)
             } else {

@@ -39,6 +39,17 @@ pub enum Overlay {
     /// Visualize HDR (photos edited in HDR): the SDR image dimmed to grey, with every pixel the HDR
     /// rendition puts above SDR white painted by how far above it is ([`HDR_BANDS`]).
     HdrRange,
+    /// Alt-drag of Exposure, Whites or Highlights: black, with only the pixels clipped at white
+    /// shown (white where all three channels clip, else those channels' colour).
+    ClipHighlights,
+    /// Alt-drag of Blacks or Shadows: white, with only the pixels clipped at black shown (black
+    /// where all three channels clip, else the colour the other channels keep: red crushed = cyan).
+    ClipShadows,
+    /// Alt-drag of Sharpening Masking: the black-and-white mask that limits where sharpening acts
+    /// (white = sharpened).
+    SharpenMask,
+    /// Alt-drag of Sharpening Amount, Radius or Detail: the photo in greyscale.
+    Greyscale,
 }
 
 /// [`Overlay::HdrRange`] colours (sRGB) for 0–1, 1–2, 2–3 and ≥ 3 stops above SDR white.
@@ -125,6 +136,10 @@ impl Overlay {
             Overlay::Mask { id, view, color, opacity } => (3, pack_mask(id, view, color, opacity) as f64),
             Overlay::AllMasks { view, color, opacity } => (5, pack_mask(0, view, color, opacity) as f64),
             Overlay::HdrRange => (4, 0.0),
+            Overlay::ClipHighlights => (6, 0.0),
+            Overlay::ClipShadows => (7, 0.0),
+            Overlay::SharpenMask => (8, 0.0),
+            Overlay::Greyscale => (9, 0.0),
         }
     }
 
@@ -135,6 +150,10 @@ impl Overlay {
             2 => Overlay::Spots(v.clamp(0.0, 100.0) as u8),
             3 if v.is_finite() && v >= 0.0 => unpack_mask(v as u64),
             4 => Overlay::HdrRange,
+            6 => Overlay::ClipHighlights,
+            7 => Overlay::ClipShadows,
+            8 => Overlay::SharpenMask,
+            9 => Overlay::Greyscale,
             5 if v.is_finite() && v >= 0.0 => {
                 let rgb = (v as u64 >> 20) & 0xff_ffff;
                 Overlay::AllMasks {
@@ -156,6 +175,10 @@ impl Overlay {
             Overlay::Mask { id, view, color, opacity } => 3 << 60 | pack_mask(id, view, color, opacity),
             Overlay::AllMasks { view, color, opacity } => 5 << 60 | pack_mask(0, view, color, opacity),
             Overlay::HdrRange => 0x4000,
+            Overlay::ClipHighlights => 0x5001,
+            Overlay::ClipShadows => 0x5002,
+            Overlay::SharpenMask => 0x5003,
+            Overlay::Greyscale => 0x5004,
         }
     }
 
@@ -171,6 +194,10 @@ impl Overlay {
 /// Settings changes an overlay needs before rendering (e.g. the visualized sample's adjustment
 /// is left out, so the range is shown on the colours it selects).
 pub fn adjust_settings(o: Overlay, s: &mut Cow<'_, DevelopSettings>) {
+    // the mask is read off the sharpening's detail band, which exists only while something sharpens
+    if o == Overlay::SharpenMask && s.detail.sharpen_amount == 0.0 {
+        s.to_mut().detail.sharpen_amount = 1.0;
+    }
     if let Overlay::PointColorRange(i) = o
         && let Some(p) = s.point_colors.get(i as usize)
         && !p.is_neutral()
@@ -186,7 +213,11 @@ pub fn adjust_settings(o: Overlay, s: &mut Cow<'_, DevelopSettings>) {
 pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, mask: Option<&Plane>, masks: Option<&[Plane]>) {
     match o {
         // drawn by the renderer from the HDR rendition ([`hdr_range`])
-        Overlay::None | Overlay::HdrRange => {}
+        // (SharpenMask is drawn from its own plane, see [`sharpen_mask_alpha`])
+        Overlay::None | Overlay::HdrRange | Overlay::SharpenMask => {}
+        Overlay::ClipHighlights => clip_view(img, true),
+        Overlay::ClipShadows => clip_view(img, false),
+        Overlay::Greyscale => greyscale(img),
         Overlay::PointColorRange(i) => {
             if let Some(p) = plan.settings.point_colors.get(i as usize) {
                 point_color_range(img, &PointK::new(p));
@@ -213,6 +244,36 @@ pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, mask: Option<&Plane>,
             }
         }
     }
+}
+
+/// The clipping view of `img`: `highlights` shows a black image with the pixels at 255 (a channel
+/// at 255 lights its colour: white when all three do); otherwise a white image with the pixels at 0
+/// (a channel at 0 drops out: black when all three do, cyan / magenta / yellow when one does).
+pub fn clip_view(img: &mut Rgba8, highlights: bool) {
+    for px in &mut img.data {
+        let out = [0, 1, 2].map(|c| {
+            let hit = if highlights { px[c] == 255 } else { px[c] == 0 };
+            if hit == highlights { 255 } else { 0 }
+        });
+        *px = [out[0], out[1], out[2], 255];
+    }
+}
+
+/// `img` as greyscale (Rec. 709 weights on the encoded values, as the mask views' grey).
+pub fn greyscale(img: &mut Rgba8) {
+    for px in &mut img.data {
+        let g = (0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32).round().clamp(0.0, 255.0) as u8;
+        *px = [g, g, g, 255];
+    }
+}
+
+/// The sharpening mask at Masking `masking` (0..100) as an alpha plane (1 = fully sharpened),
+/// from the detail band the render sharpens with. `None` when the render made no such band.
+pub(crate) fn sharpen_mask_alpha(prep: &crate::Prepared, masking: f64) -> Option<Plane> {
+    let blur = prep.texture_blur.as_ref()?;
+    let m = (masking / 100.0) as f32;
+    let data = prep.log_l.data.iter().zip(&blur.data).map(|(l, b)| crate::finish::sharpen_mask_weight(m, l - b)).collect();
+    Some(Plane { width: prep.log_l.width, height: prep.log_l.height, data })
 }
 
 /// Draw mask alpha `a` over `img` as `view`.

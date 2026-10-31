@@ -183,6 +183,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     app.image_rect = Some(img_rect);
     // request renders: the loupe at display resolution (drafts during drags)
     let interacting = app.session.interaction.is_some();
+    crate::panels::clipping::sync_alt_preview(app, ui.ctx());
     let overlay = view_overlay(app, &d);
     // a drag drafts at full size where the GPU draws the view (by the GPU's own rule, `handles`;
     // `ready` first: `available` would wait for a device still being created)
@@ -981,7 +982,8 @@ struct OverPhoto<'a> {
 /// the transform grid.
 fn photo_overlays(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &egui::Painter, o: &OverPhoto) {
     let (canvas, img_rect) = (o.canvas, o.img_rect);
-    if o.clipping && !o.fullscreen {
+    // (the Alt-drag preview already is the clipping picture)
+    if o.clipping && !o.fullscreen && crate::panels::clipping::preview(app).is_none() {
         clipping_overlay(app, ui.ctx(), p, img_rect);
     }
     // View ▸ Loupe Overlay ▸ Layout Image, over the photo (the After view in a before/after)
@@ -1049,6 +1051,10 @@ pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcra
     use lightcraft_pipeline::{MaskView, Overlay};
     if app.ui.fullscreen {
         return Overlay::None;
+    }
+    // ⌥ held while a slider is dragged shows a mask in place of the photo
+    if let Some(p) = crate::panels::clipping::preview(app) {
+        return p.overlay();
     }
     // Show every visible mask's region at once (Ctrl+Shift+O / Cmd+Shift+O), ahead of the selected-mask overlay
     // so the shortcut is not shadowed by the always-on single-mask overlay.
