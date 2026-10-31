@@ -213,11 +213,11 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
             "rating" | "stars" => cmp(p.rating as f64, val),
             "flag" => Flag::parse(val) == Some(p.flag),
             "label" | "color" => p.label.is_some_and(|l| format!("{l:?}").eq_ignore_ascii_case(val)),
-            "iso" => p.meta.iso.is_some_and(|i| cmp(i as f64, val)),
-            "f" | "aperture" => p.meta.aperture.is_some_and(|a| cmp32(a, val)),
-            "focal" => p.meta.focal_mm.is_some_and(|a| cmp32(a, val)),
-            "camera" => p.meta.camera.to_lowercase().contains(val),
-            "lens" => p.meta.lens.to_lowercase().contains(val),
+            "iso" => p.meta.effective_iso().is_some_and(|i| cmp(i as f64, val)),
+            "f" | "aperture" => p.meta.effective_aperture().is_some_and(|a| cmp32(a, val)),
+            "focal" => p.meta.effective_focal_mm().is_some_and(|a| cmp32(a, val)),
+            "camera" => p.meta.effective_camera().to_lowercase().contains(val),
+            "lens" => p.meta.effective_lens().to_lowercase().contains(val),
             "keyword" | "kw" => p.meta.keywords.iter().any(|k| crate::keywords::is_under(k, val)),
             "person" | "who" => has_person(p, val),
             "type" | "kind" => format!("{:?}", p.kind).eq_ignore_ascii_case(val),
@@ -237,7 +237,8 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
 /// Whether the lower-cased word `t` is in the file name, title, caption, camera, lens, location,
 /// format, a keyword or the name of a person (a named face) of `p`.
 fn text_matches(p: &Photo, t: &str) -> bool {
-    let hay = [&p.file_name, &p.meta.title, &p.meta.caption, &p.meta.camera, &p.meta.lens, &p.meta.location, &p.format];
+    let hay: [&str; 7] =
+        [&p.file_name, &p.meta.title, &p.meta.caption, p.meta.effective_camera(), p.meta.effective_lens(), &p.meta.location, &p.format];
     hay.iter().any(|h| h.to_lowercase().contains(t))
         || p.meta.keywords.iter().any(|k| k.to_lowercase().contains(t))
         || p.people().iter().any(|n| n.to_lowercase().contains(t))
@@ -442,7 +443,7 @@ impl Filter {
             return false;
         }
         if let Some(l) = &self.lens
-            && !p.meta.lens.to_lowercase().contains(&l.to_lowercase())
+            && !p.meta.effective_lens().to_lowercase().contains(&l.to_lowercase())
         {
             return false;
         }
@@ -477,7 +478,7 @@ impl Filter {
             return false;
         }
         if let Some(c) = &self.camera
-            && !p.meta.camera.eq_ignore_ascii_case(c)
+            && !p.meta.effective_camera().eq_ignore_ascii_case(c)
         {
             return false;
         }

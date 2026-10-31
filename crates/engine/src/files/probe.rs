@@ -8,9 +8,14 @@ pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
     let meta = Meta {
         camera,
         // (a camera that writes no lens name, like Nikon's DSLRs, still says what range the lens covers)
-        lens: m.lens_model.clone().or_else(|| m.lens_spec.and_then(lightcraft_meta::lens_spec_name)).unwrap_or_default(),
-        focal_mm: m.focal_length.map(|f| f as f32),
-        aperture: m.f_number.map(|f| f as f32),
+        lens: m
+            .lens_model
+            .clone()
+            .filter(|l| !lightcraft_catalog::exif_override::is_placeholder(l))
+            .or_else(|| m.lens_spec.and_then(lightcraft_meta::lens_spec_name))
+            .unwrap_or_default(),
+        focal_mm: m.focal_length.filter(|f| *f > 0.0).map(|f| f as f32),
+        aperture: m.f_number.filter(|f| *f > 0.0).map(|f| f as f32),
         shutter,
         iso: m.iso,
         location: m.sublocation.clone().unwrap_or_default(),
@@ -31,6 +36,7 @@ pub(super) fn meta_of(m: &lightcraft_meta::Metadata) -> (Meta, Option<String>) {
         keywords: lightcraft_catalog::keywords::from_file(&m.keywords, &m.hierarchical_keywords),
         regions: m.regions.clone(),
         focus: m.focus.clone(),
+        exif: Default::default(),
     };
     (meta, m.capture_time.as_ref().map(|d| d.to_iso()))
 }

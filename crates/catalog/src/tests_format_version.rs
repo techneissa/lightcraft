@@ -226,7 +226,7 @@ fn local_and_macos_colour_need_format_v10_and_older_builds_get_newer_not_corrupt
     let (mut j, _, _) = Journal::open(Box::new(m.clone())).unwrap();
     j.snapshot(&c).unwrap();
     drop(j);
-    assert_eq!(snapshot_version(&m), 10, "local camera profiles are catalog format v10");
+    assert!(snapshot_version(&m) >= 10, "local camera profiles are catalog format v10 and up");
     let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
     assert_eq!(r.upgraded_from, None);
     for (id, want) in ids.iter().zip(["local", "macos", "colorimetric"]) {
@@ -327,8 +327,9 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v10: `profile.camera_colour = local | macos` and `profile.camera_profile` in the develop settings.
-    const NEWEST_FIELDS: u32 = 10;
+    /// v11: `Meta.exif`, the edited camera / lens / exposure values (v10: `profile.camera_colour = local | macos`
+    /// and `profile.camera_profile` in the develop settings).
+    const NEWEST_FIELDS: u32 = 11;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

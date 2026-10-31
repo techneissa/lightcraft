@@ -7,6 +7,22 @@
   reduction would smooth away. At 0, the default, photos look as before.
 - In process V3, **Sharpening ▸ Detail** sets how much fine detail and noise sharpening brings out (low: clean
   edges; high: fine texture too). Sharpening is a little stronger overall.
+### Edit Camera, Lens and Exposure Values
+- The camera card at the top of **Info** is editable: **Camera**, **Lens**, **Focal length**, **Shutter speed**,
+  **Aperture** and **ISO**, for one photo or all selected photos. Type a value and press Return.
+- The file's own values are never changed. An edit is kept in your library beside them and shown instead, with a small
+  dot. The round arrow beside a row (**Reset to file value**) brings the file's value back; **Reset All** does it for
+  the whole card, and one Undo takes back an edit on all the selected photos. A field where the selected photos
+  differ says **Mixed**.
+- Camera and Lens are searchable: type `A7 V` or `FE 24-70` to list matching names from about 2,000 cameras and 1,200
+  lenses, pick one with a click or the arrow keys, or type any name you like.
+- Numbers are checked as you type them: `35 mm`, `f/2.8`, `1/250` or `2.5"`, `400`. A value that makes no sense says
+  why and changes nothing.
+- Search, filters, smart albums, rename tokens and slideshow text use the edited values, and so do exported files
+  (their EXIF, following Export ▸ Metadata). Colours and lens corrections still follow the camera and lens the file
+  records, so an edit never changes how a photo looks. Reload from Disk keeps your edits.
+- Agents: `photo.setMeta` takes `camera`, `lens`, `focal`, `aperture`, `shutter` and `iso` (`null` resets one);
+  `photo.resetExif` resets some or all.
 
 ### Sliders on One Row
 - Each Develop slider is one row: its name on the left, a groove with tick marks and a drop-shaped thumb, and the

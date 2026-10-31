@@ -247,7 +247,8 @@ pub(super) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
         register(ui, "histogramReadout", r);
         p.text(pos2(r.left() + r.width() / 2.0, r.bottom() - 13.0), Align2::CENTER_CENTER, text, t.font(12.5), t.text_label);
     } else if let Some(ph) = app.session.catalog.photo(id) {
-        let m = &ph.meta;
+        let shown = ph.meta.shown();
+        let m = &*shown;
         let parts: Vec<String> = [
             m.iso.map(|i| format!("ISO {i}")),
             m.focal_mm.map(|f| format!("{f:.0}mm")),
