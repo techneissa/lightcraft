@@ -64,6 +64,9 @@ pub enum Slot {
     /// A slider drag's live HDR histogram: a small full-quality render of an HDR edit, beside the
     /// drafts (which have no HDR histogram), with no texture ([`Renderer::live_hdr_histogram`]).
     HdrHistogram,
+    /// The brush tool's live preview: the photo with the active mask's brush covering everything
+    /// (or nothing, erasing), drawn under the stroke being painted ([`crate::brush_live`]).
+    BrushFull,
 }
 
 /// Settings that can change the rendered frame. Colour-only edits, including temporarily
@@ -259,6 +262,12 @@ pub struct Renderer {
     pub keep_pixels: bool,
     /// The clipping overlay's texture for the loupe photo.
     pub clip_overlay: Option<crate::panels::clipping::ClipOverlay>,
+    /// Keep a CPU copy of the loupe's and the brush preview's pixels (the brush tool is open: its
+    /// live stroke blends them, [`crate::brush_live`]).
+    pub keep_brush_pixels: bool,
+    /// The result key the brush preview ([`Slot::BrushFull`]) must have to match the photo's
+    /// current settings (`None`: no preview wanted now).
+    pub brush_target: Option<u64>,
     /// Per-view intermediate results (loupe and "before"), so slider drags redo only what changed.
     stages: HashMap<Slot, Arc<StageCache>>,
     /// Slot → key of the last quick job requested for it (each is tried once).
@@ -349,6 +358,8 @@ impl Renderer {
             discarded: 0,
             keep_pixels: false,
             clip_overlay: None,
+            keep_brush_pixels: false,
+            brush_target: None,
             stages: HashMap::new(),
             quick_tried: HashMap::new(),
             failed: HashMap::new(),
@@ -1137,8 +1148,9 @@ impl Renderer {
             }
             let img = &rendered.image;
             let color = color.unwrap_or_else(|| Arc::new(color_image(img)));
-            // the loupe keeps its pixels (a shared handle, no copy) for the clipping overlay
-            let pixels = (self.keep_pixels || slot == Slot::Main).then(|| color.clone());
+            // the loupe keeps its pixels (a shared handle, no copy) for the clipping overlay and the
+            // brush's live stroke; the brush preview keeps them while the brush tool is open
+            let pixels = (self.keep_pixels || slot == Slot::Main || (self.keep_brush_pixels && slot == Slot::BrushFull)).then(|| color.clone());
             let name = format!("{slot:?}");
             match self.textures.get_mut(&slot) {
                 Some(t) => {

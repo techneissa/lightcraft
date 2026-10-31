@@ -4,6 +4,7 @@ mod album_remove;
 mod appearance;
 mod before_after;
 mod browse_active;
+mod brush_live;
 mod button;
 mod camera_colour;
 mod canvas_keys;

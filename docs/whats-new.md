@@ -23,6 +23,14 @@
   records, so an edit never changes how a photo looks. Reload from Disk keeps your edits.
 - Agents: `photo.setMeta` takes `camera`, `lens`, `focal`, `aperture`, `shutter` and `iso` (`null` resets one);
   `photo.resetExif` resets some or all.
+### Brush Shows the Adjustment While You Paint
+- Painting with the Brush now shows the mask's adjustment under the brush as you move, the way Lightroom does, not
+  only a colour: a brush mask with Exposure +1.5 brightens the photo along the stroke at once. Erase shows the
+  adjustment going away, and Auto Mask follows the surface under the brush while you paint.
+- The photo no longer flashes back to the unadjusted look when you let go: the painted stroke stays until the
+  finished picture with the stroke has been drawn, and it looks the same.
+- A frame of painting costs about a millisecond on a 24 MP photo. A brand-new brush mask has no adjustment yet, so
+  it shows only the overlay colour until you give the mask one.
 
 ### Sliders on One Row
 - Each Develop slider is one row: its name on the left, a groove with tick marks and a drop-shaped thumb, and the
