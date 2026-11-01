@@ -710,7 +710,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Info",
             [],
             None,
-            "{ids?, title?, caption?, altText?, extendedDescription?, copyright?, copyrightStatus?: unknown|copyrighted|publicDomain, usageTerms?, copyrightUrl?, creator?, location?, city?, state?, country?, gps?: \"lat, lon\" | [lat, lon] | null, keywords?: [..], addKeywords?: [..], removeKeywords?: [..], camera?, lens?, focal?: \"35 mm\", aperture?: \"f/2.8\", shutter?: \"1/250\" | \"2.5\\\"\", iso?: 400 (the camera / lens / exposure values shown and exported; each is stored beside the file's value and null or \"\" resets it; a bad value refuses the call; see photo.resetExif)}",
+            "{ids?, title?, caption?, altText?, extendedDescription?, copyright?, copyrightStatus?: unknown|copyrighted|publicDomain, usageTerms?, copyrightUrl?, creator?, location?, city?, state?, country?, gps?: \"lat, lon\" | [lat, lon] | null, keywords?: [..], addKeywords?: [..], removeKeywords?: [..], camera?, lens?, focal?: \"35 mm\", aperture?: \"f/2.8\", shutter?: \"1/250\" | \"2.5\\\"\", iso?: 400 (the camera / lens / exposure values shown and exported; each is stored beside the file's value and null or \"\" resets it; a bad value refuses the call, and so does a focal length or aperture the photo's lens cannot give, read from its name: \"16-35mm f/4\" takes 16 to 35 mm and f/4 or more; see photo.resetExif)}",
             has_selection,
             |s, p| {
                 let strs =
@@ -738,6 +738,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     None => None,
                 };
                 let mut ops = Vec::new();
+                // photos whose lens cannot give the focal length or aperture asked for: the call changes none of them
+                let mut refused: Vec<(String, String)> = Vec::new();
+                let total = targets.len();
                 for id in targets {
                     let Some(ph) = s.catalog.photo(id) else { continue };
                     let mut m = ph.meta.clone();
@@ -786,11 +789,25 @@ pub fn specs() -> Vec<CommandSpec> {
                         let k = clean(&k);
                         m.keywords.retain(|x| !same(&clean(x), &k));
                     }
-                    crate::cmd::exif_edit::apply_params("photo.setMeta", &mut m, p)?;
+                    let (_, why) = crate::cmd::exif_edit::apply_params("photo.setMeta", &mut m, p)?;
+                    if let Some(why) = why {
+                        refused.push((ph.file_name.clone(), why));
+                        continue;
+                    }
                     ops.push(Op::SetMeta { id, meta: Box::new(m) });
                 }
+                if !refused.is_empty() {
+                    return Err(crate::cmd::exif_edit::refused_error("photo.setMeta", &refused, total));
+                }
                 let n = ops.len();
+                let gps_targets: Vec<PhotoId> = if gps.is_some() {
+                    ops.iter().filter_map(|o| if let Op::SetMeta { id, .. } = o { Some(*id) } else { None }).collect()
+                } else {
+                    vec![]
+                };
                 s.commit("Edit Info", Op::Batch { ops })?;
+                // the position typed in is LightCraft's: its sidecar follows it, cleared too
+                s.gps_edited.extend(gps_targets);
                 // keywords just added become the Recent Keywords set
                 let added: Vec<String> = strs("addKeywords").unwrap_or_default().into_iter().chain(strs("keywords").unwrap_or_default()).collect();
                 if n > 0 && !added.is_empty() {
@@ -847,7 +864,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"id": id.0, "count": s.catalog.album_count(id)}))
             }
         ),
-        cmd!(query "album.ruleFields", "Smart Album Rule Fields", [], None, "{} → [{field, label, kind (text|keywords|number|date|choice|bool|album: an album id), group (field-menu submenu, null at the top level), ops: [{op, label}], choices? (ids), choiceLabels? ({id: label})}] for ruleSet rules, in menu order", always, |_, _| {
+        cmd!(query "album.ruleFields", "Smart Album Rule Fields", [], None, "{} → [{field, label, kind (text|keywords|number|date|choice|bool|album: an album id|area: {south, west, north, east} in degrees, east < west wraps across ±180°|circle: {lat, lon, radius} in degrees and metres, 1 m–1000 km), group (field-menu submenu, null at the top level), ops: [{op, label}], choices? (ids), choiceLabels? ({id: label})}] for ruleSet rules, in menu order", always, |_, _| {
             use lightcraft_catalog::rules::{FIELDS, Kind, field_group, ops_for};
             Ok(json!(FIELDS
                 .iter()
@@ -860,6 +877,8 @@ pub fn specs() -> Vec<CommandSpec> {
                         Kind::Date => "date",
                         Kind::Choice(_) => "choice",
                         Kind::Bool => "bool",
+                        Kind::Area => "area",
+                        Kind::Circle => "circle",
                     };
                     let mut v = json!({"field": id, "label": label, "kind": k, "group": field_group(id), "ops": ops_for(*kind).iter().map(|(o, l)| json!({"op": o, "label": l})).collect::<Vec<_>>()});
                     if let Kind::Choice(c) = kind {

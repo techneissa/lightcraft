@@ -267,9 +267,12 @@ impl LightcraftApp {
         // same scroll offsets, open sections, style… as the window
         let memory = main.memory(|m| m.clone());
         view.ctx.memory_mut(|m| *m = memory);
+        self.map.shadow_pass = true;
         view.run(headless::HeadlessView::raw_input(size, ppp, time, vec![]), |ui| self.draw_window(ui));
+        self.map.shadow_pass = false;
         let img = capture.then(|| {
             let mut tex = self.renderer.cpu_textures();
+            tex.extend(crate::panels::map::cpu_textures(self));
             if let (Some((t, ..)), Some(px)) = (&self.merge.preview, &self.merge.preview_pixels) {
                 tex.insert(t.id(), crate::softpaint::CpuTexture::linear(px.clone()));
             }

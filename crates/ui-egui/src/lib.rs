@@ -80,6 +80,7 @@ use serde_json::Value;
 pub use command_error::CommandError;
 pub use control::{ControlRequest, ControlResponse};
 pub use dialogs::animated_gif;
+pub use dialogs::book_view;
 pub use dialogs::credits;
 pub use dialogs::import;
 pub use dialogs::lightroom_destination;
@@ -403,6 +404,8 @@ pub struct LightcraftApp {
     pub recent_checks: panels::library_problem::RecentChecks,
     /// The activity stack shows every task, not just the first few ("+N more" was clicked).
     pub activity_expanded: bool,
+    /// The Map view's centre and zoom, tile textures and photo pins (for the session).
+    pub map: panels::map::MapView,
     /// Batches in the activity stack whose per-photo rows are shown.
     pub activity_open: std::collections::HashSet<u64>,
     /// The last batch summary said (`Activity::finished` → `seq`): each is said once.

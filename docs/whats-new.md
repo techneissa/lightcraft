@@ -8,11 +8,33 @@
 - Renaming a keyword to one that exists asks before it merges: the Rename Keyword window says which keyword goes into which, and nothing changes until you confirm.
 - Rename Photos and Rename Folder move their files on a worker: the window keeps drawing, an activity row shows the work, and the catalog follows in one undo step when the files have moved. A move the disk refuses (no permission, name taken, disk full) changes nothing in the library and a toast says why. The file-name preview in Rename Photos waits until you stop typing before it checks the disk.
 
+### Remove: Find People and Find Wires
+- The Remove panel has Find People and Find Wires. Each outlines what it finds on the photo; click one to select it (⇧-click adds more), then Remove, or Remove All, takes them out with content-aware spots in one undo step, and every result is an ordinary spot you can still move, resize or delete. People come from the local SAM 3 model (rough shapes from detected faces when only the face detector is installed); the main subject, the largest and most central person however small, is left out unless asked for. Wires (power lines, cables) come from SAM 3 too, or from a built-in thin-line detector without it. Agents get `spot.findPeople`, `spot.findWires`, `spot.candidates`, `spot.selectCandidate` and `spot.removeCandidates`.
+
+### Plainer Camera Card in Info
+- The camera card in Info looks like the plain official card again: dim Camera, Lens, Focal length, Shutter speed, Aperture and ISO labels with plain values. Click a value to edit it (Return saves, Esc cancels). A focal length or aperture your lens cannot give (read from its name, such as 16-35mm f/4) is refused: the value shakes, keeps its old text, and a small red ! says why; `photo.setMeta` refuses it too.
+
+### Book
+- File ▸ Book… lays the selected photos (or the photos in view) out as a photo book: a cover, then pages of 1, 2, 3 or 4 photos. Pick the page size and orientation, the margin, the cell padding and the background; change a page's template or drag a photo onto another cell. A Pages view shows every page and a Spread view shows two pages open side by side. Export PDF… and Export JPEGs… write the book, and the book is saved with the library. Agents use the `book.*` commands.
+
+### Masking Workflow
+- Under the selected mask, one Add · Subtract · Intersect control sets the mode of the next part, and a button for each kind of part adds it (Brush, Linear, Radial, Color, Luminance, Subject, Sky, Background, Object, Describe); the menus are gone.
+- Each part is a row you click: it selects the part and brings its tool back (the Brush painting into a brush part, a gradient's handles on the photo, the colour picker). At the right of each row: its mode (a dropdown showing +, − or ∩), Invert and Delete. Delete removes the selected part, else the mask.
+- Brush Add and Erase are named by what a stroke does to the mask, also in a Subtract part, and the brush cursor shows + or − (swapping while ⌥ is held). Esc steps back: the brush, then the part, then the photo.
+- A mask's first part is its base and always acts as Add (a first Intersect used to empty the mask); deleting it makes the next part the base.
+- The Create New Mask buttons fill the side bar's width in 4 or 5 columns (2 in a very narrow bar), never one button alone on the last row.
+
 ### Fixed Slider Label Column
 - In the Edit and Masking panels the slider names are left-aligned in one column of fixed width, so opening or closing a section (Noise Reduction has long names) no longer moves any name or shortens any slider.
 
 ### Shorter Slider Label Column
 - The slider label column in Edit and Masking now fits the common names (Highlights, Saturation, Vibrance), so the sliders are longer. A longer name (Color Noise Reduction) uses a slightly smaller font, then wraps onto two lines, and its row gets a little taller; the column still never moves.
+
+### Map Memory Is Capped In Bytes
+- The map's decoded tiles and textures are held to 64 MiB each, whatever size a tile server sends, and Settings ▸ Map keeps a custom server's fields filled after Apply.
+
+### Map Starts Offline In This Fork
+- The Map view's tile source starts as Offline until you pick OpenStreetMap or your own server in Settings ▸ Map, so no tile server is asked unless you chose it. The switch Start on OpenStreetMap in Settings ▸ Map, or the globe button on the grey map, makes OpenStreetMap the start for libraries that have no saved source.
 
 ### Shared SAM 3 Model Folder
 - AI masks look for the SAM 3 model in `~/Library/Application Support/ArtCraft/models/sam3` (shared with PhotoCraft) first, and a download goes there.
@@ -1151,6 +1173,53 @@
   would write over the stored copy. It now leaves the library unopened, saves nothing and says which file couldn't be
   read; reload the page to try again.
 ## 2026-10-14
+
+### Map view
+- View ▸ Map (or the map pin in the bottom bar) shows the photos in view on a map, with the filmstrip below. Nearby
+  photos gather in a numbered cluster that splits as you zoom in; click a pin to select its photos, double-click to
+  open one, rest the pointer on it to see the photo.
+- Drag to pan; the mouse wheel or a pinch zooms where the pointer is; Fit to Photos frames every photo with a location.
+  The count of photos without GPS is shown bottom left.
+- The map uses OpenStreetMap's tiles (credited on the map) or a tile server you choose, only fetches the visible tiles
+  and at most one ring around them, and can be switched off in **Settings ▸ Map**; see [Map](map.md) for
+  what is sent where.
+- The Info panel shows a small map of the photo's place under its location fields (the active photo's, with several
+  selected). Click it to open the Map view there; **Open in Browser** (formerly Show on Map) still opens
+  OpenStreetMap's site.
+- Put photos on the map: drag them from the filmstrip onto the Map view and let go where they were taken (a pin follows
+  the pointer); they all get that position in one undo step, replacing any they had. Drag a photo's pin to move it;
+  **Lock Markers** in the map's toolbar keeps pins in place. Photo ▸ **Remove GPS Coordinates** (or right-click a pin)
+  clears the position. Positions are written to XMP sidecars like the Info panel's. Agents: `photo.setGps`,
+  `photo.removeGps`, `map.lockMarkers`.
+- The filmstrip's photos can be dragged now, in every view: onto the map, onto an album or a keyword, as from the grid.
+- The location filter bar above the map, as in Lightroom Classic: **Visible on Map** (the photos where the map is
+  looking; it follows as you pan and zoom), **Tagged**, **Untagged** and **None**, each with its count. It narrows the
+  filmstrip on top of your library filter and goes away when you leave the Map view. Smart albums and filters gain
+  **GPS Area** (a south / west / north / east box) next to Has GPS. Agents: `map.locationFilter {mode}`, and the
+  `gpsArea` rule field.
+- Saved locations, as in Lightroom Classic: name a place and a radius, and it is drawn on the map as a circle. The list
+  over the map's top-left corner shows how many of your photos are inside each; click one to go there, tick it to
+  select its photos, or use + to save the place the map shows (or the place of the selected photos). Drag the selected
+  location's centre or edge to move or resize it. Mark a location **Private** (right-click it) and the photos inside
+  are exported without their location, and the Info panel hides their map until you ask for it. Saved locations are
+  kept with the library (`locations.json`). Smart albums gain **GPS Radius**. Agents: `map.locations`,
+  `map.location.add`, `map.location.update`, `map.location.remove`, `map.location.photos`.
+- GPS track logs on the map, as in Lightroom Classic: **Tracklog** (top right of the map) ▸ **Load Tracklog…** draws a
+  GPX file's tracks as lines and fits the map to them; gaps in the logging stay gaps. Pick one of several tracks in the
+  menu, see its start, end and duration on the camera's clock, set the time zone offset, and **Auto-Tag N Selected
+  Photos** places them where the track was at their capture time, in one undo step. The selected photos are marked on
+  the track where they would go, so a wrong offset shows before anything is written. Files up to 50 MB (2 million
+  points) draw smoothly. Agents: `map.trackLog`, `photo.autoTagTracklog {loaded: true}`.
+- The Map view's keys, as in Lightroom Classic's Map module: **⌘K** Lock Markers, **\\** hides the location filter
+  bar, **O** folds the Saved Locations list, **=** / **−** zoom, **⌘0** fits the photos, and **H** hides the photo pins
+  (also the map's new **Hide Pins** button) so the map, saved locations and tracks show alone. They work in the Map view
+  only: elsewhere H, \\, O and ⌘K keep Remove, Show Original (the Filter Bar in the grids), the mask overlay and
+  Add Keywords.
+- **View ▸ Map** gathers every map command: Fit to Photos, zoom, Pins, Lock Markers, the location filter, Saved
+  Locations, Tracklog and Map Tiles….
+- **Settings ▸ Map**: choose OpenStreetMap, Offline or your own tile server (URL template, attribution, max zoom; used
+  only once you press Apply), see how much the tile cache holds and clear it. A note says what the tile server sees.
+  Agents: `map.showPins`, `map.filterBar`, `map.showLocations`, `map.settings`.
 
 ### Model downloads time out on a name that doesn't resolve
 - Model downloads (AI denoise, faces, SAM) give up on a server name that doesn't resolve within the connect timeout,

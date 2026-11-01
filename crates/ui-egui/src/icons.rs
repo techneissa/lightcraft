@@ -77,6 +77,12 @@ pub enum Icon {
     Radial,
     Sky,
     Subject,
+    /// Object mask: a click's arrow inside a selection frame.
+    ObjectSelect,
+    /// Describe mask: lines of text with a caret.
+    Describe,
+    /// Background mask: the Subject figure's frame filled, the figure left out.
+    Background,
     Picker,
     Rotate,
     /// A curved line with an arrow at both ends: drag to rotate, either way (the crop tool's pointer).
@@ -91,6 +97,10 @@ pub enum Icon {
     Target,
     /// Face boxes on/off: four corner brackets round a small face.
     FaceBox,
+    /// The Map view: a map pin (a teardrop with a hole).
+    MapPin,
+    /// Map tiles from OpenStreetMap: a globe (a circle with its equator, meridian and two parallels).
+    Globe,
     /// Play (a triangle pointing right).
     Play,
     /// Pause (two bars).
@@ -111,6 +121,8 @@ pub enum Icon {
     Moon,
     /// Reset to the file's value (↺): an open circle with an arrowhead turning back.
     Reset,
+    /// A value that needs a look (!): an open circle with an exclamation mark.
+    Alert,
 }
 
 struct Pen<'a> {
@@ -237,6 +249,11 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             let tip = (px + tx * 1.2, py + ty * 1.2);
             let (bx, by) = (px - tx * 2.4, py - ty * 2.4);
             pen.line(&[(bx + nx * 2.8, by + ny * 2.8), tip, (bx - nx * 2.8, by - ny * 2.8)]);
+        }
+        Alert => {
+            pen.circle(10.0, 10.0, 7.5);
+            pen.line(&[(10.0, 5.6), (10.0, 11.0)]);
+            pen.dot(10.0, 13.9, 0.95);
         }
         Moon => {
             // outer arc of the disc, then the inner arc of the bite, meeting at the horns
@@ -561,6 +578,22 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.arc(10.0, 18.0, 6.5, 200.0, 340.0);
             pen.rect(2.5, 2.5, 17.5, 17.5, 2.0);
         }
+        ObjectSelect => {
+            pen.rect(2.5, 2.5, 17.5, 17.5, 2.0);
+            pen.closed(&[(7.0, 5.5), (7.0, 14.5), (9.3, 12.3), (11.0, 16.0), (12.7, 15.2), (11.0, 11.6), (14.0, 11.6)]);
+        }
+        Describe => {
+            pen.line(&[(3.0, 5.0), (17.0, 5.0)]);
+            pen.line(&[(3.0, 10.0), (13.0, 10.0)]);
+            pen.line(&[(3.0, 15.0), (8.0, 15.0)]);
+            pen.line(&[(12.5, 12.5), (12.5, 17.5)]);
+        }
+        Background => {
+            pen.p.rect_filled(Rect::from_min_max(pen.pt(2.5, 2.5), pen.pt(17.5, 17.5)), 2.0 * k, color.gamma_multiply(0.35));
+            pen.circle(10.0, 7.0, 3.0);
+            pen.arc(10.0, 18.0, 6.5, 200.0, 340.0);
+            pen.rect(2.5, 2.5, 17.5, 17.5, 2.0);
+        }
         Play => pen.fill(&[(6.0, 4.0), (6.0, 16.0), (16.0, 10.0)], color),
         Pause => {
             pen.rect_fill(5.0, 4.0, 8.5, 16.0, 0.5);
@@ -573,6 +606,19 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.line(&[(13.0, 17.5), (17.5, 17.5), (17.5, 13.0)]);
             pen.circle(10.0, 8.5, 2.4);
             pen.arc(10.0, 16.0, 4.5, 215.0, 325.0);
+        }
+        MapPin => {
+            // the round head (open at the bottom), its point, and the hole
+            pen.arc(10.0, 8.0, 5.5, 150.0, 390.0);
+            pen.line(&[(5.24, 10.75), (10.0, 17.5), (14.76, 10.75)]);
+            pen.circle(10.0, 8.0, 1.8);
+        }
+        Globe => {
+            pen.circle(10.0, 10.0, 7.5);
+            pen.line(&[(2.5, 10.0), (17.5, 10.0)]);
+            pen.line(&[(10.0, 2.5), (10.0, 17.5)]);
+            pen.line(&[(4.2, 6.2), (15.8, 6.2)]);
+            pen.line(&[(4.2, 13.8), (15.8, 13.8)]);
         }
         Picker => {
             pen.line(&[(4.0, 16.0), (11.5, 8.5)]);

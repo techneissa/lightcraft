@@ -40,6 +40,7 @@ use sam_model::{sam_by_hand, sam_model_body};
 use slideshow_export::slideshow_export_body;
 
 pub mod animated_gif;
+pub mod book_view;
 pub mod credits;
 pub mod faces;
 pub mod import;
@@ -64,6 +65,7 @@ fn window_id(dialog: &Dialog) -> egui::Id {
     egui::Id::unique(match dialog {
         Dialog::Import { .. } => "lightcraft-import-dialog",
         Dialog::Print => "lightcraft-print-dialog",
+        Dialog::Book => "lightcraft-book-dialog",
         Dialog::Settings { .. } => "lightcraft-settings-dialog",
         _ => "lightcraft-dialog",
     })
@@ -161,7 +163,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             Dialog::Import { .. } => crate::import::DIALOG_SIZE[0],
             Dialog::SmartRules { .. } => 680.0,
             Dialog::AllMetadata { .. } => 620.0,
-            Dialog::Print => 1100.0,
+            Dialog::Print | Dialog::Book => 1100.0,
             Dialog::FaceModel { .. } => 460.0,
             Dialog::LightroomCatalog { .. } => 440.0,
             Dialog::DeletePermanently { .. } => 500.0,
@@ -310,6 +312,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::KeywordTag { editing: None, .. } => "Create Keyword Tag",
         Dialog::KeywordTag { .. } => "Edit Keyword Tag",
         Dialog::DeleteKeyword { .. } => "Delete Keyword",
+        Dialog::DeleteLocation { .. } => "Delete Saved Location",
         Dialog::MoveKeyword { .. } => "Merge Keywords",
         Dialog::KeywordSet { .. } => "Edit Keyword Set",
         Dialog::MergeKeywords { .. } => "Merge Keywords",
@@ -332,6 +335,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::SlideshowExport { .. } => "Export Slideshow",
         Dialog::AnimatedGif { .. } => "Export Animated GIF",
         Dialog::Print => "Print",
+        Dialog::Book => "Book",
         Dialog::Merge { opts } => opts.title(),
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
@@ -440,12 +444,17 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         Dialog::ContactSheet { .. } => "Choose PDF…",
         Dialog::SlideshowExport { .. } | Dialog::AnimatedGif { .. } => "Export…",
         Dialog::Print => "Print to PDF…",
+        Dialog::Book => "Export PDF…",
         Dialog::Merge { .. } => "Merge",
         Dialog::DenoiseModel { info, .. } if !informational && info["download"].is_string() => "Accept & Download",
         Dialog::DenoiseModel { .. } if !informational => "Install",
         Dialog::FaceModel { info, .. } if !informational && info["download"].is_string() => "Download",
         Dialog::FaceModel { .. } if !informational => "Install",
-        Dialog::ConfirmDelete { .. } | Dialog::ConfirmDeleteRejected { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
+        Dialog::ConfirmDelete { .. }
+        | Dialog::ConfirmDeleteRejected { .. }
+        | Dialog::DeleteKeyword { .. }
+        | Dialog::DeleteEffects { .. }
+        | Dialog::DeleteLocation { .. } => "Delete",
         Dialog::LocalProfileSwitch { .. } => "Switch",
         Dialog::SmartPreviewsForEditing { .. } => "Build Smart Previews",
         Dialog::MacosForCamera { .. } => "Apply",
@@ -595,6 +604,7 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
                     | Dialog::SlideshowExport { .. }
                     | Dialog::AnimatedGif { .. }
                     | Dialog::Print
+                    | Dialog::Book
                     | Dialog::NewAlbum { .. }
                     | Dialog::NewSmartAlbum { .. }
                     | Dialog::SmartRules { .. }
@@ -2034,6 +2044,10 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         Dialog::KeywordSet { .. } => keyword_set_body(ui, t, confirm, dlg),
         Dialog::MoveKeyword { .. } => move_keyword_body(ui, t, dlg),
         Dialog::DeleteKeyword { .. } => delete_keyword_body(ui, t, dlg),
+        Dialog::DeleteLocation { name, .. } => {
+            ui.label(crate::i18n::tr_format!("Delete the saved location “{name}”?", name = name));
+            ui.label(egui::RichText::new(crate::i18n::tr("Its photos keep their GPS positions. This can't be undone.")).color(t.text_dim));
+        }
         Dialog::SaveEffect { name, group, fields, amount, brush } => {
             if crate::panels::mask_effects::save_body(app, ui, name, group, fields, amount, brush) {
                 *confirm = true;
@@ -2081,5 +2095,6 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         Dialog::Shortcuts => crate::panels::keymap::body(app, ui, t),
         Dialog::ViewOptions => crate::panels::settings::view_options(app, ui, t),
         Dialog::Print => crate::print_view::body(app, ui, t),
+        Dialog::Book => crate::book_view::body(app, ui, t),
     }
 }

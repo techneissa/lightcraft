@@ -337,7 +337,8 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
         let show_outline = sel || (app.ui.mask_overlay_all && m.visible && !m.components.is_empty());
         for (ci, c) in m.components.iter().enumerate() {
             if show_outline {
-                component_outline(ui, p, map, (m.id, ci), &c.shape, sel, &mut grips);
+                // the selected part's handles are blue: the ones a drag takes
+                component_outline(ui, p, map, (m.id, ci, sel && app.session.active_part() == Some(ci)), &c.shape, sel, &mut grips);
             }
             if app.ui.mask_pins
                 && mode.shows(sel, live)
@@ -378,12 +379,13 @@ fn component_outline(
     ui: &egui::Ui,
     p: &egui::Painter,
     map: &CanvasMap,
-    at: (u32, usize),
+    at: (u32, usize, bool),
     shape: &MaskShape,
     sel: bool,
     grips: &mut Vec<(u32, usize, u8, Pos2)>,
 ) {
-    let (mask, ci) = at;
+    let (mask, ci, picked) = at;
+    let handle = if picked { Color32::from_rgb(1, 101, 221) } else { Color32::WHITE };
     let stroke_a: u8 = if sel { 230 } else { 170 };
     match shape {
         MaskShape::Radial { center, rx, ry, angle, .. } => {
@@ -405,7 +407,7 @@ fn component_outline(
                     let (s, co) = angle.to_radians().sin_cos();
                     let (x, y) = (rx * a_local.cos(), ry * a_local.sin());
                     let q = map.screen(Point::new(center.x + (x * co - y * s) * l.0, center.y + (x * s + y * co) * l.1));
-                    p.circle_stroke(q, 5.0, Stroke::new(1.5, Color32::WHITE));
+                    p.circle_stroke(q, 5.0, Stroke::new(1.5, handle));
                     register(ui, format!("maskHandle:{}:{ci}:{}", mask, i + 1), Rect::from_center_size(q, vec2(14.0, 14.0)));
                     grips.push((mask, ci, i as u8 + 1, q));
                 }
@@ -415,7 +417,7 @@ fn component_outline(
                 let rot_q = map.screen(Point::new(center.x + (rot_r * co) * l.0, center.y + (rot_r * s) * l.1));
                 let h1_q = map.screen(Point::new(center.x + (rx * co) * l.0, center.y + (rx * s) * l.1));
                 p.line_segment([h1_q, rot_q], Stroke::new(1.0, Color32::from_white_alpha(200)));
-                p.circle_stroke(rot_q, 4.0, Stroke::new(1.5, Color32::WHITE));
+                p.circle_stroke(rot_q, 4.0, Stroke::new(1.5, handle));
                 register(ui, format!("maskHandle:{}:{ci}:5", mask), Rect::from_center_size(rot_q, vec2(14.0, 14.0)));
                 grips.push((mask, ci, 5, rot_q));
             }
@@ -430,7 +432,7 @@ fn component_outline(
             }
             if sel {
                 for (i, q) in [a, b].iter().enumerate() {
-                    p.circle_stroke(*q, 5.0, Stroke::new(1.5, Color32::WHITE));
+                    p.circle_stroke(*q, 5.0, Stroke::new(1.5, handle));
                     register(ui, format!("maskHandle:{}:{ci}:{i}", mask), Rect::from_center_size(*q, vec2(14.0, 14.0)));
                     grips.push((mask, ci, i as u8 + 1, *q));
                 }
@@ -535,10 +537,21 @@ fn brush_tool(
     let active = app.session.active_mask;
     let long = (map.rect.width().max(map.rect.height())) as f64;
     let r = (app.ui.brush_size as f64 * long) as f32;
+    // what a stroke does to the mask: Add or Erase, turned around while ⌥ is held
+    let takes_away = app.ui.brush_erase != ui.input(|i| i.modifiers.alt);
     if let Some(h) = resp.hover_pos() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         p.circle_stroke(h, r, Stroke::new(1.0, Color32::WHITE));
         p.circle_stroke(h, r * (1.0 - app.ui.brush_feather / 100.0).max(0.05), Stroke::new(1.0, Color32::from_white_alpha(120)));
+        // + adds to the mask, − takes away from it
+        let arm = (r * 0.25).clamp(3.0, 7.0);
+        for (stroke, color) in [(3.0, Color32::from_black_alpha(160)), (1.5, Color32::WHITE)] {
+            let line = Stroke::new(stroke, color);
+            p.line_segment([h - vec2(arm, 0.0), h + vec2(arm, 0.0)], line);
+            if !takes_away {
+                p.line_segment([h - vec2(0.0, arm), h + vec2(0.0, arm)], line);
+            }
+        }
     }
     if let Some(q) = resp.interact_pointer_pos()
         && (resp.drag_started() || resp.dragged() || resp.clicked())
@@ -614,13 +627,15 @@ fn brush_tool(
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
         // holding ⌥ (Alt) paints with the other mode: Erase while adding, Add while erasing
         let (alt, shift) = resp.ctx.input(|i| (i.modifiers.alt, i.modifiers.shift));
-        let erase = app.ui.brush_erase != alt;
+        // Add and Erase are named by their effect on the mask: in a Subtract part the stroke goes the other way
+        let (part, turned) = super::super::mask_parts::painting_into(app, d);
+        let erase = super::super::mask_parts::stroke_erase(app.ui.brush_erase != alt, turned);
         // a ⇧-click draws a straight line from where the last stroke ended, as in Lightroom
         let connect = shift && resp.clicked() && pts.len() == 1;
         let _ = app.run(
             "mask.brushStroke",
             json!({"points": pts, "size": app.ui.brush_size, "feather": app.ui.brush_feather, "flow": app.ui.brush_flow,
-                   "erase": erase, "autoMask": app.ui.brush_auto_mask, "pressure": pressure, "connect": connect}),
+                   "erase": erase, "autoMask": app.ui.brush_auto_mask, "pressure": pressure, "connect": connect, "component": part}),
         );
     }
 }
@@ -660,11 +675,15 @@ fn grip_gestures(
             // Handles take precedence; otherwise grab the selected radial component under
             // the press, including components after the first in compound masks.
             let at = map.norm(q);
-            if let Some(ci) = m.components.iter().position(|c| radial_body_contains(&c.shape, at, map)) {
+            // (the selected part first)
+            let picked = app.session.active_part();
+            let body = |ci: &usize| m.components.get(*ci).is_some_and(|c| radial_body_contains(&c.shape, at, map));
+            if let Some(ci) = picked.filter(body).or_else(|| (0..m.components.len()).find(body)) {
                 return Some((m.id, ci, 0));
             }
-            // anywhere on the photo drags the selected linear gradient
-            matches!(m.components.first()?.shape, MaskShape::Linear { .. }).then_some((m.id, 0, 0))
+            // anywhere on the photo drags the selected linear gradient (the selected part, else the first)
+            let ci = picked.filter(|k| matches!(m.components.get(*k).map(|c| &c.shape), Some(MaskShape::Linear { .. }))).unwrap_or(0);
+            matches!(m.components.get(ci)?.shape, MaskShape::Linear { .. }).then_some((m.id, ci, 0))
         });
         if let Some((mask, comp, handle)) = grip
             && let Some(original_shape) = d.masks.iter().find(|m| m.id == mask).and_then(|m| m.components.get(comp)).map(|c| c.shape.clone())

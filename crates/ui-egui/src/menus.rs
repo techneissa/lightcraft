@@ -31,7 +31,7 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
     match id {
         "library.selectOnlyActive" => app.session.active().is_some(),
         "view.thumbSizeUp" | "view.thumbSizeDown" => thumb_size_view(app),
-        "dialog.contactSheet" | "app.contactSheet" | "dialog.print" | "app.print" => {
+        "dialog.contactSheet" | "app.contactSheet" | "dialog.print" | "app.print" | "dialog.book" | "app.bookPdf" | "app.bookJpeg" => {
             !cfg!(target_arch = "wasm32") && app.session.active().is_some() && app.export.is_none()
         }
         "dialog.animatedGif" | "app.animatedGif" => {
@@ -45,6 +45,9 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
             app.session.active().is_some()
         }
         "photo.tagFromTracklog" => app.session.active().is_some() && app.services.pick_tracklog.is_some(),
+        "map.loadTrackLog" => app.services.pick_tracklog.is_some() || app.services.picker.is_some(),
+        "map.trackLog.autoTag" => app.session.map.track.is_some() && !app.session.targets(&json!({})).unwrap_or_default().is_empty(),
+        "map.trackLog.setOffset" | "map.trackLog.fit" => app.session.map.track.is_some(),
         "photo.editInPhotoCraft" | "photo.editInExternal" => {
             app.session.active().is_some() && app.services.open_with.is_some() && app.edit_in.is_none()
         }

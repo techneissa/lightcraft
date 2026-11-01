@@ -168,6 +168,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         let ctx = app.tasks.repaint.clone().unwrap_or_default();
         return Some(crate::lightroom_import::command(app, id, p, &ctx));
     }
+    if let Some(r) = crate::export_task::book_task::command(app, id, p) {
+        return Some(r);
+    }
     if id == "photo.reload" {
         // the files are read in the background (a raw's decode takes a second or more)
         return crate::reload::command(app, p);
@@ -196,6 +199,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         ui_commands_11,
         ui_commands_12,
     ];
+    if let Some(r) = crate::panels::map::command(app, id, p) {
+        return Some(r);
+    }
     PARTS.iter().find_map(|part| part(app, &ctx, id, p))
 }
 
@@ -1099,23 +1105,10 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                     app.ui.tool = "guidedUpright".into();
                 }
                 "brush" => {
-                    // A new mask and Add/Subtract are selection operations, not the brush's
-                    // Erase mode. Paint positively into a component with the requested op.
-                    let create = if p.get("new").and_then(Value::as_bool) == Some(true) {
-                        Some(app.run("mask.add", json!({"kind": "brush"})))
-                    } else {
-                        p.get("op").map(|op| app.run("mask.addComponent", json!({"kind": "brush", "op": op})))
-                    };
-                    if let Some(result) = create {
-                        if let Err(e) = result {
-                            return Some(Err(e));
-                        }
-                        app.ui.brush_erase = false;
-                        app.ui.mask_overlay = true;
+                    // `new`, `op`, `component` and `erase`: crate::panels::mask_parts::start_brush
+                    if let Err(e) = crate::panels::mask_parts::start_brush(app, p) {
+                        return Some(Err(e));
                     }
-                    app.ui.right = RightPanel::Masking;
-                    app.ui.view = ViewMode::Detail;
-                    app.ui.tool = "brush".into();
                 }
                 "linear" | "radial" => {
                     app.ui.right = RightPanel::Masking;
@@ -1553,6 +1546,8 @@ fn view_back_command(app: &mut LightcraftApp, ctx: &egui::Context) -> Result<Val
         crate::panels::slideshow::end(app);
     } else if !app.ui.tool.is_empty() {
         app.ui.tool.clear();
+    } else if crate::panels::mask_parts::leave_part(app) {
+        // Esc leaves the brush first (above), then the selected part; the mask stays selected
     } else if app.ui.right == RightPanel::Crop && app.ui.view == ViewMode::Detail {
         // Esc leaves the crop tool (the crop stays), as C does; the next Esc goes back
         panel(app, ctx, RightPanel::Crop, "Crop, Rotate, Geometry");
@@ -1923,19 +1918,8 @@ fn photo_tag_from_tracklog_command(app: &mut LightcraftApp, _ctx: &egui::Context
     }
     let r = app.run("photo.autoTagTracklog", params);
     if let Ok(v) = &r {
-        let n = v["tagged"].as_u64().unwrap_or(0);
-        let sk = &v["skipped"];
-        let mut msg = crate::i18n::tr_format!("Tagged {n} photo{} from the tracklog", if n == 1 { "" } else { "s" }, n = n);
-        let outside = sk["outside"].as_u64().unwrap_or(0);
-        if outside > 0 {
-            msg += &crate::i18n::tr_format!("; {outside} outside its time range", outside = outside);
-        }
-        let kept = sk["hasGps"].as_u64().unwrap_or(0);
-        if kept > 0 {
-            msg += &crate::i18n::tr_format!("; {kept} already had a location", kept = kept);
-        }
         let ctx = app.tasks.repaint.clone().unwrap_or_default();
-        app.toast(&ctx, msg);
+        app.toast(&ctx, crate::panels::map::tracks::tagged_message(v));
     }
     r
 }

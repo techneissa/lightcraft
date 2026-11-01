@@ -1,8 +1,10 @@
 //! Edited camera / lens / exposure values (`photo.setMeta` keys `camera`, `lens`, `focal`,
 //! `aperture`, `shutter`, `iso`, and `photo.resetExif`). The file's values and the file itself
 //! are never touched: an edit is an override stored in the catalog (`Meta::exif`), a reset removes
-//! it. Rendering keeps using the file's camera and lens; see `lightcraft_catalog::exif_override`.
+//! it. Rendering keeps using the file's camera and lens; see `lightcraft_catalog::exif_override`. An edited focal
+//! length or aperture has to fit the photo's lens (`lightcraft_catalog::lens_limits`).
 
+use lightcraft_catalog::lens_limits::refusal;
 use lightcraft_catalog::{ExifField, Meta, Op};
 use serde_json::{Value, json};
 
@@ -20,9 +22,10 @@ fn value_text(cmd: &str, field: ExifField, v: &Value) -> Result<Option<String>> 
     }
 }
 
-/// Applies the edit keys present in `p` to `m`; returns whether any was present. Nothing is
-/// half-applied: on `Err`, `m` is as it was.
-pub(crate) fn apply_params(cmd: &str, m: &mut Meta, p: &Value) -> Result<bool> {
+/// Applies the edit keys present in `p` to `m`; returns whether any was present, and the reason when a focal length or
+/// aperture the photo's lens cannot give was asked for (`aperture: This lens opens to f/4 at most`), so a caller with
+/// many photos can say which were refused. Nothing is half-applied: on a refusal or an `Err`, `m` is as it was.
+pub(crate) fn apply_params(cmd: &str, m: &mut Meta, p: &Value) -> Result<(bool, Option<String>)> {
     let mut edited = m.clone();
     let mut any = false;
     for field in ExifField::ALL {
@@ -31,10 +34,29 @@ pub(crate) fn apply_params(cmd: &str, m: &mut Meta, p: &Value) -> Result<bool> {
         let text = value_text(cmd, field, v)?;
         edited.set_exif(field, text.as_deref()).map_err(|e| bad(cmd, format!("{}: {e}", field.key())))?;
     }
+    // an edited focal length or aperture has to fit the lens the photo then shows (a lens change in the same call
+    // counts); only a value that is now an edit is checked, never the file's own, and a reset never is
+    for field in [ExifField::Focal, ExifField::Aperture] {
+        if p.get(field.key()).is_some_and(|v| !v.is_null())
+            && let Some(why) = refusal(&edited, field)
+        {
+            return Ok((any, Some(format!("{}: {why}", field.key()))));
+        }
+    }
     if any {
         *m = edited;
     }
-    Ok(any)
+    Ok((any, None))
+}
+
+/// The error for the photos a call was refused on, as `(file name, reason)`: the first one's name and reason, and how
+/// many of the `total` photos were refused. A call on one photo says just the reason.
+pub(crate) fn refused_error(cmd: &str, refused: &[(String, String)], total: usize) -> crate::EngineError {
+    let Some((file, why)) = refused.first() else { return bad(cmd, "nothing refused") };
+    if total <= 1 {
+        return bad(cmd, why.clone());
+    }
+    bad(cmd, format!("{why} ({file}; {} of {total} photos refused)", refused.len()))
 }
 
 /// The fields named by `fields` (a list of keys), or all of them when it is absent.

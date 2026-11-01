@@ -142,6 +142,8 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let hint = crate::i18n::tr(if gps_mixed { MIXED } else { "latitude, longitude" });
         let r = crate::text_field::TextField::singleline("field:gps", &mut edit.text).hint(hint).label("GPS").width(f32::INFINITY).show(ui);
         edit.typed |= edit.text != edit.start;
+        // the fields' width (the row below and the map keep to it)
+        let width = r.response.rect.width();
         if r.editing {
             ui.data_mut(|d| d.insert_temp(gid, edit.clone()));
         } else {
@@ -156,20 +158,23 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             app.toast(ui.ctx(), e);
         }
         // (one photo's place: not shown while the selected photos' places differ)
-        if let Some((la, lo)) = m.gps.filter(|_| !gps_mixed) {
+        let one_place = m.gps.filter(|_| !gps_mixed);
+        if let Some((la, lo)) = one_place {
             let pretty = format!("{:.5}° {}, {:.5}° {}", la.abs(), if la >= 0.0 { "N" } else { "S" }, lo.abs(), if lo >= 0.0 { "E" } else { "W" });
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(pretty).size(11.0).color(t.text_dim));
-                if text_button(ui, "showOnMap", crate::i18n::tr("Show on Map"), false)
-                    .on_hover_text(crate::i18n::tr("Open the place in OpenStreetMap"))
-                    .clicked()
-                {
-                    let url = format!("https://www.openstreetmap.org/?mlat={la:.6}&mlon={lo:.6}#map=15/{la:.6}/{lo:.6}");
-                    if let Err(e) = crate::links::open(app, &url) {
-                        app.toast(ui.ctx(), e);
-                    }
+            ui.add(egui::Label::new(egui::RichText::new(pretty).size(11.0).color(t.text_dim)).truncate());
+        }
+        gps_map(app, ui, &t, id, m.gps, width);
+        if let Some((la, lo)) = one_place {
+            ui.add_space(6.0);
+            if text_button(ui, "showOnMap", crate::i18n::tr("Open in Browser"), false)
+                .on_hover_text(crate::i18n::tr("Open the place in OpenStreetMap"))
+                .clicked()
+            {
+                let url = format!("https://www.openstreetmap.org/?mlat={la:.6}&mlon={lo:.6}#map=15/{la:.6}/{lo:.6}");
+                if let Err(e) = crate::links::open(app, &url) {
+                    app.toast(ui.ctx(), e);
                 }
-            });
+            }
             if text_button(ui, "fillLocation", crate::i18n::tr("Fill Location"), false)
                 .on_hover_text(format!(
                     "{}\n{}",
@@ -208,6 +213,29 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     });
 }
 
+/// The map of the shown photo's place (the active one's, also while the selected photos' places
+/// differ); a click on it opens the Map view there, the button below it opens OpenStreetMap's
+/// site.
+fn gps_map(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, id: PhotoId, gps: Option<(f64, f64)>, width: f32) {
+    let Some(pos) = lightcraft_map::LatLon::from_gps(gps) else { return };
+    ui.add_space(6.0);
+    // in a private saved location the map stays hidden until asked for
+    let pass = ui.ctx().cumulative_pass_nr();
+    match crate::panels::map::locations::hides_mini_map(app, id, gps, pass) {
+        Some(loc) => {
+            ui.label(
+                egui::RichText::new(crate::i18n::tr_format!("In the private location “{name}”: its map is hidden.", name = loc.name))
+                    .size(11.0)
+                    .color(t.text_dim),
+            );
+            if text_button(ui, "showPrivateMap", crate::i18n::tr("Show Map"), false).clicked() {
+                app.map.loc.reveal_private = Some(id);
+            }
+        }
+        None => crate::panels::map::mini_map(app, ui, id, pos, width),
+    }
+}
+
 /// The Info panel's line about the photo's original and smart preview, and whether it is drawn in the accent colour:
 /// (cached answers, checked off the UI thread: unknown counts as online / no smart preview)
 pub(crate) fn smart_line(app: &LightcraftApp, p: &lightcraft_catalog::Photo) -> Option<(&'static str, bool)> {
@@ -237,7 +265,7 @@ fn camera_card(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &lightcraft_catalo
     let m = &p.meta;
     // camera, lens and the capture settings are editable (`exif_edit`): the file's values stay, an edit shows over them
     let scope = super::exif_edit::Scope::of(app, p);
-    egui::Frame::NONE.fill(t.canvas).corner_radius(6.0).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+    let card = egui::Frame::NONE.fill(t.canvas).corner_radius(6.0).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let dim = |s: &str| egui::RichText::new(s.to_string()).size(12.0).color(t.text_label);
         super::exif_edit::camera_lens(app, ui, &scope);
@@ -262,6 +290,7 @@ fn camera_card(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &lightcraft_catalo
             register(ui, "info:focus", r.response.rect);
         }
     });
+    register(ui, "info:card", card.response.rect);
 }
 
 /// The camera's focus mode, AF area and tracking in the interface language ("AF-C · Wide · Animal Eye

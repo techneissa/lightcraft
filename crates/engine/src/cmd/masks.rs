@@ -160,6 +160,9 @@ fn masks_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Mas
     let mut active = s.active_mask;
     f(&mut d.masks, &mut active)?;
     s.set_develop(id, d, label)?;
+    if active != s.active_mask {
+        s.active_component = None;
+    }
     s.active_mask = active;
     Ok(json!({"activeMask": active}))
 }
@@ -316,7 +319,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Brush Stroke",
             [],
             None,
-            "{id?: maskId, points: [[x,y],…] normalized, size?: fraction of long edge (0.03), feather?, flow?, density?, erase?: bool, autoMask?: bool, pressure?: [p,…] pen pressure 0..1 per point (scales each dab's size and flow; omitted: full), connect?: bool — start from the last point of the mask's last stroke (⇧-click), size / feather / flow tapering from that stroke's to these} → {activeMask, connected}",
+            "{id?: maskId, points: [[x,y],…] normalized, size?: fraction of long edge (0.03), feather?, flow?, density?, erase?: bool, autoMask?: bool, component?: index of the brush part to paint into (default: the selected part when it is a brush part, else the mask's last), pressure?: [p,…] pen pressure 0..1 per point (scales each dab's size and flow; omitted: full), connect?: bool — start from the last point of the mask's last stroke (⇧-click), size / feather / flow tapering from that stroke's to these} → {activeMask, connected}",
             has_active,
             |s, p| {
                 let pts: Vec<Point> = p
@@ -342,7 +345,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mut connected = false;
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
                 let want = optional_mask_id(p, "mask.brushStroke")?.or(s.active_mask);
+                let selected = s.active_component;
                 let adjust = super::mask_effects::new_mask_adjust(s, "brush");
+                let mut painted: Option<(u32, usize)> = None;
                 let mut out = masks_edit(s, "mask.brushStroke", "Brush", |masks, active| {
                     let i = match want.and_then(|m| masks.iter().position(|x| x.id == m)) {
                         Some(i) => i,
@@ -353,9 +358,10 @@ pub fn specs() -> Vec<CommandSpec> {
                         }
                     };
                     let m = &mut masks[i];
-                    if let Some(MaskComponent { shape: MaskShape::Brush { strokes }, .. }) =
-                        m.components.iter_mut().rev().find(|c| matches!(c.shape, MaskShape::Brush { .. }))
-                    {
+                    // the part to paint into: the one asked for, else the selected one, else the last brush part
+                    let target = super::mask_parts::brush_target(m, p, selected, "mask.brushStroke")?;
+                    painted = Some((m.id, target.unwrap_or(m.components.len())));
+                    if let Some(MaskComponent { shape: MaskShape::Brush { strokes }, .. }) = target.and_then(|k| m.components.get_mut(k)) {
                         // the previous stroke's end and its brush values (not its points)
                         let anchor = strokes.last().filter(|_| connect).and_then(|l| {
                             Some((
@@ -388,6 +394,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     Ok(())
                 })?;
+                // painting selects the part it paints into
+                s.active_component = painted;
                 if let Some(o) = out.as_object_mut() {
                     o.insert("connected".into(), json!(connected));
                 }
@@ -638,10 +646,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 })
             }
         ),
-        cmd!("mask.select", "Select Mask", [], None, "{id|null}", has_active, |s, p| {
-            s.active_mask = optional_mask_id(p, "mask.select")?;
-            ok()
-        }),
+        cmd!(
+            "mask.select",
+            "Select Mask",
+            [],
+            None,
+            "{id|null, component?: index} — selects a mask, and with `component` one of its parts (null or omitted: no part)",
+            has_active,
+            |s, p| super::mask_parts::select(s, p)
+        ),
         cmd!("mask.delete", "Delete Mask", [], None, "{id?}", has_active, |s, p| {
             let mid = mask_id(p, s.active_mask, "mask.delete")?;
             masks_edit(s, "mask.delete", "Delete Mask", |masks, active| {
@@ -734,7 +747,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     "op" => "Change Component Mode",
                     a => return Err(bad(c, format!("unknown action {a:?} (invert|duplicate|delete|rename|op)"))),
                 };
-                masks_edit(s, c, label, |masks, active| {
+                let selected = s.active_component.filter(|(m, _)| *m == mid).map(|(_, j)| j);
+                let out = masks_edit(s, c, label, |masks, active| {
                     let i = find(masks, mid, c)?;
                     let comps = &mut masks[i].components;
                     let comp = comps.get_mut(k).ok_or_else(|| bad(c, "no such component"))?;
@@ -751,13 +765,14 @@ pub fn specs() -> Vec<CommandSpec> {
                                 comps[k].name = None;
                             }
                         }
-                        "op" => comp.op = op.ok_or_else(|| bad(c, "missing op"))?,
+                        "op" => comp.op = super::mask_parts::mode_for(k, op.ok_or_else(|| bad(c, "missing op"))?),
                         "duplicate" => {
                             let copy = comp.clone();
                             comps.insert(k + 1, copy);
                         }
                         _ => {
                             comps.remove(k);
+                            super::mask_parts::rebase_after_delete(comps, k);
                             if comps.is_empty() {
                                 masks.remove(i);
                                 *active = masks.last().map(|m| m.id);
@@ -765,7 +780,9 @@ pub fn specs() -> Vec<CommandSpec> {
                         }
                     }
                     Ok(())
-                })
+                })?;
+                super::mask_parts::follow(s, mid, selected, &action, k);
+                Ok(out)
             }
         ),
         cmd!("mask.move", "Move Mask", [], None, "{id?, to?: index (0 = top), delta?: ±n} — reorder the masks list", has_active, |s, p| {

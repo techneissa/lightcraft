@@ -323,5 +323,19 @@
   "Panel layout could not be restored: {error}": "Не удалось восстановить расположение панелей: {error}",
   "Panel move was not applied: {error}": "Перемещение панели не применено: {error}",
   "{name} is installed": "Модель {name} установлена",
-  "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено"
+  "{name} is installed and in use: face recognition is on": "Модель {name} установлена и используется: распознавание лиц включено",
+  "Delete the saved location “{name}”?": "Удалить сохранённое место «{name}»?",
+  "In the private location “{name}”: its map is hidden.": "В частном месте «{name}»: карта скрыта.",
+  "within {d} of {lat}, {lon}": "в пределах {d} от {lat}, {lon}",
+  "All Tracks ({n})": "Все треки ({n})",
+  "Track {n}": "Трек {n}",
+  "camera time, UTC{o}": "время камеры, UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "Задать смещение часового пояса… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "Привязать выбранные фото ({n})",
+  "{m} of them fall within the track's time range": "{m} из них попадают во время трека",
+  "{n} more tracks": "ещё треков: {n}",
+  "Deleted {n} map tiles": "Удалено фрагментов карты: {n}",
+  "{size} MB in {n} tiles (limit {cap} MB)": "{size} МБ, фрагментов: {n} (предел {cap} МБ)",
+  "Map tiles from {id}": "Фрагменты карты: {id}",
+  "In use: {url} (up to zoom {zoom})": "Используется: {url} (до масштаба {zoom})"
 }

@@ -6,6 +6,7 @@
 
 mod activity;
 mod before;
+mod book;
 pub(crate) mod browse;
 mod color;
 pub(crate) mod convert;
@@ -20,6 +21,7 @@ pub(crate) mod face_detect;
 mod face_models;
 mod face_recognize;
 pub mod filters;
+mod find_removals;
 mod focus;
 pub mod geocode;
 pub mod keywords;
@@ -28,8 +30,10 @@ pub mod local_profiles;
 pub mod lut_profiles;
 pub mod macos_colour;
 pub mod manage;
+mod map;
 pub mod mask_effect_files;
 pub mod mask_effects;
+mod mask_parts;
 mod masks;
 mod merge;
 pub mod metadata;
@@ -153,6 +157,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(color::specs());
         v.extend(curves::specs());
         v.extend(masks::specs());
+        v.extend(find_removals::specs());
         v.extend(organize::specs());
         v.extend(keywords::specs());
         v.extend(manage::specs());
@@ -173,6 +178,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(slideshow::specs());
         v.extend(export::specs());
         v.extend(print::specs());
+        v.extend(book::specs());
         v.extend(before::specs());
         v.extend(browse::specs());
         v.extend(missing::specs());
@@ -187,6 +193,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(face_recognize::specs());
         v.extend(focus::specs());
         v.extend(activity::specs());
+        v.extend(map::specs());
         v
     })
 }

@@ -82,10 +82,36 @@ pub fn shortcut_of<'a>(keymap: &'a Keymap, id: &str) -> Option<&'a str> {
     find_bindable(id).and_then(|b| binding(keymap, id, b.default))
 }
 
-/// Commands that intentionally share a key: the X pair and the A pair. Each has a declared condition
+/// Commands that intentionally share a key. Each has a declared condition
 /// ([`crate::keybinds::model::conditions::DECLARED`]) that excludes its partner's: Reject Photo and
-/// Visualize Spots work outside the Crop tool, Swap Aspect and Lock Aspect Ratio inside it.
-pub const CONTEXTUAL: &[(&str, &str)] = &[("photo.reject", "crop.rotateAspect"), ("view.visualizeSpots", "crop.lockAspect")];
+/// Visualize Spots work outside the Crop tool, Swap Aspect and Lock Aspect Ratio inside it; in the
+/// Map view H, `\`, O, ⌘K, `=` and `-` are the map's ([`MAP_ONLY`]) and the grids' commands on the
+/// same keys (Remove, Show Original, the mask overlay, Add Keywords, thumbnail size) work elsewhere.
+pub const CONTEXTUAL: &[(&str, &str)] = &[
+    ("photo.reject", "crop.rotateAspect"),
+    ("view.visualizeSpots", "crop.lockAspect"),
+    ("panel.remove", "map.showPins"),
+    ("view.showOriginal", "map.filterBar"),
+    ("view.maskOverlay", "map.showLocations"),
+    ("view.thumbSizeUp", "map.zoomIn"),
+    ("view.thumbSizeDown", "map.zoomOut"),
+    ("panel.addKeywords", "map.lockMarkers"),
+];
+
+/// Commands whose keys work in the Map view only (Lightroom Classic's Map module keys, plus H to
+/// hide pins). There a map key wins over another command on the same key (H is Remove, `\` Show
+/// Original, O the mask overlay and ⌘K Add Keywords elsewhere); outside it a map key does nothing.
+pub const MAP_ONLY: &[&str] = &[
+    "map.showPins",
+    "map.lockMarkers",
+    "map.filterBar",
+    "map.showLocations",
+    "map.zoomIn",
+    "map.zoomOut",
+    "map.fit",
+    "map.location.new",
+    "map.settings",
+];
 
 /// Commands other than `id` whose first shortcut is `sc` or overlaps it (a chord and the key that
 /// leads it); contextual partners excepted. See [`crate::keybinds::model::conflicts`] for both slots.
@@ -479,6 +505,9 @@ fn fire_owned(app: &mut LightcraftApp, ctx: &egui::Context) {
 /// The keys pressed this frame: the commands to fire, and the aliases (command and params) to run.
 fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, Vec<(&'static str, serde_json::Value)>) {
     let mut fire: Vec<String> = Vec::new();
+    let in_map = app.ui.view == crate::state::ViewMode::Map;
+    // the key each command in `fire` came from (the Map view's keys win over others on theirs)
+    let mut fired_keys: Vec<(&'static str, (Modifiers, Key))> = Vec::new();
     // shortcuts the native menu bar handles (it consumes those key presses itself)
     let native = |sc: &str| app.native_shortcuts.contains(sc);
     let mut aliased: Vec<(&'static str, serde_json::Value)> = Vec::new();
@@ -528,14 +557,18 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
                     }
                 } else {
                     fire.push(id.to_string());
+                    fired_keys.push((b.id, (m, k)));
                 }
             }
         }
         // a command's second shortcut, when it is one key (a chord is [`crate::keybinds::runtime`]'s):
         // a declared one runs as the fixed aliases always did, one the user chose like a first shortcut
         for (id, (m, k), sc, declared) in &second {
+            // (in the Map view `+` zooms the map: Size Up's declared condition keeps it out of
+            // that view, and the remap below turns it into Zoom In)
+            let size_up_in_map = in_map && *id == "view.thumbSizeUp";
             // a held Space repeats: only its first press counts, as for the fixed aliases
-            if *k == Key::Escape && popup_open || *k == Key::Space && space_repeat || !matches(i, *m, *k) || !holds(id) {
+            if *k == Key::Escape && popup_open || *k == Key::Space && space_repeat || !matches(i, *m, *k) || !(holds(id) || size_up_in_map) {
                 continue;
             }
             if *declared {
@@ -558,6 +591,19 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
         }
         fixed_photo_keys(i, &native, &taken, grid_navigation, &mut fire);
     });
+    // the Map view's keys: there they take their key from any other command; elsewhere they don't fire
+    let map_keys: Vec<(Modifiers, Key)> = fired_keys.iter().filter(|(id, _)| MAP_ONLY.contains(id)).map(|(_, k)| *k).collect();
+    fire.retain(|f| {
+        if MAP_ONLY.contains(&f.as_str()) { in_map } else { !(in_map && fired_keys.iter().any(|(id, k)| *id == f.as_str() && map_keys.contains(k))) }
+    });
+    // `+` (keypad, Shift+=) sizes the grid thumbnails like `=`; in the Map view it zooms like `=`
+    if in_map {
+        for (id, _) in aliased.iter_mut() {
+            if *id == "view.thumbSizeUp" {
+                *id = "map.zoomIn";
+            }
+        }
+    }
     (fire, aliased)
 }
 
@@ -783,9 +829,8 @@ fn delete_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
     use crate::state::RightPanel as R;
     match app.ui.right {
         R::Masking => {
-            if app.session.active_mask.is_some() {
-                let _ = app.run("mask.delete", json!({}));
-            }
+            // the selected part, else the mask
+            crate::panels::mask_parts::delete_selected(app);
             return true;
         }
         R::Remove => {

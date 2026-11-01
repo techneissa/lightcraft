@@ -323,5 +323,19 @@
   "Panel layout could not be restored: {error}": "Rozložení panelů se nepodařilo obnovit: {error}",
   "Panel move was not applied: {error}": "Přesun panelu nebyl použit: {error}",
   "{name} is installed": "{name} je nainstalován",
-  "{name} is installed and in use: face recognition is on": "{name} je nainstalován a používán: rozpoznávání obličejů je zapnuto"
+  "{name} is installed and in use: face recognition is on": "{name} je nainstalován a používán: rozpoznávání obličejů je zapnuto",
+  "Delete the saved location “{name}”?": "Odstranit uložené místo „{name}“?",
+  "In the private location “{name}”: its map is hidden.": "V soukromém místě „{name}“: jeho mapa je skrytá.",
+  "within {d} of {lat}, {lon}": "do {d} od {lat}, {lon}",
+  "All Tracks ({n})": "Všechny trasy ({n})",
+  "Track {n}": "Trasa {n}",
+  "camera time, UTC{o}": "čas fotoaparátu, UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "Nastavit posun časového pásma… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "Doplnit polohu vybraných fotografií: {n}",
+  "{m} of them fall within the track's time range": "{m} z nich spadá do časového rozsahu trasy",
+  "{n} more tracks": "Další trasy: {n}",
+  "Deleted {n} map tiles": "Odstraněno dlaždic mapy: {n}",
+  "{size} MB in {n} tiles (limit {cap} MB)": "{size} MB v dlaždicích: {n} (limit {cap} MB)",
+  "Map tiles from {id}": "Dlaždice mapy z {id}",
+  "In use: {url} (up to zoom {zoom})": "Používá se: {url} (až do přiblížení {zoom})"
 }

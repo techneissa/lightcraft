@@ -36,6 +36,9 @@ pub enum Dialog {
     /// File ▸ Print…: the Print module. Its state is the session's (`print.*`); the page on show
     /// and the selected cell are [`UiState::print`].
     Print,
+    /// File ▸ Book…: the Book module. Its books are the session's (`book.*`); the page on show and
+    /// the drag are [`UiState::book`].
+    Book,
     ContactSheet {
         options: lightcraft_engine::contact_sheet::Options,
     },
@@ -151,6 +154,11 @@ pub enum Dialog {
         keyword: String,
         /// Photos that have it (or one below it).
         count: usize,
+    },
+    /// Delete a saved location (Map view), after asking: it isn't an undo step.
+    DeleteLocation {
+        id: u64,
+        name: String,
     },
     /// Merge keywords into another one on every photo.
     MergeKeywords {
