@@ -448,3 +448,87 @@ fn every_book_command_is_registered_with_a_description() {
         assert!(spec.params.len() > 10, "{id} has no description");
     }
 }
+
+fn corrupt_copies(files: &MemStore) -> Vec<String> {
+    files.files.lock().unwrap().keys().filter(|k| k.starts_with("books.json.corrupt")).cloned().collect()
+}
+
+/// A books.json from a newer LightCraft may use keys this build does not know: it is a newer file,
+/// not a damaged one, so it is left exactly as it is, no copy is made and no save replaces it.
+#[test]
+fn a_newer_books_file_with_new_keys_is_left_untouched() {
+    let newer = serde_json::to_vec(&json!({
+        "version": 7, "extra": true,
+        "library": {"books": [{"id": 1, "name": "x", "flavour": "new", "pages": []}], "shelf": 1}
+    }))
+    .unwrap();
+    let files = MemStore::new();
+    files.set("books.json", newer.clone());
+    let mut s = open(&files);
+    let warnings = s.take_library_warnings();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("books.json") && warnings[0].contains("newer") && warnings[0].contains("untouched"), "{warnings:?}");
+    assert!(corrupt_copies(&files).is_empty(), "a newer file is not damaged: no copy");
+    let ids = demo_ids(&s, 2);
+    let e = fails(&mut s, "book.create", json!({"ids": ids}));
+    assert!(e.contains("books.json") && e.contains("untouched"), "{e}");
+    assert_eq!(files.get("books.json").unwrap(), newer, "never overwritten");
+    assert!(corrupt_copies(&files).is_empty());
+    // opening again changes nothing either
+    drop(open(&files));
+    assert_eq!(files.get("books.json").unwrap(), newer);
+    assert!(corrupt_copies(&files).is_empty());
+}
+
+#[test]
+fn a_huge_books_file_is_not_read_and_blocks_saves() {
+    let files = MemStore::new();
+    let huge = vec![b' '; crate::book::store::MAX_FILE + 1];
+    files.set("books.json", huge.clone());
+    let mut s = open(&files);
+    let warnings = s.take_library_warnings();
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(warnings[0].contains("books.json") && warnings[0].contains("untouched"), "{warnings:?}");
+    let ids = demo_ids(&s, 1);
+    fails(&mut s, "book.create", json!({"ids": ids}));
+    assert_eq!(files.get("books.json").unwrap(), huge);
+}
+
+#[test]
+fn book_set_rejects_mistyped_settings_and_names() {
+    let mut s = Session::with_demo();
+    let ids = demo_ids(&s, 2);
+    run(&mut s, "book.create", json!({"ids": ids}));
+    for p in [
+        json!({"settings": null, "margin": 1}),
+        json!({"settings": 5}),
+        json!({"settings": [1]}),
+        json!({"settings": "x"}),
+        json!({"name": 5}),
+        json!({"name": null}),
+        json!({"name": ["a"]}),
+    ] {
+        fails(&mut s, "book.set", p);
+    }
+    assert_eq!(run(&mut s, "book.get", json!({}))["settings"]["margin"], 0.5);
+    run(&mut s, "book.set", json!({"settings": {"margin": 1.0}}));
+    assert_eq!(run(&mut s, "book.get", json!({}))["settings"]["margin"], 1.0);
+}
+
+#[test]
+fn a_photo_taken_off_a_page_goes_to_the_end_of_the_tray_and_the_tray_index_is_checked() {
+    let mut s = Session::with_demo();
+    let ids = demo_ids(&s, 4);
+    run(&mut s, "book.create", json!({"ids": ids, "cover": false, "preset": "two"}));
+    run(&mut s, "book.movePhoto", json!({"from": {"page": 0, "cell": 0}, "to": {"unplaced": 0}}));
+    // the tray holds one photo: the next one lands at the end, which is index 1 (or the end: `unplaced` = its length)
+    let b = run(&mut s, "book.movePhoto", json!({"from": {"page": 1, "cell": 0}, "to": {"unplaced": 1}}));
+    assert_eq!(b["unplaced"], json!([ids[0], ids[2]]));
+    // an index past the end of the tray is an error, and nothing moves
+    let before = run(&mut s, "book.get", json!({}));
+    fails(&mut s, "book.movePhoto", json!({"from": {"page": 0, "cell": 1}, "to": {"unplaced": 9}}));
+    assert_eq!(run(&mut s, "book.get", json!({})), before);
+    // the index places the photo there
+    let b = run(&mut s, "book.movePhoto", json!({"from": {"page": 0, "cell": 1}, "to": {"unplaced": 0}}));
+    assert_eq!(b["unplaced"], json!([ids[1], ids[0], ids[2]]));
+}
