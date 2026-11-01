@@ -1,2 +1,6 @@
 [alias]
 xtask = "run --package xtask --"
+
+# techneissa's fork: Fork CI (Linux) skips the accepted failures listed in fork/known-failures.txt.
+[target.'cfg(target_os = "linux")']
+runner = "fork/skip-known-failures.sh"

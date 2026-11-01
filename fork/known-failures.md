@@ -16,7 +16,25 @@
   adjustment of a +1 exposure mask shows while painting with the overlay hidden. Not touched by issue #26. Checked
   2026-11-01.
 
+### Accepted failures that Fork CI skips
+
+`fork/known-failures.txt` is the list Fork CI skips (one test path per line, `#` for a comment); it is read by
+`fork/skip-known-failures.sh`, cargo's test runner on Linux (`.cargo/config.toml`), which passes each line to the test
+binaries as `--skip`. A line skips every test whose path contains it, so write the full path. A red Fork CI run
+therefore means a failure nobody accepted. Add a line here and to the `.txt` only when techneissa accepts a failure;
+delete both when the test is fixed. A test file is never edited to hide a failure.
+
+- `tests::masking::a_brush_stroke_is_not_tinted_while_the_mask_overlay_is_hidden` (ui-egui): the same failure as above
+  under "on this Mac"; techneissa keeps it (2026-11-01: the fork's brush live preview deliberately shows the
+  adjustment while painting). Listed in `known-failures.txt`.
+
 ### Known failures on Fork CI only (Linux)
 
-None. `tests::macos_colour` (`crates/engine`) runs on macOS only (`#[cfg(target_os = "macos")]` in `tests.rs`,
+Open, not accepted, so not skipped: `tests::masking::mask_adjustments_hide_overlay_without_disabling_the_mask`
+(ui-egui) failed in the two `CI` runs on `custom` of 2026-11-01 that finished (41347506903, 41348289287) with
+`exposure initially needs scrolling: [[966.8 754.6] - [1093.5 770.6]] in [[883.5 82.0] - [1153.5 800.0]]`
+(`crates/ui-egui/src/tests/masking.rs:151`): after the masking rework the Exposure slider starts below the visible
+part of the side bar in the test's window. It needs a fix or techneissa's decision; until then Fork CI stays red.
+
+None other. `tests::macos_colour` (`crates/engine`) runs on macOS only (`#[cfg(target_os = "macos")]` in `tests.rs`,
 techneissa 2026-11-01): it failed on Linux and stopped `cargo test` before the later crates (ui-egui, apps) ran.
