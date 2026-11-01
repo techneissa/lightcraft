@@ -170,7 +170,7 @@ impl DirsNet {
         for j in 0..dec {
             (a, b) = self.mugi(&a, &b, &format!("{name}.{}", enc + 1 + j), narrow)?;
         }
-        let out = self.vb.pp(&format!("{name}.{}.seq.0", enc + 1 + dec));
+        let out = self.vb.pp(format!("{name}.{}.seq.0", enc + 1 + dec));
         Ok((conv1x1(&out, &a, narrow, narrow * 2)?, conv1x1(&out, &b, narrow, narrow * 2)?))
     }
 
@@ -184,7 +184,7 @@ impl DirsNet {
             for i in 0..self.cfg.prior_blocks {
                 (x, y) = self.mugi(&x, &y, &format!("conv_prior.block{stage}.{i}"), c)?;
             }
-            let down = self.vb.pp(&format!("conv_prior.block{stage}.{}.seq.0", self.cfg.prior_blocks));
+            let down = self.vb.pp(format!("conv_prior.block{stage}.{}.seq.0", self.cfg.prior_blocks));
             x = conv(&down, &x, (c, c * 2, 2), 2, 0)?;
             y = conv(&down, &y, (c, c * 2, 2), 2, 0)?;
             c *= 2;

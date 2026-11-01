@@ -35,12 +35,12 @@ pub fn installed_model(dir: &Path, model: &str) -> bool {
 #[cfg(not(target_arch = "wasm32"))]
 pub enum Runner {
     Dsrnet(Net),
-    Dirs(DirsNet),
+    Dirs(Box<DirsNet>),
 }
 #[cfg(not(target_arch = "wasm32"))]
 impl Runner {
     pub fn load(dir: &Path, model: &str, cpu: bool) -> Result<Self, String> {
-        if is_dirs(model) { DirsNet::load(dir, cpu).map(Self::Dirs) } else { Net::load(dir, cpu).map(Self::Dsrnet) }
+        if is_dirs(model) { DirsNet::load(dir, cpu).map(|n| Self::Dirs(Box::new(n))) } else { Net::load(dir, cpu).map(Self::Dsrnet) }
     }
     pub fn infer(&self, rgb: &[u8], w: usize, h: usize) -> Result<Vec<[f32; 3]>, String> {
         match self {
