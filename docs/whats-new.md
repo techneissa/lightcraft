@@ -18,6 +18,9 @@
   lenses, pick one with a click or the arrow keys, or type any name you like.
 - Numbers are checked as you type them: `35 mm`, `f/2.8`, `1/250` or `2.5"`, `400`. A value that makes no sense says
   why and changes nothing.
+- Edited camera, lens and exposure values are saved in the photo's XMP sidecar (**Save Metadata to File**, or
+  automatically with **Automatically write changes into XMP sidecars**) and read back from it, so they survive a new
+  library and show in other apps. Only the values you edited are written; **Reset** removes them from the sidecar.
 - Search, filters, smart albums, rename tokens and slideshow text use the edited values, and so do exported files
   (their EXIF, following Export ▸ Metadata). Colours and lens corrections still follow the camera and lens the file
   records, so an edit never changes how a photo looks. Reload from Disk keeps your edits.
