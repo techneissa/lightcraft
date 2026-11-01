@@ -188,12 +188,16 @@ impl Finds {
         taken
     }
 
-    /// Put entries `take` took back, as they were.
+    /// Put entries back in the list of `photo` (those `take` took, or ones made elsewhere), keeping their ids.
     pub fn restore(&self, photo: Option<PhotoId>, taken: Vec<Entry>) {
         let mut s = self.lock();
-        if s.photo != photo || photo.is_none() {
-            return;
+        let Some(photo) = photo else { return };
+        if s.photo != Some(photo) {
+            s.photo = Some(photo);
+            s.entries = Arc::default();
+            s.last = None;
         }
+        s.next_id = s.next_id.max(taken.iter().map(|e| e.id).max().unwrap_or(0));
         let mut entries: Vec<Entry> = s.entries.iter().cloned().chain(taken).collect();
         entries.sort_by_key(|e| e.id);
         s.entries = Arc::new(entries);

@@ -15,6 +15,7 @@ mod crop;
 mod history;
 mod info;
 mod keywords;
+mod remove_finds;
 
 #[cfg(test)]
 use crop::aspect_label;
