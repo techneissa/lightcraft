@@ -534,7 +534,8 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
         // a command's second shortcut, when it is one key (a chord is [`crate::keybinds::runtime`]'s):
         // a declared one runs as the fixed aliases always did, one the user chose like a first shortcut
         for (id, (m, k), sc, declared) in &second {
-            if *k == Key::Escape && popup_open || !matches(i, *m, *k) || !holds(id) {
+            // a held Space repeats: only its first press counts, as for the fixed aliases
+            if *k == Key::Escape && popup_open || *k == Key::Space && space_repeat || !matches(i, *m, *k) || !holds(id) {
                 continue;
             }
             if *declared {

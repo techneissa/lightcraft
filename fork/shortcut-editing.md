@@ -19,3 +19,5 @@ Keyboard shortcuts, VS Code style: two shortcuts per command (the first is what 
 ## Tests
 
 `keybinds`, `shortcut_editing`, `tests::keymap`, `shortcuts::`
+
+The official `a_held_space_toggles_the_zoom_once_however_long_it_repeats` (`tests/space_hand.rs`) holds too: the second-shortcut loop in `pressed_commands` skips a repeated Space, like the fixed aliases.
