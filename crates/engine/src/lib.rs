@@ -39,6 +39,7 @@ mod faces_index;
 #[cfg(not(target_arch = "wasm32"))]
 mod faces_worker;
 pub mod files;
+pub mod find_removals;
 #[cfg(not(target_arch = "wasm32"))]
 mod focus_scan;
 pub mod fonts;
@@ -327,6 +328,8 @@ pub struct Session {
     pub segmenter: segment::Segmenter,
     /// Selected spot (Remove panel), by index into the active photo's spots.
     pub active_spot: Option<usize>,
+    /// Find People / Find Wires: the candidates for the Remove tool and the searches that make them.
+    pub finds: find_removals::Finds,
     /// The persistent library this session writes to (`None` = in-memory only).
     pub library: Option<library::Library>,
     /// Identity of current library opening; refreshed only after a successful open.
@@ -499,6 +502,7 @@ impl Session {
             active_mask: None,
             segmenter: segment::Segmenter::default(),
             active_spot: None,
+            finds: Default::default(),
             library: None,
             library_identity: Arc::new(()),
             xmp: sidecar::XmpPrefs::default(),
