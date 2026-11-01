@@ -130,7 +130,7 @@ fn a_mask_drag_without_alt_or_of_another_mask_slider_shows_the_mask() {
     }
     frames(&mut h, 10);
     assert_eq!(h.app.ui.dragging_control.as_deref(), Some("contrast"));
-    assert!(matches!(shown(&h), Overlay::Mask { .. }), "Contrast has no ⌥ preview");
+    assert!(crate::panels::clipping::alt_overlay(&h.app).is_none(), "Contrast has no ⌥ preview");
     press(&mut h, from, Modifiers::ALT, false);
     h.app.synthetic.push(Event::ModifiersChanged(Modifiers::NONE));
     h.settle(SETTLE);

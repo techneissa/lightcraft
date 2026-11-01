@@ -89,7 +89,7 @@ fn chips_name_the_sets_and_remove_them() {
     s.execute("library.filter", &json!({"ratings": [0, 2], "flags": ["pick", "none"]})).unwrap();
     let chips = crate::filter_chips(&s.filter, &s.catalog);
     let labels: Vec<&str> = chips.iter().map(|c| c.label.as_str()).collect();
-    assert_eq!(labels, ["Rating: Unrated, 2★", "Flag: pick or none"]);
+    assert_eq!(labels, ["Flag: pick or none", "Rating: Unrated, 2★"]);
     for c in chips {
         s.execute("library.filter", &c.clear).unwrap();
     }

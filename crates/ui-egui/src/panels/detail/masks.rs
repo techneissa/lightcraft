@@ -571,7 +571,7 @@ fn brush_tool(
     let visible = active.and_then(|id| d.masks.iter().find(|m| m.id == id)).is_none_or(|m| m.visible);
     let all = app.ui.mask_overlay_all && (visible || d.masks.iter().any(|m| m.visible && !m.components.is_empty()));
     let shown = if all { visible } else { app.ui.mask_overlay } && !(colored && app.ui.mask_overlay_opacity <= 0.0);
-    if shown && let Some(Gesture::Brush { points, pressure }) = &app.gesture {
+    if let Some(Gesture::Brush { points, pressure }) = &app.gesture {
         let screen: Vec<Pos2> = points.iter().map(|q| map.screen(*q)).collect();
         // opacity 0 only gets here in the image views, which ignore it: a fixed tint there
         let opacity = if app.ui.mask_overlay_opacity > 0.0 { app.ui.mask_overlay_opacity / 100.0 } else { 110.0 / 255.0 };
@@ -591,9 +591,10 @@ fn brush_tool(
             .active()
             .filter(|_| !app.renderer.textures.contains_key(&crate::render::Slot::Region))
             .and_then(|id| super::brush_preview::images(app, id, map.rect));
+        // (the live adjustment shows with the overlay hidden too: only the tint follows `shown`, issue #2549)
         let look = crate::brush_live::Look {
             images: images.as_ref(),
-            overlay: images.is_none() || app.ui.mask_overlay,
+            overlay: shown && (images.is_none() || app.ui.mask_overlay),
             auto: app.ui.brush_auto_mask,
             now: ui.input(|i| i.time),
         };
