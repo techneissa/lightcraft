@@ -36,9 +36,6 @@ pub enum Dialog {
     /// File ▸ Print…: the Print module. Its state is the session's (`print.*`); the page on show
     /// and the selected cell are [`UiState::print`].
     Print,
-    /// File ▸ Book…: the Book module. Its books are the session's (`book.*`); the page on show and
-    /// the drag are [`UiState::book`].
-    Book,
     ContactSheet {
         options: lightcraft_engine::contact_sheet::Options,
     },

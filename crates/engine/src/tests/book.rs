@@ -225,11 +225,11 @@ fn hostile_input_is_an_error_and_changes_nothing() {
         fails(&mut s, "book.create", p);
     }
     assert_eq!(run(&mut s, "book.list", json!({}))["books"], json!([]), "nothing was created");
-    // more photos than 50 pages can hold at one photo per page
+    // more photos than 200 pages can hold at one photo per page
     let all: Vec<u64> = s.catalog.photos().map(|p| p.id.0).collect();
-    let many: Vec<u64> = all.iter().copied().cycle().take(51).collect();
+    let many: Vec<u64> = all.iter().copied().cycle().take(201).collect();
     let e = fails(&mut s, "book.create", json!({"ids": many, "preset": "one", "cover": false}));
-    assert!(e.contains("50 pages"), "{e}");
+    assert!(e.contains("200 pages"), "{e}");
 }
 
 #[test]
@@ -381,15 +381,15 @@ fn a_stopped_export_leaves_no_file_and_no_row() {
     let job = render::prepare(&mut s, &book).unwrap();
     assert!(job.steps() >= 3);
     let mut seen = 0;
-    let e = job.run(&mut |_, _| {
+    let e = job.run_rasters(&mut |_, _| {
         seen += 1;
         false
     });
     assert_eq!(e.err().as_deref(), Some(render::CANCELLED));
     assert_eq!(seen, 1, "it stops at the first check");
     // running to the end gives one raster per page
-    let rendered = render::prepare(&mut s, &book).unwrap().run(&mut |_, _| true).unwrap();
-    assert_eq!(rendered.pages.len(), book.pages.len());
+    let rendered = render::prepare(&mut s, &book).unwrap().run_rasters(&mut |_, _| true).unwrap();
+    assert_eq!(rendered.len(), book.pages.len());
     assert!(s.activity.list().is_empty());
 }
 
@@ -545,11 +545,11 @@ fn an_exported_page_has_the_template_the_model_says() {
     book.settings.fill = true;
     book.pages = vec![Page::with(Template::FullBleed, &ids[..1]), Page::with(Template::Grid4, &ids[1..5])];
     book.validate().unwrap();
-    let rendered = render::prepare(&mut s, &book).unwrap().run(&mut |_, _| true).unwrap();
-    assert_eq!(rendered.pages.len(), 2);
+    let rendered = render::prepare(&mut s, &book).unwrap().run_rasters(&mut |_, _| true).unwrap();
+    assert_eq!(rendered.len(), 2);
     let white = crate::print::compose::rec2020_from_srgb8([255; 3]);
     let px = |page: usize, x: u32, y: u32| {
-        let p = &rendered.pages[page];
+        let p = &rendered[page];
         assert_eq!((p.width, p.height), (720, 576));
         let at = ((y * p.width + x) * 3) as usize;
         [p.rgb[at], p.rgb[at + 1], p.rgb[at + 2]]

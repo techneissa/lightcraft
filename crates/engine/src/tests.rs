@@ -9,6 +9,7 @@ mod album_remove;
 mod albums_local;
 mod animated_gif;
 mod book;
+mod book_view;
 mod color;
 mod constrain_crop;
 mod crop_angle;

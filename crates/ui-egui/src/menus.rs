@@ -31,7 +31,7 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
     match id {
         "library.selectOnlyActive" => app.session.active().is_some(),
         "view.thumbSizeUp" | "view.thumbSizeDown" => thumb_size_view(app),
-        "dialog.contactSheet" | "app.contactSheet" | "dialog.print" | "app.print" | "dialog.book" | "app.bookPdf" | "app.bookJpeg" => {
+        "dialog.contactSheet" | "app.contactSheet" | "dialog.print" | "app.print" | "app.bookPdf" | "app.bookJpeg" => {
             !cfg!(target_arch = "wasm32") && app.session.active().is_some() && app.export.is_none()
         }
         "dialog.animatedGif" | "app.animatedGif" => {

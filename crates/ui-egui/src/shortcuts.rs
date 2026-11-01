@@ -459,6 +459,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
         }
         return;
     }
+    if app.recording_shortcut.is_none() && app.ui.name_edit.is_none() && crate::panels::book::handle_key(app, ctx) {
+        app.keybinds.pending = None;
+        return;
+    }
     if app.recording_shortcut.is_none() && app.ui.name_edit.is_none() && crate::panels::person::handle_bulk_key(app, ctx) {
         app.keybinds.pending = None;
         return;

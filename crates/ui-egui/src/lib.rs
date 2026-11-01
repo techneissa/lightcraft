@@ -80,7 +80,6 @@ use serde_json::Value;
 pub use command_error::CommandError;
 pub use control::{ControlRequest, ControlResponse};
 pub use dialogs::animated_gif;
-pub use dialogs::book_view;
 pub use dialogs::credits;
 pub use dialogs::import;
 pub use dialogs::lightroom_destination;

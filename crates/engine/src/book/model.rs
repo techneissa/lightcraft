@@ -147,12 +147,47 @@ impl BookSettings {
     }
 }
 
+/// Most a photo is magnified in its frame (1 fills the frame).
+pub const MAX_ZOOM: f64 = 4.0;
+
+/// How a photo shows in its frame: it fills the frame, magnified `zoom` times, around the point
+/// (`x`, `y`) of the photo. All normalized to the photo (0 to 1 across and down), so the crop means
+/// the same at any size ([`geometry::crop_window`] turns it into the part of the photo that shows).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Crop {
+    pub zoom: f64,
+    pub x: f64,
+    pub y: f64,
+}
+
+impl Crop {
+    /// The photo filling its frame, centred.
+    pub const FILL: Crop = Crop { zoom: 1.0, x: 0.5, y: 0.5 };
+
+    pub fn validate(&self) -> Result<(), String> {
+        let unit = |v: f64| v.is_finite() && (0.0..=1.0).contains(&v);
+        if !(self.zoom.is_finite() && (1.0..=MAX_ZOOM).contains(&self.zoom)) {
+            return Err(format!("a crop's zoom is a number from 1 to {MAX_ZOOM}"));
+        }
+        if !(unit(self.x) && unit(self.y)) {
+            return Err("a crop's x and y are numbers from 0 to 1".into());
+        }
+        Ok(())
+    }
+}
+
 /// One page: a template and a photo (or none) for each of its cells, in reading order.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, rename_all = "camelCase", deny_unknown_fields)]
 pub struct Page {
     pub template: Template,
     pub slots: Vec<Option<u64>>,
+    /// How each cell's photo shows: `None` as the book's settings say (whole or filled), else the
+    /// [`Crop`]. As many as `slots`.
+    pub crops: Vec<Option<Crop>>,
+    /// Auto Layout leaves a locked page as it is.
+    pub locked: bool,
 }
 
 impl Page {
@@ -162,7 +197,22 @@ impl Page {
         for (slot, p) in slots.iter_mut().zip(photos) {
             *slot = Some(*p);
         }
-        Page { template, slots }
+        Page { template, crops: vec![None; slots.len()], slots, locked: false }
+    }
+
+    /// Puts `photo` in `cell` (which must exist) with the crop `crop`; returns what was there.
+    pub fn put(&mut self, cell: usize, photo: Option<u64>, crop: Option<Crop>) -> Option<(Option<u64>, Option<Crop>)> {
+        let slot = self.slots.get_mut(cell)?;
+        let old = (std::mem::replace(slot, photo), self.crops.get(cell).copied().flatten());
+        if let Some(c) = self.crops.get_mut(cell) {
+            *c = crop.filter(|_| photo.is_some());
+        }
+        Some(old)
+    }
+
+    /// The crop of `cell`.
+    pub fn crop(&self, cell: usize) -> Option<Crop> {
+        self.crops.get(cell).copied().flatten()
     }
 }
 
@@ -214,9 +264,23 @@ impl Book {
         if self.cover && self.pages.is_empty() {
             return Err("a book with a cover has a first page".into());
         }
-        for (i, p) in self.pages.iter().enumerate() {
+        for (i, p) in self.pages.iter_mut().enumerate() {
             if p.slots.len() != p.template.cells() {
                 return Err(format!("page {} has {} slots but its template has {} cells", i + 1, p.slots.len(), p.template.cells()));
+            }
+            // a book saved before crops existed has none: every cell shows as the settings say
+            if p.crops.len() < p.slots.len() {
+                p.crops.resize(p.slots.len(), None);
+            }
+            if p.crops.len() != p.slots.len() {
+                return Err(format!("page {} has {} crops but {} cells", i + 1, p.crops.len(), p.slots.len()));
+            }
+            for (c, crop) in p.crops.iter().enumerate() {
+                match (crop, p.slots.get(c).copied().flatten()) {
+                    (Some(crop), Some(_)) => crop.validate().map_err(|e| format!("page {}: {e}", i + 1))?,
+                    (Some(_), None) => return Err(format!("page {} has a crop for the empty cell {}", i + 1, c + 1)),
+                    _ => {}
+                }
             }
         }
         if self.photos().len() > MAX_PHOTOS {

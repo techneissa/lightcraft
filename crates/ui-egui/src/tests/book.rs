@@ -1,20 +1,23 @@
-//! The Book dialog, driven through the control channel: creating a book, the template and setup
-//! buttons, dragging a photo onto another cell, the views and the PDF.
+//! The Book view, driven through the control channel: opening it from File ▸ Book… and the side bar,
+//! the page strip, dragging photos between the pool and the frames, zoom and pan, Add to Book and its
+//! questions, the side bar's rename, and undo.
 
-use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use serde_json::{Value, json};
 
 use crate::headless::Headless;
-use crate::state::Dialog;
+use crate::state::ViewMode;
 use crate::{LightcraftApp, Services};
 
-const T: Duration = Duration::from_secs(30);
+const T: Duration = Duration::from_secs(60);
 
-fn demo(services: Services) -> Headless {
+fn demo() -> Headless {
+    let services = Services { png: None, local_places: Some(Vec::new()), ..Default::default() };
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
-    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    let mut h = Headless::new(app, [1600.0, 1000.0], 1.0);
+    let r = h.request("ui.set", json!({"leftPanel": true, "sidebar": [{"id": "albums", "hidden": true}, {"id": "local", "hidden": true}, {"id": "byDate", "hidden": true}, {"id": "folders", "hidden": true}, {"id": "keywords", "hidden": true}]}), T);
+    assert_eq!(r["ok"], true, "{r}");
     h.settle(T);
     h
 }
@@ -40,302 +43,347 @@ fn cmd(h: &mut Headless, id: &str, params: Value) -> Value {
     r["result"].clone()
 }
 
-fn ids(h: &Headless, n: usize) -> Vec<u64> {
-    h.app.session.catalog.photos().take(n).map(|p| p.id.0).collect()
+fn key(h: &mut Headless, key: &str) {
+    let r = h.request("ui.key", json!({"key": key}), T);
+    assert_eq!(r["ok"], true, "{key}: {r}");
+    h.settle(T);
 }
 
-fn open_book(h: &mut Headless) {
-    cmd(h, "dialog.book", json!({}));
-    assert!(matches!(h.app.ui.dialog, Some(Dialog::Book)));
+/// Drags the middle of widget `from` onto the middle of widget `to`.
+fn drag_onto(h: &mut Headless, from: &str, to: &str) {
+    let (a, b) = (rect(h, from).center(), rect(h, to).center());
+    let r = h.request("ui.drag", json!({"x": a.x, "y": a.y, "toX": b.x, "toY": b.y, "steps": 10}), T);
+    assert_eq!(r["ok"], true, "{from} → {to}: {r}");
+    h.settle(T);
+}
+
+fn ids(h: &Headless, n: usize) -> Vec<u64> {
+    h.app.session.catalog.photos().take(n).map(|p| p.id.0).collect()
 }
 
 fn book(h: &Headless) -> lightcraft_engine::book::Book {
     h.app.session.books.find(None).unwrap().clone()
 }
 
-fn media_box(pdf: &[u8]) -> (f64, f64) {
-    let text = String::from_utf8_lossy(pdf);
-    let at = text.find("/MediaBox [").expect("a MediaBox") + "/MediaBox [".len();
-    let nums: Vec<f64> = text[at..].split(']').next().unwrap().split_whitespace().map(|v| v.parse().unwrap()).collect();
-    (nums[2], nums[3])
+/// A book of `n` photos, one per page, no cover, open in the view.
+fn open_book(h: &mut Headless, n: usize, preset: &str) {
+    let photos = ids(h, n);
+    cmd(h, "book.create", json!({"ids": photos, "preset": preset, "cover": false}));
+    cmd(h, "view.book", json!({}));
+    assert_eq!(h.app.ui.view, ViewMode::Book);
 }
 
 #[test]
-fn the_dialog_opens_without_a_book_and_makes_one_from_the_view() {
-    let mut h = demo(Services::default());
-    open_book(&mut h);
-    assert!(has(&h, "button:bookNewView") && has(&h, "button:dialogOk"));
-    assert!(!has(&h, "book:pageLabel"), "no book, no pages");
-    click(&mut h, "button:bookNewView");
-    let b = book(&h);
-    assert_eq!(b.photos().len(), h.app.session.visible().len());
-    assert!(has(&h, "book:pageLabel") && has(&h, "book:page:0") && has(&h, "book:cell:0:0"));
-    click(&mut h, "button:dialogCancel");
-    assert!(h.app.ui.dialog.is_none());
-}
-
-/// Opens a dropdown and picks its row.
-fn pick(h: &mut Headless, combo: &str, row: &str) {
-    click(h, combo);
-    click(h, row);
+fn file_book_opens_the_view_not_a_dialog_and_the_side_bar_lists_the_books() {
+    let mut h = demo();
+    cmd(&mut h, "dialog.book", json!({}));
+    assert_eq!(h.app.ui.view, ViewMode::Book);
+    assert!(h.app.ui.dialog.is_none(), "a view in the main window, not a dialog");
+    assert!(has(&h, "button:bookNewEmpty"), "no book yet");
+    let photos = ids(&h, 4);
+    cmd(&mut h, "book.create", json!({"name": "Alps", "ids": photos}));
+    cmd(&mut h, "book.create", json!({"name": "Coast", "ids": photos}));
+    h.settle(T);
+    assert!(has(&h, "source:book:1") && has(&h, "source:book:2"), "both books are in the side bar");
+    assert!(has(&h, "book:spread") && has(&h, "book:strip") && has(&h, "book:pool"), "spread, strip and pool");
+    // a book of the side bar opens it; a library row leaves; coming back keeps the page
+    click(&mut h, "source:book:1");
+    assert_eq!(h.app.session.books.current, Some(1));
+    h.app.ui.book.page = 1;
+    click(&mut h, "source:all");
+    assert_eq!(h.app.ui.view, ViewMode::PhotoGrid);
+    click(&mut h, "source:book:1");
+    assert_eq!((h.app.ui.view, h.app.ui.book.page), (ViewMode::Book, 1));
 }
 
 #[test]
-fn the_dropdowns_and_setup_run_book_commands() {
-    let mut h = demo(Services::default());
-    let picked = ids(&h, 8);
-    cmd(&mut h, "book.create", json!({"ids": picked, "preset": "one", "cover": false}));
-    open_book(&mut h);
-    assert_eq!(book(&h).pages.len(), 8);
-    // select page 3 by clicking its sheet, then give it the 4 grid from the Page Template dropdown
-    click(&mut h, "book:page:2");
-    assert_eq!(h.app.ui.book.page, 2);
-    pick(&mut h, "combo:bookTemplate", "menu:bookTemplate-grid4");
-    assert_eq!(book(&h).pages[2].template, lightcraft_engine::book::Template::Grid4);
-    assert_eq!(book(&h).unplaced.len(), 0);
-    pick(&mut h, "combo:bookTemplate", "menu:bookTemplate-one");
-    assert_eq!(book(&h).unplaced.len(), 0, "one photo was already there");
-    // setup
-    click(&mut h, "button:bookOrientation-0");
-    assert_eq!(book(&h).settings.orientation, lightcraft_engine::print::layout::Orientation::Portrait);
-    click(&mut h, "check:bookFill");
-    assert!(book(&h).settings.fill);
-    // the cover is added in front: the other pages and the page on show keep their places
-    let before: Vec<_> = book(&h).pages.iter().map(|p| p.slots.clone()).collect();
-    click(&mut h, "check:bookCover");
-    assert!(book(&h).cover);
-    let after: Vec<_> = book(&h).pages.iter().map(|p| p.slots.clone()).collect();
-    assert_eq!(after[1..], before[..], "no hand-made placement was lost");
-    assert_eq!(h.app.ui.book.page, 3, "still on the same page");
-    // the spread view shows the page and its neighbour
-    click(&mut h, "button:bookView-1");
-    assert_eq!(h.app.ui.book.view, crate::book_view::View::Spread);
-    assert!(has(&h, "book:page:3") && has(&h, "book:page:4"));
-    click(&mut h, "button:bookPageNext");
+fn the_strip_jumps_reorders_adds_and_the_keys_move() {
+    let mut h = demo();
+    open_book(&mut h, 8, "one");
+    assert!(has(&h, "book:thumb:0") && has(&h, "button:bookAddPage"));
+    click(&mut h, "book:thumb:3");
+    assert_eq!(h.app.ui.book.page, 3);
+    key(&mut h, "ArrowRight");
     assert_eq!(h.app.ui.book.page, 4);
-    click(&mut h, "check:bookCover");
-    assert!(!book(&h).cover);
-    assert_eq!(book(&h).pages.iter().map(|p| p.slots.clone()).collect::<Vec<_>>(), before);
+    key(&mut h, "ArrowLeft");
+    assert_eq!(h.app.ui.book.page, 3);
+    // pages lie open 0 | 1 2 | 3 4 | 5 6 | 7: Page Down goes to the next spread
+    key(&mut h, "PageDown");
+    assert_eq!(h.app.ui.book.page, 5);
+    key(&mut h, "PageUp");
+    assert_eq!(h.app.ui.book.page, 3);
+    // drag page 6's thumbnail onto page 2's: it becomes page 2
+    let before = book(&h).pages.iter().map(|p| p.slots.clone()).collect::<Vec<_>>();
+    drag_onto(&mut h, "book:thumb:5", "book:thumb:1");
+    let after = book(&h).pages.iter().map(|p| p.slots.clone()).collect::<Vec<_>>();
+    assert_eq!(after[1], before[5], "dragged to page 2");
+    assert_eq!(after.len(), 8);
+    cmd(&mut h, "edit.undo", json!({}));
+    assert_eq!(book(&h).pages.iter().map(|p| p.slots.clone()).collect::<Vec<_>>(), before, "one undo step");
+    // + adds an empty page after the one on show
+    click(&mut h, "book:thumb:2");
+    click(&mut h, "button:bookAddPage");
+    assert_eq!(book(&h).pages.len(), 9);
+    assert_eq!(book(&h).pages[3].slots, [None]);
+    assert_eq!(h.app.ui.book.page, 3, "the new page is on show");
 }
 
 #[test]
-fn the_side_panel_has_three_dropdowns_and_no_button_rows() {
-    let mut h = demo(Services::default());
-    let picked = ids(&h, 8);
-    cmd(&mut h, "book.create", json!({"ids": picked}));
-    open_book(&mut h);
-    for combo in ["combo:bookLayout", "combo:bookSource", "combo:bookTemplate"] {
-        assert!(has(&h, combo), "{combo}");
-    }
-    let rows: Vec<String> =
-        h.app.widgets.iter().map(|(w, _)| w.clone()).filter(|w| w.starts_with("button:bookTemplate") || w.starts_with("button:bookPreset")).collect();
-    assert!(rows.is_empty(), "template and preset button rows are gone: {rows:?}");
-    for gone in ["button:bookUseSelected", "button:bookUseView"] {
-        assert!(!has(&h, gone), "{gone}");
-    }
-    assert!(has(&h, "button:bookAutoLayout") && has(&h, "check:bookCover"));
-    // Auto Layout takes the layout and the photos source from the dropdowns
-    pick(&mut h, "combo:bookLayout", "menu:bookLayout-grid4");
-    pick(&mut h, "combo:bookSource", "menu:bookSource-view");
-    click(&mut h, "button:bookAutoLayout");
-    let b = book(&h);
-    assert!(b.cover);
-    assert!(b.pages[1..].iter().filter(|p| p.slots.len() == 4).count() >= 1);
-    assert!(b.pages[1..b.pages.len() - 1].iter().all(|p| p.template == lightcraft_engine::book::Template::Grid4));
-    assert_eq!(b.photos().len(), h.app.session.visible().len(), "the photos in view");
-    // Selected Photos: the selection, here one photo, on the cover
-    let sel = h.app.session.selected();
-    pick(&mut h, "combo:bookSource", "menu:bookSource-selected");
-    click(&mut h, "button:bookAutoLayout");
-    assert_eq!(book(&h).photos().len(), sel.len());
-}
-
-#[test]
-fn the_top_bar_group_is_centred_and_the_counter_never_touches_the_arrows() {
-    let mut h = demo(Services::default());
-    let picked = ids(&h, 12);
-    cmd(&mut h, "book.create", json!({"ids": picked, "preset": "one", "cover": false}));
-    open_book(&mut h);
-    let centre_x = |h: &Headless, id: &str| rect(h, id).center().x;
-    for page in [0, 5, 11] {
-        h.app.ui.book.page = page;
-        h.settle(T);
-        let (bar, group) = (rect(&h, "book:topBar"), rect(&h, "book:topGroup"));
-        assert!((centre_x(&h, "book:topGroup") - bar.center().x).abs() < 4.0, "page {page}: group {group:?} in bar {bar:?}");
-        assert!(bar.contains_rect(group));
-        let (prev, counter, next) = (rect(&h, "button:bookPagePrev"), rect(&h, "book:pageLabel"), rect(&h, "button:bookPageNext"));
-        assert!(prev.right() + 4.0 <= counter.left() && counter.right() + 4.0 <= next.left(), "page {page}: {prev:?} {counter:?} {next:?}");
-    }
-    // the arrows stay where they are as the page changes
+fn photos_go_from_the_pool_into_a_frame_and_swap_between_frames() {
+    let mut h = demo();
+    open_book(&mut h, 4, "two");
+    let extra: Vec<u64> = h.app.session.catalog.photos().skip(4).take(2).map(|p| p.id.0).collect();
+    cmd(&mut h, "book.addPhotos", json!({"ids": extra}));
+    // pages: [a b] [c d]; tray: [e f]; the spread of page 1 and 2 is on show
     h.app.ui.book.page = 0;
-    h.settle(T);
-    let (prev0, next0) = (rect(&h, "button:bookPagePrev"), rect(&h, "button:bookPageNext"));
-    h.app.ui.book.page = 11;
-    h.settle(T);
-    assert_eq!((rect(&h, "button:bookPagePrev"), rect(&h, "button:bookPageNext")), (prev0, next0));
-}
-
-#[test]
-fn the_counter_has_room_for_fifty_of_fifty() {
-    let mut h = demo(Services::default());
-    let picked = ids(&h, 8);
-    cmd(&mut h, "book.create", json!({"ids": picked}));
-    // fifty pages (the most a book has): the counter is as wide as it is for two digits at both ends
-    {
-        let b = h.app.session.books.find_mut(None).unwrap();
-        b.pages = (0..50).map(|i| lightcraft_engine::book::Page::with(lightcraft_engine::book::Template::One, &[1 + i % 8])).collect();
-        b.cover = false;
+    click(&mut h, "book:thumb:1");
+    let b = book(&h);
+    assert_eq!((b.pages.len(), b.unplaced.len()), (2, 2));
+    let (first, second) = (b.pages[1].slots[0], b.unplaced[0]);
+    // unplaced photos come first in the pool, marked by an outline; placed ones carry their page
+    assert!(has(&h, "book:pool:unplaced:0") && has(&h, "book:pool:0:0"));
+    drag_onto(&mut h, "book:pool:unplaced:0", "book:cell:1:0");
+    let b = book(&h);
+    assert_eq!(b.pages[1].slots[0], Some(second));
+    assert_eq!(b.unplaced.last().copied(), first, "the photo that was there waits in the tray");
+    // drag a frame's photo onto a frame of the other page: they swap
+    let (x, y) = (b.pages[1].slots[0], b.pages[1].slots[1]);
+    drag_onto(&mut h, "book:cell:1:0", "book:cell:1:1");
+    assert_eq!((book(&h).pages[1].slots[0], book(&h).pages[1].slots[1]), (y, x));
+    // a frame's photo dropped on the pool comes off its page
+    let n = book(&h).unplaced.len();
+    drag_onto(&mut h, "book:cell:1:0", "book:pool");
+    assert_eq!(book(&h).unplaced.len(), n + 1);
+    assert_eq!(book(&h).pages[1].slots[0], None);
+    // each was one undo step
+    for _ in 0..3 {
+        cmd(&mut h, "edit.undo", json!({}));
     }
-    open_book(&mut h);
-    h.app.ui.book.page = 49;
-    h.settle(T);
-    let (prev, counter, next) = (rect(&h, "button:bookPagePrev"), rect(&h, "book:pageLabel"), rect(&h, "button:bookPageNext"));
-    assert!(prev.right() + 4.0 <= counter.left() && counter.right() + 4.0 <= next.left(), "{prev:?} {counter:?} {next:?}");
-    let galley = h.app.widgets.iter().any(|(w, _)| w == "book:pageLabel");
-    assert!(galley);
+    assert_eq!(book(&h).pages[1].slots, [first, b.pages[1].slots[1]]);
 }
 
 #[test]
-fn a_photo_dragged_onto_another_cell_swaps_with_it() {
-    let mut h = demo(Services::default());
-    let picked = ids(&h, 4);
-    cmd(&mut h, "book.create", json!({"ids": picked, "preset": "two", "cover": false}));
-    open_book(&mut h);
-    click(&mut h, "button:bookView-1");
-    let before = book(&h);
-    let (a, b) = (rect(&h, "book:cell:0:0"), rect(&h, "book:cell:0:1"));
-    let r = h.request(
-        "ui.dragWidget",
-        json!({"id": "book:cell:0:0", "dx": b.center().x - a.center().x, "dy": b.center().y - a.center().y, "steps": 8}),
-        T,
-    );
+fn zoom_and_pan_save_a_crop_per_cell_as_one_undo_step() {
+    let mut h = demo();
+    open_book(&mut h, 4, "two");
+    click(&mut h, "book:thumb:1");
+    let depth = h.app.session.undo.len();
+    // scroll over the frame zooms (a pinch too)
+    let r = h.request("ui.hoverWidget", json!({"id": "book:cell:1:0"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.settle(T);
-    let after = book(&h);
-    assert_eq!(after.pages[0].slots, [before.pages[0].slots[1], before.pages[0].slots[0]], "the two photos swapped");
-    assert_eq!(after.photos().len(), 4);
-    // taken off its page, a photo waits in the tray, which then shows
-    cmd(&mut h, "book.movePhoto", json!({"from": {"page": 0, "cell": 0}, "to": {"unplaced": 0}}));
-    assert!(has(&h, "book:tray") && has(&h, "book:unplaced:0"));
-}
-
-#[test]
-fn a_long_tray_scrolls_so_every_photo_can_be_reached() {
-    let mut h = demo(Services::default());
-    let picked = ids(&h, 8);
-    cmd(&mut h, "book.create", json!({"ids": picked}));
-    {
-        let b = h.app.session.books.find_mut(None).unwrap();
-        b.unplaced = (0..40).map(|i| 1 + i % 8).collect();
+    for _ in 0..3 {
+        let r = h.request("ui.zoom", json!({"factor": 1.3}), T);
+        assert_eq!(r["ok"], true, "{r}");
     }
-    open_book(&mut h);
-    let tray = rect(&h, "book:tray");
-    let first = rect(&h, "book:unplaced:0");
-    assert!(tray.contains_rect(first));
-    // forty photos are laid out in one row, far wider than the strip; none is cut off
-    assert!(has(&h, "book:unplaced:39"), "the last photo is in the strip");
-    assert!(rect(&h, "book:unplaced:39").left() > tray.right(), "past the edge, so the strip has to scroll");
-    // scrolling the strip moves the photos
-    let r = h.request("ui.hoverWidget", json!({"id": "book:unplaced:0"}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    let r = h.request("ui.scroll", json!({"dx": -400.0, "dy": 0.0}), T);
-    assert_eq!(r["ok"], true, "{r}");
     h.settle(T);
-    assert!(rect(&h, "book:unplaced:0").left() < first.left() - 100.0, "the strip scrolled");
-    assert!(rect(&h, "book:tray") == tray, "the strip itself stays put");
-}
-
-#[test]
-fn export_pdf_runs_in_the_background_and_the_book_is_the_page_size() {
-    let asked = Arc::new(Mutex::new(Vec::<crate::pick::PickRequest>::new()));
-    let requests = asked.clone();
-    let bytes = Arc::new(Mutex::new(Vec::new()));
-    let written = bytes.clone();
-    let services = Services {
-        picker: Some(Box::new(move |req| {
-            requests.lock().unwrap().push(req);
-            let (tx, rx) = std::sync::mpsc::channel();
-            tx.send(vec!["Trip.pdf".into()]).unwrap();
-            Ok(rx)
-        })),
-        write_shared: Some(Arc::new(move |path, data| {
-            assert_eq!(path, "Trip.pdf");
-            *written.lock().unwrap() = data.to_vec();
-            Ok(())
-        })),
-        ..Default::default()
-    };
-    let mut h = demo(services);
-    let ids: Vec<u64> = h.app.session.catalog.photos().take(5).map(|p| p.id.0).collect();
-    cmd(&mut h, "book.create", json!({"name": "Trip", "ids": ids, "settings": {"ppi": 72.0, "size": "5x7"}}));
-    open_book(&mut h);
-    click(&mut h, "button:dialogOk");
-    assert!(h.app.ui.dialog.is_none(), "the dialog closes once the export has started");
-    assert!(h.step_until(Duration::from_secs(60), |h| h.app.last_export_result.is_some()), "the export did not finish");
-    assert_eq!(asked.lock().unwrap()[0].file_name.as_deref(), Some("Trip.pdf"));
-    let b = bytes.lock().unwrap();
-    assert!(b.starts_with(b"%PDF-"));
-    // 5 x 7 in landscape: 504 x 360 pt
-    let (w, hgt) = media_box(&b);
-    assert!((w - 504.0).abs() < 1.0 && (hgt - 360.0).abs() < 1.0, "got {w} x {hgt} pt");
-    let first = &h.app.last_export_result.as_ref().unwrap()["files"][0];
-    assert_eq!((first["book"].clone(), first["photos"].clone()), (json!(true), json!(5)));
-    assert!(h.app.session.activity.list().is_empty());
-    // the row ends with every render done, not one
-    let files = h.app.last_export_result.as_ref().unwrap()["files"].as_array().unwrap().clone();
-    assert_eq!(files.len(), 1);
-    assert_eq!(crate::export_task::book_task::finished_done(&files, 24), 24);
-    assert_eq!(crate::export_task::book_task::finished_done(&[json!({"path": "a"}), json!({"path": "b"})], 5), 2, "other exports count their files");
-}
-
-#[test]
-fn a_book_export_shows_a_row_in_the_activity_stack_and_stops() {
-    let mut app = LightcraftApp::new(
-        lightcraft_engine::Session::with_demo(),
-        Services { write_shared: Some(Arc::new(|_, _| panic!("a stopped export wrote a file"))), ..Default::default() },
-    );
-    let ids: Vec<u64> = app.session.catalog.photos().take(12).map(|p| p.id.0).collect();
-    app.session.execute("book.create", &json!({"ids": ids, "settings": {"ppi": 300.0}})).unwrap();
-    crate::export_task::book_task::start(&mut app, &json!({"path": "Stop.pdf"}), false).unwrap();
-    let rows = app.session.activity.list();
-    assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!((rows[0].kind, rows[0].label.as_str()), ("export", "Exporting book to PDF"));
-    assert!(rows[0].cancellable);
-    app.session.activity.cancel(rows[0].id).unwrap();
-    let task = app.export.take().unwrap();
-    assert!(task.cancel.load(std::sync::atomic::Ordering::Relaxed));
-    drop(task);
-    assert!(app.session.activity.list().is_empty(), "the row goes with the export");
-    // no book, no export; an export already running is refused
-    let mut none = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
-    assert!(crate::export_task::book_task::start(&mut none, &json!({"path": "x.pdf"}), false).is_err());
-    assert!(crate::export_task::book_task::start(&mut none, &json!({}), false).is_err());
-}
-
-#[test]
-fn the_menu_commands_are_listed_and_need_a_photo() {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
-    assert!(crate::menus::ui_enabled(&app, "dialog.book"));
-    let empty = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
-    assert!(!crate::menus::ui_enabled(&empty, "dialog.book"));
-    assert!(crate::menus::ui_commands().any(|c| c.0 == "dialog.book" && c.3 == "File"));
-}
-
-#[test]
-fn the_book_dialog_fits_the_window_with_its_buttons_on_screen() {
-    for size in [[1400.0, 900.0], [1100.0, 760.0]] {
-        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
-        let mut h = Headless::new(app, size, 1.0);
-        h.settle(T);
-        let picked = ids(&h, 6);
-        cmd(&mut h, "book.create", json!({"ids": picked}));
-        cmd(&mut h, "book.movePhoto", json!({"from": {"page": 1, "cell": 0}, "to": {"unplaced": 0}}));
-        open_book(&mut h);
-        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, h.size);
-        let dialog = rect(&h, "dialog:window");
-        assert!(screen.contains_rect(dialog), "at {size:?}: dialog {dialog:?} runs off the window");
-        for b in ["button:dialogOk", "button:dialogCancel"] {
-            assert!(dialog.contains_rect(rect(&h, b)), "at {size:?}: {b} is outside the dialog");
+    // (the zoom settles, then saves once)
+    for _ in 0..40 {
+        if book(&h).pages[1].crop(0).is_some() {
+            break;
         }
+        std::thread::sleep(Duration::from_millis(50));
+        h.step();
     }
+    let crop = book(&h).pages[1].crop(0).expect("the zoom was saved");
+    assert!((crop.zoom - 1.3f64.powi(3)).abs() < 0.05, "{crop:?}");
+    assert_eq!(h.app.session.undo.len(), depth + 1, "a run of scroll steps is one undo step");
+    // dragging inside the frame moves the photo: the crop's centre goes the other way
+    let r = h.request("ui.dragWidget", json!({"id": "book:cell:1:0", "dx": -25.0, "dy": 0.0, "steps": 8}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(T);
+    let moved = book(&h).pages[1].crop(0).unwrap();
+    assert!(moved.x > crop.x, "{moved:?} vs {crop:?}");
+    assert_eq!(moved.zoom, crop.zoom);
+    assert_eq!(h.app.session.undo.len(), depth + 2);
+    // the other cell has none
+    assert_eq!(book(&h).pages[1].crop(1), None);
+    // double click puts the photo back to the book's setting
+    click_twice(&mut h, "book:cell:1:0");
+    assert_eq!(book(&h).pages[1].crop(0), None);
+    cmd(&mut h, "edit.undo", json!({}));
+    assert_eq!(book(&h).pages[1].crop(0), Some(moved));
+}
+
+fn click_twice(h: &mut Headless, id: &str) {
+    let r = h.request("ui.clickWidget", json!({"id": id, "count": 2}), T);
+    assert_eq!(r["ok"], true, "{id}: {r}");
+    h.settle(T);
+}
+
+#[test]
+fn add_to_book_asks_about_photos_the_book_has() {
+    let mut h = demo();
+    open_book(&mut h, 3, "one");
+    let all = ids(&h, 6);
+    // the library's right-click menu: Add to Book ▸ the books and New Book…
+    cmd(&mut h, "view.photoGrid", json!({}));
+    let photo = all[4];
+    cmd(&mut h, "library.select", json!({"ids": [photo]}));
+    let thumb = rect(&h, &format!("thumb:{photo}"));
+    let r = h.request("ui.click", json!({"x": thumb.center().x, "y": thumb.center().y, "button": "right"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    let r = h.request("ui.hoverWidget", json!({"id": "button:contextAddToBook"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(has(&h, "button:contextBook:1") && has(&h, "button:contextNewBook"));
+    click(&mut h, "button:contextBook:1");
+    assert_eq!(book(&h).unplaced, [photo], "a new photo goes in at once, without a question");
+    assert!(h.app.ui.book.prompt.is_none());
+    // a photo the book has: a question, with its three answers
+    let held = all[0];
+    cmd(&mut h, "library.select", json!({"ids": [held, all[5]]}));
+    let ctx = h.view.ctx.clone();
+    crate::panels::book::add_photos_to_book(&mut h.app, &ctx, 1, vec![held, all[5]]);
+    h.settle(T);
+    assert!(has(&h, "book:prompt") && has(&h, "button:bookPromptYes") && has(&h, "button:bookPromptSkip") && has(&h, "button:bookPromptCancel"));
+    click(&mut h, "button:bookPromptCancel");
+    assert!(!has(&h, "book:prompt"));
+    assert_eq!(book(&h).photos().len(), 4, "cancel adds nothing");
+    crate::panels::book::add_photos_to_book(&mut h.app, &ctx, 1, vec![held, all[5]]);
+    h.settle(T);
+    click(&mut h, "button:bookPromptSkip");
+    let b = book(&h);
+    assert_eq!(b.photos().len(), 5, "skip adds only the new photo");
+    assert!(b.unplaced.contains(&all[5]));
+    crate::panels::book::add_photos_to_book(&mut h.app, &ctx, 1, vec![held]);
+    h.settle(T);
+    click(&mut h, "button:bookPromptYes");
+    assert_eq!(book(&h).photos().iter().filter(|p| **p == held).count(), 2, "add duplicates puts it in again");
+}
+
+#[test]
+fn photos_dragged_onto_a_book_in_the_side_bar_are_added() {
+    let mut h = demo();
+    open_book(&mut h, 2, "one");
+    cmd(&mut h, "view.photoGrid", json!({}));
+    let target = ids(&h, 8)[6];
+    let thumb = rect(&h, &format!("thumb:{target}"));
+    let row = rect(&h, "source:book:1");
+    let r = h.request("ui.drag", json!({"x": thumb.center().x, "y": thumb.center().y, "toX": row.center().x, "toY": row.center().y, "steps": 12}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(T);
+    assert!(book(&h).unplaced.contains(&target));
+}
+
+#[test]
+fn the_side_bar_renames_in_place_and_refuses_empty_and_taken_names() {
+    let mut h = demo();
+    let photos = ids(&h, 3);
+    cmd(&mut h, "book.create", json!({"name": "Alps", "ids": photos}));
+    cmd(&mut h, "book.create", json!({"name": "Coast", "ids": photos}));
+    h.settle(T);
+    let name = |h: &Headless, id: u32| h.app.session.books.find(Some(id)).unwrap().name.clone();
+    // double click: a field in the row; Return saves
+    let r = h.request("ui.clickWidget", json!({"id": "source:book:2", "count": 2}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(T);
+    assert!(has(&h, "field:bookRename"));
+    h.app.ui.book.rename = Some((2, "Shore".into()));
+    key(&mut h, "Enter");
+    assert_eq!(name(&h, 2), "Shore");
+    // Esc cancels
+    h.app.ui.book.rename = Some((2, "Reef".into()));
+    h.settle(T);
+    key(&mut h, "Escape");
+    assert_eq!(name(&h, 2), "Shore");
+    assert!(h.app.ui.book.rename.is_none());
+    // a taken name and an empty one are refused
+    for bad in ["alps", "   "] {
+        h.app.ui.book.rename = Some((2, bad.into()));
+        h.settle(T);
+        key(&mut h, "Enter");
+        assert_eq!(name(&h, 2), "Shore", "`{bad}` is refused");
+    }
+    // the rename is one undo step
+    cmd(&mut h, "edit.undo", json!({}));
+    assert_eq!(name(&h, 2), "Coast");
+}
+
+#[test]
+fn locked_pages_show_and_the_toolbar_acts_on_the_page_on_show() {
+    let mut h = demo();
+    open_book(&mut h, 4, "one");
+    click(&mut h, "book:thumb:2");
+    click(&mut h, "button:bookLockPage");
+    assert!(book(&h).pages[2].locked);
+    click(&mut h, "button:bookDuplicatePage");
+    assert_eq!(book(&h).pages.len(), 5);
+    assert_eq!(h.app.ui.book.page, 3, "the copy is on show");
+    click(&mut h, "button:bookDeletePage");
+    assert_eq!(book(&h).pages.len(), 4);
+    assert_eq!(book(&h).unplaced.len(), 1, "its photo waits in the pool");
+}
+
+/// The view draws a book of 200 pages without lag: it paints only what is on screen. The numbers go
+/// to the test output (`--nocapture`); the check is the 16 ms budget with room for a loaded machine.
+#[test]
+fn a_book_of_two_hundred_pages_draws_inside_the_frame_budget() {
+    use lightcraft_engine::book::{Book, MAX_PAGES, Page, Template};
+    let mut h = demo();
+    let photos: Vec<u64> = ids(&h, 24);
+    let mut big = Book { name: "Big".into(), ..Default::default() };
+    big.pages = (0..MAX_PAGES)
+        .map(|i| Page::with(Template::Grid4, &[photos[i % 24], photos[(i + 1) % 24], photos[(i + 2) % 24], photos[(i + 3) % 24]]))
+        .collect();
+    big.validate().unwrap();
+    h.app.session.books.add(big).unwrap();
+    cmd(&mut h, "view.book", json!({}));
+    h.app.ui.book.page = 100;
+    h.app.ui.book.reveal_page = true;
+    h.settle(T);
+    let (mut times, mut steps) = (Vec::new(), Vec::new());
+    for _ in 0..60 {
+        h.view.ctx.request_repaint();
+        let started = std::time::Instant::now();
+        h.step();
+        steps.push(started.elapsed().as_secs_f32() * 1000.0);
+        times.push(h.app.ui.book.frame_ms);
+    }
+    let stats = |v: &[f32]| (v.iter().sum::<f32>() / v.len() as f32, v.iter().fold(0.0f32, |w, t| w.max(*t)));
+    let (mean, worst) = stats(&times);
+    let (step_mean, step_worst) = stats(&steps);
+    eprintln!(
+        "book view, 200 pages: building the view mean {mean:.2} ms, worst {worst:.2} ms; the whole headless frame (UI, tessellation, CPU raster) mean {step_mean:.2} ms, worst {step_worst:.2} ms; {} frames",
+        times.len()
+    );
+    assert!(has(&h, "book:thumb:100"), "the page on show is in the strip");
+    assert!(!has(&h, "book:thumb:0") && !has(&h, "book:thumb:199"), "only the pages on screen are drawn");
+    assert!(mean < 16.0, "mean frame {mean} ms");
+}
+
+/// With Zoom to Fill Frame off a frame shows the whole photo; scrolling out at that size stores no
+/// crop (it would turn the frame into a filled one), and zooming in and out again leaves none.
+#[test]
+fn zooming_out_at_the_frames_size_stores_no_crop() {
+    let mut h = demo();
+    open_book(&mut h, 4, "two");
+    assert!(!book(&h).settings.fill);
+    click(&mut h, "book:thumb:1");
+    let depth = h.app.session.undo.len();
+    let r = h.request("ui.hoverWidget", json!({"id": "book:cell:1:0"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("ui.zoom", json!({"factor": 0.7}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(T);
+    for _ in 0..20 {
+        std::thread::sleep(Duration::from_millis(50));
+        h.step();
+    }
+    assert_eq!(book(&h).pages[1].crop(0), None, "scrolling out stored a crop");
+    assert_eq!(h.app.session.undo.len(), depth);
+    // in, then back out to the same size, before it is saved: nothing is saved
+    for factor in [1.5, 1.0 / 1.5] {
+        let r = h.request("ui.zoom", json!({"factor": factor}), T);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    h.settle(T);
+    for _ in 0..20 {
+        std::thread::sleep(Duration::from_millis(50));
+        h.step();
+    }
+    assert_eq!(book(&h).pages[1].crop(0), None);
+    assert_eq!(h.app.session.undo.len(), depth);
 }
