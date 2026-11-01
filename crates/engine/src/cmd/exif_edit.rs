@@ -1,8 +1,10 @@
 //! Edited camera / lens / exposure values (`photo.setMeta` keys `camera`, `lens`, `focal`,
 //! `aperture`, `shutter`, `iso`, and `photo.resetExif`). The file's values and the file itself
 //! are never touched: an edit is an override stored in the catalog (`Meta::exif`), a reset removes
-//! it. Rendering keeps using the file's camera and lens; see `lightcraft_catalog::exif_override`.
+//! it. Rendering keeps using the file's camera and lens; see `lightcraft_catalog::exif_override`. An edited focal
+//! length or aperture has to fit the photo's lens (`lightcraft_catalog::lens_limits`).
 
+use lightcraft_catalog::lens_limits::refusal;
 use lightcraft_catalog::{ExifField, Meta, Op};
 use serde_json::{Value, json};
 
@@ -30,6 +32,15 @@ pub(crate) fn apply_params(cmd: &str, m: &mut Meta, p: &Value) -> Result<bool> {
         any = true;
         let text = value_text(cmd, field, v)?;
         edited.set_exif(field, text.as_deref()).map_err(|e| bad(cmd, format!("{}: {e}", field.key())))?;
+    }
+    // an edited focal length or aperture has to fit the lens the photo then shows (a lens change in the same call
+    // counts); only a value that is now an edit is checked, never the file's own, and a reset never is
+    for field in [ExifField::Focal, ExifField::Aperture] {
+        if p.get(field.key()).is_some_and(|v| !v.is_null())
+            && let Some(why) = refusal(&edited, field)
+        {
+            return Err(bad(cmd, format!("{}: {why}", field.key())));
+        }
     }
     if any {
         *m = edited;

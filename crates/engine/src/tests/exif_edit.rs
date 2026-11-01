@@ -232,3 +232,63 @@ fn reload_replaces_placeholders_but_not_edits() {
     assert_eq!((m.lens.as_str(), m.focal_mm, m.aperture), ("Real lens", Some(90.0), Some(2.8)), "the file's placeholders are replaced");
     assert_eq!(m.effective_lens(), "Laowa 90mm", "the edit stays");
 }
+
+#[test]
+fn an_edited_aperture_or_focal_length_must_fit_the_lens() {
+    let (mut s, ids) = library();
+    let id = ids[0];
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "lens": "16-35mm f/4"})).unwrap();
+    let (snapshot, depth) = (s.catalog.to_snapshot(), s.undo.len());
+    // an aperture below the lens's limit, and a focal length outside its range, are refused with the reason
+    for (bad, why) in [
+        (json!({"ids": [id.0], "aperture": "f/2"}), "This lens opens to f/4 at most"),
+        (json!({"ids": [id.0], "aperture": 1.4}), "This lens opens to f/4 at most"),
+        (json!({"ids": [id.0], "focal": "50 mm"}), "This lens covers 16–35 mm"),
+        (json!({"ids": [id.0], "focal": 10}), "This lens covers 16–35 mm"),
+        // (nothing of a call with a refused value is applied)
+        (json!({"ids": [id.0], "iso": 800, "aperture": "f/2"}), "This lens opens to f/4 at most"),
+    ] {
+        let e = s.execute("photo.setMeta", &bad).unwrap_err().to_string();
+        assert!(e.contains(why), "{bad}: {e}");
+        assert_eq!(s.catalog.to_snapshot(), snapshot, "{bad}");
+        assert_eq!(s.undo.len(), depth);
+    }
+    // values the lens allows go through
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "aperture": "f/5.6", "focal": "24 mm"})).unwrap();
+    let m = meta(&s, id);
+    assert_eq!((m.effective_aperture(), m.effective_focal_mm()), (Some(5.6), Some(24.0)));
+    // the lens set in the same call is the one checked
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "lens": "50mm f/1.4", "focal": 50, "aperture": 1.4})).unwrap();
+    assert_eq!(meta(&s, id).effective_aperture(), Some(1.4));
+    // a name the parser does not understand sets no limit
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "lens": "My pinhole", "aperture": 0.5, "focal": 4000})).unwrap();
+    assert_eq!(meta(&s, id).effective_aperture(), Some(0.5));
+}
+
+#[test]
+fn a_lens_change_keeps_the_edits_and_the_files_own_values_are_never_checked() {
+    let (mut s, ids) = library();
+    let id = ids[0];
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "lens": "24-70mm f/1.8"})).unwrap();
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "aperture": "f/2", "focal": 30})).unwrap();
+    // a lens that cannot give those values is still taken, and the edits stay
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "lens": "70-200mm f/4"})).unwrap();
+    let m = meta(&s, id);
+    assert_eq!((m.effective_lens(), m.effective_aperture(), m.effective_focal_mm()), ("70-200mm f/4", Some(2.0), Some(30.0)));
+    assert!(lightcraft_catalog::lens_limits::refusal(&m, ExifField::Aperture).is_some());
+    // the file's own values (here f/2.8 and 25 mm on a lens that cannot give them) are shown as they are
+    let mut file = meta(&s, ids[1]);
+    file.lens = "70-200mm f/4".into();
+    s.apply_system(lightcraft_catalog::Op::SetMeta { id: ids[1], meta: Box::new(file) }).unwrap();
+    let m = meta(&s, ids[1]);
+    assert_eq!((m.effective_aperture(), m.effective_focal_mm()), (Some(2.8), Some(25.0)));
+    // retyping the file's value is not an edit, so it is not checked; a reset is never refused
+    s.execute("photo.setMeta", &json!({"ids": [ids[1].0], "aperture": "f/2.8", "focal": "25 mm"})).unwrap();
+    assert!(meta(&s, ids[1]).exif.is_empty());
+    s.execute("photo.setMeta", &json!({"ids": [id.0], "aperture": null, "focal": null})).unwrap();
+    // each photo is checked against its own lens: one that fails refuses the call
+    s.execute("photo.setMeta", &json!({"ids": [ids[2].0], "lens": "50mm f/1.4"})).unwrap();
+    let e = s.execute("photo.setMeta", &json!({"ids": [id.0, ids[2].0], "aperture": "f/1.4"})).unwrap_err().to_string();
+    assert!(e.contains("This lens opens to f/4 at most"), "{e}");
+    assert!(meta(&s, ids[2]).exif.aperture.is_none(), "nothing of a refused call is applied");
+}
