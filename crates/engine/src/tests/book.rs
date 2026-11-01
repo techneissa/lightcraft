@@ -532,3 +532,52 @@ fn a_photo_taken_off_a_page_goes_to_the_end_of_the_tray_and_the_tray_index_is_ch
     let b = run(&mut s, "book.movePhoto", json!({"from": {"page": 0, "cell": 1}, "to": {"unplaced": 0}}));
     assert_eq!(b["unplaced"], json!([ids[1], ids[0], ids[2]]));
 }
+
+/// What the export draws on each page is what the model says: a full-bleed page reaches the paper's
+/// corner, a grid page keeps its margin and has a photo in each of its four cells.
+#[test]
+fn an_exported_page_has_the_template_the_model_says() {
+    use crate::book::{Book, Page, Template};
+    let mut s = Session::with_demo();
+    let ids = demo_ids(&s, 5);
+    let mut book = Book { name: "T".into(), cover: true, ..Default::default() };
+    book.settings.ppi = 72.0;
+    book.settings.fill = true;
+    book.pages = vec![Page::with(Template::FullBleed, &ids[..1]), Page::with(Template::Grid4, &ids[1..5])];
+    book.validate().unwrap();
+    let rendered = render::prepare(&mut s, &book).unwrap().run(&mut |_, _| true).unwrap();
+    assert_eq!(rendered.pages.len(), 2);
+    let white = crate::print::compose::rec2020_from_srgb8([255; 3]);
+    let px = |page: usize, x: u32, y: u32| {
+        let p = &rendered.pages[page];
+        assert_eq!((p.width, p.height), (720, 576));
+        let at = ((y * p.width + x) * 3) as usize;
+        [p.rgb[at], p.rgb[at + 1], p.rgb[at + 2]]
+    };
+    assert_ne!(px(0, 1, 1), white, "the cover reaches the corner of the paper");
+    assert_ne!(px(0, 718, 574), white);
+    assert_eq!(px(1, 1, 1), white, "a grid page keeps its margin");
+    assert_eq!(px(1, 718, 574), white);
+    // the centre of each cell of the 2 x 2 grid holds a photo; the gutter between them does not
+    for (x, y) in [(190, 150), (530, 150), (190, 430), (530, 430)] {
+        assert_ne!(px(1, x, y), white, "cell at {x},{y}");
+    }
+    assert_eq!(px(1, 360, 288), white, "the middle of the page is the gutter");
+}
+
+#[test]
+fn the_cover_command_keeps_hand_made_placements() {
+    let mut s = Session::with_demo();
+    let ids = demo_ids(&s, 5);
+    run(&mut s, "book.create", json!({"ids": ids, "cover": false, "preset": "two"}));
+    run(&mut s, "book.movePhoto", json!({"from": {"page": 0, "cell": 0}, "to": {"page": 1, "cell": 1}}));
+    let before = slots(&run(&mut s, "book.get", json!({})));
+    let b = run(&mut s, "book.setCover", json!({"cover": true}));
+    assert_eq!(b["cover"], true);
+    assert_eq!(slots(&b)[1..], before[..]);
+    assert_eq!(b["pages"][0]["template"], "fullBleed");
+    let b = run(&mut s, "book.setCover", json!({"cover": false}));
+    assert_eq!(slots(&b), before);
+    fails(&mut s, "book.setCover", json!({}));
+    fails(&mut s, "book.setCover", json!({"cover": "yes"}));
+}

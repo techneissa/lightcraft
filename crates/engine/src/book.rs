@@ -81,7 +81,7 @@ impl Books {
     }
 
     /// Checks everything read from a file: counts, unique ids, every book. A bad book is an error
-    /// for the whole file (it is then set aside and the library starts without books).
+    /// for the whole file (the file is then left untouched and books are not saved, see [`store::load`]).
     pub fn validate(&mut self) -> Result<(), String> {
         if self.books.len() > MAX_BOOKS {
             return Err(format!("at most {MAX_BOOKS} books"));
@@ -98,6 +98,12 @@ impl Books {
             self.current = self.books.first().map(|b| b.id);
         }
         Ok(())
+    }
+
+    /// [`Books::validate`] on `self`, returned.
+    pub fn into_checked(mut self) -> Result<Books, String> {
+        self.validate()?;
+        Ok(self)
     }
 }
 

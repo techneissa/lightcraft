@@ -231,22 +231,20 @@ fn the_books_file_round_trips_and_refuses_bad_data() {
     assert_eq!((a, c, books.current), (1, 2, Some(2)));
     books.books[0].unplaced.push(99);
     let json = serde_json::to_vec_pretty(&BooksFile { version: 1, library: books.clone() }).unwrap();
-    let back = serde_json::from_slice::<BooksFile>(&json).unwrap().into_books().unwrap();
+    let back = serde_json::from_slice::<BooksFile>(&json).unwrap().library.into_checked().unwrap();
     assert_eq!(back, books);
     // removing the current book moves "current" on; ids are not reused while the list lives
     books.remove(2).unwrap();
     assert_eq!(books.current, Some(1));
     assert_eq!(books.add(book(1, false, Preset::One)).unwrap(), 3);
     assert!(books.remove(42).is_err() && books.find(Some(42)).is_err());
-    // a newer file, a duplicate id, a broken book and an unknown key are all refused
-    let newer = serde_json::from_str::<BooksFile>(r#"{"version": 9}"#).unwrap();
-    assert!(newer.into_books().unwrap_err().contains("newer"));
+    // a duplicate id, a broken book and an unknown key are all refused
     let mut dup = back.clone();
     dup.books[1].id = dup.books[0].id;
-    assert!(BooksFile { version: 1, library: dup }.into_books().unwrap_err().contains("duplicate"));
+    assert!(dup.into_checked().unwrap_err().contains("duplicate"));
     let mut broken = back;
     broken.books[0].settings.ppi = 1.0;
-    assert!(BooksFile { version: 1, library: broken }.into_books().is_err());
+    assert!(broken.into_checked().is_err());
     assert!(serde_json::from_str::<BooksFile>(r#"{"library": {"stuff": 1}}"#).is_err());
     assert!(serde_json::from_slice::<BooksFile>(b"{not json").is_err());
 }
@@ -258,4 +256,32 @@ fn too_many_books_are_refused() {
         books.add(book(1, false, Preset::One)).unwrap();
     }
     assert!(books.add(book(1, false, Preset::One)).is_err());
+}
+
+#[test]
+fn the_cover_comes_and_goes_without_touching_the_other_pages() {
+    let mut b = book(7, false, Preset::Mixed);
+    b.move_photo(Slot::Cell { page: 0, cell: 0 }, Slot::Cell { page: 2, cell: 1 }).unwrap(); // a hand-made change
+    let pages = b.pages.clone();
+    b.set_cover(false).unwrap();
+    assert_eq!(b.pages, pages, "no cover, none removed");
+    b.set_cover(true).unwrap();
+    assert!(b.cover);
+    assert_eq!(b.pages[0], Page { template: Template::FullBleed, slots: vec![None] }, "an empty cover with nothing in the tray");
+    assert_eq!(b.pages[1..], pages[..], "every other page as it was");
+    b.set_cover(true).unwrap();
+    assert_eq!(b.pages.len(), pages.len() + 1);
+    // a cover takes the first photo waiting in the tray; removing it gives the photo back
+    b.set_cover(false).unwrap();
+    b.move_photo(Slot::Cell { page: 0, cell: 0 }, Slot::Unplaced { unplaced: 0 }).unwrap();
+    let tray = b.unplaced.clone();
+    b.set_cover(true).unwrap();
+    assert_eq!(b.pages[0].slots, [Some(tray[0])]);
+    b.set_cover(false).unwrap();
+    assert_eq!(b.unplaced, tray, "the cover's photo is back in the tray");
+    assert_eq!(b.photos().len(), 7, "no photo lost");
+    b.validate().unwrap();
+    // no room for a cover on a full book
+    let mut full = book(MAX_PAGES as u64, false, Preset::One);
+    assert!(full.set_cover(true).is_err() && !full.cover);
 }

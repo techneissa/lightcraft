@@ -6,7 +6,7 @@
 //! `ids` (a call that names none uses the selection, else the photos in view).
 //!
 //! * `book.list`, `book.get`, `book.create`, `book.open`, `book.delete`
-//! * `book.set`, `book.layout`, `book.setTemplate`, `book.movePhoto`
+//! * `book.set`, `book.layout`, `book.setCover`, `book.setTemplate`, `book.movePhoto`
 //! * `book.exportPdf`, `book.exportJpeg`
 use serde_json::{Value, json};
 
@@ -24,6 +24,24 @@ fn only(p: &Value, known: &[&str], id: &str) -> Result<()> {
     match o.keys().find(|k| !known.contains(&k.as_str())) {
         Some(k) => Err(bad(id, format!("unknown parameter `{k}` (one of {})", known.join(", ")))),
         None => Ok(()),
+    }
+}
+
+/// `settings`: an object, or absent (an empty one). Anything else, `null` included, is an error.
+fn settings_param(p: &Value, id: &str) -> Result<Value> {
+    match p.get("settings") {
+        None => Ok(json!({})),
+        Some(v) if v.is_object() => Ok(v.clone()),
+        Some(_) => Err(bad(id, "`settings` must be an object")),
+    }
+}
+
+/// `name`: text, or absent. Anything else is an error, never dropped.
+fn name_param(p: &Value, id: &str) -> Result<Option<String>> {
+    match p.get("name") {
+        None => Ok(None),
+        Some(Value::String(n)) => clean_name(n).map(Some).map_err(|e| bad(id, e)),
+        Some(_) => Err(bad(id, "`name` must be text")),
     }
 }
 
@@ -147,11 +165,11 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "book.create";
     only(p, &["name", "ids", "id", "source", "preset", "cover", "settings"], ID)?;
     let ids = photos(s, p, ID)?;
-    let name = match str_param(p, "name") {
-        Some(n) => clean_name(n).map_err(|e| bad(ID, e))?,
+    let name = match name_param(p, ID)? {
+        Some(n) => n,
         None => free_name(s, "Untitled Book"),
     };
-    let settings = merged(&BookSettings::default(), p.get("settings").unwrap_or(&Value::Null), ID)?;
+    let settings = merged(&BookSettings::default(), &settings_param(p, ID)?, ID)?;
     let cover = flag(p, "cover", true, ID)?;
     let mut book = Book { name, settings, ..Default::default() };
     book.relayout(&ids, cover, preset(p, ID)?).map_err(|e| bad(ID, e))?;
@@ -199,13 +217,13 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     const KEYS: [&str; 7] = ["size", "orientation", "margin", "padding", "background", "fill", "ppi"];
     only(p, &["book", "name", "settings", "size", "orientation", "margin", "padding", "background", "fill", "ppi"], ID)?;
     // the settings may come nested (`settings`) or flat
-    let mut patch = p.get("settings").cloned().unwrap_or_else(|| json!({}));
+    let mut patch = settings_param(p, ID)?;
     for k in KEYS {
         if let (Some(v), Some(o)) = (p.get(k), patch.as_object_mut()) {
             o.insert(k.to_string(), v.clone());
         }
     }
-    let name = str_param(p, "name").map(clean_name).transpose().map_err(|e| bad(ID, e))?;
+    let name = name_param(p, ID)?;
     change(s, p, ID, |b| {
         b.settings = merged(&b.settings, &patch, ID).map_err(|e| e.to_string())?;
         if let Some(n) = name {
@@ -224,6 +242,13 @@ fn layout(s: &mut Session, p: &Value) -> Result<Value> {
     let cover = flag(p, "cover", cover, ID)?;
     let preset = preset(p, ID)?;
     change(s, p, ID, |b| b.relayout(&ids, cover, preset))
+}
+
+fn set_cover(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "book.setCover";
+    only(p, &["book", "cover"], ID)?;
+    let on = p.get("cover").and_then(Value::as_bool).ok_or_else(|| bad(ID, "`cover` must be true or false"))?;
+    change(s, p, ID, |b| b.set_cover(on))
 }
 
 fn set_template(s: &mut Session, p: &Value) -> Result<Value> {
@@ -319,11 +344,14 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "book.layout", "Auto Layout Book", [], None,
             "{book?, ids?, source?, preset?: mixed|one|two|three|grid4|fullBleed, cover?: bool} — lays the photos out again (default: the book's own photos in order) → book.get",
             always, layout),
+        cmd!(query "book.setCover", "Set Book Cover", [], None,
+            "{book?, cover: bool} — adds a full-bleed cover (taking the first unplaced photo) or removes it (its photo goes to `unplaced`); every other page stays as it is → book.get",
+            always, set_cover),
         cmd!(query "book.setTemplate", "Set Page Template", [], None,
             "{book?, page, template: one|two|three|grid4|fullBleed} — photos that no longer fit go to `unplaced`, and new cells take them → book.get",
             always, set_template),
         cmd!(query "book.movePhoto", "Move Book Photo", [], None,
-            "{book?, from: {page, cell} | {unplaced}, to: {page, cell} | {unplaced}} — a cell that holds a photo swaps with it; `to: {unplaced: 0}` takes the photo off its page → book.get",
+            "{book?, from: {page, cell} | {unplaced}, to: {page, cell} | {unplaced}} — a cell that holds a photo swaps with it; `to: {unplaced: N}` takes the photo off its page and puts it at position N of the tray (0 to its length; N must be below its length when the photo is in the tray already) → book.get",
             always, move_photo),
         cmd!(query "book.exportPdf", "Export Book as PDF", [], None,
             "{book?, path} → {path, pages, photos, bytes}; one PDF page per book page at the book's ppi; replaces an existing file, never an original; shown in the activity stack and cancellable",

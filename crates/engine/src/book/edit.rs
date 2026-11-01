@@ -84,6 +84,27 @@ impl Book {
         Ok(())
     }
 
+    /// Adds or removes the cover and nothing else: every other page keeps its template and photos.
+    /// A new cover is a full-bleed page that takes the first photo in the tray (empty without one);
+    /// a removed cover's photo goes to the end of the tray, so none is lost.
+    pub fn set_cover(&mut self, on: bool) -> Result<(), String> {
+        if on == self.cover {
+            return Ok(());
+        }
+        if on {
+            if self.pages.len() >= MAX_PAGES {
+                return Err(format!("a book has at most {MAX_PAGES} pages; there is no room for a cover"));
+            }
+            let photo = (!self.unplaced.is_empty()).then(|| self.unplaced.remove(0));
+            self.pages.insert(0, Page { template: Template::FullBleed, slots: vec![photo] });
+        } else if !self.pages.is_empty() {
+            let cover = self.pages.remove(0);
+            self.unplaced.extend(cover.slots.into_iter().flatten());
+        }
+        self.cover = on;
+        Ok(())
+    }
+
     /// Gives page `index` (zero-based) another template. Photos keep their order: the first cells
     /// keep theirs, photos that no longer fit go to [`Book::unplaced`], and new cells take photos
     /// from there first.
@@ -115,7 +136,8 @@ impl Book {
     }
 
     /// Moves the photo at `from` to `to`. A cell that holds a photo swaps with it (an unplaced
-    /// photo's place is taken by the displaced one); moving a page photo to the tray unplaces it.
+    /// photo's place is taken by the displaced one); moving a page photo to the tray unplaces it, at the
+    /// tray position given (0 to its length), and a tray photo moved within the tray takes that position.
     pub fn move_photo(&mut self, from: Slot, to: Slot) -> Result<(), String> {
         if from == to {
             self.check_slot(from)?;
@@ -134,12 +156,20 @@ impl Book {
                 let displaced = self.slot_mut(to)?.replace(photo);
                 *self.slot_mut(from)? = displaced;
             }
-            (Slot::Cell { .. }, Slot::Unplaced { .. }) => {
+            (Slot::Cell { .. }, Slot::Unplaced { unplaced: at }) => {
+                if at > self.unplaced.len() {
+                    return Err(format!("the tray holds {} photos; position {at} is past its end", self.unplaced.len()));
+                }
                 let photo = self.slot_mut(from)?.take().ok_or("that cell holds no photo")?;
-                self.unplaced.push(photo);
+                self.unplaced.insert(at, photo);
             }
-            (Slot::Unplaced { .. }, Slot::Unplaced { .. }) => {
+            (Slot::Unplaced { unplaced: i }, Slot::Unplaced { unplaced: at }) => {
                 self.check_slot(from)?;
+                if at >= self.unplaced.len() {
+                    return Err(format!("the tray holds {} photos; position {at} is past its end", self.unplaced.len()));
+                }
+                let photo = self.unplaced.remove(i);
+                self.unplaced.insert(at, photo);
             }
         }
         Ok(())
