@@ -19,3 +19,5 @@ catalog `query.rs` (`ratings`; `flags` is shared with official's #2588, which ad
 ## Tests
 
 `quick_filter`, `quick_filters`
+
+The official `filter_bar_filters_and_saves_a_smart_album` (`headless/tests.rs`) holds too: the flag buttons always write a `flags` set, one flag included (`toggle_flag_patch`).

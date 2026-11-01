@@ -91,18 +91,14 @@ impl Filter {
 }
 
 impl Filter {
-    /// The `library.filter` patch that turns `flag` on or off in what the flag filter shows now. One
-    /// flag left and no set in use stays the plain `flag` the filter bar always wrote; anything
-    /// else is a `flags` set.
+    /// The `library.filter` patch that turns `flag` on or off in what the flag filter shows now. It
+    /// is always a `flags` set (one flag included), as the filter bar wrote it before the quick filters.
     pub fn toggle_flag_patch(&self, flag: Flag) -> Value {
         let mut on = self.flags_shown().unwrap_or_default();
         if on.contains(&flag) {
             on.retain(|f| *f != flag);
         } else {
             on.push(flag);
-        }
-        if let ([only], true) = (on.as_slice(), self.flags.is_empty()) {
-            return json!({"flag": flag_name(*only)});
         }
         Self::flags_patch(&on)
     }
