@@ -481,6 +481,7 @@ impl LightcraftApp {
         export_task::poll(self, &ctx);
         crate::layers_task::poll(self, &ctx);
         crate::edit_in_task::poll(self, &ctx);
+        crate::rename_task::poll(self, &ctx);
         crate::editor_handoff::poll(self, &ctx);
         crate::macos_colour::job::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);

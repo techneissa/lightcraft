@@ -51,11 +51,7 @@ fn a_rename_in_three_steps_is_one_undo_step() {
     assert_eq!((path_of(&s, 1), path_of(&s, 2)), ("/p/trip-1.jpg".to_string(), "/p/trip-2.jpg".to_string()));
     assert_eq!(
         fs.listing(),
-        vec![
-            ("/p/trip-1.jpg".into(), "A".into()),
-            ("/p/trip-1.xmp".into(), "edits".into()),
-            ("/p/trip-2.jpg".into(), "B".into())
-        ]
+        vec![("/p/trip-1.jpg".into(), "A".into()), ("/p/trip-1.xmp".into(), "edits".into()), ("/p/trip-2.jpg".into(), "B".into())]
     );
     assert_eq!(s.undo.len(), 1, "one undo step");
 }

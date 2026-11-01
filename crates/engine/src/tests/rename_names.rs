@@ -92,7 +92,8 @@ fn a_component_name_is_new_in_its_mask() {
     s.execute("mask.add", &json!({"kind": "linear"})).unwrap();
     let mid = s.develop_of(s.active().unwrap()).unwrap().masks[0].id;
     s.execute("mask.component", &json!({"id": mid, "component": 0, "action": "duplicate"})).unwrap();
-    let rename = |s: &mut Session, k: u64, name: &str| s.execute("mask.component", &json!({"id": mid, "component": k, "action": "rename", "name": name}));
+    let rename =
+        |s: &mut Session, k: u64, name: &str| s.execute("mask.component", &json!({"id": mid, "component": k, "action": "rename", "name": name}));
     rename(&mut s, 0, "Horizon").unwrap();
     let e = rename(&mut s, 1, " horizon").unwrap_err().to_string();
     assert!(e.contains("already used"), "{e}");

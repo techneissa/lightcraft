@@ -33,6 +33,9 @@ fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: 
         browse_all_photos(app, !sel);
         let _ = app.run("library.filter", json!({"keyword": v}));
     }
+    if resp.double_clicked() {
+        crate::inline_rename::begin(app, crate::inline_rename::Kind::Keyword(n.path.clone()));
+    }
     crate::widgets::context_menu(&resp, |ui| {
         let has_sel = app.session.active().is_some();
         if ui.add_enabled(has_sel, egui::Button::new(crate::i18n::tr("Add to Selected Photos"))).clicked() {
@@ -43,7 +46,8 @@ fn keyword_row(app: &mut LightcraftApp, ui: &mut egui::Ui, n: &KeywordNode, id: 
         }
         ui.separator();
         if ui.button(crate::i18n::tr("Rename Keyword…")).clicked() {
-            app.ui.dialog = Some(crate::state::Dialog::RenameKeyword { from: n.path.clone(), to: n.path.clone() });
+            crate::inline_rename::begin(app, crate::inline_rename::Kind::Keyword(n.path.clone()));
+            ui.close();
         }
         if ui.button(crate::i18n::tr("Merge into…")).clicked() {
             app.ui.dialog = Some(crate::state::Dialog::MergeKeywords { from: vec![n.path.clone()], into: String::new() });

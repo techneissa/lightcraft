@@ -225,23 +225,19 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let count = d.masks.len();
         for (index, m) in d.masks.iter().enumerate() {
             let sel = app.session.active_mask == Some(m.id);
-            if let Some((rid, name)) = app.ui.renaming_mask.as_mut().filter(|(rid, _)| *rid == m.id) {
-                // inline rename: Enter (or leaving the field) commits, Escape cancels
-                let rid = *rid;
-                let r = ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width()).id_salt(("maskRename", rid)));
-                register(ui, format!("maskRename:{rid}"), r.rect);
-                if !r.has_focus() && !r.lost_focus() {
-                    r.request_focus();
-                }
-                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                    app.ui.renaming_mask = None;
-                } else if r.lost_focus() {
-                    let name = name.trim().to_string();
-                    app.ui.renaming_mask = None;
-                    if !name.is_empty() && name != m.name {
-                        let _ = app.run("mask.rename", json!({"id": rid, "name": name}));
-                    }
-                }
+            if let Some((rid, mut name)) = app.ui.renaming_mask.clone().filter(|(rid, _)| *rid == m.id) {
+                // inline rename, as in every list: Enter or leaving the field saves, Esc cancels, a name
+                // that is empty or another mask's is refused with the reason
+                let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
+                let rect = row.shrink2(vec2(2.0, 2.0));
+                register(ui, format!("maskRename:{rid}"), rect);
+                let others = d.masks.iter().filter(|o| o.id != rid).map(|o| o.name.as_str());
+                let verdict = crate::inline_rename::verdict(&name, others);
+                let unchanged = name.trim() == m.name;
+                let outcome = crate::inline_rename::edit(ui, &format!("field:maskRename:{rid}"), &mut name, rect, &verdict, unchanged);
+                crate::inline_rename::finish_with(app, ui.ctx(), outcome, "mask.rename", json!({"id": rid}), "name", name, |app, name| {
+                    app.ui.renaming_mask = name.map(|n| (rid, n));
+                });
                 continue;
             }
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
@@ -328,22 +324,18 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     lightcraft_develop::MaskOp::Subtract => "− ",
                     lightcraft_develop::MaskOp::Intersect => "∩ ",
                 };
-                if let Some((_, _, name)) = app.ui.renaming_component.as_mut().filter(|(mid, k, _)| *mid == m.id && *k == i) {
-                    // inline rename: Enter (or leaving the field) commits, Escape cancels
-                    let r = ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width() - 30.0).id_salt(("compRename", m.id, i)));
-                    register(ui, format!("componentRename:{i}"), r.rect);
-                    if !r.has_focus() && !r.lost_focus() {
-                        r.request_focus();
-                    }
-                    if ui.input(|inp| inp.key_pressed(egui::Key::Escape)) {
-                        app.ui.renaming_component = None;
-                    } else if r.lost_focus() {
-                        let name = name.trim().to_string();
-                        app.ui.renaming_component = None;
-                        if Some(&name) != c.name.as_ref() {
-                            let _ = app.run("mask.component", json!({"id": m.id, "component": i, "action": "rename", "name": name}));
-                        }
-                    }
+                if let Some((_, _, mut name)) = app.ui.renaming_component.clone().filter(|(mid, k, _)| *mid == m.id && *k == i) {
+                    // inline rename, as in every list (a name a component of this mask has is refused)
+                    let (row, _) = ui.allocate_exact_size(vec2((ui.available_width() - 30.0).max(40.0), 24.0), Sense::hover());
+                    register(ui, format!("componentRename:{i}"), row);
+                    let others = m.components.iter().enumerate().filter(|(j, _)| *j != i).filter_map(|(_, o)| o.name.as_deref());
+                    let verdict = crate::inline_rename::verdict(&name, others);
+                    let unchanged = Some(name.trim()) == c.name.as_deref();
+                    let outcome = crate::inline_rename::edit(ui, &format!("field:componentRename:{}:{i}", m.id), &mut name, row, &verdict, unchanged);
+                    let params = json!({"id": m.id, "component": i, "action": "rename"});
+                    crate::inline_rename::finish_with(app, ui.ctx(), outcome, "mask.component", params, "name", name, |app, name| {
+                        app.ui.renaming_component = name.map(|n| (m.id, i, n));
+                    });
                     return;
                 }
                 // a long name is cut short (with …) before the options button, not past the panel

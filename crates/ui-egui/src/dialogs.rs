@@ -1152,6 +1152,11 @@ fn rename_keyword_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, c
     if dialog_field(ui, "field:keywordName", to, "New name") {
         *confirm = true;
     }
+    // the name exists: say what the button does before it does it
+    if let Some(question) = crate::inline_rename::merge_question(app, from, to) {
+        let r = ui.label(egui::RichText::new(question).color(t.caution));
+        crate::widgets::register(ui, "text:keywordMerge", r.rect);
+    }
     ui.label(
         egui::RichText::new(crate::i18n::tr_format!(
             "Renames “{from}” on {n} photo{} (keywords below it too). Use | for levels, e.g. Travel|Italy. An existing name merges the two.",

@@ -128,6 +128,7 @@ impl LightcraftApp {
             from_control: false,
             layers: None,
             edit_in: None,
+            rename_task: None,
             handoffs: Vec::new(),
             macos_job: None,
             tasks: Default::default(),
@@ -214,6 +215,9 @@ impl LightcraftApp {
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
         if let Some(result) = model_setup::intercept(self, id, &params) {
             return result.map_err(CommandError::from);
+        }
+        if matches!(id, "photo.rename" | "folder.rename") && params.get("background").and_then(Value::as_bool) == Some(true) {
+            return crate::rename_task::start(self, id, &params).map_err(CommandError::from);
         }
         if let Some(r) = menus::run_ui_command(self, id, &params) {
             if r.is_ok() {

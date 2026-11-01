@@ -34,12 +34,12 @@ mod ids_params;
 mod import;
 mod import_move;
 mod keyword_list;
-mod rename_names;
 mod lens_database;
 mod libops;
 mod library;
 mod lightroom_folder;
 mod local_profiles;
+mod rename_names;
 // macOS Colour needs macOS's own raw decoder: the test only means something on the Mac (fork is Mac only)
 #[cfg(target_os = "macos")]
 mod macos_colour;
