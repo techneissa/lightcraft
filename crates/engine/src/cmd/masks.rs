@@ -88,11 +88,7 @@ enum Later {
     Text(String),
     /// Background mode: the Subject, Sky or Background selection is computed first; the mask (or
     /// part) is added when found, as for Describe, so no rough mask shows while SAM 3 runs.
-    Concept {
-        kind: &'static str,
-        text: String,
-        invert: bool,
-    },
+    Concept(super::concepts::Concept),
 }
 
 /// Compute the segmentation of a new AI shape (Object with clicks, Prompt) — or, in background
@@ -140,7 +136,7 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
             let Some(c) = super::concepts::of(shape) else { return Ok(Later::Nothing) };
             if background {
                 s.segmenter.require_model()?;
-                return Ok(Later::Concept { kind: c.kind, text: c.text.into(), invert: c.invert });
+                return Ok(Later::Concept(c));
             }
             let found = segment(s, |s| s.segment_text(id, c.text))?;
             super::concepts::store(shape, found, &c)?;
@@ -154,7 +150,7 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
 fn queue_later(s: &mut Session, later: Later, mask: u32, comp: usize, mut out: Value) -> Result<Value> {
     out["id"] = json!(mask);
     match later {
-        Later::Nothing | Later::Text(_) | Later::Concept { .. } => {}
+        Later::Nothing | Later::Text(_) | Later::Concept(_) => {}
         Later::Clicks(hint, exclude) => {
             let id = s.active().ok_or_else(|| ai_err("no active photo"))?;
             segment(s, |s| s.segment_clicks_later(id, mask, comp, hint, exclude))?;
@@ -294,9 +290,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     segment(s, |s| s.segment_text_later(id, None, "add", name, text))?;
                     return Ok(json!({"pending": true}));
                 }
-                if let Later::Concept { kind, text, invert } = &later {
+                if let Later::Concept(concept) = &later {
                     let id = s.active().ok_or_else(|| bad("mask.add", "no active photo"))?;
-                    segment(s, |s| s.segment_concept_later(id, None, "add", name, kind, text, *invert))?;
+                    segment(s, |s| s.segment_concept_later(id, None, "add", name, concept))?;
                     return Ok(json!({"pending": true}));
                 }
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
@@ -340,9 +336,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     segment(s, |s| s.segment_text_later(id, Some(mid), op, None, text))?;
                     return Ok(json!({"pending": true}));
                 }
-                if let Later::Concept { kind, text, invert } = &later {
+                if let Later::Concept(concept) = &later {
                     let op = p.get("op").and_then(Value::as_str).unwrap_or("add");
-                    segment(s, |s| s.segment_concept_later(id, Some(mid), op, None, kind, text, *invert))?;
+                    segment(s, |s| s.segment_concept_later(id, Some(mid), op, None, concept))?;
                     return Ok(json!({"pending": true}));
                 }
                 let mut comp = 0;

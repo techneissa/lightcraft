@@ -780,27 +780,24 @@ impl Session {
 
     /// Background mode: queue a Subject, Sky or Background selection; the mask (or component, combined by `op` into
     /// mask `mask`) is created by [`Session::segment_poll`] when SAM 3 has found it. `text` is what the model is asked
-    /// for, `invert` turns the result around (Background).
+    /// for (`concept`; Background turns the result around).
     pub(crate) fn segment_concept_later(
         &mut self,
         id: PhotoId,
         mask: Option<u32>,
         op: &str,
         name: Option<String>,
-        kind: &str,
-        text: &str,
-        invert: bool,
+        concept: &crate::cmd::concepts::Concept,
     ) -> Result<(), String> {
         self.segmenter.model_dir()?;
-        let text = text.trim();
         #[cfg(feature = "sam")]
         {
-            let tag = Tag::NewConcept { photo: id, mask, op: op.to_string(), name, kind: kind.to_string(), invert };
-            self.segment_queue(id, worker::Kind::Text(text.to_string()), tag, None)
+            let tag = Tag::NewConcept { photo: id, mask, op: op.to_string(), name, kind: concept.kind.to_string(), invert: concept.invert };
+            self.segment_queue(id, worker::Kind::Text(concept.text.trim().to_string()), tag, None)
         }
         #[cfg(not(feature = "sam"))]
         {
-            let _ = (id, mask, op, name, kind, text, invert);
+            let _ = (id, mask, op, name, concept);
             Err("AI masks are not available in this build".into())
         }
     }
