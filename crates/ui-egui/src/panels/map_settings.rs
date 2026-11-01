@@ -95,7 +95,7 @@ pub fn apply_draft(app: &mut LightcraftApp) -> Result<Value, String> {
 
 /// The tab.
 pub fn tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
-    heading(ui, t, "Tile source");
+    heading(ui, t, "Tile Source");
     let in_use = kind_of(app);
     let mut choice = if app.map.source_draft.custom { SourceKind::Custom } else { in_use };
     let picked = row(ui, t, "Map tiles", |ui| {
@@ -138,7 +138,7 @@ pub fn tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         custom_fields(app, ui, t);
     }
 
-    heading(ui, t, "Tile cache");
+    heading(ui, t, "Tile Cache");
     cache_rows(app, ui, t);
 
     heading(ui, t, "Privacy");

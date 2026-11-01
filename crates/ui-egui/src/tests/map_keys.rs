@@ -293,7 +293,7 @@ fn settings_map_switches_the_tile_source() {
     let rec = Arc::new(Recorder::default());
     let mut h = recorded(&rec);
     assert!(h.app.session.map.source().is_offline());
-    assert!(h.painted_text().iter().any(|t| t.contains("Map tiles are off (Settings ▸ Map)")), "the note points at Settings ▸ Map");
+    assert!(h.painted_text().iter().any(|t| t.contains("Map tiles are off (Settings → Map)")), "the note points at Settings ▸ Map");
     // OpenStreetMap
     click(&mut h, "button:settingsMapSource-0");
     assert_eq!(h.app.session.map.source().id, "osm");

@@ -839,12 +839,12 @@ fn overlay_notes(app: &LightcraftApp, ui: &egui::Ui, f: &Frame, offline: bool) {
         let (title, body) = if without == 0 {
             ("No photos", "Photos with a GPS position appear here as pins")
         } else {
-            ("No photos with a location", "Photos with a GPS position appear here as pins (Info panel ▸ GPS, or Photo ▸ Auto-Tag from Tracklog…)")
+            ("No photos with a location", "Photos with a GPS position appear here as pins (Info panel → GPS, or Photo → Auto-Tag from Tracklog…)")
         };
         note_box(painter, t, canvas.center(), &[(crate::i18n::tr(title).to_string(), true), (crate::i18n::tr(body).to_string(), false)]);
     }
     if offline {
-        let text = crate::i18n::tr("Map tiles are off (Settings ▸ Map)").to_string();
+        let text = crate::i18n::tr("Map tiles are off (Settings → Map)").to_string();
         note_box(painter, t, pos2(canvas.center().x, canvas.top() + 28.0), &[(text, false)]);
     }
     if without > 0 {
