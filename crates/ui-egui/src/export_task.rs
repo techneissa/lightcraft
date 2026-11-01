@@ -17,6 +17,8 @@ use serde_json::{Value, json};
 
 use crate::LightcraftApp;
 
+pub mod book_task;
+
 pub struct ExportTask {
     pub total: usize,
     /// Photos started so far and the file in progress.
@@ -244,6 +246,9 @@ fn export_summary(files: &[Value], photos: Option<&Value>, total: usize, cancell
     }
     if let Some(pdf) = files.first().filter(|f| f["print"] == true) {
         m = format!("Printed to PDF: {} photos, {} pages", pdf["photos"], pdf["pages"]);
+    }
+    if let Some(book) = files.first().filter(|f| f["book"] == true) {
+        m = format!("Exported book: {} photos, {} pages", book["photos"], book["pages"]);
     }
     if skipped > 0 {
         m += &crate::i18n::tr_format!(" · {skipped} skipped (file exists)", skipped = skipped);

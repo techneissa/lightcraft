@@ -18,6 +18,7 @@ pub mod activity;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod apple_photos;
 pub mod availability;
+pub mod book;
 pub(crate) mod camera_preview;
 pub mod camera_profiles;
 pub mod cmd;
@@ -63,7 +64,6 @@ mod pdf;
 pub mod preset_import;
 pub mod preset_luminar;
 pub mod presets;
-pub mod book;
 pub mod print;
 pub mod print_color;
 pub mod print_pdf;

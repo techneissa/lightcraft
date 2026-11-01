@@ -4,6 +4,7 @@ mod album_remove;
 mod alt_preview;
 mod appearance;
 mod before_after;
+mod book;
 mod browse_active;
 mod button;
 mod canvas_keys;

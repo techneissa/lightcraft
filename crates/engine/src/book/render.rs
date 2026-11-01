@@ -22,7 +22,8 @@ pub fn print_settings(book: &Book, aspect: &dyn Fn(u64) -> Option<f64>) -> Resul
     let (w, h) = book.settings.page_size()?;
     let mut layout = Layout::default();
     layout.style = Style::CustomPackage;
-    layout.page = PageSetup { paper: "custom".into(), custom_width: w, custom_height: h, orientation: Orientation::Portrait, margins: Margins::uniform(0.0) };
+    layout.page =
+        PageSetup { paper: "custom".into(), custom_width: w, custom_height: h, orientation: Orientation::Portrait, margins: Margins::uniform(0.0) };
     layout.pages = u32::try_from(book.pages.len().max(1)).map_err(|_| "too many pages")?;
     let mut ids = Vec::new();
     let mut id = 0u32;
@@ -102,4 +103,18 @@ impl Rendered {
         let options = ExportOptions { format: ExportFormat::Jpeg, quality, ..Default::default() };
         self.pages.iter().map(|p| encode_image(&output::page_to_srgb8(p)?, &options)).collect()
     }
+}
+
+/// A file name stem from a book name: letters, digits, spaces, `-` and `_` only.
+pub fn file_stem(name: &str) -> String {
+    let s: String = name.chars().map(|c| if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_') { c } else { '_' }).collect();
+    let s = s.trim().to_string();
+    if s.is_empty() { "Book".into() } else { s }
+}
+
+/// The JPEG files of a book of `pages` pages in `dir`: `<name>-01.jpg`, `<name>-02.jpg`…
+pub fn jpeg_targets(dir: &str, name: &str, pages: usize) -> Vec<String> {
+    let name = file_stem(name);
+    let digits = pages.to_string().len().max(2);
+    (1..=pages).map(|n| std::path::Path::new(dir).join(format!("{name}-{n:0digits$}.jpg")).to_string_lossy().to_string()).collect()
 }

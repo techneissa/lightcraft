@@ -872,7 +872,9 @@ impl Session {
     pub(crate) fn write_library_file(&mut self, name: &'static str, bytes: &[u8]) -> Result<()> {
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
         if lib.blocked.contains(&name) {
-            return Err(EngineError::Other(format!("{name} couldn't be used when the library opened, so it isn't overwritten; reopen the library to save it")));
+            return Err(EngineError::Other(format!(
+                "{name} couldn't be used when the library opened, so it isn't overwritten; reopen the library to save it"
+            )));
         }
         lib.files.write_atomic(name, bytes).map_err(|e| EngineError::Other(format!("{name}: {e}")))
     }

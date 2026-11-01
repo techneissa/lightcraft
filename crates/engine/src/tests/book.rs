@@ -46,7 +46,9 @@ fn demo_ids(s: &Session, n: usize) -> Vec<u64> {
 fn add_missing(s: &mut Session) -> u64 {
     let id = s.catalog.alloc_photo_id();
     let gone = std::env::temp_dir().join("lightcraft-book-no-such-folder").join("gone.jpg").to_string_lossy().to_string();
-    s.catalog.apply(Op::AddPhoto { photo: Box::new(Photo::new(id, Source::File { path: gone }, "gone.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00")) }).unwrap();
+    s.catalog
+        .apply(Op::AddPhoto { photo: Box::new(Photo::new(id, Source::File { path: gone }, "gone.jpg", "JPEG", 60, 40, "2026-01-01T10:00:00")) })
+        .unwrap();
     id.0
 }
 
@@ -118,7 +120,11 @@ fn settings_change_the_geometry_and_are_checked() {
     let mut s = Session::with_demo();
     let ids = demo_ids(&s, 3);
     run(&mut s, "book.create", json!({"ids": ids, "cover": false, "preset": "one"}));
-    let b = run(&mut s, "book.set", json!({"size": "a4", "orientation": "portrait", "margin": 0.25, "padding": 0.0, "background": [10, 20, 30], "fill": true, "ppi": 100.0, "name": "Album"}));
+    let b = run(
+        &mut s,
+        "book.set",
+        json!({"size": "a4", "orientation": "portrait", "margin": 0.25, "padding": 0.0, "background": [10, 20, 30], "fill": true, "ppi": 100.0, "name": "Album"}),
+    );
     assert_eq!(b["name"], "Album");
     assert_eq!(b["settings"]["background"], json!([10, 20, 30]));
     assert!((b["pageWidth"].as_f64().unwrap() - 210.0 / 25.4).abs() < 1e-9);
@@ -256,7 +262,11 @@ fn a_damaged_or_newer_books_file_is_never_overwritten() {
     for (bytes, why) in [
         (br#"{"version": 1, "library": {"books": [{"id": 1"#.to_vec(), "damaged"),
         (serde_json::to_vec(&json!({"version": 9})).unwrap(), "newer"),
-        (serde_json::to_vec(&json!({"version": 1, "library": {"books": [{"id": 1, "name": "x", "pages": [{"template": "grid4", "slots": []}]}]}})).unwrap(), "broken"),
+        (
+            serde_json::to_vec(&json!({"version": 1, "library": {"books": [{"id": 1, "name": "x", "pages": [{"template": "grid4", "slots": []}]}]}}))
+                .unwrap(),
+            "broken",
+        ),
     ] {
         let files = MemStore::new();
         files.set("books.json", bytes.clone());
@@ -422,7 +432,16 @@ fn fit_shows_the_whole_photo_and_fill_crops_to_the_slot() {
 #[test]
 fn every_book_command_is_registered_with_a_description() {
     for id in [
-        "book.list", "book.get", "book.create", "book.open", "book.delete", "book.set", "book.layout", "book.setTemplate", "book.movePhoto", "book.exportPdf",
+        "book.list",
+        "book.get",
+        "book.create",
+        "book.open",
+        "book.delete",
+        "book.set",
+        "book.layout",
+        "book.setTemplate",
+        "book.movePhoto",
+        "book.exportPdf",
         "book.exportJpeg",
     ] {
         let spec = crate::cmd::find_command(id).unwrap_or_else(|| panic!("{id} is not registered"));

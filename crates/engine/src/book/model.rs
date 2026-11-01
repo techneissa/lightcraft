@@ -128,7 +128,8 @@ fn check(v: f64, what: &str, max: f64) -> Result<(), String> {
 impl BookSettings {
     /// Page width and height in inches after orientation.
     pub fn page_size(&self) -> Result<(f64, f64), String> {
-        let (w, h) = size_of(&self.size).ok_or_else(|| format!("unknown page size `{}` (one of {})", self.size, size_names().collect::<Vec<_>>().join(", ")))?;
+        let (w, h) = size_of(&self.size)
+            .ok_or_else(|| format!("unknown page size `{}` (one of {})", self.size, size_names().collect::<Vec<_>>().join(", ")))?;
         Ok(match self.orientation {
             Orientation::Landscape if w != h => (h, w),
             _ => (w, h),

@@ -66,7 +66,10 @@ pub fn auto_layout(photos: &[u64], cover: bool, preset: Preset) -> Result<Vec<Pa
         rest = later;
         inner += 1;
         if pages.len() > MAX_PAGES {
-            return Err(format!("{} photos make more than {MAX_PAGES} pages; use fewer photos or a template with more photos per page", photos.len()));
+            return Err(format!(
+                "{} photos make more than {MAX_PAGES} pages; use fewer photos or a template with more photos per page",
+                photos.len()
+            ));
         }
     }
     Ok(pages)
@@ -144,7 +147,9 @@ impl Book {
 
     fn check_slot(&self, slot: Slot) -> Result<(), String> {
         match slot {
-            Slot::Unplaced { unplaced } => self.unplaced.get(unplaced).map(|_| ()).ok_or_else(|| format!("no unplaced photo {}", unplaced.saturating_add(1))),
+            Slot::Unplaced { unplaced } => {
+                self.unplaced.get(unplaced).map(|_| ()).ok_or_else(|| format!("no unplaced photo {}", unplaced.saturating_add(1)))
+            }
             Slot::Cell { page, cell } => {
                 let p = self.pages.get(page).ok_or_else(|| format!("no page {} (the book has {})", page.saturating_add(1), self.pages.len()))?;
                 p.slots.get(cell).map(|_| ()).ok_or_else(|| format!("page {} has no cell {}", page + 1, cell.saturating_add(1)))

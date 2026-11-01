@@ -25,7 +25,10 @@ fn shape(b: &Book) -> Vec<(Template, Vec<Option<u64>>)> {
 fn auto_layout_fills_pages_in_order_with_a_cover() {
     let b = book(11, true, Preset::Mixed);
     // cover, then one, two, three, four photos per page; every photo exactly once, in order
-    assert_eq!(b.pages.iter().map(|p| p.template).collect::<Vec<_>>(), [Template::FullBleed, Template::One, Template::Two, Template::Three, Template::Grid4]);
+    assert_eq!(
+        b.pages.iter().map(|p| p.template).collect::<Vec<_>>(),
+        [Template::FullBleed, Template::One, Template::Two, Template::Three, Template::Grid4]
+    );
     assert_eq!(b.pages[0].slots, [Some(1)]);
     assert_eq!(b.photos(), photos(11));
     assert!(b.cover && b.unplaced.is_empty());

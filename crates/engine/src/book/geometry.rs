@@ -41,7 +41,8 @@ pub fn cells(template: Template, page: (f64, f64), margin: f64, padding: f64) ->
         Template::Grid4 => {
             let (top, bottom) = (Rect::new(area.x, area.y, area.w, area.h / 2.0), Rect::new(area.x, area.y + area.h / 2.0, area.w, area.h / 2.0));
             let (a, b) = (Rect::new(top.x, top.y, top.w / 2.0, top.h), Rect::new(top.x + top.w / 2.0, top.y, top.w / 2.0, top.h));
-            let (c, d) = (Rect::new(bottom.x, bottom.y, bottom.w / 2.0, bottom.h), Rect::new(bottom.x + bottom.w / 2.0, bottom.y, bottom.w / 2.0, bottom.h));
+            let (c, d) =
+                (Rect::new(bottom.x, bottom.y, bottom.w / 2.0, bottom.h), Rect::new(bottom.x + bottom.w / 2.0, bottom.y, bottom.w / 2.0, bottom.h));
             vec![a, b, c, d]
         }
     };

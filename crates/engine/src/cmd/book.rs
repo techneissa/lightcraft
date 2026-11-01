@@ -8,8 +8,6 @@
 //! * `book.list`, `book.get`, `book.create`, `book.open`, `book.delete`
 //! * `book.set`, `book.layout`, `book.setTemplate`, `book.movePhoto`
 //! * `book.exportPdf`, `book.exportJpeg`
-use std::path::Path;
-
 use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, index_req, names_photos, str_param};
@@ -253,13 +251,6 @@ fn move_photo(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---- export ----------------------------------------------------------------------------------
 
-/// A file name stem from a book name: letters, digits, spaces, `-` and `_` only.
-fn stem(name: &str) -> String {
-    let s: String = name.chars().map(|c| if c.is_alphanumeric() || matches!(c, ' ' | '-' | '_') { c } else { '_' }).collect();
-    let s = s.trim().to_string();
-    if s.is_empty() { "Book".into() } else { s }
-}
-
 /// Renders the book with a row in the activity stack that cancels it.
 fn render_book(s: &mut Session, book: &Book, label: &str, id: &str) -> Result<render::Rendered> {
     let job = render::prepare(s, book).map_err(|e| bad(id, e))?;
@@ -296,9 +287,7 @@ fn export_jpeg(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => v.as_u64().filter(|q| (1..=100).contains(q)).ok_or_else(|| bad(ID, "`quality` must be 1 to 100"))? as u8,
     };
     let book = s.books.find(book_id(p, ID)?).map_err(|e| bad(ID, e))?.clone();
-    let name = stem(str_param(p, "name").unwrap_or(&book.name));
-    let digits = book.pages.len().to_string().len().max(2);
-    let targets: Vec<String> = (1..=book.pages.len()).map(|n| Path::new(dir).join(format!("{name}-{n:0digits$}.jpg")).to_string_lossy().to_string()).collect();
+    let targets = render::jpeg_targets(dir, str_param(p, "name").unwrap_or(&book.name), book.pages.len());
     for t in &targets {
         s.check_write_target(t).map_err(|e| bad(ID, e))?;
     }
