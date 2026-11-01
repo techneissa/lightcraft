@@ -234,6 +234,9 @@ impl LightcraftApp {
             params
         };
         let r = self.session.execute(id, &params).map_err(CommandError::from);
+        if r.is_ok() {
+            panels::book::after_command(self, id);
+        }
         if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
             self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
                 Some(serde_json::json!("original"))

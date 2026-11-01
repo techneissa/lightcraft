@@ -12,6 +12,7 @@ use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
 
 mod albums;
+mod books;
 mod dates;
 mod folders;
 mod keywords;
@@ -171,6 +172,10 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                     SidebarSection::Keywords => {
                         let tree = app.caches.keyword_tree(&app.session.catalog);
                         section(app, ui, s, tree.len(), |app, ui| keyword_rows(app, ui, &tree, 0.0))
+                    }
+                    SidebarSection::Books => {
+                        let rows = app.session.books.books.len();
+                        section(app, ui, s, rows, books::books_rows)
                     }
                 };
                 placed.push(at);

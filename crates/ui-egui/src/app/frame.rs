@@ -494,6 +494,7 @@ impl LightcraftApp {
         panels::left::album_drag_feedback(self, &ctx);
         panels::left::section_drag_feedback(self, &ctx);
         panels::keyword_list::drag_feedback(self, &ctx);
+        panels::book::show_prompt(self, &ctx);
         panels::toast(self, &ctx);
         drop_overlay::show(self, &ctx);
         // AppKit moves the window on a drag anywhere in the title-bar band unless the window isn't

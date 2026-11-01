@@ -18,6 +18,8 @@ pub enum ViewMode {
     People,
     /// The photos in view as pins on a map (`panels/map.rs`).
     Map,
+    /// A photo book: the spread, its pages and the book's photos ([`crate::panels::book`]).
+    Book,
 }
 
 /// The right-hand tool/panel shown next to the tool strip.

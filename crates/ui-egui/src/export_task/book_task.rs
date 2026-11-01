@@ -1,8 +1,8 @@
-//! The Book dialog's exports: a PDF or a folder of JPEGs, rendered on a worker thread with a row
+//! The Book view's exports: a PDF or a folder of JPEGs, rendered on a worker thread with a row
 //! in the activity stack that cancels it (the same task as the other exports, see [`ExportTask`]).
 //!
-//! `dialog.book` opens the dialog; `app.bookPdf` and `app.bookJpeg` ask for a destination (when
-//! `path` / `dir` is not given) and start the export.
+//! `view.book` (and `dialog.book`) open the Book view ([`crate::panels::book`]); `app.bookPdf` and
+//! `app.bookJpeg` ask for a destination (when `path` / `dir` is not given) and start the export.
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::channel;
 use std::sync::{Arc, Mutex};
@@ -14,7 +14,6 @@ use serde_json::{Value, json};
 use super::ExportTask;
 use crate::LightcraftApp;
 use crate::pick::{PickRequest, Picked};
-use crate::state::Dialog;
 
 /// JPEG quality of the pages.
 const JPEG_QUALITY: u8 = 90;
@@ -91,12 +90,10 @@ pub fn start(app: &mut LightcraftApp, params: &Value, jpeg: bool) -> Result<Valu
 
 /// The UI commands of the Book module; `None` for any other id.
 pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if let Some(r) = crate::panels::book::command(app, id, p) {
+        return Some(r);
+    }
     let jpeg = match id {
-        "dialog.book" => {
-            app.ui.book = Default::default();
-            app.ui.dialog = Some(Dialog::Book);
-            return Some(Ok(Value::Null));
-        }
         "app.bookPdf" => false,
         "app.bookJpeg" => true,
         _ => return None,

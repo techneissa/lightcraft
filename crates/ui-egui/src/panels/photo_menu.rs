@@ -73,6 +73,7 @@ pub const DEFAULT: &[&str] = &[
     "colorLabel",
     "addKeywords",
     "addToAlbum",
+    "addToBook",
     "removeFromAlbum",
     "setAlbumCover",
     "rename",
