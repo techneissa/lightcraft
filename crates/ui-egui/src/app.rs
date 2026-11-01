@@ -125,6 +125,7 @@ impl LightcraftApp {
             review_pending: None,
             shown_library: None,
             export: None,
+            from_control: false,
             layers: None,
             edit_in: None,
             handoffs: Vec::new(),

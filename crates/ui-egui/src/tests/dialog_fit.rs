@@ -99,7 +99,8 @@ fn export_dialog_is_unchanged_in_a_tall_window() {
     // buttons are the button component's medium size, 30 points, as the welcome's and every dialog's;
     // 656 wide since the format row ends with GIF, which opens Export Animated GIF; 60 shorter
     // since a slider is one 30-point row, label, track and value side by side, not 45)
-    let height = if cfg!(target_os = "macos") { 856.0 } else { 826.0 };
+    // (30 more with the Show in Finder row, in every platform's dialog)
+    let height = if cfg!(target_os = "macos") { 886.0 } else { 856.0 };
     assert!((dialog.height() - height).abs() <= 1.0, "{dialog:?}");
     assert!((dialog.width() - 656.2).abs() <= 1.0, "{dialog:?}");
 }

@@ -49,6 +49,7 @@ impl LightcraftApp {
         }
         self.memory_applied = Some(mb);
         crate::smart_editing::sync(self);
+        crate::dialogs::settings::lens_database::sync(ctx, self);
         // the monitor profile (Settings ▸ Display): previews follow it from the next frame
         if self.display_applied.as_ref() != Some(&self.ui.settings.display_profile) {
             let path = self.ui.settings.display_profile.clone();

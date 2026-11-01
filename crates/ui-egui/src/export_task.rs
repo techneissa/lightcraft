@@ -27,6 +27,8 @@ pub struct ExportTask {
     rx: Receiver<Result<(Vec<Value>, Option<Value>, bool), String>>,
     /// The export's row in the activity stack (`activity.cancel` sets `cancel`).
     guard: TaskGuard,
+    /// Show the first file in the file manager once the batch ends ([`ExportOptions::show_in_finder`]).
+    show_in_finder: bool,
 }
 
 impl ExportTask {
@@ -56,6 +58,7 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     let row = guard.handle();
     // translated here: the language is the UI thread's, and the worker would show English
     let adding = crate::i18n::tr("Adding to Apple Photos…").to_string();
+    let show_in_finder = opts.show_in_finder;
     let work = move || {
         let mut w = |path: &str, bytes: &[u8]| write(path, bytes);
         let r = run_batch(items, &opts, &to, &mut w, &|path| std::path::Path::new(path).exists(), false, &mut |done, name| {
@@ -83,7 +86,7 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     std::thread::Builder::new().name("export".into()).spawn(work).map_err(|e| e.to_string())?;
     #[cfg(target_arch = "wasm32")]
     work();
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard, show_in_finder });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -130,7 +133,7 @@ pub fn start_contact_sheet(app: &mut LightcraftApp, params: &Value) -> Result<Va
     work();
     let row = app.session.activity.start("export", "Exporting contact sheet", Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row, show_in_finder: false });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -183,7 +186,7 @@ pub fn start_print(app: &mut LightcraftApp, params: &Value) -> Result<Value, Str
     work();
     let row = app.session.activity.start("export", "Printing to PDF", Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row, show_in_finder: false });
     Ok(json!({"background": true, "total": total}))
 }
 
@@ -269,7 +272,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
     match task.rx.try_recv() {
         Ok(r) => {
             let cancelled = matches!(&r, Ok((_, _, true)));
-            let total = task.total;
+            let (total, show) = (task.total, task.show_in_finder);
             // the batch's summary (`activity.list` → finished): photos placed, the failures and why
             if let Ok((files, _, _)) = &r {
                 task.guard.progress(files.len() as u64, total as u64);
@@ -283,7 +286,10 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
             let photos_failed = matches!(&r, Ok((_, Some(p), _)) if p.get("error").is_some());
             let msg = match r {
                 Ok((files, photos, _)) => {
-                    let m = export_summary(&files, photos.as_ref(), total, cancelled);
+                    let mut m = export_summary(&files, photos.as_ref(), total, cancelled);
+                    if !cancelled && let Some(note) = crate::export_reveal::reveal_note(app, show, &files) {
+                        m += &note;
+                    }
                     app.last_export_result = Some(json!({"files": files, "cancelled": cancelled, "applePhotos": photos}));
                     m
                 }
