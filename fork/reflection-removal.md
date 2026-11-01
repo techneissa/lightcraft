@@ -1,5 +1,7 @@
 # Reflection removal
 
+List: Remove ▸ Reflections separates a window's reflection with a local DSRNet model, kept in the folder shared with PhotoCraft (official PR #1220 taken early). Branch `feat/25-reflection-removal`.
+
 ## What it does
 
 The Remove panel gets a **Reflections** section (also Photo ▸ Remove Reflections) that separates a reflection, such as a shop window's, from the photo with a local DSRNet model: DSRNet-S, DSRNet-L or DSRNet-L Nature, at Preview (384 px), Standard (768 px) or High (1024 px). Nothing leaves the Mac. Amount (default 35 %), Protect Sky, Detail Protection (default 60 %) and Limit to Area change the result without running the model again; changing the model or the quality needs Recalculate. The correction is a small grid saved beside the library settings (`reflection-cache`), never in the photo. Mac only (Candle on Metal, CPU as the fallback). Issue #25.
@@ -31,10 +33,12 @@ Licences (checked 2026-11-02):
 - `crates/develop/src/settings.rs` (`Reflection` settings, absent from the file while default), `crates/develop/src/controls.rs` (the `reflection.*` controls and the rule that keeps Left < Right and Top < Bottom).
 - `crates/engine/src/lib.rs` (`pub mod reflections;`) and `crates/engine/src/media/render.rs` (`RenderJob::run` applies the correction to the source before the pipeline, so view, thumbnails and export agree).
 - `crates/ui-egui/src/lib.rs` (`pub mod reflections;` and four state fields), `app.rs` (their start values), `menus/ui_commands.rs`, `menus/run.rs` and `menus.rs` (the commands, their dispatch and `ui_enabled`), `panels/right/crop.rs` (one call at the end of `remove`), `icons.rs` (`Icon::Reflection`), `crates/ui-egui/locales/*.json` (20 messages; fi, id, sv and vi were added here because they shipped after the PR), `tests/masking.rs` (two tests).
-- `README.md`, `docs/gaps.md`, `docs/parity-checklist.md` (LR-REM-REFLECT 🟡), `docs/whats-new.md`.
+- `README.md`, `docs/gaps.md` (row 12) and `docs/parity-checklist.md` (the LR-REM-REFLECT row, ⬜ → 🟡), both edited in place.
 - When official splits or moves one of these files again (it did before this merge: `media.rs`, `menus.rs`, `lib.rs` and `panels/right.rs` became folders), move the hook with the code.
 
 ## Tests
+
+Commands in `fork/tests.d/reflection-removal.txt`:
 
 `cargo test -p lightcraft-reflections`, `cargo test -p lightcraft-engine --lib -- reflections`, `cargo test -p lightcraft-ui-egui --lib -- reflection`. None needs a model or a photo (the correction grids are procedural). The real model was run by hand on a CC0 photo (see the PR).
 
@@ -45,3 +49,9 @@ Official may merge #1220 as it is, or a newer version of it (the PR is open and 
 2. Keep our shared folder: `models_dir()` in `crates/engine/src/reflections.rs` must still call `shared_models::models_dir` (official's version reads only `LIGHTCRAFT_REFLECTION_MODELS` and `<config>/reflection-models`), and `crates/engine/src/reflections/shared_models.rs` with its `mod shared_models;` line stays. If official adds its own model download or a different folder, point it at `ArtCraft/models/<model-id>` and ask before downloading.
 3. Keep the four extra translations (fi, id, sv, vi) if official's catalogs lack them: `reflections::tests::reflection_messages_exist_in_every_shipped_language` fails otherwise.
 4. Drop the Cargo/NOTICE/doc duplicates, re-run `cargo xtask parity --write`, then this feature's tests. When nothing of ours is left, delete this file and its line in `fork/tests.sh`.
+
+## What's New entry
+
+### Remove: Reflections
+- The Remove panel has a Reflections section (also Photo ▸ Remove Reflections) that separates a reflection, such as a window's, from the photo with a local DSRNet model (S, L or L Nature) at Preview, Standard or High quality. Nothing leaves the Mac. Amount, Protect Sky, Detail Protection and Limit to Area change the result without running the model again. It is the official experimental feature, taken early.
+- The model is not bundled: convert it once as `docs/ai-reflections.md` says, then pick its folder with Install Reflection Model…. It is kept in `~/Library/Application Support/ArtCraft/models/<model-id>` (shared with PhotoCraft).
