@@ -16,6 +16,13 @@
   adjustment of a +1 exposure mask shows while painting with the overlay hidden. Not touched by issue #26. Checked
   2026-11-01.
 
+- `tests::masking::mask_adjustments_hide_overlay_without_disabling_the_mask` (ui-egui, official #519): fails since the
+  masking rework (PR #38, c1a21808) with `exposure initially needs scrolling`. Its first step asserts the Exposure slider
+  starts below the fold; the reworked Masking panel is shorter, so the slider is already visible. The behaviour it
+  tests (a slider change hides the overlay, the mask stays enabled, O restores it) still holds; the fork test
+  `a_mask_slider_hides_the_overlay_and_keeps_the_mask_enabled` (`tests/mask_parts.rs`) proves it. The official test is
+  left as is. Checked 2026-11-02.
+
 ### Known failures on Fork CI only (Linux)
 
 None. `tests::macos_colour` (`crates/engine`) runs on macOS only (`#[cfg(target_os = "macos")]` in `tests.rs`,
