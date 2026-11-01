@@ -211,6 +211,11 @@ painting on the current mask. `{"new": true}` creates a separate brush mask; `{"
 `{"op": "subtract"}` appends a brush component to the selected mask. Creating either starts in
 paint mode with the overlay visible. Brush Erase (or Alt while painting) removes strokes' coverage
 within that brush component; it is distinct from subtracting the component from the whole mask.
+`tool.brush {"component": k}` selects part `k` (a brush part) of the selected mask and paints into it, `{"erase": true}`
+chooses Erase (taking away from the mask; a stroke in a Subtract part goes the other way on its own part). Strokes go
+into the selected part when it is a brush part, else the mask's last one; `mask.select {id, component}` selects a
+part, `mask.brushStroke {component}` names the part to paint into, and `ui.inspect` / `engine.state` report
+`activeComponent`. The first part of a mask is its base and acts as Add whatever its mode says.
 
 ### When the library can't be saved
 

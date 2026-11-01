@@ -650,6 +650,13 @@ impl Session {
         if let Some(d) = &self.smart_previews_dir {
             self.media.smart_dir = Some(d.clone());
         }
+        // books (the Book module): a file this build can't use is left as it is and never overwritten
+        let loaded = crate::book::store::load(files.as_mut());
+        self.books = loaded.books;
+        if loaded.block {
+            settings.blocked.push(crate::book::store::NAME);
+        }
+        settings.warnings.extend(loaded.warnings);
         // presets
         if let Some(f) = settings.read::<PresetsFile>(files.as_mut(), "presets.json") {
             for p in &mut self.presets {
@@ -978,6 +985,18 @@ impl Session {
         if self.auto_sync_chosen.is_none() {
             self.auto_sync = on;
         }
+    }
+
+    /// Writes a settings file of the open library (a no-op for an in-memory session); a file that
+    /// couldn't be read when the library opened is not overwritten (the Book module's books.json).
+    pub(crate) fn write_library_file(&mut self, name: &'static str, bytes: &[u8]) -> Result<()> {
+        let Some(lib) = self.library.as_mut() else { return Ok(()) };
+        if lib.blocked.contains(&name) {
+            return Err(EngineError::Other(format!(
+                "{name} was left untouched when the library opened (see the warning shown then), so nothing is saved to it; move the file away and reopen the library to start again"
+            )));
+        }
+        lib.files.write_atomic(name, bytes).map_err(|e| EngineError::Other(format!("{name}: {e}")))
     }
 
     /// Warnings about the open library not handed out yet: its settings files, and a lock that

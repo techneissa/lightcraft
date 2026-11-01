@@ -159,7 +159,8 @@ pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, l
         if comp.invert {
             c.data.iter_mut().for_each(|v| *v = 1.0 - *v);
         }
-        if first && comp.op != MaskOp::Intersect {
+        // the first part is the base, whatever its mode says (an Intersect or Subtract has nothing to cut from)
+        if first {
             alpha = c;
             first = false;
             continue;

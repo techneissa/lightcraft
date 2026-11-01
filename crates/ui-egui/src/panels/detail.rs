@@ -18,6 +18,7 @@ use lightcraft_engine::media::QuickSource;
 mod brush_preview;
 mod crop;
 mod filmstrip;
+mod find_overlay;
 mod geometry;
 mod info;
 mod masks;
