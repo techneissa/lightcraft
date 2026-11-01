@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-11-01
+
+### Shared SAM 3 Model Folder
+- AI masks look for the SAM 3 model in `~/Library/Application Support/ArtCraft/models/sam3` (shared with PhotoCraft) first, and a download goes there.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus
@@ -64,6 +69,14 @@
 - A photo with a mask id at the 32-bit limit (from a damaged or hand-edited sidecar, a paste or an agent) no longer
   breaks the masks added after it: new masks, duplicates and the masks of a preset each get an id no other mask has.
   Before, the next id wrapped around to 0, so a second new mask shared the first one's id (debug builds crashed).
+### Sharpening Radius Works, Vignette Is Smoother
+- In process V3, **Sharpening ▸ Radius** sets how wide the sharpening is, in pixels of the original photo: a
+  small radius brings out the finest edges, a large one a broader, stronger crispness (and wider halos). It is
+  scaled to the preview, so the preview matches the export. **Amount** is also clearer: 40 to 60 is a visible,
+  natural sharpening and 150 is strong without heavy halos.
+- In process V3, **Effects ▸ Vignette** darkens evenly: -100 takes the far corners down by about 2.75 stops (it
+  used to go to black), -50 by about 1.2 stops (it used to be 1) and -20 is visible; +100 lightens the corners by
+  about 1.5 stops. Photos edited earlier keep their look until you use Update to Current Process.
 
 ### Noise Reduction Contrast and Sharpening Detail Work
 - **Noise Reduction ▸ Contrast** now does something: higher values keep more texture that the luminance noise
