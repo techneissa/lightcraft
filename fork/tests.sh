@@ -7,7 +7,7 @@ run() { echo "==> $*"; "$@" || failed+=("$*"); }
 
 run cargo test -p lightcraft-codecs --lib animated_gif
 run cargo test -p lightcraft-filepanel
-run cargo test -p lightcraft-engine --lib -- layers open_path animated_gif denoise prefs quick_jobs lens_profiles camera_preview camera_profiles local_profiles smart_local smart_editing smart media presets files auto_sync quick_filters exif_edit exif_xmp sidecar::exif lens_database export::tests
+run cargo test -p lightcraft-engine --lib -- config:: layers open_path animated_gif denoise prefs quick_jobs lens_profiles camera_preview camera_profiles local_profiles smart_local smart_editing smart media presets files auto_sync quick_filters exif_edit exif_xmp sidecar::exif lens_database export::tests
 run cargo test -p lightcraft-lensdb
 run cargo test -p lightcraft-develop
 run cargo test -p lightcraft-catalog
