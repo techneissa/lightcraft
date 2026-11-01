@@ -5,6 +5,9 @@
 ### Remove: Find People and Find Wires
 - The Remove panel has Find People and Find Wires. Each outlines what it finds on the photo; click one to select it (⇧-click adds more), then Remove, or Remove All, takes them out with content-aware spots in one undo step, and every result is an ordinary spot you can still move, resize or delete. People come from the local SAM 3 model (rough shapes from detected faces when only the face detector is installed); the main subject, the largest and most central person however small, is left out unless asked for. Wires (power lines, cables) come from SAM 3 too, or from a built-in thin-line detector without it. Agents get `spot.findPeople`, `spot.findWires`, `spot.candidates`, `spot.selectCandidate` and `spot.removeCandidates`.
 
+### Plainer Camera Card in Info
+- The camera card in Info looks like the plain official card again: dim Camera, Lens, Focal length, Shutter speed, Aperture and ISO labels with plain values. Click a value to edit it (Return saves, Esc cancels). A focal length or aperture your lens cannot give (read from its name, such as 16-35mm f/4) is refused: the value shakes, keeps its old text, and a small red ! says why; `photo.setMeta` refuses it too.
+
 ### Fixed Slider Label Column
 - In the Edit and Masking panels the slider names are left-aligned in one column of fixed width, so opening or closing a section (Noise Reduction has long names) no longer moves any name or shortens any slider.
 
