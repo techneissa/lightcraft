@@ -33,7 +33,8 @@ The stack's own hooks (view mode, menus, commands, Settings tab, Info panel, fil
 - `crates/ui-egui/src/keybinds/model/conditions.rs` (`DECLARED`) and `keybinds/when/keys.rs` (the `view` value `map`): the Map view's keys share H, `\`, O, ⌘K, `=` and `-` with other commands by conditions (`view == map` / `view != map`), like the X and A pairs; `shortcuts::CONTEXTUAL` lists the pairs.
 - `crates/engine/src/sidecar_queue.rs`: the background XMP writer carries `gps_owned` (the stack's `Session::gps_edited`) to `sidecar_contents`.
 - `crates/catalog/src/rules.rs`: the GPS rule fields read the photo as shown (`meta.shown()`), as the other fields do.
-- `docs/map.md`: the default tile source line.
+- `docs/map.md`: the default tile source line, and the memory cap.
+- Fixes on top of the stack: the decoded-tile cache (`crates/map/src/service.rs`, `MEMORY_BYTES`) and the tile textures (`panels/map.rs`, `MAX_TEXTURE_BYTES`) are capped by bytes, not tile counts; Settings ▸ Map's custom-server fields are refilled from the source in use after Apply (`map_settings.rs`); the map's own notes use "→" (the UI font has no ▸); Settings headings in Title Case. Tests: `decoded_tiles_are_capped_by_bytes`, `every_cluster_pin_shows_its_photo_count`, `no_tile_request_starts_after_the_map_leaves_the_screen`, `failing_tiles_are_not_retried_after_the_map_leaves_the_screen`, and the on-demand `map_frame_times_with_five_thousand_pins` (`-- --ignored --nocapture`).
 
 ## Tests
 

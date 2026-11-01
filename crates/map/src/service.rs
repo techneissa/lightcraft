@@ -44,8 +44,9 @@ pub const MAX_TILE_EDGE: u32 = 1024;
 pub const FAILED_RETRY: Duration = Duration::from_secs(10 * 60);
 /// Most tiles wanted at once (a 16k-pixel view with its margin stays under this).
 pub const MAX_WANTED: usize = 4096;
-/// Decoded tiles kept in memory (256 × 256 × 4 bytes each: 64 MB).
-pub const MEMORY_TILES: usize = 256;
+/// Decoded tiles kept in memory, counted in bytes (RGBA: 64 MiB, 256 tiles of 256 × 256 px, or 16 of
+/// the largest 1024 × 1024 px): a server's big tiles never hold more than this.
+pub const MEMORY_BYTES: usize = 64 << 20;
 /// First backoff after an error, and the longest.
 const BACKOFF_START: Duration = Duration::from_secs(1);
 const BACKOFF_MAX: Duration = Duration::from_secs(300);
@@ -177,6 +178,9 @@ pub struct ServiceStats {
     pub queued: usize,
     pub wanted: usize,
     pub in_memory: usize,
+    /// The bytes of those decoded tiles (at most [`MEMORY_BYTES`], more only while the view itself
+    /// needs more).
+    pub memory_bytes: usize,
     /// Milliseconds until the host may be asked again (0 = not backing off).
     pub backoff_ms: u64,
 }
@@ -218,10 +222,15 @@ impl State {
         self.rank.contains_key(k)
     }
 
+    /// The bytes of the decoded tiles held.
+    fn memory_bytes(&self) -> usize {
+        self.memory.values().map(|t| t.image.rgba.len()).sum()
+    }
+
     fn remember(&mut self, key: TileKey, image: Arc<TileImage>, expires: i64) {
         self.use_counter += 1;
         self.memory.insert(key, MemTile { image, expires, used: self.use_counter });
-        while self.memory.len() > MEMORY_TILES {
+        while self.memory.len() > 1 && self.memory_bytes() > MEMORY_BYTES {
             // never drop a tile of the current view for an older one
             let victim = self.memory.iter().filter(|(k, _)| !self.rank.contains_key(k)).min_by_key(|(_, t)| t.used).map(|(k, _)| *k);
             let victim = victim.or_else(|| self.memory.iter().min_by_key(|(_, t)| t.used).map(|(k, _)| *k));
@@ -404,6 +413,7 @@ impl TileService {
         s.queued = st.disk_q.len() + st.net_q.len();
         s.wanted = st.wanted.len();
         s.in_memory = st.memory.len();
+        s.memory_bytes = st.memory_bytes();
         s.in_flight = st.net_in_flight;
         s.backoff_ms = st.backoff_until.map_or(0, |u| u.saturating_duration_since(Instant::now()).as_millis() as u64);
         s

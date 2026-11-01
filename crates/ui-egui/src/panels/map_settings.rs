@@ -122,6 +122,10 @@ pub fn tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             app.toast(ui.ctx(), e);
         }
     }
+    // a custom server in use shows its own values (after Apply, and when Settings is opened on it)
+    if choice == SourceKind::Custom && !app.map.source_draft.custom {
+        start_draft(app);
+    }
     let mut start = app.ui.settings.map_start_on_osm;
     if check(ui, "settingsMapStartOnOsm", &mut start, "Start on OpenStreetMap") {
         app.ui.settings.map_start_on_osm = start;

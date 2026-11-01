@@ -338,9 +338,25 @@ fn a_custom_server_is_used_only_once_confirmed_and_a_bad_one_changes_nothing() {
     settle_tiles(&mut h);
     assert!(rec.asked("tiles.example.org") > 0, "the confirmed server serves the map");
     assert!(h.painted_text().iter().any(|t| t.contains("© Example tiles")), "its credit is on the map");
+    // the fields keep what was applied: changing only the max zoom needs no retyping
+    frames(&mut h, 3);
+    let d = h.app.map.source_draft.clone();
+    assert_eq!(
+        (d.url.as_str(), d.attribution.as_str()),
+        ("https://tiles.example.org/{z}/{x}/{y}.png", "© Example tiles"),
+        "the fields keep their values after Apply"
+    );
+    h.app.map.source_draft.max_zoom = "12".into();
+    click(&mut h, "button:settingsMapApply");
+    assert_eq!(h.app.map.source_draft.error, None);
+    assert_eq!(h.app.session.map.source().max_zoom, 12);
+    assert_eq!(h.app.session.map.source().attribution, "© Example tiles");
+    let src = h.app.session.map.source().clone();
+    h.app.map.source_draft = Default::default();
 
     // a bad template (no https, no {x}/{y}) and a bad max zoom are refused, the source stays
     click(&mut h, "button:settingsMapSource-2");
+    frames(&mut h, 2);
     h.app.map.source_draft.url = "http://tiles.bad.example/{z}.png".into();
     click(&mut h, "button:settingsMapApply");
     assert!(h.app.map.source_draft.error.is_some(), "refused");

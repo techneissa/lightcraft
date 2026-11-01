@@ -11,6 +11,9 @@
 ### Shorter Slider Label Column
 - The slider label column in Edit and Masking now fits the common names (Highlights, Saturation, Vibrance), so the sliders are longer. A longer name (Color Noise Reduction) uses a slightly smaller font, then wraps onto two lines, and its row gets a little taller; the column still never moves.
 
+### Map Memory Is Capped In Bytes
+- The map's decoded tiles and textures are held to 64 MiB each, whatever size a tile server sends, and Settings ▸ Map keeps a custom server's fields filled after Apply.
+
 ### Map Starts Offline In This Fork
 - The Map view's tile source starts as Offline until you pick OpenStreetMap or your own server in Settings ▸ Map, so no tile server is asked unless you chose it. The switch Start on OpenStreetMap in Settings ▸ Map, or the globe button on the grey map, makes OpenStreetMap the start for libraries that have no saved source.
 

@@ -442,3 +442,22 @@ fn the_http_transport_sends_the_right_headers_and_caps_bodies() {
     }
     assert!(requests[1].contains(&"If-None-Match: \"t\"".to_string()));
 }
+
+/// Decoded tiles are held to a byte budget, not a count: a server of 1024 px tiles (4 MiB each)
+/// keeps 16, not 256 (the old count would have held a gigabyte).
+#[test]
+fn decoded_tiles_are_capped_by_bytes() {
+    let fake =
+        Fake::new(|_, _| Ok(HttpResponse { status: 200, headers: vec![("Cache-Control".into(), "max-age=600".into())], body: png(1024, 1024) }));
+    let svc = TileService::with_transport(source(), None, Some(fake.clone()));
+    // the view moves along a row, four tiles at a time, 40 tiles in all
+    for group in 0..10u32 {
+        let keys: Vec<TileKey> = (0..4).map(|i| TileKey::new(9, group * 4 + i, 3).unwrap()).collect();
+        svc.want(&keys);
+        wait_until("the group", 20, || svc.is_idle() && keys.iter().all(|k| svc.get(*k).is_some()));
+    }
+    let s = svc.stats();
+    assert!(s.memory_bytes <= MEMORY_BYTES, "{} bytes held, the budget is {MEMORY_BYTES}", s.memory_bytes);
+    assert!(s.in_memory >= 4 && s.in_memory <= 16, "{} tiles held", s.in_memory);
+    assert_eq!(fake.urls().len(), 40);
+}

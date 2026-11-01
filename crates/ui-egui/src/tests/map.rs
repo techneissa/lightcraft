@@ -279,7 +279,7 @@ fn tile_textures_are_uploaded_once_not_every_frame() {
     run(&mut h, "map.setView", json!({"lon": 4.0}));
     assert!(h.step_until(T, |h| h.app.map.tiles_missing == 0 && idle(h)));
     assert!(h.app.map.uploads - uploads <= 12, "{} new uploads for a small pan", h.app.map.uploads - uploads);
-    assert!(h.app.map.textures() <= crate::panels::map::MAX_TEXTURES);
+    assert!(h.app.map.texture_bytes() <= crate::panels::map::MAX_TEXTURE_BYTES);
     // another tile source: the old source's pictures go
     run(&mut h, "map.tileSource", json!({"offline": true}));
     frames(&mut h, 2);
@@ -556,4 +556,212 @@ fn the_mini_map_pin_stays_on_a_map_of_any_width() {
         let p = keep_on_map(pos2(500.0, 80.0), narrow);
         assert!((narrow.left()..=narrow.right()).contains(&p.x), "{w}: {p:?}");
     }
+}
+
+// ---- cluster counts, and no tile requests once the map is off the screen
+
+#[test]
+fn every_cluster_pin_shows_its_photo_count() {
+    let (mut h, _) = demo(Some(fake(false)));
+    run(&mut h, "view.map", json!({}));
+    frames(&mut h, 3);
+    // zoomed out far enough that Paris (3) and London (2) merge
+    for zoom in [4.0, 1.0] {
+        run(&mut h, "map.setView", json!({"zoom": zoom}));
+        frames(&mut h, 3);
+        let s = state(&mut h);
+        let cs = clusters(&s);
+        let big: Vec<&Value> = cs.iter().filter(|c| c["count"].as_u64().unwrap_or(0) > 1).collect();
+        assert!(!big.is_empty(), "zoom {zoom}: some photos are grouped: {s}");
+        let painted = h.painted_text();
+        for c in big {
+            let n = c["count"].as_u64().unwrap().to_string();
+            assert!(painted.contains(&n), "zoom {zoom}: the pin of {n} photos shows {n}; painted {painted:?}");
+        }
+    }
+    // at the lowest zoom Paris and London are one pin of 5 (New York is far enough to stay alone)
+    let s = state(&mut h);
+    assert!(clusters(&s).iter().any(|c| c["count"] == 5), "{s}");
+}
+
+/// A transport that counts the requests that start, can hold them until released, and can fail them.
+struct Held {
+    starts: AtomicUsize,
+    open: AtomicBool,
+    fail: bool,
+    png: Vec<u8>,
+}
+
+impl Held {
+    fn new(hold: bool, fail: bool) -> Arc<Held> {
+        Arc::new(Held { starts: AtomicUsize::new(0), open: AtomicBool::new(!hold), fail, png: tile_png() })
+    }
+    fn starts(&self) -> usize {
+        self.starts.load(Ordering::SeqCst)
+    }
+}
+
+impl Transport for Held {
+    fn get(&self, _: &str, _: &[(&'static str, String)], _: usize, cancel: &AtomicBool) -> Result<HttpResponse, String> {
+        self.starts.fetch_add(1, Ordering::SeqCst);
+        while !self.open.load(Ordering::SeqCst) && !cancel.load(Ordering::SeqCst) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        if self.fail {
+            return Err("boom".into());
+        }
+        Ok(HttpResponse { status: 200, headers: vec![("cache-control".into(), "max-age=604800".into())], body: self.png.clone() })
+    }
+}
+
+fn map_with(t: &Arc<Held>) -> Headless {
+    let (mut h, _) = demo(None);
+    h.app.session.map.set_service(TileService::with_transport(TileSource::openstreetmap(), None, Some(t.clone() as Arc<dyn Transport>)));
+    run(&mut h, "view.map", json!({}));
+    h
+}
+
+/// Requests held on the wire when the map closes finish, and nothing queued behind them starts.
+#[test]
+fn no_tile_request_starts_after_the_map_leaves_the_screen() {
+    let t = Held::new(true, false);
+    let mut h = map_with(&t);
+    assert!(h.step_until(T, |_| t.starts() == 2), "two requests on the wire, the rest queued");
+    assert!(h.app.session.map.service().is_some_and(|s| s.stats().queued > 0), "more tiles are waiting");
+    run(&mut h, "view.photoGrid", json!({}));
+    frames(&mut h, 4);
+    let s = h.app.session.map.service().unwrap().stats();
+    assert_eq!((s.wanted, s.queued), (0, 0), "the queue is cleared when no map is drawn");
+    t.open.store(true, Ordering::SeqCst);
+    assert!(h.step_until(T, |h| h.app.session.map.service().is_none_or(|s| s.is_idle())));
+    frames(&mut h, 10);
+    assert_eq!(t.starts(), 2, "only the two in flight finished; no request started after the map closed");
+}
+
+/// Failing tiles are retried with a backoff while the map is open, and not at all after it closes.
+#[test]
+fn failing_tiles_are_not_retried_after_the_map_leaves_the_screen() {
+    let t = Held::new(false, true);
+    let mut h = map_with(&t);
+    assert!(h.step_until(T, |_| t.starts() >= 2));
+    run(&mut h, "view.photoGrid", json!({}));
+    frames(&mut h, 4);
+    assert!(h.step_until(T, |h| h.app.session.map.service().is_none_or(|s| s.stats().in_flight == 0)));
+    let n = t.starts();
+    // longer than the first backoff step (1 s), frames running all the time
+    let end = std::time::Instant::now() + Duration::from_millis(2500);
+    while std::time::Instant::now() < end {
+        h.step();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    assert_eq!(t.starts(), n, "no retry once the map is gone");
+    // back on the map, the tiles are asked for again
+    run(&mut h, "view.map", json!({}));
+    assert!(h.step_until(Duration::from_secs(30), |_| t.starts() > n), "asked again when the map is back");
+}
+
+// ---- frame times with thousands of pins
+
+/// The demo library plus `n` photos spread over Europe in towns and countryside (deterministic).
+fn library_with_pins(n: u32) -> Headless {
+    use lightcraft_catalog::{Op, Photo, Source};
+    let mut s = lightcraft_engine::Session::with_demo();
+    let mut ops = Vec::new();
+    let mut seed = 0x9e37_79b9_u32;
+    let mut next = || {
+        seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+        f64::from(seed >> 8) / f64::from(1u32 << 24)
+    };
+    let towns: Vec<(f64, f64)> = (0..60).map(|_| (36.0 + next() * 24.0, -10.0 + next() * 40.0)).collect();
+    for i in 0..n {
+        let id = s.catalog.alloc_photo_id();
+        let mut p = Photo::new(id, Source::Demo { scene: 0 }, &format!("P{i:05}.JPG"), "JPEG", 600, 400, "2026-09-28T09:30:00");
+        let (clat, clon) = towns[(next() * towns.len() as f64) as usize % towns.len()];
+        // two thirds in towns (a few km round), the rest anywhere
+        p.meta.gps = Some(if next() < 0.66 {
+            (clat + (next() - 0.5) * 0.3, clon + (next() - 0.5) * 0.4)
+        } else {
+            (36.0 + next() * 24.0, -10.0 + next() * 40.0)
+        });
+        ops.push(Op::AddPhoto { photo: Box::new(p) });
+    }
+    s.commit("Add pins", Op::Batch { ops }).unwrap();
+    let services = Services { png: None, ..Default::default() };
+    let mut app = LightcraftApp::new(s, services);
+    app.session.map.set_service(TileService::with_transport(TileSource::openstreetmap(), None, Some(fake(false) as Arc<dyn Transport>)));
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    h.settle(SETTLE);
+    h
+}
+
+fn timed(h: &mut Headless) -> f64 {
+    let t0 = std::time::Instant::now();
+    h.step();
+    t0.elapsed().as_secs_f64() * 1000.0
+}
+
+fn summary(what: &str, mut ms: Vec<f64>) -> (f64, f64, f64) {
+    ms.sort_by(f64::total_cmp);
+    let (med, p95, max) = (ms[ms.len() / 2], ms[ms.len() * 95 / 100], ms[ms.len() - 1]);
+    eprintln!("FRAMES {what}: median {med:.2} ms, p95 {p95:.2} ms, max {max:.2} ms over {} frames", ms.len());
+    (med, p95, max)
+}
+
+/// Frame time of the Map view with ~5,000 geotagged photos while it rests, pans and zooms, tiles from
+/// the in-process fake server (no network). Run on demand, it is a measurement:
+/// `cargo test -p lightcraft-ui-egui --lib -- --ignored --nocapture map_frame_times`.
+/// What a frame includes: the app's logic and the whole UI pass (layout, clustering, shapes); not
+/// the GPU's drawing.
+#[test]
+#[ignore = "a measurement: run on demand"]
+fn map_frame_times_with_five_thousand_pins() {
+    let mut h = library_with_pins(5000);
+    // the same photos in the grid, for comparison: what the map adds is the difference
+    run(&mut h, "view.photoGrid", json!({}));
+    frames(&mut h, 20);
+    let grid: Vec<f64> = (0..100).map(|_| timed(&mut h)).collect();
+    summary("the photo grid resting (comparison)", grid);
+    run(&mut h, "view.map", json!({}));
+    assert!(h.step_until(SETTLE, |h| h.app.session.map.service().is_none_or(|s| s.is_idle())));
+    frames(&mut h, 5);
+    let s = state(&mut h);
+    assert_eq!(s["withGps"], 5000);
+    let idle: Vec<f64> = (0..100).map(|_| timed(&mut h)).collect();
+    eprintln!(
+        "FRAMES slow resting frames: {:?}",
+        idle.iter().enumerate().filter(|(_, m)| **m > 16.0).map(|(i, m)| (i, *m as u32)).collect::<Vec<_>>()
+    );
+    let (_, idle_p95, _) = summary("resting", idle);
+    // pan along a diagonal at zoom 6
+    run(&mut h, "map.setView", json!({"lat": 47.0, "lon": 8.0, "zoom": 6}));
+    frames(&mut h, 5);
+    let mut pan = Vec::new();
+    for i in 0..240 {
+        let t = f64::from(i) / 240.0;
+        run(&mut h, "map.setView", json!({"lat": 47.0 + t * 6.0, "lon": 8.0 + t * 12.0}));
+        let up = h.app.map.uploads;
+        let ms = timed(&mut h);
+        if ms > 16.0 {
+            eprintln!("FRAMES slow pan frame {i}: {ms:.0} ms, {} uploads, cluster {:.2} ms", h.app.map.uploads - up, h.app.map.cluster_ms);
+        }
+        pan.push(ms);
+    }
+    let (_, pan_p95, _) = summary("panning at zoom 6", pan);
+    // zoom in and out around the same place, 2 to 13
+    let mut zoom = Vec::new();
+    for i in 0..240 {
+        let t = f64::from(i) / 120.0;
+        let z = 2.0 + 11.0 * (1.0 - (t - 1.0).abs()).clamp(0.0, 1.0);
+        run(&mut h, "map.setView", json!({"lat": 47.0, "lon": 8.0, "zoom": z}));
+        let up = h.app.map.uploads;
+        let ms = timed(&mut h);
+        if ms > 16.0 {
+            eprintln!("FRAMES slow zoom frame {i}: {ms:.0} ms, {} uploads, cluster {:.2} ms", h.app.map.uploads - up, h.app.map.cluster_ms);
+        }
+        zoom.push(ms);
+    }
+    let (_, zoom_p95, _) = summary("zooming 2 to 13 and back", zoom);
+    let s = state(&mut h);
+    eprintln!("FRAMES clusterMs at the end: {}", s["clusterMs"]);
+    assert!(idle_p95 < 16.0 && pan_p95 < 16.0 && zoom_p95 < 16.0, "over the 16 ms budget");
 }

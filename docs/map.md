@@ -284,6 +284,8 @@ some uses, and Google, Apple, Bing and Esri imagery may not be used this way.
   succeeds. A tile the server refuses (e.g. 404) or that isn't a valid image isn't asked for again for 10 minutes.
 - Tiles larger than 2 MB, images that aren't PNG / JPEG / WebP of at most 1024 px a side, and anything that fails to
   decode are errors (the map shows its placeholder), never a crash.
+- **Memory is capped in bytes**: decoded tiles and the map's textures each hold at most 64 MiB (256 tiles of 256 px, or
+  16 of 1024 px), the least recently used going first, whatever size a tile server sends.
 
 ### OpenStreetMap's tile policy
 
