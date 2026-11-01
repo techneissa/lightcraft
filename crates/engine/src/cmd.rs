@@ -34,6 +34,7 @@ pub mod manage;
 mod map;
 pub mod mask_effect_files;
 pub mod mask_effects;
+mod mask_names;
 mod mask_parts;
 mod masks;
 mod merge;

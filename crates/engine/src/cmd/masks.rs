@@ -305,7 +305,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let out = masks_edit(s, "mask.add", "Add Mask", |masks, active| {
                     masks.push(Mask {
                         id: next,
-                        name: name.unwrap_or_else(|| format!("Mask {next}")),
+                        name: name.unwrap_or_else(|| super::mask_names::next(masks, &kind)),
                         components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }],
                         adjust,
                         ..Default::default()
@@ -393,7 +393,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     let i = match want.and_then(|m| masks.iter().position(|x| x.id == m)) {
                         Some(i) => i,
                         None => {
-                            masks.push(Mask { id: next, name: format!("Mask {next}"), adjust, ..Default::default() });
+                            masks.push(Mask { id: next, name: super::mask_names::next(masks, "brush"), adjust, ..Default::default() });
                             *active = Some(next);
                             masks.len() - 1
                         }
