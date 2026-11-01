@@ -28,5 +28,6 @@ only in a lane's own filtered tests. A failure Fork CI shows only on Linux is no
   3 lanes build at once.
 - **Batch the Mac's work.** After a single merge nothing builds or tests on the Mac (Fork CI checks `custom`). Once
   per batch of merges: `fork/sync-docs.py`, `fork/tests.sh` (the Mac-only tests), one push.
+- **Driving the app** (control channel, screenshots): always with a scratch library (`--library <scratch folder>`) and its own `LIGHTCRAFT_CONFIG_DIR`; without `--library` the app opens techneissa's real library (2026-11-02: a lane imported a test photo into it and had to remove it).
 - **PR and issue body files** are named after the repo and branch (`$TMPDIR/lightcraft-<branch>-body.md`), never a
   shared `$TMPDIR/body.md`: every session on this Mac uses the same `$TMPDIR`.
