@@ -58,6 +58,7 @@
 - **Sharpening Masking**: the black-and-white mask that limits where sharpening acts. **Amount, Radius or Detail**:
   the photo in greyscale, so you judge the sharpening without colour.
 - Let go of ⌥ or the slider and the photo is back. Agents use `view.clippingPreview`.
+- The same works on a **mask's** Exposure, Whites, Highlights, Blacks and Shadows, and the clipping triangles show while you edit a mask (the mask's red tint steps aside).
 
 ### Shadow and Highlight Clipping, Separately
 - The two triangles in the corners of the histogram are now two switches. The left one shows where the photo is
