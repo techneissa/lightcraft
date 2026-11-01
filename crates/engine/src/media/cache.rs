@@ -247,6 +247,17 @@ impl MediaCache {
         self.enforce_budget();
     }
 
+    /// Whether a decoded source of `id` carries an embedded semantic matte of one of `kinds` (a DNG's sky or
+    /// person matte).
+    pub fn has_matte(&self, id: PhotoId, kinds: &[lightcraft_pipeline::masks::MatteKind]) -> bool {
+        self.thumbs
+            .peek(&id)
+            .into_iter()
+            .chain(self.previews.iter().filter(|e| e.0 == id).map(|e| &e.1))
+            .chain(self.full.iter().filter(|e| e.0 == id).map(|e| &e.1))
+            .any(|s| s.info.as_ref().and_then(|i| i.mattes.as_ref()).is_some_and(|m| m.iter().any(|(k, _)| kinds.contains(&k))))
+    }
+
     /// Forget a photo's decoded sources (e.g. after its file changed).
     pub fn forget(&mut self, id: PhotoId) {
         self.thumbs.remove(&id);

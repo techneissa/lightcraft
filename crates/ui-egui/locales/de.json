@@ -3591,5 +3591,8 @@
   "Tiles are kept for a week at least (as the tile server allows) so a place you looked at before opens without asking again.": "Kacheln werden mindestens eine Woche behalten (soweit der Server es erlaubt), damit ein schon angesehener Ort ohne neue Anfrage öffnet.",
   "Privacy": "Datenschutz",
   "Showing a map asks the tile server for the tiles of the area on screen, so the server sees which places you look at, with your IP address and LightCraft's name and version. Nothing is sent while no map is on screen, or when tiles are off.": "Eine Karte lädt die Kacheln des gezeigten Gebiets vom Kachelserver; er sieht also, welche Orte Sie ansehen, mit Ihrer IP-Adresse sowie Name und Version von LightCraft. Ohne Karte auf dem Bildschirm oder mit ausgeschalteten Kacheln wird nichts gesendet.",
-  "About the map and its tiles (docs/map.md)": "Über die Karte und ihre Kacheln (docs/map.md)"
+  "About the map and its tiles (docs/map.md)": "Über die Karte und ihre Kacheln (docs/map.md)",
+  "Selecting with SAM 3": "Auswahl mit SAM 3",
+  "Rough mask. Click to install SAM 3.": "Grobe Maske. Klicken, um SAM 3 zu installieren.",
+  "Rough mask. Add it again to use SAM 3.": "Grobe Maske. Neu hinzufügen, um SAM 3 zu nutzen."
 }

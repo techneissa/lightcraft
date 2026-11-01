@@ -2357,5 +2357,8 @@
   "Set up name suggestions…": "Määritä nimiehdotukset…",
   "Top bar": "Yläpalkki",
   "Tool strip": "Työkalupalkki",
-  "Bottom bar": "Alapalkki"
+  "Bottom bar": "Alapalkki",
+  "Selecting with SAM 3": "Valinta SAM 3:lla",
+  "Rough mask. Click to install SAM 3.": "Karkea maski. Asenna SAM 3 napsauttamalla.",
+  "Rough mask. Add it again to use SAM 3.": "Karkea maski. Lisää se uudelleen käyttääksesi SAM 3:a."
 }

@@ -210,12 +210,34 @@ impl Detector {
 
     /// Run the detector for one tokenized prompt.
     pub fn predict(&self, f: &Features, ids: &[u32], valid: &[bool]) -> Result<Output> {
+        self.predict_cancellable(f, ids, valid, None, None)?.ok_or_else(|| Error::Model("detector skipped without threshold".into()))
+    }
+
+    /// Run the detector with an optional score `threshold` (when no query exceeds `threshold`, the
+    /// expensive 288×288 pixel decoder is skipped and `Ok(None)` is returned) and an optional
+    /// cancellation flag checked between layers.
+    pub fn predict_cancellable(
+        &self,
+        f: &Features,
+        ids: &[u32],
+        valid: &[bool],
+        threshold: Option<f32>,
+        cancel: Option<&std::sync::atomic::AtomicBool>,
+    ) -> Result<Option<Output>> {
+        let check = || {
+            if cancel.is_some_and(|c| c.load(std::sync::atomic::Ordering::Relaxed)) {
+                return Err(Error::Cancelled);
+            }
+            Ok(())
+        };
+        check()?;
         let text = self.text_proj.forward(&self.text.forward(ids, valid)?)?; // [1, 32, 256]
         let text_bias = padding_bias(valid, &self.device)?;
 
         // DETR encoder: image tokens attend to themselves and to the prompt
         let mut x = f.flat.clone();
         for l in &self.encoder {
+            check()?;
             let h = l.ln1.forward(&x)?;
             let hp = (&h + &f.pos)?;
             x = (&x + l.self_attn.forward(&hp, &hp, &h, None)?)?;
@@ -233,6 +255,7 @@ impl Detector {
         let mut queries = None;
         let mut presence = None;
         for l in &self.decoder {
+            check()?;
             let qpos = self.ref_point_head.forward(&self.box_sine(&boxes)?)?.pad_with_zeros(1, 1, 0)?;
             let bias = self.rpb(&boxes, f.side)?;
             let q = (&h + &qpos)?;
@@ -259,12 +282,23 @@ impl Detector {
         let pt = self.score_text_proj.forward(&pooled)?; // [1, 256]
         let pq = self.score_query_proj.forward(&queries)?; // [1, 200, 256]
         let logits = (pq.matmul(&pt.unsqueeze(2)?)? / (HIDDEN as f64).sqrt())?.clamp(-12f32, 12f32)?;
+        let logits_vec = to_vec(&logits)?;
+        let presence_val = to_vec(&presence)?.first().copied().unwrap_or(-10.0);
+        if let Some(thresh) = threshold {
+            let s = |x: f32| 1.0 / (1.0 + (-x).exp());
+            let p = s(presence_val);
+            if !logits_vec.iter().any(|l| s(*l) * p > thresh) {
+                return Ok(None);
+            }
+        }
+        check()?;
 
         // masks: the encoder memory attends to the prompt, then a pixel decoder up to 288²
         let mem = (&memory + self.prompt_attn.forward(&self.prompt_ln.forward(&memory)?, &text, &text, Some(&text_bias))?)?;
         let [l0, l1, _] = &f.levels[..] else { return Err(Error::Model("detector levels".into())) };
         let mut prev = mem.transpose(1, 2)?.reshape((1, HIDDEN, f.side, f.side))?;
         for (i, skip) in [l1, l0].into_iter().enumerate() {
+            check()?;
             let (_, _, sh, sw) = skip.dims4()?;
             prev = (prev.upsample_nearest2d(sh, sw)? + skip)?;
             let (Some(conv), Some(norm)) = (self.pixel_convs.get(i), self.pixel_norms.get(i)) else {
@@ -272,6 +306,7 @@ impl Detector {
             };
             prev = norm.forward(&conv.forward(&prev)?)?.relu()?;
         }
+        check()?;
         let inst = self.instance_proj.forward(&prev)?; // [1, 256, 288, 288]
         let semantic = to_vec(&self.semantic_proj.forward(&prev)?)?;
         let (_, c, mh, mw) = inst.dims4()?;
@@ -285,14 +320,7 @@ impl Detector {
         let masks = e.matmul(&inst.reshape((1, c, mh * mw))?)?.reshape((QUERIES, mh, mw))?;
         let boxes = cxcywh_to_xyxy(&boxes)?;
         let bv = to_vec(&boxes)?;
-        Ok(Output {
-            masks,
-            logits: to_vec(&logits)?,
-            presence: to_vec(&presence)?.first().copied().unwrap_or(-10.0),
-            boxes: bv.as_chunks::<4>().0.to_vec(),
-            text,
-            semantic,
-        })
+        Ok(Some(Output { masks, logits: logits_vec, presence: presence_val, boxes: bv.as_chunks::<4>().0.to_vec(), text, semantic }))
     }
 }
 
@@ -319,15 +347,35 @@ pub fn share(instances: &mut [Vec<f32>], semantic: &[f32]) {
     }
 }
 
+/// An instance counts as part of the main subject when its area is at least this part of the largest one's.
+pub const MAIN_AREA: f32 = 1.0 / 3.0;
+
+/// Which of instances with these `areas` are the main subject: the largest, and any other at least
+/// [`MAIN_AREA`] of its area (a group posing together stays, small figures far away go). The largest is
+/// always kept, so a photo with only small instances still selects one.
+pub fn main_instances(areas: &[usize]) -> Vec<bool> {
+    let largest = areas.iter().copied().max().unwrap_or(0);
+    areas.iter().map(|a| *a as f32 >= largest as f32 * MAIN_AREA).collect()
+}
+
 /// The instances of `out` scoring above `threshold` (sigmoid(logit) × sigmoid(presence)),
 /// merged into one mask: each its share of the semantic mask ([`share`]), then the per-pixel
-/// maximum of their probabilities, as logits.
-pub fn merge(out: &Output, threshold: f32) -> Option<Prediction> {
+/// maximum of their probabilities, as logits. With `main_only`, only the main subject's instances
+/// ([`main_instances`], by the area each one's own mask selects) take part.
+pub fn merge(out: &Output, threshold: f32, main_only: bool) -> Option<Prediction> {
     let s = |x: f32| 1.0 / (1.0 + (-x).exp());
     let presence = s(out.presence);
     let keep: Vec<(usize, f32)> = out.logits.iter().enumerate().map(|(i, l)| (i, s(*l) * presence)).filter(|(_, p)| *p > threshold).collect();
-    let best = keep.iter().map(|k| k.1).fold(0f32, f32::max);
     let mut masks: Vec<Vec<f32>> = keep.iter().map(|(i, _)| out.masks.i(*i).ok().and_then(|t| to_vec(&t).ok())).collect::<Option<_>>()?;
+    let keep: Vec<(usize, f32)> = if main_only {
+        let areas: Vec<usize> = masks.iter().map(|m| m.iter().filter(|l| **l > 0.0).count()).collect();
+        let main = main_instances(&areas);
+        masks = masks.into_iter().zip(&main).filter(|(_, m)| **m).map(|(m, _)| m).collect();
+        keep.into_iter().zip(&main).filter(|(_, m)| **m).map(|(k, _)| k).collect()
+    } else {
+        keep
+    };
+    let best = keep.iter().map(|k| k.1).fold(0f32, f32::max);
     share(&mut masks, &out.semantic);
     let merged = masks.into_iter().reduce(|acc, m| acc.iter().zip(&m).map(|(a, b)| a.max(*b)).collect());
     merged.map(|logits| Prediction { logits, score: best })
@@ -378,11 +426,51 @@ mod tests {
             semantic: semantic.to_vec(),
         };
         let semantic = [5.0, 6.0, 4.0, 6.0, 5.0];
-        let merged = merge(&output([4.0, 4.0, -6.0], &semantic), 0.5).unwrap();
+        let merged = merge(&output([4.0, 4.0, -6.0], &semantic), 0.5, false).unwrap();
         assert_eq!(merged.logits, semantic, "sure inside both and across where they touch");
         // without a semantic mask: the per-pixel maximum of the instances, as before
-        let plain = merge(&output([4.0, 4.0, -6.0], &[]), 0.5).unwrap();
+        let plain = merge(&output([4.0, 4.0, -6.0], &[]), 0.5, false).unwrap();
         assert_eq!(plain.logits, [2.0, 1.0, -0.5, 1.0, 2.0]);
-        assert!(merge(&output([-6.0; 3], &semantic), 0.5).is_none(), "nothing found");
+        assert!(merge(&output([-6.0; 3], &semantic), 0.5, false).is_none(), "nothing found");
+    }
+
+    /// Subject keeps the main instances: the largest and any other of at least a third of its area. One
+    /// large person with two tiny ones far away selects the large one; two of a size both stay; with only
+    /// small instances the largest stays.
+    #[test]
+    fn the_subject_keeps_the_main_instances_only() {
+        // 12 cells; instance 0 covers 6, 1 and 2 one cell each (far away, tiny)
+        let rows: [[f32; 12]; 3] = [
+            [4.0, 4.0, 4.0, 4.0, 4.0, 4.0, -9.0, -9.0, -9.0, -9.0, -9.0, -9.0],
+            [-9.0, -9.0, -9.0, -9.0, -9.0, -9.0, 3.0, -9.0, -9.0, -9.0, -9.0, -9.0],
+            [-9.0, -9.0, -9.0, -9.0, -9.0, -9.0, -9.0, -9.0, -9.0, 3.0, -9.0, -9.0],
+        ];
+        let output = |logits: [f32; 3], rows: &[[f32; 12]]| Output {
+            masks: Tensor::from_vec(rows.concat(), (rows.len(), 1, 12), &Device::Cpu).unwrap(),
+            logits: logits[..rows.len()].to_vec(),
+            presence: 8.0,
+            boxes: vec![[0.0; 4]; rows.len()],
+            text: Tensor::zeros(1, candle_core::DType::F32, &Device::Cpu).unwrap(),
+            semantic: vec![],
+        };
+        let selected = |m: &Prediction| m.logits.iter().map(|l| *l > 0.0).collect::<Vec<_>>();
+        let all = merge(&output([4.0; 3], &rows), 0.5, false).unwrap();
+        assert_eq!(selected(&all).iter().filter(|s| **s).count(), 8, "every instance found: 6 + 1 + 1 cells");
+        let main = merge(&output([4.0; 3], &rows), 0.5, true).unwrap();
+        assert_eq!(selected(&main).iter().filter(|s| **s).count(), 6, "the large one only");
+        assert!(selected(&main)[..6].iter().all(|s| *s) && !selected(&main)[6] && !selected(&main)[9]);
+
+        // two of about the same size (a group posing together): both stay
+        let pair = [rows[0], [-9.0, -9.0, -9.0, -9.0, -9.0, -9.0, 4.0, 4.0, 4.0, 4.0, -9.0, -9.0]];
+        let both = merge(&output([4.0; 3], &pair), 0.5, true).unwrap();
+        assert_eq!(selected(&both).iter().filter(|s| **s).count(), 10, "6 + 4 cells");
+
+        // only small instances (a few cells of the photo): the largest stays, the smaller ones go
+        let small = [rows[1], [-9.0, -9.0, 4.0, 4.0, 4.0, 4.0, -9.0, -9.0, -9.0, -9.0, -9.0, -9.0], rows[2]];
+        let one = merge(&output([4.0; 3], &small), 0.5, true).unwrap();
+        assert_eq!(selected(&one).iter().filter(|s| **s).count(), 4, "the four-cell instance");
+
+        assert_eq!(main_instances(&[]), Vec::<bool>::new());
+        assert_eq!(main_instances(&[9, 3, 2]), [true, true, false], "a third of the largest stays");
     }
 }

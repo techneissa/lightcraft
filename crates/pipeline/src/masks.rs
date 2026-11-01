@@ -102,8 +102,9 @@ impl Mattes {
             if p.is_empty() { self.of(&[Skin, Hair, Teeth, Glasses]) } else { p }
         };
         match shape {
-            MaskShape::Sky => self.of(&[Sky]),
-            MaskShape::Subject => person(),
+            MaskShape::Sky { .. } => self.of(&[Sky]),
+            // Background is the person matte turned around ([`shape_alpha`])
+            MaskShape::Subject { .. } | MaskShape::Background { .. } => person(),
             MaskShape::People { parts, .. } => {
                 let wanted: Vec<MatteKind> = parts
                     .iter()
@@ -206,12 +207,17 @@ fn for_each_pos(frame: &Frame, w: usize, h: usize, out: &mut Plane, f: impl Fn(P
     });
 }
 
-/// The alpha plane of one component shape. AI shapes use the source's matching `mattes`, if any.
+/// The alpha plane of one component shape. AI shapes use the source's matching `mattes`, if any;
+/// else a stored segmentation; else a classical heuristic.
 #[allow(clippy::too_many_arguments)]
 pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Plane {
     let fitting = mattes.map(|m| m.for_shape(shape)).unwrap_or_default();
     if !fitting.is_empty() {
-        return matte_alpha(&fitting, frame, w, h);
+        let mut out = matte_alpha(&fitting, frame, w, h);
+        if matches!(shape, MaskShape::Background { .. }) {
+            out.data.iter_mut().for_each(|v| *v = 1.0 - *v);
+        }
+        return out;
     }
     let mut out = Plane::new(w, h);
     let to_long = |p: Point| frame.norm_to_long(p);
@@ -264,7 +270,23 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
                 *v = 1.0 - smooth(tol * 0.5, tol, d);
             }
         }
-        MaskShape::Sky => {
+        MaskShape::Object { seg, detail, edge, .. }
+        | MaskShape::Prompt { seg, detail, edge, .. }
+        | MaskShape::Subject { seg, detail, edge }
+        | MaskShape::Sky { seg, detail, edge }
+        | MaskShape::Background { seg, detail, edge }
+            if seg.is_some() || !detail.is_empty() =>
+        {
+            // Edge: below 0 a steeper transition (up to 8× the logits), above 0 feathered (up to
+            // 2 % of the long edge, so previews and exports match)
+            let e = (*edge / 100.0).clamp(-1.0, 1.0) as f32;
+            let gain = if e < 0.0 { 1.0 - 7.0 * e } else { 1.0 };
+            sample_seg(seg.as_ref(), detail, gain, frame, w, h, log_l, &mut out);
+            if e > 0.0 {
+                smooth_plane(&mut out, e * 0.02 * frame_px(frame, w));
+            }
+        }
+        MaskShape::Sky { .. } => {
             // Classical sky heuristic until the segmenter lands (M12): bright, smooth, blue-ish or
             // unsaturated, and connected to the top of the frame.
             let m = frame.out_to_norm(w, h);
@@ -279,20 +301,10 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
             }
             smooth_plane(&mut out, 0.01 * frame_px(frame, w));
         }
-        MaskShape::Object { seg, detail, edge, .. } | MaskShape::Prompt { seg, detail, edge, .. } if seg.is_some() || !detail.is_empty() => {
-            // Edge: below 0 a steeper transition (up to 8× the logits), above 0 feathered (up to
-            // 2 % of the long edge, so previews and exports match)
-            let e = (*edge / 100.0).clamp(-1.0, 1.0) as f32;
-            let gain = if e < 0.0 { 1.0 - 7.0 * e } else { 1.0 };
-            sample_seg(seg.as_ref(), detail, gain, frame, w, h, log_l, &mut out);
-            if e > 0.0 {
-                smooth_plane(&mut out, e * 0.02 * frame_px(frame, w));
-            }
-        }
         // not computed yet (no clicks, or a build without the model): nothing selected
         MaskShape::Object { hint, .. } if hint.is_empty() => {}
         MaskShape::Prompt { .. } => {}
-        MaskShape::Subject | MaskShape::Object { .. } | MaskShape::People { .. } => {
+        MaskShape::Subject { .. } | MaskShape::Object { .. } | MaskShape::People { .. } => {
             // Saliency heuristic: centre-weighted local contrast (replaced by the segmenter in M12).
             let m = frame.out_to_norm(w, h);
             let blur = lightcraft_raster::blur::gaussian(log_l, 0.03 * frame_px(frame, w));
@@ -305,8 +317,9 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
             }
             smooth_plane(&mut out, 0.015 * frame_px(frame, w));
         }
-        MaskShape::Background => {
-            let mut s = shape_alpha(&MaskShape::Subject, frame, w, h, img, log_l, ev, mattes);
+        MaskShape::Background { .. } => {
+            // (no matte fits here: `for_shape` would have returned one above)
+            let mut s = shape_alpha(&MaskShape::subject(), frame, w, h, img, log_l, ev, None);
             s.data.iter_mut().for_each(|v| *v = 1.0 - *v);
             out = s;
         }
@@ -339,7 +352,11 @@ impl SegGrid {
         let u = (n.x - self.r[0]) / (self.r[2] - self.r[0]);
         let v = (n.y - self.r[1]) / (self.r[3] - self.r[1]);
         let (fx, fy) = ((u * side as f64 - 0.5) as f32, (v * side as f64 - 0.5) as f32);
-        let (fx, fy) = (fx.clamp(0.0, (side - 1) as f32), fy.clamp(0.0, (side - 1) as f32));
+        // (the outermost ring of cells is the model's least reliable: on a real photo its top row read -1.5 on
+        // average under a sky the row below read +2, a 2-8 px strip along the top edge. A grid is sampled
+        // from its second ring inwards, so the edge cells continue what lies next to them)
+        let (lo, hi) = if side >= 4 { (1.0, (side - 2) as f32) } else { (0.0, (side - 1) as f32) };
+        let (fx, fy) = (fx.clamp(lo, hi), fy.clamp(lo, hi));
         let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
         let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
         let top = at(x0, y0) * (1.0 - tx) + at(x0 + 1, y0) * tx;
