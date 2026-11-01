@@ -661,6 +661,8 @@ pub fn write_xmp_lc(meta: &Metadata, lc: &[(&str, &str)]) -> String {
     push("exifEX:BodySerialNumber", meta.serial_number.clone());
     push("exifEX:LensMake", meta.lens_make.clone());
     push("exifEX:LensModel", meta.lens_model.clone());
+    push("aux:Lens", meta.lens_model.clone());
+    push("exifEX:PhotographicSensitivity", meta.iso.map(|v| v.to_string()));
     push("exifEX:LensSerialNumber", meta.lens_serial_number.clone());
     push("Iptc4xmpCore:Location", meta.sublocation.clone());
     push("photoshop:City", meta.city.clone());

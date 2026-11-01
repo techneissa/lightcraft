@@ -81,6 +81,9 @@
   lenses, pick one with a click or the arrow keys, or type any name you like.
 - Numbers are checked as you type them: `35 mm`, `f/2.8`, `1/250` or `2.5"`, `400`. A value that makes no sense says
   why and changes nothing.
+- Edited camera, lens and exposure values are saved in the photo's XMP sidecar (**Save Metadata to File**, or
+  automatically with **Automatically write changes into XMP sidecars**) and read back from it, so they survive a new
+  library and show in other apps. Only the values you edited are written; **Reset** removes them from the sidecar.
 - Search, filters, smart albums, rename tokens and slideshow text use the edited values, and so do exported files
   (their EXIF, following Export ▸ Metadata). Colours and lens corrections still follow the camera and lens the file
   records, so an edit never changes how a photo looks. Reload from Disk keeps your edits.
@@ -110,6 +113,11 @@
 - Photos you already edited keep their look. **Photo ▸ Update to Current Process** moves them to V3 (one Undo step).
 - While you drag Highlights or Shadows, the preview now matches the export on large photos (it used a smaller
   radius before); exported photos are unchanged.
+### ⌥-Drag on a Mask's Sliders
+- Hold **⌥ (Alt)** while dragging a mask's **Exposure, Whites, Highlights, Blacks or Shadows**: the same clipping
+  preview as the Edit panel's sliders. The mask's tint, outlines and pins step aside while it shows.
+- The clipping triangles also work while you edit a mask: the mask's red tint steps aside.
+
 ### Shadow and Highlight Clipping, Separately
 - The two triangles in the corners of the histogram are now two switches. The left one shows where the photo is
   clipped to black (**blue**), the right one where it is clipped to white (**red**); each works alone, and hovering a

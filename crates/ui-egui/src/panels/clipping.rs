@@ -80,6 +80,33 @@ pub fn paint_triangle(p: &Painter, rect: Rect, color: Color32) {
     p.add(Shape::convex_polygon(pts, color, egui::Stroke::NONE));
 }
 
+/// Lightroom's Alt-drag preview on screen: ⌥ held while a slider is dragged. The Edit panel's sliders ask by
+/// their `develop` control id (`Overlay::for_control`, official); a mask's own Exposure, Whites, Highlights, Blacks
+/// and Shadows (Masking panel) carry the bare adjustment name.
+pub fn alt_overlay(app: &crate::LightcraftApp) -> Option<lightcraft_pipeline::Overlay> {
+    use crate::state::RightPanel;
+    use lightcraft_pipeline::Overlay;
+    if !app.ui.alt_held {
+        return None;
+    }
+    let control = app.ui.dragging_control.as_deref()?;
+    match app.ui.right {
+        RightPanel::Edit => Overlay::for_control(control),
+        RightPanel::Masking => mask_slider_overlay(control),
+        _ => None,
+    }
+}
+
+/// The preview a mask's slider (bare id) asks for.
+fn mask_slider_overlay(id: &str) -> Option<lightcraft_pipeline::Overlay> {
+    use lightcraft_pipeline::Overlay;
+    match id {
+        "exposure" | "whites" | "highlights" => Some(Overlay::ClipHighlights),
+        "blacks" | "shadows" => Some(Overlay::ClipShadows),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,5 +149,19 @@ mod tests {
         let dark = overlay_pixel([0, 0, 90], true, false);
         let [r, g, b, _] = dark.to_srgba_unmultiplied();
         assert!(r > 200 && g > 200 && b < 100, "red and green clipped: yellow {dark:?}");
+    }
+
+    #[test]
+    fn a_masks_sliders_ask_for_their_preview() {
+        use lightcraft_pipeline::Overlay;
+        for id in ["exposure", "whites", "highlights"] {
+            assert_eq!(mask_slider_overlay(id), Some(Overlay::ClipHighlights), "mask {id}");
+        }
+        for id in ["blacks", "shadows"] {
+            assert_eq!(mask_slider_overlay(id), Some(Overlay::ClipShadows), "mask {id}");
+        }
+        for id in ["contrast", "temp", "texture", "amount", "refine", "sharpness", ""] {
+            assert_eq!(mask_slider_overlay(id), None, "mask {id}");
+        }
     }
 }
