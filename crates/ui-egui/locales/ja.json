@@ -2509,5 +2509,8 @@
   "Tiles are kept for a week at least (as the tile server allows) so a place you looked at before opens without asking again.": "タイルは少なくとも 1 週間保持されます(サーバーが許す範囲で)。以前見た場所は再取得せずに開きます。",
   "Privacy": "プライバシー",
   "Showing a map asks the tile server for the tiles of the area on screen, so the server sees which places you look at, with your IP address and LightCraft's name and version. Nothing is sent while no map is on screen, or when tiles are off.": "地図を表示すると、画面の範囲のタイルをタイルサーバーに要求するため、サーバーにはどの場所を見ているかが、IP アドレスと LightCraft の名前とバージョンとともに伝わります。地図が画面にないとき、またはタイルがオフのときは何も送信しません。",
-  "About the map and its tiles (docs/map.md)": "地図とタイルについて(docs/map.md)"
+  "About the map and its tiles (docs/map.md)": "地図とタイルについて(docs/map.md)",
+  "Selecting with SAM 3": "SAM 3 で選択中",
+  "Rough mask. Click to install SAM 3.": "簡易マスクです。クリックして SAM 3 をインストール。",
+  "Rough mask. Add it again to use SAM 3.": "簡易マスクです。追加し直すと SAM 3 が使われます。"
 }

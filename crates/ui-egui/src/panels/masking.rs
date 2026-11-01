@@ -49,9 +49,9 @@ pub(super) fn kind_label(s: &MaskShape) -> (&'static str, Icon) {
         MaskShape::ColorRange { .. } => ("Color Range", Icon::Picker),
         MaskShape::LuminanceRange { .. } => ("Luminance Range", Icon::Sliders),
         MaskShape::DepthRange { .. } => ("Depth Range", Icon::Sliders),
-        MaskShape::Subject => ("Subject", Icon::Subject),
-        MaskShape::Sky => ("Sky", Icon::Sky),
-        MaskShape::Background => ("Background", Icon::Background),
+        MaskShape::Subject { .. } => ("Subject", Icon::Subject),
+        MaskShape::Sky { .. } => ("Sky", Icon::Sky),
+        MaskShape::Background { .. } => ("Background", Icon::Background),
         MaskShape::Object { .. } => ("Object", Icon::ObjectSelect),
         MaskShape::Prompt { .. } => ("Describe", Icon::Describe),
         MaskShape::People { .. } => ("People", Icon::Subject),
@@ -166,26 +166,37 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         });
         describe_field(app, ui, true);
-        let seg = &app.session.segmenter;
-        let status = if seg.analyzing() {
-            Some("Analyzing the photo for AI masks…")
-        } else if seg.busy() {
-            Some("Selecting…")
-        } else if seg.detail_busy() || app.ui.detail_due.is_some() {
-            Some("Refining the mask's detail…")
-        } else {
-            None
+        let status = {
+            let seg = &app.session.segmenter;
+            if seg.analyzing() {
+                Some("Analyzing the photo for AI masks…")
+            } else if seg.busy() {
+                Some("Selecting…")
+            } else if seg.detail_busy() || app.ui.detail_due.is_some() {
+                Some("Refining the mask's detail…")
+            } else {
+                None
+            }
         };
         if let Some(status) = status {
             ui.add_space(4.0);
+            let mut cancel_clicked = false;
             ui.horizontal_top(|ui| {
                 crate::progress::spinner(ui, 14.0);
                 ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(status)).color(t.text_dim)).wrap());
+                if icon_button(ui, "maskSamCancel", Icon::Close, vec2(20.0, 20.0), false, true, "Cancel AI selection").clicked() {
+                    cancel_clicked = true;
+                }
             });
-            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+            if cancel_clicked {
+                app.session.segmenter.cancel_all();
+                app.ui.detail_due = None;
+            } else {
+                ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+            }
         }
         // the model download, while its dialog is closed
-        let download = seg.download_status();
+        let download = app.session.segmenter.download_status();
         if download.running && app.ui.dialog.is_none() {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -256,7 +267,7 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             paint(ui.painter(), Rect::from_min_size(r.min + vec2(8.0, 7.0), vec2(16.0, 16.0)), icon, t.text_label);
             // a long name is cut short (with …) before the eye, the full name on hover
             let color = if m.visible { t.text } else { t.text_disabled };
-            let g = one_line(ui.painter(), &m.name, t.font(13.0), color, r.width() - 32.0 - if sel { 56.0 } else { 32.0 });
+            let g = super::mask_name::fit(ui.painter(), &m.name, t.font(13.0), color, r.width() - 32.0 - if sel { 56.0 } else { 32.0 });
             let elided = g.elided;
             let at = pos2(r.left() + 32.0, r.center().y - g.size().y / 2.0);
             register(ui, format!("maskName:{}", m.id), Rect::from_min_size(at, g.size()));
@@ -534,7 +545,15 @@ pub(super) fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: u
                 }
             }
         }
-        MaskShape::Object { edge, .. } | MaskShape::Prompt { edge, .. } => {
+        // the classical heuristic draws it: a line says so (no Edge, there is no selection to soften)
+        MaskShape::Subject { seg: None, .. } | MaskShape::Sky { seg: None, .. } | MaskShape::Background { seg: None, .. } => {
+            super::rough_mask::line(app, ui, shape);
+        }
+        MaskShape::Object { edge, .. }
+        | MaskShape::Prompt { edge, .. }
+        | MaskShape::Subject { edge, .. }
+        | MaskShape::Sky { edge, .. }
+        | MaskShape::Background { edge, .. } => {
             // Edge: how crisp the selection's border is (−100 hard … 0 as computed … 100 soft)
             let spec = ControlSpec {
                 id: "edge",
@@ -547,12 +566,19 @@ pub(super) fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: u
                 decimals: 0,
                 track: Track::Centered,
             };
-            let out = slider(ui, &spec, *edge, true, None);
+            let out = slider(ui, &spec, *edge, shape.seg().is_some(), None);
             let base = shape.clone();
             apply_slider_out(app, &spec, out, |app, v| {
                 let mut s = base.clone();
-                if let MaskShape::Object { edge, .. } | MaskShape::Prompt { edge, .. } = &mut s {
-                    *edge = v.clamp(-100.0, 100.0);
+                match &mut s {
+                    MaskShape::Object { edge, .. }
+                    | MaskShape::Prompt { edge, .. }
+                    | MaskShape::Subject { edge, .. }
+                    | MaskShape::Sky { edge, .. }
+                    | MaskShape::Background { edge, .. } => {
+                        *edge = v.clamp(-100.0, 100.0);
+                    }
+                    _ => {}
                 }
                 app.run("mask.update", json!({"component": comp, "shape": s}))
             });

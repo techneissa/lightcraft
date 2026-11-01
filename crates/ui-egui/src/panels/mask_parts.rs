@@ -10,7 +10,7 @@ use super::masking::{kind_label, menu_label, range_controls, start_describe, sta
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
-use crate::widgets::{announce_selected, icon_button, one_line, register, segmented};
+use crate::widgets::{announce_selected, icon_button, register, segmented};
 
 /// The name `mask.addComponent` and `mask.component` know a mode by.
 pub fn op_name(op: MaskOp) -> &'static str {
@@ -292,7 +292,7 @@ pub fn part_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask) {
         );
         paint(ui.painter(), Rect::from_min_size(r.min + vec2(6.0, (ROW_H - 16.0) / 2.0), vec2(16.0, 16.0)), icon, t.text_label);
         let room = BUTTON_W * 2.0 + if i > 0 { MODE_W } else { 0.0 } + 8.0;
-        let g = one_line(ui.painter(), &label, t.font(13.0), t.text, (r.width() - 28.0 - room).max(0.0));
+        let g = super::mask_name::fit(ui.painter(), &label, t.font(13.0), t.text, (r.width() - 28.0 - room).max(0.0));
         let elided = g.elided;
         ui.painter().galley(egui::pos2(r.left() + 28.0, r.center().y - g.size().y / 2.0), g, t.text);
         let resp = if elided { resp.on_hover_text(&label) } else { resp };
@@ -460,7 +460,7 @@ mod tests {
     use super::*;
 
     fn part(op: MaskOp, brush: bool) -> MaskComponent {
-        let shape = if brush { MaskShape::Brush { strokes: vec![] } } else { MaskShape::Subject };
+        let shape = if brush { MaskShape::Brush { strokes: vec![] } } else { MaskShape::subject() };
         MaskComponent { name: None, op, invert: false, shape }
     }
 

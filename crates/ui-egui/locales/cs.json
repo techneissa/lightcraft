@@ -2559,5 +2559,8 @@
   "Tiles are kept for a week at least (as the tile server allows) so a place you looked at before opens without asking again.": "Dlaždice se uchovávají alespoň týden (pokud to server dovolí), takže místo, které jste už viděli, se otevře bez nového dotazu.",
   "Privacy": "Soukromí",
   "Showing a map asks the tile server for the tiles of the area on screen, so the server sees which places you look at, with your IP address and LightCraft's name and version. Nothing is sent while no map is on screen, or when tiles are off.": "Zobrazení mapy si od serveru dlaždic vyžádá dlaždice oblasti na obrazovce, takže server vidí, která místa si prohlížíte, spolu s vaší IP adresou a názvem a verzí LightCraftu. Když na obrazovce žádná mapa není nebo jsou dlaždice vypnuté, nic se neodesílá.",
-  "About the map and its tiles (docs/map.md)": "O mapě a jejích dlaždicích (docs/map.md)"
+  "About the map and its tiles (docs/map.md)": "O mapě a jejích dlaždicích (docs/map.md)",
+  "Selecting with SAM 3": "Výběr pomocí SAM 3",
+  "Rough mask. Click to install SAM 3.": "Hrubá maska. Kliknutím nainstalujete SAM 3.",
+  "Rough mask. Add it again to use SAM 3.": "Hrubá maska. Přidejte ji znovu, použije se SAM 3."
 }

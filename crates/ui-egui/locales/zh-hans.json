@@ -2510,5 +2510,8 @@
   "Tiles are kept for a week at least (as the tile server allows) so a place you looked at before opens without asking again.": "图块至少保留一周(在服务器允许的范围内),之前看过的地方无需再次请求即可打开。",
   "Privacy": "隐私",
   "Showing a map asks the tile server for the tiles of the area on screen, so the server sees which places you look at, with your IP address and LightCraft's name and version. Nothing is sent while no map is on screen, or when tiles are off.": "显示地图会向图块服务器请求屏幕区域的图块,因此服务器能看到你查看的地点,以及你的 IP 地址和 LightCraft 的名称与版本。屏幕上没有地图或图块关闭时不会发送任何内容。",
-  "About the map and its tiles (docs/map.md)": "关于地图及其图块(docs/map.md)"
+  "About the map and its tiles (docs/map.md)": "关于地图及其图块(docs/map.md)",
+  "Selecting with SAM 3": "使用 SAM 3 选择",
+  "Rough mask. Click to install SAM 3.": "粗略蒙版。点击安装 SAM 3。",
+  "Rough mask. Add it again to use SAM 3.": "粗略蒙版。重新添加即可使用 SAM 3。"
 }
