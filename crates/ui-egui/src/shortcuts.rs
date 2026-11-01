@@ -402,6 +402,8 @@ fn keyboard_owned(app: &LightcraftApp, ctx: &egui::Context) -> bool {
 /// text field, name edit or shortcut recording owns input, then fires saved command bindings,
 /// aliases and fixed photo keys, respecting native menu ownership and open popups.
 pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context) {
+    // Space held over a tool ends when the key is up, whoever has the keyboard by then
+    crate::space_hand::tick(app, ctx);
     // the Assign Shortcut box reads its keys first: a dialog under it must not see its Esc (a quit
     // prompt or the library window in front of it owns the keys instead)
     if !crate::panels::notices::blocks_input(app)
@@ -507,6 +509,8 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
         {
             fire.push("view.detail".to_string());
         }
+        // a held Space repeats: it toggles the zoom (or takes the hand) once per press
+        let space_repeat = !i.events.iter().any(|e| matches!(e, egui::Event::Key { key: Key::Space, pressed: true, repeat: false, .. }));
         for b in bindable() {
             if let Some(sc) = binding(keymap, b.id, b.default)
                 && let Some((m, k)) = parse(sc)
@@ -516,7 +520,15 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
                 && holds(b.id)
                 && let Some(id) = grid_key_command(keymap, grid, app.ui.fullscreen, b.id, (m, k))
             {
-                fire.push(id.to_string());
+                if id == "view.zoomToggle" && k == Key::Space {
+                    // Toggle Zoom given Space in the keymap is the Space alias: the same hand and
+                    // the same once-per-press
+                    if !space_repeat {
+                        aliased.push(("view.zoomToggle", json!({})));
+                    }
+                } else {
+                    fire.push(id.to_string());
+                }
             }
         }
         // a command's second shortcut, when it is one key (a chord is [`crate::keybinds::runtime`]'s):
@@ -536,6 +548,7 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
         for (sc, id, params) in ALIASES {
             if let Some((m, k)) = parse(sc).filter(|_| !native(sc))
                 && !(k == Key::Escape && popup_open)
+                && !(k == Key::Space && space_repeat)
                 && !taken.contains(&(m, k))
                 && matches(i, m, k)
             {
@@ -600,6 +613,10 @@ fn fire_alias(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, params: se
         if let Ok(v) = app.run("slideshow.togglePause", json!({})) {
             app.toast(ctx, crate::i18n::tr(if v["paused"] == true { "Slideshow paused" } else { "Slideshow resumed" }));
         }
+        return;
+    }
+    // over a tool on the photo, held Space is the view's hand; a tap toggles on its release
+    if id == "view.zoomToggle" && crate::space_hand::begin(app, ctx) {
         return;
     }
     // flag/rate aliases (Shift+X…) go through the culling path: active photo in Compare/Survey,
@@ -681,7 +698,7 @@ fn fire_rating_key(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) -> boo
             crate::i18n::tr_format!("Rated {}", "★".repeat(n.parse().unwrap_or(0)))
         };
         app.toast(ctx, label);
-    } else if matches!(f, "photo.decreaseRating" | "photo.increaseRating") {
+    } else if matches!(f, "photo.decreaseRating" | "photo.increaseRating" | "photo.clearLabel") {
         cull(app, f, json!({}), false);
     } else if let Some(l) = f.strip_prefix("label:") {
         cull(app, "photo.label", json!({"label": l}), false);
@@ -807,8 +824,9 @@ fn brush_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
     if !library_grid(app) {
         return false;
     }
-    if let Ok(r) = app.run("album.toggleTarget", json!({})) {
-        let n = app.session.selected().len();
+    // `added` is null when nothing was left to toggle (the selected photos are gone): nothing to say
+    if let Some(r) = app.run("album.toggleTarget", json!({})).ok().filter(|r| r["added"].is_boolean()) {
+        let n = r["toggled"].as_u64().unwrap_or(0);
         let what = crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n);
         let name = r["name"].as_str().unwrap_or("Quick Collection").to_string();
         app.toast(
@@ -881,6 +899,10 @@ mod tests;
 #[cfg(test)]
 #[path = "shortcuts/tests_relative_ratings.rs"]
 mod relative_rating_tests;
+
+#[cfg(test)]
+#[path = "shortcuts/tests_clear_label.rs"]
+mod clear_label_tests;
 
 #[cfg(test)]
 #[path = "shortcuts/tests_flag_cycle.rs"]

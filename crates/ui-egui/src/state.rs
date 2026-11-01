@@ -76,6 +76,8 @@ pub struct UiState {
     #[serde(skip)]
     pub split_at: Option<f32>,
     pub thumb_size: f32,
+    /// Import review thumbnail size in points, independent of the library grid.
+    pub import_thumb_size: f32,
     /// Open Edit sections by id.
     pub open_sections: Vec<String>,
     /// Open flyouts (curve, mixer, grading…).
@@ -94,12 +96,6 @@ pub struct UiState {
     /// it was last seen on; see [`crate::panels::clipping::effective_sides`].
     #[serde(skip)]
     pub clip_hover: ([bool; 2], u64),
-    /// The Alt-drag preview a slider drag with ⌥ held asks for ([`crate::panels::clipping::sync_alt_preview`]).
-    #[serde(skip)]
-    pub alt_preview: Option<crate::panels::clipping::Preview>,
-    /// A preview `view.clippingPreview` holds until it is cleared (agents, tests, screenshots).
-    #[serde(skip)]
-    pub preview_forced: Option<crate::panels::clipping::Preview>,
     pub histogram: bool,
     /// Soft proofing (S in the loupe): render as `proof` would hold the photo.
     pub soft_proof: bool,
@@ -192,6 +188,10 @@ pub struct UiState {
     /// what the watched folder's last polls found (see [`crate::auto_import_watch`])
     #[serde(skip)]
     pub auto_watch: crate::auto_import_watch::Watch,
+    /// The watched folder that couldn't be listed and why, as the last listing found it: logged once when it
+    /// starts and once when the folder can be read again, and shown in Settings ▸ Import.
+    #[serde(skip)]
+    pub auto_import_error: Option<(String, String)>,
     /// When the automatic XMP writes that failed were last tried again (monotonic app time), and how
     /// many were waiting then.
     #[serde(skip)]
@@ -205,6 +205,10 @@ pub struct UiState {
     /// The develop control whose slider is being dragged (geometry sliders show a grid).
     #[serde(skip)]
     pub dragging_control: Option<String>,
+    /// Alt (Option on macOS) is held this frame: a dragged Edit slider shows its temporary
+    /// preview ([`lightcraft_pipeline::Overlay::for_control`]).
+    #[serde(skip)]
+    pub alt_held: bool,
     pub search: String,
     /// Focus the search field on the next frame (Edit → Find…).
     #[serde(skip)]
@@ -316,6 +320,9 @@ pub struct UiState {
     /// The keyword painter: clicking a photo in the grid toggles this keyword on it.
     #[serde(skip)]
     pub keyword_painter: Option<String>,
+    /// The text of the Keywords panel's painter box: the keyword Enable Painting paints.
+    #[serde(skip)]
+    pub keyword_painter_text: String,
     /// What the Keywording box shows (Lightroom Classic's Keyword Tags views).
     pub keywording_view: KeywordingView,
     /// The Keywording box, grouped: every keyword of this selection (its hash) is shown, however
@@ -384,6 +391,7 @@ pub struct UiState {
 }
 
 impl Default for UiState {
+    /// Initialize the library and import review sizes as independent app preferences.
     fn default() -> Self {
         UiState {
             window: None,
@@ -410,6 +418,7 @@ impl Default for UiState {
             before_after: BeforeAfter::Off,
             split_at: None,
             thumb_size: 220.0,
+            import_thumb_size: crate::import::THUMB_SIZE_DEFAULT,
             open_sections: vec!["light".into()],
             open_flyouts: vec![],
             single_panel: false,
@@ -417,8 +426,6 @@ impl Default for UiState {
             clip_highlights: false,
             show_clipping: None,
             clip_hover: ([false; 2], 0),
-            alt_preview: None,
-            preview_forced: None,
             histogram: true,
             soft_proof: false,
             proof: lightcraft_engine::pipeline::Proof { dest_warning: false, ..Default::default() },
@@ -453,10 +460,12 @@ impl Default for UiState {
             unnamed_focus: false,
             hidden_locations: Vec::new(),
             dragging_control: None,
+            alt_held: false,
             external_edits: Vec::new(),
             was_focused: true,
             auto_import_at: 0.0,
             auto_watch: Default::default(),
+            auto_import_error: None,
             sidecar_retry_at: 0.0,
             sidecars_waiting: 0,
             known_cards: None,
@@ -504,6 +513,7 @@ impl Default for UiState {
             slideshow: None,
             second_window: false,
             keyword_painter: None,
+            keyword_painter_text: String::new(),
             keywording_view: KeywordingView::default(),
             keyword_chips_all: None,
             folded_sections: Vec::new(),
@@ -606,6 +616,7 @@ impl UiState {
     /// Clamp values restored from disk.
     pub fn sanitized(mut self) -> Self {
         self.thumb_size = self.thumb_size.clamp(THUMB_SIZE_MIN, THUMB_SIZE_MAX);
+        self.import_thumb_size = crate::import::thumb_size(self.import_thumb_size);
         self.left_width = LEFT_WIDTH.clamp(self.left_width);
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
         self.brush_size = self.brush_size.clamp(0.002, 0.5);

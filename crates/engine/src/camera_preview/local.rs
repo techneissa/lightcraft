@@ -39,7 +39,7 @@ pub(crate) fn starting_colour_choice(
         let local = local_colour_with(
             raw,
             profile_key,
-            |raw, t, colour| fit_local_look(raw, bytes, t, lens, colour),
+            |raw, t, colour| fit_local_look(raw, bytes, t, lens, embedded, colour),
             |raw| starting_colour(raw, bytes, lens, embedded, CameraColour::Auto),
         );
         if let Some(local) = local {
@@ -106,9 +106,10 @@ fn fit_local_look(
     bytes: &[u8],
     transform: &CameraTransform,
     lens: Option<&LensGeometry>,
+    embedded: Option<&lightcraft_develop::EmbeddedLens>,
     colour: &(Mat3, Option<HsvTable>),
 ) -> Option<CameraLook> {
-    let (sensor, reference, clipped) = proxies(raw, bytes, transform, PROXY, 0.0, lens)?;
+    let (sensor, reference, clipped) = proxies(raw, bytes, transform, PROXY, 0.0, lens, embedded)?;
     let dro = lightcraft_raw::embedded_preview_dynamic_range_optimized(bytes) == Some(true);
     let look = fit_local_look_with(&sensor, &reference, &clipped, colour, dro)?;
     Some(if dro { with_dro_off_tone(look) } else { look })
