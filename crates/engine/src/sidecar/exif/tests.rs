@@ -357,3 +357,34 @@ fn a_hostile_override_in_the_catalog_still_writes_a_packet() {
     merge_into(&mut q, &sc, "now");
     assert!(q.meta.exif.focal_mm.is_none() && q.meta.exif.aperture.is_none() && q.meta.exif.shutter.is_none());
 }
+
+/// A sidecar stating only an exposure time.
+fn shutter_sidecar(time: &str) -> String {
+    format!(
+        r#"<x:xmpmeta xmlns:x="adobe:ns:meta/"><rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+      <rdf:Description rdf:about="" xmlns:exif="http://ns.adobe.com/exif/1.0/"><exif:ExposureTime>{time}</exif:ExposureTime></rdf:Description>
+      </rdf:RDF></x:xmpmeta>"#
+    )
+}
+
+#[test]
+fn a_long_exposure_the_file_stores_rounded_is_no_override() {
+    // the catalog keeps a file's 2.5 s as `2` and its 0.7 s as `1/1` (files/probe.rs); the sidecar says the real time
+    for (file, time) in [("2", "5/2"), ("2", "2.5"), ("1/1", "7/10"), ("1/1", "0.7"), ("30", "30/1"), ("1/250", "1/250"), ("1/3", "0.333")] {
+        let q = read_back(&photo(|m| m.shutter = file.into()), &shutter_sidecar(time));
+        assert!(q.meta.exif.is_empty(), "file {file}, sidecar {time}: {:?}", q.meta.exif);
+    }
+    // and one that clears an override the person had set
+    let mut p = photo(|m| m.shutter = "2".into());
+    p.meta.set_exif(ExifField::Shutter, Some("1/60")).unwrap();
+    merge_into(&mut p, &parse_sidecar(&shutter_sidecar("5/2"), crate::crs::Target::Rendered).unwrap(), "now");
+    assert!(p.meta.exif.is_empty());
+}
+
+#[test]
+fn a_different_exposure_is_an_override() {
+    for (file, time, want) in [("2", "1/250", "1/250"), ("1/1", "5/2", "2.5"), ("1/250", "2.5", "2.5"), ("1/250", "1/500", "1/500")] {
+        let q = read_back(&photo(|m| m.shutter = file.into()), &shutter_sidecar(time));
+        assert_eq!(q.meta.exif.shutter.as_deref(), Some(want), "file {file}, sidecar {time}");
+    }
+}

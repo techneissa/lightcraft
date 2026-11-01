@@ -84,9 +84,9 @@ fn text_of(sc: &SidecarExif, field: ExifField) -> Option<String> {
     }
 }
 
-/// Whether `text` is the file's focal length or aperture once both are rounded as an edit is
-/// (a file's 24.04 mm and a sidecar's `24` are one value, not an edit). The other fields compare
-/// in [`Meta::set_exif`].
+/// Whether `text` is the file's focal length, aperture or exposure time once both are rounded the way
+/// they are stored (a file's 24.04 mm and a sidecar's `24` are one value, not an edit). The other fields
+/// compare in [`Meta::set_exif`].
 fn same_as_file(meta: &Meta, field: ExifField, text: &str) -> bool {
     match field {
         ExifField::Focal => {
@@ -97,8 +97,15 @@ fn same_as_file(meta: &Meta, field: ExifField, text: &str) -> bool {
             let file = meta.aperture.filter(|v| v.is_finite() && *v > 0.0).and_then(|v| parse_aperture(&format_aperture(v)).ok());
             file.is_some() && file == parse_aperture(text).ok()
         }
+        // (the catalog keeps a file's exposure rounded: 2.5 s as `2`, 0.7 s as `1/1`)
+        ExifField::Shutter => parse_shutter_text(text).ok().is_some_and(|secs| !meta.shutter.is_empty() && file_shutter_text(secs) == meta.shutter),
         _ => false,
     }
+}
+
+/// An exposure time in seconds as `files/probe.rs` stores a file's: whole seconds from 1 s up, else `1/n`.
+fn file_shutter_text(secs: f64) -> String {
+    if secs >= 1.0 { format!("{secs:.0}") } else { format!("1/{:.0}", 1.0 / secs) }
 }
 
 /// `camera` split into make and model (`Sony ILCE-7M5` → `Sony`, `ILCE-7M5`); a one-word name is a model.
