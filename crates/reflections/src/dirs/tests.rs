@@ -26,10 +26,11 @@ impl SimpleBackend for Random {
 fn tiny() -> DirsConfig {
     DirsConfig {
         dim: 4,
-        enc: [1, 1, 1, 1],
-        dec: [1, 1, 1, 1],
+        enc: [1, 1, 1, 1, 1],
+        dec: [1, 1, 1, 1, 0],
         prior_blocks: 1,
         swin: SwinConfig { embed: 16, depths: [1, 2, 1, 1], heads: [2, 2, 2, 2], window: 4 },
+        pair: false,
     }
 }
 
@@ -102,7 +103,75 @@ fn damaged_checkpoint_files_are_errors_not_panics() {
     noise.extend(vec![0xffu8; 200]);
     assert!(read("noise.ckpt", &noise, &mut out).is_err());
     assert!(read_pickle(&dir.join("missing.ckpt"), "state_dict", &Device::Cpu, &mut out, |n| Some(n.to_string())).is_err());
-    assert!(DirsNet::load(&dir, true).is_err());
+    assert!(DirsNet::load(&dir, true, false).is_err());
+    assert!(DirsNet::load(&dir, true, true).is_err());
     assert!(out.is_empty());
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+fn tiny_pair() -> DirsNet {
+    let vb = VarBuilder::from_backend(Box::new(Random), DType::F32, Device::Cpu);
+    DirsNet::from_builder(vb, DirsConfig { pair: true, dec: [1, 1, 1, 1, 1], ..tiny() }, Device::Cpu).unwrap()
+}
+
+#[test]
+fn tiny_pair_network_runs_at_sizes_that_need_window_padding_and_is_deterministic() {
+    let net = tiny_pair();
+    for (w, h) in [(64, 96), (40, 24), (33, 35)] {
+        let rgb = picture(w, h);
+        let a = net.infer(&rgb, w, h).unwrap();
+        assert_eq!(a.len(), w * h);
+        assert!(a.iter().all(|p| p.iter().all(|v| v.is_finite() && (0.0..=1.0).contains(v))));
+        assert_eq!(a, net.infer(&rgb, w, h).unwrap());
+    }
+    // PAIR and MuGI are different networks over the same weights.
+    assert_ne!(net.infer(&picture(64, 64), 64, 64).unwrap(), tiny_net().infer(&picture(64, 64), 64, 64).unwrap());
+}
+
+#[test]
+fn pair_attention_is_the_same_whatever_the_chunk_size() {
+    let net = tiny_pair();
+    let x = Tensor::from_vec((0..4 * 5 * 7).map(|i| (i % 13) as f32 * 0.1).collect::<Vec<_>>(), (1, 4, 5, 7), &Device::Cpu).unwrap();
+    let whole = net.attention_block(&x, &x, "lib4.0", 4).unwrap();
+    assert_eq!(whole.0.dims(), &[1, 4, 5, 7]);
+    // One window at a time gives the same numbers as all at once.
+    let windows = Tensor::from_vec((0..6 * 144 * 4).map(|i| ((i * 7) % 11) as f32 * 0.1).collect::<Vec<_>>(), (6, 144, 4), &Device::Cpu).unwrap();
+    let vb = net.vb.pp("lib4.0.dsia_sa");
+    let all = net.window_attention(&vb, &windows, 4, (2, 1), usize::MAX).unwrap();
+    let one = net.window_attention(&vb, &windows, 4, (2, 1), 1).unwrap();
+    let diff = (all - one).unwrap().abs().unwrap().max_all().unwrap().to_scalar::<f32>().unwrap();
+    assert!(diff < 1e-6, "{diff}");
+}
+
+#[test]
+fn layered_relative_bias_indexes_layer_then_offset() {
+    let net = tiny_pair();
+    let side = 23;
+    let table = Tensor::arange(0f32, (3 * side * side) as f32, &Device::Cpu).unwrap().reshape((3 * side * side, 1)).unwrap();
+    let mut map = HashMap::new();
+    map.insert("relative_position_bias_table".to_string(), table);
+    let vb = VarBuilder::from_tensors(map, DType::F32, &Device::Cpu);
+    let n = 288;
+    let bias = net.relative_bias(&vb, 1, 2).unwrap().reshape((n, n)).unwrap().to_vec2::<f32>().unwrap();
+    // Same layer, same token: layer offset 0 is the middle block, offset (0,0) its centre.
+    assert_eq!(bias[0][0], (side * side + 11 * side + 11) as f32);
+    // Layer 1 token against layer 0 token (+1), the same position: the last block.
+    assert_eq!(bias[144][0], (2 * side * side + 11 * side + 11) as f32);
+    assert_eq!(bias[0][144], (11 * side + 11) as f32);
+    // Window attention (one layer) uses one block laid out as in Swin.
+    let single = {
+        let mut map = HashMap::new();
+        map.insert(
+            "relative_position_bias_table".to_string(),
+            Tensor::arange(0f32, (side * side) as f32, &Device::Cpu).unwrap().reshape((side * side, 1)).unwrap(),
+        );
+        net.relative_bias(&VarBuilder::from_tensors(map, DType::F32, &Device::Cpu), 1, 1)
+            .unwrap()
+            .reshape((144, 144))
+            .unwrap()
+            .to_vec2::<f32>()
+            .unwrap()
+    };
+    assert_eq!(single[1][0], (11 * side + 12) as f32);
+    assert_eq!(single[12][0], (12 * side + 11) as f32);
 }

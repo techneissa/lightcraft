@@ -16,19 +16,27 @@ mod ops;
 #[cfg(not(target_arch = "wasm32"))]
 mod swin;
 #[cfg(not(target_arch = "wasm32"))]
-pub use dirs::{DirsNet, MUGI_CHECKPOINT, SWIN_PRIOR};
+pub use dirs::{DirsNet, MUGI_CHECKPOINT, PAIR_CHECKPOINT, SWIN_PRIOR};
 #[cfg(not(target_arch = "wasm32"))]
 pub use net::Net;
 
 /// The model id of DIRS-MuGI (folder name under the models folder).
 pub const DIRS_MUGI: &str = "dirs-mugi";
+/// The model id of DIRS-PAIR.
+pub const DIRS_PAIR: &str = "dirs-pair";
 pub fn is_dirs(model: &str) -> bool {
-    model == DIRS_MUGI
+    model == DIRS_MUGI || model == DIRS_PAIR
 }
-/// A model folder is complete: DSRNet has `manifest.json` + `model.safetensors`, DIRS-MuGI the two files
-/// published on Hugging Face (`dirs_mugi_lors.ckpt`, `swin_large_o365.pth`).
+/// A model folder is complete: DSRNet has `manifest.json` + `model.safetensors`, DIRS-MuGI and DIRS-PAIR their
+/// checkpoint and the Swin prior, as published on Hugging Face (`dirs_mugi_lors.ckpt` or `dirs_pair_lors.ckpt`,
+/// `swin_large_o365.pth`).
 pub fn installed_model(dir: &Path, model: &str) -> bool {
-    if is_dirs(model) { dir.join("dirs_mugi_lors.ckpt").is_file() && dir.join("swin_large_o365.pth").is_file() } else { installed(dir) }
+    let checkpoint = match model {
+        DIRS_MUGI => "dirs_mugi_lors.ckpt",
+        DIRS_PAIR => "dirs_pair_lors.ckpt",
+        _ => return installed(dir),
+    };
+    dir.join(checkpoint).is_file() && dir.join("swin_large_o365.pth").is_file()
 }
 
 /// Either network behind one call.
@@ -40,7 +48,11 @@ pub enum Runner {
 #[cfg(not(target_arch = "wasm32"))]
 impl Runner {
     pub fn load(dir: &Path, model: &str, cpu: bool) -> Result<Self, String> {
-        if is_dirs(model) { DirsNet::load(dir, cpu).map(|n| Self::Dirs(Box::new(n))) } else { Net::load(dir, cpu).map(Self::Dsrnet) }
+        if is_dirs(model) {
+            DirsNet::load(dir, cpu, model == DIRS_PAIR).map(|n| Self::Dirs(Box::new(n)))
+        } else {
+            Net::load(dir, cpu).map(Self::Dsrnet)
+        }
     }
     pub fn infer(&self, rgb: &[u8], w: usize, h: usize) -> Result<Vec<[f32; 3]>, String> {
         match self {

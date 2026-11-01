@@ -162,13 +162,13 @@ impl Swin {
 }
 
 /// `[hp, wp, c]` to `[nW, ws*ws, c]`.
-fn window_partition(g: &Tensor, ws: usize) -> R<Tensor> {
+pub(crate) fn window_partition(g: &Tensor, ws: usize) -> R<Tensor> {
     let (hp, wp, c) = g.dims3()?;
     g.reshape((hp / ws, ws, wp / ws, ws, c))?.permute((0, 2, 1, 3, 4))?.contiguous()?.reshape(((hp / ws) * (wp / ws), ws * ws, c))
 }
 
 /// `[nW, ws*ws, c]` back to `[hp, wp, c]`.
-fn window_reverse(w: &Tensor, ws: usize, hp: usize, wp: usize, c: usize) -> R<Tensor> {
+pub(crate) fn window_reverse(w: &Tensor, ws: usize, hp: usize, wp: usize, c: usize) -> R<Tensor> {
     w.reshape((hp / ws, wp / ws, ws, ws, c))?.permute((0, 2, 1, 3, 4))?.contiguous()?.reshape((hp, wp, c))
 }
 
