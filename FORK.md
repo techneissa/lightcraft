@@ -90,6 +90,7 @@ Known failures (on this Mac, and on Fork CI only): [fork/known-failures.md](fork
 - [Edit camera, lens and exposure values in Info](fork/metadata-overrides.md): Edit Camera, Lens, Focal length, Shutter speed, Aperture and ISO for one or many photos. Branch `claude/metadata-overrides`.
 - [Brush live adjustment](fork/brush-live-preview.md): Painting with the Brush shows the mask's adjustment under the brush. Branch `claude/brush-live-preview`.
 - [⌥-drag slider previews](fork/alt-drag-clipping-preview.md): Holding ⌥ while dragging a slider shows clipping, the sharpening mask or greyscale. Branch `claude/alt-drag-clipping-preview`.
+- [Shared SAM3 model folder](fork/shared-sam3.md): AI masks look for the SAM 3 model in the folder shared with PhotoCraft (`ArtCraft/models/sam3`) first and download there. Branch `feat/16-shared-sam3`.
 
 Every feature also has an entry in `docs/whats-new.md` and a row in `docs/parity-checklist.md`; clashes there are
 fixed by the update script (both sides kept).
