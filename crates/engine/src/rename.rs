@@ -41,10 +41,11 @@ mod tokens;
 pub(crate) use fs::{MoveFs, RealFs};
 #[cfg(test)]
 use fs::{folded_path, same_contents};
-pub(crate) use moves::move_all;
 #[cfg(test)]
 pub(crate) use moves::move_file_with;
+pub(crate) use moves::{BatchMoveError, move_all, move_all_with_progress};
 pub use moves::{MoveError, move_file};
+pub(crate) use plan::{plan_moves, plan_rename_photos_with};
 pub use plan::{plan_rename_photos, rename_photos};
 #[cfg(test)]
 pub(crate) use sidecar::PacketVersion;
@@ -55,7 +56,7 @@ pub(crate) use sidecar::{SidecarMove, retry_sidecars, validate_sidecars};
 use tokens::format_date;
 pub use tokens::{
     DATE_DIRECTIVES, TEMPLATE_NOTES, TOKENS, TokenHelp, expand, expand_folder, expand_tokens, expand_tokens_with, folder_template_error,
-    sample_photo, token_example, token_help_json, token_summary, unknown_tokens,
+    name_char_problem, rename_template_error, sample_photo, token_example, token_help_json, token_summary, unknown_tokens,
 };
 
 /// One planned rename.
