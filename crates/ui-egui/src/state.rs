@@ -232,7 +232,7 @@ pub struct UiState {
     pub focus_keywords: Option<u64>,
     /// A list row being renamed in place (album, keyword, preset, version).
     #[serde(skip)]
-    pub(crate) rename_row: Option<crate::inline_rename::RowRename>,
+    pub rename_row: Option<crate::inline_rename::RowRename>,
     /// A mask being renamed in the Masks list: its id and the edited name.
     #[serde(skip)]
     pub renaming_mask: Option<(u32, String)>,
