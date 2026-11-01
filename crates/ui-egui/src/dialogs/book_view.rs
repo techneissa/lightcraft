@@ -109,11 +109,30 @@ fn check(ui: &mut Ui, id: &str, label: &str, value: bool) -> Option<bool> {
     r.changed().then_some(v)
 }
 
+/// A row of buttons of which one is on. The one on has an accent outline and accent text on the
+/// lighter fill, so it reads as selected at a glance; each is `button:{id}-{index}`.
 fn choice<V: PartialEq + Copy>(ui: &mut Ui, id: &str, options: &[(V, &str)], current: V) -> Option<V> {
+    let t = Tokens::get(ui.ctx());
     let mut out = None;
     ui.spacing_mut().item_spacing.x = 3.0;
     for (i, (v, l)) in options.iter().enumerate() {
-        if text_button(ui, &format!("{id}-{i}"), l, current == *v).clicked() && current != *v {
+        let on = current == *v;
+        let label = crate::i18n::tr(l);
+        let (r, resp) = ui.allocate_exact_size(vec2(crate::widgets::text_button_size(ui, l), 24.0), Sense::click());
+        crate::widgets::announce_selected(&resp, label.to_string(), on);
+        register(ui, format!("button:{id}-{i}"), r);
+        let fill = if on {
+            t.pressed
+        } else if resp.hovered() {
+            t.hover
+        } else {
+            t.button
+        };
+        let stroke = if on { Stroke::new(1.5, t.accent) } else { Stroke::new(1.0, t.button_border) };
+        let p = ui.painter();
+        p.rect(r, egui::CornerRadius::same(4), fill, stroke, StrokeKind::Inside);
+        p.text(r.center(), egui::Align2::CENTER_CENTER, label, t.semibold(11.5), if on { t.accent } else { t.text });
+        if resp.clicked() && !on {
             out = Some(*v);
         }
     }
