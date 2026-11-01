@@ -56,6 +56,9 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
             if resp.clicked() && !toggled {
                 set_tree_open(ui, open_id, !open);
             }
+            if resp.double_clicked() {
+                crate::inline_rename::begin(app, crate::inline_rename::Kind::Album(a.id.0));
+            }
             folder_menu(app, &resp, a);
             if draw_open {
                 albums_tree(app, ui, all, Some(a.id), indent + INDENT_STEP, open_to);
@@ -104,6 +107,9 @@ fn albums_tree(app: &mut LightcraftApp, ui: &mut egui::Ui, all: &AlbumKids, pare
             }
             if resp.clicked() {
                 let _ = app.run("library.source", json!({"kind": "album", "id": a.id.0}));
+            }
+            if resp.double_clicked() {
+                crate::inline_rename::begin(app, crate::inline_rename::Kind::Album(a.id.0));
             }
             folder_menu(app, &resp, a);
         }

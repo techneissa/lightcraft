@@ -1213,7 +1213,14 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("preset.rename", "Rename Preset", [], None, "{id, name}", always, |s, p| {
             let c = "preset.rename";
-            let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad(c, "missing name"))?.to_string();
+            let raw = str_param(p, "name").ok_or_else(|| bad(c, "missing name"))?;
+            let (pid, group) = {
+                let pr = user_preset(s, p, c)?;
+                (pr.id.clone(), pr.group.clone())
+            };
+            // the other presets of its group (a stock preset in a group of the same name counts)
+            let others = s.presets.iter().filter(|x| x.id != pid && x.group == group).map(|x| x.name.as_str());
+            let name = crate::names::check_name(raw, others).map_err(|e| bad(c, e.to_string()))?;
             user_preset(s, p, c)?.name = name;
             ok()
         }),
@@ -1277,7 +1284,12 @@ pub fn specs() -> Vec<CommandSpec> {
         }),
         cmd!("version.rename", "Rename Version", [], None, "{index, name}", has_active, |s, p| {
             let c = "version.rename";
-            let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad(c, "missing name"))?.to_string();
+            let raw = str_param(p, "name").ok_or_else(|| bad(c, "missing name"))?;
+            let i = index_req(p, "index", c)?;
+            let id = active(s, c)?;
+            let versions = s.catalog.photo(id).map(|ph| ph.versions.as_slice()).unwrap_or_default();
+            let others = versions.iter().enumerate().filter(|(k, _)| *k != i).map(|(_, v)| v.name.as_str());
+            let name = crate::names::check_name(raw, others).map_err(|e| bad(c, e.to_string()))?;
             edit_version(s, p, c, "Rename Version", |v, _| v.name = name)
         }),
         cmd!("version.update", "Update Version with Current Settings", [], None, "{index}", has_active, |s, p| {
