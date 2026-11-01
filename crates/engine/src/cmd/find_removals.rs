@@ -90,9 +90,10 @@ fn find(s: &mut Session, c: &str, job: Job, p: &Value) -> crate::Result<Value> {
     }
     let mut out = state_json(s);
     if add {
-        let taken = s.finds.take(s.active(), None, false);
+        // only this search's own kind: the other kind's candidates (found earlier) stay listed
         let kind = job.kind();
-        let mine: Vec<Entry> = taken.into_iter().filter(|e| e.candidate.kind == kind).collect();
+        let ids: Vec<u32> = s.finds.view(s.active()).entries.iter().filter(|e| e.candidate.kind == kind).map(|e| e.id).collect();
+        let mine = s.finds.take(s.active(), Some(&ids), false);
         if !mine.is_empty() {
             let (added, _) = add_spots(s, c, &mine)?;
             out["added"] = json!(mine.len());
@@ -111,7 +112,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "Find People",
             [],
             None,
-            "{includeMain?: bool (false: the largest, most central person is the main subject and not proposed), wait?: bool, add?: bool (remove everything found at once; needs wait)} — finds people with SAM 3's \"person\" mask (rough shapes from faces when only the YuNet detector is installed), on a thread with a row in the activity stack; nothing is added to the photo. Without `wait` the app returns {started} and spot.candidates has the result → {candidates: [{id, kind, source, main, selected, area, score, bbox, outline, spots}], text}",
+            "{includeMain?: bool (false: the largest, most central person, however small, is the main subject and not proposed), wait?: bool, add?: bool (remove everything found at once; needs wait)} — finds people with SAM 3's \"person\" mask (rough shapes from faces when only the YuNet detector is installed), on a thread with a row in the activity stack; nothing is added to the photo. Without `wait` the app returns {started} and spot.candidates has the result → {candidates: [{id, kind, source, main, selected, area, score, bbox, outline, spots}], text}",
             has_active,
             |s, p| {
                 let include_main = bool_or(p, "includeMain", false);
@@ -151,7 +152,15 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                 let photo = s.active();
                 let view = s.finds.view(photo);
                 let toggle = bool_or(p, "toggle", false);
-                let at = p.get("at").and_then(Value::as_array).and_then(|a| Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?)));
+                let at = match p.get("at") {
+                    None | Some(Value::Null) => None,
+                    Some(v) => Some(
+                        v.as_array()
+                            .and_then(|a| Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?)))
+                            .filter(|(x, y)| x.is_finite() && y.is_finite())
+                            .ok_or_else(|| bad(c, "`at` must be a click [x, y], 0..1 of the photo"))?,
+                    ),
+                };
                 let id = if let Some((x, y)) = at {
                     let tol = f64_or(p, "tolerance", 0.01).clamp(0.0, 0.2);
                     // the smallest thing under the click, a wire before a person

@@ -269,7 +269,7 @@ pub(crate) fn find(job: Job, img: &Rgba8, sources: PeopleSources, cancel: &Atomi
             }
             // without SAM 3 (or when it fails): the thin-line detector
             let sam_used = found.is_some();
-            let mut found = found.unwrap_or_else(|| wires::detect(img, sensitivity));
+            let mut found = found.unwrap_or_else(|| wires::detect_with(img, sensitivity, cancel));
             found.sort_by(|a, b| b.area.total_cmp(&a.area));
             let mut text = match found.len() {
                 0 => "No wires found".to_string(),

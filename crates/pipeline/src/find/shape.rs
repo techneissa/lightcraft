@@ -199,6 +199,69 @@ pub fn components(m: &Mask, limit: usize) -> Vec<Component> {
         .collect()
 }
 
+/// What [`label`] knows about one component without holding its mask.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Stat {
+    pub pixels: usize,
+    /// `[x0, y0, x1, y1]`, inclusive.
+    pub bbox: [usize; 4],
+}
+
+/// The 8-connected components of a mask as one label per pixel (`0` = none, `k + 1` = `comps[k]`) and each one's size and
+/// box: a photo with thousands of small components costs one number per pixel, not a photo-sized mask per component.
+#[derive(Clone, Debug, Default)]
+pub struct Labels {
+    pub w: usize,
+    pub h: usize,
+    pub ids: Vec<u32>,
+    pub comps: Vec<Stat>,
+}
+
+/// Label the components of `m` (none when it is empty, malformed or past [`MAX_MASK_PIXELS`]).
+pub fn label(m: &Mask) -> Labels {
+    let (w, h) = (m.w, m.h);
+    if w == 0 || h == 0 || w.checked_mul(h).is_none_or(|n| n > MAX_MASK_PIXELS || n != m.bits.len()) {
+        return Labels::default();
+    }
+    let mut ids = vec![0u32; w * h];
+    let mut comps: Vec<Stat> = Vec::new();
+    let mut stack: Vec<usize> = Vec::new();
+    for start in 0..w * h {
+        if ids[start] != 0 || !m.bits[start] {
+            continue;
+        }
+        let Ok(id) = u32::try_from(comps.len() + 1) else { break };
+        ids[start] = id;
+        stack.push(start);
+        let (mut n, mut x0, mut y0, mut x1, mut y1) = (0usize, w, h, 0usize, 0usize);
+        while let Some(i) = stack.pop() {
+            let (x, y) = (i % w, i / w);
+            n += 1;
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
+            for ny in y.saturating_sub(1)..=(y + 1).min(h - 1) {
+                for nx in x.saturating_sub(1)..=(x + 1).min(w - 1) {
+                    let j = ny * w + nx;
+                    if ids[j] == 0 && m.bits[j] {
+                        ids[j] = id;
+                        stack.push(j);
+                    }
+                }
+            }
+        }
+        comps.push(Stat { pixels: n, bbox: [x0, y0, x1, y1] });
+    }
+    Labels { w, h, ids, comps }
+}
+
+impl Labels {
+    /// Component `k` as a mask the size of its box (its pixel `(x, y)` is box pixel `(x - x0, y - y0)`).
+    pub fn crop(&self, k: usize) -> Option<Mask> {
+        let [x0, y0, x1, y1] = self.comps.get(k)?.bbox;
+        let id = u32::try_from(k + 1).ok()?;
+        Some(Mask::from_fn(x1 - x0 + 1, y1 - y0 + 1, |x, y| self.ids.get((y0 + y) * self.w + x0 + x) == Some(&id)))
+    }
+}
+
 /// The outer outline of the component `m` (assumed 8-connected) as pixel-centre points, clockwise on screen.
 pub fn trace_outline(m: &Mask) -> Vec<(f64, f64)> {
     let Some(start) = m.bits.iter().position(|b| *b) else { return Vec::new() };
@@ -412,6 +475,27 @@ mod tests {
         assert_eq!(c[1].pixels, 4);
         assert_eq!(c[0].bbox, [0, 0, 3, 3]);
         assert!(components(&Mask { w: 3, h: 3, bits: vec![true; 4] }, 4).is_empty(), "a mask of the wrong size is nothing");
+    }
+
+    #[test]
+    fn labels_cost_a_number_per_pixel_not_a_mask_per_component() {
+        // 4000 specks and one long bar on a 1600 × 1000 photo
+        let m = Mask::from_fn(1600, 1000, |x, y| (x % 7 == 3 && y % 5 == 2 && y > 100) || (y == 50 && x > 100 && x < 1500));
+        let l = label(&m);
+        assert!(l.comps.len() > 4000, "{}", l.comps.len());
+        let bar = l.comps.iter().position(|c| c.pixels == 1399).unwrap();
+        let crop = l.crop(bar).unwrap();
+        assert_eq!((crop.w, crop.h, crop.count()), (1399, 1, 1399), "a box-sized mask, not a photo-sized one");
+        assert!(l.crop(l.comps.len()).is_none());
+        // the same pieces components() finds
+        assert_eq!(
+            components(&Mask::from_fn(20, 10, |x, y| (x < 4 && y < 4) || (10..12).contains(&x) && y < 2), 8).len(),
+            label(&Mask::from_fn(20, 10, |x, y| (x < 4 && y < 4) || (10..12).contains(&x) && y < 2)).comps.len()
+        );
+        // hostile: empty, a wrong size, too many pixels
+        assert!(label(&Mask::new(0, 0)).comps.is_empty());
+        assert!(label(&Mask { w: 3, h: 3, bits: vec![true; 4] }).comps.is_empty());
+        assert!(label(&Mask { w: 5000, h: 5000, bits: vec![true; 25_000_000] }).comps.is_empty());
     }
 
     #[test]

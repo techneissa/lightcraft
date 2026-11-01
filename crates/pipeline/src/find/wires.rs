@@ -15,7 +15,9 @@
 
 use lightcraft_raster::{Plane, Rgba8, blur::gaussian};
 
-use super::shape::{Mask, components, dilate, thin};
+use std::sync::atomic::{AtomicBool, Ordering};
+
+use super::shape::{Labels, Mask, dilate, label, thin};
 use super::{Candidate, Kind, cover};
 
 /// Most wires proposed.
@@ -33,7 +35,7 @@ struct Ridges {
     n: Vec<(f32, f32)>,
 }
 
-fn ridges(l: &Plane, long: f64) -> Ridges {
+fn ridges(l: &Plane, long: f64, cancel: &AtomicBool) -> Ridges {
     let (w, h) = (l.width, l.height);
     let mut best = Ridges { r: vec![0.0; w * h], n: vec![(0.0, 1.0); w * h] };
     let k = (long / 1600.0).max(0.5);
@@ -42,6 +44,9 @@ fn ridges(l: &Plane, long: f64) -> Ridges {
         let b = gaussian(l, sigma);
         let at = |x: i64, y: i64| b.data[(y.clamp(0, h as i64 - 1) as usize) * w + x.clamp(0, w as i64 - 1) as usize];
         for y in 1..h.saturating_sub(1) {
+            if cancel.load(Ordering::Relaxed) {
+                return best;
+            }
             for x in 1..w.saturating_sub(1) {
                 let (xi, yi) = (x as i64, y as i64);
                 let c = at(xi, yi);
@@ -305,8 +310,31 @@ fn analyse(px: &[Px], l: &Plane, long: f64, c_min: f32, depth: u8, out: &mut Vec
     }
 }
 
+/// Most components looked at closely: the longest ones.
+const MAX_ANALYSED: usize = 200;
+
+/// The components (by index into `labels`) that could be a wire: long enough, the longest [`MAX_ANALYSED`] of them. Only
+/// their boxes are looked at, so a photo with thousands of specks costs nothing here.
+fn candidates(labels: &Labels, long: f64) -> Vec<usize> {
+    let mut keep: Vec<usize> = labels
+        .comps
+        .iter()
+        .enumerate()
+        .filter(|(_, c)| (c.bbox[2] - c.bbox[0] + 1).max(c.bbox[3] - c.bbox[1] + 1) as f64 + 1.0 >= MIN_LEN * long * 0.8)
+        .map(|(i, _)| i)
+        .collect();
+    keep.sort_by_key(|i| std::cmp::Reverse(labels.comps[*i].pixels));
+    keep.truncate(MAX_ANALYSED);
+    keep
+}
+
 /// Wires in a rendered image; `sensitivity` 0..100 (higher finds fainter wires).
 pub fn detect(img: &Rgba8, sensitivity: f32) -> Vec<Candidate> {
+    detect_with(img, sensitivity, &AtomicBool::new(false))
+}
+
+/// [`detect`] that stops, with nothing, soon after `cancel` is set (the ✕ in the activity stack).
+pub fn detect_with(img: &Rgba8, sensitivity: f32, cancel: &AtomicBool) -> Vec<Candidate> {
     let (w, h) = (img.width, img.height);
     if w < 64 || h < 64 || w.saturating_mul(h) > MAX_PIXELS || img.data.len() != w * h {
         return Vec::new();
@@ -317,7 +345,10 @@ pub fn detect(img: &Rgba8, sensitivity: f32) -> Vec<Candidate> {
         (0.2126 * f32::from(p[0]) + 0.7152 * f32::from(p[1]) + 0.0722 * f32::from(p[2])) / 255.0
     });
     let c_min = min_contrast(sensitivity);
-    let rd = ridges(&l, long);
+    let rd = ridges(&l, long, cancel);
+    if cancel.load(Ordering::Relaxed) {
+        return Vec::new();
+    }
     // the ridge response of a smooth sky is mostly noise: a line has to stand well above the photo's own 90th percentile,
     // however sensitive the setting
     let floor = {
@@ -331,6 +362,9 @@ pub fn detect(img: &Rgba8, sensitivity: f32) -> Vec<Candidate> {
     let edge = 3usize;
     let mut ridge = Mask::new(w, h);
     for y in edge..h - edge {
+        if cancel.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
         for x in edge..w - edge {
             let i = y * w + x;
             if rd.r[i] <= lo {
@@ -349,17 +383,18 @@ pub fn detect(img: &Rgba8, sensitivity: f32) -> Vec<Candidate> {
     // thin each band to its centre line.
     let bands = dilate(&ridge, 2.5);
     let mut out: Vec<(f64, Found)> = Vec::new();
-    for comp in components(&bands, 400) {
-        let [x0, y0, x1, y1] = comp.bbox;
-        let (bw, bh) = (x1 - x0 + 1, y1 - y0 + 1);
-        if bw.max(bh) as f64 + 1.0 < MIN_LEN * long * 0.8 {
-            continue;
+    let labels = label(&bands);
+    for k in candidates(&labels, long) {
+        if cancel.load(Ordering::Relaxed) {
+            return Vec::new();
         }
-        let strong = (y0..=y1).any(|y| (x0..=x1).any(|x| comp.mask.bits[y * w + x] && ridge.bits[y * w + x] && rd.r[y * w + x] > hi));
+        let [x0, y0, x1, y1] = labels.comps[k].bbox;
+        let id = (k + 1) as u32;
+        let strong = (y0..=y1).any(|y| (x0..=x1).any(|x| labels.ids[y * w + x] == id && ridge.bits[y * w + x] && rd.r[y * w + x] > hi));
         if !strong {
             continue;
         }
-        let crop = Mask::from_fn(bw, bh, |x, y| comp.mask.bits[(y0 + y) * w + x0 + x]);
+        let Some(crop) = labels.crop(k) else { continue };
         let line = thin(&crop, 8);
         let px = chain_pixels(&line, x0, y0);
         if px.len() < 8 {
@@ -394,4 +429,24 @@ pub fn detect(img: &Rgba8, sensitivity: f32) -> Vec<Candidate> {
             }
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn thousands_of_specks_are_dismissed_by_their_boxes() {
+        // 5000 specks and one long bar on a 1600 × 1000 photo
+        let m = Mask::from_fn(1600, 1000, |x, y| (x % 7 == 3 && y % 5 == 2 && y > 100) || (y == 50 && x > 100 && x < 1500));
+        let labels = label(&m);
+        assert!(labels.comps.len() > 4000);
+        let keep = candidates(&labels, 1600.0);
+        assert_eq!(keep.len(), 1, "only the bar is looked at");
+        assert_eq!(labels.comps[keep[0]].pixels, 1399);
+        // at most MAX_ANALYSED long components, the longest first
+        let many = Mask::from_fn(1600, 1000, |x, y| y % 3 == 0 && y > 0 && x > 100 && x < 1500 && (y / 3) % 2 == 0);
+        let keep = candidates(&label(&many), 1600.0);
+        assert!(keep.len() <= MAX_ANALYSED && keep.len() > 100, "{}", keep.len());
+    }
 }

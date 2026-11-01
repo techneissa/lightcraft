@@ -35,6 +35,10 @@ pub fn cover_mask(shape: &Mask) -> Vec<SpotPlan> {
     let long = w.max(h) as f64;
     let grown = dilate(shape, ((GROW * long) as f32).max(1.0));
     let inside = distance_sq(w, h, |i| !grown.bits.get(i).copied().unwrap_or(false));
+    if inside.len() != w * h || grown.bits.len() != w * h {
+        // (past the size the shape code works on: no distances, so nothing to cover)
+        return Vec::new();
+    }
     let widest = inside.iter().copied().fold(0.0f32, f32::max).sqrt() as f64;
     let mut r = (0.55 * widest).max(MIN_RADIUS_PX);
     let cap = MAX_SIZE * long;
@@ -44,6 +48,9 @@ pub fn cover_mask(shape: &Mask) -> Vec<SpotPlan> {
             let (x, y) = (i % w, i / w);
             (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x), y1.max(y));
         }
+    }
+    if x1 < x0 || y1 < y0 {
+        return Vec::new();
     }
     // the cell centres, row by row (cells that hold a pixel of the grown shape)
     let grid = |r: f64| {
@@ -175,6 +182,15 @@ mod tests {
         let m = Mask::from_fn(200, 100, |x, y| x >= 170 && y >= 60);
         let spots = cover_mask(&m);
         assert_eq!(uncovered(&m, &spots), 0);
+    }
+
+    #[test]
+    fn a_photo_past_the_mask_limit_gives_nothing_instead_of_underflowing() {
+        // 25 M pixels is past what the shape code works on: it must say "nothing", not index or subtract past its ends
+        let big = Mask { w: 5000, h: 5000, bits: vec![true; 25_000_000] };
+        assert!(cover_mask(&big).is_empty());
+        let thin = Mask { w: 20_000_000, h: 1, bits: vec![true; 20_000_000] };
+        assert!(cover_mask(&thin).is_empty());
     }
 
     #[test]

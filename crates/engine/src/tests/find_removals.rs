@@ -215,7 +215,12 @@ fn hostile_command_parameters_are_refused() {
     for p in [json!({"id": "x"}), json!({"id": -3}), json!({"id": 1e30})] {
         assert!(s.execute("spot.selectCandidate", &p).is_err(), "{p}");
     }
-    assert!(s.execute("spot.selectCandidate", &json!({"at": ["a", null]})).is_ok(), "a click that is not a point selects nothing");
+    for at in [json!(["a", null]), json!([0.5]), json!("0.5,0.5"), json!({"x": 1})] {
+        s.execute("spot.selectCandidate", &json!({"id": null})).unwrap();
+        let before = s.execute("spot.candidates", &json!({})).unwrap();
+        assert!(s.execute("spot.selectCandidate", &json!({"at": at})).is_err(), "{at}");
+        assert_eq!(s.execute("spot.candidates", &json!({})).unwrap(), before, "a refused click changes nothing");
+    }
     assert!(s.execute("spot.findWires", &json!({"sensitivity": f64::MAX, "wait": true})).is_ok());
     s.execute("spot.clearCandidates", &json!({})).unwrap();
     assert!(s.execute("spot.candidates", &json!({})).unwrap()["candidates"].as_array().unwrap().is_empty());
@@ -287,4 +292,21 @@ fn wires_come_from_sam_when_it_is_there_and_from_the_line_detector_when_not() {
     let failing = PeopleSources { sam: Some(Box::new(|_| Err("the GPU fell over".into()))), faces: None };
     let (_, text) = find(Job::Wires { sensitivity: 50.0 }, &sky, failing, &never).unwrap();
     assert!(text.contains("SAM 3 failed") && text.contains("line detector"), "{text}");
+}
+
+/// `add` removes only what its own search found: the other kind's candidates stay listed.
+#[test]
+fn add_leaves_the_other_kinds_candidates_alone() {
+    let dir = temp_dir("kinds");
+    let mut s = session_with_wire(&dir);
+    let id = s.active().unwrap();
+    // a person found earlier, then Find Wires with add
+    s.finds.inject(id, people::from_logits(288, &two_people_mask().logits().unwrap(), 1500, 1000));
+    let r = s.execute("spot.findWires", &json!({"add": true})).unwrap();
+    assert_eq!(r["added"], 1, "{r}");
+    let left = s.execute("spot.candidates", &json!({})).unwrap();
+    let kinds: Vec<&str> = left["candidates"].as_array().unwrap().iter().map(|c| c["kind"].as_str().unwrap()).collect();
+    assert_eq!(kinds, vec!["person", "person"], "the people found before are still listed: {left}");
+    assert!(!spots(&s).is_empty());
+    let _ = std::fs::remove_dir_all(&dir);
 }

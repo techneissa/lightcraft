@@ -288,3 +288,31 @@ fn removing_a_wire_found_through_a_sam_mask_leaves_the_sky() {
     }
     assert!(worst < 0.03, "worst difference {worst}");
 }
+
+#[test]
+fn cancelling_stops_the_line_detector() {
+    use std::sync::atomic::AtomicBool;
+    let img = sky(1600, 1000, &[(300.0, 380.0, 60.0, 2.5, 0.25)]);
+    assert_eq!(wires::detect_with(&img, 50.0, &AtomicBool::new(false)).len(), 1);
+    let t = std::time::Instant::now();
+    assert!(wires::detect_with(&img, 50.0, &AtomicBool::new(true)).is_empty(), "set before it starts: nothing, at once");
+    assert!(t.elapsed() < std::time::Duration::from_millis(500), "{:?}", t.elapsed());
+}
+
+#[test]
+fn a_photo_full_of_specks_still_gives_its_wire() {
+    // dark specks all over a sky (dust, birds, noise) and one wire: thousands of small components
+    let (w, h) = (1600usize, 1000usize);
+    let mut img = sky(w, h, &[(300.0, 380.0, 60.0, 2.5, 0.25)]);
+    for y in (440..h - 20).step_by(9) {
+        for x in (20..w - 20).step_by(11) {
+            for (dx, dy) in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                let p = &mut img.data[(y + dy) * w + x + dx];
+                *p = [p[0] / 3, p[1] / 3, p[2] / 3, 255];
+            }
+        }
+    }
+    let found = wires::detect(&img, 50.0);
+    assert_eq!(found.len(), 1, "{} wires", found.len());
+    assert!(found[0].bbox[2] - found[0].bbox[0] > 0.9);
+}

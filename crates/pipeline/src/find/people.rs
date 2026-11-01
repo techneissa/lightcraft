@@ -1,8 +1,8 @@
 //! People as candidates: from SAM 3's "person" mask (one candidate per connected blob) or, without the model, from a
 //! rough body shape under each face the face detector found.
 //!
-//! The main subject is marked: the person with the largest share of the photo weighted by how central they are, when
-//! they take at least [`MAIN_MIN_AREA`] of it (a small figure in a landscape is a bystander).
+//! The main subject is marked: the person with the largest share of the photo weighted by how central they are, however
+//! small they are (one hiker in a landscape is the subject, not a bystander). It is never proposed unless asked for.
 
 use super::shape::{Component, Mask, components, dilate, simplify, trace_outline};
 use super::{Candidate, Kind, cover};
@@ -16,8 +16,6 @@ const MIN_AREA: f64 = 0.0003;
 const JOIN: f64 = 0.006;
 /// Most people proposed.
 pub const MAX_PEOPLE: usize = 24;
-/// A main subject takes at least this share of the photo.
-pub const MAIN_MIN_AREA: f64 = 0.01;
 
 /// The working grid for a photo of `w × h`: `None` for a photo with no size.
 fn grid(w: usize, h: usize) -> Option<(usize, usize)> {
@@ -148,8 +146,8 @@ pub fn from_faces(faces: &[FaceBox], img_w: usize, img_h: usize) -> Vec<Candidat
     out
 }
 
-/// Marks the main subject: the largest share of the photo weighted by closeness to its centre, if it takes at least
-/// [`MAIN_MIN_AREA`]. Clears any earlier mark.
+/// Marks the main subject: the largest share of the photo weighted by closeness to its centre, however small. Clears
+/// any earlier mark.
 pub fn mark_main(c: &mut [Candidate]) {
     for p in c.iter_mut() {
         p.main = false;
@@ -160,9 +158,7 @@ pub fn mark_main(c: &mut [Candidate]) {
         p.area * (1.0 - 0.8 * d.clamp(0.0, 1.0))
     };
     let best = c.iter().enumerate().max_by(|a, b| weight(a.1).total_cmp(&weight(b.1))).map(|(i, _)| i);
-    if let Some(i) = best
-        && c[i].area >= MAIN_MIN_AREA
-    {
+    if let Some(i) = best {
         c[i].main = true;
     }
 }
@@ -191,11 +187,13 @@ mod tests {
     }
 
     #[test]
-    fn a_small_figure_alone_is_a_bystander() {
+    fn a_small_figure_alone_is_still_the_main_subject() {
+        // one hiker at about half a percent of a landscape is the photo's subject, not a bystander to take out
         let l = logits(|u, v| (u - 0.3).abs() < 0.01 && (0.5..0.6).contains(&v));
         let c = from_logits(288, &l, 1500, 1000);
         assert_eq!(c.len(), 1);
-        assert!(!c[0].main, "area {}", c[0].area);
+        assert!(c[0].area < 0.01, "area {}", c[0].area);
+        assert!(c[0].main, "area {}", c[0].area);
     }
 
     #[test]
