@@ -1,12 +1,14 @@
 //! `book.*`: the Book module as commands.
 //!
 //! Books live in [`Session::books`] and are saved to `books.json` in the library folder after each
-//! change. Nothing here touches the catalog, so none of it is journaled or undoable. Page and cell
-//! numbers are zero-based; `book` is a book id (the current book when left out) and photos are
+//! change. Nothing here touches the catalog, so none of it is journaled; every change is one step of
+//! the app's undo (see [`crate::book::undo`]). Page and cell numbers are zero-based; `book` is a book id (the current book when left out) and photos are
 //! `ids` (a call that names none uses the selection, else the photos in view).
 //!
-//! * `book.list`, `book.get`, `book.create`, `book.open`, `book.delete`
+//! * `book.list`, `book.get`, `book.create`, `book.open`, `book.delete`, `book.rename`, `book.duplicate`
 //! * `book.set`, `book.layout`, `book.setCover`, `book.setTemplate`, `book.movePhoto`
+//! * `book.addPhotos`, `book.addPage`, `book.deletePage`, `book.duplicatePage`, `book.movePage`,
+//!   `book.lockPage`, `book.setCellCrop`
 //! * `book.exportPdf`, `book.exportJpeg`
 use serde_json::{Value, json};
 
@@ -14,7 +16,8 @@ use super::{CommandSpec, always, bad, cmd, index_req, names_photos, str_param};
 use crate::activity::Cancel;
 use crate::book::edit::Preset;
 use crate::book::geometry::cells_for;
-use crate::book::model::{Book, BookSettings, Slot, Template, clean_name, size_names, size_of};
+use crate::book::model::{Book, BookSettings, Crop, Slot, Template, clean_name, size_names, size_of};
+use crate::book::pages::Duplicates;
 use crate::book::{MAX_PHOTOS, render};
 use crate::{Result, Session};
 
@@ -43,6 +46,14 @@ fn name_param(p: &Value, id: &str) -> Result<Option<String>> {
         Some(Value::String(n)) => clean_name(n).map(Some).map_err(|e| bad(id, e)),
         Some(_) => Err(bad(id, "`name` must be text")),
     }
+}
+
+/// A name no other book has (compared without regard to case).
+fn unique_name(s: &Session, name: &str, except: Option<u32>, id: &str) -> Result<()> {
+    if s.books.books.iter().any(|b| Some(b.id) != except && b.name.eq_ignore_ascii_case(name)) {
+        return Err(bad(id, format!("there is a book named `{name}` already")));
+    }
+    Ok(())
 }
 
 /// The `book` parameter: a book id, or `None` for the current book.
@@ -101,7 +112,7 @@ fn book_json(s: &Session, b: &Book) -> Value {
         .enumerate()
         .map(|(i, p)| {
             let cells = cells_for(p.template, &b.settings).unwrap_or_default();
-            json!({"index": i, "template": p.template, "slots": p.slots, "cells": cells.iter().map(rect_json).collect::<Vec<_>>()})
+            json!({"index": i, "template": p.template, "slots": p.slots, "crops": p.crops, "locked": p.locked, "cells": cells.iter().map(rect_json).collect::<Vec<_>>()})
         })
         .collect();
     let all = b.photos();
@@ -163,21 +174,36 @@ fn flag(p: &Value, key: &str, d: bool, id: &str) -> Result<bool> {
 
 fn create(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "book.create";
-    only(p, &["name", "ids", "id", "source", "preset", "cover", "settings"], ID)?;
-    let ids = photos(s, p, ID)?;
+    only(p, &["name", "ids", "id", "source", "preset", "cover", "settings", "empty"], ID)?;
+    let empty = flag(p, "empty", false, ID)?;
+    let ids = if empty { Vec::new() } else { photos(s, p, ID)? };
     let name = match name_param(p, ID)? {
-        Some(n) => n,
+        Some(n) => {
+            unique_name(s, &n, None, ID)?;
+            n
+        }
         None => free_name(s, "Untitled Book"),
     };
     let settings = merged(&BookSettings::default(), &settings_param(p, ID)?, ID)?;
     let cover = flag(p, "cover", true, ID)?;
     let mut book = Book { name, settings, ..Default::default() };
-    book.relayout(&ids, cover, preset(p, ID)?).map_err(|e| bad(ID, e))?;
+    if !empty {
+        book.relayout(&ids, cover, preset(p, ID)?).map_err(|e| bad(ID, e))?;
+    }
     book.validate().map_err(|e| bad(ID, e))?;
     let before = s.books.clone();
     let new = s.books.add(book).map_err(|e| bad(ID, e))?;
+    let step = book_step(&before, new);
     s.save_books(before)?;
+    s.push_book_step("Create Book", step);
     state(s, Some(new), ID)
+}
+
+/// What to put back to take book `id` away again: it was not there (a new book), with the books on show then.
+fn book_step(before: &crate::book::Books, id: u32) -> crate::book::undo::BookStep {
+    let mut step = before.snapshot(id);
+    step.book = before.books.iter().find(|b| b.id == id).cloned();
+    step
 }
 
 fn open(s: &mut Session, p: &Value) -> Result<Value> {
@@ -195,20 +221,51 @@ fn delete(s: &mut Session, p: &Value) -> Result<Value> {
     only(p, &["book"], ID)?;
     let id = s.books.find(book_id(p, ID)?).map_err(|e| bad(ID, e))?.id;
     let before = s.books.clone();
+    let step = before.snapshot(id);
     s.books.remove(id).map_err(|e| bad(ID, e))?;
     s.save_books(before)?;
+    s.push_book_step("Delete Book", step);
     list(s, &Value::Null)
 }
 
-/// Changes a copy of a book, checks it, then stores and saves it; the book is untouched on error.
-fn change(s: &mut Session, p: &Value, id: &str, f: impl FnOnce(&mut Book) -> std::result::Result<(), String>) -> Result<Value> {
+fn rename(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "book.rename";
+    only(p, &["book", "name"], ID)?;
+    let name = name_param(p, ID)?.ok_or_else(|| bad(ID, "missing `name`"))?;
+    let which = s.books.find(book_id(p, ID)?).map_err(|e| bad(ID, e))?.id;
+    unique_name(s, &name, Some(which), ID)?;
+    change(s, p, ID, "Rename Book", |b| {
+        b.name = name;
+        Ok(())
+    })
+}
+
+fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "book.duplicate";
+    only(p, &["book"], ID)?;
+    let from = s.books.find(book_id(p, ID)?).map_err(|e| bad(ID, e))?.clone();
+    let mut copy = from.clone();
+    copy.name = free_name(s, &format!("{} Copy", from.name.chars().take(crate::book::MAX_NAME.saturating_sub(7)).collect::<String>()));
+    let before = s.books.clone();
+    let new = s.books.add(copy).map_err(|e| bad(ID, e))?;
+    let step = book_step(&before, new);
+    s.save_books(before)?;
+    s.push_book_step("Duplicate Book", step);
+    state(s, Some(new), ID)
+}
+
+/// Changes a copy of a book, checks it, then stores and saves it as one undo step, `label`; the book
+/// is untouched on error.
+fn change(s: &mut Session, p: &Value, id: &str, label: &str, f: impl FnOnce(&mut Book) -> std::result::Result<(), String>) -> Result<Value> {
     let which = s.books.find(book_id(p, id)?).map_err(|e| bad(id, e))?.id;
     let mut next = s.books.find(Some(which)).map_err(|e| bad(id, e))?.clone();
     f(&mut next).map_err(|e| bad(id, e))?;
     next.validate().map_err(|e| bad(id, e))?;
     let before = s.books.clone();
+    let step = before.snapshot(which);
     *s.books.find_mut(Some(which)).map_err(|e| bad(id, e))? = next;
     s.save_books(before)?;
+    s.push_book_step(label, step);
     state(s, Some(which), id)
 }
 
@@ -224,7 +281,11 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         }
     }
     let name = name_param(p, ID)?;
-    change(s, p, ID, |b| {
+    if let Some(n) = &name {
+        let which = s.books.find(book_id(p, ID)?).map_err(|e| bad(ID, e))?.id;
+        unique_name(s, n, Some(which), ID)?;
+    }
+    change(s, p, ID, "Change Book Settings", |b| {
         b.settings = merged(&b.settings, &patch, ID).map_err(|e| e.to_string())?;
         if let Some(n) = name {
             b.name = n;
@@ -241,14 +302,14 @@ fn layout(s: &mut Session, p: &Value) -> Result<Value> {
     let ids = if names_photos(p) || p.get("source").is_some() { photos(s, p, ID)? } else { mine };
     let cover = flag(p, "cover", cover, ID)?;
     let preset = preset(p, ID)?;
-    change(s, p, ID, |b| b.relayout(&ids, cover, preset))
+    change(s, p, ID, "Auto Layout Book", |b| b.relayout(&ids, cover, preset))
 }
 
 fn set_cover(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "book.setCover";
     only(p, &["book", "cover"], ID)?;
     let on = p.get("cover").and_then(Value::as_bool).ok_or_else(|| bad(ID, "`cover` must be true or false"))?;
-    change(s, p, ID, |b| b.set_cover(on))
+    change(s, p, ID, "Set Book Cover", |b| b.set_cover(on))
 }
 
 fn set_template(s: &mut Session, p: &Value) -> Result<Value> {
@@ -256,7 +317,7 @@ fn set_template(s: &mut Session, p: &Value) -> Result<Value> {
     only(p, &["book", "page", "template"], ID)?;
     let page = index_req(p, "page", ID)?;
     let template = Template::parse(str_param(p, "template").ok_or_else(|| bad(ID, "missing `template`"))?).map_err(|e| bad(ID, e))?;
-    change(s, p, ID, |b| b.set_template(page, template))
+    change(s, p, ID, "Set Page Template", |b| b.set_template(page, template))
 }
 
 fn slot(p: &Value, key: &str, id: &str) -> Result<Slot> {
@@ -271,7 +332,104 @@ fn move_photo(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "book.movePhoto";
     only(p, &["book", "from", "to"], ID)?;
     let (from, to) = (slot(p, "from", ID)?, slot(p, "to", ID)?);
-    change(s, p, ID, |b| b.move_photo(from, to))
+    change(s, p, ID, "Move Book Photo", |b| b.move_photo(from, to))
+}
+
+/// `photos` from the `ids` the call names, else none: adding needs photos named.
+fn named_photos(s: &mut Session, p: &Value, id: &str) -> Result<Vec<u64>> {
+    if !names_photos(p) && p.get("source").is_none() {
+        return Err(bad(id, "name the photos: `ids`, or `source` (selection or view)"));
+    }
+    photos(s, p, id)
+}
+
+fn add_photos(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "book.addPhotos";
+    only(p, &["book", "ids", "id", "source", "duplicates"], ID)?;
+    let ids = named_photos(s, p, ID)?;
+    let duplicates = match p.get("duplicates") {
+        None | Some(Value::Null) => None,
+        Some(v) => Some(Duplicates::parse(v.as_str().ok_or_else(|| bad(ID, "`duplicates` must be add or skip"))?).map_err(|e| bad(ID, e))?),
+    };
+    let book = s.books.find(book_id(p, ID)?).map_err(|e| bad(ID, e))?;
+    let dups = book.duplicates_of(&ids);
+    let Some(duplicates) = duplicates.or_else(|| dups.is_empty().then_some(Duplicates::Add)) else {
+        return Err(bad(ID, format!("{} of these photos are in the book already ({:?}); say `duplicates`: add or skip", dups.len(), dups)));
+    };
+    let mut added = Default::default();
+    let state = change(s, p, ID, "Add Photos to Book", |b| {
+        added = b.add_photos(&ids, duplicates)?;
+        Ok(())
+    })?;
+    let mut out = state;
+    out["added"] = json!(added.added);
+    out["skipped"] = json!(added.skipped);
+    Ok(out)
+}
+
+fn add_page(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "book.addPage";
+    only(p, &["book", "at", "template"], ID)?;
+    let at = match p.get("at") {
+        None | Some(Value::Null) => None,
+        Some(_) => Some(index_req(p, "at", ID)?),
+    };
+    let template = match str_param(p, "template") {
+        Some(t) => Template::parse(t).map_err(|e| bad(ID, e))?,
+        None => Template::One,
+    };
+    change(s, p, ID, "Add Book Page", |b| b.add_page(at, template).map(|_| ()))
+}
+
+fn delete_page(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "book.deletePage";
+    only(p, &["book", "page"], ID)?;
+    let page = index_req(p, "page", ID)?;
+    change(s, p, ID, "Delete Book Page", |b| b.delete_page(page))
+}
+
+fn duplicate_page(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "book.duplicatePage";
+    only(p, &["book", "page"], ID)?;
+    let page = index_req(p, "page", ID)?;
+    change(s, p, ID, "Duplicate Book Page", |b| b.duplicate_page(page).map(|_| ()))
+}
+
+fn move_page(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "book.movePage";
+    only(p, &["book", "from", "to"], ID)?;
+    let (from, to) = (index_req(p, "from", ID)?, index_req(p, "to", ID)?);
+    change(s, p, ID, "Move Book Page", |b| b.move_page(from, to))
+}
+
+fn lock_page(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "book.lockPage";
+    only(p, &["book", "page", "locked"], ID)?;
+    let page = index_req(p, "page", ID)?;
+    let locked = flag(p, "locked", true, ID)?;
+    change(s, p, ID, if locked { "Lock Book Page" } else { "Unlock Book Page" }, |b| b.lock_page(page, locked))
+}
+
+/// The number `key` of `p`: a finite number, else an error.
+fn number(p: &Value, key: &str, id: &str) -> Result<f64> {
+    p.get(key).and_then(Value::as_f64).filter(|v| v.is_finite()).ok_or_else(|| bad(id, format!("`{key}` must be a number")))
+}
+
+fn set_cell_crop(s: &mut Session, p: &Value) -> Result<Value> {
+    const ID: &str = "book.setCellCrop";
+    only(p, &["book", "page", "cell", "zoom", "x", "y", "reset"], ID)?;
+    let (page, cell) = (index_req(p, "page", ID)?, index_req(p, "cell", ID)?);
+    let crop = if flag(p, "reset", false, ID)? {
+        None
+    } else {
+        let zoom = number(p, "zoom", ID)?;
+        let at = |key| match p.get(key) {
+            None | Some(Value::Null) => Ok(0.5),
+            Some(_) => number(p, key, ID),
+        };
+        Some(Crop { zoom, x: at("x")?, y: at("y")? })
+    };
+    change(s, p, ID, "Crop Book Photo", |b| b.set_cell_crop(page, cell, crop))
 }
 
 // ---- export ----------------------------------------------------------------------------------
@@ -353,6 +511,23 @@ pub fn specs() -> Vec<CommandSpec> {
         cmd!(query "book.movePhoto", "Move Book Photo", [], None,
             "{book?, from: {page, cell} | {unplaced}, to: {page, cell} | {unplaced}} — a cell that holds a photo swaps with it; `to: {unplaced: N}` takes the photo off its page and puts it at position N of the tray (0 to its length; N must be below its length when the photo is in the tray already) → book.get",
             always, move_photo),
+        cmd!(query "book.rename", "Rename Book", [], None,
+            "{book?, name} — a name 1 to 80 characters that no other book has → book.get",
+            always, rename),
+        cmd!(query "book.duplicate", "Duplicate Book", [], None, "{book?} — a copy named `<name> Copy`, which becomes the current book → book.get", always, duplicate),
+        cmd!(query "book.addPhotos", "Add Photos to Book", [], None,
+            "{book?, ids?, source?: selection|view, duplicates?: add|skip} → book.get + {added, skipped}; the photos join the tray (`unplaced`). Photos the book holds already need `duplicates`: add (they show twice) or skip; without it such a call is an error",
+            always, add_photos),
+        cmd!(query "book.addPage", "Add Book Page", [], None,
+            "{book?, at?: page number the new page takes (default: the end), template?: one|two|three|grid4|fullBleed (one)} — an empty page; nothing goes before the cover → book.get",
+            always, add_page),
+        cmd!(query "book.deletePage", "Delete Book Page", [], None, "{book?, page} — its photos go to the end of the tray → book.get", always, delete_page),
+        cmd!(query "book.duplicatePage", "Duplicate Book Page", [], None, "{book?, page} — a copy right after it, with its photos, crops and lock → book.get", always, duplicate_page),
+        cmd!(query "book.movePage", "Move Book Page", [], None, "{book?, from, to} — the page becomes page `to`; the cover stays first → book.get", always, move_page),
+        cmd!(query "book.lockPage", "Lock Book Page", [], None, "{book?, page, locked?: bool (true)} — Auto Layout leaves a locked page as it is → book.get", always, lock_page),
+        cmd!(query "book.setCellCrop", "Crop Book Photo", [], None,
+            "{book?, page, cell, zoom: 1..4, x?, y?: 0..1 (0.5), reset?: bool} — the photo fills the frame, magnified `zoom` times around the point (x, y) of the photo (fractions of it); `reset: true` goes back to the book's setting; the cell must hold a photo → book.get",
+            always, set_cell_crop),
         cmd!(query "book.exportPdf", "Export Book as PDF", [], None,
             "{book?, path} → {path, pages, photos, bytes}; one PDF page per book page at the book's ppi; replaces an existing file, never an original; shown in the activity stack and cancellable",
             always, export_pdf),

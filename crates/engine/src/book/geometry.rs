@@ -1,5 +1,5 @@
 //! Where a template's cells lie on a page. Inches, origin at the page's top-left corner.
-use super::model::{BookSettings, Template};
+use super::model::{BookSettings, Crop, Template};
 use crate::print::layout::{MIN_CELL_IN, Rect};
 
 /// A cell's slot is the template's share of the page inside the margins, less the padding.
@@ -77,4 +77,19 @@ pub fn fitted(slot: Rect, aspect: f64) -> Rect {
     w = w.max(MIN_CELL_IN).min(slot.w);
     h = h.max(MIN_CELL_IN).min(slot.h);
     Rect::new(slot.x + (slot.w - w) / 2.0, slot.y + (slot.h - h) / 2.0, w, h)
+}
+
+/// The part of a photo a [`Crop`] shows in a frame, as fractions of the photo: `(x, y, w, h)`, with
+/// the frame's aspect (`slot_aspect`, width over height) as long as the photo's (`photo_aspect`) is
+/// known. The preview and the export both take their pixels from it, so they show the same part at
+/// any size. A photo or frame of no size shows whole.
+pub fn crop_window(photo_aspect: f64, slot_aspect: f64, crop: &Crop) -> (f64, f64, f64, f64) {
+    if !(photo_aspect.is_finite() && photo_aspect > 0.0 && slot_aspect.is_finite() && slot_aspect > 0.0) {
+        return (0.0, 0.0, 1.0, 1.0);
+    }
+    let zoom = if crop.zoom.is_finite() { crop.zoom.clamp(1.0, super::model::MAX_ZOOM) } else { 1.0 };
+    let (fw, fh) = if photo_aspect >= slot_aspect { (slot_aspect / photo_aspect, 1.0) } else { (1.0, photo_aspect / slot_aspect) };
+    let (w, h) = (fw / zoom, fh / zoom);
+    let at = |centre: f64, size: f64| (if centre.is_finite() { centre.clamp(0.0, 1.0) } else { 0.5 } - size / 2.0).clamp(0.0, 1.0 - size);
+    (at(crop.x, w), at(crop.y, h), w, h)
 }

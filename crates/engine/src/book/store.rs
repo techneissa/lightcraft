@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 /// The file's name in the library folder.
 pub const NAME: &str = "books.json";
 /// Version of the file this build writes and the newest it reads.
-const VERSION: u64 = 1;
+const VERSION: u64 = 2;
 /// Largest file read, bytes (50 books of 50 pages come to well under 1 MB).
 pub const MAX_FILE: usize = 4 << 20;
 

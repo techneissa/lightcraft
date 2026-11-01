@@ -225,11 +225,11 @@ fn hostile_input_is_an_error_and_changes_nothing() {
         fails(&mut s, "book.create", p);
     }
     assert_eq!(run(&mut s, "book.list", json!({}))["books"], json!([]), "nothing was created");
-    // more photos than 50 pages can hold at one photo per page
+    // more photos than 200 pages can hold at one photo per page
     let all: Vec<u64> = s.catalog.photos().map(|p| p.id.0).collect();
-    let many: Vec<u64> = all.iter().copied().cycle().take(51).collect();
+    let many: Vec<u64> = all.iter().copied().cycle().take(201).collect();
     let e = fails(&mut s, "book.create", json!({"ids": many, "preset": "one", "cover": false}));
-    assert!(e.contains("50 pages"), "{e}");
+    assert!(e.contains("200 pages"), "{e}");
 }
 
 #[test]

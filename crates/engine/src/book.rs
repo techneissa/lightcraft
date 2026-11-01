@@ -10,25 +10,31 @@
 //! * [`model`]: the data, its checks and the page sizes.
 //! * [`geometry`]: where a template's cells lie on a page, in inches.
 //! * [`edit`]: auto layout, changing a page's template and moving a photo.
+//! * [`pages`]: adding photos, adding, deleting, duplicating, moving and locking pages, a cell's crop.
+//! * [`undo`]: a book change as a step of the app's undo.
 //! * [`render`]: a book as a print job ([`crate::print`]'s composer and PDF writer), PDF and JPEG output.
 //! * [`store`]: `books.json` in the library folder.
 //!
 //! The commands are `book.*` (`crates/engine/src/cmd/book.rs`). Nothing here touches the catalog,
-//! so none of it is journaled or undoable; a book is saved to `books.json` after each change.
+//! so none of it is journaled; a book is saved to `books.json` after each change, and each change is
+//! one step of the app's undo ([`undo`]).
 pub mod edit;
 pub mod geometry;
 pub mod model;
+pub mod pages;
 pub mod render;
 pub mod store;
+pub mod undo;
 
-pub use model::{Book, BookSettings, Page, Slot, Template};
+pub use model::{Book, BookSettings, Crop, Page, Slot, Template};
 
 use serde::{Deserialize, Serialize};
 
 /// Most books a library keeps.
 pub const MAX_BOOKS: usize = 50;
-/// Most pages a book has (the Print module's page limit, which the composer applies).
-pub const MAX_PAGES: usize = crate::print::layout::MAX_PAGES as usize;
+/// Most pages a book has. The view stays fast at this size; a PDF of a book this large may need a
+/// lower resolution to fit memory (the export says so).
+pub const MAX_PAGES: usize = 200;
 /// Most cells a page has (the 2 x 2 grid).
 pub const MAX_CELLS_PER_PAGE: usize = 4;
 /// Most photos a book holds: every cell of every page.

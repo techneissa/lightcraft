@@ -54,7 +54,7 @@ fn hostile_photo_counts_are_errors() {
     assert!(auto_layout(&many, false, Preset::Grid4).unwrap_err().contains("at most"));
     // one photo per page runs out of pages before it runs out of photos
     let e = auto_layout(&photos(MAX_PAGES as u64 + 1), false, Preset::One).unwrap_err();
-    assert!(e.contains("more than 50 pages"), "{e}");
+    assert!(e.contains("more than 200 pages"), "{e}");
     // exactly the limit works
     assert_eq!(auto_layout(&photos(MAX_PAGES as u64), false, Preset::One).unwrap().len(), MAX_PAGES);
     assert_eq!(auto_layout(&photos(MAX_PHOTOS as u64), false, Preset::Grid4).unwrap().len(), MAX_PAGES);
@@ -267,7 +267,11 @@ fn the_cover_comes_and_goes_without_touching_the_other_pages() {
     assert_eq!(b.pages, pages, "no cover, none removed");
     b.set_cover(true).unwrap();
     assert!(b.cover);
-    assert_eq!(b.pages[0], Page { template: Template::FullBleed, slots: vec![None] }, "an empty cover with nothing in the tray");
+    assert_eq!(
+        b.pages[0],
+        Page { template: Template::FullBleed, slots: vec![None], crops: vec![None], locked: false },
+        "an empty cover with nothing in the tray"
+    );
     assert_eq!(b.pages[1..], pages[..], "every other page as it was");
     b.set_cover(true).unwrap();
     assert_eq!(b.pages.len(), pages.len() + 1);
