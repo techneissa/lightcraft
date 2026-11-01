@@ -2,6 +2,12 @@
 
 ## 2026-11-01
 
+### Renaming, One Way Everywhere
+- Albums, folders of albums, keywords, presets, versions, masks and mask components are renamed in place: double-click the row (or choose Rename…) and its name turns into a text field. Return or a click away saves, Esc cancels, and the shortcuts stay quiet while you type.
+- A name that is empty or already used in the same list is refused, with the reason under the field. Return keeps the field open; a click away puts the old name back and says why. `album.rename`, `mask.rename`, `preset.rename`, `version.rename` and a mask component's rename refuse the same names, so agents get the same answer.
+- Renaming a keyword to one that exists asks before it merges: the Rename Keyword window says which keyword goes into which, and nothing changes until you confirm.
+- Rename Photos and Rename Folder move their files on a worker: the window keeps drawing, an activity row shows the work, and the catalog follows in one undo step when the files have moved. A move the disk refuses (no permission, name taken, disk full) changes nothing in the library and a toast says why. The file-name preview in Rename Photos waits until you stop typing before it checks the disk.
+
 ### Fixed Slider Label Column
 - In the Edit and Masking panels the slider names are left-aligned in one column of fixed width, so opening or closing a section (Noise Reduction has long names) no longer moves any name or shortens any slider.
 

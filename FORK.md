@@ -86,6 +86,7 @@ Known failures (on this Mac, and on Fork CI only): [fork/known-failures.md](fork
 - [Show in Finder after export](fork/export-reveal.md): An Export dialog option that shows the first exported file when the export succeeds. Branch `claude/workflow-qol`.
 - [Lens database folder](fork/lens-database-folder.md): Settings ▸ Import ▸ Lens profiles chooses the lensfun folder and says what it found. Branch `claude/workflow-qol`.
 - [Shared SAM3 model folder](fork/shared-sam3.md): AI masks look for the SAM 3 model in the folder shared with PhotoCraft (`ArtCraft/models/sam3`) first and download there. Branch `feat/16-shared-sam3`.
+- [Renaming, one way everywhere](fork/consistent-renaming.md): Rows rename in place with one set of rules; Rename Photos and Rename Folder move their files on a worker. Branch `feat/27-consistent-renaming`.
 
 Every feature also has an entry in `docs/whats-new.md` and a row in `docs/parity-checklist.md`; clashes there are
 fixed by the update script (both sides kept).

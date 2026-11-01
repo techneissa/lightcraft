@@ -18,6 +18,8 @@ run cargo test -p lightcraft-raster --lib channel_clipping
 run cargo test -p lightcraft-gpu --lib handles
 run cargo test -p lightcraft-gpu --test it -- process_v3_sharpening
 run cargo test -p lightcraft-ui-egui --lib -- delete_permanently delete_local quick_delete view_colour smart_editing auto_import toast render:: layers_task keybinds shortcut_editing shortcut_when shortcut_backup tests::keymap shortcuts:: animated_gif selection_order split_divider before_after command_palette edit_all photo_menu topbar_items titlebar loupe_stand_in the_loupe_says denoise settings profile camera_colour thumbnail dropdown_search quick_filters clipping clip_preview
+run cargo test -p lightcraft-engine --lib -- names:: rename_names rename_job rename::
+run cargo test -p lightcraft-ui-egui --lib -- renaming debounce mask_list_rename
 
 if [ ${#failed[@]} -gt 0 ]; then printf "failed: %s\n" "${failed[@]}"; exit 1; fi
 echo "all fork tests passed"
