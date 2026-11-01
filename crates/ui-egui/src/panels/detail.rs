@@ -184,7 +184,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // request renders: the loupe at display resolution (drafts during drags)
     let interacting = app.session.interaction.is_some();
     crate::panels::clipping::sync_alt_preview(app, ui.ctx());
-    let overlay = view_overlay(app, &d);
+    let overlay = view_overlay(app, &d, ui.ctx().cumulative_frame_nr());
     // a drag drafts at full size where the GPU draws the view (by the GPU's own rule, `handles`;
     // `ready` first: `available` would wait for a device still being created)
     let gpu = interacting && gpu_draws_view(app, overlay);
@@ -1047,7 +1047,7 @@ fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap
 
 /// The diagnostic overlay the loupe shows (the selected mask, Point Color's visualized range,
 /// Visualize Spots).
-pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcraft_pipeline::Overlay {
+pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings, frame: u64) -> lightcraft_pipeline::Overlay {
     use lightcraft_pipeline::{MaskView, Overlay};
     if app.ui.fullscreen {
         return Overlay::None;
@@ -1057,8 +1057,10 @@ pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcra
         return p.overlay();
     }
     // The clipping overlay reads the loupe's pixels: the mask's red tint over them would show as
-    // clipping, so with a clipping toggle on the loupe renders the photo itself (outlines and pins stay).
-    let masks_tinted = !(app.ui.clip_shadows || app.ui.clip_highlights);
+    // clipping, so while a side shows (a toggle, or the pointer on its histogram triangle) the loupe
+    // renders the photo itself (outlines and pins stay).
+    let (clip_shadows, clip_highlights) = crate::panels::clipping::effective_sides(app, frame);
+    let masks_tinted = !(clip_shadows || clip_highlights);
     // Show every visible mask's region at once (Ctrl+Shift+O / Cmd+Shift+O), ahead of the selected-mask overlay
     // so the shortcut is not shadowed by the always-on single-mask overlay.
     if masks_tinted && app.ui.right == RightPanel::Masking && app.ui.mask_overlay_all && d.masks.iter().any(|m| m.visible && !m.components.is_empty())

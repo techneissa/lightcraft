@@ -30,7 +30,7 @@ fn edit_panel(section: &str) -> Headless {
 
 fn shown(h: &Headless) -> Overlay {
     let d = h.app.session.active().and_then(|id| h.app.session.develop_of(id)).map(|d| (*d).clone()).unwrap_or_default();
-    crate::panels::detail::view_overlay(&h.app, &d)
+    crate::panels::detail::view_overlay(&h.app, &d, h.view.ctx.cumulative_frame_nr())
 }
 
 fn track(h: &Headless, control: &str) -> egui::Rect {
@@ -278,4 +278,25 @@ fn the_clipping_overlay_shows_while_a_mask_is_edited_and_the_tint_steps_aside() 
     h.app.run("view.clippingHighlights", json!({})).unwrap();
     h.settle(SETTLE);
     assert!(matches!(shown(&h), Overlay::Mask { .. }));
+}
+
+/// A pointer resting on a histogram triangle shows that side's clipping overlay, so the mask tint
+/// steps aside for as long as the hover is fresh, and is back once it ends.
+#[test]
+fn hovering_a_clipping_triangle_hides_the_mask_tint_until_the_hover_ends() {
+    let mut h = mask_panel("exposure");
+    assert!(matches!(shown(&h), Overlay::Mask { .. }), "the mask tint is up");
+    assert!(!h.app.ui.clip_highlights && !h.app.ui.clip_shadows, "no toggle is on");
+    // the histogram sets the hover each frame the pointer rests on its highlights triangle
+    h.app.ui.clip_hover = ([false, true], h.view.ctx.cumulative_frame_nr());
+    h.step();
+    assert_eq!(shown(&h), Overlay::None, "the hovered side's overlay reads the photo, not the tint");
+    // the pointer leaves: the histogram stores no hover, and the tint is back a frame later
+    h.app.ui.clip_hover = ([false, false], h.view.ctx.cumulative_frame_nr());
+    h.step();
+    assert!(matches!(shown(&h), Overlay::Mask { .. }), "the tint is back after the hover");
+    // a hover nothing refreshes (a hidden histogram) goes stale instead of hiding the tint for good
+    h.app.ui.clip_hover = ([true, false], h.view.ctx.cumulative_frame_nr());
+    frames(&mut h, 4);
+    assert!(matches!(shown(&h), Overlay::Mask { .. }), "a stale hover is ignored");
 }
