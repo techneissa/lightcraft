@@ -1056,16 +1056,21 @@ pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcra
     if let Some(p) = crate::panels::clipping::preview(app) {
         return p.overlay();
     }
+    // The clipping overlay reads the loupe's pixels: the mask's red tint over them would show as
+    // clipping, so with a clipping toggle on the loupe renders the photo itself (outlines and pins stay).
+    let masks_tinted = !(app.ui.clip_shadows || app.ui.clip_highlights);
     // Show every visible mask's region at once (Ctrl+Shift+O / Cmd+Shift+O), ahead of the selected-mask overlay
     // so the shortcut is not shadowed by the always-on single-mask overlay.
-    if app.ui.right == RightPanel::Masking && app.ui.mask_overlay_all && d.masks.iter().any(|m| m.visible && !m.components.is_empty()) {
+    if masks_tinted && app.ui.right == RightPanel::Masking && app.ui.mask_overlay_all && d.masks.iter().any(|m| m.visible && !m.components.is_empty())
+    {
         return Overlay::AllMasks {
             view: MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default(),
             color: app.ui.mask_overlay_color,
             opacity: app.ui.mask_overlay_opacity.clamp(0.0, 100.0).round() as u8,
         };
     }
-    if app.ui.right == RightPanel::Masking
+    if masks_tinted
+        && app.ui.right == RightPanel::Masking
         && app.ui.mask_overlay
         && let Some(m) = app.session.active_mask.and_then(|id| d.masks.iter().find(|m| m.id == id))
         && !m.components.is_empty()

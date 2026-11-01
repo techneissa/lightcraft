@@ -293,7 +293,13 @@ pub(super) fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &eg
 pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
     let active = app.session.active_mask;
     let clip = app.canvas_rect.unwrap_or(map.rect);
-    let p = &ui.painter_at(clip);
+    let mut painter = ui.painter_at(clip);
+    // an ⌥-drag preview (clipped highlights / crushed shadows of the render) shows the photo alone:
+    // no outlines, handles or pins over it while it is up
+    if crate::panels::clipping::preview(app).is_some() {
+        painter.set_invisible();
+    }
+    let p = &painter;
     // (mask, component, handle, screen position) of everything that can be grabbed
     let mut grips: Vec<(u32, usize, u8, Pos2)> = Vec::new();
     // pins follow Show Pins and the Tool Overlay mode (Shift+H); Auto hides them while brushing
