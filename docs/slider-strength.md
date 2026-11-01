@@ -1,6 +1,6 @@
 # Slider strength audit
 
-> **Last updated:** 2026-10-30 · **Change:** minor (first audit)
+> **Last updated:** 2026-11-01 · **Change:** minor (Sharpening Radius and the Vignette response, process V3: checked on a real photo and on the GPU; the ⌥-drag Masking preview follows V3's band)
 
 How much does each Develop slider change the picture at its ends, measured on real renders? Users report
 that most sliders feel weaker than Lightroom's. This page records the measurements, a verdict per slider and
@@ -56,17 +56,20 @@ Lightroom; *similar*; *stronger*. The real comparison is still the fidelity suit
 | Clarity -100 / +100 | medium band x0.22 / x1.80; coarse x0.68 / x1.35 | strongly softer / punchier midtone contrast | similar |
 | Dehaze -100 / 0 / +50 / +100 | spread 0.019 / 0.056 / 0.098 / 0.417, chroma 0.004 / 0.012 / 0.021 / 0.077 | strongly hazier / dramatic clearing | similar to stronger |
 | Sharpening Amount 40 / 100 / 150 (V1/V2) | edge slope x1.04 / x1.16 / x1.24; flat noise x1.31 / x1.78 / x2.18 | a visibly crisper soft edge | weaker on edges, noisy; unchanged (V1/V2 keep their look) |
-| Sharpening Amount 40 / 100 / 150 (V3, Detail 25) | slope x1.04 / x1.12 / x1.20; noise x1.24 / x1.62 / x1.94 | same | slightly less noise per edge gain; still modest on a sigma-1.2 edge because the band is fixed at 0.18 % of the long edge |
-| Sharpening Radius 0.5 / 3.0 | identical to Radius 1 | wider halos / finer detail | **broken: not read** (needs its own blur plane; follow-up) |
+| Sharpening Amount 40 / 100 / 150 (V3 before the Radius band, Detail 25) | slope x1.04 / x1.12 / x1.20; noise x1.24 / x1.62 / x1.94 | same | slightly less noise per edge gain; still modest on a sigma-1.2 edge because the band is fixed at 0.18 % of the long edge |
+| Sharpening Radius 0.5 / 3.0 | identical to Radius 1 | wider halos / finer detail | **broken: not read** (V1/V2 still; fixed in V3, see below) |
+| Sharpening Amount 40 / 60 / 100 / 150 (V3 after the Radius change, Radius 1; a 400 px picture, edge blurred by 1.2 px) | slope x1.24 / x1.36 / x1.60 / x1.92; overshoot 0.04 / 0.05 / 0.09 / 0.19; noise x1.36 / x1.55 / x1.93 (white noise of 0.06 EV) / x2.41; on a 3000 px picture with a 1.5 px edge: slope x1.10 / x1.19 / - / x1.57 | clear at 40-60, strong but without heavy halos at 150 | works; an edge blurred by 2.5 px or more needs Radius 2-3 |
+| Sharpening Radius 0.5 / 1 / 2 / 3 (V3, Amount 100, 400 px, 1.2 px edge) | slope x1.20 / x1.60 / x1.68 / x1.64; overshoot 0.01 / 0.09 / 0.23 / 0.27; halo (3000 px picture, 1.5 px edge) 0 / 6 / 10 / 14 source px | halo widens with Radius | works |
 | Sharpening Detail 0 / 100 (V1/V2) | identical to Detail 25 | halo suppression / fine-detail emphasis | **broken: not read** |
-| Sharpening Detail 0 / 100 (V3, Amount 100) | slope x1.04 / x1.36, noise x1.23 / x2.83 | 0 edges only, 100 also fine detail and noise | works (was a no-op) |
-| Sharpening Masking 0 / 100 | slope 1.16 / 1.00, noise 1.78 / 1.00 | flat areas unsharpened at 100 | similar |
+| Sharpening Detail 0 / 100 (V3, Amount 100; with the Radius band: slope x1.56 / x1.56, noise x1.13 / x1.96) | before the band: slope x1.04 / x1.36, noise x1.23 / x2.83 | 0 edges only, 100 also fine detail and noise | works (was a no-op) |
+| Sharpening Masking 0 / 100 | slope 1.16 / 1.00, noise 1.78 / 1.00 | flat areas unsharpened at 100 | similar | (V1/V2; in V3 Masking 100 keeps the edges and cuts the noise: slope x1.60, noise x1.35 vs x1.93)
 | NR Luminance 50 / 100 | luma noise std x0.74 / x0.32, edge contrast kept 1.00 | heavy smoothing at 100, edges kept | similar |
 | NR Detail 0 / 100 (at 50) | x0.67 / x0.84 | higher keeps more detail | works |
 | NR Contrast (at Luminance 50) | x0.74 before, x0.79 at 100 now (was identical at every value) | higher keeps contrast, noisy blotches | was **broken: not read**; fixed |
 | Colour NR 50 / 100 | colour noise std x0.63 / x0.25 | strong | similar |
 | Colour NR Detail 0 / Smoothness 100 | x0.50 (at 50: 0.63); Smoothness 0.62 vs 0.63 | Smoothness widens the blur | Detail works; Smoothness changes the radius only, so this metric cannot show it; left |
-| Vignette -100 / -50 / +100 (mid 50, feather 50) | corner -10.8 / -1.0 / +2.3 stops, long-edge middle -1.6 / -0.6 / +1.8 | corners near black at -100 | similar to stronger |
+| Vignette -100 / -50 / +100 (V1/V2; mid 50, feather 50) | corner -10.8 / -1.0 / +2.3 stops, long-edge middle -1.6 / -0.6 / +1.8 | corners near black at -100 | uneven: black at -100, mild at -50; unchanged in V1/V2 |
+| Vignette -100 / -50 / -20 / +50 / +100 (V3) | corner -2.79 / -1.21 / -0.42 / +0.92 / +1.49 stops, long-edge middle -1.82 / -0.79 / -0.27 / +0.67 / +1.13 | smooth, clearly visible, corners dark but not black | works |
 | Vignette Midpoint 0 / 100, Feather 0, Roundness | midpoint 100: corner -0.3; roundness -100: corner -2.8, +100: -6.6 | effects move with the sliders | works |
 | Grain Amount 25 / 50 / 100 | std 2.9 / 5.9 / 11.7 levels (Size has no effect on the std, as it should not; Roughness 100: 6.1) | subtle / visible / heavy | similar, left |
 
@@ -84,16 +87,44 @@ and the HDR sliders are not covered yet.
   `nr_contrast_keeps_more_of_the_noise_and_detail`.
 - **Sharpening Detail** (`detail.sharpenDetail`), process V3 only: read by nothing before. Sharpening now
   weights the band detail by `finish::sharpen_mix` (edges above ~0.3 EV always, finer noise-sized detail by the
-  slider), with gain 3.0 (`SHARPEN_GAIN_V3`) instead of 1.3. The WGSL kernel carries the same constants. V1 and
+  slider), with gain 3.0 at first (1.5 since the Radius band, see below) instead of 1.3. The WGSL kernel carries the same constants. V1 and
   V2 render as before. Test: `sharpening_detail_trades_edges_for_noise`.
+- **Sharpening Radius** (`detail.sharpenRadius`) and the Amount response, process V3 only: sharpening has a band of
+  its own (`PlaneSigmas::sharpen`, `Prepared::sharpen_blur`, `Planes::sharpen`; Texture, local Noise and Defringe
+  keep the fine texture band). It is pixel-scale: the Gaussian sigma is `local::sharpen_sigma` = `1.5 * Radius`
+  pixels of the original photo (`SHARPEN_RADIUS_SCALE`), times `Plan::detail_scale` (output pixels per original
+  pixel, at most 1), never below 0.6 px (`gaussian` makes no finer blur), so a preview and an export sharpen the
+  same edges. (An earlier attempt took 0.55 % of the long edge, about 33 px on a 6000 px photo: that is
+  local contrast, not sharpening.) Because the band is fine, an edge is only a few hundredths of an EV from its
+  blur: `sharpen_mix` now counts detail from 0.03 to 0.15 EV (was 0.04 to 0.3) and the Masking range is 0.08 EV
+  per 100 (was 0.25 and 0.15), and the gain is `sharpen_gain`: 2.4 up to Radius 1, then `Radius^-0.7`, so
+  Radius 3 stays strong without blowing a bright band (the CPU passes it as `FinishParams::sharpen_gain`, the
+  WGSL reads `SHARPEN_GAIN`). On the GPU the band is a second plane in the `tex` buffer at `SHARP_OFF` (the kernel
+  has no free binding); `HAS_SHARP` gates it. V1 and V2 render as before. Tests:
+  `sharpening_radius_sets_the_band_scale` (3000 px, 1.5 px edge: halo in source pixels and peak grow with Radius;
+  Amount 50 / 150 bounds on 3000 px and 400 px pictures; Radius 3 under 45 levels; a half-size preview matches the
+  export), `sharpening_radius_is_still_unread_before_v3`.
+- **Vignette** darkening, process V3 only: the multiplier `1 + amount * t` went black at -100 and was -1 stop at -50.
+  V3 darkens by `2.75 * |amount|^1.2` stops at the full falloff (`finish::vignette_dark_factor`), blended in the
+  log domain, and lightens by 0.40 of the way to white at +100 (was 0.85; +1.5 stops on grey instead of +2.3).
+  Midpoint, Roundness, Feather and Highlights act on the falloff as before. Test:
+  `vignette_response_is_smooth_and_natural` (min and max bounds, V1 / V2 as before).
+- **Checked on a real photo and on the GPU (2026-11-01).** Noise: a 12 MP A7S III raw at ISO 2500 (a flat wall in
+  the blurred background, a 400 x 300 crop at 100 %; the high-pass standard deviation of its luminance, 8-bit
+  levels, Gaussian 6 px removed; no sharpening 2.13): V2 Amount 40 / 60 → 2.79 / 3.13 (x1.31 / x1.47); V3 Amount
+  40 / 60 → 2.55 / 2.77 (x1.20 / x1.30). V3 at Amount 60 adds about the grain V2 added at 40, and V3 at 40 adds less,
+  so nothing to retune. Pictures: `$WORKSPACE/assets/lightcraft/shots/sharpen-v3/`. GPU against CPU on an Apple M4 Pro
+  (Metal), V3 Amount 50 / Radius 1.0 / Detail 25 / Masking 0 with Vignette -50, and Radius 0.5 and 3, Masking 60
+  with Detail 0, Detail 100 with Amount 150, each at full size, 1200 px and a 720 px preview of a 6000 px original:
+  mean |Δ| at most 0.0002 LSB, max |Δ| 1 LSB (`process_v3_sharpening_and_vignette_match`). The ⌥-drag Masking
+  preview (`Overlay::SharpenMask`) draws `finish::sharpen_mask_weight` from the band the render sharpens with: from
+  V3 the `sharpen` band and V3's mask range, so it shows the weight the sharpening uses (test
+  `the_sharpen_mask_follows_the_process_v3_band_and_range`).
 - Floors for the sliders found at Lightroom strength (`strong_sliders_stay_strong`), so a later retune cannot
   weaken them.
 
 ## Left, and why
 
-- **Sharpening Radius** is not read anywhere. It needs its own blur plane (the fine band is shared with Texture):
-  `PlaneSigmas`, `Prepared`, the stage cache and the GPU `Prep` all take a new plane. The edge gain of Amount
-  (x1.12 at 100 on a soft edge) comes from the same too-fine band. Do both together as a V3 follow-up.
 - Colour grading wheel strength, Vibrance on skin, mixer Hue / Luminance: weaker or borderline, but without a
   Lightroom reference a retune would be guessing; they belong to the fidelity suite and a new process version
   ([process-versions.md](process-versions.md)).
@@ -102,4 +133,6 @@ and the HDR sliders are not covered yet.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Sharpening and Vignette (V3) checked on a real photo (noise) and on the GPU (parity); the ⌥-drag Masking preview follows V3's band and mask range |
+| 2026-10-30 | minor | Sharpening Radius gets its own band and Amount is retuned; Vignette response made smooth (process V3 only) |
 | 2026-10-30 | minor | First audit: measurement harness, results table, Noise Reduction Contrast made to work |

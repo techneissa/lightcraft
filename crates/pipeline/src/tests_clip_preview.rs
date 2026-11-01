@@ -129,3 +129,23 @@ fn the_new_overlays_have_their_own_keys_and_survive_the_worker_round_trip() {
         assert_eq!(Overlay::from_parts(k, v), o);
     }
 }
+
+/// A soft 25 % step edge (no stripe-hard contrast) on a flat field.
+fn soft_step() -> Rgb32f {
+    Rgb32f::from_fn(240, 160, |x, _| [if x < 120 { 0.2 } else { 0.25 }; 3])
+}
+
+/// Process V3 sharpens a band of its own with a mask range of its own: the ⌥-drag preview must show the weight the
+/// render uses, so a soft edge V3 sharpens at Masking 50 is not masked out in the preview.
+#[test]
+fn the_sharpen_mask_follows_the_process_v3_band_and_range() {
+    let src = soft_step();
+    let edge = |process: lightcraft_develop::Process| {
+        let mut s = DevelopSettings { process: process.version(), ..Default::default() };
+        s.detail.sharpen_masking = 50.0;
+        let img = render_with(&src, &s, Overlay::SharpenMask);
+        mean_in(&img, 116, 124)
+    };
+    let (v2, v3) = (edge(lightcraft_develop::Process::V2), edge(lightcraft_develop::Process::V3));
+    assert!(v3 > v2 + 20.0, "V3's own mask range keeps a soft edge in the preview: V2 {v2}, V3 {v3}");
+}

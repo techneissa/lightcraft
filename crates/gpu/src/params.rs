@@ -30,8 +30,11 @@ const FIELDS: &[(&str, usize)] = &[
     ("SHARPEN", 1),
     ("SHARPEN_MASK", 1),
     ("SHARPEN_DETAIL", 1),
+    ("SHARPEN_GAIN", 1),
     ("HAS_CLAR", 1),
     ("HAS_TEX", 1),
+    ("HAS_SHARP", 1),
+    ("SHARP_OFF", 1),
     ("HAS_DARK", 1),
     ("HAS_CHROMA", 1),
     ("OPS_IDENTITY", 1),
@@ -142,6 +145,9 @@ impl Block {
 pub struct Present {
     pub clarity: bool,
     pub texture: bool,
+    /// Process V3: a sharpening band is bound in the `tex` buffer, `sharpen_off` words in.
+    pub sharpen: bool,
+    pub sharpen_off: usize,
     pub dark: bool,
     /// The blurred chromaticity follows the mask planes in the `masks` buffer.
     pub chroma: bool,
@@ -188,8 +194,11 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("SHARPEN", fp.sharpen);
     p.f("SHARPEN_MASK", fp.sharpen_mask);
     p.f("SHARPEN_DETAIL", fp.sharpen_detail);
+    p.f("SHARPEN_GAIN", fp.sharpen_gain);
     p.b("HAS_CLAR", present.clarity);
     p.b("HAS_TEX", present.texture);
+    p.b("HAS_SHARP", present.sharpen);
+    p.u("SHARP_OFF", present.sharpen_off as u32);
     p.b("HAS_DARK", present.dark);
     p.b("HAS_CHROMA", present.chroma);
 
