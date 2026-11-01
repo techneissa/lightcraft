@@ -2621,7 +2621,7 @@ fn alt_while_dragging_an_edit_slider_shows_its_preview() {
     let mut h = demo([1400.0, 900.0], json!({"view": "detail", "right": "edit"}));
     let id = h.app.session.active().expect("active photo");
     let d = (*h.app.session.develop_of(id).unwrap_or_default()).clone();
-    let view = |h: &Headless| crate::panels::detail::view_overlay(&h.app, &d);
+    let view = |h: &Headless| crate::panels::detail::view_overlay(&h.app, &d, h.view.ctx.cumulative_frame_nr());
     assert_eq!(h.app.ui.right, RightPanel::Edit);
     h.app.ui.dragging_control = Some("light.blacks".into());
     assert_eq!(view(&h), Overlay::None, "dragging without Alt shows the photo");
