@@ -35,6 +35,11 @@ pub fn start(app: &mut LightcraftApp, command: &str, params: &Value) -> Result<V
     }
     let job = Arc::new(app.session.begin_rename(command, params).map_err(|e| e.to_string())?);
     let total = job.total();
+    if total == 0 {
+        // nothing on disk to move (photos without files, a name that does not change): no worker, no row
+        let moved = job.run();
+        return app.session.finish_rename(&job, moved).map_err(|e| e.to_string());
+    }
     let label = if command == "folder.rename" { "Renaming folder" } else { "Renaming photos" };
     let guard = app.session.activity.start("rename", label, Cancel::No);
     guard.progress(0, total as u64);

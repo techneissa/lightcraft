@@ -12,7 +12,7 @@
 
 use serde_json::{Value, json};
 
-use crate::cmd::browse::{commit_folder_move, prepare_folder_move, rename_folder_on_disk, rename_folder_target};
+use crate::cmd::browse::{check_folder_target, commit_folder_move, prepare_folder_move, rename_folder_on_disk, rename_folder_target};
 use crate::cmd::{bad, manage::rename_args};
 use crate::rename::{BatchMoveError, FilePrep, MoveFs, RealFs, move_all};
 use crate::{EngineError, Result, Session};
@@ -79,6 +79,8 @@ impl Session {
             }
             "folder.rename" => {
                 let (from, to) = rename_folder_target(params)?;
+                // refused here, before anything runs, what the disk would refuse anyway (a name taken)
+                check_folder_target(&from, &to).map_err(|e| bad("folder.rename", e))?;
                 prepare_folder_move(self, &from).map_err(|e| bad("folder.rename", e))?;
                 Ok(RenameJob { command: "folder.rename", what: What::Folder { from, to } })
             }

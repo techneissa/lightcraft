@@ -74,7 +74,7 @@ fn a_move_that_fails_leaves_the_catalog_and_the_files_as_they_were() {
 }
 
 /// A folder rename on the real disk: the photos follow, in one undo step; a name that is taken is
-/// refused by the disk step and the catalog stays.
+/// refused when the rename begins and the catalog stays.
 #[test]
 fn a_folder_rename_in_three_steps_and_a_taken_name() {
     let dir = std::env::temp_dir().join(format!("lc-rename-job-{}", std::process::id()));
@@ -87,10 +87,8 @@ fn a_folder_rename_in_three_steps_and_a_taken_name() {
     let mut s = session_with(&[(1, &a)]);
     let from = old.to_string_lossy().to_string();
 
-    let job = s.begin_rename("folder.rename", &json!({"path": from, "name": "taken"})).unwrap();
-    let moved = job.run();
-    let err = s.finish_rename(&job, moved).unwrap_err().to_string();
-    assert!(err.contains("already exists"), "{err}");
+    let err = s.begin_rename("folder.rename", &json!({"path": from, "name": "taken"})).err().map(|e| e.to_string()).unwrap_or_default();
+    assert!(err.contains("already exists"), "refused before anything runs: {err}");
     assert_eq!(path_of(&s, 1), a, "the catalog is unchanged");
     assert!(s.undo.is_empty());
 

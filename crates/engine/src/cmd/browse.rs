@@ -337,7 +337,9 @@ pub fn specs() -> Vec<CommandSpec> {
 /// Rename `from` to `to` on disk (a folder; everything in it goes along). Never overwrites:
 /// refused when `to` exists (a case-only rename on a case-insensitive file system goes through
 /// a temporary name). Missing parents of `to` are created.
-pub(crate) fn rename_folder_on_disk(from: &str, to: &str) -> std::result::Result<(), String> {
+/// Whether the folder `from` can take the place `to`: it is a folder, nothing else is there (apart from
+/// its own spelling in another letter case) and it is not moving into itself. Nothing is changed.
+pub(crate) fn check_folder_target(from: &str, to: &str) -> std::result::Result<(), String> {
     let (src, dst) = (Path::new(from), Path::new(to));
     if !src.is_dir() {
         return Err(format!("{from} is not a folder (moved or deleted?)"));
@@ -349,6 +351,13 @@ pub(crate) fn rename_folder_on_disk(from: &str, to: &str) -> std::result::Result
     if dst.starts_with(src) {
         return Err("a folder can't move into itself".into());
     }
+    Ok(())
+}
+
+pub(crate) fn rename_folder_on_disk(from: &str, to: &str) -> std::result::Result<(), String> {
+    check_folder_target(from, to)?;
+    let (src, dst) = (Path::new(from), Path::new(to));
+    let case_only = from != to && from.to_lowercase() == to.to_lowercase();
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
