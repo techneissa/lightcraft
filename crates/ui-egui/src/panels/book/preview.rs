@@ -48,7 +48,7 @@ struct Slide {
 pub struct Frames {
     /// The last frame, milliseconds.
     pub last_ms: f32,
-    /// Frames drawn since the last turn began, and the sum and the longest of their times.
+    /// Frames drawn while a page turn slid since the preview opened, and the sum and the longest of their times.
     pub count: u32,
     pub sum_ms: f32,
     pub max_ms: f32,
@@ -66,6 +66,8 @@ pub struct Preview {
     pub reduce_motion: bool,
     /// The controls show until this time (egui time).
     controls_until: f64,
+    /// Where the pointer was last frame (the controls appear when it is somewhere else).
+    pointer: Option<egui::Pos2>,
     cache: Cache,
     pub frames: Frames,
     /// Failures already said (a failed page is said once).
@@ -100,12 +102,12 @@ impl Turn {
 
 /// Is the preview on screen?
 pub(crate) fn active(app: &LightcraftApp) -> bool {
-    app.ui.book.preview.is_some() && app.ui.fullscreen
+    app.ui.book.preview.is_some() && app.ui.fullscreen && app.ui.view == crate::state::ViewMode::Book
 }
 
 /// Drops a preview that something else ended (the full-screen preview toggled off, another view).
 pub(crate) fn sync(app: &mut LightcraftApp) {
-    if app.ui.book.preview.is_some() && (!app.ui.fullscreen || app.ui.view != crate::state::ViewMode::Book) {
+    if app.ui.book.preview.is_some() && !active(app) {
         close(app);
     }
 }
@@ -120,7 +122,7 @@ fn spread_at(spreads: &[Vec<usize>], page: usize) -> usize {
 
 /// What the preview shows, for the replies.
 pub fn state(app: &LightcraftApp, now: f64) -> Value {
-    let Some(pv) = app.ui.book.preview.as_ref().filter(|_| app.ui.fullscreen) else { return json!({"open": false}) };
+    let Some(pv) = app.ui.book.preview.as_ref().filter(|_| active(app)) else { return json!({"open": false}) };
     let spreads = spreads_of(app, pv.book).unwrap_or_default();
     json!({
         "open": true,
@@ -188,6 +190,7 @@ fn open(app: &mut LightcraftApp, ctx: &Context, p: &Value) -> Result<(), String>
         slide: None,
         reduce_motion: motion::reduced(),
         controls_until: now + CONTROLS_SECS,
+        pointer: None,
         cache: Cache::default(),
         frames: Frames::default(),
         said: 0,
@@ -232,7 +235,6 @@ fn go(app: &mut LightcraftApp, ctx: &Context, to: Turn) -> Result<(), String> {
     if target != from {
         // (a turn begun while another slides ends that one at once)
         pv.slide = (!pv.reduce_motion).then_some(Slide { from, to: target, started: now });
-        pv.frames = Frames::default();
     }
     pv.controls_until = pv.controls_until.max(now + CONTROLS_SECS / 2.0);
     ctx.request_repaint();
@@ -290,13 +292,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut Ui) {
     };
     let size = draw::page_size(area, page);
     let edge = draw::edge_of(&ctx, size);
-    // the pages to have: the spread on show, then the next, then the one before
+    // the pages to have: the spread on show, the one sliding out, then the next and the one before
     let mut wanted: Vec<usize> = spreads.get(current).cloned().unwrap_or_default();
-    for s in [current + 1, current.wrapping_sub(1)] {
-        wanted.extend(spreads.get(s).cloned().unwrap_or_default());
+    let on_show = wanted.len();
+    let sliding_from = pv.slide.map(|s| s.from);
+    for s in [sliding_from.unwrap_or(usize::MAX), current + 1, current.wrapping_sub(1)] {
+        for p in spreads.get(s).into_iter().flatten() {
+            if !wanted.contains(p) {
+                wanted.push(*p);
+            }
+        }
     }
     // (their thumbnails too: the stand-in of a page that isn't rendered yet)
-    for &p in wanted.iter().skip(spreads.get(current).map_or(0, Vec::len)) {
+    for &p in wanted.iter().skip(on_show) {
         for photo in book.pages.get(p).into_iter().flat_map(|pg| pg.slots.iter().flatten()) {
             crate::panels::grid::request_thumb(app, lightcraft_catalog::PhotoId(*photo), 512, 10);
         }
@@ -309,7 +317,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut Ui) {
         }
     }
     // pointer: moving it shows the controls
-    let moved = ctx.input(|i| i.pointer.delta() != egui::Vec2::ZERO || i.pointer.any_pressed());
+    let at = ctx.input(|i| i.pointer.latest_pos());
+    let moved = at != pv.pointer || ctx.input(|i| i.pointer.any_pressed());
+    pv.pointer = at;
     if moved {
         pv.controls_until = now + CONTROLS_SECS;
     }

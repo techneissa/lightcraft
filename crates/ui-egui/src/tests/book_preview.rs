@@ -64,6 +64,15 @@ fn page(h: &Headless) -> usize {
     h.app.ui.book.preview.as_ref().map_or(usize::MAX, |p| p.page)
 }
 
+/// Moves the pointer so the controls show.
+fn wake(h: &mut Headless) {
+    for (x, y) in [(700.0, 500.0), (760.0, 540.0)] {
+        let r = h.request("ui.move", json!({"x": x, "y": y}), T);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    h.step();
+}
+
 /// A book of `n` photos, one per page, with a cover: the cover, then spreads of two pages.
 fn open(h: &mut Headless, n: usize) -> Value {
     let photos: Vec<u64> = h.app.session.catalog.photos().take(n).map(|p| p.id.0).collect();
@@ -84,6 +93,7 @@ fn the_preview_opens_full_screen_on_the_cover_and_closes_on_the_same_page() {
     let r = open(&mut h, 8);
     assert_eq!(r["open"], true, "{r}");
     assert!(h.app.ui.fullscreen && h.app.ui.book.preview.is_some());
+    wake(&mut h);
     assert!(has(&h, "book:preview") && has(&h, "button:bookPreviewClose"), "the preview, its close button");
     assert!(!has(&h, "book:spread") && !has(&h, "book:strip"), "the Book view's panels are not drawn");
     assert_eq!((r["page"].clone(), r["spread"].clone(), r["spreads"].clone()), (json!(0), json!(0), json!(5)), "cover, then 1·2 3·4 5·6 7·8? {r}");
@@ -137,6 +147,7 @@ fn a_click_on_the_right_or_left_half_turns() {
 fn the_close_button_and_the_command_close_it() {
     let mut h = demo();
     open(&mut h, 6);
+    wake(&mut h);
     let r = h.request("ui.clickWidget", json!({"id": "button:bookPreviewClose"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.settle(T);
@@ -196,30 +207,27 @@ fn a_turn_slides_unless_reduce_motion_is_on() {
     assert!(frames.count >= 3, "the slide drew several frames: {frames:?}");
     // reduce motion: the page changes at once
     h.app.ui.book.preview.as_mut().unwrap().reduce_motion = true;
+    let slid = h.app.ui.book.preview.as_ref().unwrap().frames.count;
     key(&mut h, "ArrowRight");
     let r = crate::panels::book::preview::state(&h.app, h.time());
     assert_eq!((r["page"].clone(), r["sliding"].clone()), (json!(5), json!(false)), "{r}");
-    assert_eq!(h.app.ui.book.preview.as_ref().unwrap().frames.count, 0, "no slide frames");
+    assert_eq!(h.app.ui.book.preview.as_ref().unwrap().frames.count, slid, "no slide frames");
 }
 
 #[test]
 fn the_counter_and_thumbnails_show_while_the_pointer_moves_and_hide_after_a_moment() {
     let mut h = demo();
     open(&mut h, 8);
-    let r = h.request("ui.move", json!({"x": 800.0, "y": 600.0}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.step();
+    wake(&mut h);
     assert!(has(&h, "book:previewCounter") && has(&h, "button:bookPreviewClose"), "shown while the pointer moves");
     assert!(has(&h, "book:previewThumb:0") && has(&h, "book:previewThumb:4"), "a thumbnail for every spread that fits");
     // a few seconds of nothing: the controls are gone
-    for _ in 0..80 {
+    for _ in 0..240 {
         h.step();
     }
     assert!(!has(&h, "book:previewCounter") && !has(&h, "button:bookPreviewClose") && !has(&h, "book:previewThumb:0"), "controls hidden");
     // moving the pointer brings them back
-    let r = h.request("ui.move", json!({"x": 900.0, "y": 650.0}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.step();
+    wake(&mut h);
     assert!(has(&h, "book:previewCounter") && has(&h, "book:previewThumb:2"), "shown again");
     let r = h.request("ui.clickWidget", json!({"id": "book:previewThumb:3"}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -238,6 +246,7 @@ fn pages_are_drawn_from_the_export_composer_and_the_next_spread_is_ready() {
     key(&mut h, "ArrowRight");
     let r = crate::panels::book::preview::state(&h.app, h.time());
     assert!(r["pagesReady"].as_u64() >= Some(3), "a turn finds its pages: {r}");
+    wake(&mut h);
     let text = h.painted_text().join(" ");
     assert!(text.contains("Pages 2–3 of 8"), "{text}");
 }
@@ -264,4 +273,34 @@ fn turning_pages_draws_inside_the_frame_budget() {
         steps.iter().sum::<f32>() / steps.len() as f32, steps.iter().fold(0.0f32, |a, b| a.max(*b)));
     assert!(f.count > 0);
     assert!(f.sum_ms / f.count as f32 <= 16.0, "mean turn frame {} ms", f.sum_ms / f.count as f32);
+}
+
+#[test]
+fn a_book_of_two_hundred_pages_previews_and_turns_inside_the_frame_budget() {
+    use lightcraft_engine::book::{Book, MAX_PAGES, Page, Template};
+    let mut h = demo();
+    let photos: Vec<u64> = h.app.session.catalog.photos().take(24).map(|p| p.id.0).collect();
+    let mut big = Book { name: "Big".into(), ..Default::default() };
+    big.pages = (0..MAX_PAGES)
+        .map(|i| Page::with(Template::Grid4, &[photos[i % 24], photos[(i + 1) % 24], photos[(i + 2) % 24], photos[(i + 3) % 24]]))
+        .collect();
+    big.validate().unwrap();
+    h.app.session.books.add(big).unwrap();
+    cmd(&mut h, "view.book", json!({}));
+    cmd(&mut h, "book.preview", json!({"page": 100}));
+    run_until(&mut h, |h| crate::panels::book::preview::state(&h.app, h.time())["pagesReady"].as_u64() >= Some(5));
+    h.app.ui.book.preview.as_mut().unwrap().reduce_motion = false;
+    wake(&mut h);
+    assert!(has(&h, "book:previewThumb:50") && !has(&h, "book:previewThumb:0") && !has(&h, "book:previewThumb:100"), "only the spreads around the one on show are in the strip");
+    for _ in 0..4 {
+        let _ = h.request("ui.key", json!({"key": "ArrowRight"}), T);
+        for _ in 0..30 {
+            h.view.ctx.request_repaint();
+            h.step();
+        }
+    }
+    let f = h.app.ui.book.preview.as_ref().unwrap().frames;
+    eprintln!("book preview, 200 pages: {} turn frames, drawing mean {:.2} ms, worst {:.2} ms", f.count, f.sum_ms / f.count.max(1) as f32, f.max_ms);
+    assert!(f.count > 0 && f.sum_ms / f.count as f32 <= 16.0, "{f:?}");
+    assert_eq!(page(&h), 107, "four spreads on from 99·100");
 }
