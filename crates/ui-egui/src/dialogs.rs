@@ -312,6 +312,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::KeywordTag { editing: None, .. } => "Create Keyword Tag",
         Dialog::KeywordTag { .. } => "Edit Keyword Tag",
         Dialog::DeleteKeyword { .. } => "Delete Keyword",
+        Dialog::DeleteLocation { .. } => "Delete Saved Location",
         Dialog::MoveKeyword { .. } => "Merge Keywords",
         Dialog::KeywordSet { .. } => "Edit Keyword Set",
         Dialog::MergeKeywords { .. } => "Merge Keywords",
@@ -449,7 +450,11 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         Dialog::DenoiseModel { .. } if !informational => "Install",
         Dialog::FaceModel { info, .. } if !informational && info["download"].is_string() => "Download",
         Dialog::FaceModel { .. } if !informational => "Install",
-        Dialog::ConfirmDelete { .. } | Dialog::ConfirmDeleteRejected { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
+        Dialog::ConfirmDelete { .. }
+        | Dialog::ConfirmDeleteRejected { .. }
+        | Dialog::DeleteKeyword { .. }
+        | Dialog::DeleteEffects { .. }
+        | Dialog::DeleteLocation { .. } => "Delete",
         Dialog::LocalProfileSwitch { .. } => "Switch",
         Dialog::SmartPreviewsForEditing { .. } => "Build Smart Previews",
         Dialog::MacosForCamera { .. } => "Apply",
@@ -2034,6 +2039,10 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
         Dialog::KeywordSet { .. } => keyword_set_body(ui, t, confirm, dlg),
         Dialog::MoveKeyword { .. } => move_keyword_body(ui, t, dlg),
         Dialog::DeleteKeyword { .. } => delete_keyword_body(ui, t, dlg),
+        Dialog::DeleteLocation { name, .. } => {
+            ui.label(crate::i18n::tr_format!("Delete the saved location “{name}”?", name = name));
+            ui.label(egui::RichText::new(crate::i18n::tr("Its photos keep their GPS positions. This can't be undone.")).color(t.text_dim));
+        }
         Dialog::SaveEffect { name, group, fields, amount, brush } => {
             if crate::panels::mask_effects::save_body(app, ui, name, group, fields, amount, brush) {
                 *confirm = true;

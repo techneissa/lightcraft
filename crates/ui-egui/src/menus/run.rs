@@ -199,6 +199,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         ui_commands_11,
         ui_commands_12,
     ];
+    if let Some(r) = crate::panels::map::command(app, id, p) {
+        return Some(r);
+    }
     PARTS.iter().find_map(|part| part(app, &ctx, id, p))
 }
 
@@ -1915,19 +1918,8 @@ fn photo_tag_from_tracklog_command(app: &mut LightcraftApp, _ctx: &egui::Context
     }
     let r = app.run("photo.autoTagTracklog", params);
     if let Ok(v) = &r {
-        let n = v["tagged"].as_u64().unwrap_or(0);
-        let sk = &v["skipped"];
-        let mut msg = crate::i18n::tr_format!("Tagged {n} photo{} from the tracklog", if n == 1 { "" } else { "s" }, n = n);
-        let outside = sk["outside"].as_u64().unwrap_or(0);
-        if outside > 0 {
-            msg += &crate::i18n::tr_format!("; {outside} outside its time range", outside = outside);
-        }
-        let kept = sk["hasGps"].as_u64().unwrap_or(0);
-        if kept > 0 {
-            msg += &crate::i18n::tr_format!("; {kept} already had a location", kept = kept);
-        }
         let ctx = app.tasks.repaint.clone().unwrap_or_default();
-        app.toast(&ctx, msg);
+        app.toast(&ctx, crate::panels::map::tracks::tagged_message(v));
     }
     r
 }

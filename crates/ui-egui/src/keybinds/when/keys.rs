@@ -93,6 +93,7 @@ pub const KEYS: &[KeyDef] = &[
             ("survey", "Survey View", "The selected photos tiled"),
             ("reference", "Reference View", "A reference photo beside the one being edited"),
             ("people", "People View", "A card for each person named on faces"),
+            ("map", "Map View", "The photos in view as pins on a map"),
         ]),
     },
     KeyDef { name: "gridView", title: "Library Grid", desc: "The view is Photo Grid or Square Grid", kind: Kind::Bool { chip: "Library Grid" } },
@@ -241,6 +242,7 @@ impl Context {
                 ViewMode::Survey => 4,
                 ViewMode::Reference => 5,
                 ViewMode::People => 6,
+                ViewMode::Map => 7,
             },
         );
         c.set_flag(GRID_VIEW, crate::shortcuts::library_grid(app));

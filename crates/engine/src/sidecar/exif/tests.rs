@@ -207,7 +207,7 @@ fn another_apps_sidecar_with_the_tags_reads_without_error() {
 
 /// An existing sidecar a save is merged into.
 fn save_over(path: &std::path::Path, p: &Photo) -> String {
-    let (data, merged, _) = sidecar_contents(path, packet(p), "t").unwrap();
+    let (data, merged, _) = sidecar_contents(path, packet(p), "t", false).unwrap();
     assert!(merged || !path.exists());
     std::fs::write(path, &data).unwrap();
     data

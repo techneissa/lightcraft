@@ -194,6 +194,7 @@ pub fn confirm_style(dlg: &Dialog) -> ConfirmStyle {
         | Dialog::DeletePermanently { .. }
         | Dialog::DeleteKeyword { .. }
         | Dialog::DeleteEffects { .. }
+        | Dialog::DeleteLocation { .. }
         | Dialog::RemoveFolder { .. } => ConfirmStyle::Plain,
         _ if only_shows(dlg) => ConfirmStyle::Plain,
         _ => ConfirmStyle::Primary,
