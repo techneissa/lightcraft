@@ -3,6 +3,11 @@
 The branch **`custom`** is the official LightCraft ([storytold/lightcraft](https://github.com/storytold/lightcraft))
 plus the features listed below. The installed app is built from `custom`.
 
+**Mac only.** techneissa uses this fork on macOS and nowhere else (techneissa, 2026-11-01). Its features and fixes
+need to work on the Mac only: no Windows, Linux or web (WASM) work, checks, screenshots or fixes for them. A Fork CI
+failure that only Linux has (a macOS-only test, a Linux-only path) is not a blocker; list it under "Known failures".
+The official code's own platforms are the official project's job.
+
 ## Update the app
 
 1. Click **Update LightCraft** in Applications. (Same thing in Terminal:
@@ -76,7 +81,7 @@ Local folder: `$WORKSPACE/repos/lightcraft` (usually `~/Documents/workspace/repo
    This fork reads `CLAUDE.md`'s "before every commit" and "run the full one locally before merging" as the above:
    no `cargo xtask ci` or `ci --quick` on this Mac (techneissa, 2026-10-29: the same tests ran three times per
    feature and loaded the Mac). The official CI runs on Linux, so macOS-only tests (`macraw`, macOS Colour) run
-   only in a lane's own filtered tests.
+   only in a lane's own filtered tests. A failure Fork CI shows only on Linux is noted, not fixed (Mac only, above).
 4. `git switch custom && git merge --no-ff feat/<name>`, then `git push mine custom feat/<name>`.
 5. Add a row to the table below, and run Update LightCraft to install it.
 
@@ -155,3 +160,8 @@ cargo test -p lightcraft-ui-egui --lib -- delete_permanently delete_local quick_
   bar's unnamed click area; that one is fixed (`panels/topbar.rs`).
 - `cargo xtask ci` stops at its `test` step because of it; run the rest by hand (`cargo xtask parity`, `layers`,
   `assets`).
+
+## Known failures on Fork CI only (Linux; not fixed, Mac only)
+
+- `tests::macos_colour::a_macos_colour_photo_never_shows_the_camera_jpeg_while_it_renders` (`crates/engine`): the
+  macOS Colour feature needs macOS's raw decoder, so the test fails on Linux (Fork CI run 41155652051, 2026-10-31).
