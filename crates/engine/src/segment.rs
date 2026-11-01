@@ -17,6 +17,7 @@
 
 #[cfg(feature = "sam")]
 mod download;
+pub(crate) mod request;
 #[cfg(feature = "sam")]
 mod worker;
 

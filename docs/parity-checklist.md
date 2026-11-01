@@ -34,7 +34,7 @@ cited here still exists. Formerly docs/parity.md.
 | F. Edit panel — global adjustments (EDIT) | 45 | 3 | 3 | 1 | 27/28 (96%) | 13/14 (93%) |
 | G. Profiles (PROF) | 7 | 4 | 3 | 0 | 3/4 (75%) | 3/6 (50%) |
 | H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
-| I. Remove / healing (REM) | 8 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
+| I. Remove / healing (REM) | 8 | 2 | 1 | 2 | 4/4 (100%) | 2/3 (67%) |
 | J. Red eye (EYE) | 2 | 0 | 0 | 0 | — | 1/1 (100%) |
 | K. Masking (MASK) | 15 | 5 | 5 | 0 | 7/8 (88%) | 7/7 (100%) |
 | L. Presets (PRE) | 6 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 86 | 1 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 79 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 32 | 14 | 8 | — | 24/26 (92%) |
-| **Total** | 432 | 78 | 50 | 35 | 195/203 (96%) | 147/166 (89%) |
+| **Total** | 432 | 79 | 49 | 35 | 195/203 (96%) | 147/166 (89%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **84.1%** of 560 in-scope rows — P0 98.0% of 203 · P1 93.4% of 166 · P2 61.1% of 190.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **84.2%** of 560 in-scope rows — P0 98.0% of 203 · P1 93.4% of 166 · P2 61.3% of 190.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -276,7 +276,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-REM-HEAL | Heal | P0 | ✅ | `cmd:spot.add` (`mode: heal`), `crates/pipeline/src/spots.rs` | Zero-feather edges use a hard step; zero-opacity spots preserve all pixels, including exact-radius pixels and image corners |
 | LR-REM-CLONE | Clone | P0 | ✅ | `cmd:spot.add` (`mode: clone`), `crates/pipeline/src/spots.rs` | Hard-edge source copying and unchanged radius pixels regression-tested at two output sizes |
 | LR-REM-GEN | Generative remove | OOS | 🚫 | | |
-| LR-REM-DETECT | Object detection for remove | P2 | ⬜ | | |
+| LR-REM-DETECT | Object detection for remove | P2 | 🟡 | `cmd:spot.findPeople`, `cmd:spot.findWires`, `cmd:spot.candidates`, `cmd:spot.selectCandidate`, `cmd:spot.removeCandidates`, `crates/pipeline/src/find/mod.rs`, `crates/engine/src/find_removals.rs` | Remove panel ▸ Find People and Find Wires outline what they find on the photo; click one to select it, Remove or Remove All takes them out with content-aware spots, grown a little, in one undo step, each an ordinary editable spot. People and wires come from SAM 3's "person" and "power line" masks (local); without the model, people are rough body shapes under detected faces (YuNet) and wires come from a pure-Rust thin-line detector. The main subject (the largest, most central person, however small) is never proposed unless asked. Crossing wires and touching people come as one group; faces-only shapes are estimates; no other object kinds yet |
 | LR-REM-BRUSH-PARAMS | Brush size / feather / opacity | P0 | ✅ | `cmd:spot.add` (`size`, `feather`, `opacity`), `cmd:brush.smaller`, `cmd:brush.larger`, `cmd:brush.featherLess`, `cmd:brush.featherMore`, `crates/ui-egui/src/panels/right.rs` | Size / Feather / Opacity sliders (for new spots and the selected one); `[` `]` size, ⇧`[` ⇧`]` feather (also the Masking brush) |
 | LR-REM-SPOT-EDIT | Edit existing spots | P0 | ✅ | `cmd:spot.select`, `cmd:spot.update`, `cmd:spot.refreshSource`, `cmd:spot.delete`, `cmd:view.toolOverlay` | click a pin to select, drag target or source, ⌫ deletes the selected spot, `/` picks another source; automatic sources are resolved when the spot is added; Tool Overlay (Remove panel, View menu, ⇧H) shows the spots' pins Auto (pointer over the photo, hidden while painting) / Always / Selected / Never, and a hidden spot can't be grabbed (#224) |
 | LR-REM-VISUALIZE | Visualize spots | P1 | ✅ | `cmd:view.visualizeSpots` | |

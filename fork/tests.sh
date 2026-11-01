@@ -14,8 +14,9 @@ run cargo test -p lightcraft-lensdb
 run cargo test -p lightcraft-develop
 run cargo test -p lightcraft-catalog
 run cargo test -p lightcraft-preview
-run cargo test -p lightcraft-pipeline --lib -- masks::tests::a_first_part_is_the_base tests_tone_sliders tests_tone tests_slider_strength tests_sharpen_mask
-run cargo test -p lightcraft-ui-egui --lib -- delete_permanently delete_local quick_delete view_colour smart_editing auto_import toast render:: layers_task keybinds shortcut_editing shortcut_when shortcut tests_slider_columns edit_sections export_reveal lens_database fixed_slider_labels temp_slider dialog_fit_backup tests::keymap shortcuts:: animated_gif selection_order split_divider before_after command_palette edit_all photo_menu topbar_items titlebar loupe_stand_in the_loupe_says denoise settings profile camera_colour thumbnail dropdown_search quick_filters shortcut_backup clipping exif_edit brush_live mask_parts mask_tiles create_new_mask_tiles
+run cargo test -p lightcraft-pipeline --lib -- find:: masks::tests::a_first_part_is_the_base tests_tone_sliders tests_tone tests_slider_strength tests_sharpen_mask
+run cargo test -p lightcraft-ui-egui --lib -- delete_permanently delete_local quick_delete view_colour smart_editing auto_import toast render:: layers_task keybinds shortcut_editing shortcut_when shortcut tests_slider_columns edit_sections export_reveal lens_database fixed_slider_labels temp_slider dialog_fit_backup tests::keymap shortcuts:: animated_gif selection_order split_divider before_after command_palette edit_all photo_menu topbar_items titlebar loupe_stand_in the_loupe_says denoise settings profile camera_colour thumbnail dropdown_search quick_filters shortcut_backup clipping exif_edit brush_live mask_parts mask_tiles create_new_mask_tiles find_removals
+run cargo test -p lightcraft-engine --lib --features sam tests::find_removals
 run cargo test -p lightcraft-raster --lib channel_clipping
 run cargo test -p lightcraft-gpu --lib handles
 run cargo test -p lightcraft-gpu --test it -- process_v3_sharpening
