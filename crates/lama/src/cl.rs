@@ -36,7 +36,13 @@ pub struct Geo {
 }
 
 fn reflect(i: i64, n: i64) -> i64 {
-    if i < 0 { -i } else if i >= n { 2 * (n - 1) - i } else { i }
+    if i < 0 {
+        -i
+    } else if i >= n {
+        2 * (n - 1) - i
+    } else {
+        i
+    }
 }
 
 impl Geo {
@@ -267,7 +273,7 @@ pub struct ResnetBlock {
 
 impl ResnetBlock {
     pub fn load(w: &mut Weights, prefix: &str, l: usize, g: usize) -> Result<Self> {
-        if g == 0 || g % 2 != 0 {
+        if g == 0 || !g.is_multiple_of(2) {
             return Err(Error::Model("a residual block needs an even, non-empty global branch".into()));
         }
         Ok(Self { conv1: BlockLayer::load(w, &format!("{prefix}.conv1"), l, g)?, conv2: BlockLayer::load(w, &format!("{prefix}.conv2"), l, g)? })

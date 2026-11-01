@@ -22,6 +22,9 @@ mod error;
 pub mod fft;
 mod layers;
 mod net;
+pub mod region;
+#[cfg(test)]
+mod tests;
 
 pub use checkpoint::read_generator;
 pub use error::{Error, Result};

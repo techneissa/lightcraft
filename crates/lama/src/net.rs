@@ -43,7 +43,7 @@ impl Lama {
         let &[ngf, 4, 7, 7] = shape.as_slice() else {
             return Err(Error::Model(format!("the first layer has shape {shape:?}, expected [ngf, 4, 7, 7]")));
         };
-        if ngf == 0 || ngf % 8 != 0 || ngf > 256 {
+        if ngf == 0 || !ngf.is_multiple_of(8) || ngf > 256 {
             return Err(Error::Model(format!("unexpected base width {ngf}")));
         }
         // (reflection pad of 3 + a valid 7×7 convolution is a reflect-padded convolution)
@@ -87,7 +87,7 @@ impl Lama {
         Ok(Self { device: device.clone(), geos: GeoCache::new(device.clone()), stem, downs, blocks, ups, head })
     }
 
-/// The device the weights live on.
+    /// The device the weights live on.
     pub fn device(&self) -> &Device {
         &self.device
     }

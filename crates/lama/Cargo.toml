@@ -22,5 +22,6 @@ candle-core = { workspace = true, features = ["metal"] }
 candle-nn = { workspace = true, features = ["metal"] }
 
 [dev-dependencies]
+zip = { version = "7.4", default-features = false }
 image = { workspace = true }
 lightcraft-testkit = { workspace = true }

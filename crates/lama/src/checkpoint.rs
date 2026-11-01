@@ -40,11 +40,7 @@ fn bad(path: &Path, why: impl std::fmt::Display) -> Error {
 pub fn read_generator(path: &Path, device: &Device) -> Result<BTreeMap<String, Tensor>> {
     let file = std::fs::File::open(path).map_err(|e| bad(path, e))?;
     let mut zip = zip::ZipArchive::new(BufReader::new(file)).map_err(|e| bad(path, format!("not a PyTorch zip file ({e})")))?;
-    let pkl_name = zip
-        .file_names()
-        .find(|n| n.ends_with("data.pkl"))
-        .map(str::to_string)
-        .ok_or_else(|| bad(path, "no data.pkl inside"))?;
+    let pkl_name = zip.file_names().find(|n| n.ends_with("data.pkl")).map(str::to_string).ok_or_else(|| bad(path, "no data.pkl inside"))?;
     let dir = pkl_name.strip_suffix(".pkl").unwrap_or(&pkl_name).to_string();
     let pickle = {
         let entry = zip.by_name(&pkl_name).map_err(|e| bad(path, e))?;

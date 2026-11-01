@@ -50,7 +50,7 @@ impl Dft {
         let (mut inv_cos, mut inv_sin) = (vec![0f32; w * l], vec![0f32; w * l]);
         for k in 0..l {
             // the columns that are their own mirror image (DC, and Nyquist for an even width) count once
-            let weight = if k == 0 || (w % 2 == 0 && k == w / 2) { 1.0 } else { 2.0 };
+            let weight = if k == 0 || (w.is_multiple_of(2) && k == w / 2) { 1.0 } else { 2.0 };
             for x in 0..w {
                 let a = angle(k, x, w);
                 fwd_cos[k * w + x] = (a.cos() * scale) as f32;
@@ -203,15 +203,14 @@ mod tests {
 
     #[test]
     fn irfft2_ignores_the_imaginary_part_of_the_dc_and_nyquist_columns() {
-        // a spectrum whose DC column (and, for an even width, Nyquist column) is only imaginary has no real signal
+        // imaginary values in the first row of the DC and Nyquist columns are constant along the height after the
+        // inverse along it, and the real transform along the width drops them: no signal
         let (h, w) = (4, 4);
         let dft = Dft::new(h, w, &Device::Cpu).unwrap();
         let l = dft.half_width();
         let mut spec = vec![0f32; 2 * h * l];
-        for ky in 0..h {
-            spec[(h + ky) * l] = 1.0 + ky as f32; // imaginary, DC column
-            spec[(h + ky) * l + l - 1] = 2.0; // imaginary, Nyquist column
-        }
+        spec[h * l] = 1.0; // imaginary, row 0, DC column
+        spec[h * l + l - 1] = 2.0; // imaginary, row 0, Nyquist column
         let spec = Tensor::from_vec(spec, (2 * h, l, 1), &Device::Cpu).unwrap();
         let out = dft.irfft2(&spec).unwrap().flatten_all().unwrap().to_vec1::<f32>().unwrap();
         assert!(out.iter().all(|v| v.abs() < 1e-5), "{out:?}");
@@ -229,7 +228,8 @@ mod tests {
         for (c, want) in [4.0f32, -8.0, 16.0].iter().enumerate() {
             assert!((v[c] - want).abs() < 1e-4, "channel {c}: {} vs {want}", v[c]); // 64 · value / 8
         }
-        let others: f32 = v.iter().enumerate().filter(|(i, _)| *i >= 3 && (*i / 3) % dft.half_width() != 0 || *i >= 3 * 5 * 8).map(|(_, x)| x.abs()).fold(0.0, f32::max);
+        // every value but the first row's first (real) bin is zero
+        let others: f32 = v.iter().enumerate().filter(|(i, _)| *i >= 3).map(|(_, x)| x.abs()).fold(0.0, f32::max);
         assert!(others < 1e-4, "{others}");
     }
 
