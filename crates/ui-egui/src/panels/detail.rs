@@ -17,6 +17,7 @@ use lightcraft_engine::media::QuickSource;
 
 mod brush_preview;
 mod crop;
+mod film_bar;
 mod filmstrip;
 mod find_overlay;
 mod geometry;
