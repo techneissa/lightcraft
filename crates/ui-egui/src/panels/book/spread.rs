@@ -146,9 +146,13 @@ fn frame_input(
         let factor = f64::from(pinch) * (f64::from(scroll) * 0.004).exp();
         if (factor - 1.0).abs() > 1e-6 {
             let cur = crop_now(book, bu, page, cell).unwrap_or(Crop::FILL);
-            let crop = Crop { zoom: (cur.zoom * factor).clamp(1.0, MAX_ZOOM), ..cur };
-            // a crop that did not change (already at the limit) is no new step
-            if crop != cur || bu.pending.is_none() && book.pages.get(page).and_then(|p| p.crop(cell)).is_none() {
+            let mut crop = Crop { zoom: (cur.zoom * factor).clamp(1.0, MAX_ZOOM), ..cur };
+            // (zoomed back out to the frame's size)
+            if crop.zoom < 1.0005 {
+                crop.zoom = 1.0;
+            }
+            // a crop that did not change (zoomed out at the frame's size, or at the limit) is no new step
+            if crop != cur {
                 bu.pending = Some(Pending { book: book.id, page, cell, crop, at: now });
                 ctx.request_repaint();
             }

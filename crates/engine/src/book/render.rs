@@ -9,13 +9,16 @@ use crate::export::{ExportFormat, ExportOptions, encode_image, output_size};
 use crate::media::RenderJob;
 use crate::print::compose::{self, BlitRect, CellStyle, Image16, ImageSettings, PageStyle, PxRect, place, px_rect, rec2020_from_srgb8};
 use crate::print::layout::{Cell, Layout, Margins, Orientation, PageSetup, Style};
+use crate::print::output::MAX_PDF_BYTES;
 use crate::print::template::PrintSettings;
-use crate::print::{MAX_JOB_PIXELS, MAX_PAGE_PIXELS, PageRaster, PrintJob, output};
+use crate::print::{MAX_PAGE_PIXELS, PageRaster, PrintJob, output};
+use crate::print_color::PrintColorJob;
+use crate::print_pdf::{ImageData, PdfImage};
 use lightcraft_catalog::PhotoId;
 use lightcraft_pipeline::{OutputDepth, OutputSpace};
 
-/// Photos kept rendered while a page is composed (a photo used twice in a row renders once).
-const RENDER_CACHE: usize = 4;
+/// Bytes of rendered photos kept while pages are composed (a photo used twice in a row renders once).
+const RENDER_CACHE_BYTES: usize = 192 << 20;
 
 /// What a stopped export says.
 pub const CANCELLED: &str = "Book export cancelled";
@@ -34,9 +37,9 @@ pub fn print_settings(book: &Book, aspect: &dyn Fn(u64) -> Option<f64>) -> Resul
     let mut id = 0u32;
     for (page, p) in book.pages.iter().enumerate() {
         let slots = cells_for(p.template, &book.settings)?;
-        for (slot, photo) in slots.iter().zip(&p.slots) {
+        for (cell, (slot, photo)) in slots.iter().zip(&p.slots).enumerate() {
             let Some(photo) = *photo else { continue };
-            let whole = !(book.settings.fill || p.template == Template::FullBleed);
+            let whole = !(book.settings.fill || p.template == Template::FullBleed || p.crop(cell).is_some());
             let rect = if whole { aspect(photo).map_or(*slot, |a| fitted(*slot, a)) } else { *slot };
             id = id.saturating_add(1);
             layout.cells.push(Cell { id, page: u32::try_from(page).map_err(|_| "too many pages")?, rect, photo: Some(photo) });
@@ -99,9 +102,6 @@ pub fn prepare(session: &mut Session, book: &Book) -> Result<BookJob, String> {
     if pw == 0 || ph == 0 || page_px > MAX_PAGE_PIXELS {
         return Err(format!("a page of {pw} x {ph} pixels is too large; lower the book's resolution"));
     }
-    if page_px.saturating_mul(book.pages.len() as u64) > MAX_JOB_PIXELS {
-        return Err("the book is too large for memory; lower its resolution or export fewer pages".into());
-    }
     let style = CellStyle::of(&settings, ppi);
     let mut items = Vec::new();
     for (cell, crop) in settings.layout.cells.iter().zip(cell_crops(book)) {
@@ -139,13 +139,6 @@ pub fn prepare(session: &mut Session, book: &Book) -> Result<BookJob, String> {
     })
 }
 
-/// The pages of a rendered book.
-pub struct Rendered {
-    pub pages: Vec<PageRaster>,
-    job: PrintJob,
-    title: String,
-}
-
 /// Draws a cropped photo into `cell`: the photo as large as the crop's window needs, then that window.
 fn draw_cropped(page: &mut Image16, photo: &Image16, cell: PxRect, window: (f64, f64, f64, f64)) -> Result<(), String> {
     let (rw, rh) =
@@ -159,19 +152,62 @@ fn draw_cropped(page: &mut Image16, photo: &Image16, cell: PxRect, window: (f64,
     Ok(())
 }
 
+/// What the pages of a book are made into as they are composed.
+enum Sink<'a> {
+    /// Kept as they are (tests).
+    Rasters(&'a mut Vec<PageRaster>),
+    /// Converted and compressed for the PDF at once.
+    Pdf { pages: Vec<((f64, f64), PdfImage)>, bytes: usize },
+    /// One sRGB JPEG each, at once.
+    Jpeg { quality: u8, files: Vec<Vec<u8>> },
+}
+
 impl BookJob {
     /// Renders (progress steps) the job will run.
     pub fn steps(&self) -> usize {
         self.items.len()
     }
 
-    /// Renders every photo and composes the pages. `progress(done, name)` runs before each render;
-    /// returning `false` cancels.
-    pub fn run(self, progress: &mut dyn FnMut(usize, &str) -> bool) -> Result<Rendered, String> {
+    /// Pages the book has.
+    pub fn pages(&self) -> usize {
+        self.pages.len()
+    }
+
+    /// The pages of the book as rasters, all in memory (for tests; an export keeps one page at a time).
+    pub fn run_rasters(self, progress: &mut dyn FnMut(usize, &str) -> bool) -> Result<Vec<PageRaster>, String> {
+        let mut out = Vec::new();
+        self.run_into(progress, Sink::Rasters(&mut out))?;
+        Ok(out)
+    }
+
+    /// The book as one PDF, a page per book page at the page size. Each page is converted and
+    /// compressed as soon as it is composed, so memory holds one page's pixels and the compressed
+    /// pages so far. After the first page the size of the whole file is estimated: a book whose PDF
+    /// would pass the limit says how many pages fit at this resolution before the rest is rendered.
+    pub fn run_pdf(self, progress: &mut dyn FnMut(usize, &str) -> bool) -> Result<Vec<u8>, String> {
+        let (job, title) = (self.job.clone(), self.title.clone());
+        match self.run_into(progress, Sink::Pdf { pages: Vec::new(), bytes: 0 })? {
+            Sink::Pdf { pages, .. } => PrintColorJob::new(&job.color)?.pdf(pages, &title),
+            _ => Err("no PDF was made".into()),
+        }
+    }
+
+    /// One JPEG (sRGB) per page, made as each page is composed.
+    pub fn run_jpegs(self, quality: u8, progress: &mut dyn FnMut(usize, &str) -> bool) -> Result<Vec<Vec<u8>>, String> {
+        match self.run_into(progress, Sink::Jpeg { quality, files: Vec::new() })? {
+            Sink::Jpeg { files, .. } => Ok(files),
+            _ => Err("no pages were made".into()),
+        }
+    }
+
+    /// Renders every photo and composes the pages one at a time, handing each to `sink`.
+    /// `progress(done, name)` runs before each render; returning `false` cancels.
+    fn run_into<'a>(self, progress: &mut dyn FnMut(usize, &str) -> bool, mut sink: Sink<'a>) -> Result<Sink<'a>, String> {
+        let color = PrintColorJob::new(&self.job.color)?;
         let mut cache: Vec<((u64, usize, usize), Image16)> = Vec::new();
         let mut done = 0usize;
+        let count = self.pages.len();
         let mut items = self.items.into_iter().peekable();
-        let mut out = Vec::with_capacity(self.pages.len());
         for (index, &(w, h)) in self.pages.iter().enumerate() {
             let mut page = Image16::filled(w, h, self.background)?;
             while let Some(item) = items.next_if(|i| i.page == index) {
@@ -183,7 +219,9 @@ impl BookJob {
                     Some(at) => at,
                     None => {
                         let img = compose::render(item.job, &self.job.color).map_err(|e| format!("{}: {e}", item.name))?;
-                        if cache.len() >= RENDER_CACHE {
+                        // the newest photos stay while they fit the budget (always the newest one)
+                        let held = |c: &[((u64, usize, usize), Image16)]| c.iter().map(|(_, i)| i.rgb.len().saturating_mul(2)).sum::<usize>();
+                        while !cache.is_empty() && held(&cache).saturating_add(img.rgb.len().saturating_mul(2)) > RENDER_CACHE_BYTES {
                             cache.remove(0);
                         }
                         cache.push((item.key, img));
@@ -197,26 +235,45 @@ impl BookJob {
                 }
                 .map_err(|e| format!("{}: {e}", item.name))?;
             }
-            out.push(PageRaster { width: w as u32, height: h as u32, ppi: self.ppi, rgb: page.rgb });
+            let raster = PageRaster { width: w as u32, height: h as u32, ppi: self.ppi, rgb: page.rgb };
+            match &mut sink {
+                Sink::Rasters(out) => out.push(raster),
+                Sink::Pdf { pages, bytes } => {
+                    let points = |px: u32| f64::from(px) / f64::from(self.ppi) * 72.0;
+                    let image = color.page_image(raster.width, raster.height, &raster.rgb)?.deflated()?;
+                    drop(raster);
+                    if let ImageData::Flate { data, .. } = &image.data {
+                        *bytes = bytes.saturating_add(data.len());
+                    }
+                    if *bytes > MAX_PDF_BYTES {
+                        return Err(too_big(*bytes / (index + 1), count));
+                    }
+                    if index == 0 && count > 1 && bytes.saturating_mul(count) > MAX_PDF_BYTES {
+                        return Err(too_big(*bytes, count));
+                    }
+                    pages.push(((points(w as u32), points(h as u32)), image));
+                }
+                Sink::Jpeg { quality, files } => {
+                    let options = ExportOptions { format: ExportFormat::Jpeg, quality: *quality, ..Default::default() };
+                    files.push(encode_image(&output::page_to_srgb8(&raster)?, &options)?);
+                }
+            }
         }
         if !progress(done, "") {
             return Err(CANCELLED.to_string());
         }
-        Ok(Rendered { pages: out, job: self.job, title: self.title })
+        Ok(sink)
     }
 }
 
-impl Rendered {
-    /// The book as one PDF: a page per book page, its size the page size.
-    pub fn pdf(&self) -> Result<Vec<u8>, String> {
-        output::write(&self.pages, &self.job, &self.title)
-    }
-
-    /// One JPEG (sRGB) per page.
-    pub fn jpegs(&self, quality: u8) -> Result<Vec<Vec<u8>>, String> {
-        let options = ExportOptions { format: ExportFormat::Jpeg, quality, ..Default::default() };
-        self.pages.iter().map(|p| encode_image(&output::page_to_srgb8(p)?, &options)).collect()
-    }
+/// What a PDF over the size limit says: how many pages fit, from the size of one.
+pub(crate) fn too_big(per_page: usize, pages: usize) -> String {
+    let fit = MAX_PDF_BYTES / per_page.max(1);
+    format!(
+        "this book's PDF would be about {} MiB for {pages} pages, over the {} MiB limit: at most {fit} pages fit at this resolution; lower the resolution, use fewer pages or export JPEGs",
+        per_page.saturating_mul(pages) >> 20,
+        MAX_PDF_BYTES >> 20
+    )
 }
 
 /// A file name stem from a book name: letters, digits, spaces, `-` and `_` only.

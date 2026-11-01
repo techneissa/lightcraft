@@ -12,7 +12,7 @@ use lightcraft_pipeline::OutputSpace;
 use lightcraft_raster::Rgba8;
 
 /// Largest PDF produced, bytes.
-const MAX_PDF_BYTES: usize = 256 * 1024 * 1024;
+pub(crate) const MAX_PDF_BYTES: usize = 256 * 1024 * 1024;
 
 /// A Rec. 2020 page as 8-bit sRGB (out-of-gamut colours are clipped).
 pub fn page_to_srgb8(page: &PageRaster) -> Result<Rgba8, String> {

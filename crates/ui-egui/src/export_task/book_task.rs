@@ -51,16 +51,16 @@ pub fn start(app: &mut LightcraftApp, params: &Value, jpeg: bool) -> Result<Valu
     let (p, c) = (progress.clone(), cancel.clone());
     let (tx, rx) = channel();
     let photos = book.photos().len();
+    let pages = book.pages.len();
     let work = move || {
-        let result = job
-            .run(&mut |done, name| {
-                if let Ok(mut g) = p.lock() {
-                    *g = (done, name.to_string());
-                }
-                !c.load(Ordering::Relaxed)
-            })
-            .and_then(|rendered| {
-                let parts: Vec<Vec<u8>> = if jpeg { rendered.jpegs(JPEG_QUALITY)? } else { vec![rendered.pdf()?] };
+        let mut progress = |done: usize, name: &str| {
+            if let Ok(mut g) = p.lock() {
+                *g = (done, name.to_string());
+            }
+            !c.load(Ordering::Relaxed)
+        };
+        let result =
+            (if jpeg { job.run_jpegs(JPEG_QUALITY, &mut progress) } else { job.run_pdf(&mut progress).map(|pdf| vec![pdf]) }).and_then(|parts| {
                 let mut bytes = 0usize;
                 for (path, part) in files.iter().zip(&parts) {
                     if c.load(Ordering::Relaxed) {
@@ -73,7 +73,7 @@ pub fn start(app: &mut LightcraftApp, params: &Value, jpeg: bool) -> Result<Valu
                     }
                     bytes = bytes.saturating_add(part.len());
                 }
-                Ok(vec![json!({"path": target, "pages": rendered.pages.len(), "photos": photos, "bytes": bytes, "book": true, "jpeg": jpeg})])
+                Ok(vec![json!({"path": target, "pages": pages, "photos": photos, "bytes": bytes, "book": true, "jpeg": jpeg})])
             });
         let _ = tx.send(result.map(|files| (files, None, c.load(Ordering::Relaxed))));
     };

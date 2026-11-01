@@ -176,6 +176,9 @@ fn create(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "book.create";
     only(p, &["name", "ids", "id", "source", "preset", "cover", "settings", "empty"], ID)?;
     let empty = flag(p, "empty", false, ID)?;
+    if empty && (names_photos(p) || p.get("source").is_some()) {
+        return Err(bad(ID, "`empty` makes a book with no photos: leave out `ids` and `source`, or leave out `empty`"));
+    }
     let ids = if empty { Vec::new() } else { photos(s, p, ID)? };
     let name = match name_param(p, ID)? {
         Some(n) => {
@@ -210,9 +213,13 @@ fn open(s: &mut Session, p: &Value) -> Result<Value> {
     const ID: &str = "book.open";
     only(p, &["book"], ID)?;
     let id = s.books.find(book_id(p, ID)?).map_err(|e| bad(ID, e))?.id;
+    // the book on show is saved when the file can take it; when it can't (books.json was left untouched
+    // when the library opened) switching books still works, in memory
     let before = s.books.clone();
     s.books.current = Some(id);
-    s.save_books(before)?;
+    if s.save_books(before).is_err() {
+        s.books.current = Some(id);
+    }
     state(s, Some(id), ID)
 }
 
@@ -245,7 +252,8 @@ fn duplicate(s: &mut Session, p: &Value) -> Result<Value> {
     only(p, &["book"], ID)?;
     let from = s.books.find(book_id(p, ID)?).map_err(|e| bad(ID, e))?.clone();
     let mut copy = from.clone();
-    copy.name = free_name(s, &format!("{} Copy", from.name.chars().take(crate::book::MAX_NAME.saturating_sub(7)).collect::<String>()));
+    // room for " Copy" and a number of two digits (at most 50 books) inside the name limit
+    copy.name = free_name(s, &format!("{} Copy", from.name.chars().take(crate::book::MAX_NAME.saturating_sub(8)).collect::<String>()));
     let before = s.books.clone();
     let new = s.books.add(copy).map_err(|e| bad(ID, e))?;
     let step = book_step(&before, new);
@@ -434,13 +442,19 @@ fn set_cell_crop(s: &mut Session, p: &Value) -> Result<Value> {
 
 // ---- export ----------------------------------------------------------------------------------
 
-/// Renders the book with a row in the activity stack that cancels it.
-fn render_book(s: &mut Session, book: &Book, label: &str, id: &str) -> Result<render::Rendered> {
+/// Sets the export up with a row in the activity stack that cancels it, and runs `make` on the job.
+fn render_book<T>(
+    s: &mut Session,
+    book: &Book,
+    label: &str,
+    id: &str,
+    make: impl FnOnce(render::BookJob, &mut dyn FnMut(usize, &str) -> bool) -> std::result::Result<T, String>,
+) -> Result<T> {
     let job = render::prepare(s, book).map_err(|e| bad(id, e))?;
     let total = job.steps() as u64;
     let row = s.activity.start("export", label, Cancel::Yes);
     row.progress(0, total);
-    job.run(&mut |done, name| {
+    make(job, &mut |done, name| {
         row.progress(done as u64, total);
         row.detail(name);
         !row.is_cancelled()
@@ -454,11 +468,10 @@ fn export_pdf(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").map(str::trim).filter(|x| !x.is_empty()).ok_or_else(|| bad(ID, "missing path"))?;
     s.check_write_target(path).map_err(|e| bad(ID, e))?;
     let book = s.books.find(book_id(p, ID)?).map_err(|e| bad(ID, e))?.clone();
-    let rendered = render_book(s, &book, "Exporting book to PDF", ID)?;
-    let bytes = rendered.pdf().map_err(|e| bad(ID, e))?;
+    let bytes = render_book(s, &book, "Exporting book to PDF", ID, |job, progress| job.run_pdf(progress))?;
     s.check_write_target(path).map_err(|e| bad(ID, e))?;
     crate::export::write_file(path, &bytes).map_err(|e| bad(ID, e))?;
-    Ok(json!({"path": path, "pages": rendered.pages.len(), "photos": book.photos().len(), "bytes": bytes.len()}))
+    Ok(json!({"path": path, "pages": book.pages.len(), "photos": book.photos().len(), "bytes": bytes.len()}))
 }
 
 fn export_jpeg(s: &mut Session, p: &Value) -> Result<Value> {
@@ -474,8 +487,7 @@ fn export_jpeg(s: &mut Session, p: &Value) -> Result<Value> {
     for t in &targets {
         s.check_write_target(t).map_err(|e| bad(ID, e))?;
     }
-    let rendered = render_book(s, &book, "Exporting book to JPEG", ID)?;
-    let jpegs = rendered.jpegs(quality).map_err(|e| bad(ID, e))?;
+    let jpegs = render_book(s, &book, "Exporting book to JPEG", ID, |job, progress| job.run_jpegs(quality, progress))?;
     let mut bytes = 0usize;
     for (t, j) in targets.iter().zip(&jpegs) {
         s.check_write_target(t).map_err(|e| bad(ID, e))?;

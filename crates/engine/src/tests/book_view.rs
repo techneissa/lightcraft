@@ -328,7 +328,7 @@ fn crop_page(s: &mut Session, photo: u64, ppi: f32, crop: Option<Crop>) -> crate
     book.pages = vec![Page::with(Template::One, &[photo])];
     book.pages[0].crops = vec![crop];
     book.validate().unwrap();
-    render::prepare(s, &book).unwrap().run(&mut |_, _| true).unwrap().pages.remove(0)
+    render::prepare(s, &book).unwrap().run_rasters(&mut |_, _| true).unwrap().remove(0)
 }
 
 /// Mean absolute difference of two pages' samples, `a` being twice the size of `b`, as a fraction of full scale.
@@ -363,4 +363,173 @@ fn a_crop_shows_the_same_part_of_the_photo_at_any_resolution() {
     assert!(same < 0.03, "the crop differs between 72 and 144 ppi: {same}");
     assert!(cropped_vs_plain > 3.0 * resolution_only.max(0.002), "the crop must show: {cropped_vs_plain} vs {resolution_only}");
     assert!(cropped_vs_plain > same * 2.0, "{cropped_vs_plain} vs {same}");
+}
+
+/// With Zoom to Fill Frame off (the default) a cropped photo still fills its whole slot, in the
+/// export as on screen: the crop's window is cut from the photo for the slot, not for a box the
+/// whole photo was fitted into first.
+#[test]
+fn a_crop_fills_its_slot_when_zoom_to_fill_is_off() {
+    let mut book = Book { name: "F".into(), ..Default::default() };
+    assert!(!book.settings.fill, "the default");
+    book.pages = vec![Page::with(Template::Two, &[1, 2])];
+    book.pages[0].crops = vec![Some(Crop { zoom: 2.0, x: 0.3, y: 0.6 }), None];
+    book.validate().unwrap();
+    let slots = crate::book::geometry::cells_for(Template::Two, &book.settings).unwrap();
+    assert!(slots[0].h > slots[0].w, "a tall, non-square frame");
+    let (settings, _) = render::print_settings(&book, &|_| Some(1.5)).unwrap();
+    assert_eq!(settings.layout.cells[0].rect, slots[0], "the cropped cell is the whole slot");
+    assert_ne!(settings.layout.cells[1].rect, slots[1], "an uncropped cell of the same page is still fitted");
+}
+
+#[test]
+fn a_crop_with_zoom_to_fill_off_shows_the_same_part_at_any_resolution_and_reaches_the_slot_edge() {
+    let mut s = Session::with_demo();
+    let photo = ids(&s, 1)[0];
+    let crop = Crop { zoom: 2.0, x: 0.3, y: 0.6 };
+    let page = |s: &mut Session, ppi: f32, crop: Option<Crop>| {
+        let mut book = Book { name: "C".into(), ..Default::default() };
+        book.settings.ppi = ppi;
+        book.pages = vec![Page::with(Template::Two, &[photo])];
+        book.pages[0].crops = vec![crop, None];
+        book.validate().unwrap();
+        let slot = crate::book::geometry::cells_for(Template::Two, &book.settings).unwrap()[0];
+        (render::prepare(s, &book).unwrap().run_rasters(&mut |_, _| true).unwrap().remove(0), slot)
+    };
+    let ((low, slot), (high, _)) = (page(&mut s, 72.0, Some(crop)), page(&mut s, 144.0, Some(crop)));
+    let (plain, _) = page(&mut s, 72.0, None);
+    let same = half_size_difference(&high, &low);
+    assert!(same < 0.03, "the crop differs between 72 and 144 ppi: {same}");
+    assert!(half_size_difference(&high, &plain) > same * 2.0, "the crop must show");
+    // the photo reaches the corner of the slot (it fills it), where a fitted photo leaves paper
+    let white = crate::print::compose::rec2020_from_srgb8([255; 3]);
+    let px = |x: f64, y: f64| {
+        let (px, py) = ((x * 72.0) as usize, (y * 72.0) as usize);
+        let at = (py * low.width as usize + px) * 3;
+        [low.rgb[at], low.rgb[at + 1], low.rgb[at + 2]]
+    };
+    assert_ne!(px(slot.x + 0.04, slot.y + 0.04), white);
+    assert_ne!(px(slot.x + slot.w - 0.04, slot.y + slot.h - 0.04), white);
+}
+
+#[test]
+fn an_empty_book_made_with_photos_is_an_error() {
+    let mut s = Session::with_demo();
+    let a = ids(&s, 2);
+    let e = fails(&mut s, "book.create", json!({"empty": true, "ids": a}));
+    assert!(e.contains("empty"), "{e}");
+    fails(&mut s, "book.create", json!({"empty": true, "source": "view"}));
+    run(&mut s, "book.create", json!({"empty": true}));
+}
+
+#[test]
+fn a_copy_of_a_book_with_a_long_name_still_has_a_name_the_file_accepts() {
+    let files = MemStore::new();
+    let mut s = open(&files);
+    let a = ids(&s, 2);
+    let long = "x".repeat(crate::book::MAX_NAME);
+    run(&mut s, "book.create", json!({"name": long, "ids": a}));
+    let copy = run(&mut s, "book.duplicate", json!({"book": 1}));
+    let copy2 = run(&mut s, "book.duplicate", json!({"book": 1}));
+    for c in [&copy, &copy2] {
+        let name = c["name"].as_str().unwrap();
+        assert!(name.chars().count() <= crate::book::MAX_NAME, "{name}");
+        assert!(name.contains("Copy"));
+    }
+    assert_ne!(copy["name"], copy2["name"]);
+    drop(s);
+    let mut again = open(&files);
+    assert_eq!(run(&mut again, "book.list", json!({}))["books"].as_array().unwrap().len(), 3, "the next launch reads all three");
+    assert!(again.take_library_warnings().is_empty());
+    // `Books::add` itself refuses a name the file would not read back
+    let mut books = crate::book::Books::default();
+    let bad = Book { name: "y".repeat(crate::book::MAX_NAME + 1), ..Default::default() };
+    assert!(books.add(bad).is_err());
+}
+
+#[test]
+fn a_save_never_makes_a_file_the_reader_refuses() {
+    use crate::book::store::MAX_FILE;
+    // the largest library the limits allow, every cell cropped, still fits what the reader takes
+    let mut books = crate::book::Books::default();
+    for b in 0..crate::book::MAX_BOOKS {
+        let mut book = Book { name: format!("Book {b}"), ..Default::default() };
+        book.pages = (0..MAX_PAGES)
+            .map(|i| {
+                let mut p = Page::with(Template::Grid4, &[1, 2, 3, 4].map(|k| (i * 4 + k) as u64));
+                p.crops = vec![Some(Crop { zoom: 1.2345678901234567, x: 0.123456789012345, y: 0.987654321098765 }); 4];
+                p
+            })
+            .collect();
+        book.validate().unwrap();
+        books.add(book).unwrap();
+    }
+    let file = crate::book::store::BooksFile { version: 2, library: books };
+    let bytes = serde_json::to_vec_pretty(&file).unwrap();
+    assert!(bytes.len() < MAX_FILE, "{} bytes", bytes.len());
+    // and a save over the limit is refused with a message, the books staying as they were
+    let mut s = Session::with_demo();
+    let a = ids(&s, 2);
+    run(&mut s, "book.create", json!({"name": "A", "ids": a}));
+    let before = s.books.clone();
+    s.books.books[0].name = "Renamed".into();
+    let e = s.save_books_within(before.clone(), 64).unwrap_err().to_string();
+    assert!(e.contains("too large"), "{e}");
+    assert_eq!(s.books, before);
+}
+
+#[test]
+fn closing_a_library_forgets_the_book_steps() {
+    let files = MemStore::new();
+    let mut s = open(&files);
+    six(&mut s);
+    run(&mut s, "book.rename", json!({"name": "Renamed"}));
+    assert!(s.undo.iter().any(|e| e.book.is_some()));
+    s.close_library().unwrap();
+    assert!(s.undo.iter().chain(&s.redo).all(|e| e.book.is_none()));
+}
+
+#[test]
+fn switching_books_needs_no_save() {
+    let files = MemStore::new();
+    files.set("books.json", serde_json::to_vec(&json!({"version": 9})).unwrap());
+    let mut s = open(&files);
+    // the file is blocked: nothing can be saved, but a book made in memory can still be switched to
+    s.books.add(Book { name: "A".into(), ..Default::default() }).unwrap();
+    s.books.add(Book { name: "B".into(), ..Default::default() }).unwrap();
+    let r = run(&mut s, "book.open", json!({"book": 1}));
+    assert_eq!(r["id"], 1);
+    assert_eq!(s.books.current, Some(1));
+}
+
+#[test]
+fn a_pdf_over_the_limit_says_how_many_pages_fit() {
+    let e = render::too_big(10 << 20, 50);
+    assert!(e.contains("at most 25 pages fit"), "{e}");
+    assert!(e.contains("500 MiB") && e.contains("256 MiB"), "{e}");
+}
+
+/// The PDF is made a page at a time and still has every page, at the page size.
+#[test]
+fn the_pdf_streams_its_pages_and_keeps_them_all() {
+    let mut s = Session::with_demo();
+    let photos = ids(&s, 6);
+    let mut book = Book { name: "P".into(), ..Default::default() };
+    book.settings.ppi = 72.0;
+    book.pages = (0..6).map(|i| Page::with(Template::One, &photos[i..i + 1])).collect();
+    book.validate().unwrap();
+    let mut seen = Vec::new();
+    let pdf = render::prepare(&mut s, &book)
+        .unwrap()
+        .run_pdf(&mut |done, _| {
+            seen.push(done);
+            true
+        })
+        .unwrap();
+    let text = String::from_utf8_lossy(&pdf);
+    assert_eq!(text.matches("/Type /Page ").count(), 6);
+    assert!(seen.len() >= 6);
+    let jpegs = render::prepare(&mut s, &book).unwrap().run_jpegs(80, &mut |_, _| true).unwrap();
+    assert_eq!(jpegs.len(), 6);
+    assert!(jpegs.iter().all(|j| j.starts_with(&[0xFF, 0xD8])));
 }

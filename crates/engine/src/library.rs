@@ -862,6 +862,10 @@ impl Session {
             lib.retry_at = None;
             lib.last_error = None;
         }
+        // the Book view's undo steps write books.json: after the library is closed they must not look
+        // like they work
+        self.undo.retain(|e| e.book.is_none());
+        self.redo.retain(|e| e.book.is_none());
         let result = match (persisted, snapshot) {
             (_, Ok(())) => Ok(()),
             // neither the log nor the snapshot took the queued ops

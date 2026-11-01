@@ -135,6 +135,15 @@ pub(crate) fn flush(app: &mut LightcraftApp, ctx: &egui::Context, bu: &mut BookU
     if !holds {
         return;
     }
+    // a photo at the frame's size and centred is the book's own setting, not a crop: a frame that shows
+    // the whole photo stays so (zoomed out again, or nothing moved)
+    if p.crop.zoom <= 1.0 && (p.crop.x - 0.5).abs() < 1e-3 && (p.crop.y - 0.5).abs() < 1e-3 {
+        let stored = app.session.books.find(Some(p.book)).ok().and_then(|b| b.pages.get(p.page)).and_then(|pg| pg.crop(p.cell)).is_some();
+        if stored && let Err(e) = app.run("book.setCellCrop", json!({"book": p.book, "page": p.page, "cell": p.cell, "reset": true})) {
+            app.toast(ctx, e);
+        }
+        return;
+    }
     if let Err(e) =
         app.run("book.setCellCrop", json!({"book": p.book, "page": p.page, "cell": p.cell, "zoom": p.crop.zoom, "x": p.crop.x, "y": p.crop.y}))
     {

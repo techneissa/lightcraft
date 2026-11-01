@@ -69,6 +69,8 @@ impl Books {
         if self.books.len() >= MAX_BOOKS {
             return Err(format!("at most {MAX_BOOKS} books; delete one first"));
         }
+        // what is added is what the file reads back
+        book.validate()?;
         self.next_id = self.next_id.max(self.books.iter().map(|b| b.id).max().unwrap_or(0)).saturating_add(1);
         book.id = self.next_id;
         self.current = Some(book.id);

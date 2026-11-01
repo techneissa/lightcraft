@@ -353,3 +353,37 @@ fn a_book_of_two_hundred_pages_draws_inside_the_frame_budget() {
     assert!(!has(&h, "book:thumb:0") && !has(&h, "book:thumb:199"), "only the pages on screen are drawn");
     assert!(mean < 16.0, "mean frame {mean} ms");
 }
+
+/// With Zoom to Fill Frame off a frame shows the whole photo; scrolling out at that size stores no
+/// crop (it would turn the frame into a filled one), and zooming in and out again leaves none.
+#[test]
+fn zooming_out_at_the_frames_size_stores_no_crop() {
+    let mut h = demo();
+    open_book(&mut h, 4, "two");
+    assert!(!book(&h).settings.fill);
+    click(&mut h, "book:thumb:1");
+    let depth = h.app.session.undo.len();
+    let r = h.request("ui.hoverWidget", json!({"id": "book:cell:1:0"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("ui.zoom", json!({"factor": 0.7}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(T);
+    for _ in 0..20 {
+        std::thread::sleep(Duration::from_millis(50));
+        h.step();
+    }
+    assert_eq!(book(&h).pages[1].crop(0), None, "scrolling out stored a crop");
+    assert_eq!(h.app.session.undo.len(), depth);
+    // in, then back out to the same size, before it is saved: nothing is saved
+    for factor in [1.5, 1.0 / 1.5] {
+        let r = h.request("ui.zoom", json!({"factor": factor}), T);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    h.settle(T);
+    for _ in 0..20 {
+        std::thread::sleep(Duration::from_millis(50));
+        h.step();
+    }
+    assert_eq!(book(&h).pages[1].crop(0), None);
+    assert_eq!(h.app.session.undo.len(), depth);
+}
