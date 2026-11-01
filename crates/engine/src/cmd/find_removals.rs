@@ -81,7 +81,7 @@ fn add_spots(s: &mut Session, c: &str, entries: &[Entry]) -> crate::Result<(usiz
 fn find(s: &mut Session, c: &str, job: Job, p: &Value) -> crate::Result<Value> {
     let wait = bool_or(p, "wait", false);
     let add = bool_or(p, "add", false);
-    if add && !(wait || !s.segmenter.background) {
+    if add && !wait && s.segmenter.background {
         return Err(bad(c, "`add` needs `wait: true` here (the app finds in the background); remove with spot.removeCandidates once found"));
     }
     let started = s.start_find(c, job, wait)?;

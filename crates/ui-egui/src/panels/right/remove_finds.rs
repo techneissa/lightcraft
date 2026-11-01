@@ -7,7 +7,7 @@ use lightcraft_pipeline::find::Kind;
 /// Shown in the toast once per finished search.
 fn toast_new_outcome(app: &mut LightcraftApp, ui: &egui::Ui) {
     let Some(last) = app.session.finds.view(app.session.active()).last else { return };
-    let key = egui::Id::new("find-removals-seen");
+    let key = egui::Id::unique("find-removals-seen");
     let seen = ui.ctx().data_mut(|d| d.get_temp::<u64>(key));
     if seen != Some(last.seq) {
         ui.ctx().data_mut(|d| d.insert_temp(key, last.seq));

@@ -331,11 +331,7 @@ pub fn thin(m: &Mask, max_iter: usize) -> Mask {
                     ];
                     let b = p.iter().filter(|v| **v).count();
                     let a = (0..8).filter(|k| !p[*k] && p[(k + 1) % 8]).count();
-                    let ok = if step == 0 {
-                        !(p[0] && p[2] && p[4]) && !(p[2] && p[4] && p[6])
-                    } else {
-                        !(p[0] && p[2] && p[6]) && !(p[0] && p[4] && p[6])
-                    };
+                    let ok = if step == 0 { !(p[2] && p[4] && (p[0] || p[6])) } else { !(p[0] && p[6] && (p[2] || p[4])) };
                     if (2..=6).contains(&b) && a == 1 && ok {
                         del.push(y * w + x);
                     }
@@ -432,7 +428,7 @@ mod tests {
 
     #[test]
     fn thinning_leaves_a_one_pixel_line() {
-        let band = Mask::from_fn(40, 12, |x, y| (4..8).contains(&y) && x >= 2 && x < 38);
+        let band = Mask::from_fn(40, 12, |x, y| (4..8).contains(&y) && (2..38).contains(&x));
         let t = thin(&band, 8);
         let ys: Vec<usize> = (0..t.h).filter(|y| t.bits[y * t.w + 20]).collect();
         assert_eq!(ys.len(), 1, "{ys:?}");
