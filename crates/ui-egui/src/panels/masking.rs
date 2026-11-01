@@ -260,7 +260,7 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             paint(ui.painter(), Rect::from_min_size(r.min + vec2(8.0, 7.0), vec2(16.0, 16.0)), icon, t.text_label);
             // a long name is cut short (with …) before the eye, the full name on hover
             let color = if m.visible { t.text } else { t.text_disabled };
-            let g = one_line(ui.painter(), &m.name, t.font(13.0), color, r.width() - 32.0 - 32.0);
+            let g = one_line(ui.painter(), &m.name, t.font(13.0), color, r.width() - 32.0 - if sel { 56.0 } else { 32.0 });
             let elided = g.elided;
             let at = pos2(r.left() + 32.0, r.center().y - g.size().y / 2.0);
             register(ui, format!("maskName:{}", m.id), Rect::from_min_size(at, g.size()));
@@ -282,6 +282,10 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 if eye.clicked() {
                     let _ = app.run("mask.visible", json!({"id": m.id}));
                 }
+            }
+            if sel {
+                // Invert of the whole mask, beside the eye
+                super::mask_parts::mask_invert_button(app, ui, r, m.id, m.invert);
             }
             if resp.clicked() {
                 let _ = app.run("mask.select", json!({"id": m.id}));
@@ -307,12 +311,6 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     divider(ui);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 8 }).show(ui, |ui| {
         super::mask_parts::part_rows(app, ui, &m);
-        ui.add_space(6.0);
-        ui.horizontal(|ui| {
-            if text_button(ui, "maskInvert", crate::i18n::tr("Invert"), m.invert).clicked() {
-                let _ = app.run("mask.invert", json!({}));
-            }
-        });
     });
     if super::mask_parts::brush_bar_shown(app, &m) {
         divider(ui);

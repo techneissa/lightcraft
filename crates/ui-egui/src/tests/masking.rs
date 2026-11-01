@@ -1156,6 +1156,9 @@ fn luminance_range_drag_keeps_the_grabbed_handle() {
 #[test]
 fn luminance_range_controls_and_map() {
     let mut h = detail("panel.masking");
+    // (the panel has the part buttons now: a taller window keeps the Show Luminance Map check on screen)
+    let r = h.request("ui.resize", json!({"width": 1200, "height": 1000}), T);
+    assert_eq!(r["ok"], true, "{r}");
     exec(&mut h, "mask.add", json!({"kind": "luminanceRange", "lo": 0.6, "hi": 1.0}));
     h.settle(SETTLE);
     let lum = |h: &Headless| match &develop(h).masks[0].components[0].shape {

@@ -215,8 +215,22 @@ fn add_part(app: &mut LightcraftApp, ctx: &egui::Context, kind: &str, op: MaskOp
     }
 }
 
-/// Pick part `k` of mask `mask`: it is selected, and a brush part gets the brush, on Add.
-fn pick_part(app: &mut LightcraftApp, mask: u32, k: usize, brush: bool) {
+/// The tool a part brings back when it is picked: a brush part the Brush, a gradient its handles on the photo (the
+/// default tool drags them), a colour range the picker, an Object selection its clicks; the others their own
+/// controls in the panel.
+fn tool_of(shape: &MaskShape) -> &'static str {
+    match shape {
+        MaskShape::Brush { .. } => "brush",
+        MaskShape::Linear { .. } => "linear",
+        MaskShape::Radial { .. } => "radial",
+        MaskShape::ColorRange { .. } => "colorRange",
+        MaskShape::Object { .. } => "object",
+        _ => "",
+    }
+}
+
+/// Pick part `k` of mask `mask`: it is selected and its tool comes back (a brush part's on Add).
+fn pick_part(app: &mut LightcraftApp, mask: u32, k: usize, shape: &MaskShape) {
     let _ = app.run("mask.select", json!({"id": mask, "component": k}));
     // the mode control shows the selected part's mode
     let mode =
@@ -224,18 +238,30 @@ fn pick_part(app: &mut LightcraftApp, mask: u32, k: usize, brush: bool) {
     if let Some(mode) = mode {
         app.ui.mask_op = mode;
     }
-    if brush {
-        let _ = app.run("tool.brush", json!({"component": k}));
-    } else if app.ui.tool == "brush" {
-        app.ui.tool.clear();
+    match tool_of(shape) {
+        "brush" => {
+            let _ = app.run("tool.brush", json!({"component": k}));
+        }
+        tool => {
+            app.ui.tool = tool.into();
+            app.ui.right = crate::state::RightPanel::Masking;
+            app.ui.view = crate::state::ViewMode::Detail;
+        }
     }
 }
 
-/// The parts of mask `m`, a row each: a click selects (a brush part also starts painting into it), double-click
-/// renames; the selected or hovered row has its mode, Invert and Delete buttons.
+/// Width of the mode, Invert and Delete buttons at the right of a part's row.
+const MODE_W: f32 = 36.0;
+const BUTTON_W: f32 = 22.0;
+const ROW_H: f32 = 28.0;
+
+/// The parts of mask `m`, a row each: the whole row is a button (hover highlight, the selected part lit like a selected
+/// mask), a click selects the part and brings its tool back, double-click renames. At the right of each row: the part's
+/// mode (a dropdown showing its icon), Invert and Delete.
 pub fn part_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask) {
     let t = Tokens::get(ui.ctx());
     let selected = app.session.active_part();
+    ui.spacing_mut().item_spacing.y = 2.0;
     for (i, c) in m.components.iter().enumerate() {
         let (kind, icon) = kind_label(&c.shape);
         let label = c.name.clone().unwrap_or_else(|| match &c.shape {
@@ -245,47 +271,74 @@ pub fn part_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask) {
         if rename_row(app, ui, m.id, i, c) {
             continue;
         }
-        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::click());
+        let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
         announce_selected(&resp, label.clone(), selected == Some(i));
         register(ui, format!("component:{i}"), r);
         let sel = selected == Some(i);
-        let hot = sel || ui.rect_contains_pointer(r);
+        let hot = sel || resp.hovered() || ui.rect_contains_pointer(r);
+        if resp.hovered() {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+        }
         ui.painter().rect_filled(
             r,
             4.0,
             if sel {
                 t.tool_active
-            } else if resp.hovered() {
+            } else if hot {
                 t.hover.gamma_multiply(0.7)
             } else {
-                t.chrome
+                t.inset
             },
         );
-        paint(ui.painter(), Rect::from_min_size(r.min + vec2(6.0, 5.0), vec2(16.0, 16.0)), icon, t.text_label);
-        // the buttons' room: the three modes (not on the base), Invert and Delete
-        let room = if hot { if i == 0 { 2.0 * 22.0 } else { 5.0 * 22.0 } } else { 0.0 };
-        let mode = match part_mode(m, i) {
-            MaskOp::Add => "",
-            MaskOp::Subtract => "− ",
-            MaskOp::Intersect => "∩ ",
-        };
-        let text = format!("{mode}{label}{}", if c.invert { crate::i18n::tr(" (inverted)") } else { "" });
-        let g = one_line(ui.painter(), &text, t.font(13.0), t.text, (r.width() - 28.0 - room - 4.0).max(0.0));
+        paint(ui.painter(), Rect::from_min_size(r.min + vec2(6.0, (ROW_H - 16.0) / 2.0), vec2(16.0, 16.0)), icon, t.text_label);
+        let room = BUTTON_W * 2.0 + if i > 0 { MODE_W } else { 0.0 } + 8.0;
+        let g = one_line(ui.painter(), &label, t.font(13.0), t.text, (r.width() - 28.0 - room).max(0.0));
         let elided = g.elided;
         ui.painter().galley(egui::pos2(r.left() + 28.0, r.center().y - g.size().y / 2.0), g, t.text);
-        let resp = if elided { resp.on_hover_text(&text) } else { resp };
-        let mut used = false;
-        if hot {
-            used = part_buttons(app, ui, m, i, c, r);
-        }
+        let resp = if elided { resp.on_hover_text(&label) } else { resp };
+        let used = part_buttons(app, ui, m, i, c, r, hot);
         if resp.clicked() && !used {
-            pick_part(app, m.id, i, matches!(c.shape, MaskShape::Brush { .. }));
+            pick_part(app, m.id, i, &c.shape);
         }
         if resp.double_clicked() {
             app.ui.renaming_component = Some((m.id, i, label.clone()));
         }
         crate::widgets::context_menu(&resp, |ui| part_menu(app, ui, m.id, i, &label, m.components.len()));
         range_controls(app, ui, i, &c.shape);
+    }
+}
+
+/// The Invert button of the selected mask's row `r` in the Masks list, left of the eye (`button:maskInvert`).
+pub fn mask_invert_button(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect, mask: u32, inverted: bool) {
+    let t = Tokens::get(ui.ctx());
+    let br = Rect::from_center_size(egui::pos2(r.right() - 40.0, r.center().y), vec2(22.0, 22.0));
+    register(ui, "button:maskInvert", br);
+    let resp = ui.interact(br, egui::Id::unique(("maskInvert", mask)), Sense::click());
+    announce_selected(&resp, crate::i18n::tr("Invert mask"), inverted);
+    if inverted {
+        ui.painter().rect(br, 3.0, t.pressed, egui::Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
+    }
+    paint(ui.painter(), br.shrink(3.0), Icon::Invert, if resp.hovered() || inverted { t.text } else { t.text_dim });
+    if resp.on_hover_text(crate::i18n::tr("Invert mask")).clicked() {
+        let _ = app.run("mask.invert", json!({"id": mask}));
+    }
+}
+
+/// The glyph of a mode: + Add, − Subtract, ∩ Intersect (drawn, the font has no ∩).
+pub fn paint_mode(p: &egui::Painter, rect: Rect, op: MaskOp, col: egui::Color32) {
+    match op {
+        MaskOp::Add => paint(p, rect.shrink(4.0), Icon::Plus, col),
+        MaskOp::Subtract => paint(p, rect.shrink(4.0), Icon::Minus, col),
+        MaskOp::Intersect => {
+            let (c, r) = (rect.center() + vec2(0.0, 1.0), 4.0);
+            let mut pts = vec![c + vec2(-r, r)];
+            pts.extend((0..=12).map(|i| {
+                let a = std::f32::consts::PI * (1.0 + i as f32 / 12.0);
+                c + vec2(r * a.cos(), r * a.sin())
+            }));
+            pts.push(c + vec2(r, r));
+            p.add(egui::Shape::line(pts, egui::Stroke::new(1.5, col)));
+        }
     }
 }
 
@@ -310,59 +363,68 @@ fn rename_row(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: u32, i: usize, c
     true
 }
 
-/// The buttons at the right of part `i`'s row `r`. Whether one was pressed (the row must not also be picked).
-fn part_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask, i: usize, c: &MaskComponent, r: Rect) -> bool {
+/// The buttons at the right of part `i`'s row `r`: the mode dropdown (not on the base part, which is always Add),
+/// Invert and Delete; lit on the selected or hovered row (`hot`), dim on the others. Whether one was pressed (the
+/// row must not also be picked).
+fn part_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask, i: usize, c: &MaskComponent, r: Rect, hot: bool) -> bool {
     let t = Tokens::get(ui.ctx());
     let mut used = false;
     let mut x = r.right() - 4.0;
-    let mut button = |ui: &mut egui::Ui, id: String, name: &str, active: bool, draw: &dyn Fn(&egui::Painter, Rect, egui::Color32)| -> bool {
-        let br = Rect::from_min_size(egui::pos2(x - 20.0, r.center().y - 10.0), vec2(20.0, 20.0));
-        x -= 22.0;
-        register(ui, id.clone(), br);
-        let resp = ui.interact(br, egui::Id::unique((id, m.id, i)), Sense::click());
-        announce_selected(&resp, crate::i18n::tr(name), active);
-        if active {
-            ui.painter().rect(br, 3.0, t.pressed, egui::Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
-        } else if resp.hovered() {
-            ui.painter().rect_filled(br, 3.0, t.hover);
-        }
-        draw(ui.painter(), br, if resp.hovered() || active { t.text } else { t.text_dim });
-        resp.clicked()
-    };
-    if button(ui, format!("partDelete:{i}"), "Delete part", false, &|p, br, col| paint(p, br.shrink(3.0), Icon::Trash, col)) {
+    let dim = if hot { t.text } else { t.text_dim };
+    let mut button =
+        |ui: &mut egui::Ui, id: String, name: &str, w: f32, active: bool, draw: &dyn Fn(&egui::Painter, Rect, egui::Color32)| -> egui::Response {
+            let br = Rect::from_min_size(egui::pos2(x - w, r.center().y - 11.0), vec2(w, 22.0));
+            x -= w + 2.0;
+            register(ui, id.clone(), br);
+            let resp = ui.interact(br, egui::Id::unique((id.as_str(), m.id)), Sense::click());
+            announce_selected(&resp, crate::i18n::tr(name), active);
+            if active {
+                ui.painter().rect(br, 3.0, t.pressed, egui::Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
+            } else if resp.hovered() {
+                ui.painter().rect_filled(br, 3.0, t.hover);
+            }
+            draw(ui.painter(), br, if resp.hovered() || active { t.text } else { dim });
+            resp
+        };
+    if button(ui, format!("partDelete:{i}"), "Delete part", BUTTON_W, false, &|p, br, col| paint(p, br.shrink(3.0), Icon::Trash, col)).clicked() {
         let _ = app.run("mask.component", json!({"id": m.id, "component": i, "action": "delete"}));
         used = true;
     }
-    if button(ui, format!("partInvert:{i}"), "Invert part", c.invert, &|p, br, col| paint(p, br.shrink(3.0), Icon::Invert, col)) {
+    if button(ui, format!("partInvert:{i}"), "Invert part", BUTTON_W, c.invert, &|p, br, col| paint(p, br.shrink(3.0), Icon::Invert, col)).clicked() {
         let _ = app.run("mask.component", json!({"id": m.id, "component": i, "action": "invert"}));
         used = true;
     }
     if i > 0 {
         let now = part_mode(m, i);
-        for (op, name) in [(MaskOp::Intersect, "Intersect"), (MaskOp::Subtract, "Subtract"), (MaskOp::Add, "Add")] {
-            let draw = move |p: &egui::Painter, br: Rect, col: egui::Color32| match op {
-                MaskOp::Add => paint(p, br.shrink(4.0), Icon::Plus, col),
-                MaskOp::Subtract => paint(p, br.shrink(4.0), Icon::Minus, col),
-                MaskOp::Intersect => {
-                    // ∩ drawn as a path: the font has no such glyph
-                    let (c, r) = (br.center() + vec2(0.0, 1.0), 4.0);
-                    let mut pts = vec![c + vec2(-r, r)];
-                    pts.extend((0..=12).map(|i| {
-                        let a = std::f32::consts::PI * (1.0 + i as f32 / 12.0);
-                        c + vec2(r * a.cos(), r * a.sin())
-                    }));
-                    pts.push(c + vec2(r, r));
-                    p.add(egui::Shape::line(pts, egui::Stroke::new(1.5, col)));
+        let dropdown = button(ui, format!("partMode:{i}"), "Part mode", MODE_W, false, &|p, br, col| {
+            paint_mode(p, Rect::from_min_size(br.min, vec2(22.0, br.height())), now, col);
+            paint(p, Rect::from_center_size(egui::pos2(br.right() - 8.0, br.center().y), vec2(10.0, 10.0)), Icon::ChevronDown, col);
+        });
+        used |= dropdown.clicked();
+        egui::Popup::menu(&dropdown).show(|ui| {
+            for (op, name) in [(MaskOp::Add, "Add"), (MaskOp::Subtract, "Subtract"), (MaskOp::Intersect, "Intersect")] {
+                let (row, resp) = ui.allocate_exact_size(vec2(130.0, 24.0), Sense::click());
+                register(ui, format!("partMode:{i}:{}", op_name(op)), row);
+                if resp.hovered() || op == now {
+                    ui.painter().rect_filled(row, 3.0, if resp.hovered() { t.hover } else { t.pressed });
                 }
-            };
-            if button(ui, format!("partMode:{i}:{}", op_name(op)), name, now == op, &draw) {
-                used = true;
-                if op != now {
-                    let _ = app.run("mask.component", json!({"id": m.id, "component": i, "action": "op", "op": op_name(op)}));
-                    app.ui.mask_op = op;
+                paint_mode(ui.painter(), Rect::from_min_size(row.min, vec2(24.0, 24.0)), op, t.text);
+                ui.painter().text(
+                    egui::pos2(row.left() + 28.0, row.center().y),
+                    egui::Align2::LEFT_CENTER,
+                    crate::i18n::tr(name),
+                    t.font(12.5),
+                    t.text,
+                );
+                if resp.clicked() {
+                    if op != now {
+                        let _ = app.run("mask.component", json!({"id": m.id, "component": i, "action": "op", "op": op_name(op)}));
+                        app.ui.mask_op = op;
+                    }
+                    ui.close();
                 }
             }
-        }
+        });
     }
     used
 }

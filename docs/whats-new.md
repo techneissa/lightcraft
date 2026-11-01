@@ -7,10 +7,10 @@
 
 ### Masking Workflow
 - Under the selected mask, one Add · Subtract · Intersect control sets the mode of the next part, and a button for each kind of part adds it (Brush, Linear, Radial, Color, Luminance, Subject, Sky, Background, Object, Describe); the menus are gone.
-- Click a part's row to select it; a brush part starts painting into it again. The selected row has its own + − ∩, Invert and Delete buttons. Delete removes the selected part, else the mask.
+- Each part is a row you click: it selects the part and brings its tool back (the Brush painting into a brush part, a gradient's handles on the photo, the colour picker). At the right of each row: its mode (a dropdown showing +, − or ∩), Invert and Delete. Delete removes the selected part, else the mask.
 - Brush Add and Erase are named by what a stroke does to the mask, also in a Subtract part, and the brush cursor shows + or − (swapping while ⌥ is held). Esc steps back: the brush, then the part, then the photo.
 - A mask's first part is its base and always acts as Add (a first Intersect used to empty the mask); deleting it makes the next part the base.
-- The Create New Mask buttons fill the side bar's width, in more columns of wider tiles as the bar grows.
+- The Create New Mask buttons fill the side bar's width in 4 or 5 columns (2 in a very narrow bar), never one button alone on the last row.
 
 ### Fixed Slider Label Column
 - In the Edit and Masking panels the slider names are left-aligned in one column of fixed width, so opening or closing a section (Noise Reduction has long names) no longer moves any name or shortens any slider.

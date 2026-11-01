@@ -105,7 +105,7 @@ fn create_new_mask_tiles_follow_the_side_bars_width() {
         let content_right = width - 22.0;
         assert!(content_right - right < 8.0 && right <= content_right + 0.5, "{width}: tiles end at {right}, the panel at {content_right}");
         let first_row = tiles.iter().filter(|r| (r.top() - tiles[0].top()).abs() < 1.0).count();
-        assert_eq!(10 % first_row == 1, false, "{width}: a tile alone on the last row");
+        assert!(10 % first_row != 1, "{width}: a tile alone on the last row");
         columns.push(first_row);
         for (kind, label) in [("object", "Object"), ("background", "Background"), ("luminanceRange", "Luminance"), ("prompt", "Describe")] {
             let tile = widgets.iter().find(|(id, _)| id == &format!("maskNew:{kind}")).unwrap().1;

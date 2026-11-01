@@ -90,9 +90,15 @@ fn a_part_row_selects_the_part_and_its_buttons_change_it() {
     h.settle(SETTLE);
     click_row(&mut h, 1);
     assert_eq!(h.app.session.active_part(), Some(1));
-    // the selected row's buttons: the mode, Invert and Delete (the base part has no mode)
+    // the base part has no mode dropdown (it is always Add); every row has Invert and Delete
+    assert!(h.app.widgets.iter().all(|(id, _)| id != "partMode:0"), "the first part is the base: no mode");
+    assert!(h.app.widgets.iter().any(|(id, _)| id == "partInvert:0" && id != "partMode:0"));
+    // the mode dropdown shows the mode and changes it in one click
+    click(&mut h, "partMode:1");
     click(&mut h, "partMode:1:subtract");
     assert_eq!(ops(&h), [MaskOp::Add, MaskOp::Subtract]);
+    assert_eq!(h.app.ui.mask_op, MaskOp::Subtract, "the mode control follows the selected part");
+    click(&mut h, "partMode:1");
     click(&mut h, "partMode:1:intersect");
     assert_eq!(ops(&h), [MaskOp::Add, MaskOp::Intersect]);
     click(&mut h, "partInvert:1");
@@ -100,10 +106,68 @@ fn a_part_row_selects_the_part_and_its_buttons_change_it() {
     assert_eq!(h.app.session.active_part(), Some(1), "its buttons do not pick the row again, nor lose it");
     click_row(&mut h, 0);
     assert_eq!(h.app.session.active_part(), Some(0));
-    assert!(h.app.widgets.iter().all(|(id, _)| id != "partMode:0:add"), "the first part is the base: no mode buttons");
     click_row(&mut h, 1);
     click(&mut h, "partDelete:1");
     assert_eq!(mask(&h).components.len(), 1);
+    h.settle(SETTLE);
+}
+
+#[test]
+fn a_rows_mode_and_invert_change_only_that_part_in_one_undo_step() {
+    let mut h = masking();
+    exec(&mut h, "mask.add", json!({"kind": "radial"}));
+    exec(&mut h, "mask.addComponent", json!({"op": "add", "kind": "linear"}));
+    exec(&mut h, "mask.addComponent", json!({"op": "add", "kind": "radial"}));
+    h.settle(SETTLE);
+    let before = mask(&h);
+    click_row(&mut h, 1);
+    click(&mut h, "partMode:1");
+    click(&mut h, "partMode:1:subtract");
+    let after = mask(&h);
+    assert_eq!((after.components[0].clone(), after.components[2].clone()), (before.components[0].clone(), before.components[2].clone()));
+    assert_eq!(after.components[1].op, MaskOp::Subtract);
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(mask(&h), before, "one undo step takes the mode back");
+    click(&mut h, "partInvert:1");
+    let after = mask(&h);
+    assert_eq!((after.components[0].clone(), after.components[2].clone()), (before.components[0].clone(), before.components[2].clone()));
+    assert!(after.components[1].invert);
+    exec(&mut h, "edit.undo", json!({}));
+    assert_eq!(mask(&h), before, "one undo step takes the Invert back");
+    h.settle(SETTLE);
+}
+
+/// A click on a part's row brings its tool back: the Brush for a brush part, the gradient's handles for a gradient
+/// (blue, the ones a drag takes), the picker for a colour range; and selects the part.
+#[test]
+fn a_part_row_brings_its_tool_back() {
+    let services = Services { png: None, ..Default::default() };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut h = Headless::new(app, [1200.0, 1500.0], 1.0);
+    let r = h.request("ui.set", json!({"view": "detail"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    exec(&mut h, "panel.masking", json!({}));
+    exec(&mut h, "mask.add", json!({"kind": "radial"}));
+    exec(&mut h, "tool.brush", json!({"op": "add"}));
+    exec(&mut h, "mask.addComponent", json!({"op": "subtract", "kind": "linear"}));
+    exec(&mut h, "mask.addComponent", json!({"op": "add", "kind": "colorRange"}));
+    exec(&mut h, "mask.addComponent", json!({"op": "add", "kind": "sky"}));
+    let id = mask(&h).id;
+    exec(&mut h, "mask.select", json!({"id": id}));
+    h.app.ui.tool.clear();
+    h.settle(SETTLE);
+    for (part, tool) in [(0, "radial"), (1, "brush"), (2, "linear"), (3, "colorRange"), (4, "")] {
+        click_row(&mut h, part);
+        assert_eq!((h.app.session.active_part(), h.app.ui.tool.as_str()), (Some(part), tool), "row {part}");
+    }
+    // a gradient's tool is the default one: a drag on its handle moves it
+    click_row(&mut h, 0);
+    h.settle(SETTLE);
+    let before = mask(&h).components[0].shape.clone();
+    let handle = h.app.widgets.iter().find(|(id, _)| id == "maskHandle:1:0:1").map(|(_, r)| r.center()).expect("the radial's handle");
+    let r = h.request("ui.drag", json!({"x": handle.x, "y": handle.y, "toX": handle.x + 40.0, "toY": handle.y, "steps": 6}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_ne!(mask(&h).components[0].shape, before, "the handle moved the selected radial part");
     h.settle(SETTLE);
 }
 
