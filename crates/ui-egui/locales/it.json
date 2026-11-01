@@ -2569,5 +2569,8 @@
   "Unit": "Unità",
   "Top bar": "Barra superiore",
   "Tool strip": "Barra degli strumenti",
-  "Bottom bar": "Barra inferiore"
+  "Bottom bar": "Barra inferiore",
+  "Selecting with SAM 3": "Selezione con SAM 3",
+  "Rough mask. Click to install SAM 3.": "Maschera approssimativa. Fai clic per installare SAM 3.",
+  "Rough mask. Add it again to use SAM 3.": "Maschera approssimativa. Aggiungila di nuovo per usare SAM 3."
 }

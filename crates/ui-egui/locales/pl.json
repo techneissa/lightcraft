@@ -2328,5 +2328,8 @@
   "Set up name suggestions…": "Skonfiguruj propozycje imion…",
   "Top bar": "Górny pasek",
   "Tool strip": "Pasek narzędzi",
-  "Bottom bar": "Dolny pasek"
+  "Bottom bar": "Dolny pasek",
+  "Selecting with SAM 3": "Zaznaczanie za pomocą SAM 3",
+  "Rough mask. Click to install SAM 3.": "Przybliżona maska. Kliknij, aby zainstalować SAM 3.",
+  "Rough mask. Add it again to use SAM 3.": "Przybliżona maska. Dodaj ją ponownie, aby użyć SAM 3."
 }

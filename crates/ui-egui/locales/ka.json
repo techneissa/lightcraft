@@ -3666,5 +3666,8 @@
   "Top bar": "ზედა ზოლი",
   "Tool strip": "ხელსაწყოების ზოლი",
   "Bottom bar": "ქვედა ზოლი",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "G-SYNC/FreeSync-ის ციმციმის თავიდან აცილება (ამოქმედდება შემდეგი გაშვებისას)",
+  "Selecting with SAM 3": "არჩევა SAM 3-ით",
+  "Rough mask. Click to install SAM 3.": "უხეში ნიღაბი. დააწკაპუნეთ SAM 3-ის დასაყენებლად.",
+  "Rough mask. Add it again to use SAM 3.": "უხეში ნიღაბი. დაამატეთ ხელახლა SAM 3-ის გამოსაყენებლად."
 }

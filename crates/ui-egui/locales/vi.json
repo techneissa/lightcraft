@@ -2684,5 +2684,8 @@
   "Set up name suggestions…": "Thiết lập gợi ý tên…",
   "Top bar": "Thanh trên cùng",
   "Tool strip": "Thanh công cụ",
-  "Bottom bar": "Thanh dưới cùng"
+  "Bottom bar": "Thanh dưới cùng",
+  "Selecting with SAM 3": "Đang chọn bằng SAM 3",
+  "Rough mask. Click to install SAM 3.": "Mặt nạ gần đúng. Nhấp để cài SAM 3.",
+  "Rough mask. Add it again to use SAM 3.": "Mặt nạ gần đúng. Thêm lại để dùng SAM 3."
 }

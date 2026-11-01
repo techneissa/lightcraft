@@ -79,3 +79,101 @@ impl Session {
         none && !self.active().is_some_and(|id| self.media.has_matte(id, matte_kinds(c.kind)))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use lightcraft_develop::DevelopSettings;
+    use lightcraft_pipeline::masks::Mattes;
+    use lightcraft_raster::{Image, Rgb32f};
+    use serde_json::json;
+
+    use super::*;
+    use crate::media::SourceRef;
+    use lightcraft_pipeline::SourceInfo;
+
+    /// A session that has SAM 3 (a folder that looks installed) and decodes the active photo into the cache, with
+    /// `mattes` when given.
+    fn session(name: &str, mattes: Option<Mattes>) -> (Session, PhotoId, std::path::PathBuf) {
+        let mut s = Session::with_demo();
+        s.segmenter.background = true;
+        let dir = std::env::temp_dir().join(format!("lc-concepts-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("model.safetensors"), b"\x10\x00\x00\x00\x00\x00\x00\x00{}").unwrap();
+        std::fs::write(dir.join("vocab.json"), b"{}").unwrap();
+        std::fs::write(dir.join("merges.txt"), b"#version: 0.2\n").unwrap();
+        s.segmenter.dir = Some(dir.clone());
+        let id = s.active().unwrap();
+        let info = SourceInfo { mattes: mattes.map(Arc::new), ..Default::default() };
+        let mut job = s.render_job(id, 64, 64, false, true).unwrap();
+        job.source = SourceRef::File {
+            path: "synthetic.dng".into(),
+            max_edge: 64,
+            loader: Some(Arc::new(move |_, _, _| Ok((Rgb32f::new(64, 64), info.clone())))),
+            fallback: None,
+            denoise: None,
+            reduced: None,
+            options: Default::default(),
+        };
+        job.settings = Arc::new(DevelopSettings::default());
+        let r = job.run();
+        s.accept(&r);
+        (s, id, dir)
+    }
+
+    fn matte() -> Mattes {
+        let mut m = Mattes::default();
+        m.push(MatteKind::Sky, Image::from_fn(4, 4, |_, _| 255u8));
+        m
+    }
+
+    /// A photo with an embedded sky matte keeps it (no model run, no queued job); its Subject, with no matte for it,
+    /// goes to the model.
+    #[test]
+    fn an_embedded_matte_is_never_replaced_by_the_model() {
+        let (mut s, id, dir) = session("matte", Some(matte()));
+        assert!(!wanted(&s, id, &MaskShape::sky()), "the sky matte wins");
+        assert!(wanted(&s, id, &MaskShape::subject()), "no person matte: the model");
+        assert!(!s.is_rough_ai_mask(&MaskShape::sky()), "a matte is not a rough mask");
+        let r = s.execute("mask.add", &json!({"kind": "sky"})).unwrap();
+        assert!(r.get("pending").is_none() && !s.segmenter.busy(), "added at once, from the matte: {r}");
+        assert!(matches!(&s.develop_of(id).unwrap().masks[0].components[0].shape, MaskShape::Sky { seg: None, .. }));
+        let r = s.execute("mask.add", &json!({"kind": "subject"})).unwrap();
+        assert_eq!(r["pending"], true);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Without a matte a Sky stays rough until SAM 3 has run; with SAM 3 missing the part is rough and says so.
+    #[test]
+    fn a_part_the_heuristic_draws_is_rough() {
+        let (mut s, id, dir) = session("rough", None);
+        assert!(wanted(&s, id, &MaskShape::sky()));
+        assert!(s.is_rough_ai_mask(&MaskShape::sky()), "from before: no stored selection");
+        let found = lightcraft_develop::SegMask::from_logits(4, &[5.0; 16]);
+        assert!(!s.is_rough_ai_mask(&MaskShape::Sky { seg: Some(found), detail: vec![], edge: 0.0 }));
+        assert!(!s.is_rough_ai_mask(&MaskShape::Brush { strokes: vec![] }));
+        // no model: the mask is made the current way, at once
+        s.segmenter.dir = None;
+        assert!(!wanted(&s, id, &MaskShape::sky()));
+        let r = s.execute("mask.add", &json!({"kind": "sky"})).unwrap();
+        assert!(r.get("pending").is_none());
+        let shape = s.develop_of(id).unwrap().masks[0].components[0].shape.clone();
+        assert!(s.is_rough_ai_mask(&shape));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A mask saved before (`{"kind": "sky"}`, no selection) opens as a rough Sky and is saved back the same way.
+    #[test]
+    fn masks_saved_before_keep_their_look() {
+        for (json, shape) in [
+            (r#"{"kind":"sky"}"#, MaskShape::sky()),
+            (r#"{"kind":"subject"}"#, MaskShape::subject()),
+            (r#"{"kind":"background"}"#, MaskShape::background()),
+        ] {
+            let read: MaskShape = serde_json::from_str(json).unwrap();
+            assert_eq!(read, shape);
+            assert_eq!(serde_json::to_string(&read).unwrap(), json, "saved back unchanged");
+        }
+    }
+}

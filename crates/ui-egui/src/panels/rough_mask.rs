@@ -19,7 +19,9 @@ pub fn line(app: &mut LightcraftApp, ui: &mut egui::Ui, shape: &MaskShape) {
         ui.label(egui::RichText::new(crate::i18n::tr("Rough mask. Add it again to use SAM 3.")).color(t.text_dim).size(11.0));
     } else {
         let text = egui::RichText::new(crate::i18n::tr("Rough mask. Click to install SAM 3.")).color(t.text_dim).size(11.0);
-        if ui.add(egui::Button::new(text).frame(false)).on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+        let resp = ui.add(egui::Button::new(text).frame(false)).on_hover_cursor(egui::CursorIcon::PointingHand);
+        crate::widgets::register(ui, "button:maskRough", resp.rect);
+        if resp.clicked() {
             app.offer_sam_download(None);
         }
     }

@@ -2247,5 +2247,8 @@
   "Top bar": "Barra superior",
   "Tool strip": "Barra de ferramentas",
   "Bottom bar": "Barra inferior",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar cintilação de G-SYNC/FreeSync (no próximo início)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Evitar cintilação de G-SYNC/FreeSync (no próximo início)",
+  "Selecting with SAM 3": "Seleção com o SAM 3",
+  "Rough mask. Click to install SAM 3.": "Máscara aproximada. Clique para instalar o SAM 3.",
+  "Rough mask. Add it again to use SAM 3.": "Máscara aproximada. Adicione-a de novo para usar o SAM 3."
 }

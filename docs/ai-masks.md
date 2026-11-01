@@ -1,4 +1,4 @@
-# AI masks (Object and Describe)
+# AI masks (Subject, Sky, Background, Object and Describe)
 
 LightCraft selects objects with **SAM 3** (Segment Anything with Concepts, Meta 2025), run in
 pure Rust by `crates/segment` on [candle](https://github.com/huggingface/candle): on the GPU
@@ -10,6 +10,14 @@ Object and Describe offer to download it, every other feature (and every existin
 below) works, and no render, export or command ever waits for it.
 
 ## Using them
+
+**Subject, Sky and Background** use the model when it is installed (or a remote worker is configured): Subject is what SAM 3
+finds for `person | animal | vehicle | subject, main object, foreground` (the first alternative it finds with confidence:
+people first), Sky is `sky`, Background is everything but the subject. The mask is added when SAM 3 has found it (a row in
+the activity stack meanwhile, as for Describe), and nothing found is a message, never a rough mask. A photo with an embedded
+matte for the kind (a DNG's sky or person matte) keeps the matte and never waits for the model. Without SAM 3 the mask is
+drawn by the classical heuristic and the part says "Rough mask" and how to install SAM 3; masks saved before keep their
+look. Edge works on them like on Object and Describe.
 
 In the Masking panel (M):
 

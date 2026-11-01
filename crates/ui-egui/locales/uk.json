@@ -2399,5 +2399,8 @@
   "Top bar": "Верхня панель",
   "Tool strip": "Панель інструментів",
   "Bottom bar": "Нижня панель",
-  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)"
+  "Prevent G-SYNC/FreeSync flicker (applies at next launch)": "Запобігати мерехтінню G-SYNC/FreeSync (після перезапуску)",
+  "Selecting with SAM 3": "Виділення за допомогою SAM 3",
+  "Rough mask. Click to install SAM 3.": "Наближена маска. Натисніть, щоб установити SAM 3.",
+  "Rough mask. Add it again to use SAM 3.": "Наближена маска. Додайте її знову, щоб використати SAM 3."
 }

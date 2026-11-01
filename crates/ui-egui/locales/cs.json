@@ -2451,5 +2451,8 @@
   "Set up name suggestions…": "Nastavit návrhy jmen…",
   "Top bar": "Horní lišta",
   "Tool strip": "Pruh nástrojů",
-  "Bottom bar": "Dolní lišta"
+  "Bottom bar": "Dolní lišta",
+  "Selecting with SAM 3": "Výběr pomocí SAM 3",
+  "Rough mask. Click to install SAM 3.": "Hrubá maska. Kliknutím nainstalujete SAM 3.",
+  "Rough mask. Add it again to use SAM 3.": "Hrubá maska. Přidejte ji znovu, použije se SAM 3."
 }

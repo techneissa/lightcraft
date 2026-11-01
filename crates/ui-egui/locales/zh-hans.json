@@ -2402,5 +2402,8 @@
   "Set up name suggestions…": "设置姓名建议…",
   "Top bar": "顶部栏",
   "Tool strip": "工具栏",
-  "Bottom bar": "底部栏"
+  "Bottom bar": "底部栏",
+  "Selecting with SAM 3": "使用 SAM 3 选择",
+  "Rough mask. Click to install SAM 3.": "粗略蒙版。点击安装 SAM 3。",
+  "Rough mask. Add it again to use SAM 3.": "粗略蒙版。重新添加即可使用 SAM 3。"
 }

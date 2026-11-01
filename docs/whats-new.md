@@ -1,5 +1,12 @@
 # What's new in LightCraft
 
+## 2026-11-02
+
+### Real Subject, Sky and Background Masks
+- With SAM 3 installed, Subject, Sky and Background are real selections: Subject finds the people (else an animal, a vehicle or the main object), Sky the sky, Background everything else. The mask appears when SAM 3 has found it, with a "Selecting with SAM 3" row in the activity stack that you can cancel; the selection is stored with the mask, so previews, exports and reopening need no model, and Edge works on them.
+- A photo with an embedded sky or person matte (a DNG from an iPhone) keeps using it.
+- Without SAM 3 the mask is the same rough one as before, and the part says "Rough mask. Click to install SAM 3." Masks saved earlier look the same.
+
 ## 2026-11-01
 
 ### Plainer Camera Card in Info

@@ -87,6 +87,7 @@ Known failures (on this Mac, and on Fork CI only): [fork/known-failures.md](fork
 - [Lens database folder](fork/lens-database-folder.md): Settings ▸ Import ▸ Lens profiles chooses the lensfun folder and says what it found. Branch `claude/workflow-qol`.
 - [Masking workflow](fork/masking-workflow.md): Add · Subtract · Intersect and a button per kind of part, pick a part to paint into it, Add / Erase named by their effect, Esc steps back, tiles fill the side bar. Branch `fix/26-masking-rework`.
 - [Shared SAM3 model folder](fork/shared-sam3.md): AI masks look for the SAM 3 model in the folder shared with PhotoCraft (`ArtCraft/models/sam3`) first and download there. Branch `feat/16-shared-sam3`.
+- [Real Subject, Sky and Background masks](fork/real-subject-sky-masks.md): Subject, Sky and Background are real SAM 3 selections stored with the mask (official PR #3109, trimmed), a rough mask says so. Branch `feat/37-real-subject-sky-masks`.
 
 Every feature also has an entry in `docs/whats-new.md` and a row in `docs/parity-checklist.md`; clashes there are
 fixed by the update script (both sides kept).
