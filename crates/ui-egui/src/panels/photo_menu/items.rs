@@ -47,6 +47,7 @@ pub const BUILTINS: &[Builtin] = &[
     sub("rating", "Set Rating"),
     sub("flag", "Set Flag"),
     sub("colorLabel", "Set Color Label"),
+    only("addKeywords", "Add Keyword Shortcut", "a keyword shortcut is set"),
     sub("addToAlbum", "Add to Album"),
     only("removeFromAlbum", "Remove from Album", "in an album"),
     only("setAlbumCover", "Set as Album Cover", "in an album"),
@@ -108,6 +109,7 @@ pub fn shown(app: &LightcraftApp, b: &Builtin, photo: PhotoId, several: bool) ->
         "removeFromAlbum" | "setAlbumCover" => normal_album(app).is_some(),
         "moveToFolder" => app.services.pick_folder.is_some() || app.services.picker.is_some(),
         "locateMissing" => file_missing(app, photo),
+        "addKeywords" => !app.session.catalog.keyword_shortcut().is_empty(),
         _ => true,
     }
 }
@@ -122,7 +124,9 @@ pub fn draw(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: PhotoId
     let text = label(b);
     match b.id {
         "openInDetail" | "beforeAfterSplit" | "editIn" | "findSimilar" | "setReference" => draw_open_items(app, ui, b, id, &text),
-        "rating" | "flag" | "colorLabel" | "addToAlbum" | "removeFromAlbum" | "setAlbumCover" => draw_meta_items(app, ui, b, id, &text),
+        "rating" | "flag" | "colorLabel" | "addKeywords" | "addToAlbum" | "removeFromAlbum" | "setAlbumCover" => {
+            draw_meta_items(app, ui, b, id, &text)
+        }
         "rename" | "moveToFolder" | "reload" | "virtualCopy" | "createVersion" | "stack" => draw_file_items(app, ui, b, id, &text),
         "copySettings" | "pasteSettings" | "pasteSelected" | "resetEdits" | "photoMerge" | "rotateLeft" | "rotateRight" => {
             draw_edit_items(app, ui, b, &text)
@@ -243,6 +247,18 @@ fn draw_meta_items(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: 
         }
         "colorLabel" => {
             crate::widgets::menu_button(ui, text, |ui| label_menu(app, ui));
+        }
+        "addKeywords" => {
+            // the keyword shortcut (Set Keyword Shortcut…), given to the selected photos
+            let keywords = app.session.catalog.keyword_shortcut();
+            if !keywords.is_empty() {
+                let names = keywords.iter().map(|k| k.replace('|', " › ")).collect::<Vec<_>>().join(", ");
+                let add = ui.button(crate::i18n::tr_format!("Add Keyword “{keywords}”", keywords = names));
+                register(ui, "button:contextAddKeywordShortcut", add.rect);
+                if add.clicked() {
+                    let _ = app.run("photo.setMeta", json!({"addKeywords": keywords}));
+                }
+            }
         }
         "addToAlbum" => add_to_album(app, ui, text.to_string()),
         "removeFromAlbum" => {

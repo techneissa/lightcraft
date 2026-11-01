@@ -14,7 +14,7 @@ Quick filters in the bottom bar, beside the thumbnail slider: a Stars dropdown (
 
 ## Hooks in official files
 
-catalog `query.rs` (two fields, match, describe) and `lib.rs` (modules); engine `cmd/library/specs.rs` (`settle_sets` call, doc line), `view.rs` (two chips), `tests.rs`; UI `panels.rs`, `panels/bottombar.rs` (two calls), `panels/filterbar.rs` (flags multi-select, ratings text), `tests.rs`; `docs/parity-checklist.md`, `docs/whats-new.md`
+catalog `query.rs` (`ratings`; `flags` is shared with official's #2588, which added the same field and `flags_shown`: the fork keeps its own `flags_shown` and `toggle_flag_patch` in `quick_filter.rs`, official's `null_as_empty` on the field and official's filter chip for flags) and `lib.rs` (modules); engine `cmd/library/specs.rs` (`settle_sets` call, doc line), `view.rs` (two chips), `tests.rs`; UI `panels.rs`, `panels/bottombar.rs` (two calls), `panels/filterbar.rs` (flags multi-select, ratings text), `tests.rs`; `docs/parity-checklist.md`, `docs/whats-new.md`
 
 ## Tests
 

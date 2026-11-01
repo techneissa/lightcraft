@@ -30,8 +30,9 @@ pub struct Filter {
     /// through, see [`crate::quick_filter`].
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub ratings: Vec<u8>,
-    /// Any of these flags; empty = no constraint. ANDs with `flag`.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// Any of these flags (the filter bar's and the bottom bar's multi-select: Picked and Unflagged hide only
+    /// the rejects); empty = no constraint. ANDs with `flag`.
+    #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "null_as_empty")]
     pub flags: Vec<Flag>,
     pub label: Option<ColorLabel>,
     /// Only these photos (Find Similar results…); empty = no constraint.
@@ -78,6 +79,11 @@ pub struct Filter {
     /// Smart-album rules (all / any / none, nested groups; see [`crate::rules`]).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule_set: Option<crate::RuleSet>,
+}
+
+/// A list that may be given as `null`, read as empty: agents clear `flags` the way they clear `flag`.
+fn null_as_empty<'de, D: serde::Deserializer<'de>, T: Deserialize<'de>>(d: D) -> Result<Vec<T>, D::Error> {
+    Ok(Option::<Vec<T>>::deserialize(d)?.unwrap_or_default())
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -151,6 +157,9 @@ fn shuffle_rank(seed: u64, id: PhotoId) -> u64 {
 pub(crate) struct Prepared {
     root: Option<String>,
     only: Option<std::collections::HashSet<PhotoId>>,
+    /// [`Filter::rule_set`] with its rules in the order to test them ([`crate::RuleSet::by_cost`]);
+    /// `None` tests them as written.
+    rules: Option<crate::RuleSet>,
 }
 
 /// The tokens of a search text: split at whitespace, except inside double quotes, so
@@ -344,18 +353,35 @@ impl Filter {
     }
 
     pub fn matches(&self, p: &Photo, cat: &Catalog) -> bool {
-        self.matches_in(p, cat, &self.prepare_one())
+        // one photo: its rules are tested as written (ordering them would cost more than it saves)
+        self.matches_in(p, cat, &Prepared { root: self.library_root(), only: None, rules: None })
     }
 
-    /// [`Filter::prepare`] for testing one photo (the `only` ids are looked through, not hashed).
-    pub(crate) fn prepare_one(&self) -> Prepared {
-        Prepared { root: self.library_root(), only: None }
+    /// [`Filter::prepare`] for testing one photo at a time, with what each needs worked out once
+    /// (the `only` ids are looked through, not hashed).
+    pub(crate) fn prepare_one(&self, cat: &Catalog) -> Prepared {
+        Prepared { root: self.library_root(), only: None, rules: self.ordered_rules(cat) }
+    }
+
+    /// The rule set to test, cheapest rule first: once per prepared filter, not per photo. `None`
+    /// (as written) while any smart album tests itself or a chain is too deep ([`Catalog::keeps_written_order`]), where the
+    /// order could change which photos match.
+    fn ordered_rules(&self, cat: &Catalog) -> Option<crate::RuleSet> {
+        if cat.keeps_written_order() {
+            return None;
+        }
+        self.rule_set.as_ref().map(|rs| rs.by_cost(cat))
     }
 
     /// What [`Filter::matches_in`] needs worked out once for a pass over many photos rather than
-    /// once per photo: the library folder's identity and the `only` ids as a set.
-    pub(crate) fn prepare(&self) -> Prepared {
-        Prepared { root: self.library_root(), only: (!self.only.is_empty()).then(|| self.only.iter().copied().collect()) }
+    /// once per photo: the library folder's identity, the `only` ids as a set and the rules in the
+    /// order to test them.
+    pub(crate) fn prepare(&self, cat: &Catalog) -> Prepared {
+        Prepared {
+            root: self.library_root(),
+            only: (!self.only.is_empty()).then(|| self.only.iter().copied().collect()),
+            rules: self.ordered_rules(cat),
+        }
     }
 
     /// [`Filter::library_folder`] as a folder identity ([`folder_key`]); `None` without a choice.
@@ -402,7 +428,7 @@ impl Filter {
             return false;
         }
         if let Some(rs) = &self.rule_set
-            && !rs.matches(p, cat)
+            && !prepared.rules.as_ref().unwrap_or(rs).matches(p, cat)
         {
             return false;
         }
@@ -502,9 +528,9 @@ impl Catalog {
     /// album's rules, the filter bar), as long as they are still where the view looks (`within`: in the library,
     /// the album, the folder; not deleted).
     pub fn query_keeping(&self, filter: &Filter, sort: &Sort, keep: &std::collections::HashSet<PhotoId>, within: &Filter) -> Vec<PhotoId> {
-        let prepared = filter.prepare();
+        let prepared = filter.prepare(self);
         // `within` only decides for the few kept photos: worked out per photo, not hashed
-        let within_prepared = within.prepare_one();
+        let within_prepared = within.prepare_one(self);
         let mut v: Vec<&Photo> = self
             .photos()
             .map(|p| p.as_ref())
@@ -522,7 +548,7 @@ impl Catalog {
     pub fn follow(&self, was: &[PhotoId], touched: &[PhotoId], filter: &Filter, sort: &Sort, within: Option<&Filter>) -> Vec<PhotoId> {
         let listed: std::collections::HashSet<PhotoId> = was.iter().copied().filter(|id| touched.binary_search(id).is_ok()).collect();
         let mut ids: Vec<PhotoId> = was.iter().copied().filter(|id| !listed.contains(id)).collect();
-        let (prepared, within_prepared) = (filter.prepare_one(), within.map(Filter::prepare_one));
+        let (prepared, within_prepared) = (filter.prepare_one(self), within.map(|w| w.prepare_one(self)));
         for id in touched {
             let Some(p) = self.photo(*id) else { continue };
             let kept = within.zip(within_prepared.as_ref()).is_some_and(|(w, wp)| listed.contains(id) && w.matches_in(p, self, wp));
@@ -537,7 +563,7 @@ impl Catalog {
 
     /// How many photos match `filter`: [`Catalog::query`]'s length without its sorting.
     pub fn count(&self, filter: &Filter) -> usize {
-        let prepared = filter.prepare();
+        let prepared = filter.prepare(self);
         self.photos().filter(|p| filter.matches_in(p, self, &prepared)).count()
     }
 
@@ -594,7 +620,7 @@ impl Catalog {
     pub fn people_in(&self, filter: &Filter) -> Vec<Person> {
         let filter = Filter { person: None, ..filter.clone() };
         let mut m: std::collections::HashMap<String, (Person, f64)> = Default::default();
-        let prepared = filter.prepare();
+        let prepared = filter.prepare(self);
         for p in self.photos().filter(|p| filter.matches_in(p, self, &prepared)) {
             let mut seen: Vec<String> = Vec::new();
             for r in p.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {

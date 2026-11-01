@@ -1,6 +1,5 @@
-//! Lightroom's ⌥-drag preview: while ⌥ is held during a drag of Exposure, Whites, Highlights, Blacks,
-//! Shadows or a Sharpening slider, the loupe shows a mask instead of the photo; it ends with the drag
-//! or with ⌥. `view.clippingPreview` holds the same preview for agents.
+//! Official's ⌥-drag preview (`Overlay::for_control`) on a mask's own sliders (Masking panel), and the
+//! clipping overlay while a mask is edited: the mask's tint steps aside while a clipping side shows.
 
 use std::time::Duration;
 
@@ -9,24 +8,10 @@ use lightcraft_pipeline::Overlay;
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::panels::clipping::Preview;
 use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(20);
 const SETTLE: Duration = Duration::from_secs(120);
-
-/// The Edit panel with `section` open alone, so its sliders are on screen.
-fn edit_panel(section: &str) -> Headless {
-    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
-    let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
-    let id = h.app.session.visible_cloned()[0].0;
-    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id]}}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    let r = h.request("ui.set", json!({"view": "detail", "right": "edit", "openSections": [section]}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.settle(SETTLE);
-    h
-}
 
 fn shown(h: &Headless) -> Overlay {
     let d = h.app.session.active().and_then(|id| h.app.session.develop_of(id)).map(|d| (*d).clone()).unwrap_or_default();
@@ -48,22 +33,8 @@ fn frames(h: &mut Headless, n: usize) {
     }
 }
 
-/// A drag of `control`'s track with ⌥ held down from the press: the mask shows while it goes,
-/// goes when ⌥ is let go, comes back with ⌥, and is gone for good after the release.
-fn alt_drag(control: &str, want: Preview, overlay: Overlay) {
-    let mut h = edit_panel(if control.starts_with("detail.") { "detail" } else { "light" });
-    if control.starts_with("detail.") {
-        // Radius, Detail and Masking are greyed out until something sharpens
-        let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"values": {"detail.sharpenAmount": 40}}}), T);
-        assert_eq!(r["ok"], true, "{r}");
-        h.settle(SETTLE);
-    }
-    assert_eq!(shown(&h), Overlay::None);
-    alt_drag_in(&mut h, control, want, overlay);
-}
-
 /// The ⌥ press-drag-release on the slider `control` of whatever panel `h` shows.
-fn alt_drag_in(h: &mut Headless, control: &str, want: Preview, overlay: Overlay) {
+fn alt_drag_in(h: &mut Headless, control: &str, overlay: Overlay) {
     let t = track(h, control);
     // from the middle of the track (the demo photo's defaults sit at or near it) and rightwards
     let from = egui::pos2(t.center().x, t.center().y);
@@ -76,48 +47,71 @@ fn alt_drag_in(h: &mut Headless, control: &str, want: Preview, overlay: Overlay)
     }
     frames(h, 10);
     assert_eq!(h.app.ui.dragging_control.as_deref(), Some(control), "the drag is going");
-    assert_eq!(h.app.ui.alt_preview, Some(want), "⌥ held: {control} previews {want:?}");
     assert_eq!(shown(h), overlay, "and the loupe asks for it");
     // ⌥ let go while the mouse is still down: the photo is back
     h.app.synthetic.push(Event::ModifiersChanged(Modifiers::NONE));
     h.app.synthetic.push(Event::PointerMoved(from + step * 5.0));
     frames(h, 10);
     assert!(h.app.ui.dragging_control.is_some(), "the drag still goes");
-    assert_eq!(h.app.ui.alt_preview, None);
     assert_eq!(shown(h), Overlay::None);
     // ⌥ again
     h.app.synthetic.push(Event::ModifiersChanged(Modifiers::ALT));
     h.app.synthetic.push(Event::PointerMoved(from + step * 6.0));
     frames(h, 10);
-    assert_eq!(h.app.ui.alt_preview, Some(want));
     // the release ends it, ⌥ still down
     press(h, from + step * 6.0, Modifiers::ALT, false);
     h.settle(SETTLE);
     assert!(h.app.ui.dragging_control.is_none());
-    assert_eq!(h.app.ui.alt_preview, None, "the preview ends with the drag");
     assert_eq!(shown(h), Overlay::None);
 }
 
-#[test]
-fn alt_drag_of_exposure_whites_and_highlights_shows_clipped_highlights() {
-    for control in ["light.exposure", "light.whites", "light.highlights"] {
-        alt_drag(control, Preview::Highlights, Overlay::ClipHighlights);
-    }
+/// The Edit panel with `section` open alone, so its sliders are on screen.
+fn edit_panel(section: &str) -> Headless {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1400.0, 1000.0], 1.0);
+    let id = h.app.session.visible_cloned()[0].0;
+    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id]}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("ui.set", json!({"view": "detail", "right": "edit", "openSections": [section]}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    h
 }
 
+/// With a clipping side on (J), the red / blue clipping overlay is not drawn over an ⌥-drag preview (it would
+/// mark the preview's own black and white pixels), and is back once the drag ends.
 #[test]
-fn alt_drag_of_blacks_and_shadows_shows_crushed_shadows() {
-    for control in ["light.blacks", "light.shadows"] {
-        alt_drag(control, Preview::Shadows, Overlay::ClipShadows);
+fn the_clipping_overlay_steps_aside_while_an_alt_drag_preview_shows() {
+    let mut h = edit_panel("light");
+    h.app.run("view.clippingHighlights", json!({})).unwrap();
+    h.settle(SETTLE);
+    h.step();
+    assert!(h.app.ui.clip_highlights);
+    assert!(h.app.renderer.clip_overlay.is_some(), "the overlay is drawn on the plain photo");
+    let t = track(&h, "light.exposure");
+    let from = t.center();
+    let step = egui::vec2(t.width() * 0.04, 0.0);
+    h.app.synthetic.push(Event::ModifiersChanged(Modifiers::ALT));
+    h.app.synthetic.push(Event::PointerMoved(from));
+    press(&mut h, from, Modifiers::ALT, true);
+    for i in 1..=4 {
+        h.app.synthetic.push(Event::PointerMoved(from + step * i as f32));
     }
-}
-
-#[test]
-fn alt_drag_of_sharpening_masking_shows_the_mask_and_the_others_a_greyscale_photo() {
-    alt_drag("detail.sharpenMasking", Preview::SharpenMask, Overlay::SharpenMask);
-    for control in ["detail.sharpenAmount", "detail.sharpenRadius", "detail.sharpenDetail"] {
-        alt_drag(control, Preview::Greyscale, Overlay::Greyscale);
-    }
+    frames(&mut h, 10);
+    assert_eq!(h.app.ui.dragging_control.as_deref(), Some("light.exposure"), "the drag is going");
+    assert_eq!(shown(&h), Overlay::ClipHighlights, "the preview shows");
+    // (the frames before the preview came up drew it on the photo: forget it, and look at the frames with the preview up)
+    h.app.renderer.clip_overlay = None;
+    frames(&mut h, 4);
+    assert_eq!(shown(&h), Overlay::ClipHighlights, "the preview still shows");
+    assert!(h.app.renderer.clip_overlay.is_none(), "no clipping overlay over the preview");
+    // the release ends the preview: the overlay is back
+    press(&mut h, from + step * 4.0, Modifiers::ALT, false);
+    h.app.synthetic.push(Event::ModifiersChanged(Modifiers::NONE));
+    h.settle(SETTLE);
+    h.step();
+    assert_eq!(shown(&h), Overlay::None);
+    assert!(h.app.renderer.clip_overlay.is_some(), "the overlay is back after the drag");
 }
 
 /// The Masking panel with a linear mask selected and its sliders on screen (the dock header pushes
@@ -152,23 +146,23 @@ fn mask_panel(control: &str) -> Headless {
 }
 
 /// A mask's own sliders preview like the global ones, with the mask overlay up before the drag.
-fn mask_alt_drag(control: &str, want: Preview, overlay: Overlay) {
+fn mask_alt_drag(control: &str, overlay: Overlay) {
     let mut h = mask_panel(control);
     assert!(matches!(shown(&h), Overlay::Mask { .. }), "the mask overlay is up before the drag");
-    alt_drag_in(&mut h, control, want, overlay);
+    alt_drag_in(&mut h, control, overlay);
 }
 
 #[test]
 fn alt_drag_of_a_masks_exposure_whites_and_highlights_shows_clipped_highlights() {
     for control in ["exposure", "whites", "highlights"] {
-        mask_alt_drag(control, Preview::Highlights, Overlay::ClipHighlights);
+        mask_alt_drag(control, Overlay::ClipHighlights);
     }
 }
 
 #[test]
 fn alt_drag_of_a_masks_blacks_and_shadows_shows_crushed_shadows() {
     for control in ["blacks", "shadows"] {
-        mask_alt_drag(control, Preview::Shadows, Overlay::ClipShadows);
+        mask_alt_drag(control, Overlay::ClipShadows);
     }
 }
 
@@ -185,77 +179,10 @@ fn a_mask_drag_without_alt_or_of_another_mask_slider_shows_the_mask() {
     }
     frames(&mut h, 10);
     assert_eq!(h.app.ui.dragging_control.as_deref(), Some("contrast"));
-    assert_eq!(h.app.ui.alt_preview, None, "Contrast has no ⌥ preview");
+    assert!(crate::panels::clipping::alt_overlay(&h.app).is_none(), "Contrast has no ⌥ preview");
     press(&mut h, from, Modifiers::ALT, false);
     h.app.synthetic.push(Event::ModifiersChanged(Modifiers::NONE));
     h.settle(SETTLE);
-}
-
-#[test]
-fn a_drag_without_alt_or_of_another_slider_shows_the_photo() {
-    let mut h = edit_panel("light");
-    for (control, modifiers) in [("light.exposure", Modifiers::NONE), ("light.contrast", Modifiers::ALT)] {
-        let t = track(&h, control);
-        let from = t.center();
-        h.app.synthetic.push(Event::ModifiersChanged(modifiers));
-        h.app.synthetic.push(Event::PointerMoved(from));
-        press(&mut h, from, modifiers, true);
-        for i in 1..=4 {
-            h.app.synthetic.push(Event::PointerMoved(from + egui::vec2(t.width() * 0.04 * i as f32, 0.0)));
-        }
-        frames(&mut h, 10);
-        assert_eq!(h.app.ui.dragging_control.as_deref(), Some(control));
-        assert_eq!(h.app.ui.alt_preview, None, "{control} with {modifiers:?}");
-        assert_eq!(shown(&h), Overlay::None);
-        press(&mut h, from, modifiers, false);
-        h.app.synthetic.push(Event::ModifiersChanged(Modifiers::NONE));
-        h.settle(SETTLE);
-    }
-}
-
-#[test]
-fn the_command_holds_a_preview_until_it_is_cleared() {
-    let mut h = edit_panel("light");
-    for (params, want, overlay) in [
-        (json!({"mode": "highlights"}), Preview::Highlights, Overlay::ClipHighlights),
-        (json!({"mode": "shadows"}), Preview::Shadows, Overlay::ClipShadows),
-        (json!({"mode": "sharpenMask"}), Preview::SharpenMask, Overlay::SharpenMask),
-        (json!({"mode": "greyscale"}), Preview::Greyscale, Overlay::Greyscale),
-        (json!({"control": "light.blacks"}), Preview::Shadows, Overlay::ClipShadows),
-    ] {
-        let r = h.app.run("view.clippingPreview", params).unwrap();
-        assert_eq!(r["mode"], want.name());
-        h.step();
-        assert_eq!(shown(&h), overlay);
-    }
-    assert!(h.app.run("view.clippingPreview", json!({"mode": "sepia"})).is_err());
-    assert!(h.app.run("view.clippingPreview", json!({"control": "light.contrast"})).is_err());
-    assert_eq!(h.app.ui.preview_forced, Some(Preview::Shadows), "a refused request leaves the preview as it was");
-    for off in [json!({"mode": "off"}), json!({})] {
-        h.app.run("view.clippingPreview", json!({"mode": "greyscale"})).unwrap();
-        let r = h.app.run("view.clippingPreview", off).unwrap();
-        assert!(r["mode"].is_null());
-        assert_eq!(shown(&h), Overlay::None);
-    }
-}
-
-/// The loupe renders the preview: black and white pixels only for the clipping views.
-#[test]
-fn the_loupe_draws_the_clipping_preview() {
-    let mut h = edit_panel("light");
-    let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"values": {"light.exposure": 2.0}}}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    h.app.run("view.clippingPreview", json!({"mode": "highlights"})).unwrap();
-    h.settle(SETTLE);
-    let pixels = h.app.renderer.textures.get(&crate::render::Slot::Main).and_then(|t| t.pixels.clone()).expect("the loupe keeps its pixels");
-    // (at rest the render is shrunk to the window with a Lanczos filter, which softens the edges)
-    let extreme = pixels.pixels.iter().filter(|c| [c.r(), c.g(), c.b()].iter().all(|&v| v <= 8 || v >= 247)).count();
-    assert!(extreme * 100 >= pixels.pixels.len() * 90, "only clipped channels show: {extreme} of {}", pixels.pixels.len());
-    assert!(pixels.pixels.iter().any(|c| c.r() == 255), "+2 EV clips something");
-    h.app.run("view.clippingPreview", json!({})).unwrap();
-    h.settle(SETTLE);
-    let plain = h.app.renderer.textures.get(&crate::render::Slot::Main).and_then(|t| t.pixels.clone()).expect("pixels");
-    assert!(plain.pixels.iter().any(|c| c.r() != 0 && c.r() != 255), "the photo is back");
 }
 
 /// The J overlay (`view.clippingHighlights`) marks what the photo clips: the mask's red tint would

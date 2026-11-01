@@ -84,7 +84,7 @@ fn a_custom_white_set_in_kelvin_comes_back_to_the_relative_scale() {
     if mac(&s, id) {
         assert_eq!((back.wb.mode, back.wb.scale), (WbMode::Custom, WbScale::Legacy));
         assert!((back.wb.temp - 7000.0).abs() < 1.0 && (back.wb.tint - 5.0).abs() < 0.1, "{:?}", back.wb);
-        assert_eq!((back.wb.temp, back.wb.tint), kelvin_to_legacy(k.0, k.1, APPLE));
+        assert_eq!(Some((back.wb.temp, back.wb.tint)), kelvin_to_legacy(k.0, k.1, APPLE));
         s.execute("edit.undo", &json!({})).unwrap();
         assert_eq!((dev(&s, id).wb.scale, dev(&s, id).profile.camera_colour), (WbScale::Kelvin, CameraColour::Macos), "one undo step");
     } else {

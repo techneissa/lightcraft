@@ -59,9 +59,9 @@ fn text(h: &Headless) -> String {
 #[test]
 fn the_second_shortcut_fires_and_the_first_still_does() {
     let mut h = demo();
-    set(&mut h, "view.survey", 2, "Shift+K");
+    set(&mut h, "view.survey", 2, "Shift+Q");
     assert_eq!(shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("N"), "the first shortcut is unchanged");
-    press(&mut h, "K", false, true);
+    press(&mut h, "Q", false, true);
     assert_eq!(h.app.ui.view, ViewMode::Survey);
     h.app.run("view.detail", json!({})).unwrap();
     h.step();
@@ -72,7 +72,7 @@ fn the_second_shortcut_fires_and_the_first_still_does() {
 #[test]
 fn menus_and_the_palette_show_the_first_shortcut() {
     let mut h = demo();
-    set(&mut h, "view.survey", 2, "Shift+K");
+    set(&mut h, "view.survey", 2, "Shift+Q");
     let entry = |h: &Headless| crate::menus::menu_entries(&h.app).into_iter().find(|e| e.id == "view.survey").unwrap();
     assert_eq!(entry(&h).shortcut.as_deref(), Some("N"));
     set(&mut h, "view.survey", 1, "Cmd+K S");
@@ -85,7 +85,7 @@ fn menus_and_the_palette_show_the_first_shortcut() {
     // the control channel lists both
     let listed = crate::control::all_commands(&h.app);
     let survey = listed.as_array().unwrap().iter().find(|c| c["id"] == "view.survey").unwrap();
-    assert_eq!((survey["shortcut"].as_str(), survey["shortcut2"].as_str()), (Some("Cmd+K S"), Some("Shift+K")));
+    assert_eq!((survey["shortcut"].as_str(), survey["shortcut2"].as_str()), (Some("Cmd+K S"), Some("Shift+Q")));
 }
 
 #[test]
@@ -146,13 +146,13 @@ fn the_assign_box_saves_a_key_with_enter_and_a_chord_too() {
     assert_eq!(h.app.recording_shortcut.as_deref(), Some("view.survey"));
     assert!(text(&h).contains("Press the keys"), "{}", text(&h));
     // a key is taken, not run, and waits for Enter
-    press(&mut h, "K", false, true);
+    press(&mut h, "Q", false, true);
     assert_eq!(h.app.ui.view, ViewMode::Detail);
     assert_eq!(shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("N"));
     assert!(h.app.keybinds.capture.is_some());
     key(&mut h, "Enter");
     assert!(h.app.keybinds.capture.is_none() && h.app.recording_shortcut.is_none());
-    assert_eq!(crate::keybinds::model::effective(&h.app.ui.settings.keymap, "view.survey", 1), Some("Shift+K"));
+    assert_eq!(crate::keybinds::model::effective(&h.app.ui.settings.keymap, "view.survey", 1), Some("Shift+Q"));
     // two keys in a row are a chord
     h.app.run("app.assignShortcut", json!({"id": "view.compare"})).unwrap();
     h.step();
@@ -178,7 +178,7 @@ fn esc_closes_the_box_and_the_dialog_under_it_stays() {
     h.app.run("app.assignShortcut", json!({"id": "view.survey", "slot": 2})).unwrap();
     h.step();
     h.step();
-    press(&mut h, "K", false, true);
+    press(&mut h, "Q", false, true);
     key(&mut h, "Escape");
     assert!(h.app.keybinds.capture.is_none());
     assert!(matches!(h.app.ui.dialog, Some(Dialog::Shortcuts)), "Esc closed only the box");
@@ -232,14 +232,14 @@ fn the_window_edits_both_slots() {
     }
     click(&mut h, "button:shortcut2-view.survey");
     assert_eq!(h.app.keybinds.capture.as_ref().map(|c| (c.id.as_str(), c.slot)), Some(("view.survey", 1)));
-    press(&mut h, "K", false, true);
+    press(&mut h, "Q", false, true);
     key(&mut h, "Enter");
-    assert_eq!(crate::keybinds::model::effective(&h.app.ui.settings.keymap, "view.survey", 1), Some("Shift+K"));
+    assert_eq!(crate::keybinds::model::effective(&h.app.ui.settings.keymap, "view.survey", 1), Some("Shift+Q"));
     assert!(matches!(h.app.ui.dialog, Some(Dialog::Shortcuts)));
     // × removes the second one, ↺ restores everything
     click(&mut h, "button:shortcutClear2-view.survey");
     assert_eq!(crate::keybinds::model::effective(&h.app.ui.settings.keymap, "view.survey", 1), None);
-    set(&mut h, "view.survey", 2, "Shift+K");
+    set(&mut h, "view.survey", 2, "Shift+Q");
     set(&mut h, "view.survey", 1, "Shift+J");
     click(&mut h, "button:shortcutReset-view.survey");
     assert!(h.app.ui.settings.keymap.is_empty(), "{:?}", h.app.ui.settings.keymap);
@@ -279,8 +279,8 @@ fn a_right_click_on_a_menu_item_opens_the_box() {
 #[test]
 fn old_settings_load_and_the_second_slot_is_saved() {
     // a ui.json from before: single shortcuts only
-    let old: crate::state::AppSettings = serde_json::from_str(r#"{"keymap": {"view.survey": "Shift+K", "view.detail": ""}}"#).unwrap();
-    assert_eq!(shortcut_of(&old.keymap, "view.survey"), Some("Shift+K"));
+    let old: crate::state::AppSettings = serde_json::from_str(r#"{"keymap": {"view.survey": "Shift+Q", "view.detail": ""}}"#).unwrap();
+    assert_eq!(shortcut_of(&old.keymap, "view.survey"), Some("Shift+Q"));
     assert_eq!(shortcut_of(&old.keymap, "view.detail"), None);
     // a damaged one loads too: nothing in it can break startup
     let damaged: crate::state::AppSettings = serde_json::from_str(r#"{"keymap": {"view.survey#2": "Hyper+K", "x#2": "K"}}"#).unwrap();
@@ -288,10 +288,10 @@ fn old_settings_load_and_the_second_slot_is_saved() {
     // both slots and a chord survive a save and load
     let mut h = demo();
     set(&mut h, "view.survey", 2, "Cmd+K S");
-    set(&mut h, "view.survey", 1, "Shift+K");
+    set(&mut h, "view.survey", 1, "Shift+Q");
     let saved = serde_json::to_string(&h.app.ui).unwrap();
     let back = serde_json::from_str::<crate::UiState>(&saved).unwrap();
-    assert_eq!(crate::keybinds::model::effective_slots(&back.settings.keymap, "view.survey"), [Some("Shift+K"), Some("Cmd+K S")]);
+    assert_eq!(crate::keybinds::model::effective_slots(&back.settings.keymap, "view.survey"), [Some("Shift+Q"), Some("Cmd+K S")]);
 }
 
 #[test]

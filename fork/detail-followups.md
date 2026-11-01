@@ -10,12 +10,12 @@ Sharpening Radius (`detail.sharpenRadius`) works in process V3 (its own pixel-sc
 
 ## Own files
 
-`crates/pipeline/src/tests_slider_strength.rs` (`sharpening_radius_sets_the_band_scale`, `sharpening_radius_is_still_unread_before_v3`, `vignette_response_is_smooth_and_natural`), `crates/gpu/tests/it/equivalence.rs` (`process_v3_sharpening_and_vignette_match`), `crates/pipeline/src/tests_clip_preview.rs` (`the_sharpen_mask_follows_the_process_v3_band_and_range`)
+`crates/pipeline/src/tests_slider_strength.rs` (`sharpening_radius_sets_the_band_scale`, `sharpening_radius_is_still_unread_before_v3`, `vignette_response_is_smooth_and_natural`), `crates/gpu/tests/it/equivalence.rs` (`process_v3_sharpening_and_vignette_match`), `crates/pipeline/src/tests_sharpen_mask.rs` (`the_sharpen_mask_follows_the_process_v3_band_and_range`)
 
 ## Hooks in official files
 
-`pipeline/src/local.rs` (`sharpen_sigma`, `PlaneSigmas::sharpen`, `Planes::sharpen`), `pipeline/src/finish.rs` (`vignette_dark_factor`, `sharpen_gain`, `sharpen_mix`, the V3 sharpening branch, `sharpen_mask_weight(…, v3)` shared with the ⌥-drag preview), `pipeline/src/visualize.rs` (`sharpen_mask_alpha` reads the V3 band), `pipeline/src/lib.rs` (`Prepared::sharpen_blur`; the mask preview call takes the process), `gpu/src/render.rs` (second plane in the `tex` buffer), `gpu/src/params.rs` (`HAS_SHARP`, `SHARP_OFF`), `gpu/src/wgsl/finish.wgsl`, `docs/slider-strength.md`, `docs/process-versions.md`, `docs/whats-new.md`, `docs/parity-checklist.md`
+`pipeline/src/local.rs` (`sharpen_sigma`, `PlaneSigmas::sharpen`, `Planes::sharpen`), `pipeline/src/finish.rs` (`vignette_dark_factor`, `sharpen_gain`, `sharpen_mix`, the V3 sharpening branch, `sharpen_mask_weight(…, v3)` shared with the ⌥-drag preview), `pipeline/src/visualize.rs` (`sharpen_plane` reads the V3 band), `gpu/src/render.rs` (the same call), `pipeline/src/lib.rs` (`Prepared::sharpen_blur`; the mask preview call takes the process), `gpu/src/render.rs` (second plane in the `tex` buffer), `gpu/src/params.rs` (`HAS_SHARP`, `SHARP_OFF`), `gpu/src/wgsl/finish.wgsl`, `docs/slider-strength.md`, `docs/process-versions.md`, `docs/whats-new.md`, `docs/parity-checklist.md`
 
 ## Tests
 
-`tests_slider_strength`, `clip_preview` in `lightcraft-pipeline`; with a GPU `cargo test -p lightcraft-gpu --test it -- process_v3_sharpening` (skips without)
+`tests_slider_strength`, `tests_sharpen_mask` in `lightcraft-pipeline`; with a GPU `cargo test -p lightcraft-gpu --test it -- process_v3_sharpening` (skips without)

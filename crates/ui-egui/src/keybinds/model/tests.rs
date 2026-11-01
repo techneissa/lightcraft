@@ -24,13 +24,13 @@ fn slot_keys_round_trip() {
 fn a_command_has_two_shortcuts() {
     let mut km = keymap();
     assert_eq!(effective_slots(&km, "view.survey"), [Some("N"), None]);
-    assign(&mut km, "view.survey", 1, Some("Shift+K")).unwrap();
+    assign(&mut km, "view.survey", 1, Some("Shift+Q")).unwrap();
     // the declared primary stays; only the second slot is saved
-    assert_eq!(effective_slots(&km, "view.survey"), [Some("N"), Some("Shift+K")]);
+    assert_eq!(effective_slots(&km, "view.survey"), [Some("N"), Some("Shift+Q")]);
     assert_eq!(km.len(), 1);
-    assert_eq!(km.get("view.survey#2").map(String::as_str), Some("Shift+K"));
+    assert_eq!(km.get("view.survey#2").map(String::as_str), Some("Shift+Q"));
     assign(&mut km, "view.survey", 0, Some("Shift+J")).unwrap();
-    assert_eq!(effective_slots(&km, "view.survey"), [Some("Shift+J"), Some("Shift+K")]);
+    assert_eq!(effective_slots(&km, "view.survey"), [Some("Shift+J"), Some("Shift+Q")]);
     assign(&mut km, "view.survey", 1, None).unwrap();
     assert_eq!(effective_slots(&km, "view.survey"), [Some("Shift+J"), None]);
     // the second shortcut is stored under its own entry, which is gone once it is removed
@@ -55,13 +55,13 @@ fn a_chord_is_a_shortcut_in_either_slot() {
 #[test]
 fn a_second_shortcut_that_is_one_key_is_listed() {
     let mut km = keymap();
-    assign(&mut km, "view.survey", 1, Some("Shift+K")).unwrap();
+    assign(&mut km, "view.survey", 1, Some("Shift+Q")).unwrap();
     assert!(
         second_singles(&km)
             .iter()
-            .any(|(id, step, sc, declared)| *id == "view.survey" && *step == steps("Shift+K")[0] && sc == "Shift+K" && !*declared)
+            .any(|(id, step, sc, declared)| *id == "view.survey" && *step == steps("Shift+Q")[0] && sc == "Shift+Q" && !*declared)
     );
-    assert!(extra_taken(&km).contains(&steps("Shift+K")[0]));
+    assert!(extra_taken(&km).contains(&steps("Shift+Q")[0]));
 }
 
 #[test]
@@ -198,16 +198,16 @@ fn reset_restores_both_slots() {
 #[test]
 fn old_single_shortcut_files_load_unchanged() {
     // what an earlier build saved: one string per command, "" for none
-    let old = r#"{"view.survey":"Shift+K","view.detail":"","photo.pick":"Cmd+Alt+P"}"#;
+    let old = r#"{"view.survey":"Shift+Q","view.detail":"","photo.pick":"Cmd+Alt+P"}"#;
     let km: Keymap = serde_json::from_str(old).unwrap();
-    assert_eq!(effective_slots(&km, "view.survey"), [Some("Shift+K"), None]);
+    assert_eq!(effective_slots(&km, "view.survey"), [Some("Shift+Q"), None]);
     assert_eq!(effective_slots(&km, "view.detail"), [None, None]);
     assert_eq!(effective_slots(&km, "photo.pick"), [Some("Cmd+Alt+P"), None]);
     // saving writes the same format back, plus the second slot's own entries
     let mut km = km;
     assign(&mut km, "view.survey", 1, Some("Cmd+K S")).unwrap();
     let saved = serde_json::to_value(&km).unwrap();
-    assert_eq!(saved["view.survey"], "Shift+K");
+    assert_eq!(saved["view.survey"], "Shift+Q");
     assert_eq!(saved["view.survey#2"], "Cmd+K S");
     let back: Keymap = serde_json::from_value(saved).unwrap();
     assert_eq!(back, km);

@@ -13,7 +13,11 @@ impl crate::Session {
 
     /// A grid/filmstrip thumbnail job: the long edge is rounded up to one of [`THUMB_SIZES`]
     /// (≥ `long_edge`) and the result comes from / goes to the thumbnail cache (memory + disk).
+    /// `None` for a video: the image decoders can't read one, so none is asked to (issue #2682).
     pub fn thumb_job(&mut self, id: PhotoId, long_edge: usize) -> Option<RenderJob> {
+        if self.catalog.photo(id).is_some_and(|p| p.is_video()) {
+            return None;
+        }
         let b = thumb_bucket(long_edge);
         let mut job = self.build_job(id, b, b, false, true, Some(b))?;
         // (a thumbnail may develop a smaller copy of the raw image that the file keeps)
@@ -377,7 +381,7 @@ impl crate::Session {
         let cached = vec![(self.media.rendered.clone(), Self::view_key(&p, apply_crop))];
         let key = Self::quick_key(&p, apply_crop, camera_jpeg);
         let embedded = self.embedded_of(&p).filter(|_| camera_jpeg).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
-        Some(QuickJob { request_id: 0, photo: id, key, cached, embedded, small: apply_crop.then(|| Box::new(small)) })
+        Some(QuickJob { request_id: 0, photo: id, key, cached, embedded, minimum_embedded_edge: None, small: apply_crop.then(|| Box::new(small)) })
     }
 
     /// A first grid thumbnail for an unedited raw: the cached render for `job` (the real
@@ -396,6 +400,7 @@ impl crate::Session {
             key: job.key,
             cached: job.cache.clone().into_iter().collect(),
             embedded: Some((path, l, edge)),
+            minimum_embedded_edge: None,
             small: Some(Box::new(job.clone())),
         })
     }
@@ -436,6 +441,7 @@ impl crate::Session {
 
     /// Synchronous render (CLI, MCP, tests).
     pub fn render_now(&mut self, id: PhotoId, max_w: usize, max_h: usize) -> Result<Rendered, String> {
+        lightcraft_pipeline::check_output_size(max_w, max_h)?;
         let job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
         let r = job.run();
         self.accept(&r);
@@ -466,7 +472,17 @@ impl crate::Session {
         space: lightcraft_pipeline::OutputSpace,
         depth: lightcraft_pipeline::OutputDepth,
     ) -> Result<RenderJob, String> {
+        lightcraft_pipeline::check_output_size(max_w, max_h)?;
         let mut job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
+        // An export develops from a source at least twice its size, so it is resized down with a good filter
+        // rather than made from a preview just covering it (for a raw, a binned and box-reduced image)
+        let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
+        let level = SourceLevel::for_size(source_edge_needed(&p, &job.settings, true, max_w.max(max_h)).saturating_mul(2));
+        if level.max_edge() > job.level.max_edge() {
+            job.source = self.media.source_ref(&p, level);
+            job.key ^= ((job.level as u64) << 60) ^ ((level as u64) << 60);
+            job.level = level;
+        }
         // (never from a smart preview: Use Smart Previews instead of Originals is for viewing and editing)
         self.original_job(&mut job);
         // An export renders the full image: never a thumbnail's source developed from a smaller copy of the raw

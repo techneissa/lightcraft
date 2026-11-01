@@ -164,25 +164,23 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
         };
         add(format!("Rating {op} {}★", f.rating), json!({"rating": 0}));
     }
-    if let Some(fl) = f.flag {
-        add(format!("Flag: {}", format!("{fl:?}").to_lowercase()), json!({"flag": Null}));
+    if let Some(shown) = f.flags_shown() {
+        let name = |fl: &lightcraft_catalog::Flag| format!("{fl:?}").to_lowercase();
+        let or = |fls: &[lightcraft_catalog::Flag]| fls.iter().map(name).collect::<Vec<_>>().join(" or ");
+        // empty: `flag` and `flags` exclude each other, so name both constraints
+        let names = if shown.is_empty() {
+            // parenthesised when plural, so "pick and reject or none" cannot read as "(pick and reject) or none"
+            let plural = if f.flags.len() > 1 { format!("({})", or(&f.flags)) } else { or(&f.flags) };
+            format!("{} and {plural}", f.flag.as_ref().map(name).unwrap_or_default())
+        } else {
+            or(&shown)
+        };
+        add(format!("Flag: {names}"), json!({"flag": Null, "flags": []}));
     }
     if let Some(on) = f.ratings_shown().filter(|_| !f.ratings.is_empty()) {
         let names: Vec<String> =
             (0u8..).zip(on).filter(|(_, on)| *on).map(|(n, _)| if n == 0 { "Unrated".to_string() } else { format!("{n}★") }).collect();
         add(format!("Rating: {}", if names.is_empty() { "none".into() } else { names.join(", ") }), json!({"ratings": []}));
-    }
-    if let Some(on) = f.flags_shown().filter(|_| !f.flags.is_empty()) {
-        let names: Vec<String> = on
-            .iter()
-            .map(|fl| match fl {
-                lightcraft_catalog::Flag::Pick => "Picked",
-                lightcraft_catalog::Flag::Reject => "Rejected",
-                lightcraft_catalog::Flag::None => "Unflagged",
-            })
-            .map(String::from)
-            .collect();
-        add(format!("Flag: {}", if names.is_empty() { "none".into() } else { names.join(", ") }), json!({"flags": []}));
     }
     if let Some(shown) = f.labels_shown() {
         let or = |ls: &[lightcraft_catalog::ColorLabel]| ls.iter().map(|l| cat.label_name(*l)).collect::<Vec<_>>().join(" or ");

@@ -71,6 +71,7 @@ pub const DEFAULT: &[&str] = &[
     "rating",
     "flag",
     "colorLabel",
+    "addKeywords",
     "addToAlbum",
     "removeFromAlbum",
     "setAlbumCover",

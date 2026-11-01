@@ -14,7 +14,7 @@ Shadow and Highlight Clipping toggles: the histogram's two triangles each switch
 
 ## Hooks in official files
 
-`crates/raster/src/histogram.rs` (`channel_clipping`), `panels/edit/histogram.rs`, `panels/detail.rs` (`clipping_overlay`), `render.rs` (`clip_overlay`, the loupe keeps its pixels), `state.rs` (`clip_shadows`, `clip_highlights`, legacy `show_clipping`), `menus/menubar.rs`, `menus/run.rs`, `menus/ui_commands.rs`, `panels.rs`, `docs/control-protocol.md`, `docs/parity-checklist.md` (LR-VIEW-CLIPPING), `docs/whats-new.md`
+`crates/raster/src/histogram.rs` (`channel_clipping`), `panels/edit/histogram.rs` (the buttons take the tile and mark colours of official's `clip_button_colors`; a channel colour is used only where it stands 3:1 on the tile), `panels/detail.rs` (`clipping_overlay`), `render.rs` (`clip_overlay`, the loupe keeps its pixels), `state.rs` (`clip_shadows`, `clip_highlights`, legacy `show_clipping`), `menus/menubar.rs`, `menus/run.rs`, `menus/ui_commands.rs`, `panels.rs`, `docs/control-protocol.md`, `docs/parity-checklist.md` (LR-VIEW-CLIPPING), `docs/whats-new.md`
 
 ## Tests
 
