@@ -11,7 +11,7 @@
 - `cargo xtask ci` stops at its `test` step because of it; run the rest by hand (`cargo xtask parity`, `layers`,
   `assets`).
 
-### Known failures on Fork CI only (Linux; not fixed, Mac only)
+### Known failures on Fork CI only (Linux)
 
-- `tests::macos_colour::a_macos_colour_photo_never_shows_the_camera_jpeg_while_it_renders` (`crates/engine`): the
-  macOS Colour feature needs macOS's raw decoder, so the test fails on Linux (Fork CI run 41155652051, 2026-10-31).
+None. `tests::macos_colour` (`crates/engine`) runs on macOS only (`#[cfg(target_os = "macos")]` in `tests.rs`,
+techneissa 2026-11-01): it failed on Linux and stopped `cargo test` before the later crates (ui-egui, apps) ran.
