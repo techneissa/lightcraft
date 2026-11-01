@@ -237,7 +237,7 @@ fn camera_card(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &lightcraft_catalo
     let m = &p.meta;
     // camera, lens and the capture settings are editable (`exif_edit`): the file's values stay, an edit shows over them
     let scope = super::exif_edit::Scope::of(app, p);
-    egui::Frame::NONE.fill(t.canvas).corner_radius(6.0).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+    let card = egui::Frame::NONE.fill(t.canvas).corner_radius(6.0).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let dim = |s: &str| egui::RichText::new(s.to_string()).size(12.0).color(t.text_label);
         super::exif_edit::camera_lens(app, ui, &scope);
@@ -262,6 +262,7 @@ fn camera_card(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &lightcraft_catalo
             register(ui, "info:focus", r.response.rect);
         }
     });
+    register(ui, "info:card", card.response.rect);
 }
 
 /// The camera's focus mode, AF area and tracking in the interface language ("AF-C · Wide · Animal Eye

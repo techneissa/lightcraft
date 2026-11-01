@@ -133,7 +133,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     }
     ui.add_space(14.0);
 
-    // flags (several can be on at once, like the bottom bar's flag buttons; one flag stays a plain `flag`)
+    // flags (several can be on at once, like the bottom bar's flag buttons; always a `flags` set)
     caption(ui, "Flag");
     for (id, icon, flag, tip) in [
         ("pick", Icon::FlagPick, Flag::Pick, "Picked"),
