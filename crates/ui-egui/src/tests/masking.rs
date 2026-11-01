@@ -80,8 +80,9 @@ fn subtract_brush_removes_sky_coverage_and_add_restores_it() {
     exec(&mut h, "mask.add", json!({"kind": "sky"}));
     let r = h.request("ui.set", json!({"brushSize": 0.15, "brushFeather": 0.0, "brushFlow": 100.0}), T);
     assert_eq!(r["ok"], true, "{r}");
-    click(&mut h, "button:maskMinus:1");
-    click(&mut h, "maskComp:subtract:brush");
+    click(&mut h, "button:maskMode-subtract");
+    click(&mut h, "icon:maskPart:brush");
+    assert!(h.app.ui.brush_erase, "a Subtract part starts on Erase: its strokes take away from the mask");
     brush_at(&mut h, 0.5, 0.5);
     assert!(mask_coverage(&h, 0, 50, 50) < 0.01, "Subtract > Brush must remove sky coverage");
     assert!(mask_coverage(&h, 0, 10, 10) > 0.99, "unpainted sky stays selected");
@@ -97,12 +98,12 @@ fn subtract_brush_removes_sky_coverage_and_add_restores_it() {
     assert!(mask_coverage(&h, 0, 25, 50) < 0.01);
     assert_eq!(develop(&h).masks[0].components.len(), 2);
 
-    // Erase removes paint from the subtract component, restoring the underlying sky.
-    h.app.ui.brush_erase = true;
+    // Add, named by its effect on the mask, takes paint out of the subtract component: the underlying sky is back.
+    h.app.ui.brush_erase = false;
     brush_at(&mut h, 0.5, 0.5);
     assert!(mask_coverage(&h, 0, 50, 50) > 0.99);
-    click(&mut h, "button:maskPlus:1");
-    click(&mut h, "maskComp:add:brush");
+    click(&mut h, "button:maskMode-add");
+    click(&mut h, "icon:maskPart:brush");
     brush_at(&mut h, 0.25, 0.5);
     assert!(mask_coverage(&h, 0, 25, 50) > 0.99, "Add must be composed after Subtract");
     assert_eq!(develop(&h).masks[0].components.len(), 3);

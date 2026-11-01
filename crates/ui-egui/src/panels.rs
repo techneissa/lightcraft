@@ -24,6 +24,7 @@ pub mod layout_overlay;
 pub mod left;
 pub mod library_problem;
 pub mod mask_effects;
+pub mod mask_parts;
 pub mod masking;
 pub mod notices;
 pub mod people;

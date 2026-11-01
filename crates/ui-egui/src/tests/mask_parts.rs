@@ -1,0 +1,188 @@
+//! The Masking panel's parts (issue #26): the Add · Subtract · Intersect control, the buttons for each kind of part,
+//! picking a part to paint into it again, what Add and Erase mean in a Subtract part, and the steps of Esc.
+
+use std::time::Duration;
+
+use lightcraft_develop::{MaskOp, MaskShape};
+use serde_json::json;
+
+use crate::headless::Headless;
+use crate::{LightcraftApp, Services};
+
+const T: Duration = Duration::from_secs(20);
+const SETTLE: Duration = Duration::from_secs(120);
+
+fn masking() -> Headless {
+    let services = Services { png: None, ..Default::default() };
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+    let mut h = Headless::new(app, [1200.0, 800.0], 1.0);
+    let r = h.request("ui.set", json!({"view": "detail", "brushSize": 0.15, "brushFeather": 0.0, "brushFlow": 100.0}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    exec(&mut h, "panel.masking", json!({}));
+    h
+}
+
+fn exec(h: &mut Headless, command: &str, params: serde_json::Value) -> serde_json::Value {
+    let r = h.request("engine.execute", json!({"command": command, "params": params}), T);
+    assert_eq!(r["ok"], true, "{command}: {r}");
+    r["result"].clone()
+}
+
+fn click(h: &mut Headless, id: &str) {
+    let r = h.request("ui.clickWidget", json!({"id": id}), T);
+    assert_eq!(r["ok"], true, "{id}: {r}");
+}
+
+/// A click on the label end of a part's row (the middle is under its buttons once they show).
+fn click_row(h: &mut Headless, part: usize) {
+    let r = h.request("ui.clickWidget", json!({"id": format!("component:{part}"), "fx": 0.2}), T);
+    assert_eq!(r["ok"], true, "{r}");
+}
+
+fn brush_at(h: &mut Headless, x: f64, y: f64) {
+    let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": x, "y": y}, {"kind": "up", "x": x, "y": y}]}), T);
+    assert_eq!(r["ok"], true, "{r}");
+}
+
+fn mask(h: &Headless) -> lightcraft_develop::Mask {
+    let id = h.app.session.active().expect("active photo");
+    h.app.session.develop_of(id).expect("develop").masks[0].clone()
+}
+
+fn ops(h: &Headless) -> Vec<MaskOp> {
+    mask(h).components.iter().map(|c| c.op).collect()
+}
+
+fn strokes(h: &Headless, part: usize) -> Vec<lightcraft_develop::BrushStroke> {
+    match &mask(h).components[part].shape {
+        MaskShape::Brush { strokes } => strokes.clone(),
+        other => panic!("part {part} is {other:?}"),
+    }
+}
+
+#[test]
+fn the_mode_control_sets_the_mode_of_the_next_part_and_selects_it() {
+    let mut h = masking();
+    exec(&mut h, "mask.add", json!({"kind": "radial"}));
+    h.settle(SETTLE);
+    click(&mut h, "button:maskMode-subtract");
+    assert_eq!(h.app.ui.mask_op, MaskOp::Subtract);
+    click(&mut h, "icon:maskPart:linear");
+    click(&mut h, "button:maskMode-intersect");
+    click(&mut h, "icon:maskPart:sky");
+    assert_eq!(ops(&h), [MaskOp::Add, MaskOp::Subtract, MaskOp::Intersect]);
+    assert_eq!(h.app.session.active_part(), Some(2), "the part just added is the selected one");
+    // the mode stays where it was put, for the next part too
+    click(&mut h, "icon:maskPart:linear");
+    assert_eq!(ops(&h).last(), Some(&MaskOp::Intersect));
+    // a brush cannot intersect: its button does nothing
+    let before = mask(&h).components.len();
+    let _ = h.request("ui.clickWidget", json!({"id": "icon:maskPart:brush"}), T);
+    assert_eq!(mask(&h).components.len(), before);
+    h.settle(SETTLE);
+}
+
+#[test]
+fn a_part_row_selects_the_part_and_its_buttons_change_it() {
+    let mut h = masking();
+    exec(&mut h, "mask.add", json!({"kind": "radial"}));
+    exec(&mut h, "mask.addComponent", json!({"op": "add", "kind": "linear"}));
+    h.settle(SETTLE);
+    click_row(&mut h, 1);
+    assert_eq!(h.app.session.active_part(), Some(1));
+    // the selected row's buttons: the mode, Invert and Delete (the base part has no mode)
+    click(&mut h, "partMode:1:subtract");
+    assert_eq!(ops(&h), [MaskOp::Add, MaskOp::Subtract]);
+    click(&mut h, "partMode:1:intersect");
+    assert_eq!(ops(&h), [MaskOp::Add, MaskOp::Intersect]);
+    click(&mut h, "partInvert:1");
+    assert!(mask(&h).components[1].invert);
+    assert_eq!(h.app.session.active_part(), Some(1), "its buttons do not pick the row again, nor lose it");
+    click_row(&mut h, 0);
+    assert_eq!(h.app.session.active_part(), Some(0));
+    assert!(h.app.widgets.iter().all(|(id, _)| id != "partMode:0:add"), "the first part is the base: no mode buttons");
+    click_row(&mut h, 1);
+    click(&mut h, "partDelete:1");
+    assert_eq!(mask(&h).components.len(), 1);
+    h.settle(SETTLE);
+}
+
+#[test]
+fn picking_a_brush_part_resumes_painting_into_it_and_esc_steps_back() {
+    let mut h = masking();
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    brush_at(&mut h, 0.3, 0.3);
+    exec(&mut h, "tool.brush", json!({"op": "add"}));
+    brush_at(&mut h, 0.7, 0.7);
+    assert_eq!((strokes(&h, 0).len(), strokes(&h, 1).len()), (1, 1));
+    assert_eq!(h.app.session.active_part(), Some(1));
+
+    // Esc: the brush first, the part still selected
+    exec(&mut h, "view.back", json!({}));
+    assert_eq!(h.app.ui.tool, "");
+    assert_eq!(h.app.session.active_part(), Some(1));
+    // the first brush part picked again: the brush is on, on Add, and strokes go into that part, not the last one
+    h.app.ui.brush_erase = true;
+    click_row(&mut h, 0);
+    assert_eq!((h.app.ui.tool.as_str(), h.app.ui.brush_erase, h.app.session.active_part()), ("brush", false, Some(0)));
+    brush_at(&mut h, 0.5, 0.5);
+    assert_eq!((strokes(&h, 0).len(), strokes(&h, 1).len()), (2, 1));
+    // Esc: the brush, then the part (the mask stays), then the photo goes back to the grid
+    exec(&mut h, "view.back", json!({}));
+    assert_eq!((h.app.ui.tool.as_str(), h.app.session.active_part()), ("", Some(0)));
+    exec(&mut h, "view.back", json!({}));
+    assert_eq!((h.app.session.active_part(), h.app.session.active_mask.is_some()), (None, true));
+    exec(&mut h, "view.back", json!({}));
+    assert_eq!(h.app.ui.view, crate::state::ViewMode::PhotoGrid);
+    h.settle(SETTLE);
+}
+
+#[test]
+fn add_and_erase_name_what_a_stroke_does_to_the_mask_in_a_subtract_part_too() {
+    let mut h = masking();
+    exec(&mut h, "mask.add", json!({"kind": "sky"}));
+    click(&mut h, "button:maskMode-subtract");
+    click(&mut h, "icon:maskPart:brush");
+    // a Subtract part starts on Erase: its strokes paint the part, which takes the mask away
+    assert!(h.app.ui.brush_erase);
+    brush_at(&mut h, 0.4, 0.5);
+    assert!(!strokes(&h, 1)[0].erase);
+    // Add: the stroke takes paint out of the part, giving the mask back
+    h.app.ui.brush_erase = false;
+    brush_at(&mut h, 0.5, 0.5);
+    assert!(strokes(&h, 1)[1].erase);
+    // ⌥ turns it around for one stroke
+    let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": 0.6, "y": 0.5}, {"kind": "up", "x": 0.6, "y": 0.5}], "alt": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(!strokes(&h, 1)[2].erase);
+    h.settle(SETTLE);
+}
+
+#[test]
+fn tool_brush_takes_a_part_and_the_mode() {
+    let mut h = masking();
+    exec(&mut h, "mask.add", json!({"kind": "radial"}));
+    exec(&mut h, "mask.addComponent", json!({"op": "add", "kind": "brush"}));
+    let r = h.request("engine.execute", json!({"command": "tool.brush", "params": {"component": 0}}), T);
+    assert_eq!(r["ok"], false, "part 0 is a radial gradient: {r}");
+    exec(&mut h, "tool.brush", json!({"component": 1, "erase": true}));
+    assert_eq!((h.app.session.active_part(), h.app.ui.brush_erase), (Some(1), true));
+    h.settle(SETTLE);
+}
+
+#[test]
+fn delete_removes_the_selected_part_else_the_mask() {
+    let mut h = masking();
+    exec(&mut h, "mask.add", json!({"kind": "radial"}));
+    exec(&mut h, "mask.addComponent", json!({"op": "add", "kind": "linear"}));
+    let id = mask(&h).id;
+    exec(&mut h, "mask.select", json!({"id": id, "component": 1}));
+    let r = h.request("ui.key", json!({"key": "Delete"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(mask(&h).components.len(), 1, "the part, not the mask");
+    let r = h.request("ui.key", json!({"key": "Delete"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let d = h.app.session.develop_of(h.app.session.active().expect("photo")).expect("develop");
+    assert!(d.masks.is_empty(), "no part selected: the mask goes");
+    h.settle(SETTLE);
+}

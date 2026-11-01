@@ -77,6 +77,12 @@ pub enum Icon {
     Radial,
     Sky,
     Subject,
+    /// Object mask: a click's arrow inside a selection frame.
+    ObjectSelect,
+    /// Describe mask: lines of text with a caret.
+    Describe,
+    /// Background mask: the Subject figure's frame filled, the figure left out.
+    Background,
     Picker,
     Rotate,
     /// A curved line with an arrow at both ends: drag to rotate, either way (the crop tool's pointer).
@@ -564,6 +570,22 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.line(&[(2.5, 17.0), (17.5, 17.0)]);
         }
         Subject => {
+            pen.circle(10.0, 7.0, 3.0);
+            pen.arc(10.0, 18.0, 6.5, 200.0, 340.0);
+            pen.rect(2.5, 2.5, 17.5, 17.5, 2.0);
+        }
+        ObjectSelect => {
+            pen.rect(2.5, 2.5, 17.5, 17.5, 2.0);
+            pen.closed(&[(7.0, 5.5), (7.0, 14.5), (9.3, 12.3), (11.0, 16.0), (12.7, 15.2), (11.0, 11.6), (14.0, 11.6)]);
+        }
+        Describe => {
+            pen.line(&[(3.0, 5.0), (17.0, 5.0)]);
+            pen.line(&[(3.0, 10.0), (13.0, 10.0)]);
+            pen.line(&[(3.0, 15.0), (8.0, 15.0)]);
+            pen.line(&[(12.5, 12.5), (12.5, 17.5)]);
+        }
+        Background => {
+            pen.p.rect_filled(Rect::from_min_max(pen.pt(2.5, 2.5), pen.pt(17.5, 17.5)), 2.0 * k, color.gamma_multiply(0.35));
             pen.circle(10.0, 7.0, 3.0);
             pen.arc(10.0, 18.0, 6.5, 200.0, 340.0);
             pen.rect(2.5, 2.5, 17.5, 17.5, 2.0);

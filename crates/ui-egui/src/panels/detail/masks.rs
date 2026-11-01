@@ -535,10 +535,21 @@ fn brush_tool(
     let active = app.session.active_mask;
     let long = (map.rect.width().max(map.rect.height())) as f64;
     let r = (app.ui.brush_size as f64 * long) as f32;
+    // what a stroke does to the mask: Add or Erase, turned around while ⌥ is held
+    let takes_away = app.ui.brush_erase != ui.input(|i| i.modifiers.alt);
     if let Some(h) = resp.hover_pos() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         p.circle_stroke(h, r, Stroke::new(1.0, Color32::WHITE));
         p.circle_stroke(h, r * (1.0 - app.ui.brush_feather / 100.0).max(0.05), Stroke::new(1.0, Color32::from_white_alpha(120)));
+        // + adds to the mask, − takes away from it
+        let arm = (r * 0.25).clamp(3.0, 7.0);
+        for (stroke, color) in [(3.0, Color32::from_black_alpha(160)), (1.5, Color32::WHITE)] {
+            let line = Stroke::new(stroke, color);
+            p.line_segment([h - vec2(arm, 0.0), h + vec2(arm, 0.0)], line);
+            if !takes_away {
+                p.line_segment([h - vec2(0.0, arm), h + vec2(0.0, arm)], line);
+            }
+        }
     }
     if let Some(q) = resp.interact_pointer_pos()
         && (resp.drag_started() || resp.dragged() || resp.clicked())
@@ -614,13 +625,15 @@ fn brush_tool(
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
         // holding ⌥ (Alt) paints with the other mode: Erase while adding, Add while erasing
         let (alt, shift) = resp.ctx.input(|i| (i.modifiers.alt, i.modifiers.shift));
-        let erase = app.ui.brush_erase != alt;
+        // Add and Erase are named by their effect on the mask: in a Subtract part the stroke goes the other way
+        let (part, part_op) = super::super::mask_parts::painting_into(app, d);
+        let erase = super::super::mask_parts::stroke_erase(app.ui.brush_erase != alt, part_op);
         // a ⇧-click draws a straight line from where the last stroke ended, as in Lightroom
         let connect = shift && resp.clicked() && pts.len() == 1;
         let _ = app.run(
             "mask.brushStroke",
             json!({"points": pts, "size": app.ui.brush_size, "feather": app.ui.brush_feather, "flow": app.ui.brush_flow,
-                   "erase": erase, "autoMask": app.ui.brush_auto_mask, "pressure": pressure, "connect": connect}),
+                   "erase": erase, "autoMask": app.ui.brush_auto_mask, "pressure": pressure, "connect": connect, "component": part}),
         );
     }
 }
