@@ -11,7 +11,7 @@ use crate::colorops::ColorOps;
 use crate::geometry::Frame;
 use crate::local::log_lum;
 use crate::output::{DeepImage, DeepSamples, OutputDepth, OutputSpace, OutputTrc};
-use crate::tone::ToneMap;
+use crate::tone::{SliderModel, ToneMap};
 use crate::{Prepared, SourceInfo, for_rows};
 
 #[inline]
@@ -21,12 +21,14 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 }
 
 /// How much of the sharpening a pixel gets (0..1) under Masking `masking` (0..1), from its fine
-/// detail `det` (log luminance minus its texture blur): 1 everywhere at 0, only stronger edges
+/// detail `det` (log luminance minus its sharpening band): 1 everywhere at 0, only stronger edges
 /// as it rises. The GPU kernel (`finish.wgsl`) computes the same; Alt-drag on Masking shows it
-/// ([`crate::Overlay::SharpenMask`]).
+/// ([`crate::Overlay::SharpenMask`]). `v3`: process V3's pixel-scale band, whose edges are a few hundredths of
+/// an EV, so the mask's range is a third of V1 / V2's.
 #[inline]
-pub fn sharpen_mask_weight(masking: f32, det: f32) -> f32 {
-    if masking > 0.0 { smooth(masking * 0.25, masking * 0.25 + 0.15, det.abs()) } else { 1.0 }
+pub fn sharpen_mask_weight(masking: f32, det: f32, v3: bool) -> f32 {
+    let (start, span) = if v3 { (0.08, 0.08) } else { (0.25, 0.15) };
+    if masking > 0.0 { smooth(masking * start, masking * start + span, det.abs()) } else { 1.0 }
 }
 
 /// Parametric region curve (encoded domain) composed with the master point curve.
@@ -64,6 +66,23 @@ pub struct Vig {
     pub power: f32,
     pub highlights: f32,
     pub style: VignetteStyle,
+    /// Process V3: the response is in stops ([`vignette_dark_factor`]) instead of a straight multiplier.
+    pub v3: bool,
+}
+
+/// Process V3 vignette: the darkening reaches `VIG_V3_DARK_STOPS * |amount|^VIG_V3_DARK_CURVE` stops at full strength
+/// of the falloff `t` (about -2.75 stops in the corner at Amount -100, -1.2 at -50, -0.4 at -20). V1 / V2 multiply
+/// by `1 + amount * t`, which is black at -100 and only -1 stop at -50. The WGSL kernel repeats the constants.
+pub const VIG_V3_DARK_STOPS: f32 = 2.75;
+pub const VIG_V3_DARK_CURVE: f32 = 1.2;
+/// Process V3 lightening: the share of the way to white at Amount +100 and full falloff (V1 / V2: 0.85, which
+/// takes a mid grey corner up 2.3 stops; this gives about 1.5).
+pub const VIG_V3_LIGHT: f32 = 0.40;
+
+/// The multiplier of a negative vignette `amount` (-1..0) at falloff `t` (0..1), process V3.
+#[inline]
+pub fn vignette_dark_factor(amount: f32, t: f32) -> f32 {
+    (-VIG_V3_DARK_STOPS * (-amount).powf(VIG_V3_DARK_CURVE) * t).exp2()
 }
 
 fn vignette(s: &DevelopSettings) -> Option<Vig> {
@@ -78,12 +97,19 @@ fn vignette(s: &DevelopSettings) -> Option<Vig> {
             power: if r >= 0.0 { 2.0 } else { 2.0 + (-r) * 6.0 },
             highlights: (v.highlights / 100.0) as f32,
             style: v.style,
+            v3: s.process >= Process::V3.version(),
         }
     })
 }
 
 /// Hash constants of [`grain_noise`] (shared with the GPU kernel).
 pub const GRAIN_HASH: [u32; 4] = [0x8da6_b343, 0xd816_3841, 0xcb1a_b31f, 0x5bd1_e995];
+
+/// `v`, or 0 when it is NaN or infinite.
+#[inline]
+fn finite_or_zero(v: f32) -> f32 {
+    if v.is_finite() { v } else { 0.0 }
+}
 
 #[inline]
 fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
@@ -173,11 +199,17 @@ pub struct FinishParams {
     pub proof: Option<crate::output::ProofParams>,
     pub hl: f32,
     pub sh: f32,
+    /// Process V3 or later: the wider Shadows / Highlights weights ([`shadows_highlights_delta`]).
+    pub tone_v3: bool,
     pub clar: f32,
     pub tex: f32,
     pub dehaze: f32,
     pub sharpen: f32,
     pub sharpen_mask: f32,
+    /// Sharpening Detail as 0..1 (process V3: how much of the finest, noise-sized detail is sharpened, see [`sharpen_mix`]).
+    pub sharpen_detail: f32,
+    /// Process V3: the sharpening gain for the Radius slider ([`sharpen_gain`]).
+    pub sharpen_gain: f32,
     /// Airlight after and before exposure, exposure gain and EV (see [`crate::Prepared`]).
     pub air: f32,
     pub air_pre: f32,
@@ -251,11 +283,14 @@ impl FinishParams {
             proof: None,
             hl: (s.light.highlights / 100.0) as f32,
             sh: (s.light.shadows / 100.0) as f32,
+            tone_v3: s.process >= Process::V3.version(),
             clar,
             tex,
             dehaze,
             sharpen: (s.detail.sharpen_amount / 150.0) as f32,
             sharpen_mask: (s.detail.sharpen_masking / 100.0) as f32,
+            sharpen_detail: (s.detail.sharpen_detail / 100.0).clamp(0.0, 1.0) as f32,
+            sharpen_gain: sharpen_gain(s.detail.sharpen_radius),
             air: air_pre * gain,
             air_pre,
             gain,
@@ -290,13 +325,16 @@ impl FinishParams {
 /// lifts its highlights past white ([`ToneMap::camera_hdr`]), so it matches the SDR render below them.
 pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let l = &s.light;
-    match s.process.process() {
+    let model = match s.process.process() {
         // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
-        Process::V1 | Process::V2 => match info.camera_tone.as_ref().filter(|_| info.raw) {
-            Some(curve) => ToneMap::camera_hdr(curve, l.contrast, l.whites, l.blacks, peak),
-            None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
-            None => ToneMap::display_hdr(l.contrast, l.whites, l.blacks, peak),
-        },
+        Process::V1 | Process::V2 => SliderModel::Legacy,
+        // V3: Contrast, Whites and Blacks as strong on every path as on `ToneMap::hdr`
+        Process::V3 => SliderModel::Unified,
+    };
+    match info.camera_tone.as_ref().filter(|_| info.raw) {
+        Some(curve) => ToneMap::camera_hdr_with(curve, l.contrast, l.whites, l.blacks, peak, model),
+        None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
+        None => ToneMap::display_hdr_with(l.contrast, l.whites, l.blacks, peak, model, crate::tone::GREY),
     }
 }
 
@@ -446,21 +484,22 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let t = smooth(v.start, v.start + v.width, dist);
                 if t > 0.0 {
                     let lum = luminance_2020(d).clamp(0.0, 1.0);
+                    let k = if v.v3 { VIG_V3_LIGHT } else { 0.85 };
                     if v.amount < 0.0 {
-                        let mut f = 1.0 + v.amount * t;
+                        let mut f = if v.v3 { vignette_dark_factor(v.amount, t) } else { 1.0 + v.amount * t };
                         if v.style == VignetteStyle::HighlightPriority {
                             f += (1.0 - f) * v.highlights * smooth(0.4, 1.0, lum);
                         }
-                        if v.style == VignetteStyle::PaintOverlay {
+                        if v.style == VignetteStyle::PaintOverlay && !v.v3 {
                             d = d.map(|c| c * (1.0 - (-v.amount) * t) + 0.0);
                         } else {
                             d = d.map(|c| c * f);
                         }
                     } else if hdr {
                         // lighten towards SDR white; never pull HDR highlights down to it
-                        d = d.map(|c| c + (1.0 - c).max(0.0) * v.amount * t * 0.85);
+                        d = d.map(|c| c + (1.0 - c).max(0.0) * v.amount * t * k);
                     } else {
-                        d = d.map(|c| c + (1.0 - c) * v.amount * t * 0.85);
+                        d = d.map(|c| c + (1.0 - c) * v.amount * t * k);
                     }
                 }
             }
@@ -532,9 +571,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     lum = lum.clamp(0.0, 1.0);
                 }
                 let k = amt * g * (0.35 + 2.6 * lum * (1.0 - lum));
-                if k.is_finite() {
-                    e = e.map(|v| v + k);
-                }
+                // (a non-finite grain, from a degenerate frame, adds nothing)
+                let k = finite_or_zero(k);
+                e = e.map(|v| v + k);
             }
             let e = match &p_lut {
                 Some((l, k)) if hdr => {
@@ -635,14 +674,42 @@ fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 
     (color, log_luminance)
 }
 
+/// Change of log2 luminance from Shadows / Highlights (each -1..1) for a pixel whose edge-aware
+/// base is `base` (log2 of luminance over mid grey). `v3` selects the process V3 weights; V1 and V2
+/// keep theirs. The GPU shader (`finish.wgsl`) carries the same constants.
+pub(crate) fn shadows_highlights_delta(shadows: f32, highlights: f32, base: f32, v3: bool) -> f32 {
+    if v3 {
+        // Shadows reach from the deepest tones into the lower midtones (about 0.9 EV at 0.05 linear,
+        // 0.5 EV at 0.1, a little at mid grey) and stop before the highlights; Highlights mirror that
+        // from the upper midtones. Both slopes stay well under 1, so tones never cross.
+        let shadow_weight = 1.0 - smooth(-5.0, 1.5, base);
+        let highlight_weight = smooth(-1.4, 2.8, base);
+        let mut lift = highlights * 1.7 * highlight_weight;
+        if lift > 0.0 {
+            // a positive lift rolls off towards white instead of clipping the sky: past `KNEE` the
+            // lifted base follows a tanh shoulder that never passes `WHITE` (0.98 linear), and a
+            // tone is never made darker than it was
+            const KNEE: f32 = 1.0;
+            const WHITE: f32 = 2.45;
+            let lifted = base + lift;
+            if lifted > KNEE {
+                let shoulder = KNEE + (WHITE - KNEE) * ((lifted - KNEE) / (WHITE - KNEE)).tanh();
+                lift = (shoulder - base).max(0.0);
+            }
+        }
+        return shadows * 1.7 * shadow_weight + lift;
+    }
+    let shadow_weight = 1.0 - smooth(-4.8, 0.3, base);
+    let highlight_weight = smooth(-1.0, 2.8, base);
+    shadows * 1.7 * shadow_weight * shadow_weight.sqrt() + highlights * 1.7 * highlight_weight
+}
+
 fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1: f32, local: &PixelLocalTerms) -> f32 {
     let [_, _, _, l_con, l_hl, l_sh, l_wh, l_bl, l_tex, l_clar, _, _, _, l_sharp, l_noise, _, _] = local.values;
     let mut delta = 0.0;
     let (highlights, shadows) = (fp.hl + l_hl, fp.sh + l_sh);
     if highlights != 0.0 || shadows != 0.0 {
-        let shadow_weight = 1.0 - smooth(-4.8, 0.3, base);
-        let highlight_weight = smooth(-1.0, 2.8, base);
-        delta += shadows * 1.7 * shadow_weight * shadow_weight.sqrt() + highlights * 1.7 * highlight_weight;
+        delta += shadows_highlights_delta(shadows, highlights, base, fp.tone_v3);
     }
     if l_wh != 0.0 {
         delta += l_wh * 0.8 * smooth(0.5, 3.0, l1);
@@ -663,16 +730,25 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
     }
     let texture = fp.tex + l_tex;
     let sharpen = l_sharp * 0.6 + fp.sharpen;
-    if (texture != 0.0 || sharpen != 0.0)
+    if (texture != 0.0 || (sharpen != 0.0 && !fp.tone_v3))
         && let Some(blur) = &p.texture_blur
     {
         let detail = p.log_l.data[index] - blur.data[index];
         let tame = 1.0 - 0.6 * smooth(0.4, 1.6, detail.abs());
         delta += texture * 1.1 * detail.clamp(-1.0, 1.0) * tame;
-        if sharpen != 0.0 {
-            let mask = sharpen_mask_weight(fp.sharpen_mask, detail);
+        if sharpen != 0.0 && !fp.tone_v3 {
+            let mask = sharpen_mask_weight(fp.sharpen_mask, detail, false);
             delta += sharpen * 1.3 * detail.clamp(-0.8, 0.8) * mask;
         }
+    }
+    // process V3: sharpening has a band of its own, at the Radius slider's scale
+    if sharpen != 0.0
+        && fp.tone_v3
+        && let Some(blur) = &p.sharpen_blur
+    {
+        let detail = p.log_l.data[index] - blur.data[index];
+        let mask = sharpen_mask_weight(fp.sharpen_mask, detail, true);
+        delta += sharpen * fp.sharpen_gain * detail.clamp(-0.8, 0.8) * mask * sharpen_mix(fp.sharpen_detail, detail);
     }
     if l_noise != 0.0
         && let Some(blur) = &p.texture_blur
@@ -681,6 +757,30 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
         delta -= l_noise.clamp(-1.0, 1.0) * 0.9 * detail * (1.0 - smooth(0.1, 0.5, detail.abs()));
     }
     delta
+}
+
+/// Process V3 sharpening gain at Radius 1 and below (V1 / V2: 1.3).
+pub const SHARPEN_GAIN_V3: f32 = 2.4;
+
+/// Process V3 sharpening gain at Radius `radius`: [`SHARPEN_GAIN_V3`] up to Radius 1, then falling as `Radius^-0.7`
+/// (a wider band already moves an edge further per unit of gain and its halo is wider, so the gain gives way and
+/// Radius 3 stays strong without blowing a bright band). The WGSL kernel reads it as `SHARPEN_GAIN`.
+pub fn sharpen_gain(radius: f64) -> f32 {
+    let r = if radius.is_finite() { radius.clamp(0.1, 10.0) as f32 } else { 1.0 };
+    SHARPEN_GAIN_V3 * r.max(1.0).powf(-0.7)
+}
+
+/// Band detail (EV) below which only the Detail slider's share counts, and above which it all counts (the band is
+/// pixel-scale, so an edge of a real photo is a few hundredths of an EV from its blur). The WGSL kernel repeats them.
+pub const SHARPEN_MIX_LO: f32 = 0.03;
+pub const SHARPEN_MIX_HI: f32 = 0.15;
+
+/// Process V3: the share of the band detail `detail` (log2 luminance minus its fine blur) that sharpening
+/// boosts. Edges (more than [`SHARPEN_MIX_HI`] EV from their blur) always count; finer, noise-sized detail only as
+/// much as the Detail slider (0..1) allows, so a low Detail sharpens edges without raising the noise.
+#[inline]
+pub fn sharpen_mix(sharpen_detail: f32, detail: f32) -> f32 {
+    sharpen_detail + (1.0 - sharpen_detail) * smooth(SHARPEN_MIX_LO, SHARPEN_MIX_HI, detail.abs())
 }
 
 /// A colour needing more desaturation than this (scale < `GAMUT_WARN`) to fit is out of gamut for

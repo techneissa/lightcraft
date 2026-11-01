@@ -313,7 +313,13 @@ pub(super) fn color_range_pick(app: &mut LightcraftApp, ui: &egui::Ui, resp: &eg
 pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
     let active = app.session.active_mask;
     let clip = app.canvas_rect.unwrap_or(map.rect);
-    let p = &ui.painter_at(clip);
+    let mut painter = ui.painter_at(clip);
+    // an ⌥-drag preview (clipped highlights / crushed shadows of the render) shows the photo alone:
+    // no outlines, handles or pins over it while it is up
+    if crate::panels::clipping::alt_overlay(app).is_some() {
+        painter.set_invisible();
+    }
+    let p = &painter;
     // (mask, component, handle, screen position) of everything that can be grabbed
     let mut grips: Vec<(u32, usize, u8, Pos2)> = Vec::new();
     // pins follow Show Pins and the Tool Overlay mode (Shift+H); Auto hides them while brushing
@@ -565,7 +571,7 @@ fn brush_tool(
     let visible = active.and_then(|id| d.masks.iter().find(|m| m.id == id)).is_none_or(|m| m.visible);
     let all = app.ui.mask_overlay_all && (visible || d.masks.iter().any(|m| m.visible && !m.components.is_empty()));
     let shown = if all { visible } else { app.ui.mask_overlay } && !(colored && app.ui.mask_overlay_opacity <= 0.0);
-    if shown && let Some(Gesture::Brush { points, pressure }) = &app.gesture {
+    if let Some(Gesture::Brush { points, pressure }) = &app.gesture {
         let screen: Vec<Pos2> = points.iter().map(|q| map.screen(*q)).collect();
         // opacity 0 only gets here in the image views, which ignore it: a fixed tint there
         let opacity = if app.ui.mask_overlay_opacity > 0.0 { app.ui.mask_overlay_opacity / 100.0 } else { 110.0 / 255.0 };
@@ -579,14 +585,32 @@ fn brush_tool(
             color: app.ui.mask_overlay_color,
             opacity: opacity.clamp(0.0, 1.0),
         };
-        crate::brush_live::paint(&mut app.brush_live, ui.ctx(), p, params, &screen, pressure);
-    } else {
-        app.brush_live = None;
+        // zoomed in, the window render (not the whole-frame one the blend is made of) is on screen
+        let images = app
+            .session
+            .active()
+            .filter(|_| !app.renderer.textures.contains_key(&crate::render::Slot::Region))
+            .and_then(|id| super::brush_preview::images(app, id, map.rect));
+        // (the live adjustment shows with the overlay hidden too: only the tint follows `shown`, issue #2549)
+        let look = crate::brush_live::Look {
+            images: images.as_ref(),
+            overlay: shown && (images.is_none() || app.ui.mask_overlay),
+            auto: app.ui.brush_auto_mask,
+            now: ui.input(|i| i.time),
+        };
+        crate::brush_live::paint(&mut app.brush_live, ui.ctx(), p, params, &screen, pressure, &look);
+    } else if app.brush_live.is_some() {
+        // a stroke just committed keeps showing its adjustment until the render that has it arrives
+        let key = app.renderer.textures.get(&crate::render::Slot::Main).map(|t| t.key);
+        if crate::brush_live::paint_held(&mut app.brush_live, p, map.rect, key, ui.input(|i| i.time)) {
+            ui.ctx().request_repaint();
+        }
     }
     if (resp.drag_stopped() || resp.clicked())
         && let Some(Gesture::Brush { points, pressure }) = app.gesture.take()
     {
-        app.brush_live = None;
+        let key = app.renderer.textures.get(&crate::render::Slot::Main).map(|t| t.key);
+        crate::brush_live::hold(&mut app.brush_live, key, ui.input(|i| i.time));
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
         // holding ⌥ (Alt) paints with the other mode: Erase while adding, Add while erasing
         let (alt, shift) = resp.ctx.input(|i| (i.modifiers.alt, i.modifiers.shift));

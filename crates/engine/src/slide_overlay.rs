@@ -632,12 +632,12 @@ fn exposure(p: &Photo) -> String {
 }
 
 fn shutter(p: &Photo) -> String {
-    let s = p.meta.shutter.trim();
+    let s = p.meta.effective_shutter().trim();
     if s.is_empty() || s.ends_with('s') || s.ends_with('"') { s.to_string() } else { format!("{s} s") }
 }
 
 fn aperture(p: &Photo) -> String {
-    p.meta.aperture.filter(|a| a.is_finite() && *a > 0.0).map(|a| format!("f/{a:.1}").replace(".0", "")).unwrap_or_default()
+    p.meta.effective_aperture().filter(|a| a.is_finite() && *a > 0.0).map(|a| format!("f/{a:.1}").replace(".0", "")).unwrap_or_default()
 }
 
 /// The overlay tokens beyond the rename ones; `{seq}` has no meaning on a slide and stays as typed.
@@ -649,7 +649,7 @@ fn overlay_token(p: &Photo, name: &str, arg: Option<&str>, tag: &str) -> Option<
         "exposure" => exposure(p),
         "shutter" => shutter(p),
         "aperture" => aperture(p),
-        "focal" => p.meta.focal_mm.filter(|f| f.is_finite() && *f > 0.0).map(|f| format!("{f:.0} mm")).unwrap_or_default(),
+        "focal" => p.meta.effective_focal_mm().filter(|f| f.is_finite() && *f > 0.0).map(|f| format!("{f:.0} mm")).unwrap_or_default(),
         "date" if arg.is_none() => crate::rename::expand_tokens("{date:%Y-%m-%d}", p, 1, 1),
         "seq" | "n" => format!("{{{tag}}}"),
         _ => return None,

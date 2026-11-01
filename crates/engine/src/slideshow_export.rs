@@ -240,7 +240,7 @@ impl Slide {
 
 /// `img` at exactly `w × h`: as it is when it already is (the composer's output), else centred
 /// on black (a slide bigger than the composer draws, or a surprise from a renderer).
-fn fit(img: Rgba8, w: usize, h: usize) -> Rgba8 {
+pub(crate) fn fit(img: Rgba8, w: usize, h: usize) -> Rgba8 {
     if img.width == w && img.height == h && img.data.len() == w * h {
         return img;
     }
@@ -272,7 +272,7 @@ pub struct Prepared {
 }
 
 /// The size of a slide whose long side is `long` at `ratio` (width / height).
-fn sized(ratio: f64, long: usize) -> (usize, usize) {
+pub(crate) fn sized(ratio: f64, long: usize) -> (usize, usize) {
     let short = |l: usize, r: f64| ((l as f64 / r).round() as usize).max(1);
     if ratio >= 1.0 { (long, short(long, ratio)) } else { (short(long, 1.0 / ratio), long) }
 }
@@ -375,14 +375,14 @@ const CANCELLED: &str = "Slideshow export cancelled";
 
 /// A file written as `<path>.part` and renamed over `path` when complete; dropped before that,
 /// the part file is removed.
-struct PartFile {
+pub(crate) struct PartFile {
     part: PathBuf,
     target: PathBuf,
     done: bool,
 }
 
 impl PartFile {
-    fn new(target: &Path) -> Result<(PartFile, std::fs::File), String> {
+    pub(crate) fn new(target: &Path) -> Result<(PartFile, std::fs::File), String> {
         if let Some(dir) = target.parent().filter(|d| !d.as_os_str().is_empty()) {
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
@@ -393,7 +393,7 @@ impl PartFile {
         Ok((PartFile { part, target: target.to_path_buf(), done: false }, f))
     }
 
-    fn commit(mut self, guard: &OriginalGuard) -> Result<(), String> {
+    pub(crate) fn commit(mut self, guard: &OriginalGuard) -> Result<(), String> {
         guard.check(&self.target)?;
         std::fs::rename(&self.part, &self.target).map_err(|e| format!("{}: {e}", self.target.display()))?;
         self.done = true;

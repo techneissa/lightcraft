@@ -35,7 +35,17 @@ pub(crate) struct Settings {
     pub run_on: Option<String>,
     /// What came before `runOn`: `false` was the processor only.
     pub gpu: Option<bool>,
+    /// Turn AI Denoise on by itself for a raw photo at or above [`Self::auto_iso`] when it is opened (`None`: no).
+    pub auto_open: Option<bool>,
+    /// The ISO from which [`Self::auto_open`] acts (`None`: [`DEFAULT_AUTO_ISO`]).
+    pub auto_iso: Option<u32>,
 }
+
+/// The ISO from which a photo opened gets AI Denoise on its own, unless the user chose another.
+pub const DEFAULT_AUTO_ISO: u32 = 6400;
+
+/// The ISO the setting may be given (a sensor's range, with room above).
+pub const AUTO_ISO_RANGE: std::ops::RangeInclusive<u32> = 50..=6_553_600;
 
 impl Settings {
     pub fn auto(&self) -> bool {
@@ -48,6 +58,14 @@ impl Settings {
             None if self.gpu == Some(false) => RunOn::Cpu,
             None => RunOn::Auto,
         }
+    }
+
+    pub fn auto_open(&self) -> bool {
+        self.auto_open.unwrap_or(false)
+    }
+
+    pub fn auto_iso(&self) -> u32 {
+        self.auto_iso.unwrap_or(DEFAULT_AUTO_ISO).clamp(*AUTO_ISO_RANGE.start(), *AUTO_ISO_RANGE.end())
     }
 
     pub fn cache_bytes(&self) -> u64 {

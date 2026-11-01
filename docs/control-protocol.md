@@ -89,7 +89,7 @@ filmstrip is visible.
 | `engine.commands` | — | Engine + UI commands: id, label, menu, shortcut, params doc, enabled |
 | `ui.menu.list` | — | Menu entries (flat: id, label, menu path, shortcut, enabled) |
 | `ui.menu.tree` | — | The menu bar as shown (File … Help): items `{id, params?, label, shortcut?, enabled, checked?}`, separators, submenus — the model behind the native macOS menu bar and the in-window menus |
-| `ui.inspect` | — | UI state, window, `loupe` (`source`, `pending`, `failed` = why its render failed, else `null`, and `region: {full, window, pending}` when a zoomed view also renders the window on screen at no more than 100 % — `full` is the frame it is cut from, `window` its `[x, y, w, h]` — and `regionBefore` for the Before side of a Before/After view), canvas/image rects, `scroll: {grid, filmstrip}` (scroll offsets in points, `null` until drawn), active photo, selection, perf (`frameMs` = layout, `logicMs` = per-frame logic before it, `updateMs` = both, `maxUpdateMs`, `fps`, render queue …, `gpu` = adapter in use, `gpuReason` = why renders don't use the GPU, `gpuFallback` = latest render redone on the CPU and why — see `docs/gpu-pipeline.md`), status, memory (bytes per cache, see `library.memory`; plus stage caches — `budgetBytes`, `trimmed`, `sharedSourceBytes` (the one device copy of a big original) — and textures), `export: {running: {total, done, current} \| null, last}`, `notices` (warnings waiting to be shown, e.g. a damaged settings file; OK = `button:noticeOk`), `quitPrompt` (why quitting was stopped: tasks that would be cut short are running — `button:quitAnyway` cancels them and quits, `button:quitCancel` keeps working — or unsaved changes: `button:quitRetry` / `button:quitAnyway` / `button:quitCancel`), `import: {done, total, imported, cancelled} \| null` (an import runs on a worker thread), `tasks` (other background work: `Find Missing Photos`, `Auto Import`), `activity` (every long-running task in flight as the activity stack in the top-left corner shows it, same shape as `activity.list`; a row appears once its task is 0.5 s old, ids `activity:row:<id>`, ✕ = `activity:cancel:<id>`, `activity:more` expands past 3 rows), `fileDialogs` (commands waiting on a native file dialog, which runs off the UI thread; they run again with the answer when it closes), `copied` (the text the UI last put on the clipboard, `null` until something is copied) |
+| `ui.inspect` | — | UI state, window, `loupe` (`source`, `pending`, `failed` = why its render failed, else `null`, and `region: {full, window, pending}` when a zoomed view also renders the window on screen at no more than 100 % — `full` is the frame it is cut from, `window` its `[x, y, w, h]` — and `regionBefore` for the Before side of a Before/After view), canvas/image rects, `scroll: {grid, filmstrip}` (scroll offsets in points, `null` until drawn), active photo, selection, perf (`frameMs` = layout, `logicMs` = per-frame logic before it, `updateMs` = both, `maxUpdateMs`, `fps`, `lastRenderMs` = the last loupe render's time, `lastDraftRenderMs` / `lastFullRenderMs` = the last draft (a drag's) and the last full-quality one apart, `null` until one has run — the 16 ms budget is the draft's —, render queue …, `gpu` = adapter in use, `gpuReason` = why renders don't use the GPU, `gpuFallback` = latest render redone on the CPU and why — see `docs/gpu-pipeline.md`), status, memory (bytes per cache, see `library.memory`; plus stage caches — `budgetBytes`, `trimmed`, `sharedSourceBytes` (the one device copy of a big original) — and textures), `export: {running: {total, done, current} \| null, last}`, `notices` (warnings waiting to be shown, e.g. a damaged settings file; OK = `button:noticeOk`), `quitPrompt` (why quitting was stopped: tasks that would be cut short are running — `button:quitAnyway` cancels them and quits, `button:quitCancel` keeps working — or unsaved changes: `button:quitRetry` / `button:quitAnyway` / `button:quitCancel`), `import: {done, total, imported, cancelled} \| null` (an import runs on a worker thread), `tasks` (other background work: `Find Missing Photos`, `Auto Import`), `activity` (every long-running task in flight as the activity stack in the top-left corner shows it, same shape as `activity.list`; a row appears once its task is 0.5 s old, ids `activity:row:<id>`, ✕ = `activity:cancel:<id>`, `activity:more` expands past 3 rows), `fileDialogs` (commands waiting on a native file dialog, which runs off the UI thread; they run again with the answer when it closes), `copied` (the text the UI last put on the clipboard, `null` until something is copied) |
 | `ui.widgets` | `{filter?}` | On-screen widgets `{id, rect: [x, y, w, h]}` (screen points) |
 | `ui.clickWidget` / `ui.dragWidget` / `ui.hoverWidget` | `{id, count?, button?, fx?, fy?}` (`button: "right"` right-clicks; `count` is capped at 16) / `{id, toX?, toY?, dx?, dy?, steps?}` (steps are capped at 1000) / `{id, fx?, fy?}` | Real egui input on a widget (hover: the pointer rests on it, e.g. for preset/profile previews). `fx`/`fy` are fractions of the registered rect and may lie outside `[0,1]`; the resulting point must still be inside egui's clipped interaction rect, and a non-finite fraction or resolved point is rejected before any input is queued. Geometry comes from the latest completed layout; if the widget moves before the first event or before a press, or its latest clipped rect no longer contains the point, the request fails with an error instead of clicking another widget or retargeting. A target below an ordinary modal dialog may succeed as a no-op or a backdrop click, because egui routes that input to the dialog; a target covered by a non-modal overlay fails. The blocking library-problem/launch-list window is explicit: its dim takes the modal layer, but a background target fails instead of reporting a no-op success, and only that window's own controls (`button:library…`) pass. Its creation frame is shielded and redrawn with empty input like a prompt's, so background text/pointer input cannot act while the new modal areas settle. A quit prompt or settings notice is a real egui modal scope with a foreground backdrop. Only its own buttons (`button:quit…`, `button:noticeOk`) accept a `ui.clickWidget`; background targets fail, and background keystrokes, text/clipboard input, wheel/zoom input and AccessKit actions are dropped before panels see them. The prompt itself takes Tab/Shift+Tab, Enter/Space on the focused button, and Escape/Enter for the safe default Cancel; AccessKit Focus/Click works when targeted at a prompt button. Its first creation frame (including a Tasks→Unsaved or notice→next-notice transition) is shielded and redrawn with empty input, so a press/release in that frame, or a held press from before it, cannot act underneath it; a synthetic drag already in progress is canceled. Once settled, raw `ui.click`/`ui.drag`/`ui.pointer` and backdrop clicks are still delivered to the prompt backdrop as no-ops, and the prompt's own button clicks work normally. The area/layer check cannot see a different widget covering the point in the same layer. A `ui.clickWidget` whose widget disappears before its release also fails, after canceling the pointer press without a click or drag (the same rules apply when a click spans several host frames) |
 | `ui.move` / `ui.click` / `ui.drag` | `{x, y, count?, button?}` / `{x, y, toX, toY, steps?}` | Raw pointer input, screen points (the same click and step caps apply). In every pointer and scroll gesture a number other than `count` and `steps` must lie between −1,000,000 and 1,000,000, or the request is refused and queues nothing |
@@ -120,6 +120,9 @@ filmstrip is visible.
 | `engine.execute {command: "slideshow.export"}` | `{format: "pdf"\|"jpeg"\|"video", path, size?, quality?, fps?, container?: "mp4"\|"webm", fullScreen?, speed?, name?, ids?, wait?}` | The slideshow (the photos in view, or `ids`, as composed slides between the intro and ending screens that are on) as a PDF (one page per slide; `size` = long side 64–8192 px, default 1920), a JPEG sequence (`path` = the folder, files `<name>-001.jpg`…) or AV1 video in MP4 / WebM (`size` = frame height 64–2160 or `"720p"` / `"1080p"`, `fps` 24 / 25 / 30 / 60; fades rendered as frames; no audio; at most 2 hours). Runs in the background → `{taskId, background, slides, seconds, total, width, height, warnings}`; its row is in `activity.list` (`kind: "export"`, label "Exporting slideshow"), `activity.cancel {id: taskId}` stops it and leaves no file (outputs are written as `.part` and renamed when complete). `wait: true` runs it in the call and replies with the result. One at a time |
 | `engine.execute {command: "slideshow.exportStatus"}` | — | The last slideshow export: `{taskId, format, path, running, done, total, cancelled, result?, error?}`; `result` has `pages` (PDF), `files` (JPEG) or `frames`, `samples`, `keyFrames`, `seconds`, `fps`, `container`, `codec: "av1"`, `audio: false` (video), and `skipped` / `warnings` for photos that could not be rendered |
 | `engine.execute {command: "dialog.slideshowExport"}` / `app.slideshowExport` | `{format?}` / `{format, size?, quality?, fps?, container?, fullScreen?, path?}` | View ▸ Export Slideshow…: opens the dialog; `app.slideshowExport` asks for the path with a save dialog when none is given, then starts `slideshow.export` |
+| `engine.execute {command: "export.animatedGif"}` | `{path, ids?, size?, seconds?, loop?, dither?, wait?}` | The selected photos (or `ids`), in the order they were selected, as one animated GIF: a frame per photo rendered with its edits (raws included), fitted on black on a canvas shaped like the first photo, 256 colours per frame (dithered unless `dither: false`); `size` the long side (64–4096, default 800), `seconds` each photo (0.02–60, default 1), `loop` forever (default) or once. Runs in the background with an activity row (`activity.cancel` leaves nothing behind) and returns `{taskId, frames, width, height, …}`; `wait: true` replies with the result |
+| `engine.execute {command: "export.animatedGifStatus"}` | — | The last animated GIF export: `{taskId, format: "gif", path, running, done, total, cancelled, result?: {frames, skipped, seconds, loop, dither, bytes, width, height, warnings}, error?}` |
+| `engine.execute {command: "dialog.animatedGif"}` / `app.animatedGif` | `{}` / `{size?, seconds?, loop?, dither?, path?}` | File ▸ Export Animated GIF…: opens the dialog (needs a selection); `app.animatedGif` asks for the .gif path with a save dialog when none is given, then starts `export.animatedGif` |
 | `app.quit` | — | Close the app |
 
 White balance (`develop.set` with `wb.temp` / `wb.tint`, `develop.wb`, `develop.wbPick`) is in Kelvin and tint on
@@ -141,6 +144,9 @@ out as `Custom` values first, because a number merged into such a mode would oth
 reads it (the panel would show 5800 while the photo stayed at as shot); a partial that names a `mode` itself stays
 authoritative. Partials naming both fields mean the same as before.
 
+A raw set to macOS Colour (below) is also in Kelvin, from the Mac decoder's as-shot white, whatever scale its camera uses
+under Camera Matching; switching the choice converts a Custom white balance between the two scales.
+
 Image navigation is also available directly as the UI command `view.navigate`, with
 `{zoom?: "fit" | "fill" | {"percent": number}, pan?: [x, y]}`. Percentage zoom accepts fractional
 values greater than 0 and at most 800; pan is the normalized image centre, with coordinates from 0 to 1.
@@ -151,6 +157,7 @@ views, and only apply over their image areas. Panning stops at the image edges.
 
 The camera's focus point ([focus-points.md](focus-points.md)) is `meta.focus` in `photo.inspect`: `{rect: {x0, y0,
 x1, y1}, mode?, area?, tracking?}`, normalized to the upright photo (absent when the file records none).
+`view.clippingShadows {on?}` / `view.clippingHighlights {on?}` switch the blue / red clipping overlays one at a time (no params toggles; reply `{on}`); `view.clipping` (J) switches both together.
 `view.focusPoint {on?}` shows it over the photo (no params toggles; replies `{on}`), and `view.zoomToFocus {on?}`
 (on by default) makes `view.zoomToggle` zoom in centred on it, replying `{focus: [x, y]}` (the `pan` it set).
 `photo.readFocusPoints {ids?, wait?}` reads the point for photos imported before it was read, from a few KB of each
@@ -385,6 +392,58 @@ one pixel.
   (clicks, keys, drags) has played out. Widget ids for `ui.clickWidget` come from `ui.widgets`
   (e.g. `button:upright-auto`). A 1600×1000 demo snapshot takes ~1–2 s (debug build).
 
+## Keyboard shortcuts
+
+`engine.commands` lists each command's `shortcut` (the primary one, shown in menus) and `shortcut2` (the second
+one, or `null`); the `app.setShortcut` reply carries both too, as `shortcut` and `shortcut2`. A few commands have a
+declared second shortcut (`library.selectNone` ⌘D, `view.filmstrip` F6, `view.leftPanel` F7, `view.rightPanel` F8,
+`dialog.export` ⇧E, `app.exportPrevious` ⌘E, `view.zoomToggle` Space, `version.create` ⇧M, `view.thumbSizeUp` +,
+`brush.featherLess` ⇧{, `brush.featherMore` ⇧}).
+A shortcut is one key (`Cmd+Shift+K`, `F5`, `Delete`) or a chord of two keys separated by a space (`Cmd+K C`).
+
+- `app.setShortcut {id, shortcut, slot?}`: `slot` 1 (the default) or 2; `shortcut` `null` or `""` removes it.
+  Another command that had the keys (or a single key that leads the chord, or a chord the single key leads) loses
+  them; the reply names it in `removedFrom`. `app.setShortcut {id, reset: true}` restores both slots of a command.
+- `app.assignShortcut {id, slot?}`: opens the Assign Shortcut box (the first free slot by default). Press the keys
+  with `ui.key` (two presses make a chord) and `ui.key {key: "Enter"}` to save (Enter before any key does nothing;
+  `app.setShortcut` can give a command the Enter key); widgets `button:assignShortcut.save`,
+  `.remove`, `.cancel`, `.slot1`, `.slot2`, `assignShortcut:keys`.
+- `app.resetShortcuts` restores every command.
+- **Conditions (When).** `app.setShortcut {id, when}` limits both shortcuts of a command to a context: `when` is a
+  condition (`view == detail && !textFocus`), `null` or `""` means always. It can come alone or with `shortcut`; the
+  condition is applied first. A condition that doesn't parse is an error (`not a condition: …`, with the position
+  in words) and changes nothing. The reply carries `when` (the canonical spelling, or `null`) and `conflictsWith`
+  (commands that share a key with this one while both conditions can hold; `removedFrom` is what the assigned key took
+  away). `engine.commands` lists each command's `when` too. A command that is `reset` loses its saved condition.
+- A condition uses `&&`, `||`, `!`, `==`, `!=` and parentheses over the context keys; `app.shortcutContexts` lists
+  them with their values and what each holds now: `view` (grid, square, detail, compare, survey, reference, people),
+  `gridView`, `tool` (none, edit, crop, remove, masking, redEye, versions, activity, keywords, info), `brush`,
+  `textFocus`, `dialogOpen`, `paletteOpen`, `hasPhoto`, `hasSelection`, `multiSelection`, `fullscreen`, `slideshow`.
+  On / off keys stand alone (`textFocus`, `!textFocus`) or compare with `true` / `false`; every condition has its
+  negation (`!(view == detail)`, `view != grid`). Two commands may share a key while their conditions can't both hold
+  (Reject Photo `tool != crop` and Swap Aspect `tool == crop` share X). A condition that needs `textFocus`,
+  `dialogOpen` or `paletteOpen` also fires while a text box, a dialog or the palette has the keyboard. Stored in the
+  keymap as the entry `<id>?when`.
+- **Backup.** `app.exportShortcuts {path}` writes every customised binding as JSON and replies `{path, commands}`;
+  `app.importShortcuts {path}` reads such a file and replaces the customisations of the commands it names (what the file
+  does not mention goes back to its declared value; entries for commands this build doesn't know are kept) and replies
+  `{imported, notices}`. The file is `{"kind": "lightcraft-shortcuts", "version": 1, "shortcuts": {"<id>": {"shortcut":
+  "K", "shortcut2": "Cmd+K S", "when": "view == detail"}}}`; a field that is absent was not customised, `null` means the
+  shortcut was removed (or the condition set to always). A file that is not ours (`kind`), is newer than the build
+  (`version`) or isn't readable JSON is an error and changes nothing; an unknown command, a shortcut that doesn't parse
+  or is reserved for the app menu, and a condition that doesn't parse are skipped, each with a line in `notices`
+  (the window shows them under the list). Both commands need `path`. The window's icons are `icon:shortcutsExport` and
+  `icon:shortcutsImport` (they use the host's save and open panels), the notices' button `button:shortcutsNotesDismiss`.
+- In the Keyboard Shortcuts window the When cell of a command is `button:shortcutWhen-<id>` (click to type; the box is
+  `field:shortcutWhen`, the autocomplete rows `menu:whenSuggestion-<n>`) and `button:shortcutWhenAdd-<id>` opens the builder
+  (`menu:whenKey-<key>`, `menu:whenIs` / `menu:whenIsNot`, `menu:whenValue-<value>`, `menu:whenBack`).
+- In the Keyboard Shortcuts window the cells are `button:shortcut-<id>` (Shortcut 1) and `button:shortcut2-<id>`,
+  removed with `button:shortcutClear-<id>` / `button:shortcutClear2-<id>`, restored with `button:shortcutReset-<id>`.
+- While the first key of a chord is waiting, the hint card is the widget `chordHint`.
+- A right-click on an icon or button that runs a command opens a menu whose item is `menu:assignShortcut`; a
+  right-click on a menu item, a photo-menu row or a palette row opens the box directly. A chord may not contain
+  ⌘, or ⌘Q (the app menu's).
+
 ## Import album picker
 
 In the Import Photos review, `albumPicker:import-album` opens the destination picker.
@@ -400,6 +459,92 @@ confirmation instead of submitting the deleted ID.
 or initializes that name, edited through `field:importAlbumName`. Choosing an existing album clears
 the pending name. `ui.dialog.confirm` starts the same import into the selected album ID; engine
 `library.import` parameters `album` and `albumName` are unchanged.
+
+## Photo menu
+
+The photo's right-click menu is a list of slots in the app settings (`photoMenu`; absent = the default menu): a
+built-in item's id (`openInDetail`, `beforeAfterSplit`, `exportAnimatedGif`, …), `cmd:` and a menu-bar command
+(`cmd:view.compare`, with parameters after a `|`: `cmd:photo.rate|{"rating":3}`), or `---` for a separator.
+`photoMenu.get` returns `{items, custom, available}` (`available`: what can be added, `{item, label, path}`),
+`photoMenu.set {items}` replaces the list (an unknown built-in id, or a command the menu bar doesn't have, is refused
+and nothing changes), `photoMenu.reset` puts the
+default back; all three return the same answer. Settings ▸ Photo Menu is `app.settings {"tab": "menu"}`.
+
+The menu has three presets (Preset 1 to 3). `photoMenu.savePreset {slot}` keeps the menu as it is in a slot (1 to 3) and makes
+it the active one; `photoMenu.switchPreset {slot}` makes a saved slot the menu (an empty slot is an error and changes
+nothing); `photoMenu.clearPreset {slot}` empties a saved slot and keeps the menu (an empty slot is an error);
+`photoMenu.undoPreset` brings back the menu the last switch replaced, for as long as the menu is as the switch
+left it. They return the answer above, which also carries `presets` (`{slot, saved, active, edited, items}` per slot;
+`edited`: the active slot's menu has been changed since it was saved) and `canUndoPreset`. The presets are in the app
+settings (`photoMenuPresets`). In Settings ▸ Photo Menu they are one dropdown (`dropdown:photoMenuPreset`) beside the
+heading, with Export and Import icon buttons (`button:photoMenuExport`, `button:photoMenuImport`) after it; its menu has
+`button:photoMenuPreset-N`, `button:photoMenuSaveMenu` ▸ `button:photoMenuSavePreset-N`, `button:photoMenuClearMenu` ▸
+`button:photoMenuClearPreset-N` and `button:photoMenuUndoPreset` (only right after a switch).
+
+`photo.openAsLayersInPhotocraft {ids?, app?, wait?, format?, colorSpace?, bitDepth?, dir?}` (Photo ▸ Edit In ▸ Open as
+Layers in PhotoCraft…) renders two or more photos (`ids`, else the selection) with their edits, the first (the active
+photo, or the first of `ids`) as the top layer, and opens them in PhotoCraft as one document. Fewer than two or more than
+256 photos is an error before anything is written. The files go in a new folder `<photo> + N Layers` beside the top photo
+(`dir` for a generated demo photo, which has no folder) in the format of Settings ▸ External Editing; they are not added
+to the library. A PhotoCraft that lists `pcstack` as a document type is given one `<name>.pcstack` layer list (`{kind:
+"photocraft-open-as-layers", version: 1, name, files: [absolute paths, top first]}`); any other gets the files one by
+one (`oneByOne`). Without `wait` it returns `{background: true, total, stack}` at once and the render shows in
+`activity.list` (kind `layers`, `activity.cancel` stops it and removes its files); with `wait: true` it returns `{name,
+dir, files, stack, opened, oneByOne, failed}` when done. An editor that won't start is reported in `failed`, not as an
+error, since the files are written.
+
+`photoMenu.export {path}` writes the menu and its presets as JSON, and `photoMenu.import {path}` reads such a file back.
+Without `path` they ask with the save / open panel (and return null at once; the command runs again when the panel
+closes), and on a platform without a panel they ask for `path`. The file:
+
+```json
+{"kind": "lightcraft-photo-menu", "version": 1,
+ "items": ["openInDetail", "---", "cmd:view.compare"],
+ "presets": {"slots": [["rename"], null, ["delete"]], "active": 0}}
+```
+
+`presets` is optional on import (without it the presets stay as they are). An import checks the whole file first and
+refuses, changing nothing, a file that is not JSON, not text, over 1 MiB, of another `kind`, without a `version` or
+from a newer one (`version` above 1), or without `items`. Items this build doesn't have (an unknown built-in id, a
+command the menu bar doesn't have, a repeated item) are left out; the answer's `skipped` lists them and a notice shows
+them. Both answer the same as `photoMenu.get`, plus `path`, `items` (how many), `presets` (how many are saved) and,
+for an import, `skipped`.
+
+## Top bar items
+
+The top bar's buttons can be turned off one by one (Settings ▸ Top Bar, or a right-click on the bar). The app settings
+keep the ids turned off (`topBarHidden`; absent = every item shown). Item ids, in the bar's order: `sidebar`, `back`
+(Back and Forward), `filter`, `appearance`, `bell` (Activity), `import`, `share` (Export), `help` (Keyboard
+Shortcuts), `cloud` (Library Status, which shows anyway while saving is failing). The search field and the menus
+are not items. `topBar.get` returns `{items, hidden, custom}` (`items`: `{id, label, shown, command, reach}`, `reach`
+being the menu-bar path of the command, so a hidden item can still be found), `topBar.set {hidden}` replaces the list,
+`topBar.setItem {item, shown}` turns one on or off, `topBar.reset` shows every item; an unknown id is refused and
+nothing changes; all four return the same answer. Settings ▸ Top Bar is `app.settings {"tab": "topbar"}`.
+
+## macOS Colour and Starting Colour
+
+`develop.profile {camera_colour}` takes `"auto"` (Camera Matching), `"colorimetric"` (No Camera Matching), `"local"` (with
+`camera_profile`: the id of a profile file, see `profiles.local`) and `"macos"` (macOS Colour: the Mac's own raw decoder
+makes the colours; where it can't, the photo renders as Camera Matching and the Edit panel says why, the setting is kept).
+One undo step; the Profile group of presets, Copy / Paste and sync carries it.
+
+- `library.preferences {import: {startingColour: "macos" | "cameraMatching" | "noCameraMatching"}}`: the colour new raw
+  photos start on (default `macos`; Settings ▸ Import ▸ Raw defaults), kept in the library's `prefs.json`. `macos` applies
+  only to a photo that takes the fitted look, on a Mac whose decoder lists its camera and reads it at LightCraft's size (ARW
+  only so far); any other photo, and every photo on another system, starts on Camera Matching. A default preset with a
+  Profile group wins. Photos already imported never change. The reply's `import` has the value.
+- `profiles.macosForCameraCount {photo?}` → `{camera, photos, skipped, notMac, cameraNotRead, otherSize, checking}`: what moving every
+  photo of that photo's camera (the active photo without `photo`) to macOS Colour would do. `photos` is how many would move;
+  `skipped` is the rest, by reason (`notMac`: not a Mac or the decoder lacks a setting it needs; `cameraNotRead`: not a raw
+  macOS Colour applies to, a camera macOS does not list, or a format that has no verified type yet; `otherSize`: macOS reads
+  it at another size or can't read it). Photos already on macOS Colour are not counted. It never waits for macOS: `checking`
+  counts photos whose camera and size are being checked in the background (activity row `macosCheck`); ask again after it.
+- `profiles.macosForCamera {photo?}` → `{camera, changed, skipped, notMac, cameraNotRead, otherSize, checking}`: does it, in
+  one undo step (the Profile menu's Apply macOS Colour to All Photos from This Camera…). Never runs by itself. An error
+  while photos are still being checked.
+- `preset.apply {id, amount?, ids?}` → `{macosFallback}`: how many of the photos are on macOS Colour but use Camera Matching
+  colours on this computer after the preset (the stored value stays `macos`); a photo whose camera and size are not checked
+  yet is not counted (its check starts in the background).
 
 ## Panel docking
 

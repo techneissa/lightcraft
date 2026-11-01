@@ -12,8 +12,11 @@ use crate::theme::Tokens;
 use crate::widgets::{divider, register, slider, text_button};
 
 mod crop;
+mod exif_edit;
 mod history;
 mod info;
+#[cfg(test)]
+pub(crate) use info::smart_line;
 mod keywords;
 mod remove_finds;
 

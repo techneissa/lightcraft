@@ -40,6 +40,7 @@ pub use params::{
 #[cfg(test)]
 use place::Placer;
 pub use place::{write_file, write_file_durable, write_file_new};
+pub(crate) use prepare::for_dng;
 pub use prepare::{
     AfterExport, Destination, DngCompression, Exported, PreparedExport, export_batch, export_photo, output_size, prepare_batch, prepare_export,
 };
@@ -110,6 +111,9 @@ pub struct ExportOptions {
     pub add_to_photos: bool,
     /// The Photos album they go into, made when missing (empty = none).
     pub photos_album: String,
+    /// After a successful export, show the first file written in the system file manager. Only
+    /// the desktop app acts on it (it has the opener); the CLI, MCP and headless runs ignore it.
+    pub show_in_finder: bool,
     /// The curve of an HDR AVIF: PQ (default) or HLG.
     pub hdr_transfer: HdrCurve,
 }

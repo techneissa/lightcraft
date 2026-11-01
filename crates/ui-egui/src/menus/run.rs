@@ -146,6 +146,20 @@ fn theme_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
 
 /// Handle UI commands; `None` means "not a UI command — send it to the engine".
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if id.starts_with("photoMenu.") {
+        return Some(crate::panels::photo_menu::command(app, id, p));
+    }
+    if id.starts_with("view.editSection")
+        && let Some(r) = crate::panels::edit_sections::command(app, id, p)
+    {
+        return Some(r);
+    }
+    if id.starts_with("lensDatabase.") {
+        return Some(crate::dialogs::settings::lens_database::command(app, id, p));
+    }
+    if id.starts_with("topBar.") {
+        return Some(crate::panels::topbar_items::command(app, id, p));
+    }
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", p));
     }
@@ -743,8 +757,21 @@ fn ui_commands_5(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             Ok(json!({"zoom": zoom, "pan": pan}))
         }
         "view.clipping" => {
-            app.ui.show_clipping = !app.ui.show_clipping;
-            Ok(Value::Null)
+            // both sides together: any off turns both on, both on turns both off
+            let on = !(app.ui.clip_shadows && app.ui.clip_highlights);
+            app.ui.clip_shadows = on;
+            app.ui.clip_highlights = on;
+            Ok(json!({"shadows": on, "highlights": on}))
+        }
+        "view.clippingShadows" => {
+            // {on?}; no params toggles. The blue overlay of pixels clipped at black.
+            app.ui.clip_shadows = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.clip_shadows);
+            Ok(json!({"on": app.ui.clip_shadows}))
+        }
+        "view.clippingHighlights" => {
+            // {on?}; no params toggles. The red overlay of pixels clipped at white.
+            app.ui.clip_highlights = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.clip_highlights);
+            Ok(json!({"on": app.ui.clip_highlights}))
         }
         "view.visualizeHdr" => {
             // {on?}; no params toggles. Shown on photos edited in HDR (see `develop.hdr`).
@@ -1036,12 +1063,19 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                 return Err(format!("{s}: no such Edit section"));
             }
             let sec = &s["section.".len()..];
+            // a section taken off the panel comes back when it is asked for
+            let mut was_hidden = false;
+            if let Some(hidden) = crate::panels::edit_sections::EditSection::from_id(sec) {
+                was_hidden = app.ui.edit_sections.is_hidden(hidden);
+                app.ui.edit_sections.reveal(hidden);
+            }
             if app.ui.right != RightPanel::Edit {
                 app.ui.right = RightPanel::Edit;
             }
             if solo == Some(true) {
                 app.ui.solo_section(sec);
-            } else {
+            } else if !(was_hidden && app.ui.section_open(sec)) {
+                // a section that was hidden while open comes back open, not toggled shut
                 app.ui.toggle_section(sec);
             }
             Ok(Value::Null)
@@ -1179,6 +1213,10 @@ fn ui_commands_9(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             app.ui.dialog = Some(Dialog::PasteSettings { groups });
             Ok(Value::Null)
         }
+        "view.commandPalette" => {
+            crate::panels::command_palette::toggle(app);
+            Ok(Value::Null)
+        }
         "view.focusSearch" => {
             // the search field lives in the top bar of the library and detail views alike
             app.ui.focus_search = true;
@@ -1200,6 +1238,11 @@ fn ui_commands_9(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             Ok(Value::Null)
         }
         "app.slideshowExport" => crate::slideshow_export::start(app, id, p),
+        "dialog.animatedGif" => {
+            app.ui.dialog = Some(Dialog::AnimatedGif { settings: lightcraft_engine::animated_gif::GifSettings::default() });
+            Ok(Value::Null)
+        }
+        "app.animatedGif" => crate::animated_gif::start(app, id, p),
         "dialog.contactSheet" => {
             app.ui.dialog = Some(Dialog::ContactSheet { options: lightcraft_engine::contact_sheet::Options::default() });
             Ok(Value::Null)
@@ -1288,6 +1331,7 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         "app.checkForUpdates" => crate::updates_ui::check(app),
         "photo.editInPhotoCraft" => edit_in(app, ctx, p, true),
         "photo.editInExternal" => edit_in(app, ctx, p, false),
+        "photo.openAsLayersInPhotocraft" => crate::layers_task::open_as_layers(app, ctx, p),
         "photo.openOriginalInExternal" => open_original_in(app, ctx, p),
         "dialog.cull" => {
             let (burst_gap, similarity) = app.ui.cull_burst.unwrap_or((10.0, 0.93));
@@ -1304,6 +1348,10 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             Ok(Value::Null)
         }
         "app.setShortcut" => crate::shortcuts::set_shortcut(app, p),
+        "app.exportShortcuts" => crate::keybinds::backup::export_command(app, p),
+        "app.importShortcuts" => crate::keybinds::backup::import_command(app, p),
+        "app.shortcutContexts" => Ok(crate::keybinds::when::keys::listing(app)),
+        "app.assignShortcut" => crate::keybinds::command(app, p),
         "app.resetShortcuts" => {
             app.ui.settings.keymap.clear();
             Ok(Value::Null)
@@ -1701,7 +1749,11 @@ fn app_system_info_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, 
         "Frame update".into(),
         format!("{:.1} ms (logic {:.1} ms; slowest {:.0} ms)", app.perf.update_ms, app.perf.logic_ms, app.perf.max_update_ms),
     ));
-    rows.push(("Last loupe render".into(), format!("{:.0} ms", app.renderer.last_main_ms)));
+    let ms = |v: Option<f64>| v.map_or("–".to_string(), |v| format!("{v:.0} ms"));
+    rows.push((
+        "Last loupe render".into(),
+        format!("{:.0} ms (draft {}, full {})", app.renderer.last_main_ms, ms(app.renderer.last_draft_ms), ms(app.renderer.last_full_ms)),
+    ));
     if let Some(f) = lightcraft_engine::gpu::last_fallback() {
         rows.push(("Last GPU fallback".into(), f));
     }

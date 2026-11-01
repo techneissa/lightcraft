@@ -6,22 +6,27 @@ use serde_json::json;
 use crate::LightcraftApp;
 use crate::state::Dialog;
 use crate::theme::Tokens;
+use crate::widgets::dropdown_search::{self, Searchable};
 use lightcraft_engine::export::{ExportOptions, Resize};
 
 mod confirm;
 mod cull;
+pub(crate) mod delete_permanently;
+pub(crate) mod delete_rejected;
 mod export;
 mod frame;
+pub(crate) mod quick_delete;
 mod rename;
 mod sam_model;
 
+use animated_gif::animated_gif_body;
 pub(crate) use confirm::album_entries;
 pub use confirm::confirm_dialog;
 pub use cull::{MAX_BURST_GAP, clamp_cull_burst, cull_params, fmt_gap, parse_gap};
 pub(crate) use export::preset_lzw_note;
 use export::{
-    LIMIT_KB, QUALITY, START_NUMBER, WM_IMAGE_WIDTH, WM_INSET_X, WM_INSET_Y, WM_OPACITY, WM_POSITIONS, WM_SIZE, export_dialog_params, export_size,
-    group_checklist, tiff_lzw_note, watermark_preview,
+    LIMIT_KB, QUALITY, START_NUMBER, WM_IMAGE_WIDTH, WM_INSET_X, WM_INSET_Y, WM_OPACITY, WM_POSITIONS, WM_SIZE, colour_source_hint,
+    export_dialog_params, export_size, group_checklist, tiff_lzw_note, watermark_preview,
 };
 pub use frame::{ConfirmStyle, confirm_style, list_height, prompt};
 use frame::{
@@ -34,6 +39,7 @@ pub(crate) use sam_model::show_model_folder;
 use sam_model::{sam_by_hand, sam_model_body};
 use slideshow_export::slideshow_export_body;
 
+pub mod animated_gif;
 pub mod credits;
 pub mod faces;
 pub mod import;
@@ -139,6 +145,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     let widest = if settings { ctx.data(|d| d.get_temp::<f32>(widest_id)).unwrap_or(0.0).min(screen.width() * 0.9) } else { 0.0 };
     let mut content_w = 0.0f32;
     let mut body_h = None;
+    let mut left_by_button = false;
     // before the window: drawing it closes a dropdown the click lands outside of
     let popup_was_open = egui::Popup::is_any_open(ctx);
     let shown = egui::Window::new(crate::i18n::tr(&title))
@@ -157,6 +164,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             Dialog::Print => 1100.0,
             Dialog::FaceModel { .. } => 460.0,
             Dialog::LightroomCatalog { .. } => 440.0,
+            Dialog::DeletePermanently { .. } => 500.0,
             Dialog::LightroomDestination { .. } => 480.0,
             Dialog::ManageEffects { .. } => 560.0,
             _ => 380.0,
@@ -181,7 +189,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             let row_w = ui.available_width().max(ui.min_rect().width()).max(1.0);
             let row_h = ui.spacing().interact_size.y;
             ui.allocate_ui_with_layout(egui::vec2(row_w, row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                button_row(app, ui, &dlg, &mut close, &mut confirm);
+                button_row(app, ui, &mut dlg, &mut close, &mut confirm);
+                // (the Cancel button only: Esc and a click outside close the window without answering)
+                left_by_button = close;
             });
             if import {
                 crate::import::note_dialog_bottom(ui);
@@ -221,6 +231,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     // the dialog, such as a date picker's calendar, takes it to close itself)
     if !raw_blocked && ctx.input(|i| i.key_pressed(egui::Key::Escape)) && !crate::widgets::escape_taken(ctx) {
         close = true;
+    }
+    // Leave on Camera Matching answers the one-time local profile question; Switch does it in `confirmed`
+    if let (true, Dialog::LocalProfileSwitch { id, .. }) = (left_by_button, &dlg) {
+        let _ = app.run("profiles.localAsked", json!({"id": id}));
     }
     if !raw_blocked && confirm {
         close |= confirmed(app, ctx, &mut dlg);
@@ -278,6 +292,9 @@ fn title_bar_handle(ctx: &egui::Context, band: egui::Rect, dialog: egui::Rect) {
 
 /// The title of a dialog.
 fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
+    if matches!(dlg, Dialog::DeletePermanently { .. }) {
+        return delete_permanently::title(dlg);
+    }
     match dlg {
         Dialog::TextPrompt { title, .. } => title.as_str(),
         Dialog::NewAlbum { folder: true, .. } => "Create Folder",
@@ -313,10 +330,16 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::Export { .. } => "Export",
         Dialog::ContactSheet { .. } => "Contact Sheet PDF",
         Dialog::SlideshowExport { .. } => "Export Slideshow",
+        Dialog::AnimatedGif { .. } => "Export Animated GIF",
         Dialog::Print => "Print",
         Dialog::Merge { opts } => opts.title(),
         Dialog::Settings { .. } => "Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
+        Dialog::LocalProfileSwitch { .. } => "Local Camera Profile",
+        Dialog::SmartPreviewsForEditing { .. } => "Smart Previews",
+        Dialog::MacosForCamera { .. } => "macOS Colour",
+        Dialog::ConfirmDeleteRejected { .. } => "Delete Rejected Photos",
+        Dialog::DeletePermanently { .. } => "Delete Permanently",
         Dialog::MovePhotos { .. } => "Move Photos",
         Dialog::LightroomCatalog { .. } => "Lightroom Classic Catalog",
         Dialog::LightroomDestination { .. } => "Import Lightroom Catalog",
@@ -371,6 +394,8 @@ fn cancel_label(dlg: &Dialog, sam: &SamState) -> &'static str {
         Dialog::SamModel { .. } if sam.running || sam.installed || sam.by_hand => "Close",
         Dialog::SamModel { .. } => "Not Now",
         Dialog::LightroomResult { .. } => "Close",
+        Dialog::LocalProfileSwitch { .. } => "Leave on Camera Matching",
+        Dialog::SmartPreviewsForEditing { .. } => "Not Now",
         _ => "Cancel",
     }
 }
@@ -413,14 +438,18 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         Dialog::Import { .. } | Dialog::Export { .. } | Dialog::SamModel { .. } => "",
         Dialog::LightroomResult { first: Some(_), .. } => "Show in Library",
         Dialog::ContactSheet { .. } => "Choose PDF…",
-        Dialog::SlideshowExport { .. } => "Export…",
+        Dialog::SlideshowExport { .. } | Dialog::AnimatedGif { .. } => "Export…",
         Dialog::Print => "Print to PDF…",
         Dialog::Merge { .. } => "Merge",
         Dialog::DenoiseModel { info, .. } if !informational && info["download"].is_string() => "Accept & Download",
         Dialog::DenoiseModel { .. } if !informational => "Install",
         Dialog::FaceModel { info, .. } if !informational && info["download"].is_string() => "Download",
         Dialog::FaceModel { .. } if !informational => "Install",
-        Dialog::ConfirmDelete { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
+        Dialog::ConfirmDelete { .. } | Dialog::ConfirmDeleteRejected { .. } | Dialog::DeleteKeyword { .. } | Dialog::DeleteEffects { .. } => "Delete",
+        Dialog::LocalProfileSwitch { .. } => "Switch",
+        Dialog::SmartPreviewsForEditing { .. } => "Build Smart Previews",
+        Dialog::MacosForCamera { .. } => "Apply",
+        Dialog::DeletePermanently { .. } => "Move to Trash",
         Dialog::SaveEffect { .. }
         | Dialog::NewAlbum { .. }
         | Dialog::NewSmartAlbum { .. }
@@ -495,7 +524,7 @@ fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
 }
 
 /// The row of buttons under a dialog: Cancel and the confirm; `close` and `confirm` are set when one is clicked.
-fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut bool, confirm: &mut bool) {
+fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dialog, close: &mut bool, confirm: &mut bool) {
     let informational = is_informational(dlg);
     let sam = SamState::of(app);
     let cancel = cancel_label(dlg, &sam);
@@ -523,10 +552,12 @@ fn button_row(app: &LightcraftApp, ui: &mut egui::Ui, dlg: &Dialog, close: &mut 
     if !ok.is_empty() {
         buttons_w += ok_button.desired_size(ui).x;
     }
+    buttons_w += delete_permanently::extra_width(ui, dlg);
     ui.add_space((ui.available_width() - buttons_w).max(0.0));
     if !informational && cancel_button.show(ui).clicked() {
         *close = true;
     }
+    delete_permanently::extra_button(ui, dlg, confirm);
     let r = (!ok.is_empty()).then(|| ok_button.show(ui));
     if r.is_some_and(|r| r.clicked()) {
         if informational {
@@ -562,6 +593,7 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
                     | Dialog::Export { .. }
                     | Dialog::ContactSheet { .. }
                     | Dialog::SlideshowExport { .. }
+                    | Dialog::AnimatedGif { .. }
                     | Dialog::Print
                     | Dialog::NewAlbum { .. }
                     | Dialog::NewSmartAlbum { .. }
@@ -1195,11 +1227,19 @@ fn contact_sheet_body(app: &mut LightcraftApp, ui: &mut egui::Ui, dlg: &mut Dial
     let pages = n.div_ceil(options.columns * options.rows);
     ui.label(contact_sheet_summary(n, pages));
     field(ui, "Paper", |ui| {
-        let c = crate::widgets::combo_box("contactSheetPaper").selected_text(&options.paper).show_ui(ui, |ui| {
-            ui.selectable_value(&mut options.paper, "a4".into(), "A4");
-            ui.selectable_value(&mut options.paper, "letter".into(), crate::i18n::tr("Letter"));
-        });
-        crate::widgets::name_combo(&c.response, crate::i18n::tr("Paper"));
+        let papers = [("a4", "A4".to_string()), ("letter", crate::i18n::tr("Letter").to_string())];
+        let (c, chosen) = dropdown_search::pick(
+            ui,
+            "contactSheetPaper",
+            |c| c.selected_text(&options.paper),
+            &papers,
+            |(id, _)| *id == options.paper,
+            |(_, label)| label.clone(),
+        );
+        crate::widgets::name_combo(&c, crate::i18n::tr("Paper"));
+        if let Some((id, _)) = chosen.and_then(|i| papers.get(i)) {
+            options.paper = (*id).into();
+        }
     });
     ui.checkbox(&mut options.landscape, crate::i18n::tr("Landscape"));
     field(ui, "Columns", |ui| {
@@ -1225,7 +1265,7 @@ fn export_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut
     ui.label(egui::RichText::new(crate::i18n::tr_format!("{n} photo{}", if n == 1 { "" } else { "s" }, n = n)).color(t.text_dim));
     export_preset_row(app, ui, opts, full_size, resize, limit_kb);
     ui.add_space(4.0);
-    export_format_rows(ui, t, opts);
+    export_format_rows(app, ui, t, opts);
     export_color_rows(ui, t, opts);
     export_quality_rows(ui, opts, limit_kb);
     if opts.format.is_rendered() {
@@ -1250,22 +1290,37 @@ fn export_preset_row(
     // Preset: load a built-in or saved set of options into the dialog
     field(ui, "Preset", |ui| {
         let mut chosen = None;
-        let c = crate::widgets::combo_box("exportPreset").width(220.0).selected_text(crate::i18n::tr("Choose…")).show_ui(ui, |ui| {
+        let presets = app.session.all_export_presets();
+        let labels: Vec<String> = presets.iter().map(|(p, b)| crate::i18n::builtin_label(&p.name, *b).to_string()).collect();
+        let find = dropdown_search::before(ui, "exportPreset", &labels);
+        let c = crate::widgets::combo_box("exportPreset").width(220.0).selected_text(crate::i18n::tr("Choose…")).search(ui, &find, |ui| {
+            // the separator between the built-in and the saved presets only shows while nothing is typed
             let mut builtin = true;
-            for (p, b) in app.session.all_export_presets() {
-                if builtin && !b {
+            let picked = find.picked(ui);
+            if let Some((p, _)) = picked.and_then(|i| presets.get(i)) {
+                chosen = Some(p.name.clone());
+                ui.close();
+            }
+            let all: Vec<usize> = (0..presets.len()).collect();
+            let rows = find.options(&all);
+            for &i in rows.iter() {
+                let Some((p, b)) = presets.get(i) else { continue };
+                if builtin && !b && !find.filtering() {
                     ui.separator();
                 }
-                builtin = b;
-                let r = ui.selectable_label(false, crate::i18n::builtin_label(&p.name, b));
-                let r = match preset_lzw_note(&p.params) {
-                    Some(note) => r.on_hover_text(crate::i18n::tr(note)),
-                    None => r,
+                builtin = *b;
+                let row = ui.selectable_label(false, labels.get(i).map_or("", String::as_str));
+                let row = match preset_lzw_note(&p.params) {
+                    Some(note) => row.on_hover_text(crate::i18n::tr(note)),
+                    None => row,
                 };
-                if r.clicked() {
-                    chosen = Some(p.name);
+                find.row(ui, &row);
+                if row.clicked() {
+                    chosen = Some(p.name.clone());
+                    ui.close();
                 }
             }
+            find.no_match(ui);
         });
         crate::widgets::name_combo(&c.response, crate::i18n::tr("Preset"));
         crate::widgets::register(ui, "combo:exportPreset", c.response.rect);
@@ -1282,15 +1337,15 @@ fn export_preset_row(
 }
 
 /// Export dialog: the format, its variants and the bit depth.
-fn export_format_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
+fn export_format_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
     use lightcraft_engine::export::ExportFormat as F;
     let before = opts.format;
     // "Rendered DNG" is a DNG option (below), not a format of its own in this list
     let mut shown = if opts.format == F::RenderedDng { F::Dng } else { opts.format };
-    choices(
+    // (GIF at the row's end opens Export Animated GIF: animated_gif.rs)
+    animated_gif::export_formats(
+        app,
         ui,
-        "Format",
-        "exportFormat",
         &[
             (F::Jpeg, "JPEG"),
             (F::Png, "PNG"),
@@ -1318,6 +1373,7 @@ fn export_format_rows(ui: &mut egui::Ui, t: &Tokens, opts: &mut ExportOptions) {
         };
         ui.label(egui::RichText::new(note).color(t.text_dim));
     }
+    crate::macos_colour::show(ui, t, "label:exportMacosColour", crate::macos_colour::export_line(app, opts.format));
     if opts.format != before {
         // each format starts at its own default depth (TIFF 16-bit, others 8-bit)
         opts.bit_depth = None;
@@ -1610,6 +1666,7 @@ fn export_destination_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
     use lightcraft_engine::export::Conflict as K;
     choices(ui, "If file exists", "exportConflict", &[(K::Unique, "Add number"), (K::Overwrite, "Overwrite"), (K::Skip, "Skip")], &mut opts.conflict);
     export_apple_photos_rows(ui, t, opts);
+    crate::export_reveal::row(ui, opts);
 }
 
 /// Export dialog, after export: Apple Photos imports the files written (macOS only).
@@ -1954,10 +2011,12 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             );
             ui.label(egui::RichText::new(crate::i18n::tr("Settings to include")).color(t.text_dim));
             group_checklist(ui, "presetInclude", groups);
+            colour_source_hint(app, ui, t, groups);
         }
         Dialog::CopySettings { groups } => group_checklist(ui, "copyGroup", groups),
         Dialog::PasteSettings { .. } => paste_settings_body(app, ui, t, dlg),
         Dialog::SlideshowExport { settings } => slideshow_export_body(app, ui, settings),
+        Dialog::AnimatedGif { settings } => animated_gif_body(app, ui, settings),
         Dialog::ContactSheet { .. } => contact_sheet_body(app, ui, dlg),
         Dialog::Export { .. } => export_body(app, ui, t, dlg),
         Dialog::Merge { opts } => crate::merge::body(app, ui, opts),
@@ -1985,6 +2044,29 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             ui.label(crate::i18n::tr_format!("Move {what} to Recently Deleted?", what = what));
             ui.label(egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
         }
+        Dialog::MacosForCamera { camera, count, skipped, .. } => crate::macos_colour::picker::body(ui, t, camera, *count, *skipped),
+        Dialog::SmartPreviewsForEditing { missing } => crate::smart_editing::body(ui, t, *missing),
+        Dialog::LocalProfileSwitch { name, count, .. } => {
+            let question = if *count == 1 {
+                crate::i18n::tr_format!(
+                    "1 photo was rendered with your local profile '{name}'. Switch it to that profile to keep its look?",
+                    name = name
+                )
+            } else {
+                crate::i18n::tr_format!(
+                    "{count} photos were rendered with your local profile '{name}'. Switch them to it to keep their look?",
+                    count = count,
+                    name = name
+                )
+            };
+            ui.label(question);
+            ui.label(
+                egui::RichText::new(crate::i18n::tr("Camera Matching no longer uses it. Undo in the Edit menu takes the switch back."))
+                    .color(t.text_dim),
+            );
+        }
+        Dialog::DeletePermanently { .. } => delete_permanently::body(ui, t, dlg),
+        Dialog::ConfirmDeleteRejected { .. } => delete_rejected::body(ui, t, dlg),
         Dialog::MovePhotos { .. } => move_photos_body(ui, t, dlg),
         d @ Dialog::SynchronizeFolder { .. } => crate::sync::body(app, ui, d),
         Dialog::LightroomCatalog { .. } => lightroom_catalog_body(app, ui, t, dlg),

@@ -101,6 +101,55 @@ pub struct SourceInfo {
     /// Noise reduction sizes its radii in the original's pixels ([`Plan::detail_scale`]), so a
     /// preview looks like the full-size render scaled down (issue #960).
     pub native_long: Option<usize>,
+    /// The raw has no colour matrices of its own, but its camera model has matrices from measured
+    /// spectral sensitivities, so the photo's Profile option can start from them instead of the
+    /// look fitted to its JPEG (`lightcraft_develop::CameraColour`).
+    pub colorimetric: bool,
+    /// The photo chose a local camera profile that its source could not use, so it was decoded as Camera Matching: what
+    /// the Edit panel says under the Profile picker, for as long as it is so (the panel words and translates it).
+    pub colour_note: Option<ColourNote>,
+    /// macOS Colour can be offered for this source on this computer: a raw whose Profile option is offered
+    /// (`colorimetric`), on a Mac whose raw decoder lists its camera and has not failed to read it.
+    pub macos_offered: bool,
+    /// The photo chose macOS Colour but this source was decoded as Camera Matching: why. The choice is kept; the Edit
+    /// panel says so for as long as it is so.
+    pub macos_note: Option<MacosUnavailable>,
+}
+
+/// Why a photo set to macOS Colour renders as Camera Matching.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MacosUnavailable {
+    /// Not a Mac, macOS older than 12, or its raw decoder lacks a setting the recipe needs.
+    System,
+    /// macOS does not list the camera, or LightCraft has no verified type for its raw format.
+    Camera,
+    /// macOS reads the raw at a size more than 2 % away from LightCraft's.
+    Size,
+    /// macOS could not read the raw.
+    Unreadable,
+    /// AI Denoise is on and the photo's colours could not be carried over to macOS's (too little colour variety, or
+    /// the fit did not reproduce macOS's picture): both the plain and the denoised picture use Camera Matching. The
+    /// Edit panel's line: "AI Denoise uses Camera Matching colours on this photo".
+    Transfer,
+}
+
+/// Why a photo cannot use its local camera profile, and so renders as Camera Matching.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LocalUnavailable {
+    /// No file of that name in the folder (the folder is empty, on another computer, or the file was renamed).
+    Missing,
+    /// The file is not a usable profile.
+    Invalid,
+    /// The file is a profile for another camera.
+    OtherCamera,
+}
+
+/// The permanent note under the Profile picker for a local profile the photo cannot use (the setting stays as it is).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ColourNote {
+    pub why: LocalUnavailable,
+    /// The profile's id (its file name without `.json`), as the photo stores it.
+    pub profile: String,
 }
 
 impl Default for SourceInfo {
@@ -117,6 +166,10 @@ impl Default for SourceInfo {
             mattes: None,
             local_tone: None,
             native_long: None,
+            colorimetric: false,
+            colour_note: None,
+            macos_offered: false,
+            macos_note: None,
         }
     }
 }
@@ -227,6 +280,8 @@ pub(crate) struct Prepared {
     pub base: Arc<Plane>,
     pub clarity_blur: Option<Arc<Plane>>,
     pub texture_blur: Option<Arc<Plane>>,
+    /// Process V3: the sharpening band at the Radius slider's scale (V1 / V2 sharpen on `texture_blur`).
+    pub sharpen_blur: Option<Arc<Plane>>,
     pub dark: Option<Arc<Plane>>,
     /// Blurred chromaticity (`rgb / Y`) for local Moiré / Noise.
     pub chroma_blur: Option<Arc<Rgb32f>>,
@@ -325,7 +380,7 @@ impl StageCache {
             }
             let pl = &e.planes;
             let planes = pl.log_l.iter().chain(pl.base.iter().map(|x| &x.1)).chain(pl.clarity.iter().map(|x| &x.1));
-            for p in planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1)) {
+            for p in planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.sharpen.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1)) {
                 add(Arc::as_ptr(p) as usize, size(p));
             }
         }
@@ -471,7 +526,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     ));
     let lin_key = hash_of((
         pre_nr_key,
-        [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
+        [d.nr_luminance, d.nr_detail, d.nr_contrast, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         detail_scale.to_bits(),
     ));
     Plan { settings, frame, w, h, px_per_long, src_long, detail_scale, geo, lin_key, pre_nr_key, eyes, fixed_air, keep, mattes: info.mattes.clone() }
@@ -607,7 +662,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Some(p) if req.quality == Quality::Draft && p.pre_nr == plan.pre_nr_key => p.for_other_nr(),
         _ => local::Planes { key: lin_key, pre_nr: plan.pre_nr_key, ..Default::default() },
     };
-    let mut prep = local::prepare(lin.clone(), s, frame, px_per_long, req.quality, &mut planes, plan.mattes.as_deref());
+    let mut prep = local::prepare(lin.clone(), s, frame, px_per_long, plan.detail_scale, req.quality, &mut planes, plan.mattes.as_deref());
     if let Some(a) = plan.fixed_air {
         prep.air = a;
     }
@@ -685,7 +740,9 @@ pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, 
 /// (the one the render evaluated, or for a hidden mask a fresh evaluation).
 fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Plane> {
     if o.reads_detail() {
-        return visualize::sharpen_plane(o, &plan.settings, &prep.log_l, prep.texture_blur.as_deref(), plan.px_per_long);
+        let v3 = plan.settings.process >= lightcraft_develop::Process::V3.version();
+        let band = if v3 { prep.sharpen_blur.as_deref() } else { prep.texture_blur.as_deref() };
+        return visualize::sharpen_plane(o, &plan.settings, &prep.log_l, band, plan.px_per_long, plan.detail_scale);
     }
     let m = o.mask(&plan.settings)?;
     if let Some(e) = prep.masks.iter().find(|e| e.id == m.id) {
@@ -755,8 +812,16 @@ mod tests_hdr;
 #[cfg(test)]
 mod tests_local;
 #[cfg(test)]
+mod tests_macos_wb;
+#[cfg(test)]
 mod tests_nr_scale;
 #[cfg(test)]
+mod tests_sharpen_mask;
+#[cfg(test)]
+mod tests_slider_strength;
+#[cfg(test)]
 mod tests_tone;
+#[cfg(test)]
+mod tests_tone_sliders;
 #[cfg(test)]
 mod tests_window;

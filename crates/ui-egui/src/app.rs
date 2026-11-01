@@ -21,11 +21,19 @@ pub(crate) use frame::import_tick_allowed;
 pub(crate) use screenshot::shot_ready;
 
 impl LightcraftApp {
+    /// UI-thread milliseconds the brush stroke being painted took last frame to bring the
+    /// adjustment under the brush on screen; `None` when no stroke shows one.
+    pub fn brush_live_ms(&self) -> Option<f64> {
+        self.brush_live.as_ref().and_then(crate::brush_live::LiveStroke::live_ms)
+    }
+
     /// Build the app with default UI, renderer, cache and control state, and move AI segmentation
     /// to a worker so frames apply results instead of waiting.
     pub fn new(mut session: Session, services: Services) -> Self {
         // AI mask requests run on the model's worker; frames apply their results (never wait)
         session.segmenter.background = true;
+        // editing a selection edits every selected photo, unless the user turned Auto Sync off
+        session.set_auto_sync_default(true);
         Self {
             session,
             ui: UiState::default(),
@@ -38,6 +46,7 @@ impl LightcraftApp {
             native_menu: false,
             native_shortcuts: Default::default(),
             recording_shortcut: None,
+            keybinds: Default::default(),
             text_focus: false,
             headless_host: false,
             notices: vec![],
@@ -116,14 +125,21 @@ impl LightcraftApp {
             review_pending: None,
             shown_library: None,
             export: None,
+            from_control: false,
+            layers: None,
+            edit_in: None,
+            handoffs: Vec::new(),
+            macos_job: None,
             tasks: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,
+            animated_gif_reported: true,
             hover_preview: None,
             window_is_fullscreen: false,
             gpu_applied: None,
             gpu_notice: false,
             memory_applied: None,
+            smart_editing_applied: None,
             display_applied: None,
             display_error: None,
             screen_profile: None,
@@ -133,6 +149,8 @@ impl LightcraftApp {
             alt_asks_for_library: false,
             recent_checks: Default::default(),
             activity_expanded: false,
+            activity_open: Default::default(),
+            activity_seen_seq: 0,
             model_setup: Default::default(),
         }
     }

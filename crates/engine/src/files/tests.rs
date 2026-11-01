@@ -556,7 +556,7 @@ fn cached_denoise_uses_the_same_white_balance_profile_and_orientation_as_plain_r
     product::write(&path, &camera_rgb, key).unwrap();
     let spec = DenoiseSpec { product: path, key: key.into(), make: None };
     let (ordinary, _) = load_bytes(&bytes, 2048).unwrap();
-    let (plain, cached, _) = load_vec_pair(bytes, 2048, &spec).unwrap();
+    let (plain, cached, _) = load_vec_pair(bytes, 2048, &spec, LoadOptions::default()).unwrap();
     assert_eq!(plain.data, ordinary.data, "requesting a twin must not change the ordinary path");
     let cached = cached.unwrap();
     assert_eq!((plain.width, plain.height), (24, 32));
@@ -1220,9 +1220,9 @@ fn exports_never_develop_a_dngs_reduced_copy() {
     let mean = |img: &lightcraft_raster::Rgba8| img.data.iter().map(|p| p[1] as f64).sum::<f64>() / img.data.len().max(1) as f64;
 
     // the loaders: only the thumbnail's develops the copy, and only when it covers the size
-    let (copy, _, used) = load_vec_reduced(bytes.clone(), 512).unwrap();
+    let (copy, _, used) = load_vec_reduced(bytes.clone(), 512, LoadOptions::default()).unwrap();
     assert!(used, "a thumbnail develops the copy");
-    assert!(!load_vec_reduced(bytes.clone(), 1024).unwrap().2, "no copy covers 1024 px");
+    assert!(!load_vec_reduced(bytes.clone(), 1024, LoadOptions::default()).unwrap().2, "no copy covers 1024 px");
     let (full, _) = load_vec(bytes.clone(), 512).unwrap();
     assert!(g(&copy) > 4.0 * g(&full), "the fixture's copy is much brighter: {} vs {}", g(&copy), g(&full));
 
@@ -1655,15 +1655,18 @@ fn quick_jobs_show_embedded_previews_then_cached_renders() {
     let mut s = crate::Session::new().with_fs();
     let r = s.execute("library.import", &serde_json::json!({"paths": [path.to_string_lossy()]})).unwrap();
     let id = lightcraft_catalog::PhotoId(r["imported"][0].as_u64().unwrap());
-    // loupe: an unedited raw opens on its embedded preview…
-    let q = s.quick_view_job(id, 1600, true).unwrap().run();
+    // loupe: an unedited raw opens on a render of its own, never the camera's JPEG (its colours and
+    // lens correction are the camera's: swapping it for the render made the photo flash and shift)…
+    assert_eq!(s.quick_view_job(id, 1600, true, false).unwrap().run().quick, Some(QuickSource::Small));
+    // …unless the raw can't be rendered: then the embedded preview is all there is
+    let q = s.quick_view_job(id, 1600, true, true).unwrap().run();
     assert_eq!(q.quick, Some(QuickSource::Embedded));
     let img = q.rendered.unwrap().image;
     assert_eq!((img.width, img.height), (96, 64));
     // …and once the loupe has rendered it, on that render (any size)
     let full = s.loupe_job(id, 48, 32, true).unwrap().run();
     assert!(full.rendered.is_ok() && full.quick.is_none());
-    let q = s.quick_view_job(id, 1600, true).unwrap().run();
+    let q = s.quick_view_job(id, 1600, true, false).unwrap().run();
     assert_eq!(q.quick, Some(QuickSource::Cached));
     assert_eq!(q.rendered.unwrap().image.width, 48);
     // grid: embedded first, then the real thumbnail (final, with the thumbnail job's key)
@@ -1677,7 +1680,7 @@ fn quick_jobs_show_embedded_previews_then_cached_renders() {
     s.execute("develop.set", &serde_json::json!({"control": "light.exposure", "value": 1.0})).unwrap();
     let job = s.thumb_job(id, 128).unwrap();
     assert!(s.quick_thumb_job(&job).is_none());
-    assert_eq!(s.quick_view_job(id, 1600, true).unwrap().run().quick, Some(QuickSource::Small));
+    assert_eq!(s.quick_view_job(id, 1600, true, true).unwrap().run().quick, Some(QuickSource::Small));
     let _ = std::fs::remove_dir_all(&dir);
 }
 

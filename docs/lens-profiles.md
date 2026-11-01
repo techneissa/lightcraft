@@ -9,9 +9,13 @@ stays a separate download. Adobe LCP profiles are never used.
 
 1. Get the lensfun database (the `data/db/*.xml` files of <https://github.com/lensfun/lensfun>, or the copy a Linux
    distribution installs under `/usr/share/lensfun/version_1/`).
-2. Point `LIGHTCRAFT_LENSFUN_DIR` at that directory and start the app (or the CLI).
+2. In the app, choose the directory in Settings ▸ Import ▸ Lens profiles (Choose…, Clear). The line under it says how
+   many lens profiles were found, or why none. Or point `LIGHTCRAFT_LENSFUN_DIR` at it and start the app (or the CLI);
+   the variable wins over the Settings folder when it is set.
 
-Files are read once per process. Invalid files are skipped with a warning in the log. Without the variable nothing
+The folder is read when it is first needed and again when it changes (agents: `lensDatabase.get`, `lensDatabase.set
+{dir}`, `lensDatabase.reload`; the read runs on a worker, so these answer `reading: true` until it ends: ask `lensDatabase.get` again). Photos keep the profile they were last read with; a photo imported or reloaded
+afterwards uses the new database. Invalid files are skipped with a warning in the log. Without a folder nothing
 changes.
 
 ## What is applied
@@ -19,7 +23,9 @@ changes.
 The lens is identified from EXIF: camera make / model (for the mount and crop factor; the 35 mm equivalent focal
 length is used when the camera isn't listed) and the lens model string. Lens names match on their words; every
 number (focal lengths, apertures) in the database name must appear in the EXIF name, and the lens maker must agree
-when the file names one.
+when the file names one. A generation marker (`II`, `III`, `IV`) must also agree: a profile for the first generation is
+not used for the second, which is another optical design (the FE 70-200mm F4 G OSS profile put 0.7 EV of corner gain on
+photos from the F4 Macro G OSS II, whose camera JPEG shows 0.15 EV; mean render 4–5 L* lighter than the JPEG).
 
 Some cameras record no lens model at all, only the lens specification: Nikon DSLRs write the lens's focal range and
 maximum apertures in their maker note (tag `0x0084`) and no Exif `LensModel`, whatever lens is mounted. For such a
@@ -41,6 +47,13 @@ into the DNG `WarpRectilinear` / `FixVignetteRadial` polynomials, so it goes thr
 corrections: **Enable Profile Corrections** and its Distortion / Vignetting amounts, the CPU and GPU geometry
 stage (one resample), orientation handling and DNG export. A conversion whose radial error exceeds 0.001 of the
 half diagonal, or that would fold the image, is not applied.
+
+Correcting pincushion distortion (most telephoto lenses) fetches the frame's edges from beyond the recorded image.
+The warp is therefore zoomed in just enough that every pixel of the frame shows the photo, as the camera's own
+correction and Lightroom's profile corrections do (`lightcraft_lensdb::fill_frame`); before, a FE 70-200mm F4 Macro
+G OSS II at 182 mm left light bands about 10 px wide along the sides of a 1600 px render. Barrel corrections, which
+cover the frame already, keep their framing. Photos imported before this keep their stored correction until
+**Reload from Disk**.
 
 Normalisation follows lensfun's documentation: distortion and TCA radii are 1 at half the shorter side of the
 calibration frame (its `cropfactor` and `aspect-ratio`), vignetting radii 1 at its corner; the optical centre is

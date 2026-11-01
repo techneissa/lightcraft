@@ -431,3 +431,33 @@ fn slideshow_playback_settings_persist_with_the_library() {
     drop(s);
     let _ = std::fs::remove_dir_all(&lib);
 }
+
+#[test]
+fn auto_sync_follows_the_hosts_default_until_the_user_chooses_and_the_choice_is_kept() {
+    let lib = temp_dir("auto-sync");
+    let mut s = Session::new().with_fs();
+    assert!(!s.auto_sync, "the engine on its own (CLI, MCP) edits only the photo asked for");
+    s.set_auto_sync_default(true);
+    s.open_library(&lib, false).unwrap();
+    assert!(s.auto_sync, "a library with no saved choice starts on in a host that defaults it on");
+    s.execute("develop.autoSync", &json!({"on": false})).unwrap();
+    s.close_library().unwrap();
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.set_auto_sync_default(true);
+    s.open_library(&lib, false).unwrap();
+    assert!(!s.auto_sync, "the saved choice beats the default");
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    drop(s);
+    // a prefs file from before the setting existed has no choice
+    std::fs::write(lib.join("prefs.json"), r#"{"xmp": {"autoWrite": false}}"#).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert!(!s.auto_sync, "no choice and no host default: off");
+    s.set_auto_sync_default(true);
+    assert!(s.auto_sync, "a host default applies when nothing was chosen");
+    s.execute("develop.autoSync", &json!({})).unwrap(); // toggles
+    s.set_auto_sync_default(true);
+    assert!(!s.auto_sync, "a later default never overrides a choice");
+    let _ = std::fs::remove_dir_all(&lib);
+}

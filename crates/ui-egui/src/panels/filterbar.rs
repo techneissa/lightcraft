@@ -69,23 +69,17 @@ fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, current: &str, a
         ui.painter().rect_stroke(r.rect.expand(2.0), 4.0, Stroke::new(1.0, t.accent.gamma_multiply(0.7)), StrokeKind::Outside);
     }
     let mut chosen = None;
-    egui::Popup::menu(&r).show(|ui| {
+    let shown = |(label, patch, _): &(String, Value, bool)| -> String {
+        if matches!(id, "camera" | "lens" | "keyword") && patch.get(id).is_some_and(|value| !value.is_null()) {
+            label.clone()
+        } else {
+            crate::i18n::tr(label).to_string()
+        }
+    };
+    let find = crate::widgets::dropdown_search::before_menu(ui, &r, || items.iter().map(shown).collect());
+    crate::widgets::dropdown_search::menu(&r, &find, |ui| {
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
-            for (label, patch, sel) in &items {
-                if ui
-                    .selectable_label(
-                        *sel,
-                        if matches!(id, "camera" | "lens" | "keyword") && patch.get(id).is_some_and(|value| !value.is_null()) {
-                            label.as_str()
-                        } else {
-                            crate::i18n::tr(label)
-                        },
-                    )
-                    .clicked()
-                {
-                    chosen = Some(patch.clone());
-                }
-            }
+            chosen = find.list(ui, &items, |(_, _, sel)| *sel, shown).and_then(|i| items.get(i)).map(|(_, patch, _)| patch.clone());
         });
     });
     if let Some(p) = chosen {
@@ -133,17 +127,20 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     if let Some(r) = crate::rating::Rating::new("filter", f.rating).automation_ids("filter:star").show(ui) {
         filter(app, json!({"rating": r}));
     }
+    // the ratings ticked in the bottom bar's Stars dropdown (a set the stars can't show)
+    if !f.ratings.is_empty() {
+        ui.label(egui::RichText::new(super::quick_filters::stars_summary(&f)).font(t.font(12.0)).color(t.text));
+    }
     ui.add_space(14.0);
 
-    // flags: several can be on at once (any of them matches), as in Lightroom Classic
+    // flags (several can be on at once, like the bottom bar's flag buttons; one flag stays a plain `flag`)
     caption(ui, "Flag");
-    let chosen: Vec<Flag> = f.flags_shown().unwrap_or_default();
     for (id, icon, flag, tip) in [
         ("pick", Icon::FlagPick, Flag::Pick, "Picked"),
         ("reject", Icon::FlagReject, Flag::Reject, "Rejected"),
         ("none", Icon::Circle, Flag::None, "Unflagged"),
     ] {
-        let on = chosen.contains(&flag);
+        let on = super::quick_filters::flag_lit(&f, flag);
         let color = match flag {
             Flag::Pick if on => t.pick,
             Flag::Reject if on => t.reject,
@@ -152,13 +149,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let icon = if on && flag == Flag::Pick { Icon::FlagPickFilled } else { icon };
         let resp = toggle(ui, id, on, tip, |p, r, c| paint(p, r, icon, if color == Color32::TRANSPARENT { c } else { color }));
         if resp.clicked() {
-            // in the bar's order, so the chip reads the same whichever was clicked first
-            let names: Vec<String> = [Flag::Pick, Flag::Reject, Flag::None]
-                .into_iter()
-                .filter(|x| if *x == flag { !on } else { chosen.contains(x) })
-                .map(|x| format!("{x:?}").to_lowercase())
-                .collect();
-            filter(app, json!({"flag": Value::Null, "flags": names}));
+            filter(app, f.toggle_flag_patch(flag));
         }
     }
     ui.add_space(14.0);
@@ -273,12 +264,20 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // filter presets: apply one, save the current filter, delete
     let presets = crate::widgets::dropdown(ui, "filterPresets", crate::i18n::tr("Presets"), t.font(12.5), t.text);
     register(ui, "button:filterPresets", presets.rect);
-    egui::Popup::menu(&presets).show(|ui| {
-        let names: Vec<String> = app.session.filter_presets.iter().map(|f| f.name.clone()).collect();
-        for n in &names {
+    let names: Vec<String> = app.session.filter_presets.iter().map(|f| f.name.clone()).collect();
+    let find = crate::widgets::dropdown_search::before_menu(ui, &presets, || names.clone());
+    crate::widgets::dropdown_search::menu(&presets, &find, |ui| {
+        if let Some(n) = find.picked(ui).and_then(|i| names.get(i)) {
+            let _ = app.run("filter.applyPreset", json!({"name": n}));
+            ui.close();
+        }
+        let all: Vec<usize> = (0..names.len()).collect();
+        for n in find.options(&all).iter().filter_map(|&i| names.get(i)) {
             let r = ui.button(n);
+            find.row(ui, &r);
             if r.clicked() {
                 let _ = app.run("filter.applyPreset", json!({"name": n}));
+                ui.close();
             }
             crate::widgets::context_menu(&r, |ui| {
                 if ui.button(crate::i18n::tr("Delete Preset")).clicked() {
@@ -288,6 +287,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         if names.is_empty() {
             ui.label(egui::RichText::new(crate::i18n::tr("No filter presets yet")).color(t.text_dim));
+        }
+        find.no_match(ui);
+        // saving is not a preset: it waits until the search is cleared
+        if find.filtering() {
+            return;
         }
         ui.separator();
         if ui.add_enabled(filtering, egui::Button::new(crate::i18n::tr("Save Current Filter as Preset…"))).clicked() {

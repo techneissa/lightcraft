@@ -71,6 +71,9 @@ fn the_editor_records_a_key_and_esc_cancels_without_closing() {
     click(&mut h, "button:shortcut-view.compare");
     assert_eq!(h.app.recording_shortcut.as_deref(), Some("view.compare"));
     key(&mut h, "J", true);
+    assert_eq!(h.app.ui.view, ViewMode::Detail);
+    assert_eq!(h.app.recording_shortcut.as_deref(), Some("view.compare"), "the keys wait for Enter");
+    key(&mut h, "Enter", false);
     assert_eq!(h.app.recording_shortcut, None);
     assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.compare"), Some("Shift+J"));
     assert_eq!(h.app.ui.view, ViewMode::Detail);
@@ -154,6 +157,8 @@ fn modifiers_wait_for_their_key_and_clipboard_keys_record() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     h.step();
+    assert_eq!(h.app.recording_shortcut.as_deref(), Some("view.survey"), "the keys wait for Enter");
+    key(&mut h, "Enter", false);
     assert_eq!(h.app.recording_shortcut, None);
     assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("Cmd+Shift+K"));
     // ⌘⌥C: the windowing layer sends a Copy event with the modifiers held
@@ -163,6 +168,7 @@ fn modifiers_wait_for_their_key_and_clipboard_keys_record() {
     h.app.synthetic.push(egui::Event::Copy);
     h.step();
     h.step();
+    key(&mut h, "Enter", false);
     assert_eq!(crate::shortcuts::shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("Cmd+Alt+C"));
     // a saved modifier-only shortcut (from the bug) means no shortcut
     assert_eq!(crate::shortcuts::parse("Cmd+SuperLeft"), None);

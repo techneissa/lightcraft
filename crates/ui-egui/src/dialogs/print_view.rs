@@ -421,15 +421,20 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, pu: &mut PrintUi, 
     heading(ui, t, "Page Setup");
     row(ui, t, "Paper", |ui| {
         let current = current_paper(&l.page.paper);
-        let c = craft_ui::ComboBox::from_id_salt("printPaper").selected_text(paper_label(current)).show_ui(ui, |ui| {
-            for name in layout::paper_names().chain(std::iter::once("custom")) {
-                if ui.selectable_label(current == name, paper_label(name)).clicked() {
-                    patch(app, &ctx, json!({"layout": {"page": {"paper": name}}}));
-                }
-            }
-        });
-        crate::widgets::name_combo(&c.response, crate::i18n::tr("Paper"));
-        register(ui, "combo:printPaper", c.response.rect);
+        let papers: Vec<&str> = layout::paper_names().chain(std::iter::once("custom")).collect();
+        let (c, chosen) = crate::widgets::dropdown_search::pick(
+            ui,
+            "printPaper",
+            |c| c.selected_text(paper_label(current)),
+            &papers,
+            |name| current == *name,
+            |name| paper_label(name).to_string(),
+        );
+        crate::widgets::name_combo(&c, crate::i18n::tr("Paper"));
+        register(ui, "combo:printPaper", c.rect);
+        if let Some(name) = chosen.and_then(|i| papers.get(i)) {
+            patch(app, &ctx, json!({"layout": {"page": {"paper": name}}}));
+        }
     });
     if l.page.paper.eq_ignore_ascii_case("custom") {
         row(ui, t, "Size", |ui| {
@@ -513,25 +518,45 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
     };
     let mut pick = false;
     row(ui, t, "Profile", |ui| {
-        let c = craft_ui::ComboBox::from_id_salt("print-profile").width(190.0).selected_text(shown.clone()).show_ui(ui, |ui| {
-            for (space, label) in [(ManagedSpace::Srgb, "Managed by Printer (sRGB)"), (ManagedSpace::AdobeRgb, "Managed by Printer (Adobe RGB)")] {
-                let r = ui.selectable_label(color.profile == managed(space), crate::i18n::tr(label));
-                register(ui, format!("item:printProfile-{}", to_value(space).as_str().unwrap_or_default()), r.rect);
-                if r.clicked() && color.profile != managed(space) {
-                    patch_color(app, &ctx, "profile", to_value(managed(space)));
-                }
-            }
-            if let PrintProfile::Icc { .. } = &color.profile {
-                let _ = ui.selectable_label(true, shown.as_str());
-            }
-            if app.services.pick_display_profile.is_some() {
-                let r = ui.selectable_label(false, crate::i18n::tr("Other…"));
-                register(ui, "item:printProfile-other", r.rect);
-                pick |= r.clicked();
-            }
-        });
-        crate::widgets::name_combo(&c.response, crate::i18n::tr("Profile"));
-        register(ui, "combo:printProfile", c.response.rect);
+        enum Row {
+            Managed(ManagedSpace),
+            Icc,
+            Other,
+        }
+        let mut rows = vec![
+            (Row::Managed(ManagedSpace::Srgb), crate::i18n::tr("Managed by Printer (sRGB)").to_string()),
+            (Row::Managed(ManagedSpace::AdobeRgb), crate::i18n::tr("Managed by Printer (Adobe RGB)").to_string()),
+        ];
+        if let PrintProfile::Icc { .. } = &color.profile {
+            rows.push((Row::Icc, shown.clone()));
+        }
+        if app.services.pick_display_profile.is_some() {
+            rows.push((Row::Other, crate::i18n::tr("Other…").to_string()));
+        }
+        let (c, chosen) = crate::widgets::dropdown_search::pick_with(
+            ui,
+            "print-profile",
+            |c| c.width(190.0).selected_text(shown.clone()),
+            &rows,
+            |(row, _)| match row {
+                Row::Managed(space) => color.profile == managed(*space),
+                Row::Icc => true,
+                Row::Other => false,
+            },
+            |(_, label)| label.clone(),
+            |ui, (row, _), r| match row {
+                Row::Managed(space) => register(ui, format!("item:printProfile-{}", to_value(*space).as_str().unwrap_or_default()), r.rect),
+                Row::Other => register(ui, "item:printProfile-other", r.rect),
+                Row::Icc => {}
+            },
+        );
+        crate::widgets::name_combo(&c, crate::i18n::tr("Profile"));
+        register(ui, "combo:printProfile", c.rect);
+        match chosen.and_then(|i| rows.get(i)) {
+            Some((Row::Managed(space), _)) if color.profile != managed(*space) => patch_color(app, &ctx, "profile", to_value(managed(*space))),
+            Some((Row::Other, _)) => pick = true,
+            _ => {}
+        }
     });
     if pick && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next()) {
         patch_color(app, &ctx, "profile", json!({"kind": "icc", "path": path}));

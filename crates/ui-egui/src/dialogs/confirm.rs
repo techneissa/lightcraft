@@ -207,6 +207,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         ),
         Dialog::ContactSheet { options } => app.run("app.contactSheet", json!(options)),
         Dialog::SlideshowExport { settings } => app.run("app.slideshowExport", json!(settings)),
+        Dialog::AnimatedGif { settings } => app.run("app.animatedGif", json!(settings)),
         Dialog::Print => app.run("app.print", json!({})),
         Dialog::CopySettings { groups } => app.run("develop.copy", json!({"groups": groups})),
         Dialog::PasteSettings { groups } => app.run("develop.paste", json!({"groups": groups})),
@@ -219,6 +220,12 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::Merge { opts } => crate::merge::start_final(app, opts),
         Dialog::Import { opts } => crate::import::start(app, opts),
         Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
+        Dialog::LocalProfileSwitch { id, .. } => app.run("profiles.localSwitch", json!({"id": id})),
+        Dialog::SmartPreviewsForEditing { .. } => crate::smart_editing::build(app),
+        // on a worker: a large library would freeze the window
+        Dialog::MacosForCamera { photo, .. } => crate::macos_colour::job::start(app, *photo, true),
+        Dialog::ConfirmDeleteRejected { .. } => super::delete_rejected::confirm(app),
+        d @ Dialog::DeletePermanently { .. } => super::delete_permanently::confirm(app, d),
         Dialog::MovePhotos { ids, folder, dont_ask, library, .. } => {
             // another library opened meanwhile (from the menu bar, an agent): these numbers are
             // other photos there

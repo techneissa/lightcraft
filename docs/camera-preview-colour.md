@@ -20,7 +20,7 @@ One third of the pixels are held out from both fits. The combined model must red
 
 **Lens-corrected camera JPEGs.** Some raws carry the camera's own lens correction (Fujifilm and Panasonic tables, the ILCE-7RM4A, Nikon's NikonNEFInfo) and the camera often applies it to its JPEG. Nikon Z lenses always do, and that JPEG can be zoomed in by up to 9% to fill the frame. The fit used to pair the uncorrected sensor with the corrected JPEG, so near the edges it compared pixels from different parts of the scene. Now the sensor proxy is also warped with the file's correction (`into_lens_geometry`, pixels that land outside the picture are dropped), and the fit uses whichever of the two lines up better with the JPEG, going by the correlation of their high-passed log luminance. Files whose JPEG isn't corrected keep the plain proxy. On the 29 CC0 corpus raws with a warp the alignment goes up by 0.13 on average (Panasonic GX80 0.41 to 0.83, Fujifilm X-T20 0.44 to 0.95). Mean ΔE against the camera JPEG over the 35 corpus raws of those formats goes from 3.73 to 3.61, and on 299 private Z 6II photos with Nikon's correction read it goes from 3.22 to 2.68.
 
-**A partial look when the full look misses the gates.** The neutral fallback (camera RGB taken as sRGB, the default tone map) is far from the camera JPEG. Rendered for every photo on this path in the CC0 archive (1,150 files with a camera JPEG), it is 10.7 L\* too dark (median; about one stop), keeps 0.36 of the camera's colourfulness and has hues 7° off on the coloured pixels (median CIEDE2000 13.6). Its white balance is right: on the pixels the camera renders near-neutral the cast is under 1 a\*/b\* (median, every maker). The "blue" fallback on newer Sony bodies (Δb\* −22 over the whole frame on the ILCE-7RM5 sample) is a warm scene losing its colour, not a cast: its near-neutral pixels are within −1.6 b\*. So before falling back, a partial look is fitted (`fit_partial`): the quantile tone curve (registration-free, the largest part of the error), the chroma curve, and, when the scene has enough colour to learn a matrix (the full look's condition), the photo's own colour matrix at half weight, the other half the identity (`PARTIAL_MATRIX_WEIGHT`). No hue/saturation table. Half weight because, on the held-out proxy pixels of the 23 colourful photos without a look, the full matrix left 2 of them more than 2° further from the camera's hues than the neutral fallback and half weight none (median hue error 9.6° with the generic colour, 5.1° at half weight, 4.2° at full weight; on the 1,080 photos with a look 3.9° and 2.7°). Without a matrix (tone and chroma curve alone, or with one global saturation scale) about a third of all photos ended up more than 2° further from the camera's hues than the fallback, as the added colour makes the generic matrix's hue errors visible. The partial look is tried on all pixels, then away from edges, and used only when it cuts the held-out squared error below 0.7 of the neutral fallback's in linear and in gamma-encoded display values, and when the JPEG's luminance ranks the pixels like the scene's (Spearman ≥ 0.5, `PARTIAL_MIN_RANK_CORRELATION`): a curve matched to the brightness of an unrelated picture also beats the dark fallback pixel for pixel. The accepted full looks have 0.55 or more; three old Coolpix files whose raws decode wrongly have 0.07–0.27 and keep the fallback. There is no limit on the partial look's own error. On the archive (1,783 renders): all 1,087 full looks are byte-identical; of the 55 photos that reach the partial fit, 49 get it (40 on all pixels, 9 away from edges; 13 with the damped matrix, 41 with a chroma curve) and 6 keep the fallback (lens-corrected compacts: RX10, TZ80 1:1, D-LUX 4, G10 16:9, GF2 ×2). On the 49, median CIEDE2000 to the camera JPEG 14.0 → 2.1, ΔL\* −11.5 → +0.6, colourfulness 0.36 → 0.87, hue error 10.1° → 7.1°; every one is closer, by at least 1.3. Most of the others without a look never reach a fit: on 48 files (Nikon D4, Df, D300/D300S, D7000, D5100 and others) the camera JPEG proxy comes out a pixel narrower than the sensor proxy and no pairs are collected (the resize in PR #531 fixes this; with it 46 of them pass the full look's gates, CIEDE2000 17.9 → 2.9).
+**A partial look when the full look misses the gates.** The neutral fallback (camera RGB taken as sRGB, the default tone map) is far from the camera JPEG. Rendered for every photo on this path in the CC0 archive (1,150 files with a camera JPEG), it is 10.7 L\* too dark (median; about one stop), keeps 0.36 of the camera's colourfulness and has hues 7° off on the coloured pixels (median CIEDE2000 13.6). Its white balance is right: on the pixels the camera renders near-neutral the cast is under 1 a\*/b\* (median, every maker). The "blue" fallback on newer Sony bodies (Δb\* −22 over the whole frame on the ILCE-7RM5 sample) is a warm scene losing its colour, not a cast: its near-neutral pixels are within −1.6 b\*. So before falling back, a partial look is fitted (`fit_partial`): the quantile tone curve (registration-free, the largest part of the error), the chroma curve, and, when the scene has enough colour to learn a matrix (the full look's condition), the photo's own colour matrix at half weight, the other half the identity (`PARTIAL_MATRIX_WEIGHT`). No hue/saturation table, unless the model has a camera profile (below): then the partial look of a scene too dull to learn colour from takes the profile's colour (matrix and table) whole, or, for a model without a profile, the spectral prior (below), never the identity; a scene with colour keeps its own matrix, damped half way toward that colour. Half weight because, on the held-out proxy pixels of the 23 colourful photos without a look, the full matrix left 2 of them more than 2° further from the camera's hues than the neutral fallback and half weight none (median hue error 9.6° with the generic colour, 5.1° at half weight, 4.2° at full weight; on the 1,080 photos with a look 3.9° and 2.7°). Without a matrix (tone and chroma curve alone, or with one global saturation scale) about a third of all photos ended up more than 2° further from the camera's hues than the fallback, as the added colour makes the generic matrix's hue errors visible. The partial look is tried on all pixels, then away from edges, and used only when it cuts the held-out squared error below 0.7 of the neutral fallback's in linear and in gamma-encoded display values, and when the JPEG's luminance ranks the pixels like the scene's (Spearman ≥ 0.5, `PARTIAL_MIN_RANK_CORRELATION`): a curve matched to the brightness of an unrelated picture also beats the dark fallback pixel for pixel. The accepted full looks have 0.55 or more; three old Coolpix files whose raws decode wrongly have 0.07–0.27 and keep the fallback. There is no limit on the partial look's own error. On the archive (1,783 renders): all 1,087 full looks are byte-identical; of the 55 photos that reach the partial fit, 49 get it (40 on all pixels, 9 away from edges; 13 with the damped matrix, 41 with a chroma curve) and 6 keep the fallback (lens-corrected compacts: RX10, TZ80 1:1, D-LUX 4, G10 16:9, GF2 ×2). On the 49, median CIEDE2000 to the camera JPEG 14.0 → 2.1, ΔL\* −11.5 → +0.6, colourfulness 0.36 → 0.87, hue error 10.1° → 7.1°; every one is closer, by at least 1.3. Most of the others without a look never reach a fit: on 48 files (Nikon D4, Df, D300/D300S, D7000, D5100 and others) the camera JPEG proxy comes out a pixel narrower than the sensor proxy and no pairs are collected (the resize in PR #531 fixes this; with it 46 of them pass the full look's gates, CIEDE2000 17.9 → 2.9).
 
 **A tone curve from a black-and-white JPEG.** A raw shot in a monochrome picture style (Canon Monochrome, Sony B/W, Nikon Monochrome) records full colour, but its camera JPEG is grey, so neither the full look nor the partial look has colour to fit. Such a photo started from the spectral matrices or the neutral fallback with the default tone curve: on a Canon EOS RP, about 1.3 EV darker and flatter than the same body's photos shot in colour (issue #577). The grey JPEG still shows the camera's tone curve. When no look was fitted and every pixel of the JPEG proxy but one in a thousand has its channels within 0.002 of each other (`monochrome`; a sepia-toned JPEG has colour and isn't one), the quantile tone curve is fitted alone, luminance against luminance, on top of the colour the photo gets otherwise: the model's camera profile when it has one (in `fit_preview`, like the profile's colour looks), else its spectral matrices or the neutral fallback's (`monochrome_look`). The chroma curve stays neutral. It has the partial look's checks: the JPEG must rank the pixels like the scene (Spearman ≥ 0.5, with tied values sharing their rank, so a flat grey JPEG relates to nothing), and the curve must cut the held-out squared luminance error below 0.7 of the default curve's, in linear and gamma-encoded values, on all pixels or away from edges. Sony's DRO is handled as for colour JPEGs, and white balance stays relative to the as-shot look. The check reads pixels, not the picture style: a colour JPEG of a scene so colourless that every pixel is grey within 0.002 counts too (such a photo gets no look today either). Photos whose JPEG has colour render as before.
 
@@ -155,7 +155,7 @@ on a 4× finer proxy roughly halves it in a simulation, but the acceptance gates
 
 One photo can show too little of a colour for its own fit to learn it: in a second shot of the lime shirt only a few dozen proxy pixels show it, next to a hillside of foliage at the same hue that the camera renders differently, and the shirt stayed yellow (hue 68° against the JPEG's 82°; a 192-pixel proxy only reached 74°). `lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS…` therefore pools the colour pairs of many ARWs, NEFs or RAFs per camera model — each against its own embedded JPEG, at a 192-pixel proxy, at most 4000 pairs per photo, files spread evenly over the folders — and fits one matrix (from white-balanced camera RGB, so no single photo's white point is baked in) and one hue/saturation/value table. Models need at least 5 usable photos.
 
-Profiles are JSON files `<model>.json` in `$LIGHTCRAFT_CAMERA_PROFILES`, else `<config>/camera-profiles` (macOS `~/Library/Application Support/LightCraft/camera-profiles`); a local profile replaces a built-in one. Built-in profiles live in `assets/camera-profiles/` (listed in `assets/ATTRIBUTION.md`) and are compiled in, so the app, CLI and web build share them: ILCE-7M4, fitted to 597 photos (2.2 million colour pairs) shot in 2026, mostly with the Standard creative style and DRO Auto; ILCE-7CR, 125 photos, and ILCA-99M2, 144 photos (both below); ILCE-7RM5, 220 photos (Standard creative style); X-H2S, 201 photos; X-T4, 545 photos; NIKON Z 6_2, 296 photos; NIKON Z 8, 261 photos; NIKON D5300, 264 photos (below). They hold aggregate colour statistics only. A photo of a profiled model takes its colour from the profile and fits only its own tone and chroma curves (picture styles vary per shot; with Sony's DRO on, that tone curve is then lowered as described below); the acceptance gates still apply. A rejected profile fit retries the photo's own colour and tone fit before falling back to neutral rendering. Files are read once per process and validated (version, bounded invertible matrix, table shape and finite data); a damaged file is ignored with a warning. The profiles folder's contents are part of the render cache keys, so thumbnails rendered before a profile existed are redone; smart previews built before keep their colour until rebuilt.
+Camera Matching reads only the built-in profiles. Profiles of your own are JSON files in `$LIGHTCRAFT_CAMERA_PROFILES`, else `<config>/camera-profiles` (macOS `~/Library/Application Support/LightCraft/camera-profiles`); they are their own choices in the Profile picker and never replace a built-in one (below, "Local camera profiles"). Built-in profiles live in `assets/camera-profiles/` (listed in `assets/ATTRIBUTION.md`) and are compiled in, so the app, CLI and web build share them: ILCE-7M4, fitted to 597 photos (2.2 million colour pairs) shot in 2026, mostly with the Standard creative style and DRO Auto; ILCE-7CR, 125 photos, and ILCA-99M2, 144 photos (both below); ILCE-7RM5, 220 photos (Standard creative style); X-H2S, 201 photos; X-T4, 545 photos; NIKON Z 6_2, 296 photos; NIKON Z 8, 261 photos; NIKON D5300, 264 photos (below). They hold aggregate colour statistics only. A photo of a profiled model takes its colour from the profile and fits only its own tone and chroma curves (picture styles vary per shot; with Sony's DRO on, that tone curve is then lowered as described below); the acceptance gates still apply. A rejected profile fit retries the photo's own colour and tone fit before falling back to neutral rendering. `calibrate` fits the pooled matrix with every row summing to 1 (`fit_matrix_neutral`, the exact constrained least-squares solution), so grey camera RGB stays grey at the same value and no profile it writes carries a colour cast on every grey wall and white shirt; the free fit gave the A7 V row sums 1.007 / 0.992 / 1.062. Files are read and validated (version, bounded invertible matrix, table shape and finite data); a damaged file is ignored with a warning. The built-in profiles are part of every render cache key (`camera_profiles::cache_key`); the user's folder is not, so adding a local profile re-renders nothing on Camera Matching.
 
 
 ### Sony ILCE-7CR
@@ -199,6 +199,27 @@ Fitted from 264 usable photos of 273 D5300 NEFs (one photographer, 2014 to 2017,
 
 The same was tried for the photographer's D700, D750 and D80 (about 300 photos each) and it didn't help: on held-back photos the D750 stayed at 3.2 and the D700 and D80 got slightly worse, even fitting only their Standard (or normal saturation) photos. Their per-photo fits are already close and those bodies were shot with a mix of picture controls, so they have no profile.
 
+### Sony ILCE-7M5 (A7 V): the spectral prior for dull scenes
+
+The A7 V is not in the spectral table and has no profile. About 7.5% of its photos (29% of one 299-photo set) fail the colour gate of the per-file fit: scenes of grey walls, white clothes and skin hold too few coloured pixels (under 5% with a channel spread above 0.05), so the partial look kept the identity matrix and skin rendered grey-green (hue +17 to +19° from the camera JPEG on four photos with a face).
+
+The partial look now starts from a base colour: the camera profile's (matrix and table) when the model has one, else the **spectral prior** (`spectral_prior`), and the identity only when no matrix can be built. A scene too dull to learn colour from uses the base colour whole. A scene with enough colour keeps its own matrix, damped half way toward the base colour (toward the identity before), without the table. The prior is the body's own matrices from `lightcraft_raw::spectral` when it is covered, at its own as-shot white; for a body that is not, the mean of the total matrices of the 51 covered bodies (the 52 in the table without the Insta360), each at the white its own matrices read from the file's multipliers. The per-body-white mean measured better on held-out A7 V photos than a mean taken at the file's one as-shot white through the generic model (see below). Either way each row is projected to sum to 1, so grey stays grey. It is computed only when the partial look asks for it. A profile pooled from the photographer's own 567 A7 V photos (own fit first, then the profile) was tried and not bundled: it did better on skin (hue −2° against +5°) but its blue row (0 / −1.8 / 2.6) amplifies noise, turning deep shadows purple on 5 held-out photos (worse by 0.3 to 1.35 ΔE) with a faint magenta-blue tint on grey walls (+0.45 a\*, −0.3 b\*), and it sits 7.4 ΔE from every spectral matrix. A separate research lane found the same on 227 held-out photos (worst skin hue 8.9° against 23.9°, neutral error 0.7 against 1.2).
+
+Measured on 299 held-out A7 V photos from one shooting folder (no profile for the body): renders at 600 px compared with each file's camera JPEG at 96 px (whole frame) and 400 px (skin, neutrals), the outer 6% of every edge left out (the lens warp leaves an empty strip). ΔE is CIEDE2000. Skin is the part of each face YuNet finds (inner box) that is skin-coloured in the camera JPEG (191 photos, at least 150 pixels). Neutrals are camera-JPEG pixels with C\* under 5 (276 photos).
+
+| Held-out, 299 photos | now | spectral prior |
+| --- | --- | --- |
+| whole frame ΔE median / worst | 4.34 / 6.66 | 4.31 / 6.53 |
+| photos better / worse by more than 0.3 | | 28 / 0 |
+| skin ΔE median | 6.11 | 5.66 (47 photos better, none worse) |
+| skin hue error, \|median\| / signed | 3.0° / +0.2° | 2.4° / +0.2° |
+| skin chroma ratio (render / JPEG) | 0.88 | 0.90 |
+| neutral a\*b\* error median / worst | 1.62 / 6.71 | 1.62 / 6.71 (5 photos worse by more than 0.3, none better) |
+
+87 photos (29%) change, those whose fit failed. On them: skin ΔE 8.15 → 5.71, skin hue +17.9° → +4.8°, skin chroma ratio 0.73 → 0.83, whole frame ΔE 4.91 → 4.52, neutral error 1.07 → 1.18, neutral cast (+0.15, −0.11) → (+0.17, −0.05) a\*b\*. Worst skin hue error over the set 18.6° → 10.7°. Of four photos with a face and a failed fit, skin hue went from +16 to +19° to +2 to +6°, skin ΔE from 6.0–13.4 to 2.7–8.2; the white wall of one of them lost its cast (neutral cast (+0.01, −0.10) → (−0.05, +0.03)). One dim photo without a face goes from ΔE 3.42 to 3.97; a photo whose own fit succeeds is unchanged. Taking the mean at the file's one white instead of each body's own white was tried and cost a little on this set (the 87 photos' skin ΔE 6.16 and hue +7.3° against 5.71 and +4.8° with per-body whites, 19 better and 1 worse against 28 and 0 overall, 7 neutral regressions against 5), so per-body whites are kept; damping toward the prior instead of the identity changed nothing here (colourful failed fits are rare in it). Whole-frame ΔE is limited by the camera JPEG's local tone (DRO) and lens warp, which the look can't follow; this is a camera-JPEG look estimate, not measured calibration or Lightroom parity.
+
+`calibrate` now fits the pooled matrix with every row summing to 1 (`fit_matrix_neutral`); that matters for any profile written from here. The bundled profiles were fitted before and keep the free fit (row sums up to 1.06); the partial look uses them as they are. On the A7 V pairs (hold-out profile, own fit first, the 87 photos where it applies) the free fit, whose rows summed to 1.007 / 0.992 / 1.062, gave skin ΔE 6.99 against 4.67 for the white-keeping one, a neutral cast of (+0.68, −0.59) against (+0.45, −0.31) and 4 photos worse in skin. `LOOK_VERSION` 13 refreshes older fitted smart previews and `RENDER_CACHE_VERSION` 71 redraws cached renders.
+
 ## Sony Dynamic Range Optimizer (DRO)
 
 Sony bodies apply DRO, a local tone operator that brightens darker regions, to their JPEG (and the preview embedded in the ARW) only; the raw data are unchanged, and the factory default is DRO Auto. The tone curve fitted to that JPEG carried the brightening into the raw's starting look, so DRO photos opened lighter than in Lightroom, darktable, Photomator or Affinity, which develop the raw without it (issue #244). On 24 ILCE-7CR photos (Standard creative style) with Lightroom 9.5.1 default exports, mean L* at 200 px: with DRO off, Lightroom matches the camera JPEG (+0.15 L*, all within ±1.4) and LightCraft matches Lightroom (−0.19 L*, median ΔE76 3.6); with DRO Lv3 or Auto (8 photos), Lightroom is 2.4–10.7 L* darker than the camera JPEG and LightCraft followed the JPEG, +6.4 L* from Lightroom (median ΔE76 7.5). The tone curves fitted to 131 ILCE-7CR photos show where: at scene luminance 0.01, 0.02, 0.05 and 0.1 the median DRO Lv3/Auto curve is 8, 10, 9 and 6 L* above the DRO-off one, and from 0.3 up they agree.
@@ -228,7 +249,7 @@ vendor white-balance multipliers give through the same matrices. No number comes
 A raw starts from the first of these that is available (`camera_preview::starting_colour`):
 
 1. the file's own colour matrices (DNG);
-2. a camera profile for its model (bundled or local), with tone and chroma fitted to the file's JPEG;
+2. a built-in camera profile for its model, with tone and chroma fitted to the file's JPEG (also the colour of the partial look);
 3. the file-local fit to its own JPEG described above;
 4. the model's spectral matrices, with LightCraft's default tone curve and no JPEG fit;
 5. the neutral fallback.
@@ -245,11 +266,259 @@ still pools the uncorrected camera colour of covered models, so a profile can be
 No colour-difference measurement of the spectral matrices against the camera JPEG, or against the file-local fit,
 is recorded here yet. Whether they should come before the file-local fit for these models is open until one is.
 
+### Camera Matching and No Camera Matching (the photo's choice)
+
+The order above is what a photo gets by default, and the Profile picker calls it **Camera Matching**: LightCraft matches
+the raw's colours to the camera's own picture. For a raw without colour matrices of its own ([`file_local_look`]
+formats: ARW, NEF, RAF, CR3 …) the Profile menu (and the profile browser, as two live thumbnails) offers the other
+choice, **No Camera Matching**: the JPEG is never read. It is stored as `profile.camera_colour` (`auto` | `colorimetric`,
+left out of the settings while `auto`, so existing edits keep their JSON and hash, and an unedited photo is not
+"edited"). The field and the decode plumbing (`media::LoadOptions`) are those of
+[#2222](https://github.com/storytold/lightcraft/pull/2222) (*Calibrated camera colour*, which offered it only as a
+checkbox for models with measured matrices); the **extension** here is that the choice is offered for every such raw,
+because the models that need it most (the Sony ILCE-7M5 / A7 V and every other body without a row in
+`lightcraft_raw::spectral`) were the ones it did nothing for.
+
+What No Camera Matching starts from:
+
+- a model with measured spectral matrices: those matrices, with LightCraft's default tone curve (step 4 above, taken
+  first). The same file starts the same way whatever its JPEG shows (Picture Control, Active D-Lighting, DRO);
+- a model without them: the generic camera model (camera RGB taken as linear sRGB with the file's white balance,
+  `matrix_is_fallback`), with the default tone curve. It is what the photo gets when the JPEG fit is refused, and it is
+  darker and less colourful than Camera Matching (about one stop and a third of the colourfulness on the samples above);
+- in both: no per-photo fit, no camera profile's tone, no black-and-white tone, no dark-tone fallback. White balance
+  keeps the same scale as Camera Matching (relative, or Kelvin through the measured matrices or presets), so a white
+  balance edit made under one choice means the same under the other.
+
+How it is stored and applied: `develop.profile` takes an optional `camera_colour` (`{"camera_colour": "colorimetric"}`;
+`id` is optional when it is given), so it is one undo step; Reset and Reset Edits go back to `auto`; Copy / Paste and
+Sync of the Profile group and presets of it carry the choice both ways (`presets::extract_groups` writes it even while
+`auto`), so a per-camera Raw Default preset can give every new photo of a camera No Camera Matching. The Edit panel shows
+which way the colour starts under the profile row. The #2222 checkbox is not kept: it would repeat the menu.
+
+The choice is part of the decode: a decoded source records the options it was made with (`DecodedSource::options`), and
+one made with others is decoded again (and replaces it, so memory stays at one source per photo and level) when the
+photo, a profile-browser thumbnail or a face tile asks for the other choice. A late render of the old one is not taken
+back into the cache (`Session::accept`). A source the choice can't change is reused (`SourceInfo::colorimetric` false:
+a DNG with matrices, a smart preview, a demo scene). Renders, thumbnails, exports and the GPU path read the same
+decoded source, so they agree. A smart preview is built with Camera Matching (it stands in for the original),
+so an offline original shows Camera Matching whatever it is set to until it is back online; a macOS Colour photo's is
+built from the Mac's picture (below).
+
+Known limits: the web app's render worker (`apps/lightcraft-web/src/wire.rs`) decodes every photo as Camera Matching; a
+photo rendered from its smart preview (the original offline) always shows Camera Matching; the Before side of
+Before / After is always Camera Matching (it shows the import settings); and white balance As Shot reads the same source
+facts under both choices, so a Kelvin As Shot reading does not follow the colour model. A photo's grid thumbnail,
+loupe, export and profile-browser thumbnails all decode for the photo's own choice. The choice is not an edit on a photo
+that has no such choice (`Photo::is_edited` ignores it for a JPEG or a DNG pasted onto from a raw).
+
+Not done yet, and open in [#1207](https://github.com/storytold/lightcraft/issues/1207): a look of its own for No Camera
+Matching (it has no camera tone curve, so on the Nikon Z f frames measured there it renders about 0.75–1.75 stop darker
+and 10–20 % less saturated than the fit), matching the exposure between the two, and the option in Photo Merge, which
+keeps the Camera Matching colour (DNG export and Convert to DNG write a local profile's colour, below).
+
+### Local camera profiles (your own profile files)
+
+A profile file in the camera-profiles folder (made by `lightcraft-cli calibrate --name "A7 V Chart" FOLDERS…`, which writes
+`A7 V Chart.json` with the name inside, or any valid profile JSON; it holds aggregate colour statistics only and is never
+bundled) is a choice in the Profile picker of every raw whose camera it is made for (the file's `model` equals the
+photo's Exif model). Before this, a file `<model>.json` silently replaced the built-in profile inside Camera Matching.
+Now it does not: Camera Matching reads the built-in profiles alone.
+
+- **Names.** The picker shows the file's `name` (trimmed, at most 60 characters), else its file name without `.json`.
+  The file stem is the **id** a photo stores (`profile.camera_profile`), next to `profile.camera_colour: "local"`;
+  `develop.profile {camera_colour: "local", camera_profile: id}` sets both in one undo step, any other colour clears the id,
+  and the Profile group (presets, Copy / Paste, sync) carries both. `profiles.local {camera?}` lists the files.
+- **Colour.** The profile's matrix and hue/saturation table are the base colour (relative to the camera transform, as
+  Camera Matching uses a built-in profile); tone and chroma curves are fitted to the file's JPEG with the colour held
+  fixed (`camera_preview/local.rs`, the profile attempts of the Camera Matching search over the same tone fits, edge
+  filter and clipped-pixel refit, and a black-and-white JPEG's tone alone). There is **no retry with the photo's own colour and
+  no partial look**: if no tone fit passes the profile's colour is kept with LightCraft's default tone. Sony DRO is lowered
+  out of the tone as in Camera Matching. White balance keeps Camera Matching's scale. AI Denoise works unchanged.
+- **A file that can't be used** (missing, damaged, or made for another camera) renders the photo as Camera Matching, keeps
+  the setting and the id, and says so under the Profile picker for as long as it is so (`SourceInfo::colour_note`). The
+  picker lists the stored profile greyed. When the file is back the photo uses it again.
+- **Caches.** A decoded source records the profile's key (`LoadOptions::profile_key`: a 128-bit hash of the id and the file's
+  content, read with no shortcut by size or time, `camera_profiles::local_key`; `None` for a photo that is not on a local
+  profile). A registry keeps each key's profile for the decoder, and a key it has lost is found again by scanning the
+  folder, so a changed, replaced, removed or restored file decodes again. Only a photo on a local
+  profile has that key in its thumbnail, variant and view keys; every other photo's keys are what they were. A smart
+  preview records the colour base baked into its pixels (`base`: `auto` or `local`); one of a photo on a local profile is
+  built with the profile and records `local_profile: "<id>:<key>"` in its header too, and goes
+  stale only when that stamp differs (the file changed, or the photo left the profile) and the original can be read, and
+  a missing or unusable file keeps the proxy.
+- **DNG.** Export as DNG and Convert / Copy as DNG write the profile's matrix, table and (when fitted) tone into the DNG's
+  colour tags; the DNG's settings say Camera Matching (a DNG has matrices of its own, so the choice is not offered on it).
+  Photo Merge keeps Camera Matching; its dialog says how many of the photos are on a local profile.
+- **Catalog.** `local` and `macos` (see "macOS Colour" below) are
+  catalog format v10; a build that only knows v9 refuses the library as "newer version", untouched, never as damaged.
+- **Existing photos.** For a file named after its camera (`ILCE-7M5.json`, the name Camera Matching used to read) a
+  question is put when the library opens, until it is answered: "N photos were rendered with your local profile 'X'. Switch them to it
+  to keep their look?" **Switch** moves the Camera Matching photos of that camera to the profile in one undo step;
+  **Leave on Camera Matching** leaves them. Never automatic. Only those two answer it (kept in the library's preferences,
+  `localProfileAsked`); closing the window with Esc or a click outside asks again at the next opening, and undoing a
+  Switch puts the question back (redo answers it again).
+
+### macOS Colour (the Mac's own raw colours)
+
+The third choice in the Profile picker. On a Mac, the raw decoder the system itself uses (Core Image's `CIRAWFilter`, the
+one behind Photos and Quick Look) makes the picture's colours; LightCraft keeps its tone curve, white balance and every
+slider. It is stored as `profile.camera_colour: "macos"` (`develop.profile {camera_colour: "macos"}`, one undo step,
+carried by the Profile group of presets, Copy / Paste and Sync). All Apple calls live in `crates/macraw`, the third
+place allowed `unsafe` (`CLAUDE.md`); a stub keeps the crate building for every other system and the web.
+
+**The recipe.** `macraw::render` sets, each only after `respondsToSelector:` says the property exists: `boostAmount` 0,
+`shadowBias` 0 (the default 3 lifts deep shadows), `extendedDynamicRangeAmount` 1, gamut mapping and lens correction
+off (LightCraft applies lens profiles itself), noise reduction, despeckle, sharpness, contrast, detail and moiré
+reduction 0 (LightCraft owns them), local tone map 0. The result is a float picture in linear extended Rec.2020, upright,
+and a render never runs without the required selectors (`available()` is false instead of a half recipe). It is made in
+an autorelease pool per render, one full-size render at a time and at most two at preview size or below
+(`crates/macraw/src/slots.rs`), and the memory gate weighs it at Core Image's peak footprint (1 GB, below).
+
+**When a photo gets it.** All of: a Mac with the decoder (`macraw::available()`); an ARW, the one format with a verified
+type hint for bytes input (below: widening); a camera Apple lists, matched on the Exif model (`ILCE-7M5`, not the
+catalog's `SONY ILCE-7M5`) against the last words of Apple's names; and a decoder picture within 2 % of LightCraft's
+size on each edge (a picture within 2 % but not equal is resampled to exactly LightCraft's size, so crop, lens, spot and
+mask coordinates map one to one). A raw that fails any of them, or that the decoder then cannot read, renders as Camera
+Matching with the setting kept, and the Edit panel says why under the Profile picker:
+
+| Why | Line under the picker |
+|---|---|
+| not a Mac, or the camera or format is not offered | "Edited with macOS Colour. This picture uses Camera Matching, so colours differ." |
+| another size | "macOS reads this raw at a different size, so this picture uses Camera Matching." |
+| the decoder failed on the file (remembered for the session) | "macOS could not read this raw, so this picture uses Camera Matching." |
+| AI Denoise is on and the colour transfer was refused | "AI Denoise uses Camera Matching colours on this photo." |
+
+A camera macOS 27 can read only after downloading support for it (`macraw::Error::NeedsDownload`) gets the "could not
+read" line too, and is not remembered as failed. LightCraft does not start that download: the command for it was dropped
+for v1 (decided 2026-10-28), because the A7 V decodes without one and the path can't be tested here. Revisit when a
+camera that needs it shows up.
+
+A photo set to macOS Colour on a computer that cannot make it keeps its row in the picker, greyed. The photo's grid
+thumbnail, filmstrip and loupe never show the camera's JPEG first for a photo that does get macOS Colour: they wait for
+the macOS render (`QuickJob.embedded` is `None` for it), so there is no colour flash.
+
+**Tone, exposure, white.** Core Image's output is darker than the camera's JPEG and has no tone curve, so the tone and
+chroma curves are fitted to the file's JPEG with the colour held at identity (`camera_preview/macos_base.rs`, the gates
+of every other fit; DRO is lowered out of the tone as in Camera Matching; accepted on 66 of 68 A7 V photos, about 2 to
+3 ms). Only when that fit is refused (no JPEG, another frame, no attempt passes) does the base take a fixed gain of
++0.33 stops (`GAIN_STOPS`, measured on 16 A7 V photos: mean lightness against the camera JPEG −0.06 L*); an accepted fit
+is never multiplied again. White balance is done on the linear base with the Bradford adaptation Camera Matching uses,
+and its scale is **Kelvin** from Core Image's as-shot white (3970 K against Apple's own 3968 K on a measured file), not
+the relative 6500 K / 0 scale an A7 V uses under Camera Matching. A Custom white balance converts between the two scales
+when the choice changes (`legacy_to_kelvin`), and As Shot stays as shot. Big cool moves (−1500 K) differ visibly from
+Apple's own re-render (ΔE00 3 to 4.5). Lightroom's XMP Kelvin white balance is read as Kelvin on a macOS Colour photo.
+
+**AI Denoise.** Apple cannot denoise LightCraft's mosaic, so with AI Denoise on (and its product made) both the plain and
+the denoised picture are developed by LightCraft and carried to Apple's colours by one per-photo transfer, a white-keeping
+3×3 matrix and a gain fitted to a 1024 px Apple render over about 1 900 block averages (`camera_preview/colour_transfer.rs`).
+The same transfer finishes both pictures, so the Amount slider blends pictures of the same colour. Measured against Apple's
+own colours on 68 A7 V photos from ISO 100 to 12 800: median ΔE00 0.23 (worst 0.59), skin 0.20 (worst 0.84). A fit that
+fails its gates (500 valid blocks, matrix entries within ±3, gain 0.2 to 5, own median ΔE00 ≤ 1.5) makes both pictures
+Camera Matching, with the line above. No full-size Apple render is ever made on this path. With AI Denoise off, Apple's
+base is used directly. Turning AI Denoise on or off changes the colour by the transfer's residual and the detail by the
+demosaic, nothing else.
+
+**Caches, smart previews, exports.** A macOS Colour photo's thumbnail, variant and view render keys carry
+`macraw::cache_key()` (the OS build and decoder version); every other photo's keys are what they were. A smart preview of
+such a photo is built from the Apple base on a Mac and records `base: "macos"` and `macos_base_version` (1) in its header;
+it is stale only when that version is older and the original is online, never because the OS changed, so an offline
+photo keeps macOS pixels on any computer. A computer that cannot make the base never rebuilds such a proxy with Camera
+Matching. JPEG, TIFF and the other rendered exports use the macOS render; DNG export, Convert / Copy as DNG and Photo
+Merge keep Camera Matching colours (a DNG carries the mosaic and its own tags), their dialogs say so, and the DNG's
+settings say `auto`. Exporting a macOS Colour photo from a computer that cannot make it says how many photos use Camera
+Matching instead.
+
+**Starting Colour for Raw Photos.** Settings ▸ Import ▸ Raw defaults has the choices macOS Colour (default), Camera
+Matching and No Camera Matching (`library.preferences {import: {startingColour: "macos" | "cameraMatching" |
+"noCameraMatching"}}`, kept in the library's `prefs.json`, so a library keeps its choice across computers). At import a
+new raw gets the setting only if the photo takes the fitted look; macOS Colour additionally needs the gates above, and
+the size gate is checked with one `macraw::probe` per camera model and size per session (not per photo). Otherwise, and
+on a computer that is not a Mac (the setting's hint says so), the photo starts on Camera Matching. A default preset that
+names a colour source wins. The value is written into the photo's import look too, so a new photo is not "edited". Photos
+already in the library never change when the setting does; **Apply macOS Colour to All Photos from This Camera…** in
+the Profile menu moves them (`profiles.macosForCameraCount` says how many first, `profiles.macosForCamera` does it in
+one undo step and counts the photos it skipped by reason, never automatic). Applying a preset that carries macOS Colour
+reports how many of its photos cannot use it here (`preset.apply` → `macosFallback`) and the toast says so. Both run on
+the UI thread, so they use only the size verdicts already found and never wait for a probe (up to seconds on a slow
+disk): a camera and size not checked yet is probed on a thread of its own under the activity row **Checking macOS Raw
+Support**, the count says how many photos wait for it (`checking`) and the menu item answers "Checking which photos macOS
+can read. Try again in a moment." (the move refuses meanwhile); a preset's summary counts only the photos already known.
+A raw that check cannot read counts as another size until an import probes it again.
+
+**Catalog.** `macos` is part of catalog format v10 (with `local` and `profile.camera_profile`, `crates/catalog/src/journal.rs`
+table row 10); the official LightCraft refuses a library this build has opened as "newer version", files untouched.
+The number 10 is this fork's: if the official project reaches 10 with another meaning, the merge conflicts on `VERSION`
+and the table, and this feature takes the next free number.
+
+**Measured** (2026-10-28, macOS 27.0.1, Apple M4 Pro, A7 V ARW 7008×4672, the machine at load 4 to 13 while measuring; times
+are medians of 2 to 3 runs, with `cm` for Camera Matching on the same files):
+
+| What | macOS Colour | Camera Matching |
+|---|---|---|
+| first photo imported and shown at 1600 px | 0.91–0.92 s (the import's size probe about 0.4 s once per session) | 0.48–0.49 s |
+| import of 11 more photos of the same camera | 0.11 s | 0.05 s |
+| open at 2560 px | 0.43–0.62 s (first open of a launch 1.0 s) | 0.20–0.31 s (first 0.58 s) |
+| grid thumbnail (256 px) | 0.33–0.51 s | 0.10–0.16 s |
+| standard previews of 12 photos | 4.1–4.4 s | 1.4–1.9 s |
+| full-size JPEG export | 0.70–0.83 s | 0.59–0.87 s |
+| AI Denoise on: open at 2560 px | 1.2 s (1024 px Apple render 0.51 s, transfer fit 29 ms) | 0.68 s |
+| AI Denoise on: full-size export | 1.9 s | 1.3 s |
+| all photos of a camera to macOS Colour (12) | command 13 ms, then the 12 re-renders 4.5 s | – |
+| preset with macOS Colour on 11 photos | command 0.26 s, then the re-renders 4.0 s | – |
+| one Core Image render alone: peak resident / peak footprint at 512, 1024, 2560 px and full size | 234 / 830–990, 244 / 970, 274 / 370–675, 617 / 577–607 MB | – |
+| process peak, one full-size export: resident / footprint | 1.11 GB / 3.9 GB | 1.36 GB / 4.1 GB |
+| same, AI Denoise on | 2.4 GB / 5.5 GB | 2.3 GB / 5.0 GB |
+
+Core Image's own buffers dominate a render, so a 512 px render peaks at about the footprint of a full-size one. The
+gate weight (decided 2026-10-28) is `macraw::weight_bytes(w, h)` = the larger of 1 GB (`macraw::FLOOR_BYTES`) and
+200 MB + 16 B a pixel of the picture drawn: a flat 1 GB up to the A7 V's full 33 MP (16 B is the float RGBA band plus
+the float result per pixel; the plan's 28 B over-counted the full size by 0.5 GB against the 577–607 MB measured), more
+for larger sensors (a 60 MP picture weighs 1.16 GB). The plan's per-size targets (0.3 GB at 512 px, 0.45 GB at 2560 px)
+cannot be met by footprint, which is 370–990 MB at any size; they are met by resident size (234 and 274 MB). The loader
+reads the file, takes that weight from the file's header and the picture's long edge, and waits for it at the gate even
+for the loupe or an export (`files::fs`'s `macos_permit`), so an interactive render never stacks a second gigabyte on a
+thumbnail's; the AI Denoise path weighs the larger of its 1024 px Apple render and its own two pictures, which it holds
+one after the other. A load hands the decoder the file's path and lets its own copy of the raw go first (the camera JPEG,
+header and lens are read from it before), and a render still waiting for its slot gives up when the job is cancelled
+(building previews: ✕ in the activity stack). The thumbnail and the standard-preview build run one render at a time in the headless
+build: 3 274 photos at 0.35 to 0.47 s are about 19 to 26 minutes against about 7 to 8 with Camera Matching (the app's thumbnail
+workers run beside each other, up to the two preview-size slots; not measured here).
+
+**What it looks like.** Against the camera's JPEG, macOS Colour is the "natural" one on skin and greys (white-balance casts in
+greys 0.36 against 1.43, skin hue within 1°, measured on 60 A7 V photos) and it is not the camera's look: on the padel
+court photos of the A7 V sheet (6 photos: the camera JPEG, Camera Matching, macOS Colour, macOS Colour with AI Denoise) the saturated blue floor moves 8 to 16°
+towards violet and loses 0.07 to 0.17 of HSV saturation (hue 227° against 210°, saturation 0.48 against 0.65 on A7V02917),
+where Camera Matching stays within 2°. Highlights −50 darkens the brightest tenth of a photo more on macOS Colour
+(−4.6, −2.2 and −1.3 L* on the three bright photos of the Highlights sheet, against −3.1, −0.9 and −0.3), which is a
+property of the base, not a defect.
+
+**Other makers (survey, 2026-10-28).** The gate offers only ARW. Fourteen CC0 raws from raw.pixls.us (Canon CR3 ×2, Nikon
+NEF ×2, Fujifilm RAF, Panasonic RW2 ×2, Pentax PEF, Olympus ORF, Leica DNG ×2, Ricoh DNG, Sony ARW ×2) were run through
+the decoder directly. Eleven are listed by their Exif model (LightCraft's reader cannot open the Olympus compressed ORF, so its name was not checked), all 13 it can read have a decoder size equal to LightCraft's (a Leica M10 DNG
+differs by 0.4 %), all decode at 1600 px in 0.12 to 0.39 s with a plausible as-shot white (4 880 to 6 900 K), and a bytes
+input with the file's own type (`mdls` gives `com.canon.cr3-raw-image`, `com.nikon.raw-image`, `com.fuji.raw-image`,
+`com.panasonic.rw2-raw-image`, `com.pentax.raw-image`, `com.olympus.raw-image`, `com.adobe.raw-image`) returns pixels
+identical to a path input. The Nikon Z 6_2 and the Sony A7C II are not in Apple's list yet decode at the right size. What
+widening takes: (1) the format check in `import/starting_colour.rs::macos_gates`, `files/macos.rs::lists` and the `uti`
+table in `files/macos.rs` (add the types above after a per-format check against the real files); (2) the camera name: the
+catalog keeps `make model` joined, and splitting at the first space breaks makers with a multi-word make (`NIKON
+CORPORATION NIKON D850`, `Leica Camera AG LEICA M10`, `RICOH IMAGING COMPANY, LTD. RICOH GR III`), so the gate needs the
+Exif model (or every word suffix tried); (3) a DNG has matrices of its own, so `fitted_look` is false and the choice is not
+offered; offering it there is a separate decision; (4) per-camera checks of the tone fit against the camera JPEG (the
+Olympus compressed ORF that LightCraft cannot decode at all renders through the decoder; not tried in the product). One
+cost to know: the first probe or render of some cameras (Sony A7 IV, A7C II, Canon R6 Mark III, Fujifilm X-T50, Nikon D850
+and Z 6_2 here) took 5.1 to 5.3 s in a new process, then 50 to 65 ms. The A7 V and the other cameras above took 30 to 190 ms.
+
 ## Smart previews and the look version
 
 A smart preview keeps the result of the fit twice: the colour matrix is baked into its pixels and the tone and chroma curves are stored in its header. When the fit changes, a preview built earlier keeps the old look until it is rebuilt, and the render cache version does not reach it (renders are keyed on the library's files, proxies are files of their own).
 
 The fit therefore has a version, `LOOK_VERSION` in `crates/engine/src/camera_preview.rs`, and every smart preview records the version that wrote it in its header line (`look_version`). **Bump the constant in any change that makes the fit give a different result for the same file**: the matrix, hue/saturation, tone or chroma fit, their gates and fallbacks, or how a camera profile feeds them. Changes that leave the fitted look alone don't need it. A header without the field (everything built before it existed) counts as version 0, and so does a value that is not a non-negative integer; a value from a newer build is left alone.
+
+`LOOK_VERSION` 14 also adds the header field `base` (`auto` for Camera Matching, `local` for a local profile). A proxy of
+a raw with the fitted look that has no `base`, or an older version, is stale: before 14 a file named after the camera
+changed Camera Matching silently, so those proxies carry a colour Camera Matching no longer gives.
 
 A proxy older than the constant is brought up to date by the existing Build Smart Previews path (`smart_run`), which also repairs damaged proxies:
 
