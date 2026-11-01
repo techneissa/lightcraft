@@ -7,7 +7,7 @@
 //! The weights are read as the author published them: a Lightning `.ckpt` and the Swin `.pth`,
 //! both PyTorch pickles read by candle's non-executing pickle reader. No conversion step.
 use crate::MAX_EDGE;
-use crate::ops::{R, conv, conv1x1, depthwise3x3, device, norm2d, to_f32_vec};
+use crate::ops::{R, conv, conv1x1, depthwise3x3, device, input_tensor, norm2d, output_pixels};
 use crate::swin::{Swin, SwinConfig};
 use candle_core::{DType, Device, Tensor};
 use candle_nn::VarBuilder;
@@ -92,26 +92,8 @@ impl DirsNet {
     }
 
     fn run(&self, rgb: &[u8], w: usize, h: usize) -> R<Vec<[f32; 3]>> {
-        let data: Vec<f32> = rgb.iter().map(|x| *x as f32 / 255.0).collect();
-        let mut input = Tensor::from_vec(data, (1, h, w, 3), &self.device)?.permute((0, 3, 1, 2))?.contiguous()?;
-        if !w.is_multiple_of(32) {
-            let n = 32 - w % 32;
-            input = Tensor::cat(&[&input, &input.narrow(3, w - 1, 1)?.repeat((1, 1, 1, n))?], 3)?;
-        }
-        if !h.is_multiple_of(32) {
-            let n = 32 - h % 32;
-            input = Tensor::cat(&[&input, &input.narrow(2, h - 1, 1)?.repeat((1, 1, n, 1))?], 2)?;
-        }
-        let out = self.forward(&input)?.narrow(2, 0, h)?.narrow(3, 0, w)?.permute((0, 2, 3, 1))?;
-        let flat = to_f32_vec(&out)?;
-        let mut pixels = Vec::with_capacity(w * h);
-        for p in flat.as_chunks::<3>().0 {
-            if !p.iter().all(|x| x.is_finite()) {
-                candle_core::bail!("non-finite model output");
-            }
-            pixels.push(p.map(|x| x.clamp(0.0, 1.0)));
-        }
-        Ok(pixels)
+        let input = input_tensor(rgb, w, h, &self.device)?;
+        output_pixels(&self.forward(&input)?, w, h)
     }
 
     /// `input` is `[1, 3, h, w]` in [0, 1] with h and w multiples of 32; returns the transmission `[1, 3, h, w]`.
@@ -260,7 +242,7 @@ fn gate(x: &Tensor, y: &Tensor, c: usize, sigmoid: bool) -> R<(Tensor, Tensor)> 
 /// Reads the tensors `keep` selects from a PyTorch zip pickle under top-level `key`, as f32 on `device`.
 /// candle's reader builds tensors from the file's data and never runs code from it; a damaged or
 /// hostile file is an error, never a panic.
-fn read_pickle(
+pub(crate) fn read_pickle(
     path: &Path,
     key: &str,
     device: &Device,

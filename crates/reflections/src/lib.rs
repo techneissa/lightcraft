@@ -10,18 +10,26 @@ mod dirs;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod download;
 #[cfg(not(target_arch = "wasm32"))]
+mod focal;
+#[cfg(not(target_arch = "wasm32"))]
 mod net;
 #[cfg(not(target_arch = "wasm32"))]
 mod ops;
+#[cfg(not(target_arch = "wasm32"))]
+mod rdnet;
 #[cfg(not(target_arch = "wasm32"))]
 mod swin;
 #[cfg(not(target_arch = "wasm32"))]
 pub use dirs::{DirsNet, MUGI_CHECKPOINT, PAIR_CHECKPOINT, SWIN_PRIOR};
 #[cfg(not(target_arch = "wasm32"))]
 pub use net::Net;
+#[cfg(not(target_arch = "wasm32"))]
+pub use rdnet::{CLASSIFIER as RDNET_CLASSIFIER, NETWORK as RDNET_NETWORK, RdNet};
 
 /// The model id of DIRS-MuGI (folder name under the models folder).
 pub const DIRS_MUGI: &str = "dirs-mugi";
+/// The model id of RDNet.
+pub const RDNET: &str = "rdnet";
 /// The model id of DIRS-PAIR.
 pub const DIRS_PAIR: &str = "dirs-pair";
 pub fn is_dirs(model: &str) -> bool {
@@ -31,6 +39,9 @@ pub fn is_dirs(model: &str) -> bool {
 /// checkpoint and the Swin prior, as published on Hugging Face (`dirs_mugi_lors.ckpt` or `dirs_pair_lors.ckpt`,
 /// `swin_large_o365.pth`).
 pub fn installed_model(dir: &Path, model: &str) -> bool {
+    if model == RDNET {
+        return dir.join("fp16_check.pt").is_file() && dir.join("classifier_32.pt").is_file();
+    }
     let checkpoint = match model {
         DIRS_MUGI => "dirs_mugi_lors.ckpt",
         DIRS_PAIR => "dirs_pair_lors.ckpt",
@@ -44,12 +55,15 @@ pub fn installed_model(dir: &Path, model: &str) -> bool {
 pub enum Runner {
     Dsrnet(Net),
     Dirs(Box<DirsNet>),
+    Rdnet(Box<RdNet>),
 }
 #[cfg(not(target_arch = "wasm32"))]
 impl Runner {
     pub fn load(dir: &Path, model: &str, cpu: bool) -> Result<Self, String> {
         if is_dirs(model) {
             DirsNet::load(dir, cpu, model == DIRS_PAIR).map(|n| Self::Dirs(Box::new(n)))
+        } else if model == RDNET {
+            RdNet::load(dir, cpu).map(|n| Self::Rdnet(Box::new(n)))
         } else {
             Net::load(dir, cpu).map(Self::Dsrnet)
         }
@@ -58,6 +72,7 @@ impl Runner {
         match self {
             Self::Dsrnet(net) => net.infer(rgb, w, h),
             Self::Dirs(net) => net.infer(rgb, w, h),
+            Self::Rdnet(net) => net.infer(rgb, w, h),
         }
     }
 }
