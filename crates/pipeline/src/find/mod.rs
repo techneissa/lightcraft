@@ -2,7 +2,8 @@
 //!
 //! - [`people`]: a person mask from SAM 3's "person" prompt (or a rough body shape from a detected face) becomes one
 //!   candidate per person; the main subject (largest and most central) is marked and not proposed by default.
-//! - [`wires`]: a pure-Rust thin-line detector for power lines and cables against smooth areas such as sky.
+//! - [`wires`]: a pure-Rust thin-line detector for power lines and cables against smooth areas such as sky (the fallback
+//!   when SAM 3 is not installed; with it, wires come from its "power line" mask like people do).
 //! - [`cover`]: turns a candidate's shape into content-aware remove spots (dabs of one size on a grid or along a path)
 //!   that cover it, grown a little.
 //!

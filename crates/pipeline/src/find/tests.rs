@@ -261,3 +261,30 @@ fn thick_and_thin_wires_in_a_noisy_sky() {
     let (a, b) = (size(&found[0]), size(&found[1]));
     assert!(a.max(b) > a.min(b), "{a} vs {b}");
 }
+
+#[test]
+fn removing_a_wire_found_through_a_sam_mask_leaves_the_sky() {
+    // the "power line" mask SAM 3 gives is a band a few pixels wide around the wire, at 288 cells over the photo
+    let (w, h) = (1600usize, 1000usize);
+    let img = sky(w, h, &[(300.0, 380.0, 60.0, 2.5, 0.25)]);
+    let clean = sky(w, h, &[]);
+    let wire_y = |x: f64| 300.0 + 80.0 * (x / w as f64) + 60.0 * 4.0 * (x / w as f64) * (1.0 - x / w as f64);
+    let logits: Vec<f32> = (0..288 * 288)
+        .map(|i| {
+            let (x, y) = (((i % 288) as f64 + 0.5) / 288.0 * w as f64, ((i / 288) as f64 + 0.5) / 288.0 * h as f64);
+            if (y - wire_y(x)).abs() < 9.0 { 4.0 } else { -4.0 }
+        })
+        .collect();
+    let found = people::regions_from_logits(Kind::Wire, 288, &logits, w, h);
+    assert_eq!(found.len(), 1);
+    assert_eq!((found[0].kind, found[0].source, found[0].main), (Kind::Wire, "sam3", false));
+    let lin = remove(&img, &[&found[0]]);
+    let mut worst = 0.0f32;
+    for x in (20..w - 20).step_by(7) {
+        let y = wire_y(x as f64 + 0.5) as usize;
+        for yy in y - 3..=y + 3 {
+            worst = worst.max((lin.get(x, yy)[2] - f32::from(clean.data[yy * w + x][2]) / 255.0).abs());
+        }
+    }
+    assert!(worst < 0.03, "worst difference {worst}");
+}

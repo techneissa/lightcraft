@@ -1,7 +1,8 @@
 //! Wires: long, thin, dark, gently curved lines against smooth bright areas (power lines and cables across a sky).
 //!
-//! Classical and pure Rust. SAM 3 was tried for this and cannot do it: its masks are 288 cells across the photo, one
-//! cell is five or more pixels of a 1600 px render, and a wire is two or three (see `fork/find-people-wires.md`).
+//! The fallback when SAM 3 is not installed (or fails); with the model, "power line" masks come through
+//! [`super::people::regions_from_logits`] instead, because SAM 3 finds wires on busy backgrounds and in tangles that
+//! this does not (see `fork/find-people-wires.md`). Classical and pure Rust:
 //!
 //! 1. Ridges: the Hessian of the blurred luminance at three scales; a dark line has one strongly positive curvature
 //!    (across it) and a near-zero one (along it). Non-maximum suppression across the line thins it to one pixel.

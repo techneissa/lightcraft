@@ -29,10 +29,11 @@ fn grid(w: usize, h: usize) -> Option<(usize, usize)> {
 }
 
 /// Candidates from one mask on the working grid.
-fn from_mask(mask: &Mask, source: &'static str, score: impl Fn(&super::shape::Component) -> f32) -> Vec<Candidate> {
+fn from_mask(kind: Kind, mask: &Mask, source: &'static str, score: impl Fn(&super::shape::Component) -> f32) -> Vec<Candidate> {
     let (w, h) = (mask.w, mask.h);
     let long = w.max(h) as f64;
-    let min_px = ((MIN_AREA * (w * h) as f64) as usize).max(12);
+    // (a wire is a few pixels wide: what counts is its length, so it is held to a pixel count)
+    let min_px = if kind == Kind::Wire { 24 } else { ((MIN_AREA * (w * h) as f64) as usize).max(12) };
     // a head, an arm or a bag cut off by a thin gap still belongs to the person: link blobs a few pixels apart, then
     // take back only the mask's own pixels
     let joined = dilate(mask, (JOIN * long) as f32);
@@ -48,7 +49,7 @@ fn from_mask(mask: &Mask, source: &'static str, score: impl Fn(&super::shape::Co
             let ring = simplify(&ring, 0.003 * long, true);
             let norm = |p: &(f64, f64)| (p.0 / w as f64, p.1 / h as f64);
             Candidate {
-                kind: Kind::Person,
+                kind,
                 source,
                 outline: ring.iter().map(norm).collect(),
                 closed: true,
@@ -69,6 +70,14 @@ fn from_mask(mask: &Mask, source: &'static str, score: impl Fn(&super::shape::Co
 
 /// People from a SAM 3 mask: `side × side` logits stretched over the whole `img_w × img_h` photo; above 0 is person.
 pub fn from_logits(side: usize, logits: &[f32], img_w: usize, img_h: usize) -> Vec<Candidate> {
+    let mut out = regions_from_logits(Kind::Person, side, logits, img_w, img_h);
+    mark_main(&mut out);
+    out
+}
+
+/// One candidate of `kind` per blob of a SAM 3 mask (the same frame as [`from_logits`]); nothing is marked main. Wires
+/// from SAM 3's "power line" mask come this way: crossing wires are one blob, so one candidate.
+pub fn regions_from_logits(kind: Kind, side: usize, logits: &[f32], img_w: usize, img_h: usize) -> Vec<Candidate> {
     let Some((w, h)) = grid(img_w, img_h) else { return Vec::new() };
     if side < 2 || logits.len() < side * side {
         return Vec::new();
@@ -87,7 +96,7 @@ pub fn from_logits(side: usize, logits: &[f32], img_w: usize, img_h: usize) -> V
     };
     let values: Vec<f32> = (0..w * h).map(|i| sample(i % w, i / w)).collect();
     let mask = Mask { w, h, bits: values.iter().map(|v| *v > 0.0).collect() };
-    let mut out = from_mask(&mask, "sam3", |c| {
+    from_mask(kind, &mask, "sam3", |c| {
         let mut sum = 0.0f32;
         let mut n = 0usize;
         for (i, v) in values.iter().enumerate() {
@@ -97,9 +106,7 @@ pub fn from_logits(side: usize, logits: &[f32], img_w: usize, img_h: usize) -> V
             }
         }
         if n == 0 { 0.0 } else { sum / n as f32 }
-    });
-    mark_main(&mut out);
-    out
+    })
 }
 
 /// A rough body (head, shoulders, torso, legs) under each face, in the same frame as `from_logits`. The detector sees
@@ -136,7 +143,7 @@ pub fn from_faces(faces: &[FaceBox], img_w: usize, img_h: usize) -> Vec<Candidat
             }
         }
     }
-    let mut out = from_mask(&mask, "faces", |_| 0.3);
+    let mut out = from_mask(Kind::Person, &mask, "faces", |_| 0.3);
     mark_main(&mut out);
     out
 }

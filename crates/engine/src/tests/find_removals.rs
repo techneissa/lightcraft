@@ -259,3 +259,32 @@ fn a_search_has_a_row_and_can_be_cancelled() {
     assert_eq!(s.finds.view(s.active()).entries.len(), 1);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// SAM 3's "power line" mask: two bands across the photo.
+fn wire_mask() -> SegMask {
+    let l: Vec<f32> = (0..288 * 288)
+        .map(|i| {
+            let (x, y) = (i % 288, i / 288);
+            let c1 = 60.0 + 0.1 * x as f64;
+            let c2 = 140.0 + 0.05 * x as f64;
+            if (y as f64 - c1).abs() < 1.5 || (y as f64 - c2).abs() < 1.5 { 6.0 } else { -6.0 }
+        })
+        .collect();
+    SegMask::from_logits(288, &l)
+}
+
+#[test]
+fn wires_come_from_sam_when_it_is_there_and_from_the_line_detector_when_not() {
+    let never = AtomicBool::new(false);
+    let sky = photo();
+    let (found, text) = find(Job::Wires { sensitivity: 50.0 }, &sky, sam_says(Some(wire_mask())), &never).unwrap();
+    assert_eq!(found.len(), 2, "{text}");
+    assert!(found.iter().all(|c| c.kind == Kind::Wire && c.source == "sam3" && !c.main && !c.spots.is_empty() && c.bbox[2] - c.bbox[0] > 0.9));
+    // SAM answers "nothing": believed, not second-guessed
+    let (none, text) = find(Job::Wires { sensitivity: 50.0 }, &sky, sam_says(None), &never).unwrap();
+    assert!(none.is_empty() && text == "No wires found", "{text}");
+    // SAM fails: the line detector runs and the text says so
+    let failing = PeopleSources { sam: Some(Box::new(|_| Err("the GPU fell over".into()))), faces: None };
+    let (_, text) = find(Job::Wires { sensitivity: 50.0 }, &sky, failing, &never).unwrap();
+    assert!(text.contains("SAM 3 failed") && text.contains("line detector"), "{text}");
+}

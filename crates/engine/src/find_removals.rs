@@ -24,6 +24,8 @@ use crate::{EngineError, Session};
 pub const LOOK_EDGE: usize = 1600;
 /// The text prompt for people.
 const PERSON_PROMPT: &str = "person";
+/// The text prompt for wires: SAM 3 finds power lines and cables, also in tangles and over buildings.
+const WIRE_PROMPT: &str = "power line";
 
 /// One candidate in the list.
 #[derive(Clone, Debug)]
@@ -237,7 +239,7 @@ impl Job {
     }
 }
 
-/// The ways to find people, as far as this machine has them.
+/// The ways to find things, as far as this machine has them.
 pub(crate) struct PeopleSources {
     /// SAM 3's answer, to wait for.
     pub sam: Option<Box<dyn FnOnce(&AtomicBool) -> Result<Option<SegMask>, String> + Send>>,
@@ -248,12 +250,37 @@ pub(crate) struct PeopleSources {
 pub(crate) fn find(job: Job, img: &Rgba8, sources: PeopleSources, cancel: &AtomicBool) -> Result<(Vec<Candidate>, String), String> {
     match job {
         Job::Wires { sensitivity } => {
-            let found = wires::detect(img, sensitivity);
-            let text = match found.len() {
+            let PeopleSources { sam, .. } = sources;
+            let mut note = None;
+            let mut found = None;
+            if let Some(wait) = sam {
+                match wait(cancel) {
+                    Ok(Some(seg)) => match seg.logits() {
+                        Some(l) => found = Some(people::regions_from_logits(Kind::Wire, seg.side as usize, &l, img.width, img.height)),
+                        None => note = Some("the mask was damaged".to_string()),
+                    },
+                    Ok(None) => found = Some(Vec::new()),
+                    Err(e) if cancel.load(Ordering::SeqCst) => return Err(e),
+                    Err(e) => {
+                        log::warn!("Find Wires: SAM 3 failed: {e}");
+                        note = Some(e);
+                    }
+                }
+            }
+            // without SAM 3 (or when it fails): the thin-line detector
+            let sam_used = found.is_some();
+            let mut found = found.unwrap_or_else(|| wires::detect(img, sensitivity));
+            found.sort_by(|a, b| b.area.total_cmp(&a.area));
+            let mut text = match found.len() {
                 0 => "No wires found".to_string(),
                 1 => "Found 1 wire".to_string(),
                 n => format!("Found {n} wires"),
             };
+            if let Some(n) = note {
+                text.push_str(&format!(" (SAM 3 failed: {n}; used the line detector)"));
+            } else if !sam_used && !found.is_empty() {
+                text.push_str(" (line detector; SAM 3 is not installed)");
+            }
             Ok((found, text))
         }
         Job::People { include_main } => {
@@ -330,7 +357,15 @@ impl Session {
         let kind = job.kind();
         // everything that needs the session happens here; the thread gets plain data
         let sources = match job {
-            Job::Wires { .. } => PeopleSources { sam: None, faces: None },
+            Job::Wires { .. } => {
+                // SAM 3 when it is installed; the line detector otherwise
+                let sam: Option<Box<dyn FnOnce(&AtomicBool) -> Result<Option<SegMask>, String> + Send>> = if self.segmenter.require_model().is_ok() {
+                    self.segment_text_request(id, WIRE_PROMPT).ok().map(|req| Box::new(move |cancel: &AtomicBool| req.wait(cancel)) as _)
+                } else {
+                    None
+                };
+                PeopleSources { sam, faces: None }
+            }
             Job::People { .. } => {
                 let sam_ready = self.segmenter.require_model();
                 let faces = face_detect::detector(self);
