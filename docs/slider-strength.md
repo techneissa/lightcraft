@@ -1,6 +1,6 @@
 # Slider strength audit
 
-> **Last updated:** 2026-10-30 · **Change:** minor (Sharpening Radius and the Vignette response, process V3)
+> **Last updated:** 2026-11-01 · **Change:** minor (Sharpening Radius and the Vignette response, process V3: checked on a real photo and on the GPU; the ⌥-drag Masking preview follows V3's band)
 
 How much does each Develop slider change the picture at its ends, measured on real renders? Users report
 that most sliders feel weaker than Lightroom's. This page records the measurements, a verdict per slider and
@@ -109,6 +109,17 @@ and the HDR sliders are not covered yet.
   log domain, and lightens by 0.40 of the way to white at +100 (was 0.85; +1.5 stops on grey instead of +2.3).
   Midpoint, Roundness, Feather and Highlights act on the falloff as before. Test:
   `vignette_response_is_smooth_and_natural` (min and max bounds, V1 / V2 as before).
+- **Checked on a real photo and on the GPU (2026-11-01).** Noise: a 12 MP A7S III raw at ISO 2500 (a flat wall in
+  the blurred background, a 400 x 300 crop at 100 %; the high-pass standard deviation of its luminance, 8-bit
+  levels, Gaussian 6 px removed; no sharpening 2.13): V2 Amount 40 / 60 → 2.79 / 3.13 (x1.31 / x1.47); V3 Amount
+  40 / 60 → 2.55 / 2.77 (x1.20 / x1.30). V3 at Amount 60 adds about the grain V2 added at 40, and V3 at 40 adds less,
+  so nothing to retune. Pictures: `$WORKSPACE/assets/lightcraft/shots/sharpen-v3/`. GPU against CPU on an Apple M4 Pro
+  (Metal), V3 Amount 50 / Radius 1.0 / Detail 25 / Masking 0 with Vignette -50, and Radius 0.5 and 3, Masking 60
+  with Detail 0, Detail 100 with Amount 150, each at full size, 1200 px and a 720 px preview of a 6000 px original:
+  mean |Δ| at most 0.0002 LSB, max |Δ| 1 LSB (`process_v3_sharpening_and_vignette_match`). The ⌥-drag Masking
+  preview (`Overlay::SharpenMask`) draws `finish::sharpen_mask_weight` from the band the render sharpens with: from
+  V3 the `sharpen` band and V3's mask range, so it shows the weight the sharpening uses (test
+  `the_sharpen_mask_follows_the_process_v3_band_and_range`).
 - Floors for the sliders found at Lightroom strength (`strong_sliders_stay_strong`), so a later retune cannot
   weaken them.
 
@@ -122,5 +133,6 @@ and the HDR sliders are not covered yet.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-01 | minor | Sharpening and Vignette (V3) checked on a real photo (noise) and on the GPU (parity); the ⌥-drag Masking preview follows V3's band and mask range |
 | 2026-10-30 | minor | Sharpening Radius gets its own band and Amount is retuned; Vignette response made smooth (process V3 only) |
 | 2026-10-30 | minor | First audit: measurement harness, results table, Noise Reduction Contrast made to work |

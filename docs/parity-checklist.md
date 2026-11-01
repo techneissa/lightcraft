@@ -30,11 +30,8 @@ cited here still exists. Formerly docs/parity.md.
 | B. Library management (LIB) | 22 | 2 | 1 | 2 | 9/9 (100%) | 9/9 (100%) |
 | C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 12 | 1 | 1 | 0 | 4/4 (100%) | 5/5 (100%) |
-| E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 43 | 3 | 3 | 1 | 27/28 (96%) | 13/14 (93%) |
 | E. Metadata (META) | 6 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 44 | 2 | 3 | 1 | 28/28 (100%) | 13/14 (93%) |
-| F. Edit panel — global adjustments (EDIT) | 45 | 2 | 3 | 1 | 28/28 (100%) | 14/15 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 44 | 3 | 3 | 1 | 27/28 (96%) | 14/15 (93%) |
 | G. Profiles (PROF) | 7 | 4 | 3 | 0 | 3/4 (75%) | 3/6 (50%) |
 | H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
 | I. Remove / healing (REM) | 8 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
@@ -56,15 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 86 | 1 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 79 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 25 | 21 | 8 | — | 24/26 (92%) |
-| **Total** | 428 | 71 | 57 | 35 | 195/203 (96%) | 147/166 (89%) |
+| **Total** | 430 | 71 | 57 | 35 | 195/203 (96%) | 148/167 (89%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 556 in-scope rows — P0 98.0% of 203 · P1 93.4% of 166 · P2 58.3% of 186.
-| **Total** | 430 | 70 | 57 | 35 | 196/203 (97%) | 147/166 (89%) |
-
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.5%** of 557 in-scope rows — P0 98.3% of 203 · P1 93.4% of 166 · P2 58.6% of 187.
-| **Total** | 430 | 70 | 57 | 35 | 196/203 (97%) | 148/167 (89%) |
-
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.5%** of 557 in-scope rows — P0 98.3% of 203 · P1 93.4% of 167 · P2 58.3% of 186.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 558 in-scope rows — P0 98.0% of 203 · P1 93.4% of 167 · P2 58.6% of 187.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -217,7 +208,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-EDIT-EFFECTS-DEHAZE | Dehaze | P0 | ✅ | `ctl:effects.dehaze` | |
 | LR-EDIT-EFFECTS-VIGNETTE | Post-crop vignette | P0 | ✅ | `ctl:vignette.*`, `crates/pipeline/src/finish.rs`, `crates/ui-egui/src/panels/edit.rs` | style picker (Highlight / Color / Paint) in the Effects section; process V3 response is smooth (corner -2.79 / -1.21 / -0.42 stops at -100 / -50 / -20, +1.49 at +100; V1 / V2 go black at -100 and only -1 stop at -50), `tests_slider_strength::vignette_response_is_smooth_and_natural` |
 | LR-EDIT-EFFECTS-GRAIN | Grain | P1 | ✅ | `ctl:grain.*` | |
-| LR-EDIT-DETAIL-SHARPEN | Sharpening | P0 | 🟡 | `ctl:detail.sharpenAmount`, `ctl:detail.sharpenRadius`, `ctl:detail.sharpenDetail`, `ctl:detail.sharpenMasking` | Amount and Masking work; **Radius and Detail work from process V3 only** ([slider-strength.md](slider-strength.md)): V3 sharpens on a band of its own, a Gaussian of 1.5 x Radius pixels of the original photo (scaled to the render, so preview and export match; Amount 40 / 60 / 150 at Radius 1 on a 1.2 px edge: slope x1.24 / x1.36 / x1.92; 1.5 px edge at 3000 px: x1.10 / x1.19 / x1.57), V1 / V2 on one fixed fine band shared with Texture, Radius unread; no Alt-drag mask preview |
+| LR-EDIT-DETAIL-SHARPEN | Sharpening | P0 | 🟡 | `ctl:detail.sharpenAmount`, `ctl:detail.sharpenRadius`, `ctl:detail.sharpenDetail`, `ctl:detail.sharpenMasking` | Amount and Masking work; **Radius and Detail work from process V3 only** ([slider-strength.md](slider-strength.md)): V3 sharpens on a band of its own, a Gaussian of 1.5 x Radius pixels of the original photo (scaled to the render, so preview and export match; Amount 40 / 60 / 150 at Radius 1 on a 1.2 px edge: slope x1.24 / x1.36 / x1.92; 1.5 px edge at 3000 px: x1.10 / x1.19 / x1.57), V1 / V2 on one fixed fine band shared with Texture, Radius unread; the ⌥-drag Masking preview shows the weight the render uses (V3: its own band and mask range) |
 | LR-EDIT-DETAIL-NR | Luminance noise reduction | P0 | ✅ | `ctl:detail.nrLuminance`, `ctl:detail.nrDetail`, `ctl:detail.nrContrast` | Contrast (`local::nr_keep`, CPU and GPU) takes back the filter's changes above ~0.1 EV: more detail and blotchy noise kept; radii in the original's pixels, so grid, loupe and smaller exports look like the full-size render scaled down (`local::nr_params`, `Plan::detail_scale`, #960) |
 | LR-EDIT-DETAIL-CNR | Colour noise reduction | P0 | ✅ | `ctl:detail.nrColor`, `ctl:detail.nrColorDetail`, `ctl:detail.nrColorSmoothness` | preview-size independent like luminance NR (#960) |
 | LR-EDIT-DETAIL-DENOISE | AI denoise | P2 | 🟡 | cmd:denoise.toggle, cmd:denoise.autoOpen, cmd:denoise.models.install, cmd:denoise.queue, ctl:enhance.denoise, `crates/denoise/`, `docs/denoise.md` | non-destructive Bayer RAW, opt-in weights, pure-Rust CPU/GPU; GPU convolution uses independently written shared scalars (Metal equivalence regression, issue #479); tiles can also run on another computer's graphics card (`lightcraft-cli denoise-serve`, `crates/denoise/src/remote.rs`); X-Trans/linear RGB, model policy and Lightroom fidelity remain; closing the model setup without installing turns the switch back off (#922); the desktop app offers LightCraft's own model (MIT OR Apache-2.0, CC0 training data) as a download, from the project's release asset, else radfilms.com.au, the same SHA-256 checked either way; in a build with no model to offer Settings ▸ AI Denoise says so plainly (this version has none and none can be downloaded from here yet; Luminance and Color under Detail meanwhile; Install from file for a model you have) instead of a file prompt, and the Detail panel note answers Why?; the switch follows Auto Sync (every selected raw in one undo step, their pictures under one batch row) and `library.preferences {import: {denoiseAboveIso}}` switches it on for new raws at that ISO or above (no Settings row in this fork) |

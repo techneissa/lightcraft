@@ -676,7 +676,11 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     let masks = overlay_alphas_all(req.overlay, &plan, &prep);
     visualize::apply(&mut image, req.overlay, &plan, mask.as_ref(), masks.as_deref());
     if req.overlay == Overlay::SharpenMask
-        && let Some(a) = visualize::sharpen_mask_alpha(&prep, plan.settings.detail.sharpen_masking, plan.settings.process >= lightcraft_develop::Process::V3.version())
+        && let Some(a) = visualize::sharpen_mask_alpha(
+            &prep,
+            plan.settings.detail.sharpen_masking,
+            plan.settings.process >= lightcraft_develop::Process::V3.version(),
+        )
         && (a.width, a.height) == (image.width, image.height)
     {
         visualize::mask_view(&mut image, &a, MaskView::WhiteOnBlack, [255; 3], 100);
