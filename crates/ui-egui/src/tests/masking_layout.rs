@@ -93,11 +93,11 @@ fn masking_long_names_and_describe_controls_stay_inside_the_panel() {
 
 /// The kind buttons of Create New Mask fill the panel's width, at the default side bar and at a wide one: the
 /// right-most tile ends where the panel's content does (within a gap), the columns are 4 then 5 (never three, never one
-/// tile alone on the last row), and no label is cut.
+/// tile alone on the last row; four also at 268 pt, the default side bar with its scroll bar), and no label is cut.
 #[test]
 fn create_new_mask_tiles_follow_the_side_bars_width() {
     let mut columns = Vec::new();
-    for width in [282.0, 520.0] {
+    for width in [268.0, 282.0, 520.0] {
         let (texts, widgets) = panel(width, 1.0, Locale::En, false);
         let tiles: Vec<Rect> = widgets.iter().filter(|(id, _)| id.starts_with("maskNew:")).map(|(_, r)| *r).collect();
         assert_eq!(tiles.len(), 10);
@@ -113,5 +113,5 @@ fn create_new_mask_tiles_follow_the_side_bars_width() {
             assert!(!text.galley.elided, "{width}: {label} is cut");
         }
     }
-    assert_eq!(columns, [4, 5]);
+    assert_eq!(columns, [4, 4, 5]);
 }

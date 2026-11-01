@@ -4,17 +4,17 @@
 /// Space between tiles.
 pub const GAP: f32 = 4.0;
 /// Room left and right of a tile's label.
-pub const PAD: f32 = 2.0;
+pub const PAD: f32 = 1.5;
 /// The widest a tile is drawn; a wider side bar leaves room at the right.
 const TILE_MAX: f32 = 104.0;
 /// The columns tried, most first. Three is left out: ten tiles make rows of 3, 3, 3 and 1.
 const COLUMNS: [usize; 3] = [5, 4, 2];
 /// The label sizes tried, largest first: a label shrinks a little before a column is dropped.
-const SIZES: [f32; 5] = [10.5, 10.0, 9.5, 9.0, 8.5];
+const SIZES: [f32; 6] = [10.5, 10.0, 9.5, 9.0, 8.5, 8.0];
 
 /// Columns, tile width and label size of the grid of `count` tiles in `width`, `label(size)` being the widest label at
 /// a font size. The largest of 5, 4 and 2 columns (one that would leave a single tile on the last row is skipped) whose
-/// tiles hold the labels at a size down to 8.5 pt; the tiles share the width evenly, each at most 104 pt. In a panel
+/// tiles hold the labels at a size down to 8 pt; the tiles share the width evenly, each at most 104 pt. In a panel
 /// too narrow even for that, two tiles whose labels are cut short.
 pub fn layout(width: f32, count: usize, label: impl Fn(f32) -> f32) -> (usize, f32, f32) {
     let room = |n: usize| ((width - (n as f32 - 1.0) * GAP) / n as f32).floor();
@@ -59,7 +59,7 @@ mod tests {
         assert_eq!(n, 4);
         assert!((8.5..10.5).contains(&size) && w >= (background(size) + 2.0 * PAD).ceil(), "{size} {w}");
         // too narrow for four even at the smallest size: two columns
-        assert_eq!(layout(180.0, 10, background).0, 2);
+        assert_eq!(layout(160.0, 10, background).0, 2);
         // a very wide panel: tiles stop at 104 pt
         assert_eq!(layout(1600.0, 10, background).1, TILE_MAX);
         // never a negative width
