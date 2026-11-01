@@ -34,6 +34,7 @@ mod ids_params;
 mod import;
 mod import_move;
 mod keyword_list;
+mod rename_names;
 mod lens_database;
 mod libops;
 mod library;

@@ -927,8 +927,14 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("album.rename", "Rename Album", [], None, "{id, name}", always, |s, p| {
             let id = album_param(p, "id", "album.rename")?;
-            let name = str_param(p, "name").ok_or_else(|| bad("album.rename", "missing name"))?.to_string();
-            s.commit("Rename Album", Op::RenameAlbum { id, name })?;
+            let raw = str_param(p, "name").ok_or_else(|| bad("album.rename", "missing name"))?;
+            let this = s.catalog.album(id).ok_or_else(|| bad("album.rename", "no such album"))?;
+            // the rest of the folder it sits in: two albums side by side can't share a name
+            let others = s.catalog.albums().filter(|a| a.id != id && a.parent == this.parent).map(|a| a.name.as_str());
+            let name = crate::names::check_name(raw, others).map_err(|e| bad("album.rename", e.to_string()))?;
+            if name != this.name {
+                s.commit("Rename Album", Op::RenameAlbum { id, name })?;
+            }
             ok()
         }),
         cmd!(
