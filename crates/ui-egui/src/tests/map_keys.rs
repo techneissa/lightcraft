@@ -511,3 +511,29 @@ fn the_grey_maps_globe_button_turns_the_setting_on_and_loads_tiles() {
     frames(&mut h, 3);
     assert!(widget(&h, "icon:mapUseOsm").is_none(), "no globe once tiles are on");
 }
+
+/// Choosing a tile source in Settings ▸ Map saves it for the library, Offline included, also when it
+/// is what the library already shows by default: the library then keeps it whatever the
+/// "Start on OpenStreetMap" switch says later.
+#[test]
+fn choosing_offline_in_settings_saves_it_for_the_library() {
+    let rec = Arc::new(Recorder::default());
+    let mut h = recorded_default(&rec);
+    assert!(h.app.session.map.source_is_default() && h.app.session.map.source().is_offline());
+    click(&mut h, "button:settingsMapSource-1");
+    assert!(!h.app.session.map.source_is_default(), "the click saved Offline for the library");
+    click(&mut h, "check:settingsMapStartOnOsm");
+    assert!(h.app.ui.settings.map_start_on_osm);
+    assert!(h.app.session.map.source().is_offline(), "the library keeps its Offline when the switch goes on");
+    settle_tiles(&mut h);
+    assert!(rec.urls.lock().unwrap().is_empty(), "no tile asked");
+    // OpenStreetMap chosen while it is the default is saved the same way
+    let mut h = recorded_default(&rec);
+    click(&mut h, "check:settingsMapStartOnOsm");
+    assert_eq!(h.app.session.map.source().id, "osm");
+    assert!(h.app.session.map.source_is_default());
+    click(&mut h, "button:settingsMapSource-0");
+    assert!(!h.app.session.map.source_is_default(), "OpenStreetMap chosen is saved too");
+    click(&mut h, "check:settingsMapStartOnOsm");
+    assert_eq!(h.app.session.map.source().id, "osm", "and stays when the switch goes off");
+}

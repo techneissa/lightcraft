@@ -12,7 +12,7 @@ use lightcraft_map::source::{OSM_ID, OSM_TILE_URL};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
-use crate::panels::settings::{check, choices, heading, hint, row};
+use crate::panels::settings::{check, heading, hint, row};
 use crate::text_field::TextField;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -98,13 +98,25 @@ pub fn tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     heading(ui, t, "Tile Source");
     let in_use = kind_of(app);
     let mut choice = if app.map.source_draft.custom { SourceKind::Custom } else { in_use };
+    // (a click on the option already shown counts too when the source is only the default: it
+    // saves that source for the library)
+    let only_default = app.session.map.source_is_default();
     let picked = row(ui, t, "Map tiles", |ui| {
-        choices(
-            ui,
-            "settingsMapSource",
-            &[(SourceKind::OpenStreetMap, "OpenStreetMap"), (SourceKind::Offline, "Offline (no tiles)"), (SourceKind::Custom, "Custom server")],
-            &mut choice,
-        )
+        let mut clicked = false;
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (i, (kind, label)) in
+            [(SourceKind::OpenStreetMap, "OpenStreetMap"), (SourceKind::Offline, "Offline (no tiles)"), (SourceKind::Custom, "Custom server")]
+                .into_iter()
+                .enumerate()
+        {
+            if crate::widgets::text_button(ui, &format!("settingsMapSource-{i}"), label, choice == kind).clicked()
+                && (choice != kind || (only_default && kind != SourceKind::Custom))
+            {
+                choice = kind;
+                clicked = true;
+            }
+        }
+        clicked
     });
     if picked {
         let r = match choice {
