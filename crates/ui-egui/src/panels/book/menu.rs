@@ -62,10 +62,10 @@ pub fn add_to_book(app: &mut LightcraftApp, ui: &mut Ui, text: &str) {
     let ids: Vec<u64> = app.session.selected().iter().map(|p| p.0).collect();
     let books: Vec<(u32, String)> = app.session.books.books.iter().map(|b| (b.id, b.name.clone())).collect();
     let ctx = ui.ctx().clone();
-    crate::widgets::menu_button(ui, text, |ui| {
+    let menu = crate::widgets::menu_button(ui, text, |ui| {
         for (id, name) in &books {
             let r = ui.button(name);
-            crate::widgets::register(ui, format!("menu:addToBook-{id}"), r.rect);
+            crate::widgets::register(ui, format!("button:contextBook:{id}"), r.rect);
             if r.clicked() {
                 add_photos_to_book(app, &ctx, *id, ids.clone());
                 ui.close();
@@ -75,12 +75,13 @@ pub fn add_to_book(app: &mut LightcraftApp, ui: &mut Ui, text: &str) {
             ui.separator();
         }
         let r = ui.button(crate::i18n::tr("New Book…"));
-        crate::widgets::register(ui, "menu:addToBook-new", r.rect);
+        crate::widgets::register(ui, "button:contextNewBook", r.rect);
         if r.clicked() {
             app.ui.book.prompt = Some(Prompt::NewBook { ids: ids.clone(), name: String::new() });
             ui.close();
         }
     });
+    crate::widgets::register(ui, "button:contextAddToBook", menu.response.rect);
 }
 
 /// Draws the question that is waiting, if one is; its buttons answer it.

@@ -67,6 +67,7 @@ mod lifecycle_037;
 mod lightroom_destination;
 mod lights_out;
 mod macos_colour;
+mod book;
 mod map;
 mod map_filter;
 mod map_geotag;
