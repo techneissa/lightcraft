@@ -87,13 +87,14 @@ pub fn specs() -> Vec<CommandSpec> {
             "Filter",
             [],
             None,
-            "partial Filter: {text?, rating?, ratingOp?: atLeast|exactly|atMost, flag?: pick|reject|none|null, flags?: [pick|reject|none] (any of them; [] = no constraint), label?, kind?, merged?: hdr|panorama|hdrPanorama|any, edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?}",
+            "partial Filter: {text?, rating?, ratingOp?: atLeast|exactly|atMost, ratings?: [0..5] (any of these star ratings, 0 = unrated; the bottom bar's stars dropdown), flag?: pick|reject|none|null, flags?: [pick|reject|none] (any of these; the bottom bar's flag buttons; setting one of rating/ratings or flag/flags clears the other so the filter bar and the quick filters show one state), label?, kind?, merged?: hdr|panorama|hdrPanorama|any, edited?, date?, libraryFolder?: a path from library.folders, keyword?, person?, camera?}",
             always,
             |s, p| {
                 let mut v = serde_json::to_value(&s.filter).unwrap_or_default();
                 lightcraft_develop::presets::deep_merge(&mut v, p);
                 let f: Filter = serde_json::from_value(v).map_err(|e| bad("library.filter", e.to_string()))?;
                 let mut f = f;
+                f.settle_sets(p);
                 // a blank folder is no folder: no hidden "filters active" state
                 f.library_folder = f.library_folder.filter(|d| !d.trim().is_empty());
                 if f.library_folder.is_some() && s.source == LibrarySource::LibraryFolder {
@@ -672,36 +673,44 @@ pub fn specs() -> Vec<CommandSpec> {
             "Empty Recently Deleted",
             ["Photo"],
             None,
-            "{} → {deleted} — removes every photo in Recently Deleted from the library (files on disk stay)",
+            "{files?: \"keep\" | \"trash\"} → {deleted, trashed: [path], failed: [[path, error]], note?} — removes every photo in Recently Deleted from the library; files: \"keep\" (default) leaves the files of library photos on disk, \"trash\" moves them and their XMP sidecars to the system Trash; the files of Local photos (browsed from a folder, never in the library) always go to the Trash, either way (not a file another photo in the library still uses; a photo whose file can't be moved stays; undo brings back the photos, not the files)",
             always,
-            |s, _| {
+            |s, p| {
+                let files = crate::file_trash::FilesChoice::from_params(p, "library.emptyRecentlyDeleted")?;
                 let ids: Vec<PhotoId> = s.catalog.photos().filter(|p| p.deleted).map(|p| p.id).collect();
                 if ids.is_empty() {
-                    return Ok(json!({"deleted": 0}));
+                    return Ok(json!({"deleted": 0, "trashed": [], "failed": []}));
                 }
-                let op = s.catalog.delete_photos_permanently_ops(&ids);
-                s.commit("Empty Recently Deleted", op)?;
+                let r = s.delete_permanently_with(&ids, files, "Empty Recently Deleted")?;
                 s.selection = Selection::default();
-                Ok(json!({"deleted": ids.len()}))
+                Ok(r)
             }
         ),
-        cmd!("photo.deletePermanently", "Delete Permanently", ["Photo"], None, "{ids?}", has_selection, |s, p| {
-            let before = s.visible_cloned();
-            let t = s.targets(p)?;
-            // before the inverse ops are taken, so undo brings the photo back with its edit
-            s.end_interaction()?;
-            let op = s.catalog.delete_photos_permanently_ops(&t);
-            s.commit("Delete Permanently", op)?;
-            select_after_deletion(s, &before);
-            Ok(json!({"deleted": t.len()}))
-        }),
+        cmd!(
+            "photo.deletePermanently",
+            "Delete Permanently",
+            ["Photo"],
+            None,
+            "{ids?, files?: \"keep\" | \"trash\"} → {deleted, trashed: [path], failed: [[path, error]], note?} — removes the photos from the library; files: \"keep\" (default) leaves the files of library photos on disk, \"trash\" moves them and their XMP sidecars to the system Trash; the files of Local photos (browsed from a folder, never in the library) always go to the Trash, either way (not a file another photo in the library still uses; a photo whose file can't be moved stays; undo brings back the photos, not the files)",
+            has_selection,
+            |s, p| {
+                let files = crate::file_trash::FilesChoice::from_params(p, "photo.deletePermanently")?;
+                let before = s.visible_cloned();
+                let t = s.targets(p)?;
+                // before the inverse ops are taken, so undo brings the photo back with its edit
+                s.end_interaction()?;
+                let r = s.delete_permanently_with(&t, files, "Delete Permanently")?;
+                select_after_deletion(s, &before);
+                Ok(r)
+            }
+        ),
         // ---- metadata
         cmd!(
             "photo.setMeta",
             "Edit Info",
             [],
             None,
-            "{ids?, title?, caption?, altText?, extendedDescription?, copyright?, copyrightStatus?: unknown|copyrighted|publicDomain, usageTerms?, copyrightUrl?, creator?, location?, city?, state?, country?, gps?: \"lat, lon\" | [lat, lon] | null, keywords?: [..], addKeywords?: [..], removeKeywords?: [..]}",
+            "{ids?, title?, caption?, altText?, extendedDescription?, copyright?, copyrightStatus?: unknown|copyrighted|publicDomain, usageTerms?, copyrightUrl?, creator?, location?, city?, state?, country?, gps?: \"lat, lon\" | [lat, lon] | null, keywords?: [..], addKeywords?: [..], removeKeywords?: [..], camera?, lens?, focal?: \"35 mm\", aperture?: \"f/2.8\", shutter?: \"1/250\" | \"2.5\\\"\", iso?: 400 (the camera / lens / exposure values shown and exported; each is stored beside the file's value and null or \"\" resets it; a bad value refuses the call; see photo.resetExif)}",
             has_selection,
             |s, p| {
                 let strs =
@@ -777,6 +786,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         let k = clean(&k);
                         m.keywords.retain(|x| !same(&clean(x), &k));
                     }
+                    crate::cmd::exif_edit::apply_params("photo.setMeta", &mut m, p)?;
                     ops.push(Op::SetMeta { id, meta: Box::new(m) });
                 }
                 let n = ops.len();
@@ -1194,40 +1204,50 @@ pub fn specs() -> Vec<CommandSpec> {
             "Auto Import Now",
             [],
             None,
-            "{listing?: [[path, size]] (the folder as listed by the caller, e.g. on a worker thread), start?: bool (false: return the `library.import` params as `import` instead of importing)} — add the watched folder's new photos (files the library doesn't have yet; partial / still-copying files wait for the next scan) → {imported, folder, warnings?: [{path, code, profile?, mode?, fields?}], import?}",
+            "{listing?: [[path, size]] (the folder as listed by the caller, e.g. on a worker thread), start?: bool (false: return the `library.import` params as `import` instead of importing)} — add the watched folder's new photos (files the library doesn't have yet; partial / still-copying files wait for the next scan) → {imported, folder, waiting (a file is new or still growing: scan again soon), warnings?: [{path, code, profile?, mode?, fields?}], import?}",
             always,
             |s, p| {
                 let Some(folder) = s.import_defaults.auto_folder.clone() else { return Ok(json!({"imported": [], "folder": null})) };
-                // only files that stopped growing: a file still being written is left for later
-                let known: std::collections::HashSet<String> = s
-                    .catalog
-                    .photos()
-                    .filter_map(|p| match &p.source {
-                        lightcraft_catalog::Source::File { path } => Some(path.clone()),
-                        _ => None,
-                    })
-                    .collect();
                 // the folder's files and sizes: listed here, or already listed on a worker thread (the app)
                 let listing: Vec<(String, u64)> = match p.get("listing").and_then(Value::as_array) {
                     Some(l) => l.iter().filter_map(|e| Some((e.get(0)?.as_str()?.to_string(), e.get(1)?.as_u64()?))).collect(),
                     None => list_auto_import_folder(&folder).map_err(|e| bad("library.autoImportScan", e))?,
                 };
+                // the library's file paths, collected only once a file turns up that was not tried yet
+                // (an idle watch of a big folder has none)
+                let mut known: Option<std::collections::HashSet<String>> = None;
+                // only files that stopped growing: a file still being written is left for later
                 let mut fresh = Vec::new();
+                // files seen for the first time or still growing: the caller scans again soon
+                let mut waiting = false;
                 for (ps, size) in listing {
-                    if known.contains(&ps) {
-                        continue;
-                    }
                     // each file is tried once (a non-photo isn't retried every scan)
                     if s.auto_import_seen.get(&ps) == Some(&u64::MAX) {
+                        continue;
+                    }
+                    let known = known.get_or_insert_with(|| {
+                        s.catalog
+                            .photos()
+                            .filter_map(|p| match &p.source {
+                                lightcraft_catalog::Source::File { path } => Some(path.clone()),
+                                _ => None,
+                            })
+                            .collect()
+                    });
+                    if known.contains(&ps) {
+                        // (the library has it: never tried again, so the set is not built for it again)
+                        s.auto_import_seen.insert(ps, u64::MAX);
                         continue;
                     }
                     let seen = s.auto_import_seen.insert(ps.clone(), size);
                     if size > 0 && seen == Some(size) {
                         fresh.push(ps);
+                    } else if size > 0 {
+                        waiting = true;
                     }
                 }
                 if fresh.is_empty() {
-                    return Ok(json!({"imported": [], "folder": folder}));
+                    return Ok(json!({"imported": [], "folder": folder, "waiting": waiting}));
                 }
                 let mode = if s.import_defaults.auto_copy { "copy" } else { "add" };
                 // a photo deleted from the library doesn't come back on its own because its file
@@ -1244,13 +1264,13 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 if p.get("start").and_then(Value::as_bool) == Some(false) {
                     // the caller imports them (the app: on a worker thread)
-                    return Ok(json!({"imported": [], "folder": folder, "import": params}));
+                    return Ok(json!({"imported": [], "folder": folder, "import": params, "waiting": waiting}));
                 }
                 let sel = s.selection.clone();
                 let r = s.execute("library.import", &params)?;
                 // arriving photos don't take over the selection
                 s.selection = sel;
-                let mut result = json!({"imported": r["imported"], "folder": folder});
+                let mut result = json!({"imported": r["imported"], "folder": folder, "waiting": waiting});
                 if let Some(warnings) = r.get("warnings") {
                     result["warnings"] = warnings.clone();
                 }

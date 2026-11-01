@@ -204,6 +204,10 @@ pub struct Meta {
     /// written to XMP. Left out of the catalog JSON when unknown, so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<lightcraft_meta::FocusPoint>,
+    /// Camera and exposure values a person edited over the file's (`camera` .. `iso` above stay what
+    /// the file says). See [`crate::exif_override`]. Left out of the catalog JSON when none.
+    #[serde(default, skip_serializing_if = "crate::exif_override::ExifOverrides::is_empty")]
+    pub exif: crate::exif_override::ExifOverrides,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -434,6 +438,13 @@ impl Photo {
     pub fn relative_wb(&self) -> bool {
         self.develops_raw() && relative_wb_camera(&self.format, &self.meta.camera)
     }
+    /// [`Photo::relative_wb`] where its colour choice is honoured: a photo set to macOS Colour on a computer whose
+    /// raw decoder makes its picture (`macos`, decided by the engine) edits white balance in Kelvin from macOS's
+    /// as-shot white; its [`Photo::as_shot_wb`] is then macOS's reading, learnt when the file is decoded (a camera on
+    /// the relative scale never stores another).
+    pub fn relative_wb_on(&self, macos: bool) -> bool {
+        self.relative_wb() && !(macos && self.develop.profile.camera_colour == lightcraft_develop::CameraColour::Macos)
+    }
     /// The develop settings import gave this photo: [`Photo::camera_defaults`], or the user's
     /// default preset applied on top of them ([`Photo::import_look`]). Like the camera defaults,
     /// in the photo's own rendering process.
@@ -524,6 +535,12 @@ impl Photo {
         if self.develop.wb.mode == WbMode::AsShot && defaults.wb.mode == WbMode::AsShot {
             defaults.wb = self.develop.wb;
         }
+        // Camera Matching is a choice only a raw fitted to its camera JPEG has: on any other photo (a JPEG or DNG
+        // pasted onto from such a raw) it changes nothing, so it is not an edit.
+        if !self.fitted_look() {
+            defaults.profile.camera_colour = self.develop.profile.camera_colour;
+            defaults.profile.camera_profile.clone_from(&self.develop.profile.camera_profile);
+        }
         *self.develop != defaults && !self.develop.is_unedited()
     }
     /// Capture time if known, else import time (sort key).
@@ -602,6 +619,26 @@ mod edited_tests {
         assert!(p.is_edited());
         p.develop = Arc::new(DevelopSettings::default());
         assert!(!p.is_edited(), "a full reset is unedited too");
+    }
+
+    /// No Camera Matching is an edit on a raw fitted to its camera JPEG, and nothing on a photo that has no such
+    /// choice (a JPEG, a DNG with its own matrices) that was pasted onto from one.
+    #[test]
+    fn camera_colour_is_an_edit_only_where_the_choice_exists() {
+        use lightcraft_develop::CameraColour;
+        for (name, format, kind, edited) in
+            [("a.arw", "ARW", MediaKind::Raw, true), ("a.dng", "DNG", MediaKind::Raw, false), ("a.jpg", "JPEG", MediaKind::Image, false)]
+        {
+            let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, name, format, 10, 10, "2026-10-01T00:00:00");
+            p.kind = kind;
+            p.as_shot_wb = Some((5200.0, 4.0));
+            p.develop = Arc::new(p.import_defaults());
+            assert!(!p.is_edited(), "{name}: as imported");
+            let mut d = (*p.develop).clone();
+            d.profile.camera_colour = CameraColour::Colorimetric;
+            p.develop = Arc::new(d);
+            assert_eq!(p.is_edited(), edited, "{name}");
+        }
     }
 
     #[test]

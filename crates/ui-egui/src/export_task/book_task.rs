@@ -79,7 +79,7 @@ pub fn start(app: &mut LightcraftApp, params: &Value, jpeg: bool) -> Result<Valu
     let row =
         app.session.activity.start("export", if jpeg { "Exporting book to JPEG" } else { "Exporting book to PDF" }, Cancel::Flag(cancel.clone()));
     row.progress(0, total as u64);
-    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row });
+    app.export = Some(ExportTask { total, progress, cancel, rx, guard: row, show_in_finder: false });
     Ok(json!({"background": true, "total": total}))
 }
 

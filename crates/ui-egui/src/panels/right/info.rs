@@ -5,7 +5,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     header(ui, "Info");
     let t = Tokens::get(ui.ctx());
     padded(ui, |ui| {
-        camera_card(ui, &p);
+        camera_card(app, ui, &p);
         ui.add_space(6.0);
         if let Some(why) = &p.preview_only {
             if crate::widgets::preview_only_notice(ui, "info", why) {
@@ -194,24 +194,9 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.label(egui::RichText::new(line).color(t.text_dim));
         }
         // offline originals / smart previews
-        // (cached answers, checked off the UI thread: unknown counts as online / no smart preview)
-        if let lightcraft_catalog::Source::File { path } = &p.source {
-            let avail = &app.session.media.availability;
-            let online = !avail.is_offline(path);
-            let smart = app.session.media.smart_dir.as_ref().is_some_and(|d| {
-                let shard = lightcraft_engine::smart::sharded_file_path(d, &p);
-                let legacy = d.join(lightcraft_engine::smart::file_name(&p));
-                avail.exists(&shard.to_string_lossy()) == Some(true) || avail.exists(&legacy.to_string_lossy()) == Some(true)
-            });
-            if !online || smart {
-                let text = match (online, smart) {
-                    (false, true) => "Original offline · editing the smart preview",
-                    (false, false) => "Original offline · no smart preview",
-                    _ => "Smart preview available",
-                };
-                ui.add_space(6.0);
-                ui.label(egui::RichText::new(crate::i18n::tr(text)).color(if online { t.text_dim } else { t.accent }));
-            }
+        if let Some((text, accent)) = smart_line(app, &p) {
+            ui.add_space(6.0);
+            ui.label(egui::RichText::new(crate::i18n::tr(text)).color(if accent { t.accent } else { t.text_dim }));
         }
         ui.add_space(10.0);
         if text_button(ui, "allMetadata", crate::i18n::tr("All Metadata…"), false)
@@ -223,20 +208,39 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     });
 }
 
+/// The Info panel's line about the photo's original and smart preview, and whether it is drawn in the accent colour:
+/// (cached answers, checked off the UI thread: unknown counts as online / no smart preview)
+pub(crate) fn smart_line(app: &LightcraftApp, p: &lightcraft_catalog::Photo) -> Option<(&'static str, bool)> {
+    let lightcraft_catalog::Source::File { path } = &p.source else { return None };
+    let avail = &app.session.media.availability;
+    let online = !avail.is_offline(path);
+    let smart = app.session.media.smart_dir.as_ref().is_some_and(|d| {
+        let shard = lightcraft_engine::smart::sharded_file_path(d, p);
+        let legacy = d.join(lightcraft_engine::smart::file_name(p));
+        avail.exists(&shard.to_string_lossy()) == Some(true) || avail.exists(&legacy.to_string_lossy()) == Some(true)
+    });
+    // Use Smart Previews instead of Originals: the picture on screen was read from the smart preview
+    let editing = online && smart && app.session.media.editing_from_smart_preview(p.id, p);
+    match (online, smart) {
+        (false, true) => Some(("Original offline · editing the smart preview", true)),
+        (false, false) => Some(("Original offline · no smart preview", true)),
+        (true, true) if editing => Some(("Editing from Smart Preview", true)),
+        (true, true) => Some(("Smart preview available", false)),
+        (true, false) => None,
+    }
+}
+
 /// The camera card at the top of Info: camera, lens, size · file size and format, then the
 /// capture settings.
-fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
+fn camera_card(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
     let t = Tokens::get(ui.ctx());
     let m = &p.meta;
+    // camera, lens and the capture settings are editable (`exif_edit`): the file's values stay, an edit shows over them
+    let scope = super::exif_edit::Scope::of(app, p);
     egui::Frame::NONE.fill(t.canvas).corner_radius(6.0).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let dim = |s: &str| egui::RichText::new(s.to_string()).size(12.0).color(t.text_label);
-        if !m.camera.is_empty() {
-            ui.label(dim(&m.camera));
-        }
-        if !m.lens.is_empty() {
-            ui.add(egui::Label::new(dim(&m.lens)).truncate());
-        }
+        super::exif_edit::camera_lens(app, ui, &scope);
         ui.horizontal(|ui| {
             ui.label(dim(&format!("{} × {}  ·  {}", p.width, p.height, human_size(p.file_size))));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -245,22 +249,7 @@ fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
                 });
             });
         });
-        let rows = [
-            ("Focal length", m.focal_mm.map(|f| format!("{f:.1} mm").replace(".0 mm", " mm"))),
-            ("Shutter speed", (!m.shutter.is_empty()).then(|| crate::i18n::tr_format!("{} sec", m.shutter))),
-            ("Aperture", m.aperture.map(|f| format!("f / {f:.1}").replace(".0", ""))),
-            ("ISO", m.iso.map(|i| i.to_string())),
-        ];
-        if rows.iter().any(|r| r.1.is_some()) {
-            ui.add_space(6.0);
-            egui::Grid::new("info-capture").num_columns(2).spacing([24.0, 3.0]).show(ui, |ui| {
-                for (k, v) in rows {
-                    ui.label(dim(crate::i18n::tr(k)));
-                    ui.label(dim(&v.unwrap_or_else(|| "—".into())));
-                    ui.end_row();
-                }
-            });
-        }
+        super::exif_edit::capture(app, ui, &scope);
         // where the camera focused, and how (View ▸ Focus Point draws it): only when known; the
         // whole card's width, so "AF-C · Expanded Flexible Spot · Face tracking" fits
         if let Some(text) = focus_text(m.focus.as_ref()) {
@@ -419,17 +408,22 @@ fn copyright_status(app: &mut LightcraftApp, ui: &mut egui::Ui, current: lightcr
     let t = Tokens::get(ui.ctx());
     ui.label(egui::RichText::new(crate::i18n::tr("Copyright Status")).size(11.5).color(t.text_dim));
     let shown = crate::i18n::tr(if mixed { MIXED } else { current.label() });
-    let r = crate::widgets::combo_box("info-copyright-status").selected_text(shown).show_ui(ui, |ui| {
-        for st in lightcraft_catalog::CopyrightStatus::ALL {
-            let on = !mixed && st == current;
-            if ui.selectable_label(on, crate::i18n::tr(st.label())).clicked() && !on {
-                let ids: Vec<u64> = targets.iter().map(|id| id.0).collect();
-                let _ = app.run("photo.setMeta", json!({"ids": ids, "copyrightStatus": st.id()}));
-            }
-        }
-    });
-    crate::widgets::name_combo(&r.response, crate::i18n::tr("Copyright Status"));
-    register(ui, "field:copyrightStatus", r.response.rect);
+    let (r, chosen) = crate::widgets::dropdown_search::pick(
+        ui,
+        "info-copyright-status",
+        |c| c.selected_text(shown),
+        &lightcraft_catalog::CopyrightStatus::ALL,
+        |st| !mixed && *st == current,
+        |st| crate::i18n::tr(st.label()).to_string(),
+    );
+    crate::widgets::name_combo(&r, crate::i18n::tr("Copyright Status"));
+    register(ui, "field:copyrightStatus", r.rect);
+    if let Some(st) = chosen.and_then(|i| lightcraft_catalog::CopyrightStatus::ALL.get(i))
+        && (mixed || *st != current)
+    {
+        let ids: Vec<u64> = targets.iter().map(|id| id.0).collect();
+        let _ = app.run("photo.setMeta", json!({"ids": ids, "copyrightStatus": st.id()}));
+    }
     ui.add_space(6.0);
 }
 

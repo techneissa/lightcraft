@@ -84,17 +84,23 @@ pub enum Process {
     /// Highlights and Shadows keep the local contrast of the tones they move: their edge-aware base
     /// is taken of a fine median of log luminance (issue #632).
     V2,
+    /// Contrast, Whites and Blacks are as strong on camera-look raws and display-referred files
+    /// (JPEG, PNG) as they are on raws without a look: one slider model on every tone path.
+    /// Shadows reach the lower midtones and Highlights the upper ones (`shadows_highlights_delta`
+    /// in the pipeline's `finish`).
+    V3,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 2] = [Process::V1, Process::V2];
-    pub const LATEST: Process = Process::V2;
+    pub const ALL: [Process; 3] = [Process::V1, Process::V2, Process::V3];
+    pub const LATEST: Process = Process::V3;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
             Process::V1 => ProcessVersion(1),
             Process::V2 => ProcessVersion(2),
+            Process::V3 => ProcessVersion(3),
         }
     }
 }
@@ -199,11 +205,47 @@ pub struct Profile {
     /// settings without it keep their JSON (and hash).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub camera_local_tone: bool,
+    /// Where a raw without colour matrices of its own takes its starting colour from
+    /// (`docs/camera-preview-colour.md`). Omitted when [`CameraColour::Auto`], so settings without
+    /// it keep their JSON (and hash).
+    #[serde(skip_serializing_if = "CameraColour::is_auto")]
+    pub camera_colour: CameraColour,
+    /// The local camera profile ([`CameraColour::Local`]) the photo starts from: the file stem of a profile in
+    /// the user's `camera-profiles` folder. Omitted while none, so settings without it keep their JSON (and hash).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera_profile: Option<String>,
 }
 
 impl Default for Profile {
     fn default() -> Self {
-        Self { id: "lc.color".into(), amount: 100.0, camera_local_tone: false }
+        Self { id: "lc.color".into(), amount: 100.0, camera_local_tone: false, camera_colour: CameraColour::Auto, camera_profile: None }
+    }
+}
+
+/// The starting colour of a raw that carries no colour matrices (NEF, ARW, CR3, …).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CameraColour {
+    /// The first available of: a camera profile with tone fitted to the file's JPEG, a look fitted
+    /// to the file's JPEG, the model's spectral matrices, the neutral fallback.
+    #[default]
+    Auto,
+    /// The model's matrices from measured spectral sensitivities with LightCraft's default tone
+    /// curve, never the embedded JPEG; [`CameraColour::Auto`] for a model without them.
+    Colorimetric,
+    /// The user's own profile file for the photo's camera ([`Profile::camera_profile`]): its matrix and table are the
+    /// base colour, the tone is fitted to the file's JPEG. A missing, invalid or other-camera file renders as
+    /// [`CameraColour::Auto`] with a note, and the choice is kept.
+    Local,
+    /// The Mac's own raw decoder (macOS Colour): a computer or camera it can't make it for renders as
+    /// [`CameraColour::Auto`] and says why. Declared with [`CameraColour::Local`] in catalog format v10, so a library that
+    /// holds it is never read as corrupt.
+    Macos,
+}
+
+impl CameraColour {
+    pub fn is_auto(&self) -> bool {
+        *self == CameraColour::Auto
     }
 }
 

@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use crate::Session;
 
-fn temp_dir(tag: &str) -> std::path::PathBuf {
+pub(super) fn temp_dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lc-import-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     // Tests that take a folder "offline" rename it to this sibling; a left-over one (from a run
@@ -21,7 +21,7 @@ fn temp_dir(tag: &str) -> std::path::PathBuf {
 }
 
 /// A small procedural PNG (distinct per seed).
-fn write_png(path: &Path, seed: u8) {
+pub(super) fn write_png(path: &Path, seed: u8) {
     let (w, h) = (48usize, 32usize);
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| [(i % w * 5) as u8, (i / w * 7) as u8, seed, 255]).collect();
     let img = lightcraft_raster::Rgba8 { width: w, height: h, data };
@@ -870,6 +870,36 @@ fn auto_import_watched_folder() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// An idle watch lists the folder only when its modification time changed (or when forced), and the
+/// scan says `waiting` while a new file's size is still being confirmed, so the app keeps scanning
+/// then and only then.
+#[test]
+fn auto_import_polls_by_the_folders_time_and_says_when_it_waits() {
+    use crate::cmd::library::poll_auto_import_folder;
+    let dir = temp_dir("watch-poll");
+    let folder = dir.to_string_lossy().to_string();
+    let first = poll_auto_import_folder(&folder, None, false).unwrap();
+    assert!(first.listing.is_some(), "the first poll lists");
+    let idle = poll_auto_import_folder(&folder, first.stamp, false).unwrap();
+    assert!(idle.listing.is_none(), "nothing changed: not listed");
+    assert!(poll_auto_import_folder(&folder, first.stamp, true).unwrap().listing.is_some(), "forced: listed");
+    write_png(&dir.join("one.png"), 1);
+    let changed = poll_auto_import_folder(&folder, first.stamp, false).unwrap();
+    assert_eq!(changed.listing.map(|l| l.len()), Some(1), "a new file bumps the folder's time");
+    assert!(poll_auto_import_folder(&dir.join("nope").to_string_lossy(), None, false).is_err());
+
+    let mut s = Session::new().with_fs();
+    s.execute("library.autoImport", &json!({"folder": folder})).unwrap();
+    let scan = |s: &mut Session| s.execute("library.autoImportScan", &json!({})).unwrap();
+    let r = scan(&mut s);
+    assert_eq!((r["waiting"].clone(), r["imported"].clone()), (json!(true), json!([])), "first sight: confirm the size");
+    let r = scan(&mut s);
+    assert_eq!(r["imported"].as_array().map(Vec::len), Some(1), "{r}");
+    assert_eq!(r["waiting"], json!(false), "nothing left to confirm");
+    assert_eq!(scan(&mut s)["waiting"], json!(false));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// Smart previews: with the original offline the photo still renders (and edits apply) from
 /// its proxy; without the proxy it can't be opened.
 #[test]
@@ -974,7 +1004,7 @@ fn smart_previews_keep_the_decoder_facts_offline_edits_need() {
         let mut s = Session::new().with_fs();
         s.open_library(&lib, false).unwrap();
         let (p, i) = (pixels.clone(), info.clone());
-        s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge| Ok((p.clone(), i.clone()))));
+        s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge, _options| Ok((p.clone(), i.clone()))));
         s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
         let id = s.active().unwrap();
         let r = s.execute("library.smartPreviews", &json!({})).unwrap();
@@ -2073,7 +2103,7 @@ fn folder_import_picks_up_undecodable_raw_containers_as_preview_only() {
 }
 
 /// Rewrite the JSON header line of the smart preview at `file`.
-fn edit_smart_header(file: &Path, edit: impl FnOnce(&mut Value)) {
+pub(super) fn edit_smart_header(file: &Path, edit: impl FnOnce(&mut Value)) {
     let bytes = std::fs::read(file).unwrap();
     let start = b"LCSP1\n".len();
     let nl = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
@@ -2085,7 +2115,7 @@ fn edit_smart_header(file: &Path, edit: impl FnOnce(&mut Value)) {
     std::fs::write(file, out).unwrap();
 }
 
-fn smart_header(file: &Path) -> Value {
+pub(super) fn smart_header(file: &Path) -> Value {
     let bytes = std::fs::read(file).unwrap();
     let start = b"LCSP1\n".len();
     let nl = start + bytes[start..].iter().position(|b| *b == b'\n').unwrap();
@@ -2107,9 +2137,9 @@ fn look_loader(
     tone: lightcraft_pipeline::tone::CameraTone,
     calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 ) -> crate::media::FileLoader {
-    std::sync::Arc::new(move |path, max_edge| {
+    std::sync::Arc::new(move |path, max_edge, options| {
         calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let (img, mut info) = plain(path, max_edge)?;
+        let (img, mut info) = plain(path, max_edge, options)?;
         info.camera_tone = Some(tone);
         Ok((img, info))
     })
@@ -2277,7 +2307,7 @@ fn a_proxy_with_an_older_encoding_is_refreshed_without_the_camera_look() {
     let pixels = lightcraft_raster::Rgb32f::from_fn(48, 32, |x, y| [0.02 + (x % 9) as f32 * 0.05, 0.03 + (y % 7) as f32 * 0.04, 0.06]);
     let info = lightcraft_pipeline::SourceInfo { raw: true, as_shot_temp: 5200.0, as_shot_tint: 6.0, ..Default::default() };
     let (p, i) = (pixels.clone(), info.clone());
-    s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge| Ok((p.clone(), i.clone()))));
+    s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge, _options| Ok((p.clone(), i.clone()))));
     s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
     let id = s.active().unwrap();
     let mut raw = (**s.catalog.photo(id).unwrap()).clone();
@@ -2321,7 +2351,7 @@ fn a_stale_refresh_never_rebuilds_a_proxy_from_itself() {
     let pixels = lightcraft_raster::Rgb32f::from_fn(48, 32, |x, y| [0.02 + (x % 9) as f32 * 0.05, 0.03 + (y % 7) as f32 * 0.04, 0.06]);
     let info = lightcraft_pipeline::SourceInfo { raw: true, as_shot_temp: 5200.0, as_shot_tint: 6.0, ..Default::default() };
     let (p, i) = (pixels.clone(), info.clone());
-    s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge| Ok((p.clone(), i.clone()))));
+    s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge, _options| Ok((p.clone(), i.clone()))));
     s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
     let id = s.active().unwrap();
     // a raw that takes the per-file camera look, so an older fit makes its proxy stale

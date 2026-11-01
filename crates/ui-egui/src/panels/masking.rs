@@ -86,7 +86,17 @@ fn tile_layout(width: f32, label: impl Fn(f32) -> f32) -> (usize, f32, f32) {
     (2, room(2).max(24.0), 9.5)
 }
 
+/// The labels of the mask sliders besides [`LOCAL`] (built where they are drawn).
+const OTHER_SLIDER_LABELS: &[&str] = &["Amount", "Refine Edges", "Opacity", "Smoothness", "Edge", "Refine", "Size", "Feather", "Flow"];
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    // one label column for every mask slider label, whichever the mask shows (issue #21)
+    crate::widgets::label_column::fix(ui, "masking", || LOCAL.iter().map(|s| s.label).chain(OTHER_SLIDER_LABELS.iter().copied()).collect());
+    show_mask_panel(app, ui, id);
+    crate::widgets::label_column::release(ui);
+}
+
+fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Masking");
@@ -460,13 +470,12 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Overlay")).color(t.text_dim));
         let r = crate::widgets::dropdown(ui, "maskOverlayMode", menu_label(view.label()), t.font(12.5), t.text_label);
-        egui::Popup::menu(&r).show(|ui| {
-            for v in MaskView::ALL {
-                if ui.selectable_label(v == view, menu_label(v.label())).clicked() {
-                    let _ = app.run("view.maskOverlayMode", json!({"mode": v.name()}));
-                }
-            }
-        });
+        if let Some(v) =
+            crate::widgets::dropdown_search::menu_pick(&mut *ui, &r, &MaskView::ALL, |v| *v == view, |v| menu_label(v.label()).to_string())
+                .and_then(|i| MaskView::ALL.get(i))
+        {
+            let _ = app.run("view.maskOverlayMode", json!({"mode": v.name()}));
+        }
     });
     let colored = matches!(view, MaskView::Color | MaskView::ColorOnBw);
     if colored {

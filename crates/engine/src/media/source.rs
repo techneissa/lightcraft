@@ -1,7 +1,7 @@
 use super::{Arc, Deserialize, DevelopSettings, MediaKind, Photo, Rgb32f, Rgba8, Serialize, SourceInfo};
 
 /// Bump when the pipeline's output changes, to invalidate cached thumbnails.
-pub const RENDER_CACHE_VERSION: u64 = 72;
+pub const RENDER_CACHE_VERSION: u64 = 73;
 
 /// Thumbnails render at one of these long edges (so window/cell size changes reuse the cache).
 pub const THUMB_SIZES: [usize; 4] = [128, 256, 384, 512];
@@ -75,12 +75,43 @@ pub(super) fn source_edge_needed(p: &Photo, settings: &DevelopSettings, apply_cr
 }
 
 /// Decodes a file into a linear Rec.2020 image no larger than `max_edge` (set by the app).
-pub type FileLoader = Arc<dyn Fn(&str, usize) -> Result<(Rgb32f, SourceInfo), String> + Send + Sync>;
+pub type FileLoader = Arc<dyn Fn(&str, usize, LoadOptions) -> Result<(Rgb32f, SourceInfo), String> + Send + Sync>;
+
+/// The photo's settings a decode depends on: decoded sources are cached with them ([`DecodedSource::options`]) and
+/// decoded again when they change.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LoadOptions {
+    /// Where a raw without colour matrices takes its starting colour from (`Profile::camera_colour`).
+    pub colour: lightcraft_develop::CameraColour,
+    /// For [`CameraColour::Local`](lightcraft_develop::CameraColour::Local): the key of the local profile (its id and
+    /// its file's content, `camera_profiles::local_key`), so a changed file decodes the source again. For
+    /// [`CameraColour::Macos`](lightcraft_develop::CameraColour::Macos): the Mac's raw decoder key
+    /// (`files::macos_cache_key`, the OS build and the recipe), so renders cached by another macOS build are made again.
+    /// It is in every render key of the photo. `None` for any other photo, whose keys stay as they were.
+    pub profile_key: Option<u128>,
+}
+
+impl LoadOptions {
+    pub fn of(s: &DevelopSettings) -> LoadOptions {
+        let local = s.profile.camera_colour == lightcraft_develop::CameraColour::Local;
+        let macos = s.profile.camera_colour == lightcraft_develop::CameraColour::Macos;
+        LoadOptions {
+            colour: s.profile.camera_colour,
+            profile_key: s
+                .profile
+                .camera_profile
+                .as_deref()
+                .filter(|_| local)
+                .map(crate::camera_profiles::local_key)
+                .or_else(|| macos.then(|| u128::from(crate::files::macos_cache_key()))),
+        }
+    }
+}
 
 /// [`FileLoader`] for a thumbnail: a raw file that keeps smaller copies of its raw image (Lightroom's merged DNGs)
 /// develops the smallest that covers `max_edge` (set by the app); the flag says it did. Never used for an export,
 /// which must render the full image.
-pub type ReducedLoader = Arc<dyn Fn(&str, usize) -> Result<(Rgb32f, SourceInfo, bool), String> + Send + Sync>;
+pub type ReducedLoader = Arc<dyn Fn(&str, usize, LoadOptions) -> Result<(Rgb32f, SourceInfo, bool), String> + Send + Sync>;
 
 /// A raw file's embedded (camera-rendered) preview as display sRGB, oriented, no larger than
 /// `max_edge` (set by the app). `None`: no usable preview.
@@ -103,7 +134,7 @@ pub struct DenoiseSpec {
 
 /// Decodes a raw file once and develops it twice: as usual, and from the denoised picture in `spec` when that can be
 /// read (`None` when it cannot). Both are at most `max_edge` long and the same size.
-pub type PairLoader = Arc<dyn Fn(&str, usize, &DenoiseSpec) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> + Send + Sync>;
+pub type PairLoader = Arc<dyn Fn(&str, usize, &DenoiseSpec, LoadOptions) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> + Send + Sync>;
 
 /// A photo's denoised picture next to its plain one, and the last mix of the two that was asked for.
 pub struct Twin {
@@ -136,14 +167,34 @@ pub struct DecodedSource {
     /// These pixels came from the photo's smart preview (an offline original), not from its file.
     /// A refresh must never rebuild a proxy from itself: that would stamp its older look as current.
     pub from_proxy: bool,
+    /// ...and by choice, the original being online (Use Smart Previews instead of Originals for editing): the source
+    /// was read for `options` only, and is dropped when the setting or the photo's colour no longer allows it.
+    pub edit_proxy: bool,
     /// Developed from a smaller copy of the raw image that the file keeps ([`ReducedLoader`]), not from the image
     /// itself: good for a thumbnail, never for an export.
     pub reduced: bool,
+    /// The settings the file was decoded with.
+    pub options: LoadOptions,
 }
 
 impl DecodedSource {
     pub fn new(image: Arc<Rgb32f>, info: Option<SourceInfo>) -> Self {
-        DecodedSource { image, info, camera_tone: None, denoised: None, from_proxy: false, reduced: false }
+        DecodedSource {
+            image,
+            info,
+            camera_tone: None,
+            denoised: None,
+            from_proxy: false,
+            edit_proxy: false,
+            reduced: false,
+            options: LoadOptions::default(),
+        }
+    }
+
+    /// Whether these pixels are what decoding with `options` gives: decoded with them, or from a source the options
+    /// don't change (a raw whose starting colour is not fitted to its JPEG, a smart preview, a demo scene).
+    pub fn serves(&self, options: LoadOptions) -> bool {
+        self.options == options || (self.from_proxy && !self.edit_proxy) || !self.info.as_ref().is_some_and(|i| i.colorimetric)
     }
 
     /// The picture to develop for a Denoise `amount` (0 to 1, see [`DevelopSettings::denoise_amount`]): the plain one,
@@ -216,10 +267,22 @@ pub enum SourceRef {
         denoise: Option<(DenoiseSpec, PairLoader)>,
         /// A thumbnail's loader, used instead of `loader` (see [`ReducedLoader`]); `None` for every other job.
         reduced: Option<ReducedLoader>,
+        /// The photo's settings the decode depends on.
+        options: LoadOptions,
     },
     /// A smart preview standing in for a missing original.
     Smart {
         path: std::path::PathBuf,
+    },
+    /// Use Smart Previews instead of Originals for editing: the photo's smart preview when it has a current one (the
+    /// worker checks the file), else `otherwise`, the original's source ([`super::smart_editing`]).
+    Preferred {
+        proxy: Box<super::Proxy>,
+        /// The settings the picture is wanted for (the proxy's source is kept with them, see [`DecodedSource::edit_proxy`]).
+        options: LoadOptions,
+        /// The longest edge wanted; the preview-size proxy is shrunk to it for a thumbnail.
+        max_edge: usize,
+        otherwise: Box<SourceRef>,
     },
 }
 
@@ -241,12 +304,15 @@ impl SourceRef {
                 return Ok(DecodedSource { image: Arc::new(image), denoised: None, ..(**from).clone() });
             }
             SourceRef::Demo { scene, max_edge } => crate::demo::scene_pixels(scene, *max_edge)?,
-            SourceRef::File { path, max_edge, loader, fallback, denoise, reduced } => {
+            SourceRef::File { path, max_edge, loader, fallback, denoise, reduced, options } => {
                 let plain = || match (reduced, loader) {
-                    (Some(l), _) => {
-                        l(path, *max_edge).map(|(image, info, reduced)| DecodedSource { reduced, ..DecodedSource::new(Arc::new(image), Some(info)) })
-                    }
-                    (None, Some(l)) => l(path, *max_edge).map(|(image, info)| DecodedSource::new(Arc::new(image), Some(info))),
+                    (Some(l), _) => l(path, *max_edge, *options).map(|(image, info, reduced)| DecodedSource {
+                        reduced,
+                        options: *options,
+                        ..DecodedSource::new(Arc::new(image), Some(info))
+                    }),
+                    (None, Some(l)) => l(path, *max_edge, *options)
+                        .map(|(image, info)| DecodedSource { options: *options, ..DecodedSource::new(Arc::new(image), Some(info)) }),
                     (None, None) => Err(format!("no decoder available for {path}")),
                 };
                 // the denoised picture comes with the plain one from a single decode; when it cannot be read the
@@ -260,7 +326,7 @@ impl SourceRef {
                             None => true,
                         };
                         if made {
-                            pair(path, *max_edge, spec).and_then(|(image, twin, info)| {
+                            pair(path, *max_edge, spec, *options).and_then(|(image, twin, info)| {
                                 if spec.make.is_some() && twin.is_none() {
                                     return Err("the cached AI Denoise picture could not be read; clear the denoise cache and retry".into());
                                 }
@@ -270,7 +336,9 @@ impl SourceRef {
                                     camera_tone: None,
                                     denoised: twin.map(|t| Arc::new(Twin::new(Arc::new(t)))),
                                     from_proxy: false,
+                                    edit_proxy: false,
                                     reduced: false,
+                                    options: *options,
                                 })
                             })
                         } else {
@@ -287,6 +355,9 @@ impl SourceRef {
                     }
                     (r, _) => r,
                 };
+            }
+            SourceRef::Preferred { proxy, options, max_edge, otherwise } => {
+                return super::smart_editing::load_preferred(proxy, *options, *max_edge, otherwise);
             }
             #[cfg(not(target_arch = "wasm32"))]
             SourceRef::Smart { path } => return crate::smart::load(path),

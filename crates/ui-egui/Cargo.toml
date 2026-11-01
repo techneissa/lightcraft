@@ -35,7 +35,7 @@ lightcraft-testkit = { workspace = true }
 # `default_loader` is the "this build cannot run denoise models" stub when the package is tested
 # on its own (`cargo test -p lightcraft-ui-egui`); a workspace test only passed by feature
 # unification with the desktop app's default `denoise` feature.
-lightcraft-engine = { workspace = true, features = ["denoise"] }
+lightcraft-engine = { workspace = true, features = ["denoise", "test-hooks"] }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 lightcraft-denoise = { workspace = true, features = ["runtime"] }
 lightcraft-codecs = { workspace = true }

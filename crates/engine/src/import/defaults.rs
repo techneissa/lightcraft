@@ -41,6 +41,19 @@ pub struct ImportDefaults {
     pub auto_album: Option<String>,
     /// Open the import review when a camera or memory card is connected.
     pub show_on_card: bool,
+    /// AI Denoise on for new raw photos shot at this ISO or above (`None` = off). Their denoised
+    /// pictures are queued after the import, under one row in the activity stack.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub denoise_above_iso: Option<u32>,
+    /// The colour source new raw photos start on (Starting Colour for Raw Photos; macOS Colour by default).
+    pub starting_colour: super::starting_colour::StartingColour,
+}
+
+impl ImportDefaults {
+    /// Whether a new photo gets AI Denoise switched on ([`ImportDefaults::denoise_above_iso`]).
+    pub fn denoise_on_import(&self, p: &Photo) -> bool {
+        self.denoise_above_iso.is_some_and(|min| min > 0 && p.meta.iso.is_some_and(|iso| iso >= min)) && crate::denoise::eligible(p)
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -85,6 +98,7 @@ pub fn apply_import_defaults(s: &Session, p: &mut Photo) {
     // a raw shown from its embedded JPEG gets the rendered-file default, not the raw one
     let raw = p.develops_raw();
     let preset = s.import_defaults.preset_for(raw, &p.meta.camera).and_then(|id| s.presets.iter().find(|x| x.id == id));
+    let preset_colour = preset.is_some_and(|pr| pr.settings.pointer("/profile/camera_colour").is_some());
     match preset {
         Some(pr) => {
             let look = std::sync::Arc::new(pr.apply(&base, 1.0));
@@ -95,5 +109,18 @@ pub fn apply_import_defaults(s: &Session, p: &mut Photo) {
             p.develop = std::sync::Arc::new(base);
             p.import_look = None;
         }
+    }
+    // Starting Colour for Raw Photos (Settings ▸ Import): a preset that names a colour source wins
+    super::starting_colour::with_gate(|gate, verdicts| super::starting_colour::apply(d.starting_colour, preset_colour, p, gate, verdicts));
+    // AI Denoise above the ISO chosen (Settings ▸ Import): part of the look the photo starts from
+    if s.import_defaults.denoise_on_import(p) && !p.develop.enhance.denoise_enabled() {
+        let mut d = (*p.develop).clone();
+        d.enhance.denoise_on = Some(true);
+        if !(d.enhance.denoise.is_finite() && d.enhance.denoise > 0.0) {
+            d.enhance.denoise = 50.0;
+        }
+        let look = std::sync::Arc::new(d);
+        p.develop = look.clone();
+        p.import_look = Some(look);
     }
 }

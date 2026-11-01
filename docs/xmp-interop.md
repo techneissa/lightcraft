@@ -24,6 +24,7 @@ What we write (standard namespaces, so other tools can read the metadata):
 | Rights usage terms / copyright info URL | `xmpRights:UsageTerms` / `xmpRights:WebStatement` |
 | Keywords | `dc:subject` (names: `Places`, `Italy`, `Rome`) and, when any keyword has levels, `lr:hierarchicalSubject` (paths: `Places\|Italy\|Rome`, with the flat keywords too) |
 | Capture time, GPS | `exif:DateTimeOriginal`, `photoshop:DateCreated`, `exif:GPSLatitude`/`GPSLongitude` |
+| Edited camera, lens and exposure values (Info) | only the edited fields: `tiff:Make` + `tiff:Model` (the camera name split at its first word, or at a known two-word make), `aux:Lens` + `exifEX:LensModel`, `exif:FocalLength`, `exif:FNumber`, `exif:ExposureTime`, `exif:ISOSpeedRatings` (`rdf:Seq`) + `exifEX:PhotographicSensitivity`; `lc:exifOverrides` lists the edited fields (`camera,lens,focal,aperture,shutter,iso`). A save replaces the tags of an edited field, removes those of a field reset since the last save, and keeps every other `exif:` / `tiff:` tag another app wrote. Reading takes a stated value that differs from the file's own as an override (a value equal to the file's clears it; a damaged one is skipped) |
 | Pick / reject flag | `lc:flag` (`pick`, `reject`, `none`) |
 | Location | `lc:location` |
 | Develop settings | `lc:settings` — our complete `DevelopSettings` as JSON (exact round trip, incl. masks, spots, crop and the rendering process; settings without `process` are V1, see [process-versions.md](process-versions.md)) |

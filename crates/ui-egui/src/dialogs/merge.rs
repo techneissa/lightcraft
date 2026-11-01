@@ -517,6 +517,21 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, opts: &mut MergeDialog) 
             ui.checkbox(&mut opts.stack, crate::i18n::tr("Create Stack"));
             ui.add_space(8.0);
             ui.label(egui::RichText::new(crate::i18n::tr_format!("{} photos", app.merge.ids.len())).color(t.text_dim));
+            // a merge is a new DNG with Camera Matching's colour, whatever its frames are set to
+            let local = app
+                .merge
+                .ids
+                .iter()
+                .filter(|id| {
+                    app.session.catalog.photo(**id).is_some_and(|p| p.develop.profile.camera_colour == lightcraft_develop::CameraColour::Local)
+                })
+                .count();
+            if local > 0 {
+                let note =
+                    crate::i18n::tr_format!("{n} of these photos use a local camera profile. The merge uses Camera Matching colours.", n = local);
+                ui.add(egui::Label::new(egui::RichText::new(note).color(t.text_dim)).wrap());
+            }
+            crate::macos_colour::show(ui, &t, "label:mergeMacosColour", crate::macos_colour::merge_line(app, &app.merge.ids));
         });
     });
 }

@@ -555,19 +555,85 @@ pub fn specs() -> Vec<CommandSpec> {
                 Ok(())
             })
         }),
-        cmd!("develop.profile", "Set Profile", [], None, "{id: profile id (see profiles.list), amount?: 0..200}", has_active, |s, p| {
-            let id = str_param(p, "id").ok_or_else(|| bad("develop.profile", "missing id"))?.to_string();
-            if !crate::presets::PROFILES.iter().any(|x| x.id == id) && !s.lut_profiles.iter().any(|x| x.id == id) {
-                return Err(bad("develop.profile", format!("unknown profile `{id}`")));
+        cmd!(
+            "develop.profile",
+            "Set Profile",
+            [],
+            None,
+            "{id?: profile id (see profiles.list), amount?: 0..200, camera_colour?: \"auto\" (Camera Matching, the default) | \"colorimetric\" (No Camera Matching) | \"local\" (a local camera profile, named by camera_profile) | \"macos\" (macOS Colour: the Mac's own raw decoder makes the colours; where it can't, the photo renders as Camera Matching and its source says why), camera_profile?: the local profile's id (the file name without .json; with camera_colour \"local\")} — at least `id` or `camera_colour`",
+            has_active,
+            |s, p| {
+                let id = str_param(p, "id").map(str::to_string);
+                let colour = match str_param(p, "camera_colour") {
+                    None => None,
+                    Some("auto") => Some(lightcraft_develop::CameraColour::Auto),
+                    Some("colorimetric") => Some(lightcraft_develop::CameraColour::Colorimetric),
+                    Some("local") => Some(lightcraft_develop::CameraColour::Local),
+                    Some("macos") => Some(lightcraft_develop::CameraColour::Macos),
+                    Some(other) => {
+                        return Err(bad("develop.profile", format!("unknown camera_colour `{other}` (auto, colorimetric, local or macos)")));
+                    }
+                };
+                // the local profile's id travels with `local` and with nothing else, so no stale id is left behind
+                let camera_profile = match (colour, str_param(p, "camera_profile")) {
+                    (Some(lightcraft_develop::CameraColour::Local), Some(name)) => {
+                        let name = name.trim();
+                        if !crate::camera_profiles::valid_id(name) {
+                            return Err(bad("develop.profile", format!("camera_profile `{name}` is not a profile id (a file name without .json)")));
+                        }
+                        Some(Some(name.to_string()))
+                    }
+                    (Some(lightcraft_develop::CameraColour::Local), None) => {
+                        return Err(bad("develop.profile", "camera_colour `local` needs camera_profile (the profile's id)"));
+                    }
+                    (Some(_), Some(_)) => return Err(bad("develop.profile", "camera_profile goes with camera_colour `local` only")),
+                    (Some(_), None) => Some(None),
+                    (None, Some(_)) => return Err(bad("develop.profile", "camera_profile needs camera_colour `local`")),
+                    (None, None) => None,
+                };
+                if id.is_none() && colour.is_none() {
+                    return Err(bad("develop.profile", "missing id"));
+                }
+                if let Some(id) = &id
+                    && !crate::presets::PROFILES.iter().any(|x| x.id == *id)
+                    && !s.lut_profiles.iter().any(|x| x.id == *id)
+                {
+                    return Err(bad("develop.profile", format!("unknown profile `{id}`")));
+                }
+                // a local profile is named in the history (`Profile: A7 V Chart`), like the Switch step
+                let label = match (&id, camera_profile.as_ref().and_then(Option::as_deref)) {
+                    (_, Some(file)) => {
+                        let name = crate::camera_profiles::local_profile(file).map_or_else(|| file.to_owned(), |l| l.name.clone());
+                        format!("Profile: {name}")
+                    }
+                    (None, None) => super::macos_colour::colour_label(colour).to_owned(),
+                    (Some(_), None) => "Profile".to_owned(),
+                };
+                let leaving_macos = super::macos_colour::leaving_as_shot(s, colour);
+                edit(s, "develop.profile", &label, |d| {
+                    if let Some(as_shot) = leaving_macos {
+                        lightcraft_pipeline::local::leave_kelvin(d, as_shot);
+                    }
+                    if let Some(id) = &id {
+                        d.profile.id = id.clone();
+                        d.profile.amount = f64_or(p, "amount", d.profile.amount).clamp(0.0, 200.0);
+                    } else if p.get("amount").is_some() {
+                        d.profile.amount = f64_or(p, "amount", d.profile.amount).clamp(0.0, 200.0);
+                    }
+                    if let Some(colour) = colour {
+                        d.profile.camera_colour = colour;
+                    }
+                    if let Some(camera_profile) = &camera_profile {
+                        d.profile.camera_profile.clone_from(camera_profile);
+                    }
+                    Ok(())
+                })?;
+                if let Some(id) = &id {
+                    s.note_profile_used(id);
+                }
+                ok()
             }
-            edit(s, "develop.profile", "Profile", |d| {
-                d.profile.id = id.clone();
-                d.profile.amount = f64_or(p, "amount", d.profile.amount).clamp(0.0, 200.0);
-                Ok(())
-            })?;
-            s.note_profile_used(&id);
-            ok()
-        }),
+        ),
         cmd!("profile.favorite", "Favorite Profile", [], None, "{id, favorite?: bool} (toggles when omitted)", always, |s, p| {
             let id = str_param(p, "id").ok_or_else(|| bad("profile.favorite", "missing id"))?.to_string();
             if crate::presets::profile(&id).is_none() && !s.lut_profiles.iter().any(|x| x.id == id) {
@@ -1075,41 +1141,50 @@ pub fn specs() -> Vec<CommandSpec> {
             "Auto Sync",
             ["Edit"],
             Some("Cmd+Alt+Shift+A"),
-            "{on?: bool} (toggles when omitted) — edits to the active photo also change the other selected photos (only the settings that changed; not spot removal / red eye) → {on}",
+            "{on?: bool} (toggles when omitted) — edits to the active photo also change the other selected photos (only the settings that changed; not spot removal / red eye); saved with the library, and on by default in the desktop app → {on}",
             always,
             |s, p| {
-                s.auto_sync = p.get("on").and_then(Value::as_bool).unwrap_or(!s.auto_sync);
+                s.set_auto_sync(p.get("on").and_then(Value::as_bool).unwrap_or(!s.auto_sync));
                 Ok(json!({"on": s.auto_sync}))
             }
         ),
         // ---- presets
-        cmd!("preset.apply", "Apply Preset", [], None, "{id: presetId, amount?: 0..200 (percent), ids?}", has_selection, |s, p| {
-            let pid = str_param(p, "id").ok_or_else(|| bad("preset.apply", "missing id"))?;
-            let preset = s.presets.iter().find(|x| x.id == pid).cloned().ok_or_else(|| bad("preset.apply", format!("unknown preset `{pid}`")))?;
-            let amount = f64_or(p, "amount", 100.0).clamp(0.0, 200.0) / 100.0;
-            // `id` names the preset here: the photos are `ids`, else the selection
-            let ids = s.targets(&json!({"ids": p.get("ids")}))?;
-            let ops = ids
-                .iter()
-                .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                .filter_map(|(id, d)| {
-                    // a hand-written preset may name one white balance number only, and then it means the same as
-                    // a partial: bring the photo onto that scale first, with its own as-shot white, and put the
-                    // result back on the scale the photo is edited on (issue #2910) — the merge `develop.merge` uses
-                    let info = s.source_info(id);
-                    let prepared = prepare_photo_for_wb_partial(&d, &preset.settings, &info);
-                    let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
-                    let base: &DevelopSettings = prepared.as_ref().unwrap_or(&d);
-                    let mut next = preset.apply(base, amount);
-                    if on_kelvin_scale {
-                        lightcraft_pipeline::local::normalize_wb(&mut next, &info);
-                    }
-                    s.develop_op(id, next, &format!("Preset: {}", preset.name))
-                })
-                .collect::<Vec<_>>();
-            s.commit(&format!("Preset: {}", preset.name), Op::Batch { ops })?;
-            ok()
-        }),
+        cmd!(
+            "preset.apply",
+            "Apply Preset",
+            [],
+            None,
+            "{id: presetId, amount?: 0..200 (percent), ids?} → {macosFallback: how many of the photos are on macOS Colour but use Camera Matching colours on this computer}",
+            has_selection,
+            |s, p| {
+                let pid = str_param(p, "id").ok_or_else(|| bad("preset.apply", "missing id"))?;
+                let preset = s.presets.iter().find(|x| x.id == pid).cloned().ok_or_else(|| bad("preset.apply", format!("unknown preset `{pid}`")))?;
+                let amount = f64_or(p, "amount", 100.0).clamp(0.0, 200.0) / 100.0;
+                // `id` names the preset here: the photos are `ids`, else the selection
+                let ids = s.targets(&json!({"ids": p.get("ids")}))?;
+                let ops = ids
+                    .iter()
+                    .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
+                    .filter_map(|(id, d)| {
+                        // a hand-written preset may name one white balance number only, and then it means the same as
+                        // a partial: bring the photo onto that scale first, with its own as-shot white, and put the
+                        // result back on the scale the photo is edited on (issue #2910) — the merge `develop.merge` uses
+                        let info = s.source_info(id);
+                        let prepared = prepare_photo_for_wb_partial(&d, &preset.settings, &info);
+                        let on_kelvin_scale = prepared.is_some() && info.raw && !info.relative_wb;
+                        let base: &DevelopSettings = prepared.as_ref().unwrap_or(&d);
+                        let mut next = preset.apply(base, amount);
+                        if on_kelvin_scale {
+                            lightcraft_pipeline::local::normalize_wb(&mut next, &info);
+                        }
+                        s.develop_op(id, next, &format!("Preset: {}", preset.name))
+                    })
+                    .collect::<Vec<_>>();
+                s.commit(&format!("Preset: {}", preset.name), Op::Batch { ops })?;
+                // photos the preset put on macOS Colour that this computer makes with Camera Matching colours
+                Ok(json!({"macosFallback": super::macos_colour::fallbacks(s, &ids)}))
+            }
+        ),
         cmd!("preset.create", "Create Preset", ["Photo"], None, "{name, group?, groups?: [settingsGroup]}", has_active, |s, p| {
             let c = "preset.create";
             let id = active(s, c)?;

@@ -70,7 +70,7 @@ pub(crate) fn jobs_for(s: &mut Session, id: lightcraft_catalog::PhotoId, edge: O
 }
 
 /// The build's row in the activity stack (`what` as in [`PreviewBuild::what`]).
-fn task_for(s: &Session, state: &PreviewBuild) -> TaskGuard {
+pub(crate) fn task_for(s: &Session, state: &PreviewBuild) -> TaskGuard {
     let (kind, label) = match state.what {
         "" => ("previews", "Building previews"),
         "smart previews" => ("smartPreviews", "Building smart previews"),
@@ -84,7 +84,7 @@ fn task_for(s: &Session, state: &PreviewBuild) -> TaskGuard {
 /// Render one photo's jobs in order. The source the first job decodes serves the ones after it
 /// (the grid thumbnail is made from the view's source instead of decoding the file again).
 /// `None` when `cancel` was asked for before a job started: that photo is not counted as done.
-fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>) -> Option<bool> {
+fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&Arc<AtomicBool>>) -> Option<bool> {
     let mut decoded: Option<crate::media::DecodedSource> = None;
     let mut ok = true;
     for mut j in jobs {
@@ -97,7 +97,11 @@ fn run_photo_cancellable(jobs: Vec<RenderJob>, cancel: Option<&AtomicBool>) -> O
         {
             j.source = crate::media::SourceRef::Loaded(Box::new(src.clone()));
         }
-        let r = j.run();
+        // (a macOS Colour render still waiting for its slot gives up when the build is cancelled)
+        let r = match cancel {
+            Some(c) => crate::files::with_job_cancel(c, || j.run()),
+            None => j.run(),
+        };
         ok &= r.rendered.is_ok();
         if decoded.is_none() {
             decoded = r.loaded;
@@ -317,13 +321,41 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
 /// vendor raws and DNGs (whose tone can come from their preview); only those proxies go stale when
 /// the fit changes; an older encoding makes any proxy stale).
 #[cfg(not(target_arch = "wasm32"))]
-type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool);
+pub(crate) type SmartJob = (lightcraft_catalog::PhotoId, std::path::PathBuf, Option<crate::media::SourceRef>, bool, crate::smart::LocalWant);
+
+/// What a photo's smart preview should say about local camera profiles and macOS Colour, and how to load the original
+/// for it: a photo on a usable local profile builds its proxy with that profile's colour, and one on macOS Colour with
+/// the macOS base where this computer can make it (the proxy stands in for the original, so it must look like it);
+/// every other photo keeps Camera Matching, whatever it is set to.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn smart_local(photo: &lightcraft_catalog::Photo) -> (Option<crate::media::LoadOptions>, crate::smart::LocalWant) {
+    smart_colour(photo, crate::files::macos_lists(photo))
+}
+
+/// [`smart_local`], told whether this computer's raw decoder lists the photo's camera.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn smart_colour(photo: &lightcraft_catalog::Photo, macos_here: bool) -> (Option<crate::media::LoadOptions>, crate::smart::LocalWant) {
+    use crate::smart::LocalWant;
+    if photo.develop.profile.camera_colour == lightcraft_develop::CameraColour::Macos && photo.fitted_look() {
+        return if macos_here { (Some(crate::media::LoadOptions::of(&photo.develop)), LocalWant::Macos) } else { (None, LocalWant::MacosElsewhere) };
+    }
+    let on_local = photo.develop.profile.camera_colour == lightcraft_develop::CameraColour::Local && photo.fitted_look();
+    let id = photo.develop.profile.camera_profile.as_deref().filter(|_| on_local);
+    match id.and_then(|id| crate::camera_profiles::local_profile(id).map(|l| (id, l))) {
+        Some((id, l)) if l.is_for_camera(&photo.meta.camera) => {
+            let options = crate::media::LoadOptions::of(&photo.develop);
+            (Some(options), LocalWant::Is(crate::smart::local_stamp(id, options.profile_key.unwrap_or_default())))
+        }
+        _ if on_local => (None, LocalWant::Keep),
+        _ => (None, LocalWant::No),
+    }
+}
 
 /// DNG tone fits also go stale, although DNGs keep their own matrix and Kelvin white-balance scale.
 /// So do preview-only raws: their proxy is the embedded JPEG, read in the colour space the raw
 /// declares, which a look version bump can change too (#2654).
 #[cfg(not(target_arch = "wasm32"))]
-fn preview_fitted_look(photo: &lightcraft_catalog::Photo) -> bool {
+pub(crate) fn preview_fitted_look(photo: &lightcraft_catalog::Photo) -> bool {
     photo.fitted_look()
         || (photo.develops_raw() && photo.format.eq_ignore_ascii_case("DNG"))
         || (photo.kind == lightcraft_catalog::MediaKind::Raw && photo.preview_only.is_some())
@@ -337,7 +369,7 @@ static SMART_WRITE: std::sync::Mutex<()> = std::sync::Mutex::new(());
 /// What Build / Discard Smart Previews did.
 #[cfg(not(target_arch = "wasm32"))]
 #[derive(Default)]
-struct SmartCounts {
+pub(crate) struct SmartCounts {
     /// Proxies there now (complete ones kept, missing or damaged ones written).
     built: usize,
     /// Of those, damaged ones (cut short by a crash or a full drive) that were rebuilt.
@@ -360,10 +392,12 @@ struct SmartCounts {
 fn original_only(source: crate::media::SourceRef) -> Option<crate::media::SourceRef> {
     use crate::media::SourceRef;
     match source {
-        SourceRef::File { path, max_edge, loader, denoise, .. } => {
-            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, reduced: None })
+        SourceRef::File { path, max_edge, loader, denoise, options, .. } => {
+            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, reduced: None, options })
         }
         SourceRef::Loaded(d) if d.info.is_some() && !d.from_proxy && !d.reduced => Some(SourceRef::Loaded(d)),
+        // (Use Smart Previews for editing: the original behind the preferred proxy)
+        SourceRef::Preferred { otherwise, .. } => original_only(*otherwise),
         _ => None,
     }
 }
@@ -372,7 +406,7 @@ fn original_only(source: crate::media::SourceRef) -> Option<crate::media::Source
 /// `custom`: the folder was chosen (on another drive, perhaps): it must be there, it is never
 /// recreated. With `state`, progress and cancel.
 #[cfg(not(target_arch = "wasm32"))]
-fn smart_run(
+pub(crate) fn smart_run(
     dir: &std::path::Path,
     custom: bool,
     discard: bool,
@@ -388,7 +422,7 @@ fn smart_run(
             std::fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
     }
-    for (id, path, source, look) in jobs {
+    for (id, path, source, look, local) in jobs {
         if state.is_some_and(|(st, _)| st.cancel.load(Ordering::Relaxed)) {
             break;
         }
@@ -406,9 +440,21 @@ fn smart_run(
             // fit (see `smart::ENCODE_VERSION` and `camera_preview::LOOK_VERSION`) when its
             // original can be read
             let damaged = path.exists();
-            let stale = damaged && crate::smart::is_stale_for(&path, look);
+            let stale = damaged && (crate::smart::is_stale_for(&path, look) || crate::smart::is_local_stale(&path, &local));
             if damaged && !stale && crate::smart::is_valid(&path) {
                 n.built += 1;
+            } else if local == crate::smart::LocalWant::MacosElsewhere {
+                // (a macOS Colour photo on a computer that can't make it: no proxy with other colours is written; an
+                // older one is kept, it may be the only copy; a missing or damaged one is left for a Mac)
+                if crate::smart::is_valid(&path) {
+                    n.built += 1;
+                    n.stale_kept += 1;
+                } else {
+                    n.failed.push(json!([id.0, "macOS Colour isn't available on this computer"]));
+                    if let Some((st, _)) = state {
+                        st.failed.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
             } else {
                 // a stale proxy is rebuilt from the original only: never from itself (the file
                 // fallback or a source decoded from a proxy would stamp the old look as current)
@@ -421,7 +467,7 @@ fn smart_run(
                     .and_then(|s| s.load_source())
                     .and_then(|src| {
                         let info = src.info_or(Default::default());
-                        crate::smart::encode(&src.image, Some(&info))
+                        crate::smart::encode_for(&src.image, Some(&info), &local)
                     })
                     .and_then(|b| {
                         let parent = path.parent().ok_or_else(|| format!("{}: no parent folder", path.display()))?;
@@ -486,8 +532,11 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
             continue;
         }
         let path = crate::smart::sharded_file_path(&dir, &ph);
-        let source = (!discard).then(|| s.media.source_ref(&ph, crate::media::SourceLevel::Preview));
-        jobs.push((id, path, source, preview_fitted_look(&ph)));
+        // (a smart preview keeps the camera matching whatever the photo is set to, except for a local camera profile:
+        // it stands in for the original)
+        let (options, local) = smart_local(&ph);
+        let source = (!discard).then(|| s.media.source_ref_for(&ph, crate::media::SourceLevel::Preview, options.unwrap_or_default()));
+        jobs.push((id, path, source, preview_fitted_look(&ph), local));
     }
     let custom = s.smart_previews_dir.is_some();
     if background {
@@ -532,7 +581,15 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
     let photos: Vec<_> = s.catalog.photos().filter(|p| matches!(p.source, lightcraft_catalog::Source::File { .. })).collect();
     let jobs: Vec<SmartJob> = photos
         .iter()
-        .map(|p| (p.id, crate::smart::sharded_file_path(&dir, p), Some(s.media.origin_ref(&p.source, max_edge)), preview_fitted_look(p)))
+        .map(|p| {
+            // (a photo on a local profile is rebuilt with that profile's colour; any other from the original at preview size)
+            let (options, local) = smart_local(p);
+            let mut source = s.media.origin_ref(&p.source, max_edge);
+            if let (Some(o), crate::media::SourceRef::File { options, .. }) = (options, &mut source) {
+                *options = o;
+            }
+            (p.id, crate::smart::sharded_file_path(&dir, p), Some(source), preview_fitted_look(p), local)
+        })
         .collect();
     std::thread::Builder::new()
         .name("lc-smart-look".into())
@@ -546,8 +603,8 @@ pub(crate) fn refresh_stale_smart_previews(s: &mut Session) -> Option<std::threa
 fn refresh_stale(dir: &std::path::Path, jobs: Vec<SmartJob>) {
     let stale: Vec<SmartJob> = jobs
         .into_iter()
-        .map(|(id, path, source, look)| (id, crate::smart::existing_file_path(dir, path), source, look))
-        .filter(|(_, path, _, look)| crate::smart::is_stale_for(path, *look))
+        .map(|(id, path, source, look, local)| (id, crate::smart::existing_file_path(dir, path), source, look, local))
+        .filter(|(_, path, _, look, local)| crate::smart::is_stale_for(path, *look) || crate::smart::is_local_stale(path, local))
         .collect();
     if !stale.is_empty() {
         // `custom`: the folder is there already, and must not be recreated if it went away since
@@ -720,8 +777,15 @@ mod tests {
         let mut jobs = jobs_for(&mut s, id, Some(512));
         assert_eq!(jobs.len(), 2, "view and thumbnail");
         assert!(jobs[0].view_cache.is_some(), "the view renders first");
-        jobs[1].source =
-            SourceRef::File { path: "/nonexistent/photo.arw".into(), max_edge: 512, loader: None, fallback: None, denoise: None, reduced: None };
+        jobs[1].source = SourceRef::File {
+            path: "/nonexistent/photo.arw".into(),
+            max_edge: 512,
+            loader: None,
+            fallback: None,
+            denoise: None,
+            reduced: None,
+            options: Default::default(),
+        };
         assert!(run_photo(jobs), "the thumbnail rendered from the view's decoded source");
     }
 

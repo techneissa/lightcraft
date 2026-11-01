@@ -24,6 +24,9 @@ pub type OpenUrlFn = Box<dyn FnMut(&str) -> Result<(), String>>;
 /// Open a file in an application (`app` = "" for the system's default one).
 pub type OpenWithFn = Box<dyn FnMut(&str, &str) -> Result<(), String>>;
 
+/// [`OpenWithFn`] other threads can use, so an editor's slow start doesn't hold the frame.
+pub type SharedOpenWith = std::sync::Arc<dyn Fn(&str, &str) -> Result<(), String> + Send + Sync>;
+
 /// Open several files with one start of an application (`app` as for [`OpenWithFn`]).
 pub type OpenAllWithFn = Box<dyn FnMut(&[String], &str) -> Result<(), String>>;
 
@@ -38,6 +41,11 @@ pub type ScreenProfileFn = Box<dyn FnMut() -> Option<Vec<u8>>>;
 /// Whether an external editor can be started (its name as in [`Services::open_with`]); the
 /// error says why not and what to do (e.g. PhotoCraft isn't installed).
 pub type CheckEditorFn = Box<dyn Fn(&str) -> Result<(), String>>;
+
+/// Whether the installed editor (its name as in [`Services::open_with`]) opens a layer list
+/// (`.pcstack`), so Open as Layers hands it one document. The official PhotoCraft doesn't: it is
+/// given the files one by one.
+pub type LayersSupportFn = Box<dyn Fn(&str) -> bool>;
 
 /// Something the host does with the session (web: back up or restore the library in browser
 /// storage); the work may finish asynchronously.
@@ -108,10 +116,13 @@ pub struct Services {
     pub pick_folder: Option<PickFolder>,
     /// Open a Lightroom Classic `.lrcat` catalog for read-only import.
     pub pick_lightroom_catalog: Option<PickFolder>,
-    /// Open a web link in the browser (Help menu, About, Discord button).
+    /// Open a web link in the browser (Help menu, About).
     pub open_url: Option<OpenUrlFn>,
     /// Open a file in an external editor (Edit in External Editor; desktop only).
     pub open_with: Option<OpenWithFn>,
+    /// The same opener for a worker thread: with it, Edit In and Open as Layers hand their files
+    /// to the editor in the background (desktop only).
+    pub open_with_shared: Option<SharedOpenWith>,
     /// Open several files with one start of the editor (Open Original; desktop only): an editor
     /// that keeps one window takes them all. None = [`Services::open_with`] for each.
     pub open_all_with: Option<OpenAllWithFn>,
@@ -121,6 +132,9 @@ pub struct Services {
     /// Checked before Edit In renders a copy, so a missing editor leaves no copy behind (none =
     /// assume it can).
     pub check_editor: Option<CheckEditorFn>,
+    /// Whether the editor opens a `.pcstack` layer list (Open as Layers in PhotoCraft). None =
+    /// it doesn't, and the files open one by one.
+    pub layers_support: Option<LayersSupportFn>,
     /// File ▸ Back Up Library…: save the whole library (catalog and originals) as one file the
     /// user keeps (web only: there the library lives in browser storage, which the browser may
     /// clear; on the desktop it is a folder backed up like any other).
@@ -129,4 +143,8 @@ pub struct Services {
     pub restore_library: Option<HostAction>,
     /// The system appearance for Appearance Mode ▸ Auto, ahead of egui's own report.
     pub system_theme: Option<SystemThemeFn>,
+    /// Save dialog for the Keyboard Shortcuts window's Export… (a `.json` file; desktop only).
+    pub save_shortcuts_file: Option<SaveFile>,
+    /// Open dialog for its Import… (one `.json` file; desktop only).
+    pub pick_shortcuts_file: Option<PickFiles>,
 }

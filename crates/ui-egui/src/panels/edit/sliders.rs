@@ -67,8 +67,22 @@ pub(super) fn rel_to_k(r: f64) -> f64 {
 /// Browse…. Like the menu bar's menus, the dropdown and each submenu stay inside the window and
 /// scroll when their rows don't fit (issue #2059: a folder of many imported profiles ran past the
 /// window's bottom edge). `below` is the dropdown's bottom edge, which the menu hangs from.
-pub(super) fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, below: f32) {
-    crate::menu_level::level(ui, 1, Some(below), |ui| profile_menu_rows(app, ui, d, below));
+pub(super) fn profile_menu(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    d: &DevelopSettings,
+    below: f32,
+    find: &crate::widgets::dropdown_search::Filter,
+    profiles: &[(String, String)],
+) {
+    crate::menu_level::level(ui, 1, Some(below), |ui| {
+        // typed text lists the matching profiles from every group instead
+        if find.filtering() || find.field_shown() {
+            super::profile_search::rows(app, ui, d, find, profiles);
+        } else {
+            profile_menu_rows(app, ui, d, below);
+        }
+    });
 }
 
 fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, below: f32) {
@@ -91,6 +105,27 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
     let heading = |ui: &mut egui::Ui, s: &str| {
         ui.label(egui::RichText::new(crate::i18n::tr(s)).font(t.semibold(11.5)).color(t.text_dim));
     };
+    // Camera Matching: how a raw's colour starts, whatever profile look is applied on top
+    let mut colour_pick: (Option<crate::panels::camera_colour::Row>, Option<crate::panels::camera_colour::Row>) = (None, None);
+    if let Some(photo) = app.session.active()
+        && crate::panels::camera_colour::offered(app, photo)
+    {
+        for row in crate::panels::camera_colour::rows(app, photo, d) {
+            // (a local profile's name is the user's own: it is not translated; a greyed row is a stored profile this
+            // computer can't use for the photo)
+            let shown = if row.profile.is_some() { row.label.clone() } else { crate::i18n::tr(&row.label).to_string() };
+            let r = ui.add_enabled(row.enabled, egui::Button::selectable(row.applied(d), shown)).on_hover_text(row.tip.clone());
+            register(ui, format!("profileMenu:cameraColour:{}", row.key()), r.rect);
+            if r.clicked() {
+                colour_pick.0 = Some(row.clone());
+            }
+            if r.hovered() {
+                colour_pick.1 = Some(row);
+            }
+        }
+        crate::macos_colour::picker::menu_item(app, ui, photo);
+        ui.separator();
+    }
     for (title, key, ids) in [("Favorites", "fav", app.session.profile_favorites.clone()), ("Recent", "recent", app.session.profile_recent.clone())] {
         let list: Vec<_> = ids.iter().filter_map(|id| app.session.profile_info(id).map(|(name, _)| (id.as_str(), name))).collect();
         if list.is_empty() {
@@ -165,6 +200,15 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
         app.hover_preview =
             Some(crate::HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::profile_label(hovered_id, name)), settings: s });
     }
+    if let Some(row) = &colour_pick.1
+        && !row.applied(d)
+    {
+        let shown = if row.profile.is_some() { row.label.clone() } else { crate::i18n::tr(&row.label).to_string() };
+        app.hover_preview = Some(crate::HoverPreview { label: crate::i18n::tr_format!("Profile: {}", shown), settings: row.with(d) });
+    }
+    if let Some(row) = colour_pick.0 {
+        let _ = app.run("develop.profile", row.params());
+    }
     if let Some(id) = pick.0 {
         let _ = app.run("develop.profile", json!({"id": id}));
     }
@@ -205,6 +249,7 @@ pub(super) fn section(
             }
             ui.close();
         }
+        crate::panels::edit_sections::menu(app, ui, id);
     });
     if open {
         body(app, ui, d);

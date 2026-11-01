@@ -116,7 +116,8 @@ impl Selection {
             self.active = Some(id);
         }
     }
-    /// Shift-click: select the range between the active photo and `id` in `order`.
+    /// Shift-click: select the range between the active photo and `id` in `order`, added in order
+    /// from the active photo towards `id`.
     pub fn extend_to(&mut self, id: PhotoId, order: &[PhotoId]) {
         let anchor = self.active.unwrap_or(id);
         let (Some(a), Some(b)) = (order.iter().position(|x| *x == anchor), order.iter().position(|x| *x == id)) else {
@@ -124,9 +125,14 @@ impl Selection {
             return;
         };
         let (lo, hi) = (a.min(b), a.max(b));
-        for x in &order[lo..=hi] {
-            if !self.ids.contains(x) {
-                self.ids.push(*x);
+        // walk from the anchor towards `id`, so the pick order runs outward from the anchor
+        let mut walk = order[lo..=hi].to_vec();
+        if b < a {
+            walk.reverse();
+        }
+        for x in walk {
+            if !self.ids.contains(&x) {
+                self.ids.push(x);
             }
         }
         self.active = Some(id);
@@ -170,6 +176,11 @@ pub fn filter_chips(f: &Filter, cat: &Catalog) -> Vec<FilterChip> {
             or(&shown)
         };
         add(format!("Flag: {names}"), json!({"flag": Null, "flags": []}));
+    }
+    if let Some(on) = f.ratings_shown().filter(|_| !f.ratings.is_empty()) {
+        let names: Vec<String> =
+            (0u8..).zip(on).filter(|(_, on)| *on).map(|(n, _)| if n == 0 { "Unrated".to_string() } else { format!("{n}★") }).collect();
+        add(format!("Rating: {}", if names.is_empty() { "none".into() } else { names.join(", ") }), json!({"ratings": []}));
     }
     if let Some(shown) = f.labels_shown() {
         let or = |ls: &[lightcraft_catalog::ColorLabel]| ls.iter().map(|l| cat.label_name(*l)).collect::<Vec<_>>().join(" or ");

@@ -15,6 +15,7 @@
 extern crate lightcraft_denoise_core as lightcraft_denoise;
 
 pub mod activity;
+pub mod animated_gif;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod apple_photos;
 pub mod availability;
@@ -31,6 +32,7 @@ pub mod denoise;
 pub mod devices;
 pub mod display;
 pub mod doc_path;
+pub mod edit_copies;
 mod errors;
 pub mod export;
 pub mod face_download;
@@ -39,6 +41,7 @@ pub mod face_tiles;
 mod faces_index;
 #[cfg(not(target_arch = "wasm32"))]
 mod faces_worker;
+pub mod file_trash;
 pub mod files;
 #[cfg(not(target_arch = "wasm32"))]
 mod focus_scan;
@@ -46,6 +49,7 @@ pub mod fonts;
 pub mod guard;
 pub mod import;
 mod import_move;
+pub mod layers;
 pub mod lens_profiles;
 pub mod library;
 mod lightroom_archive;
@@ -54,6 +58,7 @@ pub mod lightroom_folder;
 pub mod lightroom_job;
 mod lightroom_sqlite;
 pub mod logging;
+pub mod macos_colour_job;
 pub mod media;
 pub mod memory;
 pub mod merge;
@@ -72,6 +77,7 @@ pub mod proof;
 pub mod rename;
 pub mod segment;
 pub mod sidecar;
+pub mod sidecar_queue;
 pub mod slide;
 pub mod slide_overlay;
 pub mod slide_template;
@@ -91,6 +97,8 @@ pub use errors::{AiModel, ErrorKind};
 pub use fonts::{CRAFT_FONTS, CraftFont};
 use lightcraft_catalog::{Catalog, Filter, Op, PhotoId, Sort};
 use lightcraft_develop::DevelopSettings;
+/// The known camera and lens names the Info panel's pickers search.
+pub use lightcraft_lensdb::names as camera_names;
 pub use media::{RenderJob, SourceLevel};
 use serde_json::Value;
 pub use view::{Browse, FilterChip, LibrarySource, Selection, SelectionState, filter_chips};
@@ -144,6 +152,9 @@ pub struct UndoEntry {
     pub(crate) retry_inverse: Vec<Op>,
     /// Sidecars still separated from their photo after a failed move or rollback.
     pub(crate) retry_sidecars: Vec<rename::SidecarMove>,
+    /// The local camera profile file whose one-time question this step answered (Switch): undoing the step puts the
+    /// question back (the file leaves `local_profile_asked`), redoing it answers it again.
+    pub(crate) answered_offer: Option<String>,
 }
 
 /// The one photo an undo step changes, when it changes exactly one through its edit, rating, flag,
@@ -230,6 +241,11 @@ pub struct Session {
     /// Auto Sync: edits to the active photo also change the other selected photos (the settings
     /// that changed, nothing else).
     pub auto_sync: bool,
+    /// What Auto Sync is for a library that has no saved choice: the host's default (off for the CLI and
+    /// MCP, on for the desktop app: [`Session::set_auto_sync_default`]).
+    auto_sync_default: bool,
+    /// The user's saved Auto Sync choice for the open library (`prefs.json`), if they made one.
+    auto_sync_chosen: Option<bool>,
     pub catalog: Catalog,
     pub source: LibrarySource,
     pub filter: Filter,
@@ -279,6 +295,10 @@ pub struct Session {
     /// Photos whose automatic XMP sidecar write failed (their folder offline, read-only or full), written again by
     /// [`Session::retry_unsaved_sidecars`] once their file is reachable.
     pub(crate) unsaved_sidecars: std::collections::BTreeSet<PhotoId>,
+    /// Automatic sidecar writes on a worker ([`sidecar_queue`]; the desktop app turns it on).
+    pub(crate) sidecar_queue: Option<Box<sidecar_queue::SidecarQueue>>,
+    /// Moves files to the system Trash (Delete Permanently ▸ Move to Trash); tests swap in a fake.
+    pub(crate) trasher: Arc<dyn file_trash::Trasher>,
     /// AI denoise: the model in use, the photos that have their picture and the work in progress.
     pub(crate) denoise: denoise::State,
     /// Where the host keeps face models (one folder each); `None` where there is no file system (the web).
@@ -377,6 +397,9 @@ pub struct Session {
     pub keyword_sets: Vec<cmd::keywords::KeywordSet>,
     pub keyword_set: Option<String>,
     pub recent_keywords: Vec<String>,
+    /// Local camera profile files (ids) this library has been asked about moving its photos to
+    /// (`cmd::local_profiles`); kept in the library's preferences, so each is asked about once.
+    pub local_profile_asked: Vec<String>,
     /// Before/After: the "before" settings chosen per photo (this session; default: the photo's
     /// import state). See `cmd/before.rs`.
     pub before: std::collections::HashMap<PhotoId, Arc<DevelopSettings>>,
@@ -390,6 +413,8 @@ pub struct Session {
     pub activity: activity::Activity,
     /// The last (or running) slideshow export (`slideshow.export`).
     pub slideshow_export: Option<std::sync::Arc<slideshow_export::ExportRun>>,
+    /// The last (or running) animated GIF export (`export.animatedGif`).
+    pub animated_gif: Option<std::sync::Arc<slideshow_export::ExportRun>>,
     /// The last (or running) Build Previews.
     pub preview_build: Option<std::sync::Arc<cmd::previews::PreviewBuild>>,
     /// Develop defaults applied on import (persisted in prefs.json).
@@ -451,6 +476,8 @@ impl Session {
         Session {
             library_generation: LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             auto_sync: false,
+            auto_sync_default: false,
+            auto_sync_chosen: None,
             catalog: Catalog::new(),
             source: LibrarySource::All,
             filter: Filter::default(),
@@ -476,6 +503,8 @@ impl Session {
             skip_auto_write: false,
             reload_tickets: Default::default(),
             unsaved_sidecars: Default::default(),
+            sidecar_queue: None,
+            trasher: Arc::new(file_trash::SystemTrash),
             denoise: Default::default(),
             face_models_dir: None,
             face_downloads: Default::default(),
@@ -524,12 +553,14 @@ impl Session {
             keyword_sets: Vec::new(),
             keyword_set: None,
             recent_keywords: Vec::new(),
+            local_profile_asked: Vec::new(),
             before: Default::default(),
             import_probes: Default::default(),
             folder_changes: None,
             activity: Default::default(),
             preview_build: None,
             slideshow_export: None,
+            animated_gif: None,
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,
             slideshow: slideshow::PlaybackSettings::default(),
@@ -639,7 +670,14 @@ impl Session {
         let fwd = op.clone();
         let inv = self.apply_through(op, Catalog::apply_new)?;
         self.pending_log.push(fwd);
-        self.undo.push(UndoEntry { label: label.to_string(), op: inv, folder: None, retry_inverse: Vec::new(), retry_sidecars: Vec::new() });
+        self.undo.push(UndoEntry {
+            label: label.to_string(),
+            op: inv,
+            folder: None,
+            retry_inverse: Vec::new(),
+            retry_sidecars: Vec::new(),
+            answered_offer: None,
+        });
         self.commits = self.commits.wrapping_add(1);
         if self.undo.len() > 1000 {
             let mut dropped = self.undo.remove(0);
@@ -759,7 +797,7 @@ impl Session {
         }
         let Some(entries) = self.undo.get(self.undo.len() - n..) else { return };
         // Folder moves and partially applied file steps stay on their own.
-        if entries.iter().any(|e| e.folder.is_some() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty()) {
+        if entries.iter().any(|e| e.folder.is_some() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty() || e.answered_offer.is_some()) {
             return;
         }
         let tail = self.undo.split_off(self.undo.len() - n);
@@ -770,7 +808,21 @@ impl Session {
             folder: None,
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            answered_offer: None,
         });
+    }
+
+    /// A history step that answered the one-time local profile question was undone (`answered` false: the question is
+    /// open again) or redone (`answered` true).
+    fn offer_answered(&mut self, id: Option<&str>, answered: bool) {
+        let Some(id) = id else { return };
+        self.local_profile_asked.retain(|x| x != id);
+        if answered {
+            self.local_profile_asked.push(id.to_owned());
+        }
+        if let Err(e) = self.save_prefs() {
+            log::warn!("local camera profiles: {e}");
+        }
     }
 
     /// Apply without recording undo (interactive previews).
@@ -800,7 +852,9 @@ impl Session {
             folder: e.folder.as_ref().map(FolderMove::reversed),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            answered_offer: e.answered_offer.clone(),
         });
+        self.offer_answered(e.answered_offer.as_deref(), false);
         Ok(e.label)
     }
 
@@ -825,7 +879,9 @@ impl Session {
             folder: e.folder.as_ref().map(FolderMove::reversed),
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
+            answered_offer: e.answered_offer.clone(),
         });
+        self.offer_answered(e.answered_offer.as_deref(), true);
         Ok(e.label)
     }
 
@@ -852,6 +908,10 @@ impl Session {
     /// library follows them (a logged change outside the undo history), so none goes missing; the
     /// folder is only moved back when no file was left behind at its new path.
     fn apply_with_files(&mut self, entry: &mut UndoEntry, fs: &dyn rename::MoveFs) -> Result<Op> {
+        if entry.folder.is_some() || !entry.retry_sidecars.is_empty() || !self.file_moves(&entry.op).is_empty() {
+            // files and their sidecars move: the queued automatic writes land first, where the files are now
+            self.finish_sidecar_writes();
+        }
         // The entry is detached from self.undo/self.redo: include it before any global
         // repair can retire, then retry revalidates it before moving its own packets.
         rename::validate_sidecars(fs, &entry.retry_sidecars).map_err(|e| EngineError::Other(format!("can't move the files back: {e}")))?;
@@ -1000,6 +1060,12 @@ impl Session {
         // switching camera local tone mapping off is a change without copying untouched values.
         old_json["profile"]["camera_local_tone"] = Value::Bool(old.profile.camera_local_tone);
         new_json["profile"]["camera_local_tone"] = Value::Bool(new.profile.camera_local_tone);
+        // Auto is omitted too: going back to Camera Matching must reach the other selected photos
+        old_json["profile"]["camera_colour"] = serde_json::json!(old.profile.camera_colour);
+        new_json["profile"]["camera_colour"] = serde_json::json!(new.profile.camera_colour);
+        // and so is no local profile
+        old_json["profile"]["camera_profile"] = serde_json::json!(old.profile.camera_profile);
+        new_json["profile"]["camera_profile"] = serde_json::json!(new.profile.camera_profile);
         // Compare actual HDR leaves even when persisted defaults omit the whole HDR object.
         old_json["hdr"] = serde_json::json!(old.hdr);
         new_json["hdr"] = serde_json::json!(new.hdr);
@@ -1330,6 +1396,16 @@ impl Session {
     pub fn visible_shared(&mut self) -> (u64, Arc<[PhotoId]>) {
         self.visible();
         (self.visible_gen, self.visible.clone())
+    }
+
+    /// The photos a Develop slider changes: the active photo, and with Auto Sync on every selected
+    /// photo (the active one first).
+    pub fn slider_targets(&self) -> Vec<PhotoId> {
+        let Some(active) = self.active() else { return Vec::new() };
+        if !self.auto_sync || self.selection.ids.len() < 2 || !self.selection.contains(active) {
+            return vec![active];
+        }
+        std::iter::once(active).chain(self.selection.ids.iter().copied().filter(|x| *x != active)).collect()
     }
 
     /// Targets of photo commands: the explicit `ids` (photo ids) or `id` (a photo id) param, else [`Self::selected`].

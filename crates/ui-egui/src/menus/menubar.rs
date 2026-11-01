@@ -75,6 +75,12 @@ pub fn native_item_presentation<'a>(
     shortcut: Option<&'a str>,
 ) -> (String, Option<&'a str>) {
     let label = display_item_label(id, params, label);
+    // a chord is no key equivalent: the native menu gets its text in the label instead
+    // a shortcut with a condition is no key equivalent either: AppKit would run it everywhere
+    let conditional = |sc: &str| native_menu_delivers(sc) && crate::keybinds::model::conditions::text(keymap, id).is_some();
+    if let Some(sc) = shortcut.filter(|sc| crate::keybinds::chord::is_chord(sc) || conditional(sc)) {
+        return (format!("{label} ({})", shortcut_text(sc, true)), None);
+    }
     let borrowed = matches!(id, "view.photoGrid" | "view.squareGrid") && shortcut != crate::shortcuts::shortcut_of(keymap, id);
     match shortcut.filter(|sc| borrowed && native_menu_delivers(sc)) {
         Some(sc) => (format!("{label} ({})", shortcut_text(sc, true)), None),
@@ -150,6 +156,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "dialog.export",
             "app.exportPrevious",
             "@Export with Preset",
+            "dialog.animatedGif",
             "---",
             "library.toggleAutoWriteXmp",
             "@Previews",
@@ -223,6 +230,8 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "view.zoom100",
             "---",
             "view.clipping",
+            "view.clippingShadows",
+            "view.clippingHighlights",
             "view.visualizeHdr",
             "view.softProof",
             "view.maskOverlay",
@@ -287,6 +296,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "---",
             "album.removePhotos",
             "photo.delete",
+            "photo.deleteRejected",
             "photo.restore",
             "photo.deletePermanently",
         ],
@@ -411,7 +421,9 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.filmstrip" => Some(u.filmstrip),
         "view.frameRate" => Some(u.frame_rate),
         "view.histogram" => Some(u.histogram),
-        "view.clipping" => Some(u.show_clipping),
+        "view.clipping" => Some(u.clip_shadows && u.clip_highlights),
+        "view.clippingShadows" => Some(u.clip_shadows),
+        "view.clippingHighlights" => Some(u.clip_highlights),
         "view.visualizeHdr" => Some(u.hdr_visualize),
         "view.softProof" => Some(u.soft_proof),
         "view.maskOverlay" => Some(u.mask_overlay),
@@ -825,7 +837,14 @@ fn node(app: &LightcraftApp, e: &MenuEntry) -> MenuNode {
         "photo.delete" if matches!(app.session.source, lightcraft_engine::LibrarySource::Album(_)) => None,
         _ => shortcut,
     };
-    item(&e.id, Value::Null, live_label(app, &e.id, &e.label), shortcut, e.enabled, checked(app, &e.id))
+    item(
+        &e.id,
+        Value::Null,
+        live_label(app, &e.id, &e.label),
+        shortcut,
+        e.enabled && crate::panels::dialogs::delete_rejected::enabled(app, &e.id),
+        checked(app, &e.id),
+    )
 }
 
 /// Drop leading, trailing and doubled separators (also inside submenus) and empty submenus.
@@ -937,6 +956,15 @@ pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Valu
     if culling_cmd {
         crate::panels::compare::target_active(app, &mut params);
     }
+    if let Some(r) = crate::panels::dialogs::delete_permanently::run_item(app, id, &mut params) {
+        return r;
+    }
+    if let Some(r) = crate::panels::dialogs::delete_rejected::run_item(app, id) {
+        return r;
+    }
+    if let Some(r) = crate::panels::dialogs::quick_delete::run_item(app, id) {
+        return r;
+    }
     if id == "photo.delete" && crate::menus::confirm_delete(app) {
         return Ok(Value::Null);
     }
@@ -999,6 +1027,10 @@ pub fn run_native_command(app: &mut LightcraftApp, id: &str, params: Value) -> N
 /// Human-readable shortcut text for menus: `Cmd+Shift+Z` → `⇧⌘Z` on macOS, `Ctrl+Shift+Z` elsewhere.
 /// On macOS the modifiers come in AppKit's and Apple's HIG order, ⌃⌥⇧⌘, however the binding spells them.
 pub fn shortcut_text(sc: &str, mac: bool) -> String {
+    // a chord (`Cmd+K C`): each step on its own
+    if crate::keybinds::chord::is_chord(sc) {
+        return crate::keybinds::chord::text(sc, mac);
+    }
     if mac {
         let (mut ctrl, mut alt, mut shift, mut cmd) = (false, false, false, false);
         let mut key = "";
@@ -1179,6 +1211,7 @@ fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Opti
                 }
                 let r = ui.add_enabled(*enabled, b);
                 crate::widgets::register(ui, format!("menuitem:{id}"), r.rect);
+                crate::keybinds::context::on_menu_item(ui, &r, id);
                 if *checked == Some(true) {
                     let t = crate::theme::Tokens::get(ui.ctx());
                     let c = egui::Rect::from_center_size(egui::pos2(r.rect.left() + 11.0, r.rect.center().y), egui::vec2(13.0, 13.0));

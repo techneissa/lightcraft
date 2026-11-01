@@ -81,6 +81,8 @@ pub struct ScanOutput {
 
 impl ScanInput {
     pub fn new(s: &mut Session, paths: &[String]) -> (Self, Vec<String>) {
+        // the scan reads sidecars: the queued automatic writes land first
+        s.finish_sidecar_writes();
         let skip = s.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.clone());
         // (no table of the library here: this is the session's thread, and the library may hold
         // millions of photos. The scan looks up what it finds)

@@ -102,6 +102,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.importThumbSize", "Import Thumbnail Size", None, ""),
     ("view.thumbSizeDown", "Decrease Grid Thumbnail Size", Some("-"), "View"),
     ("view.clipping", "Clipping", Some("J"), "View"),
+    ("view.clippingShadows", "Shadow Clipping", None, "View"),
+    ("view.clippingHighlights", "Highlight Clipping", None, "View"),
     ("view.visualizeHdr", "Visualize HDR", None, "View"),
     // in grids S expands/collapses stacks (the engine command it shadows)
     ("view.softProof", "Soft Proofing", Some("S"), "View"),
@@ -210,15 +212,21 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("dialog.pasteSettings", "Paste Selected Settings…", Some("Cmd+Shift+V"), "Edit"),
     ("view.focusSearch", "Find…", Some("Cmd+F"), "Edit"),
     ("dialog.export", "Export…", None, "File"),
-    ("dialog.print", "Print…", Some("Cmd+P"), "File"),
+    ("dialog.print", "Print…", None, "File"),
+    ("view.commandPalette", "Command Palette…", Some("Cmd+P"), "View"),
     ("app.print", "Print to PDF", None, ""),
     ("dialog.book", "Book…", None, "File"),
     ("app.bookPdf", "Export Book as PDF", None, ""),
     ("app.bookJpeg", "Export Book as JPEGs", None, ""),
     ("dialog.contactSheet", "Contact Sheet PDF…", None, "File"),
     ("app.contactSheet", "Export Contact Sheet PDF", None, ""),
+    ("dialog.animatedGif", "Export Animated GIF…", None, "File"),
+    ("app.animatedGif", "Export Animated GIF", None, ""),
     ("photo.editInPhotoCraft", "Edit in PhotoCraft", Some("Cmd+Shift+E"), "Photo>Edit In"),
     ("photo.editInExternal", "Edit in Other Editor", Some("Cmd+Alt+E"), "Photo>Edit In"),
+    // {ids?, app?, wait?, format?, colorSpace?, bitDepth?, dir?}: two or more photos, rendered with their
+    // edits, become the layers of one new PhotoCraft document (the active photo on top)
+    ("photo.openAsLayersInPhotocraft", "Open as Layers in PhotoCraft…", None, "Photo>Edit In"),
     // {ids?, app?}: the original files themselves (a raw stays a raw: no render, no copy), opened
     // in the other editor, e.g. a raw developer
     ("photo.openOriginalInExternal", "Open Original in Other Editor (RAW, no copy)", None, "Photo>Edit In"),
@@ -277,6 +285,37 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.shortcuts", "Keyboard Shortcuts", Some("Cmd+/"), "Help"),
     ("app.setShortcut", "Set Keyboard Shortcut", None, ""),
     ("app.resetShortcuts", "Reset All Keyboard Shortcuts", None, ""),
+    ("app.shortcutContexts", "List Shortcut Conditions", None, ""),
+    ("app.exportShortcuts", "Export Keyboard Shortcuts", None, ""),
+    ("app.importShortcuts", "Import Keyboard Shortcuts", None, ""),
+    // opens the Assign Shortcut box for {id}, in {slot} 1 or 2 (the first free one by default)
+    ("app.assignShortcut", "Assign Shortcut…", None, ""),
+    // the photo menu's arrangement (Settings ▸ Photo Menu): {items} = its slots in order
+    ("photoMenu.get", "Photo Menu Items", None, ""),
+    ("photoMenu.set", "Set Photo Menu Items", None, ""),
+    ("photoMenu.reset", "Reset Photo Menu", None, ""),
+    // its three presets ({slot} 1 to 3) and the .json backup ({path}; a dialog asks without one)
+    ("photoMenu.savePreset", "Save Photo Menu to Preset", None, ""),
+    ("photoMenu.switchPreset", "Switch Photo Menu Preset", None, ""),
+    ("photoMenu.clearPreset", "Clear Photo Menu Preset", None, ""),
+    ("photoMenu.undoPreset", "Undo Photo Menu Preset Switch", None, ""),
+    ("photoMenu.export", "Export Right-Click Menu…", None, ""),
+    ("photoMenu.import", "Import Right-Click Menu…", None, ""),
+    // the Edit panel's sections (header right-click menu): {order?, hidden?}; {section, show?};
+    // {section, direction: up | down | before}
+    ("view.editSections", "Arrange Edit Sections", None, ""),
+    ("view.editSectionShow", "Show or Hide Edit Section", None, ""),
+    ("view.editSectionMove", "Move Edit Section", None, ""),
+    ("view.editSectionsReset", "Reset Edit Sections", None, ""),
+    // the lens database folder (Settings ▸ Import ▸ Lens profiles): {dir} = a lensfun folder, null clears it
+    ("lensDatabase.get", "Lens Database Folder", None, ""),
+    ("lensDatabase.set", "Set Lens Database Folder", None, ""),
+    ("lensDatabase.reload", "Reload Lens Database", None, ""),
+    // the top bar's items (Settings ▸ Top Bar): {hidden} = the ids turned off; {item, shown} = one
+    ("topBar.get", "Top Bar Items", None, ""),
+    ("topBar.set", "Set Top Bar Items", None, ""),
+    ("topBar.setItem", "Show or Hide Top Bar Item", None, ""),
+    ("topBar.reset", "Reset Top Bar", None, ""),
     ("app.export", "Export Now", None, ""),
     ("app.showInFinder", "Show in Finder", Some("Cmd+R"), "Photo"),
     ("app.showInFolders", "Show in Folders", None, "Photo"),

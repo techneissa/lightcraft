@@ -6,6 +6,7 @@
 //!   catalog.snap   catalog.log      (lightcraft-catalog journal)
 //!   presets.json   view.json        (user presets + favourites; last source/sort/selection)
 //!   prefs.json     (library preferences: XMP sidecars, import defaults, cache size, last export)
+//!   auto-denoise.json  (photos Auto AI Denoise handled when they were opened; see `denoise/auto.rs`)
 //!   thumbs/        (rendered thumbnail cache, safe to delete)
 //!   Originals/     (photos imported with "copy into library")
 //! ```
@@ -152,6 +153,19 @@ pub struct Library {
     lock: Option<LibraryLock>,
 }
 
+impl Library {
+    /// A small file of the library's own beside `prefs.json`: `Ok(None)` if it is missing, an error if it cannot be read
+    /// or is larger than `max` bytes (never read whole).
+    pub(crate) fn read_file(&mut self, name: &str, max: usize) -> std::io::Result<Option<Vec<u8>>> {
+        self.files.read_capped(name, max)
+    }
+
+    /// Replace such a file (atomically).
+    pub(crate) fn write_file(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        self.files.write_atomic(name, data)
+    }
+}
+
 /// Where a library's files live (see [`Session::open_library_in`]).
 pub struct LibraryStores {
     /// Shown as the library's location (`library.info`).
@@ -281,6 +295,8 @@ struct PrefsFile {
     keyword_sets: Vec<crate::cmd::keywords::KeywordSet>,
     keyword_set: Option<String>,
     recent_keywords: Vec<String>,
+    /// Local camera profile files this library was asked about (`cmd::local_profiles`).
+    local_profile_asked: Vec<String>,
     /// Develop defaults for imported photos.
     import: crate::import::ImportDefaults,
     /// Thumbnail disk cache budget (MB, 0 = default).
@@ -300,6 +316,8 @@ struct PrefsFile {
     slide_titles: crate::slide_title::TitleSettings,
     /// A view holds the photos it shows until it is refreshed (`library.holdView`).
     hold_view: bool,
+    /// Auto Sync as the user last set it (missing = the host's default).
+    auto_sync: Option<bool>,
 }
 
 fn presets_json(s: &Session) -> String {
@@ -500,6 +518,8 @@ impl Session {
 
     /// Open `stores`; the new library takes `lock` once nothing can fail any more.
     fn open_stores(&mut self, stores: LibraryStores, seed_demo: bool, lock: &mut Option<LibraryLock>) -> Result<()> {
+        // the queued sidecar writes belong to the library being left: they land (and are noted) first
+        self.finish_sidecar_writes();
         let LibraryStores { dir, catalog, mut files, on_disk } = stores;
         self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));
         // the current library may be these same files: let its background snapshot land first
@@ -508,6 +528,8 @@ impl Session {
         {
             log::error!("library: {e}");
         }
+        // what Auto AI Denoise recorded belongs to the library being left
+        self.denoise_auto_flush(true);
         // Photo ids belong to one library; denoise work must not carry into the next.
         self.denoise.library_changed();
         self.media.denoise.clear();
@@ -558,6 +580,7 @@ impl Session {
         self.keyword_sets = prefs.keyword_sets;
         self.keyword_set = prefs.keyword_set;
         self.recent_keywords = prefs.recent_keywords;
+        self.local_profile_asked = prefs.local_profile_asked;
         self.import_defaults = prefs.import;
         self.cache_mb = prefs.cache_mb;
         self.slideshow = prefs.slideshow.sanitized();
@@ -566,6 +589,8 @@ impl Session {
         self.slide_titles = prefs.slide_titles.sanitized();
         self.forget_local_days = prefs.forget_local_days.unwrap_or(lightcraft_catalog::DEFAULT_FORGET_DAYS);
         self.hold_view = prefs.hold_view;
+        self.auto_sync_chosen = prefs.auto_sync;
+        self.auto_sync = prefs.auto_sync.unwrap_or(self.auto_sync_default);
         self.refresh_view();
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
         if let Some(d) = &self.smart_previews_dir {
@@ -705,6 +730,10 @@ impl Session {
             log::error!("library: compaction: {e}");
             lib.last_error = Some(format!("compaction: {e}"));
         }
+        // what Auto AI Denoise recorded goes to disk once the catalog edits it belongs to are saved
+        if self.pending_log.is_empty() {
+            self.denoise_auto_flush(false);
+        }
         let due = self.library.as_ref().is_some_and(|l| l.presets_saved.differs(self) && !l.blocked.contains(&"presets.json"));
         if !due {
             return Ok(());
@@ -736,7 +765,7 @@ impl Session {
     pub fn persist_if_dirty(&mut self) {
         let backing_off = self.library.as_ref().and_then(|l| l.retry_at).is_some_and(|t| web_time::Instant::now() < t);
         let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some());
-        if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved) && !backing_off {
+        if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved || self.denoise_auto_pending()) && !backing_off {
             let _ = self.persist();
         } else if let Some(lib) = self.library.as_mut() {
             poll_compaction(lib);
@@ -760,11 +789,15 @@ impl Session {
     /// holding everything in memory, so it saves those ops too (the log handle may be the only
     /// thing that's broken). Fails only if nothing could be saved; the ops then stay queued.
     pub fn close_library(&mut self) -> Result<()> {
+        self.finish_sidecar_writes();
         if self.library.is_none() {
             return Ok(());
         }
         let _ = self.end_interaction();
         let persisted = self.persist();
+        if persisted.is_ok() {
+            self.denoise_auto_flush(true);
+        }
         self.save_view();
         let unlogged = if persisted.is_err() { self.pending_log.len() as u64 } else { 0 };
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
@@ -847,6 +880,7 @@ impl Session {
             keyword_sets: self.keyword_sets.clone(),
             keyword_set: self.keyword_set.clone(),
             recent_keywords: self.recent_keywords.clone(),
+            local_profile_asked: self.local_profile_asked.clone(),
             import: self.import_defaults.clone(),
             cache_mb: self.cache_mb,
             smart_previews_dir: self.smart_previews_dir.as_ref().map(|d| d.to_string_lossy().to_string()),
@@ -856,6 +890,7 @@ impl Session {
             slide_overlays: self.slide_overlays.clone(),
             slide_titles: self.slide_titles.clone(),
             hold_view: self.hold_view,
+            auto_sync: self.auto_sync_chosen,
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
@@ -865,6 +900,26 @@ impl Session {
             ));
         }
         lib.files.write_atomic("prefs.json", &v).map_err(|e| EngineError::Other(format!("prefs: {e}")))
+    }
+
+    /// Turn Auto Sync on or off as the user's choice: it is kept in the library's preferences, so it
+    /// survives a restart. A preferences file that can't be written is logged; the choice still
+    /// holds for this session.
+    pub fn set_auto_sync(&mut self, on: bool) {
+        self.auto_sync = on;
+        self.auto_sync_chosen = Some(on);
+        if let Err(e) = self.save_prefs() {
+            log::error!("library: auto sync: {e}");
+        }
+    }
+
+    /// What Auto Sync is where the user has not chosen yet (the desktop app starts it on, so editing
+    /// a selection edits every selected photo). A choice already saved for the open library stays.
+    pub fn set_auto_sync_default(&mut self, on: bool) {
+        self.auto_sync_default = on;
+        if self.auto_sync_chosen.is_none() {
+            self.auto_sync = on;
+        }
     }
 
     /// Writes a settings file of the open library (a no-op for an in-memory session); a file that

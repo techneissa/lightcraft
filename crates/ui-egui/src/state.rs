@@ -2,10 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
+mod delete_files;
 mod dialog;
 mod settings;
 mod view;
 
+pub use delete_files::DeleteFiles;
 pub use dialog::{Dialog, NameEdit, SyncCounts, default_preset_groups};
 pub use settings::{
     AppSettings, AppearanceMode, DarkTheme, EditFile, EditFormat, EditSpace, GridBadges, KeywordChips, LOUPE_EDGE_CEILING, LOUPE_EDGE_STEP,
@@ -69,6 +71,10 @@ pub struct UiState {
     #[serde(skip)]
     pub zoom_anim: bool,
     pub before_after: BeforeAfter,
+    /// Where the line of the Before/After split views is, as a fraction of the part of the photo on
+    /// screen (`None`: the middle); both splits share it, and a session starts with it centred.
+    #[serde(skip)]
+    pub split_at: Option<f32>,
     pub thumb_size: f32,
     /// Import review thumbnail size in points, independent of the library grid.
     pub import_thumb_size: f32,
@@ -78,7 +84,18 @@ pub struct UiState {
     pub open_flyouts: Vec<String>,
     /// Solo Mode (`view.soloSections`): opening one Edit section closes the others.
     pub single_panel: bool,
-    pub show_clipping: bool,
+    /// The shadow clipping overlay (blue) is on: the histogram's left triangle, `view.clippingShadows`.
+    pub clip_shadows: bool,
+    /// The highlight clipping overlay (red) is on: the histogram's right triangle, `view.clippingHighlights`.
+    pub clip_highlights: bool,
+    /// Read from settings saved before the two sides were separate (`view.clipping`'s single
+    /// flag); [`Self::sanitized`] turns it into both sides and it is never written back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_clipping: Option<bool>,
+    /// A triangle the pointer rests on (shadows, highlights) previews its overlay, with the frame
+    /// it was last seen on; see [`crate::panels::clipping::effective_sides`].
+    #[serde(skip)]
+    pub clip_hover: ([bool; 2], u64),
     pub histogram: bool,
     /// Soft proofing (S in the loupe): render as `proof` would hold the photo.
     pub soft_proof: bool,
@@ -122,6 +139,8 @@ pub struct UiState {
     pub face_boxes: bool,
     /// The left sidebar's sections: their order, which are hidden and which are folded shut.
     pub sidebar: crate::sidebar::SidebarLayout,
+    /// The Edit panel's sections: their order and which are hidden (`panels/edit_sections.rs`).
+    pub edit_sections: crate::panels::edit_sections::EditSectionLayout,
     /// What settings files said before [`UiState::sidebar`]: the ids of the folded sections. Read
     /// so they stay folded ([`UiState::sanitized`] moves them over), never written.
     #[serde(skip_serializing)]
@@ -168,6 +187,9 @@ pub struct UiState {
     /// scanning).
     #[serde(skip)]
     pub auto_import_at: f64,
+    /// what the watched folder's last polls found (see [`crate::auto_import_watch`])
+    #[serde(skip)]
+    pub auto_watch: crate::auto_import_watch::Watch,
     /// The watched folder that couldn't be listed and why, as the last listing found it: logged once when it
     /// starts and once when the folder can be read again, and shown in Settings ▸ Import.
     #[serde(skip)]
@@ -193,6 +215,9 @@ pub struct UiState {
     /// Focus the search field on the next frame (Edit → Find…).
     #[serde(skip)]
     pub focus_search: bool,
+    /// The Command Palette (⌘P) while it is open.
+    #[serde(skip)]
+    pub palette: Option<crate::panels::command_palette::State>,
     /// Put the cursor in the Keywords panel's Add keyword box (Add Keywords): the egui pass it was
     /// asked on. A box drawn more than [`FOCUS_KEYWORDS_PASSES`] passes later doesn't take it, so
     /// a request made while the panel can't show expires.
@@ -396,12 +421,16 @@ impl Default for UiState {
             click_zoom: 100,
             zoom_anim: false,
             before_after: BeforeAfter::Off,
+            split_at: None,
             thumb_size: 220.0,
             import_thumb_size: crate::import::THUMB_SIZE_DEFAULT,
             open_sections: vec!["light".into()],
             open_flyouts: vec![],
             single_panel: false,
-            show_clipping: false,
+            clip_shadows: false,
+            clip_highlights: false,
+            show_clipping: None,
+            clip_hover: ([false; 2], 0),
             histogram: true,
             soft_proof: false,
             proof: lightcraft_engine::pipeline::Proof { dest_warning: false, ..Default::default() },
@@ -423,6 +452,7 @@ impl Default for UiState {
             show_counts: true,
             face_boxes: true,
             sidebar: Default::default(),
+            edit_sections: Default::default(),
             collapsed_sidebar: Vec::new(),
             name_edit: None,
             person_page: None,
@@ -440,12 +470,14 @@ impl Default for UiState {
             external_edits: Vec::new(),
             was_focused: true,
             auto_import_at: 0.0,
+            auto_watch: Default::default(),
             auto_import_error: None,
             sidecar_retry_at: 0.0,
             sidecars_waiting: 0,
             known_cards: None,
             search: String::new(),
             focus_search: false,
+            palette: None,
             focus_keywords: None,
             renaming_mask: None,
             describe: None,
@@ -596,6 +628,11 @@ impl UiState {
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
         self.brush_size = self.brush_size.clamp(0.002, 0.5);
         self.sidebar.adopt_collapsed(&std::mem::take(&mut self.collapsed_sidebar));
+        if let Some(both) = self.show_clipping.take() {
+            // settings from before the two sides were separate
+            self.clip_shadows |= both;
+            self.clip_highlights |= both;
+        }
         self.dialog = None;
         self.fullscreen = false;
         if !crate::state::PREVIEW_LIMITS.contains(&self.settings.preview_limit) {
