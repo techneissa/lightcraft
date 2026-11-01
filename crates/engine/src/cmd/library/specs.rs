@@ -710,7 +710,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Info",
             [],
             None,
-            "{ids?, title?, caption?, altText?, extendedDescription?, copyright?, copyrightStatus?: unknown|copyrighted|publicDomain, usageTerms?, copyrightUrl?, creator?, location?, city?, state?, country?, gps?: \"lat, lon\" | [lat, lon] | null, keywords?: [..], addKeywords?: [..], removeKeywords?: [..], camera?, lens?, focal?: \"35 mm\", aperture?: \"f/2.8\", shutter?: \"1/250\" | \"2.5\\\"\", iso?: 400 (the camera / lens / exposure values shown and exported; each is stored beside the file's value and null or \"\" resets it; a bad value refuses the call; see photo.resetExif)}",
+            "{ids?, title?, caption?, altText?, extendedDescription?, copyright?, copyrightStatus?: unknown|copyrighted|publicDomain, usageTerms?, copyrightUrl?, creator?, location?, city?, state?, country?, gps?: \"lat, lon\" | [lat, lon] | null, keywords?: [..], addKeywords?: [..], removeKeywords?: [..], camera?, lens?, focal?: \"35 mm\", aperture?: \"f/2.8\", shutter?: \"1/250\" | \"2.5\\\"\", iso?: 400 (the camera / lens / exposure values shown and exported; each is stored beside the file's value and null or \"\" resets it; a bad value refuses the call, and so does a focal length or aperture the photo's lens cannot give, read from its name: \"16-35mm f/4\" takes 16 to 35 mm and f/4 or more; see photo.resetExif)}",
             has_selection,
             |s, p| {
                 let strs =

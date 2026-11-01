@@ -3,8 +3,8 @@
 //! refused ([`refusal`]); a name that says nothing, or something unreadable, sets no limit. Only edits are checked:
 //! the file's own values are shown as they are.
 
-use crate::exif_override::{APERTURE_RANGE, ExifField, FOCAL_RANGE, format_aperture, format_focal};
 use crate::Meta;
+use crate::exif_override::{APERTURE_RANGE, ExifField, FOCAL_RANGE, format_aperture, format_focal};
 
 /// Longest number (in characters) read from a name; a longer one is not a lens spec.
 const MAX_DIGITS: usize = 8;
@@ -27,7 +27,10 @@ impl LensLimits {
     /// limit.
     pub fn of(lens: &str) -> LensLimits {
         let chars: Vec<char> = lens.chars().take(400).collect();
-        LensLimits { focal_mm: (0..chars.len()).find_map(|i| focal_at(&chars, i)), max_aperture: (0..chars.len()).find_map(|i| aperture_at(&chars, i)) }
+        LensLimits {
+            focal_mm: (0..chars.len()).find_map(|i| focal_at(&chars, i)),
+            max_aperture: (0..chars.len()).find_map(|i| aperture_at(&chars, i)),
+        }
     }
 
     /// Why an aperture of `f` is not possible on this lens, if it is not.
@@ -42,7 +45,11 @@ impl LensLimits {
         if mm + FOCAL_SLACK >= lo && mm - FOCAL_SLACK <= hi {
             return None;
         }
-        Some(if lo == hi { format!("This lens is {} mm", format_focal(lo)) } else { format!("This lens covers {}–{} mm", format_focal(lo), format_focal(hi)) })
+        Some(if lo == hi {
+            format!("This lens is {} mm", format_focal(lo))
+        } else {
+            format!("This lens covers {}–{} mm", format_focal(lo), format_focal(hi))
+        })
     }
 }
 

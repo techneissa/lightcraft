@@ -1,6 +1,8 @@
-//! The Info panel's editable camera card: typing in a row edits the selected photos' camera, lens or exposure
-//! value (the file's stays), the pickers search the known names, a bad value says why, Mixed shows where the
-//! selection differs, and the reset buttons (icon only, one size and place) give the file's values back.
+//! The Info panel's editable camera card: at rest it is plain text like the official card; clicking a value opens
+//! a text field for it alone, and typing there edits the selected photos' camera, lens or exposure value (the file's
+//! stays); the pickers search the known names, a bad value says why, an aperture or focal length the lens cannot give
+//! is refused with a "!" that says why, Mixed shows where the selection differs, and the reset buttons (icon only, one
+//! size and place) give the file's values back.
 
 use std::time::Duration;
 
@@ -22,7 +24,7 @@ fn info_panel() -> (Headless, Vec<PhotoId>) {
     for (i, id) in ids.iter().enumerate() {
         let mut m = h.app.session.catalog.photo(*id).unwrap().meta.clone();
         m.camera = "SONY ILCE-7M4".into();
-        m.lens = "FE 50mm F1.8".into();
+        m.lens = "FE 24-105mm F1.8".into();
         m.focal_mm = Some(50.0);
         m.aperture = Some(1.8);
         m.shutter = "1/125".into();
@@ -59,8 +61,10 @@ fn meta(h: &Headless, id: PhotoId) -> lightcraft_catalog::Meta {
     h.app.session.catalog.photo(id).unwrap().meta.clone()
 }
 
+/// Click a value (it turns into a text field) and type over it.
 fn type_into(h: &mut Headless, field: &str, text: &str) {
-    ask(h, "ui.clickWidget", json!({"id": format!("field:exif:{field}")}));
+    ask(h, "ui.clickWidget", json!({"id": format!("exifValue:{field}")}));
+    assert!(has(h, &format!("field:exif:{field}")), "clicking {field} opens its field");
     ask(h, "ui.text", json!({"text": text}));
 }
 
@@ -156,21 +160,167 @@ fn selected_photos_that_differ_say_mixed() {
 #[test]
 fn reset_buttons_are_one_size_in_one_place_on_every_row() {
     let (mut h, ids) = info_panel();
-    let slot_rects: Vec<egui::Rect> = ExifField::ALL.iter().map(|f| rect(&h, &format!("exifResetSlot:{}", f.key()))).collect();
+    assert!(ExifField::ALL.iter().all(|f| !has(&h, &format!("icon:exifReset:{}", f.key()))), "nothing edited, no reset buttons");
     // edit every field of the active photo
     let id = ids[0].0;
     run(
         &mut h,
         "photo.setMeta",
-        json!({"ids": [id], "camera": "Canon EOS R5", "lens": "RF50mm F1.2", "focal": 50.5, "aperture": 1.2, "shutter": "1/8000", "iso": 64}),
+        json!({"ids": [id], "camera": "Canon EOS R5", "lens": "RF50mm F1.2", "focal": 50.4, "aperture": 1.2, "shutter": "1/8000", "iso": 64}),
     );
     run(&mut h, "library.select", json!({"ids": [id], "active": id}));
     let button_rects: Vec<egui::Rect> = ExifField::ALL.iter().map(|f| rect(&h, &format!("icon:exifReset:{}", f.key()))).collect();
-    for (b, s) in button_rects.iter().zip(&slot_rects) {
-        assert_eq!(b.size(), s.size(), "the button fills the slot it had");
+    for b in &button_rects {
         assert_eq!(b.size(), button_rects[0].size(), "one size");
-        assert!((b.min.x - button_rects[0].min.x).abs() < 0.5 && (b.min.x - s.min.x).abs() < 0.5, "one column: {b:?} {s:?}");
+        assert!((b.min.x - button_rects[0].min.x).abs() < 0.5, "one column: {b:?}");
+        assert!(b.width() <= 16.0, "small: {b:?}");
     }
     // no text on them: the button is the code-drawn icon only, named for screen readers
     assert!(!h.painted_text().iter().any(|t| t.contains('↺') || t == "Reset"), "{:?}", h.painted_text());
+}
+
+const KEYS: [&str; 6] = ["camera", "lens", "focal", "shutter", "aperture", "iso"];
+
+#[test]
+fn at_rest_the_card_is_plain_text_with_no_text_box() {
+    let (h, _) = info_panel();
+    for key in KEYS {
+        assert!(has(&h, &format!("exifValue:{key}")), "{key} shows its value as text");
+        assert!(!has(&h, &format!("field:exif:{key}")), "{key} draws no text box at rest");
+    }
+    assert!(!has(&h, "button:exifResetAll") && !has(&h, "exifAlert:aperture"), "no Reset All, no alert while nothing is edited");
+    let text = h.painted_text();
+    for label in ["Camera", "Lens", "Focal length", "Shutter speed", "Aperture", "ISO"] {
+        assert!(text.iter().any(|t| t == label), "the {label} label: {text:?}");
+    }
+    // the lens line carries its own dim label, so "24-105mm F1.8" is not read as a focal length and an aperture
+    assert!(text.iter().any(|t| t == "FE 24-105mm F1.8"), "{text:?}");
+}
+
+#[test]
+fn a_click_opens_the_field_of_that_value_only_and_enter_saves_escape_cancels() {
+    let (mut h, ids) = info_panel();
+    ask(&mut h, "ui.clickWidget", json!({"id": "exifValue:iso"}));
+    for key in KEYS {
+        assert_eq!(has(&h, &format!("field:exif:{key}")), key == "iso", "{key}");
+    }
+    // Esc leaves the value as it was
+    ask(&mut h, "ui.text", json!({"text": "6400"}));
+    ask(&mut h, "ui.key", json!({"key": "Escape"}));
+    assert_eq!(meta(&h, ids[0]).effective_iso(), Some(100));
+    assert!(!has(&h, "field:exif:iso"), "Esc closes the field");
+    // Enter saves through photo.setMeta, on the selected photos
+    type_into(&mut h, "iso", "6400");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(ids.iter().all(|id| meta(&h, *id).effective_iso() == Some(6400)));
+    assert!(!has(&h, "field:exif:iso"), "Enter closes the field");
+    // clicking away saves too
+    type_into(&mut h, "shutter", "1/500");
+    ask(&mut h, "ui.clickWidget", json!({"id": "exifValue:focal"}));
+    assert_eq!(meta(&h, ids[0]).effective_shutter(), "1/500");
+    assert!(has(&h, "field:exif:focal") && !has(&h, "field:exif:shutter"), "the click went on to open the next value");
+}
+
+/// The camera card as the official build draws it (camera and lens lines, size row, capture grid), at `width`.
+fn official_card_height(width: f32, p: &lightcraft_catalog::Photo) -> f32 {
+    let mut view = crate::headless::HeadlessView::new();
+    let mut height = 0.0;
+    for frame in 0..3 {
+        view.run(crate::headless::HeadlessView::raw_input(egui::vec2(width + 40.0, 800.0), 1.0, frame as f64 / 60.0, vec![]), |ui| {
+            let t = crate::theme::Tokens::get(ui.ctx());
+            let m = &p.meta;
+            let r = egui::Frame::NONE.fill(t.canvas).corner_radius(6.0).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
+                ui.set_width(width - 24.0);
+                let dim = |s: &str| egui::RichText::new(s.to_string()).size(12.0).color(t.text_label);
+                ui.label(dim(&m.camera));
+                ui.add(egui::Label::new(dim(&m.lens)).truncate());
+                ui.horizontal(|ui| {
+                    ui.label(dim("100 × 100  ·  1 MB"));
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        egui::Frame::NONE.fill(t.chrome).corner_radius(3.0).inner_margin(egui::Margin::symmetric(5, 1)).show(ui, |ui| {
+                            ui.label(egui::RichText::new("JPEG").size(10.5).color(t.text_label));
+                        });
+                    });
+                });
+                ui.add_space(6.0);
+                egui::Grid::new("info-capture").num_columns(2).spacing([24.0, 3.0]).show(ui, |ui| {
+                    for k in ["Focal length", "Shutter speed", "Aperture", "ISO"] {
+                        ui.label(dim(k));
+                        ui.label(dim("1"));
+                        ui.end_row();
+                    }
+                });
+            });
+            height = r.response.rect.height();
+        });
+    }
+    height
+}
+
+#[test]
+fn the_card_is_no_taller_than_the_official_one_plus_the_reset_row() {
+    let (mut h, ids) = info_panel();
+    assert!(!has(&h, "info:focus"), "the demo photo has no focus point");
+    let card = rect(&h, "info:card");
+    let p = h.app.session.catalog.photo(ids[0]).unwrap().clone();
+    let official = official_card_height(card.width(), &p);
+    assert!(card.height() <= official + 1.5, "at rest the card is {} tall, the official one {official}", card.height());
+    // with something edited: the official height plus the Reset All row (and no more)
+    type_into(&mut h, "iso", "6400");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(has(&h, "button:exifResetAll"));
+    let edited = rect(&h, "info:card");
+    assert!(edited.height() <= official + 26.0, "edited the card is {} tall, the official one {official}", edited.height());
+}
+
+/// Selects photo 0 alone with a zoom lens that opens to f/4 at most.
+fn photo_with_lens(h: &mut Headless, ids: &[PhotoId], lens: &str) {
+    run(h, "library.select", json!({"ids": [ids[0].0], "active": ids[0].0}));
+    run(h, "photo.setMeta", json!({"ids": [ids[0].0], "lens": lens}));
+}
+
+#[test]
+fn a_refused_aperture_keeps_the_value_shows_an_alert_and_the_alert_says_why() {
+    let (mut h, ids) = info_panel();
+    photo_with_lens(&mut h, &ids, "16-35mm f/4");
+    assert!(!has(&h, "exifAlert:aperture"), "the file's own f/1.8 is shown as it is, no alert");
+    let before = h.app.session.catalog.to_snapshot();
+    type_into(&mut h, "aperture", "f/2.8");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert_eq!(h.app.session.catalog.to_snapshot(), before, "a refused edit changes nothing");
+    assert!(toast(&h).is_empty(), "no message line: {:?}", toast(&h));
+    assert!(!has(&h, "field:exif:aperture"), "the field closes on the old value");
+    assert!(h.painted_text().iter().any(|t| t == "f / 1.8"), "{:?}", h.painted_text());
+    assert!(has(&h, "exifAlert:aperture") && !has(&h, "exifAlert:focal"), "a small ! at the end of that row only");
+    assert!(!h.painted_text().iter().any(|t| t.contains("opens to")), "the reason shows only when the ! is clicked");
+    ask(&mut h, "ui.clickWidget", json!({"id": "exifAlert:aperture"}));
+    assert!(h.painted_text().iter().any(|t| t == "This lens opens to f/4 at most"), "{:?}", h.painted_text());
+    // a focal length outside the range is refused the same way
+    type_into(&mut h, "focal", "85 mm");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert_eq!(h.app.session.catalog.to_snapshot(), before);
+    assert!(has(&h, "exifAlert:focal"));
+    // a value the lens can give is taken, and its alert goes
+    type_into(&mut h, "aperture", "f/5.6");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert_eq!(meta(&h, ids[0]).effective_aperture(), Some(5.6));
+    assert!(!has(&h, "exifAlert:aperture"), "the alert goes once the value is fine");
+}
+
+#[test]
+fn a_lens_change_keeps_an_edit_and_marks_it_while_it_is_out_of_range() {
+    let (mut h, ids) = info_panel();
+    photo_with_lens(&mut h, &ids, "24-70mm f/2.8");
+    type_into(&mut h, "aperture", "f/2.8");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    type_into(&mut h, "focal", "30");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(!has(&h, "exifAlert:aperture") && !has(&h, "exifAlert:focal"), "both fit the lens");
+    run(&mut h, "photo.setMeta", json!({"ids": [ids[0].0], "lens": "70-200mm f/4"}));
+    assert_eq!((meta(&h, ids[0]).effective_aperture(), meta(&h, ids[0]).effective_focal_mm()), (Some(2.8), Some(30.0)), "the edits stay");
+    assert!(has(&h, "exifAlert:aperture") && has(&h, "exifAlert:focal"), "both are now out of range, and say so");
+    assert!(!has(&h, "exifAlert:iso") && !has(&h, "exifAlert:lens"));
+    // a lens that fits again clears them
+    run(&mut h, "photo.setMeta", json!({"ids": [ids[0].0], "lens": "24-70mm f/2.8"}));
+    assert!(!has(&h, "exifAlert:aperture") && !has(&h, "exifAlert:focal"));
 }
