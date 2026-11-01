@@ -52,10 +52,10 @@ impl Kind {
 
 /// An inline rename under way (the app has at most one).
 #[derive(Clone, Debug)]
-pub(crate) struct RowRename {
-    pub kind: Kind,
+pub struct RowRename {
+    pub(crate) kind: Kind,
     /// The name as typed.
-    pub text: String,
+    pub(crate) text: String,
 }
 
 /// Start renaming `kind` (the name it has now is selected).
