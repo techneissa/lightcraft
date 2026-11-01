@@ -1,3 +1,4 @@
 cargo test -p lightcraft-engine --features sam --lib -- segment:: concepts:: mask_names
-cargo test -p lightcraft-pipeline --lib -- masks::tests::embedded_mattes_win
+cargo test -p lightcraft-pipeline --lib -- masks::tests::embedded_mattes_win masks::tests::a_sky_touching
+cargo test -p lightcraft-segment
 cargo test -p lightcraft-ui-egui --lib -- rough_mask mask_name

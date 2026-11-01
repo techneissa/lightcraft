@@ -693,9 +693,49 @@ fn embedded_mattes_win_over_a_stored_segmentation() {
     let subj_stored = MaskShape::Subject { seg: Some(seg.clone()), detail: vec![], edge: 0.0 };
     let subj_alpha = shape_alpha(&subj_stored, &f, w, h, &img, &l, 0.0, Some(&mattes));
     assert!(subj_alpha.get(10, 50) > 0.99, "the person matte (left half) wins: {}", subj_alpha.get(10, 50));
+    // Background is the person matte turned around, over a stored selection too
+    // (a stored selection of the left half, which the matte must override)
+    let left: Vec<f32> = (0..side * side).map(|i| if (i % side) < side / 2 { 10.0 } else { -10.0 }).collect();
+    let back_stored = MaskShape::Background { seg: Some(SegMask::from_logits(side, &left)), detail: vec![], edge: 0.0 };
+    let back_alpha = shape_alpha(&back_stored, &f, w, h, &img, &l, 0.0, Some(&mattes));
+    assert!(back_alpha.get(10, 50) < 0.01, "the person (left half) is not background: {}", back_alpha.get(10, 50));
+    assert!(back_alpha.get(90, 50) > 0.99, "the rest is: {}", back_alpha.get(90, 50));
 
     // without a matte the stored segmentation is used
     let sky_alpha = shape_alpha(&sky_stored, &f, w, h, &img, &l, 0.0, None);
     assert!(sky_alpha.get(90, 50) > 0.99, "no matte: the stored segmentation (right half): {}", sky_alpha.get(90, 50));
     assert!(sky_alpha.get(10, 50) < 0.01, "no matte: left half unselected: {}", sky_alpha.get(10, 50));
+}
+
+/// A sky that touches the top of the photo is selected right up to its first row. The model's outermost
+/// ring of cells is unreliable (on a real photo the top row of the sky read -1.5 on average where the
+/// row below read +2, which left a 2-8 px strip uncovered along the top edge), so a grid is sampled
+/// from its second ring inwards.
+#[test]
+fn a_sky_touching_the_top_row_is_covered_there() {
+    let (n, side) = (512, 32);
+    // the sky fills the top 60 %, darker (deeper blue) towards the top; the ground is darker below
+    let log_l = Plane::from_fn(n, n, |_, y| {
+        let t = y as f32 / n as f32;
+        if t < 0.6 { -1.5 + 1.2 * t } else { -2.5 }
+    });
+    let img = Rgb32f::filled(n, n, [0.3; 3]);
+    let logits: Vec<f32> = (0..side * side)
+        .map(|i| match (i / side, i % side) {
+            // the unreliable border cells of the grid
+            (0, _) => -2.0,
+            (_, 0) => -2.0,
+            (y, _) if ((y as f32 + 0.5) / side as f32) < 0.6 => 8.0,
+            _ => -8.0,
+        })
+        .collect();
+    let shape = MaskShape::Sky { seg: Some(SegMask::from_logits(side, &logits)), detail: vec![], edge: 0.0 };
+    let a = shape_alpha(&shape, &frame(n, n), n, n, &img, &log_l, 0.0, None);
+    for y in 0..8 {
+        let row_min = (4..n - 4).map(|x| a.get(x, y)).fold(1.0f32, f32::min);
+        assert!(row_min > 0.9, "row {y} of the sky: lowest coverage {row_min}");
+    }
+    // the same at the left edge
+    let col_min = (4..n / 2).map(|y| a.get(0, y)).fold(1.0f32, f32::min);
+    assert!(col_min > 0.9, "the first column of the sky: lowest coverage {col_min}");
 }

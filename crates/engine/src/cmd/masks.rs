@@ -138,7 +138,7 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
                 s.segmenter.require_model()?;
                 return Ok(Later::Concept(c));
             }
-            let found = segment(s, |s| s.segment_text(id, c.text))?;
+            let found = segment(s, |s| s.segment_concept(id, &c))?;
             super::concepts::store(shape, found, &c)?;
         }
         _ => {}
@@ -445,6 +445,14 @@ pub fn specs() -> Vec<CommandSpec> {
             cap_color_range_samples(&mut shape);
             let comp = optional_index(p, "component", "mask.update")?.unwrap_or(0);
             let mid = mask_id(p, s.active_mask, "mask.update")?;
+            // a Subject, Sky or Background without its selection asks SAM 3 here too (as `mask.add` does), so a
+            // part set over MCP or the CLI is not left as the rough mask; in the app (background mode) it stays
+            // rough: a result that arrives later adds a part, it can't replace this one
+            if matches!(shape, MaskShape::Subject { seg: None, .. } | MaskShape::Sky { seg: None, .. } | MaskShape::Background { seg: None, .. })
+                && !s.segmenter.background
+            {
+                resolve_ai(s, &mut shape, "mask.update")?;
+            }
             masks_edit(s, "mask.update", "Edit Mask", |masks, _| {
                 let i = find(masks, mid, "mask.update")?;
                 let c = masks[i].components.get_mut(comp).ok_or_else(|| bad("mask.update", "no such component"))?;

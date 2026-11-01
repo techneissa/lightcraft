@@ -57,8 +57,6 @@ pub struct Click {
 pub(crate) enum Tag {
     /// A command waiting for the result itself.
     Wait,
-    /// Silent background model/photo warmup at startup or when switching photos.
-    Warmup,
     /// Load the model and encode the photo ahead of the first click.
     Prepare,
     /// Object clicks on component `comp` of mask `mask`.
@@ -87,7 +85,7 @@ struct InFlight {
 #[cfg_attr(not(feature = "sam"), allow(dead_code))]
 fn activity_label(tag: &Tag) -> &'static str {
     match tag {
-        Tag::Prepare | Tag::Warmup => "Analyzing the photo for AI masks…",
+        Tag::Prepare => "Analyzing the photo for AI masks…",
         Tag::Detail { .. } => "Refining the mask's detail…",
         _ => "Selecting with SAM 3",
     }
@@ -107,6 +105,8 @@ pub(crate) struct Input {
 pub(crate) enum Prompt {
     Clicks(Vec<Click>),
     Text(String),
+    /// Subject, Sky or Background (the looser score; `true`: the main subject's instances only).
+    Concept(String, bool),
 }
 
 /// Object clicks sent to the worker and not applied yet (background mode): further clicks add
@@ -161,8 +161,6 @@ pub struct Segmenter {
     next_job_id: u64,
     #[cfg_attr(not(feature = "sam"), allow(dead_code))]
     in_flight: Vec<InFlight>,
-    #[cfg_attr(not(feature = "sam"), allow(dead_code))]
-    warmup_cancel: Option<(u64, std::sync::Arc<std::sync::atomic::AtomicBool>)>,
     #[cfg(feature = "sam")]
     worker: worker::Worker,
     #[cfg(feature = "sam")]
@@ -184,7 +182,6 @@ impl Default for Segmenter {
             messages: Vec::new(),
             next_job_id: 1,
             in_flight: Vec::new(),
-            warmup_cancel: None,
             #[cfg(feature = "sam")]
             worker: worker::Worker::default(),
             #[cfg(feature = "sam")]
@@ -522,7 +519,7 @@ impl Session {
         let mut i = 0;
         while i < self.segmenter.in_flight.len() {
             let valid = match &self.segmenter.in_flight[i].tag {
-                Tag::Wait | Tag::Warmup | Tag::Prepare => true,
+                Tag::Wait | Tag::Prepare => true,
                 Tag::Clicks { photo, mask, comp, .. } | Tag::Detail { photo, mask, comp, .. } => {
                     active == Some(*photo)
                         && self.develop_of(*photo).is_some_and(|d| d.masks.iter().find(|m| m.id == *mask).is_some_and(|m| *comp < m.components.len()))
@@ -619,69 +616,12 @@ impl Session {
         let reply = self.segmenter.results.0.clone();
         let detail = matches!(kind, worker::Kind::Detail { .. });
         let job = self.segment_job(id, kind, tag.clone(), reply, region)?;
-        if let Some((warm_key, cancel)) = &self.segmenter.warmup_cancel
-            && *warm_key != job.key
-        {
-            cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-            self.segmenter.warmup_cancel = None;
-        }
         let job_id = job.id;
         let cancel = job.cancel.clone();
         self.segmenter.worker.submit(job)?;
         let task = self.activity.start("segment", activity_label(&tag), crate::activity::Cancel::Flag(cancel.clone()));
         self.segmenter.in_flight.push(InFlight { id: job_id, tag, cancel, detail, _task: task });
         Ok(())
-    }
-
-    /// The cache key of the currently active photo as SAM 3 sees it, or `None` when no photo is active.
-    pub fn active_segment_key(&self) -> Option<u64> {
-        let id = self.active()?;
-        Some(self.segment_key(id)?.0)
-    }
-
-    /// Whether the active photo's settings are already warmed up or warming up in SAM 3.
-    pub fn is_segment_warmed(&self) -> bool {
-        let key = self.active().and_then(|id| self.segment_key(id).map(|(k, _)| k)).unwrap_or(0);
-        self.segmenter.warmup_cancel.as_ref().is_some_and(|(k, _)| *k == key && (key != 0 || self.segmenter.loaded()))
-    }
-
-    /// Pre-load the SAM 3 model on its background worker thread (and pre-encode the active photo if one
-    /// is selected) so the model and image embeddings are ready in memory before the user's first AI
-    /// mask or object-remove action. Does nothing if the model is not installed.
-    pub fn segment_warmup(&mut self) {
-        if !self.segmenter.has_model() {
-            return;
-        }
-        #[cfg(feature = "sam")]
-        {
-            let Ok(dir) = self.segmenter.model_dir() else { return };
-            let active_id = self.active();
-            let key = active_id.and_then(|id| self.segment_key(id).map(|(k, _)| k)).unwrap_or(0);
-            if let Some((prev_key, prev_cancel)) = &self.segmenter.warmup_cancel {
-                if *prev_key == key && (key != 0 || self.segmenter.loaded()) {
-                    return;
-                }
-                prev_cancel.store(true, std::sync::atomic::Ordering::Relaxed);
-            }
-            let (render, missing) = active_id
-                .and_then(|id| {
-                    let (_, d) = self.segment_key(id)?;
-                    let p = self.catalog.photo(id)?;
-                    let missing = match &p.source {
-                        lightcraft_catalog::Source::File { path } if !std::path::Path::new(path).exists() => Some(path.clone()),
-                        _ => None,
-                    };
-                    let render = self.preview_job(id, INPUT_EDGE, INPUT_EDGE, false, &d)?;
-                    Some((Some(render), missing))
-                })
-                .unwrap_or_default();
-            let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-            self.segmenter.warmup_cancel = Some((key, cancel.clone()));
-            let reply = self.segmenter.results.0.clone();
-            let remote = self.segmenter.remote_endpoint();
-            let job = worker::Job { id: 0, cancel, dir, key, render, missing, kind: worker::Kind::Warmup, tag: Tag::Warmup, reply, remote };
-            let _ = self.segmenter.worker.submit(job);
-        }
     }
 
     /// Start preparing photo `id` for AI masks (load the model, encode the image), so the first
@@ -732,6 +672,21 @@ impl Session {
         #[cfg(not(feature = "sam"))]
         {
             let _ = id;
+            Err("AI masks are not available in this build".into())
+        }
+    }
+
+    /// Segment a Subject, Sky or Background selection on photo `id` (the looser score, the main subject only where
+    /// the concept says so), waiting for the model; `Ok(None)` when nothing matches.
+    pub(crate) fn segment_concept(&mut self, id: PhotoId, concept: &crate::cmd::concepts::Concept) -> Result<Option<SegMask>, String> {
+        self.segmenter.model_dir()?;
+        #[cfg(feature = "sam")]
+        {
+            self.segment_wait(id, worker::Kind::Concept(concept.text.trim().to_string(), concept.main_only), None)
+        }
+        #[cfg(not(feature = "sam"))]
+        {
+            let _ = (id, concept);
             Err("AI masks are not available in this build".into())
         }
     }
@@ -793,7 +748,7 @@ impl Session {
         #[cfg(feature = "sam")]
         {
             let tag = Tag::NewConcept { photo: id, mask, op: op.to_string(), name, kind: concept.kind.to_string(), invert: concept.invert };
-            self.segment_queue(id, worker::Kind::Text(concept.text.trim().to_string()), tag, None)
+            self.segment_queue(id, worker::Kind::Concept(concept.text.trim().to_string(), concept.main_only), tag, None)
         }
         #[cfg(not(feature = "sam"))]
         {
@@ -817,8 +772,8 @@ impl Session {
                 (seg.clone(), Prompt::Clicks(clicks_of(hint, exclude)))
             }
             MaskShape::Prompt { text, seg: Some(seg), .. } => (seg.clone(), Prompt::Text(text.clone())),
-            MaskShape::Subject { seg: Some(seg), .. } => (seg.clone(), Prompt::Text(crate::cmd::concepts::SUBJECT.into())),
-            MaskShape::Sky { seg: Some(seg), .. } => (seg.clone(), Prompt::Text(crate::cmd::concepts::SKY.into())),
+            MaskShape::Subject { seg: Some(seg), .. } => (seg.clone(), Prompt::Concept(crate::cmd::concepts::SUBJECT.into(), true)),
+            MaskShape::Sky { seg: Some(seg), .. } => (seg.clone(), Prompt::Concept(crate::cmd::concepts::SKY.into(), false)),
             _ => return Ok(false),
         };
         let p = self.catalog.photo(id).ok_or("no such photo")?;
@@ -886,7 +841,7 @@ impl Session {
         }
         polled.messages.extend(o.notice);
         match o.tag {
-            Tag::Wait | Tag::Warmup => {}
+            Tag::Wait => {}
             Tag::Prepare => {
                 if let Err(e) = o.result {
                     polled.messages.push(e);
@@ -953,7 +908,9 @@ impl Session {
                 let seg = match o.result {
                     Ok(Some(mut seg)) => {
                         if invert {
-                            let Some(inv) = seg.invert() else { return };
+                            let Some(inv) = seg.invert() else {
+                                return polled.messages.push(format!("The {kind} selection could not be turned around; try again."));
+                            };
                             seg = inv;
                         }
                         seg
@@ -964,7 +921,9 @@ impl Session {
                 if self.active() != Some(photo) {
                     return polled.messages.push(format!("The photo changed before {kind} was found; try again."));
                 }
-                let Ok(seg_val) = serde_json::to_value(seg) else { return };
+                let Ok(seg_val) = serde_json::to_value(seg) else {
+                    return polled.messages.push(format!("The {kind} selection could not be stored; try again."));
+                };
                 let mut p = serde_json::json!({"kind": kind, "seg": seg_val});
                 if let Some(n) = name {
                     p["name"] = serde_json::json!(n);
@@ -1125,6 +1084,46 @@ mod tests {
         assert!(s.segmenter.in_flight.is_empty(), "cancelled with its mask");
         assert!(s.activity.list().iter().all(|t| t.kind != "segment"), "no row is left");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ⌘Z of a slider change while Sky runs does not cancel the run: only commands that take masks away (or a photo
+    /// change) cancel what is still running.
+    #[cfg(feature = "sam")]
+    #[test]
+    fn undoing_a_slider_change_keeps_a_selection_running() {
+        let (mut s, dir) = session_with_a_model("undo-slider");
+        s.execute("develop.set", &serde_json::json!({"control": "light.exposure", "value": 0.5})).unwrap();
+        s.execute("mask.add", &serde_json::json!({"kind": "sky"})).unwrap();
+        assert_eq!(s.segmenter.in_flight.len(), 1, "Sky is running");
+        s.execute("edit.undo", &serde_json::json!({})).unwrap();
+        assert_eq!(s.segmenter.in_flight.len(), 1, "the slider's undo leaves it running");
+        // taking the masks away does cancel it: deleting the only mask, or resetting the photo
+        s.execute("mask.add", &serde_json::json!({"kind": "radial"})).unwrap();
+        s.execute("mask.deleteAll", &serde_json::json!({})).unwrap();
+        assert!(s.segmenter.in_flight.is_empty(), "cancelled");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// `mask.update` with a Subject, Sky or Background shape asks SAM 3 for it like `mask.add` does (MCP, CLI), so the
+    /// part is not left as the rough mask; without the model it still works as before.
+    #[cfg(feature = "sam")]
+    #[test]
+    fn updating_a_part_to_sky_uses_the_model_when_there_is_one() {
+        let update = serde_json::json!({"shape": {"kind": "sky"}});
+        let (mut s, dir) = session_with_a_model("update-sky");
+        s.segmenter.background = false;
+        s.execute("mask.add", &serde_json::json!({"kind": "radial"})).unwrap();
+        // (the fake model folder can't load: the model is asked, and its error comes back)
+        let e = s.execute("mask.update", &update).unwrap_err().to_string();
+        assert!(e.to_lowercase().contains("sam") || e.contains("model"), "the model was asked: {e}");
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let mut none = Session::with_demo();
+        none.segmenter.background = false;
+        none.execute("mask.add", &serde_json::json!({"kind": "radial"})).unwrap();
+        none.execute("mask.update", &update).unwrap();
+        let d = none.develop_of(none.active().unwrap()).unwrap();
+        assert!(matches!(d.masks[0].components[0].shape, MaskShape::Sky { seg: None, .. }), "no model: the rough mask, as before");
     }
 
     fn seg_box(side: usize, x0: usize, y0: usize, x1: usize, y1: usize) -> SegMask {

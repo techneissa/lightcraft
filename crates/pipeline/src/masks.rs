@@ -103,7 +103,8 @@ impl Mattes {
         };
         match shape {
             MaskShape::Sky { .. } => self.of(&[Sky]),
-            MaskShape::Subject { .. } => person(),
+            // Background is the person matte turned around ([`shape_alpha`])
+            MaskShape::Subject { .. } | MaskShape::Background { .. } => person(),
             MaskShape::People { parts, .. } => {
                 let wanted: Vec<MatteKind> = parts
                     .iter()
@@ -212,7 +213,11 @@ fn for_each_pos(frame: &Frame, w: usize, h: usize, out: &mut Plane, f: impl Fn(P
 pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Plane {
     let fitting = mattes.map(|m| m.for_shape(shape)).unwrap_or_default();
     if !fitting.is_empty() {
-        return matte_alpha(&fitting, frame, w, h);
+        let mut out = matte_alpha(&fitting, frame, w, h);
+        if matches!(shape, MaskShape::Background { .. }) {
+            out.data.iter_mut().for_each(|v| *v = 1.0 - *v);
+        }
+        return out;
     }
     let mut out = Plane::new(w, h);
     let to_long = |p: Point| frame.norm_to_long(p);
@@ -313,7 +318,8 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
             smooth_plane(&mut out, 0.015 * frame_px(frame, w));
         }
         MaskShape::Background { .. } => {
-            let mut s = shape_alpha(&MaskShape::subject(), frame, w, h, img, log_l, ev, mattes);
+            // (no matte fits here: `for_shape` would have returned one above)
+            let mut s = shape_alpha(&MaskShape::subject(), frame, w, h, img, log_l, ev, None);
             s.data.iter_mut().for_each(|v| *v = 1.0 - *v);
             out = s;
         }
@@ -346,7 +352,11 @@ impl SegGrid {
         let u = (n.x - self.r[0]) / (self.r[2] - self.r[0]);
         let v = (n.y - self.r[1]) / (self.r[3] - self.r[1]);
         let (fx, fy) = ((u * side as f64 - 0.5) as f32, (v * side as f64 - 0.5) as f32);
-        let (fx, fy) = (fx.clamp(0.0, (side - 1) as f32), fy.clamp(0.0, (side - 1) as f32));
+        // (the outermost ring of cells is the model's least reliable: on a real photo its top row read -1.5 on
+        // average under a sky the row below read +2, a 2-8 px strip along the top edge. A grid is sampled
+        // from its second ring inwards, so the edge cells continue what lies next to them)
+        let (lo, hi) = if side >= 4 { (1.0, (side - 2) as f32) } else { (0.0, (side - 1) as f32) };
+        let (fx, fy) = (fx.clamp(lo, hi), fy.clamp(lo, hi));
         let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
         let (tx, ty) = (fx - x0 as f32, fy - y0 as f32);
         let top = at(x0, y0) * (1.0 - tx) + at(x0 + 1, y0) * tx;

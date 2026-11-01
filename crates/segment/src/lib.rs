@@ -261,6 +261,12 @@ impl Sam3 {
     /// `threshold` (0..1, 0.5 is the reference default) are merged into one mask; `None` when
     /// nothing matches.
     pub fn segment_text(&mut self, enc: &mut Encoded, text: &str, threshold: f32) -> Result<Option<Prediction>> {
+        self.segment_text_with(enc, text, threshold, false)
+    }
+
+    /// [`Sam3::segment_text`]; with `main_only`, only the main subject's instances (the largest and any of at
+    /// least a third of its area, [`detector::main_instances`]) are merged.
+    pub fn segment_text_with(&mut self, enc: &mut Encoded, text: &str, threshold: f32, main_only: bool) -> Result<Option<Prediction>> {
         self.check_cancel()?;
         let cancel = self.cancel.clone();
         let (det, tok) = self.detector_parts()?;
@@ -272,7 +278,7 @@ impl Sam3 {
         let Some(out) = det.predict_cancellable(f, &ids, &valid, Some(threshold), cancel.as_deref())? else {
             return Ok(None);
         };
-        Ok(detector::merge(&out, threshold))
+        Ok(detector::merge(&out, threshold, main_only))
     }
 
     /// Raw detector outputs for `text` (tests and tools).

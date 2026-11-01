@@ -24,14 +24,17 @@ pub struct Concept {
     pub text: &'static str,
     /// The found selection is turned around (Background is everything but the subject).
     pub invert: bool,
+    /// Only the main subject's instances count (Subject and Background): the largest and any of at least a third of
+    /// its area, not every small figure far away.
+    pub main_only: bool,
 }
 
 /// The concept a classical shape stands for.
 pub fn of(shape: &MaskShape) -> Option<Concept> {
     match shape {
-        MaskShape::Subject { .. } => Some(Concept { kind: "subject", text: SUBJECT, invert: false }),
-        MaskShape::Sky { .. } => Some(Concept { kind: "sky", text: SKY, invert: false }),
-        MaskShape::Background { .. } => Some(Concept { kind: "background", text: SUBJECT, invert: true }),
+        MaskShape::Subject { .. } => Some(Concept { kind: "subject", text: SUBJECT, invert: false, main_only: true }),
+        MaskShape::Sky { .. } => Some(Concept { kind: "sky", text: SKY, invert: false, main_only: false }),
+        MaskShape::Background { .. } => Some(Concept { kind: "background", text: SUBJECT, invert: true, main_only: true }),
         _ => None,
     }
 }

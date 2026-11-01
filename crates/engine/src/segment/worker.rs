@@ -26,24 +26,25 @@ use std::time::Duration;
 use lightcraft_develop::SegMask;
 use lightcraft_segment::{
     Encoded, Sam3,
-    remote::{self, Operation, Request, text_logits},
+    remote::{self, CONCEPT_THRESHOLD, Operation, Request, TEXT_THRESHOLD, text_logits},
 };
 
 use super::{Input, Prompt, Tag};
 use crate::media::RenderJob;
 
 /// Unload the model after this long without a request.
-pub const IDLE_UNLOAD: Duration = Duration::from_secs(60 * 60);
+pub const IDLE_UNLOAD: Duration = Duration::from_secs(10 * 60);
 
 /// What to compute.
 #[derive(Clone)]
 pub enum Kind {
-    /// Load the model at startup (and optionally pre-encode the active photo) silently in the background.
-    Warmup,
     /// Load the model and encode the photo (so the first click is fast).
     Prepare,
     Clicks(Vec<lightcraft_segment::Click>),
     Text(String),
+    /// Subject, Sky or Background: like `Text`, with the looser score ([`CONCEPT_THRESHOLD`]); `true`: only the main
+    /// subject's instances (Subject and Background).
+    Concept(String, bool),
     /// A zoomed-in pass over `region` (normalized) of the photo, rendered by the job's `render`.
     Detail {
         prompt: Prompt,
@@ -167,8 +168,6 @@ pub struct Shared {
     pub pending: AtomicUsize,
     /// Detail passes queued or running.
     pub detail: AtomicUsize,
-    /// Silent startup/photo warmup jobs queued or running.
-    pub warmup: AtomicUsize,
     /// The model is in memory.
     pub loaded: AtomicBool,
     /// Loading the model or encoding a photo right now (the slow parts).
@@ -212,7 +211,6 @@ pub struct Worker {
 impl Worker {
     fn counter(&self, job: &Job) -> &AtomicUsize {
         match job.kind {
-            Kind::Warmup => &self.shared.warmup,
             Kind::Detail { .. } => &self.shared.detail,
             _ => &self.shared.pending,
         }
@@ -283,7 +281,6 @@ struct State {
 /// Whether `later` makes `job` pointless (it asks for the same selection again).
 fn supersedes(later: &Job, job: &Job) -> bool {
     match (&later.tag, &job.tag) {
-        (_, Tag::Warmup) => true,
         (Tag::Prepare, Tag::Prepare) => later.key == job.key,
         (Tag::Clicks { photo: a, mask: am, comp: ac, .. }, Tag::Clicks { photo: b, mask: bm, comp: bc, .. }) => (a, am, ac) == (b, bm, bc),
         (Tag::Detail { photo: a, mask: am, comp: ac, .. }, Tag::Detail { photo: b, mask: bm, comp: bc, .. }) => (a, am, ac) == (b, bm, bc),
@@ -314,16 +311,9 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
         }
         let Some(mut job) = queue.pop_front() else { continue };
         let is_detail = matches!(job.kind, Kind::Detail { .. });
-        let is_warmup = matches!(job.kind, Kind::Warmup);
         // counts the job as pending until just before its reply goes out: a caller woken by the
         // reply must not still see the worker busy with it
-        let done = Done(if is_warmup {
-            &shared.warmup
-        } else if is_detail {
-            &shared.detail
-        } else {
-            &shared.pending
-        });
+        let done = Done(if is_detail { &shared.detail } else { &shared.pending });
         if job.cancel.load(Ordering::Relaxed) || queue.iter().any(|later| supersedes(later, &job)) {
             drop(done);
             let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result: Ok(None), superseded: true, notice: None });
@@ -473,13 +463,9 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
     let (_, client) = state.remote.as_mut().ok_or("remote SAM unavailable")?;
     let mut region = None;
     let operation = match std::mem::replace(&mut job.kind, Kind::Prepare) {
-        Kind::Warmup => {
-            // Warmup ensures connection to the remote endpoint, but does not transmit
-            // active photo pixels in the background without explicit user masking action.
-            return Ok(None);
-        }
         Kind::Prepare => Operation::Prepare,
         Kind::Text(text) => Operation::Text(text),
+        Kind::Concept(text, main) => Operation::Concept(text, main),
         Kind::Clicks(clicks) => Operation::Clicks(clicks.iter().map(|c| [c.x, c.y, if c.positive { 1.0 } else { 0.0 }]).collect()),
         Kind::Detail { prompt, region: r } => {
             region = Some(r);
@@ -489,6 +475,7 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
             }
             match prompt {
                 Prompt::Text(text) => Operation::Text(text),
+                Prompt::Concept(text, main) => Operation::Concept(text, main),
                 Prompt::Clicks(clicks) => {
                     let inside: Vec<_> = clicks
                         .iter()
@@ -531,13 +518,6 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
     }
     let side = lightcraft_segment::MASK_SIDE;
     match std::mem::replace(&mut job.kind, Kind::Prepare) {
-        Kind::Warmup => {
-            model(state, shared, &job.dir, placement)?;
-            if job.render.is_some() && !job.cancel.load(Ordering::Relaxed) {
-                let _ = encoded(state, shared, job, placement);
-            }
-            Ok(None)
-        }
         Kind::Prepare => {
             encoded(state, shared, job, placement)?;
             Ok(None)
@@ -549,7 +529,11 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
         }
         Kind::Text(text) => {
             let (m, enc) = encoded(state, shared, job, placement)?;
-            Ok(text_logits(m, enc, &text)?.map(|l| SegMask::from_logits(side, &l)))
+            Ok(text_logits(m, enc, &text, TEXT_THRESHOLD, false)?.map(|l| SegMask::from_logits(side, &l)))
+        }
+        Kind::Concept(text, main) => {
+            let (m, enc) = encoded(state, shared, job, placement)?;
+            Ok(text_logits(m, enc, &text, CONCEPT_THRESHOLD, main)?.map(|l| SegMask::from_logits(side, &l)))
         }
         #[cfg(test)]
         #[allow(clippy::panic)]
@@ -587,7 +571,8 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
                     }
                     Some(m.segment_clicks(&mut enc, &inside)?.logits)
                 }
-                Prompt::Text(text) => text_logits(m, &mut enc, &text)?,
+                Prompt::Text(text) => text_logits(m, &mut enc, &text, TEXT_THRESHOLD, false)?,
+                Prompt::Concept(text, main) => text_logits(m, &mut enc, &text, CONCEPT_THRESHOLD, main)?,
             };
             log::info!("SAM 3 detail pass ({}×{}) in {:?}", input.w, input.h, t.elapsed());
             Ok(logits.map(|l| SegMask::from_logits_in(side, &l, region)))

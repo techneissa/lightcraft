@@ -13,7 +13,7 @@ below) works, and no render, export or command ever waits for it.
 
 **Subject, Sky and Background** use the model when it is installed (or a remote worker is configured): Subject is what SAM 3
 finds for `person | animal | vehicle | subject, main object, foreground` (the first alternative it finds with confidence:
-people first), Sky is `sky`, Background is everything but the subject. The mask is added when SAM 3 has found it (a row in
+people first; only the main subject: the largest instance and any other of at least a third of its area, so small figures far away are left out, and Object picks one of those), Sky is `sky`, Background is everything but the subject. The mask is added when SAM 3 has found it (a row in
 the activity stack meanwhile, as for Describe), and nothing found is a message, never a rough mask. A photo with an embedded
 matte for the kind (a DNG's sky or person matte) keeps the matte and never waits for the model. Without SAM 3 the mask is
 drawn by the classical heuristic and the part says "Rough mask" and how to install SAM 3; masks saved before keep their

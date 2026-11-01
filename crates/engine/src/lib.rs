@@ -651,6 +651,9 @@ impl Session {
     fn run_command(&mut self, id: &str, journal: Option<&Value>, f: impl FnOnce(&mut Session) -> Result<Value>) -> Result<Value> {
         let log_start = self.pending_log.len();
         let was_active = self.active();
+        // (what takes masks away cancels a running AI selection; a command that leaves the masks alone, such as the
+        // undo of a slider change, does not)
+        let had_masks = self.active().and_then(|p| self.develop_of(p)).is_some_and(|d| !d.masks.is_empty());
         self.depth += 1;
         // last-resort guard: a panic in a command is that command's error, not a crash
         let r = guard::catch(&format!("`{id}`"), || f(self)).unwrap_or_else(|e| Err(EngineError::Other(e)));
@@ -658,7 +661,8 @@ impl Session {
         if self.depth == 0 {
             self.reconcile_segmenter();
             let clear_ai = self.active() != was_active
-                || (matches!(id, "edit.undo" | "edit.reset" | "mask.delete" | "mask.deleteAll" | "mask.component")
+                || (had_masks
+                    && matches!(id, "edit.undo" | "edit.reset" | "mask.delete" | "mask.deleteAll" | "mask.component")
                     && self.active().and_then(|p| self.develop_of(p)).is_some_and(|d| d.masks.is_empty()));
             if clear_ai {
                 self.segmenter.cancel_all();

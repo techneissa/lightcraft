@@ -10,6 +10,10 @@ use serde::{Deserialize, Serialize};
 const CONTROL_LIMIT: usize = 16 * 1024;
 const RESPONSE_LIMIT: usize = 4 * 1024 * 1024;
 const TIMEOUT: Duration = Duration::from_secs(9 * 60);
+/// The score a Describe phrase needs (the reference default).
+pub const TEXT_THRESHOLD: f32 = 0.5;
+/// The score a Subject, Sky or Background phrase needs (official PR #3109 lowered it for these).
+pub const CONCEPT_THRESHOLD: f32 = 0.40;
 pub const ENV: &str = "LIGHTCRAFT_SAM3_REMOTE";
 
 #[derive(Serialize, Deserialize)]
@@ -17,6 +21,9 @@ pub enum Operation {
     Prepare,
     Clicks(Vec<[f32; 3]>),
     Text(String),
+    /// Like `Text`, with the looser score of Subject, Sky and Background ([`CONCEPT_THRESHOLD`]); `true`: only the
+    /// main subject's instances (Subject and Background).
+    Concept(String, bool),
 }
 
 #[derive(Serialize, Deserialize)]
@@ -37,7 +44,7 @@ impl Request {
         }
         match &self.operation {
             Operation::Prepare => {}
-            Operation::Text(text) if text.len() <= 4096 && text.split([',', ';']).any(|p| !p.trim().is_empty()) => {}
+            Operation::Text(text) | Operation::Concept(text, _) if text.len() <= 4096 && text.split([',', ';']).any(|p| !p.trim().is_empty()) => {}
             Operation::Clicks(clicks)
                 if !clicks.is_empty()
                     && clicks.len() <= 64
@@ -109,14 +116,15 @@ impl Client {
 }
 
 /// Extract text-prompted segmentation logits for a compound prompt with alternative groups (`|`)
-/// and comma-separated phrase lists.
-pub fn text_logits(model: &mut Sam3, enc: &mut Encoded, text: &str) -> crate::Result<Option<Vec<f32>>> {
+/// and comma-separated phrase lists; a phrase needs a score of `threshold`, and with `main_only` only the main
+/// subject's instances count.
+pub fn text_logits(model: &mut Sam3, enc: &mut Encoded, text: &str, threshold: f32, main_only: bool) -> crate::Result<Option<Vec<f32>>> {
     let mut best_group: Option<(f32, Vec<f32>)> = None;
     for group in text.split('|').map(str::trim).filter(|g| !g.is_empty()) {
         let mut merged: Option<Vec<f32>> = None;
         let mut group_score = 0.0f32;
         for phrase in group.split([',', ';']).map(str::trim).filter(|p| !p.is_empty()) {
-            if let Some(p) = model.segment_text(enc, phrase, 0.40)? {
+            if let Some(p) = model.segment_text_with(enc, phrase, threshold, main_only)? {
                 group_score = group_score.max(p.score);
                 if let Some(m) = &mut merged {
                     for (a, b) in m.iter_mut().zip(p.logits) {
@@ -145,7 +153,8 @@ fn predict(model: &mut Sam3, enc: &mut Encoded, operation: Operation) -> Result<
             model.prepare_clicks(enc).map_err(|e| e.to_string())?;
             Ok(None)
         }
-        Operation::Text(text) => text_logits(model, enc, &text).map_err(|e| e.to_string()),
+        Operation::Text(text) => text_logits(model, enc, &text, TEXT_THRESHOLD, false).map_err(|e| e.to_string()),
+        Operation::Concept(text, main) => text_logits(model, enc, &text, CONCEPT_THRESHOLD, main).map_err(|e| e.to_string()),
         Operation::Clicks(points) => {
             let clicks: Vec<_> = points.into_iter().map(|p| Click { x: p[0], y: p[1], positive: p[2] == 1.0 }).collect();
             Ok(Some(model.segment_clicks(enc, &clicks).map_err(|e| e.to_string())?.logits))
