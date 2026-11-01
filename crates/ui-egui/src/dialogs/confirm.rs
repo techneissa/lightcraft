@@ -70,6 +70,10 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }
             let mut p = params.clone();
             p[key.as_str()] = json!(value.trim());
+            if command == "folder.rename" {
+                // the folder moves on a worker (an activity row), not on the window's thread
+                p["background"] = json!(true);
+            }
             app.run(command, p)
         }
         Dialog::CaptureTime { mode, time, days, hours, minutes, zone } => app.run(
@@ -91,7 +95,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }
             r
         }
-        Dialog::Rename { template, start } => app.run("photo.rename", json!({"template": template, "start": start})),
+        Dialog::Rename { template, start } => app.run("photo.rename", json!({"template": template, "start": start, "background": true})),
         Dialog::RenameKeyword { from, to } => app.run("keyword.rename", json!({"from": from, "to": to})),
         Dialog::RenamePerson { from, to, merge } => app.run("faces.renamePerson", json!({"from": from, "to": to.trim(), "merge": merge})),
         Dialog::KeywordTag {

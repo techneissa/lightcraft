@@ -91,6 +91,31 @@ fn plan_rename_core(
     out
 }
 
+/// The file moves `plans` stand for: the plans whose path changes.
+pub(crate) fn plan_moves(plans: &[RenamePlan]) -> Vec<(String, String)> {
+    plans
+        .iter()
+        .filter_map(|pl| match (&pl.from_path, &pl.to_path) {
+            (Some(a), Some(b)) if Path::new(a) != Path::new(b) => Some((a.clone(), b.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// [`plan_rename_photos`] on the file system `fs`.
+pub(crate) fn plan_rename_photos_with(photos: &[std::sync::Arc<Photo>], template: &str, start: usize, fs: &dyn MoveFs) -> Vec<RenamePlan> {
+    plan_rename_core(photos, template, start, &|p| fs.exists(p), &|a, b| fs.same_file(a, b))
+}
+
+/// What [`Session::prepare_file_plans`] works out: the catalog change, how many photos it
+/// touches, and the file moves to do first.
+#[derive(Clone)]
+pub(crate) struct FilePrep {
+    pub(crate) op: Op,
+    pub(crate) n: usize,
+    pub(crate) moves: Vec<(String, String)>,
+}
+
 impl Session {
     /// Plan renaming `ids` with `template` (sequence numbers from `start`), resolving collisions.
     pub fn plan_rename(&self, ids: &[PhotoId], template: &str, start: usize) -> Vec<RenamePlan> {
@@ -172,6 +197,15 @@ impl Session {
     /// (all or nothing), then commit one undoable op, labelled `label(count)`, that points the
     /// photos (and their virtual copies) at the new paths. Undo moves the files back.
     pub(crate) fn apply_file_plans(&mut self, fs: &dyn MoveFs, plans: &[RenamePlan], label: &dyn Fn(usize) -> String) -> Result<usize> {
+        let prep = self.prepare_file_plans(fs, plans)?;
+        let moved = move_all(fs, &prep.moves);
+        self.settle_file_plans(fs, prep, moved, label)
+    }
+
+    /// The first half of [`Session::apply_file_plans`]: settle the sidecars and work out the
+    /// catalog change and the file moves, touching no photo file. The moves can then run anywhere
+    /// ([`move_all`]; [`crate::rename_job`] runs them on a worker) before [`Session::settle_file_plans`].
+    pub(crate) fn prepare_file_plans(&mut self, fs: &dyn MoveFs, plans: &[RenamePlan]) -> Result<FilePrep> {
         // the sidecars move with their files: the queued automatic writes land first, where the files are now
         self.finish_sidecar_writes();
         // A partly completed rename can already have the requested photo name. Repair
@@ -196,14 +230,21 @@ impl Session {
         }
         let n = ops.len();
         let op = Op::Batch { ops };
-        let moves: Vec<(String, String)> = plans
-            .iter()
-            .filter_map(|pl| match (&pl.from_path, &pl.to_path) {
-                (Some(a), Some(b)) if Path::new(a) != Path::new(b) => Some((a.clone(), b.clone())),
-                _ => None,
-            })
-            .collect();
-        if let Err(e) = move_all(fs, &moves) {
+        Ok(FilePrep { op, n, moves: plan_moves(plans) })
+    }
+
+    /// The second half of [`Session::apply_file_plans`], after the moves of `prep` ran as `moved`:
+    /// a failed move is followed (the catalog matches what stayed moved) and reported; otherwise
+    /// commit the one undoable op, moving the files back when the catalog does not take it.
+    pub(crate) fn settle_file_plans(
+        &mut self,
+        fs: &dyn MoveFs,
+        prep: FilePrep,
+        moved: std::result::Result<(), BatchMoveError>,
+        label: &dyn Fn(usize) -> String,
+    ) -> Result<usize> {
+        let FilePrep { op, n, moves } = prep;
+        if let Err(e) = moved {
             return Err(EngineError::Other(self.follow_stuck(&op, e, true).0));
         }
         if n > 0

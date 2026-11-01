@@ -52,3 +52,4 @@ feature: it is the hot spot two branches would both append to.
 - [Book](book.md): File ▸ Book… lays photos out as a photo book (cover, five page templates, Pages and Spread views) and exports a PDF or JPEGs. Branch `feat/23-book`.
 - [Find People and Find Wires](find-people-wires.md): Remove panel buttons that outline people and wires and remove them in one click, with SAM 3 or built-in detectors. Branch `feat/24-find-people-wires`.
 - [Map view](map-view.md): View ▸ Map with pins, drag to geotag, saved locations, location filter and track logs, from the official Map PRs taken early; starts Offline until you pick a tile server. Branch `feat/4-map-view`.
+- [Renaming, one way everywhere](consistent-renaming.md): Rows rename in place with one set of rules; Rename Photos and Rename Folder move their files on a worker. Branch `feat/27-consistent-renaming`.

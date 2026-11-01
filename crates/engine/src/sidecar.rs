@@ -963,7 +963,7 @@ impl Session {
         self.auto_write_sidecar_ids(ids);
     }
 
-    fn auto_write_sidecar_ids(&mut self, ids: Vec<PhotoId>) {
+    pub(crate) fn auto_write_sidecar_ids(&mut self, ids: Vec<PhotoId>) {
         if ids.is_empty() {
             return;
         }
