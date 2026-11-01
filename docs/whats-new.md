@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-11-01
+
+### Remove: Find People and Find Wires
+- The Remove panel has Find People and Find Wires. Each outlines what it finds on the photo; click one to select it (⇧-click adds more), then Remove, or Remove All, takes them out with content-aware spots in one undo step, and every result is an ordinary spot you can still move, resize or delete. People come from the local SAM 3 model (rough shapes from detected faces when only the face detector is installed); the main subject, the largest and most central person, is left out. Wires (power lines, cables) come from SAM 3 too, or from a built-in thin-line detector without it. Agents get `spot.findPeople`, `spot.findWires`, `spot.candidates`, `spot.selectCandidate` and `spot.removeCandidates`.
+
 ## 2026-10-30
 
 ### The Flatpak may talk to the accessibility bus
