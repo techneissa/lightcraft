@@ -12,6 +12,9 @@ run cargo test -p lightcraft-ui-egui --lib -- tests::book
 run cargo test -p lightcraft-engine --lib -- deleting_the_first_part a_selected_brush_part the_selected_part_follows config:: layers open_path animated_gif denoise prefs quick_jobs lens_profiles camera_preview camera_profiles local_profiles smart_local smart_editing smart media presets files auto_sync quick_filters exif_edit exif_xmp sidecar::exif lens_database export::tests
 run cargo test -p lightcraft-lensdb
 run cargo test -p lightcraft-develop
+run cargo test -p lightcraft-reflections
+run cargo test -p lightcraft-engine --lib -- reflections
+run cargo test -p lightcraft-ui-egui --lib -- reflection
 run cargo test -p lightcraft-catalog
 run cargo test -p lightcraft-preview
 run cargo test -p lightcraft-pipeline --lib -- find:: masks::tests::a_first_part_is_the_base tests_tone_sliders tests_tone tests_slider_strength tests_sharpen_mask

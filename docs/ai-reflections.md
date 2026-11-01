@@ -22,7 +22,7 @@ On Windows use `py -m venv .venv-reflections`, then `.venv-reflections\Scripts\p
 
 Use Install Reflection Model… and select the resulting directory containing `manifest.json` and `model.safetensors`. The installer verifies the manifest and SHA-256 before copying. It does not replace an existing installation. Alternatively supply the author checkpoint and VGG file manually; see the script's `--help`.
 
-Models live under the application's configuration directory in `reflection-models/<model-id>`. `LIGHTCRAFT_REFLECTION_MODELS` can override that directory. The Model download instructions link opens the author's trained-weight page; the conversion above creates the format needed by this app.
+Models live in `reflection-models/<model-id>` under the application's configuration directory; in the custom build on a Mac they live in `~/Library/Application Support/ArtCraft/models/<model-id>`, the folder shared with PhotoCraft (the installer only creates `<model-id>` there and never replaces an existing one). `LIGHTCRAFT_REFLECTION_MODELS` can override either folder. The Model download instructions link opens the author's trained-weight page; the conversion above creates the format needed by this app.
 
 ## Implementation and verification
 
