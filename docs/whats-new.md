@@ -1,5 +1,10 @@
 # What's new in LightCraft
 
+## 2026-11-01
+
+### Shared SAM 3 Model Folder
+- AI masks look for the SAM 3 model in `~/Library/Application Support/ArtCraft/models/sam3` (shared with PhotoCraft) first, and a download goes there.
+
 ## 2026-10-30
 
 ### Sharpening Radius Works, Vignette Is Smoother
