@@ -17,6 +17,8 @@ use serde_json::{Value, json};
 
 use crate::LightcraftApp;
 
+pub mod book_task;
+
 pub struct ExportTask {
     pub total: usize,
     /// Photos started so far and the file in progress.
@@ -250,6 +252,9 @@ fn export_summary(files: &[Value], photos: Option<&Value>, total: usize, cancell
     if let Some(pdf) = files.first().filter(|f| f["print"] == true) {
         m = format!("Printed to PDF: {} photos, {} pages", pdf["photos"], pdf["pages"]);
     }
+    if let Some(book) = files.first().filter(|f| f["book"] == true) {
+        m = format!("Exported book: {} photos, {} pages", book["photos"], book["pages"]);
+    }
     if skipped > 0 {
         m += &crate::i18n::tr_format!(" · {skipped} skipped (file exists)", skipped = skipped);
     }
@@ -275,7 +280,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
             let (total, show) = (task.total, task.show_in_finder);
             // the batch's summary (`activity.list` → finished): photos placed, the failures and why
             if let Ok((files, _, _)) = &r {
-                task.guard.progress(files.len() as u64, total as u64);
+                task.guard.progress(book_task::finished_done(files, total) as u64, total as u64);
                 for f in files.iter().filter(|f| f.get("error").is_some()) {
                     let name = f.get("file").and_then(Value::as_str).unwrap_or("");
                     task.guard.count_failed(&format!("{name}: {}", f["error"].as_str().unwrap_or("error")));

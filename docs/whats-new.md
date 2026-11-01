@@ -5,6 +5,9 @@
 ### Plainer Camera Card in Info
 - The camera card in Info looks like the plain official card again: dim Camera, Lens, Focal length, Shutter speed, Aperture and ISO labels with plain values. Click a value to edit it (Return saves, Esc cancels). A focal length or aperture your lens cannot give (read from its name, such as 16-35mm f/4) is refused: the value shakes, keeps its old text, and a small red ! says why; `photo.setMeta` refuses it too.
 
+### Book
+- File ▸ Book… lays the selected photos (or the photos in view) out as a photo book: a cover, then pages of 1, 2, 3 or 4 photos. Pick the page size and orientation, the margin, the cell padding and the background; change a page's template or drag a photo onto another cell. A Pages view shows every page and a Spread view shows two pages open side by side. Export PDF… and Export JPEGs… write the book, and the book is saved with the library. Agents use the `book.*` commands.
+
 ### Masking Workflow
 - Under the selected mask, one Add · Subtract · Intersect control sets the mode of the next part, and a button for each kind of part adds it (Brush, Linear, Radial, Color, Luminance, Subject, Sky, Background, Object, Describe); the menus are gone.
 - Each part is a row you click: it selects the part and brings its tool back (the Brush painting into a brush part, a gradient's handles on the photo, the colour picker). At the right of each row: its mode (a dropdown showing +, − or ∩), Invert and Delete. Delete removes the selected part, else the mask.

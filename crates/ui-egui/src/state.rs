@@ -394,6 +394,9 @@ pub struct UiState {
     /// The Print dialog's page, selection and drag.
     #[serde(skip)]
     pub print: crate::print_view::PrintUi,
+    /// The Book dialog's view, page and drag.
+    #[serde(skip)]
+    pub book: crate::book_view::BookUi,
 }
 
 impl Default for UiState {
@@ -548,6 +551,7 @@ impl Default for UiState {
             status: String::new(),
             dialog: None,
             print: Default::default(),
+            book: Default::default(),
         }
     }
 }

@@ -19,6 +19,7 @@ pub mod animated_gif;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod apple_photos;
 pub mod availability;
+pub mod book;
 pub(crate) mod camera_preview;
 pub mod camera_profiles;
 pub mod cmd;
@@ -369,6 +370,8 @@ pub struct Session {
     pub print: print::template::PrintSettings,
     /// Saved print templates (`print.template.*`), persisted in prefs.json.
     pub print_templates: Vec<print::template::PrintTemplate>,
+    /// The library's photo books (`book.*`), saved in books.json.
+    pub books: book::Books,
     /// Metadata presets (`metadata.*`), persisted in prefs.json.
     pub metadata_presets: Vec<cmd::metadata::MetadataPreset>,
     /// Saved filter-bar settings (`filter.*`), persisted in prefs.json.
@@ -540,6 +543,7 @@ impl Session {
             export_presets: Vec::new(),
             print: Default::default(),
             print_templates: Vec::new(),
+            books: Default::default(),
             metadata_presets: Vec::new(),
             filter_presets: Vec::new(),
             curve_presets: Vec::new(),
