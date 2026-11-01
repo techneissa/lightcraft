@@ -4,6 +4,7 @@
 //! change when [`XmpPrefs::auto_write`] is on): rating, colour label, title, caption, copyright,
 //! creator, keywords, capture time and GPS in the standard namespaces, plus our complete develop
 //! settings (`lc:settings`, JSON), the pick/reject flag (`lc:flag`) and location (`lc:location`).
+//! The camera, lens and exposure values edited in Info are written and read back too (`exif.rs`).
 //! A sidecar is written only beside an original that is an existing file at an absolute path;
 //! otherwise the save fails.
 //!
@@ -40,6 +41,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::{EngineError, Result, Session};
+
+mod exif;
 
 /// Sidecar file naming.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -142,6 +145,8 @@ pub struct SidecarData {
     /// `xmp:CreateDate` (first found). Used only when the file itself has no capture time.
     pub captured: Option<String>,
     pub develop: Option<DevelopPatch>,
+    /// The camera, lens and exposure values it states (edited values come back as overrides).
+    pub exif: Option<exif::SidecarExif>,
     /// Actionable diagnostics for foreign develop settings that were not fully carried over.
     /// These are surfaced in the photo import report and never persisted in the catalog.
     pub warnings: Vec<crate::import::ImportWarning>,
@@ -185,6 +190,7 @@ pub fn parse_sidecar(xmp: &str, target: crate::crs::Target) -> std::result::Resu
         // photo's are kept.
         regions: d.values.contains_key("mwg-rs:Regions").then(|| m.regions.clone()),
         captured: m.capture_time.map(|d| d.to_iso()),
+        exif: exif::read(m),
         ..Default::default()
     };
     if let Some(r) = m.rating {
@@ -314,6 +320,9 @@ pub fn merge_into(p: &mut Photo, sc: &SidecarData, now: &str) -> bool {
     if let Some(r) = &sc.regions {
         m.regions = r.clone();
     }
+    if let Some(x) = &sc.exif {
+        exif::apply(m, x);
+    }
     let develop = match &sc.develop {
         Some(DevelopPatch::Full(s)) => (**s).clone(),
         Some(DevelopPatch::Partial(v)) => {
@@ -377,6 +386,7 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
         ..Default::default()
     };
     let mut meta = meta;
+    let exif_fields = exif::write(&mut meta, &p.meta.exif);
     if remove_location {
         (meta.sublocation, meta.city, meta.state, meta.country, meta.gps) = (None, None, None, None, None);
     }
@@ -389,6 +399,9 @@ pub fn sidecar_packet_with(p: &Photo, cat: &lightcraft_catalog::Catalog, remove_
     let mut lc = vec![("settings", settings.as_str()), ("flag", flag)];
     if !remove_location && !p.meta.location.trim().is_empty() {
         lc.push(("location", p.meta.location.as_str()));
+    }
+    if let Some(fields) = &exif_fields {
+        lc.push((exif::MARKER, fields.as_str()));
     }
     lightcraft_meta::write_xmp_lc(&meta, &lc)
 }
@@ -469,11 +482,12 @@ pub(crate) fn sidecar_contents(path: &Path, fresh: String, stamp: &str) -> std::
     if bytes.iter().all(u8::is_ascii_whitespace) {
         return Ok((fresh, false, None));
     }
-    let rules = lightcraft_meta::MergeRules { owned: OWNED, owned_if_present: OWNED_IF_STATED };
-    match std::str::from_utf8(&bytes)
-        .map_err(|e| e.to_string())
-        .and_then(|old| lightcraft_meta::merge_xmp(old, &fresh, rules).map_err(|e| e.to_string()))
-    {
+    match std::str::from_utf8(&bytes).map_err(|e| e.to_string()).and_then(|old| {
+        // (the camera and exposure tags of every field edited now or at the last save are owned too)
+        let owned: Vec<&str> = OWNED.iter().copied().chain(exif::extra_owned(old, &fresh)).collect();
+        let rules = lightcraft_meta::MergeRules { owned: &owned, owned_if_present: OWNED_IF_STATED };
+        lightcraft_meta::merge_xmp(old, &fresh, rules).map_err(|e| e.to_string())
+    }) {
         Ok(merged) => Ok((merged, true, None)),
         Err(why) => {
             let b = backup(path, stamp)?;
