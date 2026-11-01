@@ -240,3 +240,24 @@ fn removing_a_person_leaves_the_background() {
     }
     assert!(mean / (n as f32) < 0.02 && worst < 0.08, "mean {} worst {worst}", mean / n as f32);
 }
+
+#[test]
+fn thick_and_thin_wires_in_a_noisy_sky() {
+    // the noise a real sky has (about one level in a hundred), a 5 px cable and a 1.5 px one close together
+    let (w, h) = (1280usize, 960usize);
+    let mut img = sky(w, h, &[(500.0, 300.0, 10.0, 5.0, 0.35), (520.0, 322.0, 10.0, 1.5, 0.12)]);
+    for (i, p) in img.data.iter_mut().enumerate() {
+        let n = ((i as u32).wrapping_mul(2654435761) >> 24) as i32 - 128;
+        let d = n / 40; // -3..3 levels
+        for c in p.iter_mut().take(3) {
+            *c = (i32::from(*c) + d).clamp(0, 255) as u8;
+        }
+    }
+    let found = wires::detect(&img, 50.0);
+    assert_eq!(found.len(), 2, "{} wires", found.len());
+    assert!(found.iter().all(|c| c.bbox[2] - c.bbox[0] > 0.9));
+    // the thick one gets the bigger dabs
+    let size = |c: &Candidate| c.spots.iter().map(|s| s.size).fold(0.0, f64::max);
+    let (a, b) = (size(&found[0]), size(&found[1]));
+    assert!(a.max(b) > a.min(b), "{a} vs {b}");
+}

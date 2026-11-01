@@ -299,6 +299,60 @@ pub fn simplify(pts: &[(f64, f64)], eps: f64, closed: bool) -> Vec<(f64, f64)> {
     pts.iter().zip(&keep).filter(|(_, k)| **k).map(|(p, _)| *p).collect()
 }
 
+/// `m` thinned to a one-pixel-wide centre line (Zhang-Suen), at most `max_iter` rounds: a band thicker than
+/// `2 · max_iter` pixels stays partly thick.
+pub fn thin(m: &Mask, max_iter: usize) -> Mask {
+    let (w, h) = (m.w, m.h);
+    let mut cur = m.bits.clone();
+    if w == 0 || h == 0 || cur.len() != w * h {
+        return Mask { w, h, bits: cur };
+    }
+    let at = |b: &[bool], x: i64, y: i64| x >= 0 && y >= 0 && (x as usize) < w && (y as usize) < h && b[y as usize * w + x as usize];
+    for _ in 0..max_iter {
+        let mut changed = false;
+        for step in 0..2 {
+            let mut del = Vec::new();
+            for y in 0..h {
+                for x in 0..w {
+                    if !cur[y * w + x] {
+                        continue;
+                    }
+                    let (xi, yi) = (x as i64, y as i64);
+                    // p2 … p9 clockwise from the north neighbour
+                    let p = [
+                        at(&cur, xi, yi - 1),
+                        at(&cur, xi + 1, yi - 1),
+                        at(&cur, xi + 1, yi),
+                        at(&cur, xi + 1, yi + 1),
+                        at(&cur, xi, yi + 1),
+                        at(&cur, xi - 1, yi + 1),
+                        at(&cur, xi - 1, yi),
+                        at(&cur, xi - 1, yi - 1),
+                    ];
+                    let b = p.iter().filter(|v| **v).count();
+                    let a = (0..8).filter(|k| !p[*k] && p[(k + 1) % 8]).count();
+                    let ok = if step == 0 {
+                        !(p[0] && p[2] && p[4]) && !(p[2] && p[4] && p[6])
+                    } else {
+                        !(p[0] && p[2] && p[6]) && !(p[0] && p[4] && p[6])
+                    };
+                    if (2..=6).contains(&b) && a == 1 && ok {
+                        del.push(y * w + x);
+                    }
+                }
+            }
+            changed |= !del.is_empty();
+            for i in del {
+                cur[i] = false;
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    Mask { w, h, bits: cur }
+}
+
 /// Whether `(x, y)` is inside the polygon `ring` (even-odd).
 pub fn in_polygon(ring: &[(f64, f64)], x: f64, y: f64) -> bool {
     let mut inside = false;
@@ -374,6 +428,17 @@ mod tests {
         // a single pixel and an empty mask do not loop or panic
         assert_eq!(trace_outline(&Mask::from_fn(3, 3, |x, y| x == 1 && y == 1)).len(), 1);
         assert!(trace_outline(&Mask::new(0, 0)).is_empty());
+    }
+
+    #[test]
+    fn thinning_leaves_a_one_pixel_line() {
+        let band = Mask::from_fn(40, 12, |x, y| (4..8).contains(&y) && x >= 2 && x < 38);
+        let t = thin(&band, 8);
+        let ys: Vec<usize> = (0..t.h).filter(|y| t.bits[y * t.w + 20]).collect();
+        assert_eq!(ys.len(), 1, "{ys:?}");
+        assert!(t.count() >= 30 && t.count() <= 40, "{}", t.count());
+        assert_eq!(components(&t, 4).len(), 1, "still one piece");
+        assert_eq!(thin(&Mask::new(0, 0), 3).count(), 0);
     }
 
     #[test]

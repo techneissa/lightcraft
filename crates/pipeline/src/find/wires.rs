@@ -14,7 +14,7 @@
 
 use lightcraft_raster::{Plane, Rgba8, blur::gaussian};
 
-use super::shape::{Mask, components, dilate};
+use super::shape::{Mask, components, dilate, thin};
 use super::{Candidate, Kind, cover};
 
 /// Most wires proposed.
@@ -91,7 +91,34 @@ struct Px {
     y: f64,
     /// Unit vector across the line.
     n: (f64, f64),
-    r: f32,
+}
+
+/// The pixels of a thinned line (placed at `(ox, oy)` in the photo), each with the unit vector across the line there,
+/// from the line's own direction within a few pixels.
+fn chain_pixels(line: &Mask, ox: usize, oy: usize) -> Vec<Px> {
+    let (w, h) = (line.w as i64, line.h as i64);
+    let mut out = Vec::new();
+    for (i, b) in line.bits.iter().enumerate() {
+        if !*b {
+            continue;
+        }
+        let (x, y) = ((i % line.w) as i64, (i / line.w) as i64);
+        let (mut sxx, mut syy, mut sxy) = (0.0f64, 0.0f64, 0.0f64);
+        for dy in -5i64..=5 {
+            for dx in -5i64..=5 {
+                let (nx, ny) = (x + dx, y + dy);
+                if nx >= 0 && ny >= 0 && nx < w && ny < h && dx * dx + dy * dy <= 25 && line.bits[(ny * w + nx) as usize] {
+                    let (fx, fy) = (dx as f64, dy as f64);
+                    sxx += fx * fx;
+                    syy += fy * fy;
+                    sxy += fx * fy;
+                }
+            }
+        }
+        let ang = 0.5 * (2.0 * sxy).atan2(sxx - syy);
+        out.push(Px { x: (ox as i64 + x) as f64 + 0.5, y: (oy as i64 + y) as f64 + 0.5, n: (-ang.sin(), ang.cos()) });
+    }
+    out
 }
 
 /// Least-squares `u ≈ c0 + c1·s + c2·s²`; `None` for a degenerate set.
@@ -168,7 +195,7 @@ fn judge(px: &[Px], l: &Plane, long: f64, c_min: f32, depth: u8) -> Result<Found
     let worst = resid.iter().enumerate().max_by(|a, b| a.1.abs().total_cmp(&b.1.abs())).map(|(i, _)| i);
     // the sag: how far the middle is from the chord between the ends
     let sag = (fit(0.0) - (fit(-1.0) + fit(1.0)) / 2.0).abs();
-    if rms > 0.0012 * long + 0.8 || sag > 0.12 * extent {
+    if rms > 0.002 * long + 1.0 || sag > 0.12 * extent {
         return Err(worst);
     }
     // continuity: most of the length has a ridge pixel, and not a tangle of them
@@ -179,36 +206,30 @@ fn judge(px: &[Px], l: &Plane, long: f64, c_min: f32, depth: u8) -> Result<Found
         }
     }
     let filled = occupied.iter().filter(|o| **o).count() as f64 / (extent + 1.0);
-    if filled < 0.8 || n > 2.5 * extent {
-        return Err(worst);
-    }
-    // direction: the pixels run along the fitted line
-    let slope = |s: f64| (c[1] + 2.0 * c[2] * s) / half; // du/dt
-    let aligned = px
-        .iter()
-        .zip(&st)
-        .filter(|(p, (s, _))| {
-            // the line's direction in photo coordinates is a + slope·b; across it is perpendicular
-            let (dx, dy) = (ax + slope(*s) * bx, ay + slope(*s) * by);
-            let m = (dx * dx + dy * dy).sqrt().max(1e-12);
-            (p.n.0 * dx + p.n.1 * dy).abs() / m < 0.5
-        })
-        .count() as f64
-        / n;
-    if aligned < 0.8 {
+    if filled < 0.8 || n > 3.5 * extent {
         return Err(worst);
     }
     // darker than the area on both sides, and the sides alike; the width comes from the same profiles
     let (mut good, mut widths, mut contrasts) = (0usize, Vec::new(), Vec::new());
     for p in px {
         let centre = [-1.0f64, 0.0, 1.0].into_iter().map(|d| sample(l, p.x + p.n.0 * d, p.y + p.n.1 * d)).fold(f32::MAX, f32::min);
+        let at = |sign: f64, k: f64| sample(l, p.x + sign * p.n.0 * k, p.y + sign * p.n.1 * k);
+        // the profile climbs out of the wire; where it stops climbing the wire's edge is behind us (a thick cable and
+        // a thin one need their sides sampled at different distances)
+        let walk = |sign: f64| {
+            let mut k = 1usize;
+            while k < 10 && at(sign, k as f64 + 1.0) > at(sign, k as f64) + 0.004 {
+                k += 1;
+            }
+            k
+        };
         let side = |sign: f64| {
-            let v: Vec<f32> = (0..4).map(|k| sample(l, p.x + sign * p.n.0 * (3.5 + k as f64), p.y + sign * p.n.1 * (3.5 + k as f64))).collect();
-            v.iter().sum::<f32>() / v.len() as f32
+            let k = walk(sign) as f64;
+            (2..6).map(|d| at(sign, k + d as f64)).sum::<f32>() / 4.0
         };
         let (a, b) = (side(1.0), side(-1.0));
         let contrast = (a + b) / 2.0 - centre;
-        if contrast >= c_min && (a - b).abs() <= 0.5 * contrast + 0.015 {
+        if contrast >= c_min && (a - b).abs() <= 0.7 * contrast + 0.02 {
             good += 1;
             contrasts.push(contrast);
             // width: steps along the normal until the profile is back above half the contrast
@@ -219,7 +240,7 @@ fn judge(px: &[Px], l: &Plane, long: f64, c_min: f32, depth: u8) -> Result<Found
             widths.push(reach(1.0) + reach(-1.0));
         }
     }
-    if (good as f64) < 0.75 * n {
+    if (good as f64) < 0.55 * n {
         return Err(worst);
     }
     widths.sort_by(f64::total_cmp);
@@ -227,7 +248,7 @@ fn judge(px: &[Px], l: &Plane, long: f64, c_min: f32, depth: u8) -> Result<Found
     let width = widths.get(widths.len() / 2).copied().unwrap_or(2.0).clamp(1.0, 14.0);
     let contrast = contrasts.get(contrasts.len() / 2).copied().unwrap_or(0.0);
     // the path: the median offset in bins along the line (it follows the real wire), gaps from the fit
-    let bin = 6.0;
+    let bin = 16.0;
     let nb = (extent / bin).ceil() as usize + 1;
     let mut bins: Vec<Vec<f64>> = vec![Vec::new(); nb];
     for (t, u) in &tu {
@@ -245,6 +266,11 @@ fn judge(px: &[Px], l: &Plane, long: f64, c_min: f32, depth: u8) -> Result<Found
             b[b.len() / 2]
         };
         path.push((mx + ax * t + bx * u, my + ay * t + by * u));
+    }
+    // (a thinned line is a staircase: smooth out its steps)
+    let raw = path.clone();
+    for i in 1..raw.len().saturating_sub(1) {
+        path[i] = ((raw[i - 1].0 + raw[i].0 + raw[i + 1].0) / 3.0, (raw[i - 1].1 + raw[i].1 + raw[i + 1].1) / 3.0);
     }
     // the ends reach the end of the chain
     for (t, side) in [(t0, true), (t1, false)] {
@@ -291,8 +317,15 @@ pub fn detect(img: &Rgba8, sensitivity: f32) -> Vec<Candidate> {
     });
     let c_min = min_contrast(sensitivity);
     let rd = ridges(&l, long);
-    let hi = 0.25 * c_min;
-    let lo = 0.4 * hi;
+    // the ridge response of a smooth sky is mostly noise: a line has to stand well above the photo's own 90th percentile,
+    // however sensitive the setting
+    let floor = {
+        let mut v: Vec<f32> = rd.r.iter().copied().step_by(7).collect();
+        v.sort_by(f32::total_cmp);
+        v.get(v.len() * 9 / 10).copied().unwrap_or(0.0)
+    };
+    let hi = (0.25 * c_min).max(6.0 * floor);
+    let lo = (0.1 * c_min).max(3.0 * floor);
     // thin to one pixel across the ridge
     let edge = 3usize;
     let mut ridge = Mask::new(w, h);
@@ -310,19 +343,25 @@ pub fn detect(img: &Rgba8, sensitivity: f32) -> Vec<Candidate> {
             }
         }
     }
-    // bridge gaps of a pixel or two when linking, then keep the ridge pixels of each link
-    let linked = dilate(&ridge, 1.5);
+    // A wire a few pixels wide has a ridge along each edge as well as one down its middle, and a gap of a pixel or two
+    // is common: close the ridges into bands (gaps of up to five pixels), keep the bands that hold a strong ridge, and
+    // thin each band to its centre line.
+    let bands = dilate(&ridge, 2.5);
     let mut out: Vec<(f64, Found)> = Vec::new();
-    for comp in components(&linked, 400) {
-        let px: Vec<Px> = comp
-            .mask
-            .bits
-            .iter()
-            .enumerate()
-            .filter(|(i, b)| **b && ridge.bits[*i])
-            .map(|(i, _)| Px { x: (i % w) as f64 + 0.5, y: (i / w) as f64 + 0.5, n: (f64::from(rd.n[i].0), f64::from(rd.n[i].1)), r: rd.r[i] })
-            .collect();
-        if px.len() < 8 || !px.iter().any(|p| p.r > hi) {
+    for comp in components(&bands, 400) {
+        let [x0, y0, x1, y1] = comp.bbox;
+        let (bw, bh) = (x1 - x0 + 1, y1 - y0 + 1);
+        if bw.max(bh) as f64 + 1.0 < MIN_LEN * long * 0.8 {
+            continue;
+        }
+        let strong = (y0..=y1).any(|y| (x0..=x1).any(|x| comp.mask.bits[y * w + x] && ridge.bits[y * w + x] && rd.r[y * w + x] > hi));
+        if !strong {
+            continue;
+        }
+        let crop = Mask::from_fn(bw, bh, |x, y| comp.mask.bits[(y0 + y) * w + x0 + x]);
+        let line = thin(&crop, 8);
+        let px = chain_pixels(&line, x0, y0);
+        if px.len() < 8 {
             continue;
         }
         let mut found = Vec::new();

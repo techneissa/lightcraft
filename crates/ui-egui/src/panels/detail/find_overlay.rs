@@ -43,7 +43,11 @@ pub(super) fn show(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response
         let n = map.norm(q);
         let tol = 8.0 / f64::from(long.max(1.0));
         let mut hits: Vec<_> = view.entries.iter().filter(|e| e.candidate.hit(n.x, n.y, tol)).collect();
-        hits.sort_by(|a, b| (a.candidate.kind == Kind::Person, a.candidate.area).partial_cmp(&(b.candidate.kind == Kind::Person, b.candidate.area)).unwrap_or(std::cmp::Ordering::Equal));
+        hits.sort_by(|a, b| {
+            (a.candidate.kind == Kind::Person, a.candidate.area)
+                .partial_cmp(&(b.candidate.kind == Kind::Person, b.candidate.area))
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
         if let Some(e) = hits.first() {
             let toggle = ui.input(|i| i.modifiers.shift || i.modifiers.command);
             let _ = app.run("spot.selectCandidate", json!({"id": e.id, "toggle": toggle}));
