@@ -2,6 +2,13 @@
 
 ## 2026-11-01
 
+### Renaming, One Way Everywhere
+- Albums, folders of albums, keywords, presets, versions, masks and mask components are renamed in place: double-click the row (or choose Rename…) and its name turns into a text field. Return or a click away saves, Esc cancels, and the shortcuts stay quiet while you type.
+- A name that is empty or already used in the same list is refused, with the reason under the field. Return keeps the field open; a click away puts the old name back and says why. `album.rename`, `mask.rename`, `preset.rename`, `version.rename` and a mask component's rename refuse the same names, so agents get the same answer.
+- Renaming a keyword to one that exists asks before it merges: the Rename Keyword window says which keyword goes into which, and nothing changes until you confirm.
+- Rename Photos and Rename Folder move their files on a worker: the window keeps drawing, an activity row shows the work, and the catalog follows in one undo step when the files have moved. A move the disk refuses (no permission, name taken, disk full) changes nothing in the library and a toast says why. The file-name preview in Rename Photos waits until you stop typing before it checks the disk.
+- Rename Photos and Rename Folder refuse a name with a character a file name can't hold (`: * ? " < > |`, `/`, a control character) or an empty template, and say which character, instead of writing `-` for it. XMP sidecar writes made while files move wait and go to the new names, and an export can't start while a rename runs.
+
 ### Remove: Find People and Find Wires
 - The Remove panel has Find People and Find Wires. Each outlines what it finds on the photo; click one to select it (⇧-click adds more), then Remove, or Remove All, takes them out with content-aware spots in one undo step, and every result is an ordinary spot you can still move, resize or delete. People come from the local SAM 3 model (rough shapes from detected faces when only the face detector is installed); the main subject, the largest and most central person however small, is left out unless asked for. Wires (power lines, cables) come from SAM 3 too, or from a built-in thin-line detector without it. Agents get `spot.findPeople`, `spot.findWires`, `spot.candidates`, `spot.selectCandidate` and `spot.removeCandidates`.
 

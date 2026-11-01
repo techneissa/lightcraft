@@ -123,10 +123,20 @@ pub(crate) struct BatchMoveError {
 /// Move the files `moves` names, all or nothing: after a failure the earlier moves are undone.
 /// Moves that can't be undone (e.g. the network share went away) are reported, not ignored.
 pub(crate) fn move_all(fs: &dyn MoveFs, moves: &[(String, String)]) -> std::result::Result<(), BatchMoveError> {
+    move_all_with_progress(fs, moves, &|_| {})
+}
+
+/// [`move_all`], telling `progress` how many files have moved after each one.
+pub(crate) fn move_all_with_progress(
+    fs: &dyn MoveFs,
+    moves: &[(String, String)],
+    progress: &dyn Fn(usize),
+) -> std::result::Result<(), BatchMoveError> {
     let mut done: Vec<&(String, String)> = Vec::new();
     for m in moves {
         let Err(e) = move_file_with(fs, &m.0, &m.1) else {
             done.push(m);
+            progress(done.len());
             continue;
         };
         let mut message = e.message;

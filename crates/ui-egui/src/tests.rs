@@ -99,6 +99,7 @@ mod quit_unsaved;
 mod rating;
 mod recheck;
 mod rename_person;
+mod renaming;
 mod rules_editor;
 mod sam_setup;
 mod scroll;

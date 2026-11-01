@@ -45,13 +45,21 @@ pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                 ui.painter().image(tex.tex.id(), tr, crate::panels::presets::cover_uv(tr, tex.size), egui::Color32::WHITE);
             }
             let x = tr.right() + 10.0;
-            ui.painter().with_clip_rect(r.with_max_x(r.right() - 24.0)).text(
-                pos2(x, r.top() + 18.0),
-                Align2::LEFT_CENTER,
-                &v.name,
-                t.semibold(13.0),
-                t.text,
-            );
+            // renamed in place: the name is a text field
+            let kind = crate::inline_rename::Kind::Version(i);
+            let renaming = app.ui.rename_row.as_ref().is_some_and(|rr| rr.kind == kind);
+            if renaming {
+                let field = Rect::from_min_max(pos2(x, r.top() + 5.0), pos2(r.right() - 24.0, r.top() + 31.0));
+                crate::inline_rename::field(app, ui, &kind, field);
+            } else {
+                ui.painter().with_clip_rect(r.with_max_x(r.right() - 24.0)).text(
+                    pos2(x, r.top() + 18.0),
+                    Align2::LEFT_CENTER,
+                    &v.name,
+                    t.semibold(13.0),
+                    t.text,
+                );
+            }
             let painter = ui.painter().with_clip_rect(r);
             painter.text(pos2(x, r.top() + 38.0), Align2::LEFT_CENTER, short_time(&v.created), t.font(11.0), t.text_dim);
             if current {
@@ -63,8 +71,8 @@ pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                     Some(crate::HoverPreview { label: crate::i18n::tr_format!("Version: {}", v.name), settings: (*v.settings).clone() });
             }
             if resp.double_clicked() {
-                crate::panels::dialogs::prompt(app, "Rename Version", "Version name", &v.name, "version.rename", json!({"index": i}), "name");
-            } else if resp.clicked() && !current {
+                crate::inline_rename::begin(app, kind.clone());
+            } else if resp.clicked() && !current && !renaming {
                 let _ = app.run("version.restore", json!({"index": i}));
             }
             let resp = resp.on_hover_text(crate::i18n::tr(if current {
@@ -80,7 +88,8 @@ pub(super) fn versions(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) 
                     let _ = app.run("version.update", json!({"index": i}));
                 }
                 if ui.button(crate::i18n::tr("Rename…")).clicked() {
-                    crate::panels::dialogs::prompt(app, "Rename Version", "Version name", &v.name, "version.rename", json!({"index": i}), "name");
+                    crate::inline_rename::begin(app, kind.clone());
+                    ui.close();
                 }
                 if ui.button(crate::i18n::tr("Set as Before")).clicked() {
                     let _ = app.run("beforeAfter.setBefore", json!({"source": "version", "name": v.name}));

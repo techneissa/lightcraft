@@ -230,6 +230,9 @@ pub struct UiState {
     /// a request made while the panel can't show expires.
     #[serde(skip)]
     pub focus_keywords: Option<u64>,
+    /// A list row being renamed in place (album, keyword, preset, version).
+    #[serde(skip)]
+    pub(crate) rename_row: Option<crate::inline_rename::RowRename>,
     /// A mask being renamed in the Masks list: its id and the edited name.
     #[serde(skip)]
     pub renaming_mask: Option<(u32, String)>,
@@ -493,6 +496,7 @@ impl Default for UiState {
             focus_search: false,
             palette: None,
             focus_keywords: None,
+            rename_row: None,
             renaming_mask: None,
             describe: None,
             detail_due: None,
