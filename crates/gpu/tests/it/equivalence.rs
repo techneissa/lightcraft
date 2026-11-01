@@ -941,3 +941,67 @@ fn soft_proofs_match() {
     };
     assert!(lightcraft_gpu::render(&src, &raw, &DevelopSettings::default(), &req, None).is_none(), "declined: the CPU renders it");
 }
+
+/// Process V3 sharpening (its own Radius band, gain and Detail mix) and the smooth V3 Vignette response, GPU against
+/// CPU: Amount 50 / Radius 1.0 / Detail 25 / Masking 0 with Vignette -50, then other Radius, Masking and Detail values,
+/// at a full-size, a downscaled and a preview-sized output (the band's sigma follows the original's pixels).
+#[test]
+fn process_v3_sharpening_and_vignette_match() {
+    if !gpu() {
+        return;
+    }
+    let (w, h) = (1800, 1200);
+    let src = scene(3, w, h);
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let preview = SourceInfo { raw: true, native_long: Some(6000), ..Default::default() };
+    let base = |s: &mut DevelopSettings| {
+        s.process = Process::V3.version();
+        s.detail.sharpen_amount = 50.0;
+        s.detail.sharpen_radius = 1.0;
+        s.detail.sharpen_detail = 25.0;
+        s.detail.sharpen_masking = 0.0;
+        s.vignette.amount = -50.0;
+    };
+    let edits: [(&str, Edit); 5] = [
+        ("V3 sharpen 50/1.0/25/0 + vignette -50", |_| {}),
+        ("V3 sharpen radius 3", |s| s.detail.sharpen_radius = 3.0),
+        ("V3 sharpen radius 0.5", |s| s.detail.sharpen_radius = 0.5),
+        ("V3 sharpen masking 60, detail 0", |s| {
+            s.detail.sharpen_masking = 60.0;
+            s.detail.sharpen_detail = 0.0;
+        }),
+        ("V3 sharpen detail 100, amount 150", |s| {
+            s.detail.sharpen_detail = 100.0;
+            s.detail.sharpen_amount = 150.0;
+        }),
+    ];
+    // not vacuous: the CPU render with the sharpening and the vignette differs from one without
+    let plain = DevelopSettings { process: Process::V3.version(), ..Default::default() };
+    let mut edited = plain.clone();
+    base(&mut edited);
+    let (without, with) = (render(&src, &raw, &plain, &RenderRequest::fit(w, h)).image, render(&src, &raw, &edited, &RenderRequest::fit(w, h)).image);
+    let (changed, _, _) = diff(&without, &with);
+    let mut sharp = edited.clone();
+    sharp.vignette.amount = 0.0;
+    let (sharpened, _, _) = diff(&without, &render(&src, &raw, &sharp, &RenderRequest::fit(w, h)).image);
+    eprintln!(
+        "adapter {:?}; vignette + sharpening change the CPU render by mean {changed:.3} LSB, sharpening alone by {sharpened:.3}",
+        lightcraft_gpu::adapter_name()
+    );
+    assert!(changed > 0.5 && sharpened > 0.05, "the edits must be visible for the comparison to mean anything: {changed}, {sharpened}");
+    let mut worst = (0.0f64, 0u8);
+    for (name, edit) in edits {
+        let mut s = DevelopSettings::default();
+        base(&mut s);
+        edit(&mut s);
+        for (scale, info, req) in [
+            ("full", &raw, RenderRequest::fit(w, h)),
+            ("1200", &raw, RenderRequest::fit(1200, 1200)),
+            ("preview 720 of 6000", &preview, RenderRequest::fit(720, 720)),
+        ] {
+            let (m, x) = check(&format!("{name} [{scale}]"), &src, info, &s, &req);
+            worst = (worst.0.max(m), worst.1.max(x));
+        }
+    }
+    eprintln!("V3 sharpening + vignette, worst: mean {:.4} LSB, max {} LSB", worst.0, worst.1);
+}

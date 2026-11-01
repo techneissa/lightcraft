@@ -101,11 +101,12 @@ impl Preview {
         [Preview::Highlights, Preview::Shadows, Preview::SharpenMask, Preview::Greyscale].into_iter().find(|p| p.name() == name)
     }
 
-    /// The preview a slider's drag asks for.
+    /// The preview a slider's drag asks for. A mask's sliders (Masking panel) carry the bare name of
+    /// the adjustment they change (`exposure`), the Edit panel's the `develop` control id.
     pub fn for_control(id: &str) -> Option<Preview> {
         match id {
-            "light.exposure" | "light.whites" | "light.highlights" => Some(Preview::Highlights),
-            "light.blacks" | "light.shadows" => Some(Preview::Shadows),
+            "light.exposure" | "light.whites" | "light.highlights" | "exposure" | "whites" | "highlights" => Some(Preview::Highlights),
+            "light.blacks" | "light.shadows" | "blacks" | "shadows" => Some(Preview::Shadows),
             "detail.sharpenMasking" => Some(Preview::SharpenMask),
             "detail.sharpenAmount" | "detail.sharpenRadius" | "detail.sharpenDetail" => Some(Preview::Greyscale),
             _ => None,
@@ -204,6 +205,16 @@ mod tests {
         assert_eq!(Preview::for_control("detail.sharpenMasking"), Some(Preview::SharpenMask));
         for id in ["detail.sharpenAmount", "detail.sharpenRadius", "detail.sharpenDetail"] {
             assert_eq!(Preview::for_control(id), Some(Preview::Greyscale), "{id}");
+        }
+        // a mask's sliders carry bare ids (they are not `develop` controls)
+        for id in ["exposure", "whites", "highlights"] {
+            assert_eq!(Preview::for_control(id), Some(Preview::Highlights), "mask {id}");
+        }
+        for id in ["blacks", "shadows"] {
+            assert_eq!(Preview::for_control(id), Some(Preview::Shadows), "mask {id}");
+        }
+        for id in ["contrast", "temp", "texture", "amount", "refine", "sharpness"] {
+            assert_eq!(Preview::for_control(id), None, "mask {id}");
         }
         for id in ["light.contrast", "color.vibrance", "detail.noiseLuminance", ""] {
             assert_eq!(Preview::for_control(id), None, "{id}");

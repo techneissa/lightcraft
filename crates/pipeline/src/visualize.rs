@@ -268,11 +268,12 @@ pub fn greyscale(img: &mut Rgba8) {
 }
 
 /// The sharpening mask at Masking `masking` (0..100) as an alpha plane (1 = fully sharpened),
-/// from the detail band the render sharpens with. `None` when the render made no such band.
-pub(crate) fn sharpen_mask_alpha(prep: &crate::Prepared, masking: f64) -> Option<Plane> {
-    let blur = prep.texture_blur.as_ref()?;
+/// from the detail band the render sharpens with (process V3 `v3`: the Radius slider's own band and its mask range).
+/// `None` when the render made no such band.
+pub(crate) fn sharpen_mask_alpha(prep: &crate::Prepared, masking: f64, v3: bool) -> Option<Plane> {
+    let blur = if v3 { prep.sharpen_blur.as_ref()? } else { prep.texture_blur.as_ref()? };
     let m = (masking / 100.0) as f32;
-    let data = prep.log_l.data.iter().zip(&blur.data).map(|(l, b)| crate::finish::sharpen_mask_weight(m, l - b)).collect();
+    let data = prep.log_l.data.iter().zip(&blur.data).map(|(l, b)| crate::finish::sharpen_mask_weight(m, l - b, v3)).collect();
     Some(Plane { width: prep.log_l.width, height: prep.log_l.height, data })
 }
 
