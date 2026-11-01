@@ -56,7 +56,7 @@ in Actions unless it is wanted here.
 | `origin` | the official repo, where updates come from (never pushed to) |
 | `mine` | this fork, [techneissa/lightcraft](https://github.com/techneissa/lightcraft), the backup |
 | `main` | a plain copy of the official `main`, kept in step by the update script |
-| `custom` | the official code plus every feature below: the app is built from it (the default branch here) |
+| `custom` | the official code plus every feature below: the app is built from it (the default branch here). GitHub blocks force pushes to it and its deletion (ruleset "Protect custom and main", also on `main`, techneissa 2026-11-01) |
 | `custom-build` | the release holding the app GitHub built from `custom` |
 | `feat/…`, `fix/…` | one feature each, based on the official code, kept for reference |
 
