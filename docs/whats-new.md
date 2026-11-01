@@ -8,6 +8,16 @@
 ### Plainer Camera Card in Info
 - The camera card in Info looks like the plain official card again: dim Camera, Lens, Focal length, Shutter speed, Aperture and ISO labels with plain values. Click a value to edit it (Return saves, Esc cancels). A focal length or aperture your lens cannot give (read from its name, such as 16-35mm f/4) is refused: the value shakes, keeps its old text, and a small red ! says why; `photo.setMeta` refuses it too.
 
+### Book
+- File ▸ Book… lays the selected photos (or the photos in view) out as a photo book: a cover, then pages of 1, 2, 3 or 4 photos. Pick the page size and orientation, the margin, the cell padding and the background; change a page's template or drag a photo onto another cell. A Pages view shows every page and a Spread view shows two pages open side by side. Export PDF… and Export JPEGs… write the book, and the book is saved with the library. Agents use the `book.*` commands.
+
+### Masking Workflow
+- Under the selected mask, one Add · Subtract · Intersect control sets the mode of the next part, and a button for each kind of part adds it (Brush, Linear, Radial, Color, Luminance, Subject, Sky, Background, Object, Describe); the menus are gone.
+- Each part is a row you click: it selects the part and brings its tool back (the Brush painting into a brush part, a gradient's handles on the photo, the colour picker). At the right of each row: its mode (a dropdown showing +, − or ∩), Invert and Delete. Delete removes the selected part, else the mask.
+- Brush Add and Erase are named by what a stroke does to the mask, also in a Subtract part, and the brush cursor shows + or − (swapping while ⌥ is held). Esc steps back: the brush, then the part, then the photo.
+- A mask's first part is its base and always acts as Add (a first Intersect used to empty the mask); deleting it makes the next part the base.
+- The Create New Mask buttons fill the side bar's width in 4 or 5 columns (2 in a very narrow bar), never one button alone on the last row.
+
 ### Fixed Slider Label Column
 - In the Edit and Masking panels the slider names are left-aligned in one column of fixed width, so opening or closing a section (Noise Reduction has long names) no longer moves any name or shortens any slider.
 

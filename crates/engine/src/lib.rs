@@ -19,6 +19,7 @@ pub mod animated_gif;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod apple_photos;
 pub mod availability;
+pub mod book;
 pub(crate) mod camera_preview;
 pub mod camera_profiles;
 pub mod cmd;
@@ -344,6 +345,9 @@ pub struct Session {
     depth: u32,
     /// Selected mask (Masking panel), by mask id.
     pub active_mask: Option<u32>,
+    /// The selected part (component) of a mask: the mask's id and the part's index. Strokes of the Brush go into it
+    /// when it is a brush part; see `Session::active_part` for the checked value.
+    pub active_component: Option<(u32, usize)>,
     /// AI masks (SAM 3): the model and the last photo prepared for it.
     pub segmenter: segment::Segmenter,
     /// Selected spot (Remove panel), by index into the active photo's spots.
@@ -369,6 +373,8 @@ pub struct Session {
     pub print: print::template::PrintSettings,
     /// Saved print templates (`print.template.*`), persisted in prefs.json.
     pub print_templates: Vec<print::template::PrintTemplate>,
+    /// The library's photo books (`book.*`), saved in books.json.
+    pub books: book::Books,
     /// Metadata presets (`metadata.*`), persisted in prefs.json.
     pub metadata_presets: Vec<cmd::metadata::MetadataPreset>,
     /// Saved filter-bar settings (`filter.*`), persisted in prefs.json.
@@ -529,6 +535,7 @@ impl Session {
             clock: Box::new(|| "2026-09-30T12:00:00".to_string()),
             depth: 0,
             active_mask: None,
+            active_component: None,
             segmenter: segment::Segmenter::default(),
             active_spot: None,
             finds: Default::default(),
@@ -540,6 +547,7 @@ impl Session {
             export_presets: Vec::new(),
             print: Default::default(),
             print_templates: Vec::new(),
+            books: Default::default(),
             metadata_presets: Vec::new(),
             filter_presets: Vec::new(),
             curve_presets: Vec::new(),
@@ -900,6 +908,7 @@ impl Session {
             self.selection.active = Some(id);
         }
         self.active_mask = None;
+        self.active_component = None;
         self.active_spot = None;
     }
 

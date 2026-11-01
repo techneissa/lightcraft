@@ -280,7 +280,11 @@ pub struct UiState {
     pub brush_size: f32,
     pub brush_feather: f32,
     pub brush_flow: f32,
+    /// Brush Erase, named by its effect on the mask: false adds to it, true takes away. A stroke in a Subtract part
+    /// turns it around (see `panels::mask_parts::stroke_erase`).
     pub brush_erase: bool,
+    /// The Masking panel's Add / Subtract / Intersect control: the mode of the next part.
+    pub mask_op: lightcraft_develop::MaskOp,
     /// Brush Auto Mask: dabs stick to areas like the one under the brush centre.
     pub brush_auto_mask: bool,
     /// Brush Pen Pressure: a pen's pressure scales each dab's size and flow (a mouse paints at full pressure).
@@ -390,6 +394,9 @@ pub struct UiState {
     /// The Print dialog's page, selection and drag.
     #[serde(skip)]
     pub print: crate::print_view::PrintUi,
+    /// The Book dialog's view, page and drag.
+    #[serde(skip)]
+    pub book: crate::book_view::BookUi,
 }
 
 impl Default for UiState {
@@ -498,6 +505,7 @@ impl Default for UiState {
             brush_feather: 50.0,
             brush_flow: 60.0,
             brush_erase: false,
+            mask_op: lightcraft_develop::MaskOp::Add,
             brush_auto_mask: false,
             brush_pressure: true,
             remove_size: 0.02,
@@ -543,6 +551,7 @@ impl Default for UiState {
             status: String::new(),
             dialog: None,
             print: Default::default(),
+            book: Default::default(),
         }
     }
 }

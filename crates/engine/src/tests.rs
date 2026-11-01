@@ -8,6 +8,7 @@ mod album_order;
 mod album_remove;
 mod albums_local;
 mod animated_gif;
+mod book;
 mod color;
 mod constrain_crop;
 mod crop_angle;
@@ -1483,6 +1484,85 @@ fn mask_components_invert_duplicate_rename_change_mode_and_delete() {
     }
     assert!(active_dev(&s).masks.is_empty());
     assert_eq!(s.active_mask, None);
+}
+
+/// Deleting a mask's first part makes the next one the base: it is shown (and acts) as Add, so a Subtract never turns
+/// into a silent Add, and an Intersect never empties the mask.
+#[test]
+fn deleting_the_first_part_makes_the_next_one_the_base() {
+    use lightcraft_develop::MaskOp;
+    let mut s = demo();
+    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    s.execute("mask.addComponent", &json!({"op": "subtract", "kind": "linear"})).unwrap();
+    s.execute("mask.addComponent", &json!({"op": "intersect", "kind": "radial"})).unwrap();
+    let ops = |s: &Session| active_dev(s).masks[0].components.iter().map(|c| c.op).collect::<Vec<_>>();
+    assert_eq!(ops(&s), [MaskOp::Add, MaskOp::Subtract, MaskOp::Intersect]);
+    s.execute("mask.component", &json!({"component": 0, "action": "delete"})).unwrap();
+    assert_eq!(ops(&s), [MaskOp::Add, MaskOp::Intersect], "the former second part is the base now");
+    // one undo step brings the old modes back
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(ops(&s), [MaskOp::Add, MaskOp::Subtract, MaskOp::Intersect]);
+    // the base cannot be given another mode
+    s.execute("mask.component", &json!({"component": 0, "action": "op", "op": "intersect"})).unwrap();
+    assert_eq!(ops(&s)[0], MaskOp::Add);
+}
+
+/// A mask's part can be selected, and the Brush paints into the selected brush part instead of the last one.
+#[test]
+fn a_selected_brush_part_gets_the_strokes() {
+    use lightcraft_develop::MaskShape;
+    let mut s = demo();
+    s.execute("mask.add", &json!({"kind": "brush"})).unwrap();
+    s.execute("mask.addComponent", &json!({"op": "subtract", "kind": "radial"})).unwrap();
+    s.execute("mask.addComponent", &json!({"op": "subtract", "kind": "brush"})).unwrap();
+    let strokes = |s: &Session, k: usize| match &active_dev(s).masks[0].components[k].shape {
+        MaskShape::Brush { strokes } => strokes.len(),
+        _ => usize::MAX,
+    };
+    let stroke = |component: Option<usize>| {
+        let mut p = json!({"points": [[0.2, 0.2], [0.4, 0.4]], "erase": true});
+        if let Some(k) = component {
+            p["component"] = json!(k);
+        }
+        p
+    };
+    // without a selected part: the last brush part (2)
+    s.execute("mask.brushStroke", &stroke(None)).unwrap();
+    assert_eq!((strokes(&s, 0), strokes(&s, 2)), (0, 1));
+    assert_eq!(s.active_part(), Some(2), "painting selects the part it paints into");
+    // selecting a part by hand: the first brush part gets the next strokes
+    s.execute("mask.select", &json!({"id": active_dev(&s).masks[0].id, "component": 0})).unwrap();
+    assert_eq!(s.active_part(), Some(0));
+    s.execute("mask.brushStroke", &stroke(None)).unwrap();
+    assert_eq!((strokes(&s, 0), strokes(&s, 2)), (1, 1));
+    // an explicit part wins over the selected one, and must be a brush part
+    s.execute("mask.brushStroke", &stroke(Some(2))).unwrap();
+    assert_eq!((strokes(&s, 0), strokes(&s, 2)), (1, 2));
+    assert!(s.execute("mask.brushStroke", &stroke(Some(1))).is_err(), "part 1 is a radial gradient");
+    assert!(s.execute("mask.brushStroke", &stroke(Some(9))).is_err());
+    // a part that does not exist cannot be selected; selecting a mask drops the part
+    let id = active_dev(&s).masks[0].id;
+    assert!(s.execute("mask.select", &json!({"id": id, "component": 9})).is_err());
+    assert!(s.execute("mask.select", &json!({"component": 0})).is_err());
+    s.execute("mask.select", &json!({"id": id})).unwrap();
+    assert_eq!(s.active_part(), None);
+}
+
+/// The selected part stays the same part when another part is deleted or duplicated before it.
+#[test]
+fn the_selected_part_follows_deletes_and_duplicates() {
+    let mut s = demo();
+    s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+    s.execute("mask.addComponent", &json!({"op": "subtract", "kind": "linear"})).unwrap();
+    s.execute("mask.addComponent", &json!({"op": "add", "kind": "radial"})).unwrap();
+    let id = active_dev(&s).masks[0].id;
+    s.execute("mask.select", &json!({"id": id, "component": 2})).unwrap();
+    s.execute("mask.component", &json!({"component": 0, "action": "duplicate"})).unwrap();
+    assert_eq!(s.active_part(), Some(3));
+    s.execute("mask.component", &json!({"component": 1, "action": "delete"})).unwrap();
+    assert_eq!(s.active_part(), Some(2));
+    s.execute("mask.component", &json!({"component": 2, "action": "delete"})).unwrap();
+    assert_eq!(s.active_part(), None, "the selected part itself was deleted");
 }
 
 #[test]

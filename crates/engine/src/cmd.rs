@@ -6,6 +6,7 @@
 
 mod activity;
 mod before;
+mod book;
 pub(crate) mod browse;
 mod color;
 pub(crate) mod convert;
@@ -31,6 +32,7 @@ pub mod macos_colour;
 pub mod manage;
 pub mod mask_effect_files;
 pub mod mask_effects;
+mod mask_parts;
 mod masks;
 mod merge;
 pub mod metadata;
@@ -175,6 +177,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(slideshow::specs());
         v.extend(export::specs());
         v.extend(print::specs());
+        v.extend(book::specs());
         v.extend(before::specs());
         v.extend(browse::specs());
         v.extend(missing::specs());
