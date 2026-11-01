@@ -345,7 +345,12 @@ fn row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, name: &str,
     ui.separator();
     run(app, ui, "Update with Current Settings", "mask.updateEffect", json!({"name": name, "id": mask.id}));
     if ui.button(crate::i18n::tr("Rename…")).clicked() {
-        crate::panels::dialogs::prompt(app, "Rename Effect Preset", "Preset name", name, "mask.renameEffect", json!({"name": name}), "to");
+        // the Manage window lists the presets with the name as a field
+        open_manage(app);
+        if let Some(Dialog::ManageEffects { selected, rename, .. }) = app.ui.dialog.as_mut() {
+            *selected = vec![name.to_string()];
+            *rename = Some((name.to_string(), name.to_string()));
+        }
         ui.close();
     }
     run(app, ui, "Duplicate", "mask.duplicateEffect", json!({"name": name}));
@@ -503,6 +508,7 @@ pub fn manage_body(
     let effects = app.session.mask_effects.clone();
     let mut toggle_star: Option<(String, bool)> = None;
     let mut commit_rename: Option<(String, String)> = None;
+    let mut refused: Option<String> = None;
     egui::ScrollArea::vertical().id_salt("manageEffects").max_height(380.0).auto_shrink([false, true]).show(ui, |ui| {
         for (group, ix) in fx::menu_order(&effects) {
             let list: Vec<&MaskEffect> = ix
@@ -531,15 +537,20 @@ pub fn manage_body(
                     if star.clicked() {
                         toggle_star = Some((e.name.clone(), !e.favorite));
                     }
-                    if let Some((old, text)) = rename.as_mut().filter(|(old, _)| *old == e.name) {
-                        let r = crate::text_field::TextField::singleline("field:effectRename", text).width(220.0).select_on_focus(true).show(ui);
-                        if !r.editing && r.ending.is_none() {
-                            r.response.request_focus();
-                        }
-                        if r.cancelled() {
-                            *rename = None;
-                        } else if r.committed() {
-                            commit_rename = Some((old.clone(), text.trim().to_string()));
+                    if let Some((old, mut text)) = rename.clone().filter(|(old, _)| *old == e.name) {
+                        // inline rename, as in every list: a name that is empty or another preset's is refused with the reason
+                        use crate::inline_rename::Done;
+                        let (rect, _) = ui.allocate_exact_size(vec2(240.0, 24.0), Sense::hover());
+                        let verdict = crate::inline_rename::verdict(&text, effects.iter().filter(|o| o.name != old).map(|o| o.name.as_str()));
+                        let unchanged = text.trim() == old;
+                        match crate::inline_rename::edit(ui, "field:effectRename", &mut text, rect, &verdict, unchanged) {
+                            Done::Editing => *rename = Some((old, text)),
+                            Done::Cancelled => *rename = None,
+                            Done::Save(to) => commit_rename = Some((old, to)),
+                            Done::Refused(why) => {
+                                *rename = None;
+                                refused = Some(why);
+                            }
                         }
                         return;
                     }
@@ -582,6 +593,9 @@ pub fn manage_body(
     });
     if let Some((name, on)) = toggle_star {
         let _ = app.run("mask.favoriteEffect", json!({"name": name, "favorite": on}));
+    }
+    if let Some(why) = refused {
+        app.toast(ui.ctx(), crate::i18n::tr_format!("Not renamed: {why}", why = why));
     }
     if let Some((old, to)) = commit_rename {
         *rename = None;

@@ -3,6 +3,9 @@ name: Fork CI
 # techneissa's fork: run the official CI (`cargo xtask ci`, ci.yml) on every push to `custom`, on GitHub's
 # machines, so the full suite never runs on techneissa's Mac (techneissa, 2026-10-29). ci.yml itself is
 # official and only runs on `main` and pull requests; this dispatches it for `custom` without editing it.
+# Pull requests to `custom` need nothing here: ci.yml already runs on every pull_request. A trigger here would only
+# start a second identical run per push (fork/github-builds.md). The tests accepted as failing
+# (fork/known-failures.txt) are skipped by cargo's test runner on Linux (.cargo/config.toml), in every run.
 # fork-build.yml pushes its daily upstream merge with FORK_PUSH_TOKEN, so that merge is tested too.
 
 on:

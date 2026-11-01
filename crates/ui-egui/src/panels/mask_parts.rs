@@ -10,7 +10,7 @@ use super::masking::{kind_label, menu_label, range_controls, start_describe, sta
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
-use crate::widgets::{announce_selected, icon_button, one_line, register, segmented};
+use crate::widgets::{announce_selected, icon_button, register, segmented};
 
 /// The name `mask.addComponent` and `mask.component` know a mode by.
 pub fn op_name(op: MaskOp) -> &'static str {
@@ -268,7 +268,7 @@ pub fn part_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask) {
             MaskShape::Prompt { text, .. } => format!("“{text}”"),
             _ => menu_label(kind).to_string(),
         });
-        if rename_row(app, ui, m.id, i, c) {
+        if rename_row(app, ui, m, i, c) {
             continue;
         }
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
@@ -292,7 +292,7 @@ pub fn part_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask) {
         );
         paint(ui.painter(), Rect::from_min_size(r.min + vec2(6.0, (ROW_H - 16.0) / 2.0), vec2(16.0, 16.0)), icon, t.text_label);
         let room = BUTTON_W * 2.0 + if i > 0 { MODE_W } else { 0.0 } + 8.0;
-        let g = one_line(ui.painter(), &label, t.font(13.0), t.text, (r.width() - 28.0 - room).max(0.0));
+        let g = super::mask_name::fit(ui.painter(), &label, t.font(13.0), t.text, (r.width() - 28.0 - room).max(0.0));
         let elided = g.elided;
         ui.painter().galley(egui::pos2(r.left() + 28.0, r.center().y - g.size().y / 2.0), g, t.text);
         let resp = if elided { resp.on_hover_text(&label) } else { resp };
@@ -342,24 +342,21 @@ pub fn paint_mode(p: &egui::Painter, rect: Rect, op: MaskOp, col: egui::Color32)
     }
 }
 
-/// The inline rename field of part `i`. Whether it is showing in place of the row.
-fn rename_row(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: u32, i: usize, c: &MaskComponent) -> bool {
-    let Some((_, _, name)) = app.ui.renaming_component.as_mut().filter(|(m, k, _)| *m == mask && *k == i) else { return false };
-    // Enter (or leaving the field) commits, Escape cancels
-    let r = ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width()).id_salt(("compRename", mask, i)));
-    register(ui, format!("componentRename:{i}"), r.rect);
-    if !r.has_focus() && !r.lost_focus() {
-        r.request_focus();
-    }
-    if ui.input(|inp| inp.key_pressed(egui::Key::Escape)) {
-        app.ui.renaming_component = None;
-    } else if r.lost_focus() {
-        let name = name.trim().to_string();
-        app.ui.renaming_component = None;
-        if Some(&name) != c.name.as_ref() {
-            let _ = app.run("mask.component", json!({"id": mask, "component": i, "action": "rename", "name": name}));
-        }
-    }
+/// The inline rename field of part `i`. Whether it is showing in place of the row. As in every list a name that is
+/// empty or another part's of this mask is refused with the reason.
+fn rename_row(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask, i: usize, c: &MaskComponent) -> bool {
+    let mask = m.id;
+    let Some((_, _, mut name)) = app.ui.renaming_component.clone().filter(|(id, k, _)| *id == mask && *k == i) else { return false };
+    let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::hover());
+    register(ui, format!("componentRename:{i}"), row);
+    let others = m.components.iter().enumerate().filter(|(j, _)| *j != i).filter_map(|(_, o)| o.name.as_deref());
+    let verdict = crate::inline_rename::verdict(&name, others);
+    let unchanged = Some(name.trim()) == c.name.as_deref();
+    let outcome = crate::inline_rename::edit(ui, &format!("field:componentRename:{mask}:{i}"), &mut name, row, &verdict, unchanged);
+    let params = json!({"id": mask, "component": i, "action": "rename"});
+    crate::inline_rename::finish_with(app, ui.ctx(), outcome, "mask.component", params, "name", name, |app, name| {
+        app.ui.renaming_component = name.map(|n| (mask, i, n));
+    });
     true
 }
 

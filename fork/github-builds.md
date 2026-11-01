@@ -14,6 +14,16 @@ Linux) on `custom` after every push to it, the daily merge included, so the full
 this Mac. The official `CI` workflow must stay enabled on the fork for it (`gh workflow enable CI -R
 techneissa/lightcraft`).
 
+Pull requests to `custom` are tested before they merge, and that costs no extra minutes from this file: the official
+`CI` workflow (`ci.yml`) already has a `pull_request` trigger with no branch filter, so every PR to `custom` runs
+`cargo xtask ci` on the PR's merge with `custom` (about 30 to 40 minutes on Linux; the repo is public, so GitHub
+bills nothing for it). Fork CI does not trigger on `pull_request` as well: it only dispatches `ci.yml`, so it would
+start a second identical run for every push to a PR branch (checked 2026-11-02 on `gh run list -w CI`: every
+`feat/…` PR already has its `pull_request` run). Both runs skip the tests in `known-failures.txt`
+([known-failures.md](known-failures.md)): the skip is cargo's test runner on Linux (`.cargo/config.toml`), so it
+applies to every `cargo test` on Linux, the PR runs and the dispatched ones alike, and no official workflow file is
+edited. A red run means a new failure.
+
 A daily agent (the T3 thread "Daily LightCraft Update", Grok 4.5 on Cursor, 09:00) runs the update without
 installing; when GitHub's run stopped on a clash, it merges by hand, runs the feature tests and pushes, and GitHub
 builds again. It follows the "Daily run" section of the `craftupdate` skill. To stop it: switch it off under

@@ -188,6 +188,13 @@ fn draw_row(app: &mut LightcraftApp, ui: &mut egui::Ui, row: Row) -> egui::Respo
         icon,
         if selected { t.text } else { t.icon },
     );
+    // a row being renamed in place: its name is a text field
+    if let Some(kind) = app.ui.rename_row.as_ref().map(|r| r.kind.clone()).filter(|k| k.is_row(id)) {
+        let field = Rect::from_min_max(pos2(r.left() + 40.0 + indent, r.top() + 3.0), pos2(inner.right() - 4.0, r.bottom() - 3.0));
+        crate::inline_rename::field(app, ui, &kind, field);
+        note_width(ui, 42.0 + indent + 160.0);
+        return resp;
+    }
     let font = t.font(13.5);
     let color = if selected { t.text } else { t.text_label };
     // a count of nothing is there, but fainter: the rows that hold photos stand out

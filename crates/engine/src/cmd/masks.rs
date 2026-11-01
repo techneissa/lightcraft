@@ -715,11 +715,12 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         }),
         cmd!("mask.rename", "Rename Mask", [], None, "{id?, name}", has_active, |s, p| {
-            let name = str_param(p, "name").ok_or_else(|| bad("mask.rename", "missing name"))?.to_string();
+            let raw = str_param(p, "name").ok_or_else(|| bad("mask.rename", "missing name"))?;
             let mid = mask_id(p, s.active_mask, "mask.rename")?;
             masks_edit(s, "mask.rename", "Rename Mask", |masks, _| {
                 let i = find(masks, mid, "mask.rename")?;
-                masks[i].name = name;
+                let others = masks.iter().enumerate().filter(|(k, _)| *k != i).map(|(_, m)| m.name.as_str());
+                masks[i].name = crate::names::check_name(raw, others).map_err(|e| bad("mask.rename", e.to_string()))?;
                 Ok(())
             })
         }),
@@ -796,7 +797,17 @@ pub fn specs() -> Vec<CommandSpec> {
                     let comp = comps.get_mut(k).ok_or_else(|| bad(c, "no such component"))?;
                     match action.as_str() {
                         "invert" => comp.invert = !comp.invert,
-                        "rename" => comp.name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string),
+                        "rename" => {
+                            // an empty name gives the component its automatic name back; any other must be new in this mask
+                            let raw = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty());
+                            if let Some(raw) = raw {
+                                let others = comps.iter().enumerate().filter(|(j, _)| *j != k).filter_map(|(_, c)| c.name.as_deref());
+                                let name = crate::names::check_name(raw, others).map_err(|e| bad(c, e.to_string()))?;
+                                comps[k].name = Some(name);
+                            } else {
+                                comps[k].name = None;
+                            }
+                        }
                         "op" => comp.op = super::mask_parts::mode_for(k, op.ok_or_else(|| bad(c, "missing op"))?),
                         "duplicate" => {
                             let copy = comp.clone();

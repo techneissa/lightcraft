@@ -234,23 +234,19 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let count = d.masks.len();
         for (index, m) in d.masks.iter().enumerate() {
             let sel = app.session.active_mask == Some(m.id);
-            if let Some((rid, name)) = app.ui.renaming_mask.as_mut().filter(|(rid, _)| *rid == m.id) {
-                // inline rename: Enter (or leaving the field) commits, Escape cancels
-                let rid = *rid;
-                let r = ui.add(egui::TextEdit::singleline(name).desired_width(ui.available_width()).id_salt(("maskRename", rid)));
-                register(ui, format!("maskRename:{rid}"), r.rect);
-                if !r.has_focus() && !r.lost_focus() {
-                    r.request_focus();
-                }
-                if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                    app.ui.renaming_mask = None;
-                } else if r.lost_focus() {
-                    let name = name.trim().to_string();
-                    app.ui.renaming_mask = None;
-                    if !name.is_empty() && name != m.name {
-                        let _ = app.run("mask.rename", json!({"id": rid, "name": name}));
-                    }
-                }
+            if let Some((rid, mut name)) = app.ui.renaming_mask.clone().filter(|(rid, _)| *rid == m.id) {
+                // inline rename, as in every list: Enter or leaving the field saves, Esc cancels, a name
+                // that is empty or another mask's is refused with the reason
+                let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
+                let rect = row.shrink2(vec2(2.0, 2.0));
+                register(ui, format!("maskRename:{rid}"), rect);
+                let others = d.masks.iter().filter(|o| o.id != rid).map(|o| o.name.as_str());
+                let verdict = crate::inline_rename::verdict(&name, others);
+                let unchanged = name.trim() == m.name;
+                let outcome = crate::inline_rename::edit(ui, &format!("field:maskRename:{rid}"), &mut name, rect, &verdict, unchanged);
+                crate::inline_rename::finish_with(app, ui.ctx(), outcome, "mask.rename", json!({"id": rid}), "name", name, |app, name| {
+                    app.ui.renaming_mask = name.map(|n| (rid, n));
+                });
                 continue;
             }
             let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::click());
@@ -271,7 +267,7 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             paint(ui.painter(), Rect::from_min_size(r.min + vec2(8.0, 7.0), vec2(16.0, 16.0)), icon, t.text_label);
             // a long name is cut short (with …) before the eye, the full name on hover
             let color = if m.visible { t.text } else { t.text_disabled };
-            let g = one_line(ui.painter(), &m.name, t.font(13.0), color, r.width() - 32.0 - if sel { 56.0 } else { 32.0 });
+            let g = super::mask_name::fit(ui.painter(), &m.name, t.font(13.0), color, r.width() - 32.0 - if sel { 56.0 } else { 32.0 });
             let elided = g.elided;
             let at = pos2(r.left() + 32.0, r.center().y - g.size().y / 2.0);
             register(ui, format!("maskName:{}", m.id), Rect::from_min_size(at, g.size()));
