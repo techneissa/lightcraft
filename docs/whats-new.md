@@ -10,6 +10,22 @@
 
 ## 2026-10-30
 
+### Arrange the Edit Panel
+- Right-click a section header (Light, Color, Effects, Detail, Optics, Calibration) for **Move Up**, **Move Down** and
+  **Hide This Section**, a list of the sections to show or hide any of them, **Show All Sections** and **Reset to
+  Default**. The panel keeps your order and what you hid.
+- A hidden section only leaves the panel: its adjustments stay on the photo and still apply. Choosing it from
+  Window ▸ Edit Sections (⌘1 to ⌘5) brings it back.
+
+### Show in Finder After Export
+- The Export dialog has **Show in Finder** (File Explorer on Windows, your file manager on Linux): when the export
+  finishes, the first file it wrote is shown. It is saved with the export settings and presets, and off until you
+  turn it on.
+
+### Lens Database Folder in Settings
+- **Settings ▸ Import ▸ Lens profiles** takes the folder of a lensfun lens database with **Choose…** and **Clear**, and
+  says how many lens profiles it found, or why none. The `LIGHTCRAFT_LENSFUN_DIR` variable still wins when it is set,
+  and the status line says so. Photos use the new profiles when they are imported or reloaded.
 ### Sharpening Radius Works, Vignette Is Smoother
 - In process V3, **Sharpening ▸ Radius** sets how wide the sharpening is, in pixels of the original photo: a
   small radius brings out the finest edges, a large one a broader, stronger crispness (and wider halos). It is

@@ -1515,6 +1515,7 @@ fn export_destination_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Token
     use lightcraft_engine::export::Conflict as K;
     choices(ui, "If file exists", "exportConflict", &[(K::Unique, "Add number"), (K::Overwrite, "Overwrite"), (K::Skip, "Skip")], &mut opts.conflict);
     export_apple_photos_rows(ui, t, opts);
+    crate::export_reveal::row(ui, opts);
 }
 
 /// Export dialog, after export: Apple Photos imports the files written (macOS only).

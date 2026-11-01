@@ -91,6 +91,9 @@ Known failures (on this Mac, and on Fork CI only): [fork/known-failures.md](fork
 - [Brush live adjustment](fork/brush-live-preview.md): Painting with the Brush shows the mask's adjustment under the brush. Branch `claude/brush-live-preview`.
 - [⌥-drag slider previews](fork/alt-drag-clipping-preview.md): Holding ⌥ while dragging a slider shows clipping, the sharpening mask or greyscale. Branch `claude/alt-drag-clipping-preview`.
 - [Process V3: Sharpening Radius and Vignette](fork/detail-followups.md): Sharpening Radius works, Amount is clearly visible, and the Vignette response is smooth. Branch `claude/detail-followups`.
+- [Arrange the Edit panel](fork/section-arrange.md): Right-click a section header to move, hide or reset the Develop sections. Branch `claude/workflow-qol`.
+- [Show in Finder after export](fork/export-reveal.md): An Export dialog option that shows the first exported file when the export succeeds. Branch `claude/workflow-qol`.
+- [Lens database folder](fork/lens-database-folder.md): Settings ▸ Import ▸ Lens profiles chooses the lensfun folder and says what it found. Branch `claude/workflow-qol`.
 - [Shared SAM3 model folder](fork/shared-sam3.md): AI masks look for the SAM 3 model in the folder shared with PhotoCraft (`ArtCraft/models/sam3`) first and download there. Branch `feat/16-shared-sam3`.
 
 Every feature also has an entry in `docs/whats-new.md` and a row in `docs/parity-checklist.md`; clashes there are

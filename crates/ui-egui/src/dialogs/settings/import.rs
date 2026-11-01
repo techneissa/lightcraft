@@ -71,6 +71,7 @@ pub(super) fn import_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens)
             }
         });
     }
+    super::lens_database::lens_database_rows(app, ui, t);
     heading(ui, t, crate::i18n::tr("Other images (JPEG, PNG, TIFF, HEIC…)"));
     row(ui, t, crate::i18n::tr("Non-raw photos"), |ui| {
         if let Some(v) = preset_combo(app, ui, "settingsOtherPreset", crate::i18n::tr("Other preset"), d.other_preset.as_deref(), "None") {

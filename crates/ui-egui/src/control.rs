@@ -333,7 +333,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         "engine.execute" | "ui.menu.invoke" | "command" => {
             let Some(id) = s("command").or(s("id")) else { return err("missing `command`") };
             let params = p.get("params").cloned().filter(|v| !v.is_null()).unwrap_or(json!({}));
+            app.from_control = true;
             let r = app.run(id, params);
+            app.from_control = false;
             ctx.request_repaint();
             wrap(r)
         }
@@ -533,7 +535,11 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
     use lightcraft_engine::export::{Destination, ExportOptions, export_batch};
     let p = &app.session.export_params(p)?;
     // the format follows `path` (JPEG when it names none), and `bitDepth` is checked against it
-    let opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
+    let mut opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
+    // only the Export dialog shows the file: not an agent, even through a preset or Export with Previous
+    if app.from_control {
+        opts.show_in_finder = false;
+    }
     let ids: Vec<_> = match p.get("ids").filter(|v| !v.is_null()) {
         // `ids` that aren't photo ids are an error, not "export the selection"
         Some(v) => v
@@ -583,7 +589,14 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
     } else {
         let w = app.services.write.as_mut().ok_or("no writer")?;
         let files = export_batch(&mut app.session, &ids, &opts, &to, &mut |path, bytes| w(path, bytes), &|path| std::path::Path::new(path).exists())?;
+        // the desktop app has the opener; a headless or CLI-driven run has none and shows nothing
+        let shown = crate::export_reveal::reveal_exported(app, opts.show_in_finder, &files);
         let mut out = json!({"files": files});
+        match shown {
+            Ok(true) => out["shownInFinder"] = json!(true),
+            Ok(false) => {}
+            Err(e) => out["showInFinderError"] = json!(e),
+        }
         // Photos may take minutes (and waits for the permission prompt): in the desktop app on a
         // worker, never on this (UI) thread; the app announces the outcome and
         // `export.photosImports` reports it. A window-less run (snapshot scripts) waits.
