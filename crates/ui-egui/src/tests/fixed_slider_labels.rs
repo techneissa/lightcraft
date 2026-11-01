@@ -232,6 +232,11 @@ fn every_detail_label_stays_inside_its_column() {
             let Some((text, rect)) = label_in(d, &format!("sliderLabel:{}", spec.id), &label) else { continue };
             let track = d.rect(&format!("slider:{}", spec.id));
             assert!(text.galley.rows.len() <= 2, "{label} takes {} lines", text.galley.rows.len());
+            // a wrap is between words, never inside one
+            let rows: Vec<String> = text.galley.rows.iter().map(|r| r.row.text()).collect();
+            for word in label.split_whitespace() {
+                assert!(rows.iter().any(|r| r.contains(word)), "{label} is broken inside {word:?}: {rows:?} at {width}");
+            }
             assert!(text.pos.x + text.galley.size().x <= rect.right() + 0.5, "{label} overflows its column {rect:?} at {width}");
             assert!(rect.right() < track.left(), "{label} runs into its track at {width}");
             shrunk |= font_size(text) < NORMAL_FONT;

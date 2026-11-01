@@ -75,7 +75,9 @@ pub(super) fn fit(ui: &Ui, text: &str, normal: &FontId, width: f32, color: Color
         let mut job = LayoutJob::simple(text.to_string(), FontId { size, ..normal.clone() }, color, width);
         job.wrap.max_rows = 2;
         let galley = ui.painter().layout_job(job);
-        if !galley.elided && galley.size().x <= width && galley.rows.len() <= 2 {
+        // (a word wider than the column would be broken in the middle; shrink further instead)
+        let words_fit = text.split_whitespace().all(|w| ui.painter().layout_no_wrap(w.to_string(), galley_font(&galley), color).size().x <= width);
+        if !galley.elided && galley.size().x <= width && galley.rows.len() <= 2 && words_fit {
             return (galley, false);
         }
         if size <= SMALLEST_FONT {
@@ -90,4 +92,9 @@ pub(super) fn fit(ui: &Ui, text: &str, normal: &FontId, width: f32, color: Color
 /// The height of a row holding `galley` (never below `base`).
 pub(super) fn row_height(galley: &egui::Galley, base: f32) -> f32 {
     base.max(galley.size().y + ROW_PAD)
+}
+
+/// The font `galley` was laid out in.
+fn galley_font(galley: &egui::Galley) -> FontId {
+    galley.job.sections.first().map_or_else(FontId::default, |s| s.format.font_id.clone())
 }
