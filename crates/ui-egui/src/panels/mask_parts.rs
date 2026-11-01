@@ -303,7 +303,7 @@ fn part_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask, i: usize, 
         let resp = ui.interact(br, egui::Id::unique((id, m.id, i)), Sense::click());
         announce_selected(&resp, crate::i18n::tr(name), active);
         if active {
-            ui.painter().rect_filled(br, 3.0, t.pressed);
+            ui.painter().rect(br, 3.0, t.pressed, egui::Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
         } else if resp.hovered() {
             ui.painter().rect_filled(br, 3.0, t.hover);
         }
@@ -325,7 +325,15 @@ fn part_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask, i: usize, 
                 MaskOp::Add => paint(p, br.shrink(4.0), Icon::Plus, col),
                 MaskOp::Subtract => paint(p, br.shrink(4.0), Icon::Minus, col),
                 MaskOp::Intersect => {
-                    p.text(br.center(), egui::Align2::CENTER_CENTER, "∩", egui::FontId::proportional(13.0), col);
+                    // ∩ drawn as a path: the font has no such glyph
+                    let (c, r) = (br.center() + vec2(0.0, 1.0), 4.0);
+                    let mut pts = vec![c + vec2(-r, r)];
+                    pts.extend((0..=12).map(|i| {
+                        let a = std::f32::consts::PI * (1.0 + i as f32 / 12.0);
+                        c + vec2(r * a.cos(), r * a.sin())
+                    }));
+                    pts.push(c + vec2(r, r));
+                    p.add(egui::Shape::line(pts, egui::Stroke::new(1.5, col)));
                 }
             };
             if button(ui, format!("partMode:{i}:{}", op_name(op)), name, now == op, &draw) {

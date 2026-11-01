@@ -5,6 +5,13 @@
 ### Plainer Camera Card in Info
 - The camera card in Info looks like the plain official card again: dim Camera, Lens, Focal length, Shutter speed, Aperture and ISO labels with plain values. Click a value to edit it (Return saves, Esc cancels). A focal length or aperture your lens cannot give (read from its name, such as 16-35mm f/4) is refused: the value shakes, keeps its old text, and a small red ! says why; `photo.setMeta` refuses it too.
 
+### Masking Workflow
+- Under the selected mask, one Add · Subtract · Intersect control sets the mode of the next part, and a button for each kind of part adds it (Brush, Linear, Radial, Color, Luminance, Subject, Sky, Background, Object, Describe); the menus are gone.
+- Click a part's row to select it; a brush part starts painting into it again. The selected row has its own + − ∩, Invert and Delete buttons. Delete removes the selected part, else the mask.
+- Brush Add and Erase are named by what a stroke does to the mask, also in a Subtract part, and the brush cursor shows + or − (swapping while ⌥ is held). Esc steps back: the brush, then the part, then the photo.
+- A mask's first part is its base and always acts as Add (a first Intersect used to empty the mask); deleting it makes the next part the base.
+- The Create New Mask buttons fill the side bar's width, in more columns of wider tiles as the bar grows.
+
 ### Fixed Slider Label Column
 - In the Edit and Masking panels the slider names are left-aligned in one column of fixed width, so opening or closing a section (Noise Reduction has long names) no longer moves any name or shortens any slider.
 
