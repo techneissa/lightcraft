@@ -567,7 +567,8 @@ fn pressed_commands(app: &LightcraftApp, ctx: &egui::Context) -> (Vec<String>, V
             // (in the Map view `+` zooms the map: Size Up's declared condition keeps it out of
             // that view, and the remap below turns it into Zoom In)
             let size_up_in_map = in_map && *id == "view.thumbSizeUp";
-            if *k == Key::Escape && popup_open || !matches(i, *m, *k) || !(holds(id) || size_up_in_map) {
+            // a held Space repeats: only its first press counts, as for the fixed aliases
+            if *k == Key::Escape && popup_open || *k == Key::Space && space_repeat || !matches(i, *m, *k) || !(holds(id) || size_up_in_map) {
                 continue;
             }
             if *declared {

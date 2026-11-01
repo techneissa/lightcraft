@@ -115,6 +115,8 @@ pub enum Icon {
     Moon,
     /// Reset to the file's value (↺): an open circle with an arrowhead turning back.
     Reset,
+    /// A value that needs a look (!): an open circle with an exclamation mark.
+    Alert,
 }
 
 struct Pen<'a> {
@@ -241,6 +243,11 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             let tip = (px + tx * 1.2, py + ty * 1.2);
             let (bx, by) = (px - tx * 2.4, py - ty * 2.4);
             pen.line(&[(bx + nx * 2.8, by + ny * 2.8), tip, (bx - nx * 2.8, by - ny * 2.8)]);
+        }
+        Alert => {
+            pen.circle(10.0, 10.0, 7.5);
+            pen.line(&[(10.0, 5.6), (10.0, 11.0)]);
+            pen.dot(10.0, 13.9, 0.95);
         }
         Moon => {
             // outer arc of the disc, then the inner arc of the bite, meeting at the horns

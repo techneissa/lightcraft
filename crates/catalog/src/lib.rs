@@ -19,6 +19,7 @@ pub mod folders;
 mod index;
 pub mod journal;
 pub mod keywords;
+pub mod lens_limits;
 pub mod local;
 pub mod lock;
 pub mod model;

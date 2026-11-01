@@ -160,9 +160,9 @@ fn toggling_reads_what_the_filter_bar_set() {
     assert_eq!(f.toggle_rating_patch(5)["ratings"], serde_json::json!([4]));
     // nothing set: the first tick is the only one
     assert_eq!(Filter::default().toggle_rating_patch(0)["ratings"], serde_json::json!([0]));
-    // flags: one flag stays the plain `flag`, two make a set, none clears
+    // flags: always a set (one flag too), none clears
     let none = Filter::default();
-    assert_eq!(none.toggle_flag_patch(Flag::Pick), serde_json::json!({"flag": "pick"}));
+    assert_eq!(none.toggle_flag_patch(Flag::Pick), serde_json::json!({"flag": null, "flags": ["pick"]}));
     let pick = Filter { flag: Some(Flag::Pick), ..Default::default() };
     assert_eq!(pick.toggle_flag_patch(Flag::Reject), serde_json::json!({"flag": null, "flags": ["pick", "reject"]}));
     assert_eq!(pick.toggle_flag_patch(Flag::Pick), serde_json::json!({"flag": null, "flags": []}));
