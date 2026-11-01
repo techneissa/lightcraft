@@ -52,7 +52,9 @@ impl std::fmt::Debug for MapState {
 impl Default for MapState {
     fn default() -> Self {
         MapState {
-            source: TileSource::openstreetmap(),
+            // fork: Offline until the person picks a server (Settings ▸ Map), so nothing is asked
+            // of a tile server unasked (fork/map-view.md)
+            source: TileSource::offline(),
             cache_root: None,
             cache_bytes: DEFAULT_CACHE_BYTES,
             service: None,
@@ -79,15 +81,16 @@ impl MapState {
         }
     }
 
-    /// Take the source a settings file stored, re-checked (it is hostile input): an unusable one
-    /// falls back to OpenStreetMap, with a log line.
+    /// Take the source a settings file stored, re-checked (it is hostile input): none, or an
+    /// unusable one, is Offline (fork: tiles come only from a server the person chose), with a log
+    /// line for the unusable one.
     pub(crate) fn load_source(&mut self, stored: Option<TileSource>) {
         let source = match stored.map(|s| s.checked()) {
-            None => TileSource::openstreetmap(),
+            None => TileSource::offline(),
             Some(Ok(s)) => s,
             Some(Err(e)) => {
-                log::warn!("map: the saved tile source can't be used ({e}); using OpenStreetMap");
-                TileSource::openstreetmap()
+                log::warn!("map: the saved tile source can't be used ({e}); using Offline");
+                TileSource::offline()
             }
         };
         self.set_source(source);

@@ -243,8 +243,9 @@ Photo ▸ Auto-Tag from Tracklog… and Photo ▸ Remove GPS Coordinates work in
 
 Edit ▸ Settings… ▸ Map (or View ▸ Map ▸ Map Tiles…):
 
-- **Map tiles**: **OpenStreetMap** (the default), **Offline (no tiles)** (no network at all; the map is grey and shows
-  only what LightCraft draws on it), or **Custom server**: a URL template, its attribution and its max zoom. A custom
+- **Map tiles**: **Offline (no tiles)** (no network at all; the map is grey and shows only what LightCraft draws on
+  it; **in this fork it is the default** until you pick a server, so no tile server is asked unasked), **OpenStreetMap**
+  (the default in the official app), or **Custom server**: a URL template, its attribution and its max zoom. A custom
   server is used only once you press **Apply** (or Return in one of its fields): while you type, the map keeps the
   source it has, so a half-typed address is never asked for tiles. A template that doesn't pass the checks below is
   refused with the reason and changes nothing.
@@ -257,7 +258,7 @@ uses it too):
 | Params | Source |
 |---|---|
 | `{}` | Report the current source: `{id, urlTemplate, attribution, maxZoom, userAgent, offline}` |
-| `{id: "osm"}` | OpenStreetMap's standard tiles (the default; max zoom 19) |
+| `{id: "osm"}` | OpenStreetMap's standard tiles (the official app's default; max zoom 19) |
 | `{offline: true}` | Offline: no network, no tiles |
 | `{urlTemplate, attribution, maxZoom?, id?}` | Another raster tile server, e.g. one you host. The template must start with `https://` and contain `{z}`, `{x}` and `{y}` exactly once (no other placeholders); the attribution is required (it is shown on the map); `maxZoom` is 0–24 (default 18); `id` names its cache folder (`[a-z0-9._-]`, derived from the template when absent) |
 
@@ -326,7 +327,7 @@ The web build has no tile cache and fetches no tiles yet.
 
 ## Privacy
 
-- Looking at a map tells the tile server (the OpenStreetMap Foundation, by default) which areas you look at, at which
+- Looking at a map tells the tile server (the OpenStreetMap Foundation, once you choose it) which areas you look at, at which
   zoom, from your IP address, with LightCraft's name and version (the User-Agent), like any web map does; see the
   OSMF's [privacy policy](https://osmfoundation.org/wiki/Privacy_Policy).
 - Your photos and their GPS positions stay on your computer: pins, saved locations and track logs are drawn locally,

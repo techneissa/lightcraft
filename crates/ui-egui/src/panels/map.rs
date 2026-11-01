@@ -473,6 +473,30 @@ fn filter_bar(app: &mut LightcraftApp, ui: &mut egui::Ui, bar: Rect) {
     }
 }
 
+/// What the steps of one frame of the map share: the canvas, its response, this frame's
+/// viewport, the pointer, and a painter clipped to the canvas.
+struct Frame<'a> {
+    resp: &'a egui::Response,
+    canvas: Rect,
+    vp: Viewport,
+    pointer: Option<egui::Pos2>,
+    ctx: egui::Context,
+    painter: egui::Painter,
+    t: Tokens,
+}
+
+impl Frame<'_> {
+    /// A screen position as a point of the canvas.
+    fn local(&self, p: egui::Pos2) -> Point {
+        Point::new(f64::from(p.x - self.canvas.min.x), f64::from(p.y - self.canvas.min.y))
+    }
+
+    /// A cluster's centre on the screen.
+    fn to_screen(&self, c: &Cluster) -> egui::Pos2 {
+        pos2(self.canvas.min.x + c.center.x as f32, self.canvas.min.y + c.center.y as f32)
+    }
+}
+
 fn map_canvas(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
     let t = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
@@ -488,10 +512,52 @@ fn map_canvas(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
     }
     let resp = ui.interact(canvas, egui::Id::unique("map-canvas"), Sense::click_and_drag());
     register(ui, "map:canvas", canvas);
-    let local = |p: egui::Pos2| Point::new(f64::from(p.x - canvas.min.x), f64::from(p.y - canvas.min.y));
+    let pointer = ui.input(|i| i.pointer.latest_pos());
+    track_pin_drag(app, ui, &resp, canvas, &ctx);
+    let vp = moved_viewport(app, ui, &resp, canvas);
+    set_viewport(app, vp);
+    let f = Frame { resp: &resp, canvas, vp, pointer, ctx: ctx.clone(), painter: ui.painter_at(canvas), t };
+    // a saved location's centre or radius follows the pointer
+    if let Some(p) = pointer.filter(|_| locations::dragging(app)) {
+        locations::drag_update(app, canvas, &vp, p);
+        ctx.request_repaint();
+    }
+    settle_visible_filter(app, &f);
+    land_drags(app, ui, &f);
 
-    // ---- a drag that starts on a single photo's pin moves it (unless markers are locked); any
-    // other drag (empty map, a cluster) pans
+    // ---- tiles
+    f.painter.rect_filled(canvas, 0.0, OUTSIDE);
+    let offline = app.session.map.source().is_offline();
+    let tiles = draw_tiles(app, &ctx, &f.painter, canvas, &vp, Surface::View);
+    app.map.tiles_drawn = tiles.drawn;
+    app.map.tiles_missing = tiles.missing;
+
+    // ---- saved locations and the track log, under the pins
+    locations::draw(app, ui, &f.painter, &f.t, canvas, &vp);
+    tracks::draw(app, &f.painter, &f.t, canvas, &vp);
+
+    let hovered = draw_pins(app, ui, &f);
+    let hovered_cluster = hovered.and_then(|i| app.map.clusters.get(i).cloned());
+    pin_clicks(app, ui, &f);
+    pin_menu(app, &f);
+
+    // ---- hover thumbnail
+    if let Some(c) = hovered_cluster.filter(|_| app.map.pin_drag.is_none())
+        && let Some(&first) = c.ids.first()
+    {
+        thumbnail(app, ui, &f.painter, f.to_screen(&c), radius(c.len()), PhotoId(first), c.len());
+    }
+
+    overlay_notes(app, ui, &f, offline);
+    draw_attribution(ui, &f.painter, &f.t, canvas, tiles.attribution, 11.0, "map:attribution");
+    controls(app, ui, canvas);
+    locations::overlay(app, ui, canvas);
+}
+
+/// A drag that starts on a single photo's pin moves it (unless markers are locked); any other
+/// drag (empty map, a cluster) pans. Keeps `pin_drag` for the frame.
+fn track_pin_drag(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, canvas: Rect, ctx: &egui::Context) {
+    let local = |p: egui::Pos2| Point::new(f64::from(p.x - canvas.min.x), f64::from(p.y - canvas.min.y));
     if resp.drag_started() {
         app.map.pin_drag = None;
         let origin = ui.input(|i| i.pointer.press_origin());
@@ -509,43 +575,52 @@ fn map_canvas(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
         }
     } else if !resp.dragged() && !resp.drag_stopped() {
         app.map.pin_drag = None;
-        locations::drag_end(app, &ctx, false);
+        locations::drag_end(app, ctx, false);
     }
-    let pointer = ui.input(|i| i.pointer.latest_pos());
     if let Some(d) = app.map.pin_drag.as_mut()
-        && let Some(p) = pointer
+        && let Some(p) = ui.input(|i| i.pointer.latest_pos())
     {
         d.at = p + d.grab;
         ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
     }
+}
 
-    // ---- moving the map
+/// Wheel, pinch and two-finger scroll of this frame: the zoom factor, (wheel zoom, trackpad pan)
+/// and the point they act on.
+fn scroll_input(ui: &egui::Ui) -> (f32, (f64, egui::Vec2), Option<egui::Pos2>) {
+    ui.input(|i| {
+        let mut zoom = 0.0f64;
+        let mut pan = egui::Vec2::ZERO;
+        for e in &i.events {
+            if let egui::Event::MouseWheel { unit, delta, modifiers, .. } = e
+                && !modifiers.ctrl
+                && !modifiers.command
+                && delta.is_finite()
+            {
+                match unit {
+                    // a mouse wheel zooms, as on any web map
+                    egui::MouseWheelUnit::Line => zoom += f64::from(delta.y) * WHEEL_ZOOM,
+                    egui::MouseWheelUnit::Page => zoom += f64::from(delta.y.signum()),
+                    // a trackpad's two-finger scroll pans
+                    egui::MouseWheelUnit::Point => pan += *delta,
+                }
+            }
+        }
+        (i.zoom_delta(), (zoom, pan), i.multi_touch().map(|t| t.center_pos).or(i.pointer.hover_pos()))
+    })
+}
+
+/// The viewport after this frame's drag, wheel, pinch and scroll.
+fn moved_viewport(app: &LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, canvas: Rect) -> Viewport {
+    let (w, h) = (f64::from(canvas.width()), f64::from(canvas.height()));
     let mut vp = viewport(app);
     if resp.dragged() && app.map.pin_drag.is_none() && !locations::dragging(app) {
         let d = resp.drag_delta();
         vp = vp.panned(f64::from(d.x), f64::from(d.y));
     }
     if resp.hovered() || resp.dragged() {
-        let (factor, wheel, anchor) = ui.input(|i| {
-            let mut zoom = 0.0f64;
-            let mut pan = egui::Vec2::ZERO;
-            for e in &i.events {
-                if let egui::Event::MouseWheel { unit, delta, modifiers, .. } = e
-                    && !modifiers.ctrl
-                    && !modifiers.command
-                    && delta.is_finite()
-                {
-                    match unit {
-                        // a mouse wheel zooms, as on any web map
-                        egui::MouseWheelUnit::Line => zoom += f64::from(delta.y) * WHEEL_ZOOM,
-                        egui::MouseWheelUnit::Page => zoom += f64::from(delta.y.signum()),
-                        // a trackpad's two-finger scroll pans
-                        egui::MouseWheelUnit::Point => pan += *delta,
-                    }
-                }
-            }
-            (i.zoom_delta(), (zoom, pan), i.multi_touch().map(|t| t.center_pos).or(i.pointer.hover_pos()))
-        });
+        let (factor, wheel, anchor) = scroll_input(ui);
+        let local = |p: egui::Pos2| Point::new(f64::from(p.x - canvas.min.x), f64::from(p.y - canvas.min.y));
         let anchor = anchor.filter(|p| canvas.contains(*p)).map(local).unwrap_or(Point::new(w / 2.0, h / 2.0));
         let mut dz = wheel.0;
         if factor.is_finite() && factor > 0.0 && factor != 1.0 {
@@ -561,49 +636,51 @@ fn map_canvas(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
             ui.input_mut(|i| i.smooth_scroll_delta = egui::Vec2::ZERO);
         }
     }
-    let vp = Viewport::new(vp.center, vp.zoom, w, h);
-    set_viewport(app, vp);
-    // a saved location's centre or radius follows the pointer
-    if let Some(p) = pointer.filter(|_| locations::dragging(app)) {
-        locations::drag_update(app, canvas, &vp, p);
-        ctx.request_repaint();
+    Viewport::new(vp.center, vp.zoom, w, h)
+}
+
+/// Visible on Map follows the view once it rests (a pan or zoom doesn't refilter the filmstrip
+/// every frame); the first view applies at once.
+fn settle_visible_filter(app: &mut LightcraftApp, f: &Frame) {
+    if app.map.location != LocationFilter::Visible {
+        return;
     }
-    // ---- Visible on Map follows the view once it rests (a pan or zoom doesn't refilter the
-    // filmstrip every frame); the first view applies at once
-    if app.map.location == LocationFilter::Visible {
-        let area = vp.area();
-        let now = crate::now_ms();
-        let since = match app.map.seen_area {
-            Some((a, at)) if a == area => at,
-            _ => {
-                app.map.seen_area = Some((area, now));
-                now
-            }
-        };
-        if app.map.applied_area != Some(area) {
-            let wait = AREA_SETTLE_MS - (now - since);
-            if app.map.applied_area.is_none() || wait <= 0.0 {
-                app.map.applied_area = Some(area);
-                sync_location_filter(app);
-                ctx.request_repaint();
-            } else {
-                ctx.request_repaint_after(std::time::Duration::from_millis(wait.clamp(1.0, AREA_SETTLE_MS) as u64));
-            }
+    let area = f.vp.area();
+    let now = crate::now_ms();
+    let since = match app.map.seen_area {
+        Some((a, at)) if a == area => at,
+        _ => {
+            app.map.seen_area = Some((area, now));
+            now
+        }
+    };
+    if app.map.applied_area != Some(area) {
+        let wait = AREA_SETTLE_MS - (now - since);
+        if app.map.applied_area.is_none() || wait <= 0.0 {
+            app.map.applied_area = Some(area);
+            sync_location_filter(app);
+            f.ctx.request_repaint();
+        } else {
+            f.ctx.request_repaint_after(std::time::Duration::from_millis(wait.clamp(1.0, AREA_SETTLE_MS) as u64));
         }
     }
+}
 
+/// Drags that end on the map: a saved location, a pin, or photos dragged from the filmstrip.
+fn land_drags(app: &mut LightcraftApp, ui: &egui::Ui, f: &Frame) {
+    let (resp, canvas, vp, pointer, ctx) = (f.resp, f.canvas, &f.vp, f.pointer, &f.ctx);
     // ---- a moved saved location lands (outside the map: nothing changes)
     if resp.drag_stopped() {
-        locations::drag_end(app, &ctx, pointer.is_some_and(|p| canvas.contains(p)));
+        locations::drag_end(app, ctx, pointer.is_some_and(|p| canvas.contains(p)));
     }
     // ---- a moved pin lands (outside the map: nothing changes)
     if resp.drag_stopped()
         && let Some(d) = app.map.pin_drag.take()
         && pointer.is_some_and(|p| canvas.contains(p))
     {
-        let to = vp.to_lat_lon(local(d.at));
+        let to = vp.to_lat_lon(f.local(d.at));
         if let Err(e) = app.run("photo.setGps", json!({"ids": [d.id], "lat": to.lat, "lon": to.lon})) {
-            app.toast(&ctx, e);
+            app.toast(ctx, e);
         }
     }
     // ---- photos dragged from the filmstrip: a pin at the pointer; a release sets their position
@@ -614,28 +691,19 @@ fn map_canvas(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
     {
         if ui.input(|i| i.pointer.any_released()) {
             app.ui.dragging_photos = None;
-            let to = vp.to_lat_lon(local(p));
+            let to = vp.to_lat_lon(f.local(p));
             if let Err(e) = app.run("photo.setGps", json!({"ids": ids, "lat": to.lat, "lon": to.lon})) {
-                app.toast(&ctx, e);
+                app.toast(ctx, e);
             }
         } else {
             app.map.drop_at = Some((ids.len(), p));
         }
     }
+}
 
-    // ---- tiles
-    let painter = ui.painter_at(canvas);
-    painter.rect_filled(canvas, 0.0, OUTSIDE);
-    let offline = app.session.map.source().is_offline();
-    let tiles = draw_tiles(app, &ctx, &painter, canvas, &vp, Surface::View);
-    app.map.tiles_drawn = tiles.drawn;
-    app.map.tiles_missing = tiles.missing;
-
-    // ---- saved locations and the track log, under the pins
-    locations::draw(app, ui, &painter, &t, canvas, &vp);
-    tracks::draw(app, &painter, &t, canvas, &vp);
-
-    // ---- pins
+/// Group the photos into clusters for this viewport (cached until the photos, the pin settings
+/// or the viewport change).
+fn update_clusters(app: &mut LightcraftApp, vp: &Viewport) {
     let no_pins = app.map.location == LocationFilter::Untagged || !app.ui.map_show_pins;
     let key = (
         app.map.points.generation.unwrap_or(0) ^ u64::from(no_pins).rotate_left(63),
@@ -646,19 +714,25 @@ fn map_canvas(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
         // Untagged: the filmstrip holds the photos without a position, so no pins; Hide Pins (H):
         // none either (nothing to click, hover or drag; saved locations and tracks stay)
         let shown: &[MapPoint] = if no_pins { &[] } else { &app.map.points.points };
-        app.map.clusters = lightcraft_map::cluster(shown, &vp, CLUSTER_CELL);
+        app.map.clusters = lightcraft_map::cluster(shown, vp, CLUSTER_CELL);
         app.map.cluster_ms = crate::now_ms() - t0;
         app.map.clusters_for = Some(key);
     }
+}
+
+/// The pins and clusters, the pin being moved, the drop indicator and the cursor. Returns the
+/// index of the cluster under the pointer.
+fn draw_pins(app: &mut LightcraftApp, ui: &egui::Ui, f: &Frame) -> Option<usize> {
+    let (t, painter, resp) = (&f.t, &f.painter, f.resp);
+    update_clusters(app, &f.vp);
     let selected: HashSet<u64> = app.session.selection.ids.iter().map(|p| p.0).collect();
     let active = app.session.selection.active.map(|a| a.0);
-    let to_screen = |c: &Cluster| pos2(canvas.min.x + c.center.x as f32, canvas.min.y + c.center.y as f32);
-    let hover = resp.hover_pos().filter(|_| !resp.dragged() && app.ui.dragging_photos.is_none()).map(local);
+    let hover = resp.hover_pos().filter(|_| !resp.dragged() && app.ui.dragging_photos.is_none()).map(|p| f.local(p));
     let hovered = hover.and_then(|p| lightcraft_map::cluster::hit(&app.map.clusters, p, |c| f64::from(radius(c.len())) + 3.0));
     let mut listed = HashSet::new();
     let moving = app.map.pin_drag.map(|d| d.id);
     for (i, c) in app.map.clusters.iter().enumerate() {
-        let at = to_screen(c);
+        let at = f.to_screen(c);
         let n = c.len();
         if n == 1 && c.ids.first().copied() == moving {
             // the pin being moved: a faint mark where it was
@@ -681,57 +755,63 @@ fn map_canvas(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
     }
     if let Some(d) = app.map.pin_drag {
         let sel = selected.contains(&d.id);
-        draw_pin(&painter, d.at, 1, if sel { t.accent } else { PIN }, &t, active == Some(d.id));
+        draw_pin(painter, d.at, 1, if sel { t.accent } else { PIN }, t, active == Some(d.id));
     }
     if let Some((n, p)) = app.map.drop_at {
-        drop_indicator(&painter, &t, p, n);
+        drop_indicator(painter, t, p, n);
     }
     if let Some(cursor) = resp.hover_pos().and_then(|p| locations::hover_cursor(app, p)) {
-        ctx.set_cursor_icon(cursor);
+        f.ctx.set_cursor_icon(cursor);
     } else if let Some(c) = hovered.and_then(|i| app.map.clusters.get(i)).filter(|_| app.map.pin_drag.is_none()) {
         // a single photo's pin can be picked up (unless markers are locked); a cluster is clicked
         let movable = c.len() == 1 && !app.ui.map_lock_markers;
-        ctx.set_cursor_icon(if movable { egui::CursorIcon::Grab } else { egui::CursorIcon::PointingHand });
+        f.ctx.set_cursor_icon(if movable { egui::CursorIcon::Grab } else { egui::CursorIcon::PointingHand });
     }
-    let hovered_cluster = hovered.and_then(|i| app.map.clusters.get(i).cloned());
+    hovered
+}
 
-    // ---- clicks
-    if let Some(p) = resp.interact_pointer_pos().filter(|_| resp.clicked() || resp.double_clicked()).map(local) {
-        let hit =
-            lightcraft_map::cluster::hit(&app.map.clusters, p, |c| f64::from(radius(c.len())) + 3.0).and_then(|i| app.map.clusters.get(i).cloned());
-        match hit {
-            Some(c) => {
-                let m = ui.input(|i| i.modifiers);
-                let mode = if (m.command || m.shift) && !resp.double_clicked() { "add" } else { "replace" };
-                let first = c.ids.first().copied();
-                let _ = app.run("library.select", json!({"ids": c.ids, "mode": mode, "active": first}));
-                if resp.double_clicked() {
-                    let _ = app.run("view.detail", json!({}));
-                }
+/// A click on a pin selects its photos (a double click opens Detail); on a saved location it
+/// selects that; a double click on the empty map zooms in.
+fn pin_clicks(app: &mut LightcraftApp, ui: &egui::Ui, f: &Frame) {
+    let resp = f.resp;
+    let Some(p) = resp.interact_pointer_pos().filter(|_| resp.clicked() || resp.double_clicked()).map(|p| f.local(p)) else {
+        return;
+    };
+    let hit = lightcraft_map::cluster::hit(&app.map.clusters, p, |c| f64::from(radius(c.len())) + 3.0).and_then(|i| app.map.clusters.get(i).cloned());
+    match hit {
+        Some(c) => {
+            let m = ui.input(|i| i.modifiers);
+            let mode = if (m.command || m.shift) && !resp.double_clicked() { "add" } else { "replace" };
+            let first = c.ids.first().copied();
+            let _ = app.run("library.select", json!({"ids": c.ids, "mode": mode, "active": first}));
+            if resp.double_clicked() {
+                let _ = app.run("view.detail", json!({}));
             }
-            // a saved location's centre or name selects it (anywhere else drops the selection)
-            None if resp.clicked() && !resp.double_clicked() => {
-                if let Some(at) = resp.interact_pointer_pos() {
-                    locations::click(app, at);
-                }
-            }
-            None if resp.double_clicked() => {
-                let v = viewport(app);
-                set_viewport(app, v.zoomed_around(p, (v.zoom + 1.0).min(max_zoom(app)).floor()));
-                ctx.request_repaint();
-            }
-            None => {}
         }
+        // a saved location's centre or name selects it (anywhere else drops the selection)
+        None if resp.clicked() && !resp.double_clicked() => {
+            if let Some(at) = resp.interact_pointer_pos() {
+                locations::click(app, at);
+            }
+        }
+        None if resp.double_clicked() => {
+            let v = viewport(app);
+            set_viewport(app, v.zoomed_around(p, (v.zoom + 1.0).min(max_zoom(app)).floor()));
+            f.ctx.request_repaint();
+        }
+        None => {}
     }
+}
 
-    // ---- right-click on a pin: its photos' menu
-    if resp.secondary_clicked() {
+/// Right-click on a pin: its photos' menu.
+fn pin_menu(app: &mut LightcraftApp, f: &Frame) {
+    if f.resp.secondary_clicked() {
         app.map.menu_for =
-            resp.interact_pointer_pos().map(local).and_then(|p| pin_at(&app.map.clusters, p)).map(|c| c.ids.clone()).unwrap_or_default();
+            f.resp.interact_pointer_pos().map(|p| f.local(p)).and_then(|p| pin_at(&app.map.clusters, p)).map(|c| c.ids.clone()).unwrap_or_default();
     }
     if !app.map.menu_for.is_empty() {
         let ids = app.map.menu_for.clone();
-        resp.context_menu(|ui| {
+        f.resp.context_menu(|ui| {
             let label = if ids.len() == 1 { "Remove GPS Coordinates" } else { "Remove GPS Coordinates of These Photos" };
             let b = ui.button(crate::i18n::tr(label));
             register(ui, "map:pinMenu:removeGps", b.rect);
@@ -744,32 +824,28 @@ fn map_canvas(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
             }
         });
     }
+}
 
-    // ---- hover thumbnail
-    if let Some(c) = hovered_cluster.filter(|_| app.map.pin_drag.is_none())
-        && let Some(&first) = c.ids.first()
-    {
-        thumbnail(app, ui, &painter, to_screen(&c), radius(c.len()), PhotoId(first), c.len());
-    }
-
-    // ---- overlays: notes, controls, attribution
+/// The notes on the map: no photos, none with a location, tiles off, photos without GPS.
+fn overlay_notes(app: &LightcraftApp, ui: &egui::Ui, f: &Frame, offline: bool) {
+    let (t, painter, canvas) = (&f.t, &f.painter, f.canvas);
     let n_gps = app.map.points.points.len();
     let without = app.map.points.without_gps;
     if app.map.location == LocationFilter::Untagged && without > 0 {
         let text = crate::i18n::tr("Untagged: the filmstrip shows the photos without a location. Drag them onto the map to place them.").to_string();
         // below the toolbar (and the offline note)
-        note_box(&painter, &t, pos2(canvas.center().x, canvas.top() + 84.0 + if offline { 40.0 } else { 0.0 }), &[(text, false)]);
+        note_box(painter, t, pos2(canvas.center().x, canvas.top() + 84.0 + if offline { 40.0 } else { 0.0 }), &[(text, false)]);
     } else if n_gps == 0 {
         let (title, body) = if without == 0 {
             ("No photos", "Photos with a GPS position appear here as pins")
         } else {
             ("No photos with a location", "Photos with a GPS position appear here as pins (Info panel ▸ GPS, or Photo ▸ Auto-Tag from Tracklog…)")
         };
-        note_box(&painter, &t, canvas.center(), &[(crate::i18n::tr(title).to_string(), true), (crate::i18n::tr(body).to_string(), false)]);
+        note_box(painter, t, canvas.center(), &[(crate::i18n::tr(title).to_string(), true), (crate::i18n::tr(body).to_string(), false)]);
     }
     if offline {
         let text = crate::i18n::tr("Map tiles are off (Settings ▸ Map)").to_string();
-        note_box(&painter, &t, pos2(canvas.center().x, canvas.top() + 28.0), &[(text, false)]);
+        note_box(painter, t, pos2(canvas.center().x, canvas.top() + 28.0), &[(text, false)]);
     }
     if without > 0 {
         let text = format!("{without} {}", crate::i18n::tr(if without == 1 { "photo without GPS" } else { "photos without GPS" }));
@@ -779,9 +855,6 @@ fn map_canvas(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
         painter.galley(r.min + vec2(6.0, 3.0), g, t.text_label);
         register(ui, "map:withoutGps", r);
     }
-    draw_attribution(ui, &painter, &t, canvas, tiles.attribution, 11.0, "map:attribution");
-    controls(app, ui, canvas);
-    locations::overlay(app, ui, canvas);
 }
 
 /// The pin (or cluster) under canvas point `p`, as a click finds it.

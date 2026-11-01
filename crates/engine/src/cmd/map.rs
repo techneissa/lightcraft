@@ -431,6 +431,9 @@ mod tests {
     #[test]
     fn tile_source_get_and_set() {
         let mut s = Session::new();
+        // fork: Offline until a server is chosen
+        assert_eq!(s.execute("map.tileSource", &json!({})).unwrap()["offline"], true);
+        s.execute("map.tileSource", &json!({"id": "osm"})).unwrap();
         let r = s.execute("map.tileSource", &json!({})).unwrap();
         assert_eq!(r["id"], "osm");
         assert_eq!(r["urlTemplate"], "https://tile.openstreetmap.org/{z}/{x}/{y}.png");
@@ -480,6 +483,7 @@ mod tests {
     fn changing_the_source_restarts_the_service() {
         let mut s = Session::new();
         assert!(s.map.service().is_none(), "nothing starts until a map asks");
+        s.execute("map.tileSource", &json!({"id": "osm"})).unwrap();
         assert_eq!(s.map_tiles().source().id, "osm");
         s.execute("map.tileSource", &json!({"offline": true})).unwrap();
         assert!(s.map.service().is_none());
@@ -619,6 +623,7 @@ mod tests {
             on_disk: false,
         };
         s.open_library_in(stores, true).unwrap();
+        s.map.set_source(TileSource::openstreetmap());
         assert!(s.execute("map.tileSource", &json!({"offline": true})).is_err());
         assert_eq!(s.map.source().id, "osm", "an error means nothing changed");
     }
@@ -631,7 +636,7 @@ mod tests {
         let mut s = Session::new().with_fs();
         s.open_library(&lib, false).unwrap();
         assert_eq!(s.cache_mb, 777, "the rest of prefs.json is read");
-        assert_eq!(s.map.source().id, "osm", "the damaged source falls back to OpenStreetMap");
+        assert_eq!(s.map.source().id, "offline", "the damaged source falls back to Offline (fork)");
         drop(s);
         let _ = std::fs::remove_dir_all(&lib);
     }
