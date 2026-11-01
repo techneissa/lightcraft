@@ -36,18 +36,24 @@ pub fn part_mode(m: &Mask, k: usize) -> MaskOp {
     if k == 0 { MaskOp::Add } else { m.components.get(k).map(|c| c.op).unwrap_or_default() }
 }
 
-/// Whether a stroke takes coverage away from its brush part, when the user wants to `take_away` from the mask (Erase
-/// chosen, or ⌥ held). Coverage in a Subtract part means less of the mask, so there the two turn around: adding to the
-/// mask erases from the part. Add and Erase are named by what they do to the mask.
-pub fn stroke_erase(take_away: bool, part: MaskOp) -> bool {
-    take_away != (part == MaskOp::Subtract)
+/// Whether painting part `k` of `m` does the opposite of what its name says to the mask: coverage in a Subtract part
+/// means less of the mask, and Invert (applied by the engine before the part is combined) turns every part around.
+pub fn turned_around(m: &Mask, k: usize) -> bool {
+    (part_mode(m, k) == MaskOp::Subtract) != m.components.get(k).is_some_and(|c| c.invert)
 }
 
-/// The part the Brush paints into on the selected mask, and its mode (Add when the stroke starts a part of its own).
-pub fn painting_into(app: &LightcraftApp, d: &lightcraft_develop::DevelopSettings) -> (Option<usize>, MaskOp) {
-    let Some(m) = app.session.active_mask.and_then(|id| d.masks.iter().find(|m| m.id == id)) else { return (None, MaskOp::Add) };
+/// Whether a stroke takes coverage away from its brush part, when the user wants to `take_away` from the mask (Erase
+/// chosen, or ⌥ held) and the part is `turned_around`. Add and Erase are named by what they do to the mask.
+pub fn stroke_erase(take_away: bool, turned_around: bool) -> bool {
+    take_away != turned_around
+}
+
+/// The part the Brush paints into on the selected mask, and whether it is turned around (not when the stroke starts a
+/// part of its own, which is a plain Add part).
+pub fn painting_into(app: &LightcraftApp, d: &lightcraft_develop::DevelopSettings) -> (Option<usize>, bool) {
+    let Some(m) = app.session.active_mask.and_then(|id| d.masks.iter().find(|m| m.id == id)) else { return (None, false) };
     let k = brush_part(m, app.session.active_part());
-    (k, k.map_or(MaskOp::Add, |k| part_mode(m, k)))
+    (k, k.is_some_and(|k| turned_around(m, k)))
 }
 
 /// Whether the brush's bar (Add · Erase, Auto Mask, size…) is shown: while painting, or while a brush part is selected.
@@ -58,6 +64,13 @@ pub fn brush_bar_shown(app: &LightcraftApp, m: &Mask) -> bool {
 /// The `tool.brush` command: paint on the selected mask (into its selected brush part), or `new: true` for a mask of
 /// its own, `op` for a new brush part, `component` to paint into that part, `erase` to choose Add or Erase.
 pub fn start_brush(app: &mut LightcraftApp, p: &Value) -> Result<(), String> {
+    // a malformed `component` is refused before anything changes
+    let component = match p.get("component").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => Some(
+            v.as_u64().and_then(|k| usize::try_from(k).ok()).ok_or("tool.brush: `component` must be a non-negative integer that fits in usize")?,
+        ),
+    };
     // A new mask and Add/Subtract are selection operations, not the brush's Erase mode. Paint positively into a part
     // with the requested mode.
     let create = if p.get("new").and_then(Value::as_bool) == Some(true) {
@@ -72,13 +85,13 @@ pub fn start_brush(app: &mut LightcraftApp, p: &Value) -> Result<(), String> {
         app.ui.mask_overlay = true;
         select_last_part(app);
     }
-    if let Some(k) = p.get("component").and_then(Value::as_u64) {
+    if let Some(k) = component {
         let mid = app.session.active_mask.ok_or("tool.brush: no mask selected")?;
         let id = app.session.active().ok_or("tool.brush: no active photo")?;
         let is_brush_part = app
             .session
             .develop_of(id)
-            .and_then(|d| d.masks.iter().find(|m| m.id == mid).and_then(|m| m.components.get(k as usize)).map(is_brush))
+            .and_then(|d| d.masks.iter().find(|m| m.id == mid).and_then(|m| m.components.get(k)).map(is_brush))
             .unwrap_or(false);
         if !is_brush_part {
             return Err(format!("tool.brush: part {k} of mask {mid} is not a brush part"));
@@ -205,6 +218,12 @@ fn add_part(app: &mut LightcraftApp, ctx: &egui::Context, kind: &str, op: MaskOp
 /// Pick part `k` of mask `mask`: it is selected, and a brush part gets the brush, on Add.
 fn pick_part(app: &mut LightcraftApp, mask: u32, k: usize, brush: bool) {
     let _ = app.run("mask.select", json!({"id": mask, "component": k}));
+    // the mode control shows the selected part's mode
+    let mode =
+        app.session.active().and_then(|id| app.session.develop_of(id)).and_then(|d| d.masks.iter().find(|m| m.id == mask).map(|m| part_mode(m, k)));
+    if let Some(mode) = mode {
+        app.ui.mask_op = mode;
+    }
     if brush {
         let _ = app.run("tool.brush", json!({"component": k}));
     } else if app.ui.tool == "brush" {
@@ -340,6 +359,7 @@ fn part_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask, i: usize, 
                 used = true;
                 if op != now {
                     let _ = app.run("mask.component", json!({"id": m.id, "component": i, "action": "op", "op": op_name(op)}));
+                    app.ui.mask_op = op;
                 }
             }
         }
@@ -387,12 +407,21 @@ mod tests {
 
     #[test]
     fn add_and_erase_are_named_by_what_they_do_to_the_mask() {
+        let with_part =
+            |op, invert| Mask { components: vec![part(MaskOp::Add, true), MaskComponent { invert, ..part(op, true) }], ..Default::default() };
+        let turned = |op, invert| turned_around(&with_part(op, invert), 1);
         // an Add part: Add paints it, Erase takes paint out
-        assert!(!stroke_erase(false, MaskOp::Add));
-        assert!(stroke_erase(true, MaskOp::Add));
+        assert!(!stroke_erase(false, turned(MaskOp::Add, false)));
+        assert!(stroke_erase(true, turned(MaskOp::Add, false)));
         // a Subtract part: painting it removes the mask, so Add takes paint out of the part and Erase paints it
-        assert!(stroke_erase(false, MaskOp::Subtract));
-        assert!(!stroke_erase(true, MaskOp::Subtract));
+        assert!(stroke_erase(false, turned(MaskOp::Subtract, false)));
+        assert!(!stroke_erase(true, turned(MaskOp::Subtract, false)));
+        // Invert turns every part around, and a Subtract part back
+        assert!(stroke_erase(false, turned(MaskOp::Add, true)));
+        assert!(!stroke_erase(false, turned(MaskOp::Subtract, true)));
+        // the first part is the base: Add, whatever it says
+        let base = Mask { components: vec![part(MaskOp::Subtract, true)], ..Default::default() };
+        assert!(!turned_around(&base, 0));
     }
 
     #[test]

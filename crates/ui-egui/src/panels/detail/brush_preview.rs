@@ -49,8 +49,8 @@ pub(super) fn request(app: &mut LightcraftApp, ui: &egui::Ui, a: &Ask) {
     }
     let Some(d) = app.session.develop_of(id) else { return stop(app) };
     // holding ⌥ (Alt) paints with the other mode; in a Subtract part a stroke goes the other way
-    let (part, part_op) = super::super::mask_parts::painting_into(app, &d);
-    let erase = super::super::mask_parts::stroke_erase(app.ui.brush_erase != ui.input(|i| i.modifiers.alt), part_op);
+    let (part, turned) = super::super::mask_parts::painting_into(app, &d);
+    let erase = super::super::mask_parts::stroke_erase(app.ui.brush_erase != ui.input(|i| i.modifiers.alt), turned);
     let fresh = lightcraft_engine::cmd::mask_effects::new_mask_adjust(&app.session, "brush");
     let Some(settings) = target::settings_in(&d, app.session.active_mask, part, erase, fresh) else { return stop(app) };
     if let Some(job) = app.session.preview_job(id, rw.max(8), rh.max(8), with_crop, &settings) {

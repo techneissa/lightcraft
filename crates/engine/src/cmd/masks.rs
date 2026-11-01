@@ -167,18 +167,6 @@ fn masks_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Mas
     Ok(json!({"activeMask": active}))
 }
 
-impl Session {
-    /// The selected part (component index) of the selected mask, when it still exists.
-    pub fn active_part(&self) -> Option<usize> {
-        let (mask, k) = self.active_component?;
-        if self.active_mask != Some(mask) {
-            return None;
-        }
-        let d = self.develop_of(self.active()?)?;
-        (k < d.masks.iter().find(|m| m.id == mask)?.components.len()).then_some(k)
-    }
-}
-
 /// Most pieces a tapered ⇧-click segment is cut into.
 const MAX_TAPER_STEPS: usize = 64;
 
@@ -357,7 +345,6 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mut connected = false;
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
                 let want = optional_mask_id(p, "mask.brushStroke")?.or(s.active_mask);
-                let want_part = optional_index(p, "component", "mask.brushStroke")?;
                 let selected = s.active_component;
                 let adjust = super::mask_effects::new_mask_adjust(s, "brush");
                 let mut painted: Option<(u32, usize)> = None;
@@ -371,17 +358,8 @@ pub fn specs() -> Vec<CommandSpec> {
                         }
                     };
                     let m = &mut masks[i];
-                    // the part to paint into: the one asked for, else the selected one when it is a brush part, else the
-                    // mask's last brush part
-                    let is_brush = |c: &MaskComponent| matches!(c.shape, MaskShape::Brush { .. });
-                    let target = match want_part {
-                        Some(k) if m.components.get(k).is_some_and(is_brush) => Some(k),
-                        Some(k) => return Err(bad("mask.brushStroke", format!("part {k} is not a brush part"))),
-                        None => selected
-                            .filter(|(mid, k)| *mid == m.id && m.components.get(*k).is_some_and(is_brush))
-                            .map(|(_, k)| k)
-                            .or_else(|| m.components.iter().rposition(is_brush)),
-                    };
+                    // the part to paint into: the one asked for, else the selected one, else the last brush part
+                    let target = super::mask_parts::brush_target(m, p, selected, "mask.brushStroke")?;
                     painted = Some((m.id, target.unwrap_or(m.components.len())));
                     if let Some(MaskComponent { shape: MaskShape::Brush { strokes }, .. }) = target.and_then(|k| m.components.get_mut(k)) {
                         // the previous stroke's end and its brush values (not its points)
@@ -675,24 +653,7 @@ pub fn specs() -> Vec<CommandSpec> {
             None,
             "{id|null, component?: index} — selects a mask, and with `component` one of its parts (null or omitted: no part)",
             has_active,
-            |s, p| {
-                let c = "mask.select";
-                let id = optional_mask_id(p, c)?;
-                let part = optional_index(p, "component", c)?;
-                if let Some(k) = part {
-                    let mid = id.ok_or_else(|| bad(c, "`component` needs `id`"))?;
-                    let parts =
-                        s.active().and_then(|a| s.develop_of(a)).and_then(|d| d.masks.iter().find(|m| m.id == mid).map(|m| m.components.len()));
-                    match parts {
-                        None => return Err(bad(c, format!("no mask {mid}"))),
-                        Some(n) if k >= n => return Err(bad(c, format!("mask {mid} has no part {k}"))),
-                        Some(_) => {}
-                    }
-                }
-                s.active_mask = id;
-                s.active_component = id.zip(part);
-                ok()
-            }
+            |s, p| super::mask_parts::select(s, p)
         ),
         cmd!("mask.delete", "Delete Mask", [], None, "{id?}", has_active, |s, p| {
             let mid = mask_id(p, s.active_mask, "mask.delete")?;
@@ -793,23 +754,14 @@ pub fn specs() -> Vec<CommandSpec> {
                     match action.as_str() {
                         "invert" => comp.invert = !comp.invert,
                         "rename" => comp.name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string),
-                        // the first part is the base: it takes no other mode
-                        "op" => {
-                            let op = op.ok_or_else(|| bad(c, "missing op"))?;
-                            comp.op = if k == 0 { MaskOp::Add } else { op };
-                        }
+                        "op" => comp.op = super::mask_parts::mode_for(k, op.ok_or_else(|| bad(c, "missing op"))?),
                         "duplicate" => {
                             let copy = comp.clone();
                             comps.insert(k + 1, copy);
                         }
                         _ => {
                             comps.remove(k);
-                            // deleting the base makes the next part the base, shown (and acting) as Add
-                            if k == 0
-                                && let Some(first) = comps.first_mut()
-                            {
-                                first.op = MaskOp::Add;
-                            }
+                            super::mask_parts::rebase_after_delete(comps, k);
                             if comps.is_empty() {
                                 masks.remove(i);
                                 *active = masks.last().map(|m| m.id);
@@ -818,15 +770,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     Ok(())
                 })?;
-                // the selected part keeps pointing at the same part when others come or go before it
-                if let Some(j) = selected {
-                    s.active_component = match action.as_str() {
-                        "duplicate" if j > k => Some((mid, j + 1)),
-                        "delete" if j == k => None,
-                        "delete" if j > k => Some((mid, j - 1)),
-                        _ => s.active_component,
-                    };
-                }
+                super::mask_parts::follow(s, mid, selected, &action, k);
                 Ok(out)
             }
         ),

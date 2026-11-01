@@ -186,3 +186,47 @@ fn delete_removes_the_selected_part_else_the_mask() {
     assert!(d.masks.is_empty(), "no part selected: the mask goes");
     h.settle(SETTLE);
 }
+
+#[test]
+fn tool_brush_refuses_a_malformed_component_and_changes_nothing() {
+    let mut h = masking();
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    exec(&mut h, "tool.brush", json!({"op": "add"}));
+    exec(&mut h, "view.back", json!({}));
+    let part = h.app.session.active_part();
+    assert_eq!((part, h.app.ui.tool.as_str()), (Some(1), ""));
+    for bad in [json!(-1), json!("2"), json!(1.5), json!(9), json!(null).clone()] {
+        let r = h.request("engine.execute", json!({"command": "tool.brush", "params": {"component": bad}}), T);
+        if bad.is_null() {
+            // null means no part given, like an omitted one
+            assert_eq!(r["ok"], true, "{bad}: {r}");
+            exec(&mut h, "view.back", json!({}));
+            continue;
+        }
+        assert_eq!(r["ok"], false, "{bad}: {r}");
+        assert_eq!((h.app.session.active_part(), h.app.ui.tool.as_str()), (part, ""), "{bad}: nothing changed");
+    }
+    h.settle(SETTLE);
+}
+
+/// A part with Invert on is turned around by the engine before it is combined, so a stroke in it does the opposite:
+/// Add (to the mask) has to take paint out of the part, and Erase has to paint it.
+#[test]
+fn an_inverted_part_turns_add_and_erase_around() {
+    let mut h = masking();
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    exec(&mut h, "mask.component", json!({"component": 0, "action": "invert"}));
+    h.app.ui.brush_erase = false;
+    brush_at(&mut h, 0.3, 0.5);
+    assert!(strokes(&h, 0)[0].erase, "Add in an inverted part takes paint out of it");
+    h.app.ui.brush_erase = true;
+    brush_at(&mut h, 0.6, 0.5);
+    assert!(!strokes(&h, 0)[1].erase, "Erase paints it, which takes the mask away");
+    // and in an inverted Subtract part they are the same as in a plain Add part again
+    exec(&mut h, "tool.brush", json!({"op": "subtract"}));
+    exec(&mut h, "mask.component", json!({"component": 1, "action": "invert"}));
+    h.app.ui.brush_erase = false;
+    brush_at(&mut h, 0.4, 0.4);
+    assert!(!strokes(&h, 1)[0].erase);
+    h.settle(SETTLE);
+}

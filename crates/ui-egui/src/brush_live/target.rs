@@ -36,11 +36,9 @@ pub fn settings_in(d: &DevelopSettings, mask: Option<u32>, part: Option<usize>, 
     let k = part.filter(|k| m.components.get(*k).is_some_and(is_brush)).or_else(|| m.components.iter().rposition(is_brush));
     let comp = k.and_then(|k| m.components.get_mut(k));
     match (comp, erase) {
-        (Some(c), false) => *c = MaskComponent { op: c.op, name: c.name.take(), ..full },
-        (Some(c), true) => {
-            c.shape = none;
-            c.invert = false;
-        }
+        // (a part with Invert on is turned around by the engine: full coverage of the brush is none of the part)
+        (Some(c), false) => *c = MaskComponent { op: c.op, name: c.name.take(), invert: !c.invert, ..full },
+        (Some(c), true) => c.shape = none,
         (None, false) => m.components.push(full),
         (None, true) => return None,
     }
@@ -69,6 +67,18 @@ mod tests {
         let (w, h) = (40, 30);
         let a = evaluate_one(&d.masks[0], &Frame::new(w, h, &Default::default(), true), w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None);
         a.data.iter().sum::<f32>() / (w * h) as f32
+    }
+
+    #[test]
+    fn a_part_with_invert_on_is_painted_the_other_way_round() {
+        let mut d = with_mask(adjusted());
+        d.masks[0].components[0].invert = true;
+        assert!(coverage(&d) > 0.5, "the stroke takes a small part out of the inverted part");
+        // painting covers the whole brush, which is none of the inverted part; erasing leaves all of it
+        let painted = settings(&d, Some(3), false, LocalAdjustments::default()).unwrap();
+        assert_eq!(coverage(&painted), 0.0);
+        let erased = settings(&d, Some(3), true, LocalAdjustments::default()).unwrap();
+        assert!((coverage(&erased) - 1.0).abs() < 1e-6);
     }
 
     #[test]

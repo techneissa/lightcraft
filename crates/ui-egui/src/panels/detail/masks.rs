@@ -626,8 +626,8 @@ fn brush_tool(
         // holding ⌥ (Alt) paints with the other mode: Erase while adding, Add while erasing
         let (alt, shift) = resp.ctx.input(|i| (i.modifiers.alt, i.modifiers.shift));
         // Add and Erase are named by their effect on the mask: in a Subtract part the stroke goes the other way
-        let (part, part_op) = super::super::mask_parts::painting_into(app, d);
-        let erase = super::super::mask_parts::stroke_erase(app.ui.brush_erase != alt, part_op);
+        let (part, turned) = super::super::mask_parts::painting_into(app, d);
+        let erase = super::super::mask_parts::stroke_erase(app.ui.brush_erase != alt, turned);
         // a ⇧-click draws a straight line from where the last stroke ended, as in Lightroom
         let connect = shift && resp.clicked() && pts.len() == 1;
         let _ = app.run(

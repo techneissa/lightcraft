@@ -30,6 +30,7 @@ pub mod macos_colour;
 pub mod manage;
 pub mod mask_effect_files;
 pub mod mask_effects;
+mod mask_parts;
 mod masks;
 mod merge;
 pub mod metadata;

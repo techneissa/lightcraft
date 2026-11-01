@@ -91,19 +91,27 @@ fn masking_long_names_and_describe_controls_stay_inside_the_panel() {
     }
 }
 
-/// The kind buttons of Create New Mask fill the panel's width, at a narrow and at a wide side bar: the right-most
-/// tile ends where the panel's content does (within a gap), and the wide bar has wider tiles than the narrow one.
+/// The kind buttons of Create New Mask fill the panel's width, at the default side bar and at a wide one: the
+/// right-most tile ends where the panel's content does (within a gap), the columns are 4 then 5 (never three, never one
+/// tile alone on the last row), and no label is cut.
 #[test]
 fn create_new_mask_tiles_follow_the_side_bars_width() {
-    let mut widths = Vec::new();
-    for width in [270.0, 520.0] {
-        let (_, widgets) = panel(width, 1.0, Locale::En, false);
+    let mut columns = Vec::new();
+    for width in [282.0, 520.0] {
+        let (texts, widgets) = panel(width, 1.0, Locale::En, false);
         let tiles: Vec<Rect> = widgets.iter().filter(|(id, _)| id.starts_with("maskNew:")).map(|(_, r)| *r).collect();
         assert_eq!(tiles.len(), 10);
         let right = tiles.iter().map(|r| r.right()).fold(0.0, f32::max);
         let content_right = width - 22.0;
         assert!(content_right - right < 8.0 && right <= content_right + 0.5, "{width}: tiles end at {right}, the panel at {content_right}");
-        widths.push((tiles[0].width(), tiles.iter().filter(|r| (r.top() - tiles[0].top()).abs() < 1.0).count()));
+        let first_row = tiles.iter().filter(|r| (r.top() - tiles[0].top()).abs() < 1.0).count();
+        assert_eq!(10 % first_row == 1, false, "{width}: a tile alone on the last row");
+        columns.push(first_row);
+        for (kind, label) in [("object", "Object"), ("background", "Background"), ("luminanceRange", "Luminance"), ("prompt", "Describe")] {
+            let tile = widgets.iter().find(|(id, _)| id == &format!("maskNew:{kind}")).unwrap().1;
+            let text = texts.iter().find(|t| t.galley.job.text == label && t.pos.y < tile.bottom()).unwrap();
+            assert!(!text.galley.elided, "{width}: {label} is cut");
+        }
     }
-    assert!(widths[1].0 > widths[0].0 + 8.0 || widths[1].1 > widths[0].1, "{widths:?}: the wide side bar shows more or wider tiles");
+    assert_eq!(columns, [4, 5]);
 }

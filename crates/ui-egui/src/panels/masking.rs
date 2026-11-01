@@ -59,29 +59,28 @@ pub(super) fn kind_label(s: &MaskShape) -> (&'static str, Icon) {
     }
 }
 
-/// Narrowest and widest a Create New Mask tile is drawn (a long, translated label makes a tile wider than the
-/// narrowest).
-const TILE_MIN: f32 = 48.0;
-const TILE_MAX: f32 = 104.0;
+const TILE: f32 = 52.0;
 const TILE_GAP: f32 = 6.0;
 /// Room left and right of a tile's label.
 const TILE_PAD: f32 = 3.0;
 
-/// Columns, tile width and label size of the Create New Mask grid of `count` tiles in `width`, `label(size)` being
-/// the widest label at a font size. The grid fills the width: the most columns whose tiles stay at least 48 pt (or as
-/// wide as the labels need, at 10.5 pt, or at 9.5 pt before a column is dropped) set the number of rows; the fewest
-/// columns that make that many rows share the width evenly, each tile at most 104 pt. In a panel too narrow even for
-/// two such tiles, two tiles whose labels are cut short.
-fn tile_layout(width: f32, count: usize, label: impl Fn(f32) -> f32) -> (usize, f32, f32) {
+/// Columns, tile width and label size of the Create New Mask grid in `width`, `label(size)` being
+/// the widest label at a font size: four tiles of up to 52 pt (at least 48), else three, else two —
+/// the first that fits the labels at 10.5 pt, or at 9.5 pt before a column is dropped. A tile grows
+/// past 52 pt for a long (translated) label. In a panel too narrow even for that, two tiles whose
+/// labels are cut short.
+#[allow(dead_code)] // the fork lays the tiles out with `mask_tiles::layout`
+fn tile_layout(width: f32, label: impl Fn(f32) -> f32) -> (usize, f32, f32) {
     let room = |n: usize| ((width - (n as f32 - 1.0) * TILE_GAP) / n as f32).floor();
-    let count = count.max(1);
-    for n_max in (2..=count.max(2)).rev() {
+    for n in [4, 3, 2] {
+        let w = room(n);
+        if n == 4 && w < 48.0 {
+            continue;
+        }
         for size in [10.5, 9.5] {
-            let need = (label(size) + 2.0 * TILE_PAD).ceil().max(TILE_MIN);
-            if room(n_max) >= need {
-                let rows = count.div_ceil(n_max);
-                let n = count.div_ceil(rows).max(2);
-                return (n, room(n).min(TILE_MAX), size);
+            let need = (label(size) + 2.0 * TILE_PAD).ceil();
+            if need <= w {
+                return (n, w.min(TILE.max(need)), size);
             }
         }
     }
@@ -123,8 +122,8 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 .map(|(_, l, _)| ui.painter().layout_no_wrap(crate::i18n::tr(l).to_string(), font.clone(), t.text_dim).size().x)
                 .fold(0.0, f32::max)
         };
-        let (cols, tile, size) = tile_layout(ui.available_width(), tiles.len(), widest);
-        egui::Grid::new("mask-tiles").spacing(vec2(TILE_GAP, TILE_GAP)).show(ui, |ui| {
+        let (cols, tile, size) = super::mask_tiles::layout(ui.available_width(), tiles.len(), widest);
+        egui::Grid::new("mask-tiles").spacing(vec2(super::mask_tiles::GAP, super::mask_tiles::GAP)).show(ui, |ui| {
             for (i, (kind, label, icon)) in tiles.iter().enumerate() {
                 let (r, resp) = ui.allocate_exact_size(vec2(tile, 52.0), Sense::click());
                 crate::widgets::announce(&resp, crate::i18n::tr(label));
@@ -133,7 +132,7 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 paint(ui.painter(), Rect::from_center_size(r.center() - vec2(0.0, 7.0), vec2(20.0, 20.0)), *icon, t.text_label);
                 // (cut short only in a panel too narrow for the label: the full name on hover)
                 let label = crate::i18n::tr(label);
-                let g = one_line(ui.painter(), label, t.font(size), t.text_dim, tile - 2.0 * TILE_PAD);
+                let g = one_line(ui.painter(), label, t.font(size), t.text_dim, tile - 2.0 * super::mask_tiles::PAD);
                 let elided = g.elided;
                 let at = pos2(r.center().x, r.bottom() - 9.0) - g.size() / 2.0;
                 register(ui, format!("maskNewLabel:{kind}"), Rect::from_min_size(at, g.size()));
@@ -312,9 +311,6 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.horizontal(|ui| {
             if text_button(ui, "maskInvert", crate::i18n::tr("Invert"), m.invert).clicked() {
                 let _ = app.run("mask.invert", json!({}));
-            }
-            if icon_button(ui, "maskDelete", Icon::Trash, vec2(26.0, 24.0), false, true, "Delete mask").clicked() {
-                let _ = app.run("mask.delete", json!({}));
             }
         });
     });
@@ -603,6 +599,45 @@ pub(super) fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: u
     }
 }
 
+/// The right-click / "…" menu of one component of the selected mask.
+#[allow(dead_code)] // the fork's part rows have their own menu (`mask_parts::part_menu`)
+fn component_row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: u32, k: usize, label: &str, count: usize) {
+    let mut run = |ui: &mut egui::Ui, text: &str, p: serde_json::Value| {
+        if ui.button(menu_label(text)).clicked() {
+            let mut p = p;
+            p["id"] = json!(mask);
+            p["component"] = json!(k);
+            let _ = app.run("mask.component", p);
+            ui.close();
+        }
+    };
+    run(ui, "Invert", json!({"action": "invert"}));
+    run(ui, &crate::i18n::tr_format!("Duplicate \"{label}\"", label = label), json!({"action": "duplicate"}));
+    if k > 0 {
+        crate::widgets::menu_button(ui, crate::i18n::tr("Mode"), |ui| {
+            for (op, text) in [("add", "Add"), ("subtract", "Subtract"), ("intersect", "Intersect")] {
+                run(ui, text, json!({"action": "op", "op": op}));
+            }
+        });
+    }
+    crate::widgets::menu_button(ui, crate::i18n::tr("Intersect with"), |ui| component_menu(app, ui, "intersect"));
+    crate::widgets::menu_button(ui, crate::i18n::tr("Subtract"), |ui| component_menu(app, ui, "subtract"));
+    ui.separator();
+    if ui.button(crate::i18n::tr("Rename…")).clicked() {
+        app.ui.renaming_component = Some((mask, k, label.to_string()));
+        ui.close();
+    }
+    let del = if count == 1 {
+        crate::i18n::tr_format!("Delete \"{label}\" (and the mask)", label = label)
+    } else {
+        crate::i18n::tr_format!("Delete \"{label}\"", label = label)
+    };
+    if ui.button(del).clicked() {
+        let _ = app.run("mask.component", json!({"id": mask, "component": k, "action": "delete"}));
+        ui.close();
+    }
+}
+
 /// Whether the SAM 3 model is missing in a build that could use it: then the download is
 /// offered (with `then` to start afterwards) instead of starting an AI mask.
 fn needs_model(app: &mut LightcraftApp, kind: &str, op: &str) -> bool {
@@ -739,6 +774,42 @@ fn describe_field(app: &mut LightcraftApp, ui: &mut egui::Ui, new_mask: bool) {
     }
 }
 
+#[allow(dead_code)] // the fork's kind buttons replace the menus (`mask_parts::add_controls`)
+fn component_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, op: &str) {
+    let b = ui.button(crate::i18n::tr("Object"));
+    register(ui, format!("maskComp:{op}:object"), b.rect);
+    if b.clicked() {
+        start_object(app, ui.ctx(), op);
+    }
+    let b = ui.button(crate::i18n::tr("Describe…"));
+    register(ui, format!("maskComp:{op}:prompt"), b.rect);
+    if b.clicked() {
+        start_describe(app, op);
+    }
+    for (kind, label) in [
+        ("brush", "Brush"),
+        ("linear", "Linear Gradient"),
+        ("radial", "Radial Gradient"),
+        ("sky", "Sky"),
+        ("subject", "Subject"),
+        ("luminanceRange", "Luminance Range"),
+    ] {
+        // painting only adds or erases
+        if kind == "brush" && op == "intersect" {
+            continue;
+        }
+        let b = ui.button(menu_label(label));
+        register(ui, format!("maskComp:{op}:{kind}"), b.rect);
+        if b.clicked() {
+            if kind == "brush" {
+                let _ = app.run("tool.brush", json!({"op": op}));
+            } else {
+                let _ = app.run("mask.addComponent", json!({"op": op, "kind": kind}));
+            }
+        }
+    }
+}
+
 fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 0 }).show(ui, |ui| {
@@ -814,36 +885,27 @@ mod tests {
         assert!(!enter_submits(false, true, false));
     }
 
-    /// The grid fills the panel: more columns and wider tiles as the panel grows, never narrower than 48 pt or
-    /// wider than 104 pt, and a long (translated) label gets room by dropping a column.
+    /// The grid keeps four 52 pt tiles when the labels fit, and gives a long (translated) label
+    /// room by dropping a column rather than drawing it past its tile.
     #[test]
-    fn tiles_fill_the_width_and_labels_get_the_room_they_need() {
+    fn tile_labels_get_the_room_they_need() {
         let short = |size: f32| size * 4.0; // "Luminance"-ish: 42 pt at 10.5
         let long = |size: f32| size * 5.6; // "Background"/"Hintergrund": 59 pt at 10.5, 53 at 9.5
-        // a narrow panel: four columns, the tiles share the width
-        let (n, w, size) = tile_layout(224.0, 10, short);
-        assert_eq!((n, size), (4, 10.5));
-        assert!(w >= TILE_MIN && 4.0 * w + 3.0 * TILE_GAP <= 224.0 && 224.0 - (4.0 * w + 3.0 * TILE_GAP) < 4.0, "{w}");
-        // too wide for four at either size: three tiles, wider so the label fits
-        let (n, w, size) = tile_layout(224.0, 10, long);
+        assert_eq!(tile_layout(224.0, short), (4, 51.0, 10.5));
+        // too wide for four at either size: three tiles, wider than 52 so the label fits
+        let (n, w, size) = tile_layout(224.0, long);
         assert_eq!((n, size), (3, 10.5));
         assert!(w >= long(10.5) + 2.0 * TILE_PAD && w <= (224.0 - 2.0 * TILE_GAP) / 3.0, "{w}");
         // a smaller label keeps a column: 9.5 pt fits where 10.5 doesn't
         let mid = |size: f32| size * 4.6; // 48.3 at 10.5, 43.7 at 9.5
-        assert_eq!(tile_layout(224.0, 10, mid).2, 9.5);
-        // wider panels: the same ten tiles, in fewer rows of wider tiles that still fill the width
-        let (n270, w270, _) = tile_layout(270.0, 10, short);
-        let (n520, w520, _) = tile_layout(520.0, 10, short);
-        assert!(n270 >= 4 && n520 > n270 - 1 && w520 > w270 - 1.0, "{n270}×{w270} then {n520}×{w520}");
-        assert_eq!(10_usize.div_ceil(n520), 2, "two even rows of five at 520 pt: {n520}");
-        assert!(520.0 - (n520 as f32 * w520 + (n520 as f32 - 1.0) * TILE_GAP) < n520 as f32, "{w520} fills 520 pt");
-        // a very wide panel: tiles stop at 104 pt
-        let (_, w, _) = tile_layout(1600.0, 10, short);
-        assert_eq!(w, TILE_MAX);
+        assert_eq!(tile_layout(224.0, mid), (4, 51.0, 9.5));
+        // a wide panel: tiles stay 52 pt (or as wide as the label)
+        assert_eq!(tile_layout(474.0, short).0, 4);
+        assert_eq!(tile_layout(474.0, short).1, TILE);
         // far too narrow for any label: two tiles (labels cut short), never a negative width
-        let (n, w, _) = tile_layout(60.0, 10, long);
+        let (n, w, _) = tile_layout(60.0, long);
         assert_eq!(n, 2);
         assert!(w >= 24.0);
-        assert_eq!(tile_layout(f32::NAN, 10, long).0, 2);
+        assert_eq!(tile_layout(f32::NAN, long).0, 2);
     }
 }
