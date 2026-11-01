@@ -106,7 +106,7 @@ fn the_photos_come_from_ids_the_selection_or_the_view() {
     let b = run(&mut s, "book.create", json!({"cover": false, "preset": "one"}));
     assert_eq!(b["photos"].as_u64().unwrap() as usize, all.len());
     // a selection: just those, in selection order
-    s.selection = crate::Selection { ids: vec![all[2], all[0]], active: Some(all[2]), ..Default::default() };
+    s.selection = crate::Selection { ids: vec![all[2], all[0]], active: Some(all[2]) };
     let b = run(&mut s, "book.create", json!({"cover": false, "preset": "one"}));
     assert_eq!(photo_ids(&b), [all[2].0, all[0].0]);
     // source=view ignores the selection
@@ -323,7 +323,7 @@ fn export_pdf_has_a_page_per_book_page_at_the_page_size() {
 
 /// Width and height from a JPEG's frame header.
 fn jpeg_size(b: &[u8]) -> (u32, u32) {
-    let at = b.windows(2).position(|w| w[0] == 0xFF && matches!(w[1], 0xC0 | 0xC1 | 0xC2)).expect("a frame header");
+    let at = b.windows(2).position(|w| w[0] == 0xFF && matches!(w[1], 0xC0..=0xC2)).expect("a frame header");
     let n = |i: usize| u32::from(b[at + i]) << 8 | u32::from(b[at + i + 1]);
     (n(7), n(5))
 }
