@@ -49,6 +49,7 @@ pub const BUILTINS: &[Builtin] = &[
     sub("colorLabel", "Set Color Label"),
     only("addKeywords", "Add Keyword Shortcut", "a keyword shortcut is set"),
     sub("addToAlbum", "Add to Album"),
+    sub("addToBook", "Add to Book"),
     only("removeFromAlbum", "Remove from Album", "in an album"),
     only("setAlbumCover", "Set as Album Cover", "in an album"),
     item("rename", "Rename…"),
@@ -124,7 +125,7 @@ pub fn draw(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: PhotoId
     let text = label(b);
     match b.id {
         "openInDetail" | "beforeAfterSplit" | "editIn" | "findSimilar" | "setReference" => draw_open_items(app, ui, b, id, &text),
-        "rating" | "flag" | "colorLabel" | "addKeywords" | "addToAlbum" | "removeFromAlbum" | "setAlbumCover" => {
+        "rating" | "flag" | "colorLabel" | "addKeywords" | "addToAlbum" | "addToBook" | "removeFromAlbum" | "setAlbumCover" => {
             draw_meta_items(app, ui, b, id, &text)
         }
         "rename" | "moveToFolder" | "reload" | "virtualCopy" | "createVersion" | "stack" => draw_file_items(app, ui, b, id, &text),
@@ -261,6 +262,7 @@ fn draw_meta_items(app: &mut LightcraftApp, ui: &mut egui::Ui, b: &Builtin, id: 
             }
         }
         "addToAlbum" => add_to_album(app, ui, text.to_string()),
+        "addToBook" => crate::panels::book::menu::add_to_book(app, ui, text),
         "removeFromAlbum" => {
             if let Some(aid) = normal_album(app)
                 && ui.button(text).clicked()

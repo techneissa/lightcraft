@@ -15,20 +15,19 @@ only in a lane's own filtered tests. A failure Fork CI shows only on Linux is no
 
 ## Faster builds on this Mac
 
-What was tried on this Mac (2026-11-02) to speed up builds in a new worktree:
-
-- **No sccache.** It was tried on 2026-11-02 and removed: a build in another worktree never hits the cache (the
-  target folder is on rustc's command line: 0 of 49 hits), and a cold cache made a build slower (46 s against 36 s for
-  `lightcraft-pipeline`). Copying a built `target/` (below) is what helps.
-- **Start a new worktree from a copy of a built `target/`.** Registry crates (about 340 of the 368 that
-  `lightcraft-ui-egui` needs) are the same in every worktree, and cargo reuses them from a copied folder; only the
-  workspace's own crates rebuild. On APFS `cp -Rc` clones the folder in about a second and costs no disk until files
-  change. Before the first build in a new worktree, from another worktree of this repo that has a built `target/` and is not building right now:
-
-  ```
-  cp -Rc <another worktree>/target target
-  ```
-
-  (the same for the folder `CARGO_TARGET_DIR` names). Measured with `cargo build -p lightcraft-ui-egui` (load about 90):
-  326 s from nothing (368 crates), 192 s from a clone in another worktree (25 crates). Delete your `target` when your
-  task is done, as before; never another worktree's.
+- **Build folder per lane slot.** The orchestrator gives each lane a slot, 1 to 3 (never two running lanes on one
+  slot). The lane builds with `CARGO_TARGET_DIR=$WORKSPACE/repos/lightcraft/target/lane-<slot>` (the main checkout's
+  `target`, outside the lane's worktree) and leaves the folder in place when it finishes, so the next lane on that slot
+  rebuilds only what changed. Cargo reuses a target folder across worktree paths. Measured on PhotoCraft (2026-11-02,
+  `cargo build -p photocraft`): a new worktree on a used slot recompiled 6 crates in 100 s, against 537 crates and
+  6 min in an empty folder (22 min at load ~100); a one-file change, 10 s. Read-only reviews that must build use
+  `target/review`. Never delete a slot folder while a lane uses it.
+- **No sccache.** Tried and removed on 2026-11-02: a build in another target folder never hits the cache (0 of 49
+  hits), and a cold cache made a build slower (46 s against 36 s for `lightcraft-pipeline`).
+- **Load is the biggest cost.** The same clean build takes about 6 min at load 10 and 22 min at load ~100: at most
+  3 lanes build at once.
+- **Batch the Mac's work.** After a single merge nothing builds or tests on the Mac (Fork CI checks `custom`). Once
+  per batch of merges: `fork/sync-docs.py`, `fork/tests.sh` (the Mac-only tests), one push.
+- **Driving the app** (control channel, screenshots): always with a scratch library (`--library <scratch folder>`) and its own `LIGHTCRAFT_CONFIG_DIR`; without `--library` the app opens techneissa's real library (2026-11-02: a lane imported a test photo into it and had to remove it).
+- **PR and issue body files** are named after the repo and branch (`$TMPDIR/lightcraft-<branch>-body.md`), never a
+  shared `$TMPDIR/body.md`: every session on this Mac uses the same `$TMPDIR`.

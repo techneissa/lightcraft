@@ -49,7 +49,7 @@ feature: it is the hot spot two branches would both append to.
 - [Lens database folder](lens-database-folder.md): Settings ▸ Import ▸ Lens profiles chooses the lensfun folder and says what it found. Branch `claude/workflow-qol`.
 - [Masking workflow](masking-workflow.md): Add · Subtract · Intersect and a button per kind of part, pick a part to paint into it, Add / Erase named by their effect, Esc steps back, tiles fill the side bar. Branch `fix/26-masking-rework`.
 - [Shared SAM3 model folder](shared-sam3.md): AI masks look for the SAM 3 model in the folder shared with PhotoCraft (`ArtCraft/models/sam3`) first and download there. Branch `feat/16-shared-sam3`.
-- [Book](book.md): File ▸ Book… lays photos out as a photo book (cover, five page templates, Pages and Spread views) and exports a PDF or JPEGs. Branch `feat/23-book`.
+- [Book](book.md): A Book view for photo books: books in the side bar, a spread, a page strip and a photo pool; Add to Book from the library; exports a PDF or JPEGs. Branches `feat/23-book`, `feat/23-book-view`.
 - [Find People and Find Wires](find-people-wires.md): Remove panel buttons that outline people and wires and remove them in one click, with SAM 3 or built-in detectors. Branch `feat/24-find-people-wires`.
 - [Map view](map-view.md): View ▸ Map with pins, drag to geotag, saved locations, location filter and track logs, from the official Map PRs taken early; starts Offline until you pick a tile server. Branch `feat/4-map-view`.
 - [Renaming, one way everywhere](consistent-renaming.md): Rows rename in place with one set of rules; Rename Photos and Rename Folder move their files on a worker. Branch `feat/27-consistent-renaming`.

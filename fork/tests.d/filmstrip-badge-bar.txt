@@ -1,0 +1,1 @@
+cargo test -p lightcraft-ui-egui --lib -- film_bar

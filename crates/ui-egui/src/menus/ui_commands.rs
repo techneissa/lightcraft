@@ -237,6 +237,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.commandPalette", "Command Palette…", Some("Cmd+P"), "View"),
     ("app.print", "Print to PDF", None, ""),
     ("dialog.book", "Book…", None, "File"),
+    ("view.book", "Book", None, ""),
     ("app.bookPdf", "Export Book as PDF", None, ""),
     ("app.bookJpeg", "Export Book as JPEGs", None, ""),
     ("dialog.contactSheet", "Contact Sheet PDF…", None, "File"),

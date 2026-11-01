@@ -13,9 +13,10 @@ use serde::{Deserialize, Serialize};
 /// The file's name in the library folder.
 pub const NAME: &str = "books.json";
 /// Version of the file this build writes and the newest it reads.
-const VERSION: u64 = 1;
-/// Largest file read, bytes (50 books of 50 pages come to well under 1 MB).
-pub const MAX_FILE: usize = 4 << 20;
+const VERSION: u64 = 2;
+/// Largest file read, bytes, and the largest one written: 50 books of 200 pages with every cell cropped come to
+/// under 10 MB, so a save the limits allow is never refused when the library opens.
+pub const MAX_FILE: usize = 32 << 20;
 
 /// The file: the books under a version, so a later build can change the shape.
 #[derive(Default, Serialize, Deserialize)]
@@ -83,8 +84,22 @@ impl Session {
     /// Writes the books to the library (a no-op for an in-memory session). On failure the books
     /// are what they were before `before`, so the list matches what is saved.
     pub fn save_books(&mut self, before: Books) -> Result<()> {
+        self.save_books_within(before, MAX_FILE)
+    }
+
+    /// [`Session::save_books`] refusing a file over `cap` bytes (the reader takes [`MAX_FILE`]), so a save
+    /// never makes a file the next launch would not read; the books are then what they were.
+    pub fn save_books_within(&mut self, before: Books, cap: usize) -> Result<()> {
         let file = BooksFile { version: VERSION, library: self.books.clone() };
         let bytes = serde_json::to_vec_pretty(&file).map_err(|e| EngineError::Other(format!("books: {e}")))?;
+        if bytes.len() > cap {
+            self.books = before;
+            return Err(EngineError::Other(format!(
+                "the books are too large to save ({} MB; at most {} MB): delete a book or some pages first",
+                bytes.len() >> 20,
+                cap >> 20
+            )));
+        }
         if let Err(e) = self.write_library_file(NAME, &bytes) {
             self.books = before;
             return Err(e);

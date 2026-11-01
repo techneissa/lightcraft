@@ -162,6 +162,8 @@ pub struct UndoEntry {
     /// The local camera profile file whose one-time question this step answered (Switch): undoing the step puts the
     /// question back (the file leaves `local_profile_asked`), redoing it answers it again.
     pub(crate) answered_offer: Option<String>,
+    /// A change to a book (Book view): what the book was, for undo and redo. `op` does nothing.
+    pub(crate) book: Option<Box<book::undo::BookStep>>,
 }
 
 /// The one photo an undo step changes, when it changes exactly one through its edit, rating, flag,
@@ -714,6 +716,7 @@ impl Session {
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
             answered_offer: None,
+            book: None,
         });
         self.commits = self.commits.wrapping_add(1);
         if self.undo.len() > 1000 {
@@ -834,7 +837,9 @@ impl Session {
         }
         let Some(entries) = self.undo.get(self.undo.len() - n..) else { return };
         // Folder moves and partially applied file steps stay on their own.
-        if entries.iter().any(|e| e.folder.is_some() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty() || e.answered_offer.is_some()) {
+        if entries.iter().any(|e| {
+            e.folder.is_some() || !e.retry_inverse.is_empty() || !e.retry_sidecars.is_empty() || e.answered_offer.is_some() || e.book.is_some()
+        }) {
             return;
         }
         let tail = self.undo.split_off(self.undo.len() - n);
@@ -846,6 +851,7 @@ impl Session {
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
             answered_offer: None,
+            book: None,
         });
     }
 
@@ -874,6 +880,9 @@ impl Session {
 
     pub(crate) fn undo_step_with(&mut self, fs: &dyn rename::MoveFs) -> Result<String> {
         let mut e = self.undo.pop().ok_or_else(|| EngineError::Other("nothing to undo".into()))?;
+        if e.book.is_some() {
+            return self.book_history_step(e, true);
+        }
         let redo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,
             Err(err) => {
@@ -890,6 +899,7 @@ impl Session {
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
             answered_offer: e.answered_offer.clone(),
+            book: None,
         });
         self.offer_answered(e.answered_offer.as_deref(), false);
         Ok(e.label)
@@ -901,6 +911,9 @@ impl Session {
 
     pub(crate) fn redo_step_with(&mut self, fs: &dyn rename::MoveFs) -> Result<String> {
         let mut e = self.redo.pop().ok_or_else(|| EngineError::Other("nothing to redo".into()))?;
+        if e.book.is_some() {
+            return self.book_history_step(e, false);
+        }
         let undo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,
             Err(err) => {
@@ -917,6 +930,7 @@ impl Session {
             retry_inverse: Vec::new(),
             retry_sidecars: Vec::new(),
             answered_offer: e.answered_offer.clone(),
+            book: None,
         });
         self.offer_answered(e.answered_offer.as_deref(), true);
         Ok(e.label)

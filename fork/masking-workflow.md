@@ -40,9 +40,9 @@ UI
   - `show_mask_panel`: tiles laid out by `mask_tiles::layout` (grid gap and label room from `mask_tiles`), new tile icons, the empty-list help line removed, the selected mask's row has `mask_invert_button` (and a shorter name), `add_controls` replaces the `+` / `−` pair, `part_rows` replaces the parts loop and the Add / Subtract / Intersect / Invert / trash row, the brush bar shows while a brush part is selected too.
   - `brush_settings`: a click on Add or Erase puts the Brush on.
   - `tile_layout`, `component_row_menu`, `component_menu`: left as they were, now unused (`#[allow(dead_code)]`); delete them when official drops them.
-- `crates/ui-egui/src/panels.rs`, `crates/ui-egui/src/tests.rs`: `mod` lines. `crates/ui-egui/src/tests/masking.rs`: `subtract_brush_removes_sky_coverage_and_add_restores_it` uses the new controls and `luminance_range_controls_and_map` runs in a taller window (the panel is taller now).
+- `crates/ui-egui/src/panels.rs`, `crates/ui-egui/src/tests.rs`: `mod` lines. `crates/ui-egui/src/tests/masking.rs`: `subtract_brush_removes_sky_coverage_and_add_restores_it` uses the new controls and `luminance_range_controls_and_map` runs in a taller window (the panel is taller now). Official `mask_adjustments_hide_overlay_without_disabling_the_mask` fails on its "needs scrolling" precondition (the panel is shorter now): a known failure, covered by the fork test `a_mask_slider_hides_the_overlay_and_keeps_the_mask_enabled`.
 - `docs/whats-new.md`, `docs/control-protocol.md`, `docs/parity-checklist.md`.
 
 ## Tests
 
-`mask_parts`, `a_first_part_is_the_base`, `deleting_the_first_part`, `a_selected_brush_part`, `the_selected_part_follows`, `mask_tiles`, `create_new_mask_tiles`, `brush_live::target`
+`mask_parts`, `a_first_part_is_the_base`, `deleting_the_first_part`, `a_selected_brush_part`, `the_selected_part_follows`, `a_mask_slider_hides_the_overlay`, `mask_tiles`, `create_new_mask_tiles`, `brush_live::target`

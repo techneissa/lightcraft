@@ -1,6 +1,7 @@
 //! Window regions and panels.
 
 pub mod activity;
+pub mod book;
 pub mod bottombar;
 pub mod camera_colour;
 pub mod chips;
