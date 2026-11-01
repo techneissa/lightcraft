@@ -12,6 +12,8 @@ mod crop_angle;
 mod crop_aspect;
 mod delete_local_rejected;
 mod denoise;
+mod exif_edit;
+mod exif_xmp;
 mod export;
 mod face_models;
 #[cfg(not(target_arch = "wasm32"))]

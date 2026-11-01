@@ -4,6 +4,7 @@ pub mod activity;
 pub mod bottombar;
 pub mod camera_colour;
 pub mod chips;
+pub mod clipping;
 pub mod command_palette;
 pub mod compare;
 pub mod crop_overlay;

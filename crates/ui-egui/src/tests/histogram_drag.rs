@@ -170,7 +170,7 @@ fn double_clicking_a_zone_resets_that_control_in_one_undo_step() {
     assert_eq!(value(&h, "light.shadows"), 0.0);
     // a click on the histogram toggles the clipping warnings (as before this feature): the two
     // clicks of a double-click toggle them twice, so the state is where it started
-    assert!(!h.app.ui.show_clipping);
+    assert!(!h.app.ui.clip_shadows && !h.app.ui.clip_highlights);
 }
 
 /// The strip under the plot — the readout and the EXIF line — is not a zone: a drag there leaves

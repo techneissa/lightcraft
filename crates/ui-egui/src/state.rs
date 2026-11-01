@@ -82,7 +82,24 @@ pub struct UiState {
     pub open_flyouts: Vec<String>,
     /// Solo Mode (`view.soloSections`): opening one Edit section closes the others.
     pub single_panel: bool,
-    pub show_clipping: bool,
+    /// The shadow clipping overlay (blue) is on: the histogram's left triangle, `view.clippingShadows`.
+    pub clip_shadows: bool,
+    /// The highlight clipping overlay (red) is on: the histogram's right triangle, `view.clippingHighlights`.
+    pub clip_highlights: bool,
+    /// Read from settings saved before the two sides were separate (`view.clipping`'s single
+    /// flag); [`Self::sanitized`] turns it into both sides and it is never written back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_clipping: Option<bool>,
+    /// A triangle the pointer rests on (shadows, highlights) previews its overlay, with the frame
+    /// it was last seen on; see [`crate::panels::clipping::effective_sides`].
+    #[serde(skip)]
+    pub clip_hover: ([bool; 2], u64),
+    /// The Alt-drag preview a slider drag with ⌥ held asks for ([`crate::panels::clipping::sync_alt_preview`]).
+    #[serde(skip)]
+    pub alt_preview: Option<crate::panels::clipping::Preview>,
+    /// A preview `view.clippingPreview` holds until it is cleared (agents, tests, screenshots).
+    #[serde(skip)]
+    pub preview_forced: Option<crate::panels::clipping::Preview>,
     pub histogram: bool,
     /// Soft proofing (S in the loupe): render as `proof` would hold the photo.
     pub soft_proof: bool,
@@ -398,7 +415,12 @@ impl Default for UiState {
             open_sections: vec!["light".into()],
             open_flyouts: vec![],
             single_panel: false,
-            show_clipping: false,
+            clip_shadows: false,
+            clip_highlights: false,
+            show_clipping: None,
+            clip_hover: ([false; 2], 0),
+            alt_preview: None,
+            preview_forced: None,
             histogram: true,
             soft_proof: false,
             proof: lightcraft_engine::pipeline::Proof { dest_warning: false, ..Default::default() },
@@ -591,6 +613,11 @@ impl UiState {
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
         self.brush_size = self.brush_size.clamp(0.002, 0.5);
         self.sidebar.adopt_collapsed(&std::mem::take(&mut self.collapsed_sidebar));
+        if let Some(both) = self.show_clipping.take() {
+            // settings from before the two sides were separate
+            self.clip_shadows |= both;
+            self.clip_highlights |= both;
+        }
         self.dialog = None;
         self.fullscreen = false;
         if !crate::state::PREVIEW_LIMITS.contains(&self.settings.preview_limit) {

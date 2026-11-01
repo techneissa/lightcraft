@@ -203,14 +203,15 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     if m.camera.is_empty() {
         m.camera = src.camera.clone();
     }
-    if m.lens.is_empty() {
+    // (a placeholder like `----`, which a body writes for a manual lens, counts as empty; an edit is in `m.exif`, kept)
+    if lightcraft_catalog::exif_override::is_placeholder(&m.lens) {
         m.lens = src.lens.clone();
     }
     if m.shutter.is_empty() {
         m.shutter = src.shutter.clone();
     }
-    m.focal_mm = m.focal_mm.or(src.focal_mm);
-    m.aperture = m.aperture.or(src.aperture);
+    m.focal_mm = m.focal_mm.filter(|v| *v > 0.0).or(src.focal_mm);
+    m.aperture = m.aperture.filter(|v| *v > 0.0).or(src.aperture);
     m.iso = m.iso.or(src.iso);
     m.gps = m.gps.or(src.gps);
     // the camera's focus point: photos imported before it was read get it here
