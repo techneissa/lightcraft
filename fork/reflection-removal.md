@@ -78,3 +78,18 @@ What a port of each still needs:
 ## Comparison runs
 
 Test photos and their sources: `$WORKSPACE/assets/lightcraft/design/reflection-tests/` (`sources.md`). Sheets: `$WORKSPACE/assets/lightcraft/shots/reflection-compare/`, also on `pr-assets` in `feat/25-reflection-removal/compare/`. Standard quality (long edge 768), Metal, M4 Pro; time = one inference after the model is loaded.
+
+| Photo | DSRNet-S 1st / 2nd run | DIRS-MuGI 1st / 2nd run |
+|---|---|---|
+| car-window | 23.7 s / 24.7 s | 19.4 s / 19.0 s |
+| display-case | 19.6 s / 19.2 s | 14.5 s / 14.6 s |
+| eyeglasses | 19.6 s / 19.7 s | 15.1 s / 15.0 s |
+| framed-picture-glass | 20.8 s / 20.8 s | 16.2 s / 16.3 s |
+| glass-door | 23.1 s / 22.7 s | 17.8 s / 17.6 s |
+| shiny-car-or-skin | 21.7 s / 21.7 s | 16.8 s / 16.3 s |
+| shiny-jewellery | 21.5 s / 21.5 s | 16.5 s / 16.7 s |
+| shop-window-day | 22.6 s / 22.7 s | 17.1 s / 17.2 s |
+| water-surface | 25.1 s / 25.1 s | 19.8 s / 19.8 s |
+| window-night | 22.5 s / 28.9 s | 17.3 s / 17.5 s |
+
+Measured on an Apple M4 Pro with other lanes running (load about 45), so expect ±10 %. App memory (`/usr/bin/time -l`, host RAM only, GPU buffers not counted): DSRNet-S about 250 MB, DIRS-MuGI about 1.25 GB. DIRS-PAIR, RDNet and UnReflectAnything are not ported yet, so they have no column.
