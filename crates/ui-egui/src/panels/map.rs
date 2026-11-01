@@ -1168,11 +1168,24 @@ fn controls(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
     let pins_label = crate::i18n::tr("Hide Pins").to_string();
     let pins_w = ui.painter().layout_no_wrap(pins_label.clone(), t.font(12.5), t.text).size().x + 20.0;
     let track_w = ui.painter().layout_no_wrap(crate::i18n::tr("Tracklog").to_string(), t.font(12.5), t.text).size().x + 20.0;
-    let bar_w = track_w + 6.0 + pins_w + 6.0 + lock_w + 6.0 + fit_w + 6.0 + 64.0;
+    // on the grey Offline map, a small globe button turns on "Start on OpenStreetMap" and loads tiles
+    let offline = app.session.map.source().is_offline();
+    let osm_w = if offline { 32.0 + 6.0 } else { 0.0 };
+    let bar_w = osm_w + track_w + 6.0 + pins_w + 6.0 + lock_w + 6.0 + fit_w + 6.0 + 64.0;
     let bar = Rect::from_min_size(pos2(canvas.right() - 12.0 - bar_w, canvas.top() + 12.0), vec2(bar_w, 30.0));
     if bar.left() < canvas.left() || bar.bottom() > canvas.bottom() {
         return;
     }
+    if offline {
+        let r = Rect::from_min_size(bar.min, vec2(32.0, 30.0));
+        let fill = ui.painter();
+        fill.rect_filled(r, 4.0, t.chrome.gamma_multiply(0.92));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        if icon_button(&mut child, "mapUseOsm", Icon::Globe, vec2(32.0, 30.0), false, true, "Use OpenStreetMap").clicked() {
+            use_openstreetmap(app, ui.ctx());
+        }
+    }
+    let bar = Rect::from_min_max(pos2(bar.min.x + osm_w, bar.min.y), bar.max);
     tracks::button(app, ui, Rect::from_min_size(bar.min, vec2(track_w, 30.0)));
     // Hide Pins: lit while the photo pins are hidden (H)
     let hidden = !app.ui.map_show_pins;
@@ -1208,6 +1221,16 @@ fn controls(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
     register(ui, "map:fit", b.rect);
     if b.on_hover_text(crate::i18n::tr("Show every photo with a location")).clicked() {
         let _ = app.run("map.fit", json!({}));
+    }
+}
+
+/// The grey map's globe button: switch Settings ▸ Map ▸ Start on OpenStreetMap on and load tiles
+/// now (this library's source becomes OpenStreetMap, also when it had saved Offline).
+pub fn use_openstreetmap(app: &mut LightcraftApp, ctx: &egui::Context) {
+    app.ui.settings.map_start_on_osm = true;
+    app.session.map.set_start_on_osm(true);
+    if let Err(e) = app.run("map.tileSource", json!({"id": "osm"})) {
+        app.toast(ctx, e);
     }
 }
 

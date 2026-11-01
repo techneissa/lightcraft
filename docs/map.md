@@ -245,7 +245,8 @@ Edit ▸ Settings… ▸ Map (or View ▸ Map ▸ Map Tiles…):
 
 - **Map tiles**: **Offline (no tiles)** (no network at all; the map is grey and shows only what LightCraft draws on
   it; **in this fork it is the default** until you pick a server, so no tile server is asked unasked), **OpenStreetMap**
-  (the default in the official app), or **Custom server**: a URL template, its attribution and its max zoom. A custom
+  (the default in the official app; in this fork the switch **Start on OpenStreetMap** below the choice makes it the
+  default for libraries that have saved no source, and the globe button on the grey map turns it on), or **Custom server**: a URL template, its attribution and its max zoom. A custom
   server is used only once you press **Apply** (or Return in one of its fields): while you type, the map keeps the
   source it has, so a half-typed address is never asked for tiles. A template that doesn't pass the checks below is
   refused with the reason and changes nothing.

@@ -12,7 +12,7 @@ use lightcraft_map::source::{OSM_ID, OSM_TILE_URL};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
-use crate::panels::settings::{choices, heading, hint, row};
+use crate::panels::settings::{check, choices, heading, hint, row};
 use crate::text_field::TextField;
 use crate::theme::Tokens;
 use crate::widgets::register;
@@ -121,6 +121,11 @@ pub fn tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         if let Err(e) = r {
             app.toast(ui.ctx(), e);
         }
+    }
+    let mut start = app.ui.settings.map_start_on_osm;
+    if check(ui, "settingsMapStartOnOsm", &mut start, "Start on OpenStreetMap") {
+        app.ui.settings.map_start_on_osm = start;
+        app.session.map.set_start_on_osm(start);
     }
     let src = app.session.map.source().clone();
     let status = if src.is_offline() {

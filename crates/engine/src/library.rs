@@ -319,7 +319,8 @@ struct PrefsFile {
     /// Days after which untouched Local records of unbrowsed folders are forgotten (missing =
     /// the default, 0 = never).
     forget_local_days: Option<u32>,
-    /// The map's tile source (missing = OpenStreetMap; re-checked when read). A damaged one is
+    /// The map's tile source (missing = the default: Offline, or OpenStreetMap when the user's setting says
+    /// so; re-checked when read). A damaged one is
     /// dropped on its own, never taking the other preferences with it.
     #[serde(deserialize_with = "lenient_tile_source")]
     map_source: Option<lightcraft_map::TileSource>,
@@ -928,7 +929,7 @@ impl Session {
             cache_mb: self.cache_mb,
             smart_previews_dir: self.smart_previews_dir.as_ref().map(|d| d.to_string_lossy().to_string()),
             forget_local_days: Some(self.forget_local_days),
-            map_source: Some(self.map.source().clone()),
+            map_source: (!self.map.source_is_default()).then(|| self.map.source().clone()),
             slideshow: self.slideshow.clone(),
             slide_layout: self.slide_layout.clone(),
             slide_overlays: self.slide_overlays.clone(),

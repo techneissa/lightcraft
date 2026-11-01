@@ -16,6 +16,12 @@ use crate::Session;
 /// See the module docs.
 pub struct MapState {
     source: TileSource,
+    /// The source is the default (the library saved none), not a choice: it follows
+    /// [`MapState::start_on_osm`] and is not written to the library's preferences.
+    source_is_default: bool,
+    /// The user's setting (Settings ▸ Map ▸ Start on OpenStreetMap, kept with the app's settings,
+    /// handed in by the host): what a library with no saved tile source starts on.
+    start_on_osm: bool,
     /// The tile cache folder (`<cache>/map-tiles`, one folder per source inside); `None` = tiles
     /// are kept in memory only (tests, the web).
     pub cache_root: Option<PathBuf>,
@@ -38,6 +44,7 @@ impl std::fmt::Debug for MapState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("MapState")
             .field("source", &self.source)
+            .field("source_is_default", &self.source_is_default)
             .field("cache_root", &self.cache_root)
             .field("cache_bytes", &self.cache_bytes)
             .field("service", &self.service.is_some())
@@ -55,6 +62,8 @@ impl Default for MapState {
             // fork: Offline until the person picks a server (Settings ▸ Map), so nothing is asked
             // of a tile server unasked (fork/map-view.md)
             source: TileSource::offline(),
+            source_is_default: true,
+            start_on_osm: false,
             cache_root: None,
             cache_bytes: DEFAULT_CACHE_BYTES,
             service: None,
@@ -72,28 +81,68 @@ impl MapState {
         &self.source
     }
 
-    /// Use `source` from now on (the next [`Session::map_tiles`] starts a service for it; tiles in
-    /// flight for the old one are dropped).
+    /// Use `source` from now on, as a choice (it is saved with the library and wins over the
+    /// start-on setting). The next [`Session::map_tiles`] starts a service for it; tiles in flight
+    /// for the old one are dropped.
     pub fn set_source(&mut self, source: TileSource) {
+        self.source_is_default = false;
+        self.use_source(source);
+    }
+
+    fn use_source(&mut self, source: TileSource) {
         if source != self.source {
             self.source = source;
             self.reset_service();
         }
     }
 
-    /// Take the source a settings file stored, re-checked (it is hostile input): none, or an
-    /// unusable one, is Offline (fork: tiles come only from a server the person chose), with a log
-    /// line for the unusable one.
-    pub(crate) fn load_source(&mut self, stored: Option<TileSource>) {
-        let source = match stored.map(|s| s.checked()) {
-            None => TileSource::offline(),
-            Some(Ok(s)) => s,
-            Some(Err(e)) => {
-                log::warn!("map: the saved tile source can't be used ({e}); using Offline");
-                TileSource::offline()
+    /// Whether the source is the default rather than a choice (see [`MapState::set_source`]).
+    pub fn source_is_default(&self) -> bool {
+        self.source_is_default
+    }
+
+    /// Put back a source and whether it was the default (a change that could not be saved).
+    pub fn restore_source(&mut self, source: TileSource, was_default: bool) {
+        self.use_source(source);
+        self.source_is_default = was_default;
+    }
+
+    /// What a library with no saved tile source starts on: Offline, or OpenStreetMap when the
+    /// user's setting says so.
+    fn default_source(&self) -> TileSource {
+        if self.start_on_osm { TileSource::openstreetmap() } else { TileSource::offline() }
+    }
+
+    /// The user's "Start on OpenStreetMap" setting, from the host (every frame is fine): a
+    /// source that is only the default follows it at once; a chosen one stays.
+    pub fn set_start_on_osm(&mut self, on: bool) {
+        if on != self.start_on_osm {
+            self.start_on_osm = on;
+            if self.source_is_default {
+                self.use_source(self.default_source());
             }
-        };
-        self.set_source(source);
+        }
+    }
+
+    /// The "Start on OpenStreetMap" setting as last handed in.
+    pub fn start_on_osm(&self) -> bool {
+        self.start_on_osm
+    }
+
+    /// Take the source a settings file stored, re-checked (it is hostile input). None, or an
+    /// unusable one, is the default (fork: Offline, or OpenStreetMap when the user's setting says
+    /// so), with a log line for the unusable one.
+    pub(crate) fn load_source(&mut self, stored: Option<TileSource>) {
+        match stored.map(|s| s.checked()) {
+            Some(Ok(s)) => self.set_source(s),
+            other => {
+                if let Some(Err(e)) = other {
+                    log::warn!("map: the saved tile source can't be used ({e}); using the default");
+                }
+                self.source_is_default = true;
+                self.use_source(self.default_source());
+            }
+        }
     }
 
     /// Stop the tile service (its threads end; the next use starts a fresh one).

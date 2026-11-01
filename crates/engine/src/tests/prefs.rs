@@ -448,6 +448,43 @@ fn the_map_is_offline_until_a_tile_server_is_chosen() {
     let _ = std::fs::remove_dir_all(&lib);
 }
 
+/// Fork: the "Start on OpenStreetMap" setting decides a library with no saved tile source; a
+/// library's own saved source wins, and a default is never written into its preferences.
+#[test]
+fn start_on_osm_decides_only_libraries_with_no_saved_source() {
+    let lib = temp_dir("map-start-osm");
+    let mut s = Session::new().with_fs();
+    s.map.set_start_on_osm(true);
+    s.open_library(&lib, false).unwrap();
+    assert_eq!(*s.map.source(), lightcraft_map::TileSource::openstreetmap(), "no saved source: the setting decides");
+    assert!(s.map.source_is_default());
+    s.save_prefs().unwrap();
+    let prefs: serde_json::Value = serde_json::from_slice(&std::fs::read(lib.join("prefs.json")).unwrap()).unwrap();
+    assert!(prefs.get("mapSource").is_none_or(serde_json::Value::is_null), "a default is not saved: {prefs}");
+    // the setting turned off: the unsaved default follows it at once
+    s.map.set_start_on_osm(false);
+    assert!(s.map.source().is_offline());
+    s.close_library().unwrap();
+    drop(s);
+    // a library that saved Offline keeps it with the setting on
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("map.tileSource", &json!({"offline": true})).unwrap();
+    s.close_library().unwrap();
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.map.set_start_on_osm(true);
+    s.open_library(&lib, false).unwrap();
+    assert!(s.map.source().is_offline(), "the library's own saved source wins");
+    assert!(!s.map.source_is_default());
+    s.map.set_start_on_osm(false);
+    s.map.set_start_on_osm(true);
+    assert!(s.map.source().is_offline(), "and the setting never moves a chosen source");
+    s.close_library().unwrap();
+    drop(s);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
 #[test]
 fn slideshow_playback_settings_persist_with_the_library() {
     let lib = temp_dir("slideshow");

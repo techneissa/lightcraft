@@ -440,3 +440,58 @@ fn screenshots_of_map_keys_menus_and_settings() {
     frames(&mut h, 3);
     shot(&mut h, "map-settings.png");
 }
+
+/// Fork: the map starts Offline (the default); `recorded` leaves the source as a default, not a
+/// choice, as a library with no saved tile source has it.
+fn recorded_default(rec: &Arc<Recorder>) -> Headless {
+    let mut h = recorded(rec);
+    h.app.session.map.restore_source(lightcraft_map::TileSource::offline(), true);
+    frames(&mut h, 3);
+    h
+}
+
+#[test]
+fn off_by_default_the_map_asks_no_tile_server() {
+    let rec = Arc::new(Recorder::default());
+    let mut h = recorded_default(&rec);
+    assert!(!h.app.ui.settings.map_start_on_osm);
+    frames(&mut h, 20);
+    assert!(h.app.session.map.source().is_offline());
+    assert!(rec.urls.lock().unwrap().is_empty(), "no tile request while the setting is off");
+    assert!(h.painted_text().iter().any(|t| t.contains("Start on OpenStreetMap")), "the switch is in Settings ▸ Map");
+}
+
+#[test]
+fn the_start_on_osm_switch_moves_a_default_source_and_never_a_chosen_one() {
+    let rec = Arc::new(Recorder::default());
+    let mut h = recorded_default(&rec);
+    click(&mut h, "check:settingsMapStartOnOsm");
+    assert!(h.app.ui.settings.map_start_on_osm);
+    assert_eq!(h.app.session.map.source().id, "osm", "a source that was only the default follows the switch");
+    settle_tiles(&mut h);
+    assert!(rec.asked("tile.openstreetmap.org") > 0);
+    click(&mut h, "check:settingsMapStartOnOsm");
+    assert!(h.app.session.map.source().is_offline());
+    // a chosen source stays whatever the switch says
+    run(&mut h, "map.tileSource", json!({"offline": true}));
+    click(&mut h, "check:settingsMapStartOnOsm");
+    assert!(h.app.ui.settings.map_start_on_osm);
+    assert!(h.app.session.map.source().is_offline(), "an Offline the library saved wins over the switch");
+}
+
+#[test]
+fn the_grey_maps_globe_button_turns_the_setting_on_and_loads_tiles() {
+    let rec = Arc::new(Recorder::default());
+    let mut h = recorded(&rec);
+    let _ = h.request("ui.dialog.cancel", json!({}), T);
+    frames(&mut h, 3);
+    assert!(h.app.session.map.source().is_offline() && !h.app.ui.settings.map_start_on_osm);
+    assert!(widget(&h, "icon:mapUseOsm").is_some(), "the globe is on the grey map");
+    click(&mut h, "icon:mapUseOsm");
+    assert!(h.app.ui.settings.map_start_on_osm);
+    assert_eq!(h.app.session.map.source().id, "osm");
+    settle_tiles(&mut h);
+    assert!(rec.asked("tile.openstreetmap.org") > 0, "tiles load at once");
+    frames(&mut h, 3);
+    assert!(widget(&h, "icon:mapUseOsm").is_none(), "no globe once tiles are on");
+}

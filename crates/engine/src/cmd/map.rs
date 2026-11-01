@@ -73,11 +73,11 @@ fn requested(cur: &TileSource, p: &Value) -> Result<Option<TileSource>> {
 
 fn tile_source(s: &mut Session, p: &Value) -> Result<Value> {
     if let Some(next) = requested(s.map.source(), p)? {
-        let old = s.map.source().clone();
+        let (old, was_default) = (s.map.source().clone(), s.map.source_is_default());
         s.map.set_source(next);
         // a source that can't be saved isn't kept: an error means nothing changed
         if let Err(e) = s.save_prefs() {
-            s.map.set_source(old);
+            s.map.restore_source(old, was_default);
             return Err(e);
         }
     }

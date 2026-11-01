@@ -93,6 +93,8 @@ pub enum Icon {
     FaceBox,
     /// The Map view: a map pin (a teardrop with a hole).
     MapPin,
+    /// Map tiles from OpenStreetMap: a globe (a circle with its equator, meridian and two parallels).
+    Globe,
     /// Play (a triangle pointing right).
     Play,
     /// Pause (two bars).
@@ -581,6 +583,13 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.arc(10.0, 8.0, 5.5, 150.0, 390.0);
             pen.line(&[(5.24, 10.75), (10.0, 17.5), (14.76, 10.75)]);
             pen.circle(10.0, 8.0, 1.8);
+        }
+        Globe => {
+            pen.circle(10.0, 10.0, 7.5);
+            pen.line(&[(2.5, 10.0), (17.5, 10.0)]);
+            pen.line(&[(10.0, 2.5), (10.0, 17.5)]);
+            pen.line(&[(4.2, 6.2), (15.8, 6.2)]);
+            pen.line(&[(4.2, 13.8), (15.8, 13.8)]);
         }
         Picker => {
             pen.line(&[(4.0, 16.0), (11.5, 8.5)]);
