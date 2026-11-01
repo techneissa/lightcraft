@@ -11,6 +11,11 @@
 - `cargo xtask ci` stops at its `test` step because of it; run the rest by hand (`cargo xtask parity`, `layers`,
   `assets`).
 
+- `tests::masking::a_brush_stroke_is_not_tinted_while_the_mask_overlay_is_hidden` (ui-egui): fails on `custom` before the
+  masking rework (c3e32eea) with `74 of 74 points` tinted, `[253, 209, 181]` against `[255, 255, 255]`: the live
+  adjustment of a +1 exposure mask shows while painting with the overlay hidden. Not touched by issue #26. Checked
+  2026-11-01.
+
 ### Known failures on Fork CI only (Linux)
 
 None. `tests::macos_colour` (`crates/engine`) runs on macOS only (`#[cfg(target_os = "macos")]` in `tests.rs`,
