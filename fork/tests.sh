@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Runs the tests of every fork feature (FORK.md), after a merge. From any folder: fork/tests.sh
+# The lines below are the older features'; a newer feature has fork/tests.d/<slug>.txt.
 set -u
 cd "$(dirname "$0")/.."
 failed=()
@@ -23,6 +24,16 @@ run cargo test -p lightcraft-raster --lib channel_clipping
 run cargo test -p lightcraft-gpu --lib handles
 run cargo test -p lightcraft-gpu --test it -- process_v3_sharpening
 run cargo test -p lightcraft-ui-egui --lib -- delete_permanently delete_local quick_delete view_colour smart_editing auto_import toast render:: layers_task keybinds shortcut_editing shortcut_when shortcut_backup tests::keymap shortcuts:: animated_gif selection_order split_divider before_after command_palette edit_all photo_menu topbar_items titlebar loupe_stand_in the_loupe_says denoise settings profile camera_colour thumbnail dropdown_search quick_filters clipping clip_preview map
+
+# Newer features: one file each, fork/tests.d/<slug>.txt, one command per line (blank lines and # comments skipped).
+# Never add a line above for a new feature: that is the hot spot two branches would both append to.
+shopt -s nullglob
+for f in fork/tests.d/*.txt; do
+  while IFS= read -r line; do
+    case "$line" in ''|'#'*) continue ;; esac
+    run bash -c "$line"
+  done < "$f"
+done
 
 if [ ${#failed[@]} -gt 0 ]; then printf "failed: %s\n" "${failed[@]}"; exit 1; fi
 echo "all fork tests passed"
