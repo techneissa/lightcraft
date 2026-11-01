@@ -105,6 +105,12 @@ fn vignette(s: &DevelopSettings) -> Option<Vig> {
 /// Hash constants of [`grain_noise`] (shared with the GPU kernel).
 pub const GRAIN_HASH: [u32; 4] = [0x8da6_b343, 0xd816_3841, 0xcb1a_b31f, 0x5bd1_e995];
 
+/// `v`, or 0 when it is NaN or infinite.
+#[inline]
+fn finite_or_zero(v: f32) -> f32 {
+    if v.is_finite() { v } else { 0.0 }
+}
+
 #[inline]
 fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
     // A degenerate frame (zero-width crop) maps pixels to NaN/inf coordinates: no grain there.
@@ -565,9 +571,9 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                     lum = lum.clamp(0.0, 1.0);
                 }
                 let k = amt * g * (0.35 + 2.6 * lum * (1.0 - lum));
-                if k.is_finite() {
-                    e = e.map(|v| v + k);
-                }
+                // (a non-finite grain, from a degenerate frame, adds nothing)
+                let k = finite_or_zero(k);
+                e = e.map(|v| v + k);
             }
             let e = match &p_lut {
                 Some((l, k)) if hdr => {
