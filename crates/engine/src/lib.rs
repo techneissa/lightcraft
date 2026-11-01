@@ -63,6 +63,7 @@ mod pdf;
 pub mod preset_import;
 pub mod preset_luminar;
 pub mod presets;
+pub mod book;
 pub mod print;
 pub mod print_color;
 pub mod print_pdf;
@@ -346,6 +347,8 @@ pub struct Session {
     pub print: print::template::PrintSettings,
     /// Saved print templates (`print.template.*`), persisted in prefs.json.
     pub print_templates: Vec<print::template::PrintTemplate>,
+    /// The library's photo books (`book.*`), saved in books.json.
+    pub books: book::Books,
     /// Metadata presets (`metadata.*`), persisted in prefs.json.
     pub metadata_presets: Vec<cmd::metadata::MetadataPreset>,
     /// Saved filter-bar settings (`filter.*`), persisted in prefs.json.
@@ -507,6 +510,7 @@ impl Session {
             export_presets: Vec::new(),
             print: Default::default(),
             print_templates: Vec::new(),
+            books: Default::default(),
             metadata_presets: Vec::new(),
             filter_presets: Vec::new(),
             curve_presets: Vec::new(),

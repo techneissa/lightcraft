@@ -571,6 +571,16 @@ impl Session {
         if let Some(d) = &self.smart_previews_dir {
             self.media.smart_dir = Some(d.clone());
         }
+        // books (the Book module): a file this build can't use is kept as it is, never overwritten
+        self.books = match settings.read::<crate::book::store::BooksFile>(files.as_mut(), "books.json").map(|f| f.into_books()) {
+            Some(Ok(books)) => books,
+            Some(Err(e)) => {
+                settings.blocked.push("books.json");
+                settings.warnings.push(format!("books.json can't be used ({e}). LightCraft starts without books and won't overwrite the file."));
+                Default::default()
+            }
+            None => Default::default(),
+        };
         // presets
         if let Some(f) = settings.read::<PresetsFile>(files.as_mut(), "presets.json") {
             for p in &mut self.presets {
@@ -855,6 +865,16 @@ impl Session {
             ));
         }
         lib.files.write_atomic("prefs.json", &v).map_err(|e| EngineError::Other(format!("prefs: {e}")))
+    }
+
+    /// Writes a settings file of the open library (a no-op for an in-memory session); a file that
+    /// couldn't be read when the library opened is not overwritten (the Book module's books.json).
+    pub(crate) fn write_library_file(&mut self, name: &'static str, bytes: &[u8]) -> Result<()> {
+        let Some(lib) = self.library.as_mut() else { return Ok(()) };
+        if lib.blocked.contains(&name) {
+            return Err(EngineError::Other(format!("{name} couldn't be used when the library opened, so it isn't overwritten; reopen the library to save it")));
+        }
+        lib.files.write_atomic(name, bytes).map_err(|e| EngineError::Other(format!("{name}: {e}")))
     }
 
     /// Warnings about the open library not handed out yet: its settings files, and a lock that
