@@ -17,7 +17,7 @@ use lightcraft_raster::Rgb32f;
 use crate::geometry::Frame;
 
 #[inline]
-fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
+pub(crate) fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     // Zero feather is a hard edge, including when the pixel lies exactly on the radius.
     // Dividing 0 by 0 here would give that pixel a NaN alpha, even at zero opacity.
     if e0 >= e1 {
@@ -34,7 +34,7 @@ const MAX_SPOT_SIZE: f64 = 2.0;
 
 /// A spot's radius in output pixels, `ppl` output pixels to the long edge: at least a pixel (a size that is not a
 /// number too), at most [`MAX_SPOT_SIZE`] long edges.
-fn radius_px(size: f64, ppl: f64) -> f64 {
+pub(crate) fn radius_px(size: f64, ppl: f64) -> f64 {
     let size = if size.is_nan() { 0.0 } else { size.min(MAX_SPOT_SIZE) };
     (size * ppl).max(1.0)
 }
@@ -190,7 +190,9 @@ pub fn window_for_reads_checked(
                 (x0, y0, x1, y1) = (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y));
             }
             // the box `apply` works in: the stroke plus a radius, plus a radius of padding
-            let t = [x0 - 2.0 * r, y0 - 2.0 * r, x1 + 2.0 * r, y1 + 2.0 * r];
+            // (a LaMa spot also holds the margin its fill reads, `spots_learned`)
+            let pad = 2.0 * r + crate::spots_learned::extra_pad(spot, r, (x1 - x0).max(y1 - y0));
+            let t = [x0 - pad, y0 - pad, x1 + pad, y1 + pad];
             let s = match spot.source_offset {
                 Some(o) => {
                     let b = to_out.apply(o);
@@ -274,12 +276,21 @@ fn fill_box(src: &mut [[f32; 3]], tgt: &[[f32; 3]], alpha: &[f32], bw: usize, bh
 
 /// Apply all spots to `img` (output resolution). `ppl` = output pixels per long-edge unit.
 pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
+    apply_except(img, spots, &[], frame, ppl);
+}
+
+/// [`apply`] without the spots marked in `done` (the ones a learned fill already drew,
+/// [`crate::spots_learned::apply`]); a `done` shorter than `spots` leaves the rest to draw.
+pub fn apply_except(img: &mut Rgb32f, spots: &[Spot], done: &[bool], frame: &Frame, ppl: f64) {
     if spots.is_empty() {
         return;
     }
     let (w, h) = (img.width, img.height);
     let to_out = frame.norm_to_out(w, h);
-    for spot in spots {
+    for (i, spot) in spots.iter().enumerate() {
+        if done.get(i).copied().unwrap_or(false) {
+            continue;
+        }
         let r = radius_px(spot.size, ppl) as f32;
         let pts: Vec<(f32, f32)> = spot
             .points
@@ -402,6 +413,7 @@ mod tests {
                     feather: 0.0,
                     opacity: 0.0,
                     source_offset: Some(Point::new(8.0 / 64.0, 0.0)),
+                    ..Default::default()
                 };
                 apply(&mut img, &[spot], &frame, frame.px_per_long(64));
                 for (i, (actual, expected)) in img.data.iter().zip(&original.data).enumerate() {
@@ -424,6 +436,7 @@ mod tests {
                 feather: 0.0,
                 opacity: 100.0,
                 source_offset: Some(Point::new(0.125, 0.0)),
+                ..Default::default()
             };
             apply(&mut img, &[spot], &frame, frame.px_per_long(w));
             let (x, y) = (cx as usize, cy as usize);
