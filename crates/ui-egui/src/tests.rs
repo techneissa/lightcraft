@@ -68,6 +68,7 @@ mod lightroom_destination;
 mod lights_out;
 mod macos_colour;
 mod mask_effects;
+mod mask_parts;
 mod masking;
 mod masking_layout;
 mod menubar;

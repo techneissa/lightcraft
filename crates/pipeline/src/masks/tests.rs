@@ -419,6 +419,26 @@ fn brush_and_subtract() {
     assert!(a.get(40, 5) < 0.01);
 }
 
+/// The first part of a mask is its base, whatever its mode says: an Intersect (or a Subtract) that comes first has
+/// nothing to cut from, so it must not empty the mask.
+#[test]
+fn a_first_part_is_the_base_whatever_its_mode() {
+    let f = frame(100, 50);
+    let img = Rgb32f::new(100, 50);
+    let l = Plane::new(100, 50);
+    let shape = MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.3, ry: 0.3, angle: 0.0, feather: 0.0, invert: false };
+    let alpha = |op| {
+        let m = Mask { components: vec![MaskComponent { name: None, op, invert: false, shape: shape.clone() }], ..Default::default() };
+        evaluate(&[m], &f, 100, 50, &img, &l, 0.0, None).remove(0).alpha
+    };
+    let base = alpha(MaskOp::Add);
+    assert!(base.get(50, 25) > 0.99 && base.get(2, 2) < 0.01);
+    for op in [MaskOp::Intersect, MaskOp::Subtract] {
+        let a = alpha(op);
+        assert!(a.data == base.data, "a first {op:?} acts as the base");
+    }
+}
+
 /// #518: holding the brush still adds no coverage. A press plus any number of stationary
 /// pointer samples paints exactly the single dab of the press, whatever the frame rate.
 #[test]

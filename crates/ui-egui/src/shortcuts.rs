@@ -783,9 +783,8 @@ fn delete_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
     use crate::state::RightPanel as R;
     match app.ui.right {
         R::Masking => {
-            if app.session.active_mask.is_some() {
-                let _ = app.run("mask.delete", json!({}));
-            }
+            // the selected part, else the mask
+            crate::panels::mask_parts::delete_selected(app);
             return true;
         }
         R::Remove => {

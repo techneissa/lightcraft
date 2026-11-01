@@ -344,6 +344,9 @@ pub struct Session {
     depth: u32,
     /// Selected mask (Masking panel), by mask id.
     pub active_mask: Option<u32>,
+    /// The selected part (component) of a mask: the mask's id and the part's index. Strokes of the Brush go into it
+    /// when it is a brush part; see `Session::active_part` for the checked value.
+    pub active_component: Option<(u32, usize)>,
     /// AI masks (SAM 3): the model and the last photo prepared for it.
     pub segmenter: segment::Segmenter,
     /// Selected spot (Remove panel), by index into the active photo's spots.
@@ -529,6 +532,7 @@ impl Session {
             clock: Box::new(|| "2026-09-30T12:00:00".to_string()),
             depth: 0,
             active_mask: None,
+            active_component: None,
             segmenter: segment::Segmenter::default(),
             active_spot: None,
             library: None,
@@ -900,6 +904,7 @@ impl Session {
             self.selection.active = Some(id);
         }
         self.active_mask = None;
+        self.active_component = None;
         self.active_spot = None;
     }
 
