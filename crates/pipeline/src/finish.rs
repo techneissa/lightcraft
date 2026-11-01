@@ -674,7 +674,6 @@ pub(crate) fn shadows_highlights_delta(shadows: f32, highlights: f32, base: f32,
     shadows * 1.7 * shadow_weight * shadow_weight.sqrt() + highlights * 1.7 * highlight_weight
 }
 
-
 fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1: f32, local: &PixelLocalTerms) -> f32 {
     let [_, _, _, l_con, l_hl, l_sh, l_wh, l_bl, l_tex, l_clar, _, _, _, l_sharp, l_noise, _, _] = local.values;
     let mut delta = 0.0;

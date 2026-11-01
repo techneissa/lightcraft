@@ -199,8 +199,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 ui.label(egui::RichText::new(crate::i18n::tr("White Balance")).font(t.font(13.0)).color(t.text_dim));
                 let r = crate::widgets::dropdown(ui, "wbMode", crate::i18n::tr(d.wb.mode.label()), t.font(14.0), t.text_label);
                 let modes: Vec<WbMode> = WbMode::ALL.into_iter().filter(|m| *m != WbMode::Custom).collect();
-                if let Some(m) = crate::widgets::dropdown_search::menu_pick(&mut *ui, &r, &modes, |m| d.wb.mode == *m, |m| crate::i18n::tr(m.label()).to_string())
-                    .and_then(|i| modes.get(i))
+                if let Some(m) =
+                    crate::widgets::dropdown_search::menu_pick(&mut *ui, &r, &modes, |m| d.wb.mode == *m, |m| crate::i18n::tr(m.label()).to_string())
+                        .and_then(|i| modes.get(i))
                 {
                     let mode = serde_json::to_value(m).unwrap_or_default();
                     let _ = app.run("develop.wb", json!({"mode": mode}));

@@ -28,13 +28,13 @@ fn wb(mode: WbMode, temp: f64, tint: f64, scale: WbScale, colour: CameraColour) 
 /// `kelvin_to_legacy` undoes `legacy_to_kelvin` (within 1 K and 0.1 tint), and As Shot is 6500 K / 0 exactly.
 #[test]
 fn kelvin_to_legacy_inverts_legacy_to_kelvin() {
-    assert_eq!(kelvin_to_legacy(APPLE.0, APPLE.1, APPLE), (6500.0, 0.0));
+    assert_eq!(kelvin_to_legacy(APPLE.0, APPLE.1, APPLE), Some((6500.0, 0.0)));
     for (t, tint) in [(5000.0, 0.0), (7000.0, 5.0), (9000.0, -20.0), (3500.0, 30.0), (12000.0, 10.0)] {
         let k = legacy_to_kelvin(t, tint, APPLE);
-        let (back_t, back_tint) = kelvin_to_legacy(k.0, k.1, APPLE);
+        let (back_t, back_tint) = kelvin_to_legacy(k.0, k.1, APPLE).unwrap();
         assert!((back_t - t).abs() < 1.0 && (back_tint - tint).abs() < 0.1, "{t} {tint} → {k:?} → {back_t} {back_tint}");
     }
-    assert_eq!(kelvin_to_legacy(f64::NAN, 0.0, APPLE).0.to_bits(), f64::NAN.to_bits());
+    assert_eq!(kelvin_to_legacy(f64::NAN, 0.0, APPLE), None);
 }
 
 /// T8 / T10b: on macOS Colour, As Shot is macOS's as-shot white whatever numbers are stored (6500 K / 0 from Camera
@@ -70,7 +70,7 @@ fn a_custom_white_round_trips_through_macos_colour() {
     leave_kelvin(&mut daylight, APPLE);
     let preset = WbMode::Daylight.preset().unwrap();
     assert_eq!((daylight.wb.mode, daylight.wb.scale), (WbMode::Custom, WbScale::Legacy));
-    assert_eq!((daylight.wb.temp, daylight.wb.tint), kelvin_to_legacy(preset.0, preset.1, APPLE));
+    assert_eq!(Some((daylight.wb.temp, daylight.wb.tint)), kelvin_to_legacy(preset.0, preset.1, APPLE));
     for keep in
         [wb(WbMode::AsShot, 3970.0, 4.0, WbScale::Kelvin, CameraColour::Macos), wb(WbMode::Custom, 7000.0, 5.0, WbScale::Legacy, CameraColour::Macos)]
     {

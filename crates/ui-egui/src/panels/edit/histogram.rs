@@ -87,10 +87,8 @@ fn clipping_buttons(
         }
         // the triangle shows what clips, overlay on or off: dim when nothing does
         // (a channel colour that does not stand 3:1 on this theme's tile gives way to the plain mark)
-        let color = channels
-            .and_then(crate::panels::clipping::indicator_color)
-            .filter(|c| crate::widgets::button::contrast(*c, tile) >= 3.0)
-            .unwrap_or(mark);
+        let color =
+            channels.and_then(crate::panels::clipping::indicator_color).filter(|c| crate::widgets::button::contrast(*c, tile) >= 3.0).unwrap_or(mark);
         crate::panels::clipping::paint_triangle(p, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), color);
         let status = match channels.map(|c| c.iter().any(|&x| x)) {
             Some(true) => "Clipping detected in this preview.",
