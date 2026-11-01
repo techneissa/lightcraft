@@ -30,6 +30,7 @@ pub mod local_profiles;
 pub mod lut_profiles;
 pub mod macos_colour;
 pub mod manage;
+mod map;
 pub mod mask_effect_files;
 pub mod mask_effects;
 mod mask_parts;
@@ -192,6 +193,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(face_recognize::specs());
         v.extend(focus::specs());
         v.extend(activity::specs());
+        v.extend(map::specs());
         v
     })
 }

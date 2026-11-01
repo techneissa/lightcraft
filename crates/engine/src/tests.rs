@@ -41,6 +41,7 @@ mod libops;
 mod library;
 mod lightroom_folder;
 mod local_profiles;
+mod location;
 // macOS Colour needs macOS's own raw decoder: the test only means something on the Mac (fork is Mac only)
 #[cfg(target_os = "macos")]
 mod macos_colour;
@@ -56,6 +57,7 @@ mod print;
 mod process;
 mod quick_filters;
 mod recheck;
+mod saved_locations;
 mod segment;
 mod settings_files;
 mod shelved_folder;
@@ -65,6 +67,7 @@ mod slideshow_export;
 mod smart_local;
 mod spots;
 mod sync;
+mod tracklog;
 mod view_follow;
 pub(super) mod xmp;
 

@@ -416,6 +416,8 @@ impl LightcraftApp {
         #[cfg(test)]
         self.library_passes.push(panels::library_problem::LibraryPass::Background);
         panels::dialogs::prepare(self, ui);
+        // the Map view's location filter holds only while the Map view is shown
+        panels::map::sync_location_filter(self);
         // Freeze this frame's notice barrier before `notices::show` can dismiss a prompt: the same
         // click or key must never be acted on again by the dialog drawn after it.
         let notice_blocks = panels::notices::blocks_input(self);

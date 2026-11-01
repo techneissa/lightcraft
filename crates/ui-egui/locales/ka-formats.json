@@ -326,5 +326,19 @@
   "Panel layout could not be restored: {error}": "პანელების განლაგების აღდგენა ვერ მოხერხდა: {error}",
   "Panel move was not applied: {error}": "პანელის გადატანა არ შესრულდა: {error}",
   "{name} is installed": "{name} დაინსტალირებულია",
-  "{name} is installed and in use: face recognition is on": "{name} დაინსტალირებულია და გამოიყენება: სახეების ამოცნობა ჩართულია"
+  "{name} is installed and in use: face recognition is on": "{name} დაინსტალირებულია და გამოიყენება: სახეების ამოცნობა ჩართულია",
+  "Delete the saved location “{name}”?": "წაიშალოს შენახული მდებარეობა „{name}“?",
+  "In the private location “{name}”: its map is hidden.": "პირად მდებარეობაში „{name}“: მისი რუკა დამალულია.",
+  "within {d} of {lat}, {lon}": "{lat}, {lon}-დან {d}-ის ფარგლებში",
+  "All Tracks ({n})": "ყველა მარშრუტი ({n})",
+  "Track {n}": "მარშრუტი {n}",
+  "camera time, UTC{o}": "კამერის დრო, UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "სასაათო სარტყლის წანაცვლების დაყენება… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "მდებარეობის მინიჭება მონიშნული ფოტოებისთვის: {n}",
+  "{m} of them fall within the track's time range": "მათგან {m} მარშრუტის დროის შუალედში ხვდება",
+  "{n} more tracks": "კიდევ {n} მარშრუტი",
+  "Deleted {n} map tiles": "წაიშალა რუკის ფილა: {n}",
+  "In use: {url} (up to zoom {zoom})": "გამოიყენება: {url} (მასშტაბამდე {zoom})",
+  "Map tiles from {id}": "რუკის ფილები: {id}",
+  "{size} MB in {n} tiles (limit {cap} MB)": "{size} MB, ფილა: {n} (ზღვარი {cap} MB)"
 }

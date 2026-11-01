@@ -153,6 +153,7 @@ impl LightcraftApp {
             alt_asks_for_library: false,
             recent_checks: Default::default(),
             activity_expanded: false,
+            map: Default::default(),
             activity_open: Default::default(),
             activity_seen_seq: 0,
             model_setup: Default::default(),
@@ -220,6 +221,8 @@ impl LightcraftApp {
             return result.map_err(CommandError::from);
         }
         if let Some(r) = menus::run_ui_command(self, id, &params) {
+            // a view switch ends (or starts) the Map view's location filter at once
+            panels::map::sync_location_filter(self);
             if r.is_ok() {
                 docking::reveal_command(self, id)?;
             }
@@ -630,6 +633,7 @@ impl LightcraftApp {
 
     /// Frame timings once layout is done (`t0`: when layout started).
     fn end_frame(&mut self, ctx: &egui::Context, t0: f64) {
+        panels::map::end_pass(self, ctx);
         if self.ui.frame_rate {
             frame_rate::show(ctx, self);
         } else {
