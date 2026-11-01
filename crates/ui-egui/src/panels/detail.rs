@@ -989,7 +989,8 @@ struct OverPhoto<'a> {
 /// the transform grid.
 fn photo_overlays(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &egui::Painter, o: &OverPhoto) {
     let (canvas, img_rect) = (o.canvas, o.img_rect);
-    if o.clipping && !o.fullscreen {
+    // (an Alt-drag preview already is a clipping or greyscale picture: the overlay would mark its own pixels)
+    if o.clipping && !o.fullscreen && crate::panels::clipping::alt_overlay(app).is_none() {
         clipping_overlay(app, ui.ctx(), p, img_rect);
     }
     // View ▸ Loupe Overlay ▸ Layout Image, over the photo (the After view in a before/after)

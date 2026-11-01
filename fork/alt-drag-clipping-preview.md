@@ -2,7 +2,7 @@
 
 ## What it does
 
-Official shipped Lightroom's Alt-drag slider previews (PR #999: `Overlay::for_control`, `ui.dragging_control`; merged 2026-11-01). The fork's own implementation (`view.clippingPreview`, `Preview`, `tests_clip_preview.rs`) was dropped on that merge. What stays: ⌥ held during a drag of a mask's Exposure / Whites / Highlights / Blacks / Shadows (Masking panel, bare ids `exposure`…) shows the same preview as the Edit panel's sliders; the mask tint, outlines and pins step aside while it shows.
+Official shipped Lightroom's Alt-drag slider previews (PR #999: `Overlay::for_control`, `ui.dragging_control`; merged 2026-11-01). The fork's own implementation (`view.clippingPreview`, `Preview`, `tests_clip_preview.rs`) was dropped on that merge. What stays: ⌥ held during a drag of a mask's Exposure / Whites / Highlights / Blacks / Shadows (Masking panel, bare ids `exposure`…) shows the same preview as the Edit panel's sliders; the mask tint, outlines and pins step aside while it shows, and so does the J clipping overlay (`photo_overlays` asks `clipping::alt_overlay`).
 
 ## Branch
 
@@ -14,7 +14,7 @@ Official shipped Lightroom's Alt-drag slider previews (PR #999: `Overlay::for_co
 
 ## Hooks in official files
 
-`panels/detail.rs` (`view_overlay` asks `clipping::alt_overlay`), `panels/detail/masks.rs` (outlines and pins hidden under a preview), `docs/parity-checklist.md` (LR-EDIT-ALTDRAG), `docs/whats-new.md`
+`panels/detail.rs` (`view_overlay` and `photo_overlays` ask `clipping::alt_overlay`), `panels/detail/masks.rs` (outlines and pins hidden under a preview), `docs/parity-checklist.md` (LR-EDIT-ALTDRAG), `docs/whats-new.md`
 
 ## Tests
 
