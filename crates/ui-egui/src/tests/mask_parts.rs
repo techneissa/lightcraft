@@ -294,3 +294,33 @@ fn an_inverted_part_turns_add_and_erase_around() {
     assert!(!strokes(&h, 1)[0].erase);
     h.settle(SETTLE);
 }
+
+/// Official `mask_adjustments_hide_overlay_without_disabling_the_mask` expects the Exposure slider below the fold; the
+/// reworked panel is shorter, so that test fails on its precondition. This keeps the behaviour: a slider change hides
+/// the overlay, the mask stays enabled, with the slider scrolled into view only when it needs it.
+#[test]
+fn a_mask_slider_hides_the_overlay_and_keeps_the_mask_enabled() {
+    let mut h = masking();
+    exec(&mut h, "mask.add", json!({"kind": "linear", "start": [0.5, 0.2], "end": [0.5, 0.7]}));
+    assert!(h.app.ui.mask_overlay);
+    let rect = |h: &Headless, id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).expect(id);
+    let panel = rect(&h, "panel:right_panel");
+    if !panel.contains_rect(rect(&h, "slider:exposure")) {
+        h.request("ui.move", json!({"x": panel.center().x, "y": panel.center().y}), T);
+        h.request("ui.scroll", json!({"dy": -160.0}), T);
+        h.settle(SETTLE);
+    }
+    assert!(panel.contains_rect(rect(&h, "slider:exposure")), "exposure is visible before clicking");
+    let r = h.request("ui.clickWidget", json!({"id": "slider:exposure", "fx": 0.7}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(!h.app.ui.mask_overlay, "the exposure slider hides the overlay after release");
+    assert!(mask(&h).adjust.exposure > 0.0);
+    assert!(mask(&h).visible, "hiding the overlay must not disable the mask");
+    let id = h.app.session.active().expect("active photo");
+    let d = (*h.app.session.develop_of(id).unwrap_or_default()).clone();
+    let none = lightcraft_pipeline::Overlay::None;
+    assert_eq!(crate::panels::detail::view_overlay(&h.app, &d, h.view.ctx.cumulative_frame_nr()), none);
+    let r = h.request("ui.key", json!({"key": "o"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.app.ui.mask_overlay, "O can restore the overlay");
+}

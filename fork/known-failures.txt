@@ -3,3 +3,4 @@
 # `--skip`, so Fork CI goes red only for a new failure. Why each is here: fork/known-failures.md. When a test
 # is fixed or removed, delete its line. A test file itself is never edited to hide a failure.
 tests::masking::a_brush_stroke_is_not_tinted_while_the_mask_overlay_is_hidden
+tests::masking::mask_adjustments_hide_overlay_without_disabling_the_mask
