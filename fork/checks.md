@@ -29,10 +29,10 @@ Two things are set up on this Mac (2026-11-02), outside the repo, so they work i
 - **Start a new worktree from a copy of a built `target/`.** Registry crates (about 340 of the 368 that
   `lightcraft-ui-egui` needs) are the same in every worktree, and cargo reuses them from a copied folder; only the
   workspace's own crates rebuild. On APFS `cp -Rc` clones the folder in about a second and costs no disk until files
-  change. Before the first build in a new worktree, from a worktree that is not building right now:
+  change. Before the first build in a new worktree, from another worktree of this repo that has a built `target/` and is not building right now:
 
   ```
-  cp -Rc ~/.t3/worktrees/lightcraft/<built worktree>/target target
+  cp -Rc <another worktree>/target target
   ```
 
   (the same for the folder `CARGO_TARGET_DIR` names). Measured with `cargo build -p lightcraft-ui-egui` (load about 90):
