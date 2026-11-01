@@ -231,7 +231,7 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         ui.horizontal(|ui| {
             ui.add_sized([58.0, 22.0], egui::Label::new(tr("Model")));
             let label = MODELS.iter().find(|(id, _)| *id == app.reflection_model).map(|(_, name)| *name).unwrap_or("DSRNet-S");
-            let r = egui::ComboBox::from_id_salt("reflection-model").selected_text(label).show_ui(ui, |ui| {
+            let r = crate::widgets::combo_box("reflection-model").selected_text(label).show_ui(ui, |ui| {
                 for (id, name) in MODELS {
                     let r = ui.selectable_value(&mut app.reflection_model, id.into(), name);
                     register(ui, format!("reflection:model:{id}"), r.rect);
@@ -246,7 +246,7 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 1024 => "High",
                 _ => "Standard",
             };
-            let r = egui::ComboBox::from_id_salt("reflection-quality").selected_text(tr(name)).show_ui(ui, |ui| {
+            let r = crate::widgets::combo_box("reflection-quality").selected_text(tr(name)).show_ui(ui, |ui| {
                 for (q, name) in [(384, "Preview"), (768, "Standard"), (1024, "High")] {
                     let r = ui.selectable_value(&mut app.reflection_quality, q, tr(name));
                     register(ui, format!("reflection:quality:{q}"), r.rect);

@@ -40,6 +40,8 @@ impl Net {
             middle: if small { 4 } else { 12 },
         })
     }
+    // Fork: the ported layer call keeps PyTorch's Conv2d argument list; official's PR predates the argument limit.
+    #[allow(clippy::too_many_arguments)]
     fn conv(&self, x: &Tensor, p: &str, cin: usize, cout: usize, k: usize, stride: usize, pad: usize, bias: bool) -> R<Tensor> {
         let vb = self.vb.pp(p);
         let w = vb.get((cout, cin, k, k), "weight")?;

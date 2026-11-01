@@ -54,10 +54,7 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[test]
     fn the_shared_folder_is_artcraft_models_in_application_support() {
-        assert_eq!(
-            shared_models_dir(Some("/Users/x".into())),
-            Some(PathBuf::from("/Users/x/Library/Application Support/ArtCraft/models"))
-        );
+        assert_eq!(shared_models_dir(Some("/Users/x".into())), Some(PathBuf::from("/Users/x/Library/Application Support/ArtCraft/models")));
         assert_eq!(shared_models_dir(Some(OsString::new())), None);
         assert_eq!(shared_models_dir(None), None);
     }
