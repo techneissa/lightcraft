@@ -15,7 +15,7 @@ only in a lane's own filtered tests. A failure Fork CI shows only on Linux is no
 
 ## Faster builds on this Mac
 
-Two things are set up on this Mac (2026-11-02), outside the repo, so they work in every worktree:
+What was tried on this Mac (2026-11-02) to speed up builds in a new worktree:
 
 - **No sccache.** It was tried on 2026-11-02 and removed: a build in another worktree never hits the cache (the
   target folder is on rustc's command line: 0 of 49 hits), and a cold cache made a build slower (46 s against 36 s for
