@@ -5,6 +5,7 @@ mod alt_preview;
 mod appearance;
 mod before_after;
 mod book;
+mod book_preview;
 mod browse_active;
 mod brush_live;
 mod button;

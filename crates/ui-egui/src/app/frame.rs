@@ -433,7 +433,15 @@ impl LightcraftApp {
             // full-screen preview: the photo alone on black
             egui::CentralPanel::default()
                 .frame(egui::Frame::NONE.fill(egui::Color32::BLACK))
-                .show(ui, |ui| if self.ui.slideshow.is_some() { panels::slideshow::show(self, ui) } else { panels::detail::show(self, ui) });
+                .show(ui, |ui| {
+                    if self.ui.slideshow.is_some() {
+                        panels::slideshow::show(self, ui)
+                    } else if panels::book::preview::active(self) {
+                        panels::book::preview::show(self, ui)
+                    } else {
+                        panels::detail::show(self, ui)
+                    }
+                });
             panels::second::show(self, &ctx);
             if notice_blocks {
                 panels::notices::restore_prompt_pointer(self, &ctx);
