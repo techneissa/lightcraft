@@ -950,7 +950,9 @@ impl Rule {
         if field == "filePath" {
             return file_path_matches(op, &p.source, value);
         }
-        let m = &p.meta;
+        // what the person sees: edited camera and exposure values count, not only the file's
+        let shown = p.meta.shown();
+        let m = &*shown;
         let want = lower(value);
         let text = |have: &str| text_op(op, have, &want);
         let yes = |have: bool| bool_value(value).is_some_and(|b| have == b);

@@ -253,9 +253,9 @@ pub fn expand_tokens_with(
                     }
                     Source::Demo { .. } => String::new(),
                 },
-                "camera" => p.meta.camera.clone(),
-                "lens" => p.meta.lens.clone(),
-                "iso" => p.meta.iso.map(|v| v.to_string()).unwrap_or_default(),
+                "camera" => p.meta.effective_camera().to_string(),
+                "lens" => p.meta.effective_lens().to_string(),
+                "iso" => p.meta.effective_iso().map(|v| v.to_string()).unwrap_or_default(),
                 "rating" => p.rating.to_string(),
                 "title" => p.meta.title.clone(),
                 "creator" => p.meta.creator.clone(),

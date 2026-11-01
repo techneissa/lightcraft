@@ -16,6 +16,30 @@
   reduction would smooth away. At 0, the default, photos look as before.
 - In process V3, **Sharpening ▸ Detail** sets how much fine detail and noise sharpening brings out (low: clean
   edges; high: fine texture too). Sharpening is a little stronger overall.
+### Edit Camera, Lens and Exposure Values
+- The camera card at the top of **Info** is editable: **Camera**, **Lens**, **Focal length**, **Shutter speed**,
+  **Aperture** and **ISO**, for one photo or all selected photos. Type a value and press Return.
+- The file's own values are never changed. An edit is kept in your library beside them and shown instead, with a small
+  dot. The round arrow beside a row (**Reset to file value**) brings the file's value back; **Reset All** does it for
+  the whole card, and one Undo takes back an edit on all the selected photos. A field where the selected photos
+  differ says **Mixed**.
+- Camera and Lens are searchable: type `A7 V` or `FE 24-70` to list matching names from about 2,000 cameras and 1,200
+  lenses, pick one with a click or the arrow keys, or type any name you like.
+- Numbers are checked as you type them: `35 mm`, `f/2.8`, `1/250` or `2.5"`, `400`. A value that makes no sense says
+  why and changes nothing.
+- Search, filters, smart albums, rename tokens and slideshow text use the edited values, and so do exported files
+  (their EXIF, following Export ▸ Metadata). Colours and lens corrections still follow the camera and lens the file
+  records, so an edit never changes how a photo looks. Reload from Disk keeps your edits.
+- Agents: `photo.setMeta` takes `camera`, `lens`, `focal`, `aperture`, `shutter` and `iso` (`null` resets one);
+  `photo.resetExif` resets some or all.
+### Brush Shows the Adjustment While You Paint
+- Painting with the Brush now shows the mask's adjustment under the brush as you move, the way Lightroom does, not
+  only a colour: a brush mask with Exposure +1.5 brightens the photo along the stroke at once. Erase shows the
+  adjustment going away, and Auto Mask follows the surface under the brush while you paint.
+- The photo no longer flashes back to the unadjusted look when you let go: the painted stroke stays until the
+  finished picture with the stroke has been drawn, and it looks the same.
+- A frame of painting costs about a millisecond on a 24 MP photo. A brand-new brush mask has no adjustment yet, so
+  it shows only the overlay colour until you give the mask one.
 
 ### Sliders on One Row
 - Each Develop slider is one row: its name on the left, a groove with tick marks and a drop-shaped thumb, and the
@@ -32,6 +56,26 @@
 - Photos you already edited keep their look. **Photo ▸ Update to Current Process** moves them to V3 (one Undo step).
 - While you drag Highlights or Shadows, the preview now matches the export on large photos (it used a smaller
   radius before); exported photos are unchanged.
+### Hold ⌥ While You Drag a Slider
+- Hold **⌥ (Alt)** while dragging **Exposure, Whites or Highlights**: the photo turns black and only what is clipped
+  to white shows (white where all channels clip, the channel's colour where only some do).
+- **Blacks or Shadows**: the photo turns white and what is crushed to black shows (black where all channels are at
+  zero, cyan, magenta or yellow where one is).
+- **Sharpening Masking**: the black-and-white mask that limits where sharpening acts. **Amount, Radius or Detail**:
+  the photo in greyscale, so you judge the sharpening without colour.
+- Let go of ⌥ or the slider and the photo is back. Agents use `view.clippingPreview`.
+
+### Shadow and Highlight Clipping, Separately
+- The two triangles in the corners of the histogram are now two switches. The left one shows where the photo is
+  clipped to black (**blue**), the right one where it is clipped to white (**red**); each works alone, and hovering a
+  triangle previews its overlay for as long as the pointer rests there.
+- Where all three colour channels clip, the overlay is solid; where only some do, it is tinted with those channels'
+  colour (for example yellow where red and green are at black).
+- A triangle shows what clips even when its overlay is off: dim grey for nothing, white for all three channels, else
+  the colour of the clipping channel or channels.
+- **J** and a click on the histogram still switch both sides together (both off if both were on, otherwise both on).
+  View ▸ Shadow Clipping and View ▸ Highlight Clipping switch one side; agents use `view.clippingShadows` and
+  `view.clippingHighlights`. Settings saved with the old single switch load as both on.
 
 ## 2026-10-29
 
@@ -263,6 +307,9 @@
 - The list shows up to 12 matches and scrolls for more. It no longer stays as short as the shortest list since it
   opened, and ↑ and ↓ keep the highlighted command in view.
 
+### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
+- Select Only Active Photo now sits under Deselect All, and Paste Settings from Previous under Paste Selected Settings…, instead of both after Settings…, near the end of the Edit menu. On macOS, where Settings… lives in the application menu, the Edit menu no longer shows two separator lines in a row.
+
 ### Edit All Selected Photos at Once
 - With two or more photos selected, the Edit panel opens with an "Edit All N Selected" switch, and it is on: moving a
   slider or changing a setting changes every selected photo, one undo step for all of them. This is Auto Sync, which now
@@ -289,6 +336,10 @@
   file is checked against its SHA-256 whichever site served it.
 - Without a model the panel says so plainly and points to Luminance and Color under Detail; a model you were
   given installs with **Install from file…**.
+
+### `>=` and `<=` work in the search box
+- Fielded search tokens now take inclusive comparisons: `rating:>=3`, `iso:<=400`, `f:>=2.8`, `focal:<=50`. Before,
+  the `=` was read as part of the number, so such a search quietly showed no photos at all.
 
 ## 2026-10-24
 
@@ -566,6 +617,13 @@
 - A crop ratio no longer flips to the photo's orientation (issue #2253): after X turns the crop portrait, picking
   another ratio (4 × 5, 2 × 3…) keeps it portrait, as in Lightroom, and a Custom ratio taller than wide gives a
   portrait crop.
+
+## 2026-10-17
+
+### Short Epson and Mamiya raws are refused
+- An Epson ERF or Mamiya MEF whose raw strip runs past the end of the file is now an error on import (issue #2119).
+  Before, the header probe trusted the declared strip length and sized its sample buffer from it, so a few KB of file
+  could make it allocate gigabytes.
 
 ## 2026-10-16
 

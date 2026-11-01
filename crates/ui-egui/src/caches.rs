@@ -217,8 +217,8 @@ impl Caches {
                 };
                 let lib = || cat.photos().filter(|p| p.in_library());
                 let v = std::sync::Arc::new(FilterValues {
-                    cameras: distinct(lib().map(|p| p.meta.camera.clone()).collect()),
-                    lenses: distinct(lib().map(|p| p.meta.lens.clone()).collect()),
+                    cameras: distinct(lib().map(|p| p.meta.effective_camera().to_string()).collect()),
+                    lenses: distinct(lib().map(|p| p.meta.effective_lens().to_string()).collect()),
                     keywords: cat.keywords().into_iter().map(|(k, _)| k).collect(),
                 });
                 self.filter_values = Some((cat.revision, v.clone()));

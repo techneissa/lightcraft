@@ -5,7 +5,7 @@ pub(super) fn info(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     header(ui, "Info");
     let t = Tokens::get(ui.ctx());
     padded(ui, |ui| {
-        camera_card(ui, &p);
+        camera_card(app, ui, &p);
         ui.add_space(6.0);
         if let Some(why) = &p.preview_only {
             if crate::widgets::preview_only_notice(ui, "info", why) {
@@ -232,18 +232,15 @@ pub(crate) fn smart_line(app: &LightcraftApp, p: &lightcraft_catalog::Photo) -> 
 
 /// The camera card at the top of Info: camera, lens, size · file size and format, then the
 /// capture settings.
-fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
+fn camera_card(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
     let t = Tokens::get(ui.ctx());
     let m = &p.meta;
+    // camera, lens and the capture settings are editable (`exif_edit`): the file's values stay, an edit shows over them
+    let scope = super::exif_edit::Scope::of(app, p);
     egui::Frame::NONE.fill(t.canvas).corner_radius(6.0).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let dim = |s: &str| egui::RichText::new(s.to_string()).size(12.0).color(t.text_label);
-        if !m.camera.is_empty() {
-            ui.label(dim(&m.camera));
-        }
-        if !m.lens.is_empty() {
-            ui.add(egui::Label::new(dim(&m.lens)).truncate());
-        }
+        super::exif_edit::camera_lens(app, ui, &scope);
         ui.horizontal(|ui| {
             ui.label(dim(&format!("{} × {}  ·  {}", p.width, p.height, human_size(p.file_size))));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -252,22 +249,7 @@ fn camera_card(ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
                 });
             });
         });
-        let rows = [
-            ("Focal length", m.focal_mm.map(|f| format!("{f:.1} mm").replace(".0 mm", " mm"))),
-            ("Shutter speed", (!m.shutter.is_empty()).then(|| crate::i18n::tr_format!("{} sec", m.shutter))),
-            ("Aperture", m.aperture.map(|f| format!("f / {f:.1}").replace(".0", ""))),
-            ("ISO", m.iso.map(|i| i.to_string())),
-        ];
-        if rows.iter().any(|r| r.1.is_some()) {
-            ui.add_space(6.0);
-            egui::Grid::new("info-capture").num_columns(2).spacing([24.0, 3.0]).show(ui, |ui| {
-                for (k, v) in rows {
-                    ui.label(dim(crate::i18n::tr(k)));
-                    ui.label(dim(&v.unwrap_or_else(|| "—".into())));
-                    ui.end_row();
-                }
-            });
-        }
+        super::exif_edit::capture(app, ui, &scope);
         // where the camera focused, and how (View ▸ Focus Point draws it): only when known; the
         // whole card's width, so "AF-C · Expanded Flexible Spot · Face tracking" fits
         if let Some(text) = focus_text(m.focus.as_ref()) {

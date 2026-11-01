@@ -710,8 +710,39 @@ fn ui_commands_5(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             Ok(json!({"zoom": zoom, "pan": pan}))
         }
         "view.clipping" => {
-            app.ui.show_clipping = !app.ui.show_clipping;
-            Ok(Value::Null)
+            // both sides together: any off turns both on, both on turns both off
+            let on = !(app.ui.clip_shadows && app.ui.clip_highlights);
+            app.ui.clip_shadows = on;
+            app.ui.clip_highlights = on;
+            Ok(json!({"shadows": on, "highlights": on}))
+        }
+        "view.clippingShadows" => {
+            // {on?}; no params toggles. The blue overlay of pixels clipped at black.
+            app.ui.clip_shadows = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.clip_shadows);
+            Ok(json!({"on": app.ui.clip_shadows}))
+        }
+        "view.clippingHighlights" => {
+            // {on?}; no params toggles. The red overlay of pixels clipped at white.
+            app.ui.clip_highlights = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.clip_highlights);
+            Ok(json!({"on": app.ui.clip_highlights}))
+        }
+        "view.clippingPreview" => {
+            // {mode?, control?}: hold the Alt-drag preview a drag of `control` shows, or `mode`
+            // (highlights, shadows, sharpenMask, greyscale); none, "off" or null clears it
+            use crate::panels::clipping::Preview;
+            let named = p.get("mode").and_then(Value::as_str).filter(|m| *m != "off");
+            let from_control = p.get("control").and_then(Value::as_str);
+            let next = match (named, from_control) {
+                (Some(m), _) => {
+                    Preview::parse(m).ok_or_else(|| format!("unknown preview `{m}`: highlights, shadows, sharpenMask or greyscale")).map(Some)
+                }
+                (None, Some(c)) => Preview::for_control(c).ok_or_else(|| format!("`{c}` has no Alt-drag preview")).map(Some),
+                (None, None) => Ok(None),
+            };
+            next.map(|next| {
+                app.ui.preview_forced = next;
+                json!({"mode": next.map(Preview::name)})
+            })
         }
         "view.visualizeHdr" => {
             // {on?}; no params toggles. Shown on photos edited in HDR (see `develop.hdr`).

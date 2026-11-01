@@ -24,7 +24,12 @@ pub fn photo_summary(p: &Photo) -> Value {
         "edited": p.is_edited(),
         "title": p.meta.title,
         "keywords": p.meta.keywords,
-        "camera": p.meta.camera,
+        "camera": p.meta.effective_camera(),
+        "lens": p.meta.effective_lens(),
+        // the camera and lens the file records, when an edit shows other names (null otherwise)
+        "fileCamera": p.meta.exif_overridden(lightcraft_catalog::ExifField::Camera).then_some(&p.meta.camera),
+        "fileLens": p.meta.exif_overridden(lightcraft_catalog::ExifField::Lens).then_some(&p.meta.lens),
+        "exifEdited": !p.meta.exif.is_empty(),
         "deleted": p.deleted,
         "copyOf": p.copy_of.map(|c| c.0),
         "copyName": p.copy_name,

@@ -673,6 +673,15 @@ pub(crate) fn shadows_highlights_delta(shadows: f32, highlights: f32, base: f32,
     shadows * 1.7 * shadow_weight * shadow_weight.sqrt() + highlights * 1.7 * highlight_weight
 }
 
+/// How much of the sharpening a pixel with local contrast `detail` (log luminance minus its blur) gets
+/// at Masking `masking` (0..1): everything at 0, and with more masking only the edges. Also what
+/// [`crate::Overlay::SharpenMask`] shows. `v3`: process V3's pixel-scale band, whose edges are a few hundredths of
+/// an EV, so the mask's range is a third of V1 / V2's.
+pub(crate) fn sharpen_mask_weight(masking: f32, detail: f32, v3: bool) -> f32 {
+    let (start, span) = if v3 { (0.08, 0.08) } else { (0.25, 0.15) };
+    if masking > 0.0 { smooth(masking * start, masking * start + span, detail.abs()) } else { 1.0 }
+}
+
 fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1: f32, local: &PixelLocalTerms) -> f32 {
     let [_, _, _, l_con, l_hl, l_sh, l_wh, l_bl, l_tex, l_clar, _, _, _, l_sharp, l_noise, _, _] = local.values;
     let mut delta = 0.0;
@@ -706,7 +715,7 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
         let tame = 1.0 - 0.6 * smooth(0.4, 1.6, detail.abs());
         delta += texture * 1.1 * detail.clamp(-1.0, 1.0) * tame;
         if sharpen != 0.0 && !fp.tone_v3 {
-            let mask = if fp.sharpen_mask > 0.0 { smooth(fp.sharpen_mask * 0.25, fp.sharpen_mask * 0.25 + 0.15, detail.abs()) } else { 1.0 };
+            let mask = sharpen_mask_weight(fp.sharpen_mask, detail, false);
             delta += sharpen * 1.3 * detail.clamp(-0.8, 0.8) * mask;
         }
     }
@@ -716,8 +725,7 @@ fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1
         && let Some(blur) = &p.sharpen_blur
     {
         let detail = p.log_l.data[index] - blur.data[index];
-        // (the pixel-scale band's edges are a few hundredths of an EV, so the mask's range is a third of V1 / V2's)
-        let mask = if fp.sharpen_mask > 0.0 { smooth(fp.sharpen_mask * 0.08, fp.sharpen_mask * 0.08 + 0.08, detail.abs()) } else { 1.0 };
+        let mask = sharpen_mask_weight(fp.sharpen_mask, detail, true);
         delta += sharpen * fp.sharpen_gain * detail.clamp(-0.8, 0.8) * mask * sharpen_mix(fp.sharpen_detail, detail);
     }
     if l_noise != 0.0

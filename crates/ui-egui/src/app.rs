@@ -21,6 +21,12 @@ pub(crate) use frame::import_tick_allowed;
 pub(crate) use screenshot::shot_ready;
 
 impl LightcraftApp {
+    /// UI-thread milliseconds the brush stroke being painted took last frame to bring the
+    /// adjustment under the brush on screen; `None` when no stroke shows one.
+    pub fn brush_live_ms(&self) -> Option<f64> {
+        self.brush_live.as_ref().and_then(crate::brush_live::LiveStroke::live_ms)
+    }
+
     /// Build the app with default UI, renderer, cache and control state, and move AI segmentation
     /// to a worker so frames apply results instead of waiting.
     pub fn new(mut session: Session, services: Services) -> Self {

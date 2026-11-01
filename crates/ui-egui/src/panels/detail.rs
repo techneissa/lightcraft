@@ -15,6 +15,7 @@ use crate::theme::Tokens;
 use crate::widgets::{register, register_geometry};
 use lightcraft_engine::media::QuickSource;
 
+mod brush_preview;
 mod crop;
 mod filmstrip;
 mod geometry;
@@ -182,6 +183,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     app.image_rect = Some(img_rect);
     // request renders: the loupe at display resolution (drafts during drags)
     let interacting = app.session.interaction.is_some();
+    crate::panels::clipping::sync_alt_preview(app, ui.ctx());
     let overlay = view_overlay(app, &d);
     // a drag drafts at full size where the GPU draws the view (by the GPU's own rule, `handles`;
     // `ready` first: `available` would wait for a device still being created)
@@ -236,6 +238,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let ask = LoupeAsk { id, with_crop: !crop_tool, interacting, fit_px, overlay };
     app.renderer.loupe_drawn();
     request_main(app, ui, &ask, [rw, rh], plan.window_edge.is_none());
+    let plain = overlay == lightcraft_pipeline::Overlay::None;
+    brush_preview::request(app, ui, &brush_preview::Ask { id, size: [rw, rh], with_crop: !crop_tool, fit_px, interacting, plain });
     // hovering a preset or profile: the photo with that look, shown instead of the loupe render
     // once it is ready (nothing is committed)
     let hover_key = request_hover(app, &ask, [sw, sh]);
@@ -839,7 +843,10 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
         // sampling (the render is up to a 64 px step larger, or the preview level)
         let job = if interacting { job } else { job.with_display_fit(fit_px[0], fit_px[1]) };
         let job = job.with_overlay(overlay).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
-        let job = job.with_hidden_grading(app.ui.grading_hidden_for(id));
+        let mut job = job.with_hidden_grading(app.ui.grading_hidden_for(id));
+        if app.renderer.keep_brush_pixels {
+            job.key ^= brush_preview::BRUSH_KEY_SALT;
+        }
         app.renderer.request(Slot::Main, job, 100);
         // a drag's draft that renders in a few ms (GPU) is drawn in this frame, not the next (zoomed
         // in, what changes on screen is the window's draft)
@@ -975,8 +982,9 @@ struct OverPhoto<'a> {
 /// the transform grid.
 fn photo_overlays(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &egui::Painter, o: &OverPhoto) {
     let (canvas, img_rect) = (o.canvas, o.img_rect);
-    if app.ui.show_clipping && o.clipping && !o.fullscreen {
-        clipping_overlay(app, p, img_rect);
+    // (the Alt-drag preview already is the clipping picture)
+    if o.clipping && !o.fullscreen && crate::panels::clipping::preview(app).is_none() {
+        clipping_overlay(app, ui.ctx(), p, img_rect);
     }
     // View ▸ Loupe Overlay ▸ Layout Image, over the photo (the After view in a before/after)
     super::layout_overlay::draw(app, p, img_rect);
@@ -1044,6 +1052,10 @@ pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcra
     if app.ui.fullscreen {
         return Overlay::None;
     }
+    // ⌥ held while a slider is dragged shows a mask in place of the photo
+    if let Some(p) = crate::panels::clipping::preview(app) {
+        return p.overlay();
+    }
     // Show every visible mask's region at once (Ctrl+Shift+O / Cmd+Shift+O), ahead of the selected-mask overlay
     // so the shortcut is not shadowed by the always-on single-mask overlay.
     if app.ui.right == RightPanel::Masking && app.ui.mask_overlay_all && d.masks.iter().any(|m| m.visible && !m.components.is_empty()) {
@@ -1078,16 +1090,32 @@ pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings) -> lightcra
     Overlay::None
 }
 
-fn clipping_overlay(app: &LightcraftApp, p: &egui::Painter, r: Rect) {
-    // Highlight clipped regions using the histogram's extremes isn't spatial; show a subtle frame hint.
-    if let Some(h) = app.renderer.textures.get(&Slot::Main).and_then(|t| t.histogram.as_ref()) {
-        let (lo, hi) = h.clipping();
-        if hi > 0.003 {
-            p.rect_stroke(r, 0.0, Stroke::new(2.0, Color32::from_rgb(255, 60, 60)), StrokeKind::Outside);
+/// The clipping overlay: the pixels of the loupe photo clipped at black (blue) and at white (red),
+/// for the sides that are on (a toggle, or the pointer resting on its histogram triangle).
+fn clipping_overlay(app: &mut LightcraftApp, ctx: &egui::Context, p: &egui::Painter, r: Rect) {
+    use crate::panels::clipping::{ClipOverlay, effective_sides, overlay_image};
+    let (shadows, highlights) = effective_sides(app, ctx.cumulative_frame_nr());
+    if !shadows && !highlights {
+        return;
+    }
+    let Some(t) = app.renderer.textures.get(&Slot::Main) else { return };
+    let Some(src) = t.pixels.clone() else { return };
+    let made_for = (t.key, t.size, shadows, highlights);
+    if app.renderer.clip_overlay.as_ref().is_none_or(|o| o.made_for != made_for) {
+        let img = overlay_image(&src, shadows, highlights);
+        match app.renderer.clip_overlay.as_mut() {
+            Some(o) => {
+                o.tex.set(img, egui::TextureOptions::NEAREST);
+                o.made_for = made_for;
+            }
+            None => {
+                let tex = ctx.load_texture("clipping-overlay", img, egui::TextureOptions::NEAREST);
+                app.renderer.clip_overlay = Some(ClipOverlay { made_for, tex });
+            }
         }
-        if lo > 0.003 {
-            p.rect_stroke(r.expand(3.0), 0.0, Stroke::new(2.0, Color32::from_rgb(60, 120, 255)), StrokeKind::Outside);
-        }
+    }
+    if let Some(o) = &app.renderer.clip_overlay {
+        p.image(o.tex.id(), r, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     }
 }
 

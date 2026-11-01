@@ -9,6 +9,8 @@ pub(crate) fn overlay_supports_window(overlay: lightcraft_pipeline::Overlay) -> 
     use lightcraft_pipeline::Overlay as O;
     match overlay {
         O::None | O::Mask { .. } | O::AllMasks { .. } | O::PointColorRange(_) | O::HdrRange | O::Spots(_) => true,
+        // pixel by pixel, and the sharpening detail band is finer than the window's margin
+        O::ClipHighlights | O::ClipShadows | O::SharpenMask | O::Greyscale => true,
     }
 }
 
