@@ -463,7 +463,7 @@ mod tests {
     use super::*;
 
     fn part(op: MaskOp, brush: bool) -> MaskComponent {
-        let shape = if brush { MaskShape::Brush { strokes: vec![] } } else { MaskShape::Subject };
+        let shape = if brush { MaskShape::Brush { strokes: vec![] } } else { MaskShape::subject() };
         MaskComponent { name: None, op, invert: false, shape }
     }
 
