@@ -355,7 +355,8 @@ fn paint_thumb(p: &egui::Painter, c: egui::Pos2, fill: Color32, enabled: bool) {
     p.circle_filled(pos2(centre.x - 1.2, centre.y - 1.6), 2.2, lerp(fill, Color32::WHITE, hi).gamma_multiply(0.6));
 }
 
-/// The row's three columns: the label (right-aligned against the track), the track, the value (right-aligned).
+/// The row's three columns: the label (left-aligned in a fixed column, or right-aligned against the track), the track,
+/// the value (right-aligned).
 fn slider_columns(row: Rect, wanted_label_w: f32, wanted_value_w: f32) -> (Rect, Rect, Rect) {
     let w = row.width();
     let pad = 10.0;
@@ -372,6 +373,9 @@ fn slider_columns(row: Rect, wanted_label_w: f32, wanted_value_w: f32) -> (Rect,
     let track = Rect::from_min_max(pos2(track_l, cy - 8.0), pos2(track_r, cy + 8.0));
     (label, track, value)
 }
+
+/// The size of a slider's label.
+const LABEL_FONT: f32 = 12.5;
 
 /// The size of the value figure.
 const VALUE_FONT: f32 = 14.5;
@@ -507,9 +511,16 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let (row, _) = ui.allocate_exact_size(vec2(w, t.slider_row_h), Sense::hover());
     // the label column fits the longest label among this section's sliders (last frame's widest, or this one's)
     let label_str: String = crate::i18n::tr(label_override.unwrap_or(spec.label)).to_string();
-    let label_font = t.font(12.5);
-    let own_w = ui.painter().layout_no_wrap(label_str.clone(), label_font.clone(), Color32::WHITE).size().x;
-    let label_w = shared_column_width(ui, "slider-label-w", own_w);
+    let label_font = t.font(LABEL_FONT);
+    let fixed_label_w = label_column::fixed(ui);
+    let label_w = match fixed_label_w {
+        // the Edit and Masking panels: one width for every label they can show
+        Some(w) => w,
+        None => {
+            let own_w = ui.painter().layout_no_wrap(label_str.clone(), label_font.clone(), Color32::WHITE).size().x;
+            shared_column_width(ui, "slider-label-w", own_w)
+        }
+    };
     // the value column is as wide as the widest text the control can show (its range's ends, digits as the
     // widest one) and shared by the section, so no value moves the track
     let value_font = egui::FontId::new(VALUE_FONT, egui::FontFamily::Proportional);
@@ -584,7 +595,11 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let shown_label = fit_text(ui, &label_str, &label_font, label_rect.width());
     let truncated = shown_label != label_str;
     let p = ui.painter();
-    p.text(label_rect.right_center(), Align2::RIGHT_CENTER, &shown_label, label_font, text_c);
+    if fixed_label_w.is_some() {
+        p.text(label_rect.left_center(), Align2::LEFT_CENTER, &shown_label, label_font, text_c);
+    } else {
+        p.text(label_rect.right_center(), Align2::RIGHT_CENTER, &shown_label, label_font, text_c);
+    }
     if typing.is_none() {
         let value_c = if enabled { t.text } else { t.text_disabled };
         p.text(value_rect.right_center(), Align2::RIGHT_CENTER, shown_value(spec, v), value_font.clone(), value_c);
@@ -1349,6 +1364,7 @@ pub mod album_picker;
 pub mod button;
 pub mod date_picker;
 pub mod dropdown_search;
+pub(crate) mod label_column;
 #[cfg(test)]
 #[path = "widgets/tests_numeric_entry.rs"]
 mod numeric_entry_tests;

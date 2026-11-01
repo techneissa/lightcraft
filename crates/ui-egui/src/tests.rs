@@ -34,6 +34,7 @@ mod empty_library;
 mod error_kinds;
 mod exif_edit;
 mod filmstrip;
+mod fixed_slider_labels;
 mod focus_point;
 mod folder_drop;
 mod grading;
