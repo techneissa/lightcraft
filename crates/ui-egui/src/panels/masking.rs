@@ -86,7 +86,17 @@ fn tile_layout(width: f32, label: impl Fn(f32) -> f32) -> (usize, f32, f32) {
     (2, room(2).max(24.0), 9.5)
 }
 
+/// The labels of the mask sliders besides [`LOCAL`] (built where they are drawn).
+const OTHER_SLIDER_LABELS: &[&str] = &["Amount", "Refine Edges", "Opacity", "Smoothness", "Edge", "Refine", "Size", "Feather", "Flow"];
+
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    // one label column for every mask slider label, whichever the mask shows (issue #21)
+    crate::widgets::label_column::fix(ui, "masking", || LOCAL.iter().map(|s| s.label).chain(OTHER_SLIDER_LABELS.iter().copied()).collect());
+    show_mask_panel(app, ui, id);
+    crate::widgets::label_column::release(ui);
+}
+
+fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Masking");
