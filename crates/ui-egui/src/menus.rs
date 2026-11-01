@@ -48,6 +48,11 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         "photo.editInPhotoCraft" | "photo.editInExternal" => {
             app.session.active().is_some() && app.services.open_with.is_some() && app.edit_in.is_none()
         }
+        "photo.removeReflections" | "reflection.apply" => {
+            app.session.active().is_some() && lightcraft_engine::reflections::available() && !app.tasks.is_running(crate::reflections::TASK)
+        }
+        "reflection.install" | "reflection.models" | "reflection.instructions" => !cfg!(target_arch = "wasm32"),
+        "reflection.reset" | "reflection.status" | "reflection.toggle" | "reflection.panel" => app.session.active().is_some(),
         "photo.openAsLayersInPhotocraft" => app.services.open_with.is_some() && app.session.selected().len() >= 2 && app.layers.is_none(),
         "app.exportPrevious" => app.session.active().is_some() && app.session.last_export.is_some(),
         "dialog.pasteSettings" => app.session.active().is_some() && app.session.clipboard.is_some(),
