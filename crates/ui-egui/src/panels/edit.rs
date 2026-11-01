@@ -36,6 +36,15 @@ pub use sliders::{apply_slider_out, sub_title};
 pub(crate) use sliders::{control, reload_preview_only};
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
+    // one label column for every Develop slider label, open section or not (issue #21)
+    crate::widgets::label_column::fix(ui, "edit", || {
+        controls::CONTROLS.iter().chain(controls::INDEXED).chain([&REL_TEMP, &REL_TINT]).map(|c| c.label).collect()
+    });
+    show_sections(app, ui, id);
+    crate::widgets::label_column::release(ui);
+}
+
+fn show_sections(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
     // a raw shown from its embedded JPEG (preview only) gets the rendered-file white balance scale
