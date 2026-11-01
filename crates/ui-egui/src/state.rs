@@ -137,6 +137,13 @@ pub struct UiState {
     pub show_counts: bool,
     /// Face / pet boxes (read from XMP) over the photo in the loupe.
     pub face_boxes: bool,
+    /// Map view: Lock Markers (pins can't be dragged to move a photo's position; `map.lockMarkers`).
+    pub map_lock_markers: bool,
+    /// Map view: photo pins and clusters drawn (H, `map.showPins`; saved locations and track logs
+    /// stay).
+    pub map_show_pins: bool,
+    /// Map view: the location filter bar above the map (`\`, `map.filterBar`).
+    pub map_filter_bar: bool,
     /// The left sidebar's sections: their order, which are hidden and which are folded shut.
     pub sidebar: crate::sidebar::SidebarLayout,
     /// The Edit panel's sections: their order and which are hidden (`panels/edit_sections.rs`).
@@ -394,6 +401,9 @@ pub struct UiState {
     /// The Print dialog's page, selection and drag.
     #[serde(skip)]
     pub print: crate::print_view::PrintUi,
+    /// The Book dialog's view, page and drag.
+    #[serde(skip)]
+    pub book: crate::book_view::BookUi,
 }
 
 impl Default for UiState {
@@ -452,6 +462,9 @@ impl Default for UiState {
             grid_info: "filename".into(),
             show_counts: true,
             face_boxes: true,
+            map_lock_markers: false,
+            map_show_pins: true,
+            map_filter_bar: true,
             sidebar: Default::default(),
             edit_sections: Default::default(),
             collapsed_sidebar: Vec::new(),
@@ -548,6 +561,7 @@ impl Default for UiState {
             status: String::new(),
             dialog: None,
             print: Default::default(),
+            book: Default::default(),
         }
     }
 }

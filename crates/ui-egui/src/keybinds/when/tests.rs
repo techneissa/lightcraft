@@ -264,7 +264,7 @@ fn autocomplete_follows_the_grammar() {
     assert_eq!(labels("view !"), ["!="]);
     assert_eq!(labels("view ="), ["=="]);
     // after the operator: that key's values
-    assert_eq!(labels("view == "), ["grid", "square", "detail", "compare", "survey", "reference", "people"]);
+    assert_eq!(labels("view == "), ["grid", "square", "detail", "compare", "survey", "reference", "people", "map"]);
     assert_eq!(labels("view != co"), ["compare"]);
     assert!(labels("tool != ").contains(&"crop".to_string()));
     // after a value or an on / off key: and, or

@@ -8,6 +8,7 @@ mod album_order;
 mod album_remove;
 mod albums_local;
 mod animated_gif;
+mod book;
 mod color;
 mod constrain_crop;
 mod crop_angle;
@@ -24,6 +25,7 @@ pub(super) mod face_recognize;
 mod face_tiles;
 mod file_trash;
 mod filesystem_history;
+mod find_removals;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod focus_scan;
 mod folders;
@@ -39,6 +41,7 @@ mod libops;
 mod library;
 mod lightroom_folder;
 mod local_profiles;
+mod location;
 // macOS Colour needs macOS's own raw decoder: the test only means something on the Mac (fork is Mac only)
 #[cfg(target_os = "macos")]
 mod macos_colour;
@@ -54,6 +57,7 @@ mod print;
 mod process;
 mod quick_filters;
 mod recheck;
+mod saved_locations;
 mod segment;
 mod settings_files;
 mod shelved_folder;
@@ -63,6 +67,7 @@ mod slideshow_export;
 mod smart_local;
 mod spots;
 mod sync;
+mod tracklog;
 mod view_follow;
 pub(super) mod xmp;
 

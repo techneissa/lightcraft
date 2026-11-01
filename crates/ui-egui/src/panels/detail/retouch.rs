@@ -51,6 +51,9 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
     if spot_keys(app, ui, map, d, &grips) {
         return;
     }
+    if super::find_overlay::show(app, ui, resp, map) {
+        return;
+    }
     let r = (app.ui.remove_size as f64 * long) as f32;
     // a target or source under `q`: the selected spot's first, then the nearest pin
     let hit = |q: Pos2| {

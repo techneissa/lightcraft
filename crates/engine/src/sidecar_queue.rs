@@ -35,6 +35,9 @@ pub(crate) struct Job {
     pub packet: String,
     /// The clock's time, for a backup's name.
     pub stamp: String,
+    /// The photo's GPS position was set or cleared by a command ([`crate::Session::gps_edited`]):
+    /// the sidecar takes LightCraft's, so a cleared one is removed from it too.
+    pub gps_owned: bool,
 }
 
 /// What became of a [`Job`]: the sidecar written and its bytes, or why not.
@@ -208,7 +211,7 @@ pub(crate) fn write(job: &Job) -> Result<(PathBuf, Vec<u8>), String> {
     let listed = existing.iter().find(|p| crate::rename::RealFs.listed(p)).copied();
     let path = listed.or_else(|| existing.first().copied()).unwrap_or(&job.preferred).clone();
     let err = |e: std::io::Error| format!("{}: {e}", path.display());
-    let (data, _, _) = crate::sidecar::sidecar_contents(&path, job.packet.clone(), &job.stamp).map_err(err)?;
+    let (data, _, _) = crate::sidecar::sidecar_contents(&path, job.packet.clone(), &job.stamp, job.gps_owned).map_err(err)?;
     crate::sidecar::write_atomic(&path, data.as_bytes()).map_err(err)?;
     Ok((path, data.into_bytes()))
 }
@@ -292,6 +295,7 @@ impl crate::Session {
             candidates,
             packet: crate::sidecar::sidecar_packet(p, &self.catalog),
             stamp: (self.clock)(),
+            gps_owned: self.gps_edited.contains(&id),
         };
         let Some(q) = self.sidecar_queue.as_mut() else { return Ok(false) };
         Ok(q.push(job, &self.activity))

@@ -22,6 +22,19 @@ pub const DECLARED: &[(&str, &str)] = &[
     ("crop.rotateAspect", "tool == crop"),
     ("view.visualizeSpots", "tool != crop"),
     ("crop.lockAspect", "tool == crop"),
+    // the Map view's keys (`shortcuts::MAP_ONLY`) and the commands they take their keys from
+    ("panel.remove", "view != map"),
+    ("map.showPins", "view == map"),
+    ("view.showOriginal", "view != map"),
+    ("map.filterBar", "view == map"),
+    ("view.maskOverlay", "view != map"),
+    ("map.showLocations", "view == map"),
+    ("view.thumbSizeUp", "view != map"),
+    ("map.zoomIn", "view == map"),
+    ("view.thumbSizeDown", "view != map"),
+    ("map.zoomOut", "view == map"),
+    ("panel.addKeywords", "view != map"),
+    ("map.lockMarkers", "view == map"),
 ];
 
 /// The keymap entry of the condition of `id`.

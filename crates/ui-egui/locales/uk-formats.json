@@ -323,5 +323,19 @@
   "Panel layout could not be restored: {error}": "Не вдалося відновити розташування панелей: {error}",
   "Panel move was not applied: {error}": "Переміщення панелі не застосовано: {error}",
   "{name} is installed": "{name} установлено",
-  "{name} is installed and in use: face recognition is on": "{name} установлено й використовується: розпізнавання облич увімкнено"
+  "{name} is installed and in use: face recognition is on": "{name} установлено й використовується: розпізнавання облич увімкнено",
+  "Delete the saved location “{name}”?": "Видалити збережене місце «{name}»?",
+  "In the private location “{name}”: its map is hidden.": "У приватному місці «{name}»: мапу приховано.",
+  "within {d} of {lat}, {lon}": "у межах {d} від {lat}, {lon}",
+  "All Tracks ({n})": "Усі треки ({n})",
+  "Track {n}": "Трек {n}",
+  "camera time, UTC{o}": "час камери, UTC{o}",
+  "Set Time Zone Offset… (UTC{o})": "Задати зміщення часового поясу… (UTC{o})",
+  "Auto-Tag {n} Selected Photos": "Прив'язати вибрані фото ({n})",
+  "{m} of them fall within the track's time range": "{m} з них потрапляють у час треку",
+  "{n} more tracks": "ще треків: {n}",
+  "Deleted {n} map tiles": "Видалено фрагментів мапи: {n}",
+  "{size} MB in {n} tiles (limit {cap} MB)": "{size} МБ, фрагментів: {n} (межа {cap} МБ)",
+  "Map tiles from {id}": "Фрагменти мапи: {id}",
+  "In use: {url} (up to zoom {zoom})": "Використовується: {url} (до масштабу {zoom})"
 }

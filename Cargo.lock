@@ -3738,6 +3738,7 @@ dependencies = [
  "lightcraft-heif",
  "lightcraft-lensdb",
  "lightcraft-macraw",
+ "lightcraft-map",
  "lightcraft-merge",
  "lightcraft-meta",
  "lightcraft-pipeline",
@@ -3788,7 +3789,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-filepanel"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "block2 0.6.2",
  "objc2 0.6.5",
@@ -3859,7 +3860,7 @@ dependencies = [
 
 [[package]]
 name = "lightcraft-macraw"
-version = "0.16.0"
+version = "0.17.0"
 dependencies = [
  "lightcraft-testkit",
  "objc2 0.6.5",
@@ -3867,6 +3868,21 @@ dependencies = [
  "objc2-core-graphics",
  "objc2-core-image 0.3.2",
  "objc2-foundation 0.3.2",
+]
+
+[[package]]
+name = "lightcraft-map"
+version = "0.17.0"
+dependencies = [
+ "lightcraft-codecs",
+ "lightcraft-fetch",
+ "lightcraft-geom",
+ "log",
+ "png",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "web-time",
 ]
 
 [[package]]
@@ -4045,6 +4061,7 @@ dependencies = [
  "lightcraft-engine",
  "lightcraft-faces",
  "lightcraft-geom",
+ "lightcraft-map",
  "lightcraft-merge",
  "lightcraft-meta",
  "lightcraft-pipeline",

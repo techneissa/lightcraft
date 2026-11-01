@@ -87,6 +87,9 @@ Known failures (on this Mac, and on Fork CI only): [fork/known-failures.md](fork
 - [Lens database folder](fork/lens-database-folder.md): Settings ▸ Import ▸ Lens profiles chooses the lensfun folder and says what it found. Branch `claude/workflow-qol`.
 - [Masking workflow](fork/masking-workflow.md): Add · Subtract · Intersect and a button per kind of part, pick a part to paint into it, Add / Erase named by their effect, Esc steps back, tiles fill the side bar. Branch `fix/26-masking-rework`.
 - [Shared SAM3 model folder](fork/shared-sam3.md): AI masks look for the SAM 3 model in the folder shared with PhotoCraft (`ArtCraft/models/sam3`) first and download there. Branch `feat/16-shared-sam3`.
+- [Book](fork/book.md): File ▸ Book… lays photos out as a photo book (cover, five page templates, Pages and Spread views) and exports a PDF or JPEGs. Branch `feat/23-book`.
+- [Find People and Find Wires](fork/find-people-wires.md): Remove panel buttons that outline people and wires and remove them in one click, with SAM 3 or built-in detectors. Branch `feat/24-find-people-wires`.
+- [Map view](fork/map-view.md): View ▸ Map with pins, drag to geotag, saved locations, location filter and track logs, from the official Map PRs taken early; starts Offline until you pick a tile server. Branch `feat/4-map-view`.
 - [Real Subject, Sky and Background masks](fork/real-subject-sky-masks.md): Subject, Sky and Background are real SAM 3 selections stored with the mask (official PR #3109, trimmed), a rough mask says so. Branch `feat/37-real-subject-sky-masks`.
 
 Every feature also has an entry in `docs/whats-new.md` and a row in `docs/parity-checklist.md`; clashes there are

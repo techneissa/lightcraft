@@ -64,7 +64,13 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     let cell_w = 120.0;
     let ppp = ui.ctx().pixels_per_point();
     if ids.is_empty() {
-        let why = if app.session.filter != Default::default() { "No photos match the filters (View → Clear Filters)" } else { "No photos" };
+        let why = if app.session.narrow.is_some() && app.ui.view == crate::state::ViewMode::Map {
+            "No photos match the location filter"
+        } else if app.session.filter != Default::default() {
+            "No photos match the filters (View → Clear Filters)"
+        } else {
+            "No photos"
+        };
         // a label, not painted text, so a screen reader reads the reason; the region keeps the strip navigable
         let mut empty = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::centered_and_justified(egui::Direction::TopDown)));
         crate::widgets::announce_region(&empty, egui::accesskit::Role::Region, crate::i18n::tr("Filmstrip"));
