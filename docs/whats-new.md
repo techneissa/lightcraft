@@ -8,6 +8,9 @@
 ### Fixed Slider Label Column
 - In the Edit and Masking panels the slider names are left-aligned in one column of fixed width, so opening or closing a section (Noise Reduction has long names) no longer moves any name or shortens any slider.
 
+### Shorter Slider Label Column
+- The slider label column in Edit and Masking now fits the common names (Highlights, Saturation, Vibrance), so the sliders are longer. A longer name (Color Noise Reduction) uses a slightly smaller font, then wraps onto two lines, and its row gets a little taller; the column still never moves.
+
 ### Shared SAM 3 Model Folder
 - AI masks look for the SAM 3 model in `~/Library/Application Support/ArtCraft/models/sam3` (shared with PhotoCraft) first, and a download goes there.
 
