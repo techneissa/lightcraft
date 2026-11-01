@@ -90,3 +90,20 @@ fn masking_long_names_and_describe_controls_stay_inside_the_panel() {
         }
     }
 }
+
+/// The kind buttons of Create New Mask fill the panel's width, at a narrow and at a wide side bar: the right-most
+/// tile ends where the panel's content does (within a gap), and the wide bar has wider tiles than the narrow one.
+#[test]
+fn create_new_mask_tiles_follow_the_side_bars_width() {
+    let mut widths = Vec::new();
+    for width in [270.0, 520.0] {
+        let (_, widgets) = panel(width, 1.0, Locale::En, false);
+        let tiles: Vec<Rect> = widgets.iter().filter(|(id, _)| id.starts_with("maskNew:")).map(|(_, r)| *r).collect();
+        assert_eq!(tiles.len(), 10);
+        let right = tiles.iter().map(|r| r.right()).fold(0.0, f32::max);
+        let content_right = width - 22.0;
+        assert!(content_right - right < 8.0 && right <= content_right + 0.5, "{width}: tiles end at {right}, the panel at {content_right}");
+        widths.push((tiles[0].width(), tiles.iter().filter(|r| (r.top() - tiles[0].top()).abs() < 1.0).count()));
+    }
+    assert!(widths[1].0 > widths[0].0 + 8.0 || widths[1].1 > widths[0].1, "{widths:?}: the wide side bar shows more or wider tiles");
+}
