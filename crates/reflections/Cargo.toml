@@ -3,7 +3,7 @@ name = "lightcraft-reflections"
 version.workspace = true
 edition.workspace = true
 license = "Apache-2.0"
-description = "Local DSRNet reflection inference in Rust (L3); user-installed weights"
+description = "Local DSRNet and DIRS reflection inference in Rust (L3); user-installed weights"
 [lints]
 workspace = true
 [dependencies]
@@ -11,6 +11,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 sha2 = { workspace = true }
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lightcraft-fetch = { workspace = true }
 candle-core = { workspace = true }
 candle-nn = { workspace = true }
 [target.'cfg(target_os = "macos")'.dependencies]

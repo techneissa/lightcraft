@@ -222,7 +222,7 @@ impl Net {
 /// Candle 0.9.2's CPU tiled convolution can mistake equal channel/spatial
 /// strides for channels-last storage. A padded view prevents that layout alias
 /// without changing pixels; Metal and ordinary CPU layouts use the normal path.
-fn conv2d(x: &Tensor, kernel: &Tensor, padding: usize, stride: usize) -> R<Tensor> {
+pub(crate) fn conv2d(x: &Tensor, kernel: &Tensor, padding: usize, stride: usize) -> R<Tensor> {
     let (_, channels, h, w) = x.dims4()?;
     let aliases =
         matches!(x.device(), Device::Cpu) && kernel.dim(2)? > 1 && channels > 1 && x.stride() == [channels * h * w, channels * w, channels, 1];

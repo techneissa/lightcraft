@@ -1331,6 +1331,7 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         | "reflection.toggle"
         | "reflection.panel"
         | "reflection.install"
+        | "reflection.download"
         | "reflection.models"
         | "reflection.instructions" => {
             app.ui.right = RightPanel::Remove;

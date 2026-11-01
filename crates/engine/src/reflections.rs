@@ -6,6 +6,7 @@ use lightcraft_raster::Rgb32f;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+pub mod dirs;
 mod shared_models;
 
 const MAGIC: &[u8; 8] = b"LCREFL01";
@@ -156,18 +157,18 @@ pub fn models_dir() -> Option<std::path::PathBuf> {
     )
 }
 pub fn valid_model(model: &str) -> bool {
-    matches!(model, "dsrnet-s" | "dsrnet-l" | "dsrnet-l-nature")
+    matches!(model, "dsrnet-s" | "dsrnet-l" | "dsrnet-l-nature" | "dirs-mugi")
 }
 #[cfg(not(target_arch = "wasm32"))]
 pub fn available_model(model: &str) -> bool {
-    valid_model(model) && models_dir().is_some_and(|p| lightcraft_reflections::installed(&p.join(model)))
+    valid_model(model) && models_dir().is_some_and(|p| lightcraft_reflections::installed_model(&p.join(model), model))
 }
 #[cfg(target_arch = "wasm32")]
 pub fn available_model(_model: &str) -> bool {
     false
 }
 pub fn available() -> bool {
-    available_model("dsrnet-s")
+    ["dirs-mugi", "dsrnet-s", "dsrnet-l-nature", "dsrnet-l"].iter().any(|m| available_model(m))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -177,7 +178,7 @@ pub fn make(source: crate::media::SourceRef, key: Option<Hash128>, edge: u32, mo
         return Err("Invalid reflection model or quality".into());
     }
     let dir = models_dir().ok_or("No reflection model directory")?.join(model);
-    let net = lightcraft_reflections::Net::load(&dir, false)?;
+    let net = lightcraft_reflections::Runner::load(&dir, model, false)?;
     let src = source.load()?;
     let small = lightcraft_raster::resample::fit(&src, edge as usize, edge as usize, lightcraft_raster::resample::Filter::Lanczos3);
     let matrix = lightcraft_color::REC2020.to_space(&lightcraft_color::SRGB);

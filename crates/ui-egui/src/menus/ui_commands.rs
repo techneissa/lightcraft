@@ -251,6 +251,7 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("reflection.toggle", "Reflection Visibility", None, ""),
     ("reflection.panel", "Reflections", None, ""),
     ("reflection.install", "Install Reflection Model…", None, ""),
+    ("reflection.download", "Download Reflection Model…", None, ""),
     ("reflection.instructions", "Model download instructions", None, ""),
     ("reflection.models", "Reflection Models", None, ""),
     ("reflection.status", "Reflection Status", None, ""),

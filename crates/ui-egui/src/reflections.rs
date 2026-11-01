@@ -3,16 +3,25 @@ use crate::{LightcraftApp, i18n::tr};
 use lightcraft_catalog::PhotoId;
 use serde_json::{Value, json};
 pub(crate) const TASK: &str = "Reflection Removal";
-const MODELS: [(&str, &str); 3] = [("dsrnet-s", "DSRNet-S"), ("dsrnet-l-nature", "DSRNet-L (Nature)"), ("dsrnet-l", "DSRNet-L")];
+const MODELS: [(&str, &str); 4] =
+    [("dirs-mugi", "DIRS-MuGI"), ("dsrnet-s", "DSRNet-S"), ("dsrnet-l-nature", "DSRNet-L (Nature)"), ("dsrnet-l", "DSRNet-L")];
 
 pub fn command(app: &mut LightcraftApp, name: &str, p: &Value) -> Result<Value, String> {
     if name == "reflection.instructions" {
         let open = app.services.open_url.as_mut().ok_or("No browser service available")?;
-        open("https://github.com/mingcv/DSRNet#trained-weights")?;
+        let url = if p.get("model").and_then(Value::as_str) == Some(lightcraft_engine::reflections::dirs::MODEL) {
+            lightcraft_engine::reflections::dirs::PAGE
+        } else {
+            "https://github.com/mingcv/DSRNet#trained-weights"
+        };
+        open(url)?;
         return Ok(json!({"opened":true}));
     }
     if name == "reflection.install" {
         return install(app, p);
+    }
+    if name == "reflection.download" {
+        return download(app, p);
     }
     if name == "reflection.models" {
         return Ok(
@@ -86,6 +95,9 @@ fn install(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
         Some("reflection"),
         move || -> Result<String, String> {
             let source = std::path::Path::new(&path);
+            if lightcraft_engine::reflections::dirs::is_dirs_folder(source) {
+                return lightcraft_engine::reflections::dirs::install_folder(source, &root);
+            }
             let (m, bytes) = lightcraft_reflection_install(source)?;
             let target = root.join(&m);
             if target.exists() {
@@ -113,6 +125,47 @@ fn install(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
         },
     )?;
     Ok(json!({"background":true}))
+}
+/// Downloads DIRS-MuGI's two files (about 1.1 GB) from Hugging Face into the models folder. Nothing is fetched
+/// unless the caller passes `accepted: true`, which the panel's Download button sets only after its question.
+#[cfg(not(target_arch = "wasm32"))]
+fn download(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    use lightcraft_engine::reflections::dirs;
+    if p.get("accepted").and_then(Value::as_bool) != Some(true) {
+        return Err(format!(
+            "Downloading needs a yes first: {:.1} GB from {}. Run the command again with accepted=true.",
+            dirs::download_bytes() as f64 / 1e9,
+            dirs::PAGE
+        ));
+    }
+    if app.tasks.is_running(TASK) {
+        return Err(tr("Wait for reflection removal to finish").into());
+    }
+    let root = lightcraft_engine::reflections::models_dir().ok_or("No model directory")?;
+    let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let flag = cancel.clone();
+    crate::tasks::spawn_tracked(
+        app,
+        TASK,
+        "reflection",
+        cancel,
+        move |handle| {
+            handle.detail("DIRS-MuGI");
+            dirs::download(&root, &flag, &mut |done, total| handle.progress(done, total))
+        },
+        |app, ctx, result| match result {
+            Ok(model) => {
+                app.reflection_model = model;
+                app.toast(ctx, tr("Reflection model installed"));
+            }
+            Err(e) => app.toast(ctx, format!("{}: {e}", tr("Reflection removal failed"))),
+        },
+    )?;
+    Ok(json!({"background":true}))
+}
+#[cfg(target_arch = "wasm32")]
+fn download(_app: &mut LightcraftApp, _p: &Value) -> Result<Value, String> {
+    Err(tr("Reflection removal requires the desktop app").into())
 }
 #[cfg(not(target_arch = "wasm32"))]
 fn lightcraft_reflection_install(path: &std::path::Path) -> Result<(String, Vec<u8>), String> {
@@ -209,10 +262,12 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         app.reflection_quality = if matches!(d.reflection.quality, 384 | 768 | 1024) { d.reflection.quality } else { 768 };
         app.reflection_model = if lightcraft_engine::reflections::valid_model(&d.reflection.model) {
             d.reflection.model.clone()
-        } else if lightcraft_engine::reflections::available_model("dsrnet-l-nature") {
-            "dsrnet-l-nature".into()
+        } else if let Some(id) =
+            ["dirs-mugi", "dsrnet-l-nature", "dsrnet-s"].into_iter().find(|id| lightcraft_engine::reflections::available_model(id))
+        {
+            id.into()
         } else {
-            "dsrnet-s".into()
+            "dirs-mugi".into()
         };
     }
     let available = lightcraft_engine::reflections::available_model(&app.reflection_model);
@@ -230,7 +285,7 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         ui.horizontal(|ui| {
             ui.add_sized([58.0, 22.0], egui::Label::new(tr("Model")));
-            let label = MODELS.iter().find(|(id, _)| *id == app.reflection_model).map(|(_, name)| *name).unwrap_or("DSRNet-S");
+            let label = MODELS.iter().find(|(id, _)| *id == app.reflection_model).map(|(_, name)| *name).unwrap_or("DIRS-MuGI");
             let r = crate::widgets::combo_box("reflection-model").selected_text(label).show_ui(ui, |ui| {
                 for (id, name) in MODELS {
                     let r = ui.selectable_value(&mut app.reflection_model, id.into(), name);
@@ -256,6 +311,9 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         });
         if !available {
             ui.add(egui::Label::new(tr("Install a reflection model first")).wrap());
+            if app.reflection_model == lightcraft_engine::reflections::dirs::MODEL {
+                download_row(app, ui, busy);
+            }
             let r = ui.add_enabled(!busy, egui::Button::new(tr("Install Reflection Model…")));
             register(ui, "reflection:install", r.rect);
             if r.clicked() {
@@ -264,7 +322,7 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let r = ui.link(tr("Model download instructions"));
             register(ui, "reflection:instructions", r.rect);
             if r.clicked()
-                && let Err(e) = app.run("reflection.instructions", json!({}))
+                && let Err(e) = app.run("reflection.instructions", json!({"model":app.reflection_model}))
             {
                 app.toast(ui.ctx(), e);
             }
@@ -328,12 +386,73 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         );
     });
 }
+/// The Download button, and the question it asks first: nothing is fetched until the second click.
+#[cfg(not(target_arch = "wasm32"))]
+fn download_row(app: &mut LightcraftApp, ui: &mut egui::Ui, busy: bool) {
+    use crate::widgets::register;
+    use lightcraft_engine::reflections::dirs;
+    let asking = egui::Id::unique("reflection-download-asking");
+    if !ui.data(|d| d.get_temp::<bool>(asking).unwrap_or(false)) {
+        let r = ui.add_enabled(!busy, egui::Button::new(format!("{}…", tr("Download"))));
+        register(ui, "reflection:download", r.rect);
+        if r.clicked() {
+            ui.data_mut(|d| d.insert_temp(asking, true));
+        }
+        return;
+    }
+    ui.add(egui::Label::new(format!("DIRS-MuGI · {:.1} GB · huggingface.co", dirs::download_bytes() as f64 / 1e9)).wrap());
+    ui.horizontal(|ui| {
+        let yes = ui.add_enabled(!busy, egui::Button::new(tr("Download")));
+        register(ui, "reflection:download:yes", yes.rect);
+        let no = ui.button(tr("Cancel"));
+        register(ui, "reflection:download:no", no.rect);
+        if yes.clicked() || no.clicked() {
+            ui.data_mut(|d| d.insert_temp(asking, false));
+        }
+        if yes.clicked()
+            && let Err(e) = app.run("reflection.download", json!({"accepted":true}))
+        {
+            app.toast(ui.ctx(), e);
+        }
+    });
+}
+#[cfg(target_arch = "wasm32")]
+fn download_row(_app: &mut LightcraftApp, _ui: &mut egui::Ui, _busy: bool) {}
+
 fn controls(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &lightcraft_develop::DevelopSettings, name: &str, enabled: bool) {
     crate::panels::edit::control(app, ui, d, name, enabled);
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn downloading_a_model_needs_a_yes_first_and_starts_nothing_without_it() {
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Default::default());
+        for p in [json!({}), json!({"accepted":false}), json!({"accepted":"yes"})] {
+            let e = app.run("reflection.download", p).unwrap_err();
+            assert!(e.contains("needs a yes first") && e.contains("huggingface.co"), "{e}");
+        }
+        assert!(!app.tasks.is_running(TASK));
+    }
+
+    #[test]
+    fn dirs_instructions_open_the_hugging_face_page() {
+        let opened = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+        let captured = opened.clone();
+        let services = crate::Services {
+            open_url: Some(Box::new(move |url| {
+                *captured.lock().unwrap() = url.into();
+                Ok(())
+            })),
+            ..Default::default()
+        };
+        let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
+        app.run("reflection.instructions", json!({"model":"dirs-mugi"})).unwrap();
+        assert_eq!(*opened.lock().unwrap(), "https://huggingface.co/huqiming513/DIRS-Models");
+    }
+
     #[test]
     fn reflection_messages_exist_in_every_shipped_language() {
         let messages = [

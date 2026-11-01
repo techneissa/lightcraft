@@ -1,4 +1,4 @@
-//! DSRNet transmission inference, ported from mingcv/DSRNet (Apache-2.0).
+//! DSRNet and DIRS transmission inference, ported from mingcv/DSRNet (Apache-2.0) and mingcv/DIRS.
 //! Modified work: LightCraft contributors, 2026. See NOTICE. No PyTorch process at runtime.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -6,9 +6,49 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
 #[cfg(not(target_arch = "wasm32"))]
+mod dirs;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod download;
+#[cfg(not(target_arch = "wasm32"))]
 mod net;
 #[cfg(not(target_arch = "wasm32"))]
+mod ops;
+#[cfg(not(target_arch = "wasm32"))]
+mod swin;
+#[cfg(not(target_arch = "wasm32"))]
+pub use dirs::{DirsNet, MUGI_CHECKPOINT, SWIN_PRIOR};
+#[cfg(not(target_arch = "wasm32"))]
 pub use net::Net;
+
+/// The model id of DIRS-MuGI (folder name under the models folder).
+pub const DIRS_MUGI: &str = "dirs-mugi";
+pub fn is_dirs(model: &str) -> bool {
+    model == DIRS_MUGI
+}
+/// A model folder is complete: DSRNet has `manifest.json` + `model.safetensors`, DIRS-MuGI the two files
+/// published on Hugging Face (`dirs_mugi_lors.ckpt`, `swin_large_o365.pth`).
+pub fn installed_model(dir: &Path, model: &str) -> bool {
+    if is_dirs(model) { dir.join("dirs_mugi_lors.ckpt").is_file() && dir.join("swin_large_o365.pth").is_file() } else { installed(dir) }
+}
+
+/// Either network behind one call.
+#[cfg(not(target_arch = "wasm32"))]
+pub enum Runner {
+    Dsrnet(Net),
+    Dirs(DirsNet),
+}
+#[cfg(not(target_arch = "wasm32"))]
+impl Runner {
+    pub fn load(dir: &Path, model: &str, cpu: bool) -> Result<Self, String> {
+        if is_dirs(model) { DirsNet::load(dir, cpu).map(Self::Dirs) } else { Net::load(dir, cpu).map(Self::Dsrnet) }
+    }
+    pub fn infer(&self, rgb: &[u8], w: usize, h: usize) -> Result<Vec<[f32; 3]>, String> {
+        match self {
+            Self::Dsrnet(net) => net.infer(rgb, w, h),
+            Self::Dirs(net) => net.infer(rgb, w, h),
+        }
+    }
+}
 
 pub const MAX_EDGE: usize = 1024;
 pub const WEIGHTS: &str = "model.safetensors";
@@ -76,6 +116,20 @@ mod tests {
         std::fs::write(dir.join("manifest.json"), serde_json::to_vec(&m).unwrap()).unwrap();
         std::fs::write(dir.join(WEIGHTS), vec![0u8; 16]).unwrap();
         assert!(verified_weights(&dir).unwrap_err().contains("checksum mismatch"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn a_dirs_folder_needs_both_published_files() {
+        let dir = std::env::temp_dir().join(format!("lc-dirs-installed-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(!installed_model(&dir, DIRS_MUGI));
+        std::fs::write(dir.join("dirs_mugi_lors.ckpt"), b"x").unwrap();
+        assert!(!installed_model(&dir, DIRS_MUGI));
+        std::fs::write(dir.join("swin_large_o365.pth"), b"x").unwrap();
+        assert!(installed_model(&dir, DIRS_MUGI));
+        // A DSRNet model is judged by its own files, not these.
+        assert!(!installed_model(&dir, "dsrnet-s"));
         std::fs::remove_dir_all(dir).unwrap();
     }
 }
