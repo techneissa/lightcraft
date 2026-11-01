@@ -79,8 +79,6 @@ fn seg_param(p: &Value) -> Option<lightcraft_develop::SegMask> {
     p.get("seg").and_then(|v| serde_json::from_value(v.clone()).ok())
 }
 
-pub const SUBJECT_CONCEPT: &str = "person | animal | vehicle | subject, main object, foreground";
-
 /// What a new AI shape still needs once it is added.
 enum Later {
     Nothing,
@@ -88,8 +86,8 @@ enum Later {
     Clicks(Vec<Point>, Vec<Point>),
     /// Background mode: the Describe selection is computed first; the mask is added when found.
     Text(String),
-    /// Background mode: automatic AI selection (Subject, Sky, Background) whose mask/component
-    /// is created immediately so the user can see or delete it while SAM 3 runs.
+    /// Background mode: the Subject, Sky or Background selection is computed first; the mask (or
+    /// part) is added when found, as for Describe, so no rough mask shows while SAM 3 runs.
     Concept {
         kind: &'static str,
         text: String,
@@ -136,35 +134,16 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
             let found = segment(s, |s| s.segment_text(id, text))?;
             *seg = Some(found.ok_or_else(|| ai_err(format!("nothing matching “{text}” was found in this photo")))?);
         }
-        MaskShape::Subject { .. } if s.segmenter.has_model() => {
+        MaskShape::Subject { seg: None, .. } | MaskShape::Sky { seg: None, .. } | MaskShape::Background { seg: None, .. }
+            if super::concepts::wanted(s, id, shape) =>
+        {
+            let Some(c) = super::concepts::of(shape) else { return Ok(Later::Nothing) };
             if background {
                 s.segmenter.require_model()?;
-                return Ok(Later::Concept { kind: "subject", text: SUBJECT_CONCEPT.into(), invert: false });
+                return Ok(Later::Concept { kind: c.kind, text: c.text.into(), invert: c.invert });
             }
-            let found = segment(s, |s| s.segment_text(id, SUBJECT_CONCEPT))?;
-            if let MaskShape::Subject { seg, .. } = shape {
-                *seg = found;
-            }
-        }
-        MaskShape::Sky { .. } if s.segmenter.has_model() => {
-            if background {
-                s.segmenter.require_model()?;
-                return Ok(Later::Concept { kind: "sky", text: "sky".into(), invert: false });
-            }
-            let found = segment(s, |s| s.segment_text(id, "sky"))?;
-            if let MaskShape::Sky { seg, .. } = shape {
-                *seg = found;
-            }
-        }
-        MaskShape::Background { .. } if s.segmenter.has_model() => {
-            if background {
-                s.segmenter.require_model()?;
-                return Ok(Later::Concept { kind: "background", text: SUBJECT_CONCEPT.into(), invert: true });
-            }
-            let found = segment(s, |s| s.segment_text(id, SUBJECT_CONCEPT))?;
-            if let MaskShape::Background { seg, .. } = shape {
-                *seg = found.and_then(|m| m.invert());
-            }
+            let found = segment(s, |s| s.segment_text(id, c.text))?;
+            super::concepts::store(shape, found, &c)?;
         }
         _ => {}
     }
@@ -175,15 +154,10 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
 fn queue_later(s: &mut Session, later: Later, mask: u32, comp: usize, mut out: Value) -> Result<Value> {
     out["id"] = json!(mask);
     match later {
-        Later::Nothing | Later::Text(_) => {}
+        Later::Nothing | Later::Text(_) | Later::Concept { .. } => {}
         Later::Clicks(hint, exclude) => {
             let id = s.active().ok_or_else(|| ai_err("no active photo"))?;
             segment(s, |s| s.segment_clicks_later(id, mask, comp, hint, exclude))?;
-            out["pending"] = json!(true);
-        }
-        Later::Concept { kind, text, invert } => {
-            let id = s.active().ok_or_else(|| ai_err("no active photo"))?;
-            segment(s, |s| s.segment_concept_later(id, Some(mask), Some((mask, comp)), "add", None, kind, &text, invert))?;
             out["pending"] = json!(true);
         }
     }
@@ -320,6 +294,11 @@ pub fn specs() -> Vec<CommandSpec> {
                     segment(s, |s| s.segment_text_later(id, None, "add", name, text))?;
                     return Ok(json!({"pending": true}));
                 }
+                if let Later::Concept { kind, text, invert } = &later {
+                    let id = s.active().ok_or_else(|| bad("mask.add", "no active photo"))?;
+                    segment(s, |s| s.segment_concept_later(id, None, "add", name, kind, text, *invert))?;
+                    return Ok(json!({"pending": true}));
+                }
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
                 // the effect last applied to a mask of this kind
                 let adjust = super::mask_effects::new_mask_adjust(s, &kind);
@@ -359,6 +338,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Later::Text(text) = &later {
                     let op = p.get("op").and_then(Value::as_str).unwrap_or("add");
                     segment(s, |s| s.segment_text_later(id, Some(mid), op, None, text))?;
+                    return Ok(json!({"pending": true}));
+                }
+                if let Later::Concept { kind, text, invert } = &later {
+                    let op = p.get("op").and_then(Value::as_str).unwrap_or("add");
+                    segment(s, |s| s.segment_concept_later(id, Some(mid), op, None, kind, text, *invert))?;
                     return Ok(json!({"pending": true}));
                 }
                 let mut comp = 0;

@@ -549,6 +549,10 @@ pub(super) fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: u
                 }
             }
         }
+        // the classical heuristic draws it: a line says so (no Edge, there is no selection to soften)
+        MaskShape::Subject { seg: None, .. } | MaskShape::Sky { seg: None, .. } | MaskShape::Background { seg: None, .. } => {
+            super::rough_mask::line(app, ui, shape);
+        }
         MaskShape::Object { edge, .. }
         | MaskShape::Prompt { edge, .. }
         | MaskShape::Subject { edge, .. }

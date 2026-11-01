@@ -668,7 +668,7 @@ fn ai_masks_with_segmask_sample_segmentation() {
 }
 
 #[test]
-fn stored_segmentation_takes_precedence_over_source_mattes() {
+fn embedded_mattes_win_over_a_stored_segmentation() {
     use lightcraft_develop::SegMask;
     let (w, h) = (100, 100);
     let img = Rgb32f::filled(w, h, [0.5; 3]);
@@ -685,21 +685,17 @@ fn stored_segmentation_takes_precedence_over_source_mattes() {
     let logits: Vec<f32> = (0..side * side).map(|i| if (i % side) >= side / 2 { 10.0 } else { -10.0 }).collect();
     let seg = SegMask::from_logits(side, &logits);
 
-    // Sky with stored seg uses the segmentation (right half selected), ignoring the sky matte (left half)
+    // the source's own matte wins over a stored segmentation, for Sky and Subject
     let sky_stored = MaskShape::Sky { seg: Some(seg.clone()), detail: vec![], edge: 0.0 };
     let sky_alpha = shape_alpha(&sky_stored, &f, w, h, &img, &l, 0.0, Some(&mattes));
-    assert!(sky_alpha.get(90, 50) > 0.99, "stored segmentation wins for sky (right half): {}", sky_alpha.get(90, 50));
-    assert!(sky_alpha.get(10, 50) < 0.01, "matte fallback skipped when stored seg present: {}", sky_alpha.get(10, 50));
-
-    // Subject with stored seg uses the segmentation, ignoring the person matte
-    let subj_stored = MaskShape::Subject { seg: Some(seg), detail: vec![], edge: 0.0 };
+    assert!(sky_alpha.get(10, 50) > 0.99, "the sky matte (left half) wins: {}", sky_alpha.get(10, 50));
+    assert!(sky_alpha.get(90, 50) < 0.01, "the stored segmentation is not used: {}", sky_alpha.get(90, 50));
+    let subj_stored = MaskShape::Subject { seg: Some(seg.clone()), detail: vec![], edge: 0.0 };
     let subj_alpha = shape_alpha(&subj_stored, &f, w, h, &img, &l, 0.0, Some(&mattes));
-    assert!(subj_alpha.get(90, 50) > 0.99, "stored segmentation wins for subject: {}", subj_alpha.get(90, 50));
-    assert!(subj_alpha.get(10, 50) < 0.01, "matte fallback skipped for subject: {}", subj_alpha.get(10, 50));
+    assert!(subj_alpha.get(10, 50) > 0.99, "the person matte (left half) wins: {}", subj_alpha.get(10, 50));
 
-    // Sky without stored seg falls back to the matte (left half)
-    let sky_fallback = MaskShape::sky();
-    let fb_alpha = shape_alpha(&sky_fallback, &f, w, h, &img, &l, 0.0, Some(&mattes));
-    assert!(fb_alpha.get(10, 50) > 0.99, "fallback uses matte: {}", fb_alpha.get(10, 50));
-    assert!(fb_alpha.get(90, 50) < 0.01, "fallback leaves unselected: {}", fb_alpha.get(90, 50));
+    // without a matte the stored segmentation is used
+    let sky_alpha = shape_alpha(&sky_stored, &f, w, h, &img, &l, 0.0, None);
+    assert!(sky_alpha.get(90, 50) > 0.99, "no matte: the stored segmentation (right half): {}", sky_alpha.get(90, 50));
+    assert!(sky_alpha.get(10, 50) < 0.01, "no matte: left half unselected: {}", sky_alpha.get(10, 50));
 }

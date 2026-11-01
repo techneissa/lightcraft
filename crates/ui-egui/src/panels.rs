@@ -35,6 +35,7 @@ pub mod presets;
 pub mod profiles;
 pub mod quick_filters;
 pub mod right;
+pub mod rough_mask;
 pub mod second;
 pub mod selection_order;
 pub mod slideshow;

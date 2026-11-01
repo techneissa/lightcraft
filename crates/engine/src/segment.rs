@@ -64,9 +64,9 @@ pub(crate) enum Tag {
     Clicks { photo: PhotoId, mask: u32, comp: usize, hint: Vec<Point>, exclude: Vec<Point> },
     /// A Describe selection: a new mask (`mask: None`) or a component combined by `op`.
     NewPrompt { photo: PhotoId, mask: Option<u32>, op: String, name: Option<String>, text: String },
-    /// An automatic AI concept selection (Subject, Sky, Background): updates `target: Some((mask, comp))`
-    /// created immediately in background mode, or creates a new mask/component when `target: None`.
-    NewConcept { photo: PhotoId, mask: Option<u32>, target: Option<(u32, usize)>, op: String, name: Option<String>, kind: String, invert: bool },
+    /// A Subject, Sky or Background selection: a new mask (`mask: None`) or a component combined by `op`, added when
+    /// SAM 3 has found it (`invert`: Background, the subject turned around).
+    NewConcept { photo: PhotoId, mask: Option<u32>, op: String, name: Option<String>, kind: String, invert: bool },
     /// A zoomed-in pass for a component, computed from `shape` (without its detail).
     Detail { photo: PhotoId, mask: u32, comp: usize, shape: MaskShape },
 }
@@ -78,6 +78,18 @@ struct InFlight {
     tag: Tag,
     cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
     detail: bool,
+    /// The job's row in the activity stack; it goes when the job leaves `in_flight`.
+    _task: crate::activity::TaskGuard,
+}
+
+/// The activity row's label for a request on the worker.
+#[cfg_attr(not(feature = "sam"), allow(dead_code))]
+fn activity_label(tag: &Tag) -> &'static str {
+    match tag {
+        Tag::Prepare | Tag::Warmup => "Analyzing the photo for AI masks…",
+        Tag::Detail { .. } => "Refining the mask's detail…",
+        _ => "Selecting with SAM 3",
+    }
 }
 
 /// The model input: 8-bit RGB.
@@ -268,7 +280,7 @@ impl Segmenter {
             let matches_mask = match &job.tag {
                 Tag::Clicks { photo: p, mask: m, .. } | Tag::Detail { photo: p, mask: m, .. } => *p == photo && *m == mask,
                 Tag::NewPrompt { photo: p, mask: Some(m), .. } => *p == photo && *m == mask,
-                Tag::NewConcept { photo: p, mask: m, target, .. } => *p == photo && (*m == Some(mask) || target.is_some_and(|(tm, _)| tm == mask)),
+                Tag::NewConcept { photo: p, mask: Some(m), .. } => *p == photo && *m == mask,
                 _ => false,
             };
             if matches_mask {
@@ -518,25 +530,10 @@ impl Session {
                     active == Some(*photo) && self.develop_of(*photo).is_some_and(|d| d.masks.iter().any(|m| m.id == *mask))
                 }
                 Tag::NewPrompt { photo, mask: None, .. } => active == Some(*photo),
-                Tag::NewConcept { photo, mask, target, kind, .. } => {
-                    active == Some(*photo)
-                        && match target {
-                            Some((tm, tc)) => self.develop_of(*photo).is_some_and(|d| {
-                                d.masks.iter().find(|m| m.id == *tm).and_then(|m| m.components.get(*tc)).is_some_and(|c| {
-                                    matches!(
-                                        (kind.as_str(), &c.shape),
-                                        ("subject", MaskShape::Subject { seg: None, .. })
-                                            | ("sky", MaskShape::Sky { seg: None, .. })
-                                            | ("background", MaskShape::Background { seg: None, .. })
-                                    )
-                                })
-                            }),
-                            None => match mask {
-                                Some(m) => self.develop_of(*photo).is_some_and(|d| d.masks.iter().any(|x| x.id == *m)),
-                                None => true,
-                            },
-                        }
+                Tag::NewConcept { photo, mask: Some(mask), .. } => {
+                    active == Some(*photo) && self.develop_of(*photo).is_some_and(|d| d.masks.iter().any(|m| m.id == *mask))
                 }
+                Tag::NewConcept { photo, mask: None, .. } => active == Some(*photo),
             };
             if valid {
                 i += 1;
@@ -630,7 +627,8 @@ impl Session {
         let job_id = job.id;
         let cancel = job.cancel.clone();
         self.segmenter.worker.submit(job)?;
-        self.segmenter.in_flight.push(InFlight { id: job_id, tag, cancel, detail });
+        let task = self.activity.start("segment", activity_label(&tag), crate::activity::Cancel::Flag(cancel.clone()));
+        self.segmenter.in_flight.push(InFlight { id: job_id, tag, cancel, detail, _task: task });
         Ok(())
     }
 
@@ -779,15 +777,13 @@ impl Session {
         }
     }
 
-    /// Background mode: queue an automatic AI selection (Subject, Sky, Background); updates the
-    /// immediately-created `target` mask/component (or creates one if `target` is `None`) when
-    /// the model finishes.
-    #[allow(clippy::too_many_arguments)]
+    /// Background mode: queue a Subject, Sky or Background selection; the mask (or component, combined by `op` into
+    /// mask `mask`) is created by [`Session::segment_poll`] when SAM 3 has found it. `text` is what the model is asked
+    /// for, `invert` turns the result around (Background).
     pub(crate) fn segment_concept_later(
         &mut self,
         id: PhotoId,
         mask: Option<u32>,
-        target: Option<(u32, usize)>,
         op: &str,
         name: Option<String>,
         kind: &str,
@@ -798,12 +794,12 @@ impl Session {
         let text = text.trim();
         #[cfg(feature = "sam")]
         {
-            let tag = Tag::NewConcept { photo: id, mask, target, op: op.to_string(), name, kind: kind.to_string(), invert };
+            let tag = Tag::NewConcept { photo: id, mask, op: op.to_string(), name, kind: kind.to_string(), invert };
             self.segment_queue(id, worker::Kind::Text(text.to_string()), tag, None)
         }
         #[cfg(not(feature = "sam"))]
         {
-            let _ = (id, mask, target, op, name, kind, text, invert);
+            let _ = (id, mask, op, name, kind, text, invert);
             Err("AI masks are not available in this build".into())
         }
     }
@@ -823,8 +819,8 @@ impl Session {
                 (seg.clone(), Prompt::Clicks(clicks_of(hint, exclude)))
             }
             MaskShape::Prompt { text, seg: Some(seg), .. } => (seg.clone(), Prompt::Text(text.clone())),
-            MaskShape::Subject { seg: Some(seg), .. } => (seg.clone(), Prompt::Text(crate::cmd::SUBJECT_CONCEPT.into())),
-            MaskShape::Sky { seg: Some(seg), .. } => (seg.clone(), Prompt::Text("sky".into())),
+            MaskShape::Subject { seg: Some(seg), .. } => (seg.clone(), Prompt::Text(crate::cmd::concepts::SUBJECT.into())),
+            MaskShape::Sky { seg: Some(seg), .. } => (seg.clone(), Prompt::Text(crate::cmd::concepts::SKY.into())),
             _ => return Ok(false),
         };
         let p = self.catalog.photo(id).ok_or("no such photo")?;
@@ -955,7 +951,7 @@ impl Session {
                     Err(e) => polled.messages.push(e.to_string()),
                 }
             }
-            Tag::NewConcept { photo, mask, target, op, name, kind, invert } => {
+            Tag::NewConcept { photo, mask, op, name, kind, invert } => {
                 let seg = match o.result {
                     Ok(Some(mut seg)) => {
                         if invert {
@@ -964,37 +960,11 @@ impl Session {
                         }
                         seg
                     }
-                    Ok(None) => return polled.messages.push(format!("No {kind} was found in this photo.")),
+                    Ok(None) => return polled.messages.push(crate::cmd::concepts::not_found(&kind)),
                     Err(e) => return polled.messages.push(e),
                 };
                 if self.active() != Some(photo) {
                     return polled.messages.push(format!("The photo changed before {kind} was found; try again."));
-                }
-                if let Some((tm, tc)) = target {
-                    let Some(d) = self.develop_of(photo) else { return };
-                    let mut d = (*d).clone();
-                    let Some(c) = d.masks.iter_mut().find(|m| m.id == tm).and_then(|m| m.components.get_mut(tc)) else {
-                        return;
-                    };
-                    match (&mut c.shape, kind.as_str()) {
-                        (MaskShape::Subject { seg: s_dst, detail, .. }, "subject")
-                        | (MaskShape::Sky { seg: s_dst, detail, .. }, "sky")
-                        | (MaskShape::Background { seg: s_dst, detail, .. }, "background")
-                            if s_dst.is_none() =>
-                        {
-                            *s_dst = Some(seg);
-                            detail.clear();
-                        }
-                        _ => return,
-                    }
-                    match self.set_develop(photo, d, "AI Mask") {
-                        Ok(()) => {
-                            polled.changed = true;
-                            polled.refine = Some(tm);
-                        }
-                        Err(e) => polled.messages.push(e.to_string()),
-                    }
-                    return;
                 }
                 let Ok(seg_val) = serde_json::to_value(seg) else { return };
                 let mut p = serde_json::json!({"kind": kind, "seg": seg_val});
@@ -1065,129 +1035,97 @@ mod tests {
         assert!(s.segment_poll().messages.is_empty(), "once");
     }
 
+    /// A session whose model folder looks installed (the worker is never asked in these tests: results are sent by hand).
     #[cfg(feature = "sam")]
-    #[test]
-    fn concept_masks_use_sam_when_installed() {
+    fn session_with_a_model(name: &str) -> (Session, std::path::PathBuf) {
         let mut s = Session::with_demo();
         s.segmenter.background = true;
-        let dir = std::env::temp_dir().join(format!("lc-test-sam-concept-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("lc-test-sam-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("model.safetensors"), b"\x10\x00\x00\x00\x00\x00\x00\x00{}").unwrap();
         std::fs::write(dir.join("vocab.json"), b"{}").unwrap();
         std::fs::write(dir.join("merges.txt"), b"#version: 0.2\n").unwrap();
         s.segmenter.dir = Some(dir.clone());
         assert!(s.segmenter.installed());
-
-        let r = s.execute("mask.add", &serde_json::json!({"kind": "subject"})).unwrap();
-        assert_eq!(r["pending"], true, "subject mask should queue in background mode");
-        let mid1 = r["id"].as_u64().unwrap() as u32;
-
-        let r = s.execute("mask.add", &serde_json::json!({"kind": "sky"})).unwrap();
-        assert_eq!(r["pending"], true, "sky mask should queue in background mode");
-
-        let r = s.execute("mask.add", &serde_json::json!({"kind": "background"})).unwrap();
-        assert_eq!(r["pending"], true, "background mask should queue in background mode");
-        assert_eq!(s.segmenter.in_flight.len(), 3, "three jobs queued");
-
-        let photo = s.active().unwrap();
-        let seg = SegMask::from_logits(4, &[5.0; 16]);
-        s.segmenter
-            .results
-            .0
-            .send(worker::Outcome {
-                id: 0,
-                tag: Tag::NewConcept {
-                    photo,
-                    mask: None,
-                    target: Some((mid1, 0)),
-                    op: "add".into(),
-                    name: None,
-                    kind: "subject".into(),
-                    invert: false,
-                },
-                result: Ok(Some(seg)),
-                superseded: false,
-                notice: None,
-            })
-            .unwrap();
-
-        let polled = s.segment_poll();
-        assert!(polled.changed);
-        let d = s.develop_of(photo).unwrap();
-        assert_eq!(d.masks[0].id, mid1);
-        assert_eq!(d.masks[0].name, "Mask 1");
-        let lightcraft_develop::MaskShape::Subject { seg: Some(ref s_seg), .. } = d.masks[0].components[0].shape else {
-            panic!("expected Subject with Some(seg)");
-        };
-        assert_eq!(s_seg.side, 4);
-
-        // Deleting a mask while AI is still running immediately cancels its in-flight job and clears busy()!
-        s.execute("mask.deleteAll", &serde_json::json!({})).unwrap();
-        assert!(s.segmenter.in_flight.is_empty(), "all in-flight jobs cancelled immediately");
-        assert!(!s.segmenter.busy(), "segmenter is no longer busy after deleting masks");
-        assert!(!s.segmenter.analyzing(), "segmenter is no longer analyzing after deleting masks");
-
-        let _ = std::fs::remove_dir_all(&dir);
+        (s, dir)
     }
 
     #[cfg(feature = "sam")]
+    fn concept_outcome(photo: PhotoId, mask: Option<u32>, kind: &str, invert: bool, seg: SegMask) -> worker::Outcome {
+        let tag = Tag::NewConcept { photo, mask, op: "add".into(), name: None, kind: kind.into(), invert };
+        worker::Outcome { id: 0, tag, result: Ok(Some(seg)), superseded: false, notice: None }
+    }
+
+    /// Subject, Sky and Background wait for SAM 3 like Describe: no rough mask shows meanwhile, the work has a row in
+    /// the activity stack, and the mask appears with its stored segmentation (Background turned around).
+    #[cfg(feature = "sam")]
     #[test]
-    fn concept_masks_reconciliation_validates_identity_and_avoids_overwriting_mismatched_component() {
-        let mut s = Session::with_demo();
-        s.segmenter.background = true;
-        let dir = std::env::temp_dir().join(format!("lc-test-sam-identity-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("model.safetensors"), b"\x10\x00\x00\x00\x00\x00\x00\x00{}").unwrap();
-        std::fs::write(dir.join("vocab.json"), b"{}").unwrap();
-        std::fs::write(dir.join("merges.txt"), b"#version: 0.2\n").unwrap();
-        s.segmenter.dir = Some(dir.clone());
-
-        // Queue a Subject mask in background mode: target is (mid1, 0)
-        let r = s.execute("mask.add", &serde_json::json!({"kind": "subject"})).unwrap();
-        let mid1 = r["id"].as_u64().unwrap() as u32;
-        assert_eq!(s.segmenter.in_flight.len(), 1);
-
-        // Replace component 0 with a Sky component
+    fn concept_masks_are_added_when_sam_has_found_them() {
+        let (mut s, dir) = session_with_a_model("concept");
         let photo = s.active().unwrap();
-        let mut d = (*s.develop_of(photo).unwrap()).clone();
-        d.masks[0].components[0].shape = MaskShape::sky();
-        s.set_develop(photo, d, "change to sky").unwrap();
+        for kind in ["subject", "sky", "background"] {
+            let r = s.execute("mask.add", &serde_json::json!({"kind": kind})).unwrap();
+            assert_eq!(r["pending"], true, "{kind} is queued in background mode");
+        }
+        assert_eq!(s.segmenter.in_flight.len(), 3, "three jobs queued");
+        assert!(s.develop_of(photo).unwrap().masks.is_empty(), "no mask (and no rough one) before SAM 3 has found it");
+        let rows: Vec<_> = s.activity.list().into_iter().filter(|t| t.kind == "segment").collect();
+        assert_eq!(rows.len(), 3, "each job has a row in the activity stack: {rows:?}");
 
-        // Reconcile should detect the identity change and cancel the in-flight job
-        s.reconcile_segmenter();
-        assert!(s.segmenter.in_flight.is_empty(), "in-flight job should be cancelled on identity mismatch");
-
-        // Even if an outcome arrives for the original Subject job targeting (mid1, 0),
-        // poll_segmenter must NOT overwrite the Sky component!
         let seg = SegMask::from_logits(4, &[5.0; 16]);
-        s.segmenter
-            .results
-            .0
-            .send(worker::Outcome {
-                id: 0,
-                tag: Tag::NewConcept {
-                    photo,
-                    mask: None,
-                    target: Some((mid1, 0)),
-                    op: "add".into(),
-                    name: None,
-                    kind: "subject".into(),
-                    invert: false,
-                },
-                result: Ok(Some(seg)),
-                superseded: false,
-                notice: None,
-            })
-            .unwrap();
-
+        s.segmenter.results.0.send(concept_outcome(photo, None, "subject", false, seg.clone())).unwrap();
         let polled = s.segment_poll();
-        assert!(!polled.changed, "mismatched component shape must not be modified");
+        assert!(polled.changed);
         let d = s.develop_of(photo).unwrap();
-        let lightcraft_develop::MaskShape::Sky { seg: sky_seg, .. } = &d.masks[0].components[0].shape else {
-            panic!("component 0 should remain Sky");
+        let MaskShape::Subject { seg: Some(stored), .. } = &d.masks[0].components[0].shape else {
+            panic!("expected a Subject with its segmentation")
         };
-        assert!(sky_seg.is_none(), "sky component must not be overwritten by subject segmentation");
+        assert_eq!(stored.side, 4);
+        assert!(s.segmenter.in_flight.iter().all(|j| j.id != 0), "the finished job is gone");
 
+        // Background: the subject turned around
+        s.segmenter.results.0.send(concept_outcome(photo, None, "background", true, seg.clone())).unwrap();
+        s.segment_poll();
+        let d = s.develop_of(photo).unwrap();
+        let MaskShape::Background { seg: Some(stored), .. } = &d.masks[1].components[0].shape else {
+            panic!("expected a Background with its segmentation")
+        };
+        assert_eq!(stored.logits().unwrap().iter().map(|l| l.signum()).collect::<Vec<_>>(), vec![-1.0; 16], "everything but the subject");
+
+        // deleting every mask cancels what is still running
+        s.execute("mask.deleteAll", &serde_json::json!({})).unwrap();
+        assert!(!s.segmenter.busy() && !s.segmenter.analyzing());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Nothing found: a message, never a rough mask. A job whose mask was deleted meanwhile is cancelled.
+    #[cfg(feature = "sam")]
+    #[test]
+    fn concept_masks_report_nothing_found_and_follow_their_mask() {
+        let (mut s, dir) = session_with_a_model("concept-none");
+        let photo = s.active().unwrap();
+        s.execute("mask.add", &serde_json::json!({"kind": "radial"})).unwrap();
+        let mid = s.active_mask.unwrap();
+        s.execute("mask.addComponent", &serde_json::json!({"id": mid, "op": "add", "kind": "sky"})).unwrap();
+        assert_eq!(s.segmenter.in_flight.len(), 1);
+        let none = worker::Outcome {
+            id: s.segmenter.in_flight[0].id,
+            tag: Tag::NewConcept { photo, mask: Some(mid), op: "add".into(), name: None, kind: "sky".into(), invert: false },
+            result: Ok(None),
+            superseded: false,
+            notice: None,
+        };
+        s.segmenter.results.0.send(none).unwrap();
+        let polled = s.segment_poll();
+        assert!(!polled.changed && polled.messages.iter().any(|m| m.contains("No sky was found")), "{:?}", polled.messages);
+        assert_eq!(s.develop_of(photo).unwrap().masks[0].components.len(), 1, "no rough part was added");
+
+        // the mask is deleted while SAM 3 works: the job is cancelled, its row goes
+        s.execute("mask.addComponent", &serde_json::json!({"id": mid, "op": "add", "kind": "subject"})).unwrap();
+        assert_eq!(s.segmenter.in_flight.len(), 1);
+        s.execute("mask.delete", &serde_json::json!({"id": mid})).unwrap();
+        assert!(s.segmenter.in_flight.is_empty(), "cancelled with its mask");
+        assert!(s.activity.list().iter().all(|t| t.kind != "segment"), "no row is left");
         let _ = std::fs::remove_dir_all(&dir);
     }
 
