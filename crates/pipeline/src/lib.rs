@@ -29,6 +29,7 @@ pub mod colorops;
 pub mod cull;
 pub mod curve;
 pub mod dust;
+pub mod find;
 pub mod finish;
 pub mod geometry;
 pub mod local;
