@@ -2400,7 +2400,7 @@ fn the_colour_look_is_fitted_on_the_vignetting_corrected_sensor() {
     let (raw, bytes) = grey_raw_with_jpeg((w, h), |x, y| scene(x, y) / gain(x, y), scene, [1.0, 0.9, 0.8]);
     let lens = EmbeddedLens { vignette: Some(vignette), ..Default::default() };
     let at_quarter = |embedded: Option<&EmbeddedLens>| {
-        let (_, _, look) = starting_colour(&mut raw.clone(), &bytes, None, embedded);
+        let (_, _, look) = starting_colour(&mut raw.clone(), &bytes, None, embedded, lightcraft_develop::CameraColour::Auto);
         let look = look.expect("a colour look");
         assert!(look.matrix != Mat3::IDENTITY || look.hue_sat.is_some(), "the colour fit, not the black-and-white one");
         ToneMap::camera(&look.tone, 0.0, 0.0, 0.0).apply(0.25)
