@@ -27,6 +27,18 @@ const TRAY_H: f32 = 64.0;
 /// Pages per row in the overview.
 const PER_ROW: usize = 4;
 
+/// Where Auto Layout takes the photos from.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Source {
+    Selected,
+    #[default]
+    InView,
+}
+
+/// Auto Layout's choices: the preset's name for `book.layout` and its label.
+const LAYOUTS: [(&str, &str); 6] =
+    [("mixed", "Mixed"), ("one", "1 Photo"), ("two", "2 Photos"), ("three", "3 Photos"), ("grid4", "4 Grid"), ("fullBleed", "Full Bleed")];
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum View {
     /// Every page, small.
@@ -42,13 +54,17 @@ pub struct BookUi {
     /// The page on show (selected), zero-based.
     pub page: usize,
     pub view: View,
-    /// Auto layout's template choice.
-    pub preset: Option<&'static str>,
+    /// Auto Layout's template choice (an index into [`LAYOUTS`]).
+    pub layout: usize,
+    /// Where Auto Layout takes its photos from.
+    pub source: Source,
     /// The name field, for the book `name_of`.
     name: String,
     name_of: Option<u32>,
     /// The photo being dragged: where it came from.
     drag: Option<Slot>,
+    /// The width the top bar's group had last frame, to centre it this frame.
+    group_w: Option<f32>,
     /// Where a dragged photo may land, as drawn this frame.
     hits: Vec<(Slot, Rect)>,
 }
@@ -219,45 +235,74 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, bu: &mut BookUi, b
     let s = &b.settings;
 
     heading(ui, t, "Auto Layout");
-    let presets: [(&str, &str); 6] = [("mixed", "Mixed"), ("one", "1"), ("two", "2"), ("three", "3"), ("grid4", "4"), ("fullBleed", "Full Bleed")];
-    let current = bu.preset.unwrap_or("mixed");
-    ui.horizontal_wrapped(|ui| {
-        let options: Vec<(&str, &str)> = presets.to_vec();
-        if let Some(p) = choice(ui, "bookPreset", &options, current) {
-            bu.preset = presets.iter().find(|(k, _)| *k == p).map(|(k, _)| *k);
+    row(ui, t, "Layout", |ui| {
+        let (c, chosen) = crate::widgets::dropdown_search::pick_with(
+            ui,
+            "bookLayout",
+            |c| c.selected_text(crate::i18n::tr(LAYOUTS[bu.layout.min(LAYOUTS.len() - 1)].1)),
+            &LAYOUTS,
+            |l| LAYOUTS.get(bu.layout).is_some_and(|cur| cur.0 == l.0),
+            |l| crate::i18n::tr(l.1).to_string(),
+            |ui, l, row| register(ui, format!("menu:bookLayout-{}", l.0), row.rect),
+        );
+        crate::widgets::name_combo(&c, crate::i18n::tr("Layout"));
+        register(ui, "combo:bookLayout", c.rect);
+        if let Some(i) = chosen {
+            bu.layout = i;
         }
     });
-    let mut cover = b.cover;
-    if let Some(v) = check(ui, "bookCover", "Cover", cover) {
-        cover = v;
-        run(app, &ctx, "book.layout", json!({"cover": cover, "preset": current}));
-    }
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
-        if text_button(ui, "bookAutoLayout", "Auto Layout", false).clicked() {
-            run(app, &ctx, "book.layout", json!({"cover": cover, "preset": current}));
+    row(ui, t, "Photos", |ui| {
+        let sources = [(Source::Selected, "Selected Photos"), (Source::InView, "Photos in View")];
+        let shown = sources.iter().find(|(s, _)| *s == bu.source).map_or("", |(_, l)| *l);
+        let (c, chosen) = crate::widgets::dropdown_search::pick_with(
+            ui,
+            "bookSource",
+            |c| c.selected_text(crate::i18n::tr(shown)),
+            &sources,
+            |(s, _)| *s == bu.source,
+            |(_, l)| crate::i18n::tr(l).to_string(),
+            |ui, (s, _), row| register(ui, format!("menu:bookSource-{}", if *s == Source::Selected { "selected" } else { "view" }), row.rect),
+        );
+        crate::widgets::name_combo(&c, crate::i18n::tr("Photos"));
+        register(ui, "combo:bookSource", c.rect);
+        if let Some(i) = chosen {
+            bu.source = sources[i].0;
         }
-        ui.add_enabled_ui(selected > 0, |ui| {
-            if text_button(ui, "bookUseSelected", "Use Selected Photos", false).clicked() {
-                run(app, &ctx, "book.layout", json!({"cover": cover, "preset": current, "source": "selection"}));
+    });
+    ui.horizontal(|ui| {
+        if let Some(v) = check(ui, "bookCover", "Cover", b.cover) {
+            run(app, &ctx, "book.setCover", json!({"cover": v}));
+            // (the cover is page 0: the other pages move by one)
+            bu.page = if v { bu.page + 1 } else { bu.page.saturating_sub(1) };
+        }
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if text_button(ui, "bookAutoLayout", "Auto Layout", false).clicked() {
+                let source = if bu.source == Source::Selected { "selection" } else { "view" };
+                let preset = LAYOUTS[bu.layout.min(LAYOUTS.len() - 1)].0;
+                run(app, &ctx, "book.layout", json!({"cover": b.cover, "preset": preset, "source": source}));
                 bu.page = 0;
             }
         });
-        if text_button(ui, "bookUseView", "Use Photos in View", false).clicked() {
-            run(app, &ctx, "book.layout", json!({"cover": cover, "preset": current, "source": "view"}));
-            bu.page = 0;
-        }
     });
 
     heading(ui, t, "Page Template");
     let page = bu.page;
     let on = b.pages.get(page).map(|p| p.template);
-    ui.horizontal_wrapped(|ui| {
-        ui.spacing_mut().item_spacing = vec2(3.0, 3.0);
-        for (i, tpl) in Template::ALL.into_iter().enumerate() {
-            if text_button(ui, &format!("bookTemplate-{i}"), template_label(tpl), on == Some(tpl)).clicked() && on != Some(tpl) {
-                run(app, &ctx, "book.setTemplate", json!({"page": page, "template": tpl.name()}));
-            }
+    row(ui, t, "Template", |ui| {
+        let all = Template::ALL;
+        let (c, chosen) = crate::widgets::dropdown_search::pick_with(
+            ui,
+            "bookTemplate",
+            |c| c.selected_text(on.map_or(String::new(), |tpl| crate::i18n::tr(template_label(tpl)).to_string())),
+            &all,
+            |tpl| on == Some(*tpl),
+            |tpl| crate::i18n::tr(template_label(*tpl)).to_string(),
+            |ui, tpl, row| register(ui, format!("menu:bookTemplate-{}", tpl.name()), row.rect),
+        );
+        crate::widgets::name_combo(&c, crate::i18n::tr("Template"));
+        register(ui, "combo:bookTemplate", c.rect);
+        if let Some(tpl) = chosen.and_then(|i| all.get(i)).filter(|tpl| on != Some(**tpl)) {
+            run(app, &ctx, "book.setTemplate", json!({"page": page, "template": tpl.name()}));
         }
     });
     ui.label(egui::RichText::new(crate::i18n::tr_format!("Page {n} of {m}", n = page + 1, m = b.pages.len())).color(t.text_dim));
@@ -323,22 +368,7 @@ fn settings(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, bu: &mut BookUi, b
 
 fn preview(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, bu: &mut BookUi, book: &Book) {
     let ctx = ui.ctx().clone();
-    ui.horizontal(|ui| {
-        if let Some(v) = choice(ui, "bookView", &[(View::Pages, "Pages"), (View::Spread, "Spread")], bu.view) {
-            bu.view = v;
-        }
-        ui.add_space(8.0);
-        if text_button(ui, "bookPagePrev", "◀", false).clicked() && bu.page > 0 {
-            bu.page -= 1;
-        }
-        let label = ui.label(egui::RichText::new(format!("{} {} / {}", crate::i18n::tr("Page"), bu.page + 1, book.pages.len().max(1))).color(t.text));
-        register(ui, "book:pageLabel", label.rect);
-        if text_button(ui, "bookPageNext", "▶", false).clicked() && bu.page + 1 < book.pages.len() {
-            bu.page += 1;
-        }
-        let (w, h) = book.settings.page_size().unwrap_or((0.0, 0.0));
-        ui.label(egui::RichText::new(format!("{w:.2} × {h:.2} in · {} {}", book.photos().len(), crate::i18n::tr("photos"))).color(t.text_dim));
-    });
+    top_bar(ui, t, bu, book);
     let tray = if book.unplaced.is_empty() { 0.0 } else { TRAY_H + 8.0 };
     let size = vec2(ui.available_width(), (ui.available_height() - tray).max(120.0));
     let (area, _) = ui.allocate_exact_size(size, Sense::hover());
@@ -352,6 +382,55 @@ fn preview(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, bu: &mut BookUi, bo
         tray_view(app, ui, t, bu, book);
     }
     let _ = &ctx;
+}
+
+/// The widest page counter, for the width that keeps the arrows still: "Page 50 / 50".
+const WIDEST_COUNTER: &str = "Page 50 / 50";
+
+/// The bar above the pages: the view choice, the page counter with its arrows and the book's size,
+/// as one group centred in the bar.
+fn top_bar(ui: &mut Ui, t: &Tokens, bu: &mut BookUi, book: &Book) {
+    let gap = 8.0;
+    let (w, h) = book.settings.page_size().unwrap_or((0.0, 0.0));
+    let info = format!("{w:.2} × {h:.2} in · {} {}", book.photos().len(), crate::i18n::tr("photos"));
+    let font = t.font(13.0);
+    let width_of = |text: &str| ui.painter().layout_no_wrap(text.to_string(), font.clone(), t.text).size().x;
+    let page_word = crate::i18n::tr("Page");
+    let counter_w = width_of(&WIDEST_COUNTER.replacen("Page", page_word, 1)) + 12.0;
+    let (pages_w, spread_w) = (crate::widgets::text_button_size(ui, "Pages"), crate::widgets::text_button_size(ui, "Spread"));
+    let arrow_w = crate::widgets::text_button_size(ui, "◀");
+    let info_w = width_of(&info);
+    // the group's width as drawn last frame; the first frame's is the sum of what it holds and the
+    // spaces between, close enough for one frame
+    let guess = pages_w + 3.0 + spread_w + 8.0 + 2.0 * arrow_w + counter_w + info_w + 5.0 * gap;
+    let total = bu.group_w.unwrap_or(guess);
+    let (bar, _) = ui.allocate_exact_size(vec2(ui.available_width(), 26.0), Sense::hover());
+    register(ui, "book:topBar", bar);
+    let group = Rect::from_center_size(bar.center(), vec2(total.min(bar.width()), bar.height()));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(group).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    if let Some(v) = choice(&mut child, "bookView", &[(View::Pages, "Pages"), (View::Spread, "Spread")], bu.view) {
+        bu.view = v;
+    }
+    child.spacing_mut().item_spacing.x = gap;
+    child.add_space(8.0);
+    if text_button(&mut child, "bookPagePrev", "◀", false).clicked() && bu.page > 0 {
+        bu.page -= 1;
+    }
+    let (counter, _) = child.allocate_exact_size(vec2(counter_w, 24.0), Sense::hover());
+    let text = format!("{page_word} {} / {}", bu.page + 1, book.pages.len().max(1));
+    child.painter().text(counter.center(), egui::Align2::CENTER_CENTER, text, font.clone(), t.text);
+    register(&child, "book:pageLabel", counter);
+    if text_button(&mut child, "bookPageNext", "▶", false).clicked() && bu.page + 1 < book.pages.len() {
+        bu.page += 1;
+    }
+    let (info_rect, _) = child.allocate_exact_size(vec2(info_w, 24.0), Sense::hover());
+    child.painter().text(info_rect.left_center(), egui::Align2::LEFT_CENTER, info, font, t.text_dim);
+    let used = child.min_rect();
+    register(&child, "book:topGroup", used);
+    if (used.width() - total).abs() > 0.5 {
+        bu.group_w = Some(used.width());
+        child.ctx().request_repaint();
+    }
 }
 
 /// Every page as a small sheet, [`PER_ROW`] to a row; a click selects the page.
@@ -479,24 +558,28 @@ fn paint_photo(app: &mut LightcraftApp, painter: &egui::Painter, cell: Rect, id:
 /// photo onto the strip to take it off its page.
 fn tray_view(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, bu: &mut BookUi, book: &Book) {
     let (area, _) = ui.allocate_exact_size(vec2(ui.available_width(), TRAY_H + 8.0), Sense::hover());
-    let painter = ui.painter_at(area);
-    painter.rect_filled(area, 4.0, t.canvas);
-    painter.text(area.left_top() + vec2(8.0, 3.0), egui::Align2::LEFT_TOP, crate::i18n::tr("Not on a page"), t.font(10.0), t.text_dim);
-    bu.hits.push((Slot::Unplaced { unplaced: 0 }, area));
+    ui.painter().rect_filled(area, 4.0, t.canvas);
+    // dropped on the strip, a photo goes to the end of it
+    bu.hits.push((Slot::Unplaced { unplaced: book.unplaced.len() }, area));
     register(ui, "book:tray", area);
-    let size = TRAY_H - 14.0;
-    for (i, photo) in book.unplaced.iter().enumerate() {
-        let r = Rect::from_min_size(area.left_top() + vec2(8.0 + (size + 6.0) * i as f32, 16.0), vec2(size, size));
-        if r.right() > area.right() {
-            break;
-        }
-        paint_photo(app, &painter, r, PhotoId(*photo), false);
-        register(ui, format!("book:unplaced:{i}"), r);
-        let resp = ui.interact(r, egui::Id::unique(("book-tray", i)), Sense::drag());
-        if resp.drag_started() {
-            bu.drag = Some(Slot::Unplaced { unplaced: i });
-        }
-    }
+    let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(area.shrink2(vec2(8.0, 3.0))).layout(egui::Layout::top_down(egui::Align::Min)));
+    inner.spacing_mut().item_spacing.y = 1.0;
+    inner.label(egui::RichText::new(format!("{} ({})", crate::i18n::tr("Not on a Page"), book.unplaced.len())).font(t.font(10.0)).color(t.text_dim));
+    let size = TRAY_H - 22.0;
+    egui::ScrollArea::horizontal().id_salt("book-tray").auto_shrink([false, false]).show(&mut inner, |ui| {
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 6.0;
+            for (i, photo) in book.unplaced.iter().enumerate() {
+                let (r, resp) = ui.allocate_exact_size(vec2(size, size), Sense::drag());
+                let painter = ui.painter_at(r);
+                paint_photo(app, &painter, r, PhotoId(*photo), false);
+                register(ui, format!("book:unplaced:{i}"), r);
+                if resp.drag_started() {
+                    bu.drag = Some(Slot::Unplaced { unplaced: i });
+                }
+            }
+        });
+    });
 }
 
 /// While a photo is dragged, a ghost of it follows the pointer; released over a cell it moves there
@@ -526,6 +609,8 @@ fn drop_photo(app: &mut LightcraftApp, ctx: &egui::Context, bu: &mut BookUi, has
     let target = pos.and_then(|p| bu.hits.iter().rev().find(|(_, r)| r.contains(p)).map(|(s, _)| *s));
     if let Some(to) = target
         && to != from
+        // (a tray photo dropped on the strip stays where it is)
+        && !matches!((from, to), (Slot::Unplaced { .. }, Slot::Unplaced { .. }))
     {
         let slot = |s: Slot| match s {
             Slot::Cell { page, cell } => json!({"page": page, "cell": cell}),

@@ -280,7 +280,7 @@ pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
             let (total, show) = (task.total, task.show_in_finder);
             // the batch's summary (`activity.list` → finished): photos placed, the failures and why
             if let Ok((files, _, _)) = &r {
-                task.guard.progress(files.len() as u64, total as u64);
+                task.guard.progress(book_task::finished_done(files, total) as u64, total as u64);
                 for f in files.iter().filter(|f| f.get("error").is_some()) {
                     let name = f.get("file").and_then(Value::as_str).unwrap_or("");
                     task.guard.count_failed(&format!("{name}: {}", f["error"].as_str().unwrap_or("error")));

@@ -19,6 +19,12 @@ use crate::state::Dialog;
 /// JPEG quality of the pages.
 const JPEG_QUALITY: u8 = 90;
 
+/// How many steps a finished export did: a book's one summary entry stands for all its renders, so
+/// it is `total`; any other export has one entry per photo.
+pub fn finished_done(files: &[Value], total: usize) -> usize {
+    if files.first().is_some_and(|f| f["book"] == true) { total } else { files.len() }
+}
+
 /// Starts exporting the current book (or `params.book`): a PDF at `params.path`, or with `jpeg` a
 /// folder of JPEGs at `params.dir`.
 pub fn start(app: &mut LightcraftApp, params: &Value, jpeg: bool) -> Result<Value, String> {

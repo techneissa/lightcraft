@@ -37,7 +37,9 @@ pub struct Loaded {
 
 impl Loaded {
     fn blocked(why: String) -> Loaded {
-        let note = format!("{NAME} {why}. It was left untouched, and books can't be saved until it is moved away or the LightCraft that wrote it opens this library.");
+        let note = format!(
+            "{NAME} {why}. It was left untouched, and books can't be saved until it is moved away or the LightCraft that wrote it opens this library."
+        );
         Loaded { block: true, warnings: vec![note], ..Default::default() }
     }
 }
@@ -69,7 +71,10 @@ fn set_aside(files: &mut dyn Store, bytes: &[u8], err: &str) -> Loaded {
     let secs = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
     let keep = format!("{NAME}.corrupt-{secs}");
     match files.write_atomic(&keep, bytes) {
-        Ok(()) => Loaded { warnings: vec![format!("{NAME} is damaged ({err}). It was kept as {keep}, and the library starts with no books.")], ..Default::default() },
+        Ok(()) => Loaded {
+            warnings: vec![format!("{NAME} is damaged ({err}). It was kept as {keep}, and the library starts with no books.")],
+            ..Default::default()
+        },
         Err(w) => Loaded::blocked(format!("is damaged ({err}) and couldn't be copied aside ({w})")),
     }
 }
