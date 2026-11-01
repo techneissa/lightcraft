@@ -383,13 +383,18 @@ fn paint_thumb(p: &egui::Painter, c: egui::Pos2, fill: Color32, enabled: bool) {
     p.circle_filled(pos2(centre.x - 1.2, centre.y - 1.6), 2.2, lerp(fill, Color32::WHITE, hi).gamma_multiply(0.6));
 }
 
+/// The width of the label column of a row `w` wide whose widest label is `wanted`.
+fn label_width(w: f32, wanted: f32) -> f32 {
+    (wanted + 2.0).clamp(52.0, (w * 0.41).max(52.0))
+}
+
 /// The row's three columns: the label (left-aligned in a fixed column, or right-aligned against the track), the track,
-/// the value (right-aligned).
-fn slider_columns(row: Rect, wanted_label_w: f32, wanted_value_w: f32) -> (Rect, Rect, Rect) {
+/// the value (right-aligned). `base_h` is the height of a normal row; a taller one keeps the track's offset from its middle.
+fn slider_columns(row: Rect, base_h: f32, wanted_label_w: f32, wanted_value_w: f32) -> (Rect, Rect, Rect) {
     let w = row.width();
     let pad = 10.0;
     let value_w = (wanted_value_w + 2.0).clamp(24.0, (w * 0.3).max(24.0));
-    let label_w = (wanted_label_w + 2.0).clamp(52.0, (w * 0.41).max(52.0));
+    let label_w = label_width(w, wanted_label_w);
     let gap = 7.0;
     let top = row.top();
     let h = row.height();
@@ -397,13 +402,14 @@ fn slider_columns(row: Rect, wanted_label_w: f32, wanted_value_w: f32) -> (Rect,
     let value = Rect::from_min_max(pos2(row.right() - pad - value_w, top), pos2(row.right() - pad, top + h));
     let track_l = label.right() + gap;
     let track_r = (value.left() - gap).max(track_l + 20.0);
-    let cy = top + h * 0.62;
+    // a little below the middle (0.62 of a normal row); a row grown for a two-line label keeps the same offset
+    let cy = top + h * 0.5 + base_h * 0.12;
     let track = Rect::from_min_max(pos2(track_l, cy - 8.0), pos2(track_r, cy + 8.0));
     (label, track, value)
 }
 
 /// The size of a slider's label.
-const LABEL_FONT: f32 = 12.5;
+pub(crate) const LABEL_FONT: f32 = 12.5;
 
 /// The size of the value figure.
 const VALUE_FONT: f32 = 14.5;
@@ -536,13 +542,12 @@ const THUMB_RING: f32 = 7.0;
 pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_override: Option<&str>) -> SliderOut {
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
-    let (row, _) = ui.allocate_exact_size(vec2(w, t.slider_row_h), Sense::hover());
     // the label column fits the longest label among this section's sliders (last frame's widest, or this one's)
     let label_str: String = crate::i18n::tr(label_override.unwrap_or(spec.label)).to_string();
     let label_font = t.font(LABEL_FONT);
     let fixed_label_w = label_column::fixed(ui);
     let label_w = match fixed_label_w {
-        // the Edit and Masking panels: one width for every label they can show
+        // the Edit and Masking panels: one width for the common labels
         Some(w) => w,
         None => {
             let own_w = ui.painter().layout_no_wrap(label_str.clone(), label_font.clone(), Color32::WHITE).size().x;
@@ -554,7 +559,12 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let value_font = egui::FontId::new(VALUE_FONT, egui::FontFamily::Proportional);
     let value_w = widest_value_width(ui, spec, &value_font);
     let value_w = shared_column_width(ui, "slider-value-w", value_w);
-    let (label_rect, track_rect, value_rect) = slider_columns(row, label_w, value_w);
+    // in a fixed column a label too long for it shrinks, then wraps onto two lines, and the row grows for them
+    let text_c = if enabled { t.text_label } else { t.text_disabled };
+    let fitted = fixed_label_w.map(|_| label_column::fit(ui, &label_str, &label_font, label_width(w, label_w), text_c));
+    let row_h = fitted.as_ref().map_or(t.slider_row_h, |(g, _)| label_column::row_height(g, t.slider_row_h));
+    let (row, _) = ui.allocate_exact_size(vec2(w, row_h), Sense::hover());
+    let (label_rect, track_rect, value_rect) = slider_columns(row, t.slider_row_h, label_w, value_w);
     let id = ui.scope_id().with(spec.id);
     let g = SliderLayout { spec, value, enabled, id, track_rect, value_rect };
     let resp = ui.interact(track_rect.expand2(vec2(8.0, 2.0)), id, if enabled { Sense::click_and_drag() } else { Sense::hover() });
@@ -611,17 +621,18 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let v = out.value.unwrap_or(value);
     // paint
     let hovered = resp.hovered() || resp.dragged();
-    let text_c = if enabled { t.text_label } else { t.text_disabled };
-    // a label too long for its column shrinks (down to 10 pt) before it is cut
+    // outside the fixed column a label too long for its column shrinks (down to 10 pt) before it is cut
     let mut label_font = label_font;
     while label_font.size > 9.5 && ui.painter().layout_no_wrap(label_str.clone(), label_font.clone(), Color32::WHITE).size().x > label_rect.width() {
         label_font.size = (label_font.size - 0.5).max(9.5);
     }
     let shown_label = fit_text(ui, &label_str, &label_font, label_rect.width());
-    let truncated = shown_label != label_str;
+    let mut truncated = shown_label != label_str;
     let p = ui.painter();
-    if fixed_label_w.is_some() {
-        p.text(label_rect.left_center(), Align2::LEFT_CENTER, &shown_label, label_font, text_c);
+    if let Some((galley, cut)) = fitted {
+        truncated = cut;
+        let at = pos2(label_rect.left(), label_rect.center().y - galley.size().y / 2.0);
+        p.galley(at, galley, text_c);
     } else {
         p.text(label_rect.right_center(), Align2::RIGHT_CENTER, &shown_label, label_font, text_c);
     }
