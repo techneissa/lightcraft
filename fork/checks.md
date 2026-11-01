@@ -17,15 +17,9 @@ only in a lane's own filtered tests. A failure Fork CI shows only on Linux is no
 
 Two things are set up on this Mac (2026-11-02), outside the repo, so they work in every worktree:
 
-- **sccache** (`brew install sccache`) is the compiler wrapper for every cargo build: `rustc-wrapper = "sccache"` under
-  `[build]` in `~/.cargo/config.toml` (the repo's own `.cargo/config.toml` is official and stays alone), and a 30 GB cap
-  in `~/Library/Application Support/Mozilla.sccache/config` (`[cache.disk] size`). `sccache --show-stats` shows hits.
-  To turn it off for one build: `RUSTC_WRAPPER= cargo …`; for good: delete the `rustc-wrapper` line.
-  **It does not speed up a new worktree.** The rustc command line holds the target folder (`-L dependency=<target>/debug/deps`),
-  so a build in another target folder never hits another's entries. Measured with `cargo build -p lightcraft-pipeline`
-  (a clean target folder each time, machine load about 80): 36 s without sccache; 46 s with a cold cache; 39 s against
-  42 s with a warm cache for the *same* target folder (49 of 49 crates hit); 91 s in a second worktree (0 hits).
-  Hits happen only when the same target path is built again, such as after `cargo clean`.
+- **No sccache.** It was tried on 2026-11-02 and removed: a build in another worktree never hits the cache (the
+  target folder is on rustc's command line: 0 of 49 hits), and a cold cache made a build slower (46 s against 36 s for
+  `lightcraft-pipeline`). Copying a built `target/` (below) is what helps.
 - **Start a new worktree from a copy of a built `target/`.** Registry crates (about 340 of the 368 that
   `lightcraft-ui-egui` needs) are the same in every worktree, and cargo reuses them from a copied folder; only the
   workspace's own crates rebuild. On APFS `cp -Rc` clones the folder in about a second and costs no disk until files
