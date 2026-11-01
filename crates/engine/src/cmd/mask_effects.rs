@@ -465,11 +465,10 @@ fn update_effect(s: &mut Session, p: &Value) -> Result<Value> {
 fn rename_effect(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "mask.renameEffect";
     let name = name_param(p, C)?;
-    let to = name_of(p, "to", C)?;
     let i = effect_index(s, &name, C)?;
-    if position(s, &to).is_some_and(|j| j != i) {
-        return Err(bad(C, format!("an effect named `{to}` exists already")));
-    }
+    let raw = str_param(p, "to").ok_or_else(|| bad(C, "missing `to`"))?;
+    let others = s.mask_effects.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, e)| e.name.as_str());
+    let to = crate::names::check_name(raw, others).map_err(|e| bad(C, e.to_string()))?;
     if let Some(e) = s.mask_effects.get_mut(i) {
         e.name = to.clone();
     }

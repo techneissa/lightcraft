@@ -234,7 +234,8 @@ pub(super) fn folder_menu(app: &mut LightcraftApp, resp: &egui::Response, a: &Al
             }
         });
         if ui.button(crate::i18n::tr("Rename…")).clicked() {
-            app.ui.dialog = Some(crate::state::Dialog::RenameAlbum { id: a.id.0, name: a.name.clone() });
+            crate::inline_rename::begin(app, crate::inline_rename::Kind::Album(a.id.0));
+            ui.close();
         }
         let delete = ui.button(crate::i18n::tr("Delete"));
         register(ui, format!("albumDelete:{}", a.id.0), delete.rect);

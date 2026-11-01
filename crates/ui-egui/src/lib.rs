@@ -20,6 +20,7 @@ pub mod brush_live;
 pub mod canvas_keys;
 mod command_error;
 pub mod control;
+mod debounce;
 pub mod destination;
 pub mod dialogs;
 pub mod docking;
@@ -33,6 +34,7 @@ mod frame_rate;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
+mod inline_rename;
 pub mod keybinds;
 pub mod layers_task;
 pub mod lightroom_import;
@@ -48,6 +50,7 @@ pub mod recheck;
 pub mod reflections;
 pub mod region;
 pub mod reload;
+pub mod rename_task;
 pub mod render;
 pub mod shortcuts;
 pub mod sidebar;
@@ -357,6 +360,8 @@ pub struct LightcraftApp {
     pub layers: Option<layers_task::LayersTask>,
     /// Edit In's copies, rendering in the background.
     pub edit_in: Option<edit_in_task::EditInTask>,
+    /// Rename Photos or Rename Folder, moving files in the background.
+    pub rename_task: Option<rename_task::RenameTask>,
     /// Apply macOS Colour to All Photos from This Camera, counting or moving in the background.
     pub(crate) macos_job: Option<macos_colour::job::MacosJob>,
     /// Files on their way to an external editor.
