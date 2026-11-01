@@ -6,7 +6,7 @@ use std::sync::Mutex;
 use lightcraft_engine::lens_profiles::{self, FolderSource, Problem, Status};
 use serde_json::json;
 
-use crate::dialogs::settings::lens_database::status_line;
+use crate::dialogs::settings::lens_database::{status_hint, status_line};
 use crate::state::AppSettings;
 use crate::{LightcraftApp, Services};
 
@@ -29,6 +29,16 @@ fn folder(name: &str) -> std::path::PathBuf {
     dir
 }
 
+/// Run a `lensDatabase.*` command and wait for the read on its worker; the status after it.
+fn settled(app: &mut LightcraftApp, command: &str, params: serde_json::Value) -> serde_json::Value {
+    let first = app.run(command, params).unwrap();
+    assert!(first.get("reading").is_some_and(serde_json::Value::is_boolean), "{first}");
+    assert!(crate::tasks::wait(app, &egui::Context::default(), std::time::Duration::from_secs(20)), "the read did not end");
+    let r = app.run("lensDatabase.get", json!({})).unwrap();
+    assert_eq!(r["reading"], false, "{r}");
+    r
+}
+
 #[test]
 fn the_folder_is_saved_and_old_settings_load_without_it() {
     let s = AppSettings { lens_database_dir: "/lenses".into(), ..Default::default() };
@@ -48,27 +58,27 @@ fn the_command_sets_reads_and_clears_the_folder() {
     let mut app = app();
     // a missing folder
     let gone = std::env::temp_dir().join(format!("lc-ui-lens-db-gone-{}", std::process::id()));
-    let r = app.run("lensDatabase.set", json!({"dir": gone.to_string_lossy()})).unwrap();
+    let r = settled(&mut app, "lensDatabase.set", json!({"dir": gone.to_string_lossy()}));
     assert_eq!((r["source"].as_str(), r["problem"].as_str(), r["profiles"].as_u64()), (Some("setting"), Some("missing"), Some(0)), "{r}");
     assert!(r["message"].as_str().unwrap().contains("doesn't exist"), "{r}");
     assert_eq!(app.ui.settings.lens_database_dir, gone.to_string_lossy());
     // a folder with a tiny synthetic file
     let dir = folder("set");
     std::fs::write(dir.join("t.xml"), XML).unwrap();
-    let r = app.run("lensDatabase.set", json!({"dir": dir.to_string_lossy()})).unwrap();
+    let r = settled(&mut app, "lensDatabase.set", json!({"dir": dir.to_string_lossy()}));
     assert_eq!((r["profiles"].as_u64(), r["problem"].is_null()), (Some(1), true), "{r}");
     assert_eq!(r["message"], "1 lens profile found");
     assert!(lens_profiles::database().is_some(), "the engine reads it at once");
     // files added later are found by reload
     std::fs::write(dir.join("u.xml"), XML.replace("18-55", "24-70")).unwrap();
     assert_eq!(app.run("lensDatabase.get", json!({})).unwrap()["profiles"], 1);
-    assert_eq!(app.run("lensDatabase.reload", json!({})).unwrap()["profiles"], 2);
+    assert_eq!(settled(&mut app, "lensDatabase.reload", json!({}))["profiles"], 2);
     // bad input is refused, the folder stays
     assert!(app.run("lensDatabase.set", json!({"dir": 3})).is_err());
     assert!(app.run("lensDatabase.set", json!({})).is_err());
     assert_eq!(app.run("lensDatabase.get", json!({})).unwrap()["setting"], dir.to_string_lossy().as_ref());
     // cleared
-    let r = app.run("lensDatabase.set", json!({"dir": null})).unwrap();
+    let r = settled(&mut app, "lensDatabase.set", json!({"dir": null}));
     assert_eq!((r["source"].as_str(), r["profiles"].as_u64()), (Some("none"), Some(0)), "{r}");
     assert_eq!(app.ui.settings.lens_database_dir, "");
     assert!(lens_profiles::database().is_none());
@@ -106,8 +116,11 @@ fn the_status_line_says_how_many_or_why_none() {
         profiles,
         skipped,
         problem,
+        reading: false,
     };
     assert_eq!(status_line(&at(FolderSource::None, None, 0, 0)), "No folder chosen");
+    let reading = Status { reading: true, ..at(FolderSource::Setting, None, 0, 0) };
+    assert_eq!(status_line(&reading), "Reading…");
     assert_eq!(status_line(&at(FolderSource::Setting, None, 1, 0)), "1 lens profile found");
     assert_eq!(status_line(&at(FolderSource::Setting, None, 1234, 0)), "1234 lens profiles found");
     assert_eq!(status_line(&at(FolderSource::Setting, None, 3, 2)), "3 lens profiles found, 2 files skipped");
@@ -117,6 +130,40 @@ fn the_status_line_says_how_many_or_why_none() {
     // the variable wins, and the line says so
     let env = status_line(&at(FolderSource::Env, None, 5, 0));
     assert!(env.starts_with("5 lens profiles found") && env.contains("LIGHTCRAFT_LENSFUN_DIR") && env.contains("wins"), "{env}");
+}
+
+#[test]
+fn choosing_the_same_folder_again_reads_new_files() {
+    let _turn = ONE_AT_A_TIME.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if std::env::var_os(lens_profiles::ENV).is_some_and(|v| !v.is_empty()) {
+        lightcraft_testkit::skip!(Input, "LIGHTCRAFT_LENSFUN_DIR is set and wins over the setting");
+        return;
+    }
+    let mut app = app();
+    let dir = folder("again");
+    std::fs::write(dir.join("a.xml"), XML).unwrap();
+    let set = |app: &mut LightcraftApp| settled(app, "lensDatabase.set", json!({"dir": dir.to_string_lossy()}));
+    assert_eq!(set(&mut app)["profiles"], 1);
+    std::fs::write(dir.join("b.xml"), XML.replace("18-55mm f/3.5-5.6", "50mm f/1.8")).unwrap();
+    assert_eq!(set(&mut app)["profiles"], 2, "the same folder, chosen again, was not read again");
+    settled(&mut app, "lensDatabase.set", json!({"dir": null}));
+}
+
+#[test]
+fn no_status_line_while_no_folder_is_set() {
+    let s = |source, dir: Option<&str>, problem| Status {
+        source,
+        dir: dir.map(Into::into),
+        setting: None,
+        profiles: 0,
+        skipped: 0,
+        problem,
+        reading: false,
+    };
+    assert_eq!(status_hint(&s(FolderSource::None, None, None)), None, "the row already says None");
+    assert!(status_hint(&s(FolderSource::Setting, Some("/lenses"), Some(Problem::Missing))).unwrap().contains("doesn't exist"));
+    // the variable wins even with no folder chosen in Settings: that is real status
+    assert!(status_hint(&s(FolderSource::Env, Some("/env"), None)).unwrap().contains("LIGHTCRAFT_LENSFUN_DIR"));
 }
 
 #[test]

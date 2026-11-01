@@ -150,6 +150,23 @@ fn a_hidden_section_keeps_its_adjustments() {
 }
 
 #[test]
+fn asking_for_a_hidden_open_section_brings_it_back_open_and_a_shown_one_still_toggles() {
+    let mut h = edit_open();
+    assert!(h.app.ui.section_open("effects"));
+    exec(&mut h, "view.editSectionShow", json!({"section": "effects", "show": false}));
+    exec(&mut h, "section.effects", json!({}));
+    assert!(!h.app.ui.edit_sections.is_hidden(Effects));
+    assert!(h.app.ui.section_open("effects"), "came back folded");
+    // a visible section keeps the toggle: asking for an open one folds it
+    exec(&mut h, "section.effects", json!({}));
+    assert!(!h.app.ui.section_open("effects"));
+    // hidden while folded: it comes back and opens
+    exec(&mut h, "view.editSectionShow", json!({"section": "effects", "show": false}));
+    exec(&mut h, "section.effects", json!({}));
+    assert!(h.app.ui.section_open("effects"));
+}
+
+#[test]
 fn the_header_menu_moves_hides_shows_all_and_resets() {
     let mut h = edit_open();
     let r = h.request("ui.clickWidget", json!({"id": "section:color", "button": "right"}), T);

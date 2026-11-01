@@ -2,7 +2,7 @@
 
 ## What it does
 
-An Export dialog option (File Explorer on Windows, the file manager on Linux) that shows the first exported file once the export succeeds; saved with presets and Export with Previous; the CLI, MCP and headless runs ignore it; a failing opener adds a note to the export message.
+An Export dialog option (File Explorer on Windows, the file manager on Linux) that shows the first exported file once the export succeeds; saved with presets and Export with Previous; an export an agent runs through the control channel (CLI, MCP into the running app) ignores it, also when a preset or the previous export carries it; headless runs have no opener; a failing opener adds a note to the export message.
 
 ## Branch
 

@@ -1,5 +1,6 @@
 //! Export ▸ Show in Finder: the option reveals the first file written, only where the host gave
-//! the app an opener, and a failing opener is a message, never a panic.
+//! the app an opener, only for an export started in the app (the Export dialog, Export with Previous),
+//! never for one an agent runs through the control channel, and a failing opener is a message, never a panic.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -35,6 +36,38 @@ fn the_first_file_written_is_revealed_when_the_option_is_on() {
     let first = out["files"][0]["path"].as_str().unwrap().to_string();
     assert_eq!(*revealed.borrow(), vec![first]);
     assert_eq!(out["shownInFinder"], true);
+}
+
+/// A control-channel request (an agent, the CLI, MCP into the running app) for `command`.
+fn control(app: &mut LightcraftApp, command: &str, params: Value) -> Value {
+    let (req, _rx) = crate::control::ControlRequest::new("engine.execute", json!({"command": command, "params": params}));
+    match crate::control::handle(app, &egui::Context::default(), &req) {
+        crate::control::Outcome::Done(reply) => reply,
+        _ => panic!("expected a reply"),
+    }
+}
+
+#[test]
+fn an_agent_export_never_reveals_even_with_the_option_on() {
+    let (mut app, revealed) = setup(Some(Ok(())));
+    let r = control(&mut app, "app.export", json!({"dir": "out", "longEdge": 32, "showInFinder": true}));
+    let out = &r["result"];
+    assert!(out["files"][0]["path"].is_string(), "{r}");
+    assert!(revealed.borrow().is_empty(), "an agent export opened the file manager");
+    assert!(out.get("shownInFinder").is_none() && out.get("showInFinderError").is_none(), "{r}");
+    assert!(!app.from_control, "the flag is only set while the command runs");
+}
+
+#[test]
+fn export_with_previous_reveals_for_the_user_but_not_for_an_agent() {
+    // the previous export carries the option (as the dialog saved it)
+    let (mut app, revealed) = setup(Some(Ok(())));
+    export(&mut app, true);
+    assert_eq!(revealed.borrow().len(), 1);
+    control(&mut app, "app.exportPrevious", json!({}));
+    assert_eq!(revealed.borrow().len(), 1, "an agent's Export with Previous revealed the file");
+    app.run("app.exportPrevious", json!({})).unwrap();
+    assert_eq!(revealed.borrow().len(), 2, "the menu's Export with Previous still reveals");
 }
 
 #[test]

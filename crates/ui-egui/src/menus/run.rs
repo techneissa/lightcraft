@@ -1028,7 +1028,9 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             }
             let sec = &s["section.".len()..];
             // a section taken off the panel comes back when it is asked for
+            let mut was_hidden = false;
             if let Some(hidden) = crate::panels::edit_sections::EditSection::from_id(sec) {
+                was_hidden = app.ui.edit_sections.is_hidden(hidden);
                 app.ui.edit_sections.reveal(hidden);
             }
             if app.ui.right != RightPanel::Edit {
@@ -1036,7 +1038,8 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             }
             if solo == Some(true) {
                 app.ui.solo_section(sec);
-            } else {
+            } else if !(was_hidden && app.ui.section_open(sec)) {
+                // a section that was hidden while open comes back open, not toggled shut
                 app.ui.toggle_section(sec);
             }
             Ok(Value::Null)

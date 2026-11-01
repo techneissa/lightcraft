@@ -328,6 +328,9 @@ pub struct LightcraftApp {
     pub shown_library: Option<u64>,
     /// A background export in progress.
     pub export: Option<export_task::ExportTask>,
+    /// True while the control channel (an agent, the CLI, MCP) runs a command: such an export never
+    /// shows its file in the file manager; only the Export dialog does ([`export_reveal`]).
+    pub(crate) from_control: bool,
     /// Open as Layers in PhotoCraft, rendering in the background.
     pub layers: Option<layers_task::LayersTask>,
     /// Edit In's copies, rendering in the background.

@@ -2,7 +2,7 @@
 
 ## What it does
 
-Settings ▸ Import ▸ Lens profiles: Choose…, Clear and a status line (profiles found, or why none); `LIGHTCRAFT_LENSFUN_DIR` still wins; the folder is read again when it changes; `lensDatabase.get` / `set` / `reload`.
+Settings ▸ Import ▸ Lens profiles: Choose…, Clear and a status line (profiles found, or why none; no line while no folder is set; "Reading…" while a worker reads a big folder); `LIGHTCRAFT_LENSFUN_DIR` still wins; the folder is read again when it changes; `lensDatabase.get` / `set` / `reload` (choosing the same folder again reads it again; `reading: true` until the worker ends).
 
 ## Branch
 

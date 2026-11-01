@@ -53,6 +53,9 @@ pub struct Status {
     /// XML files skipped as invalid.
     pub skipped: usize,
     pub problem: Option<Problem>,
+    /// The folder in use has not been read yet ([`status_now`] only): `profiles`, `skipped` and
+    /// `problem` are not known. [`status`] reads it and is never in this state.
+    pub reading: bool,
 }
 
 /// A folder read.
@@ -69,9 +72,11 @@ struct State {
     setting: Option<PathBuf>,
     /// The last folder read and what it gave; read again when the folder in use changes.
     loaded: Option<(PathBuf, Arc<Loaded>)>,
+    /// Bumped when the folder is set or reloaded, so a read that began before is thrown away.
+    generation: u64,
 }
 
-static STATE: Mutex<State> = Mutex::new(State { setting: None, loaded: None });
+static STATE: Mutex<State> = Mutex::new(State { setting: None, loaded: None, generation: 0 });
 
 /// The folder in use for an environment value and a setting: the variable wins when it isn't empty.
 pub(crate) fn resolve(env: Option<std::ffi::OsString>, setting: Option<&Path>) -> (FolderSource, Option<PathBuf>) {
@@ -123,16 +128,25 @@ struct Current {
 }
 
 /// The current folder's contents, read again when the folder in use is not the one last read.
+/// The read happens without the lock held, so [`status_now`] never waits for it.
 fn current() -> Current {
-    let mut state = STATE.lock().unwrap_or_else(PoisonError::into_inner);
-    let (source, dir) = resolve(std::env::var_os(ENV), state.setting.as_deref());
-    let setting = state.setting.clone();
+    let (source, dir, setting, cached, generation) = {
+        let state = STATE.lock().unwrap_or_else(PoisonError::into_inner);
+        let (source, dir) = resolve(std::env::var_os(ENV), state.setting.as_deref());
+        let cached = dir.as_ref().and_then(|dir| state.loaded.as_ref().filter(|(d, _)| d == dir).map(|(_, l)| l.clone()));
+        (source, dir, state.setting.clone(), cached, state.generation)
+    };
     let Some(dir) = dir else { return Current { source, dir: None, setting, loaded: None } };
-    if state.loaded.as_ref().is_none_or(|(d, _)| *d != dir) {
-        state.loaded = Some((dir.clone(), Arc::new(load(&dir))));
-    }
-    let loaded = state.loaded.as_ref().map(|(_, l)| l.clone());
-    Current { source, dir: Some(dir), setting, loaded }
+    let loaded = cached.unwrap_or_else(|| {
+        let read = Arc::new(load(&dir));
+        let mut state = STATE.lock().unwrap_or_else(PoisonError::into_inner);
+        // kept unless the folder was set or reloaded meanwhile
+        if state.generation == generation {
+            state.loaded = Some((dir.clone(), read.clone()));
+        }
+        read
+    });
+    Current { source, dir: Some(dir), setting, loaded: Some(loaded) }
 }
 
 /// Choose the folder the database is read from (Settings ▸ lens database); `None` or an empty path
@@ -144,12 +158,20 @@ pub fn set_folder(dir: Option<&Path>) {
     if state.setting != dir {
         state.setting = dir;
         state.loaded = None;
+        state.generation += 1;
     }
 }
 
 /// Read the folder in use again (new files were added to it).
 pub fn reload() {
-    STATE.lock().unwrap_or_else(PoisonError::into_inner).loaded = None;
+    let mut state = STATE.lock().unwrap_or_else(PoisonError::into_inner);
+    state.loaded = None;
+    state.generation += 1;
+}
+
+/// Read the folder in use now if it has not been (for a worker thread: a big folder takes a moment).
+pub fn warm() {
+    let _ = current();
 }
 
 /// The configured database; `None` when none is configured or it holds no lenses.
@@ -161,7 +183,18 @@ pub fn database() -> Option<Arc<LensDb>> {
 pub fn status() -> Status {
     let c = current();
     let (profiles, skipped, problem) = c.loaded.map_or((0, 0, None), |l| (l.profiles, l.skipped, l.problem.clone()));
-    Status { source: c.source, dir: c.dir, setting: c.setting, profiles, skipped, problem }
+    Status { source: c.source, dir: c.dir, setting: c.setting, profiles, skipped, problem, reading: false }
+}
+
+/// [`status`] without reading the folder: for the UI thread. A folder in use that is not read yet
+/// gives `reading: true`; [`warm`] on a worker reads it.
+pub fn status_now() -> Status {
+    let state = STATE.lock().unwrap_or_else(PoisonError::into_inner);
+    let (source, dir) = resolve(std::env::var_os(ENV), state.setting.as_deref());
+    let loaded = dir.as_ref().and_then(|dir| state.loaded.as_ref().filter(|(d, _)| d == dir).map(|(_, l)| l.clone()));
+    let reading = dir.is_some() && loaded.is_none();
+    let (profiles, skipped, problem) = loaded.map_or((0, 0, None), |l| (l.profiles, l.skipped, l.problem.clone()));
+    Status { source, dir, setting: state.setting.clone(), profiles, skipped, problem, reading }
 }
 
 /// The database profile for a photo with metadata `m`, for its `w × h` (unoriented, default-cropped) image,

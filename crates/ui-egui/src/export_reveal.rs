@@ -1,7 +1,10 @@
 //! Export ▸ "Show in Finder": after a successful export the desktop app shows the first file
 //! written in the system file manager ([`ExportOptions::show_in_finder`]). The opener lives in
-//! [`crate::Services::reveal`], which only the desktop host sets, so headless runs, the CLI and MCP
-//! never spawn anything; a failed opener is a toast, never a panic.
+//! [`crate::Services::reveal`], which only the desktop host sets, so headless runs never spawn
+//! anything. Only the Export dialog (and Export with Previous from the menu or keyboard) reveals: an
+//! export run through the control channel (an agent, the CLI, MCP into the running app) ignores the
+//! option, also when a preset or the previous export carries it ([`crate::LightcraftApp::from_control`]).
+//! A failed opener is a toast, never a panic.
 
 use lightcraft_engine::export::ExportOptions;
 use serde_json::Value;

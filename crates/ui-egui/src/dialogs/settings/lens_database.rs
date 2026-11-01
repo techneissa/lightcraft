@@ -6,7 +6,9 @@
 //! (`photo.reload`): each keeps the profile it was last read with.
 //!
 //! Agents use `lensDatabase.get`, `lensDatabase.set {dir}` (null or "" clears it) and
-//! `lensDatabase.reload`.
+//! `lensDatabase.reload`. A big folder takes a moment to read, so the read runs on a worker with a
+//! row in the activity stack; until it ends the status says "Reading…" and `reading` is true
+//! (ask `lensDatabase.get` again).
 
 use lightcraft_engine::lens_profiles::{self, FolderSource, Problem, Status};
 use serde_json::{Value, json};
@@ -32,10 +34,25 @@ pub(crate) fn sync(ctx: &egui::Context, app: &LightcraftApp) {
     ctx.data_mut(|d| d.insert_temp(id, wanted));
 }
 
+/// The activity row and task name of the read.
+const READING: &str = "Reading lens profiles";
+
+/// Start reading the folder in use on a worker when it has not been read (and no read is running).
+fn ensure_read(app: &mut LightcraftApp) {
+    if !lens_profiles::status_now().reading || app.tasks.is_running(READING) {
+        return;
+    }
+    let done = |_: &mut LightcraftApp, ctx: &egui::Context, ()| ctx.request_repaint();
+    if let Err(e) = crate::tasks::spawn(app, READING, Some("lensDatabase"), lens_profiles::warm, done) {
+        log::warn!("{e}");
+    }
+}
+
 /// One line about the database in use: how many profiles, or why none.
 pub(crate) fn status_line(s: &Status) -> String {
     let mut line = match (&s.problem, s.dir.as_ref()) {
         (_, None) => crate::i18n::tr("No folder chosen").to_string(),
+        _ if s.reading => crate::i18n::tr("Reading…").to_string(),
         (None, Some(_)) if s.skipped > 0 => {
             crate::i18n::tr_format!("{n} lens profiles found, {k} files skipped", n = s.profiles, k = s.skipped)
         }
@@ -52,8 +69,13 @@ pub(crate) fn status_line(s: &Status) -> String {
     line
 }
 
+/// The status line under the row: only real status, nothing while no folder is in use (the row says "None").
+pub(crate) fn status_hint(s: &Status) -> Option<String> {
+    s.dir.is_some().then(|| status_line(s))
+}
+
 fn status_json(app: &LightcraftApp) -> Value {
-    let s = lens_profiles::status();
+    let s = lens_profiles::status_now();
     let source = match s.source {
         FolderSource::None => "none",
         FolderSource::Env => "env",
@@ -67,7 +89,7 @@ fn status_json(app: &LightcraftApp) -> Value {
     });
     json!({
         "dir": s.dir, "setting": folder(app), "source": source, "env": lens_profiles::ENV,
-        "profiles": s.profiles, "skipped": s.skipped, "problem": problem, "message": status_line(&s),
+        "profiles": s.profiles, "skipped": s.skipped, "problem": problem, "reading": s.reading, "message": status_line(&s),
     })
 }
 
@@ -86,10 +108,13 @@ pub(crate) fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Va
             }
             app.ui.settings.lens_database_dir = dir;
             lens_profiles::set_folder(folder(app).as_deref());
+            // choosing the same folder again reads it again: files may have been added
+            lens_profiles::reload();
         }
         "lensDatabase.reload" => lens_profiles::reload(),
         _ => return Err(format!("unknown command `{id}`")),
     }
+    ensure_read(app);
     Ok(status_json(app))
 }
 
@@ -118,6 +143,9 @@ pub(super) fn lens_database_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: 
             let _ = app.run("lensDatabase.set", json!({"dir": null}));
         }
     });
-    // (read once per folder: a big lensfun folder takes a moment)
-    hint(ui, t, &status_line(&lens_profiles::status()));
+    // (read once per folder, on a worker: a big lensfun folder takes a moment)
+    ensure_read(app);
+    if let Some(line) = status_hint(&lens_profiles::status_now()) {
+        hint(ui, t, &line);
+    }
 }

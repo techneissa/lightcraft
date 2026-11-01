@@ -87,8 +87,19 @@ fn the_chosen_folder_is_read_reloaded_and_cleared() {
     let other = folder("state-other");
     lens_profiles::set_folder(Some(&other));
     assert!(lens_profiles::database().is_none());
+    // the UI thread's status never reads the folder: it says so until a worker has (`warm`)
+    lens_profiles::set_folder(Some(&dir));
+    let s = lens_profiles::status_now();
+    assert_eq!((s.reading, s.profiles), (true, 0), "status_now read the folder");
+    lens_profiles::warm();
+    let s = lens_profiles::status_now();
+    assert_eq!((s.reading, s.profiles), (false, 1));
+    // a changed folder is "reading" again at once
+    lens_profiles::reload();
+    assert!(lens_profiles::status_now().reading);
     // cleared: nothing configured
     lens_profiles::set_folder(None);
+    assert!(!lens_profiles::status_now().reading, "no folder, nothing to read");
     let s = lens_profiles::status();
     assert_eq!((s.source, s.dir, s.setting, s.profiles), (FolderSource::None, None, None, 0));
     let _ = std::fs::remove_dir_all(&dir);
