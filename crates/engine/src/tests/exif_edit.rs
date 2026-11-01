@@ -292,3 +292,25 @@ fn a_lens_change_keeps_the_edits_and_the_files_own_values_are_never_checked() {
     assert!(e.contains("This lens opens to f/4 at most"), "{e}");
     assert!(meta(&s, ids[2]).exif.aperture.is_none(), "nothing of a refused call is applied");
 }
+
+#[test]
+fn a_refusal_on_many_photos_names_the_first_refused_photo_and_how_many() {
+    let (mut s, ids) = library();
+    // photos 0 and 1 have a lens that opens to f/4 at most, photo 2 one that opens wider
+    for id in &ids[..2] {
+        s.execute("photo.setMeta", &json!({"ids": [id.0], "lens": "16-35mm f/4"})).unwrap();
+    }
+    s.execute("photo.setMeta", &json!({"ids": [ids[2].0], "lens": "50mm f/1.4"})).unwrap();
+    let all: Vec<u64> = ids.iter().map(|i| i.0).collect();
+    let (snapshot, depth) = (s.catalog.to_snapshot(), s.undo.len());
+    let e = s.execute("photo.setMeta", &json!({"ids": all, "aperture": "f/2"})).unwrap_err().to_string();
+    let first = s.catalog.photo(ids[0]).unwrap().file_name.clone();
+    assert!(e.contains("This lens opens to f/4 at most"), "{e}");
+    assert!(e.contains(&first), "the first refused photo is named ({first}): {e}");
+    assert!(e.contains("2 of 3 photos refused"), "{e}");
+    assert_eq!(s.catalog.to_snapshot(), snapshot, "all or nothing: the photo whose lens allows it is not changed either");
+    assert_eq!(s.undo.len(), depth);
+    // one photo: just the reason
+    let e = s.execute("photo.setMeta", &json!({"ids": [ids[0].0], "aperture": "f/2"})).unwrap_err().to_string();
+    assert!(e.contains("This lens opens to f/4 at most") && !e.contains("refused"), "{e}");
+}

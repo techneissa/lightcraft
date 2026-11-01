@@ -324,3 +324,40 @@ fn a_lens_change_keeps_an_edit_and_marks_it_while_it_is_out_of_range() {
     run(&mut h, "photo.setMeta", json!({"ids": [ids[0].0], "lens": "24-70mm f/2.8"}));
     assert!(!has(&h, "exifAlert:aperture") && !has(&h, "exifAlert:focal"));
 }
+
+#[test]
+fn a_refusal_is_over_when_the_next_edit_begins_and_the_files_own_values_are_never_flagged() {
+    let (mut h, ids) = info_panel();
+    photo_with_lens(&mut h, &ids, "16-35mm f/4");
+    // the file's own f/1.8 sits on a lens that opens to f/4 only: shown as it is, never flagged
+    assert!(!has(&h, "exifAlert:aperture"));
+    type_into(&mut h, "aperture", "f/2");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(has(&h, "exifAlert:aperture"), "the refused edit is the one on screen");
+    assert!(h.painted_text().iter().any(|t| t == "f / 1.8"), "the value is still the file's");
+    // the next edit begins (any value): the old refusal no longer marks the file's value
+    ask(&mut h, "ui.clickWidget", json!({"id": "exifValue:iso"}));
+    assert!(!has(&h, "exifAlert:aperture"), "a ! must not stay on a row that shows the file's own value");
+    ask(&mut h, "ui.key", json!({"key": "Escape"}));
+    assert!(!has(&h, "exifAlert:aperture") && !has(&h, "exifAlert:iso"));
+    // refused again, then a reset: gone as well
+    type_into(&mut h, "aperture", "f/2");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert!(has(&h, "exifAlert:aperture"));
+    run(&mut h, "photo.setMeta", json!({"ids": [ids[0].0], "iso": 800}));
+    ask(&mut h, "ui.clickWidget", json!({"id": "button:exifResetAll"}));
+    assert!(!has(&h, "exifAlert:aperture"), "Reset All ends it too");
+}
+
+#[test]
+fn a_click_on_camera_or_lens_opens_the_list_of_names_but_not_on_a_number() {
+    let (mut h, _) = info_panel();
+    for key in ["camera", "lens"] {
+        ask(&mut h, "ui.clickWidget", json!({"id": format!("exifValue:{key}")}));
+        assert!(has(&h, &format!("exifSuggestion:{key}:0")), "{key}: the list opens on the click, before anything is typed");
+        ask(&mut h, "ui.key", json!({"key": "Escape"}));
+        assert!(!has(&h, &format!("exifSuggestion:{key}:0")), "{key}: Esc closes it");
+    }
+    ask(&mut h, "ui.clickWidget", json!({"id": "exifValue:iso"}));
+    assert!(!has(&h, "exifSuggestion:iso:0") && !has(&h, "exifSuggestion:camera:0"));
+}

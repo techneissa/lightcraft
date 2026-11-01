@@ -22,9 +22,10 @@ fn value_text(cmd: &str, field: ExifField, v: &Value) -> Result<Option<String>> 
     }
 }
 
-/// Applies the edit keys present in `p` to `m`; returns whether any was present. Nothing is
-/// half-applied: on `Err`, `m` is as it was.
-pub(crate) fn apply_params(cmd: &str, m: &mut Meta, p: &Value) -> Result<bool> {
+/// Applies the edit keys present in `p` to `m`; returns whether any was present, and the reason when a focal length or
+/// aperture the photo's lens cannot give was asked for (`aperture: This lens opens to f/4 at most`), so a caller with
+/// many photos can say which were refused. Nothing is half-applied: on a refusal or an `Err`, `m` is as it was.
+pub(crate) fn apply_params(cmd: &str, m: &mut Meta, p: &Value) -> Result<(bool, Option<String>)> {
     let mut edited = m.clone();
     let mut any = false;
     for field in ExifField::ALL {
@@ -39,13 +40,23 @@ pub(crate) fn apply_params(cmd: &str, m: &mut Meta, p: &Value) -> Result<bool> {
         if p.get(field.key()).is_some_and(|v| !v.is_null())
             && let Some(why) = refusal(&edited, field)
         {
-            return Err(bad(cmd, format!("{}: {why}", field.key())));
+            return Ok((any, Some(format!("{}: {why}", field.key()))));
         }
     }
     if any {
         *m = edited;
     }
-    Ok(any)
+    Ok((any, None))
+}
+
+/// The error for the photos a call was refused on, as `(file name, reason)`: the first one's name and reason, and how
+/// many of the `total` photos were refused. A call on one photo says just the reason.
+pub(crate) fn refused_error(cmd: &str, refused: &[(String, String)], total: usize) -> crate::EngineError {
+    let Some((file, why)) = refused.first() else { return bad(cmd, "nothing refused") };
+    if total <= 1 {
+        return bad(cmd, why.clone());
+    }
+    bad(cmd, format!("{why} ({file}; {} of {total} photos refused)", refused.len()))
 }
 
 /// The fields named by `fields` (a list of keys), or all of them when it is absent.

@@ -72,20 +72,20 @@ fn hostile_names_never_panic_and_set_no_limit() {
 #[test]
 fn an_aperture_below_the_limit_is_refused_with_a_reason() {
     let l = LensLimits::of("16-35mm f/4");
-    assert_eq!(l.aperture_refusal(2.8).as_deref(), Some("This lens opens to f/4 at most"));
+    assert_eq!(l.aperture_refusal(2.8).map(|r| r.to_string()).as_deref(), Some("This lens opens to f/4 at most"));
     assert_eq!(l.aperture_refusal(4.0), None);
     assert_eq!(l.aperture_refusal(5.6), None);
-    assert_eq!(LensLimits::of("18-55mm F3.5-5.6").aperture_refusal(3.0).as_deref(), Some("This lens opens to f/3.5 at most"));
+    assert_eq!(LensLimits::of("18-55mm F3.5-5.6").aperture_refusal(3.0).map(|r| r.to_string()).as_deref(), Some("This lens opens to f/3.5 at most"));
     assert_eq!(LensLimits::of("Mystery").aperture_refusal(0.5), None);
 }
 
 #[test]
 fn a_focal_length_outside_the_range_is_refused_with_a_reason() {
     let l = LensLimits::of("16-35mm f/4");
-    assert_eq!(l.focal_refusal(50.0).as_deref(), Some("This lens covers 16–35 mm"));
-    assert_eq!(l.focal_refusal(10.0).as_deref(), Some("This lens covers 16–35 mm"));
+    assert_eq!(l.focal_refusal(50.0).map(|r| r.to_string()).as_deref(), Some("This lens covers 16–35 mm"));
+    assert_eq!(l.focal_refusal(10.0).map(|r| r.to_string()).as_deref(), Some("This lens covers 16–35 mm"));
     assert_eq!((l.focal_refusal(16.0), l.focal_refusal(35.0), l.focal_refusal(24.0)), (None, None, None));
-    assert_eq!(LensLimits::of("50mm f/1.8").focal_refusal(35.0).as_deref(), Some("This lens is 50 mm"));
+    assert_eq!(LensLimits::of("50mm f/1.8").focal_refusal(35.0).map(|r| r.to_string()).as_deref(), Some("This lens is 50 mm"));
     assert_eq!(LensLimits::of("50mm f/1.8").focal_refusal(50.0), None);
     assert_eq!(LensLimits::of("").focal_refusal(1234.0), None);
 }
@@ -106,4 +106,58 @@ fn only_an_edited_value_is_checked_against_the_lens_shown() {
     m.set_exif(ExifField::Lens, Some("70-200mm F2.8")).unwrap();
     assert!(refusal(&m, ExifField::Focal).is_some(), "a lens change leaves the edit, and now it is out of range");
     assert_eq!(refusal(&m, ExifField::Iso), None);
+}
+
+#[test]
+fn a_teleconverter_scales_the_limits() {
+    let near = |a: Option<f32>, b: f32| a.is_some_and(|a| (a - b).abs() < 0.01);
+    let l = LensLimits::of("100-400mm f/4.5-5.6 + 1.4x");
+    assert!(l.focal_mm.is_some_and(|(lo, hi)| (lo - 140.0).abs() < 0.1 && (hi - 560.0).abs() < 0.1), "{l:?}");
+    assert!(near(l.max_aperture, 6.3), "{l:?}");
+    assert_eq!(l.focal_refusal(560.0), None, "560 mm is what the lens gives with its converter");
+    assert_eq!(l.aperture_refusal(6.3), None);
+    assert!(l.aperture_refusal(4.5).is_some(), "f/4.5 is gone with the converter");
+    let l = LensLimits::of("300mm f/2.8 + EF1.4x");
+    assert_eq!(l.focal_refusal(420.0), None);
+    assert!(near(l.max_aperture, 3.92), "{l:?}");
+    for (name, focal, aperture) in [
+        ("70-200mm f/2.8 + 2x", (140.0, 400.0), 5.6),
+        ("70-200mm F2.8 GM OSS with TC-20E", (140.0, 400.0), 5.6),
+        ("Nikkor 200-500mm f/5.6E + TC-14E III", (280.0, 700.0), 7.84),
+        ("Canon EF 100-400mm f/4.5-5.6L IS II USM + Extender EF 1.4x III", (140.0, 560.0), 6.3),
+        ("400mm f/2.8 + x1.4", (560.0, 560.0), 3.92),
+        ("400mm f/2.8 + 1.4X", (560.0, 560.0), 3.92),
+        ("400mm f/2.8 + 1,4x", (560.0, 560.0), 3.92),
+    ] {
+        let l = LensLimits::of(name);
+        assert!(l.focal_mm.is_some_and(|(lo, hi)| (lo - focal.0).abs() < 0.2 && (hi - focal.1).abs() < 0.2), "{name}: {l:?}");
+        assert!(near(l.max_aperture, aperture), "{name}: {l:?}");
+    }
+}
+
+#[test]
+fn a_teleconverter_with_no_readable_factor_sets_no_limit() {
+    for name in [
+        "70-200mm f/2.8 + Extender",
+        "70-200mm f/2.8 with teleconverter",
+        "300mm f/2.8 + TC",
+        "300mm f/2.8 + 0x",
+        "300mm f/2.8 + 99x",
+        "300mm f/2.8 + ",
+        "70-200mm f/2.8 + 1.4",
+    ] {
+        assert_eq!(LensLimits::of(name), LensLimits::default(), "{name}");
+    }
+    // a "+" in a name with no converter mentioned is covered by the same rule: better no limit than a wrong one
+    assert_eq!(limits("FE 24-70mm F2.8 GM"), (Some((24.0, 70.0)), Some(2.8)), "no converter, no scaling");
+}
+
+#[test]
+fn a_decimal_comma_reads_as_a_point() {
+    assert_eq!(limits("Summilux 35 mm f/1,4"), (Some((35.0, 35.0)), Some(1.4)));
+    assert_eq!(limits("Summicron 50mm F2,0"), (Some((50.0, 50.0)), Some(2.0)));
+    assert_eq!(limits("Zoom 18-55mm F3,5-5,6"), (Some((18.0, 55.0)), Some(3.5)));
+    assert_eq!(limits("Lens 8,5mm f/1,8"), (Some((8.5, 8.5)), Some(1.8)));
+    // a comma between two things is not a decimal point
+    assert_eq!(limits("Lens 50mm,f/1.8"), (Some((50.0, 50.0)), Some(1.8)));
 }

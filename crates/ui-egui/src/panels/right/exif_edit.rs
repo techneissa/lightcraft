@@ -10,7 +10,8 @@
 //! photos selected a field where they differ says Mixed.
 
 use egui::{Rect, Sense, pos2, vec2};
-use lightcraft_catalog::lens_limits::refusal;
+use lightcraft_catalog::exif_override::{format_aperture, format_focal};
+use lightcraft_catalog::lens_limits::{LensRefusal, refusal};
 use lightcraft_catalog::{ExifField, Meta, Photo, PhotoId};
 use serde_json::{Value, json};
 
@@ -39,7 +40,7 @@ pub(super) struct Scope {
     /// Per [`ExifField::ALL`]: some target has an edited value.
     edited: [bool; 6],
     /// Per [`ExifField::ALL`]: why an edited value does not fit its photo's lens (a lens change can leave one so).
-    alert: [Option<String>; 6],
+    alert: [Option<LensRefusal>; 6],
     /// The lens the card shows, which a refusal is remembered against.
     lens: String,
 }
@@ -49,7 +50,7 @@ pub(super) struct Scope {
 struct Refused {
     ids: Vec<u64>,
     lens: String,
-    reason: String,
+    reason: LensRefusal,
     at: f64,
 }
 
@@ -69,7 +70,7 @@ impl Scope {
         let targets = if (several && !for_selected) || selected.is_empty() { vec![p.id] } else { selected.clone() };
         let shown = super::info::shown_meta(&app.session.catalog, p, &selected, for_selected);
         let (mut mixed, mut edited) = ([false; 6], [false; 6]);
-        let mut alert: [Option<String>; 6] = Default::default();
+        let mut alert: [Option<LensRefusal>; 6] = Default::default();
         for m in targets.iter().filter_map(|&id| app.session.catalog.photo(id)).map(|q| &q.meta) {
             for (i, f) in ExifField::ALL.into_iter().enumerate() {
                 edited[i] |= m.exif_overridden(f);
@@ -90,8 +91,8 @@ impl Scope {
     }
 
     /// Why `field`'s row carries a "!": an edit out of its lens's range, or a refused edit.
-    fn flag(&self, ctx: &egui::Context, field: ExifField) -> Option<String> {
-        self.alert[index(field)].clone().or_else(|| self.refused(ctx, field).map(|r| r.reason))
+    fn flag(&self, ctx: &egui::Context, field: ExifField) -> Option<LensRefusal> {
+        self.alert[index(field)].or_else(|| self.refused(ctx, field).map(|r| r.reason))
     }
 
     /// Whether any row carries a "!" (every row then keeps room for it, so the rows line up).
@@ -100,7 +101,7 @@ impl Scope {
     }
 
     /// Why `text` as `field`'s value does not fit the lens of some target photo, if it does not.
-    fn precheck(&self, app: &LightcraftApp, field: ExifField, text: &str) -> Option<String> {
+    fn precheck(&self, app: &LightcraftApp, field: ExifField, text: &str) -> Option<LensRefusal> {
         self.targets.iter().filter_map(|&id| app.session.catalog.photo(id)).find_map(|q| {
             let mut m = q.meta.clone();
             m.set_exif(field, Some(text)).ok()?;
@@ -233,10 +234,26 @@ fn run_reset(app: &mut LightcraftApp, ctx: &egui::Context, scope: &Scope, field:
 }
 
 /// A refused value: remembered (for the "!" and the shake), and nothing is saved.
-fn refuse(ctx: &egui::Context, scope: &Scope, field: ExifField, reason: String) {
+fn refuse(ctx: &egui::Context, scope: &Scope, field: ExifField, reason: LensRefusal) {
     let at = ctx.input(|i| i.time);
     ctx.data_mut(|d| d.insert_temp(refused_id(field), Refused { ids: scope.ids(), lens: scope.lens.clone(), reason, at }));
     ctx.request_repaint();
+}
+
+/// A refusal's sentence in the interface language.
+fn reason_text(r: &LensRefusal) -> String {
+    match *r {
+        LensRefusal::Aperture(limit) => crate::i18n::tr_format!("This lens opens to f/{} at most", format_aperture(limit)),
+        LensRefusal::Focal(lo, hi) if lo == hi => crate::i18n::tr_format!("This lens is {} mm", format_focal(lo)),
+        LensRefusal::Focal(lo, hi) => crate::i18n::tr_format!("This lens covers {}–{} mm", format_focal(lo), format_focal(hi)),
+    }
+}
+
+/// Forget every refused edit: a new edit begins, so the old refusal is over.
+fn forget_refusals(ctx: &egui::Context) {
+    for f in ExifField::ALL {
+        ctx.data_mut(|d| d.remove::<Refused>(refused_id(f)));
+    }
 }
 
 /// How far a refused value is pushed aside now (a quick shake that settles), and whether it is still moving.
@@ -321,7 +338,11 @@ fn rest_value(ui: &mut egui::Ui, scope: &Scope, field: ExifField, id: egui::Id, 
     let galley = crate::widgets::one_line(ui.painter(), &shown, egui::FontId::proportional(12.0), color, rect.width());
     ui.painter().galley(pos2(at.left(), at.center().y - galley.size().y / 2.0), galley, color);
     if resp.clicked() {
-        ui.data_mut(|d| d.insert_temp(id, Edit::new(value, mixed, scope.ids())));
+        // a new edit: an earlier refusal is over, and Camera and Lens open their list of names at once
+        forget_refusals(ui.ctx());
+        let mut edit = Edit::new(value, mixed, scope.ids());
+        edit.open = matches!(field, ExifField::Camera | ExifField::Lens);
+        ui.data_mut(|d| d.insert_temp(id, edit));
         ui.ctx().request_repaint();
     }
     rect
@@ -425,7 +446,7 @@ fn cluster(app: &mut LightcraftApp, ui: &mut egui::Ui, scope: &Scope, field: Exi
     if scope.any_flag(ui.ctx()) {
         let flag = scope.flag(ui.ctx(), field);
         let (r, resp) = ui.allocate_exact_size(vec2(ALERT_SIZE, ALERT_SIZE), if flag.is_some() { Sense::click() } else { Sense::hover() });
-        if let Some(reason) = flag {
+        if let Some(reason) = flag.as_ref().map(reason_text) {
             register(ui, format!("exifAlert:{}", field.key()), r);
             crate::icons::paint(ui.painter(), r, Icon::Alert, t.reject);
             crate::widgets::announce(&resp, reason.clone());

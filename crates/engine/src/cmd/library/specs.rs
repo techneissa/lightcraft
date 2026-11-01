@@ -738,6 +738,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     None => None,
                 };
                 let mut ops = Vec::new();
+                // photos whose lens cannot give the focal length or aperture asked for: the call changes none of them
+                let mut refused: Vec<(String, String)> = Vec::new();
+                let total = targets.len();
                 for id in targets {
                     let Some(ph) = s.catalog.photo(id) else { continue };
                     let mut m = ph.meta.clone();
@@ -786,8 +789,15 @@ pub fn specs() -> Vec<CommandSpec> {
                         let k = clean(&k);
                         m.keywords.retain(|x| !same(&clean(x), &k));
                     }
-                    crate::cmd::exif_edit::apply_params("photo.setMeta", &mut m, p)?;
+                    let (_, why) = crate::cmd::exif_edit::apply_params("photo.setMeta", &mut m, p)?;
+                    if let Some(why) = why {
+                        refused.push((ph.file_name.clone(), why));
+                        continue;
+                    }
                     ops.push(Op::SetMeta { id, meta: Box::new(m) });
+                }
+                if !refused.is_empty() {
+                    return Err(crate::cmd::exif_edit::refused_error("photo.setMeta", &refused, total));
                 }
                 let n = ops.len();
                 s.commit("Edit Info", Op::Batch { ops })?;
