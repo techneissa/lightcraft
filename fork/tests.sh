@@ -13,7 +13,7 @@ run cargo test -p lightcraft-develop
 run cargo test -p lightcraft-catalog
 run cargo test -p lightcraft-preview
 run cargo test -p lightcraft-pipeline --lib -- tests_tone_sliders tests_tone tests_slider_strength
-run cargo test -p lightcraft-ui-egui --lib -- delete_permanently delete_local quick_delete view_colour smart_editing auto_import toast render:: layers_task keybinds shortcut_editing shortcut_when shortcut tests_slider_columns temp_slider dialog_fit_backup tests::keymap shortcuts:: animated_gif selection_order split_divider before_after command_palette edit_all photo_menu topbar_items titlebar loupe_stand_in the_loupe_says denoise settings profile camera_colour thumbnail dropdown_search quick_filters shortcut_backup clipping exif_edit brush_live edit_sections export_reveal lens_database dialog_fit
+run cargo test -p lightcraft-ui-egui --lib -- delete_permanently delete_local quick_delete view_colour smart_editing auto_import toast render:: layers_task keybinds shortcut_editing shortcut_when shortcut tests_slider_columns fixed_slider_labels temp_slider dialog_fit_backup tests::keymap shortcuts:: animated_gif selection_order split_divider before_after command_palette edit_all photo_menu topbar_items titlebar loupe_stand_in the_loupe_says denoise settings profile camera_colour thumbnail dropdown_search quick_filters shortcut_backup clipping exif_edit brush_live edit_sections export_reveal lens_database
 run cargo test -p lightcraft-raster --lib channel_clipping
 run cargo test -p lightcraft-pipeline --lib clip_preview
 run cargo test -p lightcraft-gpu --lib handles
