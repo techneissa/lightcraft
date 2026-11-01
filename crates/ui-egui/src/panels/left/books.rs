@@ -7,8 +7,39 @@ use super::rows::{ROW_HEIGHT, Row};
 use super::{Icon, LightcraftApp, Sense, Tokens, json, pos2, register, vec2};
 use crate::panels::book::Prompt;
 
-/// The rows of the Books section.
-pub(super) fn books_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+/// The Books block below the sections: a header with a + that makes an empty book, then a row per book.
+pub(super) fn books_block(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    ui.add_space(14.0);
+    let (header, _) = ui.allocate_exact_size(vec2(ui.available_width(), 30.0), Sense::hover());
+    register(ui, "bookHeader", header);
+    ui.painter().text(
+        pos2(header.left() + 18.0, header.center().y),
+        egui::Align2::LEFT_CENTER,
+        crate::i18n::tr("Books"),
+        t.semibold(12.5),
+        t.text_dim,
+    );
+    let edge = super::sections::visible_right(ui).min(header.right());
+    let mut hdr = ui.new_child(
+        egui::UiBuilder::new()
+            .max_rect(egui::Rect::from_min_max(pos2(edge - 50.0, header.top()), pos2(edge, header.bottom())))
+            .layout(egui::Layout::right_to_left(egui::Align::Center)),
+    );
+    if crate::widgets::icon_button(&mut hdr, "bookNew", Icon::Plus, vec2(26.0, 26.0), false, true, "Create Book").clicked() {
+        let ctx = ui.ctx().clone();
+        new_book(app, &ctx);
+    }
+    if app.session.books.books.is_empty() {
+        let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_HEIGHT), Sense::hover());
+        register(ui, "bookEmpty", r);
+        ui.painter().text(pos2(r.left() + 18.0, r.center().y), egui::Align2::LEFT_CENTER, crate::i18n::tr("No books yet"), t.font(13.0), t.text_dim);
+    }
+    books_rows(app, ui);
+}
+
+/// The rows of the books.
+fn books_rows(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let books: Vec<(u32, String, usize)> = app.session.books.books.iter().map(|b| (b.id, b.name.clone(), b.photos().len())).collect();
     for (id, name, n) in books {
@@ -92,7 +123,7 @@ fn drop_target(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
 }
 
 /// The header's +: an empty book, named in its row.
-pub(super) fn new_book(app: &mut LightcraftApp, ctx: &egui::Context) {
+fn new_book(app: &mut LightcraftApp, ctx: &egui::Context) {
     match app.run("book.create", json!({"empty": true})) {
         Ok(b) => {
             if let Some(id) = b["id"].as_u64().and_then(|i| u32::try_from(i).ok()) {

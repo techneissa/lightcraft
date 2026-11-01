@@ -184,7 +184,9 @@ pub(super) fn resolve_drag(app: &mut LightcraftApp, ctx: &egui::Context, bu: &mu
         return;
     }
     bu.drag = None;
-    let target = pos.and_then(|p| bu.hits.iter().rev().find(|(_, r)| r.contains(p)).map(|(h, _)| *h));
+    let target = pos.and_then(|p| {
+        bu.hits.iter().rev().find(|(_, r)| r.contains(p)).map(|(h, _)| *h).or_else(|| bu.pool.filter(|r| r.contains(p)).map(|_| Hit::Pool))
+    });
     let to = match target {
         Some(Hit::Cell { page, cell }) => Slot::Cell { page, cell },
         Some(Hit::Pool) if matches!(from, Slot::Cell { .. }) => Slot::Unplaced { unplaced: book.unplaced.len() },

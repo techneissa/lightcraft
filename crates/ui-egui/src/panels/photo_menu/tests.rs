@@ -111,7 +111,11 @@ fn the_default_menu_is_the_official_one_plus_before_after_and_customize() {
     let id = select(&mut app, 3);
     let official = painted(&mut app, |app, ui| crate::panels::grid::context_menu(app, ui, id));
     let ours = painted(&mut app, |app, ui| show(app, ui, id));
-    let added = [crate::i18n::tr("Before/After Split").to_string(), crate::i18n::tr("Customize Menu…").to_string()];
+    let added = [
+        crate::i18n::tr("Before/After Split").to_string(),
+        crate::i18n::tr("Customize Menu…").to_string(),
+        crate::i18n::tr("Add to Book").to_string(),
+    ];
     let ours: Vec<String> = ours.into_iter().filter(|t| !added.contains(t)).collect();
     assert_eq!(ours, official);
     assert!(official.iter().any(|t| t == "Export Animated GIF…"), "{official:?}");

@@ -20,7 +20,7 @@ const LABEL_H: f32 = 16.0;
 /// Left edge of page `index` in the strip, and the strip's width up to its end.
 fn x_of(index: usize, w: f32) -> f32 {
     // pages 0 | 1 2 | 3 4 …: a wider gap before each spread
-    let spreads = (index + 1) / 2;
+    let spreads = index.div_ceil(2);
     index as f32 * (w + GAP) + spreads as f32 * SPREAD_GAP
 }
 

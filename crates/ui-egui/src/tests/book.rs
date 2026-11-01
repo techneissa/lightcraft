@@ -16,6 +16,8 @@ fn demo() -> Headless {
     let services = Services { png: None, local_places: Some(Vec::new()), ..Default::default() };
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), services);
     let mut h = Headless::new(app, [1600.0, 1000.0], 1.0);
+    let r = h.request("ui.set", json!({"leftPanel": true, "sidebar": [{"id": "albums", "hidden": true}, {"id": "local", "hidden": true}, {"id": "byDate", "hidden": true}, {"id": "folders", "hidden": true}, {"id": "keywords", "hidden": true}]}), T);
+    assert_eq!(r["ok"], true, "{r}");
     h.settle(T);
     h
 }
@@ -323,21 +325,30 @@ fn a_book_of_two_hundred_pages_draws_inside_the_frame_budget() {
     let mut h = demo();
     let photos: Vec<u64> = ids(&h, 24);
     let mut big = Book { name: "Big".into(), ..Default::default() };
-    big.pages = (0..MAX_PAGES).map(|i| Page::with(Template::Grid4, &[photos[i % 24], photos[(i + 1) % 24], photos[(i + 2) % 24], photos[(i + 3) % 24]])).collect();
+    big.pages = (0..MAX_PAGES)
+        .map(|i| Page::with(Template::Grid4, &[photos[i % 24], photos[(i + 1) % 24], photos[(i + 2) % 24], photos[(i + 3) % 24]]))
+        .collect();
     big.validate().unwrap();
     h.app.session.books.add(big).unwrap();
     cmd(&mut h, "view.book", json!({}));
     h.app.ui.book.page = 100;
     h.app.ui.book.reveal_page = true;
     h.settle(T);
-    let mut times = Vec::new();
+    let (mut times, mut steps) = (Vec::new(), Vec::new());
     for _ in 0..60 {
+        h.view.ctx.request_repaint();
+        let started = std::time::Instant::now();
         h.step();
+        steps.push(started.elapsed().as_secs_f32() * 1000.0);
         times.push(h.app.ui.book.frame_ms);
     }
-    let (sum, worst) = times.iter().fold((0.0f32, 0.0f32), |(s, w), t| (s + t, w.max(*t)));
-    let mean = sum / times.len() as f32;
-    eprintln!("book view, 200 pages: mean {mean:.2} ms, worst {worst:.2} ms over {} frames", times.len());
+    let stats = |v: &[f32]| (v.iter().sum::<f32>() / v.len() as f32, v.iter().fold(0.0f32, |w, t| w.max(*t)));
+    let (mean, worst) = stats(&times);
+    let (step_mean, step_worst) = stats(&steps);
+    eprintln!(
+        "book view, 200 pages: building the view mean {mean:.2} ms, worst {worst:.2} ms; the whole headless frame (UI, tessellation, CPU raster) mean {step_mean:.2} ms, worst {step_worst:.2} ms; {} frames",
+        times.len()
+    );
     assert!(has(&h, "book:thumb:100"), "the page on show is in the strip");
     assert!(!has(&h, "book:thumb:0") && !has(&h, "book:thumb:199"), "only the pages on screen are drawn");
     assert!(mean < 16.0, "mean frame {mean} ms");

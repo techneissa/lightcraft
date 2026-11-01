@@ -16,19 +16,12 @@ pub enum SidebarSection {
     ByDate,
     Folders,
     Keywords,
-    Books,
 }
 
 impl SidebarSection {
     /// Every section, in the order a new library shows them.
-    pub const ALL: [SidebarSection; 6] = [
-        SidebarSection::Albums,
-        SidebarSection::Local,
-        SidebarSection::ByDate,
-        SidebarSection::Folders,
-        SidebarSection::Keywords,
-        SidebarSection::Books,
-    ];
+    pub const ALL: [SidebarSection; 5] =
+        [SidebarSection::Albums, SidebarSection::Local, SidebarSection::ByDate, SidebarSection::Folders, SidebarSection::Keywords];
 
     /// The name commands, the saved UI state and widget ids (`sidebarSection:<id>`) use.
     pub const fn id(self) -> &'static str {
@@ -38,7 +31,6 @@ impl SidebarSection {
             SidebarSection::ByDate => "byDate",
             SidebarSection::Folders => "folders",
             SidebarSection::Keywords => "keywords",
-            SidebarSection::Books => "books",
         }
     }
 
@@ -50,7 +42,6 @@ impl SidebarSection {
             SidebarSection::ByDate => "By Date",
             SidebarSection::Folders => "Folders",
             SidebarSection::Keywords => "Keywords",
-            SidebarSection::Books => "Books",
         }
     }
 
@@ -62,7 +53,6 @@ impl SidebarSection {
             SidebarSection::ByDate => "No photos yet",
             SidebarSection::Folders => "No imported folders yet",
             SidebarSection::Keywords => "No keywords yet",
-            SidebarSection::Books => "No books yet",
         }
     }
 

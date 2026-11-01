@@ -1,5 +1,6 @@
-//! The Book view (File ▸ Book…, or a book in the side bar): a large spread in the middle, the
-//! page strip below it and the book's photos on the right, in the main window like the other views.
+//! The Book view (File ▸ Book…, or a book in the side bar): a large spread in the middle and the
+//! page strip below it in the main window like the other views, and the book's photos in the right
+//! panel (`panels/right.rs` hands it to [`column`] while this view is on).
 //!
 //! Every change goes through a `book.*` command ([`lightcraft_engine::cmd`]) and is one undo step;
 //! this module draws the session's books ([`lightcraft_engine::Session::books`]) and turns input into
@@ -9,7 +10,7 @@
 //! * [`spread`]: the open spread: drag a photo from the pool or another frame onto a frame, drag
 //!   inside a frame to move the photo, scroll or pinch to zoom it (the crop is saved per cell).
 //! * [`strip`]: every page as a thumbnail, only the ones on screen drawn: click, drag to reorder, +.
-//! * [`pool`]: the book's photos, searchable, unplaced first; and the book's settings.
+//! * [`pool`]: the right panel: the book's photos, searchable, unplaced first; and the book's settings.
 //! * [`menu`]: Add to Book (the photo menu, a drag onto a book in the side bar) and its prompts.
 //! * [`thumbs`]: pages and photos from the grid's thumbnails.
 //!
@@ -33,8 +34,6 @@ pub use menu::{Prompt, add_photos_to_book, show_prompt};
 
 /// Height of the page strip.
 const STRIP_H: f32 = 112.0;
-/// Width of the right column.
-const RIGHT_W: f32 = 296.0;
 /// Height of the bar above the spread.
 const BAR_H: f32 = 40.0;
 /// Seconds a zoom waits for the next scroll step before it is saved as one undo step.
@@ -98,8 +97,11 @@ pub struct BookUi {
     pub rename: Option<(u32, String)>,
     /// A question to answer before something is done.
     pub prompt: Option<Prompt>,
-    /// Where a dragged photo may land, as drawn this frame.
+    /// Where a dragged photo may land in the spread, as drawn this frame.
     pub(crate) hits: Vec<(Hit, Rect)>,
+    /// The pool's panel as drawn this frame (it is drawn before the spread): a photo dropped there
+    /// comes off its page.
+    pub(crate) pool: Option<Rect>,
     /// The strip scrolls to the page on show on the next frame.
     pub(crate) reveal_page: bool,
     /// Milliseconds the last frame of the view took to draw (for the frame-time check).
@@ -165,7 +167,22 @@ pub fn show(app: &mut LightcraftApp, ui: &mut Ui) {
             ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
+    bu.pool = None;
     bu.frame_ms = started.elapsed().as_secs_f32() * 1000.0;
+    app.ui.book = bu;
+}
+
+/// The right panel while the Book view is on: the book's photos and settings.
+pub fn column(app: &mut LightcraftApp, ui: &mut Ui) {
+    let t = Tokens::get(ui.ctx());
+    let mut bu = std::mem::take(&mut app.ui.book);
+    if let Ok(book) = app.session.books.find(None).cloned() {
+        let room = ui.max_rect();
+        pool::show(app, ui, &t, &mut bu, &book, room);
+        bu.pool = Some(room);
+    } else {
+        ui.painter().rect_filled(ui.max_rect(), 0.0, t.chrome);
+    }
     app.ui.book = bu;
 }
 
@@ -195,8 +212,7 @@ fn empty(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, bu: &mut BookUi) {
 /// The bar, the spread, the strip and the right column.
 fn layout(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, bu: &mut BookUi, book: &Book) {
     let area = ui.max_rect();
-    let right = Rect::from_min_max(egui::pos2((area.right() - RIGHT_W).max(area.left() + 200.0), area.top()), area.max);
-    let main = Rect::from_min_max(area.min, egui::pos2(right.left(), area.bottom()));
+    let main = area;
     let bar = Rect::from_min_size(main.min, vec2(main.width(), BAR_H));
     let strip = Rect::from_min_max(egui::pos2(main.left(), (main.bottom() - STRIP_H).max(bar.bottom())), main.max);
     let center = Rect::from_min_max(egui::pos2(main.left(), bar.bottom()), egui::pos2(main.right(), strip.top()));
@@ -205,7 +221,6 @@ fn layout(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, bu: &mut BookUi, boo
     bar_ui(app, &mut child(ui, bar, egui::Layout::left_to_right(egui::Align::Center)), t, bu, book);
     spread::show(app, &mut child(ui, center, egui::Layout::top_down(egui::Align::Min)), t, bu, book, center);
     strip::show(app, &mut child(ui, strip, egui::Layout::top_down(egui::Align::Min)), t, bu, book, strip);
-    pool::show(app, &mut child(ui, right, egui::Layout::top_down(egui::Align::Min)), t, bu, book, right);
 }
 
 /// Above the spread: the page counter with its arrows, and what can be done to the page on show.
@@ -324,6 +339,10 @@ pub(crate) fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     }
     app.ui.view = crate::state::ViewMode::Book;
     app.ui.book.reveal_page = true;
+    // the book's photos are in the right panel
+    if app.ui.right == crate::state::RightPanel::None {
+        app.ui.right = crate::state::RightPanel::Edit;
+    }
     Some(Ok(json!({"books": app.session.books.books.len(), "current": app.session.books.current})))
 }
 

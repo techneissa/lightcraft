@@ -33,6 +33,10 @@ pub(crate) use info::mixed_meta;
 use keywords::keywords;
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    // the Book view's photos and settings take the panel
+    if app.ui.view == crate::state::ViewMode::Book {
+        return super::book::column(app, ui);
+    }
     let t = Tokens::get(ui.ctx());
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider));
     frame.show(ui, |ui| {

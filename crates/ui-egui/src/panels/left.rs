@@ -173,13 +173,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         let tree = app.caches.keyword_tree(&app.session.catalog);
                         section(app, ui, s, tree.len(), |app, ui| keyword_rows(app, ui, &tree, 0.0))
                     }
-                    SidebarSection::Books => {
-                        let rows = app.session.books.books.len();
-                        section(app, ui, s, rows, books::books_rows)
-                    }
                 };
                 placed.push(at);
             }
+            // the books, below the sections (not one of them: fixed, like My Photos)
+            books::books_block(app, ui);
             ui.data_mut(|d| d.remove::<String>(egui::Id::unique(SCROLL_TO_ROW)));
             // room below the last section (a section dragged to the end is dropped here)
             ui.add_space(SECTION_GAP * 2.0);

@@ -8,7 +8,7 @@ use lightcraft_catalog::PhotoId;
 use lightcraft_engine::book::model::{Book, Slot};
 
 use super::thumbs::{self, Show};
-use super::{BookUi, Drag, Hit, Tab};
+use super::{BookUi, Drag, Tab};
 use crate::LightcraftApp;
 use crate::theme::Tokens;
 use crate::widgets::{register, text_button};
@@ -37,7 +37,6 @@ pub(super) fn show(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, bu: &mut Bo
     ui.painter().rect_filled(room, 0.0, t.chrome);
     ui.painter().line_segment([room.left_top(), room.left_bottom()], Stroke::new(1.0, t.divider));
     register(ui, "book:pool", room);
-    bu.hits.push((Hit::Pool, room));
     let inner = room.shrink2(vec2(10.0, 8.0));
     let mut col = ui.new_child(egui::UiBuilder::new().max_rect(inner).layout(egui::Layout::top_down(egui::Align::Min)));
     col.horizontal(|ui| {
