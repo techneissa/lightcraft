@@ -221,7 +221,9 @@ pub(super) fn preview_only_pill(ui: &mut egui::Ui, canvas: Rect, reason: &str) {
 /// nothing to show for it.
 fn info_line(field: crate::state::LoupeInfoField, photo: &lightcraft_catalog::Photo) -> Option<String> {
     use crate::state::LoupeInfoField as F;
-    let m = &photo.meta;
+    // what the person sees: edited camera and exposure values show, not only the file's
+    let shown = photo.meta.shown();
+    let m = &*shown;
     let text = match field {
         F::None => return None,
         F::FileName => photo.file_name.clone(),

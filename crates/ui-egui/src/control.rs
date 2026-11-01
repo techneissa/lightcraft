@@ -105,13 +105,17 @@ pub fn all_commands(app: &LightcraftApp) -> Value {
             let mut v = serde_json::to_value(&c).unwrap_or_default();
             if let Some(o) = v.as_object_mut() {
                 o.insert("shortcut".into(), json!(crate::shortcuts::shortcut_of(keymap, c.id)));
+                o.insert("shortcut2".into(), json!(crate::keybinds::model::effective(keymap, c.id, 1)));
+                o.insert("when".into(), json!(crate::keybinds::model::conditions::text(keymap, c.id)));
             }
             v
         })
         .collect();
     for (id, label, sc, menu) in crate::menus::ui_commands() {
         let sc = crate::shortcuts::binding(keymap, id, *sc);
-        v.push(json!({"id": id, "label": label, "shortcut": sc, "menu": [menu], "enabled": crate::menus::ui_enabled(app, id), "ui": true}));
+        let sc2 = crate::keybinds::model::effective(keymap, id, 1);
+        let when = crate::keybinds::model::conditions::text(keymap, id);
+        v.push(json!({"id": id, "label": label, "shortcut": sc, "shortcut2": sc2, "when": when, "menu": [menu], "enabled": crate::menus::ui_enabled(app, id), "ui": true}));
     }
     Value::Array(v)
 }
@@ -133,7 +137,7 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "selection": app.session.selection.ids.iter().map(|p| p.0).collect::<Vec<_>>(),
         "activeMask": app.session.active_mask,
         "widgetCount": app.widgets.len(),
-        "perf": {"viewFollowed": app.session.view_followed, "viewWorkedOut": app.session.view_worked_out, "frameMs": app.perf.frame_ms, "logicMs": app.perf.logic_ms, "updateMs": app.perf.update_ms, "maxUpdateMs": app.perf.max_update_ms, "fps": app.perf.fps, "lastRenderMs": app.renderer.last_main_ms, "renderQueue": app.renderer.queued(), "rendersInFlight": app.renderer.in_flight(), "pendingSlots": app.renderer.pending_slots(), "mergeRunning": app.merge.busy(), "lastMerge": app.merge.last_result, "rendersDone": app.renderer.completed, "thumbTextures": app.renderer.thumb_textures(), "variantTextures": app.renderer.variant_textures(), "gpu": (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten(), "gpuReason": lightcraft_engine::gpu::unavailable_reason(), "gpuFallback": lightcraft_engine::gpu::last_fallback()},
+        "perf": {"viewFollowed": app.session.view_followed, "viewWorkedOut": app.session.view_worked_out, "frameMs": app.perf.frame_ms, "logicMs": app.perf.logic_ms, "updateMs": app.perf.update_ms, "maxUpdateMs": app.perf.max_update_ms, "fps": app.perf.fps, "lastRenderMs": app.renderer.last_main_ms, "lastDraftRenderMs": app.renderer.last_draft_ms, "lastFullRenderMs": app.renderer.last_full_ms, "renderQueue": app.renderer.queued(), "rendersInFlight": app.renderer.in_flight(), "pendingSlots": app.renderer.pending_slots(), "mergeRunning": app.merge.busy(), "lastMerge": app.merge.last_result, "rendersDone": app.renderer.completed, "thumbTextures": app.renderer.thumb_textures(), "variantTextures": app.renderer.variant_textures(), "gpu": (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten(), "gpuReason": lightcraft_engine::gpu::unavailable_reason(), "gpuFallback": lightcraft_engine::gpu::last_fallback()},
         "loupe": app.loupe_shown.map(|(p, src)| json!({
             "photo": p.0,
             "source": src,
@@ -345,7 +349,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 ctx.request_repaint();
                 return started;
             }
+            app.from_control = true;
             let r = app.run(id, params);
+            app.from_control = false;
             ctx.request_repaint();
             wrap(r)
         }
@@ -555,7 +561,11 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
     use lightcraft_engine::export::{Destination, ExportOptions, export_batch};
     let p = &app.session.export_params(p)?;
     // the format follows `path` (JPEG when it names none), and `bitDepth` is checked against it
-    let opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
+    let mut opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
+    // only the Export dialog shows the file: not an agent, even through a preset or Export with Previous
+    if app.from_control {
+        opts.show_in_finder = false;
+    }
     let ids: Vec<_> = match p.get("ids").filter(|v| !v.is_null()) {
         // `ids` that aren't photo ids are an error, not "export the selection"
         Some(v) => v
@@ -605,7 +615,14 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
     } else {
         let w = app.services.write.as_mut().ok_or("no writer")?;
         let files = export_batch(&mut app.session, &ids, &opts, &to, &mut |path, bytes| w(path, bytes), &|path| std::path::Path::new(path).exists())?;
+        // the desktop app has the opener; a headless or CLI-driven run has none and shows nothing
+        let shown = crate::export_reveal::reveal_exported(app, opts.show_in_finder, &files);
         let mut out = json!({"files": files});
+        match shown {
+            Ok(true) => out["shownInFinder"] = json!(true),
+            Ok(false) => {}
+            Err(e) => out["showInFinderError"] = json!(e),
+        }
         // Photos may take minutes (and waits for the permission prompt): in the desktop app on a
         // worker, never on this (UI) thread; the app announces the outcome and
         // `export.photosImports` reports it. A window-less run (snapshot scripts) waits.

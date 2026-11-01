@@ -7,17 +7,22 @@ mod album_missing;
 mod album_order;
 mod album_remove;
 mod albums_local;
+mod animated_gif;
 mod color;
 mod constrain_crop;
 mod crop_angle;
 mod crop_aspect;
+mod delete_local_rejected;
 mod denoise;
+mod exif_edit;
+mod exif_xmp;
 mod export;
 mod face_models;
 #[cfg(not(target_arch = "wasm32"))]
 pub(super) mod face_recognize;
 #[cfg(not(target_arch = "wasm32"))]
 mod face_tiles;
+mod file_trash;
 mod filesystem_history;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod focus_scan;
@@ -29,10 +34,16 @@ mod ids_params;
 mod import;
 mod import_move;
 mod keyword_list;
+mod lens_database;
 mod libops;
 mod library;
 mod lightroom_folder;
+mod local_profiles;
 mod location;
+// macOS Colour needs macOS's own raw decoder: the test only means something on the Mac (fork is Mac only)
+#[cfg(target_os = "macos")]
+mod macos_colour;
+mod macos_wb;
 mod mask_effects;
 mod merge;
 mod move_to_share;
@@ -42,13 +53,16 @@ mod prefs;
 mod presets_scale;
 mod print;
 mod process;
+mod quick_filters;
 mod recheck;
 mod saved_locations;
 mod segment;
 mod settings_files;
 mod shelved_folder;
+mod sidecar_queue;
 mod slide;
 mod slideshow_export;
+mod smart_local;
 mod spots;
 mod sync;
 mod tracklog;
@@ -1036,6 +1050,26 @@ fn auto_sync_carries_only_the_changed_settings() {
     assert_eq!(s.develop_of(PhotoId(ids[1])).unwrap().light.exposure, 0.7);
 }
 
+/// Going back to Camera Matching (`auto`, left out of the stored settings) reaches the other selected photos too.
+#[test]
+fn auto_sync_carries_camera_matching_back() {
+    use lightcraft_catalog::PhotoId;
+    use lightcraft_develop::CameraColour;
+    let mut s = demo();
+    let ids: Vec<u64> = s.catalog.photos().take(3).map(|p| p.id.0).collect();
+    s.execute("library.select", &json!({"ids": [ids[0], ids[1]], "active": ids[0]})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    let colour = |s: &Session, i: usize| s.develop_of(PhotoId(ids[i])).unwrap().profile.camera_colour;
+    s.execute("develop.profile", &json!({"camera_colour": "colorimetric"})).unwrap();
+    assert_eq!((colour(&s, 0), colour(&s, 1), colour(&s, 2)), (CameraColour::Colorimetric, CameraColour::Colorimetric, CameraColour::Auto));
+    s.execute("develop.profile", &json!({"camera_colour": "auto"})).unwrap();
+    assert_eq!(
+        (colour(&s, 0), colour(&s, 1), colour(&s, 2)),
+        (CameraColour::Auto, CameraColour::Auto, CameraColour::Auto),
+        "Auto Sync carries Camera Matching"
+    );
+}
+
 #[test]
 fn auto_sync_camera_local_tone_off_preserves_other_settings() {
     use lightcraft_catalog::PhotoId;
@@ -1165,7 +1199,7 @@ fn build_previews_fills_the_cache() {
     let cached = |s: &mut Session, id: u64| {
         let t = s.thumb_job(PhotoId(id), 512).unwrap();
         let (c, k) = t.cache.clone().unwrap();
-        let q = s.quick_view_job(PhotoId(id), 1024, true).unwrap();
+        let q = s.quick_view_job(PhotoId(id), 1024, true, false).unwrap();
         let (vc, vk) = q.cached[0].clone();
         (c.get(k).is_some(), vc.get(vk).is_some())
     };

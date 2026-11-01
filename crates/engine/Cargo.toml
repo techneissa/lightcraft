@@ -23,6 +23,7 @@ web-time = { workspace = true }
 lightcraft-preview = { workspace = true }
 lightcraft-codecs = { workspace = true }
 lightcraft-raw = { workspace = true }
+lightcraft-macraw = { workspace = true }
 lightcraft-denoise-core = { workspace = true }
 lightcraft-denoise = { workspace = true, optional = true }
 lightcraft-meta = { workspace = true }
@@ -49,12 +50,18 @@ lightcraft-segment = { workspace = true, optional = true }
 lightcraft-fetch = { workspace = true }
 # capture-time parsing for face recognition (native only)
 chrono = { workspace = true }
+# Delete Permanently can move the files to the system Trash (no Trash in the browser)
+trash = { workspace = true }
 
 [features]
+# Test-only hooks for the crates that test against the engine (a dev-dependency feature; never enabled in a product build).
+test-hooks = []
 # AI masks with SAM 3 (Object / Describe). Off for the web and CLI builds.
 sam = ["dep:lightcraft-segment"]
 denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime", "lightcraft-gpu/denoise"]
 rawnind-model = ["denoise", "lightcraft-denoise/rawnind-model", "lightcraft-denoise-core/rawnind-model"]
+# LightCraft's own denoise model offered as a download (MIT OR Apache-2.0 weights, CC0 training data); needs its hosted file.
+lightcraft-model = ["denoise", "lightcraft-denoise/lightcraft-model", "lightcraft-denoise-core/lightcraft-model"]
 
 [dev-dependencies]
 # tests record why they skip (`cargo xtask ci` lists the skips)
@@ -65,3 +72,5 @@ jxl-oxide = { workspace = true }
 lightcraft-heif = { workspace = true, features = ["testdata"] }
 libc = { workspace = true }
 lightcraft-tiff = { workspace = true }
+# animated GIF tests decode the frames written
+gif = { workspace = true }

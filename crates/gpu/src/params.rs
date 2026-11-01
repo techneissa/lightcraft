@@ -23,13 +23,18 @@ const FIELDS: &[(&str, usize)] = &[
     ("AIR_PRE", 1),
     ("HL", 1),
     ("SH", 1),
+    ("TONE_V3", 1),
     ("CLAR", 1),
     ("TEX", 1),
     ("DEHAZE", 1),
     ("SHARPEN", 1),
     ("SHARPEN_MASK", 1),
+    ("SHARPEN_DETAIL", 1),
+    ("SHARPEN_GAIN", 1),
     ("HAS_CLAR", 1),
     ("HAS_TEX", 1),
+    ("HAS_SHARP", 1),
+    ("SHARP_OFF", 1),
     ("HAS_DARK", 1),
     ("HAS_CHROMA", 1),
     ("OPS_IDENTITY", 1),
@@ -140,6 +145,9 @@ impl Block {
 pub struct Present {
     pub clarity: bool,
     pub texture: bool,
+    /// Process V3: a sharpening band is bound in the `tex` buffer, `sharpen_off` words in.
+    pub sharpen: bool,
+    pub sharpen_off: usize,
     pub dark: bool,
     /// The blurred chromaticity follows the mask planes in the `masks` buffer.
     pub chroma: bool,
@@ -179,13 +187,18 @@ pub fn finish_block(fp: &FinishParams, masks: &[[f32; MASK_TERMS]], present: &Pr
     p.f("AIR_PRE", fp.air_pre);
     p.f("HL", fp.hl);
     p.f("SH", fp.sh);
+    p.b("TONE_V3", fp.tone_v3);
     p.f("CLAR", fp.clar);
     p.f("TEX", fp.tex);
     p.f("DEHAZE", fp.dehaze);
     p.f("SHARPEN", fp.sharpen);
     p.f("SHARPEN_MASK", fp.sharpen_mask);
+    p.f("SHARPEN_DETAIL", fp.sharpen_detail);
+    p.f("SHARPEN_GAIN", fp.sharpen_gain);
     p.b("HAS_CLAR", present.clarity);
     p.b("HAS_TEX", present.texture);
+    p.b("HAS_SHARP", present.sharpen);
+    p.u("SHARP_OFF", present.sharpen_off as u32);
     p.b("HAS_DARK", present.dark);
     p.b("HAS_CHROMA", present.chroma);
 

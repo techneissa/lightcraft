@@ -1,0 +1,23 @@
+[package]
+name = "lightcraft-filepanel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft filepanel (L0): macOS open and save panels open taller and can be resized. Allowed `unsafe` (a run-loop timer), like lightcraft-sysmem."
+
+# Opts out of the workspace lints only to keep `unsafe_code = "deny"` overridable for the `macos`
+# module below, as lightcraft-sysmem does. See AGENTS.md and craftrules standards/never-crash.md
+# ("isolated helper library crate").
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+dbg_macro = "warn"
+todo = "warn"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+block2 = "0.6"
+objc2 = { workspace = true }
+objc2-app-kit = { workspace = true, features = ["NSPanel", "NSSavePanel"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "block2", "CFDate", "CFRunLoop"] }
+objc2-foundation = { workspace = true, features = ["NSGeometry"] }

@@ -244,19 +244,23 @@ pub fn adjust_settings(o: Overlay, s: &mut Cow<'_, DevelopSettings>) {
 }
 
 /// The plane a sharpening view draws ([`Overlay::reads_detail`]), from the render's log luminance
-/// `log_l` and its texture blur (`None` when the render didn't need it: blurred here with the same
+/// `log_l` and its sharpening band (`band`: process V3's, else the texture blur; `None` when the render didn't need it: blurred here with the same
 /// sigma). [`Overlay::SharpenDetail`]: the detail band (log luminance minus its blur, in EV);
 /// [`Overlay::SharpenMask`]: the sharpening weight under the photo's Masking. Both renderers call
 /// this with their own planes.
-pub fn sharpen_plane(o: Overlay, s: &DevelopSettings, log_l: &Plane, texture: Option<&Plane>, px_per_long: f64) -> Option<Plane> {
+pub fn sharpen_plane(o: Overlay, s: &DevelopSettings, log_l: &Plane, band: Option<&Plane>, px_per_long: f64, detail_scale: f32) -> Option<Plane> {
     if !o.reads_detail() {
         return None;
     }
+    // process V3 sharpens in a band of its own, at the Radius slider's scale; V1 / V2 in the texture band
+    let v3 = s.process >= lightcraft_develop::Process::V3.version();
     let own;
-    let blur = match texture.filter(|b| (b.width, b.height) == (log_l.width, log_l.height)) {
+    let blur = match band.filter(|b| (b.width, b.height) == (log_l.width, log_l.height)) {
         Some(b) => b,
         None => {
-            own = lightcraft_raster::blur::gaussian(log_l, crate::local::texture_sigma(px_per_long));
+            let sigma =
+                if v3 { crate::local::sharpen_sigma(s.detail.sharpen_radius, detail_scale) } else { crate::local::texture_sigma(px_per_long) };
+            own = lightcraft_raster::blur::gaussian(log_l, sigma);
             &own
         }
     };
@@ -268,7 +272,7 @@ pub fn sharpen_plane(o: Overlay, s: &DevelopSettings, log_l: &Plane, texture: Op
         .zip(&blur.data)
         .map(|(l, b)| {
             let det = l - b;
-            if mask { crate::finish::sharpen_mask_weight(masking, det) } else { det }
+            if mask { crate::finish::sharpen_mask_weight(masking, det, v3) } else { det }
         })
         .collect();
     Some(Plane { width: log_l.width, height: log_l.height, data })

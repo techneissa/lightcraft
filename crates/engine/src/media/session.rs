@@ -1,7 +1,9 @@
 use super::quick::{QuickJob, content_key, source_info};
 use super::render::{RenderJob, RenderResult};
 use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
-use super::{Arc, DevelopSettings, Hash128, Hasher128, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo};
+use super::{
+    Arc, DevelopSettings, Hash128, Hasher128, LoadOptions, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo,
+};
 
 impl crate::Session {
     /// Build a render job for `id` fitting `max_w × max_h`. `before` renders the unedited look.
@@ -19,7 +21,7 @@ impl crate::Session {
         let b = thumb_bucket(long_edge);
         let mut job = self.build_job(id, b, b, false, true, Some(b))?;
         // (a thumbnail may develop a smaller copy of the raw image that the file keeps)
-        if let SourceRef::File { reduced, .. } = &mut job.source {
+        if let Some(reduced) = job.source.reduced_mut() {
             reduced.clone_from(&self.media.reduced_loader);
         }
         Some(job)
@@ -41,7 +43,8 @@ impl crate::Session {
         } else {
             source_edge_needed(&p, &settings, apply_crop, max_w.max(max_h))
         });
-        let source = self.media.source_ref(&p, level);
+        let options = LoadOptions::of(&settings);
+        let source = self.media.source_ref_for(&p, level, options);
         let request = RenderRequest { apply_crop, ..RenderRequest::fit(max_w, max_h) };
         // the photo id is part of the key: two photos with the same settings and size must not
         // share a result (a view slot showing photo A would otherwise look current for photo B)
@@ -59,10 +62,16 @@ impl crate::Session {
             ^ (level as u64) << 60
             ^ id.0.wrapping_mul(0x9e37_79b9_7f4a_7c15)
             ^ content.rotate_left(17)
-            ^ salt;
+            ^ salt
+            // (a local profile's file: nothing, so no change, for every other photo)
+            ^ options.profile_key.map_or(0, |k| (k as u64) ^ ((k >> 64) as u64)).rotate_left(29);
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
             k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key());
+            // (only a photo on a local profile has its file in its key, so every other thumbnail stays valid)
+            if let Some(local) = options.profile_key {
+                k.u64(local as u64).u64((local >> 64) as u64);
+            }
             // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
             if salt != 0 {
                 k.u64(salt);
@@ -97,19 +106,24 @@ impl crate::Session {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
         job.settings = Arc::new(settings.clone());
         job.key = settings.hash64() ^ ((max_w as u64) << 40) ^ ((max_h as u64) << 20) ^ (apply_crop as u64) ^ (job.level as u64) << 60;
+        // (a hover over a local profile follows its file, as every other render of it does)
+        job.key ^= LoadOptions::of(settings).profile_key.map_or(0, |k| (k as u64) ^ ((k >> 64) as u64)).rotate_left(29);
         Some(job)
     }
 
     /// Cache key of a variant thumbnail ([`Self::variant_job`]).
     pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize) -> Hash128 {
-        Hasher128::new()
-            .str(&content_key(p))
+        let mut k = Hasher128::new();
+        k.str(&content_key(p))
             .str("variant")
             .u64(settings.hash64())
             .u64(edge as u64)
             .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key())
-            .finish()
+            .u64(crate::camera_profiles::cache_key());
+        if let Some(local) = LoadOptions::of(settings).profile_key {
+            k.u64(local as u64).u64((local >> 64) as u64);
+        }
+        k.finish()
     }
 
     /// A thumbnail of `id` rendered with `settings` instead of its own (profile and preset
@@ -121,7 +135,7 @@ impl crate::Session {
         let p = self.catalog.photo(id)?.clone();
         let edge = edge.clamp(16, SourceLevel::Thumb.max_edge());
         let level = SourceLevel::Thumb;
-        let source = self.media.source_ref(&p, level);
+        let source = self.media.source_ref_for(&p, level, LoadOptions::of(settings));
         let ck = Self::variant_key(&p, settings, edge);
         Some(RenderJob {
             request_id: 0,
@@ -175,7 +189,7 @@ impl crate::Session {
         // pixels along the long edge that leave `edge` across the crop
         let needed = (edge as f64 * w.max(h) / side).ceil().min(SourceLevel::Preview.max_edge() as f64);
         let level = SourceLevel::for_size(needed as usize);
-        let source = self.media.source_ref(&p, level);
+        let source = self.media.source_ref_for(&p, level, LoadOptions::of(&settings));
         let ck = Self::variant_key(&p, &settings, edge);
         let preview_cut = self.face_preview_cut(&p, rect, edge, needed as usize);
         Some(RenderJob {
@@ -217,15 +231,18 @@ impl crate::Session {
     }
 
     /// Size-independent cache key of a photo's view render (loupe) for its current settings.
-    fn view_key(p: &Photo, apply_crop: bool) -> Hash128 {
-        Hasher128::new()
-            .str(&content_key(p))
+    pub(super) fn view_key(p: &Photo, apply_crop: bool) -> Hash128 {
+        let mut k = Hasher128::new();
+        k.str(&content_key(p))
             .str("view")
             .u64(p.develop.hash64())
             .u64(apply_crop as u64)
             .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key())
-            .finish()
+            .u64(crate::camera_profiles::cache_key());
+        if let Some(local) = LoadOptions::of(&p.develop).profile_key {
+            k.u64(local as u64).u64((local >> 64) as u64);
+        }
+        k.finish()
     }
 
     /// The loupe's render job: like [`Self::render_job`], and a full-quality result is kept as the
@@ -303,7 +320,10 @@ impl crate::Session {
     /// The embedded preview of an unedited raw (path, loader), when the app installed a loader.
     fn embedded_of(&self, p: &Photo) -> Option<(String, PreviewLoader)> {
         match (&p.source, &self.media.preview_loader) {
-            (Source::File { path }, Some(l)) if p.kind == MediaKind::Raw && crate::import::has_import_look(p) => Some((path.clone(), l.clone())),
+            // (never for a photo on macOS Colour that this Mac makes: its colours are not the camera's, so it waits)
+            (Source::File { path }, Some(l)) if p.kind == MediaKind::Raw && crate::import::has_import_look(p) && !crate::files::macos_shows(p) => {
+                Some((path.clone(), l.clone()))
+            }
             _ => None,
         }
     }
@@ -337,15 +357,30 @@ impl crate::Session {
     }
 
     /// Something to show in the loupe right away for `id` (see [`QuickJob`]): its cached view
-    /// render, else the embedded preview of an unedited raw, else a cached or fresh thumbnail.
-    pub fn quick_view_job(&mut self, id: PhotoId, max_edge: usize, apply_crop: bool) -> Option<QuickJob> {
+    /// render, else (with `camera_jpeg`) the embedded preview of an unedited raw, else a cached or
+    /// fresh thumbnail.
+    ///
+    /// The loupe asks for the camera's JPEG only once the raw can't be rendered: its colours and
+    /// lens correction are the camera's, so swapping it for the render a moment later made the
+    /// photo change colour and shift on screen.
+    /// The key [`Self::quick_view_job`] gives a stand-in for `id` as the photo looks now: a stand-in
+    /// texture with another key is of an older look (settings or file), and a frontend that must
+    /// never show one compares it to this.
+    pub fn quick_view_key(&self, id: PhotoId, apply_crop: bool, camera_jpeg: bool) -> Option<u64> {
+        self.catalog.photo(id).map(|p| Self::quick_key(p, apply_crop, camera_jpeg))
+    }
+
+    fn quick_key(p: &Photo, apply_crop: bool, camera_jpeg: bool) -> u64 {
+        Hasher128::new().str(&content_key(p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).u64(camera_jpeg as u64).finish().0 as u64
+    }
+
+    pub fn quick_view_job(&mut self, id: PhotoId, max_edge: usize, apply_crop: bool, camera_jpeg: bool) -> Option<QuickJob> {
         let p = self.catalog.photo(id)?.clone();
         let small = self.thumb_job(id, THUMB_SIZES[THUMB_SIZES.len() - 1])?;
         // (the thumbnail job itself starts with the cached thumbnail, after the sharper embedded preview)
         let cached = vec![(self.media.rendered.clone(), Self::view_key(&p, apply_crop))];
-        let h = Hasher128::new().str(&content_key(&p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).finish();
-        let key = h.0 as u64;
-        let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
+        let key = Self::quick_key(&p, apply_crop, camera_jpeg);
+        let embedded = self.embedded_of(&p).filter(|_| camera_jpeg).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
         Some(QuickJob { request_id: 0, photo: id, key, cached, embedded, minimum_embedded_edge: None, small: apply_crop.then(|| Box::new(small)) })
     }
 
@@ -375,6 +410,8 @@ impl crate::Session {
     pub fn accept(&mut self, r: &RenderResult) {
         if let Some(src) = &r.loaded
             && r.source_key.is_none_or(|key| self.catalog.photo(r.photo).is_some_and(|p| Hasher128::new().str(&content_key(p)).finish() == key))
+            // (not a source decoded with settings the photo no longer has: one decoded for them replaces it)
+            && self.catalog.photo(r.photo).is_none_or(|p| src.serves(LoadOptions::of(&p.develop)))
         {
             if let Some(info) = &src.info {
                 self.learn_as_shot_wb(r.photo, info);
@@ -390,7 +427,7 @@ impl crate::Session {
     /// says and what a smart preview renders with. Only for raws edited in Kelvin.
     fn learn_as_shot_wb(&mut self, id: PhotoId, info: &SourceInfo) {
         let Some(p) = self.catalog.photo(id) else { return };
-        if !info.raw || info.relative_wb || !p.develops_raw() || p.relative_wb() {
+        if !info.raw || info.relative_wb || !p.develops_raw() || crate::files::relative_wb(p) {
             return;
         }
         let read = (info.as_shot_temp, info.as_shot_tint);
@@ -446,6 +483,8 @@ impl crate::Session {
             job.key ^= ((job.level as u64) << 60) ^ ((level as u64) << 60);
             job.level = level;
         }
+        // (never from a smart preview: Use Smart Previews instead of Originals is for viewing and editing)
+        self.original_job(&mut job);
         // An export renders the full image: never a thumbnail's source developed from a smaller copy of the raw
         // image that the file keeps (Lightroom's merged DNGs)
         let reduced = match &job.source {
@@ -470,6 +509,11 @@ impl crate::Session {
         job.request.depth = depth;
         job.key ^= (space as u64 + 1).wrapping_mul(0xa076_1d64_78bd_642f) ^ (depth as u64 + 1).wrapping_mul(0xe703_7ed1_a0b4_28db);
         Ok(job)
+    }
+
+    /// The facts of photo `id`'s decoded source, when one is held (not the catalog's guess before a decode).
+    pub(crate) fn decoded_source_info(&self, id: PhotoId) -> Option<SourceInfo> {
+        Some(self.media.source_facts(id, SourceInfo { raw: false, ..SourceInfo::default() })).filter(|i| i.raw)
     }
 
     /// Prefer decoder facts to header-only metadata for pixel-statistics commands.

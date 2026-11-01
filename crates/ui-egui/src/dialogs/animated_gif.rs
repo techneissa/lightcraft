@@ -1,0 +1,338 @@
+//! File ▸ Export Animated GIF…: the dialog's choices go to `app.animatedGif`, which asks where to
+//! write the .gif and starts the engine's `export.animatedGif` on the selected photos in the
+//! background. The export's row in the activity stack shows its progress and ✕ (the engine owns
+//! the row); [`poll`] tells the user how it ended.
+
+use serde_json::{Value, json};
+
+use super::Tokens;
+use super::frame::field;
+use crate::LightcraftApp;
+use crate::pick::{PickRequest, Picked};
+
+mod preview;
+
+/// `app.animatedGif {size?, seconds?, loop?, dither?, path?}`: without a path, a save dialog asks
+/// for one first.
+pub fn start(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, String> {
+    if app.session.animated_gif.as_ref().is_some_and(|r| r.running()) {
+        return Err("an animated GIF export is already running".into());
+    }
+    let mut params = p.clone();
+    if p.get("path").and_then(Value::as_str).is_none_or(|x| x.trim().is_empty()) {
+        let req = PickRequest::save(crate::i18n::tr("Export Animated GIF"), "GIF", &["gif"], "Animation.gif");
+        let paths = match crate::pick::ask(app, id, p, "path", req, |_| None) {
+            Picked::Now(paths) => paths,
+            Picked::Later => return Ok(Value::Null),
+            Picked::Unavailable => return Err("no save dialog on this platform; supply path".into()),
+        };
+        let Some(path) = paths.into_iter().next() else { return Ok(Value::Null) };
+        params["path"] = json!(path);
+    }
+    let r = app.run("export.animatedGif", params)?;
+    app.animated_gif_reported = false;
+    Ok(r)
+}
+
+/// Each frame: when the export has ended, say how (once).
+pub fn poll(app: &mut LightcraftApp, ctx: &egui::Context) {
+    if app.animated_gif_reported {
+        return;
+    }
+    let Some(run) = app.session.animated_gif.clone() else { return };
+    if run.running() {
+        return;
+    }
+    app.animated_gif_reported = true;
+    let msg = match run.result() {
+        Some(Ok(r)) => {
+            let mut m = crate::i18n::tr_format!(
+                "Animated GIF exported: {n} frames, {mb} MB",
+                n = r["frames"].as_u64().unwrap_or(0),
+                mb = format!("{:.1}", r["bytes"].as_f64().unwrap_or(0.0) / 1e6)
+            );
+            if let Some(n) = r["skipped"].as_u64().filter(|n| *n > 0) {
+                m += &crate::i18n::tr_format!(" · {n} skipped (could not be rendered)", n = n);
+            }
+            m
+        }
+        Some(Err(e)) => e,
+        None => crate::i18n::tr("Export stopped unexpectedly").to_string(),
+    };
+    app.toast(ctx, msg);
+}
+
+/// File ▸ Export Animated GIF…: a preview playing the frames, how big, how fast, looping and
+/// dithering; where comes after (a save dialog).
+pub(super) fn animated_gif_body(app: &mut LightcraftApp, ui: &mut egui::Ui, settings: &mut lightcraft_engine::animated_gif::GifSettings) {
+    use lightcraft_engine::animated_gif::{SECONDS_MAX, SECONDS_MIN, SIZE_MAX, SIZE_MIN, canvas, original_size};
+    let t = Tokens::get(ui.ctx());
+    let ids = app.session.selected();
+    let (w, h) = canvas(&app.session, &ids, settings.size);
+    preview::show(app, ui, &ids, (w, h), settings.seconds);
+    let seconds = ids.len() as f64 * f64::from(settings.delay()) / 100.0;
+    let summary = crate::i18n::tr_format!(
+        "{n} photos · {w} × {h} px · {time}",
+        n = ids.len(),
+        w = w,
+        h = h,
+        time = if seconds < 60.0 {
+            format!("{} s", (seconds * 10.0).round() / 10.0)
+        } else {
+            format!("{}:{:02}", (seconds / 60.0).floor() as u64, (seconds % 60.0).round() as u64)
+        }
+    );
+    ui.label(egui::RichText::new(summary).color(t.text_dim));
+    let original = original_size(&app.session, &ids);
+    field(ui, "Size", |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (i, (v, l)) in [(480, "480 px"), (800, "800 px"), (1200, "1200 px")].into_iter().enumerate() {
+            if crate::widgets::text_button(ui, &format!("animatedGifSize-{i}"), l, settings.size == v).clicked() {
+                settings.size = v;
+            }
+        }
+        if let Some(o) = original
+            && crate::widgets::text_button(ui, "animatedGifSize-original", "Original", settings.size == o)
+                .on_hover_text(crate::i18n::tr_format!("The first photo's size: {o} px on the long side (at most {max})", o = o, max = SIZE_MAX))
+                .clicked()
+        {
+            settings.size = o;
+        }
+        // any size in the export's range, typed or dragged
+        let r = ui.add(egui::DragValue::new(&mut settings.size).range(SIZE_MIN..=SIZE_MAX).speed(4.0).suffix(" px"));
+        crate::widgets::register(ui, "drag:animatedGifSize", r.rect);
+    });
+    field(ui, "Each photo", |ui| {
+        let r = ui.add(egui::Slider::new(&mut settings.seconds, SECONDS_MIN..=SECONDS_MAX.min(10.0)).logarithmic(true).suffix(" s").max_decimals(2));
+        crate::widgets::register(ui, "slider:animatedGifSeconds", r.rect);
+    });
+    let r = ui.checkbox(&mut settings.loop_forever, crate::i18n::tr("Loop forever"));
+    crate::widgets::register(ui, "check:animatedGifLoop", r.rect);
+    let r = ui.checkbox(&mut settings.dither, crate::i18n::tr("Smooth gradients (dithering)"));
+    crate::widgets::register(ui, "check:animatedGifDither", r.rect);
+    ui.label(egui::RichText::new(crate::i18n::tr("One frame per selected photo, in the order you selected them.")).color(t.text_dim));
+}
+
+/// The photo context menu's Export Animated GIF…, below Export with Preset.
+pub fn context_menu_item(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    let r = ui.add_enabled(crate::menus::ui_enabled(app, "dialog.animatedGif"), egui::Button::new(crate::i18n::tr("Export Animated GIF…")));
+    crate::widgets::register(ui, "menu:exportAnimatedGif", r.rect);
+    if r.clicked() {
+        let _ = app.run("dialog.animatedGif", json!({}));
+    }
+}
+
+/// The Export dialog's Format row (ids `button:exportFormat-{index}`), with GIF at its end: GIF
+/// makes one animation of all the photos, not a file each, so it swaps the dialog for Export
+/// Animated GIF (`button:exportFormat-gif`).
+pub(super) fn export_formats<V: PartialEq + Copy>(app: &mut LightcraftApp, ui: &mut egui::Ui, options: &[(V, &str)], value: &mut V) {
+    field(ui, "Format", |ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        for (i, (v, l)) in options.iter().enumerate() {
+            if crate::widgets::text_button(ui, &format!("exportFormat-{i}"), l, *value == *v).clicked() {
+                *value = *v;
+            }
+        }
+        if crate::widgets::text_button(ui, "exportFormat-gif", "GIF", false)
+            .on_hover_text(crate::i18n::tr("One animated GIF of the selected photos"))
+            .clicked()
+        {
+            let _ = app.run("dialog.animatedGif", json!({}));
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pick::PickKind;
+    use crate::state::Dialog;
+    use crate::tests_fixtures::SyntheticLibrary;
+    use std::sync::{Arc, Mutex};
+    use std::time::{Duration, Instant};
+
+    /// The app, with three real file-backed photos, all selected, and a picker that answers
+    /// `answer` and remembers what it was asked. Keep the returned fixture alive until the app is
+    /// dropped.
+    fn app_answering(tag: &str, answer: String) -> (SyntheticLibrary, LightcraftApp, Arc<Mutex<Vec<PickRequest>>>) {
+        let files = SyntheticLibrary::with_photos(tag, 3);
+        let asked = Arc::new(Mutex::new(Vec::<PickRequest>::new()));
+        let requests = asked.clone();
+        let services = crate::Services {
+            picker: Some(Box::new(move |req| {
+                requests.lock().unwrap().push(req);
+                let (tx, rx) = std::sync::mpsc::channel();
+                tx.send(vec![answer.clone()]).unwrap();
+                Ok(rx)
+            })),
+            ..Default::default()
+        };
+        let mut app = files.app();
+        app.services = services;
+        let ids: Vec<u64> = app.session.visible_cloned().into_iter().map(|id| id.0).collect();
+        app.session.execute("library.select", &json!({"ids": ids})).unwrap();
+        (files, app, asked)
+    }
+
+    #[test]
+    fn menu_dialog_picker_and_background_export() {
+        let dir = std::env::temp_dir().join(format!("lc-ui-gif-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let path = dir.join("Anim.gif").to_string_lossy().to_string();
+        let (_files, mut app, asked) = app_answering("gif", path.clone());
+        assert!(crate::menus::ui_enabled(&app, "dialog.animatedGif"));
+        app.run("dialog.animatedGif", json!({})).unwrap();
+        let Some(Dialog::AnimatedGif { settings }) = app.ui.dialog.as_mut() else { panic!("no animated GIF dialog") };
+        assert_eq!((settings.size, settings.seconds, settings.loop_forever, settings.dither), (800, 1.0, true, true));
+        settings.size = 96;
+        settings.seconds = 0.25;
+        let mut h = crate::headless::Headless::new(app, [1000.0, 800.0], 1.0);
+        let dialog = h.app.ui.dialog.take().unwrap();
+        crate::panels::dialogs::confirm_dialog(&mut h.app, &dialog).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(300);
+        loop {
+            h.step();
+            if h.app.animated_gif_reported && h.app.session.animated_gif.is_some() {
+                break;
+            }
+            assert!(Instant::now() < deadline, "export did not finish");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        let r = h.app.session.animated_gif.clone().unwrap().result().unwrap().unwrap();
+        let req = asked.lock().unwrap();
+        assert_eq!(req[0].kind, PickKind::Save);
+        assert_eq!(req[0].filter.as_ref().unwrap().1, &["gif"]);
+        assert_eq!((r["frames"].as_u64(), r["seconds"].as_f64()), (Some(3), Some(0.75)), "{r}");
+        assert_eq!(r["width"].as_u64().unwrap().max(r["height"].as_u64().unwrap()), 96);
+        assert!(std::fs::read(&path).unwrap().starts_with(b"GIF89a"));
+        let toast = h.app.ui.toast.as_ref().map(|t| t.0.clone()).unwrap_or_default();
+        assert!(toast.contains("Animated GIF exported: 3 frames"), "{toast}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The Export dialog's GIF button and the photo context menu's item both open Export
+    /// Animated GIF (it was only in the File menu).
+    #[test]
+    fn export_dialog_and_context_menu_open_it() {
+        let t = Duration::from_secs(60);
+        let (_files, mut app, _) = app_answering("gif-entry", String::new());
+        app.ui.view = crate::state::ViewMode::PhotoGrid;
+        let mut h = crate::headless::Headless::new(app, [1400.0, 900.0], 1.0);
+        h.app.run("dialog.export", json!({})).unwrap();
+        h.settle(t);
+        let r = h.request("ui.clickWidget", json!({"id": "button:exportFormat-gif"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(t);
+        assert!(matches!(h.app.ui.dialog, Some(Dialog::AnimatedGif { .. })), "GIF in Export opens it");
+
+        h.app.ui.dialog = None;
+        h.settle(t);
+        let thumb = h.app.widgets.iter().find(|(w, _)| w.starts_with("thumb:")).map(|(w, _)| w.clone()).expect("a grid photo");
+        let r = h.request("ui.clickWidget", json!({"id": thumb, "button": "right"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(t);
+        let r = h.request("ui.clickWidget", json!({"id": "menu:exportAnimatedGif"}), t);
+        assert_eq!(r["ok"], true, "{r}");
+        h.settle(t);
+        assert!(matches!(h.app.ui.dialog, Some(Dialog::AnimatedGif { .. })), "the context menu opens it");
+    }
+
+    fn rect(h: &crate::headless::Headless, widget: &str) -> egui::Rect {
+        h.app.widgets.iter().find(|(w, _)| w == widget).map(|(_, r)| *r).unwrap_or_else(|| panic!("no {widget} on screen"))
+    }
+
+    fn order(h: &crate::headless::Headless) -> Vec<u64> {
+        h.app.session.selection.ids.iter().map(|id| id.0).collect()
+    }
+
+    /// The preview's strip edits the frames, which are the selection in order: a click picks a
+    /// photo, ✕ and Delete take it out, a drag moves it, and the mouse wheel scrolls the strip
+    /// sideways.
+    #[test]
+    fn the_strip_removes_moves_and_scrolls_photos() {
+        let t = Duration::from_secs(60);
+        let (_files, app, _) = app_answering("gif-strip", String::new());
+        let mut h = crate::headless::Headless::new(app, [1400.0, 1000.0], 1.0);
+        let photos: Vec<u64> = h.app.session.visible_cloned().into_iter().map(|id| id.0).collect();
+        // twelve photos, so the strip scrolls: three files, each added three more times
+        let mut more = Vec::new();
+        for id in &photos {
+            for _ in 0..3 {
+                let mut p = lightcraft_catalog::Photo::clone(h.app.session.catalog.photo(lightcraft_catalog::PhotoId(*id)).unwrap());
+                p.id = h.app.session.catalog.alloc_photo_id();
+                more.push(p.id.0);
+                h.app.session.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p) }).unwrap();
+            }
+        }
+        let all: Vec<u64> = photos.iter().chain(&more).copied().collect();
+        h.app.session.execute("library.select", &json!({"ids": all})).unwrap();
+        h.app.run("dialog.animatedGif", json!({})).unwrap();
+        h.settle(t);
+        assert_eq!(order(&h), all);
+        // a click on the preview pauses it; the button shows on it while the pointer is there
+        assert!(h.app.widgets.iter().all(|(w, _)| w != "icon:animatedGifPlay"), "hidden until hovered");
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "preview:animatedGif"}), t)["ok"], true);
+        h.settle(t);
+        assert!(rect(&h, "preview:animatedGif").contains_rect(rect(&h, "icon:animatedGifPlay")));
+
+        // click photo 2, then its ✕
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "animatedGifFrame:1"}), t)["ok"], true);
+        h.settle(t);
+        assert_eq!(h.request("ui.clickWidget", json!({"id": "animatedGifRemove:1"}), t)["ok"], true);
+        h.settle(t);
+        let mut want = all.clone();
+        want.remove(1);
+        assert_eq!(order(&h), want, "✕ took photo 2 out");
+        // Delete takes out the photo picked next (the one that moved into its place)
+        h.request("ui.key", json!({"key": "Delete"}), t);
+        h.settle(t);
+        want.remove(1);
+        assert_eq!(order(&h), want, "Delete took the next one out");
+        assert!(matches!(h.app.ui.dialog, Some(Dialog::AnimatedGif { .. })), "the dialog stays open");
+
+        // drag the first photo to after the third
+        let (a, b) = (rect(&h, "animatedGifFrame:0").center(), rect(&h, "animatedGifFrame:2").right_center() + egui::vec2(3.0, 0.0));
+        let press =
+            |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        h.app.synthetic.push(egui::Event::PointerMoved(a));
+        h.step();
+        h.app.synthetic.push(press(a, true));
+        h.step();
+        for k in 1..=10 {
+            h.app.synthetic.push(egui::Event::PointerMoved(a + (b - a) * (k as f32 / 10.0)));
+            h.step();
+        }
+        h.app.synthetic.push(press(b, false));
+        h.settle(t);
+        let first = want.remove(0);
+        want.insert(2, first);
+        assert_eq!(order(&h), want, "the first photo moved to third");
+
+        // the wheel's up/down scrolls the strip sideways
+        let before = rect(&h, "animatedGifFrame:0");
+        h.app.synthetic.push(egui::Event::PointerMoved(rect(&h, "animatedGifFrame:3").center()));
+        h.step();
+        for _ in 0..5 {
+            h.app.synthetic.push(egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point,
+                delta: egui::vec2(0.0, -60.0),
+                phase: egui::TouchPhase::Move,
+                source: egui::MouseWheelSource::Unknown,
+                modifiers: egui::Modifiers::NONE,
+            });
+            h.step();
+        }
+        h.settle(t);
+        let after = h.app.widgets.iter().find(|(w, _)| w == "animatedGifFrame:0").map(|(_, r)| r.left());
+        assert!(after.is_none_or(|x| x < before.left() - 50.0), "the strip scrolled: {before:?} → {after:?}");
+    }
+
+    #[test]
+    fn disabled_without_a_selection() {
+        let (_files, mut app, _) = app_answering("gif-none", String::new());
+        app.session.execute("library.select", &json!({"ids": []})).unwrap();
+        app.session.selection.active = None;
+        assert!(!crate::menus::ui_enabled(&app, "dialog.animatedGif"));
+        assert!(!crate::menus::ui_enabled(&app, "app.animatedGif"));
+    }
+}

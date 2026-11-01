@@ -21,6 +21,30 @@ pub struct Histogram {
     pub hdr: Option<HdrBins>,
 }
 
+/// Per-channel (`[r, g, b]`) fractions of pixels clipped at black and at white; see
+/// [`Histogram::channel_clipping`].
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ChannelClipping {
+    pub shadows: [f32; 3],
+    pub highlights: [f32; 3],
+}
+
+impl ChannelClipping {
+    /// A channel counts as clipping when more than this fraction of the sampled pixels sit at the
+    /// limit (0.3 %: a few stray pixels, e.g. a specular dot, do not light the warning).
+    pub const THRESHOLD: f32 = 0.003;
+
+    /// Which channels (`[r, g, b]`) clip at black.
+    pub fn shadow_channels(&self) -> [bool; 3] {
+        self.shadows.map(|f| f > Self::THRESHOLD)
+    }
+
+    /// Which channels (`[r, g, b]`) clip at white.
+    pub fn highlight_channels(&self) -> [bool; 3] {
+        self.highlights.map(|f| f > Self::THRESHOLD)
+    }
+}
+
 /// The HDR part of a [`Histogram`]: bins `from..256` cover `0..stops` stops above SDR white.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -158,6 +182,22 @@ impl Histogram {
         (lo, hi)
     }
 
+    /// Fraction of pixels at black / white in each channel (`[r, g, b]`).
+    ///
+    /// The bin counts are per channel, so this is exact for the sampled pixels; an empty histogram
+    /// reports zero everywhere.
+    pub fn channel_clipping(&self) -> ChannelClipping {
+        if self.total == 0 {
+            return ChannelClipping::default();
+        }
+        let t = self.total as f32;
+        let at = |bins: &[u32], i: usize| bins.get(i).copied().unwrap_or(0) as f32 / t;
+        ChannelClipping {
+            shadows: [at(&self.r, 0), at(&self.g, 0), at(&self.b, 0)],
+            highlights: [at(&self.r, 255), at(&self.g, 255), at(&self.b, 255)],
+        }
+    }
+
     /// Mean luma in 0..1.
     pub fn mean_luma(&self) -> f32 {
         if self.total == 0 {
@@ -197,6 +237,17 @@ mod tests {
         assert_eq!(h.percentile(0.25), 0.0);
         assert_eq!(h.percentile(0.75), 1.0);
         assert_eq!(h.above_sdr(), 0.0);
+    }
+
+    #[test]
+    fn channel_clipping_is_per_channel() {
+        // red clips at white on half the pixels; blue at black on 1 %
+        let img = Rgba8::from_fn(10, 10, |x, y| [if x < 5 { 255 } else { 100 }, 100, if y == 0 && x == 0 { 0 } else { 100 }, 255]);
+        let c = Histogram::of_srgb8(&img).channel_clipping();
+        assert_eq!(c.highlight_channels(), [true, false, false]);
+        assert_eq!(c.shadow_channels(), [false, false, true]);
+        assert!((c.shadows[2] - 0.01).abs() < 1e-6);
+        assert_eq!(Histogram::of_srgb8(&Rgba8::new(0, 0)).channel_clipping(), ChannelClipping::default());
     }
 
     #[test]

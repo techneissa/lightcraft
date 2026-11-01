@@ -7,9 +7,15 @@
 //! covered. It's incremental: each frame stamps only the dabs of the samples added since the last
 //! one and uploads only the rectangle they touched.
 
+pub mod auto;
+pub mod composite;
+pub mod target;
+
+use composite::{Blend, Mapping, PxRect};
 use egui::{Color32, ColorImage, Pos2, Rect, TextureHandle, TextureOptions, pos2};
 use lightcraft_geom::Point;
-use lightcraft_pipeline::masks::{accumulate, dab_alpha, pressure_flow, pressure_radius, push_dabs_counted, push_pressures};
+use lightcraft_pipeline::masks::{accumulate, auto_similarity, dab_alpha, pressure_flow, pressure_radius, push_dabs_counted, push_pressures};
+use std::sync::Arc;
 
 /// The largest live-stroke buffer edge (pixels); a bigger canvas is painted at a lower resolution.
 const MAX_SIDE: usize = 4096;
@@ -33,6 +39,33 @@ pub struct LiveParams {
     pub opacity: f32,
 }
 
+/// What a live stroke is blended over: the photo as it is drawn now, and as it would look with the
+/// mask covering all of it ([`target`]), both at the size the photo is drawn on `img_rect`.
+#[derive(Clone)]
+pub struct LiveImages {
+    pub base: Arc<ColorImage>,
+    pub target: Arc<ColorImage>,
+    /// The render keys of the two pictures (a new pair starts the blend afresh).
+    pub key: (u64, u64),
+    pub img_rect: Rect,
+}
+
+/// The picture an Auto Mask stroke reads while it is painted, and where it is drawn.
+pub struct AutoCtx<'a> {
+    pub guide: &'a auto::Guide,
+    pub img_rect: Rect,
+}
+
+/// The blended picture and the texture showing it.
+struct BlendTex {
+    blend: Blend,
+    texture: Option<TextureHandle>,
+    key: (u64, u64),
+    rect: Rect,
+    /// Picture pixels changed since the last upload.
+    dirty: Option<PxRect>,
+}
+
 /// An in-progress stroke's coverage at screen resolution and the texture showing it.
 pub struct LiveStroke {
     params: LiveParams,
@@ -49,6 +82,26 @@ pub struct LiveStroke {
     /// Buffer pixels painted since the last upload: (x0, y0, x1, y1), exclusive ends.
     dirty: Option<(usize, usize, usize, usize)>,
     texture: Option<TextureHandle>,
+    /// Buffer pixels painted since the blend last caught up, and everything painted so far.
+    blend_dirty: Option<PxRect>,
+    painted: Option<PxRect>,
+    blend: Option<BlendTex>,
+    /// The loupe render this stroke was committed over, once the button is up: the blend stays
+    /// drawn until that render is replaced (no flash of the unadjusted photo while the committed
+    /// stroke renders) or [`HOLD_SECS`] pass.
+    pub held: Option<(u64, f64)>,
+    /// UI-thread milliseconds the last frame spent stamping, blending and uploading.
+    last_ms: f64,
+}
+
+/// The longest a released stroke's blend stays on screen waiting for the committed render.
+pub const HOLD_SECS: f64 = 3.0;
+
+fn grow(d: &mut Option<PxRect>, r: PxRect) {
+    *d = Some(match *d {
+        Some((a, b, c, e)) => (a.min(r.0), b.min(r.1), c.max(r.2), e.max(r.3)),
+        None => r,
+    });
 }
 
 impl LiveStroke {
@@ -56,7 +109,23 @@ impl LiveStroke {
         let scale = buffer_scale(params.clip, params.scale);
         let params = LiveParams { scale, ..params };
         let (w, h) = buffer_size(params.clip, scale);
-        LiveStroke { params, w, h, alpha: vec![0.0; w * h], placed: 0, emitted: 0, last: None, last_pressure: 1.0, dirty: None, texture: None }
+        LiveStroke {
+            params,
+            w,
+            h,
+            alpha: vec![0.0; w * h],
+            placed: 0,
+            emitted: 0,
+            last: None,
+            last_pressure: 1.0,
+            dirty: None,
+            texture: None,
+            blend_dirty: None,
+            painted: None,
+            blend: None,
+            held: None,
+            last_ms: 0.0,
+        }
     }
 
     /// Stroke coverage (0..1) at buffer pixel `(x, y)`; 0 outside.
@@ -76,6 +145,12 @@ impl LiveStroke {
     /// painted, at the pen pressures `pressure` (one per point; empty: full pressure), as the
     /// pipeline scales them. Returns `true` when anything new was painted.
     pub fn stamp(&mut self, points: &[Pos2], pressure: &[f32]) -> bool {
+        self.stamp_with(points, pressure, None)
+    }
+
+    /// [`Self::stamp`] with Auto Mask: each pixel takes a dab's paint by how much it looks like the
+    /// pixel under the dab's centre in `auto`'s picture.
+    pub fn stamp_with(&mut self, points: &[Pos2], pressure: &[f32], auto: Option<AutoCtx>) -> bool {
         let Some(new) = points.get(self.placed..) else { return false };
         if new.is_empty() {
             return false;
@@ -98,10 +173,18 @@ impl LiveStroke {
         }
         self.placed = points.len();
         let base = (r, hard);
+        // buffer pixel → fraction of the guide's picture
+        let to_frac = |b: f64, lo: f32, origin: f32, extent: f32| ((b as f32 / scale + lo) - origin) / extent.max(1e-6);
         for (d, p) in dabs.into_iter().zip(pressures) {
             if !(d.x.is_finite() && d.y.is_finite()) {
                 continue;
             }
+            let reference = auto.as_ref().map(|a| {
+                a.guide.at(
+                    to_frac(d.x, clip.left(), a.img_rect.left(), a.img_rect.width()),
+                    to_frac(d.y, clip.top(), a.img_rect.top(), a.img_rect.height()),
+                )
+            });
             let r = pressure_radius(base.0, p);
             let hard = if base.0 > 0.0 { base.1 * r / base.0 } else { base.1 };
             let flow = pressure_flow(flow, p);
@@ -119,13 +202,19 @@ impl LiveStroke {
                     if dd > r {
                         continue;
                     }
-                    *v = accumulate(*v, dab_alpha(dd, r, hard), flow, density);
+                    let mut a = dab_alpha(dd, r, hard);
+                    if let (Some(ctx), Some((rl, rch))) = (auto.as_ref(), reference) {
+                        let fx = to_frac(x as f64 + 0.5, clip.left(), ctx.img_rect.left(), ctx.img_rect.width());
+                        let fy = to_frac(y as f64 + 0.5, clip.top(), ctx.img_rect.top(), ctx.img_rect.height());
+                        let (l, ch) = ctx.guide.at(fx, fy);
+                        a *= auto_similarity(l, ch, rl, rch);
+                    }
+                    *v = accumulate(*v, a, flow, density);
                 }
             }
-            self.dirty = Some(match self.dirty {
-                Some((a, b, c, e)) => (a.min(x0), b.min(y0), c.max(x1), e.max(y1)),
-                None => (x0, y0, x1, y1),
-            });
+            grow(&mut self.dirty, (x0, y0, x1, y1));
+            grow(&mut self.blend_dirty, (x0, y0, x1, y1));
+            grow(&mut self.painted, (x0, y0, x1, y1));
         }
         true
     }
@@ -182,14 +271,113 @@ fn buffer_size(clip: Rect, scale: f32) -> (usize, usize) {
     (side(clip.width()), side(clip.height()))
 }
 
+/// How the live stroke is drawn this frame.
+pub struct Look<'a> {
+    /// The photo's pictures to blend the adjustment from (`None`: coverage colour only).
+    pub images: Option<&'a LiveImages>,
+    /// Draw the coverage colour over the blend too (Show Overlay).
+    pub overlay: bool,
+    /// Auto Mask: weigh the dabs by the picture under them.
+    pub auto: bool,
+    /// Egui time (seconds), for the hold after release.
+    pub now: f64,
+}
+
+impl LiveStroke {
+    /// The picture pixels every painted buffer pixel maps to, for the picture drawn on `img_rect`.
+    fn mapping(&self, img_rect: Rect, size: [usize; 2]) -> Mapping {
+        Mapping { clip: self.params.clip, scale: self.params.scale, img_rect, size }
+    }
+
+    /// Bring the blended picture up to date and draw it over the photo. `false` when there is
+    /// nothing to draw it from (no pictures of the same size, nothing painted yet).
+    fn draw_blend(&mut self, ctx: &egui::Context, painter: &egui::Painter, images: &LiveImages) -> bool {
+        let Some(painted) = self.painted else { return false };
+        let size = images.base.size;
+        let map = self.mapping(images.img_rect, size);
+        let stale = self.blend.as_ref().is_none_or(|b| b.key != images.key || b.rect != images.img_rect);
+        if stale {
+            let Some(blend) = Blend::new(images.base.clone(), images.target.clone()) else {
+                self.blend = None;
+                return false;
+            };
+            // a new pair of pictures: everything painted so far is mixed in again
+            self.blend = Some(BlendTex { blend, texture: None, key: images.key, rect: images.img_rect, dirty: None });
+            self.blend_dirty = Some(painted);
+        }
+        let Some(mut bt) = self.blend.take() else { return false };
+        if let Some(d) = self.blend_dirty.take() {
+            let rect = map.picture_rect(d);
+            if let Some(done) = bt.blend.update(rect, |x, y| {
+                let (bx, by) = map.buffer_px(x, y);
+                self.coverage(bx, by)
+            }) {
+                grow(&mut bt.dirty, done);
+            }
+        }
+        match (&mut bt.texture, bt.dirty.take()) {
+            (None, _) => {
+                // (it starts as the photo: no copy, the pixels the loupe was made from are shared)
+                let mut tex = ctx.load_texture("brush-live-blend", images.base.clone(), TextureOptions::LINEAR);
+                // …with what is painted so far mixed in
+                if let Some(rect) = self.painted.map(|p| map.picture_rect(p)) {
+                    let rect = (rect.0, rect.1, rect.2.min(size[0]), rect.3.min(size[1]));
+                    if rect.0 < rect.2 && rect.1 < rect.3 {
+                        tex.set_partial([rect.0, rect.1], bt.blend.region(rect), TextureOptions::LINEAR);
+                    }
+                }
+                bt.texture = Some(tex);
+            }
+            (Some(t), Some(rect)) => t.set_partial([rect.0, rect.1], bt.blend.region(rect), TextureOptions::LINEAR),
+            (Some(_), None) => {}
+        }
+        if let Some(t) = &bt.texture {
+            painter.image(t.id(), images.img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+        self.blend = Some(bt);
+        true
+    }
+
+    /// Draw the blend of a stroke whose button is up while the committed render is on its way.
+    fn draw_held(&mut self, painter: &egui::Painter, img_rect: Rect) -> bool {
+        match &self.blend {
+            Some(BlendTex { texture: Some(t), rect, .. }) if *rect == img_rect => {
+                painter.image(t.id(), img_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The blended picture drawn under the stroke.
+    #[cfg(test)]
+    pub(crate) fn blend_image(&self) -> Option<&ColorImage> {
+        self.blend.as_ref().map(|b| b.blend.image())
+    }
+
+    /// UI-thread milliseconds the last frame spent on this stroke, when it shows the adjustment.
+    pub fn live_ms(&self) -> Option<f64> {
+        self.blend.as_ref().map(|_| self.last_ms)
+    }
+}
+
 /// Paint the live stroke whose samples so far are `points` (screen positions) into `painter`,
-/// keeping its buffer in `slot` (a new stroke, or new parameters, start it afresh).
-pub fn paint(slot: &mut Option<LiveStroke>, ctx: &egui::Context, painter: &egui::Painter, params: LiveParams, points: &[Pos2], pressure: &[f32]) {
+/// keeping its buffer in `slot` (a new stroke, or new parameters, start it afresh). With
+/// `look.images` the stroke shows the adjustment under the brush, not only its coverage colour.
+pub fn paint(
+    slot: &mut Option<LiveStroke>,
+    ctx: &egui::Context,
+    painter: &egui::Painter,
+    params: LiveParams,
+    points: &[Pos2],
+    pressure: &[f32],
+    look: &Look,
+) {
     let fresh = match slot {
         Some(s) => {
             // the same stroke when painted with the same parameters (at the scale it settled on)
             let same = s.params == LiveParams { scale: buffer_scale(params.clip, params.scale), ..params };
-            !same || points.len() < s.placed
+            !same || points.len() < s.placed || s.held.is_some()
         }
         None => true,
     };
@@ -197,13 +385,43 @@ pub fn paint(slot: &mut Option<LiveStroke>, ctx: &egui::Context, painter: &egui:
         *slot = Some(LiveStroke::new(params));
     }
     let Some(s) = slot else { return };
-    s.stamp(points, pressure);
-    let clip = s.params.clip;
-    // the buffer's pixels may overhang the canvas by a fraction of a pixel: map them exactly
-    let (w, h, scale) = (s.w as f32, s.h as f32, s.params.scale);
-    let rect = Rect::from_min_size(clip.min, egui::vec2(w / scale, h / scale));
-    if let Some(t) = s.upload(ctx) {
-        painter.image(t.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    let t0 = std::time::Instant::now();
+    let guide = look.images.filter(|_| look.auto).map(|i| (auto::guide_for(i.key.0, &i.base), i.img_rect));
+    let new_dabs = s.stamp_with(points, pressure, guide.as_ref().map(|(guide, img_rect)| AutoCtx { guide, img_rect: *img_rect }));
+    let blended = look.images.is_some_and(|images| s.draw_blend(ctx, painter, images));
+    if look.overlay || !blended {
+        let clip = s.params.clip;
+        // the buffer's pixels may overhang the canvas by a fraction of a pixel: map them exactly
+        let (w, h, scale) = (s.w as f32, s.h as f32, s.params.scale);
+        let rect = Rect::from_min_size(clip.min, egui::vec2(w / scale, h / scale));
+        if let Some(t) = s.upload(ctx) {
+            painter.image(t.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+        }
+    }
+    // (a frame with nothing new to paint says nothing about the cost of painting)
+    if new_dabs {
+        s.last_ms = t0.elapsed().as_secs_f64() * 1e3;
+    }
+}
+
+/// Keep drawing the adjustment of a stroke whose button just came up, until the render with the
+/// committed stroke replaces the loupe (`main_key` changes) or [`HOLD_SECS`] pass. Returns whether
+/// the stroke is still held; when not, drop it.
+pub fn paint_held(slot: &mut Option<LiveStroke>, painter: &egui::Painter, img_rect: Rect, main_key: Option<u64>, now: f64) -> bool {
+    let Some(s) = slot else { return false };
+    let Some((key, since)) = s.held else { return false };
+    if Some(key) != main_key || now - since > HOLD_SECS || !s.draw_held(painter, img_rect) {
+        *slot = None;
+        return false;
+    }
+    true
+}
+
+/// The stroke was committed over the loupe render `main_key`: keep showing it (see [`paint_held`]).
+pub fn hold(slot: &mut Option<LiveStroke>, main_key: Option<u64>, now: f64) {
+    match (slot.as_mut(), main_key) {
+        (Some(s), Some(k)) if s.blend.is_some() => s.held = Some((k, now)),
+        _ => *slot = None,
     }
 }
 
@@ -313,5 +531,81 @@ mod tests {
         let mut odd = LiveStroke::new(params());
         odd.stamp(&pts, &[f32::NAN]);
         assert!(odd.alpha.iter().all(|v| v.is_finite()));
+    }
+
+    /// The live stroke, painted frame by frame at the output's resolution, is the mask the pipeline
+    /// builds from the committed stroke (feather, flow, density and pen pressure included).
+    #[test]
+    fn incremental_stamping_equals_the_committed_mask() {
+        use lightcraft_develop::{BrushStroke, MaskShape};
+        use lightcraft_pipeline::{
+            geometry::Frame,
+            masks::{brush_dabs, shape_alpha},
+        };
+        use lightcraft_raster::{Plane, Rgb32f};
+
+        let (w, h) = (160, 90);
+        let frame = Frame::new(w, h, &Default::default(), true);
+        let pts = [(0.1, 0.2), (0.3, 0.7), (0.32, 0.72), (0.6, 0.3), (0.9, 0.8)];
+        for (feather, flow, density, pressure) in [(0.0, 100.0, 100.0, vec![]), (70.0, 35.0, 80.0, vec![0.3, 0.5, 0.6, 1.0, 0.8])] {
+            let stroke = BrushStroke {
+                points: pts.iter().map(|(x, y)| Point::new(*x, *y)).collect(),
+                size: 0.06,
+                feather,
+                flow,
+                density,
+                pressure,
+                ..Default::default()
+            };
+            let committed =
+                shape_alpha(&MaskShape::Brush { strokes: vec![stroke.clone()] }, &frame, w, h, &Rgb32f::new(w, h), &Plane::new(w, h), 0.0, None);
+            let bd = brush_dabs(&stroke, &frame, w, h);
+            let live = LiveParams {
+                clip: Rect::from_min_size(Pos2::ZERO, vec2(w as f32, h as f32)),
+                scale: 1.0,
+                r: bd.r as f32,
+                hard: bd.hard as f32,
+                flow: bd.flow,
+                density: bd.density,
+                color: [255, 0, 0],
+                opacity: 1.0,
+            };
+            let to_out = frame.norm_to_out(w, h);
+            let screen: Vec<Pos2> = stroke.points.iter().map(|p| to_out.apply(*p)).map(|q| pos2(q.x as f32, q.y as f32)).collect();
+            let mut steps = LiveStroke::new(live);
+            for n in 1..=screen.len() {
+                steps.stamp(&screen[..n], &stroke.pressure[..n.min(stroke.pressure.len())]);
+            }
+            let worst = steps.alpha.iter().zip(&committed.data).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            assert!(worst < 1e-5, "feather {feather}: live and committed coverage differ by {worst}");
+            assert!(committed.data.iter().any(|v| *v > 0.5));
+        }
+    }
+
+    /// Auto Mask while painting: a stroke started on one surface does not paint the surface next to
+    /// it, however far the brush reaches over.
+    #[test]
+    fn auto_mask_keeps_the_live_stroke_on_its_surface() {
+        // a 400 x 200 picture: grey on the left half, red on the right
+        let px = (0..200)
+            .flat_map(|_| (0..400).map(|x| if x < 200 { Color32::from_rgb(120, 120, 120) } else { Color32::from_rgb(200, 40, 40) }))
+            .collect();
+        let guide = auto::Guide::new(&ColorImage::new([400, 200], px));
+        let img_rect = Rect::from_min_size(Pos2::ZERO, vec2(400.0, 200.0));
+        let ctx = || Some(AutoCtx { guide: &guide, img_rect });
+        // dabs of radius 30 along a grey line that ends 10 px short of the border at x = 200: the
+        // last dab reaches 20 px over it
+        let pts = [pos2(120.0, 100.0), pos2(190.0, 100.0)];
+        let mut plain = LiveStroke::new(LiveParams { r: 30.0, hard: 20.0, ..params() });
+        plain.stamp(&pts, &[]);
+        let mut auto_stroke = LiveStroke::new(LiveParams { r: 30.0, hard: 20.0, ..params() });
+        auto_stroke.stamp_with(&pts, &[], ctx());
+        assert!(plain.coverage(205, 100) > 0.9, "without Auto Mask the brush paints over the border");
+        assert!(auto_stroke.coverage(180, 100) > 0.9, "the starting surface is painted");
+        assert!(auto_stroke.coverage(205, 100) < 0.05, "the next surface is not: {}", auto_stroke.coverage(205, 100));
+        // a dab centred on the other surface takes that one as its reference
+        auto_stroke.stamp_with(&[pts[0], pts[1], pos2(260.0, 100.0)], &[], ctx());
+        assert!(auto_stroke.coverage(250, 100) > 0.9);
+        assert!(auto_stroke.coverage(195, 100) > 0.9, "(the grey side stays painted)");
     }
 }

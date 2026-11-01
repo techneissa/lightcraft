@@ -1,3 +1,5 @@
+use crate::animated_gif;
+
 use super::{
     LightcraftApp, docking, drop_overlay, export_task, focus_scan, import, lightroom_import, merge, model_setup, monotonic_ms, panels, pick, recheck,
     shortcuts, slideshow_export, state, sync, tasks, theme, updates_ui, widgets,
@@ -80,8 +82,8 @@ impl LightcraftApp {
         panels::faces::pump_background(self, ctx, now);
         model_setup::pump(self, ctx, now);
         focus_scan::pump(self, ctx, now);
-        // auto import: list the watched folder every few seconds (on a worker thread: it may be on
-        // a network share), then import what's new like any import (also on a worker thread)
+        // auto import: poll the watched folder every few seconds (on a worker thread: it may be on
+        // a network share), list it when it changed, then import what's new like any import (also on a worker thread)
         // a folder that couldn't be read stops being one once another is watched (or none)
         if self.ui.auto_import_error.as_ref().is_some_and(|(f, _)| self.session.import_defaults.auto_folder.as_ref() != Some(f)) {
             self.ui.auto_import_error = None;
@@ -97,51 +99,57 @@ impl LightcraftApp {
                 && !self.tasks.is_running(LABEL)
             {
                 self.ui.auto_import_at = now;
-                let listed = folder.clone();
-                let work = move || lightcraft_engine::cmd::library::list_auto_import_folder(&listed);
-                let done = move |app: &mut LightcraftApp, _ctx: &egui::Context, listing: Result<Vec<(String, u64)>, String>| {
-                    // the watched folder changed while this one was listed: its result is for nothing on screen
-                    if app.session.import_defaults.auto_folder.as_ref() != Some(&folder) {
-                        return;
-                    }
-                    let listing = match listing {
-                        Ok(l) => {
-                            if app.ui.auto_import_error.as_ref().is_some_and(|(f, _)| *f == folder) {
-                                app.ui.auto_import_error = None;
-                                log::info!("auto import: the watched folder can be read again: {folder}");
-                            }
-                            l
-                        }
-                        // removed, renamed, unmounted or not allowed: said once, not every few seconds
-                        Err(e) => {
-                            let error = Some((folder, e));
-                            if app.ui.auto_import_error != error {
-                                if let Some((_, e)) = &error {
-                                    log::warn!("auto import: can't read the watched folder {e}");
-                                }
-                                app.ui.auto_import_error = error;
-                            }
+                // an idle folder costs one stat (see `auto_import_watch`), not a listing
+                let (last, force) = self.ui.auto_watch.ask(&folder, now);
+                let watched = folder.clone();
+                let work = move || lightcraft_engine::cmd::library::poll_auto_import_folder(&folder, last, force);
+                let done =
+                    move |app: &mut LightcraftApp, _ctx: &egui::Context, poll: Result<lightcraft_engine::cmd::library::AutoImportPoll, String>| {
+                        // the watched folder changed while this one was polled: its result is for nothing on screen
+                        if app.session.import_defaults.auto_folder.as_ref() != Some(&watched) {
                             return;
                         }
+                        let poll = match poll {
+                            Ok(p) => {
+                                if app.ui.auto_import_error.as_ref().is_some_and(|(f, _)| *f == watched) {
+                                    app.ui.auto_import_error = None;
+                                    log::info!("auto import: the watched folder can be read again: {watched}");
+                                }
+                                p
+                            }
+                            // removed, renamed, unmounted or not allowed: said once, not every few seconds
+                            Err(e) => {
+                                let error = Some((watched, e));
+                                if app.ui.auto_import_error != error {
+                                    if let Some((_, e)) = &error {
+                                        log::warn!("auto import: can't read the watched folder {e}");
+                                    }
+                                    app.ui.auto_import_error = error;
+                                }
+                                return;
+                            }
+                        };
+                        app.ui.auto_watch.polled(&watched, poll.stamp, poll.listing.is_some(), now);
+                        let Some(listing) = poll.listing else { return };
+                        // an import, a scan (a finished Local browse replaces `app.import`), a Synchronize Folder (its scan
+                        // or its run) or a Lightroom migration that started while the folder was polled: scanning now would
+                        // mark the new files as tried without importing them; the next listing picks them up
+                        if import::running(app) || app.sync.is_some() || app.sync_run.is_some() || app.lightroom.is_some() {
+                            return;
+                        }
+                        let p = serde_json::json!({"listing": listing, "start": false});
+                        let Ok(r) = app.session.execute("library.autoImportScan", &p) else { return };
+                        app.ui.auto_watch.scanned(r.get("waiting").and_then(serde_json::Value::as_bool).unwrap_or(false));
+                        let Some(mut params) = r.get("import").cloned().filter(|_| app.import.is_none()) else { return };
+                        let paths: Vec<String> =
+                            params["paths"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
+                        if let Some(o) = params.as_object_mut() {
+                            o.remove("paths");
+                        }
+                        let undo0 = app.session.undo.len();
+                        app.import = Some(import::ImportTask::new(paths, params, undo0, false).auto());
                     };
-                    // an import, a scan (a finished Local browse replaces `app.import`), a Synchronize Folder (its scan
-                    // or its run) or a Lightroom migration that started while the folder was listed: scanning now would
-                    // mark the new files as tried without importing them; the next listing picks them up
-                    if import::running(app) || app.sync.is_some() || app.sync_run.is_some() || app.lightroom.is_some() {
-                        return;
-                    }
-                    let p = serde_json::json!({"listing": listing, "start": false});
-                    let Ok(r) = app.session.execute("library.autoImportScan", &p) else { return };
-                    let Some(mut params) = r.get("import").cloned().filter(|_| app.import.is_none()) else { return };
-                    let paths: Vec<String> =
-                        params["paths"].as_array().into_iter().flatten().filter_map(|v| v.as_str().map(str::to_string)).collect();
-                    if let Some(o) = params.as_object_mut() {
-                        o.remove("paths");
-                    }
-                    let undo0 = app.session.undo.len();
-                    app.import = Some(import::ImportTask::new(paths, params, undo0, false).auto());
-                };
-                // listed every few seconds: quiet, no row in the activity stack
+                // polled every few seconds: quiet, no row in the activity stack
                 if let Err(e) = tasks::spawn(self, LABEL, None, work, done) {
                     log::warn!("{e}");
                 }
@@ -152,10 +160,15 @@ impl LightcraftApp {
         // are reachable, and said once when they start waiting and once when they're written
         #[cfg(not(target_arch = "wasm32"))]
         {
+            // the queued automatic writes the worker finished (`Session::queue_sidecar_writes`)
+            self.session.poll_sidecar_writes();
+            if self.session.sidecar_writes_pending() > 0 {
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
             if self.session.unsaved_sidecars() > 0 {
                 if now - self.ui.sidecar_retry_at >= 10.0 {
                     self.ui.sidecar_retry_at = now;
-                    self.session.retry_unsaved_sidecars();
+                    self.session.queue_unsaved_sidecar_retries();
                 }
                 ctx.request_repaint_after(std::time::Duration::from_secs(10));
             }
@@ -305,6 +318,7 @@ impl LightcraftApp {
             return;
         }
         self.shown_library = Some(generation);
+        crate::local_profile_offer::check(self);
         if let Some(l) = self.session.library.as_ref().filter(|l| l.on_disk) {
             let path = l.dir.to_string_lossy().into_owned();
             panels::settings::remember_library(&mut self.ui.settings.recent_libraries, &path);
@@ -429,6 +443,8 @@ impl LightcraftApp {
                 panels::notices::hide_background_pointer(&ctx);
             }
             panels::dialogs::show(self, &ctx, notice_blocks);
+            panels::command_palette::show(self, &ctx);
+            crate::keybinds::overlay::show(self, &ctx);
             updates_ui::show(self, &ctx);
             panels::library_problem::show(self, &ctx, notice_blocks);
             panels::toast(self, &ctx);
@@ -460,10 +476,17 @@ impl LightcraftApp {
             panels::notices::hide_background_pointer(&ctx);
         }
         panels::dialogs::show(self, &ctx, notice_blocks);
+        panels::command_palette::show(self, &ctx);
+        crate::keybinds::overlay::show(self, &ctx);
         updates_ui::show(self, &ctx);
         panels::library_problem::show(self, &ctx, notice_blocks);
         export_task::poll(self, &ctx);
+        crate::layers_task::poll(self, &ctx);
+        crate::edit_in_task::poll(self, &ctx);
+        crate::editor_handoff::poll(self, &ctx);
+        crate::macos_colour::job::poll(self, &ctx);
         slideshow_export::poll(self, &ctx);
+        animated_gif::poll(self, &ctx);
         panels::activity::show(self, &ctx);
         export_task::poll_photos(self, &ctx);
         pick::poll(self, &ctx);

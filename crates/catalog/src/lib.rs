@@ -14,6 +14,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod dates;
+pub mod exif_override;
 pub mod folders;
 mod index;
 pub mod journal;
@@ -22,6 +23,7 @@ pub mod local;
 pub mod lock;
 pub mod model;
 pub mod query;
+pub mod quick_filter;
 pub mod rules;
 pub mod safe_file;
 pub mod stacks;
@@ -32,6 +34,7 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub use dates::{DateRun, GroupBy};
+pub use exif_override::{ExifField, ExifOverrides};
 pub use folders::{FolderNode, FolderRecord};
 pub use journal::{Journal, LoadReport, PersistStats, SnapshotPolicy, SnapshotTiming};
 pub use keywords::KeywordNode;
@@ -1490,6 +1493,8 @@ mod tests_journal;
 mod tests_local;
 #[cfg(test)]
 mod tests_lock;
+#[cfg(test)]
+mod tests_quick_filter;
 #[cfg(test)]
 mod tests_repair;
 #[cfg(test)]

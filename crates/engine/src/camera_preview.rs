@@ -17,21 +17,31 @@ use lightcraft_raw::{
 };
 
 mod colour;
+pub(crate) mod colour_transfer;
 mod hue_sat;
+mod local;
 mod look_fit;
+mod macos_base;
 mod mono;
 mod pairs;
 mod proxy;
 mod tone;
 
 #[cfg(test)]
+use colour::colorimetric_camera;
+#[cfg(test)]
+use colour::spectral_prior;
+#[cfg(test)]
+pub(crate) use colour::starting_colour;
+#[cfg(test)]
 pub(crate) use colour::{PROFILE_PROXY, dng_colour, dng_tone_eligible};
 #[cfg(test)]
 use colour::{PROXY, starting_colour_with};
-pub(crate) use colour::{file_local_look, starting_colour, starting_colour_tags, with_starting_colour};
+pub(crate) use colour::{colour_choice_offered, file_local_look, starting_colour_tags, with_starting_colour_for};
 pub(crate) use hue_sat::HueSat;
 #[cfg(test)]
 use hue_sat::{MIN_LUMINANCE_KEPT, NO_LUMINANCE_KEPT, fit_hue_sat, hue_saturation, restore_weight};
+pub(crate) use local::starting_colour_choice;
 #[cfg(test)]
 pub(crate) use look_fit::fit_preview;
 #[cfg(test)]
@@ -39,6 +49,7 @@ use look_fit::{
     FIT_PREVIEW_MAX_PIXELS, SENSOR_CLIP, at_most, clips_more, correct_vignetting, fit_look, fit_look_with, sony_dro_off_tone, with_dro_off_tone,
     without_clipped,
 };
+pub(crate) use macos_base::{BaseReference, base_reference, fit_base_tone};
 #[cfg(test)]
 use mono::{fit_dark_tone, fit_tone_only, monochrome, monochrome_look, to_prophoto};
 #[cfg(test)]
@@ -84,7 +95,12 @@ use tone::{HighlightCheck, ToneFit, fit_tone, fit_tone_conditional, highlights};
 /// 13: the sensor proxy of every per-file fit gets the embedded vignetting correction the render applies (Fujifilm
 /// RAF; other makes with a lens database), so the render no longer applies it twice, at the position a lens warp samples;
 /// the warped candidate's alignment leaves out the pixels outside the sensor instead of reading them as black.
-pub const LOOK_VERSION: u32 = 13;
+/// 14: a partial look takes the camera profile's colour (matrix and table), else a spectral prior, instead of the
+/// identity, and profiles are fitted with a white-keeping matrix.
+/// 15: a smart preview names the colour base baked into its pixels (`base`: `auto` Camera Matching, or `local`
+/// a local camera profile); a Camera Matching photo no longer takes a local profile's colour silently, so older
+/// proxies of those photos are rebuilt.
+pub const LOOK_VERSION: u32 = 15;
 
 #[derive(Clone, Debug)]
 pub(crate) struct CameraLook {
@@ -94,5 +110,7 @@ pub(crate) struct CameraLook {
     pub hue_sat: Option<HsvTable>,
 }
 
+#[cfg(test)]
+mod local_tests;
 #[cfg(test)]
 mod tests;

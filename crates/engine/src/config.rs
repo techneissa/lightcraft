@@ -21,6 +21,8 @@ use std::sync::OnceLock;
 
 use crate::Session;
 
+mod shared_sam3;
+
 /// Files beside the executable that switch on portable mode (either one; contents are ignored).
 pub const PORTABLE_MARKERS: [&str; 2] = ["portable.txt", "LightCraft.portable"];
 /// The data folder created beside the executable in portable mode.
@@ -147,14 +149,10 @@ pub fn default_denoise_models_dir() -> Option<PathBuf> {
         .or_else(|| config_dir().map(|d| d.join("denoise-models")))
 }
 
-/// Where the SAM 3 model is kept: `$LIGHTCRAFT_SAM3_DIR` if set, else `<config>/models/sam3`.
+/// Where the SAM 3 model is kept: `$LIGHTCRAFT_SAM3_DIR` if set, else the folder shared with PhotoCraft
+/// (`ArtCraft/models/sam3`, fork feature) or `<config>/models/sam3`; see `shared_sam3`.
 pub fn default_sam3_dir() -> Option<PathBuf> {
-    sam3_dir(std::env::var_os("LIGHTCRAFT_SAM3_DIR"), config_dir())
-}
-
-/// [`default_sam3_dir`] for a given override and config folder: a non-empty override wins.
-fn sam3_dir(var: Option<std::ffi::OsString>, config: Option<PathBuf>) -> Option<PathBuf> {
-    var.filter(|v| !v.is_empty()).map(PathBuf::from).or_else(|| config.map(|d| d.join("models").join("sam3")))
+    shared_sam3::sam3_dir(std::env::var_os("LIGHTCRAFT_SAM3_DIR"), shared_sam3::shared_sam3_dir(std::env::var_os("HOME")), config_dir())
 }
 
 impl Session {
@@ -302,6 +300,7 @@ mod tests {
     /// A non-empty `LIGHTCRAFT_SAM3_DIR` wins; unset or empty falls back to `<config>/models/sam3` (issue #619).
     #[test]
     fn sam3_dir_prefers_the_override() {
+        let sam3_dir = |var, config| shared_sam3::sam3_dir(var, None, config);
         let config = PathBuf::from("cfg");
         let fallback = Some(config.join("models").join("sam3"));
         assert_eq!(sam3_dir(Some("elsewhere".into()), Some(config.clone())), Some(PathBuf::from("elsewhere")));

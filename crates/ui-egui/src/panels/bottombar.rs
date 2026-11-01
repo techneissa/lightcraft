@@ -201,6 +201,20 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
         {
             let _ = app.run("view.beforeAfter", json!({}));
         }
+        // (right to left: this one sits left of the Before/After button)
+        if icon_button(
+            &mut child,
+            "beforeAfterSplit",
+            Icon::BeforeAfterSplit,
+            vec2(30.0, 30.0),
+            matches!(app.ui.before_after, crate::state::BeforeAfter::Split | crate::state::BeforeAfter::SplitTopBottom),
+            true,
+            "Before/After Split (Shift+Y)",
+        )
+        .clicked()
+        {
+            let _ = app.run("view.beforeAfterSplit", json!({}));
+        }
         if app.ui.view == ViewMode::Detail
             && icon_button(&mut child, "faceBoxes", Icon::FaceBox, vec2(30.0, 30.0), app.ui.face_boxes, true, "Face boxes").clicked()
         {
@@ -242,6 +256,10 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
             );
             egui::Popup::menu(&cz).show(|ui| click_zoom_menu(app, ui));
         }
+        // the filmstrip is filtered too: one button for the quick filters when there is room
+        child.add_space(6.0);
+        let mode = super::quick_filters::mode(full.width(), true);
+        super::quick_filters::show(app, &mut child, mode);
     } else {
         // thumbnail size slider
         let (r, resp) = child.allocate_exact_size(vec2(110.0, 20.0), Sense::click_and_drag());
@@ -292,6 +310,9 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
         {
             app.ui.thumb_size = min + ((pp.x - r.left()) / r.width()).clamp(0.0, 1.0) * (max - min);
         }
+        child.add_space(4.0);
+        let mode = super::quick_filters::mode(full.width(), false);
+        super::quick_filters::show(app, &mut child, mode);
     }
     if child.min_rect().width() > 0.0 { child.min_rect().left() } else { full.right() }
 }

@@ -190,6 +190,8 @@ pub enum ConfirmStyle {
 pub fn confirm_style(dlg: &Dialog) -> ConfirmStyle {
     match dlg {
         Dialog::ConfirmDelete { .. }
+        | Dialog::ConfirmDeleteRejected { .. }
+        | Dialog::DeletePermanently { .. }
         | Dialog::DeleteKeyword { .. }
         | Dialog::DeleteEffects { .. }
         | Dialog::DeleteLocation { .. }

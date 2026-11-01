@@ -82,14 +82,20 @@ pub(super) fn crop(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             let t = Tokens::get(ui.ctx());
             let r = crate::widgets::dropdown(ui, "cropAspect", crate::i18n::tr(&cur), t.font(12.5), t.text);
 
-            egui::Popup::menu(&r).show(|ui| {
-                for (label, a) in ASPECT_PRESETS {
-                    if ui.button(crate::i18n::tr(label)).clicked() {
-                        let _ = app.run("crop.aspect", json!({"aspect": a}));
-                    }
+            let find = crate::widgets::dropdown_search::before_menu(ui, &r, || {
+                ASPECT_PRESETS.iter().map(|(label, _)| crate::i18n::tr(label).to_string()).collect()
+            });
+            crate::widgets::dropdown_search::menu(&r, &find, |ui| {
+                if let Some((_, a)) =
+                    find.list(ui, &ASPECT_PRESETS, |_| false, |(label, _)| crate::i18n::tr(label).to_string()).and_then(|i| ASPECT_PRESETS.get(i))
+                {
+                    let _ = app.run("crop.aspect", json!({"aspect": a}));
                 }
-                ui.separator();
-                custom_aspect(app, ui);
+                // the custom ratio is not an option: it waits until the search is cleared
+                if !find.filtering() {
+                    ui.separator();
+                    custom_aspect(app, ui);
+                }
             });
             let locked = app.crop_tool_aspect().is_some();
             if text_button(ui, "cropLock", if locked { "Locked" } else { "Lock" }, locked).clicked() {
@@ -406,15 +412,18 @@ pub(crate) fn tool_overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         let current = app.ui.tool_overlay;
         let r = crate::widgets::dropdown(ui, "toolOverlay", crate::i18n::tr(current.label()), t.font(12.5), t.text_label)
             .on_hover_text(crate::i18n::tr("When pins show on the photo (Shift+H cycles)"));
-        egui::Popup::menu(&r).show(|ui| {
-            for m in ToolOverlay::ALL {
-                let item = ui.selectable_label(m == current, crate::i18n::tr(m.label()));
-                register(ui, format!("toolOverlay:{}", m.name()), item.rect);
-                if item.clicked() {
-                    let _ = app.run("view.toolOverlay", json!({"mode": m.name()}));
-                }
-            }
-        });
+        if let Some(m) = crate::widgets::dropdown_search::menu_pick_with(
+            &mut *ui,
+            &r,
+            &ToolOverlay::ALL,
+            |m| *m == current,
+            |m| crate::i18n::tr(m.label()).to_string(),
+            |ui, m, item| register(ui, format!("toolOverlay:{}", m.name()), item.rect),
+        )
+        .and_then(|i| ToolOverlay::ALL.get(i))
+        {
+            let _ = app.run("view.toolOverlay", json!({"mode": m.name()}));
+        }
     });
 }
 

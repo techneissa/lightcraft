@@ -1225,7 +1225,9 @@ impl Rule {
         if field == "filePath" {
             return file_path_matches(op, &p.source, value);
         }
-        let m = &p.meta;
+        // what the person sees: edited camera and exposure values count, not only the file's
+        let shown = p.meta.shown();
+        let m = &*shown;
         // the GPS fields first: they don't need the value as text (a GPS Area's would be its JSON,
         // written out for every photo of a Visible on Map filter)
         match field {

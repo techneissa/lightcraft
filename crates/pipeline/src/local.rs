@@ -73,6 +73,7 @@ pub fn effective_wb(info: &SourceInfo, s: &DevelopSettings) -> (f64, f64) {
         WbMode::AsShot => (info.as_shot_temp, info.as_shot_tint),
         _ if legacy_wb(info, s) => legacy_to_kelvin(s.wb.temp, s.wb.tint, (info.as_shot_temp, info.as_shot_tint)),
         m if info.raw && !info.relative_wb => m.preset().unwrap_or((s.wb.temp, s.wb.tint)),
+        _ if macos_kelvin_off_the_mac(info, s) => (info.as_shot_temp, info.as_shot_tint),
         _ => (s.wb.temp, s.wb.tint),
     }
 }
@@ -89,6 +90,18 @@ fn effective_white(info: &SourceInfo, s: &DevelopSettings) -> lightcraft_color::
     }
     let (t, tint) = effective_wb(info, s);
     temp_tint_to_xy(t, tint)
+}
+
+/// Whether `s` is a macOS Colour photo's white balance set in Kelvin (on a Mac, against macOS's as-shot white) on a
+/// source edited on the relative scale: the photo renders as Camera Matching here (not a Mac, or macOS cannot read
+/// it), and without macOS's as-shot white the Kelvin values cannot be carried over. It renders as shot rather than
+/// read the Kelvin numbers as relative ones (4 000 K would turn it deep blue); the values are kept, so the Mac shows
+/// them again.
+fn macos_kelvin_off_the_mac(info: &SourceInfo, s: &DevelopSettings) -> bool {
+    info.raw
+        && info.relative_wb
+        && s.wb.scale == lightcraft_develop::WbScale::Kelvin
+        && s.profile.camera_colour == lightcraft_develop::CameraColour::Macos
 }
 
 /// Whether `s` holds a white balance written on the relative scale for a source that is edited in Kelvin today.
@@ -171,6 +184,26 @@ pub fn kelvin_to_legacy(temp: f64, tint: f64, as_shot: (f64, f64)) -> Option<(f6
     }
     let (t, tint) = xy_to_temp_tint(xy);
     (t.is_finite() && tint.is_finite()).then_some((t, tint))
+}
+
+/// Move the white balance of `d`, a photo leaving macOS Colour for a source edited on the relative scale, off the
+/// Kelvin scale: a white set in Kelvin against macOS's as-shot white `as_shot` becomes the relative white that renders
+/// the same ([`kelvin_to_legacy`]; a preset becomes that Custom value, Auto keeps its mode). As Shot, and values already
+/// on the relative scale (never edited on macOS Colour), are left as they are.
+pub fn leave_kelvin(d: &mut DevelopSettings, as_shot: (f64, f64)) {
+    use lightcraft_develop::{WbMode, WbScale};
+    if d.wb.scale != WbScale::Kelvin || d.wb.mode == WbMode::AsShot {
+        return;
+    }
+    let (t, tint) = d.wb.mode.preset().unwrap_or((d.wb.temp, d.wb.tint));
+    // nowhere to go (a non-finite value, an as-shot white outside the plane): leave it
+    let Some((t, tint)) = kelvin_to_legacy(t, tint, as_shot) else { return };
+    d.wb.temp = t;
+    d.wb.tint = tint;
+    if d.wb.mode != WbMode::Auto {
+        d.wb.mode = WbMode::Custom;
+    }
+    d.wb.scale = WbScale::Legacy;
 }
 
 /// Bring the white balance of `d` onto the scale `info` is edited on, before a new value is written into it: on a
@@ -375,7 +408,7 @@ pub fn base_detail_radius(px_per_long: f64) -> usize {
 pub fn tone_base_detail(s: &DevelopSettings, px_per_long: f64) -> usize {
     match s.process.process() {
         Process::V1 => 0,
-        Process::V2 => base_detail_radius(px_per_long),
+        Process::V2 | Process::V3 => base_detail_radius(px_per_long),
     }
 }
 
@@ -393,12 +426,24 @@ pub fn guided_fast_step(sigma: f32) -> usize {
     (sigma / 3.0).floor().clamp(1.0, 16.0) as usize
 }
 
-/// Luminance noise reduction: guided filter of log luminance (`sigma` px, `eps`), blended by `k`.
+/// Luminance noise reduction: guided filter of log luminance (`sigma` px, `eps`), blended by `k`. `contrast`
+/// (0..1) keeps the part of the filter's change that is large (more than noise): higher values keep the picture's
+/// contrast and detail at the price of noisy blotches, as Lightroom's Contrast does ([`nr_keep`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct NrLum {
     pub sigma: f32,
     pub eps: f32,
     pub k: f32,
+    pub contrast: f32,
+}
+
+/// The share of a luminance-NR change `d` (log2 luminance, filtered minus original) that Contrast takes back:
+/// 0 for changes below 0.08 EV (noise), rising to `contrast` at 0.4 EV and more (detail). The GPU kernel
+/// (`nr_lum`) uses the same edges.
+#[inline]
+pub fn nr_keep(contrast: f32, d: f32) -> f32 {
+    let t = ((d.abs() - 0.08) / 0.32).clamp(0.0, 1.0);
+    contrast * t * t * (3.0 - 2.0 * t)
 }
 
 /// Colour noise reduction: chromaticity blurred by `sigma` px, mixed in by `t`.
@@ -446,7 +491,7 @@ pub fn nr_params(s: &DevelopSettings, scale: f32) -> (Option<NrLum>, Option<NrCo
     let l = (lum > 0.0).then(|| nr_radius((1.0 + 2.5 * lum) * scale)).filter(|&(_, w)| w >= NR_MIN_BLEND).map(|(sigma, w)| {
         let detail = (s.detail.nr_detail / 100.0) as f32;
         let eps = ((0.002 + lum * lum * 0.25 * (1.0 - 0.7 * detail)) * scale * scale).max(1e-7);
-        NrLum { sigma, eps, k: lum.sqrt() * w }
+        NrLum { sigma, eps, k: lum.sqrt() * w, contrast: (s.detail.nr_contrast / 100.0).clamp(0.0, 1.0) as f32 }
     });
     let smooth = 1.0 + (s.detail.nr_color_smoothness / 100.0) as f32;
     let c = (col > 0.0).then(|| nr_radius((1.5 + 6.0 * col) * scale * smooth)).filter(|&(_, w)| w >= NR_MIN_BLEND).map(|(sigma, w)| {
@@ -474,7 +519,8 @@ pub fn apply_nr(img: &mut Rgb32f, lum: Option<NrLum>, col: Option<NrColor>) {
         for_rows(&mut img.data, w, |y, row| {
             for (x, p) in row.iter_mut().enumerate() {
                 let i = y * w + x;
-                let d = (f.data[i] - l.data[i]) * nr.k;
+                let change = f.data[i] - l.data[i];
+                let d = change * (1.0 - nr_keep(nr.contrast, change)) * nr.k;
                 let g = d.exp2();
                 *p = p.map(|v| v * g);
             }
@@ -521,6 +567,8 @@ pub(crate) struct Planes {
     pub base: Option<(BaseKey, Arc<Plane>)>,
     pub clarity: Option<(u32, Arc<Plane>)>,
     pub texture: Option<(u32, Arc<Plane>)>,
+    /// Process V3: the sharpening band, blurred at the Radius slider's scale.
+    pub sharpen: Option<(u32, Arc<Plane>)>,
     /// Dark channel and its airlight.
     pub dark: Option<(u32, Arc<Plane>, f32)>,
     /// Blurred chromaticity (local Moiré / Noise).
@@ -532,7 +580,7 @@ impl Planes {
     /// enough for a draft: the wide blurs (base, clarity, dehaze, chromaticity). Its `key` matches
     /// no image, so only another draft takes them.
     pub fn for_other_nr(self) -> Planes {
-        Planes { key: 0, pre_nr: self.pre_nr, log_l: None, texture: None, ..self }
+        Planes { key: 0, pre_nr: self.pre_nr, log_l: None, texture: None, sharpen: None, ..self }
     }
 }
 
@@ -584,6 +632,9 @@ pub struct PlaneSigmas {
     pub clarity: Option<f32>,
     /// Texture / sharpening band (Gaussian).
     pub texture: Option<f32>,
+    /// Process V3: the sharpening band (Gaussian at the Radius slider's scale, [`sharpen_sigma`]); V1 / V2 sharpen on
+    /// the `texture` band.
+    pub sharpen: Option<f32>,
     /// Dehaze dark channel (Gaussian).
     pub dark: Option<f32>,
     /// Chromaticity blur for local Moiré / colour noise (Gaussian).
@@ -595,7 +646,21 @@ pub fn texture_sigma(px_per_long: f64) -> f32 {
     (0.0018 * px_per_long as f32).max(0.6)
 }
 
-pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneSigmas {
+/// Sigma of the process V3 sharpening band per unit of Radius, in pixels of the original photo: a Gaussian of 1.5 px
+/// sees the detail of a 1 to 1.5 px soft edge of a real photo that a 1 px one barely does.
+pub const SHARPEN_RADIUS_SCALE: f32 = 1.5;
+
+/// Process V3: the sigma (px) of the sharpening band for Radius `radius` (0.5..3): [`SHARPEN_RADIUS_SCALE`] times that many pixels of the original
+/// photo, so `detail_scale` (output pixels per original pixel, see [`detail_scale`]) keeps a
+/// preview and an export sharpening the same edges. Never below 0.6 px: [`gaussian`] makes no blur finer than that,
+/// so a small preview sharpens at its finest scale instead of not at all.
+pub fn sharpen_sigma(radius: f64, detail_scale: f32) -> f32 {
+    let r = if radius.is_finite() { radius.clamp(0.1, 10.0) as f32 } else { 1.0 };
+    let k = if detail_scale.is_finite() { detail_scale.clamp(0.0, 1.0) } else { 1.0 };
+    (r * k * SHARPEN_RADIUS_SCALE).max(0.6)
+}
+
+pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, detail_scale: f32, _q: Quality) -> PlaneSigmas {
     let ppl = px_per_long as f32;
     // A hidden mask, or one with no components, does not change the picture. Its sliders must
     // not pick the tone base Clarity reads (#1214).
@@ -607,23 +672,27 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, q: Quality) -> PlaneS
     // Edge-aware base at ~1.5% of the long edge (EV² epsilon: edges of > ~0.6 EV are preserved)
     // From V2 it is taken of the median at 0.15%: lines and texture finer than that are detail,
     // not tone (#632).
-    let base = tone_active.then(|| {
-        let sigma = (0.015 * ppl).max(1.0);
-        if q == Quality::Draft { sigma.min(24.0) } else { sigma }
-    });
+    // The radius is the same fraction of the image at every quality: a draft capped in pixels
+    // looked different from the export on large previews. `guided_fast` subsamples by sigma / 3
+    // (at most 16), so a wide base is not dearer.
+    let base = tone_active.then(|| (0.015 * ppl).max(1.0));
     let clarity = (s.effects.clarity != 0.0 || local_any(|a| a.clarity)).then(|| (0.012 * ppl).max(1.0));
     // local Noise and Defringe read the fine detail band too
+    // (from process V3 sharpening, global and local, has a band of its own at the Radius slider's scale)
+    let v3 = s.process >= lightcraft_develop::Process::V3.version();
+    let sharpen =
+        (v3 && (s.detail.sharpen_amount != 0.0 || local_any(|a| a.sharpness))).then(|| sharpen_sigma(s.detail.sharpen_radius, detail_scale));
     let texture = (s.effects.texture != 0.0
-        || s.detail.sharpen_amount != 0.0
+        || (!v3 && s.detail.sharpen_amount != 0.0)
         || local_any(|a| a.texture)
-        || local_any(|a| a.sharpness)
+        || (!v3 && local_any(|a| a.sharpness))
         || local_any(|a| a.noise)
         || s.masks.iter().filter(live).any(|m| m.adjust.defringe > 0.0))
     .then(|| texture_sigma(px_per_long));
     let dark = (s.effects.dehaze != 0.0 || local_any(|a| a.dehaze)).then(|| (0.02 * ppl).max(1.0));
     let chroma = (local_any(|a| a.moire) || s.masks.iter().filter(live).any(|m| m.adjust.noise > 0.0)).then(|| (CHROMA_SIGMA * ppl).max(1.0));
     let base_detail = if base.is_some() { tone_base_detail(s, px_per_long) } else { 0 };
-    PlaneSigmas { base, base_detail, clarity, texture, dark, chroma }
+    PlaneSigmas { base, base_detail, clarity, texture, sharpen, dark, chroma }
 }
 
 /// The spatial planes the per-pixel stage needs for `img` (white-balanced, before exposure),
@@ -635,15 +704,23 @@ pub(crate) fn prepare(
     s: &DevelopSettings,
     frame: &Frame,
     px_per_long: f64,
+    detail_scale: f32,
     q: Quality,
     planes: &mut Planes,
     mattes: Option<&masks::Mattes>,
 ) -> Prepared {
     let log_l = planes.log_l.get_or_insert_with(|| Arc::new(timed("log_l", || img.map(log_lum)))).clone();
-    let PlaneSigmas { base: base_sigma, base_detail, clarity: clarity_sigma, texture: texture_sigma, dark: dark_sigma, chroma: chroma_sigma } =
-        plane_sigmas(s, px_per_long, q);
+    let PlaneSigmas {
+        base: base_sigma,
+        base_detail,
+        clarity: clarity_sigma,
+        texture: texture_sigma,
+        sharpen: sharpen_sigma,
+        dark: dark_sigma,
+        chroma: chroma_sigma,
+    } = plane_sigmas(s, px_per_long, detail_scale, q);
 
-    let Planes { base: sb, clarity: sc, texture: st, dark: sd, chroma: sch, .. } = planes;
+    let Planes { base: sb, clarity: sc, texture: st, sharpen: ssh, dark: sd, chroma: sch, .. } = planes;
     let chroma_blur = chroma_sigma.map(|sg| match sch {
         Some((k, c)) if *k == sg.to_bits() => c.clone(),
         _ => {
@@ -653,7 +730,7 @@ pub(crate) fn prepare(
         }
     });
     let l = &log_l;
-    let (base, (clarity_blur, (texture_blur, dark))) = par_join(
+    let (base, (clarity_blur, (texture_blur, (sharpen_blur, dark)))) = par_join(
         || base_sigma.map(|sg| plane_at(sb, base_key(s, sg, base_detail), || timed("base", || tone_base(l, sg, base_detail)))),
         || {
             par_join(
@@ -662,15 +739,20 @@ pub(crate) fn prepare(
                     par_join(
                         || texture_sigma.map(|sg| plane_at(st, sg.to_bits(), || timed("texture", || gaussian(l, sg)))),
                         || {
-                            dark_sigma.map(|sg| match sd {
-                                Some((k, d, air)) if *k == sg.to_bits() => (d.clone(), *air),
-                                _ => {
-                                    let d = timed("dehaze", || Arc::new(gaussian(&img.map(dark_of), sg)));
-                                    let air = airlight(&d);
-                                    *sd = Some((sg.to_bits(), d.clone(), air));
-                                    (d, air)
-                                }
-                            })
+                            par_join(
+                                || sharpen_sigma.map(|sg| plane_at(ssh, sg.to_bits(), || timed("sharpen", || gaussian(l, sg)))),
+                                || {
+                                    dark_sigma.map(|sg| match sd {
+                                        Some((k, d, air)) if *k == sg.to_bits() => (d.clone(), *air),
+                                        _ => {
+                                            let d = timed("dehaze", || Arc::new(gaussian(&img.map(dark_of), sg)));
+                                            let air = airlight(&d);
+                                            *sd = Some((sg.to_bits(), d.clone(), air));
+                                            (d, air)
+                                        }
+                                    })
+                                },
+                            )
                         },
                     )
                 },
@@ -684,7 +766,7 @@ pub(crate) fn prepare(
     };
     let ev = s.light.exposure as f32;
     let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev, mattes));
-    Prepared { img, log_l, base, clarity_blur, texture_blur, dark, chroma_blur, air, masks, px_per_long }
+    Prepared { img, log_l, base, clarity_blur, texture_blur, sharpen_blur, dark, chroma_blur, air, masks, px_per_long }
 }
 
 /// The airlight of the whole output frame, estimated on a small render of it (`proxy_w` px wide):
@@ -814,17 +896,17 @@ mod tests {
             adjust: lightcraft_develop::LocalAdjustments { highlights: 40.0, ..Default::default() },
             ..Default::default()
         });
-        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_none());
+        assert!(plane_sigmas(&s, 2000.0, 1.0, Quality::Full).base.is_none());
         s.masks[0].visible = true;
         s.masks[0].components.clear();
-        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_none());
+        assert!(plane_sigmas(&s, 2000.0, 1.0, Quality::Full).base.is_none());
         s.masks[0].components.push(MaskComponent {
             name: None,
             op: MaskOp::Add,
             invert: false,
             shape: MaskShape::Linear { start: Point::new(0.0, 0.0), end: Point::new(1.0, 0.0) },
         });
-        assert!(plane_sigmas(&s, 2000.0, Quality::Full).base.is_some());
+        assert!(plane_sigmas(&s, 2000.0, 1.0, Quality::Full).base.is_some());
     }
 
     #[test]
