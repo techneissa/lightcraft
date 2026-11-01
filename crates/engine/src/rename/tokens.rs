@@ -7,6 +7,36 @@ pub(super) fn split_ext(name: &str) -> (&str, &str) {
     }
 }
 
+/// Why `name` can't be a file or folder name as typed: the first character a name can't hold (`/ \ : * ? " < > |`
+/// or a control character), named; `None` when it has none. Rename Photos and Rename Folder refuse such a name
+/// instead of quietly writing `-` for it ([`expand`] still does that for what a token brings in).
+pub fn name_char_problem(name: &str) -> Option<String> {
+    let c = name.chars().find(|c| matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control())?;
+    Some(if c.is_control() { "a name can't contain a control character".to_string() } else { format!("a name can't contain “{c}”") })
+}
+
+/// Why `template` can't be used to rename photos: it is empty, or its own text (outside the `{…}` tokens) has a
+/// character a file name can't hold ([`name_char_problem`]).
+pub fn rename_template_error(template: &str) -> Option<String> {
+    if template.trim().is_empty() {
+        return Some("the template is empty".into());
+    }
+    let mut literal = String::new();
+    let mut rest = template;
+    while let Some(i) = rest.find('{') {
+        literal.push_str(&rest[..i]);
+        match rest[i..].find('}') {
+            Some(j) => rest = &rest[i + j + 1..],
+            None => {
+                literal.push_str(&rest[i..]);
+                rest = "";
+            }
+        }
+    }
+    literal.push_str(rest);
+    name_char_problem(&literal).map(|why| format!("the template: {why}"))
+}
+
 fn sanitize(s: &str) -> String {
     let t: String =
         s.chars().map(|c| if matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') || c.is_control() { '-' } else { c }).collect();

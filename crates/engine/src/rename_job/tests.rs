@@ -44,7 +44,7 @@ fn a_rename_in_three_steps_is_one_undo_step() {
     let job = s.begin_rename_with(&fs, "photo.rename", &params).unwrap();
     assert_eq!((job.command(), job.total()), ("photo.rename", 2));
     assert_eq!(path_of(&s, 1), "/p/a.jpg", "nothing changes before the files have moved");
-    let moved = job.run_with(&fs);
+    let moved = job.run_on(&fs, &|_, _| {});
     assert_eq!(path_of(&s, 1), "/p/a.jpg", "nor before the catalog is told");
     let r = s.finish_rename_with(&fs, &job, moved).unwrap();
     assert_eq!(r["renamed"], 2);
@@ -65,7 +65,7 @@ fn a_move_that_fails_leaves_the_catalog_and_the_files_as_they_were() {
     let mut s = session_with(&[(1, "/p/a.jpg"), (2, "/p/b.jpg")]);
     let before = fs.listing();
     let job = s.begin_rename_with(&fs, "photo.rename", &json!({"template": "x-{seq}", "ids": [1, 2]})).unwrap();
-    let moved = job.run_with(&fs);
+    let moved = job.run_on(&fs, &|_, _| {});
     let err = s.finish_rename_with(&fs, &job, moved).unwrap_err().to_string();
     assert!(err.contains("/p/b.jpg"), "names the file: {err}");
     assert_eq!(fs.listing(), before, "the first file moved back");
@@ -108,4 +108,61 @@ fn a_folder_rename_in_three_steps_and_a_taken_name() {
 fn other_commands_are_not_jobs() {
     let mut s = Session::new();
     assert!(s.begin_rename("album.rename", &json!({})).is_err());
+}
+
+/// A folder name with a character a file name can't have is refused with that character named.
+#[test]
+fn a_folder_name_with_a_forbidden_character_is_refused_naming_it() {
+    let dir = std::env::temp_dir().join(format!("lc-rename-chars-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("old")).unwrap();
+    let from = dir.join("old").to_string_lossy().to_string();
+    let mut s = Session::new();
+    for (name, shown) in [("a:b", "“:”"), ("a*b", "“*”"), ("a\u{7}b", "control")] {
+        let e = s.execute("folder.rename", &json!({"path": from, "name": name})).unwrap_err().to_string();
+        assert!(e.contains(shown), "{name:?}: {e}");
+        let e = s.begin_rename("folder.rename", &json!({"path": from, "name": name})).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(e.contains(shown), "{name:?}: {e}");
+    }
+    assert!(dir.join("old").exists(), "nothing was renamed");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A template with a character a file name can't have, or no template, is refused before any file moves
+/// (`Trip: {seq}` used to become `Trip- 1.jpg`, an empty template renamed nothing without a word).
+#[test]
+fn a_template_that_would_be_rewritten_or_is_empty_is_refused() {
+    let fs = FakeFs::new(false, &[("/p/a.jpg", "A")]);
+    let mut s = session_with(&[(1, "/p/a.jpg")]);
+    s.execute("library.select", &json!({"ids": [1]})).unwrap();
+    for (template, shown) in [("Trip: {seq}", "“:”"), ("a|b", "“|”"), ("a?b", "“?”"), ("x/y", "“/”"), ("a\u{1}b", "control"), ("  ", "empty")]
+    {
+        let params = json!({"template": template, "ids": [1]});
+        let e = s.begin_rename_with(&fs, "photo.rename", &params).err().map(|e| e.to_string()).unwrap_or_default();
+        assert!(e.contains(shown), "{template:?}: {e}");
+        let e = s.execute("photo.rename", &params).unwrap_err().to_string();
+        assert!(e.contains(shown), "{template:?}: {e}");
+        assert!(s.execute("photo.renamePreview", &params).is_err(), "the preview says so too");
+    }
+    // a colon inside a token's braces is the token's own
+    s.begin_rename_with(&fs, "photo.rename", &json!({"template": "{date:%Y%m%d}-{seq:3}", "ids": [1]})).unwrap();
+    assert_eq!(fs.listing(), vec![("/p/a.jpg".to_string(), "A".to_string())]);
+}
+
+/// A job whose worker never answered can tell whether anything moved: every file the library points at is
+/// still there, or not.
+#[test]
+fn a_job_knows_whether_its_files_are_still_in_place() {
+    let dir = std::env::temp_dir().join(format!("lc-rename-inplace-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let a = dir.join("a.jpg");
+    std::fs::write(&a, b"A").unwrap();
+    let mut s = session_with(&[(1, &a.to_string_lossy())]);
+    let job = s.begin_rename("photo.rename", &json!({"template": "x", "ids": [1]})).unwrap();
+    assert!(job.files_in_place());
+    std::fs::remove_file(&a).unwrap();
+    assert!(!job.files_in_place(), "a file the library points at is gone");
+    s.abandon_rename();
+    let _ = std::fs::remove_dir_all(&dir);
 }

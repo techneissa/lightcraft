@@ -9,6 +9,9 @@ use crate::Result;
 
 pub(crate) fn rename_args(s: &crate::Session, p: &Value, c: &str) -> Result<(Vec<lightcraft_catalog::PhotoId>, String, usize)> {
     let template = str_param(p, "template").ok_or_else(|| bad(c, "missing `template`"))?.to_string();
+    if let Some(why) = crate::rename::rename_template_error(&template) {
+        return Err(bad(c, why));
+    }
     let start = p.get("start").and_then(Value::as_u64).unwrap_or(1);
     let ids = s.targets(p)?;
     // every number of the sequence `start..start + n` must fit

@@ -73,6 +73,10 @@ pub struct SidecarQueue {
     shared: Shared,
     worker: Option<std::thread::JoinHandle<()>>,
     row: Option<TaskGuard>,
+    /// Photo files are being moved: the writes asked for meanwhile wait in `deferred` (a queued job holds the
+    /// photo's old paths) and are gathered again, at the paths the files ended up at, when the move is over.
+    rename_hold: bool,
+    deferred: Vec<PhotoId>,
 }
 
 impl SidecarQueue {
@@ -113,6 +117,22 @@ impl SidecarQueue {
     #[cfg(test)]
     pub(crate) fn hold(&self) {
         lock(&self.shared).held = true;
+    }
+
+    /// A way to wait for every queued write that a worker thread can use ([`SidecarQueue::wait`] without `&self`).
+    pub(crate) fn waiter(&self) -> impl Fn() + Send + Sync + 'static {
+        let shared = self.shared.clone();
+        move || {
+            let mut s = lock(&shared);
+            #[cfg(test)]
+            {
+                s.held = false;
+                shared.1.notify_all();
+            }
+            while !s.waiting.is_empty() || s.busy {
+                s = shared.1.wait(s).unwrap_or_else(PoisonError::into_inner);
+            }
+        }
     }
 
     /// Block until every queued write is done.
@@ -285,6 +305,13 @@ impl crate::Session {
         if !self.queueing_sidecars() {
             return Ok(false);
         }
+        // files are moving: the write is gathered once they have (a job now would capture the old paths)
+        if let Some(q) = self.sidecar_queue.as_mut().filter(|q| q.rename_hold) {
+            if !q.deferred.contains(&id) {
+                q.deferred.push(id);
+            }
+            return Ok(true);
+        }
         let (original, preferred, candidates) = self.sidecar_target(id, owners)?;
         let p = self.catalog.photo(id).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?;
         let job = Job {
@@ -299,6 +326,25 @@ impl crate::Session {
         };
         let Some(q) = self.sidecar_queue.as_mut() else { return Ok(false) };
         Ok(q.push(job, &self.activity))
+    }
+}
+
+impl crate::Session {
+    /// A rename starts moving photo files: automatic sidecar writes asked for from now on wait (see
+    /// [`SidecarQueue`]). Returns a way to wait, on another thread, for the writes already queued, so the
+    /// files move only once those have landed beside them. No-op without the queue.
+    pub(crate) fn hold_sidecars_for_rename(&mut self) -> Option<std::sync::Arc<dyn Fn() + Send + Sync>> {
+        let q = self.sidecar_queue.as_mut()?;
+        q.rename_hold = true;
+        Some(std::sync::Arc::new(q.waiter()))
+    }
+
+    /// The files have moved (or the move failed or never ran): the held writes are gathered again, now.
+    pub(crate) fn release_sidecars_after_rename(&mut self) {
+        let Some(q) = self.sidecar_queue.as_mut() else { return };
+        q.rename_hold = false;
+        let ids = std::mem::take(&mut q.deferred);
+        self.auto_write_sidecar_ids(ids);
     }
 }
 

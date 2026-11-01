@@ -217,6 +217,10 @@ impl LightcraftApp {
         if let Some(result) = model_setup::intercept(self, id, &params) {
             return result.map_err(CommandError::from);
         }
+        // photo files are moving: an export would read them from under the rename
+        if id == "app.export" && self.rename_task.is_some() {
+            return Err(CommandError::from(crate::i18n::tr("Wait for the rename to finish: it is moving the files").to_string()));
+        }
         if matches!(id, "photo.rename" | "folder.rename") && params.get("background").and_then(Value::as_bool) == Some(true) {
             return crate::rename_task::start(self, id, &params).map_err(CommandError::from);
         }

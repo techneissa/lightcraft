@@ -258,6 +258,9 @@ pub(crate) fn rename_folder_target(p: &Value) -> crate::Result<(String, String)>
         .map(str::trim)
         .filter(|n| !n.is_empty() && !n.contains(['/', '\\']) && *n != "." && *n != "..")
         .ok_or_else(|| bad("folder.rename", "give a folder name (no slashes)"))?;
+    if let Some(why) = crate::rename::name_char_problem(name) {
+        return Err(bad("folder.rename", why));
+    }
     let to = Path::new(&from).with_file_name(name).to_string_lossy().to_string();
     Ok((from, to))
 }

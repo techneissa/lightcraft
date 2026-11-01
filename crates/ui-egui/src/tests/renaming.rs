@@ -258,7 +258,10 @@ fn rename_photos_runs_on_a_worker_and_is_one_undo_step() {
     let (mut h, root, ids) = files_app("photos");
     let r = h.app.run("photo.rename", json!({"template": "trip-{seq}", "ids": ids, "background": true})).unwrap();
     assert_eq!(r["background"], true);
-    assert!(h.app.rename_task.is_some() && h.app.session.activity.list().iter().any(|t| t.kind == "rename"), "a row while the files move");
+    assert!(
+        h.app.rename_task.is_some() && h.app.session.activity.list().iter().any(|t| t.kind == "rename" && t.total == 2),
+        "a row counting the files"
+    );
     assert!(h.app.run("photo.rename", json!({"template": "x", "ids": ids, "background": true})).is_err(), "one rename at a time");
     finish_task(&mut h);
     assert_eq!((path_of(&h, ids[0]), path_of(&h, ids[1])), (root.join("trip-1.png"), root.join("trip-2.png")));
@@ -307,4 +310,32 @@ fn rename_folder_runs_on_a_worker() {
     h.app.run("edit.undo", json!({})).unwrap();
     assert!(root.join("garden.png").exists() && !renamed.exists());
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// While files move, an export is refused with the reason (it would read them from under the rename), and
+/// when the rename is over the export is allowed again.
+#[test]
+fn no_export_while_files_move() {
+    let (mut h, root, ids) = files_app("export");
+    h.app.run("photo.rename", json!({"template": "trip-{seq}", "ids": ids, "background": true})).unwrap();
+    let e = h.app.run("app.export", json!({"preset": "none", "background": true})).unwrap_err();
+    assert!(e.contains("Wait for the rename to finish"), "{e}");
+    finish_task(&mut h);
+    let e = h.app.run("app.export", json!({"preset": "none", "background": true})).unwrap_err();
+    assert!(!e.contains("Wait for the rename"), "{e}");
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+/// The Rename Photos window says why a template can't be used, instead of showing a preview of names that
+/// would be rewritten, and the preview comes back with a good one.
+#[test]
+fn the_rename_window_says_why_a_template_is_refused() {
+    let mut h = demo();
+    h.app.run("library.selectAll", json!({})).unwrap();
+    h.app.ui.dialog = Some(Dialog::Rename { template: "Trip: {seq}".into(), start: 1 });
+    h.settle(T);
+    assert!(has_widget(&h, "text:renameTemplateProblem"));
+    h.app.ui.dialog = Some(Dialog::Rename { template: "Trip-{seq}".into(), start: 1 });
+    h.settle(T);
+    assert!(!has_widget(&h, "text:renameTemplateProblem"));
 }

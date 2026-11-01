@@ -91,6 +91,22 @@ fn plan_rename_core(
     out
 }
 
+/// The file moves `plans` stand for: the plans whose path changes.
+pub(crate) fn plan_moves(plans: &[RenamePlan]) -> Vec<(String, String)> {
+    plans
+        .iter()
+        .filter_map(|pl| match (&pl.from_path, &pl.to_path) {
+            (Some(a), Some(b)) if Path::new(a) != Path::new(b) => Some((a.clone(), b.clone())),
+            _ => None,
+        })
+        .collect()
+}
+
+/// [`plan_rename_photos`] on the file system `fs`.
+pub(crate) fn plan_rename_photos_with(photos: &[std::sync::Arc<Photo>], template: &str, start: usize, fs: &dyn MoveFs) -> Vec<RenamePlan> {
+    plan_rename_core(photos, template, start, &|p| fs.exists(p), &|a, b| fs.same_file(a, b))
+}
+
 /// What [`Session::prepare_file_plans`] works out: the catalog change, how many photos it
 /// touches, and the file moves to do first.
 #[derive(Clone)]
@@ -214,14 +230,7 @@ impl Session {
         }
         let n = ops.len();
         let op = Op::Batch { ops };
-        let moves: Vec<(String, String)> = plans
-            .iter()
-            .filter_map(|pl| match (&pl.from_path, &pl.to_path) {
-                (Some(a), Some(b)) if Path::new(a) != Path::new(b) => Some((a.clone(), b.clone())),
-                _ => None,
-            })
-            .collect();
-        Ok(FilePrep { op, n, moves })
+        Ok(FilePrep { op, n, moves: plan_moves(plans) })
     }
 
     /// The second half of [`Session::apply_file_plans`], after the moves of `prep` ran as `moved`:

@@ -521,6 +521,8 @@ fn can_confirm(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> bool {
             let plan = person_rename_plan(&app.session.catalog, from, to);
             plan.block.is_some() || (plan.needs_merge && !*merge)
         }
+        // a template the rename would refuse (an empty one, a character a file name can't have)
+        Dialog::Rename { template, .. } => lightcraft_engine::rename::rename_template_error(template).is_some(),
         _ => false,
     };
     let waiting = matches!(
@@ -1091,6 +1093,11 @@ fn rename_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut
         ))
         .color(t.text_dim),
     );
+    if let Some(why) = lightcraft_engine::rename::rename_template_error(template) {
+        let r = ui.label(egui::RichText::new(why).color(t.caution));
+        crate::widgets::register(ui, "text:renameTemplateProblem", r.rect);
+        return;
+    }
     let (preview, total) = rename_preview(app, ui.ctx(), template, *start as usize);
     match &preview {
         Some(rows) => {

@@ -130,3 +130,25 @@ fn without_the_queue_the_command_writes_in_place() {
     assert_eq!(rating(&dir, 1).as_deref(), Some("2"));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Given a rename whose files are moving, when a photo is edited meanwhile, then its sidecar is written once the
+/// rename is done, at the new name: the queued write used to capture the old path and put an `IMG_1.xmp` back
+/// beside `trip-1.jpg`.
+#[test]
+fn an_edit_while_files_move_writes_the_sidecar_at_the_new_name() {
+    let (mut s, dir) = library("rename", 1);
+    rate(&mut s, &[1], 2);
+    s.finish_sidecar_writes();
+    assert_eq!(rating(&dir, 1).as_deref(), Some("2"));
+    let job = s.begin_rename("photo.rename", &json!({"template": "trip-{seq}", "ids": [1]})).unwrap();
+    // the edit lands while the files move
+    rate(&mut s, &[1], 5);
+    let moved = job.run();
+    s.finish_rename(&job, moved).unwrap();
+    s.finish_sidecar_writes();
+    assert!(dir.join("trip-1.jpg").exists() && dir.join("trip-1.xmp").exists(), "the sidecar went along");
+    assert!(!sidecar(&dir, 1).exists(), "no stale sidecar at the old name");
+    let text = std::fs::read_to_string(dir.join("trip-1.xmp")).unwrap();
+    assert!(text.contains("<xmp:Rating>5</xmp:Rating>"), "the edit made during the rename is in it: {text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
