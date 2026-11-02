@@ -157,7 +157,7 @@ pub fn models_dir() -> Option<std::path::PathBuf> {
     )
 }
 pub fn valid_model(model: &str) -> bool {
-    matches!(model, "dsrnet-s" | "dsrnet-l" | "dsrnet-l-nature" | "dirs-mugi")
+    matches!(model, "dsrnet-s" | "dsrnet-l" | "dsrnet-l-nature" | "dirs-mugi" | "dirs-pair" | "rdnet")
 }
 #[cfg(not(target_arch = "wasm32"))]
 pub fn available_model(model: &str) -> bool {
@@ -168,7 +168,7 @@ pub fn available_model(_model: &str) -> bool {
     false
 }
 pub fn available() -> bool {
-    ["dirs-mugi", "dsrnet-s", "dsrnet-l-nature", "dsrnet-l"].iter().any(|m| available_model(m))
+    ["dirs-mugi", "dirs-pair", "rdnet", "dsrnet-s", "dsrnet-l-nature", "dsrnet-l"].iter().any(|m| available_model(m))
 }
 
 #[cfg(not(target_arch = "wasm32"))]

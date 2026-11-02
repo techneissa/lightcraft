@@ -6,36 +6,44 @@ use std::sync::atomic::AtomicBool;
 pub const MODEL: &str = lightcraft_reflections::DIRS_MUGI;
 pub const PAIR: &str = lightcraft_reflections::DIRS_PAIR;
 /// The models that come as published files rather than a converted folder.
-pub const MODELS: [&str; 2] = [MODEL, PAIR];
+pub const RDNET: &str = lightcraft_reflections::RDNET;
+pub const MODELS: [&str; 3] = [MODEL, PAIR, RDNET];
 
 /// Size of the download, for the question asked before it.
 pub fn download_bytes(model: &str) -> u64 {
-    lightcraft_reflections::download::dirs_bytes(model)
+    lightcraft_reflections::download::model_bytes(model)
 }
 
-/// Where the files come from, for the question and the instructions link.
-pub const PAGE: &str = lightcraft_reflections::download::MUGI_PAGE;
+/// Where the files of `model` come from, for the question and the instructions link.
+pub fn page(model: &str) -> &'static str {
+    lightcraft_reflections::download::page(model)
+}
 
 /// A folder the user picked holds the two files of one DIRS model; which one.
 pub fn is_dirs_folder(path: &Path) -> Option<&'static str> {
     MODELS.into_iter().find(|m| lightcraft_reflections::installed_model(path, m))
 }
 
-fn checkpoint(model: &str) -> &'static str {
-    if model == PAIR { lightcraft_reflections::PAIR_CHECKPOINT } else { lightcraft_reflections::MUGI_CHECKPOINT }
+/// The two file names a model folder holds.
+fn file_names(model: &str) -> [&'static str; 2] {
+    match model {
+        PAIR => [lightcraft_reflections::PAIR_CHECKPOINT, lightcraft_reflections::SWIN_PRIOR],
+        RDNET => [lightcraft_reflections::RDNET_NETWORK, lightcraft_reflections::RDNET_CLASSIFIER],
+        _ => [lightcraft_reflections::MUGI_CHECKPOINT, lightcraft_reflections::SWIN_PRIOR],
+    }
 }
 
 /// Copies the picked folder's two files into `<root>/<model>` once they check out. The folder is created
 /// exclusively and removed again on failure; an existing model folder is never touched.
 pub fn install_folder(model: &str, source: &Path, root: &Path) -> Result<String, String> {
-    lightcraft_reflections::download::verify_dirs(model, source)?;
+    lightcraft_reflections::download::verify_model(model, source)?;
     let target = root.join(model);
     if target.exists() {
         return Err("Reflection model already installed".into());
     }
     std::fs::create_dir_all(root).map_err(|e| e.to_string())?;
     std::fs::create_dir(&target).map_err(|e| e.to_string())?;
-    let result = [checkpoint(model), lightcraft_reflections::SWIN_PRIOR]
+    let result = file_names(model)
         .iter()
         .try_for_each(|name| std::fs::copy(source.join(name), target.join(name)).map(|_| ()).map_err(|e| format!("{name}: {e}")));
     if result.is_err() {
@@ -50,7 +58,7 @@ pub fn download(model: &str, root: &Path, cancel: &AtomicBool, progress: &mut dy
     if lightcraft_reflections::installed_model(&target, model) {
         return Err("Reflection model already installed".into());
     }
-    lightcraft_reflections::download::download_dirs(model, &target, cancel, progress)?;
+    lightcraft_reflections::download::download_model(model, &target, cancel, progress)?;
     Ok(model.to_string())
 }
 

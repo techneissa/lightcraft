@@ -2,7 +2,7 @@
 //! the authors publish (huggingface.co/huqiming513/DIRS-Models); they are used as they are, with sizes and
 //! SHA-256 pinned here from Hugging Face's own file records. The downloader is `lightcraft-fetch`
 //! (resume, stall timeouts, cancellation, the file is renamed into place only when it checks out).
-use crate::{DIRS_PAIR, MUGI_CHECKPOINT, PAIR_CHECKPOINT, SWIN_PRIOR};
+use crate::{DIRS_PAIR, MUGI_CHECKPOINT, PAIR_CHECKPOINT, RDNET, SWIN_PRIOR};
 use lightcraft_fetch::{FileSpec, Options, download_url};
 use sha2::{Digest, Sha256};
 use std::io::Read;
@@ -11,6 +11,8 @@ use std::sync::atomic::AtomicBool;
 
 pub const MUGI_PAGE: &str = "https://huggingface.co/huqiming513/DIRS-Models";
 const BASE: &str = "https://huggingface.co/huqiming513/DIRS-Models/resolve/main/checkpoints";
+pub const RDNET_PAGE: &str = "https://huggingface.co/spaces/lime-j/RDNet";
+const RDNET_BASE: &str = "https://huggingface.co/spaces/lime-j/RDNet/resolve/main";
 
 struct Pinned {
     name: &'static str,
@@ -43,24 +45,48 @@ const PAIR_FILES: [Pinned; 2] = [
     SWIN_FILE,
 ];
 
-/// The two published files of a DIRS model (`dirs-mugi` or `dirs-pair`).
+const RDNET_FILES: [Pinned; 2] = [
+    Pinned {
+        name: "fp16_check.pt",
+        url_path: "fp16_check.pt",
+        size: 533_415_743,
+        sha256: "9fbd9f284d7ab5e76a5265ca10a609c52ca6fbcd373c2287e8b446389301a28a",
+    },
+    Pinned {
+        name: "classifier_32.pt",
+        url_path: "classifier_32.pt",
+        size: 197_968_849,
+        sha256: "5b4df02e173d5b9a8bdede9cfd88da215685f3e8c12867201718e51fb1ac4ed9",
+    },
+];
+
+/// The two published files of a downloadable model (`dirs-mugi`, `dirs-pair` or `rdnet`).
 fn files(model: &str) -> &'static [Pinned; 2] {
-    if model == DIRS_PAIR { &PAIR_FILES } else { &MUGI_FILES }
+    match model {
+        DIRS_PAIR => &PAIR_FILES,
+        RDNET => &RDNET_FILES,
+        _ => &MUGI_FILES,
+    }
+}
+
+/// Where the files of `model` come from (the page shown in the question before a download).
+pub fn page(model: &str) -> &'static str {
+    if model == RDNET { RDNET_PAGE } else { MUGI_PAGE }
 }
 
 /// Total bytes of both files of `model`.
-pub fn dirs_bytes(model: &str) -> u64 {
+pub fn model_bytes(model: &str) -> u64 {
     files(model).iter().map(|f| f.size).sum()
 }
 
 /// Downloads both files of `model` into `dir` (created when missing; an interrupted download resumes).
 /// `progress(done, total)` counts the bytes of both files.
-pub fn download_dirs(model: &str, dir: &Path, cancel: &AtomicBool, progress: &mut dyn FnMut(u64, u64)) -> Result<(), String> {
-    let total = dirs_bytes(model);
+pub fn download_model(model: &str, dir: &Path, cancel: &AtomicBool, progress: &mut dyn FnMut(u64, u64)) -> Result<(), String> {
+    let total = model_bytes(model);
     let mut before = 0;
     for f in files(model) {
         let spec = FileSpec { name: f.name, size: Some(f.size), sha256: Some(f.sha256), max: f.size };
-        let url = format!("{BASE}/{}", f.url_path);
+        let url = if model == RDNET { format!("{RDNET_BASE}/{}", f.url_path) } else { format!("{BASE}/{}", f.url_path) };
         download_url(&spec, &url, dir, &Options::default(), cancel, &mut |p| progress((before + p.done).min(total), total))
             .map_err(|e| e.to_string())?;
         before += f.size;
@@ -69,7 +95,7 @@ pub fn download_dirs(model: &str, dir: &Path, cancel: &AtomicBool, progress: &mu
 }
 
 /// Whether the two files in `dir` are exactly the published ones (size and SHA-256).
-pub fn verify_dirs(model: &str, dir: &Path) -> Result<(), String> {
+pub fn verify_model(model: &str, dir: &Path) -> Result<(), String> {
     for f in files(model) {
         let path = dir.join(f.name);
         let file = std::fs::File::open(&path).map_err(|e| format!("{}: {e}", f.name))?;
@@ -100,21 +126,21 @@ mod tests {
     fn wrong_sized_and_missing_files_fail_the_check() {
         let dir = std::env::temp_dir().join(format!("lc-dirs-verify-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        assert!(verify_dirs("dirs-mugi", &dir).is_err());
+        assert!(verify_model("dirs-mugi", &dir).is_err());
         std::fs::write(dir.join(MUGI_CHECKPOINT), b"not the checkpoint").unwrap();
-        assert!(verify_dirs("dirs-mugi", &dir).unwrap_err().contains("wrong size"));
-        assert!(verify_dirs("dirs-pair", &dir).is_err());
+        assert!(verify_model("dirs-mugi", &dir).unwrap_err().contains("wrong size"));
+        assert!(verify_model("dirs-pair", &dir).is_err());
         std::fs::write(dir.join(PAIR_CHECKPOINT), b"not the checkpoint").unwrap();
-        assert!(verify_dirs("dirs-pair", &dir).unwrap_err().contains("wrong size"));
-        assert_eq!(dirs_bytes("dirs-mugi"), 345_268_909 + 784_900_594);
-        assert_eq!(dirs_bytes("dirs-pair"), 561_054_629 + 784_900_594);
+        assert!(verify_model("dirs-pair", &dir).unwrap_err().contains("wrong size"));
+        assert_eq!(model_bytes("dirs-mugi"), 345_268_909 + 784_900_594);
+        assert_eq!(model_bytes("dirs-pair"), 561_054_629 + 784_900_594);
         std::fs::remove_dir_all(dir).unwrap();
     }
     #[test]
     fn a_cancelled_download_stops_before_fetching() {
         let dir = std::env::temp_dir().join(format!("lc-dirs-cancel-{}", std::process::id()));
         let cancel = AtomicBool::new(true);
-        let err = download_dirs("dirs-mugi", &dir, &cancel, &mut |_, _| {}).unwrap_err();
+        let err = download_model("dirs-mugi", &dir, &cancel, &mut |_, _| {}).unwrap_err();
         assert!(err.contains("cancelled"), "{err}");
         assert!(!dir.join(MUGI_CHECKPOINT).exists());
         let _ = std::fs::remove_dir_all(dir);

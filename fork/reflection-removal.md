@@ -1,6 +1,6 @@
 # Reflection removal
 
-List: Remove ▸ Reflections separates a window's reflection with a local model (DIRS-MuGI, or DSRNet from official PR #1220), kept in the folder shared with PhotoCraft. Branch `feat/25-reflection-removal`.
+List: Remove ▸ Reflections separates a window's reflection with a local model (DIRS-MuGI, DIRS-PAIR, RDNet, or DSRNet from official PR #1220), kept in the folder shared with PhotoCraft. Branch `feat/25-reflection-removal`.
 
 ## What it does
 
@@ -58,38 +58,43 @@ Official may merge #1220 as it is, or a newer version of it (the PR is open and 
 - The Remove panel has a Reflections section (also Photo ▸ Remove Reflections) that separates a reflection, such as a window's, from the photo with a local DSRNet model (S, L or L Nature) at Preview, Standard or High quality. Nothing leaves the Mac. Amount, Protect Sky, Detail Protection and Limit to Area change the result without running the model again. It is the official experimental feature, taken early.
 - The model is not bundled: convert it once as `docs/ai-reflections.md` says, then pick its folder with Install Reflection Model…. It is kept in `~/Library/Application Support/ArtCraft/models/<model-id>` (shared with PhotoCraft).
 
-## Models compared (2026-11-02, handoff)
+## Models compared (2026-11-02)
 
 All kept in `~/Library/Application Support/ArtCraft/models/<id>/`; none is committed. Never delete them: techneissa decides.
+Every model is read as published (no conversion), by candle's non-executing pickle reader, and matches PyTorch on a 192×160 picture with the real weights.
 
-| Id | Source | Files, size | Licence of the code / weights | Status |
-|---|---|---|---|---|
-| `dsrnet-s` | github.com/mingcv/DSRNet `weights/dsrnet_s_epoch14.pt`, converted once with `tools/convert-reflection-model.py` | `model.safetensors` 89 MB | Apache-2.0 code; weights have no licence of their own | ported (PR #1220) |
-| `dirs-mugi` | huggingface.co/huqiming513/DIRS-Models `checkpoints/dirs_mugi_lors.ckpt` and `checkpoints/pretrained/swin_large_o365.pth` | 345,268,909 B + 784,900,594 B | Hugging Face card: Apache-2.0; the GitHub repo (mingcv/DIRS) has no licence file | **ported, matches PyTorch** |
-| `dirs-pair` | same repo: `checkpoints/dirs_pair_lors.ckpt` (+ the same Swin file) | 561,054,629 B + 784,900,594 B | as above | downloaded, **not ported yet** (see below) |
-| `rdnet` | huggingface.co/spaces/lime-j/RDNet: `fp16_check.pt`, `classifier_32.pt` | about 534 MB + 198 MB | not checked yet | downloaded, **not ported yet** |
-| `unreflectanything` | huggingface.co/AlbeRota/UnReflectAnything `weights/`: `full_model_weights.pt`, `diffuse_decoder.pt`, `highlight_decoder.pt` | 3,441,741,454 B + 418,170,913 B + 54,845,081 B | MIT (model card) | downloaded, **not ported yet** |
+| Id | Source | Files, size | Licence | Status | Max difference to PyTorch (CPU / Metal) |
+|---|---|---|---|---|---|
+| `dsrnet-s` | github.com/mingcv/DSRNet, converted once with `tools/convert-reflection-model.py` | 89 MB | Apache-2.0 code; weights have none of their own | ported (PR #1220) | n/a |
+| `dirs-mugi` | huggingface.co/huqiming513/DIRS-Models | 345 MB + 785 MB | card: Apache-2.0; GitHub repo has no licence file | ported | 2.5e-6 / 4.3e-6 |
+| `dirs-pair` | same repo, `dirs_pair_lors.ckpt` + the same Swin file | 561 MB + 785 MB | as above | ported (`dirs/pair.rs`) | 1.8e-6 / 2.6e-6 |
+| `rdnet` | huggingface.co/spaces/lime-j/RDNet `fp16_check.pt`, `classifier_32.pt` | 533 MB + 198 MB | none stated (no licence file in the Space or in github.com/lime-j/RDNet) | ported (`rdnet.rs`, `focal.rs`) | 2.0e-6 / 2.3e-6 |
+| `unreflectanything` | huggingface.co/AlbeRota/UnReflectAnything `weights/` | 3.4 GB + 418 MB + 55 MB | MIT (model card) | downloaded, **not ported** | n/a |
 
-What a port of each still needs:
-- **DIRS-PAIR**: reuses `swin.rs` and the dual-stream blocks. New: `DIRSLocalInteractionBlock` (the MuGI block with a plain `x1*y2` gate, no sigmoid), `DualAttentionInteractiveBlock` (window self-attention on each stream plus a "layered" cross attention over the two streams' concatenated windows, relative-position table of `(2w-1)^2*3` rows, window 12, no shift), the five-stage extractor with `enc_blk_nums [12,8,4,2,2]`, `dec_blk_nums [2,2,2,2,2]`, and the backbone wiring in `xreflection/archs/dirs_pair_arch.py` lines 330-547 and `dirs_lors_arch.py` (`DIRS_PAIR_LORS`, output is again `out_l`). Checkpoint keys: `net_g.backbone.*`, Lightning `state_dict`.
-- **RDNet**: `models/arch/RDnet_.py` (`FullNet_NLP`, channels `[64,128,256,512]`, layers `[2,2,4,2]`, 4 subnets, run the non-reversible path), a FocalNet-L backbone (`focalnet.py`, `focalnet_L_384_22k_fl4`), NAFBlock/Decoder/UpSampleConvnext (`modules_sig.py`, `decode.py`), and the classifier `PretrainedConvNext("convnext_small_in22k")` (`classifier.py`) whose 6-number output prompts the network. Weights are stored fp16 under key `icnn`. Result: `output_j[-1][:, 3:]`, clamped to [0, 1]. Input is resized to a multiple of 32.
-- **UnReflectAnything**: DINOv3 ViT-L/16 encoder (RoPE) + reflection predictor + token inpainter + DPT-style decoder. The code is in the PyPI package `unreflectanything` (not on the Hugging Face repo); `configs/pretrained_config.yaml` there names the layout. It removes specular highlights on shiny objects (endoscopy, glossy products), not window reflections.
+Download… in the panel works for DIRS-MuGI, DIRS-PAIR and RDNet (asks first, resume, SHA-256 pinned from Hugging Face's own records). The Model dropdown lists installed models, then "Download <name>…" for the downloadable ones that are missing.
+
+RDNet notes: the Space runs inputs resized down to a multiple of 32; this port pads by edge replication instead (the same in the PyTorch reference used for the check). Only the decoder branch that gives the reflection is run, once, after the last sub-network. The Space's own `app.py` feeds 0-255 values; the port feeds 0-1, as the authors' dataset code does.
+
+### UnReflectAnything: not ported yet (stopped for context, not because it cannot be done)
+- Needs: DINOv3 ViT-L/16 encoder with RoPE (24 layers at 896 px, from `facebook/dinov3-vitl16-pretrain-lvd1689m`), two DPT decoders (diffuse and highlight), the `TokenInpainter_Prior` (6 blocks, 16 heads, local prior blending) and the mask logic of `inference.py` (brightness threshold 0.7, mask dilation 11). Code: github.com/alberto-rota/UnReflectAnything (`models.py` 1660 lines, `token_inpainters.py`, `utilities/inference.py`); layout in `config/pretrained_config.yaml`.
+- `full_model_weights.pt` is a pickle holding a `dotmap.DotMap` object next to the tensors: PyTorch's `weights_only` loader refuses it. Candle's reader must be tested on it; if it refuses too, a small restricted unpickler is needed (never run the pickle).
+- It removes highlights on shiny objects (endoscopy, glossy products), so it needs its own "Highlights" mode in the panel.
 
 ## Comparison runs
 
-Test photos and their sources: `$WORKSPACE/assets/lightcraft/design/reflection-tests/` (`sources.md`). Sheets: `$WORKSPACE/assets/lightcraft/shots/reflection-compare/`, also on `pr-assets` in `feat/25-reflection-removal/compare/`. Standard quality (long edge 768), Metal, M4 Pro; time = one inference after the model is loaded.
+Test photos and their sources: `$WORKSPACE/assets/lightcraft/design/reflection-tests/` (`sources.md`): 8 window and glass reflections and 3 shiny objects, each looked at before it was kept. Sheets: `$WORKSPACE/assets/lightcraft/shots/reflection-compare/`, also on `pr-assets` in `feat/25-reflection-removal/compare/`. Standard quality (long edge 768), Metal, M4 Pro, other lanes running (load about 25); time = one inference after the model is loaded. 
+| Photo | DSRNet-S 1st / 2nd run | DIRS-MuGI 1st / 2nd run | DIRS-PAIR 1st / 2nd run | RDNet 1st / 2nd run |
+|---|---|---|---|---|
+| amsterdam-glass-wall | 22.4 s / 22.3 s | 17.4 s / 17.6 s | 25.3 s / 25.3 s | 42.7 s / 43.1 s |
+| capri-car-paint | 17.7 s / 17.9 s | 13.6 s / 13.6 s | 20.1 s / 20.1 s | 33.5 s / 33.6 s |
+| car-window | 23.8 s / 23.7 s | 18.4 s / 18.4 s | 27.3 s / 27.6 s | 45.2 s / 45.0 s |
+| designer-apparel-window | 23.7 s / 23.6 s | 18.3 s / 18.3 s | 27.2 s / 27.2 s | 45.2 s / 46.0 s |
+| eyeglasses | 19.6 s / 20.6 s | 15.5 s / 15.6 s | 22.6 s / 22.5 s | 37.5 s / 37.5 s |
+| framed-picture-glass | 21.0 s / 21.1 s | 16.2 s / 16.2 s | 24.1 s / 24.2 s | 40.0 s / 40.0 s |
+| glass-door | 22.3 s / 22.2 s | 17.1 s / 17.1 s | 25.1 s / 27.4 s | 54.4 s / 55.2 s |
+| red-car-body | 25.8 s / 19.6 s | 15.3 s / 19.5 s | 33.6 s / 31.0 s | 43.6 s / 43.9 s |
+| shop-window-day | 26.7 s / 24.1 s | 24.2 s / 21.5 s | 33.9 s / 33.2 s | 43.4 s / 43.0 s |
+| willys-coupe | 22.4 s / 22.3 s | 17.1 s / 17.1 s | 25.1 s / 25.1 s | 42.6 s / 42.5 s |
+| window-night | 22.6 s / 22.6 s | 17.4 s / 17.4 s | 35.3 s / 25.4 s | 43.1 s / 43.2 s |
 
-| Photo | DSRNet-S 1st / 2nd run | DIRS-MuGI 1st / 2nd run |
-|---|---|---|
-| car-window | 23.7 s / 24.7 s | 19.4 s / 19.0 s |
-| display-case | 19.6 s / 19.2 s | 14.5 s / 14.6 s |
-| eyeglasses | 19.6 s / 19.7 s | 15.1 s / 15.0 s |
-| framed-picture-glass | 20.8 s / 20.8 s | 16.2 s / 16.3 s |
-| glass-door | 23.1 s / 22.7 s | 17.8 s / 17.6 s |
-| shiny-car-or-skin | 21.7 s / 21.7 s | 16.8 s / 16.3 s |
-| shiny-jewellery | 21.5 s / 21.5 s | 16.5 s / 16.7 s |
-| shop-window-day | 22.6 s / 22.7 s | 17.1 s / 17.2 s |
-| water-surface | 25.1 s / 25.1 s | 19.8 s / 19.8 s |
-| window-night | 22.5 s / 28.9 s | 17.3 s / 17.5 s |
-
-Measured on an Apple M4 Pro with other lanes running (load about 45), so expect ±10 %. App memory (`/usr/bin/time -l`, host RAM only, GPU buffers not counted): DSRNet-S about 250 MB, DIRS-MuGI about 1.25 GB. DIRS-PAIR, RDNet and UnReflectAnything are not ported yet, so they have no column.
+App memory (`/usr/bin/time -l`, host RAM only, GPU buffers not counted), mean over the photos: DSRNet-S 247 MB, DIRS-MuGI 1262 MB, DIRS-PAIR 1452 MB, RDNet 1347 MB. A few runs show a first/second difference from other work on the Mac (red-car-body, shop-window-day, window-night), not from the model.

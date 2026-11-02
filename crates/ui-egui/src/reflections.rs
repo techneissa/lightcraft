@@ -3,14 +3,25 @@ use crate::{LightcraftApp, i18n::tr};
 use lightcraft_catalog::PhotoId;
 use serde_json::{Value, json};
 pub(crate) const TASK: &str = "Reflection Removal";
-const MODELS: [(&str, &str); 4] =
-    [("dirs-mugi", "DIRS-MuGI"), ("dsrnet-s", "DSRNet-S"), ("dsrnet-l-nature", "DSRNet-L (Nature)"), ("dsrnet-l", "DSRNet-L")];
+const MODELS: [(&str, &str); 6] = [
+    ("dirs-mugi", "DIRS-MuGI"),
+    ("dirs-pair", "DIRS-PAIR"),
+    ("rdnet", "RDNet"),
+    ("dsrnet-s", "DSRNet-S"),
+    ("dsrnet-l-nature", "DSRNet-L (Nature)"),
+    ("dsrnet-l", "DSRNet-L"),
+];
+
+fn model_label(id: &str) -> &'static str {
+    MODELS.iter().find(|(m, _)| *m == id).map(|(_, name)| *name).unwrap_or("DIRS-MuGI")
+}
 
 pub fn command(app: &mut LightcraftApp, name: &str, p: &Value) -> Result<Value, String> {
     if name == "reflection.instructions" {
         let open = app.services.open_url.as_mut().ok_or("No browser service available")?;
-        let url = if p.get("model").and_then(Value::as_str) == Some(lightcraft_engine::reflections::dirs::MODEL) {
-            lightcraft_engine::reflections::dirs::PAGE
+        let model = p.get("model").and_then(Value::as_str).unwrap_or_default();
+        let url = if lightcraft_engine::reflections::dirs::MODELS.contains(&model) {
+            lightcraft_engine::reflections::dirs::page(model)
         } else {
             "https://github.com/mingcv/DSRNet#trained-weights"
         };
@@ -95,8 +106,8 @@ fn install(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
         Some("reflection"),
         move || -> Result<String, String> {
             let source = std::path::Path::new(&path);
-            if lightcraft_engine::reflections::dirs::is_dirs_folder(source) {
-                return lightcraft_engine::reflections::dirs::install_folder(source, &root);
+            if let Some(model) = lightcraft_engine::reflections::dirs::is_dirs_folder(source) {
+                return lightcraft_engine::reflections::dirs::install_folder(model, source, &root);
             }
             let (m, bytes) = lightcraft_reflection_install(source)?;
             let target = root.join(&m);
@@ -131,11 +142,15 @@ fn install(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
 #[cfg(not(target_arch = "wasm32"))]
 fn download(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
     use lightcraft_engine::reflections::dirs;
+    let model = p.get("model").and_then(Value::as_str).unwrap_or(dirs::MODEL).to_string();
+    if !dirs::MODELS.contains(&model.as_str()) {
+        return Err(format!("{model} cannot be downloaded: only DIRS-MuGI, DIRS-PAIR and RDNet can"));
+    }
     if p.get("accepted").and_then(Value::as_bool) != Some(true) {
         return Err(format!(
             "Downloading needs a yes first: {:.1} GB from {}. Run the command again with accepted=true.",
-            dirs::download_bytes() as f64 / 1e9,
-            dirs::PAGE
+            dirs::download_bytes(&model) as f64 / 1e9,
+            dirs::page(&model)
         ));
     }
     if app.tasks.is_running(TASK) {
@@ -150,8 +165,8 @@ fn download(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
         "reflection",
         cancel,
         move |handle| {
-            handle.detail("DIRS-MuGI");
-            dirs::download(&root, &flag, &mut |done, total| handle.progress(done, total))
+            handle.detail(model_label(&model));
+            dirs::download(&model, &root, &flag, &mut |done, total| handle.progress(done, total))
         },
         |app, ctx, result| match result {
             Ok(model) => {
@@ -262,8 +277,9 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         app.reflection_quality = if matches!(d.reflection.quality, 384 | 768 | 1024) { d.reflection.quality } else { 768 };
         app.reflection_model = if lightcraft_engine::reflections::valid_model(&d.reflection.model) {
             d.reflection.model.clone()
-        } else if let Some(id) =
-            ["dirs-mugi", "dsrnet-l-nature", "dsrnet-s"].into_iter().find(|id| lightcraft_engine::reflections::available_model(id))
+        } else if let Some(id) = ["dirs-mugi", "dirs-pair", "rdnet", "dsrnet-l-nature", "dsrnet-s"]
+            .into_iter()
+            .find(|id| lightcraft_engine::reflections::available_model(id))
         {
             id.into()
         } else {
@@ -285,13 +301,32 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         ui.horizontal(|ui| {
             ui.add_sized([58.0, 22.0], egui::Label::new(tr("Model")));
-            let label = MODELS.iter().find(|(id, _)| *id == app.reflection_model).map(|(_, name)| *name).unwrap_or("DIRS-MuGI");
+            let label = model_label(&app.reflection_model);
+            // Installed models are listed; the ones that can be downloaded follow, each opening its Download button.
             let r = crate::widgets::combo_box("reflection-model").selected_text(label).show_ui(ui, |ui| {
                 for (id, name) in MODELS {
-                    let r = ui.selectable_value(&mut app.reflection_model, id.into(), name);
-                    register(ui, format!("reflection:model:{id}"), r.rect);
+                    if id == app.reflection_model || lightcraft_engine::reflections::available_model(id) {
+                        let r = ui.selectable_value(&mut app.reflection_model, id.into(), name);
+                        register(ui, format!("reflection:model:{id}"), r.rect);
+                    }
+                }
+                let selected = app.reflection_model.clone();
+                let missing = |id: &str| {
+                    id != selected
+                        && lightcraft_engine::reflections::dirs::MODELS.contains(&id)
+                        && !lightcraft_engine::reflections::available_model(id)
+                };
+                if MODELS.iter().any(|(id, _)| missing(id)) {
+                    ui.separator();
+                }
+                for (id, name) in MODELS {
+                    if missing(id) {
+                        let r = ui.selectable_value(&mut app.reflection_model, id.into(), format!("{} {name}…", tr("Download")));
+                        register(ui, format!("reflection:model:{id}"), r.rect);
+                    }
                 }
             });
+            crate::widgets::name_combo(&r.response, tr("Model"));
             register(ui, "reflection:model", r.response.rect);
         });
         ui.horizontal(|ui| {
@@ -307,11 +342,12 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     register(ui, format!("reflection:quality:{q}"), r.rect);
                 }
             });
+            crate::widgets::name_combo(&r.response, tr("Quality"));
             register(ui, "reflection:quality", r.response.rect);
         });
         if !available {
             ui.add(egui::Label::new(tr("Install a reflection model first")).wrap());
-            if app.reflection_model == lightcraft_engine::reflections::dirs::MODEL {
+            if lightcraft_engine::reflections::dirs::MODELS.contains(&app.reflection_model.as_str()) {
                 download_row(app, ui, busy);
             }
             let r = ui.add_enabled(!busy, egui::Button::new(tr("Install Reflection Model…")));
@@ -400,7 +436,8 @@ fn download_row(app: &mut LightcraftApp, ui: &mut egui::Ui, busy: bool) {
         }
         return;
     }
-    ui.add(egui::Label::new(format!("DIRS-MuGI · {:.1} GB · huggingface.co", dirs::download_bytes() as f64 / 1e9)).wrap());
+    let model = app.reflection_model.clone();
+    ui.add(egui::Label::new(format!("{} · {:.1} GB · huggingface.co", model_label(&model), dirs::download_bytes(&model) as f64 / 1e9)).wrap());
     ui.horizontal(|ui| {
         let yes = ui.add_enabled(!busy, egui::Button::new(tr("Download")));
         register(ui, "reflection:download:yes", yes.rect);
@@ -410,7 +447,7 @@ fn download_row(app: &mut LightcraftApp, ui: &mut egui::Ui, busy: bool) {
             ui.data_mut(|d| d.insert_temp(asking, false));
         }
         if yes.clicked()
-            && let Err(e) = app.run("reflection.download", json!({"accepted":true}))
+            && let Err(e) = app.run("reflection.download", json!({"accepted":true,"model":model}))
         {
             app.toast(ui.ctx(), e);
         }
