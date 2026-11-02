@@ -424,6 +424,7 @@ fn show_sections(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     };
     // the sections in the order the user arranged, without the ones taken off the panel (their
     // adjustments stay in the settings and still apply)
+    crate::panels::edit_sections::drag::begin_frame(ui);
     for shown in app.ui.edit_sections.shown() {
         match shown {
             EditSection::Light => light(app, ui),
@@ -434,6 +435,7 @@ fn show_sections(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             EditSection::Calibration => calibration(app, ui),
         }
     }
+    crate::panels::edit_sections::drag::show(app, ui);
     ui.add_space(40.0);
     // A pending numeric edit commits on blur before the explicit Reset takes precedence.
     if reset_clicked {
