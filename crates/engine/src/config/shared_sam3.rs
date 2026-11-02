@@ -14,11 +14,7 @@ const MODEL_FILES: [&str; 3] = ["model.safetensors", "vocab.json", "merges.txt"]
 
 /// The folder the Mac shares with PhotoCraft for the SAM 3 model. `None` off the Mac, or without a home folder.
 pub(super) fn shared_sam3_dir(home: Option<OsString>) -> Option<PathBuf> {
-    if !cfg!(target_os = "macos") {
-        return None;
-    }
-    let home = home.filter(|h| !h.is_empty())?;
-    Some(PathBuf::from(home).join("Library").join("Application Support").join("ArtCraft").join("models").join("sam3"))
+    crate::shared_models::shared_models_dir(home).map(|d| d.join("sam3"))
 }
 
 /// Where the SAM 3 model is: a non-empty `var` (`LIGHTCRAFT_SAM3_DIR`) wins; then the `shared` folder when it holds

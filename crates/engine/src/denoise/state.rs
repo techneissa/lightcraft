@@ -100,6 +100,9 @@ pub(super) struct Running {
 pub(crate) struct State {
     /// Where the models are kept (`None` where there is no file system).
     pub models_dir: Option<PathBuf>,
+    /// The folder shared with the other ArtCraft apps (fork/shared-models.md): models are looked for there first and new
+    /// ones go there; `models_dir` keeps the settings and the download staging folder.
+    pub shared_dir: Option<PathBuf>,
     /// Models being downloaded at the user's request.
     pub downloads: Downloads,
     pub(crate) install: Option<crate::cmd::denoise::InstallJob>,
@@ -144,6 +147,7 @@ impl Default for State {
     fn default() -> Self {
         State {
             models_dir: None,
+            shared_dir: None,
             downloads: Downloads::default(),
             install: None,
             loader: default_loader(),

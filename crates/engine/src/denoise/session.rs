@@ -24,6 +24,12 @@ impl Session {
         self.library.as_ref().filter(|l| l.on_disk).map(|l| l.dir.join(DIR))
     }
 
+    /// Where the denoise models are: the shared folder first, then the models folder (`None`: no folder at all).
+    pub(crate) fn denoise_roots(&self) -> Option<crate::shared_models::ModelRoots> {
+        let old = self.denoise.models_dir.clone()?;
+        Some(crate::shared_models::ModelRoots { old, shared: self.denoise.shared_dir.clone() })
+    }
+
     /// Read which model is in use (at most every couple of seconds): the manifest and file of the model the settings
     /// name, if it is installed.
     pub(crate) fn denoise_refresh_active(&mut self, force: bool) {
@@ -33,9 +39,9 @@ impl Session {
         }
         self.denoise.active_seen = Some(web_time::Instant::now());
         self.denoise.settings = self.denoise.models_dir.as_deref().map(read_settings).unwrap_or_default();
-        let chosen = self.denoise.models_dir.as_deref().and_then(|dir| {
+        let chosen = self.denoise_roots().and_then(|roots| {
             let id = self.denoise.settings.model.clone()?;
-            installed_models(dir).into_iter().find(|i| i.manifest.id == id)
+            installed_models(&roots).into_iter().find(|i| i.manifest.id == id)
         });
         let found = chosen.map(|i| (i.fingerprint(), i));
         let same = match (&self.denoise.active, &found) {

@@ -1,6 +1,7 @@
 use super::gpu::GPU_SETUP_MARKER;
 use super::model::RunOn;
 use super::{DenoiserManifest, Deserialize, Duration, Path, PathBuf, Serialize, Value};
+use crate::shared_models::ModelRoots;
 
 /// Extension of a product file.
 pub const EXT: &str = "lcdn";
@@ -105,6 +106,8 @@ pub(crate) struct Installed {
     pub onnx: PathBuf,
     /// What was recorded when it was installed (terms accepted, hash of the file, self-test).
     pub accepted: Value,
+    /// Whether it is in the folder shared with the other ArtCraft apps.
+    pub shared: bool,
 }
 
 impl Installed {
@@ -119,7 +122,21 @@ impl Installed {
 
 /// The models in the folder. A folder that is not a valid model (wrong name, no model file, a manifest that does not
 /// validate or does not match its folder) is ignored, never trusted.
-pub(crate) fn installed_models(dir: &Path) -> Vec<Installed> {
+pub(crate) fn installed_models(roots: &ModelRoots) -> Vec<Installed> {
+    let mut out: Vec<Installed> = Vec::new();
+    // the shared folder first: a model in both is the shared one
+    for dir in roots.search() {
+        for i in installed_in(dir, roots.is_shared(dir)) {
+            if !out.iter().any(|o| o.manifest.id == i.manifest.id) {
+                out.push(i);
+            }
+        }
+    }
+    out.sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));
+    out
+}
+
+fn installed_in(dir: &Path, shared: bool) -> Vec<Installed> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut out = Vec::new();
     for e in entries.flatten() {
@@ -138,7 +155,7 @@ pub(crate) fn installed_models(dir: &Path) -> Vec<Installed> {
             continue;
         }
         let accepted = read_capped(&p.join("installed.json"), 8192).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
-        out.push(Installed { manifest: m, onnx, accepted });
+        out.push(Installed { manifest: m, onnx, accepted, shared });
     }
     out.sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));
     out
@@ -146,8 +163,8 @@ pub(crate) fn installed_models(dir: &Path) -> Vec<Installed> {
 
 /// Forget that setting the graphics card up for a model closed LightCraft before (the markers [`set_up_card`] leaves):
 /// the user chose where denoise runs, so the card may be tried again.
-pub(crate) fn forget_gpu_set_ups(dir: &Path) {
-    for i in installed_models(dir) {
+pub(crate) fn forget_gpu_set_ups(roots: &ModelRoots) {
+    for i in installed_models(roots) {
         let _ = std::fs::remove_file(i.onnx.with_file_name(GPU_SETUP_MARKER));
     }
 }

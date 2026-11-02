@@ -290,6 +290,19 @@ fn main() -> eframe::Result {
                 session = session.with_default_sam3_model();
                 // the LaMa fill for Remove, from the folder shared with PhotoCraft (fork/lama-fill.md)
                 session = session.with_default_lama_model();
+                // the face and denoise models of the old folders move into the folder shared with PhotoCraft, once
+                // (fork/shared-models.md); on a worker, because checking a 200 MB model takes a second; a failure
+                // leaves both copies and is only logged
+                let activity = session.activity.clone();
+                let _ = std::thread::Builder::new().name("shared-models-move".into()).spawn(move || {
+                    let moved = lightcraft_engine::shared_models::migrate_old_models(&activity);
+                    for line in &moved.done {
+                        log::info!("shared models: {line}");
+                    }
+                    for line in &moved.failed {
+                        log::warn!("shared models: {line}");
+                    }
+                });
                 // HDR display: SDR unless the surface, platform and display all allow HDR
                 hdr_display::report(cc.wgpu_render_state.as_ref().map(|r| r.target_format));
                 let mut app = LightcraftApp::new(session, services(cc, app_log_file.as_deref()));

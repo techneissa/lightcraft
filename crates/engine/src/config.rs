@@ -149,6 +149,17 @@ pub fn default_denoise_models_dir() -> Option<PathBuf> {
         .or_else(|| config_dir().map(|d| d.join("denoise-models")))
 }
 
+/// The folder shared with the other ArtCraft apps where face models are looked for first and new ones go
+/// ([`crate::shared_models`]); `None` off the Mac, and when `$LIGHTCRAFT_FACE_MODELS` picks another folder.
+pub fn default_face_shared_dir() -> Option<PathBuf> {
+    std::env::var_os("LIGHTCRAFT_FACE_MODELS").filter(|v| !v.is_empty()).is_none().then(crate::shared_models::default_shared_models_dir).flatten()
+}
+
+/// [`default_face_shared_dir`] for denoise models (`$LIGHTCRAFT_DENOISE_MODELS`).
+pub fn default_denoise_shared_dir() -> Option<PathBuf> {
+    std::env::var_os("LIGHTCRAFT_DENOISE_MODELS").filter(|v| !v.is_empty()).is_none().then(crate::shared_models::default_shared_models_dir).flatten()
+}
+
 /// Where the SAM 3 model is kept: `$LIGHTCRAFT_SAM3_DIR` if set, else the folder shared with PhotoCraft
 /// (`ArtCraft/models/sam3`, fork feature) or `<config>/models/sam3`; see `shared_sam3`.
 pub fn default_sam3_dir() -> Option<PathBuf> {
@@ -166,9 +177,22 @@ impl Session {
     }
 
     /// Keep face models in the shared default folder ([`default_face_models_dir`]).
-    pub fn with_default_face_models(mut self) -> Self {
-        self.face_models_dir = default_face_models_dir();
+    pub fn with_default_face_models(self) -> Self {
+        self.with_face_models(default_face_models_dir(), default_face_shared_dir())
+    }
+
+    /// Keep face models in `old` (settings, catalog, staging and models from before) and `shared` (the folder shared
+    /// with the other ArtCraft apps, looked in first), [`Session::with_default_face_models`] with the folders given.
+    pub fn with_face_models(mut self, old: Option<PathBuf>, shared: Option<PathBuf>) -> Self {
+        self.face_models_dir = old;
+        self.face_shared_dir = shared;
         self
+    }
+
+    /// Where the face models are: the shared folder first, then the models folder (`None`: no folder at all).
+    pub(crate) fn face_roots(&self) -> Option<crate::shared_models::ModelRoots> {
+        let old = self.face_models_dir.clone()?;
+        Some(crate::shared_models::ModelRoots { old, shared: self.face_shared_dir.clone() })
     }
 
     /// Cache map tiles in the shared default folder ([`default_map_cache_dir`]).
@@ -181,6 +205,7 @@ impl Session {
     /// Keep denoise models in the shared default folder ([`default_denoise_models_dir`]).
     pub fn with_default_denoise_models(mut self) -> Self {
         self.set_denoise_models_dir(default_denoise_models_dir());
+        self.denoise.shared_dir = default_denoise_shared_dir();
         self
     }
 

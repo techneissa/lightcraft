@@ -403,17 +403,21 @@ pub struct Serving {
 /// set up to run on `run_on` as the app would: the card checked against the CPU first, the CPU when the card can't.
 #[cfg(feature = "denoise")]
 pub fn serving(dir: Option<&Path>, id: Option<&str>, run_on: RunOn) -> Result<Serving, String> {
-    let dir = match dir {
-        Some(d) => d.to_path_buf(),
-        None => crate::config::default_denoise_models_dir().ok_or("no denoise models folder (set LIGHTCRAFT_DENOISE_MODELS)")?,
+    let (dir, shared) = match dir {
+        Some(d) => (d.to_path_buf(), None),
+        None => (
+            crate::config::default_denoise_models_dir().ok_or("no denoise models folder (set LIGHTCRAFT_DENOISE_MODELS)")?,
+            crate::config::default_denoise_shared_dir(),
+        ),
     };
+    let roots = crate::shared_models::ModelRoots { old: dir.clone(), shared };
     let want = match id {
         Some(i) => i.to_string(),
         None => read_settings(&dir).model.ok_or_else(|| {
             format!("no denoise model is selected in {} (install one in Settings ▸ AI Denoise, or name it with --model)", dir.display())
         })?,
     };
-    let installed = installed_models(&dir)
+    let installed = installed_models(&roots)
         .into_iter()
         .find(|m| m.manifest.id == want)
         .ok_or_else(|| format!("no installed denoise model `{want}` in {}", dir.display()))?;
