@@ -53,7 +53,6 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         egui::Popup::menu(&r).show(|ui| {
             ui.set_max_width(240.0);
             let mb = Segmenter::birefnet_bytes() as f64 / 1e6;
-            ui.label(crate::i18n::tr("Fine edges for hair and fur."));
             ui.label(egui::RichText::new(format!("{mb:.0} MB, MIT licence.")).color(t.text_dim));
             let running = app.session.segmenter.birefnet_download_status().running;
             let go = ui.add_enabled(!running, egui::Button::new(crate::i18n::tr("Download BiRefNet")));

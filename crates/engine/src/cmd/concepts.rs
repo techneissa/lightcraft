@@ -21,11 +21,13 @@ pub const SKY: &str = "sky";
 pub struct Concept {
     /// `subject`, `sky` or `background`.
     pub kind: &'static str,
+    #[cfg_attr(not(feature = "sam"), allow(dead_code))]
     pub text: &'static str,
     /// The found selection is turned around (Background is everything but the subject).
     pub invert: bool,
     /// Only the main subject's instances count (Subject and Background): the largest and any of at least a third of
     /// its area, not every small figure far away.
+    #[cfg_attr(not(feature = "sam"), allow(dead_code))]
     pub main_only: bool,
 }
 

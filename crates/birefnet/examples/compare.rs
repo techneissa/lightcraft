@@ -12,7 +12,7 @@ use lightcraft_birefnet::BiRefNet;
 
 fn read(path: &std::path::Path) -> Vec<f32> {
     let b = std::fs::read(path).unwrap();
-    b.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect()
+    b.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()
 }
 
 fn main() {

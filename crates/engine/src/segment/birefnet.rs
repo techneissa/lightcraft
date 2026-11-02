@@ -100,6 +100,8 @@ impl Settings {
             .or_else(|| config.as_ref().map(|c| c.join("models")));
         let file = config.map(|c| c.join(SELECTION_FILE));
         let selection = file.as_deref().and_then(read_selection);
+        // (the download belongs to the build with AI masks)
+        #[allow(clippy::needless_update)]
         Settings { root, selection, file, ..Default::default() }
     }
 }
