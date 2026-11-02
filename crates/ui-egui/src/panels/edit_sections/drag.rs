@@ -2,7 +2,7 @@
 //! shows where it would go, releasing over the panel moves it there (`view.editSectionMove`),
 //! releasing elsewhere or Esc leaves it. A click on a heading still opens or folds its section.
 
-use egui::{Rect, pos2, vec2};
+use egui::{Rect, pos2};
 use serde_json::{Value, json};
 
 use super::EditSection;
@@ -81,12 +81,5 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ui.painter().rect_filled(line, 1.0, t.accent);
         register(ui, "editSectionDrop", line);
     }
-    egui::Area::new(egui::Id::unique("drag-edit-section")).order(egui::Order::Tooltip).interactable(false).fixed_pos(pos + vec2(14.0, 10.0)).show(
-        ui.ctx(),
-        |ui| {
-            egui::Frame::NONE.fill(t.accent).corner_radius(10.0).inner_margin(egui::Margin::symmetric(9, 3)).show(ui, |ui| {
-                ui.label(egui::RichText::new(crate::i18n::tr(dragged.title())).color(egui::Color32::WHITE).font(t.semibold(12.0)));
-            });
-        },
-    );
+    crate::drag_ghost::show(ui.ctx(), pos, None);
 }

@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
+use crate::icons::Icon;
 use crate::theme::Tokens;
 use crate::widgets::register;
 
@@ -81,6 +82,22 @@ impl Tool {
             Tool::Activity => "History & Activity",
             Tool::Keywords => "Keywords",
             Tool::Info => "Info",
+        }
+    }
+
+    /// The icon the strip draws for it.
+    pub const fn icon(self) -> Icon {
+        match self {
+            Tool::Presets => Icon::Presets,
+            Tool::Edit => Icon::Sliders,
+            Tool::Crop => Icon::Crop,
+            Tool::Remove => Icon::Eraser,
+            Tool::Masking => Icon::Mask,
+            Tool::RedEye => Icon::Eye,
+            Tool::Versions => Icon::Versions,
+            Tool::Activity => Icon::Activity,
+            Tool::Keywords => Icon::Tag,
+            Tool::Info => Icon::Info,
         }
     }
 
@@ -326,4 +343,5 @@ pub fn drag(app: &mut LightcraftApp, ui: &mut egui::Ui, placed: &[(Tool, Rect)])
         ui.painter().rect_filled(line, 1.0, t.accent);
         register(ui, "toolStripDrop", line);
     }
+    crate::drag_ghost::show(ui.ctx(), pos, Some(dragged.icon()));
 }

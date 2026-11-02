@@ -24,6 +24,7 @@ mod debounce;
 pub mod destination;
 pub mod dialogs;
 pub mod docking;
+mod drag_ghost;
 mod drop_overlay;
 pub mod edit_in_task;
 pub mod editor_handoff;
