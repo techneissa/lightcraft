@@ -4,6 +4,10 @@ Check in batches:
 - after each change, and once more at the end of the round: only the tests of the code it touched
   (`cargo test -p <crate> <filter>`), `cargo clippy -p <crate> --all-targets -- -D warnings` for the crates it
   touched, and `cargo fmt --all --check`;
+- a pull request waits for **`fork-gate`** (`fork-pr.yml`): it tests the changed crates and the crates that depend
+  on them, on three machines, and fails for any failing test or clippy warning in them
+  ([fork/github-builds.md](github-builds.md)). Merge when `fork-gate` is green; the official `CI` does not run
+  on pull requests into `custom`;
 - the full suite runs on GitHub, not on this Mac: a push to `custom` starts Fork CI (`fork-ci.yml`), which runs the
   official CI (`cargo xtask ci`) on `custom`. Check it with `gh run list -R techneissa/lightcraft -w CI -b custom`
   and fix a failure in the next round.
@@ -17,10 +21,10 @@ only in a lane's own filtered tests. A failure Fork CI shows only on Linux is no
 
 A fix that only changes how something looks (alignment, spacing, size, an icon's drawing, a label, a hover text, a
 colour) and changes no behaviour, saved data or command goes straight onto `custom` as its own commit, with no pull
-request and no wait for GitHub's 35-55 minute gate. Run the touched tests, clippy on the touched crate and `cargo fmt
+request and no wait for GitHub's `fork-gate`. Run the touched tests, clippy on the touched crate and `cargo fmt
 --all --check` first. Fork CI checks `custom` after the push; a failure there is fixed in the next round. Several such
 fixes in one round go in together. Anything that changes behaviour, data or a command still goes through a pull
-request and its gate. A lane never pushes to `custom` itself: it commits the fix locally and the orchestrator puts it
+request and `fork-gate`. A lane never pushes to `custom` itself: it commits the fix locally and the orchestrator puts it
 on `custom`.
 
 ## Faster builds on this Mac
@@ -36,7 +40,7 @@ on `custom`.
   hits), and a cold cache made a build slower (46 s against 36 s for `lightcraft-pipeline`).
 - **Load is the biggest cost.** The same clean build takes about 6 min at load 10 and 22 min at load ~100: at most
   3 lanes build at once.
-- **Build only when it buys something** (techneissa, 2026-11-02): logic tests, AI model runs, and the round's pictures (one build at the end of a round, not after each change). Never rebuild just to see that a button or label is there. Small UI-only changes (a button, a label, hover text, a spacing nudge) are pushed without a local build or test run; GitHub's PR gate checks them.
+- **Build only when it buys something** (techneissa, 2026-11-02): logic tests, AI model runs, and the round's pictures (one build at the end of a round, not after each change). Never rebuild just to see that a button or label is there. Small UI-only changes (a button, a label, hover text, a spacing nudge) are pushed without a local build or test run; `fork-gate` checks them.
 - **Batch the Mac's work.** After a single merge nothing builds or tests on the Mac (Fork CI checks `custom`). Once
   per batch of merges: `fork/sync-docs.py`, `fork/tests.sh` (the Mac-only tests), one push.
 - **Driving the app** (control channel, screenshots): always with a scratch library (`--library <scratch folder>`) and its own `LIGHTCRAFT_CONFIG_DIR`; without `--library` the app opens techneissa's real library (2026-11-02: a lane imported a test photo into it and had to remove it).
