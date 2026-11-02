@@ -19,6 +19,16 @@ impl Session {
     }
 }
 
+impl Session {
+    /// After an undo or redo: a selected part that no longer exists is forgotten, so a later redo cannot make its index
+    /// valid for another part.
+    pub(crate) fn reconcile_part(&mut self) {
+        if self.active_component.is_some() && self.active_part().is_none() {
+            self.active_component = None;
+        }
+    }
+}
+
 /// `key` of `p` as an index: omitted or null is `None`, anything but a non-negative integer is an error.
 fn index_param(p: &Value, key: &str, c: &str) -> Result<Option<usize>> {
     p.get(key)
@@ -81,14 +91,14 @@ pub(super) fn rebase_after_delete(comps: &mut [MaskComponent], k: usize) {
     }
 }
 
-/// The selected part (`selected`, an index in mask `mask`) keeps pointing at the same part after `action` on part `k`.
-pub(super) fn follow(s: &mut Session, mask: u32, selected: Option<usize>, action: &str, k: usize) {
-    if let Some(j) = selected {
-        s.active_component = match action {
-            "duplicate" if j > k => Some((mask, j + 1)),
-            "delete" if j == k => None,
-            "delete" if j > k => Some((mask, j - 1)),
-            _ => s.active_component,
-        };
-    }
+/// The selected part (`selected`, an index in mask `mask`) keeps pointing at the same part after `action` on the parts
+/// `ks` (sorted, no repeats).
+pub(super) fn follow(s: &mut Session, mask: u32, selected: Option<usize>, action: &str, ks: &[usize]) {
+    let (Some(j), Some(last)) = (selected, ks.last().copied()) else { return };
+    s.active_component = match action {
+        "duplicate" if j > last => Some((mask, j + ks.len())),
+        "delete" if ks.contains(&j) => None,
+        "delete" => Some((mask, j - ks.iter().filter(|k| **k < j).count())),
+        _ => s.active_component,
+    };
 }

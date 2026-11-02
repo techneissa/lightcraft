@@ -1359,6 +1359,9 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             Ok(Value::Null)
         }
         "app.setShortcut" => crate::shortcuts::set_shortcut(app, p),
+        "settings.export" | "settings.import" | "settings.syncSave" | "settings.syncLoad" | "settings.syncChoose" => {
+            crate::settings_sync::command(app, id, p)
+        }
         "app.exportShortcuts" => crate::keybinds::backup::export_command(app, p),
         "app.importShortcuts" => crate::keybinds::backup::import_command(app, p),
         "app.shortcutContexts" => Ok(crate::keybinds::when::keys::listing(app)),
@@ -1562,6 +1565,8 @@ fn view_back_command(app: &mut LightcraftApp, ctx: &egui::Context) -> Result<Val
         // Through `slideshow::end`: it also releases the held slide textures. Clearing the
         // two fields directly left every rendered slide in the renderer.
         crate::panels::slideshow::end(app);
+    } else if crate::panels::mask_parts::collapse_selection(app) {
+        // several selected submasks go back to the last clicked one first
     } else if !app.ui.tool.is_empty() {
         app.ui.tool.clear();
     } else if crate::panels::mask_parts::leave_part(app) {

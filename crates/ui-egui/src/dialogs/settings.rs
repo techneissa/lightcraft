@@ -29,6 +29,7 @@ mod libraries;
 mod performance;
 mod slideshow;
 pub(crate) mod starting_colour;
+mod sync;
 mod widgets;
 
 pub use display::display_profile;
@@ -60,6 +61,7 @@ pub const TABS: &[(&str, &str)] = &[
     ("faces", "Faces"),
     ("denoise", "AI Denoise"),
     ("map", "Map"),
+    ("sync", "Sync"),
 ];
 
 /// Thumbnail cache sizes offered (MB).
@@ -81,6 +83,7 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, tab: &str) {
         "faces" => crate::panels::faces::settings_tab(app, ui, &t),
         "denoise" => crate::panels::denoise::settings_tab(app, ui, &t),
         "map" => crate::panels::map::settings::tab(app, ui, &t),
+        "sync" => sync::sync_tab(app, ui, &t),
         _ => general_tab(app, ui, &t),
     }
 }

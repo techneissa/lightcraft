@@ -83,6 +83,8 @@ pub mod reflections;
 pub mod rename;
 pub mod rename_job;
 pub mod segment;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod settings_folder;
 pub mod shared_models;
 pub mod sidecar;
 pub mod sidecar_queue;
@@ -914,6 +916,7 @@ impl Session {
             }
         };
         self.show_undone(&e.op);
+        self.reconcile_part();
         self.pending_log.push(e.op);
         self.redo.push(UndoEntry {
             label: e.label.clone(),
@@ -945,6 +948,7 @@ impl Session {
             }
         };
         self.show_undone(&e.op);
+        self.reconcile_part();
         self.pending_log.push(e.op);
         self.undo.push(UndoEntry {
             label: e.label.clone(),

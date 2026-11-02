@@ -129,6 +129,7 @@ impl LightcraftApp {
             review_pending: None,
             shown_library: None,
             export: None,
+            sync_settings: Default::default(),
             from_control: false,
             layers: None,
             edit_in: None,

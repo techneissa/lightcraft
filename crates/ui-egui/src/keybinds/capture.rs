@@ -27,6 +27,9 @@ pub struct Capture {
     pub steps: Vec<Step>,
     /// Why the last key was refused.
     pub error: Option<String>,
+    /// Recorded in the Keyboard Shortcuts window's own cell, with the clash warning under the
+    /// list: no box is drawn ([`open_inline`]).
+    pub inline: bool,
 }
 
 impl Capture {
@@ -44,8 +47,18 @@ pub fn open(app: &mut LightcraftApp, id: &str, slot: Option<usize>) -> Result<()
         return Err(format!("slot must be 1 or {}", model::SLOTS));
     }
     app.keybinds.pending = None;
-    app.keybinds.capture = Some(Capture { id: id.to_string(), slot, steps: Vec::new(), error: None });
+    app.keybinds.capture = Some(Capture { id: id.to_string(), slot, steps: Vec::new(), error: None, inline: false });
     app.recording_shortcut = Some(id.to_string());
+    Ok(())
+}
+
+/// [`open`] for a click in the Keyboard Shortcuts window: the recording shows in the cell and the
+/// window's status line, not in a box.
+pub fn open_inline(app: &mut LightcraftApp, id: &str, slot: Option<usize>) -> Result<(), String> {
+    open(app, id, slot)?;
+    if let Some(cap) = app.keybinds.capture.as_mut() {
+        cap.inline = true;
+    }
     Ok(())
 }
 
@@ -163,6 +176,13 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
         app.toast(ctx, e);
     }
     let Some(mut cap) = app.keybinds.capture.clone() else { return };
+    if cap.inline {
+        // the window draws it; with the window gone nothing is left to record into
+        if !matches!(app.ui.dialog, Some(crate::state::Dialog::Shortcuts)) {
+            close(app);
+        }
+        return;
+    }
     // another window owns the screen (a quit prompt, the library problem list): the box waits
     if crate::panels::notices::blocks_input(app) || crate::panels::library_problem::blocks_dialog_input(app) {
         return;

@@ -251,6 +251,9 @@ pub struct UiState {
     pub detail_due: Option<(f64, u32)>,
     /// A mask component being renamed inline: (mask id, component index, name).
     pub renaming_component: Option<(u32, usize, String)>,
+    /// The submasks selected together in the Masking panel, and Delete All Masks asking (issue #61).
+    #[serde(skip)]
+    pub mask_ui: crate::panels::mask_menus::MaskUi,
     /// Close the window on the next frame (File → Quit).
     #[serde(skip)]
     pub quit: bool,
@@ -381,6 +384,8 @@ pub struct UiState {
     pub navigator: bool,
     /// App preferences (Settings dialog).
     pub settings: AppSettings,
+    /// This Mac's Settings sync choices (Settings ▸ Sync); never part of a settings file.
+    pub sync: crate::settings_sync::SyncPrefs,
     /// Window full screen requested (⇧⌘F); the host applies it (`None` = no change pending).
     #[serde(skip)]
     pub window_fullscreen: Option<bool>,
@@ -513,6 +518,7 @@ impl Default for UiState {
             detail_due: None,
             sam_downloading: false,
             renaming_component: None,
+            mask_ui: Default::default(),
             quit: false,
             dragging_photos: None,
             reveal_album: None,
@@ -564,6 +570,7 @@ impl Default for UiState {
             layout_image: LayoutImage::default(),
             navigator: true,
             settings: AppSettings::default(),
+            sync: Default::default(),
             window_fullscreen: None,
             filter_bar: false,
             local_roots: Vec::new(),

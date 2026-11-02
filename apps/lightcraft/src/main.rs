@@ -114,6 +114,8 @@ impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // (a size the window was just given is remembered too)
         self.0.ui.window = self.1.window_at_exit(self.0.ui.window);
+        // Keep in Sync: the settings go to the sync folder, and the time of that save into ui.json below
+        lightcraft_ui_egui::settings_sync::save_on_quit(&mut self.0);
         if let Err(e) = self.1.save(&self.0) {
             log::error!("{e}");
         }

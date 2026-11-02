@@ -36,7 +36,8 @@ pub mod manage;
 mod map;
 pub mod mask_effect_files;
 pub mod mask_effects;
-mod mask_names;
+pub mod mask_multi;
+pub mod mask_names;
 mod mask_parts;
 mod masks;
 mod merge;
@@ -173,6 +174,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(local_profiles::specs());
         v.extend(macos_colour::specs());
         v.extend(mask_effects::specs());
+        v.extend(mask_multi::specs());
         v.extend(cull::specs());
         v.extend(convert::specs());
         v.extend(convert::edit_specs());
