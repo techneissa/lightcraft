@@ -30,12 +30,21 @@ pub mod rules;
 pub(crate) mod run;
 
 #[cfg(test)]
+mod page_tests;
+#[cfg(test)]
 mod tests;
 
 pub use plan::{Plan, apply, plan};
 pub use prompt::{confirm, prompt_body};
 #[cfg(not(target_arch = "wasm32"))]
 pub use run::{command, offer_at_start, save_on_quit};
+
+/// What a settings file says it is (`kind`).
+pub const KIND: &str = "lightcraft-settings";
+/// The version this build writes and the newest it knows.
+pub const VERSION: u64 = 1;
+/// The biggest settings file read (user presets can make one a few megabytes).
+pub const MAX_BYTES: usize = 32_000_000;
 
 /// The commands of Settings sync.
 pub const COMMANDS: [&str; 5] = ["settings.export", "settings.import", "settings.syncSave", "settings.syncLoad", "settings.syncChoose"];

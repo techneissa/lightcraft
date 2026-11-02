@@ -22,7 +22,7 @@ fn names(dir: &Path) -> Vec<String> {
 fn a_saved_file_reads_back_with_who_saved_it_and_when() {
     let dir = scratch("round");
     let stamp = by("Studio Mac", "2026-11-02T14:30:05+01:00");
-    let saved = save(dir.to_str().unwrap(), json!({"kind": KIND, "version": 1, "settings": {"a": 1}}), stamp.clone()).unwrap();
+    let saved = save(dir.to_str().unwrap(), json!({"kind": "lightcraft-settings", "version": 1, "settings": {"a": 1}}), stamp.clone()).unwrap();
     assert_eq!(saved.path, dir.join(FILE_NAME));
     let read = read(dir.to_str().unwrap()).unwrap();
     assert_eq!(read.by, Some(stamp));

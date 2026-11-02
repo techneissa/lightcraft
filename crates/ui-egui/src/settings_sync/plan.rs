@@ -8,9 +8,8 @@
 
 use serde_json::{Map, Value, json};
 
-use lightcraft_engine::settings_folder::{KIND, MAX_BYTES, VERSION};
-
 use super::rules::{SYNCED, SYNCED_SETTINGS, left_out, left_out_setting};
+use super::{KIND, MAX_BYTES, VERSION};
 use crate::LightcraftApp;
 use crate::state::{CLICK_ZOOMS, UiState};
 

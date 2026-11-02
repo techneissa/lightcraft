@@ -61,6 +61,11 @@ fn import_text(app: &mut LightcraftApp, text: &str) -> Result<Value, String> {
     app.run("settings.import", json!({"text": text}))
 }
 
+#[test]
+fn the_text_limit_is_the_folders() {
+    assert_eq!(super::MAX_BYTES, folder::MAX_BYTES);
+}
+
 // ------------------------------------------------------------------ the keys
 
 #[test]

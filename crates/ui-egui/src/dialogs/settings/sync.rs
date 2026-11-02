@@ -3,8 +3,12 @@
 //! button runs its command (`settings.export`, `settings.import`, `settings.syncChoose`,
 //! `settings.syncSave`, `settings.syncLoad`).
 
-use super::widgets::{button_width, path_label, row};
-use super::{LightcraftApp, RichText, Tokens, check, heading, json, register};
+use super::{LightcraftApp, Tokens};
+#[cfg(not(target_arch = "wasm32"))]
+use super::{
+    RichText, check, heading, json, register,
+    widgets::{button_width, path_label, row},
+};
 
 /// A button of the page: it runs `command`, and a refusal is a toast.
 #[cfg(not(target_arch = "wasm32"))]

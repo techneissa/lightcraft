@@ -5,8 +5,7 @@
 
 use serde_json::{Map, Value, json};
 
-use lightcraft_engine::settings_folder::{KIND, VERSION};
-
+use super::{KIND, VERSION};
 use crate::state::UiState;
 
 /// Top-level keys of the UI state that stay on one Mac, with the reason.

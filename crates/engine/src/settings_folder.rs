@@ -26,11 +26,8 @@ use serde_json::{Map, Value, json};
 pub const FILE_NAME: &str = "lightcraft.lcsettings";
 /// The extension of a settings file.
 pub const EXTENSION: &str = "lcsettings";
-/// What the file says it is (`kind`).
-pub const KIND: &str = "lightcraft-settings";
-/// The version this build writes and the newest it knows.
-pub const VERSION: u64 = 1;
-/// The biggest settings file read (user presets can make one a few megabytes).
+/// The biggest settings file read (user presets can make one a few megabytes); the app's own reading
+/// of a file's text uses the same limit (`lightcraft_ui_egui::settings_sync::MAX_BYTES`).
 pub const MAX_BYTES: usize = 32_000_000;
 /// The ArtCraft folder's file that names the chosen sync folder.
 pub const SHARED_NAME: &str = "sync-folder.json";
