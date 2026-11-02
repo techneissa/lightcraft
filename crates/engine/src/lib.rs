@@ -44,13 +44,13 @@ mod faces_worker;
 pub mod file_trash;
 pub mod files;
 pub mod find_removals;
-pub mod lama_fill;
 #[cfg(not(target_arch = "wasm32"))]
 mod focus_scan;
 pub mod fonts;
 pub mod guard;
 pub mod import;
 mod import_move;
+pub mod lama_fill;
 pub mod layers;
 pub mod lens_profiles;
 pub mod library;

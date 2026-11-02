@@ -97,11 +97,7 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context) {
         ));
         ui.label(egui::RichText::new(&folder).font(t.font(11.5)).color(t.text_dim));
         ui.add_space(4.0);
-        ui.label(
-            egui::RichText::new(crate::i18n::tr("Or copy big-lama.pt into that folder yourself."))
-                .font(t.font(11.5))
-                .color(t.text_dim),
-        );
+        ui.label(egui::RichText::new(crate::i18n::tr("Or copy big-lama.pt into that folder yourself.")).font(t.font(11.5)).color(t.text_dim));
         ui.add_space(10.0);
         let mut choice = None;
         ui.horizontal(|ui| {

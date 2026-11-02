@@ -121,7 +121,8 @@ fn without_the_model_a_lama_spot_shows_the_classic_fill_and_says_why() {
     let mut lama = Session::with_demo();
     classic.execute("spot.add", &json!({"mode": "fill", "points": [[0.5, 0.5]], "size": 0.06})).unwrap();
     lama.execute("spot.add", &json!({"mode": "fill", "points": [[0.5, 0.5]], "size": 0.06, "fill": "lama"})).unwrap();
-    let (a, b) = (classic.render_now(classic.active().unwrap(), 300, 200).unwrap().image, lama.render_now(lama.active().unwrap(), 300, 200).unwrap().image);
+    let (a, b) =
+        (classic.render_now(classic.active().unwrap(), 300, 200).unwrap().image, lama.render_now(lama.active().unwrap(), 300, 200).unwrap().image);
     assert_eq!(a.data, b.data);
 }
 

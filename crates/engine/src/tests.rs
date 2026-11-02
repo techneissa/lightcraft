@@ -27,7 +27,6 @@ mod face_tiles;
 mod file_trash;
 mod filesystem_history;
 mod find_removals;
-mod lama_fill;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod focus_scan;
 mod folders;
@@ -38,6 +37,7 @@ mod ids_params;
 mod import;
 mod import_move;
 mod keyword_list;
+mod lama_fill;
 mod lens_database;
 mod libops;
 mod library;

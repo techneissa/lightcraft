@@ -30,7 +30,8 @@ pub(super) fn describe(s: &Session, fill: SpotFill, out: &mut Value) {
     if fill == SpotFill::Lama {
         out["fill"] = json!(fill.name());
         if !s.lama.installed() {
-            out["note"] = json!("LaMa is not installed: the spot shows the Classic fill until it is (lama.download, or put big-lama.pt in the model folder)");
+            out["note"] =
+                json!("LaMa is not installed: the spot shows the Classic fill until it is (lama.download, or put big-lama.pt in the model folder)");
         }
     }
 }

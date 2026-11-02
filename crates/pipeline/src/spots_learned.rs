@@ -49,13 +49,8 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64, provider
             continue;
         }
         let r = radius_px(spot.size, ppl) as f32;
-        let pts: Vec<(f32, f32)> = spot
-            .points
-            .iter()
-            .map(|p| to_out.apply(*p))
-            .filter(|q| q.x.is_finite() && q.y.is_finite())
-            .map(|q| (q.x as f32, q.y as f32))
-            .collect();
+        let pts: Vec<(f32, f32)> =
+            spot.points.iter().map(|p| to_out.apply(*p)).filter(|q| q.x.is_finite() && q.y.is_finite()).map(|q| (q.x as f32, q.y as f32)).collect();
         if pts.is_empty() {
             continue;
         }

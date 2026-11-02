@@ -21,7 +21,10 @@ const DOWNLOAD_SHA256: &str = "7ba7aa7ac37a4d41fdbbeba3a2af7ead18058552997e3a3cd
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Download {
     Idle,
-    Running { bytes: u64, total: u64 },
+    Running {
+        bytes: u64,
+        total: u64,
+    },
     /// Arrived and checked: the model is installed.
     Done,
     Cancelled,
@@ -80,7 +83,9 @@ impl LamaFill {
         match result {
             Ok(()) => Download::Done,
             Err(DownloadError::Cancelled) => Download::Cancelled,
-            Err(DownloadError::AllMirrorsFailed { errors, .. }) => Download::Failed(format!("could not download LaMa: {}", errors.join("; ").chars().take(300).collect::<String>())),
+            Err(DownloadError::AllMirrorsFailed { errors, .. }) => {
+                Download::Failed(format!("could not download LaMa: {}", errors.join("; ").chars().take(300).collect::<String>()))
+            }
             Err(e) => Download::Failed(e.to_string()),
         }
     }

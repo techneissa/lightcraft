@@ -171,7 +171,9 @@ impl LamaFill {
     #[cfg(not(target_arch = "wasm32"))]
     fn model(&self) -> Result<Arc<lightcraft_lama::Lama>, String> {
         let path = self.model_path().ok_or("LaMa has no model folder")?;
-        let meta = std::fs::metadata(&path).map_err(|_| format!("LaMa is not installed ({MODEL_FILE} is not in {})", path.parent().map_or(String::new(), |p| p.display().to_string())))?;
+        let meta = std::fs::metadata(&path).map_err(|_| {
+            format!("LaMa is not installed ({MODEL_FILE} is not in {})", path.parent().map_or(String::new(), |p| p.display().to_string()))
+        })?;
         let stamp = (meta.len(), meta.modified().ok());
         let mut slot = self.inner.model.lock().unwrap_or_else(PoisonError::into_inner);
         if let Some(l) = slot.as_mut().filter(|l| l.stamp == stamp) {

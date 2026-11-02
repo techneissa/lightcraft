@@ -187,9 +187,7 @@ fn a_window_matches_the_whole_render() {
     let s = with(vec![Spot { points: vec![Point::new(0.5, 0.5), Point::new(0.56, 0.5)], ..spot(SpotMode::Fill, SpotFill::Lama) }]);
     let full_req = RenderRequest::fit(400, 300);
     let win = PixelWindow { x: 120, y: 90, w: 160, h: 120 };
-    let (whole, part) = install(&fill, || {
-        (out(&s, &full_req), out(&s, &RenderRequest { window: Some(win), ..full_req }))
-    });
+    let (whole, part) = install(&fill, || (out(&s, &full_req), out(&s, &RenderRequest { window: Some(win), ..full_req })));
     let mut worst = 0u8;
     for y in 0..win.h {
         for x in 0..win.w {
@@ -219,7 +217,7 @@ fn hostile_spots_do_not_panic() {
     for (p, size) in [((0.0, 0.0), 2.0), ((-5.0, 9.0), 0.1), ((0.5, 0.5), 0.0), ((f64::NAN, 0.5), 0.1), ((0.5, 0.5), f64::INFINITY)] {
         let mut img = Rgb32f::from_fn(40, 30, |x, _| [x as f32 / 40.0; 3]);
         let s = Spot { mode: SpotMode::Fill, points: vec![Point::new(p.0, p.1)], size, fill: SpotFill::Lama, ..Default::default() };
-        let done = spots_learned::apply(&mut img, &[s.clone()], &frame, frame.px_per_long(40), &*fill, false);
+        let done = spots_learned::apply(&mut img, std::slice::from_ref(&s), &frame, frame.px_per_long(40), &*fill, false);
         spots::apply_except(&mut img, &[s], &done, &frame, frame.px_per_long(40));
         assert!(img.data.iter().flatten().all(|v| v.is_finite()));
     }
