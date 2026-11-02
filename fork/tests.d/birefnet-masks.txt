@@ -1,2 +1,4 @@
 cargo test -p lightcraft-birefnet --lib
 cargo test -p lightcraft-develop --lib -- segmask
+cargo test -p lightcraft-engine --features sam --lib -- birefnet segment:: concepts::
+cargo test -p lightcraft-ui-egui --features lightcraft-engine/sam --lib -- selection_model

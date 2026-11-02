@@ -72,8 +72,9 @@ pub fn label_of(model: Option<&str>) -> String {
 pub struct Settings {
     /// The folder holding `birefnet/` (`ArtCraft/models` on the Mac); `None`: no BiRefNet.
     pub root: Option<PathBuf>,
-    /// The model new Subject and Background parts use (when installed).
-    pub selection: SelectionModel,
+    /// The model new Subject and Background parts use (when installed); `None`: never chosen, so BiRefNet when it is
+    /// installed (its edges are finer on every photo of the comparison), else SAM 3.
+    pub selection: Option<SelectionModel>,
     /// Where the choice is saved.
     pub file: Option<PathBuf>,
     #[cfg(feature = "sam")]
@@ -98,20 +99,20 @@ impl Settings {
             })
             .or_else(|| config.as_ref().map(|c| c.join("models")));
         let file = config.map(|c| c.join(SELECTION_FILE));
-        let selection = file.as_deref().map(read_selection).unwrap_or_default();
+        let selection = file.as_deref().and_then(read_selection);
         Settings { root, selection, file, ..Default::default() }
     }
 }
 
-/// The saved choice; a missing or damaged file is the default (SAM 3).
-fn read_selection(file: &Path) -> SelectionModel {
-    let Ok(text) = std::fs::read_to_string(file) else { return SelectionModel::default() };
+/// The saved choice; a missing or damaged file is no choice.
+fn read_selection(file: &Path) -> Option<SelectionModel> {
+    let Ok(text) = std::fs::read_to_string(file) else { return None };
     match serde_json::from_str::<serde_json::Value>(&text).ok().as_ref().and_then(|v| v.get("model")).and_then(serde_json::Value::as_str) {
-        Some(id) => SelectionModel::parse(id).unwrap_or_else(|| {
-            log::warn!("{}: unknown selection model `{id}`; using SAM 3", file.display());
-            SelectionModel::default()
+        Some(id) => SelectionModel::parse(id).or_else(|| {
+            log::warn!("{}: unknown selection model `{id}`; ignored", file.display());
+            None
         }),
-        None => SelectionModel::default(),
+        None => None,
     }
 }
 
@@ -165,12 +166,15 @@ impl Segmenter {
             .collect()
     }
 
-    /// The model new Subject and Background parts use: the saved choice when it is installed, else SAM 3 when it is,
-    /// else BiRefNet (a Mac with only BiRefNet), else SAM 3 (whose request then says how to install it).
+    /// The model new Subject and Background parts use: the saved choice when it is installed; with none, BiRefNet
+    /// when it is installed, else SAM 3 (whose request then says how to install it).
     pub fn selection(&self) -> SelectionModel {
         let available = self.available_models();
-        if available.contains(&self.birefnet.selection) {
-            return self.birefnet.selection;
+        if let Some(m) = self.birefnet.selection.filter(|m| available.contains(m)) {
+            return m;
+        }
+        if available.contains(&SelectionModel::BiRefNet) {
+            return SelectionModel::BiRefNet;
         }
         available.first().copied().unwrap_or_default()
     }
@@ -184,7 +188,7 @@ impl Segmenter {
                 SelectionModel::Combined => "SAM 3 + BiRefNet Edges needs both models installed on this Mac.".to_string(),
             });
         }
-        self.birefnet.selection = model;
+        self.birefnet.selection = Some(model);
         if let Some(file) = &self.birefnet.file {
             write_selection(file, model)?;
         }
@@ -326,12 +330,12 @@ mod tests {
     fn the_saved_choice_survives_and_a_damaged_file_is_the_default() {
         let dir = scratch("file");
         let file = dir.join(SELECTION_FILE);
-        assert_eq!(read_selection(&file), SelectionModel::Sam3, "no file");
+        assert_eq!(read_selection(&file), None, "no file");
         write_selection(&file, SelectionModel::Combined).unwrap();
-        assert_eq!(read_selection(&file), SelectionModel::Combined);
+        assert_eq!(read_selection(&file), Some(SelectionModel::Combined));
         for damaged in ["", "{", "[]", r#"{"model": 7}"#, r#"{"model": "gpt"}"#, "\u{0}\u{0}"] {
             std::fs::write(&file, damaged).unwrap();
-            assert_eq!(read_selection(&file), SelectionModel::Sam3, "{damaged:?}");
+            assert_eq!(read_selection(&file), None, "{damaged:?}");
         }
         let _ = std::fs::remove_dir_all(dir);
     }

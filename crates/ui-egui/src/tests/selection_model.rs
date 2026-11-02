@@ -51,7 +51,7 @@ fn the_dropdown_shows_with_two_models_and_sets_the_model_for_new_parts() {
     let (mut h, root) = masking("two", true, true);
     assert!(has(&h, "dropdown:selectionModel"), "two models installed: the dropdown");
     assert!(!has(&h, "dropdown:getBiRefNet"));
-    assert_eq!(h.app.session.segmenter.selection().id(), "sam3");
+    assert_eq!(h.app.session.segmenter.selection().id(), "birefnet", "never chosen: the finest edges");
     let r = h.request("ui.clickWidget", json!({"id": "dropdown:selectionModel"}), T);
     assert_eq!(r["ok"], true, "{r}");
     h.step();
@@ -59,9 +59,9 @@ fn the_dropdown_shows_with_two_models_and_sets_the_model_for_new_parts() {
     for m in ["sam3", "birefnet", "sam3+birefnet"] {
         assert!(has(&h, &format!("selectionModel:{m}")), "{m} is listed");
     }
-    let r = h.request("ui.clickWidget", json!({"id": "selectionModel:birefnet"}), T);
+    let r = h.request("ui.clickWidget", json!({"id": "selectionModel:sam3"}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert_eq!(h.app.session.segmenter.selection().id(), "birefnet");
+    assert_eq!(h.app.session.segmenter.selection().id(), "sam3");
     let _ = std::fs::remove_dir_all(root);
 }
 

@@ -83,12 +83,17 @@ pub(super) fn run(state: &mut State, shared: &Shared, job: &mut Job, placement: 
         let (m, enc) = encoded(state, shared, job, placement)?;
         text_logits(m, enc, text, CONCEPT_THRESHOLD, main)?
     };
-    // (SAM 3 finds nothing: BiRefNet is not run for a photo without a subject)
-    let Some(sam) = found else { return Ok(None) };
     if job.cancel.load(Ordering::Relaxed) {
         return Err(Failure::Cancelled);
     }
     let m = matte(state, shared, job, dir, placement)?;
+    // SAM 3's words found nothing (ferns, branches, a bottle): BiRefNet's cut-out stands alone, and says so
+    let Some(sam) = found else {
+        if !m.logits.iter().any(|l| *l > 0.0) {
+            return Ok(None);
+        }
+        return Ok(Some(SegMask::from_logits(m.side, &m.logits).made_by(SelectionModel::BiRefNet.id())));
+    };
     let logits = combine::refine_edges(&sam, side, &m);
     if !logits.iter().any(|l| *l > 0.0) {
         return Ok(None);

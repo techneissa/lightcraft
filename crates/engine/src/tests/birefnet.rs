@@ -70,7 +70,7 @@ fn the_dropdown_lists_only_installed_models_and_refuses_the_others() {
     let root = scratch("list");
     let mut s = session(&root, true, false);
     let st = s.execute("segment.selectionModel", &json!({})).unwrap();
-    assert_eq!(st["model"], "sam3");
+    assert_eq!(st["model"], "sam3", "SAM 3 is all there is");
     let installed: Vec<_> = st["models"].as_array().unwrap().iter().filter(|m| m["installed"] == true).map(|m| m["id"].as_str().unwrap()).collect();
     assert_eq!(installed, ["sam3"], "only SAM 3 is installed: the dropdown is hidden");
     let e = s.execute("segment.selectionModel", &json!({"model": "birefnet"})).unwrap_err().to_string();
@@ -85,8 +85,11 @@ fn the_dropdown_lists_only_installed_models_and_refuses_the_others() {
     // the choice is kept across restarts
     assert!(root.join("config").join("selection-model.json").is_file());
     let mut again = session(&root, true, true);
-    again.segmenter.birefnet.selection = crate::segment::birefnet::SelectionModel::default();
-    assert_eq!(again.segmenter.selection(), SelectionModel::Sam3);
+    again.segmenter.birefnet.selection = Some(SelectionModel::Combined);
+    assert_eq!(again.segmenter.selection(), SelectionModel::Combined);
+    // never chosen: BiRefNet when it is installed
+    again.segmenter.birefnet.selection = None;
+    assert_eq!(again.segmenter.selection(), SelectionModel::BiRefNet);
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -115,6 +118,8 @@ fn the_dropdown_sets_the_model_of_new_parts_only() {
     let photo = s.active().unwrap();
     let seg = SegMask::from_logits(4, &[5.0; 16]);
 
+    assert_eq!(s.segmenter.selection(), SelectionModel::BiRefNet, "never chosen, BiRefNet installed: BiRefNet");
+    select(&mut s, "sam3");
     s.execute("mask.add", &json!({"kind": "subject"})).unwrap();
     assert_eq!(rows(&s), ["Selecting with SAM 3"]);
     select(&mut s, "birefnet");
@@ -236,9 +241,9 @@ fn hostile_command_input_is_an_error() {
         let e = r.unwrap_err().to_string();
         assert!(e.len() < 400, "an error that does not echo the input back whole: {}", e.len());
     }
-    assert_eq!(s.segmenter.selection(), SelectionModel::Sam3, "nothing changed");
+    assert_eq!(s.segmenter.selection(), SelectionModel::BiRefNet, "nothing changed (never chosen: BiRefNet)");
     // null and a missing model only read
-    assert_eq!(s.execute("segment.selectionModel", &json!({"model": null})).unwrap()["model"], "sam3");
+    assert_eq!(s.execute("segment.selectionModel", &json!({"model": null})).unwrap()["model"], "birefnet");
     // the download needs `confirm: true` exactly
     for bad in [json!({}), json!({"confirm": "yes"}), json!({"confirm": 1}), json!({"confirm": false}), json!({"acknowledged": true})] {
         let e = s.execute("birefnet.model.download", &bad).unwrap_err().to_string();
@@ -248,7 +253,7 @@ fn hostile_command_input_is_an_error() {
     assert_eq!(s.execute("birefnet.model.cancel", &json!({})).unwrap()["cancelled"], false);
     let st = s.execute("birefnet.model.status", &json!({})).unwrap();
     assert_eq!(st["installed"], true);
-    assert_eq!(st["selection"], "sam3");
+    assert_eq!(st["selection"], "birefnet");
     assert_eq!(st["sizeBytes"], 444_473_596u64);
     let _ = std::fs::remove_dir_all(&root);
 }
@@ -274,8 +279,9 @@ fn a_damaged_selection_file_is_the_default() {
     std::fs::create_dir_all(file.parent().unwrap()).unwrap();
     for body in ["", "{", "null", r#"{"model":"nonsense"}"#, "\u{0}"] {
         std::fs::write(&file, body).unwrap();
-        s.segmenter.birefnet.selection = SelectionModel::default();
-        assert_eq!(s.segmenter.selection(), SelectionModel::Sam3, "{body:?}");
+        s.segmenter.birefnet.selection = None;
+        let file_choice = std::fs::read_to_string(&file).ok().and_then(|t| serde_json::from_str::<Value>(&t).ok());
+        assert!(file_choice.and_then(|v| v["model"].as_str().and_then(SelectionModel::parse)).is_none(), "{body:?}");
     }
     let _ = std::fs::remove_dir_all(&root);
 }
