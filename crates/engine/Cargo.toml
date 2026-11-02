@@ -49,6 +49,8 @@ lightcraft-birefnet = { workspace = true, optional = true }
 # model downloads run natively only (the web build fetches no models)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 lightcraft-fetch = { workspace = true }
+# the LaMa fill behind Remove (fork/lama-fill.md); the web build has none
+lightcraft-lama = { workspace = true }
 # capture-time parsing for face recognition (native only)
 chrono = { workspace = true }
 # Delete Permanently can move the files to the system Trash (no Trash in the browser)

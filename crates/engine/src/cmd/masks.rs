@@ -1,11 +1,12 @@
 //! Masking and Remove (spot) commands on the active photo.
 
 use lightcraft_develop::{
-    BrushStroke, LocalAdjustments, MAX_COLOR_RANGE_SAMPLES, MAX_RED_EYES, Mask, MaskComponent, MaskOp, MaskShape, RedEye, Spot, SpotMode,
+    BrushStroke, LocalAdjustments, MAX_COLOR_RANGE_SAMPLES, MAX_RED_EYES, Mask, MaskComponent, MaskOp, MaskShape, RedEye, Spot, SpotFill, SpotMode,
 };
 use lightcraft_geom::Point;
 use serde_json::{Value, json};
 
+use super::lama::{check_fill, describe, fill_param};
 use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, ok, point, str_param};
 use crate::segment::{Click, MAX_CLICKS};
 use crate::{Result, Session};
@@ -883,6 +884,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         feather: base.feather,
                         opacity: 100.0,
                         source_offset: None,
+                        ..Default::default()
                     };
                     spot.source_offset = pick_source(s, id, &dd, &spot, None);
                     dd.spots.push(spot);
@@ -941,6 +943,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         feather: base.feather,
                         opacity: 100.0,
                         source_offset: None,
+                        ..Default::default()
                     };
                     spot.source_offset = pick_source(s, id, &dd, &spot, None);
                     dd.spots.push(spot);
@@ -954,7 +957,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Remove Spot",
             [],
             None,
-            "{mode?: remove|heal|clone|fill (content-aware), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby)} — selects the new spot; returns {index}",
+            "{mode?: remove|heal|clone|fill (content-aware), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby), fill?: classic|lama (default classic; for remove and fill spots; LaMa needs its model, else the spot shows the Classic fill)} — selects the new spot; returns {index}",
             has_active,
             |s, p| {
                 let mode: SpotMode =
@@ -968,6 +971,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Err(bad("spot.add", "missing points"));
                 }
                 let d = Spot::default();
+                let fill = fill_param("spot.add", p, mode)?;
                 let mut spot = Spot {
                     mode,
                     points: pts,
@@ -975,6 +979,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     feather: f64_or(p, "feather", d.feather).clamp(0.0, 100.0),
                     opacity: f64_or(p, "opacity", d.opacity).clamp(0.0, 100.0),
                     source_offset: point(p, "source"),
+                    fill,
                 };
                 let id = s.active().ok_or_else(|| bad("spot.add", "no active photo"))?;
                 let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
@@ -986,7 +991,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let n = dd.spots.len();
                 s.set_develop(id, dd, "Remove")?;
                 s.active_spot = Some(n - 1);
-                Ok(json!({"index": n - 1}))
+                let mut out = json!({"index": n - 1});
+                describe(s, fill, &mut out);
+                Ok(out)
             }
         ),
         cmd!("spot.select", "Select Spot", [], None, "{index|null}", has_active, |s, p| {
@@ -1003,7 +1010,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Spot",
             [],
             None,
-            "{index? (the selected spot), move?: [dx,dy] (the target, normalized), source?: [dx,dy] (offset from the target), moveSource?: [dx,dy], size?, feather?, opacity?, mode?}",
+            "{index? (the selected spot), move?: [dx,dy] (the target, normalized), source?: [dx,dy] (offset from the target), moveSource?: [dx,dy], size?, feather?, opacity?, mode?, fill?: classic|lama}",
             has_active,
             |s, p| {
                 let c = "spot.update";
@@ -1012,8 +1019,16 @@ pub fn specs() -> Vec<CommandSpec> {
                     Some(m) => Some(serde_json::from_value(m.clone()).map_err(|e| bad(c, e.to_string()))?),
                     None => None,
                 };
+                let fill: Option<SpotFill> = match p.get("fill").filter(|v| !v.is_null()) {
+                    Some(v) => Some(v.as_str().and_then(SpotFill::from_name).ok_or_else(|| bad(c, "`fill` must be \"classic\" or \"lama\""))?),
+                    None => None,
+                };
                 spots_edit(s, c, "Edit Spot", |spots| {
                     let sp = &mut spots[i];
+                    if let Some(f) = fill {
+                        check_fill(c, f, mode.unwrap_or(sp.mode))?;
+                        sp.fill = f;
+                    }
                     if let Some(d) = point(p, "move") {
                         sp.points.iter_mut().for_each(|q| *q = Point::new(q.x + d.x, q.y + d.y));
                         // the source moves along (its offset is relative to the target)
@@ -1036,6 +1051,10 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     if let Some(m) = mode {
                         sp.mode = m;
+                        // Heal and Clone copy a source and have no LaMa fill: a spot changed to one is Classic again
+                        if !matches!(m, SpotMode::Remove | SpotMode::Fill) {
+                            sp.fill = SpotFill::Classic;
+                        }
                     }
                     Ok(())
                 })?;

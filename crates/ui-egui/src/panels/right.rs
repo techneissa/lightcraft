@@ -18,7 +18,9 @@ mod info;
 #[cfg(test)]
 pub(crate) use info::smart_line;
 mod keywords;
+mod remove_fill;
 mod remove_finds;
+pub(crate) use remove_fill::with_fill;
 
 #[cfg(test)]
 use crop::aspect_label;

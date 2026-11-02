@@ -12,6 +12,7 @@
 //! * [`edit`]: auto layout, changing a page's template and moving a photo.
 //! * [`pages`]: adding photos, adding, deleting, duplicating, moving and locking pages, a cell's crop.
 //! * [`undo`]: a book change as a step of the app's undo.
+//! * [`preview`]: one page as screen pixels for the full-screen preview (the export's composer at a screen's size).
 //! * [`render`]: a book as a print job ([`crate::print`]'s composer and PDF writer), PDF and JPEG output.
 //! * [`store`]: `books.json` in the library folder.
 //!
@@ -22,6 +23,7 @@ pub mod edit;
 pub mod geometry;
 pub mod model;
 pub mod pages;
+pub mod preview;
 pub mod render;
 pub mod store;
 pub mod undo;

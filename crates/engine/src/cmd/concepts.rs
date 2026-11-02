@@ -17,7 +17,8 @@ pub const SUBJECT: &str = "person | animal | vehicle | subject, main object, for
 /// What SAM 3 is asked for to find the sky.
 pub const SKY: &str = "sky";
 
-/// One kind of selection the model computes.
+/// One kind of selection the model computes. `text` and `main_only` are read only with the `sam` feature.
+#[cfg_attr(not(feature = "sam"), allow(dead_code))]
 pub struct Concept {
     /// `subject`, `sky` or `background`.
     pub kind: &'static str,
