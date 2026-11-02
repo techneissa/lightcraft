@@ -13,8 +13,8 @@ sys.path.insert(0, str(HERE))
 import pr_plan  # noqa: E402
 
 
-def pkg(dir_, deps=(), doc=True):
-    return {"dir": dir_, "deps": set(deps), "doc": doc}
+def pkg(dir_, deps=(), doc=True, features=()):
+    return {"dir": dir_, "deps": set(deps), "doc": doc, "features": list(features)}
 
 
 # a small workspace shaped like LightCraft: geom <- raster <- engine <- ui-egui <- app, testkit is a dev-dependency
@@ -22,7 +22,9 @@ PKGS = {
     "lightcraft-geom": pkg("crates/geom"),
     "lightcraft-raster": pkg("crates/raster", ["lightcraft-geom"]),
     "lightcraft-codecs": pkg("crates/codecs", ["lightcraft-raster"]),
-    "lightcraft-engine": pkg("crates/engine", ["lightcraft-raster", "lightcraft-codecs", "lightcraft-testkit"]),
+    "lightcraft-engine": pkg(
+        "crates/engine", ["lightcraft-raster", "lightcraft-codecs", "lightcraft-testkit"], features=["lightcraft-engine/sam"]
+    ),
     "lightcraft-ui-egui": pkg("crates/ui-egui", ["lightcraft-engine", "lightcraft-testkit"]),
     "lightcraft-testkit": pkg("crates/testkit"),
     "lightcraft": pkg("apps/lightcraft", ["lightcraft-ui-egui"], doc=False),
@@ -154,7 +156,7 @@ class Groups(unittest.TestCase):
 
     def test_packages_are_cargo_arguments(self):
         r = plan("crates/ui-egui/src/lib.rs")
-        self.assertEqual(r["clippy_args"], "-p lightcraft -p lightcraft-ui-egui")
+        self.assertEqual(r["clippy_args"], "-p lightcraft -p lightcraft-ui-egui --features lightcraft-engine/sam")
 
     def test_balance_is_deterministic(self):
         w = {"a": 5, "b": 5, "c": 5, "d": 5}
@@ -163,6 +165,41 @@ class Groups(unittest.TestCase):
     def test_heif_extras_count_in_a_group(self):
         r = plan("crates/codecs/src/a.rs")
         self.assertEqual(sum(t["heif"] for t in r["tests"]), 1)
+
+
+class Features(unittest.TestCase):
+    """A subset build must turn on the features the whole workspace build turns on (the desktop app enables engine/sam)."""
+
+    def test_a_group_gets_the_features_of_its_crates_and_their_direct_dependencies(self):
+        r = plan("Cargo.lock")
+        by = {t["crates"][0]: t for t in r["tests"] if t["crates"]}
+        engine_leg = next(t for t in r["tests"] if "lightcraft-engine" in t["crates"])
+        ui_leg = next(t for t in r["tests"] if "lightcraft-ui-egui" in t["crates"])
+        self.assertEqual(engine_leg["features"], "--features lightcraft-engine/sam")
+        self.assertEqual(ui_leg["features"], "--features lightcraft-engine/sam")  # engine is ui-egui's direct dependency
+        self.assertTrue(by)
+
+    def test_no_features_no_flag(self):
+        self.assertEqual(pr_plan.features_args(["lightcraft-geom"], PKGS), "")
+
+    def test_clippy_gets_them_too_unless_it_runs_the_whole_workspace(self):
+        self.assertTrue(plan("crates/ui-egui/src/a.rs")["clippy_args"].endswith("--features lightcraft-engine/sam"))
+        self.assertEqual(plan("Cargo.lock")["clippy_args"], "--workspace")
+
+    def test_features_come_from_the_resolve_section_of_cargo_metadata(self):
+        meta = {
+            "workspace_root": "/w",
+            "workspace_members": ["a 0.1.0", "b 0.1.0"],
+            "resolve": {"nodes": [{"id": "a 0.1.0", "features": ["default", "sam", "dep:x", "unknown"]}, {"id": "b 0.1.0", "features": []}]},
+            "packages": [
+                {"id": "a 0.1.0", "name": "a", "manifest_path": "/w/crates/a/Cargo.toml", "dependencies": [], "targets": [], "features": {"default": [], "sam": []}},
+                {"id": "b 0.1.0", "name": "b", "manifest_path": "/w/crates/b/Cargo.toml", "dependencies": [{"name": "a"}], "targets": [], "features": {}},
+            ],
+        }
+        pkgs = pr_plan.workspace_packages(meta)
+        self.assertEqual(pkgs["a"]["features"], ["a/sam"])  # declared and enabled; not default, not unknown
+        self.assertEqual(pkgs["b"]["features"], [])
+        self.assertEqual(pkgs["b"]["deps"], {"a"})
 
 
 class Git(unittest.TestCase):

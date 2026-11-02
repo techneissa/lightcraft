@@ -163,14 +163,17 @@ jobs:
         env:
           PACKAGES: ${{ matrix.packages }}
           DOC_PACKAGES: ${{ matrix.doc_packages }}
+          # the features the whole workspace build turns on (fork/pr_plan.py)
+          FEATURES: ${{ matrix.features }}
         run: |
           set -euo pipefail
           # the planned crates are separate arguments (`-p a -p b`)
           read -ra packages <<< "$PACKAGES"
           read -ra doc_packages <<< "$DOC_PACKAGES"
+          read -ra features <<< "$FEATURES"
           start=$(date +%s)
-          cargo test "${packages[@]}" --lib --bins --tests
-          if [ "${#doc_packages[@]}" -gt 0 ]; then cargo test "${doc_packages[@]}" --doc; fi
+          cargo test "${packages[@]}" "${features[@]}" --lib --bins --tests
+          if [ "${#doc_packages[@]}" -gt 0 ]; then cargo test "${doc_packages[@]}" "${features[@]}" --doc; fi
           echo "tests group ${{ matrix.name }}: $(( $(date +%s) - start )) s" | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Tests with the heif decoder

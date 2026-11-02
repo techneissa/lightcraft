@@ -73,9 +73,10 @@ HEIF_PACKAGES = {"lightcraft-codecs", "lightcraft-heif"}
 # measured test time (a run's step summary) shows a group out of balance goes here, in the same unit.
 WEIGHT_OVERRIDES = {}
 # The heif extras (clippy and tests with the feature) count as a crate for the balance.
-HEIF_WEIGHT = 120
+# Measured on the first cold run of PR 66 (about 0.35 s per unit): heif 350 s, one-off steps 750 s.
+HEIF_WEIGHT = 1000
 # The one-off steps of group 1 (clippy on the planned crates, layers, assets, parity, wasm) count as a crate too.
-ONEOFF_WEIGHT = 600
+ONEOFF_WEIGHT = 2100
 
 TEST_ATTR = re.compile(r"#\[(?:\w+::)*test\b")
 
@@ -88,14 +89,20 @@ def run(cmd, cwd=ROOT):
 
 
 def load_metadata(path=None):
-    text = Path(path).read_text(encoding="utf-8") if path else run(["cargo", "metadata", "--no-deps", "--format-version", "1"])
+    # With dependencies: the resolve section holds the features the whole workspace build turns on (see workspace_packages).
+    text = Path(path).read_text(encoding="utf-8") if path else run(["cargo", "metadata", "--format-version", "1"])
     return json.loads(text)
 
 
 def workspace_packages(meta, root=ROOT):
-    """The workspace crates: name, folder relative to the root, workspace dependencies, doc-test support."""
+    """The workspace crates: name, folder relative to the root, workspace dependencies, doc-test support, features.
+
+    `features` are the crate's features that `cargo test --workspace` turns on (for example `lightcraft-engine/sam`,
+    which the desktop app enables). A `cargo test -p <crate>` of a subset resolves fewer features, builds a different
+    crate and fails tests that need them, so every run passes these along."""
     root = Path(meta.get("workspace_root") or root)
     members = set(meta["workspace_members"])
+    enabled = {n["id"]: set(n.get("features", [])) for n in (meta.get("resolve") or {}).get("nodes", [])}
     pkgs = {}
     for p in meta["packages"]:
         if p["id"] not in members:
@@ -108,7 +115,8 @@ def workspace_packages(meta, root=ROOT):
         has_doctests = any(
             t.get("doctest", False) and any(k in ("lib", "rlib", "proc-macro") for k in t["kind"]) for t in p["targets"]
         )
-        pkgs[p["name"]] = {"dir": rel, "deps": {d["name"] for d in p["dependencies"]}, "doc": has_doctests}
+        features = sorted(f"{p['name']}/{f}" for f in enabled.get(p["id"], ()) if f in p["features"] and f != "default")
+        pkgs[p["name"]] = {"dir": rel, "deps": {d["name"] for d in p["dependencies"]}, "doc": has_doctests, "features": features}
     for p in pkgs.values():
         p["deps"] &= pkgs.keys()
     return pkgs
@@ -228,6 +236,16 @@ def balance(weights, groups, first=None):
     return [(total, sorted(names)) for total, names in bins if names]
 
 
+def features_args(crates, pkgs, lead=""):
+    """`--features a/x,b/y`: the workspace-wide features of `crates` (see workspace_packages), or ''.
+
+    Cargo accepts `crate/feature` for a selected crate and for a direct dependency of one, so the crates' own
+    dependencies in the workspace count too (a group with `ui-egui` alone still gets `lightcraft-engine/sam`)."""
+    scope = set(crates).union(*(pkgs[c]["deps"] for c in crates)) if crates else set()
+    names = sorted(f for c in scope for f in pkgs[c].get("features", ()))
+    return f"{lead}--features {','.join(names)}" if names else ""
+
+
 def plan(changed, pkgs, wasm, groups=3, weights=None):
     """What the checks run. `changed` is [(path, gone)]; `weights` maps crate to test weight (default: measured on disk)."""
     direct, full, tracker, gone_any = set(), False, False, False
@@ -261,6 +279,7 @@ def plan(changed, pkgs, wasm, groups=3, weights=None):
                 "name": f"{number}/{len(bins)}",
                 "packages": " ".join(f"-p {n}" for n in crates),
                 "doc_packages": " ".join(f"-p {n}" for n in crates if pkgs[n]["doc"]),
+                "features": features_args(crates, pkgs),
                 "heif": "+heif" in names,
                 "oneoff": "+oneoff" in names,
                 "weight": total,
@@ -272,7 +291,7 @@ def plan(changed, pkgs, wasm, groups=3, weights=None):
         "rust": rust,
         "changed": sorted(direct),
         "crates": sorted(planned),
-        "clippy_args": "--workspace" if full else " ".join(f"-p {n}" for n in sorted(planned)),
+        "clippy_args": "--workspace" if full else " ".join(f"-p {n}" for n in sorted(planned)) + features_args(planned, pkgs, " "),
         "wasm": bool(planned & wasm),
         "parity": parity,
         "heif": heif,
