@@ -21,6 +21,12 @@ pub enum Icon {
     Sliders,
     Crop,
     Eraser,
+    /// A bold, chunky cross with rounded ends (Remove panel: Heal).
+    HealCross,
+    /// Two overlapping circles (Remove panel: Clone).
+    CloneStamp,
+    /// A four-point sparkle with a small one beside it (Remove panel: Content-Aware).
+    SparkleFill,
     Mask,
     Eye,
     /// Eye with a slash (hidden).
@@ -315,6 +321,22 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.closed(&[(3.0, 12.0), (10.0, 5.0), (16.0, 11.0), (11.0, 16.0), (7.0, 16.0)]);
             pen.line(&[(6.5, 8.5), (12.5, 14.5)]);
             pen.line(&[(7.0, 17.5), (17.0, 17.5)]);
+        }
+        HealCross => {
+            pen.rect_fill(1.8, 6.6, 18.2, 13.4, 2.4);
+            pen.rect_fill(6.6, 1.8, 13.4, 18.2, 2.4);
+        }
+        CloneStamp => {
+            pen.circle(7.2, 10.0, 5.2);
+            pen.circle(12.8, 10.0, 5.2);
+        }
+        SparkleFill => {
+            let pts = [(9.0, 2.5), (10.9, 8.1), (16.5, 10.0), (10.9, 11.9), (9.0, 17.5), (7.1, 11.9), (1.5, 10.0), (7.1, 8.1)];
+            for i in 0..8 {
+                pen.fill(&[(9.0, 10.0), pts[i], pts[(i + 1) % 8]], color);
+            }
+            pen.dot(16.0, 4.0, 1.5);
+            pen.dot(15.5, 16.0, 1.1);
         }
         Mask => {
             pen.circle(10.0, 10.0, 7.0);

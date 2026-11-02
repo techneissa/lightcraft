@@ -1,4 +1,4 @@
-//! The Remove panel's Find People / Find Wires: the two search buttons, and, once something is found, how many and
+//! The Remove panel's Find row (Dust, People, Wires), and, once something is found, how many and
 //! Remove / Remove All / Clear. The outlines on the photo are drawn by `panels/detail/find_overlay.rs`.
 
 use super::{LightcraftApp, Tokens, json, padded, text_button};
@@ -18,34 +18,26 @@ fn toast_new_outcome(app: &mut LightcraftApp, ui: &egui::Ui) {
     }
 }
 
-pub(super) fn section(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+pub(super) fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, spots: usize) {
     let view = app.session.finds.view(app.session.active());
     toast_new_outcome(app, ui);
-    super::remove_fill::notice(app, ui);
     if !view.running.is_empty() {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
     }
-    padded(ui, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            for (id, label, command, kind) in
-                [("findPeople", "Find People", "spot.findPeople", Kind::Person), ("findWires", "Find Wires", "spot.findWires", Kind::Wire)]
-            {
-                let busy = view.running.contains(&kind);
-                ui.add_enabled_ui(!busy, |ui| {
-                    let r = text_button(ui, id, label, false);
-                    let r = if kind == Kind::Person {
-                        r.on_hover_text(crate::i18n::tr("Outline the people in the background; the main subject is left out"))
-                    } else {
-                        r
-                    };
-                    if r.clicked()
-                        && let Err(e) = app.run(command, json!({}))
-                    {
-                        app.toast(ui.ctx(), e);
-                    }
-                });
+    egui::Frame::NONE.inner_margin(super::remove_compact::margin()).show(ui, |ui| {
+        let busy = |kind| view.running.contains(&kind);
+        match super::remove_compact::find(ui, [false, busy(Kind::Person), busy(Kind::Wire)], spots) {
+            Some(0) => find_dust(app, ui),
+            Some(i) => {
+                let command = if i == 1 { "spot.findPeople" } else { "spot.findWires" };
+                if let Err(e) = app.run(command, json!({})) {
+                    app.toast(ui.ctx(), e);
+                }
             }
-        });
+            None => {}
+        }
+    });
+    padded(ui, |ui| {
         if view.entries.is_empty() {
             return;
         }
@@ -71,4 +63,23 @@ pub(super) fn section(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         });
     });
+    super::remove_fill::notice(app, ui);
+}
+
+/// Find Dust: heals the small dark spots sensor dust leaves, and says how many in a toast.
+fn find_dust(app: &mut LightcraftApp, ui: &egui::Ui) {
+    match app.run("spot.findDust", json!({})) {
+        Ok(r) => {
+            let n = r["added"].as_u64().unwrap_or(0);
+            app.toast(
+                ui.ctx(),
+                if n == 0 {
+                    crate::i18n::tr("No dust spots found").to_string()
+                } else {
+                    crate::i18n::tr_format!("Healed {n} dust spot{}", if n == 1 { "" } else { "s" }, n = n)
+                },
+            );
+        }
+        Err(e) => app.toast(ui.ctx(), e),
+    }
 }
