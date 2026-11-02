@@ -26,6 +26,7 @@ pub mod left;
 pub mod library_problem;
 pub mod map;
 pub mod mask_effects;
+pub mod mask_menus;
 pub mod mask_name;
 pub mod mask_parts;
 pub mod mask_tiles;

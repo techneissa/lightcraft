@@ -1544,6 +1544,8 @@ fn view_back_command(app: &mut LightcraftApp, ctx: &egui::Context) -> Result<Val
         // Through `slideshow::end`: it also releases the held slide textures. Clearing the
         // two fields directly left every rendered slide in the renderer.
         crate::panels::slideshow::end(app);
+    } else if crate::panels::mask_parts::collapse_selection(app) {
+        // several selected submasks go back to the last clicked one first
     } else if !app.ui.tool.is_empty() {
         app.ui.tool.clear();
     } else if crate::panels::mask_parts::leave_part(app) {
