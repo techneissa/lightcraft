@@ -8,9 +8,9 @@
 //! One texture is uploaded per frame at most, so a frame never pays for two pages at once.
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
-use std::sync::Arc;
 
 use egui::{ColorImage, Context, TextureHandle, TextureOptions};
 use lightcraft_engine::book::model::Book;
@@ -89,8 +89,8 @@ impl Cache {
 
     /// Keeps the `wanted` pages (most wanted first) at `edge` pixels: starts the renders that are
     /// missing, takes in the one that finished, and drops everything else. Returns the milliseconds
-    /// the texture upload took.
-    pub fn update(&mut self, app: &mut LightcraftApp, ctx: &Context, book: &Book, wanted: &[usize], edge: usize) -> f32 {
+    /// the texture upload took and the milliseconds setting the renders up took.
+    pub fn update(&mut self, app: &mut LightcraftApp, ctx: &Context, book: &Book, wanted: &[usize], edge: usize) -> (f32, f32) {
         let keys: Vec<u64> = wanted.iter().map(|p| key(book, *p, edge)).collect();
         self.entries.retain(|k, _| keys.contains(k));
         let started = std::time::Instant::now();
@@ -121,6 +121,7 @@ impl Cache {
         let upload_ms = if uploaded { started.elapsed().as_secs_f32() * 1000.0 } else { 0.0 };
         self.failures.extend(failed);
         let mut running = self.pending();
+        let setup = std::time::Instant::now();
         for (page, k) in wanted.iter().zip(&keys) {
             if running >= MAX_JOBS {
                 break;
@@ -141,7 +142,7 @@ impl Cache {
             };
             self.entries.insert(*k, Entry { state, cancel });
         }
-        upload_ms
+        (upload_ms, setup.elapsed().as_secs_f32() * 1000.0)
     }
 }
 

@@ -4,9 +4,9 @@
 //! that one page), so the preview shows the layout, the crops and the colour that print; only the
 //! resolution differs: the page's long side is `long_edge` pixels (kept between the Print module's
 //! lowest and highest resolution). A page with no photo is plain paper.
-use super::render::{self, BookJob};
 use super::Book;
 use super::model::{MAX_PPI, MIN_PPI};
+use super::render::{self, BookJob};
 use crate::Session;
 use crate::print::output::page_to_srgb8;
 
@@ -23,7 +23,11 @@ pub struct PagePixels {
 
 enum Kind {
     /// No photo on the page: its background.
-    Blank { width: usize, height: usize, background: [u8; 3] },
+    Blank {
+        width: usize,
+        height: usize,
+        background: [u8; 3],
+    },
     Render(Box<BookJob>),
 }
 
@@ -41,7 +45,8 @@ fn ppi_for(long_edge: usize, inches: f64) -> f32 {
 pub fn prepare_page(session: &mut Session, book: &Book, page: usize, long_edge: usize) -> Result<PageJob, String> {
     let p = book.pages.get(page).ok_or_else(|| format!("the book has no page {}", page + 1))?;
     let (pw, ph) = book.settings.page_size()?;
-    let mut one = Book { id: book.id, name: book.name.clone(), settings: book.settings.clone(), cover: false, pages: vec![p.clone()], unplaced: Vec::new() };
+    let mut one =
+        Book { id: book.id, name: book.name.clone(), settings: book.settings.clone(), cover: false, pages: vec![p.clone()], unplaced: Vec::new() };
     one.settings.ppi = ppi_for(long_edge, pw.max(ph));
     one.validate()?;
     if p.slots.iter().all(Option::is_none) {

@@ -54,6 +54,13 @@ pub struct Frames {
     pub max_ms: f32,
     /// The longest texture upload of those frames.
     pub upload_ms: f32,
+    /// The whole UI pass of the frame before each of those frames (the app's own measure: every
+    /// panel, not only the preview), summed and longest.
+    pub update_sum_ms: f32,
+    pub update_max_ms: f32,
+    /// Frames over the 16 ms budget (the app's UI pass), and the longest set-up of page renders.
+    pub over_budget: u32,
+    pub setup_max_ms: f32,
 }
 
 /// The open preview.
@@ -136,7 +143,9 @@ pub fn state(app: &LightcraftApp, now: f64) -> Value {
         "pagesRendering": pv.cache.pending(),
         "frames": {"last": pv.frames.last_ms, "turnFrames": pv.frames.count,
             "turnAvg": if pv.frames.count > 0 { pv.frames.sum_ms / pv.frames.count as f32 } else { 0.0 },
-            "turnMax": pv.frames.max_ms, "uploadMax": pv.frames.upload_ms},
+            "turnMax": pv.frames.max_ms, "uploadMax": pv.frames.upload_ms,
+            "updateAvg": if pv.frames.count > 0 { pv.frames.update_sum_ms / pv.frames.count as f32 } else { 0.0 },
+            "updateMax": pv.frames.update_max_ms, "overBudget": pv.frames.over_budget, "setupMax": pv.frames.setup_max_ms},
     })
 }
 
@@ -173,7 +182,11 @@ fn open(app: &mut LightcraftApp, ctx: &Context, p: &Value) -> Result<(), String>
     }
     let page = match p.get("page") {
         None | Some(Value::Null) => app.ui.book.page.min(count - 1),
-        Some(v) => v.as_u64().and_then(|n| usize::try_from(n).ok()).filter(|n| *n < count).ok_or_else(|| format!("`page` is 0 to {} in this book", count - 1))?,
+        Some(v) => v
+            .as_u64()
+            .and_then(|n| usize::try_from(n).ok())
+            .filter(|n| *n < count)
+            .ok_or_else(|| format!("`page` is 0 to {} in this book", count - 1))?,
     };
     // the crop being changed is saved before the pages are drawn from the book
     let mut bu = std::mem::take(&mut app.ui.book);
@@ -309,7 +322,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut Ui) {
             crate::panels::grid::request_thumb(app, lightcraft_catalog::PhotoId(*photo), 512, 10);
         }
     }
-    let upload = pv.cache.update(app, &ctx, &book, &wanted, edge);
+    let (upload, setup) = pv.cache.update(app, &ctx, &book, &wanted, edge);
     for e in pv.cache.failures.drain(..).collect::<Vec<_>>() {
         pv.said += 1;
         if pv.said == 1 {
@@ -345,7 +358,13 @@ pub fn show(app: &mut LightcraftApp, ui: &mut Ui) {
         None => {
             let pages = spreads.get(current).cloned().unwrap_or_default();
             if pages.is_empty() {
-                painter.text(area.center(), egui::Align2::CENTER_CENTER, crate::i18n::tr("No pages"), crate::theme::Tokens::get(&ctx).font(14.0), egui::Color32::GRAY);
+                painter.text(
+                    area.center(),
+                    egui::Align2::CENTER_CENTER,
+                    crate::i18n::tr("No pages"),
+                    crate::theme::Tokens::get(&ctx).font(14.0),
+                    egui::Color32::GRAY,
+                );
             }
             let rects = draw::spread_rects(area, size, pages.len(), 0.0);
             draw::spread(app, &painter, &pv.cache, &book, &pages, &rects, edge);
@@ -377,14 +396,19 @@ pub fn show(app: &mut LightcraftApp, ui: &mut Ui) {
         }
         None => {}
     }
+    let update = app.perf.update_ms as f32;
     if let Some(pv) = app.ui.book.preview.as_mut() {
         let ms = started.elapsed().as_secs_f32() * 1000.0;
         pv.frames.last_ms = ms;
         pv.frames.upload_ms = pv.frames.upload_ms.max(upload);
+        pv.frames.setup_max_ms = pv.frames.setup_max_ms.max(setup);
         if slide.is_some() {
             pv.frames.count += 1;
             pv.frames.sum_ms += ms + upload;
             pv.frames.max_ms = pv.frames.max_ms.max(ms + upload);
+            pv.frames.update_sum_ms += update;
+            pv.frames.update_max_ms = pv.frames.update_max_ms.max(update);
+            pv.frames.over_budget += u32::from(update > 16.0);
         }
     }
 }

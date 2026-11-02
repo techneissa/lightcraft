@@ -119,7 +119,15 @@ pub(super) fn strip_window(spreads: &[Vec<usize>], current: usize, room: f32, pa
 }
 
 /// The controls over the spread: close, counter and thumbnail strip. `alpha` fades them (0 to 1).
-pub(super) fn controls(app: &mut LightcraftApp, ui: &mut Ui, pv: &Preview, book: &Book, spreads: &[Vec<usize>], area: Rect, alpha: f32) -> Option<Action> {
+pub(super) fn controls(
+    app: &mut LightcraftApp,
+    ui: &mut Ui,
+    pv: &Preview,
+    book: &Book,
+    spreads: &[Vec<usize>],
+    area: Rect,
+    alpha: f32,
+) -> Option<Action> {
     let painter = ui.painter_at(area);
     let fade = |c: Color32| c.gamma_multiply(alpha);
     let mut action = None;
@@ -141,10 +149,17 @@ pub(super) fn controls(app: &mut LightcraftApp, ui: &mut Ui, pv: &Preview, book:
     gradient_y(&painter, bar, Color32::TRANSPARENT, fade(Color32::from_black_alpha(215)));
     let shown = spreads.get(current).map(Vec::as_slice).unwrap_or_default();
     let text = counter_text(book, shown);
-    let label = painter.text(pos2(area.center().x, area.bottom() - THUMB_H - 34.0), Align2::CENTER_CENTER, text, crate::theme::Tokens::get(ui.ctx()).font(12.5), fade(Color32::WHITE));
+    let label = painter.text(
+        pos2(area.center().x, area.bottom() - THUMB_H - 34.0),
+        Align2::CENTER_CENTER,
+        text,
+        crate::theme::Tokens::get(ui.ctx()).font(12.5),
+        fade(Color32::WHITE),
+    );
     register(ui, "book:previewCounter", label.expand(4.0));
     let (lo, hi) = strip_window(spreads, current, (area.width() - 120.0).min(1100.0), thumb_w);
-    let widths: Vec<f32> = (lo..=hi).map(|s| spreads.get(s).map_or(0.0, |p| p.len() as f32 * thumb_w + THUMB_SPINE * p.len().saturating_sub(1) as f32)).collect();
+    let widths: Vec<f32> =
+        (lo..=hi).map(|s| spreads.get(s).map_or(0.0, |p| p.len() as f32 * thumb_w + THUMB_SPINE * p.len().saturating_sub(1) as f32)).collect();
     let total: f32 = widths.iter().sum::<f32>() + THUMB_GAP * widths.len().saturating_sub(1) as f32;
     let mut x = area.center().x - total / 2.0;
     let top = area.bottom() - THUMB_H - 18.0;

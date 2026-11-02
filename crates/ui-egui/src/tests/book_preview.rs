@@ -197,7 +197,8 @@ fn a_turn_slides_unless_reduce_motion_is_on() {
     let mut h = demo();
     open(&mut h, 8);
     h.app.ui.book.preview.as_mut().unwrap().reduce_motion = false;
-    let sliding = |h: &Headless| h.app.ui.book.preview.as_ref().is_some_and(|_| crate::panels::book::preview::state(&h.app, h.time())["sliding"] == true);
+    let sliding =
+        |h: &Headless| h.app.ui.book.preview.as_ref().is_some_and(|_| crate::panels::book::preview::state(&h.app, h.time())["sliding"] == true);
     key(&mut h, "ArrowRight");
     // (settle ran frames; the slide is over by now) turn again and look at once
     let _ = h.request("ui.key", json!({"key": "ArrowRight"}), T);
@@ -239,7 +240,9 @@ fn the_counter_and_thumbnails_show_while_the_pointer_moves_and_hide_after_a_mome
 fn pages_are_drawn_from_the_export_composer_and_the_next_spread_is_ready() {
     let mut h = demo();
     open(&mut h, 8);
-    run_until(&mut h, |h| h.app.ui.book.preview.as_ref().is_some_and(|_| crate::panels::book::preview::state(&h.app, h.time())["pagesReady"].as_u64() >= Some(3)));
+    run_until(&mut h, |h| {
+        h.app.ui.book.preview.as_ref().is_some_and(|_| crate::panels::book::preview::state(&h.app, h.time())["pagesReady"].as_u64() >= Some(3))
+    });
     let r = crate::panels::book::preview::state(&h.app, h.time());
     // the cover, and the next spread (two pages) are ready; nothing before the cover
     assert_eq!(r["pagesReady"], 3, "{r}");
@@ -268,9 +271,15 @@ fn turning_pages_draws_inside_the_frame_budget() {
         }
     }
     let f = h.app.ui.book.preview.as_ref().unwrap().frames;
-    eprintln!("book preview, {} turn frames: drawing mean {:.2} ms, worst {:.2} ms (texture upload worst {:.2} ms); the whole headless frame (UI, tessellation, CPU raster) mean {:.2} ms, worst {:.2} ms",
-        f.count, f.sum_ms / f.count.max(1) as f32, f.max_ms, f.upload_ms,
-        steps.iter().sum::<f32>() / steps.len() as f32, steps.iter().fold(0.0f32, |a, b| a.max(*b)));
+    eprintln!(
+        "book preview, {} turn frames: drawing mean {:.2} ms, worst {:.2} ms (texture upload worst {:.2} ms); the whole headless frame (UI, tessellation, CPU raster) mean {:.2} ms, worst {:.2} ms",
+        f.count,
+        f.sum_ms / f.count.max(1) as f32,
+        f.max_ms,
+        f.upload_ms,
+        steps.iter().sum::<f32>() / steps.len() as f32,
+        steps.iter().fold(0.0f32, |a, b| a.max(*b))
+    );
     assert!(f.count > 0);
     assert!(f.sum_ms / f.count as f32 <= 16.0, "mean turn frame {} ms", f.sum_ms / f.count as f32);
 }
@@ -291,7 +300,10 @@ fn a_book_of_two_hundred_pages_previews_and_turns_inside_the_frame_budget() {
     run_until(&mut h, |h| crate::panels::book::preview::state(&h.app, h.time())["pagesReady"].as_u64() >= Some(5));
     h.app.ui.book.preview.as_mut().unwrap().reduce_motion = false;
     wake(&mut h);
-    assert!(has(&h, "book:previewThumb:50") && !has(&h, "book:previewThumb:0") && !has(&h, "book:previewThumb:100"), "only the spreads around the one on show are in the strip");
+    assert!(
+        has(&h, "book:previewThumb:50") && !has(&h, "book:previewThumb:0") && !has(&h, "book:previewThumb:100"),
+        "only the spreads around the one on show are in the strip"
+    );
     for _ in 0..4 {
         let _ = h.request("ui.key", json!({"key": "ArrowRight"}), T);
         for _ in 0..30 {
