@@ -46,6 +46,10 @@ pub(super) fn heading(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     let (r, _) = ui.allocate_exact_size(vec2(ui.available_width(), 46.0), Sense::hover());
     ui.painter().text(pos2(r.left() + 24.0, r.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr("Remove"), t.semibold(15.0), t.text);
+    if !super::remove_compact::takes_fill(app) {
+        ask(app, ui.ctx());
+        return;
+    }
     let area = Rect::from_min_max(pos2(r.left() + 120.0, r.top()), pos2(r.right() - 16.0, r.bottom()));
     ui.scope_builder(UiBuilder::new().max_rect(area).layout(Layout::right_to_left(Align::Center)), |ui| {
         let current = effective(app);

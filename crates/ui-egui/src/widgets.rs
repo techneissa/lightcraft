@@ -1022,7 +1022,8 @@ pub fn section_header_solo(ui: &mut Ui, id: &str, title: &str, open: bool, enabl
     let title = crate::i18n::tr(title);
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
-    let (r, resp) = ui.allocate_exact_size(vec2(w, 52.0), Sense::click());
+    // (also dragged: the Edit panel's sections move by their headings)
+    let (r, resp) = ui.allocate_exact_size(vec2(w, 52.0), Sense::click_and_drag());
     announce_disclosure(&resp, true, open, title);
     register(ui, format!("section:{id}"), r);
     let p = ui.painter();
@@ -1221,13 +1222,37 @@ pub(crate) fn accessible_label<'a>(resp: &egui::Response, tip: &'a str) -> &'a s
 
 /// An icon-only button. `active` draws the selected background (tool strip).
 pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: bool, enabled: bool, tooltip: &str) -> Response {
+    icon_button_sense(ui, id, icon, size, active, enabled, tooltip, false)
+}
+
+/// [`icon_button`] that can also be dragged (`draggable`, also when it is not enabled).
+#[allow(clippy::too_many_arguments)]
+pub fn icon_button_sense(
+    ui: &mut Ui,
+    id: &str,
+    icon: Icon,
+    size: egui::Vec2,
+    active: bool,
+    enabled: bool,
+    tooltip: &str,
+    draggable: bool,
+) -> Response {
     let tooltip = crate::i18n::tr(tooltip);
     let t = Tokens::get(ui.ctx());
-    let (r, resp) = ui.allocate_exact_size(size, if enabled { Sense::click() } else { Sense::hover() });
+    let sense = match (enabled, draggable) {
+        (true, true) => Sense::click_and_drag(),
+        (true, false) => Sense::click(),
+        (false, true) => Sense::drag(),
+        (false, false) => Sense::hover(),
+    };
+    let (r, resp) = ui.allocate_exact_size(size, sense);
     let name = accessible_label(&resp, tooltip);
     resp.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, enabled, active, name));
     register(ui, format!("icon:{id}"), r);
-    crate::keybinds::context::attach(&resp, &format!("icon:{id}"));
+    if !draggable {
+        // (a draggable icon's own menu has this row too, see `tool_strip_order::menu`)
+        crate::keybinds::context::attach(&resp, &format!("icon:{id}"));
+    }
     let p = ui.painter();
     let sq = Rect::from_center_size(r.center(), vec2(32.0f32.min(size.x), 32.0f32.min(size.y)));
     if active {

@@ -154,6 +154,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     {
         return Some(r);
     }
+    if id.starts_with("view.toolStrip")
+        && let Some(r) = crate::panels::tool_strip_order::command(app, id, p)
+    {
+        return Some(r);
+    }
     if id.starts_with("lensDatabase.") {
         return Some(crate::dialogs::settings::lens_database::command(app, id, p));
     }
@@ -1324,6 +1329,19 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         "app.checkForUpdates" => crate::updates_ui::check(app),
         "photo.editInPhotoCraft" => edit_in(app, ctx, p, true),
         "photo.editInExternal" => edit_in(app, ctx, p, false),
+        "photo.removeReflections"
+        | "reflection.apply"
+        | "reflection.reset"
+        | "reflection.status"
+        | "reflection.toggle"
+        | "reflection.panel"
+        | "reflection.install"
+        | "reflection.download"
+        | "reflection.models"
+        | "reflection.instructions" => {
+            app.ui.right = RightPanel::Remove;
+            crate::reflections::command(app, id, p)
+        }
         "photo.openAsLayersInPhotocraft" => crate::layers_task::open_as_layers(app, ctx, p),
         "photo.openOriginalInExternal" => open_original_in(app, ctx, p),
         "dialog.cull" => {

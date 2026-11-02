@@ -251,6 +251,16 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.animatedGif", "Export Animated GIF", None, ""),
     ("photo.editInPhotoCraft", "Edit in PhotoCraft", Some("Cmd+Shift+E"), "Photo>Edit In"),
     ("photo.editInExternal", "Edit in Other Editor", Some("Cmd+Alt+E"), "Photo>Edit In"),
+    ("photo.removeReflections", "Remove Reflections", None, "Photo"),
+    ("reflection.apply", "Apply Reflection Removal", None, ""),
+    ("reflection.reset", "Reset Reflection Removal", None, ""),
+    ("reflection.toggle", "Reflection Visibility", None, ""),
+    ("reflection.panel", "Reflections", None, ""),
+    ("reflection.install", "Install Reflection Model…", None, ""),
+    ("reflection.download", "Download Reflection Model…", None, ""),
+    ("reflection.instructions", "Model download instructions", None, ""),
+    ("reflection.models", "Reflection Models", None, ""),
+    ("reflection.status", "Reflection Status", None, ""),
     // {ids?, app?, wait?, format?, colorSpace?, bitDepth?, dir?}: two or more photos, rendered with their
     // edits, become the layers of one new PhotoCraft document (the active photo on top)
     ("photo.openAsLayersInPhotocraft", "Open as Layers in PhotoCraft…", None, "Photo>Edit In"),
@@ -340,6 +350,10 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.editSectionShow", "Show or Hide Edit Section", None, ""),
     ("view.editSectionMove", "Move Edit Section", None, ""),
     ("view.editSectionsReset", "Reset Edit Sections", None, ""),
+    // the tool strip's icons: {order?}; {tool, direction: up | down | before}
+    ("view.toolStrip", "Arrange Tool Strip", None, ""),
+    ("view.toolStripMove", "Move Tool Strip Icon", None, ""),
+    ("view.toolStripReset", "Reset Tool Strip Order", None, ""),
     // the lens database folder (Settings ▸ Import ▸ Lens profiles): {dir} = a lensfun folder, null clears it
     ("lensDatabase.get", "Lens Database Folder", None, ""),
     ("lensDatabase.set", "Set Lens Database Folder", None, ""),

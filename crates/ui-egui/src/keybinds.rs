@@ -33,6 +33,9 @@ pub struct State {
     pub capture: Option<capture::Capture>,
     /// The condition being typed in the Keyboard Shortcuts window.
     pub when_edit: Option<window::WhenEdit>,
+    /// The row picked in the Keyboard Shortcuts window (command, slot): Add Shortcut records into
+    /// it, ⌫ / Delete removes the shortcut in that slot.
+    pub selected: Option<(&'static str, usize)>,
     /// The notice about conditions that could not be read was shown.
     pub damage_noticed: bool,
     /// What the last Import skipped or dropped, shown under the list until dismissed.

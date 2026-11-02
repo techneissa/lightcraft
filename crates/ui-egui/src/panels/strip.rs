@@ -5,9 +5,10 @@ use serde_json::json;
 
 use crate::LightcraftApp;
 use crate::icons::Icon;
+use crate::panels::tool_strip_order::{Placed, Tool};
 use crate::state::RightPanel;
 use crate::theme::Tokens;
-use crate::widgets::icon_button;
+use crate::widgets::{icon_button, icon_button_sense};
 
 /// Height of one tool button.
 const BUTTON_H: f32 = 40.0;
@@ -28,57 +29,77 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         .show(ui, |ui| {
             crate::widgets::announce_region(ui, egui::accesskit::Role::Toolbar, crate::i18n::tr("Tool strip"));
             let has_photo = app.session.active().is_some();
+            let order = app.ui.tool_strip.tools().to_vec();
+            let (top, bottom) = order.split_at(order.len().saturating_sub(BOTTOM_PLACES));
+            let mut placed: Placed = Vec::with_capacity(order.len());
             ui.vertical_centered(|ui| {
                 ui.spacing_mut().item_spacing.y = GAP;
                 let sz = vec2(t.strip_w, BUTTON_H);
-                if icon_button(ui, "presets", Icon::Presets, sz, app.ui.presets, has_photo, "Presets (Shift+P)").clicked() {
-                    let _ = app.run("panel.presets", json!({}));
-                }
-                for (id, icon, panel, tip) in [
-                    ("edit", Icon::Sliders, RightPanel::Edit, "Edit (E)"),
-                    ("crop", Icon::Crop, RightPanel::Crop, "Crop & Rotate (C)"),
-                    ("remove", Icon::Eraser, RightPanel::Remove, "Remove (H)"),
-                    ("masking", Icon::Mask, RightPanel::Masking, "Masking (M)"),
-                    ("redeye", Icon::Eye, RightPanel::RedEye, "Red Eye"),
-                ] {
-                    let on = app.ui.right == panel || (panel == RightPanel::Edit && app.ui.right == RightPanel::Profiles);
-                    if icon_button(ui, id, icon, sz, on, has_photo, tip).clicked() {
-                        let _ = app.run(&format!("panel.{id}"), json!({}));
-                    }
-                    if id == "edit" {
+                for (i, tool) in top.iter().enumerate() {
+                    // the dividers stay in their places while the icons move
+                    if DIVIDERS_BEFORE.contains(&i) {
                         separator(ui, &t);
                     }
+                    placed.push((*tool, tool_button(app, ui, *tool, sz, has_photo)));
                 }
                 separator(ui, &t);
-                if icon_button(ui, "versions", Icon::Versions, sz, app.ui.right == RightPanel::Versions, has_photo, "Versions (Shift+V)").clicked() {
-                    let _ = app.run("panel.versions", json!({}));
-                }
-                if icon_button(ui, "activity", Icon::Activity, sz, app.ui.right == RightPanel::Activity, true, "History & Activity (Y)").clicked() {
-                    let _ = app.run("panel.activity", json!({}));
-                }
                 if icon_button(ui, "more", Icon::More, sz, false, true, "About LightCraft").clicked() {
                     app.ui.dialog = Some(crate::state::Dialog::About);
                 }
             });
-            // bottom icons: two buttons and one gap tall, so Info ends at the bottom margin as
-            // Presets starts at the top one
-            let bottom = ui.max_rect().bottom();
-            let mut child =
-                ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(
-                    egui::pos2(ui.max_rect().left(), bottom - (2.0 * BUTTON_H + GAP)),
-                    ui.max_rect().right_bottom(),
-                )));
+            // bottom icons: two buttons and one gap tall, so the last ends at the bottom margin as
+            // the first starts at the top one
+            let bottom_edge = ui.max_rect().bottom();
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(
+                egui::pos2(ui.max_rect().left(), bottom_edge - (2.0 * BUTTON_H + GAP)),
+                ui.max_rect().right_bottom(),
+            )));
             child.vertical_centered(|ui| {
                 ui.spacing_mut().item_spacing.y = GAP;
                 let sz = vec2(t.strip_w, BUTTON_H);
-                if icon_button(ui, "keywords", Icon::Tag, sz, app.ui.right == RightPanel::Keywords, has_photo, "Keywords (K)").clicked() {
-                    let _ = app.run("panel.keywords", json!({}));
-                }
-                if icon_button(ui, "info", Icon::Info, sz, app.ui.right == RightPanel::Info, has_photo, "Info (I)").clicked() {
-                    let _ = app.run("panel.info", json!({}));
+                for tool in bottom {
+                    placed.push((*tool, tool_button(app, ui, *tool, sz, has_photo)));
                 }
             });
+            crate::panels::tool_strip_order::drag(app, ui, &placed);
         });
+}
+
+/// How many icons are pinned to the bottom of the strip.
+const BOTTOM_PLACES: usize = 2;
+/// Before which place (counted from the top) a divider is drawn.
+const DIVIDERS_BEFORE: [usize; 2] = [2, 6];
+
+/// One icon: a click opens its panel, a drag moves it (see `tool_strip_order`), its right-click
+/// menu moves it too. Returns where it is.
+fn tool_button(app: &mut LightcraftApp, ui: &mut egui::Ui, tool: Tool, sz: egui::Vec2, has_photo: bool) -> egui::Rect {
+    let (icon, tip, panel) = match tool {
+        Tool::Presets => (Icon::Presets, "Presets (Shift+P)", None),
+        Tool::Edit => (Icon::Sliders, "Edit (E)", Some(RightPanel::Edit)),
+        Tool::Crop => (Icon::Crop, "Crop & Rotate (C)", Some(RightPanel::Crop)),
+        Tool::Remove => (Icon::Eraser, "Remove (H)", Some(RightPanel::Remove)),
+        Tool::Masking => (Icon::Mask, "Masking (M)", Some(RightPanel::Masking)),
+        Tool::RedEye => (Icon::Eye, "Red Eye", Some(RightPanel::RedEye)),
+        Tool::Versions => (Icon::Versions, "Versions (Shift+V)", Some(RightPanel::Versions)),
+        Tool::Activity => (Icon::Activity, "History & Activity (Y)", Some(RightPanel::Activity)),
+        Tool::Keywords => (Icon::Tag, "Keywords (K)", Some(RightPanel::Keywords)),
+        Tool::Info => (Icon::Info, "Info (I)", Some(RightPanel::Info)),
+    };
+    let on = match panel {
+        None => app.ui.presets,
+        Some(p) => app.ui.right == p || (p == RightPanel::Edit && app.ui.right == RightPanel::Profiles),
+    };
+    let enabled = has_photo || tool == Tool::Activity;
+    let id = tool.id();
+    let resp = icon_button_sense(ui, id, icon, sz, on, enabled, tip, true);
+    if resp.clicked() {
+        let _ = app.run(&format!("panel.{id}"), json!({}));
+    }
+    if resp.drag_started_by(egui::PointerButton::Primary) {
+        app.ui.dragging_tool = Some(tool);
+    }
+    crate::widgets::context_menu(&resp, |ui| crate::panels::tool_strip_order::menu(app, ui, tool));
+    resp.rect
 }
 
 fn separator(ui: &mut egui::Ui, t: &Tokens) {

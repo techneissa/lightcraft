@@ -13,6 +13,16 @@ no `cargo xtask ci` or `ci --quick` on this Mac (techneissa, 2026-10-29: the sam
 feature and loaded the Mac). The official CI runs on Linux, so macOS-only tests (`macraw`, macOS Colour) run
 only in a lane's own filtered tests. A failure Fork CI shows only on Linux is noted, not fixed (Mac only, in FORK.md).
 
+## Small looks fixes skip the pull request (techneissa, 2026-11-02)
+
+A fix that only changes how something looks (alignment, spacing, size, an icon's drawing, a label, a hover text, a
+colour) and changes no behaviour, saved data or command goes straight onto `custom` as its own commit, with no pull
+request and no wait for GitHub's 35-55 minute gate. Run the touched tests, clippy on the touched crate and `cargo fmt
+--all --check` first. Fork CI checks `custom` after the push; a failure there is fixed in the next round. Several such
+fixes in one round go in together. Anything that changes behaviour, data or a command still goes through a pull
+request and its gate. A lane never pushes to `custom` itself: it commits the fix locally and the orchestrator puts it
+on `custom`.
+
 ## Faster builds on this Mac
 
 - **Build folder per lane slot.** The orchestrator gives each lane a slot, 1 to 3 (never two running lanes on one

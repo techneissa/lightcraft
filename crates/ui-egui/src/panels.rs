@@ -45,6 +45,7 @@ pub mod selection_order;
 pub mod slideshow;
 pub mod split_divider;
 pub mod strip;
+pub mod tool_strip_order;
 pub mod topbar;
 pub mod topbar_items;
 pub mod unnamed;

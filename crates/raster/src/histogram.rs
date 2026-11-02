@@ -208,7 +208,10 @@ impl Histogram {
 
     /// Luma value (0..1) below which `q` of the pixels fall.
     pub fn percentile(&self, q: f32) -> f32 {
-        let target = (q.clamp(0.0, 1.0) * self.total as f32) as u32;
+        if self.total == 0 {
+            return 0.0;
+        }
+        let target = ((q.clamp(0.0, 1.0) * self.total as f32) as u32).max(1);
         let mut acc = 0;
         for (i, &c) in self.luma.iter().enumerate() {
             acc += c;
@@ -248,6 +251,23 @@ mod tests {
         assert_eq!(c.shadow_channels(), [false, false, true]);
         assert!((c.shadows[2] - 0.01).abs() < 1e-6);
         assert_eq!(Histogram::of_srgb8(&Rgba8::new(0, 0)).channel_clipping(), ChannelClipping::default());
+    }
+
+    #[test]
+    fn percentile_zero_skips_empty_bins() {
+        let img = Rgba8::from_fn(4, 4, |_, _| [200, 200, 200, 255]);
+        let h = Histogram::of_srgb8(&img);
+        // every pixel is in one bin, so every percentile is that bin's luma, never black
+        assert!(h.percentile(1.0) > 0.0);
+        assert_eq!(h.percentile(0.0), h.percentile(1.0));
+        assert_eq!(h.percentile(0.01), h.percentile(1.0));
+    }
+
+    #[test]
+    fn percentile_of_empty_histogram_is_zero() {
+        let h = Histogram::of_hdr(&[], 4.0);
+        assert_eq!(h.percentile(0.0), 0.0);
+        assert_eq!(h.percentile(0.5), 0.0);
     }
 
     #[test]
