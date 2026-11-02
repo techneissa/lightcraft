@@ -26,6 +26,7 @@ only in a lane's own filtered tests. A failure Fork CI shows only on Linux is no
   hits), and a cold cache made a build slower (46 s against 36 s for `lightcraft-pipeline`).
 - **Load is the biggest cost.** The same clean build takes about 6 min at load 10 and 22 min at load ~100: at most
   3 lanes build at once.
+- **Build only when it buys something** (techneissa, 2026-11-02): logic tests, AI model runs, and the round's pictures (one build at the end of a round, not after each change). Never rebuild just to see that a button or label is there. Small UI-only changes (a button, a label, hover text, a spacing nudge) are pushed without a local build or test run; GitHub's PR gate checks them.
 - **Batch the Mac's work.** After a single merge nothing builds or tests on the Mac (Fork CI checks `custom`). Once
   per batch of merges: `fork/sync-docs.py`, `fork/tests.sh` (the Mac-only tests), one push.
 - **Driving the app** (control channel, screenshots): always with a scratch library (`--library <scratch folder>`) and its own `LIGHTCRAFT_CONFIG_DIR`; without `--library` the app opens techneissa's real library (2026-11-02: a lane imported a test photo into it and had to remove it).

@@ -77,6 +77,8 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         "file.exportMaskEffects" => !app.session.mask_effects.is_empty(),
         "dialog.saveMaskEffect" => app.session.active().is_some() && app.session.active_mask.is_some(),
         "file.exportCurvePresets" => !app.session.curve_presets.is_empty(),
+        "book.preview" => app.session.books.find(None).is_ok_and(|b| !b.pages.is_empty()),
+        "book.previewPage" => crate::panels::book::preview::active(app),
         "view.compare" => app.session.catalog.len() > 1,
         "view.fullScreenPreview" | "view.infoOverlay" | "view.navigator" => app.session.active().is_some() || app.ui.fullscreen,
         "app.openLibrary" | "app.newLibrary" => app.services.pick_folder.is_some() && crate::panels::settings::can_switch_library(app).is_ok(),

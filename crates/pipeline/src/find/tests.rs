@@ -165,6 +165,7 @@ fn remove(img: &Rgba8, plans: &[&Candidate]) -> Rgb32f {
             feather: SPOT_FEATHER,
             opacity: 100.0,
             source_offset: None,
+            ..Default::default()
         })
         .collect();
     let frame = Frame::new(w, h, &DevelopSettings::default(), true);
