@@ -43,12 +43,13 @@ parallel branches made each other conflict about six times in one evening).
    `List: <one-line summary>.` (end it with the branch name) is the feature's line in the list. For the official docs, two
    optional headings in the same file: `## What's New entry` (a `### Title` block) and `## Parity rows` (table
    rows `| LR-… |`).
-5. Do **not** edit `fork/features.md`, `fork/tests.sh`, `docs/whats-new.md`, the parity summary or `FORK.md`
+5. Do **not** edit `fork/features.md`, `.github/README.md`, `fork/tests.sh`, `docs/whats-new.md`, the parity summary or `FORK.md`
    in the branch. Leave `docs/parity-checklist.md` and `docs/gaps.md` alone too, except to change one existing
    row in place (a row you edit, not a row you add, and not the "Last reviewed" line).
 6. Merge: `git switch custom && git merge --no-ff feat/<name>`, or the PR's merge button. Whoever merges then runs
    `python3 fork/sync-docs.py` once, commits `docs: sync fork notes` on `custom` and pushes it: the script copies the
-   What's New entries and parity rows into the official docs and refreshes the parity summary. Then
+   What's New entries and parity rows into the official docs and refreshes the parity summary. For a feature you can see in the app, also add one short line under the right group of
+   "What I added" in `.github/README.md` (the page GitHub shows for this fork) in the same commit. Then
    `git push mine custom feat/<name>` and run Update LightCraft to install it.
 
 Why this works, and what to do when two PRs still clash: [fork/merging.md](fork/merging.md).
