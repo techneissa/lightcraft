@@ -34,6 +34,10 @@ and often so a crash loses minutes, not hours.
 2. `cargo test -p <crate> --lib <module or test name>` for the area you touched
 3. `cargo xtask ci --quick` once per round, before committing. It measures against `mine/custom`, so it covers only your unpushed and uncommitted changes (`--base REF` overrides).
 
+Agents (lanes) on the fork run steps 1 and 2 only. Step 3 runs once per batch, on `custom`, after the batch's branches are merged: any change to `ui-egui` makes it run that crate's ~2,400 tests.
+
+One agent builds at a time on this Mac. Every agent, in any worktree, uses the main checkout's build folder: `CARGO_TARGET_DIR=$WORKSPACE/repos/lightcraft/target`. The ~760 libraries are then built once and shared, and cargo makes a second build wait for the first instead of both fighting for the CPU. This replaces the per-agent `target/agent-<name>` folders below for the fork.
+
 Write long runs to a log file; never pipe them through `tail` or `head`.
 
 Each push to `custom` runs Fork CI (~23 min) and Fork build (~15 min) on GitHub, so push in batches: commit each working change on `custom`, and push (`git push mine custom`) once the planned batch of changes is done and its checks pass, or when techneissa asks. Never push a change whose checks fail; a test that also fails without the change is not a failure of the change, but say so in the reply.
