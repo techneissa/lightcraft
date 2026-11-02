@@ -1003,6 +1003,22 @@ pub(crate) fn announce_disclosure(resp: &egui::Response, enabled: bool, expanded
 
 /// Collapsible section header ("› Light"). Returns the response (click toggles).
 pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: Option<bool>) -> (Response, Option<bool>) {
+    let h = section_header_solo(ui, id, title, open, enabled, None);
+    (h.resp, h.eye)
+}
+
+/// What [`section_header_solo`] reports.
+pub struct SectionHeader {
+    pub resp: Response,
+    /// The eye was clicked: the section's new on / off state.
+    pub eye: Option<bool>,
+    /// The Solo Mode button was clicked.
+    pub solo_clicked: bool,
+}
+
+/// [`section_header`] with the Solo Mode button (`solo`: whether the mode is on, `None` for no button) beside the
+/// eye. The button is lit while the mode is on; both show while the pointer is on the header.
+pub fn section_header_solo(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: Option<bool>, solo: Option<bool>) -> SectionHeader {
     let title = crate::i18n::tr(title);
     let t = Tokens::get(ui.ctx());
     let w = ui.available_width();
@@ -1020,8 +1036,9 @@ pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: O
     // shown while the pointer is anywhere on the header: `resp.hovered()` turns false as soon as the
     // pointer is over the eye itself (the eye is on top), which hid the eye before it could be
     // clicked (issue #316)
+    let pointer_on_header = ui.rect_contains_pointer(r);
     if let Some(on) = enabled
-        && (ui.rect_contains_pointer(r) || !on)
+        && (pointer_on_header || !on)
     {
         let eye = Rect::from_center_size(pos2(r.right() - 34.0, r.center().y), vec2(18.0, 18.0));
         let er = ui.interact(eye, ui.scope_id().with(("eye", id)), Sense::click());
@@ -1031,11 +1048,35 @@ pub fn section_header(ui: &mut Ui, id: &str, title: &str, open: bool, enabled: O
         if !on {
             ui.painter().line_segment([eye.left_bottom(), eye.right_top()], Stroke::new(1.5, t.text_disabled));
         }
+        let er = er.on_hover_text(crate::i18n::tr(if on { "Turn Section Off" } else { "Turn Section On" }));
         if er.clicked() {
             toggled = Some(!on);
         }
     }
-    (resp, toggled)
+    let mut solo_clicked = false;
+    if let Some(on) = solo
+        && (pointer_on_header || on)
+    {
+        let btn = Rect::from_center_size(pos2(r.right() - 58.0, r.center().y), vec2(18.0, 18.0));
+        let sr = ui.interact(btn, ui.scope_id().with(("solo", id)), Sense::click());
+        crate::widgets::announce_selected(&sr, crate::i18n::tr("Solo Mode"), on);
+        register(ui, format!("sectionSolo:{id}"), btn);
+        let p = ui.painter();
+        if on {
+            p.rect_filled(btn.expand(2.0), 4.0, t.tool_active);
+        } else if sr.hovered() {
+            p.rect_filled(btn.expand(2.0), 4.0, t.hover.gamma_multiply(0.7));
+        }
+        paint(p, btn, Icon::Solo, if on { t.pick } else { t.icon });
+        solo_clicked = sr.on_hover_text(crate::i18n::tr(if on { "Turn Solo Mode Off" } else { "Turn Solo Mode On" })).clicked();
+    }
+    // egui keeps the first hover text of a layer open while the pointer stays inside its widget, so the header's
+    // is not asked for while the pointer is on the eye or the Solo button: theirs shows instead
+    let on_buttons = ui.input(|i| i.pointer.hover_pos()).is_some_and(|at| {
+        [r.right() - 34.0, r.right() - 58.0].iter().any(|x| Rect::from_center_size(pos2(*x, r.center().y), vec2(22.0, 22.0)).contains(at))
+    });
+    let resp = if on_buttons { resp } else { resp.on_hover_text(crate::panels::left::disclosure_name(open, title)) };
+    SectionHeader { resp, eye: toggled, solo_clicked }
 }
 
 /// Thin divider between groups.
@@ -1110,6 +1151,12 @@ pub fn text_button_size(ui: &Ui, label: &str) -> f32 {
 /// A segmented control: `labels` share the available width equally, `per_row` per row. Each segment is
 /// addressable as `button:{id}-{key}` (keys parallel to labels). Returns the clicked index.
 pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<usize>, per_row: usize) -> Option<usize> {
+    segmented_tips(ui, id, items, &[], active, per_row)
+}
+
+/// [`segmented`] with hover text per segment: `tips` runs parallel to `items` (a shorter list leaves the rest
+/// without one). Use it where a label alone does not say what the segment does.
+pub fn segmented_tips(ui: &mut Ui, id: &str, items: &[(&str, &str)], tips: &[&str], active: Option<usize>, per_row: usize) -> Option<usize> {
     let t = Tokens::get(ui.ctx());
     let per_row = per_row.max(1);
     let gap = 4.0;
@@ -1125,6 +1172,10 @@ pub fn segmented(ui: &mut Ui, id: &str, items: &[(&str, &str)], active: Option<u
                 let (r, resp) = ui.allocate_exact_size(vec2(seg_w, 24.0), Sense::click());
                 crate::widgets::announce_selected(&resp, label.to_string(), active == Some(i));
                 register(ui, format!("button:{id}-{key}"), r);
+                let resp = match tips.get(i) {
+                    Some(tip) => resp.on_hover_text(crate::i18n::tr(tip)),
+                    None => resp,
+                };
                 let fill = if active == Some(i) {
                     t.pressed
                 } else if resp.hovered() {

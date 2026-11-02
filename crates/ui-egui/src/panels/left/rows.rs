@@ -325,5 +325,5 @@ pub(super) fn tree_toggle(
     // (the name of the row it opens: a screen reader lists the triangles one after another)
     let label = disclosure_name(*open, name);
     tri.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label.clone()));
-    tri
+    tri.on_hover_text(label)
 }

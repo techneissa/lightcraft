@@ -402,7 +402,7 @@ fn curve_footer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings)
             let current = matching_preset(&app.session, &d.curve);
             let builtin = current.as_ref().is_none_or(|name| all_presets(&app.session).iter().any(|p| p.builtin && &p.name == name));
             let label = crate::i18n::builtin_label(current.as_deref().unwrap_or("Custom"), builtin);
-            let r = crate::widgets::dropdown(ui, "curvePreset", label, t.font(12.0), t.text);
+            let r = crate::widgets::dropdown(ui, "curvePreset", label, t.font(12.0), t.text).on_hover_text(crate::i18n::tr("Point Curve Preset"));
             let presets = all_presets(&app.session);
             let find = crate::widgets::dropdown_search::before_menu(ui, &r, || {
                 presets.iter().map(|p| crate::i18n::builtin_label(&p.name, p.builtin).to_string()).collect()

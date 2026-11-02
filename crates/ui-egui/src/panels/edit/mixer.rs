@@ -15,6 +15,7 @@ pub(super) fn mixer(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSetti
                 let (r, resp) = ui.allocate_exact_size(vec2(22.0, 22.0), Sense::click());
                 crate::widgets::announce(&resp, crate::i18n::tr(b));
                 register(ui, format!("mixerBand:{b}"), r);
+                let resp = resp.on_hover_text(crate::i18n::tr_format!("Edit {band} Band", band = crate::i18n::tr(b)));
                 ui.painter().circle_filled(r.center(), 9.0, hex(BAND_COLORS[i]));
                 if i == sel {
                     ui.painter().circle_stroke(r.center(), 10.5, Stroke::new(1.5, t.text));

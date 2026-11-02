@@ -119,7 +119,7 @@ pub(super) fn show(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, bu: &mut Bo
                 bu.page = if v { bu.page + 1 } else { bu.page.saturating_sub(1) };
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if text_button(ui, "bookAutoLayout", "Auto Layout", false).clicked() {
+                if text_button(ui, "bookAutoLayout", "Auto Layout", false).on_hover_text(crate::i18n::tr("Apply Layout to Book")).clicked() {
                     let preset = LAYOUTS[bu.layout.min(LAYOUTS.len() - 1)].0;
                     run(app, &ctx, bu, "book.layout", json!({"cover": book.cover, "preset": preset}));
                     bu.page = 0;

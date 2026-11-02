@@ -55,18 +55,21 @@ pub(super) fn section(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new(crate::i18n::tr_format!("{} found", n)).color(Tokens::get(ui.ctx()).text_dim));
         ui.horizontal_wrapped(|ui| {
             ui.add_enabled_ui(selected > 0, |ui| {
-                if text_button(ui, "findRemove", "Remove", false).clicked()
+                if text_button(ui, "findRemove", "Remove", false)
+                    .on_hover_text(crate::i18n::tr("Remove Selected Finds"))
+                    .on_disabled_hover_text(crate::i18n::tr("Select Finds to Remove"))
+                    .clicked()
                     && let Err(e) = app.run("spot.removeCandidates", super::with_fill(app, "fill", json!({})))
                 {
                     app.toast(ui.ctx(), e);
                 }
             });
-            if text_button(ui, "findRemoveAll", "Remove All", false).clicked()
+            if text_button(ui, "findRemoveAll", "Remove All", false).on_hover_text(crate::i18n::tr("Remove All Finds")).clicked()
                 && let Err(e) = app.run("spot.removeCandidates", super::with_fill(app, "fill", json!({"all": true})))
             {
                 app.toast(ui.ctx(), e);
             }
-            if text_button(ui, "findClear", "Clear", false).clicked() {
+            if text_button(ui, "findClear", "Clear", false).on_hover_text(crate::i18n::tr("Clear Finds")).clicked() {
                 let _ = app.run("spot.clearCandidates", json!({}));
             }
         });

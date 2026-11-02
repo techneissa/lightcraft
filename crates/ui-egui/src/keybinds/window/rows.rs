@@ -261,11 +261,14 @@ fn slot_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, row: &Row, 
     if sc.is_some() && !recording && (ui.rect_contains_pointer(rect) || picked_here) {
         trash(app, ui, t, b, slot, rect);
     }
-    let mut r = r;
-    if let Some(others) = clash {
-        let names: Vec<_> = others.iter().map(|id| shortcuts::find_bindable(id).map_or(*id, |o| crate::i18n::tr(o.label))).collect();
-        r = r.on_hover_text(crate::i18n::tr_format!("Also used by {}", names.join(", ")));
-    }
+    let r = match clash {
+        Some(others) => {
+            let names: Vec<_> = others.iter().map(|id| shortcuts::find_bindable(id).map_or(*id, |o| crate::i18n::tr(o.label))).collect();
+            r.on_hover_text(crate::i18n::tr_format!("Also used by {}", names.join(", ")))
+        }
+        // (the hover help of #52: every control says what it does)
+        None => r.on_hover_text(crate::i18n::tr("Record New Shortcut")),
+    };
     if r.clicked() {
         app.keybinds.selected = Some((b.id, slot));
         let _ = capture::open_inline(app, b.id, Some(slot));
