@@ -277,6 +277,9 @@ pub struct Look<'a> {
     pub images: Option<&'a LiveImages>,
     /// Draw the coverage colour over the blend too (Show Overlay).
     pub overlay: bool,
+    /// The coverage colour may stand in for the blend while there is none to draw. `false` with the
+    /// overlay hidden: the stroke then shows nothing of its own until the blend is ready (issue #2549).
+    pub tint: bool,
     /// Auto Mask: weigh the dabs by the picture under them.
     pub auto: bool,
     /// Egui time (seconds), for the hold after release.
@@ -389,7 +392,7 @@ pub fn paint(
     let guide = look.images.filter(|_| look.auto).map(|i| (auto::guide_for(i.key.0, &i.base), i.img_rect));
     let new_dabs = s.stamp_with(points, pressure, guide.as_ref().map(|(guide, img_rect)| AutoCtx { guide, img_rect: *img_rect }));
     let blended = look.images.is_some_and(|images| s.draw_blend(ctx, painter, images));
-    if look.overlay || !blended {
+    if look.overlay || (!blended && look.tint) {
         let clip = s.params.clip;
         // the buffer's pixels may overhang the canvas by a fraction of a pixel: map them exactly
         let (w, h, scale) = (s.w as f32, s.h as f32, s.params.scale);
