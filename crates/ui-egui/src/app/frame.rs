@@ -71,6 +71,7 @@ impl LightcraftApp {
         panels::library_problem::import_waiting(self, ctx);
         lightroom_import::tick(self, ctx);
         recheck::tick(self);
+        crate::settings_sync::offer_at_start(self);
         tasks::poll(self, ctx);
         updates_ui::tick(self, ctx);
         self.preview_build_status(ctx);

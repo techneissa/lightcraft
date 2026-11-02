@@ -384,6 +384,8 @@ pub struct UiState {
     pub navigator: bool,
     /// App preferences (Settings dialog).
     pub settings: AppSettings,
+    /// This Mac's Settings sync choices (Settings ▸ Sync); never part of a settings file.
+    pub sync: crate::settings_sync::SyncPrefs,
     /// Window full screen requested (⇧⌘F); the host applies it (`None` = no change pending).
     #[serde(skip)]
     pub window_fullscreen: Option<bool>,
@@ -568,6 +570,7 @@ impl Default for UiState {
             layout_image: LayoutImage::default(),
             navigator: true,
             settings: AppSettings::default(),
+            sync: Default::default(),
             window_fullscreen: None,
             filter_bar: false,
             local_roots: Vec::new(),
