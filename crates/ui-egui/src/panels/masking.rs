@@ -99,6 +99,7 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Masking");
+    super::mask_menus::confirm_window(app, ui.ctx());
     super::selection_model::show(app, ui);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Create New Mask")).color(t.text_dim));
@@ -305,7 +306,7 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             if resp.double_clicked() {
                 app.ui.renaming_mask = Some((m.id, m.name.clone()));
             }
-            crate::widgets::context_menu(&resp, |ui| mask_menu(app, ui, m.id, &m.name, m.visible, index, count));
+            crate::widgets::context_menu(&resp, |ui| super::mask_menus::mask_menu(app, ui, m.id, &m.name, m.visible, index, count));
             if sel {
                 // right under the selected mask: the mode of the next part and a button for each kind of part
                 // (Describe… opens its field here)
@@ -321,7 +322,7 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(mid) = app.session.active_mask else { return };
     let Some(m) = d.masks.iter().find(|m| m.id == mid).cloned() else { return };
     divider(ui);
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 8 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 14, right: 12, top: 8, bottom: 8 }).show(ui, |ui| {
         super::mask_parts::part_rows(app, ui, &m);
     });
     if super::mask_parts::brush_bar_shown(app, &m) {
@@ -370,7 +371,8 @@ pub(super) fn menu_label(source: &str) -> &str {
     crate::i18n::tr(source)
 }
 
-/// The right-click menu of a mask in the Masks list.
+/// The right-click menu of a mask in the Masks list (the fork's is `mask_menus::mask_menu`).
+#[allow(dead_code)]
 fn mask_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, name: &str, visible: bool, index: usize, count: usize) {
     let mut run = |ui: &mut egui::Ui, label: &str, enabled: bool, cmd: &str, p: serde_json::Value| {
         if ui.add_enabled(enabled, egui::Button::new(menu_label(label))).clicked() {
@@ -691,7 +693,7 @@ pub(crate) fn start_object(app: &mut LightcraftApp, ctx: &egui::Context, op: &st
     match r {
         Ok(_) => {
             app.ui.tool = "object".into();
-            app.toast(ctx, crate::i18n::tr("Click the object to select it · ⌥-click leaves a part out"));
+            app.toast(ctx, crate::i18n::tr("Click the object to select it · ⌥-click leaves a submask out"));
         }
         Err(e) => app.ai_error(ctx, e, Some(("object", op))),
     }

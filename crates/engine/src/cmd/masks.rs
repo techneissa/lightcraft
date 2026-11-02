@@ -176,7 +176,7 @@ pub(crate) fn clicks_of(include: &[Point], exclude: &[Point]) -> Vec<Click> {
     include.iter().map(|p| Click { at: *p, include: true }).chain(exclude.iter().map(|p| Click { at: *p, include: false })).collect()
 }
 
-fn masks_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Mask>, &mut Option<u32>) -> Result<()>) -> Result<Value> {
+pub(super) fn masks_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Mask>, &mut Option<u32>) -> Result<()>) -> Result<Value> {
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
     let mut active = s.active_mask;
@@ -256,7 +256,7 @@ pub(super) fn mask_id(p: &Value, active: Option<u32>, c: &str) -> Result<u32> {
     optional_mask_id(p, c)?.or(active).ok_or_else(|| bad(c, "no mask selected (give `id`)"))
 }
 
-fn optional_index(p: &Value, key: &str, c: &str) -> Result<Option<usize>> {
+pub(super) fn optional_index(p: &Value, key: &str, c: &str) -> Result<Option<usize>> {
     p.get(key)
         .filter(|v| !v.is_null())
         .map(|v| {
@@ -267,7 +267,7 @@ fn optional_index(p: &Value, key: &str, c: &str) -> Result<Option<usize>> {
         .transpose()
 }
 
-fn find(masks: &mut [Mask], id: u32, c: &str) -> Result<usize> {
+pub(super) fn find(masks: &mut [Mask], id: u32, c: &str) -> Result<usize> {
     masks.iter().position(|m| m.id == id).ok_or_else(|| bad(c, format!("no mask {id}")))
 }
 
@@ -775,62 +775,9 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Mask Component",
             [],
             None,
-            "{id?, component: index, action: invert|duplicate|delete|rename|op, name? (rename; empty clears), op?: add|subtract|intersect} — one component of a mask (deleting the last one deletes the mask)",
+            "{id?, component: index | components: [index…], action: invert|duplicate|delete|rename|op|toMask, name? (rename, one part; empty clears), op?: add|subtract|intersect, invert?: bool (duplicate: Duplicate and Invert)} — parts of a mask, all in one undo step; deleting the last one deletes the mask; duplicate puts the copies, in order, after the last chosen part and answers their indexes as `components`; toMask makes a new mask of the chosen parts (same effects as their mask)",
             has_active,
-            |s, p| {
-                let c = "mask.component";
-                let mid = mask_id(p, s.active_mask, c)?;
-                let k = optional_index(p, "component", c)?.ok_or_else(|| bad(c, "missing component"))?;
-                let action = str_param(p, "action").ok_or_else(|| bad(c, "missing action"))?.to_string();
-                let op: Option<MaskOp> = match p.get("op") {
-                    Some(v) => Some(serde_json::from_value(v.clone()).map_err(|e| bad(c, e.to_string()))?),
-                    None => None,
-                };
-                let label = match action.as_str() {
-                    "invert" => "Invert Component",
-                    "duplicate" => "Duplicate Component",
-                    "delete" => "Delete Component",
-                    "rename" => "Rename Component",
-                    "op" => "Change Component Mode",
-                    a => return Err(bad(c, format!("unknown action {a:?} (invert|duplicate|delete|rename|op)"))),
-                };
-                let selected = s.active_component.filter(|(m, _)| *m == mid).map(|(_, j)| j);
-                let out = masks_edit(s, c, label, |masks, active| {
-                    let i = find(masks, mid, c)?;
-                    let comps = &mut masks[i].components;
-                    let comp = comps.get_mut(k).ok_or_else(|| bad(c, "no such component"))?;
-                    match action.as_str() {
-                        "invert" => comp.invert = !comp.invert,
-                        "rename" => {
-                            // an empty name gives the component its automatic name back; any other must be new in this mask
-                            let raw = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty());
-                            if let Some(raw) = raw {
-                                let others = comps.iter().enumerate().filter(|(j, _)| *j != k).filter_map(|(_, c)| c.name.as_deref());
-                                let name = crate::names::check_name(raw, others).map_err(|e| bad(c, e.to_string()))?;
-                                comps[k].name = Some(name);
-                            } else {
-                                comps[k].name = None;
-                            }
-                        }
-                        "op" => comp.op = super::mask_parts::mode_for(k, op.ok_or_else(|| bad(c, "missing op"))?),
-                        "duplicate" => {
-                            let copy = comp.clone();
-                            comps.insert(k + 1, copy);
-                        }
-                        _ => {
-                            comps.remove(k);
-                            super::mask_parts::rebase_after_delete(comps, k);
-                            if comps.is_empty() {
-                                masks.remove(i);
-                                *active = masks.last().map(|m| m.id);
-                            }
-                        }
-                    }
-                    Ok(())
-                })?;
-                super::mask_parts::follow(s, mid, selected, &action, k);
-                Ok(out)
-            }
+            |s, p| super::mask_multi::component(s, p)
         ),
         cmd!("mask.move", "Move Mask", [], None, "{id?, to?: index (0 = top), delta?: ±n} — reorder the masks list", has_active, |s, p| {
             let mid = mask_id(p, s.active_mask, "mask.move")?;

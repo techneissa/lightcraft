@@ -77,6 +77,7 @@ mod map_keys;
 mod map_locations;
 mod map_tracks;
 mod mask_effects;
+mod mask_menus;
 mod mask_name;
 mod mask_parts;
 mod masking;

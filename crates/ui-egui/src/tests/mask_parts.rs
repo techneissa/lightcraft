@@ -75,10 +75,11 @@ fn the_mode_control_sets_the_mode_of_the_next_part_and_selects_it() {
     // the mode stays where it was put, for the next part too
     click(&mut h, "icon:maskPart:linear");
     assert_eq!(ops(&h).last(), Some(&MaskOp::Intersect));
-    // a brush cannot intersect: its button does nothing
+    // a brush can intersect: the painted area is what stays
     let before = mask(&h).components.len();
-    let _ = h.request("ui.clickWidget", json!({"id": "icon:maskPart:brush"}), T);
-    assert_eq!(mask(&h).components.len(), before);
+    click(&mut h, "icon:maskPart:brush");
+    assert_eq!(mask(&h).components.len(), before + 1);
+    assert_eq!(ops(&h).last(), Some(&MaskOp::Intersect));
     h.settle(SETTLE);
 }
 
