@@ -101,6 +101,7 @@ mod quick_filters;
 mod quit_unsaved;
 mod rating;
 mod recheck;
+mod remove_compact;
 mod remove_fill;
 mod rename_person;
 mod renaming;
