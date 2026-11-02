@@ -384,6 +384,9 @@ pub enum Dialog {
         remove_missing: bool,
         read_metadata: bool,
     },
+    /// Import Settings… and Load from Folder: what the file would change, asked before anything does
+    /// (`settings.import`, `settings.syncLoad`; the file's reading is `LightcraftApp::sync_settings.prompt`).
+    SettingsImport,
     About,
     Shortcuts,
     /// View ▸ View Options (⌘J): the info overlay and the lines of Info 1 and Info 2. Changes apply

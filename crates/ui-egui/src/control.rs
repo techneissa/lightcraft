@@ -393,6 +393,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         }
         "ui.zoom" => Outcome::Gesture { method: req.method.clone(), params: req.params.clone() },
         "ui.set" => {
+            // this Mac's sync folder is the user's choice (Settings ▸ Sync), never an agent's
+            if p.get("sync").is_some() {
+                return err("ui.set: `sync` is the user's: the sync folder is chosen in Settings ▸ Sync, never by an agent".to_string());
+            }
             // an arrangement of the sidebar is checked, not made whole as a settings file's is
             let sidebar = match p.get("sidebar").map(crate::sidebar::SidebarLayout::parse).transpose() {
                 Ok(s) => s,

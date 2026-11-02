@@ -335,6 +335,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::Print => "Print",
         Dialog::Merge { opts } => opts.title(),
         Dialog::Settings { .. } => "Settings",
+        Dialog::SettingsImport => "Load Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
         Dialog::LocalProfileSwitch { .. } => "Local Camera Profile",
         Dialog::SmartPreviewsForEditing { .. } => "Smart Previews",
@@ -452,6 +453,7 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         | Dialog::DeleteEffects { .. }
         | Dialog::DeleteLocation { .. } => "Delete",
         Dialog::LocalProfileSwitch { .. } => "Switch",
+        Dialog::SettingsImport => "Load",
         Dialog::SmartPreviewsForEditing { .. } => "Build Smart Previews",
         Dialog::MacosForCamera { .. } => "Apply",
         Dialog::DeletePermanently { .. } => "Move to Trash",
@@ -2065,6 +2067,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             ui.label(crate::i18n::tr_format!("Move {what} to Recently Deleted?", what = what));
             ui.label(egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
         }
+        Dialog::SettingsImport => crate::settings_sync::prompt_body(app, ui, t),
         Dialog::MacosForCamera { camera, count, skipped, .. } => crate::macos_colour::picker::body(ui, t, camera, *count, *skipped),
         Dialog::SmartPreviewsForEditing { missing } => crate::smart_editing::body(ui, t, *missing),
         Dialog::LocalProfileSwitch { name, count, .. } => {

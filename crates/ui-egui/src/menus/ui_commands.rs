@@ -314,6 +314,12 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.resetShortcuts", "Reset All Keyboard Shortcuts", None, ""),
     ("app.shortcutContexts", "List Shortcut Conditions", None, ""),
     ("app.exportShortcuts", "Export Keyboard Shortcuts", None, ""),
+    // Settings sync (Settings ▸ Sync, `fork/settings-sync.md`): all settings in one file, or in the sync folder
+    ("settings.export", "Export Settings…", None, ""),
+    ("settings.import", "Import Settings…", None, ""),
+    ("settings.syncSave", "Save Settings to Folder", None, ""),
+    ("settings.syncLoad", "Load Settings from Folder", None, ""),
+    ("settings.syncChoose", "Choose Sync Folder…", None, ""),
     ("app.importShortcuts", "Import Keyboard Shortcuts", None, ""),
     // opens the Assign Shortcut box for {id}, in {slot} 1 or 2 (the first free one by default)
     ("app.assignShortcut", "Assign Shortcut…", None, ""),

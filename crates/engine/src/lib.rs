@@ -82,6 +82,8 @@ pub mod proof;
 pub mod rename;
 pub mod rename_job;
 pub mod segment;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod settings_folder;
 pub mod sidecar;
 pub mod sidecar_queue;
 pub mod slide;

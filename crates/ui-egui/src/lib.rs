@@ -51,6 +51,7 @@ pub mod region;
 pub mod reload;
 pub mod rename_task;
 pub mod render;
+pub mod settings_sync;
 pub mod shortcuts;
 pub mod sidebar;
 mod smart_editing;
@@ -347,6 +348,8 @@ pub struct LightcraftApp {
     pub shown_library: Option<u64>,
     /// A background export in progress.
     pub export: Option<export_task::ExportTask>,
+    /// Settings sync: the load prompt, Keep in Sync at start, and where this Mac's name and the shared folder file come from.
+    pub(crate) sync_settings: settings_sync::Runtime,
     /// True while the control channel (an agent, the CLI, MCP) runs a command: such an export never
     /// shows its file in the file manager; only the Export dialog does ([`export_reveal`]).
     pub(crate) from_control: bool,
