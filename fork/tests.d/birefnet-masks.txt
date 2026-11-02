@@ -1,0 +1,2 @@
+cargo test -p lightcraft-birefnet --lib
+cargo test -p lightcraft-develop --lib -- segmask

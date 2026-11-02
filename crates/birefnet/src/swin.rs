@@ -30,7 +30,10 @@ impl SwinConfig {
     /// Reads the size from tensor names and shapes under `bb.`.
     pub fn detect(p: &Params) -> Result<Self> {
         let bb = p.pp("bb");
-        let embed = *bb.shape("patch_embed.proj.weight").and_then(|s| s.first()).ok_or_else(|| Error::Model("no Swin backbone in this file (bb.patch_embed.proj.weight)".into()))?;
+        let embed = *bb
+            .shape("patch_embed.proj.weight")
+            .and_then(|s| s.first())
+            .ok_or_else(|| Error::Model("no Swin backbone in this file (bb.patch_embed.proj.weight)".into()))?;
         let mut depths = Vec::new();
         let mut heads = Vec::new();
         let mut window = 0;
@@ -49,7 +52,7 @@ impl SwinConfig {
             let h = bb.shape(&format!("layers.{stage}.blocks.0.attn.relative_position_bias_table")).and_then(|s| s.get(1)).copied().unwrap_or(0);
             // rows = (2w - 1)²
             let side = (rows as f64).sqrt().round() as usize;
-            if side * side != rows || side % 2 == 0 {
+            if side * side != rows || side.is_multiple_of(2) {
                 return Err(Error::Model(format!("stage {stage}: {rows} relative positions is not (2w-1)²")));
             }
             let w = side.div_ceil(2);
@@ -160,17 +163,14 @@ impl Block {
         if shifted {
             y = y.roll(-(self.shift as i32), 1)?.roll(-(self.shift as i32), 2)?;
         }
-        let windows = y
-            .reshape((b, hp / window, window, wp / window, window, c))?
-            .permute((0, 1, 3, 2, 4, 5))?
-            .contiguous()?
-            .reshape((b * (hp / window) * (wp / window), window * window, c))?;
+        let windows = y.reshape((b, hp / window, window, wp / window, window, c))?.permute((0, 1, 3, 2, 4, 5))?.contiguous()?.reshape((
+            b * (hp / window) * (wp / window),
+            window * window,
+            c,
+        ))?;
         let att = self.attention(&windows, if shifted { mask } else { None })?;
-        let mut y = att
-            .reshape((b, hp / window, wp / window, window, window, c))?
-            .permute((0, 1, 3, 2, 4, 5))?
-            .contiguous()?
-            .reshape((b, hp, wp, c))?;
+        let mut y =
+            att.reshape((b, hp / window, wp / window, window, window, c))?.permute((0, 1, 3, 2, 4, 5))?.contiguous()?.reshape((b, hp, wp, c))?;
         if shifted {
             y = y.roll(self.shift as i32, 1)?.roll(self.shift as i32, 2)?;
         }
@@ -235,7 +235,9 @@ fn shift_mask(hp: usize, wp: usize, window: usize, shift: usize, dev: &candle_co
                 let ra = region(wy * window + a / window, hp) * 3 + region(wx * window + a % window, wp);
                 for b in 0..n {
                     let rb = region(wy * window + b / window, hp) * 3 + region(wx * window + b % window, wp);
-                    if ra != rb && let Some(o) = out.get_mut(base + a * n + b) {
+                    if ra != rb
+                        && let Some(o) = out.get_mut(base + a * n + b)
+                    {
                         *o = MASKED;
                     }
                 }
@@ -267,7 +269,10 @@ impl Swin {
                 blocks.push(Block::new(&sp.pp(&format!("blocks.{j}")), dim, heads, cfg.window, shift)?);
             }
             let merging = if i + 1 < cfg.depths.len() {
-                Some(Merging { norm: sp.pp("downsample.norm").layer_norm(dim * 4, LN_EPS)?, reduction: sp.pp("downsample.reduction").linear(dim * 4, dim * 2, false)? })
+                Some(Merging {
+                    norm: sp.pp("downsample.norm").layer_norm(dim * 4, LN_EPS)?,
+                    reduction: sp.pp("downsample.reduction").linear(dim * 4, dim * 2, false)?,
+                })
             } else {
                 None
             };

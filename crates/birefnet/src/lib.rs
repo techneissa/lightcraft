@@ -14,11 +14,11 @@
 
 #[cfg(not(target_arch = "wasm32"))]
 mod blocks;
+pub mod combine;
 #[cfg(not(target_arch = "wasm32"))]
 mod deform;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod fetch;
-pub mod combine;
 pub mod image;
 #[cfg(not(target_arch = "wasm32"))]
 mod model;

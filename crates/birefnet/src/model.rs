@@ -62,7 +62,10 @@ struct Ipt {
 
 impl Ipt {
     fn load(p: &Params, cin: usize, cout: usize) -> Result<Self> {
-        Ok(Self { conv1: p.pp("conv1").conv(cin, 64, 3, ConvOpts::same(3), None)?, out: p.pp("conv_out").conv(64, cout, 3, ConvOpts::same(3), None)? })
+        Ok(Self {
+            conv1: p.pp("conv1").conv(cin, 64, 3, ConvOpts::same(3), None)?,
+            out: p.pp("conv_out").conv(64, cout, 3, ConvOpts::same(3), None)?,
+        })
     }
 
     fn forward(&self, x: &Tensor) -> Result<Tensor> {
@@ -121,7 +124,7 @@ impl Decoder {
             Ok((h, w))
         };
         // grid of tiles that matches a feature map of the given height
-        let grid = |h: usize| -> Result<usize> { if h == 0 { Err(Error::Model("empty feature map".into())) } else { Ok(ih / h) } };
+        let grid = |h: usize| -> Result<usize> { ih.checked_div(h).ok_or_else(|| Error::Model("empty feature map".into())) };
 
         let (h4, _) = dims(x4)?;
         let p4 = self.blocks[3].forward(&Tensor::cat(&[x4.clone(), self.ipt[4].forward(&tiles(x, grid(h4)?)?)?], 1)?)?;
@@ -185,7 +188,8 @@ impl Net {
             let (_, _, fh, fw) = a.dims4()?;
             joined.push(Tensor::cat(&[a.clone(), resize(b, fh, fw)?], 1)?);
         }
-        let [x1, x2, x3, x4] = <[Tensor; 4]>::try_from(joined).map_err(|_| Error::Model("the backbone returned the wrong number of stages".into()))?;
+        let [x1, x2, x3, x4] =
+            <[Tensor; 4]>::try_from(joined).map_err(|_| Error::Model("the backbone returned the wrong number of stages".into()))?;
         let (h4, w4) = (x4.dim(2)?, x4.dim(3)?);
         let ctx = Tensor::cat(&[resize(&x1, h4, w4)?, resize(&x2, h4, w4)?, resize(&x3, h4, w4)?, x4], 1)?;
         let x4 = self.squeeze.forward(&ctx)?;

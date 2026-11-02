@@ -66,8 +66,11 @@ impl Weights {
                 .and_then(|s| s.as_array())
                 .map(|a| a.iter().filter_map(|x| x.as_u64().and_then(|x| usize::try_from(x).ok())).collect())
                 .unwrap_or_default();
-            let offsets: Vec<u64> =
-                v.get("data_offsets").and_then(|s| s.as_array()).map(|a| a.iter().filter_map(serde_json::Value::as_u64).collect()).unwrap_or_default();
+            let offsets: Vec<u64> = v
+                .get("data_offsets")
+                .and_then(|s| s.as_array())
+                .map(|a| a.iter().filter_map(serde_json::Value::as_u64).collect())
+                .unwrap_or_default();
             let [start, end] = offsets[..] else { return Err(model_err(path, format!("{name}: bad data_offsets"))) };
             if let Some(dtype) = dtype {
                 let want = shape.iter().try_fold(dtype.size_in_bytes(), |a, d| a.checked_mul(*d));

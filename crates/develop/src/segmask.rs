@@ -220,6 +220,22 @@ mod tests {
     }
 
     #[test]
+    fn the_model_is_stored_with_the_selection_and_old_documents_read_without_it() {
+        let plain = SegMask::from_logits(4, &[1.0; 16]);
+        assert!(!serde_json::to_string(&plain).unwrap().contains("model"), "a SAM 3 selection is saved as before");
+        let marked = plain.clone().made_by("birefnet");
+        let back: SegMask = serde_json::from_str(&serde_json::to_string(&marked).unwrap()).unwrap();
+        assert_eq!(back.model.as_deref(), Some("birefnet"));
+        assert_eq!(marked.invert().unwrap().model.as_deref(), Some("birefnet"), "turning it around keeps the model");
+        // a document from before the field
+        let old: SegMask = serde_json::from_str(&format!(r#"{{"side":4,"data":{}}}"#, serde_json::to_string(&plain.data).unwrap())).unwrap();
+        assert_eq!(old.model, None);
+        // and a build that doesn't know the field reads the rest as before (unknown fields are ignored)
+        let newer: SegMask = serde_json::from_str(r#"{"side":4,"data":"AA==","model":"something-newer","extra":1}"#).unwrap();
+        assert_eq!(newer.model.as_deref(), Some("something-newer"));
+    }
+
+    #[test]
     fn damaged_data_is_none() {
         let mut m = SegMask::from_logits(8, &[1.0; 64]);
         m.side = 9;

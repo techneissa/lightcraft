@@ -47,7 +47,8 @@ fn distance_to_edge(inside: &[bool], n: usize) -> Vec<u32> {
         for x in 0..n {
             let me = inside.get(y * n + x).copied().unwrap_or(false);
             let differs = |xx: usize, yy: usize| inside.get(yy * n + xx).is_some_and(|v| *v != me);
-            let edge = (x > 0 && differs(x - 1, y)) || (x + 1 < n && differs(x + 1, y)) || (y > 0 && differs(x, y - 1)) || (y + 1 < n && differs(x, y + 1));
+            let edge =
+                (x > 0 && differs(x - 1, y)) || (x + 1 < n && differs(x + 1, y)) || (y > 0 && differs(x, y - 1)) || (y + 1 < n && differs(x, y + 1));
             if edge && let Some(v) = d.get_mut(y * n + x) {
                 *v = 0;
             }
@@ -58,7 +59,8 @@ fn distance_to_edge(inside: &[bool], n: usize) -> Vec<u32> {
     };
     for y in 0..n as isize {
         for x in 0..n as isize {
-            let best = [get(&d, x - 1, y) + 3, get(&d, x, y - 1) + 3, get(&d, x - 1, y - 1) + 4, get(&d, x + 1, y - 1) + 4].into_iter().min().unwrap_or(BIG);
+            let best =
+                [get(&d, x - 1, y) + 3, get(&d, x, y - 1) + 3, get(&d, x - 1, y - 1) + 4, get(&d, x + 1, y - 1) + 4].into_iter().min().unwrap_or(BIG);
             if let Some(v) = d.get_mut(y as usize * n + x as usize) {
                 *v = (*v).min(best);
             }
@@ -66,7 +68,8 @@ fn distance_to_edge(inside: &[bool], n: usize) -> Vec<u32> {
     }
     for y in (0..n as isize).rev() {
         for x in (0..n as isize).rev() {
-            let best = [get(&d, x + 1, y) + 3, get(&d, x, y + 1) + 3, get(&d, x + 1, y + 1) + 4, get(&d, x - 1, y + 1) + 4].into_iter().min().unwrap_or(BIG);
+            let best =
+                [get(&d, x + 1, y) + 3, get(&d, x, y + 1) + 3, get(&d, x + 1, y + 1) + 4, get(&d, x - 1, y + 1) + 4].into_iter().min().unwrap_or(BIG);
             if let Some(v) = d.get_mut(y as usize * n + x as usize) {
                 *v = (*v).min(best);
             }

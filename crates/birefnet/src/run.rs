@@ -48,7 +48,7 @@ impl BiRefNet {
         if !is_model_dir(dir) {
             return Err(Error::Missing(dir.to_path_buf()));
         }
-        if side == 0 || side % 32 != 0 || side > 4096 {
+        if side == 0 || !side.is_multiple_of(32) || side > 4096 {
             return Err(Error::Model(format!("input side {side} is not a multiple of 32 up to 4096")));
         }
         let weights = Arc::new(Weights::open(&dir.join(WEIGHTS_FILE))?);
@@ -128,7 +128,10 @@ mod tests {
         for (stage, depth) in depths.iter().enumerate() {
             for block in 0..*depth {
                 t.push((format!("bb.layers.{stage}.blocks.{block}.norm1.weight"), vec![e << stage]));
-                t.push((format!("bb.layers.{stage}.blocks.{block}.attn.relative_position_bias_table"), vec![(2 * window - 1) * (2 * window - 1), 3 << stage]));
+                t.push((
+                    format!("bb.layers.{stage}.blocks.{block}.attn.relative_position_bias_table"),
+                    vec![(2 * window - 1) * (2 * window - 1), 3 << stage],
+                ));
             }
         }
         t

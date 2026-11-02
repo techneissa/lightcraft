@@ -42,7 +42,11 @@ fn main() {
                     agree += 1;
                 }
             }
-            println!("logits: max |diff| {max:.4}, mean |diff| {:.5}, same side of 0 for {:.4}% of {n}", sum / n as f64, 100.0 * agree as f64 / n as f64);
+            println!(
+                "logits: max |diff| {max:.4}, mean |diff| {:.5}, same side of 0 for {:.4}% of {n}",
+                sum / n as f64,
+                100.0 * agree as f64 / n as f64
+            );
         }
     }
 }
