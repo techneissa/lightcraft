@@ -8,7 +8,7 @@
 # depends on them); a push to `custom` tests the whole workspace. The crates are split over three groups of about
 # equal test time; group 1 also runs fmt, clippy, layers, assets, parity and the wasm check. The tests run with
 # `cargo test`, not nextest: the demo library's scenes are cached per process, and nextest regenerates them for
-# every test (the ui-egui tests take 30 minutes under nextest, under 5 under cargo test).
+# every test (much slower for the ui-egui tests).
 #
 #   fork/ci.sh --part 1/3         group 1 of three: the one-off steps and its share of the tests (the default)
 #   fork/ci.sh --part 2/3         the second group

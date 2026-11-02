@@ -30,13 +30,14 @@ craft-fonts commit, Rust install and cache as `ci.yml`; it reads the packages an
 - **The three jobs** each run `cargo test -p …` for a group of crates, balanced by an estimated time per crate
   (seconds on a runner: its tests plus its lines of Rust over 200, times 0.1; `WEIGHT_OVERRIDES`, `ONEOFF_WEIGHT` and
   `HEIF_WEIGHT` in `fork/affected.py` hold measured values). `lightcraft-ui-egui` alone takes about 24 minutes
-  (2360 lib tests), so it sits in a group of its own and is the floor of any run that tests it. Group 1 also runs the one-off steps: format, clippy `-D warnings --all-targets` on the tested
+  (2360 lib tests), so it sits in a group of its own and is the floor of any run that tests it.
+  Group 1 also runs the one-off steps: format, clippy `-D warnings --all-targets` on the tested
   crates, `cargo xtask layers` and `assets`, `parity` when the tracker docs, a command or control crate
   (`lightcraft-engine`, `-develop`, `-ui-egui`, `-cli`) or a deleted or renamed file is in the change, `wasm` when a
   tested crate is in the web build. Every test run passes the features the whole workspace turns on (for example
   `lightcraft-engine/sam`, from the desktop app): `cargo test -p …` alone builds fewer and fails the tests that need
-  them. It is `cargo test`, not nextest: the demo scenes are cached per process (30 minutes under nextest for the
-  ui-egui tests, under 5 under cargo test). Each job writes its time to the run's summary.
+  them. It is `cargo test`, not nextest: the demo scenes are cached per process and nextest generates them again for
+  every test (`ci.yml` notes it is much slower here). Each job writes its time to the run's summary.
 - **`fork-gate`** is the last job and passes only when all three passed. Its name is what a pull request waits
   for. A failing test or clippy warning in a tested crate fails it.
 - The accepted failures in `known-failures.txt` ([known-failures.md](known-failures.md)) are skipped by cargo's test
