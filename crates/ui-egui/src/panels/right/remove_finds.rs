@@ -21,6 +21,7 @@ fn toast_new_outcome(app: &mut LightcraftApp, ui: &egui::Ui) {
 pub(super) fn section(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let view = app.session.finds.view(app.session.active());
     toast_new_outcome(app, ui);
+    super::remove_fill::notice(app, ui);
     if !view.running.is_empty() {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(200));
     }
@@ -55,13 +56,13 @@ pub(super) fn section(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             ui.add_enabled_ui(selected > 0, |ui| {
                 if text_button(ui, "findRemove", "Remove", false).clicked()
-                    && let Err(e) = app.run("spot.removeCandidates", json!({}))
+                    && let Err(e) = app.run("spot.removeCandidates", super::with_fill(app, "fill", json!({})))
                 {
                     app.toast(ui.ctx(), e);
                 }
             });
             if text_button(ui, "findRemoveAll", "Remove All", false).clicked()
-                && let Err(e) = app.run("spot.removeCandidates", json!({"all": true}))
+                && let Err(e) = app.run("spot.removeCandidates", super::with_fill(app, "fill", json!({"all": true})))
             {
                 app.toast(ui.ctx(), e);
             }

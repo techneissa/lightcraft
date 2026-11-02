@@ -3736,6 +3736,7 @@ dependencies = [
  "lightcraft-geom",
  "lightcraft-gpu",
  "lightcraft-heif",
+ "lightcraft-lama",
  "lightcraft-lensdb",
  "lightcraft-macraw",
  "lightcraft-map",
@@ -3847,6 +3848,20 @@ name = "lightcraft-inpaint"
 version = "0.17.0"
 dependencies = [
  "rayon",
+]
+
+[[package]]
+name = "lightcraft-lama"
+version = "0.17.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "image",
+ "lightcraft-inpaint",
+ "lightcraft-testkit",
+ "log",
+ "thiserror 2.0.21",
+ "zip 7.4.0",
 ]
 
 [[package]]

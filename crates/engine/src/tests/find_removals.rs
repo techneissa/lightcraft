@@ -10,7 +10,7 @@ use serde_json::json;
 use crate::find_removals::{Job, PeopleSources, find};
 use crate::{ErrorKind, Session};
 
-fn temp_dir(tag: &str) -> PathBuf {
+pub(super) fn temp_dir(tag: &str) -> PathBuf {
     let d = std::env::temp_dir().join(format!("lc-find-removals-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
@@ -18,7 +18,7 @@ fn temp_dir(tag: &str) -> PathBuf {
 }
 
 /// A sky with one sagging wire, as a PNG in `dir`, opened in a session.
-fn session_with_wire(dir: &std::path::Path) -> Session {
+pub(super) fn session_with_wire(dir: &std::path::Path) -> Session {
     let (w, h) = (1200usize, 800usize);
     let data: Vec<[u8; 4]> = (0..w * h)
         .map(|i| {

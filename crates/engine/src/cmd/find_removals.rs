@@ -1,11 +1,12 @@
 //! `spot.findPeople`, `spot.findWires` and the commands that act on what they find: select a candidate, remove the
 //! selected (or all) with content-aware spots in one undo step, forget them. See [`crate::find_removals`].
 
-use lightcraft_develop::{Spot, SpotMode};
+use lightcraft_develop::{Spot, SpotFill, SpotMode};
 use lightcraft_geom::Point;
 use lightcraft_pipeline::find::{Kind, SPOT_FEATHER};
 use serde_json::{Value, json};
 
+use super::lama::{describe, fill_param};
 use super::masks::SPOT_SIZE;
 use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active};
 use crate::Session;
@@ -41,7 +42,7 @@ fn state_json(s: &Session) -> Value {
 }
 
 /// Spots for `entries` appended to the active photo's, in one undo step. Returns (spots added, index of the first).
-fn add_spots(s: &mut Session, c: &str, entries: &[Entry]) -> crate::Result<(usize, usize)> {
+fn add_spots(s: &mut Session, c: &str, entries: &[Entry], fill: SpotFill) -> crate::Result<(usize, usize)> {
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
     let first = d.spots.len();
@@ -57,6 +58,7 @@ fn add_spots(s: &mut Session, c: &str, entries: &[Entry]) -> crate::Result<(usiz
                 feather: SPOT_FEATHER,
                 opacity: 100.0,
                 source_offset: None,
+                fill,
             });
         }
     }
@@ -81,6 +83,7 @@ fn add_spots(s: &mut Session, c: &str, entries: &[Entry]) -> crate::Result<(usiz
 fn find(s: &mut Session, c: &str, job: Job, p: &Value) -> crate::Result<Value> {
     let wait = bool_or(p, "wait", false);
     let add = bool_or(p, "add", false);
+    let fill = fill_param(c, p, SpotMode::Fill)?;
     if add && !wait && s.segmenter.background {
         return Err(bad(c, "`add` needs `wait: true` here (the app finds in the background); remove with spot.removeCandidates once found"));
     }
@@ -95,9 +98,10 @@ fn find(s: &mut Session, c: &str, job: Job, p: &Value) -> crate::Result<Value> {
         let ids: Vec<u32> = s.finds.view(s.active()).entries.iter().filter(|e| e.candidate.kind == kind).map(|e| e.id).collect();
         let mine = s.finds.take(s.active(), Some(&ids), false);
         if !mine.is_empty() {
-            let (added, _) = add_spots(s, c, &mine)?;
+            let (added, _) = add_spots(s, c, &mine, fill)?;
             out["added"] = json!(mine.len());
             out["spots"] = json!(added);
+            describe(s, fill, &mut out);
         } else {
             out["added"] = json!(0);
         }
@@ -112,7 +116,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "Find People",
             [],
             None,
-            "{includeMain?: bool (false: the largest, most central person, however small, is the main subject and not proposed), wait?: bool, add?: bool (remove everything found at once; needs wait)} — finds people with SAM 3's \"person\" mask (rough shapes from faces when only the YuNet detector is installed), on a thread with a row in the activity stack; nothing is added to the photo. Without `wait` the app returns {started} and spot.candidates has the result → {candidates: [{id, kind, source, main, selected, area, score, bbox, outline, spots}], text}",
+            "{includeMain?: bool (false: the largest, most central person, however small, is the main subject and not proposed), wait?: bool, add?: bool (remove everything found at once; needs wait), fill?: classic|lama (with add)} — finds people with SAM 3's \"person\" mask (rough shapes from faces when only the YuNet detector is installed), on a thread with a row in the activity stack; nothing is added to the photo. Without `wait` the app returns {started} and spot.candidates has the result → {candidates: [{id, kind, source, main, selected, area, score, bbox, outline, spots}], text}",
             has_active,
             |s, p| {
                 let include_main = bool_or(p, "includeMain", false);
@@ -124,7 +128,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "Find Wires",
             [],
             None,
-            "{sensitivity?: 0..100 (50), wait?: bool, add?: bool (remove everything found at once; needs wait)} — finds power lines and cables (long, thin, dark, gently curved lines on smooth bright areas such as sky) with a pure-Rust thin-line detector; nothing is added to the photo → as spot.findPeople",
+            "{sensitivity?: 0..100 (50), wait?: bool, add?: bool (remove everything found at once; needs wait), fill?: classic|lama (with add)} — finds power lines and cables (long, thin, dark, gently curved lines on smooth bright areas such as sky) with a pure-Rust thin-line detector; nothing is added to the photo → as spot.findPeople",
             has_active,
             |s, p| {
                 let sensitivity = f64_or(p, "sensitivity", 50.0).clamp(0.0, 100.0) as f32;
@@ -197,7 +201,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "Remove Found Items",
             [],
             None,
-            "{ids?: [n], all?: bool} — remove the selected candidates (or `ids`, or `all`) with content-aware spots, grown a little, one undo step; each spot is then an ordinary editable spot → {removed, spots, index}",
+            "{ids?: [n], all?: bool, fill?: classic|lama (default classic; LaMa needs its model, else the spots show the Classic fill)} — remove the selected candidates (or `ids`, or `all`) with content-aware spots, grown a little, one undo step; each spot is then an ordinary editable spot → {removed, spots, index}",
             has_active,
             |s, p| {
                 let c = "spot.removeCandidates";
@@ -213,6 +217,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                     None => None,
                 };
                 let all = bool_or(p, "all", false);
+                let fill = fill_param(c, p, SpotMode::Fill)?;
                 if ids.is_none() && !all && !s.finds.view(s.active()).entries.iter().any(|e| e.selected) {
                     return Err(bad(c, "nothing is selected: select a found item, or pass `all: true`"));
                 }
@@ -220,7 +225,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                 if taken.is_empty() {
                     return Err(bad(c, "no such candidate (it may have been removed)"));
                 }
-                let (spots, index) = match add_spots(s, c, &taken) {
+                let (spots, index) = match add_spots(s, c, &taken, fill) {
                     Ok(r) => r,
                     Err(e) => {
                         // nothing was added: keep the candidates
@@ -228,7 +233,9 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                         return Err(e);
                     }
                 };
-                Ok(json!({"removed": taken.len(), "spots": spots, "index": index}))
+                let mut out = json!({"removed": taken.len(), "spots": spots, "index": index});
+                describe(s, fill, &mut out);
+                Ok(out)
             }
         ),
         cmd!(
