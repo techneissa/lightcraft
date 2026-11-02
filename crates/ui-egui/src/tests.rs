@@ -43,6 +43,7 @@ mod export_reveal;
 mod filmstrip;
 mod filmstrip_drag;
 mod find_removals;
+mod remove_fill;
 mod fixed_slider_labels;
 mod focus_point;
 mod folder_drop;

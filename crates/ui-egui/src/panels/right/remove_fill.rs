@@ -13,7 +13,7 @@ use super::{LightcraftApp, Tokens, json, register, text_button};
 
 /// The memory flag of the "Download LaMa?" question.
 fn ask_id() -> egui::Id {
-    egui::Id::new("lc-lama-ask")
+    egui::Id::unique("lc-lama-ask")
 }
 
 /// `params` for a command that makes spots of `mode` (`remove`, `fill`, `heal`, `clone`), with the chosen fill when
@@ -66,7 +66,9 @@ pub(super) fn heading(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         match picked {
             Some(SpotFill::Classic) => app.ui.remove_fill = SpotFill::Classic,
             Some(SpotFill::Lama) if installed => app.ui.remove_fill = SpotFill::Lama,
-            Some(SpotFill::Lama) if !downloading => ui.ctx().data_mut(|d| d.insert_temp(ask_id(), true)),
+            Some(SpotFill::Lama) if !downloading => {
+                ui.ctx().data_mut(|d| d.insert_temp(ask_id(), true));
+            }
             _ => {}
         }
         if downloading {
@@ -83,7 +85,7 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     let t = Tokens::get(ctx);
     let folder = app.session.lama.dir().map(|d| d.display().to_string()).unwrap_or_default();
-    let modal = egui::Modal::new(egui::Id::new("lc-lama-ask-modal")).show(ctx, |ui| {
+    let modal = egui::Modal::new(egui::Id::unique("lc-lama-ask-modal")).show(ctx, |ui| {
         ui.set_width(380.0);
         ui.label(egui::RichText::new(crate::i18n::tr("Download LaMa?")).font(t.semibold(15.0)).color(t.text));
         ui.add_space(8.0);
