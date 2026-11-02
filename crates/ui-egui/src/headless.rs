@@ -89,6 +89,20 @@ pub struct HeadlessView {
     pub clipboard: String,
     /// Events the host owes the next frame (a paste request's paste, as a desktop host sends it).
     owed: Vec<egui::Event>,
+    /// The accessibility nodes of the last frame (tests; `ctx.enable_accesskit()` turns the tree on).
+    #[cfg(test)]
+    pub(crate) a11y: Vec<A11yNode>,
+}
+
+/// One accessibility node of a frame, as the hover-help test reads it (fork/hover-help.md).
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct A11yNode {
+    pub role: String,
+    pub label: String,
+    /// The hover text, when the widget has one (`on_hover_text` sets it).
+    pub description: String,
+    pub clickable: bool,
 }
 
 impl Default for HeadlessView {
@@ -111,6 +125,8 @@ impl HeadlessView {
             frames: 0,
             clipboard: String::new(),
             owed: vec![],
+            #[cfg(test)]
+            a11y: vec![],
         }
     }
 
@@ -154,6 +170,19 @@ impl HeadlessView {
         raw.events.splice(0..0, std::mem::take(&mut self.owed));
         let mut out = self.ctx.run_ui(raw, run_ui);
         self.frames += 1;
+        #[cfg(test)]
+        if let Some(update) = out.platform_output.accesskit_update.take() {
+            self.a11y = update
+                .nodes
+                .iter()
+                .map(|(_, n)| A11yNode {
+                    role: format!("{:?}", n.role()),
+                    label: n.label().unwrap_or_default().to_string(),
+                    description: n.description().unwrap_or_default().to_string(),
+                    clickable: n.supports_action(egui::accesskit::Action::Click),
+                })
+                .collect();
+        }
         self.textures.apply(std::mem::take(&mut out.textures_delta));
         self.shapes = std::mem::take(&mut out.shapes);
         self.pixels_per_point = out.pixels_per_point;

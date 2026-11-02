@@ -1,6 +1,6 @@
 use super::{
     Align2, ControlSpec, DevelopSettings, Icon, LightcraftApp, PhotoId, Section, Sense, SliderOut, Tokens, Track, Value, controls, divider, json,
-    pos2, register, section_header, slider, vec2,
+    pos2, register, slider, vec2,
 };
 
 /// Commit a slider interaction: begin → live updates → end, so a drag is one undo step.
@@ -229,8 +229,13 @@ pub(super) fn section(
     body: impl FnOnce(&mut LightcraftApp, &mut egui::Ui, &DevelopSettings),
 ) {
     let open = app.ui.section_open(id);
-    let (resp, toggled) = section_header(ui, id, title, open, Some(d.section_enabled(id)));
-    if let Some(on) = toggled {
+    let crate::widgets::SectionHeader { resp, eye: toggled, solo_clicked } =
+        crate::widgets::section_header_solo(ui, id, title, open, Some(d.section_enabled(id)), Some(app.ui.single_panel));
+    if solo_clicked {
+        if let Err(e) = app.run("view.soloSections", json!({"on": !app.ui.single_panel})) {
+            app.toast(ui.ctx(), e);
+        }
+    } else if let Some(on) = toggled {
         let _ = app.run("develop.sectionEnabled", json!({"section": id, "enabled": on}));
     } else if resp.clicked() {
         // ⌥-click opens just this section, as in Lightroom Classic
@@ -388,9 +393,11 @@ pub(super) fn header_buttons(ui: &mut egui::Ui, bw: bool, hdr: bool, reset_tip: 
             for &i in row {
                 let (id, label, active) = left[i];
                 let mut resp = crate::widgets::text_button(ui, id, crate::i18n::tr(label), active);
-                if id == "hdr" {
+                match id {
                     // HDR editing, next to B&W as Lightroom has it
-                    resp = resp.on_hover_text(crate::i18n::tr("Edit in HDR: highlights above SDR white, for HDR exports and displays"));
+                    "hdr" => resp = resp.on_hover_text(crate::i18n::tr("Edit in HDR: highlights above SDR white, for HDR exports and displays")),
+                    "auto" => resp = resp.on_hover_text(crate::i18n::tr("Auto Adjust Settings")),
+                    _ => resp = resp.on_hover_text(crate::i18n::tr(if active { "Switch to Color (V)" } else { "Switch to Black & White (V)" })),
                 }
                 let clicked = resp.clicked();
                 match id {

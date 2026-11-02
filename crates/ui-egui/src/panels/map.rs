@@ -475,6 +475,13 @@ fn filter_bar(app: &mut LightcraftApp, ui: &mut egui::Ui, bar: Rect) {
         let rich = egui::RichText::new(text).font(if on { t.semibold(12.0) } else { t.font(12.0) }).color(if on { t.text } else { t.text_label });
         let b = child.add(egui::Button::new(rich).selected(on).fill(if on { t.tool_active } else { egui::Color32::TRANSPARENT }));
         register(&child, format!("map:filter:{}", mode.id()), b.rect);
+        let tip = match mode {
+            LocationFilter::Visible => "Show Photos in View",
+            LocationFilter::Tagged => "Show Photos With Location",
+            LocationFilter::Untagged => "Show Photos Without Location",
+            LocationFilter::None => "Show All Photos",
+        };
+        let b = b.on_hover_text(crate::i18n::tr(tip));
         if b.clicked() && !on {
             let _ = app.run("map.locationFilter", json!({"mode": mode.id()}));
         }
