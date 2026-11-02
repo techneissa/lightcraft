@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Tests of fork/pr_plan.py: `python3 fork/test_pr_plan.py` (no cargo needed, no network)."""
+"""Tests of fork/affected.py: `python3 fork/test_pr_plan.py` (no cargo needed, no network)."""
 
 import re
 import sys
@@ -10,7 +10,7 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(HERE))
 
-import pr_plan  # noqa: E402
+import affected as pr_plan  # noqa: E402
 
 
 def pkg(dir_, deps=(), doc=True, features=()):
@@ -57,14 +57,14 @@ class Scope(unittest.TestCase):
         self.assertIn("lightcraft-ui-egui", plan("crates/testkit/src/lib.rs")["crates"])
 
     def test_workspace_wide_files_test_everything(self):
-        for path in ["Cargo.lock", "Cargo.toml", ".cargo/config.toml", "xtask/src/ci.rs", ".github/workflows/fork-pr.yml", "fork/known-failures.txt"]:
+        for path in ["Cargo.lock", "Cargo.toml", ".cargo/config.toml", "xtask/src/ci.rs", ".github/workflows/fork-ci.yml", "fork/known-failures.txt"]:
             r = plan(path)
             self.assertTrue(r["full"], path)
             self.assertEqual(r["crates"], sorted(PKGS), path)
             self.assertEqual(r["clippy_args"], "--workspace", path)
 
-    def test_the_plan_script_and_the_test_runner_test_everything(self):
-        for path in ["fork/pr_plan.py", "fork/skip-known-failures.sh"]:
+    def test_the_ci_files_and_the_test_runner_test_everything(self):
+        for path in ["fork/affected.py", "fork/skip-known-failures.sh"]:
             self.assertTrue(plan(path)["full"], path)
 
     def test_notes_run_the_format_check_only(self):
@@ -78,18 +78,13 @@ class Scope(unittest.TestCase):
             self.assertEqual(r["tests"][0]["packages"], "", path)
 
     def test_a_file_outside_every_crate_that_is_not_markdown_tests_everything(self):
-        for path in ["fork/tests.d/x.txt", "assets/logo.png", "LICENSE-MIT", "packaging/linux/a.sh", "fork/sync-docs.py"]:
+        for path in ["fork/tests.sh", "assets/logo.png", "LICENSE-MIT", "packaging/linux/a.sh", "fork/sync-docs.py"]:
             self.assertTrue(plan(path)["full"], path)
 
-    def test_inert_dirs_are_the_way_to_exempt_a_folder(self):
-        old = pr_plan.INERT_DIRS
-        pr_plan.INERT_DIRS = ("fork/tests.d/",)
-        try:
-            r = plan("fork/tests.d/x.txt")
-            self.assertFalse(r["full"])
-            self.assertFalse(r["rust"])
-        finally:
-            pr_plan.INERT_DIRS = old
+    def test_the_fork_test_lists_are_no_build_input(self):
+        r = plan("fork/tests.d/x.txt", "fork/x.md")
+        self.assertFalse(r["full"])
+        self.assertFalse(r["rust"])
 
     def test_markdown_inside_a_crate_counts_for_the_crate(self):
         self.assertEqual(plan("crates/geom/README.md")["changed"], ["lightcraft-geom"])
@@ -202,16 +197,55 @@ class Features(unittest.TestCase):
         self.assertEqual(pkgs["b"]["deps"], {"a"})
 
 
-class Git(unittest.TestCase):
-    def test_name_status_parsing(self):
-        out = "M\0crates/a/x.rs\0D\0old.png\0R100\0from.rs\0to.rs\0A\0new.rs\0"
+class Input(unittest.TestCase):
+    def test_plain_paths(self):
+        self.assertEqual(pr_plan.parse_changed("a/b.rs\n\n c.md \n"), [("a/b.rs", False), ("c.md", False)])
+
+    def test_name_status_lines(self):
+        out = "M\tcrates/a/x.rs\nD\told.png\nR100\tfrom.rs\tto.rs\nA\tnew.rs\n"
         self.assertEqual(
-            pr_plan.parse_name_status(out),
+            pr_plan.parse_changed(out),
             [("crates/a/x.rs", False), ("old.png", True), ("from.rs", True), ("to.rs", False), ("new.rs", False)],
         )
 
     def test_empty_diff(self):
-        self.assertEqual(pr_plan.parse_name_status(""), [])
+        self.assertEqual(pr_plan.parse_changed(""), [])
+
+    def test_a_push_tests_everything(self):
+        r = pr_plan.plan([], PKGS, WASM, weights=WEIGHTS, force_full=True)
+        self.assertTrue(r["full"])
+        self.assertEqual(r["crates"], sorted(PKGS))
+        self.assertTrue(r["parity"] and r["heif"])
+
+
+class ShellVars(unittest.TestCase):
+    def vars(self, part, *paths):
+        out = pr_plan.shell_vars(plan(*paths), part)
+        return dict(line.split("=", 1) for line in out.splitlines())
+
+    def test_group_one_runs_the_one_off_steps_and_the_others_do_not(self):
+        self.assertEqual(self.vars(1, "Cargo.lock")["ONEOFF"], "1")
+        self.assertEqual(self.vars(2, "Cargo.lock")["ONEOFF"], "0")
+        self.assertEqual(self.vars(3, "Cargo.lock")["ONEOFF"], "0")
+
+    def test_values_are_shell_quoted(self):
+        v = pr_plan.shell_vars(plan("crates/ui-egui/src/a.rs"), 1)
+        self.assertIn("CLIPPY_ARGS='-p lightcraft", v)
+
+    def test_a_group_that_does_not_exist_runs_nothing(self):
+        v = self.vars(3, "docs/foo.md")
+        self.assertEqual((v["ONEOFF"], v["PACKAGES"], v["RUST"], v["SCOPE"]), ("0", "''", "0", "none"))
+
+    def test_notes_only_scope_is_none_and_full_is_full(self):
+        self.assertEqual(self.vars(1, "docs/foo.md")["SCOPE"], "none")
+        self.assertEqual(self.vars(1, "Cargo.lock")["SCOPE"], "full")
+
+    def test_doc_features_cover_only_the_crates_with_doc_tests(self):
+        r = plan("Cargo.lock")
+        leg = next(t for t in r["tests"] if "lightcraft-engine" in t["crates"])
+        self.assertEqual(leg["doc_features"], "--features lightcraft-engine/sam")
+        leg = next(t for t in r["tests"] if "lightcraft" in t["crates"])  # the app has no library: no doc tests
+        self.assertNotIn("-p lightcraft ", leg["doc_packages"] + " ")
 
 
 class Drift(unittest.TestCase):
@@ -233,17 +267,17 @@ class Drift(unittest.TestCase):
             body = src.split(f"const {const}", 1)[1].split("];", 1)[0]
             self.assertEqual(set(re.findall(r'"([^"]+)"', body)), mine, const)
 
-    def test_workflow_uses_the_same_fonts_commit_and_packages_as_ci_yml(self):
-        ci = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
-        mine = (ROOT / ".github/workflows/fork-pr.yml").read_text(encoding="utf-8")
-        ref = re.search(r"craft-fonts-ref:\s*([0-9a-f]{40})", ci).group(1)
-        self.assertIn(ref, mine)
-        block = r"packages:\s*>-\n((?: +[a-z0-9][a-z0-9 .+-]*\n)+)"
-        ci_pkgs = re.search(block, ci).group(1).split()
-        for found in re.findall(block, mine):  # every job installs the same packages
-            self.assertEqual(sorted(found.split()), sorted(ci_pkgs))
-        mine_pkgs = ci_pkgs
-        self.assertEqual(sorted(ci_pkgs), sorted(mine_pkgs))
+    def test_xtask_ci_steps_are_the_ones_fork_ci_sh_runs(self):
+        """A step upstream adds to `cargo xtask ci` has to be added to fork/ci.sh (and here) by hand."""
+        src = (ROOT / "xtask/src/ci.rs").read_text(encoding="utf-8")
+        body = src.split("let mut steps: Vec<Step> = vec![", 1)[1].split("\n    ];", 1)[0]
+        names = set(re.findall(r'^\s{12}"([a-z-]+)",$', body, re.M))
+        names |= set(re.findall(r'steps\.push\(\(\s*"([a-z-]+)"', src))
+        known = {"fmt", "clippy", "heif", "test", "gpu-backends", "parity", "layers", "assets", "wasm"}
+        self.assertEqual(names, known)
+        script = (ROOT / "fork/ci.sh").read_text(encoding="utf-8")
+        for step in known - {"gpu-backends"}:  # no GPU on the runners
+            self.assertIn(step, script)
 
     def test_wasm_set_reads_the_layer_table(self):
         pkgs = {n: pkg(f"x/{n}") for n in ["lightcraft-geom", "lightcraft-ui-egui", "lightcraft-testkit", "lightcraft-web", "lightcraft-cli", "xtask"]}

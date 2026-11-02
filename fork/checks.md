@@ -4,12 +4,11 @@ Check in batches:
 - after each change, and once more at the end of the round: only the tests of the code it touched
   (`cargo test -p <crate> <filter>`), `cargo clippy -p <crate> --all-targets -- -D warnings` for the crates it
   touched, and `cargo fmt --all --check`;
-- a pull request waits for **`fork-gate`** (`fork-pr.yml`): it tests the changed crates and the crates that depend
+- a pull request waits for **`fork-gate`** (`fork-ci.yml`): it tests the changed crates and the crates that depend
   on them, on three machines, and fails for any failing test or clippy warning in them
-  ([fork/github-builds.md](github-builds.md)). Merge when `fork-gate` is green; the official `CI` does not run
-  on pull requests into `custom`;
-- the full suite runs on GitHub, not on this Mac: a push to `custom` starts Fork CI (`fork-ci.yml`), which runs the
-  official CI (`cargo xtask ci`) on `custom`. Check it with `gh run list -R techneissa/lightcraft -w CI -b custom`
+  ([fork/github-builds.md](github-builds.md)). Merge when `fork-gate` is green;
+- the full suite runs on GitHub, not on this Mac: a push to `custom` starts the same workflow (Fork CI) on the whole
+  workspace, as `cargo xtask ci` would. Check it with `gh run list -R techneissa/lightcraft -w "Fork CI" -b custom`
   and fix a failure in the next round.
 
 This fork reads `CLAUDE.md`'s "before every commit" and "run the full one locally before merging" as the above:

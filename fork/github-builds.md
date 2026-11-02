@@ -9,56 +9,53 @@ fine-grained token "BuildCraft forks" (the LightCraft, PdfCraft and SolidCraft f
 read and write): GitHub's own token may not push an official update that changes a workflow file. Without the
 secret it uses GitHub's own token.
 
-The workflow `.github/workflows/fork-ci.yml` (Actions ▸ Fork CI) runs the official CI (`ci.yml`, `cargo xtask ci` on
-Linux) on `custom` after every push to it, the daily merge included, so the full suite runs on GitHub and not on
-this Mac. The official `CI` workflow must stay enabled on the fork for it (`gh workflow enable CI -R
-techneissa/lightcraft`).
+## Fork CI and `fork-gate`
 
-## Pull requests: `fork-gate`
+The workflow `.github/workflows/fork-ci.yml` (Actions ▸ Fork CI) is the check on GitHub, so the full suite never runs
+on this Mac. One workflow for both events, through the suite's shared gate workflow (the same Ubuntu packages,
+craft-fonts commit, Rust install and cache as `ci.yml`; it reads the packages and the commit from `ci.yml`), running
+`fork/ci.sh` as three jobs at once (`gate (1)` to `gate (3)`):
 
-A pull request to `custom` waits for one check: **`fork-gate`** (workflow `.github/workflows/fork-pr.yml`, Actions ▸
-Fork PR). It tests what the pull request can break, on three machines at once, instead of the whole workspace on
-one (the official `ci.yml` took 35 to 55 minutes per PR). The jobs:
+- **A pull request to `custom`** tests what it can break. `fork/affected.py` lists the crates with a changed file
+  plus every workspace crate that depends on one (`cargo metadata`; normal, dev and build dependencies).
+  `Cargo.toml`, `Cargo.lock`, `.cargo/`, `.config/`, `.github/`, `xtask/`, `clippy.toml`, `rustfmt.toml`,
+  `fork/known-failures.txt`, `fork/skip-known-failures.sh`, `fork/ci.sh`, `fork/affected.py` or any file outside the
+  crates that is not Markdown (it may be a build input) tests every crate. Exceptions: a file a crate compiles in
+  counts for that crate (`EMBEDDED`, copied from `xtask/src/ci_quick.rs`, whose test keeps it complete), and
+  `fork/tests.d/` is no build input. A change to notes only (Markdown outside the crates) runs the format check and
+  nothing else.
+- **A push to `custom`** (the daily upstream merge included) tests everything: the steps of `cargo xtask ci`
+  (format, clippy, the `heif` feature, tests and doc tests, parity, layers, assets, wasm) except the GPU hardware
+  run, which needs an adapter the runners lack.
+- **The three jobs** each run `cargo test -p …` for a group of crates, balanced by a weight per crate (its tests plus
+  its lines of Rust over 200; `WEIGHT_OVERRIDES`, `ONEOFF_WEIGHT` and `HEIF_WEIGHT` in `fork/affected.py` hold
+  measured values). Group 1 also runs the one-off steps: format, clippy `-D warnings --all-targets` on the tested
+  crates, `cargo xtask layers` and `assets`, `parity` when the tracker docs, a command or control crate
+  (`lightcraft-engine`, `-develop`, `-ui-egui`, `-cli`) or a deleted or renamed file is in the change, `wasm` when a
+  tested crate is in the web build. Every test run passes the features the whole workspace turns on (for example
+  `lightcraft-engine/sam`, from the desktop app): `cargo test -p …` alone builds fewer and fails the tests that need
+  them. It is `cargo test`, not nextest: the demo scenes are cached per process (30 minutes under nextest for the
+  ui-egui tests, under 5 under cargo test). Each job writes its time to the run's summary.
+- **`fork-gate`** is the last job and passes only when all three passed. Its name is what a pull request waits
+  for. A failing test or clippy warning in a tested crate fails it.
+- The accepted failures in `known-failures.txt` ([known-failures.md](known-failures.md)) are skipped by cargo's test
+  runner on Linux (`.cargo/config.toml`), so a red run is a new failure.
 
-- `plan`: `fork/pr_plan.py` lists the crates the PR changes, plus every workspace crate that depends on them
-  (`cargo metadata`, normal, dev and build dependencies). A change to `Cargo.lock`, the root `Cargo.toml`,
-  `.cargo/`, `.config/`, `xtask/`, `.github/`, `clippy.toml`, `rustfmt.toml`, `fork/known-failures.txt`,
-  `fork/skip-known-failures.sh` or the plan script itself means every crate. A file outside every crate counts for
-  the crate that compiles it in (`EMBEDDED` in `xtask/src/ci_quick.rs`, whose test keeps that list complete;
-  `fork/test_pr_plan.py` checks the script's copy).
-  The script also splits the crates into three groups of about equal test time (a crate's weight: its tests plus
-  its lines of Rust over 200; `WEIGHT_OVERRIDES` in the script holds measured values).
-  Run it on this Mac: `python3 fork/pr_plan.py --base mine/custom`; its tests: `python3 fork/test_pr_plan.py`.
-- `tests (1/3)`, `(2/3)`, `(3/3)`: three machines at once. Each runs `cargo test -p …` for its group's crates (lib,
-  bins and integration tests, then doc tests), plus the `heif` tests in one group when planned. Same apt packages,
-  craft-fonts commit and Rust install as `ci.yml`; a Rust cache per job. They go through the test runner in
-  `.cargo/config.toml`, so the accepted failures in `known-failures.txt` ([known-failures.md](known-failures.md))
-  are skipped as in Fork CI. Each group writes its time to the run's summary. **Group 1 also runs the one-off
-  steps**, which count as weight in the balance: `cargo fmt --all --check`; clippy `-D warnings --all-targets` on
-  the planned crates (and with the `heif` feature when `lightcraft-codecs` or `lightcraft-heif` is planned);
-  `cargo xtask layers` and `assets`; `cargo xtask parity` when the tracker docs, a command or control crate
-  (`lightcraft-engine`, `-develop`, `-ui-egui`, `-cli`) or a deleted or renamed file is in the change;
-  `cargo xtask wasm` when a planned crate is in the web build.
-- `fork-gate`: passes only when `plan` and every test group passed. A failing test or clippy warning in a planned
-  crate fails it. Its name, `fork-gate`, is what merges wait for.
+On this Mac: `git diff --name-only mine/custom | python3 -I fork/affected.py --summary` shows the plan,
+`sh fork/ci.sh --part 1/3 --print` the commands, `python3 fork/test_affected.py` the script's tests. Nothing else of
+`fork/ci.sh` runs here. A run by hand (Actions ▸ Fork CI ▸ Run workflow) on `custom` also saves the dependency cache
+that pull requests then restore; other runs only read it.
 
-A pull request that changes only notes (Markdown outside the crates) tests no crate: group 1 runs the format check
-and nothing else. Any other file outside the crates (`fork/tests.d/*.txt`, a script, a picture) that no crate
-compiles in tests every crate (a build script or `include_str!` may read it); `INERT_DIRS` in `fork/pr_plan.py` exempts a folder.
-A newer push to the PR cancels the older run.
+### The official `CI` workflow is switched off
 
-A push to `custom` (the daily merge included) is unchanged: Fork CI runs the full official `cargo xtask ci`.
-Pull requests into `main` keep the official `CI` too.
+The official `CI` workflow (`ci.yml`, one machine, the whole suite, 35 to 55 minutes) is disabled in the repo's
+Actions settings, not by a file edit, so `ci.yml` stays as the official project has it and an official update never
+clashes on it. It would run a second full check on every pull request and push.
 
-### Hook in an official file
-
-`.github/workflows/ci.yml` has one added line under `pull_request:`: `branches-ignore: [custom]`, so the official
-check no longer runs on pull requests into `custom` (`fork-gate` replaces it). When an official update changes
-that `on:` block and the merge clashes, keep the line by hand. Without it both checks run on every PR.
-
-Both runs skip the tests in `known-failures.txt`: the skip is cargo's test runner on Linux (`.cargo/config.toml`),
-so it applies to every `cargo test` on Linux, and no official workflow file is edited. A red run means a new
-failure.
+- Turn it off: `gh workflow disable CI -R techneissa/lightcraft` (Actions ▸ CI ▸ ⋯ ▸ Disable workflow).
+- Turn it back on: `gh workflow enable CI -R techneissa/lightcraft`.
+- Fork CI reads two values from `ci.yml` (the Ubuntu packages and the craft-fonts commit), so it keeps working while
+  `CI` is disabled; it fails with a message when `ci.yml` no longer has them.
 
 A daily agent (the T3 thread "Daily LightCraft Update", Grok 4.5 on Cursor, 09:00) runs the update without
 installing; when GitHub's run stopped on a clash, it merges by hand, runs the feature tests and pushes, and GitHub

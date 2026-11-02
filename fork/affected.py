@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
-"""Plan the checks of a pull request to `custom` (.github/workflows/fork-pr.yml).
+"""Which workspace crates a pull request can affect, and how Fork CI splits them (fork/ci.sh).
 
-A pull request tests what it can break: the workspace crates with a changed file, plus every workspace crate
-that depends on one of them (normal, dev and build dependencies, read from `cargo metadata --no-deps`). A
-change to a workspace-wide file tests every crate; a change to notes only (Markdown outside the crates) runs
-the format check and nothing else. The test groups are balanced for three machines; group 1 also runs the
-one-off steps (format, lint, layers, assets, parity, wasm).
+Reads the changed files on stdin and prints what to run. A change tests the crates with a changed file plus every
+workspace crate that depends on one of them (normal, dev and build dependencies, from `cargo metadata`). A
+workspace-wide file, or a file outside every crate that is not Markdown, tests every crate; a change to notes only
+(Markdown outside the crates) runs the format check and nothing else. A push to `custom` passes --full: everything.
 
-    python3 fork/pr_plan.py --base HEAD^1                 # the PR merge commit against its base
-    python3 fork/pr_plan.py --base mine/custom            # a local branch against custom
-    python3 fork/pr_plan.py --files names.txt             # one changed path per line (an earlier PR's list)
+    git diff --name-only BASE HEAD | python3 -I fork/affected.py            # prints `full`, `none` or the crates
+    git diff --name-status BASE HEAD | python3 -I fork/affected.py --sh --part 2/3   # shell variables for fork/ci.sh
+    gh pr diff 60 --name-only | python3 -I fork/affected.py --summary       # the whole plan, for a check by hand
 
-Prints the plan as JSON on stdout and a summary on stderr. With --github-output it also appends the plan's
-fields to $GITHUB_OUTPUT. Tests: `python3 fork/test_pr_plan.py`. Why and how: fork/github-builds.md.
+Input lines are a path, or `git diff --name-status` lines (`D<TAB>path`, `R100<TAB>old<TAB>new`; a deleted or
+renamed-away file can break a path the parity tracker cites). The tests split into --part N/T balanced groups; group 1
+also runs the one-off steps (format, lint, layers, assets, parity, wasm). Tests: `python3 fork/test_affected.py`.
+Why and how: fork/github-builds.md.
 """
 
 import argparse
 import json
 import os
 import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -36,19 +38,21 @@ WORKSPACE_WIDE_FILES = {
     "rust-toolchain.toml",
     "fork/known-failures.txt",
     "fork/skip-known-failures.sh",
-    "fork/pr_plan.py",
-    "fork/test_pr_plan.py",
+    "fork/affected.py",
+    "fork/test_affected.py",
+    "fork/ci.sh",
 }
 WORKSPACE_WIDE_DIRS = (".cargo/", ".config/", ".github/", "xtask/")
 
 # Files outside every crate folder that are not Markdown test every crate (a build script or `include_*!` may read
 # them), except the ones a crate is known to compile in (EMBEDDED below) and the folders listed here, which are
-# known to hold no build input. Empty on purpose: `fork/tests.d/` is the one worth listing once techneissa agrees.
-INERT_DIRS = ()
+# known to hold no build input. `fork/tests.d/` holds one text file of test commands per feature (FORK.md asks every
+# feature to add one); only `fork/tests.sh`, run by hand on the Mac, reads them.
+INERT_DIRS = ("fork/tests.d/",)
 
 # Files outside a crate's folder that the crate compiles in. Mirrors EMBEDDED in xtask/src/ci_quick.rs, whose test
 # `embedded_files_are_mapped` keeps it complete, so any other file outside every crate cannot change a build.
-# test_pr_plan.py checks that this table and the Rust one agree.
+# test_affected.py checks that this table and the Rust one agree.
 EMBEDDED = [
     ("assets/app-icon/", ["lightcraft", "lightcraft-ui-egui"]),
     ("assets/camera-profiles/", ["lightcraft-engine"]),
@@ -122,31 +126,22 @@ def workspace_packages(meta, root=ROOT):
     return pkgs
 
 
-def parse_name_status(out):
-    """`git diff --name-status -z -M` output to [(path, gone)]; a renamed-from path is gone."""
-    fields = out.split("\0")
-    changed, i = [], 0
-    while i < len(fields):
-        status = fields[i].strip()
-        i += 1
-        if not status or i >= len(fields):
+def parse_changed(text):
+    """Input lines to [(path, gone)]: a path, or `git diff --name-status` lines (tab separated)."""
+    changed = []
+    for line in text.splitlines():
+        if not line.strip():
             continue
-        kind = status[0]
-        first = fields[i]
-        i += 1
-        if kind in "RC":
-            changed.append((first, kind == "R"))
-            if i < len(fields):
-                changed.append((fields[i], False))
-                i += 1
+        if "\t" in line:
+            status, *paths = line.split("\t")
+            kind = status.strip()[:1]
+            if kind in "RC" and len(paths) == 2:
+                changed += [(paths[0], kind == "R"), (paths[1], False)]
+            elif paths:
+                changed.append((paths[0], kind == "D"))
         else:
-            changed.append((first, kind == "D"))
+            changed.append((line.strip(), False))
     return changed
-
-
-def changed_from_git(base, root=ROOT):
-    merge_base = run(["git", "merge-base", base, "HEAD"], root).strip()
-    return parse_name_status(run(["git", "diff", "--name-status", "-z", "-M", merge_base, "HEAD"], root))
 
 
 def owner(path, pkgs):
@@ -246,9 +241,9 @@ def features_args(crates, pkgs, lead=""):
     return f"{lead}--features {','.join(names)}" if names else ""
 
 
-def plan(changed, pkgs, wasm, groups=3, weights=None):
+def plan(changed, pkgs, wasm, groups=3, weights=None, force_full=False):
     """What the checks run. `changed` is [(path, gone)]; `weights` maps crate to test weight (default: measured on disk)."""
-    direct, full, tracker, gone_any = set(), False, False, False
+    direct, full, tracker, gone_any = set(), force_full, False, False
     for path, gone in changed:
         o = owner(path, pkgs)
         embedded = [n for n in embedders(path) if n in pkgs]
@@ -273,13 +268,15 @@ def plan(changed, pkgs, wasm, groups=3, weights=None):
     tests = []
     for number, (total, names) in enumerate(bins, 1):
         crates = [n for n in names if not n.startswith("+")]
+        doc = [n for n in crates if pkgs[n]["doc"]]
         tests.append(
             {
                 "group": number,
                 "name": f"{number}/{len(bins)}",
                 "packages": " ".join(f"-p {n}" for n in crates),
-                "doc_packages": " ".join(f"-p {n}" for n in crates if pkgs[n]["doc"]),
+                "doc_packages": " ".join(f"-p {n}" for n in doc),
                 "features": features_args(crates, pkgs),
+                "doc_features": features_args(doc, pkgs),
                 "heif": "+heif" in names,
                 "oneoff": "+oneoff" in names,
                 "weight": total,
@@ -314,46 +311,52 @@ def summary(result, files):
     return "\n".join(lines)
 
 
-def write_github_output(result, path):
-    flat = {
-        "full": str(result["full"]).lower(),
-        "rust": str(result["rust"]).lower(),
-        "crates": " ".join(result["crates"]),
-        "clippy_args": result["clippy_args"],
-        "wasm": str(result["wasm"]).lower(),
-        "parity": str(result["parity"]).lower(),
-        "heif": str(result["heif"]).lower(),
-        "tests": json.dumps(result["tests"], separators=(",", ":")),
+def shell_vars(result, part):
+    """Shell assignments for fork/ci.sh: what test group `part` (1-based) runs."""
+    t = next((t for t in result["tests"] if t["group"] == part), None)
+    scope = "full" if result["full"] else " ".join(result["crates"]) if result["rust"] else "none"
+    flag = lambda v: "1" if v else "0"  # noqa: E731
+    mine = t or {}
+    out = {
+        "SCOPE": scope,
+        "RUST": flag(result["rust"]),
+        "ONEOFF": flag(mine.get("oneoff")),
+        "CLIPPY_ARGS": result["clippy_args"],
+        "HEIF": flag(result["heif"]),
+        "PARITY": flag(result["parity"]),
+        "WASM": flag(result["wasm"]),
+        "PACKAGES": mine.get("packages", ""),
+        "DOC_PACKAGES": mine.get("doc_packages", ""),
+        "FEATURES": mine.get("features", ""),
+        "DOC_FEATURES": mine.get("doc_features", ""),
+        "HEIF_TESTS": flag(mine.get("heif")),
     }
-    with open(path, "a", encoding="utf-8") as out:
-        for key, value in flat.items():
-            out.write(f"{key}={value}\n")
+    return "\n".join(f"{k}={shlex.quote(v)}" for k, v in out.items())
 
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--base", help="git revision to compare HEAD with (merge base)")
-    ap.add_argument("--files", help="a file with one changed path per line (a path prefixed '-' counts as deleted)")
-    ap.add_argument("--metadata", help="read `cargo metadata --no-deps` JSON from this file")
-    ap.add_argument("--groups", type=int, default=3)
-    ap.add_argument("--github-output", action="store_true", help="append the plan to $GITHUB_OUTPUT")
+    ap.add_argument("--full", action="store_true", help="test everything (a push to custom, or FORK_CI_FULL=1)")
+    ap.add_argument("--part", default="1/3", help="N/T: the test group to print variables for (default 1/3)")
+    ap.add_argument("--metadata", help="read `cargo metadata` JSON from this file instead of running cargo")
+    mode = ap.add_mutually_exclusive_group()
+    mode.add_argument("--sh", action="store_true", help="print shell variables for the group (fork/ci.sh)")
+    mode.add_argument("--summary", action="store_true", help="print the whole plan, readable")
+    mode.add_argument("--json", action="store_true", help="print the whole plan as JSON")
     args = ap.parse_args(argv)
-    if bool(args.base) == bool(args.files):
-        ap.error("give exactly one of --base and --files")
+    part, _, total = args.part.partition("/")
+    part, total = int(part), int(total or 3)
     pkgs = workspace_packages(load_metadata(args.metadata))
-    if args.base:
-        changed = changed_from_git(args.base)
+    changed = parse_changed(sys.stdin.read())
+    result = plan(changed, pkgs, wasm_set(pkgs, ROOT / "xtask/src/layers.rs"), total, force_full=args.full)
+    if args.sh:
+        print(shell_vars(result, part))
+    elif args.summary:
+        print(summary(result, len(changed)))
+    elif args.json:
+        print(json.dumps(result, indent=2))
     else:
-        changed = []
-        for line in Path(args.files).read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line:
-                changed.append((line[1:], True) if line.startswith("-") else (line, False))
-    result = plan(changed, pkgs, wasm_set(pkgs, ROOT / "xtask/src/layers.rs"), args.groups)
-    print(summary(result, len(changed)), file=sys.stderr)
-    print(json.dumps(result, indent=2))
-    if args.github_output:
-        write_github_output(result, os.environ["GITHUB_OUTPUT"])
+        print("full" if result["full"] else " ".join(result["crates"]) if result["rust"] else "none")
 
 
 if __name__ == "__main__":
