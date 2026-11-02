@@ -154,6 +154,11 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     {
         return Some(r);
     }
+    if id.starts_with("view.toolStrip")
+        && let Some(r) = crate::panels::tool_strip_order::command(app, id, p)
+    {
+        return Some(r);
+    }
     if id.starts_with("lensDatabase.") {
         return Some(crate::dialogs::settings::lens_database::command(app, id, p));
     }

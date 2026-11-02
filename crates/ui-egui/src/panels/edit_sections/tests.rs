@@ -210,3 +210,86 @@ fn the_arrangement_is_saved_with_the_ui_state_and_old_state_loads_unchanged() {
     let loaded: crate::state::UiState = serde_json::from_value(old).unwrap();
     assert!(loaded.edit_sections.is_default());
 }
+
+fn header_rect(h: &Headless, section: EditSection) -> egui::Rect {
+    let id = format!("section:{}", section.id());
+    h.app.widgets.iter().find(|(w, _)| *w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"))
+}
+
+fn press_and_move(h: &mut Headless, from: egui::Pos2, to: egui::Pos2) {
+    h.app.synthetic.push(egui::Event::PointerMoved(from));
+    h.app.synthetic.push(egui::Event::PointerButton {
+        pos: from,
+        button: egui::PointerButton::Primary,
+        pressed: true,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.step();
+    for i in 1..=8 {
+        h.app.synthetic.push(egui::Event::PointerMoved(from + (to - from) * (i as f32 / 8.0)));
+        h.step();
+    }
+    h.step();
+}
+
+fn release(h: &mut Headless, at: egui::Pos2) {
+    h.app.synthetic.push(egui::Event::PointerButton {
+        pos: at,
+        button: egui::PointerButton::Primary,
+        pressed: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    for _ in 0..3 {
+        h.step();
+    }
+}
+
+/// Given the Edit panel, when a section's heading is dragged above another and released, then the
+/// section is there, a line showed where it would go, and the new order is in the saved UI state;
+/// a click on a heading still folds its section, and a drag given up moves nothing.
+#[test]
+fn dragging_a_heading_moves_its_section() {
+    let mut h = edit_open();
+    // every section folded, so every heading is on screen
+    h.app.ui.open_sections.clear();
+    h.step();
+    h.step();
+    // Optics, dragged to just above Color
+    let color_top = header_rect(&h, Color).top();
+    let (from, to) = (header_rect(&h, Optics).center(), egui::pos2(header_rect(&h, Optics).center().x - 40.0, color_top - 4.0));
+    // (the header's centre is left of its Solo and eye buttons, which keep their own presses)
+    press_and_move(&mut h, from, to);
+    assert_eq!(h.app.ui.dragging_edit_section, Some(Optics));
+    let line = h.app.widgets.iter().find(|(w, _)| w == "editSectionDrop").map(|(_, r)| *r).expect("the drop line is drawn");
+    assert!((line.center().y - color_top).abs() < 3.0, "the line is at the top of Color: {line:?} / {color_top}");
+    release(&mut h, to);
+    assert_eq!(h.app.ui.dragging_edit_section, None);
+    assert_eq!(headers(&mut h), ["light", "optics", "color", "effects", "detail", "calibration"]);
+    assert_eq!(order(&h.app.ui.edit_sections), [Light, Optics, Color, Effects, Detail, Calibration]);
+    assert!(!h.app.ui.section_open("optics"), "a drag does not open the section");
+    // saved
+    let back = serde_json::from_value::<crate::state::UiState>(serde_json::to_value(&h.app.ui).unwrap()).unwrap();
+    assert_eq!(back.edit_sections, h.app.ui.edit_sections);
+    // Esc leaves the order
+    let (from, to) = (header_rect(&h, Calibration).center(), egui::pos2(from.x, header_rect(&h, Light).top() - 4.0));
+    press_and_move(&mut h, from, to);
+    assert_eq!(h.app.ui.dragging_edit_section, Some(Calibration));
+    h.app.synthetic.push(egui::Event::Key {
+        key: egui::Key::Escape,
+        physical_key: None,
+        pressed: true,
+        repeat: false,
+        modifiers: egui::Modifiers::NONE,
+    });
+    h.step();
+    release(&mut h, to);
+    assert_eq!(headers(&mut h), ["light", "optics", "color", "effects", "detail", "calibration"]);
+    // a click still opens
+    assert!(!h.app.ui.section_open("detail"));
+    let r = h.request("ui.clickWidget", json!({"id": "section:detail", "fx": 0.3}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+    assert!(h.app.ui.section_open("detail"), "a click opens the section");
+    assert_eq!(order(&h.app.ui.edit_sections), [Light, Optics, Color, Effects, Detail, Calibration]);
+}

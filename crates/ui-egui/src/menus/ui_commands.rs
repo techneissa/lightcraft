@@ -334,6 +334,10 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.editSectionShow", "Show or Hide Edit Section", None, ""),
     ("view.editSectionMove", "Move Edit Section", None, ""),
     ("view.editSectionsReset", "Reset Edit Sections", None, ""),
+    // the tool strip's icons: {order?}; {tool, direction: up | down | before}
+    ("view.toolStrip", "Arrange Tool Strip", None, ""),
+    ("view.toolStripMove", "Move Tool Strip Icon", None, ""),
+    ("view.toolStripReset", "Reset Tool Strip Order", None, ""),
     // the lens database folder (Settings ▸ Import ▸ Lens profiles): {dir} = a lensfun folder, null clears it
     ("lensDatabase.get", "Lens Database Folder", None, ""),
     ("lensDatabase.set", "Set Lens Database Folder", None, ""),
