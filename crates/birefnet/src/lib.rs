@@ -29,6 +29,7 @@ mod swin;
 #[cfg(not(target_arch = "wasm32"))]
 mod weights;
 
+#[cfg(not(target_arch = "wasm32"))]
 pub use fetch::Variant;
 #[cfg(not(target_arch = "wasm32"))]
 mod run;
