@@ -251,6 +251,7 @@ fn bar_ui(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, bu: &mut BookUi, boo
     }
     let tag = match book.pages.len() {
         0 => crate::i18n::tr("No pages").to_string(),
+        1 if bu.page == 0 && book.cover => crate::i18n::tr("Cover · 1 page").to_string(),
         n if bu.page == 0 && book.cover => crate::i18n::tr_format!("Cover · {n} pages", n = n),
         n => crate::i18n::tr_format!("Page {i} of {n}", i = bu.page + 1, n = n),
     };

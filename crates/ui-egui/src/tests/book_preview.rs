@@ -316,3 +316,68 @@ fn a_book_of_two_hundred_pages_previews_and_turns_inside_the_frame_budget() {
     assert!(f.count > 0 && f.sum_ms / f.count as f32 <= 16.0, "{f:?}");
     assert_eq!(page(&h), 107, "four spreads on from 99·100");
 }
+
+/// Every photo's rating, flag and the count, to see that nothing under the preview changed.
+fn library_state(h: &Headless) -> (usize, Vec<(u64, u8, String)>) {
+    let photos: Vec<_> = h.app.session.catalog.photos().map(|p| (p.id.0, p.rating, format!("{:?}", p.flag))).collect();
+    (photos.len(), photos)
+}
+
+#[test]
+fn keys_the_preview_does_not_use_do_not_reach_the_library() {
+    let mut h = demo();
+    open(&mut h, 8);
+    let first = h.app.session.catalog.photos().next().map(|p| p.id.0).unwrap();
+    cmd(&mut h, "library.select", json!({"ids": [first]}));
+    let before = library_state(&h);
+    let selected = h.app.session.selected().to_vec();
+    for k in ["3", "x", "p", "5", "0", "Backspace", "Delete", "u"] {
+        key(&mut h, k);
+    }
+    assert!(h.app.ui.book.preview.is_some() && h.app.ui.fullscreen, "still open");
+    assert_eq!(library_state(&h), before, "ratings, flags and photos stay as they were");
+    assert_eq!(h.app.session.selected().to_vec(), selected, "the selection stays");
+    // the book's own undo stack gained nothing either
+    key_with(&mut h, "z", json!({"cmd": true}));
+    assert!(h.app.ui.book.preview.is_some());
+}
+
+#[test]
+fn a_page_drawn_from_thumbnails_says_rendering_until_its_render_arrives() {
+    let mut h = demo();
+    let photos: Vec<u64> = h.app.session.catalog.photos().take(8).map(|p| p.id.0).collect();
+    cmd(&mut h, "book.create", json!({"ids": photos, "preset": "one", "cover": true}));
+    cmd(&mut h, "view.book", json!({}));
+    // no settling: the cover's render is still on its way for the first frames
+    let r = h.request("engine.execute", json!({"command": "book.preview", "params": {}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    run_until(&mut h, |h| has(h, "book:previewRendering"));
+    assert!(!h.app.session.activity.list().iter().any(|t| t.kind == "preview"), "no row in the activity stack");
+    run_until(&mut h, |h| !has(h, "book:previewRendering"));
+    let r = crate::panels::book::preview::state(&h.app, h.time());
+    assert!(r["pagesReady"].as_u64() >= Some(1), "the label goes when the cover is ready: {r}");
+}
+
+#[test]
+fn never_more_than_two_renders_run_at_once() {
+    let mut h = demo();
+    open(&mut h, 8);
+    let mut worst = 0;
+    for round in 0..12 {
+        let to = ["last", "first", "next", "last", "first", "previous"][round % 6];
+        cmd_nosettle(&mut h, "book.previewPage", json!({"to": to}));
+        for _ in 0..6 {
+            h.step();
+            let r = crate::panels::book::preview::state(&h.app, h.time());
+            worst = worst.max(r["rendersRunning"].as_u64().unwrap_or(99));
+        }
+    }
+    assert!(worst <= 2, "{worst} renders at once");
+    run_until(&mut h, |h| crate::panels::book::preview::state(&h.app, h.time())["rendersRunning"] == 0);
+}
+
+/// `cmd` without waiting for the renders to settle.
+fn cmd_nosettle(h: &mut Headless, id: &str, params: Value) {
+    // (a turn past the cover or the last spread is refused: only the renders matter here)
+    let _ = h.request("engine.execute", json!({"command": id, "params": params}), T);
+}

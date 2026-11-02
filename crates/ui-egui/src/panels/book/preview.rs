@@ -32,6 +32,8 @@ use draw::Action;
 pub const CONTROLS_SECS: f64 = 2.5;
 /// Seconds a page turn takes.
 pub const SLIDE_SECS: f64 = 0.28;
+/// Seconds a page is drawn from thumbnails before the "Rendering…" label says so (no blink for a quick render).
+const RENDERING_AFTER_SECS: f64 = 0.3;
 /// Seconds the controls take to fade out.
 const FADE_SECS: f64 = 0.35;
 
@@ -79,6 +81,10 @@ pub struct Preview {
     pub frames: Frames,
     /// Failures already said (a failed page is said once).
     said: usize,
+    /// Since when the spread on show is drawn from thumbnails (egui time), for the "Rendering…" label.
+    standin_since: Option<f64>,
+    /// The book as of the last frame, so a frame clones it only when it changed.
+    copy: Option<lightcraft_engine::book::Book>,
 }
 
 /// Where a page turn goes.
@@ -141,6 +147,7 @@ pub fn state(app: &LightcraftApp, now: f64) -> Value {
         "reduceMotion": pv.reduce_motion,
         "pagesReady": pv.cache.ready(),
         "pagesRendering": pv.cache.pending(),
+        "rendersRunning": pv.cache.in_flight(),
         "frames": {"last": pv.frames.last_ms, "turnFrames": pv.frames.count,
             "turnAvg": if pv.frames.count > 0 { pv.frames.sum_ms / pv.frames.count as f32 } else { 0.0 },
             "turnMax": pv.frames.max_ms, "uploadMax": pv.frames.upload_ms,
@@ -207,6 +214,8 @@ fn open(app: &mut LightcraftApp, ctx: &Context, p: &Value) -> Result<(), String>
         cache: Cache::default(),
         frames: Frames::default(),
         said: 0,
+        standin_since: None,
+        copy: None,
     });
     app.ui.fullscreen = true;
     ctx.request_repaint();
@@ -254,7 +263,8 @@ fn go(app: &mut LightcraftApp, ctx: &Context, to: Turn) -> Result<(), String> {
     Ok(())
 }
 
-/// The preview's keys, before the general shortcuts. `true`: handled.
+/// The preview's keys, before the general shortcuts. While it is open every key is its own: `true`
+/// (the native menu keeps ⌘Q, which does not pass through here).
 pub(crate) fn handle_key(app: &mut LightcraftApp, ctx: &Context) -> bool {
     if !active(app) || app.ui.dialog.is_some() || app.ui.book.prompt.is_some() {
         return false;
@@ -274,7 +284,9 @@ pub(crate) fn handle_key(app: &mut LightcraftApp, ctx: &Context) -> bool {
     } else if key(egui::Key::End) {
         Turn::Last
     } else {
-        return false;
+        // every other key is swallowed: the library's shortcuts (ratings, flags, delete) would
+        // reach the selected photo under the preview
+        return true;
     };
     // (at the first or the last spread the key does nothing)
     let _ = go(app, ctx, to);
@@ -289,7 +301,15 @@ pub fn show(app: &mut LightcraftApp, ui: &mut Ui) {
     ui.painter().rect_filled(area, 0.0, draw::GROUND);
     register(ui, "book:preview", area);
     let Some(mut pv) = app.ui.book.preview.take() else { return };
-    let Ok(book) = app.session.books.find(Some(pv.book)).cloned() else {
+    match app.session.books.find(Some(pv.book)) {
+        Ok(live) => {
+            if pv.copy.as_ref() != Some(live) {
+                pv.copy = Some(live.clone());
+            }
+        }
+        Err(_) => pv.copy = None,
+    }
+    let Some(book) = pv.copy.take() else {
         // the book was deleted behind the preview
         app.ui.book.preview = Some(pv);
         close(app);
@@ -300,6 +320,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut Ui) {
     pv.page = pv.page.min(book.pages.len().saturating_sub(1));
     let current = spread_at(&spreads, pv.page);
     let Ok(page) = book.settings.page_size() else {
+        pv.copy = Some(book);
         app.ui.book.preview = Some(pv);
         return;
     };
@@ -342,6 +363,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut Ui) {
         pv.slide = None;
     }
     let painter = ui.painter_at(area);
+    let mut standin = false;
     match slide {
         Some(s) => {
             let t = ((now - s.started) / SLIDE_SECS).clamp(0.0, 1.0);
@@ -351,7 +373,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut Ui) {
             for (index, dx) in [(s.from, -dir * ease * travel), (s.to, dir * (1.0 - ease) * travel)] {
                 let pages = spreads.get(index).cloned().unwrap_or_default();
                 let rects = draw::spread_rects(area, size, pages.len(), dx);
-                draw::spread(app, &painter, &pv.cache, &book, &pages, &rects, edge);
+                let late = draw::spread(app, &painter, &pv.cache, &book, &pages, &rects, edge);
+                standin = late && index == s.to;
             }
             ctx.request_repaint();
         }
@@ -367,8 +390,25 @@ pub fn show(app: &mut LightcraftApp, ui: &mut Ui) {
                 );
             }
             let rects = draw::spread_rects(area, size, pages.len(), 0.0);
-            draw::spread(app, &painter, &pv.cache, &book, &pages, &rects, edge);
+            standin = draw::spread(app, &painter, &pv.cache, &book, &pages, &rects, edge);
         }
+    }
+    // the pixels of the spread on show aren't final: say so, as the loupe does (no activity row)
+    if standin {
+        let since = *pv.standin_since.get_or_insert(now);
+        if now - since >= RENDERING_AFTER_SECS {
+            if app.ui.settings.loupe_messages {
+                let over = draw::spread_rects(area, size, spreads.get(current).map_or(0, Vec::len), 0.0)
+                    .into_iter()
+                    .reduce(|a, b| a.union(b))
+                    .unwrap_or(area);
+                crate::panels::detail::loupe_pill(ui, area, over, None, "book:previewRendering", crate::i18n::tr("Rendering…"), false);
+            }
+        } else {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(RENDERING_AFTER_SECS - (now - since) + 0.01));
+        }
+    } else {
+        pv.standin_since = None;
     }
     // a click on the left or right half turns; drawn first so the controls on top win
     let bg = ui.interact(area, egui::Id::unique("book-preview-area"), Sense::click());
@@ -385,6 +425,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut Ui) {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(left - FADE_SECS + 0.01));
         }
     }
+    pv.copy = Some(book);
     app.ui.book.preview = Some(pv);
     match action {
         Some(Action::Close) => close(app),

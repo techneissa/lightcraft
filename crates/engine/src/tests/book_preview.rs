@@ -16,9 +16,22 @@ fn demo_book(s: &mut Session) -> Book {
 
 #[test]
 fn a_preview_page_is_the_export_page() {
+    // whole photos (the book's setting), then filled frames and a full-bleed page
+    for fill in [false, true] {
+        a_preview_page_is_the_export_page_with(fill);
+    }
+}
+
+fn a_preview_page_is_the_export_page_with(fill: bool) {
     let mut s = Session::with_demo();
     let mut book = demo_book(&mut s);
     book.settings.ppi = 72.0;
+    book.settings.fill = fill;
+    if fill {
+        book.pages[1].template = Template::FullBleed;
+        book.pages[1].slots.truncate(1);
+        book.pages[1].crops.truncate(1);
+    }
     // a cropped cell too: the export draws it itself, and so must the preview
     book.pages[0].crops = vec![Some(Crop { zoom: 2.0, x: 0.3, y: 0.6 }), None];
     book.validate().unwrap();

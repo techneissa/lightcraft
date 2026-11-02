@@ -62,9 +62,11 @@ fn gradient_x(painter: &Painter, rect: Rect, left: Color32, right: Color32) {
 }
 
 /// A spread: the shadow under its pages, each page (from the render when it is ready, else from
-/// the grid's thumbnails), and the gutter where two pages meet.
-pub(super) fn spread(app: &mut LightcraftApp, painter: &Painter, cache: &Cache, book: &Book, pages: &[usize], rects: &[Rect], edge: usize) {
-    let (Some(first), Some(last)) = (rects.first(), rects.last()) else { return };
+/// the grid's thumbnails), and the gutter where two pages meet. `true`: a page is drawn from
+/// thumbnails and its render has not ended.
+pub(super) fn spread(app: &mut LightcraftApp, painter: &Painter, cache: &Cache, book: &Book, pages: &[usize], rects: &[Rect], edge: usize) -> bool {
+    let (Some(first), Some(last)) = (rects.first(), rects.last()) else { return false };
+    let mut standin = false;
     let all = first.union(*last);
     painter.add(egui::Shadow { offset: [0, 10], blur: 44, spread: 0, color: Color32::from_black_alpha(190) }.as_shape(all, 0.0));
     painter.add(egui::Shadow { offset: [0, 2], blur: 8, spread: 0, color: Color32::from_black_alpha(110) }.as_shape(all, 0.0));
@@ -73,7 +75,10 @@ pub(super) fn spread(app: &mut LightcraftApp, painter: &Painter, cache: &Cache, 
             Some(tex) => {
                 painter.image(tex.id(), rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
             }
-            None => thumbs::paint_page(app, painter, book, index, rect, None, false),
+            None => {
+                standin |= !cache.settled(book, index, edge);
+                thumbs::paint_page(app, painter, book, index, rect, None, false)
+            }
         }
     }
     if let [left, right] = rects {
@@ -82,6 +87,7 @@ pub(super) fn spread(app: &mut LightcraftApp, painter: &Painter, cache: &Cache, 
         gradient_x(painter, Rect::from_min_max(pos2(left.right() - g, left.top()), left.right_bottom()), Color32::TRANSPARENT, dark);
         gradient_x(painter, Rect::from_min_max(right.left_top(), pos2(right.left() + g, right.bottom())), dark, Color32::TRANSPARENT);
     }
+    standin
 }
 
 /// The text of the page counter for the spread of `pages`.
@@ -89,6 +95,7 @@ pub(super) fn counter_text(book: &Book, pages: &[usize]) -> String {
     let n = book.pages.len();
     match pages {
         [] => crate::i18n::tr("No pages").to_string(),
+        [0] if book.cover && n == 1 => crate::i18n::tr("Cover · 1 page").to_string(),
         [0] if book.cover => crate::i18n::tr_format!("Cover · {n} pages", n = n),
         [p] => crate::i18n::tr_format!("Page {i} of {n}", i = p + 1, n = n),
         [a, .., b] => crate::i18n::tr_format!("Pages {a}–{b} of {n}", a = a + 1, b = b + 1, n = n),
