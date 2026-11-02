@@ -16,7 +16,7 @@ use crate::panels::edit_sections::EditSection;
 use crate::render::Slot;
 use crate::state::RightPanel;
 use crate::theme::Tokens;
-use crate::widgets::{BAND_COLORS, SliderOut, divider, flyout_row, hex, register, section_header, slider, text_button};
+use crate::widgets::{BAND_COLORS, SliderOut, divider, flyout_row, hex, register, slider, text_button};
 
 mod curve;
 mod grading;
@@ -118,7 +118,8 @@ fn show_sections(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             // a long name is cut short before Browse Profiles: a wider row would widen the whole panel's
             // content, and the sliders below would run past its edge
             let max = ui.available_width() - 28.0 - ui.spacing().item_spacing.x;
-            let r = crate::widgets::dropdown_within(ui, "profile", crate::i18n::profile_label(&d.profile.id, name), t.font(15.0), t.text_label, max);
+            let r = crate::widgets::dropdown_within(ui, "profile", crate::i18n::profile_label(&d.profile.id, name), t.font(15.0), t.text_label, max)
+                .on_hover_text(crate::i18n::tr("Choose Profile"));
             let below = r.rect.bottom();
             let profiles = profile_search::items(app);
             let find = crate::widgets::dropdown_search::before_menu(ui, &r, || profiles.iter().map(|(_, name)| name.clone()).collect());
@@ -213,7 +214,8 @@ fn show_sections(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 2 }).show(ui, |ui| {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(crate::i18n::tr("White Balance")).font(t.font(13.0)).color(t.text_dim));
-                    let r = crate::widgets::dropdown(ui, "wbMode", crate::i18n::tr(d.wb.mode.label()), t.font(14.0), t.text_label);
+                    let r = crate::widgets::dropdown(ui, "wbMode", crate::i18n::tr(d.wb.mode.label()), t.font(14.0), t.text_label)
+                        .on_hover_text(crate::i18n::tr("White Balance Mode"));
                     let modes: Vec<WbMode> = WbMode::ALL.into_iter().filter(|m| *m != WbMode::Custom).collect();
                     if let Some(m) = crate::widgets::dropdown_search::menu_pick(
                         &mut *ui,
@@ -305,7 +307,14 @@ fn show_sections(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 let active = styles.iter().position(|(v, _, _)| *v == d.vignette.style);
                 let mut chosen = None;
                 egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 2, bottom: 4 }).show(ui, |ui| {
-                    chosen = crate::widgets::segmented(ui, "vignetteStyle", &items, active, 3);
+                    chosen = crate::widgets::segmented_tips(
+                        ui,
+                        "vignetteStyle",
+                        &items,
+                        &["Highlight Priority", "Color Priority", "Paint Overlay"],
+                        active,
+                        3,
+                    );
                 });
                 if let Some(i) = chosen {
                     let _ = app.run(

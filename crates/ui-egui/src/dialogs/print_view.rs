@@ -551,6 +551,7 @@ fn print_job_color(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, color: &Pri
             },
         );
         crate::widgets::name_combo(&c, crate::i18n::tr("Profile"));
+        c.clone().on_hover_text(crate::i18n::tr("Print Color Profile"));
         register(ui, "combo:printProfile", c.rect);
         match chosen.and_then(|i| rows.get(i)) {
             Some((Row::Managed(space), _)) if color.profile != managed(*space) => patch_color(app, &ctx, "profile", to_value(managed(*space))),

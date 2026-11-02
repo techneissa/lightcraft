@@ -26,6 +26,8 @@ pub enum Icon {
     Eye,
     /// Eye with a slash (hidden).
     EyeOff,
+    /// One open panel between two folded ones (Solo Mode on a Develop section header).
+    Solo,
     Presets,
     Versions,
     Activity,
@@ -371,6 +373,11 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.arc(10.0, 4.0, 9.0, 32.0, 148.0);
             pen.circle(10.0, 10.0, 2.5);
             pen.line(&[(3.5, 3.5), (16.5, 16.5)]);
+        }
+        Solo => {
+            pen.line(&[(4.5, 3.5), (15.5, 3.5)]);
+            pen.rect_fill(3.5, 7.0, 16.5, 13.0, 1.5);
+            pen.line(&[(4.5, 16.5), (15.5, 16.5)]);
         }
         Presets => {
             pen.circle(8.0, 8.0, 5.0);

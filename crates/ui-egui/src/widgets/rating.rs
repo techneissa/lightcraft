@@ -99,12 +99,14 @@ pub struct Rating {
     id: String,
     rating: u8,
     ids_prefix: Option<String>,
+    /// The stars filter instead of rate, which their hover text says.
+    filters: bool,
 }
 
 impl Rating {
     /// A rating of `rating` (0 to 5) whose stars are reachable as `star:{id}:{n}`.
     pub fn new(id: impl Into<String>, rating: u8) -> Self {
-        Self { id: id.into(), rating: rating.min(STARS), ids_prefix: None }
+        Self { id: id.into(), rating: rating.min(STARS), ids_prefix: None, filters: false }
     }
 
     /// Register the stars under `{prefix}{n}` instead of `star:{id}:{n}`, for rows that already have
@@ -112,6 +114,22 @@ impl Rating {
     pub fn automation_ids(mut self, prefix: impl Into<String>) -> Self {
         self.ids_prefix = Some(prefix.into());
         self
+    }
+
+    /// The stars set a filter, not a photo's rating: their hover text says "Filter by 3 Stars".
+    pub fn filters(mut self) -> Self {
+        self.filters = true;
+        self
+    }
+
+    /// The hover text of star `n` (1 to 5).
+    fn tip(&self, n: u8) -> String {
+        match (self.filters, n) {
+            (false, 1) => crate::i18n::tr("Rate 1 Star").to_string(),
+            (false, _) => crate::i18n::tr_format!("Rate {n} Stars", n = n),
+            (true, 1) => crate::i18n::tr("Filter by 1 Star").to_string(),
+            (true, _) => crate::i18n::tr_format!("Filter by {n} Stars", n = n),
+        }
     }
 
     fn widget_id(&self, n: u8) -> String {
@@ -143,6 +161,7 @@ impl Rating {
             let resp = ui.interact(r, id, sense);
             announce_selected(&resp, format!("{} ★", i + 1), i < self.rating);
             register(ui, self.widget_id(i + 1), r);
+            let resp = resp.on_hover_text(self.tip(i + 1));
             if resp.hovered() {
                 hover_n = Some(i + 1);
             }
@@ -193,7 +212,7 @@ impl Rating {
 }
 
 /// A frameless star toggle for favourites: filled when `favorite`, named `name` for screen readers and as
-/// its tooltip, reachable as `widget` (a full automation id). A square one line tall.
+/// (its tooltip says what a click does), reachable as `widget` (a full automation id). A square one line tall.
 pub fn favorite_button(ui: &mut Ui, widget: String, favorite: bool, name: &str) -> egui::Response {
     let t = Tokens::get(ui.ctx());
     let side = ui.spacing().interact_size.y;
@@ -211,7 +230,7 @@ pub fn favorite_button(ui: &mut Ui, widget: String, favorite: bool, name: &str) 
     }
     let icon = RatingSize::Medium.icon();
     paint_star(ui.painter(), Rect::from_center_size(r.center(), vec2(icon, icon)), favorite, if favorite { t.star } else { t.icon });
-    resp.on_hover_text(name)
+    resp.on_hover_text(crate::i18n::tr(if favorite { "Remove from Favorites" } else { "Add to Favorites" }))
 }
 
 #[cfg(test)]

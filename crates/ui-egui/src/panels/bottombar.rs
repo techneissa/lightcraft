@@ -127,6 +127,11 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
             flag == f,
         );
         register(&pill_ui, format!("flag:{id}"), r);
+        let resp = resp.on_hover_text(crate::i18n::tr(match f {
+            Flag::None => "Unflag (U)",
+            Flag::Pick => "Flag as Pick (P)",
+            Flag::Reject => "Flag as Reject (X)",
+        }));
         let on = flag == f && f != Flag::None;
         let c = if on {
             if f == Flag::Reject { t.reject } else { t.pick }
@@ -163,6 +168,7 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
     let gresp = ui.interact(gear_r, egui::Id::unique("copy-gear"), Sense::click());
     crate::widgets::announce(&gresp, crate::i18n::tr("Copy Settings…"));
     register(ui, "icon:copyGear", gear_r);
+    let gresp = gresp.on_hover_text(crate::i18n::tr("Copy Settings…"));
     ui.painter().rect_filled(gear_r, 15.0, if gresp.hovered() { t.hover } else { t.canvas });
     paint(ui.painter(), gear_r.shrink(7.0), Icon::Gear, t.icon);
     if gresp.clicked() {
@@ -229,7 +235,8 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
             Zoom::Fill => "Fill".to_string(),
             Zoom::Percent(p) => format!("{p:.0}%"),
         };
-        let zr = crate::widgets::dropdown(&mut child, "zoom", crate::i18n::tr(&zoom_label), t.font(13.0), t.text_label);
+        let zr = crate::widgets::dropdown(&mut child, "zoom", crate::i18n::tr(&zoom_label), t.font(13.0), t.text_label)
+            .on_hover_text(crate::i18n::tr("Zoom Level"));
         egui::Popup::menu(&zr).show(|ui| {
             for (label, z) in [
                 ("Fit", Zoom::Fit),
@@ -253,7 +260,8 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
                 &crate::i18n::tr_format!("Click {}:1", app.ui.click_zoom / 100),
                 t.font(13.0),
                 t.text_label,
-            );
+            )
+            .on_hover_text(crate::i18n::tr("Zoom Level On Click"));
             egui::Popup::menu(&cz).show(|ui| click_zoom_menu(app, ui));
         }
         // the filmstrip is filtered too: one button for the quick filters when there is room
@@ -275,6 +283,7 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
             node.add_action(egui::accesskit::Action::Decrement);
         });
         register(&child, "slider:thumbSize", r);
+        let resp = resp.on_hover_text(crate::i18n::tr("Thumbnail Size"));
         let (inc, dec) = crate::widgets::accessibility_nudge(&child, &resp);
         let (up, down) = if resp.has_focus() {
             // ↑ and ↓ step the size instead of moving the focus to the thumbnail above

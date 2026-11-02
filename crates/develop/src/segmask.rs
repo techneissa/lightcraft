@@ -22,6 +22,11 @@ pub struct SegMask {
     /// resolution than a pass over the whole photo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rect: Option<[f64; 4]>,
+    /// The model that made it, by id (`birefnet`, `sam3+birefnet`…); `None`: SAM 3, the only model before BiRefNet.
+    /// A part keeps the model that made it, whatever model new parts use. A build that doesn't know the field
+    /// reads the selection as SAM 3's and drops the id when it saves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 impl SegMask {
@@ -29,12 +34,17 @@ impl SegMask {
     pub fn from_logits(side: usize, logits: &[f32]) -> SegMask {
         let q: Vec<u8> = logits.iter().take(side * side).map(|l| ((l * SCALE).round().clamp(-127.0, 127.0) as i8) as u8).collect();
         let z = miniz_oxide::deflate::compress_to_vec(&q, 8);
-        SegMask { side: side as u32, data: base64_encode(&z), rect: None }
+        SegMask { side: side as u32, data: base64_encode(&z), rect: None, model: None }
     }
 
     /// From `side × side` logits over the part `rect` of the image.
     pub fn from_logits_in(side: usize, logits: &[f32], rect: [f64; 4]) -> SegMask {
         SegMask { rect: Some(rect), ..SegMask::from_logits(side, logits) }
+    }
+
+    /// The same selection, marked as made by model `id` (see [`SegMask::model`]).
+    pub fn made_by(self, id: &str) -> SegMask {
+        SegMask { model: Some(id.to_string()), ..self }
     }
 
     /// The covered part, normalized (the whole image without a `rect`); `None` when damaged.
@@ -60,10 +70,11 @@ impl SegMask {
         for l in &mut logits {
             *l = -*l;
         }
-        Some(match self.rect {
+        let inverted = match self.rect {
             Some(r) => SegMask::from_logits_in(self.side as usize, &logits, r),
             None => SegMask::from_logits(self.side as usize, &logits),
-        })
+        };
+        Some(SegMask { model: self.model.clone(), ..inverted })
     }
 }
 
@@ -209,13 +220,29 @@ mod tests {
     }
 
     #[test]
+    fn the_model_is_stored_with_the_selection_and_old_documents_read_without_it() {
+        let plain = SegMask::from_logits(4, &[1.0; 16]);
+        assert!(!serde_json::to_string(&plain).unwrap().contains("model"), "a SAM 3 selection is saved as before");
+        let marked = plain.clone().made_by("birefnet");
+        let back: SegMask = serde_json::from_str(&serde_json::to_string(&marked).unwrap()).unwrap();
+        assert_eq!(back.model.as_deref(), Some("birefnet"));
+        assert_eq!(marked.invert().unwrap().model.as_deref(), Some("birefnet"), "turning it around keeps the model");
+        // a document from before the field
+        let old: SegMask = serde_json::from_str(&format!(r#"{{"side":4,"data":{}}}"#, serde_json::to_string(&plain.data).unwrap())).unwrap();
+        assert_eq!(old.model, None);
+        // and a build that doesn't know the field reads the rest as before (unknown fields are ignored)
+        let newer: SegMask = serde_json::from_str(r#"{"side":4,"data":"AA==","model":"something-newer","extra":1}"#).unwrap();
+        assert_eq!(newer.model.as_deref(), Some("something-newer"));
+    }
+
+    #[test]
     fn damaged_data_is_none() {
         let mut m = SegMask::from_logits(8, &[1.0; 64]);
         m.side = 9;
         assert!(m.logits().is_none(), "size mismatch");
         m.side = 100_000;
         assert!(m.logits().is_none(), "absurd size");
-        assert!(SegMask { side: 8, data: "not base64 !".into(), rect: None }.logits().is_none());
+        assert!(SegMask { side: 8, data: "not base64 !".into(), rect: None, model: None }.logits().is_none());
         assert!(SegMask { rect: Some([0.5, 0.0, 0.2, 1.0]), ..SegMask::from_logits(2, &[0.0; 4]) }.bounds().is_none());
     }
 }

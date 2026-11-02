@@ -535,6 +535,9 @@ pub fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect) {
     let header = Rect::from_min_size(frame.min, vec2(LIST_W, HEADER_H));
     let hresp = ui.interact(header.with_max_x(header.right() - 34.0), egui::Id::unique("map-locations-header"), Sense::click());
     register(ui, "map:locationsHeader", header);
+    let saved = crate::i18n::tr("Saved Locations");
+    crate::widgets::announce_disclosure(&hresp, true, open, saved);
+    let hresp = hresp.on_hover_text(crate::panels::left::disclosure_name(open, saved));
     let title = format!("{} ({})", crate::i18n::tr("Saved Locations"), list.len());
     let g = ui.painter().text(pos2(header.left() + 12.0, header.center().y), Align2::LEFT_CENTER, title, t.semibold(12.5), t.text);
     let c = pos2(g.right() + 10.0, header.center().y);
@@ -643,6 +646,8 @@ fn location_row(
     register(ui, format!("map:location:{}:count", l.id), count_rect);
     p.galley(count_rect.min, count_g, t.text_dim);
     let resp = if text != label { resp.on_hover_text(&label) } else { resp };
+    let over_check = ui.input(|i| i.pointer.hover_pos()).is_some_and(|a| check.expand(4.0).contains(a));
+    let resp = resp.on_hover_text(crate::i18n::tr(if over_check { "Select Photos in Location" } else { "Show Location on Map" }));
     if resp.clicked() {
         let at = resp.interact_pointer_pos();
         let result = if at.is_some_and(|a| check.expand(4.0).contains(a)) {

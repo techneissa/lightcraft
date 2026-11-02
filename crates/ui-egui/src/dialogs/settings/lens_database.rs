@@ -137,7 +137,7 @@ pub(super) fn lens_database_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, t: 
         {
             let _ = app.run("lensDatabase.set", json!({"dir": f}));
         }
-        let r = ui.add_enabled(!dir.is_empty(), egui::Button::new(crate::i18n::tr("Clear")));
+        let r = ui.add_enabled(!dir.is_empty(), egui::Button::new(crate::i18n::tr("Clear"))).on_hover_text(crate::i18n::tr("Remove Lens Folder"));
         register(ui, "button:settingsLensDatabaseClear", r.rect);
         if r.clicked() {
             let _ = app.run("lensDatabase.set", json!({"dir": null}));

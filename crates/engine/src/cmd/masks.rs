@@ -136,10 +136,9 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
         {
             let Some(c) = super::concepts::of(shape) else { return Ok(Later::Nothing) };
             if background {
-                s.segmenter.require_model()?;
                 return Ok(Later::Concept(c));
             }
-            let found = segment(s, |s| s.segment_concept(id, &c))?;
+            let found = s.segment_concept(id, &c).map_err(ai_err)?;
             super::concepts::store(shape, found, &c)?;
         }
         _ => {}
@@ -293,7 +292,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 if let Later::Concept(concept) = &later {
                     let id = s.active().ok_or_else(|| bad("mask.add", "no active photo"))?;
-                    segment(s, |s| s.segment_concept_later(id, None, "add", name, concept))?;
+                    s.segment_concept_later(id, None, "add", name, concept).map_err(ai_err)?;
                     return Ok(json!({"pending": true}));
                 }
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
@@ -339,7 +338,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 }
                 if let Later::Concept(concept) = &later {
                     let op = p.get("op").and_then(Value::as_str).unwrap_or("add");
-                    segment(s, |s| s.segment_concept_later(id, Some(mid), op, None, concept))?;
+                    s.segment_concept_later(id, Some(mid), op, None, concept).map_err(ai_err)?;
                     return Ok(json!({"pending": true}));
                 }
                 let mut comp = 0;

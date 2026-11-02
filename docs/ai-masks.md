@@ -124,6 +124,28 @@ Agents and scripts use the same commands (control channel, `lightcraft-cli mcp -
 explicit `acknowledged`: pass it only after the user agreed to the download and the licence),
 `segment.model.cancel`.
 
+### Fine edges with BiRefNet
+
+Subject and Background parts can be made by [BiRefNet](https://github.com/ZhengPeng7/BiRefNet) (MIT licence, pure
+Rust on candle, Metal on the Mac) instead of SAM 3: it cuts the main subject out with much finer edges around hair,
+fur and lace, a few seconds per photo. The model (`model.safetensors`, 444 MB) lives in
+`~/Library/Application Support/ArtCraft/models/birefnet/` and is downloaded only after you agree: the Masking
+heading shows **Get BiRefNet** while SAM 3 is the only model installed.
+
+With two or more models installed, a dropdown on the Masking heading's row sets the model for **new** Subject and
+Background parts: SAM 3, BiRefNet, or SAM 3 + BiRefNet Edges (SAM 3 decides what the subject is, BiRefNet draws its
+edge). Until you choose, new parts use BiRefNet when it is installed (its edges were finer on all 13 photos of the comparison, in the PR). Where SAM 3 finds no subject (a fern, a bottle), SAM 3 + BiRefNet Edges uses BiRefNet alone. Every part keeps the model that made it (hover its row), so parts from different models mix in one mask, and
+changing the dropdown never changes a part that exists. Sky, Object and Describe always use SAM 3, and a part made by
+BiRefNet has no zoomed-in detail pass (BiRefNet's grid is 1024², already fine). A build without BiRefNet reads such a
+part as a SAM 3 selection and drops the model id the next time it saves the mask.
+
+| Command | Params | |
+|---|---|---|
+| `segment.selectionModel` | `{model?: "sam3"\|"birefnet"\|"sam3+birefnet"}` | read, or set and save, the model new Subject and Background parts use → `{model, label, models}` |
+| `birefnet.model.status` | `{}` | `{available, installed, dir, sizeBytes, license, licenseUrl, mirrors, download, selection, models}` |
+| `birefnet.model.download` | `{confirm: true}` | start the download in the background (refused without `confirm`: pass it only after the user agreed) → `{started}` |
+| `birefnet.model.cancel` | `{}` | stop it (it resumes next time) → `{cancelled}` |
+
 ### Download locations
 
 The model is fetched from an ordered list of mirrors: base URLs where `<base>/model.safetensors`,
