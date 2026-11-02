@@ -16,16 +16,32 @@ fn model_label(id: &str) -> &'static str {
     MODELS.iter().find(|(m, _)| *m == id).map(|(_, name)| *name).unwrap_or("DIRS-MuGI")
 }
 
+/// Whether `id` is one of the models that can be downloaded (none on the web, which fetches no models).
+#[cfg(not(target_arch = "wasm32"))]
+fn downloadable(id: &str) -> bool {
+    lightcraft_engine::reflections::dirs::MODELS.contains(&id)
+}
+
+#[cfg(target_arch = "wasm32")]
+fn downloadable(_id: &str) -> bool {
+    false
+}
+
+/// Where the files of `model` come from, for the instructions link.
+fn model_page(model: &str) -> &'static str {
+    #[cfg(not(target_arch = "wasm32"))]
+    if downloadable(model) {
+        return lightcraft_engine::reflections::dirs::page(model);
+    }
+    let _ = model;
+    "https://github.com/mingcv/DSRNet#trained-weights"
+}
+
 pub fn command(app: &mut LightcraftApp, name: &str, p: &Value) -> Result<Value, String> {
     if name == "reflection.instructions" {
         let open = app.services.open_url.as_mut().ok_or("No browser service available")?;
         let model = p.get("model").and_then(Value::as_str).unwrap_or_default();
-        let url = if lightcraft_engine::reflections::dirs::MODELS.contains(&model) {
-            lightcraft_engine::reflections::dirs::page(model)
-        } else {
-            "https://github.com/mingcv/DSRNet#trained-weights"
-        };
-        open(url)?;
+        open(model_page(model))?;
         return Ok(json!({"opened":true}));
     }
     if name == "reflection.install" {
@@ -311,11 +327,7 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     }
                 }
                 let selected = app.reflection_model.clone();
-                let missing = |id: &str| {
-                    id != selected
-                        && lightcraft_engine::reflections::dirs::MODELS.contains(&id)
-                        && !lightcraft_engine::reflections::available_model(id)
-                };
+                let missing = |id: &str| id != selected && downloadable(id) && !lightcraft_engine::reflections::available_model(id);
                 if MODELS.iter().any(|(id, _)| missing(id)) {
                     ui.separator();
                 }
@@ -347,7 +359,7 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         });
         if !available {
             ui.add(egui::Label::new(tr("Install a reflection model first")).wrap());
-            if lightcraft_engine::reflections::dirs::MODELS.contains(&app.reflection_model.as_str()) {
+            if downloadable(&app.reflection_model) {
                 download_row(app, ui, busy);
             }
             let r = ui.add_enabled(!busy, egui::Button::new(tr("Install Reflection Model…")));

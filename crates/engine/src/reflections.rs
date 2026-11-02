@@ -6,6 +6,7 @@ use lightcraft_raster::Rgb32f;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod dirs;
 mod shared_models;
 
