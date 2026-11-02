@@ -203,7 +203,10 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 // the bar takes what the Details button leaves
                 let details = ui.spacing().interact_size.x + 30.0;
                 sam_download_bar(ui, download.done, download.total, (ui.available_width() - details).max(96.0));
-                if text_button(ui, "maskSamDetails", crate::i18n::tr("Details"), false).clicked() {
+                if text_button(ui, "maskSamDetails", crate::i18n::tr("Details"), false)
+                    .on_hover_text(crate::i18n::tr("Model Download Details"))
+                    .clicked()
+                {
                     app.offer_sam_download(None);
                 }
             });
@@ -280,6 +283,7 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 register(ui, format!("maskVisible:{}", m.id), er);
                 let eye = ui.interact(er, egui::Id::unique(("maskVisible", m.id)), Sense::click());
                 crate::widgets::announce_selected(&eye, crate::i18n::tr("Show mask"), m.visible);
+                let eye = eye.on_hover_text(crate::i18n::tr(if m.visible { "Hide Mask" } else { "Show Mask" }));
                 paint(
                     ui.painter(),
                     er.shrink(3.0),
@@ -401,7 +405,8 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let view = MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default();
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Overlay")).color(t.text_dim));
-        let r = crate::widgets::dropdown(ui, "maskOverlayMode", menu_label(view.label()), t.font(12.5), t.text_label);
+        let r = crate::widgets::dropdown(ui, "maskOverlayMode", menu_label(view.label()), t.font(12.5), t.text_label)
+            .on_hover_text(crate::i18n::tr("Mask Overlay Style"));
         if let Some(v) =
             crate::widgets::dropdown_search::menu_pick(&mut *ui, &r, &MaskView::ALL, |v| *v == view, |v| menu_label(v.label()).to_string())
                 .and_then(|i| MaskView::ALL.get(i))
@@ -416,6 +421,7 @@ fn overlay_options(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let (r, resp) = ui.allocate_exact_size(vec2(18.0, 18.0), Sense::click());
                 crate::widgets::announce(&resp, format!("{} #{:02x}{:02x}{:02x}", crate::i18n::tr("Overlay color"), c[0], c[1], c[2]));
                 register(ui, format!("maskOverlayColor:{:02x}{:02x}{:02x}", c[0], c[1], c[2]), r);
+                let resp = resp.on_hover_text(crate::i18n::tr("Set Overlay Color"));
                 ui.painter().rect_filled(r.shrink(2.0), 3.0, egui::Color32::from_rgb(c[0], c[1], c[2]));
                 if app.ui.mask_overlay_color == c {
                     ui.painter().rect_stroke(r, 3.0, Stroke::new(1.5, t.text), egui::StrokeKind::Inside);
@@ -465,6 +471,7 @@ pub(super) fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: u
             let (rect, resp) = ui.allocate_exact_size(vec2(w, 18.0), Sense::click_and_drag());
             crate::widgets::announce(&resp, crate::i18n::tr("Select Luminance Range"));
             register(ui, format!("lumRange:{comp}"), rect);
+            let resp = resp.on_hover_text(crate::i18n::tr("Drag to Set Luminance Range"));
             let p = ui.painter();
             // dark → light ramp, the selected span outlined
             let n = 24;
@@ -836,11 +843,12 @@ fn brush_settings(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new(crate::i18n::tr("Brush")).font(t.semibold(13.0)));
             // named by what they do to the mask, in a Subtract part too; a click also puts the brush back on
-            if text_button(ui, "brushAdd", crate::i18n::tr("Add"), !app.ui.brush_erase).clicked() {
+            if text_button(ui, "brushAdd", crate::i18n::tr("Add"), !app.ui.brush_erase).on_hover_text(crate::i18n::tr("Paint to Add")).clicked() {
                 app.ui.brush_erase = false;
                 app.ui.tool = "brush".into();
             }
-            if text_button(ui, "brushErase", crate::i18n::tr("Erase"), app.ui.brush_erase).clicked() {
+            if text_button(ui, "brushErase", crate::i18n::tr("Erase"), app.ui.brush_erase).on_hover_text(crate::i18n::tr("Erase From Mask")).clicked()
+            {
                 app.ui.brush_erase = true;
                 app.ui.tool = "brush".into();
             }

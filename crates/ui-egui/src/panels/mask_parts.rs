@@ -10,7 +10,7 @@ use super::masking::{kind_label, menu_label, range_controls, start_describe, sta
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
-use crate::widgets::{announce_selected, icon_button, register, segmented};
+use crate::widgets::{announce_selected, icon_button, register, segmented_tips};
 
 /// The name `mask.addComponent` and `mask.component` know a mode by.
 pub fn op_name(op: MaskOp) -> &'static str {
@@ -175,7 +175,7 @@ pub fn add_controls(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let items: Vec<(&str, &str)> = ops.iter().map(|(op, label)| (*label, op_name(*op))).collect();
     let active = ops.iter().position(|(op, _)| *op == app.ui.mask_op);
     ui.add_space(4.0);
-    if let Some(i) = segmented(ui, "maskMode", &items, active, 3)
+    if let Some(i) = segmented_tips(ui, "maskMode", &items, &["Add Next Part", "Subtract Next Part", "Intersect Next Part"], active, 3)
         && let Some((op, _)) = ops.get(i)
     {
         app.ui.mask_op = *op;
@@ -368,32 +368,51 @@ fn part_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask, i: usize, 
     let mut used = false;
     let mut x = r.right() - 4.0;
     let dim = if hot { t.text } else { t.text_dim };
-    let mut button =
-        |ui: &mut egui::Ui, id: String, name: &str, w: f32, active: bool, draw: &dyn Fn(&egui::Painter, Rect, egui::Color32)| -> egui::Response {
-            let br = Rect::from_min_size(egui::pos2(x - w, r.center().y - 11.0), vec2(w, 22.0));
-            x -= w + 2.0;
-            register(ui, id.clone(), br);
-            let resp = ui.interact(br, egui::Id::unique((id.as_str(), m.id)), Sense::click());
-            announce_selected(&resp, crate::i18n::tr(name), active);
-            if active {
-                ui.painter().rect(br, 3.0, t.pressed, egui::Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
-            } else if resp.hovered() {
-                ui.painter().rect_filled(br, 3.0, t.hover);
-            }
-            draw(ui.painter(), br, if resp.hovered() || active { t.text } else { dim });
-            resp
-        };
-    if button(ui, format!("partDelete:{i}"), "Delete part", BUTTON_W, false, &|p, br, col| paint(p, br.shrink(3.0), Icon::Trash, col)).clicked() {
+    let mut button = |ui: &mut egui::Ui,
+                      id: String,
+                      name: &str,
+                      tip: &str,
+                      w: f32,
+                      active: bool,
+                      draw: &dyn Fn(&egui::Painter, Rect, egui::Color32)|
+     -> egui::Response {
+        let br = Rect::from_min_size(egui::pos2(x - w, r.center().y - 11.0), vec2(w, 22.0));
+        x -= w + 2.0;
+        register(ui, id.clone(), br);
+        let resp = ui.interact(br, egui::Id::unique((id.as_str(), m.id)), Sense::click());
+        announce_selected(&resp, crate::i18n::tr(name), active);
+        let resp = resp.on_hover_text(crate::i18n::tr(tip));
+        if active {
+            ui.painter().rect(br, 3.0, t.pressed, egui::Stroke::new(1.0, t.text_dim), egui::StrokeKind::Inside);
+        } else if resp.hovered() {
+            ui.painter().rect_filled(br, 3.0, t.hover);
+        }
+        draw(ui.painter(), br, if resp.hovered() || active { t.text } else { dim });
+        resp
+    };
+    if button(ui, format!("partDelete:{i}"), "Delete part", "Delete Part", BUTTON_W, false, &|p, br, col| paint(p, br.shrink(3.0), Icon::Trash, col))
+        .clicked()
+    {
         let _ = app.run("mask.component", json!({"id": m.id, "component": i, "action": "delete"}));
         used = true;
     }
-    if button(ui, format!("partInvert:{i}"), "Invert part", BUTTON_W, c.invert, &|p, br, col| paint(p, br.shrink(3.0), Icon::Invert, col)).clicked() {
+    if button(
+        ui,
+        format!("partInvert:{i}"),
+        "Invert part",
+        if c.invert { "Stop Inverting Part" } else { "Invert Part" },
+        BUTTON_W,
+        c.invert,
+        &|p, br, col| paint(p, br.shrink(3.0), Icon::Invert, col),
+    )
+    .clicked()
+    {
         let _ = app.run("mask.component", json!({"id": m.id, "component": i, "action": "invert"}));
         used = true;
     }
     if i > 0 {
         let now = part_mode(m, i);
-        let dropdown = button(ui, format!("partMode:{i}"), "Part mode", MODE_W, false, &|p, br, col| {
+        let dropdown = button(ui, format!("partMode:{i}"), "Part mode", "Change Part Mode", MODE_W, false, &|p, br, col| {
             paint_mode(p, Rect::from_min_size(br.min, vec2(22.0, br.height())), now, col);
             paint(p, Rect::from_center_size(egui::pos2(br.right() - 8.0, br.center().y), vec2(10.0, 10.0)), Icon::ChevronDown, col);
         });

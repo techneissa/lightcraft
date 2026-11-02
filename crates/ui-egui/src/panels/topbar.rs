@@ -211,7 +211,7 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
     };
     for (id, icon, tip, cmd) in [
         ("cloud", Icon::Cloud, cloud_tip, ""),
-        ("help", Icon::Help, "Keyboard shortcuts", "app.shortcuts"),
+        ("help", Icon::Help, "Keyboard Shortcuts", "app.shortcuts"),
         ("share", Icon::Share, "Export", "dialog.export"),
         ("import", Icon::Plus, import_tip.as_str(), "file.addPhotos"),
         ("bell", Icon::Bell, "Activity", "panel.activity"),

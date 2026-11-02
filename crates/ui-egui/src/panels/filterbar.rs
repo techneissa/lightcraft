@@ -124,7 +124,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             .map(|(l, k, op)| (l.to_string(), json!({"ratingOp": k}), f.rating_op == op))
             .collect(),
     );
-    if let Some(r) = crate::rating::Rating::new("filter", f.rating).automation_ids("filter:star").show(ui) {
+    if let Some(r) = crate::rating::Rating::new("filter", f.rating).automation_ids("filter:star").filters().show(ui) {
         filter(app, json!({"rating": r}));
     }
     // the ratings ticked in the bottom bar's Stars dropdown (a set the stars can't show)

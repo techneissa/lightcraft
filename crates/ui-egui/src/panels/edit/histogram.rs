@@ -327,6 +327,7 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
                 |(_, label)| label.clone(),
             );
             crate::widgets::name_combo(&combo, crate::i18n::tr("Profile"));
+            combo.on_hover_text(crate::i18n::tr("Proof Color Space"));
             match chosen.and_then(|i| rows.get(i)) {
                 Some((Row::Space(s), _)) => {
                     let _ = app.run("view.softProof", json!({"space": s}));

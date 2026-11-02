@@ -152,7 +152,7 @@ pub fn effect_row(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask) {
             ui.label(egui::RichText::new(crate::i18n::tr("Effect")).font(t.font(12.0)).color(t.text_label));
             let current = fx::matching_effect(&app.session, &mask.adjust);
             let label = current.as_deref().map(display_name).unwrap_or_else(|| crate::i18n::tr("Custom").to_string());
-            let r = crate::widgets::dropdown(ui, "maskEffect", &label, t.font(12.0), t.text);
+            let r = crate::widgets::dropdown(ui, "maskEffect", &label, t.font(12.0), t.text).on_hover_text(crate::i18n::tr("Choose Mask Effect"));
             if r.clicked() {
                 ui.data_mut(|d| d.insert_temp(state_id(), MenuState::default()));
             }
@@ -526,6 +526,7 @@ pub fn manage_body(
                     .sense(Sense::click()),
             );
             register(ui, format!("effectGroup:{group}"), h.rect);
+            let h = h.on_hover_text(crate::i18n::tr("Select This Group"));
             if h.clicked() {
                 // a click on the heading selects the group
                 *selected = list.iter().map(|e| e.name.clone()).collect();

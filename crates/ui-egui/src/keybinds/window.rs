@@ -391,6 +391,9 @@ fn slot_cell(
     let widget = if slot == 0 { format!("button:shortcut-{}", b.id) } else { format!("button:shortcut{}-{}", slot + 1, b.id) };
     let mut r = ui.add(egui::Button::new(text).min_size(vec2(SLOT_BUTTON_W, 22.0)).selected(recording));
     register(ui, widget, r.rect);
+    if clash.is_none() {
+        r = r.on_hover_text(crate::i18n::tr("Record New Shortcut"));
+    }
     if let Some(others) = clash {
         let names: Vec<_> = others.iter().map(|id| shortcuts::find_bindable(id).map_or(*id, |o| crate::i18n::tr(o.label))).collect();
         r = r.on_hover_text(crate::i18n::tr_format!("Also used by {}", names.join(", ")));
