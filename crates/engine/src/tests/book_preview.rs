@@ -70,7 +70,7 @@ fn an_empty_page_is_paper_and_a_missing_page_is_an_error() {
     book.pages.push(Page::with(Template::One, &[]));
     let empty = book.pages.len() - 1;
     let px = preview::prepare_page(&mut s, &book, empty, 300).unwrap().run(&|| false).unwrap();
-    assert!(px.rgba.chunks_exact(4).all(|p| p == [10, 20, 30, 255]));
+    assert!(px.rgba.as_chunks::<4>().0.iter().all(|p| *p == [10, 20, 30, 255]));
     let e = preview::prepare_page(&mut s, &book, 99, 300).err().unwrap();
     assert!(e.contains("no page 100"), "{e}");
 }

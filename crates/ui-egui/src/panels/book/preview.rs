@@ -344,7 +344,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut Ui) {
         }
     }
     let (upload, setup) = pv.cache.update(app, &ctx, &book, &wanted, edge);
-    for e in pv.cache.failures.drain(..).collect::<Vec<_>>() {
+    for e in std::mem::take(&mut pv.cache.failures) {
         pv.said += 1;
         if pv.said == 1 {
             app.toast(&ctx, format!("Preview: {e}"));
