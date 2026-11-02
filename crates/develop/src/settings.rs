@@ -1176,6 +1176,41 @@ pub enum SpotMode {
     Fill,
 }
 
+/// How a Remove or Content-Aware spot is filled (fork feature, `fork/lama-fill.md`). A spot saved without it, and a
+/// build that does not know it, reads as [`SpotFill::Classic`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpotFill {
+    /// The patch-based fill the app always had.
+    #[default]
+    Classic,
+    /// The LaMa neural fill (needs its model; without it the spot shows the Classic fill).
+    Lama,
+}
+
+impl SpotFill {
+    pub fn is_classic(&self) -> bool {
+        *self == SpotFill::Classic
+    }
+
+    /// The name used in commands and files: `classic` or `lama`.
+    pub fn name(self) -> &'static str {
+        match self {
+            SpotFill::Classic => "classic",
+            SpotFill::Lama => "lama",
+        }
+    }
+
+    /// The fill a command names (case does not matter).
+    pub fn from_name(name: &str) -> Option<SpotFill> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "classic" => Some(SpotFill::Classic),
+            "lama" => Some(SpotFill::Lama),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Spot {
@@ -1188,11 +1223,15 @@ pub struct Spot {
     pub opacity: f64,
     /// Source offset (normalized) from the target; None = auto (content-aware remove).
     pub source_offset: Option<Point>,
+    /// How a Remove or Content-Aware spot is filled; Heal and Clone ignore it. Not written when Classic, so files
+    /// without LaMa spots are byte for byte what they were.
+    #[serde(skip_serializing_if = "SpotFill::is_classic")]
+    pub fill: SpotFill,
 }
 
 impl Default for Spot {
     fn default() -> Self {
-        Self { mode: SpotMode::Remove, points: Vec::new(), size: 0.02, feather: 50.0, opacity: 100.0, source_offset: None }
+        Self { mode: SpotMode::Remove, points: Vec::new(), size: 0.02, feather: 50.0, opacity: 100.0, source_offset: None, fill: SpotFill::Classic }
     }
 }
 

@@ -13,6 +13,7 @@
 //! * [`pool`]: the right panel: the book's photos, searchable, unplaced first; and the book's settings.
 //! * [`menu`]: Add to Book (the photo menu, a drag onto a book in the side bar) and its prompts.
 //! * [`thumbs`]: pages and photos from the grid's thumbnails.
+//! * [`preview`]: the full-screen flip-through.
 //!
 //! The side bar's Books section is `panels/left/books.rs`.
 use egui::{Rect, Ui, vec2};
@@ -25,6 +26,7 @@ use crate::widgets::{register, text_button};
 
 pub mod menu;
 mod pool;
+pub mod preview;
 mod settings;
 mod spread;
 mod strip;
@@ -106,6 +108,8 @@ pub struct BookUi {
     pub(crate) reveal_page: bool,
     /// Milliseconds the last frame of the view took to draw (for the frame-time check).
     pub frame_ms: f32,
+    /// The full-screen preview, while it is open ([`preview`]).
+    pub preview: Option<preview::Preview>,
 }
 
 /// Runs a `book.*` command, saving a crop in progress first; a refusal is a toast.
@@ -153,6 +157,7 @@ pub(crate) fn flush(app: &mut LightcraftApp, ctx: &egui::Context, bu: &mut BookU
 
 /// The view, in the main window's centre panel.
 pub fn show(app: &mut LightcraftApp, ui: &mut Ui) {
+    preview::sync(app);
     let started = std::time::Instant::now();
     let t = Tokens::get(ui.ctx());
     let ctx = ui.ctx().clone();
@@ -246,6 +251,7 @@ fn bar_ui(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, bu: &mut BookUi, boo
     }
     let tag = match book.pages.len() {
         0 => crate::i18n::tr("No pages").to_string(),
+        1 if bu.page == 0 && book.cover => crate::i18n::tr("Cover · 1 page").to_string(),
         n if bu.page == 0 && book.cover => crate::i18n::tr_format!("Cover · {n} pages", n = n),
         n => crate::i18n::tr_format!("Page {i} of {n}", i = bu.page + 1, n = n),
     };
@@ -261,6 +267,11 @@ fn bar_ui(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, bu: &mut BookUi, boo
     ui.add_enabled_ui(has_page, |ui| page_buttons(app, ui, bu, book));
     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
         ui.add_space(8.0);
+        ui.add_enabled_ui(has_page, |ui| {
+            if text_button(ui, "bookPreview", "Preview", false).clicked() {
+                run(app, &ctx, bu, "book.preview", json!({}));
+            }
+        });
         if text_button(ui, "bookExportJpeg", "Export JPEGs…", false).clicked() {
             run(app, &ctx, bu, "app.bookJpeg", json!({}));
         }
@@ -305,10 +316,17 @@ fn page_buttons(app: &mut LightcraftApp, ui: &mut Ui, bu: &mut BookUi, book: &Bo
 /// ← → step through the pages, Page Up and Down through the spreads, while the Book view is on.
 /// Called before the general shortcuts, which would move the photo selection. `true`: handled.
 pub(crate) fn handle_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
+    if preview::active(app) {
+        return preview::handle_key(app, ctx);
+    }
     if app.ui.view != crate::state::ViewMode::Book || app.ui.dialog.is_some() || ctx.text_edit_focused() || app.ui.book.prompt.is_some() {
         return false;
     }
     let Ok(book) = app.session.books.find(None) else { return false };
+    if ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::Enter)) {
+        let _ = app.run("book.preview", json!({}));
+        return true;
+    }
     let spreads = book.spreads();
     let count = book.pages.len();
     let key = |k: egui::Key| ctx.input(|i| i.modifiers.is_none() && i.key_pressed(k));
@@ -335,8 +353,11 @@ pub(crate) fn handle_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
 }
 
 /// The Book commands that only the window can do: `view.book {book?}` opens the view (`dialog.book`
-/// is the same, for File ▸ Book…); `None` for any other id. See [`crate::export_task::book_task`].
+/// is the same, for File ▸ Book…), `book.preview` and `book.previewPage` the full-screen [`preview`]; `None` for any other id. See [`crate::export_task::book_task`].
 pub(crate) fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if let Some(r) = preview::command(app, id, p) {
+        return Some(r);
+    }
     if !matches!(id, "view.book" | "dialog.book") {
         return None;
     }

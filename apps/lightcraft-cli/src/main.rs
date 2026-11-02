@@ -752,7 +752,7 @@ fn render(args: &[String]) -> Result<(), String> {
     }
     let input = input.ok_or("render: missing input file")?;
     let output = output.ok_or("render: missing -o OUTPUT")?;
-    let mut s = Session::new().with_fs().with_default_denoise_models().with_default_map_cache().with_system_clock();
+    let mut s = render_session();
     let abs = expand_paths(std::slice::from_ref(&input));
     let r = s.execute("library.import", &json!({"paths": abs})).map_err(|e| e.to_string())?;
     let id = r["imported"][0].as_u64().ok_or_else(|| format!("{input}: not a readable photo"))?;
@@ -853,6 +853,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
                 .with_default_map_cache()
                 .with_system_clock()
                 .with_default_face_models()
+                .with_default_lama_model()
                 .with_default_slide_templates();
             s.open_library(dir, false).map_err(|e| library_error(dir, e))?;
             s
@@ -870,6 +871,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
             .with_default_map_cache()
             .with_system_clock()
             .with_default_face_models()
+            .with_default_lama_model()
             .with_default_slide_templates(),
     };
     // Apply compute policy before imports or the first scripted query can discover an adapter.
@@ -1093,6 +1095,21 @@ fn denoise_serve(args: &[String]) -> Result<(), String> {
 #[cfg(not(feature = "denoise"))]
 fn denoise_serve(_: &[String]) -> Result<(), String> {
     Err("denoise-serve: this build has no denoise support (build with the `denoise` feature)".into())
+}
+
+/// The session `render` works in: files, the models, and LaMa's, so a Remove spot whose fill is LaMa is drawn with it.
+fn render_session() -> Session {
+    Session::new().with_fs().with_default_denoise_models().with_default_map_cache().with_system_clock().with_default_lama_model()
+}
+
+#[cfg(test)]
+mod lama_tests {
+    #[test]
+    fn render_looks_for_the_lama_model_like_the_app_does() {
+        let s = super::render_session();
+        assert_eq!(s.lama.dir(), lightcraft_engine::lama_fill::default_lama_dir());
+        assert!(s.lama.dir().is_some(), "a computer with a home folder has a model folder");
+    }
 }
 
 #[cfg(test)]

@@ -238,6 +238,11 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("app.print", "Print to PDF", None, ""),
     ("dialog.book", "Book…", None, "File"),
     ("view.book", "Book", None, ""),
+    // {book?, page?, close?}: the open book (or `book`) full screen from `page` (0 is the first page; the page on show when
+    // omitted), a spread at a time; `close: true` closes it. ⌘↩ in the Book view. Open already: says what it shows.
+    ("book.preview", "Book Preview", None, "View"),
+    // {page} or {to: next | previous | first | last}: turn the open preview to the spread with that page
+    ("book.previewPage", "Book Preview Page", None, ""),
     ("app.bookPdf", "Export Book as PDF", None, ""),
     ("app.bookJpeg", "Export Book as JPEGs", None, ""),
     ("dialog.contactSheet", "Contact Sheet PDF…", None, "File"),
