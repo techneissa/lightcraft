@@ -8,15 +8,6 @@
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-/// The folder the Mac shares with PhotoCraft for models. `None` off the Mac, or without a home folder.
-pub(super) fn shared_models_dir(home: Option<OsString>) -> Option<PathBuf> {
-    if !cfg!(target_os = "macos") {
-        return None;
-    }
-    let home = home.filter(|h| !h.is_empty())?;
-    Some(PathBuf::from(home).join("Library").join("Application Support").join("ArtCraft").join("models"))
-}
-
 /// The folder that holds one sub-folder per reflection model: a non-empty `var` (`LIGHTCRAFT_REFLECTION_MODELS`) wins,
 /// then the `shared` folder, then the old `<config>/reflection-models` (off the Mac, or without a home folder).
 pub(super) fn models_dir(var: Option<OsString>, shared: Option<PathBuf>, config: Option<PathBuf>) -> Option<PathBuf> {
@@ -49,13 +40,5 @@ mod tests {
     fn without_a_shared_folder_the_config_folder_is_used() {
         assert_eq!(models_dir(None, None, Some(PathBuf::from("/config"))), Some(PathBuf::from("/config/reflection-models")));
         assert_eq!(models_dir(None, None, None), None);
-    }
-
-    #[cfg(target_os = "macos")]
-    #[test]
-    fn the_shared_folder_is_artcraft_models_in_application_support() {
-        assert_eq!(shared_models_dir(Some("/Users/x".into())), Some(PathBuf::from("/Users/x/Library/Application Support/ArtCraft/models")));
-        assert_eq!(shared_models_dir(Some(OsString::new())), None);
-        assert_eq!(shared_models_dir(None), None);
     }
 }

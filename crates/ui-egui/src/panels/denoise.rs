@@ -567,10 +567,10 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if installed {
-                    let r = ui.button(tr("Remove"));
+                    let (r, click) = crate::model_remove::button(ui, &format!("denoise:{id}"), m["shared"] == true);
                     register(ui, format!("denoise:remove:{id}"), r.rect);
-                    if r.clicked() {
-                        let _ = app.run("denoise.models.remove", json!({"id": id}));
+                    if matches!(click, crate::model_remove::Remove::Own | crate::model_remove::Remove::EveryApp) {
+                        let _ = app.run("denoise.models.remove", json!({"id": id, "everyApp": click == crate::model_remove::Remove::EveryApp}));
                         app.caches.denoise.epoch += 1;
                     }
                     if selected {

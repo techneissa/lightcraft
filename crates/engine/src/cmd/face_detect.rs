@@ -60,11 +60,8 @@ static LOADED: Mutex<Option<(PathBuf, Arc<Detector>)>> = Mutex::new(None);
 /// The installed YuNet, loaded once and kept (a new one is loaded when the model folder changes).
 /// (also used by the background scan, which aligns faces by the detector's landmarks and finds faces in photos that have none)
 pub(crate) fn detector(s: &Session) -> std::result::Result<Arc<Detector>, NoDetector> {
-    let home = s
-        .face_models_dir
-        .as_deref()
-        .ok_or_else(|| NoDetector::Unusable("this build has nowhere to keep face models (the desktop app does)".into()))?
-        .join(YUNET_ID);
+    let roots = s.face_roots().ok_or_else(|| NoDetector::Unusable("this build has nowhere to keep face models (the desktop app does)".into()))?;
+    let home = roots.existing_home(YUNET_ID, &["model.onnx", "face-model.json"]).unwrap_or_else(|| roots.install_home(YUNET_ID));
     let path = home.join("model.onnx");
     // installing writes the manifest last, so a folder without one is not (yet) a model
     if !path.is_file() || !home.join("face-model.json").is_file() {

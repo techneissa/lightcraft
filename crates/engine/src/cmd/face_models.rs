@@ -19,6 +19,7 @@ use serde_json::{Value, json};
 
 use super::{CommandSpec, always, bad, cmd, str_param};
 use crate::face_download::{self, State};
+use crate::shared_models::ModelRoots;
 use crate::{EngineError, Result, Session};
 
 #[derive(Default, Serialize, Deserialize)]
@@ -38,6 +39,11 @@ fn fail(what: &str, e: impl std::fmt::Display) -> EngineError {
 
 fn models_dir(s: &Session, cmd: &str) -> Result<PathBuf> {
     s.face_models_dir.clone().ok_or_else(|| bad(cmd, "this build has nowhere to keep face models (the desktop app does)"))
+}
+
+/// The shared folder and the models folder together (see `shared_models`).
+fn roots(s: &Session, cmd: &str) -> Result<ModelRoots> {
+    s.face_roots().ok_or_else(|| bad(cmd, "this build has nowhere to keep face models (the desktop app does)"))
 }
 
 /// Read at most `max` bytes of a small file.
@@ -75,11 +81,29 @@ fn write_settings(dir: &Path, st: &FaceSettings) -> Result<()> {
 pub(super) struct Installed {
     pub(super) manifest: ModelManifest,
     pub(super) accepted: Value,
+    /// The model's folder.
+    pub(super) home: PathBuf,
+    /// Whether it is in the folder shared with the other ArtCraft apps.
+    pub(super) shared: bool,
 }
 
 /// The models in the folder. A folder that is not a valid model (wrong name, no model file, a manifest that
 /// does not validate or does not match its folder) is ignored, never trusted.
-pub(super) fn installed_models(dir: &Path) -> Vec<Installed> {
+pub(super) fn installed_models(roots: &ModelRoots) -> Vec<Installed> {
+    let mut out: Vec<Installed> = Vec::new();
+    // the shared folder first: a model in both is the shared one
+    for dir in roots.search() {
+        for i in installed_in(dir, roots.is_shared(dir)) {
+            if !out.iter().any(|o| o.manifest.id == i.manifest.id) {
+                out.push(i);
+            }
+        }
+    }
+    out.sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));
+    out
+}
+
+fn installed_in(dir: &Path, shared: bool) -> Vec<Installed> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut out = Vec::new();
     for e in entries.flatten() {
@@ -93,7 +117,7 @@ pub(super) fn installed_models(dir: &Path) -> Vec<Installed> {
             continue;
         }
         let accepted = read_capped(&p.join("installed.json"), 4096).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
-        out.push(Installed { manifest: m, accepted });
+        out.push(Installed { manifest: m, accepted, home: p, shared });
     }
     out.sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));
     out
@@ -179,9 +203,9 @@ fn inspect_file(path: &str, cmd: &str, known_sha: Option<&str>, extra: &[ModelMa
 fn list(s: &mut Session, _: &Value) -> Result<Value> {
     refresh_catalog(s);
     let dir = s.face_models_dir.clone();
-    let (settings, installed) = match &dir {
-        Some(d) => (read_settings(d), installed_models(d)),
-        None => (FaceSettings::default(), Vec::new()),
+    let (settings, installed) = match (&dir, s.face_roots()) {
+        (Some(d), Some(roots)) => (read_settings(d), installed_models(&roots)),
+        _ => (FaceSettings::default(), Vec::new()),
     };
     let on_disk = |id: &str| installed.iter().find(|i| i.manifest.id == id);
     let mut models: Vec<Value> = Vec::new();
@@ -201,8 +225,14 @@ fn list(s: &mut Session, _: &Value) -> Result<Value> {
             models.push(row(s, &i.manifest, true, settings.embedder.as_deref() == Some(i.manifest.id.as_str()), &i.accepted));
         }
     }
+    // whether a model is in the folder shared with the other ArtCraft apps (removing it takes `everyApp`)
+    for m in &mut models {
+        let shared = installed.iter().any(|i| m["id"].as_str() == Some(i.manifest.id.as_str()) && i.shared);
+        m["shared"] = json!(shared);
+    }
     Ok(json!({
         "dir": dir.as_ref().map(|d| d.display().to_string()),
+        "sharedDir": s.face_shared_dir.as_ref().map(|d| d.display().to_string()),
         "enabled": settings.enabled,
         "embedder": settings.embedder,
         // where the models run: {cpuOnly, detection, recognition} as `faces.gpu` gives it
@@ -224,7 +254,7 @@ fn inspect(s: &mut Session, p: &Value) -> Result<Value> {
     let path = str_param(p, "path").ok_or_else(|| bad(C, "missing `path`"))?;
     refresh_catalog(s);
     let ins = inspect_file(path, C, None, &catalog_manifests(s))?;
-    let installed = s.face_models_dir.as_deref().map(installed_models).unwrap_or_default();
+    let installed = s.face_roots().as_ref().map(installed_models).unwrap_or_default();
     let (kind, model, assumptions, reason) = match &ins.suggestion {
         Suggestion::Known(m) => ("known", Some(m), Vec::new(), None),
         Suggestion::Draft { manifest, assumptions } => ("draft", Some(manifest), assumptions.clone(), None),
@@ -260,6 +290,7 @@ fn install(s: &mut Session, p: &Value) -> Result<Value> {
 /// of being copied and read again.
 fn install_file(s: &mut Session, c: &str, src: &Path, ins: Inspection, acknowledged: bool, activate: bool, verified: bool) -> Result<Value> {
     let dir = models_dir(s, c)?;
+    let roots = roots(s, c)?;
     let m = match ins.suggestion {
         Suggestion::Known(m) | Suggestion::Draft { manifest: m, .. } => m,
         Suggestion::Unsupported(why) => return Err(bad(c, format!("this model cannot be used yet: {why}"))),
@@ -271,7 +302,8 @@ fn install_file(s: &mut Session, c: &str, src: &Path, ins: Inspection, acknowled
     if !acknowledged {
         return Err(bad(c, "the licence has not been accepted: show the user its terms and pass `acknowledged: true` once they agree"));
     }
-    let home = dir.join(&m.id);
+    // a model goes where it already is (the old folder too); a new one goes to the shared folder
+    let home = roots.existing_home(&m.id, &["model.onnx", "face-model.json"]).unwrap_or_else(|| roots.install_home(&m.id));
     std::fs::create_dir_all(&home).map_err(|e| fail("could not create the model's folder", e))?;
     let (part, final_path) = (home.join("model.onnx.part"), home.join("model.onnx"));
     let moved = verified && std::fs::rename(src, &part).is_ok();
@@ -353,6 +385,7 @@ fn download(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.models.download";
     let id = str_param(p, "id").ok_or_else(|| bad(C, "missing `id`"))?;
     let dir = models_dir(s, C)?;
+    let roots = roots(s, C)?;
     refresh_catalog(s);
     let spec = download_spec(s, id).ok_or_else(|| bad(C, "LightCraft has no download for that model: get the file from its page, then add it"))?;
     if cfg!(target_arch = "wasm32") {
@@ -364,7 +397,7 @@ fn download(s: &mut Session, p: &Value) -> Result<Value> {
             "the licence has not been accepted: show the user the model's terms (see `faces.models.list`) and pass `acknowledged: true` once they agree",
         ));
     }
-    if installed_models(&dir).iter().any(|i| i.manifest.id == spec.id) {
+    if installed_models(&roots).iter().any(|i| i.manifest.id == spec.id) {
         return Err(bad(C, "that model is already installed"));
     }
     let host = spec.host().to_string();
@@ -437,15 +470,15 @@ fn self_test(_: &Path, _: &ModelManifest) -> std::result::Result<Value, String> 
 fn test(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.models.test";
     let id = str_param(p, "id").ok_or_else(|| bad(C, "missing `id`"))?;
-    let dir = models_dir(s, C)?;
+    let roots = roots(s, C)?;
     if !cfg!(not(target_arch = "wasm32")) {
         return Err(bad(C, "this build cannot run face recognition models"));
     }
-    let found = installed_models(&dir).into_iter().find(|i| i.manifest.id == id).ok_or_else(|| bad(C, "that model is not installed"))?;
+    let found = installed_models(&roots).into_iter().find(|i| i.manifest.id == id).ok_or_else(|| bad(C, "that model is not installed"))?;
     if found.manifest.role != Role::Embedder {
         return Err(bad(C, "only recognition models have a self-test"));
     }
-    let result = self_test(&dir.join(id).join("model.onnx"), &found.manifest);
+    let result = self_test(&found.home.join("model.onnx"), &found.manifest);
     let (ok, detail) = match &result {
         Ok(v) => (true, v.clone()),
         Err(e) => (false, json!(e)),
@@ -454,7 +487,7 @@ fn test(s: &mut Session, p: &Value) -> Result<Value> {
     let mut record = found.accepted;
     if let Some(o) = record.as_object_mut() {
         o.insert("selfTest".into(), if ok { detail.clone() } else { json!({"ok": false, "error": detail}) });
-        write_atomic(&dir.join(id).join("installed.json"), &serde_json::to_vec_pretty(&record).map_err(|e| fail("record", e))?)?;
+        write_atomic(&found.home.join("installed.json"), &serde_json::to_vec_pretty(&record).map_err(|e| fail("record", e))?)?;
     }
     Ok(json!({"id": id, "ok": ok, "result": detail}))
 }
@@ -463,19 +496,26 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.models.remove";
     let id = str_param(p, "id").ok_or_else(|| bad(C, "missing `id`"))?;
     let dir = models_dir(s, C)?;
+    let roots = roots(s, C)?;
     if !manifest::valid_id(id) {
         return Err(bad(C, "not a model id"));
     }
-    let home = dir.join(id);
     // only a folder that is a model (it has a manifest) is ever deleted
-    if !home.join("face-model.json").is_file() {
+    let homes: Vec<PathBuf> = roots.search().map(|r| r.join(id)).filter(|h| h.join("face-model.json").is_file()).collect();
+    if homes.is_empty() {
         return Err(bad(C, "that model is not installed"));
     }
-    std::fs::remove_dir_all(&home).map_err(|e| fail("could not remove the model", e))?;
+    // the files of a model in the shared folder are the other ArtCraft apps' too
+    if homes.iter().any(|h| roots.is_shared(h)) && p.get("everyApp").and_then(Value::as_bool) != Some(true) {
+        return Err(bad(C, "that model is in the folder shared with the other ArtCraft apps: pass `everyApp: true` to remove it for all of them"));
+    }
+    for home in &homes {
+        std::fs::remove_dir_all(home).map_err(|e| fail("could not remove the model", e))?;
+    }
     let mut st = read_settings(&dir);
     if st.embedder.as_deref() == Some(id) {
         // another installed recogniser takes over, so recognition keeps working; with none left nothing is chosen
-        st.embedder = installed_models(&dir).into_iter().find(|i| i.manifest.id != id && i.manifest.role == Role::Embedder).map(|i| i.manifest.id);
+        st.embedder = installed_models(&roots).into_iter().find(|i| i.manifest.id != id && i.manifest.role == Role::Embedder).map(|i| i.manifest.id);
         // on with nothing to run is not a state (issue #678)
         st.enabled &= st.embedder.is_some();
         write_settings(&dir, &st)?;
@@ -491,7 +531,7 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
         Some(v) => Some(v.as_str().ok_or_else(|| bad(C, "`id` must be a model id or null"))?.to_string()),
     };
     if let Some(id) = &id
-        && !installed_models(&dir).iter().any(|i| &i.manifest.id == id && i.manifest.role == Role::Embedder)
+        && !installed_models(&roots(s, C)?).iter().any(|i| &i.manifest.id == id && i.manifest.role == Role::Embedder)
     {
         return Err(bad(C, "that recognition model is not installed"));
     }
@@ -504,12 +544,13 @@ fn select(s: &mut Session, p: &Value) -> Result<Value> {
 fn enable(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "faces.enable";
     let dir = models_dir(s, C)?;
+    let roots = roots(s, C)?;
     let mut st = read_settings(&dir);
     let on = p.get("enabled").and_then(Value::as_bool).unwrap_or(!st.enabled);
     // on means something only with a model to run (issue #678): a toggle that is on with nothing
     // chosen would sit there doing nothing, with no word about why
     let usable =
-        st.embedder.as_deref().is_some_and(|id| installed_models(&dir).iter().any(|i| i.manifest.id == id && i.manifest.role == Role::Embedder));
+        st.embedder.as_deref().is_some_and(|id| installed_models(&roots).iter().any(|i| i.manifest.id == id && i.manifest.role == Role::Embedder));
     if on && !usable {
         return Err(bad(C, "choose a recognition model first (Settings ▸ Faces ▸ Use)"));
     }
@@ -525,14 +566,14 @@ fn enable(s: &mut Session, p: &Value) -> Result<Value> {
 
 pub fn specs() -> Vec<CommandSpec> {
     vec![
-        cmd!(query "faces.models.list", "Face Models", [], None, "{} → {dir, enabled, embedder, runtime, models: [{id, name, role, licence{name, commercial, url, notice}, provenance, source, sizeBytes, known, installed, selected}]}", always, list),
+        cmd!(query "faces.models.list", "Face Models", [], None, "{} → {dir, sharedDir, enabled, embedder, runtime, models: [{id, name, role, licence{name, commercial, url, notice}, provenance, source, sizeBytes, known, installed, shared, selected}]}", always, list),
         cmd!(query "faces.models.inspect", "Inspect Face Model File", [], None, "{path} → what a .onnx file is: {kind: known | draft | unsupported, model, assumptions, reason, alreadyInstalled}; installs nothing", always, inspect),
         cmd!(query "faces.models.install", "Install Face Model", [], None, "{path, acknowledged: true, activate?: true} → {installed, active: {embedder, enabled}} — copy a .onnx face recognition model into the models folder. `acknowledged` must be true: the user has been shown its licence (see inspect) and accepted it. Unless `activate` is false the model becomes the one in use and recognition is switched on; an earlier model stays installed", always, install),
         cmd!(query "faces.models.download", "Download Face Model", [], None, "{id, acknowledged: true} → {started, from} — fetch a recognition model LightCraft has a pinned address for (see `downloadHost` in the list), in the background over pure-Rust https (lightcraft-fetch). `acknowledged` must be true: the user has been shown the model's terms and accepted them. It is checked against its size and SHA-256, then installed, chosen and switched on by itself; `faces.models.downloads` shows how far it is", always, download),
         cmd!(query "faces.models.downloads", "Face Model Downloads", [], None, "{} → {running, downloads: [{id, state: running | done | installed | failed | cancelled, bytes, total, error, from}]} — also installs any download that has arrived; `installed` stays listed until `faces.models.downloadCancel` clears it", always, downloads),
         cmd!(query "faces.models.downloadCancel", "Cancel Face Model Download", [], None, "{id} → {discarded} — stop a download, or delete a finished one that was not installed", always, download_cancel),
         cmd!(query "faces.models.test", "Test Face Model", [], None, "{id} → {ok, result: {loadMs, embedMs, dimension, checks}} — load an installed recognition model and check it gives sensible faces; needs the recognition runtime", always, test),
-        cmd!(query "faces.models.remove", "Remove Face Model", [], None, "{id} — delete an installed model", always, remove),
+        cmd!(query "faces.models.remove", "Remove Face Model", [], None, "{id, everyApp?} — delete an installed model. A model in the folder shared with the other ArtCraft apps is refused unless `everyApp` is true", always, remove),
         cmd!(query "faces.models.select", "Choose Face Recognition Model", [], None, "{id: installed recogniser | null}", always, select),
         cmd!(query "faces.enable", "Face Recognition On/Off", [], None, "{enabled?: bool} (toggles when omitted)", always, enable),
     ]

@@ -44,6 +44,7 @@ mod local_profile_offer;
 mod macos_colour;
 pub mod menus;
 mod missing_sweep;
+mod model_remove;
 mod model_setup;
 pub mod panels;
 pub mod pick;

@@ -42,10 +42,8 @@ fn lama_dir(var: Option<std::ffi::OsString>, home: Option<std::ffi::OsString>, c
     if let Some(v) = var.filter(|v| !v.is_empty()) {
         return Some(PathBuf::from(v));
     }
-    if cfg!(target_os = "macos")
-        && let Some(home) = home.filter(|h| !h.is_empty())
-    {
-        return Some(PathBuf::from(home).join("Library").join("Application Support").join("ArtCraft").join("models").join("lama"));
+    if let Some(shared) = crate::shared_models::shared_models_dir(home) {
+        return Some(shared.join("lama"));
     }
     config.map(|c| c.join("models").join("lama"))
 }

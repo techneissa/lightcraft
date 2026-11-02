@@ -93,10 +93,7 @@ impl Settings {
         let root = std::env::var_os("LIGHTCRAFT_BIREFNET_DIR")
             .filter(|v| !v.is_empty())
             .map(PathBuf::from)
-            .or_else(|| {
-                let home = std::env::var_os("HOME").filter(|h| !h.is_empty())?;
-                cfg!(target_os = "macos").then(|| PathBuf::from(home).join("Library").join("Application Support").join("ArtCraft").join("models"))
-            })
+            .or_else(crate::shared_models::default_shared_models_dir)
             .or_else(|| config.as_ref().map(|c| c.join("models")));
         let file = config.map(|c| c.join(SELECTION_FILE));
         let selection = file.as_deref().and_then(read_selection);

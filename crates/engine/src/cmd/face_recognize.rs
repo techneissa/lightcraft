@@ -309,8 +309,9 @@ mod imp {
             return Ok(e.clone());
         }
         let dir = s.face_models_dir.clone().ok_or_else(|| bad(cmd, "this build has nowhere to keep face models"))?;
+        let roots = s.face_roots().ok_or_else(|| bad(cmd, "this build has nowhere to keep face models"))?;
         let id = read_settings(&dir).embedder.ok_or_else(|| bad(cmd, "no recognition model is chosen: add one in Settings > Faces and press Use"))?;
-        let installed = installed_models(&dir)
+        let installed = installed_models(&roots)
             .into_iter()
             .find(|i| i.manifest.id == id)
             .ok_or_else(|| bad(cmd, "the chosen recognition model is not installed"))?;
@@ -326,7 +327,7 @@ mod imp {
         {
             return Ok(e.clone());
         }
-        let embedder = Arc::new(Embedder::load(&dir.join(&id).join("model.onnx"), &installed.manifest).map_err(|e| bad(cmd, e.to_string()))?);
+        let embedder = Arc::new(Embedder::load(&installed.home.join("model.onnx"), &installed.manifest).map_err(|e| bad(cmd, e.to_string()))?);
         let net = embedder.clone();
         super::super::face_detect::offer_gpu(s, "recognition", move |gpu| net.accelerate(gpu, true).map_err(|e| e.to_string()));
         let dim = match installed.manifest.output {

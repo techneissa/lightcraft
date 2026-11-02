@@ -83,6 +83,7 @@ pub mod reflections;
 pub mod rename;
 pub mod rename_job;
 pub mod segment;
+pub mod shared_models;
 pub mod sidecar;
 pub mod sidecar_queue;
 pub mod slide;
@@ -323,6 +324,9 @@ pub struct Session {
     pub(crate) denoise: denoise::State,
     /// Where the host keeps face models (one folder each); `None` where there is no file system (the web).
     pub face_models_dir: Option<std::path::PathBuf>,
+    /// The folder shared with the other ArtCraft apps (fork/shared-models.md): face models are looked for there first
+    /// and new ones go there; `face_models_dir` keeps the settings, the catalog and the download staging folder.
+    pub face_shared_dir: Option<std::path::PathBuf>,
     /// Face model downloads started this session (the staged files wait in `<face_models_dir>/.downloads`).
     pub face_downloads: face_download::Downloads,
     /// Reverse geocoding: the parsed place names and their download (`metadata.*PlaceNames`).
@@ -546,6 +550,7 @@ impl Session {
             trasher: Arc::new(file_trash::SystemTrash),
             denoise: Default::default(),
             face_models_dir: None,
+            face_shared_dir: None,
             face_downloads: Default::default(),
             place_names: Default::default(),
             face_catalog: Default::default(),

@@ -153,7 +153,7 @@ pub fn models_dir() -> Option<std::path::PathBuf> {
     // Fork feature (fork/reflection-removal.md): the folder shared with PhotoCraft comes first.
     shared_models::models_dir(
         std::env::var_os("LIGHTCRAFT_REFLECTION_MODELS"),
-        shared_models::shared_models_dir(std::env::var_os("HOME")),
+        crate::shared_models::default_shared_models_dir(),
         crate::config::config_dir(),
     )
 }

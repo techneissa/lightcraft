@@ -50,7 +50,7 @@ impl Model for Dim {
     }
 }
 
-fn dim_loader(runs: &Arc<AtomicUsize>) -> Loader {
+pub(super) fn dim_loader(runs: &Arc<AtomicUsize>) -> Loader {
     let runs = runs.clone();
     Arc::new(move |_, _| Ok(Arc::new(Dim { runs: runs.clone() }) as Arc<dyn Model>))
 }
@@ -73,7 +73,7 @@ fn manifest(id: &str) -> DenoiserManifest {
 }
 
 /// The model's `.onnx` (not a real one: the stand-in loader never reads it) with its manifest beside it.
-fn model_files(dir: &Path, id: &str) -> PathBuf {
+pub(super) fn model_files(dir: &Path, id: &str) -> PathBuf {
     let src = dir.join(format!("src-{id}"));
     std::fs::create_dir_all(&src).unwrap();
     std::fs::write(src.join("denoise-model.json"), serde_json::to_vec(&manifest(id)).unwrap()).unwrap();
@@ -659,7 +659,7 @@ fn settings_are_checked_saved_and_a_paused_pump_starts_nothing() {
     crate::denoise::write_settings(&models, &st).unwrap();
     assert_eq!(x.s.execute("denoise.models.list", &json!({})).unwrap()["runOn"], "cpu");
     // choosing where it runs lets the card be tried again after a set-up that closed LightCraft
-    let onnx = crate::denoise::installed_models(&models).first().unwrap().onnx.clone();
+    let onnx = crate::denoise::installed_models(&crate::shared_models::ModelRoots::old_only(&models)).first().unwrap().onnx.clone();
     let marker = onnx.with_file_name(crate::denoise::GPU_SETUP_MARKER);
     std::fs::write(&marker, "setting up").unwrap();
     assert_eq!(x.s.execute("denoise.settings", &json!({"runOn": "auto"})).unwrap()["runOn"], "auto");

@@ -1,0 +1,2 @@
+cargo test -p lightcraft-engine --lib -- shared_models
+cargo test -p lightcraft-ui-egui --lib -- model_remove
