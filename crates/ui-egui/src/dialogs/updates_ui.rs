@@ -22,6 +22,9 @@ pub(crate) struct Runtime {
     repaint: Option<egui::Context>,
     /// A requested check's result dialog is showing.
     pub(crate) manual_window_open: bool,
+    /// This fork's check: the fork's own build on GitHub, never the official release (fork/in-app-update.md).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fork: crate::fork_update::State,
     #[cfg(target_arch = "wasm32")]
     pub(crate) status_message: Option<String>,
 }
@@ -38,6 +41,8 @@ impl Default for Runtime {
             #[cfg(not(target_arch = "wasm32"))]
             repaint: None,
             manual_window_open: false,
+            #[cfg(not(target_arch = "wasm32"))]
+            fork: Default::default(),
             #[cfg(target_arch = "wasm32")]
             status_message: None,
         }
@@ -56,7 +61,7 @@ impl LightcraftApp {
 pub(crate) fn blocks_input(app: &LightcraftApp) -> bool {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        app.updates_rt.updater.prompt_open()
+        app.updates_rt.updater.prompt_open() || app.updates_rt.fork.window_open
     }
     #[cfg(target_arch = "wasm32")]
     {
@@ -87,13 +92,13 @@ pub(crate) fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
     {
         let rt = &mut app.updates_rt;
         rt.repaint = Some(ctx.clone());
-        if std::mem::take(&mut rt.check_requested) {
-            rt.updater.check_now(ctx);
-            rt.manual_window_open = true;
-        } else if rt.startup_check {
-            rt.updater.check_at_start(ctx);
+        // The official release is never asked for; the fork's own build is (crate::fork_update).
+        let (asked, at_start) = (std::mem::take(&mut rt.check_requested), rt.startup_check);
+        if asked {
+            crate::fork_update::request_with_window(app);
         }
-        rt.updater.tick(ctx);
+        crate::fork_update::tick(app, at_start);
+        app.updates_rt.updater.tick(ctx);
     }
     #[cfg(target_arch = "wasm32")]
     let _ = (app, ctx);
@@ -102,6 +107,7 @@ pub(crate) fn tick(app: &mut LightcraftApp, ctx: &egui::Context) {
 pub(crate) fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     #[cfg(not(target_arch = "wasm32"))]
     {
+        crate::fork_update::window(app, ctx);
         // The restart helper is scheduled before the app closes, so no update starts over unsaved work.
         let clean = app.session.unsaved().is_none();
         match app.updates_rt.updater.show_if(ctx, clean) {

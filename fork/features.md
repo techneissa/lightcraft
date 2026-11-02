@@ -53,3 +53,4 @@ feature: it is the hot spot two branches would both append to.
 - [Find People and Find Wires](find-people-wires.md): Remove panel buttons that outline people and wires and remove them in one click, with SAM 3 or built-in detectors. Branch `feat/24-find-people-wires`.
 - [Map view](map-view.md): View ▸ Map with pins, drag to geotag, saved locations, location filter and track logs, from the official Map PRs taken early; starts Offline until you pick a tile server. Branch `feat/4-map-view`.
 - [Renaming, one way everywhere](consistent-renaming.md): Rows rename in place with one set of rules; Rename Photos and Rename Folder move their files on a worker. Branch `feat/27-consistent-renaming`.
+- [In-app update check](in-app-update.md): Check for Updates (Help menu, Settings, at start) looks for this fork's own build on GitHub, never the official release; Update opens the Update LightCraft app. Branch `feat/fork-update-check`.
