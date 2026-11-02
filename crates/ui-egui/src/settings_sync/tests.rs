@@ -68,19 +68,80 @@ fn the_text_limit_is_the_folders() {
 
 // ------------------------------------------------------------------ the keys
 
+/// The key each field of `struct_name` has in `ui.json`, read from the struct's source: its name in camelCase (or its
+/// `rename`), leaving out fields that are never written (`skip`, `skip_serializing`). Fields that are only left out
+/// while empty (`skip_serializing_if`) are in: no state built in a test could set a field the test doesn't know of.
+fn written_keys(source: &str, struct_name: &str) -> Vec<String> {
+    let start = source.find(&format!("pub struct {struct_name} {{")).expect("the struct is in the source");
+    let (mut keys, mut attrs) = (Vec::new(), String::new());
+    for line in source[start..].lines().skip(1) {
+        let line = line.trim();
+        if line == "}" {
+            break;
+        }
+        if line.starts_with("///") || line.starts_with("//") || line.is_empty() {
+            continue;
+        }
+        let Some(field) = line.strip_prefix("pub ").and_then(|r| r.split_once(':')).map(|(name, _)| name.trim().to_string()) else {
+            attrs.push_str(line);
+            continue;
+        };
+        let words: Vec<&str> = attrs.split(|c: char| !c.is_alphanumeric() && c != '_').collect();
+        let never_written = words.iter().any(|w| *w == "skip" || *w == "skip_serializing");
+        let renamed = attrs.split("rename = \"").nth(1).and_then(|r| r.split('"').next()).map(str::to_string);
+        if !never_written {
+            let camel =
+                field.split('_').enumerate().map(|(n, w)| if n == 0 { w.to_string() } else { w[..1].to_uppercase() + &w[1..] }).collect::<String>();
+            keys.push(renamed.unwrap_or(camel));
+        }
+        attrs.clear();
+    }
+    keys
+}
+
+/// A state with every `Option` and every field that is left out while empty filled in.
+fn full_state() -> UiState {
+    let mut ui = UiState {
+        window: Some(crate::window_place::WindowPlace { size: [1200.0, 800.0], zoomed: false }),
+        docking: Some(Default::default()),
+        show_clipping: Some(true),
+        crop_default_aspect: Some(json!("free")),
+        renaming_component: Some((1, 2, "x".into())),
+        ..Default::default()
+    };
+    ui.settings.photo_menu = Some(vec!["---".into()]);
+    ui.settings.top_bar_hidden = vec!["bell".into()];
+    ui
+}
+
 #[test]
 fn every_ui_key_is_decided() {
     // A key of `ui.json` that is in neither list is a setting nobody decided about: it is synced (the file is
     // built from a deny list), but decide: name it in `SYNCED` for the file, or in `LEFT_OUT` with the reason it
     // belongs to one Mac (a window, a screen, a folder, a hardware choice, what is open right now).
-    let ui = serde_json::to_value(UiState::default()).unwrap();
-    let keys = ui.as_object().unwrap();
-    let undecided: Vec<&String> = keys.keys().filter(|k| rules::left_out(k).is_none() && !rules::SYNCED.contains(&k.as_str())).collect();
+    let decided = |k: &str| rules::left_out(k).is_some() || rules::SYNCED.contains(&k);
+    let decided_setting = |k: &str| rules::left_out_setting(k).is_some() || rules::SYNCED_SETTINGS.contains(&k);
+    // what a populated state writes
+    let ui = serde_json::to_value(full_state()).unwrap();
+    let undecided: Vec<&String> = ui.as_object().unwrap().keys().filter(|k| !decided(k)).collect();
     assert!(undecided.is_empty(), "ui.json keys that are neither synced nor left out (add them to settings_sync::rules): {undecided:?}");
-    let settings = keys["settings"].as_object().unwrap();
-    let undecided: Vec<&String> =
-        settings.keys().filter(|k| rules::left_out_setting(k).is_none() && !rules::SYNCED_SETTINGS.contains(&k.as_str())).collect();
+    let undecided: Vec<&String> = ui["settings"].as_object().unwrap().keys().filter(|k| !decided_setting(k)).collect();
     assert!(undecided.is_empty(), "settings keys that are neither synced nor left out (add them to settings_sync::rules): {undecided:?}");
+    // and every field of the two structs, whatever it holds
+    let top = written_keys(include_str!("../state.rs"), "UiState");
+    let settings = written_keys(include_str!("../state/settings.rs"), "AppSettings");
+    assert!(top.len() > 60 && settings.len() > 30, "the scan found {} and {} fields", top.len(), settings.len());
+    let undecided: Vec<&String> = top.iter().filter(|k| !decided(k)).collect();
+    assert!(undecided.is_empty(), "fields of UiState that are neither synced nor left out (add them to settings_sync::rules): {undecided:?}");
+    let undecided: Vec<&String> = settings.iter().filter(|k| !decided_setting(k)).collect();
+    assert!(undecided.is_empty(), "fields of AppSettings that are neither synced nor left out (add them to settings_sync::rules): {undecided:?}");
+    // the lists name fields that exist
+    for name in rules::LEFT_OUT.iter().map(|(k, _)| *k).chain(rules::SYNCED.iter().copied()) {
+        assert!(top.iter().any(|k| k == name), "`{name}` is not a field of UiState");
+    }
+    for name in rules::LEFT_OUT_SETTINGS.iter().map(|(k, _)| *k).chain(rules::SYNCED_SETTINGS.iter().copied()) {
+        assert!(settings.iter().any(|k| k == name), "`{name}` is not a field of AppSettings");
+    }
 }
 
 #[test]
@@ -249,7 +310,7 @@ fn unknown_settings_are_named_at_most_two_hundred_times_and_counted_all() {
         ui.insert(format!("future{i}"), json!(i));
     }
     let text = json!({"kind": "lightcraft-settings", "version": 3, "ui": ui}).to_string();
-    let p = plan::plan(&text, true).unwrap();
+    let p = plan::plan(&text, Some(&[])).unwrap();
     assert_eq!(p.unknown.len(), 200);
     assert_eq!(p.unknown_total, 300);
     let r = p.report(false);
@@ -261,13 +322,36 @@ fn unknown_settings_are_named_at_most_two_hundred_times_and_counted_all() {
 fn the_prompt_names_the_first_five_then_how_many_more() {
     use super::prompt::{unknown_line, unknown_list};
     let names: Vec<String> = (1..=8).map(|i| format!("ui.s{i}")).collect();
-    assert_eq!(unknown_line(&[], 0), None);
-    assert_eq!(unknown_line(&names[..3], 3).unwrap(), "3 settings from a newer LightCraft were skipped: ui.s1, ui.s2, ui.s3");
-    assert_eq!(unknown_line(&names[..1], 1).unwrap(), "1 setting from a newer LightCraft was skipped: ui.s1");
-    assert_eq!(unknown_line(&names, 8).unwrap(), "8 settings from a newer LightCraft were skipped: ui.s1, ui.s2, ui.s3, ui.s4, ui.s5, and 3 more");
+    assert_eq!(unknown_line(&[], 0, true), None);
+    assert_eq!(unknown_line(&names[..3], 3, true).unwrap(), "3 settings from a newer LightCraft were skipped: ui.s1, ui.s2, ui.s3");
+    assert_eq!(unknown_line(&names[..1], 1, true).unwrap(), "1 setting from a newer LightCraft was skipped: ui.s1");
+    assert_eq!(
+        unknown_line(&names, 8, true).unwrap(),
+        "8 settings from a newer LightCraft were skipped: ui.s1, ui.s2, ui.s3, ui.s4, ui.s5, and 3 more"
+    );
+    // a file of this version that holds a left-out key is not "from a newer LightCraft"
+    assert_eq!(unknown_line(&names[..2], 2, false).unwrap(), "2 settings were skipped: ui.s1, ui.s2");
+    assert_eq!(unknown_line(&names[..1], 1, false).unwrap(), "1 setting was skipped: ui.s1");
     // the hover has all of them, and says when the list itself was cut
     assert_eq!(unknown_list(&names, 8).lines().count(), 8);
     assert!(unknown_list(&names, 250).ends_with("…and 242 more"));
+}
+
+#[test]
+fn a_left_out_key_in_a_file_of_this_version_is_skipped_and_named_without_a_newer_lightcraft() {
+    let home = scratch("left-out-key");
+    let mut app = app_on("B", &home);
+    let text = json!({"kind": "lightcraft-settings", "version": 1, "ui": {"leftWidth": 999, "brushFlow": 22.0, "settings": {"libraryPath": "/x"}}})
+        .to_string();
+    let p = plan::plan(&text, None).unwrap();
+    assert_eq!(p.newer, None);
+    assert_eq!(p.unknown, vec!["ui.leftWidth".to_string(), "ui.settings.libraryPath".to_string()]);
+    let line = super::prompt::unknown_line(&p.unknown, p.unknown_total, p.newer.is_some()).unwrap();
+    assert!(!line.contains("newer"), "{line}");
+    import_text(&mut app, &text).unwrap();
+    assert_eq!(app.ui.brush_flow, 22.0);
+    assert_eq!(app.ui.left_width, UiState::default().left_width, "left out means left out");
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 #[test]
@@ -310,6 +394,19 @@ fn a_bad_value_for_a_known_setting_names_it_and_changes_nothing() {
         (json!({"settings": {"darkTheme": "plaid"}}), "darkTheme"),
         (json!({"settings": {"keymap": {"view.survey": "Hyper+Banana"}}}), "view.survey"),
         (json!({"settings": {"filmNames": "yes"}}), "filmNames"),
+        // read leniently from the app's own ui.json (a bad value is the default there), never from a file
+        (json!({"settings": {"atLaunch": "whenever"}}), "atLaunch"),
+        (json!({"settings": {"atLaunch": 3}}), "atLaunch"),
+        (json!({"settings": {"deleteFiles": "shred"}}), "deleteFiles"),
+        (json!({"settings": {"keywordChips": "sparkles"}}), "keywordChips"),
+        (json!({"settings": {"loupeInfo": "all of it"}}), "loupeInfo"),
+        (json!({"settings": {"lightroomImport": "sometimes"}}), "lightroomImport"),
+        (json!({"settings": {"photoMenuPresets": [1, 2]}}), "photoMenuPresets"),
+        (json!({"settings": {"topBarHidden": "bell"}}), "topBarHidden"),
+        (json!({"settings": {"topBarHidden": ["bell", 7]}}), "topBarHidden"),
+        (json!({"settings": {"photoMenu": "---"}}), "photoMenu"),
+        (json!({"foldedSections": "keywording"}), "foldedSections"),
+        (json!({"foldedSections": ["keywording", false]}), "foldedSections"),
         (json!({"settings": 5}), "ui.settings"),
         (json!(["not", "an", "object"]), "ui"),
     ] {
@@ -410,7 +507,7 @@ fn save_to_folder_and_load_from_folder_move_settings_between_macs_through_one_fi
 
 /// An RFC 3339 time with an offset, to the second.
 fn chrono_like(at: &str) -> bool {
-    folder::SavedBy { computer: "x".into(), at: at.into() }.when().is_some() && at.len() >= 20
+    folder::SavedBy { computer: "x".into(), at: at.into(), id: None }.when().is_some() && at.len() >= 20
 }
 
 #[test]
@@ -494,7 +591,7 @@ fn keep_in_sync(app: &mut LightcraftApp, dir: &Path) {
 }
 
 fn stamp_file(dir: &Path, computer: &str, at: &str) {
-    let by = folder::SavedBy { computer: computer.into(), at: at.into() };
+    let by = folder::SavedBy { computer: computer.into(), at: at.into(), id: None };
     folder::save(&dir.to_string_lossy(), json!({"kind": "lightcraft-settings", "version": 1, "ui": {"brushFlow": 77.0}}), by).unwrap();
 }
 
@@ -674,16 +771,28 @@ fn ui_set_refuses_the_sync_folder() {
 
 // ------------------------------------------------------------------ presets
 
-fn user_preset(app: &mut LightcraftApp, name: &str) {
-    let preset = lightcraft_develop::Preset {
+fn make_preset(name: &str, exposure: f64) -> lightcraft_develop::Preset {
+    lightcraft_develop::Preset {
         id: String::new(),
         name: name.into(),
         group: "User Presets".into(),
-        settings: json!({"light": {"exposure": 0.5}}),
+        settings: json!({"light": {"exposure": exposure}}),
         favorite: false,
         builtin: false,
-    };
-    app.session.add_presets(vec![preset]);
+    }
+}
+
+fn user_preset(app: &mut LightcraftApp, name: &str) {
+    app.session.add_presets(vec![make_preset(name, 0.5)]);
+}
+
+fn with_presets(app: &LightcraftApp) -> String {
+    let by = folder::SavedBy { computer: "A".into(), at: "2026-11-02T10:00:00Z".into(), id: None };
+    folder::stamped_text(rules::document(&app.ui, rules::presets_part(&app.session.presets)), &by)
+}
+
+fn user_presets(app: &LightcraftApp) -> Vec<(String, Value)> {
+    app.session.presets.iter().filter(|p| !p.builtin).map(|p| (p.name.clone(), p.settings.clone())).collect()
 }
 
 #[test]
@@ -693,7 +802,7 @@ fn user_presets_travel_when_included_and_are_never_the_built_in_ones() {
     user_preset(&mut a, "Warm Look");
     assert!(a.session.presets.iter().any(|p| p.builtin), "built-in presets exist");
     assert!(a.ui.sync.presets, "on by default");
-    let text = folder::stamped_text(rules::document(&a.ui, rules::presets_part(&a.session.presets)), &a.sync_settings.env.saved_by());
+    let text = with_presets(&a);
     let doc: Value = serde_json::from_str(&text).unwrap();
     let names: Vec<&str> = doc["presets"]["presets"].as_array().unwrap().iter().filter_map(|p| p["name"].as_str()).collect();
     assert_eq!(names, vec!["Warm Look"]);
@@ -701,11 +810,12 @@ fn user_presets_travel_when_included_and_are_never_the_built_in_ones() {
     let mut b = app_on("B", &home);
     let before = b.session.presets.len();
     let r = import_text(&mut b, &text).unwrap();
-    assert_eq!(r["presets"], 1);
+    assert_eq!((r["presetsAdded"].clone(), r["presetsReplaced"].clone()), (json!(1), json!(0)));
     assert_eq!(b.session.presets.len(), before + 1);
     assert!(b.session.presets.iter().any(|p| p.name == "Warm Look" && !p.builtin));
-    // again: an identical preset is not added twice
-    import_text(&mut b, &text).unwrap();
+    // again: an identical preset changes nothing and the plan says so
+    let r = import_text(&mut b, &text).unwrap();
+    assert_eq!((r["presets"].clone(), r["presetsAdded"].clone(), r["presetsReplaced"].clone()), (json!(0), json!(0), json!(0)));
     assert_eq!(b.session.presets.len(), before + 1);
 
     // the option off: the file has none, and an import leaves them out
@@ -724,4 +834,266 @@ fn user_presets_travel_when_included_and_are_never_the_built_in_ones() {
     let bad = json!({"kind": "lightcraft-settings", "version": 1, "presets": {"presets": 5}}).to_string();
     assert!(import_text(&mut b, &bad).unwrap_err().contains("presets"));
     let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn a_preset_of_the_same_name_with_other_settings_replaces_the_one_here() {
+    let home = scratch("presets-replace");
+    let mut a = app_on("A", &home);
+    a.session.add_presets(vec![make_preset("Warm Look", 0.9), make_preset("New Look", 0.1), make_preset("Same Look", 0.3)]);
+    let text = with_presets(&a);
+    let mut b = app_on("B", &home);
+    b.session.add_presets(vec![make_preset("Warm Look", 0.5), make_preset("Same Look", 0.3), make_preset("Mine Only", 0.7)]);
+    let ids_before: Vec<String> = b.session.presets.iter().filter(|p| p.name == "Warm Look").map(|p| p.id.clone()).collect();
+
+    // the prompt counts only what would change: one added, one replaced, the identical one not at all
+    let r = b.run("settings.import", json!({"text": text, "prompt": true})).unwrap();
+    assert_eq!(r["dialog"], true);
+    let prompt = b.sync_settings.prompt.clone().unwrap();
+    assert_eq!((prompt.plan.presets_added, prompt.plan.presets_replaced), (1, 1));
+    assert_eq!(super::prompt::presets_line(&prompt.plan).unwrap(), "Presets: 1 added, 1 replaced.");
+    // nothing changes before OK
+    assert_eq!(user_presets(&b).iter().find(|(n, _)| n == "Warm Look").unwrap().1["light"]["exposure"], 0.5);
+    crate::panels::dialogs::confirm_dialog(&mut b, &Dialog::SettingsImport).unwrap();
+
+    let mine = user_presets(&b);
+    assert_eq!(mine.iter().filter(|(n, _)| n == "Warm Look").count(), 1, "replaced, not added beside it");
+    assert_eq!(mine.iter().find(|(n, _)| n == "Warm Look").unwrap().1["light"]["exposure"], 0.9);
+    let ids_after: Vec<String> = b.session.presets.iter().filter(|p| p.name == "Warm Look").map(|p| p.id.clone()).collect();
+    assert_eq!(ids_before, ids_after, "the preset keeps its place and id");
+    assert!(mine.iter().any(|(n, _)| n == "New Look") && mine.iter().any(|(n, _)| n == "Mine Only"));
+    assert_eq!(mine.iter().filter(|(n, _)| n == "Same Look").count(), 1);
+    assert_eq!(super::prompt::presets_line(&plan::Plan { presets_added: 2, ..Default::default() }).unwrap(), "Presets: 2 added.");
+    assert_eq!(super::prompt::presets_line(&plan::Plan { presets_replaced: 3, ..Default::default() }).unwrap(), "Presets: 3 replaced.");
+    assert_eq!(super::prompt::presets_line(&plan::Plan::default()), None);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn the_prompt_lists_only_the_parts_the_file_has() {
+    let home = scratch("areas");
+    let line = |ui: Value| {
+        let text = json!({"kind": "lightcraft-settings", "version": 1, "ui": ui}).to_string();
+        super::prompt::replaces_line(&plan::plan(&text, None).unwrap())
+    };
+    assert_eq!(line(json!({"settings": {"keymap": {}}})).unwrap(), "This replaces your keyboard shortcuts.");
+    assert_eq!(
+        line(json!({"language": "en", "settings": {"keymap": {}, "darkTheme": "midnight"}, "sidebar": []})).unwrap(),
+        "This replaces your appearance, keyboard shortcuts and arrangements."
+    );
+    assert_eq!(
+        line(json!({"brushSize": 0.1, "removeSize": 0.1, "settings": {"topBarHidden": []}})).unwrap(),
+        "This replaces your arrangements and tool defaults."
+    );
+    assert_eq!(line(json!({"settings": {"dimRejected": true}})).unwrap(), "This replaces your other settings.");
+    assert_eq!(line(json!({})), None);
+    // a file with presets only has no settings line
+    let only =
+        json!({"kind": "lightcraft-settings", "version": 1, "presets": {"format": "lightcraft.preset", "version": 1, "presets": []}}).to_string();
+    assert_eq!(super::prompt::replaces_line(&plan::plan(&only, Some(&[])).unwrap()), None);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+// ------------------------------------------------------------------ Save over newer settings
+
+fn put_file(dir: &Path, computer: &str, at: &str, id: Option<&str>) {
+    let by = folder::SavedBy { computer: computer.into(), at: at.into(), id: id.map(str::to_string) };
+    folder::save(&dir.to_string_lossy(), json!({"kind": "lightcraft-settings", "version": 1, "ui": {"brushFlow": 66.0}}), by).unwrap();
+}
+
+#[test]
+fn save_to_folder_asks_before_replacing_newer_settings_from_another_mac() {
+    let home = scratch("ask-home");
+    let sync = scratch("ask-folder");
+    let mut app = app_on("Studio", &home);
+    chosen(&mut app, &sync);
+    app.ui.sync.last = "2026-11-02T10:00:00+01:00".into();
+    put_file(&sync, "Laptop", "2026-11-02T12:00:00+01:00", None);
+    let original = std::fs::read_to_string(sync.join(FILE_NAME)).unwrap();
+
+    // a person: asked, in words, and nothing is written yet
+    let r = app.run("settings.syncSave", json!({})).unwrap();
+    assert_eq!(r["dialog"], true);
+    assert!(matches!(app.ui.dialog, Some(Dialog::SettingsReplace)));
+    let question = app.sync_settings.replace.clone().unwrap();
+    assert!(question.starts_with("The folder has newer settings from Laptop, ") && question.ends_with(". Replace them?"), "{question}");
+    assert!(question.contains("2026"), "{question}");
+    assert_eq!(std::fs::read_to_string(sync.join(FILE_NAME)).unwrap(), original);
+    // Cancel: still nothing. Replace: saved, and noted
+    app.ui.dialog = None;
+    assert_eq!(std::fs::read_to_string(sync.join(FILE_NAME)).unwrap(), original);
+    app.run("settings.syncSave", json!({})).unwrap();
+    crate::panels::dialogs::confirm_dialog(&mut app, &Dialog::SettingsReplace).unwrap();
+    assert_ne!(std::fs::read_to_string(sync.join(FILE_NAME)).unwrap(), original);
+    let by = folder::read(&sync.to_string_lossy()).unwrap().by.unwrap();
+    assert_eq!(by.computer, "Studio");
+    assert_eq!(app.ui.sync.last, by.at);
+    // it is this Mac's own file now: no question
+    app.ui.dialog = None;
+    let r = app.run("settings.syncSave", json!({})).unwrap();
+    assert!(r.get("dialog").is_none(), "{r}");
+    assert!(app.ui.dialog.is_none());
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&sync);
+}
+
+#[test]
+fn an_agent_saving_over_newer_settings_gets_an_error_unless_it_says_replace() {
+    let home = scratch("agent-ask-home");
+    let sync = scratch("agent-ask-folder");
+    let mut app = app_on("Studio", &home);
+    chosen(&mut app, &sync);
+    put_file(&sync, "Laptop", "2026-11-02T12:00:00+01:00", None);
+    let original = std::fs::read_to_string(sync.join(FILE_NAME)).unwrap();
+    app.from_control = true;
+    let e = app.run("settings.syncSave", json!({})).unwrap_err();
+    assert!(e.contains("Replace them?") && e.contains("\"replace\": true"), "{e}");
+    assert!(app.run("settings.syncSave", json!({"replace": false})).is_err());
+    assert_eq!(std::fs::read_to_string(sync.join(FILE_NAME)).unwrap(), original);
+    assert!(app.ui.dialog.is_none(), "an agent gets no dialog");
+    let r = app.run("settings.syncSave", json!({"replace": true})).unwrap();
+    assert_eq!(r["savedBy"]["computer"], "Studio");
+    assert_ne!(std::fs::read_to_string(sync.join(FILE_NAME)).unwrap(), original);
+    app.from_control = false;
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&sync);
+}
+
+#[test]
+fn a_file_that_cannot_be_read_as_to_who_or_when_is_treated_as_newer() {
+    let home = scratch("unknown-home");
+    let sync = scratch("unknown-folder");
+    let mut app = app_on("Studio", &home);
+    chosen(&mut app, &sync);
+    app.ui.sync.keep = true;
+    app.ui.sync.last = "2026-11-02T10:00:00+01:00".into();
+    for (text, expect) in [
+        (r#"{"kind": "lightcraft-settings", "version": 1}"#, "don't say which Mac"),
+        (r#"{"kind": "lightcraft-settings", "version": 1, "savedBy": {"computer": 5}}"#, "don't say which Mac"),
+        (r#"{"kind": "lightcraft-settings", "version": 1, "savedBy": {"computer": "Laptop", "at": "last week"}}"#, "can't be read"),
+        ("{ damaged", "don't say which Mac"),
+    ] {
+        std::fs::write(sync.join(FILE_NAME), text).unwrap();
+        // Save asks (an agent is refused)
+        let r = app.run("settings.syncSave", json!({})).unwrap();
+        assert_eq!(r["dialog"], true, "{text}");
+        assert!(app.sync_settings.replace.as_ref().unwrap().contains(expect), "{text}: {:?}", app.sync_settings.replace);
+        app.ui.dialog = None;
+        app.from_control = true;
+        assert!(app.run("settings.syncSave", json!({})).is_err(), "{text}");
+        app.from_control = false;
+        // quitting does not overwrite it
+        super::save_on_quit(&mut app);
+        assert_eq!(std::fs::read_to_string(sync.join(FILE_NAME)).unwrap(), text, "quit replaced {text}");
+        // and it is never offered at start (it would be, at every start)
+        app.sync_settings.started = false;
+        super::offer_at_start(&mut app);
+        assert!(app.ui.dialog.is_none(), "{text}");
+    }
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&sync);
+}
+
+#[test]
+fn two_macs_with_one_name_are_told_apart_by_the_id_this_mac_keeps() {
+    let home = scratch("ids-home");
+    let sync = scratch("ids-folder");
+    let mut a = app_on("MacBook", &home);
+    let mut b = app_on("MacBook", &home);
+    chosen(&mut a, &sync);
+    chosen(&mut b, &sync);
+    assert!(a.ui.sync.id.is_empty(), "made when first needed");
+    a.run("settings.syncSave", json!({})).unwrap();
+    let id_a = a.ui.sync.id.clone();
+    assert_eq!(id_a.len(), 32);
+    let saved = folder::read(&sync.to_string_lossy()).unwrap().by.unwrap();
+    assert_eq!(saved.id.as_deref(), Some(id_a.as_str()));
+    // kept: a second save uses the same id, and it is in the settings that ui.json holds
+    a.run("settings.syncSave", json!({})).unwrap();
+    assert_eq!(a.ui.sync.id, id_a);
+    assert_eq!(serde_json::to_value(&a.ui).unwrap()["sync"]["id"], id_a.as_str());
+    // B has the same name, and has not loaded A's file: it is another Mac
+    let r = b.run("settings.syncSave", json!({})).unwrap();
+    assert_eq!(r["dialog"], true, "same name, other id: asked");
+    assert_ne!(b.ui.sync.id, id_a);
+    b.ui.dialog = None;
+    b.ui.sync.keep = true;
+    super::save_on_quit(&mut b);
+    assert_eq!(folder::read(&sync.to_string_lossy()).unwrap().by.unwrap().id.as_deref(), Some(id_a.as_str()), "quit did not replace it");
+    // B loads it (now it has the file): saving is fine, and A is then the one that is asked
+    b.run("settings.syncLoad", json!({})).unwrap();
+    crate::panels::dialogs::confirm_dialog(&mut b, &Dialog::SettingsImport).unwrap();
+    b.ui.dialog = None;
+    let r = b.run("settings.syncSave", json!({})).unwrap();
+    assert!(r.get("dialog").is_none(), "{r}");
+    // (times are to the second: say A's last save was well before B's)
+    a.ui.sync.last = "2026-01-01T00:00:00+00:00".into();
+    let r = a.run("settings.syncSave", json!({})).unwrap();
+    assert_eq!(r["dialog"], true, "B saved after A's last save");
+    // a file with no id (PhotoCraft's kind, or an older one) is told apart by name
+    put_file(&sync, "MacBook", "2030-01-01T00:00:00+01:00", None);
+    a.ui.dialog = None;
+    let r = a.run("settings.syncSave", json!({})).unwrap();
+    assert!(r.get("dialog").is_none(), "the same name: this Mac's own: {r}");
+    put_file(&sync, "Other Mac", "2030-01-01T00:00:00+01:00", None);
+    let r = a.run("settings.syncSave", json!({})).unwrap();
+    assert_eq!(r["dialog"], true);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&sync);
+}
+
+// ------------------------------------------------------------------ small things
+
+#[test]
+fn a_leftover_temporary_file_goes_at_start_and_nothing_else() {
+    let home = scratch("leftover-home");
+    let sync = scratch("leftover-folder");
+    let mut app = app_on("Studio", &home);
+    chosen(&mut app, &sync);
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    for (name, aged) in [(".lightcraft.lcsettings.77-0.tmp", true), (".photocraft.pcsettings.77-0.tmp", true), ("mine.tmp", true), (FILE_NAME, true)]
+    {
+        let path = sync.join(name);
+        std::fs::write(&path, "x").unwrap();
+        if aged {
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(old).unwrap();
+        }
+    }
+    super::offer_at_start(&mut app);
+    assert!(!sync.join(".lightcraft.lcsettings.77-0.tmp").exists());
+    for kept in [".photocraft.pcsettings.77-0.tmp", "mine.tmp", FILE_NAME] {
+        assert!(sync.join(kept).exists(), "{kept} was removed");
+    }
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&sync);
+}
+
+#[test]
+fn when_applying_fails_the_prompt_stays_with_the_real_error() {
+    let home = scratch("fail-home");
+    let app = app_on("B", &home);
+    let mut h = crate::headless::Headless::new(app, [1200.0, 800.0], 1.0);
+    let t = std::time::Duration::from_secs(20);
+    // a plan that can't be read back as settings (what a bug or a race could hand over)
+    let mut bad = plan::Plan::default();
+    bad.ui.insert("brushSize".into(), json!("not a number"));
+    h.app.sync_settings.prompt = Some(super::Prompt { plan: bad, name: "x.lcsettings".into(), saved_line: None, saved_at: None, from_folder: false });
+    h.app.ui.dialog = Some(Dialog::SettingsImport);
+    let before = serde_json::to_value(&h.app.ui.settings).unwrap();
+    let r = h.request("ui.dialog.confirm", json!({}), t);
+    assert_eq!(r["ok"], false, "{r}");
+    assert!(r["error"].as_str().unwrap().contains("can't be used"), "{r}");
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::SettingsImport)), "the dialog stays usable");
+    assert!(h.app.sync_settings.prompt.is_some(), "so does the prompt");
+    assert_eq!(serde_json::to_value(&h.app.ui.settings).unwrap(), before);
+    let r = h.request("ui.dialog.cancel", json!({}), t);
+    assert_eq!(r["ok"], true, "{r}");
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn the_deny_list_leaves_out_every_open_or_visible_flag() {
+    for key in ["openSections", "navigator", "filterBar", "filmstrip", "presets", "histogram", "leftPanel", "right"] {
+        assert!(rules::left_out(key).is_some(), "{key} belongs to one screen");
+    }
 }

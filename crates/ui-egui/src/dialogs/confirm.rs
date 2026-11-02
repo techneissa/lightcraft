@@ -227,6 +227,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
         Dialog::LocalProfileSwitch { id, .. } => app.run("profiles.localSwitch", json!({"id": id})),
         Dialog::SettingsImport => crate::settings_sync::confirm(app),
+        Dialog::SettingsReplace => crate::settings_sync::confirm_replace(app),
         Dialog::SmartPreviewsForEditing { .. } => crate::smart_editing::build(app),
         // on a worker: a large library would freeze the window
         Dialog::MacosForCamera { photo, .. } => crate::macos_colour::job::start(app, *photo, true),

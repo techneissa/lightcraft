@@ -13,7 +13,7 @@ use std::path::Path;
 
 use serde_json::{Value, json};
 
-use lightcraft_engine::settings_folder::{self as folder, EXTENSION, FolderFile, SavedBy};
+use lightcraft_engine::settings_folder::{self as folder, EXTENSION, FolderFile, Me, SavedBy};
 
 use super::{Plan, Prompt, plan, rules};
 use crate::LightcraftApp;
@@ -37,6 +37,29 @@ pub(crate) fn tilde(path: &str) -> String {
 fn document_now(app: &LightcraftApp) -> Value {
     let presets = if app.ui.sync.presets { rules::presets_part(&app.session.presets) } else { None };
     rules::document(&app.ui, presets)
+}
+
+/// This Mac's own id, made the first time it is needed and kept in this Mac's settings.
+fn mac_id(app: &mut LightcraftApp) -> String {
+    if app.ui.sync.id.is_empty() {
+        app.ui.sync.id = folder::new_mac_id();
+    }
+    app.ui.sync.id.clone()
+}
+
+fn me(app: &mut LightcraftApp) -> Me {
+    let id = mac_id(app);
+    app.sync_settings.env.me(&id)
+}
+
+fn stamp(app: &mut LightcraftApp) -> SavedBy {
+    let id = mac_id(app);
+    app.sync_settings.env.saved_by(&id)
+}
+
+/// The presets this Mac has, when Include User Presets is on (what an import reads against).
+fn presets_in(app: &LightcraftApp) -> Option<&[lightcraft_develop::Preset]> {
+    app.ui.sync.presets.then_some(app.session.presets.as_slice())
 }
 
 fn dry_run(p: &Value) -> bool {
@@ -87,7 +110,7 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, St
     match id {
         "settings.export" => export(app, p),
         "settings.import" => import(app, p),
-        "settings.syncSave" => sync_save(app),
+        "settings.syncSave" => sync_save(app, p),
         "settings.syncLoad" => sync_load(app, p),
         "settings.syncChoose" => sync_choose(app, p),
         _ => Err(format!("unknown command `{id}`")),
@@ -108,7 +131,8 @@ fn export(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
         Chosen::Path(path) => path,
         Chosen::Later => return Ok(Value::Null),
     };
-    let text = folder::stamped_text(doc, &app.sync_settings.env.saved_by());
+    let by = stamp(app);
+    let text = folder::stamped_text(doc, &by);
     folder::write_atomic(Path::new(&path), &text)?;
     toast(app, crate::i18n::tr_format!("Exported the settings to {name}", name = file_name(&path)));
     Ok(json!({"path": path}))
@@ -134,7 +158,7 @@ fn import(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
         }
     };
     let by = folder::saved_by(&text);
-    let plan = plan(&text, app.ui.sync.presets)?;
+    let plan = plan(&text, presets_in(app))?;
     if prompting {
         open_prompt(app, name, plan, by.as_ref(), false);
         return Ok(json!({"dialog": true}));
@@ -144,10 +168,9 @@ fn import(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
 
 /// Report `plan`, applying it unless `dry`.
 fn finish(app: &mut LightcraftApp, plan: Plan, dry: bool) -> Result<Value, String> {
-    let mut report = plan.report(!dry);
+    let report = plan.report(!dry);
     if !dry {
-        let added = super::apply(app, plan)?;
-        report["presetsAdded"] = json!(added.len());
+        super::apply(app, plan)?;
     }
     Ok(report)
 }
@@ -161,14 +184,53 @@ fn open_prompt(app: &mut LightcraftApp, name: String, plan: Plan, by: Option<&Sa
 
 // ------------------------------------------------------------------ the folder
 
-/// Save to Folder: the settings now in the sync folder.
+/// Save to Folder: the settings now in the sync folder, over whatever file is there.
 pub(crate) fn save_now(app: &mut LightcraftApp) -> Result<folder::Saved, String> {
-    let saved = folder::save(&app.ui.sync.folder, document_now(app), app.sync_settings.env.saved_by())?;
+    let by = stamp(app);
+    let saved = folder::save(&app.ui.sync.folder, document_now(app), by)?;
     app.ui.sync.last.clone_from(&saved.by.at);
     Ok(saved)
 }
 
-fn sync_save(app: &mut LightcraftApp) -> Result<Value, String> {
+/// The question a save over `file` asks.
+pub(crate) fn replace_question(file: &FolderFile) -> String {
+    match &file.by {
+        Some(by) if by.when().is_some() => {
+            crate::i18n::tr_format!(
+                "The folder has newer settings from {computer}, {when}. Replace them?",
+                computer = by.computer,
+                when = by.when_text()
+            )
+        }
+        Some(by) => crate::i18n::tr_format!(
+            "The folder has settings from {computer}, saved at a time that can't be read. Replace them?",
+            computer = by.computer
+        ),
+        None => crate::i18n::tr("The folder has settings that don't say which Mac saved them. Replace them?").to_string(),
+    }
+}
+
+/// The folder's file when saving over it would replace settings this Mac hasn't seen, or can't tell:
+/// newer from another Mac, or not readably from any. An unreadable folder or file is an error: nothing is
+/// saved over it.
+fn newer_in_folder(app: &mut LightcraftApp) -> Result<Option<FolderFile>, String> {
+    let me = me(app);
+    Ok(folder::inspect(&app.ui.sync.folder, &me, &app.ui.sync.last)?.filter(|(_, s)| s.would_lose_settings()).map(|(f, _)| f))
+}
+
+fn sync_save(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
+    let id = "settings.syncSave";
+    if p.get("replace").and_then(Value::as_bool) != Some(true)
+        && let Some(file) = newer_in_folder(app)?
+    {
+        let question = replace_question(&file);
+        if app.from_control {
+            return Err(format!("{id}: {question} Pass `\"replace\": true` to save over them."));
+        }
+        app.sync_settings.replace = Some(question);
+        app.ui.dialog = Some(Dialog::SettingsReplace);
+        return Ok(json!({"dialog": true, "savedBy": file.by}));
+    }
     let saved = save_now(app)?;
     if !app.from_control {
         toast(app, crate::i18n::tr_format!("Saved the settings to {path}", path = tilde(&saved.path.to_string_lossy())));
@@ -176,9 +238,17 @@ fn sync_save(app: &mut LightcraftApp) -> Result<Value, String> {
     Ok(json!({"file": saved.path, "savedBy": saved.by}))
 }
 
+/// Replace on the question of [`sync_save`]: save over the newer file.
+pub fn confirm_replace(app: &mut LightcraftApp) -> Result<Value, String> {
+    let saved = save_now(app)?;
+    app.sync_settings.replace = None;
+    toast(app, crate::i18n::tr_format!("Saved the settings to {path}", path = tilde(&saved.path.to_string_lossy())));
+    Ok(json!({"file": saved.path, "savedBy": saved.by}))
+}
+
 fn sync_load(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
     let file = folder::read(&app.ui.sync.folder)?;
-    let plan = plan(&file.text, app.ui.sync.presets)?;
+    let plan = plan(&file.text, presets_in(app))?;
     let prompting = !app.from_control && (p.get("prompt").and_then(Value::as_bool) == Some(true) || p.as_object().is_none_or(|m| m.is_empty()));
     let (path, by) = (file.path.clone(), file.by.clone());
     if prompting {
@@ -199,7 +269,7 @@ fn sync_load(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
 fn sync_choose(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
     let id = "settings.syncChoose";
     if app.from_control {
-        return Err(format!("{id}: the sync folder is the user's choice, made in Settings ▸ Sync"));
+        return Err(super::user_only(id));
     }
     let request = PickRequest::folder(crate::i18n::tr("Choose Sync Folder"));
     let path = match p.get("path").and_then(Value::as_str).filter(|s| !s.is_empty()) {
@@ -249,7 +319,7 @@ pub(crate) fn offered_folder(app: &LightcraftApp) -> Option<String> {
 // ------------------------------------------------------------------ Keep in Sync
 
 fn offer(app: &mut LightcraftApp, file: &FolderFile) {
-    match plan(&file.text, app.ui.sync.presets) {
+    match plan(&file.text, presets_in(app)) {
         Ok(plan) => {
             let by = file.by.as_ref();
             let saved_line = by.map(|by| crate::i18n::tr_format!("Saved on {computer}, {when}", computer = by.computer, when = by.when_text()));
@@ -260,15 +330,20 @@ fn offer(app: &mut LightcraftApp, file: &FolderFile) {
     }
 }
 
-/// Each frame: at start, with Keep in Sync on, a file in the folder that another Mac saved after this
-/// Mac last saved or loaded is put to the user as the load prompt, once no other dialog is open.
-/// Cancel offers it again at the next start. A folder that can't be read is a message in the status bar.
+/// Each frame: at start, a leftover temporary file of an interrupted save goes from the chosen folder, and
+/// with Keep in Sync on, a file that another Mac saved after this Mac last saved or loaded is put to the
+/// user as the load prompt, once no other dialog is open. Cancel offers it again at the next start. A
+/// folder that can't be read is a message in the status bar.
 pub fn offer_at_start(app: &mut LightcraftApp) {
     if !app.sync_settings.started {
         app.sync_settings.started = true;
         let sync = app.ui.sync.clone();
+        if !sync.folder.is_empty() {
+            folder::remove_leftovers(Path::new(&sync.folder));
+        }
         if sync.keep && !sync.folder.is_empty() {
-            match folder::newer_file(&sync.folder, &app.sync_settings.env.computer(), &sync.last) {
+            let me = me(app);
+            match folder::newer_file(&sync.folder, &me, &sync.last) {
                 Ok(Some(file)) => offer(app, &file),
                 Ok(None) => {}
                 Err(e) => app.ui.status = e,
@@ -281,17 +356,18 @@ pub fn offer_at_start(app: &mut LightcraftApp) {
     }
 }
 
-/// On quit, with Keep in Sync on: save to the folder, unless it holds a newer file from another Mac
-/// that this Mac hasn't loaded (saving would replace it unseen). Call before the settings are saved:
-/// it notes the time of the save in them.
+/// On quit, with Keep in Sync on: save to the folder, unless it holds a file that this Mac hasn't
+/// loaded and can't tell from a newer one (from another Mac, or not saying who saved it): saving would
+/// replace it unseen, and a line in the log says so. Call before the settings are saved: it notes the
+/// time of the save, and the Mac's id, in them.
 pub fn save_on_quit(app: &mut LightcraftApp) {
     let sync = app.ui.sync.clone();
     if !sync.keep || sync.folder.is_empty() {
         return;
     }
-    match folder::newer_file(&sync.folder, &app.sync_settings.env.computer(), &sync.last) {
+    match newer_in_folder(app) {
         Ok(None) => {}
-        Ok(Some(_)) => return,
+        Ok(Some(file)) => return log::info!("Settings sync: nothing was saved to the sync folder on quit. {}", replace_question(&file)),
         Err(e) => return log::warn!("Settings sync: nothing was saved to the sync folder on quit: {e}"),
     }
     if let Err(e) = save_now(app) {

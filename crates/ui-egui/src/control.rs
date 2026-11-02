@@ -395,7 +395,7 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         "ui.set" => {
             // this Mac's sync folder is the user's choice (Settings ▸ Sync), never an agent's
             if p.get("sync").is_some() {
-                return err("ui.set: `sync` is the user's: the sync folder is chosen in Settings ▸ Sync, never by an agent".to_string());
+                return err(crate::settings_sync::user_only("ui.set `sync`"));
             }
             // an arrangement of the sidebar is checked, not made whole as a settings file's is
             let sidebar = match p.get("sidebar").map(crate::sidebar::SidebarLayout::parse).transpose() {
@@ -457,6 +457,8 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                             | crate::state::Dialog::SaveEffect { .. }
                             | crate::state::Dialog::CaptureTime { .. }
                             | crate::state::Dialog::TextPrompt { .. }
+                            | crate::state::Dialog::SettingsImport
+                            | crate::state::Dialog::SettingsReplace
                     ))
                     || (r.is_ok() && crate::panels::dialogs::keeps_open(app, &d))
                     || (r.is_err() && crate::lightroom_destination::keeps_open_on_error(app, &d))

@@ -336,6 +336,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::Merge { opts } => opts.title(),
         Dialog::Settings { .. } => "Settings",
         Dialog::SettingsImport => "Load Settings",
+        Dialog::SettingsReplace => "Replace Settings",
         Dialog::ConfirmDelete { .. } => "Delete Photos",
         Dialog::LocalProfileSwitch { .. } => "Local Camera Profile",
         Dialog::SmartPreviewsForEditing { .. } => "Smart Previews",
@@ -454,6 +455,7 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         | Dialog::DeleteLocation { .. } => "Delete",
         Dialog::LocalProfileSwitch { .. } => "Switch",
         Dialog::SettingsImport => "Load",
+        Dialog::SettingsReplace => "Replace",
         Dialog::SmartPreviewsForEditing { .. } => "Build Smart Previews",
         Dialog::MacosForCamera { .. } => "Apply",
         Dialog::DeletePermanently { .. } => "Move to Trash",
@@ -612,6 +614,8 @@ fn confirmed(app: &mut LightcraftApp, ctx: &egui::Context, dlg: &mut Dialog) -> 
                     | Dialog::SynchronizeFolder { .. }
                     | Dialog::SaveEffect { .. }
                     | Dialog::CaptureTime { .. }
+                    | Dialog::SettingsImport
+                    | Dialog::SettingsReplace
             ) =>
         {
             app.toast(ctx, e)
@@ -2068,6 +2072,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
             ui.label(egui::RichText::new(crate::i18n::tr("They can be restored from Recently Deleted until it is emptied.")).color(t.text_dim));
         }
         Dialog::SettingsImport => crate::settings_sync::prompt_body(app, ui, t),
+        Dialog::SettingsReplace => crate::settings_sync::replace_body(app, ui, t),
         Dialog::MacosForCamera { camera, count, skipped, .. } => crate::macos_colour::picker::body(ui, t, camera, *count, *skipped),
         Dialog::SmartPreviewsForEditing { missing } => crate::smart_editing::body(ui, t, *missing),
         Dialog::LocalProfileSwitch { name, count, .. } => {

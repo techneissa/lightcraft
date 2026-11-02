@@ -35,9 +35,9 @@ mod page_tests;
 mod tests;
 
 pub use plan::{Plan, apply, plan};
-pub use prompt::{confirm, prompt_body};
+pub use prompt::{confirm, prompt_body, replace_body};
 #[cfg(not(target_arch = "wasm32"))]
-pub use run::{command, offer_at_start, save_on_quit};
+pub use run::{command, confirm_replace, offer_at_start, save_on_quit};
 
 /// What a settings file says it is (`kind`).
 pub const KIND: &str = "lightcraft-settings";
@@ -46,12 +46,23 @@ pub const VERSION: u64 = 1;
 /// The biggest settings file read (user presets can make one a few megabytes).
 pub const MAX_BYTES: usize = 32_000_000;
 
+/// The refusal of everything an agent tries to change about this Mac's sync choices.
+pub fn user_only(what: &str) -> String {
+    format!("{what}: the sync folder and Keep in Sync are the user's choice, made in Settings ▸ Sync, never an agent's")
+}
+
 /// The commands of Settings sync.
 pub const COMMANDS: [&str; 5] = ["settings.export", "settings.import", "settings.syncSave", "settings.syncLoad", "settings.syncChoose"];
 
 /// Settings sync is for the desktop app: the web has no folders to sync to.
 #[cfg(target_arch = "wasm32")]
 pub fn command(_app: &mut crate::LightcraftApp, _id: &str, _p: &serde_json::Value) -> Result<serde_json::Value, String> {
+    Err("Settings sync isn't available on the web".into())
+}
+
+/// Nothing to replace on the web.
+#[cfg(target_arch = "wasm32")]
+pub fn confirm_replace(_app: &mut crate::LightcraftApp) -> Result<serde_json::Value, String> {
     Err("Settings sync isn't available on the web".into())
 }
 
@@ -90,6 +101,8 @@ pub struct Runtime {
     pub started: bool,
     /// A newer file from another Mac, to offer when no other dialog is open.
     pub offer: Option<Prompt>,
+    /// The question the open Replace dialog asks (Save to Folder over newer settings).
+    pub replace: Option<String>,
 }
 
 /// `sync` of the UI state: this Mac's sync choices. Never part of the settings file (each Mac has
@@ -105,10 +118,12 @@ pub struct SyncPrefs {
     pub last: String,
     /// User presets go into the file (and Save to Folder), on by default.
     pub presets: bool,
+    /// A random id made once for this Mac (`savedBy.id`), so two Macs with one name are told apart.
+    pub id: String,
 }
 
 impl Default for SyncPrefs {
     fn default() -> Self {
-        Self { folder: String::new(), keep: false, last: String::new(), presets: true }
+        Self { folder: String::new(), keep: false, last: String::new(), presets: true, id: String::new() }
     }
 }

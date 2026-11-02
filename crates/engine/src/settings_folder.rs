@@ -43,6 +43,10 @@ pub struct SavedBy {
     pub computer: String,
     /// When, as RFC 3339 with the Mac's offset (`2026-11-02T14:30:05+01:00`).
     pub at: String,
+    /// A random id made once per Mac (LightCraft only; PhotoCraft's files have none and readers
+    /// ignore keys they don't know). Two Macs with the same name are told apart by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
 }
 
 impl SavedBy {
@@ -79,10 +83,31 @@ impl SyncEnv {
         self.shared_file.clone().or_else(default_shared_file)
     }
 
-    /// This Mac's name and the time now.
-    pub fn saved_by(&self) -> SavedBy {
-        SavedBy { computer: self.computer(), at: now_stamp() }
+    /// This Mac's name and the time now, and `id`, the id of this Mac (empty: none).
+    pub fn saved_by(&self, id: &str) -> SavedBy {
+        SavedBy { computer: self.computer(), at: now_stamp(), id: Some(id.to_string()).filter(|i| !i.is_empty()) }
     }
+
+    /// This Mac as [`inspect`] needs it; `id` is the Mac's own id (empty: none made yet).
+    pub fn me(&self, id: &str) -> Me {
+        Me { computer: self.computer(), id: id.to_string() }
+    }
+}
+
+/// This Mac: its name and its own id (empty before one is made).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Me {
+    /// The Mac's name.
+    pub computer: String,
+    /// The Mac's own id.
+    pub id: String,
+}
+
+/// A random id for a Mac: 128 bits from the system's random seeds, as hex.
+pub fn new_mac_id() -> String {
+    use std::hash::{BuildHasher, Hasher};
+    let word = || std::collections::hash_map::RandomState::new().build_hasher().finish();
+    format!("{:016x}{:016x}", word(), word())
 }
 
 /// The Mac's name as macOS shows it in Sharing (System Settings › General › Sharing), else the
@@ -141,7 +166,9 @@ pub fn saved_by(text: &str) -> Option<SavedBy> {
     let by = doc.get("savedBy")?.as_object()?;
     let computer = clean_name(by.get("computer")?.as_str()?)?;
     let at: String = by.get("at")?.as_str()?.chars().filter(|c| !c.is_control()).take(64).collect();
-    Some(SavedBy { computer, at })
+    let id =
+        by.get("id").and_then(Value::as_str).map(|i| i.chars().filter(|c| !c.is_control()).take(64).collect::<String>()).filter(|i| !i.is_empty());
+    Some(SavedBy { computer, at, id })
 }
 
 /// A message for an I/O failure on `path` that tells the user what to do.
@@ -286,23 +313,54 @@ pub fn has_file(dir: &Path) -> bool {
 
 // ------------------------------------------------------------------ newer or not
 
-/// Is a file saved by `file` something to offer a Mac called `me` that last saved or loaded the
-/// file stamped `last`? Yes when it comes from another Mac and is newer than `last` (any, when
-/// `last` is empty or unreadable). A file whose time can't be read is never offered.
-pub fn is_newer_from_another_mac(file: &SavedBy, me: &str, last: &str) -> bool {
-    if file.computer == me {
-        return false;
-    }
-    match (file.when(), DateTime::parse_from_rfc3339(last).ok()) {
-        (Some(file), Some(last)) => file > last,
-        (Some(_), None) => true,
-        (None, _) => false,
+/// How the file in the folder stands to this Mac.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Standing {
+    /// This Mac saved it.
+    Own,
+    /// Another Mac saved it, before this Mac last saved or loaded.
+    Older,
+    /// Another Mac saved it after this Mac last saved or loaded (any, when this Mac has neither).
+    Newer,
+    /// The saver or the time can't be read: not told apart from a newer one by anything that
+    /// would overwrite it.
+    Unknown,
+}
+
+impl Standing {
+    /// Saving over the file would replace something this Mac hasn't seen (or can't tell).
+    pub fn would_lose_settings(self) -> bool {
+        matches!(self, Standing::Newer | Standing::Unknown)
     }
 }
 
-/// Keep in Sync at start: the folder's file when it comes from another Mac (not `me`) and is newer
-/// than `last`. `Ok(None)` when there is no folder, no file yet, or nothing newer.
-pub fn newer_file(folder: &str, me: &str, last: &str) -> Result<Option<FolderFile>, String> {
+/// Did `me` save the file stamped `file`? By id when the file has one and this Mac has one, else
+/// by the computer's name.
+pub fn is_same_mac(file: &SavedBy, me: &Me) -> bool {
+    match &file.id {
+        Some(id) if !me.id.is_empty() => *id == me.id,
+        _ => file.computer == me.computer,
+    }
+}
+
+/// How a file saved by `file` (`None`: it doesn't say, or not readably) stands to `me`, who last
+/// saved or loaded the file stamped `last`. A file that is not `me`'s own and whose time can't be
+/// read is [`Standing::Unknown`], like one whose saver can't be read.
+pub fn standing(file: Option<&SavedBy>, me: &Me, last: &str) -> Standing {
+    let Some(file) = file else { return Standing::Unknown };
+    if is_same_mac(file, me) {
+        return Standing::Own;
+    }
+    match (file.when(), DateTime::parse_from_rfc3339(last).ok()) {
+        (Some(file), Some(last)) if file <= last => Standing::Older,
+        (Some(_), _) => Standing::Newer,
+        (None, _) => Standing::Unknown,
+    }
+}
+
+/// The folder's file and how it stands to `me`; `Ok(None)` when no folder is chosen or it has no
+/// file yet. An error when the folder or the file can't be read: nothing may be saved over it then.
+pub fn inspect(folder: &str, me: &Me, last: &str) -> Result<Option<(FolderFile, Standing)>, String> {
     if folder.trim().is_empty() {
         return Ok(None);
     }
@@ -311,8 +369,40 @@ pub fn newer_file(folder: &str, me: &str, last: &str) -> Result<Option<FolderFil
         return Ok(None);
     }
     let file = read(folder)?;
-    let newer = file.by.as_ref().is_some_and(|by| is_newer_from_another_mac(by, me, last));
-    Ok(newer.then_some(file))
+    let stand = standing(file.by.as_ref(), me, last);
+    Ok(Some((file, stand)))
+}
+
+/// Keep in Sync at start: the folder's file when it is [`Standing::Newer`] (a file that doesn't say
+/// who saved it is never offered, or it would be offered at every start).
+pub fn newer_file(folder: &str, me: &Me, last: &str) -> Result<Option<FolderFile>, String> {
+    Ok(inspect(folder, me, last)?.filter(|(_, s)| *s == Standing::Newer).map(|(f, _)| f))
+}
+
+/// Remove temporary files an interrupted save of this app left in `dir`: only names of the form
+/// `.lightcraft.lcsettings.<pid>-<n>.tmp`, and only when a minute old (another Mac may be saving
+/// right now). Returns how many went.
+pub fn remove_leftovers(dir: &Path) -> usize {
+    let prefix = format!(".{FILE_NAME}.");
+    let Ok(entries) = std::fs::read_dir(dir) else { return 0 };
+    let mut removed = 0;
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let Some(middle) = name.strip_prefix(&prefix).and_then(|r| r.strip_suffix(".tmp")) else { continue };
+        let ours = middle
+            .split_once('-')
+            .is_some_and(|(pid, n)| !pid.is_empty() && !n.is_empty() && pid.bytes().chain(n.bytes()).all(|b| b.is_ascii_digit()));
+        let old = entry
+            .metadata()
+            .and_then(|m| m.modified())
+            .ok()
+            .and_then(|t| t.elapsed().ok())
+            .is_some_and(|age| age >= std::time::Duration::from_secs(60));
+        if ours && old && entry.file_type().is_ok_and(|t| t.is_file()) && std::fs::remove_file(entry.path()).is_ok() {
+            removed += 1;
+        }
+    }
+    removed
 }
 
 // ------------------------------------------------------------------ the shared file

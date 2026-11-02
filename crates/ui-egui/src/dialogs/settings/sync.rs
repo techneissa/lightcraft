@@ -15,10 +15,34 @@ use super::{
 fn button(app: &mut LightcraftApp, ui: &mut egui::Ui, enabled: bool, id: &str, label: &str, command: &str, params: serde_json::Value) {
     let r = ui.add_enabled(enabled, egui::Button::new(crate::i18n::tr(label)));
     register(ui, format!("button:{id}"), r.rect);
-    if r.clicked()
-        && let Err(e) = app.run(command, params)
-    {
-        app.toast_error(ui.ctx(), e);
+    if r.clicked() {
+        // input the control channel delivered (`ui.clickWidget`, `ui.pointer`, `ui.key`) is an agent's: the
+        // commands refuse or limit it as they do when called
+        app.from_control = by_agent(app);
+        let result = app.run(command, params);
+        app.from_control = false;
+        if let Err(e) = result {
+            app.toast_error(ui.ctx(), e);
+        }
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// The input of this pass came through the control channel, not from a person.
+fn by_agent(app: &LightcraftApp) -> bool {
+    app.synthetic_in_flight
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+/// A switch of the page: the new value is kept only when a person flipped it.
+fn switch(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, label: &str, value: bool, set: impl FnOnce(&mut LightcraftApp, bool)) {
+    let mut now = value;
+    if check(ui, id, &mut now, label) {
+        if by_agent(app) {
+            app.toast_error(ui.ctx(), crate::settings_sync::user_only(label));
+        } else {
+            set(app, now);
+        }
     }
 }
 
@@ -64,12 +88,8 @@ pub(super) fn sync_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         button(app, ui, chosen, "settingsSyncLoad", "Load from Folder", "settings.syncLoad", json!({}));
     });
     row(ui, t, "", |ui| {
-        let mut keep = app.ui.sync.keep;
-        ui.add_enabled_ui(chosen, |ui| {
-            if check(ui, "settingsSyncKeep", &mut keep, "Keep in Sync") {
-                app.ui.sync.keep = keep;
-            }
-        });
+        let keep = app.ui.sync.keep;
+        ui.add_enabled_ui(chosen, |ui| switch(app, ui, "settingsSyncKeep", "Keep in Sync", keep, |app, on| app.ui.sync.keep = on));
     });
     heading(ui, t, "Settings File");
     row(ui, t, "", |ui| {
@@ -78,10 +98,8 @@ pub(super) fn sync_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     });
     heading(ui, t, "Included");
     row(ui, t, "", |ui| {
-        let mut presets = app.ui.sync.presets;
-        if check(ui, "settingsSyncPresets", &mut presets, "User Presets") {
-            app.ui.sync.presets = presets;
-        }
+        let presets = app.ui.sync.presets;
+        switch(app, ui, "settingsSyncPresets", "User Presets", presets, |app, on| app.ui.sync.presets = on);
     });
 }
 

@@ -25,8 +25,14 @@ pub struct Plan {
     pub ui: Map<String, Value>,
     /// Keys of `settings` the file sets.
     pub settings: Map<String, Value>,
-    /// User presets the file adds.
+    /// The user presets of the file that would change something here: new ones, and ones that
+    /// differ from this Mac's preset of the same name and group.
     pub presets: Vec<lightcraft_develop::Preset>,
+    /// How many of [`Plan::presets`] are added, and how many replace a preset of this Mac.
+    pub presets_added: usize,
+    pub presets_replaced: usize,
+    /// What the `ui` part holds, as [`AREAS`] names it.
+    pub areas: Vec<&'static str>,
     /// The file's version when it is newer than this build's (what it understands was taken).
     pub newer: Option<u64>,
     /// The parts of the file that were read (`ui`, `presets`).
@@ -48,6 +54,8 @@ impl Plan {
             "parts": self.parts,
             "settings": self.ui.len() + self.settings.len(),
             "presets": self.presets.len(),
+            "presetsAdded": self.presets_added,
+            "presetsReplaced": self.presets_replaced,
             "fileVersion": self.newer,
             "skipped": self.notes,
             "unknown": self.unknown,
@@ -101,10 +109,80 @@ const RANGES: &[(&str, f64, f64)] = &[
     ("cropOverlayOrient", 0.0, 4.0),
 ];
 
+/// Where a setting belongs, for the prompt's "This replaces your …": (id, words).
+pub const AREAS: [(&str, &str); 5] = [
+    ("appearance", "appearance"),
+    ("shortcuts", "keyboard shortcuts"),
+    ("arrangements", "arrangements"),
+    ("tools", "tool defaults"),
+    ("other", "other settings"),
+];
+
+/// The [`AREAS`] id of the top-level setting `key`, or of `settings.<key>` when `in_settings`.
+fn area_of(key: &str, in_settings: bool) -> &'static str {
+    if in_settings {
+        match key {
+            "appearanceMode" | "darkTheme" | "lightTheme" | "favoriteThemes" => "appearance",
+            "keymap" => "shortcuts",
+            "photoMenu" | "photoMenuPresets" | "topBarHidden" => "arrangements",
+            _ => "other",
+        }
+    } else {
+        match key {
+            "language" => "appearance",
+            "sidebar" | "editSections" | "foldedSections" => "arrangements",
+            k if ["brush", "remove", "mask", "crop", "clip"].iter().any(|p| k.starts_with(p))
+                || matches!(k, "pointColorVisualize" | "hdrVisualize" | "visualizeSpots" | "spotsThreshold" | "toolOverlay") =>
+            {
+                "tools"
+            }
+            _ => "other",
+        }
+    }
+}
+
+/// `value` is read exactly as a type `T`: the app's own `ui.json` reads these leniently (a bad
+/// value is the default), a file must not.
+fn strictly<T: serde::de::DeserializeOwned>(value: &Value) -> Option<String> {
+    serde_json::from_value::<T>(value.clone()).err().map(|e| e.to_string())
+}
+
+fn strings(value: &Value) -> Option<String> {
+    (!value.as_array().is_some_and(|a| a.iter().all(Value::is_string))).then(|| "it must be a list of text".to_string())
+}
+
+/// Why `value` isn't acceptable for the top-level setting `key` of a file, where `ui.json` would
+/// quietly take a default instead.
+fn strict_top(key: &str, value: &Value) -> Option<String> {
+    match key {
+        "foldedSections" => strings(value),
+        _ => None,
+    }
+}
+
+/// The same for `settings.<key>`.
+fn strict_setting(key: &str, value: &Value) -> Option<String> {
+    use crate::state::{DeleteFiles, KeywordChips, LaunchLibrary, LightroomImport, LoupeInfo};
+    match key {
+        "atLaunch" => strictly::<LaunchLibrary>(value),
+        "deleteFiles" => strictly::<DeleteFiles>(value),
+        "keywordChips" => strictly::<KeywordChips>(value),
+        "loupeInfo" => strictly::<LoupeInfo>(value),
+        "lightroomImport" => strictly::<LightroomImport>(value),
+        "photoMenuPresets" => strictly::<crate::panels::photo_menu::presets::Presets>(value),
+        "topBarHidden" => strings(value),
+        "photoMenu" if !value.is_null() => strings(value),
+        _ => None,
+    }
+}
+
 /// Why this build can't take `value` for the top-level setting `key`; `None` when it can.
 fn problem_with(key: &str, value: &Value) -> Option<String> {
     if let Err(e) = serde_json::from_value::<UiState>(json!({ key: value })) {
         return Some(e.to_string());
+    }
+    if let Some(why) = strict_top(key, value) {
+        return Some(why);
     }
     if let Some((_, least, most)) = RANGES.iter().find(|(k, ..)| *k == key) {
         let n = value.as_f64()?;
@@ -122,6 +200,9 @@ fn problem_with(key: &str, value: &Value) -> Option<String> {
 fn problem_with_setting(key: &str, value: &Value) -> Option<String> {
     if let Err(e) = serde_json::from_value::<UiState>(json!({"settings": { key: value }})) {
         return Some(e.to_string());
+    }
+    if let Some(why) = strict_setting(key, value) {
+        return Some(why);
     }
     if key == "keymap" {
         return keymap_problem(value);
@@ -185,8 +266,8 @@ fn unknown_entries(path: &str, value: &Value) -> Vec<String> {
 
 /// Read `text` as a settings file, and say what importing it would do.
 /// A file that can't be taken is an error and nothing else happens: [`Plan`] is all a caller keeps.
-/// User presets are read when `with_presets`.
-pub fn plan(text: &str, with_presets: bool) -> Result<Plan, String> {
+/// User presets are read when `current_presets` (the presets of this Mac) is given.
+pub fn plan(text: &str, current_presets: Option<&[lightcraft_develop::Preset]>) -> Result<Plan, String> {
     let (file, version) = header(text)?;
     let strict = version <= VERSION;
     let mut plan = Plan::default();
@@ -230,6 +311,7 @@ pub fn plan(text: &str, with_presets: bool) -> Result<Plan, String> {
                                 for name in unknown_entries(&format!("settings.{k}"), v) {
                                     plan.unknown(&format!("ui.{name}"));
                                 }
+                                plan.areas.push(area_of(k, true));
                                 plan.settings.insert(k.clone(), v.clone());
                             }
                         }
@@ -241,6 +323,7 @@ pub fn plan(text: &str, with_presets: bool) -> Result<Plan, String> {
                         for name in unknown_entries(key, value) {
                             plan.unknown(&format!("ui.{name}"));
                         }
+                        plan.areas.push(area_of(key, false));
                         plan.ui.insert(key.clone(), value.clone());
                     }
                 }
@@ -249,15 +332,16 @@ pub fn plan(text: &str, with_presets: bool) -> Result<Plan, String> {
     }
     if let Some(part) = file.get("presets") {
         plan.parts.push("presets");
-        if with_presets {
+        if let Some(current) = current_presets {
             match lightcraft_engine::presets::parse_preset_file("presets.lcpreset", part.to_string().as_bytes()) {
-                Ok(list) => plan.presets = list,
+                Ok(list) => (plan.presets, plan.presets_added, plan.presets_replaced) = preset_changes(list, current),
                 Err(e) => bad(&mut plan, format!("presets: {e}")),
             }
         } else {
             plan.note("Left out the user presets (Include User Presets is off)");
         }
     }
+    plan.areas = AREAS.iter().map(|(id, _)| *id).filter(|id| plan.areas.contains(id)).collect();
     if !problems.is_empty() {
         let shown: Vec<&str> = problems.iter().take(3).map(String::as_str).collect();
         let more = problems.len().saturating_sub(shown.len());
@@ -307,9 +391,57 @@ fn carry_over(old: &mut UiState, next: &mut UiState) {
     );
 }
 
+/// Which of `incoming` change something on a Mac that has `current`: a preset of the same name and
+/// group as one of the user's replaces it when its settings differ, one with no namesake is added
+/// (unless an identical preset is there, built-in or not), an identical one changes nothing.
+/// Returns those presets, how many are added and how many replace.
+pub fn preset_changes(
+    incoming: Vec<lightcraft_develop::Preset>,
+    current: &[lightcraft_develop::Preset],
+) -> (Vec<lightcraft_develop::Preset>, usize, usize) {
+    let (mut changed, mut added, mut replaced) = (Vec::new(), 0, 0);
+    for p in incoming {
+        let same = |q: &&lightcraft_develop::Preset| q.name == p.name && q.group == p.group;
+        match current.iter().filter(same).find(|q| !q.builtin) {
+            Some(mine) if mine.settings == p.settings => {}
+            Some(_) => {
+                replaced += 1;
+                changed.push(p);
+            }
+            None if current.iter().filter(same).any(|q| q.settings == p.settings) => {}
+            None => {
+                added += 1;
+                changed.push(p);
+            }
+        }
+    }
+    (changed, added, replaced)
+}
+
+/// Put the presets of `changed` in place: a user preset of the same name and group takes the new
+/// settings, the others are added. Returns the ids added and how many were replaced.
+fn apply_presets(session: &mut lightcraft_engine::Session, changed: Vec<lightcraft_develop::Preset>) -> (Vec<String>, usize) {
+    let (mut to_add, mut replaced) = (Vec::new(), 0);
+    for p in changed {
+        match session.presets.iter().position(|q| !q.builtin && q.name == p.name && q.group == p.group) {
+            Some(i) => {
+                if let Some(mine) = session.presets.get_mut(i)
+                    && mine.settings != p.settings
+                {
+                    mine.settings = p.settings;
+                    replaced += 1;
+                }
+            }
+            None => to_add.push(p),
+        }
+    }
+    (session.add_presets(to_add), replaced)
+}
+
 /// Put `plan` in place: the settings it names are replaced, the rest stay. Returns the ids of the
-/// presets added. An error (the result couldn't be read back as settings) changes nothing.
-pub fn apply(app: &mut LightcraftApp, plan: Plan) -> Result<Vec<String>, String> {
+/// presets added and how many were replaced. An error (the result couldn't be read back as
+/// settings) changes nothing.
+pub fn apply(app: &mut LightcraftApp, plan: Plan) -> Result<(Vec<String>, usize), String> {
     let mut doc = serde_json::to_value(&app.ui).map_err(|e| e.to_string())?;
     let Some(root) = doc.as_object_mut() else { return Err("the settings could not be read".into()) };
     for (k, v) in plan.ui {
@@ -329,5 +461,5 @@ pub fn apply(app: &mut LightcraftApp, plan: Plan) -> Result<Vec<String>, String>
     next.dialog = None;
     app.ui = next;
     crate::i18n::set_language(app.ui.language);
-    Ok(if plan.presets.is_empty() { Vec::new() } else { app.session.add_presets(plan.presets) })
+    Ok(if plan.presets.is_empty() { (Vec::new(), 0) } else { apply_presets(&mut app.session, plan.presets) })
 }

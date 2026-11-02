@@ -47,12 +47,27 @@ fn app(home: &std::path::Path) -> (Headless, Asked) {
     (h, asked)
 }
 
+/// A click as the host delivers it: a person's.
 fn click(h: &mut Headless, id: &str) {
+    let at = h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| r.center()).unwrap_or_else(|| panic!("no widget {id}"));
+    let press = |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+    h.events.extend([egui::Event::PointerMoved(at), press(true), press(false)]);
+    for _ in 0..3 {
+        h.step();
+    }
+}
+
+/// A click through the control channel: an agent's.
+fn agent_click(h: &mut Headless, id: &str) {
     let r = h.request("ui.clickWidget", json!({"id": id}), T);
     assert_eq!(r["ok"], true, "{id}: {r}");
     for _ in 0..3 {
         h.step();
     }
+}
+
+fn toast(h: &Headless) -> String {
+    h.app.ui.toast.as_ref().map(|(t, ..)| t.clone()).unwrap_or_default()
 }
 
 fn has(h: &Headless, id: &str) -> bool {
@@ -129,4 +144,86 @@ fn export_and_import_ask_the_hosts_dialog_for_the_file() {
     assert_eq!(r["ok"], true, "{r}");
     assert_eq!(h.app.ui.brush_flow, 31.0);
     let _ = std::fs::remove_dir_all(&home);
+}
+
+#[test]
+fn input_from_the_control_channel_cannot_change_the_folder_or_keep_in_sync() {
+    let home = scratch("agent-home");
+    let sync = scratch("agent-folder");
+    let shared = folder::shared_file_in(&home);
+    std::fs::create_dir_all(shared.parent().unwrap()).unwrap();
+    std::fs::write(&shared, json!({"path": sync.to_string_lossy()}).to_string()).unwrap();
+    let (mut h, asked) = app(&home);
+    assert!(has(&h, "button:settingsSyncUse"), "the shared folder is offered");
+
+    // an agent's click on Use This Folder or Choose… changes nothing, and says why
+    agent_click(&mut h, "button:settingsSyncUse");
+    assert!(h.app.ui.sync.folder.is_empty(), "the folder was set through a click");
+    assert!(toast(&h).contains("user's choice"), "{}", toast(&h));
+    h.app.ui.toast = None;
+    agent_click(&mut h, "button:settingsSyncChoose");
+    assert!(h.app.ui.sync.folder.is_empty());
+    assert!(asked.lock().unwrap().is_empty(), "no folder dialog is opened for an agent");
+    assert!(toast(&h).contains("user's choice"));
+
+    // the same for the switches, by a click or by the keyboard: a pointer press at the switch
+    h.app.ui.sync.folder = sync.to_string_lossy().into_owned();
+    for _ in 0..3 {
+        h.step();
+    }
+    h.app.ui.toast = None;
+    agent_click(&mut h, "check:settingsSyncKeep");
+    assert!(!h.app.ui.sync.keep, "Keep in Sync was switched on through a click");
+    assert!(toast(&h).contains("user's choice"));
+    agent_click(&mut h, "check:settingsSyncPresets");
+    assert!(h.app.ui.sync.presets, "Include User Presets was switched off through a click");
+    let at = h.app.widgets.iter().find(|(w, _)| w == "check:settingsSyncKeep").map(|(_, r)| r.center()).unwrap();
+    let r =
+        h.request("ui.pointer", json!({"screen": true, "events": [{"kind": "down", "x": at.x, "y": at.y}, {"kind": "up", "x": at.x, "y": at.y}]}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    for _ in 0..3 {
+        h.step();
+    }
+    assert!(!h.app.ui.sync.keep, "Keep in Sync was switched on through ui.pointer");
+
+    // a person's click does all of it
+    click(&mut h, "check:settingsSyncKeep");
+    assert!(h.app.ui.sync.keep);
+    click(&mut h, "check:settingsSyncPresets");
+    assert!(!h.app.ui.sync.presets);
+    // and a person's Use This Folder
+    h.app.ui.sync.folder.clear();
+    for _ in 0..3 {
+        h.step();
+    }
+    click(&mut h, "button:settingsSyncUse");
+    assert_eq!(h.app.ui.sync.folder, sync.to_string_lossy());
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&sync);
+}
+
+#[test]
+fn an_agents_click_on_save_to_folder_is_refused_over_newer_settings_and_the_person_is_asked() {
+    let home = scratch("savebtn-home");
+    let sync = scratch("savebtn-folder");
+    let (mut h, _asked) = app(&home);
+    h.app.ui.sync.folder = sync.to_string_lossy().into_owned();
+    h.app.ui.sync.last = "2026-11-02T10:00:00+01:00".into();
+    let by = folder::SavedBy { computer: "Laptop".into(), at: "2026-11-02T12:00:00+01:00".into(), id: None };
+    folder::save(&sync.to_string_lossy(), json!({"kind": "lightcraft-settings", "version": 1}), by).unwrap();
+    let original = std::fs::read_to_string(sync.join(FILE_NAME)).unwrap();
+    for _ in 0..3 {
+        h.step();
+    }
+    agent_click(&mut h, "button:settingsSyncSave");
+    assert_eq!(std::fs::read_to_string(sync.join(FILE_NAME)).unwrap(), original, "an agent's click replaced newer settings");
+    assert!(!matches!(h.app.ui.dialog, Some(Dialog::SettingsReplace)), "an agent was not asked");
+    assert!(toast(&h).contains("Replace them?"), "{}", toast(&h));
+    // a person is asked, in words
+    click(&mut h, "button:settingsSyncSave");
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::SettingsReplace)));
+    assert!(h.app.sync_settings.replace.as_ref().unwrap().starts_with("The folder has newer settings from Laptop, "));
+    assert_eq!(std::fs::read_to_string(sync.join(FILE_NAME)).unwrap(), original);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&sync);
 }

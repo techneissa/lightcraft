@@ -1,9 +1,11 @@
 //! The load prompt of Import Settings… and Load from Folder: what the file would change, and when
-//! and on which Mac it was saved, shown before anything changes.
+//! and on which Mac it was saved, shown before anything changes; and the Replace question of Save to
+//! Folder.
 
 use serde_json::{Value, json};
 
-use super::Prompt;
+use super::Plan;
+use super::plan::AREAS;
 use crate::LightcraftApp;
 use crate::theme::Tokens;
 
@@ -11,8 +13,9 @@ use crate::theme::Tokens;
 const NAMED: usize = 5;
 
 /// "3 settings from a newer LightCraft were skipped: a, b, c, d, e, and 5 more"; `None` when
-/// nothing was skipped. The full list is [`unknown_list`].
-pub fn unknown_line(unknown: &[String], total: usize) -> Option<String> {
+/// nothing was skipped. A file that isn't from a newer LightCraft says "3 settings were skipped".
+/// The full list is [`unknown_list`].
+pub fn unknown_line(unknown: &[String], total: usize, newer: bool) -> Option<String> {
     if total == 0 {
         return None;
     }
@@ -20,10 +23,11 @@ pub fn unknown_line(unknown: &[String], total: usize) -> Option<String> {
     if total > NAMED {
         names.push_str(&crate::i18n::tr_format!(", and {n} more", n = total - NAMED));
     }
-    Some(if total == 1 {
-        crate::i18n::tr_format!("1 setting from a newer LightCraft was skipped: {names}", names = names)
-    } else {
-        crate::i18n::tr_format!("{n} settings from a newer LightCraft were skipped: {names}", n = total, names = names)
+    Some(match (total, newer) {
+        (1, true) => crate::i18n::tr_format!("1 setting from a newer LightCraft was skipped: {names}", names = names),
+        (1, false) => crate::i18n::tr_format!("1 setting was skipped: {names}", names = names),
+        (n, true) => crate::i18n::tr_format!("{n} settings from a newer LightCraft were skipped: {names}", n = n, names = names),
+        (n, false) => crate::i18n::tr_format!("{n} settings were skipped: {names}", n = n, names = names),
     })
 }
 
@@ -36,18 +40,23 @@ pub fn unknown_list(unknown: &[String], total: usize) -> String {
     list
 }
 
-/// What OK replaces, in a sentence.
-fn replaces(prompt: &Prompt) -> String {
-    let presets = prompt.plan.presets.len();
-    if presets == 0 {
-        crate::i18n::tr("This replaces your appearance, keyboard shortcuts, arrangements and tool defaults.").to_string()
-    } else if presets == 1 {
-        crate::i18n::tr("This replaces your appearance, keyboard shortcuts, arrangements and tool defaults, and adds 1 preset.").to_string()
-    } else {
-        crate::i18n::tr_format!(
-            "This replaces your appearance, keyboard shortcuts, arrangements and tool defaults, and adds {n} presets.",
-            n = presets
-        )
+/// "This replaces your appearance, keyboard shortcuts and arrangements." with only the parts the
+/// file has; `None` when it has none.
+pub fn replaces_line(plan: &Plan) -> Option<String> {
+    let words: Vec<String> = AREAS.iter().filter(|(id, _)| plan.areas.contains(id)).map(|(_, words)| crate::i18n::tr(words).to_string()).collect();
+    let (last, rest) = words.split_last()?;
+    let list = if rest.is_empty() { last.clone() } else { crate::i18n::tr_format!("{rest} and {last}", rest = rest.join(", "), last = last) };
+    Some(crate::i18n::tr_format!("This replaces your {list}.", list = list))
+}
+
+/// "Presets: 2 added, 1 replaced." counting only those that would change something; `None` when none would.
+pub fn presets_line(plan: &Plan) -> Option<String> {
+    let (added, replaced) = (plan.presets_added, plan.presets_replaced);
+    match (added, replaced) {
+        (0, 0) => None,
+        (a, 0) => Some(crate::i18n::tr_format!("Presets: {a} added.", a = a)),
+        (0, r) => Some(crate::i18n::tr_format!("Presets: {r} replaced.", r = r)),
+        (a, r) => Some(crate::i18n::tr_format!("Presets: {a} added, {r} replaced.", a = a, r = r)),
     }
 }
 
@@ -63,9 +72,11 @@ pub fn prompt_body(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.add_space(2.0);
         ui.add(egui::Label::new(egui::RichText::new(line).color(t.text_dim)).wrap());
     }
-    ui.add_space(4.0);
-    ui.add(egui::Label::new(egui::RichText::new(replaces(prompt)).color(t.text_dim)).wrap());
-    if let Some(line) = unknown_line(&prompt.plan.unknown, prompt.plan.unknown_total) {
+    for line in [replaces_line(&prompt.plan), presets_line(&prompt.plan)].into_iter().flatten() {
+        ui.add_space(4.0);
+        ui.add(egui::Label::new(egui::RichText::new(line).color(t.text_dim)).wrap());
+    }
+    if let Some(line) = unknown_line(&prompt.plan.unknown, prompt.plan.unknown_total, prompt.plan.newer.is_some()) {
         ui.add_space(4.0);
         let r = ui.add(egui::Label::new(egui::RichText::new(line).color(t.text_dim)).wrap());
         crate::widgets::register(ui, "text:settingsSyncSkipped", r.rect);
@@ -76,17 +87,25 @@ pub fn prompt_body(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     }
 }
 
+/// The Replace dialog's body: the question.
+pub fn replace_body(app: &LightcraftApp, ui: &mut egui::Ui, _t: &Tokens) {
+    ui.set_max_width(460.0);
+    let question = app.sync_settings.replace.clone().unwrap_or_default();
+    let r = ui.add(egui::Label::new(question).wrap());
+    crate::widgets::register(ui, "text:settingsSyncReplace", r.rect);
+}
+
 /// OK on the prompt: put the file's settings in place, and note that this Mac has a file from the folder.
+/// When that fails the prompt stays, with the error on screen.
 pub fn confirm(app: &mut LightcraftApp) -> Result<Value, String> {
-    let Some(prompt) = app.sync_settings.prompt.take() else { return Err(crate::i18n::tr("There is nothing to load.").to_string()) };
+    let Some(prompt) = app.sync_settings.prompt.clone() else { return Err(crate::i18n::tr("There is nothing to load.").to_string()) };
     let report = prompt.plan.report(true);
-    let name = prompt.name.clone();
-    let at = prompt.saved_at.clone();
     super::apply(app, prompt.plan)?;
-    if let Some(at) = at {
+    app.sync_settings.prompt = None;
+    if let Some(at) = prompt.saved_at {
         app.ui.sync.last = at;
     }
     let ctx = app.tasks.repaint.clone().unwrap_or_default();
-    app.toast(&ctx, crate::i18n::tr_format!("Loaded the settings in {name}", name = name));
+    app.toast(&ctx, crate::i18n::tr_format!("Loaded the settings in {name}", name = prompt.name));
     Ok(json!({"applied": true, "report": report}))
 }

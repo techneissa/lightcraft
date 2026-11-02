@@ -9,7 +9,16 @@ fn scratch(name: &str) -> PathBuf {
 }
 
 fn by(computer: &str, at: &str) -> SavedBy {
-    SavedBy { computer: computer.into(), at: at.into() }
+    SavedBy { computer: computer.into(), at: at.into(), id: None }
+}
+
+fn with_id(mut by: SavedBy, id: &str) -> SavedBy {
+    by.id = Some(id.into());
+    by
+}
+
+fn me(computer: &str, id: &str) -> Me {
+    Me { computer: computer.into(), id: id.into() }
 }
 
 fn names(dir: &Path) -> Vec<String> {
@@ -114,36 +123,108 @@ fn only_this_apps_file_is_read_or_written() {
 }
 
 #[test]
-fn newer_from_another_mac_is_offered_and_the_rest_is_not() {
-    let file = |c: &str, at: &str| by(c, at);
+fn a_file_stands_to_a_mac_by_who_saved_it_and_when() {
     let last = "2026-11-02T10:00:00+01:00";
-    // another Mac, newer than this Mac's last save or load: offered
-    assert!(is_newer_from_another_mac(&file("Laptop", "2026-11-02T10:00:01+01:00"), "Studio", last));
+    let studio = me("Studio", "");
+    // another Mac, newer than this Mac's last save or load
+    assert_eq!(standing(Some(&by("Laptop", "2026-11-02T10:00:01+01:00")), &studio, last), Standing::Newer);
     // the same instant written in another offset is not newer
-    assert!(!is_newer_from_another_mac(&file("Laptop", "2026-11-02T09:00:00Z"), "Studio", last));
-    // older, or this Mac's own file: not offered
-    assert!(!is_newer_from_another_mac(&file("Laptop", "2026-11-01T10:00:00+01:00"), "Studio", last));
-    assert!(!is_newer_from_another_mac(&file("Studio", "2026-12-01T10:00:00+01:00"), "Studio", last));
-    // nothing saved or loaded yet (or an unreadable record): any file from another Mac
-    assert!(is_newer_from_another_mac(&file("Laptop", "2026-11-02T10:00:00+01:00"), "Studio", ""));
-    assert!(is_newer_from_another_mac(&file("Laptop", "2026-11-02T10:00:00+01:00"), "Studio", "garbage"));
-    // a file whose time can't be read is never offered
-    assert!(!is_newer_from_another_mac(&file("Laptop", "yesterday"), "Studio", ""));
+    assert_eq!(standing(Some(&by("Laptop", "2026-11-02T09:00:00Z")), &studio, last), Standing::Older);
+    assert_eq!(standing(Some(&by("Laptop", "2026-11-01T10:00:00+01:00")), &studio, last), Standing::Older);
+    // this Mac's own file, whatever its time
+    assert_eq!(standing(Some(&by("Studio", "2026-12-01T10:00:00+01:00")), &studio, last), Standing::Own);
+    assert_eq!(standing(Some(&by("Studio", "yesterday")), &studio, last), Standing::Own);
+    // nothing saved or loaded yet (or an unreadable record): any file from another Mac is newer
+    assert_eq!(standing(Some(&by("Laptop", "2026-11-02T10:00:00+01:00")), &studio, ""), Standing::Newer);
+    assert_eq!(standing(Some(&by("Laptop", "2026-11-02T10:00:00+01:00")), &studio, "garbage"), Standing::Newer);
+    // the saver or the time can't be read: not told apart from a newer one
+    assert_eq!(standing(None, &studio, last), Standing::Unknown);
+    assert_eq!(standing(Some(&by("Laptop", "yesterday")), &studio, last), Standing::Unknown);
+    assert!(Standing::Unknown.would_lose_settings() && Standing::Newer.would_lose_settings());
+    assert!(!Standing::Own.would_lose_settings() && !Standing::Older.would_lose_settings());
 }
 
 #[test]
-fn newer_file_reads_the_folder_for_keep_in_sync() {
+fn two_macs_with_one_name_are_told_apart_by_their_ids() {
+    let last = "2026-11-02T10:00:00+01:00";
+    let newer = "2026-11-02T12:00:00+01:00";
+    // both have an id: it decides, whatever the names say
+    assert_eq!(standing(Some(&with_id(by("Mac", newer), "aaa")), &me("Mac", "bbb"), last), Standing::Newer);
+    assert_eq!(standing(Some(&with_id(by("Mac", newer), "aaa")), &me("Other", "aaa"), last), Standing::Own);
+    // the file has none (PhotoCraft's or an older file), or this Mac has none yet: by name
+    assert_eq!(standing(Some(&by("Mac", newer)), &me("Mac", "bbb"), last), Standing::Own);
+    assert_eq!(standing(Some(&with_id(by("Mac", newer), "aaa")), &me("Mac", ""), last), Standing::Own);
+    assert_eq!(standing(Some(&by("Mac", newer)), &me("Other", "bbb"), last), Standing::Newer);
+}
+
+#[test]
+fn saved_by_id_is_written_read_and_optional() {
+    let dir = scratch("id");
+    let folder = dir.to_str().unwrap();
+    let id = new_mac_id();
+    assert_eq!(id.len(), 32);
+    assert_ne!(id, new_mac_id(), "random");
+    let by = SyncEnv { computer: Some("Studio".into()), ..Default::default() }.saved_by(&id);
+    assert_eq!(by.id.as_deref(), Some(id.as_str()));
+    let saved = save(folder, json!({}), by.clone()).unwrap();
+    assert_eq!(read(folder).unwrap().by, Some(by));
+    assert!(std::fs::read_to_string(saved.path).unwrap().contains("\"id\""));
+    // no id made yet: the key is left out, and a file without one reads fine
+    let none = SyncEnv::default().saved_by("");
+    assert_eq!(none.id, None);
+    save(folder, json!({}), SavedBy { computer: "Studio".into(), ..none }).unwrap();
+    assert!(!std::fs::read_to_string(dir.join(FILE_NAME)).unwrap().contains("\"id\""));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn inspect_reads_the_folder_for_keep_in_sync_and_save() {
     let dir = scratch("newer");
     let folder = dir.to_str().unwrap();
-    // no folder chosen, a folder with no file: nothing to offer
-    assert_eq!(newer_file("", "Studio", "").unwrap(), None);
-    assert_eq!(newer_file(folder, "Studio", "").unwrap(), None);
+    let studio = me("Studio", "");
+    // no folder chosen, a folder with no file: nothing there
+    assert_eq!(inspect("", &studio, "").unwrap(), None);
+    assert_eq!(inspect(folder, &studio, "").unwrap(), None);
     save(folder, json!({}), by("Laptop", "2026-11-02T12:00:00+01:00")).unwrap();
-    assert!(newer_file(folder, "Studio", "2026-11-02T10:00:00+01:00").unwrap().is_some());
-    assert_eq!(newer_file(folder, "Studio", "2026-11-02T12:00:00+01:00").unwrap(), None);
-    assert_eq!(newer_file(folder, "Laptop", "").unwrap(), None);
+    assert_eq!(inspect(folder, &studio, "2026-11-02T10:00:00+01:00").unwrap().map(|(_, s)| s), Some(Standing::Newer));
+    assert!(newer_file(folder, &studio, "2026-11-02T10:00:00+01:00").unwrap().is_some());
+    assert_eq!(inspect(folder, &studio, "2026-11-02T12:00:00+01:00").unwrap().map(|(_, s)| s), Some(Standing::Older));
+    assert_eq!(newer_file(folder, &studio, "2026-11-02T12:00:00+01:00").unwrap(), None);
+    assert_eq!(newer_file(folder, &me("Laptop", ""), "").unwrap(), None);
+    // a file that doesn't say who saved it stops a save, but is never offered at start
+    std::fs::write(dir.join(FILE_NAME), "{}").unwrap();
+    assert_eq!(inspect(folder, &studio, "").unwrap().map(|(_, s)| s), Some(Standing::Unknown));
+    assert_eq!(newer_file(folder, &studio, "").unwrap(), None);
     // a folder that is gone is an error the caller can show
-    assert!(newer_file(dir.join("gone").to_str().unwrap(), "Studio", "").is_err());
+    assert!(inspect(dir.join("gone").to_str().unwrap(), &studio, "").is_err());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn leftover_temporary_files_of_this_app_go_when_old_and_nothing_else_does() {
+    let dir = scratch("leftovers");
+    let old = std::time::SystemTime::now() - std::time::Duration::from_secs(3600);
+    let put = |name: &str, aged: bool| {
+        let path = dir.join(name);
+        std::fs::write(&path, "x").unwrap();
+        if aged {
+            std::fs::File::options().write(true).open(&path).unwrap().set_modified(old).unwrap();
+        }
+    };
+    put(".lightcraft.lcsettings.123-0.tmp", true);
+    put(".lightcraft.lcsettings.4-17.tmp", true);
+    // too new (another Mac may be saving), another app's, or not our pattern
+    put(".lightcraft.lcsettings.999-0.tmp", false);
+    put(".photocraft.pcsettings.123-0.tmp", true);
+    put(".lightcraft.lcsettings.abc-0.tmp", true);
+    put(".lightcraft.lcsettings.123-0.tmp.keep", true);
+    put("notes.tmp", true);
+    put(FILE_NAME, true);
+    assert_eq!(remove_leftovers(&dir), 2);
+    let left = names(&dir);
+    assert_eq!(left.len(), 6, "{left:?}");
+    assert!(left.contains(&FILE_NAME.to_string()) && left.contains(&".lightcraft.lcsettings.999-0.tmp".to_string()));
+    assert_eq!(remove_leftovers(&dir.join("gone")), 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

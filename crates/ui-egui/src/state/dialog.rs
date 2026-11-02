@@ -387,6 +387,9 @@ pub enum Dialog {
     /// Import Settings… and Load from Folder: what the file would change, asked before anything does
     /// (`settings.import`, `settings.syncLoad`; the file's reading is `LightcraftApp::sync_settings.prompt`).
     SettingsImport,
+    /// Save to Folder over settings from another Mac that this Mac hasn't loaded: ask first
+    /// (`settings.syncSave`; the question is `LightcraftApp::sync_settings.replace`).
+    SettingsReplace,
     About,
     Shortcuts,
     /// View ▸ View Options (⌘J): the info overlay and the lines of Info 1 and Info 2. Changes apply
