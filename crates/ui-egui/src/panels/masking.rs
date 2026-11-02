@@ -322,7 +322,7 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let Some(mid) = app.session.active_mask else { return };
     let Some(m) = d.masks.iter().find(|m| m.id == mid).cloned() else { return };
     divider(ui);
-    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 8, bottom: 8 }).show(ui, |ui| {
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 14, right: 12, top: 8, bottom: 8 }).show(ui, |ui| {
         super::mask_parts::part_rows(app, ui, &m);
     });
     if super::mask_parts::brush_bar_shown(app, &m) {

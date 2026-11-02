@@ -25,7 +25,7 @@ pub fn fit(painter: &Painter, text: &str, font: FontId, color: Color32, max: f32
 }
 
 /// The smallest font a list of submask names shares before one is cut.
-pub const LIST_FLOOR: f32 = 11.0;
+pub const LIST_FLOOR: f32 = 10.5;
 
 /// One font size for every row of a list: the largest from `font` down to `floor` (steps of half a point) at which every
 /// `(text, room)` fits its room, else `floor`. Rows share it, so a long name does not make one row smaller than the rest.
