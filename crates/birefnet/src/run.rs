@@ -97,3 +97,97 @@ impl BiRefNet {
         Ok(Matte { side, logits })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::swin::SwinConfig;
+
+    /// A directory holding a safetensors file of zero-filled F32 tensors with these names and shapes.
+    fn synthetic(name: &str, tensors: &[(String, Vec<usize>)]) -> std::path::PathBuf {
+        let mut header = serde_json::Map::new();
+        let mut at = 0u64;
+        for (n, shape) in tensors {
+            let bytes = shape.iter().product::<usize>() as u64 * 4;
+            header.insert(n.clone(), serde_json::json!({"dtype": "F32", "shape": shape, "data_offsets": [at, at + bytes]}));
+            at += bytes;
+        }
+        let dir = std::env::temp_dir().join(format!("lc-birefnet-{name}-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let header = serde_json::to_string(&header).unwrap();
+        let mut file = (header.len() as u64).to_le_bytes().to_vec();
+        file.extend_from_slice(header.as_bytes());
+        file.extend(std::iter::repeat_n(0u8, at as usize));
+        std::fs::write(dir.join(WEIGHTS_FILE), file).unwrap();
+        dir
+    }
+
+    /// The tensors `SwinConfig::detect` looks at, for a backbone of embedding width `e`, `window`, and `depths` blocks per stage.
+    fn backbone(e: usize, window: usize, depths: [usize; 4]) -> Vec<(String, Vec<usize>)> {
+        let mut t = vec![("bb.patch_embed.proj.weight".to_string(), vec![e, 3, 4, 4])];
+        for (stage, depth) in depths.iter().enumerate() {
+            for block in 0..*depth {
+                t.push((format!("bb.layers.{stage}.blocks.{block}.norm1.weight"), vec![e << stage]));
+                t.push((format!("bb.layers.{stage}.blocks.{block}.attn.relative_position_bias_table"), vec![(2 * window - 1) * (2 * window - 1), 3 << stage]));
+            }
+        }
+        t
+    }
+
+    #[test]
+    fn the_backbone_size_is_read_from_the_weights() {
+        let dir = synthetic("detect", &backbone(96, 7, [2, 2, 6, 2]));
+        let weights = Arc::new(Weights::open(&dir.join(WEIGHTS_FILE)).unwrap());
+        let cfg = SwinConfig::detect(&Params::new(weights, Device::Cpu)).unwrap();
+        assert_eq!(cfg, SwinConfig { embed: 96, depths: vec![2, 2, 6, 2], heads: vec![3, 6, 12, 24], window: 7 });
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn a_file_that_is_not_birefnet_is_an_error_not_a_panic() {
+        // no backbone at all
+        let dir = synthetic("other", &[("something.weight".to_string(), vec![2, 2])]);
+        let err = BiRefNet::load_with_side(&dir, 64, Device::Cpu).err().unwrap().to_string();
+        assert!(err.contains("no Swin backbone"), "{err}");
+        let _ = std::fs::remove_dir_all(dir);
+        // a backbone whose bias table is not (2w-1)²
+        let mut t = backbone(96, 7, [1, 1, 1, 1]);
+        t[2].1 = vec![100, 3];
+        let dir = synthetic("table", &t);
+        let err = BiRefNet::load_with_side(&dir, 64, Device::Cpu).err().unwrap().to_string();
+        assert!(err.contains("not (2w-1)"), "{err}");
+        let _ = std::fs::remove_dir_all(dir);
+        // a stage without blocks
+        let dir = synthetic("empty-stage", &backbone(96, 7, [2, 0, 2, 2]));
+        assert!(BiRefNet::load_with_side(&dir, 64, Device::Cpu).is_err());
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn missing_and_wrong_shaped_tensors_are_named() {
+        // a plausible backbone that stops short: the first tensor the loader wants after the sizes
+        let dir = synthetic("short", &backbone(96, 7, [1, 1, 1, 1]));
+        let err = BiRefNet::load_with_side(&dir, 64, Device::Cpu).err().unwrap().to_string();
+        assert!(err.contains("missing tensor") || err.contains("shape mismatch"), "{err}");
+        let _ = std::fs::remove_dir_all(dir);
+        // a tensor with the wrong shape is refused before its bytes are read
+        let mut t = backbone(96, 7, [1, 1, 1, 1]);
+        t.push(("bb.patch_embed.proj.bias".to_string(), vec![5]));
+        let dir = synthetic("shape", &t);
+        let err = BiRefNet::load_with_side(&dir, 64, Device::Cpu).err().unwrap().to_string();
+        assert!(err.contains("shape mismatch for `bb.patch_embed.proj.bias`") && err.contains("[96]"), "{err}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn no_model_and_bad_input_sizes_are_errors() {
+        let empty = std::env::temp_dir().join(format!("lc-birefnet-none-{}", std::process::id()));
+        assert!(matches!(BiRefNet::load_with_side(&empty, 1024, Device::Cpu), Err(Error::Missing(_))));
+        let dir = synthetic("side", &backbone(96, 7, [1, 1, 1, 1]));
+        for side in [0, 100, 8192] {
+            let err = BiRefNet::load_with_side(&dir, side, Device::Cpu).err().unwrap().to_string();
+            assert!(err.contains("multiple of 32"), "{side}: {err}");
+        }
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}
