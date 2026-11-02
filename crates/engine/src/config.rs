@@ -160,6 +160,7 @@ impl Session {
     /// download mirrors in `<config>/models/sam3-mirrors.txt`.
     pub fn with_default_sam3_model(mut self) -> Self {
         self.segmenter.dir = default_sam3_dir();
+        self.segmenter.birefnet = crate::segment::birefnet::Settings::with_defaults();
         self.segmenter.mirrors_file = config_dir().map(|d| d.join("models").join("sam3-mirrors.txt"));
         self
     }

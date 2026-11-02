@@ -29,6 +29,8 @@ use lightcraft_segment::{
     remote::{self, CONCEPT_THRESHOLD, Operation, Request, TEXT_THRESHOLD, text_logits},
 };
 
+mod birefnet;
+
 use super::{Input, Prompt, Tag};
 use crate::media::RenderJob;
 
@@ -45,6 +47,14 @@ pub enum Kind {
     /// Subject, Sky or Background: like `Text`, with the looser score ([`CONCEPT_THRESHOLD`]); `true`: only the main
     /// subject's instances (Subject and Background).
     Concept(String, bool),
+    /// Subject or Background by BiRefNet (fork feature, issue #48): `combined` lets SAM 3 (asked for `text`; `main`:
+    /// the main subject's instances only) decide what the subject is and BiRefNet draw its edge.
+    BiRefNet {
+        combined: bool,
+        text: String,
+        main: bool,
+        dir: PathBuf,
+    },
     /// A zoomed-in pass over `region` (normalized) of the photo, rendered by the job's `render`.
     Detail {
         prompt: Prompt,
@@ -274,8 +284,16 @@ impl Worker {
 #[derive(Default)]
 struct State {
     model: Option<(PathBuf, Sam3)>,
+    birefnet: Option<(PathBuf, lightcraft_birefnet::BiRefNet)>,
     cache: Option<(u64, Encoded)>,
     remote: Option<(String, remote::Client)>,
+}
+
+impl State {
+    /// Whether a model is in memory.
+    fn loaded(&self) -> bool {
+        self.model.is_some() || self.birefnet.is_some() || self.remote.is_some()
+    }
 }
 
 /// Whether `later` makes `job` pointless (it asks for the same selection again).
@@ -296,7 +314,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
             match rx.recv_timeout(idle) {
                 Ok(j) => queue.push_back(j),
                 Err(RecvTimeoutError::Timeout) => {
-                    if state.model.is_some() || state.remote.is_some() {
+                    if state.loaded() {
                         state = State::default();
                         shared.loaded.store(false, Ordering::SeqCst);
                         log::info!("SAM 3 unloaded after {} minutes without use", idle.as_secs() / 60);
@@ -320,12 +338,12 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
             continue;
         }
         // what a retry on the CPU needs (running the job takes them)
-        let is_remote = job.remote.is_some() || remote::configured().is_some();
+        let is_remote = (job.remote.is_some() || remote::configured().is_some()) && !matches!(job.kind, Kind::BiRefNet { .. });
         let retry = (placement == Placement::Gpu && !is_remote).then(|| (job.kind.clone(), job.render.clone()));
         let mut result = attempt(&mut state, shared, &mut job, placement);
         let mut notice = None;
         if matches!(result, Err(Failure::Cancelled)) {
-            shared.loaded.store(state.model.is_some() || state.remote.is_some(), Ordering::SeqCst);
+            shared.loaded.store(state.loaded(), Ordering::SeqCst);
             drop(done);
             let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result: Ok(None), superseded: true, notice: None });
             continue;
@@ -348,7 +366,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
                     result = Ok(r);
                 }
                 Err(Failure::Cancelled) => {
-                    shared.loaded.store(state.model.is_some() || state.remote.is_some(), Ordering::SeqCst);
+                    shared.loaded.store(state.loaded(), Ordering::SeqCst);
                     drop(done);
                     let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result: Ok(None), superseded: true, notice: None });
                     continue;
@@ -364,7 +382,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
         if result.is_err() && !is_detail {
             state.cache = None;
         }
-        shared.loaded.store(state.model.is_some() || state.remote.is_some(), Ordering::SeqCst);
+        shared.loaded.store(state.loaded(), Ordering::SeqCst);
         drop(done);
         let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result, superseded: false, notice });
     }
@@ -466,6 +484,7 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
         Kind::Prepare => Operation::Prepare,
         Kind::Text(text) => Operation::Text(text),
         Kind::Concept(text, main) => Operation::Concept(text, main),
+        Kind::BiRefNet { .. } => return Err("BiRefNet runs on this Mac, not on a remote worker".into()),
         Kind::Clicks(clicks) => Operation::Clicks(clicks.iter().map(|c| [c.x, c.y, if c.positive { 1.0 } else { 0.0 }]).collect()),
         Kind::Detail { prompt, region: r } => {
             region = Some(r);
@@ -508,6 +527,10 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
     if job.cancel.load(Ordering::Relaxed) {
         return Err(Failure::Cancelled);
     }
+    // BiRefNet runs here, whatever worker SAM 3 would use
+    if let Kind::BiRefNet { combined, text, main, dir } = job.kind.clone() {
+        return birefnet::run(state, shared, job, placement, &birefnet::Request { combined, text: &text, main, dir: &dir });
+    }
     let remote_target = job.remote.clone().or_else(remote::configured);
     if let Some(endpoint) = remote_target {
         let result = remote_job(state, shared, job, &endpoint);
@@ -535,6 +558,7 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
             let (m, enc) = encoded(state, shared, job, placement)?;
             Ok(text_logits(m, enc, &text, CONCEPT_THRESHOLD, main)?.map(|l| SegMask::from_logits(side, &l)))
         }
+        Kind::BiRefNet { .. } => Err("BiRefNet is run before this point".into()),
         #[cfg(test)]
         #[allow(clippy::panic)]
         Kind::Panic => panic!("a test panic"),

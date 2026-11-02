@@ -51,7 +51,7 @@ fn matte_kinds(kind: &str) -> &'static [MatteKind] {
 /// no embedded matte for it.
 pub fn wanted(s: &Session, photo: PhotoId, shape: &MaskShape) -> bool {
     let Some(c) = of(shape) else { return false };
-    s.segmenter.has_model() && !s.media.has_matte(photo, matte_kinds(c.kind))
+    s.segmenter.can_select(c.kind) && !s.media.has_matte(photo, matte_kinds(c.kind))
 }
 
 /// What the user is told when the model finds nothing.

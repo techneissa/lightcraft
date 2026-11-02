@@ -3738,6 +3738,7 @@ dependencies = [
  "harfrust 0.13.3",
  "jxl-oxide",
  "libc",
+ "lightcraft-birefnet",
  "lightcraft-catalog",
  "lightcraft-codecs",
  "lightcraft-color",

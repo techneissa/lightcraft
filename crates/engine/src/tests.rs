@@ -45,6 +45,8 @@ mod local_profiles;
 mod location;
 mod rename_names;
 // macOS Colour needs macOS's own raw decoder: the test only means something on the Mac (fork is Mac only)
+#[cfg(feature = "sam")]
+mod birefnet;
 #[cfg(target_os = "macos")]
 mod macos_colour;
 mod macos_wb;

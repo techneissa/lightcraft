@@ -6,6 +6,7 @@
 
 mod activity;
 mod before;
+mod birefnet;
 mod book;
 pub(crate) mod browse;
 mod color;
@@ -159,6 +160,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(color::specs());
         v.extend(curves::specs());
         v.extend(masks::specs());
+        v.extend(birefnet::specs());
         v.extend(find_removals::specs());
         v.extend(organize::specs());
         v.extend(keywords::specs());
