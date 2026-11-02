@@ -3589,6 +3589,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-birefnet"
+version = "0.17.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "image",
+ "lightcraft-fetch",
+ "lightcraft-testkit",
+ "log",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "lightcraft-catalog"
 version = "0.17.0"
 dependencies = [
@@ -3724,6 +3738,7 @@ dependencies = [
  "harfrust 0.13.3",
  "jxl-oxide",
  "libc",
+ "lightcraft-birefnet",
  "lightcraft-catalog",
  "lightcraft-codecs",
  "lightcraft-color",

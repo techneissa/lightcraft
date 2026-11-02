@@ -108,6 +108,7 @@ mod rough_mask;
 mod rules_editor;
 mod sam_setup;
 mod scroll;
+mod selection_model;
 mod shortcut_backup;
 mod shortcut_editing;
 mod shortcut_when;

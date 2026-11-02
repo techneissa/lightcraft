@@ -1,0 +1,31 @@
+[package]
+name = "lightcraft-birefnet"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+description = "LightCraft BiRefNet: fine-edged subject cut-outs (Swin-L backbone, bilateral reference decoder) in pure Rust on candle (L3)"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+log = { workspace = true }
+serde_json = { workspace = true }
+
+# the model runs natively only (the web build has no AI masks)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+lightcraft-fetch = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+candle-core = { workspace = true, features = ["metal"] }
+candle-nn = { workspace = true, features = ["metal"] }
+
+[dev-dependencies]
+lightcraft-testkit = { workspace = true }
+image = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+candle-core = { workspace = true }

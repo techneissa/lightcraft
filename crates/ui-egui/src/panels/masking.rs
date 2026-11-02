@@ -99,6 +99,7 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let t = Tokens::get(ui.ctx());
     let d = app.session.develop_of(id).unwrap_or_default();
     header(ui, "Masking");
+    super::selection_model::show(app, ui);
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Create New Mask")).color(t.text_dim));
         ui.add_space(6.0);

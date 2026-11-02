@@ -15,6 +15,7 @@
 //! commands return at once and [`Session::segment_poll`] applies the results; without it (CLI,
 //! MCP, tests) they wait for the worker.
 
+pub mod birefnet;
 #[cfg(feature = "sam")]
 mod download;
 pub(crate) mod request;
@@ -65,7 +66,16 @@ pub(crate) enum Tag {
     NewPrompt { photo: PhotoId, mask: Option<u32>, op: String, name: Option<String>, text: String },
     /// A Subject, Sky or Background selection: a new mask (`mask: None`) or a component combined by `op`, added when
     /// SAM 3 has found it (`invert`: Background, the subject turned around).
-    NewConcept { photo: PhotoId, mask: Option<u32>, op: String, name: Option<String>, kind: String, invert: bool },
+    NewConcept {
+        photo: PhotoId,
+        mask: Option<u32>,
+        op: String,
+        name: Option<String>,
+        kind: String,
+        invert: bool,
+        /// The model that makes it (Subject and Background: the dropdown's choice when the request was made).
+        model: birefnet::SelectionModel,
+    },
     /// A zoomed-in pass for a component, computed from `shape` (without its detail).
     Detail { photo: PhotoId, mask: u32, comp: usize, shape: MaskShape },
 }
@@ -87,6 +97,8 @@ fn activity_label(tag: &Tag) -> &'static str {
     match tag {
         Tag::Prepare => "Analyzing the photo for AI masks…",
         Tag::Detail { .. } => "Refining the mask's detail…",
+        Tag::NewConcept { model: birefnet::SelectionModel::BiRefNet, .. } => "Selecting with BiRefNet",
+        Tag::NewConcept { model: birefnet::SelectionModel::Combined, .. } => "Selecting with SAM 3 + BiRefNet",
         _ => "Selecting with SAM 3",
     }
 }
@@ -155,6 +167,8 @@ pub struct Segmenter {
     pub background: bool,
     /// Optional remote AI worker endpoint override (host:port).
     pub remote: Option<String>,
+    /// The selection model dropdown and the BiRefNet files (fork feature, issue #48).
+    pub birefnet: birefnet::Settings,
     pending: Option<PendingClicks>,
     messages: Vec<String>,
     #[cfg_attr(not(feature = "sam"), allow(dead_code))]
@@ -178,6 +192,7 @@ impl Default for Segmenter {
             mirrors_file: None,
             background: false,
             remote: None,
+            birefnet: birefnet::Settings::default(),
             pending: None,
             messages: Vec::new(),
             next_job_id: 1,
@@ -554,7 +569,11 @@ impl Session {
         reply: std::sync::mpsc::Sender<worker::Outcome>,
         region: Option<[f64; 4]>,
     ) -> Result<worker::Job, String> {
-        let dir = self.segmenter.model_dir()?;
+        // (BiRefNet alone needs no SAM 3: its job carries its own folder)
+        let dir = match &kind {
+            worker::Kind::BiRefNet { combined: false, dir, .. } => dir.clone(),
+            _ => self.segmenter.model_dir()?,
+        };
         let (key, mut d) = self.segment_key(id).ok_or("no such photo")?;
         let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
         let missing = match &p.source {
@@ -679,10 +698,10 @@ impl Session {
     /// Segment a Subject, Sky or Background selection on photo `id` (the looser score, the main subject only where
     /// the concept says so), waiting for the model; `Ok(None)` when nothing matches.
     pub(crate) fn segment_concept(&mut self, id: PhotoId, concept: &crate::cmd::concepts::Concept) -> Result<Option<SegMask>, String> {
-        self.segmenter.model_dir()?;
         #[cfg(feature = "sam")]
         {
-            self.segment_wait(id, worker::Kind::Concept(concept.text.trim().to_string(), concept.main_only), None)
+            let (kind, _) = self.concept_kind(concept)?;
+            self.segment_wait(id, kind, None)
         }
         #[cfg(not(feature = "sam"))]
         {
@@ -744,11 +763,11 @@ impl Session {
         name: Option<String>,
         concept: &crate::cmd::concepts::Concept,
     ) -> Result<(), String> {
-        self.segmenter.model_dir()?;
         #[cfg(feature = "sam")]
         {
-            let tag = Tag::NewConcept { photo: id, mask, op: op.to_string(), name, kind: concept.kind.to_string(), invert: concept.invert };
-            self.segment_queue(id, worker::Kind::Concept(concept.text.trim().to_string(), concept.main_only), tag, None)
+            let (kind, model) = self.concept_kind(concept)?;
+            let tag = Tag::NewConcept { photo: id, mask, op: op.to_string(), name, kind: concept.kind.to_string(), invert: concept.invert, model };
+            self.segment_queue(id, kind, tag, None)
         }
         #[cfg(not(feature = "sam"))]
         {
@@ -776,6 +795,10 @@ impl Session {
             MaskShape::Sky { seg: Some(seg), .. } => (seg.clone(), Prompt::Concept(crate::cmd::concepts::SKY.into(), false)),
             _ => return Ok(false),
         };
+        // (the zoomed-in pass is SAM 3's; a part another model made keeps its own edges)
+        if seg.model.is_some() {
+            return Ok(false);
+        }
         let p = self.catalog.photo(id).ok_or("no such photo")?;
         let (pw, ph) = (f64::from(p.width.max(1)), f64::from(p.height.max(1)));
         let aspect = if d.orientation.swaps_axes() { ph / pw } else { pw / ph };
@@ -904,7 +927,7 @@ impl Session {
                     Err(e) => polled.messages.push(e.to_string()),
                 }
             }
-            Tag::NewConcept { photo, mask, op, name, kind, invert } => {
+            Tag::NewConcept { photo, mask, op, name, kind, invert, .. } => {
                 let seg = match o.result {
                     Ok(Some(mut seg)) => {
                         if invert {
@@ -1009,7 +1032,7 @@ mod tests {
 
     #[cfg(feature = "sam")]
     fn concept_outcome(photo: PhotoId, mask: Option<u32>, kind: &str, invert: bool, seg: SegMask) -> worker::Outcome {
-        let tag = Tag::NewConcept { photo, mask, op: "add".into(), name: None, kind: kind.into(), invert };
+        let tag = Tag::NewConcept { photo, mask, op: "add".into(), name: None, kind: kind.into(), invert, model: birefnet::SelectionModel::Sam3 };
         worker::Outcome { id: 0, tag, result: Ok(Some(seg)), superseded: false, notice: None }
     }
 
@@ -1067,7 +1090,15 @@ mod tests {
         assert_eq!(s.segmenter.in_flight.len(), 1);
         let none = worker::Outcome {
             id: s.segmenter.in_flight[0].id,
-            tag: Tag::NewConcept { photo, mask: Some(mid), op: "add".into(), name: None, kind: "sky".into(), invert: false },
+            tag: Tag::NewConcept {
+                photo,
+                mask: Some(mid),
+                op: "add".into(),
+                name: None,
+                kind: "sky".into(),
+                invert: false,
+                model: birefnet::SelectionModel::Sam3,
+            },
             result: Ok(None),
             superseded: false,
             notice: None,
@@ -1154,7 +1185,7 @@ mod tests {
     fn no_region_for_nothing_or_most_of_the_photo() {
         assert!(detail_region(&seg_box(50, 0, 0, 0, 0), 1.0).is_none());
         assert!(detail_region(&seg_box(50, 2, 2, 48, 48), 1.0).is_none());
-        let damaged = SegMask { side: 50, data: "?".into(), rect: None };
+        let damaged = SegMask { side: 50, data: "?".into(), rect: None, model: None };
         assert!(detail_region(&damaged, 1.0).is_none());
     }
 }

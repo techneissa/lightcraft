@@ -44,6 +44,7 @@ ab_glyph = { workspace = true }
 harfrust = { version = "0.13", default-features = false, features = ["std"] }
 unicode-segmentation = "1.13"
 lightcraft-segment = { workspace = true, optional = true }
+lightcraft-birefnet = { workspace = true, optional = true }
 
 # model downloads run natively only (the web build fetches no models)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
@@ -55,11 +56,15 @@ chrono = { workspace = true }
 # Delete Permanently can move the files to the system Trash (no Trash in the browser)
 trash = { workspace = true }
 
+[[example]]
+name = "birefnet_compare"
+required-features = ["sam"]
+
 [features]
 # Test-only hooks for the crates that test against the engine (a dev-dependency feature; never enabled in a product build).
 test-hooks = []
 # AI masks with SAM 3 (Object / Describe). Off for the web and CLI builds.
-sam = ["dep:lightcraft-segment"]
+sam = ["dep:lightcraft-segment", "dep:lightcraft-birefnet"]
 denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime", "lightcraft-gpu/denoise"]
 rawnind-model = ["denoise", "lightcraft-denoise/rawnind-model", "lightcraft-denoise-core/rawnind-model"]
 # LightCraft's own denoise model offered as a download (MIT OR Apache-2.0 weights, CC0 training data); needs its hosted file.
