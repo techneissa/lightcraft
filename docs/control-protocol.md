@@ -472,8 +472,14 @@ A shortcut is one key (`Cmd+Shift+K`, `F5`, `Delete`) or a chord of two keys sep
 - In the Keyboard Shortcuts window the When cell of a command is `button:shortcutWhen-<id>` (click to type; the box is
   `field:shortcutWhen`, the autocomplete rows `menu:whenSuggestion-<n>`) and `button:shortcutWhenAdd-<id>` opens the builder
   (`menu:whenKey-<key>`, `menu:whenIs` / `menu:whenIsNot`, `menu:whenValue-<value>`, `menu:whenBack`).
-- In the Keyboard Shortcuts window the cells are `button:shortcut-<id>` (Shortcut 1) and `button:shortcut2-<id>`,
-  removed with `button:shortcutClear-<id>` / `button:shortcutClear2-<id>`, restored with `button:shortcutReset-<id>`.
+- In the Keyboard Shortcuts window a row is `row:shortcut-<id>` (a click picks it), its cells are
+  `button:shortcut-<id>` (Shortcut 1) and `button:shortcut2-<id>` (a click records into the cell: press the keys, Enter
+  saves, Esc cancels; no Assign Shortcut box), the bare trash icon on the cell the pointer is over is
+  `button:shortcutClear-<id>` / `button:shortcutClear2-<id>`, the reset icon of a changed row is
+  `button:shortcutReset-<id>`, and the button at the search's right is `button:shortcutsAdd`. The row's right-click menu
+  has `menu:shortcutAdd`, `menu:shortcutCondition`, `menu:shortcutRemove` and `menu:shortcutReset`; a cell's has
+  `menu:shortcutRemove-<slot>`. ⌫ / Delete removes the picked shortcut. The window's size is saved as
+  `shortcutsWindowSize` (points) in the settings.
 - While the first key of a chord is waiting, the hint card is the widget `chordHint`.
 - A right-click on an icon or button that runs a command opens a menu whose item is `menu:assignShortcut`; a
   right-click on a menu item, a photo-menu row or a palette row opens the box directly. A chord may not contain

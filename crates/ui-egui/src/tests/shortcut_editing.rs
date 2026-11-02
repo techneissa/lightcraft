@@ -217,15 +217,10 @@ fn the_window_edits_both_slots() {
     assert_eq!(h.request("ui.text", json!({"text": "survey"}), T)["ok"], true);
     h.step();
     h.step();
-    for id in [
-        "button:shortcut-view.survey",
-        "button:shortcut2-view.survey",
-        "button:shortcutClear-view.survey",
-        "button:shortcutClear2-view.survey",
-        "button:shortcutReset-view.survey",
-    ] {
+    for id in ["button:shortcut-view.survey", "button:shortcut2-view.survey"] {
         assert!(has(&h, id), "{id}");
     }
+    assert!(!has(&h, "button:shortcutReset-view.survey"), "the reset icon shows on a changed row only");
     let shown = text(&h);
     for title in ["Action", "Shortcut 1", "Shortcut 2", "When"] {
         assert!(shown.contains(title), "{title}: {shown}");
@@ -236,8 +231,8 @@ fn the_window_edits_both_slots() {
     key(&mut h, "Enter");
     assert_eq!(crate::keybinds::model::effective(&h.app.ui.settings.keymap, "view.survey", 1), Some("Shift+Q"));
     assert!(matches!(h.app.ui.dialog, Some(Dialog::Shortcuts)));
-    // × removes the second one, ↺ restores everything
-    click(&mut h, "button:shortcutClear2-view.survey");
+    // ⌫ removes the second one (the cell just recorded is the picked one), ↺ restores everything
+    key(&mut h, "Backspace");
     assert_eq!(crate::keybinds::model::effective(&h.app.ui.settings.keymap, "view.survey", 1), None);
     set(&mut h, "view.survey", 2, "Shift+Q");
     set(&mut h, "view.survey", 1, "Shift+J");

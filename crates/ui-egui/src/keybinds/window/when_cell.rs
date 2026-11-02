@@ -49,7 +49,7 @@ pub fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, id: &'static
     }
 }
 
-fn start_edit(app: &mut LightcraftApp, id: &'static str) {
+pub(super) fn start_edit(app: &mut LightcraftApp, id: &'static str) {
     let text = conditions::text(&app.ui.settings.keymap, id).unwrap_or_default();
     app.keybinds.when_edit = Some(Edit { id, text, selected: 0, navigated: false, tried: false, fresh: true, list: None });
 }
