@@ -295,7 +295,13 @@ pub fn part_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask) {
         let g = super::mask_name::fit(ui.painter(), &label, t.font(13.0), t.text, (r.width() - 28.0 - room).max(0.0));
         let elided = g.elided;
         ui.painter().galley(egui::pos2(r.left() + 28.0, r.center().y - g.size().y / 2.0), g, t.text);
-        let resp = if elided { resp.on_hover_text(&label) } else { resp };
+        // (an AI part says which model made it)
+        let resp = match (elided, super::selection_model::part_tip(&c.shape)) {
+            (true, Some(tip)) => resp.on_hover_text(format!("{label}\n{tip}")),
+            (true, None) => resp.on_hover_text(&label),
+            (false, Some(tip)) => resp.on_hover_text(tip),
+            (false, None) => resp,
+        };
         let used = part_buttons(app, ui, m, i, c, r, hot);
         if resp.clicked() && !used {
             pick_part(app, m.id, i, &c.shape);
