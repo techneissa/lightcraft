@@ -24,6 +24,7 @@ mod debounce;
 pub mod destination;
 pub mod dialogs;
 pub mod docking;
+mod drag_ghost;
 mod drop_overlay;
 pub mod edit_in_task;
 pub mod editor_handoff;
@@ -47,6 +48,7 @@ mod model_setup;
 pub mod panels;
 pub mod pick;
 pub mod recheck;
+pub mod reflections;
 pub mod region;
 pub mod reload;
 pub mod rename_task;
@@ -323,6 +325,10 @@ pub struct LightcraftApp {
     pub(crate) compare_hold_until: f64,
     /// Photo Merge dialog previews and background merges.
     pub merge: merge::MergeState,
+    pub reflection_quality: u32,
+    pub reflection_model: String,
+    pub reflection_open: bool,
+    pub reflection_photo: Option<lightcraft_catalog::PhotoId>,
     /// An import in progress (the import review dialog's batches).
     pub import: Option<import::ImportTask>,
     /// A folder scan in progress (feeds the import review).

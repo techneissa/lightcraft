@@ -65,6 +65,8 @@ fn window_id(dialog: &Dialog) -> egui::Id {
         Dialog::Import { .. } => "lightcraft-import-dialog",
         Dialog::Print => "lightcraft-print-dialog",
         Dialog::Settings { .. } => "lightcraft-settings-dialog",
+        // its own id, so the size it is given doesn't carry over to the other dialogs
+        Dialog::Shortcuts => "lightcraft-shortcuts-dialog",
         _ => "lightcraft-dialog",
     })
 }
@@ -126,6 +128,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     // own so the size it is given doesn't carry over to the other dialogs. Its content scrolls
     // rather than growing the window when the options below the grid get taller (e.g. Copy).
     let import = matches!(dlg, Dialog::Import { .. });
+    // The Keyboard Shortcuts window can be resized too: its list takes the height (fork feature `feat/49-shortcuts-window`).
+    let shortcuts = matches!(dlg, Dialog::Shortcuts);
+    let shortcuts_size = shortcuts.then(|| crate::keybinds::window::size::opening_size(app, screen.size()));
     // The Print dialog sizes itself to the window and scrolls its settings column on its own.
     let print = matches!(dlg, Dialog::Print);
     let window_id = window_id(&dlg);
@@ -151,14 +156,22 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
     let shown = egui::Window::new(crate::i18n::tr(&title))
         .id(window_id)
         .collapsible(false)
-        .resizable(import)
+        .resizable(import || shortcuts)
         .vscroll(import)
-        .resize(|r| if import { r.default_height(crate::import::DIALOG_SIZE[1]) } else { r })
+        .resize(|r| match shortcuts_size {
+            _ if import => r.default_height(crate::import::DIALOG_SIZE[1]),
+            Some(size) => r
+                .default_height(size.y)
+                .min_size(crate::keybinds::window::size::min_size(screen.size()))
+                .max_size(crate::keybinds::window::size::max_size(screen.size())),
+            None => r,
+        })
         .frame(frame)
         .anchor(if settings { egui::Align2::CENTER_TOP } else { egui::Align2::CENTER_CENTER }, [0.0, if settings { top } else { 0.0 }])
         .min_width(widest)
         .default_width(match dlg {
             Dialog::Import { .. } => crate::import::DIALOG_SIZE[0],
+            Dialog::Shortcuts => shortcuts_size.map_or(380.0, |s| s.x),
             Dialog::SmartRules { .. } => 680.0,
             Dialog::AllMetadata { .. } => 620.0,
             Dialog::Print => 1100.0,
@@ -178,7 +191,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
                 ui.disable();
             }
             ui.spacing_mut().item_spacing.y = 8.0;
-            body_h = dialog_body(ui, (!import && !print).then_some(title.as_str()), body_max, |ui| {
+            body_h = dialog_body(ui, (!import && !print && !shortcuts).then_some(title.as_str()), body_max, |ui| {
                 dialog_content(app, ui, &t, body_max, &mut confirm, &mut dlg)
             });
             ui.add_space(4.0);
@@ -196,6 +209,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
             if import {
                 crate::import::note_dialog_bottom(ui);
             }
+            if shortcuts {
+                crate::keybinds::window::size::note_content_bottom(ui);
+            }
             content_w = ui.min_rect().width();
         });
     if settings && content_w > widest + 0.5 {
@@ -212,6 +228,10 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context, blocked: bool) {
         }
     }
     if let Some(w) = shown {
+        // the size the user drags the Keyboard Shortcuts window to is the one it opens at next time
+        if shortcuts && !ctx.input(|i| i.pointer.any_down()) {
+            crate::keybinds::window::size::remember(app, w.response.rect.size(), screen.size());
+        }
         crate::widgets::announce_dialog(ctx, &w.response, crate::widgets::Modal::Dialog);
         ctx.memory_mut(|m| m.set_modal_layer(w.response.layer_id));
         if let Some(body_h) = body_h {

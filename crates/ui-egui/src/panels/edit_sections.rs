@@ -9,6 +9,8 @@
 //! and keep applying to every render and export. At least one section always stays shown, so the
 //! menu that brings the others back always has a header to open it on.
 //!
+//! A section is also dragged by its heading (`drag.rs`), the way the left side bar's sections are.
+//!
 //! Agents use `view.editSections {order?, hidden?}` (no params reads it), `view.editSectionShow
 //! {section, show?}`, `view.editSectionMove {section, direction | before}` and
 //! `view.editSectionsReset`. Only the six top-level sections are arranged here; Curve, Color
@@ -20,6 +22,7 @@ use serde_json::{Value, json};
 use crate::LightcraftApp;
 use crate::widgets::register;
 
+pub mod drag;
 #[cfg(test)]
 mod tests;
 

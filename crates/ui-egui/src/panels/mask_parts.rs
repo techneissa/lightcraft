@@ -6,7 +6,7 @@ use egui::{Rect, Sense, vec2};
 use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape};
 use serde_json::{Value, json};
 
-use super::masking::{kind_label, menu_label, range_controls, start_describe, start_object};
+use super::masking::{kind_label, range_controls, start_describe, start_object};
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
 use crate::theme::Tokens;
@@ -125,6 +125,23 @@ fn select_last_part(app: &mut LightcraftApp) {
     }
 }
 
+/// The selected mask's submasks that are selected together (a lone selected one is one).
+fn chosen_parts(app: &LightcraftApp) -> Vec<usize> {
+    let Some((mid, id)) = app.session.active_mask.zip(app.session.active()) else { return Vec::new() };
+    let count = app.session.develop_of(id).and_then(|d| d.masks.iter().find(|m| m.id == mid).map(|m| m.components.len())).unwrap_or(0);
+    super::mask_menus::selected_parts(app, mid, count)
+}
+
+/// Esc, first step: several selected submasks go back to the last clicked one. Whether it did.
+pub fn collapse_selection(app: &mut LightcraftApp) -> bool {
+    if app.ui.right != crate::state::RightPanel::Masking {
+        return false;
+    }
+    let Some((mid, k)) = app.session.active_mask.zip(app.session.active_part()).filter(|_| chosen_parts(app).len() > 1) else { return false };
+    super::mask_menus::remember(app, mid, vec![k]);
+    true
+}
+
 /// Esc, one step: leave the part (keeping its mask) when the brush is off. Whether it did.
 pub fn leave_part(app: &mut LightcraftApp) -> bool {
     if app.ui.right != crate::state::RightPanel::Masking || app.session.active_part().is_none() {
@@ -136,9 +153,15 @@ pub fn leave_part(app: &mut LightcraftApp) -> bool {
     }
 }
 
-/// Delete: the selected part of the selected mask, else the mask. Whether anything was selected to delete.
+/// Delete: the selected submasks of the selected mask, else the mask. Whether anything was selected to delete.
 pub fn delete_selected(app: &mut LightcraftApp) -> bool {
     if let Some(k) = app.session.active_part() {
+        let chosen = chosen_parts(app);
+        if chosen.len() > 1 {
+            let _ = app.run("mask.component", json!({"components": chosen, "action": "delete"}));
+            app.ui.mask_ui.parts.clear();
+            return true;
+        }
         let selected_is_brush = app.session.active_mask.zip(app.session.active()).and_then(|(mid, id)| {
             app.session.develop_of(id).and_then(|d| d.masks.iter().find(|m| m.id == mid).and_then(|m| m.components.get(k)).map(is_brush))
         });
@@ -175,7 +198,7 @@ pub fn add_controls(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let items: Vec<(&str, &str)> = ops.iter().map(|(op, label)| (*label, op_name(*op))).collect();
     let active = ops.iter().position(|(op, _)| *op == app.ui.mask_op);
     ui.add_space(4.0);
-    if let Some(i) = segmented_tips(ui, "maskMode", &items, &["Add Next Part", "Subtract Next Part", "Intersect Next Part"], active, 3)
+    if let Some(i) = segmented_tips(ui, "maskMode", &items, &["Add Next Submask", "Subtract Next Submask", "Intersect Next Submask"], active, 3)
         && let Some((op, _)) = ops.get(i)
     {
         app.ui.mask_op = *op;
@@ -185,17 +208,15 @@ pub fn add_controls(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
         for (kind, label, icon) in KINDS {
-            // painting only adds or erases
-            let enabled = !(kind == "brush" && op == MaskOp::Intersect);
             let tip = crate::i18n::tr(label);
-            if icon_button(ui, &format!("maskPart:{kind}"), icon, vec2(28.0, 28.0), false, enabled, tip).clicked() {
+            if icon_button(ui, &format!("maskPart:{kind}"), icon, vec2(28.0, 28.0), false, true, tip).clicked() {
                 add_part(app, ui.ctx(), kind, op);
             }
         }
     });
 }
 
-fn add_part(app: &mut LightcraftApp, ctx: &egui::Context, kind: &str, op: MaskOp) {
+pub(super) fn add_part(app: &mut LightcraftApp, ctx: &egui::Context, kind: &str, op: MaskOp) {
     let name = op_name(op);
     match kind {
         "object" => start_object(app, ctx, name),
@@ -212,6 +233,27 @@ fn add_part(app: &mut LightcraftApp, ctx: &egui::Context, kind: &str, op: MaskOp
                 }
             }
         }
+    }
+}
+
+/// A submask just added from a menu starts its tool as picking its row would (a gradient its handles, a colour range
+/// the picker): the Brush and Object start theirs when they are added.
+pub(super) fn start_tool(app: &mut LightcraftApp, mask: u32, kind: &str) {
+    if !matches!(kind, "linear" | "radial" | "colorRange" | "luminanceRange") {
+        return;
+    }
+    let last = app
+        .session
+        .active()
+        .and_then(|id| app.session.develop_of(id))
+        .and_then(|d| d.masks.iter().find(|m| m.id == mask).map(|m| m.components.len()));
+    let shape = app
+        .session
+        .active()
+        .and_then(|id| app.session.develop_of(id))
+        .and_then(|d| d.masks.iter().find(|m| m.id == mask).and_then(|m| m.components.last().map(|c| c.shape.clone())));
+    if let Some((k, shape)) = last.and_then(|n| n.checked_sub(1)).zip(shape) {
+        pick_part(app, mask, k, &shape);
     }
 }
 
@@ -261,20 +303,23 @@ const ROW_H: f32 = 28.0;
 pub fn part_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask) {
     let t = Tokens::get(ui.ctx());
     let selected = app.session.active_part();
+    let chosen = super::mask_menus::selected_parts(app, m.id, m.components.len());
     ui.spacing_mut().item_spacing.y = 2.0;
+    // one text size for every row: the largest (down to a little smaller) at which all the names fit
+    let room_of = |i: usize| (ui.available_width() - 28.0 - (BUTTON_W * 2.0 + if i > 0 { MODE_W } else { 0.0 } + 8.0)).max(0.0);
+    let names: Vec<String> = (0..m.components.len()).map(|i| lightcraft_engine::cmd::mask_names::submask_name(m, i)).collect();
+    let rows: Vec<(&str, f32)> = names.iter().enumerate().map(|(i, n)| (n.as_str(), room_of(i))).collect();
+    let size = super::mask_name::common_size(ui.painter(), &rows, &t.font(13.0), super::mask_name::LIST_FLOOR);
     for (i, c) in m.components.iter().enumerate() {
-        let (kind, icon) = kind_label(&c.shape);
-        let label = c.name.clone().unwrap_or_else(|| match &c.shape {
-            MaskShape::Prompt { text, .. } => format!("“{text}”"),
-            _ => menu_label(kind).to_string(),
-        });
+        let (_, icon) = kind_label(&c.shape);
+        let label = lightcraft_engine::cmd::mask_names::submask_name(m, i);
         if rename_row(app, ui, m, i, c) {
             continue;
         }
         let (r, resp) = ui.allocate_exact_size(vec2(ui.available_width(), ROW_H), Sense::click());
-        announce_selected(&resp, label.clone(), selected == Some(i));
+        let sel = selected == Some(i) || chosen.contains(&i);
+        announce_selected(&resp, label.clone(), sel);
         register(ui, format!("component:{i}"), r);
-        let sel = selected == Some(i);
         let hot = sel || resp.hovered() || ui.rect_contains_pointer(r);
         if resp.hovered() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -292,7 +337,7 @@ pub fn part_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask) {
         );
         paint(ui.painter(), Rect::from_min_size(r.min + vec2(6.0, (ROW_H - 16.0) / 2.0), vec2(16.0, 16.0)), icon, t.text_label);
         let room = BUTTON_W * 2.0 + if i > 0 { MODE_W } else { 0.0 } + 8.0;
-        let g = super::mask_name::fit(ui.painter(), &label, t.font(13.0), t.text, (r.width() - 28.0 - room).max(0.0));
+        let g = crate::widgets::one_line(ui.painter(), &label, egui::FontId { size, ..t.font(13.0) }, t.text, (r.width() - 28.0 - room).max(0.0));
         let elided = g.elided;
         ui.painter().galley(egui::pos2(r.left() + 28.0, r.center().y - g.size().y / 2.0), g, t.text);
         // (an AI part says which model made it)
@@ -304,13 +349,25 @@ pub fn part_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask) {
         };
         let used = part_buttons(app, ui, m, i, c, r, hot);
         if resp.clicked() && !used {
-            pick_part(app, m.id, i, &c.shape);
+            let mods = ui.input(|input| input.modifiers);
+            click_part(app, m, i, mods);
         }
         if resp.double_clicked() {
             app.ui.renaming_component = Some((m.id, i, label.clone()));
         }
-        crate::widgets::context_menu(&resp, |ui| part_menu(app, ui, m.id, i, &label, m.components.len()));
+        crate::widgets::context_menu(&resp, |ui| {
+            // the menu acts on every selected submask when this row is one of them, else on this one
+            let chosen = super::mask_menus::selected_parts(app, m.id, m.components.len());
+            let targets = if chosen.contains(&i) { chosen } else { vec![i] };
+            super::mask_menus::part_menu(app, ui, m, &targets);
+        });
         range_controls(app, ui, i, &c.shape);
+    }
+    // a click on the empty space under the list goes back to one submask, as Esc does
+    let (rest, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 10.0), Sense::click());
+    register(ui, "partsEmpty", rest);
+    if resp.clicked() {
+        collapse_selection(app);
     }
 }
 
@@ -357,7 +414,9 @@ fn rename_row(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask, i: usize, c:
     register(ui, format!("componentRename:{i}"), row);
     let others = m.components.iter().enumerate().filter(|(j, _)| *j != i).filter_map(|(_, o)| o.name.as_deref());
     let verdict = crate::inline_rename::verdict(&name, others);
-    let unchanged = Some(name.trim()) == c.name.as_deref();
+    // (a part without a name of its own shows a generated one: typing that back names nothing)
+    let unchanged =
+        Some(name.trim()) == c.name.as_deref() || (c.name.is_none() && name.trim() == lightcraft_engine::cmd::mask_names::submask_name(m, i));
     let outcome = crate::inline_rename::edit(ui, &format!("field:componentRename:{mask}:{i}"), &mut name, row, &verdict, unchanged);
     let params = json!({"id": mask, "component": i, "action": "rename"});
     crate::inline_rename::finish_with(app, ui.ctx(), outcome, "mask.component", params, "name", name, |app, name| {
@@ -396,17 +455,20 @@ fn part_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask, i: usize, 
         draw(ui.painter(), br, if resp.hovered() || active { t.text } else { dim });
         resp
     };
-    if button(ui, format!("partDelete:{i}"), "Delete part", "Delete Part", BUTTON_W, false, &|p, br, col| paint(p, br.shrink(3.0), Icon::Trash, col))
-        .clicked()
+    if button(ui, format!("partDelete:{i}"), "Delete Submask", "Delete Submask", BUTTON_W, false, &|p, br, col| {
+        paint(p, br.shrink(3.0), Icon::Trash, col)
+    })
+    .clicked()
     {
         let _ = app.run("mask.component", json!({"id": m.id, "component": i, "action": "delete"}));
+        app.ui.mask_ui.parts.clear();
         used = true;
     }
     if button(
         ui,
         format!("partInvert:{i}"),
-        "Invert part",
-        if c.invert { "Stop Inverting Part" } else { "Invert Part" },
+        "Invert Submask",
+        if c.invert { "Stop Inverting Submask" } else { "Invert Submask" },
         BUTTON_W,
         c.invert,
         &|p, br, col| paint(p, br.shrink(3.0), Icon::Invert, col),
@@ -418,7 +480,7 @@ fn part_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask, i: usize, 
     }
     if i > 0 {
         let now = part_mode(m, i);
-        let dropdown = button(ui, format!("partMode:{i}"), "Part mode", "Change Part Mode", MODE_W, false, &|p, br, col| {
+        let dropdown = button(ui, format!("partMode:{i}"), "Submask Mode", "Change Submask Mode", MODE_W, false, &|p, br, col| {
             paint_mode(p, Rect::from_min_size(br.min, vec2(22.0, br.height())), now, col);
             paint(p, Rect::from_center_size(egui::pos2(br.right() - 8.0, br.center().y), vec2(10.0, 10.0)), Icon::ChevronDown, col);
         });
@@ -451,32 +513,34 @@ fn part_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask, i: usize, 
     used
 }
 
-/// The right-click menu of part `k`.
-fn part_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: u32, k: usize, label: &str, count: usize) {
-    let mut run = |ui: &mut egui::Ui, text: &str, p: Value| {
-        if ui.button(menu_label(text)).clicked() {
-            let mut p = p;
-            p["id"] = json!(mask);
-            p["component"] = json!(k);
-            let _ = app.run("mask.component", p);
-            ui.close();
+/// A click on submask `k` of `m`: ⌘ adds it to the selection or takes it out, ⇧ selects the run from the selected
+/// one, a plain click selects it alone and brings its tool back.
+fn click_part(app: &mut LightcraftApp, m: &Mask, k: usize, mods: egui::Modifiers) {
+    let Some(shape) = m.components.get(k).map(|c| &c.shape) else { return };
+    let chosen = super::mask_menus::selected_parts(app, m.id, m.components.len());
+    if mods.command {
+        let mut parts = chosen;
+        if let Some(at) = parts.iter().position(|j| *j == k) {
+            parts.remove(at);
+            match parts.last().copied() {
+                Some(last) => super::mask_menus::select_parts(app, m.id, parts, last),
+                None => {
+                    let _ = app.run("mask.select", json!({"id": m.id}));
+                    super::mask_menus::remember(app, m.id, Vec::new());
+                }
+            }
+        } else {
+            parts.push(k);
+            pick_part(app, m.id, k, shape);
+            super::mask_menus::remember(app, m.id, parts);
         }
-    };
-    run(ui, "Invert", json!({"action": "invert"}));
-    run(ui, &crate::i18n::tr_format!("Duplicate \"{label}\"", label = label), json!({"action": "duplicate"}));
-    ui.separator();
-    if ui.button(crate::i18n::tr("Rename…")).clicked() {
-        app.ui.renaming_component = Some((mask, k, label.to_string()));
-        ui.close();
-    }
-    let del = if count == 1 {
-        crate::i18n::tr_format!("Delete \"{label}\" (and the mask)", label = label)
+    } else if mods.shift {
+        let anchor = app.session.active_part().unwrap_or(k);
+        let parts: Vec<usize> = (anchor.min(k)..=anchor.max(k)).collect();
+        super::mask_menus::select_parts(app, m.id, parts, k);
     } else {
-        crate::i18n::tr_format!("Delete \"{label}\"", label = label)
-    };
-    if ui.button(del).clicked() {
-        let _ = app.run("mask.component", json!({"id": mask, "component": k, "action": "delete"}));
-        ui.close();
+        pick_part(app, m.id, k, shape);
+        super::mask_menus::remember(app, m.id, vec![k]);
     }
 }
 

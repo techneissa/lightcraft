@@ -244,6 +244,11 @@ pub(super) fn section(
             app.toast(ui.ctx(), e);
         }
     }
+    // dragged by its heading, the section moves among the others (see `edit_sections::drag`)
+    crate::panels::edit_sections::drag::note_header(ui, id, resp.rect);
+    if resp.drag_started_by(egui::PointerButton::Primary) && !crate::panels::edit_sections::drag::on_header_buttons(ui, resp.rect) {
+        app.ui.dragging_edit_section = crate::panels::edit_sections::EditSection::from_id(id);
+    }
     crate::widgets::context_menu(&resp, |ui| {
         let mut solo = app.ui.single_panel;
         let item = ui.checkbox(&mut solo, crate::i18n::tr("Solo Mode"));

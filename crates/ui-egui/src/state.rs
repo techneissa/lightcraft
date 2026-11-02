@@ -148,6 +148,8 @@ pub struct UiState {
     pub sidebar: crate::sidebar::SidebarLayout,
     /// The Edit panel's sections: their order and which are hidden (`panels/edit_sections.rs`).
     pub edit_sections: crate::panels::edit_sections::EditSectionLayout,
+    /// The tool strip's icons, top to bottom (`panels/tool_strip_order.rs`).
+    pub tool_strip: crate::panels::tool_strip_order::ToolStripOrder,
     /// What settings files said before [`UiState::sidebar`]: the ids of the folded sections. Read
     /// so they stay folded ([`UiState::sanitized`] moves them over), never written.
     #[serde(skip_serializing)]
@@ -249,6 +251,9 @@ pub struct UiState {
     pub detail_due: Option<(f64, u32)>,
     /// A mask component being renamed inline: (mask id, component index, name).
     pub renaming_component: Option<(u32, usize, String)>,
+    /// The submasks selected together in the Masking panel, and Delete All Masks asking (issue #61).
+    #[serde(skip)]
+    pub mask_ui: crate::panels::mask_menus::MaskUi,
     /// Close the window on the next frame (File → Quit).
     #[serde(skip)]
     pub quit: bool,
@@ -271,6 +276,12 @@ pub struct UiState {
     /// A sidebar section being dragged by its header (dropped between sections to move it there).
     #[serde(skip)]
     pub dragging_section: Option<crate::sidebar::SidebarSection>,
+    /// A tool strip icon being dragged (dropped between icons to move it there).
+    #[serde(skip)]
+    pub dragging_tool: Option<crate::panels::tool_strip_order::Tool>,
+    /// An Edit panel section being dragged by its heading.
+    #[serde(skip)]
+    pub dragging_edit_section: Option<crate::panels::edit_sections::EditSection>,
     /// Selected curve channel in the Curve flyout.
     pub curve_channel: String,
     /// Selected mixer mode: "hue" | "saturation" | "luminance" | "all".
@@ -472,6 +483,7 @@ impl Default for UiState {
             map_filter_bar: true,
             sidebar: Default::default(),
             edit_sections: Default::default(),
+            tool_strip: Default::default(),
             collapsed_sidebar: Vec::new(),
             name_edit: None,
             person_page: None,
@@ -504,6 +516,7 @@ impl Default for UiState {
             detail_due: None,
             sam_downloading: false,
             renaming_component: None,
+            mask_ui: Default::default(),
             quit: false,
             dragging_photos: None,
             reveal_album: None,
@@ -511,6 +524,8 @@ impl Default for UiState {
             reveal_folder: None,
             dragging_album: None,
             dragging_section: None,
+            dragging_tool: None,
+            dragging_edit_section: None,
             curve_channel: "parametric".into(),
             mixer_mode: "hue".into(),
             grading_mode: "3way".into(),
