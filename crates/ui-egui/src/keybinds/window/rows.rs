@@ -14,11 +14,11 @@ use super::clashes::Clashes;
 use super::{Row, when_cell};
 
 pub(super) const ROW_H: f32 = 28.0;
-const SLOT_W: f32 = 132.0;
+const SLOT_W: f32 = 124.0;
 const RESET_W: f32 = 26.0;
 const GAP: f32 = 8.0;
-const ACTION_MIN: f32 = 170.0;
-const WHEN_MIN: f32 = 230.0;
+const ACTION_MIN: f32 = 150.0;
+const WHEN_MIN: f32 = 220.0;
 const CELL_H: f32 = 22.0;
 
 /// The widths of the columns for a list `width` points wide: the fixed ones, then the Action and
@@ -30,11 +30,14 @@ pub(super) struct Cols {
     pub total: f32,
 }
 
+/// The narrowest list the columns fit in: the fixed ones, then the Action and When minimums.
+pub(super) const MIN_LIST_W: f32 = 2.0 * SLOT_W + RESET_W + 4.0 * GAP + ACTION_MIN + WHEN_MIN;
+
 impl Cols {
     pub fn for_width(width: f32) -> Cols {
         let fixed = 2.0 * SLOT_W + RESET_W + 4.0 * GAP;
         let flex = (width - fixed).max(ACTION_MIN + WHEN_MIN);
-        let action = (flex * 0.42).max(ACTION_MIN);
+        let action = (flex * 0.42).clamp(ACTION_MIN, flex - WHEN_MIN);
         Cols { action, when: flex - action, total: fixed + flex }
     }
 
@@ -229,6 +232,9 @@ fn slot_cell(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, row: &Row, 
     let recording = cap.is_some();
     let clash = cx.clashes.slots.get(&(b.id, slot));
     let (rect, r) = ui.allocate_exact_size(vec2(SLOT_W, CELL_H), Sense::click());
+    if recording {
+        super::record::note_cell(ui.ctx(), b.id, slot, rect);
+    }
     let widget = if slot == 0 { format!("button:shortcut-{}", b.id) } else { format!("button:shortcut{}-{}", slot + 1, b.id) };
     register(ui, widget, rect);
     let (text, color) = match (cap, sc) {

@@ -62,7 +62,9 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let (search_id, all_id) = (egui::Id::unique(SEARCH_ID), egui::Id::unique(SHOW_ALL_ID));
     let mut search: String = ui.data(|d| d.get_temp(search_id)).unwrap_or_default();
     let mut show_all: bool = ui.data(|d| d.get_temp(all_id)).unwrap_or(false);
-    remove_picked_on_delete(app, ui.ctx());
+    // a click outside the recording cell, or the search taking the keyboard, ends a recording (like Esc)
+    record::end_on_outside_press(app, ui.ctx());
+    let mut listed = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
         let width = (ui.available_width() - ADD_W - ui.spacing().item_spacing.x).max(120.0);
@@ -71,23 +73,29 @@ pub fn body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             .label(crate::i18n::tr("Search Commands"))
             .width(width)
             .show(ui);
-        let picked = app.keybinds.selected.map(|(id, _)| id);
-        let r = ui.add_enabled(picked.is_some(), egui::Button::new(crate::i18n::tr("Add Shortcut")).min_size(vec2(ADD_W, 0.0)));
+        let needle = search.trim().to_lowercase();
+        let (rows, clashes) = listing(app, ui.ctx(), &keymap, &needle, show_all, mac);
+        // a row the search hides is not picked: Add Shortcut and ⌫ leave it alone
+        let picked = picked_listed(app, &rows);
+        let full = picked.and_then(|(id, _)| rows.iter().find(|r| r.b.id == id)).is_some_and(|r| r.slots.iter().all(Option::is_some));
+        let label = crate::i18n::tr(if full { "Change Shortcut" } else { "Add Shortcut" });
+        let r = ui.add_enabled(picked.is_some(), egui::Button::new(label).min_size(vec2(ADD_W, 0.0)));
         register(ui, "button:shortcutsAdd", r.rect);
         if r.clicked()
-            && let Some(id) = picked
+            && let Some((id, _)) = picked
         {
             let _ = capture::open_inline(app, id, None);
         }
+        listed = Some((needle, rows, clashes));
     });
+    let Some((needle, rows, clashes)) = listed else { return };
     ui.data_mut(|d| {
         d.insert_temp(search_id, search.clone());
         d.insert_temp(all_id, show_all);
     });
+    remove_picked_on_delete(app, ui.ctx(), &rows);
     ui.add_space(2.0);
 
-    let needle = search.trim().to_lowercase();
-    let (rows, clashes) = listing(app, ui.ctx(), &keymap, &needle, show_all, mac);
     let conflicts = record::live_conflicts(app, &keymap);
     let cols = rows::Cols::for_width(ui.available_width() - SCROLL_BAR);
     rows::header(ui, t, &cols);
@@ -146,9 +154,20 @@ fn footer(app: &mut LightcraftApp, ui: &mut egui::Ui, keymap: &Keymap, show_all:
     });
 }
 
-/// ⌫ / Delete removes the shortcut of the picked row, when nothing is being typed or recorded.
-fn remove_picked_on_delete(app: &mut LightcraftApp, ctx: &egui::Context) {
-    let Some((id, slot)) = app.keybinds.selected else { return };
+/// The picked row if the list shows it now; a row the search hides stops being picked.
+fn picked_listed(app: &mut LightcraftApp, rows: &[Row]) -> Option<(&'static str, usize)> {
+    let picked = app.keybinds.selected?;
+    if rows.iter().any(|r| r.b.id == picked.0) {
+        Some(picked)
+    } else {
+        app.keybinds.selected = None;
+        None
+    }
+}
+
+/// ⌫ / Delete removes the shortcut of the picked row, when it is listed and nothing is being typed or recorded.
+fn remove_picked_on_delete(app: &mut LightcraftApp, ctx: &egui::Context, rows: &[Row]) {
+    let Some((id, slot)) = picked_listed(app, rows) else { return };
     if app.keybinds.capture.is_some() || app.keybinds.when_edit.is_some() || ctx.text_edit_focused() || egui::Popup::is_any_open(ctx) {
         return;
     }

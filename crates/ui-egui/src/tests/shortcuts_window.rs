@@ -336,3 +336,151 @@ fn a_bare_trash_icon_shows_on_the_hovered_cell_and_removes_its_shortcut() {
     assert_eq!(shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("N"), "the other shortcut stays");
     assert!(h.app.keybinds.capture.is_none(), "the click on the icon did not start a recording");
 }
+
+/// A click on the dialog's empty list area (below the few rows of a narrow search).
+fn click_list_background(h: &mut Headless) {
+    let dialog = h.app.widgets.iter().find(|(w, _)| w == "dialog:window").map(|(_, r)| *r).expect("the window");
+    let at = dialog.center();
+    let r = h.request("ui.click", json!({"x": at.x, "y": at.y}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    h.step();
+}
+
+fn recording_compare(h: &mut Headless) {
+    open(h, "compare");
+    click(h, "button:shortcut2-view.compare");
+    press(h, "Q", false, true);
+    assert_eq!(h.app.keybinds.capture.as_ref().and_then(|c| c.text()).as_deref(), Some("Shift+Q"));
+}
+
+fn nothing_saved(h: &Headless) {
+    assert!(h.app.ui.settings.keymap.is_empty(), "{:?}", h.app.ui.settings.keymap);
+    assert!(h.app.keybinds.capture.is_none() && h.app.recording_shortcut.is_none(), "{:?}", h.app.keybinds.capture);
+}
+
+#[test]
+fn a_click_on_another_rows_name_ends_the_recording_without_saving() {
+    let mut h = demo();
+    recording_compare(&mut h);
+    pick(&mut h, "compare.swap");
+    assert!(h.app.keybinds.capture.is_none(), "the click ended the recording like Esc");
+    // the key that follows is no shortcut for the row clicked first, nor for the new one
+    press(&mut h, "Q", false, true);
+    key(&mut h, "Enter");
+    nothing_saved(&h);
+    assert_eq!(h.app.keybinds.selected, Some(("compare.swap", 0)), "the click picked the row it hit");
+    assert!(matches!(h.app.ui.dialog, Some(Dialog::Shortcuts)), "the window stays open");
+}
+
+#[test]
+fn a_click_on_the_lists_background_ends_the_recording_without_saving() {
+    let mut h = demo();
+    recording_compare(&mut h);
+    click_list_background(&mut h);
+    press(&mut h, "Q", false, true);
+    key(&mut h, "Enter");
+    nothing_saved(&h);
+}
+
+#[test]
+fn a_click_on_another_cell_moves_the_recording_there_with_nothing_carried_over() {
+    let mut h = demo();
+    recording_compare(&mut h);
+    click(&mut h, "button:shortcut-compare.swap");
+    assert_eq!(h.app.keybinds.capture.as_ref().map(|c| (c.id.as_str(), c.slot, c.steps.len())), Some(("compare.swap", 0, 0)));
+    key(&mut h, "Escape");
+    nothing_saved(&h);
+    // a click inside the cell being recorded keeps it recording
+    click(&mut h, "button:shortcut2-view.compare");
+    press(&mut h, "Q", false, true);
+    click(&mut h, "button:shortcut2-view.compare");
+    assert!(h.app.keybinds.capture.is_some());
+}
+
+#[test]
+fn add_shortcut_ends_a_recording_and_starts_a_fresh_one() {
+    let mut h = demo();
+    recording_compare(&mut h);
+    click(&mut h, "button:shortcutsAdd");
+    let cap = h.app.keybinds.capture.as_ref().expect("a new recording");
+    assert_eq!((cap.id.as_str(), cap.slot, cap.steps.len()), ("view.compare", 1, 0), "the key typed before is not carried over");
+}
+
+#[test]
+fn the_search_taking_the_keyboard_ends_the_recording() {
+    let mut h = demo();
+    recording_compare(&mut h);
+    click(&mut h, "field:shortcutsSearch");
+    assert!(h.app.keybinds.capture.is_none() && h.app.recording_shortcut.is_none(), "the search has the keyboard now");
+    // keys typed there are the search's, not a shortcut
+    press(&mut h, "Q", false, true);
+    key(&mut h, "Enter");
+    nothing_saved(&h);
+}
+
+#[test]
+fn a_row_the_search_hides_is_not_picked() {
+    let mut h = demo();
+    open(&mut h, "survey");
+    pick(&mut h, "view.survey");
+    assert_eq!(h.app.keybinds.selected, Some(("view.survey", 0)));
+    // narrow the search to another command, then leave the search box
+    click(&mut h, "field:shortcutsSearch");
+    assert_eq!(h.request("ui.text", json!({"text": "compare"}), T)["ok"], true);
+    h.step();
+    h.step();
+    assert!(!has(&h, "row:shortcut-view.survey"), "the search hides Survey");
+    assert_eq!(h.app.keybinds.selected, None, "a hidden row is not picked");
+    click_list_background(&mut h);
+    // Add Shortcut does nothing, ⌫ does not touch Survey
+    click(&mut h, "button:shortcutsAdd");
+    assert!(h.app.keybinds.capture.is_none());
+    key(&mut h, "Backspace");
+    key(&mut h, "Delete");
+    assert_eq!(shortcut_of(&h.app.ui.settings.keymap, "view.survey"), Some("N"));
+    assert!(h.app.ui.settings.keymap.is_empty(), "{:?}", h.app.ui.settings.keymap);
+}
+
+#[test]
+fn the_add_button_changes_shortcut_1_when_both_are_used() {
+    let mut h = demo();
+    open(&mut h, "survey");
+    h.app.run("app.setShortcut", json!({"id": "view.survey", "slot": 2, "shortcut": "Shift+Q"})).unwrap();
+    pick(&mut h, "view.survey");
+    assert!(text(&h).contains("Change Shortcut") && !text(&h).contains("Add Shortcut"), "{}", text(&h));
+    click(&mut h, "button:shortcutsAdd");
+    assert_eq!(h.app.keybinds.capture.as_ref().map(|c| (c.id.as_str(), c.slot)), Some(("view.survey", 0)));
+    key(&mut h, "Escape");
+    // one slot free: the button adds
+    h.app.run("app.setShortcut", json!({"id": "view.survey", "slot": 2, "shortcut": null})).unwrap();
+    h.step();
+    h.step();
+    assert!(text(&h).contains("Add Shortcut"), "{}", text(&h));
+}
+
+#[test]
+fn the_recording_help_is_one_sentence_and_the_chord_hint_is_its_hover_text() {
+    let mut h = demo();
+    open(&mut h, "compare");
+    click(&mut h, "button:shortcut2-view.compare");
+    let shown = text(&h);
+    assert!(shown.contains("Press the keys, then Enter to save."), "{shown}");
+    assert!(!shown.contains("chord") && !shown.contains("Esc cancels"), "the long help is gone: {shown}");
+}
+
+#[test]
+fn at_the_smallest_width_the_when_column_and_its_plus_are_whole() {
+    let min = crate::keybinds::window::size::MIN;
+    let mut h = demo_with(|app| app.ui.settings.shortcuts_window_size = Some([min.x, 520.0]));
+    open(&mut h, "survey");
+    let rect = |h: &Headless, id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| *r).unwrap_or_else(|| panic!("no widget {id}"));
+    let dialog = rect(&h, "dialog:window");
+    assert!((dialog.width() - min.x).abs() < 3.0, "{dialog:?}");
+    let when = rect(&h, "button:shortcutWhen-view.survey");
+    let plus = rect(&h, "button:shortcutWhenAdd-view.survey");
+    assert!(when.width() >= 150.0, "{when:?}");
+    assert!(plus.right() <= dialog.right() - 16.0, "the + is cut off: {plus:?} in {dialog:?}");
+    // the shortcut cells keep their place left of it
+    assert!(rect(&h, "button:shortcut2-view.survey").right() < when.left());
+}

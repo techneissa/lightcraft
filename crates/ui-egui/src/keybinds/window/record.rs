@@ -11,6 +11,32 @@ use crate::theme::Tokens;
 use super::super::{chord, model};
 use super::clashes::Clashes;
 
+/// Where the cell being recorded into was drawn last frame: (command, slot, rect).
+const CELL: &str = "shortcuts-recording-cell";
+
+/// The recording cell says where it is, for [`end_on_outside_press`].
+pub(super) fn note_cell(ctx: &egui::Context, id: &'static str, slot: usize, rect: egui::Rect) {
+    ctx.data_mut(|d| d.insert_temp(egui::Id::unique(CELL), (id, slot, rect)));
+}
+
+/// A press outside the cell being recorded into (another row, the list's background, Add Shortcut,
+/// the search) ends the recording as Esc does, and so does the search taking the keyboard: nothing
+/// is saved and the press goes on to what it hit. Run at the start of the window's frame.
+pub(super) fn end_on_outside_press(app: &mut LightcraftApp, ctx: &egui::Context) {
+    let Some(cap) = app.keybinds.capture.as_ref().filter(|c| c.inline) else { return };
+    let cell = ctx.data(|d| d.get_temp::<(&'static str, usize, egui::Rect)>(egui::Id::unique(CELL)));
+    let outside = match cell {
+        // the cell is drawn from the frame after the click that opened it on
+        Some((id, slot, rect)) if id == cap.id && slot == cap.slot => {
+            ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_none_or(|p| !rect.contains(p)))
+        }
+        _ => false,
+    };
+    if outside || ctx.text_edit_focused() {
+        super::super::capture::close(app);
+    }
+}
+
 /// Height of the status line: two lines of small text, kept so the list doesn't jump when it fills.
 const LINE_H: f32 = 32.0;
 
@@ -47,11 +73,8 @@ pub(super) fn status(app: &LightcraftApp, ui: &mut egui::Ui, t: &Tokens, keymap:
         } else if let Some(w) = live_warning(conflicts) {
             ui.label(RichText::new(w).size(11.5).color(t.caution));
         } else {
-            ui.label(
-                RichText::new(crate::i18n::tr("Press the keys, then Enter to save. Press two keys one after the other for a chord. Esc cancels."))
-                    .size(11.5)
-                    .color(t.text_dim),
-            );
+            ui.label(RichText::new(crate::i18n::tr("Press the keys, then Enter to save.")).size(11.5).color(t.text_dim))
+                .on_hover_text(crate::i18n::tr("Press two keys one after the other for a chord. Esc cancels."));
         }
     } else {
         clash_note(ui, t, clashes, keymap, mac);

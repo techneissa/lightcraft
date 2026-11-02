@@ -1,7 +1,9 @@
 //! The search box of the Keyboard Shortcuts window understands modifier words: `cmd`, `shift`,
 //! `ctrl` and `alt` (also `command`, `control`, `option`, `opt`) match the shortcuts that use ⌘, ⇧,
 //! ⌃ and ⌥, words combine (`cmd shift` is a shortcut with both), and the symbols work too (`⌘⇧`,
-//! `⌘n`, `cmd+shift+k`). Anything else still matches command names, menus and ids.
+//! `⌘n`, `cmd+shift+k`). Anything else still matches command names, menus and ids. A modifier word is
+//! read as a modifier only: it never matches a name (a command called "Control Points" is found by
+//! "points").
 
 const CMD: u8 = 1;
 const CTRL: u8 = 2;

@@ -112,11 +112,12 @@ fn the_list_holds_commands_only() {
 
 #[test]
 fn the_columns_fill_the_width_and_keep_the_fixed_ones() {
-    let narrow = rows::Cols::for_width(640.0);
+    let narrow = rows::Cols::for_width(rows::MIN_LIST_W);
     let wide = rows::Cols::for_width(1200.0);
     assert!(wide.action > narrow.action && wide.when > narrow.when, "{narrow:?} {wide:?}");
     assert!((wide.total - 1200.0).abs() < 0.5, "{wide:?}");
-    assert!(narrow.action >= 170.0 && narrow.when >= 230.0);
+    assert!(narrow.action >= 150.0 && narrow.when >= 220.0);
+    assert!((narrow.total - rows::MIN_LIST_W).abs() < 0.5, "the minimum width is exactly what the columns need: {narrow:?}");
 }
 
 #[test]

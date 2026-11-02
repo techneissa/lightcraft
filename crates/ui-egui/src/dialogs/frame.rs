@@ -55,8 +55,8 @@ fn list_applied_id() -> egui::Id {
     egui::Id::unique("dialog-list-applied")
 }
 
-/// The height for a list in a dialog that scrolls on its own (What's New, All Metadata, the
-/// shortcuts, smart-album rules): `preferred`, less what the dialog needs to fit the window, so
+/// The height for a list in a dialog that scrolls on its own (What's New, All Metadata, Credits,
+/// smart-album rules): `preferred`, less what the dialog needs to fit the window, so
 /// on a short window the list gets shorter rather than scrolling inside a scrolling dialog.
 pub fn list_height(ui: &egui::Ui, preferred: f32) -> f32 {
     let shrink = ui.data(|d| d.get_temp::<f32>(list_shrink_id())).unwrap_or(0.0);

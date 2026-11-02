@@ -8,8 +8,11 @@ use crate::LightcraftApp;
 
 /// The size it opens at the first time.
 pub const DEFAULT: Vec2 = vec2(1000.0, 640.0);
+/// The window's frame around its content (margins and stroke), the scroll bar's room and the list's
+/// columns at their narrowest: what the smallest width must hold so the When column and its + show.
+const CHROME_W: f32 = 40.0;
 /// The smallest it is dragged to: the columns still fit.
-pub const MIN: Vec2 = vec2(640.0, 420.0);
+pub const MIN: Vec2 = vec2(super::rows::MIN_LIST_W + super::SCROLL_BAR + CHROME_W, 420.0);
 /// What a very small screen still gets: the title, the search, a few rows and the buttons.
 const SMALLEST: Vec2 = vec2(400.0, 280.0);
 /// Room left around the window on the screen.
@@ -40,19 +43,15 @@ pub fn opening_size(app: &LightcraftApp, screen: Vec2) -> Vec2 {
     vec2(want.x.clamp(min.x, max.x), want.y.clamp(min.y, max.y))
 }
 
-/// Remember the window's `size` once the user is done dragging. A size at the screen's limit is
-/// the screen's, not the user's choice, so a large size squeezed onto a small screen is kept for a
-/// larger one. Returns whether it was saved.
+/// Remember the window's `size` once the user is done dragging. A size that is what it opened at
+/// (the remembered one, or the default, squeezed onto a small screen) is not a choice and is not
+/// saved, so a large size kept for a large screen survives a visit to a small one; any other size
+/// is, even one at the screen's limit. Returns whether it was saved.
 pub fn remember(app: &mut LightcraftApp, size: Vec2, screen: Vec2) -> bool {
-    let max = max_size(screen);
-    if !(size.x.is_finite() && size.y.is_finite()) || size.x >= max.x - 0.5 || size.y >= max.y - 0.5 {
+    if !(size.x.is_finite() && size.y.is_finite()) || (size - opening_size(app, screen)).length() < 1.0 {
         return false;
     }
-    let new = [size.x.round(), size.y.round()];
-    if app.ui.settings.shortcuts_window_size == Some(new) || (app.ui.settings.shortcuts_window_size.is_none() && (size - DEFAULT).length() < 1.0) {
-        return false;
-    }
-    app.ui.settings.shortcuts_window_size = Some(new);
+    app.ui.settings.shortcuts_window_size = Some([size.x.round(), size.y.round()]);
     true
 }
 
@@ -108,8 +107,28 @@ mod tests {
         assert!(remember(&mut a, vec2(1400.0, 900.0), big));
         let small = vec2(1100.0, 700.0);
         assert_eq!(opening_size(&a, small), max_size(small));
-        assert!(!remember(&mut a, max_size(small), small), "the screen's limit is not the user's choice");
+        assert!(!remember(&mut a, max_size(small), small), "what it opened at is not a choice");
         assert_eq!(a.ui.settings.shortcuts_window_size, Some([1400.0, 900.0]));
+        // dragging it smaller there is
+        assert!(remember(&mut a, vec2(900.0, 600.0), small));
+        assert_eq!(a.ui.settings.shortcuts_window_size, Some([900.0, 600.0]));
+    }
+
+    #[test]
+    fn a_size_dragged_to_the_screens_limit_is_saved() {
+        let mut a = app();
+        let screen = vec2(1800.0, 1100.0);
+        assert_eq!(opening_size(&a, screen), DEFAULT);
+        assert!(remember(&mut a, max_size(screen), screen), "the user chose the whole screen");
+        assert_eq!(a.ui.settings.shortcuts_window_size, Some([max_size(screen).x, max_size(screen).y]));
+        assert_eq!(opening_size(&a, screen), max_size(screen));
+    }
+
+    #[test]
+    fn the_smallest_width_holds_the_columns() {
+        let list = MIN.x - super::super::SCROLL_BAR - CHROME_W;
+        assert!(list >= super::super::rows::MIN_LIST_W, "{list}");
+        const { assert!(MIN.x < 760.0) };
     }
 
     #[test]
