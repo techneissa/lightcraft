@@ -130,7 +130,7 @@ fn area_of(key: &str, in_settings: bool) -> &'static str {
     } else {
         match key {
             "language" => "appearance",
-            "sidebar" | "editSections" | "foldedSections" => "arrangements",
+            "sidebar" | "editSections" | "toolStrip" | "foldedSections" => "arrangements",
             k if ["brush", "remove", "mask", "crop", "clip"].iter().any(|p| k.starts_with(p))
                 || matches!(k, "pointColorVisualize" | "hdrVisualize" | "visualizeSpots" | "spotsThreshold" | "toolOverlay") =>
             {

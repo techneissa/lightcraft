@@ -80,6 +80,7 @@ pub const SYNCED: &[&str] = &[
     "mapFilterBar",
     "sidebar",
     "editSections",
+    "toolStrip",
     "brushSize",
     "brushFeather",
     "brushFlow",
@@ -115,6 +116,7 @@ pub const LEFT_OUT_SETTINGS: &[(&str, &str)] = &[
     ("lensDatabaseDir", "a folder on this Mac"),
     ("displayProfile", "this Mac's monitor"),
     ("smartEditingOffered", "a question asked once on this Mac"),
+    ("shortcutsWindowSize", "a window's size"),
 ];
 
 /// Keys of `settings` that go into the file.

@@ -145,18 +145,8 @@ fn every_ui_key_is_decided() {
 }
 
 #[test]
-fn the_lists_name_real_keys_and_none_twice() {
-    // keys that `ui.json` leaves out while they hold nothing
-    const ABSENT_AT_DEFAULT: [&str; 5] = ["window", "showClipping", "photoMenu", "photoMenuPresets", "topBarHidden"];
-    let ui = serde_json::to_value(UiState::default()).unwrap();
-    let keys = ui.as_object().unwrap();
-    let settings = keys["settings"].as_object().unwrap();
-    for name in rules::LEFT_OUT.iter().map(|(k, _)| *k).chain(rules::SYNCED.iter().copied()) {
-        assert!(keys.contains_key(name) || ABSENT_AT_DEFAULT.contains(&name), "`{name}` is not a key of ui.json");
-    }
-    for name in rules::LEFT_OUT_SETTINGS.iter().map(|(k, _)| *k).chain(rules::SYNCED_SETTINGS.iter().copied()) {
-        assert!(settings.contains_key(name) || ABSENT_AT_DEFAULT.contains(&name), "`{name}` is not a key of settings");
-    }
+fn the_lists_give_reasons_and_name_none_twice() {
+    // (that they name real fields is `every_ui_key_is_decided`'s)
     for (k, why) in rules::LEFT_OUT.iter().chain(rules::LEFT_OUT_SETTINGS) {
         assert!(!why.is_empty(), "{k} needs a reason");
     }
