@@ -106,6 +106,7 @@ pub(super) fn show(app: &mut LightcraftApp, ui: &mut Ui, t: &Tokens, bu: &mut Bo
         ui.painter().rect(plus, 4.0, fill, Stroke::new(1.0, t.button_border), StrokeKind::Inside);
         crate::icons::paint(ui.painter(), Rect::from_center_size(plus.center(), vec2(18.0, 18.0)), crate::icons::Icon::Plus, t.text);
         crate::widgets::announce(&resp, crate::i18n::tr("Add Page"));
+        let resp = resp.on_hover_text(crate::i18n::tr("Add Page After This One"));
         if resp.clicked() {
             add = true;
         }

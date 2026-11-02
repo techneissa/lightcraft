@@ -355,6 +355,7 @@ fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String
         pick
     });
     crate::widgets::name_combo(&r.response, crate::i18n::tr("Field"));
+    r.response.clone().on_hover_text(crate::i18n::tr("Choose Field"));
     register(ui, format!("ruleField:{salt}"), r.response.rect);
     let Some(Some(id)) = r.inner else { return };
     if field == id {
@@ -425,6 +426,7 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
                         |(_, l)| crate::i18n::tr(l).to_string(),
                     );
                     crate::widgets::name_combo(&combo, crate::i18n::tr("Operator"));
+                    combo.clone().on_hover_text(crate::i18n::tr("Choose Comparison"));
                     if let Some((id, _)) = chosen.and_then(|i| ops.get(i))
                         && op != id
                     {

@@ -31,6 +31,7 @@ pub(super) fn navigator(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect
     register(ui, "canvas:navigator", frame);
     let resp = ui.interact(frame.expand(5.0), egui::Id::unique("navigator"), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Navigator"));
+    let resp = resp.on_hover_text(crate::i18n::tr("Drag to Move the View"));
     if (resp.clicked() || resp.dragged())
         && let Some(q) = resp.interact_pointer_pos()
     {
@@ -225,7 +226,7 @@ fn film_badges(p: &egui::Painter, t: &Tokens, bar: Rect, ph: &lightcraft_catalog
     if ph.rating == 0 && ph.flag == Flag::None && !edited {
         return;
     }
-    p.rect_filled(bar, 0.0, Color32::from_black_alpha(130));
+    p.rect_filled(bar, super::film_bar::BAR_ROUNDING, Color32::from_black_alpha(130));
     let y = bar.center().y;
     let mut x = bar.left() + 3.0;
     x += crate::rating::paint_rating(p, pos2(x, y), ph.rating, crate::rating::RatingSize::Small, t.star) + 2.0;

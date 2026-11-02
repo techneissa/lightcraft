@@ -208,6 +208,11 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
     crate::widgets::context_menu(&resp, |ui| sections_menu(app, ui, Some(section)));
     let open = !app.ui.sidebar.is_collapsed(section);
     crate::widgets::announce_disclosure(&resp, true, open, title);
+    // (not over the header's own button: egui keeps the first hover text of a layer open inside its widget)
+    let over_button = header_button(section).is_some() && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| header_button_rect(ui, r).contains(p));
+    if !over_button {
+        resp.clone().on_hover_text(super::disclosure_name(open, title));
+    }
     // what is visible of the header: its bar and count end at the panel's edge, like a row's
     let edge = r.right().min(visible_right(ui));
     let hovered = resp.hovered() && app.ui.dragging_section.is_none();
