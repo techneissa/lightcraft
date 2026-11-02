@@ -3,7 +3,9 @@
 
 A pull request tests what it can break: the workspace crates with a changed file, plus every workspace crate
 that depends on one of them (normal, dev and build dependencies, read from `cargo metadata --no-deps`). A
-change to a workspace-wide file tests every crate. The test groups are balanced for three machines.
+change to a workspace-wide file tests every crate; a change to notes only (Markdown outside the crates) runs
+the format check and nothing else. The test groups are balanced for three machines; group 1 also runs the
+one-off steps (format, lint, layers, assets, parity, wasm).
 
     python3 fork/pr_plan.py --base HEAD^1                 # the PR merge commit against its base
     python3 fork/pr_plan.py --base mine/custom            # a local branch against custom
@@ -39,6 +41,11 @@ WORKSPACE_WIDE_FILES = {
 }
 WORKSPACE_WIDE_DIRS = (".cargo/", ".config/", ".github/", "xtask/")
 
+# Files outside every crate folder that are not Markdown test every crate (a build script or `include_*!` may read
+# them), except the ones a crate is known to compile in (EMBEDDED below) and the folders listed here, which are
+# known to hold no build input. Empty on purpose: `fork/tests.d/` is the one worth listing once techneissa agrees.
+INERT_DIRS = ()
+
 # Files outside a crate's folder that the crate compiles in. Mirrors EMBEDDED in xtask/src/ci_quick.rs, whose test
 # `embedded_files_are_mapped` keeps it complete, so any other file outside every crate cannot change a build.
 # test_pr_plan.py checks that this table and the Rust one agree.
@@ -67,6 +74,8 @@ HEIF_PACKAGES = {"lightcraft-codecs", "lightcraft-heif"}
 WEIGHT_OVERRIDES = {}
 # The heif extras (clippy and tests with the feature) count as a crate for the balance.
 HEIF_WEIGHT = 120
+# The one-off steps of group 1 (clippy on the planned crates, layers, assets, parity, wasm) count as a crate too.
+ONEOFF_WEIGHT = 600
 
 TEST_ATTR = re.compile(r"#\[(?:\w+::)*test\b")
 
@@ -152,6 +161,14 @@ def is_workspace_wide(path):
     return path in WORKSPACE_WIDE_FILES or path.startswith(WORKSPACE_WIDE_DIRS)
 
 
+def is_note(path):
+    return path.lower().endswith(".md")
+
+
+def is_inert(path):
+    return path.startswith(INERT_DIRS) if INERT_DIRS else False
+
+
 def reverse_closure(changed, pkgs):
     """`changed` plus every crate that depends on one of them, directly or not."""
     planned = set(changed)
@@ -198,9 +215,12 @@ def weight(name, pkgs, root=ROOT):
     return max(1, tests + lines // 200)
 
 
-def balance(weights, groups):
-    """Longest-first: each item goes to the lightest group. Returns [(total, [names])] with empty groups dropped."""
+def balance(weights, groups, first=None):
+    """Longest-first: each item goes to the lightest group. `first` (name, weight) starts group 1.
+    Returns [(total, [names])] with empty groups dropped."""
     bins = [[0, []] for _ in range(groups)]
+    if first:
+        bins[0] = [first[1], [first[0]]]
     for name, w in sorted(weights.items(), key=lambda kv: (-kv[1], kv[0])):
         lightest = min(bins, key=lambda b: (b[0], len(b[1])))
         lightest[0] += w
@@ -210,33 +230,31 @@ def balance(weights, groups):
 
 def plan(changed, pkgs, wasm, groups=3, weights=None):
     """What the checks run. `changed` is [(path, gone)]; `weights` maps crate to test weight (default: measured on disk)."""
-    direct, full = set(), False
-    parity = heif_files = False
+    direct, full, tracker, gone_any = set(), False, False, False
     for path, gone in changed:
-        if is_workspace_wide(path):
-            full = True
-        if path in PARITY_DOCS or gone:
-            parity = True
         o = owner(path, pkgs)
+        embedded = [n for n in embedders(path) if n in pkgs]
+        if is_workspace_wide(path) or (not o and not embedded and not is_note(path) and not is_inert(path)):
+            full = True
+        tracker |= path in PARITY_DOCS
+        gone_any |= gone
         if o:
             direct.add(o)
-        for name in embedders(path):
-            if name in pkgs:
-                direct.add(name)
-    if full:
-        planned = set(pkgs)
-    else:
-        planned = reverse_closure(direct, pkgs)
-    parity = parity or full or bool(direct & PARITY_PACKAGES)
+        direct.update(embedded)
+    planned = set(pkgs) if full else reverse_closure(direct, pkgs)
+    rust = bool(planned)
+    # parity and heif only matter when something compiled changed; a notes-only change runs the format check alone
+    parity = rust and (full or tracker or gone_any or bool(direct & PARITY_PACKAGES))
     heif = full or bool(planned & HEIF_PACKAGES)
     weights = weights or {}
     items = {n: weights[n] if n in weights else weight(n, pkgs) for n in planned}
     if heif:
         items["+heif"] = HEIF_WEIGHT
-    bins = balance(items, groups) if items else []
+    first = ("+oneoff", ONEOFF_WEIGHT if rust else 1)
+    bins = balance(items, groups, first)
     tests = []
     for number, (total, names) in enumerate(bins, 1):
-        crates = [n for n in names if n != "+heif"]
+        crates = [n for n in names if not n.startswith("+")]
         tests.append(
             {
                 "group": number,
@@ -244,13 +262,14 @@ def plan(changed, pkgs, wasm, groups=3, weights=None):
                 "packages": " ".join(f"-p {n}" for n in crates),
                 "doc_packages": " ".join(f"-p {n}" for n in crates if pkgs[n]["doc"]),
                 "heif": "+heif" in names,
+                "oneoff": "+oneoff" in names,
                 "weight": total,
                 "crates": crates,
             }
         )
     return {
         "full": full,
-        "rust": bool(planned),
+        "rust": rust,
         "changed": sorted(direct),
         "crates": sorted(planned),
         "clippy_args": "--workspace" if full else " ".join(f"-p {n}" for n in sorted(planned)),
@@ -271,7 +290,8 @@ def summary(result, files):
         f"wasm check: {'yes' if result['wasm'] else 'no'}; parity: {'yes' if result['parity'] else 'no'}; heif: {'yes' if result['heif'] else 'no'}"
     )
     for t in result["tests"]:
-        lines.append(f"test group {t['name']} (weight {t['weight']}): {', '.join(t['crates'])}{' +heif' if t['heif'] else ''}")
+        extras = (" +one-off steps" if t["oneoff"] else "") + (" +heif" if t["heif"] else "")
+        lines.append(f"test group {t['name']} (weight {t['weight']}): {', '.join(t['crates'])}{extras}")
     return "\n".join(lines)
 
 

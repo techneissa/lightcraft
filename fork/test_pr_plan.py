@@ -65,12 +65,32 @@ class Scope(unittest.TestCase):
         for path in ["fork/pr_plan.py", "fork/skip-known-failures.sh"]:
             self.assertTrue(plan(path)["full"], path)
 
-    def test_notes_and_fork_files_test_nothing(self):
-        for path in ["docs/foo.md", "FORK.md", "fork/tests.d/x.txt", "fork/some-feature.md", "assets/ATTRIBUTION.md", "README.md"]:
+    def test_notes_run_the_format_check_only(self):
+        for path in ["docs/foo.md", "FORK.md", "fork/some-feature.md", "assets/ATTRIBUTION.md", "README.md", "docs/gaps.md"]:
             r = plan(path)
             self.assertFalse(r["rust"], path)
-            self.assertEqual(r["tests"], [], path)
-            self.assertFalse(r["wasm"], path)
+            self.assertFalse(r["full"], path)
+            self.assertFalse(r["wasm"] or r["parity"] or r["heif"], path)
+            self.assertEqual(len(r["tests"]), 1, path)
+            self.assertTrue(r["tests"][0]["oneoff"], path)
+            self.assertEqual(r["tests"][0]["packages"], "", path)
+
+    def test_a_file_outside_every_crate_that_is_not_markdown_tests_everything(self):
+        for path in ["fork/tests.d/x.txt", "assets/logo.png", "LICENSE-MIT", "packaging/linux/a.sh", "fork/sync-docs.py"]:
+            self.assertTrue(plan(path)["full"], path)
+
+    def test_inert_dirs_are_the_way_to_exempt_a_folder(self):
+        old = pr_plan.INERT_DIRS
+        pr_plan.INERT_DIRS = ("fork/tests.d/",)
+        try:
+            r = plan("fork/tests.d/x.txt")
+            self.assertFalse(r["full"])
+            self.assertFalse(r["rust"])
+        finally:
+            pr_plan.INERT_DIRS = old
+
+    def test_markdown_inside_a_crate_counts_for_the_crate(self):
+        self.assertEqual(plan("crates/geom/README.md")["changed"], ["lightcraft-geom"])
 
     def test_embedded_file_counts_for_its_crate(self):
         r = plan("assets/camera-profiles/x.json")
@@ -84,8 +104,8 @@ class Scope(unittest.TestCase):
 
     def test_parity_runs_for_command_crates_tracker_docs_and_deleted_files(self):
         self.assertTrue(plan("crates/engine/src/a.rs")["parity"])
-        self.assertTrue(plan("docs/gaps.md")["parity"])
-        self.assertTrue(plan("docs/images/a.png", gone={"docs/images/a.png"})["parity"])
+        self.assertTrue(plan("docs/gaps.md", "crates/geom/src/a.rs")["parity"])
+        self.assertTrue(plan("crates/geom/a.png", gone={"crates/geom/a.png"})["parity"])
         self.assertFalse(plan("crates/geom/src/a.rs")["parity"])  # the engine above it is tested, but its ids cannot change
 
     def test_heif_runs_when_codecs_or_a_crate_below_it_changes(self):
@@ -104,22 +124,26 @@ class Groups(unittest.TestCase):
         seen = [c for t in r["tests"] for c in t["crates"]]
         self.assertEqual(sorted(seen), sorted(PKGS))
         self.assertEqual(len(r["tests"]), 3)
+        self.assertEqual([t["group"] for t in r["tests"] if t["oneoff"]], [1])  # the one-off steps run in group 1 only
 
     def test_groups_differ_by_at_most_the_heaviest_crate(self):
         r = plan("Cargo.lock")
         weights = sorted(t["weight"] for t in r["tests"])
-        self.assertLessEqual(weights[-1] - weights[0], max(WEIGHTS.values()))
+        self.assertLessEqual(weights[-1] - weights[0], max(max(WEIGHTS.values()), pr_plan.ONEOFF_WEIGHT))
 
     def test_the_heaviest_crate_is_alone_when_the_others_are_light(self):
         w = {"big": 100, "a": 10, "b": 10, "c": 10}
-        pkgs = {n: pkg(f"crates/{n}") for n in w}
         groups = pr_plan.balance(w, 3)
         self.assertIn((100, ["big"]), groups)
+
+    def test_the_seed_starts_group_one(self):
+        groups = pr_plan.balance({"a": 10, "b": 10}, 3, ("+oneoff", 50))
+        self.assertEqual(groups[0], (50, ["+oneoff"]))
 
     def test_a_single_crate_makes_one_group(self):
         pkgs = {"only": pkg("crates/only")}
         r = pr_plan.plan([("crates/only/a.rs", False)], pkgs, set(), weights={"only": 5})
-        self.assertEqual([t["packages"] for t in r["tests"]], ["-p only"])
+        self.assertEqual([t["packages"] for t in r["tests"]], ["", "-p only"])  # group 1 holds the one-off steps
 
     def test_doc_tests_skip_crates_without_a_library(self):
         r = plan("Cargo.lock")
