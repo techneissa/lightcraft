@@ -100,8 +100,6 @@ fn scenes() -> Vec<Scene> {
     };
     let mut over_header = edit("develop with a header under the pointer", json!({}));
     over_header.hover = vec!["section:light"];
-    let mut mixer = edit("develop with the flyouts open", json!({}));
-    mixer.commands = vec![("section.flyout", json!({}))];
     vec![
         scene("grid with sidebar", json!({"view": "photoGrid", "leftPanel": true, "right": "none"})),
         scene("square grid", json!({"view": "squareGrid", "leftPanel": false})),
