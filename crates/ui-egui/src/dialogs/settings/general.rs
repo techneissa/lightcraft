@@ -7,11 +7,22 @@ use crate::widgets::dropdown_search::presets::{self, Choice};
 
 pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, crate::i18n::tr("Language"), |ui| {
-        let languages: Vec<_> = crate::i18n::Locale::for_picker().into_iter().map(|language| (language, language.name())).collect();
-        // Thirteen language names do not fit one line in a narrow window: wrap them.
-        ui.horizontal_wrapped(|ui| {
-            choices(ui, "settingsLanguage", &languages, &mut app.ui.language);
-        });
+        let languages = crate::i18n::Locale::for_picker();
+        let current = app.ui.language;
+        let (r, chosen) = crate::widgets::dropdown_search::pick_with(
+            ui,
+            "settings-language",
+            |c| c.width(240.0).selected_text(current.name()),
+            &languages,
+            |l| *l == current,
+            |l| l.name().to_string(),
+            |ui, l, r| register(ui, format!("item:settingsLanguage-{}", l.code()), r.rect),
+        );
+        crate::widgets::name_combo(&r, crate::i18n::tr("Language"));
+        register(ui, "combo:settingsLanguage", r.rect);
+        if let Some(l) = chosen.and_then(|i| languages.get(i)) {
+            app.ui.language = *l;
+        }
         crate::i18n::set_language(app.ui.language);
     });
     heading(ui, t, crate::i18n::tr("Library"));

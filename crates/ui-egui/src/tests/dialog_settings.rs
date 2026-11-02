@@ -124,22 +124,23 @@ fn every_tab_keeps_its_controls_inside_the_window() {
 }
 
 #[test]
-fn a_row_of_many_choices_wraps_under_itself() {
-    // Given an app window too narrow for the languages in one line
+fn the_language_is_picked_from_a_dropdown() {
+    // Given Settings on General, in English
     let mut h = demo([900.0, 560.0]);
     show(&mut h, "general");
-    let languages: Vec<egui::Rect> = (0..crate::i18n::Locale::ALL.len()).map(|i| rect(&h, &format!("button:settingsLanguage-{i}"))).collect();
-    // Then they take more than one line
-    let first = languages[0];
-    assert!(languages.iter().any(|r| r.top() > first.bottom()), "the languages wrap: {languages:?}");
-    // And each further line starts under the first choice, not under the row's label
-    for r in languages.iter().filter(|r| r.top() > first.bottom()) {
-        assert!(r.left() >= first.left() - 0.5, "{r:?} starts left of the first language {first:?}");
-    }
-    assert!(
-        languages.iter().filter(|r| r.top() > first.bottom()).any(|r| (r.left() - first.left()).abs() < 0.5),
-        "a wrapped line starts at the first choice"
-    );
+    assert_eq!(h.app.ui.language, crate::i18n::Locale::En);
+    // Then the languages are one dropdown, not a row of buttons
+    assert!(h.app.widgets.iter().all(|(id, _)| !id.starts_with("button:settingsLanguage")), "no language buttons left");
+    // When it is opened and Deutsch is chosen
+    let r = h.request("ui.clickWidget", json!({"id": "combo:settingsLanguage"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(T);
+    let r = h.request("ui.clickWidget", json!({"id": "item:settingsLanguage-de"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(T);
+    // Then the app is in German
+    assert_eq!(h.app.ui.language, crate::i18n::Locale::De);
+    crate::i18n::set_language(crate::i18n::Locale::En);
 }
 
 #[test]
