@@ -70,7 +70,7 @@ pub fn apply(
         let small = lightcraft_raster::resample::fit(src, 384, 384, lightcraft_raster::resample::Filter::Lanczos3);
         let frame = lightcraft_pipeline::frame_for(&small, &Default::default(), &Default::default(), false);
         let alpha = lightcraft_pipeline::masks::shape_alpha(
-            &lightcraft_develop::MaskShape::Sky,
+            &lightcraft_develop::MaskShape::sky(),
             &frame,
             small.width,
             small.height,
