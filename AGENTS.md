@@ -28,6 +28,16 @@ branches can still break each other (e.g. a new struct field vs. a new construct
 `git log main..HEAD` + `git status` for unmerged commits or uncommitted work before starting anything new. Commit small
 and often so a crash loses minutes, not hours.
 
+## Working on the fork
+`custom` is the working branch; `mine/custom` is its copy on GitHub. A change is checked in three steps:
+1. `cargo clippy -p <crate> --all-targets -- -D warnings`
+2. `cargo test -p <crate> --lib <module or test name>` for the area you touched
+3. `cargo xtask ci --quick` once per round, before committing. It measures against `mine/custom`, so it covers only your unpushed and uncommitted changes (`--base REF` overrides).
+
+Write long runs to a log file; never pipe them through `tail` or `head`.
+
+Each push to `custom` runs Fork CI (~23 min) and Fork build (~15 min) on GitHub, so push in batches: commit each working change on `custom`, and push (`git push mine custom`) once the planned batch of changes is done and its checks pass, or when techneissa asks. Never push a change whose checks fail; a test that also fails without the change is not a failure of the change, but say so in the reply.
+
 ## Never crash (outranks feature work)
 People trust LightCraft with their photo libraries and edits; a crash loses their work. A malformed raw/JPEG/XMP, a bad
 command, control or MCP argument, a corrupt catalog or settings file, or a full disk must produce an error the user (or
