@@ -73,14 +73,16 @@ PARITY_PACKAGES = {"lightcraft-engine", "lightcraft-develop", "lightcraft-ui-egu
 PARITY_DOCS = {"docs/parity-checklist.md", "docs/gaps.md"}
 HEIF_PACKAGES = {"lightcraft-codecs", "lightcraft-heif"}
 
-# Test time per crate is guessed from its size: a test counts 1, 200 lines of Rust count 1. A crate whose
-# measured test time (a run's step summary) shows a group out of balance goes here, in the same unit.
-WEIGHT_OVERRIDES = {}
-# The heif extras (clippy and tests with the feature) count as a crate for the balance.
-# Measured on the first cold run of PR 66 (about 0.35 s per unit): heif 350 s, one-off steps 750 s.
-HEIF_WEIGHT = 1000
-# The one-off steps of group 1 (clippy on the planned crates, layers, assets, parity, wasm) count as a crate too.
-ONEOFF_WEIGHT = 2100
+# Weights are seconds on a GitHub runner (measured on PR 66's runs). A crate's test time is guessed from its size
+# (a test counts 1, 200 lines of Rust count 1, times SECONDS_PER_UNIT: the engine's 1830 tests took 223 s); a crate
+# the guess gets wrong is measured and listed here. ui-egui's 2360 lib tests alone took 1394 s, so it sits alone in
+# a group and is the floor of a run that touches it.
+SECONDS_PER_UNIT = 0.1
+WEIGHT_OVERRIDES = {"lightcraft-ui-egui": 1500}
+# The heif extras (clippy and tests with the feature) count as a crate for the balance: 139 s warm, 350 s cold.
+HEIF_WEIGHT = 250
+# The one-off steps of group 1 (clippy on the planned crates, layers, assets, parity, wasm): 216 s warm, 750 s cold.
+ONEOFF_WEIGHT = 400
 
 TEST_ATTR = re.compile(r"#\[(?:\w+::)*test\b")
 
@@ -215,7 +217,7 @@ def weight(name, pkgs, root=ROOT):
             continue
         tests += len(TEST_ATTR.findall(text))
         lines += text.count("\n")
-    return max(1, tests + lines // 200)
+    return max(1, round((tests + lines // 200) * SECONDS_PER_UNIT))
 
 
 def balance(weights, groups, first=None):

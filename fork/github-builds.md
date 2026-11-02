@@ -27,9 +27,10 @@ craft-fonts commit, Rust install and cache as `ci.yml`; it reads the packages an
 - **A push to `custom`** (the daily upstream merge included) tests everything: the steps of `cargo xtask ci`
   (format, clippy, the `heif` feature, tests and doc tests, parity, layers, assets, wasm) except the GPU hardware
   run, which needs an adapter the runners lack.
-- **The three jobs** each run `cargo test -p …` for a group of crates, balanced by a weight per crate (its tests plus
-  its lines of Rust over 200; `WEIGHT_OVERRIDES`, `ONEOFF_WEIGHT` and `HEIF_WEIGHT` in `fork/affected.py` hold
-  measured values). Group 1 also runs the one-off steps: format, clippy `-D warnings --all-targets` on the tested
+- **The three jobs** each run `cargo test -p …` for a group of crates, balanced by an estimated time per crate
+  (seconds on a runner: its tests plus its lines of Rust over 200, times 0.1; `WEIGHT_OVERRIDES`, `ONEOFF_WEIGHT` and
+  `HEIF_WEIGHT` in `fork/affected.py` hold measured values). `lightcraft-ui-egui` alone takes about 24 minutes
+  (2360 lib tests), so it sits in a group of its own and is the floor of any run that tests it. Group 1 also runs the one-off steps: format, clippy `-D warnings --all-targets` on the tested
   crates, `cargo xtask layers` and `assets`, `parity` when the tracker docs, a command or control crate
   (`lightcraft-engine`, `-develop`, `-ui-egui`, `-cli`) or a deleted or renamed file is in the change, `wasm` when a
   tested crate is in the web build. Every test run passes the features the whole workspace turns on (for example
