@@ -14,6 +14,26 @@ use crate::params::{Conv, ConvOpts, Params, resize};
 use crate::swin::{Swin, SwinConfig};
 use crate::{Error, Result};
 
+/// Per-stage timings, printed to stderr when `LIGHTCRAFT_PROFILE` is set (the GPU is waited for at each lap).
+pub struct Lap {
+    on: bool,
+    t: std::cell::Cell<std::time::Instant>,
+}
+
+impl Lap {
+    pub fn new() -> Self {
+        Self { on: std::env::var_os("LIGHTCRAFT_PROFILE").is_some(), t: std::cell::Cell::new(std::time::Instant::now()) }
+    }
+
+    pub fn lap(&self, what: &str, x: &Tensor) {
+        if self.on {
+            let _ = x.device().synchronize();
+            eprintln!("birefnet: {what} {:.0} ms", self.t.get().elapsed().as_secs_f64() * 1e3);
+            self.t.set(std::time::Instant::now());
+        }
+    }
+}
+
 /// A gradient attention gate: `p · sigmoid(attn(relu(conv(p))))`.
 struct Gate {
     conv: Conv,
@@ -93,7 +113,7 @@ impl Decoder {
 
     /// `x` is the image, `x1..x3` the joined backbone features and `x4` the squeezed deepest one.
     /// Returns the final logits at the image's size.
-    fn forward(&self, x: &Tensor, feats: [&Tensor; 4]) -> Result<Tensor> {
+    fn forward(&self, x: &Tensor, feats: [&Tensor; 4], lap: &Lap) -> Result<Tensor> {
         let [x1, x2, x3, x4] = feats;
         let (_, _, ih, iw) = x.dims4()?;
         let dims = |t: &Tensor| -> Result<(usize, usize)> {
@@ -106,20 +126,24 @@ impl Decoder {
         let (h4, _) = dims(x4)?;
         let p4 = self.blocks[3].forward(&Tensor::cat(&[x4.clone(), self.ipt[4].forward(&tiles(x, grid(h4)?)?)?], 1)?)?;
         let p4 = self.gates[2].apply(&p4)?;
+        lap.lap("decoder block 4", &p4);
         let (h3, w3) = dims(x3)?;
         let up3 = (resize(&p4, h3, w3)? + self.lateral[2].forward(x3)?)?;
 
         let p3 = self.blocks[2].forward(&Tensor::cat(&[up3.clone(), self.ipt[3].forward(&tiles(x, grid(h3)?)?)?], 1)?)?;
         let p3 = self.gates[1].apply(&p3)?;
+        lap.lap("decoder block 3", &p3);
         let (h2, w2) = dims(x2)?;
         let up2 = (resize(&p3, h2, w2)? + self.lateral[1].forward(x2)?)?;
 
         let p2 = self.blocks[1].forward(&Tensor::cat(&[up2.clone(), self.ipt[2].forward(&tiles(x, grid(h2)?)?)?], 1)?)?;
         let p2 = self.gates[0].apply(&p2)?;
+        lap.lap("decoder block 2", &p2);
         let (h1, w1) = dims(x1)?;
         let up1 = (resize(&p2, h1, w1)? + self.lateral[0].forward(x1)?)?;
 
         let p1 = self.blocks[0].forward(&Tensor::cat(&[up1, self.ipt[1].forward(&tiles(x, grid(h1)?)?)?], 1)?)?;
+        lap.lap("decoder block 1", &p1);
         let p1 = resize(&p1, ih, iw)?;
         let p1 = Tensor::cat(&[p1, self.ipt[0].forward(x)?], 1)?;
         Ok(self.conv_out.forward(&p1)?)
@@ -149,10 +173,13 @@ impl Net {
     /// Logits `[1, 1, S, S]` for the normalised image `x` `[1, 3, S, S]`. `cancel` is polled
     /// between backbone blocks.
     pub fn forward(&self, x: &Tensor, cancel: &dyn Fn() -> bool) -> Result<Tensor> {
+        let lap = Lap::new();
         let x = x.to_dtype(DType::F32)?;
         let (_, _, h, w) = x.dims4()?;
         let full = self.swin.forward(&x, cancel)?;
+        lap.lap("backbone", &x);
         let half = self.swin.forward(&resize(&x, h / 2, w / 2)?, cancel)?;
+        lap.lap("backbone, half size", &x);
         let mut joined = Vec::with_capacity(4);
         for (a, b) in full.iter().zip(&half) {
             let (_, _, fh, fw) = a.dims4()?;
@@ -162,6 +189,9 @@ impl Net {
         let (h4, w4) = (x4.dim(2)?, x4.dim(3)?);
         let ctx = Tensor::cat(&[resize(&x1, h4, w4)?, resize(&x2, h4, w4)?, resize(&x3, h4, w4)?, x4], 1)?;
         let x4 = self.squeeze.forward(&ctx)?;
-        self.decoder.forward(&x, [&x1, &x2, &x3, &x4])
+        lap.lap("squeeze", &x4);
+        let out = self.decoder.forward(&x, [&x1, &x2, &x3, &x4], &lap)?;
+        lap.lap("decoder end", &out);
+        Ok(out)
     }
 }

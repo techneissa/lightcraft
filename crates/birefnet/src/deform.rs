@@ -63,8 +63,7 @@ impl DeformConv {
             let y = (base_y.narrow(0, t0, n)? + dy)?;
             let xx = (base_x.narrow(0, t0, n)? + dx)?;
             let m = modulator.narrow(0, t0, n)?;
-            let sampled = sample(&rows, &y, &xx, &m, h, w)?; // [n, hw, c]
-            let sampled = sampled.permute((1, 0, 2))?.contiguous()?.reshape((hw, n * c))?;
+            let sampled = sample(&rows, &y, &xx, &m, h, w)?; // [hw, n·c]
             let part = sampled.matmul(&self.weight.narrow(0, t0 * c, n * c)?)?;
             acc = Some(match acc {
                 Some(a) => (a + part)?,
@@ -100,10 +99,13 @@ fn base_grid(k: usize, h: usize, w: usize, dev: &Device) -> Result<(Tensor, Tens
 }
 
 /// Bilinear samples of `rows` (`[H·W, C]`) at `[n, H·W]` positions, zero outside, times `m`.
-/// Returns `[n, H·W, C]`.
+/// Returns `[H·W, n·C]` (pixel-major, taps side by side in the columns).
 fn sample(rows: &Tensor, y: &Tensor, x: &Tensor, m: &Tensor, h: usize, w: usize) -> Result<Tensor> {
     let (n, hw) = y.dims2()?;
     let c = rows.dim(1)?;
+    // pixel-major: the gathered rows of one pixel's taps are adjacent
+    let (y, x, m) = (y.t()?.contiguous()?, x.t()?.contiguous()?, m.t()?.contiguous()?);
+    let (y, x, m) = (&y, &x, &m);
     let y0 = y.floor()?;
     let x0 = x.floor()?;
     let ly = (y - &y0)?;
@@ -120,21 +122,24 @@ fn sample(rows: &Tensor, y: &Tensor, x: &Tensor, m: &Tensor, h: usize, w: usize)
     let wy1 = ly.mul(&vy1)?;
     let wx0 = hx.mul(&vx0)?;
     let wx1 = lx.mul(&vx1)?;
-    let weights = Tensor::stack(
-        &[wy0.mul(&wx0)?, wy0.mul(&wx1)?, wy1.mul(&wx0)?, wy1.mul(&wx1)?],
-        0,
-    )?
-    .broadcast_mul(m)?; // [4, n, hw]
+    let weight = |a: &Tensor, b: &Tensor| -> Result<Tensor> { Ok(a.mul(b)?.mul(m)?.reshape((n * hw, 1))?) };
     let iy0 = y0.clamp(0.0, hmax)?;
     let iy1 = (&y0 + 1.0)?.clamp(0.0, hmax)?;
     let ix0 = x0.clamp(0.0, wmax)?;
     let ix1 = (&x0 + 1.0)?.clamp(0.0, wmax)?;
     let wf = w as f64;
-    let at = |iy: &Tensor, ix: &Tensor| -> Result<Tensor> { Ok((iy.affine(wf, 0.0)? + ix)?) };
-    let idx = Tensor::stack(&[at(&iy0, &ix0)?, at(&iy0, &ix1)?, at(&iy1, &ix0)?, at(&iy1, &ix1)?], 0)?
-        .flatten_all()?
-        .to_dtype(DType::U32)?;
-    let gathered = rows.index_select(&idx, 0)?.reshape((4, n, hw, c))?;
-    let weights = weights.reshape((4, n, hw, 1))?;
-    Ok(gathered.broadcast_mul(&weights)?.sum(0)?)
+    let at = |iy: &Tensor, ix: &Tensor| -> Result<Tensor> { Ok((iy.affine(wf, 0.0)? + ix)?.flatten_all()?.to_dtype(DType::U32)?) };
+    // the four neighbours, each a contiguous gather (a strided sum over a stacked tensor is slow on Metal)
+    let corners = [(&wy0, &wx0, &iy0, &ix0), (&wy0, &wx1, &iy0, &ix1), (&wy1, &wx0, &iy1, &ix0), (&wy1, &wx1, &iy1, &ix1)];
+    let mut acc: Option<Tensor> = None;
+    for (wy, wx, iy, ix) in corners {
+        let g = rows.index_select(&at(iy, ix)?, 0)?;
+        let term = g.broadcast_mul(&weight(wy, wx)?)?;
+        acc = Some(match acc {
+            Some(a) => (a + term)?,
+            None => term,
+        });
+    }
+    let Some(acc) = acc else { return Err(crate::Error::Model("no sampling corners".into())) };
+    Ok(acc.reshape((hw, n * c))?)
 }
