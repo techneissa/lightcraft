@@ -468,7 +468,8 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
         return Err(bad(C, "not a model id"));
     }
     // only a folder that is a model (it has a manifest) is ever deleted
-    let homes: Vec<PathBuf> = roots.search().map(|r| r.join(id)).filter(|h| h.join("denoise-model.json").is_file()).collect();
+    let homes: Vec<PathBuf> =
+        roots.search().map(|r| r.join(id)).filter(|h| h.join("denoise-model.json").is_file() && h.join("model.onnx").is_file()).collect();
     if homes.is_empty() {
         return Err(bad(C, "that model is not installed"));
     }

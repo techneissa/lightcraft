@@ -19,8 +19,7 @@ pub enum Remove {
 pub fn button(ui: &mut egui::Ui, key: &str, shared: bool) -> (egui::Response, Remove) {
     let armed_id = ui.make_persistent_id(("model-remove-armed", key));
     let armed = shared && ui.ctx().data(|d| d.get_temp::<bool>(armed_id)).unwrap_or(false);
-    let label = if armed { "Remove for Every ArtCraft App?" } else { "Remove" };
-    let r = ui.button(crate::i18n::tr(label));
+    let r = ui.button(if armed { crate::i18n::tr("Remove for Every ArtCraft App?") } else { crate::i18n::tr("Remove") });
     let outcome = match (r.clicked(), shared, armed) {
         (true, false, _) => Remove::Own,
         (true, true, true) => Remove::EveryApp,

@@ -291,8 +291,9 @@ fn main() -> eframe::Result {
                 // the face and denoise models of the old folders move into the folder shared with PhotoCraft, once
                 // (fork/shared-models.md); on a worker, because checking a 200 MB model takes a second; a failure
                 // leaves both copies and is only logged
-                let _ = std::thread::Builder::new().name("shared-models-move".into()).spawn(|| {
-                    let moved = lightcraft_engine::shared_models::migrate_old_models();
+                let activity = session.activity.clone();
+                let _ = std::thread::Builder::new().name("shared-models-move".into()).spawn(move || {
+                    let moved = lightcraft_engine::shared_models::migrate_old_models(&activity);
                     for line in &moved.done {
                         log::info!("shared models: {line}");
                     }

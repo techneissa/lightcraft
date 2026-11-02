@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 
 use lightcraft_faces::hash::sha256_file;
 
+use crate::activity::{Activity, Cancel};
+
 /// What a migration did, in sentences for a log.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Migration {
@@ -46,6 +48,9 @@ struct Known {
 /// The model file of a face or denoise model folder.
 const MODEL_FILE: &str = "model.onnx";
 
+/// How long a `model.onnx.part` may sit unchanged before it counts as left by a crash.
+const STALE_PART: std::time::Duration = std::time::Duration::from_secs(3600);
+
 /// A kind of model: where its old folder is, its manifest name, and the models LightCraft knows.
 struct Kind {
     label: &'static str,
@@ -57,10 +62,11 @@ struct Kind {
 /// Moves the face and denoise models of the old folders into the shared folder (see the module docs), for this user
 /// (`$HOME`, the config folder, the two environment variables). Blocking: hashing a 200 MB file takes about a second,
 /// so call it from a worker thread. Never panics.
-pub fn migrate_old_models() -> Migration {
+pub fn migrate_old_models(activity: &Activity) -> Migration {
     let set = |name: &str| std::env::var_os(name).is_some_and(|v| !v.is_empty());
     let config = crate::config::config_dir();
     migrate_old_models_in(
+        activity,
         std::env::var_os("HOME"),
         config.as_deref().filter(|_| !set("LIGHTCRAFT_FACE_MODELS")).map(|c| c.join("models")).as_deref(),
         config.as_deref().filter(|_| !set("LIGHTCRAFT_DENOISE_MODELS")).map(|c| c.join("denoise-models")).as_deref(),
@@ -68,7 +74,7 @@ pub fn migrate_old_models() -> Migration {
 }
 
 /// [`migrate_old_models`] with the home folder and the two old folders (`None`: that kind is left alone) as parameters.
-pub fn migrate_old_models_in(home: Option<OsString>, faces_old: Option<&Path>, denoise_old: Option<&Path>) -> Migration {
+pub fn migrate_old_models_in(activity: &Activity, home: Option<OsString>, faces_old: Option<&Path>, denoise_old: Option<&Path>) -> Migration {
     let Some(shared) = super::shared_models_dir(home) else { return Migration::default() };
     let mut kinds = Vec::new();
     if let Some(old) = faces_old {
@@ -82,11 +88,15 @@ pub fn migrate_old_models_in(home: Option<OsString>, faces_old: Option<&Path>, d
             .collect();
         kinds.push(Kind { label: "denoise", old: old.to_path_buf(), manifest: "denoise-model.json", models });
     }
-    migrate(&shared, &kinds)
+    migrate(&shared, &kinds, activity, || {})
 }
 
-fn migrate(shared: &Path, kinds: &[Kind]) -> Migration {
+/// `during` runs once the activity row is up, before the work (a test looks at the row there).
+fn migrate(shared: &Path, kinds: &[Kind], activity: &Activity, during: impl FnOnce()) -> Migration {
     let mut report = Migration::default();
+    // The row is up for the whole run; the move cannot be stopped half way, so it has no cancel.
+    let _task = activity.start("models", "Moving AI models to the shared folder", Cancel::No);
+    during();
     for kind in kinds {
         if !kind.old.is_dir() {
             continue;
@@ -133,10 +143,22 @@ fn move_model(report: &mut Migration, shared: &Path, kind: &Kind, model: &Known)
     if !meta.file_type().is_dir() || !is_plain_file(&from_file) {
         return;
     }
-    // A download or install is writing there right now.
-    if exists(&from.join("model.onnx.part")) {
-        report.failed.push(format!("left {} in the old folder: a {} model is being installed there", from.display(), kind.label));
-        return;
+    // A download or install may be writing there right now; a `.part` nobody has written to for an hour is a crashed
+    // one, and goes (the app has no lock to tell them apart, as PhotoCraft's install lock does).
+    let part = from.join("model.onnx.part");
+    if exists(&part) {
+        let stale = std::fs::metadata(&part).and_then(|m| m.modified()).is_ok_and(|t| t.elapsed().is_ok_and(|age| age > STALE_PART));
+        if !stale {
+            report.failed.push(format!("left {} in the old folder: a {} model is being installed there", from.display(), kind.label));
+            return;
+        }
+        match std::fs::remove_file(&part) {
+            Ok(()) => report.done.push(format!("removed the stale {}", part.display())),
+            Err(e) => {
+                report.failed.push(format!("left {} in the old folder: could not remove the stale {} ({e})", from.display(), part.display()));
+                return;
+            }
+        }
     }
     // Only a copy that is the published model moves; a wrong or half-written one stays where it is.
     if let Err(e) = verify(&from_file, model) {
@@ -147,6 +169,11 @@ fn move_model(report: &mut Migration, shared: &Path, kind: &Kind, model: &Known)
     let dir = shared.join(id);
     let to = dir.join(MODEL_FILE);
     if exists(&to) {
+        // A link (or anything but a plain file) at the shared path is not a checked copy, and is not ours to replace.
+        if !is_plain_file(&to) {
+            report.failed.push(format!("left {} and {} where they are: the shared path is not a plain file (a link?)", from.display(), to.display()));
+            return;
+        }
         // A checked copy is already there: it stays exactly as it is, and only the old duplicate goes.
         if known && verify(&to, model).is_ok() {
             remove_old(report, &from, &dir, kind);
@@ -215,7 +242,9 @@ fn small_files(home: &Path, kind: &Kind) -> Vec<String> {
 
 fn copy_file(from: &Path, to: &Path) -> std::io::Result<()> {
     let part = to.with_extension("migrating");
-    std::fs::copy(from, &part)?;
+    std::fs::copy(from, &part).inspect_err(|_| {
+        let _ = std::fs::remove_file(&part);
+    })?;
     std::fs::rename(&part, to).inspect_err(|_| {
         let _ = std::fs::remove_file(&part);
     })
@@ -278,6 +307,10 @@ mod tests {
         }
     }
 
+    fn go(shared: &Path, kinds: &[Kind]) -> Migration {
+        migrate(shared, kinds, &Activity::default(), || {})
+    }
+
     fn put(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
         if let Some(dir) = path.parent() {
             std::fs::create_dir_all(dir)?;
@@ -296,7 +329,7 @@ mod tests {
         let t = Temp::new()?;
         old_model(&t, b"abc")?;
         put(&t.old().join("settings.json"), b"{}")?;
-        let report = migrate(&t.shared(), &t.kinds(Some(ABC)));
+        let report = go(&t.shared(), &t.kinds(Some(ABC)));
         assert!(report.failed.is_empty(), "{report:?}");
         let home = t.shared().join("m");
         assert_eq!(std::fs::read(home.join("model.onnx"))?, b"abc");
@@ -305,7 +338,7 @@ mod tests {
         assert!(!t.old().join("m").exists(), "the then empty model folder goes");
         assert!(t.old().join("settings.json").exists(), "the settings stay in the old folder");
         // A second start finds nothing to do.
-        assert!(migrate(&t.shared(), &t.kinds(Some(ABC))).is_empty());
+        assert!(go(&t.shared(), &t.kinds(Some(ABC))).is_empty());
         Ok(())
     }
 
@@ -317,7 +350,7 @@ mod tests {
         put(&t.shared().join("m").join("installed.json"), b"{\"shared\":1}")?;
         let before = std::fs::metadata(&shared)?.modified()?;
         old_model(&t, b"abc")?;
-        let report = migrate(&t.shared(), &t.kinds(Some(ABC)));
+        let report = go(&t.shared(), &t.kinds(Some(ABC)));
         assert!(report.failed.is_empty(), "{report:?}");
         assert_eq!(std::fs::read(&shared)?, b"abc");
         assert_eq!(std::fs::metadata(&shared)?.modified()?, before, "the shared file is not rewritten");
@@ -333,7 +366,7 @@ mod tests {
         let t = Temp::new()?;
         put(&t.shared().join("m").join("model.onnx"), b"abd")?;
         old_model(&t, b"abc")?;
-        let report = migrate(&t.shared(), &t.kinds(Some(ABC)));
+        let report = go(&t.shared(), &t.kinds(Some(ABC)));
         assert!(report.failed.is_empty(), "{report:?}");
         assert_eq!(std::fs::read(t.shared().join("m").join("model.onnx"))?, b"abc");
         assert!(!t.old().join("m").exists());
@@ -344,25 +377,47 @@ mod tests {
     fn a_corrupt_old_file_is_not_moved() -> Result<(), Box<dyn std::error::Error>> {
         let t = Temp::new()?;
         old_model(&t, b"abd")?;
-        let report = migrate(&t.shared(), &t.kinds(Some(ABC)));
+        let report = go(&t.shared(), &t.kinds(Some(ABC)));
         assert_eq!(std::fs::read(t.old().join("m").join("model.onnx"))?, b"abd");
         assert!(!t.shared().exists());
         assert!(report.failed.iter().any(|l| l.contains("not the published")), "{report:?}");
         Ok(())
     }
 
+    #[cfg(unix)]
     #[test]
     fn a_failed_rename_leaves_both_copies_and_says_why() -> Result<(), Box<dyn std::error::Error>> {
+        use std::os::unix::fs::PermissionsExt;
         let t = Temp::new()?;
-        old_model(&t, b"abc")?;
-        // A folder where the model file should go: the rename cannot succeed, and nothing is deleted to make room.
-        std::fs::create_dir_all(t.shared().join("m").join("model.onnx"))?;
-        let report = migrate(&t.shared(), &t.kinds(Some(ABC)));
+        put(&t.old().join("m").join("model.onnx"), b"abc")?;
+        // A shared folder nobody can write to: the rename cannot succeed, and nothing is deleted to make room.
+        let home = t.shared().join("m");
+        std::fs::create_dir_all(&home)?;
+        std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o555))?;
+        let report = go(&t.shared(), &t.kinds(Some(ABC)));
+        // (the empty folder made for the move goes again)
+        let _ = std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o755));
         assert_eq!(std::fs::read(t.old().join("m").join("model.onnx"))?, b"abc", "the old file stays");
-        assert!(t.old().join("m").join("face-model.json").is_file());
-        assert!(t.shared().join("m").join("model.onnx").is_dir(), "the shared folder is as it was");
-        assert!(!t.shared().join("m").join("face-model.json").exists(), "no half model is left in the shared folder");
+        assert!(!home.join("model.onnx").exists(), "no half model is left in the shared folder");
         assert!(report.failed.iter().any(|l| l.contains("could not move") && l.contains("both stay")), "{report:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn a_denoise_folder_moves_with_its_own_manifest_name() -> Result<(), Box<dyn std::error::Error>> {
+        let t = Temp::new()?;
+        put(&t.old().join("m").join("model.onnx"), b"abc")?;
+        put(&t.old().join("m").join("denoise-model.json"), b"{}")?;
+        let kinds = vec![Kind {
+            label: "denoise",
+            old: t.old(),
+            manifest: "denoise-model.json",
+            models: vec![Known { id: "m".into(), size: Some(3), sha256: Some(ABC.into()) }],
+        }];
+        let report = go(&t.shared(), &kinds);
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert!(t.shared().join("m").join("denoise-model.json").is_file() && t.shared().join("m").join("model.onnx").is_file());
+        assert!(!t.old().join("m").exists());
         Ok(())
     }
 
@@ -371,7 +426,7 @@ mod tests {
         let t = Temp::new()?;
         old_model(&t, b"abc")?;
         put(&t.shared(), b"not a folder")?;
-        let report = migrate(&t.shared(), &t.kinds(Some(ABC)));
+        let report = go(&t.shared(), &t.kinds(Some(ABC)));
         assert_eq!(std::fs::read(t.old().join("m").join("model.onnx"))?, b"abc");
         assert!(report.failed.iter().any(|l| l.contains("cannot create")), "{report:?}");
         Ok(())
@@ -382,7 +437,7 @@ mod tests {
         let t = Temp::new()?;
         old_model(&t, b"abc")?;
         put(&t.old().join("m").join("model.onnx.part"), b"ab")?;
-        let report = migrate(&t.shared(), &t.kinds(Some(ABC)));
+        let report = go(&t.shared(), &t.kinds(Some(ABC)));
         assert!(t.old().join("m").join("model.onnx").is_file());
         assert!(!t.shared().exists());
         assert!(report.failed.iter().any(|l| l.contains("being installed")), "{report:?}");
@@ -396,12 +451,12 @@ mod tests {
         put(&t.old().join("sam3-real").join("model.safetensors"), b"x")?;
         #[cfg(unix)]
         std::os::unix::fs::symlink(t.old().join("sam3-real"), t.old().join("sam3"))?;
-        let report = migrate(&t.shared(), &t.kinds(Some(ABC)));
+        let report = go(&t.shared(), &t.kinds(Some(ABC)));
         assert!(report.is_empty(), "{report:?}");
         assert!(t.old().join("mine").join("model.onnx").is_file());
         assert!(!t.shared().exists());
         let none = vec![Kind { label: "face", old: t.0.join("nowhere"), manifest: "face-model.json", models: Vec::new() }];
-        assert!(migrate(&t.shared(), &none).is_empty());
+        assert!(go(&t.shared(), &none).is_empty());
         Ok(())
     }
 
@@ -412,7 +467,7 @@ mod tests {
         put(&t.shared().join("m").join("model.onnx"), b"other")?;
         let kinds =
             vec![Kind { label: "face", old: t.old(), manifest: "face-model.json", models: vec![Known { id: "m".into(), size: None, sha256: None }] }];
-        let report = migrate(&t.shared(), &kinds);
+        let report = go(&t.shared(), &kinds);
         assert_eq!(std::fs::read(t.shared().join("m").join("model.onnx"))?, b"other");
         assert!(t.old().join("m").join("model.onnx").is_file());
         assert!(!report.failed.is_empty());
@@ -422,8 +477,85 @@ mod tests {
     #[test]
     fn nothing_moves_without_a_home_folder_or_off_the_mac() {
         let old = std::env::temp_dir().join(format!("lc-migrate-none-{}", std::process::id()));
-        assert!(migrate_old_models_in(None, Some(&old), Some(&old)).is_empty());
-        assert!(migrate_old_models_in(Some(OsString::new()), Some(&old), Some(&old)).is_empty());
+        assert!(migrate_old_models_in(&Activity::default(), None, Some(&old), Some(&old)).is_empty());
+        assert!(migrate_old_models_in(&Activity::default(), Some(OsString::new()), Some(&old), Some(&old)).is_empty());
         assert!(!old.exists());
+    }
+
+    #[test]
+    fn the_move_holds_a_row_in_the_activity_stack_for_its_whole_run() -> Result<(), Box<dyn std::error::Error>> {
+        let t = Temp::new()?;
+        old_model(&t, b"abc")?;
+        let activity = Activity::default();
+        let mut seen = Vec::new();
+        migrate(&t.shared(), &t.kinds(Some(ABC)), &activity, || seen = activity.list());
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert_eq!(seen[0].kind, "models");
+        assert!(!seen[0].cancellable, "the move cannot be stopped half way");
+        assert!(activity.list().is_empty(), "the row goes when the move ends");
+        assert!(t.shared().join("m").join("model.onnx").is_file());
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_link_at_the_shared_path_is_not_a_checked_copy() -> Result<(), Box<dyn std::error::Error>> {
+        let t = Temp::new()?;
+        old_model(&t, b"abc")?;
+        // a link to a perfect copy elsewhere: it must not make the old file look like a duplicate
+        put(&t.0.join("elsewhere.onnx"), b"abc")?;
+        std::fs::create_dir_all(t.shared().join("m"))?;
+        std::os::unix::fs::symlink(t.0.join("elsewhere.onnx"), t.shared().join("m").join("model.onnx"))?;
+        let report = go(&t.shared(), &t.kinds(Some(ABC)));
+        assert_eq!(std::fs::read(t.old().join("m").join("model.onnx"))?, b"abc", "the old copy stays");
+        assert!(std::fs::symlink_metadata(t.shared().join("m").join("model.onnx"))?.file_type().is_symlink(), "the link stays");
+        assert!(report.failed.iter().any(|l| l.contains("not a plain file")), "{report:?}");
+        assert!(report.done.is_empty(), "{report:?}");
+        Ok(())
+    }
+
+    #[test]
+    fn a_stale_part_file_is_cleared_and_a_live_one_is_not() -> Result<(), Box<dyn std::error::Error>> {
+        let t = Temp::new()?;
+        old_model(&t, b"abc")?;
+        let part = t.old().join("m").join("model.onnx.part");
+        put(&part, b"ab")?;
+        let long_ago = std::time::SystemTime::now() - std::time::Duration::from_secs(2 * 3600);
+        std::fs::OpenOptions::new().write(true).open(&part)?.set_modified(long_ago)?;
+        let report = go(&t.shared(), &t.kinds(Some(ABC)));
+        assert!(report.failed.is_empty(), "{report:?}");
+        assert!(report.done.iter().any(|l| l.contains("stale")), "{report:?}");
+        assert_eq!(std::fs::read(t.shared().join("m").join("model.onnx"))?, b"abc");
+        assert!(!t.old().join("m").exists(), "the model folder goes with its stale part");
+        Ok(())
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn both_kinds_are_scanned_in_the_folders_given_under_a_home_folder() -> Result<(), Box<dyn std::error::Error>> {
+        let t = Temp::new()?;
+        let faces = t.0.join("config").join("models");
+        let denoise = t.0.join("config").join("denoise-models");
+        let face_id = lightcraft_faces::known::all().remove(0).id;
+        // (the build's known denoise models: none without the `denoise` model features)
+        let denoise_id = lightcraft_denoise_core::known::all().into_iter().next().map(|k| k.manifest.id);
+        // wrong bytes: they are found and checked, and left alone, so no real model is needed
+        put(&faces.join(&face_id).join("model.onnx"), b"not the model")?;
+        if let Some(id) = &denoise_id {
+            put(&denoise.join(id).join("model.onnx"), b"not the model")?;
+        }
+        let home = t.0.join("home");
+        let report = migrate_old_models_in(&Activity::default(), Some(home.clone().into_os_string()), Some(&faces), Some(&denoise));
+        assert!(report.failed.iter().any(|l| l.contains(&face_id) && l.contains("not the published")), "{report:?}");
+        if let Some(id) = &denoise_id {
+            assert!(report.failed.iter().any(|l| l.contains(id.as_str()) && l.contains("not the published")), "{report:?}");
+            assert!(denoise.join(id).join("model.onnx").is_file());
+        }
+        assert!(faces.join(&face_id).join("model.onnx").is_file());
+        assert!(!home.exists(), "nothing was made in the home folder");
+        // a kind given as None is not looked at
+        let report = migrate_old_models_in(&Activity::default(), Some(home.into_os_string()), None, Some(&denoise));
+        assert!(report.failed.iter().all(|l| !l.contains(&face_id)), "{report:?}");
+        Ok(())
     }
 }

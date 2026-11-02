@@ -177,9 +177,15 @@ impl Session {
     }
 
     /// Keep face models in the shared default folder ([`default_face_models_dir`]).
-    pub fn with_default_face_models(mut self) -> Self {
-        self.face_models_dir = default_face_models_dir();
-        self.face_shared_dir = default_face_shared_dir();
+    pub fn with_default_face_models(self) -> Self {
+        self.with_face_models(default_face_models_dir(), default_face_shared_dir())
+    }
+
+    /// Keep face models in `old` (settings, catalog, staging and models from before) and `shared` (the folder shared
+    /// with the other ArtCraft apps, looked in first), [`Session::with_default_face_models`] with the folders given.
+    pub fn with_face_models(mut self, old: Option<PathBuf>, shared: Option<PathBuf>) -> Self {
+        self.face_models_dir = old;
+        self.face_shared_dir = shared;
         self
     }
 

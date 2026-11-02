@@ -115,3 +115,25 @@ fn a_denoise_model_is_looked_up_in_both_folders_and_a_new_one_goes_to_the_shared
     assert!(!old_home.exists());
     let _ = std::fs::remove_dir_all(&d);
 }
+
+#[test]
+fn a_session_built_with_the_two_face_folders_finds_a_model_that_is_only_in_the_shared_one() {
+    let d = temp("faces-built");
+    let f = d.join("Mine.onnx");
+    std::fs::write(&f, lightcraft_faces::synthetic::tiny_embedder_model(512)).unwrap();
+    let id =
+        face_session(&d).execute("faces.models.install", &json!({"path": f.to_string_lossy(), "acknowledged": true})).unwrap()["installed"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    assert!(!d.join("old").join(&id).exists(), "the model is only in the shared folder");
+    // the way the desktop app, the CLI and MCP build it (`with_default_face_models` passes the default folders here)
+    let mut s = Session::new().with_face_models(Some(d.join("old")), Some(d.join("shared")));
+    let l = s.execute("faces.models.list", &json!({})).unwrap();
+    assert_eq!(listed(&l, &id)["installed"], true);
+    assert_eq!(s.execute("faces.models.test", &json!({"id": id})).unwrap()["ok"], true);
+    // without the shared folder (what the desktop app did before) the model is "not installed"
+    let mut old_only = Session::new().with_face_models(Some(d.join("old")), None);
+    assert_eq!(listed(&old_only.execute("faces.models.list", &json!({})).unwrap(), &id)["installed"], Value::Null);
+    let _ = std::fs::remove_dir_all(&d);
+}
