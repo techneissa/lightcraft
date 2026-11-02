@@ -2376,5 +2376,8 @@
   "Tiles are kept for a week at least (as the tile server allows) so a place you looked at before opens without asking again.": "Os blocos ficam guardados por pelo menos uma semana (se o servidor permitir), então um lugar já visto abre sem pedir de novo.",
   "Privacy": "Privacidade",
   "Showing a map asks the tile server for the tiles of the area on screen, so the server sees which places you look at, with your IP address and LightCraft's name and version. Nothing is sent while no map is on screen, or when tiles are off.": "Mostrar um mapa pede ao servidor os blocos da área na tela, então o servidor vê quais lugares você olha, com seu endereço IP e o nome e a versão do LightCraft. Nada é enviado sem um mapa na tela ou com os blocos desativados.",
-  "About the map and its tiles (docs/map.md)": "Sobre o mapa e seus blocos (docs/map.md)"
+  "About the map and its tiles (docs/map.md)": "Sobre o mapa e seus blocos (docs/map.md)",
+  "Selecting with SAM 3": "Seleção com o SAM 3",
+  "Rough mask. Click to install SAM 3.": "Máscara aproximada. Clique para instalar o SAM 3.",
+  "Rough mask. Add it again to use SAM 3.": "Máscara aproximada. Adicione-a de novo para usar o SAM 3."
 }

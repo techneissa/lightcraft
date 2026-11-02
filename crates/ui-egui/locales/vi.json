@@ -2705,5 +2705,8 @@
   "The photo changed; calculate reflections again": "Ảnh đã thay đổi; hãy tính lại phản chiếu",
   "Reflections calculated; adjust Amount on the right": "Đã tính phản chiếu; chỉnh Số Lượng ở bên phải",
   "Recalculate": "Tính Lại",
-  "Reflection removal failed": "Xóa phản chiếu thất bại"
+  "Reflection removal failed": "Xóa phản chiếu thất bại",
+  "Selecting with SAM 3": "Đang chọn bằng SAM 3",
+  "Rough mask. Click to install SAM 3.": "Mặt nạ gần đúng. Nhấp để cài SAM 3.",
+  "Rough mask. Add it again to use SAM 3.": "Mặt nạ gần đúng. Thêm lại để dùng SAM 3."
 }

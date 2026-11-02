@@ -2480,5 +2480,8 @@
   "The photo changed; calculate reflections again": "Bilden har ändrats; beräkna reflexerna igen",
   "Reflections calculated; adjust Amount on the right": "Reflexerna är beräknade; justera Mängd till höger",
   "Recalculate": "Beräkna om",
-  "Reflection removal failed": "Borttagningen av reflexer misslyckades"
+  "Reflection removal failed": "Borttagningen av reflexer misslyckades",
+  "Selecting with SAM 3": "Markering med SAM 3",
+  "Rough mask. Click to install SAM 3.": "Grov mask. Klicka för att installera SAM 3.",
+  "Rough mask. Add it again to use SAM 3.": "Grov mask. Lägg till den igen för att använda SAM 3."
 }

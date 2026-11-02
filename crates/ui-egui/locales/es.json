@@ -2531,5 +2531,8 @@
   "Tiles are kept for a week at least (as the tile server allows) so a place you looked at before opens without asking again.": "Las teselas se guardan al menos una semana (si el servidor lo permite), así un lugar que ya viste se abre sin volver a pedirlas.",
   "Privacy": "Privacidad",
   "Showing a map asks the tile server for the tiles of the area on screen, so the server sees which places you look at, with your IP address and LightCraft's name and version. Nothing is sent while no map is on screen, or when tiles are off.": "Mostrar un mapa pide al servidor las teselas de la zona en pantalla, así que el servidor ve qué lugares miras, con tu dirección IP y el nombre y la versión de LightCraft. No se envía nada si no hay un mapa en pantalla o si las teselas están desactivadas.",
-  "About the map and its tiles (docs/map.md)": "Acerca del mapa y sus teselas (docs/map.md)"
+  "About the map and its tiles (docs/map.md)": "Acerca del mapa y sus teselas (docs/map.md)",
+  "Selecting with SAM 3": "Selección con SAM 3",
+  "Rough mask. Click to install SAM 3.": "Máscara aproximada. Haz clic para instalar SAM 3.",
+  "Rough mask. Add it again to use SAM 3.": "Máscara aproximada. Vuelve a añadirla para usar SAM 3."
 }

@@ -3713,5 +3713,8 @@
   "Tiles are kept for a week at least (as the tile server allows) so a place you looked at before opens without asking again.": "Les tuiles sont gardées au moins une semaine (si le serveur le permet) : un lieu déjà consulté s'ouvre sans nouvelle demande.",
   "Privacy": "Confidentialité",
   "Showing a map asks the tile server for the tiles of the area on screen, so the server sees which places you look at, with your IP address and LightCraft's name and version. Nothing is sent while no map is on screen, or when tiles are off.": "Afficher une carte demande au serveur les tuiles de la zone à l'écran : il voit donc les lieux que vous regardez, avec votre adresse IP et le nom et la version de LightCraft. Rien n'est envoyé sans carte à l'écran, ni quand les tuiles sont désactivées.",
-  "About the map and its tiles (docs/map.md)": "À propos de la carte et de ses tuiles (docs/map.md)"
+  "About the map and its tiles (docs/map.md)": "À propos de la carte et de ses tuiles (docs/map.md)",
+  "Selecting with SAM 3": "Sélection avec SAM 3",
+  "Rough mask. Click to install SAM 3.": "Masque approximatif. Cliquez pour installer SAM 3.",
+  "Rough mask. Add it again to use SAM 3.": "Masque approximatif. Ajoutez-le de nouveau pour utiliser SAM 3."
 }

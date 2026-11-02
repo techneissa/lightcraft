@@ -2697,5 +2697,8 @@
   "Tiles are kept for a week at least (as the tile server allows) so a place you looked at before opens without asking again.": "I riquadri vengono conservati almeno una settimana (se il server lo consente), così un luogo già visto si apre senza chiederlo di nuovo.",
   "Privacy": "Privacy",
   "Showing a map asks the tile server for the tiles of the area on screen, so the server sees which places you look at, with your IP address and LightCraft's name and version. Nothing is sent while no map is on screen, or when tiles are off.": "Mostrare una mappa chiede al server i riquadri dell'area sullo schermo, quindi il server vede quali luoghi guardi, con il tuo indirizzo IP e il nome e la versione di LightCraft. Non viene inviato nulla quando non c'è una mappa sullo schermo o i riquadri sono disattivati.",
-  "About the map and its tiles (docs/map.md)": "Informazioni sulla mappa e i suoi riquadri (docs/map.md)"
+  "About the map and its tiles (docs/map.md)": "Informazioni sulla mappa e i suoi riquadri (docs/map.md)",
+  "Selecting with SAM 3": "Selezione con SAM 3",
+  "Rough mask. Click to install SAM 3.": "Maschera approssimativa. Fai clic per installare SAM 3.",
+  "Rough mask. Add it again to use SAM 3.": "Maschera approssimativa. Aggiungila di nuovo per usare SAM 3."
 }

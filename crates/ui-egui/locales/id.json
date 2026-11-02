@@ -2391,5 +2391,8 @@
   "The photo changed; calculate reflections again": "Foto berubah; hitung pantulan lagi",
   "Reflections calculated; adjust Amount on the right": "Pantulan dihitung; atur Jumlah di sebelah kanan",
   "Recalculate": "Hitung Ulang",
-  "Reflection removal failed": "Penghapusan pantulan gagal"
+  "Reflection removal failed": "Penghapusan pantulan gagal",
+  "Selecting with SAM 3": "Memilih dengan SAM 3",
+  "Rough mask. Click to install SAM 3.": "Mask kasar. Klik untuk memasang SAM 3.",
+  "Rough mask. Add it again to use SAM 3.": "Mask kasar. Tambahkan lagi untuk memakai SAM 3."
 }

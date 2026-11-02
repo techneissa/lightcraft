@@ -3793,5 +3793,8 @@
   "Tiles are kept for a week at least (as the tile server allows) so a place you looked at before opens without asking again.": "ფილები სულ მცირე ერთი კვირა ინახება (რამდენადაც ფილების სერვერი იძლევა უფლებას), რომ ადრე ნანახი ადგილი ხელახალი მოთხოვნის გარეშე გაიხსნას.",
   "Privacy": "კონფიდენციალურობა",
   "Showing a map asks the tile server for the tiles of the area on screen, so the server sees which places you look at, with your IP address and LightCraft's name and version. Nothing is sent while no map is on screen, or when tiles are off.": "რუკის ჩვენებისას ფილების სერვერს ეკრანზე ნაჩვენები არეალის ფილები მოეთხოვება, ამიტომ სერვერი ხედავს, რომელ ადგილებს უყურებთ, თქვენს IP მისამართთან და LightCraft-ის სახელთან და ვერსიასთან ერთად. როცა ეკრანზე რუკა არ არის ან ფილები გამორთულია, არაფერი იგზავნება.",
-  "About the map and its tiles (docs/map.md)": "რუკისა და მისი ფილების შესახებ (docs/map.md)"
+  "About the map and its tiles (docs/map.md)": "რუკისა და მისი ფილების შესახებ (docs/map.md)",
+  "Selecting with SAM 3": "არჩევა SAM 3-ით",
+  "Rough mask. Click to install SAM 3.": "უხეში ნიღაბი. დააწკაპუნეთ SAM 3-ის დასაყენებლად.",
+  "Rough mask. Add it again to use SAM 3.": "უხეში ნიღაბი. დაამატეთ ხელახლა SAM 3-ის გამოსაყენებლად."
 }

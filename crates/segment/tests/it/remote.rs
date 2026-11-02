@@ -13,6 +13,8 @@ fn validates_images_and_prompt_boundaries() {
     assert!(request(1009, 1, Operation::Prepare).validate().is_err());
     assert!(request(0, 1, Operation::Prepare).validate().is_err());
     assert!(request(0, 0, Operation::Text("dog".into())).validate().is_ok());
+    assert!(request(0, 0, Operation::Concept("sky".into(), false)).validate().is_ok());
+    assert!(request(0, 0, Operation::Concept(" ".into(), true)).validate().is_err());
     assert!(request(4, 3, Operation::Clicks(vec![[0.5, 0.5, 1.0]])).validate().is_ok());
     assert!(request(4, 3, Operation::Clicks(vec![[1.5, 0.5, 1.0]])).validate().is_err());
     assert!(request(4, 3, Operation::Clicks(vec![[0.5, f32::NAN, 1.0]])).validate().is_err());

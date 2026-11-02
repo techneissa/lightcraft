@@ -2737,5 +2737,8 @@
   "Tiles are kept for a week at least (as the tile server allows) so a place you looked at before opens without asking again.": "Фрагменты хранятся не меньше недели (если сервер позволяет), поэтому уже просмотренное место открывается без нового запроса.",
   "Privacy": "Конфиденциальность",
   "Showing a map asks the tile server for the tiles of the area on screen, so the server sees which places you look at, with your IP address and LightCraft's name and version. Nothing is sent while no map is on screen, or when tiles are off.": "Показ карты запрашивает у сервера фрагменты видимой области, поэтому сервер видит, какие места вы смотрите, вместе с вашим IP-адресом, названием и версией LightCraft. Когда карты нет на экране или фрагменты отключены, ничего не отправляется.",
-  "About the map and its tiles (docs/map.md)": "О карте и её фрагментах (docs/map.md)"
+  "About the map and its tiles (docs/map.md)": "О карте и её фрагментах (docs/map.md)",
+  "Selecting with SAM 3": "Выделение с помощью SAM 3",
+  "Rough mask. Click to install SAM 3.": "Приблизительная маска. Нажмите, чтобы установить SAM 3.",
+  "Rough mask. Add it again to use SAM 3.": "Приблизительная маска. Добавьте её снова, чтобы использовать SAM 3."
 }

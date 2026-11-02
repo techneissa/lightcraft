@@ -2377,5 +2377,8 @@
   "The photo changed; calculate reflections again": "Kuva muuttui; laske heijastukset uudelleen",
   "Reflections calculated; adjust Amount on the right": "Heijastukset laskettu; säädä määrää oikealla",
   "Recalculate": "Laske uudelleen",
-  "Reflection removal failed": "Heijastusten poisto epäonnistui"
+  "Reflection removal failed": "Heijastusten poisto epäonnistui",
+  "Selecting with SAM 3": "Valinta SAM 3:lla",
+  "Rough mask. Click to install SAM 3.": "Karkea maski. Asenna SAM 3 napsauttamalla.",
+  "Rough mask. Add it again to use SAM 3.": "Karkea maski. Lisää se uudelleen käyttääksesi SAM 3:a."
 }
