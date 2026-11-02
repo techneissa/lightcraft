@@ -79,6 +79,7 @@ pub mod print_color;
 pub mod print_pdf;
 pub mod profile_refs;
 pub mod proof;
+pub mod reflections;
 pub mod rename;
 pub mod rename_job;
 pub mod segment;

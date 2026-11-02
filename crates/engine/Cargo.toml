@@ -55,6 +55,7 @@ lightcraft-lama = { workspace = true }
 chrono = { workspace = true }
 # Delete Permanently can move the files to the system Trash (no Trash in the browser)
 trash = { workspace = true }
+lightcraft-reflections = { workspace = true }
 
 [[example]]
 name = "birefnet_compare"
