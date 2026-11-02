@@ -213,6 +213,9 @@ fn sync_choose(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
             Picked::Unavailable => return Err(format!("{id}: there is no folder dialog on this platform; give `path`")),
         },
     };
+    if !Path::new(&path).is_absolute() {
+        return Err(format!("{id}: `path` must be the folder's full path"));
+    }
     choose_folder(app, &path)?;
     Ok(json!({"folder": path}))
 }

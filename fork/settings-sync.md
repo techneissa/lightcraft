@@ -30,7 +30,7 @@ Settings ▸ Sync (a new tab) has:
 - `settings.export {path?}`, `settings.import {path?, text?, dryRun?, prompt?}`, `settings.syncSave`, `settings.syncLoad {dryRun?, prompt?}`, `settings.syncChoose {path?}`.
 - By a person without parameters: Export and Import ask for the file (`pick`), Save writes at once, Load shows the prompt, Choose asks for a folder. With parameters the command does the work without the prompt (`prompt: true` shows it; the file dialogs' answers come back that way).
 - **Agents** (the control channel and MCP): no command takes a path; `settings.export` replies `{document}` instead of writing a file, `settings.import` takes `text` and applies at once (`dryRun` only reports), `settings.syncSave` / `syncLoad` use the folder the user chose, and `settings.syncChoose` is refused. `ui.set` refuses the `sync` key, so an agent can't change the folder, Keep in Sync or the last-saved time.
-- The reply of an import (also with `dryRun`) has `applied`, `parts`, `settings`, `presets`, `skipped` (notes), `unknown` (the names, at most 200) and `unknownCount`.
+- The reply of an import (also with `dryRun`) has `applied`, `parts`, `settings`, `presets`, `fileVersion` (set when the file is newer than this build), `skipped` (notes), `unknown` (the names, at most 200) and `unknownCount`.
 
 Desktop only (macOS in this fork): the engine module and the commands are not built for the web; the Sync tab says so there.
 

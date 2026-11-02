@@ -238,7 +238,7 @@ fn a_file_from_a_newer_lightcraft_imports_what_this_build_knows_and_names_the_re
         assert!(unknown.contains(&name), "{name} not named in {unknown:?}");
     }
     assert_eq!(r["unknownCount"], unknown.len());
-    assert!(r["skipped"].as_array().unwrap().iter().any(|n| n.as_str().unwrap().contains("newer LightCraft")), "{r}");
+    assert_eq!(r["fileVersion"], 2, "{r}");
     let _ = std::fs::remove_dir_all(&home);
 }
 
@@ -474,6 +474,9 @@ fn choosing_a_folder_tells_the_other_artcraft_apps_and_keeps_their_keys() {
     assert_eq!(doc["path"], sync.to_string_lossy().as_ref());
     assert_eq!(doc["photocraft"], json!({"keep": true}));
     assert_eq!(app.ui.sync.last, "", "another folder holds another file");
+    // a folder is given by its full path
+    assert!(app.run("settings.syncChoose", json!({"path": "relative/folder"})).unwrap_err().contains("full path"));
+    assert_eq!(app.ui.sync.folder, sync.to_string_lossy());
     // a Mac with none chosen yet is offered the folder the file names
     let fresh = app_on("B", &home);
     assert_eq!(super::run::offered_folder(&fresh).as_deref(), Some(&*sync.to_string_lossy()));

@@ -27,6 +27,8 @@ pub struct Plan {
     pub settings: Map<String, Value>,
     /// User presets the file adds.
     pub presets: Vec<lightcraft_develop::Preset>,
+    /// The file's version when it is newer than this build's (what it understands was taken).
+    pub newer: Option<u64>,
     /// The parts of the file that were read (`ui`, `presets`).
     pub parts: Vec<&'static str>,
     /// What was skipped or left out, one line each.
@@ -46,6 +48,7 @@ impl Plan {
             "parts": self.parts,
             "settings": self.ui.len() + self.settings.len(),
             "presets": self.presets.len(),
+            "fileVersion": self.newer,
             "skipped": self.notes,
             "unknown": self.unknown,
             "unknownCount": self.unknown_total,
@@ -197,9 +200,7 @@ pub fn plan(text: &str, with_presets: bool) -> Result<Plan, String> {
         }
     };
     if version > VERSION {
-        plan.note(format!(
-            "This file was made by a newer LightCraft (file version {version}; this one reads up to {VERSION}); what it understands was taken"
-        ));
+        plan.newer = Some(version);
     }
     for key in file.keys().filter(|k| !matches!(k.as_str(), "kind" | "version" | "app" | "savedBy" | "ui" | "presets")) {
         plan.unknown(key);
