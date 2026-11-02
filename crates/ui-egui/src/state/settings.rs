@@ -227,6 +227,10 @@ pub struct AppSettings {
     /// (`panels::topbar_items`).
     #[serde(deserialize_with = "crate::panels::topbar_items::read_saved", skip_serializing_if = "Vec::is_empty")]
     pub top_bar_hidden: Vec<String>,
+    /// The Keyboard Shortcuts window's size (points) as the user left it; `None` = opens at the
+    /// default (fork feature `feat/49-shortcuts-window`).
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    pub shortcuts_window_size: Option<[f32; 2]>,
 }
 
 /// Where File ▸ Import Lightroom Catalog… puts a catalog (Settings ▸ General ▸ Library). Saved as
@@ -287,6 +291,7 @@ impl Default for AppSettings {
             photo_menu: None,
             photo_menu_presets: Default::default(),
             top_bar_hidden: Vec::new(),
+            shortcuts_window_size: None,
         }
     }
 }

@@ -113,6 +113,7 @@ mod selection_model;
 mod shortcut_backup;
 mod shortcut_editing;
 mod shortcut_when;
+mod shortcuts_window;
 mod sidecar_queue;
 mod slider_reset;
 mod slideshow;
