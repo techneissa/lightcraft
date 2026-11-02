@@ -19,6 +19,16 @@ impl Session {
     }
 }
 
+impl Session {
+    /// After an undo or redo: a selected part that no longer exists is forgotten, so a later redo cannot make its index
+    /// valid for another part.
+    pub(crate) fn reconcile_part(&mut self) {
+        if self.active_component.is_some() && self.active_part().is_none() {
+            self.active_component = None;
+        }
+    }
+}
+
 /// `key` of `p` as an index: omitted or null is `None`, anything but a non-negative integer is an error.
 fn index_param(p: &Value, key: &str, c: &str) -> Result<Option<usize>> {
     p.get(key)

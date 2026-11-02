@@ -92,6 +92,9 @@ fn the_mask_menu_adds_a_submask_in_each_mode() {
         );
         assert!(ok, "{menu} {kind}: {:?}", last.shape);
         assert_eq!(h.app.session.active_part(), Some(before), "the new submask is selected");
+        if kind == "linear" {
+            assert_eq!(h.app.ui.tool, "linear", "a gradient added from the menu starts its tool");
+        }
         // one undo step takes it away again
         exec(&mut h, "edit.undo", json!({}));
         assert_eq!(masks(&h)[0].components.len(), before);
@@ -163,4 +166,91 @@ fn several_submasks_are_selected_and_changed_together() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     assert_eq!(masks(&h)[0].components.len(), 4);
+}
+
+fn four_part_mask(h: &mut Headless) {
+    exec(h, "mask.add", json!({"kind": "radial"}));
+    for op in ["subtract", "add", "add"] {
+        exec(h, "mask.addComponent", json!({"kind": "linear", "op": op}));
+    }
+    h.settle(SETTLE);
+}
+
+fn chosen(h: &Headless) -> Vec<usize> {
+    let m = &masks(h)[0];
+    super::super::panels::mask_menus::selected_parts(&h.app, m.id, m.components.len())
+}
+
+fn press_delete(h: &mut Headless) {
+    let r = h.request("ui.key", json!({"key": "Delete"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+}
+
+/// Review repro 1: a row deleted with its trash button moves the indexes; Delete then takes the one submask that is
+/// selected, never the rows the old selection named.
+#[test]
+fn a_stale_selection_is_not_deleted_after_another_row_goes() {
+    let mut h = masking();
+    four_part_mask(&mut h);
+    click(&mut h, "component:1");
+    modified_click(&mut h, 2, true, false);
+    assert_eq!(chosen(&h), [1, 2]);
+    click(&mut h, "partDelete:3");
+    assert_eq!(masks(&h)[0].components.len(), 3);
+    assert_eq!(chosen(&h), [2], "the selection fell back to the engine's one submask");
+    press_delete(&mut h);
+    assert_eq!(masks(&h)[0].components.len(), 2, "only the selected submask went");
+}
+
+/// Review repro 2: another photo with a mask of the same id and the same selected index does not inherit the set.
+#[test]
+fn a_selection_does_not_follow_to_another_photo() {
+    let mut h = masking();
+    four_part_mask(&mut h);
+    click(&mut h, "component:0");
+    modified_click(&mut h, 1, true, false);
+    assert_eq!(chosen(&h), [0, 1]);
+    let active = h.app.session.active();
+    let other = h.app.session.visible().iter().copied().find(|p| Some(*p) != active).expect("another photo");
+    exec(&mut h, "library.select", json!({"ids": [other.0]}));
+    h.settle(SETTLE);
+    four_part_mask(&mut h);
+    let id = masks(&h)[0].id;
+    exec(&mut h, "mask.select", json!({"id": id, "component": 1}));
+    h.settle(SETTLE);
+    assert_eq!(chosen(&h), [1]);
+    press_delete(&mut h);
+    assert_eq!(masks(&h)[0].components.len(), 3);
+}
+
+/// A click on the empty space under the submask list goes back to one submask.
+#[test]
+fn a_click_on_empty_space_goes_back_to_one_submask() {
+    let mut h = masking();
+    four_part_mask(&mut h);
+    click(&mut h, "component:0");
+    modified_click(&mut h, 2, true, false);
+    assert_eq!(chosen(&h), [0, 2]);
+    click(&mut h, "partsEmpty");
+    assert_eq!(chosen(&h), [2]);
+}
+
+/// Undo takes a duplicated submask away; the selection never points at a row that is not there.
+#[test]
+fn undo_leaves_no_stale_selection() {
+    let mut h = masking();
+    four_part_mask(&mut h);
+    click(&mut h, "component:3");
+    modified_click(&mut h, 2, true, false);
+    right_click(&mut h, "component:2", 0.2);
+    click(&mut h, "partMenu:duplicate");
+    assert_eq!(masks(&h)[0].components.len(), 6);
+    exec(&mut h, "edit.undo", json!({}));
+    h.step();
+    assert_eq!(masks(&h)[0].components.len(), 4);
+    assert!(h.app.session.active_part().is_none());
+    assert!(chosen(&h).is_empty());
+    press_delete(&mut h);
+    assert!(masks(&h).is_empty(), "with no submask selected, Delete takes the mask, not a row");
 }

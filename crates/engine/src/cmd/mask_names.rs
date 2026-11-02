@@ -45,20 +45,9 @@ pub fn kind_of(shape: &MaskShape) -> &'static str {
     }
 }
 
-/// What a kind of part is called in a submask's name: the words of the panel's buttons.
-fn part_label(shape: &MaskShape) -> &'static str {
-    match shape {
-        MaskShape::Linear { .. } => "Linear Gradient",
-        MaskShape::Radial { .. } => "Radial Gradient",
-        MaskShape::ColorRange { .. } => "Color Range",
-        MaskShape::LuminanceRange { .. } => "Luminance Range",
-        MaskShape::DepthRange { .. } => "Depth Range",
-        s => label(kind_of(s)),
-    }
-}
-
 /// The name part `k` of `mask` is shown by (issue #61): the user's own name when it has one, else "<Kind> Submask
-/// <n>" with n counted per kind inside the mask ("Subject Submask 1", "Brush Submask 2"); a Describe part keeps its
+/// <n>" with n counted per kind inside the mask ("Subject Submask 1", "Brush Submask 2"; Linear, Radial, Luminance, Color
+/// for the longer kinds, so a name fits its row); a Describe part keeps its
 /// words (“red car” Submask). Worked out when shown, never stored, so parts saved earlier read the same way and a
 /// photo is written only when a part is renamed.
 pub fn submask_name(mask: &Mask, k: usize) -> String {
@@ -71,7 +60,7 @@ pub fn submask_name(mask: &Mask, k: usize) -> String {
     }
     let kind = std::mem::discriminant(&c.shape);
     let n = mask.components.iter().take(k + 1).filter(|o| std::mem::discriminant(&o.shape) == kind).count();
-    format!("{} Submask {n}", part_label(&c.shape))
+    format!("{} Submask {n}", label(kind_of(&c.shape)))
 }
 
 /// The name for a new mask of `kind` among `masks`.
@@ -165,11 +154,11 @@ mod tests {
             let m = s.develop_of(s.active().unwrap()).unwrap().masks[0].clone();
             (0..m.components.len()).map(|k| super::submask_name(&m, k)).collect::<Vec<_>>()
         };
-        let want = ["Subject Submask 1", "Brush Submask 1", "Luminance Range Submask 1", "Brush Submask 2", "Linear Gradient Submask 1"];
+        let want = ["Subject Submask 1", "Brush Submask 1", "Luminance Submask 1", "Brush Submask 2", "Linear Submask 1"];
         assert_eq!(shown(&s), want);
         // a user's name stays, and does not change the count of its kind
         s.execute("mask.component", &json!({"component": 1, "action": "rename", "name": "Hair"})).unwrap();
-        assert_eq!(shown(&s), ["Subject Submask 1", "Hair", "Luminance Range Submask 1", "Brush Submask 2", "Linear Gradient Submask 1"]);
+        assert_eq!(shown(&s), ["Subject Submask 1", "Hair", "Luminance Submask 1", "Brush Submask 2", "Linear Submask 1"]);
         // nothing was written for the others
         let d = s.develop_of(s.active().unwrap()).unwrap();
         assert!(d.masks[0].components.iter().enumerate().all(|(k, c)| (k == 1) == c.name.is_some()));

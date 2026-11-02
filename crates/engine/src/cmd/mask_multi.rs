@@ -59,6 +59,14 @@ pub(super) fn component(s: &mut Session, p: &Value) -> Result<Value> {
     if action == "rename" && ks.len() > 1 {
         return Err(bad(c, "rename takes one part"));
     }
+    if action == "op" {
+        // a mode a part already has changes nothing, and makes no undo step
+        let op = op.ok_or_else(|| bad(c, "missing op"))?;
+        let comps = s.active().and_then(|id| s.develop_of(id)).and_then(|d| d.masks.iter().find(|m| m.id == mid).map(|m| m.components.clone()));
+        if comps.is_some_and(|comps| ks.iter().all(|k| comps.get(*k).is_some_and(|c| c.op == super::mask_parts::mode_for(*k, op)))) {
+            return Ok(json!({"activeMask": s.active_mask}));
+        }
+    }
     let new_mask = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
     let selected = s.active_component.filter(|(m, _)| *m == mid).map(|(_, j)| j);
     let mut created: Vec<usize> = Vec::new();
@@ -148,13 +156,27 @@ fn selects_something(c: &MaskComponent) -> bool {
     }
 }
 
-/// Whether mask `m` selects nothing: no parts, or none of its Add parts (the base is one) selects anything. An
+/// Whether mask `m` selects nothing: no parts, or the parts, combined in order as the render does, leave nothing. An
 /// inverted mask selects everything it does not, so it is never empty.
 pub fn is_empty(m: &Mask) -> bool {
     if m.invert {
         return false;
     }
-    !m.components.iter().enumerate().any(|(k, c)| (k == 0 || c.op == MaskOp::Add) && selects_something(c))
+    // the base sets the state, Add joins in, Intersect with nothing clears it, Subtract never fills an empty mask
+    let mut selects = false;
+    for (k, c) in m.components.iter().enumerate() {
+        let part = selects_something(c);
+        if k == 0 {
+            selects = part;
+        } else {
+            match c.op {
+                MaskOp::Add => selects |= part,
+                MaskOp::Intersect => selects &= part,
+                MaskOp::Subtract => {}
+            }
+        }
+    }
+    !selects
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -351,5 +373,51 @@ mod tests {
         let m = &masks(&s)[0];
         assert_eq!(m.components[1].op, MaskOp::Intersect);
         assert!(matches!(&m.components[1].shape, MaskShape::Brush { strokes } if strokes.len() == 1));
+    }
+
+    /// Delete Empty folds the parts in order: a Radial base with an unpainted Intersect Brush selects nothing.
+    #[test]
+    fn a_mask_whose_intersect_part_selects_nothing_is_empty() {
+        let mut s = Session::with_demo();
+        s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+        s.execute("mask.addComponent", &json!({"kind": "brush", "op": "intersect"})).unwrap();
+        s.execute("mask.add", &json!({"kind": "radial"})).unwrap();
+        s.execute("mask.addComponent", &json!({"kind": "brush", "op": "subtract"})).unwrap();
+        let out = s.execute("mask.deleteEmpty", &json!({})).unwrap();
+        assert_eq!(out["deleted"], 1);
+        assert_eq!(masks(&s).len(), 1, "a subtract part never empties a mask");
+        assert_eq!(masks(&s)[0].components.len(), 2);
+    }
+
+    /// A mode the part already has is no change and no undo step.
+    #[test]
+    fn setting_the_mode_a_part_has_does_nothing() {
+        let steps = |s: &mut Session| {
+            let mut n = 0;
+            while s.execute("edit.undo", &json!({})).is_ok() {
+                n += 1;
+            }
+            n
+        };
+        let mut s = four_parts();
+        // the base is always Add and part 1 already is Subtract
+        s.execute("mask.component", &json!({"components": [0, 1], "action": "op", "op": "subtract"})).unwrap();
+        let mut t = four_parts();
+        assert_eq!(steps(&mut s), steps(&mut t), "no step was added");
+    }
+
+    /// After undo and redo the selected part is a valid part or none: never a stale index that a later redo makes valid
+    /// again for another part.
+    #[test]
+    fn undo_and_redo_clear_a_selected_part_that_no_longer_exists() {
+        let mut s = four_parts();
+        let id = masks(&s)[0].id;
+        s.execute("mask.select", &json!({"id": id, "component": 3})).unwrap();
+        s.execute("mask.component", &json!({"component": 0, "action": "duplicate"})).unwrap();
+        assert_eq!(s.active_part(), Some(4));
+        s.execute("edit.undo", &json!({})).unwrap();
+        assert_eq!(s.active_part(), None, "index 4 does not exist any more");
+        s.execute("edit.redo", &json!({})).unwrap();
+        assert_eq!(s.active_part(), None, "and does not come back as another part");
     }
 }

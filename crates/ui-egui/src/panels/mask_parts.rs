@@ -137,8 +137,8 @@ pub fn collapse_selection(app: &mut LightcraftApp) -> bool {
     if app.ui.right != crate::state::RightPanel::Masking {
         return false;
     }
-    let Some(k) = app.session.active_part().filter(|_| chosen_parts(app).len() > 1) else { return false };
-    app.ui.mask_ui.parts = vec![k];
+    let Some((mid, k)) = app.session.active_mask.zip(app.session.active_part()).filter(|_| chosen_parts(app).len() > 1) else { return false };
+    super::mask_menus::remember(app, mid, vec![k]);
     true
 }
 
@@ -236,6 +236,27 @@ pub(super) fn add_part(app: &mut LightcraftApp, ctx: &egui::Context, kind: &str,
     }
 }
 
+/// A submask just added from a menu starts its tool as picking its row would (a gradient its handles, a colour range
+/// the picker): the Brush and Object start theirs when they are added.
+pub(super) fn start_tool(app: &mut LightcraftApp, mask: u32, kind: &str) {
+    if !matches!(kind, "linear" | "radial" | "colorRange" | "luminanceRange") {
+        return;
+    }
+    let last = app
+        .session
+        .active()
+        .and_then(|id| app.session.develop_of(id))
+        .and_then(|d| d.masks.iter().find(|m| m.id == mask).map(|m| m.components.len()));
+    let shape = app
+        .session
+        .active()
+        .and_then(|id| app.session.develop_of(id))
+        .and_then(|d| d.masks.iter().find(|m| m.id == mask).and_then(|m| m.components.last().map(|c| c.shape.clone())));
+    if let Some((k, shape)) = last.and_then(|n| n.checked_sub(1)).zip(shape) {
+        pick_part(app, mask, k, &shape);
+    }
+}
+
 /// The tool a part brings back when it is picked: a brush part the Brush, a gradient its handles on the photo (the
 /// default tool drags them), a colour range the picker, an Object selection its clicks; the others their own
 /// controls in the panel.
@@ -284,6 +305,11 @@ pub fn part_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask) {
     let selected = app.session.active_part();
     let chosen = super::mask_menus::selected_parts(app, m.id, m.components.len());
     ui.spacing_mut().item_spacing.y = 2.0;
+    // one text size for every row: the largest (down to a little smaller) at which all the names fit
+    let room_of = |i: usize| (ui.available_width() - 28.0 - (BUTTON_W * 2.0 + if i > 0 { MODE_W } else { 0.0 } + 8.0)).max(0.0);
+    let names: Vec<String> = (0..m.components.len()).map(|i| lightcraft_engine::cmd::mask_names::submask_name(m, i)).collect();
+    let rows: Vec<(&str, f32)> = names.iter().enumerate().map(|(i, n)| (n.as_str(), room_of(i))).collect();
+    let size = super::mask_name::common_size(ui.painter(), &rows, &t.font(13.0), super::mask_name::LIST_FLOOR);
     for (i, c) in m.components.iter().enumerate() {
         let (_, icon) = kind_label(&c.shape);
         let label = lightcraft_engine::cmd::mask_names::submask_name(m, i);
@@ -311,7 +337,7 @@ pub fn part_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask) {
         );
         paint(ui.painter(), Rect::from_min_size(r.min + vec2(6.0, (ROW_H - 16.0) / 2.0), vec2(16.0, 16.0)), icon, t.text_label);
         let room = BUTTON_W * 2.0 + if i > 0 { MODE_W } else { 0.0 } + 8.0;
-        let g = super::mask_name::fit(ui.painter(), &label, t.font(13.0), t.text, (r.width() - 28.0 - room).max(0.0));
+        let g = crate::widgets::one_line(ui.painter(), &label, egui::FontId { size, ..t.font(13.0) }, t.text, (r.width() - 28.0 - room).max(0.0));
         let elided = g.elided;
         ui.painter().galley(egui::pos2(r.left() + 28.0, r.center().y - g.size().y / 2.0), g, t.text);
         // (an AI part says which model made it)
@@ -336,6 +362,12 @@ pub fn part_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask) {
             super::mask_menus::part_menu(app, ui, m, &targets);
         });
         range_controls(app, ui, i, &c.shape);
+    }
+    // a click on the empty space under the list goes back to one submask, as Esc does
+    let (rest, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 10.0), Sense::click());
+    register(ui, "partsEmpty", rest);
+    if resp.clicked() {
+        collapse_selection(app);
     }
 }
 
@@ -423,18 +455,19 @@ fn part_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask, i: usize, 
         draw(ui.painter(), br, if resp.hovered() || active { t.text } else { dim });
         resp
     };
-    if button(ui, format!("partDelete:{i}"), "Delete submask", "Delete Submask", BUTTON_W, false, &|p, br, col| {
+    if button(ui, format!("partDelete:{i}"), "Delete Submask", "Delete Submask", BUTTON_W, false, &|p, br, col| {
         paint(p, br.shrink(3.0), Icon::Trash, col)
     })
     .clicked()
     {
         let _ = app.run("mask.component", json!({"id": m.id, "component": i, "action": "delete"}));
+        app.ui.mask_ui.parts.clear();
         used = true;
     }
     if button(
         ui,
         format!("partInvert:{i}"),
-        "Invert submask",
+        "Invert Submask",
         if c.invert { "Stop Inverting Submask" } else { "Invert Submask" },
         BUTTON_W,
         c.invert,
@@ -447,7 +480,7 @@ fn part_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask, i: usize, 
     }
     if i > 0 {
         let now = part_mode(m, i);
-        let dropdown = button(ui, format!("partMode:{i}"), "Submask mode", "Change Submask Mode", MODE_W, false, &|p, br, col| {
+        let dropdown = button(ui, format!("partMode:{i}"), "Submask Mode", "Change Submask Mode", MODE_W, false, &|p, br, col| {
             paint_mode(p, Rect::from_min_size(br.min, vec2(22.0, br.height())), now, col);
             paint(p, Rect::from_center_size(egui::pos2(br.right() - 8.0, br.center().y), vec2(10.0, 10.0)), Icon::ChevronDown, col);
         });
@@ -493,14 +526,13 @@ fn click_part(app: &mut LightcraftApp, m: &Mask, k: usize, mods: egui::Modifiers
                 Some(last) => super::mask_menus::select_parts(app, m.id, parts, last),
                 None => {
                     let _ = app.run("mask.select", json!({"id": m.id}));
-                    app.ui.mask_ui.parts.clear();
+                    super::mask_menus::remember(app, m.id, Vec::new());
                 }
             }
         } else {
             parts.push(k);
             pick_part(app, m.id, k, shape);
-            app.ui.mask_ui.mask = m.id;
-            app.ui.mask_ui.parts = parts;
+            super::mask_menus::remember(app, m.id, parts);
         }
     } else if mods.shift {
         let anchor = app.session.active_part().unwrap_or(k);
@@ -508,8 +540,7 @@ fn click_part(app: &mut LightcraftApp, m: &Mask, k: usize, mods: egui::Modifiers
         super::mask_menus::select_parts(app, m.id, parts, k);
     } else {
         pick_part(app, m.id, k, shape);
-        app.ui.mask_ui.mask = m.id;
-        app.ui.mask_ui.parts = vec![k];
+        super::mask_menus::remember(app, m.id, vec![k]);
     }
 }
 
