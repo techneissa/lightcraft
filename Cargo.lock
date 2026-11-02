@@ -3736,6 +3736,7 @@ dependencies = [
  "lightcraft-geom",
  "lightcraft-gpu",
  "lightcraft-heif",
+ "lightcraft-lama",
  "lightcraft-lensdb",
  "lightcraft-macraw",
  "lightcraft-map",

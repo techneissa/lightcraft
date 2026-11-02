@@ -853,6 +853,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
                 .with_default_map_cache()
                 .with_system_clock()
                 .with_default_face_models()
+                .with_default_lama_model()
                 .with_default_slide_templates();
             s.open_library(dir, false).map_err(|e| library_error(dir, e))?;
             s

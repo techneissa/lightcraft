@@ -44,6 +44,7 @@ mod faces_worker;
 pub mod file_trash;
 pub mod files;
 pub mod find_removals;
+pub mod lama_fill;
 #[cfg(not(target_arch = "wasm32"))]
 mod focus_scan;
 pub mod fonts;
@@ -371,6 +372,8 @@ pub struct Session {
     pub active_spot: Option<usize>,
     /// Find People / Find Wires: the candidates for the Remove tool and the searches that make them.
     pub finds: find_removals::Finds,
+    /// The LaMa fill behind Remove spots whose fill is LaMa (`fork/lama-fill.md`).
+    pub lama: lama_fill::LamaFill,
     /// The persistent library this session writes to (`None` = in-memory only).
     pub library: Option<library::Library>,
     /// Identity of current library opening; refreshed only after a successful open.
@@ -503,6 +506,7 @@ impl Session {
     }
 
     pub fn new() -> Session {
+        let activity = activity::Activity::default();
         Session {
             library_generation: LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             auto_sync: false,
@@ -567,6 +571,7 @@ impl Session {
             segmenter: segment::Segmenter::default(),
             active_spot: None,
             finds: Default::default(),
+            lama: lama_fill::LamaFill::new(activity.clone()),
             library: None,
             library_identity: Arc::new(()),
             xmp: sidecar::XmpPrefs::default(),
@@ -594,7 +599,7 @@ impl Session {
             before: Default::default(),
             import_probes: Default::default(),
             folder_changes: None,
-            activity: Default::default(),
+            activity,
             preview_build: None,
             slideshow_export: None,
             animated_gif: None,
