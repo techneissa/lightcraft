@@ -157,11 +157,6 @@ pub(super) fn section_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, placed: &
         ui.painter().rect_filled(line, 1.0, t.accent);
         register(ui, "sidebarSectionDrop", line);
     }
-    // the grip beside the pointer, level with the title of the section it is over
-    let headers = placed.iter().map(|p| Rect::from_x_y_ranges(view.x_range(), p.top..=p.top + SECTION_HEADER));
-    if let Some(y) = crate::drag_ghost::row_centre(headers, pos.y) {
-        crate::drag_ghost::show(ui.ctx(), pos, y, None);
-    }
 }
 
 /// A drag that ended anywhere (also outside the sidebar, or with the sidebar closed) is over.

@@ -344,6 +344,6 @@ pub fn drag(app: &mut LightcraftApp, ui: &mut egui::Ui, placed: &[(Tool, Rect)])
         register(ui, "toolStripDrop", line);
     }
     if let Some(y) = crate::drag_ghost::row_centre(placed.iter().map(|(_, r)| *r), pos.y) {
-        crate::drag_ghost::show(ui.ctx(), pos, y, Some(dragged.icon()));
+        crate::drag_ghost::show(ui.ctx(), pos, y, dragged.icon());
     }
 }

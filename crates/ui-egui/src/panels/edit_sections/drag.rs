@@ -81,7 +81,4 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         ui.painter().rect_filled(line, 1.0, t.accent);
         register(ui, "editSectionDrop", line);
     }
-    if let Some(y) = crate::drag_ghost::row_centre(placed.iter().map(|(_, r)| *r), pos.y) {
-        crate::drag_ghost::show(ui.ctx(), pos, y, None);
-    }
 }
