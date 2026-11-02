@@ -608,6 +608,7 @@ fn brush_tool(
         let look = crate::brush_live::Look {
             images: images.as_ref(),
             overlay: shown && (images.is_none() || app.ui.mask_overlay),
+            tint: shown,
             auto: app.ui.brush_auto_mask,
             now: ui.input(|i| i.time),
         };

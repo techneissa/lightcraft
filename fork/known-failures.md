@@ -11,11 +11,6 @@
 - `cargo xtask ci` stops at its `test` step because of it; run the rest by hand (`cargo xtask parity`, `layers`,
   `assets`).
 
-- `tests::masking::a_brush_stroke_is_not_tinted_while_the_mask_overlay_is_hidden` (ui-egui): fails on `custom` before the
-  masking rework (c3e32eea) with `74 of 74 points` tinted, `[253, 209, 181]` against `[255, 255, 255]`: the live
-  adjustment of a +1 exposure mask shows while painting with the overlay hidden. Not touched by issue #26. Checked
-  2026-11-01.
-
 ### Accepted failures that Fork CI skips
 
 `fork/known-failures.txt` is the list Fork CI skips (one test path per line, `#` for a comment); it is read by
@@ -24,15 +19,7 @@ binaries as `--skip`. A line skips every test whose path contains it, so write t
 therefore means a failure nobody accepted. Add a line here and to the `.txt` only when techneissa accepts a failure;
 delete both when the test is fixed. A test file is never edited to hide a failure.
 
-- `tests::masking::a_brush_stroke_is_not_tinted_while_the_mask_overlay_is_hidden` (ui-egui): the same failure as above
-  under "on this Mac"; techneissa keeps it (2026-11-01: the fork's brush live preview deliberately shows the
-  adjustment while painting). Listed in `known-failures.txt`.
-- `tests::masking::mask_adjustments_hide_overlay_without_disabling_the_mask` (ui-egui, official #519): fails since the
-  masking rework (PR #38, c1a21808) with `exposure initially needs scrolling`. Its first step asserts the Exposure slider
-  starts below the fold; the reworked Masking panel is shorter, so the slider is already visible. The behaviour it
-  tests (a slider change hides the overlay, the mask stays enabled, O restores it) still holds; the fork test
-  `a_mask_slider_hides_the_overlay_and_keeps_the_mask_enabled` (`tests/mask_parts.rs`) proves it. The official test is
-  left as is. Listed in `known-failures.txt`. Checked 2026-11-02.
+None at the moment (`fork/known-failures.txt` holds no test).
 
 ### Known failures on Fork CI only (Linux)
 
