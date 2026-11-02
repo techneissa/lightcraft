@@ -70,9 +70,18 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "Download LaMa",
             [],
             None,
-            "{} — downloads the LaMa model (big-lama.pt, 206 MB, from huggingface.co) into the folder shared with PhotoCraft, on a thread with a row in the activity stack (✕ stops it; asking again resumes). Asking is the caller's job: the app shows a dialog first → {started: true, bytes}",
+            "{confirm: true} — downloads the LaMa model (big-lama.pt, 206 MB, from huggingface.co) into the folder shared with PhotoCraft, on a thread with a row in the activity stack (✕ stops it; asking again resumes). Without `confirm: true` it is refused: ask the user first (the app shows a dialog) → {started: true, bytes}",
             always,
-            |s, _| {
+            |s, p| {
+                if p.get("confirm").and_then(Value::as_bool) != Some(true) {
+                    return Err(bad(
+                        "lama.download",
+                        format!(
+                            "this downloads {} MB from huggingface.co: ask the user first, then send {{\"confirm\": true}}",
+                            (DOWNLOAD_BYTES + 500_000) / 1_000_000
+                        ),
+                    ));
+                }
                 s.lama.start_download().map_err(|e| bad("lama.download", e))?;
                 Ok(json!({"started": true, "bytes": DOWNLOAD_BYTES}))
             }

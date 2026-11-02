@@ -107,3 +107,25 @@ fn without_the_model_lama_offers_a_download_and_changes_nothing_until_asked() {
     click(&mut h, "button:findRemoveAll");
     assert!(fills(&h).iter().all(|f| *f == SpotFill::Classic));
 }
+
+#[test]
+fn without_the_model_the_picker_and_new_spots_agree_on_classic() {
+    let mut h = panel(false, "agree");
+    // LaMa was chosen (the Download button does it) but its model is not there yet
+    h.app.ui.remove_fill = SpotFill::Lama;
+    h.step();
+    click(&mut h, "dropdown:removeFill");
+    h.step();
+    // the picker offers the download, as it does for a model that is missing, and shows Classic as the one in use
+    assert!(h.app.widgets.iter().any(|(id, _)| id == "removeFill:lama"), "LaMa (Download…) is offered");
+    click(&mut h, "removeFill:classic");
+    h.step();
+    h.app.ui.remove_fill = SpotFill::Lama;
+    click(&mut h, "button:findRemoveAll");
+    assert!(!fills(&h).is_empty() && fills(&h).iter().all(|f| *f == SpotFill::Classic), "new spots store what the picker shows: {:?}", fills(&h));
+    // once the model arrives the chosen LaMa is the fill in use
+    let dir = h.app.session.lama.dir().unwrap();
+    std::fs::write(dir.join(lightcraft_engine::lama_fill::MODEL_FILE), b"x").unwrap();
+    assert_eq!(crate::panels::right::with_fill(&h.app, "fill", json!({})), json!({"fill": "lama"}));
+    assert_eq!(crate::panels::right::with_fill(&h.app, "heal", json!({})), json!({}));
+}

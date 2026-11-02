@@ -30,6 +30,9 @@ impl Default for Params {
 const MID_GREY: f32 = 0.18;
 /// Largest picture side accepted.
 const MAX_SIDE: usize = 1 << 15;
+/// Most pixels a picture may have: the picture is copied and the crop cut from it, so a larger one is refused with a
+/// message instead of taking gigabytes (the app hands over crops of at most about 2.4 million).
+pub const MAX_PIXELS: usize = 1 << 24;
 
 fn encode(v: f32) -> f32 {
     let v = v.clamp(0.0, 1.0);
@@ -55,6 +58,9 @@ pub fn fill(
         .checked_mul(h)
         .filter(|n| *n > 0 && w <= MAX_SIDE && h <= MAX_SIDE)
         .ok_or_else(|| Error::Input(format!("cannot fill a {w}×{h} picture")))?;
+    if n > MAX_PIXELS {
+        return Err(Error::Input(format!("a {w}×{h} picture is too large to fill (at most {} million pixels)", MAX_PIXELS >> 20)));
+    }
     if rgb.len() != n * 3 || hole.len() != n {
         return Err(Error::Input(format!("buffers hold {} and {} values for {w}×{h} pixels", rgb.len(), hole.len())));
     }
@@ -183,6 +189,13 @@ impl Lama {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_picture_over_the_pixel_limit_is_refused_with_a_message() {
+        let side = 1 << 13;
+        let e = fill(&[], &[], side, side, &Params::default(), &|_, _, _, _| Ok(Vec::new())).unwrap_err();
+        assert!(matches!(&e, Error::Input(m) if m.contains("too large")), "{e:?}");
+    }
 
     /// A "model" that paints the hole one flat colour.
     fn paint(colour: [f32; 3]) -> impl Fn(&[f32], &[f32], usize, usize) -> Result<Vec<f32>> {

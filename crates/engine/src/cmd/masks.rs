@@ -1020,7 +1020,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     Some(m) => Some(serde_json::from_value(m.clone()).map_err(|e| bad(c, e.to_string()))?),
                     None => None,
                 };
-                let fill: Option<SpotFill> = match p.get("fill") {
+                let fill: Option<SpotFill> = match p.get("fill").filter(|v| !v.is_null()) {
                     Some(v) => Some(v.as_str().and_then(SpotFill::from_name).ok_or_else(|| bad(c, "`fill` must be \"classic\" or \"lama\""))?),
                     None => None,
                 };
@@ -1052,6 +1052,10 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     if let Some(m) = mode {
                         sp.mode = m;
+                        // Heal and Clone copy a source and have no LaMa fill: a spot changed to one is Classic again
+                        if !matches!(m, SpotMode::Remove | SpotMode::Fill) {
+                            sp.fill = SpotFill::Classic;
+                        }
                     }
                     Ok(())
                 })?;

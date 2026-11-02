@@ -139,8 +139,8 @@ fn read_tensor<R: Read + std::io::Seek>(zip: &mut zip::ZipArchive<R>, info: &Ten
     entry.take(want as u64).read_exact(&mut bytes).map_err(|e| e.to_string())?;
     let body = bytes.get(start..).ok_or("bad offset")?;
     let values: Vec<f32> = match info.dtype {
-        DType::F32 => body.chunks_exact(4).map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect(),
-        DType::F64 => body.chunks_exact(8).map(|c| f64::from_le_bytes([c[0], c[1], c[2], c[3], c[4], c[5], c[6], c[7]]) as f32).collect(),
+        DType::F32 => body.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect(),
+        DType::F64 => body.as_chunks::<8>().0.iter().map(|c| f64::from_le_bytes(*c) as f32).collect(),
         other => return Err(format!("unsupported tensor type {other:?}")),
     };
     Tensor::from_vec(values, dims, device).map_err(|e| e.to_string())

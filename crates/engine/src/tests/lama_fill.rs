@@ -5,7 +5,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use lightcraft_develop::{SpotFill, SpotMode};
-use lightcraft_pipeline::learned_fill::LearnedFill;
+use lightcraft_pipeline::learned_fill::{FillRun, LearnedFill};
 use serde_json::json;
 
 use super::find_removals::{session_with_wire, temp_dir};
@@ -86,6 +86,27 @@ fn the_fill_parameter_is_validated() {
     // a null fill is no fill
     s.execute("spot.add", &json!({"points": [[0.2, 0.2]], "fill": null})).unwrap();
     assert_eq!(spots(&s)[1].fill, SpotFill::Classic);
+    // (also for an update: `fill: null` leaves the spot's fill as it is)
+    s.execute("spot.update", &json!({"index": 1, "fill": "lama"})).unwrap();
+    s.execute("spot.update", &json!({"index": 1, "fill": null, "size": 0.05})).unwrap();
+    assert_eq!(spots(&s)[1].fill, SpotFill::Lama);
+}
+
+#[test]
+fn a_spot_changed_to_heal_or_clone_is_classic_again() {
+    let mut s = Session::with_demo();
+    s.execute("spot.add", &json!({"mode": "fill", "points": [[0.3, 0.3]], "size": 0.05, "fill": "lama"})).unwrap();
+    for mode in ["heal", "clone"] {
+        s.execute("spot.update", &json!({"index": 0, "fill": "lama"})).unwrap();
+        s.execute("spot.update", &json!({"index": 0, "mode": mode, "source": [0.1, 0.0]})).unwrap();
+        assert_eq!(spots(&s)[0].fill, SpotFill::Classic, "{mode}");
+        s.execute("spot.update", &json!({"index": 0, "mode": "remove"})).unwrap();
+        assert_eq!(spots(&s)[0].fill, SpotFill::Classic, "back to remove stays Classic");
+    }
+    // changing to another LaMa mode keeps the choice
+    s.execute("spot.update", &json!({"index": 0, "fill": "lama"})).unwrap();
+    s.execute("spot.update", &json!({"index": 0, "mode": "fill"})).unwrap();
+    assert_eq!(spots(&s)[0].fill, SpotFill::Lama);
 }
 
 #[test]
@@ -112,7 +133,7 @@ fn without_the_model_a_lama_spot_shows_the_classic_fill_and_says_why() {
     let (fill, _dir, activity) = fill_with_dir("no-model");
     assert!(!fill.installed());
     let (rgb, hole) = picture(64, 64);
-    assert!(fill.fill(&rgb, &hole, 64, 64, false).is_none());
+    assert!(fill.fill(&FillRun::new(), &rgb, &hole, 64, 64, false).is_none());
     let message = fill.message().expect("a message");
     assert!(message.contains("not installed") && message.contains(MODEL_FILE), "{message}");
     assert!(activity.list().is_empty(), "no row for a run that never started");
@@ -132,7 +153,7 @@ fn a_damaged_model_is_a_message_not_a_crash() {
     std::fs::write(dir.join(MODEL_FILE), b"this is not a model").unwrap();
     assert!(fill.installed());
     let (rgb, hole) = picture(64, 64);
-    assert!(fill.fill(&rgb, &hole, 64, 64, false).is_none());
+    assert!(fill.fill(&FillRun::new(), &rgb, &hole, 64, 64, false).is_none());
     assert!(fill.message().unwrap().contains("Classic"), "{:?}", fill.message());
     assert!(activity.list().is_empty(), "the row goes when the run ends");
     assert_eq!(fill.cached_fills(), 0);
@@ -143,12 +164,12 @@ fn drafts_start_nothing_and_cached_fills_come_back_at_once() {
     let (fill, dir, activity) = fill_with_dir("drafts");
     std::fs::write(dir.join(MODEL_FILE), b"x").unwrap();
     let (rgb, hole) = picture(48, 48);
-    assert!(fill.fill(&rgb, &hole, 48, 48, true).is_none());
+    assert!(fill.fill(&FillRun::new(), &rgb, &hole, 48, 48, true).is_none());
     assert!(fill.message().is_none(), "a draft that has no fill yet is not an error");
     assert!(activity.list().is_empty());
     // wrong buffer sizes and empty pictures are refused quietly
-    assert!(fill.fill(&rgb[..10], &hole, 48, 48, false).is_none());
-    assert!(fill.fill(&[], &[], 0, 0, false).is_none());
+    assert!(fill.fill(&FillRun::new(), &rgb[..10], &hole, 48, 48, false).is_none());
+    assert!(fill.fill(&FillRun::new(), &[], &[], 0, 0, false).is_none());
 }
 
 #[test]
@@ -174,7 +195,7 @@ fn the_download_refuses_what_it_should() {
     assert!(fill.start_download().unwrap_err().contains("already installed"));
     let mut s = Session::with_demo();
     // no model folder (a bare session): nothing to download into
-    let e = s.execute("lama.download", &json!({})).unwrap_err();
+    let e = s.execute("lama.download", &json!({"confirm": true})).unwrap_err();
     assert!(e.to_string().contains("no model folder"), "{e}");
     let status = s.execute("lama.status", &json!({})).unwrap();
     assert_eq!((status["installed"].as_bool(), status["download"]["state"].as_str()), (Some(false), Some("idle")));
@@ -200,12 +221,51 @@ fn the_real_model_fills_a_hole_once() {
     }
     let (w, h) = (96, 96);
     let (rgb, hole) = picture(w, h);
-    let out = fill.fill(&rgb, &hole, w, h, false).expect("a fill");
+    let out = fill.fill(&FillRun::new(), &rgb, &hole, w, h, false).expect("a fill");
     assert_eq!(out.len(), rgb.len());
     let inside = (h / 2 * w + w / 2) * 3;
     assert_ne!(&out[inside..inside + 3], &rgb[inside..inside + 3], "the hole was rebuilt");
     assert_eq!(&out[..3], &rgb[..3], "the rest is the picture");
     assert_eq!(fill.cached_fills(), 1);
     let again: Arc<dyn LearnedFill> = Arc::new(fill.clone());
-    assert_eq!(again.fill(&rgb, &hole, w, h, true), Some(out), "a draft takes the cached fill");
+    assert_eq!(again.fill(&FillRun::new(), &rgb, &hole, w, h, true), Some(out), "a draft takes the cached fill");
+}
+
+#[test]
+fn the_download_needs_a_yes_and_names_its_size() {
+    let mut s = Session::with_demo().with_lama_dir(Some(temp_dir("confirm")));
+    for p in [json!({}), json!({"confirm": false}), json!({"confirm": "yes"}), json!({"confirm": null})] {
+        let e = s.execute("lama.download", &p).unwrap_err();
+        assert_eq!(e.kind(), ErrorKind::BadParams, "{p}");
+        assert!(e.to_string().contains("206 MB") && e.to_string().contains("confirm"), "{e}");
+    }
+    let status = s.execute("lama.status", &json!({})).unwrap();
+    assert_eq!(status["download"]["state"], "idle", "nothing started without the yes");
+    assert!(s.activity.list().is_empty());
+}
+
+#[test]
+fn one_row_serves_all_the_spots_of_a_render_and_its_cross_stops_them_all() {
+    let (fill, dir, activity) = fill_with_dir("one-row");
+    std::fs::write(dir.join(MODEL_FILE), b"x").unwrap();
+    let run = FillRun::new();
+    let (rgb, hole) = picture(40, 40);
+    // (the file is not a model, so each fill fails, but a run is started for each)
+    assert!(fill.fill(&run, &rgb, &hole, 40, 40, false).is_none());
+    let rows = || activity.list().into_iter().filter(|t| t.kind == "lama").collect::<Vec<_>>();
+    assert_eq!(rows().len(), 1, "a row while the render goes on");
+    let (rgb2, hole2) = picture(41, 40);
+    assert!(fill.fill(&run, &rgb2, &hole2, 41, 40, false).is_none());
+    assert_eq!(rows().len(), 1, "the next spot of the render uses the same row");
+    // ✕ on the row stops the render's fills, not one spot's
+    activity.cancel(rows()[0].id).unwrap();
+    assert!(run.stopped());
+    let msg = fill.message();
+    let (rgb3, hole3) = picture(42, 40);
+    assert!(fill.fill(&run, &rgb3, &hole3, 42, 40, false).is_none());
+    assert_eq!(fill.message(), msg, "a stopped render starts nothing and says nothing more");
+    drop(run);
+    assert!(rows().is_empty(), "the row goes when the render is done");
+    // another render is not stopped
+    assert!(!FillRun::new().stopped());
 }

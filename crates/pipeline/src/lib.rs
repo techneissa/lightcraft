@@ -33,6 +33,7 @@ pub mod find;
 pub mod finish;
 pub mod geometry;
 pub mod learned_fill;
+mod learned_resample;
 pub mod local;
 pub mod local_tone;
 pub mod lut;
@@ -467,6 +468,11 @@ pub struct Plan<'a> {
     pub draft: bool,
 }
 
+/// The original's long edge in pixels (an original reported smaller than the source is the source).
+fn native_long(info: &SourceInfo, src_long: usize) -> usize {
+    info.native_long.unwrap_or(0).max(src_long).max(1)
+}
+
 /// Long edge of the small render a windowed render estimates the whole frame's airlight from.
 const AIRLIGHT_PROXY_EDGE: usize = 384;
 
@@ -512,7 +518,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     };
     let src_long = src.width.max(src.height);
     // (an original reported smaller than the source is the source)
-    let native_long = info.native_long.unwrap_or(0).max(src_long).max(1);
+    let native_long = native_long(info, src_long);
     let detail_scale = local::detail_scale(px_per_long, native_long);
     let geo = hash_of((format!("{frame:?}"), w, h));
     let (wb_t, wb_tint) = local::effective_wb(info, s);
@@ -530,6 +536,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         src_long,
         // a draft render may show a LaMa spot with the Classic fill; the full render must not reuse that image
         req.quality == Quality::Draft && s.spots.iter().any(spots_learned::is_learned),
+        // and the size a learned fill sees its crops at
+        s.spots.iter().any(spots_learned::is_learned).then_some(native_long),
     ));
     let lin_key = hash_of((
         pre_nr_key,
@@ -568,7 +576,9 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     let s = &*p.settings;
     // LaMa spots first, before the white balance: the learned fill then depends on the picture alone
     let learned = learned_fill::current().filter(|_| s.spots.iter().any(spots_learned::is_learned));
-    let done = learned.map(|l| spots_learned::apply(img, &s.spots, &p.frame, p.px_per_long, &*l, p.draft)).unwrap_or_default();
+    let done = learned
+        .map(|l| spots_learned::apply(img, &s.spots, &p.frame, p.px_per_long, native_long(info, p.src_long) as f64, &*l, p.draft))
+        .unwrap_or_default();
     // (before the white balance: the gain's input is the as-shot development, as in the file)
     local_tone::apply(img, info, p);
     local::white_balance(img, info, s);

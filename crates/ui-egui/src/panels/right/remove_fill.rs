@@ -16,10 +16,16 @@ fn ask_id() -> egui::Id {
     egui::Id::unique("lc-lama-ask")
 }
 
+/// The fill new spots get, and the picker shows: LaMa when it is chosen and its model is installed, else Classic (a
+/// LaMa that is still downloading is chosen, but new spots keep the Classic fill until it arrives).
+fn effective(app: &LightcraftApp) -> SpotFill {
+    if app.ui.remove_fill == SpotFill::Lama && app.session.lama.installed() { SpotFill::Lama } else { SpotFill::Classic }
+}
+
 /// `params` for a command that makes spots of `mode` (`remove`, `fill`, `heal`, `clone`), with the chosen fill when
 /// the mode takes one. Heal and Clone copy a source, so they never get one.
 pub(crate) fn with_fill(app: &LightcraftApp, mode: &str, mut params: Value) -> Value {
-    if app.ui.remove_fill == SpotFill::Lama && matches!(mode, "remove" | "fill") {
+    if effective(app) == SpotFill::Lama && matches!(mode, "remove" | "fill") {
         params["fill"] = json!("lama");
     }
     params
@@ -42,11 +48,11 @@ pub(super) fn heading(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     ui.painter().text(pos2(r.left() + 24.0, r.center().y + 2.0), Align2::LEFT_CENTER, crate::i18n::tr("Remove"), t.semibold(15.0), t.text);
     let area = Rect::from_min_max(pos2(r.left() + 120.0, r.top()), pos2(r.right() - 16.0, r.bottom()));
     ui.scope_builder(UiBuilder::new().max_rect(area).layout(Layout::right_to_left(Align::Center)), |ui| {
-        let current = app.ui.remove_fill;
+        let current = effective(app);
         let installed = app.session.lama.installed();
-        let shown = if current == SpotFill::Lama && installed { "LaMa".to_string() } else { "Classic".to_string() };
+        let shown = if current == SpotFill::Lama { "LaMa".to_string() } else { "Classic".to_string() };
         let r = crate::widgets::dropdown(ui, "removeFill", crate::i18n::tr(&shown), t.font(12.5), t.text_label)
-            .on_hover_text(crate::i18n::tr("How new spots are filled; each spot keeps its own"));
+            .on_hover_text(crate::i18n::tr("Fill for new spots: Classic or LaMa"));
         ui.label(egui::RichText::new(crate::i18n::tr("Fill")).color(t.text_dim));
         let items = [SpotFill::Classic, SpotFill::Lama];
         let downloading = matches!(app.session.lama.download_state(), Download::Running { .. }) && !installed;
@@ -58,7 +64,7 @@ pub(super) fn heading(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             &mut *ui,
             &r,
             &items,
-            |f| *f == if installed { current } else { SpotFill::Classic },
+            |f| *f == current,
             label,
             |ui, f, item| register(ui, format!("removeFill:{}", f.name()), item.rect),
         )
@@ -114,7 +120,7 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context) {
     if let Some(download) = choice {
         ctx.data_mut(|d| d.insert_temp(ask_id(), false));
         if download {
-            match app.run("lama.download", json!({})) {
+            match app.run("lama.download", json!({"confirm": true})) {
                 Ok(_) => app.ui.remove_fill = SpotFill::Lama,
                 Err(e) => app.toast(ctx, e),
             }

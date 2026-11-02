@@ -9,7 +9,7 @@ use lightcraft_geom::Point;
 use lightcraft_raster::Rgb32f;
 
 use crate::geometry::Frame;
-use crate::learned_fill::{self, LearnedFill};
+use crate::learned_fill::{self, FillRun, LearnedFill};
 use crate::{PixelWindow, Quality, RenderRequest, SourceInfo, render, spots, spots_learned};
 
 /// The installed fill is process-wide: tests that install one take turns.
@@ -21,17 +21,22 @@ struct MeanFill {
     asked: Mutex<Vec<(usize, usize, bool)>>,
     /// What to answer instead of a fill.
     reply: Mutex<Option<Option<Vec<f32>>>>,
+    /// Press ✕ on the render's row as soon as the first fill is asked for.
+    stop_at_first: std::sync::atomic::AtomicBool,
 }
 
 impl LearnedFill for MeanFill {
-    fn fill(&self, rgb: &[f32], hole: &[f32], w: usize, h: usize, draft: bool) -> Option<Vec<f32>> {
+    fn fill(&self, run: &FillRun, rgb: &[f32], hole: &[f32], w: usize, h: usize, draft: bool) -> Option<Arc<Vec<f32>>> {
         self.asked.lock().unwrap_or_else(PoisonError::into_inner).push((w, h, draft));
+        if self.stop_at_first.load(std::sync::atomic::Ordering::Relaxed) {
+            run.stop_flag().store(true, std::sync::atomic::Ordering::Relaxed);
+        }
         if let Some(r) = self.reply.lock().unwrap_or_else(PoisonError::into_inner).clone() {
-            return r;
+            return r.map(Arc::new);
         }
         let mut sum = [0.0f64; 3];
         let mut n = 0.0f64;
-        for (px, m) in rgb.chunks_exact(3).zip(hole) {
+        for (px, m) in rgb.as_chunks::<3>().0.iter().zip(hole) {
             if *m <= 0.0 {
                 for c in 0..3 {
                     sum[c] += px[c] as f64;
@@ -41,12 +46,12 @@ impl LearnedFill for MeanFill {
         }
         let mean = sum.map(|s| (s / n.max(1.0)) as f32);
         let mut out = rgb.to_vec();
-        for (px, m) in out.chunks_exact_mut(3).zip(hole) {
+        for (px, m) in out.as_chunks_mut::<3>().0.iter_mut().zip(hole) {
             if *m > 0.0 {
-                px.copy_from_slice(&mean);
+                *px = mean;
             }
         }
-        Some(out)
+        Some(Arc::new(out))
     }
 }
 
@@ -217,16 +222,16 @@ fn hostile_spots_do_not_panic() {
     for (p, size) in [((0.0, 0.0), 2.0), ((-5.0, 9.0), 0.1), ((0.5, 0.5), 0.0), ((f64::NAN, 0.5), 0.1), ((0.5, 0.5), f64::INFINITY)] {
         let mut img = Rgb32f::from_fn(40, 30, |x, _| [x as f32 / 40.0; 3]);
         let s = Spot { mode: SpotMode::Fill, points: vec![Point::new(p.0, p.1)], size, fill: SpotFill::Lama, ..Default::default() };
-        let done = spots_learned::apply(&mut img, std::slice::from_ref(&s), &frame, frame.px_per_long(40), &*fill, false);
+        let done = spots_learned::apply(&mut img, std::slice::from_ref(&s), &frame, frame.px_per_long(40), 40.0, &*fill, false);
         spots::apply_except(&mut img, &[s], &done, &frame, frame.px_per_long(40));
         assert!(img.data.iter().flatten().all(|v| v.is_finite()));
     }
     // no points at all, and an empty picture
     let empty = Spot { points: vec![], fill: SpotFill::Lama, ..Default::default() };
     let mut img = Rgb32f::from_fn(40, 30, |_, _| [0.5; 3]);
-    assert_eq!(spots_learned::apply(&mut img, &[empty], &frame, 40.0, &*fill, false), vec![false]);
+    assert_eq!(spots_learned::apply(&mut img, &[empty], &frame, 40.0, 40.0, &*fill, false), vec![false]);
     let mut none = Rgb32f::from_fn(0, 0, |_, _| [0.0; 3]);
-    assert!(spots_learned::apply(&mut none, &[spot(SpotMode::Fill, SpotFill::Lama)], &frame, 40.0, &*fill, false).iter().all(|d| !d));
+    assert!(spots_learned::apply(&mut none, &[spot(SpotMode::Fill, SpotFill::Lama)], &frame, 40.0, 40.0, &*fill, false).iter().all(|d| !d));
 }
 
 #[test]
@@ -239,4 +244,58 @@ fn a_spot_without_a_fill_in_its_file_is_classic() {
     let json = serde_json::to_string(&lama).expect("json");
     assert!(json.contains(r#""fill":"lama""#), "{json}");
     assert_eq!(serde_json::from_str::<Spot>(&json).expect("round trip"), lama);
+}
+
+#[test]
+fn stopping_the_fill_stops_the_whole_render_not_one_spot() {
+    let fill = Arc::new(MeanFill::default());
+    fill.stop_at_first.store(true, std::sync::atomic::Ordering::Relaxed);
+    let spots: Vec<Spot> =
+        [0.2, 0.4, 0.6, 0.8].iter().map(|x| Spot { points: vec![Point::new(*x, 0.5)], ..spot(SpotMode::Fill, SpotFill::Lama) }).collect();
+    let req = RenderRequest::fit(400, 300);
+    let stopped = install(&fill, || out(&with(spots.clone()), &req));
+    let asked = fill.asked.lock().unwrap_or_else(PoisonError::into_inner).len();
+    assert_eq!(asked, 1, "the first spot was stopped; the other three must not start");
+    // the spots that did not get a learned fill show the Classic one
+    let classic = out(&with(spots.iter().map(|s| Spot { fill: SpotFill::Classic, ..s.clone() }).collect()), &req);
+    assert_eq!(stopped.get(320, 150), classic.get(320, 150));
+    // a later render starts afresh
+    fill.stop_at_first.store(false, std::sync::atomic::Ordering::Relaxed);
+    install(&fill, || out(&with(spots.clone()), &req));
+    assert_eq!(fill.asked.lock().unwrap_or_else(PoisonError::into_inner).len(), 1 + 4);
+}
+
+#[test]
+fn a_preview_and_a_full_size_render_give_the_fill_the_same_picture() {
+    let s = with(vec![spot(SpotMode::Fill, SpotFill::Lama)]);
+    let mut seen = Vec::new();
+    let mut centre = Vec::new();
+    for (w, h) in [(100, 75), (200, 150), (800, 600)] {
+        let fill = Arc::new(MeanFill::default());
+        let img = install(&fill, || out(&s, &RenderRequest::fit(w, h)));
+        let asked = fill.asked.lock().unwrap_or_else(PoisonError::into_inner).clone();
+        assert_eq!(asked.len(), 1, "{w}×{h}: {asked:?}");
+        seen.push((asked[0].0, asked[0].1));
+        centre.push(img.get(w / 2, h / 2));
+    }
+    // the same crop at the same size, to the rounding of the spot's box to whole render pixels (a few percent in the
+    // smallest render), whatever the render's size; without the scaling they differ by the render's ratio, 4 to 1
+    for (a, b) in seen.iter().zip(&seen[1..]) {
+        assert!(a.0.abs_diff(b.0) * 100 <= a.0.max(b.0) * 8 && a.1.abs_diff(b.1) * 100 <= a.1.max(b.1) * 8, "the fill saw {seen:?}");
+    }
+    // and so the hole comes out alike
+    for c in &centre[1..] {
+        assert!((0..3).all(|k| c[k].abs_diff(centre[0][k]) <= 8), "{centre:?}");
+    }
+}
+
+#[test]
+fn a_big_hole_is_handed_over_at_a_capped_size() {
+    let fill = Arc::new(MeanFill::default());
+    // an original reported ten times the source: the crop would be far over the cap
+    let info = SourceInfo { native_long: Some(200 * 40), ..Default::default() };
+    install(&fill, || render(&scene(), &info, &with(vec![spot(SpotMode::Fill, SpotFill::Lama)]), &RenderRequest::fit(400, 300)));
+    let asked = fill.asked.lock().unwrap_or_else(PoisonError::into_inner).clone();
+    assert_eq!(asked.len(), 1);
+    assert!(asked[0].0.max(asked[0].1) <= spots_learned::FILL_MAX_SIDE, "{asked:?}");
 }

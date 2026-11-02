@@ -191,7 +191,7 @@ pub fn window_for_reads_checked(
             }
             // the box `apply` works in: the stroke plus a radius, plus a radius of padding
             // (a LaMa spot also holds the margin its fill reads, `spots_learned`)
-            let pad = 2.0 * r + crate::spots_learned::extra_pad(spot, r, (x1 - x0).max(y1 - y0));
+            let pad = 2.0 * r + crate::spots_learned::extra_pad(spot, r, (x1 - x0).max(y1 - y0), ppl);
             let t = [x0 - pad, y0 - pad, x1 + pad, y1 + pad];
             let s = match spot.source_offset {
                 Some(o) => {

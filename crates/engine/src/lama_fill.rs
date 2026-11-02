@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
 
-use lightcraft_pipeline::learned_fill::LearnedFill;
+use lightcraft_pipeline::learned_fill::{FillRun, LearnedFill};
 
 use crate::activity::{Activity, Cancel};
 
@@ -228,8 +228,13 @@ impl LamaFill {
         Err("the web build has no LaMa fill".into())
     }
 
-    /// Fill `hole` of `rgb`, from the cache or with a run (see [`LearnedFill::fill`]). The row `kind` is `lama`.
-    fn make(&self, rgb: &[f32], hole: &[f32], w: usize, h: usize, key: u64) -> Option<Arc<Vec<f32>>> {
+    /// Fill `hole` of `rgb`, from the cache or with a run (see [`LearnedFill::fill`]). The row `kind` is `lama`, one per
+    /// render (`run` holds it until the render's last spot): its ✕ sets the render's stop flag, so the spots that follow
+    /// are not started either.
+    fn make(&self, run: &FillRun, rgb: &[f32], hole: &[f32], w: usize, h: usize, key: u64) -> Option<Arc<Vec<f32>>> {
+        if run.stopped() {
+            return None;
+        }
         if !self.installed() {
             let place = self.dir().map_or_else(|| "its model folder".to_string(), |d| d.display().to_string());
             self.say(format!("LaMa is not installed ({MODEL_FILE} is not in {place}): spots show the Classic fill"));
@@ -240,9 +245,13 @@ impl LamaFill {
         if let Some(hit) = self.cached(key) {
             return Some(hit);
         }
-        let flag = Arc::new(AtomicBool::new(false));
-        let _row = self.inner.activity.start("lama", "Filling with LaMa", Cancel::Flag(flag.clone()));
-        let cancelled = || flag.load(Ordering::Relaxed) || lightcraft_gpu::shutting_down();
+        if run.stopped() {
+            return None;
+        }
+        if !run.holds() {
+            run.hold(Box::new(self.inner.activity.start("lama", "Filling with LaMa", Cancel::Flag(run.stop_flag()))));
+        }
+        let cancelled = || run.stopped() || lightcraft_gpu::shutting_down();
         let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_model(rgb, hole, w, h, &cancelled)));
         match ran {
             Ok(Ok(out)) if out.len() == rgb.len() && out.iter().all(|v| v.is_finite()) => {
@@ -286,19 +295,19 @@ fn key_of(rgb: &[f32], hole: &[f32], w: usize, h: usize) -> u64 {
 }
 
 impl LearnedFill for LamaFill {
-    fn fill(&self, rgb: &[f32], hole: &[f32], w: usize, h: usize, draft: bool) -> Option<Vec<f32>> {
-        if w.checked_mul(h).is_none_or(|n| n == 0 || rgb.len() != n * 3 || hole.len() != n) {
+    fn fill(&self, run: &FillRun, rgb: &[f32], hole: &[f32], w: usize, h: usize, draft: bool) -> Option<Arc<Vec<f32>>> {
+        if w.checked_mul(h).and_then(|n| n.checked_mul(3)).is_none_or(|n3| w == 0 || h == 0 || rgb.len() != n3 || hole.len() != n3 / 3) {
             return None;
         }
         let key = key_of(rgb, hole, w, h);
         if let Some(hit) = self.cached(key) {
-            return Some(hit.as_ref().clone());
+            return Some(hit);
         }
         // a drag's drafts start nothing: the Classic fill shows until the full render has the real one
         if draft {
             return None;
         }
-        self.make(rgb, hole, w, h, key).map(|a| a.as_ref().clone())
+        self.make(run, rgb, hole, w, h, key)
     }
 }
 
