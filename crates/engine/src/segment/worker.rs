@@ -26,7 +26,7 @@ use std::time::Duration;
 use lightcraft_develop::SegMask;
 use lightcraft_segment::{
     Encoded, Sam3,
-    remote::{self, Operation, Request, text_logits},
+    remote::{self, CONCEPT_THRESHOLD, Operation, Request, TEXT_THRESHOLD, text_logits},
 };
 
 use super::{Input, Prompt, Tag};
@@ -42,6 +42,9 @@ pub enum Kind {
     Prepare,
     Clicks(Vec<lightcraft_segment::Click>),
     Text(String),
+    /// Subject, Sky or Background: like `Text`, with the looser score ([`CONCEPT_THRESHOLD`]); `true`: only the main
+    /// subject's instances (Subject and Background).
+    Concept(String, bool),
     /// A zoomed-in pass over `region` (normalized) of the photo, rendered by the job's `render`.
     Detail {
         prompt: Prompt,
@@ -60,6 +63,10 @@ pub enum Kind {
 
 /// One request.
 pub struct Job {
+    /// Monotonic request ID for in-flight tracking.
+    pub id: u64,
+    /// Cooperative cancellation flag checked between neural network layers.
+    pub cancel: Arc<AtomicBool>,
     /// The model folder.
     pub dir: PathBuf,
     /// Which photo and look the request is about (the encode cache's key).
@@ -71,13 +78,15 @@ pub struct Job {
     pub kind: Kind,
     pub tag: Tag,
     pub reply: mpsc::Sender<Outcome>,
+    pub remote: Option<String>,
 }
 
 /// A finished request: the segmentation (`None`: nothing selected / nothing to report).
 pub struct Outcome {
+    pub id: u64,
     pub tag: Tag,
     pub result: Result<Option<SegMask>, String>,
-    /// A newer request for the same selection came in; this one was skipped.
+    /// A newer request for the same selection came in, or the job was cancelled.
     pub superseded: bool,
     /// Something the user should know besides the result ([`GPU_FAILED`]).
     pub notice: Option<String>,
@@ -113,6 +122,8 @@ impl Placement {
 /// Why a job failed.
 #[derive(Debug)]
 enum Failure {
+    /// The job was cancelled by the user (e.g. mask deleted, undone, or photo switched).
+    Cancelled,
     /// The model failed (a candle error, or a panic): on the GPU, the CPU may run it.
     Model(String),
     /// Anything else (no model files, the photo, a remote worker): another device won't help.
@@ -122,6 +133,7 @@ enum Failure {
 impl Failure {
     fn message(self) -> String {
         match self {
+            Failure::Cancelled => "cancelled".into(),
             Failure::Model(m) | Failure::Other(m) => m,
         }
     }
@@ -141,7 +153,11 @@ impl From<&str> for Failure {
 
 impl From<lightcraft_segment::Error> for Failure {
     fn from(e: lightcraft_segment::Error) -> Self {
-        if matches!(e, lightcraft_segment::Error::Candle(_)) { Failure::Model(e.to_string()) } else { Failure::Other(e.to_string()) }
+        match e {
+            lightcraft_segment::Error::Cancelled => Failure::Cancelled,
+            lightcraft_segment::Error::Candle(_) => Failure::Model(e.to_string()),
+            other => Failure::Other(other.to_string()),
+        }
     }
 }
 
@@ -194,7 +210,10 @@ pub struct Worker {
 
 impl Worker {
     fn counter(&self, job: &Job) -> &AtomicUsize {
-        if matches!(job.kind, Kind::Detail { .. }) { &self.shared.detail } else { &self.shared.pending }
+        match job.kind {
+            Kind::Detail { .. } => &self.shared.detail,
+            _ => &self.shared.pending,
+        }
     }
 
     /// Whether the thread has ended (it never should); its counters are then meaningless.
@@ -256,7 +275,7 @@ impl Worker {
 struct State {
     model: Option<(PathBuf, Sam3)>,
     cache: Option<(u64, Encoded)>,
-    remote: Option<remote::Client>,
+    remote: Option<(String, remote::Client)>,
 }
 
 /// Whether `later` makes `job` pointless (it asks for the same selection again).
@@ -295,15 +314,22 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
         // counts the job as pending until just before its reply goes out: a caller woken by the
         // reply must not still see the worker busy with it
         let done = Done(if is_detail { &shared.detail } else { &shared.pending });
-        if queue.iter().any(|later| supersedes(later, &job)) {
+        if job.cancel.load(Ordering::Relaxed) || queue.iter().any(|later| supersedes(later, &job)) {
             drop(done);
-            let _ = job.reply.send(Outcome { tag: job.tag, result: Ok(None), superseded: true, notice: None });
+            let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result: Ok(None), superseded: true, notice: None });
             continue;
         }
         // what a retry on the CPU needs (running the job takes them)
-        let retry = (placement == Placement::Gpu && remote::configured().is_none()).then(|| (job.kind.clone(), job.render.clone()));
+        let is_remote = job.remote.is_some() || remote::configured().is_some();
+        let retry = (placement == Placement::Gpu && !is_remote).then(|| (job.kind.clone(), job.render.clone()));
         let mut result = attempt(&mut state, shared, &mut job, placement);
         let mut notice = None;
+        if matches!(result, Err(Failure::Cancelled)) {
+            shared.loaded.store(state.model.is_some() || state.remote.is_some(), Ordering::SeqCst);
+            drop(done);
+            let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result: Ok(None), superseded: true, notice: None });
+            continue;
+        }
         let gpu_failed = match &result {
             Err(Failure::Model(why)) => Some(why.clone()),
             _ => None,
@@ -321,6 +347,12 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
                     notice = Some(GPU_FAILED.to_string());
                     result = Ok(r);
                 }
+                Err(Failure::Cancelled) => {
+                    shared.loaded.store(state.model.is_some() || state.remote.is_some(), Ordering::SeqCst);
+                    drop(done);
+                    let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result: Ok(None), superseded: true, notice: None });
+                    continue;
+                }
                 Err(e) => {
                     // the CPU fails too, so the GPU isn't the cause: the next job uses it again
                     log::warn!("SAM 3 failed on the CPU too: {}", e.message());
@@ -334,7 +366,7 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
         }
         shared.loaded.store(state.model.is_some() || state.remote.is_some(), Ordering::SeqCst);
         drop(done);
-        let _ = job.reply.send(Outcome { tag: job.tag, result, superseded: false, notice });
+        let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result, superseded: false, notice });
     }
 }
 
@@ -391,12 +423,22 @@ fn render(job: &mut Job) -> Result<Input, String> {
 
 /// The model and the encoded photo `job.key` (rendering and encoding it when needed).
 fn encoded<'a>(state: &'a mut State, shared: &Shared, job: &mut Job, placement: Placement) -> Result<(&'a mut Sam3, &'a mut Encoded), Failure> {
+    if job.cancel.load(Ordering::Relaxed) {
+        return Err(Failure::Cancelled);
+    }
     model(state, shared, &job.dir, placement)?;
+    if job.cancel.load(Ordering::Relaxed) {
+        return Err(Failure::Cancelled);
+    }
     if state.cache.as_ref().is_none_or(|(k, _)| *k != job.key) {
         state.cache = None;
         let input = render(job)?;
+        if job.cancel.load(Ordering::Relaxed) {
+            return Err(Failure::Cancelled);
+        }
         let _busy = Flag::raise(&shared.encoding);
         let m = state.model.as_mut().map(|(_, m)| m).ok_or("the model did not load")?;
+        m.set_cancel(Some(job.cancel.clone()));
         let t = web_time::Instant::now();
         let mut enc = m.encode(&input.rgb, input.w, input.h)?;
         m.prepare_clicks(&mut enc)?;
@@ -405,21 +447,25 @@ fn encoded<'a>(state: &'a mut State, shared: &Shared, job: &mut Job, placement: 
     }
     let State { model, cache, .. } = state;
     match (model.as_mut(), cache.as_mut()) {
-        (Some((_, m)), Some((_, e))) => Ok((m, e)),
+        (Some((_, m)), Some((_, e))) => {
+            m.set_cancel(Some(job.cancel.clone()));
+            Ok((m, e))
+        }
         _ => Err("the model is not ready".into()),
     }
 }
 
 fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str) -> Result<Option<SegMask>, String> {
     let _busy = Flag::raise(&shared.encoding);
-    if state.remote.is_none() {
-        state.remote = Some(remote::Client::connect(endpoint)?);
+    if state.remote.as_ref().is_none_or(|(ep, _)| ep != endpoint) {
+        state.remote = Some((endpoint.to_string(), remote::Client::connect(endpoint)?));
     }
-    let client = state.remote.as_mut().ok_or("remote SAM unavailable")?;
+    let (_, client) = state.remote.as_mut().ok_or("remote SAM unavailable")?;
     let mut region = None;
     let operation = match std::mem::replace(&mut job.kind, Kind::Prepare) {
         Kind::Prepare => Operation::Prepare,
         Kind::Text(text) => Operation::Text(text),
+        Kind::Concept(text, main) => Operation::Concept(text, main),
         Kind::Clicks(clicks) => Operation::Clicks(clicks.iter().map(|c| [c.x, c.y, if c.positive { 1.0 } else { 0.0 }]).collect()),
         Kind::Detail { prompt, region: r } => {
             region = Some(r);
@@ -429,6 +475,7 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
             }
             match prompt {
                 Prompt::Text(text) => Operation::Text(text),
+                Prompt::Concept(text, main) => Operation::Concept(text, main),
                 Prompt::Clicks(clicks) => {
                     let inside: Vec<_> = clicks
                         .iter()
@@ -458,7 +505,11 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
 }
 
 fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placement) -> Result<Option<SegMask>, Failure> {
-    if let Some(endpoint) = remote::configured() {
+    if job.cancel.load(Ordering::Relaxed) {
+        return Err(Failure::Cancelled);
+    }
+    let remote_target = job.remote.clone().or_else(remote::configured);
+    if let Some(endpoint) = remote_target {
         let result = remote_job(state, shared, job, &endpoint);
         if result.is_err() {
             state.remote = None;
@@ -478,7 +529,11 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
         }
         Kind::Text(text) => {
             let (m, enc) = encoded(state, shared, job, placement)?;
-            Ok(text_logits(m, enc, &text)?.map(|l| SegMask::from_logits(side, &l)))
+            Ok(text_logits(m, enc, &text, TEXT_THRESHOLD, false)?.map(|l| SegMask::from_logits(side, &l)))
+        }
+        Kind::Concept(text, main) => {
+            let (m, enc) = encoded(state, shared, job, placement)?;
+            Ok(text_logits(m, enc, &text, CONCEPT_THRESHOLD, main)?.map(|l| SegMask::from_logits(side, &l)))
         }
         #[cfg(test)]
         #[allow(clippy::panic)]
@@ -492,7 +547,11 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
         },
         Kind::Detail { prompt, region } => {
             let input = render(job)?;
+            if job.cancel.load(Ordering::Relaxed) {
+                return Err(Failure::Cancelled);
+            }
             let m = model(state, shared, &job.dir, placement)?;
+            m.set_cancel(Some(job.cancel.clone()));
             let t = web_time::Instant::now();
             let mut enc = m.encode(&input.rgb, input.w, input.h)?;
             let (rw, rh) = (region[2] - region[0], region[3] - region[1]);
@@ -512,7 +571,8 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
                     }
                     Some(m.segment_clicks(&mut enc, &inside)?.logits)
                 }
-                Prompt::Text(text) => text_logits(m, &mut enc, &text)?,
+                Prompt::Text(text) => text_logits(m, &mut enc, &text, TEXT_THRESHOLD, false)?,
+                Prompt::Concept(text, main) => text_logits(m, &mut enc, &text, CONCEPT_THRESHOLD, main)?,
             };
             log::info!("SAM 3 detail pass ({}×{}) in {:?}", input.w, input.h, t.elapsed());
             Ok(logits.map(|l| SegMask::from_logits_in(side, &l, region)))
@@ -527,7 +587,18 @@ mod tests {
     fn job(tag: Tag, reply: &mpsc::Sender<Outcome>) -> Job {
         // an empty folder: loading fails with an error (no model files)
         let dir = std::env::temp_dir().join(format!("lc-sam3-worker-none-{}", std::process::id()));
-        Job { dir, key: 1, render: None, missing: None, kind: Kind::Prepare, tag, reply: reply.clone() }
+        Job {
+            id: 1,
+            cancel: Arc::new(AtomicBool::new(false)),
+            dir,
+            key: 1,
+            render: None,
+            missing: None,
+            kind: Kind::Prepare,
+            tag,
+            reply: reply.clone(),
+            remote: None,
+        }
     }
 
     #[test]

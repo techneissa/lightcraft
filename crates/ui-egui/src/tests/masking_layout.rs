@@ -78,7 +78,9 @@ fn masking_long_names_and_describe_controls_stay_inside_the_panel() {
             let (texts, widgets) = panel(width, 2.0, locale, true);
             let row = widgets.iter().find(|(id, _)| id == "mask:1").unwrap().1;
             let name = texts.iter().find(|t| t.galley.job.text == LONG_NAME).unwrap();
-            assert!(name.galley.elided, "long mask names should be elided");
+            // (a long name takes a smaller font first, and ends with … only when that does not fit either)
+            let size = name.galley.job.sections.first().map_or(13.0, |s| s.format.font_id.size);
+            assert!(name.galley.elided || size < 13.0, "long mask names should shrink or be elided");
             assert!(
                 Rect::from_min_max(pos2(row.left() + 32.0, row.top()), pos2(row.right() - 28.0, row.bottom()))
                     .contains_rect(name.visual_bounding_rect())

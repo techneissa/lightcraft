@@ -31,9 +31,9 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
             feather: f64_or(p, "feather", 50.0),
             invert: bool_or(p, "invert", false),
         },
-        "sky" => MaskShape::Sky,
-        "subject" => MaskShape::Subject,
-        "background" => MaskShape::Background,
+        "sky" => MaskShape::Sky { seg: seg_param(p), detail: vec![], edge: 0.0 },
+        "subject" => MaskShape::Subject { seg: seg_param(p), detail: vec![], edge: 0.0 },
+        "background" => MaskShape::Background { seg: seg_param(p), detail: vec![], edge: 0.0 },
         "luminanceRange" => MaskShape::LuminanceRange {
             lo: f64_or(p, "lo", 0.6),
             hi: f64_or(p, "hi", 1.0),
@@ -86,6 +86,9 @@ enum Later {
     Clicks(Vec<Point>, Vec<Point>),
     /// Background mode: the Describe selection is computed first; the mask is added when found.
     Text(String),
+    /// Background mode: the Subject, Sky or Background selection is computed first; the mask (or
+    /// part) is added when found, as for Describe, so no rough mask shows while SAM 3 runs.
+    Concept(super::concepts::Concept),
 }
 
 /// Compute the segmentation of a new AI shape (Object with clicks, Prompt) — or, in background
@@ -96,7 +99,11 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let background = s.segmenter.background;
     match shape {
-        MaskShape::Object { seg: Some(_), .. } | MaskShape::Prompt { seg: Some(_), .. } => {}
+        MaskShape::Object { seg: Some(_), .. }
+        | MaskShape::Prompt { seg: Some(_), .. }
+        | MaskShape::Subject { seg: Some(_), .. }
+        | MaskShape::Sky { seg: Some(_), .. }
+        | MaskShape::Background { seg: Some(_), .. } => {}
         MaskShape::Object { hint, exclude, .. } if !hint.is_empty() && background => {
             s.segmenter.require_model()?;
             return Ok(Later::Clicks(std::mem::take(hint), std::mem::take(exclude)));
@@ -123,6 +130,17 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
             let found = segment(s, |s| s.segment_text(id, text))?;
             *seg = Some(found.ok_or_else(|| ai_err(format!("nothing matching “{text}” was found in this photo")))?);
         }
+        MaskShape::Subject { seg: None, .. } | MaskShape::Sky { seg: None, .. } | MaskShape::Background { seg: None, .. }
+            if super::concepts::wanted(s, id, shape) =>
+        {
+            let Some(c) = super::concepts::of(shape) else { return Ok(Later::Nothing) };
+            if background {
+                s.segmenter.require_model()?;
+                return Ok(Later::Concept(c));
+            }
+            let found = segment(s, |s| s.segment_concept(id, &c))?;
+            super::concepts::store(shape, found, &c)?;
+        }
         _ => {}
     }
     Ok(Later::Nothing)
@@ -130,10 +148,14 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
 
 /// Queue what a new AI component (component `comp` of mask `mask`) still needs.
 fn queue_later(s: &mut Session, later: Later, mask: u32, comp: usize, mut out: Value) -> Result<Value> {
-    if let Later::Clicks(hint, exclude) = later {
-        let id = s.active().ok_or_else(|| ai_err("no active photo"))?;
-        segment(s, |s| s.segment_clicks_later(id, mask, comp, hint, exclude))?;
-        out["pending"] = json!(true);
+    out["id"] = json!(mask);
+    match later {
+        Later::Nothing | Later::Text(_) | Later::Concept(_) => {}
+        Later::Clicks(hint, exclude) => {
+            let id = s.active().ok_or_else(|| ai_err("no active photo"))?;
+            segment(s, |s| s.segment_clicks_later(id, mask, comp, hint, exclude))?;
+            out["pending"] = json!(true);
+        }
     }
     Ok(out)
 }
@@ -159,11 +181,16 @@ fn masks_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Mas
     let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
     let mut active = s.active_mask;
     f(&mut d.masks, &mut active)?;
+    let empty = d.masks.is_empty();
     s.set_develop(id, d, label)?;
     if active != s.active_mask {
         s.active_component = None;
     }
     s.active_mask = active;
+    s.reconcile_segmenter();
+    if empty && matches!(c, "mask.delete" | "mask.deleteAll" | "mask.component") {
+        s.segmenter.cancel_all();
+    }
     Ok(json!({"activeMask": active}))
 }
 
@@ -263,13 +290,18 @@ pub fn specs() -> Vec<CommandSpec> {
                     segment(s, |s| s.segment_text_later(id, None, "add", name, text))?;
                     return Ok(json!({"pending": true}));
                 }
+                if let Later::Concept(concept) = &later {
+                    let id = s.active().ok_or_else(|| bad("mask.add", "no active photo"))?;
+                    segment(s, |s| s.segment_concept_later(id, None, "add", name, concept))?;
+                    return Ok(json!({"pending": true}));
+                }
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
                 // the effect last applied to a mask of this kind
                 let adjust = super::mask_effects::new_mask_adjust(s, &kind);
                 let out = masks_edit(s, "mask.add", "Add Mask", |masks, active| {
                     masks.push(Mask {
                         id: next,
-                        name: name.unwrap_or_else(|| format!("Mask {next}")),
+                        name: name.unwrap_or_else(|| super::mask_names::next(masks, &kind)),
                         components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }],
                         adjust,
                         ..Default::default()
@@ -302,6 +334,11 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Later::Text(text) = &later {
                     let op = p.get("op").and_then(Value::as_str).unwrap_or("add");
                     segment(s, |s| s.segment_text_later(id, Some(mid), op, None, text))?;
+                    return Ok(json!({"pending": true}));
+                }
+                if let Later::Concept(concept) = &later {
+                    let op = p.get("op").and_then(Value::as_str).unwrap_or("add");
+                    segment(s, |s| s.segment_concept_later(id, Some(mid), op, None, concept))?;
                     return Ok(json!({"pending": true}));
                 }
                 let mut comp = 0;
@@ -352,7 +389,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     let i = match want.and_then(|m| masks.iter().position(|x| x.id == m)) {
                         Some(i) => i,
                         None => {
-                            masks.push(Mask { id: next, name: format!("Mask {next}"), adjust, ..Default::default() });
+                            masks.push(Mask { id: next, name: super::mask_names::next(masks, "brush"), adjust, ..Default::default() });
                             *active = Some(next);
                             masks.len() - 1
                         }
@@ -408,6 +445,14 @@ pub fn specs() -> Vec<CommandSpec> {
             cap_color_range_samples(&mut shape);
             let comp = optional_index(p, "component", "mask.update")?.unwrap_or(0);
             let mid = mask_id(p, s.active_mask, "mask.update")?;
+            // a Subject, Sky or Background without its selection asks SAM 3 here too (as `mask.add` does), so a
+            // part set over MCP or the CLI is not left as the rough mask; in the app (background mode) it stays
+            // rough: a result that arrives later adds a part, it can't replace this one
+            if matches!(shape, MaskShape::Subject { seg: None, .. } | MaskShape::Sky { seg: None, .. } | MaskShape::Background { seg: None, .. })
+                && !s.segmenter.background
+            {
+                resolve_ai(s, &mut shape, "mask.update")?;
+            }
             masks_edit(s, "mask.update", "Edit Mask", |masks, _| {
                 let i = find(masks, mid, "mask.update")?;
                 let c = masks[i].components.get_mut(comp).ok_or_else(|| bad("mask.update", "no such component"))?;
@@ -530,8 +575,10 @@ pub fn specs() -> Vec<CommandSpec> {
                     None => m
                         .components
                         .iter()
-                        .rposition(|x| matches!(x.shape, MaskShape::Object { .. } | MaskShape::Prompt { .. }))
-                        .ok_or_else(|| bad(c, "the mask has no Object or Describe selection"))?,
+                        .rposition(|x| {
+                            matches!(x.shape, MaskShape::Object { .. } | MaskShape::Prompt { .. } | MaskShape::Subject { .. } | MaskShape::Sky { .. })
+                        })
+                        .ok_or_else(|| bad(c, "the mask has no AI selection"))?,
                 };
                 let started = segment(s, |s| s.segment_detail(id, mid, k))?;
                 Ok(json!({"started": started}))
@@ -1120,7 +1167,9 @@ fn spots_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Spo
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
     f(&mut d.spots)?;
-    s.set_develop(id, d, label)
+    s.set_develop(id, d, label)?;
+    s.reconcile_segmenter();
+    Ok(())
 }
 
 /// An automatic source for `spot` on photo `id` (a small proxy of the photo, framed by `d`).

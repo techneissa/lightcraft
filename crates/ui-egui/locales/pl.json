@@ -2435,5 +2435,8 @@
   "Tiles are kept for a week at least (as the tile server allows) so a place you looked at before opens without asking again.": "Kafelki są przechowywane co najmniej tydzień (na ile pozwala serwer), więc oglądane wcześniej miejsce otwiera się bez ponownego pobierania.",
   "Privacy": "Prywatność",
   "Showing a map asks the tile server for the tiles of the area on screen, so the server sees which places you look at, with your IP address and LightCraft's name and version. Nothing is sent while no map is on screen, or when tiles are off.": "Wyświetlenie mapy pobiera z serwera kafelki obszaru na ekranie, więc serwer widzi, które miejsca oglądasz, wraz z Twoim adresem IP oraz nazwą i wersją LightCraft. Gdy na ekranie nie ma mapy lub kafelki są wyłączone, nic nie jest wysyłane.",
-  "About the map and its tiles (docs/map.md)": "O mapie i jej kafelkach (docs/map.md)"
+  "About the map and its tiles (docs/map.md)": "O mapie i jej kafelkach (docs/map.md)",
+  "Selecting with SAM 3": "Zaznaczanie za pomocą SAM 3",
+  "Rough mask. Click to install SAM 3.": "Przybliżona maska. Kliknij, aby zainstalować SAM 3.",
+  "Rough mask. Add it again to use SAM 3.": "Przybliżona maska. Dodaj ją ponownie, aby użyć SAM 3."
 }
