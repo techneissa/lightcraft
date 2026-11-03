@@ -28,6 +28,7 @@ pub(crate) fn file_local_look(format: RawFormat) -> bool {
             | RawFormat::Pef
             | RawFormat::Srw
             | RawFormat::Orf
+            | RawFormat::Crw
             | RawFormat::Mrw
             | RawFormat::Erf
     )
@@ -113,7 +114,7 @@ pub(super) fn spectral_prior(raw: &RawImage, transform: &CameraTransform) -> Opt
         Some(camera) => total(camera),
         None => {
             // (a 360 camera's lenses and sensors are no prior for a stills body)
-            let all: Vec<Mat3> = lightcraft_raw::spectral::cameras().iter().filter(|c| !c.model.starts_with("Insta")).map(total).collect();
+            let all: Vec<Mat3> = lightcraft_raw::spectral::cameras().filter(|c| !c.model.starts_with("Insta")).map(total).collect();
             if all.is_empty() {
                 return None;
             }

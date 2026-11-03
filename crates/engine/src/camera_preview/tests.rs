@@ -1979,7 +1979,6 @@ fn spectral_prior_mean_takes_each_body_at_its_own_white() {
     let keep_white = |m: Mat3| Mat3(m.0.map(|row| row.map(|v| v - (row.iter().sum::<f64>() - 1.0) / 3.0)));
     let mean_at = |white: Option<Xy>| {
         let all: Vec<Mat3> = lightcraft_raw::spectral::cameras()
-            .iter()
             .filter(|c| !c.model.starts_with("Insta"))
             .map(|c| {
                 let mut color = ColorData::default();
