@@ -3,8 +3,8 @@
 # building it. The build is published as the release `custom-build` (prerelease), its notes naming the commit.
 #
 # Daily, on a push to `custom`, or by hand (Actions ▸ Fork build ▸ Run workflow). A merge that clashes
-# outside the two docs files fails the run, changes nothing, and the Mac's script then merges and builds
-# locally (or an agent merges: the `craftupdate` skill).
+# outside the two docs files is left out: `custom` is built as it is, so the Mac always gets techneissa's
+# newest features, and an agent merges the official update later (the `craftupdate` skill).
 name: Fork build
 
 on:
@@ -61,8 +61,9 @@ jobs:
               others="$(printf '%s\n' "$left" | grep -vxE 'docs/whats-new\.md|docs/parity-checklist\.md' || true)"
               if [ -n "$others" ]; then
                 git merge --abort
-                echo "::error::The official update and techneissa's features both changed: $(echo $others). Nothing was changed; run the update on the Mac (it builds there) or ask an agent to update LightCraft."
-                exit 1
+                echo "::warning::The official update and techneissa's features both changed: $(echo $others). Building custom without the official update; ask an agent to update the app to merge it."
+                echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+                exit 0
               fi
               # docs only: keep both sides, the update's first (the parity "Last updated" line: the update's)
               for f in $left; do
