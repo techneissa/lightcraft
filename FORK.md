@@ -62,6 +62,6 @@ line). Print them all: `fork/features.sh`.
 Every feature also has an entry in `docs/whats-new.md` and a row in `docs/parity-checklist.md`; a feature's own
 text for them lives in its `fork/<slug>.md` until `fork/sync-docs.py` copies it.
 
-The tests of every feature, after a merge: run `fork/tests.sh`.
+Every feature's tests, by hand only: `fork/tests.sh`. No merge or batch runs it (techneissa, 2026-11-03: it repeated the tests each lane had run; Fork CI tests `custom` after the push).
 
 To find which feature owns an official file: `grep -l '<path>' fork/*.md`.
