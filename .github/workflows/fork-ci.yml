@@ -11,9 +11,9 @@ name: Fork CI
 # (fork/github-builds.md). fork-build.yml pushes its daily merge with FORK_PUSH_TOKEN, so that merge is tested too.
 
 on:
+  # Not on pull requests (techneissa, 2026-11-03): a batch of PRs is merged and tested once, so a
+  # run per PR (and again after each fix) only repeated the work.
   push:
-    branches: [custom]
-  pull_request:
     branches: [custom]
   workflow_dispatch:
 

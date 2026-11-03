@@ -16,7 +16,7 @@ on this Mac. One workflow for both events, through the suite's shared gate workf
 craft-fonts commit, Rust install and cache as `ci.yml`; it reads the packages and the commit from `ci.yml`), running
 `fork/ci.sh` as three jobs at once (`gate (1)` to `gate (3)`):
 
-- **A pull request to `custom`** tests what it can break. `fork/affected.py` lists the crates with a changed file
+- **A pull request to `custom`** no longer starts Fork CI (techneissa, 2026-11-03: a batch of PRs is merged and tested once); run by hand on a branch, it tests what it can break. `fork/affected.py` lists the crates with a changed file
   plus every workspace crate that depends on one (`cargo metadata`; normal, dev and build dependencies).
   `Cargo.toml`, `Cargo.lock`, `.cargo/`, `.config/`, `.github/`, `xtask/`, `clippy.toml`, `rustfmt.toml`,
   `fork/known-failures.txt`, `fork/skip-known-failures.sh`, `fork/ci.sh`, `fork/affected.py` or any file outside the
