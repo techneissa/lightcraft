@@ -37,9 +37,11 @@ pub fn part_mode(m: &Mask, k: usize) -> MaskOp {
 }
 
 /// Whether painting part `k` of `m` does the opposite of what its name says to the mask: coverage in a Subtract part
-/// means less of the mask, and Invert (applied by the engine before the part is combined) turns every part around.
+/// means less of the mask, and Invert (applied by the engine before the part is combined) turns a part around: its own,
+/// and on the base part the mask's (Invert Mask turns the base around, the other parts then work on the inverted mask).
 pub fn turned_around(m: &Mask, k: usize) -> bool {
-    (part_mode(m, k) == MaskOp::Subtract) != m.components.get(k).is_some_and(|c| c.invert)
+    let own = m.components.get(k).is_some_and(|c| c.invert);
+    ((part_mode(m, k) == MaskOp::Subtract) != own) != (k == 0 && m.invert)
 }
 
 /// Whether a stroke takes coverage away from its brush part, when the user wants to `take_away` from the mask (Erase
@@ -570,6 +572,20 @@ mod tests {
         // the first part is the base: Add, whatever it says
         let base = Mask { components: vec![part(MaskOp::Subtract, true)], ..Default::default() };
         assert!(!turned_around(&base, 0));
+    }
+
+    #[test]
+    fn invert_mask_turns_only_the_base_part_around() {
+        // Invert Mask turns the base around; the later parts act on the inverted mask, so Add is still Add there
+        let m = Mask {
+            invert: true,
+            components: vec![part(MaskOp::Add, false), part(MaskOp::Add, true), part(MaskOp::Subtract, true)],
+            ..Default::default()
+        };
+        assert!(!turned_around(&m, 1) && turned_around(&m, 2), "later parts keep their meaning");
+        // a brush that is the base: its coverage is what the inverted mask leaves out
+        let base = Mask { invert: true, components: vec![part(MaskOp::Add, true)], ..Default::default() };
+        assert!(turned_around(&base, 0));
     }
 
     #[test]

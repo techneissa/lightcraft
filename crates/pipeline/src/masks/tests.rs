@@ -744,3 +744,35 @@ fn a_sky_touching_the_top_row_is_covered_there() {
     let col_min = (4..n / 2).map(|y| a.get(0, y)).fold(1.0f32, f32::min);
     assert!(col_min > 0.9, "the first column of the sky: lowest coverage {col_min}");
 }
+
+/// Invert Mask turns the base part around and the later parts work on the inverted mask: an Add part
+/// puts more into what is on screen, a Subtract part takes some out (not the other way round, as when
+/// the whole stack was inverted at the end).
+#[test]
+fn invert_mask_turns_the_base_around_and_later_parts_work_on_the_inverted_mask() {
+    let (w, h) = (100, 40);
+    let img = Rgb32f::from_fn(w, h, |_, _| [0.5; 3]);
+    let log_l = Plane::from_fn(w, h, |_, _| (0.5f32).log2());
+    let f = Frame::new(w, h, &Default::default(), true);
+    // the base: the left half (x < 0.5); the second part: a gradient over x < 0.25
+    let left = |at: f64| MaskShape::Linear { start: Point::new(at, 0.5), end: Point::new(at + 0.001, 0.5) };
+    let part = |op, shape| MaskComponent { name: None, op, invert: false, shape };
+    let mask = |op, invert| Mask { invert, components: vec![part(MaskOp::Add, left(0.5)), part(op, left(0.25))], ..Default::default() };
+    let alpha = |m: &Mask| evaluate_one(m, &f, w, h, &img, &log_l, 0.0, None);
+    let at = |a: &Plane, x: usize| a.get(x, 20);
+    // not inverted: the base is the left half; Add keeps it
+    let a = alpha(&mask(MaskOp::Add, false));
+    assert!(at(&a, 10) > 0.99 && at(&a, 40) > 0.99 && at(&a, 80) < 0.01);
+    // inverted: the base is the right half; an Add part puts the far left in, the middle stays out
+    let a = alpha(&mask(MaskOp::Add, true));
+    assert!(at(&a, 80) > 0.99, "the inverted base");
+    assert!(at(&a, 10) > 0.99, "Add puts more into the inverted mask");
+    assert!(at(&a, 40) < 0.01, "outside both parts");
+    // inverted: a Subtract part takes the far left out of what is on screen (the base's right half is not there)
+    let m = Mask { invert: true, components: vec![part(MaskOp::Add, left(0.5)), part(MaskOp::Subtract, left(0.75))], ..Default::default() };
+    let a = alpha(&m);
+    assert!(at(&a, 80) > 0.99 && at(&a, 60) < 0.01, "Subtract takes out the inverted base: {} {}", at(&a, 80), at(&a, 60));
+    // an inverted mask with no part selects everything
+    let a = alpha(&Mask { invert: true, ..Default::default() });
+    assert!(at(&a, 5) > 0.99 && at(&a, 95) > 0.99);
+}

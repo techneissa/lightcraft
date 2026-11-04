@@ -149,15 +149,16 @@ pub fn evaluate(masks: &[Mask], frame: &Frame, w: usize, h: usize, img: &Rgb32f,
         .collect()
 }
 
-/// The alpha plane of mask `m` (whether visible or not): its components combined, inverted and
-/// scaled by its amount.
+/// The alpha plane of mask `m` (whether visible or not): its components combined and scaled by its
+/// amount. Invert Mask turns the base (first) part around, so every later Add, Subtract and
+/// Intersect works on the inverted mask and does what its name says to what is on screen.
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Plane {
     let mut alpha = Plane::new(w, h);
     let mut first = true;
     for comp in &m.components {
         let mut c = shape_alpha(&comp.shape, frame, w, h, img, log_l, ev, mattes);
-        if comp.invert {
+        if comp.invert != (first && m.invert) {
             c.data.iter_mut().for_each(|v| *v = 1.0 - *v);
         }
         // the first part is the base, whatever its mode says (an Intersect or Subtract has nothing to cut from)
@@ -175,6 +176,10 @@ pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, l
         }
         first = false;
     }
+    // an inverted mask with no part selects everything
+    if m.invert && m.components.is_empty() {
+        alpha.data.iter_mut().for_each(|v| *v = 1.0);
+    }
     if m.refine > 0.0 {
         // Refine Edges: the mask's edges follow the photo's (window up to ~4 % of the long edge,
         // the width of a soft brush edge or gradient)
@@ -184,9 +189,6 @@ pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, l
         for (a, r) in alpha.data.iter_mut().zip(&refined.data) {
             *a += (r - *a) * k.sqrt();
         }
-    }
-    if m.invert {
-        alpha.data.iter_mut().for_each(|v| *v = 1.0 - *v);
     }
     let amt = (m.adjust.amount / 100.0) as f32;
     if (amt - 1.0).abs() > 1e-6 {

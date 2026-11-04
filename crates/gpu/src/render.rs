@@ -1021,6 +1021,8 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
     for (mi, m) in list.iter().enumerate() {
         let mut first = true;
         for comp in &m.components {
+            // Invert Mask turns the base part around (see `lightcraft_pipeline::masks::evaluate_one`)
+            let inverted = comp.invert != (first && m.invert);
             let op = match comp.op {
                 _ if first => 0u32,
                 MaskOp::Add => 1,
@@ -1028,7 +1030,7 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
                 MaskOp::Intersect => 3,
             };
             first = false;
-            let mut p = vec![w as u32, h as u32, 0, comp.invert as u32];
+            let mut p = vec![w as u32, h as u32, 0, inverted as u32];
             p.extend_from_slice(&aff);
             let f32s = |v: &[f64]| v.iter().map(|x| (*x as f32).to_bits()).collect::<Vec<u32>>();
             let mut aux: Vec<f32> = Vec::new();
@@ -1126,7 +1128,7 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
                     let img = host.lin.get_or_insert_with(|| Arc::new(cx.read_rgb(lin, w, h))).clone();
                     let l = host.log_l.get_or_insert_with(|| Arc::new(cx.read_plane(&prep.log_l, w, h))).clone();
                     let mut v = lightcraft_pipeline::masks::shape_alpha(&comp.shape, frame, w, h, &img, &l, ev, plan.mattes.as_deref());
-                    if comp.invert {
+                    if inverted {
                         v.data.iter_mut().for_each(|x| *x = 1.0 - *x);
                     }
                     Some(cx.gpu.upload(&v.data))
@@ -1137,12 +1139,7 @@ fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Ho
             cx.run("combine", &k, &[None, None, None, Some(cbuf), Some(&alpha)], groups1(n));
         }
         let amt = (m.adjust.amount / 100.0) as f32;
-        cx.run(
-            "finalize",
-            &[n as u32, 0, mi as u32, m.invert as u32, amt.to_bits()],
-            &[None, None, None, Some(&comp_plane), Some(&alpha)],
-            groups1(n),
-        );
+        cx.run("finalize", &[n as u32, 0, mi as u32, 0, amt.to_bits()], &[None, None, None, Some(&comp_plane), Some(&alpha)], groups1(n));
     }
     let terms = list.iter().map(|m| mask_terms(&m.adjust)).collect();
     (Some(alpha), terms)
