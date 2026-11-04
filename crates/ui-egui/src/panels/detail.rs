@@ -15,6 +15,7 @@ use crate::theme::Tokens;
 use crate::widgets::{register, register_geometry};
 use lightcraft_engine::media::QuickSource;
 
+mod brush_panel;
 mod brush_preview;
 mod brush_resize;
 mod crop;
@@ -469,8 +470,23 @@ fn announce_photo(app: &LightcraftApp, resp: &egui::Response, photo: &lightcraft
     crate::widgets::announce(resp, crate::i18n::tr_format!("Photo: {name}", name = super::grid::cell_description(app, photo)));
 }
 
+/// Whether a brush is in use on the photo in the Detail view: `Some(false)` the Masking brush,
+/// `Some(true)` the Remove tool's.
+pub(crate) fn brush_in_use(app: &LightcraftApp) -> Option<bool> {
+    brush_panel::active(app).filter(|_| matches!(app.ui.view, crate::state::ViewMode::Detail) && !app.ui.fullscreen)
+}
+
 /// The loupe's right-click menu: zoom commands and the grid's photo menu.
 fn loupe_context_menu(app: &mut LightcraftApp, resp: &egui::Response, id: PhotoId) {
+    // with a brush in use the right-click opens the brush panel instead (Alt+right-drag resizes the brush)
+    if let Some(remove) = brush_panel::active(app) {
+        if !resp.ctx.input(|i| i.modifiers.alt) {
+            egui::Popup::context_menu(resp)
+                .close_behavior(crate::widgets::context_menu_close(resp, egui::PopupCloseBehavior::CloseOnClickOutside))
+                .show(|ui| brush_panel::show(app, ui, remove));
+        }
+        return;
+    }
     crate::widgets::context_menu(resp, |ui| {
         crate::widgets::menu_button(ui, crate::i18n::tr("Zoom"), |ui| {
             for (label, cmd) in [("Fit", "view.zoomFit"), ("100%", "view.zoom100"), ("Zoom In", "view.zoomIn"), ("Zoom Out", "view.zoomOut")] {

@@ -645,6 +645,52 @@ fn brush_tool(
     }
 }
 
+/// ⌃⌥-drag (or Alt+right-drag) over the photo with a radial gradient selected sets its feather, as
+/// it sets a brush's: up softens, down hardens, 200 points for the whole range. One undo step; the
+/// gradient does not move. True while the drag lasts (and on its last frame).
+fn radial_feather_drag(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, d: &DevelopSettings) -> bool {
+    let id = egui::Id::unique("radial-feather-drag");
+    let was: bool = ui.data(|x| x.get_temp(id)).unwrap_or(false);
+    let mods = ui.input(|i| i.modifiers);
+    let radial = |mask: &lightcraft_develop::Mask| {
+        let part = app.session.active_part().filter(|k| matches!(mask.components.get(*k).map(|c| &c.shape), Some(MaskShape::Radial { .. })));
+        part.or_else(|| mask.components.iter().position(|c| matches!(c.shape, MaskShape::Radial { .. })))
+    };
+    let target = app.session.active_mask.and_then(|m| d.masks.iter().find(|x| x.id == m)).and_then(|m| radial(m).map(|k| (m.id, k)));
+    let mut on = was;
+    if resp.drag_started() {
+        let right = resp.dragged_by(egui::PointerButton::Secondary);
+        on = target.is_some() && app.gesture.is_none() && mods.alt && (mods.ctrl || (right && !mods.shift));
+        if on {
+            let _ = app.run("develop.beginInteraction", json!({"label": "Edit Mask"}));
+        }
+    }
+    let Some((mask, comp)) = target.filter(|_| on) else {
+        ui.data_mut(|x| x.remove::<bool>(id));
+        return false;
+    };
+    if let Some(MaskShape::Radial { center, rx, ry, angle, feather, invert }) =
+        d.masks.iter().find(|m| m.id == mask).and_then(|m| m.components.get(comp)).map(|c| c.shape.clone())
+        && resp.dragged()
+    {
+        let feather = (feather - f64::from(resp.drag_delta().y) * 0.5).clamp(0.0, 100.0);
+        let shape = MaskShape::Radial { center, rx, ry, angle, feather, invert };
+        let _ = app.run("mask.update", json!({"id": mask, "component": comp, "shape": shape}));
+    }
+    let over = resp.drag_stopped() || (!resp.dragged() && !resp.drag_started() && !ui.input(|i| i.pointer.any_down()));
+    if over {
+        let _ = app.run("develop.endInteraction", json!({}));
+    }
+    ui.data_mut(|x| {
+        if over {
+            x.remove::<bool>(id);
+        } else {
+            x.insert_temp(id, true);
+        }
+    });
+    true
+}
+
 /// Grabbing mask grips and component bodies: select, drag, release.
 fn grip_gestures(
     app: &mut LightcraftApp,
@@ -654,6 +700,9 @@ fn grip_gestures(
     d: &DevelopSettings,
     grips: &[(u32, usize, u8, Pos2)],
 ) {
+    if radial_feather_drag(app, ui, resp, d) {
+        return;
+    }
     let active = app.session.active_mask;
     // the grip under the pointer: the selected mask's first, then the nearest
     let hit = |q: Pos2| {

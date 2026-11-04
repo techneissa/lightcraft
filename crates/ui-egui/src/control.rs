@@ -754,6 +754,8 @@ pub(crate) fn gesture_events(app: &mut LightcraftApp, ctx: &egui::Context, metho
             };
             let Some(events) = p.get("events").and_then(Value::as_array) else { return Err("missing `events`".into()) };
             let m = modifiers(p);
+            let button =
+                if p.get("button").and_then(Value::as_str) == Some("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
             for e in events {
                 let x = e.get("x").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.5) as f32;
                 let y = e.get("y").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.5) as f32;
@@ -761,11 +763,9 @@ pub(crate) fn gesture_events(app: &mut LightcraftApp, ctx: &egui::Context, metho
                 match e.get("kind").and_then(Value::as_str).unwrap_or("move") {
                     "down" => {
                         app.synthetic.push(egui::Event::PointerMoved(pos));
-                        app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: m });
+                        app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: true, modifiers: m });
                     }
-                    "up" => {
-                        app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: m })
-                    }
+                    "up" => app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: false, modifiers: m }),
                     _ => app.synthetic.push(egui::Event::PointerMoved(pos)),
                 }
             }

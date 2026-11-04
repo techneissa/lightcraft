@@ -1,4 +1,4 @@
-//! ⌃⌥-drag on the photo resizes the brush in use, for the Masking brush and the Remove tool alike
+//! ⌃⌥-drag (or Alt+right-drag, the Windows and Linux gesture of Photoshop) on the photo resizes the brush in use, for the Masking brush and the Remove tool alike
 //! (the on-canvas resize of Photoshop, as in PhotoCraft): sideways changes the size (the circle's
 //! edge follows the pointer), up and down the feather (down is harder). It begins on the press, not
 //! once egui calls the movement a drag, and moves the brush by the pointer's travel, so a value held
@@ -20,6 +20,8 @@ struct Resize {
     size: f32,
     feather: f32,
     start_feather: f32,
+    /// Begun by an Alt+right-drag: it lasts as long as the right button is down.
+    secondary: bool,
 }
 
 /// The size (fraction of the long side, within `limits`) and feather (percent) after the pointer
@@ -46,20 +48,43 @@ pub(super) fn resize_drag(
 ) -> bool {
     let id = egui::Id::unique("brush-resize-drag");
     let mut live: Option<Resize> = ui.data(|d| d.get_temp(id));
-    let (pressed, down, origin, delta, held) = ui.input(|i| {
-        (i.pointer.primary_pressed(), i.pointer.primary_down(), i.pointer.press_origin(), i.pointer.delta(), i.modifiers.ctrl && i.modifiers.alt)
+    let (pressed, secondary_pressed, primary_down, secondary_down, origin, delta, mods) = ui.input(|i| {
+        (
+            i.pointer.primary_pressed(),
+            i.pointer.button_pressed(egui::PointerButton::Secondary),
+            i.pointer.primary_down(),
+            i.pointer.secondary_down(),
+            i.pointer.press_origin().or(i.pointer.latest_pos()),
+            i.pointer.delta(),
+            i.modifiers,
+        )
     });
     let (limits, size, feather) =
         if remove { ((0.001, 0.25), app.ui.remove_size, app.ui.remove_feather) } else { ((0.002, 0.5), app.ui.brush_size, app.ui.brush_feather) };
-    if pressed {
-        live = origin.filter(|o| held && resp.hovered() && resp.rect.contains(*o) && app.gesture.is_none()).map(|anchor| Resize {
+    // ⌃⌥ with the left button, or Alt (without Shift, which is the HUD colour picker in Photoshop) with the right
+    let begins = |secondary: bool| {
+        resp.hovered() && app.gesture.is_none() && if secondary { mods.alt && !mods.shift && !mods.ctrl } else { mods.ctrl && mods.alt }
+    };
+    let started = if secondary_pressed && begins(true) {
+        Some(true)
+    } else if pressed && begins(false) {
+        Some(false)
+    } else {
+        None
+    };
+    if pressed || secondary_pressed {
+        live = started.zip(origin.filter(|o| resp.rect.contains(*o))).map(|(secondary, anchor)| Resize {
             anchor,
             size,
             feather,
             start_feather: feather,
+            secondary,
         });
-    } else if let Some(r) = live.as_mut()
+    }
+    let down = live.is_some_and(|r| if r.secondary { secondary_down } else { primary_down });
+    if let Some(r) = live.as_mut()
         && down
+        && !(pressed || secondary_pressed)
     {
         (r.size, r.feather) = travel(r.size, r.feather, delta.x, delta.y, long, limits);
     }
@@ -80,7 +105,7 @@ pub(super) fn resize_drag(
             d.remove::<Resize>(id);
         }
     });
-    draw(ui, p, &r, (r.size * long, r.feather.round()), (r.size * scale).round(), pressed || down);
+    draw(ui, p, &r, (r.size * long, r.feather.round()), (r.size * scale).round(), pressed || secondary_pressed || down);
     true
 }
 

@@ -2213,6 +2213,56 @@ fn ctrl_alt_drag_resizes_the_masking_brush_without_painting() {
     assert!(strokes(&h) > before, "a plain drag paints");
 }
 
+/// Alt+right-drag (Photoshop's Windows gesture) resizes the Masking brush like ⌃⌥-drag.
+#[test]
+fn alt_right_drag_resizes_the_masking_brush_without_painting() {
+    let mut h = detail("panel.masking");
+    h.settle(SETTLE);
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    let size = h.app.ui.brush_size;
+    let r = h.request(
+        "ui.pointer",
+        json!({"events": [{"kind": "down", "x": 0.5, "y": 0.5}, {"kind": "drag", "x": 0.55, "y": 0.5}, {"kind": "drag", "x": 0.6, "y": 0.5}, {"kind": "up", "x": 0.6, "y": 0.5}],
+               "alt": true, "button": "right"}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.app.ui.brush_size > size, "dragging right grows the brush: {} vs {size}", h.app.ui.brush_size);
+    let painted: usize = develop(&h)
+        .masks
+        .iter()
+        .flat_map(|m| m.components.iter())
+        .map(|c| if let MaskShape::Brush { strokes } = &c.shape { strokes.len() } else { 0 })
+        .sum();
+    assert_eq!(painted, 0, "a resize paints nothing");
+}
+
+/// ⌃⌥-drag over the photo with a radial gradient selected sets its feather and leaves it in place.
+#[test]
+fn ctrl_alt_drag_sets_a_radial_masks_feather_without_moving_it() {
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.18, "ry": 0.1}));
+    let feather = |h: &Headless| {
+        let MaskShape::Radial { center, feather, .. } = develop(h).masks[0].components[0].shape.clone() else { panic!("radial") };
+        (center, feather)
+    };
+    let (c0, f0) = feather(&h);
+    for (dy, harder) in [(-0.1, false), (0.15, true)] {
+        let before = feather(&h).1;
+        let r = h.request(
+            "ui.pointer",
+            json!({"events": [{"kind": "down", "x": 0.2, "y": 0.5}, {"kind": "drag", "x": 0.2, "y": 0.5 + dy / 2.0}, {"kind": "drag", "x": 0.2, "y": 0.5 + dy}, {"kind": "up", "x": 0.2, "y": 0.5 + dy}],
+                   "ctrl": true, "alt": true}),
+            T,
+        );
+        assert_eq!(r["ok"], true, "{r}");
+        let (c, f) = feather(&h);
+        assert!(if harder { f < before } else { f > before }, "feather {before} -> {f}");
+        assert!((c.x - c0.x).abs() < 1e-9 && (c.y - c0.y).abs() < 1e-9, "the gradient did not move");
+    }
+    assert_ne!(feather(&h).1, f0);
+}
+
 #[test]
 fn reflections_are_in_the_remove_panel_and_reset_is_undoable() {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());

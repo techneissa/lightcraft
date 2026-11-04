@@ -707,7 +707,7 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) {
         let _ = app.run(if f == "library.next" { "slideshow.next" } else { "slideshow.previous" }, json!({}));
         return;
     }
-    if fire_rating_key(app, ctx, f) || fire_grid_key(app, f) || fire_flag_key(app, ctx, f) {
+    if brush_digit_key(app, ctx, f) || fire_rating_key(app, ctx, f) || fire_grid_key(app, f) || fire_flag_key(app, ctx, f) {
         return;
     }
     // in the full-screen preview (no panels) I cycles the info overlay instead
@@ -736,6 +736,62 @@ fn fire_command(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) {
         "edit.redo" => app.toast(ctx, crate::i18n::tr("Redo")),
         _ => {}
     }
+}
+
+/// How long a second digit after a first one still makes a two-digit value.
+const DIGIT_PAIR_SECONDS: f64 = 0.8;
+
+/// With a brush in use the digit keys set its strength, as in Photoshop: 1-9 are 10-90 %, 0 is 100 %,
+/// and two digits typed quickly an exact value (`3` `5` is 35 %). The Masking brush's Flow, the
+/// Remove tool's Opacity. Whether `f` was one of those digits (the rating and colour label keys
+/// then leave the photo alone).
+fn brush_digit_key(app: &mut LightcraftApp, ctx: &egui::Context, f: &str) -> bool {
+    let Some(remove) = crate::panels::detail::brush_in_use(app) else { return false };
+    let digit: u32 = match f {
+        "label:red" => 6,
+        "label:yellow" => 7,
+        "label:green" => 8,
+        "label:blue" => 9,
+        _ => match f.strip_prefix("rate:").and_then(|r| r.split_once(':')) {
+            Some((n, "0")) => n.parse().unwrap_or(0),
+            _ => return false,
+        },
+    };
+    let id = egui::Id::unique("brush-digit");
+    let now = ctx.input(|i| i.time);
+    let earlier: Option<(f64, u32)> = ctx.data(|d| d.get_temp(id));
+    let value = match earlier {
+        Some((t, first)) if now - t <= DIGIT_PAIR_SECONDS => {
+            let v = first * 10 + digit;
+            if v == 0 { 100 } else { v }
+        }
+        _ => {
+            if digit == 0 {
+                100
+            } else {
+                digit * 10
+            }
+        }
+    };
+    let value = value.min(100);
+    // a pair is complete after its second digit; a lone digit may still get one
+    let first_of_pair = !matches!(earlier, Some((t, _)) if now - t <= DIGIT_PAIR_SECONDS);
+    ctx.data_mut(|d| {
+        if first_of_pair {
+            d.insert_temp(id, (now, digit));
+        } else {
+            d.remove::<(f64, u32)>(id);
+        }
+    });
+    let name = if remove {
+        app.ui.remove_opacity = value as f32;
+        "Opacity"
+    } else {
+        app.ui.brush_flow = value.max(1) as f32;
+        "Flow"
+    };
+    app.toast(ctx, format!("{} {value}", crate::i18n::tr(name)));
+    true
 }
 
 /// Rating and colour label keys; whether `f` was one.
