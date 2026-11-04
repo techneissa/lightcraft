@@ -54,7 +54,6 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
     if super::find_overlay::show(app, ui, resp, map) {
         return;
     }
-    let r = (app.ui.remove_size as f64 * long) as f32;
     // a target or source under `q`: the selected spot's first, then the nearest pin
     let hit = |q: Pos2| {
         grips
@@ -65,6 +64,11 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
             })
             .copied()
     };
+    // ⌃⌥-drag resizes the brush (sideways its size, up and down its feather) instead of painting or moving a pin
+    if super::brush_resize::resize_drag(app, ui, resp, &p, long as f32, 1000.0, true) {
+        return;
+    }
+    let r = (app.ui.remove_size as f64 * long) as f32;
     let hover = resp.hover_pos().and_then(hit);
     if let Some(h) = resp.hover_pos() {
         if hover.is_some() {

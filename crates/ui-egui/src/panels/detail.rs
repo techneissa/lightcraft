@@ -16,6 +16,7 @@ use crate::widgets::{register, register_geometry};
 use lightcraft_engine::media::QuickSource;
 
 mod brush_preview;
+mod brush_resize;
 mod crop;
 mod film_bar;
 mod filmstrip;

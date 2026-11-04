@@ -539,6 +539,10 @@ fn brush_tool(
     let r = (app.ui.brush_size as f64 * long) as f32;
     // what a stroke does to the mask: Add or Erase, turned around while ⌥ is held
     let takes_away = app.ui.brush_erase != ui.input(|i| i.modifiers.alt);
+    // ⌃⌥-drag resizes the brush (sideways its size, up and down its feather) instead of painting
+    if super::brush_resize::resize_drag(app, ui, resp, p, long as f32, 400.0, false) {
+        return;
+    }
     if let Some(h) = resp.hover_pos() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         p.circle_stroke(h, r, Stroke::new(1.0, Color32::WHITE));

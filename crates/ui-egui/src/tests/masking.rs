@@ -2164,6 +2164,55 @@ fn a_brush_stroke_is_not_tinted_while_the_mask_overlay_is_hidden() {
     pointer(&mut h, json!([{"kind": "up", "x": 0.85, "y": 0.9}]));
 }
 
+/// ⌃⌥-drag on the photo resizes the Masking brush (sideways its size, up and down its feather)
+/// and paints nothing; a plain drag still paints.
+#[test]
+fn ctrl_alt_drag_resizes_the_masking_brush_without_painting() {
+    let mut h = detail("panel.masking");
+    h.settle(SETTLE);
+    exec(&mut h, "tool.brush", json!({"new": true}));
+    let (size, feather) = (h.app.ui.brush_size, h.app.ui.brush_feather);
+    let drag = |h: &mut Headless, to_x: f32, to_y: f32| {
+        pointer(
+            h,
+            json!([{"kind": "down", "x": 0.5, "y": 0.5}, {"kind": "drag", "x": 0.5 + to_x / 2.0, "y": 0.5 + to_y / 2.0}, {"kind": "drag", "x": 0.5 + to_x, "y": 0.5 + to_y},
+                   {"kind": "up", "x": 0.5 + to_x, "y": 0.5 + to_y}]),
+        );
+    };
+    let strokes = |h: &Headless| {
+        develop(h)
+            .masks
+            .iter()
+            .flat_map(|m| m.components.iter())
+            .map(|c| if let MaskShape::Brush { strokes } = &c.shape { strokes.len() } else { 0 })
+            .sum::<usize>()
+    };
+    let before = strokes(&h);
+    let r = h.request(
+        "ui.pointer",
+        json!({"events": [{"kind": "down", "x": 0.5, "y": 0.5}, {"kind": "drag", "x": 0.55, "y": 0.5}, {"kind": "drag", "x": 0.6, "y": 0.45}, {"kind": "up", "x": 0.6, "y": 0.45}],
+               "ctrl": true, "alt": true}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.app.ui.brush_size > size, "dragging right grows the brush: {} vs {size}", h.app.ui.brush_size);
+    assert!(h.app.ui.brush_feather > feather, "dragging up softens the brush: {} vs {feather}", h.app.ui.brush_feather);
+    assert_eq!(strokes(&h), before, "a resize paints nothing");
+    let grown = h.app.ui.brush_size;
+    let r = h.request(
+        "ui.pointer",
+        json!({"events": [{"kind": "down", "x": 0.6, "y": 0.5}, {"kind": "drag", "x": 0.5, "y": 0.5}, {"kind": "up", "x": 0.5, "y": 0.5}], "ctrl": true, "alt": true}),
+        T,
+    );
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.app.ui.brush_size < grown, "dragging left shrinks the brush: {} vs {grown}", h.app.ui.brush_size);
+    // a plain drag paints and leaves the size alone
+    let size_now = h.app.ui.brush_size;
+    drag(&mut h, 0.2, 0.0);
+    assert_eq!(h.app.ui.brush_size, size_now);
+    assert!(strokes(&h) > before, "a plain drag paints");
+}
+
 #[test]
 fn reflections_are_in_the_remove_panel_and_reset_is_undoable() {
     let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services::default());
