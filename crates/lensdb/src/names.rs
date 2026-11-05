@@ -229,7 +229,10 @@ mod tests {
         let l = lenses();
         assert!(names(l, "sirui").iter().any(|n| n == "Sirui Aurora 85mm f/1.4"), "{:?}", names(l, "sirui"));
         assert_eq!(names(l, "laowa 100").first().map(String::as_str), Some("Laowa 100mm f/2.8 2x Ultra Macro APO"));
-        let sorted = l.entries().windows(2).all(|w| (w[0].maker.to_lowercase(), w[0].name.to_lowercase()) <= (w[1].maker.to_lowercase(), w[1].name.to_lowercase()));
+        let sorted = l
+            .entries()
+            .windows(2)
+            .all(|w| (w[0].maker.to_lowercase(), w[0].name.to_lowercase()) <= (w[1].maker.to_lowercase(), w[1].name.to_lowercase()));
         assert!(sorted, "merged list stays sorted");
     }
 
