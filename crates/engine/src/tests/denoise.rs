@@ -1011,7 +1011,11 @@ fn a_cancelled_batch_does_not_come_back_while_its_job_winds_down() {
     // a model that does not load until let go: the job is running all that while
     let gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
     let (g, runs) = (gate.clone(), x.runs.clone());
+    // (set when the job has reached its model: cancelling before that stops it at once, and nothing winds down)
+    let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let seen = entered.clone();
     x.s.denoise.loader = Arc::new(move |_, _| {
+        seen.store(true, std::sync::atomic::Ordering::SeqCst);
         let (open, wake) = &*g;
         let mut open = open.lock().unwrap();
         while !*open {
@@ -1021,9 +1025,20 @@ fn a_cancelled_batch_does_not_come_back_while_its_job_winds_down() {
     });
     x.s.execute("denoise.settings", &json!({"auto": true})).unwrap();
     set_amount(&mut x.s, 100.0);
+    // (the stand-in model setup loaded is kept for the next photo: forget it, so this job asks the gated loader)
+    if let Some(active) = x.s.denoise.active.as_ref() {
+        *active.model.lock().unwrap() = None;
+    }
     x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
     let batches = |s: &Session| s.activity.list().into_iter().filter(|t| t.kind == "denoise" && t.batch).count();
     let batch = x.s.activity.list().into_iter().find(|t| t.kind == "denoise" && t.batch).expect("a batch row");
+    for _ in 0..1000 {
+        if entered.load(std::sync::atomic::Ordering::SeqCst) {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert!(entered.load(std::sync::atomic::Ordering::SeqCst), "the job reached its model");
     x.s.activity.cancel(batch.id).unwrap();
     for _ in 0..3 {
         x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();

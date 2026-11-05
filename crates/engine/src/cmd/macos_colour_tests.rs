@@ -66,6 +66,8 @@ fn off_the_mac_no_photo_moves() {
 #[test]
 fn the_count_never_waits_for_macos() {
     let (probes, _g) = slow_mac(Some((7008, 4672)), std::time::Duration::from_millis(400), true, true);
+    // (Core Image's list of cameras is read once per process, about a second on a busy Mac: not what is timed here)
+    let _ = lightcraft_macraw::supports("ILCE-7M5");
     let mut s = Session::new();
     for i in 1..=2 {
         s.catalog.apply(Op::AddPhoto { photo: Box::new(raw(i, "SONY ILCE-7M5")) }).unwrap();
