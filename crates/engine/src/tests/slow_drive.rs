@@ -54,56 +54,57 @@ fn culled(s: &Session) -> Vec<(PhotoId, Flag, u8)> {
 }
 
 /// Flag and rate every photo the way a photographer culls: pick / reject in turn, a rating on
-/// every other one. Returns the slowest command, in ms.
-fn cull(s: &mut Session, rounds: usize) -> f64 {
+/// every other one.
+fn cull(s: &mut Session, rounds: usize) {
     let all = ids(s);
-    let mut slowest = 0.0f64;
     for k in 0..rounds {
         for (i, id) in all.iter().enumerate() {
             let flag = if (i + k) % 2 == 0 { "pick" } else { "reject" };
-            let t = Instant::now();
             s.execute("photo.flag", &json!({"flag": flag, "ids": [id.0]})).unwrap();
-            slowest = slowest.max(t.elapsed().as_secs_f64() * 1000.0);
             if i % 2 == 0 {
-                let t = Instant::now();
                 s.execute("photo.rate", &json!({"rating": ((i + k) % 5) as u8 + 1, "ids": [id.0]})).unwrap();
-                slowest = slowest.max(t.elapsed().as_secs_f64() * 1000.0);
             }
         }
     }
-    slowest
 }
 
-/// (a) With every sync of the log taking 300 ms, a flag or rating returns long before one sync.
-/// The same culling with the log written on the caller's thread (as before PERF-STEP-STALL) waits
-/// for a sync on every key, which is what this test would see without the fix.
+/// (a) Every sync of the log is held until the test lets go: a flag or rating still returns. The
+/// log written on the caller's thread (as before PERF-STEP-STALL) would wait inside the held sync
+/// for each key; the hold gives up after 30 s only so a regression ends, and says so.
 #[test]
 fn a_flag_never_waits_for_a_slow_drive() {
-    let sync = Duration::from_millis(300);
-    let mut seen = Vec::new();
-    for on_caller in [true, false] {
-        let dir = temp_dir(if on_caller { "wait-before" } else { "wait" });
-        fault::write_on_caller(&dir, on_caller);
-        let mut s = open(&dir);
-        slow_drive(&dir, sync, Arc::new(AtomicBool::new(false)));
-        let t = Instant::now();
-        let slowest = cull(&mut s, 1);
-        let total = t.elapsed().as_secs_f64() * 1000.0;
-        let n = s.library.as_ref().map_or(0, |l| l.journal().stats().appends);
-        eprintln!(
-            "{} drive syncing in 300 ms: slowest command {slowest:.1} ms, {total:.0} ms for the culling",
-            if on_caller { "before (log written on the caller):" } else { "after (log on its own thread):" }
-        );
-        seen.push((slowest, total, n));
-        drop(s);
-        fault::remove(&dir);
-        fault::write_on_caller(&dir, false);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-    let ((before, _, _), (after, _, _)) = (seen[0], seen[1]);
-    assert!(before >= 300.0, "the caller waited for its sync before: {before:.1} ms");
-    // a debug build of the whole workspace's tests at once leaves room; one sync is 300 ms
-    assert!(after < 120.0, "a command waited for the drive: {after:.1} ms");
+    let dir = temp_dir("wait");
+    let mut s = open(&dir);
+    let open_gate = Arc::new((std::sync::Mutex::new(false), std::sync::Condvar::new()));
+    let gave_up = Arc::new(AtomicBool::new(false));
+    let (g, gave) = (open_gate.clone(), gave_up.clone());
+    fault::install(
+        &dir,
+        Arc::new(move |step| {
+            if step == Step::Sync {
+                let held = g.0.lock().unwrap();
+                let (_held, timeout) = g.1.wait_timeout_while(held, Duration::from_secs(30), |open| !*open).unwrap();
+                if timeout.timed_out() {
+                    gave.store(true, Ordering::SeqCst);
+                }
+            }
+            Ok(())
+        }),
+    );
+    cull(&mut s, 1);
+    assert!(!gave_up.load(Ordering::SeqCst), "a command waited for the drive's sync");
+    *open_gate.0.lock().unwrap() = true;
+    open_gate.1.notify_all();
+    let want = culled(&s);
+    s.library.as_mut().unwrap().journal_mut().flush().unwrap();
+    let n = s.library.as_ref().map_or(0, |l| l.journal().stats().appends);
+    assert!(n > 0, "the commands were logged");
+    drop(s);
+    fault::remove(&dir);
+    let again = open(&dir);
+    assert_eq!(culled(&again), want, "and reached the disk once the sync landed");
+    drop(again);
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 /// (b) Everything flagged and rated while slow saves are in flight is on disk once they land

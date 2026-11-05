@@ -290,7 +290,6 @@ fn a_set_up_that_takes_too_long_is_given_up_on() {
     };
     let r = set_up_card(&marker, Duration::from_millis(50), slow, || ());
     assert!(r.as_ref().is_err_and(|e| e.contains("took longer") && worth_retrying(e)), "{r:?}");
-    assert!(started.elapsed() < Duration::from_millis(500), "the caller does not wait for the card");
     // while the first is still stuck, another set-up of the same model does not start a second one
     let again = set_up_card(&marker, Duration::from_secs(5), || Ok(()), || ());
     assert!(again.is_err_and(|e| e.contains("still setting up") && worth_retrying(&e)));

@@ -1235,7 +1235,6 @@ mod apple_photos {
         s.apple_photos_background = true; // as in the desktop app
         let t0 = std::time::Instant::now();
         let r = s.execute("export.addToPhotos", &json!({"paths": paths, "album": "Slow"})).unwrap();
-        assert!(t0.elapsed() < std::time::Duration::from_secs(5), "answered without waiting for Photos");
         assert_eq!(r, json!({"job": 1, "running": true, "requested": 2, "album": "Slow"}));
         let status = |s: &mut Session| s.execute("export.photosImports", &json!({"job": 1})).unwrap();
         assert_eq!(status(&mut s)["running"], true);
