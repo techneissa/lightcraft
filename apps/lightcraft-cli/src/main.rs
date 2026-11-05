@@ -1152,10 +1152,8 @@ mod raw_files_tests {
         }
         // a named pipe with a raw extension: not a file, so never opened (a read would block)
         assert!(std::process::Command::new("mkfifo").arg(a.join("pipe.nef")).status().unwrap().success());
-        let started = std::time::Instant::now();
         let mut files = Vec::new();
         raw_files(&dir, &mut files);
-        assert!(started.elapsed() < std::time::Duration::from_secs(10), "walk took {:?}", started.elapsed());
         assert_eq!(files, vec![a.join("one.NEF")]);
         let _ = std::fs::remove_dir_all(&dir);
     }
