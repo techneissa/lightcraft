@@ -114,6 +114,7 @@ pub const LEFT_OUT_SETTINGS: &[(&str, &str)] = &[
     ("previewLimit", "this Mac's graphics and memory"),
     ("memoryMb", "this Mac's memory"),
     ("lensDatabaseDir", "a folder on this Mac"),
+    ("lensDatabase", "a download answered on this Mac"),
     ("displayProfile", "this Mac's monitor"),
     ("smartEditingOffered", "a question asked once on this Mac"),
     ("shortcutsWindowSize", "a window's size"),

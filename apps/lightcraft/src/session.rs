@@ -274,6 +274,10 @@ pub(crate) fn open_session(in_memory: bool, launch: &Launch, seed_demo: bool) ->
         Launch::Ask => (Session::new().with_fs().with_default_denoise_models().with_default_map_cache().with_system_clock(), None),
         Launch::Open { dir, remembered, .. } => open_library_session(in_memory, dir.clone(), *remembered, seed_demo),
     };
+    // lens profiles from the app's own lensfun copy, offered on the first launch (not for a throwaway session)
+    if !in_memory {
+        s = s.with_default_lens_database().with_lens_auto_download();
+    }
     // the face models: the folder shared with PhotoCraft first, then LightCraft's own (fork/shared-models.md)
     s = s.with_default_face_models();
     s.slide_templates_dir = lightcraft_engine::config::config_dir().map(|d| d.join(lightcraft_engine::slide_template::DIR_NAME));

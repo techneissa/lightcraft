@@ -79,7 +79,9 @@ fn the_command_sets_reads_and_clears_the_folder() {
     assert_eq!(app.run("lensDatabase.get", json!({})).unwrap()["setting"], dir.to_string_lossy().as_ref());
     // cleared
     let r = settled(&mut app, "lensDatabase.set", json!({"dir": null}));
-    assert_eq!((r["source"].as_str(), r["profiles"].as_u64()), (Some("none"), Some(0)), "{r}");
+    // (the downloaded database, when another test selected one, is in use again)
+    assert!(r["source"] == "none" || r["source"] == "downloaded", "{r}");
+    assert!(r["setting"].is_null(), "{r}");
     assert_eq!(app.ui.settings.lens_database_dir, "");
     assert!(lens_profiles::database().is_none());
     let _ = std::fs::remove_dir_all(&dir);
@@ -164,6 +166,8 @@ fn no_status_line_while_no_folder_is_set() {
     assert!(status_hint(&s(FolderSource::Setting, Some("/lenses"), Some(Problem::Missing))).unwrap().contains("doesn't exist"));
     // the variable wins even with no folder chosen in Settings: that is real status
     assert!(status_hint(&s(FolderSource::Env, Some("/env"), None)).unwrap().contains("LIGHTCRAFT_LENSFUN_DIR"));
+    // the downloaded database has its own row in General
+    assert_eq!(status_hint(&s(FolderSource::Downloaded, Some("/downloaded"), None)), None);
 }
 
 #[test]

@@ -2,8 +2,8 @@
 //! ([`lightcraft_engine::lens_profiles`]). `LIGHTCRAFT_LENSFUN_DIR` still wins when it is set.
 //!
 //! The folder is an app setting ([`crate::state::AppSettings::lens_database_dir`]) and is handed to
-//! the engine when it changes. Photos pick up a changed database when they are imported or reloaded
-//! (`photo.reload`): each keeps the profile it was last read with.
+//! the engine when it changes; it wins over the downloaded database (Settings ▸ General). Raws without a profile are
+//! looked up again when the database changes ([`crate::lens_db`]); others keep the profile they were last read with.
 //!
 //! Agents use `lensDatabase.get`, `lensDatabase.set {dir}` (null or "" clears it) and
 //! `lensDatabase.reload`. A big folder takes a moment to read, so the read runs on a worker with a
@@ -69,9 +69,10 @@ pub(crate) fn status_line(s: &Status) -> String {
     line
 }
 
-/// The status line under the row: only real status, nothing while no folder is in use (the row says "None").
+/// The status line under the row: only for a folder of the user's (chosen here or [`lens_profiles::ENV`]), nothing
+/// while none is in use (the row says "None"; the downloaded database has its own row in General).
 pub(crate) fn status_hint(s: &Status) -> Option<String> {
-    s.dir.is_some().then(|| status_line(s))
+    (s.dir.is_some() && matches!(s.source, FolderSource::Setting | FolderSource::Env)).then(|| status_line(s))
 }
 
 fn status_json(app: &LightcraftApp) -> Value {
@@ -80,6 +81,7 @@ fn status_json(app: &LightcraftApp) -> Value {
         FolderSource::None => "none",
         FolderSource::Env => "env",
         FolderSource::Setting => "setting",
+        FolderSource::Downloaded => "downloaded",
     };
     let problem = s.problem.as_ref().map(|p| match p {
         Problem::Missing => "missing",

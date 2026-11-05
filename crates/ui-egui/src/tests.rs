@@ -66,6 +66,8 @@ mod labels;
 mod launch_library;
 mod layout_image;
 mod lens_database;
+mod lens_lookup;
+mod lens_offer;
 mod library_problem;
 mod lifecycle_037;
 mod lightroom_destination;

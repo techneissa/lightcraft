@@ -40,6 +40,7 @@ pub mod icons;
 mod inline_rename;
 pub mod keybinds;
 pub mod layers_task;
+pub mod lens_db;
 pub mod lightroom_import;
 pub mod links;
 mod local_profile_offer;

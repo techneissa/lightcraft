@@ -231,6 +231,10 @@ pub struct AppSettings {
     /// default (fork feature `feat/49-shortcuts-window`).
     #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
     pub shortcuts_window_size: Option<[f32; 2]>,
+    /// The answer to the first-launch offer of the lens database (Download / Not Now; Settings ▸ General ▸ Lens
+    /// profiles changes it). A value this version doesn't read asks again.
+    #[serde(deserialize_with = "lenient")]
+    pub lens_database: lightcraft_engine::lensfun_download::Offer,
 }
 
 /// Where File ▸ Import Lightroom Catalog… puts a catalog (Settings ▸ General ▸ Library). Saved as
@@ -292,6 +296,7 @@ impl Default for AppSettings {
             photo_menu_presets: Default::default(),
             top_bar_hidden: Vec::new(),
             shortcuts_window_size: None,
+            lens_database: Default::default(),
         }
     }
 }

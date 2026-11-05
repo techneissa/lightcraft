@@ -445,7 +445,7 @@ fn merge(args: &[String]) -> Result<(), String> {
         }
         i += 1;
     }
-    let mut s = Session::new().with_fs().with_default_denoise_models().with_default_map_cache().with_system_clock();
+    let mut s = file_session();
     let paths = expand_paths(&files);
     let r = s.execute("library.import", &json!({"paths": paths})).map_err(|e| e.to_string())?;
     let mut ids: Vec<u64> = r["imported"].as_array().map(|a| a.iter().filter_map(Value::as_u64).collect()).unwrap_or_default();
@@ -723,6 +723,19 @@ fn read_settings(p: &str) -> Result<SettingsFile, String> {
     }
 }
 
+/// The session `render` and the other file commands work in: files, the models and LaMa's (so a Remove spot whose fill
+/// is LaMa is drawn with it), and the lens database the desktop app downloaded, when it is there (never fetched from
+/// here: scripts and tests stay offline).
+fn file_session() -> Session {
+    Session::new()
+        .with_fs()
+        .with_default_denoise_models()
+        .with_default_map_cache()
+        .with_system_clock()
+        .with_default_lama_model()
+        .with_default_lens_database()
+}
+
 fn render(args: &[String]) -> Result<(), String> {
     let mut input = None;
     let mut output = None;
@@ -761,7 +774,7 @@ fn render(args: &[String]) -> Result<(), String> {
     }
     let input = input.ok_or("render: missing input file")?;
     let output = output.ok_or("render: missing -o OUTPUT")?;
-    let mut s = render_session();
+    let mut s = file_session();
     let abs = expand_paths(std::slice::from_ref(&input));
     let r = s.execute("library.import", &json!({"paths": abs})).map_err(|e| e.to_string())?;
     let id = r["imported"][0].as_u64().ok_or_else(|| format!("{input}: not a readable photo"))?;
@@ -863,6 +876,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
                 .with_system_clock()
                 .with_default_face_models()
                 .with_default_lama_model()
+                .with_default_lens_database()
                 .with_default_slide_templates();
             s.open_library(dir, false).map_err(|e| library_error(dir, e))?;
             s
@@ -873,6 +887,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
             .with_default_map_cache()
             .with_system_clock()
             .with_default_face_models()
+            .with_default_lens_database()
             .with_default_slide_templates(),
         None => Session::new()
             .with_fs()
@@ -881,6 +896,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
             .with_system_clock()
             .with_default_face_models()
             .with_default_lama_model()
+            .with_default_lens_database()
             .with_default_slide_templates(),
     };
     // Apply compute policy before imports or the first scripted query can discover an adapter.
@@ -1106,16 +1122,11 @@ fn denoise_serve(_: &[String]) -> Result<(), String> {
     Err("denoise-serve: this build has no denoise support (build with the `denoise` feature)".into())
 }
 
-/// The session `render` works in: files, the models, and LaMa's, so a Remove spot whose fill is LaMa is drawn with it.
-fn render_session() -> Session {
-    Session::new().with_fs().with_default_denoise_models().with_default_map_cache().with_system_clock().with_default_lama_model()
-}
-
 #[cfg(test)]
 mod lama_tests {
     #[test]
     fn render_looks_for_the_lama_model_like_the_app_does() {
-        let s = super::render_session();
+        let s = super::file_session();
         assert_eq!(s.lama.dir(), lightcraft_engine::lama_fill::default_lama_dir());
         assert!(s.lama.dir().is_some(), "a computer with a home folder has a model folder");
     }
@@ -1147,6 +1158,18 @@ mod raw_files_tests {
         assert!(started.elapsed() < std::time::Duration::from_secs(10), "walk took {:?}", started.elapsed());
         assert_eq!(files, vec![a.join("one.NEF")]);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// `render` and `merge` read the lens database the desktop app downloaded, as the desktop does (the same raw
+    /// gets the same profile everywhere), but never fetch it.
+    #[test]
+    fn render_reads_the_downloaded_lens_database() {
+        let s = super::file_session();
+        assert_eq!(lightcraft_engine::lens_profiles::host_dir(), lightcraft_engine::lensfun_download::default_dir());
+        assert!(!s.lens_auto_download, "selecting it is not permission to download it");
     }
 }
 

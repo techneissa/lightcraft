@@ -2,6 +2,9 @@ use serde_json::{Value, json};
 
 use crate::{Selection, Session, command_specs};
 
+/// The lens database folder in use is process-wide ([`crate::lens_profiles`]): tests that change it take turns.
+pub(crate) static LENS_DIRS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 mod album_loops;
 mod album_missing;
 mod album_order;
@@ -40,6 +43,7 @@ mod import_move;
 mod keyword_list;
 mod lama_fill;
 mod lens_database;
+mod lens_refresh;
 mod libops;
 mod library;
 mod lightroom_folder;
@@ -54,6 +58,7 @@ mod birefnet;
 mod macos_colour;
 mod macos_wb;
 mod mask_effects;
+mod mask_geometry;
 mod merge;
 mod move_to_share;
 mod organize;

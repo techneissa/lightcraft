@@ -22,24 +22,29 @@ fn folder(name: &str) -> PathBuf {
 #[test]
 fn the_variable_wins_over_the_setting_unless_empty() {
     let setting = Path::new("/chosen");
-    assert_eq!(lens_profiles::resolve(Some("/env".into()), Some(setting)), (FolderSource::Env, Some("/env".into())));
-    assert_eq!(lens_profiles::resolve(Some(OsString::new()), Some(setting)), (FolderSource::Setting, Some("/chosen".into())));
-    assert_eq!(lens_profiles::resolve(None, Some(setting)), (FolderSource::Setting, Some("/chosen".into())));
-    assert_eq!(lens_profiles::resolve(Some("/env".into()), None), (FolderSource::Env, Some("/env".into())));
-    assert_eq!(lens_profiles::resolve(None, None), (FolderSource::None, None));
+    assert_eq!(lens_profiles::resolve(Some("/env".into()), Some(setting), None), (FolderSource::Env, Some("/env".into())));
+    assert_eq!(lens_profiles::resolve(Some(OsString::new()), Some(setting), None), (FolderSource::Setting, Some("/chosen".into())));
+    assert_eq!(lens_profiles::resolve(None, Some(setting), None), (FolderSource::Setting, Some("/chosen".into())));
+    assert_eq!(lens_profiles::resolve(Some("/env".into()), None, None), (FolderSource::Env, Some("/env".into())));
+    assert_eq!(lens_profiles::resolve(None, None, None), (FolderSource::None, None));
+    // the downloaded database is read only when neither is set
+    let host = Path::new("/downloaded");
+    assert_eq!(lens_profiles::resolve(None, Some(setting), Some(host)), (FolderSource::Setting, Some("/chosen".into())));
+    assert_eq!(lens_profiles::resolve(Some("/env".into()), None, Some(host)), (FolderSource::Env, Some("/env".into())));
+    assert_eq!(lens_profiles::resolve(None, None, Some(host)), (FolderSource::Downloaded, Some("/downloaded".into())));
 }
 
 #[test]
 fn a_missing_folder_says_so() {
     let gone = std::env::temp_dir().join(format!("lc-lens-db-gone-{}", std::process::id()));
-    let l = lens_profiles::load(&gone);
+    let l = lens_profiles::load(&gone, "test");
     assert!(l.db.is_none());
     assert_eq!((l.profiles, l.problem), (0, Some(Problem::Missing)));
     // a file is not a folder
     let dir = folder("file");
     let file = dir.join("x.xml");
     std::fs::write(&file, XML).unwrap();
-    assert!(matches!(lens_profiles::load(&file).problem, Some(Problem::Unreadable(_))));
+    assert!(matches!(lens_profiles::load(&file, "test").problem, Some(Problem::Unreadable(_))));
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -47,9 +52,9 @@ fn a_missing_folder_says_so() {
 fn a_folder_without_xml_or_without_lenses_says_so() {
     let dir = folder("empty");
     std::fs::write(dir.join("notes.txt"), "hello").unwrap();
-    assert_eq!(lens_profiles::load(&dir).problem, Some(Problem::NoXml));
+    assert_eq!(lens_profiles::load(&dir, "test").problem, Some(Problem::NoXml));
     std::fs::write(dir.join("broken.xml"), "<not-lensfun/>").unwrap();
-    let l = lens_profiles::load(&dir);
+    let l = lens_profiles::load(&dir, "test");
     assert_eq!((l.problem, l.skipped, l.profiles), (Some(Problem::NoLenses), 1, 0));
     let _ = std::fs::remove_dir_all(&dir);
 }
@@ -58,7 +63,7 @@ fn a_folder_without_xml_or_without_lenses_says_so() {
 fn a_folder_with_a_small_lensfun_file_gives_its_profile() {
     let dir = folder("small");
     std::fs::write(dir.join("testcam.XML"), XML).unwrap();
-    let l = lens_profiles::load(&dir);
+    let l = lens_profiles::load(&dir, "test");
     assert_eq!((l.problem, l.profiles, l.skipped), (None, 1, 0));
     assert!(l.db.is_some_and(|db| db.lenses.len() == 1));
     let _ = std::fs::remove_dir_all(&dir);
@@ -68,6 +73,7 @@ fn a_folder_with_a_small_lensfun_file_gives_its_profile() {
 /// state is shared; skipped when the variable is set, which would win.)
 #[test]
 fn the_chosen_folder_is_read_reloaded_and_cleared() {
+    let _turn = super::LENS_DIRS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if std::env::var_os(lens_profiles::ENV).is_some_and(|v| !v.is_empty()) {
         lightcraft_testkit::skip!(Input, "LIGHTCRAFT_LENSFUN_DIR is set and wins over the setting");
         return;
@@ -101,7 +107,8 @@ fn the_chosen_folder_is_read_reloaded_and_cleared() {
     lens_profiles::set_folder(None);
     assert!(!lens_profiles::status_now().reading, "no folder, nothing to read");
     let s = lens_profiles::status();
-    assert_eq!((s.source, s.dir, s.setting, s.profiles), (FolderSource::None, None, None, 0));
+    assert_ne!(s.source, FolderSource::Setting);
+    assert_eq!(s.setting, None);
     let _ = std::fs::remove_dir_all(&dir);
     let _ = std::fs::remove_dir_all(&other);
 }

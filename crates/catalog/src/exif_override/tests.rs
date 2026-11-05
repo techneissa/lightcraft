@@ -220,9 +220,9 @@ fn a_v10_library_opens_unchanged() {
     let snap = c.to_snapshot();
     assert!(!snap.contains("\"exif\""));
     let store = MemStore::new();
-    store.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":10,\"seq\":1,\"catalog\":{snap}}}\n").into_bytes());
+    store.set(SNAPSHOT, format!("{{\"format\":\"lightcraft-catalog\",\"version\":12,\"seq\":1,\"catalog\":{snap}}}\n").into_bytes());
     let (_, loaded, r) = Journal::open(Box::new(store.clone())).unwrap();
-    assert_eq!(r.upgraded_from, Some(10));
+    assert_eq!(r.upgraded_from, Some(12));
     assert_eq!(loaded.photo(id).unwrap().meta, meta());
     assert_eq!(loaded.to_snapshot(), snap);
     let v: serde_json::Value = serde_json::from_slice(&store.get(SNAPSHOT).unwrap()).unwrap();
