@@ -4,3 +4,4 @@ One line each: symptom → cause → guard, at most 250 characters. Keep at most
 
 - A failing test's name was lost (2026-11-02) → the run was piped through `tail -25` → write long runs to a log file in the scratch folder and read the failures from the file.
 - No timing tests: a test never asserts how long something took (techneissa, 2026-11-05); wait on a condition instead.
+- Fork CI red on a test the Mac never compiles (2026-11-05) → a signature change missed a `cfg(not(target_os = "macos"))` caller → after changing a signature, grep its callers inside `cfg(not(...macos))` blocks too.
