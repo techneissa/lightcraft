@@ -54,7 +54,6 @@ fn mark_this_mac(app: &mut LightcraftApp) {
     app.ui.pan = (0.2, 0.7);
     app.ui.settings.library_path = "/Users/me/Library-A".into();
     app.ui.settings.display_profile = "/Library/ColorSync/Mine.icc".into();
-    app.ui.settings.lens_database_dir = "/Users/me/lensfun".into();
 }
 
 fn import_text(app: &mut LightcraftApp, text: &str) -> Result<Value, String> {
@@ -144,6 +143,22 @@ fn every_ui_key_is_decided() {
     }
 }
 
+/// An older ui.json still has `settings.lensDatabaseDir` (the folder setting this fork once had). It reads without an
+/// error, the other settings survive, and the next save no longer writes the key.
+#[test]
+fn an_old_lens_database_dir_setting_is_ignored_and_dropped() {
+    let old = json!({"lensDatabaseDir": "/Users/me/lensfun", "lensDatabase": "declined", "memoryMb": 2048});
+    let read: crate::state::AppSettings = serde_json::from_value(old).expect("an unknown key doesn't spoil the settings");
+    assert_eq!(read.memory_mb, 2048, "the other settings are read");
+    assert_eq!(read.lens_database, lightcraft_engine::lensfun_download::Offer::Declined);
+    let saved = serde_json::to_value(&read).unwrap();
+    assert!(saved.get("lensDatabaseDir").is_none(), "the key is dropped on the next save");
+    // and inside a whole ui.json
+    let file = json!({"settings": {"lensDatabaseDir": "/Users/me/lensfun"}});
+    let ui: UiState = serde_json::from_value(file).expect("an old ui.json reads");
+    assert!(serde_json::to_value(&ui).unwrap()["settings"].get("lensDatabaseDir").is_none());
+}
+
 #[test]
 fn the_lists_give_reasons_and_name_none_twice() {
     // (that they name real fields is `every_ui_key_is_decided`'s)
@@ -177,7 +192,7 @@ fn the_file_leaves_out_what_belongs_to_one_mac() {
     assert_eq!(settings["keymap"]["view.survey#2"], "Cmd+K S");
     assert_eq!(ui["brushSize"].as_f64().map(|n| (n * 1000.0).round()), Some(123.0));
     let text = rules::text(&doc);
-    for private in ["Volumes/Mine", "Library-A", "Mine.icc", "lensfun", "iCloud/LightCraft"] {
+    for private in ["Volumes/Mine", "Library-A", "Mine.icc", "iCloud/LightCraft"] {
         assert!(!text.contains(private), "{private} leaked into the file");
     }
     let _ = std::fs::remove_dir_all(&home);

@@ -45,7 +45,6 @@ mod import;
 mod import_move;
 mod keyword_list;
 mod lama_fill;
-mod lens_database;
 mod lens_refresh;
 mod libops;
 mod library;

@@ -31,12 +31,6 @@ run time, never bundled and never committed. Adobe LCP profiles are never used.
    distribution's `/usr/share/lensfun/version_1/`); then the app doesn't offer the download, and that folder is read
    even after `lens.downloadDatabase` fetches the app's own copy.
 
-4. A folder chosen in Settings ▸ Import ▸ Lens profiles (Choose…, Clear) is read in place of the downloaded database; the
-   line under it says how many lens profiles were found, or why none. The order is: `LIGHTCRAFT_LENSFUN_DIR`, then the
-   Settings folder, then the downloaded database. Choosing or clearing a folder looks up the library's raws without a
-   profile again. Agents: `lensDatabase.get` (`source`: `none`, `env`, `setting`, `downloaded`), `lensDatabase.set {dir}`,
-   `lensDatabase.reload`; the read runs on a worker, so these answer `reading: true` until it ends.
-
 When the database arrives (or changes), every library raw without a profile whose lens it knows is read again in the
 background and gets its profile; a photo still as imported gets the correction switched on, as import would, and an
 edited one keeps its settings. When a download replaced the database's files, the raws whose profile came from the

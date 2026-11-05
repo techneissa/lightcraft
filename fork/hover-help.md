@@ -22,7 +22,7 @@ List: every icon-only button and toggle (and each text button whose label alone 
 ## Hooks in official files
 
 - `widgets.rs`: `section_header_solo` and `SectionHeader` (`section_header` keeps its signature and calls it), `segmented_tips`; `widgets/rating.rs` (`Rating::filters`, the star tips, the favourite tip); `icons.rs` (`Icon::Solo`, drawn in code, original work, covered by the `icons.rs` row of `assets/ATTRIBUTION.md`); `headless.rs` (a test-only `a11y` field: the last frame's accessibility nodes); `tests.rs` (`mod hover_help;`).
-- `panels/edit/sliders.rs` (the header call and the Solo click), `panels/edit.rs`, `panels/edit/{curve,histogram,mixer}.rs`, `panels/bottombar.rs`, `panels/filterbar.rs`, `panels/left/{rows,sections}.rs`, `panels/keyword_list.rs`, `panels/{masking,mask_parts,mask_effects,map,map_locations,strip,topbar}.rs`, `panels/right/{crop,remove_finds}.rs`, `panels/book/{settings,strip}.rs`, `panels/detail/filmstrip.rs`, `dialogs/{export,print_view,rules_editor}.rs`, `dialogs/settings/lens_database.rs`, `keybinds/window.rs`: one `.on_hover_text(tr("..."))` per control, or a `tip` argument.
+- `panels/edit/sliders.rs` (the header call and the Solo click), `panels/edit.rs`, `panels/edit/{curve,histogram,mixer}.rs`, `panels/bottombar.rs`, `panels/filterbar.rs`, `panels/left/{rows,sections}.rs`, `panels/keyword_list.rs`, `panels/{masking,mask_parts,mask_effects,map,map_locations,strip,topbar}.rs`, `panels/right/{crop,remove_finds}.rs`, `panels/book/{settings,strip}.rs`, `panels/detail/filmstrip.rs`, `dialogs/{export,print_view,rules_editor}.rs`, `keybinds/window.rs`: one `.on_hover_text(tr("..."))` per control, or a `tip` argument.
 
 ## Tests
 

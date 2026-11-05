@@ -2,12 +2,11 @@
 //!
 //! When a raw carries no lens correction of its own (DNG opcodes, or a camera correction a raw reader converts,
 //! [`crate::files::embedded_lens`]), the lens named in its EXIF is looked up in a lensfun-format database. The
-//! database is read from the directory in `LIGHTCRAFT_LENSFUN_DIR` (which wins), else the folder chosen in Settings
-//! ([`set_folder`]), else lensfun's `data/db` (CC BY-SA 3.0) downloaded at run time into the app's data folder
-//! ([`crate::lensfun_download`], which the desktop app offers on its first launch and Settings can start); it is
-//! never bundled with the app. The profile is converted to the same [`lightcraft_develop::EmbeddedLens`] form (marked
-//! [`LensSource::Database`]), so "Enable Profile Corrections", its amount sliders, the GPU path and DNG export treat
-//! both alike. Without a database nothing changes.
+//! database is lensfun's `data/db` (CC BY-SA 3.0): never bundled with the app, it is downloaded at run time into the
+//! app's data folder ([`crate::lensfun_download`], which the desktop app offers on its first launch and Settings can start), or it is the
+//! directory in `LIGHTCRAFT_LENSFUN_DIR` (which wins). The profile is converted to the same
+//! [`lightcraft_develop::EmbeddedLens`] form (marked [`LensSource::Database`]), so "Enable Profile Corrections", its
+//! amount sliders, the GPU path and DNG export treat both alike. Without a database nothing changes.
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock};
@@ -15,96 +14,24 @@ use std::sync::{Arc, PoisonError, RwLock};
 use lightcraft_develop::{EmbeddedLens, LensSource};
 use lightcraft_lensdb::{LensDb, Shot};
 
-/// The environment variable naming the lens database directory. When set (and not empty) it wins over
-/// the folder chosen in Settings and the downloaded database.
+/// The environment variable naming the lens database directory.
 pub const ENV: &str = "LIGHTCRAFT_LENSFUN_DIR";
 
-/// Where the database folder in use comes from.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum FolderSource {
-    /// No folder is configured.
-    None,
-    /// [`ENV`].
-    Env,
-    /// The folder chosen in Settings ([`set_folder`]).
-    Setting,
-    /// The app's downloaded database ([`use_dir`]).
-    Downloaded,
-}
-
-/// Why the folder in use gives no profiles.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Problem {
-    /// The folder doesn't exist (for the downloaded database: the download has not finished).
-    Missing,
-    /// It exists but can't be listed (a file, no permission…); the system's words.
-    Unreadable(String),
-    /// It holds no `*.xml` files.
-    NoXml,
-    /// It holds XML files, but none gave a lens profile (not lensfun files, or all invalid).
-    NoLenses,
-}
-
-/// What the database in use holds, for Settings and agents.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Status {
-    pub source: FolderSource,
-    /// The folder in use ([`ENV`] when it is set, else the setting, else the downloaded one).
-    pub dir: Option<PathBuf>,
-    /// The folder chosen in Settings, even while [`ENV`] overrides it.
-    pub setting: Option<PathBuf>,
-    /// Lens profiles read.
-    pub profiles: usize,
-    /// XML files skipped as invalid.
-    pub skipped: usize,
-    pub problem: Option<Problem>,
-    /// The folder in use has not been read yet ([`status_now`] only): `profiles`, `skipped` and
-    /// `problem` are not known. [`status`] reads it and is never in this state.
-    pub reading: bool,
-}
-
-/// A folder read.
-pub(crate) struct Loaded {
-    pub(crate) db: Option<Arc<LensDb>>,
-    pub(crate) profiles: usize,
-    pub(crate) skipped: usize,
-    pub(crate) problem: Option<Problem>,
-}
-
-/// The database folder a host set up ([`use_dir`]), read when neither `LIGHTCRAFT_LENSFUN_DIR` nor a Settings folder
-/// is set.
+/// The database folder a host set up ([`use_dir`]), read when `LIGHTCRAFT_LENSFUN_DIR` is not set.
 static HOST_DIR: RwLock<Option<PathBuf>> = RwLock::new(None);
-/// The folder chosen in Settings ([`set_folder`]).
-static USER_DIR: RwLock<Option<PathBuf>> = RwLock::new(None);
-/// The last folder read and what it gave; read again when the folder in use changes or after [`reload`].
-static LOADED: RwLock<Option<(PathBuf, Arc<Loaded>)>> = RwLock::new(None);
+/// The loaded database and the folder it was read from (`None` inside: nothing usable there).
+static LOADED: RwLock<Option<(PathBuf, Option<Arc<LensDb>>)>> = RwLock::new(None);
 /// Bumped whenever the database in use changes ([`reload`]): photos looked up before may now find a profile.
 static GENERATION: AtomicU64 = AtomicU64::new(0);
 /// Bumped when the database's files were replaced ([`replaced`]): profiles found before may now be different.
 static REPLACED: AtomicU64 = AtomicU64::new(0);
 
-/// Use `dir` (the app's downloaded lensfun data, [`crate::lensfun_download::default_dir`]) when neither
-/// `LIGHTCRAFT_LENSFUN_DIR` nor a Settings folder is set. Hosts with a file system call it; tests and sessions that
-/// don't stay without a database.
+/// Use `dir` (the app's downloaded lensfun data, [`crate::lensfun_download::default_dir`]) when
+/// `LIGHTCRAFT_LENSFUN_DIR` is not set. Hosts with a file system call it; tests and sessions that don't stay
+/// without a database.
 pub fn use_dir(dir: Option<PathBuf>) {
     *HOST_DIR.write().unwrap_or_else(PoisonError::into_inner) = dir;
     reload();
-}
-
-/// Choose the folder the database is read from (Settings ▸ lens database); `None` or an empty path clears it.
-/// [`ENV`] still wins while it is set; the folder wins over the downloaded database. A changed folder is read on
-/// next use; [`reload`] forces that for the same folder.
-pub fn set_folder(dir: Option<&Path>) {
-    let dir = dir.filter(|d| !d.as_os_str().is_empty()).map(Path::to_path_buf);
-    let changed = {
-        let mut user = USER_DIR.write().unwrap_or_else(PoisonError::into_inner);
-        let changed = *user != dir;
-        *user = dir;
-        changed
-    };
-    if changed {
-        reload();
-    }
 }
 
 /// The database's files were replaced (a download put a new database in place): read it again, and photos whose
@@ -120,13 +47,12 @@ pub fn replacements() -> u64 {
     REPLACED.load(Ordering::Relaxed)
 }
 
-/// The folder the host selected ([`use_dir`]), whatever `LIGHTCRAFT_LENSFUN_DIR` or Settings say.
+/// The folder the host selected ([`use_dir`]), whatever `LIGHTCRAFT_LENSFUN_DIR` says.
 pub fn host_dir() -> Option<PathBuf> {
     HOST_DIR.read().unwrap_or_else(PoisonError::into_inner).clone()
 }
 
-/// Read the database again (after a download, an update, or files added to the chosen folder): the next lookup
-/// sees the new data.
+/// Read the database again (after a download or an update): the next lookup sees the new data.
 pub fn reload() {
     // under the cache lock, so a load of the old files that finishes meanwhile can't be published ([`database`])
     let mut loaded = LOADED.write().unwrap_or_else(PoisonError::into_inner);
@@ -139,130 +65,64 @@ pub fn generation() -> u64 {
     GENERATION.load(Ordering::Relaxed)
 }
 
-/// The folder in use for an environment value, a Settings folder and the host's folder: the variable wins when it
-/// isn't empty, then the setting.
-pub(crate) fn resolve(env: Option<std::ffi::OsString>, setting: Option<&Path>, host: Option<&Path>) -> (FolderSource, Option<PathBuf>) {
-    match (env.filter(|v| !v.is_empty()), setting, host) {
-        (Some(v), _, _) => (FolderSource::Env, Some(PathBuf::from(v))),
-        (None, Some(dir), _) => (FolderSource::Setting, Some(dir.to_path_buf())),
-        (None, None, Some(dir)) => (FolderSource::Downloaded, Some(dir.to_path_buf())),
-        (None, None, None) => (FolderSource::None, None),
+/// The folder the database is read from: `LIGHTCRAFT_LENSFUN_DIR`, else the host's ([`use_dir`]).
+pub fn dir() -> Option<PathBuf> {
+    source().map(|(d, _)| d)
+}
+
+/// [`dir`], and whether it is the app's own downloaded folder (read only when whole, [`crate::lensfun_download::complete`])
+/// rather than the user's.
+fn source() -> Option<(PathBuf, bool)> {
+    match std::env::var_os(ENV).filter(|v| !v.is_empty()) {
+        Some(d) => Some((PathBuf::from(d), false)),
+        None => HOST_DIR.read().unwrap_or_else(PoisonError::into_inner).clone().map(|d| (d, true)),
     }
 }
 
-/// Where the database is read from now ([`resolve`]).
-fn source() -> (FolderSource, Option<PathBuf>) {
-    let setting = USER_DIR.read().unwrap_or_else(PoisonError::into_inner).clone();
-    resolve(std::env::var_os(ENV), setting.as_deref(), host_dir().as_deref())
-}
-
-/// The folder the database is read from: `LIGHTCRAFT_LENSFUN_DIR`, else the Settings folder, else the host's
-/// ([`use_dir`]).
-pub fn dir() -> Option<PathBuf> {
-    source().1
-}
-
-/// What reading `dir` gave, when it is the folder last read.
-fn cached(dir: &Path) -> Option<Arc<Loaded>> {
-    LOADED.read().unwrap_or_else(PoisonError::into_inner).as_ref().filter(|(d, _)| d == dir).map(|(_, l)| l.clone())
-}
-
-/// The folder in use and what reading it gave, read once per folder (and again after [`reload`]). The read happens
-/// without the lock held, so [`status_now`] never waits for it.
-fn current() -> (FolderSource, Option<PathBuf>, Option<Arc<Loaded>>) {
-    let (src, dir) = source();
-    let Some(dir) = dir else { return (src, None, None) };
-    if let Some(l) = cached(&dir) {
-        return (src, Some(dir), Some(l));
+/// The database in use, read once per folder (and again after [`reload`]); `None` when none is configured, the
+/// folder is missing or it holds no lenses.
+pub fn database() -> Option<Arc<LensDb>> {
+    let (dir, downloaded) = source()?;
+    if let Some((d, db)) = LOADED.read().unwrap_or_else(PoisonError::into_inner).as_ref()
+        && *d == dir
+    {
+        return db.clone();
     }
     let generation = generation();
     // the app's own folder without its marker is a download that never finished: not read (the start fetches it)
-    let read = Arc::new(if src == FolderSource::Downloaded && !crate::lensfun_download::complete(&dir) {
+    let db = if downloaded && !crate::lensfun_download::complete(&dir) {
         // info, not a warning: before the first download this is every user's state (logged once per reload)
         log::info!("lens database: no finished download in {} yet; lens profiles are not applied", dir.display());
-        Loaded { db: None, profiles: 0, skipped: 0, problem: Some(Problem::Missing) }
+        None
     } else {
-        load(&dir, whose(src))
-    });
+        load(&dir, downloaded)
+    };
     let mut loaded = LOADED.write().unwrap_or_else(PoisonError::into_inner);
     // a reload while the files were read: they may be the old ones, so they aren't kept (the next call reads again)
     if GENERATION.load(Ordering::Relaxed) == generation {
-        *loaded = Some((dir.clone(), read.clone()));
+        *loaded = Some((dir, db.clone()));
     }
-    (src, Some(dir), Some(read))
+    db
 }
 
-/// The name of a folder source in the log.
-fn whose(src: FolderSource) -> &'static str {
-    match src {
-        FolderSource::Env | FolderSource::None => ENV,
-        FolderSource::Setting => "chosen in Settings",
-        FolderSource::Downloaded => "downloaded",
-    }
-}
-
-/// The database in use; `None` when none is configured, the folder is missing or it holds no lenses.
-pub fn database() -> Option<Arc<LensDb>> {
-    current().2?.db.clone()
-}
-
-/// Read the folder in use now if it has not been (for a worker thread: a big folder takes a moment).
-pub fn warm() {
-    let _ = current();
-}
-
-/// How many profiles the folder in use gave, or why none (reads it if needed).
-pub fn status() -> Status {
-    let (source, dir, loaded) = current();
-    let setting = USER_DIR.read().unwrap_or_else(PoisonError::into_inner).clone();
-    let (profiles, skipped, problem) = loaded.map_or((0, 0, None), |l| (l.profiles, l.skipped, l.problem.clone()));
-    Status { source, dir, setting, profiles, skipped, problem, reading: false }
-}
-
-/// [`status`] without reading the folder: for the UI thread. A folder in use that is not read yet gives
-/// `reading: true`; [`warm`] on a worker reads it.
-pub fn status_now() -> Status {
-    let (source, dir) = source();
-    let setting = USER_DIR.read().unwrap_or_else(PoisonError::into_inner).clone();
-    let loaded = dir.as_deref().and_then(cached);
-    let reading = dir.is_some() && loaded.is_none();
-    let (profiles, skipped, problem) = loaded.map_or((0, 0, None), |l| (l.profiles, l.skipped, l.problem.clone()));
-    Status { source, dir, setting, profiles, skipped, problem, reading }
-}
-
-/// Read the lensfun-format files in `dir` (`whose` names the folder in the log).
-pub(crate) fn load(dir: &Path, whose: &str) -> Loaded {
-    let fail = |problem: Problem| {
-        log::warn!("lens database: {} ({whose}) gives no lens profiles: {problem:?}", dir.display());
-        Loaded { db: None, profiles: 0, skipped: 0, problem: Some(problem) }
-    };
-    match std::fs::read_dir(dir) {
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return fail(Problem::Missing),
-        Err(e) => return fail(Problem::Unreadable(e.to_string())),
-        Ok(entries) => {
-            let any_xml = entries.flatten().any(|e| e.path().extension().is_some_and(|x| x.eq_ignore_ascii_case("xml")));
-            if !any_xml {
-                return fail(Problem::NoXml);
-            }
-        }
+fn load(dir: &Path, downloaded: bool) -> Option<Arc<LensDb>> {
+    let whose = if downloaded { "downloaded" } else { ENV };
+    if !dir.is_dir() {
+        log::warn!("lens database: {} ({whose}) is missing or not a folder", dir.display());
+        return None;
     }
     match LensDb::load_dir(dir) {
         Ok((db, errors)) => {
-            let skipped = errors.len();
             for (file, e) in errors {
                 log::warn!("lens database: skipped {file}: {e}");
             }
             let (level, line) = summary(dir, whose, &db);
             log::log!(level, "{line}");
-            let profiles = db.lenses.len();
-            if profiles == 0 {
-                return Loaded { db: None, profiles: 0, skipped, problem: Some(Problem::NoLenses) };
-            }
-            Loaded { db: Some(Arc::new(db)), profiles, skipped, problem: None }
+            (!db.lenses.is_empty()).then(|| Arc::new(db))
         }
         Err(e) => {
             log::warn!("{e}");
-            Loaded { db: None, profiles: 0, skipped: 0, problem: Some(Problem::Unreadable(e.to_string())) }
+            None
         }
     }
 }

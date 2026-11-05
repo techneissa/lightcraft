@@ -184,6 +184,7 @@ fn lens_profiles(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             "lensfun's open lens database (CC BY-SA 3.0) corrects distortion and vignetting for many lenses. It is only downloaded when you choose to.",
         ),
     );
+    hint(ui, t, crate::i18n::tr("To use a database of your own, set the LIGHTCRAFT_LENSFUN_DIR variable to its folder."));
 }
 
 /// The file Edit In hands an editor: format, colour space and bit depth (`button:{id}Format-…`).

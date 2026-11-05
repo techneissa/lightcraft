@@ -354,10 +354,6 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.toolStrip", "Arrange Tool Strip", None, ""),
     ("view.toolStripMove", "Move Tool Strip Icon", None, ""),
     ("view.toolStripReset", "Reset Tool Strip Order", None, ""),
-    // the lens database folder (Settings ▸ Import ▸ Lens profiles): {dir} = a lensfun folder, null clears it
-    ("lensDatabase.get", "Lens Database Folder", None, ""),
-    ("lensDatabase.set", "Set Lens Database Folder", None, ""),
-    ("lensDatabase.reload", "Reload Lens Database", None, ""),
     // the top bar's items (Settings ▸ Top Bar): {hidden} = the ids turned off; {item, shown} = one
     ("topBar.get", "Top Bar Items", None, ""),
     ("topBar.set", "Set Top Bar Items", None, ""),

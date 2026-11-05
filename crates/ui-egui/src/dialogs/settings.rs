@@ -24,7 +24,6 @@ mod appearance;
 mod display;
 mod general;
 mod import;
-pub(crate) mod lens_database;
 mod libraries;
 mod performance;
 mod slideshow;

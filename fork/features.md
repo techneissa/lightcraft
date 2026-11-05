@@ -46,7 +46,6 @@ feature: it is the hot spot two branches would both append to.
 - [Process V3: Sharpening Radius and Vignette](detail-followups.md): Sharpening Radius works, Amount is clearly visible, and the Vignette response is smooth. Branch `claude/detail-followups`.
 - [Arrange the Edit panel](section-arrange.md): Right-click a section header to move, hide or reset the Develop sections. Branch `claude/workflow-qol`.
 - [Show in Finder after export](export-reveal.md): An Export dialog option that shows the first exported file when the export succeeds. Branch `claude/workflow-qol`.
-- [Lens database folder](lens-database-folder.md): Settings ▸ Import ▸ Lens profiles chooses the lensfun folder and says what it found. Branch `claude/workflow-qol`.
 - [Masking workflow](masking-workflow.md): Add · Subtract · Intersect and a button per kind of part, pick a part to paint into it, Add / Erase named by their effect, Esc steps back, tiles fill the side bar. Branch `fix/26-masking-rework`.
 - [Shared SAM3 model folder](shared-sam3.md): AI masks look for the SAM 3 model in the folder shared with PhotoCraft (`ArtCraft/models/sam3`) first and download there. Branch `feat/16-shared-sam3`.
 - [Book](book.md): A Book view for photo books: books in the side bar, a spread, a page strip and a photo pool; Add to Book from the library; exports a PDF or JPEGs. Branches `feat/23-book`, `feat/23-book-view`.

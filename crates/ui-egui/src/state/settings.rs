@@ -163,9 +163,6 @@ pub struct AppSettings {
     /// Settings ▸ Map ▸ Start on OpenStreetMap: a library with no tile source saved yet starts on
     /// OpenStreetMap instead of Offline. Handed to the engine every frame (`MapState::set_start_on_osm`).
     pub map_start_on_osm: bool,
-    /// Folder of a lensfun-format lens database (Settings ▸ Import ▸ Lens profiles; empty = none;
-    /// `LIGHTCRAFT_LENSFUN_DIR` wins when set).
-    pub lens_database_dir: String,
     /// The question about building the missing smart previews was asked once, when the setting was first switched on.
     pub smart_editing_offered: bool,
     /// The Info panel's metadata fields with several photos selected: true (the default) shows the
@@ -273,7 +270,6 @@ impl Default for AppSettings {
             memory_mb: 0,
             smart_previews_for_editing: false,
             map_start_on_osm: false,
-            lens_database_dir: String::new(),
             smart_editing_offered: false,
             info_selected_photos: true,
             film_names: true,
