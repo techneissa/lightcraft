@@ -36,6 +36,8 @@ and often so a crash loses minutes, not hours.
 
 Agents (lanes) on the fork run steps 1 and 2 only. Step 3 runs once per batch, on `custom`, after the batch's branches are merged: any change to `ui-egui` makes it run that crate's ~2,400 tests.
 
+**Quick changes.** When techneissa calls a change quick or fast, the lane reads only the files the brief names, takes no pictures, runs `cargo check -p <crate>`, `cargo fmt` and only the tests it adds or changes, once, then opens the PR without waiting for CI. A full lane run costs about 40 minutes for a five-minute edit.
+
 One agent builds at a time on this Mac. Every agent, in any worktree, uses the main checkout's build folder: `CARGO_TARGET_DIR=$WORKSPACE/repos/lightcraft/target`. The ~760 libraries are then built once and shared, and cargo makes a second build wait for the first instead of both fighting for the CPU. This replaces the per-agent `target/agent-<name>` folders below for the fork.
 
 Write long runs to a log file; never pipe them through `tail` or `head`.
