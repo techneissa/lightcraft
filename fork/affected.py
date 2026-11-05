@@ -7,7 +7,7 @@ workspace-wide file, or a file outside every crate that is not Markdown, tests e
 (Markdown outside the crates) runs the format check and nothing else. A push to `custom` passes --full: everything.
 
     git diff --name-only BASE HEAD | python3 -I fork/affected.py            # prints `full`, `none` or the crates
-    git diff --name-status BASE HEAD | python3 -I fork/affected.py --sh --part 2/3   # shell variables for fork/ci.sh
+    git diff --name-status BASE HEAD | python3 -I fork/affected.py --sh --part 2/6   # shell variables for fork/ci.sh
     gh pr diff 60 --name-only | python3 -I fork/affected.py --summary       # the whole plan, for a check by hand
 
 Input lines are a path, or `git diff --name-status` lines (`D<TAB>path`, `R100<TAB>old<TAB>new`; a deleted or
@@ -75,10 +75,16 @@ HEIF_PACKAGES = {"lightcraft-codecs", "lightcraft-heif"}
 
 # Weights are seconds on a GitHub runner (measured on PR 66's runs). A crate's test time is guessed from its size
 # (a test counts 1, 200 lines of Rust count 1, times SECONDS_PER_UNIT: the engine's 1830 tests took 223 s); a crate
-# the guess gets wrong is measured and listed here. ui-egui's 2360 lib tests alone took 1394 s, so it sits alone in
-# a group and is the floor of a run that touches it.
+# the guess gets wrong is measured and listed here. ui-egui's 2438 lib tests alone took 1422 s (2026-11-05).
 SECONDS_PER_UNIT = 0.1
 WEIGHT_OVERRIDES = {"lightcraft-ui-egui": 1500}
+# Crates whose tests are split over several groups: each group runs every Nth test of each of the crate's test
+# binaries (fork/skip-known-failures.sh reads FORK_TEST_SHARD). Without it ui-egui alone held one machine for 32
+# minutes (7.6 of them compiling) while the others finished in 10. Each shard still compiles the crate, so more
+# shards than this buy little.
+SHARDS = {"lightcraft-ui-egui": 5}
+# Groups (machines) a run uses when --part gives no total; .github/workflows/fork-ci.yml's matrix must match.
+GROUPS = 6
 # The heif extras (clippy and tests with the feature) count as a crate for the balance: 139 s warm, 350 s cold.
 HEIF_WEIGHT = 250
 # The one-off steps of group 1 (clippy on the planned crates, layers, assets, parity, wasm): 216 s warm, 750 s cold.
@@ -243,7 +249,7 @@ def features_args(crates, pkgs, lead=""):
     return f"{lead}--features {','.join(names)}" if names else ""
 
 
-def plan(changed, pkgs, wasm, groups=3, weights=None, force_full=False):
+def plan(changed, pkgs, wasm, groups=GROUPS, weights=None, force_full=False):
     """What the checks run. `changed` is [(path, gone)]; `weights` maps crate to test weight (default: measured on disk)."""
     direct, full, tracker, gone_any = set(), force_full, False, False
     for path, gone in changed:
@@ -263,14 +269,27 @@ def plan(changed, pkgs, wasm, groups=3, weights=None, force_full=False):
     heif = full or bool(planned & HEIF_PACKAGES)
     weights = weights or {}
     items = {n: weights[n] if n in weights else weight(n, pkgs) for n in planned}
+    for name, count in sorted(SHARDS.items()):
+        count = min(count, groups)
+        if name in items and count > 1:
+            w = items.pop(name)
+            for i in range(1, count + 1):
+                items[f"{name}#{i}/{count}"] = -(-w // count)
     if heif:
         items["+heif"] = HEIF_WEIGHT
     first = ("+oneoff", ONEOFF_WEIGHT if rust else 1)
     bins = balance(items, groups, first)
     tests = []
     for number, (total, names) in enumerate(bins, 1):
-        crates = [n for n in names if not n.startswith("+")]
-        doc = [n for n in crates if pkgs[n]["doc"]]
+        shards = {}
+        for n in names:
+            if "#" in n:
+                crate, _, which = n.partition("#")
+                index, _, count = which.partition("/")
+                shards.setdefault(crate, (count, []))[1].append(int(index))
+        crates = sorted({n.partition("#")[0] for n in names if not n.startswith("+")})
+        # a sharded crate's doc tests run once, with its first shard
+        doc = [n for n in crates if pkgs[n]["doc"] and (n not in shards or 1 in shards[n][1])]
         tests.append(
             {
                 "group": number,
@@ -283,6 +302,8 @@ def plan(changed, pkgs, wasm, groups=3, weights=None, force_full=False):
                 "oneoff": "+oneoff" in names,
                 "weight": total,
                 "crates": crates,
+                # `crate=2,6/6`: which shards of a split crate this group runs (FORK_TEST_SHARD)
+                "shard": " ".join(f"{c}={','.join(map(str, sorted(ix)))}/{k}" for c, (k, ix) in sorted(shards.items())),
             }
         )
     return {
@@ -309,6 +330,7 @@ def summary(result, files):
     )
     for t in result["tests"]:
         extras = (" +one-off steps" if t["oneoff"] else "") + (" +heif" if t["heif"] else "")
+        extras += f" (shards {t['shard']})" if t["shard"] else ""
         lines.append(f"test group {t['name']} (weight {t['weight']}): {', '.join(t['crates'])}{extras}")
     return "\n".join(lines)
 
@@ -332,6 +354,7 @@ def shell_vars(result, part):
         "FEATURES": mine.get("features", ""),
         "DOC_FEATURES": mine.get("doc_features", ""),
         "HEIF_TESTS": flag(mine.get("heif")),
+        "SHARD": mine.get("shard", ""),
     }
     return "\n".join(f"{k}={shlex.quote(v)}" for k, v in out.items())
 
@@ -339,7 +362,7 @@ def shell_vars(result, part):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--full", action="store_true", help="test everything (a push to custom, or FORK_CI_FULL=1)")
-    ap.add_argument("--part", default="1/3", help="N/T: the test group to print variables for (default 1/3)")
+    ap.add_argument("--part", default=f"1/{GROUPS}", help=f"N/T: the test group to print variables for (default 1/{GROUPS})")
     ap.add_argument("--metadata", help="read `cargo metadata` JSON from this file instead of running cargo")
     mode = ap.add_mutually_exclusive_group()
     mode.add_argument("--sh", action="store_true", help="print shell variables for the group (fork/ci.sh)")
@@ -347,7 +370,7 @@ def main(argv=None):
     mode.add_argument("--json", action="store_true", help="print the whole plan as JSON")
     args = ap.parse_args(argv)
     part, _, total = args.part.partition("/")
-    part, total = int(part), int(total or 3)
+    part, total = int(part), int(total or GROUPS)
     pkgs = workspace_packages(load_metadata(args.metadata))
     changed = parse_changed(sys.stdin.read())
     result = plan(changed, pkgs, wasm_set(pkgs, ROOT / "xtask/src/layers.rs"), total, force_full=args.full)

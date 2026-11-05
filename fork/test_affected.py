@@ -118,9 +118,9 @@ class Scope(unittest.TestCase):
 class Groups(unittest.TestCase):
     def test_groups_cover_every_crate_once(self):
         r = plan("Cargo.lock")
-        seen = [c for t in r["tests"] for c in t["crates"]]
-        self.assertEqual(sorted(seen), sorted(PKGS))
-        self.assertEqual(len(r["tests"]), 3)
+        seen = [c for t in r["tests"] for c in t["crates"] if c not in pr_plan.SHARDS]
+        self.assertEqual(sorted(seen), sorted(set(PKGS) - set(pr_plan.SHARDS)))
+        self.assertEqual(len(r["tests"]), pr_plan.GROUPS)
         self.assertEqual([t["group"] for t in r["tests"] if t["oneoff"]], [1])  # the one-off steps run in group 1 only
 
     def test_groups_differ_by_at_most_the_heaviest_crate(self):
@@ -160,6 +160,52 @@ class Groups(unittest.TestCase):
     def test_heif_extras_count_in_a_group(self):
         r = plan("crates/codecs/src/a.rs")
         self.assertEqual(sum(t["heif"] for t in r["tests"]), 1)
+
+
+class Shards(unittest.TestCase):
+    def shards(self, r, crate="lightcraft-ui-egui"):
+        """{group: [shard indices]} and the shard count, read back from each group's `shard` value."""
+        out, counts = {}, set()
+        for t in r["tests"]:
+            for spec in t["shard"].split():
+                name, _, which = spec.partition("=")
+                if name == crate:
+                    ix, _, k = which.partition("/")
+                    out[t["group"]] = [int(i) for i in ix.split(",")]
+                    counts.add(int(k))
+        return out, counts
+
+    def test_a_sharded_crate_runs_every_shard_exactly_once(self):
+        r = plan("Cargo.lock")
+        groups, counts = self.shards(r)
+        k = min(pr_plan.SHARDS["lightcraft-ui-egui"], pr_plan.GROUPS)
+        self.assertEqual(counts, {k})
+        self.assertEqual(sorted(i for ix in groups.values() for i in ix), list(range(1, k + 1)))
+        for t in r["tests"]:  # a group with a shard tests the crate; one without does not
+            self.assertEqual("lightcraft-ui-egui" in t["crates"], t["group"] in groups)
+
+    def test_shards_never_outnumber_the_groups(self):
+        r = pr_plan.plan([("Cargo.lock", False)], PKGS, WASM, groups=2, weights=WEIGHTS)
+        _, counts = self.shards(r)
+        self.assertEqual(counts, {2})
+
+    def test_one_group_runs_the_crate_unsplit(self):
+        r = pr_plan.plan([("Cargo.lock", False)], PKGS, WASM, groups=1, weights=WEIGHTS)
+        self.assertEqual([t["shard"] for t in r["tests"]], [""])
+        self.assertIn("lightcraft-ui-egui", r["tests"][0]["crates"])
+
+    def test_a_sharded_crate_runs_its_doc_tests_once_with_shard_one(self):
+        r = plan("Cargo.lock")
+        groups, _ = self.shards(r)
+        with_docs = [t["group"] for t in r["tests"] if "lightcraft-ui-egui" in t["doc_packages"].split()]
+        self.assertEqual(with_docs, [g for g, ix in groups.items() if 1 in ix])
+
+    def test_the_shell_gets_the_shard(self):
+        r = plan("Cargo.lock")
+        groups, _ = self.shards(r)
+        group, ix = next(iter(groups.items()))
+        v = pr_plan.shell_vars(r, group)
+        self.assertIn(f"lightcraft-ui-egui={','.join(map(str, ix))}/", v)
 
 
 class Features(unittest.TestCase):
@@ -226,14 +272,14 @@ class ShellVars(unittest.TestCase):
     def test_group_one_runs_the_one_off_steps_and_the_others_do_not(self):
         self.assertEqual(self.vars(1, "Cargo.lock")["ONEOFF"], "1")
         self.assertEqual(self.vars(2, "Cargo.lock")["ONEOFF"], "0")
-        self.assertEqual(self.vars(3, "Cargo.lock")["ONEOFF"], "0")
+        self.assertEqual(self.vars(pr_plan.GROUPS, "Cargo.lock")["ONEOFF"], "0")
 
     def test_values_are_shell_quoted(self):
         v = pr_plan.shell_vars(plan("crates/ui-egui/src/a.rs"), 1)
         self.assertIn("CLIPPY_ARGS='-p lightcraft", v)
 
     def test_a_group_that_does_not_exist_runs_nothing(self):
-        v = self.vars(3, "docs/foo.md")
+        v = self.vars(pr_plan.GROUPS, "docs/foo.md")
         self.assertEqual((v["ONEOFF"], v["PACKAGES"], v["RUST"], v["SCOPE"]), ("0", "''", "0", "none"))
 
     def test_notes_only_scope_is_none_and_full_is_full(self):
@@ -278,6 +324,13 @@ class Drift(unittest.TestCase):
         script = (ROOT / "fork/ci.sh").read_text(encoding="utf-8")
         for step in known - {"gpu-backends"}:  # no GPU on the runners
             self.assertIn(step, script)
+
+    def test_the_workflow_runs_every_group(self):
+        wf = (ROOT / ".github/workflows/fork-ci.yml").read_text(encoding="utf-8")
+        parts = re.search(r"part: \[([0-9, ]+)\]", wf)
+        self.assertIsNotNone(parts)
+        self.assertEqual([int(x) for x in parts.group(1).split(",")], list(range(1, pr_plan.GROUPS + 1)))
+        self.assertIn("--part ${{ matrix.part }}/%d" % pr_plan.GROUPS, wf)
 
     def test_wasm_set_reads_the_layer_table(self):
         pkgs = {n: pkg(f"x/{n}") for n in ["lightcraft-geom", "lightcraft-ui-egui", "lightcraft-testkit", "lightcraft-web", "lightcraft-cli", "xtask"]}

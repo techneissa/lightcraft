@@ -14,7 +14,7 @@ secret it uses GitHub's own token.
 The workflow `.github/workflows/fork-ci.yml` (Actions ▸ Fork CI) is the check on GitHub, so the full suite never runs
 on this Mac. One workflow for both events, through the suite's shared gate workflow (the same Ubuntu packages,
 craft-fonts commit, Rust install and cache as `ci.yml`; it reads the packages and the commit from `ci.yml`), running
-`fork/ci.sh` as three jobs at once (`gate (1)` to `gate (3)`):
+`fork/ci.sh` as six jobs at once (`gate (1)` to `gate (6)`):
 
 - **A pull request to `custom`** no longer starts Fork CI (techneissa, 2026-11-03: a batch of PRs is merged and tested once); run by hand on a branch, it tests what it can break. `fork/affected.py` lists the crates with a changed file
   plus every workspace crate that depends on one (`cargo metadata`; normal, dev and build dependencies).
@@ -27,10 +27,13 @@ craft-fonts commit, Rust install and cache as `ci.yml`; it reads the packages an
 - **A push to `custom`** (the daily upstream merge included) tests everything: the steps of `cargo xtask ci`
   (format, clippy, the `heif` feature, tests and doc tests, parity, layers, assets, wasm) except the GPU hardware
   run, which needs an adapter the runners lack.
-- **The three jobs** each run `cargo test -p …` for a group of crates, balanced by an estimated time per crate
+- **The six jobs** each run `cargo test -p …` for a group of crates, balanced by an estimated time per crate
   (seconds on a runner: its tests plus its lines of Rust over 200, times 0.1; `WEIGHT_OVERRIDES`, `ONEOFF_WEIGHT` and
-  `HEIF_WEIGHT` in `fork/affected.py` hold measured values). `lightcraft-ui-egui` alone takes about 24 minutes
-  (2360 lib tests), so it sits in a group of its own and is the floor of any run that tests it.
+  `HEIF_WEIGHT` in `fork/affected.py` hold measured values). `lightcraft-ui-egui`'s tests take about 24 minutes
+  (2438 lib tests), so they are split over five of the jobs (`SHARDS`): each runs every fifth test of each of the
+  crate's test binaries, by exact name (`FORK_TEST_SHARD`, read by `fork/skip-known-failures.sh`), and the first
+  also runs its doc tests. Each of those jobs still compiles the crate, about 7.6 minutes, so more shards buy little.
+  The number of jobs is `GROUPS` in `fork/affected.py` and the matrix in `fork-ci.yml`; a test keeps them equal.
   Group 1 also runs the one-off steps: format, clippy `-D warnings --all-targets` on the tested
   crates, `cargo xtask layers` and `assets`, `parity` when the tracker docs, a command or control crate
   (`lightcraft-engine`, `-develop`, `-ui-egui`, `-cli`) or a deleted or renamed file is in the change, `wasm` when a
@@ -38,13 +41,13 @@ craft-fonts commit, Rust install and cache as `ci.yml`; it reads the packages an
   `lightcraft-engine/sam`, from the desktop app): `cargo test -p …` alone builds fewer and fails the tests that need
   them. It is `cargo test`, not nextest: the demo scenes are cached per process and nextest generates them again for
   every test (`ci.yml` notes it is much slower here). Each job writes its time to the run's summary.
-- **`fork-gate`** is the last job and passes only when all three passed. Its name is what a pull request waits
+- **`fork-gate`** is the last job and passes only when every job passed. Its name is what a pull request waits
   for. A failing test or clippy warning in a tested crate fails it.
 - The accepted failures in `known-failures.txt` ([known-failures.md](known-failures.md)) are skipped by cargo's test
   runner on Linux (`.cargo/config.toml`), so a red run is a new failure.
 
 On this Mac: `git diff --name-only mine/custom | python3 -I fork/affected.py --summary` shows the plan,
-`sh fork/ci.sh --part 1/3 --print` the commands, `python3 fork/test_affected.py` the script's tests. Nothing else of
+`sh fork/ci.sh --part 1/6 --print` the commands, `python3 fork/test_affected.py` the script's tests. Nothing else of
 `fork/ci.sh` runs here. A run by hand (Actions ▸ Fork CI ▸ Run workflow) on `custom` also saves the dependency cache
 that pull requests then restore; other runs only read it.
 
