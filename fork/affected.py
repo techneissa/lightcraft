@@ -7,7 +7,7 @@ workspace-wide file, or a file outside every crate that is not Markdown, tests e
 (Markdown outside the crates) runs the format check and nothing else. A push to `custom` passes --full: everything.
 
     git diff --name-only BASE HEAD | python3 -I fork/affected.py            # prints `full`, `none` or the crates
-    git diff --name-status BASE HEAD | python3 -I fork/affected.py --sh --part 2/6   # shell variables for fork/ci.sh
+    git diff --name-status BASE HEAD | python3 -I fork/affected.py --sh --part 2/7   # shell variables for fork/ci.sh
     gh pr diff 60 --name-only | python3 -I fork/affected.py --summary       # the whole plan, for a check by hand
 
 Input lines are a path, or `git diff --name-status` lines (`D<TAB>path`, `R100<TAB>old<TAB>new`; a deleted or
@@ -80,11 +80,14 @@ SECONDS_PER_UNIT = 0.1
 WEIGHT_OVERRIDES = {"lightcraft-ui-egui": 1500}
 # Crates whose tests are split over several groups: each group runs every Nth test of each of the crate's test
 # binaries (fork/skip-known-failures.sh reads FORK_TEST_SHARD). Without it ui-egui alone held one machine for 32
-# minutes (7.6 of them compiling) while the others finished in 10. Each shard still compiles the crate, so more
-# shards than this buy little.
-SHARDS = {"lightcraft-ui-egui": 5}
+# minutes (7.6 of them compiling) while the others finished in 10. A shard gets a group of its own: compiling is
+# most of a group's time (6 to 8 minutes), so a crate put next to a shard costs its compile and doc tests on top
+# (run of 2026-11-05: 20 minutes for those groups, 15 for a shard alone). Each shard still compiles the crate, so
+# more shards than this buy little.
+SHARDS = {"lightcraft-ui-egui": 4}
 # Groups (machines) a run uses when --part gives no total; .github/workflows/fork-ci.yml's matrix must match.
-GROUPS = 6
+# The shards take the last groups, the other crates and the one-off steps share the first ones.
+GROUPS = 7
 # The heif extras (clippy and tests with the feature) count as a crate for the balance: 139 s warm, 350 s cold.
 HEIF_WEIGHT = 250
 # The one-off steps of group 1 (clippy on the planned crates, layers, assets, parity, wasm): 216 s warm, 750 s cold.
@@ -269,16 +272,17 @@ def plan(changed, pkgs, wasm, groups=GROUPS, weights=None, force_full=False):
     heif = full or bool(planned & HEIF_PACKAGES)
     weights = weights or {}
     items = {n: weights[n] if n in weights else weight(n, pkgs) for n in planned}
+    # each shard of a split crate gets a group of its own, at the end; at least one group stays for the rest
+    solo = []
     for name, count in sorted(SHARDS.items()):
-        count = min(count, groups)
+        count = min(count, groups - 1 - len(solo))
         if name in items and count > 1:
             w = items.pop(name)
-            for i in range(1, count + 1):
-                items[f"{name}#{i}/{count}"] = -(-w // count)
+            solo += [(-(-w // count), [f"{name}#{i}/{count}"]) for i in range(1, count + 1)]
     if heif:
         items["+heif"] = HEIF_WEIGHT
     first = ("+oneoff", ONEOFF_WEIGHT if rust else 1)
-    bins = balance(items, groups, first)
+    bins = balance(items, groups - len(solo), first) + solo
     tests = []
     for number, (total, names) in enumerate(bins, 1):
         shards = {}

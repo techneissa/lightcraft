@@ -1,26 +1,26 @@
 #!/bin/sh
 # Fork CI's gate (.github/workflows/fork-ci.yml): the steps of `cargo xtask ci` (`cmd_ci` in xtask/src/ci.rs), split
-# over six machines. The official files stay untouched. The tests that fork/known-failures.txt accepts are
+# over seven machines. The official files stay untouched. The tests that fork/known-failures.txt accepts are
 # skipped by cargo's test runner on Linux (.cargo/config.toml, fork/skip-known-failures.sh), so a red run is a new
 # failure.
 #
 # A pull request tests only the crates it can affect (fork/affected.py: the changed crates and every crate that
-# depends on them); a push to `custom` tests the whole workspace. The crates are split over six groups of about
-# equal test time, and the slowest crate's tests over several of them (SHARDS in fork/affected.py, run by
-# fork/skip-known-failures.sh); group 1 also runs fmt, clippy, layers, assets, parity and the wasm check. The tests run with
+# depends on them); a push to `custom` tests the whole workspace. The slowest crate's tests are split over the last
+# groups, one shard each (SHARDS in fork/affected.py, run by fork/skip-known-failures.sh), and the other crates over
+# the first groups by about equal test time; group 1 also runs fmt, clippy, layers, assets, parity and the wasm check. The tests run with
 # `cargo test`, not nextest: the demo library's scenes are cached per process, and nextest regenerates them for
 # every test (much slower for the ui-egui tests).
 #
-#   fork/ci.sh --part 1/6         group 1 of six: the one-off steps and its share of the tests (the default)
-#   fork/ci.sh --part 2/6         the second group
-#   fork/ci.sh --part 1/6 --print print the commands without running them
-#   FORK_CI_FULL=1 fork/ci.sh --part 1/6    the whole workspace on a pull request too
-#   FORK_CI_FULL=0 GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=custom fork/ci.sh --part 1/6 --print   a pull request
+#   fork/ci.sh --part 1/7         group 1 of seven: the one-off steps and its share of the tests (the default)
+#   fork/ci.sh --part 2/7         the second group
+#   fork/ci.sh --part 1/7 --print print the commands without running them
+#   FORK_CI_FULL=1 fork/ci.sh --part 1/7    the whole workspace on a pull request too
+#   FORK_CI_FULL=0 GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=custom fork/ci.sh --part 1/7 --print   a pull request
 set -eu
 cd "$(dirname "$0")/.."
 
 print=false
-part="1/6"
+part="1/7"
 while [ $# -gt 0 ]; do
   case "$1" in
     --print) print=true ;;

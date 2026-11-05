@@ -184,10 +184,18 @@ class Shards(unittest.TestCase):
         for t in r["tests"]:  # a group with a shard tests the crate; one without does not
             self.assertEqual("lightcraft-ui-egui" in t["crates"], t["group"] in groups)
 
-    def test_shards_never_outnumber_the_groups(self):
-        r = pr_plan.plan([("Cargo.lock", False)], PKGS, WASM, groups=2, weights=WEIGHTS)
+    def test_shards_leave_one_group_for_the_rest(self):
+        r = pr_plan.plan([("Cargo.lock", False)], PKGS, WASM, groups=3, weights=WEIGHTS)
         _, counts = self.shards(r)
         self.assertEqual(counts, {2})
+        self.assertEqual([t["group"] for t in r["tests"] if t["oneoff"]], [1])
+
+    def test_a_shard_has_its_group_to_itself(self):
+        r = plan("Cargo.lock")
+        groups, _ = self.shards(r)
+        for t in r["tests"]:
+            if t["group"] in groups:
+                self.assertEqual((t["crates"], t["heif"], t["oneoff"]), (["lightcraft-ui-egui"], False, False))
 
     def test_one_group_runs_the_crate_unsplit(self):
         r = pr_plan.plan([("Cargo.lock", False)], PKGS, WASM, groups=1, weights=WEIGHTS)
