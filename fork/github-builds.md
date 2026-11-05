@@ -27,7 +27,7 @@ craft-fonts commit, Rust install and cache as `ci.yml`; it reads the packages an
   counts for that crate (`EMBEDDED`, copied from `xtask/src/ci_quick.rs`, whose test keeps it complete), and
   `fork/tests.d/` is no build input. A change to notes only (Markdown outside the crates) runs the format check and
   nothing else.
-- **A push to `custom`** (the daily upstream merge included) tests everything: the steps of `cargo xtask ci`
+- **A push to `custom`** (the Monday upstream merge included) tests everything: the steps of `cargo xtask ci`
   (format, clippy, the `heif` feature, tests and doc tests, parity, layers, assets, wasm) except the GPU hardware
   run, which needs an adapter the runners lack.
 - **The ten jobs** each run `cargo test -p …` for a group of crates, balanced by an estimated time per crate

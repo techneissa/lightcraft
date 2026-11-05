@@ -4,11 +4,11 @@ name: Fork CI
 # One workflow for both events, through the suite's shared gate (the same set-up as ci.yml: Ubuntu packages,
 # craft-fonts commit, Rust, cache) running fork/ci.sh as ten jobs at once (GROUPS in fork/affected.py):
 #   - a pull request to `custom` tests the crates it can affect (fork/affected.py);
-#   - a push to `custom` (the daily upstream merge included) tests everything, as `cargo xtask ci` does.
+#   - a push to `custom` (the Monday upstream merge included) tests everything, as `cargo xtask ci` does.
 # The accepted failures in fork/known-failures.txt are skipped by cargo's test runner on Linux
 # (.cargo/config.toml), so a red run is a new failure. `fork-gate` is the check a pull request waits for.
 # The official CI workflow (ci.yml) is untouched; it is switched off in the repo's Actions settings instead
-# (fork/github-builds.md). fork-build.yml pushes its daily merge with FORK_PUSH_TOKEN, so that merge is tested too.
+# (fork/github-builds.md). fork-build.yml pushes its Monday merge with FORK_PUSH_TOKEN, so that merge is tested too.
 
 on:
   # Not on pull requests (techneissa, 2026-11-03): a batch of PRs is merged and tested once, so a
