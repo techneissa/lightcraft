@@ -12,7 +12,8 @@ secret it uses GitHub's own token.
 ## Fork CI and `fork-gate`
 
 The workflow `.github/workflows/fork-ci.yml` (Actions ▸ Fork CI) is the check on GitHub, so the full suite never runs
-on this Mac. One workflow for both events, through the suite's shared gate workflow (the same Ubuntu packages,
+on this Mac. It calls techneissa's copy of the shared gate, `techneissa/craft-common-actions` (storytold's plus an `sccache`
+input, on here, that also caches the workspace crates' compiled code; merged from storytold weekly, see FORK.md there). One workflow for both events, through the suite's shared gate workflow (the same Ubuntu packages,
 craft-fonts commit, Rust install and cache as `ci.yml`; it reads the packages and the commit from `ci.yml`), running
 `fork/ci.sh` as ten jobs at once (`gate (1)` to `gate (10)`):
 

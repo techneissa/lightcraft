@@ -62,8 +62,9 @@ jobs:
       fail-fast: false
       matrix:
         part: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
-    # Tracks @main like ci.yml, so suite-wide CI fixes reach this fork too.
-    uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
+    # techneissa's copy of the shared gate (techneissa/craft-common-actions, FORK.md there): storytold's plus an
+    # `sccache` input that also caches the workspace crates' compiled code. Merged from storytold weekly.
+    uses: techneissa/craft-common-actions/.github/workflows/gate.yml@main
     with:
       packages: ${{ needs.pins.outputs.packages }}
       craft-fonts-ref: ${{ needs.pins.outputs.craft-fonts-ref }}
@@ -72,6 +73,8 @@ jobs:
       # no debug info (the gate's default is line tables): a failing test still names its file and line, and
       # nothing on the runners reads more, so the builds compile and link less (techneissa, 2026-11-05)
       dev-debug: "0"
+      # the workspace crates' compiled code in the GitHub cache too (techneissa, 2026-11-05)
+      sccache: true
       # a run by hand on `custom` saves the dependency cache that pull requests then restore
       cache-save-on-dispatch: ${{ github.event_name == 'workflow_dispatch' }}
       timeout-minutes: 75
