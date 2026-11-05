@@ -146,6 +146,9 @@ of it.
 ## Testing & performance (do this often)
 - Unit/property tests next to the code; end-to-end tests drive real binaries (`crates/mcp/tests/e2e.rs`,
   `apps/lightcraft-cli/tests/`). New features need at least one test that would fail without them.
+- **No timing tests (techneissa, 2026-11-05).** A test never passes or fails on how long something took: no
+  `elapsed() < …`, ms or frame budgets, speed ratios, or sleeps as the assertion. Wait on a condition (a gate, a
+  polled state with a generous timeout that only guards against a hang). Measuring belongs in benches and `xtask bench`.
 - **Run the app after every user-visible change**: launch with `--control 7980`, drive it with a JSON-lines script
   (`docs/showcase/run.py file.jsonl`), take `ui.screenshot`, and look at it. Check `ui.inspect` → `perf`.
 - **Benchmarks:** `cargo xtask bench` (24 MP raw from corpus; CPU and GPU columns) appends to `target/bench/history.jsonl`
