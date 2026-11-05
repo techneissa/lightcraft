@@ -68,6 +68,9 @@ jobs:
       craft-fonts-ref: ${{ needs.pins.outputs.craft-fonts-ref }}
       # as ci.yml: cargo test, not nextest (the demo scene cache is per process)
       tools: ""
+      # no debug info (the gate's default is line tables): a failing test still names its file and line, and
+      # nothing on the runners reads more, so the six builds compile and link less (techneissa, 2026-11-05)
+      dev-debug: "0"
       # a run by hand on `custom` saves the dependency cache that pull requests then restore
       cache-save-on-dispatch: ${{ github.event_name == 'workflow_dispatch' }}
       timeout-minutes: 75
