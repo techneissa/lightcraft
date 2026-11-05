@@ -21,7 +21,7 @@ use lightcraft_catalog::lens_limits::{LensRefusal, refusal};
 use lightcraft_catalog::{ExifField, Meta, Photo, PhotoId};
 use serde_json::{Value, json};
 
-use super::{Icon, LightcraftApp, Tokens, register, text_button};
+use super::{Icon, LightcraftApp, Tokens, register};
 use crate::text_field::{Ending, TextField};
 
 /// The reset button, the marker beside it and the alert are small, and the same on every row.
@@ -213,9 +213,8 @@ enum Trailing<'a> {
     Text(&'a str),
 }
 
-/// The six rows, one height with a gap between them, and Reset All under them while anything is edited.
+/// The six rows, one height with a gap between them.
 pub(super) fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, scope: &Scope, side: &Side) {
-    let t = Tokens::get(ui.ctx());
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.y = ROW_GAP;
         for f in ROWS {
@@ -228,18 +227,6 @@ pub(super) fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, scope: &Scope, si
             row(app, ui, scope, f, trailing);
         }
     });
-    if scope.any_edited() {
-        ui.add_space(2.0);
-        // (a row of its own height: `with_layout` would claim all the room left below the card)
-        ui.allocate_ui_with_layout(vec2(ui.available_width(), ROW_H), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let r = text_button(ui, "exifResetAll", crate::i18n::tr("Reset All"), false)
-                .on_hover_text(crate::i18n::tr("Give every edited camera and exposure value of the selected photos the file's value back"));
-            if r.clicked() {
-                run_reset(app, ui.ctx(), scope, None);
-            }
-            ui.label(egui::RichText::new(crate::i18n::tr("Edited")).size(11.0).color(t.accent));
-        });
-    }
 }
 
 /// `text` laid out in the card's value style, wrapped at `width` onto at most [`MAX_LINES`] lines (a word longer than
@@ -357,7 +344,11 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, scope: &Scope, field: ExifFie
         } else {
             (field_rect, commit) = (rest_value(ui, scope, field, id, (width, height), (&value, &shown, &galley, pad)), None);
         }
-        cluster(app, ui, scope, field, ROW_H);
+        // the marks sit halfway down the value block, so a wrapped value has them between its lines
+        let rest = Rect::from_min_max(pos2(ui.cursor().left(), rect.top()), rect.max);
+        let mut marks = ui.new_child(egui::UiBuilder::new().max_rect(rest).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        marks.spacing_mut().item_spacing.x = space_x;
+        cluster(app, &mut marks, scope, field, height);
     }
     if let Some((g, pad)) = trail {
         let size = g.size() + vec2(pad, if pad > 0.0 { 2.0 } else { 0.0 });

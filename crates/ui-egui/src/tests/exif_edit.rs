@@ -94,10 +94,10 @@ fn typing_a_number_edits_every_selected_photo_and_reset_gives_the_file_back() {
     }
     let m = meta(&h, ids[0]);
     assert_eq!((m.effective_shutter(), m.effective_aperture(), m.effective_focal_mm()), ("2.5", Some(4.0), Some(85.0)));
-    // Reset All takes every edit back at once
-    ask(&mut h, "ui.clickWidget", json!({"id": "button:exifResetAll"}));
+    // the command takes every edit back at once; the card has no button for it
+    assert!(!has(&h, "button:exifResetAll"), "the card has no Reset All button");
+    run(&mut h, "photo.resetExif", json!({"ids": ids.iter().map(|i| i.0).collect::<Vec<_>>()}));
     assert!(ids.iter().all(|id| meta(&h, *id).exif.is_empty()));
-    assert!(!has(&h, "button:exifResetAll"), "nothing left to reset");
 }
 
 #[test]
@@ -241,11 +241,22 @@ fn the_rows_are_roomy_and_the_card_is_a_bounded_height() {
     assert!(r.iter().all(|row| (row.height() - 24.0).abs() < 0.5), "one-line rows are one height: {r:?}");
     let card = rect(&h, "info:card");
     assert!(card.height() <= 6.0 * 24.0 + 5.0 * 6.0 + 20.0 + 1.5, "at rest the card is {} tall", card.height());
-    // with something edited: the Reset All row is added (and no more)
+    // with something edited: no Reset All row and no "Edited" label, so the card does not grow
     type_into(&mut h, "iso", "6400");
     ask(&mut h, "ui.key", json!({"key": "Enter"}));
-    assert!(has(&h, "button:exifResetAll"));
-    assert!(rect(&h, "info:card").height() <= card.height() + 26.0, "edited the card is {} tall", rect(&h, "info:card").height());
+    assert!(!has(&h, "button:exifResetAll"), "no Reset All button");
+    assert!(!h.painted_text().iter().any(|t| t == "Edited" || t == "Reset All"), "no Edited label");
+    assert!(rect(&h, "info:card").height() <= card.height() + 0.5, "edited the card is {} tall", rect(&h, "info:card").height());
+}
+
+#[test]
+fn the_edit_marks_sit_halfway_down_a_wrapped_value() {
+    let (mut h, ids) = info_panel();
+    let long = "Sigma 24-70mm F2.8 DG DN II Art Mirrorless Zoom for Sony E and L-mount Extra Long Name";
+    run(&mut h, "photo.setMeta", json!({"ids": ids.iter().map(|i| i.0).collect::<Vec<_>>(), "lens": long}));
+    let (value, reset) = (rect(&h, "exifValue:lens"), rect(&h, "icon:exifReset:lens"));
+    assert!(value.height() > 24.5, "the lens name wraps: {value:?}");
+    assert!((value.center().y - reset.center().y).abs() < 1.0, "reset {reset:?} is level with the middle of {value:?}");
 }
 
 #[test]
@@ -290,7 +301,7 @@ fn a_lens_name_too_long_for_the_row_wraps_and_only_the_rows_below_move() {
     let rest = rows(&h);
     let long = "Sigma 24-70mm F2.8 DG DN II Art Mirrorless Zoom Lens for Sony E and Leica L mounts";
     run(&mut h, "library.select", json!({"ids": [ids[0].0], "active": ids[0].0}));
-    run(&mut h, "photo.setMeta", json!({"ids": [ids[0].0], "lens": long}));
+    run(&mut h, "photo.setMeta", json!({"ids": ids.iter().map(|i| i.0).collect::<Vec<_>>(), "lens": long}));
     let r = rows(&h);
     assert!(r[1].height() > 24.0 + 10.0, "the lens row is taller for a second line: {:?}", r[1]);
     assert_eq!(r[0], rest[0], "the row above stays");
@@ -380,8 +391,8 @@ fn a_refusal_is_over_when_the_next_edit_begins_and_the_files_own_values_are_neve
     ask(&mut h, "ui.key", json!({"key": "Enter"}));
     assert!(has(&h, "exifAlert:aperture"));
     run(&mut h, "photo.setMeta", json!({"ids": [ids[0].0], "iso": 800}));
-    ask(&mut h, "ui.clickWidget", json!({"id": "button:exifResetAll"}));
-    assert!(!has(&h, "exifAlert:aperture"), "Reset All ends it too");
+    run(&mut h, "photo.resetExif", json!({"ids": [ids[0].0]}));
+    assert!(!has(&h, "exifAlert:aperture"), "a reset ends it too");
 }
 
 #[test]
