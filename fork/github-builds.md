@@ -14,7 +14,7 @@ secret it uses GitHub's own token.
 The workflow `.github/workflows/fork-ci.yml` (Actions ▸ Fork CI) is the check on GitHub, so the full suite never runs
 on this Mac. One workflow for both events, through the suite's shared gate workflow (the same Ubuntu packages,
 craft-fonts commit, Rust install and cache as `ci.yml`; it reads the packages and the commit from `ci.yml`), running
-`fork/ci.sh` as seven jobs at once (`gate (1)` to `gate (7)`):
+`fork/ci.sh` as ten jobs at once (`gate (1)` to `gate (10)`):
 
 - **A pull request to `custom`** no longer starts Fork CI (techneissa, 2026-11-03: a batch of PRs is merged and tested once); run by hand on a branch, it tests what it can break. `fork/affected.py` lists the crates with a changed file
   plus every workspace crate that depends on one (`cargo metadata`; normal, dev and build dependencies).
@@ -27,12 +27,12 @@ craft-fonts commit, Rust install and cache as `ci.yml`; it reads the packages an
 - **A push to `custom`** (the daily upstream merge included) tests everything: the steps of `cargo xtask ci`
   (format, clippy, the `heif` feature, tests and doc tests, parity, layers, assets, wasm) except the GPU hardware
   run, which needs an adapter the runners lack.
-- **The seven jobs** each run `cargo test -p …` for a group of crates, balanced by an estimated time per crate
+- **The ten jobs** each run `cargo test -p …` for a group of crates, balanced by an estimated time per crate
   (seconds on a runner: its tests plus its lines of Rust over 200, times 0.1; `WEIGHT_OVERRIDES`, `ONEOFF_WEIGHT` and
   `HEIF_WEIGHT` in `fork/affected.py` hold measured values). `lightcraft-ui-egui`'s tests take about 24 minutes
-  (2438 lib tests), so they are split over the last four jobs (`SHARDS`), one shard each and nothing else: each runs
-  every fourth test of each of the crate's test binaries, by exact name (`FORK_TEST_SHARD`, read by
-  `fork/skip-known-failures.sh`), and the first also runs its doc tests. The other crates share the first three jobs.
+  (2438 lib tests), so they are split over the last five jobs (`SHARDS`), one shard each and nothing else: each runs
+  every fifth test of each of the crate's test binaries, by exact name (`FORK_TEST_SHARD`, read by
+  `fork/skip-known-failures.sh`), and the first also runs its doc tests. The other crates share the first five jobs.
   Compiling is most of a job's time (6 to 8 minutes, and every shard compiles the crate), so a crate next to a shard
   makes that job the slowest, and more shards buy little.
   The number of jobs is `GROUPS` in `fork/affected.py` and the matrix in `fork-ci.yml`; a test keeps them equal.
@@ -49,7 +49,7 @@ craft-fonts commit, Rust install and cache as `ci.yml`; it reads the packages an
   runner on Linux (`.cargo/config.toml`), so a red run is a new failure.
 
 On this Mac: `git diff --name-only mine/custom | python3 -I fork/affected.py --summary` shows the plan,
-`sh fork/ci.sh --part 1/7 --print` the commands, `python3 fork/test_affected.py` the script's tests. Nothing else of
+`sh fork/ci.sh --part 1/10 --print` the commands, `python3 fork/test_affected.py` the script's tests. Nothing else of
 `fork/ci.sh` runs here. A run by hand (Actions ▸ Fork CI ▸ Run workflow) on `custom` also saves the dependency cache
 that pull requests then restore; other runs only read it.
 

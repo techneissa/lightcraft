@@ -7,7 +7,7 @@ workspace-wide file, or a file outside every crate that is not Markdown, tests e
 (Markdown outside the crates) runs the format check and nothing else. A push to `custom` passes --full: everything.
 
     git diff --name-only BASE HEAD | python3 -I fork/affected.py            # prints `full`, `none` or the crates
-    git diff --name-status BASE HEAD | python3 -I fork/affected.py --sh --part 2/7   # shell variables for fork/ci.sh
+    git diff --name-status BASE HEAD | python3 -I fork/affected.py --sh --part 2/10   # shell variables for fork/ci.sh
     gh pr diff 60 --name-only | python3 -I fork/affected.py --summary       # the whole plan, for a check by hand
 
 Input lines are a path, or `git diff --name-status` lines (`D<TAB>path`, `R100<TAB>old<TAB>new`; a deleted or
@@ -84,10 +84,10 @@ WEIGHT_OVERRIDES = {"lightcraft-ui-egui": 1500}
 # most of a group's time (6 to 8 minutes), so a crate put next to a shard costs its compile and doc tests on top
 # (run of 2026-11-05: 20 minutes for those groups, 15 for a shard alone). Each shard still compiles the crate, so
 # more shards than this buy little.
-SHARDS = {"lightcraft-ui-egui": 4}
+SHARDS = {"lightcraft-ui-egui": 5}
 # Groups (machines) a run uses when --part gives no total; .github/workflows/fork-ci.yml's matrix must match.
 # The shards take the last groups, the other crates and the one-off steps share the first ones.
-GROUPS = 7
+GROUPS = 10
 # The heif extras (clippy and tests with the feature) count as a crate for the balance: 139 s warm, 350 s cold.
 HEIF_WEIGHT = 250
 # The one-off steps of group 1 (clippy on the planned crates, layers, assets, parity, wasm): 216 s warm, 750 s cold.

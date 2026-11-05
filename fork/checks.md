@@ -5,7 +5,7 @@ Check in batches:
   (`cargo test -p <crate> <filter>`), `cargo clippy -p <crate> --all-targets -- -D warnings` for the crates it
   touched, and `cargo fmt --all --check`;
 - a pull request waits for **`fork-gate`** (`fork-ci.yml`): it tests the changed crates and the crates that depend
-  on them, on seven machines, and fails for any failing test or clippy warning in them
+  on them, on ten machines, and fails for any failing test or clippy warning in them
   ([fork/github-builds.md](github-builds.md)). Merge when `fork-gate` is green;
 - the full suite runs on GitHub, not on this Mac: a push to `custom` starts the same workflow (Fork CI) on the whole
   workspace, as `cargo xtask ci` would. Check it with `gh run list -R techneissa/lightcraft -w "Fork CI" -b custom`

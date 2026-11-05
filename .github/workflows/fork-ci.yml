@@ -2,7 +2,7 @@ name: Fork CI
 
 # techneissa's fork (FORK.md): the checks on GitHub's machines, so the full suite never runs on techneissa's Mac.
 # One workflow for both events, through the suite's shared gate (the same set-up as ci.yml: Ubuntu packages,
-# craft-fonts commit, Rust, cache) running fork/ci.sh as seven jobs at once (GROUPS in fork/affected.py):
+# craft-fonts commit, Rust, cache) running fork/ci.sh as ten jobs at once (GROUPS in fork/affected.py):
 #   - a pull request to `custom` tests the crates it can affect (fork/affected.py);
 #   - a push to `custom` (the daily upstream merge included) tests everything, as `cargo xtask ci` does.
 # The accepted failures in fork/known-failures.txt are skipped by cargo's test runner on Linux
@@ -53,15 +53,15 @@ jobs:
           echo "packages=$packages" >> "$GITHUB_OUTPUT"
           echo "fonts=$fonts" >> "$GITHUB_OUTPUT"
 
-  # Seven machines at once (free for a public repo): ui-egui's tests split over the last four (SHARDS in
-  # fork/affected.py), the other crates over the first three. Group 1 also runs fmt, clippy, layers, assets, parity
+  # Ten machines at once (free for a public repo; techneissa, 2026-11-05): ui-egui's tests split over the last
+  # five (SHARDS in fork/affected.py), the other crates over the first five. Group 1 also runs fmt, clippy, layers, assets, parity
   # and wasm.
   gate:
     needs: pins
     strategy:
       fail-fast: false
       matrix:
-        part: [1, 2, 3, 4, 5, 6, 7]
+        part: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     # Tracks @main like ci.yml, so suite-wide CI fixes reach this fork too.
     uses: storytold/craft-common-actions/.github/workflows/gate.yml@main
     with:
@@ -75,7 +75,7 @@ jobs:
       # a run by hand on `custom` saves the dependency cache that pull requests then restore
       cache-save-on-dispatch: ${{ github.event_name == 'workflow_dispatch' }}
       timeout-minutes: 75
-      command: sh fork/ci.sh --part ${{ matrix.part }}/7
+      command: sh fork/ci.sh --part ${{ matrix.part }}/10
 
   # The check a pull request waits for: passes only when every group passed.
   fork-gate:

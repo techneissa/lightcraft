@@ -1,6 +1,6 @@
 #!/bin/sh
 # Fork CI's gate (.github/workflows/fork-ci.yml): the steps of `cargo xtask ci` (`cmd_ci` in xtask/src/ci.rs), split
-# over seven machines. The official files stay untouched. The tests that fork/known-failures.txt accepts are
+# over ten machines. The official files stay untouched. The tests that fork/known-failures.txt accepts are
 # skipped by cargo's test runner on Linux (.cargo/config.toml, fork/skip-known-failures.sh), so a red run is a new
 # failure.
 #
@@ -11,16 +11,16 @@
 # `cargo test`, not nextest: the demo library's scenes are cached per process, and nextest regenerates them for
 # every test (much slower for the ui-egui tests).
 #
-#   fork/ci.sh --part 1/7         group 1 of seven: the one-off steps and its share of the tests (the default)
-#   fork/ci.sh --part 2/7         the second group
-#   fork/ci.sh --part 1/7 --print print the commands without running them
-#   FORK_CI_FULL=1 fork/ci.sh --part 1/7    the whole workspace on a pull request too
-#   FORK_CI_FULL=0 GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=custom fork/ci.sh --part 1/7 --print   a pull request
+#   fork/ci.sh --part 1/10        group 1 of ten: the one-off steps and its share of the tests (the default)
+#   fork/ci.sh --part 2/10        the second group
+#   fork/ci.sh --part 1/10 --print print the commands without running them
+#   FORK_CI_FULL=1 fork/ci.sh --part 1/10    the whole workspace on a pull request too
+#   FORK_CI_FULL=0 GITHUB_EVENT_NAME=pull_request GITHUB_BASE_REF=custom fork/ci.sh --part 1/10 --print   a pull request
 set -eu
 cd "$(dirname "$0")/.."
 
 print=false
-part="1/7"
+part="1/10"
 while [ $# -gt 0 ]; do
   case "$1" in
     --print) print=true ;;
