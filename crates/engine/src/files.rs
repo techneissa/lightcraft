@@ -11,6 +11,8 @@ use lightcraft_pipeline::SourceInfo;
 use lightcraft_raster::Rgb32f;
 use lightcraft_raster::resample::{Filter, fit};
 
+use lightcraft_raw::dcp::DcpProfile;
+
 use crate::media::{DenoiseSpec, FileLoader, FileProbe, LoadOptions, PairLoader, PreviewLoader, ProbeInfo, ReducedLoader};
 
 mod colour;

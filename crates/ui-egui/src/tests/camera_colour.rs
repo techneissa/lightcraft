@@ -33,7 +33,7 @@ fn panel(offered: bool, note: Option<lightcraft_pipeline::LocalUnavailable>) -> 
     let log = seen.clone();
     // (found here, on the test's thread: the decoder runs on a worker thread that doesn't see the test's folder)
     let usable_key = lightcraft_engine::camera_profiles::local_key("A7 V Chart");
-    let loader: FileLoader = Arc::new(move |_, _, options| {
+    let loader: FileLoader = Arc::new(move |_, _, options, _| {
         log.lock().unwrap().push(options);
         let mut img = lightcraft_raster::Rgb32f::new(48, 32);
         img.data.fill([0.18; 3]);

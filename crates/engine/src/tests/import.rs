@@ -1004,7 +1004,7 @@ fn smart_previews_keep_the_decoder_facts_offline_edits_need() {
         let mut s = Session::new().with_fs();
         s.open_library(&lib, false).unwrap();
         let (p, i) = (pixels.clone(), info.clone());
-        s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge, _options| Ok((p.clone(), i.clone()))));
+        s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge, _options, _| Ok((p.clone(), i.clone()))));
         s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
         let id = s.active().unwrap();
         let r = s.execute("library.smartPreviews", &json!({})).unwrap();
@@ -2137,9 +2137,9 @@ fn look_loader(
     tone: lightcraft_pipeline::tone::CameraTone,
     calls: std::sync::Arc<std::sync::atomic::AtomicUsize>,
 ) -> crate::media::FileLoader {
-    std::sync::Arc::new(move |path, max_edge, options| {
+    std::sync::Arc::new(move |path, max_edge, options, dcp| {
         calls.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let (img, mut info) = plain(path, max_edge, options)?;
+        let (img, mut info) = plain(path, max_edge, options, dcp)?;
         info.camera_tone = Some(tone);
         Ok((img, info))
     })
@@ -2307,7 +2307,7 @@ fn a_proxy_with_an_older_encoding_is_refreshed_without_the_camera_look() {
     let pixels = lightcraft_raster::Rgb32f::from_fn(48, 32, |x, y| [0.02 + (x % 9) as f32 * 0.05, 0.03 + (y % 7) as f32 * 0.04, 0.06]);
     let info = lightcraft_pipeline::SourceInfo { raw: true, as_shot_temp: 5200.0, as_shot_tint: 6.0, ..Default::default() };
     let (p, i) = (pixels.clone(), info.clone());
-    s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge, _options| Ok((p.clone(), i.clone()))));
+    s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge, _options, _| Ok((p.clone(), i.clone()))));
     s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
     let id = s.active().unwrap();
     let mut raw = (**s.catalog.photo(id).unwrap()).clone();
@@ -2351,7 +2351,7 @@ fn a_stale_refresh_never_rebuilds_a_proxy_from_itself() {
     let pixels = lightcraft_raster::Rgb32f::from_fn(48, 32, |x, y| [0.02 + (x % 9) as f32 * 0.05, 0.03 + (y % 7) as f32 * 0.04, 0.06]);
     let info = lightcraft_pipeline::SourceInfo { raw: true, as_shot_temp: 5200.0, as_shot_tint: 6.0, ..Default::default() };
     let (p, i) = (pixels.clone(), info.clone());
-    s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge, _options| Ok((p.clone(), i.clone()))));
+    s.media.file_loader = Some(std::sync::Arc::new(move |_path, _max_edge, _options, _| Ok((p.clone(), i.clone()))));
     s.execute("library.import", &json!({"paths": [src.join("a.png").to_string_lossy()]})).unwrap();
     let id = s.active().unwrap();
     // a raw that takes the per-file camera look, so an older fit makes its proxy stale

@@ -20,6 +20,7 @@ use crate::widgets::{BAND_COLORS, SliderOut, divider, flyout_row, hex, register,
 
 mod curve;
 mod grading;
+mod hdr_flow;
 mod histogram;
 mod mixer;
 mod profile_search;
@@ -181,7 +182,7 @@ fn show_sections(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
 
     let light = |app: &mut LightcraftApp, ui: &mut egui::Ui| {
         section(app, ui, &d, "light", "Light", |app, ui, d| {
-            hdr_row(app, ui, d);
+            hdr_row(app, ui, d, id);
             for c in ["light.exposure", "light.contrast", "light.highlights", "light.shadows", "light.whites", "light.blacks"] {
                 control(app, ui, d, c, true);
             }

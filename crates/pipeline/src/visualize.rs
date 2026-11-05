@@ -601,6 +601,41 @@ mod tests {
     }
 
     #[test]
+    fn sharpening_preview_follows_the_process_radius_and_render_planes() {
+        use lightcraft_develop::Process;
+        use lightcraft_raster::blur::gaussian;
+        let l = Plane { width: 80, height: 16, data: (0..1280).map(|i| ((i % 80) as f32 * 0.73).sin() * 0.3).collect() };
+        let mut s = DevelopSettings::default();
+        let mut bands = Vec::new();
+        for process in Process::ALL {
+            s.process = process.version();
+            s.detail.sharpen_radius = 3.0;
+            s.detail.sharpen_masking = 70.0;
+            let pixel = s.process >= Process::V3.version();
+            let blur = if pixel {
+                gaussian(&l, crate::local::sharpen_sigma(s.detail.sharpen_radius, 0.5))
+            } else {
+                gaussian(&l, crate::local::texture_sigma(80.0))
+            };
+            for o in [Overlay::SharpenDetail, Overlay::SharpenMask] {
+                let cached = sharpen_plane(o, &s, &l, Some(&blur), 80.0, 0.5).unwrap();
+                let fresh = sharpen_plane(o, &s, &l, None, 80.0, 0.5).unwrap();
+                assert_eq!(cached.data, fresh.data, "{process:?} {o:?}");
+                for ((&actual, &log), &base) in fresh.data.iter().zip(&l.data).zip(&blur.data) {
+                    let det = log - base;
+                    let expected = if o == Overlay::SharpenDetail { det } else { crate::finish::sharpen_mask_weight(0.7, det, pixel) };
+                    assert_eq!(actual, expected);
+                }
+            }
+            bands.push(sharpen_plane(Overlay::SharpenDetail, &s, &l, None, 80.0, 0.5).unwrap().data);
+        }
+        assert_eq!(bands[0], bands[1], "the legacy previews stay unchanged");
+        assert_ne!(bands[1], bands[2], "V3 previews use the pixel-scale band");
+        s.detail.sharpen_radius = 1.0;
+        assert_ne!(bands[2], sharpen_plane(Overlay::SharpenDetail, &s, &l, None, 80.0, 0.5).unwrap().data);
+    }
+
+    #[test]
     fn sharpening_previews_show_the_mask_and_detail() {
         // a smooth ramp (left) and a hard edge (at x = 60)
         let src = Rgb32f::from_fn(80, 40, |x, _| if x < 60 { [0.05 + 0.002 * x as f32; 3] } else { [0.6; 3] });

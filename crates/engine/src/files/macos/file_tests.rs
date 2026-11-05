@@ -17,10 +17,10 @@ fn a_cancelled_render_is_tried_again() {
     let bytes = arw("ILCE-CANCEL1", 1);
     let cancelled = Fake::new(Answer::Fail(Error::Cancelled));
     cancelled.cancel.store(true, Ordering::Relaxed);
-    let r = load_bytes_now(Cow::Borrowed(&bytes), 512, None, false, options(CameraColour::Macos), &cancelled);
+    let r = load_bytes_now(Cow::Borrowed(&bytes), 512, None, false, options(CameraColour::Macos), None, &cancelled);
     assert_eq!(r.err().as_deref(), Some("cancelled"));
     let fine = Fake::new(Answer::Grey(D50));
-    let (_, _, info, _) = load_bytes_now(Cow::Borrowed(&bytes), 512, None, false, options(CameraColour::Macos), &fine).unwrap();
+    let (_, _, info, _) = load_bytes_now(Cow::Borrowed(&bytes), 512, None, false, options(CameraColour::Macos), None, &fine).unwrap();
     assert_eq!((fine.calls.load(Ordering::SeqCst), info.macos_note), (1, None));
 }
 
@@ -34,13 +34,13 @@ fn a_file_load_renders_from_its_path() {
     let bytes = arw("ILCE-PATH1", 1);
     std::fs::write(&file, &bytes).unwrap();
     let fake = Fake { path: Some(file.clone()), ..Fake::new(Answer::Grey(D50)) };
-    let (_, _, info, _) = load_bytes_now(Cow::Owned(bytes), 512, None, false, options(CameraColour::Macos), &fake).unwrap();
+    let (_, _, info, _) = load_bytes_now(Cow::Owned(bytes), 512, None, false, options(CameraColour::Macos), None, &fake).unwrap();
     assert_eq!((fake.inputs.lock().unwrap().clone(), info.macos_note), (vec!["path"], None));
 
     let bytes = arw("ILCE-PATH2", 1);
     std::fs::write(&file, &bytes).unwrap();
     let failing = Fake { path: Some(file), ..Fake::new(Answer::Fail(Error::Undecodable)) };
-    let (img, _, info, _) = load_bytes_now(Cow::Owned(bytes), 512, None, false, options(CameraColour::Macos), &failing).unwrap();
+    let (img, _, info, _) = load_bytes_now(Cow::Owned(bytes), 512, None, false, options(CameraColour::Macos), None, &failing).unwrap();
     assert_eq!((failing.inputs.lock().unwrap().clone(), info.macos_note), (vec!["path"], Some(MacosUnavailable::Unreadable)));
     assert!(img.width > 0, "the Camera Matching decode of the file read again");
     std::fs::remove_dir_all(&dir).ok();
@@ -51,7 +51,7 @@ fn a_file_load_renders_from_its_path() {
 fn borrowed_bytes_are_rendered_as_bytes() {
     let bytes = arw("ILCE-PATH3", 1);
     let fake = Fake { path: Some("/nonexistent/a.ARW".into()), ..Fake::new(Answer::Grey(D50)) };
-    load_bytes_now(Cow::Borrowed(&bytes), 512, None, false, options(CameraColour::Macos), &fake).unwrap();
+    load_bytes_now(Cow::Borrowed(&bytes), 512, None, false, options(CameraColour::Macos), None, &fake).unwrap();
     assert_eq!(*fake.inputs.lock().unwrap(), vec!["bytes"]);
 }
 
@@ -86,9 +86,9 @@ fn an_interactive_macos_load_waits_at_the_gate() {
 fn needs_download_is_tried_again() {
     let bytes = arw("ILCE-DOWNLOAD1", 1);
     let first = Fake::new(Answer::Fail(Error::NeedsDownload { camera: "ILCE-DOWNLOAD1".into() }));
-    let (_, _, info, _) = load_bytes_now(Cow::Borrowed(&bytes), 512, None, false, options(CameraColour::Macos), &first).unwrap();
+    let (_, _, info, _) = load_bytes_now(Cow::Borrowed(&bytes), 512, None, false, options(CameraColour::Macos), None, &first).unwrap();
     assert_eq!(info.macos_note, Some(MacosUnavailable::Unreadable));
     let fine = Fake::new(Answer::Grey(D50));
-    let (_, _, info, _) = load_bytes_now(Cow::Borrowed(&bytes), 512, None, false, options(CameraColour::Macos), &fine).unwrap();
+    let (_, _, info, _) = load_bytes_now(Cow::Borrowed(&bytes), 512, None, false, options(CameraColour::Macos), None, &fine).unwrap();
     assert_eq!((fine.calls.load(Ordering::SeqCst), info.macos_note), (1, None));
 }

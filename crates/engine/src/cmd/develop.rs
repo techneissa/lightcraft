@@ -597,8 +597,17 @@ pub fn specs() -> Vec<CommandSpec> {
                 if let Some(id) = &id
                     && !crate::presets::PROFILES.iter().any(|x| x.id == *id)
                     && !s.lut_profiles.iter().any(|x| x.id == *id)
+                    && !s.dcp_profiles.iter().any(|x| x.id == *id)
                 {
                     return Err(bad("develop.profile", format!("unknown profile `{id}`")));
+                }
+                // an imported camera profile whose file is missing or damaged: choosing it would develop with the
+                // file's own colour without saying so
+                if let Some(id) = &id
+                    && crate::cmd::dcp_profiles::is_dcp_id(id)
+                    && !s.media.camera_profiles.contains_key(id)
+                {
+                    return Err(bad("develop.profile", format!("camera profile `{id}` can't be used: its file is missing or damaged")));
                 }
                 // a local profile is named in the history (`Profile: A7 V Chart`), like the Switch step
                 let label = match (&id, camera_profile.as_ref().and_then(Option::as_deref)) {
@@ -636,7 +645,7 @@ pub fn specs() -> Vec<CommandSpec> {
         ),
         cmd!("profile.favorite", "Favorite Profile", [], None, "{id, favorite?: bool} (toggles when omitted)", always, |s, p| {
             let id = str_param(p, "id").ok_or_else(|| bad("profile.favorite", "missing id"))?.to_string();
-            if crate::presets::profile(&id).is_none() && !s.lut_profiles.iter().any(|x| x.id == id) {
+            if crate::presets::profile(&id).is_none() && !s.lut_profiles.iter().any(|x| x.id == id) && !s.dcp_profiles.iter().any(|x| x.id == id) {
                 return Err(bad("profile.favorite", format!("unknown profile `{id}`")));
             }
             let on = s.profile_favorites.contains(&id);

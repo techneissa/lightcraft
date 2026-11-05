@@ -35,7 +35,7 @@ fn panel(n: u64, note: Option<MacosUnavailable>) -> (Headless, Arc<Mutex<Vec<Loa
     }
     let seen = Arc::new(Mutex::new(Vec::new()));
     let log = seen.clone();
-    let loader: FileLoader = Arc::new(move |_, _, options| {
+    let loader: FileLoader = Arc::new(move |_, _, options, _| {
         log.lock().unwrap().push(options);
         let mut img = lightcraft_raster::Rgb32f::new(48, 32);
         img.data.fill([0.18; 3]);

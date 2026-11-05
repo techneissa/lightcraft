@@ -1,5 +1,7 @@
 # Process versions
 
+> **Last updated:** 2026-10-12 · **Change:** minor (calibrated Contrast and Blacks)
+
 Every photo's develop settings record the **rendering process** they are interpreted by
 (`DevelopSettings::process`, a `ProcessVersion` in `crates/develop/src/settings.rs`). Lightroom calls
 this the process version. It lets the look of LightCraft improve (a new default tone curve, issue #146;
@@ -9,7 +11,8 @@ stronger Light sliders, issue #196) without changing a single photo someone has 
 |---|---|
 | **V1** | LightCraft's rendering from before process versions existed. Frozen. |
 | **V2** | Highlights and Shadows keep fine detail (issue #632): their base layer (`local::tone_base`) is the edge-aware filter of a separable median of log luminance (radius 0.15 % of the long edge, at most 24 px, `local::BASE_DETAIL`) instead of log luminance itself, so twigs, lines and texture take their surroundings' shift and keep their contrast; region edges stay sharp. CPU (`local::prepare`) and GPU prepare branch on `local::tone_base_detail` (0 = no median under V1); the base plane is cached per process (`local::BaseKey`). Renders without Highlights or Shadows (global or local) are the same as V1's. Tone map unchanged. |
-| **V3** (the latest) | Contrast, Whites and Blacks respond as strongly on raws with a camera look (`ToneMap::camera_hdr_with`) and on display-referred files (`display_hdr_with`) as on raws without a look (`ToneMap::hdr`, unchanged): `tone::Sliders` bends gamma-space tones about the pivot (midtone slope x1.55 at +100, x0.6 at −100, black and white held), moves the white point 0.75 EV up / 0.7 EV down over the top 3 EV, and uses `hdr`'s blacks toe; edited display curves get a looser soft clip (slope 1 to 0.96, exactly 1.0 from 1.04) so Whites +100 reaches clipping. Neutral sliders stay the identity. `local::tone_base` as V2. The tone LUT is shared by the CPU and GPU renderers, so no shader changed. Shadows and Highlights reach further into the midtones: Shadows +100 lifts about 1.7 EV in the deepest tones, 0.9 EV at 0.05 linear, 0.5 EV at 0.1 and a little at mid grey, and none above ~0.4 linear; Highlights −100 pulls from the upper midtones (0.4 EV at mid grey, 1.1 EV at 0.36, 1.6 EV at 0.7). Highlights +100 brightens the upper tones the same way up to mid-bright (0.18 → 0.24, 0.36 → 0.67 linear) and then rolls off on a tanh shoulder (knee 1.0 EV over grey, never past 0.98 linear), so a bright sky keeps its texture (a 0.5 to 0.9 ramp comes out 0.84 to 0.95, not 1.2 to 2.8) and tones already at white stay put. The weights are `shadows_highlights_delta` (`crates/pipeline/src/finish.rs`, `FinishParams::tone_v3`) and the same constants in `finish.wgsl` (`F_TONE_V3`); V1 and V2 keep their narrower weights. Sharpening has a band of its own at the Radius slider's scale: a pixel-scale Gaussian of `1.5 * Radius` pixels of the original photo, scaled to the render (`local::sharpen_sigma`; V1 and V2 sharpen on the fixed fine texture band and ignore Radius), gain `finish::sharpen_gain` (2.4 up to Radius 1, then `Radius^-0.7`) and Detail / Masking ranges (`finish::sharpen_mix`) fitted to it; on the GPU the band is a second plane in the `tex` buffer (`SHARP_OFF`). The post-crop vignette darkens by `2.75 * |amount|^1.2` stops at the full falloff (`finish::vignette_dark_factor`, about -2.8 / -1.2 / -0.4 stops in the corner at -100 / -50 / -20; V1 / V2: `1 + amount * t`, black at -100) and lightens by 0.40 of the way to white at +100 (V1 / V2: 0.85). |
+| **V3** | Contrast, Whites and Blacks respond as strongly on raws with a camera look (`ToneMap::camera_hdr_with`) and on display-referred files (`display_hdr_with`) as on raws without a look (`ToneMap::hdr`, unchanged): `tone::Sliders` bends gamma-space tones about the pivot (midtone slope x1.55 at +100, x0.6 at −100, black and white held), moves the white point 0.75 EV up / 0.7 EV down over the top 3 EV, and uses `hdr`'s blacks toe; edited display curves get a looser soft clip (slope 1 to 0.96, exactly 1.0 from 1.04) so Whites +100 reaches clipping. Neutral sliders stay the identity. `local::tone_base` as V2. The tone LUT is shared by the CPU and GPU renderers, so no shader changed. Shadows and Highlights reach further into the midtones: Shadows +100 lifts about 1.7 EV in the deepest tones, 0.9 EV at 0.05 linear, 0.5 EV at 0.1 and a little at mid grey, and none above ~0.4 linear; Highlights −100 pulls from the upper midtones (0.4 EV at mid grey, 1.1 EV at 0.36, 1.6 EV at 0.7). Highlights +100 brightens the upper tones the same way up to mid-bright (0.18 → 0.24, 0.36 → 0.67 linear) and then rolls off on a tanh shoulder (knee 1.0 EV over grey, never past 0.98 linear), so a bright sky keeps its texture (a 0.5 to 0.9 ramp comes out 0.84 to 0.95, not 1.2 to 2.8) and tones already at white stay put. The weights are `shadows_highlights_delta` (`crates/pipeline/src/finish.rs`, `FinishParams::tone_v3`) and the same constants in `finish.wgsl` (`F_TONE_V3`); V1 and V2 keep their narrower weights. Sharpening has a band of its own at the Radius slider's scale: a pixel-scale Gaussian of `1.5 * Radius` pixels of the original photo, scaled to the render (`local::sharpen_sigma`; V1 and V2 sharpen on the fixed fine texture band and ignore Radius), gain `finish::sharpen_gain` (2.4 up to Radius 1, then `Radius^-0.7`) and Detail / Masking ranges (`finish::sharpen_mix`) fitted to it; on the GPU the band is a second plane in the `tex` buffer (`SHARP_OFF`). The post-crop vignette darkens by `2.75 * |amount|^1.2` stops at the full falloff (`finish::vignette_dark_factor`, about -2.8 / -1.2 / -0.4 stops in the corner at -100 / -50 / -20; V1 / V2: `1 + amount * t`, black at -100) and lightens by 0.40 of the way to white at +100 (V1 / V2: 0.85). |
+| **V4** (the latest) | The fork's V3 (above) plus calibrated global Contrast (per channel) and Blacks (per-channel/luminance mix) on raws with a camera tone curve. Whites behaves as in V3 (upstream's own V4 keeps V2's Whites; this fork builds V4 on its V3 tone and sharpening, which were written separately from upstream's V3). Other sources and local adjustments keep V3's operators. See [calibrated Light operators](light-v3.md). |
 
 ## The rule
 
@@ -74,7 +77,7 @@ written against the current rendering. `crs:ProcessVersion` numbers Adobe's rend
 ignored; a photo imported with Lightroom edits is on LightCraft's latest process, and an existing
 LightCraft photo that receives them keeps its own.
 
-**A number this build doesn't know** (a library or sidecar written by a newer LightCraft) loads, is
+**A number above this build's latest** (a library or sidecar written by a newer LightCraft) loads, is
 kept when saved, and renders with the newest process this build has. Update to Current Process never
 moves a photo to an older process; Reset does move it to this build's latest.
 
@@ -89,3 +92,14 @@ The process is saved as `"process": <number>` in the settings JSON, except V1, w
 Settings made before process versions existed are therefore saved exactly as before, and their
 preview-cache keys (`DevelopSettings::hash64`) don't change. `develop.get` (MCP `get_develop`) always
 states the process.
+
+From process V3 on, persistent thumbnail, view-render and variant keys also include the
+resolved rendering process. A future number can keep the same settings hash across builds
+while resolving to different operators, so those keys must differ. V1 and V2 omit this
+extra field and retain their existing cached renders. No cache-version bump is needed.
+
+## Revision history
+
+| Date | Change | Summary |
+|---|---|---|
+| 2026-10-12 | minor | Calibrated Contrast and Blacks, V2 Whites, resolved-process cache keys and number coordination |

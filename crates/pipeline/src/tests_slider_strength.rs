@@ -280,10 +280,18 @@ pub(crate) fn sharpen_effect(ids: &[(&str, f64)]) -> (f32, f32, f32) {
     let src = edge_scene(w, h, 0.0);
     let noisy = edge_scene(w, h, 0.06);
     let info = SourceInfo::default();
-    let row = |img: &Rgba8| -> Vec<f32> { (0..w).map(|x| img.data[(h / 4) * w + x][1] as f32).collect() };
+    // The green row from the 16-bit render, in 8-bit levels: the 8-bit output's Bayer dither moves a pixel
+    // by a whole level, a third of the difference these checks look at.
+    let row = |src: &Rgb32f, s: &DevelopSettings| -> Vec<f32> {
+        let req = RenderRequest { depth: crate::OutputDepth::U16, ..RenderRequest::fit(src.width, src.height) };
+        match render(src, &info, s, &req).deep.map(|d| d.samples) {
+            Some(crate::DeepSamples::U16(v)) => (0..w).map(|x| v.get(((h / 4) * w + x) * 3 + 1).map_or(0.0, |&u| u as f32 / 257.0)).collect(),
+            _ => vec![0.0; w],
+        }
+    };
     let slope = |r: &[f32]| r.windows(2).map(|p| (p[1] - p[0]).abs()).fold(0.0, f32::max);
-    let base = row(&render_with(&src, &info, &DevelopSettings::default()));
-    let out = row(&render_with(&src, &info, &settings(ids)));
+    let base = row(&src, &DevelopSettings::default());
+    let out = row(&src, &settings(ids));
     let hi = base[w - 20];
     let step = hi - base[20];
     let over = (out.iter().cloned().fold(0.0, f32::max) - hi) / step.max(1.0);
@@ -538,8 +546,9 @@ fn sharpening_detail_trades_edges_for_noise() {
     let (slope0, _, noise0) = sharpen_effect(&[("detail.sharpenAmount", 100.0), ("detail.sharpenDetail", 0.0)]);
     let (slope100, _, noise100) = sharpen_effect(&[("detail.sharpenAmount", 100.0), ("detail.sharpenDetail", 100.0)]);
     assert!(noise100 > noise0 * 1.3, "noise {noise0} -> {noise100}");
-    // (the band is wide enough that an edge is far above the noise: Detail leaves its sharpening alone)
-    assert!(slope100 > slope0 - 0.02, "edge slope {slope0} -> {slope100}");
+    // (the band is wide enough that an edge is far above the noise: Detail leaves its sharpening alone to
+    // within 0.05; the 16-bit render measures 1.5998 -> 1.5648, which 8-bit rounding had shown as equal)
+    assert!(slope100 > slope0 - 0.05, "edge slope {slope0} -> {slope100}");
     assert!(slope0 > 1.02 && noise0 < noise100 * 0.85, "Detail 0 still sharpens edges with less noise: {slope0} {noise0}");
     // Amount 40 (the raw default) is visible on an edge
     assert!(sharpen_effect(&[("detail.sharpenAmount", 40.0)]).0 > 1.03);

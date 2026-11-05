@@ -116,9 +116,10 @@ mod tests {
         job.source = SourceRef::File {
             path: "synthetic.dng".into(),
             max_edge: 64,
-            loader: Some(Arc::new(move |_, _, _| Ok((Rgb32f::new(64, 64), info.clone())))),
+            loader: Some(Arc::new(move |_, _, _, _| Ok((Rgb32f::new(64, 64), info.clone())))),
             fallback: None,
             denoise: None,
+            camera_profile: None,
             reduced: None,
             options: Default::default(),
         };

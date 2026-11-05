@@ -392,8 +392,9 @@ pub(crate) struct SmartCounts {
 fn original_only(source: crate::media::SourceRef) -> Option<crate::media::SourceRef> {
     use crate::media::SourceRef;
     match source {
+        // (a smart preview keeps the file's own colour: an imported camera profile is applied when the original is read)
         SourceRef::File { path, max_edge, loader, denoise, options, .. } => {
-            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, reduced: None, options })
+            Some(SourceRef::File { path, max_edge, loader, fallback: None, denoise, camera_profile: None, reduced: None, options })
         }
         SourceRef::Loaded(d) if d.info.is_some() && !d.from_proxy && !d.reduced => Some(SourceRef::Loaded(d)),
         // (Use Smart Previews for editing: the original behind the preferred proxy)
@@ -533,9 +534,10 @@ fn smart(s: &mut Session, p: &Value) -> Result<Value> {
         }
         let path = crate::smart::sharded_file_path(&dir, &ph);
         // (a smart preview keeps the camera matching whatever the photo is set to, except for a local camera profile:
-        // it stands in for the original)
+        // it stands in for the original; it keeps the file's own colour: never built with the photo's imported camera
+        // profile, nor from a cached source developed with it)
         let (options, local) = smart_local(&ph);
-        let source = (!discard).then(|| s.media.source_ref_for(&ph, crate::media::SourceLevel::Preview, options.unwrap_or_default()));
+        let source = (!discard).then(|| s.media.source_ref_without_profile(&ph, crate::media::SourceLevel::Preview, options.unwrap_or_default()));
         jobs.push((id, path, source, preview_fitted_look(&ph), local));
     }
     let custom = s.smart_previews_dir.is_some();
@@ -783,6 +785,7 @@ mod tests {
             loader: None,
             fallback: None,
             denoise: None,
+            camera_profile: None,
             reduced: None,
             options: Default::default(),
         };

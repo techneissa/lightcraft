@@ -34,6 +34,10 @@ pub mod finish;
 pub mod geometry;
 pub mod learned_fill;
 mod learned_resample;
+pub mod light_v3;
+// generated (`light_v3_params.rs`), kept in its own compact layout
+#[rustfmt::skip]
+pub mod light_v3_params;
 pub mod local;
 pub mod local_tone;
 pub mod lut;
@@ -448,6 +452,8 @@ pub struct Plan<'a> {
     pub px_per_long: f64,
     /// Long edge of the source buffer (px).
     pub src_long: usize,
+    /// Long edge of the original photo, shared by sharpening and noise reduction.
+    pub native_long: usize,
     /// Output pixels per pixel of the original photo ([`SourceInfo::native_long`], else the source
     /// buffer), at most 1: the scale of noise reduction, whose radii are in the original's pixels.
     pub detail_scale: f32,
@@ -556,6 +562,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         h,
         px_per_long,
         src_long,
+        native_long,
         detail_scale,
         geo,
         lin_key,
@@ -853,6 +860,10 @@ mod tests_hdr;
 #[cfg(test)]
 mod tests_learned_fill;
 #[cfg(test)]
+mod tests_legacy;
+#[cfg(test)]
+mod tests_light;
+#[cfg(test)]
 mod tests_local;
 #[cfg(test)]
 mod tests_macos_wb;
@@ -860,6 +871,8 @@ mod tests_macos_wb;
 mod tests_mask_geometry;
 #[cfg(test)]
 mod tests_nr_scale;
+#[cfg(test)]
+mod tests_sharpen;
 #[cfg(test)]
 mod tests_sharpen_mask;
 #[cfg(test)]

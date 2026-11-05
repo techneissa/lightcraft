@@ -164,7 +164,7 @@ pub(crate) fn options(colour: CameraColour) -> LoadOptions {
 }
 
 pub(crate) fn load(bytes: &[u8], max_edge: usize, colour: CameraColour, backend: &dyn Backend) -> super::super::load::Loaded {
-    load_bytes_now(Cow::Borrowed(bytes), max_edge, None, false, options(colour), backend).unwrap()
+    load_bytes_now(Cow::Borrowed(bytes), max_edge, None, false, options(colour), None, backend).unwrap()
 }
 
 /// D50's chromaticity: about 5000 K.

@@ -6,6 +6,77 @@ fn session() -> crate::Session {
     s.catalog.apply(Op::AddPhoto { photo: Box::new(p) }).unwrap();
     s
 }
+/// Settings saved by a newer LightCraft (a process number this build doesn't know) render with
+/// this build's latest process, and a build that resolved the number to an older process
+/// cached other pixels under the same settings hash: the persistent keys (thumbnails, the
+/// loupe's view render, variants) name the process the settings render with, so those are
+/// never served (review of 5a7016c8: a catalog saved with a newer process kept main's V2 thumbnails).
+#[test]
+fn persistent_keys_name_the_process_the_settings_render_with() {
+    use lightcraft_develop::ProcessVersion;
+    let mut s = session();
+    let newer = DevelopSettings { process: ProcessVersion(ProcessVersion::LATEST.0 + 1), ..DevelopSettings::default() };
+    s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(newer.clone()), label: "newer".into(), edited: None }).unwrap();
+    let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+    let unnamed = |kind: Option<&str>, size: u64| {
+        let mut h = Hasher128::new();
+        h.str(&content_key(&p));
+        if let Some(k) = kind {
+            h.str(k);
+        }
+        h.u64(newer.hash64()).u64(size).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key()).finish()
+    };
+    let named = |kind: Option<&str>, size: u64, process: u64| {
+        let mut h = Hasher128::new();
+        h.str(&content_key(&p));
+        if let Some(k) = kind {
+            h.str(k);
+        }
+        h.u64(newer.hash64()).u64(size).u64(RENDER_CACHE_VERSION).u64(process).u64(crate::camera_profiles::cache_key()).finish()
+    };
+    let resolved = u64::from(lightcraft_develop::Process::LATEST.version().0);
+    let keys = [
+        (s.thumb_job(PhotoId(1), 256).unwrap().cache.unwrap().1, None, 256),
+        (crate::Session::view_key(&p, true, 0), Some("view"), 1),
+        (crate::Session::variant_key(&p, &newer, 256, 0), Some("variant"), 256),
+    ];
+    for (key, kind, size) in keys {
+        assert_ne!(key, unnamed(kind, size), "old builds did not name their resolved process");
+        assert_eq!(key, named(kind, size, resolved), "the key names the process used for rendering");
+        assert_ne!(key, named(kind, size, u64::from(newer.process.0)), "the saved future number is not the resolved process");
+    }
+}
+
+/// Photos on V1 and V2 keep the persistent keys builds before process V3 gave them (no process
+/// in them), so their cached thumbnails, view renders and variants stay valid after upgrading
+/// (review of 26cd2df1: every V1/V2 photo rendered again, and offline ones without smart
+/// previews lost their thumbnails); V3 and later name their process.
+#[test]
+fn v1_and_v2_photos_keep_the_render_cache_keys_they_had() {
+    use lightcraft_develop::Process;
+    let mut s = session();
+    for process in [Process::V1, Process::V2, Process::V3] {
+        let settings = DevelopSettings { process: process.version(), ..DevelopSettings::default() };
+        s.catalog.apply(Op::SetDevelop { id: PhotoId(1), settings: Arc::new(settings.clone()), label: "p".into(), edited: None }).unwrap();
+        let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
+        let before_v3 = |kind: Option<&str>, size: u64| {
+            let mut h = Hasher128::new();
+            h.str(&content_key(&p));
+            if let Some(k) = kind {
+                h.str(k);
+            }
+            h.u64(settings.hash64()).u64(size).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key()).finish()
+        };
+        let keys = [
+            s.thumb_job(PhotoId(1), 256).unwrap().cache.unwrap().1 == before_v3(None, 256),
+            crate::Session::view_key(&p, true, 0) == before_v3(Some("view"), 1),
+            crate::Session::variant_key(&p, &settings, 256, 0) == before_v3(Some("variant"), 256),
+        ];
+        let old = process <= Process::V2;
+        assert_eq!(keys, [old; 3], "{process:?}: thumbnail, view and variant keys");
+    }
+}
+
 #[test]
 fn hashes_match_uncached_keys_and_are_not_recomputed_for_sizes_metadata_or_before() {
     let mut s = session();
@@ -21,6 +92,7 @@ fn hashes_match_uncached_keys_and_are_not_recomputed_for_sizes_metadata_or_befor
             .u64(settings)
             .u64(b as u64)
             .u64(RENDER_CACHE_VERSION)
+            .u64(u64::from(p.develop.process.process().version().0))
             .u64(crate::camera_profiles::cache_key())
             .finish();
         let job = s.thumb_job(p.id, edge).unwrap();
@@ -70,7 +142,7 @@ fn hash_cache_is_bounded_weak_and_shared_settings_remain_independent() {
 #[test]
 fn source_from_before_content_reload_is_not_accepted() {
     let mut s = session();
-    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    s.media.file_loader = Some(Arc::new(|_, _, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
     let old = s.thumb_job(PhotoId(1), 256).unwrap().run();
     assert!(old.loaded.is_some());
     s.catalog
@@ -96,7 +168,7 @@ fn camera_colour_decodes_again_only_when_it_changes_the_source() {
     let decodes = |colorimetric: bool| {
         let seen = Arc::new(std::sync::Mutex::new(Vec::<LoadOptions>::new()));
         let log = seen.clone();
-        let loader: FileLoader = Arc::new(move |_, _, options| {
+        let loader: FileLoader = Arc::new(move |_, _, options, _| {
             log.lock().unwrap().push(options);
             Ok((Rgb32f::new(8, 8), SourceInfo { raw: true, colorimetric, ..SourceInfo::default() }))
         });
@@ -147,7 +219,7 @@ fn camera_colour_decodes_again_only_when_it_changes_the_source() {
     // a grid thumbnail goes through the thumbnail ("reduced") loader, which decodes for the photo's choice too
     let thumb_seen = Arc::new(std::sync::Mutex::new(Vec::<LoadOptions>::new()));
     let log = thumb_seen.clone();
-    s.media.reduced_loader = Some(Arc::new(move |_, _, options| {
+    s.media.reduced_loader = Some(Arc::new(move |_, _, options, _| {
         log.lock().unwrap().push(options);
         Ok((Rgb32f::new(8, 8), SourceInfo { raw: true, colorimetric: true, ..SourceInfo::default() }, false))
     }));
@@ -180,7 +252,7 @@ fn camera_colour_decodes_again_only_when_it_changes_the_source() {
 #[test]
 fn source_from_before_a_lens_profile_change_is_not_accepted() {
     let mut s = session();
-    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    s.media.file_loader = Some(Arc::new(|_, _, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
     let old = s.thumb_job(PhotoId(1), 256).unwrap().run();
     assert!(old.loaded.is_some());
     let lens = lightcraft_develop::EmbeddedLens { source: lightcraft_develop::LensSource::Database, ..Default::default() };
@@ -218,7 +290,7 @@ fn a_hover_preview_key_follows_the_lens_profile() {
 #[test]
 fn a_render_that_panics_fails_instead_of_never_answering() {
     let mut s = session();
-    s.media.file_loader = Some(Arc::new(|_, _, _| panic!("decoder bug")));
+    s.media.file_loader = Some(Arc::new(|_, _, _, _| panic!("decoder bug")));
     let mut job = s.thumb_job(PhotoId(1), 256).unwrap();
     job.request_id = 42;
     let (key, level, source_key) = (job.key, job.level, job.source_key);
@@ -263,14 +335,14 @@ fn a_local_profile_file_decodes_and_renders_the_photo_afresh_when_it_changes() {
     let mut s = session();
     let seen = Arc::new(std::sync::Mutex::new(Vec::<LoadOptions>::new()));
     let log = seen.clone();
-    s.media.file_loader = Some(Arc::new(move |_, _, options| {
+    s.media.file_loader = Some(Arc::new(move |_, _, options, _| {
         log.lock().unwrap().push(options);
         Ok((Rgb32f::new(8, 8), SourceInfo { raw: true, colorimetric: true, ..SourceInfo::default() }))
     }));
     let keys = |s: &mut crate::Session| {
         let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
         let job = s.thumb_job(PhotoId(1), 256).unwrap();
-        (job.key, job.cache.unwrap().1, crate::Session::variant_key(&p, &p.develop, 256), crate::Session::view_key(&p, true))
+        (job.key, job.cache.unwrap().1, crate::Session::variant_key(&p, &p.develop, 256, 0), crate::Session::view_key(&p, true, 0))
     };
     let render = |s: &mut crate::Session| {
         let r = s.render_job(PhotoId(1), 64, 64, false, true).unwrap().run();
@@ -318,7 +390,7 @@ fn macos_colour_renders_follow_the_mac_decoder_and_camera_matching_keys_stay() {
     let keys = |s: &mut crate::Session| {
         let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
         let job = s.thumb_job(PhotoId(1), 256).unwrap();
-        (job.key, job.cache.unwrap().1, crate::Session::variant_key(&p, &p.develop, 256), crate::Session::view_key(&p, true))
+        (job.key, job.cache.unwrap().1, crate::Session::variant_key(&p, &p.develop, 256, 0), crate::Session::view_key(&p, true, 0))
     };
     // Camera Matching: the same keys whatever the decoder's key, equal to the formula from before
     set_key(11);
@@ -332,6 +404,7 @@ fn macos_colour_renders_follow_the_mac_decoder_and_camera_matching_keys_stay() {
         .u64(p.develop.hash64())
         .u64(b as u64)
         .u64(RENDER_CACHE_VERSION)
+        .u64(u64::from(p.develop.process.process().version().0))
         .u64(crate::camera_profiles::cache_key())
         .finish();
     assert_eq!(auto.1, disk);

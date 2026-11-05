@@ -138,7 +138,7 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "activeMask": app.session.active_mask,
         "activeComponent": app.session.active_part(),
         "widgetCount": app.widgets.len(),
-        "perf": {"viewFollowed": app.session.view_followed, "viewWorkedOut": app.session.view_worked_out, "frameMs": app.perf.frame_ms, "logicMs": app.perf.logic_ms, "updateMs": app.perf.update_ms, "maxUpdateMs": app.perf.max_update_ms, "fps": app.perf.fps, "lastRenderMs": app.renderer.last_main_ms, "lastDraftRenderMs": app.renderer.last_draft_ms, "lastFullRenderMs": app.renderer.last_full_ms, "renderQueue": app.renderer.queued(), "rendersInFlight": app.renderer.in_flight(), "pendingSlots": app.renderer.pending_slots(), "mergeRunning": app.merge.busy(), "lastMerge": app.merge.last_result, "rendersDone": app.renderer.completed, "thumbTextures": app.renderer.thumb_textures(), "variantTextures": app.renderer.variant_textures(), "gpu": (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten(), "gpuReason": lightcraft_engine::gpu::unavailable_reason(), "gpuFallback": lightcraft_engine::gpu::last_fallback()},
+        "perf": {"viewFollowed": app.session.view_followed, "viewWorkedOut": app.session.view_worked_out, "frameMs": app.perf.frame_ms, "logicMs": app.perf.logic_ms, "updateMs": app.perf.update_ms, "maxUpdateMs": app.perf.max_update_ms, "fps": app.perf.fps, "lastRenderMs": app.renderer.last_main_ms, "lastDraftRenderMs": app.renderer.last_draft_ms, "lastFullRenderMs": app.renderer.last_full_ms, "renderQueue": app.renderer.queued(), "rendersInFlight": app.renderer.in_flight(), "pendingSlots": app.renderer.pending_slots(), "mergeRunning": app.merge.busy(), "lastMerge": app.merge.last_result, "rendersDone": app.renderer.completed, "thumbTextures": app.renderer.thumb_textures(), "variantTextures": app.renderer.variant_textures(), "gpu": (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten(), "gpuReason": lightcraft_engine::gpu::unavailable_reason(), "gpuFallback": lightcraft_engine::gpu::last_fallback(), "gpuWindowDevice": lightcraft_engine::gpu::on_window_device(), "screenTextures": app.renderer.has_screen_textures(), "mainOnGpu": app.renderer.textures.get(&crate::render::Slot::Main).is_some_and(|t| t.native.is_some())},
         "loupe": app.loupe_shown.map(|(p, src)| json!({
             "photo": p.0,
             "source": src,
@@ -347,6 +347,12 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
             if id == "library.missing" {
                 // looks at every photo's file: on a worker thread, answered when it is done
                 let started = crate::missing_sweep::ask(app, req.reply.clone());
+                ctx.request_repaint();
+                return started;
+            }
+            if id == "library.findSimilar" {
+                // reads every photo: on a worker thread, answered when it is done
+                let started = crate::find_similar::ask(app, &params, req.reply.clone());
                 ctx.request_repaint();
                 return started;
             }

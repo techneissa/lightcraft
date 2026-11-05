@@ -1,5 +1,6 @@
 use super::quick::{QuickJob, content_key, source_info};
 use super::render::{RenderJob, RenderResult};
+use super::settings_hash::with_process;
 use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
 use super::{
     Arc, DevelopSettings, Hash128, Hasher128, LoadOptions, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo,
@@ -44,7 +45,14 @@ impl crate::Session {
             source_edge_needed(&p, &settings, apply_crop, max_w.max(max_h))
         });
         let options = LoadOptions::of(&settings);
-        let source = self.media.source_ref_for(&p, level, options);
+        // the Before side develops with the Before settings' camera profile (or none), not the edit's
+        let source = if before {
+            let mut q = (*p).clone();
+            q.develop = settings.clone();
+            self.media.source_ref_for(&q, level, options)
+        } else {
+            self.media.source_ref_for(&p, level, options)
+        };
         let request = RenderRequest { apply_crop, ..RenderRequest::fit(max_w, max_h) };
         // the photo id is part of the key: two photos with the same settings and size must not
         // share a result (a view slot showing photo A would otherwise look current for photo B)
@@ -55,6 +63,7 @@ impl crate::Session {
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash = if before { settings.hash64() } else { self.media.settings_hashes.get(id, &settings) };
         let salt = self.media.denoise_salt(id, &settings) ^ self.lama.cache_salt(&settings);
+        let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
         let lens = super::quick::lens_key(&p);
         let key = settings_hash
             ^ ((max_w as u64) << 40)
@@ -66,10 +75,13 @@ impl crate::Session {
             ^ salt
             // (a local profile's file: nothing, so no change, for every other photo)
             ^ options.profile_key.map_or(0, |k| (k as u64) ^ ((k >> 64) as u64)).rotate_left(29)
-            ^ lens.rotate_left(31);
+            ^ lens.rotate_left(31)
+            // (an imported camera profile's file: likewise nothing for every other photo)
+            ^ profile_salt.rotate_left(43);
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
-            k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION).u64(crate::camera_profiles::cache_key());
+            k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION);
+            with_process(&mut k, &settings).u64(crate::camera_profiles::cache_key());
             // (only a photo on a local profile has its file in its key, so every other thumbnail stays valid)
             if let Some(local) = options.profile_key {
                 k.u64(local as u64).u64((local >> 64) as u64);
@@ -77,6 +89,10 @@ impl crate::Session {
             // (only a render that uses a denoised picture has it in its key, so every other thumbnail stays valid)
             if salt != 0 {
                 k.u64(salt);
+            }
+            // (likewise an imported camera profile's file: deleted or replaced, the thumbnail renders afresh)
+            if profile_salt != 0 {
+                k.str("dcp").u64(profile_salt);
             }
             // (likewise a database lens profile: thumbnails of every other photo keep their keys)
             if lens != 0 {
@@ -100,6 +116,7 @@ impl crate::Session {
             stages: None,
             view_cache: None,
             display: None,
+            on_screen: false,
             slide: None,
             preview_cut: None,
             display_fit: None,
@@ -110,27 +127,37 @@ impl crate::Session {
     /// temporary preview while hovering a preset or profile; nothing is committed or cached).
     pub fn preview_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, apply_crop: bool, settings: &DevelopSettings) -> Option<RenderJob> {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
+        // the source as these settings develop it: another camera profile (or none) decodes anew
+        let mut p = (**self.catalog.photo(id)?).clone();
+        let own_profile = self.media.camera_profile_of(&p).map(|c| c.0);
+        p.develop = Arc::new(settings.clone());
+        if self.media.camera_profile_of(&p).map(|c| c.0) != own_profile {
+            job.source = self.media.source_ref(&p, job.level);
+        }
         job.settings = Arc::new(settings.clone());
+        // (the imported camera profile's file is in the key, as in `render_job`'s: a profile file replaced under the
+        // same id is a new picture)
+        let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
         // (the photo's database lens profile stays part of it: a profile looked up again renders afresh)
         let lens = self.catalog.photo(id).map_or(0, |p| super::quick::lens_key(p));
         job.key = settings.hash64() ^ ((max_w as u64) << 40) ^ ((max_h as u64) << 20) ^ (apply_crop as u64) ^ (job.level as u64) << 60;
-        job.key ^= lens.rotate_left(31);
+        job.key ^= lens.rotate_left(31) ^ profile_salt.rotate_left(43);
         // (a hover over a local profile follows its file, as every other render of it does)
         job.key ^= LoadOptions::of(settings).profile_key.map_or(0, |k| (k as u64) ^ ((k >> 64) as u64)).rotate_left(29);
         Some(job)
     }
 
     /// Cache key of a variant thumbnail ([`Self::variant_job`]).
-    pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize) -> Hash128 {
+    /// `profile_salt`: [`MediaCache::camera_profile_salt`] of `settings`' profile.
+    pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize, profile_salt: u64) -> Hash128 {
         let mut k = Hasher128::new();
-        k.str(&content_key(p))
-            .str("variant")
-            .u64(settings.hash64())
-            .u64(edge as u64)
-            .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key());
+        k.str(&content_key(p)).str("variant").u64(settings.hash64()).u64(edge as u64).u64(RENDER_CACHE_VERSION);
+        with_process(&mut k, settings).u64(crate::camera_profiles::cache_key());
         if let Some(local) = LoadOptions::of(settings).profile_key {
             k.u64(local as u64).u64((local >> 64) as u64);
+        }
+        if profile_salt != 0 {
+            k.str("dcp").u64(profile_salt);
         }
         let lens = super::quick::lens_key(p);
         if lens != 0 {
@@ -145,11 +172,13 @@ impl crate::Session {
     /// hash, so a variant renders once; `key` is derived from the same hash, so a frontend can
     /// keep one texture per variant.
     pub fn variant_job(&mut self, id: PhotoId, settings: &DevelopSettings, edge: usize) -> Option<RenderJob> {
-        let p = self.catalog.photo(id)?.clone();
+        let mut p = (**self.catalog.photo(id)?).clone();
         let edge = edge.clamp(16, SourceLevel::Thumb.max_edge());
         let level = SourceLevel::Thumb;
+        // decoded as these settings develop it (their camera profile, or none; their camera colour)
+        p.develop = Arc::new(settings.clone());
         let source = self.media.source_ref_for(&p, level, LoadOptions::of(settings));
-        let ck = Self::variant_key(&p, settings, edge);
+        let ck = Self::variant_key(&p, settings, edge, self.media.camera_profile_salt(&settings.profile.id));
         Some(RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
@@ -166,6 +195,7 @@ impl crate::Session {
             stages: None,
             view_cache: None,
             display: None,
+            on_screen: false,
             slide: None,
             preview_cut: None,
             display_fit: None,
@@ -203,7 +233,7 @@ impl crate::Session {
         let needed = (edge as f64 * w.max(h) / side).ceil().min(SourceLevel::Preview.max_edge() as f64);
         let level = SourceLevel::for_size(needed as usize);
         let source = self.media.source_ref_for(&p, level, LoadOptions::of(&settings));
-        let ck = Self::variant_key(&p, &settings, edge);
+        let ck = Self::variant_key(&p, &settings, edge, self.media.camera_profile_salt(&settings.profile.id));
         let preview_cut = self.face_preview_cut(&p, rect, edge, needed as usize);
         Some(RenderJob {
             request_id: 0,
@@ -221,6 +251,7 @@ impl crate::Session {
             stages: None,
             view_cache: None,
             display: None,
+            on_screen: false,
             slide: None,
             preview_cut,
             display_fit: None,
@@ -244,17 +275,16 @@ impl crate::Session {
     }
 
     /// Size-independent cache key of a photo's view render (loupe) for its current settings, its lens profile
-    /// included as in [`Self::variant_key`].
-    pub(crate) fn view_key(p: &Photo, apply_crop: bool) -> Hash128 {
+    /// included as in [`Self::variant_key`]. `profile_salt`: [`MediaCache::camera_profile_salt`] of the photo's profile.
+    pub(crate) fn view_key(p: &Photo, apply_crop: bool, profile_salt: u64) -> Hash128 {
         let mut k = Hasher128::new();
-        k.str(&content_key(p))
-            .str("view")
-            .u64(p.develop.hash64())
-            .u64(apply_crop as u64)
-            .u64(RENDER_CACHE_VERSION)
-            .u64(crate::camera_profiles::cache_key());
+        k.str(&content_key(p)).str("view").u64(p.develop.hash64()).u64(apply_crop as u64).u64(RENDER_CACHE_VERSION);
+        with_process(&mut k, &p.develop).u64(crate::camera_profiles::cache_key());
         if let Some(local) = LoadOptions::of(&p.develop).profile_key {
             k.u64(local as u64).u64((local >> 64) as u64);
+        }
+        if profile_salt != 0 {
+            k.str("dcp").u64(profile_salt);
         }
         let lens = super::quick::lens_key(p);
         if lens != 0 {
@@ -268,7 +298,8 @@ impl crate::Session {
     pub fn loupe_job(&mut self, id: PhotoId, max_w: usize, max_h: usize, apply_crop: bool) -> Option<RenderJob> {
         let mut job = self.render_job(id, max_w, max_h, false, apply_crop)?;
         let p = self.catalog.photo(id)?;
-        job.view_cache = Some((self.media.rendered.clone(), Self::view_key(p, apply_crop)));
+        let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
+        job.view_cache = Some((self.media.rendered.clone(), Self::view_key(p, apply_crop, profile_salt)));
         Some(job)
     }
 
@@ -385,19 +416,26 @@ impl crate::Session {
     /// texture with another key is of an older look (settings or file), and a frontend that must
     /// never show one compares it to this.
     pub fn quick_view_key(&self, id: PhotoId, apply_crop: bool, camera_jpeg: bool) -> Option<u64> {
-        self.catalog.photo(id).map(|p| Self::quick_key(p, apply_crop, camera_jpeg))
+        self.catalog.photo(id).map(|p| Self::quick_key(p, apply_crop, camera_jpeg, self.media.camera_profile_salt(&p.develop.profile.id)))
     }
 
-    fn quick_key(p: &Photo, apply_crop: bool, camera_jpeg: bool) -> u64 {
-        Hasher128::new().str(&content_key(p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).u64(camera_jpeg as u64).finish().0 as u64
+    /// `profile_salt`: [`MediaCache::camera_profile_salt`] of the photo's profile (0 keeps every other photo's key).
+    fn quick_key(p: &Photo, apply_crop: bool, camera_jpeg: bool, profile_salt: u64) -> u64 {
+        let mut h = Hasher128::new();
+        h.str(&content_key(p)).str("quick").u64(p.develop.hash64()).u64(apply_crop as u64).u64(camera_jpeg as u64);
+        if profile_salt != 0 {
+            h.str("dcp").u64(profile_salt);
+        }
+        h.finish().0 as u64
     }
 
     pub fn quick_view_job(&mut self, id: PhotoId, max_edge: usize, apply_crop: bool, camera_jpeg: bool) -> Option<QuickJob> {
         let p = self.catalog.photo(id)?.clone();
         let small = self.thumb_job(id, THUMB_SIZES[THUMB_SIZES.len() - 1])?;
         // (the thumbnail job itself starts with the cached thumbnail, after the sharper embedded preview)
-        let cached = vec![(self.media.rendered.clone(), Self::view_key(&p, apply_crop))];
-        let key = Self::quick_key(&p, apply_crop, camera_jpeg);
+        let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
+        let cached = vec![(self.media.rendered.clone(), Self::view_key(&p, apply_crop, profile_salt))];
+        let key = Self::quick_key(&p, apply_crop, camera_jpeg, profile_salt);
         let embedded = self.embedded_of(&p).filter(|_| camera_jpeg).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
         Some(QuickJob { request_id: 0, photo: id, key, cached, embedded, minimum_embedded_edge: None, small: apply_crop.then(|| Box::new(small)) })
     }
@@ -531,13 +569,16 @@ impl crate::Session {
 
     /// The facts of photo `id`'s decoded source, when one is held (not the catalog's guess before a decode).
     pub(crate) fn decoded_source_info(&self, id: PhotoId) -> Option<SourceInfo> {
-        Some(self.media.source_facts(id, SourceInfo { raw: false, ..SourceInfo::default() })).filter(|i| i.raw)
+        let profile = self.catalog.photo(id).and_then(|p| self.media.camera_profile_of(p)).map(|(tag, _)| tag);
+        Some(self.media.source_facts(id, SourceInfo { raw: false, ..SourceInfo::default() }, profile.as_deref())).filter(|i| i.raw)
     }
 
     /// Prefer decoder facts to header-only metadata for pixel-statistics commands.
     pub fn source_info(&self, id: PhotoId) -> SourceInfo {
-        let header = self.catalog.photo(id).map(|p| source_info(p)).unwrap_or_default();
-        self.media.source_facts(id, header)
+        let photo = self.catalog.photo(id);
+        let header = photo.map(|p| source_info(p)).unwrap_or_default();
+        let profile = photo.and_then(|p| self.media.camera_profile_of(p)).map(|(tag, _)| tag);
+        self.media.source_facts(id, header, profile.as_deref())
     }
 
     /// The source proxy for pixel-statistics commands (auto tone/WB), loading synchronously.
@@ -550,5 +591,38 @@ impl crate::Session {
         }
         self.media.insert_source(id, level, r);
         Ok(image)
+    }
+
+    /// [`Session::source_now`] for several photos at once, each with the facts its decoder gave
+    /// ([`Session::source_info`], read before another photo can push it out of the cache): the
+    /// ones not in memory are decoded in parallel, so a selection costs about one decode per core,
+    /// not one after another. In the order of `ids`. Callers pass a few at a time (all of them are
+    /// held decoded until this returns).
+    pub(crate) fn sources_now(&mut self, ids: &[PhotoId], level: SourceLevel) -> Vec<(PhotoId, Result<(Arc<Rgb32f>, SourceInfo), String>)> {
+        use rayon::prelude::*;
+        let refs: Vec<(PhotoId, Option<SourceRef>)> =
+            ids.iter().map(|&id| (id, self.catalog.photo(id).cloned().map(|p| self.media.source_ref(&p, level)))).collect();
+        let loaded: Vec<(PhotoId, Result<super::source::DecodedSource, String>)> =
+            refs.into_par_iter().map(|(id, r)| (id, r.ok_or_else(|| "no such photo".to_string()).and_then(|r| r.load_source()))).collect();
+        loaded
+            .into_iter()
+            .map(|(id, r)| {
+                let r = r.map(|r| {
+                    let image = r.image.clone();
+                    if let Some(info) = &r.info {
+                        self.learn_as_shot_wb(id, info);
+                    }
+                    // read before the insert: the cache's budget may evict this very entry, and
+                    // the header facts alone lack the decoder's camera colour
+                    let facts = match r.info {
+                        Some(_) => r.info_or(self.catalog.photo(id).map(|p| source_info(p)).unwrap_or_default()),
+                        None => self.source_info(id),
+                    };
+                    self.media.insert_source(id, level, r);
+                    (image, facts)
+                });
+                (id, r)
+            })
+            .collect()
     }
 }
