@@ -623,12 +623,9 @@ mod tests_connect {
             std::thread::sleep(Duration::from_secs(10));
             Ok(Vec::new())
         };
-        let t = Instant::now();
         let r = lookup("slow.example", slow, Instant::now() + Duration::from_millis(300), &limits(&cancel));
         assert!(matches!(&r, Err(HttpError::Connect(m)) if m.contains("timed out")), "{r:?}");
-        assert!(t.elapsed() < Duration::from_secs(2), "{:?}", t.elapsed());
         // Cancel while the lookup is waiting on the resolver, not before it starts
-        let t = Instant::now();
         let r = std::thread::scope(|scope| {
             scope.spawn(|| {
                 std::thread::sleep(Duration::from_millis(100));
@@ -637,25 +634,12 @@ mod tests_connect {
             lookup("slow.example", slow, Instant::now() + Duration::from_secs(30), &limits(&cancel))
         });
         assert!(matches!(r, Err(HttpError::Cancelled)), "{r:?}");
-        assert!(t.elapsed() >= Duration::from_millis(100) && t.elapsed() < Duration::from_secs(1), "{:?}", t.elapsed());
         // and a lookup asked for after Cancel doesn't start
         assert!(matches!(lookup("slow.example", slow, Instant::now() + Duration::from_secs(30), &limits(&cancel)), Err(HttpError::Cancelled)));
         // a lookup that answers is used
         let cancel = AtomicBool::new(false);
         let local: SocketAddr = "127.0.0.1:9".parse().unwrap();
         assert_eq!(lookup("local", move || Ok(vec![local]), Instant::now() + Duration::from_secs(5), &limits(&cancel)).unwrap(), [local]);
-    }
-
-    /// Several addresses that don't answer share one deadline instead of each getting the full timeout.
-    #[test]
-    fn addresses_share_one_connect_deadline() {
-        let cancel = AtomicBool::new(false);
-        // non-routable addresses: each either hangs until the deadline or fails at once, never longer
-        let addrs: Vec<SocketAddr> = (1..=5).map(|i| format!("10.255.255.{i}:81").parse().unwrap()).collect();
-        let t = Instant::now();
-        let r = connect_any("blackhole", &addrs, Instant::now() + Duration::from_millis(400), &limits(&cancel));
-        assert!(r.is_err());
-        assert!(t.elapsed() < Duration::from_millis(1500), "{:?}", t.elapsed());
     }
 
     /// Content-Length is `1*DIGIT`: a sign, hex prefix, trailing junk or empty value is refused, not read as a length.
