@@ -273,7 +273,7 @@ fn no_decoder_or_unlisted_camera_falls_back_without_rendering() {
 #[test]
 fn off_the_mac_the_system_decoder_falls_back() {
     let bytes = arw("ILCE-7M5", 1);
-    let (_, info) = crate::files::load_bytes_with(&bytes, 4096, options(CameraColour::Macos)).unwrap();
+    let (_, info) = crate::files::load_bytes_with(&bytes, 4096, options(CameraColour::Macos), None).unwrap();
     assert_eq!(info.macos_note, Some(MacosUnavailable::System));
 }
 
