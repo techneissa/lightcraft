@@ -1,5 +1,59 @@
 # Names only, typed by hand from manufacturers' public product pages; original work (not generated; lens-names.tsv is generated).
 # maker	name	mounts (separated by ;); merged into the lens list by names.rs, a name already in lens-names.tsv is not listed twice
+7Artisans	7Artisans 75mm f/1.25 II	Leica M
+7Artisans	7Artisans AF 135mm f/1.8	Leica L;Nikon Z;Sony E
+7Artisans	7Artisans AF 40mm f/2.5 FE	Sony E
+Brightin Star	Brightin Star AF 24mm f/1.8	Nikon Z;Sony E
+Brightin Star	Brightin Star AF 35mm f/1.8	Nikon Z;Sony E
+Brightin Star	Brightin Star AF 50mm f/1.4	Fujifilm X;Nikon Z;Sony E
+Brightin Star	Brightin Star AF 85mm f/1.8	Nikon Z;Sony E
+Kipon	Kipon Iberit 35mm f/2.4	Canon RF;Fujifilm X;Leica L;Nikon Z;Sony E
+Kipon	Kipon Iberit 75mm f/2.4	Sony E
 Laowa	Laowa 100mm f/2.8 2x Ultra Macro APO	Canon EF;Nikon F;Pentax K;Sony Alpha;Sony E
+Laowa	Laowa 12mm f/2.8 Lite Zero-D	Nikon Z;Sony E
+Laowa	Laowa 15mm f/4.5 Zero-D Shift	Canon EF;Canon RF;Nikon F;Nikon Z;Sony E
+Laowa	Laowa 17mm f/4 Zero-D Tilt-Shift	Canon RF;Leica L;Nikon Z;Sony E
+Laowa	Laowa 65mm f/2.8 2x Ultra Macro APO	Canon EF-M;Canon RF;Fujifilm X;Nikon Z;Sony E
+Laowa	Laowa 90mm f/2.8 2x Ultra Macro APO	Canon RF;Leica L;Micro 4/3 System;Nikon Z;Sony E
+Meike	Meike AF 23mm f/1.4	Fujifilm X;Nikon Z;Sony E
+Meike	Meike AF 85mm f/1.4 II	Leica L;Nikon Z;Sony E
+Meike	Meike AF Air 25mm f/1.7	Fujifilm X;Nikon Z;Sony E
+Meike	Meike AF Air 56mm f/1.7	Fujifilm X;Nikon Z;Sony E
+Samyang	LK Samyang AF 14-24mm f/2.8 FE	Sony E
+Samyang	LK Samyang AF 14-24mm f/2.8 L	Leica L
+Samyang	LK Samyang AF 35mm f/1.8 P FE	Sony E
+Sigma	Sigma 135mm F1.4 DG | Art	Leica L;Sony E
+Sigma	Sigma 15mm F1.4 DC | Contemporary	Canon RF;Fujifilm X;Sony E
+Sigma	Sigma 35mm F1.2 DG DN II | Art	Leica L;Sony E
+Sigma	Sigma 35mm F1.4 DG II | Art	Leica L;Sony E
+Sigma	Sigma AF Cine 28-105mm T3 FF	Leica L;Sony E
 Sirui	Sirui Aurora 85mm f/1.4	Fujifilm X;Nikon Z;Sony E
 Sirui	Sirui Aurora 35mm f/1.4	Fujifilm X;Nikon Z;Sony E
+Sirui	Sirui 24mm f/2.8 1.33x Anamorphic	Canon EF-M;Fujifilm X;Micro 4/3 System;Nikon Z;Sony E
+Sirui	Sirui 35mm f/1.8 1.33x Anamorphic	Micro 4/3 System
+Sirui	Sirui 50mm f/1.8 1.33x Anamorphic	Fujifilm X;Micro 4/3 System;Sony E
+Sirui	Sirui 75mm f/1.8 1.33x Anamorphic	Canon EF-M;Canon RF;Fujifilm X;Leica L;Micro 4/3 System;Nikon Z;Sony E
+Sirui	Sirui Astra 50mm T1.8 1.33x	Sony E
+Sirui	Sirui Aurora 15mm f/1.6	Leica L;Sony E
+Sirui	Sirui Aurora 24mm f/1.4	Leica L;Sony E
+Sirui	Sirui Nightwalker 24mm T1.2 S35	Canon RF;Fujifilm X;Leica L;Micro 4/3 System;Sony E
+Sirui	Sirui Nightwalker 35mm T1.2 S35	Canon RF;Fujifilm X;Leica L;Micro 4/3 System;Sony E
+Sirui	Sirui Nightwalker 55mm T1.2 S35	Canon RF;Fujifilm X;Leica L;Micro 4/3 System;Sony E
+Sirui	Sirui Saturn 35mm T2.9 1.6x	Canon RF;Fujifilm X;Leica L;Nikon Z;Sony E
+Sirui	Sirui Saturn 50mm T2.9 1.6x	Canon RF;Fujifilm X;Leica L;Nikon Z;Sony E
+Sirui	Sirui Saturn 75mm T2.9 1.6x	Canon RF;Fujifilm X;Leica L;Nikon Z;Sony E
+Sirui	Sirui Sniper 16mm f/1.2	Fujifilm X;Nikon Z;Sony E
+Sirui	Sirui Sniper 23mm f/1.2 APS-C	Fujifilm X;Nikon Z;Sony E
+Sirui	Sirui Sniper 33mm f/1.2 APS-C	Fujifilm X;Nikon Z;Sony E
+Sirui	Sirui Sniper 56mm f/1.2 APS-C	Fujifilm X;Nikon Z;Sony E
+Sirui	Sirui Sniper 75mm f/1.2	Fujifilm X;Nikon Z;Sony E
+Tamron	Tamron 25-200mm F/2.8-5.6 Di III VXD G2 A075	Sony E
+Thypoch	Thypoch Simera 28mm f/1.4	Canon RF;Fujifilm X;Leica M;Nikon Z;Sony E
+Thypoch	Thypoch Simera 35mm f/1.4	Canon RF;Fujifilm X;Leica M;Nikon Z;Sony E
+TTArtisan	TTArtisan AF 32mm f/2.8	Canon RF;Nikon Z;Sony E
+TTArtisan	TTArtisan AF 56mm f/1.8	Fujifilm X;Nikon Z;Sony E
+Voigtländer	Voigtländer APO-Lanthar 90mm f/4	Leica M
+Voigtländer	Voigtländer APO-Skopar 75mm f/2.8	Leica M
+Voigtländer	Voigtländer Nokton Classic 35mm f/1.4	Canon RF;Nikon Z
+Zeiss	ZEISS Batis 2/40 CF	Sony E
+Zeiss	ZEISS Loxia 2/35	Sony E
