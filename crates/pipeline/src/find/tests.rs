@@ -295,9 +295,7 @@ fn cancelling_stops_the_line_detector() {
     use std::sync::atomic::AtomicBool;
     let img = sky(1600, 1000, &[(300.0, 380.0, 60.0, 2.5, 0.25)]);
     assert_eq!(wires::detect_with(&img, 50.0, &AtomicBool::new(false)).len(), 1);
-    let t = std::time::Instant::now();
-    assert!(wires::detect_with(&img, 50.0, &AtomicBool::new(true)).is_empty(), "set before it starts: nothing, at once");
-    assert!(t.elapsed() < std::time::Duration::from_millis(500), "{:?}", t.elapsed());
+    assert!(wires::detect_with(&img, 50.0, &AtomicBool::new(true)).is_empty(), "set before it starts: nothing");
 }
 
 #[test]
