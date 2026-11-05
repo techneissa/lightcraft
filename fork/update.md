@@ -3,7 +3,7 @@
 1. Click **Update LightCraft** in Applications. (Same thing in Terminal:
    `~/scripts/craft/update-lightcraft.sh`; `update-craft-apps.sh` updates every ArtCraft app.)
 2. It downloads the newest app GitHub built ([github-builds.md](github-builds.md); seconds), when that build has everything the Mac's `custom`
-   has. Official changes made since that build come with the next one (daily at 08:17, and after every push).
+   has. Official changes come with the Monday build (08:17; the official update is merged once a week) or with `--latest`; every push to `custom` builds too.
 3. Otherwise, or with `update-lightcraft.sh --latest`, it gets the official update, merges it into `custom` and
    backs `custom` up to this fork. Then it installs the app: a download of seconds when GitHub has already built
    that version, else a build on the Mac (1 to 10 minutes).

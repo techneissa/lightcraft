@@ -2,20 +2,26 @@
 # merged with the official main, and build it, so the Mac's update script downloads the app instead of
 # building it. The build is published as the release `custom-build` (prerelease), its notes naming the commit.
 #
-# Daily, on a push to `custom`, or by hand (Actions ▸ Fork build ▸ Run workflow). A merge that clashes
-# outside the two docs files is left out: `custom` is built as it is, so the Mac always gets techneissa's
-# newest features, and an agent merges the official update later (the `craftupdate` skill).
+# The official update is merged once a week, on Monday (techneissa, 2026-11-05), or by hand with the input
+# `merge` (Actions ▸ Fork build ▸ Run workflow). Every push to `custom` builds it without merging. A merge that
+# clashes outside the two docs files is left out: `custom` is built as it is, so the Mac always gets techneissa's
+# newest features, and an agent merges the official update later (the `craftupdate` skill). Tuesday to Sunday an
+# agent only writes down what is coming, in the issue "Upstream merge pending".
 name: Fork build
 
 on:
   schedule:
-    - cron: "17 5 * * *" # daily, 08:17 on techneissa's Mac (UTC+3), before the 09:00 daily agent
+    - cron: "17 5 * * 1" # Monday, 08:17 on techneissa's Mac (UTC+3), before the 09:00 daily agent; merges the official update
   push:
     branches: [custom]
   workflow_dispatch:
     inputs:
       force:
         description: Build even if this commit is already built
+        type: boolean
+        default: false
+      merge:
+        description: Merge the official update into custom first (the Monday schedule always does)
         type: boolean
         default: false
 
@@ -48,9 +54,17 @@ jobs:
 
       - name: Merge the official update into custom
         id: sync
+        env:
+          # only the Monday schedule and a hand run with `merge` merge; a push to custom just builds it
+          MERGE: ${{ (github.event_name == 'schedule' || inputs.merge == true) && 'true' || 'false' }}
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [ "$MERGE" != "true" ]; then
+            echo "Not the weekly merge: building custom as it is."
+            echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           git remote add upstream https://github.com/storytold/lightcraft.git
           git fetch --quiet upstream main
           if git merge-base --is-ancestor upstream/main HEAD; then

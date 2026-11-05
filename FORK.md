@@ -15,7 +15,7 @@ when it stops: [fork/update.md](fork/update.md).
 
 ## GitHub builds the app
 
-Fork build (`fork-build.yml`) and Fork CI (`fork-ci.yml`), the daily update agent, the switched-off official
+Fork build (`fork-build.yml`) and Fork CI (`fork-ci.yml`), the weekly upstream merge and the daily upstream watch, the switched-off official
 workflows: [fork/github-builds.md](fork/github-builds.md).
 
 ## Where things are

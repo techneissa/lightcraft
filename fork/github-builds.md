@@ -1,10 +1,12 @@
 # GitHub builds the app
 
-The workflow `.github/workflows/fork-build.yml` (Actions ▸ Fork build) runs daily, on every push to `custom`, and
-by hand. It merges the official update into `custom` the same way the script does, builds the Mac app, and
+The workflow `.github/workflows/fork-build.yml` (Actions ▸ Fork build) builds on every push to `custom` and
+on Mondays at 08:17, and runs by hand. On Monday, and on a hand run with the box **merge** ticked, it first merges the
+official update into `custom` the same way the script does (a push never merges: the official update comes once a
+week, techneissa, 2026-11-05). Then it builds the Mac app, and
 publishes it as the release [`custom-build`](https://github.com/techneissa/lightcraft/releases/tag/custom-build)
-(its notes name the commit). The update script downloads it ([update.md](update.md)). A run that hits a merge clash fails and
-changes nothing; GitHub emails the failure. The run pushes its merge with the secret `FORK_PUSH_TOKEN`, the
+(its notes name the commit). The update script downloads it ([update.md](update.md)). A merge that clashes is left out: the run builds
+`custom` as it is and warns; the Monday agent writes the clash into the issue "Upstream merge pending". The run pushes its merge with the secret `FORK_PUSH_TOKEN`, the
 fine-grained token "BuildCraft forks" (the LightCraft, PdfCraft and SolidCraft forks; Contents and Workflows:
 read and write): GitHub's own token may not push an official update that changes a workflow file. Without the
 secret it uses GitHub's own token.
@@ -65,10 +67,13 @@ clashes on it. It would run a second full check on every pull request and push.
 - Fork CI reads two values from `ci.yml` (the Ubuntu packages and the craft-fonts commit), so it keeps working while
   `CI` is disabled; it fails with a message when `ci.yml` no longer has them.
 
-A daily agent (the T3 thread "Daily LightCraft Update", Grok 4.5 on Cursor, 09:00) runs the update without
-installing; when GitHub's run stopped on a clash, it merges by hand, runs the feature tests and pushes, and GitHub
-builds again. It follows the "Daily run" section of the `craftupdate` skill. To stop it: switch it off under
-Scheduled Tasks in T3, or ask any agent to "turn off the daily LightCraft update".
+Upstream is merged once a week (techneissa, 2026-11-05). On Monday the Fork build run (08:17) merges it when it merges
+cleanly; the daily agent (the T3 thread "Daily LightCraft Update", Grok 4.5 on Cursor, 09:00) then merges what is
+left, and on a clash writes it into the issue "Upstream merge pending" for a merge by hand (Opus, on request). It also
+merges storytold/craft-common-actions main into techneissa/craft-common-actions. Tuesday to Sunday it merges nothing:
+it adds a dated section to that issue (the official commits waiting, a trial merge, each clash, the fork notes at
+risk). It follows the "Daily run" section of the `craftupdate` skill. To stop it: switch it off under Scheduled
+Tasks in T3, or ask any agent to "turn off the daily LightCraft update".
 
 The official project's own workflows (CI, Nix, Packaging lint, SonarCloud) are switched off in this fork:
 the official project runs them. A workflow the official project adds later starts switched on; switch it off
