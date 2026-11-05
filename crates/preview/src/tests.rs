@@ -285,7 +285,6 @@ fn pool_shutdown_reports_workers() {
     drop(release);
     assert!(p.shutdown(std::time::Duration::from_secs(30)));
     assert_eq!(p.live_workers(), 0);
-
 }
 
 #[test]
