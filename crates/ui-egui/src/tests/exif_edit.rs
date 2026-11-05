@@ -172,8 +172,11 @@ fn reset_buttons_are_one_size_in_one_place_on_every_row() {
     let button_rects: Vec<egui::Rect> = ExifField::ALL.iter().map(|f| rect(&h, &format!("icon:exifReset:{}", f.key()))).collect();
     for b in &button_rects {
         assert_eq!(b.size(), button_rects[0].size(), "one size");
-        assert!((b.min.x - button_rects[0].min.x).abs() < 0.5, "one column: {b:?}");
         assert!(b.width() <= 16.0, "small: {b:?}");
+    }
+    // (one column in the rows that have nothing of their own at the right edge: Lens, Focal length, Shutter speed)
+    for i in [2, 4] {
+        assert!((button_rects[i].min.x - button_rects[1].min.x).abs() < 0.5, "one column: {button_rects:?}");
     }
     // no text on them: the button is the code-drawn icon only, named for screen readers
     assert!(!h.painted_text().iter().any(|t| t.contains('↺') || t == "Reset"), "{:?}", h.painted_text());
@@ -221,56 +224,88 @@ fn a_click_opens_the_field_of_that_value_only_and_enter_saves_escape_cancels() {
     assert!(has(&h, "field:exif:focal") && !has(&h, "field:exif:shutter"), "the click went on to open the next value");
 }
 
-/// The camera card as the official build draws it (camera and lens lines, size row, capture grid), at `width`.
-fn official_card_height(width: f32, p: &lightcraft_catalog::Photo) -> f32 {
-    let mut view = crate::headless::HeadlessView::new();
-    let mut height = 0.0;
-    for frame in 0..3 {
-        view.run(crate::headless::HeadlessView::raw_input(egui::vec2(width + 40.0, 800.0), 1.0, frame as f64 / 60.0, vec![]), |ui| {
-            let t = crate::theme::Tokens::get(ui.ctx());
-            let m = &p.meta;
-            let r = egui::Frame::NONE.fill(t.canvas).corner_radius(6.0).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
-                ui.set_width(width - 24.0);
-                let dim = |s: &str| egui::RichText::new(s.to_string()).size(12.0).color(t.text_label);
-                ui.label(dim(&m.camera));
-                ui.add(egui::Label::new(dim(&m.lens)).truncate());
-                ui.horizontal(|ui| {
-                    ui.label(dim("100 × 100  ·  1 MB"));
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        egui::Frame::NONE.fill(t.chrome).corner_radius(3.0).inner_margin(egui::Margin::symmetric(5, 1)).show(ui, |ui| {
-                            ui.label(egui::RichText::new("JPEG").size(10.5).color(t.text_label));
-                        });
-                    });
-                });
-                ui.add_space(6.0);
-                egui::Grid::new("info-capture").num_columns(2).spacing([24.0, 3.0]).show(ui, |ui| {
-                    for k in ["Focal length", "Shutter speed", "Aperture", "ISO"] {
-                        ui.label(dim(k));
-                        ui.label(dim("1"));
-                        ui.end_row();
-                    }
-                });
-            });
-            height = r.response.rect.height();
-        });
-    }
-    height
+/// The rows' rectangles, top to bottom (Camera, Lens, Focal length, Shutter speed, Aperture, ISO).
+fn rows(h: &Headless) -> Vec<egui::Rect> {
+    ["camera", "lens", "focal", "shutter", "aperture", "iso"].iter().map(|k| rect(h, &format!("exifRow:{k}"))).collect()
 }
 
 #[test]
-fn the_card_is_no_taller_than_the_official_one_plus_the_reset_row() {
-    let (mut h, ids) = info_panel();
+fn the_rows_are_roomy_and_the_card_is_a_bounded_height() {
+    let (mut h, _) = info_panel();
+    ask(&mut h, "ui.set", json!({"rightWidth": 480}));
     assert!(!has(&h, "info:focus"), "the demo photo has no focus point");
+    let r = rows(&h);
+    for pair in r.windows(2) {
+        assert!(pair[1].top() - pair[0].bottom() >= 5.0, "a gap between rows: {pair:?}");
+    }
+    assert!(r.iter().all(|row| (row.height() - 24.0).abs() < 0.5), "one-line rows are one height: {r:?}");
     let card = rect(&h, "info:card");
-    let p = h.app.session.catalog.photo(ids[0]).unwrap().clone();
-    let official = official_card_height(card.width(), &p);
-    assert!(card.height() <= official + 1.5, "at rest the card is {} tall, the official one {official}", card.height());
-    // with something edited: the official height plus the Reset All row (and no more)
+    assert!(card.height() <= 6.0 * 24.0 + 5.0 * 6.0 + 20.0 + 1.5, "at rest the card is {} tall", card.height());
+    // with something edited: the Reset All row is added (and no more)
     type_into(&mut h, "iso", "6400");
     ask(&mut h, "ui.key", json!({"key": "Enter"}));
     assert!(has(&h, "button:exifResetAll"));
-    let edited = rect(&h, "info:card");
-    assert!(edited.height() <= official + 26.0, "edited the card is {} tall, the official one {official}", edited.height());
+    assert!(rect(&h, "info:card").height() <= card.height() + 26.0, "edited the card is {} tall", rect(&h, "info:card").height());
+}
+
+#[test]
+fn the_format_badge_and_the_size_stand_at_the_right_edge_level_with_their_rows() {
+    let (h, _) = info_panel();
+    let (r, card) = (rows(&h), rect(&h, "info:card"));
+    let level = |key: &str, row: egui::Rect| {
+        let t = rect(&h, &format!("exifTrailing:{key}"));
+        assert!((t.center().y - row.top() - 12.0).abs() < 1.5, "{key} is level with its row: {t:?} {row:?}");
+        assert!(t.right() <= card.right() && card.right() - t.right() < 14.0, "{key} is at the card's right edge: {t:?} {card:?}");
+        t
+    };
+    let badge = level("camera", r[0]);
+    let (dims, size) = (level("aperture", r[4]), level("iso", r[5]));
+    assert!(!has(&h, "exifTrailing:lens") && !has(&h, "exifTrailing:focal") && !has(&h, "exifTrailing:shutter"));
+    assert!(badge.width() < 60.0 && dims.right() == size.right(), "the two texts are right aligned");
+    let text = h.painted_text();
+    assert!(text.iter().any(|t| t.contains(" × ") && !t.contains('·')), "the dimensions are a text of their own: {text:?}");
+    assert!(!text.iter().any(|t| t.contains('·')), "no combined size line any more: {text:?}");
+}
+
+#[test]
+fn editing_a_value_moves_no_row() {
+    let (mut h, _) = info_panel();
+    let (rest, card) = (rows(&h), rect(&h, "info:card"));
+    for key in KEYS {
+        ask(&mut h, "ui.clickWidget", json!({"id": format!("exifValue:{key}")}));
+        assert!(has(&h, &format!("field:exif:{key}")), "{key} is open");
+        assert_eq!(rows(&h), rest, "editing {key} moved a row");
+        assert_eq!(rect(&h, "info:card"), card, "editing {key} moved the card");
+        let field = rect(&h, &format!("field:exif:{key}"));
+        let row = rect(&h, &format!("exifRow:{key}"));
+        assert!(field.height() <= row.height() + 0.5 && field.top() >= row.top() - 0.5, "{key}: the field fits its row: {field:?} {row:?}");
+        ask(&mut h, "ui.key", json!({"key": "Escape"}));
+        assert_eq!(rows(&h), rest, "closing {key} moved a row");
+    }
+}
+
+#[test]
+fn a_lens_name_too_long_for_the_row_wraps_and_only_the_rows_below_move() {
+    let (mut h, ids) = info_panel();
+    let rest = rows(&h);
+    let long = "Sigma 24-70mm F2.8 DG DN II Art Mirrorless Zoom Lens for Sony E and Leica L mounts";
+    run(&mut h, "library.select", json!({"ids": [ids[0].0], "active": ids[0].0}));
+    run(&mut h, "photo.setMeta", json!({"ids": [ids[0].0], "lens": long}));
+    let r = rows(&h);
+    assert!(r[1].height() > 24.0 + 10.0, "the lens row is taller for a second line: {:?}", r[1]);
+    assert_eq!(r[0], rest[0], "the row above stays");
+    let shift = r[1].height() - rest[1].height();
+    for i in 2..6 {
+        assert!((r[i].top() - rest[i].top() - shift).abs() < 0.5 && r[i].height() == rest[i].height(), "row {i} moves down by the extra line only");
+    }
+    let card = rect(&h, "info:card");
+    assert!(r[1].right() <= card.right() + 0.5, "the name stays inside the card");
+    // editing it still moves nothing
+    ask(&mut h, "ui.clickWidget", json!({"id": "exifValue:lens"}));
+    assert!(has(&h, "field:exif:lens"));
+    assert_eq!(rows(&h), r, "editing a wrapped name moved a row");
+    assert_eq!(rect(&h, "info:card"), card);
+    ask(&mut h, "ui.key", json!({"key": "Escape"}));
 }
 
 /// Selects photo 0 alone with a zoom lens that opens to f/4 at most.

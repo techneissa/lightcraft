@@ -8,6 +8,12 @@
 //! aperture the photo's lens cannot give is refused: the value shakes red, keeps its old text, and a small red "!" at
 //! the row's end says why when clicked; the "!" also marks an edit a lens change left out of range. With several
 //! photos selected a field where they differ says Mixed.
+//!
+//! The six rows are one height with a gap between them. A value too long for its column wraps onto more lines (the
+//! rows below move down for that only); clicking it opens a field in its place that keeps the row's height, and the
+//! picker's list is an overlay, so nothing else moves while a value is edited. The card's right edge holds the file
+//! format badge (level with Camera) and the picture's size (dimensions level with Aperture, file size with ISO); the
+//! rows leave room for them.
 
 use egui::{Rect, Sense, pos2, vec2};
 use lightcraft_catalog::exif_override::{format_aperture, format_focal};
@@ -24,6 +30,13 @@ const MARKER_W: f32 = 8.0;
 const ALERT_SIZE: f32 = 14.0;
 /// The gap between the labels and the values, as the official card's grid has.
 const LABEL_GAP: f32 = 24.0;
+/// A one-line row's height (the edit field fits in it) and the gap between rows.
+const ROW_H: f32 = 24.0;
+const ROW_GAP: f32 = 6.0;
+/// The rows from top to bottom, as the card lists them.
+const ROWS: [ExifField; 6] = [ExifField::Camera, ExifField::Lens, ExifField::Focal, ExifField::Shutter, ExifField::Aperture, ExifField::Iso];
+/// The most lines a value wraps to; more is cut with an ellipsis.
+const MAX_LINES: usize = 4;
 /// How long a refused value shakes, in seconds.
 const SHAKE_SECS: f64 = 0.3;
 /// Suggestions listed under a picker.
@@ -182,29 +195,43 @@ fn label_col(ui: &egui::Ui) -> f32 {
     widest + LABEL_GAP
 }
 
-/// Camera and lens: a picker row each, in the card's lines.
-pub(super) fn camera_lens(app: &mut LightcraftApp, ui: &mut egui::Ui, scope: &Scope) {
-    let h = line_height(ui);
-    row(app, ui, scope, ExifField::Camera, h);
-    row(app, ui, scope, ExifField::Lens, h);
+/// What the card shows at its right edge, level with some rows.
+pub(super) struct Side {
+    /// The file format badge ("ARW"), level with Camera.
+    pub format: String,
+    /// The picture's size in pixels, level with Aperture.
+    pub dims: String,
+    /// The file's size, level with ISO.
+    pub size: String,
 }
 
-/// Focal length, shutter speed, aperture and ISO, and Reset All under them while anything is edited.
-pub(super) fn capture(app: &mut LightcraftApp, ui: &mut egui::Ui, scope: &Scope) {
+/// What stands at a row's right edge.
+#[derive(Clone, Copy)]
+enum Trailing<'a> {
+    None,
+    Badge(&'a str),
+    Text(&'a str),
+}
+
+/// The six rows, one height with a gap between them, and Reset All under them while anything is edited.
+pub(super) fn card(app: &mut LightcraftApp, ui: &mut egui::Ui, scope: &Scope, side: &Side) {
     let t = Tokens::get(ui.ctx());
-    ui.add_space(6.0);
-    // (as tall as the official card's grid rows)
-    let h = ui.spacing().interact_size.y.max(line_height(ui));
     ui.scope(|ui| {
-        ui.spacing_mut().item_spacing.y = 3.0;
-        for f in [ExifField::Focal, ExifField::Shutter, ExifField::Aperture, ExifField::Iso] {
-            row(app, ui, scope, f, h);
+        ui.spacing_mut().item_spacing.y = ROW_GAP;
+        for f in ROWS {
+            let trailing = match f {
+                ExifField::Camera => Trailing::Badge(&side.format),
+                ExifField::Aperture => Trailing::Text(&side.dims),
+                ExifField::Iso => Trailing::Text(&side.size),
+                _ => Trailing::None,
+            };
+            row(app, ui, scope, f, trailing);
         }
     });
     if scope.any_edited() {
         ui.add_space(2.0);
         // (a row of its own height: `with_layout` would claim all the room left below the card)
-        ui.allocate_ui_with_layout(vec2(ui.available_width(), h), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        ui.allocate_ui_with_layout(vec2(ui.available_width(), ROW_H), egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let r = text_button(ui, "exifResetAll", crate::i18n::tr("Reset All"), false)
                 .on_hover_text(crate::i18n::tr("Give every edited camera and exposure value of the selected photos the file's value back"));
             if r.clicked() {
@@ -213,6 +240,19 @@ pub(super) fn capture(app: &mut LightcraftApp, ui: &mut egui::Ui, scope: &Scope)
             ui.label(egui::RichText::new(crate::i18n::tr("Edited")).size(11.0).color(t.accent));
         });
     }
+}
+
+/// `text` laid out in the card's value style, wrapped at `width` onto at most [`MAX_LINES`] lines (a word longer than
+/// the width is broken where it must).
+fn wrapped(painter: &egui::Painter, text: &str, color: egui::Color32, width: f32) -> std::sync::Arc<egui::Galley> {
+    let layout = |break_anywhere: bool| {
+        let mut job = egui::text::LayoutJob::simple(text.to_string(), egui::FontId::proportional(12.0), color, width.max(1.0));
+        job.wrap.max_rows = MAX_LINES;
+        job.wrap.break_anywhere = break_anywhere;
+        painter.layout_job(job)
+    };
+    let galley = layout(false);
+    if galley.size().x > width + 0.5 { layout(true) } else { galley }
 }
 
 /// The height of a line of the card's text.
@@ -269,7 +309,8 @@ fn shake(ctx: &egui::Context, r: &Refused) -> (f32, bool) {
 
 /// One row: a dim label, and the value as plain text; a click turns the value into a text field. Right of the value:
 /// the edited marker and the reset button (while anything is edited, in every row, so they line up) and the "!".
-fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, scope: &Scope, field: ExifField, row_h: f32) {
+/// The row is as tall as its value wraps to, whether or not the value is being edited, so an edit moves nothing.
+fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, scope: &Scope, field: ExifField, trailing: Trailing) {
     let t = Tokens::get(ui.ctx());
     let i = index(field);
     let mixed = scope.mixed[i];
@@ -279,27 +320,54 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, scope: &Scope, field: ExifFie
     let open: Option<Edit> = ui.data(|d| d.get_temp(id));
     let (any_edited, any_flag) = (scope.any_edited(), scope.any_flag(ui.ctx()));
     let mut edit = open.clone().unwrap_or_else(|| Edit::new(&value, mixed, scope.ids()));
-    let mut field_rect = Rect::NOTHING;
-    let mut commit = None;
-    ui.allocate_ui_with_layout(vec2(ui.available_width(), row_h), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-        ui.spacing_mut().item_spacing.x = 4.0;
-        let (r, _) = ui.allocate_exact_size(vec2(label_col(ui) - ui.spacing().item_spacing.x, row_h), Sense::hover());
+    let (field_rect, commit);
+    let space_x = 4.0;
+    // what stands at the row's right edge, and the room the value leaves for it
+    let trail = match trailing {
+        Trailing::None => None,
+        Trailing::Badge(s) => Some((ui.painter().layout_no_wrap(s.to_uppercase(), egui::FontId::proportional(10.5), t.text_label), 10.0)),
+        Trailing::Text(s) => Some((ui.painter().layout_no_wrap(s.to_string(), egui::FontId::proportional(12.0), t.text_label), 0.0)),
+    };
+    let reserve = trail.as_ref().map_or(0.0, |(g, pad)| g.size().x + pad + 2.0 * space_x);
+    let label_w = label_col(ui);
+    let mut slots = 0.0;
+    if any_edited {
+        slots += MARKER_W + RESET_SIZE + 2.0 * space_x;
+    }
+    if any_flag {
+        slots += ALERT_SIZE + space_x;
+    }
+    let width = (ui.available_width() - label_w - slots - reserve).max(40.0);
+    // the value wraps at the column's width; the row is as tall as that
+    let shown = if mixed { crate::i18n::tr("Mixed").to_string() } else { rest_text(field, &scope.shown) };
+    let color = if mixed { t.text_dim } else { t.text_label };
+    let galley = wrapped(ui.painter(), &shown, color, width);
+    let pad = ((ROW_H - line_height(ui)) / 2.0).max(0.0);
+    let height = ROW_H.max(galley.size().y + 2.0 * pad);
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), height), Sense::hover());
+    register(ui, format!("exifRow:{}", field.key()), rect);
+    let mut inner = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Min)));
+    {
+        let ui = &mut inner;
+        ui.spacing_mut().item_spacing.x = space_x;
+        let (r, _) = ui.allocate_exact_size(vec2(label_w - space_x, ROW_H), Sense::hover());
         ui.painter().text(r.left_center(), egui::Align2::LEFT_CENTER, name, egui::FontId::proportional(12.0), t.text_dim);
-        let mut slots = 0.0;
-        if any_edited {
-            slots += MARKER_W + RESET_SIZE + 2.0 * ui.spacing().item_spacing.x;
-        }
-        if any_flag {
-            slots += ALERT_SIZE + ui.spacing().item_spacing.x;
-        }
-        let width = (ui.available_width() - slots).max(40.0);
         if open.is_some() {
             (field_rect, commit) = open_field(ui, scope, field, id, &mut edit, width);
         } else {
-            field_rect = rest_value(ui, scope, field, id, (width, row_h), &value);
+            (field_rect, commit) = (rest_value(ui, scope, field, id, (width, height), (&value, &shown, &galley, pad)), None);
         }
-        cluster(app, ui, scope, field, row_h);
-    });
+        cluster(app, ui, scope, field, ROW_H);
+    }
+    if let Some((g, pad)) = trail {
+        let size = g.size() + vec2(pad, if pad > 0.0 { 2.0 } else { 0.0 });
+        let at = egui::Rect::from_min_size(pos2(rect.right() - size.x, rect.top() + (ROW_H - size.y) / 2.0), size);
+        register(ui, format!("exifTrailing:{}", field.key()), at);
+        if pad > 0.0 {
+            ui.painter().rect_filled(at, 3.0, t.chrome);
+        }
+        ui.painter().galley(at.center() - g.size() / 2.0, g, t.text_label);
+    }
     if let Some(text) = commit {
         let v = if text.is_empty() { Value::Null } else { Value::String(text.clone()) };
         if let Some(why) = scope.precheck(app, field, &text).filter(|_| !text.is_empty()) {
@@ -317,12 +385,19 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, scope: &Scope, field: ExifFie
     }
 }
 
-/// The value at rest: plain text (a refused one shakes in a red outline); a click opens its field.
-fn rest_value(ui: &mut egui::Ui, scope: &Scope, field: ExifField, id: egui::Id, (width, row_h): (f32, f32), value: &str) -> Rect {
+/// The value at rest: plain text, wrapped onto the lines `galley` has (a refused one shakes in a red outline); a
+/// click opens its field.
+fn rest_value(
+    ui: &mut egui::Ui,
+    scope: &Scope,
+    field: ExifField,
+    id: egui::Id,
+    (width, height): (f32, f32),
+    (value, shown, galley, pad): (&str, &str, &std::sync::Arc<egui::Galley>, f32),
+) -> Rect {
     let t = Tokens::get(ui.ctx());
     let mixed = scope.mixed[index(field)];
-    let shown = if mixed { crate::i18n::tr("Mixed").to_string() } else { rest_text(field, &scope.shown) };
-    let (rect, resp) = ui.allocate_exact_size(vec2(width, row_h), Sense::click());
+    let (rect, resp) = ui.allocate_exact_size(vec2(width, height), Sense::click());
     crate::widgets::register(ui, format!("exifValue:{}", field.key()), rect);
     crate::widgets::announce(&resp, format!("{}: {shown}", crate::i18n::tr(field.label())));
     let (dx, shaking) = scope.refused(ui.ctx(), field).map_or((0.0, false), |r| shake(ui.ctx(), &r));
@@ -335,8 +410,7 @@ fn rest_value(ui: &mut egui::Ui, scope: &Scope, field: ExifField, id: egui::Id, 
         ui.painter().rect_stroke(at.expand2(vec2(3.0, 0.0)), 3.0, egui::Stroke::new(1.0, t.reject), egui::StrokeKind::Inside);
     }
     let color = if mixed { t.text_dim } else { t.text_label };
-    let galley = crate::widgets::one_line(ui.painter(), &shown, egui::FontId::proportional(12.0), color, rect.width());
-    ui.painter().galley(pos2(at.left(), at.center().y - galley.size().y / 2.0), galley, color);
+    ui.painter().with_clip_rect(rect.expand2(vec2(4.0, 0.0))).galley(pos2(at.left(), at.top() + pad), galley.clone(), color);
     if resp.clicked() {
         // a new edit: an earlier refusal is over, and Camera and Lens open their list of names at once
         forget_refusals(ui.ctx());

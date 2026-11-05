@@ -258,8 +258,8 @@ pub(crate) fn smart_line(app: &LightcraftApp, p: &lightcraft_catalog::Photo) -> 
     }
 }
 
-/// The camera card at the top of Info: camera, lens, size · file size and format, then the
-/// capture settings.
+/// The camera card at the top of Info: camera, lens and the capture settings in rows, the file format
+/// and the picture's size at its right edge.
 fn camera_card(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &lightcraft_catalog::Photo) {
     let t = Tokens::get(ui.ctx());
     let m = &p.meta;
@@ -268,16 +268,9 @@ fn camera_card(app: &mut LightcraftApp, ui: &mut egui::Ui, p: &lightcraft_catalo
     let card = egui::Frame::NONE.fill(t.canvas).corner_radius(6.0).inner_margin(egui::Margin::symmetric(12, 10)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let dim = |s: &str| egui::RichText::new(s.to_string()).size(12.0).color(t.text_label);
-        super::exif_edit::camera_lens(app, ui, &scope);
-        ui.horizontal(|ui| {
-            ui.label(dim(&format!("{} × {}  ·  {}", p.width, p.height, human_size(p.file_size))));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                egui::Frame::NONE.fill(t.chrome).corner_radius(3.0).inner_margin(egui::Margin::symmetric(5, 1)).show(ui, |ui| {
-                    ui.label(egui::RichText::new(p.format.to_uppercase()).size(10.5).color(t.text_label));
-                });
-            });
-        });
-        super::exif_edit::capture(app, ui, &scope);
+        let side =
+            super::exif_edit::Side { format: p.format.to_uppercase(), dims: format!("{} × {}", p.width, p.height), size: human_size(p.file_size) };
+        super::exif_edit::card(app, ui, &scope, &side);
         // where the camera focused, and how (View ▸ Focus Point draws it): only when known; the
         // whole card's width, so "AF-C · Expanded Flexible Spot · Face tracking" fits
         if let Some(text) = focus_text(m.focus.as_ref()) {
