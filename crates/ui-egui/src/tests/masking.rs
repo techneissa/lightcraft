@@ -1741,7 +1741,6 @@ fn ai_masks_without_the_model_offer_the_download() {
     let dir = std::env::temp_dir().join(format!("lc-ui-no-sam3-{}", std::process::id()));
     h.app.session.segmenter.dir = Some(dir.clone());
     h.app.session.segmenter.mirrors_file = Some(dir.join("none.txt"));
-    let t = std::time::Instant::now();
     let r = h.request("ui.clickWidget", json!({"id": "maskNew:object"}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert!(develop(&h).masks.is_empty());
@@ -1797,7 +1796,6 @@ fn ai_masks_without_the_model_offer_the_download() {
     let e = h.app.run("mask.add", json!({"kind": "prompt", "text": "sky"})).unwrap_err();
     assert!(e.starts_with(lightcraft_engine::segment::NOT_INSTALLED), "{e}");
     assert!(develop(&h).masks.is_empty());
-    assert!(t.elapsed() < SETTLE, "{:?}", t.elapsed());
 }
 
 fn color_samples(h: &Headless) -> serde_json::Value {

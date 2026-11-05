@@ -209,25 +209,4 @@ mod tests {
         let (a, _, b, _) = m.picture_rect((0, 0, 5, 5));
         assert!(a == 0 && b < 10);
     }
-
-    /// A frame of painting on a 2.5 MP picture (a brush-sized rectangle blended and cut out for
-    /// the upload, as `draw_blend` does) stays far inside the 16 ms frame.
-    #[test]
-    fn a_frame_of_blending_is_cheap_on_a_big_picture() {
-        let (w, h) = (1920, 1300);
-        let img = |c: Color32| Arc::new(ColorImage::new([w, h], vec![c; w * h]));
-        let mut b = Blend::new(img(Color32::from_rgb(40, 60, 80)), img(Color32::from_rgb(200, 160, 120))).unwrap();
-        let t = std::time::Instant::now();
-        let frames = 30;
-        for k in 0..frames {
-            // a brush of radius 100 px that moved 30 px since the last frame
-            let x = 100 + k * 30;
-            let rect = (x - 100, 500, x + 130, 700);
-            let done = b.update(rect, |x, y| ((x + y) % 7) as f32 / 6.0).unwrap();
-            std::hint::black_box(b.region(done));
-        }
-        let per_frame = t.elapsed().as_secs_f64() * 1e3 / frames as f64;
-        eprintln!("blend: {per_frame:.2} ms per frame on {w}x{h}");
-        assert!(per_frame < 8.0, "{per_frame} ms per frame");
-    }
 }

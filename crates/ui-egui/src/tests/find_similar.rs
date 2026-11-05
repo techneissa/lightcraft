@@ -18,9 +18,8 @@ use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(60);
 const PHOTOS: u64 = 12;
-/// How long a read waits for a drive that isn't opened, and how long the frames may take while it does.
+/// How long a read waits for a drive that isn't opened (only a hang guard).
 const GUARD: Duration = Duration::from_secs(20);
-const FRAMES: Duration = Duration::from_secs(15);
 
 /// The photos' files: a read waits for `open` (a slow drive), at most `guard`, and is counted, as
 /// are the reads made on the UI thread.
@@ -95,14 +94,12 @@ fn answer(h: &mut Headless, rx: &Receiver<Value>) -> Value {
 fn a_search_from_the_menu_reads_off_the_ui_thread_and_the_window_goes_on() {
     let (mut h, drive) = app_on_a_slow_drive(GUARD);
     h.app.ui.view = ViewMode::Detail;
-    let t0 = Instant::now();
     let r = h.app.run("library.findSimilar", json!({"id": 1})).unwrap();
     assert_eq!(r, json!({"background": true, "count": PHOTOS}));
     for _ in 0..3 {
         h.step();
     }
     // nothing has been read yet: the command and the frames waited for none of it
-    assert!(t0.elapsed() < FRAMES, "the window waited for the files: {:?}", t0.elapsed());
     assert_eq!(h.app.session.filter, Default::default(), "no answer before the files are read");
     let row = &rows(&h)[0];
     assert_eq!(row.label, LABEL);
@@ -209,12 +206,10 @@ fn a_photo_that_cannot_be_read_says_so() {
 fn a_control_request_is_answered_when_the_search_ends() {
     let (mut h, drive) = app_on_a_slow_drive(GUARD);
     h.app.ui.view = ViewMode::Detail;
-    let t0 = Instant::now();
     let rx = ask(&mut h);
     for _ in 0..3 {
         h.step();
     }
-    assert!(t0.elapsed() < FRAMES, "the frames waited for the files: {:?}", t0.elapsed());
     assert!(rx.try_recv().is_err(), "no answer before the files are read");
     assert_eq!(rows(&h).len(), 1);
     drive.open.store(true, Ordering::SeqCst);

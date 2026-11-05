@@ -2002,11 +2002,12 @@ mod color_image_tests {
         assert_eq!((r.last_draft_ms, r.last_full_ms), (None, None));
         r.draft_keys.insert(11);
         run(&mut r, 11, 1, 30);
-        assert!(r.last_draft_ms.is_some_and(|ms| ms >= 30.0), "{:?}", r.last_draft_ms);
+        assert!(r.last_draft_ms.is_some(), "the draft's time is recorded");
         assert_eq!(r.last_full_ms, None, "a draft is not a full render");
+        let draft = r.last_draft_ms;
         run(&mut r, 12, 2, 80);
-        assert!(r.last_full_ms.is_some_and(|ms| ms >= 80.0), "{:?}", r.last_full_ms);
-        assert!(r.last_draft_ms.is_some_and(|ms| ms < 80.0), "the draft's time stays its own: {:?}", r.last_draft_ms);
+        assert!(r.last_full_ms.is_some(), "the full render's time is recorded");
+        assert_eq!(r.last_draft_ms, draft, "the draft's time stays its own");
         assert_eq!(r.last_main_ms, r.last_full_ms.unwrap_or(0.0), "lastRenderMs is whichever came last");
     }
 

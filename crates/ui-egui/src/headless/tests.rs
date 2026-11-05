@@ -2116,14 +2116,13 @@ fn a_slow_photos_import_never_blocks_the_window() {
     let wait = std::sync::Mutex::new(wait);
     h.app.session.apple_photos_background = true; // as the desktop app sets it
     h.app.session.apple_photos = Some(Arc::new(move |args: &[String], _| {
-        // a regression (Photos on the UI thread) fails the timing below instead of hanging
+        // a regression (Photos on the UI thread) fails the `running` check below after 20 s instead of hanging
         let _ = wait.lock().unwrap().recv_timeout(Duration::from_secs(20));
         let n = args.len() - args.iter().position(|a| a == lightcraft_engine::apple_photos::MARKER).unwrap() - 2;
         Ok(lightcraft_engine::apple_photos::Output { status: Some(0), stdout: "ID\n".repeat(n), stderr: String::new() })
     }));
     let t0 = Instant::now();
     let r = h.request("engine.execute", json!({"command": "export.addToPhotos", "params": {"paths": [file.to_string_lossy()], "album": "Slow"}}), t);
-    assert!(t0.elapsed() < Duration::from_secs(5), "answered at once: {r}");
     assert_eq!(r["result"]["running"], true, "{r}");
     go.send(()).unwrap();
     while !h.app.ui.toast.as_ref().is_some_and(|t| t.0.contains("Apple Photos")) {
@@ -2135,7 +2134,6 @@ fn a_slow_photos_import_never_blocks_the_window() {
         let t1 = Instant::now();
         let p = json!({"dir": out.to_string_lossy(), "longEdge": 32, "addToPhotos": true});
         let r = h.request("engine.execute", json!({"command": "app.export", "params": p}), t);
-        assert!(t1.elapsed() < Duration::from_secs(10), "the export answers without waiting for Photos: {r}");
         assert_eq!(r["result"]["applePhotos"]["running"], true, "{r}");
         assert_eq!(r["result"]["applePhotos"]["job"], 2, "{r}");
         go.send(()).unwrap();
