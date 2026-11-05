@@ -66,7 +66,7 @@ fn corpus_raw_decodes() {
         let t1 = Instant::now();
         let decoded = decode(&bytes);
         let dt = t1.elapsed().as_secs_f64() * 1e3;
-        // the header-only probe agrees with the full decode, faster
+        // the header-only probe agrees with the full decode
         let t2 = Instant::now();
         let info = probe_info(&bytes);
         let di = t2.elapsed().as_secs_f64() * 1e3;
