@@ -1,0 +1,5 @@
+# Names only, typed by hand from manufacturers' public product pages; original work (not generated; lens-names.tsv is generated).
+# maker	name	mounts (separated by ;); merged into the lens list by names.rs, a name already in lens-names.tsv is not listed twice
+Laowa	Laowa 100mm f/2.8 2x Ultra Macro APO	Canon EF;Nikon F;Pentax K;Sony Alpha;Sony E
+Sirui	Sirui Aurora 85mm f/1.4	Fujifilm X;Nikon Z;Sony E
+Sirui	Sirui Aurora 35mm f/1.4	Fujifilm X;Nikon Z;Sony E
