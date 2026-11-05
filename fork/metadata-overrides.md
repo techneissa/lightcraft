@@ -23,3 +23,5 @@ catalog `model.rs` (`Meta.exif`), `lib.rs` (modules, re-export), `query.rs` + `r
 ## Tests
 
 `exif_override`, `lens_limits`, `exif_edit`, `exif_xmp`, `sidecar::exif`, `names::`
+
+Picking (or typing and confirming) a prime lens in Info, a name with exactly one focal length before "mm" (`Sirui Aurora 35mm f/1.4`, `Laowa 60mm f/2.8 2X Ultra-Macro` = 60), also sets the Focal length as an edited override in the same undo step; zooms, ranges and names without a focal length leave it alone (`prime_focal_mm` in `exif_edit.rs`).

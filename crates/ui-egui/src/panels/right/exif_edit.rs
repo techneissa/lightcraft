@@ -205,6 +205,38 @@ pub(super) struct Side {
     pub size: String,
 }
 
+/// The focal length a lens name fixes: the one number directly before "mm" when the name has exactly one (a prime:
+/// `Sirui Aurora 35mm f/1.4`, `Laowa 60mm f/2.8 2X Ultra-Macro`). A zoom (`24-70mm`, `24mm-70mm`) and a name with no
+/// focal length give `None`; `f/2.8`, `T1.5` and `1.4x` / `2x` are not read.
+pub(super) fn prime_focal_mm(name: &str) -> Option<f64> {
+    let c: Vec<char> = name.chars().collect();
+    let mut found: Vec<f64> = Vec::new();
+    for i in 0..c.len() {
+        let is_mm = c.get(i).is_some_and(|x| x.eq_ignore_ascii_case(&'m')) && c.get(i + 1).is_some_and(|x| x.eq_ignore_ascii_case(&'m'));
+        if !is_mm || c.get(i + 2).is_some_and(|x| x.is_alphanumeric()) {
+            continue;
+        }
+        let mut end = i;
+        while end > 0 && c.get(end - 1) == Some(&' ') {
+            end -= 1;
+        }
+        let mut start = end;
+        while start > 0 && c.get(start - 1).is_some_and(|x| x.is_ascii_digit() || *x == '.') {
+            start -= 1;
+        }
+        let text: String = c.get(start..end).unwrap_or_default().iter().collect();
+        let Ok(mm) = text.parse::<f64>() else { continue };
+        // a range ("24-70mm") is a zoom, whichever end is read
+        let before = c.get(..start).unwrap_or_default().iter().rev().find(|x| **x != ' ');
+        if matches!(before, Some('-' | '–' | '—' | '~')) {
+            return None;
+        }
+        found.push(mm);
+    }
+    let first = *found.first()?;
+    (found.iter().all(|f| (f - first).abs() < 1e-6) && first.is_finite() && first > 0.0 && first <= 3000.0).then_some(first)
+}
+
 /// What stands at a row's right edge.
 #[derive(Clone, Copy)]
 enum Trailing<'a> {
@@ -366,7 +398,14 @@ fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, scope: &Scope, field: ExifFie
             refuse(ui.ctx(), scope, field, why);
         } else {
             ui.ctx().data_mut(|d| d.remove::<Refused>(refused_id(field)));
-            if let Err(e) = app.run("photo.setMeta", json!({"ids": edit.ids, field.key(): v})) {
+            let mut params = json!({"ids": edit.ids, field.key(): v});
+            // a prime fixes the focal length, set in the same step (one undo)
+            if field == ExifField::Lens
+                && let Some(mm) = prime_focal_mm(&text)
+            {
+                params["focal"] = json!(mm);
+            }
+            if let Err(e) = app.run("photo.setMeta", params) {
                 app.toast_error(ui.ctx(), e);
             }
         }

@@ -407,3 +407,22 @@ fn a_click_on_camera_or_lens_opens_the_list_of_names_but_not_on_a_number() {
     ask(&mut h, "ui.clickWidget", json!({"id": "exifValue:iso"}));
     assert!(!has(&h, "exifSuggestion:iso:0") && !has(&h, "exifSuggestion:camera:0"));
 }
+
+#[test]
+fn picking_a_prime_lens_sets_the_focal_length_too_and_a_zoom_leaves_it() {
+    let (mut h, ids) = info_panel();
+    type_into(&mut h, "lens", "Sirui Aurora 35mm f/1.4");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    for id in &ids {
+        let m = meta(&h, *id);
+        assert_eq!((m.effective_lens(), m.effective_focal_mm()), ("Sirui Aurora 35mm f/1.4", Some(35.0)));
+    }
+    assert!(has(&h, "icon:exifReset:focal"), "the focal length shows as edited");
+    // one undo takes both back
+    run(&mut h, "edit.undo", json!({}));
+    assert_eq!(meta(&h, ids[0]).effective_focal_mm(), Some(50.0));
+    // a zoom leaves the focal length alone
+    type_into(&mut h, "lens", "FE 70-200mm F2.8 GM");
+    ask(&mut h, "ui.key", json!({"key": "Enter"}));
+    assert_eq!(meta(&h, ids[0]).effective_focal_mm(), Some(50.0));
+}
