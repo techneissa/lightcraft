@@ -14,6 +14,10 @@
 //!   A cost that grows with N is the full re-rasterization of the brush part.
 //! - `overlay`: the mask overlay switched on and off again, one render per flip.
 //! - `hash`: the settings hash64 and clone the loupe took every frame (UI thread, CPU only).
+//! - `effect`: one effect-slider tick (a mask's Exposure, and the Amount slider) with `MASKS=6`
+//!   overlapping masks, every mask on one small spot and then the same masks over the whole frame
+//!   (radial gradients, and small brush blobs against whole-frame linear gradients). The cost of
+//!   the small spot should be a fraction of the full-frame one.
 //!
 //! Configurations: `one brush part` (N strokes in one component), `submasks` (the same strokes
 //! plus a second brush part and a gradient intersect), `dense` (a stroke of ~10,000 dabs, past
@@ -239,4 +243,82 @@ fn main() {
             }
         }
     }
+    if run("effect") && want_config("effect") {
+        let masks: usize = std::env::var("MASKS").ok().and_then(|v| v.parse().ok()).unwrap_or(6);
+        println!("\n== effect-slider ticks, {masks} overlapping masks");
+        for (name, small, brush) in [
+            ("radial, one small spot", true, false),
+            ("radial, whole frame", false, false),
+            ("brush blobs, small spot", true, true),
+            ("gradients, whole frame", false, true),
+        ] {
+            let base = overlapping_masks(masks, small, brush);
+            for (label, control) in [("mask exposure tick", 0), ("mask amount tick", 1), ("global exposure tick", 2)] {
+                let caches = [StageCache::default(), StageCache::default()];
+                let ms: Vec<f64> = backends
+                    .iter()
+                    .map(|&g| {
+                        drop(develop(&preview, &info, &base, &view, Some(&caches[g as usize]), g));
+                        let mut k = 0.0;
+                        best(n, || {
+                            let mut t = base.clone();
+                            k += 1.0;
+                            match control {
+                                0 => t.masks[0].adjust.exposure = 0.6 + 0.02 * k,
+                                1 => t.masks[0].adjust.amount = 100.0 - k % 50.0,
+                                _ => t.light.exposure = 0.2 + 0.01 * k,
+                            }
+                            drop(develop(&preview, &info, &t, &view, Some(&caches[g as usize]), g));
+                        })
+                    })
+                    .collect();
+                println!("{name:<26} {label:<22} {}", columns(&ms));
+            }
+        }
+    }
+}
+
+/// `count` masks that overlap: all on one small spot (about 8 % of the long edge across) or
+/// each covering the whole frame. `brush`: small brush blobs, or whole-frame linear gradients;
+/// else radial gradients. Each mask has its own effect; the last has a colour overlay.
+fn overlapping_masks(count: usize, small: bool, brush: bool) -> DevelopSettings {
+    let mut s = DevelopSettings::default();
+    s.light.exposure = 0.2;
+    for i in 0..count {
+        let shift = 0.004 * i as f64;
+        let shape = match (small, brush) {
+            (true, false) => MaskShape::Radial {
+                center: Point::new(0.5 + shift, 0.33),
+                rx: 0.04 + shift,
+                ry: 0.03 + shift,
+                angle: 0.0,
+                feather: 50.0,
+                invert: false,
+            },
+            (false, false) => MaskShape::Radial { center: Point::new(0.5 + shift, 0.33), rx: 2.0, ry: 2.0, angle: 0.0, feather: 50.0, invert: false },
+            (true, true) => {
+                let blob = BrushStroke {
+                    points: vec![Point::new(0.49 + shift, 0.33), Point::new(0.52 + shift, 0.34)],
+                    size: 0.02,
+                    ..BrushStroke::default()
+                };
+                MaskShape::Brush { strokes: vec![blob] }
+            }
+            (false, true) => MaskShape::Linear { start: Point::new(0.5, 0.0 + shift), end: Point::new(0.5, 0.66) },
+        };
+        let mut adjust =
+            LocalAdjustments { exposure: 0.4, contrast: 20.0, highlights: -30.0, saturation: 10.0 * (i % 3) as f64, ..LocalAdjustments::default() };
+        if i + 1 == count {
+            adjust.color_hue = 30.0;
+            adjust.color_sat = 40.0;
+        }
+        s.masks.push(Mask {
+            id: i as u32 + 1,
+            name: format!("Mask {}", i + 1),
+            components: vec![component(MaskOp::Add, shape)],
+            adjust,
+            ..Mask::default()
+        });
+    }
+    s
 }
