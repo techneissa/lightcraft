@@ -149,3 +149,24 @@ fn painting_frames_do_not_hash_the_settings() {
     pointer(&mut h, json!([{"kind": "up", "x": 0.7, "y": 0.55}]));
     settle_previews(&mut h);
 }
+
+/// Committing a stroke hashes the settings once on the UI thread: the new settings' own hash, which keys the loupe's render and
+/// every cache of the photo. The brush preview's settings (the photo with the brush covering everything) take their identity
+/// from what they are made of, not from another hash of every stroke. (The render workers hash none; `plan` hashes a default
+/// `DevelopSettings` of the lens fields for the Upright key, a few hundred bytes.)
+#[test]
+fn committing_a_stroke_hashes_the_settings_once() {
+    let mut h = brush_ready();
+    for i in 0..40 {
+        let y = 0.1 + 0.02 * f64::from(i);
+        exec(&mut h, "mask.brushStroke", json!({"points": [[0.1, y], [0.9, y]], "size": 0.01}));
+    }
+    settle_previews(&mut h);
+    let before = lightcraft_develop::hash64_calls();
+    pointer(&mut h, json!([{"kind": "down", "x": 0.3, "y": 0.5}, {"kind": "drag", "x": 0.4, "y": 0.5}, {"kind": "drag", "x": 0.5, "y": 0.52}]));
+    h.step();
+    pointer(&mut h, json!([{"kind": "up", "x": 0.6, "y": 0.52}]));
+    settle_previews(&mut h);
+    let calls = lightcraft_develop::hash64_calls() - before;
+    assert_eq!(calls, 1, "committing a stroke hashed the settings {calls} times");
+}

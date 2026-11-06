@@ -505,3 +505,9 @@ from the image read back once; its alpha is then kept with the view's stages lik
 read back only the finished picture and its histogram (`lightcraft_gpu::readbacks` counts them; tested). A Sky, Luminance or
 Color Range mask reads the global Exposure, so an Exposure drag evaluates it again on the CPU, with the image read back, each
 tick.
+
+The keys that find a mask's kept alpha and brush parts (`masks::alpha_key`, `masks::brush_chain`) hash the raw bits of every
+number with a word-at-a-time hasher (`masks/key.rs`), not the `{:?}` text of every stroke, which cost more than a cache hit on a
+mask of hundreds of strokes of hundreds of samples. Committing a stroke hashes the settings once on the UI thread (the
+photo's remembered hash, which keys every cache of it); the brush preview's settings take their identity from the key they are
+made from.

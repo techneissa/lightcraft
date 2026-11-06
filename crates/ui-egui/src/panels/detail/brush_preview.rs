@@ -19,7 +19,7 @@ const PRIORITY: u32 = 95;
 
 /// What the brush preview's settings are made from: the photo's settings (by their remembered hash), the mask and part
 /// being painted into, the mode and the adjustment a new mask would start with.
-#[derive(Clone, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub(crate) struct MemoKey {
     id: PhotoId,
     settings: u64,
@@ -31,6 +31,12 @@ pub(crate) struct MemoKey {
 
 /// The settings made for a [`MemoKey`] (`None`: painting would show no adjustment) and their hash.
 pub(crate) type Memo = (MemoKey, Option<(Arc<DevelopSettings>, u64)>);
+
+/// The identity of the settings made for `key` (FNV-1a of its text: it holds the photo's remembered settings hash, the mask, the part,
+/// the mode and the adjustment, which fix the settings).
+fn key_hash(key: &MemoKey) -> u64 {
+    format!("{key:?}").bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
+}
 
 /// What the loupe render being asked for is.
 #[derive(Clone, Copy)]
@@ -74,10 +80,10 @@ pub(super) fn request(app: &mut LightcraftApp, ui: &egui::Ui, a: &Ask) {
     let made = match &app.renderer.brush_settings {
         Some((k, made)) if *k == key => made.clone(),
         _ => {
-            let made = target::settings_in(&d, key.mask, part, erase, fresh).map(|s| {
-                let hash = s.hash64();
-                (Arc::new(s), hash)
-            });
+            // (the settings are a function of what the key holds, so their identity is a hash of it: hashing the settings
+            // themselves writes every stroke of every mask to JSON, once per committed stroke)
+            let hash = key_hash(&key);
+            let made = target::settings_in(&d, key.mask, part, erase, fresh).map(|s| (Arc::new(s), hash));
             app.renderer.brush_settings = Some((key, made.clone()));
             made
         }

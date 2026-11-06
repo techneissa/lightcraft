@@ -377,3 +377,108 @@ fn mask_planes_are_the_asked_masks_alphas_and_reuse_the_render() {
     let fresh = crate::mask_planes(&src, &info, &s, &req, None, &PlanesAsk { want: MaskWant::One(2), known: None });
     assert_eq!(fresh.signature, moved.signature);
 }
+
+/// The keys hash the numbers themselves: the same definition hashes alike, and a change to any one number of any part (one
+/// coordinate of a stroke somewhere in the middle, a pressure sample, a gradient's end, a stored selection) is a new key.
+#[test]
+fn a_change_to_any_one_number_of_a_mask_is_a_new_key() {
+    use lightcraft_geom::Point;
+    let keys = AlphaKeys { geo: 7, image: 9 };
+    let strokes: Vec<BrushStroke> = (0..300)
+        .map(|i| BrushStroke {
+            points: (0..40).map(|k| Point::new(0.1 + 0.002 * k as f64 + 0.0001 * i as f64, 0.5)).collect(),
+            pressure: (0..40).map(|k| 0.5 + 0.01 * k as f32).collect(),
+            erase: i % 6 == 5,
+            ..BrushStroke::default()
+        })
+        .collect();
+    let mask_of =
+        |shape: MaskShape| Mask { id: 1, components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }], ..Mask::default() };
+    let base = mask_of(MaskShape::Brush { strokes: strokes.clone() });
+    let key = alpha_key(&base, keys, 0.0);
+    assert_eq!(alpha_key(&mask_of(MaskShape::Brush { strokes: strokes.clone() }), keys, 0.0), key, "the same definition, the same key");
+    let chain = brush_chain(&strokes);
+    assert_eq!(brush_chain(&strokes), chain);
+    // one coordinate (one ulp) of one point of stroke 123
+    let mut edited = strokes.clone();
+    edited[123].points[17].x = f64::from_bits(edited[123].points[17].x.to_bits() + 1);
+    assert_ne!(alpha_key(&mask_of(MaskShape::Brush { strokes: edited.clone() }), keys, 0.0), key, "one coordinate of one point");
+    let changed = brush_chain(&edited);
+    assert_eq!(changed[..123], chain[..123], "the strokes before it keep their place in the chain");
+    assert!(changed[123..].iter().zip(&chain[123..]).all(|(a, b)| a != b), "it and every stroke after it are new");
+    // a pressure sample, a flag, the order
+    let mut edited = strokes.clone();
+    edited[299].pressure[39] += 0.01;
+    assert_ne!(brush_chain(&edited)[299], chain[299], "a pressure sample");
+    let mut edited = strokes.clone();
+    edited[5].erase = !edited[5].erase;
+    assert_ne!(brush_chain(&edited)[5], chain[5], "the erase flag");
+    let mut edited = strokes.clone();
+    edited.swap(10, 11);
+    assert_ne!(brush_chain(&edited)[11], chain[11], "the order");
+    // what the key says besides the shape
+    let mut m = base.clone();
+    m.refine = 10.0;
+    assert_ne!(alpha_key(&m, keys, 0.0), key, "Refine Edges");
+    assert_ne!(alpha_key(&base, AlphaKeys { geo: 8, ..keys }, 0.0), key, "the frame");
+    // the shapes: one number of each
+    let seg = lightcraft_develop::SegMask::from_logits(8, &[3.0; 64]);
+    let seg2 = lightcraft_develop::SegMask::from_logits(8, &[-3.0; 64]);
+    let pairs: Vec<(&str, MaskShape, MaskShape)> = vec![
+        (
+            "linear",
+            MaskShape::Linear { start: Point::new(0.1, 0.2), end: Point::new(0.5, 0.6) },
+            MaskShape::Linear { start: Point::new(0.1, 0.2), end: Point::new(0.5, 0.6001) },
+        ),
+        (
+            "radial",
+            MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.2, ry: 0.2, angle: 0.0, feather: 50.0, invert: false },
+            MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.2, ry: 0.2, angle: 0.0, feather: 50.0, invert: true },
+        ),
+        (
+            "color range",
+            MaskShape::ColorRange { samples: vec![[0.5, 0.0, 0.1]], refine: 50.0 },
+            MaskShape::ColorRange { samples: vec![[0.5, 0.0, 0.11]], refine: 50.0 },
+        ),
+        (
+            "luminance range",
+            MaskShape::LuminanceRange { lo: 0.1, hi: 0.9, lo_feather: 0.1, hi_feather: 0.1 },
+            MaskShape::LuminanceRange { lo: 0.1, hi: 0.9, lo_feather: 0.1, hi_feather: 0.2 },
+        ),
+        ("depth range", MaskShape::DepthRange { lo: 0.1, hi: 0.9, feather: 0.1 }, MaskShape::DepthRange { lo: 0.1, hi: 0.8, feather: 0.1 }),
+        (
+            "subject",
+            MaskShape::Subject { seg: Some(seg.clone()), detail: Vec::new(), edge: 0.0 },
+            MaskShape::Subject { seg: Some(seg2.clone()), detail: Vec::new(), edge: 0.0 },
+        ),
+        (
+            "sky",
+            MaskShape::Sky { seg: Some(seg.clone()), detail: Vec::new(), edge: 0.0 },
+            MaskShape::Sky { seg: Some(seg.clone()), detail: vec![seg2.clone()], edge: 0.0 },
+        ),
+        (
+            "background",
+            MaskShape::Background { seg: None, detail: Vec::new(), edge: 0.0 },
+            MaskShape::Background { seg: None, detail: Vec::new(), edge: 5.0 },
+        ),
+        (
+            "object",
+            MaskShape::Object { hint: vec![Point::new(0.5, 0.5)], exclude: Vec::new(), seg: None, detail: Vec::new(), edge: 0.0 },
+            MaskShape::Object { hint: vec![Point::new(0.5, 0.5)], exclude: vec![Point::new(0.1, 0.1)], seg: None, detail: Vec::new(), edge: 0.0 },
+        ),
+        (
+            "prompt",
+            MaskShape::Prompt { text: "the car".into(), seg: None, detail: Vec::new(), edge: 0.0 },
+            MaskShape::Prompt { text: "the cat".into(), seg: None, detail: Vec::new(), edge: 0.0 },
+        ),
+        ("people", MaskShape::People { person: 1, parts: vec!["face".into()] }, MaskShape::People { person: 1, parts: vec!["hair".into()] }),
+        ("landscape", MaskShape::Landscape { class: "water".into() }, MaskShape::Landscape { class: "sky".into() }),
+    ];
+    let mut all = std::collections::HashSet::new();
+    for (name, a, b) in pairs {
+        let (ka, kb) = (alpha_key(&mask_of(a.clone()), keys, 0.0), alpha_key(&mask_of(b), keys, 0.0));
+        assert_ne!(ka, kb, "{name}: one number changed");
+        assert_eq!(ka, alpha_key(&mask_of(a), keys, 0.0), "{name}: the same, the same");
+        assert!(all.insert(ka), "{name}: another kind of shape with the same numbers has the same key");
+    }
+}

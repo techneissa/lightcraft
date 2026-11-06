@@ -16,6 +16,7 @@ use crate::geometry::Frame;
 
 mod alpha;
 mod brush;
+mod key;
 mod planes;
 
 pub use alpha::note_evaluation;

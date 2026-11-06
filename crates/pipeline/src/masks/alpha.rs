@@ -237,34 +237,26 @@ pub fn reads(m: &Mask) -> (bool, bool) {
     (image, exposure)
 }
 
-/// Feeds `Debug` output to a hasher without building the string.
-pub(super) struct HashWrite<'a, H: std::hash::Hasher>(pub &'a mut H);
-
-impl<H: std::hash::Hasher> std::fmt::Write for HashWrite<'_, H> {
-    fn write_str(&mut self, s: &str) -> std::fmt::Result {
-        self.0.write(s.as_bytes());
-        Ok(())
-    }
-}
-
 /// The key of mask `m`'s alpha in a render with `keys` and global exposure `ev`: everything the
 /// alpha is built from: its components, Refine Edges, Invert, the frame its coordinates are on
 /// ([`Mask::on_photo`]), the render's frame, and the image and exposure for the masks that read
 /// them ([`reads`]). Not its effects or Amount (they scale terms, not the alpha), not its
 /// components' names, its name or id.
 pub fn alpha_key(m: &Mask, keys: AlphaKeys, ev: f32) -> u64 {
-    use std::fmt::Write;
-    use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash, Hasher};
+    use std::hash::Hasher;
     let (image, exposure) = reads(m);
-    let mut h = BuildHasherDefault::<DefaultHasher>::default().build_hasher();
-    keys.geo.hash(&mut h);
-    image.then_some(keys.image).hash(&mut h);
-    exposure.then_some(ev.to_bits()).hash(&mut h);
-    (m.refine.to_bits(), m.invert, m.on_photo).hash(&mut h);
-    m.components.len().hash(&mut h);
+    let mut h = super::key::Words::new();
+    h.write_u64(keys.geo);
+    h.write_u64(if image { keys.image } else { 0 });
+    h.write_u64(u64::from(image));
+    h.write_u64(if exposure { u64::from(ev.to_bits()) | 1 << 32 } else { 0 });
+    h.write_u64(m.refine.to_bits());
+    h.write_u64(u64::from(m.invert) | u64::from(m.on_photo) << 1);
+    h.write_u64(m.components.len() as u64);
     for c in &m.components {
-        // (`Debug` of an f64 round-trips: distinct definitions write distinct text)
-        let _ = write!(HashWrite(&mut h), "{:?}", (c.op, c.invert, &c.shape));
+        // (an op by its place in the enum: `MaskOp` has no `Hash`)
+        h.write_u64(u64::from(c.invert) | (c.op as u64) << 1);
+        super::key::shape(&mut h, &c.shape);
     }
     h.finish()
 }

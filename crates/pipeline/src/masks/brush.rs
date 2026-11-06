@@ -7,7 +7,6 @@ use std::sync::Arc;
 use lightcraft_develop::BrushStroke;
 use lightcraft_raster::{Plane, Rgb32f};
 
-use super::alpha::HashWrite;
 use super::{accumulate, auto_refine, auto_similarity, brush_dabs, chromaticity, dab_alpha, dab_pixel, guided_cross};
 use crate::for_rows;
 use crate::geometry::Frame;
@@ -70,16 +69,14 @@ pub struct BrushCtx<'a> {
 
 /// Identifies strokes `0..=k` for every `k`: each stroke's fields hashed into the one before.
 pub fn brush_chain(strokes: &[BrushStroke]) -> Vec<u64> {
-    use std::fmt::Write;
-    use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher, Hash, Hasher};
+    use std::hash::Hasher;
     let mut prev = 0u64;
     strokes
         .iter()
         .map(|s| {
-            let mut h = BuildHasherDefault::<DefaultHasher>::default().build_hasher();
-            prev.hash(&mut h);
-            // (`Debug` of an f64 round-trips: distinct strokes write distinct text)
-            let _ = write!(HashWrite(&mut h), "{s:?}");
+            let mut h = super::key::Words::new();
+            h.write_u64(prev);
+            super::key::stroke(&mut h, s);
             prev = h.finish();
             prev
         })
