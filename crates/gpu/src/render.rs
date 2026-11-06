@@ -736,7 +736,7 @@ pub fn render(
     }
 
     // 4. masks
-    let (masks, terms) = crate::masks::masks(&mut cx, &lin, &prep, &plan, &mut host, stages.map(|c| &c.alphas));
+    let (masks, terms) = crate::masks::masks(&mut cx, &lin, &prep, &plan, &mut host, stages.map(|c| (&c.alphas, src)));
     lap("masks", &mut t, &mut cx);
     if want == Want::MaskPlanes {
         return Some(Output::Masks(mask_planes(&mut cx, masks.as_ref(), &plan)));

@@ -8,6 +8,7 @@ use lightcraft_pipeline::Plan;
 use lightcraft_pipeline::finish::{MASK_TERMS, effect_terms};
 use lightcraft_pipeline::geometry::Frame;
 use lightcraft_pipeline::masks::{AlphaKeys, BRUSH_ENTRIES, Mattes, alpha_key, brush_base, brush_chain, brush_dabs, note_evaluation, note_stroke};
+use lightcraft_raster::Rgb32f;
 
 use crate::ctx::{Buf, groups1, groups2};
 use crate::render::{Cx, Host, Prep, gaussian, map};
@@ -24,6 +25,10 @@ pub(crate) struct AlphaStore {
 
 #[derive(Default)]
 struct Inner {
+    /// The source the alphas were evaluated on: a mask that reads the image (a range, Sky, Refine Edges, Auto Mask) keeps no
+    /// alpha for another picture, whatever its settings say (`alpha_key`'s image half has no picture's identity). Weak: the
+    /// store never keeps a photo alive, and a dropped source's address can't be taken again while this is held.
+    source: Option<std::sync::Weak<Rgb32f>>,
     mattes: Option<Arc<Mattes>>,
     slots: Vec<(u64, Arc<Buf>)>,
     brushes: Vec<BrushPart>,
@@ -203,7 +208,7 @@ pub(crate) fn masks(
     prep: &Prep,
     plan: &Plan<'_>,
     host: &mut Host,
-    store: Option<&AlphaStore>,
+    store: Option<(&AlphaStore, &Arc<Rgb32f>)>,
 ) -> (Option<Buf>, Vec<[f32; MASK_TERMS]>) {
     use lightcraft_develop::{MaskOp, MaskShape};
     let s = &*plan.settings;
@@ -224,9 +229,15 @@ pub(crate) fn masks(
         cx.copy_into(ch, &alpha, n * list.len());
     }
     let comp_plane = cx.gpu.buffer(n);
-    let mut guard = store.map(AlphaStore::lock);
+    let mut guard = store.map(|(s, _)| s.lock());
     let mut unkept = Inner::default();
     let held: &mut Inner = guard.as_deref_mut().unwrap_or(&mut unkept);
+    // another picture (the next photo, a sharper level, the Denoise mix): nothing held was made from this one
+    if let Some((_, src)) = store
+        && !held.source.as_ref().is_some_and(|w| std::ptr::eq(w.as_ptr(), Arc::as_ptr(src)))
+    {
+        *held = Inner { source: Some(Arc::downgrade(src)), ..Inner::default() };
+    }
     // the alphas of the last render, when it had the same segmentation mattes (taken out: hand back the ones used)
     let same = match (&held.mattes, &plan.mattes) {
         (None, None) => true,

@@ -356,3 +356,48 @@ fn a_cached_cpu_mask_reads_no_image_back_on_an_effect_tick() {
     }
     assert!(n0 <= lightcraft_gpu::readbacks().0);
 }
+
+/// A view's stages outlive a move to another photo (Auto Sync copies the edits to a photo of the same size). The alphas kept
+/// for masks that read the image (Sky, Luminance and Color Range, Refine Edges, Auto Mask) belong to the picture they were
+/// evaluated on: the next photo, or the same photo with a new source (a sharper level, the Denoise mix), shows its own.
+#[test]
+fn kept_alphas_never_outlive_their_source() {
+    if !gpu() {
+        return;
+    }
+    let first = scene(960, 640);
+    let other = Arc::new(lightcraft_scenes::demo_library()[1].render(960, 640));
+    // the same photo again, with different pixels (a sharper source arriving)
+    let sharper = Arc::new(Rgb32f::from_fn(960, 640, |x, y| {
+        let p = first.data[y * 960 + x];
+        let n = ((x * 7 + y * 13) % 11) as f32 * 0.01;
+        [p[0] + n, p[1] + n * 0.5, p[2]]
+    }));
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(720, 720);
+    let radial = MaskShape::Radial { center: Point::new(0.5, 0.45), rx: 0.35, ry: 0.3, angle: 0.0, feather: 60.0, invert: false };
+    let one = |shape: MaskShape, refine: f64| {
+        with_masks(vec![Mask { id: 1, components: vec![comp(MaskOp::Add, shape)], adjust: adjust(), refine, ..Default::default() }])
+    };
+    let cases: Vec<(&str, DevelopSettings)> = vec![
+        ("sky", one(MaskShape::sky(), 0.0)),
+        ("luminance range", one(MaskShape::LuminanceRange { lo: 0.2, hi: 0.8, lo_feather: 0.2, hi_feather: 0.2 }, 0.0)),
+        ("color range", one(MaskShape::ColorRange { samples: vec![[0.5, 0.02, 0.02], [0.4, -0.03, 0.05]], refine: 50.0 }, 0.0)),
+        ("refine edges", one(radial, 60.0)),
+        ("auto mask", one(MaskShape::Brush { strokes: strokes(4, true, false) }, 0.0)),
+    ];
+    for (name, s) in &cases {
+        for (label, next) in [("another photo", &other), ("a new source of the photo", &sharper)] {
+            let cache = StageCache::default();
+            lightcraft_gpu::render(&first, &info, s, &req, Some(&cache)).expect("gpu");
+            let warm = lightcraft_gpu::render(next, &info, s, &req, Some(&cache)).expect("gpu").image;
+            let fresh = lightcraft_gpu::render(next, &info, s, &req, None).expect("gpu").image;
+            let (mean, max) = diff(&warm, &fresh);
+            assert!(max == 0, "{name} on {label}: the kept alpha of the earlier picture shows (mean {mean:.4}, max {max})");
+            // and the planes the loupe tints
+            let planes = lightcraft_gpu::mask_planes(next, &info, s, &req, Some(&cache)).expect("planes");
+            let fresh = lightcraft_gpu::mask_planes(next, &info, s, &req, None).expect("planes");
+            assert_eq!(planes[0].1, fresh[0].1, "{name} on {label}: the planes are the earlier picture's");
+        }
+    }
+}
