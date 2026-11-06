@@ -141,6 +141,7 @@ impl LightcraftApp {
             slideshow_export_reported: true,
             animated_gif_reported: true,
             hover_preview: None,
+            hover_memo: None,
             window_is_fullscreen: false,
             gpu_applied: None,
             gpu_notice: false,

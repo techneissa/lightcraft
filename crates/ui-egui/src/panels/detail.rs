@@ -891,16 +891,25 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
 /// Hovering a preset or profile: the photo with that look, shown instead of the loupe render once
 /// it is ready (nothing is committed). The key of its render and the label to show.
 fn request_hover(app: &mut LightcraftApp, a: &LoupeAsk, [sw, sh]: [usize; 2]) -> Option<(u64, String)> {
-    match app.hover_preview.clone() {
-        Some(h) if !a.interacting => app.session.preview_job(a.id, sw.max(8), sh.max(8), a.with_crop, &h.settings).map(|job| {
-            // (the same display fit as the After view, drawn texel for texel like it)
-            let job = job.with_display_fit(a.fit_px[0], a.fit_px[1]);
-            let key = job.key;
-            app.renderer.request(Slot::Hover, job, 105);
-            (key, h.label)
-        }),
-        _ => None,
-    }
+    let h = app.hover_preview.as_ref().filter(|_| !a.interacting)?;
+    // (the panels build the same preview on every frame: it is shared and hashed once, not copied and hashed again each time)
+    let (settings, hash) = match &app.hover_memo {
+        Some((held, settings, hash)) if held == h => (settings.clone(), *hash),
+        _ => {
+            let settings = std::sync::Arc::new(h.settings.clone());
+            let hash = settings.hash64();
+            app.hover_memo = Some((h.clone(), settings.clone(), hash));
+            (settings, hash)
+        }
+    };
+    let label = h.label.clone();
+    app.session.preview_job_shared(a.id, sw.max(8), sh.max(8), a.with_crop, &settings, hash).map(|job| {
+        // (the same display fit as the After view, drawn texel for texel like it)
+        let job = job.with_display_fit(a.fit_px[0], a.fit_px[1]);
+        let key = job.key;
+        app.renderer.request(Slot::Hover, job, 105);
+        (key, label)
+    })
 }
 
 /// The Before render, at the stand-in size.
