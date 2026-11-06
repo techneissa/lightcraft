@@ -223,7 +223,7 @@ mod in_the_loupe {
     // Given a mask selected with its overlay shown at 1:1 (issue #547), the zoomed view keeps its
     // zoom and pan and stays a canvas-sized frame plus a native window carrying the overlay, as
     // without it, instead of a whole-frame render at the zoomed size; hiding or showing the
-    // overlay swaps the window for one with the other look
+    // overlay is drawn over the same window (it is not part of the window's render: nothing renders)
     #[test]
     fn a_mask_overlay_at_one_to_one_is_a_window_and_keeps_zoom_and_pan() {
         let (_fx, mut h, native) = detail();
@@ -244,7 +244,7 @@ mod in_the_loupe {
         let id = h.app.session.active().expect("a photo");
         let d = h.app.session.develop_of(id).expect("settings");
         assert!(
-            matches!(crate::panels::detail::view_overlay(&h.app, &d, h.view.ctx.cumulative_frame_nr()), lightcraft_pipeline::Overlay::Mask { .. }),
+            matches!(crate::panels::detail::shown_overlay(&h.app, &d, h.view.ctx.cumulative_frame_nr()), lightcraft_pipeline::Overlay::Mask { .. }),
             "the mask overlay is shown"
         );
         assert_eq!((h.app.ui.zoom, h.app.ui.pan), (zoom, pan), "showing the overlay keeps zoom and pan");
@@ -253,12 +253,13 @@ mod in_the_loupe {
         let shown = h.app.region_view.expect("a window render with the overlay");
         assert_eq!(shown.full.0.max(shown.full.1), native, "cut from the photo's own pixels");
         assert_eq!(shown.window, plain.window, "the same part of the photo");
-        assert_ne!(shown.settings, plain.settings, "the overlay is part of the window's look");
+        assert_eq!(shown.settings, plain.settings, "the overlay is no part of the window's look: it is drawn over it");
+        assert_eq!(shown.key, plain.key, "showing the overlay starts no window render");
 
         h.app.ui.mask_overlay = false;
         h.settle(SETTLE);
         assert_eq!((h.app.ui.zoom, h.app.ui.pan), (zoom, pan), "hiding it keeps them too");
-        assert_eq!(h.app.region_view.map(|r| r.settings), Some(plain.settings), "back to the plain window");
+        assert_eq!(h.app.region_view.map(|r| r.key), Some(plain.key), "the same window, with nothing drawn over it");
     }
 
     // Given the Show All Masks view (issue #1712) at 1:1, the zoomed loupe is a canvas-sized frame
@@ -285,7 +286,7 @@ mod in_the_loupe {
         let d = h.app.session.develop_of(id).expect("settings");
         assert!(
             matches!(
-                crate::panels::detail::view_overlay(&h.app, &d, h.view.ctx.cumulative_frame_nr()),
+                crate::panels::detail::shown_overlay(&h.app, &d, h.view.ctx.cumulative_frame_nr()),
                 lightcraft_pipeline::Overlay::AllMasks { .. }
             ),
             "the all-masks overlay is shown"

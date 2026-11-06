@@ -46,6 +46,7 @@ pub mod lightroom_import;
 pub mod links;
 mod local_profile_offer;
 mod macos_colour;
+pub(crate) mod mask_tint;
 pub mod menus;
 mod missing_sweep;
 mod model_remove;
@@ -385,6 +386,10 @@ pub struct LightcraftApp {
     /// The look the loupe shows while the pointer rests on a preset or profile (set by the
     /// panels each frame; nothing is committed, no history entry).
     pub hover_preview: Option<HoverPreview>,
+    /// The settings of the last hover preview rendered, shared, and their hash: the panels build the preview anew on
+    /// every frame, and the same one is rendered again without copying or hashing the settings
+    /// ([`panels::detail`]'s `request_hover`).
+    pub(crate) hover_memo: Option<(HoverPreview, std::sync::Arc<lightcraft_develop::DevelopSettings>, u64)>,
     /// The window is in full screen (as last reported by the host, or as last requested).
     pub window_is_fullscreen: bool,
     /// The GPU preference last applied (`app.gpu`), to apply Settings changes once.

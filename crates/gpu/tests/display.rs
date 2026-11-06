@@ -64,7 +64,7 @@ fn display_renders_match_readback_renders() {
                 assert!(shown.data == pixels.image.data, "{w}×{h}: the texture holds the readback's pixels");
                 assert_eq!(histogram, pixels.histogram);
             }
-            Output::Image(_) => panic!("{w}×{h}: expected a texture"),
+            Output::Image(_) | Output::Masks(_) | Output::ImageFit(..) => panic!("{w}×{h}: expected a texture"),
         }
     }
     // overlays are drawn on the CPU, and a window that spots grew is cut there: pixels

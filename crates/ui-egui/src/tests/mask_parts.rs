@@ -320,7 +320,7 @@ fn a_mask_slider_hides_the_overlay_and_keeps_the_mask_enabled() {
     let id = h.app.session.active().expect("active photo");
     let d = (*h.app.session.develop_of(id).unwrap_or_default()).clone();
     let none = lightcraft_pipeline::Overlay::None;
-    assert_eq!(crate::panels::detail::view_overlay(&h.app, &d, h.view.ctx.cumulative_frame_nr()), none);
+    assert_eq!(crate::panels::detail::shown_overlay(&h.app, &d, h.view.ctx.cumulative_frame_nr()), none);
     let r = h.request("ui.key", json!({"key": "o"}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert!(h.app.ui.mask_overlay, "O can restore the overlay");

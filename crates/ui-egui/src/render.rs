@@ -67,20 +67,21 @@ pub enum Slot {
     /// The brush tool's live preview: the photo with the active mask's brush covering everything
     /// (or nothing, erasing), drawn under the stroke being painted ([`crate::brush_live`]).
     BrushFull,
+    /// The planes of the masks a tint over [`Slot::Main`] is drawn from (no texture: [`crate::mask_tint`]); it shares
+    /// `Main`'s stage caches, which hold the alphas the photo's render made.
+    Alpha,
+    /// The same for [`Slot::Region`].
+    RegionAlpha,
 }
 
 /// Settings that can change the rendered frame. Colour-only edits, including temporarily
 /// hidden grading wheels, must not discard a decoded RAW's actual aspect ratio.
 pub(crate) fn geometry_look(settings: &lightcraft_develop::DevelopSettings) -> u64 {
-    let geometry = lightcraft_develop::DevelopSettings {
-        crop: settings.crop,
-        orientation: settings.orientation,
-        geometry: settings.geometry.clone(),
-        optics: settings.optics,
-        disabled_sections: settings.disabled_sections.iter().filter(|s| matches!(s.as_str(), "geometry" | "optics")).cloned().collect(),
-        ..Default::default()
-    };
-    geometry.hash64()
+    // (only these few fields are written and hashed: `DevelopSettings::hash64` writes every stroke of every mask, and this
+    // runs for every texture on every frame)
+    let disabled: Vec<&String> = settings.disabled_sections.iter().filter(|s| matches!(s.as_str(), "geometry" | "optics")).collect();
+    let json = serde_json::to_string(&(&settings.crop, &settings.orientation, &settings.geometry, &settings.optics, disabled)).unwrap_or_default();
+    json.as_bytes().iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
 }
 
 pub struct Tex {
@@ -303,6 +304,8 @@ pub struct Renderer {
     /// Keep a CPU copy of every texture so the UI can be rasterized headlessly (set when the app
     /// is driven by the control channel).
     pub keep_pixels: bool,
+    /// The masks' alphas that come with the loupe's renders, and the tint drawn from them ([`crate::mask_tint`]).
+    pub tints: crate::mask_tint::MaskTints,
     /// The clipping overlay's texture for the loupe photo.
     pub clip_overlay: Option<crate::panels::clipping::ClipOverlay>,
     /// Keep a CPU copy of the loupe's and the brush preview's pixels (the brush tool is open: its
@@ -311,6 +314,10 @@ pub struct Renderer {
     /// The result key the brush preview ([`Slot::BrushFull`]) must have to match the photo's
     /// current settings (`None`: no preview wanted now).
     pub brush_target: Option<u64>,
+    /// The settings the brush preview renders (the photo's with the active brush part covering everything), kept while
+    /// what they are made from is unchanged: building them copies every stroke of every mask, which a frame must not
+    /// do ([`crate::panels::detail::brush_preview`]).
+    pub(crate) brush_settings: Option<crate::panels::detail::brush_preview::Memo>,
     /// Per-view intermediate results (loupe and "before"), so slider drags redo only what changed.
     stages: HashMap<Slot, Arc<StageCache>>,
     /// Slot → key of the last quick job requested for it (each is tried once).
@@ -430,9 +437,11 @@ impl Renderer {
             completed: 0,
             discarded: 0,
             keep_pixels: false,
+            tints: Default::default(),
             clip_overlay: None,
             keep_brush_pixels: false,
             brush_target: None,
+            brush_settings: None,
             stages: HashMap::new(),
             quick_tried: HashMap::new(),
             failed: HashMap::new(),
@@ -620,7 +629,9 @@ impl Renderer {
         }
         let job = job.with_display(self.display.clone());
         // a drag's drafts are only drawn: they may stay on the GPU when the window can show them
-        if self.screen.is_some() && job.request.quality == lightcraft_pipeline::Quality::Draft { job.on_screen() } else { job }
+        // (not while a view that makes its grey from the pixels is shown: a draft left on the GPU has none, and the tint would show over colour)
+        let pixels_wanted = self.tints.keep_region && matches!(slot, Slot::Main | Slot::Region);
+        if self.screen.is_some() && !pixels_wanted && job.request.quality == lightcraft_pipeline::Quality::Draft { job.on_screen() } else { job }
     }
 
     /// Show GPU-resident renders through `screen` from now on (the desktop app, once its GPU
@@ -676,6 +687,7 @@ impl Renderer {
     /// Free a view slot's texture and stage cache (the view is no longer shown).
     pub fn release(&mut self, slot: Slot) {
         self.textures.remove(&slot);
+        self.tints.release(slot);
         self.stages.remove(&slot);
         // and its GPU-resident texture, which can be window-sized (review of PR #1065)
         self.free_native(slot);
@@ -766,7 +778,13 @@ impl Renderer {
             Requested { look: Some((geometry_look(&job.settings), job.request.apply_crop)), id: job.request_id, source: Some(job.origin.clone()) },
         );
         // (an offload keeps its own per-view stage caches; the flag tells it to)
-        let job = if slot.is_view() { job.with_stages(self.stages.entry(slot).or_default().clone()) } else { job };
+        // (a job for the masks' planes works from the alphas of the render it goes beside)
+        let stages_of = match slot {
+            Slot::Alpha => Slot::Main,
+            Slot::RegionAlpha => Slot::Region,
+            other => other,
+        };
+        let job = if slot.is_view() || stages_of != slot { job.with_stages(self.stages.entry(stages_of).or_default().clone()) } else { job };
         if self.offload.is_some() {
             self.seq += 1;
             self.queue.retain(|q| q.slot != slot);
@@ -1380,6 +1398,16 @@ impl Renderer {
             if matches!(slot, Slot::Prefetch(_)) {
                 continue;
             }
+            // the planes a tint is drawn from: no texture
+            if let Some(shown) = match slot {
+                Slot::Alpha => Some(Slot::Main),
+                Slot::RegionAlpha => Some(Slot::Region),
+                _ => None,
+            } {
+                self.tints.note(shown, r.key, r.mask_planes.clone());
+                changed = true;
+                continue;
+            }
             if slot == Slot::HdrHistogram {
                 if rendered.histogram.hdr.is_some() {
                     self.live_hdr_histogram = Some((r.photo, r.key, rendered.histogram));
@@ -1403,7 +1431,11 @@ impl Renderer {
             let color = color.unwrap_or_else(|| Arc::new(color_image(img)));
             // the loupe keeps its pixels (a shared handle, no copy) for the clipping overlay and the
             // brush's live stroke; the brush preview keeps them while the brush tool is open
-            let pixels = (self.keep_pixels || slot == Slot::Main || (self.keep_brush_pixels && slot == Slot::BrushFull)).then(|| color.clone());
+            let pixels = (self.keep_pixels
+                || slot == Slot::Main
+                || (self.keep_brush_pixels && slot == Slot::BrushFull)
+                || (self.tints.keep_region && slot == Slot::Region))
+                .then(|| color.clone());
             let name = format!("{slot:?}");
             // pixels again: the slot's GPU-resident texture is let go
             self.free_native(slot);
@@ -1505,7 +1537,7 @@ impl Renderer {
         let copies: usize = self.textures.values().filter_map(|t| t.pixels.as_ref()).map(|p| p.pixels.len() * 4).sum();
         serde_json::json!({
             "stageCaches": {"count": self.stages.len(), "cpuBytes": cpu, "gpuBytes": gpu, "budgetBytes": self.stage_budget(), "trimmed": self.stages_trimmed, "sharedSourceBytes": lightcraft_engine::gpu::shared_source_bytes()},
-            "textures": {"count": self.textures.len(), "bytes": tex, "cpuCopyBytes": copies},
+            "textures": {"count": self.textures.len(), "bytes": tex, "cpuCopyBytes": copies, "maskTintBytes": self.tints.bytes()},
         })
     }
 
@@ -1909,6 +1941,7 @@ mod color_image_tests {
             quick: None,
             display: None,
             frame: None,
+            mask_planes: None,
         };
         let histogram = Histogram::of_srgb8(&image);
         let ok = Renderer::run_for(|| result(Ok(lightcraft_pipeline::Rendered { image: image.clone(), histogram, deep: None })), &None);
@@ -1948,6 +1981,7 @@ mod color_image_tests {
                     quick: None,
                     display: None,
                     frame: None,
+                    mask_planes: None,
                 };
                 Renderer::run_for(|| result, &None)
             }),
@@ -1982,6 +2016,7 @@ mod color_image_tests {
                 quick: None,
                 display: None,
                 frame: None,
+                mask_planes: None,
             };
             Box::new(move || {
                 std::thread::sleep(std::time::Duration::from_millis(ms));

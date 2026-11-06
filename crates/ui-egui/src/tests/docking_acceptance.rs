@@ -385,3 +385,23 @@ fn panel_close_sync_replacement_cancels_held_divider() {
 fn externally_serialized_action_replacement_cancels_held_divider() {
     held_divider_replacement_route("public-action");
 }
+
+/// Resting the pointer on a preset renders its look again on every frame: the preview's settings are shared and hashed
+/// once, not copied and hashed (every stroke of every mask to JSON) on each frame.
+#[test]
+fn a_resting_preset_hover_hashes_its_settings_once() {
+    let mut h = app();
+    h.app.run("panel.presets", json!({})).unwrap();
+    dock(&mut h, json!({"operation":"float","panel":"presets","rect":[500,100,300,700]}));
+    let row = h.app.widgets.iter().find(|(id, _)| id.starts_with("preset:")).unwrap().1;
+    h.app.synthetic.push(Event::PointerMoved(row.center()));
+    h.step();
+    h.step();
+    assert!(h.app.hover_preview.is_some());
+    let before = lightcraft_develop::hash64_calls();
+    for _ in 0..12 {
+        h.step();
+        assert!(h.app.hover_preview.is_some());
+    }
+    assert_eq!(lightcraft_develop::hash64_calls(), before, "frames of a resting hover hashed the settings");
+}

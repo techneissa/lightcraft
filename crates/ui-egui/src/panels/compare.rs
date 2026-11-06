@@ -279,7 +279,8 @@ fn photo_tile(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, slot: Slo
         display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, app.ui.pan);
         p.image(tex.id(), display, uv, Color32::WHITE);
         if let Some(i) = window {
-            draw_window(&p, app, i, id, photo.develop.hash64(), display);
+            let look = app.session.settings_hash(id).unwrap_or_default();
+            draw_window(&p, app, i, id, look, display);
         }
     } else if let Some(tex) = app.renderer.textures.get(&Slot::Thumb(id)) {
         let texture_aspect = tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32;
@@ -428,7 +429,8 @@ fn request_window(app: &mut LightcraftApp, v: &TileView) -> Option<crate::region
     let job = app.session.region_job(v.id, fw, fh, win, true)?;
     // keyed as the renderer keys the texture (a display profile changes the key)
     let job = app.renderer.job_for(Slot::CompareRegion(v.pane), job);
-    let look = job.settings.hash64();
+    // (the photo's settings, remembered: the job renders exactly them)
+    let look = app.session.settings_hash(v.id).unwrap_or_default();
     let view = crate::region::RegionView { photo: v.id, before: false, key: job.key, full: (fw, fh), window: win, settings: look };
     // windows of other photos, looks and zooms of this pane can't be drawn any more
     app.compare_tiles.retain(|(p, _), t| *p != v.pane || t.is_current(v.id, (fw, fh), look, false));

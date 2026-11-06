@@ -644,3 +644,98 @@ fn an_export_develops_from_a_source_twice_its_size() {
     }
     assert_eq!(s.render_job(id, 1600, 1600, false, true).unwrap().level, SourceLevel::Preview, "a view keeps the preview");
 }
+
+// Given a job that asks for the masks' planes, it renders no photo: the planes are the visible masks' (8-bit, the render's size)
+// under a key of their own, those the asker holds are not made again, and what the overlay would draw is what comes
+#[test]
+fn a_job_can_ask_for_the_masks_planes_without_rendering_the_photo() {
+    use lightcraft_pipeline::masks::{MaskWant, PlanesAsk};
+    let mut s = crate::Session::with_demo();
+    let id = s.active().unwrap();
+    s.execute("mask.add", &serde_json::json!({"kind": "radial", "center": [0.4, 0.5], "rx": 0.2, "ry": 0.2})).unwrap();
+    s.execute("mask.add", &serde_json::json!({"kind": "linear", "start": [0.2, 0.3], "end": [0.8, 0.7]})).unwrap();
+    let ids: Vec<u32> = s.catalog.photo(id).unwrap().develop.masks.iter().map(|m| m.id).collect();
+    let plain = s.loupe_job(id, 300, 300, true).unwrap();
+    let all = PlanesAsk { want: MaskWant::All, known: None };
+    let job = |s: &mut crate::Session, ask| s.loupe_job(id, 300, 300, true).unwrap().for_mask_planes(ask);
+    assert_ne!(plain.key, job(&mut s, all).key, "the ask is part of the result key");
+    assert_ne!(job(&mut s, all).key, job(&mut s, PlanesAsk { want: MaskWant::One(ids[0]), known: None }).key, "so is what it asks for");
+    let before = super::planes_made();
+    let a = plain.run();
+    assert!(a.mask_planes.is_none() && a.rendered.unwrap().image.width > 0, "a photo render brings no planes");
+    assert_eq!(super::planes_made(), before, "and makes none");
+    let b = job(&mut s, all).run();
+    assert_eq!(b.rendered.as_ref().unwrap().image.width, 0, "a planes job renders no picture");
+    let planes = b.mask_planes.expect("the masks' planes");
+    assert_eq!(planes.planes.len(), 2);
+    assert!(planes.planes.iter().all(|(_, v)| v.len() == planes.width * planes.height) && planes.width > 0);
+    assert_eq!(super::planes_made(), before + 1);
+    // the asker holds them: nothing is made
+    let held = job(&mut s, PlanesAsk { want: MaskWant::All, known: Some(planes.signature) }).run().mask_planes.unwrap();
+    assert!(held.unchanged && held.planes.is_empty(), "held planes come again");
+    assert_eq!(super::planes_made(), before + 1);
+    // they are the alphas the overlay draws (White on Black: the alpha itself, 8-bit)
+    let overlay =
+        lightcraft_pipeline::Overlay::Mask { id: ids[0] as u16, view: lightcraft_pipeline::MaskView::WhiteOnBlack, color: [0; 3], opacity: 100 };
+    let shown = s.loupe_job(id, 300, 300, true).unwrap().with_overlay(overlay).run().rendered.unwrap().image;
+    let one = job(&mut s, PlanesAsk { want: MaskWant::One(ids[0]), known: None }).run().mask_planes.unwrap();
+    assert_eq!(one.planes.len(), 1);
+    let alpha = one.plane(ids[0]).expect("the first mask");
+    assert_eq!(shown.data.len(), alpha.len());
+    let worst = shown.data.iter().zip(alpha).map(|(p, a)| p[0].abs_diff(*a)).max().unwrap();
+    assert!(worst <= 1, "the alpha is what the overlay draws: off by {worst}");
+}
+
+// Given an edit that adds a stroke, the settings the editor passes in are the ones the photo holds afterwards and the History
+// step shares them: saving it copies no stroke (it used to copy every stroke of every mask twice more)
+#[test]
+fn saving_an_edit_does_not_copy_the_strokes() {
+    use lightcraft_develop::{BrushStroke, Mask, MaskComponent, MaskOp, MaskShape};
+    let mut s = crate::Session::with_demo();
+    let id = s.active().unwrap();
+    let stroke =
+        BrushStroke { points: (0..400).map(|i| lightcraft_geom::Point::new(0.1 + i as f64 * 0.001, 0.5)).collect(), ..BrushStroke::default() };
+    let mut d = (*s.develop_of(id).unwrap()).clone();
+    d.masks = vec![Mask {
+        id: 1,
+        components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Brush { strokes: vec![stroke; 30] } }],
+        ..Mask::default()
+    }];
+    let strokes_at = |d: &DevelopSettings| match &d.masks[0].components[0].shape {
+        MaskShape::Brush { strokes } => strokes.as_ptr() as usize,
+        _ => 0,
+    };
+    let passed = strokes_at(&d);
+    s.set_develop(id, d, "Brush").unwrap();
+    let held = s.develop_of(id).unwrap();
+    assert_eq!(strokes_at(&held), passed, "the strokes the editor made are the ones the photo holds");
+    let step = s.catalog.photo(id).unwrap().history.last().unwrap().settings.clone();
+    assert!(Arc::ptr_eq(&held, &step), "the History step shares them");
+}
+
+// Given a loupe job with a display fit on a machine with a GPU, the fit is made on the device before the readback, and the picture is
+// the CPU's fit of the full render within a level of rounding; where the device makes none (an overlay drawn on the CPU) the CPU fits
+#[test]
+fn the_display_fit_is_made_on_the_device_when_it_can_be() {
+    if !lightcraft_gpu::available() {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+        return;
+    }
+    let mut s = crate::Session::with_demo();
+    let id = s.active().unwrap();
+    let full = s.loupe_job(id, 1024, 1024, true).unwrap().run().rendered.unwrap().image;
+    let (fw, fh) = (full.width * 9 / 10, full.height * 9 / 10);
+    let before = lightcraft_gpu::device_fits();
+    let fitted = s.loupe_job(id, 1024, 1024, true).unwrap().with_display_fit(fw, fh).run().rendered.unwrap().image;
+    assert!(lightcraft_gpu::device_fits() > before, "the fit was not made on the device");
+    let want = fit_for_display(&full, fw, fh);
+    assert_eq!((fitted.width, fitted.height), (want.width, want.height));
+    let worst = fitted.data.iter().zip(&want.data).flat_map(|(p, q)| (0..4).map(move |c| p[c].abs_diff(q[c]))).max().unwrap();
+    assert!(worst <= 1, "the device's fit differs from the CPU's by {worst}");
+    // a diagnostic overlay is drawn on the CPU after the readback: the CPU fits, and the size is the same
+    let before = lightcraft_gpu::device_fits();
+    let spots = lightcraft_pipeline::Overlay::Spots(50);
+    let on_cpu = s.loupe_job(id, 1024, 1024, true).unwrap().with_overlay(spots).with_display_fit(fw, fh).run().rendered.unwrap().image;
+    assert_eq!(lightcraft_gpu::device_fits(), before, "an overlay render was fitted on the device");
+    assert_eq!((on_cpu.width, on_cpu.height), (want.width, want.height));
+}

@@ -7,6 +7,8 @@ use crate::brush_live::{LiveImages, target};
 use crate::render::Slot;
 use egui::Rect;
 use lightcraft_catalog::PhotoId;
+use lightcraft_develop::{DevelopSettings, LocalAdjustments};
+use std::sync::Arc;
 
 /// Changes the loupe's result key while the brush tool is open, so the render that follows keeps
 /// its pixels even when the tool was opened after the loupe was last rendered.
@@ -14,6 +16,27 @@ pub(super) const BRUSH_KEY_SALT: u64 = 0x5bd1_e995_0b4a_c7d3;
 
 /// Priority of the full-coverage render: below the loupe's own.
 const PRIORITY: u32 = 95;
+
+/// What the brush preview's settings are made from: the photo's settings (by their remembered hash), the mask and part
+/// being painted into, the mode and the adjustment a new mask would start with.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct MemoKey {
+    id: PhotoId,
+    settings: u64,
+    mask: Option<u32>,
+    part: Option<usize>,
+    erase: bool,
+    fresh: LocalAdjustments,
+}
+
+/// The settings made for a [`MemoKey`] (`None`: painting would show no adjustment) and their hash.
+pub(crate) type Memo = (MemoKey, Option<(Arc<DevelopSettings>, u64)>);
+
+/// The identity of the settings made for `key` (FNV-1a of its text: it holds the photo's remembered settings hash, the mask, the part,
+/// the mode and the adjustment, which fix the settings).
+fn key_hash(key: &MemoKey) -> u64 {
+    format!("{key:?}").bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3))
+}
 
 /// What the loupe render being asked for is.
 #[derive(Clone, Copy)]
@@ -52,8 +75,21 @@ pub(super) fn request(app: &mut LightcraftApp, ui: &egui::Ui, a: &Ask) {
     let (part, turned) = super::super::mask_parts::painting_into(app, &d);
     let erase = super::super::mask_parts::stroke_erase(app.ui.brush_erase != ui.input(|i| i.modifiers.alt), turned);
     let fresh = lightcraft_engine::cmd::mask_effects::new_mask_adjust(&app.session, "brush");
-    let Some(settings) = target::settings_in(&d, app.session.active_mask, part, erase, fresh) else { return stop(app) };
-    if let Some(job) = app.session.preview_job(id, rw.max(8), rh.max(8), with_crop, &settings) {
+    // (the same settings are made once, not on every frame: a copy of a mask with many strokes, and its hash, are slow)
+    let key = MemoKey { id, settings: app.session.settings_hash(id).unwrap_or_default(), mask: app.session.active_mask, part, erase, fresh };
+    let made = match &app.renderer.brush_settings {
+        Some((k, made)) if *k == key => made.clone(),
+        _ => {
+            // (the settings are a function of what the key holds, so their identity is a hash of it: hashing the settings
+            // themselves writes every stroke of every mask to JSON, once per committed stroke)
+            let hash = key_hash(&key);
+            let made = target::settings_in(&d, key.mask, part, erase, fresh).map(|s| (Arc::new(s), hash));
+            app.renderer.brush_settings = Some((key, made.clone()));
+            made
+        }
+    };
+    let Some((settings, hash)) = made else { return stop(app) };
+    if let Some(job) = app.session.preview_job_shared(id, rw.max(8), rh.max(8), with_crop, &settings, hash) {
         let job = job.with_display_fit(fit_px[0], fit_px[1]).with_hidden_grading(app.ui.grading_hidden_for(id));
         // the picture to blend is the one of these settings, and no other
         app.renderer.brush_target = Some(job.key);

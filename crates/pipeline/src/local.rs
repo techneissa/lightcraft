@@ -707,7 +707,8 @@ pub(crate) fn prepare(
     detail_scale: f32,
     q: Quality,
     planes: &mut Planes,
-    mattes: Option<&masks::Mattes>,
+    mattes: Option<&Arc<masks::Mattes>>,
+    alphas: (&mut masks::AlphaCache, masks::AlphaKeys),
 ) -> Prepared {
     let log_l = planes.log_l.get_or_insert_with(|| Arc::new(timed("log_l", || img.map(log_lum)))).clone();
     let PlaneSigmas {
@@ -765,7 +766,8 @@ pub(crate) fn prepare(
         None => (None, 1.0),
     };
     let ev = s.light.exposure as f32;
-    let masks = timed("masks", || masks::evaluate(&s.masks, frame, img.width, img.height, &img, &log_l, ev, mattes));
+    let (cache, keys) = alphas;
+    let masks = timed("masks", || masks::evaluate_cached(&s.masks, frame, img.width, img.height, &img, &log_l, ev, mattes, keys, cache));
     Prepared { img, log_l, base, clarity_blur, texture_blur, sharpen_blur, dark, chroma_blur, air, masks, px_per_long }
 }
 

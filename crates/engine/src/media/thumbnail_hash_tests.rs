@@ -37,7 +37,7 @@ fn persistent_keys_name_the_process_the_settings_render_with() {
     let resolved = u64::from(lightcraft_develop::Process::LATEST.version().0);
     let keys = [
         (s.thumb_job(PhotoId(1), 256).unwrap().cache.unwrap().1, None, 256),
-        (crate::Session::view_key(&p, true, 0), Some("view"), 1),
+        (crate::Session::view_key(&p, p.develop.hash64(), true, 0), Some("view"), 1),
         (crate::Session::variant_key(&p, &newer, 256, 0), Some("variant"), 256),
     ];
     for (key, kind, size) in keys {
@@ -69,7 +69,7 @@ fn v1_and_v2_photos_keep_the_render_cache_keys_they_had() {
         };
         let keys = [
             s.thumb_job(PhotoId(1), 256).unwrap().cache.unwrap().1 == before_v3(None, 256),
-            crate::Session::view_key(&p, true, 0) == before_v3(Some("view"), 1),
+            crate::Session::view_key(&p, p.develop.hash64(), true, 0) == before_v3(Some("view"), 1),
             crate::Session::variant_key(&p, &settings, 256, 0) == before_v3(Some("variant"), 256),
         ];
         let old = process <= Process::V2;
@@ -342,7 +342,12 @@ fn a_local_profile_file_decodes_and_renders_the_photo_afresh_when_it_changes() {
     let keys = |s: &mut crate::Session| {
         let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
         let job = s.thumb_job(PhotoId(1), 256).unwrap();
-        (job.key, job.cache.unwrap().1, crate::Session::variant_key(&p, &p.develop, 256, 0), crate::Session::view_key(&p, true, 0))
+        (
+            job.key,
+            job.cache.unwrap().1,
+            crate::Session::variant_key(&p, &p.develop, 256, 0),
+            crate::Session::view_key(&p, p.develop.hash64(), true, 0),
+        )
     };
     let render = |s: &mut crate::Session| {
         let r = s.render_job(PhotoId(1), 64, 64, false, true).unwrap().run();
@@ -390,7 +395,12 @@ fn macos_colour_renders_follow_the_mac_decoder_and_camera_matching_keys_stay() {
     let keys = |s: &mut crate::Session| {
         let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
         let job = s.thumb_job(PhotoId(1), 256).unwrap();
-        (job.key, job.cache.unwrap().1, crate::Session::variant_key(&p, &p.develop, 256, 0), crate::Session::view_key(&p, true, 0))
+        (
+            job.key,
+            job.cache.unwrap().1,
+            crate::Session::variant_key(&p, &p.develop, 256, 0),
+            crate::Session::view_key(&p, p.develop.hash64(), true, 0),
+        )
     };
     // Camera Matching: the same keys whatever the decoder's key, equal to the formula from before
     set_key(11);
@@ -422,4 +432,48 @@ fn macos_colour_renders_follow_the_mac_decoder_and_camera_matching_keys_stay() {
     let p = s.catalog.photo(PhotoId(1)).unwrap().clone();
     assert_eq!(LoadOptions::of(&p.develop).profile_key, Some(22));
     crate::files::MACOS_KEY_FOR_TESTS.with(|c| c.set(None));
+}
+/// The loupe asks for its render job, its stand-in key and the settings hash on every frame: the settings are hashed once,
+/// when an edit makes them new, not once per frame (each hash writes every stroke of every mask to JSON).
+#[test]
+fn a_frame_of_loupe_keys_hashes_the_settings_once_per_edit() {
+    let mut s = session();
+    let id = PhotoId(1);
+    let frame = |s: &mut crate::Session| {
+        s.loupe_job(id, 256, 256, true).unwrap();
+        s.quick_view_key(id, true, false).unwrap();
+        s.quick_view_job(id, 256, true, false).unwrap();
+        s.settings_hash(id).unwrap();
+    };
+    let start = lightcraft_develop::hash64_calls();
+    for _ in 0..5 {
+        frame(&mut s);
+    }
+    assert_eq!(s.media.settings_hashes.computations, 1);
+    assert_eq!(lightcraft_develop::hash64_calls() - start, 1, "five frames of loupe keys hashed the settings more than once");
+    let mut edit = DevelopSettings::default();
+    edit.light.exposure = 1.0;
+    s.catalog.apply(Op::SetDevelop { id, settings: Arc::new(edit), label: "edit".into(), edited: None }).unwrap();
+    for _ in 0..5 {
+        frame(&mut s);
+    }
+    assert_eq!(s.media.settings_hashes.computations, 2);
+    assert_eq!(lightcraft_develop::hash64_calls() - start, 2);
+}
+
+/// A preview of settings the caller keeps (the brush tool's, asked for on every frame) costs no hash or copy of its own, and
+/// renders under the key the plain preview job gives them.
+#[test]
+fn a_shared_preview_job_keeps_the_key_of_the_plain_one() {
+    let mut s = session();
+    let mut settings = DevelopSettings::default();
+    settings.light.exposure = 0.5;
+    let plain = s.preview_job(PhotoId(1), 256, 256, true, &settings).unwrap();
+    let shared = Arc::new(settings.clone());
+    let before = s.media.settings_hashes.computations;
+    let kept = s.preview_job_shared(PhotoId(1), 256, 256, true, &shared, settings.hash64()).unwrap();
+    assert_eq!(kept.key, plain.key);
+    assert!(Arc::ptr_eq(&kept.settings, &shared), "the job renders the caller's own settings, not a copy");
+    // (only the photo's own settings, for the job's other keys: the preview's are not hashed again)
+    assert!(s.media.settings_hashes.computations <= before + 1);
 }

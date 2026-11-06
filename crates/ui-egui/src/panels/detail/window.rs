@@ -19,6 +19,8 @@ pub(crate) fn overlay_supports_window(overlay: lightcraft_pipeline::Overlay) -> 
 pub(super) struct WindowCtx {
     pub(super) id: PhotoId,
     pub(super) overlay: lightcraft_pipeline::Overlay,
+    /// The tint drawn over the After window ([`crate::mask_tint`]).
+    pub(super) tint: Option<crate::mask_tint::TintSel>,
     /// Long edge of the frame the windows are cut from (`None`: no windows).
     pub(super) frame_edge: Option<usize>,
     pub(super) drawn_long: f32,
@@ -99,11 +101,22 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
     // The overlay and the proof are part of the tile's identity too, so changing mask view/colour
     // or the proof never leaves a stale region tile on screen while its replacement renders.
     let proof_key = if v.before { 0 } else { proof.map_or(0, |p| p.key()) };
-    let look = job.settings.hash64() ^ overlay.key().rotate_left(17) ^ proof_key.rotate_left(41);
+    // (the photo's remembered hash, with the wheels hidden for viewing: hashing the settings every frame writes every
+    // stroke of every mask to JSON. The Before side renders other settings, hashed here: it is only on screen on request)
+    let hidden = app.ui.grading_hidden_for(c.id);
+    let settings = if v.before {
+        job.settings.hash64()
+    } else {
+        c.look ^ hidden.iter().enumerate().fold(0u64, |b, (i, h)| b | ((*h as u64) << i)).wrapping_mul(0xd6e8_feb8_6659_fd93)
+    };
+    let look = settings ^ overlay.key().rotate_left(17) ^ proof_key.rotate_left(41);
     let view = crate::region::RegionView { photo: c.id, before: v.before, key: job.key, full: (fw, fh), window: win, settings: look };
     // windows of other photos, looks and zooms of this side can't be drawn any more
     app.region_tiles.retain(|(before, _), t| *before != v.before || t.is_current(c.id, (fw, fh), look, c.interacting));
     app.region_tiles.insert((v.before, job.key), view);
+    if !v.before {
+        super::request_planes(app, (Slot::RegionAlpha, Slot::Region), &job, c.tint);
+    }
     app.renderer.request(v.slot, job, 99);
     Some(view)
 }
@@ -119,4 +132,13 @@ pub(super) fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx,
     let at = v.img.min + vec2(tile.window.x as f32 / fw * v.img.width(), tile.window.y as f32 / fh * v.img.height());
     let dst = Rect::from_min_size(at, vec2(tile.window.w as f32 / fw * v.img.width(), tile.window.h as f32 / fh * v.img.height()));
     p.image(tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    // the mask overlay over the window, from the masks this window's render came with
+    if app.renderer.tints.drawn(v.slot, c.id, tex.key) {
+        app.renderer.tints.paint(p, v.slot, c.id, tex.key, dst);
+    } else if !v.before
+        && let Some(main) = app.renderer.textures.get(&Slot::Main).filter(|t| t.photo == c.id)
+    {
+        // (until the window's own planes come: the whole frame's, magnified, over the part of it the window covers)
+        app.renderer.tints.paint(&p.with_clip_rect(dst.intersect(p.clip_rect())), Slot::Main, c.id, main.key, v.img);
+    }
 }

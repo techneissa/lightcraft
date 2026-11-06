@@ -37,15 +37,16 @@ mod ctx;
 mod exit;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod faces;
+#[cfg(not(target_arch = "wasm32"))]
+mod masks;
 #[cfg(all(feature = "denoise", not(target_arch = "wasm32")))]
 pub mod nn;
-#[cfg(not(target_arch = "wasm32"))]
 mod params;
 #[cfg(not(target_arch = "wasm32"))]
 mod render;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use render::{DisplayFrame, GpuStages, Output};
+pub use render::{DisplayFrame, GpuStages, Output, device_fits};
 /// The wgpu the renderer is built on (the same crate eframe uses: hosts hand over its device).
 #[cfg(not(target_arch = "wasm32"))]
 pub use wgpu;
@@ -407,7 +408,7 @@ pub fn adapter_name() -> Option<String> {
 
 /// Device buffers held by the renderer.
 #[cfg(not(target_arch = "wasm32"))]
-pub use ctx::GpuMemory;
+pub use ctx::{GpuMemory, readbacks};
 
 /// Device buffers held by the renderer.
 #[cfg(target_arch = "wasm32")]
@@ -521,10 +522,10 @@ pub fn try_render(
 ) -> Result<Rendered, Fallback> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        match run(src, info, s, req, stages, false)? {
+        match run(src, info, s, req, stages, render::Want::Image)? {
             render::Output::Image(r) => Ok(r),
             // (not asked for)
-            render::Output::Display { .. } => Err(Fallback::NotTried),
+            render::Output::Display { .. } | render::Output::Masks(_) | render::Output::ImageFit(..) => Err(Fallback::NotTried),
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -534,12 +535,57 @@ pub fn try_render(
     }
 }
 
+/// [`try_render`], also giving the picture shrunk to fit `fit` (long edge and short edge: `(max_w, max_h)`, aspect kept) with a
+/// Lanczos filter on the device before it is read back, as the CPU's `fit_for_display` does (within a level of rounding). `None` in
+/// the second place: the picture already fits, a diagnostic overlay is drawn on it, the render is a window, or the device cannot hold it:
+/// fit it on the CPU.
+pub fn try_render_fit(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+    fit: (usize, usize),
+) -> Result<(Rendered, Option<lightcraft_raster::Rgba8>), Fallback> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        match run(src, info, s, req, stages, render::Want::ImageFit(fit))? {
+            render::Output::Image(r) => Ok((r, None)),
+            render::Output::ImageFit(r, f) => Ok((r, f)),
+            render::Output::Display { .. } | render::Output::Masks(_) => Err(Fallback::NotTried),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (src, info, s, req, stages, fit);
+        Err(Fallback::NotTried)
+    }
+}
+
 /// [`render`] for the window: when the device is the window's ([`adopt_window_device`]) and the
 /// render allows it, the result stays on the device as a texture to draw ([`Output::Display`]);
 /// otherwise pixels as from [`render`]. `None`: render on the CPU instead.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn render_display(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>) -> Option<Output> {
-    run(src, info, s, req, stages, true).ok()
+    run(src, info, s, req, stages, render::Want::Display).ok()
+}
+
+/// The planes `ask` names, as [`render`] would evaluate the masks for `req` (each with its Amount applied), without finishing the
+/// photo: `lightcraft_pipeline::mask_planes` on the device. Reuses the device alphas kept with `stages`, reads back only the
+/// wanted planes and none the asker holds. `None`: the GPU did not render it (use the CPU's).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn mask_planes(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+    ask: &lightcraft_pipeline::masks::PlanesAsk,
+) -> Option<lightcraft_pipeline::masks::PlanesOut> {
+    match run(src, info, s, req, stages, render::Want::MaskPlanes(ask)).ok()? {
+        Output::Masks(planes) => Some(planes),
+        _ => None,
+    }
 }
 
 /// Whether renders run on the window's device (and so can be handed over as textures).
@@ -626,7 +672,7 @@ fn run(
     s: &DevelopSettings,
     req: &RenderRequest,
     stages: Option<&StageCache>,
-    display: bool,
+    want: render::Want<'_>,
 ) -> Result<Output, Fallback> {
     {
         // sections switched off with their eye render as if at their defaults (issue #316)
@@ -652,7 +698,7 @@ fn run(
         let (r, scoped) = {
             let _scope = ctx::RenderScope::new(gpu);
             let errors = ctx::ErrorScopes::push(gpu);
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault, display)));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault, want)));
             (r, errors.pop())
         };
         // An error the device raised explains the readback failures that follow it; a buffer
@@ -675,6 +721,8 @@ fn run(
                 let what = match &r {
                     Some(Output::Image(r)) => format!("{}×{}", r.image.width, r.image.height),
                     Some(Output::Display { frame, .. }) => format!("{}×{}", frame.width, frame.height),
+                    Some(Output::Masks(_)) => "mask planes".into(),
+                    Some(Output::ImageFit(r, _)) => format!("{}×{}", r.image.width, r.image.height),
                     None => "GPU render".into(),
                 };
                 let reason = match f.kind {
