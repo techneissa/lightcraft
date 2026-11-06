@@ -3,8 +3,9 @@
 //! (`N=3` runs per row, minimum wall-clock; `STROKES=1,30,300` stroke counts; `SIZE=2560` source
 //! long edge; `ONLY=<word>` keeps the rows whose name has the word: `drag`, `new stroke`,
 //! `overlay`, `hash`; `CONFIG=<word>` keeps the configurations whose name has the word: `one`,
-//! `submasks`, `dense`, `pressure`, `auto`; `ALL=1` runs Auto Mask at every stroke count, which
-//! is slow on the CPU).
+//! `submasks`, `long`, `dense`, `pressure`, `auto`, `cpumask`; `ALL=1` runs Auto Mask at every
+//! stroke count, which is slow on the CPU; `LOUPE=3500x2200` the loupe's render size for the
+//! `loupe` rows; `SIZE=6000` is a 24 MP source).
 //!
 //! Every row is one render of a ~2.5 MP loupe (1920 × 1280) with a warm stage cache, as the loupe
 //! does while editing:
@@ -14,16 +15,24 @@
 //!   A cost that grows with N is the full re-rasterization of the brush part.
 //! - `overlay`: the mask overlay switched on and off again, one render per flip.
 //! - `hash`: the settings hash64 and clone the loupe took every frame (UI thread, CPU only).
+//! - `loupe ...`: the same renders through a whole `RenderJob`, as the loupe's worker runs them at
+//!   rest (`loupe settle`, `loupe commit`, `loupe overlay`, `loupe brush target`): `Quality::Full`,
+//!   the view cache, the display fit and the pixels read back, plus the job step by step
+//!   (`loupe steps`) and masks that run on the CPU inside a render (`cpumask`: Subject, Object,
+//!   Sky, Refine Edges, Color Range).
 //! - `effect`: one effect-slider tick (a mask's Exposure, and the Amount slider) with `MASKS=6`
 //!   overlapping masks, every mask on one small spot and then the same masks over the whole frame
 //!   (radial gradients, and small brush blobs against whole-frame linear gradients). The cost of
 //!   the small spot should be a fraction of the full-frame one.
 //!
 //! Configurations: `one brush part` (N strokes in one component), `submasks` (the same strokes
-//! plus a second brush part and a gradient intersect), `dense` (a stroke of ~10,000 dabs, past
+//! plus a second brush part and a gradient intersect), `long strokes` (400 samples each, as a
+//! mouse drag records them; mostly for the `hash` row), `dense` (a stroke of ~10,000 dabs, past
 //! the GPU kernel's 4,096), `pressure` (pen pressure on every stroke) and `auto` (Auto Mask
 //! strokes).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+mod loupe;
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -49,6 +58,8 @@ impl Rng {
 enum Kind {
     Normal,
     Dense,
+    /// A stroke recorded sample by sample: hundreds of points.
+    Long,
     Pressure,
     Auto,
 }
@@ -58,6 +69,7 @@ enum Kind {
 fn stroke(rng: &mut Rng, kind: Kind, erase: bool) -> BrushStroke {
     let (points, step, size) = match kind {
         Kind::Dense => (240, 0.004, 0.004),
+        Kind::Long => (400, 0.001, 0.03),
         _ => (12, 0.035, 0.03),
     };
     let mut p = Point::new(0.1 + 0.8 * rng.next(), 0.1 + 0.8 * rng.next());
@@ -157,9 +169,18 @@ fn main() {
         ms.iter().zip(backends).map(|(m, g)| format!("{}: {m:8.1} ms", if *g { "gpu" } else { "cpu" })).collect::<Vec<_>>().join("  |  ")
     };
 
-    let configs: [(&str, Kind, bool, &[usize]); 5] = [
+    let source = preview.clone();
+    let loupe = loupe::Loupe::new(&source, &info);
+    let out = loupe::Out { n, backends, run_row: &run, columns: &columns };
+    println!(
+        "loupe {}",
+        loupe.as_ref().map_or("job unavailable".to_string(), |l| format!("{}×{}, drawn {}×{}", l.size[0], l.size[1], l.fit[0], l.fit[1]))
+    );
+
+    let configs: [(&str, Kind, bool, &[usize]); 6] = [
         ("one brush part", Kind::Normal, false, &counts),
         ("submasks", Kind::Normal, true, &counts),
+        ("long strokes (400 samples)", Kind::Long, false, &counts),
         ("dense (past 4,096 dabs)", Kind::Dense, false, &[1, 3]),
         ("pen pressure", Kind::Pressure, false, &counts),
         ("auto mask", Kind::Auto, false, &counts),
@@ -233,6 +254,9 @@ fn main() {
                     .collect();
                 println!("{count:>4} strokes  overlay flip {}", columns(&ms));
             }
+            if let Some(loupe) = &loupe {
+                loupe::count_rows(loupe, &out, &base, &extra, count);
+            }
             if run("hash") {
                 // the per-frame cost on the UI thread: clone the settings, hash them (CPU only)
                 let hash = best(n * 5, || {
@@ -241,6 +265,15 @@ fn main() {
                 let clone = best(n * 5, || drop(std::hint::black_box(base.clone())));
                 println!("{count:>4} strokes  per-frame hash64 {hash:8.3} ms, clone {clone:8.3} ms");
             }
+        }
+    }
+    if let Some(loupe) = &loupe {
+        if run("loupe steps") {
+            let mut rng = Rng(42);
+            loupe::pieces(loupe, &out, &settings(strokes(&mut rng, Kind::Normal, 30), false));
+        }
+        if run("cpumask") && want_config("cpumask") {
+            loupe::cpu_mask_rows(loupe, &out);
         }
     }
     if run("effect") && want_config("effect") {
