@@ -67,6 +67,11 @@ pub enum Slot {
     /// The brush tool's live preview: the photo with the active mask's brush covering everything
     /// (or nothing, erasing), drawn under the stroke being painted ([`crate::brush_live`]).
     BrushFull,
+    /// The planes of the masks a tint over [`Slot::Main`] is drawn from (no texture: [`crate::mask_tint`]); it shares
+    /// `Main`'s stage caches, which hold the alphas the photo's render made.
+    Alpha,
+    /// The same for [`Slot::Region`].
+    RegionAlpha,
 }
 
 /// Settings that can change the rendered frame. Colour-only edits, including temporarily
@@ -771,7 +776,13 @@ impl Renderer {
             Requested { look: Some((geometry_look(&job.settings), job.request.apply_crop)), id: job.request_id, source: Some(job.origin.clone()) },
         );
         // (an offload keeps its own per-view stage caches; the flag tells it to)
-        let job = if slot.is_view() { job.with_stages(self.stages.entry(slot).or_default().clone()) } else { job };
+        // (a job for the masks' planes works from the alphas of the render it goes beside)
+        let stages_of = match slot {
+            Slot::Alpha => Slot::Main,
+            Slot::RegionAlpha => Slot::Region,
+            other => other,
+        };
+        let job = if slot.is_view() || stages_of != slot { job.with_stages(self.stages.entry(stages_of).or_default().clone()) } else { job };
         if self.offload.is_some() {
             self.seq += 1;
             self.queue.retain(|q| q.slot != slot);
@@ -1347,10 +1358,6 @@ impl Renderer {
             if self.pending.get(&slot).is_some_and(|p| p.0 == r.key) {
                 self.pending.remove(&slot);
             }
-            // (the masks come with the render they were evaluated for)
-            if r.rendered.is_ok() {
-                self.tints.note(slot, r.key, r.mask_planes.clone());
-            }
             // a render that stayed on the GPU: drawn from its texture
             if let Some(shown) = self.show_gpu_render(ctx, slot, &r, look, ms) {
                 changed |= shown;
@@ -1387,6 +1394,16 @@ impl Renderer {
                 }
             };
             if matches!(slot, Slot::Prefetch(_)) {
+                continue;
+            }
+            // the planes a tint is drawn from: no texture
+            if let Some(shown) = match slot {
+                Slot::Alpha => Some(Slot::Main),
+                Slot::RegionAlpha => Some(Slot::Region),
+                _ => None,
+            } {
+                self.tints.note(shown, r.key, r.mask_planes.clone());
+                changed = true;
                 continue;
             }
             if slot == Slot::HdrHistogram {

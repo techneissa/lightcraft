@@ -19,8 +19,8 @@ pub(crate) fn overlay_supports_window(overlay: lightcraft_pipeline::Overlay) -> 
 pub(super) struct WindowCtx {
     pub(super) id: PhotoId,
     pub(super) overlay: lightcraft_pipeline::Overlay,
-    /// The After window's render carries the masks' alphas ([`crate::mask_tint`]).
-    pub(super) planes: bool,
+    /// The tint drawn over the After window ([`crate::mask_tint`]).
+    pub(super) tint: Option<crate::mask_tint::TintSel>,
     /// Long edge of the frame the windows are cut from (`None`: no windows).
     pub(super) frame_edge: Option<usize>,
     pub(super) drawn_long: f32,
@@ -96,7 +96,6 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
     // never proofed (its whole-frame render isn't either)
     let proof = app.ui.soft_proof.then_some(app.ui.proof);
     let job = job.with_overlay(overlay).with_proof(if v.before { None } else { proof });
-    let job = if c.planes && !v.before { job.with_mask_planes() } else { job };
     // keyed as the renderer keys the texture (a display profile changes the key)
     let job = app.renderer.job_for(v.slot, job);
     // The overlay and the proof are part of the tile's identity too, so changing mask view/colour
@@ -115,6 +114,9 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
     // windows of other photos, looks and zooms of this side can't be drawn any more
     app.region_tiles.retain(|(before, _), t| *before != v.before || t.is_current(c.id, (fw, fh), look, c.interacting));
     app.region_tiles.insert((v.before, job.key), view);
+    if !v.before {
+        super::request_planes(app, (Slot::RegionAlpha, Slot::Region), &job, c.tint);
+    }
     app.renderer.request(v.slot, job, 99);
     Some(view)
 }
@@ -131,5 +133,12 @@ pub(super) fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx,
     let dst = Rect::from_min_size(at, vec2(tile.window.w as f32 / fw * v.img.width(), tile.window.h as f32 / fh * v.img.height()));
     p.image(tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     // the mask overlay over the window, from the masks this window's render came with
-    app.renderer.tints.paint(p, v.slot, tex.key, dst);
+    if app.renderer.tints.drawn(v.slot, c.id, tex.key) {
+        app.renderer.tints.paint(p, v.slot, c.id, tex.key, dst);
+    } else if !v.before
+        && let Some(main) = app.renderer.textures.get(&Slot::Main).filter(|t| t.photo == c.id)
+    {
+        // (until the window's own planes come: the whole frame's, magnified, over the part of it the window covers)
+        app.renderer.tints.paint(&p.with_clip_rect(dst.intersect(p.clip_rect())), Slot::Main, c.id, main.key, v.img);
+    }
 }

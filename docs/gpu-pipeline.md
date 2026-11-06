@@ -489,15 +489,16 @@ stay on the device.
 
 ### The overlay's alphas (issue #75)
 
-The loupe draws a mask overlay over the plain photo, so the photo's render comes with the masks' alphas
-instead of the tint (`RenderJob::with_mask_planes`; the Masking panel asks for it whether the overlay is
-shown or not). `lightcraft_gpu::mask_planes` (`Want::MaskPlanes` in `render.rs`) stops after `masks()`,
-reads the stack of planes back once, applies each mask's Amount and cuts the window; it runs right after
-the photo's render, so it copies the alphas that render kept and evaluates no mask. The CPU's twin is
-`lightcraft_pipeline::mask_planes`. The UI makes one premultiplied tint texture from the selected plane (or
-the union of all) per view and colour, and draws it with the opacity as the draw's tint
-(`crates/ui-egui/src/mask_tint.rs`). With a display profile, and in the browser build, the overlay is still
-drawn into the render.
+The loupe draws a mask overlay over the plain photo. While a tint is shown, a job beside the photo's render
+(`RenderJob::for_mask_planes`, `Slot::Alpha` / `Slot::RegionAlpha`) answers with the selected mask's plane, or every visible
+mask's for Show All Masks. `lightcraft_gpu::mask_planes` (`Want::MaskPlanes` in `render.rs`) stops after `masks()`: it copies the
+alphas the photo's render kept (no mask is evaluated), signs the planes (`masks::planes_signature`: each mask's alpha key and
+Amount, the size, the window, the source), and reads back only the wanted planes, one at a time, applying the Amount and cutting
+the window. The asker sends the signature of the planes it holds, and gets none while it is unchanged: an effect slider, a drag,
+or hiding and showing the overlay make no plane. With the overlay off nothing is asked. The CPU's twin is
+`lightcraft_pipeline::mask_planes`. The UI makes one premultiplied tint texture from the plane per view and colour, and draws it
+with the opacity as the draw's tint (`crates/ui-egui/src/mask_tint.rs`). With a display profile, and in the browser build, the
+overlay is still drawn into the render.
 
 A mask without a kernel (Subject, Object, Sky and Background selections, Color Range's heuristics) is evaluated on the CPU
 from the image read back once; its alpha is then kept with the view's stages like any other, so the effect ticks that follow

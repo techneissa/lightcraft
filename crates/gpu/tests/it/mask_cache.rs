@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use lightcraft_develop::{BrushStroke, DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
 use lightcraft_geom::Point;
-use lightcraft_pipeline::masks::{mask_evaluations, strokes_rasterized};
+use lightcraft_pipeline::masks::{MaskWant, PlanesAsk, mask_evaluations, strokes_rasterized};
 use lightcraft_pipeline::{RenderRequest, SourceInfo, StageCache, render};
 use lightcraft_raster::{Rgb32f, Rgba8};
 
@@ -290,9 +290,13 @@ fn the_device_gives_the_masks_alphas_the_cpu_does() {
         // the photo's render first, as the loupe does: it keeps the alphas the planes are read from
         lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu");
         let before = mask_evaluations();
-        let gpu_planes = lightcraft_gpu::mask_planes(&src, &info, &s, &req, Some(&cache)).expect("gpu planes");
+        let all = PlanesAsk { want: MaskWant::All, known: None };
+        let out = lightcraft_gpu::mask_planes(&src, &info, &s, &req, Some(&cache), &all).expect("gpu planes");
+        let gpu_planes = out.planes.expect("planes");
         assert_eq!(mask_evaluations() - before, 0, "{name}: the planes evaluated a mask again");
-        let cpu_planes = lightcraft_pipeline::mask_planes(&src, &info, &s, &req, None);
+        let cpu = lightcraft_pipeline::mask_planes(&src, &info, &s, &req, None, &all);
+        assert_eq!(cpu.signature, out.signature, "{name}: both renderers sign the planes alike");
+        let cpu_planes = cpu.planes.expect("planes");
         let ids = |p: &[(u32, lightcraft_raster::Plane)]| p.iter().map(|(id, _)| *id).collect::<Vec<_>>();
         assert_eq!(ids(&gpu_planes), vec![3, 9], "{name}: the visible masks, in order");
         assert_eq!(ids(&gpu_planes), ids(&cpu_planes));
@@ -305,6 +309,18 @@ fn the_device_gives_the_masks_alphas_the_cpu_does() {
         if name == "window" {
             assert_eq!((gpu_planes[0].1.width, gpu_planes[0].1.height), (window.w, window.h), "cut to the window");
         }
+        // one mask reads back one plane; planes the asker holds read back nothing
+        let (_, b0) = lightcraft_gpu::readbacks();
+        let one = PlanesAsk { want: MaskWant::One(9), known: None };
+        let got = lightcraft_gpu::mask_planes(&src, &info, &s, &req, Some(&cache), &one).expect("one");
+        let (_, b1) = lightcraft_gpu::readbacks();
+        let n = (gpu_planes[0].1.width * gpu_planes[0].1.height) as u64;
+        assert_eq!(b1 - b0, n * 4, "{name}: one mask's plane is read back, not the stack");
+        assert_eq!(got.planes.expect("planes").len(), 1);
+        let held = PlanesAsk { want: MaskWant::One(9), known: Some(got.signature) };
+        let again = lightcraft_gpu::mask_planes(&src, &info, &s, &req, Some(&cache), &held).expect("held");
+        assert!(again.planes.is_none() && again.signature == got.signature, "{name}: held planes are not made again");
+        assert_eq!(lightcraft_gpu::readbacks().1, b1, "{name}: and nothing is read back for them");
         // the Amount scales the plane (60 % at most)
         let top = gpu_planes[0].1.data.iter().copied().fold(0.0f32, f32::max);
         assert!(top <= 0.6 + 1e-3, "{name}: the Amount applies: {top}");
@@ -395,8 +411,9 @@ fn kept_alphas_never_outlive_their_source() {
             let (mean, max) = diff(&warm, &fresh);
             assert!(max == 0, "{name} on {label}: the kept alpha of the earlier picture shows (mean {mean:.4}, max {max})");
             // and the planes the loupe tints
-            let planes = lightcraft_gpu::mask_planes(next, &info, s, &req, Some(&cache)).expect("planes");
-            let fresh = lightcraft_gpu::mask_planes(next, &info, s, &req, None).expect("planes");
+            let ask = PlanesAsk { want: MaskWant::All, known: None };
+            let planes = lightcraft_gpu::mask_planes(next, &info, s, &req, Some(&cache), &ask).expect("planes").planes.expect("planes");
+            let fresh = lightcraft_gpu::mask_planes(next, &info, s, &req, None, &ask).expect("planes").planes.expect("planes");
             assert_eq!(planes[0].1, fresh[0].1, "{name} on {label}: the planes are the earlier picture's");
         }
     }

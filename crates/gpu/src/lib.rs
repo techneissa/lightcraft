@@ -543,9 +543,9 @@ pub fn render_display(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings,
     run(src, info, s, req, stages, render::Want::Display).ok()
 }
 
-/// The alpha of every visible mask that has components, as [`render`] would evaluate it for `req` (each with its Amount
-/// applied), without finishing the photo: `lightcraft_pipeline::mask_planes` on the device. Reuses the device alphas kept
-/// with `stages`. `None`: the GPU did not render it (use the CPU's).
+/// The planes `ask` names, as [`render`] would evaluate the masks for `req` (each with its Amount applied), without finishing the
+/// photo: `lightcraft_pipeline::mask_planes` on the device. Reuses the device alphas kept with `stages`, reads back only the
+/// wanted planes and none the asker holds. `None`: the GPU did not render it (use the CPU's).
 #[cfg(not(target_arch = "wasm32"))]
 pub fn mask_planes(
     src: &Arc<Rgb32f>,
@@ -553,8 +553,9 @@ pub fn mask_planes(
     s: &DevelopSettings,
     req: &RenderRequest,
     stages: Option<&StageCache>,
-) -> Option<Vec<(u32, lightcraft_raster::Plane)>> {
-    match run(src, info, s, req, stages, render::Want::MaskPlanes).ok()? {
+    ask: &lightcraft_pipeline::masks::PlanesAsk,
+) -> Option<lightcraft_pipeline::masks::PlanesOut> {
+    match run(src, info, s, req, stages, render::Want::MaskPlanes(ask)).ok()? {
         Output::Masks(planes) => Some(planes),
         _ => None,
     }
@@ -644,7 +645,7 @@ fn run(
     s: &DevelopSettings,
     req: &RenderRequest,
     stages: Option<&StageCache>,
-    want: render::Want,
+    want: render::Want<'_>,
 ) -> Result<Output, Fallback> {
     {
         // sections switched off with their eye render as if at their defaults (issue #316)

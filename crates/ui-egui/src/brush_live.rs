@@ -293,14 +293,15 @@ pub struct Look<'a> {
 #[derive(Clone, Copy)]
 pub struct TintOver<'a> {
     pub tints: &'a crate::mask_tint::MaskTints,
-    /// The key of the loupe render the tint belongs to.
+    /// The photo and the key of the loupe render the tint belongs to.
+    pub photo: lightcraft_catalog::PhotoId,
     pub key: u64,
     pub rect: Rect,
 }
 
 impl TintOver<'_> {
     fn paint(&self, painter: &egui::Painter) {
-        self.tints.paint(painter, crate::render::Slot::Main, self.key, self.rect);
+        self.tints.paint(painter, crate::render::Slot::Main, self.photo, self.key, self.rect);
     }
 }
 
@@ -437,7 +438,7 @@ pub fn paint_held(
     img_rect: Rect,
     main_key: Option<u64>,
     now: f64,
-    tints: &crate::mask_tint::MaskTints,
+    (tints, photo): (&crate::mask_tint::MaskTints, lightcraft_catalog::PhotoId),
 ) -> bool {
     let Some(s) = slot else { return false };
     let Some((key, since)) = s.held else { return false };
@@ -445,7 +446,7 @@ pub fn paint_held(
         *slot = None;
         return false;
     }
-    TintOver { tints, key, rect: img_rect }.paint(painter);
+    TintOver { tints, photo, key, rect: img_rect }.paint(painter);
     true
 }
 

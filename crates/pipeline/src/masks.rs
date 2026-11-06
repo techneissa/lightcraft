@@ -16,11 +16,13 @@ use crate::geometry::Frame;
 
 mod alpha;
 mod brush;
+mod planes;
 
 pub use alpha::note_evaluation;
 pub use alpha::{AlphaCache, AlphaKeys, MaskAlpha, alpha_key, mask_evaluations, reads};
 use alpha::{map_rows, zip_rows};
 pub use brush::{BRUSH_ENTRIES, BrushCache, BrushCtx, brush_base, brush_chain, note_stroke, strokes_rasterized};
+pub use planes::{MaskWant, PlanesAsk, PlanesOut, planes_signature, wanted};
 
 /// What an embedded segmentation matte selects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

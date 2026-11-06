@@ -191,8 +191,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let overlay = view_overlay(app, d, ui.ctx().cumulative_frame_nr());
     let tint = mask_tint(app, d, ui.ctx().cumulative_frame_nr(), overlay);
     // (the zoom window's grey for Color Overlay on B&W is made from its pixels)
-    app.renderer.tints.keep_region = tint.planes;
-    if !tint.planes {
+    app.renderer.tints.keep_region = tint.sel.is_some_and(|s| s.view == lightcraft_pipeline::MaskView::ColorOnBw);
+    if !tint.open {
         app.renderer.tints.clear();
     }
     // a drag drafts at full size where the GPU draws the view (by the GPU's own rule, `handles`;
@@ -246,7 +246,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // hover and before renders are stand-ins: the preview size is plenty and keeps them cheap
     let se = app.ui.settings.stand_in_edge(want, texture_side);
     let (sw, sh) = if aspect >= 1.0 { (se, short(se, aspect)) } else { (short(se, 1.0 / aspect), se) };
-    let ask = LoupeAsk { id, with_crop: !crop_tool, interacting, fit_px, overlay, planes: tint.planes };
+    let ask = LoupeAsk { id, with_crop: !crop_tool, interacting, fit_px, overlay, tint: tint.sel };
     app.renderer.loupe_drawn();
     request_main(app, ui, &ask, [rw, rh], plan.window_edge.is_none());
     let plain = overlay == lightcraft_pipeline::Overlay::None;
@@ -271,7 +271,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let window_ctx = WindowCtx {
         id,
         overlay,
-        planes: tint.planes,
+        tint: tint.sel,
         frame_edge: plan.window_edge.filter(|_| windowable_view),
         drawn_long,
         aspect,
@@ -864,8 +864,8 @@ fn whole_frame_edge(app: &LightcraftApp, interacting: bool, plan: &crate::region
 
 /// What a loupe render request is for.
 struct LoupeAsk {
-    /// The renders carry the masks' alphas ([`MaskTintAsk::planes`]).
-    planes: bool,
+    /// The tint drawn over the render ([`MaskTintAsk::sel`]): its planes are asked for beside it.
+    tint: Option<crate::mask_tint::TintSel>,
     id: PhotoId,
     with_crop: bool,
     interacting: bool,
@@ -883,11 +883,11 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
         // sampling (the render is up to a 64 px step larger, or the preview level)
         let job = if interacting { job } else { job.with_display_fit(fit_px[0], fit_px[1]) };
         let job = job.with_overlay(overlay).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
-        let job = if a.planes { job.with_mask_planes() } else { job };
         let mut job = job.with_hidden_grading(app.ui.grading_hidden_for(id));
         if app.renderer.keep_brush_pixels {
             job.key ^= brush_preview::BRUSH_KEY_SALT;
         }
+        request_planes(app, (Slot::Alpha, Slot::Main), &job, a.tint);
         app.renderer.request(Slot::Main, job, 100);
         // a drag's draft that renders in a few ms (GPU) is drawn in this frame, not the next (zoomed
         // in, what changes on screen is the window's draft)
@@ -899,6 +899,23 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
             app.renderer.wait_for_draft(ui.ctx(), &mut app.session, budget);
         }
     }
+}
+
+/// Ask for the planes of the mask `tint` draws, beside the render `job` of `shown` (`slots`: where the ask goes, and the slot of
+/// the render): a job that stops before the photo is finished and reads nothing back while the planes held are still the right
+/// ones. Nothing is asked while the tint is hidden or a slider is dragged (the masks do not change under it; the tint is made
+/// again when it stops).
+pub(super) fn request_planes(
+    app: &mut LightcraftApp,
+    (ask_slot, shown): (Slot, Slot),
+    job: &lightcraft_engine::RenderJob,
+    tint: Option<crate::mask_tint::TintSel>,
+) {
+    let Some(tint) = tint.filter(|_| app.ui.dragging_control.is_none()) else { return };
+    let Some(ask) = app.renderer.tints.ask(shown, job.photo, job.key, tint.pick) else { return };
+    let alpha = job.clone().for_mask_planes(ask);
+    app.renderer.tints.asked(shown, job.photo, job.key, tint.pick, alpha.key);
+    app.renderer.request(ask_slot, alpha, 99);
 }
 
 /// Hovering a preset or profile: the photo with that look, shown instead of the loupe render once
@@ -972,7 +989,7 @@ fn draw_slot(app: &LightcraftApp, p: &egui::Painter, (id, with_crop): (PhotoId, 
     p.with_clip_rect(clip).image(tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
     // (only over the loupe's own render of the photo: never a stand-in, which has no masks)
     if slot == Slot::Main && what == "render" {
-        app.renderer.tints.paint(&p.with_clip_rect(clip), Slot::Main, tex.key, image_rect);
+        app.renderer.tints.paint(&p.with_clip_rect(clip), Slot::Main, tex.photo, tex.key, image_rect);
     }
     what
 }
@@ -1108,27 +1125,25 @@ fn tint_outside_render(app: &LightcraftApp) -> bool {
 
 /// What the loupe asks of the masks for the view it paints this frame.
 pub(crate) struct MaskTintAsk {
-    /// The renders carry the masks' alphas (the Masking panel is open and a mask has something to show), whether the overlay
-    /// is shown or not: showing it later asks for no render.
-    pub planes: bool,
-    /// The tint to draw now (`None`: no overlay).
+    /// The Masking panel is open and a mask has something to show: what the tint holds is kept for showing it again.
+    pub open: bool,
+    /// The tint to draw now (`None`: no overlay): the planes it is made from are asked for beside the photo's render, and
+    /// only while it is shown.
     pub sel: Option<crate::mask_tint::TintSel>,
 }
 
-/// The mask overlay as [`view_overlay`] used to render it, now drawn over the photo: `planes` says the renders carry the masks'
-/// alphas, `sel` what to draw. `render_overlay` is what [`view_overlay`] gave: any other diagnostic view takes the loupe.
+/// The mask overlay as [`view_overlay`] used to render it, now drawn over the photo: `sel` is what to draw. `render_overlay` is what [`view_overlay`] gave: any other diagnostic view takes the loupe.
 pub(crate) fn mask_tint(app: &LightcraftApp, d: &DevelopSettings, frame: u64, render_overlay: lightcraft_pipeline::Overlay) -> MaskTintAsk {
     use crate::mask_tint::{Pick, TintSel};
     use lightcraft_pipeline::{MaskView, Overlay};
-    let none = MaskTintAsk { planes: false, sel: None };
+    let none = MaskTintAsk { open: false, sel: None };
     let any = d.masks.iter().any(|m| m.visible && !m.components.is_empty());
     if !tint_outside_render(app) || app.ui.fullscreen || app.ui.right != RightPanel::Masking || !any {
         return none;
     }
-    let planes = true;
     let (clip_shadows, clip_highlights) = crate::panels::clipping::effective_sides(app, frame);
     if render_overlay != Overlay::None || clip_shadows || clip_highlights {
-        return MaskTintAsk { planes, sel: None };
+        return MaskTintAsk { open: true, sel: None };
     }
     let (view, color) = (MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default(), app.ui.mask_overlay_color);
     let opacity = app.ui.mask_overlay_opacity.clamp(0.0, 100.0).round() as u8;
@@ -1139,7 +1154,7 @@ pub(crate) fn mask_tint(app: &LightcraftApp, d: &DevelopSettings, frame: u64, re
     } else {
         None
     };
-    MaskTintAsk { planes, sel: pick.map(|pick| TintSel { pick, view, color, opacity }) }
+    MaskTintAsk { open: true, sel: pick.map(|pick| TintSel { pick, view, color, opacity }) }
 }
 
 /// What the loupe shows over the photo, whether it is rendered into it ([`view_overlay`]) or drawn over it ([`mask_tint`]): the

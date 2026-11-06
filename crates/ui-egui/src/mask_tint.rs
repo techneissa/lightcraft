@@ -1,10 +1,11 @@
 //! The mask overlay drawn over the photo when the loupe paints, not rendered into it.
 //!
-//! The loupe's render comes with the alpha of every visible mask ([`MaskPlanes`], asked for with
-//! `RenderJob::with_mask_planes`). From the selected mask's alpha (or all of them) and the view's
-//! colour this makes a small premultiplied tint texture; the loupe draws it over the plain photo
-//! with the overlay's opacity as the draw's tint. So `O`, the opacity slider, the colour and the
-//! view start no render: only a change of the masks' shapes does, as it did.
+//! While a tint is shown, a job beside the photo's render answers with the alpha of the selected mask (or of every visible
+//! one: [`MaskPlanes`], `RenderJob::for_mask_planes`). It stops before the photo is finished and finds the alphas the photo's
+//! render kept, and it reads nothing back while the planes held here are still the right ones. From the plane and the view's
+//! colour this makes a small premultiplied tint texture; the loupe draws it over the plain photo with the overlay's opacity as
+//! the draw's tint. So `O`, the opacity slider, the colour and the view start no render of the photo, and with the overlay
+//! off nothing is read back at all.
 //!
 //! Every view of the Overlay menu is the photo and one or two layers over it:
 //! - Color Overlay: the colour at the mask's alpha, at the opacity.
@@ -16,8 +17,10 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use egui::{Color32, ColorImage, Painter, Rect, TextureHandle, TextureOptions, pos2};
+use lightcraft_catalog::PhotoId;
 use lightcraft_engine::media::MaskPlanes;
 use lightcraft_pipeline::MaskView;
+use lightcraft_pipeline::masks::{MaskWant, PlanesAsk};
 
 use crate::render::{Slot, Tex};
 
@@ -39,10 +42,30 @@ pub struct TintSel {
     pub opacity: u8,
 }
 
+/// The planes held for a slot, and what they were asked for.
+struct Held {
+    photo: PhotoId,
+    planes: Arc<MaskPlanes>,
+    pick: Pick,
+    /// The key of the photo render the planes were last found to be the right ones for.
+    for_key: u64,
+}
+
+/// The last ask made for a slot (not made twice).
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Asked {
+    photo: PhotoId,
+    /// The key of the photo render the ask was made beside.
+    base: u64,
+    pick: Pick,
+    /// The key of the job that answers.
+    job: u64,
+}
+
 /// The tint made for a slot's texture.
 struct Built {
-    /// The render the masks and the photo texture came from.
-    key: u64,
+    /// The planes it was made from.
+    signature: u64,
     pick: Pick,
     view: MaskView,
     color: [u8; 3],
@@ -56,11 +79,11 @@ fn tinted(slot: Slot) -> bool {
     matches!(slot, Slot::Main | Slot::Region)
 }
 
-/// The masks' alphas the renders brought, and the tint textures made from them.
+/// The masks' planes the answers brought, and the tint textures made from them.
 #[derive(Default)]
 pub struct MaskTints {
-    /// Slot → (key of the render, its masks).
-    masks: HashMap<Slot, (u64, Arc<MaskPlanes>)>,
+    held: HashMap<Slot, Held>,
+    asked: HashMap<Slot, Asked>,
     built: HashMap<Slot, Built>,
     sel: Option<TintSel>,
     /// Keep the zoom window's pixels (Color Overlay on B&W makes its grey from them).
@@ -68,52 +91,90 @@ pub struct MaskTints {
     /// Tint textures made so far (tests count them: a toggle or an opacity change makes none).
     #[cfg(test)]
     pub(crate) builds: usize,
+    /// Answers to asks that came, and the ones that brought planes (tests: what showing, hiding and dragging ask for).
+    #[cfg(test)]
+    pub(crate) answers: usize,
+    #[cfg(test)]
+    pub(crate) delivered: usize,
 }
 
 impl MaskTints {
-    /// A render of `slot` finished with these masks (`None`: it had none).
-    pub fn note(&mut self, slot: Slot, key: u64, planes: Option<Arc<MaskPlanes>>) {
+    /// The ask to make beside the photo render `base` (of `photo`) in `slot`, if it is not made already: the planes of `pick`,
+    /// and the signature of the ones held, which need not come again.
+    pub fn ask(&mut self, slot: Slot, photo: PhotoId, base: u64, pick: Pick) -> Option<PlanesAsk> {
         if !tinted(slot) {
+            return None;
+        }
+        let held = self.held.get(&slot).filter(|h| h.photo == photo && h.pick == pick);
+        // (held for this very render: nothing to ask)
+        if held.is_some_and(|h| h.for_key == base) || self.asked.get(&slot).is_some_and(|a| (a.photo, a.base, a.pick) == (photo, base, pick)) {
+            return None;
+        }
+        Some(PlanesAsk {
+            want: match pick {
+                Pick::One(id) => MaskWant::One(id),
+                Pick::All => MaskWant::All,
+            },
+            known: held.map(|h| h.planes.signature),
+        })
+    }
+
+    /// The ask was made as job `job`.
+    pub fn asked(&mut self, slot: Slot, photo: PhotoId, base: u64, pick: Pick, job: u64) {
+        self.asked.insert(slot, Asked { photo, base, pick, job });
+    }
+
+    /// The answer to the ask of `slot` (job `job`) came.
+    pub fn note(&mut self, slot: Slot, job: u64, planes: Option<Arc<MaskPlanes>>) {
+        #[cfg(test)]
+        {
+            self.answers += 1;
+            self.delivered += usize::from(planes.as_ref().is_some_and(|p| !p.unchanged));
+        }
+        let Some(asked) = self.asked.get(&slot).copied().filter(|a| a.job == job) else { return };
+        let Some(planes) = planes else { return };
+        if planes.unchanged {
+            // (still the planes it holds: valid for the render the ask was made beside)
+            if let Some(h) = self.held.get_mut(&slot).filter(|h| h.planes.signature == planes.signature && h.photo == asked.photo) {
+                h.for_key = asked.base;
+            }
             return;
         }
-        match planes {
-            Some(p) => {
-                self.masks.insert(slot, (key, p));
-            }
-            None => self.release(slot),
-        }
+        self.held.insert(slot, Held { photo: asked.photo, planes, pick: asked.pick, for_key: asked.base });
     }
 
     /// `slot` has no texture any more.
     pub fn release(&mut self, slot: Slot) {
-        self.masks.remove(&slot);
+        self.held.remove(&slot);
+        self.asked.remove(&slot);
         self.built.remove(&slot);
     }
 
     /// Let go of everything (the loupe shows no masks).
     pub fn clear(&mut self) {
-        self.masks.clear();
+        self.held.clear();
+        self.asked.clear();
         self.built.clear();
         self.sel = None;
         self.keep_region = false;
     }
 
-    /// The masks the slot's current render brought.
+    /// The planes held for the slot.
     #[cfg(test)]
     pub(crate) fn planes(&self, slot: Slot) -> Option<&Arc<MaskPlanes>> {
-        self.masks.get(&slot).map(|(_, m)| m)
+        self.held.get(&slot).map(|h| &h.planes)
     }
 
-    /// Whether the slot's render brought masks.
+    /// Whether planes are held for the slot.
     pub fn has_masks(&self, slot: Slot) -> bool {
-        self.masks.contains_key(&slot)
+        self.held.contains_key(&slot)
     }
 
-    /// Memory held (bytes): the alphas and the tint textures.
+    /// Memory held (bytes): the planes and the tint textures.
     pub fn bytes(&self) -> usize {
-        let alphas: usize = self.masks.values().map(|(_, m)| m.bytes()).sum();
+        let planes: usize = self.held.values().map(|h| h.planes.bytes()).sum();
         let tints: usize = self.built.values().map(|b| b.tint.byte_size() + b.grey.as_ref().map_or(0, TextureHandle::byte_size)).sum();
-        alphas + tints
+        planes + tints
     }
 
     /// What the frame draws (`None`: hidden). Makes the tint textures it needs that aren't made yet.
@@ -121,11 +182,13 @@ impl MaskTints {
         self.sel = sel;
         let Some(sel) = sel else { return };
         for slot in [Slot::Main, Slot::Region] {
-            let (Some(tex), Some((key, planes))) = (textures.get(&slot), self.masks.get(&slot)) else { continue };
-            if tex.key != *key {
+            let (Some(tex), Some(held)) = (textures.get(&slot), self.held.get(&slot)) else { continue };
+            // (planes of another mask than the one selected now wait for their replacement)
+            if held.photo != tex.photo || held.pick != sel.pick {
                 continue;
             }
-            let fresh = |b: &Built| b.key == *key && b.pick == sel.pick && b.view == sel.view && b.color == sel.color;
+            let signature = held.planes.signature;
+            let fresh = |b: &Built| b.signature == signature && b.pick == sel.pick && b.view == sel.view && b.color == sel.color;
             if self.built.get(&slot).is_some_and(fresh) {
                 // (the grey under Color Overlay on B&W, once the photo's pixels are there)
                 if sel.view == MaskView::ColorOnBw
@@ -135,7 +198,7 @@ impl MaskTints {
                 }
                 continue;
             }
-            let Some(image) = tint_image(planes, sel) else {
+            let Some(image) = tint_image(&held.planes, sel) else {
                 self.built.remove(&slot);
                 continue;
             };
@@ -147,20 +210,25 @@ impl MaskTints {
             {
                 self.builds += 1;
             }
-            self.built.insert(slot, Built { key: *key, pick: sel.pick, view: sel.view, color: sel.color, tint, grey });
+            self.built.insert(slot, Built { signature, pick: sel.pick, view: sel.view, color: sel.color, tint, grey });
         }
     }
 
-    /// Whether `slot`'s texture (the render `key`) has its tint drawn by [`Self::paint`].
-    pub fn drawn(&self, slot: Slot, key: u64) -> bool {
-        self.sel.is_some_and(|sel| {
-            self.built.get(&slot).is_some_and(|b| b.key == key && b.pick == sel.pick && b.view == sel.view && b.color == sel.color)
-        })
+    /// Whether `slot`'s texture (the render `key`, of `photo`) has its tint drawn by [`Self::paint`]. The whole frame takes the
+    /// planes it has (a late answer leaves the last tint up); a window only its own (it is cut from where it is).
+    pub fn drawn(&self, slot: Slot, photo: PhotoId, key: u64) -> bool {
+        let (Some(sel), Some(held), Some(b)) = (self.sel, self.held.get(&slot), self.built.get(&slot)) else { return false };
+        held.photo == photo
+            && b.signature == held.planes.signature
+            && b.pick == sel.pick
+            && b.view == sel.view
+            && b.color == sel.color
+            && (slot == Slot::Main || held.for_key == key)
     }
 
-    /// Draw the tint of `slot`'s render `key` into `dst`, over the photo drawn there.
-    pub fn paint(&self, p: &Painter, slot: Slot, key: u64, dst: Rect) {
-        let Some(sel) = self.sel.filter(|_| self.drawn(slot, key)) else { return };
+    /// Draw the tint of `slot`'s render `key` (of `photo`) into `dst`, over the photo drawn there.
+    pub fn paint(&self, p: &Painter, slot: Slot, photo: PhotoId, key: u64, dst: Rect) {
+        let Some(sel) = self.sel.filter(|_| self.drawn(slot, photo, key)) else { return };
         let Some(b) = self.built.get(&slot) else { return };
         let uv = Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0));
         match (sel.view, &b.grey) {

@@ -661,15 +661,27 @@ pub fn render_cached(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, 
     render_impl(Src::Shared(src), info, s, req, Some(cache), None)
 }
 
-/// The alpha of every visible mask that has components, as the render for `req` evaluates it
-/// (each with its Amount applied: what a mask overlay tints), without finishing the photo: the
-/// masks' own work only, reusing `cache` as [`render_cached`] does. In the order of the masks,
-/// each with its [`lightcraft_develop::Mask::id`]; the planes are the render's size (the window's
-/// for a windowed request).
-pub fn mask_planes(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: Option<&StageCache>) -> Vec<(u32, Plane)> {
-    let mut out = Vec::new();
-    render_impl(Src::Shared(src), info, s, req, cache, Some(&mut out));
-    out
+/// The planes `ask` names, as the render for `req` evaluates the masks (each with its Amount applied), without finishing the
+/// photo: the masks' own work only, reusing `cache` as [`render_cached`] does. When the asker already holds them
+/// ([`masks::PlanesAsk::known`] is the signature) none are made. The planes are the render's size (the window's for a windowed
+/// request).
+pub fn mask_planes(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    cache: Option<&StageCache>,
+    ask: &masks::PlanesAsk,
+) -> masks::PlanesOut {
+    let mut job = PlanesJob { ask, out: None };
+    render_impl(Src::Shared(src), info, s, req, cache, Some(&mut job));
+    job.out.unwrap_or(masks::PlanesOut { signature: 0, planes: Some(Vec::new()) })
+}
+
+/// A request for mask planes handed to [`render_impl`], and its answer.
+struct PlanesJob<'a> {
+    ask: &'a masks::PlanesAsk,
+    out: Option<masks::PlanesOut>,
 }
 
 enum Src<'a> {
@@ -677,7 +689,7 @@ enum Src<'a> {
     Shared(&'a Arc<Rgb32f>),
 }
 
-/// `alphas_out`: stop after the masks and hand over their alphas instead of finishing the photo (the
+/// `alphas_out`: stop after the masks and answer the request for their planes instead of finishing the photo (the
 /// returned [`Rendered`] is then empty; see [`mask_planes`]).
 fn render_impl(
     src: Src<'_>,
@@ -685,7 +697,7 @@ fn render_impl(
     s: &DevelopSettings,
     req: &RenderRequest,
     cache: Option<&StageCache>,
-    alphas_out: Option<&mut Vec<(u32, Plane)>>,
+    alphas_out: Option<&mut PlanesJob<'_>>,
 ) -> Rendered {
     // sections switched off with their eye render as if at their defaults (issue #316)
     let effective = s.effective();
@@ -750,20 +762,22 @@ fn render_impl(
     if let Some((a, c)) = shared {
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes, masks: alphas });
     }
-    if let Some(out) = alphas_out {
-        *out = prep
-            .masks
-            .iter()
-            .map(|e| {
-                let p = e.plane();
-                (e.id, plan.keep.map_or(p.clone(), |k| p.crop(k.x, k.y, k.w, k.h)))
-            })
-            .collect();
-        return Rendered {
-            image: Rgba8 { width: 0, height: 0, data: Vec::new() },
-            histogram: Histogram::of_srgb8(&Rgba8 { width: 0, height: 0, data: Vec::new() }),
-            deep: None,
-        };
+    if let Some(job) = alphas_out {
+        let signature = masks::planes_signature(&plan, src_img as *const Rgb32f as usize, job.ask.want);
+        let planes = (job.ask.known != Some(signature)).then(|| {
+            let ids: Vec<u32> = masks::wanted(&plan.settings.masks, job.ask.want).map(|m| m.id).collect();
+            prep.masks
+                .iter()
+                .filter(|e| ids.contains(&e.id))
+                .map(|e| {
+                    let p = e.plane();
+                    (e.id, plan.keep.map_or(p.clone(), |k| p.crop(k.x, k.y, k.w, k.h)))
+                })
+                .collect()
+        });
+        job.out = Some(masks::PlanesOut { signature, planes });
+        let none = Rgba8 { width: 0, height: 0, data: Vec::new() };
+        return Rendered { histogram: Histogram::of_srgb8(&none), image: none, deep: None };
     }
     if req.depth != OutputDepth::U8 {
         let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof);

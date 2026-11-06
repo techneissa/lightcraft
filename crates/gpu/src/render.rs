@@ -9,6 +9,7 @@ use lightcraft_geom::Orientation;
 use lightcraft_pipeline::finish::{FinishParams, FinishParamsInput};
 use lightcraft_pipeline::geometry::SampleMode;
 use lightcraft_pipeline::local::plane_at;
+use lightcraft_pipeline::masks::PlanesOut;
 use lightcraft_pipeline::{Plan, RenderRequest, Rendered, SourceInfo, local};
 use lightcraft_raster::resample::Filter;
 use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8};
@@ -618,19 +619,19 @@ pub enum Output {
         histogram: Histogram,
     },
     /// The alphas of the visible masks (see [`Want::MaskPlanes`]).
-    Masks(Vec<(u32, Plane)>),
+    Masks(lightcraft_pipeline::masks::PlanesOut),
 }
 
 /// What a render is for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Want {
+pub enum Want<'a> {
     /// Pixels in host memory.
     Image,
     /// A texture on the window's device when [`can_display`], else pixels.
     Display,
-    /// Only the alpha plane of each visible mask that has components, with its Amount applied
-    /// (`lightcraft_pipeline::mask_planes`): the photo is not finished.
-    MaskPlanes,
+    /// Only the planes `ask` names, with each mask's Amount applied (`lightcraft_pipeline::mask_planes`): the photo is not
+    /// finished, and the planes are not read back when the asker holds them.
+    MaskPlanes(&'a lightcraft_pipeline::masks::PlanesAsk),
 }
 
 /// Whether a render of this plan can end in a texture instead of a readback: the device is the
@@ -653,7 +654,7 @@ pub fn render(
     req: &RenderRequest,
     stages: Option<&GpuStages>,
     fault: Option<crate::Fault>,
-    want: Want,
+    want: Want<'_>,
 ) -> Option<Output> {
     let mut t = profiling().then(std::time::Instant::now);
     // Each stage is submitted on its own; under `LIGHTCRAFT_PROFILE` also waited for, so the
@@ -738,8 +739,8 @@ pub fn render(
     // 4. masks
     let (masks, terms) = crate::masks::masks(&mut cx, &lin, &prep, &plan, &mut host, stages.map(|c| (&c.alphas, src)));
     lap("masks", &mut t, &mut cx);
-    if want == Want::MaskPlanes {
-        return Some(Output::Masks(mask_planes(&mut cx, masks.as_ref(), &plan)));
+    if let Want::MaskPlanes(ask) = want {
+        return Some(Output::Masks(mask_planes(&mut cx, masks.as_ref(), &plan, Arc::as_ptr(src) as usize, ask)));
     }
 
     // 5. per-pixel stage
@@ -892,25 +893,32 @@ pub fn render(
     Some(Output::Image(Rendered { image, histogram, deep: None }))
 }
 
-/// The alpha of each visible mask that has components, from the masks buffer (`masks()`: one plane after another in
-/// the masks' order), each with its Amount applied as `Evaluated::plane` does, cut to the request's window.
-fn mask_planes(cx: &mut Cx<'_>, all: Option<&Buf>, plan: &Plan<'_>) -> Vec<(u32, Plane)> {
+/// The planes `ask` names, from the masks buffer (`masks()`: one plane after another in the masks' order), each with its Amount
+/// applied as `Evaluated::plane` does and cut to the request's window. Only the wanted planes are read back, and none when the
+/// asker holds them (`PlanesAsk::known` is their signature).
+fn mask_planes(cx: &mut Cx<'_>, all: Option<&Buf>, plan: &Plan<'_>, source: usize, ask: &lightcraft_pipeline::masks::PlanesAsk) -> PlanesOut {
+    use lightcraft_pipeline::masks::{planes_signature, wanted};
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
+    let signature = planes_signature(plan, source, ask.want);
+    if ask.known == Some(signature) {
+        return PlanesOut { signature, planes: None };
+    }
     let list: Vec<_> = plan.settings.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();
-    let (Some(all), false) = (all, list.is_empty() || n == 0) else { return Vec::new() };
-    let raw: Vec<f32> = cx.read(all, n * list.len());
-    list.iter()
-        .zip(raw.chunks_exact(n))
-        .map(|(m, alpha)| {
-            let amount = (m.adjust.amount / 100.0) as f32;
-            let mut plane = Plane { width: w, height: h, data: alpha.to_vec() };
-            if (amount - 1.0).abs() > 1e-6 {
-                plane.data.iter_mut().for_each(|v| *v *= amount);
-            }
-            (m.id, plan.keep.map_or(plane.clone(), |k| plane.crop(k.x, k.y, k.w, k.h)))
-        })
-        .collect()
+    let (Some(all), false) = (all, list.is_empty() || n == 0) else { return PlanesOut { signature, planes: Some(Vec::new()) } };
+    let ids: Vec<u32> = wanted(&plan.settings.masks, ask.want).map(|m| m.id).collect();
+    let mut out = Vec::new();
+    for (mi, m) in list.iter().enumerate().filter(|(_, m)| ids.contains(&m.id)) {
+        // (a plane at a time: one mask's alpha is what a tint shows, and the whole stack is many times that)
+        let one = cx.slice(all, mi * n, n);
+        let mut plane = cx.read_plane(&one, w, h);
+        let amount = (m.adjust.amount / 100.0) as f32;
+        if (amount - 1.0).abs() > 1e-6 {
+            plane.data.iter_mut().for_each(|v| *v *= amount);
+        }
+        out.push((m.id, plan.keep.map_or(plane.clone(), |k| plane.crop(k.x, k.y, k.w, k.h))));
+    }
+    PlanesOut { signature, planes: Some(out) }
 }
 
 /// The finished output `out` (`w × h` packed RGBA8) as a texture on the device, with its

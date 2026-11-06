@@ -45,15 +45,20 @@ pub struct RenderJob {
     /// to a 64 px step) and the window would otherwise shrink the texture with 2-tap bilinear sampling, which blurs fine detail at
     /// small ratios and aliases it at large ones. The caches keep the full render.
     pub display_fit: Option<(usize, usize)>,
-    /// Also give the alpha of every visible mask ([`RenderResult::mask_planes`]), so a frontend can tint a mask over the
-    /// photo when it draws it ([`Self::with_mask_planes`]).
-    pub mask_planes: bool,
+    /// Not a render of the photo: only the planes of masks this asks for ([`RenderResult::mask_planes`]), so a frontend can tint
+    /// a mask over the photo it draws ([`Self::for_mask_planes`]).
+    pub mask_ask: Option<lightcraft_pipeline::masks::PlanesAsk>,
 }
 
 /// The alpha of each visible mask that has components (its Amount applied), 8-bit, at the size of the render it came with
 /// (the window's for a window render): what a mask overlay draws over the photo.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct MaskPlanes {
+    /// What the planes are made from ([`lightcraft_pipeline::masks::planes_signature`]): a frontend that holds them says so in
+    /// its next ask and gets no planes while it is the same.
+    pub signature: u64,
+    /// The asker holds the planes of this signature: `planes` is empty.
+    pub unchanged: bool,
     pub width: usize,
     pub height: usize,
     /// `(Mask::id, alpha)`, `width × height` values each, in the masks' order.
@@ -80,7 +85,10 @@ impl MaskPlanes {
         self.planes.iter().map(|(_, p)| p.len()).sum()
     }
 
-    fn of(planes: Vec<(u32, lightcraft_raster::Plane)>) -> MaskPlanes {
+    fn of(out: lightcraft_pipeline::masks::PlanesOut) -> MaskPlanes {
+        let signature = out.signature;
+        let Some(planes) = out.planes else { return MaskPlanes { signature, unchanged: true, ..MaskPlanes::default() } };
+        PLANES_MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         let (width, height) = planes.first().map_or((0, 0), |(_, p)| (p.width, p.height));
         let q = |v: f32| (v.clamp(0.0, 1.0) * 255.0).round() as u8;
         let planes = planes
@@ -88,8 +96,16 @@ impl MaskPlanes {
             .filter(|(_, p)| (p.width, p.height) == (width, height))
             .map(|(id, p)| (id, p.data.into_iter().map(q).collect()))
             .collect();
-        MaskPlanes { width, height, planes }
+        MaskPlanes { signature, unchanged: false, width, height, planes }
     }
+}
+
+static PLANES_MADE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many times mask planes have been read out of a render (to be handed to a frontend) in this process: a test counts what
+/// showing, hiding and dragging make. A render that finds the asker holds the planes makes none.
+pub fn planes_made() -> u64 {
+    PLANES_MADE.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// `img` shrunk to fit `max_w × max_h` with a Lanczos filter (see [`RenderJob::display_fit`]).
@@ -196,14 +212,22 @@ impl RenderJob {
         self
     }
 
-    /// Also give the alpha of every visible mask with the result ([`RenderResult::mask_planes`]), cut from the same
-    /// evaluation as the render. The overlay that tints a mask is then drawn by the frontend over the plain render: showing
-    /// it, hiding it and changing its opacity, colour or view start no render. Gets its own result key.
-    pub fn with_mask_planes(mut self) -> Self {
-        if !self.mask_planes {
-            self.mask_planes = true;
-            self.key ^= 0x4d41_534b_504c_4e53;
-        }
+    /// This job does not render the photo: it answers `ask` with the planes of the masks it names
+    /// ([`RenderResult::mask_planes`]), from the alphas the photo's own render kept, without finishing the picture. The overlay
+    /// that tints a mask is drawn by the frontend over the plain render from them: showing it, hiding it and changing its
+    /// opacity, colour or view start no render of the photo. Gets its own result key.
+    pub fn for_mask_planes(mut self, ask: lightcraft_pipeline::masks::PlanesAsk) -> Self {
+        use lightcraft_pipeline::masks::MaskWant;
+        let (kind, id) = match ask.want {
+            MaskWant::All => (1u64, 0),
+            MaskWant::One(id) => (2, u64::from(id)),
+        };
+        self.key ^= (0x4d41_534b_504c_4e53 ^ kind << 40 ^ id ^ ask.known.unwrap_or(0).rotate_left(23)).wrapping_mul(0x9e37_79b9_7f4a_7c15);
+        self.mask_ask = Some(ask);
+        self.cache = None;
+        self.view_cache = None;
+        self.display_fit = None;
+        self.on_screen = false;
         self
     }
 
@@ -375,12 +399,29 @@ impl RenderJob {
                 // converted for the display below
                 let clip_view = self.request.overlay.is_clipping();
                 let request = if clip_view { RenderRequest { display: None, ..self.request } } else { self.request };
+                // a job for the masks' planes: the photo is not rendered (the stage caches hold the alphas of the render that went before)
+                if let Some(ask) = &self.mask_ask {
+                    let planes = masks_of(src, &info, &self.settings, &request, self.stages.as_deref(), gpu, ask);
+                    let none = lightcraft_raster::Rgba8 { width: 0, height: 0, data: Vec::new() };
+                    return RenderResult {
+                        request_id: self.request_id,
+                        source_key: self.source_key,
+                        photo: self.photo,
+                        level: self.level,
+                        key: self.key,
+                        rendered: Ok(Rendered { histogram: Histogram::of_srgb8(&none), image: none, deep: None }),
+                        gpu_fallback: None,
+                        loaded: (!was_loaded).then_some(source),
+                        quick: None,
+                        display: None,
+                        frame: None,
+                        mask_planes: Some(planes),
+                    };
+                }
                 let pixels_needed =
                     self.cache.is_some() || self.display.is_some() || (self.view_cache.is_some() && self.request.quality == Quality::Full);
                 let frame = (self.on_screen && !pixels_needed && gpu)
                     .then(|| develop_on_screen(src, &info, &self.settings, &request, self.stages.as_deref()));
-                // the masks' alphas beside the photo (the same stage caches: the masks are not evaluated twice)
-                let mask_planes = self.mask_planes.then(|| masks_of(src, &info, &self.settings, &request, self.stages.as_deref(), gpu)).flatten();
                 let (mut rendered, gpu_fallback) = match frame {
                     Some(OnScreen::Frame(frame, histogram)) => {
                         return RenderResult {
@@ -399,7 +440,7 @@ impl RenderJob {
                             quick: None,
                             display: None,
                             frame: Some(frame),
-                            mask_planes,
+                            mask_planes: None,
                         };
                     }
                     Some(OnScreen::Pixels(r)) => (r, None),
@@ -460,7 +501,7 @@ impl RenderJob {
                     quick: None,
                     display,
                     frame: None,
-                    mask_planes,
+                    mask_planes: None,
                 }
             }
             Err(e) => self.failed(e),
@@ -468,8 +509,8 @@ impl RenderJob {
     }
 }
 
-/// The alpha of every visible mask for `req`: from the GPU's masks when `gpu` is set and it renders them, else the CPU's. The
-/// stage caches `stages` hold the evaluated alphas of the render that went before, so nothing is evaluated again.
+/// The planes `ask` names for `req`: from the GPU's masks when `gpu` is set and it renders them, else the CPU's. The stage caches
+/// `stages` hold the evaluated alphas of the render that went before, so nothing is evaluated again.
 fn masks_of(
     src: &Arc<Rgb32f>,
     info: &SourceInfo,
@@ -477,19 +518,17 @@ fn masks_of(
     req: &RenderRequest,
     stages: Option<&StageCache>,
     gpu: bool,
-) -> Option<Arc<MaskPlanes>> {
-    // (a masks-less photo has none to give)
-    if s.masks.iter().all(|m| !m.visible || m.components.is_empty()) {
-        return None;
-    }
+    ask: &lightcraft_pipeline::masks::PlanesAsk,
+) -> Arc<MaskPlanes> {
     #[cfg(not(target_arch = "wasm32"))]
-    let on_gpu = gpu.then(|| lightcraft_gpu::mask_planes(src, info, s, req, stages)).flatten();
+    let on_gpu = gpu.then(|| lightcraft_gpu::mask_planes(src, info, s, req, stages, ask)).flatten();
     #[cfg(target_arch = "wasm32")]
-    let on_gpu = None::<Vec<(u32, lightcraft_raster::Plane)>>;
-    #[cfg(target_arch = "wasm32")]
-    let _ = gpu;
-    let planes = on_gpu.unwrap_or_else(|| lightcraft_pipeline::mask_planes(src, info, s, req, stages));
-    Some(Arc::new(MaskPlanes::of(planes)))
+    let on_gpu = {
+        let _ = gpu;
+        None::<lightcraft_pipeline::masks::PlanesOut>
+    };
+    let out = on_gpu.unwrap_or_else(|| lightcraft_pipeline::mask_planes(src, info, s, req, stages, ask));
+    Arc::new(MaskPlanes::of(out))
 }
 
 /// Render `src`: on the GPU when `gpu` is set and a GPU is available (`lightcraft_gpu`), else on

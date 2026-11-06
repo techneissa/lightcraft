@@ -315,10 +315,10 @@ fn a_mask_with_no_amount_does_not_take_the_tint() {
     assert_ne!(render(&src, &info, &one, &req).image, render(&src, &info, &two, &req).image);
 }
 
-/// The planes a loupe tints (`mask_planes`) are the alphas of the visible masks with their Amount, in order, and ask for no
-/// second evaluation after the photo's render.
+/// The planes a loupe tints (`mask_planes`) are the alphas of the masks asked for with their Amount, ask no second evaluation after
+/// the photo's render, and come only when the asker does not hold them (the signature says what they are made from).
 #[test]
-fn mask_planes_are_the_visible_masks_alphas_and_reuse_the_render() {
+fn mask_planes_are_the_asked_masks_alphas_and_reuse_the_render() {
     let src = Arc::new(Rgb32f::from_fn(64, 48, |x, y| [0.2 + x as f32 * 0.005, 0.3, 0.2 + y as f32 * 0.004]));
     let info = SourceInfo { raw: true, ..Default::default() };
     let radial = |id, amount| Mask {
@@ -333,19 +333,47 @@ fn mask_planes_are_the_visible_masks_alphas_and_reuse_the_render() {
         ..Mask::default()
     };
     let hidden = Mask { visible: false, ..radial(5, 100.0) };
-    let s = DevelopSettings { masks: vec![radial(1, 100.0), hidden, radial(2, 50.0)], ..DevelopSettings::default() };
+    let mut s = DevelopSettings { masks: vec![radial(1, 100.0), hidden, radial(2, 50.0)], ..DevelopSettings::default() };
     let req = RenderRequest::fit(64, 64);
     let cache = StageCache::default();
     render_cached(&src, &info, &s, &req, &cache);
+    let all = PlanesAsk { want: MaskWant::All, known: None };
     let before = super::mask_evaluations();
-    let planes = crate::mask_planes(&src, &info, &s, &req, Some(&cache));
+    let out = crate::mask_planes(&src, &info, &s, &req, Some(&cache), &all);
     assert_eq!(super::mask_evaluations() - before, 0, "the render's alphas are reused");
+    let planes = out.planes.expect("planes");
     assert_eq!(planes.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![1, 2], "visible masks only");
     let (full, half) = (&planes[0].1, &planes[1].1);
     assert_eq!((full.width, full.height), (64, 48));
     let (a, b) = (full.data.iter().copied().fold(0.0f32, f32::max), half.data.iter().copied().fold(0.0f32, f32::max));
     assert!((a - 1.0).abs() < 1e-3 && (b - 0.5).abs() < 1e-3, "the Amount scales the plane: {a} {b}");
+    // one mask: only its plane
+    let one = crate::mask_planes(&src, &info, &s, &req, Some(&cache), &PlanesAsk { want: MaskWant::One(2), known: None });
+    let one_planes = one.planes.expect("planes");
+    assert_eq!(one_planes.len(), 1);
+    assert_eq!(one_planes[0].1.data, half.data);
+    assert_ne!(one.signature, out.signature, "another mask, other planes");
+    // the asker holds them: none come, whatever else changed (an effect, the global Exposure) that they are not made from
+    let held = PlanesAsk { want: MaskWant::One(2), known: Some(one.signature) };
+    s.masks[2].adjust.exposure = -1.0;
+    s.masks[0].adjust.contrast = 30.0;
+    s.light.exposure = 0.7;
+    let again = crate::mask_planes(&src, &info, &s, &req, Some(&cache), &held);
+    assert_eq!(again.signature, one.signature);
+    assert!(again.planes.is_none(), "the same planes are not made again");
+    // what they are made from does count: the shape, the Amount, the size
+    s.masks[2].adjust.amount = 80.0;
+    assert_ne!(crate::mask_planes(&src, &info, &s, &req, Some(&cache), &held).signature, one.signature, "the Amount");
+    s.masks[2].adjust.amount = 50.0;
+    if let MaskShape::Radial { rx, .. } = &mut s.masks[2].components[0].shape {
+        *rx = 0.3;
+    }
+    let moved = crate::mask_planes(&src, &info, &s, &req, Some(&cache), &held);
+    assert_ne!(moved.signature, one.signature, "the shape");
+    assert!(moved.planes.is_some());
+    let small = crate::mask_planes(&src, &info, &s, &RenderRequest::fit(32, 32), None, &held);
+    assert_ne!(small.signature, moved.signature, "the size");
     // without a cache it is the same
-    let fresh = crate::mask_planes(&src, &info, &s, &req, None);
-    assert_eq!(fresh[1].1.data, half.data);
+    let fresh = crate::mask_planes(&src, &info, &s, &req, None, &PlanesAsk { want: MaskWant::One(2), known: None });
+    assert_eq!(fresh.signature, moved.signature);
 }
