@@ -185,6 +185,14 @@ fn an_effect_drag_evaluates_no_mask_on_the_device() {
     let mut s = with_masks(masks);
     let cache = StageCache::default();
     lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu");
+    // the kept alphas count with the view's stages, and clearing them frees them
+    let (w, h) = (720usize, 480usize);
+    let with_alphas = lightcraft_gpu::stage_bytes(&cache);
+    cache.clear();
+    assert_eq!(lightcraft_gpu::stage_bytes(&cache), 0);
+    lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu");
+    assert_eq!(lightcraft_gpu::stage_bytes(&cache), with_alphas);
+    assert!(with_alphas >= 2 * w * h * 4, "two masks' alphas are held: {with_alphas} bytes");
     let mut evaluated = 0;
     for k in 1..7 {
         match k % 3 {

@@ -261,6 +261,8 @@ fn an_effect_drag_over_masks_evaluates_none_and_equals_a_full_render() {
     let mut s = spot_settings(5);
     for req in [RenderRequest::fit(300, 200), RenderRequest { quality: Quality::Draft, ..RenderRequest::fit(150, 100) }] {
         render_cached(&src, &info, &s, &req, &cache);
+        // (the held alphas and brush planes count with the cache's memory)
+        assert!(cache.bytes() > 0);
         let mut evaluated = 0;
         for k in 1..8 {
             match k % 3 {
