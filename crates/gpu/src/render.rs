@@ -23,6 +23,8 @@ pub struct GpuStages {
     entries: Mutex<Vec<Entry>>,
     /// The uploaded source (a view renders one photo at several sizes).
     source: Mutex<Option<(Arc<Rgb32f>, Arc<Buf>)>>,
+    /// The alphas of the last render's masks and the brush parts they were built from.
+    alphas: crate::masks::AlphaStore,
 }
 
 const CAPACITY: usize = 2;
@@ -113,6 +115,7 @@ impl GpuStages {
         if let Some((_, b)) = &*self.source.lock().unwrap_or_else(|e| e.into_inner()) {
             add(b);
         }
+        self.alphas.each(&mut add);
         total
     }
 
@@ -120,6 +123,7 @@ impl GpuStages {
     pub fn clear(&self) {
         self.lock().clear();
         *self.source.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.alphas.clear();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -715,7 +719,7 @@ pub fn render(
     }
 
     // 4. masks
-    let (masks, terms) = crate::masks::masks(&mut cx, &lin, &prep, &plan, &mut host);
+    let (masks, terms) = crate::masks::masks(&mut cx, &lin, &prep, &plan, &mut host, stages.map(|c| &c.alphas));
     lap("masks", &mut t, &mut cx);
 
     // 5. per-pixel stage

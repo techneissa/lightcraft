@@ -1,36 +1,166 @@
 //! Mask evaluation on the device (`lightcraft_pipeline::masks`): each visible mask's alpha plane
 //! and its effect terms.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use lightcraft_develop::BrushStroke;
 use lightcraft_pipeline::Plan;
-use lightcraft_pipeline::finish::{MASK_TERMS, mask_terms};
+use lightcraft_pipeline::finish::{MASK_TERMS, effect_terms};
+use lightcraft_pipeline::geometry::Frame;
+use lightcraft_pipeline::masks::{AlphaKeys, BRUSH_ENTRIES, Mattes, alpha_key, brush_base, brush_chain, brush_dabs, note_evaluation, note_stroke};
 
 use crate::ctx::{Buf, groups1, groups2};
 use crate::render::{Cx, Host, Prep, gaussian, map};
 
-/// Most brush dabs the mask kernel evaluates per pixel (more: the CPU rasterizes the brush).
-const MAX_DABS: usize = 4096;
+/// The alphas of the last render's masks and the brush parts they were built from, on the device: the
+/// GPU twin of `lightcraft_pipeline::masks::AlphaCache`, kept next to the view's other stages. An
+/// effect slider, the Amount or Exposure for a gradient or a brush changes nothing a mask's alpha is built
+/// from, so no mask is evaluated again (each alpha is copied into the render's stack of planes), and a
+/// brush part extended by a stroke stamps only that stroke.
+#[derive(Default)]
+pub(crate) struct AlphaStore {
+    inner: Mutex<Inner>,
+}
 
-/// The `shape` kernel's brush data for `dabs`: stroke records (12 words: dab offset, dab count,
-/// r, hard, flow, density, erase, bbox x0 y0 x1 y1, auto) then the dab centres.
-fn brush_aux(dabs: &[&lightcraft_pipeline::masks::BrushDabs], erase: bool) -> Vec<f32> {
-    let mut aux = Vec::new();
-    let mut off = 12 * dabs.len();
-    for d in dabs {
-        let (mut x0, mut y0, mut x1, mut y1) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
-        for q in &d.dabs {
-            (x0, y0, x1, y1) = (x0.min(q.x - d.r), y0.min(q.y - d.r), x1.max(q.x + d.r), y1.max(q.y + d.r));
+#[derive(Default)]
+struct Inner {
+    mattes: Option<Arc<Mattes>>,
+    slots: Vec<(u64, Arc<Buf>)>,
+    brushes: Vec<BrushPart>,
+}
+
+/// A brush part's plane and the strokes it holds (`masks::brush_chain`).
+#[derive(Clone)]
+struct BrushPart {
+    base: u64,
+    chain: Vec<u64>,
+    plane: Arc<Buf>,
+}
+
+impl AlphaStore {
+    fn lock(&self) -> MutexGuard<'_, Inner> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Drop everything.
+    pub(crate) fn clear(&self) {
+        *self.lock() = Inner::default();
+    }
+
+    /// Hand every device buffer held to `add` (the caller counts each once).
+    pub(crate) fn each(&self, mut add: impl FnMut(&Arc<Buf>)) {
+        let g = self.lock();
+        g.slots.iter().for_each(|(_, b)| add(b));
+        g.brushes.iter().for_each(|p| add(&p.plane));
+    }
+}
+
+/// What a brush part is stamped against.
+struct BrushEnv<'a> {
+    lin: &'a Buf,
+    log_l: &'a Buf,
+    frame: &'a Frame,
+    w: usize,
+    h: usize,
+    keys: AlphaKeys,
+}
+
+/// The plane of brush strokes `strokes` on the device (`masks::brush`), or `None` when the device can't hold their dabs
+/// (the CPU rasterizes the part). Strokes that extend a part held in `parts` are stamped over a copy of its plane; the
+/// result is kept there. `inverted`: the part is turned around.
+fn brush_part(cx: &mut Cx<'_>, env: &BrushEnv<'_>, strokes: &[BrushStroke], inverted: bool, parts: &mut Vec<BrushPart>) -> Option<Buf> {
+    let n = env.w * env.h;
+    let auto = strokes.iter().any(|s| s.auto_mask);
+    let base = brush_base(env.keys.geo, env.keys.image, auto, env.w, env.h);
+    let chain = brush_chain(strokes);
+    // the part this one extends (the longest held prefix of its strokes)
+    let hit = parts
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.base == base && !e.chain.is_empty() && e.chain.len() <= chain.len() && chain.starts_with(&e.chain))
+        .max_by_key(|(_, e)| e.chain.len())
+        .map(|(i, _)| i);
+    let (plane, from) = match hit {
+        Some(i) => {
+            // (the most recently used goes last)
+            let e = parts.remove(i);
+            parts.push(e.clone());
+            (cx.copy(&e.plane), e.chain.len())
         }
-        aux.extend([off as f32, d.dabs.len() as f32, d.r as f32, d.hard as f32, d.flow, d.density, (erase && d.erase) as u8 as f32]);
-        aux.extend([x0, y0, x1, y1].map(|v| v as f32));
-        aux.push(d.auto as u8 as f32);
-        off += 2 * d.dabs.len();
+        None => (cx.zeroed(n), 0),
+    };
+    for s in strokes.iter().skip(from) {
+        if !stamp_stroke(cx, env, s, &plane) {
+            return None;
+        }
     }
-    for d in dabs {
-        aux.extend(d.dabs.iter().flat_map(|q| [q.x as f32, q.y as f32]));
+    if !strokes.is_empty() && from < strokes.len() {
+        parts.push(BrushPart { base, chain, plane: Arc::new(cx.copy(&plane)) });
+        while parts.len() > BRUSH_ENTRIES {
+            parts.remove(0);
+        }
     }
-    aux
+    if inverted {
+        // (the kernel's unused `c` binding is writable, so it can't be the unused read-only dummy as well)
+        let unused = cx.gpu.buffer(1);
+        cx.run("finalize", &[n as u32, 0, 0, 1, 1f32.to_bits()], &[None, None, None, Some(&unused), Some(&plane)], groups1(n));
+    }
+    Some(plane)
+}
+
+/// Stamp one stroke into `plane` inside its bounding box (the `stroke` kernel). An Auto Mask stroke is stamped
+/// alone, refined with the guided filter and combined, as on the CPU.
+fn stamp_stroke(cx: &mut Cx<'_>, env: &BrushEnv<'_>, s: &BrushStroke, plane: &Buf) -> bool {
+    note_stroke();
+    let (w, h) = (env.w, env.h);
+    let n = w * h;
+    let bd = brush_dabs(s, env.frame, w, h);
+    if bd.dabs.is_empty() {
+        return true;
+    }
+    // five words a dab, pen pressure applied
+    if !bd.dabs.len().checked_mul(5).is_some_and(|words| cx.gpu.fits(words)) {
+        return false;
+    }
+    let rmax = bd.r.max(0.5);
+    let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+    for d in &bd.dabs {
+        lo = [lo[0].min(d.x), lo[1].min(d.y)];
+        hi = [hi[0].max(d.x), hi[1].max(d.y)];
+    }
+    let clamp = |v: f64, max: usize| v.clamp(0.0, max as f64) as usize;
+    let (x0, x1) = (clamp((lo[0] - rmax).floor(), w), clamp((hi[0] + rmax).ceil(), w));
+    let (y0, y1) = (clamp((lo[1] - rmax).floor(), h), clamp((hi[1] + rmax).ceil(), h));
+    if x0 >= x1 || y0 >= y1 {
+        return true;
+    }
+    let aux: Vec<f32> = bd
+        .dabs
+        .iter()
+        .enumerate()
+        .flat_map(|(k, d)| {
+            let (r, hard, flow) = bd.dab(k);
+            [d.x as f32, d.y as f32, r as f32, hard as f32, flow]
+        })
+        .collect();
+    let aux = cx.gpu.upload(&aux);
+    let mut p = vec![w as u32, h as u32, 0, 0, 0, 0, 0, 0, 0, 0];
+    p.extend([x0, y0, x1, y1, bd.dabs.len()].map(|v| v as u32));
+    p.extend([bd.density.to_bits(), bd.erase as u32, bd.auto as u32, 0]);
+    let grid = groups2(x1 - x0, y1 - y0, [16, 16]);
+    if !bd.auto {
+        cx.run("stroke", &p, &[Some(env.lin), Some(env.log_l), Some(&aux), Some(plane), None], grid);
+        return true;
+    }
+    // the stroke alone (mode 1), refined, then combined into the part in order
+    let own = cx.zeroed(n);
+    p[18] = 1;
+    cx.run("stroke", &p, &[Some(env.lin), Some(env.log_l), Some(&aux), Some(&own), None], grid);
+    let (sigma, eps) = lightcraft_pipeline::masks::auto_refine(bd.r);
+    let refined = guided_cross(cx, env.log_l, &own, w, h, sigma, eps, Combine::Max);
+    let op = if bd.erase { 2 } else { 1 };
+    cx.run("combine", &[n as u32, 0, 0, op], &[None, None, None, Some(&refined), Some(plane)], groups1(n));
+    true
 }
 
 /// How [`guided_cross`] combines the filtered plane with its input.
@@ -65,7 +195,16 @@ fn guided_cross(cx: &mut Cx<'_>, guide: &Buf, p: &Buf, w: usize, h: usize, sigma
 /// Evaluate the masks (`lightcraft_pipeline::masks::evaluate`): their alpha planes (concatenated,
 /// followed by the blurred chromaticity when local Moiré / Noise need it) and their adjustment
 /// terms. Shapes without a kernel (Sky, Subject, …) run on the CPU.
-pub(crate) fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, host: &mut Host) -> (Option<Buf>, Vec<[f32; MASK_TERMS]>) {
+///
+/// `store`: the view's alphas of the last render (see [`AlphaStore`]); without one every mask is evaluated.
+pub(crate) fn masks(
+    cx: &mut Cx<'_>,
+    lin: &Buf,
+    prep: &Prep,
+    plan: &Plan<'_>,
+    host: &mut Host,
+    store: Option<&AlphaStore>,
+) -> (Option<Buf>, Vec<[f32; MASK_TERMS]>) {
     use lightcraft_develop::{MaskOp, MaskShape};
     let s = &*plan.settings;
     let list: Vec<_> = s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();
@@ -85,7 +224,28 @@ pub(crate) fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, ho
         cx.copy_into(ch, &alpha, n * list.len());
     }
     let comp_plane = cx.gpu.buffer(n);
+    let mut guard = store.map(AlphaStore::lock);
+    let mut unkept = Inner::default();
+    let held: &mut Inner = guard.as_deref_mut().unwrap_or(&mut unkept);
+    // the alphas of the last render, when it had the same segmentation mattes (taken out: hand back the ones used)
+    let same = match (&held.mattes, &plan.mattes) {
+        (None, None) => true,
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+        _ => false,
+    };
+    let old = if same { std::mem::take(&mut held.slots) } else { Vec::new() };
+    let mut used: Vec<(u64, Arc<Buf>)> = Vec::new();
+    let keys = AlphaKeys { geo: plan.geo, image: plan.lin_key };
     for (mi, m) in list.iter().enumerate() {
+        let key = alpha_key(m, keys, ev);
+        if let Some((_, buf)) = old.iter().find(|(k, _)| *k == key) {
+            cx.copy_into(buf, &alpha, mi * n);
+            if !used.iter().any(|(k, _)| *k == key) {
+                used.push((key, buf.clone()));
+            }
+            continue;
+        }
+        note_evaluation();
         // its coordinates on the photo before the warp (`masks::evaluate_one`): through a lens or
         // perspective warp the kernels' affine positions don't hold, so its shapes run on the CPU
         let mframe = plan.frame.for_mask(m.on_photo);
@@ -136,55 +296,10 @@ pub(crate) fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, ho
                     Some(3)
                 }
                 MaskShape::Brush { strokes } => {
-                    // The kernel takes at most MAX_DABS across the whole mask, so no more than
-                    // that (plus one, to tell "at it" from "past it") is ever built: each stroke
-                    // may otherwise construct two million dabs before the sum below rejects them
-                    // all (#1520).
-                    let mut room = MAX_DABS + 1;
-                    let dabs: Vec<_> = strokes
-                        .iter()
-                        .map(|st| {
-                            let d = lightcraft_pipeline::masks::brush_dabs_within(st, frame, w, h, room);
-                            room -= d.dabs.len().min(room);
-                            d
-                        })
-                        .collect();
-                    // pen pressure varies radius and flow per dab, which the kernel doesn't take: the CPU rasterizes it
-                    if dabs.iter().map(|d| d.dabs.len()).sum::<usize>() > MAX_DABS || dabs.iter().any(|d| !d.pressure.is_empty()) {
-                        None
-                    } else if dabs.iter().any(|d| d.auto) {
-                        // Auto Mask: stroke by stroke (each one refined before it's combined)
-                        let brush = cx.zeroed(n);
-                        let stroke = cx.gpu.buffer(n);
-                        for d in &dabs {
-                            let mut q = p.clone();
-                            q[2] = 4;
-                            q[3] = 0;
-                            q.push(1);
-                            let aux = cx.gpu.upload(&brush_aux(&[d], false));
-                            cx.run("shape", &q, &[Some(lin), Some(&prep.log_l), Some(&aux), Some(&stroke), Some(&brush)], groups2(w, h, [16, 16]));
-                            let refined = d.auto.then(|| {
-                                let (sigma, eps) = lightcraft_pipeline::masks::auto_refine(d.r);
-                                guided_cross(cx, &prep.log_l, &stroke, w, h, sigma, eps, Combine::Max)
-                            });
-                            let op = if d.erase { 2 } else { 1 };
-                            cx.run(
-                                "combine",
-                                &[n as u32, 0, 0, op],
-                                &[None, None, None, Some(refined.as_ref().unwrap_or(&stroke)), Some(&brush)],
-                                groups1(n),
-                            );
-                        }
-                        if comp.invert {
-                            cx.run("finalize", &[n as u32, 0, 0, 1, 1f32.to_bits()], &[None, None, None, Some(&stroke), Some(&brush)], groups1(n));
-                        }
-                        own = Some(brush);
-                        None
-                    } else {
-                        p.push(dabs.len() as u32);
-                        aux = brush_aux(&dabs.iter().collect::<Vec<_>>(), true);
-                        Some(4)
-                    }
+                    // (None: the device can't hold the dabs, and the CPU rasterizes the part)
+                    let env = BrushEnv { lin, log_l: &prep.log_l, frame, w, h, keys };
+                    own = brush_part(cx, &env, strokes, inverted, &mut held.brushes);
+                    None
                 }
                 _ => None,
             };
@@ -220,9 +335,16 @@ pub(crate) fn masks(cx: &mut Cx<'_>, lin: &Buf, prep: &Prep, plan: &Plan<'_>, ho
             let refined = guided_cross(cx, &prep.log_l, &plane, w, h, sigma, 0.02, Combine::Mix(k.sqrt()));
             cx.copy_into(&refined, &alpha, mi * n);
         }
-        let amt = (m.adjust.amount / 100.0) as f32;
-        cx.run("finalize", &[n as u32, 0, mi as u32, 0, amt.to_bits()], &[None, None, None, Some(&comp_plane), Some(&alpha)], groups1(n));
+        // (the mask's Amount scales its effect terms, not its alpha: see `effect_terms`)
+        if !used.iter().any(|(k, _)| *k == key) {
+            used.push((key, Arc::new(cx.slice(&alpha, mi * n, n))));
+        }
     }
-    let terms = list.iter().map(|m| mask_terms(&m.adjust)).collect();
+    // (a render that failed is redone on the CPU: what it left on the device is not kept)
+    if !crate::ctx::failed() {
+        held.mattes = plan.mattes.clone();
+        held.slots = used;
+    }
+    let terms = list.iter().map(|m| effect_terms(&m.adjust, (m.adjust.amount / 100.0) as f32)).collect();
     (Some(alpha), terms)
 }

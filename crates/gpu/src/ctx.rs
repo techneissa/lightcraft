@@ -73,7 +73,7 @@ const MODULES: &[Module] = &[
     Module {
         src: include_str!("wgsl/mask.wgsl"),
         bindings: &[("img", false, "f32"), ("log_l", false, "f32"), ("aux", false, "f32"), ("c", true, "f32"), ("alpha", true, "f32")],
-        entries: &["shape", "combine", "finalize"],
+        entries: &["shape", "combine", "finalize", "stroke"],
     },
     Module {
         src: include_str!("wgsl/present.wgsl"),

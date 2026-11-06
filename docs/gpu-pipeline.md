@@ -469,3 +469,20 @@ A view's stages keep an uploaded source only up to 96 MB (a Preview-level source
   faster path for exports.
 - Large-radius blurs at full size (dehaze dark channel at 24 MP) dominate the export: a summed-area
   table or a downsampled dark channel would cut them further.
+
+## Masks on the device (issue #75)
+
+`crates/gpu/src/masks.rs` evaluates the masks. Each mask's alpha is kept with the view's stages
+(`AlphaStore`, next to the CPU's `AlphaCache`, same key: `masks::alpha_key`), so an effect slider, the
+Amount or the global Exposure (for masks that don't read it) evaluates no mask: each kept plane is copied
+into the render's stack of planes. A mask's Amount scales its effect terms (`finish::effect_terms`), not
+its alpha.
+
+A brush part is stamped stroke by stroke by the `stroke` kernel (`mask.wgsl`), inside the stroke's
+bounding box. Each 16 × 16 tile first picks, 256 dabs at a time, the dabs that reach it into workgroup
+memory, so a stroke of tens of thousands of dabs costs what its box and its dabs near each pixel cost; the
+old kernel took at most 4,096 dabs across the whole mask and sent the part to the CPU past that. A dab is
+five words (x, y, radius, hard core, flow), pen pressure applied on the CPU, so pressure stays on the
+device. An Auto Mask stroke is stamped alone, refined with the guided filter and combined in order. A part
+whose strokes extend a held part stamps only the new strokes over a copy of its plane; the last four parts
+stay on the device.
