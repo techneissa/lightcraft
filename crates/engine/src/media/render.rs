@@ -422,6 +422,7 @@ impl RenderJob {
                     self.cache.is_some() || self.display.is_some() || (self.view_cache.is_some() && self.request.quality == Quality::Full);
                 let frame = (self.on_screen && !pixels_needed && gpu)
                     .then(|| develop_on_screen(src, &info, &self.settings, &request, self.stages.as_deref()));
+                let mut fitted: Option<Rgba8> = None;
                 let (mut rendered, gpu_fallback) = match frame {
                     Some(OnScreen::Frame(frame, histogram)) => {
                         return RenderResult {
@@ -444,7 +445,13 @@ impl RenderJob {
                         };
                     }
                     Some(OnScreen::Pixels(r)) => (r, None),
-                    None => develop_reporting(src, &info, &self.settings, &request, self.stages.as_deref(), gpu),
+                    None => {
+                        // the display fit is made on the device before the readback when nothing is converted for a monitor after it
+                        let fit = self.display_fit.filter(|_| self.request.quality == Quality::Full && self.display.is_none());
+                        let (r, fallback, f) = develop_reporting_fit(src, &info, &self.settings, &request, self.stages.as_deref(), gpu, fit);
+                        fitted = f;
+                        (r, fallback)
+                    }
                 };
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
@@ -486,7 +493,11 @@ impl RenderJob {
                 {
                     let (w, h) = (rendered.image.width, rendered.image.height);
                     if w > fw.max(1) || h > fh.max(1) {
-                        rendered.image = fit_for_display(&rendered.image, fw, fh);
+                        let size = lightcraft_raster::resample::fit_size(w, h, fw.max(1), fh.max(1));
+                        rendered.image = match fitted.take() {
+                            Some(f) if (f.width, f.height) == size => f,
+                            _ => fit_for_display(&rendered.image, fw, fh),
+                        };
                     }
                 }
                 RenderResult {
@@ -549,12 +560,27 @@ pub fn develop_reporting(
     stages: Option<&StageCache>,
     gpu: bool,
 ) -> (Rendered, Option<String>) {
-    let (mut rendered, fallback) = develop_image(src, info, s, req, stages, gpu);
+    let (rendered, fallback, _) = develop_reporting_fit(src, info, s, req, stages, gpu, None);
+    (rendered, fallback)
+}
+
+/// [`develop_reporting`], also giving the picture fitted to `fit` (see [`fit_for_display`]) when the GPU made it before the
+/// readback: the same picture the CPU's fit gives, within a level of rounding. `None` there: fit it on the CPU.
+pub fn develop_reporting_fit(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+    gpu: bool,
+    fit: Option<(usize, usize)>,
+) -> (Rendered, Option<String>, Option<Rgba8>) {
+    let (mut rendered, fallback, fitted) = develop_image(src, info, s, req, stages, gpu, fit);
     // an HDR edit's preview is its SDR rendition: its histogram shows the HDR range instead
     if let Some(h) = lightcraft_pipeline::hdr_histogram(src, info, s, req) {
         rendered.histogram = h;
     }
-    (rendered, fallback)
+    (rendered, fallback, fitted)
 }
 
 fn develop_image(
@@ -564,11 +590,16 @@ fn develop_image(
     req: &RenderRequest,
     stages: Option<&StageCache>,
     gpu: bool,
-) -> (Rendered, Option<String>) {
+    fit: Option<(usize, usize)>,
+) -> (Rendered, Option<String>, Option<Rgba8>) {
     // (LUT profiles, Refine Edges and soft proofs render on the GPU too)
     let fallback = if gpu {
-        match lightcraft_gpu::try_render(src, info, s, req, stages) {
-            Ok(r) => return (r, None),
+        let tried = match fit {
+            Some(fit) => lightcraft_gpu::try_render_fit(src, info, s, req, stages, fit),
+            None => lightcraft_gpu::try_render(src, info, s, req, stages).map(|r| (r, None)),
+        };
+        match tried {
+            Ok((r, fitted)) => return (r, None, fitted),
             Err(lightcraft_gpu::Fallback::Failed(why)) => Some(why),
             Err(lightcraft_gpu::Fallback::NotTried) => None,
         }
@@ -579,7 +610,7 @@ fn develop_image(
         Some(st) => lightcraft_pipeline::render_cached(src, info, s, req, st),
         None => lightcraft_pipeline::render(src, info, s, req),
     };
-    (rendered, fallback)
+    (rendered, fallback, None)
 }
 
 /// What [`develop_on_screen`] made.
@@ -607,7 +638,9 @@ fn develop_on_screen(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, 
             OnScreen::Pixels(r)
         }
         // (a render for the photo's pixels never answers with the masks' alphas)
-        Some(lightcraft_gpu::Output::Masks(_)) | None => OnScreen::Pixels(develop(src, info, s, req, stages, false)),
+        Some(lightcraft_gpu::Output::Masks(_) | lightcraft_gpu::Output::ImageFit(..)) | None => {
+            OnScreen::Pixels(develop(src, info, s, req, stages, false))
+        }
     }
     #[cfg(target_arch = "wasm32")]
     OnScreen::Pixels(develop(src, info, s, req, stages, false))

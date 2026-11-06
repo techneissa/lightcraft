@@ -620,6 +620,8 @@ pub enum Output {
     },
     /// The alphas of the visible masks (see [`Want::MaskPlanes`]).
     Masks(lightcraft_pipeline::masks::PlanesOut),
+    /// Pixels, and the same picture fitted to the size asked for ([`Want::ImageFit`]) when that was made on the device.
+    ImageFit(Rendered, Option<Rgba8>),
 }
 
 /// What a render is for.
@@ -629,6 +631,9 @@ pub enum Want<'a> {
     Image,
     /// A texture on the window's device when [`can_display`], else pixels.
     Display,
+    /// Pixels, and the picture shrunk to fit this size with a Lanczos filter on the device before it is read back (the CPU's
+    /// `fit_for_display`, in the same colour space), when the picture is larger and nothing is drawn over it on the CPU.
+    ImageFit((usize, usize)),
     /// Only the planes `ask` names, with each mask's Amount applied (`lightcraft_pipeline::mask_planes`): the photo is not
     /// finished, and the planes are not read back when the asker holds them.
     MaskPlanes(&'a lightcraft_pipeline::masks::PlanesAsk),
@@ -810,6 +815,11 @@ pub fn render(
             groups2(w, rows.min(h - y0), [16, 16]),
         );
     }
+    // (recorded before the readback below, which submits it)
+    let fitted = match want {
+        Want::ImageFit(max) if plan.keep.is_none() && req.overlay == lightcraft_pipeline::Overlay::None => fit_on_device(&mut cx, &out, (w, h), max),
+        _ => None,
+    };
     if want == Want::Display && can_display(gpu, &plan, req) {
         return to_texture(&mut cx, &out, w, h).map(|(frame, histogram)| Output::Display { frame, histogram });
     }
@@ -890,7 +900,42 @@ pub fn render(
     if let Some(k) = plan.keep {
         image = image.crop(k.x, k.y, k.w, k.h);
     }
-    Some(Output::Image(Rendered { image, histogram, deep: None }))
+    let rendered = Rendered { image, histogram, deep: None };
+    let Some((buf, (fw, fh))) = fitted else { return Some(Output::Image(rendered)) };
+    let data: Vec<[u8; 4]> = cx.read(&buf, fw * fh);
+    if crate::ctx::failed() {
+        return None;
+    }
+    Some(Output::ImageFit(rendered, Some(Rgba8 { width: fw, height: fh, data })))
+}
+
+static DEVICE_FITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// How many display fits the device has made in this process (a test says a job's fit was made there, not on the CPU).
+pub fn device_fits() -> u64 {
+    DEVICE_FITS.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+/// The finished picture `out` (`w × h` packed RGBA8) shrunk to fit `max` with a Lanczos3 filter, as `fit_for_display` does on the
+/// CPU: the 8-bit values filtered as floats with the same taps (`resample::weights`), rounded and clamped. `None` when the
+/// picture already fits, or the device cannot hold the floats (the buffers are three floats a pixel, the first pass as wide as
+/// the result and as tall as the picture).
+fn fit_on_device(cx: &mut Cx<'_>, out: &Buf, (w, h): (usize, usize), (max_w, max_h): (usize, usize)) -> Option<(Buf, (usize, usize))> {
+    let (fw, fh) = lightcraft_raster::resample::fit_size(w, h, max_w.max(1), max_h.max(1));
+    if (fw, fh) == (w, h) || fw > w || fh > h {
+        return None;
+    }
+    let floats = |px: usize| px.checked_mul(3).filter(|words| cx.gpu.fits(*words));
+    floats(w * h)?;
+    floats(fw * h)?;
+    floats(fw * fh)?;
+    DEVICE_FITS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let f = cx.gpu.buffer(w * h * 3);
+    cx.run("unpack_rgb8", &[(w * h) as u32], &[Some(out), Some(&f), None], groups1(w * h));
+    let small = resize(cx, &f, (w, h), (fw, fh), 3, Filter::Lanczos3);
+    let packed = cx.gpu.buffer(fw * fh);
+    cx.run("pack_rgb8", &[(fw * fh) as u32], &[None, Some(&small), Some(&packed)], groups1(fw * fh));
+    Some((packed, (fw, fh)))
 }
 
 /// The planes `ask` names, from the masks buffer (`masks()`: one plane after another in the masks' order), each with its Amount

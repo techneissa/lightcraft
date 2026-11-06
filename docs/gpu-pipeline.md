@@ -511,3 +511,15 @@ number with a word-at-a-time hasher (`masks/key.rs`), not the `{:?}` text of eve
 mask of hundreds of strokes of hundreds of samples. Committing a stroke hashes the settings once on the UI thread (the
 photo's remembered hash, which keys every cache of it); the brush preview's settings take their identity from the key they are
 made from.
+
+### The display fit on the device (issue #75)
+
+At rest the loupe renders a little larger than it is drawn and shrinks the picture with a Lanczos3 filter to the exact drawn size
+(`RenderJob::display_fit`). That fit was 14 ms of CPU at 3468 × 2179. `lightcraft_gpu::try_render_fit` (`Want::ImageFit`) makes it
+on the device before the readback: `fit.wgsl` turns the finished picture's packed bytes into floats, the existing `resize_h` /
+`resize_v` kernels filter them with the CPU's own taps (`resample::weights`), and `pack_rgb8` rounds and clamps them back. The
+full picture is read back as before (the view cache keeps it), and the fitted one beside it; the two differ from the CPU's fit by
+at most a level of rounding (`crates/gpu/tests/it/fit.rs`). The CPU fits where the device cannot: a diagnostic overlay is drawn on
+the CPU after the readback, a monitor profile converts the picture after it, and a device whose buffers cannot hold three floats a
+pixel of the picture (`Gpu::fits`) falls back too. The kernels use three storage bindings and 16 × 16 groups, within every
+supported adapter's limits (the device needs at least 10 storage buffers a stage; Metal, Vulkan and DX12 all give that).

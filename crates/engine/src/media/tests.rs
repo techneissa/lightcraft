@@ -712,3 +712,30 @@ fn saving_an_edit_does_not_copy_the_strokes() {
     let step = s.catalog.photo(id).unwrap().history.last().unwrap().settings.clone();
     assert!(Arc::ptr_eq(&held, &step), "the History step shares them");
 }
+
+// Given a loupe job with a display fit on a machine with a GPU, the fit is made on the device before the readback, and the picture is
+// the CPU's fit of the full render within a level of rounding; where the device makes none (an overlay drawn on the CPU) the CPU fits
+#[test]
+fn the_display_fit_is_made_on_the_device_when_it_can_be() {
+    if !lightcraft_gpu::available() {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+        return;
+    }
+    let mut s = crate::Session::with_demo();
+    let id = s.active().unwrap();
+    let full = s.loupe_job(id, 1024, 1024, true).unwrap().run().rendered.unwrap().image;
+    let (fw, fh) = (full.width * 9 / 10, full.height * 9 / 10);
+    let before = lightcraft_gpu::device_fits();
+    let fitted = s.loupe_job(id, 1024, 1024, true).unwrap().with_display_fit(fw, fh).run().rendered.unwrap().image;
+    assert!(lightcraft_gpu::device_fits() > before, "the fit was not made on the device");
+    let want = fit_for_display(&full, fw, fh);
+    assert_eq!((fitted.width, fitted.height), (want.width, want.height));
+    let worst = fitted.data.iter().zip(&want.data).flat_map(|(p, q)| (0..4).map(move |c| p[c].abs_diff(q[c]))).max().unwrap();
+    assert!(worst <= 1, "the device's fit differs from the CPU's by {worst}");
+    // a diagnostic overlay is drawn on the CPU after the readback: the CPU fits, and the size is the same
+    let before = lightcraft_gpu::device_fits();
+    let spots = lightcraft_pipeline::Overlay::Spots(50);
+    let on_cpu = s.loupe_job(id, 1024, 1024, true).unwrap().with_overlay(spots).with_display_fit(fw, fh).run().rendered.unwrap().image;
+    assert_eq!(lightcraft_gpu::device_fits(), before, "an overlay render was fitted on the device");
+    assert_eq!((on_cpu.width, on_cpu.height), (want.width, want.height));
+}

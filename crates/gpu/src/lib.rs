@@ -46,7 +46,7 @@ mod params;
 mod render;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use render::{DisplayFrame, GpuStages, Output};
+pub use render::{DisplayFrame, GpuStages, Output, device_fits};
 /// The wgpu the renderer is built on (the same crate eframe uses: hosts hand over its device).
 #[cfg(not(target_arch = "wasm32"))]
 pub use wgpu;
@@ -525,12 +525,39 @@ pub fn try_render(
         match run(src, info, s, req, stages, render::Want::Image)? {
             render::Output::Image(r) => Ok(r),
             // (not asked for)
-            render::Output::Display { .. } | render::Output::Masks(_) => Err(Fallback::NotTried),
+            render::Output::Display { .. } | render::Output::Masks(_) | render::Output::ImageFit(..) => Err(Fallback::NotTried),
         }
     }
     #[cfg(target_arch = "wasm32")]
     {
         let _ = (src, info, s, req, stages);
+        Err(Fallback::NotTried)
+    }
+}
+
+/// [`try_render`], also giving the picture shrunk to fit `fit` (long edge and short edge: `(max_w, max_h)`, aspect kept) with a
+/// Lanczos filter on the device before it is read back, as the CPU's `fit_for_display` does (within a level of rounding). `None` in
+/// the second place: the picture already fits, a diagnostic overlay is drawn on it, the render is a window, or the device cannot hold it:
+/// fit it on the CPU.
+pub fn try_render_fit(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+    fit: (usize, usize),
+) -> Result<(Rendered, Option<lightcraft_raster::Rgba8>), Fallback> {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        match run(src, info, s, req, stages, render::Want::ImageFit(fit))? {
+            render::Output::Image(r) => Ok((r, None)),
+            render::Output::ImageFit(r, f) => Ok((r, f)),
+            render::Output::Display { .. } | render::Output::Masks(_) => Err(Fallback::NotTried),
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = (src, info, s, req, stages, fit);
         Err(Fallback::NotTried)
     }
 }
@@ -695,6 +722,7 @@ fn run(
                     Some(Output::Image(r)) => format!("{}×{}", r.image.width, r.image.height),
                     Some(Output::Display { frame, .. }) => format!("{}×{}", frame.width, frame.height),
                     Some(Output::Masks(_)) => "mask planes".into(),
+                    Some(Output::ImageFit(r, _)) => format!("{}×{}", r.image.width, r.image.height),
                     None => "GPU render".into(),
                 };
                 let reason = match f.kind {

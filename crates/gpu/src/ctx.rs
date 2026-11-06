@@ -81,6 +81,11 @@ const MODULES: &[Module] = &[
         entries: &["unwritten", "pad_rows"],
     },
     Module {
+        src: include_str!("wgsl/fit.wgsl"),
+        bindings: &[("px", false, "u32"), ("f", true, "f32"), ("out", true, "u32")],
+        entries: &["unpack_rgb8", "pack_rgb8"],
+    },
+    Module {
         src: include_str!("wgsl/geom.wgsl"),
         bindings: &[("src", false, "f32"), ("dst", true, "f32"), ("coverage", false, "u32")],
         entries: &["orient", "sample_affine", "sample_warp"],
