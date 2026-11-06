@@ -408,7 +408,7 @@ pub fn adapter_name() -> Option<String> {
 
 /// Device buffers held by the renderer.
 #[cfg(not(target_arch = "wasm32"))]
-pub use ctx::GpuMemory;
+pub use ctx::{GpuMemory, readbacks};
 
 /// Device buffers held by the renderer.
 #[cfg(target_arch = "wasm32")]

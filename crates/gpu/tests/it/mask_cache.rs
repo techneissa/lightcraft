@@ -310,3 +310,49 @@ fn the_device_gives_the_masks_alphas_the_cpu_does() {
         assert!(top <= 0.6 + 1e-3, "{name}: the Amount applies: {top}");
     }
 }
+
+/// A mask the device has no kernel for (a stored Subject selection) is evaluated on the CPU from the image read back once; with
+/// its alpha kept, the effect ticks that follow read back only the finished picture and its histogram, never the image again.
+#[test]
+fn a_cached_cpu_mask_reads_no_image_back_on_an_effect_tick() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(960, 640);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(720, 720);
+    let side = 64;
+    let logits: Vec<f32> = (0..side * side)
+        .map(|i| {
+            let (x, y) = ((i % side) as f32 / side as f32 - 0.5, (i / side) as f32 / side as f32 - 0.5);
+            (0.2 - x.hypot(y)) * 40.0
+        })
+        .collect();
+    let seg = lightcraft_develop::SegMask::from_logits(side, &logits);
+    let mask = Mask {
+        id: 1,
+        components: vec![comp(MaskOp::Add, MaskShape::Subject { seg: Some(seg), detail: Vec::new(), edge: 0.0 })],
+        adjust: adjust(),
+        ..Default::default()
+    };
+    let mut s = with_masks(vec![mask]);
+    let cache = StageCache::default();
+    let (w, h) = (720u64, 480u64);
+    let (n0, b0) = lightcraft_gpu::readbacks();
+    lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu");
+    let (_, first) = lightcraft_gpu::readbacks();
+    // (the first render reads the image for the mask: 12 bytes a pixel, 16 with the log luminance, besides the output)
+    assert!(first - b0 >= w * h * 12, "the first render reads the image back for the CPU mask: {} bytes", first - b0);
+    for k in 1..4 {
+        s.masks[0].adjust.exposure = 0.2 * k as f64;
+        s.light.exposure = 0.05 * k as f64;
+        let (n, b) = lightcraft_gpu::readbacks();
+        let before = mask_evaluations();
+        lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu");
+        let (n2, b2) = lightcraft_gpu::readbacks();
+        assert_eq!(mask_evaluations() - before, 0, "tick {k} evaluated the mask again");
+        // the output picture (4 bytes a pixel) and the histogram's few bins
+        assert!(b2 - b <= w * h * 4 + 64 * 1024, "tick {k} read {} bytes back ({} readbacks)", b2 - b, n2 - n);
+    }
+    assert!(n0 <= lightcraft_gpu::readbacks().0);
+}

@@ -736,6 +736,7 @@ impl Gpu {
     /// nothing more is submitted.
     pub fn finish_and_read<T: bytemuck::Pod>(&self, mut enc: wgpu::CommandEncoder, src: &Buf, len: usize) -> Vec<T> {
         assert!(len <= src.len, "readback of {len} values from a buffer of {}", src.len);
+        READBACKS.with(|r| r.set((r.get().0.wrapping_add(1), r.get().1.wrapping_add(len as u64 * 4))));
         let zeros = || vec![<T as bytemuck::Zeroable>::zeroed(); len];
         if failed() {
             return zeros();
@@ -950,6 +951,17 @@ pub(crate) enum FailKind {
 pub(crate) struct Failure {
     pub kind: FailKind,
     pub reason: String,
+}
+
+thread_local! {
+    /// (readbacks, bytes asked for) by this thread's renders so far.
+    static READBACKS: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Readbacks (device buffer to host memory) this thread's renders have made, and the bytes they asked for: a test counts what a
+/// render reads back (a mask evaluated on the CPU reads the whole image).
+pub fn readbacks() -> (u64, u64) {
+    READBACKS.with(std::cell::Cell::get)
 }
 
 thread_local! {

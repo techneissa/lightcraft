@@ -498,3 +498,9 @@ the photo's render, so it copies the alphas that render kept and evaluates no ma
 the union of all) per view and colour, and draws it with the opacity as the draw's tint
 (`crates/ui-egui/src/mask_tint.rs`). With a display profile, and in the browser build, the overlay is still
 drawn into the render.
+
+A mask without a kernel (Subject, Object, Sky and Background selections, Color Range's heuristics) is evaluated on the CPU
+from the image read back once; its alpha is then kept with the view's stages like any other, so the effect ticks that follow
+read back only the finished picture and its histogram (`lightcraft_gpu::readbacks` counts them; tested). A Sky, Luminance or
+Color Range mask reads the global Exposure, so an Exposure drag evaluates it again on the CPU, with the image read back, each
+tick.
