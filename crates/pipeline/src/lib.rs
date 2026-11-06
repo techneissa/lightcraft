@@ -765,13 +765,22 @@ fn render_impl(
     if let Some(job) = alphas_out {
         let signature = masks::planes_signature(&plan, src_img as *const Rgb32f as usize, job.ask.want);
         let planes = (job.ask.known != Some(signature)).then(|| {
-            let ids: Vec<u32> = masks::wanted(&plan.settings.masks, job.ask.want).map(|m| m.id).collect();
-            prep.masks
-                .iter()
-                .filter(|e| ids.contains(&e.id))
-                .map(|e| {
-                    let p = e.plane();
-                    (e.id, plan.keep.map_or(p.clone(), |k| p.crop(k.x, k.y, k.w, k.h)))
+            let ev = plan.settings.light.exposure as f32;
+            masks::wanted(&plan.settings.masks, job.ask.want)
+                .map(|m| {
+                    // (a hidden mask is not in the render's masks: evaluated here, as the overlay always did)
+                    let p = match prep.masks.iter().find(|e| e.id == m.id) {
+                        Some(e) => e.plane(),
+                        None => {
+                            let mut p = masks::evaluate_one(m, &plan.frame, plan.w, plan.h, &prep.img, &prep.log_l, ev, plan.mattes.as_deref());
+                            let amount = (m.adjust.amount / 100.0) as f32;
+                            if (amount - 1.0).abs() > 1e-6 {
+                                p.data.iter_mut().for_each(|v| *v *= amount);
+                            }
+                            p
+                        }
+                    };
+                    (m.id, plan.keep.map_or(p.clone(), |k| p.crop(k.x, k.y, k.w, k.h)))
                 })
                 .collect()
         });

@@ -1137,7 +1137,8 @@ pub(crate) fn mask_tint(app: &LightcraftApp, d: &DevelopSettings, frame: u64, re
     use crate::mask_tint::{Pick, TintSel};
     use lightcraft_pipeline::{MaskView, Overlay};
     let none = MaskTintAsk { open: false, sel: None };
-    let any = d.masks.iter().any(|m| m.visible && !m.components.is_empty());
+    // (a selected mask that is hidden still shows its overlay: any mask with something in it opens the tint)
+    let any = d.masks.iter().any(|m| !m.components.is_empty());
     if !tint_outside_render(app) || app.ui.fullscreen || app.ui.right != RightPanel::Masking || !any {
         return none;
     }

@@ -309,6 +309,14 @@ fn the_device_gives_the_masks_alphas_the_cpu_does() {
         if name == "window" {
             assert_eq!((gpu_planes[0].1.width, gpu_planes[0].1.height), (window.w, window.h), "cut to the window");
         }
+        // a selected mask that is hidden still has its plane: the device has it not, the CPU evaluates it, and both agree
+        let hidden = PlanesAsk { want: MaskWant::One(4), known: None };
+        let g = lightcraft_gpu::mask_planes(&src, &info, &s, &req, Some(&cache), &hidden).expect("hidden").planes.expect("planes");
+        let c = lightcraft_pipeline::mask_planes(&src, &info, &s, &req, None, &hidden).planes.expect("planes");
+        assert_eq!(g.len(), 1, "{name}: the hidden mask's plane");
+        assert!(g[0].1.data.iter().any(|v| *v > 0.5), "{name}: it selects something");
+        let worst = g[0].1.data.iter().zip(&c[0].1.data).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+        assert!(worst < 0.02, "{name}: the hidden mask differs by {worst}");
         // one mask reads back one plane; planes the asker holds read back nothing
         let (_, b0) = lightcraft_gpu::readbacks();
         let one = PlanesAsk { want: MaskWant::One(9), known: None };

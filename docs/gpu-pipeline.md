@@ -495,7 +495,7 @@ mask's for Show All Masks. `lightcraft_gpu::mask_planes` (`Want::MaskPlanes` in 
 alphas the photo's render kept (no mask is evaluated), signs the planes (`masks::planes_signature`: each mask's alpha key and
 Amount, the size, the window, the source), and reads back only the wanted planes, one at a time, applying the Amount and cutting
 the window. The asker sends the signature of the planes it holds, and gets none while it is unchanged: an effect slider, a drag,
-or hiding and showing the overlay make no plane. With the overlay off nothing is asked. The CPU's twin is
+or hiding and showing the overlay make no plane. With the overlay off nothing is asked. A selected mask that is hidden still has its plane (evaluated on the CPU from the image on the device path, not part of Show All Masks). The CPU's twin is
 `lightcraft_pipeline::mask_planes`. The UI makes one premultiplied tint texture from the plane per view and colour, and draws it
 with the opacity as the draw's tint (`crates/ui-egui/src/mask_tint.rs`). With a display profile, and in the browser build, the
 overlay is still drawn into the render.

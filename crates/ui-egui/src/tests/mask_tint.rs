@@ -204,3 +204,21 @@ fn color_overlay_on_bw_keeps_its_drafts_off_the_gpu() {
     let full = h.app.session.loupe_job(id, 300, 300, true).expect("a job");
     assert!(!h.app.renderer.job_for(Slot::Main, full).on_screen);
 }
+
+// Given a selected mask that is hidden (the eye in the list), its overlay still shows: the planes of a hidden mask are asked for
+// and drawn, as the overlay always did; Show All Masks leaves it out
+#[test]
+fn a_hidden_selected_mask_still_shows_its_overlay() {
+    let mut h = masking();
+    let id = h.app.session.active_mask.expect("a selected mask");
+    let r = h.request("engine.execute", json!({"command": "mask.visible", "params": {"id": id, "visible": false}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.settle(SETTLE));
+    assert!(h.app.ui.mask_overlay);
+    let (photo, k) = main_tex(&h);
+    let held = h.app.renderer.tints.planes(Slot::Main).expect("planes");
+    assert_eq!(held.planes.len(), 1, "the hidden mask's plane");
+    assert_eq!(held.planes[0].0, id);
+    assert!(held.planes[0].1.iter().any(|a| *a > 0));
+    assert!(h.app.renderer.tints.drawn(Slot::Main, photo, k), "its overlay is drawn");
+}

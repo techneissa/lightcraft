@@ -353,6 +353,12 @@ fn mask_planes_are_the_asked_masks_alphas_and_reuse_the_render() {
     assert_eq!(one_planes.len(), 1);
     assert_eq!(one_planes[0].1.data, half.data);
     assert_ne!(one.signature, out.signature, "another mask, other planes");
+    // a hidden mask that is selected still has its plane (not in All), with its Amount
+    let hidden_one = crate::mask_planes(&src, &info, &s, &req, Some(&cache), &PlanesAsk { want: MaskWant::One(5), known: None });
+    let hp = hidden_one.planes.expect("a hidden mask's plane");
+    assert_eq!(hp.len(), 1);
+    assert!(hp[0].1.data.iter().any(|v| *v > 0.9), "it selects where its shape is");
+    assert_eq!(hp[0].1.data, planes[0].1.data, "the same shape as the visible one, evaluated apart");
     // the asker holds them: none come, whatever else changed (an effect, the global Exposure) that they are not made from
     let held = PlanesAsk { want: MaskWant::One(2), known: Some(one.signature) };
     s.masks[2].adjust.exposure = -1.0;

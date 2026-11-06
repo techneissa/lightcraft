@@ -740,7 +740,7 @@ pub fn render(
     let (masks, terms) = crate::masks::masks(&mut cx, &lin, &prep, &plan, &mut host, stages.map(|c| (&c.alphas, src)));
     lap("masks", &mut t, &mut cx);
     if let Want::MaskPlanes(ask) = want {
-        return Some(Output::Masks(mask_planes(&mut cx, masks.as_ref(), &plan, Arc::as_ptr(src) as usize, ask)));
+        return Some(Output::Masks(mask_planes(&mut cx, masks.as_ref(), &plan, (&lin, &prep.log_l), Arc::as_ptr(src) as usize, ask)));
     }
 
     // 5. per-pixel stage
@@ -896,7 +896,14 @@ pub fn render(
 /// The planes `ask` names, from the masks buffer (`masks()`: one plane after another in the masks' order), each with its Amount
 /// applied as `Evaluated::plane` does and cut to the request's window. Only the wanted planes are read back, and none when the
 /// asker holds them (`PlanesAsk::known` is their signature).
-fn mask_planes(cx: &mut Cx<'_>, all: Option<&Buf>, plan: &Plan<'_>, source: usize, ask: &lightcraft_pipeline::masks::PlanesAsk) -> PlanesOut {
+fn mask_planes(
+    cx: &mut Cx<'_>,
+    all: Option<&Buf>,
+    plan: &Plan<'_>,
+    (lin, log_l): (&Buf, &Buf),
+    source: usize,
+    ask: &lightcraft_pipeline::masks::PlanesAsk,
+) -> PlanesOut {
     use lightcraft_pipeline::masks::{planes_signature, wanted};
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
@@ -904,14 +911,26 @@ fn mask_planes(cx: &mut Cx<'_>, all: Option<&Buf>, plan: &Plan<'_>, source: usiz
     if ask.known == Some(signature) {
         return PlanesOut { signature, planes: None };
     }
-    let list: Vec<_> = plan.settings.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();
-    let (Some(all), false) = (all, list.is_empty() || n == 0) else { return PlanesOut { signature, planes: Some(Vec::new()) } };
-    let ids: Vec<u32> = wanted(&plan.settings.masks, ask.want).map(|m| m.id).collect();
+    if n == 0 {
+        return PlanesOut { signature, planes: Some(Vec::new()) };
+    }
+    // the device's stack holds the visible masks, in order
+    let visible: Vec<_> = plan.settings.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();
     let mut out = Vec::new();
-    for (mi, m) in list.iter().enumerate().filter(|(_, m)| ids.contains(&m.id)) {
-        // (a plane at a time: one mask's alpha is what a tint shows, and the whole stack is many times that)
-        let one = cx.slice(all, mi * n, n);
-        let mut plane = cx.read_plane(&one, w, h);
+    let mut host: Option<(Rgb32f, Plane)> = None;
+    for m in wanted(&plan.settings.masks, ask.want) {
+        let mut plane = match (visible.iter().position(|v| v.id == m.id), all) {
+            // (a plane at a time: one mask's alpha is what a tint shows, and the whole stack is many times that)
+            (Some(mi), Some(all)) => {
+                let one = cx.slice(all, mi * n, n);
+                cx.read_plane(&one, w, h)
+            }
+            // a hidden mask is not on the device: evaluated on the CPU from the image, as the overlay always did
+            _ => {
+                let (img, l) = host.get_or_insert_with(|| (cx.read_rgb(lin, w, h), cx.read_plane(log_l, w, h)));
+                lightcraft_pipeline::masks::evaluate_one(m, &plan.frame, w, h, img, l, plan.settings.light.exposure as f32, plan.mattes.as_deref())
+            }
+        };
         let amount = (m.adjust.amount / 100.0) as f32;
         if (amount - 1.0).abs() > 1e-6 {
             plane.data.iter_mut().for_each(|v| *v *= amount);

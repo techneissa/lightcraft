@@ -34,14 +34,15 @@ pub struct PlanesOut {
     pub planes: Option<Vec<(u32, Plane)>>,
 }
 
-/// The masks of `settings` that `want` names and a render evaluates: visible, with components.
+/// The masks of `settings` that `want` names and has something to show: every visible mask with components for [`MaskWant::All`];
+/// for [`MaskWant::One`] the mask itself, hidden or not (a selected mask that is hidden still shows its overlay).
 pub fn wanted(masks: &[Mask], want: MaskWant) -> impl Iterator<Item = &Mask> {
     masks.iter().filter(move |m| {
-        let named = match want {
-            MaskWant::All => true,
-            MaskWant::One(id) => id == m.id,
-        };
-        named && m.visible && !m.components.is_empty()
+        !m.components.is_empty()
+            && match want {
+                MaskWant::All => m.visible,
+                MaskWant::One(id) => id == m.id,
+            }
     })
 }
 
