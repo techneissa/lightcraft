@@ -16,7 +16,7 @@
 //! - `overlay`: the mask overlay switched on and off again, one render per flip.
 //! - `hash`: the settings hash64 and clone the loupe took every frame (UI thread, CPU only).
 //! - `loupe ...`: the same renders through a whole `RenderJob`, as the loupe's worker runs them at
-//!   rest (`loupe settle`, `loupe commit`, `loupe overlay`, `loupe brush target`): `Quality::Full`,
+//!   rest (`loupe settle`, `loupe commit`, `loupe overlay`, `loupe brush target`, `loupe planes`: the tint's planes beside the render): `Quality::Full`,
 //!   the view cache, the display fit and the pixels read back, plus the job step by step
 //!   (`loupe steps`) and masks that run on the CPU inside a render (`cpumask`: Subject, Object,
 //!   Sky, Refine Edges, Color Range).

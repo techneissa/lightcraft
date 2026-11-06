@@ -12,6 +12,7 @@ use lightcraft_develop::{BrushStroke, DevelopSettings, LocalAdjustments, Mask, M
 use lightcraft_engine::Session;
 use lightcraft_engine::media::{DecodedSource, RenderJob, SourceRef, fit_for_display};
 use lightcraft_geom::Point;
+use lightcraft_pipeline::masks::{MaskWant, PlanesAsk};
 use lightcraft_pipeline::{MaskView, Overlay, SourceInfo, StageCache};
 use lightcraft_raster::Rgb32f;
 
@@ -59,6 +60,15 @@ impl Loupe {
         let overlay = Overlay::AllMasks { view: MaskView::Color, color: [255, 40, 40], opacity: 50 };
         self.at_rest(settings, stages).with_overlay(overlay)
     }
+}
+
+fn black_box_run(job: RenderJob) {
+    std::hint::black_box(run(job));
+}
+
+/// The signature of the planes a planes job answered with.
+fn signature_of(job: RenderJob) -> u64 {
+    job.run().mask_planes.map_or(0, |p| p.signature)
 }
 
 /// Run `job`; the result's image size says it rendered.
@@ -136,6 +146,66 @@ pub fn count_rows(loupe: &Loupe, out: &Out<'_>, base: &DevelopSettings, extra: &
             })
         });
         println!("{count:>4} strokes  loupe overlay flip {}", columns(&ms));
+    }
+    if run_row("loupe planes") {
+        // the tint's planes beside a photo render (`for_mask_planes`): the first ask reads the selected mask's plane back, one the
+        // asker holds reads nothing, every mask's reads them all; and a committed stroke's photo render plus the planes
+        // of its new alpha
+        let one = PlanesAsk { want: MaskWant::One(1), known: None };
+        let plane_job = |t: &DevelopSettings, stages: &Arc<StageCache>, ask| loupe.at_rest(t, stages).for_mask_planes(ask);
+        let ms = per_backend(&|_, stages| {
+            black_box_run(loupe.at_rest(base, stages));
+            let mut k = 0.0;
+            best(n, || {
+                let mut t = base.clone();
+                k += 1.0;
+                t.masks[0].adjust.amount = 100.0 - k % 40.0;
+                black_box_run(plane_job(&t, stages, one));
+            })
+        });
+        println!("{count:>4} strokes  loupe planes first (one mask) {}", columns(&ms));
+        let ms = per_backend(&|_, stages| {
+            black_box_run(loupe.at_rest(base, stages));
+            let signature = signature_of(plane_job(base, stages, one));
+            let held = PlanesAsk { want: MaskWant::One(1), known: Some(signature) };
+            let mut k = 0.0;
+            best(n, || {
+                let mut t = base.clone();
+                k += 1.0;
+                t.light.exposure = 0.2 + k * 0.01;
+                black_box_run(plane_job(&t, stages, held));
+            })
+        });
+        println!("{count:>4} strokes  loupe planes held (nothing read) {}", columns(&ms));
+        let ms = per_backend(&|_, stages| {
+            black_box_run(loupe.at_rest(base, stages));
+            let all = PlanesAsk { want: MaskWant::All, known: None };
+            let mut k = 0.0;
+            best(n, || {
+                let mut t = base.clone();
+                k += 1.0;
+                t.masks[0].adjust.amount = 100.0 - k % 40.0;
+                black_box_run(plane_job(&t, stages, all));
+            })
+        });
+        println!("{count:>4} strokes  loupe planes (all masks) {}", columns(&ms));
+        let ms = per_backend(&|_, stages| {
+            black_box_run(loupe.at_rest(base, stages));
+            let mut k = 0;
+            best(n, || {
+                let mut t = base.clone();
+                if let Some(s) = extra.get(k % extra.len().max(1)) {
+                    push_stroke(&mut t, s.clone());
+                }
+                k += 1;
+                black_box_run(loupe.at_rest(&t, stages));
+                black_box_run(plane_job(&t, stages, one));
+                // (undone: the held planes are the old ones again, asked for with their signature)
+                black_box_run(loupe.at_rest(base, stages));
+                black_box_run(plane_job(base, stages, one));
+            })
+        });
+        println!("{count:>4} strokes  loupe commit+undo with the tint's planes {}", columns(&ms));
     }
     if run_row("loupe brush target") {
         // the brush tool's second render: the photo with the mask's brush covering everything
