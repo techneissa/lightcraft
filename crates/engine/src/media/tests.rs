@@ -674,3 +674,30 @@ fn a_render_can_bring_the_masks_alphas_without_changing_the_photo() {
     let worst = shown.data.iter().zip(alpha).map(|(p, a)| p[0].abs_diff(*a)).max().unwrap();
     assert!(worst <= 1, "the alpha is what the overlay draws: off by {worst}");
 }
+
+// Given an edit that adds a stroke, the settings the editor passes in are the ones the photo holds afterwards and the History
+// step shares them: saving it copies no stroke (it used to copy every stroke of every mask twice more)
+#[test]
+fn saving_an_edit_does_not_copy_the_strokes() {
+    use lightcraft_develop::{BrushStroke, Mask, MaskComponent, MaskOp, MaskShape};
+    let mut s = crate::Session::with_demo();
+    let id = s.active().unwrap();
+    let stroke =
+        BrushStroke { points: (0..400).map(|i| lightcraft_geom::Point::new(0.1 + i as f64 * 0.001, 0.5)).collect(), ..BrushStroke::default() };
+    let mut d = (*s.develop_of(id).unwrap()).clone();
+    d.masks = vec![Mask {
+        id: 1,
+        components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Brush { strokes: vec![stroke; 30] } }],
+        ..Mask::default()
+    }];
+    let strokes_at = |d: &DevelopSettings| match &d.masks[0].components[0].shape {
+        MaskShape::Brush { strokes } => strokes.as_ptr() as usize,
+        _ => 0,
+    };
+    let passed = strokes_at(&d);
+    s.set_develop(id, d, "Brush").unwrap();
+    let held = s.develop_of(id).unwrap();
+    assert_eq!(strokes_at(&held), passed, "the strokes the editor made are the ones the photo holds");
+    let step = s.catalog.photo(id).unwrap().history.last().unwrap().settings.clone();
+    assert!(Arc::ptr_eq(&held, &step), "the History step shares them");
+}

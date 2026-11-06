@@ -1084,19 +1084,24 @@ impl Session {
     /// undo step; otherwise it is committed with a history entry.
     pub fn set_develop(&mut self, id: PhotoId, settings: DevelopSettings, label: &str) -> Result<()> {
         let now = (self.clock)();
-        // Auto Sync carries the edit as asked; each photo then fits its own crop (review of #1990)
-        let requested = settings;
-        let settings = Arc::new(self.fit_constrained_crop(id, requested.clone()));
-        let crop_edited = self.develop_of(id).is_some_and(|d| d.crop.geometry != requested.crop.geometry);
+        let crop_edited = self.develop_of(id).is_some_and(|d| d.crop.geometry != settings.crop.geometry);
+        let interacting = self.interaction.as_ref().is_some_and(|i| i.photo == id);
+        // Auto Sync carries the edit as asked; each photo then fits its own crop (review of #1990). Only then is the edit
+        // kept as asked next to the fitted one: every stroke of every mask is one copy of it, so a plain edit moves into
+        // the photo's settings without any.
+        let requested = (!interacting && self.auto_sync_applies(id, label)).then(|| settings.clone());
+        let settings = Arc::new(self.fit_constrained_crop(id, settings));
         if let Some(i) = &mut self.interaction
             && i.photo == id
         {
             i.crop_edited |= crop_edited;
             return self.apply_silent(Op::SetDevelop { id, settings, label: label.into(), edited: Some(now) });
         }
-        let own_auto = self.own_auto_wb(id, &requested, label);
-        let mut ops = vec![self.develop_op(id, (*settings).clone(), label).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?];
-        ops.extend(self.auto_sync_ops(id, &requested, label, &own_auto));
+        let own_auto = requested.as_ref().map(|r| self.own_auto_wb(id, r, label)).unwrap_or_default();
+        let mut ops = vec![self.develop_op_shared(id, settings, label).ok_or(lightcraft_catalog::CatalogError::NoPhoto(id))?];
+        if let Some(requested) = &requested {
+            ops.extend(self.auto_sync_ops(id, requested, label, &own_auto));
+        }
         let op = if ops.len() == 1 { ops.remove(0) } else { Op::Batch { ops } };
         self.commit(label, op)
     }
@@ -1201,6 +1206,12 @@ impl Session {
 
     /// The op that sets a photo's develop settings and appends a History entry (for batches).
     pub fn develop_op(&self, id: PhotoId, settings: DevelopSettings, label: &str) -> Option<Op> {
+        self.develop_op_shared(id, Arc::new(settings), label)
+    }
+
+    /// [`Self::develop_op`] for settings already shared: they go into the op and the History step as they are (no copy of
+    /// the masks' strokes), unless old masks have to be attached to the photo first.
+    pub fn develop_op_shared(&self, id: PhotoId, settings: Arc<DevelopSettings>, label: &str) -> Option<Op> {
         self.catalog.photo(id)?;
         let mut settings = settings;
         // old masks (on the corrected frame) go onto the photo, from the frame they were drawn on:
@@ -1216,7 +1227,7 @@ impl Session {
         if settings.masks.iter().any(|m| !m.on_photo) || turn.is_some() {
             let kept_frame = before.as_ref().and_then(|b| self.mask_frame(id, b));
             let new_frame = self.mask_frame(id, &settings);
-            for m in &mut settings.masks {
+            for m in &mut Arc::make_mut(&mut settings).masks {
                 let kept = before.as_ref().is_some_and(|b| b.masks.contains(m));
                 if let Some(f) = if kept { kept_frame.as_ref() } else { new_frame.as_ref() } {
                     lightcraft_pipeline::mask_space::attach(m, f);
@@ -1226,7 +1237,6 @@ impl Session {
                 }
             }
         }
-        let settings = Arc::new(settings);
         let step = lightcraft_catalog::HistoryStep { label: label.into(), settings: settings.clone() };
         Some(Op::Batch {
             ops: vec![Op::SetDevelop { id, settings, label: label.into(), edited: Some((self.clock)()) }, Op::PushHistory { id, step }],
