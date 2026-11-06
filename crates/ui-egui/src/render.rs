@@ -629,7 +629,9 @@ impl Renderer {
         }
         let job = job.with_display(self.display.clone());
         // a drag's drafts are only drawn: they may stay on the GPU when the window can show them
-        if self.screen.is_some() && job.request.quality == lightcraft_pipeline::Quality::Draft { job.on_screen() } else { job }
+        // (not while a view that makes its grey from the pixels is shown: a draft left on the GPU has none, and the tint would show over colour)
+        let pixels_wanted = self.tints.keep_region && matches!(slot, Slot::Main | Slot::Region);
+        if self.screen.is_some() && !pixels_wanted && job.request.quality == lightcraft_pipeline::Quality::Draft { job.on_screen() } else { job }
     }
 
     /// Show GPU-resident renders through `screen` from now on (the desktop app, once its GPU

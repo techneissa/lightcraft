@@ -86,7 +86,8 @@ pub struct MaskTints {
     asked: HashMap<Slot, Asked>,
     built: HashMap<Slot, Built>,
     sel: Option<TintSel>,
-    /// Keep the zoom window's pixels (Color Overlay on B&W makes its grey from them).
+    /// The view shown makes its grey from the photo's pixels (Color Overlay on B&W): the zoom window keeps its pixels, and a draft is
+    /// not left on the GPU.
     pub keep_region: bool,
     /// Tint textures made so far (tests count them: a toggle or an opacity change makes none).
     #[cfg(test)]

@@ -170,3 +170,37 @@ fn the_tint_is_the_selected_masks_alpha() {
     assert_eq!(held.planes[0].0, selected);
     assert!(held.plane(selected).is_some_and(|p| p.iter().any(|a| *a > 0)), "the mask selects something");
 }
+
+struct NoScreen;
+
+impl crate::render::ScreenTextures for NoScreen {
+    fn show(&mut self, _: &lightcraft_engine::media::ScreenFrame, _: Option<egui::TextureId>) -> Option<egui::TextureId> {
+        None
+    }
+    fn free(&mut self, _: egui::TextureId) {}
+}
+
+// Given Color Overlay on B&W (its grey is made from the photo's pixels), a drag's drafts are not left on the GPU, where there are no
+// pixels and the tint would show over the colour photo; every other view keeps them there
+#[test]
+fn color_overlay_on_bw_keeps_its_drafts_off_the_gpu() {
+    let mut h = masking();
+    h.app.renderer.set_screen_textures(Box::new(NoScreen));
+    let id = h.app.session.active().expect("a photo");
+    let draft = |h: &mut Headless, slot: Slot| {
+        let job = h.app.session.loupe_job(id, 300, 300, true).expect("a job").draft();
+        h.app.renderer.job_for(slot, job).on_screen
+    };
+    assert!(draft(&mut h, Slot::Main), "a draft is left on the GPU where the window can draw it");
+    h.app.ui.mask_overlay_mode = MaskView::ColorOnBw.name().to_string();
+    h.settle(SETTLE);
+    assert!(h.app.renderer.tints.keep_region, "the view makes its grey from the pixels");
+    assert!(!draft(&mut h, Slot::Main), "Color Overlay on B&W: the draft comes back as pixels");
+    assert!(!draft(&mut h, Slot::Region));
+    h.app.ui.mask_overlay_mode = MaskView::Color.name().to_string();
+    h.settle(SETTLE);
+    assert!(draft(&mut h, Slot::Main), "another view: back on the GPU");
+    // (the photo's own full renders were never left there)
+    let full = h.app.session.loupe_job(id, 300, 300, true).expect("a job");
+    assert!(!h.app.renderer.job_for(Slot::Main, full).on_screen);
+}
