@@ -72,15 +72,11 @@ pub enum Slot {
 /// Settings that can change the rendered frame. Colour-only edits, including temporarily
 /// hidden grading wheels, must not discard a decoded RAW's actual aspect ratio.
 pub(crate) fn geometry_look(settings: &lightcraft_develop::DevelopSettings) -> u64 {
-    let geometry = lightcraft_develop::DevelopSettings {
-        crop: settings.crop,
-        orientation: settings.orientation,
-        geometry: settings.geometry.clone(),
-        optics: settings.optics,
-        disabled_sections: settings.disabled_sections.iter().filter(|s| matches!(s.as_str(), "geometry" | "optics")).cloned().collect(),
-        ..Default::default()
-    };
-    geometry.hash64()
+    // (only these few fields are written and hashed: `DevelopSettings::hash64` writes every stroke of every mask, and this
+    // runs for every texture on every frame)
+    let disabled: Vec<&String> = settings.disabled_sections.iter().filter(|s| matches!(s.as_str(), "geometry" | "optics")).collect();
+    let json = serde_json::to_string(&(&settings.crop, &settings.orientation, &settings.geometry, &settings.optics, disabled)).unwrap_or_default();
+    json.as_bytes().iter().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(*b)).wrapping_mul(0x0100_0000_01b3))
 }
 
 pub struct Tex {
@@ -311,6 +307,10 @@ pub struct Renderer {
     /// The result key the brush preview ([`Slot::BrushFull`]) must have to match the photo's
     /// current settings (`None`: no preview wanted now).
     pub brush_target: Option<u64>,
+    /// The settings the brush preview renders (the photo's with the active brush part covering everything), kept while
+    /// what they are made from is unchanged: building them copies every stroke of every mask, which a frame must not
+    /// do ([`crate::panels::detail::brush_preview`]).
+    pub(crate) brush_settings: Option<crate::panels::detail::brush_preview::Memo>,
     /// Per-view intermediate results (loupe and "before"), so slider drags redo only what changed.
     stages: HashMap<Slot, Arc<StageCache>>,
     /// Slot → key of the last quick job requested for it (each is tried once).
@@ -433,6 +433,7 @@ impl Renderer {
             clip_overlay: None,
             keep_brush_pixels: false,
             brush_target: None,
+            brush_settings: None,
             stages: HashMap::new(),
             quick_tried: HashMap::new(),
             failed: HashMap::new(),

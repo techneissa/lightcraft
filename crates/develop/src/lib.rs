@@ -18,6 +18,18 @@ pub use settings::*;
 
 use serde_json::Value;
 
+#[cfg(any(test, feature = "test-hooks"))]
+thread_local! {
+    static HASH64_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times [`DevelopSettings::hash64`] has run on this thread (a test counts what a stretch of frames hashes: each
+/// call writes the whole settings, every stroke of every mask, to JSON).
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn hash64_calls() -> usize {
+    HASH64_CALLS.with(std::cell::Cell::get)
+}
+
 impl DevelopSettings {
     /// Settings for a freshly imported raw file (Lightroom applies capture sharpening and colour
     /// noise reduction by default to raw files).
@@ -92,6 +104,8 @@ impl DevelopSettings {
 
     /// Stable 64-bit hash of the settings (FNV-1a over canonical JSON), for preview cache keys.
     pub fn hash64(&self) -> u64 {
+        #[cfg(any(test, feature = "test-hooks"))]
+        HASH64_CALLS.with(|c| c.set(c.get() + 1));
         let s = serde_json::to_string(self).unwrap_or_default();
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for b in s.as_bytes() {

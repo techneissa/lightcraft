@@ -11,6 +11,12 @@ pub(super) struct SettingsHashes {
 }
 
 impl SettingsHashes {
+    /// The remembered hash of `settings` for photo `id`, when [`Self::get`] has already hashed these very settings
+    /// (the same `Arc`); for a caller that only reads.
+    pub(super) fn peek(&self, id: PhotoId, settings: &Arc<DevelopSettings>) -> Option<u64> {
+        self.entries.get(&id).filter(|(old, _)| old.as_ptr() == Arc::as_ptr(settings)).map(|(_, hash)| *hash)
+    }
+
     pub(super) fn get(&mut self, id: PhotoId, settings: &Arc<DevelopSettings>) -> u64 {
         if let Some((old, hash)) = self.entries.get(&id)
             && old.as_ptr() == Arc::as_ptr(settings)

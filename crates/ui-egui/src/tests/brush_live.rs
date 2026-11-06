@@ -126,3 +126,26 @@ fn erasing_shows_live_and_undo_restores_the_photo() {
     assert!(diff(at(&undone, 0.5, 0.5), at(&painted, 0.5, 0.5)) <= 1, "undo brings the stroke back");
     assert!(h.app.brush_live.is_none());
 }
+
+/// A frame with the brush tool open, a stroke being painted and nothing else changing hashes no settings: each hash writes every
+/// stroke of every mask to JSON, and doing it on every frame made the pointer drag once a mask held many strokes.
+#[test]
+fn painting_frames_do_not_hash_the_settings() {
+    let mut h = brush_ready();
+    // many strokes in the mask, as a long session leaves it
+    for i in 0..40 {
+        let y = 0.1 + 0.02 * f64::from(i);
+        exec(&mut h, "mask.brushStroke", json!({"points": [[0.1, y], [0.9, y]], "size": 0.01}));
+    }
+    settle_previews(&mut h);
+    pointer(&mut h, json!([{"kind": "down", "x": 0.3, "y": 0.5}, {"kind": "drag", "x": 0.4, "y": 0.5}, {"kind": "drag", "x": 0.5, "y": 0.5}]));
+    h.step();
+    let before = lightcraft_develop::hash64_calls();
+    for k in 0..20 {
+        pointer(&mut h, json!([{"kind": "drag", "x": 0.5 + 0.01 * f64::from(k), "y": 0.55}]));
+        h.step();
+    }
+    assert_eq!(lightcraft_develop::hash64_calls(), before, "frames of painting hashed the settings");
+    pointer(&mut h, json!([{"kind": "up", "x": 0.7, "y": 0.55}]));
+    settle_previews(&mut h);
+}

@@ -16,7 +16,7 @@ use crate::widgets::{register, register_geometry};
 use lightcraft_engine::media::QuickSource;
 
 mod brush_panel;
-mod brush_preview;
+pub(crate) mod brush_preview;
 mod brush_resize;
 mod crop;
 mod film_bar;
@@ -149,11 +149,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     };
     let Some(photo) = app.session.catalog.photo(id).cloned() else { return };
     brief_info(app, ui.ctx(), id);
-    let d = (*photo.develop).clone();
+    // (borrowed, not cloned: a frame must not copy every stroke of every mask)
+    let d: &DevelopSettings = &photo.develop;
     // the full-screen preview shows the photo only: no tool overlays
     let right = if fullscreen { RightPanel::None } else { app.ui.right };
     let crop_tool = right == RightPanel::Crop;
-    let frame = Frame::with_lens(photo.width.max(1) as usize, photo.height.max(1) as usize, &d, !crop_tool, photo.embedded_lens.as_ref());
+    let frame = Frame::with_lens(photo.width.max(1) as usize, photo.height.max(1) as usize, d, !crop_tool, photo.embedded_lens.as_ref());
     let aspect = frame.aspect() as f32;
     let ppp = ui.ctx().pixels_per_point();
     let area = canvas.shrink(loupe_margin(fullscreen, crop_tool));
@@ -164,7 +165,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let split_view = matches!(app.ui.before_after, BeforeAfter::Split | BeforeAfter::SplitTopBottom);
     let areas = view_areas(app.ui.before_after, area);
     let main_area = *areas.last().unwrap_or(&area);
-    let visible_texture_aspect = visible_texture_aspect(app, id, &d, crop_tool);
+    let visible_texture_aspect = visible_texture_aspect(app, id, d, crop_tool);
     // Follow the texture only where it really differs (an unsupported raw's embedded JPEG with
     // another crop): a texture's whole-pixel size is a little off the exact aspect, and the crop
     // tool's overlays need the frame's own geometry.
@@ -187,7 +188,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     app.image_rect = Some(img_rect);
     // request renders: the loupe at display resolution (drafts during drags)
     let interacting = app.session.interaction.is_some();
-    let overlay = view_overlay(app, &d, ui.ctx().cumulative_frame_nr());
+    let overlay = view_overlay(app, d, ui.ctx().cumulative_frame_nr());
     // a drag drafts at full size where the GPU draws the view (by the GPU's own rule, `handles`;
     // `ready` first: `available` would wait for a device still being created)
     let gpu = interacting && gpu_draws_view(app, overlay);
@@ -199,7 +200,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let native_long = native[0].max(native[1]);
     let drawn_long = target_rect.width().max(target_rect.height()) * ppp;
     // the whole frame at about canvas size; the zoomed part of it is a window render (below)
-    let look = d.hash64();
+    // (remembered per photo: the settings are hashed when they change, not on every frame)
+    let look = app.session.settings_hash(id).unwrap_or_default();
     // Diagnostic views that need whole-frame context, or reads too far for one window, still
     // render the whole frame at the size it is drawn. Mask overlays and soft proofing (both act
     // pixel by pixel) are window-safe.
@@ -287,7 +289,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         &t,
         LoupePaint {
             photo: &photo,
-            d: &d,
+            d,
             frame: &frame,
             id,
             ppp,

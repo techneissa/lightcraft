@@ -99,7 +99,15 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
     // The overlay and the proof are part of the tile's identity too, so changing mask view/colour
     // or the proof never leaves a stale region tile on screen while its replacement renders.
     let proof_key = if v.before { 0 } else { proof.map_or(0, |p| p.key()) };
-    let look = job.settings.hash64() ^ overlay.key().rotate_left(17) ^ proof_key.rotate_left(41);
+    // (the photo's remembered hash, with the wheels hidden for viewing: hashing the settings every frame writes every
+    // stroke of every mask to JSON. The Before side renders other settings, hashed here: it is only on screen on request)
+    let hidden = app.ui.grading_hidden_for(c.id);
+    let settings = if v.before {
+        job.settings.hash64()
+    } else {
+        c.look ^ hidden.iter().enumerate().fold(0u64, |b, (i, h)| b | ((*h as u64) << i)).wrapping_mul(0xd6e8_feb8_6659_fd93)
+    };
+    let look = settings ^ overlay.key().rotate_left(17) ^ proof_key.rotate_left(41);
     let view = crate::region::RegionView { photo: c.id, before: v.before, key: job.key, full: (fw, fh), window: win, settings: look };
     // windows of other photos, looks and zooms of this side can't be drawn any more
     app.region_tiles.retain(|(before, _), t| *before != v.before || t.is_current(c.id, (fw, fh), look, c.interacting));

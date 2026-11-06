@@ -38,6 +38,8 @@ lightcraft-testkit = { workspace = true }
 # on its own (`cargo test -p lightcraft-ui-egui`); a workspace test only passed by feature
 # unification with the desktop app's default `denoise` feature.
 lightcraft-engine = { workspace = true, features = ["denoise", "test-hooks"] }
+# counts the settings hashes a frame takes (`hash64_calls`)
+lightcraft-develop = { workspace = true, features = ["test-hooks"] }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 lightcraft-denoise = { workspace = true, features = ["runtime"] }
 lightcraft-codecs = { workspace = true }
