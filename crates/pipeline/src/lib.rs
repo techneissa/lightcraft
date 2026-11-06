@@ -379,6 +379,7 @@ impl StageCache {
         }
         let mut seen: Vec<usize> = Vec::new();
         let mut total = 0;
+        let mut masks_bytes = 0;
         let mut add = |p: usize, n: usize| {
             if !seen.contains(&p) {
                 seen.push(p);
@@ -395,8 +396,13 @@ impl StageCache {
             for p in planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.sharpen.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1)) {
                 add(Arc::as_ptr(p) as usize, size(p));
             }
+            if let Some((_, c)) = &pl.chroma {
+                add(Arc::as_ptr(c) as usize, size(c));
+            }
+            // (the alphas and brush planes: each held once by its cache)
+            masks_bytes += e.masks.bytes();
         }
-        total
+        total + masks_bytes
     }
 
     /// Number of cached output sizes.
@@ -433,6 +439,9 @@ struct CacheEntry {
     sampled: Arc<Rgb32f>,
     lin: Option<(u64, Arc<Rgb32f>)>,
     planes: local::Planes,
+    /// Alphas of the last render's masks, and the brush parts they were built from (kept across
+    /// changes to the image: those of masks that don't read it stay valid).
+    masks: masks::AlphaCache,
 }
 
 fn hash_of(parts: impl std::hash::Hash) -> u64 {
@@ -701,6 +710,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         }
     };
     lap("wb/spots/nr", &mut t);
+    let mut alphas = cached.as_ref().map(|e| e.masks.clone()).unwrap_or_default();
     let mut planes = match cached.map(|e| e.planes) {
         Some(p) if p.key == lin_key => p,
         // A draft while noise reduction changes (a slider drag): the wide, edge-aware planes of the
@@ -710,13 +720,15 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Some(p) if req.quality == Quality::Draft && p.pre_nr == plan.pre_nr_key => p.for_other_nr(),
         _ => local::Planes { key: lin_key, pre_nr: plan.pre_nr_key, ..Default::default() },
     };
-    let mut prep = local::prepare(lin.clone(), s, frame, px_per_long, plan.detail_scale, req.quality, &mut planes, plan.mattes.as_deref());
+    let keys = masks::AlphaKeys { geo, image: lin_key };
+    let mut prep =
+        local::prepare(lin.clone(), s, frame, px_per_long, plan.detail_scale, req.quality, &mut planes, plan.mattes.as_ref(), (&mut alphas, keys));
     if let Some(a) = plan.fixed_air {
         prep.air = a;
     }
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
-        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes });
+        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes, masks: alphas });
     }
     if req.depth != OutputDepth::U8 {
         let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof);
@@ -794,7 +806,7 @@ fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Plane> 
     }
     let m = o.mask(&plan.settings)?;
     if let Some(e) = prep.masks.iter().find(|e| e.id == m.id) {
-        return Some(e.alpha.clone());
+        return Some(e.plane());
     }
     let ev = plan.settings.light.exposure as f32;
     Some(masks::evaluate_one(m, &plan.frame, plan.w, plan.h, &prep.img, &prep.log_l, ev, plan.mattes.as_deref()))
@@ -810,7 +822,7 @@ fn overlay_alphas_all(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Ve
     let mut out = Vec::new();
     for m in plan.settings.masks.iter().filter(|m| m.visible && !m.components.is_empty()) {
         if let Some(e) = prep.masks.iter().find(|e| e.id == m.id) {
-            out.push(e.alpha.clone());
+            out.push(e.plane());
         } else {
             out.push(masks::evaluate_one(m, &plan.frame, plan.w, plan.h, &prep.img, &prep.log_l, ev, plan.mattes.as_deref()));
         }

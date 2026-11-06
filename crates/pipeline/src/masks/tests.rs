@@ -438,7 +438,7 @@ fn a_first_part_is_the_base_whatever_its_mode() {
     assert!(base.get(50, 25) > 0.99 && base.get(2, 2) < 0.01);
     for op in [MaskOp::Intersect, MaskOp::Subtract] {
         let a = alpha(op);
-        assert!(a.data == base.data, "a first {op:?} acts as the base");
+        assert!(a == base, "a first {op:?} acts as the base");
     }
 }
 

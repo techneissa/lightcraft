@@ -430,7 +430,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let (w, h) = (p.img.width, p.img.height);
     let p_lut = fp.lut.clone();
     let FinishParams { light, curves, vig, to_out, out_luma, grain, .. } = fp;
-    let terms: Vec<[f32; MASK_TERMS]> = p.masks.iter().map(|m| mask_terms(&m.adjust)).collect();
+    let terms = scaled_terms(p);
     let out_to_norm = fp.out_to_norm;
     let long = fp.ow.max(fp.oh);
     let [vx, vy, vw, vh] = fp.view;
@@ -444,10 +444,12 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let hdr = peak > 1.0;
     let mut out = vec![T::default(); w * h];
     for_rows(&mut out, w, |y, row| {
+        // the masks whose bounds hold this row, in order (the last tinted one wins)
+        let active: Vec<usize> = (0..p.masks.len()).filter(|k| terms[*k].is_some() && p.masks[*k].alpha.row(y).is_some()).collect();
         for (x, px) in row.iter_mut().enumerate() {
             let i = y * w + x;
             let raw = p.img.data[i];
-            let local = pixel_local_terms(p, &terms, i);
+            let local = pixel_local_terms(p, &terms, &active, x, y);
             let l_sat = local.values[11];
             let l_hue = local.values[12];
             let l_pre = p.log_l.data[i];
@@ -635,11 +637,41 @@ struct PixelLocalTerms {
     tint: Option<([f32; 3], f32)>,
 }
 
-fn pixel_local_terms(p: &Prepared, terms: &[[f32; MASK_TERMS]], index: usize) -> PixelLocalTerms {
+/// A mask's effect terms with its Amount (`amount`: 1 = 100 %) applied: the Amount scales the terms
+/// and the tint's strength, never the mask's alpha. A mask with no Amount (0 or less) has no effect
+/// and no tint: all zeros, so it adds nothing and cannot take the tint of the mask before it.
+pub fn effect_terms(j: &LocalAdjustments, amount: f32) -> [f32; MASK_TERMS] {
+    if amount <= 0.0 {
+        return [0.0; MASK_TERMS];
+    }
+    let mut t = mask_terms(j);
+    t.iter_mut().take(MASK_SUMS).for_each(|v| *v *= amount);
+    t[MASK_SUMS + 3] *= amount;
+    t
+}
+
+/// Each mask's effect terms with its Amount applied (`None`: the mask has no effect: its Amount is
+/// 0 or less). The Amount scales the terms and the tint's strength, never the alpha.
+fn scaled_terms(p: &Prepared) -> Vec<Option<[f32; MASK_TERMS]>> {
+    p.masks
+        .iter()
+        .map(|m| {
+            if m.amount <= 0.0 || m.alpha.is_zero() {
+                return None;
+            }
+            Some(effect_terms(&m.adjust, m.amount))
+        })
+        .collect()
+}
+
+/// The sum of the masks' terms at pixel `(x, y)`: only the `active` masks (those whose bounds hold
+/// the row) are read, and a mask reads nothing outside its bounds.
+fn pixel_local_terms(p: &Prepared, terms: &[Option<[f32; MASK_TERMS]>], active: &[usize], x: usize, y: usize) -> PixelLocalTerms {
     let mut values = [0.0; MASK_SUMS];
     let mut tint = None;
-    for (mask, terms) in p.masks.iter().zip(terms) {
-        let alpha = mask.alpha.data[index];
+    for &k in active {
+        let (Some(mask), Some(Some(terms))) = (p.masks.get(k), terms.get(k)) else { continue };
+        let alpha = mask.alpha.at(x, y);
         if alpha <= 0.0 {
             continue;
         }

@@ -9,9 +9,18 @@
 use lightcraft_develop::{BrushStroke, LocalAdjustments, Mask, MaskOp, MaskShape, SegMask};
 use lightcraft_geom::{Orientation, Point};
 use lightcraft_raster::{Image, Plane, Rgb32f};
+use std::sync::Arc;
 
 use crate::for_rows;
 use crate::geometry::Frame;
+
+mod alpha;
+mod brush;
+
+pub use alpha::note_evaluation;
+pub use alpha::{AlphaCache, AlphaKeys, MaskAlpha, alpha_key, mask_evaluations, reads};
+use alpha::{map_rows, zip_rows};
+pub use brush::{BRUSH_ENTRIES, BrushCache, BrushCtx, brush_base, brush_chain, note_stroke, strokes_rasterized};
 
 /// What an embedded segmentation matte selects.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -129,8 +138,25 @@ impl Mattes {
 pub struct Evaluated {
     /// The mask's id ([`Mask::id`]).
     pub id: u32,
-    pub alpha: Plane,
+    /// Where the mask selects, without its Amount, held for its non-zero bounds. Shared with the
+    /// [`AlphaCache`] that keeps it for the next render.
+    pub alpha: Arc<MaskAlpha>,
+    /// The mask's Amount as a factor (1 = 100 %): it scales the mask's effect terms in the finish
+    /// stage and its overlay, not its alpha, so the Amount slider never changes the alpha.
+    pub amount: f32,
     pub adjust: LocalAdjustments,
+}
+
+impl Evaluated {
+    /// The whole frame's alpha with the mask's Amount applied: what the mask's overlay shows.
+    pub fn plane(&self) -> Plane {
+        let mut p = self.alpha.to_plane();
+        let amt = self.amount;
+        if (amt - 1.0).abs() > 1e-6 {
+            map_rows(&mut p, |v| *v *= amt);
+        }
+        p
+    }
 }
 
 #[inline]
@@ -145,8 +171,58 @@ pub fn evaluate(masks: &[Mask], frame: &Frame, w: usize, h: usize, img: &Rgb32f,
     masks
         .iter()
         .filter(|m| m.visible && !m.components.is_empty())
-        .map(|m| Evaluated { id: m.id, alpha: evaluate_one(m, frame, w, h, img, log_l, ev, mattes), adjust: m.adjust })
+        .map(|m| Evaluated {
+            id: m.id,
+            alpha: Arc::new(evaluate_alpha(m, frame, w, h, img, log_l, ev, mattes, None)),
+            amount: amount_of(m),
+            adjust: m.adjust,
+        })
         .collect()
+}
+
+/// [`evaluate`], reusing the alphas `cache` holds for masks whose inputs are unchanged ([`alpha_key`]) and keeping this
+/// render's there. The result is identical to [`evaluate`]'s.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_cached(
+    masks: &[Mask],
+    frame: &Frame,
+    w: usize,
+    h: usize,
+    img: &Rgb32f,
+    log_l: &Plane,
+    ev: f32,
+    mattes: Option<&Arc<Mattes>>,
+    keys: AlphaKeys,
+    cache: &mut AlphaCache,
+) -> Vec<Evaluated> {
+    let old = cache.take(mattes);
+    let mut used = Vec::new();
+    let out = masks
+        .iter()
+        .filter(|m| m.visible && !m.components.is_empty())
+        .map(|m| {
+            let key = alpha_key(m, keys, ev);
+            let alpha = match old.iter().find(|(k, _)| *k == key) {
+                Some((_, a)) => a.clone(),
+                None => {
+                    let brush = Some(BrushCtx { cache: &mut cache.brushes, geo: keys.geo, image: keys.image });
+                    Arc::new(evaluate_alpha(m, frame, w, h, img, log_l, ev, mattes.map(|a| &**a), brush))
+                }
+            };
+            // (a mask twice with the same definition holds one alpha)
+            if !used.iter().any(|(k, _)| *k == key) {
+                used.push((key, alpha.clone()));
+            }
+            Evaluated { id: m.id, alpha, amount: amount_of(m), adjust: m.adjust }
+        })
+        .collect();
+    cache.keep(mattes, used);
+    out
+}
+
+/// A mask's Amount (0..100 %) as a factor.
+fn amount_of(m: &Mask) -> f32 {
+    (m.adjust.amount / 100.0) as f32
 }
 
 /// The alpha plane of mask `m` (whether visible or not): its components combined and scaled by its
@@ -154,14 +230,37 @@ pub fn evaluate(masks: &[Mask], frame: &Frame, w: usize, h: usize, img: &Rgb32f,
 /// Intersect works on the inverted mask and does what its name says to what is on screen.
 #[allow(clippy::too_many_arguments)]
 pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Plane {
+    let mut alpha = evaluate_alpha(m, frame, w, h, img, log_l, ev, mattes, None).to_plane();
+    let amt = amount_of(m);
+    if (amt - 1.0).abs() > 1e-6 {
+        map_rows(&mut alpha, |v| *v *= amt);
+    }
+    alpha
+}
+
+/// [`evaluate_one`] without the mask's Amount (the finish stage applies it to the effect terms), held for its bounds.
+/// `brush`: keeps and reuses the planes of brush parts.
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_alpha(
+    m: &Mask,
+    frame: &Frame,
+    w: usize,
+    h: usize,
+    img: &Rgb32f,
+    log_l: &Plane,
+    ev: f32,
+    mattes: Option<&Mattes>,
+    mut brush: Option<BrushCtx<'_>>,
+) -> MaskAlpha {
+    note_evaluation();
     // its coordinates on the photo before the warp, or (an old mask) on the corrected frame
     let frame = &*frame.for_mask(m.on_photo);
     let mut alpha = Plane::new(w, h);
     let mut first = true;
     for comp in &m.components {
-        let mut c = shape_alpha(&comp.shape, frame, w, h, img, log_l, ev, mattes);
+        let mut c = shape_alpha_in(&comp.shape, frame, w, h, img, log_l, ev, mattes, brush.as_mut());
         if comp.invert != (first && m.invert) {
-            c.data.iter_mut().for_each(|v| *v = 1.0 - *v);
+            map_rows(&mut c, |v| *v = 1.0 - *v);
         }
         // the first part is the base, whatever its mode says (an Intersect or Subtract has nothing to cut from)
         if first {
@@ -169,18 +268,15 @@ pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, l
             first = false;
             continue;
         }
-        for (a, c) in alpha.data.iter_mut().zip(&c.data) {
-            *a = match comp.op {
-                MaskOp::Add => a.max(*c),
-                MaskOp::Subtract => *a * (1.0 - c),
-                MaskOp::Intersect => *a * c,
-            };
+        match comp.op {
+            MaskOp::Add => zip_rows(&mut alpha, &c, |a, c| *a = a.max(c)),
+            MaskOp::Subtract => zip_rows(&mut alpha, &c, |a, c| *a *= 1.0 - c),
+            MaskOp::Intersect => zip_rows(&mut alpha, &c, |a, c| *a *= c),
         }
-        first = false;
     }
     // an inverted mask with no part selects everything
     if m.invert && m.components.is_empty() {
-        alpha.data.iter_mut().for_each(|v| *v = 1.0);
+        map_rows(&mut alpha, |v| *v = 1.0);
     }
     if m.refine > 0.0 {
         // Refine Edges: the mask's edges follow the photo's (window up to ~4 % of the long edge,
@@ -188,15 +284,10 @@ pub fn evaluate_one(m: &Mask, frame: &Frame, w: usize, h: usize, img: &Rgb32f, l
         let k = (m.refine / 100.0).clamp(0.0, 1.0) as f32;
         let sigma = (0.04 * frame.output_long(w, h) as f32 * k).max(1.0);
         let refined = guided_cross(log_l, &alpha, sigma, 0.02);
-        for (a, r) in alpha.data.iter_mut().zip(&refined.data) {
-            *a += (r - *a) * k.sqrt();
-        }
+        let t = k.sqrt();
+        zip_rows(&mut alpha, &refined, |a, r| *a += (r - *a) * t);
     }
-    let amt = (m.adjust.amount / 100.0) as f32;
-    if (amt - 1.0).abs() > 1e-6 {
-        alpha.data.iter_mut().for_each(|v| *v *= amt);
-    }
-    alpha
+    MaskAlpha::from_plane(alpha)
 }
 
 /// Per-pixel positions in long-edge units for output pixel centres.
@@ -215,6 +306,22 @@ fn for_each_pos(frame: &Frame, w: usize, h: usize, out: &mut Plane, f: impl Fn(P
 /// else a stored segmentation; else a classical heuristic.
 #[allow(clippy::too_many_arguments)]
 pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Plane {
+    shape_alpha_in(shape, frame, w, h, img, log_l, ev, mattes, None)
+}
+
+/// [`shape_alpha`] keeping and reusing the planes of brush parts in `brush`.
+#[allow(clippy::too_many_arguments)]
+fn shape_alpha_in(
+    shape: &MaskShape,
+    frame: &Frame,
+    w: usize,
+    h: usize,
+    img: &Rgb32f,
+    log_l: &Plane,
+    ev: f32,
+    mattes: Option<&Mattes>,
+    brush: Option<&mut BrushCtx<'_>>,
+) -> Plane {
     let fitting = mattes.map(|m| m.for_shape(shape)).unwrap_or_default();
     if !fitting.is_empty() {
         let mut out = matte_alpha(&fitting, frame, w, h);
@@ -251,7 +358,7 @@ pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &R
                 if inv { 1.0 - a } else { a }
             });
         }
-        MaskShape::Brush { strokes } => rasterize_brush(strokes, frame, w, h, img, log_l, &mut out),
+        MaskShape::Brush { strokes } => out = brush::rasterize(strokes, frame, w, h, img, log_l, brush),
         MaskShape::LuminanceRange { lo, hi, lo_feather, hi_feather } => {
             let (lo, hi, lf, hf) = (*lo as f32, *hi as f32, (*lo_feather as f32).max(1e-3), (*hi_feather as f32).max(1e-3));
             for (v, l) in out.data.iter_mut().zip(&log_l.data) {
@@ -833,53 +940,7 @@ fn guided_cross_fast(guide: &Plane, p: &mut Plane, sigma: f32, eps: f32, weight:
     });
 }
 
-/// Stamp brush strokes into `out` (max-combine; erase strokes subtract). Auto Mask strokes weight
-/// each dab by [`auto_similarity`] to the pixel under its centre and are refined with
-/// [`guided_cross`] on log luminance.
-fn rasterize_brush(strokes: &[BrushStroke], frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, out: &mut Plane) {
-    if w == 0 || h == 0 {
-        return;
-    }
-    for s in strokes {
-        let bd = brush_dabs(s, frame, w, h);
-        let (dens, erase, auto) = (bd.density, bd.erase, bd.auto);
-        let mut stroke_alpha = Plane::new(w, h);
-        for (k, d) in bd.dabs.iter().enumerate() {
-            let (r, hard, flow) = bd.dab(k);
-            let refc = auto.then(|| {
-                let j = dab_pixel(*d, w, h);
-                (log_l.data[j], chromaticity(img.data[j]))
-            });
-            let (x0, x1) = (((d.x - r).floor().max(0.0)) as usize, ((d.x + r).ceil().max(0.0) as usize).min(w));
-            let (y0, y1) = (((d.y - r).floor().max(0.0)) as usize, ((d.y + r).ceil().max(0.0) as usize).min(h));
-            for y in y0..y1 {
-                for x in x0..x1 {
-                    let dd = Point::new(x as f64 + 0.5, y as f64 + 0.5).dist(*d);
-                    if dd > r {
-                        continue;
-                    }
-                    let mut a = dab_alpha(dd, r, hard);
-                    let i = y * w + x;
-                    if let Some((rl, rch)) = refc {
-                        a *= auto_similarity(log_l.data[i], chromaticity(img.data[i]), rl, rch);
-                    }
-                    let v = &mut stroke_alpha.data[i];
-                    // flow accumulates within a stroke up to density
-                    *v = accumulate(*v, a, flow, dens);
-                }
-            }
-        }
-        if auto {
-            let (sigma, eps) = auto_refine(bd.r);
-            let q = guided_cross(log_l, &stroke_alpha, sigma, eps);
-            // the refinement fills gaps along edges; it never takes paint away
-            stroke_alpha = stroke_alpha.zip_map(&q, f32::max);
-        }
-        for (o, a) in out.data.iter_mut().zip(&stroke_alpha.data) {
-            *o = if erase { *o * (1.0 - a) } else { o.max(*a) };
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_cache;
