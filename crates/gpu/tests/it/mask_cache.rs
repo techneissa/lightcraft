@@ -247,3 +247,66 @@ fn a_new_stroke_stamps_one_stroke_on_the_device() {
     assert_eq!(n, 0, "back to a held state: no stroke");
     assert_eq!(undone, first);
 }
+
+/// The masks' alphas the loupe tints (`mask_planes`): the device's equal the CPU's for strokes, a gradient, an Amount and a window,
+/// they come from the alphas the photo's render kept (no mask is evaluated again), and they are a mask's alpha, not an image.
+#[test]
+fn the_device_gives_the_masks_alphas_the_cpu_does() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(960, 640);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let masks = vec![
+        Mask {
+            id: 3,
+            components: vec![comp(MaskOp::Add, MaskShape::Brush { strokes: strokes(6, false, false) })],
+            adjust: LocalAdjustments { amount: 60.0, ..adjust() },
+            ..Default::default()
+        },
+        Mask {
+            id: 9,
+            components: vec![comp(
+                MaskOp::Add,
+                MaskShape::Radial { center: Point::new(0.5, 0.4), rx: 0.2, ry: 0.15, angle: 0.0, feather: 60.0, invert: false },
+            )],
+            adjust: adjust(),
+            ..Default::default()
+        },
+        // (hidden: no plane)
+        Mask {
+            id: 4,
+            visible: false,
+            components: vec![comp(MaskOp::Add, MaskShape::Linear { start: Point::new(0.5, 0.1), end: Point::new(0.5, 0.9) })],
+            ..Default::default()
+        },
+    ];
+    let s = with_masks(masks);
+    let window = lightcraft_pipeline::PixelWindow { x: 100, y: 60, w: 300, h: 200 };
+    for (name, req) in
+        [("whole frame", RenderRequest::fit(720, 720)), ("window", RenderRequest { window: Some(window), ..RenderRequest::fit(720, 720) })]
+    {
+        let cache = StageCache::default();
+        // the photo's render first, as the loupe does: it keeps the alphas the planes are read from
+        lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu");
+        let before = mask_evaluations();
+        let gpu_planes = lightcraft_gpu::mask_planes(&src, &info, &s, &req, Some(&cache)).expect("gpu planes");
+        assert_eq!(mask_evaluations() - before, 0, "{name}: the planes evaluated a mask again");
+        let cpu_planes = lightcraft_pipeline::mask_planes(&src, &info, &s, &req, None);
+        let ids = |p: &[(u32, lightcraft_raster::Plane)]| p.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+        assert_eq!(ids(&gpu_planes), vec![3, 9], "{name}: the visible masks, in order");
+        assert_eq!(ids(&gpu_planes), ids(&cpu_planes));
+        for ((id, g), (_, c)) in gpu_planes.iter().zip(&cpu_planes) {
+            assert_eq!((g.width, g.height), (c.width, c.height), "{name}: mask {id}");
+            let max = g.data.iter().zip(&c.data).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            assert!(max < 0.02, "{name}: mask {id} differs by {max}");
+            assert!(g.data.iter().any(|v| *v > 0.5), "{name}: mask {id} selects something");
+        }
+        if name == "window" {
+            assert_eq!((gpu_planes[0].1.width, gpu_planes[0].1.height), (window.w, window.h), "cut to the window");
+        }
+        // the Amount scales the plane (60 % at most)
+        let top = gpu_planes[0].1.data.iter().copied().fold(0.0f32, f32::max);
+        assert!(top <= 0.6 + 1e-3, "{name}: the Amount applies: {top}");
+    }
+}

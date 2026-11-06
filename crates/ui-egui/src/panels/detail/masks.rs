@@ -701,16 +701,22 @@ fn brush_tool(
         // (the live adjustment shows with the overlay hidden too: only the tint follows `shown`, issue #2549)
         let look = crate::brush_live::Look {
             images: images.as_ref(),
-            overlay: shown && (images.is_none() || app.ui.mask_overlay),
+            overlay: shown,
             tint: shown,
             auto: app.ui.brush_auto_mask,
             now: ui.input(|i| i.time),
+            // (the overlay of the committed strokes is drawn over the blend, which covers the one under it)
+            over: app.renderer.textures.get(&crate::render::Slot::Main).map(|t| crate::brush_live::TintOver {
+                tints: &app.renderer.tints,
+                key: t.key,
+                rect: map.rect,
+            }),
         };
         crate::brush_live::paint(&mut app.brush_live, ui.ctx(), p, params, &screen, pressure, &look);
     } else if app.brush_live.is_some() {
         // a stroke just committed keeps showing its adjustment until the render that has it arrives
         let key = app.renderer.textures.get(&crate::render::Slot::Main).map(|t| t.key);
-        if crate::brush_live::paint_held(&mut app.brush_live, p, map.rect, key, ui.input(|i| i.time)) {
+        if crate::brush_live::paint_held(&mut app.brush_live, p, map.rect, key, ui.input(|i| i.time), &app.renderer.tints) {
             ui.ctx().request_repaint();
         }
     }

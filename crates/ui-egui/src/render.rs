@@ -299,6 +299,8 @@ pub struct Renderer {
     /// Keep a CPU copy of every texture so the UI can be rasterized headlessly (set when the app
     /// is driven by the control channel).
     pub keep_pixels: bool,
+    /// The masks' alphas that come with the loupe's renders, and the tint drawn from them ([`crate::mask_tint`]).
+    pub tints: crate::mask_tint::MaskTints,
     /// The clipping overlay's texture for the loupe photo.
     pub clip_overlay: Option<crate::panels::clipping::ClipOverlay>,
     /// Keep a CPU copy of the loupe's and the brush preview's pixels (the brush tool is open: its
@@ -430,6 +432,7 @@ impl Renderer {
             completed: 0,
             discarded: 0,
             keep_pixels: false,
+            tints: Default::default(),
             clip_overlay: None,
             keep_brush_pixels: false,
             brush_target: None,
@@ -677,6 +680,7 @@ impl Renderer {
     /// Free a view slot's texture and stage cache (the view is no longer shown).
     pub fn release(&mut self, slot: Slot) {
         self.textures.remove(&slot);
+        self.tints.release(slot);
         self.stages.remove(&slot);
         // and its GPU-resident texture, which can be window-sized (review of PR #1065)
         self.free_native(slot);
@@ -1343,6 +1347,10 @@ impl Renderer {
             if self.pending.get(&slot).is_some_and(|p| p.0 == r.key) {
                 self.pending.remove(&slot);
             }
+            // (the masks come with the render they were evaluated for)
+            if r.rendered.is_ok() {
+                self.tints.note(slot, r.key, r.mask_planes.clone());
+            }
             // a render that stayed on the GPU: drawn from its texture
             if let Some(shown) = self.show_gpu_render(ctx, slot, &r, look, ms) {
                 changed |= shown;
@@ -1404,7 +1412,11 @@ impl Renderer {
             let color = color.unwrap_or_else(|| Arc::new(color_image(img)));
             // the loupe keeps its pixels (a shared handle, no copy) for the clipping overlay and the
             // brush's live stroke; the brush preview keeps them while the brush tool is open
-            let pixels = (self.keep_pixels || slot == Slot::Main || (self.keep_brush_pixels && slot == Slot::BrushFull)).then(|| color.clone());
+            let pixels = (self.keep_pixels
+                || slot == Slot::Main
+                || (self.keep_brush_pixels && slot == Slot::BrushFull)
+                || (self.tints.keep_region && slot == Slot::Region))
+                .then(|| color.clone());
             let name = format!("{slot:?}");
             // pixels again: the slot's GPU-resident texture is let go
             self.free_native(slot);
@@ -1506,7 +1518,7 @@ impl Renderer {
         let copies: usize = self.textures.values().filter_map(|t| t.pixels.as_ref()).map(|p| p.pixels.len() * 4).sum();
         serde_json::json!({
             "stageCaches": {"count": self.stages.len(), "cpuBytes": cpu, "gpuBytes": gpu, "budgetBytes": self.stage_budget(), "trimmed": self.stages_trimmed, "sharedSourceBytes": lightcraft_engine::gpu::shared_source_bytes()},
-            "textures": {"count": self.textures.len(), "bytes": tex, "cpuCopyBytes": copies},
+            "textures": {"count": self.textures.len(), "bytes": tex, "cpuCopyBytes": copies, "maskTintBytes": self.tints.bytes()},
         })
     }
 
@@ -1910,6 +1922,7 @@ mod color_image_tests {
             quick: None,
             display: None,
             frame: None,
+            mask_planes: None,
         };
         let histogram = Histogram::of_srgb8(&image);
         let ok = Renderer::run_for(|| result(Ok(lightcraft_pipeline::Rendered { image: image.clone(), histogram, deep: None })), &None);
@@ -1949,6 +1962,7 @@ mod color_image_tests {
                     quick: None,
                     display: None,
                     frame: None,
+                    mask_planes: None,
                 };
                 Renderer::run_for(|| result, &None)
             }),
@@ -1983,6 +1997,7 @@ mod color_image_tests {
                 quick: None,
                 display: None,
                 frame: None,
+                mask_planes: None,
             };
             Box::new(move || {
                 std::thread::sleep(std::time::Duration::from_millis(ms));

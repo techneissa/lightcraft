@@ -284,6 +284,24 @@ pub struct Look<'a> {
     pub auto: bool,
     /// Egui time (seconds), for the hold after release.
     pub now: f64,
+    /// The mask overlay of the committed strokes ([`crate::mask_tint`]: the loupe's render key and the picture's rect), drawn
+    /// over the blend, which would hide the one under it.
+    pub over: Option<TintOver<'a>>,
+}
+
+/// The mask overlay to draw over a picture that covers the loupe's own.
+#[derive(Clone, Copy)]
+pub struct TintOver<'a> {
+    pub tints: &'a crate::mask_tint::MaskTints,
+    /// The key of the loupe render the tint belongs to.
+    pub key: u64,
+    pub rect: Rect,
+}
+
+impl TintOver<'_> {
+    fn paint(&self, painter: &egui::Painter) {
+        self.tints.paint(painter, crate::render::Slot::Main, self.key, self.rect);
+    }
 }
 
 impl LiveStroke {
@@ -392,6 +410,9 @@ pub fn paint(
     let guide = look.images.filter(|_| look.auto).map(|i| (auto::guide_for(i.key.0, &i.base), i.img_rect));
     let new_dabs = s.stamp_with(points, pressure, guide.as_ref().map(|(guide, img_rect)| AutoCtx { guide, img_rect: *img_rect }));
     let blended = look.images.is_some_and(|images| s.draw_blend(ctx, painter, images));
+    if let (true, Some(over)) = (blended, &look.over) {
+        over.paint(painter);
+    }
     if look.overlay || (!blended && look.tint) {
         let clip = s.params.clip;
         // the buffer's pixels may overhang the canvas by a fraction of a pixel: map them exactly
@@ -410,13 +431,21 @@ pub fn paint(
 /// Keep drawing the adjustment of a stroke whose button just came up, until the render with the
 /// committed stroke replaces the loupe (`main_key` changes) or [`HOLD_SECS`] pass. Returns whether
 /// the stroke is still held; when not, drop it.
-pub fn paint_held(slot: &mut Option<LiveStroke>, painter: &egui::Painter, img_rect: Rect, main_key: Option<u64>, now: f64) -> bool {
+pub fn paint_held(
+    slot: &mut Option<LiveStroke>,
+    painter: &egui::Painter,
+    img_rect: Rect,
+    main_key: Option<u64>,
+    now: f64,
+    tints: &crate::mask_tint::MaskTints,
+) -> bool {
     let Some(s) = slot else { return false };
     let Some((key, since)) = s.held else { return false };
     if Some(key) != main_key || now - since > HOLD_SECS || !s.draw_held(painter, img_rect) {
         *slot = None;
         return false;
     }
+    TintOver { tints, key, rect: img_rect }.paint(painter);
     true
 }
 

@@ -314,3 +314,38 @@ fn a_mask_with_no_amount_does_not_take_the_tint() {
     two.masks[1].adjust.amount = 100.0;
     assert_ne!(render(&src, &info, &one, &req).image, render(&src, &info, &two, &req).image);
 }
+
+/// The planes a loupe tints (`mask_planes`) are the alphas of the visible masks with their Amount, in order, and ask for no
+/// second evaluation after the photo's render.
+#[test]
+fn mask_planes_are_the_visible_masks_alphas_and_reuse_the_render() {
+    let src = Arc::new(Rgb32f::from_fn(64, 48, |x, y| [0.2 + x as f32 * 0.005, 0.3, 0.2 + y as f32 * 0.004]));
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let radial = |id, amount| Mask {
+        id,
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Radial { center: lightcraft_geom::Point::new(0.5, 0.35), rx: 0.2, ry: 0.2, angle: 0.0, feather: 50.0, invert: false },
+        }],
+        adjust: LocalAdjustments { exposure: 0.5, amount, ..Default::default() },
+        ..Mask::default()
+    };
+    let hidden = Mask { visible: false, ..radial(5, 100.0) };
+    let s = DevelopSettings { masks: vec![radial(1, 100.0), hidden, radial(2, 50.0)], ..DevelopSettings::default() };
+    let req = RenderRequest::fit(64, 64);
+    let cache = StageCache::default();
+    render_cached(&src, &info, &s, &req, &cache);
+    let before = super::mask_evaluations();
+    let planes = crate::mask_planes(&src, &info, &s, &req, Some(&cache));
+    assert_eq!(super::mask_evaluations() - before, 0, "the render's alphas are reused");
+    assert_eq!(planes.iter().map(|(id, _)| *id).collect::<Vec<_>>(), vec![1, 2], "visible masks only");
+    let (full, half) = (&planes[0].1, &planes[1].1);
+    assert_eq!((full.width, full.height), (64, 48));
+    let (a, b) = (full.data.iter().copied().fold(0.0f32, f32::max), half.data.iter().copied().fold(0.0f32, f32::max));
+    assert!((a - 1.0).abs() < 1e-3 && (b - 0.5).abs() < 1e-3, "the Amount scales the plane: {a} {b}");
+    // without a cache it is the same
+    let fresh = crate::mask_planes(&src, &info, &s, &req, None);
+    assert_eq!(fresh[1].1.data, half.data);
+}

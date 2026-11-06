@@ -486,3 +486,15 @@ five words (x, y, radius, hard core, flow), pen pressure applied on the CPU, so 
 device. An Auto Mask stroke is stamped alone, refined with the guided filter and combined in order. A part
 whose strokes extend a held part stamps only the new strokes over a copy of its plane; the last four parts
 stay on the device.
+
+### The overlay's alphas (issue #75)
+
+The loupe draws a mask overlay over the plain photo, so the photo's render comes with the masks' alphas
+instead of the tint (`RenderJob::with_mask_planes`; the Masking panel asks for it whether the overlay is
+shown or not). `lightcraft_gpu::mask_planes` (`Want::MaskPlanes` in `render.rs`) stops after `masks()`,
+reads the stack of planes back once, applies each mask's Amount and cuts the window; it runs right after
+the photo's render, so it copies the alphas that render kept and evaluates no mask. The CPU's twin is
+`lightcraft_pipeline::mask_planes`. The UI makes one premultiplied tint texture from the selected plane (or
+the union of all) per view and colour, and draws it with the opacity as the draw's tint
+(`crates/ui-egui/src/mask_tint.rs`). With a display profile, and in the browser build, the overlay is still
+drawn into the render.

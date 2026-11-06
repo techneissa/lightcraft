@@ -652,13 +652,24 @@ pub fn hdr_histogram(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: 
 
 /// Render `src` with settings `s`.
 pub fn render(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Rendered {
-    render_impl(Src::Borrowed(src), info, s, req, None)
+    render_impl(Src::Borrowed(src), info, s, req, None, None)
 }
 
 /// [`render`], reusing (and refreshing) the intermediate results in `cache`. The output is
 /// identical to [`render`]'s.
 pub fn render_cached(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: &StageCache) -> Rendered {
-    render_impl(Src::Shared(src), info, s, req, Some(cache))
+    render_impl(Src::Shared(src), info, s, req, Some(cache), None)
+}
+
+/// The alpha of every visible mask that has components, as the render for `req` evaluates it
+/// (each with its Amount applied: what a mask overlay tints), without finishing the photo: the
+/// masks' own work only, reusing `cache` as [`render_cached`] does. In the order of the masks,
+/// each with its [`lightcraft_develop::Mask::id`]; the planes are the render's size (the window's
+/// for a windowed request).
+pub fn mask_planes(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: Option<&StageCache>) -> Vec<(u32, Plane)> {
+    let mut out = Vec::new();
+    render_impl(Src::Shared(src), info, s, req, cache, Some(&mut out));
+    out
 }
 
 enum Src<'a> {
@@ -666,7 +677,16 @@ enum Src<'a> {
     Shared(&'a Arc<Rgb32f>),
 }
 
-fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: Option<&StageCache>) -> Rendered {
+/// `alphas_out`: stop after the masks and hand over their alphas instead of finishing the photo (the
+/// returned [`Rendered`] is then empty; see [`mask_planes`]).
+fn render_impl(
+    src: Src<'_>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    cache: Option<&StageCache>,
+    alphas_out: Option<&mut Vec<(u32, Plane)>>,
+) -> Rendered {
     // sections switched off with their eye render as if at their defaults (issue #316)
     let effective = s.effective();
     let edit: &DevelopSettings = &effective;
@@ -729,6 +749,21 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes, masks: alphas });
+    }
+    if let Some(out) = alphas_out {
+        *out = prep
+            .masks
+            .iter()
+            .map(|e| {
+                let p = e.plane();
+                (e.id, plan.keep.map_or(p.clone(), |k| p.crop(k.x, k.y, k.w, k.h)))
+            })
+            .collect();
+        return Rendered {
+            image: Rgba8 { width: 0, height: 0, data: Vec::new() },
+            histogram: Histogram::of_srgb8(&Rgba8 { width: 0, height: 0, data: Vec::new() }),
+            deep: None,
+        };
     }
     if req.depth != OutputDepth::U8 {
         let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof);

@@ -522,10 +522,10 @@ pub fn try_render(
 ) -> Result<Rendered, Fallback> {
     #[cfg(not(target_arch = "wasm32"))]
     {
-        match run(src, info, s, req, stages, false)? {
+        match run(src, info, s, req, stages, render::Want::Image)? {
             render::Output::Image(r) => Ok(r),
             // (not asked for)
-            render::Output::Display { .. } => Err(Fallback::NotTried),
+            render::Output::Display { .. } | render::Output::Masks(_) => Err(Fallback::NotTried),
         }
     }
     #[cfg(target_arch = "wasm32")]
@@ -540,7 +540,24 @@ pub fn try_render(
 /// otherwise pixels as from [`render`]. `None`: render on the CPU instead.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn render_display(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, stages: Option<&StageCache>) -> Option<Output> {
-    run(src, info, s, req, stages, true).ok()
+    run(src, info, s, req, stages, render::Want::Display).ok()
+}
+
+/// The alpha of every visible mask that has components, as [`render`] would evaluate it for `req` (each with its Amount
+/// applied), without finishing the photo: `lightcraft_pipeline::mask_planes` on the device. Reuses the device alphas kept
+/// with `stages`. `None`: the GPU did not render it (use the CPU's).
+#[cfg(not(target_arch = "wasm32"))]
+pub fn mask_planes(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    stages: Option<&StageCache>,
+) -> Option<Vec<(u32, lightcraft_raster::Plane)>> {
+    match run(src, info, s, req, stages, render::Want::MaskPlanes).ok()? {
+        Output::Masks(planes) => Some(planes),
+        _ => None,
+    }
 }
 
 /// Whether renders run on the window's device (and so can be handed over as textures).
@@ -627,7 +644,7 @@ fn run(
     s: &DevelopSettings,
     req: &RenderRequest,
     stages: Option<&StageCache>,
-    display: bool,
+    want: render::Want,
 ) -> Result<Output, Fallback> {
     {
         // sections switched off with their eye render as if at their defaults (issue #316)
@@ -653,7 +670,7 @@ fn run(
         let (r, scoped) = {
             let _scope = ctx::RenderScope::new(gpu);
             let errors = ctx::ErrorScopes::push(gpu);
-            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault, display)));
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| render::render(gpu, src, info, s, req, ext.as_deref(), fault, want)));
             (r, errors.pop())
         };
         // An error the device raised explains the readback failures that follow it; a buffer
@@ -676,6 +693,7 @@ fn run(
                 let what = match &r {
                     Some(Output::Image(r)) => format!("{}×{}", r.image.width, r.image.height),
                     Some(Output::Display { frame, .. }) => format!("{}×{}", frame.width, frame.height),
+                    Some(Output::Masks(_)) => "mask planes".into(),
                     None => "GPU render".into(),
                 };
                 let reason = match f.kind {

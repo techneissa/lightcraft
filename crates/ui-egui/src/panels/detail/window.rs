@@ -19,6 +19,8 @@ pub(crate) fn overlay_supports_window(overlay: lightcraft_pipeline::Overlay) -> 
 pub(super) struct WindowCtx {
     pub(super) id: PhotoId,
     pub(super) overlay: lightcraft_pipeline::Overlay,
+    /// The After window's render carries the masks' alphas ([`crate::mask_tint`]).
+    pub(super) planes: bool,
     /// Long edge of the frame the windows are cut from (`None`: no windows).
     pub(super) frame_edge: Option<usize>,
     pub(super) drawn_long: f32,
@@ -94,6 +96,7 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
     // never proofed (its whole-frame render isn't either)
     let proof = app.ui.soft_proof.then_some(app.ui.proof);
     let job = job.with_overlay(overlay).with_proof(if v.before { None } else { proof });
+    let job = if c.planes && !v.before { job.with_mask_planes() } else { job };
     // keyed as the renderer keys the texture (a display profile changes the key)
     let job = app.renderer.job_for(v.slot, job);
     // The overlay and the proof are part of the tile's identity too, so changing mask view/colour
@@ -127,4 +130,6 @@ pub(super) fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx,
     let at = v.img.min + vec2(tile.window.x as f32 / fw * v.img.width(), tile.window.y as f32 / fh * v.img.height());
     let dst = Rect::from_min_size(at, vec2(tile.window.w as f32 / fw * v.img.width(), tile.window.h as f32 / fh * v.img.height()));
     p.image(tex.id(), dst, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    // the mask overlay over the window, from the masks this window's render came with
+    app.renderer.tints.paint(p, v.slot, tex.key, dst);
 }

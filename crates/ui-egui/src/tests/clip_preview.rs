@@ -15,7 +15,7 @@ const SETTLE: Duration = Duration::from_secs(120);
 
 fn shown(h: &Headless) -> Overlay {
     let d = h.app.session.active().and_then(|id| h.app.session.develop_of(id)).map(|d| (*d).clone()).unwrap_or_default();
-    crate::panels::detail::view_overlay(&h.app, &d, h.view.ctx.cumulative_frame_nr())
+    crate::panels::detail::shown_overlay(&h.app, &d, h.view.ctx.cumulative_frame_nr())
 }
 
 fn track(h: &Headless, control: &str) -> egui::Rect {

@@ -613,7 +613,24 @@ pub struct DisplayFrame {
 /// texture on the window's device plus the histogram.
 pub enum Output {
     Image(Rendered),
-    Display { frame: DisplayFrame, histogram: Histogram },
+    Display {
+        frame: DisplayFrame,
+        histogram: Histogram,
+    },
+    /// The alphas of the visible masks (see [`Want::MaskPlanes`]).
+    Masks(Vec<(u32, Plane)>),
+}
+
+/// What a render is for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Want {
+    /// Pixels in host memory.
+    Image,
+    /// A texture on the window's device when [`can_display`], else pixels.
+    Display,
+    /// Only the alpha plane of each visible mask that has components, with its Amount applied
+    /// (`lightcraft_pipeline::mask_planes`): the photo is not finished.
+    MaskPlanes,
 }
 
 /// Whether a render of this plan can end in a texture instead of a readback: the device is the
@@ -636,7 +653,7 @@ pub fn render(
     req: &RenderRequest,
     stages: Option<&GpuStages>,
     fault: Option<crate::Fault>,
-    display: bool,
+    want: Want,
 ) -> Option<Output> {
     let mut t = profiling().then(std::time::Instant::now);
     // Each stage is submitted on its own; under `LIGHTCRAFT_PROFILE` also waited for, so the
@@ -721,6 +738,9 @@ pub fn render(
     // 4. masks
     let (masks, terms) = crate::masks::masks(&mut cx, &lin, &prep, &plan, &mut host, stages.map(|c| &c.alphas));
     lap("masks", &mut t, &mut cx);
+    if want == Want::MaskPlanes {
+        return Some(Output::Masks(mask_planes(&mut cx, masks.as_ref(), &plan)));
+    }
 
     // 5. per-pixel stage
     let mut fp = FinishParams::new(FinishParamsInput {
@@ -789,7 +809,7 @@ pub fn render(
             groups2(w, rows.min(h - y0), [16, 16]),
         );
     }
-    if display && can_display(gpu, &plan, req) {
+    if want == Want::Display && can_display(gpu, &plan, req) {
         return to_texture(&mut cx, &out, w, h).map(|(frame, histogram)| Output::Display { frame, histogram });
     }
     // the alpha a mask overlay shows: copied out before the readback below submits
@@ -870,6 +890,27 @@ pub fn render(
         image = image.crop(k.x, k.y, k.w, k.h);
     }
     Some(Output::Image(Rendered { image, histogram, deep: None }))
+}
+
+/// The alpha of each visible mask that has components, from the masks buffer (`masks()`: one plane after another in
+/// the masks' order), each with its Amount applied as `Evaluated::plane` does, cut to the request's window.
+fn mask_planes(cx: &mut Cx<'_>, all: Option<&Buf>, plan: &Plan<'_>) -> Vec<(u32, Plane)> {
+    let (w, h) = (plan.w, plan.h);
+    let n = w * h;
+    let list: Vec<_> = plan.settings.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();
+    let (Some(all), false) = (all, list.is_empty() || n == 0) else { return Vec::new() };
+    let raw: Vec<f32> = cx.read(all, n * list.len());
+    list.iter()
+        .zip(raw.chunks_exact(n))
+        .map(|(m, alpha)| {
+            let amount = (m.adjust.amount / 100.0) as f32;
+            let mut plane = Plane { width: w, height: h, data: alpha.to_vec() };
+            if (amount - 1.0).abs() > 1e-6 {
+                plane.data.iter_mut().for_each(|v| *v *= amount);
+            }
+            (m.id, plan.keep.map_or(plane.clone(), |k| plane.crop(k.x, k.y, k.w, k.h)))
+        })
+        .collect()
 }
 
 /// The finished output `out` (`w × h` packed RGBA8) as a texture on the device, with its

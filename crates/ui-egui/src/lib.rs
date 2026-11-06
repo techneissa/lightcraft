@@ -46,6 +46,7 @@ pub mod lightroom_import;
 pub mod links;
 mod local_profile_offer;
 mod macos_colour;
+pub(crate) mod mask_tint;
 pub mod menus;
 mod missing_sweep;
 mod model_remove;

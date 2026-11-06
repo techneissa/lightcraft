@@ -189,6 +189,12 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // request renders: the loupe at display resolution (drafts during drags)
     let interacting = app.session.interaction.is_some();
     let overlay = view_overlay(app, d, ui.ctx().cumulative_frame_nr());
+    let tint = mask_tint(app, d, ui.ctx().cumulative_frame_nr(), overlay);
+    // (the zoom window's grey for Color Overlay on B&W is made from its pixels)
+    app.renderer.tints.keep_region = tint.planes;
+    if !tint.planes {
+        app.renderer.tints.clear();
+    }
     // a drag drafts at full size where the GPU draws the view (by the GPU's own rule, `handles`;
     // `ready` first: `available` would wait for a device still being created)
     let gpu = interacting && gpu_draws_view(app, overlay);
@@ -240,7 +246,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // hover and before renders are stand-ins: the preview size is plenty and keeps them cheap
     let se = app.ui.settings.stand_in_edge(want, texture_side);
     let (sw, sh) = if aspect >= 1.0 { (se, short(se, aspect)) } else { (short(se, 1.0 / aspect), se) };
-    let ask = LoupeAsk { id, with_crop: !crop_tool, interacting, fit_px, overlay };
+    let ask = LoupeAsk { id, with_crop: !crop_tool, interacting, fit_px, overlay, planes: tint.planes };
     app.renderer.loupe_drawn();
     request_main(app, ui, &ask, [rw, rh], plan.window_edge.is_none());
     let plain = overlay == lightcraft_pipeline::Overlay::None;
@@ -265,6 +271,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let window_ctx = WindowCtx {
         id,
         overlay,
+        planes: tint.planes,
         frame_edge: plan.window_edge.filter(|_| windowable_view),
         drawn_long,
         aspect,
@@ -282,6 +289,9 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         Vec::new()
     };
     let windows = request_windows(app, &window_ctx, window_views);
+    // the mask overlay, made from the masks that came with the renders on screen (nothing renders for it)
+    let renderer = &mut app.renderer;
+    renderer.tints.show(ui.ctx(), &renderer.textures, tint.sel);
     loupe_paint_and_finish(
         app,
         ui,
@@ -854,6 +864,8 @@ fn whole_frame_edge(app: &LightcraftApp, interacting: bool, plan: &crate::region
 
 /// What a loupe render request is for.
 struct LoupeAsk {
+    /// The renders carry the masks' alphas ([`MaskTintAsk::planes`]).
+    planes: bool,
     id: PhotoId,
     with_crop: bool,
     interacting: bool,
@@ -871,6 +883,7 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
         // sampling (the render is up to a 64 px step larger, or the preview level)
         let job = if interacting { job } else { job.with_display_fit(fit_px[0], fit_px[1]) };
         let job = job.with_overlay(overlay).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
+        let job = if a.planes { job.with_mask_planes() } else { job };
         let mut job = job.with_hidden_grading(app.ui.grading_hidden_for(id));
         if app.renderer.keep_brush_pixels {
             job.key ^= brush_preview::BRUSH_KEY_SALT;
@@ -957,6 +970,10 @@ fn draw_slot(app: &LightcraftApp, p: &egui::Painter, (id, with_crop): (PhotoId, 
     };
     let image_rect = snap_fit_rect(fit_texture_rect(r, tex.size), tex.size, ppp);
     p.with_clip_rect(clip).image(tex.id(), image_rect, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
+    // (only over the loupe's own render of the photo: never a stand-in, which has no masks)
+    if slot == Slot::Main && what == "render" {
+        app.renderer.tints.paint(&p.with_clip_rect(clip), Slot::Main, tex.key, image_rect);
+    }
     what
 }
 
@@ -1082,6 +1099,65 @@ fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap
     }
 }
 
+/// Whether the mask overlay is drawn over the loupe's plain render ([`crate::mask_tint`]) instead of rendered into it: not in
+/// the browser build (its renders run in workers that don't carry the masks' alphas) and not with a display profile (the
+/// render's colours are converted for the monitor, a tint drawn over them would not be).
+fn tint_outside_render(app: &LightcraftApp) -> bool {
+    cfg!(not(target_arch = "wasm32")) && app.renderer.display_id().is_none()
+}
+
+/// What the loupe asks of the masks for the view it paints this frame.
+pub(crate) struct MaskTintAsk {
+    /// The renders carry the masks' alphas (the Masking panel is open and a mask has something to show), whether the overlay
+    /// is shown or not: showing it later asks for no render.
+    pub planes: bool,
+    /// The tint to draw now (`None`: no overlay).
+    pub sel: Option<crate::mask_tint::TintSel>,
+}
+
+/// The mask overlay as [`view_overlay`] used to render it, now drawn over the photo: `planes` says the renders carry the masks'
+/// alphas, `sel` what to draw. `render_overlay` is what [`view_overlay`] gave: any other diagnostic view takes the loupe.
+pub(crate) fn mask_tint(app: &LightcraftApp, d: &DevelopSettings, frame: u64, render_overlay: lightcraft_pipeline::Overlay) -> MaskTintAsk {
+    use crate::mask_tint::{Pick, TintSel};
+    use lightcraft_pipeline::{MaskView, Overlay};
+    let none = MaskTintAsk { planes: false, sel: None };
+    let any = d.masks.iter().any(|m| m.visible && !m.components.is_empty());
+    if !tint_outside_render(app) || app.ui.fullscreen || app.ui.right != RightPanel::Masking || !any {
+        return none;
+    }
+    let planes = true;
+    let (clip_shadows, clip_highlights) = crate::panels::clipping::effective_sides(app, frame);
+    if render_overlay != Overlay::None || clip_shadows || clip_highlights {
+        return MaskTintAsk { planes, sel: None };
+    }
+    let (view, color) = (MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default(), app.ui.mask_overlay_color);
+    let opacity = app.ui.mask_overlay_opacity.clamp(0.0, 100.0).round() as u8;
+    let pick = if app.ui.mask_overlay_all {
+        Some(Pick::All)
+    } else if app.ui.mask_overlay {
+        app.session.active_mask.and_then(|id| d.masks.iter().find(|m| m.id == id)).filter(|m| !m.components.is_empty()).map(|m| Pick::One(m.id))
+    } else {
+        None
+    };
+    MaskTintAsk { planes, sel: pick.map(|pick| TintSel { pick, view, color, opacity }) }
+}
+
+/// What the loupe shows over the photo, whether it is rendered into it ([`view_overlay`]) or drawn over it ([`mask_tint`]): the
+/// mask overlay as [`lightcraft_pipeline::Overlay::Mask`] / `AllMasks`, as `view_overlay` gave it before it was drawn over the render.
+#[cfg(test)]
+pub(crate) fn shown_overlay(app: &LightcraftApp, d: &DevelopSettings, frame: u64) -> lightcraft_pipeline::Overlay {
+    use crate::mask_tint::Pick;
+    use lightcraft_pipeline::Overlay;
+    let rendered = view_overlay(app, d, frame);
+    match mask_tint(app, d, frame, rendered).sel {
+        Some(sel) if rendered == Overlay::None => match sel.pick {
+            Pick::One(id) => Overlay::Mask { id: id.min(u32::from(u16::MAX)) as u16, view: sel.view, color: sel.color, opacity: sel.opacity },
+            Pick::All => Overlay::AllMasks { view: sel.view, color: sel.color, opacity: sel.opacity },
+        },
+        _ => rendered,
+    }
+}
+
 /// The diagnostic overlay the loupe shows (an Alt-drag preview, the selected mask, Point Color's
 /// visualized range, Visualize Spots).
 pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings, frame: u64) -> lightcraft_pipeline::Overlay {
@@ -1097,7 +1173,8 @@ pub(crate) fn view_overlay(app: &LightcraftApp, d: &DevelopSettings, frame: u64)
     // clipping, so while a side shows (a toggle, or the pointer on its histogram triangle) the loupe
     // renders the photo itself (outlines and pins stay).
     let (clip_shadows, clip_highlights) = crate::panels::clipping::effective_sides(app, frame);
-    let masks_tinted = !(clip_shadows || clip_highlights);
+    // (the mask overlay is drawn over the plain render when it can be: `mask_tint`)
+    let masks_tinted = !(clip_shadows || clip_highlights) && !tint_outside_render(app);
     // Show every visible mask's region at once (Ctrl+Shift+O / Cmd+Shift+O), ahead of the selected-mask overlay
     // so the shortcut is not shadowed by the always-on single-mask overlay.
     if masks_tinted && app.ui.right == RightPanel::Masking && app.ui.mask_overlay_all && d.masks.iter().any(|m| m.visible && !m.components.is_empty())

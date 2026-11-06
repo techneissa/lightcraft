@@ -644,3 +644,33 @@ fn an_export_develops_from_a_source_twice_its_size() {
     }
     assert_eq!(s.render_job(id, 1600, 1600, false, true).unwrap().level, SourceLevel::Preview, "a view keeps the preview");
 }
+
+// Given a job that asks for the masks' alphas, the photo it renders is the one it renders without, and the alphas are
+// the visible masks' (8-bit, the render's size), under a key of their own
+#[test]
+fn a_render_can_bring_the_masks_alphas_without_changing_the_photo() {
+    let mut s = crate::Session::with_demo();
+    let id = s.active().unwrap();
+    s.execute("mask.add", &serde_json::json!({"kind": "radial", "center": [0.4, 0.5], "rx": 0.2, "ry": 0.2})).unwrap();
+    s.execute("mask.add", &serde_json::json!({"kind": "linear", "start": [0.2, 0.3], "end": [0.8, 0.7]})).unwrap();
+    let plain = s.loupe_job(id, 300, 300, true).unwrap();
+    let with = s.loupe_job(id, 300, 300, true).unwrap().with_mask_planes();
+    assert_ne!(plain.key, with.key, "the alphas are part of the result key");
+    assert_eq!(with.key, s.loupe_job(id, 300, 300, true).unwrap().with_mask_planes().with_mask_planes().key, "asking twice changes nothing more");
+    let (a, b) = (plain.run(), with.run());
+    assert!(a.mask_planes.is_none(), "a plain render brings none");
+    assert_eq!(a.rendered.unwrap().image, b.rendered.unwrap().image, "the photo is the same");
+    let planes = b.mask_planes.expect("the masks' alphas");
+    assert_eq!(planes.planes.len(), 2);
+    let image = |p: &super::MaskPlanes| p.planes.iter().all(|(_, v)| v.len() == p.width * p.height);
+    assert!(image(&planes) && planes.width > 0, "{}×{}", planes.width, planes.height);
+    // they are the alphas the overlay draws (White on Black: the alpha itself, 8-bit)
+    let first = s.catalog.photo(id).unwrap().develop.masks[0].id;
+    let overlay =
+        lightcraft_pipeline::Overlay::Mask { id: first as u16, view: lightcraft_pipeline::MaskView::WhiteOnBlack, color: [0; 3], opacity: 100 };
+    let shown = s.loupe_job(id, 300, 300, true).unwrap().with_overlay(overlay).run().rendered.unwrap().image;
+    let alpha = planes.plane(first).expect("the first mask");
+    assert_eq!(shown.data.len(), alpha.len());
+    let worst = shown.data.iter().zip(alpha).map(|(p, a)| p[0].abs_diff(*a)).max().unwrap();
+    assert!(worst <= 1, "the alpha is what the overlay draws: off by {worst}");
+}
