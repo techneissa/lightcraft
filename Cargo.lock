@@ -4007,6 +4007,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-parsing"
+version = "0.18.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "image",
+ "lightcraft-faces",
+ "lightcraft-fetch",
+ "lightcraft-testkit",
+ "log",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "lightcraft-pipeline"
 version = "0.18.0"
 dependencies = [
