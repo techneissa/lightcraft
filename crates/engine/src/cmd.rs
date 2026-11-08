@@ -41,6 +41,7 @@ mod print;
 mod query;
 pub mod recheck;
 pub mod reload;
+mod retouch;
 pub mod similar;
 mod slideshow;
 mod sync;
@@ -183,6 +184,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(face_recognize::specs());
         v.extend(focus::specs());
         v.extend(activity::specs());
+        v.extend(retouch::specs());
         v
     })
 }

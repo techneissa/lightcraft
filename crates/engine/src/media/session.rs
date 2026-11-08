@@ -64,6 +64,7 @@ impl crate::Session {
         let salt = self.media.denoise_salt(id, &settings);
         let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
         let lens = super::quick::lens_key(&p);
+        let (retouch, faces) = self.retouch_for(&p, &settings);
         let key = settings_hash
             ^ ((max_w as u64) << 40)
             ^ ((max_h as u64) << 20)
@@ -74,7 +75,8 @@ impl crate::Session {
             ^ salt
             ^ profile_salt.rotate_left(29)
             ^ lens.rotate_left(37)
-            ^ decoder.rotate_left(43);
+            ^ decoder.rotate_left(43)
+            ^ retouch.rotate_left(53);
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
             k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION);
@@ -94,6 +96,9 @@ impl crate::Session {
             if decoder != 0 {
                 k.str("decoder").u64(decoder);
             }
+            if retouch != 0 {
+                k.str("retouch").u64(retouch);
+            }
             (self.media.rendered.clone(), k.finish())
         });
         Some(RenderJob {
@@ -104,7 +109,7 @@ impl crate::Session {
             level,
             source,
             origin: p.source.clone(),
-            info: source_info(&p),
+            info: SourceInfo { retouch: faces, ..source_info(&p) },
             settings,
             request,
             key,
@@ -186,6 +191,8 @@ impl crate::Session {
         p.develop = Arc::new(settings.clone());
         let source = self.media.source_ref(&p, level);
         let ck = Self::variant_key(&p, settings, edge, self.media.camera_profile_salt(&settings.profile.id));
+        let (retouch, faces) = self.retouch_for(&p, settings);
+        let ck = crate::retouch_input::salted(ck, retouch);
         Some(RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
@@ -194,7 +201,7 @@ impl crate::Session {
             level,
             source,
             origin: p.source.clone(),
-            info: source_info(&p),
+            info: SourceInfo { retouch: faces, ..source_info(&p) },
             settings: Arc::new(settings.clone()),
             request: RenderRequest { apply_crop: true, ..RenderRequest::fit(edge, edge) },
             key: (ck.0 as u64) ^ ((ck.0 >> 64) as u64),
@@ -308,6 +315,10 @@ impl crate::Session {
         let decoder = super::quick::decoder_key(p);
         if decoder != 0 {
             k.str("decoder").u64(decoder);
+        }
+        let retouch = self.retouch_salt(p, &p.develop);
+        if retouch != 0 {
+            k.str("retouch").u64(retouch);
         }
         k.finish()
     }
@@ -437,7 +448,7 @@ impl crate::Session {
             .u64(id.0)
             .u64(profile_salt)
             .finish();
-        let key = h.0 as u64 ^ super::quick::decoder_key(&p).rotate_left(43);
+        let key = h.0 as u64 ^ super::quick::decoder_key(&p).rotate_left(43) ^ self.retouch_salt(&p, &p.develop).rotate_left(53);
         let embedded = self.embedded_of(&p).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
         let embedded_cache = embedded.as_ref().map(|(_, _, edge)| {
             let cache = self.media.rendered.clone();
@@ -538,6 +549,7 @@ impl crate::Session {
     /// Synchronous render (CLI, MCP, tests).
     pub fn render_now(&mut self, id: PhotoId, max_w: usize, max_h: usize) -> Result<Rendered, String> {
         lightcraft_pipeline::check_output_size(max_w, max_h)?;
+        self.retouch_before_export(id);
         let job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
         let r = job.run();
         self.accept(&r);
@@ -569,6 +581,7 @@ impl crate::Session {
         depth: lightcraft_pipeline::OutputDepth,
     ) -> Result<RenderJob, String> {
         lightcraft_pipeline::check_output_size(max_w, max_h)?;
+        self.retouch_before_export(id);
         let mut job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
         // An export develops from a source at least twice its size, so it is resized down with a good filter
         // rather than made from a preview just covering it (for a raw, a binned and box-reduced image)

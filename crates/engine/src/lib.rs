@@ -73,6 +73,7 @@ pub mod print_pdf;
 pub mod profile_refs;
 pub mod proof;
 pub mod rename;
+pub mod retouch_input;
 pub mod segment;
 pub mod sidecar;
 pub mod slide;
@@ -397,6 +398,8 @@ pub struct Session {
     /// Background tasks in flight (imports, exports, preview builds…), for the activity stack and
     /// `activity.list` / `activity.cancel`.
     pub activity: activity::Activity,
+    /// The faces portrait retouching works on, per photo (fork, `fork/retouch-foundation.md`).
+    pub retouch_faces: retouch_input::FaceStore,
     /// The last (or running) slideshow export (`slideshow.export`).
     pub slideshow_export: Option<std::sync::Arc<slideshow_export::ExportRun>>,
     /// The last (or running) Build Previews.
@@ -495,6 +498,7 @@ impl Session {
             unsaved_sidecars: Default::default(),
             denoise: Default::default(),
             face_models_dir: None,
+            retouch_faces: Default::default(),
             face_downloads: Default::default(),
             lensfun: Default::default(),
             lens_auto_download: false,

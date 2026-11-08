@@ -22,6 +22,7 @@ mod grading;
 mod hdr_flow;
 mod histogram;
 mod mixer;
+pub(crate) mod portrait;
 mod sliders;
 
 use curve::curve_editor;
@@ -385,6 +386,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
         ui.add_space(8.0);
     });
+    // portrait retouching (fork, `fork/retouch-foundation.md`)
+    portrait::show(app, ui, &d, id);
     ui.add_space(40.0);
     // A pending numeric edit commits on blur before the explicit Reset takes precedence.
     if reset_clicked {
