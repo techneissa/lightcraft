@@ -1273,11 +1273,27 @@ pub struct Spot {
     /// without LaMa spots are byte for byte what they were.
     #[serde(skip_serializing_if = "SpotFill::is_classic")]
     pub fill: SpotFill,
+    /// The spot has no effect (its row's eye is off). Not written when shown (fork feature, `fork/spot-rows.md`).
+    #[serde(skip_serializing_if = "Spot::is_shown")]
+    pub hidden: bool,
+    /// When its circle shows on the photo; `None` follows the Tool Overlay. Not written when `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub circle: Option<crate::spot_circle::SpotCircle>,
 }
 
 impl Default for Spot {
     fn default() -> Self {
-        Self { mode: SpotMode::Remove, points: Vec::new(), size: 0.02, feather: 50.0, opacity: 100.0, source_offset: None, fill: SpotFill::Classic }
+        Self {
+            mode: SpotMode::Remove,
+            points: Vec::new(),
+            size: 0.02,
+            feather: 50.0,
+            opacity: 100.0,
+            source_offset: None,
+            fill: SpotFill::Classic,
+            hidden: false,
+            circle: None,
+        }
     }
 }
 

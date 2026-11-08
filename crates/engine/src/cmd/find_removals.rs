@@ -59,6 +59,7 @@ fn add_spots(s: &mut Session, c: &str, entries: &[Entry], fill: SpotFill) -> cra
                 opacity: 100.0,
                 source_offset: None,
                 fill,
+                ..Default::default()
             });
         }
     }

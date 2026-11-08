@@ -127,6 +127,7 @@ mod smart_editing;
 mod solo_sections;
 mod space_hand;
 mod split_divider;
+mod spot_rows;
 mod switch_library;
 mod sync;
 mod tallies;

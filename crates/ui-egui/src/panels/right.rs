@@ -21,7 +21,9 @@ mod keywords;
 mod remove_compact;
 mod remove_fill;
 mod remove_finds;
+mod spot_rows;
 pub(crate) use remove_fill::with_fill;
+pub(crate) use spot_rows::overlay_of as spot_overlay;
 
 #[cfg(test)]
 use crop::aspect_label;
