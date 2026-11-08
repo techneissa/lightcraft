@@ -14,23 +14,23 @@ fn demo() -> (Session, Vec<PhotoId>) {
     (s, ids)
 }
 
-fn temp(s: &Session, id: PhotoId) -> f64 {
-    lightcraft_pipeline::local::effective_wb(&s.source_info(id), &s.develop_of(id).unwrap()).0
-}
-
 #[test]
 fn a_library_photo_as_reference_sets_sliders_in_one_undo_step() {
     let (mut s, ids) = demo();
     let (a, b, reference) = (ids[0], ids[1], ids[2]);
-    // the reference: a much warmer, darker edit of another photo
-    s.execute("develop.set", &json!({"ids": [reference], "values": {"wb.temp": 9500, "light.exposure": -1.0}})).unwrap();
     let before = [(*s.develop_of(a).unwrap()).clone(), (*s.develop_of(b).unwrap()).clone()];
-    let (ta, tb) = (temp(&s, a), temp(&s, b));
+    // what the reference as it is gives (the demo photos differ: dunes against a sunset has no one right white
+    // balance, so this test checks Exposure; the look crate's tests check Temp on alike scenes)
+    s.execute("develop.matchLook", &json!({"ids": [a, b], "reference": {"photo": reference}})).unwrap();
+    let ex = |s: &Session, id| s.develop_of(id).unwrap().light.exposure;
+    let (ea, eb) = (ex(&s, a), ex(&s, b));
+    s.execute("edit.undo", &json!({})).unwrap();
+    // the reference made much darker
+    s.execute("develop.set", &json!({"ids": [reference], "values": {"light.exposure": -1.5}})).unwrap();
     let v = s.execute("develop.matchLook", &json!({"ids": [a, b], "reference": {"photo": reference}})).unwrap();
     assert_eq!(v["photos"].as_array().map(Vec::len), Some(2), "{v}");
     assert!(v["failed"].as_array().is_some_and(Vec::is_empty), "{v}");
-    assert!(temp(&s, a) > ta && temp(&s, b) > tb, "warmer: {} > {ta}, {} > {tb}", temp(&s, a), temp(&s, b));
-    assert!(s.develop_of(a).unwrap().light.exposure < before[0].light.exposure);
+    assert!(ex(&s, a) < ea && ex(&s, b) < eb, "darker than to the reference as it was: {} < {ea}, {} < {eb}", ex(&s, a), ex(&s, b));
     // one undo step brings both back
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(*s.develop_of(a).unwrap(), before[0]);
@@ -93,4 +93,15 @@ fn a_pasted_picture_is_a_reference() {
     let v = s.execute("develop.matchLook", &json!({"ids": [ids[0]], "reference": {"pasted": true}})).unwrap();
     assert_eq!(v["photos"].as_array().map(Vec::len), Some(1), "{v}");
     assert!(s.develop_of(ids[0]).unwrap().light.exposure < ex);
+}
+
+#[test]
+fn amount_zero_changes_nothing_and_adds_no_undo_step() {
+    let (mut s, ids) = demo();
+    s.execute("develop.set", &json!({"ids": [ids[1]], "values": {"wb.temp": 9500, "light.exposure": -1.0}})).unwrap();
+    let before = (*s.develop_of(ids[0]).unwrap()).clone();
+    let steps = s.undo.len();
+    s.execute("develop.matchLook", &json!({"ids": [ids[0]], "reference": {"photo": ids[1]}, "amount": 0})).unwrap();
+    assert_eq!(serde_json::to_string(&*s.develop_of(ids[0]).unwrap()).unwrap(), serde_json::to_string(&before).unwrap());
+    assert_eq!(s.undo.len(), steps, "no undo step");
 }

@@ -3952,6 +3952,7 @@ dependencies = [
  "lightcraft-raster",
  "lightcraft-scenes",
  "serde",
+ "serde_json",
 ]
 
 [[package]]

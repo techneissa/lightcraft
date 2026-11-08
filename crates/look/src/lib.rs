@@ -165,17 +165,33 @@ impl MatchResult {
     pub fn scaled(&self, amount: f64) -> MatchResult {
         let k = if amount.is_finite() { amount.clamp(0.0, 1.0) } else { 1.0 };
         let mut r = self.clone();
+        // a wheel that had no saturation has no hue to start from: its hue is taken as fitted, its saturation scales
+        let from_grey = |hue_id: &str| {
+            let sat_id = hue_id.replace(".hue", ".sat");
+            self.changes.iter().find(|c| c.id == sat_id).is_some_and(|c| c.from.abs() < 1e-9)
+        };
         for c in &mut r.changes {
-            c.to = if c.id.ends_with(".hue") && c.id.starts_with("grading.") { c.to } else { c.from + (c.to - c.from) * k };
+            let d = c.to - c.from;
+            c.to = if c.id.starts_with("grading.") && c.id.ends_with(".hue") {
+                if from_grey(&c.id) && k > 0.0 {
+                    c.to
+                } else {
+                    // along the shorter way round the wheel
+                    (c.from + ((d + 180.0).rem_euclid(360.0) - 180.0) * k).rem_euclid(360.0)
+                }
+            } else {
+                c.from + d * k
+            };
         }
-        r.curve = self.curve.as_ref().map(|pts| pts.iter().map(|p| Point::new(p.x, p.x + (p.y - p.x) * k)).collect());
+        r.changes.retain(|c| (c.to - c.from).abs() > 1e-9);
+        r.curve = self.curve.as_ref().filter(|_| k > 0.0).map(|pts| pts.iter().map(|p| Point::new(p.x, p.x + (p.y - p.x) * k)).collect());
         r
     }
 
     /// Apply the match's changes to `d` (the photo's settings now, which may have moved on since the match started):
     /// only the sliders the match moved are written.
     pub fn apply_to(&self, d: &mut DevelopSettings, info: &SourceInfo) {
-        if self.changes.iter().any(|c| c.id.starts_with("wb.")) {
+        if self.changes.iter().any(|c| c.id.starts_with("wb.") && (c.to - c.from).abs() > 1e-9) {
             let (t, tint) = lightcraft_pipeline::auto::current_wb(info, d);
             lightcraft_pipeline::local::normalize_wb(d, info);
             d.wb.temp = t;

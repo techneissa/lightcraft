@@ -15,6 +15,9 @@ const BINS: usize = 1024;
 /// colour of the walls, white clothes and greys (white balance), not of a big coloured object (that is for Vibrance,
 /// Saturation and the mixer); a picture with no neutrals at all still has a cast, its colourful pixels' mean.
 const NEUTRAL_FLOOR: f32 = 0.02;
+/// OkLab chroma past which a pixel counts as colourful for the cast. Wide enough that walls under a strong white
+/// balance (a warm 9500 K) still count, narrow enough that a saturated shirt does not.
+const NEUTRAL_CHROMA: f32 = 0.16;
 /// OkLab chroma that counts as fully colourful for the hue bands (below it a pixel is partly neutral).
 const BAND_CHROMA: f32 = 0.06;
 
@@ -132,6 +135,16 @@ fn mask_at(mask: Option<&Plane>, x: usize, y: usize, w: usize, h: usize) -> f32 
     if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }
 }
 
+/// The cast at a lightness with zone memberships `zl`: the zones' casts blended.
+fn blend(zl: &[f32; 3], cast: &[[f32; 2]]) -> [f32; 2] {
+    let mut c0 = [0.0f32; 2];
+    for (zw, m) in zl.iter().zip(cast) {
+        c0[0] += zw * m[0];
+        c0[1] += zw * m[1];
+    }
+    c0
+}
+
 /// Measure `img`, each pixel weighted by `mask` (none: the whole picture).
 pub fn measure(img: &Rgba8, mask: Option<&Plane>) -> Stats {
     let (w, h) = (img.width, img.height);
@@ -164,7 +177,7 @@ pub fn measure(img: &Rgba8, mask: Option<&Plane>) -> Stats {
             if let Some(v) = l_hist.get_mut(li) {
                 *v += wt;
             }
-            let neutral = 1.0 - (c / BAND_CHROMA).min(1.0) + NEUTRAL_FLOOR;
+            let neutral = (1.0 - c / NEUTRAL_CHROMA).max(0.0) + NEUTRAL_FLOOR;
             for (z, zw) in zones(l).iter().enumerate() {
                 let k = zw * wt;
                 if let (Some(acc), Some(zwacc), Some(nacc)) = (zone_ab.get_mut(z), zone_w.get_mut(z), zone_n.get_mut(z)) {
@@ -194,11 +207,7 @@ pub fn measure(img: &Rgba8, mask: Option<&Plane>) -> Stats {
     }
     let cast: Vec<[f32; 2]> = zone_ab.iter().zip(&zone_n).map(|(acc, zw)| if *zw > 0.0 { [acc[0] / zw, acc[1] / zw] } else { [0.0, 0.0] }).collect();
     for ([l, a, b], wt) in &px {
-        let mut c0 = [0.0f32; 2];
-        for (zw, m) in zones(*l).iter().zip(&cast) {
-            c0[0] += zw * m[0];
-            c0[1] += zw * m[1];
-        }
+        let c0 = blend(&zones(*l), &cast);
         let c = (a - c0[0]).hypot(b - c0[1]);
         let ci = ((c.clamp(0.0, C_MAX) / C_MAX * BINS as f32) as usize).min(BINS - 1);
         if let Some(v) = c_hist.get_mut(ci) {

@@ -246,8 +246,41 @@ fn amount_scales_the_changes() {
     let half = r.scaled(0.5);
     let ex = |r: &MatchResult| r.changes.iter().find(|c| c.id == "light.exposure").map(|c| c.to).unwrap();
     assert!((ex(&half) - ex(&r) / 2.0).abs() < 1e-9);
-    assert!(r.scaled(0.0).changes.iter().filter(|c| !c.id.ends_with(".hue")).all(|c| c.to == c.from));
     assert_eq!(r.scaled(f64::NAN).changes, r.changes);
+}
+
+#[test]
+fn amount_zero_leaves_the_settings_exactly_as_they_were() {
+    // a match that moves white balance, the grading wheels (hue and saturation) and the curve
+    let src = scene(Kind::AlpineLake, 41);
+    let reference = render(&scene(Kind::OceanSunset, 3), &DevelopSettings::default());
+    let r = fit(&src, &DevelopSettings::default(), &reference);
+    assert!(r.changes.iter().any(|c| c.id.starts_with("wb.")) && r.changes.iter().any(|c| c.id.ends_with(".hue")), "{:?}", r.changes);
+    let none = r.scaled(0.0);
+    assert!(none.changes.is_empty(), "{:?}", none.changes);
+    assert!(none.curve.is_none());
+    let before = DevelopSettings::default();
+    let mut after = before.clone();
+    none.apply_to(&mut after, &SourceInfo::default());
+    assert_eq!(serde_json::to_string(&after).unwrap(), serde_json::to_string(&before).unwrap());
+}
+
+#[test]
+fn a_grading_hue_scales_along_the_shorter_arc() {
+    let r = MatchResult {
+        settings: DevelopSettings::default(),
+        changes: vec![
+            Change { id: "grading.shadows.hue".into(), from: 350.0, to: 30.0 },
+            Change { id: "grading.shadows.sat".into(), from: 20.0, to: 40.0 },
+        ],
+        curve: None,
+        loss_before: 0.0,
+        loss_after: 0.0,
+        evals: 0,
+    };
+    let half = r.scaled(0.5);
+    let hue = half.changes.iter().find(|c| c.id == "grading.shadows.hue").unwrap().to;
+    assert!((hue - 10.0).abs() < 1e-9, "350° → 30° halfway is 10°, not 190°: {hue}");
 }
 
 /// A grey wall (working space, linear) with a small muted yellow patch on it.
