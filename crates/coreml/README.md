@@ -1,0 +1,30 @@
+# lightcraft-coreml
+
+Runs converted AI models through Apple's Core ML (Neural Engine, GPU, CPU) on the Mac. Layer 0, no workspace
+dependencies; a stub that reports itself unavailable on every other system. All `unsafe` is in `src/macos.rs`.
+The candle port of each model stays the reference and the fallback (`fork/coreml.md`).
+
+API: `available()`, `compile(package, dest)` (an `.mlpackage` to a compiled `.mlmodelc`, once after a download),
+`Model::load(compiled, ComputeUnits)`, `Model::predict(input, shape, data, output)` on `f32` tensors. Every failure
+is an `Error`, never a panic.
+
+**Objective-C exceptions are not caught.** Catching them needs `objc2`'s `exception` feature, which compiles an
+Objective-C helper with `cc`, and LightCraft is pure Rust (CLAUDE.md). Core ML is never given a reason to throw:
+
+- `available()` checks macOS 13 or later and, with `respondsToSelector:`, every selector used:
+  `compileModelAtURL:error:`, `modelWithContentsOfURL:configuration:error:`, `predictionFromFeatures:error:`,
+  `modelDescription`, `inputDescriptionsByName`, `outputDescriptionsByName`, `setComputeUnits:`,
+  `initWithShape:dataType:error:`, `getBytesWithHandler:`, `getMutableBytesWithHandler:`,
+  `initWithDictionary:error:`, `featureValueWithMultiArray:`.
+- Every object a call may return as nil is received as an `Option` and checked; failures come back through an
+  `NSError` out-parameter (`compileModelAtURL:error:`, `modelWithContentsOfURL:configuration:error:`,
+  `initWithShape:dataType:error:`, `initWithDictionary:error:`, `predictionFromFeatures:error:`,
+  `featureValueForName:`, `multiArrayValue`, `modelDescription`).
+- Input and output names are checked against the model's description, and the shape against the data, before the
+  call. Tensors have 1 to 5 dimensions and at most 64 M numbers.
+- The byte handlers copy exactly the buffer size Core ML passes; the output is read through its own strides (the
+  Neural Engine pads rows) and any offset past the buffer is an error.
+- Every call runs in an autorelease pool. A loaded model is used by one thread at a time (a `Mutex`).
+
+`compileModelAtURL:error:` is deprecated in favour of the asynchronous call but still works; it runs on a worker
+thread, once per download.

@@ -25,6 +25,7 @@ mod display;
 mod general;
 mod import;
 mod libraries;
+mod model_runtime;
 mod performance;
 mod slideshow;
 pub(crate) mod starting_colour;

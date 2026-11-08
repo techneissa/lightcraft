@@ -24,6 +24,7 @@ lightcraft-preview = { workspace = true }
 lightcraft-codecs = { workspace = true }
 lightcraft-raw = { workspace = true }
 lightcraft-macraw = { workspace = true }
+lightcraft-coreml = { workspace = true }
 lightcraft-denoise-core = { workspace = true }
 lightcraft-denoise = { workspace = true, optional = true }
 lightcraft-meta = { workspace = true }

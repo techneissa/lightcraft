@@ -47,7 +47,9 @@ struct Inner {
     model_dir: Mutex<Option<PathBuf>>,
     profiles_dir: Mutex<Option<PathBuf>>,
     #[cfg(not(target_arch = "wasm32"))]
-    encoder: Mutex<Option<Arc<lightcraft_learn::encoder::Encoder>>>,
+    encoder: Mutex<Option<Arc<lightcraft_learn::image_encoder::ImageEncoder>>>,
+    /// Which engine runs the encoder (`fork/coreml.md`).
+    runtime: Mutex<crate::model_runtime::Runtime>,
     download: Mutex<Download>,
     /// Profiles read, by file, with the file's size and time when read.
     read: Mutex<HashMap<PathBuf, (Stamp, Result<Arc<Profile>, String>)>>,
@@ -120,6 +122,7 @@ impl LearnEdits {
                 profiles_dir: Mutex::new(None),
                 #[cfg(not(target_arch = "wasm32"))]
                 encoder: Mutex::new(None),
+                runtime: Mutex::new(Default::default()),
                 download: Mutex::new(Download::Idle),
                 read: Mutex::new(HashMap::new()),
                 features: Mutex::new(HashMap::new()),
@@ -194,7 +197,7 @@ impl LearnEdits {
 
     /// The encoder, loaded once (on a job's thread).
     #[cfg(not(target_arch = "wasm32"))]
-    pub(crate) fn encoder(&self) -> Result<Option<Arc<lightcraft_learn::encoder::Encoder>>, String> {
+    pub(crate) fn encoder(&self) -> Result<Option<Arc<lightcraft_learn::image_encoder::ImageEncoder>>, String> {
         if self.statistics_only() {
             return Ok(None);
         }
@@ -207,10 +210,40 @@ impl LearnEdits {
                 (lightcraft_learn::ENCODER_BYTES + 500_000) / 1_000_000
             ));
         }
-        let path = self.model_path().ok_or("no model folder")?;
-        let e = Arc::new(lightcraft_learn::encoder::Encoder::load(&path).map_err(|e| e.to_string())?);
+        let dir = self.model_dir().ok_or("no model folder")?;
+        let e = Arc::new(lightcraft_learn::image_encoder::ImageEncoder::load(&dir, self.runtime()).map_err(|e| e.to_string())?);
         *lock(&self.inner.encoder) = Some(e.clone());
         Ok(Some(e))
+    }
+
+    /// Which engine runs the encoder: Automatic, Core ML or Candle.
+    pub fn runtime(&self) -> crate::model_runtime::Runtime {
+        *lock(&self.inner.runtime)
+    }
+
+    /// Run the encoder on `runtime` from the next job on (a loaded encoder is dropped).
+    pub fn set_runtime(&self, runtime: crate::model_runtime::Runtime) {
+        *lock(&self.inner.runtime) = runtime;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            *lock(&self.inner.encoder) = None;
+        }
+    }
+
+    /// Whether the Core ML version of the encoder is in the model folder (`fork/coreml.md`).
+    pub fn coreml_installed(&self) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.model_dir().is_some_and(|d| lightcraft_learn::image_encoder::coreml_installed(&d));
+        #[cfg(target_arch = "wasm32")]
+        false
+    }
+
+    /// The engine the loaded encoder runs on (`coreml` or `candle`); `None` before a job has loaded it.
+    pub fn backend(&self) -> Option<&'static str> {
+        #[cfg(not(target_arch = "wasm32"))]
+        return lock(&self.inner.encoder).as_ref().map(|e| e.backend().id());
+        #[cfg(target_arch = "wasm32")]
+        None
     }
 
     /// The feature layout new profiles get.
@@ -327,6 +360,8 @@ impl Session {
     /// Learn My Edits with its default folders ([`default_model_dir`], [`default_profiles_dir`]).
     pub fn with_default_learn(self) -> Self {
         self.learn.set_dirs(default_model_dir(), default_profiles_dir());
+        self.model_runtimes.open(crate::model_runtime::default_file());
+        self.learn.set_runtime(self.model_runtimes.get(lightcraft_learn::ENCODER_ID));
         self
     }
 

@@ -17,6 +17,8 @@
 #[cfg(not(target_arch = "wasm32"))]
 pub mod encoder;
 pub mod features;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod image_encoder;
 mod linalg;
 pub mod profile;
 pub mod ridge;
@@ -73,6 +75,12 @@ impl From<candle_core::Error> for Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Something that turns an sRGB photo (`width × height × 3` bytes) into the encoder's numbers: the candle
+/// [`encoder::Encoder`], or [`image_encoder::ImageEncoder`], which runs Core ML or candle.
+pub trait ImageFeatures {
+    fn features(&self, width: usize, height: usize, rgb: &[u8]) -> Result<Vec<f32>>;
+}
+
 /// The layout of features made with the encoder (`true`) or with the photo statistics only.
 pub fn layout(with_encoder: bool) -> Layout {
     Layout { photo: PHOTO_DIMS, encoder: if with_encoder { encoder_dims() } else { 0 } }
@@ -92,7 +100,7 @@ fn encoder_dims() -> usize {
 /// The features of a photo developed at its defaults (`rgb`: `width × height × 3` sRGB bytes), with the encoder's
 /// when one is given.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn photo_features(encoder: Option<&encoder::Encoder>, width: usize, height: usize, rgb: &[u8]) -> Result<Vec<f32>> {
+pub fn photo_features<E: ImageFeatures + ?Sized>(encoder: Option<&E>, width: usize, height: usize, rgb: &[u8]) -> Result<Vec<f32>> {
     let mut f = features::photo_stats(width, height, rgb)?;
     if let Some(e) = encoder {
         f.extend(e.features(width, height, rgb)?);

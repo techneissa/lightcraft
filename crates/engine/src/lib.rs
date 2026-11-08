@@ -69,6 +69,7 @@ pub mod media;
 pub mod memory;
 pub mod merge;
 mod model_download;
+pub mod model_runtime;
 pub mod names;
 pub mod open_path;
 pub mod originals;
@@ -393,6 +394,8 @@ pub struct Session {
     pub lama: lama_fill::LamaFill,
     /// Learn My Edits: profiles trained on the user's edits (`fork/learn-my-edits.md`).
     pub learn: learn::LearnEdits,
+    /// Which engine runs each AI model that has a Core ML version (`fork/coreml.md`).
+    pub model_runtimes: Arc<model_runtime::ModelRuntimes>,
     /// The persistent library this session writes to (`None` = in-memory only).
     pub library: Option<library::Library>,
     /// Identity of current library opening; refreshed only after a successful open.
@@ -598,6 +601,7 @@ impl Session {
             finds: Default::default(),
             lama: lama_fill::LamaFill::new(activity.clone()),
             learn: learn::LearnEdits::new(activity.clone()),
+            model_runtimes: Default::default(),
             library: None,
             library_identity: Arc::new(()),
             xmp: sidecar::XmpPrefs::default(),
