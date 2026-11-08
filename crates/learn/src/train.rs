@@ -17,8 +17,9 @@ use crate::{Error, Result};
 pub const MIN_EXAMPLES: usize = 10;
 /// Most examples a profile holds.
 pub const MAX_EXAMPLES: usize = 200;
-/// A slider is learned when its held-out error is at most this share of the defaults' error.
-const KEEP_RATIO: f64 = 0.9;
+/// A slider is learned when its held-out error is at most this share of the defaults' error: at least 20 % closer.
+/// With 12 examples, 3 % of sliders moved at random pass it (10 % margin: 9 %).
+const KEEP_RATIO: f64 = 0.8;
 const FOLDS: usize = 5;
 
 /// One photo the profile learns from.
@@ -201,6 +202,7 @@ fn targets_of(examples: &[&Example], sliders: &[(usize, f64)]) -> Vec<Vec<f64>> 
 }
 
 /// Fits every group on `examples`.
+/// Fits every group of `plan` on `examples`: the model and the examples' standardised features.
 fn fit_all(layout: Layout, examples: &[&Example], plan: &[(Group, Vec<(usize, f64)>)], cancel: &dyn Fn() -> bool) -> Result<(Model, Vec<Vec<f32>>)> {
     let rows: Vec<&[f32]> = examples.iter().map(|e| e.features.as_slice()).collect();
     let standardizer = Standardizer::of(&rows, layout.dims());
@@ -234,6 +236,132 @@ pub fn predict(model: &Model, x: &[Vec<f32>], f: &[f32]) -> Vec<(usize, f32)> {
         }
     }
     out
+}
+
+/// Per group of a plan, per example, per slider: a prediction (0, the default, where none was made).
+type Held = Vec<Vec<Vec<f64>>>;
+type Plan = Vec<(Group, Vec<(usize, f64)>)>;
+
+/// Folds of the inner held-out run that decides what a model learns.
+const INNER_FOLDS: usize = 3;
+
+/// The part of `chosen` that is in `plan`.
+fn restrict(chosen: Plan, plan: &[(Group, Vec<(usize, f64)>)]) -> Plan {
+    chosen
+        .into_iter()
+        .filter_map(|(g, sl)| {
+            let (_, own) = plan.iter().find(|(pg, _)| *pg == g)?;
+            let sl: Vec<(usize, f64)> = sl.into_iter().filter(|(i, _)| own.iter().any(|(j, _)| j == i)).collect();
+            (!sl.is_empty()).then_some((g, sl))
+        })
+        .collect()
+}
+
+/// Where slider `idx` of `group` sits in `plan`.
+fn place(plan: &[(Group, Vec<(usize, f64)>)], group: Group, idx: usize) -> Option<(usize, usize)> {
+    let gi = plan.iter().position(|(g, _)| *g == group)?;
+    let si = plan.get(gi)?.1.iter().position(|(i, _)| *i == idx)?;
+    Some((gi, si))
+}
+
+/// Out-of-fold predictions of `examples` for the sliders of `plan`, and of the fixed preset (each fold's average
+/// edit). Each fold is predicted by a model trained on the others that learns only what its own training photos
+/// changed and, with `choose`, only what an inner held-out run on those photos finds worth learning ([`decide`]), so
+/// the error of the whole procedure is what is measured.
+fn held_out(
+    layout: Layout,
+    examples: &[&Example],
+    plan: &[(Group, Vec<(usize, f64)>)],
+    groups: &[Group],
+    folds: usize,
+    choose: bool,
+    cancel: &dyn Fn() -> bool,
+) -> Result<(Held, Held)> {
+    let n = examples.len();
+    let mut held: Held = plan.iter().map(|(_, s)| vec![vec![0.0; s.len()]; n]).collect();
+    let mut preset = held.clone();
+    for (fold, fold_plan) in fold_plans(examples, folds, groups).into_iter().enumerate() {
+        if cancel() {
+            return Err(Error::Cancelled);
+        }
+        let train: Vec<&Example> = examples.iter().enumerate().filter(|(i, _)| i % folds != fold).map(|(_, e)| *e).collect();
+        let fold_plan = restrict(fold_plan, plan);
+        let out: Vec<usize> = (0..n).filter(|i| i % folds == fold).collect();
+        for (g, sl) in &fold_plan {
+            for (idx, _) in sl {
+                let mean = train.iter().map(|e| e.targets.get(*idx).copied().unwrap_or(0.0) as f64).sum::<f64>() / train.len().max(1) as f64;
+                let Some((gi, si)) = place(plan, *g, *idx) else { continue };
+                for i in &out {
+                    if let Some(v) = preset.get_mut(gi).and_then(|h| h.get_mut(*i)).and_then(|r| r.get_mut(si)) {
+                        *v = mean;
+                    }
+                }
+            }
+        }
+        let chosen = if choose { decide(layout, &train, &fold_plan, groups, cancel)? } else { fold_plan };
+        if chosen.is_empty() {
+            continue;
+        }
+        let (model, x) = fit_all(layout, &train, &chosen, cancel)?;
+        for i in &out {
+            let Some(e) = examples.get(*i) else { continue };
+            let q = model.standardizer.apply(&e.features);
+            for g in &model.groups {
+                let p = ridge::predict(&g.kernel, layout, &x, &g.mean, &g.alpha, &q);
+                for (id, v) in g.sliders.iter().zip(&p) {
+                    let Some(idx) = SLIDERS.iter().position(|s| s.id == id) else { continue };
+                    let Some((gi, si)) = place(plan, g.group, idx) else { continue };
+                    if let Some(h) = held.get_mut(gi).and_then(|h| h.get_mut(*i)).and_then(|r| r.get_mut(si)) {
+                        *h = *v;
+                    }
+                }
+            }
+        }
+    }
+    Ok((held, preset))
+}
+
+/// The sliders of `plan` worth learning, judged on `examples` alone (the photos a model is trained on), by an inner
+/// held-out run: a slider is kept when its error on photos the inner models had not seen is at most [`KEEP_RATIO`]
+/// of leaving them at their defaults. A colour wheel's two axes (one label) are judged together.
+fn decide(layout: Layout, examples: &[&Example], plan: &[(Group, Vec<(usize, f64)>)], groups: &[Group], cancel: &dyn Fn() -> bool) -> Result<Plan> {
+    let folds = INNER_FOLDS.min(examples.len());
+    if folds < 2 || plan.is_empty() {
+        return Ok(Vec::new());
+    }
+    let (held, _) = held_out(layout, examples, plan, groups, folds, false, cancel)?;
+    let mut out = Vec::new();
+    for ((group, sliders), held) in plan.iter().zip(&held) {
+        let label = |si: usize| sliders.get(si).and_then(|(idx, _)| SLIDERS.get(*idx)).map_or("", |s| s.label);
+        // per slider: (held-out, defaults) mean absolute error, scaled
+        let errs: Vec<(f64, f64)> = sliders
+            .iter()
+            .enumerate()
+            .map(|(si, (idx, scale))| {
+                examples.iter().zip(held).fold((0.0, 0.0), |a, (e, h)| {
+                    let y = e.targets.get(*idx).copied().unwrap_or(0.0) as f64;
+                    let p = h.get(si).copied().unwrap_or(0.0);
+                    (a.0 + (p - y).abs() / scale, a.1 + y.abs() / scale)
+                })
+            })
+            .collect();
+        let kept: Vec<(usize, f64)> = sliders
+            .iter()
+            .enumerate()
+            .filter(|(si, _)| {
+                let (e, d) = (0..sliders.len())
+                    .filter(|sj| label(*sj) == label(*si))
+                    .filter_map(|sj| errs.get(sj))
+                    .fold((0.0, 0.0), |a, t| (a.0 + t.0, a.1 + t.1));
+                d > 1e-9 && e <= KEEP_RATIO * d
+            })
+            .map(|(_, s)| *s)
+            .collect();
+        if !kept.is_empty() {
+            out.push((*group, kept));
+        }
+    }
+    Ok(out)
 }
 
 /// What each held-out fold learns: the sliders its own training photos changed, never ones only its held-out photos
@@ -282,39 +410,16 @@ pub fn train(
     let plan = edited(&all, groups);
     let n = examples.len();
     let folds = FOLDS.min(n);
-    // held-out predictions of every example, per planned group
-    let mut held: Vec<Vec<Vec<f64>>> = plan.iter().map(|(_, s)| vec![vec![0.0; s.len()]; n]).collect();
-    let mut preset: Vec<Vec<Vec<f64>>> = held.clone();
-    for (fold, fold_plan) in fold_plans(&all, folds, groups).into_iter().enumerate() {
-        progress(fold, folds + 1);
-        let train: Vec<&Example> = all.iter().enumerate().filter(|(i, _)| i % folds != fold).map(|(_, e)| *e).collect();
-        let (model, x) = fit_all(layout, &train, &fold_plan, cancel)?;
-        for (i, e) in all.iter().enumerate().filter(|(i, _)| i % folds == fold) {
-            let q = model.standardizer.apply(&e.features);
-            for g in &model.groups {
-                let p = ridge::predict(&g.kernel, layout, &x, &g.mean, &g.alpha, &q);
-                // into the places of the whole plan; a slider no training photo changed stays at its default (0)
-                let Some(gi) = plan.iter().position(|(pg, _)| *pg == g.group) else { continue };
-                for ((id, v), m) in g.sliders.iter().zip(&p).zip(&g.mean) {
-                    let Some(si) = plan.get(gi).and_then(|(_, sl)| sl.iter().position(|(idx, _)| SLIDERS.get(*idx).is_some_and(|s| s.id == id)))
-                    else {
-                        continue;
-                    };
-                    if let Some(h) = held.get_mut(gi).and_then(|h| h.get_mut(i)).and_then(|r| r.get_mut(si)) {
-                        *h = *v;
-                    }
-                    if let Some(pr) = preset.get_mut(gi).and_then(|h| h.get_mut(i)).and_then(|r| r.get_mut(si)) {
-                        *pr = *m;
-                    }
-                }
-            }
-        }
-    }
-    progress(folds, folds + 1);
+    // held-out predictions of every example (each fold choosing what it learns from its own training photos)
+    progress(0, 3);
+    let (held, preset) = held_out(layout, &all, &plan, groups, folds, true, cancel)?;
+    // what the profile learns: decided on all the examples, the way each fold decided on its own
+    progress(1, 3);
+    let kept_plan = decide(layout, &all, &plan, groups, cancel)?;
+    progress(2, 3);
     // score each slider on the held-out predictions; a wheel's two axes (one label) are kept or dropped together
     let mut scores = Vec::with_capacity(plan.len());
     let mut per_photo = vec![(0.0f64, 0.0f64, 0.0f64); n];
-    let mut kept_plan: Vec<(Group, Vec<(usize, f64)>)> = Vec::new();
     let mut all_ratios = Vec::with_capacity(plan.len());
     for (gi, (group, sliders)) in plan.iter().enumerate() {
         // per slider: summed errors in its own units, and per photo in shared (scaled) units
@@ -337,13 +442,7 @@ pub fn train(
         }
         let total =
             |si: usize| photo_errs.get(si).map_or((0.0, 0.0, 0.0), |v| v.iter().fold((0.0, 0.0, 0.0), |a, p| (a.0 + p.0, a.1 + p.1, a.2 + p.2)));
-        let label = |si: usize| sliders.get(si).and_then(|(idx, _)| SLIDERS.get(*idx)).map_or("", |s| s.label);
-        let kept: Vec<bool> = (0..sliders.len())
-            .map(|si| {
-                let (err, def) = (0..sliders.len()).filter(|sj| label(*sj) == label(si)).map(total).fold((0.0, 0.0), |a, t| (a.0 + t.0, a.1 + t.1));
-                def > 1e-9 && err <= KEEP_RATIO * def
-            })
-            .collect();
+        let kept: Vec<bool> = sliders.iter().map(|(idx, _)| kept_plan.iter().any(|(g, sl)| g == group && sl.iter().any(|(j, _)| j == idx))).collect();
         let ratio_of = |which: &dyn Fn(usize) -> bool| {
             let (e, d, p) = (0..sliders.len()).filter(|si| which(*si)).map(total).fold((0.0, 0.0, 0.0), |a, t| (a.0 + t.0, a.1 + t.1, a.2 + t.2));
             if d > 1e-9 { (e / d, p / d) } else { (1.0, 1.0) }
@@ -368,9 +467,6 @@ pub fn train(
                 SLIDERS.get(*idx).map(|s| SliderScore { id: s.id.to_string(), error: e / n as f64, default_error: d / n as f64, kept: Some(*k) })
             })
             .collect();
-        if any {
-            kept_plan.push((*group, sliders.iter().zip(&kept).filter(|(_, k)| **k).map(|(s, _)| *s).collect()));
-        }
         scores.push(GroupScore { group: *group, kept: any, ratio, preset_ratio, sliders: slider_scores });
     }
     if kept_plan.is_empty() {
@@ -388,6 +484,6 @@ pub fn train(
         groups: scores,
     };
     let (model, _) = fit_all(layout, &all, &kept_plan, cancel)?;
-    progress(folds + 1, folds + 1);
+    progress(3, 3);
     Ok((model, report))
 }

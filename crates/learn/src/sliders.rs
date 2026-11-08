@@ -296,9 +296,11 @@ pub fn write(out: &mut DevelopSettings, defaults: &DevelopSettings, predicted: &
     }
     let index = |kind: Kind| SLIDERS.iter().position(|s| s.kind == kind);
     for w in wheels {
+        // an axis the profile doesn't predict keeps the photo's own value
         let (dx, dy) = wheel_xy(wheel(defaults, w));
-        let x = dx + index(Kind::Wheel(w, 0)).and_then(get).unwrap_or(0.0);
-        let y = dy + index(Kind::Wheel(w, 1)).and_then(get).unwrap_or(0.0);
+        let (cx, cy) = wheel_xy(wheel(out, w));
+        let x = index(Kind::Wheel(w, 0)).and_then(get).map_or(cx, |t| dx + t);
+        let y = index(Kind::Wheel(w, 1)).and_then(get).map_or(cy, |t| dy + t);
         let sat = x.hypot(y).clamp(0.0, 100.0);
         let target = wheel_mut(out, w);
         if sat < 0.5 {
@@ -309,15 +311,19 @@ pub fn write(out: &mut DevelopSettings, defaults: &DevelopSettings, predicted: &
         }
     }
     for ch in curves {
-        let mut pts = Vec::with_capacity(CURVE_X.len());
-        let mut identity = true;
+        // the photo's own curve, with a point set at each place the profile predicts; its other points stay
+        let mut pts: Vec<Point> = channel(&out.curve, ch).to_vec();
+        if pts.is_empty() {
+            pts = vec![Point::new(0.0, 0.0), Point::new(1.0, 1.0)];
+        }
         for (i, x) in CURVE_X.iter().enumerate() {
+            let Some(t) = index(Curve(ch, i as u8)).and_then(get) else { continue };
             let base = curve_offset(channel(&defaults.curve, ch), *x);
-            let t = index(Curve(ch, i as u8)).and_then(get).unwrap_or(0.0);
             let y = (x + (base + t) / 100.0).clamp(0.0, 1.0);
-            identity &= (y - x).abs() < 0.002;
+            pts.retain(|p| (p.x - x).abs() >= 0.02);
             pts.push(Point::new(*x, y));
         }
-        *channel_mut(&mut out.curve, ch) = if identity { Vec::new() } else { pts };
+        pts.sort_by(|a, b| a.x.total_cmp(&b.x));
+        *channel_mut(&mut out.curve, ch) = if ToneCurve::point_curve_is_identity(&pts) { Vec::new() } else { pts };
     }
 }

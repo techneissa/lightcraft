@@ -1,7 +1,7 @@
 //! Kernel ridge regression with its strength chosen per slider by leave-one-out error, in closed form.
 //!
 //! With `K = U S Uᵀ`, `(K + λI)⁻¹ = U (S + λ)⁻¹ Uᵀ`, so one eigen-decomposition gives the fit for every λ, and the
-//! leave-one-out residual of example `i` is `αᵢ / [(K + λI)⁻¹]ᵢᵢ` without refitting. Targets are centred on
+//! leave-one-out residual of example `i` follows without refitting (with the mean refitted too; see [`fit`]). Targets are centred on
 //! their mean, so a profile that finds nothing in the features falls back to the average edit, and a strong λ
 //! is exactly that.
 
@@ -101,6 +101,8 @@ pub fn fit(k: &Square, y: &[Vec<f64>]) -> Fit {
             }
         }
     }
+    // Uᵀ 1
+    let ones: Vec<f64> = (0..n).map(|kk| (0..n).map(|i| e.vectors.at(i, kk)).sum()).collect();
     let trace = e.values.iter().map(|v| v.max(0.0)).sum::<f64>() / n.max(1) as f64;
     let base = if trace > 1e-12 { trace } else { 1.0 };
     let mut best_alpha = vec![0.0; n * t];
@@ -109,8 +111,20 @@ pub fn fit(k: &Square, y: &[Vec<f64>]) -> Fit {
     for step in -8..=8 {
         let lambda = base * 10f64.powf(step as f64 * 0.5);
         let inv: Vec<f64> = e.values.iter().map(|s| 1.0 / (s.max(0.0) + lambda)).collect();
-        // diag of (K + λI)⁻¹
-        let g: Vec<f64> = (0..n).map(|i| (0..n).map(|kk| e.vectors.at(i, kk).powi(2) * inv.get(kk).copied().unwrap_or(0.0)).sum()).collect();
+        // the fit is ŷ = S y with S = 11ᵀ/n + M (I − 11ᵀ/n), M = K (K + λI)⁻¹: its residual is λα and its leave-one-out
+        // residual λαᵢ / (1 − Sᵢᵢ). (Dividing αᵢ by [(K + λI)⁻¹]ᵢᵢ instead ignores that the mean is refitted: with
+        // centred features the linear kernel has the constant vector in its null space, and that made noise look
+        // learnable.)
+        let shrink: Vec<f64> = e.values.iter().zip(&inv).map(|(s, i)| s.max(0.0) * i).collect();
+        let nf = n.max(1) as f64;
+        let g: Vec<f64> = (0..n)
+            .map(|i| {
+                let mii: f64 = (0..n).map(|kk| e.vectors.at(i, kk).powi(2) * shrink.get(kk).copied().unwrap_or(0.0)).sum();
+                let m1: f64 =
+                    (0..n).map(|kk| e.vectors.at(i, kk) * shrink.get(kk).copied().unwrap_or(0.0) * ones.get(kk).copied().unwrap_or(0.0)).sum();
+                (1.0 - 1.0 / nf - mii + m1 / nf) / lambda
+            })
+            .collect();
         for j in 0..t {
             let alpha: Vec<f64> = (0..n)
                 .map(|i| {
