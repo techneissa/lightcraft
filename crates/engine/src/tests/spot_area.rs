@@ -318,3 +318,24 @@ fn an_old_lama_spot_keeps_its_source_through_an_edit() {
     s.execute("spot.update", &json!({"index": 0, "fill": "lama"})).unwrap();
     assert_eq!(spots(&s)[0].source_offset, None);
 }
+
+// Given an object spot that was dragged, a ⇧- or ⌥-click keeps its shape and says why instead of replacing it
+#[test]
+fn a_click_on_a_moved_object_spot_keeps_its_shape_and_says_why() {
+    let mut s = session();
+    let seg = |b| serde_json::to_value(box_seg(b)).unwrap();
+    s.execute("spot.object", &json!({"x": 0.4, "y": 0.4, "seg": seg([0.3, 0.3, 0.5, 0.5])})).unwrap();
+    s.execute("spot.update", &json!({"move": [0.1, 0.0]})).unwrap();
+    let moved = spots(&s)[0].clone();
+    let commits = s.commits();
+    for p in [json!({"add": true}), json!({"subtract": true})] {
+        let mut p = p;
+        p["x"] = json!(0.55);
+        p["y"] = json!(0.4);
+        p["seg"] = seg([0.5, 0.3, 0.7, 0.5]);
+        let e = s.execute("spot.object", &p).unwrap_err().to_string();
+        assert!(e.contains("was moved"), "{e}");
+    }
+    assert_eq!(spots(&s), vec![moved], "the shape stays");
+    assert_eq!(s.commits(), commits, "no undo step");
+}

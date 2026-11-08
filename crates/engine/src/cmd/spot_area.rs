@@ -17,6 +17,9 @@ use crate::Session;
 use crate::segment::MAX_CLICKS;
 use crate::spot_area::{DEFAULT_EXPAND, EXPAND_RANGE, ObjectAsk, Reach, is_object_spot, stroke_clicks};
 
+/// Why a click can't add to or take from an object spot that was moved.
+pub(crate) const MOVED: &str = "This spot was moved, so clicks can't change it. Click the object again (without ⇧ or ⌥) to select it anew.";
+
 /// The fill of a shaped spot: LaMa unless the command names Classic.
 fn area_fill(c: &str, p: &Value) -> crate::Result<SpotFill> {
     let Some(v) = p.get("fill").filter(|v| !v.is_null()) else { return Ok(SpotFill::Lama) };
@@ -99,6 +102,8 @@ fn object(s: &mut Session, p: &Value) -> crate::Result<Value> {
     let (mut hint, mut exclude) = match (add || subtract).then(|| s.object_pending(id, target)).flatten() {
         Some(pending) => pending,
         None => match target.and_then(|i| s.develop_of(id).and_then(|d| d.spots.get(i).and_then(|sp| sp.area.clone()))) {
+            // a moved spot forgot its clicks (they no longer describe it): a click would replace its shape
+            Some(a) if a.hint.is_empty() => return Err(bad(c, MOVED)),
             Some(a) => (a.hint, a.exclude),
             None => (Vec::new(), Vec::new()),
         },
