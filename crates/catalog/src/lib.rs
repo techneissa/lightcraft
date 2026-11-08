@@ -14,13 +14,16 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod dates;
+mod delta;
 pub mod exif_override;
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub mod fault;
 pub mod folders;
+mod history_serde;
 mod index;
 pub mod journal;
+mod journal_delta;
 pub mod keywords;
 pub mod lens_limits;
 pub mod local;
@@ -892,16 +895,8 @@ impl Catalog {
             Op::PushHistory { id, step } => {
                 let p = self.photo_mut(id)?;
                 let old = p.history.clone();
-                let old_cursor = p.history_cursor.take();
-                // a new edit made from an earlier step drops the steps after it
-                if let Some(c) = old_cursor {
-                    p.history.truncate(c.saturating_add(1));
-                }
-                p.history.push(step);
-                if p.history.len() > HISTORY_LIMIT {
-                    let n = p.history.len() - HISTORY_LIMIT;
-                    p.history.drain(..n);
-                }
+                let old_cursor = p.history_cursor;
+                p.push_history(step);
                 if old_cursor.is_none() {
                     Op::SetHistory { id, history: old }
                 } else {
@@ -1495,6 +1490,8 @@ mod tests_format_version;
 mod tests_index;
 #[cfg(test)]
 mod tests_journal;
+#[cfg(test)]
+mod tests_journal_delta;
 #[cfg(test)]
 mod tests_local;
 #[cfg(test)]

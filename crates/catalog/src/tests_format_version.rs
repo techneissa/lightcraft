@@ -327,9 +327,9 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v13: `Meta.exif`, the edited camera / lens / exposure values (fork; v12: `profile.camera_colour = local | macos`
+    /// v14: develop and History log records as patches (`journal_delta`, fork, #77). v13: `Meta.exif`, the edited camera / lens / exposure values (fork; v12: `profile.camera_colour = local | macos`
     /// and `profile.camera_profile` in the develop settings; v11: `EmbeddedLens.source`; v10: `Mask.on_photo`).
-    const NEWEST_FIELDS: u32 = 13;
+    const NEWEST_FIELDS: u32 = 14;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
 }

@@ -257,7 +257,8 @@ pub struct Photo {
     pub edited: Option<String>,
     #[serde(default)]
     pub versions: Vec<Version>,
-    #[serde(default)]
+    /// Stored as patches of the step before (format 14, [`crate::history_serde`]).
+    #[serde(default, with = "crate::history_serde")]
     pub history: Vec<HistoryStep>,
     /// The History step the photo's settings are at, when it isn't the latest one (Go to History
     /// Step moved back): later steps stay listed and can be returned to until a new edit drops
@@ -365,6 +366,20 @@ pub fn preview_stamp(preview_only: &Option<String>) -> String {
 impl Photo {
     /// Keep the newest [`HISTORY_LIMIT`](crate::HISTORY_LIMIT) History steps; the cursor moves with
     /// its step, or to the oldest step kept when its own is dropped. Returns how many were dropped.
+    /// Append a History step as an edit does: an edit made from an earlier step (the cursor)
+    /// drops the steps after it, the oldest go beyond [`crate::HISTORY_LIMIT`], and the cursor is
+    /// cleared.
+    pub(crate) fn push_history(&mut self, step: HistoryStep) {
+        if let Some(c) = self.history_cursor.take() {
+            self.history.truncate(c.saturating_add(1));
+        }
+        self.history.push(step);
+        if self.history.len() > crate::HISTORY_LIMIT {
+            let n = self.history.len() - crate::HISTORY_LIMIT;
+            self.history.drain(..n);
+        }
+    }
+
     pub fn trim_history(&mut self) -> usize {
         let n = self.history.len().saturating_sub(crate::HISTORY_LIMIT);
         if n > 0 {
