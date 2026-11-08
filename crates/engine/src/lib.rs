@@ -96,6 +96,7 @@ pub mod slide_title;
 pub mod slideshow;
 pub mod slideshow_export;
 pub mod smart;
+pub mod spot_source;
 pub mod sync;
 mod sync_same;
 pub mod text;
@@ -388,6 +389,8 @@ pub struct Session {
     pub active_spot: Option<usize>,
     /// Find People / Find Wires: the candidates for the Remove tool and the searches that make them.
     pub finds: find_removals::Finds,
+    /// New spots' automatic sources being found on workers (`spot_source`).
+    pub spot_sources: spot_source::SpotSources,
     /// The LaMa fill behind Remove spots whose fill is LaMa (`fork/lama-fill.md`).
     pub lama: lama_fill::LamaFill,
     /// The persistent library this session writes to (`None` = in-memory only).
@@ -593,6 +596,7 @@ impl Session {
             segmenter: segment::Segmenter::default(),
             active_spot: None,
             finds: Default::default(),
+            spot_sources: Default::default(),
             lama: lama_fill::LamaFill::new(activity.clone()),
             library: None,
             library_identity: Arc::new(()),
@@ -767,6 +771,15 @@ impl Session {
         for mut dropped in self.redo.drain(..) {
             self.pending_sidecar_repairs.append(&mut dropped.retry_sidecars);
         }
+        Ok(())
+    }
+
+    /// Apply `op` (a new edit) as part of the last undo step: a result that arrives after the edit it belongs to
+    /// (`spot_source`). Undoing that step brings back what was before both.
+    pub(crate) fn apply_amending(&mut self, op: Op) -> Result<()> {
+        let fwd = op.clone();
+        self.apply_through(op, Catalog::apply_new)?;
+        self.pending_log.push(fwd);
         Ok(())
     }
 

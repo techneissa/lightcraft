@@ -159,6 +159,15 @@ impl LightcraftApp {
             }
             ctx.request_repaint_after(std::time::Duration::from_secs(3));
         }
+        // new spots' sources found on workers (`spot.add` with `background`): each goes on its spot
+        if self.session.spot_sources.pending() > 0 {
+            self.session.poll_spot_sources();
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+        // the open photo's thumbnail held back during a burst of spot edits renders once they pause
+        if let Some(left) = self.edited_thumb.left(self.tick_now()) {
+            ctx.request_repaint_after(std::time::Duration::from_secs_f64(left + 0.02));
+        }
         // automatic XMP writes that failed (a network share offline): tried again every few seconds once their files
         // are reachable, and said once when they start waiting and once when they're written
         #[cfg(not(target_arch = "wasm32"))]

@@ -64,6 +64,7 @@ impl LightcraftApp {
             last_shot_geometry: None,
             max_texture_side: MAX_TEXTURE_SIDE,
             clock: AppClock::new(),
+            edited_thumb: Default::default(),
             accesskit_language: None,
             slideshow_hidden_at: None,
             slideshow_auto_paused: false,

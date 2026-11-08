@@ -110,6 +110,7 @@ mod rating;
 mod recheck;
 mod remove_compact;
 mod remove_fill;
+mod remove_fixed_cost;
 mod remove_lag;
 mod rename_person;
 mod renaming;

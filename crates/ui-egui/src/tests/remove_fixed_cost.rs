@@ -1,0 +1,67 @@
+//! Issue #97: a spot edit no longer waits on a second full render or on the source search. With the Remove panel open,
+//! the open photo's thumbnail renders once at the end of a burst of spot edits; a spot painted on the photo is added at
+//! once and its source, found on a worker, arrives a moment later.
+
+use std::collections::HashSet;
+use std::time::Duration;
+
+use serde_json::json;
+
+use crate::headless::Headless;
+use crate::render::Slot;
+use crate::{LightcraftApp, Services};
+
+const T: Duration = Duration::from_secs(20);
+const SETTLE: Duration = Duration::from_secs(120);
+
+fn remove_panel() -> Headless {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 900.0], 1.0);
+    assert_eq!(h.request("ui.set", json!({"view": "detail", "filmstrip": true}), T)["ok"], true);
+    assert_eq!(h.request("engine.execute", json!({"command": "panel.remove"}), T)["ok"], true);
+    assert!(h.settle(SETTLE));
+    h
+}
+
+fn spots(h: &Headless) -> Vec<lightcraft_develop::Spot> {
+    h.app.session.develop_of(h.app.session.active().unwrap()).unwrap_or_default().spots.clone()
+}
+
+#[test]
+fn a_burst_of_spot_edits_renders_the_thumbnail_once_at_the_end() {
+    let mut h = remove_panel();
+    let id = h.app.session.active().expect("a photo is open");
+    assert!(h.app.renderer.thumb(id).is_some(), "the filmstrip shows its thumbnail");
+    let mut asked = HashSet::new();
+    asked.insert(h.app.renderer.wanted(Slot::Thumb(id)));
+    // five spots, about a twentieth of a second apart
+    for k in 0..5 {
+        let add =
+            json!({"command": "spot.add", "params": {"mode": "heal", "points": [[0.2 + 0.1 * k as f64, 0.5]], "size": 0.02, "source": [0.05, 0.0]}});
+        assert_eq!(h.request("engine.execute", add, T)["ok"], true);
+        for _ in 0..3 {
+            h.step();
+            asked.insert(h.app.renderer.wanted(Slot::Thumb(id)));
+        }
+    }
+    assert_eq!(asked.len(), 1, "no thumbnail render during the burst");
+    // the edits pause: one render
+    for _ in 0..60 {
+        h.step();
+        asked.insert(h.app.renderer.wanted(Slot::Thumb(id)));
+    }
+    assert_eq!(asked.len(), 2, "one thumbnail render once the burst paused");
+    assert_eq!(spots(&h).len(), 5);
+}
+
+#[test]
+fn a_painted_spot_gets_its_source_from_the_search_on_a_worker() {
+    let mut h = remove_panel();
+    let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": 0.4, "y": 0.6}, {"kind": "up", "x": 0.4, "y": 0.6}]}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    assert_eq!(spots(&h).len(), 1, "the spot is added in the frame of the click");
+    assert!(h.settle(SETTLE));
+    assert!(spots(&h)[0].source_offset.is_some(), "its source arrived");
+    assert_eq!(h.app.session.spot_sources.pending(), 0);
+}
