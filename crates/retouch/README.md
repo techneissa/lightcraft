@@ -53,7 +53,9 @@ crate only reads it.
 
 - `Input::faces`: one `Face` per face, in the provider's order (which may change between detections).
 - `Face::bounds`: the face box, normalised to the photo **before its crop** (0…1 across width and height, y down,
-  after orientation, lens corrections and transform: the frame Remove spots use).
+  after orientation, lens corrections and transform: the frame Remove spots use). With `Input::on_photo` (faces from
+  the people parse) every coordinate is before lens corrections and transform instead (after the orientation), and
+  the step maps it through their warp, per pixel, as local masks drawn on the photo are.
 - `Face::upright`: the same box on the photo before the user's rotation (Rotate Left / Right, flips), when the
   provider knows it; per-face settings are keyed and matched by it (`Face::key_bounds`). Lens corrections and
   transform are not undone.
@@ -63,12 +65,15 @@ crate only reads it.
 - `Face::masks`: `(Part, PartMask)` pairs, at most one per `Part` (Entire Person, Facial Skin, Body Skin, Hair,
   Eyebrows, Eye Whites, Iris, Lips, Teeth, Clothes Top, Clothes Bottom, Dress, Shoes, Hat, Bag, Others). A
   `PartMask` is a float `Plane` (0…1) at any resolution, covering `area` (a normalised rectangle) of the photo;
-  0 outside it. Empty today: the YuNet provider gives boxes and landmarks only, and the people parser (#81)
-  installs its own provider with masks (`FaceStore::set_provider`).
+  0 outside it. While the chosen people-parts set is downloaded, faces come from the photo's people parse with every
+  part the parser found, at the resolution the models made them (`crates/engine/src/retouch_input/parts.rs`,
+  `fork/retouch-masks.md`); without it, YuNet gives boxes and five landmarks and no masks.
 - `Input::fingerprint`: a hash of all of it, in the render cache keys.
 
 A feature reads the faces through `Scene`: each `FaceCtx` has the box and landmarks in the image's pixels and
-`size`, the face's size in pixels; `Scene::mask_at` / `Scene::mask_plane` sample a part mask in the image's pixels.
+`size`, the face's size in pixels; `Scene::mask_at` / `Scene::mask_plane` sample a part mask in the image's pixels,
+and `Scene::mask_box` gives the pixels a mask can touch (read and write only those). Skin Tone's Amount is a stand-in
+Face Light (Facial Skin brightened by up to half again) that shows the masks arrive; its feature lane replaces it.
 
 ## Rules every feature follows
 
