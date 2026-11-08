@@ -94,6 +94,8 @@ const FIELDS: &[(&str, usize)] = &[
     ("PROOF_DISP_WARN", 1),
     // first row of a band dispatch (the kernel runs over rows Y0.., see `render`)
     ("Y0", 1),
+    // first column of a dirty rectangle's dispatch (`dirty`, issue #111; 0 for a whole render)
+    ("X0", 1),
     // process V4's calibrated Contrast, Blacks (`FinishParams::light`): the number of active
     // operators (0 = none), each one's mode (`light_v3::Mode::code`) and mix weight, and the offset
     // of their tables in `aux` (LIGHT_N entries each, in order)

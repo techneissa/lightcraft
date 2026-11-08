@@ -495,7 +495,7 @@ fn gamut_apply(r: vec3<f32>, luma: vec3<f32>, tg: f32) -> vec3<f32> {
 fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let w = pu(F_W);
     let h = pu(F_H);
-    let x = gid.x;
+    let x = gid.x + pu(F_X0);
     let y = gid.y + pu(F_Y0);
     if (x >= w || y >= h) {
         return;
