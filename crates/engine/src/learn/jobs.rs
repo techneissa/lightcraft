@@ -116,6 +116,9 @@ impl LearnEdits {
             .name("learn-edits".into())
             .spawn(move || {
                 let row = row;
+                while this.held() && !flag.load(Ordering::Relaxed) {
+                    std::thread::sleep(std::time::Duration::from_millis(5));
+                }
                 crate::guard::catch("Learn My Edits", || work(&this, &row, &flag)).unwrap_or_else(Outcome::Failed)
             })
             .map_err(|e| format!("could not start: {e}"))?;

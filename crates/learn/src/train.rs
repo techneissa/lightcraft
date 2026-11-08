@@ -223,6 +223,17 @@ pub fn predict(model: &Model, x: &[Vec<f32>], f: &[f32]) -> Vec<(usize, f32)> {
     out
 }
 
+/// What each held-out fold learns: the sliders its own training photos changed, never ones only its held-out photos
+/// changed (that would leak them into the accuracy shown). Example `i` is held out in fold `i % folds`.
+pub(crate) fn fold_plans(all: &[&Example], folds: usize, groups: &[Group]) -> Vec<Vec<(Group, Vec<(usize, f64)>)>> {
+    (0..folds)
+        .map(|fold| {
+            let train: Vec<&Example> = all.iter().enumerate().filter(|(i, _)| i % folds != fold).map(|(_, e)| *e).collect();
+            edited(&train, groups)
+        })
+        .collect()
+}
+
 /// Check what can be trained before spending time on it.
 pub fn check(examples: &[Example], layout: Layout, groups: &[Group]) -> Result<()> {
     if examples.len() < MIN_EXAMPLES {
@@ -261,17 +272,27 @@ pub fn train(
     // held-out predictions of every example, per planned group
     let mut held: Vec<Vec<Vec<f64>>> = plan.iter().map(|(_, s)| vec![vec![0.0; s.len()]; n]).collect();
     let mut preset: Vec<Vec<Vec<f64>>> = held.clone();
-    for fold in 0..folds {
+    for (fold, fold_plan) in fold_plans(&all, folds, groups).into_iter().enumerate() {
         progress(fold, folds + 1);
         let train: Vec<&Example> = all.iter().enumerate().filter(|(i, _)| i % folds != fold).map(|(_, e)| *e).collect();
-        let (model, x) = fit_all(layout, &train, &plan, cancel)?;
+        let (model, x) = fit_all(layout, &train, &fold_plan, cancel)?;
         for (i, e) in all.iter().enumerate().filter(|(i, _)| i % folds == fold) {
             let q = model.standardizer.apply(&e.features);
-            for (gi, g) in model.groups.iter().enumerate() {
+            for g in &model.groups {
                 let p = ridge::predict(&g.kernel, layout, &x, &g.mean, &g.alpha, &q);
-                if let (Some(h), Some(pr)) = (held.get_mut(gi).and_then(|h| h.get_mut(i)), preset.get_mut(gi).and_then(|h| h.get_mut(i))) {
-                    *h = p;
-                    *pr = g.mean.clone();
+                // into the places of the whole plan; a slider no training photo changed stays at its default (0)
+                let Some(gi) = plan.iter().position(|(pg, _)| *pg == g.group) else { continue };
+                for ((id, v), m) in g.sliders.iter().zip(&p).zip(&g.mean) {
+                    let Some(si) = plan.get(gi).and_then(|(_, sl)| sl.iter().position(|(idx, _)| SLIDERS.get(*idx).is_some_and(|s| s.id == id)))
+                    else {
+                        continue;
+                    };
+                    if let Some(h) = held.get_mut(gi).and_then(|h| h.get_mut(i)).and_then(|r| r.get_mut(si)) {
+                        *h = *v;
+                    }
+                    if let Some(pr) = preset.get_mut(gi).and_then(|h| h.get_mut(i)).and_then(|r| r.get_mut(si)) {
+                        *pr = *m;
+                    }
                 }
             }
         }

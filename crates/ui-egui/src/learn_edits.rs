@@ -82,7 +82,7 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, St
                     }
                 }
             };
-            let r = app.session.execute("button:learnExport", &json!({"profile": profile, "path": path})).map_err(|e| e.to_string());
+            let r = app.session.execute("learn.export", &json!({"profile": profile, "path": path})).map_err(|e| e.to_string());
             note(app, &r, tr("Profile exported"));
             r
         }
@@ -98,7 +98,7 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, St
                     }
                 }
             };
-            let r = app.session.execute("button:learnImport", &json!({"path": path})).map_err(|e| e.to_string());
+            let r = app.session.execute("learn.import", &json!({"path": path})).map_err(|e| e.to_string());
             if let Ok(v) = &r {
                 app.ui.learn_edits.selected = v["profile"]["id"].as_str().map(str::to_string);
             }
@@ -336,8 +336,7 @@ fn new_form(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, busy: bool) 
         if button(ui, "button:learnCreate", tr("Create and Train"), ready) {
             let ids: Vec<u64> = if form.from_view { app.session.visible_cloned() } else { app.session.selected() }.iter().map(|i| i.0).collect();
             let groups: Vec<&str> = form.groups.iter().map(|g| g.id()).collect();
-            if let Some(v) = run(app, "button:learnCreate", json!({"name": form.name.trim(), "kind": form.kind.trim(), "groups": groups, "ids": ids}))
-            {
+            if let Some(v) = run(app, "learn.create", json!({"name": form.name.trim(), "kind": form.kind.trim(), "groups": groups, "ids": ids})) {
                 app.ui.learn_edits.selected = v["id"].as_str().or(v["profile"]["id"].as_str()).map(str::to_string);
                 close = true;
             }
@@ -359,7 +358,7 @@ fn errors(group: &Value) -> String {
         seen.push(sl.label);
         let e = s["error"].as_f64().unwrap_or(0.0);
         parts.push(match id {
-            "wb.temp" => format!("{} ±{:.0} K", tr(sl.label), e * 30.25),
+            "wb.temp" => format!("{} ±{:.0} mired", tr(sl.label), e),
             "light.exposure" => format!("{} ±{:.2} EV", tr(sl.label), e),
             _ => format!("{} ±{:.0}", tr(sl.label), e),
         });

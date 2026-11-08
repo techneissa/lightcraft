@@ -58,6 +58,8 @@ struct Inner {
     message: Mutex<Option<String>>,
     /// Tests only: features without the encoder.
     statistics_only: std::sync::atomic::AtomicBool,
+    /// Tests only: a job waits at its start while this is set (so a test can see it running).
+    hold: std::sync::atomic::AtomicBool,
 }
 
 /// Learn My Edits for a session. Cheap to clone; every clone is the same.
@@ -124,6 +126,7 @@ impl LearnEdits {
                 job: Mutex::new(None),
                 message: Mutex::new(None),
                 statistics_only: std::sync::atomic::AtomicBool::new(false),
+                hold: std::sync::atomic::AtomicBool::new(false),
             }),
         }
     }
@@ -143,6 +146,16 @@ impl LearnEdits {
     #[cfg(any(test, feature = "test-hooks"))]
     pub fn set_statistics_only(&self, on: bool) {
         self.inner.statistics_only.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Tests: hold every job at its start until this is called with `false`.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn hold_jobs(&self, on: bool) {
+        self.inner.hold.store(on, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn held(&self) -> bool {
+        self.inner.hold.load(std::sync::atomic::Ordering::Relaxed)
     }
 
     pub(crate) fn statistics_only(&self) -> bool {

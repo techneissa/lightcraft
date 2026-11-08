@@ -147,11 +147,21 @@ fn needs_model(s: &Session, c: &str) -> crate::Result<()> {
     ))
 }
 
+/// Take in a job that has ended, before anything else: without the app's frame loop (MCP, the CLI) nothing else would,
+/// and the job's result would never be written and every later call would find Learn My Edits busy.
+fn take_in(s: &mut Session) {
+    jobs::pump(s, false);
+}
+
 fn create(s: &mut Session, p: &Value) -> crate::Result<Value> {
+    take_in(s);
     const C: &str = "learn.create";
     let name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).ok_or_else(|| bad(C, "missing `name`"))?;
     let kind = str_param(p, "kind").unwrap_or("");
     let groups = groups_param(C, p)?;
+    if let Some((_, _, label)) = s.learn.running() {
+        return Err(bad(C, format!("Learn My Edits is busy: {label}")));
+    }
     let id = s.learn.new_id(name).map_err(|e| bad(C, e))?;
     let profile = Profile::new(name, kind, s.learn.layout(), &groups);
     let from_photos = p.get("ids").is_some_and(|v| !v.is_null()) || p.get("id").is_some_and(|v| !v.is_null()) || !s.selected().is_empty();
@@ -168,6 +178,7 @@ fn create(s: &mut Session, p: &Value) -> crate::Result<Value> {
 }
 
 fn add_examples(s: &mut Session, p: &Value) -> crate::Result<Value> {
+    take_in(s);
     const C: &str = "learn.addExamples";
     let (id, profile) = profile_param(s, C, p)?;
     s.learn.check_idle(&id).map_err(|e| bad(C, e))?;
@@ -179,6 +190,7 @@ fn add_examples(s: &mut Session, p: &Value) -> crate::Result<Value> {
 }
 
 fn apply(s: &mut Session, p: &Value) -> crate::Result<Value> {
+    take_in(s);
     const C: &str = "learn.apply";
     let (id, profile) = profile_param(s, C, p)?;
     if profile.model.is_none() {
@@ -202,7 +214,10 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             None,
             "{} → {model: {installed, file, bytes, download: {state, bytes, total, error}}, profilesFolder, job: {profile, name, label}|null, message, profiles: [{id, name, kind, groups, learned, examples, trained, report: {examples, beatsDefaults, beatsPreset, errorVsDefaults, groups: [{group, kept, errorVsDefaults, presetErrorVsDefaults, sliders: [{id, error, defaultError}]}]}|null, problem}]}",
             always,
-            |s, _| Ok(status(s))
+            |s, _| {
+                take_in(s);
+                Ok(status(s))
+            }
         ),
         cmd!(
             "learn.downloadModel",
@@ -212,6 +227,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "{confirm: true} — downloads the image model (DINOv2-small, 88 MB, from huggingface.co) into the folder shared with PhotoCraft, with a row in the activity stack. Without `confirm: true` it is refused: ask the user first → {started: true, bytes}",
             always,
             |s, p| {
+                take_in(s);
                 if p.get("confirm").and_then(Value::as_bool) != Some(true) {
                     return Err(bad(
                         "learn.downloadModel",
@@ -251,6 +267,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "{profile, photo} — removes the example named `photo` (as listed in the profile file); train again to use the change",
             always,
             |s, p| {
+                take_in(s);
                 const C: &str = "learn.removeExample";
                 let (id, mut profile) = profile_param(s, C, p)?;
                 s.learn.check_idle(&id).map_err(|e| bad(C, e))?;
@@ -270,6 +287,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "{profile, wait?} — trains the profile on its examples again",
             always,
             |s, p| {
+                take_in(s);
                 const C: &str = "learn.train";
                 let (id, profile) = profile_param(s, C, p)?;
                 s.learn.start_training(&id, profile, Vec::new()).map_err(|e| bad(C, e))?;
@@ -285,9 +303,10 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             has_selection,
             apply
         ),
-        cmd!("learn.cancel", "Stop Learn My Edits", [], None, "{} — stops the running job", always, |s, _| Ok(
-            json!({"stopped": s.learn.cancel()})
-        )),
+        cmd!("learn.cancel", "Stop Learn My Edits", [], None, "{} — stops the running job", always, |s, _| {
+            take_in(s);
+            Ok(json!({"stopped": s.learn.cancel()}))
+        }),
         cmd!(
             query "learn.pump",
             "Learn My Edits Results",
@@ -308,6 +327,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "{profile, name?, kind?, groups?} — renames it, or changes what it learns (it needs training again)",
             always,
             |s, p| {
+                take_in(s);
                 const C: &str = "learn.update";
                 let (id, mut profile) = profile_param(s, C, p)?;
                 s.learn.check_idle(&id).map_err(|e| bad(C, e))?;
@@ -335,6 +355,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!("learn.delete", "Delete Learn My Edits Profile", [], None, "{profile} — deletes the profile's file", always, |s, p| {
+            take_in(s);
             const C: &str = "learn.delete";
             let id = str_param(p, "profile").ok_or_else(|| bad(C, "missing `profile`"))?;
             s.learn.get(id).map_err(|e| bad(C, e))?;
@@ -349,6 +370,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "{profile, path} — writes the profile to one `.lclearn` file",
             always,
             |s, p| {
+                take_in(s);
                 const C: &str = "learn.export";
                 let (_, profile) = profile_param(s, C, p)?;
                 let path = str_param(p, "path").filter(|x| !x.is_empty()).ok_or_else(|| bad(C, "missing `path`"))?;
@@ -364,6 +386,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "{path} — adds the profile in a `.lclearn` file (a copy, under a new id when one has its name)",
             always,
             |s, p| {
+                take_in(s);
                 const C: &str = "learn.import";
                 let path = str_param(p, "path").filter(|x| !x.is_empty()).ok_or_else(|| bad(C, "missing `path`"))?;
                 let profile = Profile::read(std::path::Path::new(path)).map_err(|e| bad(C, e.to_string()))?;

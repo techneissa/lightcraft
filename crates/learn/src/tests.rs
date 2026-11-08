@@ -341,3 +341,32 @@ fn a_fitted_before_after_pair_is_an_example_like_an_edit() {
     p.add_example(e).unwrap();
     assert_eq!(p.examples.len(), 1);
 }
+
+#[test]
+fn each_held_out_fold_learns_only_sliders_its_own_training_photos_changed() {
+    // Contrast was changed on photo 0 alone: the fold that holds photo 0 out must not learn Contrast
+    let mut examples: Vec<Example> = grid(10, 0).into_iter().map(|(seed, light, cast)| example(seed, light, cast, &rule)).collect();
+    examples[0].targets[idx("light.contrast")] = 40.0;
+    let all: Vec<&Example> = examples.iter().collect();
+    let plans = train::fold_plans(&all, 5, &[Group::Tone]);
+    let learns = |fold: usize, id: &str| plans[fold].iter().any(|(_, s)| s.iter().any(|(i, _)| *i == idx(id)));
+    assert!(!learns(0, "light.contrast"), "fold 0 holds photo 0 out");
+    assert!((1..5).all(|f| learns(f, "light.contrast")));
+    assert!((0..5).all(|f| learns(f, "light.exposure")));
+}
+
+#[test]
+fn a_profile_names_dinov2_small_with_768_numbers_or_no_encoder() {
+    let p = stats_profile(&[Group::Tone]);
+    let mut v: serde_json::Value = serde_json::from_str(&p.to_json().unwrap()).unwrap();
+    assert!(Profile::from_json(&v.to_string()).is_ok());
+    for (encoder, width) in [("dinov2-small", 768), ("clip-vit-b32", 768), ("dinov2-small", 512)] {
+        v["features"]["encoder"] = encoder.into();
+        v["features"]["layout"]["encoder"] = width.into();
+        let ok = Profile::from_json(&v.to_string()).is_ok();
+        assert_eq!(ok, encoder == "dinov2-small" && width == 768, "{encoder} {width}");
+    }
+    v["features"]["encoder"] = serde_json::Value::Null;
+    v["features"]["layout"]["encoder"] = 768.into();
+    assert!(Profile::from_json(&v.to_string()).is_err());
+}

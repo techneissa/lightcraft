@@ -187,3 +187,39 @@ fn a_damaged_profile_file_is_an_error_not_a_panic() {
     assert!(s.execute("learn.apply", &json!({"profile": "../../etc/passwd", "ids": [ids[0]]})).is_err());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn without_wait_the_next_learn_command_takes_the_job_in() {
+    // no frame loop here (as over MCP or the CLI): `learn.status` itself writes the apply's sliders
+    let (mut s, dir, ids) = session("nowait", 12);
+    s.execute("learn.create", &json!({"name": "No Wait", "groups": ["tone"], "ids": &ids[..12], "wait": true})).unwrap();
+    let dark = lightcraft_catalog::PhotoId(ids[12]);
+    let r = s.execute("learn.apply", &json!({"profile": "no-wait", "ids": [ids[12]]})).unwrap();
+    assert_eq!(r["started"], true, "{r}");
+    let mut st = Value::Null;
+    for _ in 0..600 {
+        st = s.execute("learn.status", &json!({})).unwrap();
+        if st["job"].is_null() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    assert!(st["job"].is_null(), "still busy: {st}");
+    assert!(s.develop_of(dark).unwrap().light.exposure > 0.5, "the sliders were written");
+    assert_eq!(history(&s, ids[12]).last().map(String::as_str), Some("Learned: No Wait"));
+    // and a later job command is not refused as busy
+    s.execute("learn.train", &json!({"profile": "no-wait", "wait": true})).unwrap();
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn a_new_profile_while_a_job_runs_is_refused_and_leaves_no_file() {
+    let (mut s, dir, ids) = session("busy", 12);
+    s.learn.hold_jobs(true);
+    s.execute("learn.create", &json!({"name": "First", "groups": ["tone"], "ids": &ids[..12]})).unwrap();
+    let e = s.execute("learn.create", &json!({"name": "Second", "groups": ["tone"], "ids": &ids[..12]})).unwrap_err().to_string();
+    assert!(e.contains("busy"), "{e}");
+    assert!(!dir.join("profiles/second.lclearn").exists(), "no empty profile left behind");
+    s.learn.hold_jobs(false);
+    let _ = std::fs::remove_dir_all(dir);
+}

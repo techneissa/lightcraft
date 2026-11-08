@@ -202,11 +202,14 @@ impl Profile {
             return bad("name");
         }
         let layout = self.features.layout;
-        if layout.photo != crate::PHOTO_DIMS || layout.encoder > 4096 || self.features.encoder.as_deref().is_some_and(|e| e.len() > 100) {
+        if layout.photo != crate::PHOTO_DIMS {
             return Err(Error::Profile("made with other features; train it again from its photos".into()));
         }
-        if (layout.encoder == 0) != self.features.encoder.is_none() {
-            return bad("features");
+        match (self.features.encoder.as_deref(), layout.encoder) {
+            (None, 0) => {}
+            (Some(crate::ENCODER_ID), 768) => {}
+            (Some(_), _) => return Err(Error::Profile("made with another image model; train it again from its photos".into())),
+            (None, _) => return bad("features"),
         }
         if self.sliders.len() != SLIDERS.len() || self.sliders.iter().zip(SLIDERS).any(|(a, b)| a != b.id) {
             return Err(Error::Profile("made by another version of LightCraft; train it again from its photos".into()));
