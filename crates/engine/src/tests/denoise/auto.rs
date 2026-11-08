@@ -183,6 +183,22 @@ fn without_a_model_the_built_in_denoiser_is_used() {
     finish(x);
 }
 
+/// With a downloaded model installed, Auto AI Denoise uses it, not the built-in denoiser: the picture is made by the
+/// model (its runs are counted).
+#[test]
+fn with_a_model_installed_that_model_is_used() {
+    let (mut x, id) = with_iso("auto-model", true, 12_800);
+    turn_on(&mut x.s);
+    let r = open(&mut x.s, id);
+    assert_eq!((r["applied"].clone(), r["reason"].clone()), (json!(true), json!("applied")), "{r}");
+    let active = x.s.denoise.active.as_ref().map(|a| a.id.clone());
+    assert_eq!(active.as_deref(), Some("stand-in"));
+    assert_ne!(active.as_deref(), Some(lightcraft_denoise::builtin::ID));
+    pump_until_ready(&mut x.s, 1);
+    assert!(x.runs.load(std::sync::atomic::Ordering::Relaxed) > 0, "the installed model made the picture");
+    finish(x);
+}
+
 #[test]
 fn an_unknown_photo_is_an_error_not_a_panic() {
     let (mut x, _) = with_iso("auto-unknown", true, 12_800);
