@@ -42,10 +42,12 @@ pub enum SettingsGroup {
     RedEye,
     LensBlur,
     Calibration,
+    /// Portrait retouching (fork, `fork/retouch-foundation.md`): the whole block with the per-face settings.
+    Portrait,
 }
 
 impl SettingsGroup {
-    pub const ALL: [SettingsGroup; 20] = [
+    pub const ALL: [SettingsGroup; 21] = [
         SettingsGroup::Profile,
         SettingsGroup::Treatment,
         SettingsGroup::WhiteBalance,
@@ -66,6 +68,7 @@ impl SettingsGroup {
         SettingsGroup::RedEye,
         SettingsGroup::LensBlur,
         SettingsGroup::Calibration,
+        SettingsGroup::Portrait,
     ];
 
     /// Groups included by default when copying (Lightroom excludes crop, masks and spots by default).
@@ -98,6 +101,7 @@ impl SettingsGroup {
             SettingsGroup::RedEye => "Red Eye",
             SettingsGroup::LensBlur => "Lens Blur",
             SettingsGroup::Calibration => "Calibration",
+            SettingsGroup::Portrait => "Portrait",
         }
     }
 
@@ -124,6 +128,7 @@ impl SettingsGroup {
             SettingsGroup::RedEye => &["red_eye"],
             SettingsGroup::LensBlur => &["lens_blur"],
             SettingsGroup::Calibration => &["calibration"],
+            SettingsGroup::Portrait => &[crate::retouch::KEY],
         }
     }
 }

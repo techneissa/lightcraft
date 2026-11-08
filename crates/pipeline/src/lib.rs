@@ -47,6 +47,7 @@ pub mod optics;
 pub mod output;
 pub mod profiles;
 pub mod redeye;
+pub mod retouch_step;
 pub mod spots;
 pub mod straighten;
 pub mod tone;
@@ -108,6 +109,9 @@ pub struct SourceInfo {
     /// Noise reduction sizes its radii in the original's pixels ([`Plan::detail_scale`]), so a
     /// preview looks like the full-size render scaled down (issue #960).
     pub native_long: Option<usize>,
+    /// The faces (boxes, landmarks, persons, part masks) portrait retouching works on (fork,
+    /// `fork/retouch-foundation.md`); `None`: not found yet, or none.
+    pub retouch: Option<retouch_step::Faces>,
 }
 
 impl Default for SourceInfo {
@@ -124,6 +128,7 @@ impl Default for SourceInfo {
             mattes: None,
             local_tone: None,
             native_long: None,
+            retouch: None,
         }
     }
 }
@@ -521,6 +526,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         // and the local tone mapping
         local_tone::enabled(info, s),
         src_long,
+        retouch_step::key(s, info),
     ));
     let lin_key = hash_of((
         pre_nr_key,
@@ -604,7 +610,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
 pub fn lin_needs_cpu(s: &DevelopSettings, info: &SourceInfo) -> bool {
     let o = &s.optics;
     let defringe = s.section_enabled("optics") && (o.defringe_purple_amount > 0.0 || o.defringe_green_amount > 0.0);
-    defringe || !s.spots.is_empty() || local_tone::enabled(info, s)
+    defringe || !s.spots.is_empty() || local_tone::enabled(info, s) || retouch_step::active(s)
 }
 
 /// The white-balanced, defringed, retouched image (before noise reduction): the CPU part of the
@@ -617,6 +623,7 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     optics::defringe(img, s, p.px_per_long / optics::DEFRINGE_REF_LONG);
     spots::apply(img, &s.spots, &p.frame, p.px_per_long);
     redeye::apply(img, &p.eyes);
+    retouch_step::apply(img, info, p);
 }
 
 /// The settings a render of `s` for `req` uses: the HDR edit for an [`OutputDepth::F32Hdr`]

@@ -3731,6 +3731,7 @@ version = "0.18.0"
 dependencies = [
  "lightcraft-color",
  "lightcraft-geom",
+ "lightcraft-retouch",
  "miniz_oxide 0.9.1",
  "proptest",
  "serde",
@@ -3984,6 +3985,17 @@ dependencies = [
  "zune-core",
  "zune-jpeg",
  "zune-jpegxl",
+]
+
+[[package]]
+name = "lightcraft-retouch"
+version = "0.18.0"
+dependencies = [
+ "image",
+ "lightcraft-color",
+ "lightcraft-raster",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

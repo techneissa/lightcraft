@@ -28,6 +28,8 @@ pub enum Section {
     Calibration,
     PointColor,
     RedEye,
+    /// Portrait retouching (fork, `fork/retouch-foundation.md`; its controls are in [`crate::retouch`]).
+    Portrait,
 }
 
 impl Section {
@@ -49,6 +51,7 @@ impl Section {
             Section::Calibration => "Calibration",
             Section::PointColor => "Point Color",
             Section::RedEye => "Red Eye",
+            Section::Portrait => "Portrait",
         }
     }
 }
@@ -153,7 +156,7 @@ macro_rules! controls {
         pub fn get(s: &DevelopSettings, id: &str) -> Option<f64> {
             match id {
                 $( $id => Some(s.$($field).+ as f64), )*
-                _ => indexed_get(s, id),
+                _ => indexed_get(s, id).or_else(|| crate::retouch::get(s, id)),
             }
         }
 
@@ -163,7 +166,7 @@ macro_rules! controls {
             let v = spec.clamp(v);
             match id {
                 $( $id => { s.$($field).+ = v as _; true } )*
-                _ => indexed_set(s, id, v),
+                _ => indexed_set(s, id, v) || crate::retouch::set(s, id, v),
             }
         }
     };
@@ -471,6 +474,9 @@ pub fn find(id: &str) -> Option<&'static ControlSpec> {
     if let Some(c) = CONTROLS.iter().find(|c| c.id == id) {
         return Some(c);
     }
+    if let Some(c) = crate::retouch::find(id) {
+        return Some(c);
+    }
     let (fam, _, field) = split_indexed(id)?;
     INDEXED.iter().find(|c| c.id.strip_prefix(fam).and_then(|r| r.strip_prefix('.')) == Some(field))
 }
@@ -493,7 +499,7 @@ pub fn indexed_instances(s: &DevelopSettings) -> Vec<(String, &'static ControlSp
 }
 
 pub fn in_section(section: Section) -> impl Iterator<Item = &'static ControlSpec> {
-    CONTROLS.iter().filter(move |c| c.section == section)
+    CONTROLS.iter().chain(crate::retouch::specs()).filter(move |c| c.section == section)
 }
 
 #[cfg(test)]

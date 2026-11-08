@@ -1,0 +1,19 @@
+[package]
+name = "lightcraft-retouch"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft portrait retouching (L1): settings, face input contract and the retouching step"
+
+[lints]
+workspace = true
+
+[dependencies]
+lightcraft-raster = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+# the examples read and write JPEGs
+image = { workspace = true }
+lightcraft-color = { workspace = true }

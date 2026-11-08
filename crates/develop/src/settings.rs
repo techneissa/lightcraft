@@ -158,6 +158,10 @@ pub struct DevelopSettings {
     pub calibration: Calibration,
     /// Section on/off toggles (the "eye" buttons on panel headers): section id → enabled.
     pub disabled_sections: Vec<String>,
+    /// Portrait retouching (fork feature, `fork/retouch-foundation.md`), in its own namespace: not written while it is
+    /// the default, read leniently (a build without it, or a malformed block, reads as off).
+    #[serde(rename = "fork_retouch", skip_serializing_if = "crate::retouch::Retouch::is_default")]
+    pub retouch: crate::retouch::Retouch,
 }
 
 impl Default for DevelopSettings {
@@ -191,6 +195,7 @@ impl Default for DevelopSettings {
             enhance: Enhance::default(),
             calibration: Calibration::default(),
             disabled_sections: Vec::new(),
+            retouch: Default::default(),
         }
     }
 }

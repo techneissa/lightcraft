@@ -14,6 +14,8 @@ lightcraft-color = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 miniz_oxide = { workspace = true }
+# fork: portrait retouching (fork/retouch-foundation.md)
+lightcraft-retouch = { workspace = true }
 
 [dev-dependencies]
 proptest = { workspace = true }
