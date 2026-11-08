@@ -28,6 +28,7 @@ pub mod blemish;
 pub mod colorops;
 pub mod cull;
 pub mod curve;
+pub mod decontam;
 pub mod dust;
 pub mod find;
 pub mod finish;
@@ -324,6 +325,8 @@ pub(crate) struct Prepared {
     pub px_per_long: f64,
     /// The recolored masks' references ([`Plan::recolor`]).
     pub recolor: Vec<(u32, recolor::Reference)>,
+    /// Fork (`fork/decontaminate.md`): each decontaminated mask's edge colours ([`decontam::Split`]).
+    pub split: Vec<decontam::Split>,
 }
 
 /// Output size for a source of `src_w × src_h` under `s`, fitting `max_w × max_h`.
@@ -881,6 +884,7 @@ fn render_impl(
         prep.air = a;
     }
     prep.recolor.clone_from(&plan.recolor);
+    prep.split = decontam::splits(&prep, &s.masks);
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), colour_noise, planes, masks: alphas });
@@ -1072,6 +1076,8 @@ fn plan_preserves_matching_box_size() {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_decontam;
 #[cfg(test)]
 mod tests_geometry;
 #[cfg(test)]

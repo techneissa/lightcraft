@@ -698,6 +698,10 @@ fn run(
         if s.spots.iter().any(|sp| sp.mode == lightcraft_develop::SpotMode::Fill || sp.area.is_some()) {
             return Err(Fallback::NotTried);
         }
+        // fork (`fork/decontaminate.md`): a decontaminated mask edge has no GPU kernel yet: the CPU renders the photo
+        if s.masks.iter().any(|m| m.visible && m.decontaminate > 0.0) {
+            return Err(Fallback::NotTried);
+        }
         // in flight until this returns; not tried once the process is ending (issue #620)
         let _work = exit::enter().ok_or(Fallback::NotTried)?;
         let gpu = device().ok_or(Fallback::NotTried)?;

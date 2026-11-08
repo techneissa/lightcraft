@@ -1220,6 +1220,10 @@ pub struct Mask {
     /// Refine Edges 0..100: the mask's edges snap to the photo's (guided filter).
     #[serde(skip_serializing_if = "is_zero")]
     pub refine: f64,
+    /// Fork (`fork/decontaminate.md`): Decontaminate 0..100: at the mask's soft edge, a pixel's own colour and the
+    /// colour behind it are edited apart, so a strand of hair keeps no blue of the sky the mask changes. 0 = off.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub decontaminate: f64,
     /// Where its coordinates (gradients, brush strokes, AI selections) live: `true`, on the photo as
     /// shot (user orientation, before lens corrections, Upright and Transform), so the mask stays
     /// on the same content whatever those do; `false`, a mask from before that, on the corrected
@@ -1252,6 +1256,7 @@ impl Default for Mask {
             components: Vec::new(),
             adjust: LocalAdjustments::default(),
             refine: 0.0,
+            decontaminate: 0.0,
             on_photo: true,
             before_invert: Vec::new(),
         }
