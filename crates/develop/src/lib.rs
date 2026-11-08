@@ -10,11 +10,13 @@ pub mod controls;
 pub mod presets;
 pub mod segmask;
 pub mod settings;
+pub mod spot_circle;
 
 pub use controls::{CONTROLS, ControlSpec, Section, Track};
 pub use presets::{Preset, SettingsGroup, apply_partial, extract_groups};
 pub use segmask::SegMask;
 pub use settings::*;
+pub use spot_circle::SpotCircle;
 
 use serde_json::Value;
 
@@ -135,10 +137,13 @@ impl DevelopSettings {
     /// Calibration the pipeline switches off where it applies them. Borrowed when every section is on.
     pub fn effective(&self) -> std::borrow::Cow<'_, DevelopSettings> {
         let off = |section: &str| !self.section_enabled(section);
-        if !(off("light") || off("color") || off("detail")) {
+        let hidden = self.spots.iter().any(|s| s.hidden);
+        if !(off("light") || off("color") || off("detail") || hidden) {
             return std::borrow::Cow::Borrowed(self);
         }
         let mut d = self.clone();
+        // a hidden spot (its row's eye) has no effect, on the CPU and the GPU alike
+        spot_circle::without_hidden(&mut d.spots);
         if off("light") {
             d.reset_section(Section::Light);
             d.reset_section(Section::Curve);

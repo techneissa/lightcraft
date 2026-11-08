@@ -13,21 +13,21 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
     let active = app.session.active_spot.filter(|i| *i < d.spots.len());
     let (mode, live) = (app.ui.tool_overlay, pins_live(app, resp, map));
     // Auto also hides them while a new spot is painted
-    let painting = mode == ToolOverlay::Auto && matches!(app.gesture, Some(Gesture::Spot { .. }));
+    let painting = matches!(app.gesture, Some(Gesture::Spot { .. }));
     let p = ui.painter_at(app.canvas_rect.unwrap_or(map.rect));
-    let mut pins = p.clone();
-    if painting {
-        pins.set_invisible();
-    }
+    let mut quiet = p.clone();
+    quiet.set_invisible();
     // (spot, is source, screen centre, radius) of everything that can be grabbed
     let mut grips: Vec<(usize, bool, Pos2, f32)> = Vec::new();
     for (i, s) in d.spots.iter().enumerate() {
         let r = (s.size * long) as f32;
         let sel = Some(i) == active;
-        if !mode.shows(sel, live) {
+        // the spot's own circle setting (its row in the panel) beats the Tool Overlay
+        let own = crate::panels::right::spot_overlay(s, mode);
+        if !own.shows(sel, live) {
             continue;
         }
-        let p = &pins;
+        let p = if painting && own == ToolOverlay::Auto { &quiet } else { &p };
         let col = Color32::from_white_alpha(if sel { 230 } else { 150 });
         for q in &s.points {
             p.circle_stroke(map.screen(*q), r, Stroke::new(if sel { 1.5 } else { 1.0 }, col));
@@ -73,8 +73,12 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
     if let Some(h) = resp.hover_pos() {
         if hover.is_some() {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Grab);
+        } else if mode == ToolOverlay::Never {
+            // nothing covers the photo at Never: a small pointer shows where the brush is
+            ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         } else {
             ui.ctx().set_cursor_icon(egui::CursorIcon::None);
+            register(ui, "removeBrushRing", Rect::from_center_size(h, vec2(2.0 * r, 2.0 * r)));
             p.circle_stroke(h, r, Stroke::new(1.0, Color32::WHITE));
             p.circle_stroke(h, r * (1.0 - app.ui.remove_feather / 100.0).max(0.05), Stroke::new(1.0, Color32::from_white_alpha(110)));
         }
@@ -120,10 +124,13 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
             _ => app.gesture = Some(Gesture::Spot { points: vec![n] }),
         }
     }
-    if let Some(Gesture::Spot { points }) = &app.gesture {
+    if mode != ToolOverlay::Never
+        && let Some(Gesture::Spot { points }) = &app.gesture
+    {
         for q in points {
             p.circle_filled(map.screen(*q), r, Color32::from_white_alpha(60));
         }
+        register(ui, "removePaintFill", map.rect);
     }
     if (resp.drag_stopped() || resp.clicked())
         && let Some(Gesture::Spot { points }) = app.gesture.take()

@@ -948,6 +948,8 @@ mod tests_sharpen_mask;
 #[cfg(test)]
 mod tests_slider_strength;
 #[cfg(test)]
+mod tests_spot_hidden;
+#[cfg(test)]
 mod tests_tone;
 #[cfg(test)]
 mod tests_tone_sliders;
