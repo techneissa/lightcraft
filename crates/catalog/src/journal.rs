@@ -67,6 +67,7 @@
 //! | 13 | local camera profiles and macOS Colour (fork; its builds wrote them as 12 before 2026-11-08) | develop settings `profile.camera_colour = local` / `macos` (`CameraColour::{Local, Macos}`) and `profile.camera_profile` |
 //! | 14 | edited camera / lens / exposure values (fork; written as 13 before 2026-11-08) | `Meta.exif` (`ExifOverrides`: `camera`, `lens`, `focal_mm`, `aperture`, `shutter`, `iso`), in `SetMeta` and `AddPhoto` bodies |
 //! | fork 1 | the fork's own format name `lightcraft-catalog-fork` (2026-11-09) | nothing new: official 12 with the fork's 13 and 14 |
+//! | fork 2 | develop edits and History saved as what changed (#77) | log records `patchDevelop`, `patchPush`, `patchHistory`, `patchBatch` ([`crate::journal_delta`]); `Photo.history` steps after the first as `{label, patch}` ([`crate::history_serde`]) |
 //!
 //! Versions 1–14 are `"format":"lightcraft-catalog"`; the fork writes `"format":"lightcraft-catalog-fork"` from
 //! its version 1 on, with its own counter, so an official build refuses a fork library untouched and the same
@@ -78,6 +79,10 @@
 //!   serialized field to the catalog, a photo, an album, a stack or develop settings that an older
 //!   build would misread or silently drop. New fields must deserialize from older data
 //!   (`#[serde(default)]`), so newer builds keep reading every older format.
+//! - **Any change to how develop settings serialize is a format change** (fork 2 on): log patches
+//!   ([`crate::journal_delta`]) and History steps ([`crate::history_serde`]) are made against the
+//!   writer's JSON of the settings, so a renamed field, a changed default that is skipped when
+//!   serialized, or a reordered array makes a patch miss what it was made from. Bump [`VERSION`].
 //! - **Opening an older format upgrades it**: right after loading, [`Journal::open`] writes a
 //!   snapshot in this build's format (also for a new library), before anything is appended — so a
 //!   library is never a mix, and older builds refuse it from then on instead of reading part of it.
@@ -88,6 +93,7 @@
 //!   is never mistaken for a torn tail or damage. (Builds up to v0.2.0 refuse a v2 snapshot with
 //!   "unsupported format".)
 
+use crate::journal_delta::{self, LogOp, Replay, Shadow};
 use crate::store::Store;
 use crate::{Catalog, CatalogError, Op, Result};
 
@@ -219,6 +225,8 @@ pub struct Journal {
     /// handed over before, which it holds and retries): the next chance writes a snapshot, a fresh
     /// file holding everything, in case only the log's file is broken.
     snapshot_due: bool,
+    /// The photos as replaying the log leaves them: what records are patched against.
+    shadow: Shadow,
 }
 
 /// A background snapshot in flight.
@@ -240,25 +248,35 @@ fn io(e: std::io::Error) -> CatalogError {
     CatalogError::Io(e.to_string())
 }
 
-/// One log line (without the newline) for op number `seq`.
+/// One log line (without the newline) for op number `seq`, written whole (the format before 14,
+/// still read; [`Journal::append`] writes develop and History changes as patches).
 pub fn encode_record(seq: u64, op: &Op) -> String {
     let body = serde_json::to_string(op).unwrap_or_default();
+    line_of(seq, &body)
+}
+
+fn encode_log(seq: u64, rec: &LogOp) -> String {
+    line_of(seq, &serde_json::to_string(rec).unwrap_or_default())
+}
+
+fn line_of(seq: u64, body: &str) -> String {
     let crc = crc32fast::hash(body.as_bytes());
     format!("{{\"seq\":{seq},\"crc\":{crc},\"op\":{body}}}")
 }
 
-/// Parse one log line (without the newline). `None` if it's malformed, the CRC doesn't match, or
-/// the op is one this version doesn't know (see [`Journal::open`]).
+/// Parse one log line (without the newline). `None` if it's malformed, the CRC doesn't match, the
+/// op is one this version doesn't know (see [`Journal::open`]), or it is a patch (it needs the
+/// catalog it was made against).
 pub fn decode_record(line: &str) -> Option<(u64, Op)> {
     match decode_line(line) {
-        Line::Record(seq, op) => Some((seq, op)),
-        Line::Newer(_) | Line::Bad => None,
+        Line::Record(seq, LogOp::Plain(op)) => Some((seq, op)),
+        Line::Record(_, LogOp::Delta(_)) | Line::Newer(_) | Line::Bad => None,
     }
 }
 
 /// One log line, decoded.
 enum Line {
-    Record(u64, Op),
+    Record(u64, LogOp),
     /// The CRC matches — the line is exactly what was written — but the op doesn't parse: it
     /// was written by a newer LightCraft (an op or field this version doesn't know), not damaged.
     Newer(u64),
@@ -278,7 +296,7 @@ fn decode_line(line: &str) -> Line {
     if crc32fast::hash(body.as_bytes()) != crc {
         return Line::Bad;
     }
-    match serde_json::from_str(body) {
+    match journal_delta::decode(body) {
         Ok(op) => Line::Record(seq, op),
         Err(_) => Line::Newer(seq),
     }
@@ -320,7 +338,7 @@ pub(crate) const MAX_SCAN: usize = 64 << 20;
 /// by the record that retried it (the retry re-encodes the same ops with the same `seq`s). Returns
 /// the fragment's length and the record, if that record continues the log (`seq <= last + 1`).
 /// The record's CRC must match, so damage is never mistaken for it.
-fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
+fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, LogOp))> {
     const START: &[u8] = b"{\"seq\":";
     // The retry record starts with the `{"seq":` marker, but that marker can also occur inside
     // the op body (a smart-album rule value such as `{"seq":1}`); then the last occurrence is
@@ -361,7 +379,7 @@ fn resync(line: &[u8], last: u64) -> Option<(usize, (u64, Op))> {
         let Ok(text) = std::str::from_utf8(suffix) else { continue };
         #[cfg(test)]
         RESYNC_CANDIDATES.with(|c| c.set(c.get() + 1));
-        if let Some((seq, op)) = decode_record(text.trim_end_matches('\u{0D}'))
+        if let Line::Record(seq, op) = decode_line(text.trim_end_matches('\u{0D}'))
             && seq <= last.saturating_add(1)
         {
             return Some((i, (seq, op)));
@@ -435,6 +453,18 @@ fn write_snapshot_owned(store: &mut dyn Store, seq: u64, mut snapshot: Catalog) 
 /// The highest `seq` a snapshot may hold; beyond it the counter is treated as corrupt, far from overflow.
 const MAX_SEQ: u64 = u64::MAX / 2;
 
+/// What [`Journal::open`] read but couldn't load.
+struct Lost {
+    /// Where real damage starts in the log (a bad record followed by good ones).
+    damaged_at: Option<usize>,
+    /// Records that didn't apply.
+    failed: usize,
+    /// Histories cut short in the log's records and in the snapshot.
+    log_cut: usize,
+    snap_cut: usize,
+    snapshot_seq: u64,
+}
+
 /// Just the identification of `catalog.snap` (read before the catalog itself).
 #[derive(serde::Deserialize)]
 struct SnapHeader {
@@ -457,6 +487,7 @@ impl Journal {
         let snap = store.read(SNAPSHOT).map_err(io)?;
         let log = store.read(LOG).map_err(io)?;
         report.created = snap.is_none() && log.is_none();
+        crate::history_serde::take_cut();
         let (mut catalog, snapshot_seq, header) = match &snap {
             Some(bytes) => {
                 // the header first: a newer snapshot may not parse as this version's catalog, and the fork's own
@@ -478,6 +509,7 @@ impl Journal {
             None => (Catalog::new(), 0, None),
         };
         report.snapshot_seq = snapshot_seq;
+        let snap_cut = crate::history_serde::take_cut();
         let mut j = Journal {
             store,
             seq: snapshot_seq,
@@ -490,8 +522,10 @@ impl Journal {
             retry_at_records: 0,
             tail_dirty: false,
             snapshot_due: false,
+            shadow: Shadow::default(),
         };
         let log = log.unwrap_or_default();
+        let mut replay = Replay::default();
 
         // Scan records; `good_end` is the byte offset just past the last good record.
         let mut pos = 0usize;
@@ -509,7 +543,10 @@ impl Journal {
                 good_end = next;
                 continue;
             }
-            let mut record = line.and_then(decode_record);
+            let mut record = line.map(decode_line).and_then(|l| match l {
+                Line::Record(seq, op) => Some((seq, op)),
+                Line::Newer(_) | Line::Bad => None,
+            });
             if record.is_none()
                 && let Some((at, r)) = resync(&log[pos..line_end], j.seq)
             {
@@ -530,11 +567,13 @@ impl Journal {
                     let _ = op;
                     report.stale += 1;
                 }
-                Some((seq, op)) if j.seq.checked_add(1) == Some(seq) => {
-                    if catalog.apply(op).is_err() {
-                        report.failed += 1;
-                    } else {
-                        report.replayed += 1;
+                Some((seq, rec)) if j.seq.checked_add(1) == Some(seq) => {
+                    match replay.apply(rec, &mut catalog) {
+                        Ok(()) => report.replayed += 1,
+                        Err(e) => {
+                            log::warn!("{LOG}: record {seq} not applied: {e}");
+                            report.failed += 1;
+                        }
                     }
                     j.seq = seq;
                 }
@@ -561,34 +600,28 @@ impl Journal {
             needs_newline = !has_nl;
         }
 
+        let log_cut = crate::history_serde::take_cut();
         // Nothing was refused: an older snapshot is about to be rewritten in this format (upgrade or damage), so
         // the first time it is kept as it was. A copy that can't be written leaves the library unchanged.
         if let (Some(bytes), Some(Header::Older { .. })) = (&snap, header) {
             keep_before_upgrade(j.store.as_mut(), bytes)?;
         }
+        // something the files hold didn't load (a record that didn't apply, a History cut short): a copy
+        // of what holds it is kept before a snapshot replaces it, so it isn't lost on the next save,
+        // and the snapshot gives later patches the state they will be made against
+        let lost = Lost { damaged_at, failed: report.failed, log_cut, snap_cut, snapshot_seq };
+        let kept = j.keep_what_did_not_load(&lost, &log, snap.as_deref())?;
         drop(snap);
-        if let Some(at) = damaged_at {
-            let name = format!("{LOG}.damaged-{}", j.seq);
-            j.store.write_atomic(&name, &log).map_err(io)?;
-            log::warn!("catalog log damaged at byte {at}; kept as {name}; state recovered up to op {}", j.seq);
-            report.damaged = Some(name);
+        j.shadow = Shadow::of(&catalog);
+        if !kept.is_empty() {
+            report.damaged = Some(kept.join(", "));
             j.snapshot(&catalog)?;
-        } else {
-            if good_end < log.len() {
-                report.torn_bytes = (log.len() - good_end) as u64;
-                log::warn!("catalog log: dropped a torn final record ({} bytes)", report.torn_bytes);
-                j.store.truncate(LOG, good_end as u64).map_err(io)?;
-                j.log_bytes = good_end as u64;
-            } else if needs_newline {
-                j.store.append(LOG, b"\n").map_err(io)?;
-                j.log_bytes = good_end as u64 + 1;
-            } else {
-                j.log_bytes = good_end as u64;
-            }
         }
         // Bring an older (or new, or snapshot-less) library to this version's format before
         // anything is appended: a snapshot in this format makes older builds refuse the library
         // instead of misreading ops or dropping fields they don't know.
+        let mut log_reset = report.damaged.is_some();
+        let mut upgrade_failed = false;
         if report.created {
             // tiny: written directly, not counted as a compaction
             let empty = format!("{{\"format\":\"{FORK_FORMAT}\",\"version\":{VERSION},\"seq\":0,\"catalog\":{}}}\n", catalog.to_snapshot());
@@ -602,16 +635,69 @@ impl Journal {
             });
             match j.snapshot(&catalog) {
                 Ok(()) => {
+                    log_reset = true;
                     if let Some(v) = report.upgraded_from {
                         log::info!("catalog: upgraded from format v{v} to v{VERSION}");
                     }
                 }
                 // nothing lost: the old files are intact and still load; retried on next open
-                Err(e) => log::warn!("catalog: can't write the format v{VERSION} snapshot: {e}"),
+                Err(e) => {
+                    upgrade_failed = true;
+                    log::warn!("catalog: can't write the format v{VERSION} snapshot: {e}");
+                }
             }
+        }
+        if damaged_at.is_none() && good_end < log.len() {
+            report.torn_bytes = (log.len() - good_end) as u64;
+        }
+        if !log_reset {
+            j.end_log(good_end, log.len(), needs_newline, upgrade_failed)?;
         }
         catalog.revision = 0;
         Ok((j, catalog, report))
+    }
+
+    /// After loading: keep a copy of what didn't load (`catalog.log.damaged-<seq>`,
+    /// `catalog.snap.damaged-<seq>`) before a snapshot replaces it, so it isn't lost on the next
+    /// save. Returns the copies' names.
+    fn keep_what_did_not_load(&mut self, lost: &Lost, log: &[u8], snap: Option<&[u8]>) -> Result<Vec<String>> {
+        let mut kept = Vec::new();
+        if lost.damaged_at.is_some() || lost.failed > 0 || lost.log_cut > 0 {
+            let name = format!("{LOG}.damaged-{}", self.seq);
+            self.store.write_atomic(&name, log).map_err(io)?;
+            match lost.damaged_at {
+                Some(at) => log::warn!("catalog log damaged at byte {at}; kept as {name}; state recovered up to op {}", self.seq),
+                None => log::warn!("catalog log: {} record(s) not applied, {} History cut short; kept as {name}", lost.failed, lost.log_cut),
+            }
+            kept.push(name);
+        }
+        if lost.snap_cut > 0
+            && let Some(bytes) = snap
+        {
+            let name = format!("{SNAPSHOT}.damaged-{}", lost.snapshot_seq);
+            self.store.write_atomic(&name, bytes).map_err(io)?;
+            log::warn!("{SNAPSHOT}: {} History cut short; kept as {name}", lost.snap_cut);
+            kept.push(name);
+        }
+        Ok(kept)
+    }
+
+    /// After loading, when no snapshot reset the log: cut its torn end (`good_end` of `len`
+    /// bytes is whole) or end its last line. After a failed upgrade the file stays as it was and
+    /// the first append cuts the torn end.
+    fn end_log(&mut self, good_end: usize, len: usize, needs_newline: bool, upgrade_failed: bool) -> Result<()> {
+        if good_end < len && upgrade_failed {
+            self.tail_dirty = true;
+        } else if good_end < len {
+            log::warn!("catalog log: dropped a torn final record ({} bytes)", len - good_end);
+            self.store.truncate(LOG, good_end as u64).map_err(io)?;
+        } else if needs_newline {
+            self.store.append(LOG, b"\n").map_err(io)?;
+            self.log_bytes = good_end as u64 + 1;
+            return Ok(());
+        }
+        self.log_bytes = good_end as u64;
+        Ok(())
     }
 
     /// Append ops (already applied to the live catalog) durably, in order.
@@ -622,11 +708,15 @@ impl Journal {
         let t0 = web_time::Instant::now();
         let mut buf = String::new();
         let mut seq = self.seq;
+        // develop and History changes as patches against the shadow, which moves on only once
+        // the records are written (a retry encodes them against the same state)
+        let mut pass = self.shadow.pass();
         for op in ops {
             seq = seq.checked_add(1).ok_or_else(|| CatalogError::Corrupt(format!("{LOG}: op counter overflow")))?;
-            buf.push_str(&encode_record(seq, op));
+            buf.push_str(&encode_log(seq, &pass.encode(op)));
             buf.push('\n');
         }
+        let changes = pass.changes();
         if self.tail_dirty {
             self.store.truncate(LOG, self.log_bytes).map_err(io)?;
             self.tail_dirty = false;
@@ -642,6 +732,7 @@ impl Journal {
             }
             return Err(io(e));
         }
+        self.shadow.commit(changes);
         if let Some(p) = self.pending.as_mut() {
             p.tail.extend_from_slice(buf.as_bytes());
             p.tail_records += ops.len() as u64;
@@ -685,9 +776,10 @@ impl Journal {
                 return Err(io(e));
             }
         };
-        // the snapshot is durable: it holds every op up to `seq`
+        // the snapshot is durable: it holds every op up to `seq`, and later records patch it
         self.seq = seq;
         self.snapshot_seq = seq;
+        self.shadow = Shadow::of(catalog);
         let t2 = web_time::Instant::now();
         // A crash here leaves old records in the log; they are skipped by seq on load.
         self.store.write_atomic(LOG, b"").map_err(io)?;

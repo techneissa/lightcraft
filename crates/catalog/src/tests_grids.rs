@@ -136,8 +136,8 @@ fn v9_catalog_with_inline_grids_loads_and_is_upgraded() {
     assert!(rewritten.contains("\"grids\":["), "the shared table is in the file");
 }
 
-/// The op log is not deduplicated: every record keeps the grids inline (a log never carries the
-/// shared table), and replaying it rebuilds the same state.
+/// The op log is not deduplicated: a record that holds a grid holds it inline (a log never carries
+/// the shared table), and replaying it rebuilds the same state.
 #[test]
 fn log_records_keep_their_grids_inline() {
     let (live, ops, _, blob) = masked_catalog(2);
@@ -147,7 +147,9 @@ fn log_records_keep_their_grids_inline() {
     drop(j); // no snapshot: the log holds the whole state
     let log_bytes = m.get(LOG).unwrap();
     let log = std::str::from_utf8(&log_bytes).unwrap();
-    assert_eq!(log.match_indices(&blob).count(), 4, "two edits, SetDevelop + PushHistory each, inline");
+    // (fork 2, #77: records are patches; the first edit's patch carries the mask with its grid
+    // inline, its History step and the second edit only what changed)
+    assert_eq!(log.match_indices(&blob).count(), 1, "the grid inline, in the patch that adds the mask");
     let (_, loaded, report) = open(&m);
     assert_eq!(report.replayed, 3, "the photo and the two edits");
     assert_eq!(loaded.to_snapshot(), live.to_snapshot());
