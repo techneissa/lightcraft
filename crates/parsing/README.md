@@ -70,7 +70,7 @@ the folder under a size.
 ## Try it
 
 ```bash
-cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/ [--set segformer|bisenet] [--models DIR]
+cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/ [--set segformer|bisenet|sapiens2] [--models DIR]
 ```
 
 writes `outdir/<part>.png` (one colour per person), `all.png`, `background.png`, `landmarks.png`, `people.json` and

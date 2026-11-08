@@ -11,6 +11,7 @@ use crate::facemesh::FaceMesh;
 use crate::models::{FaceModel, ModelFile, ModelSet};
 use crate::nn::{Layout, Params};
 use crate::people;
+use crate::sapiens::Sapiens2;
 use crate::segformer::Segformer;
 use crate::types::{FaceHint, NormRect, Parsing, Part, Person, Plane};
 use crate::weights::Weights;
@@ -41,6 +42,8 @@ pub struct Parser {
     face: FaceNet,
     face_model: FaceModel,
     body: Segformer,
+    /// The set's body-part parser (Sapiens2), which decides where skin, hair and clothes are.
+    parts: Option<Sapiens2>,
     mesh: FaceMesh,
     dev: Device,
 }
@@ -94,9 +97,24 @@ impl Parser {
         if body.classes() != body::CLASSES {
             return Err(Error::Model(format!("{}: {} classes, not {}", body_file.label, body.classes(), body::CLASSES)));
         }
+        let parts = match set.parts_file() {
+            Some(f) => Some(Sapiens2::load(&Params::new(open(&f, models)?, dev.clone(), Layout::Ohwi)).map_err(|e| named(&f, e))?),
+            None => None,
+        };
         let mesh_file = crate::models::FACE_MESH;
         let mesh = FaceMesh::load(open(&mesh_file, models)?.as_ref(), &dev).map_err(|e| named(&mesh_file, e))?;
-        Ok(Self { set, face, face_model: set.face_model(), body, mesh, dev })
+        Ok(Self { set, face, face_model: set.face_model(), body, parts, mesh, dev })
+    }
+
+    /// The whole photo through the clothes parser at `side`, and through the set's body-part parser when it has one
+    /// (its class probabilities on the same grid).
+    fn body_maps(&self, img: &crate::RgbImage, side: usize) -> Result<(body::BodyMap, Option<Vec<f32>>)> {
+        let map = body::run(&self.body, img, side, &self.dev)?;
+        let parts = match &self.parts {
+            Some(net) => Some(crate::fuse::run(net, img, map.w, map.h, &self.dev)?),
+            None => None,
+        };
+        Ok((map, parts))
     }
 
     pub fn set(&self) -> ModelSet {
@@ -118,21 +136,35 @@ impl Parser {
         let mut prof = Profile::start();
         let (iw, ih) = (img.width as f32, img.height as f32);
         let given: Vec<FaceHint> = hints.iter().filter_map(|h| h.rect.clamped().map(|rect| FaceHint { rect, ..h.clone() })).collect();
-        let mut map = body::run(&self.body, img, body_side(&given, img, opts), &self.dev)?;
+        let (mut map, mut parts) = self.body_maps(img, body_side(&given, img, opts))?;
         prof.step("body");
         if cancelled() {
             return Err(Error::Cancelled);
         }
-        let faces = faces_of(&given, hints.is_empty(), &map, iw, opts);
+        let faces = match parts.as_deref() {
+            // faces from the map are needed only without hints
+            Some(p) if hints.is_empty() => faces_of(&given, true, &crate::fuse::fuse(&map, p), iw, opts),
+            _ => faces_of(&given, hints.is_empty(), &map, iw, opts),
+        };
         if hints.is_empty() {
             // the faces were found in the map: look again, closer, when they are small
             let side = body_side(&faces, img, opts);
             if side > map.w.max(map.h) {
-                map = body::run(&self.body, img, side, &self.dev)?;
+                (map, parts) = self.body_maps(img, side)?;
                 prof.step("body again");
             }
         }
         let rects: Vec<NormRect> = faces.iter().map(|f| f.rect).collect();
+        if let (Some(net), Some(probs)) = (&self.parts, parts.as_mut()) {
+            // each person up close (Sapiens2 is unsure of people further back in a whole photo)
+            let boxes = crate::crops::boxes(&map, &rects, img, crate::crops::MAX_CROPS);
+            crate::crops::refine(net, img, (map.w, map.h), probs, &boxes, &self.dev, cancelled)?;
+            prof.step("people up close");
+        }
+        let map = match parts.as_deref() {
+            Some(p) => crate::fuse::fuse(&map, p),
+            None => map,
+        };
         let owners = people::assign(&map.person(), &map.skin_or_hair(), map.w, map.h, &rects);
         let count = owners.people.min(opts.max_people);
         let mut people: Vec<Person> = (0..count)
