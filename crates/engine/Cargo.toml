@@ -46,6 +46,8 @@ unicode-normalization = "0.1"
 unicode-segmentation = "1.13"
 lightcraft-segment = { workspace = true, optional = true }
 lightcraft-birefnet = { workspace = true, optional = true }
+# Learn My Edits (fork/learn-my-edits.md)
+lightcraft-learn = { workspace = true }
 
 # model downloads run natively only (the web build fetches no models)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]

@@ -29,6 +29,7 @@ mod focus;
 pub mod geocode;
 pub mod keywords;
 mod lama;
+mod learn;
 pub mod lens_refresh;
 pub mod library;
 pub mod local_profiles;
@@ -168,6 +169,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(birefnet::specs());
         v.extend(find_removals::specs());
         v.extend(lama::specs());
+        v.extend(learn::specs());
         v.extend(organize::specs());
         v.extend(keywords::specs());
         v.extend(manage::specs());
