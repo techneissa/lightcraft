@@ -93,6 +93,7 @@ pub mod rename;
 pub mod rename_job;
 pub mod retouch_input;
 pub mod segment;
+pub mod select_people;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod settings_folder;
 pub mod shared_models;
@@ -413,6 +414,8 @@ pub struct Session {
     pub parsing: people_parsing::PeopleParsing,
     /// BiRefNet-matting edges for people and Subject masks (`fork/hair-edges.md`).
     pub hair_edges: hair_edges::HairEdges,
+    /// Each photo's people for Select People masks (`fork/select-people.md`).
+    pub select_people: select_people::SelectPeople,
     /// The persistent library this session writes to (`None` = in-memory only).
     pub library: Option<library::Library>,
     /// Identity of current library opening; refreshed only after a successful open.
@@ -635,6 +638,7 @@ impl Session {
             model_runtimes: Default::default(),
             parsing: people_parsing::PeopleParsing::new(activity.clone()).with_hair_edges(hair_edges.clone()),
             hair_edges,
+            select_people: Default::default(),
             library: None,
             library_identity: Arc::new(()),
             xmp: sidecar::XmpPrefs::default(),

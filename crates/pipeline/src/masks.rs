@@ -117,6 +117,8 @@ impl Mattes {
             MaskShape::Sky { .. } => self.of(&[Sky]),
             // Background is the person matte turned around ([`shape_alpha`])
             MaskShape::Subject { .. } | MaskShape::Background { .. } => person(),
+            // (fork, `fork/select-people.md`: a part the people parser drew keeps its own selection)
+            MaskShape::People { seg, detail, .. } if seg.is_some() || !detail.is_empty() => Vec::new(),
             MaskShape::People { parts, .. } => {
                 let wanted: Vec<MatteKind> = parts
                     .iter()
@@ -389,6 +391,7 @@ fn shape_alpha_in(
         | MaskShape::Subject { seg, detail, edge }
         | MaskShape::Sky { seg, detail, edge }
         | MaskShape::Background { seg, detail, edge }
+        | MaskShape::People { seg, detail, edge, .. }
             if seg.is_some() || !detail.is_empty() =>
         {
             // Edge: below 0 a steeper transition (up to 8× the logits), above 0 feathered (up to

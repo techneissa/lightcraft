@@ -61,6 +61,7 @@ mod query;
 pub mod recheck;
 pub mod reload;
 mod retouch;
+mod select_people;
 pub mod similar;
 mod slideshow;
 pub mod smart_editing;
@@ -183,6 +184,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(learn::specs());
         v.extend(model_runtime::specs());
         v.extend(parsing::specs());
+        v.extend(select_people::specs());
         v.extend(hair_edges::specs());
         v.extend(organize::specs());
         v.extend(keywords::specs());

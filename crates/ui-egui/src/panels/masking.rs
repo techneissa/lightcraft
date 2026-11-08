@@ -564,7 +564,8 @@ pub(super) fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: u
         | MaskShape::Prompt { edge, .. }
         | MaskShape::Subject { edge, .. }
         | MaskShape::Sky { edge, .. }
-        | MaskShape::Background { edge, .. } => {
+        | MaskShape::Background { edge, .. }
+        | MaskShape::People { edge, seg: Some(_), .. } => {
             // Edge: how crisp the selection's border is (−100 hard … 0 as computed … 100 soft)
             let spec = ControlSpec {
                 id: "edge",
@@ -586,7 +587,8 @@ pub(super) fn range_controls(app: &mut LightcraftApp, ui: &mut egui::Ui, comp: u
                     | MaskShape::Prompt { edge, .. }
                     | MaskShape::Subject { edge, .. }
                     | MaskShape::Sky { edge, .. }
-                    | MaskShape::Background { edge, .. } => {
+                    | MaskShape::Background { edge, .. }
+                    | MaskShape::People { edge, .. } => {
                         *edge = v.clamp(-100.0, 100.0);
                     }
                     _ => {}

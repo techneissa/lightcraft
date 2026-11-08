@@ -113,9 +113,21 @@ fn iou(a: &lightcraft_geom::Rect, b: &NormRect) -> f64 {
 fn prepare(s: &mut Session, id: lightcraft_catalog::PhotoId) -> std::result::Result<(RgbImage, Vec<FaceHint>), String> {
     let (rgb, w, h) = super::face_detect::render_rgb(s, id, PARSE_EDGE)?;
     let img = RgbImage::new(w, h, rgb).map_err(|e| e.to_string())?;
-    let Ok(detector) = super::face_detect::detector(s) else { return Ok((img, Vec::new())) };
-    let faces = detector.detect(&img.data, w, h, &lightcraft_faces::yunet::Options::default()).map_err(|e| e.to_string())?;
+    let detector = super::face_detect::detector(s).ok();
     let regions = s.catalog.photo(id).map(|p| p.meta.regions.clone()).unwrap_or_default();
+    let hints = hints_for(detector.as_deref(), &img, &regions)?;
+    Ok((img, hints))
+}
+
+/// The faces of `img` as hints for a parse: `detector`'s (none without one), each named after the face region of
+/// `regions` it matches (Select People prepares its parses off the main thread with it, `fork/select-people.md`).
+pub(crate) fn hints_for(
+    detector: Option<&lightcraft_faces::yunet::Detector>,
+    img: &RgbImage,
+    regions: &[lightcraft_meta::Region],
+) -> std::result::Result<Vec<FaceHint>, String> {
+    let Some(detector) = detector else { return Ok(Vec::new()) };
+    let faces = detector.detect(&img.data, img.width, img.height, &lightcraft_faces::yunet::Options::default()).map_err(|e| e.to_string())?;
     let hints = faces
         .into_iter()
         .map(|f| {
@@ -130,7 +142,7 @@ fn prepare(s: &mut Session, id: lightcraft_catalog::PhotoId) -> std::result::Res
             FaceHint { rect, landmarks: Some(f.landmarks), score: f.score, person_id }
         })
         .collect();
-    Ok((img, hints))
+    Ok(hints)
 }
 
 /// Parse photo `id` (waiting for the run with `wait`).
