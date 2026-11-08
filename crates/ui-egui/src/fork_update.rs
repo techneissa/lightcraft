@@ -325,6 +325,12 @@ pub fn request(app: &mut LightcraftApp) {
     app.updates_rt.fork.pending = true;
 }
 
+/// Whether the desktop app checks for a new build when it starts: not when an agent drives it (a control port) or
+/// when `LIGHTCRAFT_NO_UPDATE_CHECK` is set, so test copies of the app never pop up the update window.
+pub fn check_at_start(control_port: bool, no_update_env: Option<&std::ffi::OsStr>) -> bool {
+    !control_port && no_update_env.is_none_or(|v| v.is_empty())
+}
+
 /// Every frame: starts a check that was asked for, or the one at start (`at_start`, quiet).
 pub fn tick(app: &mut LightcraftApp, at_start: bool) {
     let fork = &mut app.updates_rt.fork;
@@ -461,6 +467,15 @@ mod tests {
 
     const A: &str = "d7ae6dfc978dd9d4ec963aae4a6c37cecd680806";
     const B: &str = "0123456789abcdef0123456789abcdef01234567";
+
+    #[test]
+    fn agent_driven_runs_skip_the_check_at_start() {
+        use std::ffi::OsStr;
+        assert!(check_at_start(false, None));
+        assert!(check_at_start(false, Some(OsStr::new(""))));
+        assert!(!check_at_start(true, None));
+        assert!(!check_at_start(false, Some(OsStr::new("1"))));
+    }
 
     #[test]
     fn release_body_names_a_commit() {

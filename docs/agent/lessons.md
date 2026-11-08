@@ -6,3 +6,5 @@ One line each: symptom → cause → guard, at most 250 characters. Keep at most
 - A bench's "after" run reran the "before" binary (2026-11-07) → cargo in a shared target reuses another worktree's build when your files are older → check the log says `Compiling`, or `touch` the crate sources first.
 - No timing tests: a test never asserts how long something took (techneissa, 2026-11-05); wait on a condition instead.
 - Fork CI red on a test the Mac never compiles (2026-11-05) → a signature change missed a `cfg(not(target_os = "macos"))` caller → after changing a signature, grep its callers inside `cfg(not(...macos))` blocks too.
+- Lanes ended their turn while a build ran and stopped (2026-11-08) → nothing wakes a lane for its own background build → every brief: never end the turn while a build or run you wait on is still going.
+- Test copies of the app popped up "A New Build Is Ready" on techneissa's screen (2026-11-08) → the update check ran at every start → agent runs use `--control` or `LIGHTCRAFT_NO_UPDATE_CHECK=1`, and headless snapshots for pictures.
