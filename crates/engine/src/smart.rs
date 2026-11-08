@@ -361,6 +361,7 @@ fn decode_with_offer(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option
         mattes: (!mattes.is_empty()).then(|| Arc::new(mattes)),
         local_tone: f.local_tone.map(Arc::new),
         native_long: None,
+        retouch: None,
         // (a smart preview keeps the colour it was made with: the option can't change it)
         colorimetric: false,
         colour_note: None,

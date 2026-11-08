@@ -1146,9 +1146,13 @@ fn linear(
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let s = &*plan.settings;
-    let img = if lightcraft_pipeline::local_tone::enabled(info, s) || s.spots.iter().any(lightcraft_pipeline::spots_learned::is_learned) {
+    let img = if lightcraft_pipeline::local_tone::enabled(info, s)
+        || s.spots.iter().any(lightcraft_pipeline::spots_learned::is_learned)
+        || lightcraft_pipeline::retouch_step::active(s)
+    {
         // the camera's local tone mapping (ProRAW gain table, off by default), or a LaMa spot (the
         // learned fill runs on the CPU, before the white balance): the whole scene-linear stage on the CPU
+        // (or portrait retouching, fork `fork/retouch-foundation.md`)
         let mut img = match host.sampled.take() {
             Some(i) => i,
             None => cx.read_rgb(sampled, w, h),

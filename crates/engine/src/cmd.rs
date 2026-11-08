@@ -60,6 +60,7 @@ mod print;
 mod query;
 pub mod recheck;
 pub mod reload;
+mod retouch;
 pub mod similar;
 mod slideshow;
 pub mod smart_editing;
@@ -223,6 +224,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(focus::specs());
         v.extend(match_look::specs());
         v.extend(activity::specs());
+        v.extend(retouch::specs());
         v.extend(map::specs());
         v
     })
