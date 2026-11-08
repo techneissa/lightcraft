@@ -299,3 +299,40 @@ fn a_big_hole_is_handed_over_at_a_capped_size() {
     assert_eq!(asked.len(), 1);
     assert!(asked[0].0.max(asked[0].1) <= spots_learned::FILL_MAX_SIDE, "{asked:?}");
 }
+
+/// Issue #82: a LaMa spot asks its fill only when it is new or changed (or reads what a changed spot drew), so adding the
+/// 13th spot asks once, not thirteen times; a drag's draft that got no fill is asked again by the full render.
+#[test]
+fn a_lama_spot_edit_asks_the_fill_only_for_the_spots_it_reaches() {
+    let fill = Arc::new(MeanFill::default());
+    let at = |x: f64, y: f64| Spot { points: vec![Point::new(x, y)], size: 0.02, ..spot(SpotMode::Remove, SpotFill::Lama) };
+    let mut s = with((0..12).map(|i| at(0.1 + 0.2 * (i % 5) as f64, 0.15 + 0.3 * (i / 5) as f64)).collect());
+    let src = Arc::new(scene());
+    let (info, req) = (SourceInfo::default(), RenderRequest::fit(400, 300));
+    let cache = crate::StageCache::default();
+    let asked = || fill.asked.lock().unwrap_or_else(PoisonError::into_inner).len();
+    let edit = |s: &DevelopSettings, req: &RenderRequest| {
+        let before = asked();
+        let kept = crate::render_cached(&src, &info, s, req, &cache).image;
+        let n = asked() - before;
+        (n, kept.data == render(&src, &info, s, req).image.data)
+    };
+    install(&fill, || {
+        assert_eq!(edit(&s, &req), (12, true));
+        s.spots.push(at(0.5, 0.92));
+        assert_eq!(edit(&s, &req), (1, true), "the 13th spot alone");
+        s.spots[3].points[0].x += 0.01;
+        assert_eq!(edit(&s, &req), (1, true), "a moved spot alone");
+        s.light.exposure = 1.0;
+        s.wb.temp += 800.0;
+        s.wb.mode = lightcraft_develop::WbMode::Custom;
+        assert_eq!(edit(&s, &req), (0, true), "the white balance and tone ask nothing");
+        // a drag's draft gets no fill for the changed spot; the full render after it asks for that one spot again
+        *fill.reply.lock().unwrap_or_else(PoisonError::into_inner) = Some(None);
+        s.spots[5].opacity = 60.0;
+        let draft = RenderRequest { quality: Quality::Draft, ..req };
+        assert_eq!(edit(&s, &draft).0, 1);
+        *fill.reply.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        assert_eq!(edit(&s, &req), (1, true), "the full render asks again for the spot the draft could not fill");
+    });
+}

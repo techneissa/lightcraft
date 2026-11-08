@@ -1567,3 +1567,23 @@ fn thumbnail_memos_are_pruned_with_the_visible_set_and_cleared_by_forget_all() {
     r.forget_all();
     assert!(r.embedded_thumbs.is_empty() && r.thumb_inputs.is_empty() && r.failed.is_empty());
 }
+
+/// Issue #82: the thumbnail of the photo in the loupe renders again after every edit; it keeps its stages (one photo's at a
+/// time), so a spot edit draws only the spots it reaches there too. Other thumbnails keep none.
+#[test]
+fn the_edited_photos_thumbnail_keeps_its_stages() {
+    let (mut app, work, _ctx) = fixture();
+    let main = app.session.render_job(PhotoId(1), 64, 64, false, true).unwrap();
+    app.renderer.request(Slot::Main, main, 100);
+    take_job(&work);
+    let thumb = |app: &mut crate::LightcraftApp, id: PhotoId, size: usize| {
+        let mut job = app.session.thumb_job(PhotoId(1), size).unwrap();
+        job.photo = id;
+        app.renderer.request(Slot::Thumb(id), job, 10);
+        take_job(&work).1.stages
+    };
+    let first = thumb(&mut app, PhotoId(1), 256).expect("the edited photo's thumbnail keeps stages");
+    let again = thumb(&mut app, PhotoId(1), 512).expect("and keeps them");
+    assert!(Arc::ptr_eq(&first, &again), "the same stages from one render to the next");
+    assert!(thumb(&mut app, PhotoId(2), 256).is_none(), "another photo's thumbnail keeps none");
+}

@@ -48,6 +48,7 @@ pub mod output;
 pub mod profiles;
 pub mod redeye;
 pub mod spots;
+pub mod spots_keep;
 pub mod spots_learned;
 pub mod straighten;
 pub mod tone;
@@ -337,11 +338,13 @@ pub struct StageCache {
     capacity: usize,
     /// Another renderer's per-view state (the GPU renderer keeps its device-resident stages here).
     ext: Mutex<Option<Arc<dyn Any + Send + Sync>>>,
+    /// The spots of the last renders (`spots_keep`): a spot edit draws only what it reaches.
+    spots: spots_keep::KeptStore<spots_keep::CpuKept>,
 }
 
 impl Default for StageCache {
     fn default() -> Self {
-        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None) }
+        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None), spots: Default::default() }
     }
 }
 
@@ -350,6 +353,7 @@ impl StageCache {
     pub fn clear(&self) {
         self.lock().clear();
         *self.ext.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.spots.clear();
     }
 
     /// Per-view state of type `T` kept alongside this cache (created on first use). Lets another
@@ -399,9 +403,10 @@ impl StageCache {
             if let Some((_, c)) = &pl.chroma {
                 add(Arc::as_ptr(c) as usize, size(c));
             }
-            // (the alphas and brush planes: each held once by its cache)
+            // (the alphas and brush planes, and the spots' patches: each held once by its cache)
             masks_bytes += e.masks.bytes();
         }
+        masks_bytes += self.spots.bytes();
         total + masks_bytes
     }
 
@@ -489,7 +494,7 @@ pub struct Plan<'a> {
 }
 
 /// The original's long edge in pixels (an original reported smaller than the source is the source).
-fn native_long(info: &SourceInfo, src_long: usize) -> usize {
+pub(crate) fn native_long(info: &SourceInfo, src_long: usize) -> usize {
     info.native_long.unwrap_or(0).max(src_long).max(1)
 }
 
@@ -549,8 +554,9 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
         format!("{:?}", s.spots),
         format!("{eyes:?}"),
-        // defringe runs in this stage
+        // defringe runs in this stage (and stops when the Optics eye is off)
         format!("{:?}", s.optics),
+        spots_keep::pre_spot_sections(s),
         // and the local tone mapping
         local_tone::enabled(info, s),
         src_long,
@@ -736,7 +742,13 @@ fn render_impl(
         None => {
             // Without a cache the resampled buffer is ours: work on it in place.
             let mut img = if shared.is_some() { (*sampled).clone() } else { Arc::unwrap_or_clone(sampled.clone()) };
-            lin_cpu(&mut img, info, &plan);
+            if let Some((a, c)) = shared {
+                let kept = spots_keep::lin_cpu(&mut img, info, &plan, c.spots.get(a, geo).as_deref());
+                let bytes = kept.as_ref().map_or(0, |k| k.bytes());
+                c.spots.put(a, geo, kept, bytes);
+            } else {
+                lin_cpu(&mut img, info, &plan);
+            }
             local::denoise(&mut img, s, detail_scale);
             Arc::new(img)
         }

@@ -10,6 +10,7 @@ use lightcraft_pipeline::finish::{FinishParams, FinishParamsInput};
 use lightcraft_pipeline::geometry::SampleMode;
 use lightcraft_pipeline::local::plane_at;
 use lightcraft_pipeline::masks::PlanesOut;
+use lightcraft_pipeline::spots_keep::{CpuKept, Kept, KeptStore};
 use lightcraft_pipeline::{Plan, RenderRequest, Rendered, SourceInfo, local};
 use lightcraft_raster::resample::Filter;
 use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8};
@@ -26,6 +27,10 @@ pub struct GpuStages {
     source: Mutex<Option<(Arc<Rgb32f>, Arc<Buf>)>>,
     /// The alphas of the last render's masks and the brush parts they were built from.
     alphas: crate::masks::AlphaStore,
+    /// The spots of the last renders (`spots_keep`), on the device or (for the scene-linear stage on the CPU) on the
+    /// host: a spot edit draws only what it reaches.
+    spots: KeptStore<Kept<Buf, Buf>>,
+    spots_cpu: KeptStore<CpuKept>,
 }
 
 const CAPACITY: usize = 2;
@@ -93,6 +98,8 @@ impl GpuStages {
     pub fn bytes(&self) -> usize {
         let mut seen: Vec<*const Buf> = Vec::new();
         let mut total = 0;
+        // (each spot's patches are its own)
+        let mut patches = 0;
         let mut add = |b: &Arc<Buf>| {
             let p = Arc::as_ptr(b);
             if !seen.contains(&p) {
@@ -117,7 +124,8 @@ impl GpuStages {
             add(b);
         }
         self.alphas.each(&mut add);
-        total
+        patches += self.spots.bytes();
+        total + patches
     }
 
     /// Drop everything (e.g. when memory is needed).
@@ -125,6 +133,8 @@ impl GpuStages {
         self.lock().clear();
         *self.source.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.alphas.clear();
+        self.spots.clear();
+        self.spots_cpu.clear();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -139,18 +149,39 @@ pub(crate) struct Cx<'a> {
     enc: Option<wgpu::CommandEncoder>,
     /// Kernel invocations recorded since the last submit.
     pending: u64,
+    /// Compute passes recorded since the last submit, and the most one submission held.
+    passes: usize,
+    most_passes: usize,
 }
 
 /// Kernel invocations recorded before a render submits them (under one full-size pass over a
 /// 24 MP export, several passes over a preview): no single submission runs long.
 const FLUSH_INVOCATIONS: u64 = 16 << 20;
 
+/// Compute passes recorded before a render submits them, however small: wgpu records each pass in two
+/// Metal command buffers of its own, and Metal loses the device past 4096 of them not yet done. Hundreds
+/// of spots (about 14 small passes each) went past it in one submission and took the app down (issue #82).
+pub(crate) const FLUSH_PASSES: usize = 256;
+
 /// Pixels per dispatch of the per-pixel stage (the heaviest kernel).
 const BAND_PIXELS: usize = 4 << 20;
 
 impl<'a> Cx<'a> {
     pub fn new(gpu: &'a Gpu) -> Cx<'a> {
-        Cx { gpu, enc: Some(gpu.encoder()), pending: 0 }
+        Cx { gpu, enc: Some(gpu.encoder()), pending: 0, passes: 0, most_passes: 0 }
+    }
+
+    /// The most compute passes one submission of this render held.
+    #[cfg(test)]
+    pub fn most_passes(&self) -> usize {
+        self.most_passes.max(self.passes)
+    }
+
+    /// Forget what was recorded since the last submit (it was just submitted).
+    fn submitted(&mut self) {
+        self.pending = 0;
+        self.most_passes = self.most_passes.max(self.passes);
+        self.passes = 0;
     }
 
     /// Record kernel `name` (see [`Gpu::run`]).
@@ -159,14 +190,15 @@ impl<'a> Cx<'a> {
         self.gpu.run(enc, name, p, bufs, groups);
         // every kernel runs 256 invocations per workgroup
         self.pending += groups.iter().map(|g| *g as u64).product::<u64>() * 256;
-        if self.pending >= FLUSH_INVOCATIONS {
+        self.passes += 1;
+        if self.pending >= FLUSH_INVOCATIONS || self.passes >= FLUSH_PASSES {
             self.flush();
         }
     }
 
     /// Submit what is recorded and read back `len` values of `b`.
     pub fn read<T: bytemuck::Pod>(&mut self, b: &Buf, len: usize) -> Vec<T> {
-        self.pending = 0;
+        self.submitted();
         let enc = self.enc.take().unwrap_or_else(|| self.gpu.encoder());
         self.gpu.finish_and_read(enc, b, len)
     }
@@ -176,7 +208,7 @@ impl<'a> Cx<'a> {
     /// i915 hang check; issue #78's iGPU spent seconds on an export recorded as one submission),
     /// and buffers dropped by earlier work become reusable by later work (lower peak memory).
     pub fn flush(&mut self) {
-        self.pending = 0;
+        self.submitted();
         if let Some(enc) = self.enc.take() {
             self.gpu.submit([enc.finish()]);
         }
@@ -184,7 +216,7 @@ impl<'a> Cx<'a> {
 
     /// Submit what is recorded and wait for it (profiling only: stage timings).
     pub fn sync(&mut self) {
-        self.pending = 0;
+        self.submitted();
         if let Some(enc) = self.enc.take() {
             self.gpu.submit([enc.finish()]);
         }
@@ -722,7 +754,17 @@ pub fn render(
     // 2. white balance, defringe, spots, noise reduction
     let lin = match cached.as_ref().and_then(|e| e.lin.clone()).filter(|(k, _)| *k == plan.lin_key) {
         Some((_, b)) => b,
-        None => Arc::new(linear(&mut cx, &sampled, info, &plan, &mut host)),
+        None => {
+            let kept = stages.map(|c| (c.spots.get(src, plan.geo), c.spots_cpu.get(src, plan.geo))).unwrap_or_default();
+            let (b, k) = linear(&mut cx, &sampled, info, &plan, &mut host, (kept.0.as_deref(), kept.1.as_deref()));
+            if let Some(c) = stages {
+                let device = k.0.as_ref().map_or(0, |k| crate::spots_keep::bytes(k));
+                c.spots.put(src, plan.geo, k.0, device);
+                let host = k.1.as_ref().map_or(0, |k| k.bytes());
+                c.spots_cpu.put(src, plan.geo, k.1, host);
+            }
+            Arc::new(b)
+        }
     };
     lap("wb/nr", &mut t, &mut cx);
 
@@ -1036,8 +1078,20 @@ fn unwritten(data: &[[u8; 4]]) -> usize {
     data.chunks(4096).filter(|c| c.iter().fold(255u8, |a, p| a & p[3]) != 255).map(|c| c.iter().filter(|p| p[3] != 255).count()).sum()
 }
 
-/// The white-balanced, retouched, denoised image.
-fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, host: &mut Host) -> Buf {
+/// What a view keeps of its last render's spots, on the device and on the host.
+type KeptSpots = (Option<Arc<Kept<Buf, Buf>>>, Option<Arc<CpuKept>>);
+
+/// The white-balanced, retouched, denoised image, drawing only the spots an edit reaches when `kept` (the view's last
+/// spots) allows; with what to keep for the next render.
+fn linear(
+    cx: &mut Cx<'_>,
+    sampled: &Buf,
+    info: &SourceInfo,
+    plan: &Plan<'_>,
+    host: &mut Host,
+    kept: (Option<&Kept<Buf, Buf>>, Option<&CpuKept>),
+) -> (Buf, KeptSpots) {
+    let mut keep: KeptSpots = (None, None);
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let s = &*plan.settings;
@@ -1048,17 +1102,19 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
             Some(i) => i,
             None => cx.read_rgb(sampled, w, h),
         };
-        lightcraft_pipeline::lin_cpu(&mut img, info, plan);
+        keep.1 = lightcraft_pipeline::spots_keep::lin_cpu(&mut img, info, plan, kept.1);
         cx.gpu.upload(rgb_words(&img))
     } else {
         // `lin_cpu`'s order: white balance, defringe, spots, red eye
-        let m = local::wb_matrix_for(info, s);
-        let mut p = vec![m.is_some() as u32];
-        p.extend(m.unwrap_or_default().iter().flatten().map(|v| v.to_bits()));
-        let out = cx.gpu.buffer(n * 3);
-        map(cx, "wb_k", n, &p, [Some(sampled), None, None], &out);
-        let out = defringe(cx, out, plan);
-        let out = spots(cx, out, plan);
+        let (out, k) = crate::spots_keep::spots(cx, info, plan, kept.0, |cx| {
+            let m = local::wb_matrix_for(info, s);
+            let mut p = vec![m.is_some() as u32];
+            p.extend(m.unwrap_or_default().iter().flatten().map(|v| v.to_bits()));
+            let out = cx.gpu.buffer(n * 3);
+            map(cx, "wb_k", n, &p, [Some(sampled), None, None], &out);
+            defringe(cx, out, plan)
+        });
+        keep.0 = k;
         if plan.eyes.is_empty() {
             out
         } else {
@@ -1069,7 +1125,7 @@ fn linear(cx: &mut Cx<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, ho
             eyed
         }
     };
-    denoise(cx, img, plan)
+    (denoise(cx, img, plan), keep)
 }
 
 /// Defringe (`optics::defringe`) of the white-balanced image.
@@ -1100,17 +1156,19 @@ fn defringe(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
     out
 }
 
-/// Spot removal (`spots::apply`), spot by spot on `img` in place: each spot reads the image as
-/// the earlier ones left it.
-fn spots(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
+/// One spot of the spot removal (`spots::apply`) on `img` in place, reading the image as the earlier spots left it
+/// (`spots_keep` draws them in order).
+pub(crate) fn draw_spot(cx: &mut Cx<'_>, img: &Buf, plan: &Plan<'_>, spot: &lightcraft_develop::Spot) {
     use lightcraft_pipeline::spots;
     let (w, h) = (plan.w, plan.h);
-    for spot in &plan.settings.spots {
-        let Some(l) = spots::layout(spot, &plan.frame, w, h, plan.px_per_long) else { continue };
-        let Some(&first) = l.pts.first() else { continue };
+    // (a hidden spot draws nothing: `DevelopSettings::effective` already leaves it out of a render)
+    if !spot.hidden {
+        let Some(l) = spots::layout(spot, &plan.frame, w, h, plan.px_per_long) else { return };
+        let Some(&first) = l.pts.first() else { return };
+        lightcraft_pipeline::spots_keep::note_spot();
         let offset = match l.offset {
             Some(o) => o,
-            None => auto_source(cx, &img, w, h, first, l.r),
+            None => auto_source(cx, img, w, h, first, l.r),
         };
         let pts = cx.gpu.upload(&l.pts.iter().flat_map(|p| [p.0, p.1]).collect::<Vec<f32>>());
         let nb = l.bw * l.bh;
@@ -1119,16 +1177,15 @@ fn spots(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
         p.extend([l.r, l.inner, l.opacity, offset.0, offset.1].map(f32::to_bits));
         p.push(l.heal as u32);
         let groups = groups2(l.bw, l.bh, [16, 16]);
-        cx.run("spot_prep", &p, &[Some(&img), Some(&pts), Some(&al), Some(&sp), Some(&df), Some(&wt)], groups);
+        cx.run("spot_prep", &p, &[Some(img), Some(&pts), Some(&al), Some(&sp), Some(&df), Some(&wt)], groups);
         // Heal: the tone correction is the masked difference's normalized blur
         let blurred = l.heal.then(|| {
             let sigma = (l.r * 0.6).max(1.0);
             (gaussian(cx, &df, l.bw, l.bh, 3, sigma), gaussian(cx, &wt, l.bw, l.bh, 1, sigma))
         });
         let (bd, bm) = blurred.as_ref().map_or((&df, &wt), |(d, m)| (d, m));
-        cx.run("spot_apply", &p, &[Some(&img), Some(&pts), Some(&al), Some(&sp), Some(bd), Some(bm)], groups);
+        cx.run("spot_apply", &p, &[Some(img), Some(&pts), Some(&al), Some(&sp), Some(bd), Some(bm)], groups);
     }
-    img
 }
 
 /// `spots::auto_source` on the device: every candidate scored at once, the 48 scores read back.
@@ -1259,6 +1316,25 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// However small its passes, a render submits them before there are [`FLUSH_PASSES`] (issue #82).
+    #[test]
+    fn a_render_submits_its_passes_in_bounded_batches() {
+        let _serial = crate::DEVICE_TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(gpu) = crate::device() else {
+            lightcraft_testkit::skip!(Gpu, "no GPU device");
+            return;
+        };
+        let _scope = crate::ctx::RenderScope::new(gpu);
+        let mut cx = Cx::new(gpu);
+        let (a, b) = (gpu.upload(&[1.0f32; 64]), gpu.buffer(16));
+        for _ in 0..3 * FLUSH_PASSES + 7 {
+            map(&mut cx, "subsample", 16, &[4], [Some(&a), None, None], &b);
+        }
+        let most = cx.most_passes();
+        cx.flush();
+        assert!(most <= FLUSH_PASSES, "{most} passes in one submission");
+    }
 
     #[test]
     fn coverage_mask_matches_per_pixel_decision() {
