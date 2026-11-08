@@ -3,8 +3,9 @@
 //! Each group picks its kernel (how much the encoder counts, linear or Gaussian) by leave-one-out error, and each
 //! slider its ridge strength. The accuracy shown to the photographer comes from photos the model never saw: the
 //! examples are split in up to five folds, and each fold is predicted by a model trained (with its own choices)
-//! on the others. A group that is no closer to the photographer's edits than leaving the photo at its defaults is
-//! dropped, and a profile with no group left is refused, so a weak profile can't pretend.
+//! on the others. A slider that is no closer to the photographer's edits than leaving the photo at its defaults is
+//! skipped (a colour wheel's two axes together), so one slider without a pattern never takes the others of its group
+//! with it; a profile with no slider left is refused, so a weak profile can't pretend.
 
 use serde::{Deserialize, Serialize};
 
@@ -16,7 +17,7 @@ use crate::{Error, Result};
 pub const MIN_EXAMPLES: usize = 10;
 /// Most examples a profile holds.
 pub const MAX_EXAMPLES: usize = 200;
-/// A group is kept when its held-out error is at most this share of the defaults' error.
+/// A slider is learned when its held-out error is at most this share of the defaults' error.
 const KEEP_RATIO: f64 = 0.9;
 const FOLDS: usize = 5;
 
@@ -93,6 +94,17 @@ pub struct SliderScore {
     pub error: f64,
     /// The same for leaving the photo at its defaults.
     pub default_error: f64,
+    /// Learned (closer than the defaults on held-out photos), or skipped. `None` in profiles saved before sliders
+    /// were decided one by one: there the group's `kept` says.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kept: Option<bool>,
+}
+
+impl SliderScore {
+    /// Whether the slider is learned, for a report of either kind (`group_kept`: its group's decision).
+    pub fn learned(&self, group_kept: bool) -> bool {
+        self.kept.unwrap_or(group_kept)
+    }
 }
 
 /// Held-out accuracy of one group.
@@ -100,9 +112,10 @@ pub struct SliderScore {
 #[serde(rename_all = "camelCase")]
 pub struct GroupScore {
     pub group: Group,
-    /// Kept in the profile (closer than the defaults), or dropped.
+    /// Some of its sliders are learned, or none.
     pub kept: bool,
-    /// Held-out error as a share of the defaults' error (lower is better; 1 = no better than doing nothing).
+    /// Held-out error of its learned sliders (of all, when none is) as a share of the defaults' error (lower is
+    /// better; 1 = no better than doing nothing).
     pub ratio: f64,
     /// The same for applying the average edit to every photo, like a fixed preset.
     pub preset_ratio: f64,
@@ -298,14 +311,15 @@ pub fn train(
         }
     }
     progress(folds, folds + 1);
-    // score each group on the held-out predictions
+    // score each slider on the held-out predictions; a wheel's two axes (one label) are kept or dropped together
     let mut scores = Vec::with_capacity(plan.len());
     let mut per_photo = vec![(0.0f64, 0.0f64, 0.0f64); n];
+    let mut kept_plan: Vec<(Group, Vec<(usize, f64)>)> = Vec::new();
+    let mut all_ratios = Vec::with_capacity(plan.len());
     for (gi, (group, sliders)) in plan.iter().enumerate() {
-        let (mut err, mut def, mut pre) = (0.0, 0.0, 0.0);
-        let mut slider_scores = Vec::with_capacity(sliders.len());
+        // per slider: summed errors in its own units, and per photo in shared (scaled) units
         let mut sums = vec![(0.0f64, 0.0f64); sliders.len()];
-        let mut photo_errs = vec![(0.0f64, 0.0f64, 0.0f64); n];
+        let mut photo_errs = vec![vec![(0.0f64, 0.0f64, 0.0f64); n]; sliders.len()];
         for (i, e) in all.iter().enumerate() {
             for (si, (idx, scale)) in sliders.iter().enumerate() {
                 let y = e.targets.get(*idx).copied().unwrap_or(0.0) as f64;
@@ -316,37 +330,51 @@ pub fn train(
                     s.0 += de;
                     s.1 += dd;
                 }
-                if let Some(pe) = photo_errs.get_mut(i) {
-                    pe.0 += de / scale;
-                    pe.1 += dd / scale;
-                    pe.2 += dm / scale;
+                if let Some(pe) = photo_errs.get_mut(si).and_then(|v| v.get_mut(i)) {
+                    *pe = (de / scale, dd / scale, dm / scale);
                 }
             }
         }
-        for pe in &photo_errs {
-            err += pe.0;
-            def += pe.1;
-            pre += pe.2;
-        }
-        let ratio = if def > 1e-9 { err / def } else { 1.0 };
-        let kept = ratio <= KEEP_RATIO;
-        if kept {
-            for (acc, pe) in per_photo.iter_mut().zip(&photo_errs) {
-                acc.0 += pe.0;
-                acc.1 += pe.1;
-                acc.2 += pe.2;
+        let total =
+            |si: usize| photo_errs.get(si).map_or((0.0, 0.0, 0.0), |v| v.iter().fold((0.0, 0.0, 0.0), |a, p| (a.0 + p.0, a.1 + p.1, a.2 + p.2)));
+        let label = |si: usize| sliders.get(si).and_then(|(idx, _)| SLIDERS.get(*idx)).map_or("", |s| s.label);
+        let kept: Vec<bool> = (0..sliders.len())
+            .map(|si| {
+                let (err, def) = (0..sliders.len()).filter(|sj| label(*sj) == label(si)).map(total).fold((0.0, 0.0), |a, t| (a.0 + t.0, a.1 + t.1));
+                def > 1e-9 && err <= KEEP_RATIO * def
+            })
+            .collect();
+        let ratio_of = |which: &dyn Fn(usize) -> bool| {
+            let (e, d, p) = (0..sliders.len()).filter(|si| which(*si)).map(total).fold((0.0, 0.0, 0.0), |a, t| (a.0 + t.0, a.1 + t.1, a.2 + t.2));
+            if d > 1e-9 { (e / d, p / d) } else { (1.0, 1.0) }
+        };
+        let any = kept.iter().any(|k| *k);
+        all_ratios.push(ratio_of(&|_| true).0);
+        let (ratio, preset_ratio) = if any { ratio_of(&|si| kept.get(si).copied().unwrap_or(false)) } else { ratio_of(&|_| true) };
+        for (si, k) in kept.iter().enumerate() {
+            if *k && let Some(v) = photo_errs.get(si) {
+                for (acc, pe) in per_photo.iter_mut().zip(v) {
+                    acc.0 += pe.0;
+                    acc.1 += pe.1;
+                    acc.2 += pe.2;
+                }
             }
         }
-        for ((idx, _), (e, d)) in sliders.iter().zip(&sums) {
-            if let Some(s) = SLIDERS.get(*idx) {
-                slider_scores.push(SliderScore { id: s.id.to_string(), error: e / n as f64, default_error: d / n as f64 });
-            }
+        let slider_scores = sliders
+            .iter()
+            .zip(&sums)
+            .zip(&kept)
+            .filter_map(|(((idx, _), (e, d)), k)| {
+                SLIDERS.get(*idx).map(|s| SliderScore { id: s.id.to_string(), error: e / n as f64, default_error: d / n as f64, kept: Some(*k) })
+            })
+            .collect();
+        if any {
+            kept_plan.push((*group, sliders.iter().zip(&kept).filter(|(_, k)| **k).map(|(s, _)| *s).collect()));
         }
-        scores.push(GroupScore { group: *group, kept, ratio, preset_ratio: if def > 1e-9 { pre / def } else { 1.0 }, sliders: slider_scores });
+        scores.push(GroupScore { group: *group, kept: any, ratio, preset_ratio, sliders: slider_scores });
     }
-    let kept: Vec<(Group, Vec<(usize, f64)>)> = plan.iter().zip(&scores).filter(|(_, s)| s.kept).map(|(p, _)| p.clone()).collect();
-    if kept.is_empty() {
-        let worst = scores.iter().map(|s| format!("{} {:.0} %", s.group.label(), s.ratio * 100.0)).collect::<Vec<_>>().join(", ");
+    if kept_plan.is_empty() {
+        let worst = scores.iter().zip(&all_ratios).map(|(s, r)| format!("{} {:.0} %", s.group.label(), r * 100.0)).collect::<Vec<_>>().join(", ");
         return Err(Error::Train(format!(
             "these examples don't share a pattern the profile can learn: on photos it had not seen, it was no closer to your edits than leaving them at their defaults (error against the defaults': {worst}). Add more examples, or split them into profiles by kind of photo"
         )));
@@ -359,7 +387,7 @@ pub fn train(
         ratio: if def > 1e-9 { err / def } else { 1.0 },
         groups: scores,
     };
-    let (model, _) = fit_all(layout, &all, &kept, cancel)?;
+    let (model, _) = fit_all(layout, &all, &kept_plan, cancel)?;
     progress(folds + 1, folds + 1);
     Ok((model, report))
 }

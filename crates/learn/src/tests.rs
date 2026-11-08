@@ -370,3 +370,81 @@ fn a_profile_names_dinov2_small_with_768_numbers_or_no_encoder() {
     v["features"]["layout"]["encoder"] = 768.into();
     assert!(Profile::from_json(&v.to_string()).is_err());
 }
+
+/// Examples where Exposure follows the rule, Shadows is always +20, and Contrast is random (as often up as down).
+fn mixed_profile() -> Profile {
+    let mut p = stats_profile(&[Group::Tone]);
+    for (seed, light, cast) in grid(40, 0) {
+        let up = (seed * 7919) % 2 == 0;
+        let contrast = (20 + (seed * 31) % 40) as f64;
+        p.add_example(example(seed, light, cast, &|l, c| {
+            let mut s = rule(l, c);
+            s.light.contrast = if up { contrast } else { -contrast };
+            s
+        }))
+        .unwrap();
+    }
+    p
+}
+
+#[test]
+fn a_slider_without_a_pattern_is_skipped_and_the_others_of_its_group_are_learned() {
+    let mut p = mixed_profile();
+    let report = p.train(&|| false, &mut |_, _| {}).unwrap().clone();
+    let tone = report.groups.iter().find(|g| g.group == Group::Tone).unwrap();
+    assert!(tone.kept, "{report:?}");
+    let learned = |id: &str| tone.sliders.iter().find(|s| s.id == id).map(|s| s.learned(tone.kept));
+    assert_eq!(learned("light.exposure"), Some(true), "{tone:?}");
+    assert_eq!(learned("light.shadows"), Some(true), "{tone:?}");
+    assert_eq!(learned("light.contrast"), Some(false), "{tone:?}");
+    let model = p.model.as_ref().unwrap();
+    let ids: Vec<&str> = model.groups.iter().flat_map(|g| g.sliders.iter().map(String::as_str)).collect();
+    assert!(ids.contains(&"light.exposure") && !ids.contains(&"light.contrast"), "{ids:?}");
+}
+
+#[test]
+fn applying_changes_only_the_learned_sliders() {
+    let mut p = mixed_profile();
+    p.train(&|| false, &mut |_, _| {}).unwrap();
+    let mut current = DevelopSettings::default();
+    current.light.contrast = 7.0;
+    current.light.whites = -5.0;
+    let (w, h, rgb) = scene(77, 0.3, 0.2);
+    let out = crate::apply(&p, &features::photo_stats(w, h, &rgb).unwrap(), &current, &DevelopSettings::default()).unwrap();
+    assert!(out.light.exposure > 0.5, "{}", out.light.exposure);
+    assert!((out.light.shadows - 20.0).abs() < 1.0, "{}", out.light.shadows);
+    assert_eq!(out.light.contrast, 7.0, "Contrast was skipped: the photo keeps its own");
+    let mut back = out.clone();
+    (back.light.exposure, back.light.shadows) = (current.light.exposure, current.light.shadows);
+    assert_eq!(back, current, "nothing but Exposure and Shadows changes");
+}
+
+#[test]
+fn profiles_saved_before_sliders_were_decided_one_by_one_load_and_apply_as_before() {
+    // a profile file as the earlier build wrote it: no `kept` on any slider score
+    let mut p = stats_profile(&[Group::Tone, Group::WhiteBalance]);
+    for (seed, light, cast) in grid(20, 0) {
+        p.add_example(example(seed, light, cast, &rule)).unwrap();
+    }
+    p.train(&|| false, &mut |_, _| {}).unwrap();
+    let mut v: serde_json::Value = serde_json::from_str(&p.to_json().unwrap()).unwrap();
+    for g in v["report"]["groups"].as_array_mut().unwrap() {
+        for s in g["sliders"].as_array_mut().unwrap() {
+            s.as_object_mut().unwrap().remove("kept");
+        }
+    }
+    let old_text = v.to_string();
+    let old = Profile::from_json(&old_text).unwrap();
+    for g in &old.report.as_ref().unwrap().groups {
+        for s in &g.sliders {
+            assert_eq!(s.kept, None);
+            assert_eq!(s.learned(g.kept), g.kept, "the group's decision stands for its sliders");
+        }
+    }
+    let (w, h, rgb) = scene(91, 0.35, -0.3);
+    let f = features::photo_stats(w, h, &rgb).unwrap();
+    let base = DevelopSettings::default();
+    assert_eq!(crate::apply(&old, &f, &base, &base).unwrap(), crate::apply(&p, &f, &base, &base).unwrap());
+    // and it is written back the way it was read
+    assert_eq!(Profile::from_json(&old.to_json().unwrap()).unwrap(), old);
+}

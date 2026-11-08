@@ -23,7 +23,7 @@ fn profile_json(id: &str, p: &Profile) -> Value {
                 "kept": g.kept,
                 "errorVsDefaults": g.ratio,
                 "presetErrorVsDefaults": g.preset_ratio,
-                "sliders": g.sliders.iter().map(|s| json!({"id": s.id, "error": s.error, "defaultError": s.default_error})).collect::<Vec<_>>(),
+                "sliders": g.sliders.iter().map(|s| json!({"id": s.id, "error": s.error, "defaultError": s.default_error, "learned": s.learned(g.kept)})).collect::<Vec<_>>(),
             })).collect::<Vec<_>>(),
         })
     });
