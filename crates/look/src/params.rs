@@ -121,8 +121,9 @@ impl Param {
             Param::Control(id) if id.starts_with("mixer.") => (100.0, 2e-3),
             Param::Control(id) if id.starts_with("light.") || id.starts_with("color.") => (100.0, 1e-3),
             Param::Control(_) => (100.0, 2e-4),
-            Param::Mired => (50.0, 2e-4),
-            Param::Tint => (50.0, 2e-4),
+            // a white balance far off is rarely the look: a strong cast should rather go to the grading wheels
+            Param::Mired => (50.0, 1.5e-3),
+            Param::Tint => (50.0, 1.5e-3),
             Param::Wheel(..) => (50.0, 2e-3),
         };
         let d = (to - from) / scale;

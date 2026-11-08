@@ -196,10 +196,9 @@ impl Fitter<'_> {
 
     fn stages(&mut self, d: &mut DevelopSettings, best: &mut f64, opts: &MatchOptions) -> Result<(), Stop> {
         use Param::{Control, Mired, Tint, Wheel};
-        let mut broad = vec![Control("light.exposure"), Control("color.saturation")];
-        if opts.white_balance {
-            broad.extend([Mired, Tint]);
-        }
+        // white balance first: a cast is the white balance's to fix, before Saturation could drain it instead
+        let mut broad = if opts.white_balance { vec![Mired, Tint] } else { Vec::new() };
+        broad.push(Control("light.exposure"));
         self.descend(d, best, &broad, 5)?;
         let tone = [
             Control("light.exposure"),
@@ -210,11 +209,12 @@ impl Fitter<'_> {
             Control("light.blacks"),
         ];
         self.descend(d, best, &tone, 4)?;
-        let mut colour = vec![Control("color.vibrance"), Control("color.saturation")];
+        // colourfulness and white balance together: Saturation scales a cast as well, so each corrects the other
+        let mut colour = vec![Control("color.saturation"), Control("color.vibrance")];
         if opts.white_balance {
             colour.extend([Mired, Tint]);
         }
-        self.descend(d, best, &colour, 3)?;
+        self.descend(d, best, &colour, 5)?;
         if opts.grading {
             let wheels =
                 [Zone::Midtones, Zone::Shadows, Zone::Highlights].into_iter().flat_map(|z| [Wheel(z, false), Wheel(z, true)]).collect::<Vec<_>>();
@@ -235,13 +235,16 @@ impl Fitter<'_> {
         if opts.curve {
             self.fit_curve(d, best)?;
         }
-        let polish = [
+        let mut polish = vec![
             Control("light.exposure"),
             Control("light.contrast"),
             Control("color.saturation"),
             Wheel(Zone::Midtones, false),
             Wheel(Zone::Midtones, true),
         ];
+        if opts.white_balance {
+            polish.extend([Mired, Tint]);
+        }
         self.descend(d, best, &polish, 1)?;
         Ok(())
     }
