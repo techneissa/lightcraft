@@ -220,6 +220,8 @@ impl DevelopSettings {
             // and so does the camera's own local tone mapping
             Section::Profile => {
                 self.profile = Profile::default();
+                // Match Look's residual Look (fork) belongs to the Profile group
+                self.look = ResidualLook::default();
             }
             _ => {}
         }

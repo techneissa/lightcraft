@@ -124,6 +124,8 @@ pub struct MatchResult {
     pub curve: Option<Vec<Point>>,
     /// The residual Look the match set (an empty one when it removed the photo's earlier Look), if it changed it.
     pub look: Option<ResidualLook>,
+    /// The photo's Look when it was matched ([`MatchResult::scaled`] blends from it).
+    pub look_from: ResidualLook,
     /// How far the looks were apart before and after (see [`stats::loss`]).
     pub loss_before: f64,
     pub loss_after: f64,
@@ -190,7 +192,7 @@ impl MatchResult {
         }
         r.changes.retain(|c| (c.to - c.from).abs() > 1e-9);
         r.curve = self.curve.as_ref().filter(|_| k > 0.0).map(|pts| pts.iter().map(|p| Point::new(p.x, p.x + (p.y - p.x) * k)).collect());
-        r.look = self.look.as_ref().filter(|_| k > 0.0).map(|l| ResidualLook { amount: (l.amount * k).round(), ..l.clone() });
+        r.look = self.look.as_ref().filter(|_| k > 0.0).map(|to| ResidualLook::blend(&self.look_from, to, k));
         r
     }
 
@@ -231,8 +233,6 @@ fn working_copy(s: &DevelopSettings, info: &SourceInfo) -> DevelopSettings {
     d.wb.temp = t;
     d.wb.tint = tint;
     d.wb.mode = WbMode::Custom;
-    // a new match starts without the photo's earlier residual Look
-    d.look = ResidualLook::default();
     d
 }
 
@@ -288,7 +288,11 @@ pub fn match_look(
     if goals.is_empty() {
         return Err(LookError::Invalid("the reference regions are empty".into()));
     }
-    let start = working_copy(target.settings, &info);
+    let mut start = working_copy(target.settings, &info);
+    if opts.look {
+        // a match that fits a Look starts without the photo's earlier one
+        start.look = ResidualLook::default();
+    }
     let mut d = start.clone();
     let mut fitter = fit::Fitter {
         src: &src,
@@ -316,9 +320,12 @@ pub fn match_look(
         }
     }
     let curve = (d.curve.master != start.curve.master).then(|| d.curve.master.clone());
-    let look = (d.look != target.settings.look && !(d.look.is_identity() && target.settings.look.is_identity())).then(|| d.look.clone());
+    // the Look changes only when this match fits one (it then replaces the photo's earlier Look); unticked, the
+    // photo keeps its Look and the sliders were fitted with it in place
+    let look = (opts.look && d.look != target.settings.look && !(d.look.is_identity() && target.settings.look.is_identity())).then(|| d.look.clone());
     let mut settings = target.settings.clone();
-    let result = MatchResult { settings: settings.clone(), changes, curve, look, loss_before, loss_after, evals };
+    let result =
+        MatchResult { settings: settings.clone(), changes, curve, look, look_from: target.settings.look.clone(), loss_before, loss_after, evals };
     result.apply_to(&mut settings, &info);
     Ok(MatchResult { settings, ..result })
 }

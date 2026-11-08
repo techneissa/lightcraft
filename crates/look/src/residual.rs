@@ -19,6 +19,8 @@ const CAP_BAND_L: f64 = 0.03;
 const CAP_BAND_AB: f64 = 0.02;
 /// Most the lightness offset changes from one knot to the next, so the lightness map stays smooth and rising.
 const MAX_KNOT_STEP: f64 = 0.02;
+/// Most smoothing passes; it settles in a few.
+const SMOOTH_PASSES: usize = 64;
 /// Offsets all below this are noise, well under a visible step (OkLab ~0.02): no Look.
 const NOISE: f64 = 0.01;
 /// A zone counts once it holds this share of both pictures.
@@ -65,19 +67,28 @@ fn lightness_offset(now: &[f32; L_QUANTILES.len()], goal: &[f32; L_QUANTILES.len
 
 /// Keep neighbouring lightness knots within [`MAX_KNOT_STEP`] of each other, the ends at 0.
 fn smooth(knots: &mut [f64; LOOK_KNOTS]) {
-    if let Some(v) = knots.first_mut() {
-        *v = 0.0;
+    let last = LOOK_KNOTS - 1;
+    knots[0] = 0.0;
+    knots[last] = 0.0;
+    for _ in 0..SMOOTH_PASSES {
+        let before = *knots;
+        // interior knots only: the ends stay pinned at 0
+        for i in 1..last {
+            let prev = knots[i - 1];
+            knots[i] = knots[i].clamp(prev - MAX_KNOT_STEP, prev + MAX_KNOT_STEP);
+        }
+        for i in (1..last).rev() {
+            let next = knots[i + 1];
+            knots[i] = knots[i].clamp(next - MAX_KNOT_STEP, next + MAX_KNOT_STEP);
+        }
+        if *knots == before {
+            break;
+        }
     }
-    if let Some(v) = knots.last_mut() {
-        *v = 0.0;
-    }
-    for i in 1..LOOK_KNOTS {
-        let prev = knots[i - 1];
-        knots[i] = knots[i].clamp(prev - MAX_KNOT_STEP, prev + MAX_KNOT_STEP);
-    }
-    for i in (0..LOOK_KNOTS - 1).rev() {
-        let next = knots[i + 1];
-        knots[i] = knots[i].clamp(next - MAX_KNOT_STEP, next + MAX_KNOT_STEP);
+    let smooth_now = knots.windows(2).all(|w| (w[1] - w[0]).abs() <= MAX_KNOT_STEP + 1e-12);
+    // (never seen: a map that did not settle is dropped rather than kept rough)
+    if !smooth_now || knots.iter().any(|v| !v.is_finite()) {
+        *knots = [0.0; LOOK_KNOTS];
     }
 }
 
@@ -141,6 +152,7 @@ impl Fitter<'_> {
         let mut trial = d.clone();
         trial.look = ResidualLook::default();
         let mut found = false;
+        let mut low = *best;
         'rounds: for _ in 0..ROUNDS {
             let now = self.measure(&trial);
             let mut target = trial.look.clone();
@@ -159,8 +171,8 @@ impl Fitter<'_> {
                         Err(Stop::Budget) => break 'rounds,
                         Err(e) => return Err(e),
                     };
-                    if l < *best - crate::fit::tolerance(*best) {
-                        *best = l;
+                    if l < low - crate::fit::tolerance(low) {
+                        low = l;
                         trial = t;
                         moved = true;
                         found = true;
@@ -174,6 +186,7 @@ impl Fitter<'_> {
         }
         if found && biggest(&trial.look) >= NOISE {
             *d = trial;
+            *best = low;
         }
         Ok(())
     }
@@ -225,6 +238,26 @@ mod tests {
         smooth(&mut k);
         assert_eq!((k[0], k[LOOK_KNOTS - 1]), (0.0, 0.0));
         assert!(k.windows(2).all(|w| (w[1] - w[0]).abs() <= MAX_KNOT_STEP + 1e-12), "{k:?}");
+    }
+
+    #[test]
+    fn random_lightness_maps_end_at_zero_and_stay_smooth() {
+        let mut seed = 0x2545_f491_4f6c_dd1du64;
+        let mut next = || {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            (seed >> 11) as f64 / (1u64 << 53) as f64
+        };
+        for _ in 0..20_000 {
+            let mut k = [0.0; LOOK_KNOTS];
+            for v in &mut k {
+                *v = (next() * 2.0 - 1.0) * CAP_L * 2.0;
+            }
+            smooth(&mut k);
+            assert_eq!((k[0], k[LOOK_KNOTS - 1]), (0.0, 0.0), "{k:?}");
+            assert!(k.windows(2).all(|w| (w[1] - w[0]).abs() <= MAX_KNOT_STEP + 1e-12), "{k:?}");
+        }
     }
 
     #[test]

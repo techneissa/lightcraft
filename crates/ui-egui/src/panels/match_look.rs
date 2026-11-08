@@ -65,12 +65,12 @@ pub struct State {
 type PreviewSlot = std::sync::Arc<std::sync::Mutex<Option<Option<Rgba8>>>>;
 
 impl State {
-    /// A match started from the window is still running.
     /// Whether the match also fits the residual Look.
     pub fn look(&self) -> bool {
         self.look
     }
 
+    /// A match started from the window is still running.
     pub fn running(&self) -> bool {
         self.running
     }

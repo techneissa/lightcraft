@@ -157,6 +157,26 @@ impl Param {
         }
     }
 
+    /// The range the fit keeps this number in, whatever the move (a grading wheel: the most saturation, on its
+    /// distance from the centre). A photo already past it is not pulled in, only kept from going further.
+    pub fn band(&self) -> (f64, f64) {
+        match self {
+            Param::Control(id) if *id == "light.exposure" => (-3.0, 3.0),
+            Param::Control(id) if id.starts_with("mixer.") => match id.rsplit('.').next().unwrap_or("") {
+                "hue" => (-25.0, 25.0),
+                "sat" => (-50.0, 50.0),
+                _ => (-40.0, 40.0),
+            },
+            Param::Control(id) if *id == "light.highlights" || *id == "light.shadows" => (-70.0, 70.0),
+            Param::Control(id) if *id == "color.saturation" => (-50.0, 50.0),
+            Param::Control(_) => (-60.0, 60.0),
+            // 2500 K to 12000 K
+            Param::Mired => (1e6 / 12000.0, 1e6 / 2500.0),
+            Param::Tint => (-60.0, 60.0),
+            Param::Wheel(..) => (-40.0, 40.0),
+        }
+    }
+
     /// The other axis of a grading wheel.
     pub fn other_axis(&self) -> Option<Param> {
         match self {

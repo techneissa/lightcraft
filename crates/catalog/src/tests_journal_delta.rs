@@ -174,7 +174,7 @@ fn replaying_patches_gives_what_whole_records_gave() {
     assert_eq!((r.failed, r.upgraded_from), (0, Some(1)));
     assert_eq!(old.get(crate::fork_format::BEFORE_UPGRADE), Some(snap_of(&base, 1)), "the fork 1 snapshot is kept");
     let v: serde_json::Value = serde_json::from_slice(&old.get(SNAPSHOT).unwrap()).unwrap();
-    assert_eq!((v["format"].as_str(), v["version"].as_u64()), (Some("lightcraft-catalog-fork"), Some(2)));
+    assert_eq!((v["format"].as_str(), v["version"].as_u64()), (Some("lightcraft-catalog-fork"), Some(u64::from(crate::fork_format::VERSION))));
 
     assert_eq!(new.to_snapshot(), was.to_snapshot());
     assert_eq!(new.to_snapshot(), live.c.to_snapshot());

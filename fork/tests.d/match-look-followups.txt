@@ -3,3 +3,5 @@ cargo test -p lightcraft-pipeline --lib residual_look
 cargo test -p lightcraft-develop --lib controls
 cargo test -p lightcraft-engine --lib -- match_look
 cargo test -p lightcraft-ui-egui --lib -- tests::match_look
+cargo test -p lightcraft-catalog --lib fork_format
+cargo test -p lightcraft-develop --lib residual_look

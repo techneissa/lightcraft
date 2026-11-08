@@ -167,3 +167,33 @@ fn the_residual_look_is_saved_with_the_edit_when_asked() {
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(*s.develop_of(a).unwrap(), before);
 }
+
+/// `match-look-followups`: the Look is part of the Profile group, so Copy / Paste and a preset carry it.
+#[test]
+fn copy_paste_and_presets_carry_the_look() {
+    let (mut s, ids) = demo();
+    let (a, b, c) = (ids[0], ids[1], ids[2]);
+    let look = json!({"cast": [[0.0, -0.02], [0.01, 0.0], [0.0, 0.0]], "amount": 70.0});
+    s.execute("library.select", &json!({"ids": [a], "active": a})).unwrap();
+    s.execute("develop.merge", &json!({"settings": {"look": look}})).unwrap();
+    let want = s.develop_of(a).unwrap().look.clone();
+    assert!(want.is_active());
+    s.execute("develop.copy", &json!({"groups": ["profile"]})).unwrap();
+    s.execute("develop.paste", &json!({"ids": [b]})).unwrap();
+    assert_eq!(s.develop_of(b).unwrap().look, want, "pasted");
+    let preset = s.execute("preset.create", &json!({"name": "Look", "groups": ["profile"]})).unwrap()["id"].as_str().unwrap().to_string();
+    s.execute("preset.apply", &json!({"id": preset, "ids": [c]})).unwrap();
+    assert_eq!(s.develop_of(c).unwrap().look, want, "a preset carries it");
+}
+
+/// With the Residual Look box unticked, a match keeps the photo's Look.
+#[test]
+fn an_unticked_match_keeps_the_photos_look() {
+    let (mut s, ids) = demo();
+    let (a, reference) = (ids[0], ids[1]);
+    s.execute("library.select", &json!({"ids": [a], "active": a})).unwrap();
+    s.execute("develop.merge", &json!({"settings": {"look": {"cast": [[0.0, 0.0], [0.02, 0.0], [0.0, 0.0]]}}})).unwrap();
+    let before = s.develop_of(a).unwrap().look.clone();
+    s.execute("develop.matchLook", &json!({"ids": [a], "reference": {"photo": reference}})).unwrap();
+    assert_eq!(s.develop_of(a).unwrap().look, before);
+}

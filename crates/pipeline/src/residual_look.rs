@@ -148,7 +148,13 @@ fn table(n: usize, f: impl Fn([f32; 3]) -> [f32; 3]) -> Lut3d {
     Lut3d { size: n, data, domain_min: [0.0; 3], domain_max: [1.0; 3], title: None }
 }
 
-type Key = (Vec<u32>, usize, u32, u32);
+/// What a cached table was built from: the Look's offsets, and with a LUT profile its id, the registry's generation
+/// ([`crate::lut::generation`]), the profile's amount and the Look's Amount (both baked into a composed table).
+#[derive(Clone, PartialEq)]
+struct Key {
+    look: Vec<u32>,
+    profile: Option<(String, u64, u32, u32)>,
+}
 
 /// The last table built (a render reuses it while the Look and profile stay the same).
 fn cache() -> &'static Mutex<Option<(Key, Arc<Lut3d>)>> {
@@ -157,48 +163,36 @@ fn cache() -> &'static Mutex<Option<(Key, Arc<Lut3d>)>> {
 }
 
 /// The finishing stage's LUT for `s`: the LUT profile `profile` (with its amount) as it is, the residual Look's
-/// table with its Amount, or both composed into one table. B&W photos skip the Look.
+/// table with its Amount, or both composed into one table. B&W photos, and the Profile eye off, skip the Look.
 pub fn finish_lut(s: &DevelopSettings, profile: Option<(Arc<Lut3d>, f32)>) -> Option<(Arc<Lut3d>, f32)> {
     let look = &s.look;
-    if !look.is_active() || s.treatment == Treatment::Bw {
+    // the Profile group's eye switches the Look off (a LUT profile is left as it was: it has always rendered whatever
+    // the eye says)
+    if !look.is_active() || s.treatment == Treatment::Bw || !s.section_enabled("profile") {
         return profile;
     }
     let k = (look.amount / 100.0).clamp(0.0, 1.0) as f32;
-    let bits = look
-        .lightness
-        .iter()
-        .chain(look.cast.iter().flatten())
-        .chain(look.bands.iter().flatten())
-        .chain([&look.chroma])
-        .map(|v| (*v as f32).to_bits())
-        .collect();
-    let key: Key = (
-        bits,
-        profile.as_ref().map_or(0, |(l, _)| Arc::as_ptr(l) as usize),
-        profile.as_ref().map_or(0, |(_, a)| a.to_bits()),
-        if profile.is_some() { k.to_bits() } else { 0 },
-    );
-    let mut c = cache().lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some((ck, lut)) = c.as_ref()
-        && *ck == key
-    {
-        let lut = lut.clone();
-        return Some((lut, if profile.is_some() { 1.0 } else { k }));
-    }
-    let (lut, amount) = match &profile {
-        None => (table(GRID, |c| apply(look, c)), k),
-        Some((p, pk)) => {
-            let composed = table(GRID_COMPOSED, |c| {
-                let m = p.apply(c);
-                let q = std::array::from_fn(|i| (c[i] + (m[i] - c[i]) * pk).clamp(0.0, 1.0));
-                let o = apply(look, q);
-                std::array::from_fn(|i| q[i] + (o[i] - q[i]) * k)
-            });
-            (composed, 1.0)
-        }
+    let bits = look.lightness.iter().chain(look.cast.iter().flatten()).chain(look.bands.iter().flatten()).chain([&look.chroma]);
+    let key = Key {
+        look: bits.map(|v| (*v as f32).to_bits()).collect(),
+        profile: profile.as_ref().map(|(_, a)| (s.profile.id.clone(), crate::lut::generation(), a.to_bits(), k.to_bits())),
     };
-    let lut = Arc::new(lut);
-    *c = Some((key, lut.clone()));
+    let amount = if profile.is_some() { 1.0 } else { k };
+    let cached = cache().lock().unwrap_or_else(PoisonError::into_inner).as_ref().filter(|(ck, _)| *ck == key).map(|(_, l)| l.clone());
+    if let Some(lut) = cached {
+        return Some((lut, amount));
+    }
+    // built outside the lock: another render never waits for this one's table
+    let lut = Arc::new(match &profile {
+        None => table(GRID, |c| apply(look, c)),
+        Some((p, pk)) => table(GRID_COMPOSED, |c| {
+            let m = p.apply(c);
+            let q = std::array::from_fn(|i| (c[i] + (m[i] - c[i]) * pk).clamp(0.0, 1.0));
+            let o = apply(look, q);
+            std::array::from_fn(|i| q[i] + (o[i] - q[i]) * k)
+        }),
+    });
+    *cache().lock().unwrap_or_else(PoisonError::into_inner) = Some((key, lut.clone()));
     Some((lut, amount))
 }
 
@@ -243,6 +237,9 @@ mod tests {
         s.look.amount = 0.0;
         assert!(finish_lut(&s, None).is_none(), "Amount 0 is off");
         s.look.amount = 100.0;
+        s.set_section_enabled("profile", false);
+        assert!(finish_lut(&s, None).is_none(), "the Profile eye off hides the Look");
+        s.set_section_enabled("profile", true);
         s.treatment = Treatment::Bw;
         assert!(finish_lut(&s, None).is_none(), "B&W skips the Look");
     }
@@ -296,5 +293,22 @@ mod tests {
         let out = crate::render(&src, &info, &warm, &req).image;
         let (p, o) = (plain.get(10, 10), out.get(10, 10));
         assert!(o[0] as i32 - o[2] as i32 > p[0] as i32 - p[2] as i32 + 5, "{p:?} → {o:?}");
+    }
+
+    /// A LUT profile changed under the same id gets a new composed table, never the stale one, even when the new
+    /// table sits at the old one's address (here: the same allocation, changed in place after it was unregistered).
+    #[test]
+    fn a_profile_registered_again_rebuilds_the_composed_table() {
+        let id = "lut:residual-look-regen";
+        let mut s = DevelopSettings { look: look(|l| l.cast = [[0.0, 0.03]; 3]), ..Default::default() };
+        s.profile.id = id.to_string();
+        crate::lut::register(id, table(9, |c| [c[2], c[1], c[0]]));
+        let mut p = crate::lut::get(id).unwrap();
+        let first = finish_lut(&s, Some((p.clone(), 1.0))).unwrap().0.apply([0.2, 0.5, 0.8]);
+        crate::lut::unregister(id);
+        Arc::get_mut(&mut p).unwrap().data = table(9, |c| c).data;
+        let second = finish_lut(&s, Some((p, 1.0))).unwrap().0.apply([0.2, 0.5, 0.8]);
+        let want = apply(&s.look, [0.2, 0.5, 0.8]);
+        assert!(want.iter().zip(second).all(|(a, b)| (a - b).abs() < 0.01), "{first:?} → {second:?}, want {want:?}");
     }
 }
