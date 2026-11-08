@@ -36,6 +36,7 @@ lightcraft-film = { path = "crates/film" }
 lightcraft-lensdb = { path = "crates/lensdb" }
 lightcraft-inpaint = { path = "crates/inpaint" }
 lightcraft-lama = { path = "crates/lama" }
+lightcraft-learn = { path = "crates/learn" }
 lightcraft-scenes = { path = "crates/scenes" }
 lightcraft-pipeline = { path = "crates/pipeline" }
 lightcraft-gpu = { path = "crates/gpu" }
@@ -52,6 +53,7 @@ lightcraft-heif = { path = "crates/heif" }
 lightcraft-segment = { path = "crates/segment" }
 lightcraft-reflections = { path = "crates/reflections" }
 lightcraft-birefnet = { path = "crates/birefnet" }
+lightcraft-parsing = { path = "crates/parsing" }
 lightcraft-geocode = { path = "crates/geocode" }
 lightcraft-slideshow = { path = "crates/slideshow" }
 lightcraft-testkit = { path = "crates/testkit" }

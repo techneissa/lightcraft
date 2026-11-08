@@ -1,0 +1,33 @@
+[package]
+name = "lightcraft-parsing"
+version.workspace = true
+edition.workspace = true
+license = "MIT"
+description = "LightCraft people parsing: per-person part masks (skin, hair, eyes, lips, clothes) and dense face landmarks, in pure Rust on candle (L3)"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+log = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+sha2 = { workspace = true }
+image = { workspace = true }
+
+# the models run natively only (the web build has no AI masks)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+candle-core = { workspace = true, features = ["metal"] }
+candle-nn = { workspace = true, features = ["metal"] }
+
+[dev-dependencies]
+lightcraft-testkit = { workspace = true }
+lightcraft-faces = { workspace = true }
+
+[[example]]
+name = "parts"

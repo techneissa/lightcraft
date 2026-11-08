@@ -43,6 +43,8 @@ mod inline_rename;
 pub mod keybinds;
 pub mod layers_task;
 pub mod lens_db;
+// Learn My Edits window (fork/learn-my-edits.md)
+pub mod learn_edits;
 pub mod lightroom_import;
 pub mod links;
 mod local_profile_offer;

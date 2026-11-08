@@ -318,6 +318,7 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     let d = app.session.develop_of(id).unwrap_or_default();
     super::remove_fill::heading(app, ui);
     egui::Frame::NONE.inner_margin(super::remove_compact::margin()).show(ui, |ui| super::remove_compact::tools(app, ui));
+    super::remove_object::section(app, ui);
     // brush settings; with a spot selected they edit that spot too
     let sel = app.session.active_spot.and_then(|i| d.spots.get(i).map(|sp| (i, sp.clone())));
     if let Some((i, sp)) = &sel {
@@ -342,8 +343,10 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         decimals: 0,
         track: lightcraft_develop::Track::Plain,
     };
+    // (a spot in an object's shape: its size is how far it reaches past the object, `fork/object-remove.md`)
+    let (size_label, size_max) = super::remove_object::size_label(sel.as_ref().is_some_and(|(_, sp)| sp.area.is_some()));
     let sliders = [
-        (plain("ui.removeSize", "Size", 1.0, 250.0, 20.0), "size", (app.ui.remove_size * 1000.0) as f64),
+        (plain("ui.removeSize", size_label, 1.0, size_max, 20.0), "size", (app.ui.remove_size * 1000.0) as f64),
         (plain("ui.removeFeather", "Feather", 0.0, 100.0, 50.0), "feather", app.ui.remove_feather as f64),
         (plain("ui.removeOpacity", "Opacity", 0.0, 100.0, 100.0), "opacity", app.ui.remove_opacity as f64),
     ];
@@ -364,7 +367,9 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if sel.is_some() {
         padded(ui, |ui| {
             ui.horizontal(|ui| {
-                if text_button(ui, "spotRefresh", crate::i18n::tr("Refresh Source (/)"), false).clicked() {
+                // (a spot rebuilt from its surroundings has no source to refresh, `fork/object-remove.md`)
+                let sourced = sel.as_ref().is_some_and(|(_, sp)| super::remove_object::has_source(sp));
+                if sourced && text_button(ui, "spotRefresh", crate::i18n::tr("Refresh Source (/)"), false).clicked() {
                     let _ = app.run("spot.refreshSource", json!({}));
                 }
                 if text_button(ui, "spotDelete", crate::i18n::tr("Delete (⌫)"), false).clicked() {

@@ -46,6 +46,7 @@ pub mod import;
 pub mod keymap;
 pub mod lightroom_destination;
 pub mod merge;
+pub mod people_parts;
 pub mod print_view;
 pub mod rules_editor;
 pub mod settings;

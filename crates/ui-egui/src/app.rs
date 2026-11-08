@@ -544,7 +544,8 @@ impl LightcraftApp {
             self.ai_error(ctx, e, None);
         }
         let seg = &self.session.segmenter;
-        if seg.busy() || seg.pending_clicks().is_some() {
+        // (Object clicks of the Remove tool too, `fork/object-remove.md`)
+        if seg.busy() || seg.pending_clicks().is_some() || self.session.object_jobs.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         let download = seg.download_status();

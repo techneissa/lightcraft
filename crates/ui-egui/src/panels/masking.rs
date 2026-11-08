@@ -336,6 +336,7 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         let out = slider(ui, s, v, true, None);
         apply_slider_out(app, s, out, |app, v| app.run("mask.adjust", json!({"values": {s.id: v}})));
     }
+    super::mask_recolor::row(app, ui, &m);
     let amt = ControlSpec {
         id: "amount",
         label: "Amount",

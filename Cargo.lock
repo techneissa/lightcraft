@@ -3793,12 +3793,14 @@ dependencies = [
  "lightcraft-gpu",
  "lightcraft-heif",
  "lightcraft-lama",
+ "lightcraft-learn",
  "lightcraft-lensdb",
  "lightcraft-look",
  "lightcraft-macraw",
  "lightcraft-map",
  "lightcraft-merge",
  "lightcraft-meta",
+ "lightcraft-parsing",
  "lightcraft-pipeline",
  "lightcraft-preview",
  "lightcraft-raster",
@@ -3931,6 +3933,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-learn"
+version = "0.18.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "image",
+ "lightcraft-color",
+ "lightcraft-develop",
+ "lightcraft-geom",
+ "lightcraft-testkit",
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "lightcraft-lensdb"
 version = "0.18.0"
 dependencies = [
@@ -4021,6 +4040,22 @@ dependencies = [
  "quick-xml 0.41.0",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lightcraft-parsing"
+version = "0.18.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "image",
+ "lightcraft-faces",
+ "lightcraft-testkit",
+ "log",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4174,6 +4209,7 @@ dependencies = [
  "lightcraft-faces",
  "lightcraft-fetch",
  "lightcraft-geom",
+ "lightcraft-learn",
  "lightcraft-look",
  "lightcraft-map",
  "lightcraft-merge",

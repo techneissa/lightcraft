@@ -1,0 +1,5 @@
+# Recolor on a mask (issue #83)
+cargo test -p lightcraft-pipeline --lib -- recolor
+cargo test -p lightcraft-gpu --test it -- gpu_matches_cpu
+cargo test -p lightcraft-engine --lib -- mask_recolor mask_effects
+cargo test -p lightcraft-ui-egui --lib -- mask_recolor

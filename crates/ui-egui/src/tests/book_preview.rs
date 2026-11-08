@@ -11,7 +11,11 @@ use crate::headless::Headless;
 use crate::state::ViewMode;
 use crate::{LightcraftApp, Services};
 
-const T: Duration = Duration::from_secs(60);
+/// How long a wait in this file lasts before it calls the preview hung. Only a hang guard, never what a test
+/// measures: the first 5 pages of the 200-page book take about 3 s here, and the whole crate's tests run side by
+/// side on Fork CI, where one wait went past 60 s (issue #78). A test waits on a condition, so this costs nothing when
+/// the preview works.
+const T: Duration = Duration::from_secs(600);
 
 fn demo() -> Headless {
     let services = Services { png: None, local_places: Some(Vec::new()), ..Default::default() };

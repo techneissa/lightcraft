@@ -1,0 +1,3 @@
+cargo test -p lightcraft-learn --lib
+cargo test -p lightcraft-engine --lib -- tests::learn
+cargo test -p lightcraft-ui-egui --lib -- learn_edits

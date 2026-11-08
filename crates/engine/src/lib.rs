@@ -52,6 +52,7 @@ pub mod import;
 mod import_move;
 pub mod lama_fill;
 pub mod layers;
+pub mod learn;
 pub mod lens_profiles;
 pub mod lensfun_download;
 pub mod library;
@@ -72,6 +73,7 @@ pub mod names;
 pub mod open_path;
 pub mod originals;
 mod pdf;
+pub mod people_parsing;
 pub mod preset_import;
 pub mod preset_luminar;
 pub mod presets;
@@ -96,6 +98,7 @@ pub mod slide_title;
 pub mod slideshow;
 pub mod slideshow_export;
 pub mod smart;
+pub mod spot_area;
 pub mod spot_source;
 pub mod sync;
 mod sync_same;
@@ -393,6 +396,12 @@ pub struct Session {
     pub spot_sources: spot_source::SpotSources,
     /// The LaMa fill behind Remove spots whose fill is LaMa (`fork/lama-fill.md`).
     pub lama: lama_fill::LamaFill,
+    /// Object clicks of the Remove tool on their way to SAM 3 (fork, `fork/object-remove.md`).
+    pub object_jobs: spot_area::ObjectJobs,
+    /// Learn My Edits: profiles trained on the user's edits (`fork/learn-my-edits.md`).
+    pub learn: learn::LearnEdits,
+    /// Per-person part masks and face landmarks (`fork/people-parsing.md`).
+    pub parsing: people_parsing::PeopleParsing,
     /// The persistent library this session writes to (`None` = in-memory only).
     pub library: Option<library::Library>,
     /// Identity of current library opening; refreshed only after a successful open.
@@ -598,6 +607,9 @@ impl Session {
             finds: Default::default(),
             spot_sources: Default::default(),
             lama: lama_fill::LamaFill::new(activity.clone()),
+            object_jobs: Default::default(),
+            learn: learn::LearnEdits::new(activity.clone()),
+            parsing: people_parsing::PeopleParsing::new(activity.clone()),
             library: None,
             library_identity: Arc::new(()),
             xmp: sidecar::XmpPrefs::default(),

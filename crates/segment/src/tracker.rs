@@ -211,6 +211,43 @@ impl Tracker {
     /// Predict masks for `clicks`. `multimask`: the three alternatives (best by predicted IoU is
     /// returned), else the single-mask output with SAM 2's stability fallback.
     pub fn predict(&self, f: &Features, clicks: &[Click], multimask: bool) -> Result<Prediction> {
+        let (masks, iou, object_score) = self.heads(f, clicks)?;
+        let pick = |i: usize| -> Result<Prediction> {
+            Ok(Prediction { logits: to_vec(&masks.i((0, i))?)?, iou: iou.get(i).copied().unwrap_or(0.0), object_score })
+        };
+        let best_multi = || (1..MASK_TOKENS).max_by(|a, b| iou.get(*a).partial_cmp(&iou.get(*b)).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(1);
+        if multimask {
+            return pick(best_multi());
+        }
+        // single-mask output unless it is unstable (area changes > 2 % when the threshold moves ±0.05)
+        let single = masks.i((0, 0))?;
+        let inter = single.gt(0.05)?.to_dtype(DType::F32)?.sum_all()?.to_scalar::<f32>()?;
+        let union = single.gt(-0.05)?.to_dtype(DType::F32)?.sum_all()?.to_scalar::<f32>()?;
+        let stability = if union > 0.0 { inter / union } else { 1.0 };
+        if stability >= 0.98 { pick(0) } else { pick(best_multi()) }
+    }
+
+    /// The alternative of the three that covers the whole object (fork, `fork/object-remove.md`:
+    /// [`crate::whole::whole_object`]), for a click that removes it.
+    pub fn predict_whole(&self, f: &Features, clicks: &[Click]) -> Result<Prediction> {
+        let (masks, iou, object_score) = self.heads(f, clicks)?;
+        let inside = |i: usize| -> Result<Tensor> { Ok(masks.i((0, i))?.gt(0.0)?.to_dtype(DType::F32)?) };
+        let count = |t: &Tensor| -> Result<usize> { Ok(t.sum_all()?.to_scalar::<f32>()?.max(0.0) as usize) };
+        let scores: Vec<(usize, f32)> =
+            (1..MASK_TOKENS).map(|i| Ok((count(&inside(i)?)?, iou.get(i).copied().unwrap_or(0.0)))).collect::<Result<_>>()?;
+        let best = crate::whole::best(&scores).unwrap_or(0);
+        let best_in = inside(1 + best)?;
+        let mut alts = Vec::with_capacity(scores.len());
+        for (k, (area, score)) in scores.iter().enumerate() {
+            let holds = count(&(inside(1 + k)? * &best_in)?)?;
+            alts.push(crate::whole::Alternative { area: *area, score: *score, holds });
+        }
+        let i = 1 + crate::whole::whole_object(&alts, best);
+        Ok(Prediction { logits: to_vec(&masks.i((0, i))?)?, iou: iou.get(i).copied().unwrap_or(0.0), object_score })
+    }
+
+    /// The decoder's masks `[1, 4, side, side]`, their predicted IoUs and the object score for `clicks`.
+    fn heads(&self, f: &Features, clicks: &[Click]) -> Result<(Tensor, Vec<f32>, f32)> {
         let sparse = self.embed_clicks(clicks)?;
         let tokens = Tensor::cat(&[self.output_tokens.unsqueeze(0)?, sparse], 1)?; // [1, T, 256]
         let image = f.image.broadcast_add(&self.no_mask)?; // dense prompt: "no mask"
@@ -236,18 +273,6 @@ impl Tracker {
         let masks = hyper.matmul(&up.reshape((b, uc, uh * uw))?)?.reshape((b, MASK_TOKENS, uh, uw))?;
         let iou = to_vec(&self.iou_head.forward(&iou_token)?)?;
         let object_score = to_vec(&self.obj_head.forward(&q.i((.., 0, ..))?)?)?.first().copied().unwrap_or(0.0);
-        let pick = |i: usize| -> Result<Prediction> {
-            Ok(Prediction { logits: to_vec(&masks.i((0, i))?)?, iou: iou.get(i).copied().unwrap_or(0.0), object_score })
-        };
-        let best_multi = || (1..MASK_TOKENS).max_by(|a, b| iou.get(*a).partial_cmp(&iou.get(*b)).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(1);
-        if multimask {
-            return pick(best_multi());
-        }
-        // single-mask output unless it is unstable (area changes > 2 % when the threshold moves ±0.05)
-        let single = masks.i((0, 0))?;
-        let inter = single.gt(0.05)?.to_dtype(DType::F32)?.sum_all()?.to_scalar::<f32>()?;
-        let union = single.gt(-0.05)?.to_dtype(DType::F32)?.sum_all()?.to_scalar::<f32>()?;
-        let stability = if union > 0.0 { inter / union } else { 1.0 };
-        if stability >= 0.98 { pick(0) } else { pick(best_multi()) }
+        Ok((masks, iou, object_score))
     }
 }

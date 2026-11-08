@@ -319,6 +319,10 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("view.frameRate", "Frame Rate", None, "Help>Debug"),
     ("app.whatsNew", "What's New", None, "Help"),
     ("dialog.cull", "Assisted Culling…", None, "Photo"),
+    // Learn My Edits (`fork/learn-my-edits.md`): the window, and its Export… / Import… with a file dialog
+    ("dialog.learnEdits", "Learn My Edits…", None, "Photo"),
+    ("learnEdits.export", "Export Learn My Edits Profile…", None, ""),
+    ("learnEdits.import", "Import Learn My Edits Profile…", None, ""),
     ("app.help", "LightCraft Help", Some("F1"), "Help"),
     ("app.discord", "Join the ArtCraft Discord…", None, "Help"),
     ("app.feedback", "Send Feedback…", None, "Help"),

@@ -10,12 +10,14 @@ pub mod controls;
 pub mod presets;
 pub mod segmask;
 pub mod settings;
+pub mod spot_area;
 pub mod spot_circle;
 
 pub use controls::{CONTROLS, ControlSpec, Section, Track};
 pub use presets::{Preset, SettingsGroup, apply_partial, extract_groups};
 pub use segmask::SegMask;
 pub use settings::*;
+pub use spot_area::SpotArea;
 pub use spot_circle::SpotCircle;
 
 use serde_json::Value;

@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use lightcraft_develop::BrushStroke;
 use lightcraft_pipeline::Plan;
-use lightcraft_pipeline::finish::{MASK_TERMS, effect_terms};
+use lightcraft_pipeline::finish::{MASK_TERMS, effect_terms_with};
 use lightcraft_pipeline::geometry::Frame;
 use lightcraft_pipeline::masks::{AlphaKeys, BRUSH_ENTRIES, Mattes, alpha_key, brush_base, brush_chain, brush_dabs, note_evaluation, note_stroke};
 use lightcraft_raster::Rgb32f;
@@ -356,6 +356,12 @@ pub(crate) fn masks(
         held.mattes = plan.mattes.clone();
         held.slots = used;
     }
-    let terms = list.iter().map(|m| effect_terms(&m.adjust, (m.adjust.amount / 100.0) as f32)).collect();
+    let terms = list
+        .iter()
+        .map(|m| {
+            let r = plan.recolor.iter().find(|(id, _)| *id == m.id).map(|(_, r)| r);
+            effect_terms_with(&m.adjust, (m.adjust.amount / 100.0) as f32, r)
+        })
+        .collect();
     (Some(alpha), terms)
 }

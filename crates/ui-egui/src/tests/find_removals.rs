@@ -29,6 +29,7 @@ fn person(x0: f64, y0: f64, x1: f64, y1: f64) -> Candidate {
         score: 0.9,
         main: false,
         spots: cover::cover_mask(&m),
+        region: None,
     }
 }
 
