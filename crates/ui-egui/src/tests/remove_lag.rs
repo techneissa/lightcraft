@@ -76,6 +76,8 @@ fn a_press_held_still_adds_no_points_to_the_painted_spot() {
     }
     pointer(&mut h, "drag", 0.50);
     pointer(&mut h, "up", 0.50);
+    // (a painted spot is added once its source is found on a worker, issue #97)
+    assert!(h.settle(T));
     let r = h.request("engine.execute", json!({"command": "develop.get", "params": {}}), T);
     let spots = r["result"]["spots"].as_array().cloned().unwrap_or_default();
     assert_eq!(spots.len(), 1, "{r}");

@@ -136,7 +136,7 @@ fn newer_snapshot_is_refused_untouched() {
     let m = MemStore::new();
     m.set(
         SNAPSHOT,
-        format!("{{\"format\":\"lightcraft-catalog\",\"version\":{},\"seq\":2,\"catalog\":{}}}\n", VERSION + 1, base.to_snapshot()).into_bytes(),
+        format!("{{\"format\":\"lightcraft-catalog-fork\",\"version\":{},\"seq\":2,\"catalog\":{}}}\n", VERSION + 1, base.to_snapshot()).into_bytes(),
     );
     m.set(LOG, log.into_bytes());
     assert_refused_untouched(&m);
@@ -144,7 +144,7 @@ fn newer_snapshot_is_refused_untouched() {
     let m = MemStore::new();
     m.set(
         SNAPSHOT,
-        format!("{{\"format\":\"lightcraft-catalog\",\"version\":{},\"seq\":2,\"catalog\":{{\"photos\":7}}}}\n", VERSION + 1).into_bytes(),
+        format!("{{\"format\":\"lightcraft-catalog-fork\",\"version\":{},\"seq\":2,\"catalog\":{{\"photos\":7}}}}\n", VERSION + 1).into_bytes(),
     );
     assert_refused_untouched(&m);
     let e = Journal::open(Box::new(m)).err().unwrap().to_string();
@@ -160,7 +160,7 @@ fn unknown_op_in_the_log_is_refused_untouched() {
         let body = r#"{"op":"fromTheFuture","id":1,"what":"something new"}"#;
         format!("{{\"seq\":{seq},\"crc\":{},\"op\":{body}}}\n", crc32fast::hash(body.as_bytes()))
     };
-    let snap = format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot());
+    let snap = format!("{{\"format\":\"lightcraft-catalog-fork\",\"version\":{VERSION},\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot());
     let id = base.photos().next().unwrap().id;
     let after = format!("{}\n", encode_record(5, &Op::SetRating { id, rating: 1 }));
     for log in [format!("{log}{}", future(4)), format!("{log}{}{after}", future(4)), format!("{}{log}", future(3))] {
@@ -184,7 +184,7 @@ fn bad_crc_is_still_a_torn_tail() {
     let m = MemStore::new();
     m.set(
         SNAPSHOT,
-        format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes(),
+        format!("{{\"format\":\"lightcraft-catalog-fork\",\"version\":{VERSION},\"seq\":2,\"catalog\":{}}}\n", base.to_snapshot()).into_bytes(),
     );
     let body = r#"{"op":"fromTheFuture"}"#;
     m.set(LOG, format!("{log}{{\"seq\":4,\"crc\":1,\"op\":{body}}}\n").into_bytes());
@@ -207,8 +207,9 @@ fn local_and_macos_colour_need_format_v10_and_older_builds_get_newer_not_corrupt
     }
     /// The newest format an older build reads.
     const OLDEST_BUILD_MAX: u32 = 9;
-    // (a library with `local` or `macos` must carry a version an older build refuses)
-    const _: () = assert!(VERSION > OLDEST_BUILD_MAX);
+    // (a library with `local` or `macos` must carry a header an older build refuses: since 2026-11-09 the fork's own
+    // format name, which every build refuses before reading the catalog; before it, a version above 9)
+    const _: () = assert!(crate::fork_format::LEGACY_FORK_MAX > OLDEST_BUILD_MAX);
 
     let mut c = Catalog::new();
     let mut ids = Vec::new();
@@ -226,7 +227,7 @@ fn local_and_macos_colour_need_format_v10_and_older_builds_get_newer_not_corrupt
     let (mut j, _, _) = Journal::open(Box::new(m.clone())).unwrap();
     j.snapshot(&c).unwrap();
     drop(j);
-    assert!(snapshot_version(&m) >= 12, "local camera profiles are catalog format v12 and up");
+    assert_eq!(snapshot_version(&m), u64::from(VERSION), "written in the fork's own format");
     let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
     assert_eq!(r.upgraded_from, None);
     for (id, want) in ids.iter().zip(["local", "macos", "colorimetric"]) {
@@ -237,15 +238,16 @@ fn local_and_macos_colour_need_format_v10_and_older_builds_get_newer_not_corrupt
     // what an older build would do with the bodies: fail to parse them (so the header is what keeps it out)
     assert!(serde_json::from_value::<V9Colour>(serde_json::json!("local")).is_err());
     assert!(serde_json::from_value::<V9Colour>(serde_json::json!("macos")).is_err());
-    // a reader limited to the older format: the header check fires first, on a body it could not parse either
+    // a reader limited to the older format: the header check fires first, on a body it could not parse either (the
+    // format name: older builds refuse it before reading anything else)
     let v: serde_json::Value = serde_json::from_slice(&m.get(SNAPSHOT).unwrap()).unwrap();
-    assert!(v["version"].as_u64().unwrap() > u64::from(OLDEST_BUILD_MAX), "header above the older maximum: Newer, not Corrupt");
+    assert_eq!(v["format"].as_str(), Some(crate::fork_format::FORK_FORMAT), "a name older builds don't know");
     // and this build, given a snapshot one above itself that holds a colour it does not know, says Newer too
     let m = MemStore::new();
     m.set(
         SNAPSHOT,
         format!(
-            "{{\"format\":\"lightcraft-catalog\",\"version\":{},\"seq\":0,\"catalog\":{{\"photos\":[{{\"profile\":{{\"camera_colour\":\"fromTheFuture\"}}}}]}}}}\n",
+            "{{\"format\":\"lightcraft-catalog-fork\",\"version\":{},\"seq\":0,\"catalog\":{{\"photos\":[{{\"profile\":{{\"camera_colour\":\"fromTheFuture\"}}}}]}}}}\n",
             VERSION + 1
         )
         .into_bytes(),
@@ -327,9 +329,16 @@ fn op_variants_are_versioned() {
             Op::SetHistoryCursor { .. } => 8,
         }
     }
-    /// v13: `Meta.exif`, the edited camera / lens / exposure values (fork; v12: `profile.camera_colour = local | macos`
-    /// and `profile.camera_profile` in the develop settings; v11: `EmbeddedLens.source`; v10: `Mask.on_photo`).
-    const NEWEST_FIELDS: u32 = 13;
+    /// In `lightcraft-catalog` numbers: v14: `Meta.exif`, the edited camera / lens / exposure values (fork; v13:
+    /// `profile.camera_colour = local | macos` and `profile.camera_profile` in the develop settings; v12:
+    /// `Catalog.grids` and `SegMask.grid`, shared by a snapshot's masks (#2154); v11: `EmbeddedLens.source`; v10:
+    /// `Mask.on_photo`).
+    const NEWEST_FIELDS: u32 = 14;
+    /// In the fork's own numbers (`lightcraft-catalog-fork`, from 2026-11-09): v1 adds nothing to v14; v2: develop and History log
+    /// records and `Photo.history` steps as patches (`journal_delta`, `history_serde`, #77). A later fork
+    /// op or field raises this and `fork_format::VERSION` (and is matched above under no official number).
+    const NEWEST_FORK_FIELDS: u32 = 2;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
-    assert_eq!(newest.max(NEWEST_FIELDS), VERSION, "the newest op's or fields' version must be the current format version");
+    assert_eq!(newest.max(NEWEST_FIELDS), crate::fork_format::LEGACY_FORK_MAX, "the newest official-numbered op or field");
+    assert_eq!(NEWEST_FORK_FIELDS, VERSION, "the newest fork op's or fields' version must be the current format version");
 }

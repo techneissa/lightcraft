@@ -52,8 +52,11 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
             app.session.active().is_some() && app.services.open_with.is_some() && app.edit_in.is_none()
         }
         "photo.removeReflections" | "reflection.apply" => {
-            app.session.active().is_some() && lightcraft_engine::reflections::available() && !app.tasks.is_running(crate::reflections::TASK)
+            app.session.active().is_some()
+                && (lightcraft_engine::reflections::available() || app.reflection_glare.mode == lightcraft_develop::ReflectionMode::Highlights)
+                && !app.tasks.is_running(crate::reflections::TASK)
         }
+        "reflection.mode" | "reflection.area" | "reflection.glare" | "reflection.paint" | "reflection.tool" => app.session.active().is_some(),
         "reflection.install" | "reflection.download" | "reflection.models" | "reflection.instructions" => !cfg!(target_arch = "wasm32"),
         "reflection.reset" | "reflection.status" | "reflection.toggle" | "reflection.panel" => app.session.active().is_some(),
         "photo.openAsLayersInPhotocraft" => app.services.open_with.is_some() && app.session.selected().len() >= 2 && app.layers.is_none(),

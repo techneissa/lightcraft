@@ -11,6 +11,7 @@ use crate::state::UiState;
 /// Top-level keys of the UI state that stay on one Mac, with the reason.
 pub const LEFT_OUT: &[(&str, &str)] = &[
     ("window", "the window's size and place"),
+    ("seenVersion", "the version whose What's New this Mac has shown: each Mac shows it once after its own update"),
     ("docking", "panel positions"),
     ("dockingVersion", "panel positions"),
     ("view", "the view in use"),
@@ -91,6 +92,9 @@ pub const SYNCED: &[&str] = &[
     "removeFeather",
     "removeOpacity",
     "removeFill",
+    "removeObject",
+    "removeObjectFill",
+    "removeExpand",
     "pointColorVisualize",
     "hdrVisualize",
     "visualizeSpots",
@@ -113,6 +117,7 @@ pub const LEFT_OUT_SETTINGS: &[(&str, &str)] = &[
     ("composeWindow", "this Mac's window system"),
     ("previewLimit", "this Mac's graphics and memory"),
     ("memoryMb", "this Mac's memory"),
+    ("backgroundPrep", "what this Mac prepares ahead: its speed and memory"),
     ("lensDatabase", "a download answered on this Mac"),
     ("displayProfile", "this Mac's monitor"),
     ("smartEditingOffered", "a question asked once on this Mac"),
@@ -152,6 +157,8 @@ pub const SYNCED_SETTINGS: &[&str] = &[
     "photoMenu",
     "photoMenuPresets",
     "topBarHidden",
+    // (how many hot pixels Remove Hot Pixels may replace: the same raw renders alike on every Mac)
+    "hotPixelLimit",
 ];
 
 /// Why `key` of the UI state stays on one Mac; `None` when it goes into the file.

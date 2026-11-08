@@ -1,0 +1,2 @@
+# The fork's own catalog format name (fork/catalog-format.md)
+cargo test -p lightcraft-catalog --lib fork_format

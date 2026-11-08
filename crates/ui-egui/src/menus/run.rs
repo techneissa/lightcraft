@@ -179,6 +179,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     if let Some(r) = crate::export_task::book_task::command(app, id, p) {
         return Some(r);
     }
+    if id == "develop.auto" {
+        return Some(crate::auto_settings::command(app, p));
+    }
     if id == "photo.reload" {
         // the files are read in the background (a raw's decode takes a second or more)
         return crate::reload::command(app, p);
@@ -1345,7 +1348,13 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         | "reflection.install"
         | "reflection.download"
         | "reflection.models"
-        | "reflection.instructions" => {
+        | "reflection.instructions"
+        // fork feature (fork/glare-highlights.md)
+        | "reflection.mode"
+        | "reflection.area"
+        | "reflection.glare"
+        | "reflection.paint"
+        | "reflection.tool" => {
             app.ui.right = RightPanel::Remove;
             crate::reflections::command(app, id, p)
         }

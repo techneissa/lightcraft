@@ -5,7 +5,7 @@
 //! `mine/custom` when the fork's remote-tracking branch exists, else `origin/main` (or
 //! `--base REF`), committed or not, and runs:
 //!
-//! - fmt, layers, assets: always (seconds);
+//! - fmt, layers, assets, roots: always (seconds);
 //! - clippy on the whole workspace (check builds only; catches callers broken by an API change);
 //! - the tests of the changed packages only (not their dependents);
 //! - heif when `lightcraft-codecs` / `lightcraft-heif` changed;

@@ -160,9 +160,12 @@ fn never_covers_nothing_but_a_click_or_a_drag_still_adds_a_spot() {
     assert!(!has(&h, "removePaintFill"), "no fill while painting at Never");
     let r = h.request("ui.pointer", json!({"events": [{"kind": "up", "x": 0.5, "y": 0.8}]}), T);
     assert_eq!(r["ok"], true, "{r}");
+    // (a painted spot is added once its source is found on a worker, issue #97)
+    assert!(h.settle(T));
     assert_eq!(spots(&h).len(), 2, "the drag added a spot");
     let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": 0.6, "y": 0.85}, {"kind": "up", "x": 0.6, "y": 0.85}]}), T);
     assert_eq!(r["ok"], true, "{r}");
+    assert!(h.settle(T));
     assert_eq!(spots(&h).len(), 3, "a click added one too");
     // Auto still fills while painting
     exec(&mut h, "view.toolOverlay", json!({"mode": "auto"}));
