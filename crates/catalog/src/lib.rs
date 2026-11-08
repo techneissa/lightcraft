@@ -19,6 +19,7 @@ pub mod exif_override;
 #[doc(hidden)]
 pub mod fault;
 pub mod folders;
+pub mod fork_format;
 mod index;
 pub mod journal;
 pub mod keywords;

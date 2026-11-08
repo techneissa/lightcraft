@@ -64,8 +64,14 @@
 //! | 10 | masks stay on the photo under lens corrections, Upright and Transform | `Mask.on_photo` (develop settings) |
 //! | 11 | lens database profiles named in the Optics panel | `EmbeddedLens.source` |
 //! | 12 | history steps and versions share segmentation grids (#2154) | `Catalog.grids`, `SegMask.grid` |
-//! | 13 | local camera profiles and macOS Colour (fork) | develop settings `profile.camera_colour = local` / `macos` (`CameraColour::{Local, Macos}`) and `profile.camera_profile` |
-//! | 14 | edited camera / lens / exposure values (fork) | `Meta.exif` (`ExifOverrides`: `camera`, `lens`, `focal_mm`, `aperture`, `shutter`, `iso`), in `SetMeta` and `AddPhoto` bodies |
+//! | 13 | local camera profiles and macOS Colour (fork; its builds wrote them as 12 before 2026-11-08) | develop settings `profile.camera_colour = local` / `macos` (`CameraColour::{Local, Macos}`) and `profile.camera_profile` |
+//! | 14 | edited camera / lens / exposure values (fork; written as 13 before 2026-11-08) | `Meta.exif` (`ExifOverrides`: `camera`, `lens`, `focal_mm`, `aperture`, `shutter`, `iso`), in `SetMeta` and `AddPhoto` bodies |
+//! | fork 1 | the fork's own format name `lightcraft-catalog-fork` (2026-11-09) | nothing new: official 12 with the fork's 13 and 14 |
+//!
+//! Versions 1–14 are `"format":"lightcraft-catalog"`; the fork writes `"format":"lightcraft-catalog-fork"` from
+//! its version 1 on, with its own counter, so an official build refuses a fork library untouched and the same
+//! number never means two formats again ([`crate::fork_format`] says how each header reads). The first upgrade of
+//! an older snapshot keeps it as it was in `catalog.snap.before-upgrade`.
 //!
 //! Rules:
 //! - **Bump [`VERSION`]** (and add a row above) in the change that adds an [`Op`] variant or a
@@ -87,10 +93,12 @@ use crate::{Catalog, CatalogError, Op, Result};
 
 pub const SNAPSHOT: &str = "catalog.snap";
 pub const LOG: &str = "catalog.log";
-const FORMAT: &str = "lightcraft-catalog";
-/// The catalog format this build writes (and the newest it reads). See the module docs →
-/// *Format versions*; bump it whenever an [`Op`] variant or a serialized field is added.
-pub const VERSION: u32 = 14;
+/// The catalog format this build writes (and the newest it reads), under the fork's own format name: see
+/// [`crate::fork_format`] and the module docs → *Format versions*. Bump it there whenever an [`Op`] variant or a
+/// serialized field is added. (Fork: an official update that changes the official `VERSION` here clashes with this
+/// line; the official number goes to `fork_format::OFFICIAL_VERSION`, and its module docs say what else to do.)
+pub use crate::fork_format::VERSION;
+use crate::fork_format::{BEFORE_UPGRADE, FORK_FORMAT, Header};
 
 /// When [`Journal::wants_snapshot`] says it's time to compact the log.
 #[derive(Clone, Copy, Debug)]
@@ -278,7 +286,21 @@ fn decode_line(line: &str) -> Line {
 
 /// The error for a library written by a newer LightCraft.
 fn newer(what: String) -> CatalogError {
-    CatalogError::Newer(format!("{what}; this version reads catalog format v{VERSION} and older"))
+    crate::fork_format::newer(what)
+}
+
+/// Keeps `snap` (the snapshot as read, in an older format) as [`BEFORE_UPGRADE`] before the first upgrade writes
+/// over it; a copy kept by an earlier upgrade stays as it is.
+fn keep_before_upgrade(store: &mut dyn Store, snap: &[u8]) -> Result<()> {
+    // (a cap of 0 bytes: `None` only when there is no copy yet, without reading one that is there)
+    match store.read_capped(BEFORE_UPGRADE, 0) {
+        Ok(None) => store
+            .write_atomic(BEFORE_UPGRADE, snap)
+            .map_err(|e| CatalogError::Io(format!("can't keep a copy of {SNAPSHOT} before upgrading it ({e}); the library was left unchanged"))),
+        Ok(Some(_)) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::InvalidData => Ok(()),
+        Err(e) => Err(io(e)),
+    }
 }
 
 #[cfg(test)]
@@ -372,7 +394,7 @@ fn write_snapshot_owned(store: &mut dyn Store, seq: u64, mut snapshot: Catalog) 
         // serde_json emits many tiny writes: buffer them in a concrete writer (inlined), so only
         // 1 MiB chunks go through the store's `dyn Write`
         let mut b = std::io::BufWriter::with_capacity(1 << 20, w);
-        write!(b, "{{\"format\":\"{FORMAT}\",\"version\":{VERSION},\"seq\":{seq},\"catalog\":")?;
+        write!(b, "{{\"format\":\"{FORK_FORMAT}\",\"version\":{VERSION},\"seq\":{seq},\"catalog\":")?;
         // The shared grids, in first-appearance order. The pool is a serialization detail:
         // `snapshot` itself is never modified (log records, presets and XMP stay inline).
         let mut pool: Vec<String> = Vec::new();
@@ -435,17 +457,13 @@ impl Journal {
         let snap = store.read(SNAPSHOT).map_err(io)?;
         let log = store.read(LOG).map_err(io)?;
         report.created = snap.is_none() && log.is_none();
-        let (mut catalog, snapshot_seq, snapshot_version) = match snap {
+        let (mut catalog, snapshot_seq, header) = match &snap {
             Some(bytes) => {
-                // the header first: a newer snapshot may not parse as this version's catalog
-                let h: SnapHeader = serde_json::from_slice(&bytes).map_err(|e| CatalogError::Corrupt(format!("{SNAPSHOT}: {e}")))?;
-                if h.format != FORMAT {
-                    return Err(CatalogError::Corrupt(format!("{SNAPSHOT}: not a LightCraft catalog (format {:?})", h.format)));
-                }
-                if h.version > VERSION {
-                    return Err(newer(format!("{SNAPSHOT} is catalog format v{}", h.version)));
-                }
-                let s: SnapFile = serde_json::from_slice(&bytes).map_err(|e| CatalogError::Corrupt(format!("{SNAPSHOT}: {e}")))?;
+                // the header first: a newer snapshot may not parse as this version's catalog, and the fork's own
+                // format name keeps official and fork formats of one number apart (`fork_format`)
+                let h: SnapHeader = serde_json::from_slice(bytes).map_err(|e| CatalogError::Corrupt(format!("{SNAPSHOT}: {e}")))?;
+                let header = crate::fork_format::check(&h.format, h.version)?;
+                let s: SnapFile = serde_json::from_slice(bytes).map_err(|e| CatalogError::Corrupt(format!("{SNAPSHOT}: {e}")))?;
                 // a seq this high can't come from real use; the next record's seq would wrap
                 if s.seq > MAX_SEQ {
                     return Err(CatalogError::Corrupt(format!("{SNAPSHOT}: seq {} is out of range", s.seq)));
@@ -455,7 +473,7 @@ impl Journal {
                 for r in &report.repaired {
                     log::warn!("{SNAPSHOT}: {r}");
                 }
-                (catalog, s.seq, Some(h.version))
+                (catalog, s.seq, Some(header))
             }
             None => (Catalog::new(), 0, None),
         };
@@ -543,6 +561,12 @@ impl Journal {
             needs_newline = !has_nl;
         }
 
+        // Nothing was refused: an older snapshot is about to be rewritten in this format (upgrade or damage), so
+        // the first time it is kept as it was. A copy that can't be written leaves the library unchanged.
+        if let (Some(bytes), Some(Header::Older { .. })) = (&snap, header) {
+            keep_before_upgrade(j.store.as_mut(), bytes)?;
+        }
+        drop(snap);
         if let Some(at) = damaged_at {
             let name = format!("{LOG}.damaged-{}", j.seq);
             j.store.write_atomic(&name, &log).map_err(io)?;
@@ -567,12 +591,15 @@ impl Journal {
         // instead of misreading ops or dropping fields they don't know.
         if report.created {
             // tiny: written directly, not counted as a compaction
-            let empty = format!("{{\"format\":\"{FORMAT}\",\"version\":{VERSION},\"seq\":0,\"catalog\":{}}}\n", catalog.to_snapshot());
+            let empty = format!("{{\"format\":\"{FORK_FORMAT}\",\"version\":{VERSION},\"seq\":0,\"catalog\":{}}}\n", catalog.to_snapshot());
             if let Err(e) = j.store.write_atomic(SNAPSHOT, empty.as_bytes()) {
                 log::warn!("catalog: can't write the new library's snapshot: {e}");
             }
-        } else if report.damaged.is_none() && snapshot_version != Some(VERSION) {
-            report.upgraded_from = Some(snapshot_version.unwrap_or(0));
+        } else if report.damaged.is_none() && header != Some(Header::Current) {
+            report.upgraded_from = Some(match header {
+                Some(Header::Older { version, .. }) => version,
+                _ => 0,
+            });
             match j.snapshot(&catalog) {
                 Ok(()) => {
                     if let Some(v) = report.upgraded_from {

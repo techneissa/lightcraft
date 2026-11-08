@@ -166,7 +166,7 @@ fn shared_grid_references_resolve_or_are_repaired() {
     m.set(
         SNAPSHOT,
         format!(
-            "{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{{\"grids\":[\"dHdv\"],{} }} }}\n",
+            "{{\"format\":\"lightcraft-catalog-fork\",\"version\":{VERSION},\"seq\":2,\"catalog\":{{\"grids\":[\"dHdv\"],{} }} }}\n",
             &body[1..body.len() - 1]
         )
         .into_bytes(),
@@ -188,7 +188,7 @@ fn shared_grid_references_resolve_or_are_repaired() {
     m.set(
         SNAPSHOT,
         format!(
-            "{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{{\"grids\":[\"{blob}\"],{} }} }}\n",
+            "{{\"format\":\"lightcraft-catalog-fork\",\"version\":{VERSION},\"seq\":2,\"catalog\":{{\"grids\":[\"{blob}\"],{} }} }}\n",
             &body[1..body.len() - 1]
         )
         .into_bytes(),
@@ -346,7 +346,7 @@ fn empty_shared_grid_table_clears_dangling_references() {
     m.set(
         SNAPSHOT,
         format!(
-            "{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{{\"grids\":[],{} }} }}\n",
+            "{{\"format\":\"lightcraft-catalog-fork\",\"version\":{VERSION},\"seq\":2,\"catalog\":{{\"grids\":[],{} }} }}\n",
             &body[1..body.len() - 1]
         )
         .into_bytes(),
@@ -376,7 +376,7 @@ fn omitted_shared_grid_table_clears_dangling_references() {
     let m = MemStore::new();
     m.set(
         SNAPSHOT,
-        format!("{{\"format\":\"lightcraft-catalog\",\"version\":{VERSION},\"seq\":2,\"catalog\":{{{} }} }}\n", &body[1..body.len() - 1])
+        format!("{{\"format\":\"lightcraft-catalog-fork\",\"version\":{VERSION},\"seq\":2,\"catalog\":{{{} }} }}\n", &body[1..body.len() - 1])
             .into_bytes(),
     );
     let (_, damaged, report) = open(&m);
