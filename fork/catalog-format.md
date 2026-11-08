@@ -21,7 +21,7 @@ This build reads:
 
 Every upgrade first keeps the snapshot as it was in `catalog.snap.before-upgrade`; when one exists from an earlier upgrade, it stays. If the copy can't be written, the library is not opened and nothing changes (the error says so). A failed upgrade write leaves the old file as it was (temp file, then rename).
 
-**A new fork format** (an `Op` variant or serialized field): raise `fork_format::VERSION` and add a row to the format table in `journal.rs`. PR #101 (journal deltas) takes fork version 2.
+**A new fork format** (an `Op` variant or serialized field): raise `fork_format::VERSION` and add a row to the format table in `journal.rs`. PR #101 (journal deltas) takes fork version 2; Match Look's residual Look (#90, develop settings `look`) takes 3.
 
 **An official format past 12** (an official update changes `VERSION` in `journal.rs`, which clashes with the fork's line there): raise `fork_format::OFFICIAL_VERSION`, read the new official fields, and decide `lightcraft-catalog` 13 and 14 by content. Refuse what is still unclear rather than guess: an official 13 read as the fork's would drop the official fields.
 

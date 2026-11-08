@@ -30,6 +30,8 @@ fn match_look_window_matches_the_selected_photo_to_a_library_photo() {
     h.settle(SETTLE);
     assert!(widget(&h, &format!("matchLook:photo:{}", reference.0)).is_some(), "the view's photos are offered");
     assert!(h.step_until(SETTLE, |h| widget(h, "matchLook:reference").is_some()), "the reference shows small");
+    assert!(widget(&h, "matchLook:look").is_some(), "the Residual Look box shows");
+    assert!(h.app.ui.match_look.as_ref().is_some_and(|s| !s.look()), "Residual Look is off by default");
     let before = (*h.app.session.develop_of(target).unwrap()).clone();
     let r = h.request("ui.clickWidget", json!({"id": "matchLook:apply"}), T);
     assert_eq!(r["ok"], true, "{r}");
@@ -38,8 +40,13 @@ fn match_look_window_matches_the_selected_photo_to_a_library_photo() {
     });
     assert!(done, "the match lands on the photo");
     assert!(h.app.session.develop_of(target).unwrap().light.exposure < before.light.exposure, "darker, like the reference");
+    assert!(h.app.session.develop_of(target).unwrap().look.is_identity(), "no Look while the box is off");
     h.app.session.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(*h.app.session.develop_of(target).unwrap(), before, "one undo step");
+    let r = h.request("ui.clickWidget", json!({"id": "matchLook:look"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(T);
+    assert!(h.app.ui.match_look.as_ref().is_some_and(|s| s.look()), "the box turns the Residual Look on");
 }
 
 #[test]
@@ -57,4 +64,22 @@ fn a_chosen_file_is_read_off_the_ui_thread_and_shows_when_ready() {
     assert!(!h.app.ui.match_look.as_ref().unwrap().preview_ready(), "the command returns before the file is read");
     assert!(h.step_until(SETTLE, |h| widget(h, "matchLook:reference").is_some()), "the preview shows once read");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `match-look-followups`: the Edit panel shows the residual Look's Amount only while the photo has a Look.
+#[test]
+fn the_look_amount_slider_shows_only_with_a_look() {
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    app.ui.settings.gpu = false;
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    let id = h.app.session.visible_cloned()[0];
+    let r = h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let r = h.request("ui.set", json!({"view": "detail", "right": "edit"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(widget(&h, "slider:look.amount").is_none(), "no Look, no slider");
+    h.app.session.execute("develop.merge", &json!({"settings": {"look": {"cast": [[0.0, 0.02], [0.0, 0.02], [0.0, 0.02]]}}})).unwrap();
+    h.settle(SETTLE);
+    assert!(widget(&h, "slider:look.amount").is_some(), "the Look's Amount shows");
 }
