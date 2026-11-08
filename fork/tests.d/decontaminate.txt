@@ -1,0 +1,2 @@
+cargo test -p lightcraft-pipeline --lib -- decontam
+cargo test -p lightcraft-engine --features sam --lib -- decontaminate hair_edges

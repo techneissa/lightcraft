@@ -76,6 +76,10 @@ required-features = ["sam"]
 name = "hair_edges"
 required-features = ["sam"]
 
+[[example]]
+name = "decontam_compare"
+required-features = ["sam"]
+
 [features]
 # Test-only hooks for the crates that test against the engine (a dev-dependency feature; never enabled in a product build).
 test-hooks = []

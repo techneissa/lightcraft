@@ -383,9 +383,8 @@ impl HairEdges {
             return Ok(m);
         }
         if !self.available(edge, kind) {
-            return Err(match edge {
-                _ => format!("BiRefNet Matting is not downloaded ({} MB; maskEdges.download)", MODEL_BYTES.div_ceil(1_000_000)),
-            });
+            // (another edge model says here what it lacks)
+            return Err(format!("{} is not downloaded ({} MB; maskEdges.download)", edge.label(), MODEL_BYTES.div_ceil(1_000_000)));
         }
         let row = self.inner.activity.start("matting", "Refining hair edges", Cancel::Flag(cancel.clone()));
         row.detail(edge.label());
