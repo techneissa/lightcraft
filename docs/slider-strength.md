@@ -1,6 +1,6 @@
 # Slider strength audit
 
-> **Last updated:** 2026-11-01 · **Change:** minor (Sharpening Radius and the Vignette response, process V3: checked on a real photo and on the GPU; the ⌥-drag Masking preview follows V3's band)
+> **Changes:** [revision history](#revision-history)
 
 How much does each Develop slider change the picture at its ends, measured on real renders? Users report
 that most sliders feel weaker than Lightroom's. This page records the measurements, a verdict per slider and

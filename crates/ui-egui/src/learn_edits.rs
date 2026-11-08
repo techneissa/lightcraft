@@ -345,9 +345,11 @@ fn new_form(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, busy: bool) 
     app.ui.learn_edits.new = if close { None } else { Some(form) };
 }
 
-/// "Exposure ±0.18 EV, Contrast ±4" for a group's sliders.
-fn errors(group: &Value) -> String {
-    let mut parts = Vec::new();
+/// A group's report as two lines: its learned sliders with their held-out error ("Exposure ±0.18 EV, Shadows ±0"),
+/// and the sliders it skipped ("Contrast"). A colour wheel's two axes are one name.
+pub(crate) fn group_lines(group: &Value) -> (Vec<String>, Vec<String>) {
+    let group_kept = group["kept"].as_bool() == Some(true);
+    let (mut learned, mut skipped) = (Vec::new(), Vec::new());
     let mut seen = Vec::new();
     for s in group["sliders"].as_array().map(Vec::as_slice).unwrap_or_default() {
         let id = s["id"].as_str().unwrap_or_default();
@@ -356,17 +358,28 @@ fn errors(group: &Value) -> String {
             continue;
         }
         seen.push(sl.label);
+        // reports saved before sliders were decided one by one carry no `learned`: the group decided
+        if !s["learned"].as_bool().unwrap_or(group_kept) {
+            skipped.push(tr(sl.label).to_string());
+            continue;
+        }
         let e = s["error"].as_f64().unwrap_or(0.0);
-        parts.push(match id {
+        learned.push(match id {
             "wb.temp" => format!("{} ±{:.0} mired", tr(sl.label), e),
             "light.exposure" => format!("{} ±{:.2} EV", tr(sl.label), e),
             _ => format!("{} ±{:.0}", tr(sl.label), e),
         });
-        if parts.len() == 4 {
-            break;
-        }
     }
-    parts.join(", ")
+    (learned, skipped)
+}
+
+/// At most four names, then "and N more".
+fn names(list: &[String]) -> String {
+    if list.len() <= 4 {
+        return list.join(", ");
+    }
+    let shown = list.get(..4).map(|l| l.join(", ")).unwrap_or_default();
+    tr_format!("{} and {} more", shown, list.len() - 4)
 }
 
 fn accuracy(ui: &mut egui::Ui, t: &Tokens, p: &Value) {
@@ -392,10 +405,14 @@ fn accuracy(ui: &mut egui::Ui, t: &Tokens, p: &Value) {
     );
     for g in r["groups"].as_array().map(Vec::as_slice).unwrap_or_default() {
         let label = Group::from_id(g["group"].as_str().unwrap_or_default()).map(|g| tr(g.label()).to_string()).unwrap_or_default();
-        if g["kept"].as_bool() == Some(true) {
-            ui.label(format!("{label}: {}", errors(g)));
-        } else {
+        let (learned, skipped) = group_lines(g);
+        if learned.is_empty() {
             ui.label(RichText::new(tr_format!("{}: not learned, your edits there follow no pattern it can see", label)).color(t.text_dim));
+            continue;
+        }
+        ui.label(format!("{label}: {}", names(&learned)));
+        if !skipped.is_empty() {
+            ui.label(RichText::new(tr_format!("{} skipped, no pattern: {}", label, names(&skipped))).color(t.text_dim));
         }
     }
 }

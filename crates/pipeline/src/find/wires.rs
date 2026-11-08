@@ -426,6 +426,7 @@ pub fn detect_with(img: &Rgba8, sensitivity: f32, cancel: &AtomicBool) -> Vec<Ca
                 score: f.score,
                 main: false,
                 spots: cover::cover_path(&f.path, f.width, w, h),
+                region: super::region::path_region(&f.path, f.width, w, h).map(std::sync::Arc::new),
             }
         })
         .collect()

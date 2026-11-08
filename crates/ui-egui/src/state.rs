@@ -10,9 +10,9 @@ mod view;
 pub use delete_files::DeleteFiles;
 pub use dialog::{Dialog, NameEdit, SyncCounts, default_preset_groups};
 pub use settings::{
-    AppSettings, AppearanceMode, DarkTheme, EditFile, EditFormat, EditSpace, GridBadges, KeywordChips, LOUPE_EDGE_CEILING, LOUPE_EDGE_STEP,
-    LaunchLibrary, LightTheme, LightroomImport, MIN_TEXTURE_SIDE, PHOTOCRAFT, PREVIEW_LIMITS, RECENT_LIBRARIES, STANDARD_PREVIEW_EDGE, StartupView,
-    WINDOW_FRAME_CEILING,
+    AppSettings, AppearanceMode, DarkTheme, EditFile, EditFormat, EditSpace, GridBadges, HOT_PIXEL_LIMIT_DEFAULT, HOT_PIXEL_LIMITS, KeywordChips,
+    LOUPE_EDGE_CEILING, LOUPE_EDGE_STEP, LaunchLibrary, LightTheme, LightroomImport, MIN_TEXTURE_SIDE, PHOTOCRAFT, PREVIEW_LIMITS, RECENT_LIBRARIES,
+    STANDARD_PREVIEW_EDGE, StartupView, WINDOW_FRAME_CEILING,
 };
 pub use view::{
     BRIEF_INFO_SECS, BeforeAfter, BriefInfo, CLICK_ZOOMS, CropOverlay, FOCUS_KEYWORDS_PASSES, InfoOverlay, KeywordingView, LEFT_WIDTH, LayoutImage,
@@ -319,6 +319,10 @@ pub struct UiState {
     pub remove_opacity: f32,
     /// The fill of new Remove and Content-Aware spots (the Remove panel's Fill picker, `fork/lama-fill.md`).
     pub remove_fill: lightcraft_develop::SpotFill,
+    /// Object mode in the Remove panel, its fill and the Expand of new object spots (`fork/object-remove.md`).
+    pub remove_object: bool,
+    pub remove_object_fill: lightcraft_develop::SpotFill,
+    pub remove_expand: f32,
     /// The Learn My Edits window (`fork/learn-my-edits.md`); not saved.
     #[serde(skip)]
     pub learn_edits: crate::learn_edits::Window,
@@ -432,6 +436,12 @@ pub struct UiState {
     pub status: String,
     #[serde(skip)]
     pub dialog: Option<Dialog>,
+    /// The last app version whose startup dialog was shown; `None` = the dialog was never
+    /// presented (never run, pre-feature settings, or a file saved before it was shown — that is
+    /// why `None` serializes, as `null`, instead of being omitted: a settings file from this
+    /// version without a seen version must not read as a pre-feature file).
+    #[serde(default)]
+    pub seen_version: Option<String>,
     /// The Print dialog's page, selection and drag.
     #[serde(skip)]
     pub print: crate::print_view::PrintUi,
@@ -562,6 +572,9 @@ impl Default for UiState {
             remove_feather: 50.0,
             remove_opacity: 100.0,
             remove_fill: lightcraft_develop::SpotFill::Classic,
+            remove_object: false,
+            remove_object_fill: lightcraft_develop::SpotFill::Lama,
+            remove_expand: 0.005,
             learn_edits: Default::default(),
             point_color: 0,
             point_color_visualize: false,
@@ -601,6 +614,7 @@ impl Default for UiState {
             #[cfg(test)]
             find_missing_test_delay: None,
             rechecked_library: None,
+            seen_version: None,
             lens_download_checked: false,
             lens_refreshed: None,
             lens_lookup_ids: Vec::new(),
@@ -705,6 +719,16 @@ impl UiState {
             StartupView::Detail => self.view = ViewMode::Detail,
         }
         self
+    }
+
+    /// Record that the startup dialog for the running version has been presented.
+    ///
+    /// Record-on-show semantics: `seen_version` is set when the dialog is laid out in a UI pass
+    /// (`dialogs::show`), not when the logic tick picks it — a host that quits before a visible
+    /// frame does not burn the tour — and a crash while the dialog is up does not re-trigger it
+    /// on every subsequent launch.
+    pub fn record_startup_dialog_seen(&mut self) {
+        self.seen_version = Some(env!("CARGO_PKG_VERSION").to_string());
     }
 }
 

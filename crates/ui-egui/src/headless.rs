@@ -423,6 +423,7 @@ impl Headless {
     /// input)?
     pub fn busy(&self) -> bool {
         self.app.renderer.in_flight() > 0
+            || self.app.session.spot_sources.pending() > 0
             || crate::panels::left::fs_cached_running(&self.view.ctx) > 0
             || self.app.merge.busy()
             || self.app.scan.is_some()
@@ -444,6 +445,21 @@ impl Headless {
 
     /// Run frames until nothing is pending (renders finished, input consumed) for a few frames in
     /// a row, or `timeout` passes. Returns whether it settled.
+    /// Step until every spot asked for in the background has been added with its source (`spot.add` with
+    /// `background`, what the Remove tool sends: issue #97). Whether they were, within 30 s (a hang guard).
+    pub fn settle_spot_sources(&mut self) -> bool {
+        let t0 = Instant::now();
+        while self.app.session.spot_sources.pending() > 0 {
+            if t0.elapsed() > Duration::from_secs(30) {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+            self.step();
+        }
+        self.step();
+        true
+    }
+
     pub fn settle(&mut self, timeout: Duration) -> bool {
         let t0 = Instant::now();
         let mut quiet = 0;

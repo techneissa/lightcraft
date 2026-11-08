@@ -1,3 +1,4 @@
+use super::builtin::{BuiltinModel, builtin_marker};
 use super::model::{Loader, Model, ModelSlot, RunOn, STACK};
 use super::settings::EXT;
 use super::{
@@ -138,6 +139,9 @@ impl Progress {
 
 /// The loaded model, loading it first when it is not (kept for the next photo).
 pub(super) fn loaded(spec: &JobSpec) -> Result<Arc<dyn Model>, MakeError> {
+    if spec.manifest.id == lightcraft_denoise::builtin::ID {
+        return Ok(Arc::new(BuiltinModel::new(&builtin_marker(&spec.onnx))));
+    }
     if let Some(m) = spec.model.lock().unwrap_or_else(PoisonError::into_inner).clone() {
         return Ok(m);
     }
@@ -195,12 +199,20 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
     }
     let decoded = began.elapsed();
     let model = loaded(spec)?;
+    // (a job stopped while its model loaded gives up now, not after its turn at the memory gate below)
+    if cancelled() {
+        return Err(MakeError::Cancelled);
+    }
     // Packed input, returned RGB and the preceding group's RGB overlap while tiles run.
     let scratch =
         model.bytes_per_tile().saturating_add(128usize.saturating_mul(spec.manifest.tile as usize).saturating_mul(spec.manifest.tile as usize));
     let (_, budget) = crate::memory::work_gate().usage();
     let parallel = spec.parallel.clamp(1, 4).min((budget / scratch.max(1)).max(1));
     let _held = crate::memory::work_gate().acquire(mosaic.data.len().saturating_mul(20).saturating_add(scratch.saturating_mul(parallel)));
+    model.prepare(&mosaic.data, mosaic.width, mosaic.height);
+    if cancelled() {
+        return Err(MakeError::Cancelled);
+    }
     let (runner, parallel) = model.runner(spec.run_on, parallel);
     let params = Params {
         tile: spec.manifest.tile as usize,

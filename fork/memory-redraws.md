@@ -19,3 +19,8 @@ Performance: memory and redraws: the loupe never draws another photo's pixels wh
 ## Tests
 
 `loupe_stand_in`, `auto_import`, `render::`, `thumbnail_memos`, `toast`, `lightcraft-preview` (`waker`)
+
+Two official tests in `render/thumbnail_tests.rs` are adapted (`// fork:`), because the look-ahead's stand-in is the raw's
+thumbnail render, never the camera JPEG: `a_running_stand_in_the_loupe_waits_for_keeps_its_slot` holds back the file read
+instead of the preview read, and `a_stand_in_made_ahead_for_a_smaller_loupe_is_not_taken_over` asks for camera-JPEG
+stand-ins, the only ones with a size.

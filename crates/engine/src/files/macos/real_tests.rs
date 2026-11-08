@@ -32,8 +32,16 @@ fn no_product() -> DenoiseSpec {
 /// The transferred plain picture (unscaled: the fixed gain taken off when the tone fit was refused) and macOS's own
 /// picture, both at `edge`, upright, and whether the transfer was accepted.
 pub(super) fn pair(bytes: &[u8], edge: usize) -> (Rgb32f, Rgb32f, bool) {
-    let (img, _, info, _) =
-        load_bytes_now(Cow::Borrowed(bytes), edge, Some(&no_product()), false, options(CameraColour::Macos), None, &System).unwrap();
+    let (img, _, info, _) = load_bytes_now(
+        Cow::Borrowed(bytes),
+        edge,
+        Some(&no_product()),
+        false,
+        options(CameraColour::Macos),
+        crate::media::RawDecode::default(),
+        &System,
+    )
+    .unwrap();
     let accepted = info.macos_note.is_none();
     let img = if info.camera_tone.is_none() {
         let gain = 2f32.powf(GAIN_STOPS);
@@ -144,7 +152,8 @@ fn a_real_denoised_picture_keeps_macos_colours() {
     let key = product.file_stem().unwrap().to_string_lossy().into_owned();
     let spec = DenoiseSpec { product, key, make: None };
     let (plain, twin, info, _) =
-        load_bytes_now(Cow::Borrowed(&bytes), 2560, Some(&spec), false, options(CameraColour::Macos), None, &System).unwrap();
+        load_bytes_now(Cow::Borrowed(&bytes), 2560, Some(&spec), false, options(CameraColour::Macos), crate::media::RawDecode::default(), &System)
+            .unwrap();
     assert!(info.macos_note.is_none(), "{:?}", info.macos_note);
     let twin = twin.expect("the product fits this raw");
     let unscale = |img: Rgb32f| match info.camera_tone {
@@ -184,7 +193,8 @@ fn a_real_denoised_picture_keeps_macos_colours() {
 fn the_white_balance_slider_neutralises_a_grey_patch() {
     use lightcraft_develop::{DevelopSettings, WbMode, WbScale};
     let Some(bytes) = sample() else { return };
-    let (img, _, info, _) = load_bytes_now(Cow::Borrowed(&bytes), 1600, None, false, options(CameraColour::Macos), None, &System).unwrap();
+    let (img, _, info, _) =
+        load_bytes_now(Cow::Borrowed(&bytes), 1600, None, false, options(CameraColour::Macos), crate::media::RawDecode::default(), &System).unwrap();
     assert!(info.macos_note.is_none() && !info.relative_wb && info.legacy_relative_wb);
     let (cols, rows) = (img.width / 32, img.height / 32);
     let blocks = super::colour_transfer::means(&img, cols, rows);
@@ -231,8 +241,10 @@ fn the_file_loader_renders_from_the_path_like_the_bytes() {
     };
     let path = std::path::PathBuf::from(path);
     let bytes = std::fs::read(&path).unwrap();
-    let (from_bytes, _, a, _) = load_bytes_now(Cow::Borrowed(&bytes), 1600, None, false, options(CameraColour::Macos), None, &System).unwrap();
-    let (from_path, _, b, _) = super::super::load::load_file(&path, bytes, 1600, None, false, options(CameraColour::Macos), None).unwrap();
+    let (from_bytes, _, a, _) =
+        load_bytes_now(Cow::Borrowed(&bytes), 1600, None, false, options(CameraColour::Macos), crate::media::RawDecode::default(), &System).unwrap();
+    let (from_path, _, b, _) =
+        super::super::load::load_file(&path, bytes, 1600, None, false, options(CameraColour::Macos), crate::media::RawDecode::default()).unwrap();
     assert!(a.macos_note.is_none() && b.macos_note.is_none());
     assert_eq!((from_path.width, from_path.height), (from_bytes.width, from_bytes.height));
     let worst = from_bytes.data.iter().flatten().zip(from_path.data.iter().flatten()).map(|(x, y)| (x - y).abs()).fold(0f32, f32::max);

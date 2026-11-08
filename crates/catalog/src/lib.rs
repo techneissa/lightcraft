@@ -14,13 +14,17 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 pub mod dates;
+mod delta;
 pub mod exif_override;
 #[cfg(not(target_arch = "wasm32"))]
 #[doc(hidden)]
 pub mod fault;
 pub mod folders;
+pub mod fork_format;
+mod history_serde;
 mod index;
 pub mod journal;
+mod journal_delta;
 pub mod keywords;
 pub mod lens_limits;
 pub mod local;
@@ -225,8 +229,8 @@ pub enum Op {
         /// `None` = its raw data decodes (or it isn't a raw).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         preview_only: Option<String>,
-        /// The app version that decided `preview_only` (see [`Photo::preview_checked`]); empty
-        /// when it is `None`.
+        /// The app version that decided `preview_only` (see [`Photo::preview_checked`]); also
+        /// retained for supported ORF files so their withdrawal recheck runs only once.
         #[serde(default, skip_serializing_if = "String::is_empty")]
         preview_checked: String,
     },
@@ -293,6 +297,13 @@ pub struct Catalog {
     /// What the library keeps about its folders (folder identity → record), see [`folders`].
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     folder_records: BTreeMap<String, FolderRecord>,
+    /// Segmentation grids shared by this snapshot's masks: each distinct grid's data once, in
+    /// first-appearance order, referenced by index from the masks ([`lightcraft_develop::\
+    /// SegMask::grid`] is a position here). A serialization detail of snapshots
+    /// ([`journal`]): never held in the live catalog — [`Catalog::repair`] resolves the
+    /// references and clears the table when a snapshot is read.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    grids: Vec<String>,
     /// Increments on every applied op, and when a batch fails and its rollback cannot undo it whole (the catalog
     /// changed, so what is keyed by the revision is out of date).
     #[serde(skip)]
@@ -369,6 +380,25 @@ impl std::fmt::Debug for PlansMemo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("PlansMemo")
     }
+}
+
+/// Resolves the shared-grid references of one settings holder (see [`Photo::settings_holders`])
+/// against a snapshot's grid table: each referenced mask takes its
+/// grid's data and the reference is cleared. A reference past the table (a damaged snapshot)
+/// leaves the mask empty — it renders nothing, like any other damaged grid. Data present on the
+/// mask itself wins over a stray reference. Returns the dangling count added to `dangling`.
+fn resolve_grids(settings: &mut Arc<DevelopSettings>, grids: &[String], dangling: usize) -> usize {
+    let mut dangling = dangling;
+    Arc::make_mut(settings).visit_seg_masks_mut(&mut |m| {
+        if let Some(i) = m.grid.take() {
+            match (m.data.is_empty(), grids.get(i as usize)) {
+                (true, Some(data)) => m.data = data.clone(),
+                (true, None) => dangling += 1,
+                (false, _) => {}
+            }
+        }
+    });
+    dangling
 }
 
 /// A short memory of what the latest ops changed, so that what is derived from the catalog (the grid's list) can
@@ -892,16 +922,8 @@ impl Catalog {
             Op::PushHistory { id, step } => {
                 let p = self.photo_mut(id)?;
                 let old = p.history.clone();
-                let old_cursor = p.history_cursor.take();
-                // a new edit made from an earlier step drops the steps after it
-                if let Some(c) = old_cursor {
-                    p.history.truncate(c.saturating_add(1));
-                }
-                p.history.push(step);
-                if p.history.len() > HISTORY_LIMIT {
-                    let n = p.history.len() - HISTORY_LIMIT;
-                    p.history.drain(..n);
-                }
+                let old_cursor = p.history_cursor;
+                p.push_history(step);
                 if old_cursor.is_none() {
                     Op::SetHistory { id, history: old }
                 } else {
@@ -1196,6 +1218,23 @@ impl Catalog {
     /// wrote).
     pub fn repair(&mut self) -> Vec<String> {
         let mut changed = Vec::new();
+        // Segmentation grids shared by the snapshot this was read from (issue #2154): each
+        // reference takes its grid's data, and the table is not kept — a live catalog always
+        // stores the data inline, so masks render and serialize without the snapshot's table.
+        // Resolving is the normal way a snapshot in this format reads (not reported); a
+        // reference past the table is damage and is reported — that includes a reference into
+        // an empty table, which is always dangling, so the table being empty does not skip it.
+        let grids = std::mem::take(&mut self.grids);
+        let mut dangling = 0usize;
+        for p in self.photos.values_mut() {
+            let photo = Arc::make_mut(p);
+            for settings in photo.settings_holders_mut() {
+                dangling = resolve_grids(settings, &grids, dangling);
+            }
+        }
+        if dangling > 0 {
+            changed.push(format!("{dangling} segmentation grid reference(s) pointed past the shared table: cleared"));
+        }
         for (id, p) in self.photos.iter_mut() {
             if p.id != *id {
                 changed.push(format!("photo {} was filed as {}", p.id.0, id.0));
@@ -1492,9 +1531,13 @@ mod tests_folders;
 #[cfg(test)]
 mod tests_format_version;
 #[cfg(test)]
+mod tests_grids;
+#[cfg(test)]
 mod tests_index;
 #[cfg(test)]
 mod tests_journal;
+#[cfg(test)]
+mod tests_journal_delta;
 #[cfg(test)]
 mod tests_local;
 #[cfg(test)]
