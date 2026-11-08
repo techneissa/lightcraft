@@ -102,6 +102,13 @@ fn stroke_alpha(spot: &Spot, pts: &[(f32, f32)], r: f32, b: PixelBox) -> Vec<f32
     alpha
 }
 
+/// A shaped spot's alpha in `b` (`crate::spot_area`); `None` for a stroke spot.
+fn shaped_alpha(spot: &Spot, frame: &Frame, (w, h): (usize, usize), r: f32, b: PixelBox) -> Option<Vec<f32>> {
+    let feather = (spot.feather / 100.0).clamp(0.0, 1.0) as f32;
+    let opacity = (spot.opacity / 100.0).clamp(0.0, 1.0) as f32;
+    crate::spot_area::alpha(spot, frame, w, h, (b.x0, b.y0, b.w(), b.h()), r, r * (1.0 - feather * 0.8), opacity)
+}
+
 /// Draw every learned spot of `spots` on `img` (output resolution, `ppl` output pixels per long edge) before the
 /// white balance. `reference_long` is the long edge of the original in pixels: the fill sees each crop at the size it
 /// has there. Says, per spot, whether it is done (a spot that is not learned, or got no learned fill, is not).
@@ -124,10 +131,15 @@ pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64, referenc
             break;
         }
         let r = radius_px(spot.size, ppl) as f32;
-        let pts: Vec<(f32, f32)> =
-            spot.points.iter().map(|p| to_out.apply(*p)).filter(|q| q.x.is_finite() && q.y.is_finite()).map(|q| (q.x as f32, q.y as f32)).collect();
+        // (a shaped spot's box and alpha are its shape's, `spot_area`)
+        let pts: Vec<(f32, f32)> = crate::spot_area::box_points(spot)
+            .iter()
+            .map(|p| to_out.apply(*p))
+            .filter(|q| q.x.is_finite() && q.y.is_finite())
+            .map(|q| (q.x as f32, q.y as f32))
+            .collect();
         let Some(b) = (!pts.is_empty()).then(|| stroke_box(&pts, r, w, h)).flatten() else { continue };
-        let alpha = stroke_alpha(spot, &pts, r, b);
+        let alpha = shaped_alpha(spot, frame, (w, h), r, b).unwrap_or_else(|| stroke_alpha(spot, &pts, r, b));
         if !alpha.iter().any(|a| *a > 0.0) {
             // nothing to rebuild (zero opacity): nothing for the Classic fill to draw either
             *done = true;

@@ -1279,6 +1279,10 @@ pub struct Spot {
     /// When its circle shows on the photo; `None` follows the Tool Overlay. Not written when `None`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub circle: Option<crate::spot_circle::SpotCircle>,
+    /// The spot's shape when it is drawn in the shape of an object or a mask instead of along its stroke (fork
+    /// feature, `fork/object-remove.md`). Not written for a stroke spot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub area: Option<crate::spot_area::SpotArea>,
 }
 
 impl Default for Spot {
@@ -1293,6 +1297,7 @@ impl Default for Spot {
             fill: SpotFill::Classic,
             hidden: false,
             circle: None,
+            area: None,
         }
     }
 }

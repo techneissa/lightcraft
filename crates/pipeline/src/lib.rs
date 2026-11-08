@@ -47,6 +47,7 @@ pub mod optics;
 pub mod output;
 pub mod profiles;
 pub mod redeye;
+pub mod spot_area;
 pub mod spots;
 pub mod spots_learned;
 pub mod straighten;
