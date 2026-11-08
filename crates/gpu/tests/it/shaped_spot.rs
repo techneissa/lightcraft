@@ -37,6 +37,9 @@ fn a_shaped_spot_renders_on_the_cpu_and_both_paths_agree() {
     let with = |hidden: bool| DevelopSettings { spots: vec![shaped(hidden)], ..Default::default() };
     // the GPU leaves it to the CPU, so the app's render (GPU, then CPU) is the CPU's picture
     assert!(matches!(lightcraft_gpu::try_render(&src, &info, &with(false), &req, None), Err(Fallback::NotTried)));
+    // a LaMa one too (its fill runs on the CPU either way)
+    let lama = DevelopSettings { spots: vec![Spot { fill: lightcraft_develop::SpotFill::Lama, ..shaped(false) }], ..Default::default() };
+    assert!(matches!(lightcraft_gpu::try_render(&src, &info, &lama, &req, None), Err(Fallback::NotTried)));
     let cpu = render(&src, &info, &with(false), &req).image;
     let plain = render(&src, &info, &DevelopSettings::default(), &req).image;
     assert_ne!(cpu.data, plain.data, "the spot changes the picture");
