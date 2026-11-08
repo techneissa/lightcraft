@@ -48,6 +48,8 @@ pub struct State {
     url: String,
     /// 0..100.
     amount: f32,
+    /// Also fit the residual Look (off by default).
+    look: bool,
     running: bool,
     next_pump: f64,
     message: Option<String>,
@@ -64,6 +66,11 @@ type PreviewSlot = std::sync::Arc<std::sync::Mutex<Option<Option<Rgba8>>>>;
 
 impl State {
     /// A match started from the window is still running.
+    /// Whether the match also fits the residual Look.
+    pub fn look(&self) -> bool {
+        self.look
+    }
+
     pub fn running(&self) -> bool {
         self.running
     }
@@ -150,6 +157,9 @@ pub fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Va
             if let Some(a) = p.get("amount").and_then(Value::as_f64) {
                 state(app).amount = a.clamp(0.0, 100.0) as f32;
             }
+            if let Some(on) = p.get("look").and_then(Value::as_bool) {
+                state(app).look = on;
+            }
             Some(apply(app))
         }
         _ => None,
@@ -192,11 +202,15 @@ fn apply(app: &mut LightcraftApp) -> Result<Value, String> {
     }
     let Some(r) = s.reference.clone() else { return Err(tr("Choose a reference first").to_string()) };
     let amount = s.amount as f64;
+    let look = s.look;
     let ids: Vec<u64> = app.session.selected().into_iter().filter(|id| Reference::Photo(*id) != r).map(|id| id.0).collect();
     if ids.is_empty() {
         return Err(tr("Select the photos to match").to_string());
     }
-    let v = app.session.execute("develop.matchLook", &json!({"ids": ids, "reference": reference_param(&r), "amount": amount, "wait": false}));
+    let v = app.session.execute(
+        "develop.matchLook",
+        &json!({"ids": ids, "reference": reference_param(&r), "amount": amount, "options": {"look": look}, "wait": false}),
+    );
     let s = state(app);
     match v {
         Ok(v) => {
@@ -404,6 +418,9 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
             let s = state(app);
             let slider = ui.add(egui::Slider::new(&mut s.amount, 0.0..=100.0).text(tr("Amount")).step_by(1.0).suffix(" %"));
             crate::widgets::register_response("matchLook:amount", slider.rect, &slider);
+            let r = ui.checkbox(&mut s.look, tr("Residual Look"));
+            crate::widgets::register_response("matchLook:look", r.rect, &r);
+            r.on_hover_text(tr("A colour lookup after the sliders, for what they can't reach"));
             let n = app.session.selected().len();
             ui.label(egui::RichText::new(tr_format!("Applies to {n} selected photo(s)", n = n)).color(t.text_dim));
             ui.add_space(6.0);

@@ -117,17 +117,59 @@ impl Param {
     /// within the noise of the measurement. Broad sliders cost little, narrow ones more.
     pub fn prior(&self, from: f64, to: f64) -> f64 {
         let (scale, weight) = match self {
-            Param::Control(id) if *id == "light.exposure" => (2.0, 2e-4),
-            Param::Control(id) if id.starts_with("mixer.") => (100.0, 2e-3),
-            Param::Control(id) if id.starts_with("light.") || id.starts_with("color.") => (100.0, 1e-3),
-            Param::Control(_) => (100.0, 2e-4),
+            Param::Control(id) if *id == "light.exposure" => (2.0, 6e-4),
+            Param::Control(id) if id.starts_with("mixer.") => (100.0, 8e-3),
+            Param::Control(id) if id.starts_with("light.") || id.starts_with("color.") => (100.0, 4e-3),
+            Param::Control(_) => (100.0, 8e-4),
             // a white balance far off is rarely the look: a strong cast should rather go to the grading wheels
-            Param::Mired => (50.0, 1.5e-3),
-            Param::Tint => (50.0, 1.5e-3),
-            Param::Wheel(..) => (50.0, 2e-3),
+            Param::Mired => (50.0, 3e-3),
+            Param::Tint => (50.0, 3e-3),
+            Param::Wheel(..) => (50.0, 4e-3),
         };
         let d = (to - from) / scale;
         weight * d * d
+    }
+
+    /// The furthest the fit moves this number from where the photo had it, so a match looks natural at Amount 100.
+    /// `large`: for a colour mixer band, the hue is a large part of both pictures (a smaller band is a colour the
+    /// two only share by chance, such as a blue shirt against a navy sofa, and moves little). A grading wheel's cap is
+    /// on the distance its point moves.
+    pub fn cap(&self, large: bool) -> f64 {
+        match self {
+            Param::Control(id) if *id == "light.exposure" => 1.5,
+            Param::Control(id) if id.starts_with("mixer.") => {
+                let part = id.rsplit('.').next().unwrap_or("");
+                match (part, large) {
+                    ("hue", true) => 20.0,
+                    ("sat", true) => 35.0,
+                    ("lum", true) => 25.0,
+                    ("hue", false) => 10.0,
+                    ("sat", false) => 15.0,
+                    _ => 10.0,
+                }
+            }
+            Param::Control(id) if *id == "light.highlights" || *id == "light.shadows" => 50.0,
+            Param::Control(id) if *id == "color.saturation" => 35.0,
+            Param::Control(_) => 40.0,
+            Param::Mired => 80.0,
+            Param::Tint => 40.0,
+            Param::Wheel(..) => 30.0,
+        }
+    }
+
+    /// The other axis of a grading wheel.
+    pub fn other_axis(&self) -> Option<Param> {
+        match self {
+            Param::Wheel(z, y) => Some(Param::Wheel(*z, !*y)),
+            _ => None,
+        }
+    }
+
+    /// The colour mixer band this number belongs to.
+    pub fn mixer_band(&self) -> Option<usize> {
+        let Param::Control(id) = self else { return None };
+        let name = id.strip_prefix("mixer.")?.split('.').next()?;
+        lightcraft_develop::MIXER_BANDS.iter().position(|b| *b == name)
     }
 
     /// The smallest step worth trying (below it the fitter stops refining this number).

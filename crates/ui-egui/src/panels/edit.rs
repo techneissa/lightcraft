@@ -166,6 +166,11 @@ fn show_sections(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         control(app, ui, &d, "profile.amount", true);
         ui.add_space(6.0);
     }
+    // Match Look's residual Look (fork): its Amount, while the photo has one
+    if !d.look.is_identity() {
+        control(app, ui, &d, "look.amount", true);
+        ui.add_space(6.0);
+    }
     // a raw carrying its own local tone mapping (Apple ProRAW's gain table map): off renders it as
     // Lightroom Classic does, on as the camera does
     if app.session.source_info(id).local_tone.is_some() {

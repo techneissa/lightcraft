@@ -154,6 +154,9 @@ pub struct DevelopSettings {
     pub reflection: Reflection,
     /// Camera calibration: shadows tint and primary hue/saturation (applied before tone mapping).
     pub calibration: Calibration,
+    /// Match Look's residual Look (fork); not written while it changes nothing.
+    #[serde(skip_serializing_if = "crate::residual_look::ResidualLook::is_default")]
+    pub look: crate::residual_look::ResidualLook,
     /// Section on/off toggles (the "eye" buttons on panel headers): section id → enabled.
     pub disabled_sections: Vec<String>,
 }
@@ -189,6 +192,7 @@ impl Default for DevelopSettings {
             enhance: Enhance::default(),
             reflection: Reflection::default(),
             calibration: Calibration::default(),
+            look: crate::residual_look::ResidualLook::default(),
             disabled_sections: Vec::new(),
         }
     }

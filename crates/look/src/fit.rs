@@ -43,10 +43,15 @@ pub(crate) struct Fitter<'a> {
     pub start: DevelopSettings,
     /// Every number any stage may move (the prior is summed over them).
     pub all: Vec<Param>,
+    /// The colour mixer bands that are a large part of both pictures (their sliders may move further).
+    pub large_bands: Vec<usize>,
 }
 
+/// A mixer band counts as large once it holds this share of both pictures.
+pub(crate) const LARGE_BAND_SHARE: f32 = 0.08;
+
 /// The improvement that counts (relative to the loss, plus a floor far below anything visible).
-fn tolerance(best: f64) -> f64 {
+pub(crate) fn tolerance(best: f64) -> f64 {
     best * 1e-4 + 1e-9
 }
 
@@ -92,12 +97,26 @@ impl Fitter<'_> {
         Ok(())
     }
 
+    /// `v` kept within `p`'s cap around where the photo started ([`Param::cap`]).
+    pub fn limit(&self, p: &Param, d: &DevelopSettings, v: f64) -> f64 {
+        let cap = p.cap(p.mixer_band().is_some_and(|b| self.large_bands.contains(&b)));
+        let s0 = p.get(&self.start);
+        let reach = match p.other_axis() {
+            Some(o) => {
+                let off = o.get(d) - o.get(&self.start);
+                (cap * cap - off * off).max(0.0).sqrt()
+            }
+            None => cap,
+        };
+        v.clamp(s0 - reach, s0 + reach)
+    }
+
     /// Try `p` one step up and down; on a better look keep going that way with growing steps. Whether it moved.
     fn try_param(&mut self, d: &mut DevelopSettings, best: &mut f64, p: &Param, step: f64) -> Result<bool, Stop> {
         let v0 = p.get(d);
         for dir in [1.0, -1.0] {
             let mut trial = d.clone();
-            let v = p.set(&mut trial, v0 + dir * step);
+            let v = p.set(&mut trial, self.limit(p, d, v0 + dir * step));
             if (v - v0).abs() < 1e-9 {
                 continue;
             }
@@ -110,7 +129,7 @@ impl Fitter<'_> {
                     s *= 2.0;
                     let mut further = d.clone();
                     let from = p.get(d);
-                    let to = p.set(&mut further, from + dir * s);
+                    let to = p.set(&mut further, self.limit(p, d, from + dir * s));
                     if (to - from).abs() < 1e-9 {
                         break;
                     }
@@ -138,7 +157,7 @@ impl Fitter<'_> {
             .collect()
     }
 
-    fn measure(&mut self, d: &DevelopSettings) -> Stats {
+    pub(crate) fn measure(&mut self, d: &DevelopSettings) -> Stats {
         let img = lightcraft_pipeline::render(self.src, self.info, d, &self.req).image;
         stats::measure(&img, self.goals.first().and_then(|g| g.mask.as_ref()))
     }
@@ -222,6 +241,12 @@ impl Fitter<'_> {
         }
         if opts.mixer {
             let now = self.measure(d);
+            self.large_bands = (0..MIXER_BANDS.len())
+                .filter(|&i| {
+                    now.bands.get(i).is_some_and(|b| b.share >= LARGE_BAND_SHARE)
+                        && self.goals.iter().any(|g| g.stats.bands.get(i).is_some_and(|b| b.share >= LARGE_BAND_SHARE))
+                })
+                .collect();
             let mut mix = Vec::new();
             for i in self.shared_bands(&now) {
                 for part in ["hue", "sat", "lum"] {
@@ -246,6 +271,9 @@ impl Fitter<'_> {
             polish.extend([Mired, Tint]);
         }
         self.descend(d, best, &polish, 1)?;
+        if opts.look {
+            self.fit_look(d, best)?;
+        }
         Ok(())
     }
 }

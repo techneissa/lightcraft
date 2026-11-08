@@ -138,3 +138,32 @@ fn a_large_pasted_picture_is_kept_small() {
     let held = s.match_look.pasted.clone().unwrap();
     assert_eq!((held.width, held.height), (1024, 683), "stored small, not at 3000×2000");
 }
+
+/// `match-look-followups`: with `options.look` the match also saves a residual Look, which `look.amount` scales and
+/// one undo removes; without it no Look is saved.
+#[test]
+fn the_residual_look_is_saved_with_the_edit_when_asked() {
+    let (mut s, ids) = demo();
+    let (a, reference) = (ids[0], ids[1]);
+    let before = (*s.develop_of(a).unwrap()).clone();
+    // a cast that only a Look makes, on a reference matched without white balance or grading
+    let look = json!({"cast": [[0.0, -0.04], [0.03, 0.0], [-0.04, 0.0]]});
+    s.execute("library.select", &json!({"ids": [reference], "active": reference})).unwrap();
+    s.execute("develop.merge", &json!({"settings": {"look": look}})).unwrap();
+    assert!(s.develop_of(reference).unwrap().look.is_active());
+    s.execute("library.select", &json!({"ids": [a], "active": a})).unwrap();
+    let opts = json!({"whiteBalance": false, "grading": false});
+    s.execute("develop.matchLook", &json!({"ids": [a], "reference": {"photo": reference}, "options": opts})).unwrap();
+    assert!(s.develop_of(a).unwrap().look.is_identity(), "off by default");
+    s.execute("edit.undo", &json!({})).unwrap();
+    let opts = json!({"whiteBalance": false, "grading": false, "look": true});
+    let v = s.execute("develop.matchLook", &json!({"ids": [a], "reference": {"photo": reference}, "options": opts})).unwrap();
+    assert!(v["photos"][0]["look"].is_object(), "{v}");
+    let d = s.develop_of(a).unwrap();
+    assert!(d.look.is_active(), "{:?}", d.look);
+    s.execute("develop.set", &json!({"ids": [a], "values": {"look.amount": 40}})).unwrap();
+    assert_eq!(s.develop_of(a).unwrap().look.amount, 40.0);
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(*s.develop_of(a).unwrap(), before);
+}

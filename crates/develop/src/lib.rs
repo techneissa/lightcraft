@@ -8,12 +8,14 @@
 
 pub mod controls;
 pub mod presets;
+pub mod residual_look;
 pub mod segmask;
 pub mod settings;
 pub mod spot_circle;
 
 pub use controls::{CONTROLS, ControlSpec, Section, Track};
 pub use presets::{Preset, SettingsGroup, apply_partial, extract_groups};
+pub use residual_look::{LOOK_KNOTS, ResidualLook};
 pub use segmask::SegMask;
 pub use settings::*;
 pub use spot_circle::SpotCircle;
