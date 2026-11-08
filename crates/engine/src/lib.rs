@@ -96,6 +96,7 @@ pub mod slide_title;
 pub mod slideshow;
 pub mod slideshow_export;
 pub mod smart;
+pub mod spot_area;
 pub mod sync;
 mod sync_same;
 pub mod text;
@@ -388,6 +389,8 @@ pub struct Session {
     pub finds: find_removals::Finds,
     /// The LaMa fill behind Remove spots whose fill is LaMa (`fork/lama-fill.md`).
     pub lama: lama_fill::LamaFill,
+    /// Object clicks of the Remove tool on their way to SAM 3 (fork, `fork/object-remove.md`).
+    pub object_jobs: spot_area::ObjectJobs,
     /// The persistent library this session writes to (`None` = in-memory only).
     pub library: Option<library::Library>,
     /// Identity of current library opening; refreshed only after a successful open.
@@ -591,6 +594,7 @@ impl Session {
             active_spot: None,
             finds: Default::default(),
             lama: lama_fill::LamaFill::new(activity.clone()),
+            object_jobs: Default::default(),
             library: None,
             library_identity: Arc::new(()),
             xmp: sidecar::XmpPrefs::default(),

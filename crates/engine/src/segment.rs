@@ -16,6 +16,7 @@
 //! MCP, tests) they wait for the worker.
 
 pub mod birefnet;
+pub(crate) mod clicks_request;
 #[cfg(feature = "sam")]
 mod download;
 pub(crate) mod request;
@@ -849,8 +850,9 @@ impl Session {
     /// their messages. Cheap when nothing is pending: call it every frame.
     pub fn segment_poll(&mut self) -> Polled {
         self.reconcile_segmenter();
-        #[cfg_attr(not(feature = "sam"), allow(unused_mut))]
         let mut polled = Polled { messages: std::mem::take(&mut self.segmenter.messages), ..Default::default() };
+        // Object clicks of the Remove tool (fork, `fork/object-remove.md`)
+        polled.changed |= self.poll_object_jobs(&mut polled.messages);
         #[cfg(feature = "sam")]
         {
             // (before draining: a worker that is idle now has sent everything)
