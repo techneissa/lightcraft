@@ -45,8 +45,17 @@ fn a_burst_of_spot_edits_renders_the_thumbnail_once_at_the_end() {
         }
     }
     assert_eq!(asked.len(), 1, "no thumbnail render during the burst");
-    // the edits pause: one render
-    for _ in 0..60 {
+    // the edits pause and the loupe has its render: one thumbnail render
+    let t0 = std::time::Instant::now();
+    let mut frames = 0;
+    while frames < 60 || h.app.renderer.is_pending(Slot::Main) {
+        assert!(t0.elapsed() < SETTLE, "the loupe never finished");
+        h.step();
+        frames += 1;
+        asked.insert(h.app.renderer.wanted(Slot::Thumb(id)));
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    for _ in 0..30 {
         h.step();
         asked.insert(h.app.renderer.wanted(Slot::Thumb(id)));
     }

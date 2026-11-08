@@ -2,7 +2,7 @@
 //!
 //! Every edit renders the photo's filmstrip thumbnail again, a second full render next to the loupe's. While the Remove
 //! panel is open, the thumbnail of the photo in the loupe now follows once its edits have paused for [`SETTLE`]
-//! seconds: a burst of spots renders it once, at the end. A slider drag already holds it back the same way
+//! seconds and the loupe has its render: a burst of spots renders it once, at the end, after the loupe's. A slider drag already holds it back the same way
 //! (`panels::grid::request_thumb`).
 
 use lightcraft_catalog::PhotoId;
@@ -37,7 +37,8 @@ pub(crate) fn waits(app: &mut LightcraftApp, id: PhotoId) -> bool {
     let now = app.tick_now();
     match app.edited_thumb.held {
         Some((p, l, since)) if p == id && l == look => {
-            if now - since < SETTLE {
+            // (and while the loupe renders: the thumbnail never takes the device from it)
+            if now - since < SETTLE || app.renderer.is_pending(crate::render::Slot::Main) {
                 return true;
             }
             app.edited_thumb.held = None;
