@@ -10,7 +10,7 @@ use lightcraft_pipeline::finish::{FinishParams, FinishParamsInput};
 use lightcraft_pipeline::geometry::SampleMode;
 use lightcraft_pipeline::local::plane_at;
 use lightcraft_pipeline::masks::PlanesOut;
-use lightcraft_pipeline::spots_keep::{CpuKept, Kept};
+use lightcraft_pipeline::spots_keep::{CpuKept, Kept, KeptStore};
 use lightcraft_pipeline::{Plan, RenderRequest, Rendered, SourceInfo, local};
 use lightcraft_raster::resample::Filter;
 use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8};
@@ -27,6 +27,10 @@ pub struct GpuStages {
     source: Mutex<Option<(Arc<Rgb32f>, Arc<Buf>)>>,
     /// The alphas of the last render's masks and the brush parts they were built from.
     alphas: crate::masks::AlphaStore,
+    /// The spots of the last renders (`spots_keep`), on the device or (for the scene-linear stage on the CPU) on the
+    /// host: a spot edit draws only what it reaches.
+    spots: KeptStore<Kept<Buf, Buf>>,
+    spots_cpu: KeptStore<CpuKept>,
 }
 
 const CAPACITY: usize = 2;
@@ -38,10 +42,6 @@ struct Entry {
     sampled: Arc<Buf>,
     lin: Option<(u64, Arc<Buf>)>,
     planes: Planes,
-    /// The images before and after the spots of the last render (`spots_keep`), on the device or (for the scene-linear
-    /// stage on the CPU) on the host: a spot edit draws only what it reaches.
-    spots: Option<Arc<Kept<Buf, Buf>>>,
-    spots_cpu: Option<Arc<CpuKept>>,
 }
 
 /// Spatial planes of one linear image (`key` = its `lin_key`), each tagged with its radius.
@@ -112,10 +112,6 @@ impl GpuStages {
             if let Some((_, b)) = &e.lin {
                 add(b);
             }
-            if let Some(k) = &e.spots {
-                add(&k.post);
-                patches += k.patches.iter().flatten().map(|p| (p.before.len + p.after.len) * 4).sum::<usize>();
-            }
             let p = &e.planes;
             p.log_l.iter().for_each(&mut add);
             p.base.iter().for_each(|(_, b)| add(b));
@@ -128,6 +124,10 @@ impl GpuStages {
             add(b);
         }
         self.alphas.each(&mut add);
+        self.spots.each(|k| {
+            add(&k.post);
+            patches += k.patches.iter().flatten().map(|p| (p.before.len + p.after.len) * 4).sum::<usize>();
+        });
         total + patches
     }
 
@@ -136,6 +136,8 @@ impl GpuStages {
         self.lock().clear();
         *self.source.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.alphas.clear();
+        self.spots.clear();
+        self.spots_cpu.clear();
     }
 
     pub fn is_empty(&self) -> bool {
@@ -753,12 +755,15 @@ pub fn render(
     lap("sample", &mut t, &mut cx);
 
     // 2. white balance, defringe, spots, noise reduction
-    let mut kept = cached.as_ref().map(|e| (e.spots.clone(), e.spots_cpu.clone())).unwrap_or_default();
     let lin = match cached.as_ref().and_then(|e| e.lin.clone()).filter(|(k, _)| *k == plan.lin_key) {
         Some((_, b)) => b,
         None => {
+            let kept = stages.map(|c| (c.spots.get(src, plan.geo), c.spots_cpu.get(src, plan.geo))).unwrap_or_default();
             let (b, k) = linear(&mut cx, &sampled, info, &plan, &mut host, (kept.0.as_deref(), kept.1.as_deref()));
-            kept = k;
+            if let Some(c) = stages {
+                c.spots.put(src, plan.geo, k.0);
+                c.spots_cpu.put(src, plan.geo, k.1);
+            }
             Arc::new(b)
         }
     };
@@ -776,7 +781,7 @@ pub fn render(
     }
     lap("planes", &mut t, &mut cx);
     if let Some(c) = stages {
-        c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), planes, spots: kept.0, spots_cpu: kept.1 });
+        c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), planes });
     }
 
     // 4. masks

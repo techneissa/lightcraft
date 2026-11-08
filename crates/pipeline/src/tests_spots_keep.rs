@@ -192,3 +192,20 @@ fn a_change_never_draws_the_spots_before_it() {
     s.spots[3].opacity = 50.0;
     assert_eq!(edit(&cache, &src, &s), (1, true));
 }
+
+#[test]
+fn the_full_size_keeps_its_spots_through_a_drags_drafts() {
+    let (src, cache) = (scene(), StageCache::default());
+    let info = SourceInfo::default();
+    let mut s = DevelopSettings { spots: grid(30), ..Default::default() };
+    edit(&cache, &src, &s);
+    // a drag renders drafts at two other sizes: the stage cache holds two sizes, so the full size's entry goes
+    s.spots[4].opacity = 70.0;
+    for size in [400, 300] {
+        let before = spots_drawn();
+        render_cached(&src, &info, &s, &RenderRequest::fit(size, size), &cache);
+        assert_eq!(spots_drawn() - before, 30, "a size drawn the first time draws them all");
+    }
+    s.spots[4].opacity = 60.0;
+    assert_eq!(edit(&cache, &src, &s), (1, true), "the full render after the drag draws the spot it changed");
+}

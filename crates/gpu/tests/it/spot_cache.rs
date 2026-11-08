@@ -107,3 +107,24 @@ fn a_spot_edit_draws_only_the_spots_it_reaches_on_the_device() {
         assert!(drawn(&s).1, "step {step}");
     }
 }
+
+#[test]
+fn the_full_size_keeps_its_spots_through_a_drags_drafts_on_the_device() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(960, 640);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let cache = StageCache::default();
+    let drawn = |s: &DevelopSettings, size: usize| {
+        let before = spots_drawn();
+        lightcraft_gpu::render(&src, &info, s, &RenderRequest::fit(size, size), Some(&cache)).expect("gpu");
+        spots_drawn() - before
+    };
+    let mut s = DevelopSettings { spots: grid(30, 6), ..Default::default() };
+    assert_eq!(drawn(&s, 720), 30);
+    s.spots[4].opacity = 70.0;
+    assert_eq!((drawn(&s, 600), drawn(&s, 480)), (30, 30), "the drafts' sizes, each drawn the first time");
+    s.spots[4].opacity = 60.0;
+    assert_eq!(drawn(&s, 720), 1, "the full render after the drag draws the spot it changed");
+}

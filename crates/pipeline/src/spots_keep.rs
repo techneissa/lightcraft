@@ -208,6 +208,57 @@ impl<I, P> Kept<I, P> {
     }
 }
 
+/// Most output sizes a view keeps spots for: the full-size render and the two draft sizes a drag goes through, so
+/// the full render after a drag still finds its spots.
+pub const KEPT_SIZES: usize = 3;
+
+/// A view's kept spots ([`Kept`], [`CpuKept`]) per output size, of the photo source they were drawn from: the last
+/// [`KEPT_SIZES`]. Apart from the view's stage cache, which holds two sizes: a drag's drafts would push the full size
+/// out, and the full render after every drag drew every spot again.
+pub struct KeptStore<T> {
+    v: std::sync::Mutex<Vec<(std::sync::Weak<Rgb32f>, u64, Arc<T>)>>,
+}
+
+impl<T> Default for KeptStore<T> {
+    fn default() -> Self {
+        Self { v: std::sync::Mutex::new(Vec::new()) }
+    }
+}
+
+impl<T> KeptStore<T> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<(std::sync::Weak<Rgb32f>, u64, Arc<T>)>> {
+        self.v.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// What was kept for `src` at the size `geo` names ([`Plan::geo`]).
+    pub fn get(&self, src: &Arc<Rgb32f>, geo: u64) -> Option<Arc<T>> {
+        self.lock().iter().find(|(s, g, _)| *g == geo && std::sync::Weak::ptr_eq(s, &Arc::downgrade(src))).map(|e| e.2.clone())
+    }
+
+    /// Keep `kept` for `src` at `geo` (`None`: forget it), dropping the oldest size past [`KEPT_SIZES`] and anything of
+    /// a source that is gone.
+    pub fn put(&self, src: &Arc<Rgb32f>, geo: u64, kept: Option<Arc<T>>) {
+        let mut v = self.lock();
+        v.retain(|(s, g, _)| s.strong_count() > 0 && !(*g == geo && std::sync::Weak::ptr_eq(s, &Arc::downgrade(src))));
+        if let Some(k) = kept {
+            v.push((Arc::downgrade(src), geo, k));
+        }
+        while v.len() > KEPT_SIZES {
+            v.remove(0);
+        }
+    }
+
+    /// Forget everything.
+    pub fn clear(&self) {
+        self.lock().clear();
+    }
+
+    /// Each kept state, for counting its bytes.
+    pub fn each(&self, mut f: impl FnMut(&T)) {
+        self.lock().iter().for_each(|e| f(&e.2));
+    }
+}
+
 /// Key of the image the Classic spots are drawn on: everything [`Plan::pre_nr_key`] holds but those spots and the
 /// red eye corrections (drawn after them). The LaMa spots are drawn before the white balance and so are part of it,
 /// with which of them got their fill (`done`).

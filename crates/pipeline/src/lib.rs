@@ -338,11 +338,13 @@ pub struct StageCache {
     capacity: usize,
     /// Another renderer's per-view state (the GPU renderer keeps its device-resident stages here).
     ext: Mutex<Option<Arc<dyn Any + Send + Sync>>>,
+    /// The spots of the last renders (`spots_keep`): a spot edit draws only what it reaches.
+    spots: spots_keep::KeptStore<spots_keep::CpuKept>,
 }
 
 impl Default for StageCache {
     fn default() -> Self {
-        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None) }
+        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None), spots: Default::default() }
     }
 }
 
@@ -351,6 +353,7 @@ impl StageCache {
     pub fn clear(&self) {
         self.lock().clear();
         *self.ext.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.spots.clear();
     }
 
     /// Per-view state of type `T` kept alongside this cache (created on first use). Lets another
@@ -392,7 +395,6 @@ impl StageCache {
             if let Some((_, l)) = &e.lin {
                 add(Arc::as_ptr(l) as usize, size(l));
             }
-            masks_bytes += e.spots.as_ref().map_or(0, |k| k.bytes());
             let pl = &e.planes;
             let planes = pl.log_l.iter().chain(pl.base.iter().map(|x| &x.1)).chain(pl.clarity.iter().map(|x| &x.1));
             for p in planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.sharpen.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1)) {
@@ -404,6 +406,7 @@ impl StageCache {
             // (the alphas and brush planes, and the spots' patches: each held once by its cache)
             masks_bytes += e.masks.bytes();
         }
+        self.spots.each(|k| masks_bytes += k.bytes());
         total + masks_bytes
     }
 
@@ -444,8 +447,6 @@ struct CacheEntry {
     /// Alphas of the last render's masks, and the brush parts they were built from (kept across
     /// changes to the image: those of masks that don't read it stay valid).
     masks: masks::AlphaCache,
-    /// The image after the spots of the last render and each spot's patch (`spots_keep`): a spot edit draws only what it reaches.
-    spots: Option<Arc<spots_keep::CpuKept>>,
 }
 
 fn hash_of(parts: impl std::hash::Hash) -> u64 {
@@ -735,14 +736,14 @@ fn render_impl(
     };
     lap("sample", &mut t);
 
-    let mut kept_spots = cached.as_ref().and_then(|e| e.spots.clone());
     let lin = match cached.as_ref().and_then(|e| e.lin.clone()).filter(|(k, _)| *k == lin_key) {
         Some((_, img)) => img,
         None => {
             // Without a cache the resampled buffer is ours: work on it in place.
             let mut img = if shared.is_some() { (*sampled).clone() } else { Arc::unwrap_or_clone(sampled.clone()) };
-            if shared.is_some() {
-                kept_spots = spots_keep::lin_cpu(&mut img, info, &plan, kept_spots.as_deref());
+            if let Some((a, c)) = shared {
+                let kept = spots_keep::lin_cpu(&mut img, info, &plan, c.spots.get(a, geo).as_deref());
+                c.spots.put(a, geo, kept);
             } else {
                 lin_cpu(&mut img, info, &plan);
             }
@@ -769,7 +770,7 @@ fn render_impl(
     }
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
-        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes, masks: alphas, spots: kept_spots });
+        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes, masks: alphas });
     }
     if let Some(job) = alphas_out {
         let signature = masks::planes_signature(&plan, src_img as *const Rgb32f as usize, job.ask.want);
