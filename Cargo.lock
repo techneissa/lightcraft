@@ -3793,6 +3793,7 @@ dependencies = [
  "lightcraft-gpu",
  "lightcraft-heif",
  "lightcraft-lama",
+ "lightcraft-learn",
  "lightcraft-lensdb",
  "lightcraft-look",
  "lightcraft-macraw",
@@ -3928,6 +3929,23 @@ dependencies = [
  "log",
  "thiserror 2.0.21",
  "zip 7.4.0",
+]
+
+[[package]]
+name = "lightcraft-learn"
+version = "0.18.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "image",
+ "lightcraft-color",
+ "lightcraft-develop",
+ "lightcraft-geom",
+ "lightcraft-testkit",
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -4174,6 +4192,7 @@ dependencies = [
  "lightcraft-faces",
  "lightcraft-fetch",
  "lightcraft-geom",
+ "lightcraft-learn",
  "lightcraft-look",
  "lightcraft-map",
  "lightcraft-merge",

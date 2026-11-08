@@ -36,6 +36,7 @@ lightcraft-film = { path = "crates/film" }
 lightcraft-lensdb = { path = "crates/lensdb" }
 lightcraft-inpaint = { path = "crates/inpaint" }
 lightcraft-lama = { path = "crates/lama" }
+lightcraft-learn = { path = "crates/learn" }
 lightcraft-scenes = { path = "crates/scenes" }
 lightcraft-pipeline = { path = "crates/pipeline" }
 lightcraft-gpu = { path = "crates/gpu" }

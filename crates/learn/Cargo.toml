@@ -1,0 +1,31 @@
+[package]
+name = "lightcraft-learn"
+version.workspace = true
+edition.workspace = true
+license = "MIT OR Apache-2.0"
+description = "LightCraft Learn My Edits: a frozen image encoder (DINOv2-small on candle) and a small regressor that learn a photographer's slider edits from their own photos (L3)"
+
+[lints]
+workspace = true
+
+[dependencies]
+lightcraft-color = { workspace = true }
+lightcraft-develop = { workspace = true }
+lightcraft-geom = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+log = { workspace = true }
+
+# the encoder runs natively only (the web build has no models)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+candle-core = { workspace = true, features = ["metal"] }
+candle-nn = { workspace = true, features = ["metal"] }
+
+[dev-dependencies]
+lightcraft-testkit = { workspace = true }
+image = { workspace = true }
