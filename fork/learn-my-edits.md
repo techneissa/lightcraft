@@ -19,7 +19,7 @@ Mac only (the web build has no image model). Issue #87, part of #79.
 
 ## Measured
 
-On this Mac (M4 Pro, Metal, under a heavy load from other builds), with the real-photo check on Sony A7 V raws whose edits were made by a known procedural rule (Exposure from the photo's brightness, Contrast from its spread, Temp from the focal length, Vibrance from the ISO, each with human-like noise), since no edited photos of that camera were at hand:
+On a Mac (Metal, under a heavy load from other builds), with the real-photo check on Sony A7 V raws whose edits were made by a known procedural rule (Exposure from the photo's brightness, Contrast from its spread, Temp from the focal length, Vibrance from the ISO, each with human-like noise), since no edited photos of that camera were at hand:
 - `train` example, 149 photos (developed at their defaults by `lightcraft-cli render --size 384`): features 27 ms per photo, training 9.9 s. Held out: closer to the edit than the defaults on 148 of 149, error 24 % of the defaults' (a fixed preset of the average edit: Tone 27 %, Presence 47 %); Exposure ±0.18 EV, Contrast ±4.5, Temp ±4.8 mired (about 145 K at 5500 K), Vibrance ±6.6. Without the encoder: 22 %; on these rules the photo statistics carry most of it.
 - In the app, 11 raws in a scratch library: New Profile (render, features, training) 8.0 s; Apply to 3 new raws 0.1 s (0.02 s again, features kept); their error Exposure 0.18 EV, Vibrance 5.6.
 - In the app, 40 procedural landscapes (the PR's picture): 32 examples trained in 8.3 s, held-out error 6 % of the defaults'; Apply to 8 photos 0.13 s.
