@@ -10,4 +10,5 @@ mod fit;
 #[cfg(not(target_arch = "wasm32"))]
 mod gpu_probe;
 mod mask_cache;
+mod spot_cache;
 mod thumbs_bench;

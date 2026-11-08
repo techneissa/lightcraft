@@ -44,6 +44,8 @@ pub mod nn;
 mod params;
 #[cfg(not(target_arch = "wasm32"))]
 mod render;
+#[cfg(not(target_arch = "wasm32"))]
+mod spots_keep;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use render::{DisplayFrame, GpuStages, Output, device_fits};

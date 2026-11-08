@@ -48,6 +48,7 @@ pub mod output;
 pub mod profiles;
 pub mod redeye;
 pub mod spots;
+pub mod spots_keep;
 pub mod spots_learned;
 pub mod straighten;
 pub mod tone;
@@ -391,6 +392,9 @@ impl StageCache {
             if let Some((_, l)) = &e.lin {
                 add(Arc::as_ptr(l) as usize, size(l));
             }
+            for k in e.spots.iter().flat_map(|k| [&k.pre, &k.post]) {
+                add(Arc::as_ptr(k) as usize, size(k));
+            }
             let pl = &e.planes;
             let planes = pl.log_l.iter().chain(pl.base.iter().map(|x| &x.1)).chain(pl.clarity.iter().map(|x| &x.1));
             for p in planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.sharpen.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1)) {
@@ -442,6 +446,8 @@ struct CacheEntry {
     /// Alphas of the last render's masks, and the brush parts they were built from (kept across
     /// changes to the image: those of masks that don't read it stay valid).
     masks: masks::AlphaCache,
+    /// The image before and after the spots of the last render (`spots_keep`): a spot edit draws only what it reaches.
+    spots: Option<Arc<spots_keep::Kept<Rgb32f>>>,
 }
 
 fn hash_of(parts: impl std::hash::Hash) -> u64 {
@@ -595,6 +601,15 @@ pub fn lin_needs_cpu(s: &DevelopSettings, info: &SourceInfo) -> bool {
 /// scene-linear stage, in place.
 pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     let s = &*p.settings;
+    let done = lin_cpu_pre(img, info, p);
+    spots::apply_except(img, &s.spots, &done, &p.frame, p.px_per_long);
+    redeye::apply(img, &p.eyes);
+}
+
+/// [`lin_cpu`] up to the Classic spots (the image they are drawn on, [`spots_keep::key`]); returns the spots a learned
+/// fill drew.
+pub(crate) fn lin_cpu_pre(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Vec<bool> {
+    let s = &*p.settings;
     // LaMa spots first, before the white balance: the learned fill then depends on the picture alone
     let learned = learned_fill::current().filter(|_| s.spots.iter().any(spots_learned::is_learned));
     let done = learned
@@ -604,8 +619,7 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     local_tone::apply(img, info, p);
     local::white_balance(img, info, s);
     optics::defringe(img, s, p.px_per_long / optics::DEFRINGE_REF_LONG);
-    spots::apply_except(img, &s.spots, &done, &p.frame, p.px_per_long);
-    redeye::apply(img, &p.eyes);
+    done
 }
 
 /// The settings a render of `s` for `req` uses: the HDR edit for an [`OutputDepth::F32Hdr`]
@@ -731,12 +745,17 @@ fn render_impl(
     };
     lap("sample", &mut t);
 
+    let mut kept_spots = cached.as_ref().and_then(|e| e.spots.clone());
     let lin = match cached.as_ref().and_then(|e| e.lin.clone()).filter(|(k, _)| *k == lin_key) {
         Some((_, img)) => img,
         None => {
             // Without a cache the resampled buffer is ours: work on it in place.
             let mut img = if shared.is_some() { (*sampled).clone() } else { Arc::unwrap_or_clone(sampled.clone()) };
-            lin_cpu(&mut img, info, &plan);
+            if shared.is_some() {
+                kept_spots = spots_keep::lin_cpu(&mut img, info, &plan, kept_spots.as_deref());
+            } else {
+                lin_cpu(&mut img, info, &plan);
+            }
             local::denoise(&mut img, s, detail_scale);
             Arc::new(img)
         }
@@ -760,7 +779,7 @@ fn render_impl(
     }
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
-        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes, masks: alphas });
+        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes, masks: alphas, spots: kept_spots });
     }
     if let Some(job) = alphas_out {
         let signature = masks::planes_signature(&plan, src_img as *const Rgb32f as usize, job.ask.want);
