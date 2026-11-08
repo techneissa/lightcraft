@@ -12,7 +12,7 @@
 //! start from the image the kept linear stage was made from, or for what stage 1 leaves out: masks that read the
 //! image, red eye, LaMa spots and the camera's local tone map (the linear stage on the CPU).
 
-mod cut;
+pub(crate) mod cut;
 
 use std::cell::{Cell, RefCell};
 use std::sync::atomic::{AtomicU64, Ordering};

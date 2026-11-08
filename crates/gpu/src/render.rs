@@ -136,6 +136,7 @@ impl GpuStages {
             p.texture.iter().for_each(|(_, b)| add(b));
             p.sharpen.iter().for_each(|(_, b)| add(b));
             p.dark.iter().for_each(|(_, b, _)| add(b));
+            p.chroma.iter().for_each(|(_, b)| add(b));
         }
         if let Some((_, b)) = &*self.source.lock().unwrap_or_else(|e| e.into_inner()) {
             add(b);
@@ -792,7 +793,9 @@ pub fn render(
     // the view's last render at this size, when this one differs from it only in its spots (issue #111)
     crate::dirty::note_frame(None);
     let rest = stages
-        .filter(|_| fault.is_none() && !matches!(want, Want::MaskPlanes(_)) && crate::dirty::eligible(info, &plan))
+        // (a dropped dispatch may: it is how a driver fails an incremental render too, and the checks must catch it)
+        .filter(|_| fault.is_none_or(|f| f == crate::Fault::DropWork))
+        .filter(|_| !matches!(want, Want::MaskPlanes(_)) && crate::dirty::eligible(info, &plan))
         .map(|_| Arc::new(crate::dirty::Rest::of(info, &plan, req)));
     let start = cached.as_ref().and_then(|e| e.last.clone()).filter(|l| rest.as_deref() == Some(&*l.rest));
     if profiling() {
@@ -906,6 +909,13 @@ pub fn render(
     let mut p = p;
     let whole = [[0, 0, w, h]];
     let rects = from.map_or_else(|| whole.to_vec(), |(_, tiles)| tiles.rects());
+    if from.is_some() {
+        // the copied output is written everywhere: cleared where this render writes, so that work which never runs
+        // there still fails the checks below (and the display's)
+        for r in &rects {
+            crate::dirty::cut::clear_rect(&mut cx, 1, &out, w, r);
+        }
+    }
     if stages.is_some() {
         crate::dirty::note_tiles(from.map_or_else(|| crate::dirty::Tiles::all((w, h)).len(), |(_, tiles)| tiles.count()));
     }

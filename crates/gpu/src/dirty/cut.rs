@@ -77,6 +77,16 @@ pub(crate) fn copy_rect(
     cx.run("rect_copy", &p, &[Some(src), Some(dst)], groups2(rw, rh, [16, 16]));
 }
 
+/// Clear the rectangle `r` of the whole image `dst` (rows of `w` pixels, `nc` channels) to zero words.
+pub(crate) fn clear_rect(cx: &mut Cx<'_>, nc: usize, dst: &Buf, w: usize, r: &Rect) {
+    let (rw, rh) = (width(r), height(r));
+    if rw == 0 || rh == 0 {
+        return;
+    }
+    let p = [nc, w, r[0], r[1], rw, rh].map(|v| v as u32);
+    cx.run("rect_clear", &p, &[None, Some(dst)], groups2(rw, rh, [16, 16]));
+}
+
 /// The rectangle `r` of `part` as an image of its own; `None` when `part` does not hold all of it.
 pub(crate) fn cut(cx: &mut Cx<'_>, part: &Part<'_>, r: &Rect) -> Option<Buf> {
     if !contains(&part.at, r) {
