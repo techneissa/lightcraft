@@ -234,3 +234,35 @@ fn the_bar_menu_toggles_items_and_opens_the_editor() {
     click(&mut h, "menu:customizeTopBar");
     assert_eq!(h.app.ui.dialog, Some(crate::state::Dialog::Settings { tab: SETTINGS_TAB.into() }));
 }
+
+// Scenario: the Library Status icon (the cloud) is automatic: no item to pick, and a saved list that names it (from
+// before 2026-11-09) reads fine, with no gap on the bar
+#[test]
+fn the_library_status_icon_is_not_an_item() {
+    assert!(item("cloud").is_none() && ITEMS.iter().all(|i| i.icon != Icon::Cloud));
+    let mut plain = demo();
+    let r = run(&mut plain, "topBar.get", json!({}));
+    assert!(r["result"]["items"].as_array().unwrap().iter().all(|i| i["id"] != "cloud"), "{r}");
+    assert!(run(&mut plain, "topBar.setItem", json!({"item": "cloud", "shown": false}))["ok"] == false);
+    assert!(!has(&plain, "icon:cloud"), "not on the bar while saving works");
+    // a saved list from before: read as it was, the cloud ignored
+    let mut saved = serde_json::to_value(AppSettings::default()).unwrap();
+    saved["topBarHidden"] = json!(["cloud", "bell"]);
+    let back: AppSettings = serde_json::from_value(saved).unwrap();
+    let mut old = app();
+    old.ui.settings = back;
+    let mut h = Headless::new(old, [1400.0, 900.0], 1.0);
+    h.settle(Duration::from_secs(120));
+    assert!(!has(&h, "icon:cloud") && !has(&h, "icon:bell"));
+    for item in ITEMS.iter().filter(|i| i.id != "bell") {
+        assert!(has(&h, &icon(item.id)), "{} stays", item.id);
+    }
+    // no empty slot: the bar is laid out as with only Activity turned off
+    run(&mut plain, "topBar.setItem", json!({"item": "bell", "shown": false}));
+    for id in ["icon:help", "icon:share", "icon:import", "icon:appearance", "field:search"] {
+        assert_eq!(widget(&h, id), widget(&plain, id), "{id} sits where it would without the old id");
+    }
+    // changed here, the list drops the old id
+    run(&mut h, "topBar.setItem", json!({"item": "help", "shown": false}));
+    assert_eq!(h.app.ui.settings.top_bar_hidden, ["bell", "help"]);
+}

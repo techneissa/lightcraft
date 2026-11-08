@@ -133,8 +133,8 @@ fn hostile_shapes_draw_nothing_and_never_panic() {
     let frame = Frame::new(w, h, &DevelopSettings::default(), true);
     let good = shape_of(64, 48, OBJ);
     let bad = [
-        SegMask { side: 1024, data: "not base64".into(), rect: Some([f64::NAN, 0.0, 2.0, -1.0]), model: None },
-        SegMask { side: 0, data: String::new(), rect: None, model: None },
+        SegMask { side: 1024, data: "not base64".into(), rect: Some([f64::NAN, 0.0, 2.0, -1.0]), model: None, grid: None },
+        SegMask { side: 0, data: String::new(), rect: None, model: None, grid: None },
         SegMask { rect: Some([0.5, 0.5, 0.5, 0.5]), ..good.clone() },
         SegMask { rect: Some([-1e300, -1e300, 1e300, 1e300]), ..good.clone() },
         SegMask { rect: Some([5.0, 5.0, 6.0, 6.0]), ..good.clone() },

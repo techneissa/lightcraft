@@ -91,6 +91,7 @@ fn decoder_info_survives_render_jobs_cache_and_eviction() {
         fallback: None,
         denoise: None,
         camera_profile: None,
+        outliers: false,
         reduced: None,
         options: Default::default(),
     };
@@ -149,6 +150,7 @@ fn old_relative_white_balance_on_a_kelvin_camera_keeps_its_look_and_learns_the_a
         fallback: None,
         denoise: None,
         camera_profile: None,
+        outliers: false,
         reduced: None,
         options: Default::default(),
     };
@@ -726,7 +728,9 @@ fn the_display_fit_is_made_on_the_device_when_it_can_be() {
     let full = s.loupe_job(id, 1024, 1024, true).unwrap().run().rendered.unwrap().image;
     let (fw, fh) = (full.width * 9 / 10, full.height * 9 / 10);
     let before = lightcraft_gpu::device_fits();
-    let fitted = s.loupe_job(id, 1024, 1024, true).unwrap().with_display_fit(fw, fh).run().rendered.unwrap().image;
+    // (a fresh render each time: the view the first one kept would serve the next, fitted on the CPU)
+    let fresh = |s: &mut crate::Session| RenderJob { view_cache: None, ..s.loupe_job(id, 1024, 1024, true).unwrap() };
+    let fitted = fresh(&mut s).with_display_fit(fw, fh).run().rendered.unwrap().image;
     assert!(lightcraft_gpu::device_fits() > before, "the fit was not made on the device");
     let want = fit_for_display(&full, fw, fh);
     assert_eq!((fitted.width, fitted.height), (want.width, want.height));
@@ -735,7 +739,23 @@ fn the_display_fit_is_made_on_the_device_when_it_can_be() {
     // a diagnostic overlay is drawn on the CPU after the readback: the CPU fits, and the size is the same
     let before = lightcraft_gpu::device_fits();
     let spots = lightcraft_pipeline::Overlay::Spots(50);
-    let on_cpu = s.loupe_job(id, 1024, 1024, true).unwrap().with_overlay(spots).with_display_fit(fw, fh).run().rendered.unwrap().image;
+    let on_cpu = fresh(&mut s).with_overlay(spots).with_display_fit(fw, fh).run().rendered.unwrap().image;
     assert_eq!(lightcraft_gpu::device_fits(), before, "an overlay render was fitted on the device");
     assert_eq!((on_cpu.width, on_cpu.height), (want.width, want.height));
+}
+
+#[test]
+fn a_thumbnail_is_cut_from_the_decoded_full_source() {
+    let mut s = crate::Session::new();
+    let p = Photo::new(PhotoId(1), Source::File { path: "/nowhere/a.ARW".into() }, "a.ARW", "ARW", 2400, 1600, "");
+    s.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(p.clone()) }).unwrap();
+    s.media.insert(p.id, SourceLevel::Full, Arc::new(Rgb32f::from_fn(2400, 1600, |x, _| [x as f32 / 2400.0, 0.5, 0.25])));
+    let job = s.thumb_job(p.id, 512).unwrap();
+    assert!(matches!(job.source, SourceRef::Fit { .. }));
+    let r = job.run();
+    let thumb = r.rendered.as_ref().unwrap();
+    assert_eq!((thumb.image.width, thumb.image.height), (512, 341));
+    s.accept(&r);
+    let cached = s.media.get(p.id, SourceLevel::Thumb).unwrap();
+    assert_eq!((cached.width, cached.height), (512, 341), "a thumbnail-sized source is kept, not the full source");
 }

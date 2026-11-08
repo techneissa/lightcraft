@@ -320,7 +320,7 @@ fn streamed_snapshot_keeps_the_on_disk_format() {
     assert_eq!(c.to_snapshot(), full.to_snapshot());
     j.snapshot(&c).unwrap();
     let legacy = format!(
-        "{{\"format\":\"lightcraft-catalog\",\"version\":{},\"seq\":{},\"catalog\":{}}}\n",
+        "{{\"format\":\"lightcraft-catalog-fork\",\"version\":{},\"seq\":{},\"catalog\":{}}}\n",
         crate::journal::VERSION,
         j.seq(),
         c.to_snapshot()
@@ -378,7 +378,7 @@ fn a_damaged_process_value_loads_as_v1_with_the_edits() {
     let snapshot = c.to_snapshot();
     assert!(snapshot.contains(r#""process":7"#));
     let snapshot = format!(
-        "{{\"format\":\"lightcraft-catalog\",\"version\":{},\"seq\":0,\"catalog\":{}}}\n",
+        "{{\"format\":\"lightcraft-catalog-fork\",\"version\":{},\"seq\":0,\"catalog\":{}}}\n",
         crate::journal::VERSION,
         snapshot.replace(r#""process":7"#, r#""process":-1"#)
     );
