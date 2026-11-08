@@ -209,24 +209,26 @@ impl<I, P> Kept<I, P> {
 }
 
 /// Key of the image the Classic spots are drawn on: everything [`Plan::pre_nr_key`] holds but those spots and the
-/// red eye corrections (drawn after them). Learned spots are drawn before the white balance and so are part of it.
-pub fn key(info: &SourceInfo, p: &Plan<'_>) -> u64 {
+/// red eye corrections (drawn after them). The LaMa spots are drawn before the white balance and so are part of it,
+/// with which of them got their fill (`done`).
+pub fn key(info: &SourceInfo, p: &Plan<'_>, done: &[bool]) -> u64 {
     let s = &*p.settings;
     let (wb_t, wb_tint) = crate::local::effective_wb(info, s);
     let learned: Vec<(usize, String)> =
         s.spots.iter().enumerate().filter(|(_, sp)| crate::spots_learned::is_learned(sp)).map(|(i, sp)| (i, format!("{sp:?}"))).collect();
     crate::hash_of((
-        p.geo,
-        (p.w, p.h),
-        p.px_per_long.to_bits(),
+        learned_key(p),
         [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
         format!("{:?}", s.optics),
         crate::local_tone::enabled(info, s),
-        p.src_long,
-        p.draft && !learned.is_empty(),
-        (!learned.is_empty()).then_some(p.native_long),
         learned,
+        done,
     ))
+}
+
+/// Key of the image the LaMa spots are drawn on (the resampled source) and of the size their fill sees it at.
+fn learned_key(p: &Plan<'_>) -> u64 {
+    crate::hash_of((p.geo, (p.w, p.h), p.px_per_long.to_bits(), p.src_long, p.native_long))
 }
 
 /// The pixels of `img` in `r`, row by row.
@@ -251,36 +253,50 @@ pub fn paste(img: &mut Rgb32f, r: &Rect, patch: &[[f32; 3]]) {
     }
 }
 
-/// What the CPU renderer keeps of a view's spots.
-pub type CpuKept = Kept<Rgb32f, Vec<[f32; 3]>>;
+type CpuPatch = Option<Arc<Patch<Vec<[f32; 3]>>>>;
+type CpuLayer = Kept<Rgb32f, Vec<[f32; 3]>>;
 
-/// [`crate::lin_cpu`] on `img` (the resampled source), reusing `kept` (the view's last spots) when the image before
-/// the spots is this one: then only the spots an edit reaches are drawn. Returns what to keep for the next render
-/// (`None` without spots).
-pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, kept: Option<&CpuKept>) -> Option<Arc<CpuKept>> {
-    let s = &*p.settings;
-    if s.spots.is_empty() {
-        crate::lin_cpu(img, info, p);
-        return None;
+/// What the CPU renderer keeps of a view's spots: the LaMa spots (drawn on the resampled source, before the white
+/// balance) and the Classic ones (after it), each a layer of its own.
+pub struct CpuKept {
+    pub learned: Option<CpuLayer>,
+    pub classic: CpuLayer,
+}
+
+impl CpuKept {
+    /// Bytes of the images and patches held.
+    pub fn bytes(&self) -> usize {
+        let layer = |k: &CpuLayer| (k.post.data.len() + k.patches.iter().flatten().map(|p| p.before.len() + p.after.len()).sum::<usize>()) * 12;
+        self.learned.as_ref().map_or(0, layer) + layer(&self.classic)
     }
-    let key = key(info, p);
-    let hit = kept.filter(|k| k.key == key && (k.post.width, k.post.height) == (img.width, img.height));
-    let done = match hit {
-        Some(k) => k.done.clone(),
-        None => crate::lin_cpu_pre(img, info, p),
-    };
-    let new = entries(&s.spots, &done, &p.frame, img.width, img.height, p.px_per_long);
-    let mut patches: Vec<Option<Arc<Patch<Vec<[f32; 3]>>>>> = vec![None; new.len()];
-    let draw = |img: &mut Rgb32f, i: usize, patches: &mut Vec<Option<Arc<Patch<Vec<[f32; 3]>>>>>| {
-        let (Some(Some(d)), Some(spot)) = (new.get(i), s.spots.get(i)) else { return };
-        let before = cut(img, &d.at.write);
-        spots::apply(img, std::slice::from_ref(spot), &p.frame, p.px_per_long);
-        if let Some(slot) = patches.get_mut(i) {
-            *slot = Some(Arc::new(Patch { before, after: cut(img, &d.at.write) }));
+}
+
+/// One layer of spots drawn in order on `img`, reusing `kept` (the layer's last result, `key` naming the image it was
+/// drawn on) for only the spots an edit reaches. Otherwise `prepare` makes `img` the layer's image and every spot is
+/// drawn. `draw` draws spot `i` and says whether it drew (a spot that did not is tried again next time). `img` ends as
+/// the layer's result.
+fn layer(
+    img: &mut Rgb32f,
+    key: u64,
+    kept: Option<&CpuLayer>,
+    mut new: Vec<Option<Drawn>>,
+    prepare: impl FnOnce(&mut Rgb32f),
+    mut draw: impl FnMut(&mut Rgb32f, usize) -> bool,
+) -> CpuLayer {
+    let mut patches: Vec<CpuPatch> = vec![None; new.len()];
+    let mut draw_one = |img: &mut Rgb32f, i: usize, new: &mut [Option<Drawn>], patches: &mut [CpuPatch]| {
+        let Some(r) = new.get(i).and_then(Option::as_ref).map(|d| d.at.write) else { return };
+        let before = cut(img, &r);
+        if draw(img, i) {
+            if let Some(slot) = patches.get_mut(i) {
+                *slot = Some(Arc::new(Patch { before, after: cut(img, &r) }));
+            }
+        } else if let Some(slot) = new.get_mut(i) {
+            *slot = None;
         }
     };
-    let plan = hit.map(|k| (k, redo(&k.drawn, &new))).filter(|(k, r)| k.has_patches(r));
-    match plan {
+    let hit = kept.filter(|k| k.key == key && (k.post.width, k.post.height) == (img.width, img.height));
+    match hit.map(|k| (k, redo(&k.drawn, &new))).filter(|(k, r)| k.has_patches(r)) {
         Some((k, r)) => {
             *img = (*k.post).clone();
             // (a spot not drawn again keeps its patches: it is the old one, reading the same pixels)
@@ -294,7 +310,7 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, kept: Option<&
             }
             for step in &r.steps {
                 match *step {
-                    Step::Draw(i) => draw(img, i, &mut patches),
+                    Step::Draw(i) => draw_one(img, i, &mut new, &mut patches),
                     Step::Paste { i, old } => {
                         if let (Some(Some(d)), Some(Some(pt))) = (new.get(i), k.patches.get(old)) {
                             paste(img, &d.at.write, &pt.after);
@@ -304,18 +320,67 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, kept: Option<&
             }
         }
         None => {
-            if hit.is_some() {
-                // (a kept stage without the patches it needs: the image before the spots again)
-                crate::lin_cpu_pre(img, info, p);
-            }
+            prepare(img);
             for i in 0..new.len() {
-                draw(img, i, &mut patches);
+                draw_one(img, i, &mut new, &mut patches);
             }
         }
     }
-    let post = Arc::new(img.clone());
+    Kept { key, post: Arc::new(img.clone()), drawn: new, patches, done: Vec::new() }
+}
+
+/// [`crate::lin_cpu`] on `img` (the resampled source), reusing `kept` (the view's last spots): only the spots an edit
+/// reaches are drawn, LaMa and Classic alike, and the white balance runs only when the image the Classic spots are
+/// drawn on changed. Returns what to keep for the next render (`None` without spots).
+pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, kept: Option<&CpuKept>) -> Option<Arc<CpuKept>> {
+    let s = &*p.settings;
+    if s.spots.is_empty() {
+        crate::lin_cpu(img, info, p);
+        return None;
+    }
+    let (w, h, ppl) = (img.width, img.height, p.px_per_long);
+    // 1. LaMa spots, on the resampled source: each asks its fill (and the fill's cache) only when it is drawn again
+    let lnew: Vec<Option<Drawn>> = s
+        .spots
+        .iter()
+        .map(|sp| {
+            crate::spots_learned::footprint(sp, &p.frame, w, h, ppl).map(|(write, read)| Drawn { spot: sp.clone(), at: Footprint { write, read } })
+        })
+        .collect();
+    let learned = lnew.iter().any(Option::is_some).then(|| {
+        let provider = crate::learned_fill::current();
+        let at = crate::spots_learned::Where { frame: &p.frame, ppl, reference_long: crate::native_long(info, p.src_long) as f64, draft: p.draft };
+        let run = crate::learned_fill::FillRun::new();
+        let kept = kept.and_then(|k| k.learned.as_ref());
+        layer(
+            img,
+            learned_key(p),
+            kept,
+            lnew,
+            |_| {},
+            |img, i| {
+                let (Some(pr), Some(sp)) = (provider.as_ref(), s.spots.get(i)) else { return false };
+                crate::spots_learned::apply_one(img, sp, &at, &**pr, &run)
+            },
+        )
+    });
+    let done: Vec<bool> = learned.as_ref().map(|k| k.drawn.iter().map(Option::is_some).collect()).unwrap_or_default();
+    // 2. the Classic spots (and the LaMa ones that got no fill), after the white balance
+    let cnew = entries(&s.spots, &done, &p.frame, w, h, ppl);
+    let prepare = |img: &mut Rgb32f| {
+        // (`crate::lin_cpu`'s order between its LaMa and Classic spots)
+        crate::local_tone::apply(img, info, p);
+        crate::local::white_balance(img, info, s);
+        crate::optics::defringe(img, s, ppl / crate::optics::DEFRINGE_REF_LONG);
+    };
+    let classic = layer(img, key(info, p, &done), kept.map(|k| &k.classic), cnew, prepare, |img, i| {
+        if let Some(sp) = s.spots.get(i) {
+            spots::apply(img, std::slice::from_ref(sp), &p.frame, ppl);
+        }
+        true
+    });
     crate::redeye::apply(img, &p.eyes);
-    Some(Arc::new(Kept { key, post, drawn: new, patches, done }))
+    Some(Arc::new(CpuKept { learned, classic }))
 }
 
 #[cfg(test)]

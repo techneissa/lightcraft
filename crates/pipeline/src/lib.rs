@@ -392,10 +392,7 @@ impl StageCache {
             if let Some((_, l)) = &e.lin {
                 add(Arc::as_ptr(l) as usize, size(l));
             }
-            if let Some(k) = &e.spots {
-                add(Arc::as_ptr(&k.post) as usize, size(&k.post));
-                masks_bytes += k.patches.iter().flatten().map(|p| (p.before.len() + p.after.len()) * 12).sum::<usize>();
-            }
+            masks_bytes += e.spots.as_ref().map_or(0, |k| k.bytes());
             let pl = &e.planes;
             let planes = pl.log_l.iter().chain(pl.base.iter().map(|x| &x.1)).chain(pl.clarity.iter().map(|x| &x.1));
             for p in planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.sharpen.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1)) {
@@ -447,7 +444,7 @@ struct CacheEntry {
     /// Alphas of the last render's masks, and the brush parts they were built from (kept across
     /// changes to the image: those of masks that don't read it stay valid).
     masks: masks::AlphaCache,
-    /// The image before and after the spots of the last render (`spots_keep`): a spot edit draws only what it reaches.
+    /// The image after the spots of the last render and each spot's patch (`spots_keep`): a spot edit draws only what it reaches.
     spots: Option<Arc<spots_keep::CpuKept>>,
 }
 
@@ -496,7 +493,7 @@ pub struct Plan<'a> {
 }
 
 /// The original's long edge in pixels (an original reported smaller than the source is the source).
-fn native_long(info: &SourceInfo, src_long: usize) -> usize {
+pub(crate) fn native_long(info: &SourceInfo, src_long: usize) -> usize {
     info.native_long.unwrap_or(0).max(src_long).max(1)
 }
 
@@ -602,15 +599,6 @@ pub fn lin_needs_cpu(s: &DevelopSettings, info: &SourceInfo) -> bool {
 /// scene-linear stage, in place.
 pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     let s = &*p.settings;
-    let done = lin_cpu_pre(img, info, p);
-    spots::apply_except(img, &s.spots, &done, &p.frame, p.px_per_long);
-    redeye::apply(img, &p.eyes);
-}
-
-/// [`lin_cpu`] up to the Classic spots (the image they are drawn on, [`spots_keep::key`]); returns the spots a learned
-/// fill drew.
-pub(crate) fn lin_cpu_pre(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Vec<bool> {
-    let s = &*p.settings;
     // LaMa spots first, before the white balance: the learned fill then depends on the picture alone
     let learned = learned_fill::current().filter(|_| s.spots.iter().any(spots_learned::is_learned));
     let done = learned
@@ -620,7 +608,8 @@ pub(crate) fn lin_cpu_pre(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> 
     local_tone::apply(img, info, p);
     local::white_balance(img, info, s);
     optics::defringe(img, s, p.px_per_long / optics::DEFRINGE_REF_LONG);
-    done
+    spots::apply_except(img, &s.spots, &done, &p.frame, p.px_per_long);
+    redeye::apply(img, &p.eyes);
 }
 
 /// The settings a render of `s` for `req` uses: the HDR edit for an [`OutputDepth::F32Hdr`]
