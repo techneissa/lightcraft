@@ -98,6 +98,7 @@ fn spots_are_added_and_moved_by_keyboard() {
     focus(&mut h, "spot:new");
     key(&mut h, "right", true);
     key(&mut h, "enter", false);
+    h.settle_spot_sources();
     let spots = develop(&h).spots;
     assert_eq!(spots.len(), 1, "Return adds a spot");
     let p = spots[0].points[0];

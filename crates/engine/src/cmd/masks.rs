@@ -930,7 +930,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Remove Spot",
             [],
             None,
-            "{mode?: remove|heal|clone|fill (content-aware), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby), fill?: classic|lama (default classic; for remove and fill spots; LaMa needs its model, else the spot shows the Classic fill), background?: true (the best match is found on a worker: the spot is added at once and gets its source a moment later, as part of this step)} — selects the new spot; returns {index, sourcePending?}",
+            "{mode?: remove|heal|clone|fill (content-aware), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby), fill?: classic|lama (default classic; for remove and fill spots; LaMa needs its model, else the spot shows the Classic fill), background?: true (the best match is found on a worker and the spot is added with it a moment later, as its own undo step; returns {pending: true})} — selects the new spot; returns {index}",
             has_active,
             |s, p| {
                 let mode: SpotMode =
@@ -956,26 +956,21 @@ pub fn specs() -> Vec<CommandSpec> {
                     ..Default::default()
                 };
                 let id = s.active().ok_or_else(|| bad("spot.add", "no active photo"))?;
-                let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
+                let dd = (*s.develop_of(id).unwrap_or_default()).clone();
                 let search = spot.source_offset.is_none() && spot.mode != SpotMode::Fill;
-                let background = search && bool_or(p, "background", false);
-                if search && !background {
+                if search && bool_or(p, "background", false) {
+                    // on a worker: the window never waits on the search; the spot comes with its source (`spot_source`)
+                    s.add_spot_when_found(id, dd, spot);
+                    let mut out = json!({"pending": true});
+                    describe(s, fill, &mut out);
+                    return Ok(out);
+                }
+                if search {
                     // resolve the automatic source now: it gets a pin and stays put at every size
                     spot.source_offset = pick_source(s, id, &dd, &spot, None);
                 }
-                let searched = background.then(|| (dd.clone(), spot.clone()));
-                dd.spots.push(spot);
-                let n = dd.spots.len();
-                s.set_develop(id, dd, "Remove")?;
-                s.active_spot = Some(n - 1);
-                // (on a worker: the window never waits on the search, `spot_source`)
-                if let Some((d, spot)) = searched {
-                    s.search_spot_source(id, d, spot);
-                }
+                let n = s.add_spot(id, spot)? + 1;
                 let mut out = json!({"index": n - 1});
-                if background {
-                    out["sourcePending"] = json!(true);
-                }
                 describe(s, fill, &mut out);
                 Ok(out)
             }

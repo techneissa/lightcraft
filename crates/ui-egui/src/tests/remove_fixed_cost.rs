@@ -1,6 +1,6 @@
 //! Issue #97: a spot edit no longer waits on a second full render or on the source search. With the Remove panel open,
 //! the open photo's thumbnail renders once at the end of a burst of spot edits; a spot painted on the photo is added at
-//! once and its source, found on a worker, arrives a moment later.
+//! with its source, found on a worker, a frame or two later.
 
 use std::collections::HashSet;
 use std::time::Duration;
@@ -59,9 +59,8 @@ fn a_painted_spot_gets_its_source_from_the_search_on_a_worker() {
     let mut h = remove_panel();
     let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": 0.4, "y": 0.6}, {"kind": "up", "x": 0.4, "y": 0.6}]}), T);
     assert_eq!(r["ok"], true, "{r}");
-    h.step();
-    assert_eq!(spots(&h).len(), 1, "the spot is added in the frame of the click");
     assert!(h.settle(SETTLE));
-    assert!(spots(&h)[0].source_offset.is_some(), "its source arrived");
+    assert_eq!(spots(&h).len(), 1, "the spot is added once its source is found");
+    assert!(spots(&h)[0].source_offset.is_some(), "with its source");
     assert_eq!(h.app.session.spot_sources.pending(), 0);
 }

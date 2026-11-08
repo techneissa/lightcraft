@@ -631,6 +631,7 @@ fn remove_spots_by_pointer_and_keyboard() {
     let r = h.request("ui.set", json!({"removeFeather": 30.0, "removeOpacity": 80.0}), T);
     assert_eq!(r["ok"], true, "{r}");
     pointer(&mut h, json!([{"kind": "down", "x": 0.3, "y": 0.6}, {"kind": "up", "x": 0.3, "y": 0.6}]));
+    h.settle_spot_sources();
     assert_eq!(spots(&h).len(), 1);
     assert_eq!((spots(&h)[0].feather, spots(&h)[0].opacity), (30.0, 80.0));
     assert_eq!(h.app.session.active_spot, Some(0));
@@ -652,6 +653,7 @@ fn remove_spots_by_pointer_and_keyboard() {
     assert_eq!(h.app.ui.filmstrip, film);
     // a second spot elsewhere; clicking the first one's pin selects it
     pointer(&mut h, json!([{"kind": "down", "x": 0.7, "y": 0.3}, {"kind": "up", "x": 0.7, "y": 0.3}]));
+    h.settle_spot_sources();
     assert_eq!((spots(&h).len(), h.app.session.active_spot), (2, Some(1)));
     pointer(&mut h, json!([{"kind": "down", "x": 0.3, "y": 0.6}, {"kind": "up", "x": 0.3, "y": 0.6}]));
     assert_eq!((spots(&h).len(), h.app.session.active_spot), (2, Some(0)));

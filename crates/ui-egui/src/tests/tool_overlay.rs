@@ -107,6 +107,7 @@ fn hidden_spot_pins_are_not_grabbed_and_the_tool_still_works() {
     exec(&mut h, "view.toolOverlay", json!({"mode": "never"}));
     let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": 0.25, "y": 0.3}, {"kind": "up", "x": 0.25, "y": 0.3}]}), T);
     assert_eq!(r["ok"], true, "{r}");
+    h.settle_spot_sources();
     assert_eq!(spots(&h).len(), 4, "Never: a click adds a spot");
     assert_eq!(h.app.session.active_spot, Some(3));
     exec(&mut h, "edit.undo", json!({}));
@@ -126,6 +127,7 @@ fn hidden_spot_pins_are_not_grabbed_and_the_tool_still_works() {
     // …and a click on a hidden spot adds one rather than selecting it
     let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": 0.75, "y": 0.3}, {"kind": "up", "x": 0.75, "y": 0.3}]}), T);
     assert_eq!(r["ok"], true, "{r}");
+    h.settle_spot_sources();
     assert_eq!(spots(&h).len(), 4);
 }
 

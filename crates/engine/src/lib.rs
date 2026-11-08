@@ -389,7 +389,7 @@ pub struct Session {
     pub active_spot: Option<usize>,
     /// Find People / Find Wires: the candidates for the Remove tool and the searches that make them.
     pub finds: find_removals::Finds,
-    /// New spots' automatic sources being found on workers (`spot_source`).
+    /// New spots waiting for their automatic source, found on workers (`spot_source`).
     pub spot_sources: spot_source::SpotSources,
     /// The LaMa fill behind Remove spots whose fill is LaMa (`fork/lama-fill.md`).
     pub lama: lama_fill::LamaFill,
@@ -771,15 +771,6 @@ impl Session {
         for mut dropped in self.redo.drain(..) {
             self.pending_sidecar_repairs.append(&mut dropped.retry_sidecars);
         }
-        Ok(())
-    }
-
-    /// Apply `op` (a new edit) as part of the last undo step: a result that arrives after the edit it belongs to
-    /// (`spot_source`). Undoing that step brings back what was before both.
-    pub(crate) fn apply_amending(&mut self, op: Op) -> Result<()> {
-        let fwd = op.clone();
-        self.apply_through(op, Catalog::apply_new)?;
-        self.pending_log.push(fwd);
         Ok(())
     }
 
