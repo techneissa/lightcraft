@@ -42,6 +42,7 @@ pub mod mask_multi;
 pub mod mask_names;
 mod mask_parts;
 mod masks;
+pub mod match_look;
 mod merge;
 pub mod metadata;
 pub mod missing;
@@ -205,6 +206,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(face_detect::specs());
         v.extend(face_recognize::specs());
         v.extend(focus::specs());
+        v.extend(match_look::specs());
         v.extend(activity::specs());
         v.extend(map::specs());
         v
