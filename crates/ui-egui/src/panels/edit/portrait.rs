@@ -95,10 +95,10 @@ fn pick_id(photo: PhotoId) -> egui::Id {
 /// The Portrait section of the Edit panel.
 pub(super) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, photo: PhotoId) {
     section(app, ui, d, "portrait", "Portrait", |app, ui, d| {
-        let st = app.session.retouch_faces_of(photo);
-        // the faces are found once per photo, when the section is first open on it
+        let mut st = app.session.retouch_faces_of(photo);
+        // the faces are found once per photo, when the section is first open on it (without a face model: why not)
         if st.found.is_none() && !st.busy && st.error.is_none() {
-            app.session.retouch_search(photo, false);
+            st.error = app.session.retouch_search(photo, false);
         }
         if st.busy {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));

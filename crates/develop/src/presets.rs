@@ -71,11 +71,14 @@ impl SettingsGroup {
         SettingsGroup::Portrait,
     ];
 
-    /// Groups included by default when copying (Lightroom excludes crop, masks and spots by default).
+    /// Groups included by default when copying (Lightroom excludes crop, masks and spots by default; Portrait holds
+    /// one photo's face edits like them).
     pub fn default_copy() -> Vec<SettingsGroup> {
         SettingsGroup::ALL
             .into_iter()
-            .filter(|g| !matches!(g, SettingsGroup::Crop | SettingsGroup::Masks | SettingsGroup::Spots | SettingsGroup::RedEye))
+            .filter(|g| {
+                !matches!(g, SettingsGroup::Crop | SettingsGroup::Masks | SettingsGroup::Spots | SettingsGroup::RedEye | SettingsGroup::Portrait)
+            })
             .collect()
     }
 

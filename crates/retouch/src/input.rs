@@ -159,6 +159,10 @@ pub const LANDMARKS: [&str; 5] = ["right eye", "left eye", "nose tip", "right mo
 pub struct Face {
     /// The face's box.
     pub bounds: NormRect,
+    /// The same box on the photo before the user's rotation (Rotate Left / Right, flips), when the provider knows
+    /// it: per-face settings are kept by this one ([`Face::key_bounds`]), so a rotation never moves them to
+    /// another face. Lens corrections and transform are not undone.
+    pub upright: Option<NormRect>,
     /// [`LANDMARKS`] first, then any more the provider has. May lie slightly outside 0…1.
     pub landmarks: Vec<(f64, f64)>,
     /// How sure the detector was (0…1).
@@ -175,6 +179,11 @@ impl Face {
     /// A face known only by its box (no landmarks, no person, no masks).
     pub fn boxed(bounds: NormRect) -> Face {
         Face { bounds, score: 1.0, ..Face::default() }
+    }
+
+    /// The box per-face settings are kept by: [`Face::upright`], else [`Face::bounds`].
+    pub fn key_bounds(&self) -> NormRect {
+        self.upright.filter(NormRect::is_valid).unwrap_or(self.bounds)
     }
 
     /// The mask of `part`, when the parser gave one.
@@ -222,7 +231,8 @@ impl Input {
             let mut h = Fnv::new();
             h.u64(self.faces.len() as u64);
             for f in &self.faces {
-                for v in [f.bounds.x0, f.bounds.y0, f.bounds.x1, f.bounds.y1] {
+                let up = f.key_bounds();
+                for v in [f.bounds.x0, f.bounds.y0, f.bounds.x1, f.bounds.y1, up.x0, up.y0, up.x1, up.y1] {
                     h.u64(v.to_bits());
                 }
                 h.u64(f.landmarks.len() as u64);

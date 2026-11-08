@@ -53,6 +53,9 @@ crate only reads it.
 - `Input::faces`: one `Face` per face, in the provider's order (which may change between detections).
 - `Face::bounds`: the face box, normalised to the photo **before its crop** (0…1 across width and height, y down,
   after orientation, lens corrections and transform: the frame Remove spots use).
+- `Face::upright`: the same box on the photo before the user's rotation (Rotate Left / Right, flips), when the
+  provider knows it; per-face settings are keyed and matched by it (`Face::key_bounds`). Lens corrections and
+  transform are not undone.
 - `Face::landmarks`: normalised points; the first five are always YuNet's (the subject's right eye, left eye,
   nose tip, right and left mouth corner); a provider with more appends them after these.
 - `Face::person`: the name of the photo's named face (People) the face overlaps, trimmed and lower case.
@@ -88,7 +91,7 @@ malformed block, reads it as off; it is not written while it is the default):
 
 - `global`: a `Features` struct, one field per feature, for every face.
 - `faces`: faces with their own settings (`FaceOverride`): the face's key (`FaceKey`: its person when named, and
-  its box) and a whole `Features`, copied from `global` when the face first gets its own.
+  its box on the photo before the user's rotation) and a whole `Features`, copied from `global` when the face first gets its own.
 - Matching (`overrides::resolve`, independent of detection order): a named face takes its person's settings;
   another face takes the unclaimed settings whose box centre is nearest, within half that box; settings made for a
   person never go to a face named as someone else.
@@ -107,4 +110,5 @@ pass (they are one per-pixel pass there, so the step sits before all of them). S
    feature wires it into the pipeline's geometry.
 3. **Background**: after every retouch, once for the whole picture.
 
-The step is skipped, adding nothing to any cache key, while the block is off or the Portrait section's eye is off.
+The step is skipped while the block is off or the Portrait section's eye is off; the scene-linear stage's key then
+hashes a 0 for it (in-memory stage caches only).

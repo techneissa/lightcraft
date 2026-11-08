@@ -45,14 +45,14 @@ pub struct FaceKey {
     /// The person's name (trimmed, lower case), when the face was named.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub person: Option<String>,
-    /// The face's box when the settings were made.
+    /// The face's box when the settings were made, on the photo before the user's rotation ([`Face::key_bounds`]).
     pub bounds: NormRect,
 }
 
 impl FaceKey {
     /// The key of `face` as detected now.
     pub fn of(face: &Face) -> FaceKey {
-        FaceKey { person: face.person.clone(), bounds: face.bounds }
+        FaceKey { person: face.person.clone(), bounds: face.key_bounds() }
     }
 }
 

@@ -5,7 +5,7 @@
 //! finish. The retouch stage runs first, then the background stage. The geometry stage (face reshape) has its slot
 //! reserved in `lightcraft_retouch::Stage` and is not run yet.
 //!
-//! Skipped entirely, touching no pixel and adding nothing to the cache keys, while the block is off or the Portrait
+//! Skipped entirely, touching no pixel and hashing a 0 into the stage key, while the block is off or the Portrait
 //! section's eye is off ([`active`]).
 
 use std::sync::Arc;

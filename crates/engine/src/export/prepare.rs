@@ -58,6 +58,8 @@ struct RenderWork {
     hdr_job: Option<crate::media::RenderJob>,
     meta: Option<Metadata>,
     opts: ExportOptions,
+    /// A retouched photo's faces, found when the export runs (fork, `fork/retouch-foundation.md`).
+    faces: Option<crate::retouch_input::ExportFaces>,
 }
 
 enum Work {
@@ -123,6 +125,7 @@ fn prepare_guarded(
         let label = p.file_name.clone();
         let meta = export_metadata(p, &session.catalog, o);
         let gain_map = o.hdr_output() && o.format == ExportFormat::Jpeg;
+        let faces = session.retouch_export_faces(id);
         let mut job = session.export_job(id, w, h, o.effective_space(), o.effective_depth())?;
         job.request.exact_size = true;
         job.key ^= 0x86e2_fadc_0917_b435;
@@ -138,7 +141,7 @@ fn prepare_guarded(
         } else {
             None
         };
-        (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone() })), weight)
+        (Work::Render(Box::new(RenderWork { job, hdr_job, meta, opts: o.clone(), faces })), weight)
     } else {
         let lightcraft_catalog::Source::File { path } = &p.source else {
             return Err(format!("{} is a generated demo photo: it has no original file to export", p.file_name));
@@ -212,7 +215,10 @@ impl PreparedExport {
         let file_name = self.file_name;
         match self.work {
             Work::Render(w) => {
-                let RenderWork { job, hdr_job, meta, opts } = *w;
+                let RenderWork { mut job, mut hdr_job, meta, opts, faces } = *w;
+                if let Some(faces) = faces {
+                    faces.fill(&mut [&mut job].into_iter().chain(hdr_job.as_mut()).collect::<Vec<_>>());
+                }
                 let result = job.run();
                 let r = result.rendered?;
                 let gpu_fallback = result.gpu_fallback;

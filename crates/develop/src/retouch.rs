@@ -186,6 +186,7 @@ mod tests {
         // and other groups leave it alone
         let light = crate::extract_groups(&DevelopSettings::default(), &[SettingsGroup::Light]);
         assert_eq!(crate::apply_partial(&src, &light, 1.0).retouch, src.retouch);
-        assert!(SettingsGroup::default_copy().contains(&SettingsGroup::Portrait));
+        // one photo's face edits, like masks and spots: copied only when ticked by hand
+        assert!(!SettingsGroup::default_copy().contains(&SettingsGroup::Portrait));
     }
 }

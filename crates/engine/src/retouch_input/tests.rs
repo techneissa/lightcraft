@@ -112,8 +112,8 @@ fn copy_paste_sync_and_presets_carry_the_block_and_the_faces() {
     s.execute("retouch.set", &json!({"control": "retouch.skin.amount", "value": 55, "face": 0})).unwrap();
     let want = retouch_of(&s);
     assert_eq!(want.faces.len(), 1);
-    // copy / paste (Portrait is in the default copy groups)
-    s.execute("develop.copy", &json!({})).unwrap();
+    // copy / paste with Portrait ticked (it is not in the default copy groups)
+    s.execute("develop.copy", &json!({"groups": ["portrait"]})).unwrap();
     s.execute("library.select", &json!({"ids": [vis[1].0]})).unwrap();
     s.execute("develop.paste", &json!({})).unwrap();
     assert_eq!(s.develop_of(vis[1]).unwrap().retouch, want);
@@ -133,6 +133,28 @@ fn copy_paste_sync_and_presets_carry_the_block_and_the_faces() {
     s.execute("library.select", &json!({"ids": [vis[3].0]})).unwrap();
     s.execute("develop.paste", &json!({})).unwrap();
     assert!(s.develop_of(vis[3]).unwrap().retouch.is_default());
+}
+
+/// Portrait holds one photo's face edits, like masks and spots: the default copy and Auto Sync leave it.
+#[test]
+fn default_copy_and_auto_sync_leave_the_portrait_settings_alone() {
+    let (mut s, _) = demo_with(vec![ann()]);
+    let vis = s.visible_cloned();
+    s.execute("library.select", &json!({"ids": [vis[0].0, vis[1].0]})).unwrap();
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    s.execute("develop.set", &json!({"control": "retouch.skin.amount", "value": 40})).unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.5})).unwrap();
+    assert_eq!(s.develop_of(vis[0]).unwrap().retouch.global.get("retouch.skin.amount"), Some(40.0));
+    let other = s.develop_of(vis[1]).unwrap();
+    assert_eq!(other.light.exposure, 0.5, "Auto Sync is on");
+    assert!(other.retouch.is_default(), "Auto Sync does not carry face edits");
+    s.execute("develop.autoSync", &json!({"on": false})).unwrap();
+    s.execute("library.select", &json!({"ids": [vis[0].0]})).unwrap();
+    s.execute("develop.copy", &json!({})).unwrap();
+    s.execute("library.select", &json!({"ids": [vis[2].0]})).unwrap();
+    s.execute("develop.paste", &json!({})).unwrap();
+    assert_eq!(s.develop_of(vis[2]).unwrap().light.exposure, 0.5);
+    assert!(s.develop_of(vis[2]).unwrap().retouch.is_default(), "not in the default copy");
 }
 
 #[test]
@@ -306,6 +328,107 @@ fn no_panic_with_no_faces_fifty_faces_a_failing_provider_or_a_one_pixel_photo() 
     assert!(s.render_now(id, 16, 16).is_ok());
     assert_eq!(s.execute("retouch.detect", &json!({})).unwrap()["faces"].as_array().unwrap().len(), 1);
     let _ = std::fs::remove_dir_all(&src);
+}
+
+/// No face model is not a failure of the photo: once a model is there, the next search runs (no restart).
+#[test]
+fn a_missing_face_model_is_not_kept_as_a_failure() {
+    let mut s = Session::with_demo();
+    let id = s.active().unwrap();
+    let _ = s.retouch_search(id, false);
+    let st = s.retouch_faces_of(id);
+    assert!(st.error.is_none() && !st.busy && st.found.is_none());
+    // the model arrives (as installing YuNet does: nothing else is reset)
+    s.retouch_faces.provider = Some(Arc::new(Fake(Mutex::new(vec![ann()]))));
+    let _ = s.retouch_search(id, false);
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while s.retouch_faces_of(id).found.is_none() {
+        assert!(std::time::Instant::now() < until, "the search never ran");
+        std::thread::yield_now();
+    }
+}
+
+/// A background export is set up on the UI thread: it must not wait there for the faces. The export finds them
+/// when it runs (on its worker, under its activity row), so the result still has them.
+#[test]
+fn a_background_export_finds_the_faces_when_it_runs_not_when_it_is_set_up() {
+    use std::sync::atomic::AtomicUsize;
+    struct Gate {
+        go: Arc<AtomicBool>,
+        calls: Arc<AtomicUsize>,
+    }
+    impl FaceProvider for Gate {
+        fn name(&self) -> &str {
+            "Gate"
+        }
+        fn faces(&self, _img: &Rgba8) -> Result<Vec<Face>, String> {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            // (a hang guard, not a timing check: set-up never gets here once fixed)
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(20);
+            while !self.go.load(Ordering::SeqCst) && std::time::Instant::now() < until {
+                std::thread::yield_now();
+            }
+            Ok(vec![ann()])
+        }
+    }
+    let (go, calls) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicUsize::new(0)));
+    let mut s = Session::with_demo();
+    s.retouch_faces.set_provider(Arc::new(Gate { go: go.clone(), calls: calls.clone() }));
+    let id = s.active().unwrap();
+    s.execute("develop.set", &json!({"control": "retouch.skin.amount", "value": 40})).unwrap();
+    let opts = crate::export::ExportOptions { resize: Some(crate::export::Resize::long_edge(64)), ..Default::default() };
+    let items = crate::export::prepare_batch(&mut s, &[id], &opts).unwrap();
+    assert_eq!(calls.load(Ordering::SeqCst), 0, "setting up the export ran no face search");
+    go.store(true, Ordering::SeqCst);
+    for item in items {
+        item.run().unwrap();
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "running it did, once");
+    assert_eq!(s.retouch_faces_of(id).found.map(|f| f.input.faces.len()), Some(1), "and kept the faces for the previews");
+    assert!(!s.retouch_faces_of(id).busy);
+}
+
+/// A face's own settings are kept by its box on the photo before the user's rotation: Rotate Right moves every
+/// face, and the settings stay with their face, never with another face that lands where it was.
+#[test]
+fn a_faces_own_settings_survive_a_rotation() {
+    let rect = |b: NormRect| lightcraft_geom::Rect { x0: b.x0, y0: b.y0, x1: b.x1, y1: b.y1 };
+    let back = |r: lightcraft_geom::Rect| NormRect::new(r.x0, r.y0, r.x1, r.y1);
+    let a = NormRect::new(0.1, 0.1, 0.3, 0.4);
+    let (mut s, fake) = demo_with(vec![face(a.x0, a.y0, a.x1, a.y1, None)]);
+    s.execute("retouch.detect", &json!({})).unwrap();
+    s.execute("retouch.set", &json!({"control": "retouch.eyes.amount", "value": 60, "face": 0})).unwrap();
+    s.execute("photo.rotateRight", &json!({})).unwrap();
+    let o = s.develop_of(s.active().unwrap()).unwrap().orientation;
+    assert_ne!(o, lightcraft_geom::Orientation::Normal);
+    // the detector now sees face A turned, and face B (unturned somewhere else) exactly where A was
+    let a_now = back(o.map_norm_rect(rect(a)));
+    let b_before = back(o.inverse().map_norm_rect(rect(a)));
+    let b_now = back(o.map_norm_rect(rect(b_before)));
+    assert!((b_now.x0 - a.x0).abs() < 1e-9 && (b_now.y1 - a.y1).abs() < 1e-9, "B lands on A's old box: {b_now:?}");
+    *fake.0.lock().unwrap() = vec![face(a_now.x0, a_now.y0, a_now.x1, a_now.y1, None), face(b_now.x0, b_now.y0, b_now.x1, b_now.y1, None)];
+    let listed = s.execute("retouch.detect", &json!({"again": true})).unwrap();
+    let own: Vec<(Value, Value)> = listed["faces"].as_array().unwrap().iter().map(|f| (f["bounds"][0].clone(), f["own"].clone())).collect();
+    let a_own = own.iter().find(|(x0, _)| (x0.as_f64().unwrap() - a_now.x0).abs() < 1e-6).map(|(_, o)| o.clone());
+    let b_own = own.iter().find(|(x0, _)| (x0.as_f64().unwrap() - b_now.x0).abs() < 1e-6).map(|(_, o)| o.clone());
+    assert_eq!(a_own, Some(json!(0)), "A keeps its settings: {listed}");
+    assert_eq!(b_own, Some(Value::Null), "B never takes them: {listed}");
+}
+
+/// Browsing past [`super::KEEP`] retouched photos must not drop the faces of the ones in use: the cache forgets the
+/// photo used least recently.
+#[test]
+fn the_face_cache_forgets_the_photo_used_least_recently() {
+    let store = super::FaceStore::default();
+    let found = || super::Found { input: Arc::new(lightcraft_develop::retouch::Input::default()), thumbs: Arc::new(Vec::new()) };
+    for i in 0..super::KEEP {
+        store.put(&format!("photo {i}"), Ok(found()));
+    }
+    assert!(store.get("photo 0").is_some(), "the oldest, used again");
+    store.put("one more", Ok(found()));
+    assert!(store.get("photo 0").is_some(), "kept: it was used last but one");
+    assert!(store.get("photo 1").is_none(), "the one used least recently goes");
+    assert!(store.get("one more").is_some());
 }
 
 #[test]

@@ -13,27 +13,33 @@ Nothing changes in a photo yet: every feature is an empty stub. What is there fo
   A feature's issue edits only its own module, example, tests and panel section. `crates/retouch/README.md` has the
   contract, the rules (sizes are fractions of the face; off is byte for byte; no panic) and the render order.
 - **Settings**: the develop settings' `fork_retouch` block: settings for every face, and per-face settings keyed by
-  the face's person (People names) or, for an unnamed face, by its box, matched the same whatever order the faces
-  are found in; settings made for a person never go to someone else. Not written while it is the default; a build
+  the face's person (People names) or, for an unnamed face, by its box on the photo before the user's rotation
+  (Rotate Left / Right and flips keep them with their face; a lens correction or transform changed afterwards can
+  still move an unnamed face's box away from its settings), matched the same whatever order the faces are found in;
+  settings made for a person never go to someone else. Not written while it is the default; a build
   without it, or a malformed block, reads it as off. Stored in the catalog and in the sidecar's `lc:settings`; an
   app that rewrites the sidecar and keeps `lc:settings` (Lightroom) keeps it. Copy / Paste, Sync and presets carry
-  it as the **Portrait** group (in the default copy groups; copying an unretouched photo's Portrait group turns
-  retouching off).
+  it as the **Portrait** group. It holds one photo's face edits, like Masking and Remove: it is not in the default
+  copy groups and Auto Sync leaves it alone; ticked by hand it is copied (copying an unretouched photo's Portrait
+  group turns retouching off).
 - **Controls**: every value is a develop control in section Portrait: `retouch.<feature>.<field>` (every face) and
   `retouchFace.<i>.<feature>.<field>` (the `i`-th face with its own settings). `develop.set`, `develop.controls`,
   the control channel and MCP reach them. Today each feature has one, `Amount` (0…100), with no effect.
 - **The step** (`crates/pipeline/src/retouch_step.rs`): in the scene-linear stage after white balance, spots and red
   eye, before noise reduction, tone, colour, masks, detail and effects; retouch stage, then background stage; the
-  geometry slot (face reshape, next to Transform) is reserved, not run. Skipped, with every cache key unchanged,
-  while the block is off or the Portrait section's eye is off. On the GPU, a retouched photo's scene-linear stage
+  geometry slot (face reshape, next to Transform) is reserved, not run. Skipped while the block is off or the
+  Portrait section's eye is off; the scene-linear stage's key then hashes a 0 for it (a new element of that key, so
+  in-memory stage caches made before this change are not reused; nothing on disk changes). On the GPU, a retouched photo's scene-linear stage
   runs on the CPU.
 - **Faces** (`crates/engine/src/retouch_input.rs`): a `FaceProvider` finds them on a 1600-pixel render of the photo
   before its crop, without retouching; the default is YuNet (Settings ▸ Faces: boxes and five landmarks, no masks),
   so features that need masks change nothing until the people parser (#81) installs its provider
   (`FaceStore::set_provider`). Found once per photo on a worker thread with the activity row "Finding Faces", kept
-  in memory for the last 64 photos, with a round thumbnail per face; a face's person is the named People region it
+  in memory for the 64 photos used last, with a round thumbnail per face; a missing face model is not remembered
+  as the photo's failure, so the search runs once a model is installed; a face's person is the named People region it
   overlaps. Renders never wait (a preview without faces is redrawn once they are found: their fingerprint is in the
-  render keys); exports and synchronous renders find them first.
+  render keys). A background export sets up without waiting and finds the faces on its own worker, under its
+  activity row, before rendering; synchronous renders and exports find them first.
 - **Commands**: `retouch.faces {id?}` (the faces found, with `own`, the index of a face's own settings),
   `retouch.detect {id?, again?}`, `retouch.set {control, value, face?, id?}` (with `face`, that face gets its own
   settings, copied from every face's), `retouch.resetFace {face}`, `retouch.reset {feature?, face?}`. UI command
@@ -94,9 +100,11 @@ cargo test -p lightcraft-mcp --lib -- tests_retouch
 cargo test -p lightcraft-ui-egui --lib -- portrait
 ```
 
-They cover: the all-off block renders byte for byte like none (CPU, 8-bit and float) and keeps every cache key; the
+They cover: the all-off block renders byte for byte like none (CPU, 8-bit and float) with the same stage keys; the
 block through JSON, the sidecar (also rewritten by another app), the catalog, copy / paste, sync and presets; a face's
-own settings following its person when the faces come back in another order; MCP reading and setting a value; the
+own settings following its person when the faces come back in another order, and its face through a rotation; the
+default copy and Auto Sync leaving Portrait alone; a background export finding faces when it runs, not when it is
+set up; a missing model not kept as a failure; the face cache forgetting the photo used least recently; MCP reading and setting a value; the
 Portrait section's rows and face picker; no panic with no faces, 50 faces, a failing provider or a 1 × 1 photo.
 No test needs a model: the engine and UI tests install a fake provider.
 

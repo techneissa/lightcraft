@@ -4,7 +4,8 @@
 //! 1. A named face takes the settings made for its person. Among several faces of one name, or several settings
 //!    of one name, the closest boxes pair up.
 //! 2. Every other face takes the unclaimed settings whose box centre is closest to its own, when its centre lies
-//!    within half the settings' box (width and height) of the settings' centre.
+//!    within half the settings' box (width and height) of the settings' centre. Boxes are compared on the photo
+//!    before the user's rotation ([`Face::key_bounds`]).
 //! 3. Settings made for a person never go to a face named as someone else: re-detecting faces never moves them to
 //!    another person. They may go to an unnamed face at their place (the same face, not recognised this time).
 
@@ -25,7 +26,7 @@ pub fn resolve(r: &Retouch, faces: &[Face]) -> Vec<Option<usize>> {
         let Some(name) = f.person.as_deref() else { continue };
         for (oi, o) in r.faces.iter().enumerate() {
             if o.face.person.as_deref() == Some(name) {
-                pairs.push((distance(&f.bounds, &o.face.bounds), f.bounds.centre(), fi, oi));
+                pairs.push((distance(&f.key_bounds(), &o.face.bounds), f.key_bounds().centre(), fi, oi));
             }
         }
     }
@@ -46,8 +47,8 @@ pub fn resolve(r: &Retouch, faces: &[Face]) -> Vec<Option<usize>> {
             {
                 continue;
             }
-            if within(&f.bounds, &o.face.bounds) {
-                pairs.push((distance(&f.bounds, &o.face.bounds), f.bounds.centre(), fi, oi));
+            if within(&f.key_bounds(), &o.face.bounds) {
+                pairs.push((distance(&f.key_bounds(), &o.face.bounds), f.key_bounds().centre(), fi, oi));
             }
         }
     }

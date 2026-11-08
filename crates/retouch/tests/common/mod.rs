@@ -18,6 +18,7 @@ pub fn face(x0: f64, y0: f64, x1: f64, y1: f64) -> Face {
     let at = |fx: f64, fy: f64| (x0 + fx * w, y0 + fy * h);
     Face {
         bounds: NormRect::new(x0, y0, x1, y1),
+        upright: None,
         landmarks: vec![at(0.3, 0.4), at(0.7, 0.4), at(0.5, 0.6), at(0.35, 0.8), at(0.65, 0.8)],
         score: 0.9,
         person: None,
