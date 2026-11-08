@@ -367,7 +367,9 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if sel.is_some() {
         padded(ui, |ui| {
             ui.horizontal(|ui| {
-                if text_button(ui, "spotRefresh", crate::i18n::tr("Refresh Source (/)"), false).clicked() {
+                // (a spot rebuilt from its surroundings has no source to refresh, `fork/object-remove.md`)
+                let sourced = sel.as_ref().is_some_and(|(_, sp)| super::remove_object::has_source(sp));
+                if sourced && text_button(ui, "spotRefresh", crate::i18n::tr("Refresh Source (/)"), false).clicked() {
                     let _ = app.run("spot.refreshSource", json!({}));
                 }
                 if text_button(ui, "spotDelete", crate::i18n::tr("Delete (⌫)"), false).clicked() {

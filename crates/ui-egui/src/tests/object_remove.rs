@@ -105,6 +105,7 @@ fn a_shaped_spot_has_a_named_row_and_no_source_pin() {
         h.step();
         assert!(has(&h, &format!("spotPin:{i}")), "spot {i} has its pin");
         assert_eq!(has(&h, &format!("spotSource:{i}")), source, "spot {i}: a source pin only for Classic Remove");
+        assert_eq!(has(&h, "button:spotRefresh"), source, "spot {i}: Refresh Source only with a source");
     }
     // Object mode has its own fill choice, LaMa unless Classic is picked; the brush's stays Classic
     click(&mut h, "removeSelect-object");

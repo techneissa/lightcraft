@@ -28,6 +28,12 @@ pub(super) fn set_fill(app: &mut LightcraftApp, fill: SpotFill) {
     }
 }
 
+/// Whether `spot` copies from a source (Heal, Clone, a Classic Remove spot): the others are rebuilt from their
+/// surroundings and have no source to refresh.
+pub(super) fn has_source(spot: &lightcraft_develop::Spot) -> bool {
+    spot.area.is_none() && spot.mode != lightcraft_develop::SpotMode::Fill && !lightcraft_pipeline::spots_learned::is_learned(spot)
+}
+
 /// The Expand slider: how far past the object a spot reaches, in thousandths of the long edge.
 fn expand_spec(label: &'static str) -> ControlSpec {
     ControlSpec {
