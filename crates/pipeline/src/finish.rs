@@ -134,7 +134,10 @@ fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
 }
 
 /// Number of per-mask terms in [`mask_terms`].
-pub const MASK_TERMS: usize = 21;
+pub const MASK_TERMS: usize = 21 + crate::recolor::TERMS;
+
+/// Where a mask's Recolor terms ([`crate::recolor::terms`]) start in its term block.
+pub const MASK_RECOLOR: usize = 21;
 
 /// Number of alpha-weighted terms at the start of [`mask_terms`].
 pub const MASK_SUMS: usize = 17;
@@ -142,7 +145,8 @@ pub const MASK_SUMS: usize = 17;
 /// A mask's local adjustments as the per-pixel stage uses them (alpha-weighted sums), in order:
 /// exposure, temp, tint, contrast, highlights, shadows, whites, blacks, texture, clarity, dehaze,
 /// saturation, hue, sharpness, noise, moiré, defringe, then the colour overlay: on (0/1), cos and
-/// sin of its OkLCh hue, and its strength.
+/// sin of its OkLCh hue, and its strength, then the Recolor ([`MASK_RECOLOR`]; off here: its terms need the area's
+/// reference, [`effect_terms_with`]).
 pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
     let (on, cos, sin, amt) = if j.color_sat > 0.0 {
         let hue = crate::colorops::oklch_hue_of_srgb_hue(j.color_hue);
@@ -172,6 +176,16 @@ pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
         cos,
         sin,
         amt,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
     ]
 }
 
@@ -334,15 +348,20 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let model = match s.process.process() {
         // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
         Process::V1 | Process::V2 => SliderModel::Legacy,
-        // V3: Contrast, Whites and Blacks as strong on every path as on `ToneMap::hdr`; V4 keeps that
-        Process::V3 | Process::V4 => SliderModel::Unified,
+        // V3: Contrast, Whites and Blacks as strong on every path as on `ToneMap::hdr`; V4 and later keep that
+        Process::V3 | Process::V4 | Process::V5 | Process::V6 => SliderModel::Unified,
     };
+    // V5 and later: a raw's tone curve rolls off into white in stops, a camera curve past its last knot, the
+    // generic curve from half a stop below its white point instead of clipping (issue #1632)
+    let rolloff = s.process.process() >= Process::V5;
     // V4: on a raw's camera curve only Whites stays in the tone map; calibrated Contrast and
     // Blacks follow it ([`crate::light_v3`]). Other paths keep V3's Contrast and Blacks.
     let calibrated = crate::light_v3::applies(s, info);
     let (contrast, blacks) = if calibrated { (0.0, 0.0) } else { (l.contrast, l.blacks) };
     match info.camera_tone.as_ref().filter(|_| info.raw) {
+        Some(curve) if rolloff => ToneMap::camera_rolloff_hdr_with(curve, contrast, l.whites, blacks, peak, model),
         Some(curve) => ToneMap::camera_hdr_with(curve, contrast, l.whites, blacks, peak, model),
+        None if info.raw && rolloff => ToneMap::rolloff_hdr(l.contrast, l.whites, l.blacks, peak),
         None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
         None => ToneMap::display_hdr_with(l.contrast, l.whites, l.blacks, peak, model, crate::tone::GREY),
     }
@@ -493,6 +512,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let lab = lightcraft_color::perceptual::oklab_from_2020(d);
                 d = lightcraft_color::perceptual::oklab_to_2020([lab[0], lab[1] + dir[0] * 0.08 * amt, lab[2] + dir[1] * 0.08 * amt]);
             }
+            d = recolor_pixel(p, &terms, &active, x, y, d);
 
             // --- vignette (display linear, post-crop)
             if let Some(v) = vig {
@@ -616,7 +636,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 }
 
 #[inline]
-fn apply_light(
+pub(crate) fn apply_light(
     color: [f32; 3],
     light: Option<&crate::light_v3::LightOps>,
     preview: Option<&crate::light_v3::PreviewOps>,
@@ -632,9 +652,9 @@ fn apply_light(
     }
 }
 
-struct PixelLocalTerms {
-    values: [f32; MASK_SUMS],
-    tint: Option<([f32; 3], f32)>,
+pub(crate) struct PixelLocalTerms {
+    pub(crate) values: [f32; MASK_SUMS],
+    pub(crate) tint: Option<([f32; 3], f32)>,
 }
 
 /// A mask's effect terms with its Amount (`amount`: 1 = 100 %) applied: the Amount scales the terms
@@ -650,23 +670,33 @@ pub fn effect_terms(j: &LocalAdjustments, amount: f32) -> [f32; MASK_TERMS] {
     t
 }
 
+/// [`effect_terms`] with the mask's Recolor, from its area's reference `r` ([`crate::Plan::recolor`]).
+pub fn effect_terms_with(j: &LocalAdjustments, amount: f32, r: Option<&crate::recolor::Reference>) -> [f32; MASK_TERMS] {
+    let mut t = effect_terms(j, amount);
+    if let Some(tail) = t.get_mut(MASK_RECOLOR..) {
+        tail.copy_from_slice(&crate::recolor::terms(j, amount, r));
+    }
+    t
+}
+
 /// Each mask's effect terms with its Amount applied (`None`: the mask has no effect: its Amount is
 /// 0 or less). The Amount scales the terms and the tint's strength, never the alpha.
-fn scaled_terms(p: &Prepared) -> Vec<Option<[f32; MASK_TERMS]>> {
+pub(crate) fn scaled_terms(p: &Prepared) -> Vec<Option<[f32; MASK_TERMS]>> {
     p.masks
         .iter()
         .map(|m| {
             if m.amount <= 0.0 || m.alpha.is_zero() {
                 return None;
             }
-            Some(effect_terms(&m.adjust, m.amount))
+            let r = p.recolor.iter().find(|(id, _)| *id == m.id).map(|(_, r)| r);
+            Some(effect_terms_with(&m.adjust, m.amount, r))
         })
         .collect()
 }
 
 /// The sum of the masks' terms at pixel `(x, y)`: only the `active` masks (those whose bounds hold
 /// the row) are read, and a mask reads nothing outside its bounds.
-fn pixel_local_terms(p: &Prepared, terms: &[Option<[f32; MASK_TERMS]>], active: &[usize], x: usize, y: usize) -> PixelLocalTerms {
+pub(crate) fn pixel_local_terms(p: &Prepared, terms: &[Option<[f32; MASK_TERMS]>], active: &[usize], x: usize, y: usize) -> PixelLocalTerms {
     let mut values = [0.0; MASK_SUMS];
     let mut tint = None;
     for &k in active {
@@ -685,7 +715,22 @@ fn pixel_local_terms(p: &Prepared, terms: &[Option<[f32; MASK_TERMS]>], active: 
     PixelLocalTerms { values, tint }
 }
 
-fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 3], local: &PixelLocalTerms) -> ([f32; 3], f32) {
+/// The masks' Recolor at pixel `(x, y)` on display-linear `d`, in mask order (unchanged, exactly, where none is on).
+fn recolor_pixel(p: &Prepared, terms: &[Option<[f32; MASK_TERMS]>], active: &[usize], x: usize, y: usize, d: [f32; 3]) -> [f32; 3] {
+    let mut lab = None;
+    for &k in active {
+        let (Some(mask), Some(Some(t))) = (p.masks.get(k), terms.get(k)) else { continue };
+        let Some(rc) = t.get(MASK_RECOLOR..) else { continue };
+        let alpha = mask.alpha.at(x, y);
+        if rc.first().is_some_and(|k| *k > 0.0) && alpha > 0.0 {
+            let l = lab.unwrap_or_else(|| lightcraft_color::perceptual::oklab_from_2020(d));
+            lab = Some(crate::recolor::apply_terms(l, rc, alpha));
+        }
+    }
+    lab.map_or(d, lightcraft_color::perceptual::oklab_to_2020)
+}
+
+pub(crate) fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 3], local: &PixelLocalTerms) -> ([f32; 3], f32) {
     let [l_exp, l_temp, l_tint, _, _, _, _, _, _, _, l_dehaze, _, _, _, l_noise, l_moire, l_defringe] = local.values;
     let mut color = if fp.gain == 1.0 { raw } else { raw.map(|value| value * fp.gain) };
 
@@ -772,7 +817,7 @@ pub(crate) fn shadows_highlights_delta(shadows: f32, highlights: f32, base: f32,
     shadows * 1.7 * shadow_weight * shadow_weight.sqrt() + highlights * 1.7 * highlight_weight
 }
 
-fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1: f32, local: &PixelLocalTerms) -> f32 {
+pub(crate) fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1: f32, local: &PixelLocalTerms) -> f32 {
     let [_, _, _, l_con, l_hl, l_sh, l_wh, l_bl, l_tex, l_clar, _, _, _, l_sharp, l_noise, _, _] = local.values;
     let mut delta = 0.0;
     let (highlights, shadows) = (fp.hl + l_hl, fp.sh + l_sh);

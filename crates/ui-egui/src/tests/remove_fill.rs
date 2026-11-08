@@ -29,6 +29,7 @@ fn person() -> Candidate {
         score: 0.9,
         main: false,
         spots: cover::cover_mask(&m),
+        region: None,
     }
 }
 

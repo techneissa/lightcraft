@@ -343,5 +343,10 @@
   "Deleted {n} map tiles": "წაიშალა რუკის ფილა: {n}",
   "In use: {url} (up to zoom {zoom})": "გამოიყენება: {url} (მასშტაბამდე {zoom})",
   "Map tiles from {id}": "რუკის ფილები: {id}",
-  "{size} MB in {n} tiles (limit {cap} MB)": "{size} MB, ფილა: {n} (ზღვარი {cap} MB)"
+  "{size} MB in {n} tiles (limit {cap} MB)": "{size} MB, ფილა: {n} (ზღვარი {cap} MB)",
+  "Bring photos in with File › Import Photos… ({keys}).": "ფოტოების შემოსატანად გამოიყენეთ ფაილი › ფოტოების იმპორტი… ({keys}).",
+  "View › Detail View ({keys}).": "ხედი › დეტალური ხედი ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "ფაილი › ექსპორტი… · ფაილი › დაბეჭდვა… ({keys}).",
+  "{n} folder{} could not be read": "საქაღალდეები, რომლებიც ვერ წაიკითხა: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "გამოტოვებული ფაილები (მხარდაუჭერელი ფოტოს ტიპია): {n}{:.0}"
 }

@@ -149,6 +149,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     if let Some(r) = crate::panels::match_look::command(app, id, p) {
         return Some(r);
     }
+    if id == "dialog.learnEdits" || id.starts_with("learnEdits.") {
+        return Some(crate::learn_edits::command(app, id, p));
+    }
     if id.starts_with("photoMenu.") {
         return Some(crate::panels::photo_menu::command(app, id, p));
     }
@@ -175,6 +178,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     }
     if let Some(r) = crate::export_task::book_task::command(app, id, p) {
         return Some(r);
+    }
+    if id == "develop.auto" {
+        return Some(crate::auto_settings::command(app, p));
     }
     if id == "photo.reload" {
         // the files are read in the background (a raw's decode takes a second or more)

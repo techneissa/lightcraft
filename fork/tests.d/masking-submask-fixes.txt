@@ -1,0 +1,3 @@
+# Edge sliders per submask row, and Invert Mask turning the later parts (issues #68, #72)
+cargo test -p lightcraft-engine --lib -- mask_invert
+cargo test -p lightcraft-ui-egui --lib -- mask_edge_rows

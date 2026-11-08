@@ -11,4 +11,6 @@ mod fit;
 mod gpu_probe;
 mod hidden_spot;
 mod mask_cache;
+mod shaped_spot;
+mod spot_cache;
 mod thumbs_bench;

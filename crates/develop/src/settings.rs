@@ -93,12 +93,18 @@ pub enum Process {
     /// camera curve keeps V3 Whites and fitted pointwise operators follow it
     /// (`lightcraft_pipeline::light_v3`, `docs/light-v3.md`).
     V4,
+    /// V4, with a raw's tone curve rolling off into white in stops past its last fitted knot, so
+    /// highlights the sensor recorded keep their detail when Exposure lifts them (issue #1632).
+    V5,
+    /// V5, with colour noise reduction on the linear colour differences R−Y and B−Y, leaving Y alone, with
+    /// edge-aware weights from a denoised guide and a brake for isolated colour specks (issue #815).
+    V6,
 }
 
 impl Process {
     /// Every process, oldest first.
-    pub const ALL: [Process; 4] = [Process::V1, Process::V2, Process::V3, Process::V4];
-    pub const LATEST: Process = Process::V4;
+    pub const ALL: [Process; 6] = [Process::V1, Process::V2, Process::V3, Process::V4, Process::V5, Process::V6];
+    pub const LATEST: Process = Process::V6;
 
     pub const fn version(self) -> ProcessVersion {
         match self {
@@ -106,6 +112,8 @@ impl Process {
             Process::V2 => ProcessVersion(2),
             Process::V3 => ProcessVersion(3),
             Process::V4 => ProcessVersion(4),
+            Process::V5 => ProcessVersion(5),
+            Process::V6 => ProcessVersion(6),
         }
     }
 }
@@ -675,6 +683,13 @@ pub struct Detail {
     pub nr_color: f64,
     pub nr_color_detail: f64,
     pub nr_color_smoothness: f64,
+    /// Replace single outlier photosites (noise spikes far above all their same-colour neighbours) in the
+    /// raw mosaic before demosaicing, so they do not become coloured dots (#1345). On for newly imported
+    /// raws ([`crate::DevelopSettings::for_raw`]); off for edits saved before it existed, so they look the
+    /// same. Raw files only. Omitted when off, so settings saved before it keep their JSON (and hash, and with it
+    /// their cached thumbnails).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub nr_outliers: bool,
 }
 
 impl Default for Detail {
@@ -692,6 +707,7 @@ impl Default for Detail {
             nr_color: 0.0,
             nr_color_detail: 50.0,
             nr_color_smoothness: 50.0,
+            nr_outliers: false,
         }
     }
 }
@@ -922,6 +938,26 @@ pub struct LocalAdjustments {
     pub color_sat: f64,
     /// Local vignette/grain are not in Lightroom; we keep the struct extensible.
     pub amount: f64,
+    /// Recolor (0..100; 0 = off): the area takes the colour `recolor_r/g/b` (sRGB-encoded, 0..1) and keeps its
+    /// shading. Not written while 0, so edits without it stay as they were.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_r: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_g: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_b: f64,
+    /// Recolor's Range (−100..100, 0 = automatic): widens or narrows which colours count as the area's main colour.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_range: f64,
+    /// Recolor's Colour to Replace (sRGB-encoded, 0..1; black = automatic, the area's main colour).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_from_r: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_from_g: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_from_b: f64,
 }
 
 impl Default for LocalAdjustments {
@@ -947,6 +983,14 @@ impl Default for LocalAdjustments {
             color_hue: 0.0,
             color_sat: 0.0,
             amount: 100.0,
+            recolor: 0.0,
+            recolor_r: 0.0,
+            recolor_g: 0.0,
+            recolor_b: 0.0,
+            recolor_range: 0.0,
+            recolor_from_r: 0.0,
+            recolor_from_g: 0.0,
+            recolor_from_b: 0.0,
         }
     }
 }
@@ -1183,6 +1227,11 @@ pub struct Mask {
     /// edit converts an old one (`lightcraft_pipeline::mask_space::attach`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub on_photo: bool,
+    /// What the parts after the first were (mode, own Invert) before the last Invert Mask rewrote them, so inverting
+    /// again puts them back as they were. Empty when unknown; only used while the parts are still what that Invert
+    /// made (`lightcraft_engine::cmd::mask_invert`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub before_invert: Vec<(MaskOp, bool)>,
 }
 
 fn is_zero(v: &f64) -> bool {
@@ -1204,7 +1253,74 @@ impl Default for Mask {
             adjust: LocalAdjustments::default(),
             refine: 0.0,
             on_photo: true,
+            before_invert: Vec::new(),
         }
+    }
+}
+
+impl DevelopSettings {
+    /// Calls `f` for every segmentation grid stored in these settings (the `seg` and `detail`
+    /// of Object and Prompt mask shapes).
+    pub fn visit_seg_masks(&self, f: &mut impl FnMut(&crate::SegMask)) {
+        for mask in &self.masks {
+            for component in &mask.components {
+                visit_shape(&component.shape, f);
+            }
+        }
+    }
+
+    /// [`DevelopSettings::visit_seg_masks`] with mutable access (resolving references into a
+    /// snapshot's grid table).
+    pub fn visit_seg_masks_mut(&mut self, f: &mut impl FnMut(&mut crate::SegMask)) {
+        for mask in &mut self.masks {
+            for component in &mut mask.components {
+                visit_shape_mut(&mut component.shape, f);
+            }
+        }
+    }
+}
+
+fn visit_shape(shape: &MaskShape, f: &mut impl FnMut(&crate::SegMask)) {
+    match shape {
+        MaskShape::Object { seg, detail, .. } => {
+            if let Some(seg) = seg {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        MaskShape::Prompt { seg, detail, .. } => {
+            if let Some(seg) = seg {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn visit_shape_mut(shape: &mut MaskShape, f: &mut impl FnMut(&mut crate::SegMask)) {
+    match shape {
+        MaskShape::Object { seg, detail, .. } => {
+            if let Some(seg) = seg.as_mut() {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        MaskShape::Prompt { seg, detail, .. } => {
+            if let Some(seg) = seg.as_mut() {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1279,6 +1395,10 @@ pub struct Spot {
     /// When its circle shows on the photo; `None` follows the Tool Overlay. Not written when `None`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub circle: Option<crate::spot_circle::SpotCircle>,
+    /// The spot's shape when it is drawn in the shape of an object or a mask instead of along its stroke (fork
+    /// feature, `fork/object-remove.md`). Not written for a stroke spot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub area: Option<crate::spot_area::SpotArea>,
 }
 
 impl Default for Spot {
@@ -1293,6 +1413,7 @@ impl Default for Spot {
             fill: SpotFill::Classic,
             hidden: false,
             circle: None,
+            area: None,
         }
     }
 }

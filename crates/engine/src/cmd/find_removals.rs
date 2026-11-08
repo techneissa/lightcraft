@@ -47,6 +47,12 @@ fn add_spots(s: &mut Session, c: &str, entries: &[Entry], fill: SpotFill) -> cra
     let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
     let first = d.spots.len();
     for e in entries {
+        // one spot in its shape when the candidate has one (fork, `fork/object-remove.md`)
+        if let Some(seg) = e.candidate.region.as_deref().and_then(lightcraft_pipeline::find::region::area_of) {
+            let area = lightcraft_develop::SpotArea::new(e.candidate.kind.name(), seg);
+            d.spots.push(crate::spot_area::area_spot(area, lightcraft_pipeline::find::cover::GROW, fill));
+            continue;
+        }
         for plan in &e.candidate.spots {
             if plan.points.is_empty() {
                 continue;

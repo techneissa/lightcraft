@@ -299,3 +299,73 @@ fn a_big_hole_is_handed_over_at_a_capped_size() {
     assert_eq!(asked.len(), 1);
     assert!(asked[0].0.max(asked[0].1) <= spots_learned::FILL_MAX_SIDE, "{asked:?}");
 }
+
+/// Issue #82: a LaMa spot asks its fill only when it is new or changed (or reads what a changed spot drew), so adding the
+/// 13th spot asks once, not thirteen times; a drag's draft that got no fill is asked again by the full render.
+#[test]
+fn a_lama_spot_edit_asks_the_fill_only_for_the_spots_it_reaches() {
+    let fill = Arc::new(MeanFill::default());
+    let at = |x: f64, y: f64| Spot { points: vec![Point::new(x, y)], size: 0.02, ..spot(SpotMode::Remove, SpotFill::Lama) };
+    let mut s = with((0..12).map(|i| at(0.1 + 0.2 * (i % 5) as f64, 0.15 + 0.3 * (i / 5) as f64)).collect());
+    let src = Arc::new(scene());
+    let (info, req) = (SourceInfo::default(), RenderRequest::fit(400, 300));
+    let cache = crate::StageCache::default();
+    let asked = || fill.asked.lock().unwrap_or_else(PoisonError::into_inner).len();
+    let edit = |s: &DevelopSettings, req: &RenderRequest| {
+        let before = asked();
+        let kept = crate::render_cached(&src, &info, s, req, &cache).image;
+        let n = asked() - before;
+        (n, kept.data == render(&src, &info, s, req).image.data)
+    };
+    install(&fill, || {
+        assert_eq!(edit(&s, &req), (12, true));
+        s.spots.push(at(0.5, 0.92));
+        assert_eq!(edit(&s, &req), (1, true), "the 13th spot alone");
+        s.spots[3].points[0].x += 0.01;
+        assert_eq!(edit(&s, &req), (1, true), "a moved spot alone");
+        s.light.exposure = 1.0;
+        s.wb.temp += 800.0;
+        s.wb.mode = lightcraft_develop::WbMode::Custom;
+        assert_eq!(edit(&s, &req), (0, true), "the white balance and tone ask nothing");
+        // a drag's draft gets no fill for the changed spot; the full render after it asks for that one spot again
+        *fill.reply.lock().unwrap_or_else(PoisonError::into_inner) = Some(None);
+        s.spots[5].opacity = 60.0;
+        let draft = RenderRequest { quality: Quality::Draft, ..req };
+        assert_eq!(edit(&s, &draft).0, 1);
+        *fill.reply.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        assert_eq!(edit(&s, &req), (1, true), "the full render asks again for the spot the draft could not fill");
+    });
+}
+
+/// Fork feature (`fork/object-remove.md`): a LaMa spot in an object's shape is filled over its whole shape, by a
+/// whole render (an export) and by the incremental path a view's renders take alike, not in a circle around its pin.
+#[test]
+fn a_shaped_lama_spot_is_filled_over_its_whole_shape_in_the_preview_and_the_export() {
+    let fill = Arc::new(MeanFill::default());
+    // a shape over the middle of the picture, [0.3, 0.3]–[0.7, 0.7], much bigger than the spot's radius
+    let seg = lightcraft_develop::SegMask::from_logits_in(16, &[8.0; 256], [0.3, 0.3, 0.7, 0.7]);
+    let shaped = Spot {
+        points: vec![Point::new(0.5, 0.5)],
+        size: 0.005,
+        area: Some(lightcraft_develop::SpotArea::new("object", seg)),
+        ..spot(SpotMode::Remove, SpotFill::Lama)
+    };
+    let s = with(vec![shaped]);
+    let src = Arc::new(scene());
+    let (info, req) = (SourceInfo::default(), RenderRequest::fit(400, 300));
+    let cache = crate::StageCache::default();
+    install(&fill, || {
+        let plain = render(&src, &info, &with(vec![]), &req).image;
+        let export = render(&src, &info, &s, &req).image;
+        let preview = crate::render_cached(&src, &info, &s, &req, &cache).image;
+        assert_eq!(preview.data, export.data, "the preview draws what the export draws");
+        // near the shape's corners, far from the pin: filled with the fill's flat colour like its middle
+        for (x, y) in [(130, 100), (270, 100), (130, 200), (270, 200)] {
+            assert_ne!(export.get(x, y), plain.get(x, y), "({x}, {y}) is inside the shape");
+            assert_eq!(export.get(x, y), export.get(200, 150), "({x}, {y}) has the fill");
+        }
+        // and outside the shape and its margin, nothing changed
+        assert_eq!(export.get(20, 20), plain.get(20, 20));
+        assert_eq!(export.get(380, 280), plain.get(380, 280));
+    });
+}
