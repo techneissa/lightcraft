@@ -25,6 +25,7 @@ mod find_overlay;
 mod geometry;
 mod info;
 mod masks;
+mod object_remove;
 mod retouch;
 mod window;
 
@@ -822,6 +823,21 @@ struct ToolView<'a> {
 /// Route the pointer to the right panel's tool on the photo, or to the general interactions.
 fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, tv: &ToolView, v: &Views) {
     let (map, d) = (tv.map, tv.d);
+    if let Some(target) = super::mask_recolor::pick_target(&app.ui.tool) {
+        // Recolor's eyedroppers (Masking): a click sets the selected mask's colour, or its Colour to Replace, from
+        // that point (kept on the photo)
+        if resp.clicked()
+            && let Some(q) = resp.interact_pointer_pos()
+        {
+            let n = map.norm(q);
+            let (x, y) = (n.x.clamp(0.0, 1.0), n.y.clamp(0.0, 1.0));
+            if let Err(e) = app.run("mask.recolorPick", json!({"x": x, "y": y, "target": target})) {
+                app.toast(ui.ctx(), e);
+            }
+            app.ui.tool.clear();
+        }
+        return;
+    }
     match tv.right {
         RightPanel::Crop => crop_overlay(app, ui, resp, map, tv.frame, d, tv.id),
         RightPanel::Masking => mask_overlay(app, ui, resp, map, d),
@@ -1262,7 +1278,9 @@ fn general_cursor(app: &LightcraftApp, ui: &egui::Ui, resp: &egui::Response, img
         return;
     }
     let cursor = match app.ui.tool.as_str() {
-        "wbPicker" | "colorRange" | "pointColor" => egui::CursorIcon::Crosshair,
+        "wbPicker" | "colorRange" | "pointColor" | super::mask_recolor::PICK_TOOL | super::mask_recolor::PICK_FROM_TOOL => {
+            egui::CursorIcon::Crosshair
+        }
         tool if tool.starts_with("tat:") => egui::CursorIcon::ResizeVertical,
         _ if img.width() > canvas.width() + 1.0 || img.height() > canvas.height() + 1.0 => {
             if resp.dragged() {

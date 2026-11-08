@@ -46,7 +46,9 @@ pub mod masks;
 pub mod optics;
 pub mod output;
 pub mod profiles;
+pub mod recolor;
 pub mod redeye;
+pub mod spot_area;
 pub mod spots;
 pub mod spots_keep;
 pub mod spots_learned;
@@ -299,6 +301,8 @@ pub(crate) struct Prepared {
     pub masks: Vec<masks::Evaluated>,
     /// Output pixels per unit of the source long edge.
     pub px_per_long: f64,
+    /// The recolored masks' references ([`Plan::recolor`]).
+    pub recolor: Vec<(u32, recolor::Reference)>,
 }
 
 /// Output size for a source of `src_w × src_h` under `s`, fitting `max_w × max_h`.
@@ -449,7 +453,7 @@ struct CacheEntry {
     masks: masks::AlphaCache,
 }
 
-fn hash_of(parts: impl std::hash::Hash) -> u64 {
+pub(crate) fn hash_of(parts: impl std::hash::Hash) -> u64 {
     use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
     BuildHasherDefault::<DefaultHasher>::default().hash_one(parts)
 }
@@ -491,6 +495,9 @@ pub struct Plan<'a> {
     /// A render that follows a slider drag ([`Quality::Draft`]): LaMa spots take a fill that is already known and start
     /// no run ([`learned_fill::LearnedFill::fill`]).
     pub draft: bool,
+    /// The references of the masks whose Recolor is on, by mask id ([`recolor::measure::references`]): measured on the whole
+    /// frame, the same for every render of the edit.
+    pub recolor: Vec<(u32, recolor::Reference)>,
 }
 
 /// The original's long edge in pixels (an original reported smaller than the source is the source).
@@ -519,6 +526,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     }
     let s = &*settings;
     let frame = frame_for(src, info, s, req.apply_crop);
+    let recolor =
+        recolor::measure::references(src, info, s, &frame, req.space, native_long(info, src.width.max(src.height)), req.quality == Quality::Draft);
     let (full_w, full_h) = frame.fit(req.max_w, req.max_h);
     // sizes and scale are those of the whole output; a window only narrows what is drawn
     let px_per_long = frame.px_per_long(full_w);
@@ -587,6 +596,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         keep,
         mattes: info.mattes.clone(),
         draft: req.quality == Quality::Draft,
+        recolor,
     }
 }
 
@@ -770,6 +780,7 @@ fn render_impl(
     if let Some(a) = plan.fixed_air {
         prep.air = a;
     }
+    prep.recolor.clone_from(&plan.recolor);
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
         c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), planes, masks: alphas });
@@ -953,6 +964,8 @@ mod tests_macos_wb;
 mod tests_mask_geometry;
 #[cfg(test)]
 mod tests_nr_scale;
+#[cfg(test)]
+mod tests_recolor_render;
 #[cfg(test)]
 mod tests_sharpen;
 #[cfg(test)]

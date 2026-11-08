@@ -370,3 +370,146 @@ fn a_profile_names_dinov2_small_with_768_numbers_or_no_encoder() {
     v["features"]["layout"]["encoder"] = 768.into();
     assert!(Profile::from_json(&v.to_string()).is_err());
 }
+
+/// Examples where Exposure follows the rule, Shadows is always +20, and Contrast is random (as often up as down).
+fn mixed_profile() -> Profile {
+    let mut p = stats_profile(&[Group::Tone]);
+    for (seed, light, cast) in grid(40, 0) {
+        let up = (seed * 7919) % 2 == 0;
+        let contrast = (20 + (seed * 31) % 40) as f64;
+        p.add_example(example(seed, light, cast, &|l, c| {
+            let mut s = rule(l, c);
+            s.light.contrast = if up { contrast } else { -contrast };
+            s
+        }))
+        .unwrap();
+    }
+    p
+}
+
+#[test]
+fn a_slider_without_a_pattern_is_skipped_and_the_others_of_its_group_are_learned() {
+    let mut p = mixed_profile();
+    let report = p.train(&|| false, &mut |_, _| {}).unwrap().clone();
+    let tone = report.groups.iter().find(|g| g.group == Group::Tone).unwrap();
+    assert!(tone.kept, "{report:?}");
+    let learned = |id: &str| tone.sliders.iter().find(|s| s.id == id).map(|s| s.learned(tone.kept));
+    assert_eq!(learned("light.exposure"), Some(true), "{tone:?}");
+    assert_eq!(learned("light.shadows"), Some(true), "{tone:?}");
+    assert_eq!(learned("light.contrast"), Some(false), "{tone:?}");
+    let model = p.model.as_ref().unwrap();
+    let ids: Vec<&str> = model.groups.iter().flat_map(|g| g.sliders.iter().map(String::as_str)).collect();
+    assert!(ids.contains(&"light.exposure") && !ids.contains(&"light.contrast"), "{ids:?}");
+}
+
+#[test]
+fn applying_changes_only_the_learned_sliders() {
+    let mut p = mixed_profile();
+    p.train(&|| false, &mut |_, _| {}).unwrap();
+    let mut current = DevelopSettings::default();
+    current.light.contrast = 7.0;
+    current.light.whites = -5.0;
+    let (w, h, rgb) = scene(77, 0.3, 0.2);
+    let out = crate::apply(&p, &features::photo_stats(w, h, &rgb).unwrap(), &current, &DevelopSettings::default()).unwrap();
+    assert!(out.light.exposure > 0.5, "{}", out.light.exposure);
+    assert!((out.light.shadows - 20.0).abs() < 1.0, "{}", out.light.shadows);
+    assert_eq!(out.light.contrast, 7.0, "Contrast was skipped: the photo keeps its own");
+    let mut back = out.clone();
+    (back.light.exposure, back.light.shadows) = (current.light.exposure, current.light.shadows);
+    assert_eq!(back, current, "nothing but Exposure and Shadows changes");
+}
+
+#[test]
+fn profiles_saved_before_sliders_were_decided_one_by_one_load_and_apply_as_before() {
+    // written by the build of PR #95 (`--example train -- <10 photos> --groups tone --no-encoder`): no `kept` on its
+    // slider scores
+    let text = include_str!("testdata/profile-v1-before-102.json");
+    let old = Profile::from_json(text).unwrap();
+    assert_eq!(old.to_json().unwrap(), text, "written back byte for byte");
+    let report = old.report.as_ref().unwrap();
+    for g in &report.groups {
+        for s in &g.sliders {
+            assert_eq!(s.kept, None);
+            assert_eq!(s.learned(g.kept), g.kept, "the group's decision stands for its sliders");
+        }
+    }
+    // it applies as it did: its model is read as written and predicts its own examples
+    let mut ids: Vec<&str> = old.model.as_ref().unwrap().groups.iter().flat_map(|g| g.sliders.iter().map(String::as_str)).collect();
+    ids.sort_unstable();
+    assert_eq!(ids, vec!["light.exposure", "light.shadows"]);
+    let base = DevelopSettings::default();
+    for e in &old.examples {
+        let out = crate::apply(&old, &e.features, &base, &base).unwrap();
+        assert!(
+            (out.light.exposure - e.targets[idx("light.exposure")] as f64).abs() < 0.2,
+            "{} vs {}",
+            out.light.exposure,
+            e.targets[idx("light.exposure")]
+        );
+        assert!((out.light.shadows - 20.0).abs() < 0.5);
+        let mut back = out.clone();
+        (back.light.exposure, back.light.shadows) = (0.0, 0.0);
+        assert_eq!(back, base);
+    }
+}
+
+#[test]
+fn a_curve_point_or_wheel_axis_the_profile_does_not_predict_keeps_the_photo_s_own_value() {
+    let defaults = DevelopSettings::default();
+    let mut current = defaults.clone();
+    let own = vec![
+        lightcraft_geom::Point::new(0.0, 0.0),
+        lightcraft_geom::Point::new(0.1, 0.05),
+        lightcraft_geom::Point::new(0.9, 0.97),
+        lightcraft_geom::Point::new(1.0, 1.0),
+    ];
+    current.curve.master = own.clone();
+    current.grading.shadows = lightcraft_develop::Wheel { hue: 200.0, sat: 30.0, lum: 0.0 };
+    let mut out = current.clone();
+    // the profile learned the master curve at 50 % (+5) and the shadows wheel's x axis (+10) only
+    sliders::write(&mut out, &defaults, &[(idx("curve.master.50"), 5.0), (idx("grading.shadows.x"), 10.0)]);
+    for p in &own {
+        assert!(out.curve.master.iter().any(|q| (q.x - p.x).abs() < 1e-9 && (q.y - p.y).abs() < 1e-9), "{p:?} gone: {:?}", out.curve.master);
+    }
+    assert!(out.curve.master.iter().any(|q| (q.x - 0.5).abs() < 1e-9 && (q.y - 0.55).abs() < 1e-9), "{:?}", out.curve.master);
+    assert_eq!(out.curve.master.len(), own.len() + 1);
+    // the wheel's y keeps the photo's own value: 30 · sin 200°
+    let y = 30.0 * 200f64.to_radians().sin();
+    let (sat, hue) = (out.grading.shadows.sat, out.grading.shadows.hue.to_radians());
+    assert!((sat * hue.sin() - y).abs() < 0.6, "y {} want {y}", sat * hue.sin());
+    assert!((sat * hue.cos() - 10.0).abs() < 0.6, "x {}", sat * hue.cos());
+}
+
+/// A pseudo-random number in −1..1 for (seed, photo, slider).
+fn noise(seed: u64, photo: u64, slider: u64) -> f64 {
+    let mut x = seed.wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ photo.wrapping_mul(0xbf58_476d_1ce4_e5b9) ^ slider.wrapping_mul(0x94d0_49bb_1331_11eb);
+    x ^= x >> 31;
+    x = x.wrapping_mul(0xd6e8_feb8_6659_fd93);
+    x ^= x >> 29;
+    (x % 2001) as f64 / 1000.0 - 1.0
+}
+
+#[test]
+fn sliders_edited_at_random_among_many_are_skipped() {
+    // 12 examples: Exposure follows the rule; all 24 Color Mixer sliders were moved at random (up as often as down)
+    let mixer: Vec<usize> = SLIDERS.iter().enumerate().filter(|(_, s)| s.group == Group::ColorMixer).map(|(i, _)| i).collect();
+    let (mut kept_noise, mut red_hue_skipped) = (0, 0);
+    for seed in 0..20u64 {
+        let mut p = stats_profile(&[Group::Tone, Group::ColorMixer]);
+        for (n, (s, light, cast)) in grid(12, seed as u32 * 100).into_iter().enumerate() {
+            let mut e = example(s, light, cast, &rule);
+            for (k, i) in mixer.iter().enumerate() {
+                e.targets[*i] = (40.0 * noise(seed, n as u64, k as u64)) as f32;
+            }
+            p.add_example(e).unwrap();
+        }
+        let report = p.train(&|| false, &mut |_, _| {}).unwrap().clone();
+        let mix = report.groups.iter().find(|g| g.group == Group::ColorMixer).unwrap();
+        kept_noise += mix.sliders.iter().filter(|s| s.learned(mix.kept)).count();
+        red_hue_skipped += mix.sliders.iter().any(|s| s.id == "mixer.red.hue" && !s.learned(mix.kept)) as usize;
+        let tone = report.groups.iter().find(|g| g.group == Group::Tone).unwrap();
+        assert!(tone.sliders.iter().any(|s| s.id == "light.exposure" && s.learned(tone.kept)), "seed {seed}: Exposure follows a rule");
+    }
+    assert!(red_hue_skipped >= 19, "Red Hue skipped in only {red_hue_skipped} of 20");
+    assert!(kept_noise <= 24, "{kept_noise} of 480 random sliders kept");
+}

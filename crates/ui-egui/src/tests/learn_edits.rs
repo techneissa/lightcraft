@@ -198,3 +198,20 @@ fn every_button_of_the_window_works() {
     no_error(&h, "Stop");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn a_group_lists_its_learned_and_its_skipped_sliders() {
+    let group = json!({"group": "tone", "kept": true, "sliders": [
+        {"id": "light.exposure", "error": 0.18, "defaultError": 1.0, "learned": true},
+        {"id": "light.contrast", "error": 70.0, "defaultError": 40.0, "learned": false},
+        {"id": "light.shadows", "error": 0.0, "defaultError": 20.0, "learned": true},
+    ]});
+    let (learned, skipped) = crate::learn_edits::group_lines(&group);
+    assert_eq!(learned, vec!["Exposure ±0.18 EV".to_string(), "Shadows ±0".to_string()]);
+    assert_eq!(skipped, vec!["Contrast".to_string()]);
+    // a report saved before sliders were decided one by one: the group decides for all of them
+    let old = json!({"group": "tone", "kept": true, "sliders": [{"id": "light.contrast", "error": 4.0, "defaultError": 12.0}]});
+    assert_eq!(crate::learn_edits::group_lines(&old), (vec!["Contrast ±4".to_string()], Vec::new()));
+    let dropped = json!({"group": "tone", "kept": false, "sliders": [{"id": "light.contrast", "error": 40.0, "defaultError": 12.0}]});
+    assert_eq!(crate::learn_edits::group_lines(&dropped), (Vec::new(), vec!["Contrast".to_string()]));
+}

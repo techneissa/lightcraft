@@ -359,6 +359,8 @@ fn main() -> eframe::Result {
                 session = session.with_default_lama_model();
                 // Learn My Edits: its profiles in <config>/learn-profiles, its model shared with PhotoCraft (fork/learn-my-edits.md)
                 session = session.with_default_learn();
+                // people parts (fork/people-parsing.md): models in the shared folder, parses cached in ~/Library/Caches
+                session = session.with_default_parsing_models();
                 // the face and denoise models of the old folders move into the folder shared with PhotoCraft, once
                 // (fork/shared-models.md); on a worker, because checking a 200 MB model takes a second; a failure
                 // leaves both copies and is only logged

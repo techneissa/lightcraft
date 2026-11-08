@@ -195,6 +195,10 @@ pub(crate) fn make_product(spec: &JobSpec, progress: Option<&Progress>) -> Resul
     }
     let decoded = began.elapsed();
     let model = loaded(spec)?;
+    // (a job stopped while its model loaded gives up now, not after its turn at the memory gate below)
+    if cancelled() {
+        return Err(MakeError::Cancelled);
+    }
     // Packed input, returned RGB and the preceding group's RGB overlap while tiles run.
     let scratch =
         model.bytes_per_tile().saturating_add(128usize.saturating_mul(spec.manifest.tile as usize).saturating_mul(spec.manifest.tile as usize));

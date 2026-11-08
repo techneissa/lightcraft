@@ -1003,6 +1003,17 @@ fn a_cancelled_denoise_batch_stays_cancelled_until_asked_again() {
     let _ = std::fs::remove_dir_all(x.dir);
 }
 
+/// Wait until `done` holds. Only a hang guard: the job runs on a thread of its own and waits at the process-wide
+/// memory gate behind the decodes of every test running beside it, so how long it takes is not what a test checks
+/// (issue #20).
+fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+    let started = std::time::Instant::now();
+    while !done() {
+        assert!(started.elapsed() < std::time::Duration::from_secs(300), "gave up waiting: {what}");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 /// A job told to stop by the batch row's ✕ winds down on its own thread: until it has, no new batch row
 /// appears for it. The photo it was making waits until asked for again.
 #[test]
@@ -1032,13 +1043,7 @@ fn a_cancelled_batch_does_not_come_back_while_its_job_winds_down() {
     x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
     let batches = |s: &Session| s.activity.list().into_iter().filter(|t| t.kind == "denoise" && t.batch).count();
     let batch = x.s.activity.list().into_iter().find(|t| t.kind == "denoise" && t.batch).expect("a batch row");
-    for _ in 0..1000 {
-        if entered.load(std::sync::atomic::Ordering::SeqCst) {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
-    assert!(entered.load(std::sync::atomic::Ordering::SeqCst), "the job reached its model");
+    wait_for("the job reached its model", || entered.load(std::sync::atomic::Ordering::SeqCst));
     x.s.activity.cancel(batch.id).unwrap();
     for _ in 0..3 {
         x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
@@ -1049,14 +1054,10 @@ fn a_cancelled_batch_does_not_come_back_while_its_job_winds_down() {
     let (open, wake) = &*gate;
     *open.lock().unwrap() = true;
     wake.notify_all();
-    for _ in 0..200 {
+    wait_for("the stopped job wound down", || {
         x.s.execute("denoise.pump", &json!({"pace": "full"})).unwrap();
-        if !x.s.denoise_busy() {
-            break;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(20));
-    }
-    assert!(!x.s.denoise_busy(), "stopped");
+        !x.s.denoise_busy()
+    });
     assert_eq!(batches(&x.s), 0);
     drop(x.s);
     let _ = std::fs::remove_dir_all(x.dir);

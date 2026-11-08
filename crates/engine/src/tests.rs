@@ -52,6 +52,7 @@ mod library;
 mod lightroom_folder;
 mod local_profiles;
 mod location;
+mod people_parsing;
 mod rename_names;
 mod shared_models;
 // macOS Colour needs macOS's own raw decoder: the test only means something on the Mac (fork is Mac only)
@@ -83,6 +84,7 @@ mod slideshow_export;
 #[cfg(not(target_arch = "wasm32"))]
 mod slow_drive;
 mod smart_local;
+mod spot_area;
 mod spot_rows;
 mod spots;
 mod sync;

@@ -91,6 +91,7 @@ pub fn mask_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, name: &str
     run(app, ui, &crate::i18n::tr_format!("Duplicate and Invert \"{name}\"", name = name), true, "mask.duplicate", json!({"id": id, "invert": true}));
     run(app, ui, &crate::i18n::tr_format!("Invert \"{name}\"", name = name), true, "mask.invert", json!({"id": id}));
     run(app, ui, menu_label(if visible { "Hide Mask" } else { "Show Mask" }), true, "mask.visible", json!({"id": id}));
+    crate::panels::right::remove_object::remove_this_area(app, ui, id);
     ui.separator();
     for (label, op) in [("Add to Mask", MaskOp::Add), ("Subtract from Mask", MaskOp::Subtract), ("Intersect Mask with", MaskOp::Intersect)] {
         let button = crate::widgets::menu_button(ui, crate::i18n::tr(label), |ui| kinds_menu(app, ui, id, op));

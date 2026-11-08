@@ -1,0 +1,2 @@
+cargo test -p lightcraft-ui-egui --lib -- tests::find_similar tests::book_preview
+cargo test -p lightcraft-engine --lib -- tests::denoise
