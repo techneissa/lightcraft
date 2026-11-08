@@ -6,7 +6,7 @@ use lightcraft_develop::{DevelopSettings, Spot, SpotMode};
 use lightcraft_geom::Point;
 use lightcraft_raster::Rgb32f;
 
-use super::{Drawn, Footprint, redo, spots_drawn};
+use super::{Drawn, Footprint, Step, redo, spots_drawn};
 use crate::{RenderRequest, SourceInfo, StageCache, render, render_cached};
 
 fn scene() -> Arc<Rgb32f> {
@@ -138,16 +138,57 @@ fn edits_in_any_order_match_drawing_every_spot() {
 }
 
 #[test]
-fn redo_follows_what_each_spot_reads() {
+fn redo_draws_the_changed_spot_and_the_later_ones_reading_it() {
     let d = |write: [usize; 4], read: [usize; 4], x: f64| Some(Drawn { spot: spot(SpotMode::Heal, x, 0.5, None), at: Footprint { write, read } });
-    let a = d([0, 0, 10, 10], [0, 0, 10, 10], 0.1);
-    let b = d([20, 0, 30, 10], [5, 0, 30, 10], 0.2); // reads a's box
-    let c = d([40, 0, 50, 10], [40, 0, 50, 10], 0.3);
-    let old = vec![a.clone(), b.clone(), c.clone()];
-    let a2 = d([1, 0, 11, 10], [1, 0, 11, 10], 0.11);
-    let r = redo(&old, &[a2.clone(), b.clone(), c.clone()]).unwrap_or_else(|| panic!("a and b only"));
-    assert_eq!(r.draw, vec![true, true, false]);
-    assert_eq!(redo(&old, &old).map(|r| r.drawn()), Some(0), "nothing changed");
-    assert_eq!(redo(&old, &[a2, b, d([5, 0, 45, 10], [5, 0, 45, 10], 0.31)]), None, "every spot: from the image before them");
-    assert_eq!(redo(&[], &[c]), None);
+    let first = d([0, 0, 10, 10], [0, 0, 10, 10], 0.05); // under the changed one, earlier
+    let a = d([5, 0, 15, 10], [5, 0, 15, 10], 0.1);
+    let b = d([20, 0, 30, 10], [8, 0, 30, 10], 0.2); // reads a's box
+    let c = d([40, 0, 50, 10], [40, 0, 50, 10], 0.3); // apart
+    let e = d([12, 0, 22, 10], [12, 0, 22, 10], 0.4); // over a's and b's boxes, reads neither's change
+    let old = vec![first.clone(), a, b.clone(), c.clone(), e.clone()];
+    let a2 = d([6, 0, 16, 10], [6, 0, 16, 10], 0.11);
+    let r = redo(&old, &[first.clone(), a2.clone(), b.clone(), c.clone(), e.clone()]);
+    assert_eq!(r.steps, vec![Step::Draw(1), Step::Draw(2), Step::Draw(4)], "e reads what a drew");
+    assert_eq!(r.undo, vec![4, 2, 1], "taken off last first; the first spot and c stay");
+    let moved_far = d([60, 0, 70, 10], [60, 0, 70, 10], 0.7);
+    let r = redo(&old, &[first.clone(), old[1].clone(), b.clone(), c.clone(), moved_far]);
+    assert_eq!((r.undo, r.steps), (vec![4], vec![Step::Draw(4)]), "the last spot alone");
+    let r = redo(&old, &[first.clone(), old[1].clone(), c.clone(), e.clone()]);
+    assert_eq!((r.undo.clone(), r.steps.clone()), (vec![4, 2], vec![Step::Draw(3)]), "b deleted: e reads its box, c is left alone");
+    assert_eq!(r.same, vec![Some(0), Some(1), Some(3), Some(4)]);
+    let over = d([30, 0, 38, 10], [30, 0, 38, 10], 0.25); // drawn later where c's new source is, reading nothing that changed
+    let longer = vec![first.clone(), old[1].clone(), b.clone(), c.clone(), e.clone(), over.clone()];
+    let c2 = d([41, 0, 51, 10], [33, 0, 51, 10], 0.31);
+    let r = redo(&longer, &[first.clone(), old[1].clone(), b.clone(), c2, e.clone(), over]);
+    assert_eq!(
+        r.steps,
+        vec![Step::Draw(3), Step::Paste { i: 5, old: 5 }],
+        "c reads from under a later spot: it is taken off, then put back from its result"
+    );
+    let r = redo(&old, &old);
+    assert_eq!((r.undo.len(), r.steps.len()), (0, 0), "nothing changed");
+}
+
+#[test]
+fn a_change_never_draws_the_spots_before_it() {
+    let (src, cache) = (scene(), StageCache::default());
+    let mut s = DevelopSettings {
+        spots: vec![
+            spot(SpotMode::Clone, 0.300, 0.50, Some((0.0, 0.1))),
+            spot(SpotMode::Heal, 0.325, 0.50, Some((0.0, -0.1))),
+            spot(SpotMode::Clone, 0.350, 0.50, Some((0.0, 0.1))),
+        ],
+        ..Default::default()
+    };
+    edit(&cache, &src, &s);
+    s.spots[1].opacity = 70.0;
+    assert_eq!(edit(&cache, &src, &s), (2, true), "the second and the third it overlaps, not the first under it");
+    s.spots[0].feather = 0.0;
+    assert_eq!(edit(&cache, &src, &s), (3, true), "the first and the two drawn over it");
+    // a spot copying from where a later spot drew: that one is taken off and put back, not drawn
+    s.spots.push(spot(SpotMode::Clone, 0.7, 0.3, Some((0.0, 0.2))));
+    s.spots.push(spot(SpotMode::Heal, 0.7, 0.5, Some((0.1, 0.0))));
+    edit(&cache, &src, &s);
+    s.spots[3].opacity = 50.0;
+    assert_eq!(edit(&cache, &src, &s), (1, true));
 }

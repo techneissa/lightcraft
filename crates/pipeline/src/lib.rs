@@ -392,8 +392,9 @@ impl StageCache {
             if let Some((_, l)) = &e.lin {
                 add(Arc::as_ptr(l) as usize, size(l));
             }
-            for k in e.spots.iter().flat_map(|k| [&k.pre, &k.post]) {
-                add(Arc::as_ptr(k) as usize, size(k));
+            if let Some(k) = &e.spots {
+                add(Arc::as_ptr(&k.post) as usize, size(&k.post));
+                masks_bytes += k.patches.iter().flatten().map(|p| (p.before.len() + p.after.len()) * 12).sum::<usize>();
             }
             let pl = &e.planes;
             let planes = pl.log_l.iter().chain(pl.base.iter().map(|x| &x.1)).chain(pl.clarity.iter().map(|x| &x.1));
@@ -403,7 +404,7 @@ impl StageCache {
             if let Some((_, c)) = &pl.chroma {
                 add(Arc::as_ptr(c) as usize, size(c));
             }
-            // (the alphas and brush planes: each held once by its cache)
+            // (the alphas and brush planes, and the spots' patches: each held once by its cache)
             masks_bytes += e.masks.bytes();
         }
         total + masks_bytes
@@ -447,7 +448,7 @@ struct CacheEntry {
     /// changes to the image: those of masks that don't read it stay valid).
     masks: masks::AlphaCache,
     /// The image before and after the spots of the last render (`spots_keep`): a spot edit draws only what it reaches.
-    spots: Option<Arc<spots_keep::Kept<Rgb32f>>>,
+    spots: Option<Arc<spots_keep::CpuKept>>,
 }
 
 fn hash_of(parts: impl std::hash::Hash) -> u64 {

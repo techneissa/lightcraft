@@ -10,7 +10,7 @@ use lightcraft_pipeline::finish::{FinishParams, FinishParamsInput};
 use lightcraft_pipeline::geometry::SampleMode;
 use lightcraft_pipeline::local::plane_at;
 use lightcraft_pipeline::masks::PlanesOut;
-use lightcraft_pipeline::spots_keep::Kept;
+use lightcraft_pipeline::spots_keep::{CpuKept, Kept};
 use lightcraft_pipeline::{Plan, RenderRequest, Rendered, SourceInfo, local};
 use lightcraft_raster::resample::Filter;
 use lightcraft_raster::{Histogram, Plane, Rgb32f, Rgba8};
@@ -40,8 +40,8 @@ struct Entry {
     planes: Planes,
     /// The images before and after the spots of the last render (`spots_keep`), on the device or (for the scene-linear
     /// stage on the CPU) on the host: a spot edit draws only what it reaches.
-    spots: Option<Arc<Kept<Buf>>>,
-    spots_cpu: Option<Arc<Kept<Rgb32f>>>,
+    spots: Option<Arc<Kept<Buf, Buf>>>,
+    spots_cpu: Option<Arc<CpuKept>>,
 }
 
 /// Spatial planes of one linear image (`key` = its `lin_key`), each tagged with its radius.
@@ -98,6 +98,8 @@ impl GpuStages {
     pub fn bytes(&self) -> usize {
         let mut seen: Vec<*const Buf> = Vec::new();
         let mut total = 0;
+        // (each spot's patches are its own)
+        let mut patches = 0;
         let mut add = |b: &Arc<Buf>| {
             let p = Arc::as_ptr(b);
             if !seen.contains(&p) {
@@ -110,7 +112,10 @@ impl GpuStages {
             if let Some((_, b)) = &e.lin {
                 add(b);
             }
-            e.spots.iter().flat_map(|k| [&k.pre, &k.post]).for_each(&mut add);
+            if let Some(k) = &e.spots {
+                add(&k.post);
+                patches += k.patches.iter().flatten().map(|p| (p.before.len + p.after.len) * 4).sum::<usize>();
+            }
             let p = &e.planes;
             p.log_l.iter().for_each(&mut add);
             p.base.iter().for_each(|(_, b)| add(b));
@@ -123,7 +128,7 @@ impl GpuStages {
             add(b);
         }
         self.alphas.each(&mut add);
-        total
+        total + patches
     }
 
     /// Drop everything (e.g. when memory is needed).
@@ -241,15 +246,6 @@ impl<'a> Cx<'a> {
         let enc = self.enc.get_or_insert_with(|| self.gpu.encoder());
         enc.copy_buffer_to_buffer(b.raw(), (offset * 4) as u64, out.raw(), 0, (len * 4) as u64);
         out
-    }
-
-    /// Copy `len` words of `src` from `from` into `dst` at `to` (recorded).
-    pub fn copy_words(&mut self, src: &Buf, from: usize, dst: &Buf, to: usize, len: usize) {
-        if len == 0 || from.saturating_add(len) > src.len || to.saturating_add(len) > dst.len {
-            return;
-        }
-        let enc = self.enc.get_or_insert_with(|| self.gpu.encoder());
-        enc.copy_buffer_to_buffer(src.raw(), (from * 4) as u64, dst.raw(), (to * 4) as u64, (len * 4) as u64);
     }
 
     /// Copy all of `src` into `dst` at `offset` (32-bit words; recorded).
@@ -1079,7 +1075,7 @@ fn unwritten(data: &[[u8; 4]]) -> usize {
 }
 
 /// What a view keeps of its last render's spots, on the device and on the host.
-type KeptSpots = (Option<Arc<Kept<Buf>>>, Option<Arc<Kept<Rgb32f>>>);
+type KeptSpots = (Option<Arc<Kept<Buf, Buf>>>, Option<Arc<CpuKept>>);
 
 /// The white-balanced, retouched, denoised image, drawing only the spots an edit reaches when `kept` (the view's last
 /// spots) allows; with what to keep for the next render.
@@ -1089,7 +1085,7 @@ fn linear(
     info: &SourceInfo,
     plan: &Plan<'_>,
     host: &mut Host,
-    kept: (Option<&Kept<Buf>>, Option<&Kept<Rgb32f>>),
+    kept: (Option<&Kept<Buf, Buf>>, Option<&CpuKept>),
 ) -> (Buf, KeptSpots) {
     let mut keep: KeptSpots = (None, None);
     let (w, h) = (plan.w, plan.h);
@@ -1156,17 +1152,14 @@ fn defringe(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
     out
 }
 
-/// Spot removal (`spots::apply`), spot by spot on `img` in place: each spot reads the image as
-/// the earlier ones left it. Only the spots marked in `draw` (`spots_keep`).
-pub(crate) fn draw_spots(cx: &mut Cx<'_>, img: &Buf, plan: &Plan<'_>, draw: &[bool]) {
+/// One spot of the spot removal (`spots::apply`) on `img` in place, reading the image as the earlier spots left it
+/// (`spots_keep` draws them in order).
+pub(crate) fn draw_spot(cx: &mut Cx<'_>, img: &Buf, plan: &Plan<'_>, spot: &lightcraft_develop::Spot) {
     use lightcraft_pipeline::spots;
     let (w, h) = (plan.w, plan.h);
-    for (i, spot) in plan.settings.spots.iter().enumerate() {
-        if !draw.get(i).copied().unwrap_or(false) {
-            continue;
-        }
-        let Some(l) = spots::layout(spot, &plan.frame, w, h, plan.px_per_long) else { continue };
-        let Some(&first) = l.pts.first() else { continue };
+    {
+        let Some(l) = spots::layout(spot, &plan.frame, w, h, plan.px_per_long) else { return };
+        let Some(&first) = l.pts.first() else { return };
         lightcraft_pipeline::spots_keep::note_spot();
         let offset = match l.offset {
             Some(o) => o,

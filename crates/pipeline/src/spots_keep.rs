@@ -2,12 +2,15 @@
 //!
 //! Spots are drawn one after another on the white-balanced image, each reading the image as the earlier ones left
 //! it, so every spot edit used to draw every spot again: adding the 101st spot cost a hundred times the first, and
-//! moving one redrew all of them. A view now keeps the image before its spots ([`Kept::pre`]) and after them
-//! ([`Kept::post`]). On the next render, [`redo`] compares the old spots with the new ones and finds the area an edit
-//! changed (the boxes of the spots added, removed or changed); every spot that reads from that area is drawn again,
-//! and what it reads joins the area, until nothing more is reached. That area is copied back from `pre` into a copy
-//! of `post` and only those spots are drawn on it. Each spot drawn again then reads exactly the pixels the whole
-//! sequence would have given it, so the result is the same as drawing every spot.
+//! moving one redrew all of them. A view now keeps the image after its spots ([`Kept::post`]) and, for each spot, its
+//! box as it was before the spot drew and after ([`Patch`]). On the next render [`redo`] compares the old spots with
+//! the new ones. Only the spots added or changed are drawn, and the later spots whose box or source reads pixels a
+//! drawn spot changed; earlier spots are never drawn again. Before that, the later spots that overlap what changes
+//! are taken off in reverse order (each spot's box goes back to how it was before it), and afterwards every one of
+//! them not drawn again is put back from its own result. Each spot drawn then reads exactly the pixels the whole
+//! sequence would have given it, so the result is the same as drawing every spot. A change before the spots (white
+//! balance, profile, anything in [`key`]) draws them all again; a change after them (tone, masks, effects) reuses
+//! the whole stage and draws none.
 
 use std::cell::Cell;
 use std::sync::Arc;
@@ -101,71 +104,108 @@ pub fn entries(spots: &[Spot], done: &[bool], frame: &Frame, w: usize, h: usize,
         .collect()
 }
 
-/// How to turn the old spots' result into the new one's: copy `restore` back from the image before the spots,
-/// then draw the spots marked in `draw`, in order.
+/// One step of turning the old spots' result into the new one's.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Step {
+    /// Draw new spot `i`.
+    Draw(usize),
+    /// Put new spot `i` back from the result old spot `old` gave (the same spot, reading the same pixels).
+    Paste { i: usize, old: usize },
+}
+
+/// The work that turns the result of `old` into that of `new` (same image before the spots): put the boxes of the
+/// old spots in `undo` back as they were before each drew (in that order: last first), then run `steps`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Redo {
-    pub restore: Vec<Rect>,
-    pub draw: Vec<bool>,
+    pub undo: Vec<usize>,
+    pub steps: Vec<Step>,
+    /// For each new spot, the old spot it is (unchanged), if any.
+    pub same: Vec<Option<usize>>,
 }
 
 impl Redo {
     /// Spots it draws.
     pub fn drawn(&self) -> usize {
-        self.draw.iter().filter(|d| **d).count()
+        self.steps.iter().filter(|s| matches!(s, Step::Draw(_))).count()
     }
 }
 
-/// The work that turns the result of `old` into that of `new` (same image before the spots), or `None` when it is
-/// every new spot (draw them all from the image before the spots).
-pub fn redo(old: &[Option<Drawn>], new: &[Option<Drawn>]) -> Option<Redo> {
+/// [`Redo`] from the result of `old` to that of `new` (both drawn on the same image).
+pub fn redo(old: &[Option<Drawn>], new: &[Option<Drawn>]) -> Redo {
     // the spots changed: what lies between the longest common start and end
     let a = old.iter().zip(new).take_while(|(o, n)| o == n).count();
     let (old_rest, new_rest) = (old.get(a..).unwrap_or_default(), new.get(a..).unwrap_or_default());
     let b = old_rest.iter().rev().zip(new_rest.iter().rev()).take_while(|(o, n)| o == n).count();
-    let changed =
-        |v: &[Option<Drawn>]| v.get(..v.len().saturating_sub(b)).unwrap_or_default().iter().flatten().map(|d| d.at.write).collect::<Vec<_>>();
-    let mut area = changed(old_rest);
-    area.extend(changed(new_rest));
+    let (old_end, new_end) = (old.len().saturating_sub(b), new.len().saturating_sub(b));
+    let write = |v: &[Option<Drawn>], i: usize| v.get(i).and_then(Option::as_ref).map(|d| d.at.write);
+    // the spots drawn: the new and changed ones, and each later one that reads what one drawn before it changed
+    let mut changed: Vec<Rect> = (a..old_end).filter_map(|i| write(old, i)).collect();
+    let mut read_by_drawn: Vec<Rect> = Vec::new();
     let mut draw = vec![false; new.len()];
-    // Every spot that reads the area is drawn again, and its box joins the area (it is copied back from before the
-    // spots, then drawn). What it reads outside the area holds the old result, which is what it needs unless a later
-    // spot drew there: then that joins the area too. Each round adds a spot.
-    for _ in 0..=new.len() {
-        let mut grew = false;
-        for (i, d) in new.iter().enumerate() {
-            let Some(d) = d else { continue };
-            if draw.get(i).copied().unwrap_or(true) || !area.iter().any(|r| overlaps(r, &d.at.read)) {
-                continue;
-            }
+    for (i, d) in new.iter().enumerate().skip(a) {
+        let Some(d) = d else { continue };
+        if i < new_end || changed.iter().any(|r| overlaps(r, &d.at.read)) {
             if let Some(slot) = draw.get_mut(i) {
                 *slot = true;
             }
-            area.push(d.at.write);
-            let later = new.get(i + 1..).unwrap_or_default();
-            if later.iter().flatten().any(|k| overlaps(&k.at.write, &d.at.read)) {
-                area.push(d.at.read);
-            }
-            grew = true;
-        }
-        if !grew {
-            break;
+            changed.push(d.at.write);
+            read_by_drawn.push(d.at.read);
         }
     }
-    // (drawing every one is cheaper from the image before the spots)
-    let all = new.iter().zip(&draw).all(|(d, r)| d.is_none() || *r);
-    (!all).then_some(Redo { restore: area, draw })
+    // the old spots taken off: those whose box holds what a drawn spot reads or what a removed one drew, and every
+    // later one drawn over one taken off
+    let old_of = |i: usize| i + old_end - new_end;
+    let mut undone = vec![false; old.len()];
+    for (k, d) in old.iter().enumerate().skip(a) {
+        let Some(d) = d else { continue };
+        let removed = k < old_end;
+        let redrawn = k >= old_end && draw.get(k + new_end - old_end).copied().unwrap_or(false);
+        let needed = read_by_drawn.iter().chain(&changed).any(|r| overlaps(r, &d.at.write));
+        let over = (a..k).any(|u| undone.get(u).copied().unwrap_or(false) && write(old, u).is_some_and(|w| overlaps(&w, &d.at.write)));
+        if let Some(slot) = undone.get_mut(k) {
+            *slot = removed || redrawn || needed || over;
+        }
+    }
+    let undo = (a..old.len()).rev().filter(|k| undone.get(*k).copied().unwrap_or(false)).collect();
+    let steps = (a..new.len())
+        .filter_map(|i| {
+            if draw.get(i).copied().unwrap_or(false) {
+                Some(Step::Draw(i))
+            } else {
+                (i >= new_end && undone.get(old_of(i)).copied().unwrap_or(false)).then(|| Step::Paste { i, old: old_of(i) })
+            }
+        })
+        .collect();
+    let same = (0..new.len()).map(|i| if i < a { Some(i) } else { (i >= new_end).then(|| old_of(i)) }).collect();
+    Redo { undo, steps, same }
 }
 
-/// What a view keeps of its last render's spots: the image before them, after them, and how each was drawn.
-pub struct Kept<I> {
+/// One spot's box before it drew and after, row by row (`I`: the pixels, on the host or the device).
+pub struct Patch<P> {
+    pub before: P,
+    pub after: P,
+}
+
+/// What a view keeps of its last render's spots: the image after them, how each was drawn and each one's [`Patch`].
+pub struct Kept<I, P> {
     /// [`key`] of the image before the spots.
     pub key: u64,
-    pub pre: Arc<I>,
     pub post: Arc<I>,
     pub drawn: Vec<Option<Drawn>>,
-    /// The spots a learned fill drew (part of `pre`).
+    pub patches: Vec<Option<Arc<Patch<P>>>>,
+    /// The spots a learned fill drew (part of the image before the spots).
     pub done: Vec<bool>,
+}
+
+impl<I, P> Kept<I, P> {
+    /// The patches of the spots `redo` puts back: all there (else the whole stage is drawn again).
+    pub fn has_patches(&self, r: &Redo) -> bool {
+        let old = r.steps.iter().filter_map(|s| match s {
+            Step::Paste { old, .. } => Some(*old),
+            Step::Draw(_) => None,
+        });
+        r.undo.iter().copied().chain(old).all(|k| self.patches.get(k).is_some_and(Option::is_some))
+    }
 }
 
 /// Key of the image the Classic spots are drawn on: everything [`Plan::pre_nr_key`] holds but those spots and the
@@ -189,58 +229,93 @@ pub fn key(info: &SourceInfo, p: &Plan<'_>) -> u64 {
     ))
 }
 
-/// The pixels of `rects` copied from `from` into `to` (images of the same size).
-pub fn restore(to: &mut Rgb32f, from: &Rgb32f, rects: &[Rect]) {
-    let w = to.width.min(from.width);
-    for r in rects {
-        let (x0, x1) = (r[0].min(w), r[2].min(w));
-        for y in r[1]..r[3].min(to.height).min(from.height) {
-            let (a, b) = (y * w + x0, y * w + x1);
-            if let (Some(d), Some(s)) = (to.data.get_mut(a..b), from.data.get(a..b)) {
-                d.copy_from_slice(s);
-            }
+/// The pixels of `img` in `r`, row by row.
+pub fn cut(img: &Rgb32f, r: &Rect) -> Vec<[f32; 3]> {
+    let (x0, x1) = (r[0].min(img.width), r[2].min(img.width));
+    let mut out = Vec::with_capacity((x1 - x0) * r[3].saturating_sub(r[1]));
+    for y in r[1]..r[3].min(img.height) {
+        out.extend_from_slice(img.data.get(y * img.width + x0..y * img.width + x1).unwrap_or_default());
+    }
+    out
+}
+
+/// `patch` ([`cut`] from `r`) put back into `img`.
+pub fn paste(img: &mut Rgb32f, r: &Rect, patch: &[[f32; 3]]) {
+    let (x0, x1) = (r[0].min(img.width), r[2].min(img.width));
+    let w = img.width;
+    for (row, y) in (r[1]..r[3].min(img.height)).enumerate() {
+        let (d, s) = (img.data.get_mut(y * w + x0..y * w + x1), patch.get(row * (x1 - x0)..(row + 1) * (x1 - x0)));
+        if let (Some(d), Some(s)) = (d, s) {
+            d.copy_from_slice(s);
         }
     }
 }
 
-/// [`crate::lin_cpu`] on `img` (the resampled source), reusing `kept` (the view's last spots) when its image before the
-/// spots is this one: then only the spots an edit reaches are drawn. Returns what to keep for the next render
+/// What the CPU renderer keeps of a view's spots.
+pub type CpuKept = Kept<Rgb32f, Vec<[f32; 3]>>;
+
+/// [`crate::lin_cpu`] on `img` (the resampled source), reusing `kept` (the view's last spots) when the image before
+/// the spots is this one: then only the spots an edit reaches are drawn. Returns what to keep for the next render
 /// (`None` without spots).
-pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, kept: Option<&Kept<Rgb32f>>) -> Option<Arc<Kept<Rgb32f>>> {
+pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, kept: Option<&CpuKept>) -> Option<Arc<CpuKept>> {
     let s = &*p.settings;
     if s.spots.is_empty() {
         crate::lin_cpu(img, info, p);
         return None;
     }
     let key = key(info, p);
-    let hit = kept.filter(|k| k.key == key && (k.pre.width, k.pre.height) == (img.width, img.height));
-    let (pre, done) = match hit {
-        Some(k) => (k.pre.clone(), k.done.clone()),
-        None => {
-            let done = crate::lin_cpu_pre(img, info, p);
-            (Arc::new(img.clone()), done)
-        }
+    let hit = kept.filter(|k| k.key == key && (k.post.width, k.post.height) == (img.width, img.height));
+    let done = match hit {
+        Some(k) => k.done.clone(),
+        None => crate::lin_cpu_pre(img, info, p),
     };
     let new = entries(&s.spots, &done, &p.frame, img.width, img.height, p.px_per_long);
-    let plan = hit.and_then(|k| redo(&k.drawn, &new).map(|r| (k, r)));
-    let mut work = match &plan {
-        Some((k, r)) => {
-            let mut work = (*k.post).clone();
-            restore(&mut work, &pre, &r.restore);
-            let skip: Vec<bool> = r.draw.iter().enumerate().map(|(i, d)| !d || done.get(i).copied().unwrap_or(false)).collect();
-            spots::apply_except(&mut work, &s.spots, &skip, &p.frame, p.px_per_long);
-            work
-        }
-        None => {
-            let mut work = (*pre).clone();
-            spots::apply_except(&mut work, &s.spots, &done, &p.frame, p.px_per_long);
-            work
+    let mut patches: Vec<Option<Arc<Patch<Vec<[f32; 3]>>>>> = vec![None; new.len()];
+    let draw = |img: &mut Rgb32f, i: usize, patches: &mut Vec<Option<Arc<Patch<Vec<[f32; 3]>>>>>| {
+        let (Some(Some(d)), Some(spot)) = (new.get(i), s.spots.get(i)) else { return };
+        let before = cut(img, &d.at.write);
+        spots::apply(img, std::slice::from_ref(spot), &p.frame, p.px_per_long);
+        if let Some(slot) = patches.get_mut(i) {
+            *slot = Some(Arc::new(Patch { before, after: cut(img, &d.at.write) }));
         }
     };
-    let post = Arc::new(work.clone());
-    crate::redeye::apply(&mut work, &p.eyes);
-    *img = work;
-    Some(Arc::new(Kept { key, pre, post, drawn: new, done }))
+    let plan = hit.map(|k| (k, redo(&k.drawn, &new))).filter(|(k, r)| k.has_patches(r));
+    match plan {
+        Some((k, r)) => {
+            *img = (*k.post).clone();
+            // (a spot not drawn again keeps its patches: it is the old one, reading the same pixels)
+            for (slot, old) in patches.iter_mut().zip(&r.same) {
+                *slot = old.and_then(|o| k.patches.get(o).cloned().flatten());
+            }
+            for u in &r.undo {
+                if let (Some(Some(d)), Some(Some(pt))) = (k.drawn.get(*u), k.patches.get(*u)) {
+                    paste(img, &d.at.write, &pt.before);
+                }
+            }
+            for step in &r.steps {
+                match *step {
+                    Step::Draw(i) => draw(img, i, &mut patches),
+                    Step::Paste { i, old } => {
+                        if let (Some(Some(d)), Some(Some(pt))) = (new.get(i), k.patches.get(old)) {
+                            paste(img, &d.at.write, &pt.after);
+                        }
+                    }
+                }
+            }
+        }
+        None => {
+            if hit.is_some() {
+                // (a kept stage without the patches it needs: the image before the spots again)
+                crate::lin_cpu_pre(img, info, p);
+            }
+            for i in 0..new.len() {
+                draw(img, i, &mut patches);
+            }
+        }
+    }
+    let post = Arc::new(img.clone());
+    crate::redeye::apply(img, &p.eyes);
+    Some(Arc::new(Kept { key, post, drawn: new, patches, done }))
 }
 
 #[cfg(test)]

@@ -1,88 +1,97 @@
 //! Spots on the device drawn again only where an edit reaches ([`lightcraft_pipeline::spots_keep`], issue #82): the
-//! view keeps the white-balanced image before its spots and the image after them on the device.
+//! view keeps the image after its spots and each spot's box before and after it drew, on the device.
 
 use std::sync::Arc;
 
-use lightcraft_pipeline::spots_keep::{self as keep, Kept, Rect};
+use lightcraft_pipeline::spots_keep::{self as keep, Kept, Patch, Rect, Step};
 use lightcraft_pipeline::{Plan, SourceInfo};
 
 use crate::ctx::Buf;
-use crate::render::Cx;
+use crate::render::{Cx, draw_spot};
 
-/// The image before the spots (`before_spots` makes it, unless `kept` holds it) with the spots drawn: only those an
-/// edit reaches when `kept` holds this image's last spots. Returns what to keep for the next render (`None` without
-/// spots).
+type DeviceKept = Kept<Buf, Buf>;
+type DevicePatch = Option<Arc<Patch<Buf>>>;
+
+/// The image before the spots (`before_spots` makes it, unless `kept` holds this image's last spots) with the spots
+/// drawn: with `kept`, only those an edit reaches. Returns what to keep for the next render (`None` without spots).
 pub(crate) fn spots(
     cx: &mut Cx<'_>,
     info: &SourceInfo,
     plan: &Plan<'_>,
-    kept: Option<&Kept<Buf>>,
+    kept: Option<&DeviceKept>,
     before_spots: impl FnOnce(&mut Cx<'_>) -> Buf,
-) -> (Buf, Option<Arc<Kept<Buf>>>) {
+) -> (Buf, Option<Arc<DeviceKept>>) {
     let s = &*plan.settings;
     if s.spots.is_empty() {
         return (before_spots(cx), None);
     }
     let (w, h) = (plan.w, plan.h);
     let key = keep::key(info, plan);
-    let hit = kept.filter(|k| k.key == key && k.pre.len == w * h * 3 && k.post.len == w * h * 3);
-    let pre = match hit {
-        Some(k) => k.pre.clone(),
-        None => Arc::new(before_spots(cx)),
-    };
     let new = keep::entries(&s.spots, &[], &plan.frame, w, h, plan.px_per_long);
-    let (work, draw) = match hit.and_then(|k| keep::redo(&k.drawn, &new).map(|r| (k, r))) {
+    let mut patches: Vec<DevicePatch> = vec![None; new.len()];
+    let plan_from =
+        kept.filter(|k| k.key == key && k.post.len == w * h * 3).map(|k| (k, keep::redo(&k.drawn, &new))).filter(|(k, r)| k.has_patches(r));
+    let img = match plan_from {
         Some((k, r)) => {
-            let work = cx.copy(&k.post);
-            restore(cx, &pre, &work, &r.restore, w);
-            (work, r.draw)
+            let img = cx.copy(&k.post);
+            // (a spot not drawn again keeps its patches: it is the old one, reading the same pixels)
+            for (slot, old) in patches.iter_mut().zip(&r.same) {
+                *slot = old.and_then(|o| k.patches.get(o).cloned().flatten());
+            }
+            for u in &r.undo {
+                if let (Some(Some(d)), Some(Some(p))) = (k.drawn.get(*u), k.patches.get(*u)) {
+                    patch(cx, &img, &p.before, &d.at.write, w, h, true);
+                }
+            }
+            for step in &r.steps {
+                match *step {
+                    Step::Draw(i) => draw(cx, &img, plan, &new, i, &mut patches),
+                    Step::Paste { i, old } => {
+                        if let (Some(Some(d)), Some(Some(p))) = (new.get(i), k.patches.get(old)) {
+                            patch(cx, &img, &p.after, &d.at.write, w, h, true);
+                        }
+                    }
+                }
+            }
+            img
         }
-        None => (cx.copy(&pre), vec![true; s.spots.len()]),
+        None => {
+            let img = before_spots(cx);
+            for i in 0..new.len() {
+                draw(cx, &img, plan, &new, i, &mut patches);
+            }
+            img
+        }
     };
-    crate::render::draw_spots(cx, &work, plan, &draw);
-    let post = Arc::new(work);
+    let post = Arc::new(img);
     // (what follows writes its own buffers, but the kept one must never be handed on)
     let out = cx.copy(&post);
-    (out, Some(Arc::new(Kept { key, pre, post, drawn: new, done: Vec::new() })))
+    (out, Some(Arc::new(Kept { key, post, drawn: new, patches, done: Vec::new() })))
 }
 
-/// The pixels of `rects` copied from `from` into `to` (RGB images `w` pixels wide), row by row.
-fn restore(cx: &mut Cx<'_>, from: &Buf, to: &Buf, rects: &[Rect], w: usize) {
-    for r in merged(rects) {
-        let (x0, x1) = (r[0].min(w), r[2].min(w));
-        if x1 <= x0 {
-            continue;
-        }
-        if x0 == 0 && x1 == w {
-            // whole rows: one copy
-            cx.copy_words(from, r[1] * w * 3, to, r[1] * w * 3, (r[3].saturating_sub(r[1])) * w * 3);
-            continue;
-        }
-        for y in r[1]..r[3] {
-            cx.copy_words(from, (y * w + x0) * 3, to, (y * w + x0) * 3, (x1 - x0) * 3);
-        }
+/// Draw spot `i` on `img`, keeping its box before and after.
+fn draw(cx: &mut Cx<'_>, img: &Buf, plan: &Plan<'_>, new: &[Option<keep::Drawn>], i: usize, patches: &mut [DevicePatch]) {
+    let (Some(Some(d)), Some(spot)) = (new.get(i), plan.settings.spots.get(i)) else { return };
+    let r = &d.at.write;
+    let n = (r[2] - r[0]) * (r[3] - r[1]) * 3;
+    let (before, after) = (cx.gpu.buffer(n), cx.gpu.buffer(n));
+    patch(cx, img, &before, r, plan.w, plan.h, false);
+    draw_spot(cx, img, plan, spot);
+    patch(cx, img, &after, r, plan.w, plan.h, false);
+    if let Some(slot) = patches.get_mut(i) {
+        *slot = Some(Arc::new(Patch { before, after }));
     }
 }
 
-/// `rects` without the ones another one holds (each pixel is copied once per rectangle holding it).
-fn merged(rects: &[Rect]) -> Vec<Rect> {
-    let inside = |a: &Rect, b: &Rect| a[0] >= b[0] && a[1] >= b[1] && a[2] <= b[2] && a[3] <= b[3];
-    let mut out: Vec<Rect> = Vec::new();
-    for (i, r) in rects.iter().enumerate() {
-        // (of two equal rectangles the first stays)
-        let held = rects.iter().enumerate().any(|(j, o)| j != i && inside(r, o) && (r != o || j < i));
-        if !held && r[2] > r[0] && r[3] > r[1] {
-            out.push(*r);
-        }
+/// `img`'s box `r` copied into `p` (`back`: `p` copied into it).
+fn patch(cx: &mut Cx<'_>, img: &Buf, p: &Buf, r: &Rect, w: usize, h: usize, back: bool) {
+    let (bw, bh) = (r[2].saturating_sub(r[0]), r[3].saturating_sub(r[1]));
+    if bw == 0 || bh == 0 || p.len < bw * bh * 3 || r[2] > w || r[3] > h {
+        return;
     }
-    out
-}
-
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn rectangles_held_by_another_are_copied_once() {
-        let m = super::merged(&[[0, 0, 10, 10], [2, 2, 5, 5], [0, 0, 10, 10], [8, 8, 20, 20], [3, 3, 3, 9]]);
-        assert_eq!(m, vec![[0, 0, 10, 10], [8, 8, 20, 20]]);
-    }
+    let params = [w, h, r[0], r[1], bw, bh, back as usize].map(|v| v as u32);
+    // (the kernel's other writable bindings each need a buffer of their own)
+    let unused = [cx.gpu.buffer(1), cx.gpu.buffer(1), cx.gpu.buffer(1)];
+    let [al, df, wt] = &unused;
+    cx.run("spot_patch", &params, &[Some(img), None, Some(al), Some(p), Some(df), Some(wt)], crate::ctx::groups2(bw, bh, [16, 16]));
 }

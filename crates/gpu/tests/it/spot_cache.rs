@@ -82,4 +82,28 @@ fn a_spot_edit_draws_only_the_spots_it_reaches_on_the_device() {
     assert_eq!(drawn(&s), (0, true), "a deleted spot's box comes back");
     s.light.exposure = 0.5;
     assert_eq!(drawn(&s), (0, true), "a slider outside the spots draws none");
+    // a spot over an earlier one: changing it never draws the earlier one; changing the earlier one draws both
+    let mut over = s.spots[10].clone();
+    over.points[0].x += 0.003;
+    over.mode = SpotMode::Clone;
+    s.spots.push(over);
+    assert_eq!(drawn(&s), (1, true));
+    let last = s.spots.len() - 1;
+    s.spots[last].feather = 0.0;
+    assert_eq!(drawn(&s), (1, true), "the spot under it stays");
+    s.spots[10].opacity = 50.0;
+    assert_eq!(drawn(&s), (2, true), "it and the spot drawn over it");
+    // and any sequence of edits gives what drawing every spot gives
+    for step in 0..12usize {
+        let i = (step * 7) % s.spots.len();
+        match step % 4 {
+            0 => s.spots[i].points[0].y += 0.004,
+            1 => s.spots[i].size = 0.003 + 0.001 * (step % 3) as f64,
+            2 => s.spots[i].source_offset = Some(Point::new(0.006, 0.0)),
+            _ => {
+                s.spots.remove(i);
+            }
+        }
+        assert!(drawn(&s).1, "step {step}");
+    }
 }
