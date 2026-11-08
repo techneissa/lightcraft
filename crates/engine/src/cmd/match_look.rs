@@ -132,7 +132,11 @@ fn work(reference: RefInput, targets: Vec<TargetInput>, opts: MatchOptions, canc
     let refimg = match crate::guard::catch("reading the Match Look reference", || load_reference(reference, cancel)) {
         Ok(Ok(img)) => img,
         Ok(Err(e)) => {
-            return Done { cancelled: e == LookError::Cancelled, results: targets.iter().map(|t| (t.id, Err(e.to_string()))).collect(), seconds: 0.0 };
+            return Done {
+                cancelled: e == LookError::Cancelled,
+                results: targets.iter().map(|t| (t.id, Err(e.to_string()))).collect(),
+                seconds: 0.0,
+            };
         }
         Err(e) => return Done { cancelled: false, results: targets.iter().map(|t| (t.id, Err(e.to_string()))).collect(), seconds: 0.0 },
     };

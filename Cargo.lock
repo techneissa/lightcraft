@@ -4173,6 +4173,7 @@ dependencies = [
  "lightcraft-faces",
  "lightcraft-fetch",
  "lightcraft-geom",
+ "lightcraft-look",
  "lightcraft-map",
  "lightcraft-merge",
  "lightcraft-meta",
