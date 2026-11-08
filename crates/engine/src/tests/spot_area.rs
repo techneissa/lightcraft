@@ -299,3 +299,22 @@ fn a_shape_is_measured_without_the_spots_over_it() {
     let all = spots(&s);
     assert_eq!(all[0].area, all[1].area, "the same mask, the same shape, whatever spots the photo has");
 }
+
+// Given a LaMa Remove spot saved with a source (before LaMa spots stopped taking one), a slider change or a move keeps
+// its source; only a change of fill or mode decides it again
+#[test]
+fn an_old_lama_spot_keeps_its_source_through_an_edit() {
+    let mut s = session();
+    let id = s.active().unwrap();
+    let mut d = (*s.develop_of(id).unwrap()).clone();
+    let source = Some(Point::new(0.08, 0.0));
+    d.spots.push(Spot { points: vec![Point::new(0.4, 0.4)], fill: SpotFill::Lama, source_offset: source, ..Default::default() });
+    s.set_develop(id, d, "Old Spot").unwrap();
+    for p in [json!({"index": 0, "size": 0.03}), json!({"index": 0, "move": [0.01, 0.0]}), json!({"index": 0, "opacity": 80, "feather": 20})] {
+        s.execute("spot.update", &p).unwrap();
+        assert_eq!(spots(&s)[0].source_offset, source, "{p}");
+    }
+    // naming the fill or the mode decides it again
+    s.execute("spot.update", &json!({"index": 0, "fill": "lama"})).unwrap();
+    assert_eq!(spots(&s)[0].source_offset, None);
+}

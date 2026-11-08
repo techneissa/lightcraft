@@ -185,7 +185,7 @@ pub(super) fn sourceless(spot: &Spot) -> bool {
     spot.area.is_some() || lightcraft_pipeline::spots_learned::is_learned(spot)
 }
 
-/// What `spot.update` does to spot `i`'s source when it changes the spot's `mode` and `fill`: `Some(None)` takes it
+/// What `spot.update` does to spot `i`'s source when the call changes the spot's `mode` or `fill` (otherwise nothing): `Some(None)` takes it
 /// away (the spot becomes sourceless), `Some(Some(_))` gives a Classic Remove spot back the source it needs, `None`
 /// leaves it. A shaped spot never heals or clones and has no source to move.
 pub(super) fn update_source(
@@ -206,6 +206,11 @@ pub(super) fn update_source(
         if ["source", "moveSource"].iter().any(|k| p.get(k).is_some_and(|v| !v.is_null())) {
             return Err(bad(c, "this spot has no source: it is rebuilt from its surroundings"));
         }
+        return Ok(None);
+    }
+    // only a change of mode or fill decides the source again: a size, a move or an opacity keeps the one it has (an old
+    // LaMa spot saved with a source keeps it, for where LaMa can't run)
+    if mode.is_none() && fill.is_none() {
         return Ok(None);
     }
     let mut after = spot.clone();
