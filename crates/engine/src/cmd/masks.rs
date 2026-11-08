@@ -703,7 +703,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Mask Adjustments",
             [],
             None,
-            "{id?, values: {exposure, contrast, highlights, shadows, whites, blacks, temp, tint, texture, clarity, dehaze, hue, saturation, sharpness, noise, moire, defringe, color_hue, color_sat, amount}}",
+            "{id?, values: {exposure, contrast, highlights, shadows, whites, blacks, temp, tint, texture, clarity, dehaze, hue, saturation, sharpness, noise, moire, defringe, color_hue, color_sat, recolor, recolor_r, recolor_g, recolor_b, recolor_range, recolor_from_r, recolor_from_g, recolor_from_b, amount}} (recolor 0..100 with its colour as sRGB 0..1 channels, Range −100..100, Colour to Replace as sRGB 0..1 (black = automatic); `mask.recolor` takes hex colours)",
             has_active,
             |s, p| {
                 let vals = p.get("values").cloned().ok_or_else(|| bad("mask.adjust", "missing values"))?;
@@ -1197,6 +1197,11 @@ pub(crate) fn clamp_local(mut a: LocalAdjustments) -> LocalAdjustments {
     c(&mut a.color_hue, 0.0, 360.0);
     c(&mut a.color_sat, 0.0, 100.0);
     c(&mut a.amount, 0.0, 200.0);
+    c(&mut a.recolor, 0.0, 100.0);
+    for v in [&mut a.recolor_r, &mut a.recolor_g, &mut a.recolor_b, &mut a.recolor_from_r, &mut a.recolor_from_g, &mut a.recolor_from_b] {
+        c(v, 0.0, 1.0);
+    }
+    c(&mut a.recolor_range, -100.0, 100.0);
     a
 }
 
