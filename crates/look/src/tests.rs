@@ -249,3 +249,22 @@ fn amount_scales_the_changes() {
     assert!(r.scaled(0.0).changes.iter().filter(|c| !c.id.ends_with(".hue")).all(|c| c.to == c.from));
     assert_eq!(r.scaled(f64::NAN).changes, r.changes);
 }
+
+/// A grey wall (working space, linear) with a small muted yellow patch on it.
+fn grey_photo() -> Rgb32f {
+    Rgb32f::from_fn(240, 160, |x, y| {
+        let v = 0.04 + 0.7 * (x as f32 / 240.0) * (0.6 + 0.4 * y as f32 / 160.0);
+        if (100..140).contains(&x) && (60..110).contains(&y) { [0.42, 0.36, 0.12] } else { [v, v, v] }
+    })
+}
+
+#[test]
+fn white_balance_follows_the_neutrals_not_a_big_coloured_object() {
+    // the reference: a cool grey wall, and a large saturated yellow shirt covering half of it
+    let reference = Rgba8::from_fn(240, 160, |x, y| {
+        let g = (60.0 + 150.0 * x as f32 / 240.0) as u8;
+        if (60..180).contains(&x) && y > 20 { [235, 205, 25, 255] } else { [g.saturating_sub(10), g.saturating_sub(2), g.saturating_add(14), 255] }
+    });
+    let r = fit(&grey_photo(), &DevelopSettings::default(), &reference);
+    assert!(value(&r, "wb.temp") < 6500.0, "cooler like the reference's wall, not warmer like its shirt: {}", value(&r, "wb.temp"));
+}

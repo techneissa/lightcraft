@@ -11,6 +11,10 @@ pub const L_QUANTILES: [f32; 9] = [0.02, 0.05, 0.1, 0.25, 0.5, 0.75, 0.9, 0.95, 
 /// Chroma quantiles measured.
 pub const C_QUANTILES: [f32; 2] = [0.5, 0.9];
 const BINS: usize = 1024;
+/// What a fully colourful pixel still counts in a zone's cast, against 1 + this for a neutral one: the cast is the
+/// colour of the walls, white clothes and greys (white balance), not of a big coloured object (that is for Vibrance,
+/// Saturation and the mixer); a picture with no neutrals at all still has a cast, its colourful pixels' mean.
+const NEUTRAL_FLOOR: f32 = 0.02;
 /// OkLab chroma that counts as fully colourful for the hue bands (below it a pixel is partly neutral).
 const BAND_CHROMA: f32 = 0.06;
 
@@ -28,7 +32,8 @@ pub struct Band {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Stats {
     pub l_q: [f32; L_QUANTILES.len()],
-    /// Mean OkLab a, b of the shadows, midtones and highlights.
+    /// The cast of the shadows, midtones and highlights: mean OkLab a, b, neutral pixels weighted far above colourful
+    /// ones.
     pub zone_ab: [[f32; 2]; 3],
     /// Share of the weight in each zone.
     pub zone_w: [f32; 3],
@@ -135,6 +140,8 @@ pub fn measure(img: &Rgba8, mask: Option<&Plane>) -> Stats {
     const C_MAX: f32 = 0.4;
     let mut zone_ab = [[0.0f32; 2]; 3];
     let mut zone_w = [0.0f32; 3];
+    // the cast's own weights: neutral pixels count, colourful ones barely (see `NEUTRAL_FLOOR`)
+    let mut zone_n = [0.0f32; 3];
     let mut c_sum = 0.0f32;
     let mut bands = [[0.0f32; 4]; 8];
     let mut band_w = [0.0f32; 8];
@@ -157,12 +164,14 @@ pub fn measure(img: &Rgba8, mask: Option<&Plane>) -> Stats {
             if let Some(v) = l_hist.get_mut(li) {
                 *v += wt;
             }
+            let neutral = 1.0 - (c / BAND_CHROMA).min(1.0) + NEUTRAL_FLOOR;
             for (z, zw) in zones(l).iter().enumerate() {
                 let k = zw * wt;
-                if let (Some(acc), Some(zwacc)) = (zone_ab.get_mut(z), zone_w.get_mut(z)) {
-                    acc[0] += a * k;
-                    acc[1] += b * k;
+                if let (Some(acc), Some(zwacc), Some(nacc)) = (zone_ab.get_mut(z), zone_w.get_mut(z), zone_n.get_mut(z)) {
+                    acc[0] += a * k * neutral;
+                    acc[1] += b * k * neutral;
                     *zwacc += k;
+                    *nacc += k * neutral;
                 }
             }
             let colourful = (c / BAND_CHROMA).min(1.0) * wt;
@@ -183,7 +192,7 @@ pub fn measure(img: &Rgba8, mask: Option<&Plane>) -> Stats {
             }
         }
     }
-    let cast: Vec<[f32; 2]> = zone_ab.iter().zip(&zone_w).map(|(acc, zw)| if *zw > 0.0 { [acc[0] / zw, acc[1] / zw] } else { [0.0, 0.0] }).collect();
+    let cast: Vec<[f32; 2]> = zone_ab.iter().zip(&zone_n).map(|(acc, zw)| if *zw > 0.0 { [acc[0] / zw, acc[1] / zw] } else { [0.0, 0.0] }).collect();
     for ([l, a, b], wt) in &px {
         let mut c0 = [0.0f32; 2];
         for (zw, m) in zones(*l).iter().zip(&cast) {
@@ -209,11 +218,11 @@ pub fn measure(img: &Rgba8, mask: Option<&Plane>) -> Stats {
     }
     s.c_mean = c_sum / total;
     for z in 0..3 {
-        let (Some(acc), Some(zw)) = (zone_ab.get(z), zone_w.get(z)) else { continue };
+        let (Some(acc), Some(zw), Some(zn)) = (zone_ab.get(z), zone_w.get(z), zone_n.get(z)) else { continue };
         if let (Some(out), Some(ow)) = (s.zone_ab.get_mut(z), s.zone_w.get_mut(z)) {
             *ow = zw / total;
-            if *zw > 0.0 {
-                *out = [acc[0] / zw, acc[1] / zw];
+            if *zn > 0.0 {
+                *out = [acc[0] / zn, acc[1] / zn];
             }
         }
     }
