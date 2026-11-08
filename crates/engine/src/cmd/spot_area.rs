@@ -131,7 +131,10 @@ fn run_object(s: &mut Session, c: &str, id: crate::PhotoId, ask: ObjectAsk, p: &
             out["pending"] = json!(true);
             return Ok(out);
         }
-        None => segment(s, |s| s.segment_clicks(id, &clicks_of(&ask.hint, &ask.exclude)))?,
+        // (the model sees the photo without its spots, as in the app)
+        None => segment(s, |s| {
+            s.segment_clicks_request(id, &clicks_of(&ask.hint, &ask.exclude))?.wait()?.ok_or_else(|| "nothing was selected".to_string())
+        })?,
     };
     let fill = ask.fill;
     let index = s.apply_object(id, seg, &ask)?;

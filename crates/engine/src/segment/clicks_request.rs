@@ -20,6 +20,27 @@ pub(crate) struct ClicksRequest {
 }
 
 impl ClicksRequest {
+    /// Wait for the selection (CLI, MCP, tests), up to the segmenter's longest wait.
+    pub(crate) fn wait(self) -> Result<Option<SegMask>, String> {
+        #[cfg(feature = "sam")]
+        {
+            match self.rx.recv_timeout(super::WAIT) {
+                Ok(o) => {
+                    if let Some(n) = o.notice {
+                        log::warn!("{n}");
+                    }
+                    o.result
+                }
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Err("the AI model took too long; try again".into()),
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Err("the AI mask worker stopped".into()),
+            }
+        }
+        #[cfg(not(feature = "sam"))]
+        {
+            Err("AI masks are not available in this build".into())
+        }
+    }
+
     /// The selection once the model has answered (`Ok(None)`: nothing was selected); `None` while it works.
     pub(crate) fn try_take(&self) -> Option<Result<Option<SegMask>, String>> {
         #[cfg(feature = "sam")]
@@ -54,7 +75,8 @@ impl Session {
         #[cfg(feature = "sam")]
         {
             let (tx, rx) = std::sync::mpsc::channel();
-            let job = self.segment_job(id, super::worker::Kind::Clicks(Self::model_clicks(clicks)), super::Tag::Wait, tx, None)?;
+            // (on the photo without its spots: the spot a further click changes would hide the object)
+            let job = self.segment_job_in(id, super::worker::Kind::Clicks(Self::model_clicks(clicks)), super::Tag::Wait, tx, None, true)?;
             let cancel = job.cancel.clone();
             self.segmenter.worker.submit(job)?;
             Ok(ClicksRequest { cancel, rx })

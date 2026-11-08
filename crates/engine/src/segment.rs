@@ -581,6 +581,21 @@ impl Session {
         reply: std::sync::mpsc::Sender<worker::Outcome>,
         region: Option<[f64; 4]>,
     ) -> Result<worker::Job, String> {
+        self.segment_job_in(id, kind, tag, reply, region, false)
+    }
+
+    /// [`Self::segment_job`]; `without_spots`: the model sees the photo without its Remove spots (the Remove tool's
+    /// Object clicks, `fork/object-remove.md`: a spot already over the object would hide it).
+    #[cfg(feature = "sam")]
+    fn segment_job_in(
+        &mut self,
+        id: PhotoId,
+        kind: worker::Kind,
+        tag: Tag,
+        reply: std::sync::mpsc::Sender<worker::Outcome>,
+        region: Option<[f64; 4]>,
+        without_spots: bool,
+    ) -> Result<worker::Job, String> {
         // (BiRefNet alone needs no SAM 3: its job carries its own folder)
         let dir = match &kind {
             worker::Kind::BiRefNet { combined: false, dir, .. } => dir.clone(),
@@ -593,7 +608,11 @@ impl Session {
             self.apply_silent(lightcraft_catalog::Op::SetDevelop { id, settings: std::sync::Arc::new(on), label: "Masks".into(), edited: None })
                 .map_err(|e| e.to_string())?;
         }
-        let (key, mut d) = self.segment_key(id).ok_or("no such photo")?;
+        let (mut key, mut d) = self.segment_key(id).ok_or("no such photo")?;
+        if without_spots && !d.spots.is_empty() {
+            d.spots.clear();
+            key = mix(key, d.hash64() ^ 0x5350_4f54);
+        }
         let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
         let missing = match &p.source {
             lightcraft_catalog::Source::File { path } if !std::path::Path::new(path).exists() => Some(path.clone()),
