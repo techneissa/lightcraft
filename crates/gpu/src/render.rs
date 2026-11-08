@@ -765,15 +765,8 @@ pub fn render(
                 colour_noise = lightcraft_pipeline::colour_noise(src, info, &plan).map(|n| (plan.noise_key, n));
             }
             let kept = stages.map(|c| (c.spots.get(src, plan.geo), c.spots_cpu.get(src, plan.geo))).unwrap_or_default();
-            let (b, k) = linear(
-                &mut cx,
-                &sampled,
-                info,
-                &plan,
-                &mut host,
-                (kept.0.as_deref(), kept.1.as_deref()),
-                colour_noise.as_ref().map(|c| &c.1),
-            );
+            let (b, k) =
+                linear(&mut cx, &sampled, info, &plan, &mut host, (kept.0.as_deref(), kept.1.as_deref()), colour_noise.as_ref().map(|c| &c.1));
             if let Some(c) = stages {
                 let device = k.0.as_ref().map_or(0, |k| crate::spots_keep::bytes(k));
                 c.spots.put(src, plan.geo, k.0, device);
