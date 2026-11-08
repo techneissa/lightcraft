@@ -930,7 +930,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Remove Spot",
             [],
             None,
-            "{mode?: remove|heal|clone|fill (content-aware), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby), fill?: classic|lama (default classic; for remove and fill spots; LaMa needs its model, else the spot shows the Classic fill), background?: true (the best match is found on a worker and the spot is added with it a moment later, as its own undo step; returns {pending: true})} — selects the new spot; returns {index}",
+            "{mode?: remove|heal|clone|fill (content-aware), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby), fill?: classic|lama (default classic; for remove and fill spots; LaMa needs its model, else the spot shows the Classic fill), background?: true (in the window: the best match is found on a worker and the spot is added with it a moment later, as its own undo step; returns {pending: true}; elsewhere the search runs at once)} — selects the new spot; returns {index}, or {pending: true} while earlier spots wait for their source",
             has_active,
             |s, p| {
                 let mode: SpotMode =
@@ -961,7 +961,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 if super::spot_area::sourceless(&spot) {
                     // LaMa rebuilds a Remove spot from its surroundings: it reads no source and shows no pin
                     spot.source_offset = None;
-                } else if search && bool_or(p, "background", false) {
+                } else if search && bool_or(p, "background", false) && s.spots_in_background() {
                     // on a worker: the window never waits on the search; the spot comes with its source (`spot_source`)
                     s.add_spot_when_found(id, dd, spot);
                     let mut out = json!({"pending": true});
@@ -971,8 +971,11 @@ pub fn specs() -> Vec<CommandSpec> {
                     // resolve the automatic source now: it gets a pin and stays put at every size
                     spot.source_offset = pick_source(s, id, &dd, &spot, None);
                 }
-                let n = s.add_spot(id, spot)? + 1;
-                let mut out = json!({"index": n - 1});
+                // (behind spots still waiting for their source, it waits its turn: they keep the order they were asked in)
+                let mut out = match s.add_spot_in_turn(id, spot)? {
+                    Some(i) => json!({"index": i}),
+                    None => json!({"pending": true}),
+                };
                 describe(s, fill, &mut out);
                 Ok(out)
             }

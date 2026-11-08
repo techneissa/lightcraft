@@ -1,15 +1,23 @@
 //! A new spot's automatic source, found on a worker (issue #97).
 //!
-//! `spot.add` with `background: true` (what the Remove tool on the photo sends) returns at once: the search for the
-//! spot's source (`pick_source` on a 512-pixel copy of the photo, which may first be made from a larger one or decoded)
-//! runs on a worker, and [`Session::poll_spot_sources`], called every frame, adds the spot with its source when the
-//! answer comes, as one undo step. The window never waits on the search, and the spot renders once, with its source:
-//! added before its answer, it would render twice (choosing its own source first). Spots are added in the order they
-//! were asked for. A search that fails, or a worker that can't start, adds the spot without a source (the render then
-//! chooses one itself).
+//! In the window (which installs a waker, [`SpotSources::set_waker`]), `spot.add` with `background: true` (what the
+//! Remove tool on the photo sends) returns at once: the search for the spot's source (`pick_source` on a 512-pixel copy
+//! of the photo, which may first be made from a larger one or decoded) runs on a worker, which wakes the window when it
+//! answers, and [`Session::poll_spot_sources`], called every frame, adds the spot with its source as one undo step. The
+//! window never waits on the search, and the spot renders once, with its source. Without a window (scripts, the CLI,
+//! MCP) nothing would poll: the search runs at once there, as without the flag.
+//!
+//! - Spots are added in the order they were asked for; a spot that needs no search, asked behind pending ones, waits its
+//!   turn too.
+//! - While a drag (an interaction) is open on the photo, answers wait and are added after it ends; a spot asked during a
+//!   drag that is cancelled is dropped with it.
+//! - Undo and redo first finish the pending searches, so they undo the spot just clicked, not the step before it.
+//! - An answer for a library that was closed since is dropped.
+//! - A search that fails, or a worker that can't start, adds the spot without a source (the render then chooses one).
 
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, Weak};
 
 use lightcraft_develop::{DevelopSettings, Spot};
 use lightcraft_geom::Point;
@@ -17,43 +25,90 @@ use lightcraft_geom::Point;
 use crate::media::{DecodedSource, SourceLevel, SourceRef};
 use crate::{PhotoId, Session};
 
-/// One search that answered: the spot it was for, its place in the order of asking, and the source it found.
+/// One search that answered: its place in the order of asking, the spot, and the source it found.
 struct Found {
     seq: u64,
-    photo: PhotoId,
     spot: Spot,
     source: Option<Point>,
     /// The 512-pixel copy, when the worker made it (kept for the next search).
     decoded: Option<DecodedSource>,
 }
 
-/// Searches running and answers waiting to be added.
+/// What the session knows of a spot asked for and not added yet.
+#[derive(Clone)]
+struct Asked {
+    photo: PhotoId,
+    /// The library opening it was asked in.
+    library: Weak<()>,
+    /// Asked while a drag was open on the photo: dropped if that drag is cancelled.
+    in_drag: bool,
+}
+
+/// Called by a worker when its answer is ready (the window repaints).
+pub type Waker = Arc<dyn Fn() + Send + Sync>;
+
+/// Searches running and spots waiting to be added.
 #[derive(Clone, Default)]
 pub struct SpotSources {
     running: Arc<AtomicUsize>,
     done: Arc<Mutex<Vec<Found>>>,
-    /// The next search's place, and the next place to add.
-    asked: u64,
+    waker: Arc<Mutex<Option<Waker>>>,
+    asked: HashMap<u64, Asked>,
+    /// The next spot's place, and the next place to add.
+    next: u64,
     added: u64,
 }
 
 impl SpotSources {
     /// Spots asked for that are not added yet.
     pub fn pending(&self) -> usize {
-        self.running.load(Ordering::SeqCst) + self.done.lock().unwrap_or_else(PoisonError::into_inner).len()
+        self.asked.len()
+    }
+
+    /// Wake the window with `waker` when a search answers; from then on `background` spots are searched on workers.
+    pub fn set_waker(&mut self, waker: Waker) {
+        *self.waker.lock().unwrap_or_else(PoisonError::into_inner) = Some(waker);
+    }
+
+    /// Whether a window polls this session (it set a waker).
+    pub fn has_waker(&self) -> bool {
+        self.waker.lock().unwrap_or_else(PoisonError::into_inner).is_some()
+    }
+
+    /// The drag open on `photo` ended: the spots asked during it are added as their own steps.
+    pub(crate) fn drag_ended(&mut self, photo: PhotoId) {
+        self.asked.values_mut().filter(|a| a.photo == photo).for_each(|a| a.in_drag = false);
+    }
+
+    /// The drag open on `photo` was cancelled: the spots asked during it are dropped with it.
+    pub(crate) fn drag_cancelled(&mut self, photo: PhotoId) {
+        self.asked.retain(|_, a| !(a.photo == photo && a.in_drag));
     }
 }
 
 impl Session {
+    /// Whether a `background` spot is searched on a worker: only when a window polls the session.
+    pub(crate) fn spots_in_background(&self) -> bool {
+        self.spot_sources.has_waker()
+    }
+
+    /// Remember a spot asked for photo `id`; its place in the order.
+    fn ask(&mut self, id: PhotoId) -> u64 {
+        let seq = self.spot_sources.next;
+        self.spot_sources.next += 1;
+        let in_drag = self.interaction.as_ref().is_some_and(|i| i.photo == id);
+        self.spot_sources.asked.insert(seq, Asked { photo: id, library: Arc::downgrade(&self.library_identity), in_drag });
+        seq
+    }
+
     /// Add `spot` to photo `id` once its automatic source is found on a worker (`d`: the photo's settings now).
     pub(crate) fn add_spot_when_found(&mut self, id: PhotoId, d: DevelopSettings, spot: Spot) {
-        let seq = self.spot_sources.asked;
-        self.spot_sources.asked += 1;
+        let seq = self.ask(id);
         let source = self.catalog.photo(id).cloned().map(|p| self.media.source_ref(&p, SourceLevel::Thumb));
         let info = self.source_info(id);
-        let (running, done) = (self.spot_sources.running.clone(), self.spot_sources.done.clone());
+        let (running, done, waker) = (self.spot_sources.running.clone(), self.spot_sources.done.clone(), self.spot_sources.waker.clone());
         running.fetch_add(1, Ordering::SeqCst);
-        let failed = Found { seq, photo: id, spot: spot.clone(), source: None, decoded: None };
+        let failed = Found { seq, spot: spot.clone(), source: None, decoded: None };
         let work = move || {
             #[cfg(test)]
             test_gate(seq);
@@ -67,8 +122,13 @@ impl Session {
             .ok()
             .flatten();
             let (at, decoded) = found.unwrap_or_default();
-            done.lock().unwrap_or_else(PoisonError::into_inner).push(Found { seq, photo: id, spot, source: at, decoded });
+            done.lock().unwrap_or_else(PoisonError::into_inner).push(Found { seq, spot, source: at, decoded });
             running.fetch_sub(1, Ordering::SeqCst);
+            // the window sleeps until something wakes it: this answer must
+            let wake = waker.lock().unwrap_or_else(PoisonError::into_inner).clone();
+            if let Some(wake) = wake {
+                wake();
+            }
         };
         if let Err(e) = std::thread::Builder::new().name("lc-spot-source".into()).spawn(work) {
             log::warn!("spot source: no worker ({e}); the spot is added without one");
@@ -77,28 +137,72 @@ impl Session {
         }
     }
 
-    /// Add the spots whose source was found, in the order they were asked for; the number added.
+    /// Add `spot` (which needs no search) to photo `id`: now, or after the spots asked before it when any are pending.
+    /// Whether it waits.
+    pub(crate) fn add_spot_in_turn(&mut self, id: PhotoId, spot: Spot) -> crate::Result<Option<usize>> {
+        if self.spot_sources.pending() == 0 {
+            return self.add_spot(id, spot).map(Some);
+        }
+        let seq = self.ask(id);
+        let source = spot.source_offset;
+        self.spot_sources.done.lock().unwrap_or_else(PoisonError::into_inner).push(Found { seq, spot, source, decoded: None });
+        Ok(None)
+    }
+
+    /// Add the spots whose source was found, in the order they were asked for; the number added. A spot waits while a
+    /// drag is open on its photo.
     pub fn poll_spot_sources(&mut self) -> usize {
         let mut added = 0;
-        loop {
-            let next = {
+        {
+            // answers of spots dropped since (their drag was cancelled) are thrown away
+            let asked = &self.spot_sources.asked;
+            self.spot_sources.done.lock().unwrap_or_else(PoisonError::into_inner).retain(|f| asked.contains_key(&f.seq));
+        }
+        while self.spot_sources.added < self.spot_sources.next {
+            let seq = self.spot_sources.added;
+            let Some(asked) = self.spot_sources.asked.get(&seq).cloned() else {
+                // dropped (its drag was cancelled)
+                self.spot_sources.added += 1;
+                continue;
+            };
+            let library = Arc::downgrade(&self.library_identity);
+            let elsewhere = !Weak::ptr_eq(&asked.library, &library);
+            if !elsewhere && self.interaction.as_ref().is_some_and(|i| i.photo == asked.photo) {
+                break;
+            }
+            let found = {
                 let mut done = self.spot_sources.done.lock().unwrap_or_else(PoisonError::into_inner);
-                let at = done.iter().position(|f| f.seq == self.spot_sources.added);
+                let at = done.iter().position(|f| f.seq == seq);
                 at.map(|i| done.swap_remove(i))
             };
-            let Some(f) = next else { break };
+            let Some(f) = found else { break };
             self.spot_sources.added += 1;
+            self.spot_sources.asked.remove(&seq);
+            if elsewhere {
+                // asked in a library that has been closed since
+                continue;
+            }
             if let Some(decoded) = f.decoded {
-                self.media.insert_source(f.photo, SourceLevel::Thumb, decoded);
+                self.media.insert_source(asked.photo, SourceLevel::Thumb, decoded);
             }
             let mut spot = f.spot;
             spot.source_offset = f.source;
-            match self.add_spot(f.photo, spot) {
+            match self.add_spot(asked.photo, spot) {
                 Ok(_) => added += 1,
                 Err(e) => log::warn!("spot source: the spot could not be added: {e}"),
             }
         }
         added
+    }
+
+    /// Wait for the searches still running and add their spots (before an undo or a redo, which would otherwise undo
+    /// the step before a spot just clicked). Searches take milliseconds; a worker stuck for 10 s is left behind.
+    pub(crate) fn finish_spot_sources(&mut self) {
+        let start = std::time::Instant::now();
+        while self.spot_sources.running.load(Ordering::SeqCst) > 0 && start.elapsed() < std::time::Duration::from_secs(10) {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        self.poll_spot_sources();
     }
 
     /// Add `spot` to photo `id` as one undo step ("Remove"), selecting it when the photo is the active one; its index.

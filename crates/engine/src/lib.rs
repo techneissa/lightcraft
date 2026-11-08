@@ -936,6 +936,8 @@ impl Session {
     }
 
     pub(crate) fn undo_step_with(&mut self, fs: &dyn rename::MoveFs) -> Result<String> {
+        // a spot clicked a moment ago is the step to undo, not the one before it (`spot_source`)
+        self.finish_spot_sources();
         let mut e = self.undo.pop().ok_or_else(|| EngineError::Other("nothing to undo".into()))?;
         if e.book.is_some() {
             return self.book_history_step(e, true);
@@ -970,6 +972,7 @@ impl Session {
     }
 
     pub(crate) fn redo_step_with(&mut self, fs: &dyn rename::MoveFs) -> Result<String> {
+        self.finish_spot_sources();
         let mut e = self.redo.pop().ok_or_else(|| EngineError::Other("nothing to redo".into()))?;
         if e.book.is_some() {
             return self.book_history_step(e, false);
@@ -1328,6 +1331,7 @@ impl Session {
     /// Commit the interaction as one undo step (no-op if nothing changed).
     pub fn end_interaction(&mut self) -> Result<()> {
         let Some(i) = self.interaction.take() else { return Ok(()) };
+        self.spot_sources.drag_ended(i.photo);
         let Some(cur) = self.develop_of(i.photo) else { return Ok(()) };
         if *cur == *i.original {
             return Ok(());
@@ -1345,6 +1349,8 @@ impl Session {
 
     pub fn cancel_interaction(&mut self) -> Result<()> {
         if let Some(i) = self.interaction.take() {
+            // spots clicked during the drag go with it (`spot_source`)
+            self.spot_sources.drag_cancelled(i.photo);
             self.apply_silent(Op::SetDevelop { id: i.photo, settings: i.original, label: i.label, edited: None })?;
         }
         Ok(())

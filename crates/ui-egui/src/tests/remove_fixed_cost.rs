@@ -66,6 +66,9 @@ fn a_burst_of_spot_edits_renders_the_thumbnail_once_at_the_end() {
 #[test]
 fn a_painted_spot_gets_its_source_from_the_search_on_a_worker() {
     let mut h = remove_panel();
+    // the window sleeps between frames: the worker must wake it when the search answers, or the spot stays unseen
+    // (and a second click adds another) until some later redraw
+    assert!(h.app.session.spot_sources.has_waker(), "the window gave the search a way to wake it");
     let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": 0.4, "y": 0.6}, {"kind": "up", "x": 0.4, "y": 0.6}]}), T);
     assert_eq!(r["ok"], true, "{r}");
     assert!(h.settle(SETTLE));

@@ -160,7 +160,12 @@ impl LightcraftApp {
             }
             ctx.request_repaint_after(std::time::Duration::from_secs(3));
         }
-        // new spots' sources found on workers (`spot.add` with `background`): each goes on its spot
+        // new spots' sources found on workers (`spot.add` with `background`): each goes on its spot. The worker wakes the
+        // window when it answers (the click that asked comes after this poll, so nothing else would)
+        if !self.session.spot_sources.has_waker() {
+            let wake = ctx.clone();
+            self.session.spot_sources.set_waker(std::sync::Arc::new(move || wake.request_repaint()));
+        }
         if self.session.spot_sources.pending() > 0 {
             self.session.poll_spot_sources();
             ctx.request_repaint_after(std::time::Duration::from_millis(16));

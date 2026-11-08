@@ -1,3 +1,3 @@
 # Remove: the source search on a worker, the thumbnail once per burst (issue #97)
 cargo test -p lightcraft-engine --lib -- tests::spot_source tests::spot_rows
-cargo test -p lightcraft-ui-egui --lib -- tests::remove_fixed_cost tests::remove_lag tests::spot_rows tests::canvas_keys tests::canvas_pan tests::tool_overlay tests::space_hand tests::masking::remove_spots
+cargo test -p lightcraft-ui-egui --lib -- edited_thumb tests::remove_fixed_cost tests::remove_lag tests::spot_rows tests::canvas_keys tests::canvas_pan tests::tool_overlay tests::space_hand tests::masking::remove_spots

@@ -154,7 +154,7 @@ fn space_held_over_the_healing_brush_pans_and_paints_no_spot() {
     // the tool has its pointer back: the same drag paints a spot and leaves the view alone
     let pan = h.app.ui.pan;
     drag(&mut h);
-    h.settle_spot_sources();
+    assert!(h.settle_spot_sources(), "a spot's source search never answered");
     assert_eq!(develop(&h).spots.len(), spots + 1, "the brush did not paint after the release");
     assert_eq!(h.app.ui.pan, pan);
 }

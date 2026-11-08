@@ -1,6 +1,8 @@
 //! Issue #97: with `background: true`, `spot.add` returns before a new spot's source is found; the spot is added with
 //! its source when the search on a worker answers, as one undo step, in the order the spots were asked for.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
@@ -22,6 +24,34 @@ fn settle(s: &mut Session) {
     s.poll_spot_sources();
 }
 
+/// A session polled by a window, as the app's is: the worker wakes it (the count of wakes).
+fn windowed() -> (Session, Arc<AtomicUsize>) {
+    let mut s = Session::with_demo();
+    let woken = Arc::new(AtomicUsize::new(0));
+    let w = woken.clone();
+    s.spot_sources.set_waker(Arc::new(move || {
+        w.fetch_add(1, Ordering::SeqCst);
+    }));
+    (s, woken)
+}
+
+/// Waits (a hang guard) until `n` searches have answered, without adding them.
+fn answered(s: &Session, n: usize) {
+    let start = Instant::now();
+    while s.spot_sources.answered() < n {
+        assert!(start.elapsed() < Duration::from_secs(60), "the search never answered");
+        std::thread::sleep(Duration::from_millis(5));
+    }
+}
+
+fn exposure(s: &Session) -> f64 {
+    s.develop_of(s.active().unwrap()).unwrap().light.exposure
+}
+
+fn bg(x: f64) -> serde_json::Value {
+    json!({"mode": "remove", "points": [[x, 0.5]], "size": 0.03, "background": true})
+}
+
 /// Hold the session's first search on its worker until the sender says go.
 fn hold_first_search() -> std::sync::mpsc::Sender<()> {
     let (go, wait) = std::sync::mpsc::channel();
@@ -39,7 +69,7 @@ fn a_spot_asked_in_the_background_returns_before_its_source_is_found() {
     let want = spots(&sync)[0].clone();
     assert!(want.source_offset.is_some());
 
-    let mut s = Session::with_demo();
+    let (mut s, woken) = windowed();
     let go = hold_first_search();
     let mut bg = add.clone();
     bg["background"] = json!(true);
@@ -49,6 +79,8 @@ fn a_spot_asked_in_the_background_returns_before_its_source_is_found() {
     assert_eq!(s.poll_spot_sources(), 0, "nothing to add while the search waits");
     assert!(spots(&s).is_empty());
     go.send(()).unwrap();
+    answered(&s, 1);
+    assert_eq!(woken.load(Ordering::SeqCst), 1, "the answer wakes the window, which otherwise sleeps until some later redraw");
     settle(&mut s);
     assert_eq!(spots(&s), vec![want], "the spot, with the source the old way finds");
     assert_eq!(s.active_spot, Some(0), "and selected");
@@ -59,17 +91,13 @@ fn a_spot_asked_in_the_background_returns_before_its_source_is_found() {
 #[test]
 fn spots_asked_in_the_background_are_added_in_the_order_asked() {
     let _turn = crate::spot_source::TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut s = Session::with_demo();
+    let (mut s, _) = windowed();
     // the first search waits, the second answers first
     let go = hold_first_search();
     for x in [0.3, 0.6] {
-        s.execute("spot.add", &json!({"mode": "remove", "points": [[x, 0.5]], "size": 0.03, "background": true})).unwrap();
+        s.execute("spot.add", &bg(x)).unwrap();
     }
-    let start = Instant::now();
-    while s.spot_sources.answered() < 1 {
-        assert!(start.elapsed() < Duration::from_secs(60), "the second search never answered");
-        std::thread::sleep(Duration::from_millis(5));
-    }
+    answered(&s, 1);
     assert_eq!(s.poll_spot_sources(), 0, "the second waits for the first");
     go.send(()).unwrap();
     settle(&mut s);
@@ -77,4 +105,109 @@ fn spots_asked_in_the_background_are_added_in_the_order_asked() {
     // an explicit source, or a Content-Aware spot, needs no search: added at once
     let r = s.execute("spot.add", &json!({"mode": "fill", "points": [[0.5, 0.8]], "size": 0.03, "background": true})).unwrap();
     assert_eq!(r["index"], json!(2), "{r}");
+}
+
+#[test]
+fn a_content_aware_spot_asked_behind_pending_ones_keeps_its_place() {
+    let _turn = crate::spot_source::TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (mut s, _) = windowed();
+    let go = hold_first_search();
+    s.execute("spot.add", &bg(0.3)).unwrap();
+    let r = s.execute("spot.add", &json!({"mode": "fill", "points": [[0.5, 0.5]], "size": 0.03, "background": true})).unwrap();
+    assert_eq!(r, json!({"pending": true}), "it waits behind the spot clicked before it");
+    go.send(()).unwrap();
+    settle(&mut s);
+    assert_eq!(spots(&s).iter().map(|p| p.points[0].x).collect::<Vec<_>>(), vec![0.3, 0.5], "click order");
+    assert_eq!(s.active_spot, Some(1), "the last one clicked is selected");
+}
+
+#[test]
+fn without_a_window_a_background_spot_is_searched_at_once() {
+    // scripts, the CLI and MCP have no window polling the session: the spot must not wait for a poll that never comes
+    let mut s = Session::with_demo();
+    let r = s.execute("spot.add", &bg(0.4)).unwrap();
+    assert_eq!(r["index"], json!(0), "{r}");
+    assert_eq!(s.spot_sources.pending(), 0);
+    assert!(spots(&s)[0].source_offset.is_some(), "with its source");
+}
+
+#[test]
+fn an_answer_landing_during_a_drag_waits_and_is_its_own_undo_step() {
+    let _turn = crate::spot_source::TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (mut s, _) = windowed();
+    let go = hold_first_search();
+    s.execute("spot.add", &bg(0.4)).unwrap();
+    // a slider drag starts before the search answers
+    s.begin_interaction("Exposure").unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.0})).unwrap();
+    go.send(()).unwrap();
+    answered(&s, 1);
+    assert_eq!(s.poll_spot_sources(), 0, "not merged into the drag's undo step");
+    assert!(spots(&s).is_empty());
+    s.end_interaction().unwrap();
+    assert_eq!(s.poll_spot_sources(), 1, "added once the drag ends");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(spots(&s).is_empty(), "the spot is one step");
+    assert_eq!(exposure(&s), 1.0, "the drag is another");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(exposure(&s), 0.0);
+}
+
+#[test]
+fn a_spot_asked_before_a_cancelled_drag_is_still_added() {
+    let _turn = crate::spot_source::TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (mut s, _) = windowed();
+    let go = hold_first_search();
+    s.execute("spot.add", &bg(0.4)).unwrap();
+    s.begin_interaction("Exposure").unwrap();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.0})).unwrap();
+    go.send(()).unwrap();
+    answered(&s, 1);
+    assert_eq!(s.poll_spot_sources(), 0);
+    s.cancel_interaction().unwrap();
+    settle(&mut s);
+    assert_eq!(spots(&s).len(), 1, "cancelling the drag does not take the spot with it");
+    assert_eq!(exposure(&s), 0.0);
+}
+
+#[test]
+fn a_spot_asked_during_a_drag_that_is_cancelled_is_dropped() {
+    let _turn = crate::spot_source::TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (mut s, _) = windowed();
+    let go = hold_first_search();
+    s.begin_interaction("Remove").unwrap();
+    s.execute("spot.add", &bg(0.4)).unwrap();
+    s.cancel_interaction().unwrap();
+    assert_eq!(s.spot_sources.pending(), 0, "nothing left waiting");
+    go.send(()).unwrap();
+    answered(&s, 1);
+    s.poll_spot_sources();
+    assert!(spots(&s).is_empty(), "its late answer adds nothing");
+    assert_eq!(s.spot_sources.answered(), 0, "and is thrown away");
+}
+
+#[test]
+fn undo_right_after_a_click_undoes_the_new_spot() {
+    let (mut s, _) = windowed();
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.0})).unwrap();
+    s.execute("spot.add", &bg(0.4)).unwrap();
+    // no frame has polled yet
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert!(spots(&s).is_empty(), "the spot is undone");
+    assert_eq!(exposure(&s), 1.0, "not the step before it");
+    assert_eq!(s.spot_sources.pending(), 0, "nothing left to land after the undo");
+}
+
+#[test]
+fn an_answer_for_a_library_closed_since_is_dropped() {
+    let _turn = crate::spot_source::TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (mut s, _) = windowed();
+    let go = hold_first_search();
+    s.execute("spot.add", &bg(0.4)).unwrap();
+    // what opening a library does (a photo id there may name another photo)
+    s.library_identity = Arc::new(());
+    go.send(()).unwrap();
+    settle(&mut s);
+    assert!(spots(&s).is_empty());
+    assert_eq!(s.spot_sources.pending(), 0);
 }
