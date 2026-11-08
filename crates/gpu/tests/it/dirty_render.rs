@@ -69,12 +69,21 @@ struct View {
     req: RenderRequest,
     cache: StageCache,
     tiles: usize,
+    /// What the last render with the stages said it changed.
+    note: Option<lightcraft_gpu::FrameNote>,
 }
 
 impl View {
     fn new(w: usize, h: usize, fit: usize) -> View {
         let src = scene(w, h);
-        View { src, info: SourceInfo { raw: true, ..Default::default() }, req: RenderRequest::fit(fit, fit), cache: StageCache::default(), tiles: 0 }
+        View {
+            src,
+            info: SourceInfo { raw: true, ..Default::default() },
+            req: RenderRequest::fit(fit, fit),
+            cache: StageCache::default(),
+            tiles: 0,
+            note: None,
+        }
     }
 
     /// Render `s` with the view's stages: (tiles computed, the image), checked against a whole render.
@@ -82,6 +91,7 @@ impl View {
         let before = tiles_rendered();
         let img = lightcraft_gpu::render(&self.src, &self.info, s, &self.req, Some(&self.cache)).expect("gpu").image;
         let tiles = tiles_rendered() - before;
+        self.note = lightcraft_gpu::take_frame_note();
         let whole = lightcraft_gpu::render(&self.src, &self.info, s, &self.req, None).expect("gpu").image;
         let differ = img.data.iter().zip(&whole.data).filter(|(a, b)| a != b).count();
         assert!(differ == 0, "{what}: {differ} pixels differ from a whole render");
@@ -222,4 +232,31 @@ fn a_mask_that_reads_the_image_renders_whole() {
     s.spots.push(spot(SpotMode::Heal, 0.6, 0.5));
     let (n, _) = v.render(&s, "a spot");
     assert_eq!(n, v.tiles);
+}
+
+/// Each render with stages says which output it started from and the rectangles it changed; outside them the pixels
+/// are the earlier output's (what the loupe would upload).
+#[test]
+fn a_render_says_what_it_changed() {
+    if !gpu() {
+        return;
+    }
+    let mut v = View::new(2800, 1867, 2560);
+    let mut s = DevelopSettings::default();
+    planes(&mut s);
+    s.spots = vec![spot(SpotMode::Heal, 0.3, 0.3)];
+    let (_, before) = v.render(&s, "first");
+    let first = v.note.clone().expect("a note");
+    assert_eq!(first.changed, None, "the first render is whole");
+    s.spots.push(spot(SpotMode::Heal, 0.7, 0.6));
+    let (_, after) = v.render(&s, "a spot");
+    let note = v.note.clone().expect("a note");
+    let (from, rects) = note.changed.expect("started from the first render");
+    assert_eq!(from, first.frame);
+    assert_ne!(note.frame, first.frame);
+    let inside = |x: usize, y: usize| rects.iter().any(|r| x >= r[0] && x < r[2] && y >= r[1] && y < r[3]);
+    let w = after.width;
+    let outside = (0..after.data.len()).filter(|i| !inside(i % w, i / w)).filter(|i| after.data[*i] != before.data[*i]).count();
+    assert_eq!(outside, 0, "pixels outside the changed rectangles differ");
+    assert!(after.data != before.data, "the spot changed something");
 }

@@ -314,7 +314,7 @@ pub(crate) fn box_chunk(r: usize) -> usize {
 /// One box pass of radius `r` (clamped edges) over a `w × h` image of `nc` interleaved channels,
 /// `src → dst`: horizontal or vertical. `y0`: the image's first row in the whole image it was cut from (0 for a whole
 /// image), where the vertical pass's runs start.
-fn box_pass(cx: &mut Cx<'_>, horizontal: bool, src: &Buf, dst: &Buf, (w, h): (usize, usize), nc: usize, r: usize, y0: usize) {
+fn box_pass(cx: &mut Cx<'_>, (horizontal, r): (bool, usize), src: &Buf, dst: &Buf, (w, h): (usize, usize), nc: usize, y0: usize) {
     let chunk = box_chunk(r);
     let phase = (y0 % chunk) as u32;
     let p = [w as u32, h as u32, nc as u32, r as u32, chunk as u32, phase];
@@ -344,7 +344,7 @@ pub(crate) fn gaussian_at(cx: &mut Cx<'_>, src: &Buf, (w, h): (usize, usize), nc
     let mut bufs = [cx.gpu.buffer(w * h * nc), cx.gpu.buffer(w * h * nc)];
     for (i, (horizontal, r)) in passes.iter().enumerate() {
         let (out, prev) = (&bufs[i % 2], &bufs[(i + 1) % 2]);
-        box_pass(cx, *horizontal, if i == 0 { src } else { prev }, out, (w, h), nc, *r, y0);
+        box_pass(cx, (*horizontal, *r), if i == 0 { src } else { prev }, out, (w, h), nc, y0);
     }
     let last = (passes.len() - 1) % 2;
     let [a, b] = std::mem::replace(&mut bufs, [cx.gpu.buffer(0), cx.gpu.buffer(0)]);
@@ -791,13 +791,7 @@ pub fn render(
         .map(|_| Arc::new(crate::dirty::Rest::of(info, &plan, req)));
     let start = cached.as_ref().and_then(|e| e.last.clone()).filter(|l| rest.as_deref() == Some(&*l.rest));
     if profiling() {
-        let why = match (&rest, cached.as_ref().and_then(|e| e.last.as_ref())) {
-            (None, _) => "not eligible",
-            (_, None) => "no last render",
-            (Some(r), Some(l)) if **r != *l.rest => "more than the spots changed",
-            _ => "from the last render",
-        };
-        eprintln!("  gpu dirty: {why}");
+        eprintln!("  gpu dirty: {}", crate::dirty::why(rest.as_deref(), cached.as_ref().and_then(|e| e.last.as_ref())));
     }
     let mut host = Host::default();
     let mut cx = Cx::new(gpu);
@@ -828,78 +822,12 @@ pub fn render(
     lap("sample", &mut t, &mut cx);
 
     // 2. white balance, defringe, spots, noise reduction
-    let old_lin = cached.as_ref().and_then(|e| e.lin.clone());
-    // the tiles of the linear image that differ from the one `start` was made from, and the spots' image this one is
-    // made from
-    let mut t_lin: Option<crate::dirty::Tiles> = None;
-    let old_post = cached.as_ref().map_or_else(std::sync::Weak::new, |e| e.post.clone());
-    let mut post = std::sync::Weak::new();
-    let lin = match old_lin.clone().filter(|(k, _)| *k == plan.lin_key) {
-        Some((_, b)) => {
-            if start.as_ref().is_some_and(|l| l.lin_key == plan.lin_key) {
-                t_lin = Some(crate::dirty::Tiles::none((w, h)));
-            }
-            post = old_post;
-            b
-        }
-        None => {
-            let kept = stages.map(|c| (c.spots.get(src, plan.geo), c.spots_cpu.get(src, plan.geo))).unwrap_or_default();
-            let (pre, k, redone) = linear(&mut cx, &sampled, info, &plan, &mut host, (kept.0.as_deref(), kept.1.as_deref()));
-            if let Some(k) = &k.0 {
-                post = Arc::downgrade(&k.post);
-            }
-            if let Some(c) = stages {
-                let device = k.0.as_ref().map_or(0, |k| crate::spots_keep::bytes(k));
-                c.spots.put(src, plan.geo, k.0, device);
-                let host = k.1.as_ref().map_or(0, |k| k.bytes());
-                c.spots_cpu.put(src, plan.geo, k.1, host);
-            }
-            // only the boxes the spots rewrote, when the kept linear image was made from the image they started from
-            let dirty = match (&start, &redone, &old_lin) {
-                (Some(l), Some(r), Some((k, old))) if *k == l.lin_key && std::sync::Weak::ptr_eq(&r.from, &old_post) => {
-                    crate::dirty::linear(&mut cx, &pre, old, &plan, &crate::dirty::Tiles::of((w, h), &r.rects))
-                }
-                _ => None,
-            };
-            match dirty {
-                Some((b, tiles)) => {
-                    t_lin = Some(tiles);
-                    Arc::new(b)
-                }
-                None => Arc::new(denoise(&mut cx, pre, &plan)),
-            }
-        }
-    };
+    let at = ViewAt { stages, src, cached: cached.as_ref(), start: start.as_ref() };
+    let (lin, t_lin, post) = linear_stage(&mut cx, &at, &sampled, info, &plan, &mut host);
     lap("wb/nr", &mut t, &mut cx);
 
-    // 3. spatial planes (with `t_lin`, only where the linear image changed; `t_out`: the output tiles that change)
-    let old_planes = cached.map(|e| e.planes);
-    let dirty = match (&t_lin, &old_planes, &start) {
-        (Some(tiles), Some(p), Some(l)) if p.key == l.lin_key && p.key != plan.lin_key => crate::dirty::planes(&mut cx, &lin, &plan, req, p, tiles),
-        _ => None,
-    };
-    let (planes, mut prep, mut t_out) = match dirty {
-        Some((planes, prep, tiles)) => (planes, prep, Some(tiles)),
-        None => {
-            let mut planes = match old_planes {
-                Some(p) if p.key == plan.lin_key => p,
-                _ => Planes { key: plan.lin_key, ..Default::default() },
-            };
-            let prep = prepare(&mut cx, &lin, &plan, req, &mut planes);
-            // (the same linear image gives the same planes)
-            (planes, prep, t_lin.clone().filter(|tiles| tiles.count() == 0))
-        }
-    };
-    // a window dehazes with the whole frame's airlight
-    if let Some(a) = plan.fixed_air {
-        prep.air = a;
-    }
-    // an airlight that moved changes every pixel
-    if let (Some(l), Some(tiles)) = (&start, &mut t_out)
-        && l.air != prep.air.to_bits()
-    {
-        *tiles = crate::dirty::Tiles::all((w, h));
-    }
+    // 3. spatial planes (`t_out`: the output tiles that change from `start`'s)
+    let (planes, prep, t_out) = planes_stage(&mut cx, &at, (&lin, t_lin.as_ref()), &plan, req);
     lap("planes", &mut t, &mut cx);
     if let Some(c) = stages {
         c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), post, planes, last: None });
@@ -1110,6 +1038,93 @@ pub fn render(
         return None;
     }
     Some(Output::ImageFit(rendered, Some(Rgba8 { width: fw, height: fh, data })))
+}
+
+/// A view's stages and what they kept for this render's size: the entry, and the last render when this one differs
+/// from it only in its spots (issue #111).
+struct ViewAt<'a> {
+    stages: Option<&'a GpuStages>,
+    src: &'a Arc<Rgb32f>,
+    cached: Option<&'a Entry>,
+    start: Option<&'a crate::dirty::Last>,
+}
+
+/// The white-balanced, retouched, denoised image; the tiles of it that differ from the one `start` was made from (when
+/// it was); and the image after the spots it was made from.
+fn linear_stage(
+    cx: &mut Cx<'_>,
+    at: &ViewAt<'_>,
+    sampled: &Buf,
+    info: &SourceInfo,
+    plan: &Plan<'_>,
+    host: &mut Host,
+) -> (Arc<Buf>, Option<crate::dirty::Tiles>, std::sync::Weak<Buf>) {
+    let (src, size) = (at.src, (plan.w, plan.h));
+    let old_lin = at.cached.and_then(|e| e.lin.clone());
+    let old_post = at.cached.map_or_else(std::sync::Weak::new, |e| e.post.clone());
+    if let Some((_, b)) = old_lin.clone().filter(|(k, _)| *k == plan.lin_key) {
+        let same = at.start.is_some_and(|l| l.lin_key == plan.lin_key).then(|| crate::dirty::Tiles::none(size));
+        return (b, same, old_post);
+    }
+    let kept = at.stages.map(|c| (c.spots.get(src, plan.geo), c.spots_cpu.get(src, plan.geo))).unwrap_or_default();
+    let (pre, k, redone) = linear(cx, sampled, info, plan, host, (kept.0.as_deref(), kept.1.as_deref()));
+    let post = k.0.as_ref().map_or_else(std::sync::Weak::new, |k| Arc::downgrade(&k.post));
+    if let Some(c) = at.stages {
+        let device = k.0.as_ref().map_or(0, |k| crate::spots_keep::bytes(k));
+        c.spots.put(src, plan.geo, k.0, device);
+        let host = k.1.as_ref().map_or(0, |k| k.bytes());
+        c.spots_cpu.put(src, plan.geo, k.1, host);
+    }
+    // only the boxes the spots rewrote, when the kept linear image was made from the image they started from
+    let dirty = match (at.start, &redone, &old_lin) {
+        (Some(l), Some(r), Some((k, old))) if *k == l.lin_key && std::sync::Weak::ptr_eq(&r.from, &old_post) => {
+            crate::dirty::linear(cx, &pre, old, plan, &crate::dirty::Tiles::of(size, &r.rects))
+        }
+        _ => None,
+    };
+    match dirty {
+        Some((b, tiles)) => (Arc::new(b), Some(tiles), post),
+        None => (Arc::new(denoise(cx, pre, plan)), None, post),
+    }
+}
+
+/// The planes of `lin` (with its tiles that changed from `start`'s, only there) and the output tiles that change from
+/// `start`'s output (`None`: all of them, or no `start`).
+fn planes_stage(
+    cx: &mut Cx<'_>,
+    at: &ViewAt<'_>,
+    (lin, t_lin): (&Arc<Buf>, Option<&crate::dirty::Tiles>),
+    plan: &Plan<'_>,
+    req: &RenderRequest,
+) -> (Planes, Prep, Option<crate::dirty::Tiles>) {
+    let old = at.cached.map(|e| e.planes.clone());
+    let dirty = match (t_lin, &old, at.start) {
+        (Some(tiles), Some(p), Some(l)) if p.key == l.lin_key && p.key != plan.lin_key => crate::dirty::planes(cx, lin, plan, req, p, tiles),
+        _ => None,
+    };
+    let (planes, mut prep, mut t_out) = match dirty {
+        Some((planes, prep, tiles)) => (planes, prep, Some(tiles)),
+        None => {
+            let mut planes = match old {
+                Some(p) if p.key == plan.lin_key => p,
+                _ => Planes { key: plan.lin_key, ..Default::default() },
+            };
+            let prep = prepare(cx, lin, plan, req, &mut planes);
+            // (the same linear image gives the same planes)
+            (planes, prep, t_lin.filter(|tiles| tiles.count() == 0).cloned())
+        }
+    };
+    // a window dehazes with the whole frame's airlight
+    if let Some(a) = plan.fixed_air {
+        prep.air = a;
+    }
+    // an airlight that moved changes every pixel
+    if let (Some(l), Some(tiles)) = (at.start, &mut t_out)
+        && l.air != prep.air.to_bits()
+    {
+        *tiles = crate::dirty::Tiles::all((plan.w, plan.h));
+    }
+    (planes, prep, t_out)
 }
 
 static DEVICE_FITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1625,7 +1640,7 @@ mod tests {
             // noise reduction's radii, Texture's and Dehaze's at 6000 px
             for r in [2, 11, 120] {
                 for (k, horizontal) in [("box_h", true), ("box_v", false)] {
-                    time(&format!("{k} nc={nc} r={r}"), &mut |cx| box_pass(cx, horizontal, &src, &out, (w, h), nc, r, 0));
+                    time(&format!("{k} nc={nc} r={r}"), &mut |cx| box_pass(cx, (horizontal, r), &src, &out, (w, h), nc, 0));
                 }
             }
         }

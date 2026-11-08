@@ -249,6 +249,16 @@ pub(crate) struct Last {
     pub(crate) air: u32,
 }
 
+/// Why a render does or does not start from the view's last one (`LIGHTCRAFT_PROFILE`).
+pub(crate) fn why(rest: Option<&Rest>, last: Option<&Last>) -> &'static str {
+    match (rest, last) {
+        (None, _) => "not eligible",
+        (_, None) => "no last render",
+        (Some(r), Some(l)) if *r != *l.rest => "more than the spots changed",
+        _ => "from the last render",
+    }
+}
+
 /// What `spots_keep` redrew: the image it started from and the boxes it rewrote.
 pub(crate) struct Redone {
     pub(crate) from: Weak<Buf>,
@@ -422,7 +432,7 @@ mod tests {
             covered.union(&Tiles::of(size, &[r]));
         }
         assert_eq!(covered, t);
-        let tiles: usize = t.rects().iter().map(|r| cut::area(r)).sum();
+        let tiles: usize = t.rects().iter().map(cut::area).sum();
         assert_eq!(area, tiles, "no rectangle overlaps another");
     }
 }
