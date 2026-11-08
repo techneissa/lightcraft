@@ -20,7 +20,6 @@ pub mod settings;
 
 pub mod background;
 pub mod blemish;
-pub mod clothes_colour;
 pub mod eyes;
 pub mod glare;
 pub mod hair;
@@ -46,7 +45,6 @@ settings::features! {
     teeth_lips: teeth_lips::TeethLips,
     glare: glare::Glare,
     hair: hair::Hair,
-    clothes_colour: clothes_colour::ClothesColour,
     reshape: reshape::Reshape,
     background: background::Background,
 }

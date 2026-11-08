@@ -21,7 +21,6 @@ use crate::widgets::{flyout_row, register};
 
 mod background;
 mod blemish;
-mod clothes_colour;
 mod eyes;
 mod glare;
 mod hair;
@@ -43,7 +42,6 @@ const SECTIONS: &[(&str, Icon, fn(&mut Ctx<'_>))] = &[
     (<r::teeth_lips::TeethLips as Feature>::KEY, teeth_lips::ICON, teeth_lips::body),
     (<r::glare::Glare as Feature>::KEY, glare::ICON, glare::body),
     (<r::hair::Hair as Feature>::KEY, hair::ICON, hair::body),
-    (<r::clothes_colour::ClothesColour as Feature>::KEY, clothes_colour::ICON, clothes_colour::body),
     (<r::reshape::Reshape as Feature>::KEY, reshape::ICON, reshape::body),
     (<r::background::Background as Feature>::KEY, background::ICON, background::body),
 ];

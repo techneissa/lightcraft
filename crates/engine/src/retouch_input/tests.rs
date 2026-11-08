@@ -73,8 +73,8 @@ fn a_value_for_one_face_stays_with_its_person_when_faces_come_back_in_another_or
     assert_eq!(r.global.get("retouch.skin.amount"), Some(20.0));
     assert_eq!(r.faces.len(), 1);
     assert_eq!(r.faces[0].face.person.as_deref(), Some("bob"));
-    // a new detection lists them the other way round, and Bob a little moved
-    *fake.0.lock().unwrap() = vec![face(0.58, 0.22, 0.79, 0.52, Some("bob")), ann()];
+    // a new detection (of another crop of the scene) finds them the other way round: Ann where Bob was, Bob far left
+    *fake.0.lock().unwrap() = vec![face(0.6, 0.2, 0.8, 0.5, Some("ann")), face(0.05, 0.22, 0.26, 0.52, Some("bob"))];
     let listed = s.execute("retouch.detect", &json!({"again": true})).unwrap();
     assert_eq!(listed["faces"][0]["person"], "bob");
     assert_eq!(listed["faces"][0]["own"], 0, "Bob keeps his own settings: {listed}");

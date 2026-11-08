@@ -11,7 +11,8 @@
 //!   nothing). Exports and synchronous renders find them first ([`Session::retouch_detect_now`]).
 //! - The default provider is YuNet (`crates/faces`, installed in Settings ▸ Faces): boxes and five landmarks, no
 //!   masks. Another provider (the people parser, issue #81) is installed with [`FaceStore::set_provider`].
-//! - A face's person is the name of the photo's named face region it overlaps most (People).
+//! - A face's person is the name of the photo's named face region it overlaps most (People). Faces are listed left
+//!   to right.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -338,6 +339,8 @@ fn find(job: crate::RenderJob, provider: &dyn FaceProvider, regions: &[(NormRect
     let img = job.run().rendered?.image;
     let mut faces = provider.faces(&img)?;
     faces.truncate(lightcraft_develop::retouch::MAX_FACES);
+    // left to right, as the face picker shows them (per-face settings never depend on the order)
+    faces.sort_by(|a, b| a.bounds.centre().0.total_cmp(&b.bounds.centre().0).then(a.bounds.centre().1.total_cmp(&b.bounds.centre().1)));
     name_faces(&mut faces, regions);
     let thumbs = faces.iter().map(|f| thumb(&img, &f.bounds)).collect();
     Ok(Found { input: Arc::new(Input::new(faces)), thumbs: Arc::new(thumbs) })

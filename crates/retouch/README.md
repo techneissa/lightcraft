@@ -18,7 +18,6 @@ Each feature owns one module and touches nothing else in this crate:
 | Teeth and Lips | `src/teeth_lips.rs` | `examples/teeth_lips.rs` | `tests/teeth_lips.rs` | `…/portrait/teeth_lips.rs` |
 | Glasses Glare | `src/glare.rs` | `examples/glare.rs` | `tests/glare.rs` | `…/portrait/glare.rs` |
 | Stray Hair | `src/hair.rs` | `examples/hair.rs` | `tests/hair.rs` | `…/portrait/hair.rs` |
-| Clothes Color | `src/clothes_colour.rs` | `examples/clothes_colour.rs` | `tests/clothes_colour.rs` | `…/portrait/clothes_colour.rs` |
 | Face Reshape | `src/reshape.rs` | `examples/reshape.rs` | `tests/reshape.rs` | `…/portrait/reshape.rs` |
 | Background | `src/background.rs` | `examples/background.rs` | `tests/background.rs` | `…/portrait/background.rs` |
 
@@ -34,6 +33,8 @@ In the module:
   `cx.slider("retouch.<KEY>.<field>")`, which writes to every face or to the picked one.
 
 Never edit `lib.rs`, `settings.rs`, `run.rs` or the panel list (`portrait.rs`): they already list every feature.
+Clothes recolouring is not one of them: it is a local-mask effect (issue #83), so it works on any mask; the clothes
+parts of `Part` are there for its masks.
 
 Try a feature without building the app:
 
@@ -101,7 +102,7 @@ and red eye, before noise reduction; global tone and colour, local masks, detail
 pass (they are one per-pixel pass there, so the step sits before all of them). Stages, in order:
 
 1. **Retouch** (tone and colour), features in this order: Blemishes, Skin, Wrinkles, Skin Tone, Eyes, Teeth and
-   Lips, Glasses Glare, Stray Hair, Clothes Color.
+   Lips, Glasses Glare, Stray Hair.
 2. **Geometry**: Face Reshape, a geometry step next to Transform. Its slot is reserved and not run yet; the reshape
    feature wires it into the pipeline's geometry.
 3. **Background**: after every retouch, once for the whole picture.

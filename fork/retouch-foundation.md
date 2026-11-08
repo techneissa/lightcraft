@@ -8,7 +8,7 @@ Nothing changes in a photo yet: every feature is an empty stub. What is there fo
 
 - **`crates/retouch`** (`lightcraft-retouch`, layer 1, a leaf crate): the settings, the input contract and the
   step. One module per feature (`blemish`, `skin`, `wrinkles`, `skin_tone`, `eyes`, `teeth_lips`, `glare`, `hair`,
-  `clothes_colour`, `reshape`, `background`), each with its settings struct, its sliders, a no-op `apply`, an
+  `reshape`, `background`; clothes recolouring is a local-mask effect instead, issue #83), each with its settings struct, its sliders, a no-op `apply`, an
   example program (`cargo run -p lightcraft-retouch --example skin -- in.jpg out.jpg --amount 50`) and a test file.
   A feature's issue edits only its own module, example, tests and panel section. `crates/retouch/README.md` has the
   contract, the rules (sizes are fractions of the face; off is byte for byte; no panic) and the render order.
@@ -102,4 +102,4 @@ No test needs a model: the engine and UI tests install a fake provider.
 
 ## Parity rows
 
-| LR-EDIT-PORTRAIT | Portrait retouching | — | 🟡 | `cmd:retouch.faces`, `cmd:retouch.detect`, `cmd:retouch.set`, `cmd:retouch.resetFace`, `cmd:retouch.reset`, `ctl:retouch.*`, `crates/retouch/src/lib.rs`, `crates/pipeline/src/retouch_step.rs`, `crates/engine/src/retouch_input.rs`, `crates/ui-egui/src/panels/edit/portrait.rs` | an extra (the reference app has no portrait retouching): the base only (issue #80). Settings for every face and per face (kept by person or place), one pipeline step, faces from YuNet, the Portrait section with a face picker; every feature (skin, blemishes, wrinkles, skin tone, eyes, teeth and lips, glare, stray hair, clothes colour, reshape, background) is a stub that changes nothing yet. See `fork/retouch-foundation.md` |
+| LR-EDIT-PORTRAIT | Portrait retouching | — | 🟡 | `cmd:retouch.faces`, `cmd:retouch.detect`, `cmd:retouch.set`, `cmd:retouch.resetFace`, `cmd:retouch.reset`, `ctl:retouch.*`, `crates/retouch/src/lib.rs`, `crates/pipeline/src/retouch_step.rs`, `crates/engine/src/retouch_input.rs`, `crates/ui-egui/src/panels/edit/portrait.rs` | an extra (the reference app has no portrait retouching): the base only (issue #80). Settings for every face and per face (kept by person or place), one pipeline step, faces from YuNet, the Portrait section with a face picker; every feature (skin, blemishes, wrinkles, skin tone, eyes, teeth and lips, glare, stray hair, reshape, background) is a stub that changes nothing yet. See `fork/retouch-foundation.md` |

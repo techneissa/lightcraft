@@ -12,7 +12,7 @@ fn named(f: Face, name: &str) -> Face {
 
 #[test]
 fn every_feature_has_a_section_and_unique_reachable_controls() {
-    assert_eq!(FEATURES.len(), 11);
+    assert_eq!(FEATURES.len(), 10);
     let mut ids = std::collections::BTreeSet::new();
     let mut f = Features::default();
     for spec in lightcraft_retouch::controls() {
