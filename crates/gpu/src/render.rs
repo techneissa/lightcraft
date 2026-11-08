@@ -31,6 +31,8 @@ pub struct GpuStages {
     /// host: a spot edit draws only what it reaches.
     spots: KeptStore<Kept<Buf, Buf>>,
     spots_cpu: KeptStore<CpuKept>,
+    /// What the job that showed the last render made of it on the host, by that render's frame number (issue #111).
+    pub(crate) host: Mutex<Option<crate::dirty::HostKept>>,
 }
 
 const CAPACITY: usize = 2;
@@ -149,6 +151,7 @@ impl GpuStages {
         self.alphas.clear();
         self.spots.clear();
         self.spots_cpu.clear();
+        *self.host.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     pub fn is_empty(&self) -> bool {

@@ -1,6 +1,6 @@
 # An edit renders only the tiles it changed
 
-List: a Remove, Heal or Clone edit recomputes only the 64 px tiles it reaches through noise reduction, the planes and the per-pixel stage on the GPU, with a whole render's pixels; `perf/111-dirty-render`.
+List: a Remove, Heal or Clone edit recomputes only the 64 px tiles it reaches on the GPU, and the loupe converts, fits and uploads only those, with a whole render's pixels; `perf/111-dirty-render`.
 
 ## What it does
 
@@ -12,7 +12,10 @@ List: a Remove, Heal or Clone edit recomputes only the 64 px tiles it reaches th
 - **Memory**: the kept output is 4 bytes a pixel per size (17 MB at 2560 × 1707), counted in the stage cache's bytes, so the trim frees it with the rest.
 - `LIGHTCRAFT_PROFILE=1` prints `gpu dirty: <why>` and `gpu tiles: <n> of <all>` per render.
 - **Measured** (release build, one A7 V raw, 5 Heal spots, a move and a resize, app open throughout, load average 32–50 from other builds): the GPU render's stages, each waited for (`LIGHTCRAFT_PROFILE`), went from a median of 105 ms (60–222) to 56 ms (28–93). Release-to-result did not change beyond the noise (clicks: median 160 ms before, 171 ms after), because most of each loupe job is now CPU work after the GPU render (about 80–120 ms under that load), not measured stage by stage here.
-- **Not yet (stage 2)**: the readback of only the dirty tiles; the loupe uploading only them (at rest it gets a Lanczos-fitted copy, converted for the display, so the fit and the conversion must follow the tiles first; `lightcraft_gpu::take_frame_note` already says which output a render started from and what it changed); dirty tiles through masks that read the image, red eye and the LaMa layer; the CPU renderer; drag drafts.
+- **The loupe job after the render (stage 2).** The GPU renderer says which output a render started from and which rectangles changed (`lightcraft_gpu::take_frame_note`). The loupe job keeps, with the view's stages and under that render's number (`lightcraft_gpu::keep_host`), what it made of it on the host: the image converted for the display, its sRGB twin (view cache and histogram) and the image fitted to the drawn size. The next job converts and fits only the changed rectangles over copies of those (`engine::media::dirty`): the conversions map each pixel on its own and the Lanczos fit gives each output pixel from fixed taps in a fixed order, so the bits are the whole job's. The result says which rectangles of its picture changed (`RenderResult::changed`), and the window uploads only those into the loupe texture (`set_partial`) when the texture shows the picture they changed from.
+- **Measured, stage 2** (same raw, 10 Heal clicks, the three builds run back to back at load 12–15, medians): release → result 116.5 ms on `custom`, 92 ms after stage 1, 84.5 ms after stage 2; the Lanczos fit 15.7 → 3.2 ms; the worker job 74.7 → 52.1 → 42.4 ms. Step by step at load 28–46 before stage 2: [comment on #111](https://github.com/techneissa/lightcraft/issues/111#issuecomment-6727983986). What is left: the GPU call (~30 ms, of which spots and noise reduction ~11 ms, mostly whole-buffer copies) and two frame waits (~16 ms from the click to the job, up to 16 ms from the job to the screen).
+- `LIGHTCRAFT_PROFILE=1` also prints the job's steps (`job:`), the worker's (`worker:`), and the UI's (`ui: spot.add`, `submitted`, `texture set … whole / N rectangles`), with times since start to follow one edit through the threads.
+- **Not yet**: reading back only the dirty tiles; the histogram patched instead of counted again; the frame waits; dirty tiles through masks that read the image, red eye and the LaMa layer; the CPU renderer; drag drafts.
 
 Issue #111.
 
@@ -22,7 +25,7 @@ Issue #111.
 
 ## Own files
 
-`crates/gpu/src/dirty.rs`, `crates/gpu/src/dirty/cut.rs`, `crates/gpu/src/wgsl/dirty.wgsl`, `crates/gpu/tests/it/dirty_render.rs`
+`crates/gpu/src/dirty.rs`, `crates/gpu/src/dirty/cut.rs`, `crates/gpu/src/wgsl/dirty.wgsl`, `crates/gpu/tests/it/dirty_render.rs`, `crates/engine/src/media/dirty.rs`, `crates/engine/src/media/dirty_tests.rs`
 
 ## Hooks in official files
 
@@ -30,7 +33,10 @@ Issue #111.
 - `crates/gpu/src/spots_keep.rs`: `spots` also returns the boxes it rewrote.
 - `crates/gpu/src/wgsl/blur.wgsl` (`box_v`: P[5], the first row), `wgsl/finish.wgsl` and `params.rs` (`X0`), `ctx.rs` (the `rect_copy` module).
 - `crates/gpu/src/lib.rs`: `mod dirty`, its exports, the frame note cleared after a failed render.
-- `crates/gpu/tests/it/main.rs`: `mod dirty_render`.
+- `crates/gpu/tests/it/main.rs`: `mod dirty_render`. `crates/gpu/src/render.rs` also: `GpuStages::host` (the job's kept images), cleared with the rest.
+- `crates/engine/src/media/render.rs`: `RenderResult::changed`; the loupe job converts and fits through `dirty::Patch` and keeps what it made; timing lines. `media.rs`: `pub mod dirty`. `display.rs`: `histogram_sample` is `pub(crate)`.
+- `changed: None` in every other `RenderResult` literal: `crates/engine/src/media/{render,quick}.rs`, `crates/engine/src/slide_title.rs`, `crates/ui-egui/src/render.rs` (tests), `apps/lightcraft-web/src/workers.rs`.
+- `crates/ui-egui/src/render.rs`: `Renderer::shown_frames`, `upload` (whole or the changed rectangles), `sub_image`, `stamp`, timing lines. `panels/detail/retouch.rs`: a timing line around `spot.add`.
 
 ## Tests
 

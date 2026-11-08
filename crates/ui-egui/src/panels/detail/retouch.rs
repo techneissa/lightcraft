@@ -154,7 +154,11 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
         let params =
             json!({"mode": mode, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity});
+        let t_add = std::time::Instant::now();
         let _ = app.run("spot.add", crate::panels::right::with_fill(app, mode, params));
+        if lightcraft_pipeline::profiling() {
+            eprintln!("  ui: spot.add {:.1} ms (at {:.1})", t_add.elapsed().as_secs_f64() * 1e3, crate::render::stamp());
+        }
     }
 }
 
@@ -205,7 +209,11 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
             _ => "remove",
         };
         let params = json!({"mode": mode, "points": [[place.0, place.1]], "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity});
+        let t_add = std::time::Instant::now();
         let _ = app.run("spot.add", crate::panels::right::with_fill(app, mode, params));
+        if lightcraft_pipeline::profiling() {
+            eprintln!("  ui: spot.add {:.1} ms (at {:.1})", t_add.elapsed().as_secs_f64() * 1e3, crate::render::stamp());
+        }
         return true;
     }
     false

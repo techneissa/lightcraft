@@ -50,7 +50,7 @@ mod render;
 mod spots_keep;
 
 #[cfg(not(target_arch = "wasm32"))]
-pub use dirty::{FrameNote, TILE, take_frame_note, tiles_rendered};
+pub use dirty::{FrameNote, HostData, TILE, host_of, keep_host, take_frame_note, tiles_rendered};
 #[cfg(not(target_arch = "wasm32"))]
 pub use render::{DisplayFrame, GpuStages, Output, device_fits};
 /// The wgpu the renderer is built on (the same crate eframe uses: hosts hand over its device).

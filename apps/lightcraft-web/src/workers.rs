@@ -320,6 +320,7 @@ impl Workers {
                     display: None,
                     frame: None,
                     mask_planes: None,
+                    changed: None,
                 };
                 g.done.push((b.slot, r, 0.0));
             }
@@ -413,6 +414,7 @@ impl Workers {
                 display: None,
                 frame: None,
                 mask_planes: None,
+                changed: None,
             },
             ms,
         ));
@@ -469,6 +471,7 @@ impl RenderOffload for Workers {
                 display: None,
                 frame: None,
                 mask_planes: None,
+                changed: None,
             };
             g.done.push((slot, r, 0.0));
             return None;

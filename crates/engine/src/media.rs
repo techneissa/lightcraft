@@ -28,6 +28,7 @@ pub use lightcraft_raw::dcp::DcpProfile;
 use serde::{Deserialize, Serialize};
 
 mod cache;
+pub mod dirty;
 mod quick;
 mod render;
 mod session;
