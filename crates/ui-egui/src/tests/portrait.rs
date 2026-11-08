@@ -80,10 +80,11 @@ fn rect_of(h: &mut Headless, id: &str) -> Option<[f64; 4]> {
     r["result"].as_array().into_iter().flatten().find(|w| w["id"] == id).and_then(|w| serde_json::from_value(w["rect"].clone()).ok())
 }
 
-/// The face picker is a card at the top-right of the photo: it picks faces, folds into a button (remembered),
-/// stays put while the photo zooms, and hides with the tool overlay.
+/// The face picker sits at the image view's top-right corner, a fixed margin from its edges: the same place for
+/// photos of other shapes and at any zoom. It picks faces, folds into the overflow button there (remembered), and
+/// hides with the tool overlay.
 #[test]
-fn the_face_picker_on_the_photo_picks_folds_and_hides() {
+fn the_face_picker_keeps_to_the_views_corner_picks_folds_and_hides() {
     let mut session = lightcraft_engine::Session::with_demo();
     session.retouch_faces.set_provider(Arc::new(TwoFaces));
     let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
@@ -91,46 +92,53 @@ fn the_face_picker_on_the_photo_picks_folds_and_hides() {
     assert_eq!(h.request("ui.set", json!({"view": "detail"}), T)["ok"], true);
     h.app.ui.right = crate::state::RightPanel::Edit;
     h.app.ui.open_sections = vec!["portrait".into()];
-    let photo = h.app.session.active().unwrap();
-    h.app.session.retouch_detect_now(photo, false).unwrap();
-    h.step();
-    h.step();
-    let image = rect_of(&mut h, "canvas:image").unwrap();
-    let card = rect_of(&mut h, "portrait:facesCard").expect("the picker is on the photo");
-    // top-right corner of the photo, inside it
-    assert!(card[0] + card[2] <= image[0] + image[2] && card[1] >= image[1], "{card:?} in {image:?}");
-    assert!(card[0] + card[2] > image[0] + image[2] - 40.0 && card[1] < image[1] + 40.0, "near the top-right corner: {card:?} {image:?}");
-    let ctx = h.view.ctx.clone();
-    click(&mut h, "portrait:face:0");
-    assert_eq!(picked(&ctx, photo), Some(0), "picked on the photo");
-    // zoomed in, the photo fills the view and the card keeps to the view's top-right corner
-    let r = h.request("engine.execute", json!({"command": "view.zoom100", "params": {}}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    for _ in 0..30 {
-        h.step();
-    }
-    let after = rect_of(&mut h, "portrait:facesCard").unwrap();
-    assert!(after[1] <= card[1] + 0.5 && after[0] + after[2] >= card[0] + card[2] - 0.5, "{after:?} {card:?}");
-    let panned = {
-        h.app.ui.pan = (0.2, 0.7);
+    let settle = |h: &mut Headless| {
         for _ in 0..30 {
             h.step();
         }
-        rect_of(&mut h, "portrait:facesCard").unwrap()
     };
-    assert_eq!(panned, after, "panning moves the photo, not the card");
-    // folds into one button, remembered in the saved state
-    click(&mut h, "portrait:faces");
+    let ids = h.app.session.visible_cloned();
+    let (wide, tall) = (ids[0], ids[1]);
+    // the second photo cropped tall: another shape on screen
+    let mut d = (*h.app.session.develop_of(tall).unwrap()).clone();
+    d.crop.geometry.rect = lightcraft_geom::Rect { x0: 0.35, y0: 0.0, x1: 0.6, y1: 1.0 };
+    h.app.session.set_develop(tall, d, "Crop").unwrap();
+    for id in [wide, tall] {
+        h.app.session.retouch_detect_now(id, false).unwrap();
+    }
+    let mut cards = Vec::new();
+    for id in [wide, tall] {
+        h.app.session.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+        settle(&mut h);
+        cards.push((rect_of(&mut h, "portrait:card").expect("the picker is on the loupe"), rect_of(&mut h, "canvas:image").unwrap()));
+    }
+    let r = h.request("engine.execute", json!({"command": "view.zoom100", "params": {}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    settle(&mut h);
+    let zoomed = rect_of(&mut h, "portrait:card").unwrap();
+    let canvas = h.app.canvas_rect.unwrap();
+    let corner = [f64::from(canvas.right()) - 12.0, f64::from(canvas.top()) + 12.0];
+    assert_ne!(cards[0].1[2] / cards[0].1[3], cards[1].1[2] / cards[1].1[3], "the photos have other shapes");
+    for card in [cards[0].0, cards[1].0, zoomed] {
+        assert!((card[0] + card[2] - corner[0]).abs() < 0.5 && (card[1] - corner[1]).abs() < 0.5, "{card:?} at {corner:?}");
+    }
+    let ctx = h.view.ctx.clone();
+    click(&mut h, "portrait:face:0");
+    assert_eq!(picked(&ctx, tall), Some(0), "picked on the loupe");
+    // folds into the overflow button at the same corner, remembered in the saved state; it opens again
+    click(&mut h, "portrait:more");
     assert!(h.app.ui.flyout_open(crate::panels::edit::portrait::FOLDED));
     assert!(rect_of(&mut h, "portrait:face:0").is_none(), "folded: no faces");
-    click(&mut h, "portrait:faces");
+    let folded = rect_of(&mut h, "portrait:card").unwrap();
+    assert!((folded[0] + folded[2] - corner[0]).abs() < 0.5 && (folded[1] - corner[1]).abs() < 0.5 && folded[2] < 50.0, "{folded:?}");
+    click(&mut h, "portrait:more");
     assert!(rect_of(&mut h, "portrait:face:0").is_some());
     // the tool overlay off (Shift+H to Never) hides it; the section closed hides it
     h.app.ui.tool_overlay = crate::state::ToolOverlay::Never;
     h.step();
-    assert!(rect_of(&mut h, "portrait:facesCard").is_none());
+    assert!(rect_of(&mut h, "portrait:card").is_none());
     h.app.ui.tool_overlay = crate::state::ToolOverlay::Auto;
     h.app.ui.open_sections.clear();
     h.step();
-    assert!(rect_of(&mut h, "portrait:facesCard").is_none());
+    assert!(rect_of(&mut h, "portrait:card").is_none());
 }

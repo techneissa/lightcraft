@@ -20,6 +20,8 @@ mod geometry;
 mod info;
 mod look_ahead;
 mod masks;
+// fork: the people picker over the loupe (`fork/retouch-foundation.md`)
+pub(crate) mod people_picker;
 mod retouch;
 mod window;
 
@@ -359,7 +361,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // drawn and hit-tested above the loupe and its tools: clicks on it pan
     let nav = navigator(app, ui, canvas, img_rect, id);
     // the Portrait section's face picker, on the photo (fork, `fork/retouch-foundation.md`)
-    super::edit::portrait::overlay(app, ui, img_rect.intersect(canvas), id);
+    super::edit::portrait::overlay(app, ui, canvas, id);
     // what is on screen isn't the render on its way (a stand-in, the last render after an edit,
     // a magnified frame under its window): say so once that has lasted a moment
     let coming = render_coming(app, shown, &windows, ViewMode { split, show_before, split_view });

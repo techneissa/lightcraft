@@ -47,12 +47,16 @@ Nothing changes in a photo yet: every feature is an empty stub. What is there fo
 - **Portrait section** in the Edit panel (last, after Calibration): a line "Editing: All Faces" (or the picked face:
   its name, else "Face 2"), why there are no faces when there are none, and a collapsible row per feature, empty.
   Opening the section finds the photo's faces. Sliders in a feature's section change the picked face.
-- **Face picker on the photo** (`portrait/overlay.rs`), while the Portrait section is open: a semi-opaque dark card
-  at the top-right corner of the photo on screen with All and each face as a round thumbnail (its name on hover),
-  the picked one ringed. Its button folds it into a small faces button and back; folded or not is kept in the saved
-  `openFlyouts` (`portrait.facesFolded`). It stays put on screen while the photo zooms and pans under it, takes its
-  own clicks, and hides with the tool overlay (View ▸ Tool Overlay ▸ Never, Shift+H) and in the full-screen
-  preview. The choice is per photo and not saved.
+- **Face picker on the loupe** (`portrait/overlay.rs`), while the Portrait section is open: the people picker
+  (`panels/detail/people_picker.rs`), a semi-opaque dark card at the image view's top-right corner, 12 points from
+  its edges: the same place for every photo, zoom and aspect ratio, below the "Camera preview" badge when that is
+  at the same corner. Row one: All and each face as a round thumbnail (its name on hover), the picked one ringed;
+  one at a time (a per-face slider writes one face's own settings). Row two, for Select People masks: a list of
+  parts (several with ⌘-click), shown only when a caller gives items; Portrait gives none yet. The card folds into
+  an overflow button ("⋯") at the same corner and opens from it; folded or not is kept in the saved
+  `openFlyouts` (`portrait.facesFolded`). Zooming and panning move the photo under it; it takes its own clicks and
+  hides with the tool overlay (View ▸ Tool Overlay ▸ Never, Shift+H) and in the full-screen preview. The choice
+  is per photo and not saved.
 
 Mac only, like every fork feature; the web build compiles it but finds no faces.
 
@@ -67,7 +71,8 @@ Mac only, like every fork feature; the web build compiles it but finds no faces.
 `tests/common/mod.rs`, `tests/foundation.rs`), `crates/develop/src/retouch.rs`, `crates/pipeline/src/retouch_step.rs`,
 `crates/engine/src/retouch_input.rs`, `crates/engine/src/retouch_input/tests.rs`, `crates/engine/src/cmd/retouch.rs`,
 `crates/ui-egui/src/panels/edit/portrait.rs`, `crates/ui-egui/src/panels/edit/portrait/<feature>.rs`,
-`crates/ui-egui/src/panels/edit/portrait/overlay.rs`,
+`crates/ui-egui/src/panels/edit/portrait/overlay.rs`, `crates/ui-egui/src/panels/detail/people_picker.rs` and its
+`people_picker/tests.rs`,
 `crates/ui-egui/src/tests/portrait.rs`, `crates/mcp/src/tests_retouch.rs`, `fork/retouch-foundation.md`,
 `fork/tests.d/retouch-foundation.txt`
 
@@ -90,7 +95,7 @@ Mac only, like every fork feature; the web build compiles it but finds no faces.
   the faces first); `src/media/source.rs` (`info_or` keeps the faces); `SourceInfo` literals in
   `src/files/load.rs` and `src/smart.rs`.
 - `crates/ui-egui/src/panels/edit.rs` (`mod portrait`, the section drawn after Calibration),
-  `src/panels/detail.rs` (the face picker drawn over the photo, after the navigator), `src/menus/ui_commands.rs`
+  `src/panels/detail.rs` (`mod people_picker`; the face picker drawn over the view, after the navigator), `src/menus/ui_commands.rs`
   (`section.portrait`), `src/tests.rs` (`mod portrait`).
 - `crates/mcp/src/lib.rs` (`mod tests_retouch`).
 
@@ -115,8 +120,9 @@ block through JSON, the sidecar (also rewritten by another app), the catalog, co
 own settings following its person when the faces come back in another order, and its face through a rotation; the
 default copy and Auto Sync leaving Portrait alone; a background export finding faces when it runs, not when it is
 set up; a missing model not kept as a failure; the face cache forgetting the photo used least recently; MCP reading and setting a value; the
-Portrait section's rows; the face picker on the photo picking, folding, staying put through zoom and pan, and
-hiding with the tool overlay; no panic with no faces, 50 faces, a failing provider or a 1 × 1 photo.
+Portrait section's rows; the face picker keeping to the view's corner for photos of other shapes and at 100 %,
+picking, folding into the overflow button and hiding with the tool overlay; the picker's parts row (⌘-click
+multi-select, with a dummy list) and its place below the camera-preview badge; no panic with no faces, 50 faces, a failing provider or a 1 × 1 photo.
 No test needs a model: the engine and UI tests install a fake provider.
 
 ## Parity rows
