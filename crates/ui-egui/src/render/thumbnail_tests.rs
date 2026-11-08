@@ -1796,13 +1796,8 @@ fn a_running_stand_in_the_loupe_waits_for_keeps_its_slot() {
     let first = Arc::new(std::sync::Mutex::new(()));
     let later = Arc::new(std::sync::Mutex::new(()));
     let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-    let mut s = Session::new();
+    let s = Session::new();
     let (f, l, c) = (first.clone(), later.clone(), calls.clone());
-    s.media.preview_loader = Some(Arc::new(move |_: &str, _| {
-        let gate = if c.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 { &f } else { &l };
-        drop(gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
-        Some(lightcraft_raster::Rgba8 { width: 4, height: 4, data: vec![[200, 100, 50, 255]; 16] })
-    }));
     let raw = |id: u64| {
         let mut p = Photo::new(PhotoId(id), Source::File { path: format!("r{id}.cr3") }, &format!("r{id}.cr3"), "CR3", 6000, 4000, "2026-01-01");
         p.kind = lightcraft_catalog::MediaKind::Raw;
@@ -1810,6 +1805,13 @@ fn a_running_stand_in_the_loupe_waits_for_keeps_its_slot() {
         p
     };
     let (mut app, _, ctx) = fixture_with(s, raw(1));
+    // fork: the stand-in made ahead is the raw's thumbnail render, never the camera JPEG (fork/memory-redraws.md),
+    // so the file read is the one held back
+    app.session.media.file_loader = Some(Arc::new(move |_: &str, _, _, _| {
+        let gate = if c.fetch_add(1, std::sync::atomic::Ordering::SeqCst) == 0 { &f } else { &l };
+        drop(gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner));
+        Ok((lightcraft_raster::Rgb32f::new(8, 8), Default::default()))
+    }));
     for id in 2..=3 {
         app.session.catalog.apply(Op::AddPhoto { photo: Box::new(raw(id)) }).unwrap();
     }
@@ -1885,8 +1887,9 @@ fn a_stand_in_made_ahead_shows_after_the_loupes_own_request_failed() {
 #[test]
 fn a_stand_in_made_ahead_for_a_smaller_loupe_is_not_taken_over() {
     let (mut app, ctx) = raw_loupe(2);
-    let small = quick(&mut app, 2, 32);
-    let large = quick(&mut app, 2, 64);
+    // fork: only a stand-in with the camera JPEG has a size (the look-ahead's own has none: fork/memory-redraws.md)
+    let small = app.session.quick_view_job(PhotoId(2), 32, true, true).unwrap();
+    let large = app.session.quick_view_job(PhotoId(2), 64, true, true).unwrap();
     assert_eq!(small.key, large.key, "the same stand-in, at another size");
     app.renderer.look_ahead(vec![small], 96);
     assert_eq!(app.renderer.pool.run_inline(1), 1);
