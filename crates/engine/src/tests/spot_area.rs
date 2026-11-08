@@ -286,3 +286,16 @@ fn app_clicks_queue_and_failures_come_back_as_messages() {
     assert!(spots(&s).is_empty());
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// Given a spot already over the object, the next shape is measured on the photo, not on the filled-in pixels (a ⇧-click
+// that refines an object spot came out as a blocky shape before)
+#[test]
+fn a_shape_is_measured_without_the_spots_over_it() {
+    let mut s = session();
+    let seg = serde_json::to_value(box_seg([0.3, 0.3, 0.6, 0.6])).unwrap();
+    s.execute("mask.add", &json!({"kind": "object", "seg": seg})).unwrap();
+    s.execute("spot.fromMask", &json!({"fill": "classic"})).unwrap();
+    s.execute("spot.fromMask", &json!({"fill": "classic"})).unwrap();
+    let all = spots(&s);
+    assert_eq!(all[0].area, all[1].area, "the same mask, the same shape, whatever spots the photo has");
+}

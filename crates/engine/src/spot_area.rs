@@ -85,6 +85,9 @@ impl Session {
     pub(crate) fn mask_spot_area(&mut self, id: PhotoId, d: &DevelopSettings, mid: u32, reach: Option<&Reach>) -> Result<SegMask, String> {
         let src = self.source_now(id, SourceLevel::Preview)?;
         let info = self.source_info(id);
+        // on the photo without its spots: the mask's edges follow the photo's, and a spot already over the object
+        // (the one a further click changes) would hand it the filled-in pixels instead
+        let d = &DevelopSettings { spots: Vec::new(), ..d.clone() };
         let req = lightcraft_pipeline::RenderRequest { apply_crop: false, ..lightcraft_pipeline::RenderRequest::fit(MEASURE_EDGE, MEASURE_EDGE) };
         let out = lightcraft_pipeline::mask_planes(&src, &info, d, &req, None, &PlanesAsk { want: MaskWant::One(mid), known: None });
         let plane = out.planes.and_then(|p| p.into_iter().find(|(i, _)| *i == mid).map(|(_, p)| p)).ok_or("the mask selects nothing to remove")?;
