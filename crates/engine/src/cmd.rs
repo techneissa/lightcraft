@@ -50,6 +50,7 @@ mod merge;
 pub mod metadata;
 pub mod missing;
 mod organize;
+pub(crate) mod parsing;
 mod prefs;
 mod preset_files;
 pub mod previews;
@@ -175,6 +176,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(spot_rows::specs());
         v.extend(lama::specs());
         v.extend(learn::specs());
+        v.extend(parsing::specs());
         v.extend(organize::specs());
         v.extend(keywords::specs());
         v.extend(manage::specs());

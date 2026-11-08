@@ -53,6 +53,7 @@ lightcraft-heif = { path = "crates/heif" }
 lightcraft-segment = { path = "crates/segment" }
 lightcraft-reflections = { path = "crates/reflections" }
 lightcraft-birefnet = { path = "crates/birefnet" }
+lightcraft-parsing = { path = "crates/parsing" }
 lightcraft-geocode = { path = "crates/geocode" }
 lightcraft-slideshow = { path = "crates/slideshow" }
 lightcraft-testkit = { path = "crates/testkit" }
