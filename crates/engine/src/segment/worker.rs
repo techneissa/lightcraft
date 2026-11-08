@@ -47,13 +47,15 @@ pub enum Kind {
     /// Subject, Sky or Background: like `Text`, with the looser score ([`CONCEPT_THRESHOLD`]); `true`: only the main
     /// subject's instances (Subject and Background).
     Concept(String, bool),
-    /// Subject or Background by BiRefNet (fork feature, issue #48): `combined` lets SAM 3 (asked for `text`; `main`:
-    /// the main subject's instances only) decide what the subject is and BiRefNet draw its edge.
+    /// Subject or Background by BiRefNet (fork feature, issue #48): `model` says whether SAM 3 (asked for `text`;
+    /// `main`: the main subject's instances only), BiRefNet (from `dir`) or both make it; `matting` redraws its edge with
+    /// BiRefNet-matting (`fork/hair-edges.md`).
     BiRefNet {
-        combined: bool,
+        model: crate::segment::birefnet::SelectionModel,
         text: String,
         main: bool,
         dir: PathBuf,
+        matting: Option<crate::hair_edges::HairEdges>,
     },
     /// A zoomed-in pass over `region` (normalized) of the photo, rendered by the job's `render`.
     Detail {
@@ -528,8 +530,8 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
         return Err(Failure::Cancelled);
     }
     // BiRefNet runs here, whatever worker SAM 3 would use
-    if let Kind::BiRefNet { combined, text, main, dir } = job.kind.clone() {
-        return birefnet::run(state, shared, job, placement, &birefnet::Request { combined, text: &text, main, dir: &dir });
+    if let Kind::BiRefNet { model, text, main, dir, matting } = job.kind.clone() {
+        return birefnet::run(state, shared, job, placement, &birefnet::Request { model, text: &text, main, dir: &dir, matting: matting.as_ref() });
     }
     let remote_target = job.remote.clone().or_else(remote::configured);
     if let Some(endpoint) = remote_target {

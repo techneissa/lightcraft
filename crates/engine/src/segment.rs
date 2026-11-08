@@ -17,7 +17,7 @@
 
 pub mod birefnet;
 #[cfg(feature = "sam")]
-mod download;
+pub(crate) mod download;
 pub(crate) mod request;
 #[cfg(feature = "sam")]
 mod worker;
@@ -582,7 +582,7 @@ impl Session {
     ) -> Result<worker::Job, String> {
         // (BiRefNet alone needs no SAM 3: its job carries its own folder)
         let dir = match &kind {
-            worker::Kind::BiRefNet { combined: false, dir, .. } => dir.clone(),
+            worker::Kind::BiRefNet { model: birefnet::SelectionModel::BiRefNet, dir, .. } => dir.clone(),
             _ => self.segmenter.model_dir()?,
         };
         // old masks go onto the photo first: the selection that comes back is in its coordinates

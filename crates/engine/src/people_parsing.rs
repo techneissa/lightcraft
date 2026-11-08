@@ -133,6 +133,8 @@ struct Inner {
     watcher: AtomicBool,
     runs: std::sync::atomic::AtomicUsize,
     message: Mutex<Option<String>>,
+    /// BiRefNet-matting edges for Entire Person and Background (`fork/hair-edges.md`), when the session has them.
+    hair_edges: Mutex<Option<crate::hair_edges::HairEdges>>,
 }
 
 /// The people parsing of a session. Cheap to clone; every clone is the same.
@@ -169,8 +171,21 @@ impl PeopleParsing {
                 watcher: AtomicBool::new(false),
                 runs: std::sync::atomic::AtomicUsize::new(0),
                 message: Mutex::new(None),
+                hair_edges: Mutex::new(None),
             }),
         }
+    }
+
+    /// Draw Entire Person and Background edges with `edges` when its People edge is BiRefNet Matting.
+    pub fn with_hair_edges(self, edges: crate::hair_edges::HairEdges) -> Self {
+        *lock(&self.inner.hair_edges) = Some(edges);
+        self
+    }
+
+    /// The hair edges to draw parses with now, if BiRefNet Matting is chosen for people (and installed).
+    fn matting(&self) -> Option<crate::hair_edges::HairEdges> {
+        use crate::hair_edges::{Edge, EdgeKind};
+        lock(&self.inner.hair_edges).clone().filter(|e| e.edge(EdgeKind::People) == Edge::Matting)
     }
 
     /// Use these folders: `models` (each model in its own folder under it), `cache` (parse files), `choice` (the file
@@ -282,7 +297,13 @@ impl PeopleParsing {
     /// the same picture) has ended; without, it returns [`Outcome::Running`].
     pub fn parse(&self, img: RgbImage, hints: Vec<FaceHint>, wait: bool) -> Outcome {
         let set = self.model_set();
-        let key = cache::key(&img, &hints, &set.version());
+        let matting = self.matting();
+        // (a parse with matting edges is its own version, so switching the edge never reads the other's file)
+        let version = match &matting {
+            Some(_) => format!("{}+{}", set.version(), crate::hair_edges::VERSION),
+            None => set.version(),
+        };
+        let key = cache::key(&img, &hints, &version);
         if let Some(p) = self.remembered(&key).or_else(|| self.filed(&key)) {
             self.remember(&key, p.clone());
             return Outcome::Ready { parsing: p, cached: true };
@@ -304,7 +325,7 @@ impl PeopleParsing {
                     let flag = Arc::new(AtomicBool::new(false));
                     jobs.map.insert(key.clone(), Job::Running(flag.clone()));
                     drop(jobs);
-                    if let Err(e) = self.spawn(key.clone(), set, models, img, hints, flag) {
+                    if let Err(e) = self.spawn(key.clone(), set, models, (img, hints), matting, flag) {
                         lock(&self.inner.jobs).finish(key.clone(), Err(e.clone()));
                         self.inner.done.notify_all();
                         return Outcome::Failed(e);
@@ -351,7 +372,15 @@ impl PeopleParsing {
         lock(&self.inner.jobs).finished_kept()
     }
 
-    fn spawn(&self, key: String, set: ModelSet, models: PathBuf, img: RgbImage, hints: Vec<FaceHint>, flag: Arc<AtomicBool>) -> Result<(), String> {
+    fn spawn(
+        &self,
+        key: String,
+        set: ModelSet,
+        models: PathBuf,
+        (img, hints): (RgbImage, Vec<FaceHint>),
+        matting: Option<crate::hair_edges::HairEdges>,
+        flag: Arc<AtomicBool>,
+    ) -> Result<(), String> {
         let row = self.inner.activity.start("parsing", "Finding people parts", Cancel::Flag(flag.clone()));
         row.detail(set.label());
         let this = self.clone();
@@ -361,7 +390,13 @@ impl PeopleParsing {
                 // the row goes when the thread ends, however it ends
                 let _row = row;
                 let cancelled = || flag.load(Ordering::Relaxed) || lightcraft_gpu::shutting_down();
-                let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| this.run(set, &models, &img, &hints, &cancelled)));
+                let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    let p = this.run(set, &models, &img, &hints, &cancelled)?;
+                    match &matting {
+                        Some(edges) => hair_edged(edges, p, &img, &flag),
+                        None => Ok(p),
+                    }
+                }));
                 let result = match ran {
                     Ok(Ok(p)) => {
                         let p = Arc::new(p);
@@ -455,6 +490,16 @@ impl PeopleParsing {
     }
 }
 
+/// `p` with its Entire Person edges drawn by BiRefNet Matting from `img` (the picture it was parsed from).
+fn hair_edged(edges: &crate::hair_edges::HairEdges, mut p: Parsing, img: &RgbImage, cancel: &Arc<AtomicBool>) -> Result<Parsing, String> {
+    if p.people.is_empty() {
+        return Ok(p);
+    }
+    let matte = edges.matte(&img.data, img.width, img.height, cancel).map_err(|e| format!("hair edges: {e}"))?;
+    crate::hair_edges::people::refine(&mut p, &matte);
+    Ok(p)
+}
+
 fn read_choice(path: &Path) -> Option<ModelSet> {
     let text = std::fs::read_to_string(path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
@@ -479,6 +524,9 @@ impl crate::Session {
             crate::config::cache_dir().map(|d| d.join("people-parsing")),
             crate::config::config_dir().map(|d| d.join("parsing-model.json")),
         );
+        // (the hair edges share the models folder; `fork/hair-edges.md`)
+        let models = std::env::var_os("LIGHTCRAFT_BIREFNET_DIR").filter(|v| !v.is_empty()).map(PathBuf::from).or_else(default_models_dir);
+        self.hair_edges.set_paths(models, crate::config::config_dir().map(|d| d.join(crate::hair_edges::CHOICE_FILE)));
         self
     }
 }

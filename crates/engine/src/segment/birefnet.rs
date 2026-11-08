@@ -63,6 +63,8 @@ impl SelectionModel {
 pub fn label_of(model: Option<&str>) -> String {
     match model {
         None => SelectionModel::Sam3.label().to_string(),
+        // (an edge redrawn by BiRefNet-matting: `fork/hair-edges.md`)
+        Some(id) if id.ends_with("+matting") => format!("{}, BiRefNet Matting Edges", label_of(id.strip_suffix("+matting").filter(|b| *b != "sam3"))),
         Some(id) => SelectionModel::parse(id).map_or_else(|| id.to_string(), |m| m.label().to_string()),
     }
 }
@@ -271,17 +273,35 @@ impl crate::Session {
     pub(super) fn concept_kind(&self, concept: &crate::cmd::concepts::Concept) -> Result<(super::worker::Kind, SelectionModel), String> {
         let model = self.segmenter.concept_model(concept.kind);
         let text = concept.text.trim().to_string();
-        let kind = if model.uses_birefnet() {
-            let dir = self.segmenter.birefnet_dir().filter(|d| lightcraft_birefnet::is_model_dir(d)).ok_or("The BiRefNet model is not installed")?;
+        let matting = self.subject_matting(concept.kind, model);
+        let kind = if model.uses_birefnet() || matting.is_some() {
+            let dir = match model.uses_birefnet() {
+                true => {
+                    self.segmenter.birefnet_dir().filter(|d| lightcraft_birefnet::is_model_dir(d)).ok_or("The BiRefNet model is not installed")?
+                }
+                false => PathBuf::new(),
+            };
             if model.uses_sam3() {
                 self.segmenter.model_dir()?;
             }
-            super::worker::Kind::BiRefNet { combined: model.uses_sam3(), text, main: concept.main_only, dir }
+            super::worker::Kind::BiRefNet { model, text, main: concept.main_only, dir, matting }
         } else {
             self.segmenter.model_dir()?;
             super::worker::Kind::Concept(text, concept.main_only)
         };
         Ok((kind, model))
+    }
+}
+
+#[cfg(feature = "sam")]
+impl crate::Session {
+    /// The hair edges a new `kind` part made by `model` gets (`fork/hair-edges.md`): BiRefNet Matting when it is the
+    /// Subject edge and installed, for Subject and Background only. SAM 3 must run on this Mac for it (a remote worker
+    /// returns masks, not the model).
+    pub(crate) fn subject_matting(&self, kind: &str, model: SelectionModel) -> Option<crate::hair_edges::HairEdges> {
+        use crate::hair_edges::{Edge, EdgeKind};
+        let local = !model.uses_sam3() || (self.segmenter.installed() && self.segmenter.remote_endpoint().is_none());
+        (kind != "sky" && local && self.hair_edges.edge(EdgeKind::Subject) == Edge::Matting).then(|| self.hair_edges.clone())
     }
 }
 

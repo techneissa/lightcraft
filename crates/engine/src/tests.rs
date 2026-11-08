@@ -38,6 +38,7 @@ mod find_removals;
 mod focus_scan;
 mod folders;
 mod forget_local;
+mod hair_edges;
 mod history_cursor;
 mod hold_view;
 mod ids_params;

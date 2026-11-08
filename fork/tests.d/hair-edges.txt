@@ -1,0 +1,2 @@
+cargo test -p lightcraft-engine --features sam --lib -- hair_edges people_parsing birefnet
+cargo test -p lightcraft-ui-egui --features lightcraft-engine/sam --lib -- hair_edges

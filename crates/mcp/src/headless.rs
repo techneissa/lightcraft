@@ -37,7 +37,14 @@ impl Default for Headless {
             .with_system_clock()
             .with_default_face_models()
             .with_default_lens_database();
-        Self::new(session.with_default_sam3_model().with_default_lama_model().with_default_learn().with_default_parsing_models().with_default_slide_templates())
+        Self::new(
+            session
+                .with_default_sam3_model()
+                .with_default_lama_model()
+                .with_default_learn()
+                .with_default_parsing_models()
+                .with_default_slide_templates(),
+        )
     }
 }
 
@@ -50,7 +57,14 @@ impl Headless {
     pub fn demo() -> Self {
         let session =
             Session::with_demo().with_fs().with_default_denoise_models().with_default_map_cache().with_system_clock().with_default_face_models();
-        Self::new(session.with_default_sam3_model().with_default_lama_model().with_default_learn().with_default_parsing_models().with_default_slide_templates())
+        Self::new(
+            session
+                .with_default_sam3_model()
+                .with_default_lama_model()
+                .with_default_learn()
+                .with_default_parsing_models()
+                .with_default_slide_templates(),
+        )
     }
 
     fn photo_or_active(&self, p: &Value) -> Result<PhotoId, String> {
