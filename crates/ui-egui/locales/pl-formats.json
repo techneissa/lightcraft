@@ -340,5 +340,10 @@
   "Deleted {n} map tiles": "Usunięte kafelki mapy: {n}",
   "{size} MB in {n} tiles (limit {cap} MB)": "{size} MB w kafelkach: {n} (limit {cap} MB)",
   "Map tiles from {id}": "Kafelki mapy z {id}",
-  "In use: {url} (up to zoom {zoom})": "W użyciu: {url} (do powiększenia {zoom})"
+  "In use: {url} (up to zoom {zoom})": "W użyciu: {url} (do powiększenia {zoom})",
+  "Bring photos in with File › Import Photos… ({keys}).": "Zdjęcia importujesz przez Plik › Importuj zdjęcia… ({keys}).",
+  "View › Detail View ({keys}).": "Widok › Widok szczegółów ({keys}).",
+  "File › Export… · File › Print… ({keys}).": "Plik › Eksportuj… · Plik › Drukuj… ({keys}).",
+  "{n} folder{} could not be read": "Nie udało się odczytać folderów: {n}{:.0}",
+  "{n} file{} skipped (not a supported photo type)": "Pominięte pliki (nieobsługiwany typ zdjęcia): {n}{:.0}"
 }
