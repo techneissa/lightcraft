@@ -234,3 +234,70 @@ fn hiding_a_spot_redraws_only_the_spots_drawn_over_it() {
     s.spots[4].hidden = false;
     assert_eq!(edit(&cache, &src, &s), (2, true), "shown again: it and the spot drawn over it");
 }
+
+/// Review of #96 (F1): the Optics eye switches defringe off where it runs, before the spots. With only Defringe set,
+/// toggling the eye kept the image before the spots (and with no spot edit the whole stage): defringe stayed on, or
+/// off, outside what an edit redrew.
+#[test]
+fn the_optics_eye_redraws_the_image_under_the_spots() {
+    let (src, cache) = (scene(), StageCache::default());
+    let mut s = DevelopSettings { spots: grid(10), ..Default::default() };
+    s.optics.defringe_purple_amount = 20.0;
+    s.optics.defringe_green_amount = 20.0;
+    s.optics.defringe_purple_hue_lo = 0.0;
+    s.optics.defringe_purple_hue_hi = 100.0;
+    s.optics.defringe_green_hue_lo = 0.0;
+    s.optics.defringe_green_hue_hi = 100.0;
+    let (info, req) = (SourceInfo::default(), RenderRequest::fit(480, 480));
+    let without = DevelopSettings { optics: Default::default(), ..s.clone() };
+    assert_ne!(render(&src, &info, &s, &req).image.data, render(&src, &info, &without, &req).image.data, "defringe changes the picture");
+    assert!(edit(&cache, &src, &s).1);
+    for on in [false, true] {
+        if on {
+            s.disabled_sections.retain(|x| x != "optics");
+        } else {
+            s.disabled_sections.push("optics".to_string());
+        }
+        assert!(edit(&cache, &src, &s).1, "the eye alone (on: {on})");
+        s.spots[3].opacity -= 10.0;
+        assert!(edit(&cache, &src, &s).1, "then a spot edit (on: {on})");
+    }
+}
+
+/// Review of #96 (F3): a view's kept spots stay under their byte cap, however long the strokes; past it a render draws
+/// more spots again and still gives what drawing every spot gives.
+#[test]
+fn kept_spots_stay_under_their_byte_cap() {
+    let src = scene();
+    // long strokes across the photo: each spot's boxes are most of the picture
+    let long = |i: usize| Spot {
+        mode: [SpotMode::Heal, SpotMode::Clone][i % 2],
+        points: (0..20).map(|k| Point::new(0.05 + 0.045 * k as f64, 0.1 + 0.04 * i as f64)).collect(),
+        size: 0.01,
+        source_offset: Some(Point::new(0.0, 0.02)),
+        ..Default::default()
+    };
+    let mut s = DevelopSettings { spots: (0..20).map(long).collect(), ..Default::default() };
+    // a cap of about three images of the largest size here: the boxes of twenty long strokes go past it
+    let cap = 480 * 320 * 12 * 3;
+    let cache = StageCache { spots: super::KeptStore::with_cap(cap), ..Default::default() };
+    let mut drawn = Vec::new();
+    for size in [480, 400, 300, 480] {
+        s.spots[size % 7].opacity -= 5.0;
+        let (info, req) = (SourceInfo::default(), RenderRequest::fit(size, size));
+        let before = spots_drawn();
+        let kept = render_cached(&src, &info, &s, &req, &cache).image;
+        drawn.push(spots_drawn() - before);
+        assert_eq!(kept.data, render(&src, &info, &s, &req).image.data, "{size}");
+        assert!(cache.spots.bytes() <= cap, "{} bytes kept, cap {cap}", cache.spots.bytes());
+    }
+    assert_eq!(drawn[3], 20, "the full size was forgotten to stay under the cap, so it drew every spot: {drawn:?}");
+    let store = super::KeptStore::<u8>::with_cap(250);
+    let a = Arc::new(Rgb32f::new(1, 1));
+    store.put(&a, 1, Some(Arc::new(1)), 100);
+    store.put(&a, 2, Some(Arc::new(2)), 100);
+    store.put(&a, 3, Some(Arc::new(3)), 100);
+    assert_eq!((store.get(&a, 1), store.bytes()), (None, 200), "the oldest size goes");
+    store.put(&a, 4, Some(Arc::new(4)), 300);
+    assert_eq!((store.get(&a, 4), store.bytes()), (None, 200), "one over the cap alone is not kept");
+}

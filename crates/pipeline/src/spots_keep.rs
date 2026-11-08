@@ -213,38 +213,50 @@ impl<I, P> Kept<I, P> {
 /// the full render after a drag still finds its spots.
 pub const KEPT_SIZES: usize = 3;
 
+/// Most bytes a view's kept spots take (its image after the spots and each spot's boxes, every size together). Past it
+/// the oldest size is forgotten, and a size that alone needs more is not kept: those renders draw every spot again.
+pub const KEPT_BYTES: usize = 384 << 20;
+
+type KeptEntry<T> = (std::sync::Weak<Rgb32f>, u64, Arc<T>, usize);
+
 /// A view's kept spots ([`Kept`], [`CpuKept`]) per output size, of the photo source they were drawn from: the last
-/// [`KEPT_SIZES`]. Apart from the view's stage cache, which holds two sizes: a drag's drafts would push the full size
-/// out, and the full render after every drag drew every spot again.
+/// [`KEPT_SIZES`], in at most [`KEPT_BYTES`]. Apart from the view's stage cache, which holds two sizes: a drag's drafts
+/// would push the full size out, and the full render after every drag drew every spot again.
 pub struct KeptStore<T> {
-    v: std::sync::Mutex<Vec<(std::sync::Weak<Rgb32f>, u64, Arc<T>)>>,
+    v: std::sync::Mutex<Vec<KeptEntry<T>>>,
+    cap: usize,
 }
 
 impl<T> Default for KeptStore<T> {
     fn default() -> Self {
-        Self { v: std::sync::Mutex::new(Vec::new()) }
+        Self::with_cap(KEPT_BYTES)
     }
 }
 
 impl<T> KeptStore<T> {
-    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<(std::sync::Weak<Rgb32f>, u64, Arc<T>)>> {
+    /// A store that keeps at most `cap` bytes.
+    pub fn with_cap(cap: usize) -> Self {
+        Self { v: std::sync::Mutex::new(Vec::new()), cap }
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<KeptEntry<T>>> {
         self.v.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
     /// What was kept for `src` at the size `geo` names ([`Plan::geo`]).
     pub fn get(&self, src: &Arc<Rgb32f>, geo: u64) -> Option<Arc<T>> {
-        self.lock().iter().find(|(s, g, _)| *g == geo && std::sync::Weak::ptr_eq(s, &Arc::downgrade(src))).map(|e| e.2.clone())
+        self.lock().iter().find(|(s, g, ..)| *g == geo && std::sync::Weak::ptr_eq(s, &Arc::downgrade(src))).map(|e| e.2.clone())
     }
 
-    /// Keep `kept` for `src` at `geo` (`None`: forget it), dropping the oldest size past [`KEPT_SIZES`] and anything of
-    /// a source that is gone.
-    pub fn put(&self, src: &Arc<Rgb32f>, geo: u64, kept: Option<Arc<T>>) {
+    /// Keep `kept` (`bytes` large) for `src` at `geo` (`None`: forget it), dropping anything of a source that is gone and
+    /// the oldest sizes past [`KEPT_SIZES`] or the byte cap. One that alone is over the cap is not kept.
+    pub fn put(&self, src: &Arc<Rgb32f>, geo: u64, kept: Option<Arc<T>>, bytes: usize) {
         let mut v = self.lock();
-        v.retain(|(s, g, _)| s.strong_count() > 0 && !(*g == geo && std::sync::Weak::ptr_eq(s, &Arc::downgrade(src))));
-        if let Some(k) = kept {
-            v.push((Arc::downgrade(src), geo, k));
+        v.retain(|(s, g, ..)| s.strong_count() > 0 && !(*g == geo && std::sync::Weak::ptr_eq(s, &Arc::downgrade(src))));
+        if let Some(k) = kept.filter(|_| bytes <= self.cap) {
+            v.push((Arc::downgrade(src), geo, k, bytes));
         }
-        while v.len() > KEPT_SIZES {
+        while v.len() > KEPT_SIZES || v.iter().map(|e| e.3).sum::<usize>() > self.cap {
             v.remove(0);
         }
     }
@@ -254,10 +266,19 @@ impl<T> KeptStore<T> {
         self.lock().clear();
     }
 
-    /// Each kept state, for counting its bytes.
-    pub fn each(&self, mut f: impl FnMut(&T)) {
-        self.lock().iter().for_each(|e| f(&e.2));
+    /// Bytes held.
+    pub fn bytes(&self) -> usize {
+        self.lock().iter().map(|e| e.3).sum()
     }
+}
+
+/// Which section toggles (eyes) the image before the spots depends on, beyond what [`DevelopSettings::effective`]
+/// already resets (Light, Color and Detail come back to their defaults when off, so their values say it): Optics switches
+/// defringe (and with Geometry the frame, part of [`Plan::geo`]) off where it is applied.
+///
+/// [`DevelopSettings::effective`]: lightcraft_develop::DevelopSettings::effective
+pub fn pre_spot_sections(s: &lightcraft_develop::DevelopSettings) -> [bool; 2] {
+    ["optics", "geometry"].map(|section| s.section_enabled(section))
 }
 
 /// Key of the image the Classic spots are drawn on: everything [`Plan::pre_nr_key`] holds but those spots and the
@@ -272,6 +293,7 @@ pub fn key(info: &SourceInfo, p: &Plan<'_>, done: &[bool]) -> u64 {
         learned_key(p),
         [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
         format!("{:?}", s.optics),
+        pre_spot_sections(s),
         crate::local_tone::enabled(info, s),
         learned,
         done,

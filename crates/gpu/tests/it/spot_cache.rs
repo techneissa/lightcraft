@@ -128,3 +128,34 @@ fn the_full_size_keeps_its_spots_through_a_drags_drafts_on_the_device() {
     s.spots[4].opacity = 60.0;
     assert_eq!(drawn(&s, 720), 1, "the full render after the drag draws the spot it changed");
 }
+
+/// Review of #96 (F1): with only Defringe set, the Optics eye changes the image under the spots on the device too.
+#[test]
+fn the_optics_eye_redraws_the_image_under_the_spots_on_the_device() {
+    if !gpu() {
+        return;
+    }
+    let src = scene(960, 640);
+    let (info, req) = (SourceInfo { raw: true, ..Default::default() }, RenderRequest::fit(720, 720));
+    let cache = StageCache::default();
+    let same = |s: &DevelopSettings| {
+        let kept = lightcraft_gpu::render(&src, &info, s, &req, Some(&cache)).expect("gpu").image;
+        kept == lightcraft_gpu::render(&src, &info, s, &req, None).expect("gpu").image
+    };
+    let mut s = DevelopSettings { spots: grid(12, 4), ..Default::default() };
+    s.optics.defringe_purple_amount = 20.0;
+    s.optics.defringe_green_amount = 20.0;
+    (s.optics.defringe_purple_hue_lo, s.optics.defringe_purple_hue_hi) = (0.0, 100.0);
+    (s.optics.defringe_green_hue_lo, s.optics.defringe_green_hue_hi) = (0.0, 100.0);
+    assert!(same(&s));
+    for on in [false, true] {
+        if on {
+            s.disabled_sections.retain(|x| x != "optics");
+        } else {
+            s.disabled_sections.push("optics".to_string());
+        }
+        assert!(same(&s), "the eye alone (on: {on})");
+        s.spots[3].opacity -= 10.0;
+        assert!(same(&s), "then a spot edit (on: {on})");
+    }
+}

@@ -406,7 +406,7 @@ impl StageCache {
             // (the alphas and brush planes, and the spots' patches: each held once by its cache)
             masks_bytes += e.masks.bytes();
         }
-        self.spots.each(|k| masks_bytes += k.bytes());
+        masks_bytes += self.spots.bytes();
         total + masks_bytes
     }
 
@@ -554,8 +554,9 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
         format!("{:?}", s.spots),
         format!("{eyes:?}"),
-        // defringe runs in this stage
+        // defringe runs in this stage (and stops when the Optics eye is off)
         format!("{:?}", s.optics),
+        spots_keep::pre_spot_sections(s),
         // and the local tone mapping
         local_tone::enabled(info, s),
         src_long,
@@ -743,7 +744,8 @@ fn render_impl(
             let mut img = if shared.is_some() { (*sampled).clone() } else { Arc::unwrap_or_clone(sampled.clone()) };
             if let Some((a, c)) = shared {
                 let kept = spots_keep::lin_cpu(&mut img, info, &plan, c.spots.get(a, geo).as_deref());
-                c.spots.put(a, geo, kept);
+                let bytes = kept.as_ref().map_or(0, |k| k.bytes());
+                c.spots.put(a, geo, kept, bytes);
             } else {
                 lin_cpu(&mut img, info, &plan);
             }

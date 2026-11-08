@@ -8,7 +8,8 @@ List: Remove, Heal, Clone, Content-Aware and LaMa spots redraw only what an edit
 - **What invalidates them**: a change before the spots (white balance, profile, defringe, the photo's crop or size) draws them all again; a change after them (tone, colour, masks, effects, sharpening, noise reduction) draws none.
 - **LaMa spots** are a layer of their own, before the white balance, with the same patches: a LaMa spot asks LaMa (and its cache) only when it is new or changed, or reads what a changed spot drew. A fill a drag's draft could not give is asked again by the full render.
 - **Content-Aware (PatchMatch)** spots fill only the spot an edit reaches.
-- **Three sizes per view** are kept (the full size and a drag's two draft sizes), apart from the stage cache's two, so the full render after a drag still redraws only the changed spot.
+- **Three sizes per view** are kept (the full size and a drag's two draft sizes), apart from the stage cache's two, so the full render after a drag still redraws only the changed spot They take at most 384 MB per view (`KEPT_BYTES`): past it the oldest size is forgotten and that render draws every spot again.
+- **What invalidates them** also includes the Optics and Geometry eyes (`pre_spot_sections`): with only Defringe set, the Optics eye used to leave the image under the spots as it was.
 - **The open photo's filmstrip thumbnail**, which every edit renders again, keeps its spots too (one photo at a time).
 - **Zoomed in**, a new spot keeps the sharp window on screen until the window with the spot arrives (it used to drop to the softer whole frame for a moment, so the photo seemed to render again after every spot). A change of mask overlay or soft proof still drops it at once.
 - **Painting**: a press held still adds no point to the stroke (it took one per frame, hundreds on a long press).

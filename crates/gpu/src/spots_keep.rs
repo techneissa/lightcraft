@@ -78,6 +78,11 @@ pub(crate) fn spots(
     (out, Some(Arc::new(Kept { key, post, drawn: new, patches, done: Vec::new() })))
 }
 
+/// Device bytes `k` holds: its image after the spots and each spot's boxes.
+pub(crate) fn bytes(k: &DeviceKept) -> usize {
+    (k.post.len + k.patches.iter().flatten().map(|p| p.before.len + p.after.len).sum::<usize>()) * 4
+}
+
 /// Draw spot `i` on `img`, keeping its box before and after.
 fn draw(cx: &mut Cx<'_>, img: &Buf, plan: &Plan<'_>, new: &[Option<keep::Drawn>], i: usize, patches: &mut [DevicePatch]) {
     let (Some(Some(d)), Some(spot)) = (new.get(i), plan.settings.spots.get(i)) else { return };

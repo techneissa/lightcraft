@@ -124,10 +124,7 @@ impl GpuStages {
             add(b);
         }
         self.alphas.each(&mut add);
-        self.spots.each(|k| {
-            add(&k.post);
-            patches += k.patches.iter().flatten().map(|p| (p.before.len + p.after.len) * 4).sum::<usize>();
-        });
+        patches += self.spots.bytes();
         total + patches
     }
 
@@ -761,8 +758,10 @@ pub fn render(
             let kept = stages.map(|c| (c.spots.get(src, plan.geo), c.spots_cpu.get(src, plan.geo))).unwrap_or_default();
             let (b, k) = linear(&mut cx, &sampled, info, &plan, &mut host, (kept.0.as_deref(), kept.1.as_deref()));
             if let Some(c) = stages {
-                c.spots.put(src, plan.geo, k.0);
-                c.spots_cpu.put(src, plan.geo, k.1);
+                let device = k.0.as_ref().map_or(0, |k| crate::spots_keep::bytes(k));
+                c.spots.put(src, plan.geo, k.0, device);
+                let host = k.1.as_ref().map_or(0, |k| k.bytes());
+                c.spots_cpu.put(src, plan.geo, k.1, host);
             }
             Arc::new(b)
         }
