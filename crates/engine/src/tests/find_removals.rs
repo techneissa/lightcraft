@@ -62,9 +62,13 @@ fn find_wires_lists_them_and_remove_all_is_one_undo_step() {
     let commits = s.commits();
     let r = s.execute("spot.removeCandidates", &json!({"all": true})).unwrap();
     let n = r["spots"].as_u64().unwrap() as usize;
-    assert!(n >= 2 && spots(&s).len() == n, "{r}");
+    assert!(n == 1 && spots(&s).len() == n, "{r}");
     assert_eq!(s.commits(), commits + 1, "one undo step");
-    assert!(spots(&s).iter().all(|sp| sp.mode == SpotMode::Fill && sp.source_offset.is_none()), "ordinary content-aware spots");
+    // one spot in the wire's shape, with no source (`fork/object-remove.md`)
+    assert!(
+        spots(&s).iter().all(|sp| sp.mode == SpotMode::Remove && sp.source_offset.is_none() && sp.area.as_ref().is_some_and(|a| a.kind == "wire")),
+        "a shaped spot"
+    );
     assert_eq!(s.active_spot, Some(0));
     assert!(s.execute("spot.candidates", &json!({})).unwrap()["candidates"].as_array().unwrap().is_empty(), "removed ones leave the list");
     // the wire is gone from the render

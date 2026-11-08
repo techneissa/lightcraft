@@ -290,7 +290,7 @@ impl FinishParams {
             shadow_tint: if calibration { (s.calibration.shadows_tint / 100.0) as f32 } else { 0.0 },
             tone: base_tone(s, info, peak),
             light: crate::light_v3::LightOps::new(s, info),
-            lut: crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32)),
+            lut: crate::residual_look::finish_lut(s, crate::lut::get(&s.profile.id).map(|l| (l, (s.profile.amount / 100.0).clamp(0.0, 2.0) as f32))),
             ops: ColorOps::new(s),
             curves: curve_luts(&s.curve),
             refine_sat: (s.curve.refine_saturation / 100.0).clamp(0.0, 1.0) as f32,
@@ -348,15 +348,20 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
     let model = match s.process.process() {
         // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
         Process::V1 | Process::V2 => SliderModel::Legacy,
-        // V3: Contrast, Whites and Blacks as strong on every path as on `ToneMap::hdr`; V4 keeps that
-        Process::V3 | Process::V4 => SliderModel::Unified,
+        // V3: Contrast, Whites and Blacks as strong on every path as on `ToneMap::hdr`; V4 and later keep that
+        Process::V3 | Process::V4 | Process::V5 | Process::V6 => SliderModel::Unified,
     };
+    // V5 and later: a raw's tone curve rolls off into white in stops, a camera curve past its last knot, the
+    // generic curve from half a stop below its white point instead of clipping (issue #1632)
+    let rolloff = s.process.process() >= Process::V5;
     // V4: on a raw's camera curve only Whites stays in the tone map; calibrated Contrast and
     // Blacks follow it ([`crate::light_v3`]). Other paths keep V3's Contrast and Blacks.
     let calibrated = crate::light_v3::applies(s, info);
     let (contrast, blacks) = if calibrated { (0.0, 0.0) } else { (l.contrast, l.blacks) };
     match info.camera_tone.as_ref().filter(|_| info.raw) {
+        Some(curve) if rolloff => ToneMap::camera_rolloff_hdr_with(curve, contrast, l.whites, blacks, peak, model),
         Some(curve) => ToneMap::camera_hdr_with(curve, contrast, l.whites, blacks, peak, model),
+        None if info.raw && rolloff => ToneMap::rolloff_hdr(l.contrast, l.whites, l.blacks, peak),
         None if info.raw => ToneMap::hdr(l.contrast, l.whites, l.blacks, peak),
         None => ToneMap::display_hdr_with(l.contrast, l.whites, l.blacks, peak, model, crate::tone::GREY),
     }

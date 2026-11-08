@@ -120,7 +120,7 @@ fn remove_all_uses_the_fill_it_is_given() {
     assert_eq!(s.execute("spot.candidates", &json!({})).unwrap()["candidates"].as_array().unwrap().len(), 1, "the found wire is still listed");
     let r = s.execute("spot.removeCandidates", &json!({"all": true, "fill": "lama"})).unwrap();
     assert_eq!(r["fill"], "lama");
-    assert!(!spots(&s).is_empty() && spots(&s).iter().all(|sp| sp.fill == SpotFill::Lama && sp.mode == SpotMode::Fill));
+    assert!(!spots(&s).is_empty() && spots(&s).iter().all(|sp| sp.fill == SpotFill::Lama && (sp.mode == SpotMode::Fill || sp.area.is_some())));
     // and without `fill`, Classic, as before
     let mut again = session_with_wire(&temp_dir("remove-all-classic"));
     again.execute("spot.findWires", &json!({})).unwrap();

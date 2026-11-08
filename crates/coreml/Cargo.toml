@@ -1,0 +1,23 @@
+[package]
+name = "lightcraft-coreml"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft coreml (L0): runs converted AI models through Apple's Core ML (Neural Engine, GPU, CPU). Allowed `unsafe` (the Objective-C calls), like lightcraft-macraw."
+
+# The workspace lints deny `unsafe_code`; only the `macos` module allows it (AGENTS.md, "isolated helper crate").
+[lints]
+workspace = true
+
+[dependencies]
+log = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# No `exception` feature: it compiles an Objective-C helper with `cc` (README.md).
+objc2 = { workspace = true }
+block2 = { version = "0.6", default-features = false, features = ["std"] }
+objc2-foundation = { workspace = true, features = ["NSString", "NSURL", "NSArray", "NSDictionary", "NSError", "NSValue", "NSSet", "NSEnumerator", "NSAutoreleasePool", "NSObject", "NSProcessInfo"] }
+objc2-core-ml = { version = "=0.3.2", default-features = false, features = ["std", "block2", "MLModel", "MLModel_MLModelCompilation", "MLModelConfiguration", "MLMultiArray", "MLFeatureValue", "MLFeatureProvider", "MLDictionaryFeatureProvider", "MLModelDescription", "MLFeatureDescription", "MLFeatureType"] }
+
+[dev-dependencies]
+lightcraft-testkit = { workspace = true }

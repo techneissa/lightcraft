@@ -166,6 +166,11 @@ fn show_sections(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         control(app, ui, &d, "profile.amount", true);
         ui.add_space(6.0);
     }
+    // Match Look's residual Look (fork): its Amount, while the photo has one
+    if !d.look.is_identity() {
+        control(app, ui, &d, "look.amount", true);
+        ui.add_space(6.0);
+    }
     // a raw carrying its own local tone mapping (Apple ProRAW's gain table map): off renders it as
     // Lightroom Classic does, on as the camera does
     if app.session.source_info(id).local_tone.is_some() {
@@ -357,6 +362,15 @@ fn show_sections(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                     slider_group_divider(ui);
                 }
                 control(app, ui, d, c, true);
+            }
+            // single outlier photosites, replaced in the raw mosaic (#1345): raws only
+            if app.session.catalog.photo(id).is_some_and(|p| p.develops_raw()) {
+                egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 4, bottom: 0 }).show(ui, |ui| {
+                    let mut on = d.detail.nr_outliers;
+                    if crate::dialogs::settings::check(ui, "detail.nrOutliers", &mut on, "Remove Hot Pixels") {
+                        let _ = app.run("develop.merge", json!({"settings": {"detail": {"nr_outliers": on}}, "label": "Remove Hot Pixels"}));
+                    }
+                });
             }
             ui.add_space(8.0);
         })

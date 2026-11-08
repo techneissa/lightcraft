@@ -57,6 +57,7 @@ fn a_middle_drag_pans_with_the_healing_brush_and_adds_no_spot() {
     let pan = h.app.ui.pan;
     let at = h.app.image_rect.expect("the photo is shown").center();
     drag(&mut h, PointerButton::Primary, at, at + vec2(40.0, 0.0));
+    assert!(h.settle_spot_sources(), "a spot's source search never answered");
     assert_eq!(spots(&h), 1, "a left drag paints a spot");
     assert_eq!(h.app.ui.pan, pan);
 }

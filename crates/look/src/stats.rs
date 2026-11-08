@@ -3,7 +3,7 @@
 //! lightness and colour of each of the colour mixer's eight hue bands. [`loss`] says how far two pictures' looks are
 //! apart; the fitter moves sliders to make it small.
 
-use lightcraft_develop::MIXER_HUES;
+use lightcraft_pipeline::residual_look;
 use lightcraft_raster::{Plane, Rgba8};
 
 /// Lightness quantiles measured (fractions of the pixels).
@@ -21,7 +21,7 @@ const MEASURE_PIXELS: usize = 1 << 20;
 /// balance (a warm 9500 K) still count, narrow enough that a saturated shirt does not.
 const NEUTRAL_CHROMA: f32 = 0.16;
 /// OkLab chroma that counts as fully colourful for the hue bands (below it a pixel is partly neutral).
-const BAND_CHROMA: f32 = 0.06;
+const BAND_CHROMA: f32 = residual_look::BAND_CHROMA;
 
 /// One hue band's share of the picture and its average colour.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -66,50 +66,13 @@ pub fn oklab_srgb8(p: [u8; 4]) -> [f32; 3] {
 
 /// HSV hue of an 8-bit pixel in degrees (the colour mixer's bands are placed on it), `None` for greys.
 fn hsv_hue(p: [u8; 4]) -> Option<f32> {
-    let (r, g, b) = (p[0] as f32, p[1] as f32, p[2] as f32);
-    let max = r.max(g).max(b);
-    let d = max - r.min(g).min(b);
-    if d < 1.0 {
-        return None;
-    }
-    let h = if max == r {
-        ((g - b) / d).rem_euclid(6.0)
-    } else if max == g {
-        (b - r) / d + 2.0
-    } else {
-        (r - g) / d + 4.0
-    };
-    Some(h * 60.0)
+    residual_look::hsv_hue([p[0], p[1], p[2]].map(|v| v as f32 / 255.0))
 }
 
-/// How much of hue `h` (degrees) belongs to each mixer band: a tent between neighbouring band centres.
-pub fn band_weights(h: f32) -> [f32; 8] {
-    let mut w = [0.0f32; 8];
-    let n = MIXER_HUES.len();
-    for i in 0..n {
-        let c0 = MIXER_HUES.get(i).copied().unwrap_or(0.0) as f32;
-        let c1 = MIXER_HUES.get((i + 1) % n).copied().unwrap_or(0.0) as f32;
-        let span = (c1 - c0).rem_euclid(360.0).max(1.0);
-        let t = (h - c0).rem_euclid(360.0) / span;
-        if t <= 1.0 {
-            if let Some(v) = w.get_mut(i) {
-                *v += 1.0 - t;
-            }
-            if let Some(v) = w.get_mut((i + 1) % n) {
-                *v += t;
-            }
-            break;
-        }
-    }
-    w
-}
+/// How much of hue `h` (degrees) belongs to each mixer band.
+pub use residual_look::band_weights;
 
-/// Shadow / midtone / highlight membership of lightness `l` (sums to 1).
-fn zones(l: f32) -> [f32; 3] {
-    let s = ((0.55 - l) / 0.35).clamp(0.0, 1.0);
-    let h = ((l - 0.55) / 0.35).clamp(0.0, 1.0);
-    [s, (1.0 - s - h).max(0.0), h]
-}
+use residual_look::zones;
 
 fn quantile(hist: &[f32], total: f32, q: f32, max: f32) -> f32 {
     let target = q * total;

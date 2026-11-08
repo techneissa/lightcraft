@@ -134,15 +134,11 @@ impl Encoder {
     /// The [`DIMS`] features of an sRGB photo (`rgb`: `width × height × 3` bytes). The photo is squashed to
     /// 224 × 224; any size from 1 × 1 up works.
     pub fn features(&self, width: usize, height: usize, rgb: &[u8]) -> Result<Vec<f32>> {
-        let pixels = crate::features::resample_rgb(width, height, rgb, INPUT, INPUT)?;
-        let mut planar = vec![0f32; 3 * INPUT * INPUT];
-        for (i, px) in pixels.as_chunks::<3>().0.iter().enumerate() {
-            for (c, v) in px.iter().enumerate() {
-                if let Some(slot) = planar.get_mut(c * INPUT * INPUT + i) {
-                    *slot = (v - MEAN[c]) / STD[c];
-                }
-            }
-        }
+        self.run(pixels(width, height, rgb)?)
+    }
+
+    /// The features of [`pixels`]' output.
+    pub fn run(&self, planar: Vec<f32>) -> Result<Vec<f32>> {
         let x = Tensor::from_vec(planar, (1, 3, INPUT, INPUT), &self.device)?;
         let x = self.patch.forward(&x)?.flatten_from(2)?.transpose(1, 2)?; // [1, 256, 384]
         let mut x = (Tensor::cat(&[&self.cls, &x], 1)?.broadcast_add(&self.pos))?;
@@ -152,11 +148,36 @@ impl Encoder {
         let x = self.norm.forward(&x)?;
         let cls = x.narrow(1, 0, 1)?.flatten_all()?;
         let mean = x.narrow(1, 1, GRID * GRID)?.mean(1)?.flatten_all()?;
-        let out = Tensor::cat(&[&cls, &mean], D::Minus1)?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
-        if out.len() != DIMS || out.iter().any(|v| !v.is_finite()) {
-            return Err(Error::Model("the encoder gave no usable features".into()));
+        checked(Tensor::cat(&[&cls, &mean], D::Minus1)?.to_dtype(DType::F32)?.to_vec1::<f32>()?)
+    }
+}
+
+/// What the encoder sees of an sRGB photo (`rgb`: `width × height × 3` bytes): squashed to 224 × 224, ImageNet
+/// normalised, planar `[1, 3, 224, 224]`. The same for candle and Core ML.
+pub fn pixels(width: usize, height: usize, rgb: &[u8]) -> Result<Vec<f32>> {
+    let pixels = crate::features::resample_rgb(width, height, rgb, INPUT, INPUT)?;
+    let mut planar = vec![0f32; 3 * INPUT * INPUT];
+    for (i, px) in pixels.as_chunks::<3>().0.iter().enumerate() {
+        for (c, v) in px.iter().enumerate() {
+            if let Some(slot) = planar.get_mut(c * INPUT * INPUT + i) {
+                *slot = (v - MEAN[c]) / STD[c];
+            }
         }
-        Ok(out)
+    }
+    Ok(planar)
+}
+
+/// `out` when it is [`DIMS`] finite numbers.
+pub(crate) fn checked(out: Vec<f32>) -> Result<Vec<f32>> {
+    if out.len() != DIMS || out.iter().any(|v| !v.is_finite()) {
+        return Err(Error::Model("the encoder gave no usable features".into()));
+    }
+    Ok(out)
+}
+
+impl crate::ImageFeatures for Encoder {
+    fn features(&self, width: usize, height: usize, rgb: &[u8]) -> Result<Vec<f32>> {
+        Encoder::features(self, width, height, rgb)
     }
 }
 

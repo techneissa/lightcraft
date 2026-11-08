@@ -277,13 +277,20 @@ pub(crate) fn eligible(info: &SourceInfo, plan: &Plan<'_>) -> bool {
 
 /// The kept linear image `old` with the tiles `spots` (where the image after the spots changed) and as far as noise
 /// reduction spreads them made again from `post` (the image after the spots, whole); with the tiles that changed.
-pub(crate) fn linear(cx: &mut Cx<'_>, post: &Buf, old: &Buf, plan: &Plan<'_>, spots: &Tiles) -> Option<(Buf, Tiles)> {
+pub(crate) fn linear(
+    cx: &mut Cx<'_>,
+    post: &Buf,
+    old: &Buf,
+    plan: &Plan<'_>,
+    spots: &Tiles,
+    noise: Option<&lightcraft_pipeline::nrc_joint::JointNoise>,
+) -> Option<(Buf, Tiles)> {
     let whole = (plan.w, plan.h);
     let t = spots.grow(cut::denoise_reach(plan));
     let out = cx.copy(old);
     let part = Part::whole(post, whole, 3);
     for r in t.rects() {
-        let v = cut::denoise(cx, &part, plan, &r)?;
+        let v = cut::denoise(cx, &part, plan, noise, &r)?;
         paste(cx, &v, &r, 3, &out, plan.w);
     }
     Some((out, t))

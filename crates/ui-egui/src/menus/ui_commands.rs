@@ -60,7 +60,6 @@ pub fn language_from_command(id: &str) -> Option<crate::i18n::Locale> {
 pub const UI_COMMANDS: &[UiCommand] = &[
     ("ui.dock", "Arrange Panel", None, ""),
     ("ui.dock.reset", "Reset Panel Layout", None, "Window"),
-    ("modelSetup.cancel", "Cancel Pending Photo Action", None, ""),
     ("view.photoGrid", "Photo Grid", None, "View"),
     ("view.squareGrid", "Square Grid", None, "View"),
     // G: Photo Grid ↔ Square Grid (from other views: the photo grid)
@@ -267,6 +266,13 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("reflection.instructions", "Model download instructions", None, ""),
     ("reflection.models", "Reflection Models", None, ""),
     ("reflection.status", "Reflection Status", None, ""),
+    // fork feature (fork/glare-highlights.md): {mode}, {area}, {threshold?, expand?, fill?}, {points, size?, erase?} |
+    // {clear}, {tool}
+    ("reflection.mode", "Reflection Mode", None, ""),
+    ("reflection.area", "Reflection Area", None, ""),
+    ("reflection.glare", "Glare Settings", None, ""),
+    ("reflection.paint", "Paint Glare", None, ""),
+    ("reflection.tool", "Reflection Tool", None, ""),
     // {ids?, app?, wait?, format?, colorSpace?, bitDepth?, dir?}: two or more photos, rendered with their
     // edits, become the layers of one new PhotoCraft document (the active photo on top)
     ("photo.openAsLayersInPhotocraft", "Open as Layers in PhotoCraft…", None, "Photo>Edit In"),

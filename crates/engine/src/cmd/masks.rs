@@ -167,7 +167,7 @@ fn ai_err(msg: impl Into<String>) -> crate::EngineError {
 
 /// A segmentation call: the model is checked first, so a missing one is [`crate::EngineError::ModelMissing`]
 /// (the segmenter's own errors are text).
-fn segment<T>(s: &mut Session, f: impl FnOnce(&mut Session) -> std::result::Result<T, String>) -> Result<T> {
+pub(super) fn segment<T>(s: &mut Session, f: impl FnOnce(&mut Session) -> std::result::Result<T, String>) -> Result<T> {
     s.segmenter.require_model()?;
     f(s).map_err(ai_err)
 }
@@ -930,7 +930,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Remove Spot",
             [],
             None,
-            "{mode?: remove|heal|clone|fill (content-aware), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby), fill?: classic|lama (default classic; for remove and fill spots; LaMa needs its model, else the spot shows the Classic fill)} — selects the new spot; returns {index}",
+            "{mode?: remove|heal|clone|fill (content-aware), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby), fill?: classic|lama (default classic; for remove and fill spots; LaMa needs its model, else the spot shows the Classic fill), background?: true (in the window: the best match is found on a worker and the spot is added with it a moment later, as its own undo step; returns {pending: true}; elsewhere the search runs at once)} — selects the new spot; returns {index}, or {pending: true} while earlier spots wait for their source",
             has_active,
             |s, p| {
                 let mode: SpotMode =
@@ -956,16 +956,26 @@ pub fn specs() -> Vec<CommandSpec> {
                     ..Default::default()
                 };
                 let id = s.active().ok_or_else(|| bad("spot.add", "no active photo"))?;
-                let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
-                if spot.source_offset.is_none() && spot.mode != SpotMode::Fill {
+                let dd = (*s.develop_of(id).unwrap_or_default()).clone();
+                let search = spot.source_offset.is_none() && spot.mode != SpotMode::Fill;
+                if super::spot_area::sourceless(&spot) {
+                    // LaMa rebuilds a Remove spot from its surroundings: it reads no source and shows no pin
+                    spot.source_offset = None;
+                } else if search && bool_or(p, "background", false) && s.spots_in_background() {
+                    // on a worker: the window never waits on the search; the spot comes with its source (`spot_source`)
+                    s.add_spot_when_found(id, dd, spot);
+                    let mut out = json!({"pending": true});
+                    describe(s, fill, &mut out);
+                    return Ok(out);
+                } else if search {
                     // resolve the automatic source now: it gets a pin and stays put at every size
                     spot.source_offset = pick_source(s, id, &dd, &spot, None);
                 }
-                dd.spots.push(spot);
-                let n = dd.spots.len();
-                s.set_develop(id, dd, "Remove")?;
-                s.active_spot = Some(n - 1);
-                let mut out = json!({"index": n - 1});
+                // (behind spots still waiting for their source, it waits its turn: they keep the order they were asked in)
+                let mut out = match s.add_spot_in_turn(id, spot)? {
+                    Some(i) => json!({"index": i}),
+                    None => json!({"pending": true}),
+                };
                 describe(s, fill, &mut out);
                 Ok(out)
             }
@@ -997,6 +1007,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     Some(v) => Some(v.as_str().and_then(SpotFill::from_name).ok_or_else(|| bad(c, "`fill` must be \"classic\" or \"lama\""))?),
                     None => None,
                 };
+                // (shaped spots, LaMa's missing source, the source a Classic Remove spot gets back: `spot_area`)
+                let source = super::spot_area::update_source(s, c, i, p, mode, fill)?;
                 spots_edit(s, c, "Edit Spot", |spots| {
                     let sp = &mut spots[i];
                     if let Some(f) = fill {
@@ -1005,6 +1017,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     if let Some(d) = point(p, "move") {
                         sp.points.iter_mut().for_each(|q| *q = Point::new(q.x + d.x, q.y + d.y));
+                        if let Some(a) = &mut sp.area {
+                            a.shift(d.x, d.y);
+                        }
                         // the source moves along (its offset is relative to the target)
                     }
                     if let Some(o) = point(p, "source") {
@@ -1030,6 +1045,9 @@ pub fn specs() -> Vec<CommandSpec> {
                             sp.fill = SpotFill::Classic;
                         }
                     }
+                    if let Some(o) = source {
+                        sp.source_offset = o;
+                    }
                     Ok(())
                 })?;
                 Ok(json!({"index": i}))
@@ -1048,6 +1066,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
                 let dd = (*s.develop_of(id).unwrap_or_default()).clone();
                 let spot = dd.spots[i].clone();
+                if super::spot_area::sourceless(&spot) || spot.mode == SpotMode::Fill {
+                    return Err(bad(c, "this spot has no source: it is rebuilt from its surroundings"));
+                }
                 let next = pick_source(s, id, &dd, &spot, spot.source_offset).ok_or_else(|| bad(c, "no other source fits in the photo"))?;
                 spots_edit(s, c, "Refresh Source", |spots| {
                     spots[i].source_offset = Some(next);
@@ -1165,7 +1186,13 @@ pub(super) fn spots_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&
 }
 
 /// An automatic source for `spot` on photo `id` (a small proxy of the photo, framed by `d`).
-fn pick_source(s: &mut Session, id: crate::PhotoId, d: &lightcraft_develop::DevelopSettings, spot: &Spot, avoid: Option<Point>) -> Option<Point> {
+pub(super) fn pick_source(
+    s: &mut Session,
+    id: crate::PhotoId,
+    d: &lightcraft_develop::DevelopSettings,
+    spot: &Spot,
+    avoid: Option<Point>,
+) -> Option<Point> {
     let src = s.source_now(id, crate::media::SourceLevel::Thumb).ok()?;
     let info = s.source_info(id);
     lightcraft_pipeline::spots::pick_source(&src, &info, d, spot, avoid)
