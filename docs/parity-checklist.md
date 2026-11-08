@@ -34,10 +34,10 @@ cited here still exists. Formerly docs/parity.md.
 | F. Edit panel — global adjustments (EDIT) | 42 | 5 | 3 | 1 | 25/28 (89%) | 14/15 (93%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
-| I. Remove / healing (REM) | 8 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
+| I. Remove / healing (REM) | 9 | 1 | 2 | 2 | 4/4 (100%) | 3/4 (75%) |
 | J. Red eye (EYE) | 2 | 0 | 0 | 0 | — | 1/1 (100%) |
 | K. Masking (MASK) | 15 | 5 | 5 | 0 | 7/8 (88%) | 7/7 (100%) |
-| L. Presets (PRE) | 6 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
+| L. Presets (PRE) | 7 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
 | M. Versions & history (VER) | 5 | 0 | 0 | 0 | 1/1 (100%) | 3/3 (100%) |
 | N. Copy / paste / sync (SYNC) | 5 | 0 | 0 | 0 | 3/3 (100%) | 1/1 (100%) |
 | O. Merge (MERGE) | 3 | 1 | 0 | 0 | — | — |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 420 | 70 | 57 | 35 | 193/203 (95%) | 147/163 (90%) |
+| **Total** | 422 | 70 | 57 | 35 | 193/203 (95%) | 148/164 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 547 in-scope rows — P0 97.5% of 203 · P1 94.2% of 163 · P2 56.7% of 179.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 549 in-scope rows — P0 97.5% of 203 · P1 94.2% of 164 · P2 56.9% of 180.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -279,6 +279,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-REM-DUST | Dust detection | P2 | ✅ | `cmd:spot.findDust`, `crates/pipeline/src/dust.rs` | Remove panel ▸ Find Dust Spots: small, soft, round dark spots on smooth areas become heal spots (sensitivity; one undo step); Visualize Spots for checking by eye |
 | LR-REM-BLEMISH | Find blemishes on faces (beyond Lightroom) | P2 | ✅ | `cmd:spot.findBlemishes`, `crates/pipeline/src/blemish.rs`, `crates/engine/src/cmd/face_detect.rs` | Remove panel ▸ Find Blemishes: with the YuNet detector installed, small darker-or-redder round spots on each face's skin (eyes, brows, nostrils and mouth cut out around the landmarks) become heal spots (one undo step); faces under 160 px and faces with more than 12 candidates (stubble, freckles) get none, at most 6 per face; sensitivity 0–100. Classical, no learned model beyond the detector; not a Lightroom feature |
 | LR-REM-SYNC | Sync spots | P1 | ✅ | `cmd:develop.copy` (`groups`), `crates/develop/src/presets.rs` | |
+| LR-REM-SPOT-ROWS | A row for each spot | P1 | ✅ | `cmd:spot.select`, `cmd:spot.visible`, `cmd:spot.circle`, `cmd:spot.delete`, `crates/ui-egui/src/panels/right/spot_rows.rs` | Remove panel ▸ one row per spot ("Heal 2"): click selects, the eye hides or shows the effect (preview, export and GPU; saved with the photo), the circle menu overrides Tool Overlay for that spot (Use Global, Auto, Always, Selected, Never), the trash can deletes; each is one undo step; the list scrolls inside seven rows (#71). Tool Overlay Never also hides the brush rings and the painting fill (#69) |
 
 ## J. Red eye (EYE)
 
@@ -329,6 +330,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-PRE-PREMIUM | Built-in presets (own) | P2 | ✅ | `crates/engine/src/presets.rs` | 41 own-authored presets in 10 groups (Color, Film, B&W incl. toners, Portrait, Landscape, Urban, Food, Seasons, Vintage, Style) |
 | LR-PRE-RECOMMENDED | Community recommendations | OOS | 🚫 | | |
 | LR-PRE-ONIMPORT | Apply during import | P2 | ✅ | `cmd:library.import` (`preset`) | chosen in the import review; raw / per-camera defaults in Settings |
+| LR-PRE-LEARNED | Learn My Edits: profiles trained on your own edits (beyond Lightroom) | P2 | ✅ | `cmd:learn.create`, `cmd:learn.apply`, `cmd:learn.status`, `crates/learn` | Photo ▸ Learn My Edits…: a profile per kind of photography learns White Balance, Tone, Presence, Color Mixer, Color Grading and Tone Curve sliders from 10–200 edited photos (DINOv2-small features plus photo statistics, kernel ridge regression per group); held-out accuracy shown, groups without a pattern dropped, too few or disagreeing examples refused; applies as sliders in one undo step with a History step per photo; profiles export and import as `.lclearn` files. Not compared against Lightroom (it has no equivalent) |
 
 ## M. Versions & history (VER)
 

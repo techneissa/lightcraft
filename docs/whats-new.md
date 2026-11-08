@@ -40,6 +40,18 @@
 
 ## 2026-11-08
 
+### Learn My Edits
+- Photo ▸ Learn My Edits… learns how you edit a kind of photo from 10 to 200 photos you have already edited, then applies it to new photos as ordinary slider values you can adjust: white balance, tone, presence, colour mixer, colour grading and tone curve.
+- Make several profiles ("Portraits", "Landscapes", "Skin Tones"…). Each says how close it came to your edits on photos it had not seen, and drops what your edits don't follow a pattern in. Add a photo you adjusted after applying and it learns again.
+- It needs an 88 MB image model, downloaded only after you agree. Profiles export and import as one file.
+
+### Match Look
+- Photo ▸ Match Look… gives the selected photos the colour and tone of a reference: a photo of the view, an image file, a pasted image or a web address. The result is ordinary slider values (white balance, Light, Vibrance and Saturation, Color Mixer, Color Grading, a tone curve), one undo step, with an Amount. A reference from outside the library is never imported.
+
+### Spot Rows in Remove
+- Every Remove, Content-Aware, Heal and Clone spot has a row in the Remove panel: click it to select the spot, use the eye to hide or show its effect, the trash can to delete it, and the circle menu to set when its circle shows on the photo (Use Global, Auto, Always, Selected or Never).
+- With Tool Overlay at Never, the brush rings and the white painting fill are gone too; a small crosshair shows where the brush is.
+
 ### Fine-Edged Subject Masks With BiRefNet
 - Subject and Background masks can use BiRefNet, a model that cuts hair, fur and lace out far more finely than SAM 3. Masking has a model dropdown on its heading (SAM 3, BiRefNet, SAM 3 + BiRefNet Edges) for new parts; each part keeps the model that made it, and its row says so on hover.
 - BiRefNet is a 444 MB download (MIT licence), offered as "Get BiRefNet" on the Masking heading and only after you agree. It runs on the Mac's GPU in a few seconds per photo.
