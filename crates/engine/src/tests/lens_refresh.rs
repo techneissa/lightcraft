@@ -264,6 +264,7 @@ fn a_new_database_profile_changes_the_render_and_cache_keys() {
 #[test]
 fn the_downloaded_database_is_selected_and_read_only_when_whole() {
     use crate::{lens_profiles, lensfun_download};
+    let _turn = super::LENS_DIRS.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if std::env::var_os(lens_profiles::ENV).is_some_and(|v| !v.is_empty()) {
         lightcraft_testkit::skip!(Input, "LIGHTCRAFT_LENSFUN_DIR names the folder in use");
         return;

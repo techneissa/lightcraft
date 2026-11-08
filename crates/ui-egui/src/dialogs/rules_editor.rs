@@ -9,6 +9,7 @@ use serde_json::{Value, json};
 use crate::album_picker::{AlbumEntry, AlbumPicker};
 use crate::date_picker::{DatePicker, PickedDate};
 use crate::theme::Tokens;
+use crate::widgets::dropdown_search::{self, Searchable};
 use crate::widgets::register;
 
 pub mod rules_move;
@@ -33,6 +34,10 @@ pub fn default_value(field: &str, op: &str) -> Value {
         (Some(Kind::Bool), _) => json!(true),
         // picked from the list
         (Some(Kind::Album), _) => Value::Null,
+        // the whole world: a rule that means something, to narrow from
+        (Some(Kind::Area), _) => lightcraft_catalog::rules::GpsArea::WORLD.to_value(),
+        // a kilometre around 0, 0: a valid circle to move from
+        (Some(Kind::Circle), _) => json!({"lat": 0.0, "lon": 0.0, "radius": 1000.0}),
         _ => json!(""),
     }
 }
@@ -53,12 +58,19 @@ fn match_combo(ui: &mut egui::Ui, salt: &str, m: &mut Match) {
         Match::Any => "any",
         Match::None => "none",
     };
-    let combo = crate::widgets::combo_box(format!("{salt}-match")).width(64.0).selected_text(crate::i18n::tr(label(*m))).show_ui(ui, |ui| {
-        for x in [Match::All, Match::Any, Match::None] {
-            ui.selectable_value(m, x, crate::i18n::tr(label(x)));
-        }
-    });
-    crate::widgets::name_combo(&combo.response, crate::i18n::tr("Match"));
+    let current = *m;
+    let (combo, chosen) = dropdown_search::pick(
+        ui,
+        &format!("{salt}-match"),
+        |c| c.width(64.0).selected_text(crate::i18n::tr(label(current))),
+        &[Match::All, Match::Any, Match::None],
+        |x| *x == current,
+        |x| crate::i18n::tr(label(*x)).to_string(),
+    );
+    crate::widgets::name_combo(&combo, crate::i18n::tr("Match"));
+    if let Some(x) = chosen.and_then(|i| [Match::All, Match::Any, Match::None].get(i).copied()) {
+        *m = x;
+    }
 }
 
 fn text_value(ui: &mut egui::Ui, v: &mut Value, width: f32, hint: &str, salt: &str) {
@@ -132,11 +144,50 @@ fn album_value(ui: &mut egui::Ui, v: &mut Value, salt: &str, env: &Env) {
     }
 }
 
+/// A GPS Area rule's value: south, west, north, east in degrees. A value that isn't an area is
+/// shown as the whole world and kept until an edge is changed, so the check can mark it.
+fn area_value(ui: &mut egui::Ui, v: &mut Value) {
+    let edge = |k: &str, d: f64| v.get(k).and_then(Value::as_f64).filter(|x| x.is_finite()).unwrap_or(d);
+    let w = lightcraft_catalog::rules::GpsArea::WORLD;
+    let mut e = [edge("south", w.south), edge("west", w.west), edge("north", w.north), edge("east", w.east)];
+    let mut changed = false;
+    for (i, (name, max)) in [("South", 90.0), ("West", 180.0), ("North", 90.0), ("East", 180.0)].into_iter().enumerate() {
+        ui.label(crate::i18n::tr(name));
+        if let Some(x) = e.get_mut(i) {
+            // a stored edge out of range is shown as it is, not clamped (and saved) on sight
+            changed |= ui.add(egui::DragValue::new(x).range(-max..=max).clamp_existing_to_range(false).speed(0.1).max_decimals(6)).changed();
+        }
+    }
+    if changed {
+        let [south, west, north, east] = e;
+        *v = json!({"south": south, "west": west, "north": north, "east": east});
+    }
+}
+
+/// A GPS Radius rule's centre (degrees) and radius (metres).
+fn circle_value(ui: &mut egui::Ui, v: &mut Value) {
+    let n = |k: &str, d: f64| v.get(k).and_then(Value::as_f64).filter(|x| x.is_finite()).unwrap_or(d);
+    let (mut lat, mut lon, mut radius) = (n("lat", 0.0), n("lon", 0.0), n("radius", 1000.0));
+    let mut changed = false;
+    ui.label(crate::i18n::tr("Latitude"));
+    changed |= ui.add(egui::DragValue::new(&mut lat).range(-90.0..=90.0).speed(0.01).max_decimals(6)).changed();
+    ui.label(crate::i18n::tr("Longitude"));
+    changed |= ui.add(egui::DragValue::new(&mut lon).range(-180.0..=180.0).speed(0.01).max_decimals(6)).changed();
+    ui.label(crate::i18n::tr("Radius (m)"));
+    let (lo, hi) = (lightcraft_catalog::rules::MIN_RADIUS_M, lightcraft_catalog::rules::MAX_RADIUS_M);
+    changed |= ui.add(egui::DragValue::new(&mut radius).range(lo..=hi).speed(10.0).max_decimals(0)).changed();
+    if changed {
+        *v = json!({"lat": lat, "lon": lon, "radius": radius});
+    }
+}
+
 /// The value editor for one rule.
 fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &str, env: &Env) {
     match (field_kind(field), op) {
         (_, "isEmpty" | "isNotEmpty") => {}
         (Some(Kind::Album), _) => album_value(ui, v, salt, env),
+        (Some(Kind::Area), _) => area_value(ui, v),
+        (Some(Kind::Circle), _) => circle_value(ui, v),
         (Some(Kind::Date), "inLast" | "notInLast") => {
             // shown as stored ({n, unit}, or a plain number of days) and only written when changed:
             // drawing never turns "0 days" into 1 or 20,000 into the spinner's 10,000
@@ -153,15 +204,21 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
             let mut unit = stored_unit.to_lowercase();
             let mut changed =
                 ui.add(egui::DragValue::new(&mut n).range(1.0..=10_000.0).clamp_existing_to_range(false).speed(0.2).fixed_decimals(0)).changed();
-            let combo = crate::widgets::combo_box(format!("{salt}-unit")).width(70.0).selected_text(crate::i18n::tr(&unit)).show_ui(ui, |ui| {
-                for u in ["hours", "days", "weeks", "months", "years"] {
-                    if ui.selectable_label(unit.trim_end_matches('s') == u.trim_end_matches('s'), crate::i18n::tr(u)).clicked() {
-                        unit = u.to_string();
-                        changed = true;
-                    }
-                }
-            });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr("Unit"));
+            const UNITS: [&str; 5] = ["hours", "days", "weeks", "months", "years"];
+            let shown = unit.clone();
+            let (combo, chosen) = dropdown_search::pick(
+                ui,
+                &format!("{salt}-unit"),
+                |c| c.width(70.0).selected_text(crate::i18n::tr(&shown)),
+                &UNITS,
+                |u| shown.trim_end_matches('s') == u.trim_end_matches('s'),
+                |u| crate::i18n::tr(u).to_string(),
+            );
+            crate::widgets::name_combo(&combo, crate::i18n::tr("Unit"));
+            if let Some(u) = chosen.and_then(|i| UNITS.get(i)) {
+                unit = u.to_string();
+                changed = true;
+            }
             if changed {
                 *v = json!({"n": n.round(), "unit": unit});
             }
@@ -203,31 +260,36 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
         (Some(Kind::Number), _) => number_value(ui, v, field),
         (Some(Kind::Choice(c)), _) => {
             let cur = v.as_str().unwrap_or("").to_string();
-            let combo = crate::widgets::combo_box(format!("{salt}-choice"))
-                .width(120.0)
-                .selected_text(crate::i18n::choice_text(field, &cur))
-                .show_ui(ui, |ui| {
-                    for (id, _) in c.iter() {
-                        if ui.selectable_label(cur == *id, crate::i18n::choice_text(field, id)).clicked() {
-                            *v = json!(id);
-                        }
-                    }
-                });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr(field_label(field).unwrap_or(field)));
+            let (combo, chosen) = dropdown_search::pick(
+                ui,
+                &format!("{salt}-choice"),
+                |combo| combo.width(120.0).selected_text(crate::i18n::choice_text(field, &cur)),
+                c,
+                |(id, _)| cur == *id,
+                |(id, _)| crate::i18n::choice_text(field, id).to_string(),
+            );
+            crate::widgets::name_combo(&combo, crate::i18n::tr(field_label(field).unwrap_or(field)));
+            if let Some((id, _)) = chosen.and_then(|i| c.get(i)) {
+                *v = json!(id);
+            }
         }
         (Some(Kind::Bool), _) => {
             // the catalog's reading of the value ("false" is no); one that is neither yes nor no is
             // shown as written and kept until a choice replaces it, so the dialog reports it
             let cur = bool_value(v);
             let text = cur.map_or_else(|| v.to_string(), |b| crate::i18n::bool_text(b).to_string());
-            let combo = crate::widgets::combo_box(format!("{salt}-bool")).width(60.0).selected_text(text).show_ui(ui, |ui| {
-                for b in [true, false] {
-                    if ui.selectable_label(cur == Some(b), crate::i18n::bool_text(b)).clicked() {
-                        *v = json!(b);
-                    }
-                }
-            });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr(field_label(field).unwrap_or(field)));
+            let (combo, chosen) = dropdown_search::pick(
+                ui,
+                &format!("{salt}-bool"),
+                |c| c.width(60.0).selected_text(text),
+                &[true, false],
+                |b| cur == Some(*b),
+                |b| crate::i18n::bool_text(*b).to_string(),
+            );
+            crate::widgets::name_combo(&combo, crate::i18n::tr(field_label(field).unwrap_or(field)));
+            if let Some(b) = chosen.and_then(|i| [true, false].get(i)) {
+                *v = json!(b);
+            }
         }
         (Some(Kind::Date), _) => {
             text_value(ui, v, 120.0, "2026-04 or 2026-04-12", salt);
@@ -242,8 +304,17 @@ fn value_editor(ui: &mut egui::Ui, field: &str, op: &str, v: &mut Value, salt: &
 fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String, value: &mut Value) {
     let label = field_label(field).unwrap_or(field.as_str()).to_string();
     let current = field.clone();
-    let r = crate::widgets::combo_box(format!("{salt}-field")).width(150.0).height(400.0).selected_text(crate::i18n::tr(&label)).show_ui(ui, |ui| {
-        let mut pick = None;
+    // typing searches every field, the ones in the group submenus too
+    let mut every: Vec<&'static str> = TOP_LEVEL_FIELDS.to_vec();
+    every.extend(FIELD_GROUPS.iter().flat_map(|(_, ids)| ids.iter().copied()));
+    let names: Vec<String> = every.iter().map(|id| crate::i18n::tr(field_label(id).unwrap_or(id)).to_string()).collect();
+    let combo_salt = format!("{salt}-field");
+    let find = dropdown_search::before(ui, &combo_salt, &names);
+    let r = crate::widgets::combo_box(&combo_salt).width(150.0).height(400.0).selected_text(crate::i18n::tr(&label)).search(ui, &find, |ui| {
+        let mut pick = find.picked(ui).and_then(|i| every.get(i).copied());
+        if pick.is_some() {
+            ui.close();
+        }
         let mut item = |ui: &mut egui::Ui, id: &'static str| {
             let r = ui.selectable_label(current == id, crate::i18n::tr(field_label(id).unwrap_or(id)));
             register(ui, format!("ruleFieldItem:{id}:{salt}"), r.rect);
@@ -251,7 +322,19 @@ fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String
                 pick = Some(id);
                 ui.close();
             }
+            r
         };
+        if find.filtering() {
+            let all: Vec<usize> = (0..every.len()).collect();
+            for &i in find.options(&all).iter() {
+                if let Some(&id) = every.get(i) {
+                    let r = item(ui, id);
+                    find.row(ui, &r);
+                }
+            }
+            find.no_match(ui);
+            return pick;
+        }
         for id in TOP_LEVEL_FIELDS {
             item(ui, id);
         }
@@ -273,6 +356,7 @@ fn field_menu(ui: &mut egui::Ui, salt: &str, field: &mut String, op: &mut String
         pick
     });
     crate::widgets::name_combo(&r.response, crate::i18n::tr("Field"));
+    r.response.clone().on_hover_text(crate::i18n::tr("Choose Field"));
     register(ui, format!("ruleField:{salt}"), r.response.rect);
     let Some(Some(id)) = r.inner else { return };
     if field == id {
@@ -333,19 +417,26 @@ pub fn edit(ui: &mut egui::Ui, rs: &mut RuleSet, salt: &str, depth: usize, path:
                     field_menu(ui, &rsalt, field, op, value);
                     let kind = field_kind(field).unwrap_or(Kind::Text);
                     let op_label = ops_for(kind).iter().find(|o| o.0 == op.as_str()).map_or(op.as_str(), |o| o.1).to_string();
-                    let combo =
-                        crate::widgets::combo_box(format!("{rsalt}-op")).width(110.0).selected_text(crate::i18n::tr(&op_label)).show_ui(ui, |ui| {
-                            for (id, l) in ops_for(kind) {
-                                if ui.selectable_label(op == id, crate::i18n::tr(l)).clicked() && op != id {
-                                    let was_special = matches!(op.as_str(), "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty");
-                                    *op = id.to_string();
-                                    if was_special || matches!(*id, "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty") {
-                                        *value = default_value(field, op);
-                                    }
-                                }
-                            }
-                        });
-                    crate::widgets::name_combo(&combo.response, crate::i18n::tr("Operator"));
+                    let ops = ops_for(kind);
+                    let (combo, chosen) = dropdown_search::pick(
+                        ui,
+                        &format!("{rsalt}-op"),
+                        |c| c.width(110.0).selected_text(crate::i18n::tr(&op_label)),
+                        ops,
+                        |(id, _)| op == id,
+                        |(_, l)| crate::i18n::tr(l).to_string(),
+                    );
+                    crate::widgets::name_combo(&combo, crate::i18n::tr("Operator"));
+                    combo.clone().on_hover_text(crate::i18n::tr("Choose Comparison"));
+                    if let Some((id, _)) = chosen.and_then(|i| ops.get(i))
+                        && op != id
+                    {
+                        let was_special = matches!(op.as_str(), "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty");
+                        *op = id.to_string();
+                        if was_special || matches!(*id, "between" | "inLast" | "notInLast" | "isEmpty" | "isNotEmpty") {
+                            *value = default_value(field, op);
+                        }
+                    }
                     value_editor(ui, field, op, value, &rsalt, env);
                     // − and + at the end of the row, after the value however long it is: a
                     // right-to-left layout put them over the value when the row had no room left
@@ -423,6 +514,8 @@ mod tests {
                     Kind::Number => v.is_number(),
                     Kind::Bool => v.is_boolean(),
                     Kind::Album => v.is_null(),
+                    Kind::Area => lightcraft_catalog::rules::GpsArea::parse(v).is_ok(),
+                    Kind::Circle => lightcraft_catalog::rules::GpsCircle::parse(v).is_ok(),
                     Kind::Text | Kind::Keywords | Kind::Date => v.is_string(),
                 };
                 match *op {
@@ -440,5 +533,21 @@ mod tests {
         lightcraft_catalog::rules::set_now(None);
         assert_eq!(default_value("shutterSpeed", "gte"), json!("1/250"));
         assert_eq!(default_value("shutterSpeed", "between"), json!(["1/1000", "1/125"]));
+    }
+
+    /// An area whose stored edge is out of range stays as stored when the editor draws it, so
+    /// the rule check can still mark it (the editor doesn't fix it up unasked).
+    #[test]
+    fn an_out_of_range_area_is_not_rewritten_by_drawing_it() {
+        let ctx = egui::Context::default();
+        let stored = json!({"south": 95.0, "west": -200.0, "north": 10.0, "east": 10.0});
+        let mut v = stored.clone();
+        for _ in 0..3 {
+            let mut out = ctx.run_ui(egui::RawInput::default(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| area_value(ui, &mut v));
+            });
+            out.textures_delta.clear();
+        }
+        assert_eq!(v, stored);
     }
 }

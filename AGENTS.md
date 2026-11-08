@@ -69,6 +69,8 @@ LightCraft is a clean-room, open-source, pure-Rust photo library + non-destructi
    `docs/target-app-parity.md` when a listed gap closes (add a row to each doc's revision history; the header line keeps only `Last reviewed`, `Target` and the `Changes` link, never a `Last updated` date or a change note, which every PR would edit and conflict on); `cargo xtask parity` (part of `ci`) checks that every `cmd:`/`ctl:` id and
    path the tracker cites still exists and that `docs/gaps.md` lists each gap once, and `cargo xtask parity --write`
    refreshes its summary.
+3. Lessons: docs/agent/lessons.md (orchestrators and solo sessions read it at start).
+
 `plan/` stays optional. Do not stop to ask except for the house-rule list.
 
 **Merging agent branches:** merge one branch, run `cargo xtask ci`, fix, commit — then the next. Two individually green
@@ -77,6 +79,22 @@ branches can still break each other (e.g. a new struct field vs. a new construct
 **Resuming after a crash / another session:** check `git status` on main, `git worktree list`, and each worktree's
 `git log main..HEAD` + `git status` for unmerged commits or uncommitted work before starting anything new. Commit small
 and often so a crash loses minutes, not hours.
+
+## Working on the fork
+`custom` is the working branch; `mine/custom` is its copy on GitHub. A change is checked in three steps:
+1. `cargo clippy -p <crate> --all-targets -- -D warnings`
+2. `cargo test -p <crate> --lib <module or test name>` for the area you touched
+3. `cargo xtask ci --quick` once per round, before committing. It measures against `mine/custom`, so it covers only your unpushed and uncommitted changes (`--base REF` overrides).
+
+Agents (lanes) on the fork run steps 1 and 2 only. Step 3 runs once per batch, on `custom`, after the batch's branches are merged: any change to `ui-egui` makes it run that crate's ~2,400 tests.
+
+**Quick changes.** When techneissa calls a change quick or fast, the lane reads only the files the brief names, takes no pictures, runs `cargo check -p <crate>`, `cargo fmt` and only the tests it adds or changes, once, then opens the PR without waiting for CI. A full lane run costs about 40 minutes for a five-minute edit.
+
+One agent builds at a time on this Mac. Every agent, in any worktree, uses the main checkout's build folder: `CARGO_TARGET_DIR=$WORKSPACE/repos/lightcraft/target`. The ~760 libraries are then built once and shared, and cargo makes a second build wait for the first instead of both fighting for the CPU. This replaces the per-agent `target/agent-<name>` folders below for the fork.
+
+Write long runs to a log file; never pipe them through `tail` or `head`.
+
+Each push to `custom` runs Fork CI (~23 min) and Fork build (~15 min) on GitHub, so push in batches: commit each working change on `custom`, and push (`git push mine custom`) once the planned batch of changes is done and its checks pass, or when techneissa asks. Never push a change whose checks fail; a test that also fails without the change is not a failure of the change, but say so in the reply.
 
 ## Never crash (outranks feature work)
 People trust LightCraft with their photo libraries and edits; a crash loses their work. A malformed raw/JPEG/XMP, a bad
@@ -89,10 +107,13 @@ of it.
   "unsupported" error or is disabled. Sole exception: a provably infallible literal, as `#[allow(clippy::expect_used)]`
   + `.expect("why it can't fail")`.
 - **`unsafe` lives only in `crates/sysmem`** (one FFI call, `malloc_zone_pressure_relief`, that returns freed
-  allocator pages to macOS after raw decodes) **and `crates/wincolor`** (Win32 calls that read the colour profile
-  Windows assigns to the monitor showing the window, and whether Windows colour-manages that monitor itself). Every
-  other production crate root has `#![forbid(unsafe_code)]`. A new unsafe need goes in an isolated, well-tested helper
-  crate like them: `// SAFETY:` on every block, a safe API, a safe fallback where possible, and a line here naming it.
+  allocator pages to macOS after raw decodes), **`crates/wincolor`** (Win32 calls that read the colour profile
+  Windows assigns to the monitor showing the window, and whether Windows colour-manages that monitor itself),
+  `crates/filepanel` (a run-loop timer that makes the macOS open and save panels taller and resizable),
+  `crates/macraw` (Core Image's raw decoder through objc2, to give macOS's own raw colours as a base) and
+  `crates/coreml` (Core ML through objc2, to run converted AI models on the Neural Engine). Every other production
+  crate root has `#![forbid(unsafe_code)]`. A new unsafe need goes in an isolated, well-tested helper crate like
+  them: `// SAFETY:` on every block, a safe API, a safe fallback where possible, and a line here naming it.
 - **Input-derived numbers are hostile:** `get()` instead of `[i]`/`[a..b]` for offsets from files, users, agents or
   arithmetic on them; checked/saturating math for lengths, offsets and counts; no division by zero, NaN/inf or negative
   casts to `usize`; cap allocations sized by input; slice strings only at char boundaries.
@@ -175,6 +196,7 @@ of it.
 - Text boxes use `crates/ui-egui/src/widgets/text_field.rs` (`TextField`), not `egui::TextEdit`: it gives every field the
   Cut / Copy / Paste / Select All menu, Esc restoring the text, and reports how an edit ended. Give each a widget id
   that is unique on screen. Older fields still on `TextEdit` move over as they are touched.
+- Shell gotcha: `mv`/`cp` are aliased interactive here — use `/bin/mv -f` / `/bin/cp -f`.
 - Parallel agents: separate git worktrees and `CARGO_TARGET_DIR=target/agent-<name>`; each agent uses its **own control port** (pick one in 18000–19999, never the default 7980) and its own scratch subfolder (`<scratch>/<agent-name>/`) — never `rm -rf` shared paths; delete your target dir when done (disk is shared); keep every `Cargo.toml` valid at all times (the `crates/*` glob means one broken manifest breaks everyone).
 - Test corpora: `cargo xtask corpus --download` into `corpus/` (gitignored, CC0 only). Never commit media.
 - Shared real-file test corpora (Photoshop-authored PSDs, etc.) live in [`storytold/photocraft-corpus`](https://github.com/storytold/photocraft-corpus). Never commit large binary fixtures to this repo; fetch them pinned by commit and sha256-verified, as PhotoCraft does with `cargo xtask corpus`.
@@ -182,6 +204,9 @@ of it.
 ## Testing & performance (do this often)
 - Unit/property tests next to the code; end-to-end tests drive real binaries (`crates/mcp/tests/e2e.rs`,
   `apps/lightcraft-cli/tests/`). New features need at least one test that would fail without them.
+- **No timing tests (techneissa, 2026-11-05).** A test never passes or fails on how long something took: no
+  `elapsed() < …`, ms or frame budgets, speed ratios, or sleeps as the assertion. Wait on a condition (a gate, a
+  polled state with a generous timeout that only guards against a hang). Measuring belongs in benches and `xtask bench`.
 - **Run the app after every user-visible change**: launch with `--control 7980`, drive it with a JSON-lines script
   (`docs/showcase/run.py file.jsonl`), take `ui.screenshot`, and look at it. Check `ui.inspect` → `perf`.
 - **Benchmarks:** `cargo xtask bench` (24 MP raw from corpus; CPU and GPU columns) appends to `target/bench/history.jsonl`

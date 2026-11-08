@@ -1008,7 +1008,9 @@ version = "0.4.45"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1aa79e62e7697b8e29b513a68abacf485adcd1fe8284a4316c5ae868e6633327"
 dependencies = [
+ "iana-time-zone",
  "num-traits",
+ "windows-link",
 ]
 
 [[package]]
@@ -2923,6 +2925,30 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6dbf3de79e51f3d586ab4cb9d5c3e2c14aa28ed23d180cf89b4df0454a69cc87"
 
 [[package]]
+name = "iana-time-zone"
+version = "0.1.65"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e31bc9ad994ba00e440a8aa5c9ef0ec67d5cb5e5cb0cc7f8b744a35b389cc470"
+dependencies = [
+ "android_system_properties",
+ "core-foundation-sys",
+ "iana-time-zone-haiku",
+ "js-sys",
+ "log",
+ "wasm-bindgen",
+ "windows-core",
+]
+
+[[package]]
+name = "iana-time-zone-haiku"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f31827a206f56af32e590ba56d5d2d085f558508192593743f16b2306495269f"
+dependencies = [
+ "cc",
+]
+
+[[package]]
 name = "icu_collections"
 version = "2.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3595,6 +3621,7 @@ dependencies = [
  "egui",
  "lightcraft-codecs",
  "lightcraft-engine",
+ "lightcraft-filepanel",
  "lightcraft-raster",
  "lightcraft-sysmem",
  "lightcraft-testkit",
@@ -3612,6 +3639,20 @@ dependencies = [
  "winit",
  "winresource",
  "zbus",
+]
+
+[[package]]
+name = "lightcraft-birefnet"
+version = "0.18.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "image",
+ "lightcraft-fetch",
+ "lightcraft-testkit",
+ "log",
+ "serde_json",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3658,7 +3699,9 @@ version = "0.18.0"
 dependencies = [
  "avif-serialize",
  "bytemuck",
+ "color_quant",
  "dhat",
+ "gif",
  "image",
  "image-webp",
  "jixel",
@@ -3690,6 +3733,18 @@ dependencies = [
  "lightcraft-geom",
  "proptest",
  "serde",
+]
+
+[[package]]
+name = "lightcraft-coreml"
+version = "0.18.0"
+dependencies = [
+ "block2 0.6.2",
+ "lightcraft-testkit",
+ "log",
+ "objc2 0.6.5",
+ "objc2-core-ml",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -3746,12 +3801,15 @@ dependencies = [
  "chrono",
  "craft-docpath",
  "fs4",
+ "gif",
  "harfrust 0.13.3",
  "jxl-oxide",
  "libc",
+ "lightcraft-birefnet",
  "lightcraft-catalog",
  "lightcraft-codecs",
  "lightcraft-color",
+ "lightcraft-coreml",
  "lightcraft-denoise",
  "lightcraft-denoise-core",
  "lightcraft-develop",
@@ -3761,13 +3819,21 @@ dependencies = [
  "lightcraft-geom",
  "lightcraft-gpu",
  "lightcraft-heif",
+ "lightcraft-inpaint",
+ "lightcraft-lama",
+ "lightcraft-learn",
  "lightcraft-lensdb",
+ "lightcraft-look",
+ "lightcraft-macraw",
+ "lightcraft-map",
  "lightcraft-merge",
  "lightcraft-meta",
+ "lightcraft-parsing",
  "lightcraft-pipeline",
  "lightcraft-preview",
  "lightcraft-raster",
  "lightcraft-raw",
+ "lightcraft-reflections",
  "lightcraft-scenes",
  "lightcraft-segment",
  "lightcraft-slideshow",
@@ -3778,10 +3844,13 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.21",
+ "trash",
  "unicode-normalization",
  "unicode-segmentation",
  "web-time",
+ "zip 7.4.0",
 ]
 
 [[package]]
@@ -3808,6 +3877,17 @@ dependencies = [
  "rustls-rustcrypto",
  "sha2",
  "webpki-roots",
+]
+
+[[package]]
+name = "lightcraft-filepanel"
+version = "0.18.0"
+dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.5",
+ "objc2-app-kit 0.3.2",
+ "objc2-core-foundation",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -3869,12 +3949,87 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-lama"
+version = "0.18.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "image",
+ "lightcraft-inpaint",
+ "lightcraft-testkit",
+ "log",
+ "thiserror 2.0.21",
+ "zip 7.4.0",
+]
+
+[[package]]
+name = "lightcraft-learn"
+version = "0.18.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "image",
+ "lightcraft-color",
+ "lightcraft-coreml",
+ "lightcraft-develop",
+ "lightcraft-geom",
+ "lightcraft-testkit",
+ "log",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "lightcraft-lensdb"
 version = "0.18.0"
 dependencies = [
  "lightcraft-develop",
  "lightcraft-geom",
  "quick-xml 0.41.0",
+]
+
+[[package]]
+name = "lightcraft-look"
+version = "0.18.0"
+dependencies = [
+ "lightcraft-codecs",
+ "lightcraft-color",
+ "lightcraft-develop",
+ "lightcraft-fetch",
+ "lightcraft-geom",
+ "lightcraft-pipeline",
+ "lightcraft-raster",
+ "lightcraft-scenes",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "lightcraft-macraw"
+version = "0.18.0"
+dependencies = [
+ "lightcraft-testkit",
+ "objc2 0.6.5",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-core-image 0.3.2",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
+name = "lightcraft-map"
+version = "0.18.0"
+dependencies = [
+ "lightcraft-codecs",
+ "lightcraft-fetch",
+ "lightcraft-geom",
+ "log",
+ "png",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "web-time",
 ]
 
 [[package]]
@@ -3916,6 +4071,22 @@ dependencies = [
  "quick-xml 0.41.0",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "lightcraft-parsing"
+version = "0.18.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "image",
+ "lightcraft-faces",
+ "lightcraft-testkit",
+ "log",
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -3985,6 +4156,18 @@ dependencies = [
  "zune-core",
  "zune-jpeg",
  "zune-jpegxl",
+]
+
+[[package]]
+name = "lightcraft-reflections"
+version = "0.18.0"
+dependencies = [
+ "candle-core",
+ "candle-nn",
+ "lightcraft-fetch",
+ "serde",
+ "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -4066,7 +4249,11 @@ dependencies = [
  "lightcraft-develop",
  "lightcraft-engine",
  "lightcraft-faces",
+ "lightcraft-fetch",
  "lightcraft-geom",
+ "lightcraft-learn",
+ "lightcraft-look",
+ "lightcraft-map",
  "lightcraft-merge",
  "lightcraft-meta",
  "lightcraft-pipeline",
@@ -4624,7 +4811,7 @@ dependencies = [
  "libc",
  "objc2 0.5.2",
  "objc2-core-data",
- "objc2-core-image",
+ "objc2-core-image 0.2.2",
  "objc2-foundation 0.2.2",
  "objc2-quartz-core 0.2.2",
 ]
@@ -4686,6 +4873,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2a180dd8642fa45cdb7dd721cd4c11b1cadd4929ce112ebd8b9f5803cc79d536"
 dependencies = [
  "bitflags 2.13.2",
+ "block2 0.6.2",
  "dispatch2",
  "objc2 0.6.5",
 ]
@@ -4716,6 +4904,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "objc2-core-image"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e5d563b38d2b97209f8e861173de434bd0214cf020e3423a52624cd1d989f006"
+dependencies = [
+ "objc2 0.6.5",
+ "objc2-core-foundation",
+ "objc2-core-graphics",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "objc2-core-location"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4725,6 +4925,17 @@ dependencies = [
  "objc2 0.5.2",
  "objc2-contacts",
  "objc2-foundation 0.2.2",
+]
+
+[[package]]
+name = "objc2-core-ml"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "201b055e6acfa0f9f15568255d3f03ce2b54bc86d1814442dc69138e36813e18"
+dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -4856,7 +5067,7 @@ dependencies = [
  "objc2 0.5.2",
  "objc2-cloud-kit",
  "objc2-core-data",
- "objc2-core-image",
+ "objc2-core-image 0.2.2",
  "objc2-core-location",
  "objc2-foundation 0.2.2",
  "objc2-link-presentation",
@@ -6785,6 +6996,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "trash"
+version = "5.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "be89b3fe156965d29ac4f8522f3a640c655affdd9f21cb4f36857f0c92c00317"
+dependencies = [
+ "chrono",
+ "libc",
+ "log",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
+ "once_cell",
+ "percent-encoding",
+ "scopeguard",
+ "urlencoding",
+ "windows",
+]
+
+[[package]]
 name = "tree_magic_mini"
 version = "3.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6969,6 +7198,12 @@ dependencies = [
  "httparse",
  "log",
 ]
+
+[[package]]
+name = "urlencoding"
+version = "2.1.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 
 [[package]]
 name = "utf16_iter"

@@ -17,12 +17,15 @@ lightcraft-raster = { workspace = true }
 lightcraft-develop = { workspace = true }
 lightcraft-scenes = { workspace = true }
 lightcraft-pipeline = { workspace = true }
+lightcraft-inpaint = { workspace = true }
 lightcraft-gpu = { workspace = true }
 lightcraft-catalog = { workspace = true }
 web-time = { workspace = true }
 lightcraft-preview = { workspace = true }
 lightcraft-codecs = { workspace = true }
 lightcraft-raw = { workspace = true }
+lightcraft-macraw = { workspace = true }
+lightcraft-coreml = { workspace = true }
 lightcraft-denoise-core = { workspace = true }
 lightcraft-denoise = { workspace = true, optional = true }
 lightcraft-meta = { workspace = true }
@@ -30,7 +33,9 @@ lightcraft-lensdb = { workspace = true }
 lightcraft-faces = { workspace = true }
 miniz_oxide = { workspace = true }
 lightcraft-merge = { workspace = true }
+lightcraft-look = { workspace = true }
 lightcraft-geocode = { workspace = true }
+lightcraft-map = { workspace = true }
 lightcraft-slideshow = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
@@ -43,27 +48,53 @@ harfrust = { version = "0.13", default-features = false, features = ["std"] }
 unicode-normalization = "0.1"
 unicode-segmentation = "1.13"
 lightcraft-segment = { workspace = true, optional = true }
+lightcraft-birefnet = { workspace = true, optional = true }
+# Learn My Edits (fork/learn-my-edits.md)
+lightcraft-learn = { workspace = true }
+# per-person part masks (fork/people-parsing.md); its models run natively only
+lightcraft-parsing = { workspace = true }
 
 # model downloads run natively only (the web build fetches no models)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 lightcraft-fetch = { workspace = true }
-# capture-time parsing for face recognition (native only)
-chrono = { workspace = true }
 # free space of the drive holding the preview cache (the low-disk alert; pure Rust: rustix / windows-sys)
 fs4 = { workspace = true }
+# unpacks the Core ML models' release zips (stored, fork/coreml.md)
+zip = { version = "7.4", default-features = false }
+# the LaMa fill behind Remove (fork/lama-fill.md); the web build has none
+lightcraft-lama = { workspace = true }
+# capture-time parsing for face recognition, and the Mac's time zone for Settings sync's `savedBy` (native only)
+chrono = { workspace = true, features = ["clock"] }
+# Delete Permanently can move the files to the system Trash (no Trash in the browser)
+trash = { workspace = true }
+lightcraft-reflections = { workspace = true }
+
+[[example]]
+name = "birefnet_compare"
+required-features = ["sam"]
 
 [features]
+# Test-only hooks for the crates that test against the engine (a dev-dependency feature; never enabled in a product build).
+test-hooks = []
 # AI masks with SAM 3 (Object / Describe). Off for the web and CLI builds.
-sam = ["dep:lightcraft-segment"]
+sam = ["dep:lightcraft-segment", "dep:lightcraft-birefnet"]
 denoise = ["dep:lightcraft-denoise", "lightcraft-denoise/runtime", "lightcraft-gpu/denoise"]
 rawnind-model = ["denoise", "lightcraft-denoise/rawnind-model", "lightcraft-denoise-core/rawnind-model"]
+# LightCraft's own denoise model offered as a download (MIT OR Apache-2.0 weights, CC0 training data); needs its hosted file.
+lightcraft-model = ["denoise", "lightcraft-denoise/lightcraft-model", "lightcraft-denoise-core/lightcraft-model"]
 
 [dev-dependencies]
+# counts the settings hashes a frame takes (`hash64_calls`)
+lightcraft-develop = { workspace = true, features = ["test-hooks"] }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
+# the Core ML download test's fixture hash (fork/coreml.md)
+sha2 = { workspace = true }
 # HDR JPEG XL tests read the file's colour encoding
 jxl-oxide = { workspace = true }
 # Lossless synthetic HEIC files (the import test; decoded when the codecs' `heif` feature is on).
 lightcraft-heif = { workspace = true, features = ["testdata"] }
 libc = { workspace = true }
 lightcraft-tiff = { workspace = true }
+# animated GIF tests decode the frames written
+gif = { workspace = true }

@@ -25,18 +25,28 @@ fn dng_names(path: &str) -> impl Iterator<Item = std::path::PathBuf> {
 /// DNG deletes the raw copy): the encoded file must decode to the same raw data, and it is
 /// written to a temp file, synced, read back identical and only then given its name — never
 /// replacing an existing file. On any failure no DNG is left behind and the raw stays in use.
-pub(crate) fn write_dng_for(s: &Session, path: &str, packet: String) -> std::result::Result<String, String> {
-    write_dng_with(s.media.file_bytes.as_ref(), path, packet)
+pub(crate) fn write_dng_for(s: &Session, path: &str, packet: String, colour: crate::media::LoadOptions) -> std::result::Result<String, String> {
+    write_dng_colour(s.media.file_bytes.as_ref(), path, packet, colour)
 }
 
 /// [`write_dng_for`] without the session (imports convert on a worker thread).
 pub(crate) fn write_dng_with(file_bytes: Option<&crate::merge::ByteReader>, path: &str, packet: String) -> std::result::Result<String, String> {
+    write_dng_colour(file_bytes, path, packet, Default::default())
+}
+
+/// [`write_dng_with`] for a photo whose Profile choice (`colour`) says which colour the DNG is written with.
+pub(crate) fn write_dng_colour(
+    file_bytes: Option<&crate::merge::ByteReader>,
+    path: &str,
+    packet: String,
+    colour: crate::media::LoadOptions,
+) -> std::result::Result<String, String> {
     let bytes = match file_bytes {
         Some(r) => r(path)?,
         None => std::fs::read(path).map_err(|e| format!("{path}: {e}"))?,
     };
     let mut raw = lightcraft_raw::decode(&bytes).map_err(|e| format!("{path}: {e}"))?;
-    crate::camera_preview::with_starting_colour(&mut raw, &bytes);
+    crate::camera_preview::with_starting_colour_for(&mut raw, &bytes, colour.colour, colour.profile_key);
     drop(bytes);
     let dng = lightcraft_raw::write_dng(&raw, &lightcraft_raw::DngWriteOptions { xmp: (!packet.is_empty()).then_some(packet), ..Default::default() })
         .map_err(|e| e.to_string())?;
@@ -82,8 +92,9 @@ fn convert(s: &mut Session, p: &Value) -> Result<Value> {
             ]));
             continue;
         }
-        let packet = crate::sidecar::sidecar_packet(&ph, &s.catalog);
-        match write_dng_for(s, path, packet) {
+        // (the DNG has colour matrices of its own, so its settings don't name a colour source)
+        let packet = crate::sidecar::sidecar_packet(&crate::export::for_dng(&ph), &s.catalog);
+        match write_dng_for(s, path, packet, crate::media::LoadOptions::of(&ph.develop)) {
             Ok(out) => {
                 let file_name = Path::new(&out).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                 // virtual copies of this photo follow it to the DNG
@@ -125,14 +136,17 @@ pub fn specs() -> Vec<CommandSpec> {
 /// the library and stack it on top of the original. The host opens the file in the editor.
 fn edit_external(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "photo.editExternal";
-    let mut ids = s.targets(p)?;
-    ids.dedup();
-    if ids.is_empty() {
-        return Err(bad(C, "no active photo"));
-    }
-    if ids.len() > MAX_EDIT_COPIES {
-        return Err(bad(C, format!("{} photos selected: edit at most {MAX_EDIT_COPIES} at a time", ids.len())));
-    }
+    let plan = crate::edit_copies::prepare(s, p).map_err(|e| bad(C, e))?;
+    // durable: each TIFF becomes a library photo the external editor then changes
+    let rendered = plan.run(&mut |path, bytes| crate::export::write_file_durable(path, bytes), &mut |_, _| true);
+    crate::edit_copies::finish(s, rendered).map_err(|e| bad(C, e))
+}
+
+/// The options of an edit copy (`format` tiff or psd, `colorSpace`, `bitDepth` 8 or 16; the
+/// defaults a 16-bit Adobe RGB TIFF), named by `naming`: a free name, never over a file. Shared by
+/// Edit In and Open as Layers ([`crate::layers`]).
+pub(crate) fn edit_options(p: &Value, naming: &str) -> Result<crate::export::ExportOptions> {
+    const C: &str = "photo.editExternal";
     let space = match super::str_param(p, "colorSpace").unwrap_or("adobeRgb") {
         "srgb" => lightcraft_pipeline::OutputSpace::Srgb,
         "displayP3" => lightcraft_pipeline::OutputSpace::DisplayP3,
@@ -149,55 +163,14 @@ fn edit_external(s: &mut Session, p: &Value) -> Result<Value> {
         16 => 16,
         d => return Err(bad(C, format!("bitDepth {d}: use 8 or 16"))),
     };
-    let opts = crate::export::ExportOptions {
+    Ok(crate::export::ExportOptions {
         format,
         bit_depth: Some(bit_depth),
         color_space: space,
-        naming: "{name}-Edit".into(),
+        naming: naming.into(),
         conflict: crate::export::Conflict::Unique,
         ..Default::default()
-    };
-    let mut copies = Vec::new();
-    for id in ids {
-        copies.push(edit_copy(s, p, id, &opts)?);
-    }
-    let new: Vec<lightcraft_catalog::PhotoId> = copies.iter().filter_map(|c| c["id"].as_u64()).map(lightcraft_catalog::PhotoId).collect();
-    s.selection = crate::Selection { active: new.first().copied(), ids: new };
-    let first = copies.first().cloned().unwrap_or(Value::Null);
-    Ok(json!({"path": first["path"], "id": first["id"], "original": first["original"], "copies": copies}))
-}
-
-/// Most photos one Edit In renders (each becomes a full-size file on disk and a library photo).
-const MAX_EDIT_COPIES: usize = 50;
-
-/// One photo's edit copy for [`edit_external`]: rendered with `opts` next to its original (a demo
-/// photo into `dir`), added to the library and stacked on top of the original, expanded.
-fn edit_copy(s: &mut Session, p: &Value, id: lightcraft_catalog::PhotoId, opts: &crate::export::ExportOptions) -> Result<Value> {
-    const C: &str = "photo.editExternal";
-    let ph = s.catalog.photo(id).cloned().ok_or_else(|| bad(C, format!("no photo {}", id.0)))?;
-    let dir = match &ph.source {
-        Source::File { path } => Path::new(path).parent().map(|d| d.to_string_lossy().to_string()).unwrap_or_default(),
-        Source::Demo { .. } => match super::str_param(p, "dir") {
-            Some(d) => d.to_string(),
-            None => return Err(bad(C, "a generated demo photo has no folder: give `dir`")),
-        },
-    };
-    let mut written = Vec::new();
-    let mut write = |path: &str, bytes: &[u8]| -> std::result::Result<(), String> {
-        // durable: the TIFF becomes a library photo the external editor then changes
-        crate::export::write_file_durable(path, bytes)?;
-        written.push(path.to_string());
-        Ok(())
-    };
-    let to = crate::export::Destination { dir, exact: None };
-    crate::export::export_batch(s, &[id], opts, &to, &mut write, &|path| Path::new(path).exists()).map_err(|e| bad(C, e))?;
-    let ext = format!(".{}", opts.format.extension());
-    let out = written.into_iter().find(|w| w.ends_with(&ext)).ok_or_else(|| bad(C, "nothing was written"))?;
-    let r = s.execute("library.import", &json!({"paths": [out]}))?;
-    let new = r["imported"].get(0).and_then(Value::as_u64).ok_or_else(|| bad(C, "the edit copy could not be added"))?;
-    // stack: the edit on top of the original, expanded so both show
-    let _ = s.execute("stack.group", &json!({"ids": [new, id.0], "top": new, "collapsed": false}));
-    Ok(json!({"path": out, "id": new, "original": id.0}))
+    })
 }
 
 /// The op that brings a photo up to date with what its file is now (`info`, a fresh probe), or
@@ -230,7 +203,8 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     if m.camera.is_empty() {
         m.camera = src.camera.clone();
     }
-    if m.lens.is_empty() {
+    // (a placeholder like `----`, which a body writes for a manual lens, counts as empty; an edit is in `m.exif`, kept)
+    if lightcraft_catalog::exif_override::is_placeholder(&m.lens) {
         m.lens = src.lens.clone();
     }
     if m.make.is_empty() {
@@ -242,8 +216,8 @@ fn fill_missing_meta(id: lightcraft_catalog::PhotoId, ph: &lightcraft_catalog::P
     if m.shutter.is_empty() {
         m.shutter = src.shutter.clone();
     }
-    m.focal_mm = m.focal_mm.or(src.focal_mm);
-    m.aperture = m.aperture.or(src.aperture);
+    m.focal_mm = m.focal_mm.filter(|v| *v > 0.0).or(src.focal_mm);
+    m.aperture = m.aperture.filter(|v| *v > 0.0).or(src.aperture);
     m.iso = m.iso.or(src.iso);
     m.flash = m.flash.or(src.flash);
     m.exposure_bias = m.exposure_bias.or(src.exposure_bias);

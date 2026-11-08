@@ -3,4 +3,4 @@ cargo test -p lightcraft-develop --lib -- retouch
 cargo test -p lightcraft-pipeline --lib -- retouch_step
 cargo test -p lightcraft-engine --lib -- retouch_input
 cargo test -p lightcraft-mcp --lib -- tests_retouch
-cargo test -p lightcraft-ui-egui --lib -- portrait
+cargo test -p lightcraft-ui-egui --lib -- portrait tool_strip_order

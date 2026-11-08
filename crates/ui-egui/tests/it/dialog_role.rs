@@ -54,6 +54,11 @@ fn every_dialog_is_a_modal_dialog_with_its_title() {
 
 #[test]
 fn settings_is_a_dialog_too() {
+    // (Settings' texts use symbols (▸) only craft-fonts has; the window cannot be drawn without them)
+    if lightcraft_engine::CRAFT_FONTS.is_empty() {
+        lightcraft_testkit::skip!(Fonts, "built without CRAFT_FONTS_DIR: Settings' ▸ has no glyph");
+        return;
+    }
     let mut h = harness();
     h.state_mut().run("app.settings", serde_json::json!({})).expect("Settings opens");
     h.run_steps(6);

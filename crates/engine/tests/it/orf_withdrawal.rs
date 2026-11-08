@@ -40,7 +40,7 @@ fn decoder_keys(s: &mut Session) -> (Vec<u64>, Vec<Hash128>, String) {
     let thumb = s.thumb_job(p.id, 256).unwrap();
     let render = s.render_job(p.id, 640, 480, false, true).unwrap();
     let hover = s.preview_job(p.id, 640, 480, true, &p.develop).unwrap();
-    let quick = s.quick_view_job(p.id, 640, true).unwrap();
+    let quick = s.quick_view_job(p.id, 640, true, true).unwrap();
     (
         vec![thumb.key, render.key, hover.key, quick.key],
         vec![
@@ -111,7 +111,7 @@ fn orf_preview_transition_changes_render_keys_with_identical_bytes_and_settings(
 #[test]
 fn source_from_before_orf_preview_transition_is_not_accepted() {
     let mut s = decoder_session("ORF");
-    s.media.file_loader = Some(Arc::new(|_, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
+    s.media.file_loader = Some(Arc::new(|_, _, _, _| Ok((Rgb32f::new(8, 8), SourceInfo::default()))));
     let old = s.thumb_job(PhotoId(1), 256).unwrap().run();
     assert!(old.loaded.is_some());
     mark_orf_preview_only(&mut s);

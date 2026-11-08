@@ -1,0 +1,1 @@
+cargo test -p lightcraft-ui-egui --lib -- shortcuts_window keybinds::window shortcut_editing shortcut_when shortcut_backup tests::keymap shortcuts:: dialog_fit

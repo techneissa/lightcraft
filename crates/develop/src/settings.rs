@@ -84,10 +84,13 @@ pub enum Process {
     /// Highlights and Shadows keep the local contrast of the tones they move: their edge-aware base
     /// is taken of a fine median of log luminance (issue #632).
     V2,
-    /// Pixel-scale sharpening with working Radius and Detail controls.
+    /// Contrast, Whites and Blacks are as strong on camera-look raws and display-referred files
+    /// (JPEG, PNG) as they are on raws without a look: one slider model on every tone path.
+    /// Shadows reach the lower midtones and Highlights the upper ones (`shadows_highlights_delta`
+    /// in the pipeline's `finish`). Pixel-scale sharpening with working Radius and Detail controls.
     V3,
     /// V3, with Contrast and Blacks on a raw's camera look calibrated to Lightroom: the
-    /// camera curve keeps V2 Whites and fitted pointwise operators follow it
+    /// camera curve keeps V3 Whites and fitted pointwise operators follow it
     /// (`lightcraft_pipeline::light_v3`, `docs/light-v3.md`).
     V4,
     /// V4, with a raw's tone curve rolling off into white in stops past its last fitted knot, so
@@ -154,6 +157,9 @@ pub struct DevelopSettings {
     pub red_eye: Vec<RedEye>,
     pub lens_blur: LensBlur,
     pub enhance: Enhance,
+    /// Local per-photo reflection correction; absent in old catalogs.
+    #[serde(skip_serializing_if = "Reflection::is_default")]
+    pub reflection: Reflection,
     /// Camera calibration: shadows tint and primary hue/saturation (applied before tone mapping).
     pub calibration: Calibration,
     /// Section on/off toggles (the "eye" buttons on panel headers): section id → enabled.
@@ -193,6 +199,7 @@ impl Default for DevelopSettings {
             red_eye: Vec::new(),
             lens_blur: LensBlur::default(),
             enhance: Enhance::default(),
+            reflection: Reflection::default(),
             calibration: Calibration::default(),
             disabled_sections: Vec::new(),
             retouch: Default::default(),
@@ -220,11 +227,47 @@ pub struct Profile {
     /// settings without it keep their JSON (and hash).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub camera_local_tone: bool,
+    /// Where a raw without colour matrices of its own takes its starting colour from
+    /// (`docs/camera-preview-colour.md`). Omitted when [`CameraColour::Auto`], so settings without
+    /// it keep their JSON (and hash).
+    #[serde(skip_serializing_if = "CameraColour::is_auto")]
+    pub camera_colour: CameraColour,
+    /// The local camera profile ([`CameraColour::Local`]) the photo starts from: the file stem of a profile in
+    /// the user's `camera-profiles` folder. Omitted while none, so settings without it keep their JSON (and hash).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub camera_profile: Option<String>,
 }
 
 impl Default for Profile {
     fn default() -> Self {
-        Self { id: "lc.color".into(), amount: 100.0, camera_local_tone: false }
+        Self { id: "lc.color".into(), amount: 100.0, camera_local_tone: false, camera_colour: CameraColour::Auto, camera_profile: None }
+    }
+}
+
+/// The starting colour of a raw that carries no colour matrices (NEF, ARW, CR3, …).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum CameraColour {
+    /// The first available of: a camera profile with tone fitted to the file's JPEG, a look fitted
+    /// to the file's JPEG, the model's spectral matrices, the neutral fallback.
+    #[default]
+    Auto,
+    /// The model's matrices from measured spectral sensitivities with LightCraft's default tone
+    /// curve, never the embedded JPEG; [`CameraColour::Auto`] for a model without them.
+    Colorimetric,
+    /// The user's own profile file for the photo's camera ([`Profile::camera_profile`]): its matrix and table are the
+    /// base colour, the tone is fitted to the file's JPEG. A missing, invalid or other-camera file renders as
+    /// [`CameraColour::Auto`] with a note, and the choice is kept.
+    Local,
+    /// The Mac's own raw decoder (macOS Colour): a computer or camera it can't make it for renders as
+    /// [`CameraColour::Auto`] and says why. Declared with [`CameraColour::Local`] in catalog format v10, so a library that
+    /// holds it is never read as corrupt.
+    Macos,
+}
+
+impl CameraColour {
+    pub fn is_auto(&self) -> bool {
+        *self == CameraColour::Auto
     }
 }
 
@@ -900,6 +943,26 @@ pub struct LocalAdjustments {
     pub color_sat: f64,
     /// Local vignette/grain are not in Lightroom; we keep the struct extensible.
     pub amount: f64,
+    /// Recolor (0..100; 0 = off): the area takes the colour `recolor_r/g/b` (sRGB-encoded, 0..1) and keeps its
+    /// shading. Not written while 0, so edits without it stay as they were.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_r: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_g: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_b: f64,
+    /// Recolor's Range (−100..100, 0 = automatic): widens or narrows which colours count as the area's main colour.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_range: f64,
+    /// Recolor's Colour to Replace (sRGB-encoded, 0..1; black = automatic, the area's main colour).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_from_r: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_from_g: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_from_b: f64,
 }
 
 impl Default for LocalAdjustments {
@@ -925,6 +988,14 @@ impl Default for LocalAdjustments {
             color_hue: 0.0,
             color_sat: 0.0,
             amount: 100.0,
+            recolor: 0.0,
+            recolor_r: 0.0,
+            recolor_g: 0.0,
+            recolor_b: 0.0,
+            recolor_range: 0.0,
+            recolor_from_r: 0.0,
+            recolor_from_g: 0.0,
+            recolor_from_b: 0.0,
         }
     }
 }
@@ -1040,9 +1111,30 @@ pub enum MaskShape {
         feather: f64,
     },
     /// AI / automatic selections, evaluated by a segmenter.
-    Subject,
-    Sky,
-    Background,
+    Subject {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::segmask::de_detail")]
+        detail: Vec<crate::SegMask>,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        edge: f64,
+    },
+    Sky {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::segmask::de_detail")]
+        detail: Vec<crate::SegMask>,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        edge: f64,
+    },
+    Background {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::segmask::de_detail")]
+        detail: Vec<crate::SegMask>,
+        #[serde(default, skip_serializing_if = "is_zero")]
+        edge: f64,
+    },
     /// One object picked by clicks (SAM 3 point prompts): `hint` holds the clicks that include,
     /// `exclude` the ones that exclude; `seg` the segmentation computed from them.
     Object {
@@ -1080,6 +1172,35 @@ pub enum MaskShape {
     },
 }
 
+impl MaskShape {
+    /// Create an automatic Subject mask shape with default empty segmentation.
+    pub fn subject() -> Self {
+        MaskShape::Subject { seg: None, detail: Vec::new(), edge: 0.0 }
+    }
+
+    /// Create an automatic Sky mask shape with default empty segmentation.
+    pub fn sky() -> Self {
+        MaskShape::Sky { seg: None, detail: Vec::new(), edge: 0.0 }
+    }
+
+    /// Create an automatic Background mask shape with default empty segmentation.
+    pub fn background() -> Self {
+        MaskShape::Background { seg: None, detail: Vec::new(), edge: 0.0 }
+    }
+
+    /// The segmentation mask data for shapes that carry one (Object, Describe/Prompt, Subject, Sky, Background).
+    pub fn seg(&self) -> Option<&crate::SegMask> {
+        match self {
+            MaskShape::Object { seg, .. }
+            | MaskShape::Prompt { seg, .. }
+            | MaskShape::Subject { seg, .. }
+            | MaskShape::Sky { seg, .. }
+            | MaskShape::Background { seg, .. } => seg.as_ref(),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MaskComponent {
     /// A name given in the Masking panel (Rename); `None` shows the shape's kind.
@@ -1111,6 +1232,11 @@ pub struct Mask {
     /// edit converts an old one (`lightcraft_pipeline::mask_space::attach`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub on_photo: bool,
+    /// What the parts after the first were (mode, own Invert) before the last Invert Mask rewrote them, so inverting
+    /// again puts them back as they were. Empty when unknown; only used while the parts are still what that Invert
+    /// made (`lightcraft_engine::cmd::mask_invert`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub before_invert: Vec<(MaskOp, bool)>,
 }
 
 fn is_zero(v: &f64) -> bool {
@@ -1132,6 +1258,7 @@ impl Default for Mask {
             adjust: LocalAdjustments::default(),
             refine: 0.0,
             on_photo: true,
+            before_invert: Vec::new(),
         }
     }
 }
@@ -1216,6 +1343,41 @@ pub enum SpotMode {
     Fill,
 }
 
+/// How a Remove or Content-Aware spot is filled (fork feature, `fork/lama-fill.md`). A spot saved without it, and a
+/// build that does not know it, reads as [`SpotFill::Classic`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum SpotFill {
+    /// The patch-based fill the app always had.
+    #[default]
+    Classic,
+    /// The LaMa neural fill (needs its model; without it the spot shows the Classic fill).
+    Lama,
+}
+
+impl SpotFill {
+    pub fn is_classic(&self) -> bool {
+        *self == SpotFill::Classic
+    }
+
+    /// The name used in commands and files: `classic` or `lama`.
+    pub fn name(self) -> &'static str {
+        match self {
+            SpotFill::Classic => "classic",
+            SpotFill::Lama => "lama",
+        }
+    }
+
+    /// The fill a command names (case does not matter).
+    pub fn from_name(name: &str) -> Option<SpotFill> {
+        match name.trim().to_ascii_lowercase().as_str() {
+            "classic" => Some(SpotFill::Classic),
+            "lama" => Some(SpotFill::Lama),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Spot {
@@ -1228,11 +1390,36 @@ pub struct Spot {
     pub opacity: f64,
     /// Source offset (normalized) from the target; None = auto (content-aware remove).
     pub source_offset: Option<Point>,
+    /// How a Remove or Content-Aware spot is filled; Heal and Clone ignore it. Not written when Classic, so files
+    /// without LaMa spots are byte for byte what they were.
+    #[serde(skip_serializing_if = "SpotFill::is_classic")]
+    pub fill: SpotFill,
+    /// The spot has no effect (its row's eye is off). Not written when shown (fork feature, `fork/spot-rows.md`).
+    #[serde(skip_serializing_if = "Spot::is_shown")]
+    pub hidden: bool,
+    /// When its circle shows on the photo; `None` follows the Tool Overlay. Not written when `None`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub circle: Option<crate::spot_circle::SpotCircle>,
+    /// The spot's shape when it is drawn in the shape of an object or a mask instead of along its stroke (fork
+    /// feature, `fork/object-remove.md`). Not written for a stroke spot.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub area: Option<crate::spot_area::SpotArea>,
 }
 
 impl Default for Spot {
     fn default() -> Self {
-        Self { mode: SpotMode::Remove, points: Vec::new(), size: 0.02, feather: 50.0, opacity: 100.0, source_offset: None }
+        Self {
+            mode: SpotMode::Remove,
+            points: Vec::new(),
+            size: 0.02,
+            feather: 50.0,
+            opacity: 100.0,
+            source_offset: None,
+            fill: SpotFill::Classic,
+            hidden: false,
+            circle: None,
+            area: None,
+        }
     }
 }
 
@@ -1360,5 +1547,61 @@ impl DevelopSettings {
         s.light.whites = add(s.light.whites, h.sdr_whites);
         s.effects.clarity = add(s.effects.clarity, h.sdr_clarity);
         std::borrow::Cow::Owned(s)
+    }
+}
+
+/// A cached, source-bound correction applied before ordinary develop edits.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Reflection {
+    /// Original-source coordinates (before user crop/rotation), expressed as percentages.
+    pub limit_region: bool,
+    pub left: f64,
+    pub top: f64,
+    pub right: f64,
+    pub bottom: f64,
+    pub protect_sky: bool,
+    pub detail_protection: f64,
+    pub model: String,
+    pub enabled: bool,
+    pub correction: String,
+    pub source_key: String,
+    pub amount: f64,
+    pub quality: u32,
+    /// Fork feature (`fork/glare-highlights.md`): reflections in glass or glare, the area the model ran on, and the
+    /// glare settings. Not written while default.
+    #[serde(skip_serializing_if = "crate::ReflectionMode::is_reflections")]
+    pub mode: crate::ReflectionMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub area: Option<crate::ReflectionArea>,
+    #[serde(skip_serializing_if = "crate::Glare::is_default")]
+    pub glare: crate::Glare,
+}
+impl Reflection {
+    pub fn is_default(&self) -> bool {
+        self.correction.is_empty() && self.amount == 0.0
+    }
+}
+
+impl Default for Reflection {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            correction: String::new(),
+            source_key: String::new(),
+            amount: 0.0,
+            quality: 0,
+            limit_region: false,
+            left: 0.0,
+            top: 0.0,
+            right: 100.0,
+            bottom: 100.0,
+            protect_sky: false,
+            detail_protection: 0.0,
+            model: String::new(),
+            mode: Default::default(),
+            area: None,
+            glare: Default::default(),
+        }
     }
 }

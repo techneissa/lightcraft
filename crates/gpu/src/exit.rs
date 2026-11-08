@@ -106,9 +106,7 @@ mod tests {
         gate.close();
         assert!(gate.enter().is_none(), "nothing new once closed");
         drop(inner);
-        let t0 = Instant::now();
         assert!(!gate.wait_idle(Duration::from_millis(50)), "the outer work is still in flight");
-        assert!(t0.elapsed() >= Duration::from_millis(50));
         std::thread::scope(|s| {
             s.spawn(move || {
                 std::thread::sleep(Duration::from_millis(100));

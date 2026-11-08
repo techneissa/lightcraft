@@ -17,7 +17,7 @@ use lightcraft_raster::Rgb32f;
 use crate::geometry::Frame;
 
 #[inline]
-fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
+pub(crate) fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
     // Zero feather is a hard edge, including when the pixel lies exactly on the radius.
     // Dividing 0 by 0 here would give that pixel a NaN alpha, even at zero opacity.
     if e0 >= e1 {
@@ -34,7 +34,7 @@ const MAX_SPOT_SIZE: f64 = 2.0;
 
 /// A spot's radius in output pixels, `ppl` output pixels to the long edge: at least a pixel (a size that is not a
 /// number too), at most [`MAX_SPOT_SIZE`] long edges.
-fn radius_px(size: f64, ppl: f64) -> f64 {
+pub(crate) fn radius_px(size: f64, ppl: f64) -> f64 {
     let size = if size.is_nan() { 0.0 } else { size.min(MAX_SPOT_SIZE) };
     (size * ppl).max(1.0)
 }
@@ -214,14 +214,18 @@ pub fn window_for_reads_checked(
         .iter()
         .filter_map(|spot| {
             let r = radius_px(spot.size, ppl);
-            let pts: Vec<_> = spot.points.iter().map(|p| to_out.apply(*p)).collect();
+            // (a shaped spot's box is its shape's, `spot_area`)
+            let pts: Vec<_> = crate::spot_area::box_points(spot).iter().map(|p| to_out.apply(*p)).collect();
             let first = pts.first()?;
             let (mut x0, mut y0, mut x1, mut y1) = (first.x, first.y, first.x, first.y);
             for p in &pts {
                 (x0, y0, x1, y1) = (x0.min(p.x), y0.min(p.y), x1.max(p.x), y1.max(p.y));
             }
             // the box `apply` works in: the stroke plus a radius, plus a radius of padding
-            let t = [x0 - 2.0 * r, y0 - 2.0 * r, x1 + 2.0 * r, y1 + 2.0 * r];
+            // (a LaMa spot also holds the margin its fill reads, `spots_learned`)
+            let span = (x1 - x0).max(y1 - y0);
+            let pad = 2.0 * r + crate::spots_learned::extra_pad(spot, r, span, ppl) + crate::spot_area::window_pad(spot, r, span);
+            let t = [x0 - pad, y0 - pad, x1 + pad, y1 + pad];
             let s = match spot.source_offset {
                 Some(o) => {
                     let b = to_out.apply(o);
@@ -319,8 +323,7 @@ pub struct SpotLayout {
 pub fn layout(spot: &Spot, frame: &Frame, w: usize, h: usize, ppl: f64) -> Option<SpotLayout> {
     let to_out = frame.norm_to_out(w, h);
     let r = radius_px(spot.size, ppl) as f32;
-    let pts: Vec<(f32, f32)> = spot
-        .points
+    let pts: Vec<(f32, f32)> = crate::spot_area::box_points(spot)
         .iter()
         .map(|p| {
             let q = to_out.apply(*p);
@@ -328,7 +331,9 @@ pub fn layout(spot: &Spot, frame: &Frame, w: usize, h: usize, ppl: f64) -> Optio
         })
         .collect();
     pts.first()?;
-    let fill = spot.mode == SpotMode::Fill;
+    // a shaped spot (`spot_area`) has no source: it is rebuilt from its surroundings
+    let shaped = spot.area.is_some();
+    let fill = spot.mode == SpotMode::Fill || shaped;
     let offset = if fill {
         Some((0.0, 0.0))
     } else {
@@ -347,7 +352,7 @@ pub fn layout(spot: &Spot, frame: &Frame, w: usize, h: usize, ppl: f64) -> Optio
         y1 = y1.max(p.1 + r);
     }
     // content-aware fill reads the spot's surroundings (the window holds 2 radii around it)
-    let pad = if fill { 2.0 * r } else { r };
+    let pad = if fill { 2.0 * r } else { r } + crate::spot_area::context_pad(spot, f64::from((x1 - x0).max(y1 - y0))) as f32;
     let (bx0, by0) = (((x0 - pad).floor().max(0.0)) as usize, ((y0 - pad).floor().max(0.0)) as usize);
     let (bx1, by1) = (((x1 + pad).ceil() as usize).min(w), ((y1 + pad).ceil() as usize).min(h));
     if bx1 <= bx0 || by1 <= by0 {
@@ -364,7 +369,7 @@ pub fn layout(spot: &Spot, frame: &Frame, w: usize, h: usize, ppl: f64) -> Optio
         bh: by1 - by0,
         inner: r * (1.0 - feather * 0.8),
         opacity: (spot.opacity / 100.0).clamp(0.0, 1.0) as f32,
-        heal: matches!(spot.mode, SpotMode::Remove | SpotMode::Heal),
+        heal: !shaped && matches!(spot.mode, SpotMode::Remove | SpotMode::Heal),
         fill,
     })
 }
@@ -385,22 +390,39 @@ fn fill_box(src: &mut [[f32; 3]], tgt: &[[f32; 3]], alpha: &[f32], bw: usize, bh
 
 /// Apply all spots to `img` (output resolution). `ppl` = output pixels per long-edge unit.
 pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64) {
+    apply_except(img, spots, &[], frame, ppl);
+}
+
+/// [`apply`] without the spots marked in `done` (the ones a learned fill already drew,
+/// [`crate::spots_learned::apply`]); a `done` shorter than `spots` leaves the rest to draw.
+pub fn apply_except(img: &mut Rgb32f, spots: &[Spot], done: &[bool], frame: &Frame, ppl: f64) {
     let (w, h) = (img.width, img.height);
-    for spot in spots {
+    for (i, spot) in spots.iter().enumerate() {
+        if done.get(i).copied().unwrap_or(false) {
+            continue;
+        }
         let Some(SpotLayout { r, pts, offset, bx: bx0, by: by0, bw, bh, inner, opacity, heal, fill }) = layout(spot, frame, w, h, ppl) else {
             continue;
         };
         let Some(&first) = pts.first() else { continue };
+        crate::spots_keep::note_spot();
         let offset = offset.unwrap_or_else(|| auto_source(img, first, r));
         // alpha of the stroke and source patch in the box
         let mut alpha = vec![0.0f32; bw * bh];
         let mut src = vec![[0.0f32; 3]; bw * bh];
         let mut tgt = vec![[0.0f32; 3]; bw * bh];
+        // (a shaped spot's alpha follows its shape, `spot_area`)
+        let shaped = crate::spot_area::alpha(spot, frame, w, h, (bx0, by0, bw, bh), r, inner, opacity);
         for y in 0..bh {
             for x in 0..bw {
                 let (px, py) = ((bx0 + x) as f32 + 0.5, (by0 + y) as f32 + 0.5);
-                let d = pts.iter().map(|p| ((px - p.0).powi(2) + (py - p.1).powi(2)).sqrt()).fold(f32::MAX, f32::min);
-                alpha[y * bw + x] = (1.0 - smooth(inner, r, d)) * opacity;
+                alpha[y * bw + x] = match &shaped {
+                    Some(a) => a.get(y * bw + x).copied().unwrap_or(0.0),
+                    None => {
+                        let d = pts.iter().map(|p| ((px - p.0).powi(2) + (py - p.1).powi(2)).sqrt()).fold(f32::MAX, f32::min);
+                        (1.0 - smooth(inner, r, d)) * opacity
+                    }
+                };
                 src[y * bw + x] = img.sample_bilinear(px + offset.0, py + offset.1);
                 tgt[y * bw + x] = img.get(bx0 + x, by0 + y);
             }
@@ -474,6 +496,7 @@ mod tests {
                     feather: 0.0,
                     opacity: 0.0,
                     source_offset: Some(Point::new(8.0 / 64.0, 0.0)),
+                    ..Default::default()
                 };
                 apply(&mut img, &[spot], &frame, frame.px_per_long(64));
                 for (i, (actual, expected)) in img.data.iter().zip(&original.data).enumerate() {
@@ -496,6 +519,7 @@ mod tests {
                 feather: 0.0,
                 opacity: 100.0,
                 source_offset: Some(Point::new(0.125, 0.0)),
+                ..Default::default()
             };
             apply(&mut img, &[spot], &frame, frame.px_per_long(w));
             let (x, y) = (cx as usize, cy as usize);

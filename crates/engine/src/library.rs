@@ -6,6 +6,8 @@
 //!   catalog.snap   catalog.log      (lightcraft-catalog journal)
 //!   presets.json   view.json        (user presets + favourites; last source/sort/selection)
 //!   prefs.json     (library preferences: XMP sidecars, import defaults, cache size, last export)
+//!   locations.json (the map's saved locations, see `locations.rs`)
+//!   auto-denoise.json  (photos Auto AI Denoise handled when they were opened; see `denoise/auto.rs`)
 //!   thumbs/        (rendered thumbnail cache, safe to delete)
 //!   Originals/     (photos imported with "copy into library")
 //! ```
@@ -160,6 +162,19 @@ pub struct Library {
     lock: Option<LibraryLock>,
 }
 
+impl Library {
+    /// A small file of the library's own beside `prefs.json`: `Ok(None)` if it is missing, an error if it cannot be read
+    /// or is larger than `max` bytes (never read whole).
+    pub(crate) fn read_file(&mut self, name: &str, max: usize) -> std::io::Result<Option<Vec<u8>>> {
+        self.files.read_capped(name, max)
+    }
+
+    /// Replace such a file (atomically).
+    pub(crate) fn write_file(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        self.files.write_atomic(name, data)
+    }
+}
+
 /// Where a library's files live (see [`Session::open_library_in`]).
 pub struct LibraryStores {
     /// Shown as the library's location (`library.info`).
@@ -242,6 +257,18 @@ struct ViewFile {
     selection: Selection,
 }
 
+/// `mapSource` as stored, or `None` (OpenStreetMap) when it isn't a tile source, with a log line.
+fn lenient_tile_source<'de, D: serde::Deserializer<'de>>(deserializer: D) -> std::result::Result<Option<lightcraft_map::TileSource>, D::Error> {
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(value.and_then(|value| match serde_json::from_value::<lightcraft_map::TileSource>(value) {
+        Ok(source) => Some(source),
+        Err(e) => {
+            log::warn!("prefs.json mapSource: {e}; using OpenStreetMap");
+            None
+        }
+    }))
+}
+
 impl Library {
     pub fn journal(&self) -> &Journal {
         &self.journal
@@ -298,6 +325,8 @@ struct PrefsFile {
     keyword_sets: Vec<crate::cmd::keywords::KeywordSet>,
     keyword_set: Option<String>,
     recent_keywords: Vec<String>,
+    /// Local camera profile files this library was asked about (`cmd::local_profiles`).
+    local_profile_asked: Vec<String>,
     /// Develop defaults for imported photos.
     import: crate::import::ImportDefaults,
     /// Thumbnail disk cache budget (MB, 0 = default).
@@ -312,6 +341,11 @@ struct PrefsFile {
     /// Days after which untouched Local records of unbrowsed folders are forgotten (missing =
     /// the default, 0 = never).
     forget_local_days: Option<u32>,
+    /// The map's tile source (missing = the default: Offline, or OpenStreetMap when the user's setting says
+    /// so; re-checked when read). A damaged one is
+    /// dropped on its own, never taking the other preferences with it.
+    #[serde(deserialize_with = "lenient_tile_source")]
+    map_source: Option<lightcraft_map::TileSource>,
     /// Slideshow playback settings.
     slideshow: crate::slideshow::PlaybackSettings,
     /// Slideshow slide layout (margins, options, backdrop).
@@ -322,6 +356,8 @@ struct PrefsFile {
     slide_titles: crate::slide_title::TitleSettings,
     /// A view holds the photos it shows until it is refreshed (`library.holdView`).
     hold_view: bool,
+    /// Auto Sync as the user last set it (missing = the host's default).
+    auto_sync: Option<bool>,
 }
 
 fn presets_json(s: &Session) -> String {
@@ -381,6 +417,26 @@ struct SettingsLoad {
 }
 
 impl SettingsLoad {
+    /// Keep a copy of `name` as `<name>.corrupt-<unix time>` before it is written again without
+    /// some of its content (`why`), with a warning; when the copy can't be made the file isn't
+    /// overwritten this session.
+    fn set_aside(&mut self, store: &mut dyn Store, name: &'static str, why: &str) {
+        let bytes = match store.read(name) {
+            Ok(Some(b)) => b,
+            _ => return,
+        };
+        let secs = web_time::SystemTime::now().duration_since(web_time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+        let keep = format!("{name}.corrupt-{secs}");
+        log::error!("library: {name}: {why}");
+        match store.write_atomic(&keep, &bytes) {
+            Ok(()) => self.warnings.push(format!("{name}: {why}. The file was kept as {keep}.")),
+            Err(w) => {
+                self.blocked.push(name);
+                self.warnings.push(format!("{name}: {why}, and it couldn't be set aside ({w}). LightCraft won't overwrite the file."));
+            }
+        }
+    }
+
     fn read<T: serde::de::DeserializeOwned>(&mut self, store: &mut dyn Store, name: &'static str) -> Option<T> {
         let bytes = match store.read(name) {
             Ok(b) => b?,
@@ -524,6 +580,8 @@ impl Session {
 
     /// Open `stores`; the new library takes `lock` once nothing can fail any more.
     fn open_stores(&mut self, stores: LibraryStores, seed_demo: bool, lock: &mut Option<LibraryLock>) -> Result<()> {
+        // the queued sidecar writes belong to the library being left: they land (and are noted) first
+        self.finish_sidecar_writes();
         let LibraryStores { dir, catalog, mut files, on_disk } = stores;
         // the current library may be these same files: let its background snapshot land first, and
         // what its log's thread was handed reach the file before the new journal reads it. When
@@ -542,6 +600,8 @@ impl Session {
                 log::error!("library: {e} (every change is in its snapshot)");
             }
         }
+        // what Auto AI Denoise recorded belongs to the library being left
+        self.denoise_auto_flush(true);
         self.media.smart_dir = on_disk.then(|| crate::smart::dir(&dir));
         // Photo ids belong to one library; denoise work must not carry into the next.
         self.denoise.library_changed();
@@ -565,6 +625,8 @@ impl Session {
         }
         self.undo.clear();
         self.redo.clear();
+        // photo ids are per library: positions set in the last one say nothing about this one's
+        self.gps_edited.clear();
         self.interaction = None;
         self.pending_log.clear();
         self.selection = Selection::default();
@@ -598,6 +660,7 @@ impl Session {
         self.keyword_sets = prefs.keyword_sets;
         self.keyword_set = prefs.keyword_set;
         self.recent_keywords = prefs.recent_keywords;
+        self.local_profile_asked = prefs.local_profile_asked;
         self.import_defaults = prefs.import;
         self.cache_mb = prefs.cache_mb;
         self.prep.library = prefs.prep.map(crate::prep::PrepSettings::sanitized);
@@ -606,12 +669,35 @@ impl Session {
         self.slide_overlays = prefs.slide_overlays.sanitized();
         self.slide_titles = prefs.slide_titles.sanitized();
         self.forget_local_days = prefs.forget_local_days.unwrap_or(lightcraft_catalog::DEFAULT_FORGET_DAYS);
+        self.map.load_source(prefs.map_source);
+        // saved locations: hostile input, checked entry by entry
+        let file = settings.read::<crate::locations::LocationsFile>(files.as_mut(), crate::locations::FILE).unwrap_or_default();
+        let (locations, dropped) = crate::locations::SavedLocations::load(file, self.map.locations.revision());
+        if dropped > 0 {
+            settings.set_aside(files.as_mut(), crate::locations::FILE, &format!("{dropped} saved location(s) in it aren't valid and were left out"));
+            // the copy is safe: write the good ones back, so the next open doesn't set it aside again
+            if !settings.blocked.contains(&crate::locations::FILE)
+                && let Err(e) = files.write_atomic(crate::locations::FILE, &locations.to_file())
+            {
+                log::error!("library: {}: {e}", crate::locations::FILE);
+            }
+        }
+        self.map.locations.replace(locations);
         self.hold_view = prefs.hold_view;
+        self.auto_sync_chosen = prefs.auto_sync;
+        self.auto_sync = prefs.auto_sync.unwrap_or(self.auto_sync_default);
         self.refresh_view();
         self.smart_previews_dir = prefs.smart_previews_dir.filter(|_| on_disk).map(PathBuf::from);
         if let Some(d) = &self.smart_previews_dir {
             self.media.smart_dir = Some(d.clone());
         }
+        // books (the Book module): a file this build can't use is left as it is and never overwritten
+        let loaded = crate::book::store::load(files.as_mut());
+        self.books = loaded.books;
+        if loaded.block {
+            settings.blocked.push(crate::book::store::NAME);
+        }
+        settings.warnings.extend(loaded.warnings);
         // presets
         if let Some(f) = settings.read::<PresetsFile>(files.as_mut(), "presets.json") {
             for p in &mut self.presets {
@@ -744,6 +830,10 @@ impl Session {
             log::error!("library: compaction: {e}");
             lib.last_error = Some(format!("compaction: {e}"));
         }
+        // what Auto AI Denoise recorded goes to disk once the catalog edits it belongs to are saved
+        if self.pending_log.is_empty() {
+            self.denoise_auto_flush(false);
+        }
         let due = self.library.as_ref().is_some_and(|l| l.presets_saved.differs(self) && !l.blocked.contains(&"presets.json"));
         if !due {
             return Ok(());
@@ -777,7 +867,7 @@ impl Session {
         let presets_unsaved = self.library.as_ref().is_some_and(|l| l.presets_error.is_some());
         // records the log's thread can't write: a snapshot (a fresh file holding everything) is due
         let log_held = self.library.as_ref().is_some_and(|l| l.log_held.is_some());
-        if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved || log_held) && !backing_off {
+        if self.library.is_some() && (!self.pending_log.is_empty() || presets_unsaved || self.denoise_auto_pending() || log_held) && !backing_off {
             let _ = self.persist();
         } else if let Some(lib) = self.library.as_mut() {
             poll_compaction(lib);
@@ -827,11 +917,15 @@ impl Session {
     /// holding everything in memory, so it saves those ops too (the log handle may be the only
     /// thing that's broken). Fails only if nothing could be saved; the ops then stay queued.
     pub fn close_library(&mut self) -> Result<()> {
+        self.finish_sidecar_writes();
         if self.library.is_none() {
             return Ok(());
         }
         let _ = self.end_interaction();
         let persisted = self.persist();
+        if persisted.is_ok() {
+            self.denoise_auto_flush(true);
+        }
         self.save_view();
         let unlogged = if persisted.is_err() { self.pending_log.len() as u64 } else { 0 };
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
@@ -847,6 +941,10 @@ impl Session {
             lib.retry_at = None;
             lib.last_error = None;
         }
+        // the Book view's undo steps write books.json: after the library is closed they must not look
+        // like they work
+        self.undo.retain(|e| e.book.is_none());
+        self.redo.retain(|e| e.book.is_none());
         let result = match (persisted, snapshot) {
             (_, Ok(())) => Ok(()),
             // neither the log nor the snapshot took the queued ops
@@ -917,16 +1015,19 @@ impl Session {
             keyword_sets: self.keyword_sets.clone(),
             keyword_set: self.keyword_set.clone(),
             recent_keywords: self.recent_keywords.clone(),
+            local_profile_asked: self.local_profile_asked.clone(),
             import: self.import_defaults.clone(),
             cache_mb: self.cache_mb,
             prep: self.prep.library,
             smart_previews_dir: self.smart_previews_dir.as_ref().map(|d| d.to_string_lossy().to_string()),
             forget_local_days: Some(self.forget_local_days),
+            map_source: (!self.map.source_is_default()).then(|| self.map.source().clone()),
             slideshow: self.slideshow.clone(),
             slide_layout: self.slide_layout.clone(),
             slide_overlays: self.slide_overlays.clone(),
             slide_titles: self.slide_titles.clone(),
             hold_view: self.hold_view,
+            auto_sync: self.auto_sync_chosen,
         })
         .unwrap_or_default();
         let Some(lib) = self.library.as_mut() else { return Ok(()) };
@@ -936,6 +1037,51 @@ impl Session {
             ));
         }
         lib.files.write_atomic("prefs.json", &v).map_err(|e| EngineError::Other(format!("prefs: {e}")))
+    }
+
+    /// Save the saved locations (`locations.json`, atomically; no-op for in-memory sessions).
+    pub fn save_locations(&mut self) -> Result<()> {
+        let v = self.map.locations.to_file();
+        let Some(lib) = self.library.as_mut() else { return Ok(()) };
+        if lib.blocked.contains(&crate::locations::FILE) {
+            return Err(EngineError::Other(format!(
+                "{0} couldn't be read when the library opened, so it isn't overwritten; reopen the library to save locations",
+                crate::locations::FILE
+            )));
+        }
+        lib.files.write_atomic(crate::locations::FILE, &v).map_err(|e| EngineError::Other(format!("saved locations: {e}")))
+    }
+
+    /// Turn Auto Sync on or off as the user's choice: it is kept in the library's preferences, so it
+    /// survives a restart. A preferences file that can't be written is logged; the choice still
+    /// holds for this session.
+    pub fn set_auto_sync(&mut self, on: bool) {
+        self.auto_sync = on;
+        self.auto_sync_chosen = Some(on);
+        if let Err(e) = self.save_prefs() {
+            log::error!("library: auto sync: {e}");
+        }
+    }
+
+    /// What Auto Sync is where the user has not chosen yet (the desktop app starts it on, so editing
+    /// a selection edits every selected photo). A choice already saved for the open library stays.
+    pub fn set_auto_sync_default(&mut self, on: bool) {
+        self.auto_sync_default = on;
+        if self.auto_sync_chosen.is_none() {
+            self.auto_sync = on;
+        }
+    }
+
+    /// Writes a settings file of the open library (a no-op for an in-memory session); a file that
+    /// couldn't be read when the library opened is not overwritten (the Book module's books.json).
+    pub(crate) fn write_library_file(&mut self, name: &'static str, bytes: &[u8]) -> Result<()> {
+        let Some(lib) = self.library.as_mut() else { return Ok(()) };
+        if lib.blocked.contains(&name) {
+            return Err(EngineError::Other(format!(
+                "{name} was left untouched when the library opened (see the warning shown then), so nothing is saved to it; move the file away and reopen the library to start again"
+            )));
+        }
+        lib.files.write_atomic(name, bytes).map_err(|e| EngineError::Other(format!("{name}: {e}")))
     }
 
     /// Warnings about the open library not handed out yet: its settings files, and a lock that

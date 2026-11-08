@@ -59,7 +59,8 @@ commands:
                   target/ci/report.json (machine, GPU adapters, data,
                   steps, skipped tests) and target/ci/summary.md; --hardware also runs the GPU tests on
                   every backend with a hardware adapter; --summary-md prints the Markdown summary.
-                  --quick: only what the changes since the merge base with origin/main (or REF) can
+                  --quick: only what the changes since the merge base with mine/custom (the fork's pushed branch, when it exists),
+                  else origin/main (or REF) can
                   break: clippy, the changed packages' tests, and heif / parity / wasm when they apply.
                   One ci runs at a time per machine; others wait (LIGHTCRAFT_CI_SLOTS=N for N at once,
                   LIGHTCRAFT_CI_LOCK=off to skip the lock)

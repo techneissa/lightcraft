@@ -179,3 +179,43 @@ fn brackets_yield_to_text_focus_and_shortcut_recording() {
     assert_eq!(ratings(&app).unwrap(), [0, 2, 5]);
     assert!(app.session.undo.is_empty());
 }
+
+#[test]
+fn digits_set_the_brush_strength_while_a_brush_is_in_use_and_rate_otherwise() {
+    // Masking brush: 3 is Flow 30; no rating changes
+    let mut app = app().unwrap();
+    app.ui.view = ViewMode::Detail;
+    app.ui.right = RightPanel::Masking;
+    app.ui.tool = "brush".into();
+    let ctx = egui::Context::default();
+    frame(&mut app, &ctx, Some(Key::Num3), None);
+    assert_eq!(app.ui.brush_flow, 30.0);
+    assert_eq!(ratings(&app).unwrap(), [0, 2, 5], "the digit did not rate");
+    // 0 is 100 % (typed apart from the 3, so no pair)
+    let ctx = egui::Context::default();
+    frame(&mut app, &ctx, Some(Key::Num0), None);
+    assert_eq!(app.ui.brush_flow, 100.0);
+    // the Remove tool takes Opacity
+    app.ui.right = RightPanel::Remove;
+    let ctx = egui::Context::default();
+    frame(&mut app, &ctx, Some(Key::Num5), None);
+    assert_eq!(app.ui.remove_opacity, 50.0);
+    assert_eq!(ratings(&app).unwrap(), [0, 2, 5]);
+    // without a brush the digit rates the photo
+    app.ui.right = RightPanel::Edit;
+    let ctx = egui::Context::default();
+    frame(&mut app, &ctx, Some(Key::Num4), None);
+    assert_eq!(ratings(&app).unwrap(), [4, 4, 4], "the digit rates the selection");
+}
+
+#[test]
+fn two_digits_typed_together_make_an_exact_brush_value() {
+    let mut app = app().unwrap();
+    app.ui.view = ViewMode::Detail;
+    app.ui.right = RightPanel::Masking;
+    app.ui.tool = "brush".into();
+    let ctx = egui::Context::default();
+    frame(&mut app, &ctx, Some(Key::Num3), None);
+    frame(&mut app, &ctx, Some(Key::Num5), None);
+    assert_eq!(app.ui.brush_flow, 35.0);
+}

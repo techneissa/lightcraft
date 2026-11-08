@@ -48,6 +48,8 @@ impl LightcraftApp {
             let _ = self.session.execute("app.memoryBudget", &serde_json::json!({"mb": mb}));
         }
         self.memory_applied = Some(mb);
+        crate::smart_editing::sync(self);
+        self.session.map.set_start_on_osm(self.ui.settings.map_start_on_osm);
         let limit = self.ui.settings.hot_pixel_limit;
         if self.hot_pixels_applied != Some(limit) {
             self.hot_pixels_applied = Some(limit);

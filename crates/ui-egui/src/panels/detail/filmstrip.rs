@@ -31,6 +31,7 @@ pub(super) fn navigator(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect
     register(ui, "canvas:navigator", frame);
     let resp = ui.interact(frame.expand(5.0), egui::Id::unique("navigator"), Sense::click_and_drag());
     crate::widgets::announce(&resp, crate::i18n::tr("Navigator"));
+    let resp = resp.on_hover_text(crate::i18n::tr("Drag to Move the View"));
     if (resp.clicked() || resp.dragged())
         && let Some(q) = resp.interact_pointer_pos()
     {
@@ -64,7 +65,13 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
     let cell_w = 120.0;
     let ppp = ui.ctx().pixels_per_point();
     if ids.is_empty() {
-        let why = if app.session.filter != Default::default() { "No photos match the filters (View → Clear Filters)" } else { "No photos" };
+        let why = if app.session.narrow.is_some() && app.ui.view == crate::state::ViewMode::Map {
+            "No photos match the location filter"
+        } else if app.session.filter != Default::default() {
+            "No photos match the filters (View → Clear Filters)"
+        } else {
+            "No photos"
+        };
         // a label, not painted text, so a screen reader reads the reason; the region keeps the strip navigable
         let mut empty = ui.new_child(egui::UiBuilder::new().max_rect(r).layout(egui::Layout::centered_and_justified(egui::Direction::TopDown)));
         crate::widgets::announce_region(&empty, egui::accesskit::Role::Region, crate::i18n::tr("Filmstrip"));
@@ -128,15 +135,14 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 }
             }
             if let Some(tex) = thumb {
-                let [tw, th] = tex.size;
-                let s = (img_area.width() / tw as f32).min(img_area.height() / th as f32);
-                let fr = Rect::from_center_size(img_area.center(), vec2(tw as f32 * s, th as f32 * s));
+                let lay = super::film_bar::layout(cr, img_area, tex.size, app.ui.settings.film_badges);
+                let fr = lay.image;
                 p.image(tex.id(), fr, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0)), Color32::WHITE);
                 crate::panels::grid::selection_ring(p, &t, fr, state);
                 if app.ui.settings.film_badges
                     && let Some(ph) = app.session.catalog.photo(*id)
                 {
-                    film_badges(p, &t, fr, ph);
+                    film_badges(p, &t, lay.bar, ph);
                 }
                 if let Some(st) = app.session.catalog.stack_of(*id) {
                     let collapsed = st.collapsed;
@@ -196,7 +202,7 @@ pub(crate) fn filmstrip(app: &mut LightcraftApp, ui: &mut egui::Ui, r: Rect) {
                 }
             }
             // the same photo actions as the grid and loupe (Restore / Delete Permanently in Recently Deleted)
-            crate::widgets::context_menu(&resp, |ui| crate::panels::grid::context_menu(app, ui, *id));
+            crate::widgets::context_menu(&resp, |ui| crate::panels::photo_menu::show(app, ui, *id));
         }
     });
 }
@@ -212,16 +218,15 @@ pub(crate) fn film_spoken(file_name: &str, failed: bool) -> String {
     }
 }
 
-/// Rating, flag and edited badges along a filmstrip thumbnail's bottom edge (Settings → Interface).
-fn film_badges(p: &egui::Painter, t: &Tokens, fr: Rect, ph: &lightcraft_catalog::Photo) {
+/// Rating, flag and edited badges in the cell's `bar` (Settings → Interface).
+fn film_badges(p: &egui::Painter, t: &Tokens, bar: Rect, ph: &lightcraft_catalog::Photo) {
     use crate::icons::{Icon, paint};
     use lightcraft_catalog::Flag;
     let edited = ph.is_edited();
     if ph.rating == 0 && ph.flag == Flag::None && !edited {
         return;
     }
-    let bar = Rect::from_min_max(pos2(fr.left(), fr.bottom() - 15.0), fr.right_bottom());
-    p.rect_filled(bar, 0.0, Color32::from_black_alpha(130));
+    p.rect_filled(bar, super::film_bar::BAR_ROUNDING, Color32::from_black_alpha(130));
     let y = bar.center().y;
     let mut x = bar.left() + 3.0;
     x += crate::rating::paint_rating(p, pos2(x, y), ph.rating, crate::rating::RatingSize::Small, t.star) + 2.0;

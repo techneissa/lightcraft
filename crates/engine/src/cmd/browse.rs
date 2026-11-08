@@ -249,6 +249,22 @@ fn add_to_library(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"added": n}))
 }
 
+/// Where `folder.rename {path, name}` takes the folder: its path and the new one. Refused for the
+/// home folder and its standard places, and for a name that is empty or has a slash.
+pub(crate) fn rename_folder_target(p: &Value) -> crate::Result<(String, String)> {
+    let from = str_param(p, "path").ok_or_else(|| bad("folder.rename", "missing path"))?.trim_end_matches(['/', '\\']).to_string();
+    refuse_protected_place("folder.rename", &from)?;
+    let name = str_param(p, "name")
+        .map(str::trim)
+        .filter(|n| !n.is_empty() && !n.contains(['/', '\\']) && *n != "." && *n != "..")
+        .ok_or_else(|| bad("folder.rename", "give a folder name (no slashes)"))?;
+    if let Some(why) = crate::rename::name_char_problem(name) {
+        return Err(bad("folder.rename", why));
+    }
+    let to = Path::new(&from).with_file_name(name).to_string_lossy().to_string();
+    Ok((from, to))
+}
+
 pub fn specs() -> Vec<CommandSpec> {
     vec![
         cmd!(
@@ -259,13 +275,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "{path, name} — rename a folder on disk (its files and sidecars go along) and relink the photos in it; one undo step (undo renames it back, refused if the old name is taken); refused for the home folder and its Pictures, Desktop and Downloads → {path, relinked}",
             always,
             |s, p| {
-                let from = str_param(p, "path").ok_or_else(|| bad("folder.rename", "missing path"))?.trim_end_matches(['/', '\\']).to_string();
-                refuse_protected_place("folder.rename", &from)?;
-                let name = str_param(p, "name")
-                    .map(str::trim)
-                    .filter(|n| !n.is_empty() && !n.contains(['/', '\\']) && *n != "." && *n != "..")
-                    .ok_or_else(|| bad("folder.rename", "give a folder name (no slashes)"))?;
-                let to = Path::new(&from).with_file_name(name).to_string_lossy().to_string();
+                let (from, to) = rename_folder_target(p)?;
                 let n = move_folder(s, &from, &to).map_err(|e| bad("folder.rename", e))?;
                 Ok(json!({"path": to, "relinked": n}))
             }
@@ -330,7 +340,9 @@ pub fn specs() -> Vec<CommandSpec> {
 /// Rename `from` to `to` on disk (a folder; everything in it goes along). Never overwrites:
 /// refused when `to` exists (a case-only rename on a case-insensitive file system goes through
 /// a temporary name). Missing parents of `to` are created.
-pub(crate) fn rename_folder_on_disk(from: &str, to: &str) -> std::result::Result<(), String> {
+/// Whether the folder `from` can take the place `to`: it is a folder, nothing else is there (apart from
+/// its own spelling in another letter case) and it is not moving into itself. Nothing is changed.
+pub(crate) fn check_folder_target(from: &str, to: &str) -> std::result::Result<(), String> {
     let (src, dst) = (Path::new(from), Path::new(to));
     if !src.is_dir() {
         return Err(format!("{from} is not a folder (moved or deleted?)"));
@@ -342,6 +354,13 @@ pub(crate) fn rename_folder_on_disk(from: &str, to: &str) -> std::result::Result
     if dst.starts_with(src) {
         return Err("a folder can't move into itself".into());
     }
+    Ok(())
+}
+
+pub(crate) fn rename_folder_on_disk(from: &str, to: &str) -> std::result::Result<(), String> {
+    check_folder_target(from, to)?;
+    let (src, dst) = (Path::new(from), Path::new(to));
+    let case_only = from != to && from.to_lowercase() == to.to_lowercase();
     if let Some(parent) = dst.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("{}: {e}", parent.display()))?;
     }
@@ -518,7 +537,14 @@ fn follow_library_folder(chosen: &mut Option<String>, from: &str, to: &str) {
 /// the photos inside, as one undo step: undo renames the folder back and restores the photos'
 /// paths, redo repeats the move — each refused (and reported) when the destination is taken.
 pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result::Result<usize, String> {
-    let (src, dst) = (Path::new(from), Path::new(to));
+    prepare_folder_move(s, from)?;
+    rename_folder_on_disk(from, to)?;
+    commit_folder_move(s, from, to)
+}
+
+/// The checks before a folder is moved, and the sidecar repairs it needs first.
+pub(crate) fn prepare_folder_move(s: &mut Session, from: &str) -> std::result::Result<(), String> {
+    let src = Path::new(from);
     if !src.is_dir() {
         return Err(format!("{from} is not a folder"));
     }
@@ -533,8 +559,13 @@ pub(crate) fn move_folder(s: &mut Session, from: &str, to: &str) -> std::result:
     }
     // Repairs retain their exact old paths, including those on surviving history entries.
     // Complete them before the directory moves; an unavailable repair leaves it in place.
-    s.repair_sidecars_with(&crate::rename::RealFs).map_err(|e| e.to_string())?;
-    rename_folder_on_disk(from, to)?;
+    s.repair_sidecars_with(&crate::rename::RealFs).map_err(|e| e.to_string())
+}
+
+/// After the folder moved on disk: point its photos and the library's records at the new place, in
+/// one undo step. When the catalog does not take it, the folder is put back where the photos still point.
+pub(crate) fn commit_folder_move(s: &mut Session, from: &str, to: &str) -> std::result::Result<usize, String> {
+    let (src, dst) = (Path::new(from), Path::new(to));
     let mut ops: Vec<Op> = s
         .catalog
         .photos()

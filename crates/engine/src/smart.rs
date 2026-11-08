@@ -59,6 +59,77 @@ const HEADER_MAX: u64 = 4096;
 /// wrote the proxy's pixels (colour matrix and profile are baked into them) and stored tone curve.
 const LOOK_FIELD: &str = "look_version";
 
+/// The header field that names the colour base baked into the proxy's pixels: `auto` for Camera Matching, `local`
+/// for a local camera profile (then [`LOCAL_FIELD`] names it), `macos` for macOS Colour (then [`MACOS_FIELD`] says
+/// which version of LightCraft's macOS base made it). A proxy of a photo with the fitted look that has none
+/// was written before Camera Matching stopped taking a local profile's colour silently: it is out of date.
+const BASE_FIELD: &str = "base";
+
+/// The header field that names the local camera profile whose colour is baked into the proxy's pixels
+/// (`<id>:<key>`, [`local_stamp`]); absent for every other proxy.
+const LOCAL_FIELD: &str = "local_profile";
+
+/// The header field with the version of LightCraft's macOS base ([`MACOS_BASE_VERSION`]) a `macos` proxy was made with.
+/// The OS build is not recorded: a proxy may be the only copy while its original is offline, so a macOS update never
+/// makes one stale.
+const MACOS_FIELD: &str = "macos_base_version";
+
+/// The version of LightCraft's macOS base (the decoder recipe and the loader's tone fit, `files::macos`): it rises with
+/// either, so proxies made before a change are rebuilt from their online originals. The recipe's part is
+/// `lightcraft_macraw::RECIPE_VERSION` itself (one number, never bumped apart); bump [`MACOS_FIT_VERSION`] for the fit.
+pub const MACOS_BASE_VERSION: u64 = lightcraft_macraw::RECIPE_VERSION as u64 + MACOS_FIT_VERSION;
+
+/// The tone fit's part of [`MACOS_BASE_VERSION`] (`camera_preview::macos_base`): bumped when the fit changes what a macOS
+/// Colour picture looks like.
+pub const MACOS_FIT_VERSION: u64 = 0;
+
+/// What a photo's smart preview should say about local camera profiles and macOS Colour.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LocalWant {
+    /// The photo is not on a local profile: a proxy that has the colour of one is out of date.
+    No,
+    /// On a profile whose file is missing or unusable: whatever the proxy has is kept (it may be the only copy).
+    Keep,
+    /// On this profile as the file is now: a proxy made with another profile or another content is out of date.
+    Is(String),
+    /// On macOS Colour, which this computer can make: a proxy with another base, or an older macOS base
+    /// ([`MACOS_BASE_VERSION`]), is out of date.
+    Macos,
+    /// On macOS Colour, which this computer cannot make (not a Mac, a camera its decoder does not list): whatever the
+    /// proxy has is kept, and a missing one is not built (it would have Camera Matching's colours, not the photo's).
+    MacosElsewhere,
+}
+
+/// The header stamp of local profile `id` as its file is now: `<id>:<key>`.
+pub fn local_stamp(id: &str, key: u128) -> String {
+    format!("{id}:{key:032x}")
+}
+
+/// Whether the proxy at `path` has the wrong local-profile colour for what the photo wants ([`LocalWant`]). An
+/// unreadable proxy is not stale here ([`is_valid`]'s business), and a missing file never makes one stale.
+pub fn is_local_stale(path: &Path, want: &LocalWant) -> bool {
+    use std::io::Read;
+    if matches!(want, LocalWant::Keep | LocalWant::MacosElsewhere) || !is_valid(path) {
+        return false;
+    }
+    let Ok(f) = std::fs::File::open(path) else { return false };
+    let mut head = Vec::with_capacity(1024);
+    if f.take(HEADER_MAX).read_to_end(&mut head).is_err() {
+        return false;
+    }
+    let Some(rest) = head.strip_prefix(MAGIC) else { return false };
+    let Some(nl) = rest.iter().position(|b| *b == b'\n') else { return false };
+    let Some(header) = rest.get(..nl).and_then(|h| serde_json::from_slice::<serde_json::Value>(h).ok()) else { return false };
+    let has = header.get(LOCAL_FIELD).and_then(serde_json::Value::as_str);
+    let macos = header.get(BASE_FIELD).and_then(serde_json::Value::as_str) == Some("macos");
+    match want {
+        LocalWant::No => has.is_some() || macos,
+        LocalWant::Is(stamp) => has != Some(stamp.as_str()),
+        LocalWant::Macos => !macos || header.get(MACOS_FIELD).and_then(serde_json::Value::as_u64).unwrap_or(0) < MACOS_BASE_VERSION,
+        LocalWant::Keep | LocalWant::MacosElsewhere => false,
+    }
+}
+
 /// The JPEG quality a smart preview's pixels are stored at. The original 92 left the 8×8 DCT's
 /// quantised DC — each block's own mean, luma and chroma — visible as block steps across the frame
 /// and as a small constant colour shift; that is the largest part of what a proxy gets wrong
@@ -78,10 +149,12 @@ const ENC_FIELD: &str = "enc";
 /// settings or stored facts change, so proxies an older build wrote are rebuilt: a missing field
 /// reads as 0, which makes every proxy from before this version stale. Version 2 is the first to
 /// record the field at all (a version 1 proxy is stored at JPEG quality 92, which this build
-/// raises to [`JPEG_QUALITY`]); version 3 is the first to store the decoder facts in the tail. A
-/// stale proxy whose original is offline is kept as it is (see [`is_stale`]).
+/// raises to [`JPEG_QUALITY`]); version 3 is the first to store the decoder facts in the tail; version 4 (this fork's,
+/// `FORK.md`: Smart Previews for editing) adds the two flags the Profile picker needs ([`SmartFacts::colorimetric`],
+/// [`SmartFacts::macos_offered`]), so a photo edited from its proxy offers the same Profile choices as from its original.
+/// A stale proxy whose original is offline is kept as it is (see [`is_stale`]).
 /// Crate-visible so the look-marker test pins the marker format to it instead of to a literal.
-pub(crate) const ENCODE_VERSION: u64 = 3;
+pub(crate) const ENCODE_VERSION: u64 = 4;
 
 /// The decoder facts a render interprets its settings against, stored with the proxy's pixels so
 /// an offline original edits like it did online (the catalog's header facts cannot carry them).
@@ -100,6 +173,13 @@ struct SmartFacts {
     /// The semantic mattes whose bytes follow the facts, in this order.
     #[serde(default)]
     mattes: Vec<StoredMatte>,
+    /// The original's [`SourceInfo::colorimetric`] and [`SourceInfo::macos_offered`]: what the Profile picker offers. A
+    /// proxy standing in for an offline original does not use them (its colour can't change); one a photo is edited
+    /// from while the original is online does ([`load_for_editing`]).
+    #[serde(default)]
+    colorimetric: bool,
+    #[serde(default)]
+    macos_offered: bool,
 }
 
 /// One stored matte's shape; its `len` bytes of 0..255 alpha follow the facts.
@@ -141,6 +221,18 @@ fn stored_facts(head: &serde_json::Value, bytes: &[u8]) -> Option<(SmartFacts, M
 /// Encode a source image and its decoder facts (the camera tone curve and the [`SourceInfo`] the
 /// render interprets settings against, if given) as a smart preview.
 pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String> {
+    encode_stamped(img, info, None)
+}
+
+/// [`encode`] for a photo on a local camera profile: `local_profile` (`<id>:<key>`, [`local_stamp`]) is recorded in the
+/// header, because the proxy's pixels carry that profile's colour.
+pub fn encode_stamped(img: &Rgb32f, info: Option<&SourceInfo>, local_profile: Option<&str>) -> Result<Vec<u8>, String> {
+    encode_for(img, info, &local_profile.map_or(LocalWant::No, |stamp| LocalWant::Is(stamp.to_owned())))
+}
+
+/// [`encode`] with the colour base `want` names in the header: a local profile's stamp, or `macos` and
+/// [`MACOS_BASE_VERSION`] for a proxy made from the macOS base; `auto` otherwise.
+pub fn encode_for(img: &Rgb32f, info: Option<&SourceInfo>, want: &LocalWant) -> Result<Vec<u8>, String> {
     // scale so all but the brightest 0.05 % fit into 0..1
     let mut lum: Vec<f32> = img.data.iter().map(|c| c[0].max(c[1]).max(c[2])).filter(|v| v.is_finite()).collect();
     let scale = if lum.is_empty() {
@@ -175,6 +267,18 @@ pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String
         LOOK_FIELD: crate::camera_preview::LOOK_VERSION,
         ENC_FIELD: ENCODE_VERSION,
     });
+    let base = match want {
+        LocalWant::Is(stamp) => {
+            head[LOCAL_FIELD] = serde_json::Value::String(stamp.clone());
+            "local"
+        }
+        LocalWant::Macos => {
+            head[MACOS_FIELD] = serde_json::Value::from(MACOS_BASE_VERSION);
+            "macos"
+        }
+        LocalWant::No | LocalWant::Keep | LocalWant::MacosElsewhere => "auto",
+    };
+    head[BASE_FIELD] = serde_json::Value::String(base.to_owned());
     // The tail: the decoder facts (and the file's semantic mattes) after the JPEG, so the header
     // stays small. `tail` records its byte count from the end of the file, so a header rewritten
     // in place (an edited look version) keeps pointing at it.
@@ -198,6 +302,8 @@ pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String
             camera_color: i.camera_color.as_deref().cloned(),
             local_tone: i.local_tone.as_deref().cloned(),
             mattes: matte_list,
+            colorimetric: i.colorimetric,
+            macos_offered: i.macos_offered,
         };
         let facts = serde_json::to_vec(&facts).map_err(|e| e.to_string())?;
         let n = u32::try_from(facts.len()).map_err(|_| "smart preview facts too large")?;
@@ -220,6 +326,12 @@ pub fn encode(img: &Rgb32f, info: Option<&SourceInfo>) -> Result<Vec<u8>, String
 /// Decode a smart preview back into a source image, its stored camera tone curve and the stored
 /// decoder facts (an invalid curve or tail is ignored, like a missing one).
 pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<SourceInfo>), String> {
+    decode_with_offer(bytes).map(|(img, tone, info, _)| (img, tone, info))
+}
+
+/// [`decode`], also giving the original's Profile-picker flags the proxy stored (`colorimetric`, `macos_offered`);
+/// `None` when it stored no facts.
+fn decode_with_offer(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<SourceInfo>, Option<(bool, bool)>), String> {
     let rest = bytes.strip_prefix(MAGIC).ok_or("not a smart preview")?;
     let nl = rest.iter().position(|b| *b == b'\n').ok_or("bad smart preview")?;
     let head: serde_json::Value = serde_json::from_slice(&rest[..nl]).map_err(|e| e.to_string())?;
@@ -235,7 +347,9 @@ pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<Source
     // the decoder undoes the sRGB encoding; the values are the source's own primaries
     let mut img = d.image;
     img.data.iter_mut().for_each(|c| *c = c.map(|v| v * scale));
-    let info = stored_facts(&head, bytes).map(|(f, mattes)| SourceInfo {
+    let facts = stored_facts(&head, bytes);
+    let offer = facts.as_ref().map(|(f, _)| (f.colorimetric, f.macos_offered));
+    let info = facts.map(|(f, mattes)| SourceInfo {
         raw: f.raw,
         as_shot_temp: f.as_shot_temp,
         as_shot_tint: f.as_shot_tint,
@@ -248,8 +362,13 @@ pub fn decode(bytes: &[u8]) -> Result<(Rgb32f, Option<CameraTone>, Option<Source
         local_tone: f.local_tone.map(Arc::new),
         native_long: None,
         retouch: None,
+        // (a smart preview keeps the colour it was made with: the option can't change it)
+        colorimetric: false,
+        colour_note: None,
+        macos_offered: false,
+        macos_note: None,
     });
-    Ok((img, tone, info))
+    Ok((img, tone, info, offer))
 }
 
 /// Where a library keeps its smart previews.
@@ -427,6 +546,11 @@ fn header_look_version(head: &serde_json::Value) -> u64 {
     head.get(LOOK_FIELD).and_then(serde_json::Value::as_u64).unwrap_or(0)
 }
 
+/// Whether a header names its colour base ([`BASE_FIELD`]) as `auto`, `local` or `macos`.
+fn header_has_base(head: &serde_json::Value) -> bool {
+    matches!(head.get(BASE_FIELD).and_then(serde_json::Value::as_str), Some("auto" | "local" | "macos"))
+}
+
 /// The encode version a header records: a missing, negative, fractional or otherwise malformed
 /// value counts as 0 (older than any real version), like [`header_look_version`].
 fn header_encode_version(head: &serde_json::Value) -> u64 {
@@ -438,7 +562,8 @@ fn header_encode_version(head: &serde_json::Value) -> u64 {
 /// reaches every proxy — or, when the photo takes the per-file camera look (`look`,
 /// [`lightcraft_catalog::Photo::fitted_look`]), by an older camera-look fit than this build's (so
 /// its stored curve, and the colour baked into its pixels, are out of date; the fit only reaches
-/// those raws, so a JPEG's or DNG's proxy is never stale for it). A proxy from a newer build is
+/// those raws, so a JPEG's or DNG's proxy is never stale for it), or one that names no colour base
+/// ([`BASE_FIELD`]). A proxy from a newer build is
 /// left alone (rebuilding it here would only undo that build's work), as is one that can't be
 /// read: those are [`is_valid`]'s business.
 pub fn is_stale_for(path: &Path, look: bool) -> bool {
@@ -454,13 +579,21 @@ pub fn is_stale_for(path: &Path, look: bool) -> bool {
     let Some(rest) = head.strip_prefix(MAGIC) else { return false };
     let Some(nl) = rest.iter().position(|b| *b == b'\n') else { return false };
     rest.get(..nl).and_then(|h| serde_json::from_slice::<serde_json::Value>(h).ok()).is_some_and(|h| {
-        header_encode_version(&h) < ENCODE_VERSION || (look && header_look_version(&h) < u64::from(crate::camera_preview::LOOK_VERSION))
+        header_encode_version(&h) < ENCODE_VERSION
+            || (look && (header_look_version(&h) < u64::from(crate::camera_preview::LOOK_VERSION) || !header_has_base(&h)))
     })
 }
 
 /// [`is_stale_for`] for a photo that takes the per-file camera look: both conditions apply.
 pub fn is_stale(path: &Path) -> bool {
     is_stale_for(path, true)
+}
+
+/// Whether the proxy at `path` can stand in for a photo's online original while it is edited (Smart Previews for editing):
+/// complete, written by the current encoding and camera-look fit (`look`: the photo takes the per-file look), and made
+/// with the colour `want` names. A stale proxy is not one: unlike an offline original's, it is never used, only rebuilt.
+pub fn current_for(path: &Path, look: bool, want: &LocalWant) -> bool {
+    !matches!(want, LocalWant::Keep | LocalWant::MacosElsewhere) && is_valid(path) && !is_stale_for(path, look) && !is_local_stale(path, want)
 }
 
 /// The marker file in a smart previews folder: the camera-look fit version and encode version its
@@ -495,6 +628,31 @@ pub fn mark_look_checked(dir: &Path) -> Result<(), String> {
     lightcraft_catalog::safe_file::write_atomic(&path, text.as_bytes()).map_err(|e| format!("{}: {e}", path.display()))
 }
 
+/// Load the proxy at `path` to edit from it while its original can be read (Smart Previews for editing): like [`load`],
+/// with the Profile-picker flags of the original, so the photo is offered the same Profile choices. A proxy that stored
+/// none (written before [`ENCODE_VERSION`] 4) is an error: it is not used for editing.
+pub fn load_for_editing(path: &Path) -> Result<crate::media::DecodedSource, String> {
+    let b = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let (image, camera_tone, info, offer) = decode_with_offer(&b)?;
+    let (Some(mut info), Some((colorimetric, macos_offered))) = (info, offer) else {
+        return Err(format!("{}: no stored facts", path.display()));
+    };
+    info.colorimetric = colorimetric;
+    info.macos_offered = macos_offered;
+    Ok(crate::media::DecodedSource {
+        image: Arc::new(image),
+        info: Some(info),
+        camera_tone,
+        denoised: None,
+        camera_profile: None,
+        outliers: false,
+        from_proxy: true,
+        edit_proxy: true,
+        reduced: false,
+        options: Default::default(),
+    })
+}
+
 /// Load the proxy at `path`.
 pub fn load(path: &Path) -> Result<crate::media::DecodedSource, String> {
     let b = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
@@ -506,7 +664,9 @@ pub fn load(path: &Path) -> Result<crate::media::DecodedSource, String> {
         camera_profile: None,
         outliers: false,
         from_proxy: true,
+        edit_proxy: false,
         reduced: false,
+        options: Default::default(),
     })
 }
 

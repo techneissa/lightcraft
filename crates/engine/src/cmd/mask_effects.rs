@@ -35,7 +35,19 @@ pub const FIELDS: &[&str] = &[
     "defringe",
     "color_hue",
     "color_sat",
+    "recolor",
+    "recolor_r",
+    "recolor_g",
+    "recolor_b",
+    "recolor_range",
+    "recolor_from_r",
+    "recolor_from_g",
+    "recolor_from_b",
 ];
+
+/// Recolor's colour, Range and Colour to Replace: they do nothing without its amount (`recolor`), as the colour's
+/// hue without its saturation, and go with it.
+const RECOLOR_RGB: [&str; 7] = ["recolor_r", "recolor_g", "recolor_b", "recolor_range", "recolor_from_r", "recolor_from_g", "recolor_from_b"];
 
 /// Brush settings an effect can carry (Lightroom keeps these per brush, not in presets).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -121,7 +133,8 @@ pub fn get(a: &LocalAdjustments, k: &str) -> f64 {
 /// `a` with field `k` set to `v` (unchanged for an unknown name).
 pub fn set(a: &LocalAdjustments, k: &str, v: f64) -> LocalAdjustments {
     let Ok(Value::Object(mut o)) = serde_json::to_value(a) else { return *a };
-    if !o.contains_key(k) || !v.is_finite() {
+    // (fields at 0 that aren't written, as Recolor's, are still fields)
+    if !(o.contains_key(k) || FIELDS.contains(&k)) || !v.is_finite() {
         return *a;
     }
     o.insert(k.into(), json!(v));
@@ -130,9 +143,13 @@ pub fn set(a: &LocalAdjustments, k: &str, v: f64) -> LocalAdjustments {
 
 /// The sliders of `a` away from 0 (the colour's hue only with its saturation).
 pub fn changed_fields(a: &LocalAdjustments) -> Vec<String> {
-    let mut out: Vec<String> = FIELDS.iter().filter(|k| get(a, k).abs() > 1e-9 && **k != "color_hue").map(|k| k.to_string()).collect();
+    let mut out: Vec<String> =
+        FIELDS.iter().filter(|k| get(a, k).abs() > 1e-9 && **k != "color_hue" && !RECOLOR_RGB.contains(k)).map(|k| k.to_string()).collect();
     if a.color_sat.abs() > 1e-9 {
         out.push("color_hue".into());
+    }
+    if a.recolor.abs() > 1e-9 {
+        out.extend(RECOLOR_RGB.iter().map(|k| k.to_string()));
     }
     out
 }
@@ -159,9 +176,13 @@ impl MaskEffect {
     pub fn matches(&self, a: &LocalAdjustments) -> bool {
         let fields = self.field_list();
         let colorless = |x: &LocalAdjustments| x.color_sat.abs() < 1e-9;
+        let unrecolored = |x: &LocalAdjustments| x.recolor.abs() < 1e-9;
         let same = |k: &str| (get(&self.adjust, k) - get(a, k)).abs() < 1e-6;
-        fields.iter().all(|k| *k == "color_hue" && colorless(&self.adjust) && colorless(a) || same(k))
-            && (!self.with_amount || (self.adjust.amount - a.amount).abs() < 1e-6)
+        fields.iter().all(|k| {
+            *k == "color_hue" && colorless(&self.adjust) && colorless(a)
+                || RECOLOR_RGB.contains(k) && unrecolored(&self.adjust) && unrecolored(a)
+                || same(k)
+        }) && (!self.with_amount || (self.adjust.amount - a.amount).abs() < 1e-6)
     }
     /// Does the effect set nothing (all its sliders at 0, nothing kept from an import)?
     pub fn is_empty(&self) -> bool {
@@ -176,6 +197,9 @@ impl MaskEffect {
         self.fields.retain(|f| FIELDS.contains(&f.as_str()));
         if self.fields.iter().any(|f| f == "color_sat") && !self.fields.iter().any(|f| f == "color_hue") {
             self.fields.push("color_hue".into());
+        }
+        if self.fields.iter().any(|f| f == "recolor") {
+            self.fields.extend(RECOLOR_RGB.iter().map(|k| k.to_string()));
         }
         self.fields.sort_by_key(|f| FIELDS.iter().position(|k| k == f));
         self.fields.dedup();
@@ -465,11 +489,10 @@ fn update_effect(s: &mut Session, p: &Value) -> Result<Value> {
 fn rename_effect(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "mask.renameEffect";
     let name = name_param(p, C)?;
-    let to = name_of(p, "to", C)?;
     let i = effect_index(s, &name, C)?;
-    if position(s, &to).is_some_and(|j| j != i) {
-        return Err(bad(C, format!("an effect named `{to}` exists already")));
-    }
+    let raw = str_param(p, "to").ok_or_else(|| bad(C, "missing `to`"))?;
+    let others = s.mask_effects.iter().enumerate().filter(|(j, _)| *j != i).map(|(_, e)| e.name.as_str());
+    let to = crate::names::check_name(raw, others).map_err(|e| bad(C, e.to_string()))?;
     if let Some(e) = s.mask_effects.get_mut(i) {
         e.name = to.clone();
     }

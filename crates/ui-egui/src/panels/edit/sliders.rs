@@ -1,6 +1,6 @@
 use super::{
     Align2, ControlSpec, DevelopSettings, Icon, LightcraftApp, PhotoId, Section, Sense, SliderOut, Tokens, Track, Value, controls, divider, json,
-    pos2, register, section_header, slider, vec2,
+    pos2, register, slider, vec2,
 };
 
 /// Commit a slider interaction: begin → live updates → end, so a drag is one undo step.
@@ -67,8 +67,22 @@ pub(super) fn rel_to_k(r: f64) -> f64 {
 /// Browse…. Like the menu bar's menus, the dropdown and each submenu stay inside the window and
 /// scroll when their rows don't fit (issue #2059: a folder of many imported profiles ran past the
 /// window's bottom edge). `below` is the dropdown's bottom edge, which the menu hangs from.
-pub(super) fn profile_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, below: f32) {
-    crate::menu_level::level(ui, 1, Some(below), |ui| profile_menu_rows(app, ui, d, below));
+pub(super) fn profile_menu(
+    app: &mut LightcraftApp,
+    ui: &mut egui::Ui,
+    d: &DevelopSettings,
+    below: f32,
+    find: &crate::widgets::dropdown_search::Filter,
+    profiles: &[(String, String)],
+) {
+    crate::menu_level::level(ui, 1, Some(below), |ui| {
+        // typed text lists the matching profiles from every group instead
+        if find.filtering() || find.field_shown() {
+            super::profile_search::rows(app, ui, d, find, profiles);
+        } else {
+            profile_menu_rows(app, ui, d, below);
+        }
+    });
 }
 
 fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSettings, below: f32) {
@@ -91,6 +105,27 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
     let heading = |ui: &mut egui::Ui, s: &str| {
         ui.label(egui::RichText::new(crate::i18n::tr(s)).font(t.semibold(11.5)).color(t.text_dim));
     };
+    // Camera Matching: how a raw's colour starts, whatever profile look is applied on top
+    let mut colour_pick: (Option<crate::panels::camera_colour::Row>, Option<crate::panels::camera_colour::Row>) = (None, None);
+    if let Some(photo) = app.session.active()
+        && crate::panels::camera_colour::offered(app, photo)
+    {
+        for row in crate::panels::camera_colour::rows(app, photo, d) {
+            // (a local profile's name is the user's own: it is not translated; a greyed row is a stored profile this
+            // computer can't use for the photo)
+            let shown = if row.profile.is_some() { row.label.clone() } else { crate::i18n::tr(&row.label).to_string() };
+            let r = ui.add_enabled(row.enabled, egui::Button::selectable(row.applied(d), shown)).on_hover_text(row.tip.clone());
+            register(ui, format!("profileMenu:cameraColour:{}", row.key()), r.rect);
+            if r.clicked() {
+                colour_pick.0 = Some(row.clone());
+            }
+            if r.hovered() {
+                colour_pick.1 = Some(row);
+            }
+        }
+        crate::macos_colour::picker::menu_item(app, ui, photo);
+        ui.separator();
+    }
     for (title, key, ids) in [("Favorites", "fav", app.session.profile_favorites.clone()), ("Recent", "recent", app.session.profile_recent.clone())] {
         let list: Vec<_> = ids.iter().filter_map(|id| app.session.profile_info(id).map(|(name, _)| (id.as_str(), name))).collect();
         if list.is_empty() {
@@ -169,6 +204,15 @@ fn profile_menu_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, d: &DevelopSett
         app.hover_preview =
             Some(crate::HoverPreview { label: crate::i18n::tr_format!("Profile: {}", crate::i18n::profile_label(hovered_id, name)), settings: s });
     }
+    if let Some(row) = &colour_pick.1
+        && !row.applied(d)
+    {
+        let shown = if row.profile.is_some() { row.label.clone() } else { crate::i18n::tr(&row.label).to_string() };
+        app.hover_preview = Some(crate::HoverPreview { label: crate::i18n::tr_format!("Profile: {}", shown), settings: row.with(d) });
+    }
+    if let Some(row) = colour_pick.0 {
+        let _ = app.run("develop.profile", row.params());
+    }
     if let Some(id) = pick.0 {
         let _ = app.run("develop.profile", json!({"id": id}));
     }
@@ -189,8 +233,13 @@ pub(super) fn section(
     body: impl FnOnce(&mut LightcraftApp, &mut egui::Ui, &DevelopSettings),
 ) {
     let open = app.ui.section_open(id);
-    let (resp, toggled) = section_header(ui, id, title, open, Some(d.section_enabled(id)));
-    if let Some(on) = toggled {
+    let crate::widgets::SectionHeader { resp, eye: toggled, solo_clicked } =
+        crate::widgets::section_header_solo(ui, id, title, open, Some(d.section_enabled(id)), Some(app.ui.single_panel));
+    if solo_clicked {
+        if let Err(e) = app.run("view.soloSections", json!({"on": !app.ui.single_panel})) {
+            app.toast(ui.ctx(), e);
+        }
+    } else if let Some(on) = toggled {
         let _ = app.run("develop.sectionEnabled", json!({"section": id, "enabled": on}));
     } else if resp.clicked() {
         // ⌥-click opens just this section, as in Lightroom Classic
@@ -198,6 +247,11 @@ pub(super) fn section(
         if let Err(e) = app.run(&format!("section.{id}"), json!({"solo": solo})) {
             app.toast(ui.ctx(), e);
         }
+    }
+    // dragged by its heading, the section moves among the others (see `edit_sections::drag`)
+    crate::panels::edit_sections::drag::note_header(ui, id, resp.rect);
+    if resp.drag_started_by(egui::PointerButton::Primary) && !crate::panels::edit_sections::drag::on_header_buttons(ui, resp.rect) {
+        app.ui.dragging_edit_section = crate::panels::edit_sections::EditSection::from_id(id);
     }
     crate::widgets::context_menu(&resp, |ui| {
         let mut solo = app.ui.single_panel;
@@ -209,6 +263,7 @@ pub(super) fn section(
             }
             ui.close();
         }
+        crate::panels::edit_sections::menu(app, ui, id);
     });
     if open {
         body(app, ui, d);
@@ -348,9 +403,11 @@ pub(super) fn header_buttons(ui: &mut egui::Ui, bw: bool, hdr: bool, reset_tip: 
             for &i in row {
                 let (id, label, active) = left[i];
                 let mut resp = crate::widgets::text_button(ui, id, crate::i18n::tr(label), active);
-                if id == "hdr" {
+                match id {
                     // HDR editing, next to B&W as Lightroom has it
-                    resp = resp.on_hover_text(crate::i18n::tr("Edit in HDR: highlights above SDR white, for HDR exports and displays"));
+                    "hdr" => resp = resp.on_hover_text(crate::i18n::tr("Edit in HDR: highlights above SDR white, for HDR exports and displays")),
+                    "auto" => resp = resp.on_hover_text(crate::i18n::tr("Auto Adjust Settings")),
+                    _ => resp = resp.on_hover_text(crate::i18n::tr(if active { "Switch to Color (V)" } else { "Switch to Black & White (V)" })),
                 }
                 let clicked = resp.clicked();
                 match id {

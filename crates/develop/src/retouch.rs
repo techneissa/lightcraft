@@ -89,7 +89,7 @@ pub fn face_instances(s: &DevelopSettings) -> Vec<(String, &'static ControlSpec)
     out
 }
 
-/// Whether the render changes anything: the Portrait section is on and some feature is on for some face.
+/// Whether the render changes anything: Portrait is on (the tab's eye) and some feature is on for some face.
 pub fn active(s: &DevelopSettings) -> bool {
     s.section_enabled("portrait") && !s.retouch.is_off()
 }

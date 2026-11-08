@@ -713,6 +713,10 @@ pub fn request_thumb(app: &mut LightcraftApp, id: PhotoId, size: usize, priority
     {
         return;
     }
+    // with the Remove panel open, the photo's thumbnail follows once a burst of spot edits pauses
+    if crate::edited_thumb::waits(app, id) {
+        return;
+    }
     // The camera's embedded preview is this photo's thumbnail (unedited raw): once its quick render
     // has arrived there is nothing left to ask for. Without this the grid would rebuild the render
     // job — and its cache key — on every frame, which is what the embedded-thumbnail record settles.
@@ -794,14 +798,14 @@ fn cell(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, r: Rect, square
     let photo_rect = paint_cell_thumbnail(app, p, &t, id, img_rect, ThumbFlags { square, state, onscreen, ppp });
     // labels and badges
     paint_cell_caption(app, p, &t, &photo, r, square);
-    paint_cell_badges(app, p, &t, &photo, photo_rect, BadgeFlags { square, selected, hovered: resp.hovered() });
+    paint_cell_badges(app, p, &t, id, &photo, photo_rect, BadgeFlags { square, selected, hovered: resp.hovered() });
     if let Some(name) = &photo.copy_name {
         paint_copy_tag(p, &t, name, img_rect, square);
     }
     if let Some(why) = &photo.preview_only {
         paint_preview_pill(ui, p, &t, id, why, photo_rect);
     }
-    if photo.flag == Flag::Reject {
+    if photo.flag == Flag::Reject && app.ui.settings.dim_rejected {
         p.rect_filled(img_rect, 0.0, Color32::from_black_alpha(110));
     }
     cell_interaction(app, ui, &resp, id, &photo);
@@ -849,7 +853,8 @@ fn paint_cell_thumbnail(app: &mut LightcraftApp, p: &egui::Painter, t: &Tokens, 
 
 fn paint_cell_caption(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo: &lightcraft_catalog::Photo, r: Rect, square: bool) {
     if square && app.ui.show_filenames {
-        let m = &photo.meta;
+        let shown = photo.meta.shown();
+        let m = &*shown;
         let name = match app.ui.grid_info.as_str() {
             "exposure" => {
                 let parts: Vec<String> = [
@@ -885,7 +890,15 @@ fn photo_badge_bar(photo_rect: Rect) -> Rect {
     Rect::from_min_max(pos2(photo_rect.left(), (photo_rect.bottom() - 24.0).max(photo_rect.top())), photo_rect.right_bottom())
 }
 
-fn paint_cell_badges(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo: &lightcraft_catalog::Photo, photo_rect: Rect, flags: BadgeFlags) {
+fn paint_cell_badges(
+    app: &LightcraftApp,
+    p: &egui::Painter,
+    t: &Tokens,
+    id: PhotoId,
+    photo: &lightcraft_catalog::Photo,
+    photo_rect: Rect,
+    flags: BadgeFlags,
+) {
     let BadgeFlags { square, selected, hovered } = flags;
     let show_badges = match app.ui.settings.grid_badges {
         crate::state::GridBadges::Auto => hovered || selected || photo.rating > 0 || photo.flag != Flag::None || photo.label.is_some(),
@@ -911,6 +924,9 @@ fn paint_cell_badges(app: &LightcraftApp, p: &egui::Painter, t: &Tokens, photo: 
             Flag::None => {}
         }
         let mut right = bar.right();
+        if let Some(n) = super::selection_order::number(&app.session, id) {
+            right -= super::selection_order::paint(p, right - 6.0, bar.center().y, n, t) + 8.0;
+        }
         if photo.is_edited() {
             paint(p, Rect::from_min_size(pos2(right - 20.0, bar.center().y - 7.0), vec2(14.0, 14.0)), Icon::Sliders, t.text_label);
             right -= 20.0;
@@ -985,7 +1001,7 @@ fn cell_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
     if resp.drag_started_by(egui::PointerButton::Primary) {
         begin_photo_drag(app, id);
     }
-    crate::widgets::context_menu(resp, |ui| context_menu(app, ui, id));
+    crate::widgets::context_menu(resp, |ui| super::photo_menu::show(app, ui, id));
 }
 
 struct ThumbFlags {
@@ -1327,6 +1343,15 @@ fn context_menu_open_and_edit(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Ph
             if ui.button(crate::i18n::tr("Edit in Other Editor")).clicked() {
                 let _ = app.run("photo.editInExternal", json!({}));
             }
+            if ui
+                .add_enabled(
+                    crate::menus::ui_enabled(app, "photo.openAsLayersInPhotocraft"),
+                    egui::Button::new(crate::i18n::tr("Open as Layers in PhotoCraft…")),
+                )
+                .clicked()
+            {
+                let _ = app.run("photo.openAsLayersInPhotocraft", json!({}));
+            }
             // the raw itself, unrendered: for a raw developer set as the other editor
             if ui
                 .add_enabled(
@@ -1555,6 +1580,7 @@ fn context_menu_locate_and_export(app: &mut LightcraftApp, ui: &mut egui::Ui, id
             }
         }
     });
+    crate::animated_gif::context_menu_item(app, ui);
     ui.separator();
 }
 
@@ -1563,8 +1589,10 @@ fn context_menu_delete(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         if ui.button(crate::i18n::tr("Restore")).clicked() {
             let _ = app.run("photo.restore", json!({}));
         }
-        if ui.button(crate::i18n::tr("Delete Permanently")).clicked() {
-            let _ = app.run("photo.deletePermanently", json!({}));
+        let permanently = ui.button(crate::i18n::tr("Delete Permanently"));
+        register(ui, "button:contextDeletePermanently", permanently.rect);
+        if permanently.clicked() {
+            let _ = crate::menubar::run_item(app, "photo.deletePermanently", json!({}));
         }
     } else {
         let delete = ui.button(crate::i18n::tr("Delete Photo"));

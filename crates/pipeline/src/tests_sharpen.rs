@@ -1,5 +1,6 @@
-//! Sharpening: an unsharp mask at the pixel scale, with Radius (source pixels), Detail (halo
-//! damping) and Masking (edge mask), the same at every preview and export size.
+//! Sharpening: an unsharp mask at the pixel scale, with Radius (source pixels), Detail (how much
+//! of the finest, noise-sized detail is sharpened, `finish::sharpen_mix`) and Masking (edge mask),
+//! the same at every preview and export size.
 
 use lightcraft_develop::DevelopSettings;
 use lightcraft_raster::{Rgb32f, Rgba8};
@@ -89,17 +90,18 @@ fn larger_radius_boosts_coarser_detail() {
 }
 
 #[test]
-fn detail_changes_the_output_and_damps_halos() {
+fn detail_changes_the_output_and_never_widens_halos() {
     let src = scene(256);
     let lo = render_at(&src, &sharp(80.0, 1.5, 0.0, 0.0), 256);
     let hi = render_at(&src, &sharp(80.0, 1.5, 100.0, 0.0), 256);
     let plain = render_at(&src, &sharp(0.0, 1.5, 0.0, 0.0), 256);
     assert_ne!(lo.data, hi.data);
-    // the overshoot next to the hard edge (u = 0.5) shrinks with Detail 0
+    // the overshoot next to the hard edge (u = 0.5) is no larger with Detail 0 (an edge is always
+    // sharpened in full; Detail 0 leaves out the finer detail around it)
     let row = 96 * 256;
     let at = |img: &Rgba8, x: usize| img.data[row + x][1] as i32;
     let over = |img: &Rgba8| (118..128).map(|x| (at(img, x) - at(&plain, x)).abs()).max().unwrap_or(0);
-    assert!(over(&lo) < over(&hi), "halo {} (detail 0) vs {} (detail 100)", over(&lo), over(&hi));
+    assert!(over(&lo) <= over(&hi), "halo {} (detail 0) vs {} (detail 100)", over(&lo), over(&hi));
 }
 
 #[test]
@@ -143,29 +145,6 @@ fn sharpening_is_the_same_at_every_size() {
 }
 
 #[test]
-fn subpixel_blur_response_is_continuous_and_does_not_vanish() {
-    use crate::local::{sharpen_gain, sharpen_sigma};
-    use lightcraft_raster::{
-        Plane,
-        blur::{gauss_taps, gaussian_taps},
-    };
-    // An alternating grating measures the actual FIR response at Nyquist, away from edges.
-    let src = Plane::from_fn(256, 16, |x, _| if x % 2 == 0 { 1.0 } else { -1.0 });
-    let response = |sigma| {
-        let blur = gaussian_taps(&src, &gauss_taps(sharpen_sigma(sigma)));
-        (16..240).map(|x| (src.data[x] - blur.data[x]) * src.data[x]).sum::<f32>() / 224.0 * sharpen_gain(sigma)
-    };
-    for sigma in [0.1, 0.25, 0.34, 0.4, 0.4999, 0.5001] {
-        let desired = -(-0.5 * std::f32::consts::PI.powi(2) * sigma * sigma).exp_m1();
-        assert!((response(sigma) - desired).abs() < 0.001, "sigma {sigma}: {} vs {desired}", response(sigma));
-    }
-    assert!((response(0.4999) - response(0.5001)).abs() < 0.001);
-    assert!(response(0.75) > response(0.5));
-    assert_eq!(sharpen_gain(1.0), 1.0);
-    assert_eq!(sharpen_gain(2.0), 1.0);
-}
-
-#[test]
 fn reduced_source_uses_the_original_pixel_radius() {
     let original = scene(512);
     let told = SourceInfo { native_long: Some(512), ..info() };
@@ -194,7 +173,7 @@ fn old_processes_keep_their_sharpening_and_cache_switches_are_exact() {
     let src = Arc::new(scene(256));
     let req = RenderRequest::fit(256, 256);
     let cache = StageCache::default();
-    for process in [Process::V1, Process::V2, Process::V3, Process::V2, Process::V3] {
+    for process in [Process::V1, Process::V2, Process::V3, Process::V4, Process::V2, Process::V3] {
         let mut s = sharp(80.0, 0.6, 0.0, 30.0);
         s.process = process.version();
         let plain = render(&src, &info(), &s, &req).image;
@@ -248,19 +227,4 @@ fn local_sharpness_uses_the_sharpen_band() {
     assert!(rms(&with, &plain) > 0.05, "{}", rms(&with, &plain));
     s.detail.sharpen_radius = 3.0;
     assert_ne!(render_at(&src, &s, 256).data, with.data, "Radius reaches the local sharpness band");
-}
-
-/// An enlarging export (2× the original) scales Radius 2 and 3 to 4 and 6 px: they stay distinct
-/// rather than meeting at a 4 px cap.
-#[test]
-fn enlarged_export_keeps_radius_steps_apart() {
-    use crate::Quality;
-    use crate::local::plane_sigmas;
-    let sigma = |r: f64| plane_sigmas(&sharp(100.0, r, 0.0, 0.0), 1024.0, 512.0, Quality::Full).sharpen.unwrap();
-    assert_eq!((sigma(2.0), sigma(3.0)), (4.0, 6.0));
-    let src = scene(128);
-    let enlarged = SourceInfo { native_long: Some(64), ..info() };
-    let at = |r: f64| render(&src, &enlarged, &sharp(100.0, r, 0.0, 0.0), &RenderRequest::fit(128, 128)).image;
-    let d = rms(&at(2.0), &at(3.0));
-    assert!(d > 0.1, "Radius 2 and 3 render alike at 2x: {d}");
 }

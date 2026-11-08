@@ -8,9 +8,9 @@ the face input contract and the retouching step. A leaf crate: it depends on `li
 
 Each feature owns one module and touches nothing else in this crate:
 
-| Feature | Module | Example | Tests | Panel section |
+| Feature | Module | Example | Tests | Section of the Portrait tab |
 |---|---|---|---|---|
-| Blemishes | `src/blemish.rs` | `examples/blemish.rs` | `tests/blemish.rs` | `crates/ui-egui/src/panels/edit/portrait/blemish.rs` |
+| Blemishes | `src/blemish.rs` | `examples/blemish.rs` | `tests/blemish.rs` | `crates/ui-egui/src/panels/portrait/blemish.rs` |
 | Skin | `src/skin.rs` | `examples/skin.rs` | `tests/skin.rs` | `…/portrait/skin.rs` |
 | Wrinkles | `src/wrinkles.rs` | `examples/wrinkles.rs` | `tests/wrinkles.rs` | `…/portrait/wrinkles.rs` |
 | Skin Tone | `src/skin_tone.rs` | `examples/skin_tone.rs` | `tests/skin_tone.rs` | `…/portrait/skin_tone.rs` |
@@ -32,7 +32,8 @@ In the module:
 - **`apply`**: retouch the image in place (see the rules below). The panel section draws its sliders with
   `cx.slider("retouch.<KEY>.<field>")`, which writes to every face or to the picked one.
 
-Never edit `lib.rs`, `settings.rs`, `run.rs` or the panel list (`portrait.rs`): they already list every feature.
+Never edit `lib.rs`, `settings.rs`, `run.rs` or the tab's list of sections (`crates/ui-egui/src/panels/portrait.rs`):
+they already list every feature. The tab's Portrait Presets section (`panels/portrait/presets.rs`) has no module here.
 Clothes recolouring is not one of them: it is a local-mask effect (issue #83), so it works on any mask; the clothes
 parts of `Part` are there for its masks.
 
@@ -79,10 +80,38 @@ A feature reads the faces through `Scene`: each `FaceCtx` has the box and landma
 - **No panic** on any input: no faces, 100 faces, a face past the edge, a box that is not a box, a 1 × 1 or empty
   image, a malformed mask. Each feature's test file runs these through `tests/common`.
 - **Models run once per photo**, on a worker thread with an activity row, cached; a slider drag never runs a model.
-  `apply` itself runs no model.
+  `apply` itself runs no model. See the speed target below.
 - The image is scene-linear RGB (linear Rec.2020 primaries in the app; the examples use linear sRGB).
 - A windowed render (the zoomed loupe) gives `apply` a part of the frame: `Scene` maps faces into it, and a feature
   that reads far around a face reads only what the window holds.
+
+## Speed target
+
+Every feature lane builds to this, and its PR reports both numbers below:
+
+- **A slider is a GPU step on cached masks.** Moving a slider re-runs only the feature's per-pixel work on masks
+  that are already there: no model runs while dragging, and the draft render keeps the loupe's slider budget.
+- **Models run once per photo, ahead of time.** People parsing (#81) and face matching run once per photo, before
+  the photo is opened: on import and while the app is idle, on Core ML where the model has a Core ML file (see
+  `fork/coreml.md`), else candle. Opening a photo in the Portrait tab, or applying a portrait preset, then finds the
+  masks ready.
+- **Report**: the model time per photo (the parse and the match, on the Mac it was measured on, with the model set
+  and Core ML or candle) and the slider time (one draft render with the feature on, against the same render with
+  it off). Measure with `LIGHTCRAFT_PROFILE=1` or a bench, never in a test.
+
+Running ahead of time is not wired yet. Today faces are found when the Portrait tab opens on a photo and kept in
+memory for the 64 photos used last. What it takes:
+
+1. **One frame for faces.** Find faces (and their masks) on the photo as the background face scan sees it
+   (upright, uncropped, default settings, 2048 px: `crates/engine/src/faces_worker.rs`, the frame people parsing
+   uses too), and map them into the edit's frame (orientation, lens corrections, transform) when a render needs
+   them. A result then no longer depends on the edit, and per-face settings can be keyed by that frame.
+2. **A disk cache** of each photo's faces, keyed by the file's pixels and the provider's version, like people
+   parsing's (`~/Library/Caches/LightCraft/people-parsing`), so the work survives a restart and the 64-photo memory
+   cache only holds what is open.
+3. **A queue in the background face scan** (`faces.pump`, paced by what the user is doing): photos imported or not
+   yet parsed get their faces and masks while the pace allows, after the scan's own work for the photo, reusing its
+   render.
 
 ## Settings
 
@@ -110,5 +139,5 @@ pass (they are one per-pixel pass there, so the step sits before all of them). S
    feature wires it into the pipeline's geometry.
 3. **Background**: after every retouch, once for the whole picture.
 
-The step is skipped while the block is off or the Portrait section's eye is off; the scene-linear stage's key then
+The step is skipped while the block is off or the Portrait tab's eye is off; the scene-linear stage's key then
 hashes a 0 for it (in-memory stage caches only).

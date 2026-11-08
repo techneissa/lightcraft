@@ -21,11 +21,19 @@ pub(crate) use frame::import_tick_allowed;
 pub(crate) use screenshot::shot_ready;
 
 impl LightcraftApp {
+    /// UI-thread milliseconds the brush stroke being painted took last frame to bring the
+    /// adjustment under the brush on screen; `None` when no stroke shows one.
+    pub fn brush_live_ms(&self) -> Option<f64> {
+        self.brush_live.as_ref().and_then(crate::brush_live::LiveStroke::live_ms)
+    }
+
     /// Build the app with default UI, renderer, cache and control state, and move AI segmentation
     /// to a worker so frames apply results instead of waiting.
     pub fn new(mut session: Session, services: Services) -> Self {
         // AI mask requests run on the model's worker; frames apply their results (never wait)
         session.segmenter.background = true;
+        // editing a selection edits every selected photo, unless the user turned Auto Sync off
+        session.set_auto_sync_default(true);
         Self {
             session,
             ui: UiState::default(),
@@ -38,6 +46,7 @@ impl LightcraftApp {
             native_menu: false,
             native_shortcuts: Default::default(),
             recording_shortcut: None,
+            keybinds: Default::default(),
             text_focus: false,
             headless_host: false,
             notices: vec![],
@@ -55,6 +64,7 @@ impl LightcraftApp {
             last_shot_geometry: None,
             max_texture_side: MAX_TEXTURE_SIDE,
             clock: AppClock::new(),
+            edited_thumb: Default::default(),
             accesskit_language: None,
             slideshow_hidden_at: None,
             slideshow_auto_paused: false,
@@ -109,6 +119,11 @@ impl LightcraftApp {
             compare_tiles: Default::default(),
             compare_hold_until: f64::NEG_INFINITY,
             merge: merge::MergeState::default(),
+            reflection_quality: 768,
+            reflection_model: "dsrnet-s".into(),
+            reflection_open: true,
+            reflection_photo: None,
+            reflection_glare: Default::default(),
             import: None,
             scan: None,
             scans_stopping: Default::default(),
@@ -122,16 +137,26 @@ impl LightcraftApp {
             review_pending: None,
             shown_library: None,
             export: None,
+            sync_settings: Default::default(),
+            from_control: false,
+            layers: None,
+            edit_in: None,
+            rename_task: None,
+            handoffs: Vec::new(),
+            macos_job: None,
             tasks: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,
+            animated_gif_reported: true,
             hover_preview: None,
+            hover_memo: None,
             window_is_fullscreen: false,
             gpu_applied: None,
             gpu_notice: false,
             disk_space_notice: false,
             disk_notice: None,
             memory_applied: None,
+            smart_editing_applied: None,
             hot_pixels_applied: None,
             display_applied: None,
             display_error: None,
@@ -142,6 +167,9 @@ impl LightcraftApp {
             alt_asks_for_library: false,
             recent_checks: Default::default(),
             activity_expanded: false,
+            map: Default::default(),
+            activity_open: Default::default(),
+            activity_seen_seq: 0,
         }
     }
 
@@ -202,7 +230,16 @@ impl LightcraftApp {
     /// [`LightcraftApp::run`], keeping what kind of error a refusal is: for code that decides on it
     /// (offer a model's download, treat a cancel as one) instead of reading the message.
     pub fn run_typed(&mut self, id: &str, params: Value) -> Result<Value, CommandError> {
+        // photo files are moving: an export would read them from under the rename
+        if id == "app.export" && self.rename_task.is_some() {
+            return Err(CommandError::from(crate::i18n::tr("Wait for the rename to finish: it is moving the files").to_string()));
+        }
+        if matches!(id, "photo.rename" | "folder.rename") && params.get("background").and_then(Value::as_bool) == Some(true) {
+            return crate::rename_task::start(self, id, &params).map_err(CommandError::from);
+        }
         if let Some(r) = menus::run_ui_command(self, id, &params) {
+            // a view switch ends (or starts) the Map view's location filter at once
+            panels::map::sync_location_filter(self);
             if r.is_ok() {
                 docking::reveal_command(self, id)?;
             }
@@ -218,6 +255,9 @@ impl LightcraftApp {
             params
         };
         let r = self.session.execute(id, &params).map_err(CommandError::from);
+        if r.is_ok() {
+            panels::book::after_command(self, id);
+        }
         if r.is_ok() && matches!(id, "crop.aspect" | "crop.rotateAspect") {
             self.ui.crop_default_aspect = if id == "crop.aspect" && params.get("aspect").and_then(Value::as_str) == Some("original") {
                 Some(serde_json::json!("original"))
@@ -545,7 +585,8 @@ impl LightcraftApp {
             self.ai_error(ctx, e, None);
         }
         let seg = &self.session.segmenter;
-        if seg.busy() || seg.pending_clicks().is_some() {
+        // (Object clicks of the Remove tool too, `fork/object-remove.md`)
+        if seg.busy() || seg.pending_clicks().is_some() || self.session.object_jobs.busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         let download = seg.download_status();
@@ -649,6 +690,7 @@ impl LightcraftApp {
 
     /// Frame timings once layout is done (`t0`: when layout started).
     fn end_frame(&mut self, ctx: &egui::Context, t0: f64) {
+        panels::map::end_pass(self, ctx);
         if self.ui.frame_rate {
             frame_rate::show(ctx, self);
         } else {

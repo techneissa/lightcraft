@@ -1,15 +1,28 @@
 use super::widgets::{check, choices, field, heading, hint, path_label, row};
 use super::{LightcraftApp, RichText, StartupView, Tokens, json, register};
+use crate::widgets::dropdown_search::Searchable;
+use crate::widgets::dropdown_search::presets::{self, Choice};
 
 // ------------------------------------------------------------------------------------- General
 
 pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     row(ui, t, crate::i18n::tr("Language"), |ui| {
-        let languages: Vec<_> = crate::i18n::Locale::for_picker().into_iter().map(|language| (language, language.name())).collect();
-        // Thirteen language names do not fit one line in a narrow window: wrap them.
-        ui.horizontal_wrapped(|ui| {
-            choices(ui, "settingsLanguage", &languages, &mut app.ui.language);
-        });
+        let languages = crate::i18n::Locale::for_picker();
+        let current = app.ui.language;
+        let (r, chosen) = crate::widgets::dropdown_search::pick_with(
+            ui,
+            "settings-language",
+            |c| c.width(240.0).selected_text(current.name()),
+            &languages,
+            |l| *l == current,
+            |l| l.name().to_string(),
+            |ui, l, r| register(ui, format!("item:settingsLanguage-{}", l.code()), r.rect),
+        );
+        crate::widgets::name_combo(&r, crate::i18n::tr("Language"));
+        register(ui, "combo:settingsLanguage", r.rect);
+        if let Some(l) = chosen.and_then(|i| languages.get(i)) {
+            app.ui.language = *l;
+        }
         crate::i18n::set_language(app.ui.language);
     });
     heading(ui, t, crate::i18n::tr("Library"));
@@ -69,10 +82,26 @@ pub(super) fn general_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens
             &mut app.ui.settings.startup_view,
         );
     });
+    #[cfg(not(target_arch = "wasm32"))]
+    crate::fork_update::settings_row(app, ui, t);
     heading(ui, t, crate::i18n::tr("Culling"));
     check(ui, "settings.autoAdvance", &mut app.ui.auto_advance, "Auto Advance: move to the next photo after rating or flagging");
     check(ui, "settings.confirmDelete", &mut app.ui.settings.confirm_delete, "Confirm before moving photos to Recently Deleted");
+    ui.add_enabled_ui(app.ui.settings.confirm_delete, |ui| {
+        ui.indent("settingsConfirmDeletePickedOnly", |ui| {
+            check(ui, "settings.confirmDeletePickedOnly", &mut app.ui.settings.confirm_delete_picked_only, "Only for picked or starred photos");
+        });
+    });
     check(ui, "settings.askBeforeMove", &mut app.ui.settings.ask_before_move, "Confirm before moving photos to another folder on disk");
+    row(ui, t, crate::i18n::tr("Delete Permanently"), |ui| {
+        use crate::state::DeleteFiles;
+        choices(
+            ui,
+            "settingsDeleteFiles",
+            &[(DeleteFiles::Ask, "Ask Each Time"), (DeleteFiles::Trash, "Move Files to Trash"), (DeleteFiles::Keep, "Keep Files")],
+            &mut app.ui.settings.delete_files,
+        );
+    });
     heading(ui, t, crate::i18n::tr("Dialogs"));
     check(ui, "settings.closeDialogsOutside", &mut app.ui.settings.close_dialogs_outside, "Close a dialog by clicking outside it");
     heading(ui, t, crate::i18n::tr("External Editing"));
@@ -134,7 +163,9 @@ fn lens_profiles(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     };
     row(ui, t, crate::i18n::tr("Lens database"), |ui| {
         ui.label(RichText::new(status).color(t.text));
-        let r = ui.add_enabled(!own && !running && !installed, egui::Button::new(crate::i18n::tr("Download Lens Database")));
+        let r = ui
+            .add_enabled(!own && !running && !installed, egui::Button::new(crate::i18n::tr("Download Lens Database")))
+            .on_hover_text(crate::i18n::tr("Download lensfun's lens database into the app's folder"));
         register(ui, "button:settingsLensDatabase", r.rect);
         if r.clicked()
             && let Err(e) = crate::lens_db::download_default(app)
@@ -153,6 +184,7 @@ fn lens_profiles(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             "lensfun's open lens database (CC BY-SA 3.0) corrects distortion and vignetting for many lenses. It is only downloaded when you choose to.",
         ),
     );
+    hint(ui, t, crate::i18n::tr("To use a database of your own, set the LIGHTCRAFT_LENSFUN_DIR variable to its folder."));
 }
 
 /// The file Edit In hands an editor: format, colour space and bit depth (`button:{id}Format-…`).
@@ -194,12 +226,13 @@ pub(super) fn preset_combo(
     };
     let text = current.map(name).unwrap_or_else(|| crate::i18n::tr(none_label).to_string());
     let mut out = None;
-    let r = crate::widgets::combo_box(id).width(240.0).selected_text(text).show_ui(ui, |ui| {
-        if ui.selectable_label(current.is_none(), crate::i18n::tr(none_label)).clicked() {
-            out = Some(None);
-        }
-        if let Some(pid) = crate::panels::presets::picker_rows(ui, id, &app.session.presets, current) {
-            out = Some(Some(pid));
+    let fixed = [(crate::i18n::tr(none_label).to_string(), current.is_none())];
+    let find = presets::before(ui, id, &[fixed[0].0.clone()], &app.session.presets);
+    let r = crate::widgets::combo_box(id).width(240.0).selected_text(text).search(ui, &find, |ui| {
+        match presets::list(ui, &find, id, &fixed, &app.session.presets, current) {
+            Some(Choice::Fixed(_)) => out = Some(None),
+            Some(Choice::Preset(pid)) => out = Some(Some(pid)),
+            None => {}
         }
     });
     crate::widgets::name_combo(&r.response, label);

@@ -1,4 +1,4 @@
-//! The Edit panel's Portrait section (fork, `fork/retouch-foundation.md`): its feature sections and its face picker.
+//! The Portrait tab (fork, `fork/retouch-foundation.md`): its feature sections and its face picker.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,7 +8,8 @@ use lightcraft_engine::retouch_input::FaceProvider;
 use serde_json::json;
 
 use crate::headless::Headless;
-use crate::panels::edit::portrait::picked;
+use crate::panels::portrait::picked;
+use crate::state::RightPanel;
 use crate::{LightcraftApp, Services};
 
 const T: Duration = Duration::from_secs(20);
@@ -33,20 +34,24 @@ fn click(h: &mut Headless, id: &str) {
     h.step();
 }
 
+/// The Portrait tab: its strip icon and shortcut open it, it finds the photo's faces, has a section per feature and
+/// Portrait Presets (closed until opened, kept in `openSections`), says which faces its sliders change, shows the
+/// face picker on the photo while it is open, and its eye turns retouching off.
 #[test]
-fn the_portrait_section_shows_a_section_per_feature_and_a_face_picker() {
+fn the_portrait_tab_has_a_section_per_feature_and_shows_the_face_picker() {
     let mut session = lightcraft_engine::Session::with_demo();
     session.retouch_faces.set_provider(Arc::new(TwoFaces));
     let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 1400.0], 1.0);
     assert_eq!(h.request("ui.set", json!({"view": "detail"}), T)["ok"], true);
-    h.app.ui.right = crate::state::RightPanel::Edit;
-    h.app.ui.open_sections = Vec::new();
+    h.app.ui.right = RightPanel::Edit;
     h.step();
-    let r = h.request("engine.execute", json!({"command": "section.portrait", "params": {}}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    assert_eq!(h.app.ui.open_sections, ["portrait"]);
-    // opening the section finds the faces, in the background
+    h.step();
+    assert!(rect_of(&mut h, "portrait:card").is_none(), "no face picker in the Edit panel");
+    click(&mut h, "icon:portrait");
+    assert_eq!(h.app.ui.right, RightPanel::Portrait, "the strip icon opens the tab");
+    assert!(crate::menus::UI_COMMANDS.iter().any(|c| c.0 == "panel.portrait" && c.2 == Some("T")), "shortcut T");
+    // opening the tab finds the faces, in the background
     let photo = h.app.session.active().unwrap();
     let until = std::time::Instant::now() + Duration::from_secs(60);
     while h.app.session.retouch_faces_of(photo).found.is_none() {
@@ -55,16 +60,20 @@ fn the_portrait_section_shows_a_section_per_feature_and_a_face_picker() {
     }
     h.step();
     h.step();
-    for f in FEATURES {
-        let r = h.request("ui.clickWidget", json!({"id": format!("flyout:portrait.{}", f.key)}), T);
-        assert_eq!(r["ok"], true, "{}: {r}", f.key);
-        h.step();
-        assert!(h.app.ui.flyout_open(&format!("portrait.{}", f.key)), "{} opens", f.key);
-        click(&mut h, &format!("flyout:portrait.{}", f.key));
-        assert!(!h.app.ui.flyout_open(&format!("portrait.{}", f.key)), "{} closes", f.key);
+    let keys: Vec<&str> = FEATURES.iter().map(|f| f.key).chain(["presets"]).collect();
+    for key in &keys {
+        let id = format!("portrait.{key}");
+        assert!(!h.app.ui.section_open(&id), "{key} starts closed");
+        click(&mut h, &format!("section:{id}"));
+        assert!(h.app.ui.section_open(&id), "{key} opens");
+        click(&mut h, &format!("section:{id}"));
+        assert!(!h.app.ui.section_open(&id), "{key} closes");
     }
-    // the side panel says which faces the sliders change; the picker is on the photo
+    let r = h.request("engine.execute", json!({"command": "portrait.section", "params": {"section": "nope"}}), T);
+    assert_eq!(r["ok"], false, "{r}");
+    // the tab says which faces the sliders change; the picker is on the photo
     assert!(rect_of(&mut h, "portrait:editing").is_some());
+    assert!(rect_of(&mut h, "portrait:card").is_some(), "the face picker shows while the tab is open");
     let ctx = h.view.ctx.clone();
     assert_eq!(picked(&ctx, photo), None, "All by default");
     click(&mut h, "portrait:face:1");
@@ -73,6 +82,15 @@ fn the_portrait_section_shows_a_section_per_feature_and_a_face_picker() {
     assert_eq!(picked(&ctx, photo), None);
     // nothing about the photo changed by looking
     assert!(h.app.session.develop_of(photo).unwrap().retouch.is_default());
+    // the eye turns retouching off for the photo, and on again
+    click(&mut h, "portrait:switch");
+    assert!(!h.app.session.develop_of(photo).unwrap().section_enabled("portrait"));
+    click(&mut h, "portrait:switch");
+    assert!(h.app.session.develop_of(photo).unwrap().section_enabled("portrait"));
+    // another tab: no picker
+    click(&mut h, "icon:edit");
+    h.step();
+    assert!(rect_of(&mut h, "portrait:card").is_none());
 }
 
 fn rect_of(h: &mut Headless, id: &str) -> Option<[f64; 4]> {
@@ -90,8 +108,7 @@ fn the_face_picker_keeps_to_the_views_corner_picks_folds_and_hides() {
     let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 900.0], 1.0);
     assert_eq!(h.request("ui.set", json!({"view": "detail"}), T)["ok"], true);
-    h.app.ui.right = crate::state::RightPanel::Edit;
-    h.app.ui.open_sections = vec!["portrait".into()];
+    h.app.ui.right = RightPanel::Portrait;
     let settle = |h: &mut Headless| {
         for _ in 0..30 {
             h.step();
@@ -127,18 +144,18 @@ fn the_face_picker_keeps_to_the_views_corner_picks_folds_and_hides() {
     assert_eq!(picked(&ctx, tall), Some(0), "picked on the loupe");
     // folds into the overflow button at the same corner, remembered in the saved state; it opens again
     click(&mut h, "portrait:more");
-    assert!(h.app.ui.flyout_open(crate::panels::edit::portrait::FOLDED));
+    assert!(h.app.ui.flyout_open(crate::panels::portrait::FOLDED));
     assert!(rect_of(&mut h, "portrait:face:0").is_none(), "folded: no faces");
     let folded = rect_of(&mut h, "portrait:card").unwrap();
     assert!((folded[0] + folded[2] - corner[0]).abs() < 0.5 && (folded[1] - corner[1]).abs() < 0.5 && folded[2] < 50.0, "{folded:?}");
     click(&mut h, "portrait:more");
     assert!(rect_of(&mut h, "portrait:face:0").is_some());
-    // the tool overlay off (Shift+H to Never) hides it; the section closed hides it
+    // the tool overlay off (Shift+H to Never) hides it; the tab closed hides it
     h.app.ui.tool_overlay = crate::state::ToolOverlay::Never;
     h.step();
     assert!(rect_of(&mut h, "portrait:card").is_none());
     h.app.ui.tool_overlay = crate::state::ToolOverlay::Auto;
-    h.app.ui.open_sections.clear();
+    h.app.ui.right = RightPanel::Edit;
     h.step();
     assert!(rect_of(&mut h, "portrait:card").is_none());
 }

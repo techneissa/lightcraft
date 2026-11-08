@@ -12,15 +12,28 @@ pub enum Icon {
     Filter,
     Bell,
     Share,
+    /// An open tray with an arrow leaving it (the Export… buttons in Settings ▸ Photo Menu and the Keyboard Shortcuts window).
+    TrayOut,
+    /// An open tray with an arrow going in (the Import… buttons in Settings ▸ Photo Menu and the Keyboard Shortcuts window).
+    TrayIn,
     Help,
     Cloud,
+    Reflection,
     Sliders,
     Crop,
     Eraser,
+    /// A bold, chunky cross with rounded ends (Remove panel: Heal).
+    HealCross,
+    /// Two overlapping circles (Remove panel: Clone).
+    CloneStamp,
+    /// A four-point sparkle with a small one beside it (Remove panel: Content-Aware).
+    SparkleFill,
     Mask,
     Eye,
     /// Eye with a slash (hidden).
     EyeOff,
+    /// One open panel between two folded ones (Solo Mode on a Develop section header).
+    Solo,
     Presets,
     Versions,
     Activity,
@@ -44,6 +57,8 @@ pub enum Icon {
     Gear,
     Filmstrip,
     BeforeAfter,
+    /// Before/After Split: one photo, a movable line between the two.
+    BeforeAfterSplit,
     ChevronDown,
     ChevronRight,
     ChevronLeft,
@@ -71,6 +86,12 @@ pub enum Icon {
     Radial,
     Sky,
     Subject,
+    /// Object mask: a click's arrow inside a selection frame.
+    ObjectSelect,
+    /// Describe mask: lines of text with a caret.
+    Describe,
+    /// Background mask: the Subject figure's frame filled, the figure left out.
+    Background,
     Picker,
     Rotate,
     /// A curved line with an arrow at both ends: drag to rotate, either way (the crop tool's pointer).
@@ -83,11 +104,12 @@ pub enum Icon {
     Edited,
     /// Targeted adjustment: a ring with a centre dot and up/down arrows (drag vertically).
     Target,
-    /// Community chat (opens the ArtCraft Discord): a speech bubble with three dots. Our own
-    /// generic drawing, not any service's logo.
-    Chat,
     /// Face boxes on/off: four corner brackets round a small face.
     FaceBox,
+    /// The Map view: a map pin (a teardrop with a hole).
+    MapPin,
+    /// Map tiles from OpenStreetMap: a globe (a circle with its equator, meridian and two parallels).
+    Globe,
     /// Play (a triangle pointing right).
     Play,
     /// Pause (two bars).
@@ -106,6 +128,10 @@ pub enum Icon {
     Sun,
     /// Appearance Mode ▸ Dark: a crescent moon.
     Moon,
+    /// Reset to the file's value (↺): an open circle with an arrowhead turning back.
+    Reset,
+    /// A value that needs a look (!): an open circle with an exclamation mark.
+    Alert,
 }
 
 struct Pen<'a> {
@@ -222,6 +248,22 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
                 pen.line(&[(10.0 + 5.4 * c, 10.0 + 5.4 * s), (10.0 + 7.4 * c, 10.0 + 7.4 * s)]);
             }
         }
+        Reset => {
+            // three quarters of a circle, an arrowhead at its start pointing the way back (anticlockwise)
+            let (cx, cy, rad, a0) = (10.0f32, 10.5f32, 5.8f32, 228.0f32.to_radians());
+            pen.arc(cx, cy, rad, 228.0, 505.0);
+            let (px, py) = (cx + rad * a0.cos(), cy + rad * a0.sin());
+            let (tx, ty) = (a0.sin(), -a0.cos());
+            let (nx, ny) = (a0.cos(), a0.sin());
+            let tip = (px + tx * 1.2, py + ty * 1.2);
+            let (bx, by) = (px - tx * 2.4, py - ty * 2.4);
+            pen.line(&[(bx + nx * 2.8, by + ny * 2.8), tip, (bx - nx * 2.8, by - ny * 2.8)]);
+        }
+        Alert => {
+            pen.circle(10.0, 10.0, 7.5);
+            pen.line(&[(10.0, 5.6), (10.0, 11.0)]);
+            pen.dot(10.0, 13.9, 0.95);
+        }
         Moon => {
             // outer arc of the disc, then the inner arc of the bite, meeting at the horns
             pen.arc(10.0, 10.0, 6.5, 2.9, 263.8);
@@ -243,6 +285,16 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.line(&[(6.0, 8.0), (4.0, 8.0), (4.0, 17.0), (16.0, 17.0), (16.0, 8.0), (14.0, 8.0)]);
             pen.line(&[(10.0, 12.0), (10.0, 2.5)]);
             pen.line(&[(6.5, 6.0), (10.0, 2.5), (13.5, 6.0)]);
+        }
+        TrayOut => {
+            pen.line(&[(4.0, 12.0), (4.0, 16.5), (16.0, 16.5), (16.0, 12.0)]);
+            pen.line(&[(10.0, 13.0), (10.0, 3.5)]);
+            pen.line(&[(6.5, 7.0), (10.0, 3.5), (13.5, 7.0)]);
+        }
+        TrayIn => {
+            pen.line(&[(4.0, 12.0), (4.0, 16.5), (16.0, 16.5), (16.0, 12.0)]);
+            pen.line(&[(10.0, 3.5), (10.0, 13.0)]);
+            pen.line(&[(6.5, 9.5), (10.0, 13.0), (13.5, 9.5)]);
         }
         Help => {
             pen.circle(10.0, 10.0, 7.5);
@@ -272,6 +324,22 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.closed(&[(3.0, 12.0), (10.0, 5.0), (16.0, 11.0), (11.0, 16.0), (7.0, 16.0)]);
             pen.line(&[(6.5, 8.5), (12.5, 14.5)]);
             pen.line(&[(7.0, 17.5), (17.0, 17.5)]);
+        }
+        HealCross => {
+            pen.rect_fill(1.8, 6.6, 18.2, 13.4, 2.4);
+            pen.rect_fill(6.6, 1.8, 13.4, 18.2, 2.4);
+        }
+        CloneStamp => {
+            pen.circle(7.2, 10.0, 5.2);
+            pen.circle(12.8, 10.0, 5.2);
+        }
+        SparkleFill => {
+            let pts = [(9.0, 2.5), (10.9, 8.1), (16.5, 10.0), (10.9, 11.9), (9.0, 17.5), (7.1, 11.9), (1.5, 10.0), (7.1, 8.1)];
+            for i in 0..8 {
+                pen.fill(&[(9.0, 10.0), pts[i], pts[(i + 1) % 8]], color);
+            }
+            pen.dot(16.0, 4.0, 1.5);
+            pen.dot(15.5, 16.0, 1.1);
         }
         Mask => {
             pen.circle(10.0, 10.0, 7.0);
@@ -315,11 +383,23 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
                 pen.line(&[(10.0 + 6.0 * a.cos(), 10.0 + 6.0 * a.sin()), (10.0 + 8.0 * a.cos(), 10.0 + 8.0 * a.sin())]);
             }
         }
+        Reflection => {
+            pen.line(&[(9.0, 2.5), (9.0, 17.5)]);
+            pen.closed(&[(6.0, 5.0), (2.5, 14.5), (6.0, 14.5)]);
+            pen.closed(&[(12.0, 5.0), (15.5, 14.5), (12.0, 14.5)]);
+            pen.line(&[(16.0, 2.0), (16.0, 6.0)]);
+            pen.line(&[(14.0, 4.0), (18.0, 4.0)]);
+        }
         EyeOff => {
             pen.arc(10.0, 16.0, 9.0, 212.0, 328.0);
             pen.arc(10.0, 4.0, 9.0, 32.0, 148.0);
             pen.circle(10.0, 10.0, 2.5);
             pen.line(&[(3.5, 3.5), (16.5, 16.5)]);
+        }
+        Solo => {
+            pen.line(&[(4.5, 3.5), (15.5, 3.5)]);
+            pen.rect_fill(3.5, 7.0, 16.5, 13.0, 1.5);
+            pen.line(&[(4.5, 16.5), (15.5, 16.5)]);
         }
         Presets => {
             pen.circle(8.0, 8.0, 5.0);
@@ -422,6 +502,11 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.rect(3.0, 4.0, 17.0, 16.0, 1.0);
             pen.line(&[(10.0, 2.5), (10.0, 17.5)]);
             pen.rect_fill(10.0, 4.0, 17.0, 16.0, 0.5);
+        }
+        BeforeAfterSplit => {
+            pen.rect(3.0, 4.0, 17.0, 16.0, 1.0);
+            pen.line(&[(10.0, 2.5), (10.0, 17.5)]);
+            pen.circle(10.0, 10.0, 2.6);
         }
         ChevronDown => pen.line(&[(5.0, 7.5), (10.0, 12.5), (15.0, 7.5)]),
         Forward | ChevronRight => pen.line(&[(7.5, 5.0), (12.5, 10.0), (7.5, 15.0)]),
@@ -530,6 +615,22 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.arc(10.0, 18.0, 6.5, 200.0, 340.0);
             pen.rect(2.5, 2.5, 17.5, 17.5, 2.0);
         }
+        ObjectSelect => {
+            pen.rect(2.5, 2.5, 17.5, 17.5, 2.0);
+            pen.closed(&[(7.0, 5.5), (7.0, 14.5), (9.3, 12.3), (11.0, 16.0), (12.7, 15.2), (11.0, 11.6), (14.0, 11.6)]);
+        }
+        Describe => {
+            pen.line(&[(3.0, 5.0), (17.0, 5.0)]);
+            pen.line(&[(3.0, 10.0), (13.0, 10.0)]);
+            pen.line(&[(3.0, 15.0), (8.0, 15.0)]);
+            pen.line(&[(12.5, 12.5), (12.5, 17.5)]);
+        }
+        Background => {
+            pen.p.rect_filled(Rect::from_min_max(pen.pt(2.5, 2.5), pen.pt(17.5, 17.5)), 2.0 * k, color.gamma_multiply(0.35));
+            pen.circle(10.0, 7.0, 3.0);
+            pen.arc(10.0, 18.0, 6.5, 200.0, 340.0);
+            pen.rect(2.5, 2.5, 17.5, 17.5, 2.0);
+        }
         Play => pen.fill(&[(6.0, 4.0), (6.0, 16.0), (16.0, 10.0)], color),
         Pause => {
             pen.rect_fill(5.0, 4.0, 8.5, 16.0, 0.5);
@@ -542,6 +643,19 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.line(&[(13.0, 17.5), (17.5, 17.5), (17.5, 13.0)]);
             pen.circle(10.0, 8.5, 2.4);
             pen.arc(10.0, 16.0, 4.5, 215.0, 325.0);
+        }
+        MapPin => {
+            // the round head (open at the bottom), its point, and the hole
+            pen.arc(10.0, 8.0, 5.5, 150.0, 390.0);
+            pen.line(&[(5.24, 10.75), (10.0, 17.5), (14.76, 10.75)]);
+            pen.circle(10.0, 8.0, 1.8);
+        }
+        Globe => {
+            pen.circle(10.0, 10.0, 7.5);
+            pen.line(&[(2.5, 10.0), (17.5, 10.0)]);
+            pen.line(&[(10.0, 2.5), (10.0, 17.5)]);
+            pen.line(&[(4.2, 6.2), (15.8, 6.2)]);
+            pen.line(&[(4.2, 13.8), (15.8, 13.8)]);
         }
         Picker => {
             pen.line(&[(4.0, 16.0), (11.5, 8.5)]);
@@ -592,25 +706,6 @@ fn paint_with(p: &Painter, rect: Rect, icon: Icon, color: Color32, turn: Option<
             pen.line(&[(15.5, 3.5), (15.5, 16.5)]);
             pen.line(&[(13.5, 5.5), (15.5, 3.5), (17.5, 5.5)]);
             pen.line(&[(13.5, 14.5), (15.5, 16.5), (17.5, 14.5)]);
-        }
-        Chat => {
-            // rounded bubble with a tail at the lower left
-            pen.closed(&[
-                (4.5, 3.5),
-                (15.5, 3.5),
-                (17.0, 5.0),
-                (17.0, 12.0),
-                (15.5, 13.5),
-                (9.0, 13.5),
-                (5.5, 16.8),
-                (5.5, 13.5),
-                (4.5, 13.5),
-                (3.0, 12.0),
-                (3.0, 5.0),
-            ]);
-            for x in [6.8, 10.0, 13.2] {
-                pen.dot(x, 8.5, 1.1);
-            }
         }
     }
 }

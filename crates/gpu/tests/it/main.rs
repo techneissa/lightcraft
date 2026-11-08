@@ -6,6 +6,11 @@
 
 mod equivalence;
 mod fallback;
+mod fit;
 #[cfg(not(target_arch = "wasm32"))]
 mod gpu_probe;
+mod hidden_spot;
+mod mask_cache;
+mod shaped_spot;
+mod spot_cache;
 mod thumbs_bench;

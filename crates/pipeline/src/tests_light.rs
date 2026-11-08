@@ -38,10 +38,12 @@ fn check_luminance_cutoff(chroma: f32, pixel: [f32; 3], expected: [u8; 4]) {
     s.light.contrast = 100.0;
     s.light.blacks = 80.0;
     let image = render(&src, &info, &s, &RenderRequest::fit(64, 64)).image;
-    // (8-bit output is dithered: a flat source varies by a level)
-    assert!(image.data.iter().all(|p| p.iter().zip(image.data[0]).all(|(a, b)| a.abs_diff(b) <= 1)));
-    for (actual, expected) in image.data[0].into_iter().zip(expected) {
-        assert!(actual.abs_diff(expected) <= 1, "chroma {chroma}: {:?}, expected {expected}", image.data[0]);
+    // A flat picture is flat to within the 8-bit output's Bayer dither (floor or floor + 1 per pixel).
+    for px in &image.data {
+        for (actual, expected) in px.iter().zip(expected) {
+            assert!(actual.abs_diff(expected) <= 1, "chroma {chroma}: {px:?}, expected {expected}");
+        }
+        assert!(px.iter().zip(image.data[0]).all(|(a, b)| a.abs_diff(b) <= 1), "chroma {chroma}: not flat: {px:?} vs {:?}", image.data[0]);
     }
 }
 
@@ -134,6 +136,9 @@ fn golden(process: ProcessVersion) -> u64 {
 /// call the platform's `powf` / `exp2` / `log2`, whose last bit can differ on other platforms, so
 /// elsewhere the test only prints them. Before updating them during a rebase, run this exact fixture
 /// on main and confirm that both hashes match. This PR must not change V1 or V2 rendering.
+/// Last update: the 8×8 Bayer dither of 8-bit output (#3509) changed the 8-bit bytes of every
+/// process. With `enc` rounding as before, the fork's V1 / V2 hashes before that merge
+/// (0x5bf0a7c8579f3f34, 0x87a3598c15979e4d) came out again exactly, so only the dither changed.
 #[test]
 fn v1_and_v2_render_as_before_v3() {
     let got = [golden(ProcessVersion(1)), golden(ProcessVersion(2))];
@@ -143,7 +148,7 @@ fn v1_and_v2_render_as_before_v3() {
     }
 }
 
-const GOLDEN: [u64; 2] = [0x5bf0_a7c8_579f_3f34, 0x87a3_598c_1597_9e4d];
+const GOLDEN: [u64; 2] = [0x4830_59a3_ad92_326c, 0x9653_aed0_ea32_aff3];
 
 fn on(process: Process, s: &DevelopSettings) -> DevelopSettings {
     DevelopSettings { process: process.version(), ..s.clone() }
@@ -312,8 +317,9 @@ fn v3_sliders_move_a_grey_ramp_their_way() {
         ("light.blacks", -60.0),
     ] {
         let r = shot(id, v);
-        // (within a level of 8-bit dither)
-        assert!(r.windows(2).all(|w| luma(w[1]) >= luma(w[0]) - 1), "{id} {v}: the ramp is no longer increasing");
+        // (8 pixels apart: the 8-bit output's Bayer dither repeats every 8 pixels, so on a row two pixels
+        // 8 apart share their offset and an increasing ramp stays exactly non-decreasing)
+        assert!((0..248).all(|x| luma(r[x + 8]) >= luma(r[x])), "{id} {v}: the ramp is no longer increasing");
         assert!(r.iter().all(|p| p[0].abs_diff(p[1]) <= 1 && p[1].abs_diff(p[2]) <= 1), "{id} {v}: the ramp is no longer grey");
         let diff = |lo: usize, hi: usize| (lo..hi).map(|x| luma(r[x]) - luma(plain[x])).sum::<i32>();
         let (dark, light) = (diff(40, 90), diff(170, 220));

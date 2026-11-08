@@ -9,6 +9,8 @@
 //! page" opens the model's own page in the browser for anything else.
 
 use egui::RichText;
+
+use crate::model_remove::Remove;
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
@@ -305,6 +307,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.add_space(4.0);
         hint(ui, t, &format!("Faces are found by {} ({}, included).", d["name"].as_str().unwrap_or("the detector"), mb(d["sizeBytes"].as_u64())));
     }
+    super::people_parts::section(app, ui, t);
 }
 
 /// How the scan is going: a bar while photos are left, then how many faces it learned.
@@ -387,10 +390,10 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if installed {
-                    let r = ui.button(crate::i18n::tr("Remove"));
+                    let (r, click) = crate::model_remove::button(ui, &format!("faces:{id}"), m["shared"] == true);
                     register(ui, format!("faces:remove:{id}"), r.rect);
-                    if r.clicked() {
-                        let _ = app.run("faces.models.remove", json!({"id": id}));
+                    if matches!(click, Remove::Own | Remove::EveryApp) {
+                        let _ = app.run("faces.models.remove", json!({"id": id, "everyApp": click == Remove::EveryApp}));
                         app.caches.faces_epoch += 1;
                     }
                     if !selected && !detector {

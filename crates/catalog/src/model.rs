@@ -222,6 +222,10 @@ pub struct Meta {
     /// written to XMP. Left out of the catalog JSON when unknown, so older catalogs read unchanged.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub focus: Option<lightcraft_meta::FocusPoint>,
+    /// Camera and exposure values a person edited over the file's (`camera` .. `iso` above stay what
+    /// the file says). See [`crate::exif_override`]. Left out of the catalog JSON when none.
+    #[serde(default, skip_serializing_if = "crate::exif_override::ExifOverrides::is_empty")]
+    pub exif: crate::exif_override::ExifOverrides,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -268,7 +272,8 @@ pub struct Photo {
     pub edited: Option<String>,
     #[serde(default)]
     pub versions: Vec<Version>,
-    #[serde(default)]
+    /// Stored as patches of the step before (fork format 2, [`crate::history_serde`]).
+    #[serde(default, with = "crate::history_serde")]
     pub history: Vec<HistoryStep>,
     /// The History step the photo's settings are at, when it isn't the latest one (Go to History
     /// Step moved back): later steps stay listed and can be returned to until a new edit drops
@@ -376,6 +381,20 @@ pub fn preview_stamp(preview_only: &Option<String>) -> String {
 impl Photo {
     /// Keep the newest [`HISTORY_LIMIT`](crate::HISTORY_LIMIT) History steps; the cursor moves with
     /// its step, or to the oldest step kept when its own is dropped. Returns how many were dropped.
+    /// Append a History step as an edit does: an edit made from an earlier step (the cursor)
+    /// drops the steps after it, the oldest go beyond [`crate::HISTORY_LIMIT`], and the cursor is
+    /// cleared.
+    pub(crate) fn push_history(&mut self, step: HistoryStep) {
+        if let Some(c) = self.history_cursor.take() {
+            self.history.truncate(c.saturating_add(1));
+        }
+        self.history.push(step);
+        if self.history.len() > crate::HISTORY_LIMIT {
+            let n = self.history.len() - crate::HISTORY_LIMIT;
+            self.history.drain(..n);
+        }
+    }
+
     pub fn trim_history(&mut self) -> usize {
         let n = self.history.len().saturating_sub(crate::HISTORY_LIMIT);
         if n > 0 {
@@ -458,6 +477,13 @@ impl Photo {
     /// ([`relative_wb_camera`]). Other raws edit white balance in Kelvin.
     pub fn relative_wb(&self) -> bool {
         self.develops_raw() && relative_wb_camera(&self.format, &self.meta.camera)
+    }
+    /// [`Photo::relative_wb`] where its colour choice is honoured: a photo set to macOS Colour on a computer whose
+    /// raw decoder makes its picture (`macos`, decided by the engine) edits white balance in Kelvin from macOS's
+    /// as-shot white; its [`Photo::as_shot_wb`] is then macOS's reading, learnt when the file is decoded (a camera on
+    /// the relative scale never stores another).
+    pub fn relative_wb_on(&self, macos: bool) -> bool {
+        self.relative_wb() && !(macos && self.develop.profile.camera_colour == lightcraft_develop::CameraColour::Macos)
     }
     /// Every settings holder of this photo that can carry segmentation grids: the develop
     /// settings, the versions', the history steps' and the import look. A snapshot's shared grid
@@ -566,6 +592,12 @@ impl Photo {
         if self.develop.wb.mode == WbMode::AsShot && defaults.wb.mode == WbMode::AsShot {
             defaults.wb = self.develop.wb;
         }
+        // Camera Matching is a choice only a raw fitted to its camera JPEG has: on any other photo (a JPEG or DNG
+        // pasted onto from such a raw) it changes nothing, so it is not an edit.
+        if !self.fitted_look() {
+            defaults.profile.camera_colour = self.develop.profile.camera_colour;
+            defaults.profile.camera_profile.clone_from(&self.develop.profile.camera_profile);
+        }
         *self.develop != defaults && !self.develop.is_unedited()
     }
     /// Capture time if known, else import time (sort key).
@@ -644,6 +676,26 @@ mod edited_tests {
         assert!(p.is_edited());
         p.develop = Arc::new(DevelopSettings::default());
         assert!(!p.is_edited(), "a full reset is unedited too");
+    }
+
+    /// No Camera Matching is an edit on a raw fitted to its camera JPEG, and nothing on a photo that has no such
+    /// choice (a JPEG, a DNG with its own matrices) that was pasted onto from one.
+    #[test]
+    fn camera_colour_is_an_edit_only_where_the_choice_exists() {
+        use lightcraft_develop::CameraColour;
+        for (name, format, kind, edited) in
+            [("a.arw", "ARW", MediaKind::Raw, true), ("a.dng", "DNG", MediaKind::Raw, false), ("a.jpg", "JPEG", MediaKind::Image, false)]
+        {
+            let mut p = Photo::new(PhotoId(1), Source::Demo { scene: 0 }, name, format, 10, 10, "2026-10-01T00:00:00");
+            p.kind = kind;
+            p.as_shot_wb = Some((5200.0, 4.0));
+            p.develop = Arc::new(p.import_defaults());
+            assert!(!p.is_edited(), "{name}: as imported");
+            let mut d = (*p.develop).clone();
+            d.profile.camera_colour = CameraColour::Colorimetric;
+            p.develop = Arc::new(d);
+            assert_eq!(p.is_edited(), edited, "{name}");
+        }
     }
 
     #[test]

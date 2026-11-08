@@ -159,26 +159,16 @@ pub(super) fn section_drag(app: &mut LightcraftApp, ui: &mut egui::Ui, placed: &
     }
 }
 
-/// The dragged section's name follows the pointer; a drag that ended anywhere (also outside the
-/// sidebar, or with the sidebar closed) is over.
+/// A drag that ended anywhere (also outside the sidebar, or with the sidebar closed) is over.
 pub fn section_drag_feedback(app: &mut LightcraftApp, ctx: &egui::Context) {
-    let Some(section) = app.ui.dragging_section else { return };
-    let (down, pos) = ctx.input(|i| (i.pointer.primary_down(), i.pointer.latest_pos()));
-    if !down || !app.ui.left_panel {
+    if app.ui.dragging_section.is_none() {
+        return;
+    }
+    if !ctx.input(|i| i.pointer.primary_down()) || !app.ui.left_panel {
         app.ui.dragging_section = None;
         return;
     }
-    let Some(pos) = pos else { return };
-    let t = Tokens::get(ctx);
     ctx.set_cursor_icon(egui::CursorIcon::Grabbing);
-    egui::Area::new(egui::Id::unique("drag-section")).order(egui::Order::Tooltip).interactable(false).fixed_pos(pos + vec2(14.0, 10.0)).show(
-        ctx,
-        |ui| {
-            egui::Frame::NONE.fill(t.accent).corner_radius(10.0).inner_margin(egui::Margin::symmetric(9, 3)).show(ui, |ui| {
-                ui.label(egui::RichText::new(crate::i18n::tr(section.title())).color(egui::Color32::WHITE).font(t.semibold(12.0)));
-            });
-        },
-    );
 }
 
 /// A section's header in `r`: a disclosure chevron in the gutter (where tree rows have their
@@ -208,6 +198,11 @@ fn section_header(app: &mut LightcraftApp, ui: &mut egui::Ui, section: SidebarSe
     crate::widgets::context_menu(&resp, |ui| sections_menu(app, ui, Some(section)));
     let open = !app.ui.sidebar.is_collapsed(section);
     crate::widgets::announce_disclosure(&resp, true, open, title);
+    // (not over the header's own button: egui keeps the first hover text of a layer open inside its widget)
+    let over_button = header_button(section).is_some() && ui.input(|i| i.pointer.hover_pos()).is_some_and(|p| header_button_rect(ui, r).contains(p));
+    if !over_button {
+        resp.clone().on_hover_text(super::disclosure_name(open, title));
+    }
     // what is visible of the header: its bar and count end at the panel's edge, like a row's
     let edge = r.right().min(visible_right(ui));
     let hovered = resp.hovered() && app.ui.dragging_section.is_none();

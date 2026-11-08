@@ -334,6 +334,19 @@ pub fn commit_prepared(s: &mut Session, opts: &ImportOptions, now: &str, prepare
     if !placed.is_empty() {
         finish_moves(s, placed, log0, &mut report);
     }
+    // AI Denoise switched on at import (above the ISO chosen): their pictures are made in the background
+    // (not for a folder being browsed: nothing was imported)
+    if s.import_defaults.denoise_above_iso.is_some() && !opts.local {
+        let on: Vec<PhotoId> =
+            report.imported.iter().map(|i| PhotoId(*i)).filter(|id| s.develop_of(*id).is_some_and(|d| d.denoise_amount() > 0.0)).collect();
+        if !on.is_empty() {
+            s.denoise_enqueue_all(&on);
+        }
+    }
+    // Use Smart Previews instead of Originals for editing: the new photos get theirs in the background
+    if !opts.local {
+        crate::cmd::smart_editing::after_import(s, &report.imported);
+    }
     Ok(report)
 }
 

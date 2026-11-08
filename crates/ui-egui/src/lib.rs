@@ -15,35 +15,58 @@ pub const UPDATE_APP: craft_update::app::App = craft_update::app::App {
     ..craft_update::suite::LIGHTCRAFT
 };
 
+pub mod auto_import_watch;
 pub mod brush_live;
 pub mod canvas_keys;
 mod command_error;
 pub mod control;
+mod debounce;
 pub mod destination;
 pub mod dialogs;
 pub mod docking;
+mod drag_ghost;
 mod drop_overlay;
+pub mod edit_in_task;
+mod edited_thumb;
+pub mod editor_handoff;
+pub mod export_reveal;
 pub mod export_task;
 mod find_similar;
 mod focus_scan;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod fork_update;
 mod frame_rate;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
+mod inline_rename;
+pub mod keybinds;
+pub mod layers_task;
 pub mod lens_db;
+// Learn My Edits window (fork/learn-my-edits.md)
+pub mod learn_edits;
 pub mod lightroom_import;
 pub mod links;
+mod local_profile_offer;
 pub mod loupe_timing;
+mod macos_colour;
+pub(crate) mod mask_tint;
 pub mod menus;
 mod missing_sweep;
+mod model_remove;
 pub mod panels;
 pub mod pick;
 pub mod recheck;
+pub mod reflections;
+pub mod reflections_glare;
 pub mod region;
 pub mod reload;
+pub mod rename_task;
 pub mod render;
+pub mod settings_sync;
 pub mod shortcuts;
 pub mod sidebar;
+mod smart_editing;
 pub mod softpaint;
 pub mod space_hand;
 pub mod startup;
@@ -70,6 +93,7 @@ use serde_json::Value;
 
 pub use command_error::CommandError;
 pub use control::{ControlRequest, ControlResponse};
+pub use dialogs::animated_gif;
 pub use dialogs::credits;
 pub use dialogs::import;
 pub use dialogs::lightroom_destination;
@@ -107,7 +131,7 @@ pub use services::{
 };
 use state::{GestureFrame, InjectedPress};
 
-const TOAST_SECONDS: f64 = 1.4;
+pub(crate) const TOAST_SECONDS: f64 = 1.4;
 /// The `path` of a display profile read from the screen rather than chosen as a file.
 pub const SCREEN_PROFILE: &str = "screen";
 
@@ -167,6 +191,8 @@ pub struct LightcraftApp {
     /// The keyboard shortcuts editor is waiting for a key press for this command: no shortcut
     /// fires (the native menu bar drops its accelerators too) until it gets one or is cancelled.
     pub recording_shortcut: Option<String>,
+    /// The shortcut editor's state: a chord waiting for its next key, the Assign Shortcut box.
+    pub keybinds: crate::keybinds::State,
     /// A text field had the keyboard at the end of the last frame. egui drops the focus as Esc
     /// arrives, before the shortcuts are read, so this is how Esc there stays the field's own.
     pub text_focus: bool,
@@ -197,6 +223,8 @@ pub struct LightcraftApp {
     /// The texture limit the host last reported (`RawInput::max_texture_side`), retained across
     /// passes where the host reports it only once.
     max_texture_side: usize,
+    /// The open photo's thumbnail held back during a burst of spot edits (`edited_thumb`).
+    pub(crate) edited_thumb: edited_thumb::Hold,
     /// Monotonic app clock (`web_time::Instant`), not the wall clock and not egui's per-pass time:
     /// timers must keep advancing while the window is hidden.
     clock: AppClock,
@@ -322,6 +350,12 @@ pub struct LightcraftApp {
     pub(crate) compare_hold_until: f64,
     /// Photo Merge dialog previews and background merges.
     pub merge: merge::MergeState,
+    pub reflection_quality: u32,
+    pub reflection_model: String,
+    pub reflection_open: bool,
+    pub reflection_photo: Option<lightcraft_catalog::PhotoId>,
+    /// Fork feature (fork/glare-highlights.md): the Reflections section's mode, area and glare choices.
+    pub reflection_glare: reflections_glare::GlarePanel,
     /// An import in progress (the import review dialog's batches).
     pub import: Option<import::ImportTask>,
     /// A folder scan in progress (feeds the import review).
@@ -349,15 +383,36 @@ pub struct LightcraftApp {
     pub shown_library: Option<u64>,
     /// A background export in progress.
     pub export: Option<export_task::ExportTask>,
+    /// Settings sync: the load prompt, Keep in Sync at start, and where this Mac's name and the shared folder file come from.
+    pub(crate) sync_settings: settings_sync::Runtime,
+    /// True while the control channel (an agent, the CLI, MCP) runs a command: such an export never
+    /// shows its file in the file manager; only the Export dialog does ([`export_reveal`]).
+    pub(crate) from_control: bool,
+    /// Open as Layers in PhotoCraft, rendering in the background.
+    pub layers: Option<layers_task::LayersTask>,
+    /// Edit In's copies, rendering in the background.
+    pub edit_in: Option<edit_in_task::EditInTask>,
+    /// Rename Photos or Rename Folder, moving files in the background.
+    pub rename_task: Option<rename_task::RenameTask>,
+    /// Apply macOS Colour to All Photos from This Camera, counting or moving in the background.
+    pub(crate) macos_job: Option<macos_colour::job::MacosJob>,
+    /// Files on their way to an external editor.
+    pub handoffs: Vec<editor_handoff::Handoff>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).
     pub last_export_result: Option<Value>,
     /// The last slideshow export's end has been told (a toast).
     pub slideshow_export_reported: bool,
+    /// The last animated GIF export's end has been told (a toast).
+    pub animated_gif_reported: bool,
     /// The look the loupe shows while the pointer rests on a preset or profile (set by the
     /// panels each frame; nothing is committed, no history entry).
     pub hover_preview: Option<HoverPreview>,
+    /// The settings of the last hover preview rendered, shared, and their hash: the panels build the preview anew on
+    /// every frame, and the same one is rendered again without copying or hashing the settings
+    /// ([`panels::detail`]'s `request_hover`).
+    pub(crate) hover_memo: Option<(HoverPreview, std::sync::Arc<lightcraft_develop::DevelopSettings>, u64)>,
     /// The window is in full screen (as last reported by the host, or as last requested).
     pub window_is_fullscreen: bool,
     /// The GPU preference last applied (`app.gpu`), to apply Settings changes once.
@@ -375,6 +430,8 @@ pub struct LightcraftApp {
     pub(crate) disk_notice: Option<(u64, String)>,
     /// The memory budget setting last applied (MB, 0 = automatic).
     memory_applied: Option<u32>,
+    /// Use Smart Previews for viewing and editing, as last agreed between Settings and the engine ([`smart_editing`]).
+    smart_editing_applied: Option<bool>,
     /// The hot pixel limit last applied (percent).
     hot_pixels_applied: Option<f32>,
     /// The display profile setting last applied (`app.displayProfile`).
@@ -398,6 +455,12 @@ pub struct LightcraftApp {
     pub recent_checks: panels::library_problem::RecentChecks,
     /// The activity stack shows every task, not just the first few ("+N more" was clicked).
     pub activity_expanded: bool,
+    /// The Map view's centre and zoom, tile textures and photo pins (for the session).
+    pub map: panels::map::MapView,
+    /// Batches in the activity stack whose per-photo rows are shown.
+    pub activity_open: std::collections::HashSet<u64>,
+    /// The last batch summary said (`Activity::finished` → `seq`): each is said once.
+    pub activity_seen_seq: u64,
 }
 
 /// How long a screenshot waits for in-flight renders before it is captured anyway (and the

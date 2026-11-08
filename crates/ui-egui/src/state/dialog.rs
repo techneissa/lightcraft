@@ -39,6 +39,10 @@ pub enum Dialog {
     ContactSheet {
         options: lightcraft_engine::contact_sheet::Options,
     },
+    /// File ▸ Export Animated GIF…: size, seconds per photo, loop, dithering.
+    AnimatedGif {
+        settings: lightcraft_engine::animated_gif::GifSettings,
+    },
     /// View ▸ Export Slideshow…: format, size, quality, frame rate, container.
     SlideshowExport {
         settings: lightcraft_engine::slideshow_export::ExportSettings,
@@ -147,6 +151,11 @@ pub enum Dialog {
         keyword: String,
         /// Photos that have it (or one below it).
         count: usize,
+    },
+    /// Delete a saved location (Map view), after asking: it isn't an undo step.
+    DeleteLocation {
+        id: u64,
+        name: String,
     },
     /// Merge keywords into another one on every photo.
     MergeKeywords {
@@ -310,8 +319,44 @@ pub enum Dialog {
     DeleteEffects {
         names: Vec<String>,
     },
+    /// Delete Permanently / Empty Recently Deleted with Settings ▸ Delete Permanently on Ask Each
+    /// Time: `count` photos go from the library, `local` of them Local (their files always go to the
+    /// Trash); `files` is "trash" (Move to Trash) or "keep" (Keep Files).
+    DeletePermanently {
+        count: usize,
+        local: usize,
+        empty: bool,
+        files: String,
+    },
     /// Confirm moving photos to Recently Deleted.
     ConfirmDelete {
+        count: usize,
+    },
+    /// Once per profile file: its camera's photos were rendered with it inside Camera Matching, which no longer reads
+    /// the folder. Switch them to its own Profile choice, or leave them on Camera Matching
+    /// (`profiles.localSwitch`; [`crate::local_profile_offer`]).
+    LocalProfileSwitch {
+        /// The profile file's name without `.json`.
+        id: String,
+        /// What the Profile picker calls it.
+        name: String,
+        count: usize,
+    },
+    /// Once, when Use Smart Previews for viewing and editing is first switched on: build the `missing` smart previews of the
+    /// library in the background (`library.smartPreviewsForEditing {build}`; [`crate::smart_editing`]).
+    SmartPreviewsForEditing {
+        missing: usize,
+    },
+    /// Apply macOS Colour to All Photos from This Camera… (`profiles.macosForCamera`; [`crate::macos_colour::picker`]):
+    /// `count` photos of `camera` would move, `skipped` can't use macOS Colour on this Mac.
+    MacosForCamera {
+        photo: u64,
+        camera: String,
+        count: usize,
+        skipped: usize,
+    },
+    /// Confirm Photo ▸ Delete Rejected Photos: the `count` rejected photos of the view.
+    ConfirmDeleteRejected {
         count: usize,
     },
     /// Confirm moving photos dropped on a Folders row into that folder on disk
@@ -351,6 +396,12 @@ pub enum Dialog {
         remove_missing: bool,
         read_metadata: bool,
     },
+    /// Import Settings… and Load from Folder: what the file would change, asked before anything does
+    /// (`settings.import`, `settings.syncLoad`; the file's reading is `LightcraftApp::sync_settings.prompt`).
+    SettingsImport,
+    /// Save to Folder over settings from another Mac that this Mac hasn't loaded: ask first
+    /// (`settings.syncSave`; the question is `LightcraftApp::sync_settings.replace`).
+    SettingsReplace,
     About,
     Shortcuts,
     /// View ▸ View Options (⌘J): the info overlay and the lines of Info 1 and Info 2. Changes apply

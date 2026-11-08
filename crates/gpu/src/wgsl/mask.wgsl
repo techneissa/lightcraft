@@ -12,7 +12,7 @@ fn pos(x: u32, y: u32) -> vec2<f32> {
 //   0 linear: a.xy, d.xy, |d|²         1 radial: centre.xy, cos, sin, rx, ry, feather, invert
 //   2 luminance range: lo, hi, lo feather, hi feather, ev
 //   3 colour range: tol, gain, sample count (OkLab triples in aux)
-//   4 brush: stroke count (stroke records + dabs in aux)
+//   (brush strokes: see `stroke`)
 // `masks::chromaticity` of pixel i.
 fn chroma_at(i: u32) -> vec3<f32> {
     let c = vec3<f32>(img[3u * i], img[3u * i + 1u], img[3u * i + 2u]);
@@ -76,50 +76,6 @@ fn shape(@builtin(global_invocation_id) g: vec3<u32>) {
             best = min(best, sqrt(da * da + db * db + 0.25 * (dl * dl)));
         }
         v = 1.0 - sstep(tol * 0.5, tol, best);
-    } else if (kind == 4u) {
-        // stroke record: dab offset, dab count, r, hard, flow, density, erase, bbox x0 y0 x1 y1, auto
-        let px = f32(g.x) + 0.5;
-        let py = f32(g.y) + 0.5;
-        let lp = log_l[i];
-        let chp = chroma_at(i);
-        for (var k = 0u; k < pu(10u); k++) {
-            let o = 12u * k;
-            let auto_mask = aux[o + 11u] != 0.0;
-            if (px < aux[o + 7u] || py < aux[o + 8u] || px > aux[o + 9u] || py > aux[o + 10u]) {
-                continue;
-            }
-            let off = u32(aux[o]);
-            let cnt = u32(aux[o + 1u]);
-            let r = aux[o + 2u];
-            let hard = aux[o + 3u];
-            let flow = aux[o + 4u];
-            var keep = 1.0;
-            for (var j = 0u; j < cnt; j++) {
-                let dx = px - aux[off + 2u * j];
-                let dy = py - aux[off + 2u * j + 1u];
-                let dd = sqrt(dx * dx + dy * dy);
-                if (dd > r) {
-                    continue;
-                }
-                var a = 1.0;
-                if (dd > hard) {
-                    a = 1.0 - sstep(hard, r, dd);
-                }
-                if (auto_mask) {
-                    let rx = min(u32(max(floor(aux[off + 2u * j]), 0.0)), w - 1u);
-                    let ry = min(u32(max(floor(aux[off + 2u * j + 1u]), 0.0)), h - 1u);
-                    let ri = ry * w + rx;
-                    a *= auto_similarity(lp, chp, log_l[ri], chroma_at(ri));
-                }
-                keep *= 1.0 - a * flow;
-            }
-            let sa = min(1.0 - keep, aux[o + 5u]);
-            if (aux[o + 6u] != 0.0) {
-                v = v * (1.0 - sa);
-            } else {
-                v = max(v, sa);
-            }
-        }
     }
     if (pu(3u) != 0u) {
         v = 1.0 - v;
@@ -168,4 +124,100 @@ fn finalize(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups
         a = a * amt;
     }
     alpha[j] = a;
+}
+
+// One brush stroke stamped inside its bounding box into `c` (`masks::brush`'s `stamp`): one dab is
+// five words in aux (x, y, r, hard, flow), pen pressure already applied. P: w, h, (unused 2..9),
+// box x0, y0, x1, y1 (10..13), dab count, density, erase, auto (14..17), mode (18): 0 combines the
+// stroke into `c` (max, or subtract when erasing), 1 writes the stroke's own alpha there (Auto Mask:
+// the caller refines it and combines it).
+//
+// Each 16 × 16 tile first picks, 256 dabs at a time, the dabs that reach it into workgroup memory:
+// a pixel then reads the few dabs near it, not every dab of the stroke. A stroke's coverage is a
+// product over its dabs, so the order of the picked ones does not matter.
+var<workgroup> near_dabs: array<u32, 256>;
+var<workgroup> near_count: atomic<u32>;
+var<workgroup> dab_count: u32;
+
+@compute @workgroup_size(16, 16)
+fn stroke(@builtin(global_invocation_id) g: vec3<u32>, @builtin(local_invocation_index) li: u32, @builtin(workgroup_id) wid: vec3<u32>) {
+    let w = pu(0u);
+    let h = pu(1u);
+    let x = pu(10u) + g.x;
+    let y = pu(11u) + g.y;
+    let inside = x < pu(12u) && y < pu(13u) && x < w && y < h;
+    let tx0 = f32(pu(10u) + wid.x * 16u);
+    let ty0 = f32(pu(11u) + wid.y * 16u);
+    let px = f32(x) + 0.5;
+    let py = f32(y) + 0.5;
+    if (li == 0u) {
+        dab_count = pu(14u);
+    }
+    workgroupBarrier();
+    let cnt = workgroupUniformLoad(&dab_count);
+    let auto_mask = pu(17u) != 0u;
+    var lp = 0.0;
+    var chp = vec3<f32>(0.0);
+    if (inside && auto_mask) {
+        let i = y * w + x;
+        lp = log_l[i];
+        chp = chroma_at(i);
+    }
+    var keep = 1.0;
+    for (var base = 0u; base < cnt; base += 256u) {
+        if (li == 0u) {
+            atomicStore(&near_count, 0u);
+        }
+        workgroupBarrier();
+        let j = base + li;
+        if (j < cnt) {
+            let o = 5u * j;
+            let r = aux[o + 2u];
+            let dx = aux[o];
+            let dy = aux[o + 1u];
+            // (the tile's pixel centres lie within [tx0 + 0.5, tx0 + 15.5]: a dab farther than r misses them all)
+            if (dx + r >= tx0 && dx - r <= tx0 + 16.0 && dy + r >= ty0 && dy - r <= ty0 + 16.0) {
+                let k = atomicAdd(&near_count, 1u);
+                near_dabs[k] = j;
+            }
+        }
+        workgroupBarrier();
+        let m = atomicLoad(&near_count);
+        if (inside) {
+            for (var q = 0u; q < m; q++) {
+                let o = 5u * near_dabs[q];
+                let dx = px - aux[o];
+                let dy = py - aux[o + 1u];
+                let r = aux[o + 2u];
+                let dd = sqrt(dx * dx + dy * dy);
+                if (dd > r) {
+                    continue;
+                }
+                var a = 1.0;
+                if (dd > aux[o + 3u]) {
+                    a = 1.0 - sstep(aux[o + 3u], r, dd);
+                }
+                if (auto_mask) {
+                    let rx = min(u32(max(floor(aux[o]), 0.0)), w - 1u);
+                    let ry = min(u32(max(floor(aux[o + 1u]), 0.0)), h - 1u);
+                    let ri = ry * w + rx;
+                    a *= auto_similarity(lp, chp, log_l[ri], chroma_at(ri));
+                }
+                keep *= 1.0 - a * aux[o + 4u];
+            }
+        }
+        // (the next batch overwrites the list)
+        workgroupBarrier();
+    }
+    if (inside) {
+        let i = y * w + x;
+        let sa = min(1.0 - keep, bitcast<f32>(pu(15u)));
+        if (pu(18u) == 1u) {
+            c[i] = sa;
+        } else if (pu(16u) != 0u) {
+            c[i] = c[i] * (1.0 - sa);
+        } else {
+            c[i] = max(c[i], sa);
+        }
+    }
 }

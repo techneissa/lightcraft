@@ -13,6 +13,7 @@ workspace = true
 craft-ui = { workspace = true }
 craft-window = { workspace = true }
 lightcraft-geom = { workspace = true }
+lightcraft-map = { workspace = true }
 lightcraft-meta = { workspace = true }
 lightcraft-color = { workspace = true }
 lightcraft-raster = { workspace = true }
@@ -20,7 +21,9 @@ lightcraft-develop = { workspace = true }
 lightcraft-pipeline = { workspace = true }
 lightcraft-catalog = { workspace = true }
 web-time = { workspace = true }
+lightcraft-learn = { workspace = true }
 lightcraft-engine = { workspace = true }
+lightcraft-look = { workspace = true }
 lightcraft-slideshow = { workspace = true }
 lightcraft-preview = { workspace = true }
 egui = { workspace = true }
@@ -36,7 +39,9 @@ lightcraft-testkit = { workspace = true }
 # `default_loader` is the "this build cannot run denoise models" stub when the package is tested
 # on its own (`cargo test -p lightcraft-ui-egui`); a workspace test only passed by feature
 # unification with the desktop app's default `denoise` feature.
-lightcraft-engine = { workspace = true, features = ["denoise"] }
+lightcraft-engine = { workspace = true, features = ["denoise", "test-hooks"] }
+# counts the settings hashes a frame takes (`hash64_calls`)
+lightcraft-develop = { workspace = true, features = ["test-hooks"] }
 egui_kittest = { workspace = true, features = ["wgpu", "snapshot"] }
 lightcraft-denoise = { workspace = true, features = ["runtime"] }
 lightcraft-codecs = { workspace = true }
@@ -51,3 +56,4 @@ toml = "1"
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 craft-update = { workspace = true }
+lightcraft-fetch = { workspace = true }

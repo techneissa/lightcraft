@@ -1,11 +1,12 @@
 //! Masking and Remove (spot) commands on the active photo.
 
 use lightcraft_develop::{
-    BrushStroke, LocalAdjustments, MAX_COLOR_RANGE_SAMPLES, MAX_RED_EYES, Mask, MaskComponent, MaskOp, MaskShape, RedEye, Spot, SpotMode,
+    BrushStroke, LocalAdjustments, MAX_COLOR_RANGE_SAMPLES, MAX_RED_EYES, Mask, MaskComponent, MaskOp, MaskShape, RedEye, Spot, SpotFill, SpotMode,
 };
 use lightcraft_geom::Point;
 use serde_json::{Value, json};
 
+use super::lama::{check_fill, describe, fill_param};
 use super::{CommandSpec, bad, bool_or, cmd, f64_or, has_active, ok, point, str_param};
 use crate::segment::{Click, MAX_CLICKS};
 use crate::{Result, Session};
@@ -31,9 +32,9 @@ fn shape_from(kind: &str, p: &Value, c: &str) -> Result<MaskShape> {
             feather: f64_or(p, "feather", 50.0),
             invert: bool_or(p, "invert", false),
         },
-        "sky" => MaskShape::Sky,
-        "subject" => MaskShape::Subject,
-        "background" => MaskShape::Background,
+        "sky" => MaskShape::Sky { seg: seg_param(p), detail: vec![], edge: 0.0 },
+        "subject" => MaskShape::Subject { seg: seg_param(p), detail: vec![], edge: 0.0 },
+        "background" => MaskShape::Background { seg: seg_param(p), detail: vec![], edge: 0.0 },
         "luminanceRange" => MaskShape::LuminanceRange {
             lo: f64_or(p, "lo", 0.6),
             hi: f64_or(p, "hi", 1.0),
@@ -86,6 +87,9 @@ enum Later {
     Clicks(Vec<Point>, Vec<Point>),
     /// Background mode: the Describe selection is computed first; the mask is added when found.
     Text(String),
+    /// Background mode: the Subject, Sky or Background selection is computed first; the mask (or
+    /// part) is added when found, as for Describe, so no rough mask shows while SAM 3 runs.
+    Concept(super::concepts::Concept),
 }
 
 /// Compute the segmentation of a new AI shape (Object with clicks, Prompt) — or, in background
@@ -96,7 +100,11 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let background = s.segmenter.background;
     match shape {
-        MaskShape::Object { seg: Some(_), .. } | MaskShape::Prompt { seg: Some(_), .. } => {}
+        MaskShape::Object { seg: Some(_), .. }
+        | MaskShape::Prompt { seg: Some(_), .. }
+        | MaskShape::Subject { seg: Some(_), .. }
+        | MaskShape::Sky { seg: Some(_), .. }
+        | MaskShape::Background { seg: Some(_), .. } => {}
         MaskShape::Object { hint, exclude, .. } if !hint.is_empty() && background => {
             s.segmenter.require_model()?;
             return Ok(Later::Clicks(std::mem::take(hint), std::mem::take(exclude)));
@@ -123,6 +131,16 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
             let found = segment(s, |s| s.segment_text(id, text))?;
             *seg = Some(found.ok_or_else(|| ai_err(format!("nothing matching “{text}” was found in this photo")))?);
         }
+        MaskShape::Subject { seg: None, .. } | MaskShape::Sky { seg: None, .. } | MaskShape::Background { seg: None, .. }
+            if super::concepts::wanted(s, id, shape) =>
+        {
+            let Some(c) = super::concepts::of(shape) else { return Ok(Later::Nothing) };
+            if background {
+                return Ok(Later::Concept(c));
+            }
+            let found = s.segment_concept(id, &c).map_err(ai_err)?;
+            super::concepts::store(shape, found, &c)?;
+        }
         _ => {}
     }
     Ok(Later::Nothing)
@@ -130,10 +148,14 @@ fn resolve_ai(s: &mut Session, shape: &mut MaskShape, c: &str) -> Result<Later> 
 
 /// Queue what a new AI component (component `comp` of mask `mask`) still needs.
 fn queue_later(s: &mut Session, later: Later, mask: u32, comp: usize, mut out: Value) -> Result<Value> {
-    if let Later::Clicks(hint, exclude) = later {
-        let id = s.active().ok_or_else(|| ai_err("no active photo"))?;
-        segment(s, |s| s.segment_clicks_later(id, mask, comp, hint, exclude))?;
-        out["pending"] = json!(true);
+    out["id"] = json!(mask);
+    match later {
+        Later::Nothing | Later::Text(_) | Later::Concept(_) => {}
+        Later::Clicks(hint, exclude) => {
+            let id = s.active().ok_or_else(|| ai_err("no active photo"))?;
+            segment(s, |s| s.segment_clicks_later(id, mask, comp, hint, exclude))?;
+            out["pending"] = json!(true);
+        }
     }
     Ok(out)
 }
@@ -145,7 +167,7 @@ fn ai_err(msg: impl Into<String>) -> crate::EngineError {
 
 /// A segmentation call: the model is checked first, so a missing one is [`crate::EngineError::ModelMissing`]
 /// (the segmenter's own errors are text).
-fn segment<T>(s: &mut Session, f: impl FnOnce(&mut Session) -> std::result::Result<T, String>) -> Result<T> {
+pub(super) fn segment<T>(s: &mut Session, f: impl FnOnce(&mut Session) -> std::result::Result<T, String>) -> Result<T> {
     s.segmenter.require_model()?;
     f(s).map_err(ai_err)
 }
@@ -154,13 +176,21 @@ pub(crate) fn clicks_of(include: &[Point], exclude: &[Point]) -> Vec<Click> {
     include.iter().map(|p| Click { at: *p, include: true }).chain(exclude.iter().map(|p| Click { at: *p, include: false })).collect()
 }
 
-fn masks_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Mask>, &mut Option<u32>) -> Result<()>) -> Result<Value> {
+pub(super) fn masks_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Mask>, &mut Option<u32>) -> Result<()>) -> Result<Value> {
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
     let mut active = s.active_mask;
     f(&mut d.masks, &mut active)?;
+    let empty = d.masks.is_empty();
     s.set_develop(id, d, label)?;
+    if active != s.active_mask {
+        s.active_component = None;
+    }
     s.active_mask = active;
+    s.reconcile_segmenter();
+    if empty && matches!(c, "mask.delete" | "mask.deleteAll" | "mask.component") {
+        s.segmenter.cancel_all();
+    }
     Ok(json!({"activeMask": active}))
 }
 
@@ -226,7 +256,7 @@ pub(super) fn mask_id(p: &Value, active: Option<u32>, c: &str) -> Result<u32> {
     optional_mask_id(p, c)?.or(active).ok_or_else(|| bad(c, "no mask selected (give `id`)"))
 }
 
-fn optional_index(p: &Value, key: &str, c: &str) -> Result<Option<usize>> {
+pub(super) fn optional_index(p: &Value, key: &str, c: &str) -> Result<Option<usize>> {
     p.get(key)
         .filter(|v| !v.is_null())
         .map(|v| {
@@ -237,7 +267,7 @@ fn optional_index(p: &Value, key: &str, c: &str) -> Result<Option<usize>> {
         .transpose()
 }
 
-fn find(masks: &mut [Mask], id: u32, c: &str) -> Result<usize> {
+pub(super) fn find(masks: &mut [Mask], id: u32, c: &str) -> Result<usize> {
     masks.iter().position(|m| m.id == id).ok_or_else(|| bad(c, format!("no mask {id}")))
 }
 
@@ -260,13 +290,18 @@ pub fn specs() -> Vec<CommandSpec> {
                     segment(s, |s| s.segment_text_later(id, None, "add", name, text))?;
                     return Ok(json!({"pending": true}));
                 }
+                if let Later::Concept(concept) = &later {
+                    let id = s.active().ok_or_else(|| bad("mask.add", "no active photo"))?;
+                    s.segment_concept_later(id, None, "add", name, concept).map_err(ai_err)?;
+                    return Ok(json!({"pending": true}));
+                }
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
                 // the effect last applied to a mask of this kind
                 let adjust = super::mask_effects::new_mask_adjust(s, &kind);
                 let out = masks_edit(s, "mask.add", "Add Mask", |masks, active| {
                     masks.push(Mask {
                         id: next,
-                        name: name.unwrap_or_else(|| format!("Mask {next}")),
+                        name: name.unwrap_or_else(|| super::mask_names::next(masks, &kind)),
                         components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }],
                         adjust,
                         ..Default::default()
@@ -301,6 +336,11 @@ pub fn specs() -> Vec<CommandSpec> {
                     segment(s, |s| s.segment_text_later(id, Some(mid), op, None, text))?;
                     return Ok(json!({"pending": true}));
                 }
+                if let Later::Concept(concept) = &later {
+                    let op = p.get("op").and_then(Value::as_str).unwrap_or("add");
+                    s.segment_concept_later(id, Some(mid), op, None, concept).map_err(ai_err)?;
+                    return Ok(json!({"pending": true}));
+                }
                 let mut comp = 0;
                 let out = masks_edit(s, "mask.addComponent", "Edit Mask", |masks, _| {
                     let i = find(masks, mid, "mask.addComponent")?;
@@ -316,7 +356,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Brush Stroke",
             [],
             None,
-            "{id?: maskId, points: [[x,y],…] normalized, size?: fraction of long edge (0.03), feather?, flow?, density?, erase?: bool, autoMask?: bool, pressure?: [p,…] pen pressure 0..1 per point (scales each dab's size and flow; omitted: full), connect?: bool — start from the last point of the mask's last stroke (⇧-click), size / feather / flow tapering from that stroke's to these} → {activeMask, connected}",
+            "{id?: maskId, points: [[x,y],…] normalized, size?: fraction of long edge (0.03), feather?, flow?, density?, erase?: bool, autoMask?: bool, component?: index of the brush part to paint into (default: the selected part when it is a brush part, else the mask's last), pressure?: [p,…] pen pressure 0..1 per point (scales each dab's size and flow; omitted: full), connect?: bool — start from the last point of the mask's last stroke (⇧-click), size / feather / flow tapering from that stroke's to these} → {activeMask, connected}",
             has_active,
             |s, p| {
                 let pts: Vec<Point> = p
@@ -342,20 +382,23 @@ pub fn specs() -> Vec<CommandSpec> {
                 let mut connected = false;
                 let next = s.active().and_then(|id| s.develop_of(id)).map(|d| d.next_mask_id()).unwrap_or(1);
                 let want = optional_mask_id(p, "mask.brushStroke")?.or(s.active_mask);
+                let selected = s.active_component;
                 let adjust = super::mask_effects::new_mask_adjust(s, "brush");
+                let mut painted: Option<(u32, usize)> = None;
                 let mut out = masks_edit(s, "mask.brushStroke", "Brush", |masks, active| {
                     let i = match want.and_then(|m| masks.iter().position(|x| x.id == m)) {
                         Some(i) => i,
                         None => {
-                            masks.push(Mask { id: next, name: format!("Mask {next}"), adjust, ..Default::default() });
+                            masks.push(Mask { id: next, name: super::mask_names::next(masks, "brush"), adjust, ..Default::default() });
                             *active = Some(next);
                             masks.len() - 1
                         }
                     };
                     let m = &mut masks[i];
-                    if let Some(MaskComponent { shape: MaskShape::Brush { strokes }, .. }) =
-                        m.components.iter_mut().rev().find(|c| matches!(c.shape, MaskShape::Brush { .. }))
-                    {
+                    // the part to paint into: the one asked for, else the selected one, else the last brush part
+                    let target = super::mask_parts::brush_target(m, p, selected, "mask.brushStroke")?;
+                    painted = Some((m.id, target.unwrap_or(m.components.len())));
+                    if let Some(MaskComponent { shape: MaskShape::Brush { strokes }, .. }) = target.and_then(|k| m.components.get_mut(k)) {
                         // the previous stroke's end and its brush values (not its points)
                         let anchor = strokes.last().filter(|_| connect).and_then(|l| {
                             Some((
@@ -388,6 +431,8 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     Ok(())
                 })?;
+                // painting selects the part it paints into
+                s.active_component = painted;
                 if let Some(o) = out.as_object_mut() {
                     o.insert("connected".into(), json!(connected));
                 }
@@ -400,6 +445,14 @@ pub fn specs() -> Vec<CommandSpec> {
             cap_color_range_samples(&mut shape);
             let comp = optional_index(p, "component", "mask.update")?.unwrap_or(0);
             let mid = mask_id(p, s.active_mask, "mask.update")?;
+            // a Subject, Sky or Background without its selection asks SAM 3 here too (as `mask.add` does), so a
+            // part set over MCP or the CLI is not left as the rough mask; in the app (background mode) it stays
+            // rough: a result that arrives later adds a part, it can't replace this one
+            if matches!(shape, MaskShape::Subject { seg: None, .. } | MaskShape::Sky { seg: None, .. } | MaskShape::Background { seg: None, .. })
+                && !s.segmenter.background
+            {
+                resolve_ai(s, &mut shape, "mask.update")?;
+            }
             masks_edit(s, "mask.update", "Edit Mask", |masks, _| {
                 let i = find(masks, mid, "mask.update")?;
                 let c = masks[i].components.get_mut(comp).ok_or_else(|| bad("mask.update", "no such component"))?;
@@ -547,8 +600,10 @@ pub fn specs() -> Vec<CommandSpec> {
                     None => m
                         .components
                         .iter()
-                        .rposition(|x| matches!(x.shape, MaskShape::Object { .. } | MaskShape::Prompt { .. }))
-                        .ok_or_else(|| bad(c, "the mask has no Object or Describe selection"))?,
+                        .rposition(|x| {
+                            matches!(x.shape, MaskShape::Object { .. } | MaskShape::Prompt { .. } | MaskShape::Subject { .. } | MaskShape::Sky { .. })
+                        })
+                        .ok_or_else(|| bad(c, "the mask has no AI selection"))?,
                 };
                 let started = segment(s, |s| s.segment_detail(id, mid, k))?;
                 Ok(json!({"started": started}))
@@ -648,7 +703,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Set Mask Adjustments",
             [],
             None,
-            "{id?, values: {exposure, contrast, highlights, shadows, whites, blacks, temp, tint, texture, clarity, dehaze, hue, saturation, sharpness, noise, moire, defringe, color_hue, color_sat, amount}}",
+            "{id?, values: {exposure, contrast, highlights, shadows, whites, blacks, temp, tint, texture, clarity, dehaze, hue, saturation, sharpness, noise, moire, defringe, color_hue, color_sat, recolor, recolor_r, recolor_g, recolor_b, recolor_range, recolor_from_r, recolor_from_g, recolor_from_b, amount}} (recolor 0..100 with its colour as sRGB 0..1 channels, Range −100..100, Colour to Replace as sRGB 0..1 (black = automatic); `mask.recolor` takes hex colours)",
             has_active,
             |s, p| {
                 let vals = p.get("values").cloned().ok_or_else(|| bad("mask.adjust", "missing values"))?;
@@ -663,10 +718,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 })
             }
         ),
-        cmd!("mask.select", "Select Mask", [], None, "{id|null}", has_active, |s, p| {
-            s.active_mask = optional_mask_id(p, "mask.select")?;
-            ok()
-        }),
+        cmd!(
+            "mask.select",
+            "Select Mask",
+            [],
+            None,
+            "{id|null, component?: index} — selects a mask, and with `component` one of its parts (null or omitted: no part)",
+            has_active,
+            |s, p| super::mask_parts::select(s, p)
+        ),
         cmd!("mask.delete", "Delete Mask", [], None, "{id?}", has_active, |s, p| {
             let mid = mask_id(p, s.active_mask, "mask.delete")?;
             masks_edit(s, "mask.delete", "Delete Mask", |masks, active| {
@@ -684,11 +744,12 @@ pub fn specs() -> Vec<CommandSpec> {
             })
         }),
         cmd!("mask.rename", "Rename Mask", [], None, "{id?, name}", has_active, |s, p| {
-            let name = str_param(p, "name").ok_or_else(|| bad("mask.rename", "missing name"))?.to_string();
+            let raw = str_param(p, "name").ok_or_else(|| bad("mask.rename", "missing name"))?;
             let mid = mask_id(p, s.active_mask, "mask.rename")?;
             masks_edit(s, "mask.rename", "Rename Mask", |masks, _| {
                 let i = find(masks, mid, "mask.rename")?;
-                masks[i].name = name;
+                let others = masks.iter().enumerate().filter(|(k, _)| *k != i).map(|(_, m)| m.name.as_str());
+                masks[i].name = crate::names::check_name(raw, others).map_err(|e| bad("mask.rename", e.to_string()))?;
                 Ok(())
             })
         }),
@@ -696,7 +757,8 @@ pub fn specs() -> Vec<CommandSpec> {
             let mid = mask_id(p, s.active_mask, "mask.invert")?;
             masks_edit(s, "mask.invert", "Invert Mask", |masks, _| {
                 let i = find(masks, mid, "mask.invert")?;
-                masks[i].invert = !masks[i].invert;
+                // the later parts turn with it, so the whole mask selects the opposite (issue #72)
+                super::mask_invert::invert(&mut masks[i]);
                 Ok(())
             })
         }),
@@ -726,7 +788,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     m.id = next;
                     m.name = format!("{} copy", m.name);
                     if invert {
-                        m.invert = !m.invert;
+                        super::mask_invert::invert(&mut m);
                     }
                     masks.insert(i + 1, m);
                     *active = Some(next);
@@ -739,48 +801,9 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Mask Component",
             [],
             None,
-            "{id?, component: index, action: invert|duplicate|delete|rename|op, name? (rename; empty clears), op?: add|subtract|intersect} — one component of a mask (deleting the last one deletes the mask)",
+            "{id?, component: index | components: [index…], action: invert|duplicate|delete|rename|op|toMask, name? (rename, one part; empty clears), op?: add|subtract|intersect, invert?: bool (duplicate: Duplicate and Invert)} — parts of a mask, all in one undo step; deleting the last one deletes the mask; duplicate puts the copies, in order, after the last chosen part and answers their indexes as `components`; toMask makes a new mask of the chosen parts (same effects as their mask)",
             has_active,
-            |s, p| {
-                let c = "mask.component";
-                let mid = mask_id(p, s.active_mask, c)?;
-                let k = optional_index(p, "component", c)?.ok_or_else(|| bad(c, "missing component"))?;
-                let action = str_param(p, "action").ok_or_else(|| bad(c, "missing action"))?.to_string();
-                let op: Option<MaskOp> = match p.get("op") {
-                    Some(v) => Some(serde_json::from_value(v.clone()).map_err(|e| bad(c, e.to_string()))?),
-                    None => None,
-                };
-                let label = match action.as_str() {
-                    "invert" => "Invert Component",
-                    "duplicate" => "Duplicate Component",
-                    "delete" => "Delete Component",
-                    "rename" => "Rename Component",
-                    "op" => "Change Component Mode",
-                    a => return Err(bad(c, format!("unknown action {a:?} (invert|duplicate|delete|rename|op)"))),
-                };
-                masks_edit(s, c, label, |masks, active| {
-                    let i = find(masks, mid, c)?;
-                    let comps = &mut masks[i].components;
-                    let comp = comps.get_mut(k).ok_or_else(|| bad(c, "no such component"))?;
-                    match action.as_str() {
-                        "invert" => comp.invert = !comp.invert,
-                        "rename" => comp.name = str_param(p, "name").map(str::trim).filter(|n| !n.is_empty()).map(str::to_string),
-                        "op" => comp.op = op.ok_or_else(|| bad(c, "missing op"))?,
-                        "duplicate" => {
-                            let copy = comp.clone();
-                            comps.insert(k + 1, copy);
-                        }
-                        _ => {
-                            comps.remove(k);
-                            if comps.is_empty() {
-                                masks.remove(i);
-                                *active = masks.last().map(|m| m.id);
-                            }
-                        }
-                    }
-                    Ok(())
-                })
-            }
+            |s, p| super::mask_multi::component(s, p)
         ),
         cmd!("mask.move", "Move Mask", [], None, "{id?, to?: index (0 = top), delta?: ±n} — reorder the masks list", has_active, |s, p| {
             let mid = mask_id(p, s.active_mask, "mask.move")?;
@@ -815,7 +838,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let c = "spot.findDust";
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
                 // the uncropped photo, so positions are the spots' own coordinates
-                let job = s.render_job(id, 1600, 1600, false, false).ok_or_else(|| bad(c, "no photo"))?;
+                let mut job = s.render_job(id, 1600, 1600, false, false).ok_or_else(|| bad(c, "no photo"))?;
+                // (the photo's own pixels, never a smart preview's)
+                s.original_job(&mut job);
                 let img = job.run().rendered.map_err(|e| bad(c, e))?.image;
                 let found = lightcraft_pipeline::dust::detect(&img, f64_or(p, "sensitivity", 50.0) as f32);
                 let out: Vec<Value> = found.iter().map(|d| json!({"x": d.x, "y": d.y, "size": d.radius})).collect();
@@ -832,6 +857,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         feather: base.feather,
                         opacity: 100.0,
                         source_offset: None,
+                        ..Default::default()
                     };
                     spot.source_offset = pick_source(s, id, &dd, &spot, None);
                     dd.spots.push(spot);
@@ -852,7 +878,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
                 let detector = super::face_detect::detector(s).map_err(|e| e.into_error(c))?;
                 // the uncropped photo, so positions are the spots' own coordinates
-                let job = s.render_job(id, 1600, 1600, false, false).ok_or_else(|| bad(c, "no photo"))?;
+                let mut job = s.render_job(id, 1600, 1600, false, false).ok_or_else(|| bad(c, "no photo"))?;
+                s.original_job(&mut job);
                 let img = job.run().rendered.map_err(|e| bad(c, e))?.image;
                 let rgb: Vec<u8> = img.data.iter().flat_map(|px| [px[0], px[1], px[2]]).collect();
                 let faces =
@@ -889,6 +916,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         feather: base.feather,
                         opacity: 100.0,
                         source_offset: None,
+                        ..Default::default()
                     };
                     spot.source_offset = pick_source(s, id, &dd, &spot, None);
                     dd.spots.push(spot);
@@ -902,7 +930,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Remove Spot",
             [],
             None,
-            "{mode?: remove|heal|clone|fill (content-aware), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby)} — selects the new spot; returns {index}",
+            "{mode?: remove|heal|clone|fill (content-aware), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby), fill?: classic|lama (default classic; for remove and fill spots; LaMa needs its model, else the spot shows the Classic fill), background?: true (in the window: the best match is found on a worker and the spot is added with it a moment later, as its own undo step; returns {pending: true}; elsewhere the search runs at once)} — selects the new spot; returns {index}, or {pending: true} while earlier spots wait for their source",
             has_active,
             |s, p| {
                 let mode: SpotMode =
@@ -916,6 +944,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Err(bad("spot.add", "missing points"));
                 }
                 let d = Spot::default();
+                let fill = fill_param("spot.add", p, mode)?;
                 let mut spot = Spot {
                     mode,
                     points: pts,
@@ -923,18 +952,32 @@ pub fn specs() -> Vec<CommandSpec> {
                     feather: f64_or(p, "feather", d.feather).clamp(0.0, 100.0),
                     opacity: f64_or(p, "opacity", d.opacity).clamp(0.0, 100.0),
                     source_offset: point(p, "source"),
+                    fill,
+                    ..Default::default()
                 };
                 let id = s.active().ok_or_else(|| bad("spot.add", "no active photo"))?;
-                let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
-                if spot.source_offset.is_none() && spot.mode != SpotMode::Fill {
+                let dd = (*s.develop_of(id).unwrap_or_default()).clone();
+                let search = spot.source_offset.is_none() && spot.mode != SpotMode::Fill;
+                if super::spot_area::sourceless(&spot) {
+                    // LaMa rebuilds a Remove spot from its surroundings: it reads no source and shows no pin
+                    spot.source_offset = None;
+                } else if search && bool_or(p, "background", false) && s.spots_in_background() {
+                    // on a worker: the window never waits on the search; the spot comes with its source (`spot_source`)
+                    s.add_spot_when_found(id, dd, spot);
+                    let mut out = json!({"pending": true});
+                    describe(s, fill, &mut out);
+                    return Ok(out);
+                } else if search {
                     // resolve the automatic source now: it gets a pin and stays put at every size
                     spot.source_offset = pick_source(s, id, &dd, &spot, None);
                 }
-                dd.spots.push(spot);
-                let n = dd.spots.len();
-                s.set_develop(id, dd, "Remove")?;
-                s.active_spot = Some(n - 1);
-                Ok(json!({"index": n - 1}))
+                // (behind spots still waiting for their source, it waits its turn: they keep the order they were asked in)
+                let mut out = match s.add_spot_in_turn(id, spot)? {
+                    Some(i) => json!({"index": i}),
+                    None => json!({"pending": true}),
+                };
+                describe(s, fill, &mut out);
+                Ok(out)
             }
         ),
         cmd!("spot.select", "Select Spot", [], None, "{index|null}", has_active, |s, p| {
@@ -951,7 +994,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Spot",
             [],
             None,
-            "{index? (the selected spot), move?: [dx,dy] (the target, normalized), source?: [dx,dy] (offset from the target), moveSource?: [dx,dy], size?, feather?, opacity?, mode?}",
+            "{index? (the selected spot), move?: [dx,dy] (the target, normalized), source?: [dx,dy] (offset from the target), moveSource?: [dx,dy], size?, feather?, opacity?, mode?, fill?: classic|lama}",
             has_active,
             |s, p| {
                 let c = "spot.update";
@@ -960,10 +1003,23 @@ pub fn specs() -> Vec<CommandSpec> {
                     Some(m) => Some(serde_json::from_value(m.clone()).map_err(|e| bad(c, e.to_string()))?),
                     None => None,
                 };
+                let fill: Option<SpotFill> = match p.get("fill").filter(|v| !v.is_null()) {
+                    Some(v) => Some(v.as_str().and_then(SpotFill::from_name).ok_or_else(|| bad(c, "`fill` must be \"classic\" or \"lama\""))?),
+                    None => None,
+                };
+                // (shaped spots, LaMa's missing source, the source a Classic Remove spot gets back: `spot_area`)
+                let source = super::spot_area::update_source(s, c, i, p, mode, fill)?;
                 spots_edit(s, c, "Edit Spot", |spots| {
                     let sp = &mut spots[i];
+                    if let Some(f) = fill {
+                        check_fill(c, f, mode.unwrap_or(sp.mode))?;
+                        sp.fill = f;
+                    }
                     if let Some(d) = point(p, "move") {
                         sp.points.iter_mut().for_each(|q| *q = Point::new(q.x + d.x, q.y + d.y));
+                        if let Some(a) = &mut sp.area {
+                            a.shift(d.x, d.y);
+                        }
                         // the source moves along (its offset is relative to the target)
                     }
                     if let Some(o) = point(p, "source") {
@@ -984,6 +1040,13 @@ pub fn specs() -> Vec<CommandSpec> {
                     }
                     if let Some(m) = mode {
                         sp.mode = m;
+                        // Heal and Clone copy a source and have no LaMa fill: a spot changed to one is Classic again
+                        if !matches!(m, SpotMode::Remove | SpotMode::Fill) {
+                            sp.fill = SpotFill::Classic;
+                        }
+                    }
+                    if let Some(o) = source {
+                        sp.source_offset = o;
                     }
                     Ok(())
                 })?;
@@ -1003,6 +1066,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
                 let dd = (*s.develop_of(id).unwrap_or_default()).clone();
                 let spot = dd.spots[i].clone();
+                if super::spot_area::sourceless(&spot) || spot.mode == SpotMode::Fill {
+                    return Err(bad(c, "this spot has no source: it is rebuilt from its surroundings"));
+                }
                 let next = pick_source(s, id, &dd, &spot, spot.source_offset).ok_or_else(|| bad(c, "no other source fits in the photo"))?;
                 spots_edit(s, c, "Refresh Source", |spots| {
                     spots[i].source_offset = Some(next);
@@ -1102,7 +1168,7 @@ fn spots_len(s: &Session) -> usize {
 }
 
 /// `index` from the params, else the selected spot.
-fn spot_index(s: &Session, p: &Value, c: &str) -> Result<usize> {
+pub(super) fn spot_index(s: &Session, p: &Value, c: &str) -> Result<usize> {
     let i = optional_index(p, "index", c)?.or(s.active_spot).ok_or_else(|| bad(c, "no spot selected (give `index`)"))?;
     if i >= spots_len(s) {
         return Err(bad(c, "no such spot"));
@@ -1110,15 +1176,23 @@ fn spot_index(s: &Session, p: &Value, c: &str) -> Result<usize> {
     Ok(i)
 }
 
-fn spots_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Spot>) -> Result<()>) -> Result<()> {
+pub(super) fn spots_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Spot>) -> Result<()>) -> Result<()> {
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
     f(&mut d.spots)?;
-    s.set_develop(id, d, label)
+    s.set_develop(id, d, label)?;
+    s.reconcile_segmenter();
+    Ok(())
 }
 
 /// An automatic source for `spot` on photo `id` (a small proxy of the photo, framed by `d`).
-fn pick_source(s: &mut Session, id: crate::PhotoId, d: &lightcraft_develop::DevelopSettings, spot: &Spot, avoid: Option<Point>) -> Option<Point> {
+pub(super) fn pick_source(
+    s: &mut Session,
+    id: crate::PhotoId,
+    d: &lightcraft_develop::DevelopSettings,
+    spot: &Spot,
+    avoid: Option<Point>,
+) -> Option<Point> {
     let src = s.source_now(id, crate::media::SourceLevel::Thumb).ok()?;
     let info = s.source_info(id);
     lightcraft_pipeline::spots::pick_source(&src, &info, d, spot, avoid)
@@ -1150,6 +1224,11 @@ pub(crate) fn clamp_local(mut a: LocalAdjustments) -> LocalAdjustments {
     c(&mut a.color_hue, 0.0, 360.0);
     c(&mut a.color_sat, 0.0, 100.0);
     c(&mut a.amount, 0.0, 200.0);
+    c(&mut a.recolor, 0.0, 100.0);
+    for v in [&mut a.recolor_r, &mut a.recolor_g, &mut a.recolor_b, &mut a.recolor_from_r, &mut a.recolor_from_g, &mut a.recolor_from_b] {
+        c(v, 0.0, 1.0);
+    }
+    c(&mut a.recolor_range, -100.0, 100.0);
     a
 }
 

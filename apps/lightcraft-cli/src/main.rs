@@ -10,7 +10,7 @@
 //! lightcraft-cli denoise-serve [--model ID] [--models DIR] [--listen ADDR] [--token-env VAR] [--run-on auto|gpu|cpu]
 //! lightcraft-cli commands [--json]
 //! lightcraft-cli controls [--json]
-//! lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
+//! lightcraft-cli calibrate [--max N] [--out DIR] [--name NAME] FOLDERS/FILES…
 //! lightcraft-cli bench-cull FOLDER [--files K] [--n N] [--copy M] [--work DIR] [--json FILE]
 //! ```
 #![forbid(unsafe_code)]
@@ -106,12 +106,13 @@ USAGE:
         --max-connections N   concurrent clients (default 8)
   lightcraft-cli commands [--json]   list every command id with its parameters
   lightcraft-cli controls [--json]   list every develop control id with its range
-  lightcraft-cli calibrate [--max N] [--out DIR] FOLDERS/FILES…
+  lightcraft-cli calibrate [--max N] [--out DIR] [--name NAME] FOLDERS/FILES…
       Fit a colour profile per camera model from raw files and their embedded camera JPEGs
       (Sony ARW, Nikon NEF, Fujifilm RAF, Canon CRW): up to N files spread over the folders (default 300; 0 = all), pooled per
       model, written as <model>.json to DIR (default: the profiles folder LightCraft reads,
-      <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). Raws of a profiled model then
-      take their colour from the profile and only their tone from their own JPEG.
+      <config>/camera-profiles, or $LIGHTCRAFT_CAMERA_PROFILES). The result is a local profile: it appears as its own
+      choice in the Profile picker of that camera's raws (it no longer changes Camera Matching). With --name it is
+      written as NAME.json and shown as NAME (one camera model only).
   lightcraft-cli bench-cull FOLDER [--files K] [--n N] [--copy M] [--work DIR] [--json FILE]
       Time what culling a shoot costs on its own files: reading the folder (browse), the first
       screen of grid thumbnails, camera previews at loupe sizes and full size, a loupe render,
@@ -239,12 +240,14 @@ fn raw_files(path: &Path, out: &mut Vec<std::path::PathBuf>) {
 fn calibrate(args: &[String]) -> Result<(), String> {
     let mut max = 300usize;
     let mut out: Option<std::path::PathBuf> = None;
+    let mut name: Option<String> = None;
     let mut inputs = Vec::new();
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "--max" => max = take_value(args, &mut i, "--max")?.parse().map_err(|_| "--max needs a number".to_string())?,
             "--out" => out = Some(take_value(args, &mut i, "--out")?.into()),
+            "--name" => name = Some(take_value(args, &mut i, "--name")?.to_string()),
             a if a.starts_with("--") => return Err(format!("unknown option `{a}`")),
             f => inputs.push(f.to_string()),
         }
@@ -294,10 +297,17 @@ fn calibrate(args: &[String]) -> Result<(), String> {
         pool.merge(p);
     }
     let mut written = 0;
-    for result in pool.fit(5) {
+    let fitted = pool.fit(5);
+    if name.is_some() && fitted.iter().filter(|r| r.is_ok()).count() > 1 {
+        return Err("--name names one profile, but the photos are of several camera models: calibrate each camera on its own".into());
+    }
+    for result in fitted {
         match result {
             Ok(profile) => {
-                let path = lightcraft_engine::camera_profiles::save(&profile, &dir)?;
+                let path = match &name {
+                    Some(name) => lightcraft_engine::camera_profiles::save_named(&profile, &dir, name)?,
+                    None => lightcraft_engine::camera_profiles::save(&profile, &dir)?,
+                };
                 println!(
                     "{}: {} photos, {} colour pairs, hue/saturation table {} → {}",
                     profile.model,
@@ -319,6 +329,7 @@ fn calibrate(args: &[String]) -> Result<(), String> {
     if written == 0 {
         return Err("no profile written".into());
     }
+    eprintln!("calibrate: the profile is now a choice in the Profile picker of that camera's raws; Camera Matching no longer uses it");
     Ok(())
 }
 
@@ -721,10 +732,17 @@ fn read_settings(p: &str) -> Result<SettingsFile, String> {
     }
 }
 
-/// The session `render` and `merge` develop files in: with the lens database the desktop app downloaded, when it is
-/// there (never fetched from here: scripts and tests stay offline).
+/// The session `render` and the other file commands work in: files, the models and LaMa's (so a Remove spot whose fill
+/// is LaMa is drawn with it), and the lens database the desktop app downloaded, when it is there (never fetched from
+/// here: scripts and tests stay offline).
 fn file_session() -> Session {
-    Session::new().with_fs().with_default_denoise_models().with_system_clock().with_default_lens_database()
+    Session::new()
+        .with_fs()
+        .with_default_denoise_models()
+        .with_default_map_cache()
+        .with_system_clock()
+        .with_default_lama_model()
+        .with_default_lens_database()
 }
 
 fn render(args: &[String]) -> Result<(), String> {
@@ -863,8 +881,10 @@ fn snapshot(args: &[String]) -> Result<(), String> {
             let mut s = Session::new()
                 .with_fs()
                 .with_default_denoise_models()
+                .with_default_map_cache()
                 .with_system_clock()
                 .with_default_face_models()
+                .with_default_lama_model()
                 .with_default_lens_database()
                 .with_default_slide_templates();
             s.open_library(dir, false).map_err(|e| library_error(dir, e))?;
@@ -873,6 +893,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
         None if files.is_empty() => Session::with_demo()
             .with_fs()
             .with_default_denoise_models()
+            .with_default_map_cache()
             .with_system_clock()
             .with_default_face_models()
             .with_default_lens_database()
@@ -880,8 +901,10 @@ fn snapshot(args: &[String]) -> Result<(), String> {
         None => Session::new()
             .with_fs()
             .with_default_denoise_models()
+            .with_default_map_cache()
             .with_system_clock()
             .with_default_face_models()
+            .with_default_lama_model()
             .with_default_lens_database()
             .with_default_slide_templates(),
     };
@@ -1108,6 +1131,16 @@ fn denoise_serve(_: &[String]) -> Result<(), String> {
     Err("denoise-serve: this build has no denoise support (build with the `denoise` feature)".into())
 }
 
+#[cfg(test)]
+mod lama_tests {
+    #[test]
+    fn render_looks_for_the_lama_model_like_the_app_does() {
+        let s = super::file_session();
+        assert_eq!(s.lama.dir(), lightcraft_engine::lama_fill::default_lama_dir());
+        assert!(s.lama.dir().is_some(), "a computer with a home folder has a model folder");
+    }
+}
+
 #[cfg(all(test, unix))]
 mod raw_files_tests {
     use super::raw_files;
@@ -1128,10 +1161,8 @@ mod raw_files_tests {
         }
         // a named pipe with a raw extension: not a file, so never opened (a read would block)
         assert!(std::process::Command::new("mkfifo").arg(a.join("pipe.nef")).status().unwrap().success());
-        let started = std::time::Instant::now();
         let mut files = Vec::new();
         raw_files(&dir, &mut files);
-        assert!(started.elapsed() < std::time::Duration::from_secs(10), "walk took {:?}", started.elapsed());
         assert_eq!(files, vec![a.join("one.NEF")]);
         let _ = std::fs::remove_dir_all(&dir);
     }

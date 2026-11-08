@@ -1,7 +1,10 @@
 use super::colour::bin_factor;
+use super::macos::{self, Backend};
 use super::preview::{fit_box, load_embedded_preview};
 use super::probe::preview_reason;
-use super::{Arc, CameraColourModel, DcpProfile, DenoiseSpec, Filter, HIGHLIGHT_CLIP, Orientation, Rgb32f, SourceInfo, fit, xy_to_temp_tint};
+use super::{
+    Arc, CameraColourModel, DcpProfile, DenoiseSpec, Filter, HIGHLIGHT_CLIP, LoadOptions, Orientation, Rgb32f, SourceInfo, fit, xy_to_temp_tint,
+};
 use crate::media::RawDecode;
 
 /// Decode a file into a linear Rec.2020 image no larger than `max_edge`, oriented.
@@ -10,31 +13,42 @@ use crate::media::RawDecode;
 /// instead of each one waking the pool from outside and waiting for it (which costs more than the
 /// loops themselves when the machine is busy).
 pub fn load_bytes(bytes: &[u8], max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    load_bytes_decoded(bytes, max_edge, RawDecode::default())
+    load_bytes_decoded(bytes, max_edge, LoadOptions::default(), RawDecode::default())
 }
 
-/// [`load_bytes`] developing a raw file with an imported camera profile (`dcp`) in place of its own colour model.
-pub fn load_bytes_with(bytes: &[u8], max_edge: usize, dcp: Option<&DcpProfile>) -> Result<(Rgb32f, SourceInfo), String> {
-    load_bytes_decoded(bytes, max_edge, RawDecode { dcp, outliers: false })
+/// [`load_bytes`] with the photo's settings the decode depends on, developing a raw file with an imported camera
+/// profile (`dcp`) in place of its own colour model.
+pub fn load_bytes_with(bytes: &[u8], max_edge: usize, options: LoadOptions, dcp: Option<&DcpProfile>) -> Result<(Rgb32f, SourceInfo), String> {
+    load_bytes_decoded(bytes, max_edge, options, RawDecode { dcp, outliers: false })
 }
 
-/// [`load_bytes`] decoding a raw file as `with` says.
-pub fn load_bytes_decoded(bytes: &[u8], max_edge: usize, with: RawDecode<'_>) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(|_| load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None, false, with).map(|(img, _, info, _)| (img, info)))
+/// [`load_bytes`] with the photo's settings the decode depends on, decoding a raw file as `with` says.
+pub fn load_bytes_decoded(bytes: &[u8], max_edge: usize, options: LoadOptions, with: RawDecode<'_>) -> Result<(Rgb32f, SourceInfo), String> {
+    rayon::scope(|_| {
+        load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None, false, options, with, &macos::System).map(|(img, _, info, _)| (img, info))
+    })
 }
 
 /// [`load_bytes`] taking the file's bytes: a raw file's bytes are freed as soon as it is decoded
 /// (less memory held while it is developed).
-pub fn load_vec(bytes: Vec<u8>, max_edge: usize, with: RawDecode<'_>) -> Result<(Rgb32f, SourceInfo), String> {
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, false, with).map(|(img, _, info, _)| (img, info)))
+pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
+    load_vec_with(bytes, max_edge, LoadOptions::default(), RawDecode::default())
+}
+
+/// [`load_vec`] with the photo's settings the decode depends on, decoding a raw file as `with` says.
+pub fn load_vec_with(bytes: Vec<u8>, max_edge: usize, options: LoadOptions, with: RawDecode<'_>) -> Result<(Rgb32f, SourceInfo), String> {
+    rayon::scope(move |_| {
+        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, false, options, with, &macos::System).map(|(img, _, info, _)| (img, info))
+    })
 }
 
 /// [`load_vec`] for a thumbnail: a DNG that keeps reduced-resolution copies of its raw image (Lightroom's HDR and
 /// panorama merges) develops the smallest that covers `max_edge` instead of the whole image. The flag says whether
 /// it did: such a picture is not the full image, and an export never renders from it.
-pub fn load_vec_reduced(bytes: Vec<u8>, max_edge: usize, with: RawDecode<'_>) -> Result<(Rgb32f, SourceInfo, bool), String> {
+pub fn load_vec_reduced(bytes: Vec<u8>, max_edge: usize, options: LoadOptions, with: RawDecode<'_>) -> Result<(Rgb32f, SourceInfo, bool), String> {
     rayon::scope(move |_| {
-        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, true, with).map(|(img, _, info, reduced)| (img, info, reduced))
+        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, true, options, with, &macos::System)
+            .map(|(img, _, info, reduced)| (img, info, reduced))
     })
 }
 
@@ -45,11 +59,29 @@ pub fn load_vec_pair(
     bytes: Vec<u8>,
     max_edge: usize,
     spec: &DenoiseSpec,
+    options: LoadOptions,
     with: RawDecode<'_>,
 ) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
     rayon::scope(move |_| {
-        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec), false, with).map(|(img, twin, info, _)| (img, twin, info))
+        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec), false, options, with, &macos::System)
+            .map(|(img, twin, info, _)| (img, twin, info))
     })
+}
+
+/// The filesystem loaders' decode of `path`, whose `bytes` were read: as [`load_vec_with`], [`load_vec_reduced`]
+/// (`allow_reduced`) and [`load_vec_pair`] (`denoise`), with the job's cancel flag and, for macOS Colour, the decoder
+/// reading the file itself once its bytes are let go (`macos::FileJob`).
+pub(crate) fn load_file(
+    path: &std::path::Path,
+    bytes: Vec<u8>,
+    max_edge: usize,
+    denoise: Option<&DenoiseSpec>,
+    allow_reduced: bool,
+    options: LoadOptions,
+    with: RawDecode<'_>,
+) -> Result<Loaded, String> {
+    let job = macos::FileJob::current(path);
+    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, denoise, allow_reduced, options, with, &job))
 }
 
 /// The denoised camera RGB of `raw` from its cached product, as the plain development would have it: the default
@@ -74,15 +106,61 @@ fn denoised_camera_rgb(raw: &lightcraft_raw::RawImage, spec: &DenoiseSpec, facto
     }
 }
 
-fn load_bytes_now(
-    bytes: std::borrow::Cow<'_, [u8]>,
+/// A decoded picture, its denoised twin, the source facts, and whether a reduced copy was developed.
+pub(super) type Loaded = (Rgb32f, Option<Rgb32f>, SourceInfo, bool);
+
+pub(super) fn load_bytes_now(
+    mut bytes: std::borrow::Cow<'_, [u8]>,
     max_edge: usize,
     denoise: Option<&DenoiseSpec>,
     allow_reduced: bool,
+    options: LoadOptions,
     with: RawDecode<'_>,
-) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo, bool), String> {
+    backend: &dyn Backend,
+) -> Result<Loaded, String> {
     let dcp = with.dcp;
     if lightcraft_raw::probe(&bytes).is_some() {
+        // macOS Colour: the Mac's decoder makes the picture from the file's header alone (the mosaic is never
+        // unpacked); when it cannot, the photo is decoded as Camera Matching below and says why
+        // (with AI Denoise on, the denoised picture can only come from LightCraft's develop: both pictures are then
+        // developed here and carried over to macOS's colours, fitted to a small picture of macOS's, `macos::transfer_for`)
+        // (an imported camera profile replaces the raw's colour model below: macOS's decoder can't apply it, so the
+        // photo develops here with the profile)
+        let (macos_note, target) = match options.colour {
+            _ if dcp.is_some() => (None, None),
+            lightcraft_develop::CameraColour::Macos if denoise.is_some() => {
+                let t = web_time::Instant::now();
+                match macos::transfer_target(&bytes, backend) {
+                    Ok(target) => {
+                        if lightcraft_pipeline::profiling() {
+                            eprintln!(
+                                "[profile] macOS Colour with AI Denoise: macOS picture at {} px {:.1} ms",
+                                macos::TRANSFER_EDGE,
+                                t.elapsed().as_secs_f64() * 1e3
+                            );
+                        }
+                        (None, Some(target))
+                    }
+                    Err(_) if macos::cancelled(backend) => return Err("cancelled".into()),
+                    Err(why) => (Some(why), None),
+                }
+            }
+            lightcraft_develop::CameraColour::Macos => match macos_source(std::mem::take(&mut bytes), max_edge, backend) {
+                Ok(found) => return Ok(found),
+                Err((why, back)) => {
+                    if macos::cancelled(backend) {
+                        return Err("cancelled".into());
+                    }
+                    bytes = match (back, backend.path()) {
+                        (Some(back), _) => back,
+                        (None, Some(path)) => macos::reread(path)?,
+                        (None, None) => return Err("the raw's bytes are gone".into()),
+                    };
+                    (Some(why), None)
+                }
+            },
+            _ => (None, None),
+        };
         // a thumbnail (`allow_reduced`, never an export) of a DNG that keeps smaller copies of its raw image
         // (Lightroom's merges) develops the smallest that covers it; a denoised photo's twin needs the full mosaic
         let reduced = (allow_reduced && denoise.is_none() && max_edge < usize::MAX)
@@ -115,6 +193,7 @@ fn load_bytes_now(
         // (removed before the camera look's binned sensor proxy too, which needs an empty `OpcodeList3`).
         let info = raw.info();
         let lens = crate::lens_profiles::for_raw(&info, || lightcraft_meta::extract(&bytes));
+        let macos_offered = macos_note.is_none() && macos::offered(&bytes, &info, backend);
         // (the camera look still pairs the sensor with the camera JPEG through the warp the camera applied to it)
         let lens_geometry = crate::camera_preview::lens_geometry(&raw.opcodes.list3);
         // A DNG's preview already has its lens opcodes applied. Keep them for its single tone fit,
@@ -131,7 +210,7 @@ fn load_bytes_now(
                 let own = raw.color.clone();
                 // the same proxy as the starting colour's fit below: the DNG's lens opcodes back in, no embedded lens
                 let tone = with_dng_lens_ops(&mut raw, dng_lens_ops.as_ref(), lens.as_ref(), list3, |raw, embedded| {
-                    crate::camera_preview::starting_colour(raw, &bytes, lens_geometry.as_ref(), embedded)
+                    crate::camera_preview::starting_colour_choice(raw, &bytes, lens_geometry.as_ref(), embedded, options.colour, options.profile_key)
                 })
                 .2
                 .map(|look| look.tone);
@@ -156,11 +235,14 @@ fn load_bytes_now(
             Some(own) => scale.keeping_classification_of(own),
             None => scale,
         };
+        // (whether the photo's Profile option can change its starting colour: decided before the colour is chosen;
+        // never with an imported camera profile, whose matrices replace the file's)
+        let colorimetric = crate::camera_preview::colour_choice_offered(&raw);
         // the source's segmentation mattes (DNG semantic masks), read while the starting colour is fitted
-        let ((xy, t, camera_look), mattes) = rayon::join(
+        let ((xy, t, camera_look, local), mattes) = rayon::join(
             || {
                 with_dng_lens_ops(&mut raw, dng_lens_ops.as_ref(), lens.as_ref(), list3, |raw, embedded| {
-                    crate::camera_preview::starting_colour(raw, &bytes, lens_geometry.as_ref(), embedded)
+                    crate::camera_preview::starting_colour_choice(raw, &bytes, lens_geometry.as_ref(), embedded, options.colour, options.profile_key)
                 })
             },
             || dng_mattes(&bytes, &info),
@@ -197,17 +279,29 @@ fn load_bytes_now(
             tables: tables.as_ref(),
             hue_sat: hue_sat.as_ref(),
         };
+        // macOS Colour with AI Denoise: the transfer to macOS's colours, fitted on the plain picture, replaces the colour
+        // model for both pictures; refused, both stay on Camera Matching and the photo says so
+        let fit_started = web_time::Instant::now();
+        let transfer = target.as_ref().map(|target| macos::transfer_for(target, &img, clip_mask.as_deref(), colour.wb, raw.orientation));
+        if lightcraft_pipeline::profiling() && transfer.is_some() {
+            eprintln!("[profile] macOS Colour with AI Denoise: transfer fit {:.1} ms", fit_started.elapsed().as_secs_f64() * 1e3);
+        }
+        let transferred = match &transfer {
+            Some(Ok(t)) => Some(CameraColourModel { wb: colour.wb, matrix: t.matrix, gain: t.gain, tables: None, hue_sat: None }),
+            _ => None,
+        };
+        let model = transferred.as_ref().unwrap_or(&colour);
         // camera RGB → what the pipeline takes: clipped highlights rebuilt, white balance and the colour model applied,
         // fitted to `max_edge` and upright (the same for the plain and the denoised picture)
         let finish = |mut img: Rgb32f| {
             let mut stages = vec![("develop", t0.elapsed())];
             stages.push(("transform", t0.elapsed()));
             match &clip_mask {
-                Some(mask) => colour.rebuild_highlights_masked(&mut img, mask),
-                None => colour.rebuild_highlights(&mut img),
+                Some(mask) => model.rebuild_highlights_masked(&mut img, mask),
+                None => model.rebuild_highlights(&mut img),
             }
             stages.push(("highlights", t0.elapsed()));
-            colour.apply(&mut img);
+            model.apply(&mut img);
             stages.push(("colour", t0.elapsed()));
             // a full-size render keeps the picture (fitting it to its own size would copy it, ~390 MB at 33 MP)
             let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Box) } else { img };
@@ -230,6 +324,16 @@ fn load_bytes_now(
             eprintln!("[profile] raw source {}×{} (max {max_edge}, ms after decode): {}", img.width, img.height, parts.join(", "));
         }
         let twin = twin.map(|picture| finish(picture).0);
+        if lightcraft_pipeline::profiling()
+            && let Some(transfer) = &transfer
+        {
+            eprintln!("[profile] macOS Colour with AI Denoise: transfer {transfer:?}");
+        }
+        let macos_note = if matches!(transfer, Some(Err(_))) { Some(lightcraft_pipeline::MacosUnavailable::Transfer) } else { macos_note };
+        if let (Some(target), Some(Ok(_))) = (target, &transfer) {
+            let (img, twin, info) = macos::transferred(target, img, twin, lens, raw.orientation);
+            return Ok((img, twin, SourceInfo { mattes, ..info }, used_reduced));
+        }
         // White balance re-evaluates the file's own colour model (when it has one and no file-local look matrix sits
         // on top of it). A model's measured matrices never do: they only give the Kelvin scale its numbers, and the
         // picture is adapted from the as-shot white as every fitted look is (so settings from before that scale
@@ -239,9 +343,10 @@ fn load_bytes_now(
                 let tags = lightcraft_raw::ColorData { profile: Default::default(), ..raw.color.clone() };
                 Arc::new(lightcraft_pipeline::CameraColor { tags, developed_for: xy })
             });
+        // (a local profile whose tone fit failed keeps LightCraft's default tone: its look carries a placeholder curve)
         let camera_tone = camera_tone_of(
             dcp.is_some(),
-            camera_look.as_ref().map(|p| p.tone),
+            camera_look.as_ref().filter(|_| !local.default_tone).map(|p| p.tone),
             raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve),
             kept_tone,
         );
@@ -264,6 +369,10 @@ fn load_bytes_now(
                 // (the catalog knows the original's size: `media::source_info`)
                 native_long: None,
                 retouch: None,
+                colorimetric,
+                colour_note: local.note,
+                macos_offered,
+                macos_note,
             },
             used_reduced,
         ));
@@ -273,6 +382,56 @@ fn load_bytes_now(
     let img = d.to_working();
     let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Mitchell) } else { img };
     Ok((img.into_oriented(Orientation::from_exif(d.orientation)), None, SourceInfo::default(), false))
+}
+
+/// Why a macOS Colour source was not made, and the raw's bytes when they are still here (`None` after the decoder read
+/// the file from its path: the caller reads it again for the Camera Matching decode).
+type NoMacos<'a> = (lightcraft_pipeline::MacosUnavailable, Option<std::borrow::Cow<'a, [u8]>>);
+
+/// The macOS Colour source of the raw in `bytes` (`files::macos`): its base fitted to `max_edge`, upright, no twin.
+/// Everything read from the bytes (header, camera JPEG, lens) is read first; a load with a path ([`Backend::path`])
+/// then lets its own copy of the file go and has the decoder read the file.
+fn macos_source<'a>(bytes: std::borrow::Cow<'a, [u8]>, max_edge: usize, backend: &dyn Backend) -> Result<Loaded, NoMacos<'a>> {
+    use lightcraft_pipeline::MacosUnavailable;
+    let t0 = web_time::Instant::now();
+    let Ok(info) = lightcraft_raw::probe_info(&bytes) else { return Err((MacosUnavailable::Unreadable, Some(bytes))) };
+    let ready = match macos::prepare(&bytes, &info, backend) {
+        Ok(ready) => ready,
+        Err(why) => return Err((why, Some(bytes))),
+    };
+    // the camera JPEG the tone is fitted to, small, read before the decoder runs
+    let reference = crate::camera_preview::base_reference(&bytes);
+    let lens = crate::lens_profiles::for_raw(&info, || lightcraft_meta::extract(&bytes));
+    let path = backend.path().filter(|_| matches!(bytes, std::borrow::Cow::Owned(_)));
+    let base = match path {
+        Some(path) => {
+            drop(bytes);
+            macos::render_base(&ready, lightcraft_macraw::Input::Path(path), max_edge, backend).map_err(|why| (why, None))?
+        }
+        None => match macos::render_base(&ready, lightcraft_macraw::Input::Bytes { data: &bytes, uti: ready.uti() }, max_edge, backend) {
+            Ok(base) => base,
+            Err(why) => return Err((why, Some(bytes))),
+        },
+    };
+    let rendered = t0.elapsed();
+    let look = reference.as_ref().and_then(|r| crate::camera_preview::fit_base_tone(r, info.orientation, &base.image));
+    if lightcraft_pipeline::profiling() {
+        let fit = if look.is_some() { "tone fit accepted" } else { "tone fit refused" };
+        let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+        eprintln!(
+            "[profile] raw source {}×{} (max {max_edge}): macos {:.1} ms, {fit} {:.1} ms",
+            base.image.width,
+            base.image.height,
+            ms(rendered),
+            ms(t0.elapsed().saturating_sub(rendered))
+        );
+    }
+    let source = macos::source_info(&base, lens);
+    let (img, camera_tone) = macos::toned(base.image, look);
+    let source = SourceInfo { camera_tone, ..source };
+    // (the decoder already scaled it; a size gate rounding can leave it a pixel long)
+    let img = if img.width.max(img.height) > max_edge { fit(&img, max_edge, max_edge, Filter::Box) } else { img };
+    Ok((img, None, source, false))
 }
 
 /// Which white-balance scale a raw is edited on, decided from the file alone, the way the catalog decides it from

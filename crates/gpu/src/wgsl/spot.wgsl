@@ -175,3 +175,22 @@ fn spot_score(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     al[j] = s;
 }
+
+// A spot's box to (DIR 0) or from (DIR 1) a patch of its own in `sp`, row by row (`spots_keep::cut` / `paste`).
+// Parameters: W, H, BX, BY, BW, BH, DIR.
+@compute @workgroup_size(16, 16)
+fn spot_patch(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let bw = pu(4u);
+    if (gid.x >= bw || gid.y >= pu(5u)) {
+        return;
+    }
+    let i = 3u * ((pu(3u) + gid.y) * pu(0u) + pu(2u) + gid.x);
+    let j = 3u * (gid.y * bw + gid.x);
+    for (var c = 0u; c < 3u; c++) {
+        if (pu(6u) == 0u) {
+            sp[j + c] = img[i + c];
+        } else {
+            img[i + c] = sp[j + c];
+        }
+    }
+}

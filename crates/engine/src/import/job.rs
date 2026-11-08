@@ -163,6 +163,8 @@ impl ImportJob {
     /// Snapshot what an import with `opts` needs from the session (no file-system calls). Takes
     /// the probes a preceding scan left ([`Session::import_probes`]).
     pub fn new(s: &mut Session, opts: ImportOptions) -> crate::Result<Self> {
+        // the import reads (and with Move, moves) sidecars: the queued automatic writes land first
+        s.finish_sidecar_writes();
         // a recipe is checked before any file is read or placed, not when the photos are committed
         crate::cmd::check_recipe(&opts.recipe).map_err(|e| crate::cmd::bad("library.import", e))?;
         let mode = opts.mode;
@@ -518,6 +520,7 @@ impl Session {
             slide: None,
             preview_cut: None,
             display_fit: None,
+            mask_ask: None,
         };
         let embedded = match (&self.media.preview_loader, c.kind) {
             (Some(l), MediaKind::Raw) => Some((c.path.clone(), l.clone(), edge)),

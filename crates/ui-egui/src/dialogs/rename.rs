@@ -28,6 +28,14 @@ pub(crate) fn rename_preview(
     {
         return (read(&rows), total);
     }
+    // a template being typed is planned once it rests, not on every key: the earlier rows stay up meanwhile
+    let now = ctx.input(|i| i.time);
+    let rested = crate::debounce::rested(ctx, "rename-preview", key, now, crate::debounce::PREVIEW_REST);
+    if !rested {
+        // (the rows of the earlier template stay up meanwhile; none if there were none)
+        let earlier = ctx.data(|d| d.get_temp::<(u64, Rows)>(id)).and_then(|(_, rows)| read(&rows));
+        return (earlier, total);
+    }
     let rows: Rows = Default::default();
     let first: Vec<_> = photos.into_iter().take(RENAME_PREVIEW_ROWS).collect();
     let (out, template, repaint) = (rows.clone(), template.to_string(), ctx.clone());

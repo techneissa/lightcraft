@@ -38,6 +38,77 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+## 2026-11-09
+
+### Remove an Object in One Step
+- The Remove panel has an Object mode: click an object and LightCraft selects it with SAM 3 and removes all of it with one spot in its shape. ⇧-click adds to it, ⌥-click leaves a part out, and a loose stroke over an object snaps to its outline. Expand sets how far past the outline the spot reaches.
+- Any mask can become a Remove spot too: right-click it and choose Remove This Area.
+- These spots fill with LaMa unless you pick Classic. Find People and Find Wires now remove each find with one spot in its shape.
+- Remove spots that use LaMa, and Content-Aware spots, no longer show a source pin: they rebuild the area from what is around it.
+
+### Recolor
+- A mask can now recolor what it selects: pick a colour (picker, hex value or eyedropper) and the area's main colour takes it while keeping its own folds, gradients and highlights. Other colours inside the mask (a logo, dust, a white lining) stay; Range and Color to Replace choose which colour changes. Red boots become purple boots with the same light on them; a black shirt can become white with its folds in place.
+- Works with every mask, including Describe ("boots", "red dress"). Saved with the mask and carried by Sync, Copy / Paste and presets.
+
+## 2026-11-08
+
+### Learn My Edits
+- Photo ▸ Learn My Edits… learns how you edit a kind of photo from 10 to 200 photos you have already edited, then applies it to new photos as ordinary slider values you can adjust: white balance, tone, presence, colour mixer, colour grading and tone curve.
+- Make several profiles ("Portraits", "Landscapes", "Skin Tones"…). Each says how close it came to your edits on photos it had not seen, and drops what your edits don't follow a pattern in. Add a photo you adjusted after applying and it learns again.
+- It needs an 88 MB image model, downloaded only after you agree. Profiles export and import as one file.
+
+### Match Look
+- Photo ▸ Match Look… gives the selected photos the colour and tone of a reference: a photo of the view, an image file, a pasted image or a web address. The result is ordinary slider values (white balance, Light, Vibrance and Saturation, Color Mixer, Color Grading, a tone curve), one undo step, with an Amount. A reference from outside the library is never imported.
+
+### Spot Rows in Remove
+- Every Remove, Content-Aware, Heal and Clone spot has a row in the Remove panel: click it to select the spot, use the eye to hide or show its effect, the trash can to delete it, and the circle menu to set when its circle shows on the photo (Use Global, Auto, Always, Selected or Never).
+- With Tool Overlay at Never, the brush rings and the white painting fill are gone too; a small crosshair shows where the brush is.
+
+### Fine-Edged Subject Masks With BiRefNet
+- Subject and Background masks can use BiRefNet, a model that cuts hair, fur and lace out far more finely than SAM 3. Masking has a model dropdown on its heading (SAM 3, BiRefNet, SAM 3 + BiRefNet Edges) for new parts; each part keeps the model that made it, and its row says so on hover.
+- BiRefNet is a 444 MB download (MIT licence), offered as "Get BiRefNet" on the Masking heading and only after you agree. It runs on the Mac's GPU in a few seconds per photo.
+- An older build reads a BiRefNet part as a SAM 3 selection.
+
+### Hover Help and a Solo Mode Button
+- Controls that showed nothing on hover now say what they do: the eye on each Develop section, the stars, flags, zoom menus, the masking buttons, the Crop and Remove buttons and more.
+- Each Develop section header has a Solo Mode button beside the eye: one click turns Solo Mode on or off, and it is lit on every header while it is on.
+
+### LaMa Fill for Remove
+- The Remove panel has a Fill choice, Classic or LaMa. LaMa is a learned fill that rebuilds lines, windows and textures where the Classic fill leaves a grey smudge, best on large or busy areas. It sets the fill for new spots; each spot keeps its own. Find People and Find Wires use it too.
+- LaMa needs its 206 MB model: choose LaMa and LightCraft asks before it downloads it (or copy `big-lama.pt` into the models folder it shares with PhotoCraft). Without it, spots show the Classic fill.
+
+### Combine Masks From The Right-Click Menu
+- A mask's menu has Add to Mask, Subtract from Mask and Intersect Mask with, each listing every kind of submask, plus Delete Empty Masks and Delete All Masks. The Brush can now intersect.
+- ⌘-click and ⇧-click select several submasks; the submask menu duplicates, inverts, changes the mode of and deletes them together, or copies them into a new mask.
+- Submasks are named by kind and number ("Brush Submask 2"); the panel says Submask where it said Part.
+
+### Real Subject, Sky and Background Masks
+- With SAM 3 installed, Subject, Sky and Background are real selections: Subject finds the people (else an animal, a vehicle or the main object), Sky the sky, Background everything else. The mask appears when SAM 3 has found it, with a "Selecting with SAM 3" row in the activity stack that you can cancel; the selection is stored with the mask, so previews, exports and reopening need no model, and Edge works on them.
+- Subject keeps the main subject: the largest person (or animal, vehicle) and any other at least a third of its size, not small figures far away. Use Object to click one of those.
+- A photo with an embedded sky or person matte (a DNG from an iPhone) keeps using it.
+- Without SAM 3 the mask is the same rough one as before, and the part says "Rough mask. Click to install SAM 3." Masks saved earlier look the same.
+- A new mask is named after its first part: "Subject Mask 1", "Sky Mask 1", "Brush Mask 2"; a number is never used twice for a kind. A name too long for its row gets a smaller font, then "…".
+
+### Remove: Reflections
+- The Remove panel has a Reflections section (also Photo ▸ Remove Reflections) that separates a reflection, such as a window's, from the photo with a local DSRNet model (S, L or L Nature) at Preview, Standard or High quality. Nothing leaves the Mac. Amount, Protect Sky, Detail Protection and Limit to Area change the result without running the model again. It is the official experimental feature, taken early.
+- The model is not bundled: convert it once as `docs/ai-reflections.md` says, then pick its folder with Install Reflection Model…. It is kept in `~/Library/Application Support/ArtCraft/models/<model-id>` (shared with PhotoCraft).
+
+### Arrange the tool strip and the Edit panel by dragging
+
+Drag an icon in the tool strip, or a section heading in the Edit panel, up or down to put it where you want it. A line shows where it will land. The order is remembered. Right-click a strip icon for Move Up, Move Down and Reset Order.
+
+### Settings Sync
+- Settings ▸ Sync moves all your settings to another Mac: Export Settings… and Import Settings… use one file, or Save to Folder and Load from Folder use a folder you choose, such as one in iCloud Drive. Keep in Sync saves there when you quit and offers a newer file from another Mac when you start.
+- Appearance, keyboard shortcuts, arrangements, tool defaults and your presets go along; window sizes, panel positions and folders of one Mac stay. Loading names when and on which Mac the file was saved, and asks first.
+- PhotoCraft uses the same folder, with its own file.
+
+### One models folder for every ArtCraft app
+Face and denoise models now live in the folder LightCraft shares with PhotoCraft, so a model is downloaded once. Models already in LightCraft's own folders move there at the first start. Removing a shared model asks "Remove for Every ArtCraft App?".
+
+### Keyboard Shortcuts window
+
+The Keyboard Shortcuts window is one resizable window that remembers its size. Click a shortcut and press the keys: each combination is added, two make a chord, a warning shows before Enter if another command has the key, Enter saves and Esc cancels. Remove a shortcut with ⌫ / Delete, the trash icon or the right-click menu; the ↺ on a changed row puts it back. The search finds shortcuts by modifier (`cmd shift`, `⌘⇧`).
+
 ## 2026-11-02
 
 ### The Windows title bar is readable from the moment the window opens
@@ -65,6 +136,43 @@
   `mcp --connect` still gets `{photos}`, now when the search ends; a caller that stops waiting (the control server
   gives a request 60 s) can ask again once that search has ended (while it runs, a new request is refused as already
   running), and what was read isn't read again.
+### Renaming, One Way Everywhere
+- Albums, folders of albums, keywords, presets, versions, masks and mask components are renamed in place: double-click the row (or choose Rename…) and its name turns into a text field. Return or a click away saves, Esc cancels, and the shortcuts stay quiet while you type.
+- A name that is empty or already used in the same list is refused, with the reason under the field. Return keeps the field open; a click away puts the old name back and says why. `album.rename`, `mask.rename`, `preset.rename`, `version.rename` and a mask component's rename refuse the same names, so agents get the same answer.
+- Renaming a keyword to one that exists asks before it merges: the Rename Keyword window says which keyword goes into which, and nothing changes until you confirm.
+- Rename Photos and Rename Folder move their files on a worker: the window keeps drawing, an activity row shows the work, and the catalog follows in one undo step when the files have moved. A move the disk refuses (no permission, name taken, disk full) changes nothing in the library and a toast says why. The file-name preview in Rename Photos waits until you stop typing before it checks the disk.
+- Rename Photos and Rename Folder refuse a name with a character a file name can't hold (`: * ? " < > |`, `/`, a control character) or an empty template, and say which character, instead of writing `-` for it. XMP sidecar writes made while files move wait and go to the new names, and an export can't start while a rename runs.
+
+### Remove: Find People and Find Wires
+- The Remove panel has Find People and Find Wires. Each outlines what it finds on the photo; click one to select it (⇧-click adds more), then Remove, or Remove All, takes them out with content-aware spots in one undo step, and every result is an ordinary spot you can still move, resize or delete. People come from the local SAM 3 model (rough shapes from detected faces when only the face detector is installed); the main subject, the largest and most central person however small, is left out unless asked for. Wires (power lines, cables) come from SAM 3 too, or from a built-in thin-line detector without it. Agents get `spot.findPeople`, `spot.findWires`, `spot.candidates`, `spot.selectCandidate` and `spot.removeCandidates`.
+
+### Plainer Camera Card in Info
+- The camera card in Info looks like the plain official card again: dim Camera, Lens, Focal length, Shutter speed, Aperture and ISO labels with plain values. Click a value to edit it (Return saves, Esc cancels). A focal length or aperture your lens cannot give (read from its name, such as 16-35mm f/4) is refused: the value shakes, keeps its old text, and a small red ! says why; `photo.setMeta` refuses it too.
+
+### Book
+- Books are a view in the main window, listed in the side bar like albums (several books; double-click to rename, right-click for Duplicate and Delete…). File ▸ Book… or a book in the side bar opens it: a large spread in the middle (the cover alone), the page strip below it (click to jump, drag to reorder, + adds a page, ← → and Page Up / Down move) and the book's photos on the right (searchable, unplaced first, a mark and page number on placed ones). Drag a photo from the pool into a frame, drag inside a frame to move the photo, scroll or pinch to zoom it (double-click resets), drop a photo on another frame to swap. Right-click photos ▸ Add to Book (or drag them onto a book in the side bar); a book that has some of them asks whether to add the duplicates or skip them. Every change is one undo step; lock a page so Auto Layout leaves it alone; duplicate or delete a page. The page size, margin, padding, background, Auto Layout and Cover are on the Settings tab; Export PDF… and Export JPEGs… write the book (the crop of each frame is used), and books are saved with the library. Preview (the button above the spread, or ⌘↩) opens the book full screen, page by page like the printed book: the cover alone, then two-page spreads on a dark ground; ← → Page Up / Down, Space and a click on the right or left half turn pages (a short slide, none with Reduce motion on), Home / End jump, Esc or the close button return to the same page; the page counter and a strip of thumbnails show while the mouse moves. Pages are drawn by the export's own composer, so what you see is what prints. Agents use the `book.*` commands.
+
+### Masking Workflow
+- Under the selected mask, one Add · Subtract · Intersect control sets the mode of the next part, and a button for each kind of part adds it (Brush, Linear, Radial, Color, Luminance, Subject, Sky, Background, Object, Describe); the menus are gone.
+- Each part is a row you click: it selects the part and brings its tool back (the Brush painting into a brush part, a gradient's handles on the photo, the colour picker). At the right of each row: its mode (a dropdown showing +, − or ∩), Invert and Delete. Delete removes the selected part, else the mask.
+- Brush Add and Erase are named by what a stroke does to the mask, also in a Subtract part, and the brush cursor shows + or − (swapping while ⌥ is held). Esc steps back: the brush, then the part, then the photo.
+- A mask's first part is its base and always acts as Add (a first Intersect used to empty the mask); deleting it makes the next part the base.
+- The Create New Mask buttons fill the side bar's width in 4 or 5 columns (2 in a very narrow bar), never one button alone on the last row.
+
+### Fixed Slider Label Column
+- In the Edit and Masking panels the slider names are left-aligned in one column of fixed width, so opening or closing a section (Noise Reduction has long names) no longer moves any name or shortens any slider.
+
+### Shorter Slider Label Column
+- The slider label column in Edit and Masking now fits the common names (Highlights, Saturation, Vibrance), so the sliders are longer. A longer name (Color Noise Reduction) uses a slightly smaller font, then wraps onto two lines, and its row gets a little taller; the column still never moves.
+
+### Map Memory Is Capped In Bytes
+- The map's decoded tiles and textures are held to 64 MiB each, whatever size a tile server sends, and Settings ▸ Map keeps a custom server's fields filled after Apply.
+
+### Map Starts Offline In This Fork
+- The Map view's tile source starts as Offline until you pick OpenStreetMap or your own server in Settings ▸ Map, so no tile server is asked unless you chose it. The switch Start on OpenStreetMap in Settings ▸ Map, or the globe button on the grey map, makes OpenStreetMap the start for libraries that have no saved source.
+
+### Shared SAM 3 Model Folder
+- AI masks look for the SAM 3 model in `~/Library/Application Support/ArtCraft/models/sam3` (shared with PhotoCraft) first, and a download goes there.
 
 ## 2026-10-30
 
@@ -151,6 +259,92 @@
   breaks the masks added after it: new masks, duplicates and the masks of a preset each get an id no other mask has.
   Before, the next id wrapped around to 0, so a second new mask shared the first one's id (debug builds crashed).
 
+### Arrange the Edit Panel
+- Right-click a section header (Light, Color, Effects, Detail, Optics, Calibration) for **Move Up**, **Move Down** and
+  **Hide This Section**, a list of the sections to show or hide any of them, **Show All Sections** and **Reset to
+  Default**. The panel keeps your order and what you hid.
+- A hidden section only leaves the panel: its adjustments stay on the photo and still apply. Choosing it from
+  Window ▸ Edit Sections (⌘1 to ⌘5) brings it back.
+
+### Show in Finder After Export
+- The Export dialog has **Show in Finder** (File Explorer on Windows, your file manager on Linux): when the export
+  finishes, the first file it wrote is shown. It is saved with the export settings and presets, and off until you
+  turn it on.
+
+### Sharpening Radius Works, Vignette Is Smoother
+- In process V3, **Sharpening ▸ Radius** sets how wide the sharpening is, in pixels of the original photo: a
+  small radius brings out the finest edges, a large one a broader, stronger crispness (and wider halos). It is
+  scaled to the preview, so the preview matches the export. **Amount** is also clearer: 40 to 60 is a visible,
+  natural sharpening and 150 is strong without heavy halos.
+- In process V3, **Effects ▸ Vignette** darkens evenly: -100 takes the far corners down by about 2.75 stops (it
+  used to go to black), -50 by about 1.2 stops (it used to be 1) and -20 is visible; +100 lightens the corners by
+  about 1.5 stops. Photos edited earlier keep their look until you use Update to Current Process.
+
+### Noise Reduction Contrast and Sharpening Detail Work
+- **Noise Reduction ▸ Contrast** now does something: higher values keep more texture that the luminance noise
+  reduction would smooth away. At 0, the default, photos look as before.
+- In process V3, **Sharpening ▸ Detail** sets how much fine detail and noise sharpening brings out (low: clean
+  edges; high: fine texture too). Sharpening is a little stronger overall.
+### Edit Camera, Lens and Exposure Values
+- The camera card at the top of **Info** is editable: **Camera**, **Lens**, **Focal length**, **Shutter speed**,
+  **Aperture** and **ISO**, for one photo or all selected photos. Type a value and press Return.
+- The file's own values are never changed. An edit is kept in your library beside them and shown instead, with a small
+  dot. The round arrow beside a row (**Reset to file value**) brings the file's value back; **Reset All** does it for
+  the whole card, and one Undo takes back an edit on all the selected photos. A field where the selected photos
+  differ says **Mixed**.
+- Camera and Lens are searchable: type `A7 V` or `FE 24-70` to list matching names from about 2,000 cameras and 1,200
+  lenses, pick one with a click or the arrow keys, or type any name you like.
+- Numbers are checked as you type them: `35 mm`, `f/2.8`, `1/250` or `2.5"`, `400`. A value that makes no sense says
+  why and changes nothing.
+- Edited camera, lens and exposure values are saved in the photo's XMP sidecar (**Save Metadata to File**, or
+  automatically with **Automatically write changes into XMP sidecars**) and read back from it, so they survive a new
+  library and show in other apps. Only the values you edited are written; **Reset** removes them from the sidecar.
+- Search, filters, smart albums, rename tokens and slideshow text use the edited values, and so do exported files
+  (their EXIF, following Export ▸ Metadata). Colours and lens corrections still follow the camera and lens the file
+  records, so an edit never changes how a photo looks. Reload from Disk keeps your edits.
+- Agents: `photo.setMeta` takes `camera`, `lens`, `focal`, `aperture`, `shutter` and `iso` (`null` resets one);
+  `photo.resetExif` resets some or all.
+### Brush Shows the Adjustment While You Paint
+- Painting with the Brush now shows the mask's adjustment under the brush as you move, the way Lightroom does, not
+  only a colour: a brush mask with Exposure +1.5 brightens the photo along the stroke at once. Erase shows the
+  adjustment going away, and Auto Mask follows the surface under the brush while you paint.
+- The photo no longer flashes back to the unadjusted look when you let go: the painted stroke stays until the
+  finished picture with the stroke has been drawn, and it looks the same.
+- A frame of painting costs about a millisecond on a 24 MP photo. A brand-new brush mask has no adjustment yet, so
+  it shows only the overlay colour until you give the mask one.
+
+### Sliders on One Row
+- Each Develop slider is one row: its name on the left, a groove with tick marks and a drop-shaped thumb, and the
+  value on the right in a column of fixed width, so typing or dragging to `-100` never moves the slider.
+- Long names such as Color Noise Reduction shrink to fit; Temp, Tint, Vibrance and Saturation keep their colours.
+
+### Stronger Contrast, Whites and Blacks
+- New and reset photos use **Process V3**, where Contrast, Whites and Blacks are clearly stronger on raws that have a
+  camera look and on JPEG / PNG files, matching the strength they already had on other raws. Contrast +100 is a firm
+  S-curve, Whites +100 pushes bright tones into clipping while the midtones hold, and Blacks -100 crushes only the
+  deepest tones. Neutral sliders still leave a photo exactly as it was.
+- In V3, **Shadows** +100 opens the lower midtones too, not only the deepest shadows, and **Highlights** reach
+  further into the upper midtones; Highlights +100 now rolls off towards white, so skies keep their clouds.
+- Photos you already edited keep their look. **Photo ▸ Update to Current Process** moves them to V3 (one Undo step).
+- While you drag Highlights or Shadows, the preview now matches the export on large photos (it used a smaller
+  radius before); exported photos are unchanged.
+### ⌥-Drag on a Mask's Sliders
+- Hold **⌥ (Alt)** while dragging a mask's **Exposure, Whites, Highlights, Blacks or Shadows**: the same clipping
+  preview as the Edit panel's sliders. The mask's tint, outlines and pins step aside while it shows.
+- The clipping triangles also work while you edit a mask: the mask's red tint steps aside.
+
+### Shadow and Highlight Clipping, Separately
+- The two triangles in the corners of the histogram are now two switches. The left one shows where the photo is
+  clipped to black (**blue**), the right one where it is clipped to white (**red**); each works alone, and hovering a
+  triangle previews its overlay for as long as the pointer rests there.
+- Where all three colour channels clip, the overlay is solid; where only some do, it is tinted with those channels'
+  colour (for example yellow where red and green are at black).
+- A triangle shows what clips even when its overlay is off: dim grey for nothing, white for all three channels, else
+  the colour of the clipping channel or channels.
+- **J** and a click on the histogram still switch both sides together (both off if both were on, otherwise both on).
+  View ▸ Shadow Clipping and View ▸ Highlight Clipping switch one side; agents use `view.clippingShadows` and
+  `view.clippingHighlights`. Settings saved with the old single switch load as both on.
+
 ## 2026-10-29
 
 ### A person's page opens in seconds in a large library
@@ -193,6 +387,71 @@
   selected Object mask, and a click on the selected mask's own pin adds nothing. Subject, Sky, Background and the
   range masks still have no pin.
 
+
+### Shorter Settings
+- Settings drops help lines that only repeated their button: under Delete Permanently, Only for picked or starred
+  photos and Starting Colour for Raw Photos. The Auto AI Denoise line is one sentence.
+- Settings ▸ Import no longer has **AI Denoise from**: new photos no longer get AI Denoise at import. Auto AI Denoise
+  (Settings ▸ AI Denoise) still switches it on when a high-ISO raw opens in Detail.
+
+### Faster Deleting While You Cull
+- **⌫ in Recently Deleted** now deletes the selected photos permanently, with the same dialog and setting as Delete
+  Permanently (it used to offer to move them to Recently Deleted, where they already were).
+- **Settings ▸ General ▸ Culling ▸ Only for picked or starred photos** (under "Confirm before moving photos to Recently
+  Deleted", off by default): with it on, rejected and unflagged photos without stars go to Recently Deleted at once,
+  with a short message and Undo to bring them back. If any photo you delete is picked or has stars, the check still
+  shows. Delete Rejected Photos (⌘⌫) follows the same rule.
+
+### Delete Rejected Photos, and Local Photos Go to the Trash
+- **Photo ▸ Delete Rejected Photos (⌘⌫):** sends the rejected photos in the view you're in (the folder, album or
+  source, as filtered) to Recently Deleted in one go; rejected photos elsewhere stay. One Undo brings them all back. It
+  asks first while "Confirm before moving photos to Recently Deleted" is on, and is greyed out when nothing in view is
+  rejected. ⌫ still sends any selected photo to Recently Deleted, rejected or not.
+- **Photos from Local folders** (browsed, never added to the library) always have their files moved to the Trash when
+  you delete them permanently: keeping their files would only bring them back the next time you open the folder. With
+  Ask Each Time they get a short "Move 3 Photos to the Trash?" check.
+- The dialog's **Remove from Library** button, and the setting's **Remove from Library Only** choice, are now **Keep
+  Files**: LightCraft forgets library photos and their files stay in the folders.
+
+### Delete Permanently Asks About the Files
+- Delete Permanently and Empty Recently Deleted used to remove photos from the library only: the files stayed in their
+  folders, and opening a folder again showed them as new photos, so they looked restored.
+- Now a dialog asks: **Move to Trash** sends the photos' files and XMP sidecars to the system Trash (you can get them
+  back from there), **Keep Files** keeps them where they are, **Cancel** (or Esc) does nothing.
+- Settings ▸ General ▸ Culling ▸ **Delete Permanently** picks the answer once: Ask Each Time (the default), Move Files
+  to Trash or Keep Files.
+- A file another photo still uses stays: a virtual copy's file while its master stays, a raw + JPEG pair's shared
+  sidecar while the other half stays. A file that can't be moved is reported and its photo stays in the library.
+- Undo brings back the photos, not the files: get the files back from the Trash. Agents pass `files: "trash"` to
+  `photo.deletePermanently` or `library.emptyRecentlyDeleted` (the default, `"keep"`, never removes a file).
+
+### Type to search in dropdown lists
+- Open a dropdown and start typing: the list narrows to the options that match, ignoring case (names that start with
+  your letters first, then names with a word that starts with them, then names that contain them). ↑ and ↓ move over
+  the matches, Return or a click picks one, and Esc clears the text before it closes the list. Nothing matches shows
+  "No match". A slim Search field with a magnifier appears above the rows only once you type; a list you don't type
+  in looks as it did. The field takes pasted text and IME input.
+- While a list is open, the letters you type no longer run shortcuts (G, D, Space…) and a held Backslash no longer
+  shows the original. Preset pickers (Settings ▸ Import, the Import dialog) search "None", the default rows and every
+  preset together, and still draw only the rows in view.
+- The menus of the borderless dropdown buttons search too: Profile (every group at once, with the hover preview),
+  White Balance, Aspect Ratio, Point Curve, Tool Overlay, Mask Overlay, Filter Presets and the filter bar's pickers.
+  The rows that are not options (Save…, Import…, the custom ratio) wait until the text is cleared. The bottom bar's
+  Zoom menus have no search yet, but a letter typed over one no longer runs a shortcut. Clicking the search field
+  no longer closes the list.
+
+### Quick Filters in the Bottom Bar
+- Next to the thumbnail size slider there is now a **Stars** dropdown and three flag buttons (Picked, Rejected,
+  Unflagged). Tick Unrated, 1★ … 5★ in any mix: the menu stays open while you tick, and the button shows your choice
+  (`2★, 4★`, or `All`). The flag buttons can be on together too.
+- Choices inside one group show photos that match any of them; the two groups together show photos that match both
+  (1★ + Picked = one-star picks). Nothing chosen filters nothing.
+- A small ✕ (or right-click ▸ Clear Filters) resets both groups. The grid header says `12 of 298 photos` while a filter
+  hides some. In a narrower bar, and in Detail and Compare (the filmstrip), one filter button holds the same choices.
+- The filter bar above the grid shows the same state: its flag buttons now work together, and the ratings ticked in the
+  dropdown appear beside its stars. Agents set them with `library.filter` (`ratings`, `flags`); old smart albums and
+  saved filters load as before.
+
 ## 2026-10-28
 
 ### The empty photo grid names Import Photos' shortcut as it is bound
@@ -216,7 +475,168 @@
   so a script or an agent can't do it either.
 
 
+### Rejected Photos Keep Their Look in Compare and Survey
+- Compare and Survey no longer dim a photo flagged as rejected: they show it with the same colours and brightness as
+  the loupe and the filmstrip, so you compare photos as they are. The red reject flag says it is rejected.
+- The grid still dims rejected photos by default. **Settings ▸ Interface ▸ Grid ▸ Dim Rejected Photos** turns that
+  off (agents: `ui.set {"settings": {"dimRejected": false}}`).
+
+### Use Smart Previews for Viewing and Editing
+- **Settings ▸ Performance** has a new switch next to the Smart Previews folder: **Use Smart Previews for viewing and
+  editing** (off by default; Lightroom's "Use Smart Previews instead of Originals for image editing"). With it on, the
+  grid, the loupe at fit and fill, Compare, Survey and every slider edit use a photo's Smart Preview even when its
+  original is right there. Photos on a network drive, an external drive or big 33 MP raws open and edit fast.
+- The original is still read when you zoom to 100 % or more, and for Export, Edit In, Open as Layers, print, the contact
+  sheet, DNG export, Photo Merge and AI Denoise. While it loads, the same photo with the same edit stays on screen from
+  the Smart Preview, so colour, tone and white balance don't flicker. The two renders match to a median ΔE00 of about 0.4.
+- A Smart Preview that is out of date, or was made for another colour than the photo's Profile (No Camera Matching, a
+  local camera profile, macOS Colour), counts as missing: that photo uses its original as before.
+- **Info** says "Editing from Smart Preview" when it applies. Switching the setting on asks once whether to build the
+  missing Smart Previews in the background; new imports build theirs. Agents set it with `library.smartPreviewsForEditing`.
+- Smart Previews now keep what the Profile picker offers, so existing ones are rebuilt once in the background when the
+  library opens (photos whose original is offline keep theirs).
+
+### Open Photos as Layers in PhotoCraft
+- **Photo ▸ Edit In ▸ Open as Layers in PhotoCraft…** (two or more photos selected; also in the right-click menu's list
+  of commands, and in its **Edit In** submenu) opens the selected photos as the layers of one new PhotoCraft document,
+  for double and multiple exposures. The active photo is the top layer; the others follow in the order you selected them.
+- Each photo is rendered with its edits, as for **Edit in PhotoCraft** (the same file format, colour space and bit depth
+  from Settings ▸ External Editing), into a folder beside the top photo named `<photo> + 2 Layers`. Each file is named
+  after its photo, so PhotoCraft names the layer the same. The files are not added to your library.
+- The progress shows in the activity stack with ✕ to stop; a stopped or failed run removes its files.
+- Needs the PhotoCraft that opens layer lists (on a Mac, its `Info.plist` lists `pcstack`). With the official PhotoCraft,
+  or on Windows and Linux, the photos open one by one and the toast says why.
+- Up to 256 photos; more is refused with a message. When you save the document in PhotoCraft, import it with File ▸
+  Import Photos… (or save it in a watched auto-import folder).
+
+### Right-Click Menu: Three Presets, a Backup File, Lists that Fill the Page
+- **Settings ▸ Photo Menu** has three presets in one small dropdown beside the heading. It shows the active preset (a dot
+  when the menu changed since). Pick **Preset 1 / 2 / 3** to switch at once (an empty one says it is empty), **Save to
+  Preset** or **Clear Preset** to keep or empty one, and **Undo** right after a switch to bring the old menu back.
+- Two icon buttons next to it, **Export Right-Click Menu…** and **Import Right-Click Menu…**, save and load the menu and its
+  three presets as a `.json` file. A file of another kind, from a newer LightCraft, or broken is refused with a message and
+  changes nothing; items this version doesn't have are skipped and named.
+- The two lists grow to the height of the page, down to the Add Separator row.
+
+### macOS Colour: the Mac's Own Raw Colours in the Profile Picker
+- On a Mac, the Profile menu and browser have a third choice, **macOS Colour**: the raw decoder that Photos and Quick Look
+  use makes the colours, and LightCraft keeps its tone curve, white balance and every slider. Skin and greys come out
+  natural; the picture is not the camera's own look (saturated blues, such as a padel court, move towards violet), so
+  Camera Matching stays one click away.
+- New raw photos start on it: **Settings ▸ Import ▸ Starting Colour for Raw Photos** offers macOS Colour (the default),
+  Camera Matching and No Camera Matching. It applies to a Sony ARW from a camera your Mac's decoder lists and reads at
+  LightCraft's size (an A7 V, an A7 IV); anything else, and every computer that is not a Mac, starts on Camera Matching.
+  Photos already in your library are never changed by the setting.
+- **Apply macOS Colour to All Photos from This Camera…** in the Profile menu counts the photos first, then moves them in one
+  undo step, and says how many it left alone and why. It never runs by itself.
+- A photo set to macOS Colour that this computer can't make shows as Camera Matching and says why under the picker (not a
+  Mac, a camera or format that isn't offered, another size, a file macOS could not read); the choice is kept, so the photo
+  uses it again on a Mac. Presets and sync carry the choice, and applying a preset says how many photos fall back.
+- AI Denoise works on these photos: its picture is given the Mac's colours, so the Amount slider blends two pictures of the
+  same colour. White balance shows Kelvin. No camera JPEG flashes in the grid or loupe while the Mac's picture is made, so
+  thumbnails of macOS Colour photos fill in a little slower than before (about 0.4 s each).
+- DNG export, Convert to DNG and Photo Merge keep Camera Matching colours and their dialogs say so.
+
+### Keyboard Shortcuts: Two per Command, Chords, Right-Click to Assign
+- Every command can have **two shortcuts**. The first is the one menus, tooltips and the Command Palette show; the
+  second works too. Set either in Help ▸ Keyboard Shortcuts (⌘/): click a shortcut, press the keys, press Enter.
+  The old extra keys (⌘D for Select None, F6, F7 and F8 for the panels, Space for Zoom Toggle and the like) are now
+  declared Shortcut 2 values you can change or remove; ↺ brings them back.
+- A shortcut can be a **chord**, two keys one after the other (⌘K, then C). After the first key a small card
+  lists what each next key does; Esc, another key or a 4 second wait cancels it. A single key that is also the first
+  key of a chord counts as a conflict, like two commands with the same key.
+- **Right-click** an icon, a button, a menu item, a row of the photo menu or a Command Palette row and choose **Assign Shortcut…**: press the
+  keys, Enter saves, Esc cancels, Remove clears it. It says which command already has the keys and takes them over
+  when you save.
+- The Keyboard Shortcuts window is wider, with columns (Action, Shortcut 1, Shortcut 2, Where), a heading per menu, a
+  highlight on a key two commands share, ↺ to restore one command and Reset All to Default. Settings from before load
+  unchanged.
+
+### Keyboard Shortcuts: A Shortcut Can Work Only Where You Want It
+- The last column of Help ▸ Keyboard Shortcuts is now **When**. A shortcut can be limited to a context, such as the
+  Loupe View, the Crop Tool or "not while typing". It shows as small chips (Loupe View, Not Typing); click it to type the
+  condition with suggestions (context names, their opposites, `==`, `!=`, `&&`, `||`, `!`), or press **+** to build one
+  from menus (pick what, **Is** or **Is Not**, pick the value). A condition that does not make sense says why in red and
+  is not saved.
+- Two commands can share a key while their conditions never hold together (X is Reject Photo outside the Crop Tool and
+  Swap Aspect inside it). When they could both apply, the key is amber with the reason under the list.
+- Saved in your settings; settings from before load unchanged. `app.setShortcut` takes `when`.
+- Two small icons at the top of the window, **Export Shortcuts…** and **Import Shortcuts…**, save all your shortcuts
+  (both keys, chords and conditions) to a JSON file as a backup and read them back. A file that isn't a LightCraft
+  shortcuts file, or comes from a newer LightCraft, is refused with a clear message; entries that don't fit this
+  version are skipped and listed under the list.
+
+### Your Own Camera Profiles in the Profile Picker
+- A camera profile of your own (a file in the camera-profiles folder, made with `lightcraft-cli calibrate --name "A7 V
+  Chart"`) is now its own choice in the Profile menu and browser, for the raws of the camera it is made for, under the name
+  inside the file (else its file name). Camera Matching no longer changes when you add one. The profile gives the base
+  colour; the tone still follows the camera's own picture.
+- A photo whose profile file is missing, damaged or made for another camera shows as Camera Matching and says so under
+  the picker. The choice is kept, so the photo uses the profile again when the file is back.
+- Photos you had already: if a file named after your camera (for example `ILCE-7M5.json`) used to change Camera Matching,
+  LightCraft asks once whether to switch those photos to it to keep their look. It never does so by itself, and one undo
+  step takes it back.
+- Presets, Copy and Paste, and sync carry the choice. Export as DNG and Convert to DNG keep the profile's colour.
+- Your library is saved in a new format (v10): an older LightCraft will say it is from a newer version and leave it alone.
+
+### Choose What the Top Bar Shows
+- Any button on the top bar can be turned off: Settings ▸ Top Bar has a check box for each (My Photos Panel, Back
+  and Forward, Filters, Appearance Mode, Activity, Import Photos, Export, Keyboard Shortcuts, Library Status), or
+  right-click an empty spot on the bar. A button that is off still works from the menu bar; each row says where.
+  Reset to Default shows them all. The search field and the menus stay. Library Status comes back, as a warning,
+  if saving fails.
+- The Discord button is gone from the top bar. Help ▸ Join the ArtCraft Discord… and the About window still have it.
+
+### Arrange the Photo Menu
+- The menu a right-click on a photo opens can be arranged in Settings ▸ Photo Menu (or its Customize Menu… item):
+  drag a row to move it, × takes it out, and the list beside it adds any item back, or any command from the menu bar,
+  with a search box to find it. With a row picked, ↑ / ↓ pick another, ⌥↑ / ⌥↓ move it and Delete takes it out. Add
+  Separator and Reset to Default are below. Changes apply at once.
+- The menu now has Before/After Split under Open in Detail: from the grid it opens the photo with the split on.
+- With one photo selected, the menu leaves out what needs several: Photo Merge, Export Animated GIF…, and Group into
+  Stack in the Stack submenu.
+
+### Taller File Windows on the Mac
+- The windows that ask where to save a file or which file to open (Export Animated GIF…, Import, Open Library and
+  the rest) now open at least 520 points tall instead of about 360, so more of the folder list shows. Drag any edge
+  to make them bigger or smaller; the next one opens at the size you left.
+
+### Auto AI Denoise When a Photo Is Opened
+- Settings ▸ AI Denoise ▸ **Auto AI Denoise** (off by default) switches AI Denoise on for a raw photo shot at your
+  **ISO Threshold** (default 6400) or above when you open it in Detail. It is one undo step, stays on the photo, and
+  is never applied again to a photo you undid or switched off.
+
+
 ## 2026-10-27
+
+### Export the selected photos as an animated GIF
+- File ▸ Export Animated GIF… (also in a photo's right-click menu, and GIF in the Export window's formats) turns the
+  selected photos into one GIF, a frame per photo with your edits, in the order you selected them: with two or more
+  photos selected, each thumbnail shows its number (1, 2, 3…) at the right of its badge bar, and ⌘-click adds the next
+  one. Raw files are rendered straight from the raw, with no JPEG in between. The window plays a preview at the chosen
+  speed (click it or press Space to pause and play), with the photos in order, numbered, in a strip below that the
+  mouse wheel scrolls sideways: click a photo to pick it, drag it to move it, ✕ or Delete takes it out. Choose the
+  size (480, 800 or 1200 px on the long side, the first photo's own size, or any size from 64 to 4096 px), how long
+  each photo stays up (down to 0.02 s), whether it loops forever, and dithering, which keeps skies and other gradients
+  smooth in a GIF's 256 colours. The frame takes the first photo's shape; photos of another shape sit on black. It
+  runs in the background with a row in the activity stack (✕ stops it and leaves no file). Agents use
+  `export.animatedGif`.
+
+### Drag the Before/After split line
+- In View ▸ Before/After Split (Shift+Y) and Split Top/Bottom the line between Before and After is now a divider you
+  can move: hover it for the resize cursor, then drag it anywhere across the photo. Before is left of the line (above
+  it in Top/Bottom), After is right of it (below). A round grip with ‹ › shows where to grab, small Before and After
+  labels sit in the corners, and a double-click on the line puts it back in the middle. The position follows zoom, pan
+  and window size, and dragging the line never pans the photo or paints with a tool. The bottom bar has a Split button
+  beside Before/After.
+
+### A Command Palette on ⌘P
+- Press ⌘P (Ctrl+P on Windows and Linux), or choose View ▸ Command Palette…, and type to find any command in the
+  menus by its name or its menu: the best matches come first, each with its menu and shortcut. Use ↑ and ↓ to move,
+  Return or a click to run it, and Esc to close it. Commands that cannot run right now are greyed out. Print… no
+  longer uses ⌘P; its menu item is unchanged, and you can give it a shortcut in Keyboard Shortcuts.
+- The list shows up to 12 matches and scrolls for more. It no longer stays as short as the shortest list since it
+  opened, and ↑ and ↓ keep the highlighted command in view.
 
 ### The Edit menu groups Select Only Active Photo and Paste Settings from Previous with their kin
 - Select Only Active Photo now sits under Deselect All, and Paste Settings from Previous under Paste Selected Settings…, instead of both after Settings…, near the end of the Edit menu. On macOS, where Settings… lives in the application menu, the Edit menu no longer shows two separator lines in a row.
@@ -258,6 +678,14 @@
 - The number beside a slider is now named "Exposure value" (the slider's name and "value"), and "Click to type a value,
   drag to change it" is its description. It was named "Exposure: Click to type a value, drag to change it", so
   VoiceOver read the whole sentence each time it reached the field, once for every slider in the Edit panel.
+
+### Edit All Selected Photos at Once
+- With two or more photos selected, the Edit panel opens with an "Edit All N Selected" switch, and it is on: moving a
+  slider or changing a setting changes every selected photo, one undo step for all of them. This is Auto Sync, which now
+  starts on in the app (Edit ▸ Auto Sync is the same switch) and remembers your choice per library. Spot removal and red
+  eye stay with their own photo.
+- The AI Denoise switch and its Amount now reach every selected photo too. Before, the switch changed only the photo you
+  were editing even with Auto Sync on.
 
 ## 2026-10-29
 
@@ -315,6 +743,23 @@
 
 
 ## 2026-10-25
+
+### AI Denoise for a whole shoot
+- **AI Denoise follows Auto Sync**, like the sliders: with Auto Sync on, the switch turns it on (or off) for every
+  selected raw photo in one undo step, and their denoised pictures are made in the background.
+- **AI Denoise at import:** Settings ▸ Import ▸ **AI Denoise from** (ISO 800 … 12800) switches it on for new raw photos
+  shot at that ISO or above.
+- **One progress row for a job over many photos.** AI Denoise and exports show one row in the activity stack:
+  "37 of 200 · about 6 min left · 2 failed". "Show each photo" opens the rows of the photos in progress. When the job
+  ends, a note says how it went ("AI Denoise: 198 done, 2 failed: …").
+
+### AI Denoise with LightCraft's own model
+- Settings ▸ AI Denoise offers **LightCraft Denoise (Bayer) 0.1.0**, a model trained by LightCraft contributors on
+  CC0 raw photos and licensed MIT OR Apache-2.0 like LightCraft, so commercial work is fine. It downloads once
+  (31 MB) after its terms are shown, from the project's release, or from the trainer's site when that fails; the
+  file is checked against its SHA-256 whichever site served it.
+- Without a model the panel says so plainly and points to Luminance and Color under Detail; a model you were
+  given installs with **Install from file…**.
 
 ### `>=` and `<=` work in the search box
 - Fielded search tokens now take inclusive comparisons: `rating:>=3`, `iso:<=400`, `f:>=2.8`, `focal:<=50`. Before,
@@ -937,6 +1382,53 @@
   would write over the stored copy. It now leaves the library unopened, saves nothing and says which file couldn't be
   read; reload the page to try again.
 ## 2026-10-14
+
+### Map view
+- View ▸ Map (or the map pin in the bottom bar) shows the photos in view on a map, with the filmstrip below. Nearby
+  photos gather in a numbered cluster that splits as you zoom in; click a pin to select its photos, double-click to
+  open one, rest the pointer on it to see the photo.
+- Drag to pan; the mouse wheel or a pinch zooms where the pointer is; Fit to Photos frames every photo with a location.
+  The count of photos without GPS is shown bottom left.
+- The map uses OpenStreetMap's tiles (credited on the map) or a tile server you choose, only fetches the visible tiles
+  and at most one ring around them, and can be switched off in **Settings ▸ Map**; see [Map](map.md) for
+  what is sent where.
+- The Info panel shows a small map of the photo's place under its location fields (the active photo's, with several
+  selected). Click it to open the Map view there; **Open in Browser** (formerly Show on Map) still opens
+  OpenStreetMap's site.
+- Put photos on the map: drag them from the filmstrip onto the Map view and let go where they were taken (a pin follows
+  the pointer); they all get that position in one undo step, replacing any they had. Drag a photo's pin to move it;
+  **Lock Markers** in the map's toolbar keeps pins in place. Photo ▸ **Remove GPS Coordinates** (or right-click a pin)
+  clears the position. Positions are written to XMP sidecars like the Info panel's. Agents: `photo.setGps`,
+  `photo.removeGps`, `map.lockMarkers`.
+- The filmstrip's photos can be dragged now, in every view: onto the map, onto an album or a keyword, as from the grid.
+- The location filter bar above the map, as in Lightroom Classic: **Visible on Map** (the photos where the map is
+  looking; it follows as you pan and zoom), **Tagged**, **Untagged** and **None**, each with its count. It narrows the
+  filmstrip on top of your library filter and goes away when you leave the Map view. Smart albums and filters gain
+  **GPS Area** (a south / west / north / east box) next to Has GPS. Agents: `map.locationFilter {mode}`, and the
+  `gpsArea` rule field.
+- Saved locations, as in Lightroom Classic: name a place and a radius, and it is drawn on the map as a circle. The list
+  over the map's top-left corner shows how many of your photos are inside each; click one to go there, tick it to
+  select its photos, or use + to save the place the map shows (or the place of the selected photos). Drag the selected
+  location's centre or edge to move or resize it. Mark a location **Private** (right-click it) and the photos inside
+  are exported without their location, and the Info panel hides their map until you ask for it. Saved locations are
+  kept with the library (`locations.json`). Smart albums gain **GPS Radius**. Agents: `map.locations`,
+  `map.location.add`, `map.location.update`, `map.location.remove`, `map.location.photos`.
+- GPS track logs on the map, as in Lightroom Classic: **Tracklog** (top right of the map) ▸ **Load Tracklog…** draws a
+  GPX file's tracks as lines and fits the map to them; gaps in the logging stay gaps. Pick one of several tracks in the
+  menu, see its start, end and duration on the camera's clock, set the time zone offset, and **Auto-Tag N Selected
+  Photos** places them where the track was at their capture time, in one undo step. The selected photos are marked on
+  the track where they would go, so a wrong offset shows before anything is written. Files up to 50 MB (2 million
+  points) draw smoothly. Agents: `map.trackLog`, `photo.autoTagTracklog {loaded: true}`.
+- The Map view's keys, as in Lightroom Classic's Map module: **⌘K** Lock Markers, **\\** hides the location filter
+  bar, **O** folds the Saved Locations list, **=** / **−** zoom, **⌘0** fits the photos, and **H** hides the photo pins
+  (also the map's new **Hide Pins** button) so the map, saved locations and tracks show alone. They work in the Map view
+  only: elsewhere H, \\, O and ⌘K keep Remove, Show Original (the Filter Bar in the grids), the mask overlay and
+  Add Keywords.
+- **View ▸ Map** gathers every map command: Fit to Photos, zoom, Pins, Lock Markers, the location filter, Saved
+  Locations, Tracklog and Map Tiles….
+- **Settings ▸ Map**: choose OpenStreetMap, Offline or your own tile server (URL template, attribution, max zoom; used
+  only once you press Apply), see how much the tile cache holds and clear it. A note says what the tile server sees.
+  Agents: `map.showPins`, `map.filterBar`, `map.showLocations`, `map.settings`.
 
 ### Model downloads time out on a name that doesn't resolve
 - Model downloads (AI denoise, faces, SAM) give up on a server name that doesn't resolve within the connect timeout,

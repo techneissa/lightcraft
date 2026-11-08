@@ -16,6 +16,10 @@ pub enum ViewMode {
     Reference,
     /// A card per person named on faces (close-up, name, photo count).
     People,
+    /// The photos in view as pins on a map (`panels/map.rs`).
+    Map,
+    /// A photo book: the spread, its pages and the book's photos ([`crate::panels::book`]).
+    Book,
 }
 
 /// The right-hand tool/panel shown next to the tool strip.
@@ -35,11 +39,14 @@ pub enum RightPanel {
     Info,
     /// The profile browser (part of Edit).
     Profiles,
+    /// Portrait retouching (fork, `fork/retouch-foundation.md`).
+    Portrait,
 }
 
 impl RightPanel {
     pub fn is_edit_tool(self) -> bool {
         matches!(self, RightPanel::Edit | RightPanel::Profiles | RightPanel::Crop | RightPanel::Remove | RightPanel::Masking | RightPanel::RedEye)
+            || self == RightPanel::Portrait
     }
 }
 

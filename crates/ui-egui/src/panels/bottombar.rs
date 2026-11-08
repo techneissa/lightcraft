@@ -17,6 +17,7 @@ const VIEW_MODES: &[(&str, Icon, ViewMode, &str)] = &[
     ("compare", Icon::Compare, ViewMode::Compare, "Compare (Shift+C)"),
     ("survey", Icon::Survey, ViewMode::Survey, "Survey (N)"),
     ("people", Icon::Subject, ViewMode::People, "People"),
+    ("map", Icon::MapPin, ViewMode::Map, "Map"),
 ];
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
@@ -34,7 +35,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let left_end = left_ui
                 .horizontal_centered(|ui| {
                     ui.spacing_mut().item_spacing.x = 2.0;
-                    if left_rect.width() >= 270.0 {
+                    // Seven 32 px view buttons, the separator and Sort need about 300 px.
+                    if left_rect.width() >= 304.0 {
                         for &(id, icon, mode, tip) in VIEW_MODES {
                             if icon_button(ui, id, icon, vec2(32.0, 32.0), app.ui.view == mode, true, tip).clicked() {
                                 let _ = app.run(&format!("view.{id}"), json!({}));
@@ -125,6 +127,11 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
             flag == f,
         );
         register(&pill_ui, format!("flag:{id}"), r);
+        let resp = resp.on_hover_text(crate::i18n::tr(match f {
+            Flag::None => "Unflag (U)",
+            Flag::Pick => "Flag as Pick (P)",
+            Flag::Reject => "Flag as Reject (X)",
+        }));
         let on = flag == f && f != Flag::None;
         let c = if on {
             if f == Flag::Reject { t.reject } else { t.pick }
@@ -161,6 +168,7 @@ fn centre(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, from: f32, to:
     let gresp = ui.interact(gear_r, egui::Id::unique("copy-gear"), Sense::click());
     crate::widgets::announce(&gresp, crate::i18n::tr("Copy Settings…"));
     register(ui, "icon:copyGear", gear_r);
+    let gresp = gresp.on_hover_text(crate::i18n::tr("Copy Settings…"));
     ui.painter().rect_filled(gear_r, 15.0, if gresp.hovered() { t.hover } else { t.canvas });
     paint(ui.painter(), gear_r.shrink(7.0), Icon::Gear, t.icon);
     if gresp.clicked() {
@@ -199,6 +207,20 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
         {
             let _ = app.run("view.beforeAfter", json!({}));
         }
+        // (right to left: this one sits left of the Before/After button)
+        if icon_button(
+            &mut child,
+            "beforeAfterSplit",
+            Icon::BeforeAfterSplit,
+            vec2(30.0, 30.0),
+            matches!(app.ui.before_after, crate::state::BeforeAfter::Split | crate::state::BeforeAfter::SplitTopBottom),
+            true,
+            "Before/After Split (Shift+Y)",
+        )
+        .clicked()
+        {
+            let _ = app.run("view.beforeAfterSplit", json!({}));
+        }
         if app.ui.view == ViewMode::Detail
             && icon_button(&mut child, "faceBoxes", Icon::FaceBox, vec2(30.0, 30.0), app.ui.face_boxes, true, "Face boxes").clicked()
         {
@@ -213,7 +235,8 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
             Zoom::Fill => "Fill".to_string(),
             Zoom::Percent(p) => format!("{p:.0}%"),
         };
-        let zr = crate::widgets::dropdown(&mut child, "zoom", crate::i18n::tr(&zoom_label), t.font(13.0), t.text_label);
+        let zr = crate::widgets::dropdown(&mut child, "zoom", crate::i18n::tr(&zoom_label), t.font(13.0), t.text_label)
+            .on_hover_text(crate::i18n::tr("Zoom Level"));
         egui::Popup::menu(&zr).show(|ui| {
             for (label, z) in [
                 ("Fit", Zoom::Fit),
@@ -237,9 +260,14 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
                 &crate::i18n::tr_format!("Click {}:1", app.ui.click_zoom / 100),
                 t.font(13.0),
                 t.text_label,
-            );
+            )
+            .on_hover_text(crate::i18n::tr("Zoom Level On Click"));
             egui::Popup::menu(&cz).show(|ui| click_zoom_menu(app, ui));
         }
+        // the filmstrip is filtered too: one button for the quick filters when there is room
+        child.add_space(6.0);
+        let mode = super::quick_filters::mode(full.width(), true);
+        super::quick_filters::show(app, &mut child, mode);
     } else {
         // thumbnail size slider
         let (r, resp) = child.allocate_exact_size(vec2(110.0, 20.0), Sense::click_and_drag());
@@ -255,6 +283,7 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
             node.add_action(egui::accesskit::Action::Decrement);
         });
         register(&child, "slider:thumbSize", r);
+        let resp = resp.on_hover_text(crate::i18n::tr("Thumbnail Size"));
         let (inc, dec) = crate::widgets::accessibility_nudge(&child, &resp);
         let (up, down) = if resp.has_focus() {
             // ↑ and ↓ step the size instead of moving the focus to the thumbnail above
@@ -290,6 +319,9 @@ fn right_side(app: &mut LightcraftApp, ui: &mut egui::Ui, full: Rect, compact_zo
         {
             app.ui.thumb_size = min + ((pp.x - r.left()) / r.width()).clamp(0.0, 1.0) * (max - min);
         }
+        child.add_space(4.0);
+        let mode = super::quick_filters::mode(full.width(), false);
+        super::quick_filters::show(app, &mut child, mode);
     }
     if child.min_rect().width() > 0.0 { child.min_rect().left() } else { full.right() }
 }
@@ -379,6 +411,7 @@ mod visual_regressions {
                 ViewMode::Survey,
                 ViewMode::Reference,
                 ViewMode::People,
+                ViewMode::Map,
             ] {
                 for scale in [1.0, 1.5, 2.0] {
                     let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Default::default());
@@ -434,6 +467,7 @@ mod visual_regressions {
                 ViewMode::Survey,
                 ViewMode::Reference,
                 ViewMode::People,
+                ViewMode::Map,
             ] {
                 for scale in [1.0, 1.5, 2.0] {
                     let ctx = egui::Context::default();

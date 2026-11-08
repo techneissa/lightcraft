@@ -556,3 +556,15 @@ fn malformed_capture_time_without_fallback_is_not_projected() {
     assert_eq!(parsed.metadata.capture_time, None);
     assert_eq!(parsed.properties["exif:DateTimeOriginal"], vec!["2026-01-01T".to_string()]);
 }
+
+#[test]
+fn lens_and_sensitivity_are_written_in_both_standard_places() {
+    let m = Metadata { lens_model: Some("RF24-70mm F2.8".into()), iso: Some(1600), ..Default::default() };
+    let x = write_xmp(&m, None);
+    assert!(x.contains("<aux:Lens>RF24-70mm F2.8</aux:Lens>") && x.contains("<exifEX:LensModel>RF24-70mm F2.8</exifEX:LensModel>"), "{x}");
+    assert!(x.contains("<exifEX:PhotographicSensitivity>1600<") && x.contains("<rdf:li>1600</rdf:li>"), "{x}");
+    let back = parse_xmp(&x).unwrap().metadata;
+    assert_eq!((back.lens_model.as_deref(), back.iso), (Some("RF24-70mm F2.8"), Some(1600)));
+    let none = write_xmp(&Metadata::default(), None);
+    assert!(!none.contains("aux:Lens") && !none.contains("PhotographicSensitivity"));
+}

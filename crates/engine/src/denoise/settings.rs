@@ -3,6 +3,7 @@ use super::builtin::{builtin_marker, forget_builtin_card};
 use super::gpu::GPU_SETUP_MARKER;
 use super::model::RunOn;
 use super::{DenoiserManifest, Deserialize, Duration, Path, PathBuf, Serialize, Value};
+use crate::shared_models::ModelRoots;
 
 /// Extension of a product file.
 pub const EXT: &str = "lcdn";
@@ -37,7 +38,17 @@ pub(crate) struct Settings {
     pub run_on: Option<String>,
     /// What came before `runOn`: `false` was the processor only.
     pub gpu: Option<bool>,
+    /// Turn AI Denoise on by itself for a raw photo at or above [`Self::auto_iso`] when it is opened (`None`: no).
+    pub auto_open: Option<bool>,
+    /// The ISO from which [`Self::auto_open`] acts (`None`: [`DEFAULT_AUTO_ISO`]).
+    pub auto_iso: Option<u32>,
 }
+
+/// The ISO from which a photo opened gets AI Denoise on its own, unless the user chose another.
+pub const DEFAULT_AUTO_ISO: u32 = 6400;
+
+/// The ISO the setting may be given (a sensor's range, with room above).
+pub const AUTO_ISO_RANGE: std::ops::RangeInclusive<u32> = 50..=6_553_600;
 
 impl Settings {
     pub fn auto(&self) -> bool {
@@ -50,6 +61,14 @@ impl Settings {
             None if self.gpu == Some(false) => RunOn::Cpu,
             None => RunOn::Auto,
         }
+    }
+
+    pub fn auto_open(&self) -> bool {
+        self.auto_open.unwrap_or(false)
+    }
+
+    pub fn auto_iso(&self) -> u32 {
+        self.auto_iso.unwrap_or(DEFAULT_AUTO_ISO).clamp(*AUTO_ISO_RANGE.start(), *AUTO_ISO_RANGE.end())
     }
 
     pub fn cache_bytes(&self) -> u64 {
@@ -89,6 +108,8 @@ pub(crate) struct Installed {
     pub onnx: PathBuf,
     /// What was recorded when it was installed (terms accepted, hash of the file, self-test).
     pub accepted: Value,
+    /// Whether it is in the folder shared with the other ArtCraft apps.
+    pub shared: bool,
 }
 
 impl Installed {
@@ -103,7 +124,21 @@ impl Installed {
 
 /// The models in the folder. A folder that is not a valid model (wrong name, no model file, a manifest that does not
 /// validate or does not match its folder) is ignored, never trusted.
-pub(crate) fn installed_models(dir: &Path) -> Vec<Installed> {
+pub(crate) fn installed_models(roots: &ModelRoots) -> Vec<Installed> {
+    let mut out: Vec<Installed> = Vec::new();
+    // the shared folder first: a model in both is the shared one
+    for dir in roots.search() {
+        for i in installed_in(dir, roots.is_shared(dir)) {
+            if !out.iter().any(|o| o.manifest.id == i.manifest.id) {
+                out.push(i);
+            }
+        }
+    }
+    out.sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));
+    out
+}
+
+fn installed_in(dir: &Path, shared: bool) -> Vec<Installed> {
     let Ok(entries) = std::fs::read_dir(dir) else { return Vec::new() };
     let mut out = Vec::new();
     for e in entries.flatten() {
@@ -122,7 +157,7 @@ pub(crate) fn installed_models(dir: &Path) -> Vec<Installed> {
             continue;
         }
         let accepted = read_capped(&p.join("installed.json"), 8192).and_then(|b| serde_json::from_slice(&b).ok()).unwrap_or(Value::Null);
-        out.push(Installed { manifest: m, onnx, accepted });
+        out.push(Installed { manifest: m, onnx, accepted, shared });
     }
     out.sort_by(|a, b| a.manifest.id.cmp(&b.manifest.id));
     out
@@ -130,10 +165,11 @@ pub(crate) fn installed_models(dir: &Path) -> Vec<Installed> {
 
 /// Forget that setting the graphics card up for a model closed LightCraft before (the markers [`set_up_card`] leaves):
 /// the user chose where denoise runs, so the card may be tried again.
-pub(crate) fn forget_gpu_set_ups(dir: &Path) {
-    for i in installed_models(dir) {
+pub(crate) fn forget_gpu_set_ups(roots: &ModelRoots) {
+    for i in installed_models(roots) {
         let _ = std::fs::remove_file(i.onnx.with_file_name(GPU_SETUP_MARKER));
     }
+    // (the built-in denoiser keeps its card marker in the library's own models folder, as `denoise_refresh_active` names it)
     #[cfg(feature = "denoise")]
-    forget_builtin_card(&builtin_marker(&dir.join(lightcraft_denoise::builtin::ID)));
+    forget_builtin_card(&builtin_marker(&roots.old.join(lightcraft_denoise::builtin::ID)));
 }

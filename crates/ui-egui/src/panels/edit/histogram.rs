@@ -46,6 +46,87 @@ fn live_hdr_histogram(live: Option<&(PhotoId, u64, Histogram)>, id: PhotoId, dra
     live.filter(|l| dragging && l.0 == id).map(|l| l.2.clone())
 }
 
+/// The two corner triangles: each toggles its own clipping overlay and shows which channels clip;
+/// a click on the plot itself (`plot_clicked`) toggles both.
+fn clipping_buttons(
+    app: &mut LightcraftApp,
+    ui: &egui::Ui,
+    p: &egui::Painter,
+    t: &Tokens,
+    plot: Rect,
+    clipping: Option<lightcraft_raster::histogram::ChannelClipping>,
+    plot_clicked: bool,
+) {
+    // the panel's floating scroll bar widens over the right edge when hovered: both buttons keep
+    // clear of it, the left one too so they stay symmetric (#1640)
+    let [shadow_rect, highlight_rect] = crate::panels::histogram::clipping_rects(ui, plot);
+    let mut hover = [false; 2];
+    let mut run: Option<&str> = None;
+    for (side, (name, rect, label, command, channels, on)) in [
+        ("shadows", shadow_rect, "Shadow clipping", "view.clippingShadows", clipping.map(|c| c.shadow_channels()), app.ui.clip_shadows),
+        (
+            "highlights",
+            highlight_rect,
+            "Highlight clipping",
+            "view.clippingHighlights",
+            clipping.map(|c| c.highlight_channels()),
+            app.ui.clip_highlights,
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let response = ui.interact(rect, ui.scope_id().with(("histogram-clipping", name)), Sense::click());
+        register(ui, format!("histogram:{name}"), rect);
+        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), on, crate::i18n::tr(label)));
+        if response.clicked() {
+            run = Some(command);
+        }
+        hover[side] = response.hovered();
+        // Keep the hit target comfortable, with a smaller box and clear space to the plot edges.
+        let box_rect = rect.shrink2(vec2(2.0, 2.0));
+        let clipped = channels.is_some_and(|c| c.iter().any(|&x| x));
+        let (tile, mark) = clip_button_colors(t, on, response.hovered(), clipped);
+        p.rect_filled(box_rect, 3.0, tile);
+        if on {
+            p.rect_stroke(box_rect, 3.0, Stroke::new(1.0, t.text), egui::StrokeKind::Inside);
+        }
+        // the triangle shows what clips, overlay on or off: dim when nothing does
+        // (a channel colour that does not stand 3:1 on this theme's tile gives way to the plain mark)
+        let color =
+            channels.and_then(crate::panels::clipping::indicator_color).filter(|c| crate::widgets::button::contrast(*c, tile) >= 3.0).unwrap_or(mark);
+        crate::panels::clipping::paint_triangle(p, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), color);
+        let status = match channels.map(|c| c.iter().any(|&x| x)) {
+            Some(true) => "Clipping detected in this preview.",
+            Some(false) => "No clipping detected in this preview.",
+            None => "Histogram not yet available.",
+        };
+        response.on_hover_text(format!(
+            "{}\n{}\n{}",
+            crate::i18n::tr(label),
+            crate::i18n::tr(match (side, on) {
+                (0, true) => "Click to hide the shadow clipping overlay (blue). Hover to preview it.",
+                (0, false) => "Click to show the shadow clipping overlay (blue). Hover to preview it.",
+                (_, true) => "Click to hide the highlight clipping overlay (red). Hover to preview it.",
+                (_, false) => "Click to show the highlight clipping overlay (red). Hover to preview it.",
+            }),
+            crate::i18n::tr(status)
+        ));
+    }
+    // a pointer resting on a triangle previews its overlay for as long as it stays
+    let frame = ui.ctx().cumulative_frame_nr();
+    if hover != app.ui.clip_hover.0 || hover.iter().any(|&h| h) {
+        app.ui.clip_hover = (hover, frame);
+        ui.ctx().request_repaint();
+    }
+    // a click on the plot itself toggles both sides together, as it always has
+    if let Some(command) = run {
+        let _ = app.run(command, json!({}));
+    } else if plot_clicked {
+        let _ = app.run("view.clipping", json!({}));
+    }
+}
+
 /// The histogram, its clipping buttons and the EXIF strip, drawn above the Edit panel's scrolling sliders
 /// ([`crate::panels::right::show`]).
 pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
@@ -112,7 +193,7 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
             "Left: the standard (SDR) range up to SDR white. Right: the HDR range, one band per stop above SDR white (the orange line: the HDR headroom). With Visualize HDR range on, the bands take its colours.",
         ));
     }
-    let clipping = hist.as_ref().map(|h| h.clipping());
+    let clipping = hist.as_ref().map(|h| h.channel_clipping());
     // mid-way with no histogram of the new kind yet, the one being left is drawn alone
     if let Some(h) = hist.or_else(|| flow.leaving()) {
         // HDR: SDR on the left, a solid line at SDR white and dashed ones between the stops
@@ -137,52 +218,14 @@ pub(crate) fn histogram(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId)
         }
         flow.paint_curve(p, plot, &h);
     }
-    let mut clicked = resp.clicked();
-    // both buttons keep clear of the panel's right edge, where its floating scroll bar widens when
-    // hovered beside the sliders, the left one too so they stay symmetric (#1640)
-    let [shadow_rect, highlight_rect] = crate::panels::histogram::clipping_rects(ui, plot);
-    for (name, rect, label, clipped) in [
-        ("shadows", shadow_rect, "Shadow clipping", clipping.map(|(lo, _)| lo > 0.003)),
-        ("highlights", highlight_rect, "Highlight clipping", clipping.map(|(_, hi)| hi > 0.003)),
-    ] {
-        let response = ui.interact(rect, ui.scope_id().with(("histogram-clipping", name)), Sense::click());
-        register(ui, format!("histogram:{name}"), rect);
-        response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, ui.is_enabled(), app.ui.show_clipping, crate::i18n::tr(label)));
-        clicked |= response.clicked();
-        let active = app.ui.show_clipping;
-        // Keep the hit target comfortable, with a smaller box and clear space to the plot edges.
-        let box_rect = rect.shrink2(vec2(2.0, 2.0));
-        let (tile, mark) = clip_button_colors(&t, active, response.hovered(), clipped == Some(true));
-        p.rect_filled(box_rect, 3.0, tile);
-        if active {
-            p.rect_stroke(box_rect, 3.0, Stroke::new(1.0, t.text), egui::StrokeKind::Inside);
-        }
-        paint(p, Rect::from_center_size(rect.center(), vec2(16.0, 16.0)), Icon::ChevronDown, mark);
-        let status = match clipped {
-            Some(true) => "Clipping detected in this preview.",
-            Some(false) => "No clipping detected in this preview.",
-            None => "Histogram not yet available.",
-        };
-        response.on_hover_text(format!(
-            "{}\n{}\n{}",
-            crate::i18n::tr(label),
-            crate::i18n::tr(if active {
-                "Click to hide clipping warnings for shadows and highlights."
-            } else {
-                "Click to show clipping warnings for shadows and highlights."
-            }),
-            crate::i18n::tr(status)
-        ));
-    }
-    if clicked {
-        let _ = app.run("view.clipping", json!({}));
-    }
+    clipping_buttons(app, ui, p, &t, plot, clipping, resp.clicked());
     // the tonal zone the pointer is on replaces the EXIF strip while it is there
     if let Some(text) = zone.as_ref().and_then(|a| a.readout()) {
         register(ui, "histogramReadout", r);
         p.text(pos2(r.left() + r.width() / 2.0, r.bottom() - 13.0), Align2::CENTER_CENTER, text, t.font(12.5), t.text_label);
     } else if let Some(ph) = app.session.catalog.photo(id) {
-        let m = &ph.meta;
+        let shown = ph.meta.shown();
+        let m = &*shown;
         let parts: Vec<String> = [
             m.iso.map(|i| format!("ISO {i}")),
             m.focal_mm.map(|f| format!("{f:.0}mm")),
@@ -233,20 +276,39 @@ pub(super) fn soft_proofing(app: &mut LightcraftApp, ui: &mut egui::Ui, id: Phot
             let device = app.ui.proof_profile.as_ref().map(|(_, n)| n.clone());
             let shown = device.clone().unwrap_or_else(|| cur.label().to_string());
             let mut pick = false;
-            let combo = crate::widgets::combo_box("proof-space").width(170.0).selected_text(shown).show_ui(ui, |ui| {
-                for s in OutputSpace::ALL {
-                    if ui.selectable_label(device.is_none() && cur == s, s.label()).clicked() {
-                        let _ = app.run("view.softProof", json!({"space": s}));
-                    }
+            enum Row {
+                Space(OutputSpace),
+                Device,
+                Other,
+            }
+            let mut rows: Vec<(Row, String)> = OutputSpace::ALL.iter().map(|s| (Row::Space(*s), s.label().to_string())).collect();
+            if let Some(n) = &device {
+                rows.push((Row::Device, n.clone()));
+            }
+            if app.services.pick_display_profile.is_some() {
+                rows.push((Row::Other, crate::i18n::tr("Other…").to_string()));
+            }
+            let (combo, chosen) = crate::widgets::dropdown_search::pick(
+                ui,
+                "proof-space",
+                |c| c.width(170.0).selected_text(shown),
+                &rows,
+                |(row, _)| match row {
+                    Row::Space(s) => device.is_none() && cur == *s,
+                    Row::Device => true,
+                    Row::Other => false,
+                },
+                |(_, label)| label.clone(),
+            );
+            crate::widgets::name_combo(&combo, crate::i18n::tr("Profile"));
+            combo.on_hover_text(crate::i18n::tr("Proof Color Space"));
+            match chosen.and_then(|i| rows.get(i)) {
+                Some((Row::Space(s), _)) => {
+                    let _ = app.run("view.softProof", json!({"space": s}));
                 }
-                if let Some(n) = &device {
-                    let _ = ui.selectable_label(true, n);
-                }
-                if app.services.pick_display_profile.is_some() && ui.selectable_label(false, crate::i18n::tr("Other…")).clicked() {
-                    pick = true;
-                }
-            });
-            crate::widgets::name_combo(&combo.response, crate::i18n::tr("Profile"));
+                Some((Row::Other, _)) => pick = true,
+                _ => {}
+            }
             if pick
                 && let Some(path) = app.services.pick_display_profile.as_mut().and_then(|pick| pick().into_iter().next())
                 && let Err(e) = app.run("view.softProof", json!({"profile": path}))

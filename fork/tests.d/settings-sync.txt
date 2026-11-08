@@ -1,0 +1,2 @@
+cargo test -p lightcraft-engine --lib -- settings_folder
+cargo test -p lightcraft-ui-egui --lib -- settings_sync

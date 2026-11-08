@@ -1,0 +1,1 @@
+cargo test -p lightcraft-ui-egui --lib -- tool_strip_order edit_sections

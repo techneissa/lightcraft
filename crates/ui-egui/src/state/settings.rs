@@ -126,9 +126,14 @@ pub struct AppSettings {
     /// `confirmDelete: false` by default (#1239).
     #[serde(rename = "askBeforeDelete")]
     pub confirm_delete: bool,
+    /// With the delete confirmation on, ask only when a picked or starred photo is among those deleted.
+    pub confirm_delete_picked_only: bool,
     /// Ask before photos dropped on a Folders row move there on disk (the dialog's "Don't ask
     /// again" turns it off).
     pub ask_before_move: bool,
+    /// What Delete Permanently does with the photos' files: ask, move them to the Trash, or leave them.
+    #[serde(deserialize_with = "lenient")]
+    pub delete_files: super::DeleteFiles,
     /// A click on the dimmed backdrop around a dialog closes it, like Esc (off: a stray click
     /// never throws away a dialog's choices).
     pub close_dialogs_outside: bool,
@@ -153,6 +158,13 @@ pub struct AppSettings {
     pub photocraft_file: EditFile,
     /// Memory the caches may hold together, in MB (0 = automatic; `app.memoryBudget`).
     pub memory_mb: u32,
+    /// Use Smart Previews instead of Originals for viewing and editing (`library.smartPreviewsForEditing`).
+    pub smart_previews_for_editing: bool,
+    /// Settings ▸ Map ▸ Start on OpenStreetMap: a library with no tile source saved yet starts on
+    /// OpenStreetMap instead of Offline. Handed to the engine every frame (`MapState::set_start_on_osm`).
+    pub map_start_on_osm: bool,
+    /// The question about building the missing smart previews was asked once, when the setting was first switched on.
+    pub smart_editing_offered: bool,
     /// Remove Hot Pixels leaves a raw alone when more than this share of its photosites, in percent, would be
     /// replaced (`app.hotPixelLimit`).
     pub hot_pixel_limit: f32,
@@ -166,6 +178,9 @@ pub struct AppSettings {
     pub film_badges: bool,
     /// Grid: when to show the rating / flag / edited badges.
     pub grid_badges: GridBadges,
+    /// Grid: a photo flagged as rejected is shown dimmed (Settings ▸ Interface ▸ Dim Rejected Photos; on by default, as
+    /// in Lightroom Classic). Compare, Survey, the loupe and the filmstrip never dim it.
+    pub dim_rejected: bool,
     /// View ▸ View Options ▸ Show message when loading or rendering photos: the loupe says
     /// "Rendering…" while the photo it shows is not the finished render.
     pub loupe_messages: bool,
@@ -203,6 +218,24 @@ pub struct AppSettings {
     /// gets a new one, or always merge (issue #2672; the window's "Don't ask again" picks that).
     #[serde(deserialize_with = "lenient")]
     pub lightroom_import: LightroomImport,
+    /// The photo menu as the person arranged it (Settings ▸ Photo Menu): its slots in order;
+    /// None is the default menu (`panels::photo_menu`).
+    #[serde(deserialize_with = "crate::panels::photo_menu::read_saved", skip_serializing_if = "Option::is_none")]
+    pub photo_menu: Option<Vec<String>>,
+    /// The three presets of the photo menu (Settings ▸ Photo Menu ▸ Presets; `panels::photo_menu::presets`).
+    #[serde(
+        deserialize_with = "crate::panels::photo_menu::presets::read",
+        skip_serializing_if = "crate::panels::photo_menu::presets::Presets::is_empty"
+    )]
+    pub photo_menu_presets: crate::panels::photo_menu::presets::Presets,
+    /// The top bar's items turned off (Settings ▸ Top Bar): their ids; none is every item shown
+    /// (`panels::topbar_items`).
+    #[serde(deserialize_with = "crate::panels::topbar_items::read_saved", skip_serializing_if = "Vec::is_empty")]
+    pub top_bar_hidden: Vec<String>,
+    /// The Keyboard Shortcuts window's size (points) as the user left it; `None` = opens at the
+    /// default (fork feature `feat/49-shortcuts-window`).
+    #[serde(deserialize_with = "lenient", skip_serializing_if = "Option::is_none")]
+    pub shortcuts_window_size: Option<[f32; 2]>,
     /// The answer to the first-launch offer of the lens database (Download / Not Now; Settings ▸ General ▸ Lens
     /// profiles changes it). A value this version doesn't read asks again.
     #[serde(deserialize_with = "lenient")]
@@ -230,7 +263,9 @@ impl Default for AppSettings {
             at_launch: LaunchLibrary::Last,
             startup_view: StartupView::Last,
             confirm_delete: true,
+            confirm_delete_picked_only: false,
             ask_before_move: true,
+            delete_files: super::DeleteFiles::Ask,
             close_dialogs_outside: false,
             import_dropped_directly: false,
             gpu: true,
@@ -241,11 +276,15 @@ impl Default for AppSettings {
             photocraft_path: String::new(),
             photocraft_file: EditFile { format: EditFormat::Psd, ..EditFile::default() },
             memory_mb: 0,
+            smart_previews_for_editing: false,
+            map_start_on_osm: false,
+            smart_editing_offered: false,
             hot_pixel_limit: HOT_PIXEL_LIMIT_DEFAULT,
             info_selected_photos: true,
             film_names: true,
             film_badges: true,
             grid_badges: GridBadges::Auto,
+            dim_rejected: true,
             loupe_messages: true,
             background_prep: Default::default(),
             keymap: Default::default(),
@@ -259,6 +298,10 @@ impl Default for AppSettings {
             zoom_to_focus: true,
             loupe_info: LoupeInfo::default(),
             lightroom_import: LightroomImport::Ask,
+            photo_menu: None,
+            photo_menu_presets: Default::default(),
+            top_bar_hidden: Vec::new(),
+            shortcuts_window_size: None,
             lens_database: Default::default(),
         }
     }

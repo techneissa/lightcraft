@@ -486,3 +486,57 @@ A view's stages keep an uploaded source only up to 96 MB (a Preview-level source
   faster path for exports.
 - Large-radius blurs at full size (dehaze dark channel at 24 MP) dominate the export: a summed-area
   table or a downsampled dark channel would cut them further.
+
+## Masks on the device (issue #75)
+
+`crates/gpu/src/masks.rs` evaluates the masks. Each mask's alpha is kept with the view's stages
+(`AlphaStore`, next to the CPU's `AlphaCache`, same key: `masks::alpha_key`), so an effect slider, the
+Amount or the global Exposure (for masks that don't read it) evaluates no mask: each kept plane is copied
+into the render's stack of planes. A mask's Amount scales its effect terms (`finish::effect_terms`), not
+its alpha.
+
+A brush part is stamped stroke by stroke by the `stroke` kernel (`mask.wgsl`), inside the stroke's
+bounding box. Each 16 × 16 tile first picks, 256 dabs at a time, the dabs that reach it into workgroup
+memory, so a stroke of tens of thousands of dabs costs what its box and its dabs near each pixel cost; the
+old kernel took at most 4,096 dabs across the whole mask and sent the part to the CPU past that. A dab is
+five words (x, y, radius, hard core, flow), pen pressure applied on the CPU, so pressure stays on the
+device. An Auto Mask stroke is stamped alone, refined with the guided filter and combined in order. A part
+whose strokes extend a held part stamps only the new strokes over a copy of its plane; the last four parts
+stay on the device.
+
+### The overlay's alphas (issue #75)
+
+The loupe draws a mask overlay over the plain photo. While a tint is shown, a job beside the photo's render
+(`RenderJob::for_mask_planes`, `Slot::Alpha` / `Slot::RegionAlpha`) answers with the selected mask's plane, or every visible
+mask's for Show All Masks. `lightcraft_gpu::mask_planes` (`Want::MaskPlanes` in `render.rs`) stops after `masks()`: it copies the
+alphas the photo's render kept (no mask is evaluated), signs the planes (`masks::planes_signature`: each mask's alpha key and
+Amount, the size, the window, the source), and reads back only the wanted planes, one at a time, applying the Amount and cutting
+the window. The asker sends the signature of the planes it holds, and gets none while it is unchanged: an effect slider, a drag,
+or hiding and showing the overlay make no plane. With the overlay off nothing is asked. A selected mask that is hidden still has its plane (evaluated on the CPU from the image on the device path, not part of Show All Masks). The CPU's twin is
+`lightcraft_pipeline::mask_planes`. The UI makes one premultiplied tint texture from the plane per view and colour, and draws it
+with the opacity as the draw's tint (`crates/ui-egui/src/mask_tint.rs`). With a display profile, and in the browser build, the
+overlay is still drawn into the render.
+
+A mask without a kernel (Subject, Object, Sky and Background selections, Color Range's heuristics) is evaluated on the CPU
+from the image read back once; its alpha is then kept with the view's stages like any other, so the effect ticks that follow
+read back only the finished picture and its histogram (`lightcraft_gpu::readbacks` counts them; tested). A Sky, Luminance or
+Color Range mask reads the global Exposure, so an Exposure drag evaluates it again on the CPU, with the image read back, each
+tick.
+
+The keys that find a mask's kept alpha and brush parts (`masks::alpha_key`, `masks::brush_chain`) hash the raw bits of every
+number with a word-at-a-time hasher (`masks/key.rs`), not the `{:?}` text of every stroke, which cost more than a cache hit on a
+mask of hundreds of strokes of hundreds of samples. Committing a stroke hashes the settings once on the UI thread (the
+photo's remembered hash, which keys every cache of it); the brush preview's settings take their identity from the key they are
+made from.
+
+### The display fit on the device (issue #75)
+
+At rest the loupe renders a little larger than it is drawn and shrinks the picture with a Lanczos3 filter to the exact drawn size
+(`RenderJob::display_fit`). That fit was 14 ms of CPU at 3468 × 2179. `lightcraft_gpu::try_render_fit` (`Want::ImageFit`) makes it
+on the device before the readback: `fit.wgsl` turns the finished picture's packed bytes into floats, the existing `resize_h` /
+`resize_v` kernels filter them with the CPU's own taps (`resample::weights`), and `pack_rgb8` rounds and clamps them back. The
+full picture is read back as before (the view cache keeps it), and the fitted one beside it; the two differ from the CPU's fit by
+at most a level of rounding (`crates/gpu/tests/it/fit.rs`). The CPU fits where the device cannot: a diagnostic overlay is drawn on
+the CPU after the readback, a monitor profile converts the picture after it, and a device whose buffers cannot hold three floats a
+pixel of the picture (`Gpu::fits`) falls back too. The kernels use three storage bindings and 16 × 16 groups, within every
+supported adapter's limits (the device needs at least 10 storage buffers a stage; Metal, Vulkan and DX12 all give that).

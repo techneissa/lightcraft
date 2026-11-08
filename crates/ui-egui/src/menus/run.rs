@@ -146,6 +146,31 @@ fn theme_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
 
 /// Handle UI commands; `None` means "not a UI command — send it to the engine".
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if let Some(r) = crate::panels::match_look::command(app, id, p) {
+        return Some(r);
+    }
+    if id == "dialog.learnEdits" || id.starts_with("learnEdits.") {
+        return Some(crate::learn_edits::command(app, id, p));
+    }
+    if id.starts_with("photoMenu.") {
+        return Some(crate::panels::photo_menu::command(app, id, p));
+    }
+    if id.starts_with("view.editSection")
+        && let Some(r) = crate::panels::edit_sections::command(app, id, p)
+    {
+        return Some(r);
+    }
+    if id.starts_with("view.toolStrip")
+        && let Some(r) = crate::panels::tool_strip_order::command(app, id, p)
+    {
+        return Some(r);
+    }
+    if id.starts_with("portrait.") {
+        return Some(crate::panels::portrait::command(app, id, p));
+    }
+    if id.starts_with("topBar.") {
+        return Some(crate::panels::topbar_items::command(app, id, p));
+    }
     if matches!(id, "ui.dock" | "ui.dock.reset") {
         return Some(crate::docking::command(app, id == "ui.dock.reset", p));
     }
@@ -153,6 +178,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         // the app's own context: a fresh one's repaints reach no window and its clock starts at zero
         let ctx = app.tasks.repaint.clone().unwrap_or_default();
         return Some(crate::lightroom_import::command(app, id, p, &ctx));
+    }
+    if let Some(r) = crate::export_task::book_task::command(app, id, p) {
+        return Some(r);
     }
     if id == "develop.auto" {
         return Some(crate::auto_settings::command(app, p));
@@ -189,6 +217,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         ui_commands_11,
         ui_commands_12,
     ];
+    if let Some(r) = crate::panels::map::command(app, id, p) {
+        return Some(r);
+    }
     PARTS.iter().find_map(|part| part(app, &ctx, id, p))
 }
 
@@ -750,8 +781,21 @@ fn ui_commands_5(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             Ok(json!({"zoom": zoom, "pan": pan}))
         }
         "view.clipping" => {
-            app.ui.show_clipping = !app.ui.show_clipping;
-            Ok(Value::Null)
+            // both sides together: any off turns both on, both on turns both off
+            let on = !(app.ui.clip_shadows && app.ui.clip_highlights);
+            app.ui.clip_shadows = on;
+            app.ui.clip_highlights = on;
+            Ok(json!({"shadows": on, "highlights": on}))
+        }
+        "view.clippingShadows" => {
+            // {on?}; no params toggles. The blue overlay of pixels clipped at black.
+            app.ui.clip_shadows = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.clip_shadows);
+            Ok(json!({"on": app.ui.clip_shadows}))
+        }
+        "view.clippingHighlights" => {
+            // {on?}; no params toggles. The red overlay of pixels clipped at white.
+            app.ui.clip_highlights = p.get("on").and_then(Value::as_bool).unwrap_or(!app.ui.clip_highlights);
+            Ok(json!({"on": app.ui.clip_highlights}))
         }
         "view.visualizeHdr" => {
             // {on?}; no params toggles. Shown on photos edited in HDR (see `develop.hdr`).
@@ -967,6 +1011,10 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             panel(app, ctx, RightPanel::RedEye, "Red Eye");
             Ok(Value::Null)
         }
+        "panel.portrait" => {
+            panel(app, ctx, RightPanel::Portrait, "Portrait");
+            Ok(Value::Null)
+        }
         "panel.info" => {
             panel(app, ctx, RightPanel::Info, "Info");
             Ok(Value::Null)
@@ -1043,12 +1091,19 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                 return Err(format!("{s}: no such Edit section"));
             }
             let sec = &s["section.".len()..];
+            // a section taken off the panel comes back when it is asked for
+            let mut was_hidden = false;
+            if let Some(hidden) = crate::panels::edit_sections::EditSection::from_id(sec) {
+                was_hidden = app.ui.edit_sections.is_hidden(hidden);
+                app.ui.edit_sections.reveal(hidden);
+            }
             if app.ui.right != RightPanel::Edit {
                 app.ui.right = RightPanel::Edit;
             }
             if solo == Some(true) {
                 app.ui.solo_section(sec);
-            } else {
+            } else if !(was_hidden && app.ui.section_open(sec)) {
+                // a section that was hidden while open comes back open, not toggled shut
                 app.ui.toggle_section(sec);
             }
             Ok(Value::Null)
@@ -1072,23 +1127,10 @@ fn ui_commands_8(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
                     app.ui.tool = "guidedUpright".into();
                 }
                 "brush" => {
-                    // A new mask and Add/Subtract are selection operations, not the brush's
-                    // Erase mode. Paint positively into a component with the requested op.
-                    let create = if p.get("new").and_then(Value::as_bool) == Some(true) {
-                        Some(app.run("mask.add", json!({"kind": "brush"})))
-                    } else {
-                        p.get("op").map(|op| app.run("mask.addComponent", json!({"kind": "brush", "op": op})))
-                    };
-                    if let Some(result) = create {
-                        if let Err(e) = result {
-                            return Some(Err(e));
-                        }
-                        app.ui.brush_erase = false;
-                        app.ui.mask_overlay = true;
+                    // `new`, `op`, `component` and `erase`: crate::panels::mask_parts::start_brush
+                    if let Err(e) = crate::panels::mask_parts::start_brush(app, p) {
+                        return Some(Err(e));
                     }
-                    app.ui.right = RightPanel::Masking;
-                    app.ui.view = ViewMode::Detail;
-                    app.ui.tool = "brush".into();
                 }
                 "linear" | "radial" => {
                     app.ui.right = RightPanel::Masking;
@@ -1186,6 +1228,10 @@ fn ui_commands_9(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             app.ui.dialog = Some(Dialog::PasteSettings { groups });
             Ok(Value::Null)
         }
+        "view.commandPalette" => {
+            crate::panels::command_palette::toggle(app);
+            Ok(Value::Null)
+        }
         "view.focusSearch" => {
             // the search field lives in the top bar of the library and detail views alike
             app.ui.focus_search = true;
@@ -1207,6 +1253,11 @@ fn ui_commands_9(app: &mut LightcraftApp, _ctx: &egui::Context, id: &str, p: &Va
             Ok(Value::Null)
         }
         "app.slideshowExport" => crate::slideshow_export::start(app, id, p),
+        "dialog.animatedGif" => {
+            app.ui.dialog = Some(Dialog::AnimatedGif { settings: lightcraft_engine::animated_gif::GifSettings::default() });
+            Ok(Value::Null)
+        }
+        "app.animatedGif" => crate::animated_gif::start(app, id, p),
         "dialog.contactSheet" => {
             app.ui.dialog = Some(Dialog::ContactSheet { options: lightcraft_engine::contact_sheet::Options::default() });
             Ok(Value::Null)
@@ -1295,6 +1346,26 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         "app.checkForUpdates" => crate::updates_ui::check(app),
         "photo.editInPhotoCraft" => edit_in(app, ctx, p, true),
         "photo.editInExternal" => edit_in(app, ctx, p, false),
+        "photo.removeReflections"
+        | "reflection.apply"
+        | "reflection.reset"
+        | "reflection.status"
+        | "reflection.toggle"
+        | "reflection.panel"
+        | "reflection.install"
+        | "reflection.download"
+        | "reflection.models"
+        | "reflection.instructions"
+        // fork feature (fork/glare-highlights.md)
+        | "reflection.mode"
+        | "reflection.area"
+        | "reflection.glare"
+        | "reflection.paint"
+        | "reflection.tool" => {
+            app.ui.right = RightPanel::Remove;
+            crate::reflections::command(app, id, p)
+        }
+        "photo.openAsLayersInPhotocraft" => crate::layers_task::open_as_layers(app, ctx, p),
         "photo.openOriginalInExternal" => open_original_in(app, ctx, p),
         "dialog.cull" => {
             let (burst_gap, similarity) = app.ui.cull_burst.unwrap_or((10.0, 0.93));
@@ -1311,6 +1382,13 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
             Ok(Value::Null)
         }
         "app.setShortcut" => crate::shortcuts::set_shortcut(app, p),
+        "settings.export" | "settings.import" | "settings.syncSave" | "settings.syncLoad" | "settings.syncChoose" => {
+            crate::settings_sync::command(app, id, p)
+        }
+        "app.exportShortcuts" => crate::keybinds::backup::export_command(app, p),
+        "app.importShortcuts" => crate::keybinds::backup::import_command(app, p),
+        "app.shortcutContexts" => Ok(crate::keybinds::when::keys::listing(app)),
+        "app.assignShortcut" => crate::keybinds::command(app, p),
         "app.resetShortcuts" => {
             app.ui.settings.keymap.clear();
             Ok(Value::Null)
@@ -1510,8 +1588,12 @@ fn view_back_command(app: &mut LightcraftApp, ctx: &egui::Context) -> Result<Val
         // Through `slideshow::end`: it also releases the held slide textures. Clearing the
         // two fields directly left every rendered slide in the renderer.
         crate::panels::slideshow::end(app);
+    } else if crate::panels::mask_parts::collapse_selection(app) {
+        // several selected submasks go back to the last clicked one first
     } else if !app.ui.tool.is_empty() {
         app.ui.tool.clear();
+    } else if crate::panels::mask_parts::leave_part(app) {
+        // Esc leaves the brush first (above), then the selected part; the mask stays selected
     } else if app.ui.right == RightPanel::Crop && app.ui.view == ViewMode::Detail {
         // Esc leaves the crop tool (the crop stays), as C does; the next Esc goes back
         panel(app, ctx, RightPanel::Crop, "Crop, Rotate, Geometry");
@@ -1708,7 +1790,11 @@ fn app_system_info_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, 
         "Frame update".into(),
         format!("{:.1} ms (logic {:.1} ms; slowest {:.0} ms)", app.perf.update_ms, app.perf.logic_ms, app.perf.max_update_ms),
     ));
-    rows.push(("Last loupe render".into(), format!("{:.0} ms", app.renderer.last_main_ms)));
+    let ms = |v: Option<f64>| v.map_or("–".to_string(), |v| format!("{v:.0} ms"));
+    rows.push((
+        "Last loupe render".into(),
+        format!("{:.0} ms (draft {}, full {})", app.renderer.last_main_ms, ms(app.renderer.last_draft_ms), ms(app.renderer.last_full_ms)),
+    ));
     if let Some(f) = lightcraft_engine::gpu::last_fallback() {
         rows.push(("Last GPU fallback".into(), f));
     }
@@ -1878,19 +1964,8 @@ fn photo_tag_from_tracklog_command(app: &mut LightcraftApp, _ctx: &egui::Context
     }
     let r = app.run("photo.autoTagTracklog", params);
     if let Ok(v) = &r {
-        let n = v["tagged"].as_u64().unwrap_or(0);
-        let sk = &v["skipped"];
-        let mut msg = crate::i18n::tr_format!("Tagged {n} photo{} from the tracklog", if n == 1 { "" } else { "s" }, n = n);
-        let outside = sk["outside"].as_u64().unwrap_or(0);
-        if outside > 0 {
-            msg += &crate::i18n::tr_format!("; {outside} outside its time range", outside = outside);
-        }
-        let kept = sk["hasGps"].as_u64().unwrap_or(0);
-        if kept > 0 {
-            msg += &crate::i18n::tr_format!("; {kept} already had a location", kept = kept);
-        }
         let ctx = app.tasks.repaint.clone().unwrap_or_default();
-        app.toast(&ctx, msg);
+        app.toast(&ctx, crate::panels::map::tracks::tagged_message(v));
     }
     r
 }

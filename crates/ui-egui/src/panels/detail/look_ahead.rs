@@ -114,6 +114,7 @@ pub(crate) fn look_ahead(app: &mut LightcraftApp, id: PhotoId, edge: usize, crop
     for &nid in &targets {
         crate::panels::grid::request_thumb(app, nid, AHEAD_THUMB_EDGE, AHEAD_PRIORITY + 2);
     }
-    let jobs = targets.into_iter().filter_map(|nid| app.session.quick_view_job(nid, edge, crop)).collect();
+    // (no camera JPEG: the loupe keeps the last photo rather than flash the camera's colours, as `request_stand_in`)
+    let jobs = targets.into_iter().filter_map(|nid| app.session.quick_view_job(nid, edge, crop, false)).collect();
     app.renderer.look_ahead(jobs, AHEAD_PRIORITY);
 }

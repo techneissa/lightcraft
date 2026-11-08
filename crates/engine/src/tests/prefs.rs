@@ -392,6 +392,99 @@ fn reopening_a_library_retires_the_old_cache_so_its_jobs_cannot_write_after_a_cl
     let _ = std::fs::remove_dir_all(&lib);
 }
 
+/// The map's tile source is a library preference; a stored one is checked again when read.
+#[test]
+fn the_map_tile_source_persists_and_is_rechecked() {
+    let lib = temp_dir("map");
+    {
+        let mut s = Session::new().with_fs();
+        s.open_library(&lib, false).unwrap();
+        assert_eq!(s.map.source().id, "offline", "fork: a new library asks no tile server");
+        s.execute(
+            "map.tileSource",
+            &json!({"urlTemplate": "https://tiles.example.org/{z}/{x}/{y}.png", "attribution": "© Example", "maxZoom": 16, "id": "example"}),
+        )
+        .unwrap();
+        s.close_library().unwrap();
+    }
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    let src = s.map.source().clone();
+    assert_eq!((src.id.as_str(), src.max_zoom, src.attribution.as_str()), ("example", 16, "© Example"));
+    s.execute("map.tileSource", &json!({"offline": true})).unwrap();
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert!(s.map.source().is_offline());
+    drop(s);
+    // a hand-edited prefs.json pointing at plain http falls back to Offline (fork: no tile server
+    // is asked unless the person chose it)
+    let mut prefs: serde_json::Value = serde_json::from_slice(&std::fs::read(lib.join("prefs.json")).unwrap()).unwrap();
+    prefs["mapSource"] = json!({"id": "evil", "urlTemplate": "http://evil.example/{z}/{x}/{y}", "attribution": "x", "maxZoom": 19});
+    std::fs::write(lib.join("prefs.json"), serde_json::to_vec(&prefs).unwrap()).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert!(s.map.source().is_offline());
+    drop(s);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// Fork: a new library, and a session that never opened one, ask no tile server until the person
+/// picks one (Settings ▸ Map); the pick is kept with the library.
+#[test]
+fn the_map_is_offline_until_a_tile_server_is_chosen() {
+    assert!(Session::new().map.source().is_offline());
+    let lib = temp_dir("map-offline");
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert!(s.map.source().is_offline(), "a new library starts Offline");
+    s.execute("map.tileSource", &json!({"id": "osm"})).unwrap();
+    s.close_library().unwrap();
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert_eq!(*s.map.source(), lightcraft_map::TileSource::openstreetmap(), "the chosen server stays chosen");
+    drop(s);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+/// Fork: the "Start on OpenStreetMap" setting decides a library with no saved tile source; a
+/// library's own saved source wins, and a default is never written into its preferences.
+#[test]
+fn start_on_osm_decides_only_libraries_with_no_saved_source() {
+    let lib = temp_dir("map-start-osm");
+    let mut s = Session::new().with_fs();
+    s.map.set_start_on_osm(true);
+    s.open_library(&lib, false).unwrap();
+    assert_eq!(*s.map.source(), lightcraft_map::TileSource::openstreetmap(), "no saved source: the setting decides");
+    assert!(s.map.source_is_default());
+    s.save_prefs().unwrap();
+    let prefs: serde_json::Value = serde_json::from_slice(&std::fs::read(lib.join("prefs.json")).unwrap()).unwrap();
+    assert!(prefs.get("mapSource").is_none_or(serde_json::Value::is_null), "a default is not saved: {prefs}");
+    // the setting turned off: the unsaved default follows it at once
+    s.map.set_start_on_osm(false);
+    assert!(s.map.source().is_offline());
+    s.close_library().unwrap();
+    drop(s);
+    // a library that saved Offline keeps it with the setting on
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    s.execute("map.tileSource", &json!({"offline": true})).unwrap();
+    s.close_library().unwrap();
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.map.set_start_on_osm(true);
+    s.open_library(&lib, false).unwrap();
+    assert!(s.map.source().is_offline(), "the library's own saved source wins");
+    assert!(!s.map.source_is_default());
+    s.map.set_start_on_osm(false);
+    s.map.set_start_on_osm(true);
+    assert!(s.map.source().is_offline(), "and the setting never moves a chosen source");
+    s.close_library().unwrap();
+    drop(s);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
 #[test]
 fn slideshow_playback_settings_persist_with_the_library() {
     let lib = temp_dir("slideshow");
@@ -429,5 +522,35 @@ fn slideshow_playback_settings_persist_with_the_library() {
     };
     assert_eq!((s.slideshow.slide_duration, s.slideshow.fade_duration), (120.0, 0.0));
     drop(s);
+    let _ = std::fs::remove_dir_all(&lib);
+}
+
+#[test]
+fn auto_sync_follows_the_hosts_default_until_the_user_chooses_and_the_choice_is_kept() {
+    let lib = temp_dir("auto-sync");
+    let mut s = Session::new().with_fs();
+    assert!(!s.auto_sync, "the engine on its own (CLI, MCP) edits only the photo asked for");
+    s.set_auto_sync_default(true);
+    s.open_library(&lib, false).unwrap();
+    assert!(s.auto_sync, "a library with no saved choice starts on in a host that defaults it on");
+    s.execute("develop.autoSync", &json!({"on": false})).unwrap();
+    s.close_library().unwrap();
+    drop(s);
+    let mut s = Session::new().with_fs();
+    s.set_auto_sync_default(true);
+    s.open_library(&lib, false).unwrap();
+    assert!(!s.auto_sync, "the saved choice beats the default");
+    s.execute("develop.autoSync", &json!({"on": true})).unwrap();
+    drop(s);
+    // a prefs file from before the setting existed has no choice
+    std::fs::write(lib.join("prefs.json"), r#"{"xmp": {"autoWrite": false}}"#).unwrap();
+    let mut s = Session::new().with_fs();
+    s.open_library(&lib, false).unwrap();
+    assert!(!s.auto_sync, "no choice and no host default: off");
+    s.set_auto_sync_default(true);
+    assert!(s.auto_sync, "a host default applies when nothing was chosen");
+    s.execute("develop.autoSync", &json!({})).unwrap(); // toggles
+    s.set_auto_sync_default(true);
+    assert!(!s.auto_sync, "a later default never overrides a choice");
     let _ = std::fs::remove_dir_all(&lib);
 }

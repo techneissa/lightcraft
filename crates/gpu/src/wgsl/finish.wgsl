@@ -174,6 +174,108 @@ fn point_color(k: u32, lch: vec3<f32>) -> vec3<f32> {
 }
 
 // `ColorOps::apply`.
+// `lightcraft_pipeline::recolor::lightness`.
+fn recolor_lightness(l: f32, lr0: f32, lt0: f32) -> f32 {
+    let lr = max(lr0, RC_MIN_L);
+    let lt = max(lt0, 0.0);
+    if (l <= lr) {
+        return lt * l / lr;
+    }
+    let s = min(lt / lr, max(1.0 - lt, 0.0) / max(1.0 - lr, 1e-3));
+    return lt + (l - lr) * s;
+}
+
+// `lightcraft_pipeline::recolor::chroma_ratio`.
+fn recolor_chroma_ratio(c: f32, rc: f32) -> f32 {
+    if (rc <= 1e-6) {
+        return 0.0;
+    }
+    let r = max(c / rc, 0.0);
+    let span = RC_MAX_CHROMA - 1.0;
+    if (r > 1.0) {
+        return 1.0 + span * (1.0 - exp(-(r - 1.0) / span));
+    }
+    return r;
+}
+
+// Hue of OkLab `(a, b)`, 0 for a neutral one (as the CPU's `recolor::hue`).
+fn ok_hue(a: f32, b: f32) -> f32 {
+    return select(atan2(b, a), 0.0, a == 0.0 && b == 0.0);
+}
+
+// `lightcraft_pipeline::recolor::smooth` (smoothstep, also for e0 >= e1 where WGSL's is undefined).
+fn rc_smooth(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// `lightcraft_pipeline::recolor::apply_terms`: terms at `t` (strength, target OkLab, main L, C, hue cos, sin, hue
+// window, saturation floor).
+fn recolor_one(lab: vec3<f32>, t: u32, alpha: f32) -> vec3<f32> {
+    let k0 = min(aux[t] * alpha, 1.0);
+    if (k0 <= 0.0) {
+        return lab;
+    }
+    let rl = aux[t + 4u];
+    let rc = aux[t + 5u];
+    let hr = ok_hue(aux[t + 6u], aux[t + 7u]);
+    let win_h = aux[t + 8u];
+    let win_s = aux[t + 9u];
+    let c = length(lab.yz);
+    let h = ok_hue(lab.y, lab.z);
+    // membership in the main colour
+    let coloured = rc_smooth(RC_GREY0, RC_GREY1, rc);
+    let dh = abs(wrap_angle(h - hr));
+    let by_hue = 1.0 - rc_smooth(win_h, win_h * 2.0 + 0.1, dh);
+    let q = (c / max(lab.x, 0.05)) / max(rc / max(rl, 0.05), 1e-4);
+    let by_sat = rc_smooth(win_s * 0.6, win_s * 2.5, q) * rc_smooth(RC_MIN_C0, RC_MIN_C1, c);
+    let full = 1.0 + (by_hue * by_sat - 1.0) * coloured;
+    let loose = 1.0 - rc_smooth(win_h * 2.0, win_h * 3.2 + 0.1, dh);
+    let weak = rc_smooth(RC_HUE_C0, RC_HUE_C1, c) * (1.0 - rc_smooth(RC_HUE_C2, RC_HUE_C3, c));
+    let hue_w = max(full, loose * weak * coloured);
+    let k = k0 * full;
+    let k_hue = k0 * max(hue_w - full, 0.0);
+    if (k <= 0.0 && k_hue <= 0.0) {
+        return lab;
+    }
+    let tl = vec3<f32>(aux[t + 1u], aux[t + 2u], aux[t + 3u]);
+    let lt = tl.x;
+    let ct = length(tl.yz);
+    let ht = ok_hue(tl.y, tl.z);
+    let l1 = recolor_lightness(lab.x, rl, lt);
+    let grey = select(1.0, clamp(l1 / lt, 0.0, 1.0), lt > 1e-6) * (1.0 - rc_smooth(lt, max(lt, 0.95) + 0.05, l1));
+    let ends = rc_smooth(RC_DARK0, RC_DARK1, l1) * (1.0 - rc_smooth(RC_LIGHT0, RC_LIGHT1, l1));
+    let c1 = ct * (grey + (recolor_chroma_ratio(c, rc) - grey) * coloured) * ends;
+    let keep = coloured * rc_smooth(RC_GREY0, RC_GREY1, c);
+    let h1 = ht + clamp(wrap_angle(h - hr) * keep, -RC_MAX_HUE, RC_MAX_HUE);
+    let nlab = vec3<f32>(l1, c1 * cos(h1), c1 * sin(h1));
+    let turned = vec3<f32>(l1, c * cos(h1), c * sin(h1));
+    return lab + (nlab - lab) * k + (turned - lab) * k_hue;
+}
+
+// Every mask's Recolor at pixel `i`, in mask order (`finish::recolor_pixel`); `d` unchanged where none is on.
+fn recolor_masks(d: vec3<f32>, i: u32, n: u32) -> vec3<f32> {
+    var lab = vec3<f32>(0.0);
+    var found = false;
+    let nm = pu(F_NMASK);
+    for (var m = 0u; m < nm; m++) {
+        let a = masks[m * n + i];
+        let t = pu(F_MASK_OFF) + m * MASK_TERMS + MASK_RECOLOR;
+        if (a <= 0.0 || aux[t] <= 0.0) {
+            continue;
+        }
+        if (!found) {
+            lab = oklab(d);
+            found = true;
+        }
+        lab = recolor_one(lab, t, a);
+    }
+    if (!found) {
+        return d;
+    }
+    return oklab_inv(lab);
+}
+
 fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
     if (pu(F_OPS_IDENTITY) != 0u && local_sat == 0.0 && local_hue == 0.0) {
         return rgb;
@@ -525,9 +627,24 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
     let hh = pf(F_HL) + lt[4];
     let ss = pf(F_SH) + lt[5];
     if (hh != 0.0 || ss != 0.0) {
-        let ws = 1.0 - sstep(-4.8, 0.3, base);
-        let wh = sstep(-1.0, 2.8, base);
-        delta += ss * 1.7 * ws * sqrt(ws) + hh * 1.7 * wh;
+        if (pu(F_TONE_V3) != 0u) {
+            let ws = 1.0 - sstep(-5.0, 1.5, base);
+            let wh = sstep(-1.4, 2.8, base);
+            var lift = hh * 1.7 * wh;
+            if (lift > 0.0) {
+                // same shoulder as finish.rs (KNEE 1.0, WHITE 2.45)
+                let lifted = base + lift;
+                if (lifted > 1.0) {
+                    let shoulder = 1.0 + 1.45 * tanh((lifted - 1.0) / 1.45);
+                    lift = max(shoulder - base, 0.0);
+                }
+            }
+            delta += ss * 1.7 * ws + lift;
+        } else {
+            let ws = 1.0 - sstep(-4.8, 0.3, base);
+            let wh = sstep(-1.0, 2.8, base);
+            delta += ss * 1.7 * ws * sqrt(ws) + hh * 1.7 * wh;
+        }
     }
     if (lt[6] != 0.0) {
         delta += lt[6] * 0.8 * sstep(0.5, 3.0, l1);
@@ -546,28 +663,33 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
     }
     let tx = pf(F_TEX) + lt[8];
-    if (tx != 0.0 && pu(F_HAS_TEX) != 0u) {
+    let sp = lt[13] * 0.6 + pf(F_SHARPEN);
+    let v3 = pu(F_TONE_V3) != 0u;
+    if ((tx != 0.0 || (sp != 0.0 && !v3)) && pu(F_HAS_TEX) != 0u) {
         let det = l_pre - tex[i];
         let tame = 1.0 - 0.6 * sstep(0.4, 1.6, abs(det));
         delta += tx * 1.1 * clamp(det, -1.0, 1.0) * tame;
+        if (sp != 0.0 && !v3) {
+            let sm = pf(F_SHARPEN_MASK);
+            var mk = 1.0;
+            if (sm > 0.0) {
+                mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
+            }
+            delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
+        }
     }
-    let sp = lt[13] * 0.6 + pf(F_SHARPEN);
-    if (pu(F_SHARPEN_V3) != 0u && sp != 0.0 && pu(F_HAS_SHP) != 0u) {
-        let det = l_pre - tex[pu(F_SHP_OFF) + i];
+    // process V3: sharpening has a band of its own at the Radius slider's scale (`finish::local_tone_delta`)
+    if (sp != 0.0 && v3 && pu(F_HAS_SHARP) != 0u) {
+        let det = l_pre - tex[pu(F_SHARP_OFF) + i];
         let sm = pf(F_SHARPEN_MASK);
         var mk = 1.0;
         if (sm > 0.0) {
-            mk = sstep(sm * 0.1, sm * 0.1 + 0.06, abs(det));
+            mk = sstep(sm * 0.08, sm * 0.08 + 0.08, abs(det)); // (V3: `finish::local_tone_delta`)
         }
-        delta += sp * pf(F_SHARPEN_GAIN) * 7.0 * mk * det / (1.0 + abs(det) / pf(F_SHARPEN_LIMIT));
-    } else if (pu(F_SHARPEN_V3) == 0u && sp != 0.0 && pu(F_HAS_TEX) != 0u) {
-        let det = l_pre - tex[i];
-        let sm = pf(F_SHARPEN_MASK);
-        var mk = 1.0;
-        if (sm > 0.0) {
-            mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
-        }
-        delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
+        // `finish::sharpen_gain` (SHARPEN_GAIN), `finish::sharpen_mix` (`SHARPEN_MIX_LO` / `_HI`)
+        let sd = pf(F_SHARPEN_DETAIL);
+        let mixv = sd + (1.0 - sd) * sstep(0.03, 0.15, abs(det));
+        delta += sp * pf(F_SHARPEN_GAIN) * clamp(det, -0.8, 0.8) * mk * mixv;
     }
     // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
     if (l_noise != 0.0 && pu(F_HAS_TEX) != 0u) {
@@ -611,6 +733,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let lab = oklab(d);
         d = oklab_inv(vec3<f32>(lab.x, lab.y + tint_dir.x * 0.08 * tint_amt, lab.z + tint_dir.y * 0.08 * tint_amt));
     }
+    d = recolor_masks(d, i, n);
 
     // --- vignette (display linear, post-crop)
     if (pu(F_VIG) != 0u) {
@@ -634,20 +757,30 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
             let lum = clamp(lum2020(d), 0.0, 1.0);
             if (amount < 0.0) {
                 var f = 1.0 + amount * t;
+                if (pu(F_TONE_V3) != 0u) {
+                    // process V3 (`finish::vignette_dark_factor`)
+                    f = exp2(-2.75 * pow(-amount, 1.2) * t);
+                }
                 let style = pu(F_VIG_STYLE);
                 if (style == 1u) {
                     f += (1.0 - f) * pf(F_VIG_HL) * sstep(0.4, 1.0, lum);
                 }
-                if (style == 2u) {
+                if (style == 2u && pu(F_TONE_V3) == 0u) {
                     d = d * (1.0 - (-amount) * t) + 0.0;
                 } else {
                     d = d * f;
                 }
-            } else if (hdr) {
-                // lighten towards SDR white; never pull HDR highlights down to it
-                d = d + max(1.0 - d, vec3<f32>(0.0)) * amount * t * 0.85;
             } else {
-                d = d + (1.0 - d) * amount * t * 0.85;
+                var lk = 0.85;
+                if (pu(F_TONE_V3) != 0u) {
+                    lk = 0.40; // `finish::VIG_V3_LIGHT`
+                }
+                if (hdr) {
+                    // lighten towards SDR white; never pull HDR highlights down to it
+                    d = d + max(1.0 - d, vec3<f32>(0.0)) * amount * t * lk;
+                } else {
+                    d = d + (1.0 - d) * amount * t * lk;
+                }
             }
         }
     }

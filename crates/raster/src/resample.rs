@@ -166,10 +166,14 @@ fn vertical<T: Pixel>(img: &Image<T>, h: usize, filter: Filter) -> Image<T> {
 
 /// Fit within `max_w × max_h` preserving aspect (never upscales).
 pub fn fit<T: Pixel>(img: &Image<T>, max_w: usize, max_h: usize, filter: Filter) -> Image<T> {
-    let s = (max_w as f64 / img.width as f64).min(max_h as f64 / img.height as f64).min(1.0);
-    let w = ((img.width as f64 * s).round() as usize).max(1);
-    let h = ((img.height as f64 * s).round() as usize).max(1);
+    let (w, h) = fit_size(img.width, img.height, max_w, max_h);
     resize(img, w, h, filter)
+}
+
+/// The size [`fit`] gives a `width × height` image for `max_w × max_h`: aspect kept, never larger.
+pub fn fit_size(width: usize, height: usize, max_w: usize, max_h: usize) -> (usize, usize) {
+    let s = (max_w as f64 / width as f64).min(max_h as f64 / height as f64).min(1.0);
+    (((width as f64 * s).round() as usize).max(1), ((height as f64 * s).round() as usize).max(1))
 }
 
 /// 2× box downsample (pyramid level).

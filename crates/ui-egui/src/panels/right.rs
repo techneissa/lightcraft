@@ -12,9 +12,21 @@ use crate::theme::Tokens;
 use crate::widgets::{divider, register, slider, text_button};
 
 mod crop;
+mod exif_edit;
 mod history;
 mod info;
+#[cfg(test)]
+pub(crate) use info::smart_line;
 mod keywords;
+mod remove_compact;
+mod remove_fill;
+mod remove_finds;
+pub(crate) mod remove_object;
+mod spot_rows;
+pub(crate) use remove_fill::with_fill;
+pub(crate) use spot_rows::overlay_of as spot_overlay;
+#[cfg(test)]
+pub(crate) use spot_rows::spot_name as spot_name_for_tests;
 
 #[cfg(test)]
 use crop::aspect_label;
@@ -29,6 +41,10 @@ pub(crate) use info::mixed_meta;
 use keywords::keywords;
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
+    // the Book view's photos and settings take the panel
+    if app.ui.view == crate::state::ViewMode::Book {
+        return super::book::column(app, ui);
+    }
     let t = Tokens::get(ui.ctx());
     let frame = egui::Frame::NONE.fill(t.chrome).stroke(egui::Stroke::new(1.0, t.divider));
     frame.show(ui, |ui| {
@@ -86,6 +102,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 RightPanel::Remove => remove(app, ui, id),
                 RightPanel::Masking => super::masking::show(app, ui, id),
                 RightPanel::RedEye => red_eye(app, ui, id),
+                RightPanel::Portrait => super::portrait::show(app, ui, id),
                 RightPanel::Info => info(app, ui, id),
                 RightPanel::Keywords => keywords(app, ui, id),
                 RightPanel::Versions => versions(app, ui, id),

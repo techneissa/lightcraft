@@ -37,6 +37,8 @@ pub struct Ui {
     list: Option<(u64, f64, Value)>,
     /// Why the last file picked with Install from file… was refused, shown under the button.
     rejected: Option<String>,
+    /// Auto AI Denoise: the photo last opened and the missing-model note.
+    pub(super) auto: super::denoise_auto::State,
 }
 
 /// Called every frame: keeps the engine's denoise work going and asks for a redraw when a photo's picture appears (the
@@ -65,6 +67,7 @@ pub fn pump_ui_input(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
 
 /// Worker results and pacing on monotonic deadlines; safe in `logic`, including while hidden.
 pub fn pump_background(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
+    super::denoise_auto::pump(app, ctx);
     watch_downloads(app, ctx);
     if now < app.caches.denoise.next_pump {
         return;
@@ -141,14 +144,16 @@ fn watch_downloads(app: &mut LightcraftApp, ctx: &egui::Context) {
     ctx.request_repaint_after(std::time::Duration::from_millis(120));
 }
 
-/// Per-photo AI Denoise switch.
+/// The AI Denoise switch. On the active photo it follows the sliders: with Auto Sync on, every selected photo switches
+/// with it, in one undo step.
 pub fn detail_toggle(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, on: bool, applicable: bool) {
     let mut enabled = on;
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 6, bottom: 2 }).show(ui, |ui| {
         let r = ui.add_enabled(applicable, egui::Checkbox::new(&mut enabled, crate::i18n::tr("AI Denoise")));
         register(ui, "denoise:enabled", r.rect);
         if r.changed() {
-            let _ = app.run("denoise.toggle", json!({"id": id.0, "enabled": enabled}));
+            let params = if app.session.active() == Some(id) { json!({"enabled": enabled}) } else { json!({"id": id.0, "enabled": enabled}) };
+            let _ = app.run("denoise.toggle", params);
         }
     });
 }
@@ -181,7 +186,8 @@ pub fn detail_status(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, am
     match state {
         PhotoState::NotApplicable | PhotoState::Ready => {}
         PhotoState::Idle => {
-            if amount > 0.0 && app.session.denoise_auto() {
+            let held = app.session.denoise_held(id);
+            if amount > 0.0 && app.session.denoise_auto() && !held {
                 // the pump has not met this photo yet: let it come round soon instead of waiting out its pause
                 let now = app.tick_now();
                 app.caches.denoise.next_pump = app.caches.denoise.next_pump.min(now + 0.05);
@@ -194,7 +200,12 @@ pub fn detail_status(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId, am
                 });
             } else if amount > 0.0 {
                 egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
-                    note(ui, "Its denoised picture is not made yet, and pictures are not made on their own (Settings, AI Denoise).", t.text_dim);
+                    let why = if held {
+                        "Its denoised picture is not made yet: AI Denoise was stopped for it."
+                    } else {
+                        "Its denoised picture is not made yet, and pictures are not made on their own (Settings, AI Denoise)."
+                    };
+                    note(ui, why, t.text_dim);
                     ui.add_space(2.0);
                     let r = ui.small_button(crate::i18n::tr("Make it now"));
                     register(ui, "denoise:make", r.rect);
@@ -305,6 +316,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         hint(ui, t, "The built-in denoiser is in use: press Use on a model to use that instead.");
     }
     hint(ui, t, "Works on raw files from cameras with a standard (Bayer) sensor. Other files keep their normal noise reduction.");
+    super::denoise_auto::section(app, ui, t, &list);
     work_section(app, ui, t, &list);
 }
 
@@ -417,12 +429,18 @@ fn cache_section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, list: &
         ui.label(RichText::new(crate::i18n::tr("Limit")).color(t.text_label));
         let current = list["cacheGb"].as_u64().unwrap_or(20) as u32;
         let mut choice = current;
-        let combo = crate::widgets::combo_box("denoise-cache-limit").selected_text(tr_format!("{size} GB", size = current)).show_ui(ui, |ui| {
-            for gb in CACHE_LIMITS {
-                ui.selectable_value(&mut choice, gb, tr_format!("{size} GB", size = gb));
-            }
-        });
-        crate::widgets::name_combo(&combo.response, tr("Cache limit"));
+        let (combo, chosen) = crate::widgets::dropdown_search::pick(
+            ui,
+            "denoise-cache-limit",
+            |c| c.selected_text(tr_format!("{size} GB", size = current)),
+            &CACHE_LIMITS,
+            |gb| *gb == choice,
+            |gb| tr_format!("{size} GB", size = gb).to_string(),
+        );
+        crate::widgets::name_combo(&combo, tr("Cache limit"));
+        if let Some(gb) = chosen.and_then(|i| CACHE_LIMITS.get(i)) {
+            choice = *gb;
+        }
         if choice != current {
             let _ = app.run("denoise.settings", json!({"cacheGb": choice}));
             app.caches.denoise.epoch += 1;
@@ -511,10 +529,10 @@ fn model_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, m: &Value, 
             });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if installed {
-                    let r = ui.button(tr("Remove"));
+                    let (r, click) = crate::model_remove::button(ui, &format!("denoise:{id}"), m["shared"] == true);
                     register(ui, format!("denoise:remove:{id}"), r.rect);
-                    if r.clicked() {
-                        let _ = app.run("denoise.models.remove", json!({"id": id}));
+                    if matches!(click, crate::model_remove::Remove::Own | crate::model_remove::Remove::EveryApp) {
+                        let _ = app.run("denoise.models.remove", json!({"id": id, "everyApp": click == crate::model_remove::Remove::EveryApp}));
                         app.caches.denoise.epoch += 1;
                     }
                     if selected {

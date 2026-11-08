@@ -627,7 +627,7 @@ impl Prepared {
     }
 }
 
-fn render(job: RenderJob, color: &crate::print_color::PrintColorSettings) -> Result<Image16, String> {
+pub(crate) fn render(job: RenderJob, color: &crate::print_color::PrintColorSettings) -> Result<Image16, String> {
     let rendered = job.run().rendered?;
     let mut deep = rendered.deep.ok_or("the render has no 16-bit samples")?;
     // print sharpening for the paper, at the size the photo prints

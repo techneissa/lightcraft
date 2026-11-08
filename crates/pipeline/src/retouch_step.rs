@@ -6,7 +6,7 @@
 //! reserved in `lightcraft_retouch::Stage` and is not run yet.
 //!
 //! Skipped entirely, touching no pixel and hashing a 0 into the stage key, while the block is off or the Portrait
-//! section's eye is off ([`active`]).
+//! tab's eye is off ([`active`]).
 
 use std::sync::Arc;
 
@@ -97,7 +97,7 @@ mod tests {
         let face = Face::boxed(NormRect::new(0.4, 0.2, 0.6, 0.5));
         off.retouch.override_mut(std::slice::from_ref(&face), 0);
         assert!(!off.retouch.is_default() && off.retouch.is_off());
-        // a feature on, but the Portrait section's eye off
+        // a feature on, but the Portrait tab's eye off
         let mut eye_off = plain.clone();
         controls::set(&mut eye_off, "retouch.skin.amount", 60.0);
         eye_off.set_section_enabled("portrait", false);

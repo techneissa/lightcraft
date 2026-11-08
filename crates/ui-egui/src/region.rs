@@ -29,6 +29,8 @@ pub struct RegionView {
     pub window: PixelWindow,
     /// Hash of the render state it was rendered with (develop settings plus any window-safe overlay).
     pub settings: u64,
+    /// The part of `settings` that is how the photo is viewed (the mask overlay, the soft proof), not its edit.
+    pub view: u64,
 }
 
 impl RegionView {
@@ -39,6 +41,14 @@ impl RegionView {
     /// belongs: drafts follow the drag, and waiting for an exact match would show none.
     pub fn is_current(&self, photo: lightcraft_catalog::PhotoId, full: (usize, usize), settings: u64, drafting: bool) -> bool {
         self.photo == photo && self.full == full && (drafting || self.settings == settings)
+    }
+
+    /// Whether this window stays on screen while the window for a new edit of the photo renders: the same photo, zoom
+    /// and `view` (mask overlay, soft proof). The whole-frame render keeps its old picture until the new one arrives;
+    /// a window that dropped out showed the softer whole frame for a moment, so the photo seemed to render again after
+    /// every spot (issue #82). A change of overlay or proof still drops it at once.
+    pub fn stands_in(&self, photo: lightcraft_catalog::PhotoId, full: (usize, usize), view: u64) -> bool {
+        self.photo == photo && self.full == full && self.view == view
     }
 }
 
@@ -377,17 +387,36 @@ impl SizeHold {
 /// Fit that is the photo's middle; zoomed in, the photo's own middle is mostly off screen, and a
 /// line there left the whole view to one side (#1351).
 pub fn wipe_line(img: egui::Rect, canvas: egui::Rect) -> egui::Pos2 {
+    wipe_line_at(img, canvas, 0.5)
+}
+
+/// [`wipe_line`] moved to `at`, a fraction (0..=1) of the part of the photo that is on screen,
+/// from its left (top): the line the user dragged to (`panels::split_divider`).
+pub fn wipe_line_at(img: egui::Rect, canvas: egui::Rect, at: f32) -> egui::Pos2 {
     let shown = img.intersect(canvas);
-    if shown.is_positive() { shown.center() } else { img.center() }
+    let at = if at.is_finite() { at.clamp(0.0, 1.0) } else { 0.5 };
+    if shown.is_positive() { shown.min + shown.size() * at } else { img.center() }
 }
 
 /// Where a window of one side of a Before/After view may be drawn: its own pane in side by side
 /// and stacked views (a window carries margin beyond what its pane shows, which would otherwise
 /// spill into the neighbour), its side of the line in a wipe, else the canvas.
 pub fn window_clip(mode: crate::state::BeforeAfter, before_side: bool, pane: egui::Rect, canvas: egui::Rect, img: egui::Rect) -> egui::Rect {
+    window_clip_at(mode, before_side, pane, canvas, img, 0.5)
+}
+
+/// [`window_clip`] with the line of a wipe at `at` (see [`wipe_line_at`]).
+pub fn window_clip_at(
+    mode: crate::state::BeforeAfter,
+    before_side: bool,
+    pane: egui::Rect,
+    canvas: egui::Rect,
+    img: egui::Rect,
+    at: f32,
+) -> egui::Rect {
     use crate::state::BeforeAfter;
     let (min, max) = (canvas.min, canvas.max);
-    let line = wipe_line(img, canvas);
+    let line = wipe_line_at(img, canvas, at);
     let clip = match (mode, before_side) {
         (BeforeAfter::Split, true) => egui::Rect::from_min_max(min, egui::pos2(line.x, max.y)),
         (BeforeAfter::SplitTopBottom, true) => egui::Rect::from_min_max(min, egui::pos2(max.x, line.y)),

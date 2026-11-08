@@ -1,0 +1,367 @@
+//! Mask evaluation on the device (`lightcraft_pipeline::masks`): each visible mask's alpha plane
+//! and its effect terms.
+
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+
+use lightcraft_develop::BrushStroke;
+use lightcraft_pipeline::Plan;
+use lightcraft_pipeline::finish::{MASK_TERMS, effect_terms_with};
+use lightcraft_pipeline::geometry::Frame;
+use lightcraft_pipeline::masks::{AlphaKeys, BRUSH_ENTRIES, Mattes, alpha_key, brush_base, brush_chain, brush_dabs, note_evaluation, note_stroke};
+use lightcraft_raster::Rgb32f;
+
+use crate::ctx::{Buf, groups1, groups2};
+use crate::render::{Cx, Host, Prep, gaussian, map};
+
+/// The alphas of the last render's masks and the brush parts they were built from, on the device: the
+/// GPU twin of `lightcraft_pipeline::masks::AlphaCache`, kept next to the view's other stages. An
+/// effect slider, the Amount or Exposure for a gradient or a brush changes nothing a mask's alpha is built
+/// from, so no mask is evaluated again (each alpha is copied into the render's stack of planes), and a
+/// brush part extended by a stroke stamps only that stroke.
+#[derive(Default)]
+pub(crate) struct AlphaStore {
+    inner: Mutex<Inner>,
+}
+
+#[derive(Default)]
+struct Inner {
+    /// The source the alphas were evaluated on: a mask that reads the image (a range, Sky, Refine Edges, Auto Mask) keeps no
+    /// alpha for another picture, whatever its settings say (`alpha_key`'s image half has no picture's identity). Weak: the
+    /// store never keeps a photo alive, and a dropped source's address can't be taken again while this is held.
+    source: Option<std::sync::Weak<Rgb32f>>,
+    mattes: Option<Arc<Mattes>>,
+    slots: Vec<(u64, Arc<Buf>)>,
+    brushes: Vec<BrushPart>,
+}
+
+/// A brush part's plane and the strokes it holds (`masks::brush_chain`).
+#[derive(Clone)]
+struct BrushPart {
+    base: u64,
+    chain: Vec<u64>,
+    plane: Arc<Buf>,
+}
+
+impl AlphaStore {
+    fn lock(&self) -> MutexGuard<'_, Inner> {
+        self.inner.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Drop everything.
+    pub(crate) fn clear(&self) {
+        *self.lock() = Inner::default();
+    }
+
+    /// Hand every device buffer held to `add` (the caller counts each once).
+    pub(crate) fn each(&self, mut add: impl FnMut(&Arc<Buf>)) {
+        let g = self.lock();
+        g.slots.iter().for_each(|(_, b)| add(b));
+        g.brushes.iter().for_each(|p| add(&p.plane));
+    }
+}
+
+/// What a brush part is stamped against.
+struct BrushEnv<'a> {
+    lin: &'a Buf,
+    log_l: &'a Buf,
+    frame: &'a Frame,
+    w: usize,
+    h: usize,
+    keys: AlphaKeys,
+}
+
+/// The plane of brush strokes `strokes` on the device (`masks::brush`), or `None` when the device can't hold their dabs
+/// (the CPU rasterizes the part). Strokes that extend a part held in `parts` are stamped over a copy of its plane; the
+/// result is kept there. `inverted`: the part is turned around.
+fn brush_part(cx: &mut Cx<'_>, env: &BrushEnv<'_>, strokes: &[BrushStroke], inverted: bool, parts: &mut Vec<BrushPart>) -> Option<Buf> {
+    let n = env.w * env.h;
+    let auto = strokes.iter().any(|s| s.auto_mask);
+    let base = brush_base(env.keys.geo, env.keys.image, auto, env.w, env.h);
+    let chain = brush_chain(strokes);
+    // the part this one extends (the longest held prefix of its strokes)
+    let hit = parts
+        .iter()
+        .enumerate()
+        .filter(|(_, e)| e.base == base && !e.chain.is_empty() && e.chain.len() <= chain.len() && chain.starts_with(&e.chain))
+        .max_by_key(|(_, e)| e.chain.len())
+        .map(|(i, _)| i);
+    let (plane, from) = match hit {
+        Some(i) => {
+            // (the most recently used goes last)
+            let e = parts.remove(i);
+            parts.push(e.clone());
+            (cx.copy(&e.plane), e.chain.len())
+        }
+        None => (cx.zeroed(n), 0),
+    };
+    for s in strokes.iter().skip(from) {
+        if !stamp_stroke(cx, env, s, &plane) {
+            return None;
+        }
+    }
+    if !strokes.is_empty() && from < strokes.len() {
+        parts.push(BrushPart { base, chain, plane: Arc::new(cx.copy(&plane)) });
+        while parts.len() > BRUSH_ENTRIES {
+            parts.remove(0);
+        }
+    }
+    if inverted {
+        // (the kernel's unused `c` binding is writable, so it can't be the unused read-only dummy as well)
+        let unused = cx.gpu.buffer(1);
+        cx.run("finalize", &[n as u32, 0, 0, 1, 1f32.to_bits()], &[None, None, None, Some(&unused), Some(&plane)], groups1(n));
+    }
+    Some(plane)
+}
+
+/// Stamp one stroke into `plane` inside its bounding box (the `stroke` kernel). An Auto Mask stroke is stamped
+/// alone, refined with the guided filter and combined, as on the CPU.
+fn stamp_stroke(cx: &mut Cx<'_>, env: &BrushEnv<'_>, s: &BrushStroke, plane: &Buf) -> bool {
+    note_stroke();
+    let (w, h) = (env.w, env.h);
+    let n = w * h;
+    let bd = brush_dabs(s, env.frame, w, h);
+    if bd.dabs.is_empty() {
+        return true;
+    }
+    // five words a dab, pen pressure applied
+    if !bd.dabs.len().checked_mul(5).is_some_and(|words| cx.gpu.fits(words)) {
+        return false;
+    }
+    let rmax = bd.r.max(0.5);
+    let (mut lo, mut hi) = ([f64::MAX; 2], [f64::MIN; 2]);
+    for d in &bd.dabs {
+        lo = [lo[0].min(d.x), lo[1].min(d.y)];
+        hi = [hi[0].max(d.x), hi[1].max(d.y)];
+    }
+    let clamp = |v: f64, max: usize| v.clamp(0.0, max as f64) as usize;
+    let (x0, x1) = (clamp((lo[0] - rmax).floor(), w), clamp((hi[0] + rmax).ceil(), w));
+    let (y0, y1) = (clamp((lo[1] - rmax).floor(), h), clamp((hi[1] + rmax).ceil(), h));
+    if x0 >= x1 || y0 >= y1 {
+        return true;
+    }
+    let aux: Vec<f32> = bd
+        .dabs
+        .iter()
+        .enumerate()
+        .flat_map(|(k, d)| {
+            let (r, hard, flow) = bd.dab(k);
+            [d.x as f32, d.y as f32, r as f32, hard as f32, flow]
+        })
+        .collect();
+    let aux = cx.gpu.upload(&aux);
+    let mut p = vec![w as u32, h as u32, 0, 0, 0, 0, 0, 0, 0, 0];
+    p.extend([x0, y0, x1, y1, bd.dabs.len()].map(|v| v as u32));
+    p.extend([bd.density.to_bits(), bd.erase as u32, bd.auto as u32, 0]);
+    let grid = groups2(x1 - x0, y1 - y0, [16, 16]);
+    if !bd.auto {
+        cx.run("stroke", &p, &[Some(env.lin), Some(env.log_l), Some(&aux), Some(plane), None], grid);
+        return true;
+    }
+    // the stroke alone (mode 1), refined, then combined into the part in order
+    let own = cx.zeroed(n);
+    p[18] = 1;
+    cx.run("stroke", &p, &[Some(env.lin), Some(env.log_l), Some(&aux), Some(&own), None], grid);
+    let (sigma, eps) = lightcraft_pipeline::masks::auto_refine(bd.r);
+    let refined = guided_cross(cx, env.log_l, &own, w, h, sigma, eps, Combine::Max);
+    let op = if bd.erase { 2 } else { 1 };
+    cx.run("combine", &[n as u32, 0, 0, op], &[None, None, None, Some(&refined), Some(plane)], groups1(n));
+    true
+}
+
+/// How [`guided_cross`] combines the filtered plane with its input.
+#[derive(Clone, Copy)]
+enum Combine {
+    /// The larger of the two (Auto Mask strokes).
+    Max,
+    /// The input moved towards the filtered plane by this much (Refine Edges).
+    Mix(f32),
+}
+
+/// Cross guided filter (`masks::guided_cross`) of `p` steered by `guide`, combined with `p`.
+#[allow(clippy::too_many_arguments)]
+fn guided_cross(cx: &mut Cx<'_>, guide: &Buf, p: &Buf, w: usize, h: usize, sigma: f32, eps: f32, how: Combine) -> Buf {
+    let n = w * h;
+    let (m0, m1) = (cx.gpu.buffer(2 * n), cx.gpu.buffer(2 * n));
+    map(cx, "xguided_pre", n, &[0], [Some(guide), Some(p), None], &m0);
+    map(cx, "xguided_pre", n, &[1], [Some(guide), Some(p), None], &m1);
+    let (b0, b1) = (gaussian(cx, &m0, w, h, 2, sigma), gaussian(cx, &m1, w, h, 2, sigma));
+    let ab = cx.gpu.buffer(2 * n);
+    map(cx, "xguided_ab", n, &[eps.to_bits()], [Some(&b0), Some(&b1), None], &ab);
+    let ab = gaussian(cx, &ab, w, h, 2, sigma);
+    let q = cx.gpu.buffer(n);
+    let mode = match how {
+        Combine::Max => [0, 0],
+        Combine::Mix(k) => [1, k.to_bits()],
+    };
+    map(cx, "xguided_apply", n, &mode, [Some(guide), Some(&ab), Some(p)], &q);
+    q
+}
+
+/// Evaluate the masks (`lightcraft_pipeline::masks::evaluate`): their alpha planes (concatenated,
+/// followed by the blurred chromaticity when local Moiré / Noise need it) and their adjustment
+/// terms. Shapes without a kernel (Sky, Subject, …) run on the CPU.
+///
+/// `store`: the view's alphas of the last render (see [`AlphaStore`]); without one every mask is evaluated.
+pub(crate) fn masks(
+    cx: &mut Cx<'_>,
+    lin: &Buf,
+    prep: &Prep,
+    plan: &Plan<'_>,
+    host: &mut Host,
+    store: Option<(&AlphaStore, &Arc<Rgb32f>)>,
+) -> (Option<Buf>, Vec<[f32; MASK_TERMS]>) {
+    use lightcraft_develop::{MaskOp, MaskShape};
+    let s = &*plan.settings;
+    let list: Vec<_> = s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();
+    if list.is_empty() {
+        return (None, Vec::new());
+    }
+    let (w, h) = (plan.w, plan.h);
+    let n = w * h;
+    let frame = &plan.frame;
+    let ev = s.light.exposure as f32;
+    let long = frame.ow.max(frame.oh);
+    let [a, b, c, d, e, f] = frame.out_to_norm(w, h).0;
+    let (kx, ky) = (frame.ow / long, frame.oh / long);
+    let aff = [a * kx, b * ky, c * kx, d * ky, e * kx, f * ky].map(|v| (v as f32).to_bits());
+    let alpha = cx.zeroed(n * list.len() + if prep.chroma.is_some() { 3 * n } else { 0 });
+    if let Some(ch) = &prep.chroma {
+        cx.copy_into(ch, &alpha, n * list.len());
+    }
+    let comp_plane = cx.gpu.buffer(n);
+    let mut guard = store.map(|(s, _)| s.lock());
+    let mut unkept = Inner::default();
+    let held: &mut Inner = guard.as_deref_mut().unwrap_or(&mut unkept);
+    // another picture (the next photo, a sharper level, the Denoise mix): nothing held was made from this one
+    if let Some((_, src)) = store
+        && !held.source.as_ref().is_some_and(|w| std::ptr::eq(w.as_ptr(), Arc::as_ptr(src)))
+    {
+        *held = Inner { source: Some(Arc::downgrade(src)), ..Inner::default() };
+    }
+    // the alphas of the last render, when it had the same segmentation mattes (taken out: hand back the ones used)
+    let same = match (&held.mattes, &plan.mattes) {
+        (None, None) => true,
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
+        _ => false,
+    };
+    let old = if same { std::mem::take(&mut held.slots) } else { Vec::new() };
+    let mut used: Vec<(u64, Arc<Buf>)> = Vec::new();
+    let keys = AlphaKeys { geo: plan.geo, image: plan.lin_key };
+    for (mi, m) in list.iter().enumerate() {
+        let key = alpha_key(m, keys, ev);
+        if let Some((_, buf)) = old.iter().find(|(k, _)| *k == key) {
+            cx.copy_into(buf, &alpha, mi * n);
+            if !used.iter().any(|(k, _)| *k == key) {
+                used.push((key, buf.clone()));
+            }
+            continue;
+        }
+        note_evaluation();
+        // its coordinates on the photo before the warp (`masks::evaluate_one`): through a lens or
+        // perspective warp the kernels' affine positions don't hold, so its shapes run on the CPU
+        let mframe = plan.frame.for_mask(m.on_photo);
+        let frame = &*mframe;
+        let warped = frame.mask_warp().is_some();
+        let mut first = true;
+        for comp in &m.components {
+            // Invert Mask turns the base part around (see `lightcraft_pipeline::masks::evaluate_one`)
+            let inverted = comp.invert != (first && m.invert);
+            let op = match comp.op {
+                _ if first => 0u32,
+                MaskOp::Add => 1,
+                MaskOp::Subtract => 2,
+                MaskOp::Intersect => 3,
+            };
+            first = false;
+            let mut p = vec![w as u32, h as u32, 0, inverted as u32];
+            p.extend_from_slice(&aff);
+            let f32s = |v: &[f64]| v.iter().map(|x| (*x as f32).to_bits()).collect::<Vec<u32>>();
+            let mut aux: Vec<f32> = Vec::new();
+            let mut own: Option<Buf> = None;
+            let kind = match &comp.shape {
+                MaskShape::Linear { .. } | MaskShape::Radial { .. } if warped => None,
+                MaskShape::Linear { start, end } => {
+                    let (a, b) = (frame.norm_to_long(*start), frame.norm_to_long(*end));
+                    let d = b - a;
+                    p.extend(f32s(&[a.x, a.y, d.x, d.y, d.dot(d).max(1e-12)]));
+                    Some(0)
+                }
+                MaskShape::Radial { center, rx, ry, angle, feather, invert } => {
+                    let c = frame.norm_to_long(*center);
+                    let (sn, co) = (-angle.to_radians()).sin_cos();
+                    p.extend(f32s(&[c.x, c.y, co, sn, rx.max(1e-6), ry.max(1e-6), (*feather / 100.0).clamp(0.0, 1.0)]));
+                    p.push(*invert as u32);
+                    Some(1)
+                }
+                MaskShape::LuminanceRange { lo, hi, lo_feather, hi_feather } => {
+                    p.extend(f32s(&[*lo, *hi, lo_feather.max(1e-3), hi_feather.max(1e-3)]));
+                    p.push(ev.to_bits());
+                    Some(2)
+                }
+                MaskShape::ColorRange { samples, refine } => {
+                    let tol = lightcraft_pipeline::masks::color_range_tolerance(*refine);
+                    // at most the CPU's samples (`MAX_COLOR_RANGE_SAMPLES`): cost is pixels x samples
+                    let samples = samples.iter().take(lightcraft_develop::MAX_COLOR_RANGE_SAMPLES);
+                    p.extend([tol.to_bits(), ev.exp2().to_bits(), samples.len() as u32]);
+                    aux.extend(samples.flat_map(|s| s.map(|v| v as f32)));
+                    Some(3)
+                }
+                MaskShape::Brush { strokes } => {
+                    // (None: the device can't hold the dabs, and the CPU rasterizes the part)
+                    let env = BrushEnv { lin, log_l: &prep.log_l, frame, w, h, keys };
+                    own = brush_part(cx, &env, strokes, inverted, &mut held.brushes);
+                    None
+                }
+                _ => None,
+            };
+            let plane = match kind {
+                _ if own.is_some() => own,
+                Some(k) => {
+                    p[2] = k;
+                    let aux = (!aux.is_empty()).then(|| cx.gpu.upload(&aux));
+                    cx.run("shape", &p, &[Some(lin), Some(&prep.log_l), aux.as_ref(), Some(&comp_plane), Some(&alpha)], groups2(w, h, [16, 16]));
+                    None
+                }
+                None => {
+                    // no kernel: evaluate on the CPU
+                    let img = host.lin.get_or_insert_with(|| Arc::new(cx.read_rgb(lin, w, h))).clone();
+                    let l = host.log_l.get_or_insert_with(|| Arc::new(cx.read_plane(&prep.log_l, w, h))).clone();
+                    let mut v = lightcraft_pipeline::masks::shape_alpha(&comp.shape, frame, w, h, &img, &l, ev, plan.mattes.as_deref());
+                    if inverted {
+                        v.data.iter_mut().for_each(|x| *x = 1.0 - *x);
+                    }
+                    Some(cx.gpu.upload(&v.data))
+                }
+            };
+            let cbuf = plane.as_ref().unwrap_or(&comp_plane);
+            let k = [n as u32, 0, mi as u32, op];
+            cx.run("combine", &k, &[None, None, None, Some(cbuf), Some(&alpha)], groups1(n));
+        }
+        if m.refine > 0.0 {
+            // Refine Edges (`masks::evaluate_one`): the combined alpha follows the photo's edges,
+            // before the mask's invert and amount
+            let k = (m.refine / 100.0).clamp(0.0, 1.0) as f32;
+            let sigma = (0.04 * frame.output_long(w, h) as f32 * k).max(1.0);
+            let plane = cx.slice(&alpha, mi * n, n);
+            let refined = guided_cross(cx, &prep.log_l, &plane, w, h, sigma, 0.02, Combine::Mix(k.sqrt()));
+            cx.copy_into(&refined, &alpha, mi * n);
+        }
+        // (the mask's Amount scales its effect terms, not its alpha: see `effect_terms`)
+        if !used.iter().any(|(k, _)| *k == key) {
+            used.push((key, Arc::new(cx.slice(&alpha, mi * n, n))));
+        }
+    }
+    // (a render that failed is redone on the CPU: what it left on the device is not kept)
+    if !crate::ctx::failed() {
+        held.mattes = plan.mattes.clone();
+        held.slots = used;
+    }
+    let terms = list
+        .iter()
+        .map(|m| {
+            let r = plan.recolor.iter().find(|(id, _)| *id == m.id).map(|(_, r)| r);
+            effect_terms_with(&m.adjust, (m.adjust.amount / 100.0) as f32, r)
+        })
+        .collect();
+    (Some(alpha), terms)
+}

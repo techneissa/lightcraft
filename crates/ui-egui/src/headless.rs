@@ -89,6 +89,20 @@ pub struct HeadlessView {
     pub clipboard: String,
     /// Events the host owes the next frame (a paste request's paste, as a desktop host sends it).
     owed: Vec<egui::Event>,
+    /// The accessibility nodes of the last frame (tests; `ctx.enable_accesskit()` turns the tree on).
+    #[cfg(test)]
+    pub(crate) a11y: Vec<A11yNode>,
+}
+
+/// One accessibility node of a frame, as the hover-help test reads it (fork/hover-help.md).
+#[cfg(test)]
+#[derive(Clone, Debug)]
+pub(crate) struct A11yNode {
+    pub role: String,
+    pub label: String,
+    /// The hover text, when the widget has one (`on_hover_text` sets it).
+    pub description: String,
+    pub clickable: bool,
 }
 
 impl Default for HeadlessView {
@@ -111,6 +125,8 @@ impl HeadlessView {
             frames: 0,
             clipboard: String::new(),
             owed: vec![],
+            #[cfg(test)]
+            a11y: vec![],
         }
     }
 
@@ -154,6 +170,19 @@ impl HeadlessView {
         raw.events.splice(0..0, std::mem::take(&mut self.owed));
         let mut out = self.ctx.run_ui(raw, run_ui);
         self.frames += 1;
+        #[cfg(test)]
+        if let Some(update) = out.platform_output.accesskit_update.take() {
+            self.a11y = update
+                .nodes
+                .iter()
+                .map(|(_, n)| A11yNode {
+                    role: format!("{:?}", n.role()),
+                    label: n.label().unwrap_or_default().to_string(),
+                    description: n.description().unwrap_or_default().to_string(),
+                    clickable: n.supports_action(egui::accesskit::Action::Click),
+                })
+                .collect();
+        }
         self.textures.apply(std::mem::take(&mut out.textures_delta));
         self.shapes = std::mem::take(&mut out.shapes);
         self.pixels_per_point = out.pixels_per_point;
@@ -260,7 +289,7 @@ pub struct Headless {
     quit: bool,
     /// The simulated window is zoomed (`Maximized(true)` seen, reported back to the app like a real host).
     pub window_maximized: bool,
-    /// Window-management and pointer commands the app sent (`StartDrag`, `Maximized`,
+    /// Window-management and pointer commands the app sent (`StartDrag`, `Maximized`, `Minimized`,
     /// `CursorPosition`, …), oldest first.
     pub window_commands: Vec<ViewportCommand>,
     /// The pointer cursor the last frame asked for (what a real host would show).
@@ -382,7 +411,9 @@ impl Headless {
                     self.window_commands.push(c);
                 }
                 // recorded, not carried out: the simulated pointer moves only when a test moves it
-                ViewportCommand::StartDrag | ViewportCommand::CursorPosition(_) | ViewportCommand::CursorGrab(_) => self.window_commands.push(c),
+                ViewportCommand::StartDrag | ViewportCommand::Minimized(_) | ViewportCommand::CursorPosition(_) | ViewportCommand::CursorGrab(_) => {
+                    self.window_commands.push(c)
+                }
                 _ => {}
             }
         }
@@ -392,6 +423,7 @@ impl Headless {
     /// input)?
     pub fn busy(&self) -> bool {
         self.app.renderer.in_flight() > 0
+            || self.app.session.spot_sources.pending() > 0
             || crate::panels::left::fs_cached_running(&self.view.ctx) > 0
             || self.app.merge.busy()
             || self.app.scan.is_some()
@@ -399,6 +431,11 @@ impl Headless {
             || self.app.sync_run.is_some()
             || self.app.import.is_some()
             || self.app.export.is_some()
+            || self.app.layers.is_some()
+            || self.app.edit_in.is_some()
+            || !self.app.handoffs.is_empty()
+            || self.app.macos_job.is_some()
+            || self.app.session.sidecar_writes_pending() > 0
             || self.app.session.denoise_busy()
             || !self.app.tasks.is_empty()
             || !self.app.synthetic.is_empty()
@@ -408,6 +445,21 @@ impl Headless {
 
     /// Run frames until nothing is pending (renders finished, input consumed) for a few frames in
     /// a row, or `timeout` passes. Returns whether it settled.
+    /// Step until every spot asked for in the background has been added with its source (`spot.add` with
+    /// `background`, what the Remove tool sends: issue #97). Whether they were, within 30 s (a hang guard).
+    pub fn settle_spot_sources(&mut self) -> bool {
+        let t0 = Instant::now();
+        while self.app.session.spot_sources.pending() > 0 {
+            if t0.elapsed() > Duration::from_secs(30) {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(1));
+            self.step();
+        }
+        self.step();
+        true
+    }
+
     pub fn settle(&mut self, timeout: Duration) -> bool {
         let t0 = Instant::now();
         let mut quiet = 0;

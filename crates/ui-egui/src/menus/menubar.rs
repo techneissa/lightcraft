@@ -75,6 +75,12 @@ pub fn native_item_presentation<'a>(
     shortcut: Option<&'a str>,
 ) -> (String, Option<&'a str>) {
     let label = display_item_label(id, params, label);
+    // a chord is no key equivalent: the native menu gets its text in the label instead
+    // a shortcut with a condition is no key equivalent either: AppKit would run it everywhere
+    let conditional = |sc: &str| native_menu_delivers(sc) && crate::keybinds::model::conditions::text(keymap, id).is_some();
+    if let Some(sc) = shortcut.filter(|sc| crate::keybinds::chord::is_chord(sc) || conditional(sc)) {
+        return (format!("{label} ({})", shortcut_text(sc, true)), None);
+    }
     let borrowed = matches!(id, "view.photoGrid" | "view.squareGrid") && shortcut != crate::shortcuts::shortcut_of(keymap, id);
     match shortcut.filter(|sc| borrowed && native_menu_delivers(sc)) {
         Some(sc) => (format!("{label} ({})", shortcut_text(sc, true)), None),
@@ -150,6 +156,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "dialog.export",
             "app.exportPrevious",
             "@Export with Preset",
+            "dialog.animatedGif",
             "---",
             "library.toggleAutoWriteXmp",
             "@Previews",
@@ -193,6 +200,8 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "view.compare",
             "view.survey",
             "view.people",
+            "view.map",
+            "@Map",
             "---",
             "view.leftPanel",
             "@Sidebar Sections",
@@ -223,6 +232,8 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "view.zoom100",
             "---",
             "view.clipping",
+            "view.clippingShadows",
+            "view.clippingHighlights",
             "view.visualizeHdr",
             "view.softProof",
             "view.maskOverlay",
@@ -283,10 +294,12 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "dialog.rename",
             "dialog.captureTime",
             "photo.tagFromTracklog",
+            "photo.removeGps",
             "tool.enablePainting",
             "---",
             "album.removePhotos",
             "photo.delete",
+            "photo.deleteRejected",
             "photo.restore",
             "photo.deletePermanently",
         ],
@@ -299,6 +312,7 @@ const LAYOUT: &[(&str, &[&str])] = &[
             "panel.remove",
             "panel.masking",
             "panel.redeye",
+            "panel.portrait",
             "---",
             "panel.presets",
             "panel.versions",
@@ -403,6 +417,11 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.compare" => Some(u.view == ViewMode::Compare),
         "view.survey" => Some(u.view == ViewMode::Survey),
         "view.people" => Some(u.view == ViewMode::People),
+        "view.map" => Some(u.view == ViewMode::Map),
+        "map.lockMarkers" => Some(u.map_lock_markers),
+        "map.showPins" => Some(u.map_show_pins),
+        "map.filterBar" => Some(u.map_filter_bar),
+        "map.showLocations" => Some(!app.map.loc.list_folded),
         "view.reference" => Some(u.view == ViewMode::Reference),
         "view.leftPanel" => Some(u.left_panel),
         "view.faceBoxes" => Some(u.face_boxes),
@@ -411,7 +430,9 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "view.filmstrip" => Some(u.filmstrip),
         "view.frameRate" => Some(u.frame_rate),
         "view.histogram" => Some(u.histogram),
-        "view.clipping" => Some(u.show_clipping),
+        "view.clipping" => Some(u.clip_shadows && u.clip_highlights),
+        "view.clippingShadows" => Some(u.clip_shadows),
+        "view.clippingHighlights" => Some(u.clip_highlights),
         "view.visualizeHdr" => Some(u.hdr_visualize),
         "view.softProof" => Some(u.soft_proof),
         "view.maskOverlay" => Some(u.mask_overlay),
@@ -436,6 +457,7 @@ pub fn checked(app: &LightcraftApp, id: &str) -> Option<bool> {
         "panel.remove" => panel(RightPanel::Remove),
         "panel.masking" => panel(RightPanel::Masking),
         "panel.redeye" => panel(RightPanel::RedEye),
+        "panel.portrait" => panel(RightPanel::Portrait),
         "panel.versions" => panel(RightPanel::Versions),
         "panel.activity" => panel(RightPanel::Activity),
         "panel.info" => panel(RightPanel::Info),
@@ -464,6 +486,55 @@ fn live_label(app: &LightcraftApp, id: &str, label: &str) -> String {
     }
 }
 
+/// View ▸ Map: the Map view's commands (Lightroom Classic has a Map module with its own menus;
+/// LightCraft has one menu bar for every view, so they gather here, enabled in the Map view). Each
+/// item runs its command, as its key does.
+fn map_menu(app: &LightcraftApp) -> Vec<MenuNode> {
+    let keymap = &app.ui.settings.keymap;
+    let in_map = app.ui.view == ViewMode::Map;
+    let entry = |id: &str, label: &str, params: Value, enabled: bool| {
+        // ⌘0 fits the map (Zoom to Fit's key, which the Map view turns into Fit to Photos)
+        let sc = if id == "map.fit" { crate::shortcuts::shortcut_of(keymap, "view.zoomFit") } else { crate::shortcuts::shortcut_of(keymap, id) };
+        let checked = if params.is_null() { checked(app, id) } else { None };
+        item(id, params, label, sc, enabled && crate::menus::ui_enabled(app, id), checked)
+    };
+    let filter = crate::panels::map::LocationFilter::ALL
+        .into_iter()
+        .map(|m| item("map.locationFilter", json!({"mode": m.id()}), m.label(), None, in_map, Some(app.map.location == m)))
+        .collect();
+    let track = app.session.map.track.is_some();
+    vec![
+        entry("map.fit", "Fit to Photos", Value::Null, in_map),
+        entry("map.zoomIn", "Zoom In", Value::Null, in_map),
+        entry("map.zoomOut", "Zoom Out", Value::Null, in_map),
+        MenuNode::Separator,
+        entry("map.showPins", "Pins", Value::Null, in_map),
+        entry("map.lockMarkers", "Lock Markers", Value::Null, in_map),
+        entry("map.filterBar", "Location Filter Bar", Value::Null, in_map),
+        MenuNode::Submenu { label: "Location Filter".into(), children: filter },
+        MenuNode::Separator,
+        MenuNode::Submenu {
+            label: "Saved Locations".into(),
+            children: vec![
+                entry("map.location.new", "New Location…", Value::Null, in_map),
+                entry("map.showLocations", "Location List", Value::Null, in_map),
+            ],
+        },
+        MenuNode::Submenu {
+            label: "Tracklog".into(),
+            children: vec![
+                entry("map.loadTrackLog", "Load Tracklog…", Value::Null, true),
+                entry("map.trackLog.autoTag", "Auto-Tag Selected Photos", Value::Null, in_map),
+                entry("map.trackLog.setOffset", "Set Time Zone Offset…", Value::Null, true),
+                entry("map.trackLog.fit", "Fit Map to Tracklog", Value::Null, in_map),
+                item("map.trackLog", json!({"clear": true}), "Clear Tracklog", None, track, None),
+            ],
+        },
+        MenuNode::Separator,
+        entry("map.settings", "Map Tiles…", Value::Null, true),
+    ]
+}
+
 /// The parameterized submenus.
 /// The params of Build Standard-Sized Previews: automatic builds as big as the loupe on this screen shows photos
 /// (the engine's standard size, once a loupe has been drawn); before that, in a fresh session, the standard
@@ -480,6 +551,7 @@ pub(crate) fn expanded(app: &LightcraftApp, name: &str) -> Option<Vec<MenuNode>>
     let active = app.session.active().and_then(|id| app.session.catalog.photo(id).cloned());
     let has = active.is_some();
     Some(match name {
+        "Map" => map_menu(app),
         "Previews" => {
             // (the background preparation's build gives way to one asked for here)
             let running = app.session.preview_build.as_ref().is_some_and(|b| b.running() && !b.background);
@@ -839,7 +911,14 @@ fn node(app: &LightcraftApp, e: &MenuEntry) -> MenuNode {
         "photo.delete" if matches!(app.session.source, lightcraft_engine::LibrarySource::Album(_)) => None,
         _ => shortcut,
     };
-    item(&e.id, Value::Null, live_label(app, &e.id, &e.label), shortcut, e.enabled, checked(app, &e.id))
+    item(
+        &e.id,
+        Value::Null,
+        live_label(app, &e.id, &e.label),
+        shortcut,
+        e.enabled && crate::panels::dialogs::delete_rejected::enabled(app, &e.id),
+        checked(app, &e.id),
+    )
 }
 
 /// Drop leading, trailing and doubled separators (also inside submenus) and empty submenus.
@@ -951,6 +1030,15 @@ pub fn run_item(app: &mut LightcraftApp, id: &str, params: Value) -> Result<Valu
     if culling_cmd {
         crate::panels::compare::target_active(app, &mut params);
     }
+    if let Some(r) = crate::panels::dialogs::delete_permanently::run_item(app, id, &mut params) {
+        return r;
+    }
+    if let Some(r) = crate::panels::dialogs::delete_rejected::run_item(app, id) {
+        return r;
+    }
+    if let Some(r) = crate::panels::dialogs::quick_delete::run_item(app, id) {
+        return r;
+    }
     if id == "photo.delete" && crate::menus::confirm_delete(app) {
         return Ok(Value::Null);
     }
@@ -1013,6 +1101,10 @@ pub fn run_native_command(app: &mut LightcraftApp, id: &str, params: Value) -> N
 /// Human-readable shortcut text for menus: `Cmd+Shift+Z` → `⇧⌘Z` on macOS, `Ctrl+Shift+Z` elsewhere.
 /// On macOS the modifiers come in AppKit's and Apple's HIG order, ⌃⌥⇧⌘, however the binding spells them.
 pub fn shortcut_text(sc: &str, mac: bool) -> String {
+    // a chord (`Cmd+K C`): each step on its own
+    if crate::keybinds::chord::is_chord(sc) {
+        return crate::keybinds::chord::text(sc, mac);
+    }
     if mac {
         let (mut ctrl, mut alt, mut shift, mut cmd) = (false, false, false, false);
         let mut key = "";
@@ -1193,6 +1285,7 @@ fn nodes_ui(ui: &mut egui::Ui, nodes: &[MenuNode], mac: bool, clicked: &mut Opti
                 }
                 let r = ui.add_enabled(*enabled, b);
                 crate::widgets::register(ui, format!("menuitem:{id}"), r.rect);
+                crate::keybinds::context::on_menu_item(ui, &r, id);
                 if *checked == Some(true) {
                     let t = crate::theme::Tokens::get(ui.ctx());
                     let c = egui::Rect::from_center_size(egui::pos2(r.rect.left() + 11.0, r.rect.center().y), egui::vec2(13.0, 13.0));

@@ -185,6 +185,8 @@ impl eframe::App for App {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         // (a size the window was just given is remembered too)
         self.0.ui.window = self.1.window_at_exit(self.0.ui.window);
+        // Keep in Sync: the settings go to the sync folder, and the time of that save into ui.json below
+        lightcraft_ui_egui::settings_sync::save_on_quit(&mut self.0);
         if let Err(e) = self.1.save(&self.0) {
             log::error!("{e}");
         }
@@ -357,10 +359,32 @@ fn main() -> eframe::Result {
                 // (never required: without it, AI masks offer to download it; see docs/ai-masks.md)
                 // and the user's own download locations, one base URL per line (LIGHTCRAFT_SAM3_MIRRORS too)
                 session = session.with_default_sam3_model();
+                // the LaMa fill for Remove, from the folder shared with PhotoCraft (fork/lama-fill.md)
+                session = session.with_default_lama_model();
+                // Learn My Edits: its profiles in <config>/learn-profiles, its model shared with PhotoCraft (fork/learn-my-edits.md)
+                session = session.with_default_learn();
+                // people parts (fork/people-parsing.md): models in the shared folder, parses cached in ~/Library/Caches
+                session = session.with_default_parsing_models();
+                // the face and denoise models of the old folders move into the folder shared with PhotoCraft, once
+                // (fork/shared-models.md); on a worker, because checking a 200 MB model takes a second; a failure
+                // leaves both copies and is only logged
+                let activity = session.activity.clone();
+                let _ = std::thread::Builder::new().name("shared-models-move".into()).spawn(move || {
+                    let moved = lightcraft_engine::shared_models::migrate_old_models(&activity);
+                    for line in &moved.done {
+                        log::info!("shared models: {line}");
+                    }
+                    for line in &moved.failed {
+                        log::warn!("shared models: {line}");
+                    }
+                });
                 // HDR display: SDR unless the surface, platform and display all allow HDR
                 hdr_display::report(cc.wgpu_render_state.as_ref().map(|r| r.target_format));
                 let mut app = LightcraftApp::new(session, services(cc, app_log_file.as_deref()));
-                app.set_startup_update_check(true);
+                app.set_startup_update_check(lightcraft_ui_egui::fork_update::check_at_start(
+                    control_port.is_some(),
+                    std::env::var_os("LIGHTCRAFT_NO_UPDATE_CHECK").as_deref(),
+                ));
                 if let Some(ui) = prefs {
                     app.ui = ui;
                 }

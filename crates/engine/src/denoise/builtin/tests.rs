@@ -86,7 +86,7 @@ fn a_set_up_marker_left_behind_keeps_the_card_off_the_built_in_denoiser_until_a_
     assert_eq!(device["retry"], true, "{device}");
     assert!(device["reason"].as_str().unwrap().contains("closed"), "{device}");
     // choosing where denoise runs forgets it (and the marker): the card is set up afresh for the next photo
-    forget_gpu_set_ups(&dir);
+    forget_gpu_set_ups(&crate::shared_models::ModelRoots::old_only(&dir));
     assert!(!marker.exists());
     let (again, _) = builtin("builtin-marker-again");
     assert_eq!(again.device(RunOn::Auto)["kind"], "pending");

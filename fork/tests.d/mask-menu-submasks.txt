@@ -1,0 +1,3 @@
+# the mask menu, submask selection and submask names (issue #61)
+cargo test -p lightcraft-engine --lib -- mask_multi mask_names the_selected_part
+cargo test -p lightcraft-ui-egui --lib -- mask_menus mask_parts

@@ -608,14 +608,26 @@ fn the_margin_grows_with_the_zoom_up_to_a_cap() {
 #[test]
 fn a_tile_is_drawn_only_while_it_shows_what_the_loupe_shows() {
     use lightcraft_catalog::PhotoId;
-    let v =
-        RegionView { photo: PhotoId(1), before: false, key: 7, full: (6000, 4000), window: PixelWindow { x: 0, y: 0, w: 256, h: 256 }, settings: 11 };
+    let v = RegionView {
+        photo: PhotoId(1),
+        before: false,
+        key: 7,
+        full: (6000, 4000),
+        window: PixelWindow { x: 0, y: 0, w: 256, h: 256 },
+        settings: 11,
+        view: 3,
+    };
     assert!(v.is_current(PhotoId(1), (6000, 4000), 11, false));
     assert!(!v.is_current(PhotoId(2), (6000, 4000), 11, false), "another photo");
     assert!(!v.is_current(PhotoId(1), (6000, 4001), 11, false), "another zoom");
     assert!(!v.is_current(PhotoId(1), (6000, 4000), 12, false), "another look (an edit, an undo)");
     assert!(v.is_current(PhotoId(1), (6000, 4000), 12, true), "a drag's drafts follow the value");
     assert!(!v.is_current(PhotoId(2), (6000, 4000), 12, true), "…of this photo only");
+    // while the window of a new edit renders, the old one stays on screen; not over another photo, zoom or overlay
+    assert!(v.stands_in(PhotoId(1), (6000, 4000), 3));
+    assert!(!v.stands_in(PhotoId(2), (6000, 4000), 3));
+    assert!(!v.stands_in(PhotoId(1), (6000, 4001), 3));
+    assert!(!v.stands_in(PhotoId(1), (6000, 4000), 4), "another mask overlay or proof drops it at once");
 }
 
 // Given a GPU that allows 2048 px textures, no window is wider than that
@@ -649,4 +661,26 @@ fn nothing_visible_or_hostile_input_is_no_window() {
 fn a_window_is_bounded() {
     let w = window_for(100_000, 100_000, (0.0, 0.0, 90_000.0, 90_000.0), MAX_SPAN).unwrap();
     assert!(w.w <= MAX_SPAN && w.h <= MAX_SPAN);
+}
+
+// Given a wipe whose line was moved (a fraction of the photo on screen), its two sides are cut
+// there, at Fit and zoomed in (where the fraction is of the visible part), and a fraction outside
+// 0..=1 or not a number is held to the photo or the middle
+#[test]
+fn a_moved_wipe_line_cuts_the_windows_there() {
+    use crate::state::BeforeAfter::*;
+    let canvas = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1000.0, 600.0));
+    let img = egui::Rect::from_min_max(egui::pos2(100.0, 50.0), egui::pos2(900.0, 550.0));
+    assert_eq!(wipe_line_at(img, canvas, 0.25), egui::pos2(300.0, 175.0));
+    assert_eq!(wipe_line_at(img, canvas, 0.5), wipe_line(img, canvas));
+    assert_eq!(window_clip_at(Split, true, canvas, canvas, img, 0.25).max.x, 300.0);
+    assert_eq!(window_clip_at(Split, false, canvas, canvas, img, 0.25).min.x, 300.0);
+    assert_eq!(window_clip_at(SplitTopBottom, true, canvas, canvas, img, 0.25).max.y, 175.0);
+    assert_eq!(window_clip_at(SplitTopBottom, false, canvas, canvas, img, 0.25).min.y, 175.0);
+    let zoomed = egui::Rect::from_min_max(egui::pos2(-200.0, -900.0), egui::pos2(3400.0, 1500.0));
+    assert_eq!(window_clip_at(Split, false, canvas, canvas, zoomed, 0.25).min.x, 250.0);
+    assert_eq!(wipe_line_at(img, canvas, 7.0).x, 900.0);
+    assert_eq!(wipe_line_at(img, canvas, -1.0).x, 100.0);
+    assert_eq!(wipe_line_at(img, canvas, f32::NAN).x, 500.0);
+    assert_eq!(window_clip_at(Off, false, canvas, canvas, img, 0.25), canvas);
 }

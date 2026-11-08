@@ -8,7 +8,7 @@ use crate::LightcraftApp;
 use crate::pick::{PickRequest, Picked};
 use crate::state::{BeforeAfter, Dialog, RightPanel, ViewMode, Zoom};
 
-mod files;
+pub(crate) mod files;
 mod run;
 mod ui_commands;
 
@@ -31,8 +31,11 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
     match id {
         "library.selectOnlyActive" => app.session.active().is_some(),
         "view.thumbSizeUp" | "view.thumbSizeDown" => thumb_size_view(app),
-        "dialog.contactSheet" | "app.contactSheet" | "dialog.print" | "app.print" => {
+        "dialog.contactSheet" | "app.contactSheet" | "dialog.print" | "app.print" | "app.bookPdf" | "app.bookJpeg" => {
             !cfg!(target_arch = "wasm32") && app.session.active().is_some() && app.export.is_none()
+        }
+        "dialog.animatedGif" | "app.animatedGif" => {
+            !cfg!(target_arch = "wasm32") && !app.session.selected().is_empty() && !app.session.animated_gif.as_ref().is_some_and(|r| r.running())
         }
         "dialog.slideshowExport" | "app.slideshowExport" => {
             !cfg!(target_arch = "wasm32") && !app.session.slideshow_export.as_ref().is_some_and(|r| r.running())
@@ -42,7 +45,21 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
             app.session.active().is_some()
         }
         "photo.tagFromTracklog" => app.session.active().is_some() && app.services.pick_tracklog.is_some(),
-        "photo.editInPhotoCraft" | "photo.editInExternal" => app.session.active().is_some() && app.services.open_with.is_some(),
+        "map.loadTrackLog" => app.services.pick_tracklog.is_some() || app.services.picker.is_some(),
+        "map.trackLog.autoTag" => app.session.map.track.is_some() && !app.session.targets(&json!({})).unwrap_or_default().is_empty(),
+        "map.trackLog.setOffset" | "map.trackLog.fit" => app.session.map.track.is_some(),
+        "photo.editInPhotoCraft" | "photo.editInExternal" => {
+            app.session.active().is_some() && app.services.open_with.is_some() && app.edit_in.is_none()
+        }
+        "photo.removeReflections" | "reflection.apply" => {
+            app.session.active().is_some()
+                && (lightcraft_engine::reflections::available() || app.reflection_glare.mode == lightcraft_develop::ReflectionMode::Highlights)
+                && !app.tasks.is_running(crate::reflections::TASK)
+        }
+        "reflection.mode" | "reflection.area" | "reflection.glare" | "reflection.paint" | "reflection.tool" => app.session.active().is_some(),
+        "reflection.install" | "reflection.download" | "reflection.models" | "reflection.instructions" => !cfg!(target_arch = "wasm32"),
+        "reflection.reset" | "reflection.status" | "reflection.toggle" | "reflection.panel" => app.session.active().is_some(),
+        "photo.openAsLayersInPhotocraft" => app.services.open_with.is_some() && app.session.selected().len() >= 2 && app.layers.is_none(),
         "app.exportPrevious" => app.session.active().is_some() && app.session.last_export.is_some(),
         "dialog.pasteSettings" => app.session.active().is_some() && app.session.clipboard.is_some(),
         "photo.openOriginalInExternal" => {
@@ -68,6 +85,8 @@ pub fn ui_enabled(app: &LightcraftApp, id: &str) -> bool {
         "file.exportMaskEffects" => !app.session.mask_effects.is_empty(),
         "dialog.saveMaskEffect" => app.session.active().is_some() && app.session.active_mask.is_some(),
         "file.exportCurvePresets" => !app.session.curve_presets.is_empty(),
+        "book.preview" => app.session.books.find(None).is_ok_and(|b| !b.pages.is_empty()),
+        "book.previewPage" => crate::panels::book::preview::active(app),
         "view.compare" => app.session.catalog.len() > 1,
         "view.fullScreenPreview" | "view.infoOverlay" | "view.navigator" => app.session.active().is_some() || app.ui.fullscreen,
         "app.openLibrary" | "app.newLibrary" => app.services.pick_folder.is_some() && crate::panels::settings::can_switch_library(app).is_ok(),

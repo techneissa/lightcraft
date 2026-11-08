@@ -258,25 +258,23 @@ pub fn adjust_settings(o: Overlay, s: &mut Cow<'_, DevelopSettings>) {
 }
 
 /// The plane a sharpening view draws ([`Overlay::reads_detail`]), from the render's log luminance
-/// `log_l` and its process-specific sharpening blur (`None` when the render didn't need it:
-/// blurred here with the same kernel and sigma). [`Overlay::SharpenDetail`]: the detail band (log luminance minus its blur, in EV);
+/// `log_l` and its sharpening band (`band`: process V3's, else the texture blur; `None` when the render didn't need it: blurred here with the same
+/// sigma). [`Overlay::SharpenDetail`]: the detail band (log luminance minus its blur, in EV);
 /// [`Overlay::SharpenMask`]: the sharpening weight under the photo's Masking. Both renderers call
 /// this with their own planes.
-pub fn sharpen_plane(o: Overlay, s: &DevelopSettings, log_l: &Plane, band: Option<&Plane>, px_per_long: f64, native_long: f64) -> Option<Plane> {
+pub fn sharpen_plane(o: Overlay, s: &DevelopSettings, log_l: &Plane, band: Option<&Plane>, px_per_long: f64, detail_scale: f32) -> Option<Plane> {
     if !o.reads_detail() {
         return None;
     }
+    // process V3 sharpens in a band of its own, at the Radius slider's scale; V1 / V2 in the texture band
+    let v3 = s.process >= lightcraft_develop::Process::V3.version();
     let own;
-    let pixel = crate::local::pixel_sharpen(s);
     let blur = match band.filter(|b| (b.width, b.height) == (log_l.width, log_l.height)) {
         Some(b) => b,
         None => {
-            own = if pixel {
-                let sigma = crate::local::sharpen_sigma(crate::local::sharpen_sigma_raw(s, px_per_long, native_long));
-                lightcraft_raster::blur::gaussian_taps(log_l, &lightcraft_raster::blur::gauss_taps(sigma))
-            } else {
-                lightcraft_raster::blur::gaussian(log_l, crate::local::texture_sigma(px_per_long))
-            };
+            let sigma =
+                if v3 { crate::local::sharpen_sigma(s.detail.sharpen_radius, detail_scale) } else { crate::local::texture_sigma(px_per_long) };
+            own = lightcraft_raster::blur::gaussian(log_l, sigma);
             &own
         }
     };
@@ -288,13 +286,7 @@ pub fn sharpen_plane(o: Overlay, s: &DevelopSettings, log_l: &Plane, band: Optio
         .zip(&blur.data)
         .map(|(l, b)| {
             let det = l - b;
-            if !mask {
-                det
-            } else if pixel {
-                crate::finish::pixel_sharpen_mask_weight(masking, det)
-            } else {
-                crate::finish::sharpen_mask_weight(masking, det)
-            }
+            if mask { crate::finish::sharpen_mask_weight(masking, det, v3) } else { det }
         })
         .collect();
     Some(Plane { width: log_l.width, height: log_l.height, data })
@@ -645,7 +637,7 @@ mod tests {
     #[test]
     fn sharpening_preview_follows_the_process_radius_and_render_planes() {
         use lightcraft_develop::Process;
-        use lightcraft_raster::blur::{gaussian, gaussian_taps};
+        use lightcraft_raster::blur::gaussian;
         let l = Plane { width: 80, height: 16, data: (0..1280).map(|i| ((i % 80) as f32 * 0.73).sin() * 0.3).collect() };
         let mut s = DevelopSettings::default();
         let mut bands = Vec::new();
@@ -653,35 +645,28 @@ mod tests {
             s.process = process.version();
             s.detail.sharpen_radius = 3.0;
             s.detail.sharpen_masking = 70.0;
-            let pixel = crate::local::pixel_sharpen(&s);
+            let pixel = s.process >= Process::V3.version();
             let blur = if pixel {
-                let sigma = crate::local::sharpen_sigma(crate::local::sharpen_sigma_raw(&s, 80.0, 160.0));
-                gaussian_taps(&l, &lightcraft_raster::blur::gauss_taps(sigma))
+                gaussian(&l, crate::local::sharpen_sigma(s.detail.sharpen_radius, 0.5))
             } else {
                 gaussian(&l, crate::local::texture_sigma(80.0))
             };
             for o in [Overlay::SharpenDetail, Overlay::SharpenMask] {
-                let cached = sharpen_plane(o, &s, &l, Some(&blur), 80.0, 160.0).unwrap();
-                let fresh = sharpen_plane(o, &s, &l, None, 80.0, 160.0).unwrap();
+                let cached = sharpen_plane(o, &s, &l, Some(&blur), 80.0, 0.5).unwrap();
+                let fresh = sharpen_plane(o, &s, &l, None, 80.0, 0.5).unwrap();
                 assert_eq!(cached.data, fresh.data, "{process:?} {o:?}");
                 for ((&actual, &log), &base) in fresh.data.iter().zip(&l.data).zip(&blur.data) {
                     let det = log - base;
-                    let expected = if o == Overlay::SharpenDetail {
-                        det
-                    } else if pixel {
-                        crate::finish::pixel_sharpen_mask_weight(0.7, det)
-                    } else {
-                        crate::finish::sharpen_mask_weight(0.7, det)
-                    };
+                    let expected = if o == Overlay::SharpenDetail { det } else { crate::finish::sharpen_mask_weight(0.7, det, pixel) };
                     assert_eq!(actual, expected);
                 }
             }
-            bands.push(sharpen_plane(Overlay::SharpenDetail, &s, &l, None, 80.0, 160.0).unwrap().data);
+            bands.push(sharpen_plane(Overlay::SharpenDetail, &s, &l, None, 80.0, 0.5).unwrap().data);
         }
         assert_eq!(bands[0], bands[1], "the legacy previews stay unchanged");
         assert_ne!(bands[1], bands[2], "V3 previews use the pixel-scale band");
         s.detail.sharpen_radius = 1.0;
-        assert_ne!(bands[2], sharpen_plane(Overlay::SharpenDetail, &s, &l, None, 80.0, 160.0).unwrap().data);
+        assert_ne!(bands[2], sharpen_plane(Overlay::SharpenDetail, &s, &l, None, 80.0, 0.5).unwrap().data);
     }
 
     #[test]

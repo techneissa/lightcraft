@@ -25,6 +25,15 @@ pub struct Filter {
     pub rating: u8,
     pub rating_op: RatingOp,
     pub flag: Option<Flag>,
+    /// Any of these star ratings (0 = unrated; the bottom bar's quick filters and the filter bar's
+    /// stars); empty = no constraint. Together with `rating` / `ratingOp` both must let a photo
+    /// through, see [`crate::quick_filter`].
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ratings: Vec<u8>,
+    /// Any of these flags (the filter bar's and the bottom bar's multi-select: Picked and Unflagged hide only
+    /// the rejects); empty = no constraint. ANDs with `flag`.
+    #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "null_as_empty")]
+    pub flags: Vec<Flag>,
     pub label: Option<ColorLabel>,
     /// Only these photos (Find Similar results…); empty = no constraint.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -36,10 +45,6 @@ pub struct Filter {
     /// Any of these labels (the filter bar's multi-select); empty = no constraint.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub labels: Vec<ColorLabel>,
-    /// Any of these flags (the filter bar's multi-select: Picked and Unflagged hide only the
-    /// rejects); empty = no constraint.
-    #[serde(skip_serializing_if = "Vec::is_empty", deserialize_with = "null_as_empty")]
-    pub flags: Vec<Flag>,
     pub kind: Option<MediaKind>,
     pub edited: Option<bool>,
     pub album: Option<AlbumId>,
@@ -217,11 +222,11 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
             "rating" | "stars" => cmp(p.rating as f64, val),
             "flag" => Flag::parse(val) == Some(p.flag),
             "label" | "color" => p.label.is_some_and(|l| format!("{l:?}").eq_ignore_ascii_case(val)),
-            "iso" => p.meta.iso.is_some_and(|i| cmp(i as f64, val)),
-            "f" | "aperture" => p.meta.aperture.is_some_and(|a| cmp32(a, val)),
-            "focal" => p.meta.focal_mm.is_some_and(|a| cmp32(a, val)),
-            "camera" => p.meta.camera.to_lowercase().contains(val),
-            "lens" => p.meta.lens.to_lowercase().contains(val),
+            "iso" => p.meta.effective_iso().is_some_and(|i| cmp(i as f64, val)),
+            "f" | "aperture" => p.meta.effective_aperture().is_some_and(|a| cmp32(a, val)),
+            "focal" => p.meta.effective_focal_mm().is_some_and(|a| cmp32(a, val)),
+            "camera" => p.meta.effective_camera().to_lowercase().contains(val),
+            "lens" => p.meta.effective_lens().to_lowercase().contains(val),
             "keyword" | "kw" => p.meta.keywords.iter().any(|k| crate::keywords::is_under(k, val)),
             "person" | "who" => has_person(p, val),
             "type" | "kind" => format!("{:?}", p.kind).eq_ignore_ascii_case(val),
@@ -241,7 +246,8 @@ fn token_matches(p: &Photo, tok: &str) -> bool {
 /// Whether the lower-cased word `t` is in the file name, title, caption, camera, lens, location,
 /// format, a keyword or the name of a person (a named face) of `p`.
 fn text_matches(p: &Photo, t: &str) -> bool {
-    let hay = [&p.file_name, &p.meta.title, &p.meta.caption, &p.meta.camera, &p.meta.lens, &p.meta.location, &p.format];
+    let hay: [&str; 7] =
+        [&p.file_name, &p.meta.title, &p.meta.caption, p.meta.effective_camera(), p.meta.effective_lens(), &p.meta.location, &p.format];
     hay.iter().any(|h| h.to_lowercase().contains(t))
         || p.meta.keywords.iter().any(|k| k.to_lowercase().contains(t))
         || p.people().iter().any(|n| n.to_lowercase().contains(t))
@@ -275,17 +281,6 @@ impl Filter {
         self.describe_in(Some(cat))
     }
 
-    /// The flags that `flag` and `flags` let through together (they AND), in the filter bar's
-    /// order; `None` when neither is set, empty when they exclude each other. The chip and the
-    /// filter bar's buttons show this, so they match what is filtered.
-    pub fn flags_shown(&self) -> Option<Vec<Flag>> {
-        if self.flag.is_none() && self.flags.is_empty() {
-            return None;
-        }
-        let passes = |f: &Flag| self.flag.is_none_or(|x| x == *f) && (self.flags.is_empty() || self.flags.contains(f));
-        Some([Flag::Pick, Flag::Reject, Flag::None].into_iter().filter(passes).collect())
-    }
-
     fn describe_in(&self, cat: Option<&crate::Catalog>) -> String {
         let mut v: Vec<String> = Vec::new();
         if self.rating > 0 {
@@ -298,6 +293,9 @@ impl Filter {
         }
         if let Some(f) = self.flag {
             v.push(format!("flag {}", format!("{f:?}").to_lowercase()));
+        }
+        if !self.ratings.is_empty() {
+            v.push(format!("rating {}", self.ratings.iter().map(ToString::to_string).collect::<Vec<_>>().join(" or ")));
         }
         if !self.flags.is_empty() {
             v.push(format!("flag {}", self.flags.iter().map(|f| format!("{f:?}").to_lowercase()).collect::<Vec<_>>().join(" or ")));
@@ -420,6 +418,9 @@ impl Filter {
                 return false;
             }
         }
+        if !self.ratings.is_empty() && !self.ratings.contains(&p.rating) || !self.flags.is_empty() && !self.flags.contains(&p.flag) {
+            return false;
+        }
         if self.flag.is_some_and(|f| f != p.flag) || self.label.is_some_and(|l| Some(l) != p.label) || self.kind.is_some_and(|k| k != p.kind) {
             return false;
         }
@@ -432,9 +433,6 @@ impl Filter {
             return false;
         }
         if !self.labels.is_empty() && !p.label.is_some_and(|l| self.labels.contains(&l)) {
-            return false;
-        }
-        if !self.flags.is_empty() && !self.flags.contains(&p.flag) {
             return false;
         }
         if self.only_none {
@@ -471,7 +469,7 @@ impl Filter {
             return false;
         }
         if let Some(l) = &self.lens
-            && !p.meta.lens.to_lowercase().contains(&l.to_lowercase())
+            && !p.meta.effective_lens().to_lowercase().contains(&l.to_lowercase())
         {
             return false;
         }
@@ -506,7 +504,7 @@ impl Filter {
             return false;
         }
         if let Some(c) = &self.camera
-            && !p.meta.camera.eq_ignore_ascii_case(c)
+            && !p.meta.effective_camera().eq_ignore_ascii_case(c)
         {
             return false;
         }

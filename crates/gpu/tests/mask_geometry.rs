@@ -108,7 +108,11 @@ fn luma(img: &Rgba8, i: usize) -> f64 {
     (p[0] as f64 + p[1] as f64 + p[2] as f64) / 3.0
 }
 
-/// A difference between two renders, without the one level of 8-bit dither any pixel can differ by.
+/// A difference between two renders, without the one level of 8-bit dither any pixel can differ by
+/// (as in `lightcraft-pipeline`'s `tests_mask_geometry`). A soft mask's far tail changes every
+/// pixel's value by a hair, which flips the dither of scattered pixels by one level across the
+/// whole frame; counting those pulls the centroid toward the frame's centre (6 px off for the
+/// object shape after Straighten, though CPU and GPU place its mask at the same pixels).
 fn above_dither(d: f64) -> f64 {
     (d - 1.5).max(0.0)
 }

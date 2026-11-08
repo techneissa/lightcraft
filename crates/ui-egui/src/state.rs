@@ -2,10 +2,12 @@
 
 use serde::{Deserialize, Serialize};
 
+mod delete_files;
 mod dialog;
 mod settings;
 mod view;
 
+pub use delete_files::DeleteFiles;
 pub use dialog::{Dialog, NameEdit, SyncCounts, default_preset_groups};
 pub use settings::{
     AppSettings, AppearanceMode, DarkTheme, EditFile, EditFormat, EditSpace, GridBadges, HOT_PIXEL_LIMIT_DEFAULT, HOT_PIXEL_LIMITS, KeywordChips,
@@ -69,6 +71,10 @@ pub struct UiState {
     #[serde(skip)]
     pub zoom_anim: bool,
     pub before_after: BeforeAfter,
+    /// Where the line of the Before/After split views is, as a fraction of the part of the photo on
+    /// screen (`None`: the middle); both splits share it, and a session starts with it centred.
+    #[serde(skip)]
+    pub split_at: Option<f32>,
     pub thumb_size: f32,
     /// Import review thumbnail size in points, independent of the library grid.
     pub import_thumb_size: f32,
@@ -78,7 +84,18 @@ pub struct UiState {
     pub open_flyouts: Vec<String>,
     /// Solo Mode (`view.soloSections`): opening one Edit section closes the others.
     pub single_panel: bool,
-    pub show_clipping: bool,
+    /// The shadow clipping overlay (blue) is on: the histogram's left triangle, `view.clippingShadows`.
+    pub clip_shadows: bool,
+    /// The highlight clipping overlay (red) is on: the histogram's right triangle, `view.clippingHighlights`.
+    pub clip_highlights: bool,
+    /// Read from settings saved before the two sides were separate (`view.clipping`'s single
+    /// flag); [`Self::sanitized`] turns it into both sides and it is never written back.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub show_clipping: Option<bool>,
+    /// A triangle the pointer rests on (shadows, highlights) previews its overlay, with the frame
+    /// it was last seen on; see [`crate::panels::clipping::effective_sides`].
+    #[serde(skip)]
+    pub clip_hover: ([bool; 2], u64),
     pub histogram: bool,
     /// Soft proofing (S in the loupe): render as `proof` would hold the photo.
     pub soft_proof: bool,
@@ -120,8 +137,19 @@ pub struct UiState {
     pub show_counts: bool,
     /// Face / pet boxes (read from XMP) over the photo in the loupe.
     pub face_boxes: bool,
+    /// Map view: Lock Markers (pins can't be dragged to move a photo's position; `map.lockMarkers`).
+    pub map_lock_markers: bool,
+    /// Map view: photo pins and clusters drawn (H, `map.showPins`; saved locations and track logs
+    /// stay).
+    pub map_show_pins: bool,
+    /// Map view: the location filter bar above the map (`\`, `map.filterBar`).
+    pub map_filter_bar: bool,
     /// The left sidebar's sections: their order, which are hidden and which are folded shut.
     pub sidebar: crate::sidebar::SidebarLayout,
+    /// The Edit panel's sections: their order and which are hidden (`panels/edit_sections.rs`).
+    pub edit_sections: crate::panels::edit_sections::EditSectionLayout,
+    /// The tool strip's icons, top to bottom (`panels/tool_strip_order.rs`).
+    pub tool_strip: crate::panels::tool_strip_order::ToolStripOrder,
     /// What settings files said before [`UiState::sidebar`]: the ids of the folded sections. Read
     /// so they stay folded ([`UiState::sanitized`] moves them over), never written.
     #[serde(skip_serializing)]
@@ -168,6 +196,9 @@ pub struct UiState {
     /// scanning).
     #[serde(skip)]
     pub auto_import_at: f64,
+    /// what the watched folder's last polls found (see [`crate::auto_import_watch`])
+    #[serde(skip)]
+    pub auto_watch: crate::auto_import_watch::Watch,
     /// The watched folder that couldn't be listed and why, as the last listing found it: logged once when it
     /// starts and once when the folder can be read again, and shown in Settings ▸ Import.
     #[serde(skip)]
@@ -193,11 +224,20 @@ pub struct UiState {
     /// Focus the search field on the next frame (Edit → Find…).
     #[serde(skip)]
     pub focus_search: bool,
+    /// The Command Palette (⌘P) while it is open.
+    #[serde(skip)]
+    pub palette: Option<crate::panels::command_palette::State>,
+    /// Photo ▸ Match Look… while it is open or its match runs (fork, `fork/match-look.md`).
+    #[serde(skip)]
+    pub match_look: Option<crate::panels::match_look::State>,
     /// Put the cursor in the Keywords panel's Add keyword box (Add Keywords): the egui pass it was
     /// asked on. A box drawn more than [`FOCUS_KEYWORDS_PASSES`] passes later doesn't take it, so
     /// a request made while the panel can't show expires.
     #[serde(skip)]
     pub focus_keywords: Option<u64>,
+    /// A list row being renamed in place (album, keyword, preset, version).
+    #[serde(skip)]
+    pub rename_row: Option<crate::inline_rename::RowRename>,
     /// A mask being renamed in the Masks list: its id and the edited name.
     #[serde(skip)]
     pub renaming_mask: Option<(u32, String)>,
@@ -214,6 +254,9 @@ pub struct UiState {
     pub detail_due: Option<(f64, u32)>,
     /// A mask component being renamed inline: (mask id, component index, name).
     pub renaming_component: Option<(u32, usize, String)>,
+    /// The submasks selected together in the Masking panel, and Delete All Masks asking (issue #61).
+    #[serde(skip)]
+    pub mask_ui: crate::panels::mask_menus::MaskUi,
     /// Close the window on the next frame (File → Quit).
     #[serde(skip)]
     pub quit: bool,
@@ -236,6 +279,12 @@ pub struct UiState {
     /// A sidebar section being dragged by its header (dropped between sections to move it there).
     #[serde(skip)]
     pub dragging_section: Option<crate::sidebar::SidebarSection>,
+    /// A tool strip icon being dragged (dropped between icons to move it there).
+    #[serde(skip)]
+    pub dragging_tool: Option<crate::panels::tool_strip_order::Tool>,
+    /// An Edit panel section being dragged by its heading.
+    #[serde(skip)]
+    pub dragging_edit_section: Option<crate::panels::edit_sections::EditSection>,
     /// Selected curve channel in the Curve flyout.
     pub curve_channel: String,
     /// Selected mixer mode: "hue" | "saturation" | "luminance" | "all".
@@ -255,7 +304,11 @@ pub struct UiState {
     pub brush_size: f32,
     pub brush_feather: f32,
     pub brush_flow: f32,
+    /// Brush Erase, named by its effect on the mask: false adds to it, true takes away. A stroke in a Subtract part
+    /// turns it around (see `panels::mask_parts::stroke_erase`).
     pub brush_erase: bool,
+    /// The Masking panel's Add / Subtract / Intersect control: the mode of the next part.
+    pub mask_op: lightcraft_develop::MaskOp,
     /// Brush Auto Mask: dabs stick to areas like the one under the brush centre.
     pub brush_auto_mask: bool,
     /// Brush Pen Pressure: a pen's pressure scales each dab's size and flow (a mouse paints at full pressure).
@@ -264,6 +317,15 @@ pub struct UiState {
     pub remove_size: f32,
     pub remove_feather: f32,
     pub remove_opacity: f32,
+    /// The fill of new Remove and Content-Aware spots (the Remove panel's Fill picker, `fork/lama-fill.md`).
+    pub remove_fill: lightcraft_develop::SpotFill,
+    /// Object mode in the Remove panel, its fill and the Expand of new object spots (`fork/object-remove.md`).
+    pub remove_object: bool,
+    pub remove_object_fill: lightcraft_develop::SpotFill,
+    pub remove_expand: f32,
+    /// The Learn My Edits window (`fork/learn-my-edits.md`); not saved.
+    #[serde(skip)]
+    pub learn_edits: crate::learn_edits::Window,
     /// Selected Point Color sample.
     pub point_color: usize,
     /// Point Color "Visualize range": the selected sample's range in colour, the rest grey.
@@ -332,6 +394,8 @@ pub struct UiState {
     pub navigator: bool,
     /// App preferences (Settings dialog).
     pub settings: AppSettings,
+    /// This Mac's Settings sync choices (Settings ▸ Sync); never part of a settings file.
+    pub sync: crate::settings_sync::SyncPrefs,
     /// Window full screen requested (⇧⌘F); the host applies it (`None` = no change pending).
     #[serde(skip)]
     pub window_fullscreen: Option<bool>,
@@ -381,6 +445,9 @@ pub struct UiState {
     /// The Print dialog's page, selection and drag.
     #[serde(skip)]
     pub print: crate::print_view::PrintUi,
+    /// The Book view's page, drag and prompts.
+    #[serde(skip)]
+    pub book: crate::panels::book::BookUi,
 }
 
 impl Default for UiState {
@@ -409,12 +476,16 @@ impl Default for UiState {
             click_zoom: 100,
             zoom_anim: false,
             before_after: BeforeAfter::Off,
+            split_at: None,
             thumb_size: 220.0,
             import_thumb_size: crate::import::THUMB_SIZE_DEFAULT,
             open_sections: vec!["light".into()],
             open_flyouts: vec![],
             single_panel: false,
-            show_clipping: false,
+            clip_shadows: false,
+            clip_highlights: false,
+            show_clipping: None,
+            clip_hover: ([false; 2], 0),
             histogram: true,
             soft_proof: false,
             proof: lightcraft_engine::pipeline::Proof { dest_warning: false, ..Default::default() },
@@ -435,7 +506,12 @@ impl Default for UiState {
             grid_info: "filename".into(),
             show_counts: true,
             face_boxes: true,
+            map_lock_markers: false,
+            map_show_pins: true,
+            map_filter_bar: true,
             sidebar: Default::default(),
+            edit_sections: Default::default(),
+            tool_strip: Default::default(),
             collapsed_sidebar: Vec::new(),
             name_edit: None,
             person_page: None,
@@ -453,18 +529,23 @@ impl Default for UiState {
             external_edits: Vec::new(),
             was_focused: true,
             auto_import_at: 0.0,
+            auto_watch: Default::default(),
             auto_import_error: None,
             sidecar_retry_at: 0.0,
             sidecars_waiting: 0,
             known_cards: None,
             search: String::new(),
             focus_search: false,
+            palette: None,
+            match_look: None,
             focus_keywords: None,
+            rename_row: None,
             renaming_mask: None,
             describe: None,
             detail_due: None,
             sam_downloading: false,
             renaming_component: None,
+            mask_ui: Default::default(),
             quit: false,
             dragging_photos: None,
             reveal_album: None,
@@ -472,6 +553,8 @@ impl Default for UiState {
             reveal_folder: None,
             dragging_album: None,
             dragging_section: None,
+            dragging_tool: None,
+            dragging_edit_section: None,
             curve_channel: "parametric".into(),
             mixer_mode: "hue".into(),
             grading_mode: "3way".into(),
@@ -482,11 +565,17 @@ impl Default for UiState {
             brush_feather: 50.0,
             brush_flow: 60.0,
             brush_erase: false,
+            mask_op: lightcraft_develop::MaskOp::Add,
             brush_auto_mask: false,
             brush_pressure: true,
             remove_size: 0.02,
             remove_feather: 50.0,
             remove_opacity: 100.0,
+            remove_fill: lightcraft_develop::SpotFill::Classic,
+            remove_object: false,
+            remove_object_fill: lightcraft_develop::SpotFill::Lama,
+            remove_expand: 0.005,
+            learn_edits: Default::default(),
             point_color: 0,
             point_color_visualize: false,
             hdr_visualize: false,
@@ -512,6 +601,7 @@ impl Default for UiState {
             layout_image: LayoutImage::default(),
             navigator: true,
             settings: AppSettings::default(),
+            sync: Default::default(),
             window_fullscreen: None,
             filter_bar: false,
             local_roots: Vec::new(),
@@ -531,6 +621,7 @@ impl Default for UiState {
             status: String::new(),
             dialog: None,
             print: Default::default(),
+            book: Default::default(),
         }
     }
 }
@@ -612,6 +703,11 @@ impl UiState {
         self.right_width = RIGHT_WIDTH.clamp(self.right_width);
         self.brush_size = self.brush_size.clamp(0.002, 0.5);
         self.sidebar.adopt_collapsed(&std::mem::take(&mut self.collapsed_sidebar));
+        if let Some(both) = self.show_clipping.take() {
+            // settings from before the two sides were separate
+            self.clip_shadows |= both;
+            self.clip_highlights |= both;
+        }
         self.dialog = None;
         self.fullscreen = false;
         if !crate::state::PREVIEW_LIMITS.contains(&self.settings.preview_limit) {

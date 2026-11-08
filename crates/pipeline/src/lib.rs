@@ -29,8 +29,11 @@ pub mod colorops;
 pub mod cull;
 pub mod curve;
 pub mod dust;
+pub mod find;
 pub mod finish;
 pub mod geometry;
+pub mod learned_fill;
+mod learned_resample;
 pub mod light_v3;
 // generated (`light_v3_params.rs`), kept in its own compact layout
 #[rustfmt::skip]
@@ -46,9 +49,13 @@ mod nrc_joint_reference;
 pub mod optics;
 pub mod output;
 pub mod profiles;
+pub mod recolor;
 pub mod redeye;
 pub mod retouch_step;
+pub mod spot_area;
 pub mod spots;
+pub mod spots_keep;
+pub mod spots_learned;
 pub mod straighten;
 pub mod tone;
 pub mod transform;
@@ -112,6 +119,55 @@ pub struct SourceInfo {
     /// The faces (boxes, landmarks, persons, part masks) portrait retouching works on (fork,
     /// `fork/retouch-foundation.md`); `None`: not found yet, or none.
     pub retouch: Option<retouch_step::Faces>,
+    /// The raw has no colour matrices of its own, but its camera model has matrices from measured
+    /// spectral sensitivities, so the photo's Profile option can start from them instead of the
+    /// look fitted to its JPEG (`lightcraft_develop::CameraColour`).
+    pub colorimetric: bool,
+    /// The photo chose a local camera profile that its source could not use, so it was decoded as Camera Matching: what
+    /// the Edit panel says under the Profile picker, for as long as it is so (the panel words and translates it).
+    pub colour_note: Option<ColourNote>,
+    /// macOS Colour can be offered for this source on this computer: a raw whose Profile option is offered
+    /// (`colorimetric`), on a Mac whose raw decoder lists its camera and has not failed to read it.
+    pub macos_offered: bool,
+    /// The photo chose macOS Colour but this source was decoded as Camera Matching: why. The choice is kept; the Edit
+    /// panel says so for as long as it is so.
+    pub macos_note: Option<MacosUnavailable>,
+}
+
+/// Why a photo set to macOS Colour renders as Camera Matching.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MacosUnavailable {
+    /// Not a Mac, macOS older than 12, or its raw decoder lacks a setting the recipe needs.
+    System,
+    /// macOS does not list the camera, or LightCraft has no verified type for its raw format.
+    Camera,
+    /// macOS reads the raw at a size more than 2 % away from LightCraft's.
+    Size,
+    /// macOS could not read the raw.
+    Unreadable,
+    /// AI Denoise is on and the photo's colours could not be carried over to macOS's (too little colour variety, or
+    /// the fit did not reproduce macOS's picture): both the plain and the denoised picture use Camera Matching. The
+    /// Edit panel's line: "AI Denoise uses Camera Matching colours on this photo".
+    Transfer,
+}
+
+/// Why a photo cannot use its local camera profile, and so renders as Camera Matching.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LocalUnavailable {
+    /// No file of that name in the folder (the folder is empty, on another computer, or the file was renamed).
+    Missing,
+    /// The file is not a usable profile.
+    Invalid,
+    /// The file is a profile for another camera.
+    OtherCamera,
+}
+
+/// The permanent note under the Profile picker for a local profile the photo cannot use (the setting stays as it is).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ColourNote {
+    pub why: LocalUnavailable,
+    /// The profile's id (its file name without `.json`), as the photo stores it.
+    pub profile: String,
 }
 
 impl Default for SourceInfo {
@@ -129,6 +185,10 @@ impl Default for SourceInfo {
             local_tone: None,
             native_long: None,
             retouch: None,
+            colorimetric: false,
+            colour_note: None,
+            macos_offered: false,
+            macos_note: None,
         }
     }
 }
@@ -257,7 +317,7 @@ pub(crate) struct Prepared {
     pub base: Arc<Plane>,
     pub clarity_blur: Option<Arc<Plane>>,
     pub texture_blur: Option<Arc<Plane>>,
-    /// Log luminance blurred at the sharpen radius (the pixel-scale band sharpening boosts).
+    /// Process V3: the sharpening band at the Radius slider's scale (V1 / V2 sharpen on `texture_blur`).
     pub sharpen_blur: Option<Arc<Plane>>,
     pub dark: Option<Arc<Plane>>,
     /// Blurred chromaticity (`rgb / Y`) for local Moiré / Noise.
@@ -267,6 +327,8 @@ pub(crate) struct Prepared {
     pub masks: Vec<masks::Evaluated>,
     /// Output pixels per unit of the source long edge.
     pub px_per_long: f64,
+    /// The recolored masks' references ([`Plan::recolor`]).
+    pub recolor: Vec<(u32, recolor::Reference)>,
 }
 
 /// Output size for a source of `src_w × src_h` under `s`, fitting `max_w × max_h`.
@@ -306,11 +368,13 @@ pub struct StageCache {
     capacity: usize,
     /// Another renderer's per-view state (the GPU renderer keeps its device-resident stages here).
     ext: Mutex<Option<Arc<dyn Any + Send + Sync>>>,
+    /// The spots of the last renders (`spots_keep`): a spot edit draws only what it reaches.
+    spots: spots_keep::KeptStore<spots_keep::CpuKept>,
 }
 
 impl Default for StageCache {
     fn default() -> Self {
-        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None) }
+        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None), spots: Default::default() }
     }
 }
 
@@ -319,6 +383,7 @@ impl StageCache {
     pub fn clear(&self) {
         self.lock().clear();
         *self.ext.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        self.spots.clear();
     }
 
     /// Per-view state of type `T` kept alongside this cache (created on first use). Lets another
@@ -348,6 +413,7 @@ impl StageCache {
         }
         let mut seen: Vec<usize> = Vec::new();
         let mut total = 0;
+        let mut masks_bytes = 0;
         let mut add = |p: usize, n: usize| {
             if !seen.contains(&p) {
                 seen.push(p);
@@ -364,8 +430,14 @@ impl StageCache {
             for p in planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.sharpen.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1)) {
                 add(Arc::as_ptr(p) as usize, size(p));
             }
+            if let Some((_, c)) = &pl.chroma {
+                add(Arc::as_ptr(c) as usize, size(c));
+            }
+            // (the alphas and brush planes, and the spots' patches: each held once by its cache)
+            masks_bytes += e.masks.bytes();
         }
-        total
+        masks_bytes += self.spots.bytes();
+        total + masks_bytes
     }
 
     /// Number of cached output sizes.
@@ -404,9 +476,12 @@ struct CacheEntry {
     /// The joint colour NR's noise model of the whole frame ([`colour_noise`]), keyed by [`Plan::noise_key`].
     colour_noise: Option<(u64, nrc_joint::JointNoise)>,
     planes: local::Planes,
+    /// Alphas of the last render's masks, and the brush parts they were built from (kept across
+    /// changes to the image: those of masks that don't read it stay valid).
+    masks: masks::AlphaCache,
 }
 
-fn hash_of(parts: impl std::hash::Hash) -> u64 {
+pub(crate) fn hash_of(parts: impl std::hash::Hash) -> u64 {
     use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
     BuildHasherDefault::<DefaultHasher>::default().hash_one(parts)
 }
@@ -448,8 +523,19 @@ pub struct Plan<'a> {
     pub keep: Option<PixelWindow>,
     /// The source's segmentation mattes ([`SourceInfo::mattes`]).
     pub mattes: Option<Arc<masks::Mattes>>,
+    /// A render that follows a slider drag ([`Quality::Draft`]): LaMa spots take a fill that is already known and start
+    /// no run ([`learned_fill::LearnedFill::fill`]).
+    pub draft: bool,
+    /// The references of the masks whose Recolor is on, by mask id ([`recolor::measure::references`]): measured on the whole
+    /// frame, the same for every render of the edit.
+    pub recolor: Vec<(u32, recolor::Reference)>,
     /// The whole frame and its output size (a windowed render's [`Self::frame`] is part of it).
     pub full: (geometry::Frame, usize, usize),
+}
+
+/// The original's long edge in pixels (an original reported smaller than the source is the source).
+pub(crate) fn native_long(info: &SourceInfo, src_long: usize) -> usize {
+    info.native_long.unwrap_or(0).max(src_long).max(1)
 }
 
 /// Long edge of the small render a windowed render estimates the whole frame's airlight from.
@@ -473,12 +559,14 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     }
     let s = &*settings;
     let frame = frame_for(src, info, s, req.apply_crop);
+    let recolor =
+        recolor::measure::references(src, info, s, &frame, req.space, native_long(info, src.width.max(src.height)), req.quality == Quality::Draft);
     let (full_w, full_h) = req.size(&frame);
     // sizes and scale are those of the whole output; a window only narrows what is drawn
     let px_per_long = frame.px_per_long(full_w);
     let src_long = src.width.max(src.height);
     // (an original reported smaller than the source is the source)
-    let native_long = info.native_long.unwrap_or(0).max(src_long).max(1);
+    let native_long = native_long(info, src_long);
     let detail_scale = local::detail_scale(px_per_long, native_long);
     let mut fixed_air = None;
     let mut keep = None;
@@ -521,16 +609,21 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
         format!("{:?}", s.spots),
         format!("{eyes:?}"),
-        // defringe runs in this stage
+        // defringe runs in this stage (and stops when the Optics eye is off)
         format!("{:?}", s.optics),
+        spots_keep::pre_spot_sections(s),
         // and the local tone mapping
         local_tone::enabled(info, s),
         src_long,
+        // a draft render may show a LaMa spot with the Classic fill; the full render must not reuse that image
+        req.quality == Quality::Draft && s.spots.iter().any(spots_learned::is_learned),
+        // and the size a learned fill sees its crops at
+        s.spots.iter().any(spots_learned::is_learned).then_some(native_long),
         retouch_step::key(s, info),
     ));
     let lin_key = hash_of((
         pre_nr_key,
-        [d.nr_luminance, d.nr_detail, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
+        [d.nr_luminance, d.nr_detail, d.nr_contrast, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         detail_scale.to_bits(),
         // the process picks the colour filter (Update to Current Process, undo)
         local::joint_colour_nr(s),
@@ -553,6 +646,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         fixed_air,
         keep,
         mattes: info.mattes.clone(),
+        draft: req.quality == Quality::Draft,
+        recolor,
         full,
     }
 }
@@ -590,6 +685,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
                 fixed_air: None,
                 keep: None,
                 mattes: None,
+                recolor: Vec::new(),
                 full: p.full.clone(),
                 ..*p
             };
@@ -617,11 +713,16 @@ pub fn lin_needs_cpu(s: &DevelopSettings, info: &SourceInfo) -> bool {
 /// scene-linear stage, in place.
 pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     let s = &*p.settings;
+    // LaMa spots first, before the white balance: the learned fill then depends on the picture alone
+    let learned = learned_fill::current().filter(|_| s.spots.iter().any(spots_learned::is_learned));
+    let done = learned
+        .map(|l| spots_learned::apply(img, &s.spots, &p.frame, p.px_per_long, native_long(info, p.src_long) as f64, &*l, p.draft))
+        .unwrap_or_default();
     // (before the white balance: the gain's input is the as-shot development, as in the file)
     local_tone::apply(img, info, p);
     local::white_balance(img, info, s);
     optics::defringe(img, s, p.px_per_long / optics::DEFRINGE_REF_LONG);
-    spots::apply(img, &s.spots, &p.frame, p.px_per_long);
+    spots::apply_except(img, &s.spots, &done, &p.frame, p.px_per_long);
     redeye::apply(img, &p.eyes);
     retouch_step::apply(img, info, p);
 }
@@ -670,13 +771,36 @@ pub fn hdr_histogram(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: 
 
 /// Render `src` with settings `s`.
 pub fn render(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> Rendered {
-    render_impl(Src::Borrowed(src), info, s, req, None)
+    render_impl(Src::Borrowed(src), info, s, req, None, None)
 }
 
 /// [`render`], reusing (and refreshing) the intermediate results in `cache`. The output is
 /// identical to [`render`]'s.
 pub fn render_cached(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: &StageCache) -> Rendered {
-    render_impl(Src::Shared(src), info, s, req, Some(cache))
+    render_impl(Src::Shared(src), info, s, req, Some(cache), None)
+}
+
+/// The planes `ask` names, as the render for `req` evaluates the masks (each with its Amount applied), without finishing the
+/// photo: the masks' own work only, reusing `cache` as [`render_cached`] does. When the asker already holds them
+/// ([`masks::PlanesAsk::known`] is the signature) none are made. The planes are the render's size (the window's for a windowed
+/// request).
+pub fn mask_planes(
+    src: &Arc<Rgb32f>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    cache: Option<&StageCache>,
+    ask: &masks::PlanesAsk,
+) -> masks::PlanesOut {
+    let mut job = PlanesJob { ask, out: None };
+    render_impl(Src::Shared(src), info, s, req, cache, Some(&mut job));
+    job.out.unwrap_or(masks::PlanesOut { signature: 0, planes: Some(Vec::new()) })
+}
+
+/// A request for mask planes handed to [`render_impl`], and its answer.
+struct PlanesJob<'a> {
+    ask: &'a masks::PlanesAsk,
+    out: Option<masks::PlanesOut>,
 }
 
 enum Src<'a> {
@@ -684,7 +808,16 @@ enum Src<'a> {
     Shared(&'a Arc<Rgb32f>),
 }
 
-fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: Option<&StageCache>) -> Rendered {
+/// `alphas_out`: stop after the masks and answer the request for their planes instead of finishing the photo (the
+/// returned [`Rendered`] is then empty; see [`mask_planes`]).
+fn render_impl(
+    src: Src<'_>,
+    info: &SourceInfo,
+    s: &DevelopSettings,
+    req: &RenderRequest,
+    cache: Option<&StageCache>,
+    alphas_out: Option<&mut PlanesJob<'_>>,
+) -> Rendered {
     // sections switched off with their eye render as if at their defaults (issue #316)
     let effective = s.effective();
     let edit: &DevelopSettings = &effective;
@@ -723,7 +856,13 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         None => {
             // Without a cache the resampled buffer is ours: work on it in place.
             let mut img = if shared.is_some() { (*sampled).clone() } else { Arc::unwrap_or_clone(sampled.clone()) };
-            lin_cpu(&mut img, info, &plan);
+            if let Some((a, c)) = shared {
+                let kept = spots_keep::lin_cpu(&mut img, info, &plan, c.spots.get(a, geo).as_deref());
+                let bytes = kept.as_ref().map_or(0, |k| k.bytes());
+                c.spots.put(a, geo, kept, bytes);
+            } else {
+                lin_cpu(&mut img, info, &plan);
+            }
             if colour_noise.is_none() {
                 colour_noise = self::colour_noise(src_img, info, &plan).map(|n| (plan.noise_key, n));
             }
@@ -732,6 +871,7 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         }
     };
     lap("wb/spots/nr", &mut t);
+    let mut alphas = cached.as_ref().map(|e| e.masks.clone()).unwrap_or_default();
     let mut planes = match cached.map(|e| e.planes) {
         Some(p) if p.key == lin_key => p,
         // A draft while noise reduction changes (a slider drag): the wide, edge-aware planes of the
@@ -741,13 +881,42 @@ fn render_impl(src: Src<'_>, info: &SourceInfo, s: &DevelopSettings, req: &Rende
         Some(p) if req.quality == Quality::Draft && p.pre_nr == plan.pre_nr_key => p.for_other_nr(),
         _ => local::Planes { key: lin_key, pre_nr: plan.pre_nr_key, ..Default::default() },
     };
-    let mut prep = local::prepare(lin.clone(), s, frame, px_per_long, plan.native_long as f64, req.quality, &mut planes, plan.mattes.as_deref());
+    let keys = masks::AlphaKeys { geo, image: lin_key };
+    let mut prep =
+        local::prepare(lin.clone(), s, frame, px_per_long, plan.detail_scale, req.quality, &mut planes, plan.mattes.as_ref(), (&mut alphas, keys));
     if let Some(a) = plan.fixed_air {
         prep.air = a;
     }
+    prep.recolor.clone_from(&plan.recolor);
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
-        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), colour_noise, planes });
+        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), colour_noise, planes, masks: alphas });
+    }
+    if let Some(job) = alphas_out {
+        let signature = masks::planes_signature(&plan, src_img as *const Rgb32f as usize, job.ask.want);
+        let planes = (job.ask.known != Some(signature)).then(|| {
+            let ev = plan.settings.light.exposure as f32;
+            masks::wanted(&plan.settings.masks, job.ask.want)
+                .map(|m| {
+                    // (a hidden mask is not in the render's masks: evaluated here, as the overlay always did)
+                    let p = match prep.masks.iter().find(|e| e.id == m.id) {
+                        Some(e) => e.plane(),
+                        None => {
+                            let mut p = masks::evaluate_one(m, &plan.frame, plan.w, plan.h, &prep.img, &prep.log_l, ev, plan.mattes.as_deref());
+                            let amount = (m.adjust.amount / 100.0) as f32;
+                            if (amount - 1.0).abs() > 1e-6 {
+                                p.data.iter_mut().for_each(|v| *v *= amount);
+                            }
+                            p
+                        }
+                    };
+                    (m.id, plan.keep.map_or(p.clone(), |k| p.crop(k.x, k.y, k.w, k.h)))
+                })
+                .collect()
+        });
+        job.out = Some(masks::PlanesOut { signature, planes });
+        let none = Rgba8 { width: 0, height: 0, data: Vec::new() };
+        return Rendered { histogram: Histogram::of_srgb8(&none), image: none, deep: None };
     }
     if req.depth != OutputDepth::U8 {
         let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof);
@@ -823,12 +992,13 @@ pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, 
 /// (the one the render evaluated, or for a hidden mask a fresh evaluation).
 fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Plane> {
     if o.reads_detail() {
-        let band = if local::pixel_sharpen(&plan.settings) { &prep.sharpen_blur } else { &prep.texture_blur };
-        return visualize::sharpen_plane(o, &plan.settings, &prep.log_l, band.as_deref(), plan.px_per_long, plan.native_long as f64);
+        let v3 = plan.settings.process >= lightcraft_develop::Process::V3.version();
+        let band = if v3 { prep.sharpen_blur.as_deref() } else { prep.texture_blur.as_deref() };
+        return visualize::sharpen_plane(o, &plan.settings, &prep.log_l, band, plan.px_per_long, plan.detail_scale);
     }
     let m = o.mask(&plan.settings)?;
     if let Some(e) = prep.masks.iter().find(|e| e.id == m.id) {
-        return Some(e.alpha.clone());
+        return Some(e.plane());
     }
     let ev = plan.settings.light.exposure as f32;
     Some(masks::evaluate_one(m, &plan.frame, plan.w, plan.h, &prep.img, &prep.log_l, ev, plan.mattes.as_deref()))
@@ -844,7 +1014,7 @@ fn overlay_alphas_all(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Ve
     let mut out = Vec::new();
     for m in plan.settings.masks.iter().filter(|m| m.visible && !m.components.is_empty()) {
         if let Some(e) = prep.masks.iter().find(|e| e.id == m.id) {
-            out.push(e.alpha.clone());
+            out.push(e.plane());
         } else {
             out.push(masks::evaluate_one(m, &plan.frame, plan.w, plan.h, &prep.img, &prep.log_l, ev, plan.mattes.as_deref()));
         }
@@ -914,18 +1084,32 @@ mod tests_geometry;
 #[cfg(test)]
 mod tests_hdr;
 #[cfg(test)]
+mod tests_learned_fill;
+#[cfg(test)]
 mod tests_legacy;
 #[cfg(test)]
 mod tests_light;
 #[cfg(test)]
 mod tests_local;
 #[cfg(test)]
+mod tests_macos_wb;
+#[cfg(test)]
 mod tests_mask_geometry;
 #[cfg(test)]
 mod tests_nr_scale;
 #[cfg(test)]
+mod tests_recolor_render;
+#[cfg(test)]
 mod tests_sharpen;
 #[cfg(test)]
+mod tests_sharpen_mask;
+#[cfg(test)]
+mod tests_slider_strength;
+#[cfg(test)]
+mod tests_spot_hidden;
+#[cfg(test)]
 mod tests_tone;
+#[cfg(test)]
+mod tests_tone_sliders;
 #[cfg(test)]
 mod tests_window;

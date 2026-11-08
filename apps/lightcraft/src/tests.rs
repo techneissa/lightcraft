@@ -91,6 +91,30 @@ fn the_desktop_session_adds_to_apple_photos_in_the_background() {
     assert!(!lightcraft_engine::Session::new().apple_photos_background);
 }
 
+/// fork/shared-models.md: the desktop session looks for face models in the folder shared with PhotoCraft first
+/// (after the move at start the models are only there), the same way the CLI and MCP sessions do.
+#[test]
+fn the_desktop_session_looks_for_face_models_in_the_shared_folder_first() {
+    let cli = lightcraft_engine::Session::new().with_default_face_models();
+    for (in_memory, launch) in [
+        (true, Launch::Open { dir: None, alt_asks: false, remembered: false }),
+        (false, Launch::Ask),
+        (false, Launch::Open { dir: None, alt_asks: false, remembered: false }),
+    ] {
+        let (s, _) = open_session(in_memory, &launch, false);
+        assert_eq!(s.face_models_dir, cli.face_models_dir);
+        assert_eq!(s.face_shared_dir, cli.face_shared_dir);
+        assert_eq!(s.face_shared_dir, lightcraft_engine::config::default_face_shared_dir());
+        // the denoise models too
+        let mut s = s;
+        let shared = s.execute("denoise.models.list", &serde_json::json!({})).map(|l| l["sharedDir"].clone());
+        let want = lightcraft_engine::config::default_denoise_shared_dir().map(|d| d.display().to_string());
+        assert_eq!(shared.ok().and_then(|v| v.as_str().map(str::to_string)), want);
+    }
+    #[cfg(target_os = "macos")]
+    assert!(cli.face_shared_dir.is_some_and(|d| d.ends_with("ArtCraft/models")) || std::env::var_os("LIGHTCRAFT_FACE_MODELS").is_some());
+}
+
 /// Issue #1290: with Settings ▸ At launch ▸ Ask me nothing is opened (nor seeded with demo
 /// photos) before the user chooses, and the settings are still saved while the list shows (a
 /// removed entry is kept), unlike the failed-library window's temporary session.

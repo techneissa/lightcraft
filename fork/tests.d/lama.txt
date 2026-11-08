@@ -1,0 +1,4 @@
+cargo test -p lightcraft-lama --lib
+cargo test -p lightcraft-pipeline --lib -- learned_fill spots tests_window
+cargo test -p lightcraft-engine --lib lama_fill
+cargo test -p lightcraft-ui-egui --lib remove_fill

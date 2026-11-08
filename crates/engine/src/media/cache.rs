@@ -1,5 +1,5 @@
 use super::settings_hash::SettingsHashes;
-use super::source::{DecodedSource, DenoiseSpec, PairLoader, RENDERED_MEM_BYTES, SourceLevel, SourceRef, THUMB_SOURCE_BYTES};
+use super::source::{DecodedSource, DenoiseSpec, LoadOptions, PairLoader, RENDERED_MEM_BYTES, SourceLevel, SourceRef, THUMB_SOURCE_BYTES};
 use super::{Arc, DcpProfile, DevelopSettings, HashMap, Hasher128, Lru, MediaCache, Photo, PhotoId, PreviewCache, Rgb32f, Source, SourceInfo};
 
 /// The photos that have a cached denoised picture for the denoise model in use. Only memory: nothing here touches the
@@ -66,6 +66,7 @@ impl Default for MediaCache {
             preview_loader: None,
             file_bytes: None,
             smart_dir: None,
+            smart_edit: Default::default(),
             availability: Default::default(),
             scenes: Vec::new(),
             rendered: Arc::new(PreviewCache::memory(rendered_budget(budget))),
@@ -257,6 +258,17 @@ impl MediaCache {
         self.enforce_budget();
     }
 
+    /// Whether a decoded source of `id` carries an embedded semantic matte of one of `kinds` (a DNG's sky or
+    /// person matte).
+    pub fn has_matte(&self, id: PhotoId, kinds: &[lightcraft_pipeline::masks::MatteKind]) -> bool {
+        self.thumbs
+            .peek(&id)
+            .into_iter()
+            .chain(self.previews.iter().filter(|e| e.0 == id).map(|e| &e.1))
+            .chain(self.full.iter().filter(|e| e.0 == id).map(|e| &e.1))
+            .any(|s| s.info.as_ref().and_then(|i| i.mattes.as_ref()).is_some_and(|m| m.iter().any(|(k, _)| kinds.contains(&k))))
+    }
+
     /// Forget a photo's decoded sources (e.g. after its file changed).
     pub fn forget(&mut self, id: PhotoId) {
         self.thumbs.remove(&id);
@@ -298,34 +310,56 @@ impl MediaCache {
     /// How to load photo `p` at `level`: from the cache when its source is there, else from its file (with its denoised
     /// picture beside it when it has one), its smart preview or the demo scene.
     pub fn source_ref(&mut self, p: &Photo, level: SourceLevel) -> SourceRef {
-        self.source_ref_with(p, level, true)
+        self.source_ref_for(p, level, LoadOptions::of(&p.develop))
+    }
+
+    /// [`Self::source_ref`] for settings other than the photo's own (the profile browser's variants, a face tile): a
+    /// cached source is used only when it was decoded with the same `options`.
+    pub fn source_ref_for(&mut self, p: &Photo, level: SourceLevel, options: LoadOptions) -> SourceRef {
+        self.source_ref_with(p, level, true, options)
     }
 
     /// [`Self::source_ref`] that never takes a decoded source from memory: for a job that needs something the cached
     /// one lacks (an export, whose denoised picture is made when it runs).
     pub fn source_ref_uncached(&mut self, p: &Photo, level: SourceLevel) -> SourceRef {
-        self.source_ref_with(p, level, false)
+        self.source_ref_with(p, level, false, LoadOptions::of(&p.develop))
     }
 
-    /// [`Self::source_ref`] without the photo's imported camera profile (keeping its denoised picture): a smart
+    /// [`Self::source_ref_for`] without the photo's imported camera profile (keeping its denoised picture): a smart
     /// preview keeps the file's own colour, and a cached source developed with the profile doesn't stand in for it.
     #[cfg(not(target_arch = "wasm32"))]
-    pub fn source_ref_without_profile(&mut self, p: &Photo, level: SourceLevel) -> SourceRef {
-        self.source_ref_for(p, level, true, None)
+    pub fn source_ref_without_profile(&mut self, p: &Photo, level: SourceLevel, options: LoadOptions) -> SourceRef {
+        self.source_ref_dcp(p, level, true, options, None)
     }
 
-    fn source_ref_with(&mut self, p: &Photo, level: SourceLevel, cached: bool) -> SourceRef {
-        let wanted = self.camera_profile_of(p);
-        self.source_ref_for(p, level, cached, wanted)
+    fn source_ref_with(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: LoadOptions) -> SourceRef {
+        let dcp = self.camera_profile_of(p);
+        self.source_ref_dcp(p, level, cached, wanted, dcp)
     }
 
-    /// [`Self::source_ref_with`] developed with camera profile `wanted` (none: the file's own colour).
-    fn source_ref_for(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: Option<(String, Arc<DcpProfile>)>) -> SourceRef {
-        let mut r = self.source_ref_plain(p, level, cached, wanted);
+    /// [`Self::source_ref_with`] developed with camera profile `dcp` (none: the file's own colour). A photo with one
+    /// never edits from its smart preview, which keeps the file's own colour.
+    fn source_ref_dcp(
+        &mut self,
+        p: &Photo,
+        level: SourceLevel,
+        cached: bool,
+        wanted: LoadOptions,
+        dcp: Option<(String, Arc<DcpProfile>)>,
+    ) -> SourceRef {
+        let profiled = dcp.is_some();
+        let mut r = self.source_ref_plain(p, level, cached, wanted, dcp.clone());
+        // (a source read from the smart preview that the setting or the photo's colour no longer allows is read again)
+        if self.smart_source_vetoed(&r, p, level, wanted) {
+            r = self.source_ref_plain(p, level, false, wanted, dcp);
+        }
+        if let SourceRef::File { options, .. } = &mut r {
+            *options = wanted;
+        }
         if let (SourceRef::File { denoise, .. }, Some((spec, loader))) = (&mut r, self.denoise.get(p.id)) {
             *denoise = Some((spec.clone(), loader.clone()));
         }
-        r
+        if profiled { r } else { self.choose_smart(p, level, cached, wanted, r) }
     }
 
     /// Is photo `p`'s original known to be missing (cached answer only)?
@@ -333,14 +367,22 @@ impl MediaCache {
         matches!(&p.source, Source::File { path } if self.availability.is_offline(path))
     }
 
-    fn source_ref_plain(&mut self, p: &Photo, level: SourceLevel, cached: bool, wanted: Option<(String, Arc<DcpProfile>)>) -> SourceRef {
+    fn source_ref_plain(
+        &mut self,
+        p: &Photo,
+        level: SourceLevel,
+        cached: bool,
+        wanted: LoadOptions,
+        dcp: Option<(String, Arc<DcpProfile>)>,
+    ) -> SourceRef {
+        // (a source decoded with other settings is decoded again, and the new one replaces it in the cache; one
+        // developed with another camera profile, or none, doesn't stand in either; a smart preview has no camera
+        // profile, and decoding it again gives the same picture, so it stands in while the original is offline)
+        let tag = dcp.as_ref().map(|(id, _)| id.clone());
         let outliers = p.develop.removes_hot_pixels();
-        // (a source developed with another camera profile, or none, doesn't stand in; a smart preview
-        // has no camera profile, and decoding it again gives the same picture, so it stands in while the
-        // original is offline)
         if cached
-            && let Some(a) = self.get_source(p.id, level).filter(|a| a.fits_outliers(outliers))
-            && (a.camera_profile == wanted.as_ref().map(|(id, _)| id.clone()) || (a.from_proxy && self.original_offline(p)))
+            && let Some(a) = self.get_source(p.id, level).filter(|a| a.serves(wanted) && a.fits_outliers(outliers))
+            && (a.camera_profile == tag || (a.from_proxy && self.original_offline(p)))
         {
             return SourceRef::Loaded(Box::new(a));
         }
@@ -351,8 +393,7 @@ impl MediaCache {
             && self.denoise.spec(p.id).is_none()
             && let Some(big) = [SourceLevel::Preview, SourceLevel::Full].into_iter().find_map(|level| {
                 self.get_source(p.id, level).filter(|b| {
-                    b.fits_outliers(outliers)
-                        && (b.camera_profile.as_deref() == wanted.as_ref().map(|(tag, _)| tag.as_str()) || (b.from_proxy && self.original_offline(p)))
+                    b.serves(wanted) && b.fits_outliers(outliers) && (b.camera_profile == tag || (b.from_proxy && self.original_offline(p)))
                 })
             })
         {
@@ -379,14 +420,14 @@ impl MediaCache {
             let mut r = self.origin_ref(&p.source, max_edge);
             if let SourceRef::File { fallback, camera_profile, outliers: o, .. } = &mut r {
                 *fallback = Some(sp);
-                *camera_profile = wanted;
+                *camera_profile = dcp;
                 *o = outliers;
             }
             return r;
         }
         let mut r = self.origin_ref(&p.source, max_edge);
         if let SourceRef::File { camera_profile, outliers: o, .. } = &mut r {
-            *camera_profile = wanted;
+            *camera_profile = dcp;
             *o = outliers;
         }
         r
@@ -430,6 +471,7 @@ impl MediaCache {
                         camera_profile: None,
                         outliers: false,
                         reduced: None,
+                        options: LoadOptions::default(),
                     },
                 }
             }
@@ -442,6 +484,7 @@ impl MediaCache {
                 camera_profile: None,
                 outliers: false,
                 reduced: None,
+                options: LoadOptions::default(),
             },
         }
     }

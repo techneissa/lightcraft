@@ -23,7 +23,10 @@ lightcraft-denoise = { path = "crates/denoise", default-features = false }
 lightcraft-geom = { path = "crates/geom" }
 lightcraft-faces = { path = "crates/faces" }
 lightcraft-sysmem = { path = "crates/sysmem" }
+lightcraft-filepanel = { path = "crates/filepanel" }
+lightcraft-macraw = { path = "crates/macraw" }
 lightcraft-wincolor = { path = "crates/wincolor" }
+lightcraft-coreml = { path = "crates/coreml" }
 lightcraft-color = { path = "crates/color" }
 lightcraft-raster = { path = "crates/raster" }
 lightcraft-tiff = { path = "crates/tiff" }
@@ -34,18 +37,25 @@ lightcraft-develop = { path = "crates/develop" }
 lightcraft-film = { path = "crates/film" }
 lightcraft-lensdb = { path = "crates/lensdb" }
 lightcraft-inpaint = { path = "crates/inpaint" }
+lightcraft-lama = { path = "crates/lama" }
+lightcraft-learn = { path = "crates/learn" }
 lightcraft-scenes = { path = "crates/scenes" }
 lightcraft-pipeline = { path = "crates/pipeline" }
 lightcraft-gpu = { path = "crates/gpu" }
 lightcraft-catalog = { path = "crates/catalog" }
 lightcraft-preview = { path = "crates/preview" }
 lightcraft-merge = { path = "crates/merge" }
+lightcraft-look = { path = "crates/look" }
 lightcraft-engine = { path = "crates/engine" }
 lightcraft-ui-egui = { path = "crates/ui-egui" }
 lightcraft-mcp = { path = "crates/mcp" }
 lightcraft-fetch = { path = "crates/fetch" }
+lightcraft-map = { path = "crates/map" }
 lightcraft-heif = { path = "crates/heif" }
 lightcraft-segment = { path = "crates/segment" }
+lightcraft-reflections = { path = "crates/reflections" }
+lightcraft-birefnet = { path = "crates/birefnet" }
+lightcraft-parsing = { path = "crates/parsing" }
 lightcraft-geocode = { path = "crates/geocode" }
 lightcraft-slideshow = { path = "crates/slideshow" }
 lightcraft-testkit = { path = "crates/testkit" }
@@ -67,6 +77,7 @@ proptest = "1"
 bytemuck = { version = "1", features = ["derive"] }
 crc32fast = "1"
 siphasher = "1"
+trash = "5.2" # MIT; moves files to the system Trash (Delete Permanently ▸ Move to Trash); NSFileManager on macOS, no C
 libm = "0.2" # pure-Rust maths for lightcraft-film (target-independent results)
 libc = "0.2" # dev-only: process CPU time in benches
 dhat = "0.3" # opt-in heap profiling (lightcraft-cli --features dhat-heap) and heap tests; never in product builds
@@ -85,6 +96,8 @@ ab_glyph = { version = "0.2", default-features = false, features = ["std"] }  # 
 png = "0.18"
 tiff = "0.11"
 image-webp = "0.2"
+gif = { version = "0.14", default-features = false, features = ["std", "raii_no_panic"] } # MIT OR Apache-2.0, animated GIF export
+color_quant = "1.1" # MIT, NeuQuant (a test baseline for the GIF quantiser)
 moxcms = { version = "0.9", default-features = false, features = ["lut"] }
 jxl-oxide = { version = "0.12", default-features = false }
 jixel = "=0.3.4" # BSD-3-Clause OR Apache-2.0, pure-Rust JPEG XL encoder (export; port of libjxl-tiny)

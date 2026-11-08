@@ -105,13 +105,17 @@ pub fn all_commands(app: &LightcraftApp) -> Value {
             let mut v = serde_json::to_value(&c).unwrap_or_default();
             if let Some(o) = v.as_object_mut() {
                 o.insert("shortcut".into(), json!(crate::shortcuts::shortcut_of(keymap, c.id)));
+                o.insert("shortcut2".into(), json!(crate::keybinds::model::effective(keymap, c.id, 1)));
+                o.insert("when".into(), json!(crate::keybinds::model::conditions::text(keymap, c.id)));
             }
             v
         })
         .collect();
     for (id, label, sc, menu) in crate::menus::ui_commands() {
         let sc = crate::shortcuts::binding(keymap, id, *sc);
-        v.push(json!({"id": id, "label": label, "shortcut": sc, "menu": [menu], "enabled": crate::menus::ui_enabled(app, id), "ui": true}));
+        let sc2 = crate::keybinds::model::effective(keymap, id, 1);
+        let when = crate::keybinds::model::conditions::text(keymap, id);
+        v.push(json!({"id": id, "label": label, "shortcut": sc, "shortcut2": sc2, "when": when, "menu": [menu], "enabled": crate::menus::ui_enabled(app, id), "ui": true}));
     }
     Value::Array(v)
 }
@@ -132,8 +136,9 @@ pub fn inspect(app: &LightcraftApp, ctx: &egui::Context) -> Value {
         "active": app.session.active().map(|p| p.0),
         "selection": app.session.selection.ids.iter().map(|p| p.0).collect::<Vec<_>>(),
         "activeMask": app.session.active_mask,
+        "activeComponent": app.session.active_part(),
         "widgetCount": app.widgets.len(),
-        "perf": {"viewFollowed": app.session.view_followed, "viewWorkedOut": app.session.view_worked_out, "frameMs": app.perf.frame_ms, "logicMs": app.perf.logic_ms, "updateMs": app.perf.update_ms, "maxUpdateMs": app.perf.max_update_ms, "fps": app.perf.fps, "lastRenderMs": app.renderer.last_main_ms, "renderQueue": app.renderer.queued(), "rendersInFlight": app.renderer.in_flight(), "pendingSlots": app.renderer.pending_slots(), "mergeRunning": app.merge.busy(), "lastMerge": app.merge.last_result, "rendersDone": app.renderer.completed, "thumbTextures": app.renderer.thumb_textures(), "thumbsMade": app.renderer.thumbs_made, "variantTextures": app.renderer.variant_textures(), "gpu": (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten(), "gpuReason": lightcraft_engine::gpu::unavailable_reason(), "gpuFallback": lightcraft_engine::gpu::last_fallback(), "gpuWindowDevice": lightcraft_engine::gpu::on_window_device(), "screenTextures": app.renderer.has_screen_textures(), "mainOnGpu": app.renderer.textures.get(&crate::render::Slot::Main).is_some_and(|t| t.native.is_some()), "loupeSteps": app.loupe_timing.to_json(), "previewCache": preview_cache_json(app)},
+        "perf": {"viewFollowed": app.session.view_followed, "viewWorkedOut": app.session.view_worked_out, "frameMs": app.perf.frame_ms, "logicMs": app.perf.logic_ms, "updateMs": app.perf.update_ms, "maxUpdateMs": app.perf.max_update_ms, "fps": app.perf.fps, "lastRenderMs": app.renderer.last_main_ms, "lastDraftRenderMs": app.renderer.last_draft_ms, "lastFullRenderMs": app.renderer.last_full_ms, "renderQueue": app.renderer.queued(), "rendersInFlight": app.renderer.in_flight(), "pendingSlots": app.renderer.pending_slots(), "mergeRunning": app.merge.busy(), "lastMerge": app.merge.last_result, "rendersDone": app.renderer.completed, "thumbTextures": app.renderer.thumb_textures(), "thumbsMade": app.renderer.thumbs_made, "variantTextures": app.renderer.variant_textures(), "gpu": (lightcraft_engine::gpu::ready() && lightcraft_engine::gpu::available()).then(lightcraft_engine::gpu::adapter_name).flatten(), "gpuReason": lightcraft_engine::gpu::unavailable_reason(), "gpuFallback": lightcraft_engine::gpu::last_fallback(), "gpuWindowDevice": lightcraft_engine::gpu::on_window_device(), "screenTextures": app.renderer.has_screen_textures(), "mainOnGpu": app.renderer.textures.get(&crate::render::Slot::Main).is_some_and(|t| t.native.is_some()), "loupeSteps": app.loupe_timing.to_json(), "previewCache": preview_cache_json(app)},
         "loupe": app.loupe_shown.map(|(p, src)| json!({
             "photo": p.0,
             "source": src,
@@ -351,7 +356,9 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 ctx.request_repaint();
                 return started;
             }
+            app.from_control = true;
             let r = app.run(id, params);
+            app.from_control = false;
             ctx.request_repaint();
             wrap(r)
         }
@@ -392,6 +399,10 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
         }
         "ui.zoom" => Outcome::Gesture { method: req.method.clone(), params: req.params.clone() },
         "ui.set" => {
+            // this Mac's sync folder is the user's choice (Settings ▸ Sync), never an agent's
+            if p.get("sync").is_some() {
+                return err(crate::settings_sync::user_only("ui.set `sync`"));
+            }
             // an arrangement of the sidebar is checked, not made whole as a settings file's is
             let sidebar = match p.get("sidebar").map(crate::sidebar::SidebarLayout::parse).transpose() {
                 Ok(s) => s,
@@ -453,6 +464,8 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                             | crate::state::Dialog::CaptureTime { .. }
                             | crate::state::Dialog::LensDatabase { .. }
                             | crate::state::Dialog::TextPrompt { .. }
+                            | crate::state::Dialog::SettingsImport
+                            | crate::state::Dialog::SettingsReplace
                     ))
                     || (r.is_ok() && crate::panels::dialogs::keeps_open(app, &d))
                     || (r.is_err() && crate::lightroom_destination::keeps_open_on_error(app, &d))
@@ -562,7 +575,11 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
     use lightcraft_engine::export::{Destination, ExportOptions, export_batch};
     let p = &app.session.export_params(p)?;
     // the format follows `path` (JPEG when it names none), and `bitDepth` is checked against it
-    let opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
+    let mut opts = ExportOptions::from_params(p).map_err(|e| e.to_string())?;
+    // only the Export dialog shows the file: not an agent, even through a preset or Export with Previous
+    if app.from_control {
+        opts.show_in_finder = false;
+    }
     let ids: Vec<_> = match p.get("ids").filter(|v| !v.is_null()) {
         // `ids` that aren't photo ids are an error, not "export the selection"
         Some(v) => v
@@ -612,7 +629,14 @@ pub fn export_active(app: &mut LightcraftApp, p: &Value) -> Result<Value, String
     } else {
         let w = app.services.write.as_mut().ok_or("no writer")?;
         let files = export_batch(&mut app.session, &ids, &opts, &to, &mut |path, bytes| w(path, bytes), &|path| std::path::Path::new(path).exists())?;
+        // the desktop app has the opener; a headless or CLI-driven run has none and shows nothing
+        let shown = crate::export_reveal::reveal_exported(app, opts.show_in_finder, &files);
         let mut out = json!({"files": files});
+        match shown {
+            Ok(true) => out["shownInFinder"] = json!(true),
+            Ok(false) => {}
+            Err(e) => out["showInFinderError"] = json!(e),
+        }
         // Photos may take minutes (and waits for the permission prompt): in the desktop app on a
         // worker, never on this (UI) thread; the app announces the outcome and
         // `export.photosImports` reports it. A window-less run (snapshot scripts) waits.
@@ -727,21 +751,28 @@ pub(crate) fn gesture_events(app: &mut LightcraftApp, ctx: &egui::Context, metho
             Ok(GestureOutcome::done(Value::Null))
         }
         "ui.pointer" => {
-            let Some(img) = app.image_rect else { return Err("no image on screen (switch to Detail view)".into()) };
+            // events in normalized image coordinates of the displayed photo frame, or in screen
+            // points with `screen: true` (a drag held across requests, e.g. over the map)
+            let screen = p.get("screen").and_then(Value::as_bool).unwrap_or(false);
+            let img = match app.image_rect {
+                _ if screen => egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1.0, 1.0)),
+                Some(r) => r,
+                None => return Err("no image on screen (switch to Detail view, or pass screen: true for screen points)".into()),
+            };
             let Some(events) = p.get("events").and_then(Value::as_array) else { return Err("missing `events`".into()) };
             let m = modifiers(p);
+            let button =
+                if p.get("button").and_then(Value::as_str) == Some("right") { egui::PointerButton::Secondary } else { egui::PointerButton::Primary };
             for e in events {
-                let x = e.get("x").and_then(Value::as_f64).unwrap_or(0.5) as f32;
-                let y = e.get("y").and_then(Value::as_f64).unwrap_or(0.5) as f32;
+                let x = e.get("x").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.5) as f32;
+                let y = e.get("y").and_then(Value::as_f64).filter(|v| v.is_finite()).unwrap_or(0.5) as f32;
                 let pos = egui::pos2(img.left() + x * img.width(), img.top() + y * img.height());
                 match e.get("kind").and_then(Value::as_str).unwrap_or("move") {
                     "down" => {
                         app.synthetic.push(egui::Event::PointerMoved(pos));
-                        app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: m });
+                        app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: true, modifiers: m });
                     }
-                    "up" => {
-                        app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: m })
-                    }
+                    "up" => app.synthetic.push(egui::Event::PointerButton { pos, button, pressed: false, modifiers: m }),
                     _ => app.synthetic.push(egui::Event::PointerMoved(pos)),
                 }
             }

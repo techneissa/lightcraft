@@ -8,16 +8,34 @@
 
 pub mod controls;
 pub mod presets;
+pub mod reflection_area;
 pub mod retouch;
 pub mod segmask;
 pub mod settings;
+pub mod spot_area;
+pub mod spot_circle;
 
 pub use controls::{CONTROLS, ControlSpec, Section, Track};
 pub use presets::{Preset, SettingsGroup, apply_partial, extract_groups};
+pub use reflection_area::{Glare, GlareStroke, ReflectionArea, ReflectionMode};
 pub use segmask::{SegMask, with_grid_interner};
 pub use settings::*;
+pub use spot_area::SpotArea;
+pub use spot_circle::SpotCircle;
 
 use serde_json::Value;
+
+#[cfg(any(test, feature = "test-hooks"))]
+thread_local! {
+    static HASH64_CALLS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times [`DevelopSettings::hash64`] has run on this thread (a test counts what a stretch of frames hashes: each
+/// call writes the whole settings, every stroke of every mask, to JSON).
+#[cfg(any(test, feature = "test-hooks"))]
+pub fn hash64_calls() -> usize {
+    HASH64_CALLS.with(std::cell::Cell::get)
+}
 
 impl DevelopSettings {
     /// Settings for a freshly imported raw file (Lightroom applies capture sharpening and colour
@@ -107,6 +125,8 @@ impl DevelopSettings {
 
     /// Stable 64-bit hash of the settings (FNV-1a over canonical JSON), for preview cache keys.
     pub fn hash64(&self) -> u64 {
+        #[cfg(any(test, feature = "test-hooks"))]
+        HASH64_CALLS.with(|c| c.set(c.get() + 1));
         let s = serde_json::to_string(self).unwrap_or_default();
         let mut h: u64 = 0xcbf2_9ce4_8422_2325;
         for b in s.as_bytes() {
@@ -136,10 +156,13 @@ impl DevelopSettings {
     /// Calibration the pipeline switches off where it applies them. Borrowed when every section is on.
     pub fn effective(&self) -> std::borrow::Cow<'_, DevelopSettings> {
         let off = |section: &str| !self.section_enabled(section);
-        if !(off("light") || off("color") || off("detail")) {
+        let hidden = self.spots.iter().any(|s| s.hidden);
+        if !(off("light") || off("color") || off("detail") || hidden) {
             return std::borrow::Cow::Borrowed(self);
         }
         let mut d = self.clone();
+        // a hidden spot (its row's eye) has no effect, on the CPU and the GPU alike
+        spot_circle::without_hidden(&mut d.spots);
         if off("light") {
             d.reset_section(Section::Light);
             d.reset_section(Section::Curve);
@@ -228,6 +251,80 @@ mod tests_process;
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// The Camera colour option is left out of the JSON while it is Auto (settings from before it keep their hash, and
+    /// every cached preview stays valid); Colorimetric is stored, read back, and changes the hash.
+    #[test]
+    fn camera_colour_is_stored_only_when_it_is_not_auto() {
+        let auto = DevelopSettings::default();
+        assert!(!auto.to_json().to_string().contains("camera_colour"));
+        let mut colorimetric = auto.clone();
+        colorimetric.profile.camera_colour = CameraColour::Colorimetric;
+        let v = colorimetric.to_json();
+        assert_eq!(v["profile"]["camera_colour"], json!("colorimetric"));
+        assert_eq!(DevelopSettings::from_json(&v).unwrap().profile.camera_colour, CameraColour::Colorimetric);
+        assert_ne!(colorimetric.hash64(), auto.hash64());
+        // a merge can set it back by name
+        let back: Profile = serde_json::from_value(json!({"camera_colour": "auto"})).unwrap();
+        assert!(back.camera_colour.is_auto());
+    }
+
+    /// T2 / LT1 (guard): the serde names of the Camera colour are exactly these four; the catalog stores them in the
+    /// develop settings, so a change here needs a new catalog format version (`lightcraft_catalog::journal` →
+    /// *Format versions*). `Local` and `Macos` round-trip, `Auto` stays out of the JSON, and so does an absent local
+    /// profile (settings that never chose keep their hash).
+    #[test]
+    fn camera_colour_names_are_pinned_and_local_profiles_round_trip() {
+        let names: Vec<_> = [CameraColour::Auto, CameraColour::Colorimetric, CameraColour::Local, CameraColour::Macos]
+            .iter()
+            .map(|c| serde_json::to_value(c).unwrap())
+            .collect();
+        assert_eq!(names, [json!("auto"), json!("colorimetric"), json!("local"), json!("macos")]);
+        // an exhaustive match: a new value breaks this test and points at the catalog version rule
+        for c in [CameraColour::Auto, CameraColour::Colorimetric, CameraColour::Local, CameraColour::Macos] {
+            match c {
+                CameraColour::Auto | CameraColour::Colorimetric | CameraColour::Local | CameraColour::Macos => {}
+            }
+        }
+        let auto = DevelopSettings::default();
+        assert!(!auto.to_json().to_string().contains("camera_profile"), "no profile chosen stores nothing");
+        let mut local = auto.clone();
+        local.profile.camera_colour = CameraColour::Local;
+        local.profile.camera_profile = Some("A7 V Chart".into());
+        let v = local.to_json();
+        assert_eq!((&v["profile"]["camera_colour"], &v["profile"]["camera_profile"]), (&json!("local"), &json!("A7 V Chart")));
+        assert_eq!(DevelopSettings::from_json(&v).unwrap(), local);
+        assert_ne!(local.hash64(), auto.hash64());
+        let mut macos = auto.clone();
+        macos.profile.camera_colour = CameraColour::Macos;
+        assert_eq!(DevelopSettings::from_json(&macos.to_json()).unwrap(), macos);
+        // `null` is no profile (a preset below the choice clears the id this way)
+        let back: Profile = serde_json::from_value(json!({"camera_colour": "auto", "camera_profile": null})).unwrap();
+        assert_eq!(back.camera_profile, None);
+    }
+
+    /// A preset or sync of the Profile group carries the Camera colour both ways: Colorimetric onto an Auto photo,
+    /// and Auto back onto a Colorimetric one.
+    #[test]
+    fn the_profile_group_carries_the_camera_colour_both_ways() {
+        let auto = DevelopSettings::default();
+        let mut colorimetric = auto.clone();
+        colorimetric.profile.camera_colour = CameraColour::Colorimetric;
+        let on = extract_groups(&colorimetric, &[SettingsGroup::Profile]);
+        let off = extract_groups(&auto, &[SettingsGroup::Profile]);
+        assert_eq!(apply_partial(&auto, &on, 1.0).profile.camera_colour, CameraColour::Colorimetric);
+        assert_eq!(apply_partial(&colorimetric, &off, 1.0).profile.camera_colour, CameraColour::Auto);
+        // and a preset of the group still applies below the halfway amount (where discrete fields keep their value)
+        let mut lighter = colorimetric.clone();
+        lighter.light.exposure = 1.0;
+        let both = extract_groups(&lighter, &[SettingsGroup::Light, SettingsGroup::Profile]);
+        let weak = apply_partial(&auto, &both, 0.3);
+        assert!((weak.light.exposure - 0.3).abs() < 1e-9, "the preset applied: exposure {}", weak.light.exposure);
+        assert_eq!(weak.profile.camera_colour, CameraColour::Auto, "below the halfway amount the option keeps its value");
+        // other groups leave it alone
+        let light = extract_groups(&auto, &[SettingsGroup::Light]);
+        assert_eq!(apply_partial(&colorimetric, &light, 1.0).profile.camera_colour, CameraColour::Colorimetric);
+    }
 
     /// Remove Hot Pixels (#1345) is on for a newly imported raw and off for everything else, and an edit saved
     /// before the box existed reads as off, so it renders as it did.

@@ -12,6 +12,7 @@ use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
 
 mod albums;
+mod books;
 mod dates;
 mod folders;
 mod keywords;
@@ -175,6 +176,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 };
                 placed.push(at);
             }
+            // the books, below the sections (not one of them: fixed, like My Photos)
+            books::books_block(app, ui);
             ui.data_mut(|d| d.remove::<String>(egui::Id::unique(SCROLL_TO_ROW)));
             // room below the last section (a section dragged to the end is dropped here)
             ui.add_space(SECTION_GAP * 2.0);

@@ -388,6 +388,60 @@ fn cases() -> Vec<(&'static str, Edit)> {
                 },
             ];
         }),
+        ("masks (recolor)", |s| {
+            // issue #83: a coloured area to purple over a grey-ish one to white, overlapping
+            let part = |shape| vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }];
+            s.masks = vec![
+                Mask {
+                    id: 1,
+                    components: part(MaskShape::Radial {
+                        center: Point::new(0.45, 0.55),
+                        rx: 0.3,
+                        ry: 0.25,
+                        angle: 0.0,
+                        feather: 50.0,
+                        invert: false,
+                    }),
+                    adjust: lightcraft_develop::LocalAdjustments {
+                        recolor: 100.0,
+                        recolor_r: 0.48,
+                        recolor_g: 0.25,
+                        recolor_b: 0.69,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Mask {
+                    id: 2,
+                    components: part(MaskShape::Linear { start: Point::new(0.0, 0.2), end: Point::new(0.0, 0.5) }),
+                    adjust: lightcraft_develop::LocalAdjustments {
+                        recolor: 60.0,
+                        recolor_r: 0.95,
+                        recolor_g: 0.95,
+                        recolor_b: 0.95,
+                        exposure: -0.3,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Mask {
+                    id: 3,
+                    components: part(MaskShape::Radial { center: Point::new(0.6, 0.4), rx: 0.35, ry: 0.3, angle: 0.0, feather: 40.0, invert: false }),
+                    adjust: lightcraft_develop::LocalAdjustments {
+                        recolor: 100.0,
+                        recolor_r: 0.2,
+                        recolor_g: 0.6,
+                        recolor_b: 0.3,
+                        recolor_range: 60.0,
+                        recolor_from_r: 0.3,
+                        recolor_from_g: 0.4,
+                        recolor_from_b: 0.8,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ];
+        }),
         ("masks (brush + ranges)", |s| {
             let stroke = BrushStroke {
                 points: vec![Point::new(0.1, 0.3), Point::new(0.5, 0.4), Point::new(0.8, 0.35)],
@@ -434,7 +488,7 @@ fn cases() -> Vec<(&'static str, Edit)> {
             s.masks = vec![
                 Mask {
                     components: vec![
-                        MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Sky },
+                        MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::sky() },
                         MaskComponent {
                             name: None,
                             op: MaskOp::Subtract,
@@ -446,12 +500,12 @@ fn cases() -> Vec<(&'static str, Edit)> {
                     ..Default::default()
                 },
                 Mask {
-                    components: vec![MaskComponent { name: None, op: MaskOp::Intersect, invert: false, shape: MaskShape::Subject }],
+                    components: vec![MaskComponent { name: None, op: MaskOp::Intersect, invert: false, shape: MaskShape::subject() }],
                     adjust: lightcraft_develop::LocalAdjustments { exposure: 0.5, ..Default::default() },
                     ..Default::default()
                 },
                 Mask {
-                    components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: true, shape: MaskShape::Background }],
+                    components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: true, shape: MaskShape::background() }],
                     adjust: lightcraft_develop::LocalAdjustments { saturation: -60.0, ..Default::default() },
                     invert: true,
                     ..Default::default()
@@ -722,8 +776,9 @@ fn light_v3_operators_match() {
             lightcraft_develop::controls::set(&mut s, id, v);
             check(&format!("V4 {id} {v}"), &src, &info, &s, &req);
             if id == "light.whites" {
+                // (this fork builds V4 on its V3 tone: Whites behave as V3's, not V2's)
                 let mut old = s.clone();
-                old.process = Process::V2.version();
+                old.process = Process::V3.version();
                 assert_eq!(
                     lightcraft_gpu::render(&src, &info, &s, &req, None).unwrap().image,
                     lightcraft_gpu::render(&src, &info, &old, &req, None).unwrap().image
@@ -1374,6 +1429,70 @@ fn soft_proofs_match() {
     assert!(lightcraft_gpu::render(&src, &raw, &DevelopSettings::default(), &req, None).is_none(), "declined: the CPU renders it");
 }
 
+/// Process V3 sharpening (its own Radius band, gain and Detail mix) and the smooth V3 Vignette response, GPU against
+/// CPU: Amount 50 / Radius 1.0 / Detail 25 / Masking 0 with Vignette -50, then other Radius, Masking and Detail values,
+/// at a full-size, a downscaled and a preview-sized output (the band's sigma follows the original's pixels).
+#[test]
+fn process_v3_sharpening_and_vignette_match() {
+    if !gpu() {
+        return;
+    }
+    let (w, h) = (1800, 1200);
+    let src = scene(3, w, h);
+    let raw = SourceInfo { raw: true, ..Default::default() };
+    let preview = SourceInfo { raw: true, native_long: Some(6000), ..Default::default() };
+    let base = |s: &mut DevelopSettings| {
+        s.process = Process::V3.version();
+        s.detail.sharpen_amount = 50.0;
+        s.detail.sharpen_radius = 1.0;
+        s.detail.sharpen_detail = 25.0;
+        s.detail.sharpen_masking = 0.0;
+        s.vignette.amount = -50.0;
+    };
+    let edits: [(&str, Edit); 5] = [
+        ("V3 sharpen 50/1.0/25/0 + vignette -50", |_| {}),
+        ("V3 sharpen radius 3", |s| s.detail.sharpen_radius = 3.0),
+        ("V3 sharpen radius 0.5", |s| s.detail.sharpen_radius = 0.5),
+        ("V3 sharpen masking 60, detail 0", |s| {
+            s.detail.sharpen_masking = 60.0;
+            s.detail.sharpen_detail = 0.0;
+        }),
+        ("V3 sharpen detail 100, amount 150", |s| {
+            s.detail.sharpen_detail = 100.0;
+            s.detail.sharpen_amount = 150.0;
+        }),
+    ];
+    // not vacuous: the CPU render with the sharpening and the vignette differs from one without
+    let plain = DevelopSettings { process: Process::V3.version(), ..Default::default() };
+    let mut edited = plain.clone();
+    base(&mut edited);
+    let (without, with) = (render(&src, &raw, &plain, &RenderRequest::fit(w, h)).image, render(&src, &raw, &edited, &RenderRequest::fit(w, h)).image);
+    let (changed, _, _) = diff(&without, &with);
+    let mut sharp = edited.clone();
+    sharp.vignette.amount = 0.0;
+    let (sharpened, _, _) = diff(&without, &render(&src, &raw, &sharp, &RenderRequest::fit(w, h)).image);
+    eprintln!(
+        "adapter {:?}; vignette + sharpening change the CPU render by mean {changed:.3} LSB, sharpening alone by {sharpened:.3}",
+        lightcraft_gpu::adapter_name()
+    );
+    assert!(changed > 0.5 && sharpened > 0.05, "the edits must be visible for the comparison to mean anything: {changed}, {sharpened}");
+    let mut worst = (0.0f64, 0u8);
+    for (name, edit) in edits {
+        let mut s = DevelopSettings::default();
+        base(&mut s);
+        edit(&mut s);
+        for (scale, info, req) in [
+            ("full", &raw, RenderRequest::fit(w, h)),
+            ("1200", &raw, RenderRequest::fit(1200, 1200)),
+            ("preview 720 of 6000", &preview, RenderRequest::fit(720, 720)),
+        ] {
+            let (m, x) = check(&format!("{name} [{scale}]"), &src, info, &s, &req);
+            worst = (worst.0.max(m), worst.1.max(x));
+        }
+    }
+    eprintln!("V3 sharpening + vignette, worst: mean {:.4} LSB, max {} LSB", worst.0, worst.1);
+}
+
 /// Spot removal on the device: Clone, Heal and Remove (automatic source, scored on the device),
 /// brushed strokes, overlapping spots (each reads what the earlier ones left), feather 0 and
 /// spots cut by the image edge.
@@ -1392,6 +1511,7 @@ fn spots_match() {
         feather,
         opacity: 100.0,
         source_offset: off.map(|o| Point::new(o.0, o.1)),
+        ..Default::default()
     };
     let sets: Vec<(&str, Vec<Spot>)> = vec![
         ("clone", vec![spot(SpotMode::Clone, &[(0.3, 0.4)], 0.04, 40.0, Some((0.15, 0.05)))]),

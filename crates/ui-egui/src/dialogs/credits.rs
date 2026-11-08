@@ -240,15 +240,19 @@ pub fn contributors_ui(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         }
         ui.separator();
         ui.label(crate::i18n::tr("Sort"));
-        let sort = crate::widgets::combo_box("credits_sort").selected_text(crate::i18n::tr(v.key.label().0)).show_ui(ui, |ui| {
-            for k in SortKey::ALL {
-                if ui.selectable_label(v.key == k, crate::i18n::tr(k.label().0)).clicked() {
-                    v.key = k;
-                    v.ascending = k.default_ascending();
-                }
-            }
-        });
-        crate::widgets::name_combo(&sort.response, crate::i18n::tr("Sort"));
+        let (sort, chosen) = crate::widgets::dropdown_search::pick(
+            ui,
+            "credits_sort",
+            |c| c.selected_text(crate::i18n::tr(v.key.label().0)),
+            &SortKey::ALL,
+            |k| v.key == *k,
+            |k| crate::i18n::tr(k.label().0).to_string(),
+        );
+        crate::widgets::name_combo(&sort, crate::i18n::tr("Sort"));
+        if let Some(k) = chosen.and_then(|i| SortKey::ALL.get(i)) {
+            v.key = *k;
+            v.ascending = k.default_ascending();
+        }
         let reverse =
             crate::widgets::arrow_button(ui, "", if v.ascending { crate::icons::Icon::ChevronUp } else { crate::icons::Icon::ChevronDown }, false);
         reverse.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, ui.is_enabled(), crate::i18n::tr("Reverse the order")));

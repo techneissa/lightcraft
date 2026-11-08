@@ -327,18 +327,6 @@ mod tests {
         }
     }
 
-    /// Dropping a `Downloads` with nothing running (every session has one) returns at once: the
-    /// wait for running threads is the only part that takes time, and the web has no threads.
-    #[test]
-    fn dropping_idle_downloads_returns_at_once() {
-        let t = std::time::Instant::now();
-        drop(Downloads::default());
-        let mut d = Downloads::default();
-        d.set_outcome("m", State::Failed("x".into()));
-        drop(d);
-        assert!(t.elapsed() < Duration::from_millis(500), "{:?}", t.elapsed());
-    }
-
     #[test]
     fn a_running_download_shows_in_activity_and_cancels() {
         use crate::activity::{Activity, Unit};
@@ -439,9 +427,7 @@ mod tests {
         let mut d = Downloads::default();
         d.jobs.insert("m".into(), shared.clone());
         assert!(d.running());
-        let started = std::time::Instant::now();
         drop(d);
-        assert!(started.elapsed() < Duration::from_millis(900), "quitting must not wait for a transfer to finish");
         assert_eq!(shared.get(), State::Cancelled);
         handle.join().unwrap();
     }

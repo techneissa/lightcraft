@@ -1,0 +1,25 @@
+[package]
+name = "lightcraft-look"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "LightCraft Match Look: fit develop sliders so a photo takes a reference picture's colour and tone (L3)"
+
+[lints]
+workspace = true
+
+[dependencies]
+lightcraft-geom = { workspace = true }
+lightcraft-color = { workspace = true }
+lightcraft-raster = { workspace = true }
+lightcraft-develop = { workspace = true }
+lightcraft-pipeline = { workspace = true }
+lightcraft-codecs = { workspace = true }
+serde = { workspace = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lightcraft-fetch = { workspace = true }
+
+[dev-dependencies]
+lightcraft-scenes = { workspace = true }
+serde_json = { workspace = true }

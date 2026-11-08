@@ -630,7 +630,8 @@ impl NativeMenu {
         sync_rows(&all, &mut self.items, &app.ui.settings.keymap);
 
         let focus = ctx.egui_wants_keyboard_input();
-        let capturing = app.recording_shortcut.is_some();
+        // a chord waiting for its second key counts too: no accelerator may take that key
+        let capturing = app.recording_shortcut.is_some() || app.keybinds.pending.is_some();
         if sync_needed(focus, capturing, self.text_focus, self.capturing, self.accelerators_pending) {
             self.text_focus = focus;
             self.capturing = capturing;

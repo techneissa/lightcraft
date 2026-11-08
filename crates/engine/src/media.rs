@@ -32,18 +32,20 @@ mod quick;
 mod render;
 mod session;
 mod settings_hash;
+mod smart_editing;
 mod source;
 
 pub use cache::DenoiseIndex;
 #[cfg(test)]
 pub(crate) use cache::rendered_budget;
 pub use quick::{QuickJob, QuickSource, content_key, source_info};
-pub use render::{RenderJob, RenderResult, ScreenFrame, develop, develop_reporting, fit_cached, fit_for_display};
+pub use render::{MaskPlanes, RenderJob, RenderResult, ScreenFrame, develop, develop_reporting, fit_cached, fit_for_display, planes_made};
 #[cfg(test)]
 use settings_hash::SETTINGS_HASH_ENTRIES;
 use settings_hash::SettingsHashes;
+pub use smart_editing::Proxy;
 pub use source::{
-    DISK_CACHE_BYTES, DISK_CACHE_PER_PHOTO, DecodedSource, DenoiseSpec, FACE_EDGE_STEP, FileLoader, FileProbe, MakeProduct, PairLoader,
+    DISK_CACHE_BYTES, DISK_CACHE_PER_PHOTO, DecodedSource, DenoiseSpec, FACE_EDGE_STEP, FileLoader, FileProbe, LoadOptions, MakeProduct, PairLoader,
     PreviewLoader, ProbeInfo, RENDER_CACHE_VERSION, RawDecode, ReducedLoader, SourceLevel, SourceRef, THUMB_SIZES, Twin, default_disk_cache_bytes,
     face_edge, thumb_bucket,
 };
@@ -75,6 +77,8 @@ pub struct MediaCache {
     pub file_bytes: Option<crate::merge::ByteReader>,
     /// The library's smart previews folder (originals offline: render from the proxy).
     pub smart_dir: Option<std::path::PathBuf>,
+    /// Use Smart Previews instead of Originals for editing (`library.smartPreviewsForEditing`).
+    smart_edit: smart_editing::State,
     /// Whether originals (and smart previews) are on disk: cached and checked off the UI thread
     /// in the app (see [`crate::availability`]).
     pub availability: crate::availability::Availability,

@@ -1,5 +1,5 @@
 //! Where LightCraft keeps per-user data on this machine: the config folder (app settings, camera
-//! profiles, face and denoise models).
+//! profiles, face and denoise models) and the cache folder (map tiles).
 //!
 //! [`config_dir`] picks it, in order:
 //! 1. `$LIGHTCRAFT_CONFIG_DIR`, when set (tests, agents, custom setups).
@@ -20,6 +20,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use crate::Session;
+
+mod shared_sam3;
 
 /// Files beside the executable that switch on portable mode (either one; contents are ignored).
 pub const PORTABLE_MARKERS: [&str; 2] = ["portable.txt", "LightCraft.portable"];
@@ -62,6 +64,32 @@ fn config_dir_with(platform: Platform, env: impl Fn(&str) -> Option<OsString>, p
             env("XDG_CONFIG_HOME").map(PathBuf::from).or_else(|| env("HOME").map(|h| PathBuf::from(h).join(".config"))).map(|c| c.join("lightcraft"))
         }
     }
+}
+
+/// LightCraft's per-user cache folder, for data that can be fetched or rebuilt again (map tiles):
+/// `~/Library/Caches/LightCraft` on macOS, `%LOCALAPPDATA%\LightCraft\Cache` on Windows,
+/// `$XDG_CACHE_HOME/lightcraft` (else `~/.cache/lightcraft`) elsewhere. In portable mode it is
+/// `<exe dir>/LightCraftData/Cache`, so tiles stay on the portable medium too.
+pub fn cache_dir() -> Option<PathBuf> {
+    if let Some(dir) = portable_dir() {
+        Some(dir.join("Cache"))
+    } else if cfg!(target_os = "macos") {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Caches/LightCraft"))
+    } else if cfg!(windows) {
+        std::env::var_os("LOCALAPPDATA").map(|a| PathBuf::from(a).join("LightCraft").join("Cache"))
+    } else {
+        std::env::var_os("XDG_CACHE_HOME")
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+            .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".cache")))
+            .map(|c| c.join("lightcraft"))
+    }
+}
+
+/// Where map tiles are cached: `$LIGHTCRAFT_MAP_CACHE` if set, else `<cache>/map-tiles` (one
+/// folder per tile source inside; see docs/map.md).
+pub fn default_map_cache_dir() -> Option<PathBuf> {
+    std::env::var_os("LIGHTCRAFT_MAP_CACHE").filter(|v| !v.is_empty()).map(PathBuf::from).or_else(|| cache_dir().map(|d| d.join("map-tiles")))
 }
 
 /// This process's portable data folder, if a marker sits beside its executable and the folder can be
@@ -121,14 +149,21 @@ pub fn default_denoise_models_dir() -> Option<PathBuf> {
         .or_else(|| config_dir().map(|d| d.join("denoise-models")))
 }
 
-/// Where the SAM 3 model is kept: `$LIGHTCRAFT_SAM3_DIR` if set, else `<config>/models/sam3`.
-pub fn default_sam3_dir() -> Option<PathBuf> {
-    sam3_dir(std::env::var_os("LIGHTCRAFT_SAM3_DIR"), config_dir())
+/// The folder shared with the other ArtCraft apps where face models are looked for first and new ones go
+/// ([`crate::shared_models`]); `None` off the Mac, and when `$LIGHTCRAFT_FACE_MODELS` picks another folder.
+pub fn default_face_shared_dir() -> Option<PathBuf> {
+    std::env::var_os("LIGHTCRAFT_FACE_MODELS").filter(|v| !v.is_empty()).is_none().then(crate::shared_models::default_shared_models_dir).flatten()
 }
 
-/// [`default_sam3_dir`] for a given override and config folder: a non-empty override wins.
-fn sam3_dir(var: Option<std::ffi::OsString>, config: Option<PathBuf>) -> Option<PathBuf> {
-    var.filter(|v| !v.is_empty()).map(PathBuf::from).or_else(|| config.map(|d| d.join("models").join("sam3")))
+/// [`default_face_shared_dir`] for denoise models (`$LIGHTCRAFT_DENOISE_MODELS`).
+pub fn default_denoise_shared_dir() -> Option<PathBuf> {
+    std::env::var_os("LIGHTCRAFT_DENOISE_MODELS").filter(|v| !v.is_empty()).is_none().then(crate::shared_models::default_shared_models_dir).flatten()
+}
+
+/// Where the SAM 3 model is kept: `$LIGHTCRAFT_SAM3_DIR` if set, else the folder shared with PhotoCraft
+/// (`ArtCraft/models/sam3`, fork feature) or `<config>/models/sam3`; see `shared_sam3`.
+pub fn default_sam3_dir() -> Option<PathBuf> {
+    shared_sam3::sam3_dir(std::env::var_os("LIGHTCRAFT_SAM3_DIR"), shared_sam3::shared_sam3_dir(std::env::var_os("HOME")), config_dir())
 }
 
 impl Session {
@@ -136,13 +171,34 @@ impl Session {
     /// download mirrors in `<config>/models/sam3-mirrors.txt`.
     pub fn with_default_sam3_model(mut self) -> Self {
         self.segmenter.dir = default_sam3_dir();
+        self.segmenter.birefnet = crate::segment::birefnet::Settings::with_defaults();
         self.segmenter.mirrors_file = config_dir().map(|d| d.join("models").join("sam3-mirrors.txt"));
         self
     }
 
     /// Keep face models in the shared default folder ([`default_face_models_dir`]).
-    pub fn with_default_face_models(mut self) -> Self {
-        self.face_models_dir = default_face_models_dir();
+    pub fn with_default_face_models(self) -> Self {
+        self.with_face_models(default_face_models_dir(), default_face_shared_dir())
+    }
+
+    /// Keep face models in `old` (settings, catalog, staging and models from before) and `shared` (the folder shared
+    /// with the other ArtCraft apps, looked in first), [`Session::with_default_face_models`] with the folders given.
+    pub fn with_face_models(mut self, old: Option<PathBuf>, shared: Option<PathBuf>) -> Self {
+        self.face_models_dir = old;
+        self.face_shared_dir = shared;
+        self
+    }
+
+    /// Where the face models are: the shared folder first, then the models folder (`None`: no folder at all).
+    pub(crate) fn face_roots(&self) -> Option<crate::shared_models::ModelRoots> {
+        let old = self.face_models_dir.clone()?;
+        Some(crate::shared_models::ModelRoots { old, shared: self.face_shared_dir.clone() })
+    }
+
+    /// Cache map tiles in the shared default folder ([`default_map_cache_dir`]).
+    pub fn with_default_map_cache(mut self) -> Self {
+        self.map.cache_root = default_map_cache_dir();
+        self.map.reset_service();
         self
     }
 
@@ -169,6 +225,7 @@ impl Session {
     /// Keep denoise models in the shared default folder ([`default_denoise_models_dir`]).
     pub fn with_default_denoise_models(mut self) -> Self {
         self.set_denoise_models_dir(default_denoise_models_dir());
+        self.denoise.shared_dir = default_denoise_shared_dir();
         self
     }
 
@@ -289,6 +346,7 @@ mod tests {
     /// A non-empty `LIGHTCRAFT_SAM3_DIR` wins; unset or empty falls back to `<config>/models/sam3` (issue #619).
     #[test]
     fn sam3_dir_prefers_the_override() {
+        let sam3_dir = |var, config| shared_sam3::sam3_dir(var, None, config);
         let config = PathBuf::from("cfg");
         let fallback = Some(config.join("models").join("sam3"));
         assert_eq!(sam3_dir(Some("elsewhere".into()), Some(config.clone())), Some(PathBuf::from("elsewhere")));

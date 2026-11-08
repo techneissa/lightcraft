@@ -39,7 +39,10 @@ pub const TABLE: &[(&str, Class)] = &[
     ("raster", Class::Layer(0)),
     ("tiff", Class::Layer(0)),
     ("sysmem", Class::Layer(0)),
+    ("filepanel", Class::Layer(0)),
+    ("macraw", Class::Layer(0)),
     ("wincolor", Class::Layer(0)),
+    ("coreml", Class::Layer(0)),
     ("fetch", Class::Layer(0)),
     ("denoise-core", Class::Layer(1)),
     ("denoise", Class::Layer(1)),
@@ -57,12 +60,19 @@ pub const TABLE: &[(&str, Class)] = &[
     ("scenes", Class::Layer(1)),
     ("slideshow", Class::Layer(1)),
     ("pipeline", Class::Layer(2)),
+    ("map", Class::Layer(2)),
     ("gpu", Class::Layer(3)),
     ("catalog", Class::Layer(3)),
     ("preview", Class::Layer(3)),
     ("export", Class::Layer(3)),
     ("merge", Class::Layer(3)),
+    ("look", Class::Layer(3)),
     ("segment", Class::Layer(3)),
+    ("reflections", Class::Layer(3)),
+    ("birefnet", Class::Layer(3)),
+    ("parsing", Class::Layer(3)),
+    ("lama", Class::Layer(3)),
+    ("learn", Class::Layer(3)),
     ("engine", Class::Layer(4)),
     ("ui-egui", Class::Layer(5)),
     ("mcp", Class::Layer(5)),
@@ -344,6 +354,16 @@ mod tests {
         assert!(matches!(&v[..], [Violation::Unregistered { krate }] if krate == "lightcraft-mystery"));
         assert!(!check(&[c("lightcraft-pipeline", &[("lightcraft-testkit", Normal, true)])]).is_empty());
         assert!(check(&[c("lightcraft-pipeline", &[("lightcraft-testkit", Dev, true)])]).is_empty());
+    }
+
+    /// T18 (macOS Colour plan): macraw is a registered layer-0 crate, so the engine may use it and it
+    /// may use nothing above it.
+    #[test]
+    fn macraw_is_layer_zero() {
+        assert_eq!(classify("lightcraft-macraw"), Some(Class::Layer(0)));
+        assert!(check(&[c("lightcraft-engine", &[("lightcraft-macraw", Normal, true)])]).is_empty());
+        assert!(check(&[c("lightcraft-macraw", &[("objc2", Normal, false), ("lightcraft-testkit", Dev, true)])]).is_empty());
+        assert!(!check(&[c("lightcraft-macraw", &[("lightcraft-color", Normal, true)])]).is_empty());
     }
 
     #[test]

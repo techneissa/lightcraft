@@ -151,6 +151,13 @@ pub fn survey_photos(app: &mut LightcraftApp) -> Vec<PhotoId> {
     v
 }
 
+/// A mask, submask or spot picked on one photo means nothing on another: its index could name that photo's.
+fn clear_part_selection(app: &mut LightcraftApp) {
+    app.session.active_mask = None;
+    app.session.active_component = None;
+    app.session.active_spot = None;
+}
+
 /// Move the active photo `d` steps within the survey.
 pub fn survey_step(app: &mut LightcraftApp, d: isize) -> Result<Value, String> {
     let v = survey_photos(app);
@@ -160,6 +167,7 @@ pub fn survey_step(app: &mut LightcraftApp, d: isize) -> Result<Value, String> {
     let i = app.session.selection.active.and_then(|a| v.iter().position(|x| *x == a)).unwrap_or(0);
     let j = (i as isize + d).clamp(0, v.len() as isize - 1) as usize;
     app.session.selection.active = Some(v[j]);
+    clear_part_selection(app);
     Ok(json!({"active": v[j].0}))
 }
 
@@ -287,7 +295,8 @@ fn photo_tile(
         display = super::detail::fit_rect(img_area, texture_aspect, zoom, native, ppp, app.ui.pan);
         p.image(tex.id(), display, uv, Color32::WHITE);
         if let Some(i) = window {
-            draw_window(&p, app, i, id, photo.develop.hash64(), img);
+            let look = app.session.settings_hash(id).unwrap_or_default();
+            draw_window(&p, app, i, id, look, img);
         }
     } else if let Some(tex) = app.renderer.textures.get(&Slot::Thumb(id)) {
         let texture_aspect = tex.size[0].max(1) as f32 / tex.size[1].max(1) as f32;
@@ -296,9 +305,7 @@ fn photo_tile(
     } else {
         p.rect_filled(img.intersect(img_area), 0.0, t.skeleton);
     }
-    if photo.flag == Flag::Reject {
-        p.rect_filled(display, 0.0, Color32::from_black_alpha(110));
-    }
+    // (a rejected photo is not dimmed: Compare and Survey show it as the loupe does, and its flag says it is rejected)
     if app.ui.settings.focus_point {
         super::detail::draw_focus_point(&p, display, &photo, &format!("compare:focusPoint:{}", id.0));
     }
@@ -441,8 +448,9 @@ fn request_window(app: &mut LightcraftApp, v: &TileView) -> Option<crate::region
     let job = app.session.region_job(v.id, fw, fh, win, true)?;
     // keyed as the renderer keys the texture (a display profile changes the key)
     let job = app.renderer.job_for(Slot::CompareRegion(v.pane), job);
-    let look = job.settings.hash64();
-    let view = crate::region::RegionView { photo: v.id, before: false, key: job.key, full: (fw, fh), window: win, settings: look };
+    // (the photo's settings, remembered: the job renders exactly them)
+    let look = app.session.settings_hash(v.id).unwrap_or_default();
+    let view = crate::region::RegionView { photo: v.id, before: false, key: job.key, full: (fw, fh), window: win, settings: look, view: 0 };
     // windows of other photos, looks and zooms of this pane can't be drawn any more
     app.compare_tiles.retain(|(p, _), t| *p != v.pane || t.is_current(v.id, (fw, fh), look, false));
     app.compare_tiles.insert((v.pane, job.key), view);
@@ -539,7 +547,7 @@ pub fn show_compare(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let _ = make_select(app);
             }
             ui.separator();
-            super::grid::context_menu(app, ui, id);
+            super::photo_menu::show(app, ui, id);
         });
     }
     let mid = area.center().x;
@@ -588,6 +596,7 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         } else if resp.clicked() {
             app.session.selection.active = Some(*id);
+            clear_part_selection(app);
         }
         if resp.double_clicked() {
             let _ = app.run("library.select", json!({"ids": [id.0]}));
@@ -605,7 +614,7 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                 let _ = app.run("library.select", json!({"ids": [id.0], "mode": "toggle"}));
             }
         }
-        crate::widgets::context_menu(&resp, |ui| super::grid::context_menu(app, ui, *id));
+        crate::widgets::context_menu(&resp, |ui| super::photo_menu::show(app, ui, *id));
     }
     let n = photos.len();
     let msg = if app.session.selection.ids.len() > SURVEY_MAX {

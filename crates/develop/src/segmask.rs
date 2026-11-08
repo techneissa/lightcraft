@@ -28,6 +28,11 @@ pub struct SegMask {
     /// resolution than a pass over the whole photo.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rect: Option<[f64; 4]>,
+    /// The model that made it, by id (`birefnet`, `sam3+birefnet`…); `None`: SAM 3, the only model before BiRefNet.
+    /// A part keeps the model that made it, whatever model new parts use. A build that doesn't know the field
+    /// reads the selection as SAM 3's and drops the id when it saves.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// Index into the catalog snapshot's shared grid table (`Catalog::grids`) this mask refers
     /// to instead of carrying its own `data`. A serialization detail of snapshots only: the
     /// snapshot writer sets it (through the interner, into its own table), `Catalog::repair`
@@ -43,12 +48,17 @@ impl SegMask {
     pub fn from_logits(side: usize, logits: &[f32]) -> SegMask {
         let q: Vec<u8> = logits.iter().take(side * side).map(|l| ((l * SCALE).round().clamp(-127.0, 127.0) as i8) as u8).collect();
         let z = miniz_oxide::deflate::compress_to_vec(&q, 8);
-        SegMask { side: side as u32, data: base64_encode(&z), rect: None, grid: None }
+        SegMask { side: side as u32, data: base64_encode(&z), rect: None, model: None, grid: None }
     }
 
     /// From `side × side` logits over the part `rect` of the image.
     pub fn from_logits_in(side: usize, logits: &[f32], rect: [f64; 4]) -> SegMask {
         SegMask { rect: Some(rect), ..SegMask::from_logits(side, logits) }
+    }
+
+    /// The same selection, marked as made by model `id` (see [`SegMask::model`]).
+    pub fn made_by(self, id: &str) -> SegMask {
+        SegMask { model: Some(id.to_string()), ..self }
     }
 
     /// The covered part, normalized (the whole image without a `rect`); `None` when damaged.
@@ -66,6 +76,19 @@ impl SegMask {
         let z = base64_decode(&self.data)?;
         let q = miniz_oxide::inflate::decompress_to_vec_with_limit(&z, side * side).ok()?;
         (q.len() == side * side).then(|| q.iter().map(|b| f32::from(*b as i8) / SCALE).collect())
+    }
+
+    /// Invert the mask: negates every logit, so selected becomes unselected and vice versa.
+    pub fn invert(&self) -> Option<SegMask> {
+        let mut logits = self.logits()?;
+        for l in &mut logits {
+            *l = -*l;
+        }
+        let inverted = match self.rect {
+            Some(r) => SegMask::from_logits_in(self.side as usize, &logits, r),
+            None => SegMask::from_logits(self.side as usize, &logits),
+        };
+        Some(SegMask { model: self.model.clone(), ..inverted })
     }
 }
 
@@ -102,12 +125,16 @@ impl Serialize for SegMask {
         if !self.data.is_empty()
             && let Some(id) = INTERNER.with(|i| i.borrow().as_ref().and_then(|m| m.get(&self.data).copied()))
         {
-            let len = if self.rect.is_some() { 3 } else { 2 };
+            let len = 2 + usize::from(self.rect.is_some()) + usize::from(self.model.is_some());
             let mut map = serializer.serialize_map(Some(len))?;
             map.serialize_entry("side", &self.side)?;
             map.serialize_entry("grid", &id)?;
             if let Some(rect) = self.rect {
                 map.serialize_entry("rect", &rect)?;
+            }
+            // (the model that made it: the fork's `model`, kept through the shared grid table too)
+            if let Some(model) = &self.model {
+                map.serialize_entry("model", model)?;
             }
             return map.end();
         }
@@ -115,12 +142,16 @@ impl Serialize for SegMask {
         // so every serialization that doesn't dedup keeps its bytes (`hash64`, cache keys). `grid`
         // is never written here: a value read from some document is dropped on save, and only the
         // interner above can write a reference (into the table of the snapshot being written).
-        let len = 2 + usize::from(self.rect.is_some());
+        let len = 2 + usize::from(self.rect.is_some()) + usize::from(self.model.is_some());
         let mut map = serializer.serialize_map(Some(len))?;
         map.serialize_entry("side", &self.side)?;
         map.serialize_entry("data", &self.data)?;
         if let Some(rect) = self.rect {
             map.serialize_entry("rect", &rect)?;
+        }
+        // (the fork's `model`, after `rect` as its derived form wrote it: hashes of masks saved before stay)
+        if let Some(model) = &self.model {
+            map.serialize_entry("model", model)?;
         }
         map.end()
     }
@@ -254,13 +285,60 @@ mod tests {
     }
 
     #[test]
+    fn segmask_invert_negates_logits() {
+        let side = 8;
+        let l: Vec<f32> = (0..side * side).map(|i| (i as f32 - 32.0) / 4.0).collect();
+        let m = SegMask::from_logits_in(side, &l, [0.1, 0.2, 0.8, 0.9]);
+        let inv = m.invert().unwrap();
+        assert_eq!(inv.rect, Some([0.1, 0.2, 0.8, 0.9]));
+        let orig_logits = m.logits().unwrap();
+        let inv_logits = inv.logits().unwrap();
+        for (a, b) in orig_logits.iter().zip(&inv_logits) {
+            assert!((a + b).abs() <= 1e-5, "expected negation: {a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn the_model_is_stored_with_the_selection_and_old_documents_read_without_it() {
+        let plain = SegMask::from_logits(4, &[1.0; 16]);
+        assert!(!serde_json::to_string(&plain).unwrap().contains("model"), "a SAM 3 selection is saved as before");
+        let marked = plain.clone().made_by("birefnet");
+        let back: SegMask = serde_json::from_str(&serde_json::to_string(&marked).unwrap()).unwrap();
+        assert_eq!(back.model.as_deref(), Some("birefnet"));
+        assert_eq!(marked.invert().unwrap().model.as_deref(), Some("birefnet"), "turning it around keeps the model");
+        // a document from before the field
+        let old: SegMask = serde_json::from_str(&format!(r#"{{"side":4,"data":{}}}"#, serde_json::to_string(&plain.data).unwrap())).unwrap();
+        assert_eq!(old.model, None);
+        // and a build that doesn't know the field reads the rest as before (unknown fields are ignored)
+        let newer: SegMask = serde_json::from_str(r#"{"side":4,"data":"AA==","model":"something-newer","extra":1}"#).unwrap();
+        assert_eq!(newer.model.as_deref(), Some("something-newer"));
+    }
+
+    /// Merge of the fork's `model` with the shared grid table (#2154): a selection a model made keeps its model id in a
+    /// snapshot that refers to its grid by index, and in the plain form after its `rect`, as the derived form wrote it.
+    #[test]
+    fn the_model_survives_the_shared_grid_table() {
+        let m = SegMask::from_logits(4, &[1.0; 16]).made_by("birefnet");
+        let table = std::collections::HashMap::from([(m.data.clone(), 2u32)]);
+        let referenced = with_grid_interner(table, || serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(referenced, "{\"side\":4,\"grid\":2,\"model\":\"birefnet\"}");
+        let back: SegMask = serde_json::from_str(&referenced).unwrap();
+        assert_eq!((back.grid, back.model.as_deref()), (Some(2), Some("birefnet")));
+        let with_rect = SegMask { rect: Some([0.0, 0.0, 0.5, 0.5]), ..m.clone() };
+        assert_eq!(
+            serde_json::to_string(&with_rect).unwrap(),
+            format!("{{\"side\":4,\"data\":\"{}\",\"rect\":[0.0,0.0,0.5,0.5],\"model\":\"birefnet\"}}", m.data)
+        );
+    }
+
+    #[test]
     fn damaged_data_is_none() {
         let mut m = SegMask::from_logits(8, &[1.0; 64]);
         m.side = 9;
         assert!(m.logits().is_none(), "size mismatch");
         m.side = 100_000;
         assert!(m.logits().is_none(), "absurd size");
-        assert!(SegMask { side: 8, data: "not base64 !".into(), rect: None, grid: None }.logits().is_none());
+        assert!(SegMask { side: 8, data: "not base64 !".into(), rect: None, model: None, grid: None }.logits().is_none());
         assert!(SegMask { rect: Some([0.5, 0.0, 0.2, 1.0]), ..SegMask::from_logits(2, &[0.0; 4]) }.bounds().is_none());
     }
 
@@ -269,7 +347,7 @@ mod tests {
     /// a stray value (issue #2154).
     #[test]
     fn stray_grid_is_never_written_outside_the_interner() {
-        let empty = SegMask { side: 4, data: String::new(), rect: None, grid: None };
+        let empty = SegMask { side: 4, data: String::new(), rect: None, model: None, grid: None };
         let stray = SegMask { grid: Some(3), ..empty.clone() };
         assert_eq!(serde_json::to_string(&stray).unwrap(), "{\"side\":4,\"data\":\"\"}");
         assert_eq!(serde_json::to_string(&stray).unwrap(), serde_json::to_string(&empty).unwrap());

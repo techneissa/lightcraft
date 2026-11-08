@@ -84,18 +84,23 @@ const MODULES: &[Module] = &[
     Module {
         src: include_str!("wgsl/spot.wgsl"),
         bindings: &[("img", true, "f32"), ("pts", false, "f32"), ("al", true, "f32"), ("sp", true, "f32"), ("df", true, "f32"), ("wt", true, "f32")],
-        entries: &["spot_prep", "spot_apply", "spot_score"],
+        entries: &["spot_prep", "spot_apply", "spot_score", "spot_patch"],
     },
     Module { src: include_str!("wgsl/hist.wgsl"), bindings: &[("px", false, "u32"), ("bins", true, "atomic<u32>")], entries: &["histogram"] },
     Module {
         src: include_str!("wgsl/mask.wgsl"),
         bindings: &[("img", false, "f32"), ("log_l", false, "f32"), ("aux", false, "f32"), ("c", true, "f32"), ("alpha", true, "f32")],
-        entries: &["shape", "combine", "finalize"],
+        entries: &["shape", "combine", "finalize", "stroke"],
     },
     Module {
         src: include_str!("wgsl/present.wgsl"),
         bindings: &[("px", false, "u32"), ("dst", true, "u32"), ("count", true, "atomic<u32>")],
         entries: &["unwritten", "pad_rows"],
+    },
+    Module {
+        src: include_str!("wgsl/fit.wgsl"),
+        bindings: &[("px", false, "u32"), ("f", true, "f32"), ("out", true, "u32")],
+        entries: &["unpack_rgb8", "pack_rgb8"],
     },
     Module {
         src: include_str!("wgsl/geom.wgsl"),
@@ -420,6 +425,23 @@ fn constants() -> String {
     s += &format!("const EYE_WORDS: u32 = {}u;\n", lightcraft_pipeline::redeye::EYE_WORDS);
     use lightcraft_pipeline::masks::{AUTO_TOL_CHROMA, AUTO_TOL_EV};
     s += &format!("const AUTO_TOL_EV: f32 = {AUTO_TOL_EV:?};\nconst AUTO_TOL_CHROMA: f32 = {AUTO_TOL_CHROMA:?};\n");
+    {
+        use lightcraft_pipeline::recolor::{
+            DARK_FADE, GREY_CHROMA, HUE_ONLY_CHROMA, LIGHT_FADE, MAX_CHROMA_RATIO, MAX_HUE_OFFSET, MIN_CHROMA, MIN_REF_L,
+        };
+        let r = lightcraft_pipeline::finish::MASK_RECOLOR;
+        s += &format!("const MASK_RECOLOR: u32 = {r}u;\nconst RC_GREY0: f32 = {:?};\nconst RC_GREY1: f32 = {:?};\n", GREY_CHROMA[0], GREY_CHROMA[1]);
+        s += &format!("const RC_MIN_C0: f32 = {:?};\nconst RC_MIN_C1: f32 = {:?};\n", MIN_CHROMA[0], MIN_CHROMA[1]);
+        let [h0, h1, h2, h3] = HUE_ONLY_CHROMA;
+        s += &format!(
+            "const RC_HUE_C0: f32 = {h0:?};\nconst RC_HUE_C1: f32 = {h1:?};\nconst RC_HUE_C2: f32 = {h2:?};\nconst RC_HUE_C3: f32 = {h3:?};\n"
+        );
+        s += &format!("const RC_DARK0: f32 = {:?};\nconst RC_DARK1: f32 = {:?};\n", DARK_FADE[0], DARK_FADE[1]);
+        s += &format!("const RC_LIGHT0: f32 = {:?};\nconst RC_LIGHT1: f32 = {:?};\n", LIGHT_FADE[0], LIGHT_FADE[1]);
+        s += &format!(
+            "const RC_MAX_CHROMA: f32 = {MAX_CHROMA_RATIO:?};\nconst RC_MAX_HUE: f32 = {MAX_HUE_OFFSET:?};\nconst RC_MIN_L: f32 = {MIN_REF_L:?};\n"
+        );
+    }
     s += &format!("const SHADOW_TINT_K: f32 = {:?};\n", lightcraft_pipeline::colorops::SHADOW_TINT);
     s += &format!("const GAMUT_WARN: f32 = {:?};\n", lightcraft_pipeline::finish::GAMUT_WARN);
     s += &format!("const NCAND: u32 = {}u;\n", lightcraft_pipeline::spots::candidates(1.0).len());
@@ -779,6 +801,7 @@ impl Gpu {
     /// earlier failure in the same render nothing more is submitted. `T` is always a 32-bit type
     /// at the call sites (the copy and the readback tail are defined in 32-bit words).
     pub fn finish_and_read<T: bytemuck::Pod>(&self, mut enc: wgpu::CommandEncoder, src: &Buf, len: usize) -> Vec<T> {
+        READBACKS.with(|r| r.set((r.get().0.wrapping_add(1), r.get().1.wrapping_add(len as u64 * 4))));
         let zeros = || vec![<T as bytemuck::Zeroable>::zeroed(); len];
         if failed() {
             return zeros();
@@ -1005,6 +1028,17 @@ pub(crate) enum FailKind {
 pub(crate) struct Failure {
     pub kind: FailKind,
     pub reason: String,
+}
+
+thread_local! {
+    /// (readbacks, bytes asked for) by this thread's renders so far.
+    static READBACKS: std::cell::Cell<(u64, u64)> = const { std::cell::Cell::new((0, 0)) };
+}
+
+/// Readbacks (device buffer to host memory) this thread's renders have made, and the bytes they asked for: a test counts what a
+/// render reads back (a mask evaluated on the CPU reads the whole image).
+pub fn readbacks() -> (u64, u64) {
+    READBACKS.with(std::cell::Cell::get)
 }
 
 thread_local! {

@@ -41,7 +41,7 @@ fn a_camera_profile_replaces_the_raw_colour_model_when_decoding() {
     let dng = crate::tests_xmp::synthetic_dng_with(None, Default::default());
     let (plain, plain_info) = crate::files::load_bytes(&dng, 64).unwrap();
     let p = swapping_profile("Swap");
-    let (with, info) = crate::files::load_bytes_with(&dng, 64, Some(&p)).unwrap();
+    let (with, info) = crate::files::load_bytes_with(&dng, 64, crate::media::LoadOptions::default(), Some(&p)).unwrap();
     let (a, b) = (mean_rgb(&plain), mean_rgb(&with));
     assert!((a[0] - b[0]).abs() > 1e-3 || (a[2] - b[2]).abs() > 1e-3, "the profile changes the colour: {a:?} vs {b:?}");
     // white balance at render time works from the profile's matrices
@@ -59,13 +59,13 @@ fn a_profile_without_a_tone_curve_keeps_the_photos_contrast() {
     raw.color.profile.tone_curve = ToneCurve::from_tag(&[0.0, 0.0, 0.18, 0.3, 1.0, 1.0]);
     let dng = lightcraft_raw::write_dng(&raw, &Default::default()).unwrap();
     // a chart-style profile (no curve) keeps the file's curve
-    let (_, info) = crate::files::load_bytes_with(&dng, 64, Some(&swapping_profile("Swap"))).unwrap();
+    let (_, info) = crate::files::load_bytes_with(&dng, 64, crate::media::LoadOptions::default(), Some(&swapping_profile("Swap"))).unwrap();
     let tone = info.camera_tone.expect("the file's tone curve stays");
     assert!((tone.apply(0.18) - 0.3).abs() < 0.01, "{}", tone.apply(0.18));
     // a profile with a curve of its own uses that one (18 % → 45 %)
     let mut curved = swapping_profile("Curved");
     curved.color.profile.tone_curve = ToneCurve::from_tag(&[0.0, 0.0, 0.18, 0.45, 1.0, 1.0]);
-    let (_, info) = crate::files::load_bytes_with(&dng, 64, Some(&curved)).unwrap();
+    let (_, info) = crate::files::load_bytes_with(&dng, 64, crate::media::LoadOptions::default(), Some(&curved)).unwrap();
     let tone = info.camera_tone.expect("the profile's tone curve");
     assert!((tone.apply(0.18) - 0.45).abs() < 0.01, "{}", tone.apply(0.18));
 }
@@ -328,7 +328,7 @@ fn smart_previews_are_built_without_the_imported_camera_profile() {
     let dng = std::fs::read(dir.join("files").join("IMG_0003.dng")).unwrap();
     let edge = SourceLevel::Preview.max_edge();
     let plain = mean_rgb(&crate::files::load_bytes(&dng, edge).unwrap().0);
-    let with = mean_rgb(&crate::files::load_bytes_with(&dng, edge, Some(&swapping_profile("Swap"))).unwrap().0);
+    let with = mean_rgb(&crate::files::load_bytes_with(&dng, edge, crate::media::LoadOptions::default(), Some(&swapping_profile("Swap"))).unwrap().0);
     assert!(distance(got, plain) < distance(got, with), "the proxy has the file's own colour: {got:?}, plain {plain:?}, profiled {with:?}");
     // nor from the file developed with the profile
     s.media.forget(id);

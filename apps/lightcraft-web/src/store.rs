@@ -146,9 +146,9 @@ impl Originals {
         let s = self.clone();
         // (an imported camera profile is not applied on the web, as in the render worker: a raw keeps its own colour,
         // whether it decodes in a worker or inline when workers are unavailable)
-        let loader: FileLoader = Arc::new(move |path: &str, max_edge: usize, with: lightcraft_engine::media::RawDecode<'_>| {
+        let loader: FileLoader = Arc::new(move |path: &str, max_edge: usize, options, with: lightcraft_engine::media::RawDecode<'_>| {
             let bytes = s.get(path).ok_or_else(|| format!("{path}: the original is still loading from browser storage"))?;
-            load_bytes_decoded(&bytes, max_edge, lightcraft_engine::media::RawDecode { dcp: None, outliers: with.outliers })
+            load_bytes_decoded(&bytes, max_edge, options, lightcraft_engine::media::RawDecode { dcp: None, outliers: with.outliers })
         });
         let s = self.clone();
         let probe: FileProbe = Arc::new(move |path: &str| {
@@ -285,15 +285,16 @@ mod tests {
             color: ColorData { illuminant: [21, 0], color_matrix: [Some(swap), None], ..Default::default() },
         };
         assert_ne!(
-            lightcraft_engine::files::load_bytes_with(&dng, 64, Some(&profile)).unwrap().0.data,
-            lightcraft_engine::files::load_bytes_with(&dng, 64, None).unwrap().0.data,
+            lightcraft_engine::files::load_bytes_with(&dng, 64, Default::default(), Some(&profile)).unwrap().0.data,
+            lightcraft_engine::files::load_bytes_with(&dng, 64, Default::default(), None).unwrap().0.data,
             "the profile changes a raw's colour where it is applied"
         );
         let store = Originals::default();
         store.insert("h1", Arc::from(dng));
         let (loader, _) = store.hooks();
-        let with = loader("web/h1/a.dng", 64, lightcraft_engine::media::RawDecode { dcp: Some(&profile), outliers: false }).unwrap();
-        let without = loader("web/h1/a.dng", 64, Default::default()).unwrap();
+        let with =
+            loader("web/h1/a.dng", 64, Default::default(), lightcraft_engine::media::RawDecode { dcp: Some(&profile), outliers: false }).unwrap();
+        let without = loader("web/h1/a.dng", 64, Default::default(), Default::default()).unwrap();
         assert_eq!(with.0.data, without.0.data, "the web loader leaves it out");
     }
 

@@ -2,7 +2,8 @@
 //!
 //! The full `ci` builds the workspace four ways (clippy, heif, tests, wasm) plus the CLI for the
 //! parity check, ~23 minutes cold. `--quick` looks at what changed since the merge base with
-//! `origin/main` (or `--base REF`), committed or not, and runs:
+//! `mine/custom` when the fork's remote-tracking branch exists, else `origin/main` (or
+//! `--base REF`), committed or not, and runs:
 //!
 //! - fmt, layers, assets, roots: always (seconds);
 //! - clippy on the whole workspace (check builds only; catches callers broken by an API change);
@@ -144,15 +145,19 @@ fn parse_paths_z(out: &str) -> impl Iterator<Item = Changed> + '_ {
     out.split('\0').filter(|p| !p.is_empty()).map(|p| Changed { path: p.to_owned(), gone: false })
 }
 
-/// The files changed since the merge base with `base` (default `origin/main`, else `main`):
+/// The ref to measure against when `--base` is not given: the fork's pushed `mine/custom` when it
+/// exists (so only unpushed work counts), else upstream `origin/main`, else `main`.
+fn default_base(exists: impl Fn(&str) -> bool) -> Option<&'static str> {
+    ["mine/custom", "origin/main", "main"].into_iter().find(|b| exists(b))
+}
+
+/// The files changed since the merge base with `base` (default: see `default_base`):
 /// committed, staged, unstaged and untracked. Returns the base description and the files.
 pub fn changed_files(root: &Path, base: Option<&str>) -> Result<(String, Vec<Changed>), String> {
     let base = match base {
         Some(b) => b.to_owned(),
-        None => ["origin/main", "main"]
-            .into_iter()
-            .find(|b| git(root, &["rev-parse", "--verify", "--quiet", &format!("{b}^{{commit}}")]).is_ok())
-            .ok_or("no origin/main or main to compare with; pass --base REF")?
+        None => default_base(|b| git(root, &["rev-parse", "--verify", "--quiet", &format!("{b}^{{commit}}")]).is_ok())
+            .ok_or("no mine/custom, origin/main or main to compare with; pass --base REF")?
             .to_owned(),
     };
     let merge_base = git(root, &["merge-base", "HEAD", &base])?.trim().to_owned();
@@ -199,6 +204,15 @@ mod tests {
         .into_iter()
         .map(|(a, b)| (a.to_owned(), b.to_owned()))
         .collect()
+    }
+
+    #[test]
+    fn default_base_prefers_the_forks_pushed_branch() {
+        let with = |refs: &'static [&'static str]| default_base(move |b| refs.contains(&b));
+        assert_eq!(with(&["mine/custom", "origin/main", "main"]), Some("mine/custom"));
+        assert_eq!(with(&["origin/main", "main"]), Some("origin/main"));
+        assert_eq!(with(&["main"]), Some("main"));
+        assert_eq!(with(&[]), None);
     }
 
     #[test]

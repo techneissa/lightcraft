@@ -17,5 +17,9 @@ miniz_oxide = { workspace = true }
 # fork: portrait retouching (fork/retouch-foundation.md)
 lightcraft-retouch = { workspace = true }
 
+[features]
+# Test-only hook: count the calls of `DevelopSettings::hash64` on this thread (`hash64_calls`). Never enabled in a product build.
+test-hooks = []
+
 [dev-dependencies]
 proptest = { workspace = true }

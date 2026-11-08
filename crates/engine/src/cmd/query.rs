@@ -24,7 +24,12 @@ pub fn photo_summary(p: &Photo) -> Value {
         "edited": p.is_edited(),
         "title": p.meta.title,
         "keywords": p.meta.keywords,
-        "camera": p.meta.camera,
+        "camera": p.meta.effective_camera(),
+        "lens": p.meta.effective_lens(),
+        // the camera and lens the file records, when an edit shows other names (null otherwise)
+        "fileCamera": p.meta.exif_overridden(lightcraft_catalog::ExifField::Camera).then_some(&p.meta.camera),
+        "fileLens": p.meta.exif_overridden(lightcraft_catalog::ExifField::Lens).then_some(&p.meta.lens),
+        "exifEdited": !p.meta.exif.is_empty(),
         "deleted": p.deleted,
         "copyOf": p.copy_of.map(|c| c.0),
         "copyName": p.copy_name,
@@ -120,6 +125,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 "selection": s.selection,
                 "visibleCount": n,
                 "activeMask": s.active_mask,
+                "activeComponent": s.active_part(),
                 "activeSpot": s.active_spot,
                 "undo": s.undo.last().map(|u| u.label.clone()),
                 "redo": s.redo.last().map(|u| u.label.clone()),
@@ -225,6 +231,16 @@ pub fn specs() -> Vec<CommandSpec> {
             let imported =
                 s.lut_profiles.iter().map(|p| json!({"id": p.id, "name": p.name, "group": p.group, "favorite": favorite(&p.id), "imported": true}));
             Ok(Value::Array(builtin.chain(imported).collect()))
+        }),
+        cmd!(query "profiles.local", "List Local Camera Profiles", [], None, "{camera?: a camera (`SONY ILCE-7M5` or just `ILCE-7M5`; only the usable profiles made for it)} — the profile files in the camera-profiles folder: [{id (the file name without .json), name (shown in the Profile picker), model (the Exif model it is for), valid, key (hex; changes with the file)}]. A photo uses one with `develop.profile {camera_colour: \"local\", camera_profile: id}`", always, |_, p| {
+            let camera = super::str_param(p, "camera").map(str::trim).filter(|c| !c.is_empty());
+            let list = match camera {
+                Some(camera) => crate::camera_profiles::local_profiles_for_camera(camera),
+                None => crate::camera_profiles::local_profiles(),
+            };
+            Ok(Value::Array(
+                list.iter().map(|l| json!({"id": l.id, "name": l.name, "model": l.model, "valid": l.valid(), "key": format!("{:032x}", l.key)})).collect(),
+            ))
         }),
         cmd!(query "profiles.menu", "Profile Menu", [], None, "{} — favourites, recent (newest first) and groups", always, |s, _| Ok(s.profile_menu())),
         cmd!(query "history.list", "List History", [], None, "{id?} — returns {history: labels oldest first, cursor: index of the step the settings are at (later steps can be returned to), versions}", has_active, |s, p| {

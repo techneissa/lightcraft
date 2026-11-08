@@ -31,13 +31,13 @@ cited here still exists. Formerly docs/parity.md.
 | C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 41 | 5 | 3 | 1 | 25/28 (89%) | 13/14 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 42 | 5 | 3 | 1 | 25/28 (89%) | 14/15 (93%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
-| I. Remove / healing (REM) | 8 | 1 | 2 | 2 | 4/4 (100%) | 2/3 (67%) |
+| I. Remove / healing (REM) | 9 | 2 | 1 | 2 | 4/4 (100%) | 3/4 (75%) |
 | J. Red eye (EYE) | 2 | 0 | 0 | 0 | — | 1/1 (100%) |
-| K. Masking (MASK) | 15 | 5 | 5 | 0 | 7/8 (88%) | 7/7 (100%) |
-| L. Presets (PRE) | 6 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
+| K. Masking (MASK) | 16 | 5 | 5 | 0 | 7/8 (88%) | 7/7 (100%) |
+| L. Presets (PRE) | 7 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
 | M. Versions & history (VER) | 5 | 0 | 0 | 0 | 1/1 (100%) | 3/3 (100%) |
 | N. Copy / paste / sync (SYNC) | 5 | 0 | 0 | 0 | 3/3 (100%) | 1/1 (100%) |
 | O. Merge (MERGE) | 3 | 1 | 0 | 0 | — | — |
@@ -47,15 +47,15 @@ cited here still exists. Formerly docs/parity.md.
 | S. Export (EXP) | 14 | 5 | 0 | 0 | 7/7 (100%) | 6/7 (86%) |
 | T. Share (SHARE) | 0 | 0 | 0 | 4 | — | — |
 | U. Map & location (MAP) | 0 | 1 | 1 | 0 | — | 0/1 (0%) |
-| V. Preferences (PREF) | 6 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
+| V. Preferences (PREF) | 7 | 2 | 2 | 2 | 1/1 (100%) | 4/5 (80%) |
 | W. Cloud & AI infrastructure (CLOUD / AI) | 1 | 0 | 1 | 2 | — | — |
 | X. Cross-cutting behaviours (BEHAV) | 23 | 6 | 1 | 1 | 8/8 (100%) | 7/10 (70%) |
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
-| Z. Keyboard shortcuts (desktop) | 78 | 4 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
+| Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 417 | 70 | 57 | 35 | 192/203 (95%) | 146/162 (90%) |
+| **Total** | 423 | 71 | 56 | 35 | 193/203 (95%) | 148/164 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.1%** of 544 in-scope rows — P0 97.3% of 203 · P1 94.1% of 162 · P2 56.7% of 178.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 550 in-scope rows — P0 97.5% of 203 · P1 94.2% of 164 · P2 57.5% of 181.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -270,8 +270,8 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-REM-HEAL | Heal | P0 | ✅ | `cmd:spot.add` (`mode: heal`), `crates/pipeline/src/spots.rs` | Zero-feather edges use a hard step; zero-opacity spots preserve all pixels, including exact-radius pixels and image corners |
 | LR-REM-CLONE | Clone | P0 | ✅ | `cmd:spot.add` (`mode: clone`), `crates/pipeline/src/spots.rs` | Hard-edge source copying and unchanged radius pixels regression-tested at two output sizes |
 | LR-REM-GEN | Generative remove | OOS | 🚫 | | |
-| LR-REM-DETECT | Object detection for remove | P2 | ⬜ | | |
-| LR-REM-BRUSH-PARAMS | Brush size / feather / opacity | P0 | ✅ | `cmd:spot.add` (`size`, `feather`, `opacity`), `cmd:brush.smaller`, `cmd:brush.larger`, `cmd:brush.featherLess`, `cmd:brush.featherMore`, `crates/ui-egui/src/panels/right.rs` | Size / Feather / Opacity sliders (for new spots and the selected one); `[` `]` size, ⇧`[` ⇧`]` feather (also the Masking brush) |
+| LR-REM-DETECT | Object detection for remove | P2 | 🟡 | `cmd:spot.object`, `cmd:spot.objectStroke`, `cmd:spot.fromMask`, `cmd:spot.findPeople`, `cmd:spot.findWires`, `cmd:spot.candidates`, `cmd:spot.selectCandidate`, `cmd:spot.removeCandidates`, `crates/pipeline/src/spot_area.rs`, `crates/engine/src/spot_area.rs`, `crates/pipeline/src/find/mod.rs`, `crates/engine/src/find_removals.rs` | Remove panel ▸ Object: click an object (SAM 3; ⇧-click adds, ⌥-click leaves a part out) or brush loosely over it, and one spot in the object's shape takes it out, grown by Expand; a mask's menu ▸ Remove This Area does the same for any mask. These spots have no source and fill with LaMa unless Classic is picked; the shape is stored with the spot, so previews, exports and the GPU path match. Find People and Find Wires outline what they find (SAM 3's "person" and "power line" masks; without the model, rough shapes under faces and a pure-Rust line detector); Remove or Remove All takes each out as one spot in its shape, in one undo step. The main subject is never proposed unless asked. Without SAM 3 a loose stroke stays a brush-shaped spot; no automatic detection of other distraction kinds |
+| LR-REM-BRUSH-PARAMS | Brush size / feather / opacity | P0 | ✅ | `cmd:spot.add` (`size`, `feather`, `opacity`), `cmd:brush.smaller`, `cmd:brush.larger`, `cmd:brush.featherLess`, `cmd:brush.featherMore`, `crates/ui-egui/src/panels/right.rs` | Size / Feather / Opacity sliders (for new spots and the selected one); `[` `]` size, ⇧`[` ⇧`]` feather (also the Masking brush); ⌃⌥-drag or Alt+right-drag on the photo resizes the brush (sideways size, up / down feather; Masking brush and Remove tool), right-click opens a Size / Feather / Flow (Opacity) panel at the pointer, digit keys set Flow (Opacity), 1-9 = 10-90 %, 0 = 100 %, two digits an exact value; `crates/ui-egui/src/panels/detail/brush_resize.rs`, `crates/ui-egui/src/panels/detail/brush_panel.rs` |
 | LR-REM-SPOT-EDIT | Edit existing spots | P0 | ✅ | `cmd:spot.select`, `cmd:spot.update`, `cmd:spot.refreshSource`, `cmd:spot.delete`, `cmd:view.toolOverlay` | click a pin to select, drag target or source, ⌫ deletes the selected spot, `/` picks another source; automatic sources are resolved when the spot is added; Tool Overlay (Remove panel, View menu, ⇧H) shows the spots' pins Auto (pointer over the photo, hidden while painting) / Always / Selected / Never, and a hidden spot can't be grabbed (#224) |
 | LR-REM-VISUALIZE | Visualize spots | P1 | ✅ | `cmd:view.visualizeSpots` | |
 | LR-REM-PEOPLE | Remove people (generative) | OOS | 🚫 | | |
@@ -279,6 +279,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-REM-DUST | Dust detection | P2 | ✅ | `cmd:spot.findDust`, `crates/pipeline/src/dust.rs` | Remove panel ▸ Find Dust Spots: small, soft, round dark spots on smooth areas become heal spots (sensitivity; one undo step); Visualize Spots for checking by eye |
 | LR-REM-BLEMISH | Find blemishes on faces (beyond Lightroom) | P2 | ✅ | `cmd:spot.findBlemishes`, `crates/pipeline/src/blemish.rs`, `crates/engine/src/cmd/face_detect.rs` | Remove panel ▸ Find Blemishes: with the YuNet detector installed, small darker-or-redder round spots on each face's skin (eyes, brows, nostrils and mouth cut out around the landmarks) become heal spots (one undo step); faces under 160 px and faces with more than 12 candidates (stubble, freckles) get none, at most 6 per face; sensitivity 0–100. Classical, no learned model beyond the detector; not a Lightroom feature |
 | LR-REM-SYNC | Sync spots | P1 | ✅ | `cmd:develop.copy` (`groups`), `crates/develop/src/presets.rs` | |
+| LR-REM-SPOT-ROWS | A row for each spot | P1 | ✅ | `cmd:spot.select`, `cmd:spot.visible`, `cmd:spot.circle`, `cmd:spot.delete`, `crates/ui-egui/src/panels/right/spot_rows.rs` | Remove panel ▸ one row per spot ("Heal 2"): click selects, the eye hides or shows the effect (preview, export and GPU; saved with the photo), the circle menu overrides Tool Overlay for that spot (Use Global, Auto, Always, Selected, Never), the trash can deletes; each is one undo step; the list scrolls inside seven rows (#71). Tool Overlay Never also hides the brush rings and the painting fill (#69) |
 
 ## J. Red eye (EYE)
 
@@ -296,7 +297,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-MASK-SKY | Select sky | P2 | 🟡 | `cmd:mask.add` (`sky`), `crates/pipeline/src/masks.rs` (`Mattes`), `crates/raw/src/semantic.rs` | heuristic; a photo that carries a sky matte (DNG semantic mask, e.g. iPhone ProRAW) uses it instead, through orientation / crop / lens corrections, preview = export (checked on one CC0 iPhone 12 Pro ProRAW and synthetic files) |
 | LR-MASK-BACKGROUND | Select background | P2 | 🟡 | `cmd:mask.add` (`background`) | inverse of the subject mask (heuristic, or the photo's person mattes) |
 | LR-MASK-OBJECTS | Object selection | P2 | 🟡 | `cmd:mask.add` (`object`, `prompt`), `cmd:mask.objectPoint`, `cmd:mask.refineDetail`, `cmd:segment.prepare`, `cmd:segment.model.status`, `cmd:segment.model.download`, `cmd:segment.model.cancel`, `cmd:app.openSamModelFolder`, `crates/segment`, `crates/engine/src/segment.rs` | SAM 3 in pure Rust (candle; Metal on macOS, CPU elsewhere): Object tile → click to include, ⌥-click to leave out; Describe tile → a text prompt selects every instance ("sky", "the red car"); both also as Add/Subtract/Intersect components; + / − under the selected mask; comma lists (`car, road`); a zoomed-in detail pass for 5–10× finer edges on small objects; per-selection Edge (hard ↔ soft); the stored grid is enlarged along the photo's edges (a guided filter of its logits by log luminance, so no outline spills onto the background under a raised Exposure, #3272). The model runs on its own worker thread (the UI never waits; panics become errors; a job that fails on the Mac's GPU runs again on the CPU, which then serves the rest of the session, #1974), is unloaded after 10 min idle, and is optional: the segmentation is stored with the mask (288² logits), so renders and exports never need it. Weights are never bundled (SAM License): without them the app offers a consented background download (mirrors, resume, timeouts, SHA-256) — **but no default download location is configured yet** (users set `LIGHTCRAFT_SAM3_MIRRORS` or install by hand: the dialog names the three files, opens the configured model folder with the host opener, preserves setup on an open error, and links docs/ai-masks.md; Meta's original checkpoint installed in place of the Hugging Face one is named as such, #3378). Not verified against Lightroom's Select Object; no brush/box object mode; the first click on a photo waits for its analysis (~4 s on an M4 Pro, much longer on CPU) |
-| LR-MASK-PEOPLE | People parts | P2 | ⬜ | | shape exists (no UI): uses the photo's person / skin / hair / teeth / glasses mattes when it carries them (DNG semantic masks), else the subject heuristic |
+| LR-MASK-PEOPLE | People parts | P2 | ⬜ | `cmd:parsing.run`, `cmd:parsing.mask`, `crates/parsing` | shape exists (no UI): uses the photo's person / skin / hair / teeth / glasses mattes when it carries them (DNG semantic masks), else the subject heuristic. Fork: `crates/parsing` makes per-person part masks (Entire Person, Facial / Body Skin, Hair, Eyebrows, Eye Whites, Iris, Lips, Teeth, Clothes Top / Bottom / Dress / Shoes / Hat / Bag, Others) and 478 face landmarks with two downloadable model sets (`cmd:parsing.modelSet`, `cmd:parsing.download`), cached per photo; the Select People UI is not built yet |
 | LR-MASK-LANDSCAPE | Landscape classes | P2 | ⬜ | | shape exists, evaluates empty |
 | LR-MASK-BRUSH | Brush mask | P0 | 🟡 | `cmd:tool.brush`, `cmd:mask.brushStroke` (`autoMask`), `crates/pipeline/src/masks.rs`, `crates/ui-egui/src/brush_live.rs` | size/feather/flow/density/erase; Create New Mask starts a separate brush in paint mode; the stroke shows while the button is held with the committed stroke's dab spacing, feather and flow, so fast strokes have no gaps (#517); with the mask overlay hidden (O / the eye, or after a mask slider hid it) or a colour overlay at opacity 0 it is not tinted while painting either, so dodging and burning is judged on the photo, and its effect shows once the stroke is committed (#2549); coverage builds up by passes, not hold time (holding the brush still adds nothing, live or committed, #518); oversized path segments skip intermediate dabs instead of allocating a million samples; Auto Mask: dabs weighted by similarity to the colour under the dab centre, refined by a guided filter on luminance (CPU + GPU); ⇧-click draws a straight stroke from where the last stroke ended (`connect`), tapering size, feather and flow from that stroke's values when they changed; no A/B brushes; pen pressure (Brush ▸ Pen Pressure, on by default; `pressure` per point in `mask.brushStroke`) scales each dab's size (a tenth to all of it) and flow, live and committed alike, where winit reports a pen force (Windows; not macOS / Linux tablets yet); no tilt |
 | LR-MASK-LINEAR | Linear gradient | P0 | ✅ | `cmd:tool.linear`, `cmd:mask.update`, `crates/pipeline/src/mask_space.rs` | gradients, brushes and AI selections stay on the photo's content when lens corrections, Upright, Transform or Rotate Left / Right change (`Mask.on_photo`; CPU and GPU) |
@@ -316,6 +317,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-MASK-UPDATE | Recompute AI masks | P2 | ⬜ | | |
 | LR-MASK-SYNC | Copy masks to other photos | P1 | ✅ | `cmd:develop.copy` (`groups`) | |
 | LR-MASK-ADAPTIVE | Adaptive presets | P2 | ⬜ | | |
+| LR-MASK-RECOLOR | Recolor a masked area | P2 | ✅ | `cmd:mask.recolor`, `cmd:mask.recolorPick`, `crates/pipeline/src/recolor/mod.rs`, `crates/ui-egui/src/panels/mask_recolor.rs` | beyond Lightroom (no equivalent): the area takes a picked colour (picker, hex, eyedropper on this or another photo) and keeps its shading, in OkLab against the area's mean measured on a fixed proxy, so preview, export and GPU match |
 
 ## L. Presets (PRE)
 
@@ -329,6 +331,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-PRE-PREMIUM | Built-in presets (own) | P2 | ✅ | `crates/engine/src/presets.rs` | 41 own-authored presets in 10 groups (Color, Film, B&W incl. toners, Portrait, Landscape, Urban, Food, Seasons, Vintage, Style) |
 | LR-PRE-RECOMMENDED | Community recommendations | OOS | 🚫 | | |
 | LR-PRE-ONIMPORT | Apply during import | P2 | ✅ | `cmd:library.import` (`preset`) | chosen in the import review; raw / per-camera defaults in Settings |
+| LR-PRE-LEARNED | Learn My Edits: profiles trained on your own edits (beyond Lightroom) | P2 | ✅ | `cmd:learn.create`, `cmd:learn.apply`, `cmd:learn.status`, `crates/learn` | Photo ▸ Learn My Edits…: a profile per kind of photography learns White Balance, Tone, Presence, Color Mixer, Color Grading and Tone Curve sliders from 10–200 edited photos (DINOv2-small features plus photo statistics, kernel ridge regression per group); held-out accuracy shown, groups without a pattern dropped, too few or disagreeing examples refused; applies as sliders in one undo step with a History step per photo; profiles export and import as `.lclearn` files. Not compared against Lightroom (it has no equivalent) |
 
 ## M. Versions & history (VER)
 
@@ -443,6 +446,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-PREF-TECHPREVIEW | Early-access toggles | P2 | ⬜ | | |
 | LR-PREF-NOTIFICATIONS | Notifications | OOS | 🚫 | | |
 | LR-PREF-DEVICE | Device settings | P2 | ⬜ | | |
+| LR-PREF-SETTINGSSYNC | Settings sync | — | ✅ | `cmd:settings.export`, `cmd:settings.import`, `cmd:settings.syncSave`, `cmd:settings.syncLoad`, `cmd:settings.syncChoose`, `crates/ui-egui/src/settings_sync.rs`, `crates/engine/src/settings_folder.rs`, `crates/ui-egui/src/dialogs/settings/sync.rs` | an extra (the reference app has no settings export): Settings ▸ Sync saves and loads all settings (appearance, keyboard shortcuts, arrangements, tool defaults, user presets) as one `.lcsettings` file or in a chosen folder shared with PhotoCraft; Keep in Sync saves on quit and offers a newer file from another Mac at start; a file from a newer LightCraft imports what this build knows and names the rest; a bad value or a damaged file changes nothing; agents give no path and can't change the folder. See `fork/settings-sync.md` |
 
 ## W. Cloud & AI infrastructure (CLOUD / AI)
 

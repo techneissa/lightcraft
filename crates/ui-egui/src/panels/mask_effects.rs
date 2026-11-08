@@ -18,13 +18,19 @@ use crate::widgets::{register, register_response};
 pub fn field_label(k: &str) -> &'static str {
     match k {
         "color_hue" | "color_sat" => "Color",
+        "recolor" | "recolor_r" | "recolor_g" | "recolor_b" | "recolor_range" | "recolor_from_r" | "recolor_from_g" | "recolor_from_b" => "Recolor",
         _ => super::masking::LOCAL.iter().find(|s| s.id == k).map_or("", |s| s.label),
     }
 }
 
 /// The choices of the New Effect Preset checklist: each slider once (Color = hue + saturation).
 fn checklist() -> Vec<&'static str> {
-    FIELDS.iter().copied().filter(|k| *k != "color_hue").collect()
+    FIELDS.iter().copied().filter(|k| *k != "color_hue" && !is_recolor_rgb(k)).collect()
+}
+
+/// Recolor's colour channels: one "Recolor" choice with its amount.
+fn is_recolor_rgb(k: &str) -> bool {
+    matches!(k, "recolor_r" | "recolor_g" | "recolor_b" | "recolor_range" | "recolor_from_r" | "recolor_from_g" | "recolor_from_b")
 }
 
 /// "Exposure +0.50 · Clarity −20" — what an effect sets, for the lists.
@@ -32,12 +38,16 @@ pub fn summary(e: &MaskEffect) -> String {
     let fields = e.field_list();
     let mut parts: Vec<String> = fx::changed_fields(&e.adjust)
         .iter()
-        .filter(|k| fields.contains(&k.as_str()) && k.as_str() != "color_hue")
+        .filter(|k| fields.contains(&k.as_str()) && k.as_str() != "color_hue" && !is_recolor_rgb(k))
         .map(|k| {
             let v = fx::get(&e.adjust, k);
             match k.as_str() {
                 "exposure" => format!("{} {:+.2}", crate::i18n::tr(field_label(k)), v),
                 "color_sat" => format!("{} {:.0}°/{:.0}", crate::i18n::tr("Color"), e.adjust.color_hue, v),
+                "recolor" => {
+                    let hex = lightcraft_pipeline::recolor::to_hex([e.adjust.recolor_r, e.adjust.recolor_g, e.adjust.recolor_b]);
+                    format!("{} {hex} {v:.0}", crate::i18n::tr("Recolor"))
+                }
                 _ => format!("{} {:+.0}", crate::i18n::tr(field_label(k)), v),
             }
         })
@@ -152,7 +162,7 @@ pub fn effect_row(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask) {
             ui.label(egui::RichText::new(crate::i18n::tr("Effect")).font(t.font(12.0)).color(t.text_label));
             let current = fx::matching_effect(&app.session, &mask.adjust);
             let label = current.as_deref().map(display_name).unwrap_or_else(|| crate::i18n::tr("Custom").to_string());
-            let r = crate::widgets::dropdown(ui, "maskEffect", &label, t.font(12.0), t.text);
+            let r = crate::widgets::dropdown(ui, "maskEffect", &label, t.font(12.0), t.text).on_hover_text(crate::i18n::tr("Choose Mask Effect"));
             if r.clicked() {
                 ui.data_mut(|d| d.insert_temp(state_id(), MenuState::default()));
             }
@@ -345,7 +355,12 @@ fn row_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, mask: &Mask, name: &str,
     ui.separator();
     run(app, ui, "Update with Current Settings", "mask.updateEffect", json!({"name": name, "id": mask.id}));
     if ui.button(crate::i18n::tr("Rename…")).clicked() {
-        crate::panels::dialogs::prompt(app, "Rename Effect Preset", "Preset name", name, "mask.renameEffect", json!({"name": name}), "to");
+        // the Manage window lists the presets with the name as a field
+        open_manage(app);
+        if let Some(Dialog::ManageEffects { selected, rename, .. }) = app.ui.dialog.as_mut() {
+            *selected = vec![name.to_string()];
+            *rename = Some((name.to_string(), name.to_string()));
+        }
         ui.close();
     }
     run(app, ui, "Duplicate", "mask.duplicateEffect", json!({"name": name}));
@@ -439,7 +454,7 @@ pub fn save_body(
                 *fields = match id {
                     "all" => list.iter().map(|k| k.to_string()).collect(),
                     "none" => Vec::new(),
-                    _ => changed.iter().filter(|k| k.as_str() != "color_hue").cloned().collect(),
+                    _ => changed.iter().filter(|k| k.as_str() != "color_hue" && !is_recolor_rgb(k)).cloned().collect(),
                 };
             }
         }
@@ -467,6 +482,9 @@ pub fn save_confirm(app: &mut LightcraftApp, name: &str, group: &str, fields: &[
     let mut keep: Vec<String> = fields.to_vec();
     if keep.iter().any(|f| f == "color_sat") {
         keep.push("color_hue".into());
+    }
+    if keep.iter().any(|f| f == "recolor") {
+        keep.extend(["recolor_r", "recolor_g", "recolor_b", "recolor_range", "recolor_from_r", "recolor_from_g", "recolor_from_b"].map(String::from));
     }
     let all = checklist().iter().all(|k| keep.iter().any(|f| f == k));
     let mut p = json!({"name": name.trim(), "group": group.trim(), "amount": amount});
@@ -503,6 +521,7 @@ pub fn manage_body(
     let effects = app.session.mask_effects.clone();
     let mut toggle_star: Option<(String, bool)> = None;
     let mut commit_rename: Option<(String, String)> = None;
+    let mut refused: Option<String> = None;
     egui::ScrollArea::vertical().id_salt("manageEffects").max_height(380.0).auto_shrink([false, true]).show(ui, |ui| {
         for (group, ix) in fx::menu_order(&effects) {
             let list: Vec<&MaskEffect> = ix
@@ -520,6 +539,7 @@ pub fn manage_body(
                     .sense(Sense::click()),
             );
             register(ui, format!("effectGroup:{group}"), h.rect);
+            let h = h.on_hover_text(crate::i18n::tr("Select This Group"));
             if h.clicked() {
                 // a click on the heading selects the group
                 *selected = list.iter().map(|e| e.name.clone()).collect();
@@ -531,15 +551,20 @@ pub fn manage_body(
                     if star.clicked() {
                         toggle_star = Some((e.name.clone(), !e.favorite));
                     }
-                    if let Some((old, text)) = rename.as_mut().filter(|(old, _)| *old == e.name) {
-                        let r = crate::text_field::TextField::singleline("field:effectRename", text).width(220.0).select_on_focus(true).show(ui);
-                        if !r.editing && r.ending.is_none() {
-                            r.response.request_focus();
-                        }
-                        if r.cancelled() {
-                            *rename = None;
-                        } else if r.committed() {
-                            commit_rename = Some((old.clone(), text.trim().to_string()));
+                    if let Some((old, mut text)) = rename.clone().filter(|(old, _)| *old == e.name) {
+                        // inline rename, as in every list: a name that is empty or another preset's is refused with the reason
+                        use crate::inline_rename::Done;
+                        let (rect, _) = ui.allocate_exact_size(vec2(240.0, 24.0), Sense::hover());
+                        let verdict = crate::inline_rename::verdict(&text, effects.iter().filter(|o| o.name != old).map(|o| o.name.as_str()));
+                        let unchanged = text.trim() == old;
+                        match crate::inline_rename::edit(ui, "field:effectRename", &mut text, rect, &verdict, unchanged) {
+                            Done::Editing => *rename = Some((old, text)),
+                            Done::Cancelled => *rename = None,
+                            Done::Save(to) => commit_rename = Some((old, to)),
+                            Done::Refused(why) => {
+                                *rename = None;
+                                refused = Some(why);
+                            }
                         }
                         return;
                     }
@@ -582,6 +607,9 @@ pub fn manage_body(
     });
     if let Some((name, on)) = toggle_star {
         let _ = app.run("mask.favoriteEffect", json!({"name": name, "favorite": on}));
+    }
+    if let Some(why) = refused {
+        app.toast(ui.ctx(), crate::i18n::tr_format!("Not renamed: {why}", why = why));
     }
     if let Some((old, to)) = commit_rename {
         *rename = None;

@@ -70,6 +70,10 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }
             let mut p = params.clone();
             p[key.as_str()] = json!(value.trim());
+            if command == "folder.rename" {
+                // the folder moves on a worker (an activity row), not on the window's thread
+                p["background"] = json!(true);
+            }
             app.run(command, p)
         }
         Dialog::CaptureTime { mode, time, days, hours, minutes, zone } => app.run(
@@ -91,7 +95,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }
             r
         }
-        Dialog::Rename { template, start } => app.run("photo.rename", json!({"template": template, "start": start})),
+        Dialog::Rename { template, start } => app.run("photo.rename", json!({"template": template, "start": start, "background": true})),
         Dialog::RenameKeyword { from, to } => app.run("keyword.rename", json!({"from": from, "to": to})),
         Dialog::RenamePerson { from, to, merge } => app.run("faces.renamePerson", json!({"from": from, "to": to.trim(), "merge": merge})),
         Dialog::KeywordTag {
@@ -141,6 +145,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             }
         }
         Dialog::DeleteKeyword { keyword, .. } => app.run("keyword.delete", json!({"keyword": keyword})),
+        Dialog::DeleteLocation { id, .. } => app.run("map.location.remove", json!({"id": id})),
         Dialog::KeywordSet { replaces, name, slots, as_new } => {
             use lightcraft_catalog::keywords::same;
             let name = name.trim();
@@ -207,6 +212,7 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         ),
         Dialog::ContactSheet { options } => app.run("app.contactSheet", json!(options)),
         Dialog::SlideshowExport { settings } => app.run("app.slideshowExport", json!(settings)),
+        Dialog::AnimatedGif { settings } => app.run("app.animatedGif", json!(settings)),
         Dialog::Print => app.run("app.print", json!({})),
         Dialog::CopySettings { groups } => app.run("develop.copy", json!({"groups": groups})),
         Dialog::PasteSettings { groups } => app.run("develop.paste", json!({"groups": groups})),
@@ -219,6 +225,14 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
         Dialog::Merge { opts } => crate::merge::start_final(app, opts),
         Dialog::Import { opts } => crate::import::start(app, opts),
         Dialog::ConfirmDelete { .. } => app.run("photo.delete", json!({})),
+        Dialog::LocalProfileSwitch { id, .. } => app.run("profiles.localSwitch", json!({"id": id})),
+        Dialog::SettingsImport => crate::settings_sync::confirm(app),
+        Dialog::SettingsReplace => crate::settings_sync::confirm_replace(app),
+        Dialog::SmartPreviewsForEditing { .. } => crate::smart_editing::build(app),
+        // on a worker: a large library would freeze the window
+        Dialog::MacosForCamera { photo, .. } => crate::macos_colour::job::start(app, *photo, true),
+        Dialog::ConfirmDeleteRejected { .. } => super::delete_rejected::confirm(app),
+        d @ Dialog::DeletePermanently { .. } => super::delete_permanently::confirm(app, d),
         Dialog::MovePhotos { ids, folder, dont_ask, library, .. } => {
             // another library opened meanwhile (from the menu bar, an agent): these numbers are
             // other photos there

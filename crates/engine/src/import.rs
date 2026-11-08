@@ -40,6 +40,7 @@ mod defaults;
 mod files;
 mod job;
 mod scan;
+mod starting_colour;
 mod types;
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -61,6 +62,13 @@ pub use scan::{
 };
 #[cfg(test)]
 use scan::{library_files, library_hashes};
+pub use starting_colour::CHECKING_LABEL as MACOS_CHECKING_LABEL;
+#[cfg(test)]
+pub(crate) use starting_colour::tests as starting_colour_tests;
+pub(crate) use starting_colour::{
+    GateRef as MacosGate, Known as MacosKnown, check_later as check_macos_later, current as macos_gate, macos_gates_known,
+};
+pub use starting_colour::{Skip as MacosSkip, StartingColour};
 pub use types::{
     Duplicate, FileFacts, ImportCandidate, ImportMode, ImportOptions, ImportReport, ImportUprightMode, ImportWarning, ImportWarningCode, Kept, Moved,
     OnDeleted, Organize,

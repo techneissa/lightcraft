@@ -1,0 +1,14 @@
+# Lessons (orchestrator only; read at session start)
+
+One line each: symptom → cause → guard, at most 250 characters. Keep at most 40 lines: merge lessons or turn them into checks, and prune one when a script, check or skill line guards it. Agents never load this file; a lesson they need goes into their skill or brief as one line.
+
+- A failing test's name was lost (2026-11-02) → the run was piped through `tail -25` → write long runs to a log file in the scratch folder and read the failures from the file.
+- A bench's "after" run reran the "before" binary (2026-11-07) → cargo in a shared target reuses another worktree's build when your files are older → check the log says `Compiling`, or `touch` the crate sources first.
+- No timing tests: a test never asserts how long something took (techneissa, 2026-11-05); wait on a condition instead.
+- Fork CI red on a test the Mac never compiles (2026-11-05) → a signature change missed a `cfg(not(target_os = "macos"))` caller → after changing a signature, grep its callers inside `cfg(not(...macos))` blocks too.
+- Lanes ended their turn while a build ran and stopped (2026-11-08) → nothing wakes a lane for its own background build → every brief: never end the turn while a build or run you wait on is still going.
+- Test copies of the app popped up "A New Build Is Ready" on techneissa's screen (2026-11-08) → the update check ran at every start → agent runs use `--control` or `LIGHTCRAFT_NO_UPDATE_CHECK=1`, and headless snapshots for pictures.
+- A lane re-downloaded both people-parsing model sets for a test (2026-11-08) → its test fetched real files into a scratch folder → tests read models from the shared ArtCraft models folder and skip when missing; download tests use a fake server.
+- Load reached 100–170 with 6 lanes building (2026-11-08) → each cargo used all 12 cores → every lane builds with `CARGO_BUILD_JOBS=4`.
+- Two lanes measured or tested the other tree's code (2026-11-09) → worktrees sharing one build folder link each other's crates (cargo keys a crate by its path inside the repo) → one build folder per worktree at a time; after switching trees, touch the sources and check the binary holds your code.
+- A merged batch failed the settings-sync test (2026-11-09) → a lane added `ui.json` keys without deciding sync for them → a new `UiState` field goes into `settings_sync::rules` in the same change.

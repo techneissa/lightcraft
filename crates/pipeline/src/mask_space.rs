@@ -169,13 +169,14 @@ fn remap(m: &mut Mask, fwd: &dyn Fn(Point) -> Point, back: &dyn Fn(Point) -> Poi
                 hint.iter_mut().chain(exclude.iter_mut()).for_each(|p| *p = fwd(*p));
                 remap_segs(seg, detail, fwd, back);
             }
-            MaskShape::Prompt { seg, detail, .. } => remap_segs(seg, detail, fwd, back),
+            // (Subject, Sky and Background keep the segmentation they were computed with, like Prompt)
+            MaskShape::Prompt { seg, detail, .. }
+            | MaskShape::Subject { seg, detail, .. }
+            | MaskShape::Sky { seg, detail, .. }
+            | MaskShape::Background { seg, detail, .. } => remap_segs(seg, detail, fwd, back),
             // computed from the photo at each render (its mattes follow the warp), or colours,
             // tones and depths, which have no place (a colour range's samples are colours)
-            MaskShape::Subject
-            | MaskShape::Sky
-            | MaskShape::Background
-            | MaskShape::People { .. }
+            MaskShape::People { .. }
             | MaskShape::Landscape { .. }
             | MaskShape::ColorRange { .. }
             | MaskShape::LuminanceRange { .. }
@@ -356,8 +357,8 @@ mod tests {
         m.components.push(comp(MaskShape::Object {
             hint: vec![Point::new(1e300, -1e300)],
             exclude: Vec::new(),
-            seg: Some(SegMask { side: 1024, data: "not base64".into(), rect: Some([f64::NAN, 0.0, 2.0, -1.0]), grid: None }),
-            detail: vec![SegMask { side: 0, data: String::new(), rect: None, grid: None }],
+            seg: Some(SegMask { side: 1024, data: "not base64".into(), rect: Some([f64::NAN, 0.0, 2.0, -1.0]), model: None, grid: None }),
+            detail: vec![SegMask { side: 0, data: String::new(), rect: None, model: None, grid: None }],
             edge: 0.0,
         }));
         m.on_photo = false;

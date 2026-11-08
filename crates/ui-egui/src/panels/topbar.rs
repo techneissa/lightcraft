@@ -5,24 +5,27 @@ use serde_json::json;
 
 use crate::LightcraftApp;
 use crate::icons::{Icon, paint};
+use crate::panels::topbar_items::shown;
 use crate::theme::Tokens;
 use crate::widgets::{icon_button, register};
 
 /// The bar doubles as the window's title bar: dragging its empty space moves the window and a
 /// double-click acts as the system setting says. Made before the bar's widgets so they win the click.
-fn window_handle(ui: &mut egui::Ui, bar: Rect) {
+fn window_handle(ui: &mut egui::Ui, bar: Rect) -> egui::Response {
     register(ui, "region:titlebar", bar);
     let resp = craft_window::title_bar::empty_area(ui, bar);
     crate::widgets::announce(&resp, crate::i18n::tr("Title bar"));
+    resp
 }
 
 /// Draw the top bar: the titlebar drag area, the in-window menus when there is no native menu
 /// bar, sidebar and back/forward buttons, the centred search field, the filter button with its
-/// active count, and the right-side action icons.
+/// active count, and the right-side action icons. A person turns the buttons off one by one
+/// (`topbar_items`); a right-click on the bar's empty space lists them.
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
     // room for the traffic lights; in full screen they are gone, and the sidebar button sits as far
-    // from the left edge as the Discord button from the right (12 margin + 4)
+    // from the left edge as the last icon from the right (12 margin + 4)
     let left = match (app.integrated_titlebar, app.window_is_fullscreen) {
         (true, false) => 78,
         (true, true) => 16,
@@ -37,52 +40,78 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let panel = egui::Panel::top("top_bar")
         .exact_size(t.top_bar_h)
         .frame(egui::Frame::NONE.fill(fill).inner_margin(egui::Margin { left, right: 12, top: 0, bottom: 0 }))
-        .show(ui, |ui| {
-            crate::widgets::announce_region(ui, egui::accesskit::Role::Toolbar, crate::i18n::tr("Top bar"));
-            let full = ui.max_rect();
-            // The whole bar, its margins included. The search field is centred on this and not on
-            // `full`, which is only what the margins leave: on macOS the left margin holds the
-            // traffic lights' room, and full screen gives that room back. Centring on `full` moved
-            // the field, and changed its width, every time that room changed (issue #2365).
-            let bar = Rect::from_min_max(pos2(full.left() - left as f32, full.top()), pos2(full.right() + 12.0, full.bottom()));
-            // The field stops short of the filter icon and the seven icons on the right; centred,
-            // it is twice the room between the window's centre and them.
-            let mut sw = 640.0f32.min(2.0 * (full.right() - 310.0 - bar.center().x)).max(190.0);
-            if !app.native_menu {
-                // leave room for the in-window menus left of the (centred) search field
-                let menus_right = full.left() + 140.0 + crate::menubar::bar_width(ui) + 24.0;
-                sw = sw.min(2.0 * (bar.center().x - menus_right)).max(190.0);
-            }
-            let search_left = bar.center().x - sw / 2.0;
-            let sr = Rect::from_center_size(pos2(bar.center().x, full.center().y), vec2(sw, 28.0));
-            if app.integrated_titlebar {
-                window_handle(ui, bar);
-            }
-            nav_buttons(app, ui, search_left);
-            search_field(app, ui, &t, sr);
-            filter_button(app, ui, &t, sr);
-            let x = right_icons(app, ui, &t, full);
-            appearance_button(app, ui, &t, full, x);
-        });
+        .show(ui, |ui| top_bar_body(app, ui, &t, left));
     if let Some(slot) = slot {
         ui.ctx().layer_painter(ui.layer_id()).set(slot, egui::Shape::rect_filled(panel.response.rect, 0.0, t.chrome));
     }
+}
+
+/// The top bar panel's contents (search field, filter, nav and right-side icons).
+fn top_bar_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, left: i8) {
+    crate::widgets::announce_region(ui, egui::accesskit::Role::Toolbar, crate::i18n::tr("Top bar"));
+    let full = ui.max_rect();
+    // The whole bar, its margins included. The search field is centred on this and not on
+    // `full`, which is only what the margins leave: on macOS the left margin holds the
+    // traffic lights' room, and full screen gives that room back. Centring on `full` moved
+    // the field, and changed its width, every time that room changed (issue #2365).
+    let bar = Rect::from_min_max(pos2(full.left() - left as f32, full.top()), pos2(full.right() + 12.0, full.bottom()));
+    // saving is failing: the cloud icon turns into a warning until a save succeeds
+    let unsaved = app.session.unsaved().map(|(n, e)| unsaved_tip(n, e));
+    // the icons on the right that are on, from the left; the cloud is no item (`topbar_items`): it shows only while
+    // saving fails, whatever a saved list says
+    let mut right: Vec<&str> = ["appearance", "bell", "import", "share", "help"].into_iter().filter(|id| shown(app, id)).collect();
+    if unsaved.is_some() {
+        right.push("cloud");
+    }
+    // The field stops short of the filter icon (when shown) and the icons on the right;
+    // centred, it is twice the room between the window's centre and them.
+    let filter_room = if shown(app, "filter") { 30.0 } else { 0.0 };
+    let mut sw = 640.0f32.min(2.0 * (full.right() - filter_room - 40.0 * right.len() as f32 - bar.center().x)).max(190.0);
+    if !app.native_menu {
+        // leave room for the in-window menus left of the (centred) search field
+        let menus_right = full.left() + 140.0 + crate::menubar::bar_width(ui) + 24.0;
+        sw = sw.min(2.0 * (bar.center().x - menus_right)).max(190.0);
+    }
+    let search_left = bar.center().x - sw / 2.0;
+    let sr = Rect::from_center_size(pos2(bar.center().x, full.center().y), vec2(sw, 28.0));
+    let background = if app.integrated_titlebar {
+        window_handle(ui, bar)
+    } else {
+        // the bar's own click area (its right-click menu) has a name, like every interactive node
+        let resp = ui.interact(bar, ui.scope_id().with("top_bar_background"), Sense::click());
+        crate::widgets::announce(&resp, crate::i18n::tr("Top Bar"));
+        resp
+    };
+    nav_buttons(app, ui, search_left);
+    search_field(app, ui, t, sr);
+    if shown(app, "filter") {
+        filter_button(app, ui, t, sr);
+    }
+    let x = right_icons(app, ui, t, full, &right);
+    if right.contains(&"appearance") {
+        appearance_button(app, ui, t, full, x);
+    }
+    crate::panels::topbar_items::bar_menu(app, &background);
 }
 
 /// Sidebar toggle, back/forward and, without a native menu bar, the in-window menus.
 fn nav_buttons(app: &mut LightcraftApp, ui: &mut egui::Ui, search_left: f32) {
     ui.horizontal_centered(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
-        if icon_button(ui, "sidebar", Icon::Sidebar, vec2(30.0, 30.0), app.ui.left_panel, true, crate::i18n::tr("Show/hide My Photos panel"))
-            .clicked()
-        {
-            let _ = app.run("view.leftPanel", json!({}));
+        if shown(app, "sidebar") {
+            if icon_button(ui, "sidebar", Icon::Sidebar, vec2(30.0, 30.0), app.ui.left_panel, true, crate::i18n::tr("Show/hide My Photos panel"))
+                .clicked()
+            {
+                let _ = app.run("view.leftPanel", json!({}));
+            }
+            ui.add_space(8.0);
         }
-        ui.add_space(8.0);
-        if icon_button(ui, "back", Icon::Back, vec2(30.0, 30.0), false, true, crate::i18n::tr("Back")).clicked() {
-            let _ = app.run("view.back", json!({}));
+        if shown(app, "back") {
+            if icon_button(ui, "back", Icon::Back, vec2(30.0, 30.0), false, true, crate::i18n::tr("Back")).clicked() {
+                let _ = app.run("view.back", json!({}));
+            }
+            icon_button(ui, "forward", Icon::Forward, vec2(30.0, 30.0), false, false, crate::i18n::tr("Forward"));
         }
-        icon_button(ui, "forward", Icon::Forward, vec2(30.0, 30.0), false, false, crate::i18n::tr("Forward"));
         if !app.native_menu {
             // no native menu bar (web, Windows, Linux): menus in the top bar
             ui.add_space(10.0);
@@ -169,7 +198,7 @@ fn filter_button(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, sr: Rec
 }
 
 /// The right-side action icons; returns the x where the next icon would go.
-fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rect) -> f32 {
+fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rect, right: &[&str]) -> f32 {
     // right icons
     let mut x = full.right() - 18.0;
     // saving is failing: a warning shows until a save succeeds (nothing is shown otherwise)
@@ -182,13 +211,15 @@ fn right_icons(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, full: Rec
         None => crate::i18n::tr("Import Photos…").to_string(),
     };
     for (id, icon, tip, cmd) in [
-        ("discord", Icon::Chat, "Join the ArtCraft community on Discord", "app.discord"),
         ("cloud", Icon::Cloud, cloud_tip, ""),
-        ("help", Icon::Help, "Keyboard shortcuts", "app.shortcuts"),
+        ("help", Icon::Help, "Keyboard Shortcuts", "app.shortcuts"),
         ("share", Icon::Share, "Export", "dialog.export"),
         ("import", Icon::Plus, import_tip.as_str(), "file.addPhotos"),
         ("bell", Icon::Bell, "Activity", "panel.activity"),
     ] {
+        if !right.contains(&id) {
+            continue;
+        }
         let warn = id == "cloud" && unsaved.is_some();
         if id == "cloud" && !warn {
             continue;

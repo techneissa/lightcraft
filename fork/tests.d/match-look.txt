@@ -1,0 +1,3 @@
+cargo test -p lightcraft-look --lib
+cargo test -p lightcraft-engine --lib -- match_look
+cargo test -p lightcraft-ui-egui --lib -- tests::match_look

@@ -65,8 +65,10 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
                 .and_then(|s| if s.success() { Ok(()) } else { Err(format!("opening folder failed: {s}")) })
         })),
         open_with: Some(Box::new(editors::open_with)),
+        open_with_shared: Some(std::sync::Arc::new(editors::open_with)),
         open_all_with: Some(Box::new(editors::open_all_with)),
         check_editor: Some(Box::new(editors::check)),
+        layers_support: Some(Box::new(editors::supports_layers)),
         open_url: Some(Box::new(|url: &str| {
             if !url.starts_with("https://") {
                 return Err("only https links are opened".into());
@@ -248,6 +250,23 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
         backup_library: None,
         restore_library: None,
         system_theme: appearance::service(),
+        save_shortcuts_file: Some(Box::new(|name: &str| {
+            rfd::FileDialog::new()
+                .set_title(lightcraft_ui_egui::i18n::tr("Export Keyboard Shortcuts"))
+                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Keyboard Shortcuts"), &["json"])
+                .set_file_name(name)
+                .save_file()
+                .map(|p| p.to_string_lossy().to_string())
+        })),
+        pick_shortcuts_file: Some(Box::new(|| {
+            rfd::FileDialog::new()
+                .set_title(lightcraft_ui_egui::i18n::tr("Import Keyboard Shortcuts"))
+                .add_filter_nocase(lightcraft_ui_egui::i18n::tr("Keyboard Shortcuts"), &["json"])
+                .pick_file()
+                .map(|p| p.to_string_lossy().to_string())
+                .into_iter()
+                .collect()
+        })),
     }
 }
 
@@ -256,17 +275,20 @@ pub(crate) fn services(cc: &eframe::CreationContext<'_>, log_file: Option<&std::
 /// the window lists the recent ones.
 pub(crate) fn open_session(in_memory: bool, launch: &Launch, seed_demo: bool) -> (Session, Option<LibraryProblem>) {
     let (mut s, problem) = match launch {
-        Launch::Ask => (Session::new().with_fs().with_default_denoise_models().with_system_clock(), None),
+        Launch::Ask => (Session::new().with_fs().with_default_denoise_models().with_default_map_cache().with_system_clock(), None),
         Launch::Open { dir, remembered, .. } => open_library_session(in_memory, dir.clone(), *remembered, seed_demo),
     };
     // lens profiles from the app's own lensfun copy, offered on the first launch (not for a throwaway session)
     if !in_memory {
         s = s.with_default_lens_database().with_lens_auto_download();
     }
-    s.face_models_dir = lightcraft_engine::config::default_face_models_dir();
+    // the face models: the folder shared with PhotoCraft first, then LightCraft's own (fork/shared-models.md)
+    s = s.with_default_face_models();
     s.slide_templates_dir = lightcraft_engine::config::config_dir().map(|d| d.join(lightcraft_engine::slide_template::DIR_NAME));
     // Control requests are answered on the UI thread: Add to Apple Photos must not wait there
     s.apple_photos_background = true;
+    // automatic XMP sidecars are written on a worker: a bulk edit mustn't wait for hundreds of files
+    s.queue_sidecar_writes(true);
     (s, problem)
 }
 
@@ -279,9 +301,16 @@ pub(crate) fn open_session(in_memory: bool, launch: &Launch, seed_demo: bool) ->
 /// make a new, empty one in its place, e.g. on an unmounted drive's path (issue #3239).
 fn open_library_session(in_memory: bool, dir: Option<std::path::PathBuf>, remembered: bool, seed_demo: bool) -> (Session, Option<LibraryProblem>) {
     if in_memory {
-        return (if seed_demo { Session::with_demo() } else { Session::new() }.with_fs().with_default_denoise_models().with_system_clock(), None);
+        return (
+            if seed_demo { Session::with_demo() } else { Session::new() }
+                .with_fs()
+                .with_default_denoise_models()
+                .with_default_map_cache()
+                .with_system_clock(),
+            None,
+        );
     }
-    let unopened = || Session::new().with_fs().with_default_denoise_models().with_system_clock();
+    let unopened = || Session::new().with_fs().with_default_denoise_models().with_default_map_cache().with_system_clock();
     let Some(dir) = dir else {
         log::warn!("no library location (set --library or LIGHTCRAFT_LIBRARY)");
         return (unopened(), Some(LibraryProblem::new("", "There is no home folder to keep the library in. Choose a folder for it.")));
@@ -292,7 +321,7 @@ fn open_library_session(in_memory: bool, dir: Option<std::path::PathBuf>, rememb
         return (unopened(), Some(LibraryProblem { existing_only: true, ..LibraryProblem::new(dir.to_string_lossy(), why) }));
     }
     let t0 = std::time::Instant::now();
-    let mut s = Session::new().with_fs().with_default_denoise_models().with_system_clock();
+    let mut s = Session::new().with_fs().with_default_denoise_models().with_default_map_cache().with_system_clock();
     match s.open_library(&dir, seed_demo && !remembered) {
         Ok(r) => {
             let (replayed, torn) = (r.replayed, r.torn_bytes);

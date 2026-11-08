@@ -96,10 +96,13 @@ fn export_dialog_is_unchanged_in_a_tall_window() {
     // (846 tall as before #781: the whole dialog, nothing scrolled away, plus the Export to row
     // since #956; 615 wide since the format row gained JPEG XL, #780. On macOS the dialog has one
     // more row, "Add to Apple Photos" (#236), so it is 30 taller there. 8 more since its footer's
-    // buttons are the button component's medium size, 30 points, as the welcome's and every dialog's)
-    let height = if cfg!(target_os = "macos") { 916.0 } else { 886.0 };
+    // buttons are the button component's medium size, 30 points, as the welcome's and every dialog's;
+    // 656 wide since the format row ends with GIF, which opens Export Animated GIF; 60 shorter
+    // since a slider is one 30-point row, label, track and value side by side, not 45)
+    // (30 more with the Show in Finder row, in every platform's dialog)
+    let height = if cfg!(target_os = "macos") { 886.0 } else { 856.0 };
     assert!((dialog.height() - height).abs() <= 1.0, "{dialog:?}");
-    assert!((dialog.width() - 615.2).abs() <= 1.0, "{dialog:?}");
+    assert!((dialog.width() - 656.2).abs() <= 1.0, "{dialog:?}");
 }
 
 // Scenario: other long dialogs fit a short window too, with their buttons on screen
@@ -125,15 +128,18 @@ fn long_dialogs_fit_a_short_window() {
     }
 }
 
-// Scenario: a list that scrolls on its own (the shortcuts) gets shorter instead of scrolling inside a scrolling dialog
+// Scenario: the shortcuts window (its list takes the height the window gives it) shrinks to a short
+// window and keeps its buttons on screen
 #[test]
-fn a_dialog_list_shrinks_to_fit_a_short_window() {
+fn the_shortcuts_list_shrinks_to_fit_a_short_window() {
     let mut h = demo([1000.0, 320.0]);
     open(&mut h, "app.shortcuts");
-    let shrink = h.view.ctx.data(|d| d.get_temp::<f32>(egui::Id::unique("dialog-list-shrink"))).unwrap_or(0.0);
-    assert!(shrink > 0.0, "the list gave up room");
+    for _ in 0..6 {
+        h.step();
+    }
     let dialog = rect(&h, "dialog:window");
     assert!(dialog.height() <= 320.0, "{dialog:?}");
+    assert_fits(&h, "app.shortcuts");
 }
 
 /// Settings ▸ Performance: the GPU status line above the controls stays one line whatever it says

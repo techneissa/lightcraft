@@ -10,7 +10,7 @@ const PHOTOCRAFT: &str = lightcraft_ui_egui::state::PHOTOCRAFT;
 const PHOTOCRAFT_ID: &str = "ai.storyteller.photocraft";
 
 /// How an editor is started.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 enum Launcher {
     /// The system's default application for the file.
     Default,
@@ -26,6 +26,28 @@ enum Launcher {
 /// for PhotoCraft, that it is installed. The error says what to do instead.
 pub fn check(app: &str) -> Result<(), String> {
     launcher(app).map(|_| ())
+}
+
+/// Whether `app` opens a `.pcstack` layer list (Open as Layers in PhotoCraft): the PhotoCraft fork
+/// lists `pcstack` among its document types. Only the macOS app bundle is looked at; elsewhere, and
+/// for any other editor, the answer is no and the files open one by one.
+pub fn supports_layers(app: &str) -> bool {
+    match launcher(app) {
+        Ok(Launcher::MacApp(bundle)) if cfg!(target_os = "macos") => bundle_lists_pcstack(Path::new(&bundle)),
+        _ => false,
+    }
+}
+
+/// Whether the application bundle's `Info.plist` lists `pcstack` as a document type. The plist is
+/// converted to XML by `plutil` (it is binary in most bundles); an unreadable one says no.
+fn bundle_lists_pcstack(bundle: &Path) -> bool {
+    let plist = bundle.join("Contents").join("Info.plist");
+    let converted = Command::new("plutil").args(["-convert", "xml1", "-o", "-", "--"]).arg(&plist).output().ok().filter(|o| o.status.success());
+    let text = match converted {
+        Some(o) => String::from_utf8_lossy(&o.stdout).to_string(),
+        None => std::fs::read(&plist).map(|b| String::from_utf8_lossy(&b).to_string()).unwrap_or_default(),
+    };
+    lightcraft_engine::layers::plist_lists_pcstack(&text)
 }
 
 /// Open `path` in `app` (see [`check`]). Spawned, never waited for: the editor runs alongside.
@@ -119,9 +141,32 @@ fn launcher(app: &str) -> Result<Launcher, String> {
     if !app.eq_ignore_ascii_case(PHOTOCRAFT) {
         return Ok(if cfg!(target_os = "macos") { Launcher::MacApp(app.to_string()) } else { Launcher::Program(PathBuf::from(app)) });
     }
-    find_photocraft().ok_or_else(|| {
+    find_photocraft_cached().ok_or_else(|| {
         "PhotoCraft isn't installed. Get it from getartcraft.com/apps/photocraft, or give where it is in Settings ▸ External Editing.".to_string()
     })
+}
+
+/// How long a PhotoCraft lookup is reused. One Edit In asks several times (the check, layer
+/// support, each file), and on macOS the lookup may run Spotlight (`mdfind`).
+const LOOKUP_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// [`find_photocraft`], reused for [`LOOKUP_TTL`]: an install or removal shows within seconds.
+fn find_photocraft_cached() -> Option<Launcher> {
+    static CACHE: std::sync::Mutex<Option<(std::time::Instant, Option<Launcher>)>> = std::sync::Mutex::new(None);
+    cached(&CACHE, std::time::Instant::now(), find_photocraft)
+}
+
+/// The value in `cache` if it is younger than [`LOOKUP_TTL`] at `now`, else `find`'s (kept).
+fn cached<T: Clone>(cache: &std::sync::Mutex<Option<(std::time::Instant, T)>>, now: std::time::Instant, find: impl FnOnce() -> T) -> T {
+    let mut slot = cache.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some((at, v)) = slot.as_ref()
+        && now.saturating_duration_since(*at) < LOOKUP_TTL
+    {
+        return v.clone();
+    }
+    let v = find();
+    *slot = Some((now, v.clone()));
+    v
 }
 
 fn find_photocraft() -> Option<Launcher> {
@@ -310,6 +355,30 @@ mod tests {
         assert!(all_command(Launcher::Default, &paths).is_none(), "the system default opens them one by one");
     }
 
+    /// An app bundle whose `Info.plist` lists `pcstack` opens layer lists; one without (the
+    /// official PhotoCraft) or without a readable plist does not.
+    #[test]
+    fn a_bundle_is_checked_for_the_pcstack_document_type() {
+        let root = std::env::temp_dir().join(format!("lc-editors-plist-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let bundle = |name: &str, extensions: &str| {
+            let contents = root.join(name).join("Contents");
+            std::fs::create_dir_all(&contents).unwrap();
+            let plist = format!(
+                "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n\
+                 <plist version=\"1.0\"><dict><key>CFBundleName</key><string>PhotoCraft</string>\n\
+                 <key>CFBundleDocumentTypes</key><array><dict><key>CFBundleTypeExtensions</key><array>{extensions}</array></dict></array>\n\
+                 </dict></plist>"
+            );
+            std::fs::write(contents.join("Info.plist"), plist).unwrap();
+            root.join(name)
+        };
+        assert!(bundle_lists_pcstack(&bundle("Fork.app", "<string>psd</string><string>pcstack</string>")));
+        assert!(!bundle_lists_pcstack(&bundle("Official.app", "<string>psd</string><string>tif</string>")));
+        assert!(!bundle_lists_pcstack(&root.join("Missing.app")), "no plist: no support, no panic");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     #[test]
     fn windows_lookup_prefers_the_recorded_install_folder() {
         let env = |k: &str| match k {
@@ -370,6 +439,25 @@ mod tests {
         names.sort_by_key(|n| version_key(n));
         assert_eq!(names[2], "photocraft-1.10-x86_64.appimage");
         assert_eq!(names[0], "photocraft-1.2-x86_64.appimage");
+    }
+
+    /// The PhotoCraft lookup (Spotlight on macOS) runs once for the asks of one click, and again
+    /// once the cached answer is old.
+    #[test]
+    fn the_photocraft_lookup_is_reused_for_a_while() {
+        let cache = std::sync::Mutex::new(None);
+        let runs = std::cell::Cell::new(0);
+        let find = || {
+            runs.set(runs.get() + 1);
+            Some(Launcher::MacApp("/Applications/PhotoCraft.app".into()))
+        };
+        let t0 = std::time::Instant::now();
+        for _ in 0..4 {
+            assert_eq!(cached(&cache, t0, find), Some(Launcher::MacApp("/Applications/PhotoCraft.app".into())));
+        }
+        assert_eq!(runs.get(), 1, "one lookup for the check, the layer test and each file");
+        cached(&cache, t0 + LOOKUP_TTL, find);
+        assert_eq!(runs.get(), 2, "an old answer is looked up again");
     }
 
     #[test]
