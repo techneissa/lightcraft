@@ -26,6 +26,7 @@ lightcraft-sysmem = { path = "crates/sysmem" }
 lightcraft-filepanel = { path = "crates/filepanel" }
 lightcraft-macraw = { path = "crates/macraw" }
 lightcraft-wincolor = { path = "crates/wincolor" }
+lightcraft-coreml = { path = "crates/coreml" }
 lightcraft-color = { path = "crates/color" }
 lightcraft-raster = { path = "crates/raster" }
 lightcraft-tiff = { path = "crates/tiff" }

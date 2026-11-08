@@ -1,0 +1,6 @@
+# One-time Core ML conversion only (tools/convert-coreml-dinov2.py, fork/coreml.md). The app never runs Python.
+# The model now in the shared ArtCraft models folder was made with Python 3.12.14, torch 2.15.0, coremltools 9.0, numpy 2.5.4, safetensors 0.8.0 on macOS 27 (M4 Pro).
+coremltools==9.0
+torch>=2.7,<3
+safetensors>=0.4,<1
+numpy>=2,<3

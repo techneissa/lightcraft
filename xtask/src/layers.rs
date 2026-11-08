@@ -42,6 +42,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("filepanel", Class::Layer(0)),
     ("macraw", Class::Layer(0)),
     ("wincolor", Class::Layer(0)),
+    ("coreml", Class::Layer(0)),
     ("fetch", Class::Layer(0)),
     ("denoise-core", Class::Layer(1)),
     ("denoise", Class::Layer(1)),

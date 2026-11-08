@@ -1,0 +1,3 @@
+cargo test -p lightcraft-coreml
+cargo test -p lightcraft-learn --lib -- image_encoder
+cargo test -p lightcraft-engine --lib -- model_runtime

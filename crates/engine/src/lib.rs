@@ -71,6 +71,7 @@ pub mod media;
 pub mod memory;
 pub mod merge;
 mod model_download;
+pub mod model_runtime;
 pub mod names;
 pub mod open_path;
 pub mod originals;
@@ -400,6 +401,8 @@ pub struct Session {
     pub object_jobs: spot_area::ObjectJobs,
     /// Learn My Edits: profiles trained on the user's edits (`fork/learn-my-edits.md`).
     pub learn: learn::LearnEdits,
+    /// Which engine runs each AI model that has a Core ML version (`fork/coreml.md`).
+    pub model_runtimes: Arc<model_runtime::ModelRuntimes>,
     /// Per-person part masks and face landmarks (`fork/people-parsing.md`).
     pub parsing: people_parsing::PeopleParsing,
     /// The persistent library this session writes to (`None` = in-memory only).
@@ -616,6 +619,7 @@ impl Session {
             lama: lama_fill::LamaFill::new(activity.clone()),
             object_jobs: Default::default(),
             learn: learn::LearnEdits::new(activity.clone()),
+            model_runtimes: Default::default(),
             parsing: people_parsing::PeopleParsing::new(activity.clone()),
             library: None,
             library_identity: Arc::new(()),

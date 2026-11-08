@@ -3736,6 +3736,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-coreml"
+version = "0.18.0"
+dependencies = [
+ "block2 0.6.2",
+ "lightcraft-testkit",
+ "log",
+ "objc2 0.6.5",
+ "objc2-core-ml",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "lightcraft-denoise"
 version = "0.18.0"
 dependencies = [
@@ -3796,6 +3808,7 @@ dependencies = [
  "lightcraft-catalog",
  "lightcraft-codecs",
  "lightcraft-color",
+ "lightcraft-coreml",
  "lightcraft-denoise",
  "lightcraft-denoise-core",
  "lightcraft-develop",
@@ -3829,11 +3842,13 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.21",
  "trash",
  "unicode-normalization",
  "unicode-segmentation",
  "web-time",
+ "zip 7.4.0",
 ]
 
 [[package]]
@@ -3953,6 +3968,7 @@ dependencies = [
  "candle-nn",
  "image",
  "lightcraft-color",
+ "lightcraft-coreml",
  "lightcraft-develop",
  "lightcraft-geom",
  "lightcraft-testkit",
@@ -4896,6 +4912,17 @@ dependencies = [
  "objc2 0.5.2",
  "objc2-contacts",
  "objc2-foundation 0.2.2",
+]
+
+[[package]]
+name = "objc2-core-ml"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "201b055e6acfa0f9f15568255d3f03ce2b54bc86d1814442dc69138e36813e18"
+dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]

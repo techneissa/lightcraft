@@ -49,6 +49,7 @@ pub mod match_look;
 mod merge;
 pub mod metadata;
 pub mod missing;
+mod model_runtime;
 mod organize;
 pub(crate) mod parsing;
 mod prefs;
@@ -178,6 +179,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(spot_area::specs());
         v.extend(lama::specs());
         v.extend(learn::specs());
+        v.extend(model_runtime::specs());
         v.extend(parsing::specs());
         v.extend(organize::specs());
         v.extend(keywords::specs());
