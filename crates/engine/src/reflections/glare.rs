@@ -8,6 +8,8 @@
 //!
 //! Pure and deterministic: the same pixels and settings give the same mask, whatever the thread count.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use lightcraft_raster::{Plane, Rgb32f};
 
 /// What [`find`] works with besides the pixels.
@@ -68,6 +70,11 @@ fn limits(t: f32) -> Limits {
 
 /// The glare mask of `img` (0..=1 per pixel), searched where `region` (same size) is above one half, or everywhere.
 pub fn find(img: &Rgb32f, region: Option<&Plane>, p: &Params, strokes: &[Stroke]) -> Plane {
+    find_until(img, region, p, strokes, &AtomicBool::new(false))
+}
+
+/// [`find`] that stops painting strokes once `stop` is set (the caller then drops the result).
+pub fn find_until(img: &Rgb32f, region: Option<&Plane>, p: &Params, strokes: &[Stroke], stop: &AtomicBool) -> Plane {
     let (w, h) = (img.width, img.height);
     let mut out = Plane::new(w, h);
     if w == 0 || h == 0 || img.data.len() != w * h || region.is_some_and(|r| r.width != w || r.height != h) {
@@ -88,7 +95,8 @@ pub fn find(img: &Rgb32f, region: Option<&Plane>, p: &Params, strokes: &[Stroke]
     let long = if p.photo_long.is_finite() && p.photo_long > 0.0 { p.photo_long } else { w.max(h) as f64 };
     // the surroundings: a box mean wide enough to hold a lens's glare, taken again with the glare held down to the
     // first mean, so a large bright spot does not raise its own surroundings
-    let r_bg = ((0.03 * long).round() as usize).clamp(4, w.max(h));
+    // (never `clamp(4, …)`: a picture under 4 pixels would make its bounds cross)
+    let r_bg = ((0.03 * long).round() as usize).max(4).min(w.max(h).max(1));
     let first = box_mean(&y, w, h, r_bg);
     let held: Vec<f32> = y.iter().zip(&first).map(|(v, b)| v.min(*b)).collect();
     let bg = box_mean(&held, w, h, 2 * r_bg);
@@ -128,7 +136,7 @@ pub fn find(img: &Rgb32f, region: Option<&Plane>, p: &Params, strokes: &[Stroke]
     for (o, d) in out.data.iter_mut().zip(&dist) {
         *o = 1.0 - smoothstep(grow, grow + feather, *d);
     }
-    paint(&mut out, strokes);
+    paint(&mut out, strokes, stop);
     if let Some(r) = region {
         // a mask region's own soft edge
         for (o, a) in out.data.iter_mut().zip(&r.data) {
@@ -295,37 +303,57 @@ fn distance(mask: &[bool], w: usize, h: usize, cap: f32) -> Vec<f32> {
 }
 
 /// Draw the painted strokes over `alpha`: an added stroke raises it to the stroke's own soft disc, an erased one
-/// lowers it by as much.
-fn paint(alpha: &mut Plane, strokes: &[Stroke]) {
+/// lowers it by as much. Each segment is drawn over its own box only, so a long stroke costs its length, not its
+/// points times its box; `stop` is checked between strokes.
+fn paint(alpha: &mut Plane, strokes: &[Stroke], stop: &AtomicBool) {
     let (w, h) = (alpha.width, alpha.height);
     for s in strokes {
+        if stop.load(Ordering::Relaxed) {
+            return;
+        }
         let r = s.radius.max(0.5);
-        if !r.is_finite() || s.points.is_empty() {
+        let pts: Vec<(f32, f32)> = s.points.iter().copied().filter(|p| p.0.is_finite() && p.1.is_finite()).collect();
+        if !r.is_finite() || pts.is_empty() {
             continue;
         }
         let inner = r * 0.8;
+        // the stroke's own alpha (the most of its segments), over the stroke's box
         let (mut x0, mut y0, mut x1, mut y1) = (f32::MAX, f32::MAX, f32::MIN, f32::MIN);
-        for p in &s.points {
-            x0 = x0.min(p.0 - r);
-            y0 = y0.min(p.1 - r);
-            x1 = x1.max(p.0 + r);
-            y1 = y1.max(p.1 + r);
+        for p in &pts {
+            (x0, y0, x1, y1) = (x0.min(p.0 - r), y0.min(p.1 - r), x1.max(p.0 + r), y1.max(p.1 + r));
         }
-        if !(x0.is_finite() && y0.is_finite() && x1.is_finite() && y1.is_finite()) {
+        let px = |v: f32, n: usize| (v.max(0.0) as usize).min(n);
+        let (bx0, by0, bx1, by1) = (px(x0.floor(), w), px(y0.floor(), h), px(x1.ceil(), w), px(y1.ceil(), h));
+        if bx1 <= bx0 || by1 <= by0 {
             continue;
         }
-        let (bx0, by0) = (x0.floor().max(0.0) as usize, y0.floor().max(0.0) as usize);
-        let (bx1, by1) = ((x1.ceil().max(0.0) as usize).min(w), (y1.ceil().max(0.0) as usize).min(h));
+        let bw = bx1 - bx0;
+        let mut own = vec![0.0f32; bw * (by1 - by0)];
+        let first = [pts[0], pts[0]];
+        let segments = std::iter::once(&first[..]).chain(pts.windows(2));
+        for seg in segments {
+            let (a, b) = (seg[0], seg[seg.len() - 1]);
+            let sx0 = px((a.0.min(b.0) - r).floor(), w).max(bx0);
+            let sy0 = px((a.1.min(b.1) - r).floor(), h).max(by0);
+            let sx1 = px((a.0.max(b.0) + r).ceil(), w).min(bx1);
+            let sy1 = px((a.1.max(b.1) + r).ceil(), h).min(by1);
+            for y in sy0..sy1 {
+                for x in sx0..sx1 {
+                    let d = segment_distance(a, b, x as f32 + 0.5, y as f32 + 0.5);
+                    let v = 1.0 - smoothstep(inner, r, d);
+                    if let Some(o) = own.get_mut((y - by0) * bw + (x - bx0)) {
+                        *o = o.max(v);
+                    }
+                }
+            }
+        }
         for y in by0..by1 {
             for x in bx0..bx1 {
-                let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
-                let d = segments_distance(&s.points, px, py);
-                let a = 1.0 - smoothstep(inner, r, d);
+                let a = own.get((y - by0) * bw + (x - bx0)).copied().unwrap_or(0.0);
                 if a <= 0.0 {
                     continue;
                 }
-                let i = y * w + x;
-                if let Some(v) = alpha.data.get_mut(i) {
+                if let Some(v) = alpha.data.get_mut(y * w + x) {
                     *v = if s.erase { *v * (1.0 - a) } else { v.max(a) };
                 }
             }
@@ -333,19 +361,12 @@ fn paint(alpha: &mut Plane, strokes: &[Stroke]) {
     }
 }
 
-/// Distance from `(x, y)` to the polyline through `pts`.
-fn segments_distance(pts: &[(f32, f32)], x: f32, y: f32) -> f32 {
-    let point = |a: (f32, f32)| ((x - a.0).powi(2) + (y - a.1).powi(2)).sqrt();
-    let Some(first) = pts.first() else { return f32::MAX };
-    let mut best = point(*first);
-    for pair in pts.windows(2) {
-        let (a, b) = (pair[0], pair[1]);
-        let (dx, dy) = (b.0 - a.0, b.1 - a.1);
-        let len2 = dx * dx + dy * dy;
-        let t = if len2 > 0.0 { (((x - a.0) * dx + (y - a.1) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
-        best = best.min(point((a.0 + t * dx, a.1 + t * dy)));
-    }
-    best
+/// Distance from `(x, y)` to the segment `a`–`b`.
+fn segment_distance(a: (f32, f32), b: (f32, f32), x: f32, y: f32) -> f32 {
+    let (dx, dy) = (b.0 - a.0, b.1 - a.1);
+    let len2 = dx * dx + dy * dy;
+    let t = if len2 > 0.0 { (((x - a.0) * dx + (y - a.1) * dy) / len2).clamp(0.0, 1.0) } else { 0.0 };
+    ((x - a.0 - t * dx).powi(2) + (y - a.1 - t * dy).powi(2)).sqrt()
 }
 
 #[cfg(test)]
@@ -427,6 +448,28 @@ mod tests {
         let boxed = find(&img, None, &Params { chosen: true, boxed: true, max_spot: 0.35, ..params() }, &[]);
         assert_eq!(boxed.get(10, 150), 0.0);
         assert!(boxed.get(250, 150) > 0.99);
+    }
+
+    #[test]
+    fn pictures_smaller_than_the_background_window_do_not_panic() {
+        for (w, h) in [(1, 1), (3, 3), (1, 7), (2, 1)] {
+            let img = Rgb32f::filled(w, h, [1.0; 3]);
+            let a = find(&img, None, &params(), &[]);
+            assert_eq!((a.width, a.height), (w, h));
+            let _ = find(&img, None, &Params { photo_long: f64::NAN, ..params() }, &[]);
+        }
+    }
+
+    #[test]
+    fn a_long_stroke_paints_its_whole_length_and_a_stop_paints_no_more() {
+        let img = picture(400, 300, &[]);
+        let points: Vec<(f32, f32)> = (0..3000).map(|i| (20.0 + i as f32 * 0.12, 150.0)).collect();
+        let strokes = [Stroke { erase: false, radius: 4.0, points }];
+        let a = find(&img, None, &params(), &strokes);
+        assert!(a.get(21, 150) > 0.99 && a.get(200, 150) > 0.99 && a.get(379, 150) > 0.99);
+        assert_eq!(a.get(200, 160), 0.0);
+        let stopped = find_until(&img, None, &params(), &strokes, &AtomicBool::new(true));
+        assert_eq!(stopped.get(200, 150), 0.0);
     }
 
     #[test]

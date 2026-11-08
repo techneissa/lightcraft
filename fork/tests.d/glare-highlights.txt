@@ -1,3 +1,4 @@
 cargo test -p lightcraft-develop --lib -- reflection_area
 cargo test -p lightcraft-engine --lib -- reflections
 cargo test -p lightcraft-ui-egui --lib -- reflection
+cargo test -p lightcraft-pipeline --lib -- learned_fill

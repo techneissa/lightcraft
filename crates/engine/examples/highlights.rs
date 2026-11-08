@@ -106,7 +106,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
     let start = Instant::now();
-    let made = highlights::make(&src, &g, &region, learned, &AtomicBool::new(false))?;
+    let made = highlights::make(&src, &g, &region, learned, &Arc::new(AtomicBool::new(false)))?;
     eprintln!(
         "{} tile(s), {:.2} % of the area changed, fill {:?}, {:.1} s",
         made.tiles.len(),

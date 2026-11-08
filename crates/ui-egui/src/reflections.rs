@@ -322,8 +322,9 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         } else {
             "dirs-mugi".into()
         };
-        crate::reflections_glare::load(app, &d.reflection);
     }
+    // fork (fork/glare-highlights.md): the panel's mode, area and strokes are this photo's
+    crate::reflections_glare::sync(app, id);
     let highlights = app.reflection_glare.mode == lightcraft_develop::ReflectionMode::Highlights;
     let available = highlights || lightcraft_engine::reflections::available_model(&app.reflection_model);
     let pad = egui::Margin { left: 24, right: 22, top: 4, bottom: 8 };

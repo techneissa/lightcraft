@@ -16,7 +16,7 @@ use lightcraft_raster::{Plane, Rgb32f};
 
 use super::area::Region;
 use super::glare::{self, Stroke};
-use super::tiles::{MAX_TILES, Tile};
+use super::tiles::{MAX_PIXELS, MAX_TILES, Tile};
 
 /// Long edge of the picture the glare is looked for in.
 const FIND_EDGE: usize = 3072;
@@ -41,7 +41,9 @@ pub struct Made {
 }
 
 /// Find and fill the glare of `src` (the full source) in `region`.
-pub fn make(src: &Rgb32f, glare: &Glare, region: &Region, learned: Option<Arc<dyn LearnedFill>>, cancel: &AtomicBool) -> Result<Made, String> {
+/// `cancel` is the run's stop flag: the learned fill's row stops it too, and a stopped run returns "Stopped" and makes
+/// nothing.
+pub fn make(src: &Rgb32f, glare: &Glare, region: &Region, learned: Option<Arc<dyn LearnedFill>>, cancel: &Arc<AtomicBool>) -> Result<Made, String> {
     let glare = glare.clone().sanitized();
     let (w, h) = (src.width, src.height);
     let search = region.pixel_box(w, h).ok_or("The area is empty")?;
@@ -81,28 +83,51 @@ pub fn make(src: &Rgb32f, glare: &Glare, region: &Region, learned: Option<Arc<dy
         chosen: !whole,
         boxed: !whole && region.alpha.is_none(),
     };
-    let mask = glare::find(&small, region_alpha.as_ref(), &params, &strokes);
+    let mut mask = glare::find_until(&small, region_alpha.as_ref(), &params, &strokes, cancel);
+    if cancel.load(Ordering::Relaxed) {
+        return Err("Stopped".into());
+    }
+    if params.boxed {
+        // a box's border fades in, as a reflection model's result does, so a stroke across it leaves no edge
+        let feather = (fw.min(fh) as f64 * super::area::BOX_FEATHER).max(1.0) as f32;
+        for (i, v) in mask.data.iter_mut().enumerate() {
+            let (x, y) = ((i % fw) as f32 + 0.5, (i / fw) as f32 + 0.5);
+            let edge = x.min(y).min(fw as f32 - x).min(fh as f32 - y);
+            let t = (edge / feather).clamp(0.0, 1.0);
+            *v *= t * t * (3.0 - 2.0 * t);
+        }
+    }
     let changed = mask.data.iter().filter(|v| **v > HOLE).count();
     if changed == 0 {
         return Err("No glare found in the area. Lower Threshold, or paint the glare.".into());
     }
     let coverage = changed as f64 / (fw * fh).max(1) as f64;
-    let run = FillRun::new();
+    let run = FillRun::with_stop(cancel.clone());
     let mut used = glare.fill;
     let mut tiles = Vec::new();
-    for c in clusters(&mask, MAX_TILES) {
+    // each cluster in the source's pixels, and the size it is filled at: all of them together within what a
+    // correction may hold
+    let px = |v: usize, origin: usize, n: usize| ((origin as f64 + v as f64 / k).round() as usize).min(n);
+    let found: Vec<([usize; 4], [usize; 4])> = clusters(&mask, MAX_TILES)
+        .into_iter()
+        .map(|c| (c, [px(c[0], search[0], w), px(c[1], search[1], h), px(c[2], search[0], w), px(c[3], search[1], h)]))
+        .filter(|(_, b)| b[2] > b[0] && b[3] > b[1])
+        .collect();
+    let side = if used == SpotFill::Lama && learned.is_some() { FILL_SIDE } else { CLASSIC_SIDE };
+    let mut sizes: Vec<(usize, usize)> =
+        found.iter().map(|(_, b)| lightcraft_raster::resample::fit_size(b[2] - b[0], b[3] - b[1], side, side)).collect();
+    budget(&mut sizes, MAX_PIXELS);
+    for ((c, b), size) in found.into_iter().zip(sizes) {
         if cancel.load(Ordering::Relaxed) || run.stopped() {
             return Err("Stopped".into());
         }
-        // the cluster in the source's pixels
-        let px = |v: usize, origin: usize, n: usize| ((origin as f64 + v as f64 / k).round() as usize).min(n);
-        let b = [px(c[0], search[0], w), px(c[1], search[1], h), px(c[2], search[0], w), px(c[3], search[1], h)];
-        if b[2] <= b[0] || b[3] <= b[1] {
-            continue;
-        }
         let tile_src = src.crop(b[0], b[1], b[2] - b[0], b[3] - b[1]);
-        let side = if used == SpotFill::Lama && learned.is_some() { FILL_SIDE } else { CLASSIC_SIDE };
-        let (tw, th) = lightcraft_raster::resample::fit_size(tile_src.width, tile_src.height, side, side);
+        // the Classic fill (also after LaMa gave none) works on smaller crops
+        let (tw, th) = if used == SpotFill::Lama && learned.is_some() {
+            size
+        } else {
+            lightcraft_raster::resample::fit_size(size.0, size.1, CLASSIC_SIDE, CLASSIC_SIDE)
+        };
         let rgb = if (tw, th) == (tile_src.width, tile_src.height) { tile_src } else { resize(&tile_src, tw, th, Filter::Lanczos3) };
         // the glare's alpha at the tile's size
         let alpha: Vec<f32> = (0..tw * th)
@@ -125,6 +150,9 @@ pub fn make(src: &Rgb32f, glare: &Glare, region: &Region, learned: Option<Arc<dy
         let rect = [b[0] as f32 / w as f32, b[1] as f32 / h as f32, b[2] as f32 / w as f32, b[3] as f32 / h as f32];
         tiles.push(Tile { rect, grid });
     }
+    if cancel.load(Ordering::Relaxed) || run.stopped() {
+        return Err("Stopped".into());
+    }
     if tiles.is_empty() {
         return Err("No glare found in the area. Lower Threshold, or paint the glare.".into());
     }
@@ -141,12 +169,31 @@ pub fn make(src: &Rgb32f, glare: &Glare, region: &Region, learned: Option<Arc<dy
     Ok(Made { tiles, reflection: base, coverage, fill: used })
 }
 
+/// Shrink the largest of `sizes` (width, height) until all of them together hold at most `max_total` pixels.
+pub fn budget(sizes: &mut [(usize, usize)], max_total: usize) {
+    while sizes.iter().map(|(w, h)| w.saturating_mul(*h)).fold(0usize, usize::saturating_add) > max_total {
+        let Some(big) = sizes.iter_mut().max_by_key(|(w, h)| w.saturating_mul(*h)) else { return };
+        if big.0.saturating_mul(big.1) <= 1 {
+            return;
+        }
+        *big = (((big.0 as f64 * 0.9) as usize).max(1), ((big.1 as f64 * 0.9) as usize).max(1));
+    }
+}
+
 /// The fill with the photo's own fine detail kept where the glare did not blow it out. Glare adds a smooth veil of
 /// light: under a veil the detail is still there, so only the smooth part is taken from the fill (`src - blur(src) +
 /// blur(fill)`); where the photo is clipped there is no detail left and the fill is taken as it is.
 pub fn keep_texture(src: &Rgb32f, filled: &[f32], alpha: &[f32]) -> Rgb32f {
     let (w, h) = (src.width, src.height);
-    let fill = Rgb32f { width: w, height: h, data: filled.as_chunks::<3>().0.to_vec() };
+    // non-finite values (a broken fill or source) would reach every neighbour through the blurs: the source's value,
+    // or 0, stands in for them
+    let finite = |v: f32| if v.is_finite() { v } else { 0.0 };
+    let src = &Rgb32f { width: w, height: h, data: src.data.iter().map(|p| p.map(finite)).collect() };
+    let fill = Rgb32f {
+        width: w,
+        height: h,
+        data: filled.as_chunks::<3>().0.iter().zip(&src.data).map(|(f, s)| [0, 1, 2].map(|c| if f[c].is_finite() { f[c] } else { s[c] })).collect(),
+    };
     if fill.data.len() != src.data.len() || alpha.len() != src.data.len() {
         return fill;
     }
@@ -185,7 +232,9 @@ pub fn keep_texture(src: &Rgb32f, filled: &[f32], alpha: &[f32]) -> Rgb32f {
         let (Some(s), Some(ls), Some(lf), Some(g)) = (veiled.data.get(i), low_src.data.get(i), low_fill.data.get(i), glare.get(i)) else { continue };
         for c in 0..3 {
             // the detail moves the fill by at most a quarter of its own value, so an edge the blur missed leaves no line
-            let detail = lf[c] + (s[c] - ls[c]).clamp(-0.25 * lf[c].abs(), 0.25 * lf[c].abs());
+            // (max / min, never `clamp`: its bounds must not cross or be NaN)
+            let cap = 0.25 * lf[c].abs();
+            let detail = lf[c] + (s[c] - ls[c]).max(-cap).min(cap);
             o[c] = (g * o[c] + (1.0 - g) * detail).max(0.0);
         }
     }
@@ -374,6 +423,70 @@ mod tests {
     }
 
     #[test]
+    fn a_box_of_two_pixels_is_an_error_or_a_result_never_a_panic() {
+        let src = photo();
+        let tiny = Region { rect: [0.25, 0.5, 0.25 + 2.0 / 600.0, 0.5 + 2.0 / 400.0], alpha: None };
+        let _ = make(&src, &Glare::default(), &tiny, None, &Arc::new(AtomicBool::new(false)));
+    }
+
+    #[test]
+    fn a_fill_with_nan_values_gives_finite_pixels_not_a_panic() {
+        let src = Rgb32f::filled(16, 16, [0.5, 0.4, 0.3]);
+        let mut fill = vec![0.2f32; 16 * 16 * 3];
+        fill[0] = f32::NAN;
+        fill[100] = f32::INFINITY;
+        let out = keep_texture(&src, &fill, &[1.0; 256]);
+        assert!(out.data.iter().all(|p| p.iter().all(|v| v.is_finite())));
+    }
+
+    #[test]
+    fn many_large_clusters_are_shrunk_to_fit_one_correction() {
+        let mut sizes = vec![(1536, 1536); 8];
+        budget(&mut sizes, MAX_PIXELS);
+        let total: usize = sizes.iter().map(|(w, h)| w * h).sum();
+        assert!(total <= MAX_PIXELS, "{total}");
+        assert!(sizes.iter().all(|(w, h)| *w > 500 && *h > 500), "{sizes:?}");
+        let mut small = vec![(100, 50)];
+        budget(&mut small, MAX_PIXELS);
+        assert_eq!(small, vec![(100, 50)]);
+    }
+
+    /// A fill that stops the run while it fills (✕ on a row).
+    struct Stopper(Arc<AtomicBool>);
+    impl LearnedFill for Stopper {
+        fn fill(&self, _run: &FillRun, rgb: &[f32], _hole: &[f32], _w: usize, _h: usize, _draft: bool) -> Option<Arc<Vec<f32>>> {
+            self.0.store(true, Ordering::Relaxed);
+            Some(Arc::new(rgb.to_vec()))
+        }
+    }
+
+    #[test]
+    fn a_run_stopped_during_the_fill_makes_nothing() {
+        let cancel = Arc::new(AtomicBool::new(false));
+        let stopper: Arc<dyn LearnedFill> = Arc::new(Stopper(cancel.clone()));
+        let e = make(&photo(), &Glare::default(), &Region::whole(), Some(stopper), &cancel).err();
+        assert_eq!(e.as_deref(), Some("Stopped"));
+    }
+
+    #[test]
+    fn painted_glare_fades_in_at_a_box_border() {
+        let dir = std::env::temp_dir().join(format!("lc-glare-feather-{}", std::process::id()));
+        let src = Rgb32f::filled(200, 200, [0.6, 0.6, 0.6]);
+        let region = Region { rect: [0.25, 0.25, 0.75, 0.75], alpha: None };
+        let stroke = lightcraft_develop::GlareStroke { erase: false, size: 0.4, points: vec![lightcraft_geom::Point::new(0.5, 0.5)] };
+        let glare = Glare { paint: vec![stroke], ..Default::default() };
+        let grey: Arc<dyn LearnedFill> = Arc::new(Grey(Default::default()));
+        let made = make(&src, &glare, &region, Some(grey), &Arc::new(AtomicBool::new(false))).unwrap();
+        let r = super::super::area::save_in(&dir, &made.tiles, Some(Hash128(9)), made.reflection).unwrap();
+        let out = super::super::apply(&Arc::new(src.clone()), &r, Some(Hash128(9)), None).unwrap();
+        let change = |x: usize, y: usize| src.get(x, y)[0] - out.get(x, y)[0];
+        assert!(change(100, 100) > 0.25, "the middle is filled");
+        assert!(change(50, 100) < 0.05 * change(100, 100), "the border fades in: {}", change(50, 100));
+        assert!(change(56, 100) > change(50, 100));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn clusters_far_apart_stay_apart_and_close_ones_merge() {
         let mut m = Plane::new(200, 100);
         for (x, y) in [(20, 50), (22, 50), (180, 50)] {
@@ -390,7 +503,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("lc-glare-make-{}", std::process::id()));
         let src = photo();
         let grey = Arc::new(Grey(Default::default()));
-        let made = make(&src, &Glare::default(), &Region::whole(), Some(grey.clone()), &AtomicBool::new(false)).unwrap();
+        let made = make(&src, &Glare::default(), &Region::whole(), Some(grey.clone()), &Arc::new(AtomicBool::new(false))).unwrap();
         assert_eq!(made.fill, SpotFill::Lama);
         assert_eq!(grey.0.load(Ordering::Relaxed), 2, "one fill per cluster");
         assert!(made.coverage > 0.0 && made.coverage < 0.05);
@@ -409,12 +522,12 @@ mod tests {
 
     #[test]
     fn without_the_learned_fill_the_classic_fill_is_used_and_no_glare_is_an_error() {
-        let made = make(&photo(), &Glare::default(), &Region::whole(), None, &AtomicBool::new(false)).unwrap();
+        let made = make(&photo(), &Glare::default(), &Region::whole(), None, &Arc::new(AtomicBool::new(false))).unwrap();
         assert_eq!(made.fill, SpotFill::Classic);
         let plain = Rgb32f::filled(100, 100, [0.3, 0.2, 0.14]);
-        let e = make(&plain, &Glare::default(), &Region::whole(), None, &AtomicBool::new(false)).err().unwrap();
+        let e = make(&plain, &Glare::default(), &Region::whole(), None, &Arc::new(AtomicBool::new(false))).err().unwrap();
         assert!(e.contains("No glare found"), "{e}");
-        let e = make(&photo(), &Glare::default(), &Region::whole(), None, &AtomicBool::new(true)).err().unwrap();
+        let e = make(&photo(), &Glare::default(), &Region::whole(), None, &Arc::new(AtomicBool::new(true))).err().unwrap();
         assert_eq!(e, "Stopped");
     }
 
@@ -424,7 +537,7 @@ mod tests {
         let src = photo();
         let left = Region { rect: [0.0, 0.0, 0.5, 1.0], alpha: None };
         let grey: Arc<dyn LearnedFill> = Arc::new(Grey(Default::default()));
-        let made = make(&src, &Glare::default(), &left, Some(grey), &AtomicBool::new(false)).unwrap();
+        let made = make(&src, &Glare::default(), &left, Some(grey), &Arc::new(AtomicBool::new(false))).unwrap();
         let r = super::super::area::save_in(&dir, &made.tiles, Some(Hash128(6)), made.reflection).unwrap();
         let out = super::super::apply(&Arc::new(src.clone()), &r, Some(Hash128(6)), None).unwrap();
         assert!(out.get(150, 200)[0] < 0.35);

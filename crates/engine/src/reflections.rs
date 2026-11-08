@@ -118,6 +118,10 @@ struct Correct<'a> {
 impl Correct<'_> {
     /// The correction of pixel `i` by `delta`.
     fn pixel(&self, pixel: &mut [f32; 3], delta: &[f32; 3], i: usize) {
+        // no change here (a tile's margin): the pixel stays exactly as it was, negative values included
+        if delta.iter().all(|d| *d == 0.0) {
+            return;
+        }
         let (r, w, h) = (self.r, self.width as f64, self.height as f64);
         let x = (i % self.width.max(1)) as f64 + 0.5;
         let y = (i / self.width.max(1)) as f64 + 0.5;
@@ -179,7 +183,8 @@ pub fn make(source: crate::media::SourceRef, key: Option<Hash128>, edge: u32, mo
     let matrix = lightcraft_color::REC2020.to_space(&lightcraft_color::SRGB);
     let bytes: Vec<u8> = small.data.iter().flat_map(|p| matrix.apply_f32(*p).map(lightcraft_color::transfer::encode_srgb8)).collect();
     let clean = net.infer(&bytes, small.width, small.height)?;
-    let root = crate::config::config_dir().ok_or("No local configuration directory")?.join("reflection-cache");
+    // Fork (fork/glare-highlights.md): the folder tests can replace
+    let root = area::cache_root()?;
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
     let path = root.join(format!("{}-{nonce}.lcr", std::process::id()));
@@ -339,6 +344,22 @@ mod tests {
         assert!(lightcraft_develop::controls::set(&mut d, "reflection.bottom", 0.0));
         assert!(d.reflection.top < d.reflection.bottom);
     }
+    #[test]
+    fn a_tile_with_no_change_leaves_its_pixels_exactly_as_they_were() {
+        // negative linear values (outside the gamut) under a tile's zero margin must not be clamped to 0
+        let dir = std::env::temp_dir().join(format!("lc-reflection-zero-{}", std::process::id()));
+        let mut grid = Rgb32f::filled(4, 4, [0.0; 3]);
+        grid.data[5] = [0.1, 0.1, 0.1];
+        let tile = tiles::Tile { rect: [0.0, 0.0, 1.0, 1.0], grid };
+        let key = Some(Hash128(4321));
+        let r = area::save_in(&dir, &[tile], key, Reflection { amount: 100.0, ..Default::default() }).unwrap();
+        let src = Arc::new(Rgb32f::filled(8, 8, [-0.05, 0.5, -0.01]));
+        let out = apply(&src, &r, key, None).unwrap();
+        assert_eq!(out.data[0], src.data[0]);
+        assert_eq!(out.data[63], src.data[63]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     #[test]
     fn corrupt_reflection_file_is_an_error_not_a_panic() {
         let path = std::env::temp_dir().join(format!("lc-reflection-corrupt-{}", std::process::id()));

@@ -45,10 +45,14 @@ pub struct GlarePanel {
     pub area: Option<ReflectionArea>,
     pub glare: Glare,
     pub tool: Option<Tool>,
-    /// The drag in progress: points as fractions of the source.
+    /// The drag in progress: points as fractions of the source (a stroke).
     pub drag: Vec<Point>,
-    /// A stroke came while a run was going: run again when it ends.
-    pub rerun: bool,
+    /// Where a box drag started, on the screen.
+    pub drag_from: Option<egui::Pos2>,
+    /// A stroke on this photo came while a run was going: run again when it ends, if the photo is still the one shown.
+    pub rerun: Option<PhotoId>,
+    /// The photo these choices belong to.
+    pub photo: Option<PhotoId>,
 }
 
 /// Take the panel's choices back from a photo's saved result.
@@ -56,10 +60,21 @@ pub fn load(app: &mut LightcraftApp, r: &Reflection) {
     let p = &mut app.reflection_glare;
     p.tool = None;
     p.drag.clear();
-    p.rerun = false;
+    p.drag_from = None;
     p.mode = r.mode;
     p.area = r.area.clone();
     p.glare = r.glare.clone().sanitized();
+}
+
+/// Make the panel's choices the photo `id`'s, when they belong to another photo (or none): a photo never runs with
+/// another photo's mode, box or strokes, whether the section was open when the photo changed or not.
+pub fn sync(app: &mut LightcraftApp, id: PhotoId) {
+    if app.reflection_glare.photo == Some(id) {
+        return;
+    }
+    let r = app.session.develop_of(id).map(|d| d.reflection.clone()).unwrap_or_default();
+    load(app, &r);
+    app.reflection_glare.photo = Some(id);
 }
 
 fn area_json(a: &Option<ReflectionArea>) -> Value {
@@ -94,6 +109,7 @@ fn parse_area(v: &Value, d: &DevelopSettings) -> Result<Option<ReflectionArea>, 
 
 /// Apply a command's `mode`, `area`, `threshold`, `expand` and `fill` to the panel.
 pub fn take_params(app: &mut LightcraftApp, id: PhotoId, p: &Value) -> Result<(), String> {
+    sync(app, id);
     if let Some(m) = p.get("mode") {
         let m = m.as_str().and_then(ReflectionMode::from_name).ok_or("mode is reflections or highlights")?;
         app.reflection_glare.mode = m;
@@ -128,6 +144,8 @@ pub fn command(app: &mut LightcraftApp, name: &str, p: &Value) -> Option<Result<
                 .then(|| Err("No photo selected".into()));
         }
     };
+    // every reflection command sees the shown photo's choices
+    sync(app, id);
     let result = match name {
         "reflection.mode" | "reflection.area" | "reflection.glare" => {
             let key = name.trim_start_matches("reflection.");
@@ -177,20 +195,39 @@ fn paint(app: &mut LightcraftApp, id: PhotoId, p: &Value) -> Result<Value, Strin
     app.reflection_glare.mode = ReflectionMode::Highlights;
     let running = app.tasks.is_running(crate::reflections::TASK);
     if running {
-        app.reflection_glare.rerun = true;
+        app.reflection_glare.rerun = Some(id);
     } else {
         crate::reflections::run(app, id, &json!({}))?;
     }
     Ok(json!({"strokes": app.reflection_glare.glare.paint.len(), "background": true}))
 }
 
-/// After a run: start the one a stroke asked for while it went.
+/// After a run: start the one a stroke asked for while it went, if its photo is still the one shown (its strokes stay
+/// in the panel either way).
 pub fn after_run(app: &mut LightcraftApp) {
-    if std::mem::take(&mut app.reflection_glare.rerun)
-        && let Some(id) = app.session.active()
+    if let Some(id) = app.reflection_glare.rerun.take()
+        && app.session.active() == Some(id)
         && let Err(e) = crate::reflections::run(app, id, &json!({}))
     {
         log::warn!("reflection rerun: {e}");
+    }
+}
+
+/// What a recalculation keeps of the photo's earlier result `old`: Amount, Protect Sky and Detail Protection when it
+/// is of the same kind, and Limit to Area only for a whole-photo result (an area is its own limit, and an old limit
+/// would keep part of the new area unchanged).
+pub fn keep_choices(old: &Reflection, made: &mut Reflection) {
+    if old.correction.is_empty() || old.mode != made.mode {
+        return;
+    }
+    made.amount = old.amount;
+    made.protect_sky = old.protect_sky;
+    made.detail_protection = old.detail_protection;
+    if made.area.is_none() {
+        made.limit_region = old.limit_region;
+        (made.left, made.top, made.right, made.bottom) = (old.left, old.top, old.right, old.bottom);
+    } else {
+        made.limit_region = false;
     }
 }
 
@@ -213,7 +250,8 @@ fn start_job(app: &mut LightcraftApp, id: PhotoId, edge: u32, model: String, pan
     use std::sync::atomic::AtomicBool;
     // the whole photo at its own size: an area keeps all its detail
     let job = app.session.render_job(id, 1 << 15, 1 << 15, false, false).ok_or("Photo cannot be loaded")?;
-    let learned = (panel.glare.fill == SpotFill::Lama && app.session.lama.installed()).then(lightcraft_pipeline::learned_fill::current).flatten();
+    let lama_installed = app.session.lama.installed();
+    let learned = (panel.glare.fill == SpotFill::Lama && lama_installed).then(lightcraft_pipeline::learned_fill::current).flatten();
     let generation = app.session.library_generation();
     let key = job.source_key;
     let identity = lightcraft_engine::reflections::identity(key);
@@ -237,14 +275,20 @@ fn start_job(app: &mut LightcraftApp, id: PhotoId, edge: u32, model: String, pan
             };
             if highlights {
                 let made = highlights::make(&src, &panel.glare, &region, learned, &flag)?;
-                let note = (panel.glare.fill == SpotFill::Lama && made.fill == SpotFill::Classic)
-                    .then(|| "LaMa is not installed: the Classic fill was used".to_string());
+                let note = (panel.glare.fill == SpotFill::Lama && made.fill == SpotFill::Classic).then(|| {
+                    if lama_installed { "LaMa could not fill: the Classic fill was used" } else { "LaMa is not installed: the Classic fill was used" }
+                        .to_string()
+                });
                 let mut r = made.reflection;
                 r.area = panel.area.clone();
+                // ✕ after the fill: nothing is saved
+                if flag.load(std::sync::atomic::Ordering::Relaxed) {
+                    return Err("Stopped".into());
+                }
                 Ok((area::save(&made.tiles, key, r)?, note))
             } else {
                 let a = panel.area.clone().unwrap_or_default();
-                Ok((area::make(&src, key, edge, &model, &region, a)?, None))
+                Ok((area::make(&src, key, edge, &model, &region, a, &flag)?, None))
             }
         },
         move |app, ctx, result| {
@@ -273,12 +317,7 @@ fn finish(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId, identity: &
             }
             let Some(d) = app.session.develop_of(id) else { return };
             let mut d = (*d).clone();
-            // a recalculation of the same kind keeps the chosen Amount
-            if !d.reflection.correction.is_empty() && d.reflection.mode == made.mode {
-                made.amount = d.reflection.amount;
-                made.limit_region = d.reflection.limit_region;
-                (made.left, made.top, made.right, made.bottom) = (d.reflection.left, d.reflection.top, d.reflection.right, d.reflection.bottom);
-            }
+            keep_choices(&d.reflection, &mut made);
             let label = if made.mode == ReflectionMode::Highlights { "Remove Glare" } else { "Remove Reflections" };
             d.reflection = made;
             match app.session.set_develop(id, d, label) {
@@ -439,6 +478,23 @@ pub fn highlights_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, busy: bool) {
 
 // ------------------------------------------------------------------------ on the photo
 
+/// The box (percent of the source) around `corners` (fractions of the source), kept on the photo; `None` when it has
+/// no inside.
+pub fn box_of(corners: [Point; 4]) -> Option<ReflectionArea> {
+    let pc = |v: f64| if v.is_finite() { (v * 100.0).clamp(0.0, 100.0) } else { 0.0 };
+    let (mut l, mut t, mut r, mut b) = (f64::MAX, f64::MAX, f64::MIN, f64::MIN);
+    for c in corners {
+        (l, t, r, b) = (l.min(pc(c.x)), t.min(pc(c.y)), r.max(pc(c.x)), b.max(pc(c.y)));
+    }
+    ReflectionArea::boxed(l, t, r, b)
+}
+
+/// The long edge, in screen points, of a photo whose corner `origin` and the ends of its two edges `x_end`, `y_end`
+/// are on the screen there.
+pub fn long_on_screen(origin: egui::Pos2, x_end: egui::Pos2, y_end: egui::Pos2) -> f32 {
+    origin.distance(x_end).max(origin.distance(y_end))
+}
+
 /// Source fractions of a point of the photo as shown (`map`'s coordinates on the photo as shot).
 fn to_source(map: &CanvasMap, d: &DevelopSettings, q: egui::Pos2) -> Point {
     let n = map.for_mask(true).norm(q);
@@ -457,6 +513,9 @@ pub fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
     if !app.reflection_open {
         return false;
     }
+    if let Some(id) = app.session.active() {
+        sync(app, id);
+    }
     let p = ui.painter_at(app.canvas_rect.unwrap_or(map.rect));
     let col = Color32::from_rgb(255, 196, 64);
     if let Some(a) = app.reflection_glare.area.as_ref().filter(|a| a.mask.is_none()) {
@@ -465,7 +524,9 @@ pub fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
         p.add(egui::Shape::closed_line(corners.to_vec(), Stroke::new(1.5, col)));
     }
     let Some(tool) = app.reflection_glare.tool else { return false };
-    let long = map.rect.width().max(map.rect.height());
+    // a stroke's size is a share of the whole photo's long edge, cropped or not: so is its circle
+    let m = map.for_mask(true);
+    let long = long_on_screen(m.screen(Point::new(0.0, 0.0)), m.screen(Point::new(1.0, 0.0)), m.screen(Point::new(0.0, 1.0)));
     let radius = app.ui.remove_size * long;
     if let Some(h) = resp.hover_pos() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
@@ -473,50 +534,57 @@ pub fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response
             p.circle_stroke(h, radius, Stroke::new(1.0, Color32::WHITE));
         }
     }
+    let press = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos());
     if resp.drag_started()
-        && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
+        && let Some(q) = press
     {
-        app.reflection_glare.drag = vec![to_source(map, d, q)];
+        if tool == Tool::Box {
+            app.reflection_glare.drag_from = Some(q);
+        } else {
+            app.reflection_glare.drag = vec![to_source(map, d, q)];
+        }
     }
     if resp.dragged()
         && let Some(q) = resp.interact_pointer_pos()
+        && tool != Tool::Box
         && !app.reflection_glare.drag.is_empty()
     {
         let n = to_source(map, d, q);
         let drag = &mut app.reflection_glare.drag;
-        if tool == Tool::Box {
-            drag.truncate(1);
-        }
         if drag.len() < lightcraft_develop::reflection_area::MAX_STROKE_POINTS {
             drag.push(n);
         }
     }
-    let drag = app.reflection_glare.drag.clone();
-    match tool {
-        Tool::Box => {
-            if let (Some(a), Some(b)) = (drag.first(), drag.last()) {
-                p.rect_stroke(
-                    egui::Rect::from_two_pos(to_screen(map, d, *a), to_screen(map, d, *b)),
-                    0.0,
-                    Stroke::new(1.0, Color32::WHITE),
-                    egui::StrokeKind::Middle,
-                );
-            }
+    // the box that will run: the source box around all four corners of the dragged rectangle (straightened or
+    // lens-corrected, they are not a box in the source), drawn while dragging exactly as it will be kept
+    let dragged_box = match (tool, app.reflection_glare.drag_from, resp.interact_pointer_pos()) {
+        (Tool::Box, Some(a), Some(b)) => {
+            let r = egui::Rect::from_two_pos(a, b);
+            box_of([r.left_top(), r.right_top(), r.right_bottom(), r.left_bottom()].map(|q| to_source(map, d, q)))
         }
-        _ => {
-            let pts: Vec<egui::Pos2> = drag.iter().map(|q| to_screen(map, d, *q)).collect();
-            p.add(egui::Shape::line(pts, Stroke::new(2.0 * radius, Color32::from_white_alpha(70))));
-        }
+        _ => None,
+    };
+    if let Some(a) = &dragged_box {
+        let (l, t, r, b) = a.fractions();
+        let corners = [Point::new(l, t), Point::new(r, t), Point::new(r, b), Point::new(l, b)].map(|c| to_screen(map, d, c));
+        p.add(egui::Shape::closed_line(corners.to_vec(), Stroke::new(1.0, Color32::WHITE)));
+    }
+    if tool != Tool::Box {
+        let pts: Vec<egui::Pos2> = app.reflection_glare.drag.iter().map(|q| to_screen(map, d, *q)).collect();
+        p.add(egui::Shape::line(pts, Stroke::new(2.0 * radius, Color32::from_white_alpha(70))));
     }
     if resp.drag_stopped() {
         let drag = std::mem::take(&mut app.reflection_glare.drag);
-        let result = match (tool, drag.first(), drag.last()) {
-            (Tool::Box, Some(a), Some(b)) => {
-                let pc = |v: f64| (v * 100.0).clamp(0.0, 100.0);
-                let area = json!({"left": pc(a.x.min(b.x)), "top": pc(a.y.min(b.y)), "right": pc(a.x.max(b.x)), "bottom": pc(a.y.max(b.y))});
-                app.run("reflection.area", json!({"area": area})).map(|_| app.reflection_glare.tool = None)
-            }
-            (Tool::Paint | Tool::Erase, Some(_), _) => {
+        app.reflection_glare.drag_from = None;
+        let result = match (tool, drag.first()) {
+            (Tool::Box, _) => match dragged_box {
+                Some(a) => {
+                    let area = json!({"left": a.left, "top": a.top, "right": a.right, "bottom": a.bottom});
+                    app.run("reflection.area", json!({"area": area})).map(|_| app.reflection_glare.tool = None)
+                }
+                None => Ok(()),
+            },
+            (Tool::Paint | Tool::Erase, Some(_)) => {
                 let size = app.ui.remove_size as f64 * 100.0;
                 let points: Vec<[f64; 2]> = drag.iter().map(|q| [q.x * 100.0, q.y * 100.0]).collect();
                 app.run("reflection.paint", json!({"points": points, "size": size, "erase": tool == Tool::Erase})).map(|_| ())
@@ -566,9 +634,32 @@ mod tests {
         assert_eq!(app.reflection_glare.tool, Some(Tool::Paint));
     }
 
+    /// Corrections of the runs these tests start go into one scratch folder of the test process, never the real
+    /// reflection cache (set once: tests run side by side).
+    fn scratch_cache() {
+        static SET: std::sync::Once = std::sync::Once::new();
+        SET.call_once(|| {
+            let dir = std::env::temp_dir().join(format!("lc-glare-ui-{}", std::process::id()));
+            lightcraft_engine::reflections::area::set_cache_root(Some(dir));
+        });
+    }
+
+    /// Run the app's finished tasks until the reflection run ends (a generous bound guards only against a hang).
+    fn join(app: &mut LightcraftApp) {
+        let ctx = egui::Context::default();
+        assert!(crate::tasks::wait_for(app, &ctx, crate::reflections::TASK, std::time::Duration::from_secs(120)));
+    }
+
+    fn other_photo(app: &LightcraftApp) -> PhotoId {
+        let active = app.session.active();
+        app.session.catalog.photos().map(|p| p.id).find(|id| Some(*id) != active).unwrap()
+    }
+
     #[test]
     fn a_painted_stroke_is_kept_and_starts_a_run() {
+        scratch_cache();
         let mut app = app();
+        let id = app.session.active().unwrap();
         let r = app.run("reflection.paint", json!({"points": [[50, 50], [52, 50]], "size": 2})).unwrap();
         assert_eq!(r["strokes"], 1);
         assert_eq!(app.reflection_glare.mode, ReflectionMode::Highlights);
@@ -577,12 +668,85 @@ mod tests {
         assert!(app.run("reflection.paint", json!({"points": []})).is_err());
         assert!(app.run("reflection.paint", json!({"points": [["a", 1]]})).is_err());
         assert!(app.tasks.is_running(crate::reflections::TASK));
-        // a second stroke while the first runs waits for it
+        // a second stroke while the first runs waits for it, for this photo
         app.run("reflection.paint", json!({"points": [[10, 10]], "erase": true})).unwrap();
         assert_eq!(app.reflection_glare.glare.paint.len(), 2);
-        assert!(app.reflection_glare.rerun);
+        assert_eq!(app.reflection_glare.rerun, Some(id));
+        join(&mut app);
+        // the waiting run started when the first ended
+        join(&mut app);
+        assert_eq!(app.reflection_glare.rerun, None);
         app.run("reflection.paint", json!({"clear": true})).unwrap();
+        join(&mut app);
         assert!(app.reflection_glare.glare.paint.is_empty());
+    }
+
+    #[test]
+    fn a_waiting_rerun_never_runs_on_another_photo() {
+        scratch_cache();
+        let mut app = app();
+        app.run("reflection.paint", json!({"points": [[50, 50]], "size": 2})).unwrap();
+        app.run("reflection.paint", json!({"points": [[20, 20]], "size": 2})).unwrap();
+        assert!(app.reflection_glare.rerun.is_some());
+        let b = other_photo(&app);
+        app.session.selection.active = Some(b);
+        join(&mut app);
+        assert!(!app.tasks.is_running(crate::reflections::TASK), "photo A's strokes started a run on photo B");
+        assert_eq!(app.reflection_glare.rerun, None);
+    }
+
+    #[test]
+    fn the_panel_follows_the_shown_photo_with_the_section_closed() {
+        let mut app = app();
+        app.reflection_open = false;
+        app.run("reflection.mode", json!({"mode": "highlights"})).unwrap();
+        app.run("reflection.area", json!({"area": {"left": 10, "top": 10, "right": 20, "bottom": 20}})).unwrap();
+        let b = other_photo(&app);
+        app.session.selection.active = Some(b);
+        let s = app.run("reflection.status", json!({})).unwrap()["panel"].clone();
+        assert_eq!(s["mode"], "reflections", "photo B took photo A's mode");
+        assert_eq!(s["area"], "whole");
+    }
+
+    #[test]
+    fn a_recalculation_keeps_protections_and_drops_an_old_limit_for_an_area() {
+        let old = Reflection {
+            correction: "x".into(),
+            amount: 40.0,
+            protect_sky: true,
+            detail_protection: 70.0,
+            limit_region: true,
+            left: 50.0,
+            ..Default::default()
+        };
+        let mut area = Reflection { amount: 100.0, area: ReflectionArea::boxed(0.0, 0.0, 30.0, 30.0), ..Default::default() };
+        keep_choices(&old, &mut area);
+        assert_eq!((area.amount, area.protect_sky, area.detail_protection, area.limit_region), (40.0, true, 70.0, false));
+        let mut whole = Reflection { amount: 100.0, ..Default::default() };
+        keep_choices(&old, &mut whole);
+        assert!(whole.limit_region && whole.left == 50.0 && whole.detail_protection == 70.0);
+        let mut glare = Reflection { mode: ReflectionMode::Highlights, amount: 100.0, ..Default::default() };
+        keep_choices(&old, &mut glare);
+        assert_eq!(glare.amount, 100.0, "another kind of result keeps its own defaults");
+    }
+
+    #[test]
+    fn a_dragged_box_is_the_box_around_all_its_corners() {
+        // a straightened view: the dragged rectangle is a turned quad on the source
+        let quad = [Point::new(0.30, 0.20), Point::new(0.62, 0.26), Point::new(0.56, 0.58), Point::new(0.24, 0.52)];
+        let a = box_of(quad).unwrap();
+        let near = |v: f64, want: f64| (v - want).abs() < 1e-9;
+        assert!(near(a.left, 24.0) && near(a.top, 20.0) && near(a.right, 62.0) && near(a.bottom, 58.0), "{a:?}");
+        assert!(box_of([Point::new(0.5, 0.5); 4]).is_none());
+        let off = box_of([Point::new(-0.2, 0.1), Point::new(1.3, 0.1), Point::new(1.3, 0.4), Point::new(-0.2, 0.4)]).unwrap();
+        assert_eq!((off.left, off.right), (0.0, 100.0));
+    }
+
+    #[test]
+    fn the_brush_circle_follows_the_whole_photo_not_the_crop() {
+        // a photo cropped to a quarter: shown at 400 points wide, the whole photo spans 1600
+        let o = egui::pos2(-600.0, -300.0);
+        assert_eq!(long_on_screen(o, egui::pos2(1000.0, -300.0), egui::pos2(-600.0, 900.0)), 1600.0);
     }
 
     #[test]

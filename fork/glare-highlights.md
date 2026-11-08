@@ -26,14 +26,19 @@ remove glare by design: a blown-out spot has nothing behind it to separate. High
   edge across) or too large (8 % of the photo, 35 % of a chosen area) go, as do spots no brighter than the ring around
   them (pieces of a white wall). **Threshold** (default 50) makes it stricter, **Expand** (default 30) grows the
   result before a feathered edge. Inside a chosen area the floor is lower, so a reflection on dark sunglasses counts.
-- **Paint Glare** / **Erase Glare** paint on the photo with the Remove brush's size: strokes add to or take from the
+- **Paint Glare** / **Erase Glare** paint on the photo with the Remove brush's size (a share of the whole photo's
+  long edge, so a crop does not change it; the circle on the photo shows it): strokes add to or take from the
   found glare, and each stroke finds and fills again. **Clear** drops them.
 - Filling (`highlights.rs`): the glare is grouped into clusters, each filled in a crop of up to 1536 px with **LaMa**
   (the Remove panel's model, read from `ArtCraft/models/lama`; its own activity row and cache), or **Classic** (the
   patch fill) when LaMa is missing or chosen. Under a veil of light the photo's own fine detail is kept (only the smooth
   part comes from the fill); where the photo is clipped the fill is used as it is.
 
-Both run on a worker thread with the "Reflection Removal" row in the activity stack (✕ stops). The result is a tiled
+Both run on a worker thread with the "Reflection Removal" row in the activity stack. ✕ stops the run, its LaMa fill
+included, and nothing is saved. The panel's choices (mode, area, strokes) belong to the photo shown: changing photos
+takes the new photo's back from its saved result, open section or not, and a stroke that waits for a run only runs if
+its photo is still shown. A box's border fades in for Highlights too. Glare clusters are filled at sizes that together
+fit one correction (12.6 MP). The result is a tiled
 correction (`LCREFL02`, `crates/engine/src/reflections/tiles.rs`): each tile is a box in fractions of the original
 photo and a grid of the change, so the preview, thumbnails and exports apply the same thing at any size, and the
 correction stays on the same content when the crop or rotation changes. Old whole-photo corrections (`LCREFL01`) read
@@ -60,7 +65,7 @@ encoder inside; personal use only in this fork.
 
 ## Branch
 
-`feat/74-glare-highlights`
+`feat/74-glare-highlights` (from `custom`)
 
 ## Own files
 
@@ -77,7 +82,10 @@ encoder inside; personal use only in this fork.
 - `crates/ui-egui/src/lib.rs` (module, `reflection_glare` field), `app.rs` (its start value), `reflections.rs` (the
   rows, the mode in `start` and `reflection.toggle`, the commands), `menus/run.rs`, `menus/ui_commands.rs` and
   `menus.rs` (five commands), `panels/detail.rs` (`geometry` is `pub(crate)`), `panels/detail/geometry.rs`
-  (`CanvasMap::rect` is `pub(crate)`), `panels/detail/retouch.rs` (one call at the start of `remove_overlay`).
+  (`CanvasMap::rect` is `pub(crate)`), and in `panels/detail.rs` the Remove arm of `tool_interaction` asks
+  `reflections_glare::overlay` first.
+- `crates/pipeline/src/learned_fill.rs` (`FillRun::with_stop`, so the run's ✕ stops LaMa too; a fork file from
+  `fork/lama-fill.md`).
 - `docs/ai-reflections.md` (the default Amount).
 
 ## Tests

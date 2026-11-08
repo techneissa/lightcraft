@@ -23,7 +23,7 @@ const MASK_EDGE: usize = 1024;
 /// Context around the area handed to the model, as a share of the area's longer side.
 pub const CONTEXT: f64 = 0.25;
 /// Width of a box's soft edge, as a share of its shorter side.
-const BOX_FEATHER: f64 = 0.08;
+pub const BOX_FEATHER: f64 = 0.08;
 /// Shortest side a model is given, pixels.
 const MIN_SIDE: usize = 64;
 
@@ -169,10 +169,25 @@ pub fn model_size(cw: usize, ch: usize, edge: usize) -> (usize, usize) {
     (((cw as f64 * s).round() as usize).max(1), ((ch as f64 * s).round() as usize).max(1))
 }
 
+/// A folder that replaces `<config>/reflection-cache` (tests: a run never writes into the real one).
+static CACHE_ROOT: std::sync::RwLock<Option<std::path::PathBuf>> = std::sync::RwLock::new(None);
+
+/// Save corrections into `dir` instead of `<config>/reflection-cache` (`None`: the usual folder again).
+pub fn set_cache_root(dir: Option<std::path::PathBuf>) {
+    *CACHE_ROOT.write().unwrap_or_else(std::sync::PoisonError::into_inner) = dir;
+}
+
+/// Where corrections are saved.
+pub fn cache_root() -> Result<std::path::PathBuf, String> {
+    if let Some(dir) = CACHE_ROOT.read().unwrap_or_else(std::sync::PoisonError::into_inner).clone() {
+        return Ok(dir);
+    }
+    Ok(crate::config::config_dir().ok_or("No local configuration directory")?.join("reflection-cache"))
+}
+
 /// Write `tiles` into a new file of the reflection cache and the settings that use it.
 pub fn save(tiles: &[Tile], key: Option<Hash128>, base: Reflection) -> Result<Reflection, String> {
-    let root = crate::config::config_dir().ok_or("No local configuration directory")?.join("reflection-cache");
-    save_in(&root, tiles, key, base)
+    save_in(&cache_root()?, tiles, key, base)
 }
 
 /// [`save`] into the folder `root`.
@@ -200,9 +215,25 @@ pub fn to_srgb8(img: &Rgb32f) -> Vec<u8> {
     img.data.iter().flat_map(|p| matrix.apply_f32(*p).map(lightcraft_color::transfer::encode_srgb8)).collect()
 }
 
-/// Run reflection `model` on `region` of `src` (the full source) at `edge`, and save the result.
-pub fn make(src: &Rgb32f, key: Option<Hash128>, edge: u32, model: &str, region: &Region, area: ReflectionArea) -> Result<Reflection, String> {
+/// Run reflection `model` on `region` of `src` (the full source) at `edge`, and save the result. A run whose `cancel`
+/// is set returns "Stopped" and saves nothing.
+pub fn make(
+    src: &Rgb32f,
+    key: Option<Hash128>,
+    edge: u32,
+    model: &str,
+    region: &Region,
+    area: ReflectionArea,
+    cancel: &std::sync::atomic::AtomicBool,
+) -> Result<Reflection, String> {
+    let stopped = || cancel.load(std::sync::atomic::Ordering::Relaxed);
+    if stopped() {
+        return Err("Stopped".into());
+    }
     let tile = run_model(src, edge, model, region)?;
+    if stopped() {
+        return Err("Stopped".into());
+    }
     let base = Reflection {
         amount: 100.0,
         quality: edge,
