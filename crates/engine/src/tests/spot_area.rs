@@ -139,7 +139,11 @@ fn clicks_make_and_change_one_object_spot() {
 fn without_the_model_clicks_ask_for_it_and_strokes_stay_brush_spots() {
     let mut s = session();
     let e = s.execute("spot.object", &json!({"x": 0.5, "y": 0.5})).unwrap_err();
+    // (a build without AI masks says so instead of asking for the model)
+    #[cfg(feature = "sam")]
     assert_eq!(e.kind(), ErrorKind::ModelMissing(crate::AiModel::Sam3), "{e}");
+    #[cfg(not(feature = "sam"))]
+    assert_eq!(e.kind(), ErrorKind::Other, "{e}");
     let r = s.execute("spot.objectStroke", &json!({"points": [[0.4, 0.5], [0.5, 0.5]], "size": 0.03, "fill": "classic"})).unwrap();
     assert_eq!(r["snapped"], false);
     let sp = &spots(&s)[0];
