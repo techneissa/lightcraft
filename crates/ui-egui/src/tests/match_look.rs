@@ -41,3 +41,20 @@ fn match_look_window_matches_the_selected_photo_to_a_library_photo() {
     h.app.session.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(*h.app.session.develop_of(target).unwrap(), before, "one undo step");
 }
+
+#[test]
+fn a_chosen_file_is_read_off_the_ui_thread_and_shows_when_ready() {
+    let mut app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    app.ui.settings.gpu = false;
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    let dir = std::env::temp_dir().join(format!("lightcraft-match-look-ui-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join("reference.png");
+    let img = lightcraft_raster::Rgba8::from_fn(320, 200, |x, y| [(x % 256) as u8, (y % 256) as u8, 120, 255]);
+    std::fs::write(&path, lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap()).unwrap();
+    let r = h.app.run("matchLook.chooseFile", json!({"path": path.to_string_lossy()}));
+    assert!(r.is_ok(), "{r:?}");
+    assert!(!h.app.ui.match_look.as_ref().unwrap().preview_ready(), "the command returns before the file is read");
+    assert!(h.step_until(SETTLE, |h| widget(h, "matchLook:reference").is_some()), "the preview shows once read");
+    let _ = std::fs::remove_dir_all(&dir);
+}

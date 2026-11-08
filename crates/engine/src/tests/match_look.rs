@@ -87,7 +87,7 @@ fn bad_references_are_errors_not_panics() {
 fn a_pasted_picture_is_a_reference() {
     let (mut s, ids) = demo();
     // a dark, warm picture
-    s.set_match_look_pasted(lightcraft_raster::Rgba8::from_fn(64, 48, |x, y| [(40 + x) as u8, (20 + y / 2) as u8, 10, 255]));
+    s.set_match_look_pasted(&lightcraft_raster::Rgba8::from_fn(64, 48, |x, y| [(40 + x) as u8, (20 + y / 2) as u8, 10, 255])).unwrap();
     assert!(s.match_look_has_pasted());
     let ex = s.develop_of(ids[0]).unwrap().light.exposure;
     let v = s.execute("develop.matchLook", &json!({"ids": [ids[0]], "reference": {"pasted": true}})).unwrap();
@@ -104,4 +104,37 @@ fn amount_zero_changes_nothing_and_adds_no_undo_step() {
     s.execute("develop.matchLook", &json!({"ids": [ids[0]], "reference": {"photo": ids[1]}, "amount": 0})).unwrap();
     assert_eq!(serde_json::to_string(&*s.develop_of(ids[0]).unwrap()).unwrap(), serde_json::to_string(&before).unwrap());
     assert_eq!(s.undo.len(), steps, "no undo step");
+}
+
+#[test]
+fn a_background_match_decodes_nothing_on_the_calling_thread_and_cancels_at_once() {
+    let (mut s, ids) = demo();
+    let (target, reference) = (ids[0], ids[1]);
+    s.media.clear_sources();
+    let v = s.execute("develop.matchLook", &json!({"ids": [target], "reference": {"photo": reference}, "wait": false})).unwrap();
+    assert_eq!(v["started"], true);
+    use crate::media::SourceLevel;
+    assert!(!s.media.has_source(target, SourceLevel::Thumb) && !s.media.has_source(reference, SourceLevel::Thumb), "decoded on the worker");
+    let row = s.activity.list().into_iter().find(|t| t.kind == "look").expect("its row");
+    s.activity.cancel(row.id).unwrap();
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let last: Value = loop {
+        let p = s.execute("develop.matchLookPump", &json!({})).unwrap();
+        if p["active"] == false {
+            break p["last"].clone();
+        }
+        assert!(Instant::now() < deadline, "the match never stopped");
+        std::thread::sleep(Duration::from_millis(20));
+    };
+    assert_eq!(last["cancelled"], true, "{last}");
+}
+
+#[test]
+fn a_large_pasted_picture_is_kept_small() {
+    let (mut s, _) = demo();
+    let big = lightcraft_raster::Rgba8::from_fn(3000, 2000, |x, y| [(x % 256) as u8, (y % 256) as u8, 90, 255]);
+    let kept = s.set_match_look_pasted(&big).unwrap();
+    assert_eq!((kept.width, kept.height), (1024, 683));
+    let held = s.match_look.pasted.clone().unwrap();
+    assert_eq!((held.width, held.height), (1024, 683), "stored small, not at 3000×2000");
 }

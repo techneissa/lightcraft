@@ -15,9 +15,11 @@ use crate::LookError;
 /// The largest reference file or download read, bytes.
 pub const MAX_BYTES: u64 = 64 << 20;
 /// The largest reference image decoded, pixels.
-const MAX_PIXELS: u64 = 250_000_000;
+pub const MAX_PIXELS: u64 = 250_000_000;
 /// The long edge a reference is decoded at (the fitter measures it smaller still).
 pub const DECODE_EDGE: u32 = 1024;
+/// [`DECODE_EDGE`] as a size.
+pub const EDGE: usize = DECODE_EDGE as usize;
 
 /// Where a reference picture comes from.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,6 +40,33 @@ pub fn decode(bytes: &[u8]) -> Result<Rgba8, LookError> {
     }
     let img = d.to_srgb8();
     Ok(img.into_oriented(lightcraft_geom::Orientation::from_exif(d.orientation)))
+}
+
+/// Refuse a picture past [`MAX_PIXELS`] (before its pixels are touched).
+pub fn check_pixels(width: usize, height: usize) -> Result<(), LookError> {
+    match (width as u64).checked_mul(height as u64) {
+        Some(n) if n <= MAX_PIXELS => Ok(()),
+        _ => Err(LookError::TooLarge(format!("the picture is {width}×{height}; a reference may have at most {} megapixels", MAX_PIXELS / 1_000_000))),
+    }
+}
+
+/// `img` with its long edge at most `edge` (an average of the pixels each one covers, in linear light), refused
+/// past [`MAX_PIXELS`]: a pasted picture is made small before it is kept or measured.
+pub fn fit_edge(img: &Rgba8, edge: usize) -> Result<Rgba8, LookError> {
+    check_pixels(img.width, img.height)?;
+    if img.width == 0 || img.height == 0 || img.data.len() != img.width.saturating_mul(img.height) {
+        return Err(LookError::Invalid("the picture is empty".into()));
+    }
+    let long = img.width.max(img.height);
+    if long <= edge.max(1) {
+        return Ok(img.clone());
+    }
+    let k = edge.max(1) as f64 / long as f64;
+    let (w, h) = (((img.width as f64 * k).round() as usize).max(1), ((img.height as f64 * k).round() as usize).max(1));
+    use lightcraft_color::transfer::{decode_srgb8, encode_srgb8};
+    let lin = img.map(|p| [decode_srgb8(p[0]), decode_srgb8(p[1]), decode_srgb8(p[2])]);
+    let small = lightcraft_raster::resample::resize(&lin, w, h, lightcraft_raster::resample::Filter::Box);
+    Ok(small.map(|p| [encode_srgb8(p[0]), encode_srgb8(p[1]), encode_srgb8(p[2]), 255]))
 }
 
 /// Read a file of at most [`MAX_BYTES`].

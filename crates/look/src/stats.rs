@@ -15,6 +15,8 @@ const BINS: usize = 1024;
 /// colour of the walls, white clothes and greys (white balance), not of a big coloured object (that is for Vibrance,
 /// Saturation and the mixer); a picture with no neutrals at all still has a cast, its colourful pixels' mean.
 const NEUTRAL_FLOOR: f32 = 0.02;
+/// About how many pixels [`measure`] reads.
+const MEASURE_PIXELS: usize = 1 << 20;
 /// OkLab chroma past which a pixel counts as colourful for the cast. Wide enough that walls under a strong white
 /// balance (a warm 9500 K) still count, narrow enough that a saturated shirt does not.
 const NEUTRAL_CHROMA: f32 = 0.16;
@@ -162,9 +164,11 @@ pub fn measure(img: &Rgba8, mask: Option<&Plane>) -> Stats {
     // first pass: lightness, the casts and the hue bands; the colourfulness is measured in a second pass, around each
     // zone's own cast, so a cast is matched by white balance and grading and never by draining the colour
     let mut px: Vec<([f32; 3], f32)> = Vec::with_capacity(w.saturating_mul(h).min(1 << 24));
-    for y in 0..h {
+    // a large picture is measured on a grid of about a megapixel (the statistics don't need more)
+    let step = ((w.saturating_mul(h) as f64 / MEASURE_PIXELS as f64).sqrt().ceil() as usize).max(1);
+    for y in (0..h).step_by(step) {
         let Some(row) = img.data.get(y * w..(y + 1) * w) else { break };
-        for (x, &p) in row.iter().enumerate() {
+        for (x, &p) in row.iter().enumerate().step_by(step) {
             let wt = mask_at(mask, x, y, w, h);
             if wt <= 0.0 {
                 continue;

@@ -55,12 +55,22 @@ pub struct State {
     preview: Option<(Reference, egui::TextureHandle, [usize; 2])>,
     /// A picture to turn into the preview texture on the next draw.
     pending_preview: Option<(Reference, Rgba8)>,
+    /// A file's preview being read on a worker thread: it fills the slot when done.
+    loading: Option<(Reference, PreviewSlot)>,
 }
+
+/// Where a background preview read leaves its picture (`None` inside while it runs or when the file can't be read).
+type PreviewSlot = std::sync::Arc<std::sync::Mutex<Option<Option<Rgba8>>>>;
 
 impl State {
     /// A match started from the window is still running.
     pub fn running(&self) -> bool {
         self.running
+    }
+
+    /// The reference's small picture is ready to show (a file's is read in the background).
+    pub fn preview_ready(&self) -> bool {
+        self.pending_preview.is_some() || self.preview.is_some()
     }
 }
 
@@ -74,24 +84,50 @@ fn state(app: &mut LightcraftApp) -> &mut State {
     app.ui.match_look.get_or_insert_with(|| State { amount: 100.0, ..State::default() })
 }
 
-/// A file reference's small preview (decoded on the spot: at most a 64 MB file, decoded small).
-fn file_preview(path: &str) -> Option<Rgba8> {
-    let bytes = lightcraft_look::reference::read_file(std::path::Path::new(path)).ok()?;
-    lightcraft_look::reference::decode(&bytes).ok()
+/// A file reference's small preview, read and decoded on a worker thread (the UI never waits for a file).
+fn file_preview(path: &str) -> PreviewSlot {
+    let slot: PreviewSlot = Default::default();
+    let (out, path) = (slot.clone(), path.to_string());
+    let spawned = std::thread::Builder::new().name("match-look-preview".into()).spawn(move || {
+        let read = || {
+            let bytes = lightcraft_look::reference::read_file(std::path::Path::new(&path)).ok()?;
+            lightcraft_look::reference::decode(&bytes).ok()
+        };
+        // a decoder bug in one file is that file's problem: no preview, never a crash
+        let pic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(read)).ok().flatten();
+        *out.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(pic);
+    });
+    if spawned.is_err() {
+        *slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(None);
+    }
+    slot
 }
 
 fn set_reference(app: &mut LightcraftApp, r: Reference) {
-    let pic = match &r {
-        Reference::File(p) => file_preview(p),
+    let loading = match &r {
+        Reference::File(p) => Some((r.clone(), file_preview(p))),
         _ => None,
     };
     let s = state(app);
     s.open = true;
     s.message = None;
-    if let Some(pic) = pic {
-        s.pending_preview = Some((r.clone(), pic));
-    }
+    s.loading = loading;
     s.reference = Some(r);
+}
+
+/// A finished background preview becomes the preview texture's picture.
+fn take_loaded(s: &mut State, ctx: &egui::Context) {
+    let Some((r, slot)) = s.loading.as_ref() else { return };
+    let done = slot.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+    match done {
+        None => ctx.request_repaint_after(std::time::Duration::from_millis(100)),
+        Some(pic) => {
+            if let Some(pic) = pic {
+                s.pending_preview = Some((r.clone(), pic));
+            }
+            s.loading = None;
+        }
+    }
 }
 
 /// The UI commands of Match Look; `None` for any other id.
@@ -217,12 +253,20 @@ fn take_paste(app: &mut LightcraftApp, ctx: &egui::Context) {
     });
     let Some(img) = pasted else { return };
     let [w, h] = img.size;
+    if let Err(e) = lightcraft_look::reference::check_pixels(w, h) {
+        state(app).message = Some(e.to_string());
+        return;
+    }
     let Some(rgba) = Rgba8::from_pixels(w, h, img.pixels.iter().map(|c| c.to_srgba_unmultiplied())) else { return };
-    app.session.set_match_look_pasted(rgba.clone());
-    let s = state(app);
-    s.pending_preview = Some((Reference::Pasted, rgba));
-    s.reference = Some(Reference::Pasted);
-    s.message = None;
+    match app.session.set_match_look_pasted(&rgba) {
+        Ok(small) => {
+            let s = state(app);
+            s.pending_preview = Some((Reference::Pasted, (*small).clone()));
+            s.reference = Some(Reference::Pasted);
+            s.message = None;
+        }
+        Err(e) => state(app).message = Some(e),
+    }
 }
 
 fn preview_texture(ctx: &egui::Context, s: &mut State) {
@@ -316,6 +360,7 @@ pub fn show(app: &mut LightcraftApp, ctx: &egui::Context) {
     }
     take_paste(app, ctx);
     if let Some(s) = app.ui.match_look.as_mut() {
+        take_loaded(s, ctx);
         preview_texture(ctx, s);
     }
     let t = Tokens::get(ctx);

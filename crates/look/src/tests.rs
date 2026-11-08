@@ -301,3 +301,16 @@ fn white_balance_follows_the_neutrals_not_a_big_coloured_object() {
     let r = fit(&grey_photo(), &DevelopSettings::default(), &reference);
     assert!(value(&r, "wb.temp") < 6500.0, "cooler like the reference's wall, not warmer like its shirt: {}", value(&r, "wb.temp"));
 }
+
+#[test]
+fn pictures_past_the_pixel_cap_are_refused_and_large_ones_made_small() {
+    assert!(matches!(reference::check_pixels(20_000, 20_000), Err(LookError::TooLarge(_))));
+    assert!(matches!(reference::check_pixels(usize::MAX, 2), Err(LookError::TooLarge(_))));
+    assert!(reference::check_pixels(8000, 6000).is_ok());
+    let big = Rgba8::from_fn(3000, 1000, |x, _| [(x % 256) as u8, 128, 64, 255]);
+    let small = reference::fit_edge(&big, reference::EDGE).unwrap();
+    assert_eq!((small.width, small.height), (1024, 341));
+    // a picture already small is kept as it is
+    let little = Rgba8::from_fn(300, 200, |x, _| [x as u8, 0, 0, 255]);
+    assert_eq!(reference::fit_edge(&little, reference::EDGE).unwrap().data, little.data);
+}

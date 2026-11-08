@@ -20,7 +20,7 @@ use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, cmd};
 use crate::activity::{Cancel, TaskGuard};
-use crate::media::SourceLevel;
+use crate::media::{SourceLevel, SourceRef};
 use crate::{Result, Session};
 
 const CMD: &str = "develop.matchLook";
@@ -33,7 +33,7 @@ const REFERENCE_EDGE: usize = 512;
 /// Match Look's state on the session: a pasted reference waiting to be used, the job in flight and the last result.
 #[derive(Default)]
 pub struct MatchLook {
-    pasted: Option<Arc<Rgba8>>,
+    pub(crate) pasted: Option<Arc<Rgba8>>,
     job: Option<Job>,
     last: Option<Value>,
 }
@@ -54,8 +54,7 @@ struct Done {
 enum RefInput {
     /// A library photo: rendered with its own settings on the worker.
     Photo {
-        src: Arc<Rgb32f>,
-        info: Box<SourceInfo>,
+        src: Box<Pending>,
         settings: Arc<DevelopSettings>,
     },
     Picture(Arc<Rgba8>),
@@ -64,16 +63,41 @@ enum RefInput {
 
 struct TargetInput {
     id: PhotoId,
-    src: Arc<Rgb32f>,
-    info: SourceInfo,
+    src: Pending,
     settings: Arc<DevelopSettings>,
+}
+
+/// A photo's source, still to be decoded (on the worker: the UI thread never waits for a decode).
+struct Pending {
+    source: SourceRef,
+    /// The facts the catalog knows (a decode adds its own).
+    header: SourceInfo,
+    /// The facts the session holds now, used when the decode brings none.
+    known: SourceInfo,
+}
+
+impl Pending {
+    fn of(s: &mut Session, id: PhotoId) -> Option<Pending> {
+        let photo = s.catalog.photo(id)?.clone();
+        let source = s.media.source_ref(&photo, SourceLevel::Thumb);
+        Some(Pending { source, header: crate::media::source_info(&photo), known: s.source_info(id) })
+    }
+
+    fn load(self) -> std::result::Result<(Arc<Rgb32f>, SourceInfo), String> {
+        let d = self.source.load_source()?;
+        let info = if d.info.is_some() { d.info_or(self.header) } else { self.known };
+        Ok((d.image, info))
+    }
 }
 
 impl Session {
     /// Hold a pasted picture as the next Match Look reference (`reference: {pasted: true}`); the app calls this when the
-    /// user pastes an image in the Match Look dialog.
-    pub fn set_match_look_pasted(&mut self, img: Rgba8) {
-        self.match_look.pasted = (img.width > 0 && img.height > 0).then(|| Arc::new(img));
+    /// user pastes an image in the Match Look dialog. It is kept small (at most [`reference::EDGE`] on its long side)
+    /// and refused past [`reference::MAX_PIXELS`]; the picture kept is returned (the window shows it).
+    pub fn set_match_look_pasted(&mut self, img: &Rgba8) -> std::result::Result<Arc<Rgba8>, String> {
+        let small = Arc::new(reference::fit_edge(img, reference::EDGE).map_err(|e| e.to_string())?);
+        self.match_look.pasted = Some(small.clone());
+        Ok(small)
     }
 
     /// Whether a pasted picture is held for Match Look.
@@ -97,8 +121,8 @@ fn reference_input(s: &mut Session, p: &Value) -> Result<RefInput> {
     if let Some(id) = r.get("photo") {
         let id = id.as_u64().map(PhotoId).ok_or_else(|| bad(CMD, "`reference.photo` must be a photo id"))?;
         let settings = s.develop_of(id).ok_or_else(|| bad(CMD, format!("no photo {}", id.0)))?;
-        let src = s.source_now(id, SourceLevel::Thumb).map_err(|e| bad(CMD, format!("the reference photo could not be read: {e}")))?;
-        return Ok(RefInput::Photo { src, info: Box::new(s.source_info(id)), settings });
+        let src = Pending::of(s, id).ok_or_else(|| bad(CMD, format!("no photo {}", id.0)))?;
+        return Ok(RefInput::Photo { src: Box::new(src), settings });
     }
     if let Some(path) = r.get("path").and_then(Value::as_str) {
         return Ok(RefInput::Load(Source::File(path.into())));
@@ -116,7 +140,10 @@ fn reference_input(s: &mut Session, p: &Value) -> Result<RefInput> {
 
 fn load_reference(r: RefInput, cancel: &AtomicBool) -> std::result::Result<Arc<Rgba8>, LookError> {
     match r {
-        RefInput::Photo { src, info, settings } => Ok(Arc::new(lightcraft_look::render_reference(&src, &info, &settings, REFERENCE_EDGE))),
+        RefInput::Photo { src, settings } => {
+            let (src, info) = src.load().map_err(|e| LookError::Decode(format!("the reference photo could not be read: {e}")))?;
+            Ok(Arc::new(lightcraft_look::render_reference(&src, &info, &settings, REFERENCE_EDGE)))
+        }
         RefInput::Picture(img) => Ok(img),
         RefInput::Load(src) => {
             let cache = crate::config::cache_dir().map(|c| c.join("match-look"));
@@ -148,7 +175,14 @@ fn work(reference: RefInput, targets: Vec<TargetInput>, opts: MatchOptions, canc
             break;
         }
         guard.progress(i as u64, total);
-        let target = Target { src: &t.src, info: &t.info, settings: &t.settings };
+        let (src, info) = match crate::guard::catch("reading a photo for Match Look", || t.src.load()) {
+            Ok(Ok(loaded)) => loaded,
+            Ok(Err(e)) | Err(e) => {
+                results.push((t.id, Err(e)));
+                continue;
+            }
+        };
+        let target = Target { src: &src, info: &info, settings: &t.settings };
         let r = crate::guard::catch("matching a look", || {
             lightcraft_look::match_look(&target, &refimg, &[RegionPair::whole()], &opts, cancel, &|_, _| {})
         });
@@ -222,13 +256,10 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     let reference = reference_input(s, p)?;
     let mut targets = Vec::new();
     let mut unreadable = Vec::new();
-    for chunk in ids.chunks(8) {
-        for (id, r) in s.sources_now(chunk, SourceLevel::Thumb) {
-            match (r, s.develop_of(id)) {
-                (Ok((src, info)), Some(settings)) => targets.push(TargetInput { id, src, info, settings }),
-                (Err(e), _) => unreadable.push((id, Err(e))),
-                (_, None) => unreadable.push((id, Err("no such photo".to_string()))),
-            }
+    for &id in &ids {
+        match (Pending::of(s, id), s.develop_of(id)) {
+            (Some(src), Some(settings)) => targets.push(TargetInput { id, src, settings }),
+            _ => unreadable.push((id, Err("no such photo".to_string()))),
         }
     }
     let opts = options(p);
