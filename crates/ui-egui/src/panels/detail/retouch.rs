@@ -4,6 +4,9 @@ use super::{Color32, DevelopSettings, Gesture, LightcraftApp, Point, Pos2, Rect,
 
 // ------------------------------------------------------------------------ remove
 
+/// Screen points a painted spot's pointer must move before the stroke takes another point.
+pub(crate) const SPOT_POINT_SPACING: f32 = 1.0;
+
 /// The Remove tool on the photo: every spot's outline and pin (the selected one with its source),
 /// click a pin to select its spot, drag a target or source to move it, paint elsewhere to add one.
 /// A spot's own circle setting, else the Tool Overlay mode (Shift+H), says whether its circle shows; a spot whose
@@ -30,8 +33,11 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
         }
         let p = if painting && own == ToolOverlay::Auto { &quiet } else { &p };
         let col = Color32::from_white_alpha(if sel { 230 } else { 150 });
-        for q in &s.points {
-            p.circle_stroke(map.screen(*q), r, Stroke::new(if sel { 1.5 } else { 1.0 }, col));
+        // (a spot in an object's shape shows its outline, `object_remove`)
+        if !super::object_remove::outline(ui.ctx(), p, map, s, sel) {
+            for q in &s.points {
+                p.circle_stroke(map.screen(*q), r, Stroke::new(if sel { 1.5 } else { 1.0 }, col));
+            }
         }
         let Some(&t) = s.points.first() else { continue };
         let tq = map.screen(t);
@@ -121,7 +127,13 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
     {
         let n = map.norm(q);
         match &mut app.gesture {
-            Some(Gesture::Spot { points }) => points.push(n),
+            // (a press held still adds no point: a long press made a spot of hundreds of the same point, and every
+            // pixel of its box is measured against each of them)
+            Some(Gesture::Spot { points }) => {
+                if points.last().is_none_or(|l| map.screen(*l).distance(q) >= SPOT_POINT_SPACING) {
+                    points.push(n);
+                }
+            }
             _ => app.gesture = Some(Gesture::Spot { points: vec![n] }),
         }
     }
@@ -136,6 +148,10 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
     if (resp.drag_stopped() || resp.clicked())
         && let Some(Gesture::Spot { points }) = app.gesture.take()
     {
+        // Object mode: the object under the click or stroke (`object_remove`)
+        if super::object_remove::commit(app, ui.ctx(), &points, resp.clicked()) {
+            return;
+        }
         let mode = match app.ui.tool.as_str() {
             "heal" => "heal",
             "clone" => "clone",

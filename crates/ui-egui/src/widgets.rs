@@ -427,7 +427,9 @@ fn widest_value_width(ui: &Ui, spec: &ControlSpec, font: &egui::FontId) -> f32 {
 /// The widest width (points) of a column among the sliders of the enclosing `Ui` this frame or the last, so the
 /// rows' columns line up.
 fn shared_column_width(ui: &Ui, name: &str, own: f32) -> f32 {
-    let key = ui.scope_id().with(name);
+    // (the rows of a repeated list are scopes of their own, but share the list's columns)
+    let scope = repeated_row(ui).map_or_else(|| ui.scope_id(), |(_, outer)| outer);
+    let key = scope.with(name);
     let frame = ui.ctx().cumulative_pass_nr();
     let (f, prev, cur): (u64, f32, f32) = ui.data(|d| d.get_temp(key)).unwrap_or((frame, 0.0, 0.0));
     let (prev, cur) = if f == frame { (prev, cur) } else { (cur, 0.0) };
@@ -534,6 +536,36 @@ fn update_wheel_arming(ui: &mut Ui, id: egui::Id, resp: &egui::Response, row: Re
 /// The radius of a slider's hollow ring thumb.
 const THUMB_RING: f32 = 7.0;
 
+/// Where a list repeats the same sliders (every submask of a mask has an Edge slider): the row's number.
+fn repeated_row_key() -> egui::Id {
+    egui::Id::unique("lightcraft-repeated-slider-row")
+}
+
+/// The row's number, and the scope of the list, while [`in_repeated_row`] runs.
+fn repeated_row(ui: &Ui) -> Option<(usize, egui::Id)> {
+    ui.data(|d| d.get_temp(repeated_row_key()))
+}
+
+/// Runs `add` as row `row` of a list that repeats the same sliders. A slider's widget id comes from the enclosing
+/// scope, so the rows get their own scope (else every row's Edge slider is one widget: they move together and only
+/// the last can be grabbed, issue #68). Each slider is named `slider:<id>:<row>` for the control channel, and the
+/// first row's also `slider:<id>`. The rows still share the list's label and value column widths.
+pub fn in_repeated_row<R>(ui: &mut Ui, row: usize, add: impl FnOnce(&mut Ui) -> R) -> R {
+    let outer = repeated_row(ui);
+    let scope = outer.map_or_else(|| ui.scope_id(), |(_, scope)| scope);
+    ui.data_mut(|d| d.insert_temp(repeated_row_key(), (row, scope)));
+    let out = ui.push_id(("repeated-slider-row", row), add).inner;
+    ui.data_mut(|d| match outer {
+        Some(o) => {
+            d.insert_temp(repeated_row_key(), o);
+        }
+        None => {
+            d.remove::<(usize, egui::Id)>(repeated_row_key());
+        }
+    });
+    out
+}
+
 /// A Lightroom slider row (label + value above a track with a hollow ring thumb).
 /// Double-click the label or thumb to reset (hovering either says so). Shift-drag = fine adjustment.
 /// Scroll sideways over it to nudge it. Click the value to type one: Return or clicking away applies it,
@@ -579,14 +611,27 @@ pub fn slider(ui: &mut Ui, spec: &ControlSpec, value: f64, enabled: bool, label_
     let reset_hint = crate::i18n::tr_format!("{name} — double-click to reset it", name = label_text);
     let label_resp = if enabled { label_resp.on_hover_text(reset_hint.as_str()) } else { label_resp };
     crate::widgets::announce(&label_resp, crate::i18n::tr_format!("Reset {name}", name = label_text.clone()));
-    register(ui, format!("sliderLabel:{}", spec.id), label_rect);
-    register(ui, format!("slider:{}", spec.id), track_rect);
+    // (in a repeated list the bare names mean the first row)
+    let row = repeated_row(ui).map(|(row, _)| row);
+    let bare = row.is_none_or(|row| row == 0);
+    if bare {
+        register(ui, format!("sliderLabel:{}", spec.id), label_rect);
+        register(ui, format!("slider:{}", spec.id), track_rect);
+    }
+    if let Some(row) = row {
+        register(ui, format!("slider:{}:{row}", spec.id), track_rect);
+    }
     // the value: click it to type an exact one, drag it sideways to scrub (over the label, so it
     // takes the click)
     let value_resp = ui.interact(value_rect, id.with("value"), if enabled { Sense::click_and_drag() } else { Sense::hover() });
     // the name is short ("Exposure value"); how to use it is the description the hover text below gives
     crate::widgets::announce(&value_resp, crate::i18n::tr_format!("{name} value", name = label_text.clone()));
-    register(ui, format!("sliderValue:{}", spec.id), value_rect);
+    if bare {
+        register(ui, format!("sliderValue:{}", spec.id), value_rect);
+    }
+    if let Some(row) = row {
+        register(ui, format!("sliderValue:{}:{row}", spec.id), value_rect);
+    }
     // say that an exact value can be typed here (issue #534: an exact crop angle was hard to find)
     let value_resp = if enabled { value_resp.on_hover_text(crate::i18n::tr("Click to type a value, drag to change it")) } else { value_resp };
     // Keep the short focus-acquisition guard, but let an explicit Return/Escape end the edit.

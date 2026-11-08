@@ -49,7 +49,7 @@ pub enum Patch {
 
 /// The patch that turns `old` into `new`.
 pub fn diff(old: &Value, new: &Value) -> Patch {
-    if old == new {
+    if same(old, new) {
         return Patch::Same;
     }
     match (old, new) {
@@ -72,9 +72,9 @@ pub fn diff(old: &Value, new: &Value) -> Patch {
             Patch::Obj { s, d }
         }
         (Value::Array(o), Value::Array(n)) => {
-            let h = o.iter().zip(n).take_while(|(a, b)| a == b).count();
+            let h = o.iter().zip(n).take_while(|(a, b)| same(a, b)).count();
             let room = o.len().min(n.len()) - h;
-            let t = o.iter().rev().zip(n.iter().rev()).take(room).take_while(|(a, b)| a == b).count();
+            let t = o.iter().rev().zip(n.iter().rev()).take(room).take_while(|(a, b)| same(a, b)).count();
             let (om, nm) = (&o[h..o.len() - t], &n[h..n.len() - t]);
             if om.len() == nm.len() {
                 Patch::Arr { n: o.len(), h, t, e: om.iter().zip(nm).map(|(a, b)| diff(a, b)).collect(), v: Vec::new() }
@@ -83,6 +83,20 @@ pub fn diff(old: &Value, new: &Value) -> Patch {
             }
         }
         _ => Patch::Set(new.clone()),
+    }
+}
+
+/// Whether `a` and `b` are written the same: `==` on JSON values takes `-0.0` for `0.0`, and a
+/// patch must keep the sign a setting was saved with.
+fn same(a: &Value, b: &Value) -> bool {
+    match (a, b) {
+        (Value::Number(x), Value::Number(y)) => match (x.as_f64(), y.as_f64()) {
+            (Some(p), Some(q)) if x.is_f64() || y.is_f64() => p.to_bits() == q.to_bits() && x.is_f64() == y.is_f64(),
+            _ => x == y,
+        },
+        (Value::Array(x), Value::Array(y)) => x.len() == y.len() && x.iter().zip(y).all(|(p, q)| same(p, q)),
+        (Value::Object(x), Value::Object(y)) => x.len() == y.len() && x.iter().all(|(k, v)| y.get(k).is_some_and(|w| same(v, w))),
+        _ => a == b,
     }
 }
 
@@ -170,6 +184,18 @@ mod tests {
         round(json!([{"x": [1]}, {"x": [2]}]), json!([{"x": [1]}, {"x": [2, 3]}]));
         round(json!({"a": [1]}), json!(7));
         round(json!(null), json!({"a": 1}));
+        // the sign of zero is kept (`==` on values takes them for one)
+        let p = round(json!({"c": 0.0}), json!({"c": -0.0}));
+        assert_ne!(p, Patch::Same);
+        assert_eq!(
+            serde_json::to_string(&{
+                let mut v = json!({"c": 0.0});
+                apply(&mut v, &p).unwrap();
+                v
+            })
+            .unwrap(),
+            "{\"c\":-0.0}"
+        );
     }
 
     #[test]

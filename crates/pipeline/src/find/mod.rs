@@ -11,6 +11,7 @@
 
 pub mod cover;
 pub mod people;
+pub mod region;
 pub mod shape;
 pub mod wires;
 
@@ -60,6 +61,9 @@ pub struct Candidate {
     pub main: bool,
     /// The spots that remove it.
     pub spots: Vec<SpotPlan>,
+    /// Its shape on the working grid over the photo (fork, `fork/object-remove.md`): Remove takes it out with one spot
+    /// in this shape; without one, with [`Candidate::spots`].
+    pub region: Option<std::sync::Arc<shape::Mask>>,
 }
 
 impl Candidate {

@@ -1,9 +1,9 @@
-//! Log records that hold only what changed (issue #77, catalog format 14).
+//! Log records that hold only what changed (issue #77, fork catalog format 2).
 //!
 //! An edit is `SetDevelop` + `PushHistory` with the photo's whole develop settings, and an undo
 //! or redo is `SetHistory` with every History step. With brush masks the settings hold every
 //! point of every stroke, so the log grew with the square of the strokes (300 strokes: 240 MB of
-//! log; each undo about 100 MB). Since format 14 these ops are written as patches against the
+//! log; each undo about 100 MB). Since fork format 2 these ops are written as patches against the
 //! photo's state **before the record** ([`DeltaOp`]); every other op, and an op on a photo the
 //! log doesn't know yet, is written as before ([`LogOp::Plain`]).
 //!
@@ -11,9 +11,14 @@
 //! or the loaded catalog, then every appended record, applied with the catalog's own rules). A
 //! patch is made against the shadow, so replay finds exactly the state it was made from. The
 //! shadow moves on only once a batch is appended; a failed append is retried against the same
-//! state. Every patch checks the shape it was made from ([`crate::delta`]), and replay stops
-//! applying patches to a photo once one of its records failed, so a mismatch is reported
-//! (`LoadReport::failed`) and never mixes two states.
+//! state. Every patch checks the shape it was made from ([`crate::delta`]). On replay a patch that
+//! doesn't fit is skipped with the rest of its photo's part of the record, and that photo's later
+//! patches too, so a mismatch is reported (`LoadReport::failed`) and never mixes two states; the
+//! other photos in the record still apply. `Journal::open` then keeps the log as
+//! `catalog.log.damaged-<seq>` and writes a snapshot, so the next session patches that state.
+//!
+//! Patches are relative to the writer's JSON of the settings: any change to how develop settings
+//! serialize is a catalog format change (see `journal` → *Format versions* → Rules).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
@@ -30,7 +35,7 @@ use crate::{Catalog, HistoryStep, Op, Photo, PhotoId};
 #[serde(untagged)]
 pub(crate) enum LogOp {
     Delta(DeltaOp),
-    /// Written exactly as before format 14.
+    /// Written exactly as before fork format 2.
     Plain(Op),
 }
 
@@ -260,30 +265,36 @@ impl Pass<'_> {
 #[derive(Default)]
 pub(crate) struct Replay {
     cache: Cached,
-    /// Photos one of whose records failed: their later patches are refused, never applied to a
+    /// Photos one of whose patches failed: their later patches are skipped, never applied to a
     /// state they weren't made from.
     broken: HashSet<PhotoId>,
 }
 
 impl Replay {
-    /// Apply record `rec` to `catalog` (the state before it). On an error nothing was applied,
-    /// and later patches of the photos it changes are refused.
+    /// Apply record `rec` to `catalog` (the state before it). A patch that doesn't fit (or is of a
+    /// photo whose earlier patch didn't) is skipped with the rest of that photo's part of the
+    /// record, and the photo's later patches are skipped too; the other photos' parts apply. An
+    /// error says what was skipped.
     pub(crate) fn apply(&mut self, rec: LogOp, catalog: &mut Catalog) -> Result<(), String> {
-        let mut ids = Vec::new();
-        match &rec {
-            LogOp::Delta(d) => {
-                delta_ids(d, &mut ids);
-                if let Some(id) = ids.iter().find(|id| self.broken.contains(id)) {
-                    return Err(format!("photo {}: an earlier change to it failed", id.0));
-                }
+        let mut skipped: Vec<(PhotoId, String)> = Vec::new();
+        let op = self.resolve_in(rec, catalog, &mut HashMap::new(), &mut skipped);
+        let bad: HashSet<PhotoId> = skipped.iter().map(|(id, _)| *id).collect();
+        let op = op.and_then(|op| without(op, &bad));
+        self.broken.extend(bad.iter().copied());
+        if let Some(op) = op {
+            let mut ids = Vec::new();
+            op_ids(&op, &mut ids);
+            if let Err(e) = catalog.apply(op) {
+                // nothing of it applied: every photo it changes missed a change
+                self.broken.extend(ids);
+                skipped.push((PhotoId(0), e.to_string()));
             }
-            LogOp::Plain(op) => op_ids(op, &mut ids),
         }
-        let done = self.resolve_in(rec, catalog, &mut HashMap::new()).and_then(|op| catalog.apply(op).map(|_| ()).map_err(|e| e.to_string()));
-        if done.is_err() {
-            self.broken.extend(ids);
+        match skipped.first() {
+            None => Ok(()),
+            Some((_, e)) if skipped.len() == 1 => Err(e.clone()),
+            Some((_, e)) => Err(format!("{e} (and {} more)", skipped.len() - 1)),
         }
-        done
     }
 
     fn develop(catalog: &Catalog, id: PhotoId) -> Result<Arc<DevelopSettings>, String> {
@@ -301,14 +312,43 @@ impl Replay {
         Ok(s)
     }
 
-    fn resolve_in(&mut self, rec: LogOp, catalog: &Catalog, set: &mut HashMap<PhotoId, Arc<DevelopSettings>>) -> Result<Op, String> {
+    /// The op `rec` stands for; a patch that can't be resolved is left out and listed in `skipped`.
+    fn resolve_in(
+        &mut self,
+        rec: LogOp,
+        catalog: &Catalog,
+        set: &mut HashMap<PhotoId, Arc<DevelopSettings>>,
+        skipped: &mut Vec<(PhotoId, String)>,
+    ) -> Option<Op> {
         let d = match rec {
             LogOp::Plain(op) => {
                 note_set(&op, set);
-                return Ok(op);
+                return Some(op);
+            }
+            LogOp::Delta(DeltaOp::Batch { ops }) => {
+                let out: Vec<Op> = ops.into_iter().filter_map(|o| self.resolve_in(o, catalog, set, skipped)).collect();
+                return (!out.is_empty()).then_some(Op::Batch { ops: out });
             }
             LogOp::Delta(d) => d,
         };
+        let mut ids = Vec::new();
+        delta_ids(&d, &mut ids);
+        let id = ids.first().copied().unwrap_or(PhotoId(0));
+        if self.broken.contains(&id) {
+            skipped.push((id, format!("photo {}: an earlier change to it failed", id.0)));
+            return None;
+        }
+        match self.leaf(d, catalog, set) {
+            Ok(op) => Some(op),
+            Err(e) => {
+                skipped.push((id, e));
+                None
+            }
+        }
+    }
+
+    /// One patch op (not a batch) as the op it stands for.
+    fn leaf(&mut self, d: DeltaOp, catalog: &Catalog, set: &mut HashMap<PhotoId, Arc<DevelopSettings>>) -> Result<Op, String> {
         Ok(match d {
             DeltaOp::Develop { id, patch, label, edited } => {
                 let settings = self.patched(&Self::develop(catalog, id)?, &patch)?;
@@ -351,14 +391,26 @@ impl Replay {
                 }
                 Op::SetHistory { id, history }
             }
-            DeltaOp::Batch { ops } => {
-                let mut out = Vec::with_capacity(ops.len());
-                for o in ops {
-                    out.push(self.resolve_in(o, catalog, set)?);
-                }
-                Op::Batch { ops: out }
-            }
+            DeltaOp::Batch { .. } => return Err("a batch where one op was expected".into()),
         })
+    }
+}
+
+/// `op` without the ops that change a photo in `bad` (`None` when nothing is left).
+fn without(op: Op, bad: &HashSet<PhotoId>) -> Option<Op> {
+    if bad.is_empty() {
+        return Some(op);
+    }
+    match op {
+        Op::Batch { ops } => {
+            let ops: Vec<Op> = ops.into_iter().filter_map(|o| without(o, bad)).collect();
+            (!ops.is_empty()).then_some(Op::Batch { ops })
+        }
+        op => {
+            let mut ids = Vec::new();
+            op_ids(&op, &mut ids);
+            (!ids.iter().any(|id| bad.contains(id))).then_some(op)
+        }
     }
 }
 

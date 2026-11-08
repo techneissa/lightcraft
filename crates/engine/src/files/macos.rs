@@ -392,7 +392,8 @@ pub(super) fn transferred(
 mod file_tests;
 #[cfg(test)]
 mod preset_tests;
-#[cfg(all(test, target_os = "macos"))]
+#[cfg(test)]
+#[cfg(target_os = "macos")]
 mod real_tests;
 #[cfg(test)]
 pub(crate) mod tests;

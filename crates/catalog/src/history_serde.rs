@@ -1,4 +1,4 @@
-//! How a photo's History is stored (format 14, issue #77): the first step whole, each later one
+//! How a photo's History is stored (fork format 2, issue #77): the first step whole, each later one
 //! as a [`Patch`] of the step before (`{"label": …, "patch": …}`). Each step holds the photo's
 //! whole develop settings, and with brush masks those hold every stroke: 200 steps of a photo
 //! painted with 300 strokes took about 100 MB of `catalog.snap`, written again at every
@@ -6,8 +6,10 @@
 //!
 //! Reading takes either form, step by step, so older catalogs (every step whole) still load. A
 //! step that can't be rebuilt (a patch that doesn't fit, neither settings nor a patch) ends the
-//! History there, with a warning: the photo and the rest of the catalog still load.
+//! History there, with a warning: the photo and the rest of the catalog still load, and
+//! [`take_cut`] tells `Journal::open` to keep a copy of the file before it is written again.
 
+use std::cell::Cell;
 use std::sync::Arc;
 
 use lightcraft_develop::DevelopSettings;
@@ -18,6 +20,20 @@ use serde_json::Value;
 use crate::HistoryStep;
 use crate::delta::{self, Patch};
 
+thread_local! {
+    /// Histories cut short on this thread since the last [`take_cut`].
+    static CUT: Cell<usize> = const { Cell::new(0) };
+}
+
+/// How many histories were cut short on this thread since the last call (and start again at 0).
+pub(crate) fn take_cut() -> usize {
+    CUT.with(|c| c.replace(0))
+}
+
+fn cut() {
+    CUT.with(|c| c.set(c.get().saturating_add(1)));
+}
+
 #[derive(Serialize)]
 struct StepOut<'a> {
     label: &'a str,
@@ -27,11 +43,14 @@ struct StepOut<'a> {
     patch: Option<Patch>,
 }
 
+/// A step as read: its settings as JSON, so a patch of the next step applies to exactly what was
+/// written (inside a snapshot a mask's grid is a reference into the snapshot's table, which the
+/// settings resolve only later, in `Catalog::repair`).
 #[derive(Deserialize)]
 struct StepIn {
     label: String,
     #[serde(default)]
-    settings: Option<Arc<DevelopSettings>>,
+    settings: Option<Value>,
     #[serde(default)]
     patch: Option<Patch>,
 }
@@ -64,40 +83,28 @@ pub fn serialize<S: Serializer>(history: &[HistoryStep], s: S) -> Result<S::Ok, 
 pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<HistoryStep>, D::Error> {
     let steps = Vec::<StepIn>::deserialize(d)?;
     let mut out: Vec<HistoryStep> = Vec::with_capacity(steps.len().min(crate::HISTORY_LIMIT));
-    // the step before as JSON, made when a patch first needs it
+    // the step before as JSON, as written
     let mut prev: Option<Value> = None;
     for (i, s) in steps.into_iter().enumerate() {
         let settings = match (s.settings, s.patch) {
-            (Some(settings), _) => {
-                prev = None;
-                settings
-            }
-            (None, Some(Patch::Same)) if out.last().is_some() => out.last().map(|l| l.settings.clone()).unwrap_or_default(),
-            (None, Some(patch)) => match rebuild(out.last(), &mut prev, &patch) {
-                Ok(s) => s,
-                Err(e) => {
-                    log::warn!("History step {i} ({:?}) can't be rebuilt ({e}): the History ends before it", s.label);
-                    break;
-                }
-            },
-            (None, None) => {
-                log::warn!("History step {i} ({:?}) holds no settings: the History ends before it", s.label);
-                break;
-            }
+            (None, Some(Patch::Same)) if prev.is_some() => out.last().map(|l| l.settings.clone()),
+            (Some(v), _) => typed(v, &mut prev).ok(),
+            (None, Some(patch)) => prev.take().and_then(|mut v| delta::apply(&mut v, &patch).ok().and_then(|()| typed(v, &mut prev).ok())),
+            (None, None) => None,
+        };
+        let Some(settings) = settings else {
+            log::warn!("History step {i} ({:?}) can't be rebuilt: the History ends before it", s.label);
+            cut();
+            break;
         };
         out.push(HistoryStep { label: s.label, settings });
     }
     Ok(out)
 }
 
-fn rebuild(last: Option<&HistoryStep>, prev: &mut Option<Value>, patch: &Patch) -> Result<Arc<DevelopSettings>, String> {
-    let last = last.ok_or("a patch with no step before it")?;
-    let mut v = match prev.take() {
-        Some(v) => v,
-        None => serde_json::to_value(&*last.settings).map_err(|e| e.to_string())?,
-    };
-    delta::apply(&mut v, patch)?;
-    let s = Arc::new(DevelopSettings::deserialize(&v).map_err(|e| e.to_string())?);
+/// The settings `v` holds; `v` becomes the step before.
+fn typed(v: Value, prev: &mut Option<Value>) -> Result<Arc<DevelopSettings>, serde_json::Error> {
+    let s = Arc::new(DevelopSettings::deserialize(&v)?);
     *prev = Some(v);
     Ok(s)
 }

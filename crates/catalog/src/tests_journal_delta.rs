@@ -1,5 +1,5 @@
-//! Issue #77: develop edits and History are logged as patches (format 14). Replaying them gives
-//! the same catalog as the whole records of format 13 did; a bad patch is an error the library
+//! Issue #77: develop edits and History are logged as patches (fork format 2). Replaying them
+//! gives the same catalog as the whole records of fork format 1 did; a bad patch is an error the library
 //! recovers from; a brush stroke costs the log about the stroke.
 
 use std::sync::Arc;
@@ -17,7 +17,7 @@ fn add_photo(c: &mut Catalog) -> (PhotoId, Op) {
 }
 
 /// A 60-point drag (about a second at 60 frames per second); `points` 4 for sessions whose
-/// whole-record (format 13) replay would otherwise take long.
+/// whole-record (fork format 1) replay would otherwise take long.
 fn stroke_of(i: usize, points: usize) -> BrushStroke {
     let y = 0.05 + (i % 90) as f64 * 0.01 + 0.000_123_456_7;
     BrushStroke {
@@ -146,13 +146,13 @@ fn open(m: &MemStore) -> (Journal, Catalog, LoadReport) {
 }
 
 fn snap_of(c: &Catalog, version: u32) -> Vec<u8> {
-    format!("{{\"format\":\"lightcraft-catalog\",\"version\":{version},\"seq\":1,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes()
+    format!("{{\"format\":\"lightcraft-catalog-fork\",\"version\":{version},\"seq\":1,\"catalog\":{}}}\n", c.to_snapshot()).into_bytes()
 }
 
 #[test]
 fn replaying_patches_gives_what_whole_records_gave() {
     let (base, live) = session(230);
-    // format 14: patches
+    // fork format 2: patches
     let m = MemStore::new();
     m.set(SNAPSHOT, snap_of(&base, journal::VERSION));
     let (mut j, _, _) = open(&m);
@@ -165,13 +165,16 @@ fn replaying_patches_gives_what_whole_records_gave() {
     assert!(log.contains("\"op\":\"patchBatch\"") && log.contains("\"op\":\"patchHistory\""), "written as patches");
     let (_, new, r) = open(&m);
     assert_eq!((r.failed, r.replayed), (0, live.ops.len()));
-    // format 13: the same ops, whole
+    // fork format 1: the same ops, whole
     let old = MemStore::new();
-    old.set(SNAPSHOT, snap_of(&base, 13));
+    old.set(SNAPSHOT, snap_of(&base, 1));
     let lines: String = live.ops.iter().enumerate().map(|(i, op)| format!("{}\n", encode_record(i as u64 + 2, op))).collect();
     old.set(LOG, lines.into_bytes());
     let (_, was, r) = open(&old);
-    assert_eq!((r.failed, r.upgraded_from), (0, Some(13)));
+    assert_eq!((r.failed, r.upgraded_from), (0, Some(1)));
+    assert_eq!(old.get(crate::fork_format::BEFORE_UPGRADE), Some(snap_of(&base, 1)), "the fork 1 snapshot is kept");
+    let v: serde_json::Value = serde_json::from_slice(&old.get(SNAPSHOT).unwrap()).unwrap();
+    assert_eq!((v["format"].as_str(), v["version"].as_u64()), (Some("lightcraft-catalog-fork"), Some(2)));
 
     assert_eq!(new.to_snapshot(), was.to_snapshot());
     assert_eq!(new.to_snapshot(), live.c.to_snapshot());
@@ -290,6 +293,115 @@ fn a_patch_that_does_not_fit_is_reported_and_the_rest_replays() {
     assert_eq!(back.photo(a).unwrap().rating, 2);
     assert_eq!(back.photo(b).unwrap().develop.light.exposure, 2.0);
     assert!(back.photo(b).unwrap().history.is_empty());
+    // the log that didn't apply is kept, and a snapshot of what loaded replaces it: the next
+    // session's patches are made against that state and apply on every later open
+    assert_eq!(r.damaged.as_deref(), Some("catalog.log.damaged-7"));
+    assert!(m.get("catalog.log.damaged-7").is_some_and(|l| l.len() > 100));
+    let (mut j, _, again) = open(&m);
+    assert_eq!((again.replayed, again.failed, again.damaged.as_deref()), (0, 0, None));
+    let mut d = (*back.photo(a).unwrap().develop).clone();
+    d.light.exposure = 1.5;
+    j.append(&[edit(a, d, "Exposure")]).unwrap();
+    drop(j);
+    let (_, last, r) = open(&m);
+    assert_eq!((r.replayed, r.failed), (1, 0));
+    assert_eq!(last.photo(a).unwrap().develop.light.exposure, 1.5);
+}
+
+/// One bad patch in a batch skips only its photo's part: the other photos' parts apply.
+#[test]
+fn a_bad_patch_in_a_batch_skips_only_its_photo() {
+    let mut c = Catalog::new();
+    let (a, add_a) = add_photo(&mut c);
+    let (b, add_b) = add_photo(&mut c);
+    c.apply(add_a).unwrap();
+    c.apply(add_b).unwrap();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snap_of(&c, journal::VERSION));
+    let exposure = |id: PhotoId, v: f64| {
+        format!(
+            r#"{{"op":"patchDevelop","id":{},"patch":{{"o":{{"s":{{"light":{{"o":{{"s":{{"exposure":{{"v":{v:?}}}}}}}}}}}}}}},"label":"Exposure","edited":null}}"#,
+            id.0
+        )
+    };
+    let bad = format!(
+        r#"{{"op":"patchDevelop","id":{},"patch":{{"o":{{"s":{{"masks":{{"a":{{"n":7,"h":7,"t":0,"v":[]}}}}}}}}}},"label":"Brush","edited":null}}"#,
+        a.0
+    );
+    let push = |id: PhotoId| format!(r#"{{"op":"patchPush","id":{},"label":"Sync","base":"develop"}}"#, id.0);
+    let batch =
+        format!(r#"{{"op":"patchBatch","ops":[{bad},{},{},{},{{"op":"setRating","id":{},"rating":4}}]}}"#, push(a), exposure(b, 1.0), push(b), b.0);
+    m.set(LOG, [line(2, &batch), line(3, &exposure(a, 3.0)), line(4, &exposure(b, 2.0))].concat().into_bytes());
+    let (_, back, r) = open(&m);
+    assert_eq!((r.replayed, r.failed), (1, 2), "{r:?}");
+    let (pa, pb) = (back.photo(a).unwrap(), back.photo(b).unwrap());
+    assert_eq!((pa.develop.light.exposure, pa.history.len()), (0.0, 0), "a's part and its later patch are skipped");
+    assert_eq!((pb.develop.light.exposure, pb.history.len(), pb.rating), (2.0, 1, 4), "b's part and its later patch apply");
+}
+
+/// A History in the snapshot that can't be rebuilt is cut, and the snapshot is kept before it is
+/// written again.
+#[test]
+fn a_history_cut_short_keeps_the_snapshot() {
+    let mut c = Catalog::new();
+    let (a, add_a) = add_photo(&mut c);
+    c.apply(add_a).unwrap();
+    for i in 0..3 {
+        let op = edit(a, painted(&c.photo(a).unwrap().develop, i), "Brush");
+        c.apply(op).unwrap();
+    }
+    let mut v: serde_json::Value = serde_json::from_slice(&snap_of(&c, journal::VERSION)).unwrap();
+    v["catalog"]["photos"][a.0.to_string()]["history"][1]["patch"] = serde_json::json!({"a": {"n": 99, "h": 0, "t": 0, "v": []}});
+    let bytes = format!("{v}\n").into_bytes();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, bytes.clone());
+    let (_, back, r) = open(&m);
+    assert_eq!(back.photo(a).unwrap().history.len(), 1);
+    assert_eq!(r.damaged.as_deref(), Some("catalog.snap.damaged-1"));
+    assert_eq!(m.get("catalog.snap.damaged-1"), Some(bytes));
+}
+
+/// A store whose snapshot writes fail (the copy beside it can still be written).
+#[derive(Clone, Default)]
+struct NoSnapshots(MemStore);
+
+impl Store for NoSnapshots {
+    fn read(&mut self, name: &str) -> std::io::Result<Option<Vec<u8>>> {
+        self.0.read(name)
+    }
+    fn write_atomic(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        if name == SNAPSHOT {
+            return Err(std::io::Error::other("disk full"));
+        }
+        self.0.write_atomic(name, data)
+    }
+    fn append(&mut self, name: &str, data: &[u8]) -> std::io::Result<()> {
+        self.0.append(name, data)
+    }
+    fn truncate(&mut self, name: &str, len: u64) -> std::io::Result<()> {
+        self.0.truncate(name, len)
+    }
+    fn describe(&self) -> String {
+        "no snapshots".into()
+    }
+}
+
+/// An upgrade that can't write its snapshot leaves the log as it was, torn end included; one
+/// that can cuts nothing (the snapshot resets the log).
+#[test]
+fn a_failed_upgrade_leaves_the_torn_log_as_it_was() {
+    let mut c = Catalog::new();
+    let (id, add) = add_photo(&mut c);
+    c.apply(add).unwrap();
+    let log = format!("{}{{\"seq\":3,\"crc\":1,\"op\":{{\"op\":\"setRat", encode_record(2, &Op::SetRating { id, rating: 2 }) + "\n");
+    let store = NoSnapshots::default();
+    store.0.set(SNAPSHOT, snap_of(&c, 1));
+    store.0.set(LOG, log.clone().into_bytes());
+    let (_, back, r) = Journal::open(Box::new(store.clone())).unwrap();
+    assert_eq!((back.photo(id).unwrap().rating, r.upgraded_from), (2, Some(1)));
+    assert_eq!(store.0.get(LOG), Some(log.into_bytes()), "the log is untouched");
+    assert_eq!(store.0.get(SNAPSHOT), Some(snap_of(&c, 1)));
+    assert_eq!(r.torn_bytes, 35);
 }
 
 /// A patch record cut off by a crash mid-append is a torn tail: dropped, the rest kept.

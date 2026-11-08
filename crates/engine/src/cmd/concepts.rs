@@ -120,6 +120,7 @@ mod tests {
             fallback: None,
             denoise: None,
             camera_profile: None,
+            outliers: false,
             reduced: None,
             options: Default::default(),
         };

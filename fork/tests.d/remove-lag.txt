@@ -1,0 +1,5 @@
+# Remove, Heal and Clone: a spot edit draws only the spots it reaches (issue #82)
+cargo test -p lightcraft-pipeline --lib -- spots_keep learned_fill spots
+cargo test -p lightcraft-gpu --lib -- spots_keep render::tests::a_render_submits
+cargo test -p lightcraft-gpu --test it -- spot_cache spots_match
+cargo test -p lightcraft-ui-egui --lib -- tests::remove_lag region::tests render::thumbnail_tests
