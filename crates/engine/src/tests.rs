@@ -87,6 +87,7 @@ mod slow_drive;
 mod smart_local;
 mod spot_area;
 mod spot_rows;
+mod spot_source;
 mod spots;
 mod sync;
 mod tracklog;

@@ -27,6 +27,7 @@ pub mod docking;
 mod drag_ghost;
 mod drop_overlay;
 pub mod edit_in_task;
+mod edited_thumb;
 pub mod editor_handoff;
 pub mod export_reveal;
 pub mod export_task;
@@ -221,6 +222,8 @@ pub struct LightcraftApp {
     /// The texture limit the host last reported (`RawInput::max_texture_side`), retained across
     /// passes where the host reports it only once.
     max_texture_side: usize,
+    /// The open photo's thumbnail held back during a burst of spot edits (`edited_thumb`).
+    pub(crate) edited_thumb: edited_thumb::Hold,
     /// Monotonic app clock (`web_time::Instant`), not the wall clock and not egui's per-pass time:
     /// timers must keep advancing while the window is hidden.
     clock: AppClock,

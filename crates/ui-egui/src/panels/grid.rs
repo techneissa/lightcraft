@@ -713,6 +713,10 @@ pub fn request_thumb(app: &mut LightcraftApp, id: PhotoId, size: usize, priority
     {
         return;
     }
+    // with the Remove panel open, the photo's thumbnail follows once a burst of spot edits pauses
+    if crate::edited_thumb::waits(app, id) {
+        return;
+    }
     // The camera's embedded preview is this photo's thumbnail (unedited raw): once its quick render
     // has arrived there is nothing left to ask for. Without this the grid would rebuild the render
     // job — and its cache key — on every frame, which is what the embedded-thumbnail record settles.
