@@ -61,10 +61,13 @@ fn matte(state: &mut State, shared: &Shared, job: &mut Job, dir: &Path, placemen
 
 /// What a BiRefNet job asks for.
 pub(super) struct Request<'a> {
-    pub combined: bool,
+    /// Which model makes the selection.
+    pub model: SelectionModel,
     pub text: &'a str,
     pub main: bool,
     pub dir: &'a Path,
+    /// BiRefNet-matting redraws the selection's edge (`fork/hair-edges.md`).
+    pub matting: Option<&'a crate::hair_edges::HairEdges>,
 }
 
 /// The two steps of "SAM 3 + BiRefNet Edges", so the order they run in can be tested without a model.
@@ -95,14 +98,30 @@ impl Steps for Models<'_> {
     }
 }
 
-/// Run a BiRefNet job: `combined` lets SAM 3 (asked for `text`, the main subject's instances only when `main`) decide
-/// what the subject is and BiRefNet draw its edge; otherwise BiRefNet's cut-out stands alone. `Ok(None)`: nothing found.
+/// Run a BiRefNet job: SAM 3 alone (asked for `text`, the main subject's instances only when `main`), BiRefNet's
+/// cut-out alone, or SAM 3 deciding what the subject is and BiRefNet drawing its edge; then, with `matting`,
+/// BiRefNet-matting redraws the edge. `Ok(None)`: nothing found.
 pub(super) fn run(state: &mut State, shared: &Shared, job: &mut Job, placement: Placement, req: &Request) -> Result<Option<SegMask>, Failure> {
-    if !req.combined {
-        let m = matte(state, shared, job, req.dir, placement)?;
-        return Ok(stand_alone(&m));
-    }
-    combined(&mut Models { state, shared, placement, req }, job)
+    // (the matte renders the photo from the job's render, which SAM 3's encode may take)
+    let saved = job.render.clone();
+    let base = match req.model {
+        SelectionModel::BiRefNet => stand_alone(&matte(state, shared, job, req.dir, placement)?),
+        SelectionModel::Combined => combined(&mut Models { state, shared, placement, req }, job)?,
+        SelectionModel::Sam3 => {
+            let (m, enc) = encoded(state, shared, job, placement)?;
+            text_logits(m, enc, req.text, CONCEPT_THRESHOLD, req.main)?.map(|l| SegMask::from_logits(lightcraft_segment::MASK_SIDE, &l))
+        }
+    };
+    // (the edge read now, not when the job was queued: set back to Current meanwhile, the part keeps its own edge)
+    let matting = req.matting.filter(|e| e.edge(crate::hair_edges::EdgeKind::Subject) == crate::hair_edges::Edge::Matting);
+    let (Some(edges), Some(base)) = (matting, base.as_ref()) else { return Ok(base) };
+    job.render = saved;
+    let input = render(job)?;
+    let m = edges.matte(&input.rgb, input.w, input.h, &job.cancel).map_err(|e| match job.cancel.load(Ordering::Relaxed) {
+        true => Failure::Cancelled,
+        false => Failure::Other(format!("Hair edges: {e}")),
+    })?;
+    Ok(crate::hair_edges::subject_edge(base, &m))
 }
 
 /// BiRefNet's cut-out as a selection; `None` when it holds nothing.

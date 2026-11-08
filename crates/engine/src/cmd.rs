@@ -27,6 +27,7 @@ pub mod filters;
 mod find_removals;
 mod focus;
 pub mod geocode;
+mod hair_edges;
 pub mod keywords;
 mod lama;
 mod learn;
@@ -181,6 +182,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(learn::specs());
         v.extend(model_runtime::specs());
         v.extend(parsing::specs());
+        v.extend(hair_edges::specs());
         v.extend(organize::specs());
         v.extend(keywords::specs());
         v.extend(manage::specs());

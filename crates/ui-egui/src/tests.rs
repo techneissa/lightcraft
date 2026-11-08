@@ -54,6 +54,7 @@ mod grading;
 mod grid;
 mod grid_drag;
 mod guided_guides;
+mod hair_edges;
 mod histogram_drag;
 mod hover_help;
 mod import_recipe;

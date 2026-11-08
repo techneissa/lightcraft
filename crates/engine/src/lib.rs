@@ -49,7 +49,9 @@ pub mod find_removals;
 #[cfg(not(target_arch = "wasm32"))]
 mod focus_scan;
 pub mod fonts;
+mod gpu_run;
 pub mod guard;
+pub mod hair_edges;
 pub mod import;
 mod import_move;
 pub mod lama_fill;
@@ -408,6 +410,8 @@ pub struct Session {
     pub model_runtimes: Arc<model_runtime::ModelRuntimes>,
     /// Per-person part masks and face landmarks (`fork/people-parsing.md`).
     pub parsing: people_parsing::PeopleParsing,
+    /// BiRefNet-matting edges for people and Subject masks (`fork/hair-edges.md`).
+    pub hair_edges: hair_edges::HairEdges,
     /// The persistent library this session writes to (`None` = in-memory only).
     pub library: Option<library::Library>,
     /// Identity of current library opening; refreshed only after a successful open.
@@ -551,6 +555,7 @@ impl Session {
 
     pub fn new() -> Session {
         let activity = activity::Activity::default();
+        let hair_edges = hair_edges::HairEdges::new(activity.clone());
         Session {
             library_generation: LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             auto_sync: false,
@@ -624,7 +629,8 @@ impl Session {
             object_jobs: Default::default(),
             learn: learn::LearnEdits::new(activity.clone()),
             model_runtimes: Default::default(),
-            parsing: people_parsing::PeopleParsing::new(activity.clone()),
+            parsing: people_parsing::PeopleParsing::new(activity.clone()).with_hair_edges(hair_edges.clone()),
+            hair_edges,
             library: None,
             library_identity: Arc::new(()),
             xmp: sidecar::XmpPrefs::default(),
