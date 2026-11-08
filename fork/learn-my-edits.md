@@ -1,0 +1,57 @@
+# Learn My Edits
+
+List: Learn My Edits (Photo ▸ Learn My Edits…): profiles trained in the app on 10 to 200 of your own edited photos learn how you edit one kind of photo, and apply it to new photos as ordinary slider values, with their held-out accuracy shown (issue #87). Branch `feat/87-learn-my-edits`.
+
+## What it does
+
+- **A profile** has a name, a kind of photography ("Portraits", "Landscapes", "Animals", "Sky", "Skin Tones", …) and the slider groups it learns: White Balance (Temp, Tint), Tone (Exposure, Contrast, Highlights, Shadows, Whites, Blacks), Presence (Texture, Clarity, Dehaze, Vibrance, Saturation), Color Mixer (24 sliders), Color Grading (the four wheels, Blending, Balance) and Tone Curve (the four region sliders, and the master, red, green and blue point curves at 0, 25, 50, 75 and 100 %). Several profiles live side by side, one `.lclearn` file each in `<config>/learn-profiles/`.
+- **Examples** are photos already edited in the library: New Profile… takes the selected photos or the photos shown (an album, a folder, a filter), Add Selected Photos as Examples adds more (a photo already there is replaced, so a photo adjusted after applying goes back in), and the profile retrains. A photo with no edit in the profile's groups is skipped and named. 10 to 200 examples.
+- **How it learns.** Each photo is developed at its own defaults (as Reset would give it, with its as-shot white balance) at 384 pixels, never its edit. Its features are 47 photo statistics (brightness percentiles and histogram, clipping, colour casts in the shadows and highlights, how much of each mixer hue it holds, local contrast, where the light is) and 768 numbers from a frozen image encoder, DINOv2-small, that say what the photo shows. The two are needed together: DINOv2 is trained to ignore brightness and colour casts (a brighter, warmer copy of a photo scores 0.995 cosine similarity to it, another photo 0.02–0.13), and those are what Exposure and Temp answer to. Its targets are each learned slider's change from the photo's defaults: Temp in mireds (equal steps look equal at any temperature), a grading wheel as a point on the wheel (its hue means nothing at 0 saturation and wraps at 360), a point curve as its height above the diagonal at five places. A kernel ridge regression per group maps features to targets; for each group it picks how much the encoder counts and whether the map is linear or smooth (Gaussian), and for each slider how strongly it holds back, all by leave-one-out error, preferring the simpler choice unless a more complex one is clearly better. Sliders no example changed are never written.
+- **Honest accuracy.** The examples are split into five folds; each fold is predicted by a profile trained, with its own choices, on the other four. The window says on how many of those photos the profile came closer to the edit than the defaults, its error as a share of the defaults' error and against one fixed preset of the average edit, and per group the mean error per slider ("Tone: Exposure ±0.18 EV, Contrast ±4"). A group whose held-out error is not at least 10 % below the defaults' is dropped ("not learned, your edits there follow no pattern it can see"); with no group left, or fewer than 10 examples, training refuses and says why, and the profile keeps its examples.
+- **Apply** to the selected photos: only the sliders of the groups the profile learned change; White Balance becomes Custom. One undo step for the whole apply, one History step per photo named "Learned: <profile name>". The values are ordinary sliders to adjust.
+- **Jobs.** Gathering examples, training and working out an apply run on a thread, one at a time, with a row in the activity stack ("Learning “Portraits”", "Applying “Portraits”") whose ✕ (or the window's Stop) cancels it; a cancelled training keeps the profile as it was. Features are kept in memory per photo, so applying again or adding an applied photo back costs no new render.
+- **The image model** (DINOv2-small, `facebook/dinov2-small` `model.safetensors`, 88 MB, pinned to revision `ed25f3a3`, size and SHA-256 checked) goes in `~/Library/Application Support/ArtCraft/models/dinov2-small/` (shared with PhotoCraft; `LIGHTCRAFT_LEARN_DIR` overrides). The window asks before it downloads it; `learn.downloadModel` needs `"confirm": true`. Licence: Apache-2.0 (Meta's DINOv2 code and weights); personal use. The encoder in `crates/learn/src/encoder.rs` was written from the paper and the published tensor names (no code copied); the 37 × 37 position table is resampled once to 16 × 16 (224-pixel input). Metal on the Mac, the CPU elsewhere.
+- **Files.** A profile is JSON (`format: lightcraft-learn-profile`, `version: 1`): name, kind, groups, the feature layout and encoder id, the examples (features and targets, never pixels; each named by its photo id and file name), the trained model and its report. At most 16 MB and 200 examples; every number, length and id is checked on reading, so a damaged or foreign file is an error the window shows. Export… writes one file; Import… adds a copy (a new id when the name is taken). Not in Settings Sync.
+- **Before/after pairs** (#84): `lightcraft_learn::example_from_fit(name, features_of_before, fitted_settings, defaults)` turns the settings the Match Look fitter finds for a pair into an example. No fitter here; nothing calls it yet.
+- **Commands** (also over MCP): `learn.status`, `learn.downloadModel {confirm}`, `learn.create {name, kind?, groups?, ids?, empty?, wait?}`, `learn.addExamples {profile, ids?, wait?}`, `learn.removeExample {profile, photo}`, `learn.train {profile, wait?}`, `learn.apply {profile, ids?, wait?}`, `learn.cancel`, `learn.pump`, `learn.update {profile, name?, kind?, groups?}`, `learn.delete`, `learn.export {profile, path}`, `learn.import {path}`. With `wait: true` a job command returns its result; the app's frame loop calls `learn.pump`. UI: `dialog.learnEdits`, `learnEdits.export`, `learnEdits.import` (a file dialog without `path`).
+
+Mac only (the web build has no image model). Issue #87, part of #79.
+
+## Measured
+
+On this Mac (M4 Pro, Metal, under a heavy load from other builds), with the real-photo check on Sony A7 V raws whose edits were made by a known procedural rule (Exposure from the photo's brightness, Contrast from its spread, Temp from the focal length, Vibrance from the ISO, each with human-like noise), since no edited photos of that camera were at hand:
+- `train` example, 149 photos (developed at their defaults by `lightcraft-cli render --size 384`): features 27 ms per photo, training 9.9 s. Held out: closer to the edit than the defaults on 148 of 149, error 24 % of the defaults' (a fixed preset of the average edit: Tone 27 %, Presence 47 %); Exposure ±0.18 EV, Contrast ±4.5, Temp ±4.8 mired (about 145 K at 5500 K), Vibrance ±6.6. Without the encoder: 22 %; on these rules the photo statistics carry most of it.
+- In the app, 11 raws in a scratch library: New Profile (render, features, training) 8.0 s; Apply to 3 new raws 0.1 s (0.02 s again, features kept); their error Exposure 0.18 EV, Vibrance 5.6.
+- In the app, 40 procedural landscapes (the PR's picture): 32 examples trained in 8.3 s, held-out error 6 % of the defaults'; Apply to 8 photos 0.13 s.
+
+## Branch
+
+`feat/87-learn-my-edits`
+
+## Own files
+
+`crates/learn/` (`src/{lib,encoder,features,sliders,linalg,ridge,train,profile,tests}.rs`, `examples/{train,apply}.rs`), `crates/engine/src/learn.rs`, `crates/engine/src/learn/{jobs,download}.rs`, `crates/engine/src/cmd/learn.rs`, `crates/engine/src/tests/learn.rs`, `crates/ui-egui/src/learn_edits.rs`, `crates/ui-egui/src/tests/learn_edits.rs`, `fork/learn-my-edits.md`, `fork/tests.d/learn-my-edits.txt`
+
+## Hooks in official files
+
+- `Cargo.toml` (workspace dependency `lightcraft-learn`), `Cargo.lock`, `xtask/src/layers.rs` (`learn` is layer 3).
+- `crates/engine/Cargo.toml` (the dependency), `crates/engine/src/lib.rs` (`pub mod learn`, `Session::learn` and its line in `Session::new`), `crates/engine/src/cmd.rs` (`mod learn`, `learn::specs()`), the `mod` line of `crates/engine/src/tests.rs`.
+- `apps/lightcraft/src/main.rs` and `crates/mcp/src/headless.rs` (`with_default_learn()`).
+- `crates/ui-egui/Cargo.toml` (the dependency), `crates/ui-egui/src/lib.rs` (`pub mod learn_edits`), `crates/ui-egui/src/state.rs` (`UiState::learn_edits`, not saved), `crates/ui-egui/src/menus/ui_commands.rs` (three ids, `dialog.learnEdits` in the Photo menu), `crates/ui-egui/src/menus/run.rs` (their dispatch), `crates/ui-egui/src/app/frame.rs` (`learn_edits::pump` in the background logic, `learn_edits::show` after the dialogs), the `mod` line of `crates/ui-egui/src/tests.rs`.
+
+## Tests
+
+`cargo test -p lightcraft-learn --lib` (procedural photos whose edits follow a rule: darker photos got more Exposure, bluer ones a warmer Temp, learned on held-out photos; only learned groups written; fewer than 10 and disagreeing examples refused; damaged profile files and a missing or damaged model are errors; with `LIGHTCRAFT_LEARN_MODEL` set to the model file, the encoder's features and its brightness invariance), `cargo test -p lightcraft-engine --lib -- tests::learn` (in a temporary library: create, apply as one undo step with one History step per photo, add an example, export / import / delete, the activity row, refusals, damaged files), `cargo test -p lightcraft-ui-egui --lib -- learn_edits` (the window from the Photo menu, the download question, the list and the New Profile form). Engine and UI tests use the photo statistics only (`LearnEdits::set_statistics_only`, test builds), so they need no model.
+
+To measure on your own photos without the app: `cargo run --release -p lightcraft-learn --example train -- <folder of name.jpg + name.json> out.lclearn [--groups tone,whiteBalance] [--no-encoder]` (the JPEG developed at its defaults, the JSON its edit as develop settings) prints the held-out accuracy; `--example apply -- out.lclearn photo.jpg` prints the sliders.
+
+## What's New entry
+
+### Learn My Edits
+- Photo ▸ Learn My Edits… learns how you edit a kind of photo from 10 to 200 photos you have already edited, then applies it to new photos as ordinary slider values you can adjust: white balance, tone, presence, colour mixer, colour grading and tone curve.
+- Make several profiles ("Portraits", "Landscapes", "Skin Tones"…). Each says how close it came to your edits on photos it had not seen, and drops what your edits don't follow a pattern in. Add a photo you adjusted after applying and it learns again.
+- It needs an 88 MB image model, downloaded only after you agree. Profiles export and import as one file.
+
+## Parity rows
+
+| LR-PRE-LEARNED | Learn My Edits: profiles trained on your own edits (beyond Lightroom) | P2 | ✅ | `cmd:learn.create`, `cmd:learn.apply`, `cmd:learn.status`, `crates/learn` | Photo ▸ Learn My Edits…: a profile per kind of photography learns White Balance, Tone, Presence, Color Mixer, Color Grading and Tone Curve sliders from 10–200 edited photos (DINOv2-small features plus photo statistics, kernel ridge regression per group); held-out accuracy shown, groups without a pattern dropped, too few or disagreeing examples refused; applies as sliders in one undo step with a History step per photo; profiles export and import as `.lclearn` files. Not compared against Lightroom (it has no equivalent) |
