@@ -43,6 +43,7 @@ pub mod faces;
 mod masks;
 #[cfg(all(feature = "denoise", not(target_arch = "wasm32")))]
 pub mod nn;
+#[cfg(not(target_arch = "wasm32"))]
 mod params;
 #[cfg(not(target_arch = "wasm32"))]
 mod render;

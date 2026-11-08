@@ -1,0 +1,1 @@
+cargo test -p lightcraft-catalog --lib -- delta history_serde tests_journal tests_format_version

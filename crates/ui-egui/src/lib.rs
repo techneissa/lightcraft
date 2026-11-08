@@ -58,6 +58,7 @@ pub mod panels;
 pub mod pick;
 pub mod recheck;
 pub mod reflections;
+pub mod reflections_glare;
 pub mod region;
 pub mod reload;
 pub mod rename_task;
@@ -353,6 +354,8 @@ pub struct LightcraftApp {
     pub reflection_model: String,
     pub reflection_open: bool,
     pub reflection_photo: Option<lightcraft_catalog::PhotoId>,
+    /// Fork feature (fork/glare-highlights.md): the Reflections section's mode, area and glare choices.
+    pub reflection_glare: reflections_glare::GlarePanel,
     /// An import in progress (the import review dialog's batches).
     pub import: Option<import::ImportTask>,
     /// A folder scan in progress (feeds the import review).

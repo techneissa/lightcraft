@@ -55,6 +55,10 @@ pub fn command(app: &mut LightcraftApp, name: &str, p: &Value) -> Result<Value, 
             json!({"models":MODELS.iter().map(|(id,label)|json!({"id":id,"label":label,"installed":lightcraft_engine::reflections::available_model(id)})).collect::<Vec<_>>() }),
         );
     }
+    // Fork feature (fork/glare-highlights.md): mode, area, glare, paint and tool
+    if let Some(result) = crate::reflections_glare::command(app, name, p) {
+        return result;
+    }
     let id = app.session.active().ok_or("No photo selected")?;
     match name {
         "reflection.panel" => {
@@ -69,6 +73,7 @@ pub fn command(app: &mut LightcraftApp, name: &str, p: &Value) -> Result<Value, 
             let on = p.get("enabled").and_then(Value::as_bool).unwrap_or(!d.reflection.enabled);
             if on
                 && (d.reflection.correction.is_empty()
+                    || d.reflection.mode != app.reflection_glare.mode
                     || p.get("quality").and_then(Value::as_u64).is_some_and(|q| q != d.reflection.quality as u64)
                     || p.get("model").and_then(Value::as_str).is_some_and(|m| m != d.reflection.model))
             {
@@ -90,7 +95,7 @@ pub fn command(app: &mut LightcraftApp, name: &str, p: &Value) -> Result<Value, 
         "reflection.status" => {
             let d = app.session.develop_of(id).ok_or("Photo missing")?;
             Ok(
-                json!({"running":app.tasks.is_running(TASK),"ready":!d.reflection.correction.is_empty(),"settings":d.reflection,"amount":d.reflection.amount,"quality":d.reflection.quality,"enabled":d.reflection.enabled}),
+                json!({"running":app.tasks.is_running(TASK),"ready":!d.reflection.correction.is_empty(),"settings":d.reflection,"amount":d.reflection.amount,"quality":d.reflection.quality,"enabled":d.reflection.enabled,"panel":crate::reflections_glare::status(app)}),
             )
         }
         "reflection.apply" | "photo.removeReflections" => start(app, id, p),
@@ -207,18 +212,33 @@ fn install(_app: &mut LightcraftApp, _p: &Value) -> Result<Value, String> {
     Err(tr("Reflection removal requires the desktop app").into())
 }
 
+/// Start the run the panel (and `p`) ask for (fork feature, fork/glare-highlights.md: `reflection.paint` runs it too).
+pub(crate) fn run(app: &mut LightcraftApp, id: PhotoId, p: &Value) -> Result<Value, String> {
+    start(app, id, p)
+}
+
 #[cfg(not(target_arch = "wasm32"))]
 fn start(app: &mut LightcraftApp, id: PhotoId, p: &Value) -> Result<Value, String> {
     if app.tasks.is_running(TASK) {
         return Err(tr("Wait for reflection removal to finish").into());
     }
+    // Fork feature (fork/glare-highlights.md): mode, area and glare settings, then Highlights or an area run
+    crate::reflections_glare::take_params(app, id, p)?;
     let model = p.get("model").and_then(Value::as_str).unwrap_or(&app.reflection_model).to_string();
-    if !lightcraft_engine::reflections::available_model(&model) {
+    let highlights = app.reflection_glare.mode == lightcraft_develop::ReflectionMode::Highlights;
+    if !highlights && !lightcraft_engine::reflections::available_model(&model) {
         return Err(tr("Install a reflection model first").into());
     }
     let edge = p.get("quality").and_then(Value::as_u64).unwrap_or(app.reflection_quality as u64);
     if !matches!(edge, 384 | 768 | 1024) {
         return Err("Invalid reflection quality".into());
+    }
+    if let Some(result) = crate::reflections_glare::start(app, id, edge as u32, &model) {
+        if !highlights {
+            app.reflection_model = model;
+            app.reflection_quality = edge as u32;
+        }
+        return result;
     }
     let job = app.session.render_job(id, edge as usize, edge as usize, false, false).ok_or("Photo cannot be loaded")?;
     app.reflection_model = model.clone();
@@ -265,6 +285,7 @@ fn start(app: &mut LightcraftApp, id: PhotoId, p: &Value) -> Result<Value, Strin
                 }
                 Err(e) => app.toast(ctx, format!("{}: {e}", tr("Reflection removal failed"))),
             }
+            crate::reflections_glare::after_run(app);
             ctx.request_repaint();
         },
     )?;
@@ -302,7 +323,10 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             "dirs-mugi".into()
         };
     }
-    let available = lightcraft_engine::reflections::available_model(&app.reflection_model);
+    // fork (fork/glare-highlights.md): the panel's mode, area and strokes are this photo's
+    crate::reflections_glare::sync(app, id);
+    let highlights = app.reflection_glare.mode == lightcraft_develop::ReflectionMode::Highlights;
+    let available = highlights || lightcraft_engine::reflections::available_model(&app.reflection_model);
     let pad = egui::Margin { left: 24, right: 22, top: 4, bottom: 8 };
     egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
         ui.spacing_mut().item_spacing.y = 8.0;
@@ -315,48 +339,55 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         {
             app.toast(ui.ctx(), e);
         }
-        ui.horizontal(|ui| {
-            ui.add_sized([58.0, 22.0], egui::Label::new(tr("Model")));
-            let label = model_label(&app.reflection_model);
-            // Installed models are listed; the ones that can be downloaded follow, each opening its Download button.
-            let r = crate::widgets::combo_box("reflection-model").selected_text(label).show_ui(ui, |ui| {
-                for (id, name) in MODELS {
-                    if id == app.reflection_model || lightcraft_engine::reflections::available_model(id) {
-                        let r = ui.selectable_value(&mut app.reflection_model, id.into(), name);
-                        register(ui, format!("reflection:model:{id}"), r.rect);
+        crate::reflections_glare::mode_row(app, ui, busy);
+        crate::reflections_glare::area_row(app, ui, &d, busy);
+        if highlights {
+            crate::reflections_glare::highlights_rows(app, ui, busy);
+        }
+        if !highlights {
+            ui.horizontal(|ui| {
+                ui.add_sized([58.0, 22.0], egui::Label::new(tr("Model")));
+                let label = model_label(&app.reflection_model);
+                // Installed models are listed; the ones that can be downloaded follow, each opening its Download button.
+                let r = crate::widgets::combo_box("reflection-model").selected_text(label).show_ui(ui, |ui| {
+                    for (id, name) in MODELS {
+                        if id == app.reflection_model || lightcraft_engine::reflections::available_model(id) {
+                            let r = ui.selectable_value(&mut app.reflection_model, id.into(), name);
+                            register(ui, format!("reflection:model:{id}"), r.rect);
+                        }
                     }
-                }
-                let selected = app.reflection_model.clone();
-                let missing = |id: &str| id != selected && downloadable(id) && !lightcraft_engine::reflections::available_model(id);
-                if MODELS.iter().any(|(id, _)| missing(id)) {
-                    ui.separator();
-                }
-                for (id, name) in MODELS {
-                    if missing(id) {
-                        let r = ui.selectable_value(&mut app.reflection_model, id.into(), format!("{} {name}…", tr("Download")));
-                        register(ui, format!("reflection:model:{id}"), r.rect);
+                    let selected = app.reflection_model.clone();
+                    let missing = |id: &str| id != selected && downloadable(id) && !lightcraft_engine::reflections::available_model(id);
+                    if MODELS.iter().any(|(id, _)| missing(id)) {
+                        ui.separator();
                     }
-                }
+                    for (id, name) in MODELS {
+                        if missing(id) {
+                            let r = ui.selectable_value(&mut app.reflection_model, id.into(), format!("{} {name}…", tr("Download")));
+                            register(ui, format!("reflection:model:{id}"), r.rect);
+                        }
+                    }
+                });
+                crate::widgets::name_combo(&r.response, tr("Model"));
+                register(ui, "reflection:model", r.response.rect);
             });
-            crate::widgets::name_combo(&r.response, tr("Model"));
-            register(ui, "reflection:model", r.response.rect);
-        });
-        ui.horizontal(|ui| {
-            ui.add_sized([58.0, 22.0], egui::Label::new(tr("Quality")));
-            let name = match app.reflection_quality {
-                384 => "Preview",
-                1024 => "High",
-                _ => "Standard",
-            };
-            let r = crate::widgets::combo_box("reflection-quality").selected_text(tr(name)).show_ui(ui, |ui| {
-                for (q, name) in [(384, "Preview"), (768, "Standard"), (1024, "High")] {
-                    let r = ui.selectable_value(&mut app.reflection_quality, q, tr(name));
-                    register(ui, format!("reflection:quality:{q}"), r.rect);
-                }
+            ui.horizontal(|ui| {
+                ui.add_sized([58.0, 22.0], egui::Label::new(tr("Quality")));
+                let name = match app.reflection_quality {
+                    384 => "Preview",
+                    1024 => "High",
+                    _ => "Standard",
+                };
+                let r = crate::widgets::combo_box("reflection-quality").selected_text(tr(name)).show_ui(ui, |ui| {
+                    for (q, name) in [(384, "Preview"), (768, "Standard"), (1024, "High")] {
+                        let r = ui.selectable_value(&mut app.reflection_quality, q, tr(name));
+                        register(ui, format!("reflection:quality:{q}"), r.rect);
+                    }
+                });
+                crate::widgets::name_combo(&r.response, tr("Quality"));
+                register(ui, "reflection:quality", r.response.rect);
             });
-            crate::widgets::name_combo(&r.response, tr("Quality"));
-            register(ui, "reflection:quality", r.response.rect);
-        });
+        }
         if !available {
             ui.add(egui::Label::new(tr("Install a reflection model first")).wrap());
             if downloadable(&app.reflection_model) {
@@ -375,8 +406,9 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
                 app.toast(ui.ctx(), e);
             }
         }
-        if ready {
-            let r = ui.add_enabled(!busy && available, egui::Button::new(tr("Recalculate")));
+        if ready || highlights {
+            let label = if ready { "Recalculate" } else { "Find Glare" };
+            let r = ui.add_enabled(!busy && available, egui::Button::new(tr(label)));
             register(ui, "reflection:recompute", r.rect);
             if r.clicked()
                 && let Err(e) = app.run("reflection.apply", json!({"quality":app.reflection_quality,"model":app.reflection_model}))
@@ -392,33 +424,35 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
     });
     controls(app, ui, &d, "reflection.amount", ready && !busy);
-    egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
-        let mut sky = d.reflection.protect_sky;
-        let r = ui.add_enabled(ready && !busy, egui::Checkbox::new(&mut sky, tr("Protect sky (estimate)")));
-        register(ui, "reflection:protectSky", r.rect);
-        if r.on_hover_text(tr("Uses an embedded sky matte or an estimate. Limit the area for exact protection.")).changed() {
-            let _ = app.run("develop.merge", json!({"settings":{"reflection":{"protect_sky":sky}},"label":"Reflection Sky Protection"}));
-        }
-    });
-    controls(app, ui, &d, "reflection.detailProtection", ready && !busy);
-    egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
-        let mut limited = d.reflection.limit_region;
-        let r = ui.add_enabled(ready && !busy, egui::Checkbox::new(&mut limited, tr("Limit to area")));
-        register(ui, "reflection:limitRegion", r.rect);
-        if r.changed() {
-            let _ = app.run("develop.merge", json!({"settings":{"reflection":{"limit_region":limited}},"label":"Reflection Area"}));
-        }
-        if limited {
-            ui.add(egui::Label::new(tr("Percent of the original image, before crop or rotation. Outside this area stays unchanged.")).wrap());
-        }
-    });
-    if d.reflection.limit_region {
-        for name in ["reflection.left", "reflection.top", "reflection.right", "reflection.bottom"] {
-            controls(app, ui, &d, name, ready && !busy);
+    if !highlights {
+        egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
+            let mut sky = d.reflection.protect_sky;
+            let r = ui.add_enabled(ready && !busy, egui::Checkbox::new(&mut sky, tr("Protect sky (estimate)")));
+            register(ui, "reflection:protectSky", r.rect);
+            if r.on_hover_text(tr("Uses an embedded sky matte or an estimate. Limit the area for exact protection.")).changed() {
+                let _ = app.run("develop.merge", json!({"settings":{"reflection":{"protect_sky":sky}},"label":"Reflection Sky Protection"}));
+            }
+        });
+        controls(app, ui, &d, "reflection.detailProtection", ready && !busy);
+        egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
+            let mut limited = d.reflection.limit_region;
+            let r = ui.add_enabled(ready && !busy, egui::Checkbox::new(&mut limited, tr("Limit to area")));
+            register(ui, "reflection:limitRegion", r.rect);
+            if r.changed() {
+                let _ = app.run("develop.merge", json!({"settings":{"reflection":{"limit_region":limited}},"label":"Reflection Area"}));
+            }
+            if limited {
+                ui.add(egui::Label::new(tr("Percent of the original image, before crop or rotation. Outside this area stays unchanged.")).wrap());
+            }
+        });
+        if d.reflection.limit_region {
+            for name in ["reflection.left", "reflection.top", "reflection.right", "reflection.bottom"] {
+                controls(app, ui, &d, name, ready && !busy);
+            }
         }
     }
     egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
-        let r = ui.add_enabled(ready && !busy, egui::Button::new(tr("Reset")));
+        let r = ui.add_enabled(ready && !busy, egui::Button::new(tr("Reset"))).on_hover_text(tr("Reset Reflection Removal"));
         register(ui, "reflection:reset", r.rect);
         if r.clicked() {
             let _ = app.run("reflection.reset", json!({}));

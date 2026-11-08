@@ -27,6 +27,11 @@ impl FillRun {
         Self::default()
     }
 
+    /// A run whose stop flag is `stop`: a caller's own ✕ stops the fills too (fork feature, `fork/glare-highlights.md`).
+    pub fn with_stop(stop: Arc<AtomicBool>) -> Self {
+        Self { stop, held: Mutex::default() }
+    }
+
     /// The flag a row's ✕ sets; every fill of the render checks it.
     pub fn stop_flag(&self) -> Arc<AtomicBool> {
         self.stop.clone()
