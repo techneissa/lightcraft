@@ -9,6 +9,9 @@ description = "LightCraft coreml (L0): runs converted AI models through Apple's 
 [lints]
 workspace = true
 
+[dependencies]
+log = { workspace = true }
+
 [target.'cfg(target_os = "macos")'.dependencies]
 # No `exception` feature: it compiles an Objective-C helper with `cc` (README.md).
 objc2 = { workspace = true }

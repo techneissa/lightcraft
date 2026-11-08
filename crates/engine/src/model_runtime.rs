@@ -4,11 +4,16 @@
 //! `models.runtime`, kept in `<config>/model-runtimes.json`. Automatic is the default: Core ML when its model is
 //! installed and loads, else candle. A missing or damaged file means every model on Automatic.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 
 pub use lightcraft_coreml::Runtime;
+
+#[cfg(not(target_arch = "wasm32"))]
+mod download;
+#[cfg(not(target_arch = "wasm32"))]
+pub use download::{RELEASES, Release, release};
 
 /// The settings file's name in the config folder.
 pub const FILE: &str = "model-runtimes.json";
@@ -53,6 +58,9 @@ fn write(path: &Path, map: &BTreeMap<String, Runtime>) -> Result<(), String> {
 pub struct ModelRuntimes {
     file: Mutex<Option<PathBuf>>,
     choices: Mutex<BTreeMap<String, Runtime>>,
+    /// The Core ML downloads, by model.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    downloads: Mutex<HashMap<String, crate::lama_fill::Download>>,
 }
 
 impl ModelRuntimes {
@@ -68,16 +76,20 @@ impl ModelRuntimes {
         self.choices.lock().unwrap_or_else(PoisonError::into_inner).get(model).copied().unwrap_or_default()
     }
 
-    /// Choose `runtime` for `model` and save the file. An unknown model is an error.
+    /// Choose `runtime` for `model`: the file is saved first, and nothing changes when it can't be. An unknown model is
+    /// an error.
     pub fn set(&self, model: &str, runtime: Runtime) -> Result<(), String> {
         if !MODELS.iter().any(|(id, _)| *id == model) {
             return Err(format!("no model `{model}` has a Core ML version"));
         }
         let mut choices = self.choices.lock().unwrap_or_else(PoisonError::into_inner);
-        choices.insert(model.to_string(), runtime);
-        match self.file.lock().unwrap_or_else(PoisonError::into_inner).as_deref() {
-            Some(path) => write(path, &choices),
-            None => Ok(()),
+        let mut next = choices.clone();
+        next.insert(model.to_string(), runtime);
+        // saved first: a choice that could not be saved is not applied
+        if let Some(path) = self.file.lock().unwrap_or_else(PoisonError::into_inner).as_deref() {
+            write(path, &next)?;
         }
+        *choices = next;
+        Ok(())
     }
 }

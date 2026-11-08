@@ -1,5 +1,6 @@
+use crate::cache::{key_path, package_key};
 use crate::layout::{Elem, check_shape, contiguous, f16_to_f32, gather, replace_dir};
-use crate::{ComputeUnits, Error, Model, compile};
+use crate::{ComputeUnits, Error, Model, compile, load_package};
 
 fn scratch(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("lightcraft-coreml-{name}-{}", std::process::id()));
@@ -45,6 +46,16 @@ fn strides_past_the_buffer_are_an_error() {
     assert!(matches!(gather(&[2, 3], &[4, 1], Elem::F32, &stored), Err(Error::Output(_))));
     assert!(matches!(gather(&[2, 2], &[usize::MAX, 1], Elem::F32, &stored), Err(Error::Output(_))));
     assert!(matches!(gather(&[2, 2], &[2], Elem::F32, &stored), Err(Error::Output(_))));
+}
+
+/// A shape whose element count overflows `usize` is an error, not an overflow panic inside Core ML's byte handler.
+#[test]
+fn a_huge_output_shape_is_an_error() {
+    let stored = vec![0u8; 16];
+    let r = gather(&[usize::MAX, usize::MAX, 2], &[1, 1, 1], Elem::F32, &stored);
+    assert!(matches!(r, Err(Error::Output(_))), "{r:?}");
+    let r = gather(&[1 << 40, 1 << 30], &[1 << 30, 1], Elem::F16, &stored);
+    assert!(matches!(r, Err(Error::Output(_))), "{r:?}");
 }
 
 #[test]
@@ -94,4 +105,40 @@ fn a_damaged_model_is_an_error_not_a_crash() {
 #[test]
 fn core_ml_is_available_on_this_mac() {
     assert!(crate::available());
+}
+
+#[test]
+fn a_new_manifest_is_a_new_cache_key() {
+    let dir = scratch("key");
+    let package = dir.join("m.mlpackage");
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("Manifest.json"), br#"{"itemInfoEntries": {"A": {}}}"#).unwrap();
+    let first = package_key(&package).unwrap();
+    assert_eq!(package_key(&package).unwrap(), first);
+    std::fs::write(package.join("Manifest.json"), br#"{"itemInfoEntries": {"B": {}}}"#).unwrap();
+    assert_ne!(package_key(&package).unwrap(), first);
+    assert!(matches!(package_key(&dir.join("none.mlpackage")), Err(Error::Io(_))));
+    assert_eq!(key_path(&dir.join("m.mlmodelc")), dir.join("m.mlmodelc.key"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A damaged package next to a stale compiled copy: compiling it fails, nothing is loaded, no key is left behind.
+#[test]
+fn a_damaged_package_is_not_loaded_from_a_stale_copy() {
+    let dir = scratch("stale");
+    let (package, compiled) = (dir.join("m.mlpackage"), dir.join("m.mlmodelc"));
+    std::fs::create_dir_all(package.join("Data/com.apple.CoreML")).unwrap();
+    std::fs::write(package.join("Manifest.json"), b"{ damaged").unwrap();
+    std::fs::create_dir_all(&compiled).unwrap();
+    std::fs::write(key_path(&compiled), "an older model").unwrap();
+    let r = load_package(&package, &compiled, ComputeUnits::All);
+    assert!(matches!(r, Err(Error::Compile(_) | Error::Unavailable)), "{r:?}");
+    if crate::available() {
+        assert!(!key_path(&compiled).exists());
+    }
+    assert!(matches!(
+        load_package(&dir.join("none.mlpackage"), &dir.join("none.mlmodelc"), ComputeUnits::All),
+        Err(Error::Missing(_) | Error::Unavailable)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
 }

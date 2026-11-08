@@ -3,8 +3,8 @@
 //! reference.
 //!
 //! The model folder holds `model.safetensors` (candle) and, optionally, `coreml/dinov2-small.mlpackage` (made once by
-//! `tools/convert-coreml-dinov2.py`). The package is compiled for this Mac once, into `coreml/dinov2-small.mlmodelc`,
-//! the first time it is loaded. With [`Runtime::Automatic`] a missing, damaged or failing Core ML model means candle,
+//! `tools/convert-coreml-dinov2.py`, or downloaded). The package is compiled for this Mac once, into
+//! `coreml/dinov2-small.mlmodelc`, the first time it is loaded, and again when the package changes. With [`Runtime::Automatic`] a missing, damaged or failing Core ML model means candle,
 //! never a panic; [`Runtime::CoreMl`] makes that an error instead.
 
 use std::path::{Path, PathBuf};
@@ -54,28 +54,13 @@ pub fn coreml_installed(model_dir: &Path) -> bool {
     package.is_dir() || compiled.is_dir()
 }
 
-/// The compiled Core ML model of `model_dir`, compiling the package first when the compiled folder is missing or
-/// older than the package.
-fn compiled(model_dir: &Path) -> std::result::Result<PathBuf, lightcraft_coreml::Error> {
-    let (package, compiled) = coreml_paths(model_dir);
-    let modified = |p: &Path| std::fs::metadata(p).and_then(|m| m.modified()).ok();
-    let stale = match (modified(&package), modified(&compiled)) {
-        (Some(p), Some(c)) => p > c,
-        (Some(_), None) => true,
-        (None, _) => false,
-    };
-    if stale {
-        lightcraft_coreml::compile(&package, &compiled)?;
-    }
-    Ok(compiled)
-}
-
 /// The Core ML model of `model_dir`, loaded and checked to answer with [`DIMS`] numbers.
 fn load_coreml(model_dir: &Path) -> std::result::Result<Model, lightcraft_coreml::Error> {
     if !lightcraft_coreml::available() {
         return Err(lightcraft_coreml::Error::Unavailable);
     }
-    let model = Model::load(&compiled(model_dir)?, ComputeUnits::All)?;
+    let (package, compiled) = coreml_paths(model_dir);
+    let model = lightcraft_coreml::load_package(&package, &compiled, ComputeUnits::All)?;
     let out = model.predict(INPUT_NAME, &[1, 3, INPUT, INPUT], &vec![0.0; 3 * INPUT * INPUT], OUTPUT_NAME)?;
     if out.data.len() != DIMS {
         return Err(lightcraft_coreml::Error::Output(format!("{} numbers, not {DIMS}", out.data.len())));

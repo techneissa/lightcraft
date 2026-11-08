@@ -175,9 +175,11 @@ fn multi_array(shape: &[usize], data: &[f32]) -> Result<Retained<MLMultiArray>> 
         let fits = usize::try_from(size).is_ok_and(|s| s == std::mem::size_of_val(data));
         *written.borrow_mut() = match strides {
             Ok(s) if s == want && fits => {
-                // SAFETY: Core ML's buffer is `size` bytes, writable for the handler's duration, Float32 (asked for
-                // above) and aligned for it; `size` equals `data`'s byte length, so the copy stays inside it.
-                unsafe { std::ptr::copy_nonoverlapping(data.as_ptr(), ptr.as_ptr().cast::<f32>(), data.len()) };
+                let bytes = std::mem::size_of_val(data);
+                // SAFETY: Core ML's buffer is `size` bytes, writable for the handler's duration and Float32 (asked for
+                // above); `size` equals `data`'s byte length, so the copy stays inside it. Copied as bytes, so the
+                // buffer's alignment does not matter.
+                unsafe { std::ptr::copy_nonoverlapping(data.as_ptr().cast::<u8>(), ptr.as_ptr().cast::<u8>(), bytes) };
                 Ok(())
             }
             Ok(s) => Err(Error::Input(format!("Core ML laid the input out as {s:?} in {size} bytes"))),

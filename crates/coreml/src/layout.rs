@@ -67,7 +67,9 @@ pub(crate) fn gather(shape: &[usize], strides: &[usize], elem: Elem, bytes: &[u8
     if strides.len() != shape.len() {
         return Err(Error::Output(format!("shape {shape:?} with strides {strides:?}")));
     }
-    let count = check_shape(shape, shape.iter().product())?;
+    // counted with checked multiplies: an overflow here would panic inside Core ML's byte handler
+    let count = shape.iter().try_fold(1usize, |n, &d| n.checked_mul(d)).ok_or_else(|| Error::Output(format!("shape {shape:?} is too large")))?;
+    let count = check_shape(shape, count).map_err(|e| Error::Output(e.to_string()))?;
     let size = elem.bytes();
     let mut out = Vec::with_capacity(count);
     let mut index = vec![0usize; shape.len()];

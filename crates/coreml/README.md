@@ -4,7 +4,9 @@ Runs converted AI models through Apple's Core ML (Neural Engine, GPU, CPU) on th
 dependencies; a stub that reports itself unavailable on every other system. All `unsafe` is in `src/macos.rs`.
 The candle port of each model stays the reference and the fallback (`fork/coreml.md`).
 
-API: `available()`, `compile(package, dest)` (an `.mlpackage` to a compiled `.mlmodelc`, once after a download),
+API: `available()`, `compile(package, dest)` (an `.mlpackage` to a compiled `.mlmodelc`), `load_package(package,
+compiled, units)` (compiles when the copy is missing or was made from another package, keyed by its `Manifest.json`
+in `<compiled>.key`, and again once when a cached copy fails to load),
 `Model::load(compiled, ComputeUnits)`, `Model::predict(input, shape, data, output)` on `f32` tensors. Every failure
 is an `Error`, never a panic.
 

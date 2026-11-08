@@ -56,6 +56,8 @@ lightcraft-parsing = { workspace = true }
 # model downloads run natively only (the web build fetches no models)
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 lightcraft-fetch = { workspace = true }
+# unpacks the Core ML models' release zips (stored, fork/coreml.md)
+zip = { version = "7.4", default-features = false }
 # the LaMa fill behind Remove (fork/lama-fill.md); the web build has none
 lightcraft-lama = { workspace = true }
 # capture-time parsing for face recognition, and the Mac's time zone for Settings sync's `savedBy` (native only)
@@ -83,6 +85,8 @@ lightcraft-model = ["denoise", "lightcraft-denoise/lightcraft-model", "lightcraf
 lightcraft-develop = { workspace = true, features = ["test-hooks"] }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
+# the Core ML download test's fixture hash (fork/coreml.md)
+sha2 = { workspace = true }
 # HDR JPEG XL tests read the file's colour encoding
 jxl-oxide = { workspace = true }
 # Lossless synthetic HEIC files (the import test; decoded when the codecs' `heif` feature is on).

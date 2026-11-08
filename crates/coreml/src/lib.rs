@@ -10,6 +10,7 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod cache;
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 mod layout;
 #[cfg(target_os = "macos")]
@@ -18,6 +19,7 @@ mod macos;
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 mod stub;
 
+pub use cache::load_package;
 #[cfg(target_os = "macos")]
 use macos as imp;
 #[cfg(not(target_os = "macos"))]
