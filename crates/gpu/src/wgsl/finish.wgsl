@@ -667,15 +667,17 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
                 } else {
                     d = d * f;
                 }
-            } else if (hdr) {
-                // lighten towards SDR white; never pull HDR highlights down to it
-                d = d + max(1.0 - d, vec3<f32>(0.0)) * amount * t * 0.85;
             } else {
                 var lk = 0.85;
                 if (pu(F_TONE_V3) != 0u) {
                     lk = 0.40; // `finish::VIG_V3_LIGHT`
                 }
-                d = d + (1.0 - d) * amount * t * lk;
+                if (hdr) {
+                    // lighten towards SDR white; never pull HDR highlights down to it
+                    d = d + max(1.0 - d, vec3<f32>(0.0)) * amount * t * lk;
+                } else {
+                    d = d + (1.0 - d) * amount * t * lk;
+                }
             }
         }
     }

@@ -728,7 +728,9 @@ fn the_display_fit_is_made_on_the_device_when_it_can_be() {
     let full = s.loupe_job(id, 1024, 1024, true).unwrap().run().rendered.unwrap().image;
     let (fw, fh) = (full.width * 9 / 10, full.height * 9 / 10);
     let before = lightcraft_gpu::device_fits();
-    let fitted = s.loupe_job(id, 1024, 1024, true).unwrap().with_display_fit(fw, fh).run().rendered.unwrap().image;
+    // (a fresh render each time: the view the first one kept would serve the next, fitted on the CPU)
+    let fresh = |s: &mut crate::Session| RenderJob { view_cache: None, ..s.loupe_job(id, 1024, 1024, true).unwrap() };
+    let fitted = fresh(&mut s).with_display_fit(fw, fh).run().rendered.unwrap().image;
     assert!(lightcraft_gpu::device_fits() > before, "the fit was not made on the device");
     let want = fit_for_display(&full, fw, fh);
     assert_eq!((fitted.width, fitted.height), (want.width, want.height));
@@ -737,7 +739,7 @@ fn the_display_fit_is_made_on_the_device_when_it_can_be() {
     // a diagnostic overlay is drawn on the CPU after the readback: the CPU fits, and the size is the same
     let before = lightcraft_gpu::device_fits();
     let spots = lightcraft_pipeline::Overlay::Spots(50);
-    let on_cpu = s.loupe_job(id, 1024, 1024, true).unwrap().with_overlay(spots).with_display_fit(fw, fh).run().rendered.unwrap().image;
+    let on_cpu = fresh(&mut s).with_overlay(spots).with_display_fit(fw, fh).run().rendered.unwrap().image;
     assert_eq!(lightcraft_gpu::device_fits(), before, "an overlay render was fitted on the device");
     assert_eq!((on_cpu.width, on_cpu.height), (want.width, want.height));
 }

@@ -3,7 +3,7 @@
 use lightcraft_catalog::{Op, PhotoId};
 use serde_json::{Value, json};
 
-use super::{Setup, model_files, photo, pump_until_ready, setup};
+use super::{Setup, photo, pump_until_ready, setup};
 use crate::Session;
 
 fn set_iso(s: &mut Session, id: PhotoId, iso: Option<u32>) {
@@ -168,20 +168,18 @@ fn a_photo_the_user_already_set_is_left_alone() {
     finish(x);
 }
 
+/// Without an installed model the built-in denoiser (upstream #2982) does the work: opening a high-ISO raw applies, as
+/// with a model (before it, the fork's Auto AI Denoise waited for a model).
 #[test]
-fn without_a_model_nothing_happens_until_one_is_installed() {
+fn without_a_model_the_built_in_denoiser_is_used() {
     let (mut x, id) = with_iso("auto-nomodel", false, 12_800);
     turn_on(&mut x.s);
     let undo = x.s.undo.len();
     let r = open(&mut x.s, id);
-    assert_eq!((r["applied"].clone(), r["reason"].clone()), (json!(false), json!("noModel")), "{r}");
-    assert!(!on(&x.s, id));
-    assert_eq!(x.s.undo.len(), undo);
-    // the photo was not used up: once a model is installed, opening it applies
-    let onnx = model_files(&x.dir, "stand-in");
-    x.s.execute("denoise.models.install", &json!({"path": onnx.to_string_lossy(), "acknowledged": true})).unwrap();
-    assert_eq!(open(&mut x.s, id)["reason"], "applied");
+    assert_eq!((r["applied"].clone(), r["reason"].clone()), (json!(true), json!("applied")), "{r}");
     assert!(on(&x.s, id));
+    assert_eq!(x.s.undo.len(), undo + 1);
+    assert_eq!(x.s.denoise.active.as_ref().map(|a| a.id.as_str()), Some(lightcraft_denoise::builtin::ID));
     finish(x);
 }
 

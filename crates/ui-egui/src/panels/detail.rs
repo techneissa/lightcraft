@@ -416,7 +416,7 @@ fn loupe_paint_and_finish(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
     let divider = super::split_divider::interact(app, ui, canvas, img_rect);
     let line = divider.line;
     draw_wipe_before(app, &p, id, img_rect, line);
-    let camera_full_drawn = camera_full && draw_camera_full(app, &p, id, img_rect, display_aspect, window_cover(&windows));
+    let camera_full_drawn = camera_full && draw_camera_full(app, &p, id, img_rect, display_aspect, window_cover(windows));
     // …and the window renders go over the whole-frame ones, all of them, where they belong in the
     // frame (clipped to their pane, or their side of the line)
     let drawn = draw_windows(app, &p, window_ctx, windows, [canvas, img_rect], (show_before, split), divider.at);

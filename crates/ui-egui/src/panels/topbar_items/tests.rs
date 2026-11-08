@@ -52,7 +52,8 @@ fn the_bar_has_no_discord_button() {
     let h = demo();
     assert!(!has(&h, "icon:discord"));
     // every item is there by default
-    for item in ITEMS {
+    // (Library Status, the cloud, shows only while saving fails: upstream #3832 took the idle button off the bar)
+    for item in ITEMS.iter().filter(|i| i.id != "cloud") {
         assert!(has(&h, &icon(item.id)), "{} is on the bar by default", item.id);
     }
     // the Help menu still has it
@@ -68,7 +69,7 @@ fn hiding_an_item_removes_it_from_the_bar_and_persists() {
     let r = run(&mut h, "topBar.setItem", json!({"item": "bell", "shown": false}));
     assert_eq!(r["ok"], true, "{r}");
     assert!(!has(&h, "icon:bell"), "hidden");
-    for item in ITEMS.iter().filter(|i| i.id != "bell") {
+    for item in ITEMS.iter().filter(|i| !matches!(i.id, "bell" | "cloud")) {
         assert!(has(&h, &icon(item.id)), "{} stays", item.id);
     }
     assert_eq!(widget(&h, "icon:share"), share, "the icons on its right stay");
@@ -129,7 +130,7 @@ fn reset_shows_every_item_again() {
     assert!(!has(&h, "icon:sidebar") && !has(&h, "icon:help") && !has(&h, "icon:filter"));
     let r = run(&mut h, "topBar.reset", json!({}));
     assert_eq!(r["ok"], true, "{r}");
-    for item in ITEMS {
+    for item in ITEMS.iter().filter(|i| i.id != "cloud") {
         assert!(has(&h, &icon(item.id)), "{} is back", item.id);
     }
     assert_eq!(r["result"]["custom"], false);

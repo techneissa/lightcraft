@@ -1647,8 +1647,9 @@ fn raw_loupe(n: u64) -> (crate::LightcraftApp, egui::Context) {
 /// The look-ahead with every photo allowed (the default preparation settings).
 const ALL: crate::panels::detail::Prepare = crate::panels::detail::Prepare::Photos(lightcraft_engine::prep::Scope::All);
 
+/// The stand-in the look-ahead asks for: without the camera JPEG (the fork's loupe shows it only once a raw can't render).
 fn quick(app: &mut crate::LightcraftApp, id: u64, edge: usize) -> QuickJob {
-    app.session.quick_view_job(PhotoId(id), edge, true, true).unwrap()
+    app.session.quick_view_job(PhotoId(id), edge, true, false).unwrap()
 }
 
 /// The loupe's stand-ins ahead follow Settings ▸ Performance: none when the mode prepares only the photo on
@@ -1929,10 +1930,10 @@ fn the_look_ahead_asks_again_when_only_the_crop_changes() {
     let (mut app, _ctx) = raw_loupe(3);
     let ahead_keys = |r: &Renderer| r.quick_tried.iter().filter(|(s, _)| matches!(s, Slot::QuickAhead(_))).map(|(_, k)| *k).collect::<Vec<u64>>();
     crate::panels::detail::look_ahead(&mut app, PhotoId(1), 64, true, ALL);
-    let cropped = app.session.quick_view_job(PhotoId(2), 64, true, true).unwrap().key;
+    let cropped = app.session.quick_view_job(PhotoId(2), 64, true, false).unwrap().key;
     assert!(ahead_keys(&app.renderer).contains(&cropped));
     crate::panels::detail::look_ahead(&mut app, PhotoId(1), 64, false, ALL);
-    let uncropped = app.session.quick_view_job(PhotoId(2), 64, false, true).unwrap().key;
+    let uncropped = app.session.quick_view_job(PhotoId(2), 64, false, false).unwrap().key;
     assert_ne!(cropped, uncropped);
     assert!(ahead_keys(&app.renderer).contains(&uncropped), "the stand-ins are made again without the crop");
 }
