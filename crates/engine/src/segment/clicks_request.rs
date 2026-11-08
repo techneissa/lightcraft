@@ -20,6 +20,14 @@ pub(crate) struct ClicksRequest {
 }
 
 impl ClicksRequest {
+    /// A request the model has already answered with `seg` (tests).
+    #[cfg(all(test, feature = "sam"))]
+    pub(crate) fn answered(seg: Option<SegMask>) -> ClicksRequest {
+        let (tx, rx) = std::sync::mpsc::channel();
+        let _ = tx.send(super::worker::Outcome { id: 0, tag: super::Tag::Wait, result: Ok(seg), superseded: false, notice: None });
+        ClicksRequest { cancel: Arc::default(), rx }
+    }
+
     /// Wait for the selection (CLI, MCP, tests), up to the segmenter's longest wait.
     pub(crate) fn wait(self) -> Result<Option<SegMask>, String> {
         #[cfg(feature = "sam")]
@@ -76,7 +84,7 @@ impl Session {
         {
             let (tx, rx) = std::sync::mpsc::channel();
             // (on the photo without its spots: the spot a further click changes would hide the object)
-            let job = self.segment_job_in(id, super::worker::Kind::Clicks(Self::model_clicks(clicks)), super::Tag::Wait, tx, None, true)?;
+            let job = self.segment_job_in(id, super::worker::Kind::ObjectClicks(Self::model_clicks(clicks)), super::Tag::Wait, tx, None, true)?;
             let cancel = job.cancel.clone();
             self.segmenter.worker.submit(job)?;
             Ok(ClicksRequest { cancel, rx })

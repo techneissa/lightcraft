@@ -55,6 +55,9 @@ pub(crate) struct ObjectJob {
     expand: f64,
     fill: SpotFill,
     req: ClicksRequest,
+    /// The model has answered: its selection is being measured on a thread of its own (so a big photo never holds
+    /// up the window).
+    measuring: Option<std::sync::mpsc::Receiver<Result<SegMask, String>>>,
     _task: TaskGuard,
 }
 
@@ -83,61 +86,88 @@ impl Session {
     /// Mask `mid` of `d` (photo `id`'s settings, maybe with a mask added) as a stored spot shape, cut to `reach` when
     /// given. An error says why there is nothing to remove.
     pub(crate) fn mask_spot_area(&mut self, id: PhotoId, d: &DevelopSettings, mid: u32, reach: Option<&Reach>) -> Result<SegMask, String> {
-        let src = self.source_now(id, SourceLevel::Preview)?;
-        let info = self.source_info(id);
-        // on the photo without its spots: the mask's edges follow the photo's, and a spot already over the object
-        // (the one a further click changes) would hand it the filled-in pixels instead
-        let d = &DevelopSettings { spots: Vec::new(), ..d.clone() };
-        let req = lightcraft_pipeline::RenderRequest { apply_crop: false, ..lightcraft_pipeline::RenderRequest::fit(MEASURE_EDGE, MEASURE_EDGE) };
-        let out = lightcraft_pipeline::mask_planes(&src, &info, d, &req, None, &PlanesAsk { want: MaskWant::One(mid), known: None });
-        let plane = out.planes.and_then(|p| p.into_iter().find(|(i, _)| *i == mid).map(|(_, p)| p)).ok_or("the mask selects nothing to remove")?;
-        let (w, h) = (plane.width, plane.height);
-        if w == 0 || h == 0 || plane.data.len() != w * h {
-            return Err("the mask selects nothing to remove".into());
-        }
-        let frame = lightcraft_pipeline::frame_for(&src, &info, d, false);
-        let (to_norm, to_px) = (frame.out_to_norm(w, h), frame.norm_to_out(w, h));
-        // (a mask at a lower Amount still selects its area)
-        let peak = plane.data.iter().copied().filter(|v| v.is_finite()).fold(0.0f32, f32::max);
-        if peak <= 0.05 {
-            return Err("the mask selects nothing to remove".into());
-        }
-        let long = |p: Point| frame.norm_to_long(p);
-        let reach_long: Option<(Vec<Point>, f64)> = reach.map(|r| (r.points.iter().map(|p| long(*p)).collect(), STROKE_REACH * r.radius));
-        let cov: Vec<f32> = plane
-            .data
-            .iter()
-            .enumerate()
-            .map(|(i, v)| {
-                let v = if v.is_finite() { (v / peak).clamp(0.0, 1.0) } else { 0.0 };
-                match &reach_long {
-                    Some((pts, r)) if v > 0.0 => {
-                        let q = long(to_norm.apply(Point::new((i % w) as f64 + 0.5, (i / w) as f64 + 0.5)));
-                        if pts.iter().any(|p| (p.x - q.x).hypot(p.y - q.y) <= *r) { v } else { 0.0 }
-                    }
-                    _ => v,
-                }
-            })
-            .collect();
-        let inside = cov.iter().filter(|c| **c > 0.5).count();
-        if inside == 0 {
-            return Err("the mask selects nothing to remove".into());
-        }
-        if inside as f64 / (w * h) as f64 > MAX_SHARE {
-            return Err("the area covers most of the photo; Remove rebuilds smaller areas from what is around them".into());
-        }
-        lightcraft_pipeline::spot_area::area_from_coverage(&cov, w, h, |p| to_norm.apply(p), |p| to_px.apply(p))
-            .ok_or_else(|| "the mask selects nothing to remove".to_string())
+        let (src, info) = self.measure_source(id)?;
+        measure(&src, &info, d, mid, reach)
     }
 
+    /// The picture a shape is measured on: the photo's preview-size source (the view usually holds it already).
+    fn measure_source(&mut self, id: PhotoId) -> Result<(std::sync::Arc<lightcraft_raster::Rgb32f>, lightcraft_pipeline::SourceInfo), String> {
+        Ok((self.source_now(id, SourceLevel::Preview)?, self.source_info(id)))
+    }
+}
+
+/// Mask `mid` of `d` measured on `src` (see [`Session::mask_spot_area`]); plain data, so it runs on any thread.
+fn measure(
+    src: &std::sync::Arc<lightcraft_raster::Rgb32f>,
+    info: &lightcraft_pipeline::SourceInfo,
+    d: &DevelopSettings,
+    mid: u32,
+    reach: Option<&Reach>,
+) -> Result<SegMask, String> {
+    // on the photo without its spots: the mask's edges follow the photo's, and a spot already over the object
+    // (the one a further click changes) would hand it the filled-in pixels instead
+    let d = &DevelopSettings { spots: Vec::new(), ..d.clone() };
+    let req = lightcraft_pipeline::RenderRequest { apply_crop: false, ..lightcraft_pipeline::RenderRequest::fit(MEASURE_EDGE, MEASURE_EDGE) };
+    let out = lightcraft_pipeline::mask_planes(src, info, d, &req, None, &PlanesAsk { want: MaskWant::One(mid), known: None });
+    let plane = out.planes.and_then(|p| p.into_iter().find(|(i, _)| *i == mid).map(|(_, p)| p)).ok_or("the mask selects nothing to remove")?;
+    let (w, h) = (plane.width, plane.height);
+    if w == 0 || h == 0 || plane.data.len() != w * h {
+        return Err("the mask selects nothing to remove".into());
+    }
+    let frame = lightcraft_pipeline::frame_for(src, info, d, false);
+    let (to_norm, to_px) = (frame.out_to_norm(w, h), frame.norm_to_out(w, h));
+    // (a mask at a lower Amount still selects its area)
+    let peak = plane.data.iter().copied().filter(|v| v.is_finite()).fold(0.0f32, f32::max);
+    if peak <= 0.05 {
+        return Err("the mask selects nothing to remove".into());
+    }
+    let long = |p: Point| frame.norm_to_long(p);
+    let reach_long: Option<(Vec<Point>, f64)> = reach.map(|r| (r.points.iter().map(|p| long(*p)).collect(), STROKE_REACH * r.radius));
+    let cov: Vec<f32> = plane
+        .data
+        .iter()
+        .enumerate()
+        .map(|(i, v)| {
+            let v = if v.is_finite() { (v / peak).clamp(0.0, 1.0) } else { 0.0 };
+            match &reach_long {
+                Some((pts, r)) if v > 0.0 => {
+                    let q = long(to_norm.apply(Point::new((i % w) as f64 + 0.5, (i / w) as f64 + 0.5)));
+                    if pts.iter().any(|p| (p.x - q.x).hypot(p.y - q.y) <= *r) { v } else { 0.0 }
+                }
+                _ => v,
+            }
+        })
+        .collect();
+    let inside = cov.iter().filter(|c| **c > 0.5).count();
+    if inside == 0 {
+        return Err("the mask selects nothing to remove".into());
+    }
+    if inside as f64 / (w * h) as f64 > MAX_SHARE {
+        return Err("the area covers most of the photo; Remove rebuilds smaller areas from what is around them".into());
+    }
+    lightcraft_pipeline::spot_area::area_from_coverage(&cov, w, h, |p| to_norm.apply(p), |p| to_px.apply(p))
+        .ok_or_else(|| "the mask selects nothing to remove".to_string())
+}
+
+/// The settings `d` with an Object mask of `seg` added (the model's photo coordinates), and the mask's id.
+fn with_object(d: &DevelopSettings, seg: SegMask, ask: &ObjectAsk) -> (DevelopSettings, u32) {
+    let mut d = d.clone();
+    let mid = d.masks.iter().map(|m| m.id).max().unwrap_or(0).saturating_add(1);
+    let shape = MaskShape::Object { hint: ask.hint.clone(), exclude: ask.exclude.clone(), seg: Some(seg), detail: Vec::new(), edge: 0.0 };
+    d.masks.push(Mask { id: mid, components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }], ..Default::default() });
+    (d, mid)
+}
+
+/// The stored shape of an Object spot from its measured coverage.
+fn object_area(seg: SegMask, ask: &ObjectAsk) -> SpotArea {
+    SpotArea { hint: ask.hint.clone(), exclude: ask.exclude.clone(), ..SpotArea::new("object", seg) }
+}
+
+impl Session {
     /// An Object selection (`seg`, in the model's photo coordinates, from `hint` and `exclude`) as a stored spot shape.
     pub(crate) fn object_spot_area(&mut self, id: PhotoId, seg: SegMask, ask: &ObjectAsk) -> Result<SpotArea, String> {
-        let mut d = (*self.develop_of(id).ok_or("no such photo")?).clone();
-        let mid = d.masks.iter().map(|m| m.id).max().unwrap_or(0).saturating_add(1);
-        let shape = MaskShape::Object { hint: ask.hint.clone(), exclude: ask.exclude.clone(), seg: Some(seg), detail: Vec::new(), edge: 0.0 };
-        d.masks.push(Mask { id: mid, components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }], ..Default::default() });
-        let seg = self.mask_spot_area(id, &d, mid, ask.reach.as_ref())?;
-        Ok(SpotArea { hint: ask.hint.clone(), exclude: ask.exclude.clone(), ..SpotArea::new("object", seg) })
+        let (d, mid) = with_object(&*self.develop_of(id).ok_or("no such photo")?, seg, ask);
+        Ok(object_area(self.mask_spot_area(id, &d, mid, ask.reach.as_ref())?, ask))
     }
 
     /// Add a shaped Remove spot of `area` to photo `id` (one undo step, `label`) and select it; its index.
@@ -164,6 +194,11 @@ impl Session {
     /// Apply an Object selection: a new spot, or spot `ask.target` reshaped. Its index.
     pub(crate) fn apply_object(&mut self, id: PhotoId, seg: SegMask, ask: &ObjectAsk) -> crate::Result<usize> {
         let area = self.object_spot_area(id, seg, ask).map_err(crate::EngineError::Other)?;
+        self.apply_object_area(id, area, ask)
+    }
+
+    /// A measured Object shape applied: a new spot, or spot `ask.target` reshaped. Its index.
+    fn apply_object_area(&mut self, id: PhotoId, area: SpotArea, ask: &ObjectAsk) -> crate::Result<usize> {
         match ask.target {
             Some(i) => self.reshape_spot(id, i, area).map(|_| i),
             None => self.add_area_spot(id, area, ask.expand, ask.fill, "Remove Object"),
@@ -196,7 +231,7 @@ impl Session {
         let req = self.segment_clicks_request(id, model_clicks).map_err(crate::EngineError::Other)?;
         let task = self.activity.start("segment", "Selecting with SAM 3", Cancel::Flag(req.cancel.clone()));
         let ObjectAsk { target, hint, exclude, reach, expand, fill } = ask;
-        self.object_jobs.0.push(ObjectJob { photo: id, target, hint, exclude, reach, expand, fill, req, _task: task });
+        self.object_jobs.0.push(ObjectJob { photo: id, target, hint, exclude, reach, expand, fill, req, measuring: None, _task: task });
         Ok(())
     }
 
@@ -207,31 +242,56 @@ impl Session {
         let mut changed = false;
         let jobs = std::mem::take(&mut self.object_jobs.0);
         let mut waiting = Vec::new();
-        for j in jobs {
+        for mut j in jobs {
             if active != Some(j.photo) || j.req.cancel.load(Ordering::SeqCst) {
                 // another photo now, or stopped with ✕
                 j.req.cancel.store(true, Ordering::SeqCst);
+                continue;
+            }
+            let ask = ObjectAsk {
+                target: j.target,
+                hint: j.hint.clone(),
+                exclude: j.exclude.clone(),
+                reach: j.reach.clone(),
+                expand: j.expand,
+                fill: j.fill,
+            };
+            // (a spot it refines must still be an Object spot)
+            let photo = j.photo;
+            let fits = |s: &Session| ask.target.is_none_or(|i| s.develop_of(photo).is_some_and(|d| d.spots.get(i).is_some_and(is_object_spot)));
+            const CHANGED: &str = "The spot was changed before the object was found; click again.";
+            if let Some(rx) = &j.measuring {
+                let measured = match rx.try_recv() {
+                    Ok(m) => m,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => {
+                        waiting.push(j);
+                        continue;
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => Err("measuring the selection failed; click again".into()),
+                };
+                match measured {
+                    Ok(_) if !fits(self) => messages.push(CHANGED.into()),
+                    Ok(seg) => match self.apply_object_area(photo, object_area(seg, &ask), &ask) {
+                        Ok(_) => changed = true,
+                        Err(e) => messages.push(e.to_string()),
+                    },
+                    Err(e) => messages.push(e),
+                }
                 continue;
             }
             let Some(result) = j.req.try_take() else {
                 waiting.push(j);
                 continue;
             };
-            let ObjectJob { photo, target, hint, exclude, reach, expand, fill, .. } = j;
-            let ask = ObjectAsk { target, hint, exclude, reach, expand, fill };
             match result {
-                Ok(Some(seg)) => {
-                    // (a spot it refines must still be an Object spot)
-                    let fits = target.is_none_or(|i| self.develop_of(photo).is_some_and(|d| d.spots.get(i).is_some_and(is_object_spot)));
-                    if !fits {
-                        messages.push("The spot was changed before the object was found; click again.".into());
-                        continue;
+                Ok(Some(_)) if !fits(self) => messages.push(CHANGED.into()),
+                Ok(Some(seg)) => match self.measure_later(photo, seg, &ask) {
+                    Ok(rx) => {
+                        j.measuring = Some(rx);
+                        waiting.push(j);
                     }
-                    match self.apply_object(photo, seg, &ask) {
-                        Ok(_) => changed = true,
-                        Err(e) => messages.push(e.to_string()),
-                    }
-                }
+                    Err(e) => messages.push(e),
+                },
                 Ok(None) => messages.push("Nothing was selected there; click on the object.".into()),
                 Err(e) => messages.push(e),
             }
@@ -240,6 +300,29 @@ impl Session {
         waiting.append(&mut self.object_jobs.0);
         self.object_jobs.0 = waiting;
         changed
+    }
+
+    /// Put a job whose request is `req` on the list, as [`Session::queue_object`] does (tests).
+    #[cfg(all(test, feature = "sam"))]
+    pub(crate) fn push_object_job(&mut self, id: PhotoId, ask: ObjectAsk, req: ClicksRequest) {
+        let task = self.activity.start("segment", "Selecting with SAM 3", Cancel::Flag(req.cancel.clone()));
+        let ObjectAsk { target, hint, exclude, reach, expand, fill } = ask;
+        self.object_jobs.0.push(ObjectJob { photo: id, target, hint, exclude, reach, expand, fill, req, measuring: None, _task: task });
+    }
+
+    /// Measure the Object selection `seg` of photo `id` on a thread of its own; the answer comes on the channel.
+    fn measure_later(&mut self, id: PhotoId, seg: SegMask, ask: &ObjectAsk) -> Result<std::sync::mpsc::Receiver<Result<SegMask, String>>, String> {
+        let (d, mid) = with_object(&*self.develop_of(id).ok_or("no such photo")?, seg, ask);
+        let (src, info) = self.measure_source(id)?;
+        let reach = ask.reach.clone();
+        let (tx, rx) = std::sync::mpsc::channel();
+        let work = move || {
+            let r = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| measure(&src, &info, &d, mid, reach.as_ref())))
+                .unwrap_or_else(|_| Err("measuring the selection failed unexpectedly (the photo is untouched)".into()));
+            let _ = tx.send(r);
+        };
+        std::thread::Builder::new().name("object-measure".into()).spawn(work).map_err(|e| format!("could not measure the selection: {e}"))?;
+        Ok(rx)
     }
 }
 

@@ -339,3 +339,33 @@ fn a_click_on_a_moved_object_spot_keeps_its_shape_and_says_why() {
     assert_eq!(spots(&s), vec![moved], "the shape stays");
     assert_eq!(s.commits(), commits, "no undo step");
 }
+
+// Given the model's answer in the app, the poll that receives it hands the measuring to a thread (a big photo never
+// holds up the window); a later poll adds the spot, with its row in the activity stack until then
+#[cfg(feature = "sam")]
+#[test]
+fn the_app_measures_an_answer_off_the_poll_that_receives_it() {
+    use crate::segment::clicks_request::ClicksRequest;
+    use crate::spot_area::ObjectAsk;
+    let mut s = session();
+    s.segmenter.background = true;
+    let id = s.active().unwrap();
+    let ask = ObjectAsk { target: None, hint: vec![Point::new(0.4, 0.4)], exclude: vec![], reach: None, expand: 0.005, fill: SpotFill::Lama };
+    s.push_object_job(id, ask, ClicksRequest::answered(Some(box_seg([0.3, 0.3, 0.5, 0.5]))));
+    let mut messages = Vec::new();
+    assert!(!s.poll_object_jobs(&mut messages), "nothing applied by the poll that got the answer");
+    assert!(spots(&s).is_empty() && s.object_jobs.busy() && messages.is_empty(), "{messages:?}");
+    assert!(s.activity.list().iter().any(|t| t.label == "Selecting with SAM 3"));
+    let t = std::time::Instant::now();
+    while s.object_jobs.busy() {
+        s.poll_object_jobs(&mut messages);
+        assert!(t.elapsed() < std::time::Duration::from_secs(60), "the measuring never finished");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    assert!(messages.is_empty(), "{messages:?}");
+    let all = spots(&s);
+    assert_eq!(all.len(), 1);
+    let b = bounds(&all[0]);
+    assert!((b[0] - 0.3).abs() < 0.02 && (b[2] - 0.5).abs() < 0.02, "{b:?}");
+    assert!(!s.activity.list().iter().any(|t| t.label == "Selecting with SAM 3"), "the row goes with the job");
+}
