@@ -757,7 +757,8 @@ pub fn specs() -> Vec<CommandSpec> {
             let mid = mask_id(p, s.active_mask, "mask.invert")?;
             masks_edit(s, "mask.invert", "Invert Mask", |masks, _| {
                 let i = find(masks, mid, "mask.invert")?;
-                masks[i].invert = !masks[i].invert;
+                // the later parts turn with it, so the whole mask selects the opposite (issue #72)
+                super::mask_invert::invert(&mut masks[i]);
                 Ok(())
             })
         }),
@@ -787,7 +788,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     m.id = next;
                     m.name = format!("{} copy", m.name);
                     if invert {
-                        m.invert = !m.invert;
+                        super::mask_invert::invert(&mut m);
                     }
                     masks.insert(i + 1, m);
                     *active = Some(next);

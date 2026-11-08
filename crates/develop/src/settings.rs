@@ -1183,6 +1183,11 @@ pub struct Mask {
     /// edit converts an old one (`lightcraft_pipeline::mask_space::attach`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub on_photo: bool,
+    /// What the parts after the first were (mode, own Invert) before the last Invert Mask rewrote them, so inverting
+    /// again puts them back as they were. Empty when unknown; only used while the parts are still what that Invert
+    /// made (`lightcraft_engine::cmd::mask_invert`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub before_invert: Vec<(MaskOp, bool)>,
 }
 
 fn is_zero(v: &f64) -> bool {
@@ -1204,6 +1209,7 @@ impl Default for Mask {
             adjust: LocalAdjustments::default(),
             refine: 0.0,
             on_photo: true,
+            before_invert: Vec::new(),
         }
     }
 }

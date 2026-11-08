@@ -79,6 +79,7 @@ mod map_geotag;
 mod map_keys;
 mod map_locations;
 mod map_tracks;
+mod mask_edge_rows;
 mod mask_effects;
 mod mask_menus;
 mod mask_name;
