@@ -16,6 +16,7 @@ Update opens the **Update LightCraft** app (`open -a "Update LightCraft"`). That
 
 ## Details
 
+- No check at start when an agent drives the app (`--control` or `LIGHTCRAFT_CONTROL_PORT`) or when `LIGHTCRAFT_NO_UPDATE_CHECK` is set (`fork_update::check_at_start`, called from `apps/lightcraft/src/main.rs`): test copies of the app carry an older commit and popped up the update window on every launch (2026-11-08).
 - The request runs on a worker thread with a row in the activity stack (kind `update`, "Checking for updates"), through `lightcraft-fetch`'s HTTPS client with timeouts; an error never panics.
 - The official `craft_update::Updater` stays in `updates_ui.rs` but nothing calls its check; `UPDATE_APP` in `lib.rs` is left as it was.
 - Tests never touch the network: the real getter is replaced by a refusing one under `cfg(test)`, and tests install fakes.
