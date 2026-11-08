@@ -149,6 +149,84 @@ fn point_color(k: u32, lch: vec3<f32>) -> vec3<f32> {
 }
 
 // `ColorOps::apply`.
+// `lightcraft_pipeline::recolor::lightness`.
+fn recolor_lightness(l: f32, lr0: f32, lt0: f32) -> f32 {
+    let lr = max(lr0, RC_MIN_L);
+    let lt = max(lt0, 0.0);
+    if (l <= lr) {
+        return lt * l / lr;
+    }
+    let s = min(lt / lr, max(1.0 - lt, 0.0) / max(1.0 - lr, 1e-3));
+    return lt + (l - lr) * s;
+}
+
+// `lightcraft_pipeline::recolor::chroma_ratio`.
+fn recolor_chroma_ratio(c: f32, rc: f32, l: f32) -> f32 {
+    if (rc <= 1e-6) {
+        return 0.0;
+    }
+    var r = max(c / rc, 0.0);
+    let span = RC_MAX_CHROMA - 1.0;
+    if (r > 1.0) {
+        r = 1.0 + span * (1.0 - exp(-(r - 1.0) / span));
+    }
+    return r * smoothstep(RC_NEUTRAL0, RC_NEUTRAL1, c / max(l, 0.05));
+}
+
+// Hue of OkLab `(a, b)`, 0 for a neutral one (as the CPU's atan2(0, 0)).
+fn ok_hue(a: f32, b: f32) -> f32 {
+    return select(atan2(b, a), 0.0, a == 0.0 && b == 0.0);
+}
+
+// `lightcraft_pipeline::recolor::apply_terms`: terms at `t` (strength, target OkLab, reference L, C, hue cos, sin).
+fn recolor_one(lab: vec3<f32>, t: u32, alpha: f32) -> vec3<f32> {
+    let k = min(aux[t] * alpha, 1.0);
+    if (k <= 0.0) {
+        return lab;
+    }
+    let tl = vec3<f32>(aux[t + 1u], aux[t + 2u], aux[t + 3u]);
+    let rl = aux[t + 4u];
+    let rc = aux[t + 5u];
+    let c = length(lab.yz);
+    let h = ok_hue(lab.y, lab.z);
+    let ct = length(tl.yz);
+    let ht = ok_hue(tl.y, tl.z);
+    let l1 = recolor_lightness(lab.x, rl, tl.x);
+    let coloured = smoothstep(RC_GREY0, RC_GREY1, rc);
+    let by_chroma = recolor_chroma_ratio(c, rc, lab.x);
+    let by_light = select(1.0, clamp(l1 / tl.x, 0.0, 1.5), tl.x > 1e-6);
+    let grey = by_light * (1.0 - smoothstep(RC_WHITE0, RC_WHITE1, l1));
+    let c1 = ct * (grey + (by_chroma - grey) * coloured);
+    let hr = ok_hue(aux[t + 6u], aux[t + 7u]);
+    let keep = coloured * smoothstep(RC_GREY0, RC_GREY1, c);
+    let h1 = ht + clamp(wrap_angle(h - hr) * keep, -RC_MAX_HUE, RC_MAX_HUE);
+    let nlab = vec3<f32>(l1, c1 * cos(h1), c1 * sin(h1));
+    return lab + (nlab - lab) * k;
+}
+
+// Every mask's Recolor at pixel `i`, in mask order (`finish::recolor_pixel`); `d` unchanged where none is on.
+fn recolor_masks(d: vec3<f32>, i: u32, n: u32) -> vec3<f32> {
+    var lab = vec3<f32>(0.0);
+    var found = false;
+    let nm = pu(F_NMASK);
+    for (var m = 0u; m < nm; m++) {
+        let a = masks[m * n + i];
+        let t = pu(F_MASK_OFF) + m * MASK_TERMS + MASK_RECOLOR;
+        if (a <= 0.0 || aux[t] <= 0.0) {
+            continue;
+        }
+        if (!found) {
+            lab = oklab(d);
+            found = true;
+        }
+        lab = recolor_one(lab, t, a);
+    }
+    if (!found) {
+        return d;
+    }
+    return oklab_inv(lab);
+}
+
 fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
     if (pu(F_OPS_IDENTITY) != 0u && local_sat == 0.0 && local_hue == 0.0) {
         return rgb;
@@ -603,6 +681,7 @@ fn main(@builtin(global_invocation_id) gid: vec3<u32>) {
         let lab = oklab(d);
         d = oklab_inv(vec3<f32>(lab.x, lab.y + tint_dir.x * 0.08 * tint_amt, lab.z + tint_dir.y * 0.08 * tint_amt));
     }
+    d = recolor_masks(d, i, n);
 
     // --- vignette (display linear, post-crop)
     if (pu(F_VIG) != 0u) {

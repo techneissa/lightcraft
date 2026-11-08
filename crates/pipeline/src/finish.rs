@@ -134,7 +134,10 @@ fn grain_noise(x: f32, y: f32, seed: u32) -> f32 {
 }
 
 /// Number of per-mask terms in [`mask_terms`].
-pub const MASK_TERMS: usize = 21;
+pub const MASK_TERMS: usize = 21 + crate::recolor::TERMS;
+
+/// Where a mask's Recolor terms ([`crate::recolor::terms`]) start in its term block.
+pub const MASK_RECOLOR: usize = 21;
 
 /// Number of alpha-weighted terms at the start of [`mask_terms`].
 pub const MASK_SUMS: usize = 17;
@@ -142,7 +145,8 @@ pub const MASK_SUMS: usize = 17;
 /// A mask's local adjustments as the per-pixel stage uses them (alpha-weighted sums), in order:
 /// exposure, temp, tint, contrast, highlights, shadows, whites, blacks, texture, clarity, dehaze,
 /// saturation, hue, sharpness, noise, moiré, defringe, then the colour overlay: on (0/1), cos and
-/// sin of its OkLCh hue, and its strength.
+/// sin of its OkLCh hue, and its strength, then the Recolor ([`MASK_RECOLOR`]; off here: its terms need the area's
+/// reference, [`effect_terms_with`]).
 pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
     let (on, cos, sin, amt) = if j.color_sat > 0.0 {
         let hue = crate::colorops::oklch_hue_of_srgb_hue(j.color_hue);
@@ -172,6 +176,14 @@ pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
         cos,
         sin,
         amt,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
     ]
 }
 
@@ -493,6 +505,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
                 let lab = lightcraft_color::perceptual::oklab_from_2020(d);
                 d = lightcraft_color::perceptual::oklab_to_2020([lab[0], lab[1] + dir[0] * 0.08 * amt, lab[2] + dir[1] * 0.08 * amt]);
             }
+            d = recolor_pixel(p, &terms, &active, x, y, d);
 
             // --- vignette (display linear, post-crop)
             if let Some(v) = vig {
@@ -650,6 +663,15 @@ pub fn effect_terms(j: &LocalAdjustments, amount: f32) -> [f32; MASK_TERMS] {
     t
 }
 
+/// [`effect_terms`] with the mask's Recolor, from its area's reference `r` ([`crate::Plan::recolor`]).
+pub fn effect_terms_with(j: &LocalAdjustments, amount: f32, r: Option<&crate::recolor::Reference>) -> [f32; MASK_TERMS] {
+    let mut t = effect_terms(j, amount);
+    if let Some(tail) = t.get_mut(MASK_RECOLOR..) {
+        tail.copy_from_slice(&crate::recolor::terms(j, amount, r));
+    }
+    t
+}
+
 /// Each mask's effect terms with its Amount applied (`None`: the mask has no effect: its Amount is
 /// 0 or less). The Amount scales the terms and the tint's strength, never the alpha.
 fn scaled_terms(p: &Prepared) -> Vec<Option<[f32; MASK_TERMS]>> {
@@ -659,7 +681,8 @@ fn scaled_terms(p: &Prepared) -> Vec<Option<[f32; MASK_TERMS]>> {
             if m.amount <= 0.0 || m.alpha.is_zero() {
                 return None;
             }
-            Some(effect_terms(&m.adjust, m.amount))
+            let r = p.recolor.iter().find(|(id, _)| *id == m.id).map(|(_, r)| r);
+            Some(effect_terms_with(&m.adjust, m.amount, r))
         })
         .collect()
 }
@@ -683,6 +706,21 @@ fn pixel_local_terms(p: &Prepared, terms: &[Option<[f32; MASK_TERMS]>], active: 
         }
     }
     PixelLocalTerms { values, tint }
+}
+
+/// The masks' Recolor at pixel `(x, y)` on display-linear `d`, in mask order (unchanged, exactly, where none is on).
+fn recolor_pixel(p: &Prepared, terms: &[Option<[f32; MASK_TERMS]>], active: &[usize], x: usize, y: usize, d: [f32; 3]) -> [f32; 3] {
+    let mut lab = None;
+    for &k in active {
+        let (Some(mask), Some(Some(t))) = (p.masks.get(k), terms.get(k)) else { continue };
+        let Some(rc) = t.get(MASK_RECOLOR..) else { continue };
+        let alpha = mask.alpha.at(x, y);
+        if rc.first().is_some_and(|k| *k > 0.0) && alpha > 0.0 {
+            let l = lab.unwrap_or_else(|| lightcraft_color::perceptual::oklab_from_2020(d));
+            lab = Some(crate::recolor::apply_terms(l, rc, alpha));
+        }
+    }
+    lab.map_or(d, lightcraft_color::perceptual::oklab_to_2020)
 }
 
 fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 3], local: &PixelLocalTerms) -> ([f32; 3], f32) {

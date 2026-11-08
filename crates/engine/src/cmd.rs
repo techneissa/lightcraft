@@ -41,6 +41,7 @@ pub mod mask_effects;
 pub mod mask_multi;
 pub mod mask_names;
 mod mask_parts;
+mod mask_recolor;
 mod masks;
 mod merge;
 pub mod metadata;
@@ -179,6 +180,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(dcp_profiles::specs());
         v.extend(mask_effects::specs());
         v.extend(mask_multi::specs());
+        v.extend(mask_recolor::specs());
         v.extend(cull::specs());
         v.extend(convert::specs());
         v.extend(convert::edit_specs());

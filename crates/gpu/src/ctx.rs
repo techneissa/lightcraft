@@ -398,6 +398,16 @@ fn constants() -> String {
     s += &format!("const EYE_WORDS: u32 = {}u;\n", lightcraft_pipeline::redeye::EYE_WORDS);
     use lightcraft_pipeline::masks::{AUTO_TOL_CHROMA, AUTO_TOL_EV};
     s += &format!("const AUTO_TOL_EV: f32 = {AUTO_TOL_EV:?};\nconst AUTO_TOL_CHROMA: f32 = {AUTO_TOL_CHROMA:?};\n");
+    {
+        use lightcraft_pipeline::recolor::{GREY_CHROMA, MAX_CHROMA_RATIO, MAX_HUE_OFFSET, MIN_REF_L, NEUTRAL_SAT, WHITE_FADE};
+        let r = lightcraft_pipeline::finish::MASK_RECOLOR;
+        s += &format!("const MASK_RECOLOR: u32 = {r}u;\nconst RC_GREY0: f32 = {:?};\nconst RC_GREY1: f32 = {:?};\n", GREY_CHROMA[0], GREY_CHROMA[1]);
+        s += &format!("const RC_WHITE0: f32 = {:?};\nconst RC_WHITE1: f32 = {:?};\n", WHITE_FADE[0], WHITE_FADE[1]);
+        s += &format!("const RC_NEUTRAL0: f32 = {:?};\nconst RC_NEUTRAL1: f32 = {:?};\n", NEUTRAL_SAT[0], NEUTRAL_SAT[1]);
+        s += &format!(
+            "const RC_MAX_CHROMA: f32 = {MAX_CHROMA_RATIO:?};\nconst RC_MAX_HUE: f32 = {MAX_HUE_OFFSET:?};\nconst RC_MIN_L: f32 = {MIN_REF_L:?};\n"
+        );
+    }
     s += &format!("const SHADOW_TINT_K: f32 = {:?};\n", lightcraft_pipeline::colorops::SHADOW_TINT);
     s += &format!("const GAMUT_WARN: f32 = {:?};\n", lightcraft_pipeline::finish::GAMUT_WARN);
     s += &format!("const NCAND: u32 = {}u;\n", lightcraft_pipeline::spots::candidates(1.0).len());

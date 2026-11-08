@@ -83,6 +83,7 @@ mod mask_effects;
 mod mask_menus;
 mod mask_name;
 mod mask_parts;
+mod mask_recolor;
 mod mask_tint;
 mod masking;
 mod masking_layout;

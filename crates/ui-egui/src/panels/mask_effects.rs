@@ -18,13 +18,19 @@ use crate::widgets::{register, register_response};
 pub fn field_label(k: &str) -> &'static str {
     match k {
         "color_hue" | "color_sat" => "Color",
+        "recolor" | "recolor_r" | "recolor_g" | "recolor_b" => "Recolor",
         _ => super::masking::LOCAL.iter().find(|s| s.id == k).map_or("", |s| s.label),
     }
 }
 
 /// The choices of the New Effect Preset checklist: each slider once (Color = hue + saturation).
 fn checklist() -> Vec<&'static str> {
-    FIELDS.iter().copied().filter(|k| *k != "color_hue").collect()
+    FIELDS.iter().copied().filter(|k| *k != "color_hue" && !is_recolor_rgb(k)).collect()
+}
+
+/// Recolor's colour channels: one "Recolor" choice with its amount.
+fn is_recolor_rgb(k: &str) -> bool {
+    matches!(k, "recolor_r" | "recolor_g" | "recolor_b")
 }
 
 /// "Exposure +0.50 · Clarity −20" — what an effect sets, for the lists.
@@ -32,12 +38,16 @@ pub fn summary(e: &MaskEffect) -> String {
     let fields = e.field_list();
     let mut parts: Vec<String> = fx::changed_fields(&e.adjust)
         .iter()
-        .filter(|k| fields.contains(&k.as_str()) && k.as_str() != "color_hue")
+        .filter(|k| fields.contains(&k.as_str()) && k.as_str() != "color_hue" && !is_recolor_rgb(k))
         .map(|k| {
             let v = fx::get(&e.adjust, k);
             match k.as_str() {
                 "exposure" => format!("{} {:+.2}", crate::i18n::tr(field_label(k)), v),
                 "color_sat" => format!("{} {:.0}°/{:.0}", crate::i18n::tr("Color"), e.adjust.color_hue, v),
+                "recolor" => {
+                    let hex = lightcraft_pipeline::recolor::to_hex([e.adjust.recolor_r, e.adjust.recolor_g, e.adjust.recolor_b]);
+                    format!("{} {hex} {v:.0}", crate::i18n::tr("Recolor"))
+                }
                 _ => format!("{} {:+.0}", crate::i18n::tr(field_label(k)), v),
             }
         })
@@ -444,7 +454,7 @@ pub fn save_body(
                 *fields = match id {
                     "all" => list.iter().map(|k| k.to_string()).collect(),
                     "none" => Vec::new(),
-                    _ => changed.iter().filter(|k| k.as_str() != "color_hue").cloned().collect(),
+                    _ => changed.iter().filter(|k| k.as_str() != "color_hue" && !is_recolor_rgb(k)).cloned().collect(),
                 };
             }
         }
@@ -472,6 +482,9 @@ pub fn save_confirm(app: &mut LightcraftApp, name: &str, group: &str, fields: &[
     let mut keep: Vec<String> = fields.to_vec();
     if keep.iter().any(|f| f == "color_sat") {
         keep.push("color_hue".into());
+    }
+    if keep.iter().any(|f| f == "recolor") {
+        keep.extend(["recolor_r", "recolor_g", "recolor_b"].map(String::from));
     }
     let all = checklist().iter().all(|k| keep.iter().any(|f| f == k));
     let mut p = json!({"name": name.trim(), "group": group.trim(), "amount": amount});
