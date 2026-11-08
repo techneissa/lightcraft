@@ -71,11 +71,13 @@ Mac only, like every fork feature; the web build compiles it but finds no faces.
 - `crates/develop/Cargo.toml` (the dependency); `src/settings.rs` (field `DevelopSettings::retouch`, serialised as
   `fork_retouch`, and its default); `src/lib.rs` (`pub mod retouch`, `to_json_for_merge` states the block,
   `reset_section` resets it); `src/controls.rs` (`Section::Portrait`, and `get` / `set` / `find` / `in_section`
-  fall back to the retouch controls); `src/presets.rs` (`SettingsGroup::Portrait`).
+  fall back to the retouch controls); `src/presets.rs` (`SettingsGroup::Portrait`, left out of `default_copy`).
 - `crates/pipeline/src/lib.rs`: `pub mod retouch_step`, `SourceInfo::retouch`, the step's key in `pre_nr_key`, the
   step in `lin_cpu` and `lin_needs_cpu`. `crates/gpu/src/render.rs` (`linear`): a retouched photo's scene-linear
   stage on the CPU.
-- `crates/engine/src/lib.rs` (`pub mod retouch_input`, `Session::retouch_faces`); `src/cmd.rs` (`mod retouch`, its
+- `crates/engine/src/lib.rs` (`pub mod retouch_input`, `Session::retouch_faces`, Auto Sync's delta leaves
+  `fork_retouch` out); `src/export/prepare.rs` (`RenderWork::faces`: a prepared export finds the faces when it
+  runs); `src/cmd.rs` (`mod retouch`, its
   specs); `src/cmd/query.rs` (`develop.controls` lists the retouch controls); `src/media/session.rs` (`build_job`,
   `variant_job`, `view_key` and `quick_view_job` add the faces and their salt; `render_now` and `export_job` find
   the faces first); `src/media/source.rs` (`info_or` keeps the faces); `SourceInfo` literals in
