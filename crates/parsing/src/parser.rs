@@ -106,34 +106,6 @@ impl Parser {
         Ok(Self { set, face, face_model: set.face_model(), body, parts, mesh, dev })
     }
 
-    /// The clothes parser's map with Sapiens2's say inside the people's boxes: each person up close (Sapiens2 is unsure
-    /// of people further back in a whole photo), and a pass over the whole photo only for the people without a pass of
-    /// their own (a portrait that fills the frame, people past the first [`crate::crops::MAX_CROPS`]).
-    fn with_parts(
-        &self,
-        net: &Sapiens2,
-        map: body::BodyMap,
-        img: &crate::RgbImage,
-        faces: &[NormRect],
-        cancelled: &dyn Fn() -> bool,
-    ) -> Result<body::BodyMap> {
-        let people = crate::crops::people_boxes(&map, faces, img);
-        if people.is_empty() {
-            return Ok(map);
-        }
-        let crops = crate::crops::crops(&people, crate::crops::MAX_CROPS);
-        let mut probs = if crops.len() < people.len() {
-            crate::fuse::run(net, img, map.w, map.h, &self.dev)?
-        } else {
-            vec![0.0; crate::sapiens::CLASSES * map.w * map.h]
-        };
-        if cancelled() {
-            return Err(Error::Cancelled);
-        }
-        crate::crops::refine(net, img, (map.w, map.h), &mut probs, &crops, &self.dev, cancelled)?;
-        Ok(crate::fuse::fuse(&map, &probs, &crate::crops::presence(&people, map.w, map.h)))
-    }
-
     pub fn set(&self) -> ModelSet {
         self.set
     }
@@ -171,7 +143,7 @@ impl Parser {
         let rects: Vec<NormRect> = faces.iter().map(|f| f.rect).collect();
         let map = match &self.parts {
             Some(net) => {
-                let m = self.with_parts(net, map, img, &rects, cancelled)?;
+                let m = crate::crops::parts_map(&|x| net.forward(x), map, img, &rects, &self.dev, cancelled)?;
                 prof.step("people up close");
                 m
             }

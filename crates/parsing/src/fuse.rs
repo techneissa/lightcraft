@@ -7,7 +7,8 @@ use candle_core::Device;
 
 use crate::body::{BodyMap, CLASSES as ATR};
 use crate::image::{RgbImage, sample_grid};
-use crate::sapiens::{self, Sapiens2, class as s};
+use crate::sapiens::{self, class as s};
+use crate::types::NormRect;
 use crate::{Error, Result};
 
 /// The clothes parser's classes (ATR order).
@@ -54,6 +55,8 @@ fn route(c: usize) -> To {
         s::RIGHT_SHOE | s::RIGHT_SOCK => To::One(atr::RIGHT_SHOE),
         s::LEFT_FOOT | s::LEFT_LOWER_LEG | s::LEFT_UPPER_LEG => To::One(atr::LEFT_LEG),
         s::RIGHT_FOOT | s::RIGHT_LOWER_LEG | s::RIGHT_UPPER_LEG => To::One(atr::RIGHT_LEG),
+        // the clothes parser has no torso or neck skin: any of its arm and leg classes makes Body Skin, so bare torso
+        // (and the neck below the chin, in `fuse`) take the left arm's
         s::LEFT_HAND | s::LEFT_LOWER_ARM | s::LEFT_UPPER_ARM | s::TORSO => To::One(atr::LEFT_ARM),
         s::RIGHT_HAND | s::RIGHT_LOWER_ARM | s::RIGHT_UPPER_ARM => To::One(atr::RIGHT_ARM),
         s::UPPER_CLOTHING => To::Named { names: &[atr::UPPER, atr::DRESS, atr::SCARF], default: atr::UPPER },
@@ -84,12 +87,12 @@ pub fn input_size(width: usize, height: usize) -> (usize, usize) {
 }
 
 /// Sapiens2's class probabilities over the whole photo, on a `w × h` grid (class-major), for the clothes parser's grid.
-pub fn run(model: &Sapiens2, img: &RgbImage, w: usize, h: usize, dev: &Device) -> Result<Vec<f32>> {
+pub fn run(net: crate::crops::Forward, img: &RgbImage, w: usize, h: usize, dev: &Device) -> Result<Vec<f32>> {
     let (iw, ih) = input_size(img.width, img.height);
     let (sx, sy) = (img.width as f32 / iw as f32, img.height as f32 / ih as f32);
     let px = sample_grid(img, iw, ih, sx.max(sy), [0.485, 0.456, 0.406], |u, v| (u * sx, v * sy));
     let x = sapiens::input(px, iw, ih, dev)?;
-    let logits = model.forward(&x)?;
+    let logits = net(&x)?;
     let down = crate::nn::resize(&logits, h, w, false)?;
     let probs = candle_nn::ops::softmax(&down, 1)?.flatten_all()?.to_vec1::<f32>()?;
     if probs.len() != sapiens::CLASSES * w * h {
@@ -98,13 +101,38 @@ pub fn run(model: &Sapiens2, img: &RgbImage, w: usize, h: usize, dev: &Device) -
     Ok(probs)
 }
 
+/// Under a face, down to this many face heights below its chin, Sapiens2's face-and-neck class is neck (Body Skin).
+const NECK_DEPTH: f32 = 3.0;
+
+/// The cells of a `w × h` grid below a face's chin (its box's bottom), one face width to each side of it.
+fn below_chins(faces: &[NormRect], w: usize, h: usize) -> Vec<bool> {
+    let mut out = vec![false; w * h];
+    for f in faces {
+        let (fw, fh) = (f.width(), f.height());
+        let x0 = ((f.x0 - fw) * w as f32).floor().clamp(0.0, w as f32) as usize;
+        let x1 = ((f.x1 + fw) * w as f32).ceil().clamp(0.0, w as f32) as usize;
+        let y0 = (f.y1 * h as f32).ceil().clamp(0.0, h as f32) as usize;
+        let y1 = ((f.y1 + NECK_DEPTH * fh) * h as f32).ceil().clamp(0.0, h as f32) as usize;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                if let Some(o) = out.get_mut(y * w + x) {
+                    *o = true;
+                }
+            }
+        }
+    }
+    out
+}
+
 /// The clothes parser's map with Sapiens2's say on where things are, as much as `presence` gives it at each cell (1
 /// inside the people's boxes, 0 away from them; missing cells: 0): each Sapiens2 class's probability goes to its
-/// clothes-parser class, and a garment's is shared among the garments the clothes parser sees there.
-pub fn fuse(map: &BodyMap, parts: &[f32], presence: &[f32]) -> BodyMap {
+/// clothes-parser class, and a garment's is shared among the garments the clothes parser sees there. Sapiens2's face
+/// and neck are one class: it is the face down to the chin of one of `faces`, Body Skin below it.
+pub fn fuse(map: &BodyMap, parts: &[f32], presence: &[f32], faces: &[NormRect]) -> BodyMap {
     let n = map.w * map.h;
     let mut probs = vec![0.0f32; ATR * n];
     let routes: Vec<To> = (0..sapiens::CLASSES).map(route).collect();
+    let neck = below_chins(faces, map.w, map.h);
     for i in 0..n {
         let atr_p = |c: usize| map.probs.get(c * n + i).copied().unwrap_or(0.0);
         for (c, to) in routes.iter().enumerate() {
@@ -113,6 +141,11 @@ pub fn fuse(map: &BodyMap, parts: &[f32], presence: &[f32]) -> BodyMap {
                 continue;
             }
             match to {
+                To::One(_) if c == s::FACE_NECK && neck.get(i).copied().unwrap_or(false) => {
+                    if let Some(o) = probs.get_mut(atr::LEFT_ARM * n + i) {
+                        *o += p;
+                    }
+                }
                 To::One(k) => {
                     if let Some(o) = probs.get_mut(k * n + i) {
                         *o += p;
@@ -159,7 +192,7 @@ mod tests {
         for &(c, p) in parts {
             s[c] = p;
         }
-        fuse(&BodyMap { w: 1, h: 1, probs: a }, &s, &[1.0])
+        fuse(&BodyMap { w: 1, h: 1, probs: a }, &s, &[1.0], &[])
     }
 
     #[test]
@@ -184,17 +217,38 @@ mod tests {
     }
 
     #[test]
+    fn face_and_neck_is_the_face_down_to_the_chin_and_body_skin_below() {
+        // a 1 × 4 column: a face over rows 0 and 1, its chin at row 2
+        let (w, h) = (1, 4);
+        let atr = [vec![1.0; w * h], vec![0.0; (ATR - 1) * w * h]].concat();
+        let mut parts = vec![0.0; sapiens::CLASSES * w * h];
+        for i in 0..w * h {
+            parts[s::FACE_NECK * w * h + i] = 1.0;
+        }
+        let face = NormRect::new(0.0, 0.0, 1.0, 0.5);
+        let m = fuse(&BodyMap { w, h, probs: atr }, &parts, &[1.0; 4], &[face]);
+        let at = |c: usize, y: usize| m.probs[c * w * h + y];
+        assert_eq!((at(atr::FACE, 0), at(atr::FACE, 1)), (1.0, 1.0), "the face itself");
+        assert_eq!((at(atr::LEFT_ARM, 2), at(atr::LEFT_ARM, 3)), (1.0, 1.0), "the neck under the chin is Body Skin");
+        assert_eq!(at(atr::FACE, 3), 0.0);
+        // without a face box it stays the face, as before
+        let atr = [vec![1.0; w * h], vec![0.0; (ATR - 1) * w * h]].concat();
+        let m = fuse(&BodyMap { w, h, probs: atr }, &parts, &[1.0; 4], &[]);
+        assert_eq!(m.probs[atr::FACE * w * h + 3], 1.0);
+    }
+
+    #[test]
     fn the_fused_map_still_sums_to_one() {
         let atr: Vec<f32> = (0..ATR).map(|c| (c as f32 + 1.0) / ((ATR * (ATR + 1)) as f32 / 2.0)).collect();
         let logits = Tensor::arange(0f32, sapiens::CLASSES as f32, &Device::Cpu).unwrap().affine(0.3, 0.0).unwrap().sin().unwrap();
         let parts = softmax(&logits.reshape((1, sapiens::CLASSES, 1, 1)).unwrap());
-        let m = fuse(&BodyMap { w: 1, h: 1, probs: atr.clone() }, &parts, &[0.5]);
+        let m = fuse(&BodyMap { w: 1, h: 1, probs: atr.clone() }, &parts, &[0.5], &[]);
         assert!((m.probs.iter().sum::<f32>() - 1.0).abs() < 1e-4);
         // and a map missing its values is empty, not a panic
-        let m = fuse(&BodyMap { w: 2, h: 2, probs: vec![] }, &[], &[]);
+        let m = fuse(&BodyMap { w: 2, h: 2, probs: vec![] }, &[], &[], &[]);
         assert_eq!(m.probs.len(), ATR * 4);
         // away from the people Sapiens2 has no say: the clothes parser's map stays
-        let m = fuse(&BodyMap { w: 1, h: 1, probs: atr.clone() }, &parts, &[0.0]);
+        let m = fuse(&BodyMap { w: 1, h: 1, probs: atr.clone() }, &parts, &[0.0], &[]);
         assert_eq!(m.probs, atr);
     }
 

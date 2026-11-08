@@ -16,14 +16,17 @@ List: a third people-parts model set, Sapiens2 (Meta's Sapiens2-seg 0.4B, about 
 - **Faces** are parsed as in the SegFormer set (SegFormer-B0 face parser and face mesh): brows, eyes, iris, lips and
   teeth are the same, and beards count as facial skin.
 - **Each person up close**: the first 8 people whose body box covers less than half the photo get a Sapiens2 pass of
-  their own (it is unsure of people further back in a whole photo); the rest, and a portrait that fills the frame,
-  share one pass over the whole photo. Sapiens2 has a say only inside the people's boxes, so a photo without people
-  (a car at night) finds none.
+  their own (it is unsure of people further back in a whole photo), all of them together at most twice the trained
+  input size. Each cell takes the pass of the box it belongs to, never a mix of two; a person without a pass (a
+  portrait that fills the frame, the ninth person) keeps the whole photo's pass, which runs only then. Sapiens2 has a
+  say only inside the people's boxes, so a photo without people (a car at night) finds none. The neck below the chin
+  is Body Skin.
 - **Licence**: Sapiens2's weights are under Meta's
   [Sapiens2 License](https://github.com/facebookresearch/sapiens2/blob/main/LICENSE.md): free use, redistribution only
-  with the licence, and it forbids surveillance, biometric processing and identifying people. The masks never feed
-  face recognition: nothing in face detection, recognition or People reads a parse (a parse only carries the person
-  id of a face region the caller hands in). The weights are never shipped with LightCraft (`NOTICE`).
+  with the licence, and it forbids surveillance, biometric processing and identifying people. Its masks may feed
+  Select People: splitting a person into parts is not identifying them, and techneissa uses the app personally. They
+  never reach face detection, face recognition or the People catalog (a parse only carries the person id of a face
+  region the caller hands in). The weights are never shipped with LightCraft (`NOTICE`).
 - How it does (2048 px photos, second parse with the models loaded, M-series Mac at a load of 12 to 50 while other
   builds ran):
 
@@ -37,9 +40,17 @@ List: a third people-parts model set, Sapiens2 (Meta's Sapiens2-seg 0.4B, about 
   dark coverall, a dark suit on dark, a group of three; techneissa's own photos: groups indoors, portraits, a car at
   night). Still weak: a man whose face is hidden behind a megaphone is
   only partly found (no face, so no pass of his own); a patterned blanket worn as a scarf is Others.
+- After the fix round (final build, Sapiens2 set, one run each, load about 30): a 26-person group photo (CC0, 960 px)
+  17.8 s, of which 5.5 s the people's passes (the SegFormer set alone took about 20 s on it under similar load); the
+  sofa group 4.8 s, of which 3.1 s the passes. Model load 2.5 s.
+- Memory: the linear layers' weights stay bfloat16 on the GPU, widened to f32 per use: 0.8 GB resident instead of
+  1.6 GB, masks the same to the bit. The process's peak footprint while parsing is 7 to 11 GB (SegFormer set: 2.8 GB):
+  candle's Metal buffer pool keeps a pass's intermediate buffers until its next flush. Splitting the head's
+  convolutions into bands of rows and smaller attention chunks did not lower it measurably.
 - Speed: candle's Metal matrix multiply is the limit (a full 1024 × 768 pass is about 2.3 s of transformer blocks,
-  half precision gives nothing). The head's four 2× transposed convolutions run as 3 × 3 convolutions and a pixel
-  shuffle (4 s → 0.7 s per pass); a person's pass is sized to the body map cells it fills.
+  half precision gives nothing; Core ML is the next step, in its own lane). The head's four 2× transposed
+  convolutions run as 3 × 3 convolutions and a pixel shuffle (4 s → 0.7 s per pass); a person's pass is sized to the
+  body map cells it fills.
 - Try it: `cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/ --set sapiens2`.
 
 ## Branch
@@ -63,8 +74,10 @@ List: a third people-parts model set, Sapiens2 (Meta's Sapiens2-seg 0.4B, about 
 
 `fork/tests.d/sapiens2-clothes.txt`: the transformer pieces (bf16 rounding of the rotary table, rotary turns,
 instance norm, the 3 × 3 convolution equals the transposed one), the fusion (Sapiens2 places clothes the clothes
-parser calls background, the clothes parser names a dress or hat, the fused map sums to one, no say away from the
-people), the people's boxes and passes, the set's files and size, and with the models in the shared folder a
+parser calls background, the clothes parser names a dress or hat, the neck below the chin is Body Skin, the fused map
+sums to one, no say away from the people), the people's boxes, the passes with a stand-in network (a pass lands on
+the cells it saw at the photo's edge and in the middle; overlapping boxes never mix; a ninth person keeps the whole
+photo's pass; the passes' budget), the set's files and size, and with the models in the shared folder a
 Sapiens2 parse of a picture without people and of a 1 × 1 photo.
 
 ## What's New entry

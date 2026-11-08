@@ -43,8 +43,9 @@ Retouch defines its own input types. Mapping is direct: face box ← `Person::fa
 | `bisenet` | BiSeNet (ResNet-18), 19 classes (`mlx-community/face-parsing-bisenet-bf16`) | SegFormer-B2, 18 clothes classes (`mattmdjaga/segformer_b2_clothes`) | the same face mesh | 141 MB |
 | `sapiens2` | the SegFormer set's | Sapiens2-seg 0.4B, 29 body-part classes (`mlx-community/sapiens2-seg-0.4b-bf16`), with the SegFormer-B3 naming the garments | the same face mesh | 1,022 MB (813 MB more than `segformer`) |
 
-Sapiens2's weights are under Meta's Sapiens2 License, which forbids identifying people: its masks never feed face
-recognition (nothing in this crate does; `person_id` only passes through what the caller's face hints carry).
+Sapiens2's weights are under Meta's Sapiens2 License, which forbids identifying people. Its masks may feed Select
+People (splitting a person into parts is not identifying them); they never reach face detection, face recognition or
+the People catalog (`person_id` only passes through what the caller's face hints carry).
 
 Each file is pinned by Hugging Face revision, size and SHA-256 in `src/models.rs` and lives in its own folder under
 the models folder (on the Mac `~/Library/Application Support/ArtCraft/models/<folder>/`). Weights are never committed.
@@ -74,12 +75,17 @@ Sapiens2's clothes (Top, Bottom, Dress, Hat, Bag, Others), which Sapiens2 has no
 2. Each of the first 8 people whose box covers less than half the photo gets a Sapiens2 pass of their own over the
    box (`src/crops.rs`): Sapiens2 is trained on pictures framed around one person, and in a whole photo it is unsure of
    the people further back. The box is sampled at 1.5 model pixels per body-map cell (long side at least 384, at most
-   the trained 1024 × 768 patches). A pass over the whole photo (half the trained patches) runs only for people without
-   a pass of their own (a portrait that fills the frame).
-3. Sapiens2 has a say only inside the people's boxes, fading at their edges; elsewhere the B3's map stays. Sapiens2 is
+   the trained 1024 × 768 patches); all the passes together see at most twice the trained patches, past which each is
+   made smaller by the same factor (eight large people would otherwise take about 20 s).
+3. Each body-map cell belongs to one box: the one whose say there is greatest (1 inside, fading at its inner edges),
+   the smaller box on a tie (a person inside another's box). It takes that box's pass, or the whole photo's pass (half
+   the trained patches) when that box had none (a portrait that fills the frame, the ninth person); the whole photo's
+   pass runs only then. Passes never mix, and they are written straight into the one probability grid.
+4. Sapiens2 has a say only inside the people's boxes, fading at their edges; elsewhere the B3's map stays. Sapiens2 is
    trained on pictures with people and calls much of a picture without any (a car at night) a person.
-4. Each Sapiens2 class goes to its B3 class: background, hair, face (with lips, teeth and tongue), eyeglasses
-   (Others), shoes and socks (Shoes), arms, hands, legs, feet and bare torso (Body Skin). Upper clothing is shared
+5. Each Sapiens2 class goes to its B3 class: background, hair, face (with lips, teeth and tongue; below a face's chin
+   its face-and-neck class is the neck, Body Skin), eyeglasses (Others), shoes and socks (Shoes), arms, hands, legs,
+   feet and bare torso (Body Skin). Upper clothing is shared
    among top, dress and scarf, lower clothing among trousers, skirt, dress and belt, and apparel among hat, bag,
    scarf, belt and the rest, by the B3's own probabilities there (plus 0.05 for the usual garment, so where the B3 sees
    background, as on dark and light clothes, upper clothing is a top).
@@ -87,9 +93,13 @@ Sapiens2's clothes (Top, Bottom, Dress, Hat, Bag, Others), which Sapiens2 has no
 The face parts (brows, eyes, iris, lips, teeth) still come from the face parser and the mesh: Sapiens2 has no eyes or
 brows, and its lips match the face parser's.
 
+The network call is a closure (`crops::Forward`), so the placement tests run a stand-in network without the model.
+
 The network (`src/sapiens.rs`) is a plain ViT with 2-D rotary positions, RMS and query/key norms, grouped-query
 attention in its middle blocks and SwiGLU feed-forwards, then four 2× transposed convolutions; each transposed
-convolution runs as a 3 × 3 convolution and a pixel shuffle (the same sums, several times faster on Metal). On the
+convolution runs as a 3 × 3 convolution and a pixel shuffle (the same sums, several times faster on Metal). The
+linear layers' weights stay bfloat16 on the device, the checkpoint's own precision, and are widened to f32 for each
+use (0.8 GB resident instead of 1.6 GB; the masks are the same to the bit). On the
 same input it gives the same class as mlx-vlm's port at 99.8 % of the pixels.
 
 ## Cache

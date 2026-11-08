@@ -113,7 +113,7 @@ fn odd_photos_parse_without_panicking() {
 }
 
 #[test]
-fn sapiens2_finds_no_person_in_a_landscape_and_tells_a_shirt_from_the_sky() {
+fn sapiens2_finds_no_person_in_a_landscape_or_a_one_pixel_photo() {
     let Some(dir) = models_dir().filter(|d| ModelSet::Sapiens2.installed_in(d)) else {
         lightcraft_testkit::skip!(Model, "the Sapiens2 set is not in the shared models folder (or LIGHTCRAFT_PARSING_MODELS)");
         return;

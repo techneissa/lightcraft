@@ -1,13 +1,13 @@
 //! Sapiens2 up close: the model is trained on pictures framed around one person, and in a whole photo of several
 //! people it is unsure of those further back (dark clothes there read as background). Each person, largest face first,
-//! gets a pass of their own over a box around their body, and the box's result replaces the whole photo's there (with
-//! a soft edge where it meets it).
+//! gets a pass of their own over a box around their body. Each cell of the body map belongs to one person's box (the
+//! one it is deepest inside) and takes that box's pass, or the whole photo's when the box had none.
 
-use candle_core::Device;
+use candle_core::{Device, Tensor};
 
 use crate::body::BodyMap;
 use crate::image::{RgbImage, sample_grid};
-use crate::sapiens::{self, Sapiens2};
+use crate::sapiens;
 use crate::types::NormRect;
 use crate::{Error, Result};
 
@@ -17,12 +17,16 @@ pub const MAX_CROPS: usize = 8;
 const CELL_SAMPLES: f32 = 1.5;
 /// A box's long side is never smaller than this for the model.
 const MIN_LONG: f32 = 384.0;
+/// All the people's passes together see at most this many times the trained number of patches (eight large people
+/// would otherwise take about 20 s); past it each box's pass is made smaller by the same factor.
+const BUDGET: f32 = 2.0;
 /// A box over this share of the photo was seen about as well by the whole photo's pass.
 const WHOLE_SHARE: f32 = 0.5;
-/// The share of a box's size over which its result fades into the whole photo's.
+/// The share of a box's size over which its say fades at its inner edges.
 const FEATHER: f32 = 0.08;
-/// How much the whole photo's pass counts where a box covers it.
-const WHOLE_WEIGHT: f32 = 1e-3;
+
+/// Sapiens2's forward: a normalised `1 × 3 × H × W` input to `1 × 29 × H × W` logits (a stand-in in tests).
+pub type Forward<'a> = &'a dyn Fn(&Tensor) -> Result<Tensor>;
 /// A body box around a face: this many face widths across, from this many face heights above the face's top to this
 /// many below it.
 const BODY_WIDE: f32 = 4.0;
@@ -77,31 +81,67 @@ pub fn people_boxes(body: &BodyMap, faces: &[NormRect], img: &RgbImage) -> Vec<N
     out
 }
 
-/// The boxes worth a pass of their own: the first `max` people's, except boxes over most of the photo (the whole
-/// photo's pass saw those as well).
-pub fn crops(people: &[NormRect], max: usize) -> Vec<NormRect> {
-    people.iter().take(max).filter(|b| b.width() * b.height() < WHOLE_SHARE).copied().collect()
+/// Which people's boxes get a pass of their own: the first `max` of those under half the photo (a box over most of
+/// it was seen about as well by the whole photo's pass).
+pub fn crops(people: &[NormRect], max: usize) -> Vec<bool> {
+    let mut left = max;
+    people
+        .iter()
+        .map(|b| {
+            let take = left > 0 && b.width() * b.height() < WHOLE_SHARE;
+            if take {
+                left -= 1;
+            }
+            take
+        })
+        .collect()
+}
+
+/// The grid cells a box covers: `x0, y0, width, height`, out to whole cells, inside the grid.
+fn cells(b: &NormRect, w: usize, h: usize) -> (usize, usize, usize, usize) {
+    let gx0 = ((b.x0 * w as f32).floor().max(0.0) as usize).min(w);
+    let gy0 = ((b.y0 * h as f32).floor().max(0.0) as usize).min(h);
+    let gx1 = ((b.x1 * w as f32).ceil().max(0.0) as usize).min(w);
+    let gy1 = ((b.y1 * h as f32).ceil().max(0.0) as usize).min(h);
+    (gx0, gy0, gx1.saturating_sub(gx0), gy1.saturating_sub(gy0))
+}
+
+/// Each person's say at each cell of their box: 1 inside, fading at its inner edges, `(cell, weight)`.
+fn weights(b: &NormRect, w: usize, h: usize) -> impl Iterator<Item = (usize, f32)> {
+    let (gx0, gy0, cw, ch) = cells(b, w, h);
+    (0..ch).flat_map(move |y| (0..cw).map(move |x| ((gy0 + y) * w + gx0 + x, fade(x, cw, gx0, w).min(fade(y, ch, gy0, h)))))
 }
 
 /// How much Sapiens2 counts at each cell of a `w × h` grid: 1 inside a person's box, fading to 0 at its inner edges.
 pub fn presence(people: &[NormRect], w: usize, h: usize) -> Vec<f32> {
     let mut out = vec![0.0f32; w * h];
     for b in people {
-        let gx0 = ((b.x0 * w as f32).floor().max(0.0) as usize).min(w);
-        let gy0 = ((b.y0 * h as f32).floor().max(0.0) as usize).min(h);
-        let gx1 = ((b.x1 * w as f32).ceil().max(0.0) as usize).min(w);
-        let gy1 = ((b.y1 * h as f32).ceil().max(0.0) as usize).min(h);
-        let (cw, ch) = (gx1.saturating_sub(gx0), gy1.saturating_sub(gy0));
-        for y in 0..ch {
-            for x in 0..cw {
-                let v = fade(x, cw, gx0, w).min(fade(y, ch, gy0, h));
-                if let Some(o) = out.get_mut((gy0 + y) * w + gx0 + x) {
-                    *o = o.max(v);
-                }
+        for (i, v) in weights(b, w, h) {
+            if let Some(o) = out.get_mut(i) {
+                *o = o.max(v);
             }
         }
     }
     out
+}
+
+/// The box each cell belongs to: the one it is deepest inside (the greatest say), the smaller box on a tie (a person
+/// in front of or inside another's box); `None` outside every box.
+fn owners(people: &[NormRect], w: usize, h: usize) -> Vec<Option<usize>> {
+    let mut owner = vec![None; w * h];
+    let mut best = vec![(0.0f32, f32::INFINITY); w * h];
+    for (k, b) in people.iter().enumerate() {
+        let area = b.width() * b.height();
+        for (i, v) in weights(b, w, h) {
+            if let (Some(o), Some(m)) = (owner.get_mut(i), best.get_mut(i))
+                && (v > m.0 || (v == m.0 && area < m.1))
+            {
+                *o = Some(k);
+                *m = (v, area);
+            }
+        }
+    }
+    owner
 }
 
 /// `r` grown by `by` of its size on each side.
@@ -110,59 +150,99 @@ fn grow(r: &NormRect, by: f32) -> NormRect {
     NormRect::new(r.x0 - mx, r.y0 - my, r.x1 + mx, r.y1 + my)
 }
 
-/// Run Sapiens2 over each box and put its result into `probs` (the whole photo's class probabilities on the body
-/// map's `grid` of `w × h` cells, class-major), blending where boxes overlap and fading at their edges.
-pub fn refine(
-    net: &Sapiens2,
+/// The clothes parser's `map` with Sapiens2's say inside the people's boxes (`faces`: the people's faces, largest
+/// first). The first [`MAX_CROPS`] people get a pass of their own; a cell takes the pass of the box it belongs to, or
+/// the whole photo's pass when that box had none (a portrait filling the frame, the ninth person), which runs only
+/// then.
+pub fn parts_map(net: Forward, map: BodyMap, img: &RgbImage, faces: &[NormRect], dev: &Device, cancelled: &dyn Fn() -> bool) -> Result<BodyMap> {
+    parts_map_with(net, map, img, faces, dev, cancelled, MAX_CROPS)
+}
+
+/// [`parts_map`] with at most `max` passes of their own.
+fn parts_map_with(
+    net: Forward,
+    map: BodyMap,
     img: &RgbImage,
-    grid: (usize, usize),
-    probs: &mut [f32],
-    boxes: &[NormRect],
+    faces: &[NormRect],
     dev: &Device,
     cancelled: &dyn Fn() -> bool,
-) -> Result<()> {
-    let (w, h) = grid;
-    let n = w * h;
-    if boxes.is_empty() || probs.len() != sapiens::CLASSES * n {
-        return Ok(());
+    max: usize,
+) -> Result<BodyMap> {
+    let people = people_boxes(&map, faces, img);
+    if people.is_empty() {
+        return Ok(map);
     }
-    let mut acc: Vec<f32> = probs.iter().map(|p| p * WHOLE_WEIGHT).collect();
-    let mut weight = vec![WHOLE_WEIGHT; n];
-    for b in boxes {
+    let (w, h) = (map.w, map.h);
+    let cropped = crops(&people, max);
+    let owner = owners(&people, w, h);
+    let uncropped = |k: &usize| !cropped.get(*k).copied().unwrap_or(false);
+    let mut probs = if owner.iter().flatten().any(uncropped) { crate::fuse::run(net, img, w, h, dev)? } else { vec![0.0; sapiens::CLASSES * w * h] };
+    let mine: Vec<(usize, &NormRect)> = people.iter().enumerate().filter(|(k, _)| !uncropped(k)).collect();
+    let samples = samples(mine.iter().map(|(_, b)| cells(b, w, h)), CELL_SAMPLES);
+    for (k, b) in mine {
         if cancelled() {
             return Err(Error::Cancelled);
         }
-        // the box, out to whole grid cells
-        let gx0 = ((b.x0 * w as f32).floor().max(0.0) as usize).min(w);
-        let gy0 = ((b.y0 * h as f32).floor().max(0.0) as usize).min(h);
-        let gx1 = ((b.x1 * w as f32).ceil().max(0.0) as usize).min(w);
-        let gy1 = ((b.y1 * h as f32).ceil().max(0.0) as usize).min(h);
-        let (cw, ch) = (gx1.saturating_sub(gx0), gy1.saturating_sub(gy0));
+        let at = Passes { net, img, grid: (w, h), samples, dev };
+        at.place(&mut probs, b, |i| owner.get(i).copied().flatten() == Some(k))?;
+    }
+    Ok(crate::fuse::fuse(&map, &probs, &presence(&people, w, h), faces))
+}
+
+/// What every person's pass shares: the network, the photo, the body map's grid, model pixels per cell, the device.
+struct Passes<'a> {
+    net: Forward<'a>,
+    img: &'a RgbImage,
+    grid: (usize, usize),
+    samples: f32,
+    dev: &'a Device,
+}
+
+impl Passes<'_> {
+    /// Run Sapiens2 over box `b` and write its class probabilities into `probs` (class-major on the grid) at the cells
+    /// where `mine(cell)`.
+    fn place(&self, probs: &mut [f32], b: &NormRect, mine: impl Fn(usize) -> bool) -> Result<()> {
+        let (w, h) = self.grid;
+        let n = w * h;
+        let (gx0, gy0, cw, ch) = cells(b, w, h);
         if cw < 2 || ch < 2 {
-            continue;
+            return Ok(());
         }
-        let local = pass(net, img, (gx0, gy0, cw, ch), (w, h), dev)?;
+        let local = self.pass((gx0, gy0, cw, ch))?;
         for y in 0..ch {
             for x in 0..cw {
-                let wt = fade(x, cw, gx0, w).min(fade(y, ch, gy0, h));
                 let i = (gy0 + y) * w + gx0 + x;
-                if let Some(t) = weight.get_mut(i) {
-                    *t += wt;
+                if !mine(i) {
+                    continue;
                 }
                 for c in 0..sapiens::CLASSES {
-                    if let (Some(a), Some(&p)) = (acc.get_mut(c * n + i), local.get(c * cw * ch + y * cw + x)) {
-                        *a += wt * p;
+                    if let (Some(o), Some(&p)) = (probs.get_mut(c * n + i), local.get(c * cw * ch + y * cw + x)) {
+                        *o = p;
                     }
                 }
             }
         }
+        Ok(())
     }
-    for (i, p) in probs.iter_mut().enumerate() {
-        if let (Some(&a), Some(&t)) = (acc.get(i), weight.get(i % n.max(1))) {
-            *p = a / t;
+
+    /// Sapiens2's class probabilities over the grid cells `cells` (`x0, y0, width, height`), from a pass over that
+    /// part of the photo alone.
+    fn pass(&self, cells: (usize, usize, usize, usize)) -> Result<Vec<f32>> {
+        let (gx0, gy0, cw, ch) = cells;
+        let img = self.img;
+        let (sx, sy) = (img.width as f32 / self.grid.0 as f32, img.height as f32 / self.grid.1 as f32);
+        let (px0, py0, pw, ph) = (gx0 as f32 * sx, gy0 as f32 * sy, cw as f32 * sx, ch as f32 * sy);
+        let (iw, ih) = input_size(cw as f32 * self.samples, ch as f32 * self.samples);
+        let (ux, uy) = (pw / iw as f32, ph / ih as f32);
+        let px = sample_grid(img, iw, ih, ux.max(uy), [0.485, 0.456, 0.406], |u, v| (px0 + u * ux, py0 + v * uy));
+        let logits = (self.net)(&sapiens::input(px, iw, ih, self.dev)?)?;
+        let down = crate::nn::resize(&logits, ch, cw, false)?;
+        let probs = candle_nn::ops::softmax(&down, 1)?.flatten_all()?.to_vec1::<f32>()?;
+        if probs.len() != sapiens::CLASSES * cw * ch {
+            return Err(Error::Model(format!("Sapiens2 gave {} values, not {}", probs.len(), sapiens::CLASSES * cw * ch)));
         }
+        Ok(probs)
     }
-    Ok(())
 }
 
 /// How much a box's result counts at cell `at` of its `len` cells along one axis (the box starts at cell `start` of
@@ -173,22 +253,12 @@ fn fade(at: usize, len: usize, start: usize, total: usize) -> f32 {
     (lo.min(hi) / (FEATHER * len as f32).max(1.0)).min(1.0)
 }
 
-/// Sapiens2's class probabilities over the grid cells `cells` (`x0, y0, width, height`) of a `grid` covering the
-/// photo, from a pass over that part of the photo alone.
-fn pass(net: &Sapiens2, img: &RgbImage, cells: (usize, usize, usize, usize), grid: (usize, usize), dev: &Device) -> Result<Vec<f32>> {
-    let (gx0, gy0, cw, ch) = cells;
-    let (sx, sy) = (img.width as f32 / grid.0 as f32, img.height as f32 / grid.1 as f32);
-    let (px0, py0, pw, ph) = (gx0 as f32 * sx, gy0 as f32 * sy, cw as f32 * sx, ch as f32 * sy);
-    let (iw, ih) = input_size(cw as f32 * CELL_SAMPLES, ch as f32 * CELL_SAMPLES);
-    let (ux, uy) = (pw / iw as f32, ph / ih as f32);
-    let px = sample_grid(img, iw, ih, ux.max(uy), [0.485, 0.456, 0.406], |u, v| (px0 + u * ux, py0 + v * uy));
-    let logits = net.forward(&sapiens::input(px, iw, ih, dev)?)?;
-    let down = crate::nn::resize(&logits, ch, cw, false)?;
-    let probs = candle_nn::ops::softmax(&down, 1)?.flatten_all()?.to_vec1::<f32>()?;
-    if probs.len() != sapiens::CLASSES * cw * ch {
-        return Err(Error::Model(format!("Sapiens2 gave {} values, not {}", probs.len(), sapiens::CLASSES * cw * ch)));
-    }
-    Ok(probs)
+/// Model pixels per grid cell for boxes of these `cells`: `wanted`, or less when their passes together would see more
+/// than [`BUDGET`] times the trained number of patches.
+fn samples(cells: impl Iterator<Item = (usize, usize, usize, usize)>, wanted: f32) -> f32 {
+    let trained = (sapiens::TRAIN_H * sapiens::TRAIN_W) as f32;
+    let total: f32 = cells.map(|(_, _, cw, ch)| (cw * ch) as f32 * wanted * wanted).map(|a| a.min(trained)).sum();
+    if total > BUDGET * trained { wanted * (BUDGET * trained / total).sqrt() } else { wanted }
 }
 
 /// The model's input for a box wanted at `w × h` (its grid cells times [`CELL_SAMPLES`]): the box's shape, the long
@@ -231,11 +301,11 @@ mod tests {
         let people = people_boxes(&empty, &faces, &img);
         assert_eq!(people.len(), 2);
         assert!(people[0].x0 < 0.1 && people[0].x1 > 0.15 && people[0].y1 > 0.9, "{:?}", people[0]);
-        assert_eq!(crops(&people, 1).len(), 1);
+        assert_eq!(crops(&people, 1), vec![true, false]);
         // a face as big as the photo: its body box covers most of it, so the whole photo's pass is enough
         let big = people_boxes(&empty, &[NormRect::new(0.3, 0.1, 0.7, 0.9)], &img);
         assert_eq!(big.len(), 1);
-        assert!(crops(&big, MAX_CROPS).is_empty());
+        assert_eq!(crops(&big, MAX_CROPS), vec![false]);
         // no faces and no person area: nowhere for Sapiens2 to decide
         assert!(people_boxes(&empty, &[], &img).is_empty());
         assert!(presence(&[], 20, 10).iter().all(|&v| v == 0.0));
@@ -256,5 +326,150 @@ mod tests {
         assert!(fade(0, 40, 10, 100) < 0.2 && fade(39, 40, 10, 100) < 0.2);
         assert_eq!(fade(20, 40, 10, 100), 1.0, "the middle is the box's alone");
         assert!(fade(1, 40, 10, 100) > fade(0, 40, 10, 100));
+    }
+
+    // ---- placement, with a stand-in for the network (no model needed) ----
+
+    use crate::sapiens::class;
+
+    const GRID: (usize, usize) = (40, 24);
+
+    /// A black 200 × 120 photo (5 px per grid cell) with `patches` (cell rectangles `x0, y0, x1, y1`) in `colour`.
+    fn photo(patches: &[((usize, usize, usize, usize), [u8; 3])]) -> RgbImage {
+        let (w, h) = (200usize, 120usize);
+        let mut d = vec![0u8; w * h * 3];
+        for &((x0, y0, x1, y1), c) in patches {
+            for y in y0 * 5..y1 * 5 {
+                for x in x0 * 5..x1 * 5 {
+                    d[(y * w + x) * 3..(y * w + x) * 3 + 3].copy_from_slice(&c);
+                }
+            }
+        }
+        RgbImage::new(w, h, d).unwrap()
+    }
+
+    /// The clothes parser seeing nothing (the boxes come from the faces alone).
+    fn nothing() -> BodyMap {
+        let n = GRID.0 * GRID.1;
+        BodyMap { w: GRID.0, h: GRID.1, probs: [vec![1.0; n], vec![0.0; (crate::body::CLASSES - 1) * n]].concat() }
+    }
+
+    /// Logits with `class(r, g, b)` (the normalised input's channels) winning at each input pixel.
+    fn logits(x: &Tensor, class: &dyn Fn(usize, usize, f32, f32, f32) -> usize) -> Result<Tensor> {
+        let (_, _, h, w) = x.dims4()?;
+        let v = x.flatten_all()?.to_vec1::<f32>()?;
+        let n = w * h;
+        let mut out = vec![0.0f32; sapiens::CLASSES * n];
+        for i in 0..n {
+            out[class(w, h, v[i], v[n + i], v[2 * n + i]) * n + i] = 10.0;
+        }
+        Ok(Tensor::from_vec(out, (1, sapiens::CLASSES, h, w), x.device())?)
+    }
+
+    /// Red pixels are upper clothing, blue ones lower clothing, the rest background.
+    fn by_colour(_: usize, _: usize, r: f32, _: f32, b: f32) -> usize {
+        if r > 1.0 {
+            class::UPPER_CLOTHING
+        } else if b > 1.0 {
+            class::LOWER_CLOTHING
+        } else {
+            class::BACKGROUND
+        }
+    }
+
+    fn atr(m: &BodyMap, c: usize, x: usize, y: usize) -> f32 {
+        m.probs[c * m.w * m.h + y * m.w + x]
+    }
+
+    const UPPER: usize = 4;
+    const PANTS: usize = 6;
+    const HAIR: usize = 2;
+
+    #[test]
+    fn a_pass_lands_on_the_cells_it_saw_at_the_edge_and_in_the_middle() {
+        // a person at the top-left corner, their shirt in cells x 2..5, y 7..10; one in the middle, cells x 21..24,
+        // y 15..18
+        let img = photo(&[((2, 7, 5, 10), [255, 0, 0]), ((21, 15, 24, 18), [255, 0, 0])]);
+        let faces = [NormRect::new(0.0, 0.0, 0.1, 0.15), NormRect::new(0.5, 0.35, 0.58, 0.48)];
+        let net = |x: &Tensor| logits(x, &by_colour);
+        let m = parts_map(&net, nothing(), &img, &faces, &Device::Cpu, &|| false).unwrap();
+        for (x0, y0, x1, y1) in [(2, 7, 5, 10), (21, 15, 24, 18)] {
+            for y in y0..y1 {
+                for x in x0..x1 {
+                    assert!(atr(&m, UPPER, x, y) > 0.95, "({x}, {y}): {}", atr(&m, UPPER, x, y));
+                }
+            }
+            // one cell off to each side is not the shirt
+            for (x, y) in [(x0 - 1, y0), (x1, y0), (x0, y0 - 1), (x0, y1)] {
+                assert!(atr(&m, UPPER, x, y) < 0.05, "({x}, {y}) is next to the shirt: {}", atr(&m, UPPER, x, y));
+            }
+        }
+    }
+
+    #[test]
+    fn where_two_boxes_overlap_a_cell_takes_one_pass_not_a_mix() {
+        // two people side by side: a red half and a blue half; each pass calls everything it sees by its main colour
+        let img = photo(&[((0, 0, 20, 24), [255, 0, 0]), ((20, 0, 40, 24), [0, 0, 255])]);
+        let faces = [NormRect::new(0.38, 0.1, 0.46, 0.22), NormRect::new(0.54, 0.1, 0.62, 0.22)];
+        let net = |x: &Tensor| {
+            let mean = |c: usize| x.narrow(1, c, 1).and_then(|t| t.mean_all()).and_then(|t| t.to_scalar::<f32>());
+            let main = if mean(0)? > mean(2)? { class::UPPER_CLOTHING } else { class::LOWER_CLOTHING };
+            logits(x, &|_, _, _, _, _| main)
+        };
+        let m = parts_map(&net, nothing(), &img, &faces, &Device::Cpu, &|| false).unwrap();
+        let people = people_boxes(&nothing(), &faces, &img);
+        assert!(people[0].x1 > people[1].x0, "the boxes overlap: {people:?}");
+        let overlap = ((people[1].x0 * 40.0).ceil() as usize + (people[0].x1 * 40.0).floor() as usize) / 2;
+        for y in 6..18 {
+            let (top, pants) = (atr(&m, UPPER, overlap, y), atr(&m, PANTS, overlap, y));
+            assert!(top > 0.95 || pants > 0.95, "cell ({overlap}, {y}) mixes the two passes: top {top}, trousers {pants}");
+        }
+        assert!(atr(&m, UPPER, 14, 12) > 0.95 && atr(&m, PANTS, 25, 12) > 0.95, "each person's own pass");
+    }
+
+    #[test]
+    fn a_person_without_a_pass_inside_anothers_box_keeps_the_whole_photo_pass() {
+        let img = photo(&[]);
+        // a large face, and a small one inside its body box; only the first gets a pass
+        let faces = [NormRect::new(0.42, 0.05, 0.5, 0.15), NormRect::new(0.45, 0.5, 0.48, 0.55)];
+        let whole = crate::fuse::input_size(img.width, img.height);
+        let net = |x: &Tensor| {
+            let (_, _, h, w) = x.dims4()?;
+            // the whole photo's pass says hair, a person's pass upper clothing
+            let c = if (w, h) == whole { class::HAIR } else { class::UPPER_CLOTHING };
+            logits(x, &|_, _, _, _, _| c)
+        };
+        let m = parts_map_with(&net, nothing(), &img, &faces, &Device::Cpu, &|| false, 1).unwrap();
+        let people = people_boxes(&nothing(), &faces, &img);
+        assert_eq!(crops(&people, 1), vec![true, false]);
+        let small = people[1];
+        let (cx, cy) = small.centre();
+        let (x, y) = ((cx * 40.0) as usize, (cy * 24.0) as usize);
+        assert!(atr(&m, HAIR, x, y) > 0.95, "the second person's cells take the whole photo's pass: hair {}", atr(&m, HAIR, x, y));
+        assert!(atr(&m, UPPER, 20, 2) > 0.95, "the first person's own pass");
+    }
+
+    #[test]
+    fn many_large_people_share_a_budget_and_few_keep_their_size() {
+        let trained = (sapiens::TRAIN_H * sapiens::TRAIN_W) as f32;
+        // three boxes of 200 × 500 cells: 1.5 samples a cell makes each 0.29 of the trained size, under the budget
+        assert_eq!(samples([(0, 0, 200, 500); 3].into_iter(), 1.5), 1.5);
+        // eight: 2.3 times the trained size, so each is made smaller to fit twice it
+        let s = samples([(0, 0, 200, 500); 8].into_iter(), 1.5);
+        assert!(s < 1.5);
+        let total = 8.0 * 200.0 * 500.0 * s * s;
+        assert!((total / trained - BUDGET).abs() < 0.01, "{}", total / trained);
+        assert_eq!(samples(std::iter::empty(), 1.5), 1.5);
+    }
+
+    #[test]
+    fn the_smaller_box_owns_a_cell_both_cover_fully() {
+        let big = NormRect::new(0.0, 0.0, 1.0, 1.0);
+        let small = NormRect::new(0.3, 0.3, 0.7, 0.7);
+        let o = owners(&[big, small], 10, 10);
+        assert_eq!(o[5 * 10 + 5], Some(1));
+        assert_eq!(o[0], Some(0));
+        assert_eq!(owners(&[], 2, 2), vec![None; 4]);
+        assert_eq!(crops(&[small, big, small, small], 2), vec![true, false, true, false], "the big one never counts toward the cap");
     }
 }

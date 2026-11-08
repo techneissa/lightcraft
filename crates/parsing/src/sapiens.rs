@@ -134,18 +134,35 @@ fn rms(x: &Tensor, w: &Tensor) -> Result<Tensor> {
     Ok(candle_nn::ops::rms_norm(&x.contiguous()?, w, EPS)?)
 }
 
+/// A linear layer whose weight is kept in half the memory (bfloat16: the checkpoint's own precision, so nothing is
+/// lost) and widened to f32 for each use; the sums are f32 as before.
+struct Lin {
+    w: Tensor,
+    b: Tensor,
+}
+
+impl Lin {
+    fn load(p: &Params, input: usize, output: usize) -> Result<Self> {
+        Ok(Self { w: p.tensor_as("weight", &[output, input], DType::BF16)?, b: p.tensor("bias", &[output])? })
+    }
+
+    fn forward(&self, x: &Tensor) -> Result<Tensor> {
+        Ok(Linear::new(self.w.to_dtype(DType::F32)?, Some(self.b.clone())).forward(x)?)
+    }
+}
+
 struct Block {
     ln1: Tensor,
-    wq: Linear,
-    wk: Linear,
-    wv: Linear,
+    wq: Lin,
+    wk: Lin,
+    wv: Lin,
     q_norm: Tensor,
     k_norm: Tensor,
-    proj: Linear,
+    proj: Lin,
     gamma: Option<Tensor>,
     ln2: Tensor,
-    w12: Linear,
-    w3: Linear,
+    w12: Lin,
+    w3: Lin,
     heads: usize,
     kv_heads: usize,
 }
@@ -160,16 +177,16 @@ impl Block {
         };
         Ok(Self {
             ln1: p.pp("ln1").tensor("weight", &[c])?,
-            wq: a.pp("wq").linear(c, c)?,
-            wk: a.pp("wk").linear(c, kv)?,
-            wv: a.pp("wv").linear(c, kv)?,
+            wq: Lin::load(&a.pp("wq"), c, c)?,
+            wk: Lin::load(&a.pp("wk"), c, kv)?,
+            wv: Lin::load(&a.pp("wv"), c, kv)?,
             q_norm: a.pp("q_norm").tensor("weight", &[HEAD_DIM])?,
             k_norm: a.pp("k_norm").tensor("weight", &[HEAD_DIM])?,
-            proj: a.pp("proj").linear(c, c)?,
+            proj: Lin::load(&a.pp("proj"), c, c)?,
             gamma: if a.has("gamma.weight") { Some(a.pp("gamma").tensor("weight", &[c])?) } else { None },
             ln2: p.pp("ln2").tensor("weight", &[c])?,
-            w12: p.pp("ffn.w12").linear(c, 2 * hidden)?,
-            w3: p.pp("ffn.w3").linear(hidden, c)?,
+            w12: Lin::load(&p.pp("ffn.w12"), c, 2 * hidden)?,
+            w3: Lin::load(&p.pp("ffn.w3"), hidden, c)?,
             heads,
             kv_heads: kv / HEAD_DIM,
         })
