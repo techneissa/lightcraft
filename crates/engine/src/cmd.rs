@@ -46,6 +46,7 @@ mod merge;
 pub mod metadata;
 pub mod missing;
 mod organize;
+mod parsing;
 mod prefs;
 mod preset_files;
 pub mod previews;
@@ -168,6 +169,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(birefnet::specs());
         v.extend(find_removals::specs());
         v.extend(lama::specs());
+        v.extend(parsing::specs());
         v.extend(organize::specs());
         v.extend(keywords::specs());
         v.extend(manage::specs());

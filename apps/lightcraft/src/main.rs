@@ -357,6 +357,8 @@ fn main() -> eframe::Result {
                 session = session.with_default_sam3_model();
                 // the LaMa fill for Remove, from the folder shared with PhotoCraft (fork/lama-fill.md)
                 session = session.with_default_lama_model();
+                // people parts (fork/people-parsing.md): models in the shared folder, parses cached in ~/Library/Caches
+                session = session.with_default_parsing_models();
                 // the face and denoise models of the old folders move into the folder shared with PhotoCraft, once
                 // (fork/shared-models.md); on a worker, because checking a 200 MB model takes a second; a failure
                 // leaves both copies and is only logged

@@ -195,6 +195,17 @@ pub fn guided_px(guide: &RgbImage, mask: &[f32], r_full: usize, eps: f32) -> Vec
     out
 }
 
+/// Write a `w × h` mask as an 8-bit grey PNG.
+pub fn save_png(path: &std::path::Path, mask: &[f32], w: usize, h: usize) -> crate::Result<()> {
+    let bytes: Vec<u8> = mask.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+    let (wu, hu) = (
+        u32::try_from(w).map_err(|_| crate::Error::Input("too wide".into()))?,
+        u32::try_from(h).map_err(|_| crate::Error::Input("too tall".into()))?,
+    );
+    let png = image::GrayImage::from_raw(wu, hu, bytes).ok_or_else(|| crate::Error::Input("the mask's size does not match its values".into()))?;
+    png.save(path).map_err(|e| crate::Error::Input(format!("could not write {}: {e}", path.display())))
+}
+
 /// The box around a selection's planes, in fractions of the photo.
 pub fn bounds(p: &Parsing, sel: Select) -> Option<NormRect> {
     if sel == Select::Background {
