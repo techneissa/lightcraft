@@ -72,6 +72,7 @@ if [ "$ONEOFF" = 1 ]; then
       step heif-clippy cargo clippy -p lightcraft-codecs --features heif --all-targets -- -D warnings
     fi
     step layers cargo xtask layers
+    step roots cargo xtask roots
     step assets cargo xtask assets
     if [ "$PARITY" = 1 ]; then step parity cargo xtask parity; fi
     if [ "$WASM" = 1 ]; then step wasm cargo xtask wasm; fi
