@@ -103,7 +103,8 @@ impl HairEdges {
         })
     }
 
-    /// The Subject matte of an 8-bit RGB picture from Vision's foreground masks (every subject together): from memory
+    /// The Subject matte of an 8-bit RGB picture from Vision's foreground masks (every subject together) and its person
+    /// segmentation (fine hair), the larger at each pixel: from memory
     /// when the same pixels were matted before. `Ok(None)`: Vision found no subject.
     pub(crate) fn vision_subject(&self, rgb: &[u8], w: usize, h: usize, cancel: &Arc<AtomicBool>) -> Result<Option<Arc<Matte>>, String> {
         let img = image(rgb, w, h);
@@ -112,8 +113,23 @@ impl HairEdges {
         if let Some(m) = self.remembered(key) {
             return Ok(Some(m));
         }
-        let found = self.with_vision(cancel, || av::foreground_instances(&img).map_err(|e| e.to_string()))?;
-        let Some(all) = found.union() else { return Ok(None) };
+        // (the subject mask's edge is hard and drops strands; where the subject is a person, the person segmentation's
+        // fine hair is added: the larger of the two at each pixel, only within the band around the part's edge)
+        let (found, people) = self.with_vision(cancel, || {
+            let found = av::foreground_instances(&img).map_err(|e| e.to_string())?;
+            let people = match found.masks.is_empty() {
+                true => None,
+                false => Some(av::person_segmentation(&img).map_err(|e| e.to_string())?),
+            };
+            Ok((found, people))
+        })?;
+        let Some(mut all) = found.union() else { return Ok(None) };
+        if let Some(p) = people {
+            let p = if (p.width, p.height) == (all.width, all.height) { p } else { p.resized(all.width, all.height) };
+            for (a, b) in all.data.iter_mut().zip(&p.data) {
+                *a = a.max(*b);
+            }
+        }
         let m = Arc::new(to_matte(&all, SUBJECT_SIDE));
         if !m.is_valid() {
             return Err("Apple Vision produced an invalid matte".into());
