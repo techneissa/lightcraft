@@ -29,9 +29,14 @@ fn tool_name(mode: SpotMode) -> &'static str {
 
 /// The name of spot `i`: its tool and its number among the spots of that tool ("Heal 2"). `None` past the end.
 pub(crate) fn spot_name(spots: &[Spot], i: usize) -> Option<String> {
-    let mode = spots.get(i)?.mode;
+    let spot = spots.get(i)?;
+    let mode = spot.mode;
     let n = spots.iter().take(i + 1).filter(|s| s.mode == mode).count();
-    Some(format!("{} {n}", crate::i18n::tr(tool_name(mode))))
+    // a spot in an object's or a mask's shape says what it is ("Remove 3 · Object", `fork/object-remove.md`)
+    match &spot.area {
+        Some(a) => Some(format!("{} {n} · {}", crate::i18n::tr(tool_name(mode)), crate::i18n::tr(a.label()))),
+        None => Some(format!("{} {n}", crate::i18n::tr(tool_name(mode)))),
+    }
 }
 
 /// The Tool Overlay setting one spot's circle follows: its own, else the global one.

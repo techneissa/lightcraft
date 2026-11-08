@@ -19,7 +19,8 @@ fn ask_id() -> egui::Id {
 /// The fill new spots get, and the picker shows: LaMa when it is chosen and its model is installed, else Classic (a
 /// LaMa that is still downloading is chosen, but new spots keep the Classic fill until it arrives).
 fn effective(app: &LightcraftApp) -> SpotFill {
-    if app.ui.remove_fill == SpotFill::Lama && app.session.lama.installed() { SpotFill::Lama } else { SpotFill::Classic }
+    // (Object mode keeps its own choice, LaMa unless Classic is picked: `fork/object-remove.md`)
+    if super::remove_object::chosen_fill(app) == SpotFill::Lama && app.session.lama.installed() { SpotFill::Lama } else { SpotFill::Classic }
 }
 
 /// `params` for a command that makes spots of `mode` (`remove`, `fill`, `heal`, `clone`), with the chosen fill when
@@ -74,8 +75,8 @@ pub(super) fn heading(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         )
         .and_then(|i| items.get(i).copied());
         match picked {
-            Some(SpotFill::Classic) => app.ui.remove_fill = SpotFill::Classic,
-            Some(SpotFill::Lama) if installed => app.ui.remove_fill = SpotFill::Lama,
+            Some(SpotFill::Classic) => super::remove_object::set_fill(app, SpotFill::Classic),
+            Some(SpotFill::Lama) if installed => super::remove_object::set_fill(app, SpotFill::Lama),
             Some(SpotFill::Lama) if !downloading => {
                 ui.ctx().data_mut(|d| d.insert_temp(ask_id(), true));
             }
@@ -125,7 +126,7 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context) {
         ctx.data_mut(|d| d.insert_temp(ask_id(), false));
         if download {
             match app.run("lama.download", json!({"confirm": true})) {
-                Ok(_) => app.ui.remove_fill = SpotFill::Lama,
+                Ok(_) => super::remove_object::set_fill(app, SpotFill::Lama),
                 Err(e) => app.toast(ctx, e),
             }
         }

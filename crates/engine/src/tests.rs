@@ -84,6 +84,7 @@ mod slideshow_export;
 #[cfg(not(target_arch = "wasm32"))]
 mod slow_drive;
 mod smart_local;
+mod spot_area;
 mod spot_rows;
 mod spots;
 mod sync;

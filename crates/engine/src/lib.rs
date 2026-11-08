@@ -98,6 +98,7 @@ pub mod slide_title;
 pub mod slideshow;
 pub mod slideshow_export;
 pub mod smart;
+pub mod spot_area;
 pub mod sync;
 mod sync_same;
 pub mod text;
@@ -392,6 +393,8 @@ pub struct Session {
     pub finds: find_removals::Finds,
     /// The LaMa fill behind Remove spots whose fill is LaMa (`fork/lama-fill.md`).
     pub lama: lama_fill::LamaFill,
+    /// Object clicks of the Remove tool on their way to SAM 3 (fork, `fork/object-remove.md`).
+    pub object_jobs: spot_area::ObjectJobs,
     /// Learn My Edits: profiles trained on the user's edits (`fork/learn-my-edits.md`).
     pub learn: learn::LearnEdits,
     /// Per-person part masks and face landmarks (`fork/people-parsing.md`).
@@ -600,6 +603,7 @@ impl Session {
             active_spot: None,
             finds: Default::default(),
             lama: lama_fill::LamaFill::new(activity.clone()),
+            object_jobs: Default::default(),
             learn: learn::LearnEdits::new(activity.clone()),
             parsing: people_parsing::PeopleParsing::new(activity.clone()),
             library: None,

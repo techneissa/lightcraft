@@ -319,6 +319,10 @@ pub struct UiState {
     pub remove_opacity: f32,
     /// The fill of new Remove and Content-Aware spots (the Remove panel's Fill picker, `fork/lama-fill.md`).
     pub remove_fill: lightcraft_develop::SpotFill,
+    /// Object mode in the Remove panel, its fill and the Expand of new object spots (`fork/object-remove.md`).
+    pub remove_object: bool,
+    pub remove_object_fill: lightcraft_develop::SpotFill,
+    pub remove_expand: f32,
     /// The Learn My Edits window (`fork/learn-my-edits.md`); not saved.
     #[serde(skip)]
     pub learn_edits: crate::learn_edits::Window,
@@ -562,6 +566,9 @@ impl Default for UiState {
             remove_feather: 50.0,
             remove_opacity: 100.0,
             remove_fill: lightcraft_develop::SpotFill::Classic,
+            remove_object: false,
+            remove_object_fill: lightcraft_develop::SpotFill::Lama,
+            remove_expand: 0.005,
             learn_edits: Default::default(),
             point_color: 0,
             point_color_visualize: false,

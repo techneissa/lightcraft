@@ -61,6 +61,7 @@ pub mod reload;
 pub mod similar;
 mod slideshow;
 pub mod smart_editing;
+mod spot_area;
 mod spot_rows;
 mod sync;
 mod xmp;
@@ -174,6 +175,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(birefnet::specs());
         v.extend(find_removals::specs());
         v.extend(spot_rows::specs());
+        v.extend(spot_area::specs());
         v.extend(lama::specs());
         v.extend(learn::specs());
         v.extend(parsing::specs());
