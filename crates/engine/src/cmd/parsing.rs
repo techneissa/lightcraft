@@ -24,7 +24,7 @@ const MAX_MASK_EDGE: usize = 8192;
 fn set_param(c: &str, p: &Value, s: &Session) -> Result<ModelSet> {
     match p.get("set").filter(|v| !v.is_null()) {
         None => Ok(s.parsing.model_set()),
-        Some(v) => v.as_str().and_then(ModelSet::from_id).ok_or_else(|| bad(c, "`set` must be \"segformer\" or \"bisenet\"")),
+        Some(v) => v.as_str().and_then(ModelSet::from_id).ok_or_else(|| bad(c, "`set` must be \"segformer\", \"bisenet\" or \"sapiens2\"")),
     }
 }
 
@@ -222,14 +222,14 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "People Parts Model Set",
             [],
             None,
-            "{set: \"segformer\"|\"bisenet\"} — the model set that finds people's parts from now on (parses made by the other set stay cached) → {modelSet, installed}",
+            "{set: \"segformer\"|\"bisenet\"|\"sapiens2\"} — the model set that finds people's parts from now on (parses made by the other set stay cached) → {modelSet, installed}",
             always,
             |s, p| {
                 let set = p
                     .get("set")
                     .and_then(Value::as_str)
                     .and_then(ModelSet::from_id)
-                    .ok_or_else(|| bad("parsing.modelSet", "`set` must be \"segformer\" or \"bisenet\""))?;
+                    .ok_or_else(|| bad("parsing.modelSet", "`set` must be \"segformer\", \"bisenet\" or \"sapiens2\""))?;
                 s.parsing.set_model_set(set).map_err(|e| bad("parsing.modelSet", e))?;
                 Ok(json!({"modelSet": set.id(), "installed": s.parsing.installed(set)}))
             }
@@ -239,7 +239,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "Download People Parts Models",
             [],
             None,
-            "{set?: \"segformer\"|\"bisenet\" (default: the chosen set), confirm: true, choose?: bool} — downloads the set's missing models from huggingface.co into the folder shared with the other ArtCraft apps, on a thread with a row in the activity stack (✕ stops it; asking again resumes; sizes and SHA-256 are checked; one download at a time). With `choose`, the set parses from the moment the download has finished; a download that stops or fails changes nothing. Without `confirm: true` it is refused: ask the user first → {started: true, bytes}",
+            "{set?: \"segformer\"|\"bisenet\"|\"sapiens2\" (default: the chosen set), confirm: true, choose?: bool} — downloads the set's missing models from huggingface.co into the folder shared with the other ArtCraft apps, on a thread with a row in the activity stack (✕ stops it; asking again resumes; sizes and SHA-256 are checked; one download at a time). With `choose`, the set parses from the moment the download has finished; a download that stops or fails changes nothing. Without `confirm: true` it is refused: ask the user first → {started: true, bytes}",
             always,
             |s, p| {
                 const C: &str = "parsing.download";

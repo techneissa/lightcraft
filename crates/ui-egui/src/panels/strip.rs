@@ -68,7 +68,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
 /// How many icons are pinned to the bottom of the strip.
 const BOTTOM_PLACES: usize = 2;
 /// Before which place (counted from the top) a divider is drawn.
-const DIVIDERS_BEFORE: [usize; 2] = [2, 6];
+const DIVIDERS_BEFORE: [usize; 2] = [2, 7];
 
 /// One icon: a click opens its panel, a drag moves it (see `tool_strip_order`), its right-click
 /// menu moves it too. Returns where it is.
@@ -80,6 +80,7 @@ fn tool_button(app: &mut LightcraftApp, ui: &mut egui::Ui, tool: Tool, sz: egui:
         Tool::Remove => (Icon::Eraser, "Remove (H)", Some(RightPanel::Remove)),
         Tool::Masking => (Icon::Mask, "Masking (M)", Some(RightPanel::Masking)),
         Tool::RedEye => (Icon::Eye, "Red Eye", Some(RightPanel::RedEye)),
+        Tool::Portrait => (Icon::Subject, "Portrait (T)", Some(RightPanel::Portrait)),
         Tool::Versions => (Icon::Versions, "Versions (Shift+V)", Some(RightPanel::Versions)),
         Tool::Activity => (Icon::Activity, "History & Activity (Y)", Some(RightPanel::Activity)),
         Tool::Keywords => (Icon::Tag, "Keywords (K)", Some(RightPanel::Keywords)),

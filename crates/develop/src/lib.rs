@@ -10,6 +10,7 @@ pub mod controls;
 pub mod presets;
 pub mod reflection_area;
 pub mod residual_look;
+pub mod retouch;
 pub mod segmask;
 pub mod settings;
 pub mod spot_area;
@@ -68,6 +69,7 @@ impl DevelopSettings {
         if let Some(detail) = v.get_mut("detail").and_then(Value::as_object_mut) {
             detail.insert("nr_outliers".into(), Value::Bool(self.detail.nr_outliers));
         }
+        retouch::state_for_merge(&mut v, self);
         v
     }
 
@@ -223,6 +225,8 @@ impl DevelopSettings {
                 // Match Look's residual Look (fork) belongs to the Profile group
                 self.look = ResidualLook::default();
             }
+            // and the per-face settings with them
+            Section::Portrait => self.retouch = Default::default(),
             _ => {}
         }
     }

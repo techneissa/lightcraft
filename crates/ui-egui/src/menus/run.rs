@@ -165,6 +165,9 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
     {
         return Some(r);
     }
+    if id.starts_with("portrait.") {
+        return Some(crate::panels::portrait::command(app, id, p));
+    }
     if id.starts_with("topBar.") {
         return Some(crate::panels::topbar_items::command(app, id, p));
     }
@@ -1006,6 +1009,10 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
         }
         "panel.redeye" => {
             panel(app, ctx, RightPanel::RedEye, "Red Eye");
+            Ok(Value::Null)
+        }
+        "panel.portrait" => {
+            panel(app, ctx, RightPanel::Portrait, "Portrait");
             Ok(Value::Null)
         }
         "panel.info" => {

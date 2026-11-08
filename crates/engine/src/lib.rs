@@ -91,6 +91,7 @@ pub mod proof;
 pub mod reflections;
 pub mod rename;
 pub mod rename_job;
+pub mod retouch_input;
 pub mod segment;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod settings_folder;
@@ -482,6 +483,8 @@ pub struct Session {
     /// Background tasks in flight (imports, exports, preview builds…), for the activity stack and
     /// `activity.list` / `activity.cancel`.
     pub activity: activity::Activity,
+    /// The faces portrait retouching works on, per photo (fork, `fork/retouch-foundation.md`).
+    pub retouch_faces: retouch_input::FaceStore,
     /// The last (or running) slideshow export (`slideshow.export`).
     pub slideshow_export: Option<std::sync::Arc<slideshow_export::ExportRun>>,
     /// The last (or running) animated GIF export (`export.animatedGif`).
@@ -594,6 +597,7 @@ impl Session {
             trasher: Arc::new(file_trash::SystemTrash),
             denoise: Default::default(),
             face_models_dir: None,
+            retouch_faces: Default::default(),
             face_shared_dir: None,
             face_downloads: Default::default(),
             lensfun: Default::default(),
@@ -1234,7 +1238,7 @@ impl Session {
         new_json["hdr"] = serde_json::json!(new.hdr);
         let Some(mut delta) = json_delta(&old_json, &new_json) else { return Vec::new() };
         if let Some(o) = delta.as_object_mut() {
-            for k in ["spots", "red_eye", "version", "process"] {
+            for k in ["spots", "red_eye", lightcraft_develop::retouch::KEY, "version", "process"] {
                 o.remove(k);
             }
             if o.is_empty() {

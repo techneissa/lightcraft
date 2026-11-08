@@ -32,6 +32,7 @@ pub const WIDGET_COMMANDS: &[(&str, &str)] = &[
     ("icon:crop", "panel.crop"),
     ("icon:remove", "panel.remove"),
     ("icon:masking", "panel.masking"),
+    ("icon:portrait", "panel.portrait"),
     ("icon:versions", "panel.versions"),
     ("icon:activity", "panel.activity"),
     ("icon:keywords", "panel.keywords"),

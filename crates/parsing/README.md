@@ -41,6 +41,11 @@ Retouch defines its own input types. Mapping is direct: face box ← `Person::fa
 | --- | --- | --- | --- | --- |
 | `segformer` (default) | SegFormer-B0, 19 CelebAMask-HQ classes (`alexkrz/segformer-b0-celebamask_hq`) | SegFormer-B3, 18 clothes classes (`sayeed99/segformer_b3_clothes`) | MediaPipe face mesh v2 (`SceneWorks/mp-facemesh-v2`) | 209 MB |
 | `bisenet` | BiSeNet (ResNet-18), 19 classes (`mlx-community/face-parsing-bisenet-bf16`) | SegFormer-B2, 18 clothes classes (`mattmdjaga/segformer_b2_clothes`) | the same face mesh | 141 MB |
+| `sapiens2` | the SegFormer set's | Sapiens2-seg 0.4B, 29 body-part classes (`mlx-community/sapiens2-seg-0.4b-bf16`), with the SegFormer-B3 naming the garments | the same face mesh | 1,022 MB (813 MB more than `segformer`) |
+
+Sapiens2's weights are under Meta's Sapiens2 License, which forbids identifying people. Its masks may feed Select
+People (splitting a person into parts is not identifying them); they never reach face detection, face recognition or
+the People catalog (`person_id` only passes through what the caller's face hints carry).
 
 Each file is pinned by Hugging Face revision, size and SHA-256 in `src/models.rs` and lives in its own folder under
 the models folder (on the Mac `~/Library/Application Support/ArtCraft/models/<folder>/`). Weights are never committed.
@@ -60,6 +65,43 @@ the models folder (on the Mac `~/Library/Application Support/ArtCraft/models/<fo
 
 Without face hints the body parser's face class gives the faces (YuNet is better for small faces).
 
+### The `sapiens2` set
+
+Sapiens2 decides where the person, skin, hair and clothes are; the B3 clothes parser only names the garments inside
+Sapiens2's clothes (Top, Bottom, Dress, Hat, Bag, Others), which Sapiens2 has no classes for (`src/fuse.rs`).
+
+1. The B3 runs as above; its person area and the faces give each person a box (the body box around their face: four
+   face widths across, down to eight face heights below it, grown to take in what the B3 saw of them close by).
+2. Each of the first 8 people whose box covers less than half the photo gets a Sapiens2 pass of their own over the
+   box (`src/crops.rs`): Sapiens2 is trained on pictures framed around one person, and in a whole photo it is unsure of
+   the people further back. The box is sampled at 1.5 model pixels per body-map cell (long side at least 384, at most
+   the trained 1024 × 768 patches); all the passes together see at most twice the trained patches, past which each is
+   made smaller by the same factor (eight large people would otherwise take about 20 s).
+3. Each body-map cell belongs to one box: the one whose say there is greatest (1 inside, fading at its inner edges),
+   the smaller box on a tie (a person inside another's box). It takes that box's pass, or the whole photo's pass (half
+   the trained patches) when that box had none (a portrait that fills the frame, the ninth person); the whole photo's
+   pass runs only then. Passes never mix, and they are written straight into the one probability grid.
+4. Sapiens2 has a say only inside the people's boxes, fading at their edges; elsewhere the B3's map stays. Sapiens2 is
+   trained on pictures with people and calls much of a picture without any (a car at night) a person.
+5. Each Sapiens2 class goes to its B3 class: background, hair, face (with lips, teeth and tongue; below a face's chin
+   its face-and-neck class is the neck, Body Skin), eyeglasses (Others), shoes and socks (Shoes), arms, hands, legs,
+   feet and bare torso (Body Skin). Upper clothing is shared
+   among top, dress and scarf, lower clothing among trousers, skirt, dress and belt, and apparel among hat, bag,
+   scarf, belt and the rest, by the B3's own probabilities there (plus 0.05 for the usual garment, so where the B3 sees
+   background, as on dark and light clothes, upper clothing is a top).
+
+The face parts (brows, eyes, iris, lips, teeth) still come from the face parser and the mesh: Sapiens2 has no eyes or
+brows, and its lips match the face parser's.
+
+The network call is a closure (`crops::Forward`), so the placement tests run a stand-in network without the model.
+
+The network (`src/sapiens.rs`) is a plain ViT with 2-D rotary positions, RMS and query/key norms, grouped-query
+attention in its middle blocks and SwiGLU feed-forwards, then four 2× transposed convolutions; each transposed
+convolution runs as a 3 × 3 convolution and a pixel shuffle (the same sums, several times faster on Metal). The
+linear layers' weights stay bfloat16 on the device, the checkpoint's own precision, and are widened to f32 for each
+use (0.8 GB resident instead of 1.6 GB; the masks are the same to the bit). On the
+same input it gives the same class as mlx-vlm's port at 99.8 % of the pixels.
+
 ## Cache
 
 `cache::key(img, hints, set.version())` is a SHA-256 of the pixels, size and hints plus the set's version (its files'
@@ -70,7 +112,7 @@ the folder under a size.
 ## Try it
 
 ```bash
-cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/ [--set segformer|bisenet] [--models DIR]
+cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/ [--set segformer|bisenet|sapiens2] [--models DIR]
 ```
 
 writes `outdir/<part>.png` (one colour per person), `all.png`, `background.png`, `landmarks.png`, `people.json` and
@@ -79,5 +121,5 @@ models folder when it is there.
 
 ## Tests
 
-`cargo test -p lightcraft-parsing --lib`. The model tests run with `LIGHTCRAFT_PARSING_MODELS=<models folder>` and
-skip without it.
+`cargo test -p lightcraft-parsing --lib`. The model tests read the models from the shared folder (or
+`LIGHTCRAFT_PARSING_MODELS`) and skip without them; no test downloads a model.

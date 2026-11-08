@@ -1,6 +1,6 @@
 //! Parse a photo and write each part mask as a picture.
 //!
-//! `cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/ [--set segformer|bisenet]
+//! `cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/ [--set segformer|bisenet|sapiens2]
 //! [--models DIR] [--edge 2048] [--no-yunet] [--cells 1.5] [--eps 0.0002]`
 //!
 //! Writes `outdir/<part>.png` (the photo dimmed, the part in colour, one colour per person), `outdir/all.png` (every
@@ -59,7 +59,7 @@ fn yunet(img: &RgbImage) -> Option<Vec<FaceHint>> {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let (Some(input), Some(out)) = (args.first(), args.get(1)) else {
-        return Err("usage: parts in.jpg outdir/ [--set segformer|bisenet] [--models DIR] [--edge 2048] [--no-yunet]".into());
+        return Err("usage: parts in.jpg outdir/ [--set segformer|bisenet|sapiens2] [--models DIR] [--edge 2048] [--no-yunet]".into());
     };
     let out = PathBuf::from(out);
     std::fs::create_dir_all(&out)?;

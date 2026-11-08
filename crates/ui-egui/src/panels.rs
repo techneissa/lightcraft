@@ -38,6 +38,8 @@ pub mod people;
 pub mod person;
 pub mod photo_menu;
 pub mod presets;
+// fork: the Portrait tab (`fork/retouch-foundation.md`)
+pub mod portrait;
 pub mod profiles;
 pub mod quick_filters;
 pub mod right;

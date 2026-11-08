@@ -2,8 +2,9 @@
 //! (Entire Person, Facial and Body Skin, Hair, Eyebrows, Eye Whites, Iris, Lips, Teeth, Clothes Top / Bottom / Dress
 //! / Shoes / Hat / Bag, Others), for the portrait features and the Select People masks.
 //!
-//! Two model sets parse ([`ModelSet`]): SegFormer-B0 faces with SegFormer-B3 bodies, or BiSeNet faces with
-//! SegFormer-B2 bodies; both use MediaPipe's face mesh v2. The weights are not part of LightCraft: they are downloaded
+//! Three model sets parse ([`ModelSet`]): SegFormer-B0 faces with SegFormer-B3 bodies, BiSeNet faces with
+//! SegFormer-B2 bodies, or the SegFormer set with Sapiens2 deciding where skin, hair and clothes are; all use
+//! MediaPipe's face mesh v2. The weights are not part of LightCraft: they are downloaded
 //! into the models folder ([`models`]) and read from there ([`Parser::load`]). On macOS the models run on the GPU
 //! through Metal, elsewhere on the CPU. No UI dependencies (L3).
 //!
@@ -25,17 +26,23 @@ mod bisenet;
 #[cfg(not(target_arch = "wasm32"))]
 mod body;
 #[cfg(not(target_arch = "wasm32"))]
+mod crops;
+#[cfg(not(target_arch = "wasm32"))]
 mod eyes;
 #[cfg(not(target_arch = "wasm32"))]
 mod face;
 #[cfg(not(target_arch = "wasm32"))]
 mod facemesh;
 #[cfg(not(target_arch = "wasm32"))]
+mod fuse;
+#[cfg(not(target_arch = "wasm32"))]
 mod nn;
 #[cfg(not(target_arch = "wasm32"))]
 mod parser;
 #[cfg(not(target_arch = "wasm32"))]
 mod people;
+#[cfg(not(target_arch = "wasm32"))]
+mod sapiens;
 #[cfg(not(target_arch = "wasm32"))]
 mod segformer;
 #[cfg(not(target_arch = "wasm32"))]
