@@ -12,7 +12,8 @@ pub(crate) fn scene(seed: u32, light: f32, cast: f32) -> (usize, usize, Vec<u8>)
     let (w, h) = (96usize, 64usize);
     let mut rgb = Vec::with_capacity(w * h * 3);
     let r = |k: u32| ((seed.wrapping_mul(2_654_435_761).wrapping_add(k.wrapping_mul(40_503)) >> 8) % 1000) as f32 / 1000.0;
-    let blobs: Vec<(f32, f32, f32, [f32; 3])> = (0..4).map(|k| (r(k * 4), r(k * 4 + 1), 0.08 + 0.15 * r(k * 4 + 2), [r(k * 7 + 3), r(k * 7 + 4), r(k * 7 + 5)])).collect();
+    let blobs: Vec<(f32, f32, f32, [f32; 3])> =
+        (0..4).map(|k| (r(k * 4), r(k * 4 + 1), 0.08 + 0.15 * r(k * 4 + 2), [r(k * 7 + 3), r(k * 7 + 4), r(k * 7 + 5)])).collect();
     for y in 0..h {
         for x in 0..w {
             let (fx, fy) = (x as f32 / w as f32, y as f32 / h as f32);
@@ -45,7 +46,11 @@ fn stats_profile(groups: &[Group]) -> Profile {
 fn example(seed: u32, light: f32, cast: f32, rule: &dyn Fn(f32, f32) -> DevelopSettings) -> Example {
     let (w, h, rgb) = scene(seed, light, cast);
     let defaults = DevelopSettings::default();
-    Example { photo: format!("p{seed}"), features: features::photo_stats(w, h, &rgb).unwrap(), targets: sliders::targets(&rule(light, cast), &defaults) }
+    Example {
+        photo: format!("p{seed}"),
+        features: features::photo_stats(w, h, &rgb).unwrap(),
+        targets: sliders::targets(&rule(light, cast), &defaults),
+    }
 }
 
 /// The rule: darker photos got more Exposure; bluer ones a warmer Temp.
@@ -59,7 +64,9 @@ fn rule(light: f32, cast: f32) -> DevelopSettings {
 }
 
 fn grid(n: u32, offset: u32) -> Vec<(u32, f32, f32)> {
-    (0..n).map(|i| (i + offset, 0.2 + 0.7 * ((i * 37 + offset) % 101) as f32 / 100.0, -1.0 + 2.0 * ((i * 53 + offset * 3) % 97) as f32 / 96.0)).collect()
+    (0..n)
+        .map(|i| (i + offset, 0.2 + 0.7 * ((i * 37 + offset) % 101) as f32 / 100.0, -1.0 + 2.0 * ((i * 53 + offset * 3) % 97) as f32 / 96.0))
+        .collect()
 }
 
 #[test]
@@ -79,7 +86,11 @@ fn a_profile_learns_that_darker_photos_got_more_exposure() {
         let f = features::photo_stats(w, h, &rgb).unwrap();
         let out = crate::apply(&p, &f, &DevelopSettings::default(), &DevelopSettings::default()).unwrap();
         let want = rule(light, cast);
-        errors.push(((out.light.exposure - want.light.exposure).abs(), (1e6 / out.wb.temp - 1e6 / want.wb.temp).abs(), (out.light.shadows - 20.0).abs()));
+        errors.push((
+            (out.light.exposure - want.light.exposure).abs(),
+            (1e6 / out.wb.temp - 1e6 / want.wb.temp).abs(),
+            (out.light.shadows - 20.0).abs(),
+        ));
     }
     let n = errors.len() as f64;
     let exposure = errors.iter().map(|e| e.0).sum::<f64>() / n;
@@ -90,7 +101,14 @@ fn a_profile_learns_that_darker_photos_got_more_exposure() {
     assert!(mired < 6.0, "temp error {mired} mired");
     assert!(shadows < 1.0, "shadows error {shadows}");
     let (dark, bright) = (scene(900, 0.25, 0.0), scene(901, 0.85, 0.0));
-    let e = |s: &(usize, usize, Vec<u8>)| p.predict(&features::photo_stats(s.0, s.1, &s.2).unwrap()).unwrap().iter().find(|(i, _)| *i == idx("light.exposure")).map(|(_, v)| *v).unwrap();
+    let e = |s: &(usize, usize, Vec<u8>)| {
+        p.predict(&features::photo_stats(s.0, s.1, &s.2).unwrap())
+            .unwrap()
+            .iter()
+            .find(|(i, _)| *i == idx("light.exposure"))
+            .map(|(_, v)| *v)
+            .unwrap()
+    };
     assert!(e(&dark) > e(&bright) + 1.0, "dark {} bright {}", e(&dark), e(&bright));
 }
 
@@ -308,4 +326,18 @@ fn the_encoder_gives_finite_features_when_installed() {
     let other = cos(&a, &e.features(w2, h2, &rgb2).unwrap());
     assert!(same > other && same > 0.98, "same photo {same}, another {other}");
     let _ = train::MIN_EXAMPLES;
+}
+
+#[test]
+fn a_fitted_before_after_pair_is_an_example_like_an_edit() {
+    let defaults = DevelopSettings::default();
+    let mut fitted = defaults.clone();
+    fitted.light.exposure = 0.8;
+    fitted.color.vibrance = 12.0;
+    let e = crate::example_from_fit("pair 1", vec![0.0; crate::PHOTO_DIMS], &fitted, &defaults);
+    assert_eq!(e.targets, sliders::targets(&fitted, &defaults));
+    assert!((e.targets[idx("light.exposure")] - 0.8).abs() < 1e-6);
+    let mut p = stats_profile(&[Group::Tone]);
+    p.add_example(e).unwrap();
+    assert_eq!(p.examples.len(), 1);
 }

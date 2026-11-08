@@ -22,13 +22,23 @@ fn png(dir: &Path, name: &str, light: f32, seed: usize) -> String {
             let (x, y) = (i % w, i / w);
             let sky = y < h * 2 / 5;
             let blob = ((x as i64 - (seed * 37 % w) as i64).pow(2) + (y as i64 - (seed * 53 % h) as i64).pow(2)) < 400;
-            let c = if blob { [0.8, 0.3, 0.2] } else if sky { [0.5, 0.65, 0.9] } else { [0.35, 0.5, 0.25] };
+            let c = if blob {
+                [0.8, 0.3, 0.2]
+            } else if sky {
+                [0.5, 0.65, 0.9]
+            } else {
+                [0.35, 0.5, 0.25]
+            };
             let t = 0.85 + 0.3 * (((x * 7 + y * 13 + seed) % 11) as f32 / 11.0);
             let px = |v: f32| ((v * t * light * 1.5).clamp(0.0, 1.0).powf(1.0 / 2.2) * 255.0) as u8;
             [px(c[0]), px(c[1]), px(c[2]), 255]
         })
         .collect();
-    let bytes = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&lightcraft_raster::Rgba8 { width: w, height: h, data }), &Default::default()).unwrap();
+    let bytes = lightcraft_codecs::encode_png(
+        &lightcraft_codecs::EncodeImage::rgba8(&lightcraft_raster::Rgba8 { width: w, height: h, data }),
+        &Default::default(),
+    )
+    .unwrap();
     let path = dir.join(name);
     std::fs::write(&path, bytes).unwrap();
     path.to_string_lossy().into_owned()
@@ -64,7 +74,8 @@ fn history(s: &Session, id: u64) -> Vec<String> {
 fn a_profile_trained_in_the_library_applies_as_one_undo_step() {
     let (mut s, dir, ids) = session("apply", 16);
     let (edited, rest) = ids.split_at(16);
-    let r = s.execute("learn.create", &json!({"name": "Evening Light", "kind": "Landscapes", "groups": ["tone"], "ids": edited, "wait": true})).unwrap();
+    let r =
+        s.execute("learn.create", &json!({"name": "Evening Light", "kind": "Landscapes", "groups": ["tone"], "ids": edited, "wait": true})).unwrap();
     assert_eq!(r["photos"], 16, "{r}");
     let profile = &r["profile"];
     assert_eq!(profile["trained"], true, "{r}");
@@ -77,12 +88,14 @@ fn a_profile_trained_in_the_library_applies_as_one_undo_step() {
     // the two new photos: give them something outside Tone that must survive
     let (dark, bright) = (rest[0], rest[1]);
     s.execute("develop.set", &json!({"ids": [dark, bright], "values": {"mixer.blue.sat": -20, "color.vibrance": 10}})).unwrap();
-    let before: Vec<lightcraft_develop::DevelopSettings> = [dark, bright].iter().map(|i| (*s.develop_of(lightcraft_catalog::PhotoId(*i)).unwrap()).clone()).collect();
+    let before: Vec<lightcraft_develop::DevelopSettings> =
+        [dark, bright].iter().map(|i| (*s.develop_of(lightcraft_catalog::PhotoId(*i)).unwrap()).clone()).collect();
     let undo_depth = s.undo.len();
     let r = s.execute("learn.apply", &json!({"profile": id, "ids": [dark, bright], "wait": true})).unwrap();
     assert_eq!(r["applied"], 2, "{r}");
     assert_eq!(s.undo.len(), undo_depth + 1, "one undo step for the whole apply");
-    let after: Vec<lightcraft_develop::DevelopSettings> = [dark, bright].iter().map(|i| (*s.develop_of(lightcraft_catalog::PhotoId(*i)).unwrap()).clone()).collect();
+    let after: Vec<lightcraft_develop::DevelopSettings> =
+        [dark, bright].iter().map(|i| (*s.develop_of(lightcraft_catalog::PhotoId(*i)).unwrap()).clone()).collect();
     assert!(after[0].light.exposure > after[1].light.exposure + 0.8, "dark {} bright {}", after[0].light.exposure, after[1].light.exposure);
     assert!(after[0].light.exposure > 0.6, "{}", after[0].light.exposure);
     assert!((after[0].light.shadows - 25.0).abs() < 3.0, "{}", after[0].light.shadows);
@@ -96,7 +109,8 @@ fn a_profile_trained_in_the_library_applies_as_one_undo_step() {
         assert_eq!(history(&s, id).iter().filter(|l| l.starts_with("Learned")).count(), 1);
     }
     s.execute("edit.undo", &json!({})).unwrap();
-    let undone: Vec<lightcraft_develop::DevelopSettings> = [dark, bright].iter().map(|i| (*s.develop_of(lightcraft_catalog::PhotoId(*i)).unwrap()).clone()).collect();
+    let undone: Vec<lightcraft_develop::DevelopSettings> =
+        [dark, bright].iter().map(|i| (*s.develop_of(lightcraft_catalog::PhotoId(*i)).unwrap()).clone()).collect();
     assert_eq!(undone, before);
 
     // Add This Photo as Example: an adjusted photo goes back in and the profile retrains

@@ -53,7 +53,10 @@ pub fn resample_weights(n_in: usize, n_out: usize) -> Vec<Vec<(usize, f32)>> {
 }
 
 fn check(width: usize, height: usize, rgb: &[u8]) -> Result<()> {
-    let n = width.checked_mul(height).filter(|n| *n > 0 && *n <= MAX_PIXELS).ok_or_else(|| Error::Input(format!("a {width} × {height} photo can't be measured")))?;
+    let n = width
+        .checked_mul(height)
+        .filter(|n| *n > 0 && *n <= MAX_PIXELS)
+        .ok_or_else(|| Error::Input(format!("a {width} × {height} photo can't be measured")))?;
     if n.checked_mul(3) != Some(rgb.len()) {
         return Err(Error::Input(format!("{} bytes for a {width} × {height} RGB photo", rgb.len())));
     }

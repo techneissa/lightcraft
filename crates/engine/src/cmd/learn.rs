@@ -75,7 +75,10 @@ fn groups_param(c: &str, p: &Value) -> crate::Result<Vec<Group>> {
     match p.get("groups") {
         None | Some(Value::Null) => Ok(Group::ALL.to_vec()),
         Some(Value::Array(a)) => {
-            let g: Vec<Group> = a.iter().map(|v| v.as_str().and_then(Group::from_id).ok_or_else(|| bad(c, format!("unknown group {v}")))).collect::<crate::Result<_>>()?;
+            let g: Vec<Group> = a
+                .iter()
+                .map(|v| v.as_str().and_then(Group::from_id).ok_or_else(|| bad(c, format!("unknown group {v}"))))
+                .collect::<crate::Result<_>>()?;
             if g.is_empty() { Err(bad(c, "name at least one group")) } else { Ok(g) }
         }
         Some(_) => Err(bad(c, "`groups` must be a list of group ids")),
@@ -212,7 +215,10 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                 if p.get("confirm").and_then(Value::as_bool) != Some(true) {
                     return Err(bad(
                         "learn.downloadModel",
-                        format!("this downloads {} MB from huggingface.co: ask the user first, then send {{\"confirm\": true}}", (lightcraft_learn::ENCODER_BYTES + 500_000) / 1_000_000),
+                        format!(
+                            "this downloads {} MB from huggingface.co: ask the user first, then send {{\"confirm\": true}}",
+                            (lightcraft_learn::ENCODER_BYTES + 500_000) / 1_000_000
+                        ),
                     ));
                 }
                 s.learn.start_download().map_err(|e| bad("learn.downloadModel", e))?;
@@ -256,12 +262,20 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"examples": profile.examples.len()}))
             }
         ),
-        cmd!("learn.train", "Train Learn My Edits Profile", [], None, "{profile, wait?} — trains the profile on its examples again", always, |s, p| {
-            const C: &str = "learn.train";
-            let (id, profile) = profile_param(s, C, p)?;
-            s.learn.start_training(&id, profile, Vec::new()).map_err(|e| bad(C, e))?;
-            finish(s, C, p, json!({"id": id}))
-        }),
+        cmd!(
+            "learn.train",
+            "Train Learn My Edits Profile",
+            [],
+            None,
+            "{profile, wait?} — trains the profile on its examples again",
+            always,
+            |s, p| {
+                const C: &str = "learn.train";
+                let (id, profile) = profile_param(s, C, p)?;
+                s.learn.start_training(&id, profile, Vec::new()).map_err(|e| bad(C, e))?;
+                finish(s, C, p, json!({"id": id}))
+            }
+        ),
         cmd!(
             "learn.apply",
             "Apply Learn My Edits Profile",
@@ -271,7 +285,9 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             has_selection,
             apply
         ),
-        cmd!("learn.cancel", "Stop Learn My Edits", [], None, "{} — stops the running job", always, |s, _| Ok(json!({"stopped": s.learn.cancel()}))),
+        cmd!("learn.cancel", "Stop Learn My Edits", [], None, "{} — stops the running job", always, |s, _| Ok(
+            json!({"stopped": s.learn.cancel()})
+        )),
         cmd!(
             query "learn.pump",
             "Learn My Edits Results",
@@ -284,27 +300,40 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                 Ok(json!({"applied": r.applied, "trained": r.trained, "message": r.message, "error": r.error}))
             }
         ),
-        cmd!("learn.update", "Edit Learn My Edits Profile", [], None, "{profile, name?, kind?, groups?} — renames it, or changes what it learns (it needs training again)", always, |s, p| {
-            const C: &str = "learn.update";
-            let (id, mut profile) = profile_param(s, C, p)?;
-            s.learn.check_idle(&id).map_err(|e| bad(C, e))?;
-            let fresh = Profile::new(str_param(p, "name").unwrap_or(&profile.name), str_param(p, "kind").unwrap_or(&profile.kind), profile.features.clone(), &profile.groups);
-            if fresh.name.is_empty() {
-                return Err(bad(C, "the name can't be empty"));
-            }
-            (profile.name, profile.kind) = (fresh.name, fresh.kind);
-            if p.get("groups").is_some_and(|g| !g.is_null()) {
-                let mut groups = groups_param(C, p)?;
-                groups.sort();
-                groups.dedup();
-                if groups != profile.groups {
-                    profile.groups = groups;
-                    (profile.model, profile.report) = (None, None);
+        cmd!(
+            "learn.update",
+            "Edit Learn My Edits Profile",
+            [],
+            None,
+            "{profile, name?, kind?, groups?} — renames it, or changes what it learns (it needs training again)",
+            always,
+            |s, p| {
+                const C: &str = "learn.update";
+                let (id, mut profile) = profile_param(s, C, p)?;
+                s.learn.check_idle(&id).map_err(|e| bad(C, e))?;
+                let fresh = Profile::new(
+                    str_param(p, "name").unwrap_or(&profile.name),
+                    str_param(p, "kind").unwrap_or(&profile.kind),
+                    profile.features.clone(),
+                    &profile.groups,
+                );
+                if fresh.name.is_empty() {
+                    return Err(bad(C, "the name can't be empty"));
                 }
+                (profile.name, profile.kind) = (fresh.name, fresh.kind);
+                if p.get("groups").is_some_and(|g| !g.is_null()) {
+                    let mut groups = groups_param(C, p)?;
+                    groups.sort();
+                    groups.dedup();
+                    if groups != profile.groups {
+                        profile.groups = groups;
+                        (profile.model, profile.report) = (None, None);
+                    }
+                }
+                s.learn.save(&id, &profile).map_err(|e| bad(C, e))?;
+                Ok(json!({"profile": profile_json(&id, &profile)}))
             }
-            s.learn.save(&id, &profile).map_err(|e| bad(C, e))?;
-            Ok(json!({"profile": profile_json(&id, &profile)}))
-        }),
+        ),
         cmd!("learn.delete", "Delete Learn My Edits Profile", [], None, "{profile} — deletes the profile's file", always, |s, p| {
             const C: &str = "learn.delete";
             let id = str_param(p, "profile").ok_or_else(|| bad(C, "missing `profile`"))?;
@@ -312,20 +341,36 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             s.learn.delete(id).map_err(|e| bad(C, e))?;
             Ok(json!({"deleted": id}))
         }),
-        cmd!("learn.export", "Export Learn My Edits Profile", [], None, "{profile, path} — writes the profile to one `.lclearn` file", always, |s, p| {
-            const C: &str = "learn.export";
-            let (_, profile) = profile_param(s, C, p)?;
-            let path = str_param(p, "path").filter(|x| !x.is_empty()).ok_or_else(|| bad(C, "missing `path`"))?;
-            profile.write(std::path::Path::new(path)).map_err(|e| bad(C, e.to_string()))?;
-            Ok(json!({"path": path}))
-        }),
-        cmd!("learn.import", "Import Learn My Edits Profile", [], None, "{path} — adds the profile in a `.lclearn` file (a copy, under a new id when one has its name)", always, |s, p| {
-            const C: &str = "learn.import";
-            let path = str_param(p, "path").filter(|x| !x.is_empty()).ok_or_else(|| bad(C, "missing `path`"))?;
-            let profile = Profile::read(std::path::Path::new(path)).map_err(|e| bad(C, e.to_string()))?;
-            let id = s.learn.new_id(&profile.name).map_err(|e| bad(C, e))?;
-            s.learn.save(&id, &profile).map_err(|e| bad(C, e))?;
-            Ok(json!({"profile": profile_json(&id, &profile)}))
-        }),
+        cmd!(
+            "learn.export",
+            "Export Learn My Edits Profile",
+            [],
+            None,
+            "{profile, path} — writes the profile to one `.lclearn` file",
+            always,
+            |s, p| {
+                const C: &str = "learn.export";
+                let (_, profile) = profile_param(s, C, p)?;
+                let path = str_param(p, "path").filter(|x| !x.is_empty()).ok_or_else(|| bad(C, "missing `path`"))?;
+                profile.write(std::path::Path::new(path)).map_err(|e| bad(C, e.to_string()))?;
+                Ok(json!({"path": path}))
+            }
+        ),
+        cmd!(
+            "learn.import",
+            "Import Learn My Edits Profile",
+            [],
+            None,
+            "{path} — adds the profile in a `.lclearn` file (a copy, under a new id when one has its name)",
+            always,
+            |s, p| {
+                const C: &str = "learn.import";
+                let path = str_param(p, "path").filter(|x| !x.is_empty()).ok_or_else(|| bad(C, "missing `path`"))?;
+                let profile = Profile::read(std::path::Path::new(path)).map_err(|e| bad(C, e.to_string()))?;
+                let id = s.learn.new_id(&profile.name).map_err(|e| bad(C, e))?;
+                s.learn.save(&id, &profile).map_err(|e| bad(C, e))?;
+                Ok(json!({"profile": profile_json(&id, &profile)}))
+            }
+        ),
     ]
 }

@@ -84,6 +84,7 @@ impl LightcraftApp {
         panels::denoise::pump_background(self, ctx, now);
         panels::faces::pump_background(self, ctx, now);
         model_setup::pump(self, ctx, now);
+        crate::learn_edits::pump(self, ctx);
         focus_scan::pump(self, ctx, now);
         // auto import: poll the watched folder every few seconds (on a worker thread: it may be on
         // a network share), list it when it changed, then import what's new like any import (also on a worker thread)
@@ -490,6 +491,7 @@ impl LightcraftApp {
             panels::notices::hide_background_pointer(&ctx);
         }
         panels::dialogs::show(self, &ctx, notice_blocks);
+        crate::learn_edits::show(self, &ctx);
         panels::command_palette::show(self, &ctx);
         crate::keybinds::overlay::show(self, &ctx);
         updates_ui::show(self, &ctx);

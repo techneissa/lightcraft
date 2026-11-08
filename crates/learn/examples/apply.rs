@@ -15,13 +15,18 @@ type Res<T> = Result<T, Box<dyn std::error::Error>>;
 fn main() -> Res<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let model = args.iter().position(|a| a == "--model").and_then(|i| args.get(i + 1)).map(PathBuf::from);
-    let (Some(profile), Some(photo)) = (args.first(), args.get(1)) else { return Err("usage: apply <profile.lclearn> <photo.jpg> [--model path]".into()) };
+    let (Some(profile), Some(photo)) = (args.first(), args.get(1)) else {
+        return Err("usage: apply <profile.lclearn> <photo.jpg> [--model path]".into());
+    };
     let profile = Profile::read(std::path::Path::new(profile))?;
     let encoder = match &profile.features.encoder {
         Some(_) => {
             let path = model
                 .or_else(|| std::env::var_os("LIGHTCRAFT_LEARN_MODEL").map(PathBuf::from))
-                .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/ArtCraft/models/dinov2-small/model.safetensors")))
+                .or_else(|| {
+                    std::env::var_os("HOME")
+                        .map(|h| PathBuf::from(h).join("Library/Application Support/ArtCraft/models/dinov2-small/model.safetensors"))
+                })
                 .ok_or("no model path")?;
             Some(Encoder::load(&path)?)
         }
@@ -39,7 +44,9 @@ fn main() -> Res<()> {
             println!("{:<24} {}", c.id, c.format(a));
         }
     }
-    for (name, pts) in [("curve.master", &out.curve.master), ("curve.red", &out.curve.red), ("curve.green", &out.curve.green), ("curve.blue", &out.curve.blue)] {
+    for (name, pts) in
+        [("curve.master", &out.curve.master), ("curve.red", &out.curve.red), ("curve.green", &out.curve.green), ("curve.blue", &out.curve.blue)]
+    {
         if !pts.is_empty() {
             let p: Vec<String> = pts.iter().map(|p| format!("({:.2}, {:.3})", p.x, p.y)).collect();
             println!("{name:<24} {}", p.join(" "));

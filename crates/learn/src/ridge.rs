@@ -112,8 +112,11 @@ pub fn fit(k: &Square, y: &[Vec<f64>]) -> Fit {
         // diag of (K + λI)⁻¹
         let g: Vec<f64> = (0..n).map(|i| (0..n).map(|kk| e.vectors.at(i, kk).powi(2) * inv.get(kk).copied().unwrap_or(0.0)).sum()).collect();
         for j in 0..t {
-            let alpha: Vec<f64> =
-                (0..n).map(|i| (0..n).map(|kk| e.vectors.at(i, kk) * inv.get(kk).copied().unwrap_or(0.0) * uty.get(kk * t + j).copied().unwrap_or(0.0)).sum()).collect();
+            let alpha: Vec<f64> = (0..n)
+                .map(|i| {
+                    (0..n).map(|kk| e.vectors.at(i, kk) * inv.get(kk).copied().unwrap_or(0.0) * uty.get(kk * t + j).copied().unwrap_or(0.0)).sum()
+                })
+                .collect();
             let mse = alpha.iter().zip(&g).map(|(a, gi)| (a / gi.max(1e-300)).powi(2)).sum::<f64>() / n.max(1) as f64;
             if mse.is_finite() && mse < best_mse[j] {
                 best_mse[j] = mse;

@@ -6,8 +6,8 @@
 //! saves the profile itself. An apply job's features come back to the session's thread ([`pump`]), which writes the
 //! sliders as one undo step with one History step per photo, named after the profile.
 
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread::JoinHandle;
 
 use lightcraft_catalog::{Op, PhotoId};
@@ -35,7 +35,11 @@ pub enum Outcome {
     /// A profile was trained and saved: `(profile id, what to tell the user)`.
     Trained(String, String),
     /// Features for an apply.
-    Applied { profile: Arc<Profile>, items: Vec<(PhotoId, Arc<Vec<f32>>)>, failed: Vec<String> },
+    Applied {
+        profile: Arc<Profile>,
+        items: Vec<(PhotoId, Arc<Vec<f32>>)>,
+        failed: Vec<String>,
+    },
     Failed(String),
     Cancelled,
 }
@@ -94,7 +98,13 @@ impl LearnEdits {
         lock(&self.inner.job).as_ref().map(|j| j.cancel.store(true, Ordering::Relaxed)).is_some()
     }
 
-    fn start(&self, profile: &str, name: &str, label: String, work: impl FnOnce(&LearnEdits, &crate::activity::TaskGuard, &AtomicBool) -> Outcome + Send + 'static) -> Result<(), String> {
+    fn start(
+        &self,
+        profile: &str,
+        name: &str,
+        label: String,
+        work: impl FnOnce(&LearnEdits, &crate::activity::TaskGuard, &AtomicBool) -> Outcome + Send + 'static,
+    ) -> Result<(), String> {
         let mut job = lock(&self.inner.job);
         if let Some(j) = job.as_ref() {
             return Err(format!("Learn My Edits is busy: {}", j.label));
@@ -114,7 +124,13 @@ impl LearnEdits {
     }
 
     /// The features of each item, in order (`Err` per photo that failed). Stops with `None` when cancelled.
-    fn features(&self, items: Vec<Item>, row: &crate::activity::TaskGuard, cancel: &AtomicBool, total: u64) -> Result<Option<Vec<(Item, Result<Arc<Vec<f32>>, String>)>>, String> {
+    fn features(
+        &self,
+        items: Vec<Item>,
+        row: &crate::activity::TaskGuard,
+        cancel: &AtomicBool,
+        total: u64,
+    ) -> Result<Option<Vec<(Item, Result<Arc<Vec<f32>>, String>)>>, String> {
         #[cfg(not(target_arch = "wasm32"))]
         let encoder = if items.iter().all(|i| i.cached.is_some()) { None } else { self.encoder()? };
         let mut out = Vec::with_capacity(items.len());
@@ -129,7 +145,7 @@ impl LearnEdits {
                     Ok(r) => {
                         let rgb: Vec<u8> = r.image.data.iter().flat_map(|p| [p[0], p[1], p[2]]).collect();
                         #[cfg(not(target_arch = "wasm32"))]
-                        let f = lightcraft_learn::photo_features(encoder.as_deref(), r.image.width as usize, r.image.height as usize, &rgb).map_err(|e| e.to_string());
+                        let f = lightcraft_learn::photo_features(encoder.as_deref(), r.image.width, r.image.height, &rgb).map_err(|e| e.to_string());
                         #[cfg(target_arch = "wasm32")]
                         let f: Result<Vec<f32>, String> = Err("the web build has no image model".into());
                         f.map(|f| {
@@ -168,18 +184,25 @@ impl LearnEdits {
             }
             row.progress(total - 1, total);
             row.detail("Training");
-            let result = profile.train(&|| cancel.load(Ordering::Relaxed), &mut |_, _| {}).map(|r| r.clone());
+            let result = profile.train(&|| cancel.load(Ordering::Relaxed), &mut |_, _| {}).cloned();
             if matches!(result, Err(lightcraft_learn::Error::Cancelled)) {
                 return Outcome::Cancelled;
             }
             if let Err(e) = this.save(&pid, &profile) {
                 return Outcome::Failed(e);
             }
-            let skipped = if failed.is_empty() { String::new() } else { format!(" ({} photos skipped: {})", failed.len(), failed.first().cloned().unwrap_or_default()) };
+            let skipped = if failed.is_empty() {
+                String::new()
+            } else {
+                format!(" ({} photos skipped: {})", failed.len(), failed.first().cloned().unwrap_or_default())
+            };
             match result {
                 Ok(r) => Outcome::Trained(
                     pid,
-                    format!("“{}” learned from {} photos: closer to your edits than the defaults on {} of them{skipped}", profile.name, r.examples, r.beats_defaults),
+                    format!(
+                        "“{}” learned from {} photos: closer to your edits than the defaults on {} of them{skipped}",
+                        profile.name, r.examples, r.beats_defaults
+                    ),
                 ),
                 Err(e) => Outcome::Failed(format!("“{}”: {e}{skipped}", profile.name)),
             }

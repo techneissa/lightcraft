@@ -222,8 +222,11 @@ impl LearnEdits {
     pub fn list(&self) -> Vec<Listed> {
         let Some(dir) = self.profiles_dir() else { return Vec::new() };
         let Ok(entries) = std::fs::read_dir(&dir) else { return Vec::new() };
-        let mut paths: Vec<PathBuf> =
-            entries.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x == lightcraft_learn::profile::EXTENSION)).take(MAX_PROFILES).collect();
+        let mut paths: Vec<PathBuf> = entries
+            .filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.extension().is_some_and(|x| x == lightcraft_learn::profile::EXTENSION))
+            .take(MAX_PROFILES)
+            .collect();
         paths.sort();
         let mut out: Vec<Listed> = paths
             .into_iter()

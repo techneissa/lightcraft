@@ -66,6 +66,7 @@ mod keywording;
 mod labels;
 mod launch_library;
 mod layout_image;
+mod learn_edits;
 mod lens_lookup;
 mod lens_offer;
 mod library_problem;

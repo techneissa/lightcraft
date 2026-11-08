@@ -16,9 +16,9 @@ use lightcraft_learn::{Example, Features, Group, Profile, encoder::Encoder, layo
 type Res<T> = Result<T, Box<dyn std::error::Error>>;
 
 pub fn model_path(arg: Option<&str>) -> Option<PathBuf> {
-    arg.map(PathBuf::from)
-        .or_else(|| std::env::var_os("LIGHTCRAFT_LEARN_MODEL").map(PathBuf::from))
-        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/ArtCraft/models/dinov2-small/model.safetensors")))
+    arg.map(PathBuf::from).or_else(|| std::env::var_os("LIGHTCRAFT_LEARN_MODEL").map(PathBuf::from)).or_else(|| {
+        std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/ArtCraft/models/dinov2-small/model.safetensors"))
+    })
 }
 
 fn load_rgb(path: &Path) -> Res<(usize, usize, Vec<u8>)> {
@@ -56,8 +56,16 @@ fn main() -> Res<()> {
         eprintln!("encoder loaded in {:.2} s (GPU: {})", t.elapsed().as_secs_f64(), e.on_gpu());
         Some(e)
     };
-    let mut profile = Profile::new(Path::new(out).file_stem().and_then(|s| s.to_str()).unwrap_or("Profile"), "", Features { encoder: encoder.as_ref().map(|_| lightcraft_learn::ENCODER_ID.to_string()), layout: layout(encoder.is_some()) }, &groups);
-    let mut jpgs: Vec<PathBuf> = std::fs::read_dir(folder)?.filter_map(|e| e.ok().map(|e| e.path())).filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("jpg"))).collect();
+    let mut profile = Profile::new(
+        Path::new(out).file_stem().and_then(|s| s.to_str()).unwrap_or("Profile"),
+        "",
+        Features { encoder: encoder.as_ref().map(|_| lightcraft_learn::ENCODER_ID.to_string()), layout: layout(encoder.is_some()) },
+        &groups,
+    );
+    let mut jpgs: Vec<PathBuf> = std::fs::read_dir(folder)?
+        .filter_map(|e| e.ok().map(|e| e.path()))
+        .filter(|p| p.extension().is_some_and(|x| x.eq_ignore_ascii_case("jpg")))
+        .collect();
     jpgs.sort();
     let defaults = DevelopSettings::default();
     let t = Instant::now();
@@ -87,14 +95,25 @@ fn main() -> Res<()> {
         report.ratio * 100.0
     );
     for g in &report.groups {
-        println!("{} — {} — error {:.0} % of the defaults', a fixed preset {:.0} %", g.group.label(), if g.kept { "kept" } else { "dropped" }, g.ratio * 100.0, g.preset_ratio * 100.0);
+        println!(
+            "{} — {} — error {:.0} % of the defaults', a fixed preset {:.0} %",
+            g.group.label(),
+            if g.kept { "kept" } else { "dropped" },
+            g.ratio * 100.0,
+            g.preset_ratio * 100.0
+        );
         for s in &g.sliders {
             println!("    {:<24} error {:>8.2}   defaults {:>8.2}", s.id, s.error, s.default_error);
         }
     }
     if let Some(m) = &profile.model {
         for g in &m.groups {
-            println!("{}: encoder weight {}, {}", g.group.label(), g.kernel.encoder_weight, if g.kernel.rbf.is_some() { "gaussian" } else { "linear" });
+            println!(
+                "{}: encoder weight {}, {}",
+                g.group.label(),
+                g.kernel.encoder_weight,
+                if g.kernel.rbf.is_some() { "gaussian" } else { "linear" }
+            );
         }
     }
     Ok(())

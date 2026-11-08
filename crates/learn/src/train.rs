@@ -143,7 +143,9 @@ fn edited(examples: &[&Example], groups: &[Group]) -> Vec<(Group, Vec<(usize, f6
                 .enumerate()
                 .filter(|(_, s)| s.group == *g)
                 .filter_map(|(i, s)| {
-                    let rms = (examples.iter().map(|e| (e.targets.get(i).copied().unwrap_or(0.0) as f64).powi(2)).sum::<f64>() / examples.len().max(1) as f64).sqrt();
+                    let rms = (examples.iter().map(|e| (e.targets.get(i).copied().unwrap_or(0.0) as f64).powi(2)).sum::<f64>()
+                        / examples.len().max(1) as f64)
+                        .sqrt();
                     (rms >= floor_of(s.id)).then_some((i, rms))
                 })
                 .collect();
@@ -244,7 +246,13 @@ pub fn check(examples: &[Example], layout: Layout, groups: &[Group]) -> Result<(
 }
 
 /// Train on `examples`, learning `groups`. `cancel` is asked between steps; `progress(done, total)` reports them.
-pub fn train(examples: &[Example], layout: Layout, groups: &[Group], cancel: &dyn Fn() -> bool, progress: &mut dyn FnMut(usize, usize)) -> Result<(Model, Report)> {
+pub fn train(
+    examples: &[Example],
+    layout: Layout,
+    groups: &[Group],
+    cancel: &dyn Fn() -> bool,
+    progress: &mut dyn FnMut(usize, usize),
+) -> Result<(Model, Report)> {
     check(examples, layout, groups)?;
     let all: Vec<&Example> = examples.iter().collect();
     let plan = edited(&all, groups);

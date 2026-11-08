@@ -21,9 +21,9 @@ mod linalg;
 pub mod profile;
 pub mod ridge;
 pub mod sliders;
-pub mod train;
 #[cfg(test)]
 mod tests;
+pub mod train;
 
 use lightcraft_develop::DevelopSettings;
 
@@ -98,6 +98,13 @@ pub fn photo_features(encoder: Option<&encoder::Encoder>, width: usize, height: 
         f.extend(e.features(width, height, rgb)?);
     }
     Ok(f)
+}
+
+/// An example from a before/after pair of files, for the Match Look fitter (#84) to feed: `before` is the
+/// unedited photo's features ([`photo_features`] of the before file), `fitted` the settings the fitter found to
+/// turn it into the after, relative to `defaults`. The profile learns the fitted sliders as if they were an edit.
+pub fn example_from_fit(photo: &str, before: Vec<f32>, fitted: &DevelopSettings, defaults: &DevelopSettings) -> Example {
+    Example { photo: photo.to_string(), features: before, targets: sliders::targets(fitted, defaults) }
 }
 
 /// `settings` with `profile`'s prediction for a photo with features `f` written in; only the sliders of the groups
