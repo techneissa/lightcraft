@@ -54,7 +54,8 @@ Nothing changes in a photo yet: every feature is an empty stub. What is there fo
   section per feature, empty: Skin, Blemishes, Wrinkles, Eyes, Teeth and Lips, Skin Tone, Face Reshape, Glasses
   Glare, Background, Stray Hair, and Portrait Presets (no feature module yet). Sections start closed; open ones are
   kept in the saved `openSections` as `portrait.<key>` (a key already there, so no new `ui.json` key; Edit's Solo
-  Mode leaves them alone). Opening the tab finds the photo's faces. Sliders in a feature's section change the picked
+  Mode leaves them alone). `ui.json` saves the open Portrait tab as Edit: a build without the tab cannot read
+  `right: "portrait"` and would drop the whole file. Opening the tab finds the photo's faces. Sliders in a feature's section change the picked
   face. Select People's parts stay in the Masking panel.
 - **Face picker on the loupe** (`portrait/overlay.rs`), while the Portrait tab is open: the people picker
   (`panels/detail/people_picker.rs`), a semi-opaque dark card at the image view's top-right corner, 12 points from
@@ -104,7 +105,7 @@ Mac only, like every fork feature; the web build compiles it but finds no faces.
   the faces first); `src/media/source.rs` (`info_or` keeps the faces); `SourceInfo` literals in
   `src/files/load.rs` and `src/smart.rs`.
 - `crates/ui-egui/src/panels.rs` (`mod portrait`); `src/state/view.rs` (`RightPanel::Portrait`, an edit tool);
-  `src/panels/right.rs` (the tab drawn); `src/panels/detail.rs` (`mod people_picker`; the face picker drawn over the
+  `src/state.rs` (`right` saved through `portrait::save_right`); `src/panels/right.rs` (the tab drawn); `src/panels/detail.rs` (`mod people_picker`; the face picker drawn over the
   view, after the navigator; the tab renders in Develop mode); `src/panels/strip.rs` (the icon, the second divider
   one place lower); `src/panels/tool_strip_order.rs` (`Tool::Portrait`; an old saved order gets it after Masking)
   and its `tests.rs` (the usual order with Portrait); `src/menus/ui_commands.rs` (`panel.portrait`,

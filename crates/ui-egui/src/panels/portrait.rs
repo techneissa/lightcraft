@@ -195,6 +195,13 @@ fn editing_line(ui: &mut egui::Ui, st: &lightcraft_engine::retouch_input::FacesS
     });
 }
 
+/// How `ui.json` saves the open tab (`UiState::right`): the Portrait tab as Edit. A build without this tab fails to
+/// read a `right` it does not know and drops the whole file, so the app reopens on Edit instead.
+pub(crate) fn save_right<S: serde::Serializer>(right: &RightPanel, s: S) -> Result<S::Ok, S::Error> {
+    let saved = if *right == RightPanel::Portrait { RightPanel::Edit } else { *right };
+    serde::Serialize::serialize(&saved, s)
+}
+
 /// The tab's UI commands: `portrait.section {section, open?}` opens the Portrait tab and opens or closes one of its
 /// sections (no `open`: toggles). Any other id: an error.
 pub(crate) fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, String> {
@@ -227,6 +234,16 @@ pub(crate) fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Va
 mod tests {
     use super::*;
     use lightcraft_develop::retouch::FEATURES;
+
+    /// An older build reads `ui.json`: the Portrait tab is saved as Edit, so the file stays readable there.
+    #[test]
+    fn the_portrait_tab_is_saved_as_edit() {
+        let ui = crate::state::UiState { right: RightPanel::Portrait, ..Default::default() };
+        let saved = serde_json::to_value(&ui).unwrap();
+        assert_eq!(saved["right"], "edit");
+        let ui = crate::state::UiState { right: RightPanel::Masking, ..Default::default() };
+        assert_eq!(serde_json::to_value(&ui).unwrap()["right"], "masking");
+    }
 
     #[test]
     fn every_feature_has_one_section_and_presets_come_last() {
