@@ -49,6 +49,7 @@ pub mod find_removals;
 #[cfg(not(target_arch = "wasm32"))]
 mod focus_scan;
 pub mod fonts;
+mod gpu_run;
 pub mod guard;
 pub mod hair_edges;
 pub mod import;

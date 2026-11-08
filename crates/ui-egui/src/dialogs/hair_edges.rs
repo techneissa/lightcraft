@@ -16,10 +16,6 @@ fn ask_id() -> egui::Id {
     egui::Id::unique("lc-hair-edges-ask")
 }
 
-fn pending_id() -> egui::Id {
-    egui::Id::unique("lc-hair-edges-pending")
-}
-
 /// The section, at the end of the Faces tab.
 pub fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let Ok(status) = app.session.execute("maskEdges.status", &json!({})) else { return };
@@ -29,15 +25,6 @@ pub fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let installed = status["installed"] == true;
     let download = &status["download"];
     let running = download["running"] == true;
-    // a download asked for from here has finished: use it for the kind it was asked for
-    if let Some(kind) = ui.ctx().data(|d| d.get_temp::<String>(pending_id()))
-        && !running
-    {
-        ui.ctx().data_mut(|d| d.remove::<String>(pending_id()));
-        if installed && let Err(e) = app.run("maskEdges.edge", json!({"kind": kind, "edge": "birefnet-matting"})) {
-            app.toast(ui.ctx(), e);
-        }
-    }
     ui.add_space(8.0);
     heading(ui, t, "Hair Edges");
     hint(ui, t, "BiRefNet Matting keeps flyaway hair in people and subject masks.");
@@ -112,11 +99,9 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context, status: &Value) {
     if let Some(download) = choice {
         ctx.data_mut(|d| d.remove::<String>(ask_id()));
         if download {
-            match app.run("maskEdges.download", json!({"confirm": true})) {
-                Ok(_) => ctx.data_mut(|d| {
-                    d.insert_temp(pending_id(), kind);
-                }),
-                Err(e) => app.toast(ctx, e),
+            // (the engine chooses it for `kind` once the download has finished, whether or not Settings is open)
+            if let Err(e) = app.run("maskEdges.download", json!({"confirm": true, "kind": kind})) {
+                app.toast(ctx, e);
             }
         }
     }

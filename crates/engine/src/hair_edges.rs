@@ -168,6 +168,10 @@ struct Inner {
     watcher: AtomicBool,
     #[cfg(feature = "sam")]
     download: crate::segment::download::Downloader,
+    /// The GPU failed once: run on the CPU from now on ([`on_devices`]).
+    gpu_refused: AtomicBool,
+    /// The kind whose BiRefNet Matting was asked for with the download: chosen when the download has finished.
+    pending: Mutex<Option<EdgeKind>>,
 }
 
 /// The hair edges of a session. Cheap to clone; every clone is the same.
@@ -201,6 +205,8 @@ impl HairEdges {
                 watcher: AtomicBool::new(false),
                 #[cfg(feature = "sam")]
                 download: Default::default(),
+                gpu_refused: AtomicBool::new(false),
+                pending: Mutex::new(None),
             }),
         }
     }
@@ -210,6 +216,7 @@ impl HairEdges {
         let saved = choice.as_deref().map(read_choice).unwrap_or_default();
         *lock(&self.inner.paths) = Paths { models, choice };
         *lock(&self.inner.choice) = saved;
+        self.inner.gpu_refused.store(false, Ordering::Relaxed);
         #[cfg(feature = "sam")]
         {
             *lock(&self.inner.loaded) = None;
@@ -233,7 +240,12 @@ impl HairEdges {
         if lock(&self.inner.runner).is_some() {
             return true;
         }
-        Self::AVAILABLE && self.model_dir().is_some_and(|d| d.join("model.safetensors").is_file())
+        // (a short or damaged download is not installed: Settings offers the download again)
+        Self::AVAILABLE
+            && self
+                .model_dir()
+                .and_then(|d| std::fs::metadata(d.join("model.safetensors")).ok())
+                .is_some_and(|m| m.is_file() && m.len() == MODEL_BYTES)
     }
 
     /// The edge chosen for `kind` (saved; Current until the user picks).
@@ -262,16 +274,51 @@ impl HairEdges {
                 "BiRefNet Matting is not available in this build".into()
             });
         }
-        let saved = {
-            let mut c = lock(&self.inner.choice);
-            match kind {
-                EdgeKind::People => c.people = edge,
-                EdgeKind::Subject => c.subject = edge,
+        let path = lock(&self.inner.paths).choice.clone();
+        // the new choice is written while the lock is held, and kept only once it is written: two calls at once
+        // never interleave, and a failed write leaves the choice as it was
+        let mut c = lock(&self.inner.choice);
+        let mut next = *c;
+        match kind {
+            EdgeKind::People => next.people = edge,
+            EdgeKind::Subject => next.subject = edge,
+        }
+        if let Some(path) = path {
+            write_choice(&path, next)?;
+        }
+        *c = next;
+        Ok(())
+    }
+
+    /// Choose BiRefNet Matting for `kind` once the download that is running finishes (`maskEdges.download {kind}`):
+    /// a small thread watches the download and applies the choice when it ends, whether or not Settings is open. A
+    /// download that fails or stops chooses nothing.
+    pub fn choose_when_downloaded(&self, kind: EdgeKind) {
+        *lock(&self.inner.pending) = Some(kind);
+        let weak = Arc::downgrade(&self.inner);
+        let spawned = std::thread::Builder::new().name("matting-choice".into()).spawn(move || {
+            loop {
+                std::thread::sleep(std::time::Duration::from_millis(250));
+                let Some(inner) = weak.upgrade() else { return };
+                let this = HairEdges { inner };
+                if !this.download_status().running {
+                    this.settle_download();
+                    return;
+                }
             }
-            *c
-        };
-        let Some(path) = lock(&self.inner.paths).choice.clone() else { return Ok(()) };
-        write_choice(&path, saved)
+        });
+        if let Err(e) = spawned {
+            log::warn!("hair edges: could not watch the download ({e}); choose BiRefNet Matting once it has finished");
+        }
+    }
+
+    /// Apply the choice waiting for the download, if it has finished: `Some(kind)` when it was chosen now.
+    pub fn settle_download(&self) -> Option<EdgeKind> {
+        if self.download_status().running {
+            return None;
+        }
+        let kind = lock(&self.inner.pending).take()?;
+        self.installed().then(|| self.set_edge(kind, Edge::Matting).ok()).flatten().map(|()| kind)
     }
 
     /// How many times a matte was made by the model (not the cache).
@@ -313,6 +360,8 @@ impl HairEdges {
         let row = self.inner.activity.start("matting", "Refining hair edges", Cancel::Flag(cancel.clone()));
         row.detail("BiRefNet Matting");
         let _one_at_a_time = lock(&self.inner.one_run);
+        // (one model on the GPU at a time, people parsing and LaMa included: `crate::gpu_run`)
+        let _gpu = crate::gpu_run::turn();
         // (another caller may have made it while this one waited)
         if let Some(m) = self.remembered(key) {
             return Ok(m);
@@ -359,6 +408,42 @@ impl HairEdges {
 
 #[cfg(feature = "sam")]
 mod model;
+
+/// How one attempt to make a matte on one device ended.
+#[cfg_attr(not(feature = "sam"), allow(dead_code))]
+pub(crate) enum Attempt {
+    Done(Matte),
+    /// The GPU could not load or run the model: try the CPU.
+    Gpu(String),
+    /// An error that another device would not fix (a damaged file, cancelled).
+    Fail(String),
+}
+
+/// Run `attempt` on the GPU, then on the CPU when the GPU fails or panics (`cpu` says which). A panic is caught for
+/// each device on its own, so a Metal kernel panic still reaches the CPU attempt; a panic on the CPU is the final
+/// error. Once the GPU has failed, `gpu_refused` is set and later calls go straight to the CPU (the 885 MB model is
+/// not loaded onto the GPU again for every photo).
+#[cfg_attr(not(feature = "sam"), allow(dead_code))]
+pub(crate) fn on_devices(gpu_refused: &AtomicBool, mut attempt: impl FnMut(bool) -> Attempt) -> Result<Matte, String> {
+    let devices: &[bool] = if gpu_refused.load(Ordering::Relaxed) { &[true] } else { &[false, true] };
+    for &cpu in devices {
+        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| attempt(cpu))) {
+            Ok(Attempt::Done(m)) => return Ok(m),
+            Ok(Attempt::Fail(e)) => return Err(e),
+            Ok(Attempt::Gpu(e)) if !cpu => {
+                log::warn!("BiRefNet Matting failed on the GPU ({e}); using the CPU from now on");
+                gpu_refused.store(true, Ordering::Relaxed);
+            }
+            Ok(Attempt::Gpu(e)) => return Err(e),
+            Err(_) if !cpu => {
+                log::warn!("BiRefNet Matting stopped unexpectedly on the GPU; using the CPU from now on");
+                gpu_refused.store(true, Ordering::Relaxed);
+            }
+            Err(_) => return Err("BiRefNet Matting stopped unexpectedly".into()),
+        }
+    }
+    Err("BiRefNet Matting could not run on this Mac".into())
+}
 
 /// A Subject selection `base` with its edge redrawn by the matte `m`: `base` decides away from its edge, the matte
 /// within a band around it (`lightcraft_birefnet::combine`). Marked `<base model>+matting`; `None` when it then holds

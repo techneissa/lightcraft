@@ -428,6 +428,8 @@ impl PeopleParsing {
 
     fn run(&self, set: ModelSet, models: &Path, img: &RgbImage, hints: &[FaceHint], cancelled: &dyn Fn() -> bool) -> Result<Parsing, String> {
         let _one_at_a_time = lock(&self.inner.one_run);
+        // (one model on the GPU at a time, hair edges and LaMa included: `crate::gpu_run`)
+        let _gpu = crate::gpu_run::turn();
         if cancelled() {
             return Err("cancelled".into());
         }

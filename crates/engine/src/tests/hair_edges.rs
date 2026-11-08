@@ -208,9 +208,14 @@ fn a_missing_or_damaged_model_is_a_message_not_a_panic() {
     std::fs::create_dir_all(&model).unwrap();
     let file = model.join("model.safetensors");
     let right_size_zeros = |f: &Path| std::fs::File::create(f).and_then(|f| f.set_len(crate::hair_edges::MODEL_BYTES)).unwrap();
+    // a short file (a download cut off) is not installed: Settings offers the download again
+    for len in [0, 22, crate::hair_edges::MODEL_BYTES - 1, crate::hair_edges::MODEL_BYTES + 1] {
+        std::fs::File::create(&file).and_then(|f| f.set_len(len)).unwrap();
+        assert!(!h.installed(), "{len} bytes");
+        assert!(h.set_edge(EdgeKind::People, Edge::Matting).is_err(), "{len} bytes");
+    }
     for (name, write) in [
-        ("garbage", Box::new(|f: &Path| std::fs::write(f, b"definitely not a model").unwrap()) as Box<dyn Fn(&Path)>),
-        ("zeros", Box::new(right_size_zeros)),
+        ("zeros", Box::new(right_size_zeros) as Box<dyn Fn(&Path)>),
         (
             "huge-header",
             Box::new(|f: &Path| {
@@ -348,4 +353,163 @@ fn the_real_model_mattes_a_portrait() {
     let again = h.matte(&rgb, w, hh, &flag).unwrap();
     assert!(Arc::ptr_eq(&m, &again));
     assert_eq!(h.runs(), 1);
+}
+
+/// One model on the GPU at a time: a matte asked for while another photo's parse runs waits for it (it overlapped the
+/// parse before, and a Subject matte overlapped parses and LaMa fills).
+#[test]
+fn a_matte_never_runs_beside_a_parse() {
+    use std::sync::atomic::Ordering;
+    let (h, dir, _) = edges("gpu-turn");
+    let busy = Arc::new(AtomicBool::new(false));
+    let gate = Arc::new(AtomicBool::new(false));
+    let overlap = Arc::new(AtomicBool::new(false));
+    let p = PeopleParsing::new(Activity::default());
+    p.set_paths(Some(dir.join("models")), Some(dir.join("cache")), None);
+    let (b, g) = (busy.clone(), gate.clone());
+    p.set_runner(Some(Arc::new(move |set, _, _, _, _| {
+        b.store(true, Ordering::SeqCst);
+        while !g.load(Ordering::SeqCst) {
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        }
+        b.store(false, Ordering::SeqCst);
+        Ok(person_parse(set))
+    })));
+    let (b, o) = (busy.clone(), overlap.clone());
+    h.set_runner(Some(Arc::new(move |_, _, _, _| {
+        if b.load(Ordering::SeqCst) {
+            o.store(true, Ordering::SeqCst);
+        }
+        Ok(portrait_matte())
+    })));
+    assert!(matches!(p.parse(picture(), Vec::new(), false), Outcome::Running));
+    let t = std::time::Instant::now();
+    while !busy.load(Ordering::SeqCst) {
+        assert!(t.elapsed() < std::time::Duration::from_secs(30), "the parse never started");
+        std::thread::sleep(std::time::Duration::from_millis(2));
+    }
+    let matting = {
+        let h = h.clone();
+        std::thread::spawn(move || {
+            let img = RgbImage::new(8, 8, vec![7; 192]).unwrap();
+            h.matte(&img.data, 8, 8, &Arc::new(AtomicBool::new(false))).map(|_| ())
+        })
+    };
+    // (the order only: give the matte time to start beside the parse, as it did before)
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    gate.store(true, Ordering::SeqCst);
+    matting.join().unwrap().unwrap();
+    assert!(!overlap.load(Ordering::SeqCst), "the matte ran while the parse held the GPU");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A panic on the GPU still reaches the CPU attempt; a panic on the CPU is the final error; after the GPU failed once,
+/// the next photo goes straight to the CPU.
+#[test]
+#[allow(clippy::panic)]
+fn a_gpu_panic_falls_back_to_the_cpu() {
+    use crate::hair_edges::{Attempt, on_devices};
+    let refused = AtomicBool::new(false);
+    let mut tried = Vec::new();
+    let m = on_devices(&refused, |cpu| {
+        tried.push(cpu);
+        if !cpu {
+            panic!("a Metal kernel panic");
+        }
+        Attempt::Done(Matte { side: 1, logits: vec![1.0] })
+    });
+    assert_eq!(m.unwrap().side, 1);
+    assert_eq!(tried, [false, true]);
+    tried.clear();
+    let e = on_devices(&refused, |cpu| {
+        tried.push(cpu);
+        panic!("a CPU panic")
+    });
+    assert!(e.unwrap_err().contains("unexpectedly"));
+    assert_eq!(tried, [true], "the GPU that failed is not tried again");
+    // a GPU error (not a panic) also falls back, and a damaged file is not retried on the CPU
+    let fresh = AtomicBool::new(false);
+    assert!(
+        on_devices(&fresh, |cpu| if cpu { Attempt::Done(Matte { side: 1, logits: vec![0.0] }) } else { Attempt::Gpu("out of memory".into()) })
+            .is_ok()
+    );
+    let fresh = AtomicBool::new(false);
+    let mut n = 0;
+    assert!(
+        on_devices(&fresh, |_| {
+            n += 1;
+            Attempt::Fail("damaged".into())
+        })
+        .is_err()
+    );
+    assert_eq!(n, 1);
+}
+
+/// The choice is kept only once it is written; two callers at once never lose one another's kind.
+#[test]
+fn the_choice_is_written_before_it_counts() {
+    let (h, dir, _) = edges("choice");
+    h.set_runner(Some(fake_matte()));
+    // a choice file that cannot be written (a folder in its place): an error, and the choice as it was
+    let blocked = dir.join("blocked.json");
+    std::fs::create_dir_all(blocked.with_extension("json.part")).unwrap();
+    h.set_paths(Some(dir.join("models")), Some(blocked));
+    assert!(h.set_edge(EdgeKind::People, Edge::Matting).is_err());
+    assert_eq!(h.chosen(EdgeKind::People), Edge::Current, "not chosen when it could not be kept");
+    // two threads, each flipping its own kind
+    h.set_paths(Some(dir.join("models")), Some(dir.join("mask-edges.json")));
+    let threads: Vec<_> = EdgeKind::ALL
+        .into_iter()
+        .map(|kind| {
+            let h = h.clone();
+            std::thread::spawn(move || {
+                for i in 0..50 {
+                    h.set_edge(kind, if i % 2 == 0 { Edge::Matting } else { Edge::Current }).unwrap();
+                }
+                h.set_edge(kind, Edge::Matting).unwrap();
+            })
+        })
+        .collect();
+    for t in threads {
+        t.join().unwrap();
+    }
+    let again = HairEdges::new(Activity::default());
+    again.set_paths(None, Some(dir.join("mask-edges.json")));
+    for k in EdgeKind::ALL {
+        assert_eq!(h.chosen(k), Edge::Matting, "{k:?}");
+        assert_eq!(again.chosen(k), Edge::Matting, "{k:?} in the file");
+    }
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A download asked for with a kind chooses BiRefNet Matting for it when it ends, with no Settings window drawn.
+#[test]
+fn the_kind_asked_for_is_chosen_when_the_download_ends() {
+    let (h, dir, _) = edges("pending");
+    h.set_runner(Some(fake_matte()));
+    // (no download runs: it has "finished")
+    h.choose_when_downloaded(EdgeKind::Subject);
+    let t = std::time::Instant::now();
+    while h.chosen(EdgeKind::Subject) != Edge::Matting {
+        assert!(t.elapsed() < std::time::Duration::from_secs(30), "never chosen");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    assert_eq!(h.chosen(EdgeKind::People), Edge::Current);
+    // not installed when it ends (a failed download): nothing is chosen
+    let (h, dir2, _) = edges("pending-failed");
+    h.choose_when_downloaded(EdgeKind::People);
+    assert_eq!(h.settle_download(), None);
+    assert_eq!(h.chosen(EdgeKind::People), Edge::Current);
+    let _ = std::fs::remove_dir_all(dir);
+    let _ = std::fs::remove_dir_all(dir2);
+}
+
+/// A part's model id comes from the document: a hostile one with many suffixes is read once, never recursively.
+#[cfg(feature = "sam")]
+#[test]
+fn a_hostile_model_id_is_read_once() {
+    let id = format!("birefnet{}", "+matting".repeat(100_000));
+    let label = crate::segment::birefnet::label_of(Some(&id));
+    assert!(label.len() < 120, "{}", label.len());
+    assert!(label.ends_with("BiRefNet Matting Edges"));
 }

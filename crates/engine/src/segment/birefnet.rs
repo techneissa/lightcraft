@@ -61,11 +61,15 @@ impl SelectionModel {
 
 /// What a stored selection's model id reads as: `None` is SAM 3; an id this build does not know is shown as it is.
 pub fn label_of(model: Option<&str>) -> String {
+    // (an id from a document: one level only, and an unknown one shown shortened)
+    let plain = |id: &str| SelectionModel::parse(id).map_or_else(|| id.chars().take(60).collect(), |m| m.label().to_string());
     match model {
         None => SelectionModel::Sam3.label().to_string(),
         // (an edge redrawn by BiRefNet-matting: `fork/hair-edges.md`)
-        Some(id) if id.ends_with("+matting") => format!("{}, BiRefNet Matting Edges", label_of(id.strip_suffix("+matting").filter(|b| *b != "sam3"))),
-        Some(id) => SelectionModel::parse(id).map_or_else(|| id.to_string(), |m| m.label().to_string()),
+        Some(id) => match id.strip_suffix("+matting") {
+            Some(base) => format!("{}, BiRefNet Matting Edges", plain(base)),
+            None => plain(id),
+        },
     }
 }
 
@@ -305,6 +309,22 @@ impl crate::Session {
     }
 }
 
+impl Segmenter {
+    /// Stop the Subject and Background requests in flight (their edge setting changed: `fork/hair-edges.md`), so
+    /// none of them adds a part with the old edge. The number stopped.
+    pub fn cancel_subject_jobs(&mut self) -> usize {
+        let before = self.in_flight.len();
+        self.in_flight.retain(|job| {
+            let subject = matches!(&job.tag, super::Tag::NewConcept { kind, .. } if kind == "subject" || kind == "background");
+            if subject {
+                job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            !subject
+        });
+        before - self.in_flight.len()
+    }
+}
+
 #[cfg(all(test, feature = "sam"))]
 impl Segmenter {
     /// The tags of the requests in flight (tests answer them by hand).
@@ -366,5 +386,42 @@ mod tests {
         assert_eq!(s.selection(), SelectionModel::Sam3);
         assert_eq!(s.concept_model("sky"), SelectionModel::Sam3);
         assert!(!s.can_select("subject") && !s.can_select("sky"));
+    }
+
+    /// Changing the Subject edge stops the Subject and Background requests in flight (one queued with BiRefNet
+    /// Matting still added a matted part after the edge was set back to Current); Sky and clicks go on.
+    #[test]
+    fn subject_jobs_stop_and_others_go_on() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let activity = crate::activity::Activity::default();
+        let mut s = Segmenter::default();
+        let photo = lightcraft_catalog::PhotoId(1);
+        let concept = |kind: &str| super::super::Tag::NewConcept {
+            photo,
+            mask: None,
+            op: "add".into(),
+            name: None,
+            kind: kind.into(),
+            invert: kind == "background",
+            model: SelectionModel::BiRefNet,
+        };
+        let mut flags = Vec::new();
+        for (i, tag) in [concept("subject"), concept("background"), concept("sky"), super::super::Tag::Prepare].into_iter().enumerate() {
+            let cancel = Arc::new(AtomicBool::new(false));
+            flags.push(cancel.clone());
+            s.in_flight.push(super::super::InFlight {
+                id: i as u64 + 1,
+                tag,
+                cancel,
+                detail: false,
+                _task: activity.start("segment", "x", crate::activity::Cancel::No),
+            });
+        }
+        assert_eq!(s.cancel_subject_jobs(), 2);
+        assert_eq!(s.in_flight.len(), 2, "Sky and the analysis go on");
+        let stopped: Vec<bool> = flags.iter().map(|f| f.load(Ordering::Relaxed)).collect();
+        assert_eq!(stopped, [true, true, false, false]);
+        assert_eq!(s.cancel_subject_jobs(), 0);
     }
 }

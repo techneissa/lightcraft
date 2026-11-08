@@ -6,7 +6,7 @@ use std::sync::{Arc, Weak};
 
 use lightcraft_birefnet::{BiRefNet, Variant};
 
-use super::{HairEdges, Inner, KEEP_LOADED, Loaded, MODEL_BYTES, Matte, lock};
+use super::{Attempt, HairEdges, Inner, KEEP_LOADED, Loaded, MODEL_BYTES, Matte, lock, on_devices};
 use crate::segment::DownloadStatus;
 
 /// What the user reads when the file is there but cannot be used.
@@ -24,11 +24,11 @@ impl HairEdges {
         if len != MODEL_BYTES {
             return Err(damaged(format!("the BiRefNet Matting model file is {len} bytes, not {MODEL_BYTES}")));
         }
-        let mut slot = lock(&self.inner.loaded);
-        for cpu in [false, true] {
+        let attempt = |cpu: bool| -> Attempt {
             if stop() {
-                return Err("cancelled".into());
+                return Attempt::Fail("cancelled".into());
             }
+            let mut slot = lock(&self.inner.loaded);
             if slot.as_ref().is_none_or(|l| l.model.device().is_cpu() != cpu) {
                 *slot = None;
                 let t = web_time::Instant::now();
@@ -36,34 +36,31 @@ impl HairEdges {
                 let model = match model {
                     Ok(m) => m,
                     // (the GPU could not take it: the CPU next)
-                    Err(lightcraft_birefnet::Error::Candle(e)) if !cpu => {
-                        log::warn!("BiRefNet Matting did not load on the GPU ({e}); trying the CPU");
-                        continue;
-                    }
-                    Err(e) => return Err(damaged(e)),
+                    Err(lightcraft_birefnet::Error::Candle(e)) if !cpu => return Attempt::Gpu(e.to_string()),
+                    Err(e) => return Attempt::Fail(damaged(e)),
                 };
                 log::info!("BiRefNet Matting loaded in {:?} ({})", t.elapsed(), if model.device().is_cpu() { "CPU" } else { "GPU" });
                 *slot = Some(Loaded { model, last_used: std::time::Instant::now() });
             }
-            let Some(l) = slot.as_mut() else { continue };
+            let Some(l) = slot.as_mut() else { return Attempt::Fail("the BiRefNet Matting model did not load".into()) };
             l.last_used = std::time::Instant::now();
             l.model.set_cancel(Some(cancel.clone()));
-            match l.model.matte(rgb, w, h) {
-                Ok(m) => {
-                    l.model.set_cancel(None);
-                    drop(slot);
-                    self.watch();
-                    return Ok(Matte { side: m.side, logits: m.logits });
-                }
-                Err(lightcraft_birefnet::Error::Cancelled) => return Err("cancelled".into()),
-                Err(lightcraft_birefnet::Error::Candle(e)) if !cpu => {
-                    log::warn!("BiRefNet Matting failed on the GPU ({e}); trying the CPU");
-                    *slot = None;
-                }
-                Err(e) => return Err(damaged(e)),
+            let out = l.model.matte(rgb, w, h);
+            l.model.set_cancel(None);
+            match out {
+                Ok(m) => Attempt::Done(Matte { side: m.side, logits: m.logits }),
+                Err(lightcraft_birefnet::Error::Cancelled) => Attempt::Fail("cancelled".into()),
+                Err(lightcraft_birefnet::Error::Candle(e)) if !cpu => Attempt::Gpu(e.to_string()),
+                Err(e) => Attempt::Fail(damaged(e)),
             }
+        };
+        let out = on_devices(&self.inner.gpu_refused, attempt);
+        match &out {
+            // (a model that failed, or panicked mid-run, is not kept)
+            Err(_) => *lock(&self.inner.loaded) = None,
+            Ok(_) => self.watch(),
         }
-        Err("BiRefNet Matting could not run on this Mac".into())
+        out
     }
 
     /// Drop the model once it has been idle for [`KEEP_LOADED`] (one watcher thread at a time).

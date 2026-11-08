@@ -112,7 +112,9 @@ pub(super) fn run(state: &mut State, shared: &Shared, job: &mut Job, placement: 
             text_logits(m, enc, req.text, CONCEPT_THRESHOLD, req.main)?.map(|l| SegMask::from_logits(lightcraft_segment::MASK_SIDE, &l))
         }
     };
-    let (Some(edges), Some(base)) = (req.matting, base.as_ref()) else { return Ok(base) };
+    // (the edge read now, not when the job was queued: set back to Current meanwhile, the part keeps its own edge)
+    let matting = req.matting.filter(|e| e.edge(crate::hair_edges::EdgeKind::Subject) == crate::hair_edges::Edge::Matting);
+    let (Some(edges), Some(base)) = (matting, base.as_ref()) else { return Ok(base) };
     job.render = saved;
     let input = render(job)?;
     let m = edges.matte(&input.rgb, input.w, input.h, &job.cancel).map_err(|e| match job.cancel.load(Ordering::Relaxed) {

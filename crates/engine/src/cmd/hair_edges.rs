@@ -43,14 +43,20 @@ fn set_edge(s: &mut Session, p: &Value) -> Result<Value> {
     let kind = p.get("kind").and_then(Value::as_str).ok_or_else(|| bad(c, "`kind` must be people or subject"))?;
     let kind = EdgeKind::parse(kind)
         .ok_or_else(|| bad(c, format!("unknown kind `{}` (use people or subject)", kind.chars().take(40).collect::<String>())))?;
+    let mut cancelled = 0;
     if let Some(v) = p.get("edge").filter(|v| !v.is_null()) {
         let id = v.as_str().ok_or_else(|| bad(c, "`edge` must be current or birefnet-matting"))?;
         let edge = Edge::parse(id)
             .ok_or_else(|| bad(c, format!("unknown edge `{}` (use current or birefnet-matting)", id.chars().take(40).collect::<String>())))?;
+        let before = s.hair_edges.edge(kind);
         s.hair_edges.set_edge(kind, edge).map_err(|e| bad(c, e))?;
+        // Subject and Background requests still running were made for the old edge: stop them
+        if kind == EdgeKind::Subject && s.hair_edges.edge(kind) != before {
+            cancelled = s.segmenter.cancel_subject_jobs();
+        }
     }
     let h = &s.hair_edges;
-    Ok(json!({"kind": kind.id(), "chosen": h.chosen(kind).id(), "edge": h.edge(kind).id(), "kinds": kinds(h)}))
+    Ok(json!({"kind": kind.id(), "chosen": h.chosen(kind).id(), "edge": h.edge(kind).id(), "kinds": kinds(h), "cancelled": cancelled}))
 }
 
 fn download(s: &mut Session, p: &Value) -> Result<Value> {
@@ -64,7 +70,20 @@ fn download(s: &mut Session, p: &Value) -> Result<Value> {
             ),
         ));
     }
+    // (`kind`: choose BiRefNet Matting for it once the download has finished)
+    let kind = match p.get("kind").filter(|v| !v.is_null()) {
+        None => None,
+        Some(v) => Some(v.as_str().and_then(EdgeKind::parse).ok_or_else(|| bad(c, "`kind` must be people or subject"))?),
+    };
     let started = s.hair_edges.start_download(&s.activity).map_err(|e| bad(c, e))?;
+    if let Some(kind) = kind {
+        match started {
+            true => s.hair_edges.choose_when_downloaded(kind),
+            // (already installed: choose it now)
+            false if s.hair_edges.installed() => s.hair_edges.set_edge(kind, Edge::Matting).map_err(|e| bad(c, e))?,
+            false => {}
+        }
+    }
     Ok(json!({"started": started, "installed": s.hair_edges.installed(), "downloading": s.hair_edges.download_status().running}))
 }
 
@@ -84,7 +103,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Mask Edge",
             [],
             None,
-            "{kind: people|subject, edge?: current|birefnet-matting} — read, or set (and save) the edge of new masks of a kind: people is Entire Person and Background from people parsing, subject is Subject and the Background made from it. Current is the default; BiRefNet Matting keeps flyaway hair and needs the model (maskEdges.download). `edge` in the answer is what masks get now (Current while the chosen model is missing) → {kind, chosen, edge, kinds}",
+            "{kind: people|subject, edge?: current|birefnet-matting} — read, or set (and save) the edge of new masks of a kind: people is Entire Person and Background from people parsing, subject is Subject and the Background made from it. Current is the default; BiRefNet Matting keeps flyaway hair and needs the model (maskEdges.download). `edge` in the answer is what masks get now (Current while the chosen model is missing). Changing the Subject edge stops the Subject and Background requests still running (`cancelled`: how many) → {kind, chosen, edge, kinds, cancelled}",
             always,
             set_edge
         ),
@@ -93,7 +112,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Download BiRefNet Matting Model",
             [],
             None,
-            "{confirm: true} — download BiRefNet Matting (about 885 MB, MIT licence) in the background; only after the user agreed to it. Size and SHA-256 are checked; watch maskEdges.status; maskEdges.cancel stops it (it resumes later) → {started, installed, downloading}",
+            "{confirm: true, kind?: people|subject} — download BiRefNet Matting (about 885 MB, MIT licence) in the background; only after the user agreed to it; with `kind`, BiRefNet Matting is chosen for that kind once the download has finished. Size and SHA-256 are checked; watch maskEdges.status; maskEdges.cancel stops it (it resumes later) → {started, installed, downloading}",
             always,
             download
         ),
