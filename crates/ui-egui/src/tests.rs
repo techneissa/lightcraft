@@ -108,6 +108,7 @@ mod rating;
 mod recheck;
 mod remove_compact;
 mod remove_fill;
+mod remove_lag;
 mod rename_person;
 mod renaming;
 mod rough_mask;

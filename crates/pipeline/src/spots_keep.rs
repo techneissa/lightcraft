@@ -296,7 +296,12 @@ fn layer(
         }
     };
     let hit = kept.filter(|k| k.key == key && (k.post.width, k.post.height) == (img.width, img.height));
-    match hit.map(|k| (k, redo(&k.drawn, &new))).filter(|(k, r)| k.has_patches(r)) {
+    let plan = hit.map(|k| (k, redo(&k.drawn, &new))).filter(|(k, r)| k.has_patches(r));
+    if crate::profiling() {
+        let why = plan.as_ref().map_or_else(|| "drew all".to_string(), |(_, r)| format!("drew {} (took off {})", r.drawn(), r.undo.len()));
+        eprintln!("  spots: {} of {} in {}×{}: {why}", new.iter().flatten().count(), new.len(), img.width, img.height);
+    }
+    match plan {
         Some((k, r)) => {
             *img = (*k.post).clone();
             // (a spot not drawn again keeps its patches: it is the old one, reading the same pixels)

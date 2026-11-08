@@ -109,10 +109,15 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
     } else {
         c.look ^ hidden.iter().enumerate().fold(0u64, |b, (i, h)| b | ((*h as u64) << i)).wrapping_mul(0xd6e8_feb8_6659_fd93)
     };
-    let look = settings ^ overlay.key().rotate_left(17) ^ proof_key.rotate_left(41);
-    let view = crate::region::RegionView { photo: c.id, before: v.before, key: job.key, full: (fw, fh), window: win, settings: look };
-    // windows of other photos, looks and zooms of this side can't be drawn any more
-    app.region_tiles.retain(|(before, _), t| *before != v.before || t.is_current(c.id, (fw, fh), look, c.interacting));
+    let shown_as = overlay.key().rotate_left(17) ^ proof_key.rotate_left(41);
+    let look = settings ^ shown_as;
+    let view = crate::region::RegionView { photo: c.id, before: v.before, key: job.key, full: (fw, fh), window: win, settings: look, view: shown_as };
+    // windows of other photos, looks and zooms of this side can't be drawn any more; the one on screen stays while the
+    // window of a new edit renders
+    let on_screen = app.renderer.textures.get(&v.slot).map(|t| t.key);
+    app.region_tiles.retain(|(before, key), t| {
+        *before != v.before || t.is_current(c.id, (fw, fh), look, c.interacting) || (Some(*key) == on_screen && t.stands_in(c.id, (fw, fh), shown_as))
+    });
     app.region_tiles.insert((v.before, job.key), view);
     if !v.before {
         super::request_planes(app, (Slot::RegionAlpha, Slot::Region), &job, c.tint);
@@ -125,7 +130,11 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
 /// drag, an earlier draft of it).
 pub(super) fn draw_window(p: &egui::Painter, app: &LightcraftApp, c: &WindowCtx, v: &WindowView, wanted: &crate::region::RegionView) {
     let Some(tex) = app.renderer.textures.get(&v.slot).filter(|t| t.photo == c.id) else { return };
-    let Some(tile) = app.region_tiles.get(&(v.before, tex.key)).filter(|t| t.is_current(c.id, wanted.full, wanted.settings, c.interacting)) else {
+    let pending = app.renderer.is_pending(v.slot);
+    let fits = |t: &&crate::region::RegionView| {
+        t.is_current(c.id, wanted.full, wanted.settings, c.interacting) || (pending && t.stands_in(c.id, wanted.full, wanted.view))
+    };
+    let Some(tile) = app.region_tiles.get(&(v.before, tex.key)).filter(fits) else {
         return;
     };
     let (fw, fh) = (tile.full.0 as f32, tile.full.1 as f32);

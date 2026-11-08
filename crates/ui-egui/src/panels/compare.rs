@@ -431,7 +431,7 @@ fn request_window(app: &mut LightcraftApp, v: &TileView) -> Option<crate::region
     let job = app.renderer.job_for(Slot::CompareRegion(v.pane), job);
     // (the photo's settings, remembered: the job renders exactly them)
     let look = app.session.settings_hash(v.id).unwrap_or_default();
-    let view = crate::region::RegionView { photo: v.id, before: false, key: job.key, full: (fw, fh), window: win, settings: look };
+    let view = crate::region::RegionView { photo: v.id, before: false, key: job.key, full: (fw, fh), window: win, settings: look, view: 0 };
     // windows of other photos, looks and zooms of this pane can't be drawn any more
     app.compare_tiles.retain(|(p, _), t| *p != v.pane || t.is_current(v.id, (fw, fh), look, false));
     app.compare_tiles.insert((v.pane, job.key), view);

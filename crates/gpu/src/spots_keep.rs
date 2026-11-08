@@ -31,6 +31,15 @@ pub(crate) fn spots(
     let mut patches: Vec<DevicePatch> = vec![None; new.len()];
     let plan_from =
         kept.filter(|k| k.key == key && k.post.len == w * h * 3).map(|k| (k, keep::redo(&k.drawn, &new))).filter(|(k, r)| k.has_patches(r));
+    if crate::render::profiling() {
+        let why = match (kept, &plan_from) {
+            (_, Some((_, r))) => format!("drew {} (took off {})", r.drawn(), r.undo.len()),
+            (None, _) => "nothing kept: drew all".to_string(),
+            (Some(k), None) if k.key != key => "image before the spots changed: drew all".to_string(),
+            (Some(_), None) => "patches missing: drew all".to_string(),
+        };
+        eprintln!("  gpu spots: {} of {} in {w}×{h}: {why}", new.iter().flatten().count(), new.len());
+    }
     let img = match plan_from {
         Some((k, r)) => {
             let img = cx.copy(&k.post);

@@ -320,6 +320,10 @@ pub struct Renderer {
     pub(crate) brush_settings: Option<crate::panels::detail::brush_preview::Memo>,
     /// Per-view intermediate results (loupe and "before"), so slider drags redo only what changed.
     stages: HashMap<Slot, Arc<StageCache>>,
+    /// The photo the loupe renders, and the stages of its thumbnail, which every edit renders again: a spot edit then
+    /// draws only the spots it reaches there too (issue #82).
+    main_photo: Option<PhotoId>,
+    edited_thumb: Option<(PhotoId, Arc<StageCache>)>,
     /// Slot → key of the last quick job requested for it (each is tried once).
     quick_tried: HashMap<Slot, u64>,
     /// Jobs that failed (unreadable or missing file…), by slot and job key, with the error and
@@ -443,6 +447,8 @@ impl Renderer {
             brush_target: None,
             brush_settings: None,
             stages: HashMap::new(),
+            main_photo: None,
+            edited_thumb: None,
             quick_tried: HashMap::new(),
             failed: HashMap::new(),
             catalog_rev: 0,
@@ -728,6 +734,7 @@ impl Renderer {
             return Some(LOUPE_RELEASE);
         }
         self.stages.remove(&Slot::Main);
+        self.edited_thumb = None;
         // (let the idle trim give the GPU's recycled buffers back too)
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -784,7 +791,24 @@ impl Renderer {
             Slot::RegionAlpha => Slot::Region,
             other => other,
         };
-        let job = if slot.is_view() || stages_of != slot { job.with_stages(self.stages.entry(stages_of).or_default().clone()) } else { job };
+        if slot == Slot::Main {
+            self.main_photo = Some(job.photo);
+        }
+        let job = if slot.is_view() || stages_of != slot {
+            job.with_stages(self.stages.entry(stages_of).or_default().clone())
+        } else if let Slot::Thumb(id) = slot
+            && self.main_photo == Some(id)
+        {
+            // (one photo's at a time: the one being edited)
+            let stages = match &self.edited_thumb {
+                Some((p, c)) if *p == id => c.clone(),
+                _ => Arc::new(StageCache::default()),
+            };
+            self.edited_thumb = Some((id, stages.clone()));
+            job.with_stages(stages)
+        } else {
+            job
+        };
         if self.offload.is_some() {
             self.seq += 1;
             self.queue.retain(|q| q.slot != slot);
