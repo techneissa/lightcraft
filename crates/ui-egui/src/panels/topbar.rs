@@ -57,11 +57,12 @@ fn top_bar_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, left: i8
     let bar = Rect::from_min_max(pos2(full.left() - left as f32, full.top()), pos2(full.right() + 12.0, full.bottom()));
     // saving is failing: the cloud icon turns into a warning until a save succeeds
     let unsaved = app.session.unsaved().map(|(n, e)| unsaved_tip(n, e));
-    // the icons on the right that are on, from the left; a warning is never turned off
-    let right: Vec<&str> = ["appearance", "bell", "import", "share", "help", "cloud"]
-        .into_iter()
-        .filter(|id| shown(app, id) || (*id == "cloud" && unsaved.is_some()))
-        .collect();
+    // the icons on the right that are on, from the left; the cloud is no item (`topbar_items`): it shows only while
+    // saving fails, whatever a saved list says
+    let mut right: Vec<&str> = ["appearance", "bell", "import", "share", "help"].into_iter().filter(|id| shown(app, id)).collect();
+    if unsaved.is_some() {
+        right.push("cloud");
+    }
     // The field stops short of the filter icon (when shown) and the icons on the right;
     // centred, it is twice the room between the window's centre and them.
     let filter_room = if shown(app, "filter") { 30.0 } else { 0.0 };
