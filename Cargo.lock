@@ -3818,6 +3818,7 @@ dependencies = [
  "lightcraft-geom",
  "lightcraft-gpu",
  "lightcraft-heif",
+ "lightcraft-inpaint",
  "lightcraft-lama",
  "lightcraft-learn",
  "lightcraft-lensdb",

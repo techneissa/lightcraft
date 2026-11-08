@@ -2,7 +2,7 @@
 
 Open a photo, choose Remove, and expand Reflections. Select DSRNet-S, DSRNet-L, or DSRNet-L (Nature), choose Preview, Standard, or High, and enable Apply. The desktop app performs inference locally; photos are not uploaded. Recalculate after changing model or quality. Amount and protection controls update without repeating inference.
 
-Start at the default 35% Amount, with sky protection and 60% Detail Protection. Single-image reflection separation is ambiguous: clouds, glass, and real scene details can be mistaken for reflections. A larger model does not guarantee better results. Compare against the original before exporting.
+A new result starts at 100% Amount (this fork: at 35% with 60% Detail Protection only about a fifth of the model's change showed), with 60% Detail Protection; lower Amount if clouds or real details fade. Single-image reflection separation is ambiguous: clouds, glass, and real scene details can be mistaken for reflections. A larger model does not guarantee better results. Compare against the original before exporting.
 
 Sky protection uses an embedded sky matte when available, otherwise a heuristic estimate. For reliable exclusion, enable Limit to area and set its four boundaries. Coordinates are percentages of the original oriented image, before user crop and rotation. Pixels outside the area are unchanged at the reflection stage; later filters can still affect them. Detail Protection limits the correction relative to source brightness; 100% disables correction.
 
