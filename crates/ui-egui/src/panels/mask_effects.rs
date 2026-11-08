@@ -18,7 +18,7 @@ use crate::widgets::{register, register_response};
 pub fn field_label(k: &str) -> &'static str {
     match k {
         "color_hue" | "color_sat" => "Color",
-        "recolor" | "recolor_r" | "recolor_g" | "recolor_b" => "Recolor",
+        "recolor" | "recolor_r" | "recolor_g" | "recolor_b" | "recolor_range" | "recolor_from_r" | "recolor_from_g" | "recolor_from_b" => "Recolor",
         _ => super::masking::LOCAL.iter().find(|s| s.id == k).map_or("", |s| s.label),
     }
 }
@@ -30,7 +30,7 @@ fn checklist() -> Vec<&'static str> {
 
 /// Recolor's colour channels: one "Recolor" choice with its amount.
 fn is_recolor_rgb(k: &str) -> bool {
-    matches!(k, "recolor_r" | "recolor_g" | "recolor_b")
+    matches!(k, "recolor_r" | "recolor_g" | "recolor_b" | "recolor_range" | "recolor_from_r" | "recolor_from_g" | "recolor_from_b")
 }
 
 /// "Exposure +0.50 · Clarity −20" — what an effect sets, for the lists.
@@ -484,7 +484,7 @@ pub fn save_confirm(app: &mut LightcraftApp, name: &str, group: &str, fields: &[
         keep.push("color_hue".into());
     }
     if keep.iter().any(|f| f == "recolor") {
-        keep.extend(["recolor_r", "recolor_g", "recolor_b"].map(String::from));
+        keep.extend(["recolor_r", "recolor_g", "recolor_b", "recolor_range", "recolor_from_r", "recolor_from_g", "recolor_from_b"].map(String::from));
     }
     let all = checklist().iter().all(|k| keep.iter().any(|f| f == k));
     let mut p = json!({"name": name.trim(), "group": group.trim(), "amount": amount});

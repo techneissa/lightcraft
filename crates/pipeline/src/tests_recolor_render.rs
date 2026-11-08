@@ -146,3 +146,55 @@ fn a_describe_mask_recolors_what_it_selects() {
     assert_eq!(on.get(W - 5, 5), plain.get(W - 5, 5), "outside what it selects");
     assert_eq!(on.get(3, 3), plain.get(3, 3));
 }
+
+/// Mean OkLab of the pixels in columns `x0..x1`, rows 4..h-4 of `img`.
+fn mean_lab(img: &Rgba8, x0: usize, x1: usize) -> [f32; 3] {
+    let mut sum = [0.0f32; 3];
+    let mut n = 0.0;
+    for y in 4..img.height - 4 {
+        for x in x0..x1 {
+            let lab = lab_of(img.get(x, y));
+            for (s, v) in sum.iter_mut().zip(lab) {
+                *s += v;
+            }
+            n += 1.0;
+        }
+    }
+    sum.map(|s| s / n)
+}
+
+fn lab_of(p: [u8; 4]) -> [f32; 3] {
+    oklab_from_2020(
+        lightcraft_color::SRGB.to_space(&lightcraft_color::REC2020).apply_f32([p[0], p[1], p[2]].map(|v| srgb_to_linear(f32::from(v) / 255.0))),
+    )
+}
+
+/// Review F2: with global Shadows and the mask's own Contrast and Clarity set (local tone, which runs before
+/// Recolor), a flat red area still lands on the picked colour.
+#[test]
+fn the_picked_colour_lands_with_local_tone_set() {
+    let src = Rgb32f::from_fn(W, H, |x, _| if x < W / 2 { [0.06, 0.012, 0.01] } else { [0.05, 0.2, 0.06] });
+    let mut s = recolored(100.0, PURPLE);
+    s.light.shadows = 80.0;
+    s.masks[0].adjust.contrast = 40.0;
+    s.masks[0].adjust.blacks = 50.0;
+    let on = shot(&src, &s, W, H);
+    let got = mean_lab(&on, 10, W * 4 / 10);
+    let want = srgb_to_oklab(PURPLE);
+    assert!((got[0] - want[0]).abs() < 0.03, "lightness {} vs the pick's {}", got[0], want[0]);
+    let (gc, wc) = (got[1].hypot(got[2]), want[1].hypot(want[2]));
+    assert!((gc - wc).abs() < 0.03, "chroma {gc} vs {wc}");
+}
+
+/// Review F4: a mask a few pixels wide on a large photo still recolors (it is measured on a finer proxy).
+#[test]
+fn a_tiny_mask_still_recolors() {
+    let (w, h) = (2400, 1600);
+    let src = Rgb32f::from_fn(w, h, |_, _| [0.3, 0.05, 0.04]);
+    let shape = MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.0012, ry: 0.0012, angle: 0.0, feather: 0.0, invert: false };
+    let mut s = recolored(100.0, PURPLE);
+    s.masks[0].components[0].shape = shape;
+    let plain = render(&src, &SourceInfo::default(), &DevelopSettings::default(), &RenderRequest::fit(w, h)).image;
+    let on = render(&src, &SourceInfo::default(), &s, &RenderRequest::fit(w, h)).image;
+    assert_ne!(on.get(w / 2, h / 2), plain.get(w / 2, h / 2), "the tiny mask recolors");
+}

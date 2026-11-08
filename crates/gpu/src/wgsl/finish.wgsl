@@ -161,47 +161,71 @@ fn recolor_lightness(l: f32, lr0: f32, lt0: f32) -> f32 {
 }
 
 // `lightcraft_pipeline::recolor::chroma_ratio`.
-fn recolor_chroma_ratio(c: f32, rc: f32, l: f32) -> f32 {
+fn recolor_chroma_ratio(c: f32, rc: f32) -> f32 {
     if (rc <= 1e-6) {
         return 0.0;
     }
-    var r = max(c / rc, 0.0);
+    let r = max(c / rc, 0.0);
     let span = RC_MAX_CHROMA - 1.0;
     if (r > 1.0) {
-        r = 1.0 + span * (1.0 - exp(-(r - 1.0) / span));
+        return 1.0 + span * (1.0 - exp(-(r - 1.0) / span));
     }
-    return r * smoothstep(RC_NEUTRAL0, RC_NEUTRAL1, c / max(l, 0.05));
+    return r;
 }
 
-// Hue of OkLab `(a, b)`, 0 for a neutral one (as the CPU's atan2(0, 0)).
+// Hue of OkLab `(a, b)`, 0 for a neutral one (as the CPU's `recolor::hue`).
 fn ok_hue(a: f32, b: f32) -> f32 {
     return select(atan2(b, a), 0.0, a == 0.0 && b == 0.0);
 }
 
-// `lightcraft_pipeline::recolor::apply_terms`: terms at `t` (strength, target OkLab, reference L, C, hue cos, sin).
+// `lightcraft_pipeline::recolor::smooth` (smoothstep, also for e0 >= e1 where WGSL's is undefined).
+fn rc_smooth(e0: f32, e1: f32, x: f32) -> f32 {
+    let t = clamp((x - e0) / (e1 - e0), 0.0, 1.0);
+    return t * t * (3.0 - 2.0 * t);
+}
+
+// `lightcraft_pipeline::recolor::apply_terms`: terms at `t` (strength, target OkLab, main L, C, hue cos, sin, hue
+// window, saturation floor).
 fn recolor_one(lab: vec3<f32>, t: u32, alpha: f32) -> vec3<f32> {
-    let k = min(aux[t] * alpha, 1.0);
-    if (k <= 0.0) {
+    let k0 = min(aux[t] * alpha, 1.0);
+    if (k0 <= 0.0) {
+        return lab;
+    }
+    let rl = aux[t + 4u];
+    let rc = aux[t + 5u];
+    let hr = ok_hue(aux[t + 6u], aux[t + 7u]);
+    let win_h = aux[t + 8u];
+    let win_s = aux[t + 9u];
+    let c = length(lab.yz);
+    let h = ok_hue(lab.y, lab.z);
+    // membership in the main colour
+    let coloured = rc_smooth(RC_GREY0, RC_GREY1, rc);
+    let dh = abs(wrap_angle(h - hr));
+    let by_hue = 1.0 - rc_smooth(win_h, win_h * 2.0 + 0.1, dh);
+    let q = (c / max(lab.x, 0.05)) / max(rc / max(rl, 0.05), 1e-4);
+    let by_sat = rc_smooth(win_s * 0.6, win_s * 2.5, q) * rc_smooth(RC_MIN_C0, RC_MIN_C1, c);
+    let full = 1.0 + (by_hue * by_sat - 1.0) * coloured;
+    let loose = 1.0 - rc_smooth(win_h * 2.0, win_h * 3.2 + 0.1, dh);
+    let weak = rc_smooth(RC_HUE_C0, RC_HUE_C1, c) * (1.0 - rc_smooth(RC_HUE_C2, RC_HUE_C3, c));
+    let hue_w = max(full, loose * weak * coloured);
+    let k = k0 * full;
+    let k_hue = k0 * max(hue_w - full, 0.0);
+    if (k <= 0.0 && k_hue <= 0.0) {
         return lab;
     }
     let tl = vec3<f32>(aux[t + 1u], aux[t + 2u], aux[t + 3u]);
-    let rl = aux[t + 4u];
-    let rc = aux[t + 5u];
-    let c = length(lab.yz);
-    let h = ok_hue(lab.y, lab.z);
+    let lt = tl.x;
     let ct = length(tl.yz);
     let ht = ok_hue(tl.y, tl.z);
-    let l1 = recolor_lightness(lab.x, rl, tl.x);
-    let coloured = smoothstep(RC_GREY0, RC_GREY1, rc);
-    let by_chroma = recolor_chroma_ratio(c, rc, lab.x);
-    let by_light = select(1.0, clamp(l1 / tl.x, 0.0, 1.5), tl.x > 1e-6);
-    let grey = by_light * (1.0 - smoothstep(RC_WHITE0, RC_WHITE1, l1));
-    let c1 = ct * (grey + (by_chroma - grey) * coloured);
-    let hr = ok_hue(aux[t + 6u], aux[t + 7u]);
-    let keep = coloured * smoothstep(RC_GREY0, RC_GREY1, c);
+    let l1 = recolor_lightness(lab.x, rl, lt);
+    let grey = select(1.0, clamp(l1 / lt, 0.0, 1.0), lt > 1e-6) * (1.0 - rc_smooth(lt, max(lt, 0.95) + 0.05, l1));
+    let ends = rc_smooth(RC_DARK0, RC_DARK1, l1) * (1.0 - rc_smooth(RC_LIGHT0, RC_LIGHT1, l1));
+    let c1 = ct * (grey + (recolor_chroma_ratio(c, rc) - grey) * coloured) * ends;
+    let keep = coloured * rc_smooth(RC_GREY0, RC_GREY1, c);
     let h1 = ht + clamp(wrap_angle(h - hr) * keep, -RC_MAX_HUE, RC_MAX_HUE);
     let nlab = vec3<f32>(l1, c1 * cos(h1), c1 * sin(h1));
-    return lab + (nlab - lab) * k;
+    let turned = vec3<f32>(l1, c * cos(h1), c * sin(h1));
+    return lab + (nlab - lab) * k + (turned - lab) * k_hue;
 }
 
 // Every mask's Recolor at pixel `i`, in mask order (`finish::recolor_pixel`); `d` unchanged where none is on.

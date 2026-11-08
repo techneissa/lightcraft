@@ -399,11 +399,18 @@ fn constants() -> String {
     use lightcraft_pipeline::masks::{AUTO_TOL_CHROMA, AUTO_TOL_EV};
     s += &format!("const AUTO_TOL_EV: f32 = {AUTO_TOL_EV:?};\nconst AUTO_TOL_CHROMA: f32 = {AUTO_TOL_CHROMA:?};\n");
     {
-        use lightcraft_pipeline::recolor::{GREY_CHROMA, MAX_CHROMA_RATIO, MAX_HUE_OFFSET, MIN_REF_L, NEUTRAL_SAT, WHITE_FADE};
+        use lightcraft_pipeline::recolor::{
+            DARK_FADE, GREY_CHROMA, HUE_ONLY_CHROMA, LIGHT_FADE, MAX_CHROMA_RATIO, MAX_HUE_OFFSET, MIN_CHROMA, MIN_REF_L,
+        };
         let r = lightcraft_pipeline::finish::MASK_RECOLOR;
         s += &format!("const MASK_RECOLOR: u32 = {r}u;\nconst RC_GREY0: f32 = {:?};\nconst RC_GREY1: f32 = {:?};\n", GREY_CHROMA[0], GREY_CHROMA[1]);
-        s += &format!("const RC_WHITE0: f32 = {:?};\nconst RC_WHITE1: f32 = {:?};\n", WHITE_FADE[0], WHITE_FADE[1]);
-        s += &format!("const RC_NEUTRAL0: f32 = {:?};\nconst RC_NEUTRAL1: f32 = {:?};\n", NEUTRAL_SAT[0], NEUTRAL_SAT[1]);
+        s += &format!("const RC_MIN_C0: f32 = {:?};\nconst RC_MIN_C1: f32 = {:?};\n", MIN_CHROMA[0], MIN_CHROMA[1]);
+        let [h0, h1, h2, h3] = HUE_ONLY_CHROMA;
+        s += &format!(
+            "const RC_HUE_C0: f32 = {h0:?};\nconst RC_HUE_C1: f32 = {h1:?};\nconst RC_HUE_C2: f32 = {h2:?};\nconst RC_HUE_C3: f32 = {h3:?};\n"
+        );
+        s += &format!("const RC_DARK0: f32 = {:?};\nconst RC_DARK1: f32 = {:?};\n", DARK_FADE[0], DARK_FADE[1]);
+        s += &format!("const RC_LIGHT0: f32 = {:?};\nconst RC_LIGHT1: f32 = {:?};\n", LIGHT_FADE[0], LIGHT_FADE[1]);
         s += &format!(
             "const RC_MAX_CHROMA: f32 = {MAX_CHROMA_RATIO:?};\nconst RC_MAX_HUE: f32 = {MAX_HUE_OFFSET:?};\nconst RC_MIN_L: f32 = {MIN_REF_L:?};\n"
         );

@@ -1,5 +1,7 @@
 //! Recolor a masked area of a photo outside the app, to tune [`lightcraft_pipeline::recolor`] on real photos:
 //! `cargo run --release -p lightcraft-pipeline --example recolor -- in.jpg mask.png out.jpg --to "#7a3fb0" --amount 100`
+//! Optional: `--range -100..100` (which colours count as the area's main colour) and `--from "#rrggbb"` (the Colour
+//! to Replace; automatic without it).
 //! The mask is a greyscale picture (white = recolor) of any size; it is stretched to the photo.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
@@ -16,12 +18,14 @@ fn main() {
 fn run() -> Result<(), String> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let mut pos = Vec::new();
-    let (mut to, mut amount) = ("#7a3fb0".to_string(), 100.0f32);
+    let (mut to, mut amount, mut range, mut from) = ("#7a3fb0".to_string(), 100.0f32, 0.0f64, None);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         match a.as_str() {
             "--to" => to = it.next().ok_or("--to needs a colour")?.clone(),
             "--amount" => amount = it.next().and_then(|v| v.parse().ok()).ok_or("--amount needs a number")?,
+            "--range" => range = it.next().and_then(|v| v.parse().ok()).ok_or("--range needs a number")?,
+            "--from" => from = Some(it.next().and_then(|v| parse_hex(v)).ok_or("--from needs a colour")?),
             _ => pos.push(a.clone()),
         }
     }
@@ -33,7 +37,7 @@ fn run() -> Result<(), String> {
     let m = image::imageops::resize(&m, w, h, image::imageops::FilterType::Triangle);
     let mut px: Vec<[f32; 3]> = img.pixels().map(|p| p.0.map(|v| f32::from(v) / 255.0)).collect();
     let alpha: Vec<f32> = m.pixels().map(|p| f32::from(p.0[0]) / 255.0).collect();
-    recolor_srgb(&mut px, &alpha, target, (amount / 100.0).clamp(0.0, 1.0));
+    recolor_srgb(&mut px, &alpha, target, (amount / 100.0).clamp(0.0, 1.0), range, from);
     let out = image::RgbImage::from_fn(w, h, |x, y| {
         let i = (y as usize) * (w as usize) + x as usize;
         image::Rgb(px.get(i).copied().unwrap_or_default().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8))

@@ -184,6 +184,8 @@ pub fn mask_terms(j: &LocalAdjustments) -> [f32; MASK_TERMS] {
         0.0,
         0.0,
         0.0,
+        0.0,
+        0.0,
     ]
 }
 
@@ -629,7 +631,7 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
 }
 
 #[inline]
-fn apply_light(
+pub(crate) fn apply_light(
     color: [f32; 3],
     light: Option<&crate::light_v3::LightOps>,
     preview: Option<&crate::light_v3::PreviewOps>,
@@ -645,9 +647,9 @@ fn apply_light(
     }
 }
 
-struct PixelLocalTerms {
-    values: [f32; MASK_SUMS],
-    tint: Option<([f32; 3], f32)>,
+pub(crate) struct PixelLocalTerms {
+    pub(crate) values: [f32; MASK_SUMS],
+    pub(crate) tint: Option<([f32; 3], f32)>,
 }
 
 /// A mask's effect terms with its Amount (`amount`: 1 = 100 %) applied: the Amount scales the terms
@@ -674,7 +676,7 @@ pub fn effect_terms_with(j: &LocalAdjustments, amount: f32, r: Option<&crate::re
 
 /// Each mask's effect terms with its Amount applied (`None`: the mask has no effect: its Amount is
 /// 0 or less). The Amount scales the terms and the tint's strength, never the alpha.
-fn scaled_terms(p: &Prepared) -> Vec<Option<[f32; MASK_TERMS]>> {
+pub(crate) fn scaled_terms(p: &Prepared) -> Vec<Option<[f32; MASK_TERMS]>> {
     p.masks
         .iter()
         .map(|m| {
@@ -689,7 +691,7 @@ fn scaled_terms(p: &Prepared) -> Vec<Option<[f32; MASK_TERMS]>> {
 
 /// The sum of the masks' terms at pixel `(x, y)`: only the `active` masks (those whose bounds hold
 /// the row) are read, and a mask reads nothing outside its bounds.
-fn pixel_local_terms(p: &Prepared, terms: &[Option<[f32; MASK_TERMS]>], active: &[usize], x: usize, y: usize) -> PixelLocalTerms {
+pub(crate) fn pixel_local_terms(p: &Prepared, terms: &[Option<[f32; MASK_TERMS]>], active: &[usize], x: usize, y: usize) -> PixelLocalTerms {
     let mut values = [0.0; MASK_SUMS];
     let mut tint = None;
     for &k in active {
@@ -723,7 +725,7 @@ fn recolor_pixel(p: &Prepared, terms: &[Option<[f32; MASK_TERMS]>], active: &[us
     lab.map_or(d, lightcraft_color::perceptual::oklab_to_2020)
 }
 
-fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 3], local: &PixelLocalTerms) -> ([f32; 3], f32) {
+pub(crate) fn adjust_scene_pixel(p: &Prepared, fp: &FinishParams, index: usize, raw: [f32; 3], local: &PixelLocalTerms) -> ([f32; 3], f32) {
     let [l_exp, l_temp, l_tint, _, _, _, _, _, _, _, l_dehaze, _, _, _, l_noise, l_moire, l_defringe] = local.values;
     let mut color = if fp.gain == 1.0 { raw } else { raw.map(|value| value * fp.gain) };
 
@@ -810,7 +812,7 @@ pub(crate) fn shadows_highlights_delta(shadows: f32, highlights: f32, base: f32,
     shadows * 1.7 * shadow_weight * shadow_weight.sqrt() + highlights * 1.7 * highlight_weight
 }
 
-fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1: f32, local: &PixelLocalTerms) -> f32 {
+pub(crate) fn local_tone_delta(p: &Prepared, fp: &FinishParams, index: usize, base: f32, l1: f32, local: &PixelLocalTerms) -> f32 {
     let [_, _, _, l_con, l_hl, l_sh, l_wh, l_bl, l_tex, l_clar, _, _, _, l_sharp, l_noise, _, _] = local.values;
     let mut delta = 0.0;
     let (highlights, shadows) = (fp.hl + l_hl, fp.sh + l_sh);

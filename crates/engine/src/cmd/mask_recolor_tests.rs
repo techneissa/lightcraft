@@ -17,7 +17,8 @@ fn recolor_sets_the_colour_and_amount_and_refuses_bad_values() {
     let mut s = Session::with_demo();
     let m = new_mask(&mut s);
     let v = s.execute("mask.recolor", &json!({"color": "#7a3fb0"})).unwrap();
-    assert_eq!(v, json!({"color": "#7a3fb0", "amount": 100.0}), "a first colour turns Recolor on");
+    assert_eq!((&v["color"], &v["amount"]), (&json!("#7a3fb0"), &json!(100.0)), "a first colour turns Recolor on");
+    assert_eq!((&v["range"], &v["from"]), (&json!(0.0), &serde_json::Value::Null));
     let a = adjust(&s, m);
     assert!((a.recolor_r - 0x7a as f64 / 255.0).abs() < 1e-9 && a.recolor == 100.0);
     s.execute("mask.recolor", &json!({"amount": 140})).unwrap();
@@ -85,4 +86,29 @@ fn effects_and_paste_carry_the_recolor() {
     s.execute("develop.paste", &json!({"ids": [ids[1]]})).unwrap();
     let pasted = s.develop_of(PhotoId(ids[1])).unwrap();
     assert!(pasted.masks.iter().any(|x| x.adjust.recolor == 80.0 && x.adjust.recolor_r == a.recolor_r));
+}
+
+/// Range and Colour to Replace through `mask.recolor` and the eyedropper; a point off the photo is refused
+/// (review F6), not clamped to its edge.
+#[test]
+fn range_and_colour_to_replace_and_points_off_the_photo() {
+    let mut s = Session::with_demo();
+    let m = new_mask(&mut s);
+    let v = s.execute("mask.recolor", &json!({"color": "#7a3fb0", "range": 250, "from": "#3050c0"})).unwrap();
+    assert_eq!(v["range"], 100.0);
+    assert_eq!(v["from"], "#3050c0");
+    let a = adjust(&s, m);
+    assert!((a.recolor_from_b - 0xc0 as f64 / 255.0).abs() < 1e-9);
+    let v = s.execute("mask.recolor", &json!({"from": null})).unwrap();
+    assert_eq!(v["from"], serde_json::Value::Null, "null: automatic again");
+    let v = s.execute("mask.recolorPick", &json!({"x": 0.5, "y": 0.5, "target": "from"})).unwrap();
+    assert!(v["from"].is_string(), "{v}");
+    assert_eq!(v["color"], "#7a3fb0", "the target colour stays");
+    for bad in [json!({"x": 1.2, "y": 0.5}), json!({"x": -0.1, "y": 0.5}), json!({"x": 0.5, "y": 0.5, "target": "both"})] {
+        assert!(s.execute("mask.recolorPick", &bad).is_err(), "{bad}");
+    }
+    let saved = serde_json::to_value(adjust(&s, m)).unwrap();
+    assert!(saved.get("recolor_range").is_some());
+    let fresh = serde_json::to_value(lightcraft_develop::LocalAdjustments::default()).unwrap();
+    assert!(fresh.get("recolor_range").is_none() && fresh.get("recolor_from_r").is_none(), "skipped at their defaults");
 }

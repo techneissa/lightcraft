@@ -45,3 +45,31 @@ fn the_eyedropper_picks_the_recolor_colour_from_the_photo() {
     assert!(a.recolor_r + a.recolor_g + a.recolor_b > 0.0, "a colour from the photo: {a:?}");
     assert_eq!(h.app.ui.tool, "", "one pick disarms it");
 }
+
+/// The Colour to Replace eyedropper sets the mask's Colour to Replace (not its new colour); Automatic clears it.
+#[test]
+fn the_colour_to_replace_eyedropper_sets_the_source_colour() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1400.0, 2400.0], 1.0);
+    h.request("ui.set", json!({"view": "detail"}), T);
+    h.request("engine.execute", json!({"command": "panel.masking"}), T);
+    h.request("engine.execute", json!({"command": "mask.add", "params": {"kind": "radial"}}), T);
+    h.request("engine.execute", json!({"command": "mask.recolor", "params": {"color": "#7a3fb0"}}), T);
+    h.settle(SETTLE);
+    let r = h.request("ui.clickWidget", json!({"id": "icon:recolorFromPicker"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    let pos = h.app.image_rect.expect("the photo on screen").center();
+    h.app.synthetic.push(egui::Event::PointerMoved(pos));
+    h.app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() });
+    h.app.synthetic.push(egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() });
+    h.settle(SETTLE);
+    let a = adjust(&h);
+    assert!(lightcraft_pipeline::recolor::source_rgb(&a).is_some(), "a Colour to Replace: {a:?}");
+    assert!((a.recolor_r - 0x7a as f64 / 255.0).abs() < 1e-9, "the new colour stays");
+    assert_eq!(h.app.ui.tool, "");
+    let r = h.request("ui.clickWidget", json!({"id": "button:recolorFromAuto"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.settle(SETTLE);
+    assert!(lightcraft_pipeline::recolor::source_rgb(&adjust(&h)).is_none(), "Automatic clears it");
+}

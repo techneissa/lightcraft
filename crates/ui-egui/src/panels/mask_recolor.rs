@@ -1,9 +1,10 @@
-//! The Masking panel's Recolor row (issue #83): a colour swatch (with the colour picker), the colour as hex, an
-//! eyedropper on the photo, and the Recolor amount. The mask's area takes the colour and keeps its shading.
+//! The Masking panel's Recolor rows (issue #83): the new colour (swatch with the colour picker, hex value,
+//! eyedropper), the Colour to Replace (automatic, or picked with its own eyedropper), Recolor Amount and Range. The
+//! main colour of the mask's area takes the new colour and keeps its shading; other colours inside the mask stay.
 
 use egui::vec2;
 use lightcraft_develop::{ControlSpec, Mask, Section, Track};
-use lightcraft_pipeline::recolor::{parse_hex, to_hex};
+use lightcraft_pipeline::recolor::{parse_hex, source_rgb, to_hex};
 use serde_json::json;
 
 use super::edit::apply_slider_out;
@@ -13,8 +14,19 @@ use crate::icons::Icon;
 use crate::theme::Tokens;
 use crate::widgets::{icon_button, register, slider};
 
-/// The on-canvas tool that picks the Recolor colour from the photo (`mask.recolorPick`).
+/// The on-canvas tool that picks the new colour from the photo (`mask.recolorPick`).
 pub const PICK_TOOL: &str = "recolorPick";
+/// The on-canvas tool that picks the Colour to Replace (`mask.recolorPick {target: "from"}`).
+pub const PICK_FROM_TOOL: &str = "recolorPickFrom";
+
+/// The `mask.recolorPick` target of on-canvas tool `tool` (`None`: not a Recolor eyedropper).
+pub fn pick_target(tool: &str) -> Option<&'static str> {
+    match tool {
+        PICK_TOOL => Some("to"),
+        PICK_FROM_TOOL => Some("from"),
+        _ => None,
+    }
+}
 
 /// The Recolor amount slider (`LocalAdjustments::recolor`).
 pub const AMOUNT: ControlSpec = ControlSpec {
@@ -29,7 +41,20 @@ pub const AMOUNT: ControlSpec = ControlSpec {
     track: Track::Plain,
 };
 
-/// The row, for the selected mask `m`.
+/// The Range slider (`LocalAdjustments::recolor_range`): which colours count as the area's main colour.
+pub const RANGE: ControlSpec = ControlSpec {
+    id: "recolorRange",
+    label: "Range",
+    section: Section::Light,
+    min: -100.0,
+    max: 100.0,
+    default: 0.0,
+    step: 1.0,
+    decimals: 0,
+    track: Track::Centered,
+};
+
+/// The rows, for the selected mask `m`.
 pub fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask) {
     let t = Tokens::get(ui.ctx());
     let a = m.adjust;
@@ -40,19 +65,49 @@ pub fn row(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask) {
             swatch(app, ui, rgb);
             hex_field(app, ui, m.id, rgb);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                let active = app.ui.tool == PICK_TOOL;
-                if icon_button(ui, "recolorPicker", Icon::Picker, vec2(24.0, 24.0), active, true, tr("Pick Recolor Color")).clicked() {
-                    if active {
-                        app.ui.tool.clear();
-                    } else {
-                        app.ui.tool = PICK_TOOL.into();
-                    }
-                }
+                picker(app, ui, "recolorPicker", PICK_TOOL, tr("Pick Recolor Color"));
             });
         });
+        let from = source_rgb(&a);
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new(tr("Color to Replace")).font(t.font(12.0)).color(t.text_label));
+            if from.is_none() {
+                ui.label(egui::RichText::new(tr("Automatic")).font(t.font(12.0)).color(t.text_dim));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                picker(app, ui, "recolorFromPicker", PICK_FROM_TOOL, tr("Pick Color to Replace"));
+            });
+        });
+        if let Some(from) = from {
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(vec2(18.0, 14.0), egui::Sense::hover());
+                let [r, g, b] = from.map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8);
+                ui.painter().rect_filled(rect, 2.0, egui::Color32::from_rgb(r, g, b));
+                ui.label(egui::RichText::new(to_hex(from)).font(t.font(12.0)).color(t.text));
+                let auto = ui.small_button(tr("Automatic"));
+                register(ui, "button:recolorFromAuto", auto.rect);
+                if auto.clicked() {
+                    let _ = app.run("mask.recolor", json!({"from": null}));
+                }
+            });
+        }
     });
     let out = slider(ui, &AMOUNT, a.recolor, true, None);
     apply_slider_out(app, &AMOUNT, out, |app, v| app.run("mask.recolor", json!({"amount": v})));
+    let out = slider(ui, &RANGE, a.recolor_range, true, None);
+    apply_slider_out(app, &RANGE, out, |app, v| app.run("mask.recolor", json!({"range": v})));
+}
+
+/// An eyedropper button that arms (or disarms) on-canvas tool `tool`.
+fn picker(app: &mut LightcraftApp, ui: &mut egui::Ui, id: &str, tool: &str, tip: &str) {
+    let active = app.ui.tool == tool;
+    if icon_button(ui, id, Icon::Picker, vec2(24.0, 24.0), active, true, tip).clicked() {
+        if active {
+            app.ui.tool.clear();
+        } else {
+            app.ui.tool = tool.into();
+        }
+    }
 }
 
 /// The colour swatch with egui's colour picker; a drag in the picker is one undo step.

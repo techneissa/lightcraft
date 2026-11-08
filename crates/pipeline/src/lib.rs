@@ -447,7 +447,7 @@ struct CacheEntry {
     masks: masks::AlphaCache,
 }
 
-fn hash_of(parts: impl std::hash::Hash) -> u64 {
+pub(crate) fn hash_of(parts: impl std::hash::Hash) -> u64 {
     use std::hash::{BuildHasher, BuildHasherDefault, DefaultHasher};
     BuildHasherDefault::<DefaultHasher>::default().hash_one(parts)
 }
@@ -489,7 +489,7 @@ pub struct Plan<'a> {
     /// A render that follows a slider drag ([`Quality::Draft`]): LaMa spots take a fill that is already known and start
     /// no run ([`learned_fill::LearnedFill::fill`]).
     pub draft: bool,
-    /// The references of the masks whose Recolor is on, by mask id ([`recolor::references`]): measured on the whole
+    /// The references of the masks whose Recolor is on, by mask id ([`recolor::measure::references`]): measured on the whole
     /// frame, the same for every render of the edit.
     pub recolor: Vec<(u32, recolor::Reference)>,
 }
@@ -520,7 +520,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     }
     let s = &*settings;
     let frame = frame_for(src, info, s, req.apply_crop);
-    let recolor = recolor::references(src, info, s, &frame, req.space);
+    let recolor =
+        recolor::measure::references(src, info, s, &frame, req.space, native_long(info, src.width.max(src.height)), req.quality == Quality::Draft);
     let (full_w, full_h) = frame.fit(req.max_w, req.max_h);
     // sizes and scale are those of the whole output; a window only narrows what is drawn
     let px_per_long = frame.px_per_long(full_w);

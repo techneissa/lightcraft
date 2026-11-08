@@ -39,11 +39,15 @@ pub const FIELDS: &[&str] = &[
     "recolor_r",
     "recolor_g",
     "recolor_b",
+    "recolor_range",
+    "recolor_from_r",
+    "recolor_from_g",
+    "recolor_from_b",
 ];
 
-/// Recolor's colour channels: they do nothing without its amount (`recolor`), as the colour's hue without its
-/// saturation.
-const RECOLOR_RGB: [&str; 3] = ["recolor_r", "recolor_g", "recolor_b"];
+/// Recolor's colour, Range and Colour to Replace: they do nothing without its amount (`recolor`), as the colour's
+/// hue without its saturation, and go with it.
+const RECOLOR_RGB: [&str; 7] = ["recolor_r", "recolor_g", "recolor_b", "recolor_range", "recolor_from_r", "recolor_from_g", "recolor_from_b"];
 
 /// Brush settings an effect can carry (Lightroom keeps these per brush, not in presets).
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

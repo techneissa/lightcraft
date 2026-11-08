@@ -415,6 +415,22 @@ fn cases() -> Vec<(&'static str, Edit)> {
                     },
                     ..Default::default()
                 },
+                Mask {
+                    id: 3,
+                    components: part(MaskShape::Radial { center: Point::new(0.6, 0.4), rx: 0.35, ry: 0.3, angle: 0.0, feather: 40.0, invert: false }),
+                    adjust: lightcraft_develop::LocalAdjustments {
+                        recolor: 100.0,
+                        recolor_r: 0.2,
+                        recolor_g: 0.6,
+                        recolor_b: 0.3,
+                        recolor_range: 60.0,
+                        recolor_from_r: 0.3,
+                        recolor_from_g: 0.4,
+                        recolor_from_b: 0.8,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
             ];
         }),
         ("masks (brush + ranges)", |s| {

@@ -932,6 +932,16 @@ pub struct LocalAdjustments {
     pub recolor_g: f64,
     #[serde(skip_serializing_if = "is_zero")]
     pub recolor_b: f64,
+    /// Recolor's Range (−100..100, 0 = automatic): widens or narrows which colours count as the area's main colour.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_range: f64,
+    /// Recolor's Colour to Replace (sRGB-encoded, 0..1; black = automatic, the area's main colour).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_from_r: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_from_g: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_from_b: f64,
 }
 
 impl Default for LocalAdjustments {
@@ -961,6 +971,10 @@ impl Default for LocalAdjustments {
             recolor_r: 0.0,
             recolor_g: 0.0,
             recolor_b: 0.0,
+            recolor_range: 0.0,
+            recolor_from_r: 0.0,
+            recolor_from_g: 0.0,
+            recolor_from_b: 0.0,
         }
     }
 }
