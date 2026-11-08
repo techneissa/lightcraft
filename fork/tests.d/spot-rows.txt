@@ -1,0 +1,5 @@
+cargo test -p lightcraft-develop --lib spot_circle
+cargo test -p lightcraft-engine --lib spot_rows
+cargo test -p lightcraft-pipeline --lib tests_spot_hidden
+cargo test -p lightcraft-gpu --test it hidden_spot
+cargo test -p lightcraft-ui-egui --lib -- spot_rows tool_overlay

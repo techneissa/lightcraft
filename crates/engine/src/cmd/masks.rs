@@ -952,6 +952,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     opacity: f64_or(p, "opacity", d.opacity).clamp(0.0, 100.0),
                     source_offset: point(p, "source"),
                     fill,
+                    ..Default::default()
                 };
                 let id = s.active().ok_or_else(|| bad("spot.add", "no active photo"))?;
                 let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
@@ -1145,7 +1146,7 @@ fn spots_len(s: &Session) -> usize {
 }
 
 /// `index` from the params, else the selected spot.
-fn spot_index(s: &Session, p: &Value, c: &str) -> Result<usize> {
+pub(super) fn spot_index(s: &Session, p: &Value, c: &str) -> Result<usize> {
     let i = optional_index(p, "index", c)?.or(s.active_spot).ok_or_else(|| bad(c, "no spot selected (give `index`)"))?;
     if i >= spots_len(s) {
         return Err(bad(c, "no such spot"));
@@ -1153,7 +1154,7 @@ fn spot_index(s: &Session, p: &Value, c: &str) -> Result<usize> {
     Ok(i)
 }
 
-fn spots_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Spot>) -> Result<()>) -> Result<()> {
+pub(super) fn spots_edit(s: &mut Session, c: &str, label: &str, f: impl FnOnce(&mut Vec<Spot>) -> Result<()>) -> Result<()> {
     let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
     let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
     f(&mut d.spots)?;

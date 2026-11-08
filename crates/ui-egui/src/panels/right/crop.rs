@@ -407,6 +407,7 @@ pub(super) fn remove(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             }
         }
     });
+    super::spot_rows::section(app, ui, &d.spots);
     crate::reflections::panel(app, ui, id);
 }
 
