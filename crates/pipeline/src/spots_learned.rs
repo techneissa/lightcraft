@@ -136,7 +136,7 @@ fn boxes(spot: &Spot, frame: &Frame, w: usize, h: usize, ppl: f64) -> Option<(Ve
 
 /// Where a learned spot draws (its box) and what its fill reads (the crop), in a `w × h` render: `[x0, y0, x1, y1)`.
 pub fn footprint(spot: &Spot, frame: &Frame, w: usize, h: usize, ppl: f64) -> Option<([usize; 4], [usize; 4])> {
-    if !is_learned(spot) {
+    if !is_learned(spot) || spot.hidden {
         return None;
     }
     let (_, _, b, c) = boxes(spot, frame, w, h, ppl)?;

@@ -52,3 +52,33 @@ fn zoomed_in_a_new_spot_keeps_the_sharp_window_until_its_own_arrives() {
     assert_ne!(h.app.renderer.textures[&Slot::Region].key, old, "and replaces the old one");
     assert!(drawn(&h, Slot::Region));
 }
+
+/// Issue #82: a press held still while painting a spot adds no point. Every frame of a drag added the pointer's place, so
+/// a long press made a spot of hundreds of the same point, and every pixel of its box is measured against each one.
+#[test]
+fn a_press_held_still_adds_no_points_to_the_painted_spot() {
+    let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 900.0], 1.0);
+    assert_eq!(h.request("ui.set", json!({"view": "detail"}), T)["ok"], true);
+    assert_eq!(h.request("engine.execute", json!({"command": "panel.remove"}), T)["ok"], true);
+    h.step();
+    let pointer = |h: &mut Headless, kind: &str, x: f64| {
+        let r = h.request("ui.pointer", json!({"events": [{"kind": kind, "x": x, "y": 0.6}]}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+    };
+    pointer(&mut h, "down", 0.40);
+    pointer(&mut h, "drag", 0.45);
+    // held still for a while: thirty frames at the same place
+    for _ in 0..30 {
+        pointer(&mut h, "drag", 0.45);
+        h.step();
+    }
+    pointer(&mut h, "drag", 0.50);
+    pointer(&mut h, "up", 0.50);
+    let r = h.request("engine.execute", json!({"command": "develop.get", "params": {}}), T);
+    let spots = r["result"]["spots"].as_array().cloned().unwrap_or_default();
+    assert_eq!(spots.len(), 1, "{r}");
+    let n = spots[0]["points"].as_array().map_or(0, Vec::len);
+    assert!((2..=4).contains(&n), "the stroke's own points only, not one per frame held: {n}");
+}

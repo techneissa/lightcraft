@@ -1162,7 +1162,8 @@ fn defringe(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>) -> Buf {
 pub(crate) fn draw_spot(cx: &mut Cx<'_>, img: &Buf, plan: &Plan<'_>, spot: &lightcraft_develop::Spot) {
     use lightcraft_pipeline::spots;
     let (w, h) = (plan.w, plan.h);
-    {
+    // (a hidden spot draws nothing: `DevelopSettings::effective` already leaves it out of a render)
+    if !spot.hidden {
         let Some(l) = spots::layout(spot, &plan.frame, w, h, plan.px_per_long) else { return };
         let Some(&first) = l.pts.first() else { return };
         lightcraft_pipeline::spots_keep::note_spot();

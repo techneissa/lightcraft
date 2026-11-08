@@ -96,7 +96,8 @@ pub fn entries(spots: &[Spot], done: &[bool], frame: &Frame, w: usize, h: usize,
         .iter()
         .enumerate()
         .map(|(i, sp)| {
-            if done.get(i).copied().unwrap_or(false) {
+            // (a hidden spot draws nothing: `DevelopSettings::effective` already leaves it out of a render)
+            if done.get(i).copied().unwrap_or(false) || sp.hidden {
                 return None;
             }
             footprint(sp, frame, w, h, ppl).map(|at| Drawn { spot: sp.clone(), at })

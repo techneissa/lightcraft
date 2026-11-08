@@ -209,3 +209,28 @@ fn the_full_size_keeps_its_spots_through_a_drags_drafts() {
     s.spots[4].opacity = 60.0;
     assert_eq!(edit(&cache, &src, &s), (1, true), "the full render after the drag draws the spot it changed");
 }
+
+/// A spot's eye (`Spot::hidden`) is an edit like any other: hiding one of ten redraws only the later spot drawn over it,
+/// with the result of drawing the ten without it; showing it again draws it and that spot.
+#[test]
+fn hiding_a_spot_redraws_only_the_spots_drawn_over_it() {
+    let (src, cache) = (scene(), StageCache::default());
+    let mut spots = grid(9);
+    // the tenth spot is drawn over the fifth
+    let mut over = spots[4].clone();
+    over.points[0].x += 0.01;
+    over.mode = SpotMode::Clone;
+    spots.push(over);
+    let mut s = DevelopSettings { spots, ..Default::default() };
+    edit(&cache, &src, &s);
+    s.spots[4].hidden = true;
+    assert_eq!(edit(&cache, &src, &s), (1, true), "the spot drawn over it, not the other eight");
+    let mut without = s.clone();
+    without.spots.remove(4);
+    let (info, req) = (SourceInfo::default(), RenderRequest::fit(480, 480));
+    assert_eq!(render_cached(&src, &info, &s, &req, &cache).image.data, render(&src, &info, &without, &req).image.data, "as if it were not there");
+    s.spots[2].hidden = true;
+    assert_eq!(edit(&cache, &src, &s), (0, true), "a spot nothing is drawn over: its box comes back");
+    s.spots[4].hidden = false;
+    assert_eq!(edit(&cache, &src, &s), (2, true), "shown again: it and the spot drawn over it");
+}
