@@ -336,8 +336,9 @@ fn op_variants_are_versioned() {
     const NEWEST_FIELDS: u32 = 14;
     /// In the fork's own numbers (`lightcraft-catalog-fork`, from 2026-11-09): v1 adds nothing to v14; v2: develop and History log
     /// records and `Photo.history` steps as patches (`journal_delta`, `history_serde`, #77). A later fork
-    /// op or field raises this and `fork_format::VERSION` (and is matched above under no official number).
-    const NEWEST_FORK_FIELDS: u32 = 2;
+    /// op or field raises this and `fork_format::VERSION` (and is matched above under no official number). v3: the
+    /// develop settings' `look`, Match Look's residual Look (#90).
+    const NEWEST_FORK_FIELDS: u32 = 3;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), crate::fork_format::LEGACY_FORK_MAX, "the newest official-numbered op or field");
     assert_eq!(NEWEST_FORK_FIELDS, VERSION, "the newest fork op's or fields' version must be the current format version");

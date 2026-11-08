@@ -9,6 +9,7 @@
 pub mod controls;
 pub mod presets;
 pub mod reflection_area;
+pub mod residual_look;
 pub mod retouch;
 pub mod segmask;
 pub mod settings;
@@ -18,6 +19,7 @@ pub mod spot_circle;
 pub use controls::{CONTROLS, ControlSpec, Section, Track};
 pub use presets::{Preset, SettingsGroup, apply_partial, extract_groups};
 pub use reflection_area::{Glare, GlareStroke, ReflectionArea, ReflectionMode};
+pub use residual_look::{LOOK_KNOTS, ResidualLook};
 pub use segmask::{SegMask, with_grid_interner};
 pub use settings::*;
 pub use spot_area::SpotArea;
@@ -220,6 +222,8 @@ impl DevelopSettings {
             // and so does the camera's own local tone mapping
             Section::Profile => {
                 self.profile = Profile::default();
+                // Match Look's residual Look (fork) belongs to the Profile group
+                self.look = ResidualLook::default();
             }
             // and the per-face settings with them
             Section::Portrait => self.retouch = Default::default(),

@@ -68,6 +68,7 @@
 //! | 14 | edited camera / lens / exposure values (fork; written as 13 before 2026-11-08) | `Meta.exif` (`ExifOverrides`: `camera`, `lens`, `focal_mm`, `aperture`, `shutter`, `iso`), in `SetMeta` and `AddPhoto` bodies |
 //! | fork 1 | the fork's own format name `lightcraft-catalog-fork` (2026-11-09) | nothing new: official 12 with the fork's 13 and 14 |
 //! | fork 2 | develop edits and History saved as what changed (#77) | log records `patchDevelop`, `patchPush`, `patchHistory`, `patchBatch` ([`crate::journal_delta`]); `Photo.history` steps after the first as `{label, patch}` ([`crate::history_serde`]) |
+//! | fork 3 | Match Look's residual Look (#90) | develop settings `look` (`ResidualLook`: `amount`, `lightness`, `cast`, `chroma`, `bands`), left out while empty |
 //!
 //! Versions 1–14 are `"format":"lightcraft-catalog"`; the fork writes `"format":"lightcraft-catalog-fork"` from
 //! its version 1 on, with its own counter, so an official build refuses a fork library untouched and the same

@@ -138,3 +138,62 @@ fn a_large_pasted_picture_is_kept_small() {
     let held = s.match_look.pasted.clone().unwrap();
     assert_eq!((held.width, held.height), (1024, 683), "stored small, not at 3000×2000");
 }
+
+/// `match-look-followups`: with `options.look` the match also saves a residual Look, which `look.amount` scales and
+/// one undo removes; without it no Look is saved.
+#[test]
+fn the_residual_look_is_saved_with_the_edit_when_asked() {
+    let (mut s, ids) = demo();
+    let (a, reference) = (ids[0], ids[1]);
+    let before = (*s.develop_of(a).unwrap()).clone();
+    // a cast that only a Look makes, on a reference matched without white balance or grading
+    let look = json!({"cast": [[0.0, -0.04], [0.03, 0.0], [-0.04, 0.0]]});
+    s.execute("library.select", &json!({"ids": [reference], "active": reference})).unwrap();
+    s.execute("develop.merge", &json!({"settings": {"look": look}})).unwrap();
+    assert!(s.develop_of(reference).unwrap().look.is_active());
+    s.execute("library.select", &json!({"ids": [a], "active": a})).unwrap();
+    let opts = json!({"whiteBalance": false, "grading": false});
+    s.execute("develop.matchLook", &json!({"ids": [a], "reference": {"photo": reference}, "options": opts})).unwrap();
+    assert!(s.develop_of(a).unwrap().look.is_identity(), "off by default");
+    s.execute("edit.undo", &json!({})).unwrap();
+    let opts = json!({"whiteBalance": false, "grading": false, "look": true});
+    let v = s.execute("develop.matchLook", &json!({"ids": [a], "reference": {"photo": reference}, "options": opts})).unwrap();
+    assert!(v["photos"][0]["look"].is_object(), "{v}");
+    let d = s.develop_of(a).unwrap();
+    assert!(d.look.is_active(), "{:?}", d.look);
+    s.execute("develop.set", &json!({"ids": [a], "values": {"look.amount": 40}})).unwrap();
+    assert_eq!(s.develop_of(a).unwrap().look.amount, 40.0);
+    s.execute("edit.undo", &json!({})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(*s.develop_of(a).unwrap(), before);
+}
+
+/// `match-look-followups`: the Look is part of the Profile group, so Copy / Paste and a preset carry it.
+#[test]
+fn copy_paste_and_presets_carry_the_look() {
+    let (mut s, ids) = demo();
+    let (a, b, c) = (ids[0], ids[1], ids[2]);
+    let look = json!({"cast": [[0.0, -0.02], [0.01, 0.0], [0.0, 0.0]], "amount": 70.0});
+    s.execute("library.select", &json!({"ids": [a], "active": a})).unwrap();
+    s.execute("develop.merge", &json!({"settings": {"look": look}})).unwrap();
+    let want = s.develop_of(a).unwrap().look.clone();
+    assert!(want.is_active());
+    s.execute("develop.copy", &json!({"groups": ["profile"]})).unwrap();
+    s.execute("develop.paste", &json!({"ids": [b]})).unwrap();
+    assert_eq!(s.develop_of(b).unwrap().look, want, "pasted");
+    let preset = s.execute("preset.create", &json!({"name": "Look", "groups": ["profile"]})).unwrap()["id"].as_str().unwrap().to_string();
+    s.execute("preset.apply", &json!({"id": preset, "ids": [c]})).unwrap();
+    assert_eq!(s.develop_of(c).unwrap().look, want, "a preset carries it");
+}
+
+/// With the Residual Look box unticked, a match keeps the photo's Look.
+#[test]
+fn an_unticked_match_keeps_the_photos_look() {
+    let (mut s, ids) = demo();
+    let (a, reference) = (ids[0], ids[1]);
+    s.execute("library.select", &json!({"ids": [a], "active": a})).unwrap();
+    s.execute("develop.merge", &json!({"settings": {"look": {"cast": [[0.0, 0.0], [0.02, 0.0], [0.0, 0.0]]}}})).unwrap();
+    let before = s.develop_of(a).unwrap().look.clone();
+    s.execute("develop.matchLook", &json!({"ids": [a], "reference": {"photo": reference}})).unwrap();
+    assert_eq!(s.develop_of(a).unwrap().look, before);
+}

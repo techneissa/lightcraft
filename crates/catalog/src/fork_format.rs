@@ -37,7 +37,7 @@ pub const FORK_FORMAT: &str = "lightcraft-catalog-fork";
 pub const OFFICIAL_FORMAT: &str = "lightcraft-catalog";
 /// The fork format this build writes (and the newest it reads). Bump it whenever an `Op` variant or a serialized
 /// field is added, and add a row to `journal.rs` → *Format versions*.
-pub const VERSION: u32 = 2;
+pub const VERSION: u32 = 3;
 /// The newest official format this build reads (official update of 2026-11-08: shared segmentation grids).
 pub const OFFICIAL_VERSION: u32 = 12;
 /// The highest `lightcraft-catalog` version a fork build wrote, before the fork had its own name.

@@ -43,10 +43,19 @@ pub(crate) struct Fitter<'a> {
     pub start: DevelopSettings,
     /// Every number any stage may move (the prior is summed over them).
     pub all: Vec<Param>,
+    /// The colour mixer bands that are a large part of both pictures (their sliders may move further).
+    pub large_bands: Vec<usize>,
 }
 
+/// Renders kept for the residual Look ([`Fitter::fit_look`]: up to 4 rounds of 4 parts × 3 strengths, usually far
+/// fewer).
+pub(crate) const LOOK_BUDGET: usize = 48;
+
+/// A mixer band counts as large once it holds this share of both pictures.
+pub(crate) const LARGE_BAND_SHARE: f32 = 0.08;
+
 /// The improvement that counts (relative to the loss, plus a floor far below anything visible).
-fn tolerance(best: f64) -> f64 {
+pub(crate) fn tolerance(best: f64) -> f64 {
     best * 1e-4 + 1e-9
 }
 
@@ -92,12 +101,39 @@ impl Fitter<'_> {
         Ok(())
     }
 
+    /// `v` kept within `p`'s cap around where the photo started ([`Param::cap`]) and within its band
+    /// ([`Param::band`], widened to where the photo started when that is outside it). A bound that isn't a number
+    /// (settings from a damaged file) keeps the current value.
+    pub fn limit(&self, p: &Param, d: &DevelopSettings, v: f64) -> f64 {
+        let now = p.get(d);
+        let cap = p.cap(p.mixer_band().is_some_and(|b| self.large_bands.contains(&b)));
+        let s0 = p.get(&self.start);
+        let (lo, hi) = match p.other_axis() {
+            Some(o) => {
+                let (off, other) = (o.get(d) - o.get(&self.start), o.get(d));
+                let reach = (cap * cap - off * off).max(0.0).sqrt();
+                // the wheel's saturation stays within its band's radius (or where the photo had it)
+                let radius = p.band().1.max(s0.hypot(o.get(&self.start)));
+                let inside = (radius * radius - other * other).max(0.0).sqrt();
+                ((s0 - reach).max(-inside), (s0 + reach).min(inside))
+            }
+            None => {
+                let (blo, bhi) = p.band();
+                ((s0 - cap).max(blo.min(s0)), (s0 + cap).min(bhi.max(s0)))
+            }
+        };
+        if !(lo.is_finite() && hi.is_finite() && v.is_finite()) || lo > hi {
+            return now;
+        }
+        v.clamp(lo, hi)
+    }
+
     /// Try `p` one step up and down; on a better look keep going that way with growing steps. Whether it moved.
     fn try_param(&mut self, d: &mut DevelopSettings, best: &mut f64, p: &Param, step: f64) -> Result<bool, Stop> {
         let v0 = p.get(d);
         for dir in [1.0, -1.0] {
             let mut trial = d.clone();
-            let v = p.set(&mut trial, v0 + dir * step);
+            let v = p.set(&mut trial, self.limit(p, d, v0 + dir * step));
             if (v - v0).abs() < 1e-9 {
                 continue;
             }
@@ -110,7 +146,7 @@ impl Fitter<'_> {
                     s *= 2.0;
                     let mut further = d.clone();
                     let from = p.get(d);
-                    let to = p.set(&mut further, from + dir * s);
+                    let to = p.set(&mut further, self.limit(p, d, from + dir * s));
                     if (to - from).abs() < 1e-9 {
                         break;
                     }
@@ -138,7 +174,7 @@ impl Fitter<'_> {
             .collect()
     }
 
-    fn measure(&mut self, d: &DevelopSettings) -> Stats {
+    pub(crate) fn measure(&mut self, d: &DevelopSettings) -> Stats {
         let img = lightcraft_pipeline::render(self.src, self.info, d, &self.req).image;
         stats::measure(&img, self.goals.first().and_then(|g| g.mask.as_ref()))
     }
@@ -188,10 +224,23 @@ impl Fitter<'_> {
             Err(Stop::Budget) => return Err(LookError::Invalid("the evaluation budget is too small".into())),
         };
         let mut best = before;
-        match self.stages(d, &mut best, opts) {
-            Ok(()) | Err(Stop::Budget) => Ok((before, best)),
-            Err(Stop::Cancelled) => Err(LookError::Cancelled),
+        // the residual Look has renders of its own, so sliders that use up theirs never leave it out
+        let full = self.budget;
+        if opts.look {
+            self.budget = full.saturating_sub(LOOK_BUDGET).max(self.evals + 1);
         }
+        match self.stages(d, &mut best, opts) {
+            Ok(()) | Err(Stop::Budget) => {}
+            Err(Stop::Cancelled) => return Err(LookError::Cancelled),
+        }
+        if opts.look {
+            self.budget = self.evals.saturating_add(LOOK_BUDGET).max(full);
+            match self.fit_look(d, &mut best) {
+                Ok(()) | Err(Stop::Budget) => {}
+                Err(Stop::Cancelled) => return Err(LookError::Cancelled),
+            }
+        }
+        Ok((before, best))
     }
 
     fn stages(&mut self, d: &mut DevelopSettings, best: &mut f64, opts: &MatchOptions) -> Result<(), Stop> {
@@ -222,6 +271,12 @@ impl Fitter<'_> {
         }
         if opts.mixer {
             let now = self.measure(d);
+            self.large_bands = (0..MIXER_BANDS.len())
+                .filter(|&i| {
+                    now.bands.get(i).is_some_and(|b| b.share >= LARGE_BAND_SHARE)
+                        && self.goals.iter().any(|g| g.stats.bands.get(i).is_some_and(|b| b.share >= LARGE_BAND_SHARE))
+                })
+                .collect();
             let mut mix = Vec::new();
             for i in self.shared_bands(&now) {
                 for part in ["hue", "sat", "lum"] {

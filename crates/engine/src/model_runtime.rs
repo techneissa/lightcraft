@@ -63,6 +63,15 @@ pub struct ModelRuntimes {
     downloads: Mutex<HashMap<String, crate::lama_fill::Download>>,
 }
 
+/// The web build downloads no Core ML model.
+#[cfg(target_arch = "wasm32")]
+impl ModelRuntimes {
+    /// Where `model`'s Core ML download stands: never started on the web.
+    pub fn download_state(&self, _model: &str) -> crate::lama_fill::Download {
+        crate::lama_fill::Download::Idle
+    }
+}
+
 impl ModelRuntimes {
     /// Keep the choices in `file`, reading what it holds.
     pub fn open(&self, file: Option<PathBuf>) {

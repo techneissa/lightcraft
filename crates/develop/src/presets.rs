@@ -111,7 +111,7 @@ impl SettingsGroup {
     /// Top-level JSON keys of `DevelopSettings` that belong to the group.
     pub fn keys(self) -> &'static [&'static str] {
         match self {
-            SettingsGroup::Profile => &["profile"],
+            SettingsGroup::Profile => &["profile", "look"],
             SettingsGroup::Treatment => &["treatment"],
             SettingsGroup::WhiteBalance => &["wb"],
             SettingsGroup::Light => &["light", "hdr"],
@@ -158,6 +158,11 @@ pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
             _ => Value::Null,
         };
         profile.insert("camera_profile".to_string(), id);
+    }
+    // Match Look's residual Look (fork) is part of the Profile group; left out of the settings while empty, the group
+    // still carries it, so applying it removes the Look of a photo that has one
+    if groups.contains(&SettingsGroup::Profile) && !out.contains_key("look") {
+        out.insert("look".to_string(), serde_json::to_value(&s.look).unwrap_or(Value::Null));
     }
     Value::Object(out)
 }

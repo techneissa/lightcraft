@@ -51,6 +51,7 @@ pub mod output;
 pub mod profiles;
 pub mod recolor;
 pub mod redeye;
+pub mod residual_look;
 pub mod retouch_step;
 pub mod spot_area;
 pub mod spots;

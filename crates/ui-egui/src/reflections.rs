@@ -452,7 +452,7 @@ pub fn panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         }
     }
     egui::Frame::NONE.inner_margin(pad).show(ui, |ui| {
-        let r = ui.add_enabled(ready && !busy, egui::Button::new(tr("Reset")));
+        let r = ui.add_enabled(ready && !busy, egui::Button::new(tr("Reset"))).on_hover_text(tr("Reset Reflection Removal"));
         register(ui, "reflection:reset", r.rect);
         if r.clicked() {
             let _ = app.run("reflection.reset", json!({}));

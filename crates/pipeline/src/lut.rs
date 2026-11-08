@@ -92,9 +92,19 @@ fn registry() -> &'static RwLock<HashMap<String, Arc<Lut3d>>> {
     R.get_or_init(Default::default)
 }
 
+/// Bumped whenever a LUT is registered or forgotten, so a table built from one (Match Look's residual Look composed
+/// with a LUT profile, fork) knows when it is stale.
+static GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// The registry's generation (see [`GENERATION`]).
+pub fn generation() -> u64 {
+    GENERATION.load(std::sync::atomic::Ordering::Acquire)
+}
+
 /// Make a LUT available to renders under profile id `id` (`lut:…`).
 pub fn register(id: &str, lut: Lut3d) {
     registry().write().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), Arc::new(lut));
+    GENERATION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
 }
 
 /// The LUT registered for profile `id`.
@@ -108,6 +118,7 @@ pub fn get(id: &str) -> Option<Arc<Lut3d>> {
 /// Forget a LUT profile.
 pub fn unregister(id: &str) {
     registry().write().unwrap_or_else(|e| e.into_inner()).remove(id);
+    GENERATION.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
 }
 
 /// Profile ids that render with a LUT.
