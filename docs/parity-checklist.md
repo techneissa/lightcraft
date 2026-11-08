@@ -34,9 +34,9 @@ cited here still exists. Formerly docs/parity.md.
 | F. Edit panel — global adjustments (EDIT) | 42 | 5 | 3 | 1 | 25/28 (89%) | 14/15 (93%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
-| I. Remove / healing (REM) | 9 | 1 | 2 | 2 | 4/4 (100%) | 3/4 (75%) |
+| I. Remove / healing (REM) | 9 | 2 | 1 | 2 | 4/4 (100%) | 3/4 (75%) |
 | J. Red eye (EYE) | 2 | 0 | 0 | 0 | — | 1/1 (100%) |
-| K. Masking (MASK) | 15 | 5 | 5 | 0 | 7/8 (88%) | 7/7 (100%) |
+| K. Masking (MASK) | 16 | 5 | 5 | 0 | 7/8 (88%) | 7/7 (100%) |
 | L. Presets (PRE) | 7 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
 | M. Versions & history (VER) | 5 | 0 | 0 | 0 | 1/1 (100%) | 3/3 (100%) |
 | N. Copy / paste / sync (SYNC) | 5 | 0 | 0 | 0 | 3/3 (100%) | 1/1 (100%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 422 | 70 | 57 | 35 | 193/203 (95%) | 148/164 (90%) |
+| **Total** | 423 | 71 | 56 | 35 | 193/203 (95%) | 148/164 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 549 in-scope rows — P0 97.5% of 203 · P1 94.2% of 164 · P2 56.9% of 180.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 550 in-scope rows — P0 97.5% of 203 · P1 94.2% of 164 · P2 57.5% of 181.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -317,6 +317,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-MASK-UPDATE | Recompute AI masks | P2 | ⬜ | | |
 | LR-MASK-SYNC | Copy masks to other photos | P1 | ✅ | `cmd:develop.copy` (`groups`) | |
 | LR-MASK-ADAPTIVE | Adaptive presets | P2 | ⬜ | | |
+| LR-MASK-RECOLOR | Recolor a masked area | P2 | ✅ | `cmd:mask.recolor`, `cmd:mask.recolorPick`, `crates/pipeline/src/recolor.rs`, `crates/ui-egui/src/panels/mask_recolor.rs` | beyond Lightroom (no equivalent): the area takes a picked colour (picker, hex, eyedropper on this or another photo) and keeps its shading, in OkLab against the area's mean measured on a fixed proxy, so preview, export and GPU match |
 
 ## L. Presets (PRE)
 

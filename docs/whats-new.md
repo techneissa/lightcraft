@@ -38,6 +38,18 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+## 2026-11-09
+
+### Remove an Object in One Step
+- The Remove panel has an Object mode: click an object and LightCraft selects it with SAM 3 and removes all of it with one spot in its shape. ⇧-click adds to it, ⌥-click leaves a part out, and a loose stroke over an object snaps to its outline. Expand sets how far past the outline the spot reaches.
+- Any mask can become a Remove spot too: right-click it and choose Remove This Area.
+- These spots fill with LaMa unless you pick Classic. Find People and Find Wires now remove each find with one spot in its shape.
+- Remove spots that use LaMa, and Content-Aware spots, no longer show a source pin: they rebuild the area from what is around it.
+
+### Recolor
+- A mask can now recolor what it selects: pick a colour (picker, hex value or eyedropper) and the area's main colour takes it while keeping its own folds, gradients and highlights. Other colours inside the mask (a logo, dust, a white lining) stay; Range and Color to Replace choose which colour changes. Red boots become purple boots with the same light on them; a black shirt can become white with its folds in place.
+- Works with every mask, including Describe ("boots", "red dress"). Saved with the mask and carried by Sync, Copy / Paste and presets.
+
 ## 2026-11-08
 
 ### Learn My Edits
