@@ -4,7 +4,7 @@ List: each submask's Edge, Smoothness and Refine slider changes only its own sub
 
 ## What it does
 
-- **Sliders per submask** (#68): every submask row of the Masking panel is its own id scope (`widgets::in_repeated_row`), so two submasks' Edge sliders (and Smoothness, Refine) are separate widgets. Before, they shared one widget id: they moved together and only the bottom one could be grabbed. The control channel names each slider `slider:<id>:<row>` (`slider:edge:0`, `sliderValue:edge:1`) besides the old `slider:<id>`, which stays.
+- **Sliders per submask** (#68): every submask row of the Masking panel is its own id scope (`widgets::in_repeated_row`), so two submasks' Edge sliders (and Smoothness, Refine) are separate widgets. Before, they shared one widget id: they moved together and only the bottom one could be grabbed. The control channel names each slider `slider:<id>:<row>` (`slider:edge:0`, `sliderValue:edge:1`); the old `slider:<id>` means the first row. The rows share one label and value column width.
 - **Invert Mask** (#72): `mask.invert` and `mask.duplicate` with `invert` flip `Mask.invert` and rewrite the later submasks in the same undo step (`cmd::mask_invert::invert`), so the whole mask selects the opposite:
 
   | Submask before | after |
@@ -13,7 +13,7 @@ List: each submask's Edge, Smoothness and Refine slider changes only its own sub
   | Subtract C | Add C |
   | Intersect C | Add C, the submask's own Invert flipped |
 
-  Hard edges give the exact opposite. Where soft edges overlap the result differs slightly (Add is `max`, Subtract multiplies). Inverting twice selects the same area; an Intersect comes back as Subtract with its Invert on. A saved mask with Invert already on renders as before: `evaluate_one` is unchanged, only a new click rewrites submasks.
+  Hard edges give the exact opposite. Where soft edges overlap the result differs slightly (Add is `max`, Subtract multiplies). Inverting twice puts every part back exactly: the Invert keeps what the parts were in `Mask.before_invert` (saved only while set, absent in old files) and the next Invert restores it while the parts are still what the first one made; after any edit the table applies again. A saved mask with Invert already on renders as before: `evaluate_one` is unchanged, only a new click rewrites submasks.
 
 ## Branch
 
@@ -25,7 +25,7 @@ List: each submask's Edge, Smoothness and Refine slider changes only its own sub
 
 ## Hooks in official files
 
-- `crates/engine/src/cmd.rs`: `mod mask_invert;`. `crates/engine/src/cmd/masks.rs`: `mask.invert` and `mask.duplicate` call `mask_invert::invert`.
+- `crates/develop/src/settings.rs`: `Mask.before_invert`. `crates/engine/src/cmd.rs`: `mod mask_invert;`. `crates/engine/src/cmd/masks.rs`: `mask.invert` and `mask.duplicate` call `mask_invert::invert`.
 - `crates/ui-egui/src/widgets.rs`: `in_repeated_row`, and `slider` also registers `slider:<id>:<row>` and `sliderValue:<id>:<row>` inside it. `crates/ui-egui/src/panels/mask_parts.rs`: `part_rows` calls `range_controls` through `in_repeated_row`. `crates/ui-egui/src/tests.rs`: `mod mask_edge_rows;`.
 
 ## Tests

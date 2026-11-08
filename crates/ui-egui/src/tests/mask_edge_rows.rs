@@ -63,9 +63,15 @@ fn drag(h: &mut Headless, id: &str, dx: f64) {
 fn an_edge_slider_changes_only_its_own_submask() {
     let mut h = two_ai_submasks();
     assert_eq!(edges(&h), [0.0, 0.0]);
-    drag(&mut h, "slider:edge:0", 60.0);
+    // (the bare name is the first row's, as before there were rows)
+    drag(&mut h, "slider:edge", 60.0);
+    let after_bare = edges(&h);
+    assert!(after_bare[0] > 0.0, "the bare slider:edge moves the first submask: {after_bare:?}");
+    assert_eq!(after_bare[1], 0.0, "and only that one: {after_bare:?}");
+    // (a drag sets the value from the pointer: 30 points right of the middle is about 29, not 58)
+    drag(&mut h, "slider:edge:0", 30.0);
     let after_first = edges(&h);
-    assert!(after_first[0] > 0.0, "the first slider moves its submask: {after_first:?}");
+    assert!(after_first[0] > 0.0 && after_first[0] < after_bare[0], "the first slider moves its submask: {after_first:?}");
     assert_eq!(after_first[1], 0.0, "and only that one: {after_first:?}");
     drag(&mut h, "slider:edge:1", -60.0);
     let after_second = edges(&h);
@@ -98,4 +104,15 @@ fn a_refine_slider_changes_only_its_own_submask() {
     let after = refines(&h);
     assert!(after[0] > 50.0, "the first slider moves its submask: {after:?}");
     assert_eq!(after[1], 50.0, "and only that one: {after:?}");
+}
+
+/// An Edge row and a Refine row of one mask keep one value column width, as the rows did before each had a scope.
+#[test]
+fn the_rows_share_one_value_column_width() {
+    let mut h = two_ai_submasks();
+    let range = MaskShape::ColorRange { samples: vec![[0.5, 0.0, 0.0]], refine: 50.0 };
+    exec(&mut h, "mask.update", json!({"component": 1, "shape": range}));
+    h.settle(SETTLE);
+    let width = |id: &str| h.app.widgets.iter().find(|(w, _)| w == id).map(|(_, r)| r.width()).unwrap_or_else(|| panic!("no widget {id}"));
+    assert_eq!(width("sliderValue:edge:0"), width("sliderValue:refine:1"));
 }

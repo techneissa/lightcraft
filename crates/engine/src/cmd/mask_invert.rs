@@ -8,28 +8,44 @@
 //! | Add C           | Subtract C                             | not (X or C) = (not X) without C      |
 //! | Subtract C      | Add C                                  | not (X without C) = (not X) or C      |
 //! | Intersect C     | Add C, the part's own Invert flipped   | not (X and C) = (not X) or (not C)    |
+//!
+//! A second Invert puts every part back exactly as it was (`Mask.before_invert`).
 
 use lightcraft_develop::{Mask, MaskOp};
 
+/// The table's rewrite of one part's (mode, own Invert).
+fn turned((op, own): (MaskOp, bool)) -> (MaskOp, bool) {
+    match op {
+        MaskOp::Add => (MaskOp::Subtract, own),
+        MaskOp::Subtract => (MaskOp::Add, own),
+        MaskOp::Intersect => (MaskOp::Add, !own),
+    }
+}
+
 /// Turns `m` around: `Mask.invert` flips and every part after the first changes as the table above says. Saved masks
 /// are never rewritten, only a call of this is.
+///
+/// Inverting twice selects the same area, but the table alone would bring an Intersect part back as a Subtract with
+/// its Invert on (the same pixels under another name). So a call keeps what the parts were in `Mask.before_invert`;
+/// the next call puts exactly that back when the parts are still what the table made of it (any edit since, or a
+/// reorder, fails that check and the table applies again).
 pub(super) fn invert(m: &mut Mask) {
     m.invert = !m.invert;
-    for c in m.components.iter_mut().skip(1) {
-        match c.op {
-            MaskOp::Add => c.op = MaskOp::Subtract,
-            MaskOp::Subtract => c.op = MaskOp::Add,
-            MaskOp::Intersect => {
-                c.op = MaskOp::Add;
-                c.invert = !c.invert;
-            }
-        }
+    let now: Vec<(MaskOp, bool)> = m.components.iter().skip(1).map(|c| (c.op, c.invert)).collect();
+    let before = std::mem::take(&mut m.before_invert);
+    let undoing = !before.is_empty() && before.iter().copied().map(turned).eq(now.iter().copied());
+    let target: Vec<(MaskOp, bool)> = if undoing { before } else { now.iter().copied().map(turned).collect() };
+    for (c, (op, own)) in m.components.iter_mut().skip(1).zip(target) {
+        (c.op, c.invert) = (op, own);
+    }
+    if !undoing {
+        m.before_invert = now;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use lightcraft_develop::{DevelopSettings, MaskComponent, MaskShape};
+    use lightcraft_develop::{BrushStroke, DevelopSettings, MaskComponent, MaskShape};
     use lightcraft_geom::Point;
     use lightcraft_pipeline::geometry::Frame;
     use lightcraft_pipeline::masks::evaluate_one;
@@ -98,6 +114,7 @@ mod tests {
                     let mut twice = once.clone();
                     invert(&mut twice);
                     assert_eq!(alpha(&twice).data, before.data, "{what}: twice selects the same area");
+                    assert_eq!(twice.components, m.components, "{what}: twice puts every part back as it was");
                 }
             }
         }
@@ -118,18 +135,56 @@ mod tests {
         assert!(a.get(90, 20) > 0.99, "outside both");
     }
 
-    /// An Intersect part comes back as Add with its own Invert on.
+    /// Inverting twice restores every part exactly (mode and own Invert), whatever it was, on a mask that is not
+    /// inverted and one that is, with a gradient base and a brush base.
     #[test]
-    fn an_intersect_part_becomes_add_with_its_own_invert_flipped() {
+    fn inverting_twice_restores_every_part_exactly() {
+        let ops = [MaskOp::Add, MaskOp::Subtract, MaskOp::Intersect];
+        let brush = MaskShape::Brush { strokes: vec![BrushStroke { points: vec![Point::new(0.3, 0.1)], size: 0.05, ..Default::default() }] };
+        for base in [half(0.5, false), brush] {
+            for mask_invert in [false, true] {
+                for base_own in [false, true] {
+                    for (o1, o2) in ops.iter().flat_map(|a| ops.iter().map(move |b| (*a, *b))) {
+                        for (own1, own2) in [(false, false), (false, true), (true, false), (true, true)] {
+                            let m = Mask {
+                                invert: mask_invert,
+                                components: vec![
+                                    part(MaskOp::Add, base_own, base.clone()),
+                                    part(o1, own1, half(0.75, false)),
+                                    part(o2, own2, half(0.2, true)),
+                                ],
+                                ..Default::default()
+                            };
+                            let mut once = m.clone();
+                            invert(&mut once);
+                            assert_eq!(once.invert, !mask_invert);
+                            let mut twice = once.clone();
+                            invert(&mut twice);
+                            let what = format!("invert={mask_invert} base own {base_own}: {o1:?}/{own1}, {o2:?}/{own2}");
+                            assert_eq!(twice, m, "{what}: twice gives back the same mask");
+                            // and a third time turns it again, as the first
+                            let mut thrice = twice.clone();
+                            invert(&mut thrice);
+                            assert_eq!(thrice, once, "{what}: three times is one time");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// A part edited after Invert is not put back from the old note: the table applies again.
+    #[test]
+    fn an_edit_after_invert_makes_the_next_invert_use_the_table() {
         let mut m = Mask {
             components: vec![part(MaskOp::Add, false, half(0.5, false)), part(MaskOp::Intersect, false, half(0.25, false))],
             ..Default::default()
         };
         invert(&mut m);
-        assert!(m.invert);
         assert_eq!((m.components[1].op, m.components[1].invert), (MaskOp::Add, true));
+        m.components[1].op = MaskOp::Subtract;
         invert(&mut m);
-        assert_eq!((m.components[1].op, m.components[1].invert), (MaskOp::Subtract, true));
+        assert_eq!((m.components[1].op, m.components[1].invert), (MaskOp::Add, true), "Subtract with Invert on becomes Add with it on");
     }
 
     fn two_part_session() -> Session {
