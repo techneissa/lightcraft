@@ -144,8 +144,12 @@ fn the_commands_check_what_they_are_given() {
     let mut s = session_with_wire(&dir);
     s.parsing.set_paths(Some(dir.join("models")), Some(dir.join("cache")), Some(dir.join("choice.json")));
     let status = s.execute("parsing.status", &json!({})).unwrap();
-    assert_eq!(status["sets"].as_array().unwrap().len(), 2);
+    assert_eq!(status["sets"].as_array().unwrap().len(), 3);
     assert_eq!(status["modelSet"], "segformer");
+    // Sapiens2 is the SegFormer set's files plus its own, about 0.8 GB more
+    let sapiens2 = status["sets"].as_array().unwrap().iter().find(|v| v["id"] == "sapiens2").unwrap();
+    assert_eq!(sapiens2["bytes"].as_u64(), Some(ModelSet::Sapiens2.size()));
+    assert!(sapiens2["files"].as_array().unwrap().iter().any(|f| f["licence"].as_str().unwrap().contains("identifying people")));
     assert!(s.execute("parsing.modelSet", &json!({"set": "nope"})).is_err());
     assert_eq!(s.execute("parsing.modelSet", &json!({"set": "bisenet"})).unwrap()["modelSet"], "bisenet");
     let refused = s.execute("parsing.download", &json!({})).unwrap_err().to_string();

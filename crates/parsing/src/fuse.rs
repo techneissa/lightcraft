@@ -68,8 +68,8 @@ fn route(c: usize) -> To {
     }
 }
 
-/// The whole photo's pass sees this share of the trained number of patches: the people get passes of their own
-/// ([`crate::crops`]), so this one only has to find them and the background (the same masks, in about half the time).
+/// The whole photo's pass sees this share of the trained number of patches: it serves the people without a pass of
+/// their own ([`crate::crops`]), mostly a portrait that fills the frame (the same masks, in about half the time).
 const WHOLE_AREA: f32 = 0.5;
 
 /// The input Sapiens2 sees for a `width × height` photo: [`WHOLE_AREA`] of the trained number of patches (1024 × 768),
@@ -98,9 +98,10 @@ pub fn run(model: &Sapiens2, img: &RgbImage, w: usize, h: usize, dev: &Device) -
     Ok(probs)
 }
 
-/// The clothes parser's map with Sapiens2's say on where things are: each Sapiens2 class's probability goes to its
+/// The clothes parser's map with Sapiens2's say on where things are, as much as `presence` gives it at each cell (1
+/// inside the people's boxes, 0 away from them; missing cells: 0): each Sapiens2 class's probability goes to its
 /// clothes-parser class, and a garment's is shared among the garments the clothes parser sees there.
-pub fn fuse(map: &BodyMap, parts: &[f32]) -> BodyMap {
+pub fn fuse(map: &BodyMap, parts: &[f32], presence: &[f32]) -> BodyMap {
     let n = map.w * map.h;
     let mut probs = vec![0.0f32; ATR * n];
     let routes: Vec<To> = (0..sapiens::CLASSES).map(route).collect();
@@ -128,6 +129,12 @@ pub fn fuse(map: &BodyMap, parts: &[f32]) -> BodyMap {
                 }
             }
         }
+        let say = presence.get(i).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+        for c in 0..ATR {
+            if let Some(o) = probs.get_mut(c * n + i) {
+                *o = say * *o + (1.0 - say) * atr_p(c);
+            }
+        }
     }
     BodyMap { w: map.w, h: map.h, probs }
 }
@@ -152,7 +159,7 @@ mod tests {
         for &(c, p) in parts {
             s[c] = p;
         }
-        fuse(&BodyMap { w: 1, h: 1, probs: a }, &s)
+        fuse(&BodyMap { w: 1, h: 1, probs: a }, &s, &[1.0])
     }
 
     #[test]
@@ -181,11 +188,14 @@ mod tests {
         let atr: Vec<f32> = (0..ATR).map(|c| (c as f32 + 1.0) / ((ATR * (ATR + 1)) as f32 / 2.0)).collect();
         let logits = Tensor::arange(0f32, sapiens::CLASSES as f32, &Device::Cpu).unwrap().affine(0.3, 0.0).unwrap().sin().unwrap();
         let parts = softmax(&logits.reshape((1, sapiens::CLASSES, 1, 1)).unwrap());
-        let m = fuse(&BodyMap { w: 1, h: 1, probs: atr }, &parts);
+        let m = fuse(&BodyMap { w: 1, h: 1, probs: atr.clone() }, &parts, &[0.5]);
         assert!((m.probs.iter().sum::<f32>() - 1.0).abs() < 1e-4);
         // and a map missing its values is empty, not a panic
-        let m = fuse(&BodyMap { w: 2, h: 2, probs: vec![] }, &[]);
+        let m = fuse(&BodyMap { w: 2, h: 2, probs: vec![] }, &[], &[]);
         assert_eq!(m.probs.len(), ATR * 4);
+        // away from the people Sapiens2 has no say: the clothes parser's map stays
+        let m = fuse(&BodyMap { w: 1, h: 1, probs: atr.clone() }, &parts, &[0.0]);
+        assert_eq!(m.probs, atr);
     }
 
     #[test]

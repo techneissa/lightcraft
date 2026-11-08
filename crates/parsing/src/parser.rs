@@ -106,15 +106,32 @@ impl Parser {
         Ok(Self { set, face, face_model: set.face_model(), body, parts, mesh, dev })
     }
 
-    /// The whole photo through the clothes parser at `side`, and through the set's body-part parser when it has one
-    /// (its class probabilities on the same grid).
-    fn body_maps(&self, img: &crate::RgbImage, side: usize) -> Result<(body::BodyMap, Option<Vec<f32>>)> {
-        let map = body::run(&self.body, img, side, &self.dev)?;
-        let parts = match &self.parts {
-            Some(net) => Some(crate::fuse::run(net, img, map.w, map.h, &self.dev)?),
-            None => None,
+    /// The clothes parser's map with Sapiens2's say inside the people's boxes: each person up close (Sapiens2 is unsure
+    /// of people further back in a whole photo), and a pass over the whole photo only for the people without a pass of
+    /// their own (a portrait that fills the frame, people past the first [`crate::crops::MAX_CROPS`]).
+    fn with_parts(
+        &self,
+        net: &Sapiens2,
+        map: body::BodyMap,
+        img: &crate::RgbImage,
+        faces: &[NormRect],
+        cancelled: &dyn Fn() -> bool,
+    ) -> Result<body::BodyMap> {
+        let people = crate::crops::people_boxes(&map, faces, img);
+        if people.is_empty() {
+            return Ok(map);
+        }
+        let crops = crate::crops::crops(&people, crate::crops::MAX_CROPS);
+        let mut probs = if crops.len() < people.len() {
+            crate::fuse::run(net, img, map.w, map.h, &self.dev)?
+        } else {
+            vec![0.0; crate::sapiens::CLASSES * map.w * map.h]
         };
-        Ok((map, parts))
+        if cancelled() {
+            return Err(Error::Cancelled);
+        }
+        crate::crops::refine(net, img, (map.w, map.h), &mut probs, &crops, &self.dev, cancelled)?;
+        Ok(crate::fuse::fuse(&map, &probs, &crate::crops::presence(&people, map.w, map.h)))
     }
 
     pub fn set(&self) -> ModelSet {
@@ -136,33 +153,28 @@ impl Parser {
         let mut prof = Profile::start();
         let (iw, ih) = (img.width as f32, img.height as f32);
         let given: Vec<FaceHint> = hints.iter().filter_map(|h| h.rect.clamped().map(|rect| FaceHint { rect, ..h.clone() })).collect();
-        let (mut map, mut parts) = self.body_maps(img, body_side(&given, img, opts))?;
+        let mut map = body::run(&self.body, img, body_side(&given, img, opts), &self.dev)?;
         prof.step("body");
         if cancelled() {
             return Err(Error::Cancelled);
         }
-        let faces = match parts.as_deref() {
-            // faces from the map are needed only without hints
-            Some(p) if hints.is_empty() => faces_of(&given, true, &crate::fuse::fuse(&map, p), iw, opts),
-            _ => faces_of(&given, hints.is_empty(), &map, iw, opts),
-        };
+        // without hints the faces come from the clothes parser's map (Sapiens2 sees faces where there are none)
+        let faces = faces_of(&given, hints.is_empty(), &map, iw, opts);
         if hints.is_empty() {
             // the faces were found in the map: look again, closer, when they are small
             let side = body_side(&faces, img, opts);
             if side > map.w.max(map.h) {
-                (map, parts) = self.body_maps(img, side)?;
+                map = body::run(&self.body, img, side, &self.dev)?;
                 prof.step("body again");
             }
         }
         let rects: Vec<NormRect> = faces.iter().map(|f| f.rect).collect();
-        if let (Some(net), Some(probs)) = (&self.parts, parts.as_mut()) {
-            // each person up close (Sapiens2 is unsure of people further back in a whole photo)
-            let boxes = crate::crops::boxes(&map, &rects, img, crate::crops::MAX_CROPS);
-            crate::crops::refine(net, img, (map.w, map.h), probs, &boxes, &self.dev, cancelled)?;
-            prof.step("people up close");
-        }
-        let map = match parts.as_deref() {
-            Some(p) => crate::fuse::fuse(&map, p),
+        let map = match &self.parts {
+            Some(net) => {
+                let m = self.with_parts(net, map, img, &rects, cancelled)?;
+                prof.step("people up close");
+                m
+            }
             None => map,
         };
         let owners = people::assign(&map.person(), &map.skin_or_hair(), map.w, map.h, &rects);

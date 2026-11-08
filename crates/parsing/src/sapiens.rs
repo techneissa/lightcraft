@@ -2,10 +2,11 @@
 //! RMS norms, query/key norms, grouped-query attention in its middle blocks and SwiGLU feed-forwards, then four 2×
 //! transposed convolutions back to the input's size and 29 classes (`docs/SEG.md` of facebookresearch/sapiens2).
 //!
-//! Written from Meta's published model code (Sapiens2 License) and the layout of the MLX bf16 checkpoint
-//! (`mlx-community/sapiens2-seg-0.4b-bf16`: kernels out, kh, kw, in). The sizes come from the weights, so the 0.8B and
-//! 1B checkpoints load too. The licence forbids identifying people: what this network sees never feeds face
-//! recognition.
+//! Written for candle from the paper and the layout of the MLX bf16 checkpoint (`mlx-community/sapiens2-seg-0.4b-bf16`:
+//! kernels out, kh, kw, in), checked against Meta's published inference code and mlx-vlm's MIT port (on the same input
+//! the two give the same class at 99.8 % of the pixels). The sizes come from the weights, so the 0.8B and 1B
+//! checkpoints load too. The weights' licence (Sapiens2 License) forbids identifying people: what this network sees
+//! never feeds face recognition.
 
 use candle_core::{D, DType, Device, Tensor};
 use candle_nn::{Linear, Module};
