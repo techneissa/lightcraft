@@ -10,6 +10,10 @@ use super::{Color32, DevelopSettings, Gesture, LightcraftApp, Point, Pos2, Rect,
 /// circle is not showing can't be grabbed, so a click there adds a new one. A spot hidden with its eye (no effect)
 /// is grabbed like any other while its circle shows.
 pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
+    // fork feature (fork/glare-highlights.md): the Reflections section's box and glare brush
+    if crate::reflections_glare::overlay(app, ui, resp, map, d) {
+        return;
+    }
     let long = (map.rect.width().max(map.rect.height())) as f64;
     let active = app.session.active_spot.filter(|i| *i < d.spots.len());
     let (mode, live) = (app.ui.tool_overlay, pins_live(app, resp, map));

@@ -1342,7 +1342,13 @@ fn ui_commands_10(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Va
         | "reflection.install"
         | "reflection.download"
         | "reflection.models"
-        | "reflection.instructions" => {
+        | "reflection.instructions"
+        // fork feature (fork/glare-highlights.md)
+        | "reflection.mode"
+        | "reflection.area"
+        | "reflection.glare"
+        | "reflection.paint"
+        | "reflection.tool" => {
             app.ui.right = RightPanel::Remove;
             crate::reflections::command(app, id, p)
         }

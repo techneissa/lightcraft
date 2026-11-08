@@ -1442,6 +1442,14 @@ pub struct Reflection {
     pub source_key: String,
     pub amount: f64,
     pub quality: u32,
+    /// Fork feature (`fork/glare-highlights.md`): reflections in glass or glare, the area the model ran on, and the
+    /// glare settings. Not written while default.
+    #[serde(skip_serializing_if = "crate::ReflectionMode::is_reflections")]
+    pub mode: crate::ReflectionMode,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub area: Option<crate::ReflectionArea>,
+    #[serde(skip_serializing_if = "crate::Glare::is_default")]
+    pub glare: crate::Glare,
 }
 impl Reflection {
     pub fn is_default(&self) -> bool {
@@ -1465,6 +1473,9 @@ impl Default for Reflection {
             protect_sky: false,
             detail_protection: 0.0,
             model: String::new(),
+            mode: Default::default(),
+            area: None,
+            glare: Default::default(),
         }
     }
 }

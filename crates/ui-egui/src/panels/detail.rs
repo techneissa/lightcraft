@@ -22,7 +22,7 @@ mod crop;
 mod film_bar;
 mod filmstrip;
 mod find_overlay;
-mod geometry;
+pub(crate) mod geometry;
 mod info;
 mod masks;
 mod retouch;

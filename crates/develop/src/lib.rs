@@ -8,12 +8,14 @@
 
 pub mod controls;
 pub mod presets;
+pub mod reflection_area;
 pub mod segmask;
 pub mod settings;
 pub mod spot_circle;
 
 pub use controls::{CONTROLS, ControlSpec, Section, Track};
 pub use presets::{Preset, SettingsGroup, apply_partial, extract_groups};
+pub use reflection_area::{Glare, GlareStroke, ReflectionArea, ReflectionMode};
 pub use segmask::SegMask;
 pub use settings::*;
 pub use spot_circle::SpotCircle;

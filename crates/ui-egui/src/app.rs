@@ -117,6 +117,7 @@ impl LightcraftApp {
             reflection_model: "dsrnet-s".into(),
             reflection_open: true,
             reflection_photo: None,
+            reflection_glare: Default::default(),
             import: None,
             scan: None,
             waiting_import: Default::default(),
