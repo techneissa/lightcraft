@@ -1,5 +1,5 @@
 //! Fork feature (`fork/hair-edges.md`, issue #103): Settings ▸ Faces ▸ Hair Edges, the edge of Entire Person /
-//! Background and Subject masks: Current (the default) or BiRefNet Matting. Without the model, BiRefNet Matting reads
+//! Background and Subject masks: Current (the default), BiRefNet Matting, or Apple Vision on a Mac that runs it. Without the model, BiRefNet Matting reads
 //! "(Download…)": choosing it asks first (its size, where it goes), downloads only on Download, with a row in the
 //! activity stack, and is chosen once the download has finished.
 
@@ -25,6 +25,7 @@ pub fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
     let installed = status["installed"] == true;
     let download = &status["download"];
     let running = download["running"] == true;
+    let vision = status["visionAvailable"] == true;
     ui.add_space(8.0);
     heading(ui, t, "Hair Edges");
     hint(ui, t, "BiRefNet Matting keeps flyaway hair in people and subject masks.");
@@ -54,6 +55,13 @@ pub fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 } else if !running {
                     ui.ctx().data_mut(|d| d.insert_temp(ask_id(), id.clone()));
                 }
+            }
+            // (Apple Vision's own masks, no download: `fork/apple-vision-masks.md`)
+            if vision
+                && text_button(ui, &format!("maskEdges.{id}-vision"), "Apple Vision", chosen == "apple-vision").clicked()
+                && let Err(e) = app.run("maskEdges.edge", json!({"kind": id, "edge": "apple-vision"}))
+            {
+                app.toast(ui.ctx(), e);
             }
         });
     }

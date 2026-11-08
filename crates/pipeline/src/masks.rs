@@ -529,7 +529,8 @@ fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Fram
     let cell = coarse.iter().chain(&patches).map(|g| g.cell_px(frame, w)).fold(0.0, f64::max);
     // (fork, `fork/hair-edges.md`: a grid whose edge BiRefNet-matting drew already follows the photo's strands; filtered
     // only where its cells are wider than a pixel, an export would draw another outline than a preview)
-    let matted = seg.and_then(|s| s.model.as_deref()).is_some_and(|m| m.ends_with("+matting"));
+    // (and `+vision`, an edge Apple Vision drew: `fork/apple-vision-masks.md`)
+    let matted = seg.and_then(|s| s.model.as_deref()).is_some_and(|m| m.ends_with("+matting") || m.ends_with("+vision"));
     if cell >= 1.0 && !matted {
         guided_cross_fast(log_l, out, (SEG_WINDOW * cell) as f32, SEG_EPS, |mean| 1.0 - smooth(3.0 * gain, 7.0 * gain, mean.abs()));
     }

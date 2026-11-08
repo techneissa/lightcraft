@@ -28,6 +28,8 @@ fn status(s: &mut Session, _: &Value) -> Result<Value> {
     Ok(json!({
         "available": HairEdges::AVAILABLE,
         "installed": h.installed(),
+        // (Apple Vision's own masks: `fork/apple-vision-masks.md`)
+        "visionAvailable": crate::hair_edges::vision::available(),
         "dir": h.model_dir().map(|d| d.display().to_string()),
         "sizeBytes": MODEL_BYTES,
         "license": LICENSE,
@@ -45,9 +47,10 @@ fn set_edge(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| bad(c, format!("unknown kind `{}` (use people or subject)", kind.chars().take(40).collect::<String>())))?;
     let mut cancelled = 0;
     if let Some(v) = p.get("edge").filter(|v| !v.is_null()) {
-        let id = v.as_str().ok_or_else(|| bad(c, "`edge` must be current or birefnet-matting"))?;
-        let edge = Edge::parse(id)
-            .ok_or_else(|| bad(c, format!("unknown edge `{}` (use current or birefnet-matting)", id.chars().take(40).collect::<String>())))?;
+        let id = v.as_str().ok_or_else(|| bad(c, "`edge` must be current, birefnet-matting or apple-vision"))?;
+        let edge = Edge::parse(id).ok_or_else(|| {
+            bad(c, format!("unknown edge `{}` (use current, birefnet-matting or apple-vision)", id.chars().take(40).collect::<String>()))
+        })?;
         let before = s.hair_edges.edge(kind);
         s.hair_edges.set_edge(kind, edge).map_err(|e| bad(c, e))?;
         // Subject and Background requests still running were made for the old edge: stop them
@@ -94,7 +97,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Mask Edges Status",
             [],
             None,
-            "{} — the edge of Entire Person / Background (people) and Subject masks, and whether BiRefNet Matting (hair-accurate edges) is installed → {available, installed, dir, sizeBytes, license, licenseUrl, download: {running, done, total, file, error, cancelled, finished}, kinds: [{kind, label, chosen, edge}], edges: [{id, label}]}",
+            "{} — the edge of Entire Person / Background (people) and Subject masks, and whether BiRefNet Matting (hair-accurate edges) is installed and Apple Vision runs here → {available, installed, visionAvailable, dir, sizeBytes, license, licenseUrl, download: {running, done, total, file, error, cancelled, finished}, kinds: [{kind, label, chosen, edge}], edges: [{id, label}]}",
             always,
             status
         ),
@@ -103,7 +106,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Mask Edge",
             [],
             None,
-            "{kind: people|subject, edge?: current|birefnet-matting} — read, or set (and save) the edge of new masks of a kind: people is Entire Person and Background from people parsing, subject is Subject and the Background made from it. Current is the default; BiRefNet Matting keeps flyaway hair and needs the model (maskEdges.download). `edge` in the answer is what masks get now (Current while the chosen model is missing). Changing the Subject edge stops the Subject and Background requests still running (`cancelled`: how many) → {kind, chosen, edge, kinds, cancelled}",
+            "{kind: people|subject, edge?: current|birefnet-matting|apple-vision} — read, or set (and save) the edge of new masks of a kind: people is Entire Person and Background from people parsing, subject is Subject and the Background made from it. Current is the default; BiRefNet Matting keeps flyaway hair and needs the model (maskEdges.download); Apple Vision uses the Mac's own person and subject masks (macOS 14 or later, no download, a fraction of a second). `edge` in the answer is what masks get now (Current while the chosen model is missing). Changing the Subject edge stops the Subject and Background requests still running (`cancelled`: how many) → {kind, chosen, edge, kinds, cancelled}",
             always,
             set_edge
         ),

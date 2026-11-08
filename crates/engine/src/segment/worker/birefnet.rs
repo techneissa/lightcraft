@@ -113,15 +113,19 @@ pub(super) fn run(state: &mut State, shared: &Shared, job: &mut Job, placement: 
         }
     };
     // (the edge read now, not when the job was queued: set back to Current meanwhile, the part keeps its own edge)
-    let matting = req.matting.filter(|e| e.edge(crate::hair_edges::EdgeKind::Subject) == crate::hair_edges::Edge::Matting);
+    // (BiRefNet Matting or Apple Vision: `fork/apple-vision-masks.md`)
+    let edge = req.matting.map(|e| e.edge(crate::hair_edges::EdgeKind::Subject)).unwrap_or_default();
+    let matting = req.matting.filter(|_| edge != crate::hair_edges::Edge::Current);
     let (Some(edges), Some(base)) = (matting, base.as_ref()) else { return Ok(base) };
     job.render = saved;
     let input = render(job)?;
-    let m = edges.matte(&input.rgb, input.w, input.h, &job.cancel).map_err(|e| match job.cancel.load(Ordering::Relaxed) {
+    let m = edges.subject_matte(edge, &input.rgb, input.w, input.h, &job.cancel).map_err(|e| match job.cancel.load(Ordering::Relaxed) {
         true => Failure::Cancelled,
         false => Failure::Other(format!("Hair edges: {e}")),
     })?;
-    Ok(crate::hair_edges::subject_edge(base, &m))
+    // (Vision found no subject: the part keeps its own edge)
+    let Some(m) = m else { return Ok(Some(base.clone())) };
+    Ok(crate::hair_edges::vision::subject_edge(edge, base, &m))
 }
 
 /// BiRefNet's cut-out as a selection; `None` when it holds nothing.

@@ -66,9 +66,11 @@ pub fn label_of(model: Option<&str>) -> String {
     match model {
         None => SelectionModel::Sam3.label().to_string(),
         // (an edge redrawn by BiRefNet-matting: `fork/hair-edges.md`)
-        Some(id) => match id.strip_suffix("+matting") {
-            Some(base) => format!("{}, BiRefNet Matting Edges", plain(base)),
-            None => plain(id),
+        Some(id) => match (id.strip_suffix("+matting"), id.strip_suffix(crate::hair_edges::vision::SUFFIX)) {
+            (Some(base), _) => format!("{}, BiRefNet Matting Edges", plain(base)),
+            // (Apple Vision drew the edge: `fork/apple-vision-masks.md`)
+            (_, Some(base)) => format!("{}, Apple Vision Edges", plain(base)),
+            _ => plain(id),
         },
     }
 }
@@ -305,7 +307,7 @@ impl crate::Session {
     pub(crate) fn subject_matting(&self, kind: &str, model: SelectionModel) -> Option<crate::hair_edges::HairEdges> {
         use crate::hair_edges::{Edge, EdgeKind};
         let local = !model.uses_sam3() || (self.segmenter.installed() && self.segmenter.remote_endpoint().is_none());
-        (kind != "sky" && local && self.hair_edges.edge(EdgeKind::Subject) == Edge::Matting).then(|| self.hair_edges.clone())
+        (kind != "sky" && local && self.hair_edges.edge(EdgeKind::Subject) != Edge::Current).then(|| self.hair_edges.clone())
     }
 }
 

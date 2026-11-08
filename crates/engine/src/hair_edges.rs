@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use crate::activity::{Activity, Cancel};
 
 pub mod people;
+pub mod vision;
 
 /// The newest mattes kept in memory (4 MB each).
 const IN_MEMORY: usize = 4;
@@ -45,15 +46,18 @@ pub enum Edge {
     Current,
     /// BiRefNet-matting redraws the edge, so flyaway hair stays in.
     Matting,
+    /// Apple Vision's own person and subject masks redraw the edge (`vision`, issue #115).
+    Vision,
 }
 
 impl Edge {
-    pub const ALL: [Edge; 2] = [Edge::Current, Edge::Matting];
+    pub const ALL: [Edge; 3] = [Edge::Current, Edge::Matting, Edge::Vision];
 
     pub fn id(self) -> &'static str {
         match self {
             Edge::Current => "current",
             Edge::Matting => "birefnet-matting",
+            Edge::Vision => "apple-vision",
         }
     }
 
@@ -61,6 +65,7 @@ impl Edge {
         match self {
             Edge::Current => "Current",
             Edge::Matting => "BiRefNet Matting",
+            Edge::Vision => "Apple Vision",
         }
     }
 
@@ -261,12 +266,16 @@ impl HairEdges {
     pub fn edge(&self, kind: EdgeKind) -> Edge {
         match self.chosen(kind) {
             Edge::Matting if self.installed() => Edge::Matting,
+            Edge::Vision if vision::available() => Edge::Vision,
             _ => Edge::Current,
         }
     }
 
     /// Choose the edge of `kind` masks from now on (kept in the choice file). BiRefNet Matting needs the model.
     pub fn set_edge(&self, kind: EdgeKind, edge: Edge) -> Result<(), String> {
+        if edge == Edge::Vision && !vision::available() {
+            return Err("Apple Vision masks need macOS 14 or later on a Mac".into());
+        }
         if edge == Edge::Matting && !self.installed() {
             return Err(if Self::AVAILABLE {
                 format!("BiRefNet Matting is not downloaded yet ({} MB; maskEdges.download)", MODEL_BYTES.div_ceil(1_000_000))

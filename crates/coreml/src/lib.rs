@@ -7,6 +7,8 @@
 //! Linux, wasm) everything compiles, [`available`] is false and every call returns [`Error::Unavailable`]. With
 //! lightcraft-sysmem, lightcraft-filepanel and lightcraft-macraw this is one of the crates allowed `unsafe`
 //! (AGENTS.md). It has no dependency on a workspace crate.
+//!
+//! [`vision`] reaches Apple Vision's own person and subject masks the same way (issue #115).
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -18,12 +20,20 @@ mod layout;
 mod macos;
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 mod stub;
+pub mod vision;
+#[cfg(target_os = "macos")]
+#[allow(unsafe_code)]
+mod vision_macos;
 
 pub use cache::load_package;
 #[cfg(target_os = "macos")]
 use macos as imp;
 #[cfg(not(target_os = "macos"))]
 use stub as imp;
+#[cfg(not(target_os = "macos"))]
+use stub::vision as imp_vision;
+#[cfg(target_os = "macos")]
+use vision_macos as imp_vision;
 
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
@@ -102,6 +112,8 @@ pub enum Error {
     Output(String),
     /// A file operation around the model failed.
     Io(String),
+    /// Apple Vision could not make a mask ([`vision`]).
+    Vision(String),
 }
 
 impl std::fmt::Display for Error {
@@ -115,6 +127,7 @@ impl std::fmt::Display for Error {
             Error::Predict(m) => write!(f, "Core ML could not run the model: {m}"),
             Error::Output(m) => write!(f, "Core ML output: {m}"),
             Error::Io(m) => f.write_str(m),
+            Error::Vision(m) => write!(f, "Apple Vision: {m}"),
         }
     }
 }
@@ -197,3 +210,5 @@ impl Model {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_vision;

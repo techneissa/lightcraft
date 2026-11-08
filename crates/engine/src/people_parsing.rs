@@ -182,10 +182,13 @@ impl PeopleParsing {
         self
     }
 
-    /// The hair edges to draw parses with now, if BiRefNet Matting is chosen for people (and installed).
-    fn matting(&self) -> Option<crate::hair_edges::HairEdges> {
+    /// The hair edges to draw parses with now, and which: BiRefNet Matting (installed) or Apple Vision (this Mac runs
+    /// it) when chosen for people.
+    fn matting(&self) -> Option<(crate::hair_edges::HairEdges, crate::hair_edges::Edge)> {
         use crate::hair_edges::{Edge, EdgeKind};
-        lock(&self.inner.hair_edges).clone().filter(|e| e.edge(EdgeKind::People) == Edge::Matting)
+        let edges = lock(&self.inner.hair_edges).clone()?;
+        let edge = edges.edge(EdgeKind::People);
+        (edge != Edge::Current).then_some((edges, edge))
     }
 
     /// Use these folders: `models` (each model in its own folder under it), `cache` (parse files), `choice` (the file
@@ -299,8 +302,8 @@ impl PeopleParsing {
         let set = self.model_set();
         let matting = self.matting();
         // (a parse with matting edges is its own version, so switching the edge never reads the other's file)
-        let version = match &matting {
-            Some(_) => format!("{}+{}", set.version(), crate::hair_edges::VERSION),
+        let version = match matting.as_ref().and_then(|(_, e)| crate::hair_edges::vision::version(*e)) {
+            Some(edge) => format!("{}+{edge}", set.version()),
             None => set.version(),
         };
         let key = cache::key(&img, &hints, &version);
@@ -378,7 +381,7 @@ impl PeopleParsing {
         set: ModelSet,
         models: PathBuf,
         (img, hints): (RgbImage, Vec<FaceHint>),
-        matting: Option<crate::hair_edges::HairEdges>,
+        matting: Option<(crate::hair_edges::HairEdges, crate::hair_edges::Edge)>,
         flag: Arc<AtomicBool>,
     ) -> Result<(), String> {
         let row = self.inner.activity.start("parsing", "Finding people parts", Cancel::Flag(flag.clone()));
@@ -393,7 +396,8 @@ impl PeopleParsing {
                 let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let p = this.run(set, &models, &img, &hints, &cancelled)?;
                     match &matting {
-                        Some(edges) => hair_edged(edges, p, &img, &flag),
+                        Some((edges, crate::hair_edges::Edge::Vision)) => crate::hair_edges::vision::people_edged(edges, p, &img, &flag),
+                        Some((edges, _)) => hair_edged(edges, p, &img, &flag),
                         None => Ok(p),
                     }
                 }));
