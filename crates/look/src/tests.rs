@@ -174,11 +174,72 @@ fn bad_web_addresses_are_errors() {
     }
 }
 
+fn later() -> std::time::Instant {
+    std::time::Instant::now() + std::time::Duration::from_secs(3600)
+}
+
+#[test]
+fn a_download_past_its_deadline_stops() {
+    // a server that never stops sending a trickle
+    let gone = std::time::Instant::now().checked_sub(std::time::Duration::from_secs(1)).unwrap();
+    let r = reference::read_capped(None, reference::MAX_BYTES, gone, |buf| Ok(buf.len().min(10)));
+    assert!(matches!(r, Err(LookError::Download(_))), "{r:?}");
+}
+
+#[test]
+fn an_image_too_large_to_decode_is_refused_from_its_header() {
+    // a PNG header that says 12000×12000 (144 MP, 1.6 GB as float RGB) and little else
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut ihdr = b"IHDR".to_vec();
+    ihdr.extend(12_000u32.to_be_bytes());
+    ihdr.extend(12_000u32.to_be_bytes());
+    ihdr.extend([8, 2, 0, 0, 0]);
+    png.extend(13u32.to_be_bytes());
+    png.extend(&ihdr);
+    png.extend(crc32(&ihdr).to_be_bytes());
+    for (kind, data) in [(&b"IDAT"[..], &[0x78u8, 0x9c, 0x03, 0x00, 0x00, 0x00, 0x00, 0x01][..]), (&b"IEND"[..], &[][..])] {
+        let mut chunk = kind.to_vec();
+        chunk.extend(data);
+        png.extend((data.len() as u32).to_be_bytes());
+        png.extend(&chunk);
+        png.extend(crc32(&chunk).to_be_bytes());
+    }
+    assert!(lightcraft_codecs::read_header(&png).is_ok_and(|h| h.width == 12_000), "the header reads");
+    let r = reference::decode(&png);
+    assert!(matches!(r, Err(LookError::TooLarge(_))), "{r:?}");
+}
+
+fn crc32(data: &[u8]) -> u32 {
+    let mut c = 0xffff_ffffu32;
+    for &b in data {
+        c ^= b as u32;
+        for _ in 0..8 {
+            c = if c & 1 != 0 { 0xedb8_8320 ^ (c >> 1) } else { c >> 1 };
+        }
+    }
+    !c
+}
+
+#[test]
+fn a_damaged_cached_download_is_removed_not_returned() {
+    let dir = std::env::temp_dir().join(format!("lightcraft-look-badcache-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let url = "https://example.invalid/damaged.jpg";
+    let cached = dir.join(reference::cache_name(url));
+    std::fs::write(&cached, b"not an image").unwrap();
+    let never = AtomicBool::new(false);
+    // the cached file is dropped and the address tried again (it does not exist)
+    let r = reference::load(&Source::Url(url.into()), Some(&dir), &never);
+    assert!(matches!(r, Err(LookError::Download(_))), "{r:?}");
+    assert!(!cached.exists(), "the damaged file is removed");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn a_huge_download_is_refused() {
     // announced larger than the cap: refused before reading
     let mut reads = 0;
-    let r = reference::read_capped(Some(reference::MAX_BYTES + 1), reference::MAX_BYTES, |_| {
+    let r = reference::read_capped(Some(reference::MAX_BYTES + 1), reference::MAX_BYTES, later(), |_| {
         reads += 1;
         Ok(0)
     });
@@ -186,7 +247,7 @@ fn a_huge_download_is_refused() {
     assert_eq!(reads, 0);
     // no length announced, more sent than the cap: refused once past it
     let mut sent = 0u64;
-    let r = reference::read_capped(None, 1 << 20, |buf| {
+    let r = reference::read_capped(None, 1 << 20, later(), |buf| {
         sent += buf.len() as u64;
         buf.fill(0);
         Ok(buf.len())
@@ -195,7 +256,7 @@ fn a_huge_download_is_refused() {
     assert!(sent <= (1 << 20) + 64 * 1024);
     // within the cap: all of it
     let mut left = 100_000usize;
-    let r = reference::read_capped(Some(100_000), reference::MAX_BYTES, |buf| {
+    let r = reference::read_capped(Some(100_000), reference::MAX_BYTES, later(), |buf| {
         let n = left.min(buf.len());
         left -= n;
         Ok(n)

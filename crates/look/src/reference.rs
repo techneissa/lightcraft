@@ -16,6 +16,10 @@ use crate::LookError;
 pub const MAX_BYTES: u64 = 64 << 20;
 /// The largest reference image decoded, pixels.
 pub const MAX_PIXELS: u64 = 250_000_000;
+/// The most memory a reference's decode may take, bytes (width × height × 3 channels × 4 bytes).
+pub const MAX_DECODE_BYTES: u64 = 1536 << 20;
+/// The longest a download may take in all.
+pub const DOWNLOAD_DEADLINE: std::time::Duration = std::time::Duration::from_secs(120);
 /// The long edge a reference is decoded at (the fitter measures it smaller still).
 pub const DECODE_EDGE: u32 = 1024;
 /// [`DECODE_EDGE`] as a size.
@@ -33,6 +37,21 @@ pub enum Source {
 
 /// Decode `bytes` into a small display-ready picture (orientation applied).
 pub fn decode(bytes: &[u8]) -> Result<Rgba8, LookError> {
+    // what a decode would allocate, from the header, before it does (formats other than JPEG decode at full size, as
+    // linear float RGB)
+    if let Ok(h) = lightcraft_codecs::read_header(bytes) {
+        check_pixels(h.width as usize, h.height as usize)?;
+        let need = (h.width as u64).saturating_mul(h.height as u64).saturating_mul(3 * 4);
+        if need > MAX_DECODE_BYTES {
+            return Err(LookError::TooLarge(format!(
+                "the image is {}×{}: decoding it would take {} MB; a reference may take at most {} MB",
+                h.width,
+                h.height,
+                need >> 20,
+                MAX_DECODE_BYTES >> 20
+            )));
+        }
+    }
     let opts = lightcraft_codecs::DecodeOptions { max_size: Some((DECODE_EDGE, DECODE_EDGE)), max_pixels: MAX_PIXELS };
     let d = lightcraft_codecs::decode(bytes, opts).map_err(|e| LookError::Decode(e.to_string()))?;
     if d.width == 0 || d.height == 0 {
@@ -91,13 +110,40 @@ pub fn load(src: &Source, cache: Option<&Path>, cancel: &AtomicBool) -> Result<R
             }
             decode(b)
         }
-        Source::Url(u) => decode(&web::fetch(u, cache, cancel)?),
+        Source::Url(u) => {
+            #[cfg(not(target_arch = "wasm32"))]
+            check_url(u)?;
+            let cached = cache.map(|c| c.join(cache_name(u)));
+            if let Some(p) = &cached
+                && let Ok(meta) = std::fs::metadata(p)
+            {
+                match (meta.len() <= MAX_BYTES).then(|| std::fs::read(p).ok()).flatten().map(|b| decode(&b)) {
+                    Some(Ok(img)) => return Ok(img),
+                    // a damaged or foreign cached file is removed and downloaded again, never returned
+                    _ => {
+                        let _ = std::fs::remove_file(p);
+                    }
+                }
+            }
+            let bytes = web::fetch(u, cancel)?;
+            let img = decode(&bytes)?;
+            // only a download that decodes is kept
+            if let (Some(p), Some(dir)) = (&cached, cache) {
+                keep(dir, p, &bytes);
+            }
+            Ok(img)
+        }
     }
 }
 
-/// Read a body through `read` (bytes into the buffer, 0 at the end), refusing more than `cap` bytes: at once when the
+/// Read a body through `read`, until `deadline`, (bytes into the buffer, 0 at the end), refusing more than `cap` bytes: at once when the
 /// server announces a larger `declared` length, else as soon as more arrives.
-pub fn read_capped(declared: Option<u64>, cap: u64, mut read: impl FnMut(&mut [u8]) -> Result<usize, LookError>) -> Result<Vec<u8>, LookError> {
+pub fn read_capped(
+    declared: Option<u64>,
+    cap: u64,
+    deadline: std::time::Instant,
+    mut read: impl FnMut(&mut [u8]) -> Result<usize, LookError>,
+) -> Result<Vec<u8>, LookError> {
     let too_large = || LookError::TooLarge(format!("the download is larger than {} MB", cap >> 20));
     if declared.is_some_and(|n| n > cap) {
         return Err(too_large());
@@ -105,6 +151,10 @@ pub fn read_capped(declared: Option<u64>, cap: u64, mut read: impl FnMut(&mut [u
     let mut out = Vec::new();
     let mut buf = vec![0u8; 64 * 1024];
     loop {
+        // a server that sends a trickle never stalls long enough for the stall timeout: the whole read has a limit too
+        if std::time::Instant::now() > deadline {
+            return Err(LookError::Download("the download took too long".into()));
+        }
         let n = read(&mut buf)?;
         if n == 0 {
             return Ok(out);
@@ -113,6 +163,33 @@ pub fn read_capped(declared: Option<u64>, cap: u64, mut read: impl FnMut(&mut [u
             return Err(too_large());
         }
         out.extend_from_slice(buf.get(..n).unwrap_or_default());
+    }
+}
+
+/// Downloads kept in the cache folder (the oldest go first).
+const CACHE_FILES: usize = 16;
+
+/// Keep a download in the cache (failing quietly: the cache is only a saving): written under a temporary name and
+/// renamed, so a crash never leaves half a file under the real name; the oldest past [`CACHE_FILES`] are removed.
+fn keep(dir: &Path, path: &Path, bytes: &[u8]) {
+    let part = path.with_extension("part");
+    if std::fs::create_dir_all(dir).is_err() || std::fs::write(&part, bytes).is_err() || std::fs::rename(&part, path).is_err() {
+        let _ = std::fs::remove_file(&part);
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    let mut files: Vec<(std::time::SystemTime, PathBuf)> = rd
+        .filter_map(|e| e.ok())
+        .map(|e| e.path())
+        .filter(|p| p.extension().is_some_and(|x| x == "img"))
+        .filter_map(|p| std::fs::metadata(&p).and_then(|m| m.modified()).ok().map(|t| (t, p)))
+        .collect();
+    if files.len() <= CACHE_FILES {
+        return;
+    }
+    files.sort();
+    for (_, p) in files.iter().take(files.len() - CACHE_FILES) {
+        let _ = std::fs::remove_file(p);
     }
 }
 
@@ -141,28 +218,18 @@ pub fn check_url(url: &str) -> Result<lightcraft_fetch::http::Url, LookError> {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod web {
-    use std::path::Path;
     use std::sync::atomic::AtomicBool;
     use std::time::Duration;
 
     use lightcraft_fetch::http::{self, Limits};
 
-    use super::{LookError, MAX_BYTES, cache_name, check_url, read_capped};
+    use super::{DOWNLOAD_DEADLINE, LookError, MAX_BYTES, check_url, read_capped};
 
-    /// Downloads kept in the cache folder (the oldest go first).
-    const CACHE_FILES: usize = 16;
     const MAX_REDIRECTS: usize = 5;
 
-    pub fn fetch(url: &str, cache: Option<&Path>, cancel: &AtomicBool) -> Result<Vec<u8>, LookError> {
+    pub fn fetch(url: &str, cancel: &AtomicBool) -> Result<Vec<u8>, LookError> {
         let mut u = check_url(url)?;
-        let cached = cache.map(|c| c.join(cache_name(url)));
-        if let Some(p) = &cached
-            && let Ok(meta) = std::fs::metadata(p)
-            && meta.len() <= MAX_BYTES
-            && let Ok(b) = std::fs::read(p)
-        {
-            return Ok(b);
-        }
+        let deadline = std::time::Instant::now() + DOWNLOAD_DEADLINE;
         let limits = Limits { connect: Duration::from_secs(10), stall: Duration::from_secs(20), cancel };
         let net = |e: http::HttpError| match e {
             http::HttpError::Cancelled => LookError::Cancelled,
@@ -183,42 +250,16 @@ mod web {
                 return Err(LookError::Download(format!("the server answered {}", r.status)));
             }
             let declared = r.content_length();
-            let bytes = read_capped(declared, MAX_BYTES, |buf| r.read(buf, &limits).map_err(net))?;
-            if let (Some(p), Some(dir)) = (&cached, cache) {
-                keep(dir, p, &bytes);
-            }
-            return Ok(bytes);
+            return read_capped(declared, MAX_BYTES, deadline, |buf| r.read(buf, &limits).map_err(net));
         }
         Err(LookError::Download("too many redirects".into()))
-    }
-
-    /// Keep a download in the cache (failing quietly: the cache is only a saving), removing the oldest past
-    /// [`CACHE_FILES`].
-    fn keep(dir: &Path, path: &Path, bytes: &[u8]) {
-        if std::fs::create_dir_all(dir).is_err() || std::fs::write(path, bytes).is_err() {
-            return;
-        }
-        let Ok(rd) = std::fs::read_dir(dir) else { return };
-        let mut files: Vec<(std::time::SystemTime, std::path::PathBuf)> = rd
-            .filter_map(|e| e.ok())
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|x| x == "img"))
-            .filter_map(|p| std::fs::metadata(&p).and_then(|m| m.modified()).ok().map(|t| (t, p)))
-            .collect();
-        if files.len() <= CACHE_FILES {
-            return;
-        }
-        files.sort();
-        for (_, p) in files.iter().take(files.len() - CACHE_FILES) {
-            let _ = std::fs::remove_file(p);
-        }
     }
 }
 
 #[cfg(target_arch = "wasm32")]
 mod web {
     use super::LookError;
-    pub fn fetch(_: &str, _: Option<&std::path::Path>, _: &std::sync::atomic::AtomicBool) -> Result<Vec<u8>, LookError> {
+    pub fn fetch(_: &str, _: &std::sync::atomic::AtomicBool) -> Result<Vec<u8>, LookError> {
         Err(LookError::Download("the web build cannot download a reference".into()))
     }
 }
