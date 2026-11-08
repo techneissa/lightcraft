@@ -3939,6 +3939,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-look"
+version = "0.18.0"
+dependencies = [
+ "lightcraft-codecs",
+ "lightcraft-color",
+ "lightcraft-develop",
+ "lightcraft-fetch",
+ "lightcraft-geom",
+ "lightcraft-pipeline",
+ "lightcraft-raster",
+ "lightcraft-scenes",
+ "serde",
+]
+
+[[package]]
 name = "lightcraft-macraw"
 version = "0.18.0"
 dependencies = [
