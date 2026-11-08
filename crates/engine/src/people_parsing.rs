@@ -52,9 +52,51 @@ pub enum Outcome {
 /// What runs a parse: the model set's parser normally; tests put a fake one in.
 pub type Runner = Arc<dyn Fn(ModelSet, &Path, &RgbImage, &[FaceHint], &dyn Fn() -> bool) -> Result<Parsing, String> + Send + Sync>;
 
+/// A stand-in for the network in tests: gets the set and the models folder, says how the download ended.
+#[cfg(any(test, feature = "test-hooks"))]
+pub type TestFetch = Arc<dyn Fn(ModelSet, &Path) -> Download + Send + Sync>;
+
 enum Job {
     Running(Arc<AtomicBool>),
-    Done(Result<Arc<Parsing>, String>),
+    /// The result and when it finished (a count, oldest lowest).
+    Done(Result<Arc<Parsing>, String>, u64),
+}
+
+/// Finished runs kept for whoever waits on them (their parses are also cached).
+const KEEP_FINISHED: usize = 16;
+
+/// The runs, and how many callers wait on each.
+#[derive(Default)]
+struct Jobs {
+    map: HashMap<String, Job>,
+    waiters: HashMap<String, usize>,
+    finished: u64,
+}
+
+impl Jobs {
+    /// File a finished run, then let the oldest finished runs nobody waits on go, down to [`KEEP_FINISHED`].
+    fn finish(&mut self, key: String, result: Result<Arc<Parsing>, String>) {
+        self.finished += 1;
+        self.map.insert(key, Job::Done(result, self.finished));
+        while self.map.values().filter(|j| matches!(j, Job::Done(..))).count() > KEEP_FINISHED {
+            let oldest = self
+                .map
+                .iter()
+                .filter(|(k, _)| self.waiters.get(*k).copied().unwrap_or(0) == 0)
+                .filter_map(|(k, j)| match j {
+                    Job::Done(_, n) => Some((*n, k.clone())),
+                    Job::Running(_) => None,
+                })
+                .min();
+            let Some((_, k)) = oldest else { break };
+            self.map.remove(&k);
+        }
+    }
+
+    #[cfg(test)]
+    fn finished_kept(&self) -> usize {
+        self.map.values().filter(|j| matches!(j, Job::Done(..))).count()
+    }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -75,12 +117,17 @@ struct Inner {
     activity: Activity,
     paths: Mutex<Paths>,
     set: Mutex<Option<ModelSet>>,
-    jobs: Mutex<HashMap<String, Job>>,
+    jobs: Mutex<Jobs>,
     done: Condvar,
     memory: Mutex<VecDeque<(String, Arc<Parsing>)>>,
     downloads: Mutex<HashMap<ModelSet, Download>>,
     download_flags: Mutex<Vec<Arc<AtomicBool>>>,
+    #[cfg(any(test, feature = "test-hooks"))]
+    test_fetch: Mutex<Option<TestFetch>>,
     runner: Mutex<Option<Runner>>,
+    /// One model run at a time: runs share one loaded model and its GPU device, whose buffers are safe with one graph
+    /// in flight only.
+    one_run: Mutex<()>,
     #[cfg(not(target_arch = "wasm32"))]
     loaded: Mutex<Option<Loaded>>,
     watcher: AtomicBool,
@@ -108,12 +155,15 @@ impl PeopleParsing {
                 activity,
                 paths: Mutex::new(Paths::default()),
                 set: Mutex::new(None),
-                jobs: Mutex::new(HashMap::new()),
+                jobs: Mutex::new(Jobs::default()),
                 done: Condvar::new(),
                 memory: Mutex::new(VecDeque::new()),
                 downloads: Mutex::new(HashMap::new()),
                 download_flags: Mutex::new(Vec::new()),
+                #[cfg(any(test, feature = "test-hooks"))]
+                test_fetch: Mutex::new(None),
                 runner: Mutex::new(None),
+                one_run: Mutex::new(()),
                 #[cfg(not(target_arch = "wasm32"))]
                 loaded: Mutex::new(None),
                 watcher: AtomicBool::new(false),
@@ -184,12 +234,12 @@ impl PeopleParsing {
 
     /// Whether a run is going.
     pub fn busy(&self) -> bool {
-        lock(&self.inner.jobs).values().any(|j| matches!(j, Job::Running(_)))
+        lock(&self.inner.jobs).map.values().any(|j| matches!(j, Job::Running(_)))
     }
 
     /// Stop every run going.
     pub fn cancel_runs(&self) {
-        for j in lock(&self.inner.jobs).values() {
+        for j in lock(&self.inner.jobs).map.values() {
             if let Job::Running(flag) = j {
                 flag.store(true, Ordering::Relaxed);
             }
@@ -247,15 +297,15 @@ impl PeopleParsing {
         };
         {
             let mut jobs = lock(&self.inner.jobs);
-            match jobs.get(&key) {
+            match jobs.map.get(&key) {
                 Some(Job::Running(_)) if !wait => return Outcome::Running,
                 Some(Job::Running(_)) => {}
                 _ => {
                     let flag = Arc::new(AtomicBool::new(false));
-                    jobs.insert(key.clone(), Job::Running(flag.clone()));
+                    jobs.map.insert(key.clone(), Job::Running(flag.clone()));
                     drop(jobs);
                     if let Err(e) = self.spawn(key.clone(), set, models, img, hints, flag) {
-                        lock(&self.inner.jobs).insert(key.clone(), Job::Done(Err(e.clone())));
+                        lock(&self.inner.jobs).finish(key.clone(), Err(e.clone()));
                         self.inner.done.notify_all();
                         return Outcome::Failed(e);
                     }
@@ -268,19 +318,37 @@ impl PeopleParsing {
         self.wait_for(&key)
     }
 
-    /// Wait until the run for `key` has ended.
-    fn wait_for(&self, key: &str) -> Outcome {
+    /// Wait until the run for `key` has ended. Its result stays filed while this waits; a run no longer filed (it
+    /// finished long ago) gives its cached parse.
+    pub(crate) fn wait_for(&self, key: &str) -> Outcome {
         let mut jobs = lock(&self.inner.jobs);
-        loop {
-            match jobs.get(key) {
+        *jobs.waiters.entry(key.to_string()).or_default() += 1;
+        let outcome = loop {
+            match jobs.map.get(key) {
                 Some(Job::Running(_)) => {
                     jobs = self.inner.done.wait_timeout(jobs, Duration::from_millis(500)).map(|r| r.0).unwrap_or_else(|e| e.into_inner().0);
                 }
-                Some(Job::Done(Ok(p))) => return Outcome::Ready { parsing: p.clone(), cached: false },
-                Some(Job::Done(Err(e))) => return Outcome::Failed(e.clone()),
-                None => return Outcome::Failed("the run was dropped".into()),
+                Some(Job::Done(Ok(p), _)) => break Some(Outcome::Ready { parsing: p.clone(), cached: false }),
+                Some(Job::Done(Err(e), _)) => break Some(Outcome::Failed(e.clone())),
+                None => break None,
+            }
+        };
+        if let Some(n) = jobs.waiters.get_mut(key) {
+            *n = n.saturating_sub(1);
+            if *n == 0 {
+                jobs.waiters.remove(key);
             }
         }
+        drop(jobs);
+        outcome.unwrap_or_else(|| match self.remembered(key).or_else(|| self.filed(key)) {
+            Some(parsing) => Outcome::Ready { parsing, cached: true },
+            None => Outcome::Failed("the run was dropped".into()),
+        })
+    }
+
+    #[cfg(test)]
+    pub(crate) fn finished_kept(&self) -> usize {
+        lock(&self.inner.jobs).finished_kept()
     }
 
     fn spawn(&self, key: String, set: ModelSet, models: PathBuf, img: RgbImage, hints: Vec<FaceHint>, flag: Arc<AtomicBool>) -> Result<(), String> {
@@ -316,14 +384,7 @@ impl PeopleParsing {
                         Err("people parsing stopped unexpectedly".into())
                     }
                 };
-                {
-                    let mut jobs = lock(&this.inner.jobs);
-                    // finished runs are kept for whoever waits on them; old ones go (their parses are cached)
-                    if jobs.len() > 16 {
-                        jobs.retain(|_, j| matches!(j, Job::Running(_)));
-                    }
-                    jobs.insert(key, Job::Done(result));
-                }
+                lock(&this.inner.jobs).finish(key, result);
                 this.inner.done.notify_all();
             })
             .map(|_| ())
@@ -331,6 +392,10 @@ impl PeopleParsing {
     }
 
     fn run(&self, set: ModelSet, models: &Path, img: &RgbImage, hints: &[FaceHint], cancelled: &dyn Fn() -> bool) -> Result<Parsing, String> {
+        let _one_at_a_time = lock(&self.inner.one_run);
+        if cancelled() {
+            return Err("cancelled".into());
+        }
         self.inner.runs.fetch_add(1, Ordering::Relaxed);
         let runner = lock(&self.inner.runner).clone();
         if let Some(r) = runner {

@@ -168,6 +168,7 @@ impl FaceMesh {
                 if kh != kw
                     || stride[0] != stride[1]
                     || padding[0] != padding[1]
+                    || padding[0] >= kh
                     || raw.dilation.is_some_and(|d| d != [1, 1])
                     || o % groups != 0
                     || per == 0
@@ -221,6 +222,11 @@ impl FaceMesh {
         })
     }
 
+    #[cfg(test)]
+    fn ops(&self) -> usize {
+        self.nodes.len()
+    }
+
     /// Run on `B` crops, `B × 3 × 256 × 256` with values 0 to 1.
     pub fn forward(&self, x: &Tensor) -> Result<Vec<MeshOut>> {
         let b = x.dim(0)?;
@@ -252,7 +258,8 @@ impl FaceMesh {
                 }
                 Op::Reshape(shape) => {
                     let t = arg(0)?;
-                    let known: i64 = shape.iter().filter(|&&d| d > 0).product();
+                    let known =
+                        shape.iter().filter(|&&d| d > 0).try_fold(1i64, |a, &d| a.checked_mul(d)).ok_or_else(|| bad("a reshape is too large"))?;
                     let n = i64::try_from(t.elem_count()).map_err(|_| bad("too large"))?;
                     if known <= 0 || n % known != 0 {
                         return Err(bad("a reshape does not fit"));
@@ -281,5 +288,34 @@ impl FaceMesh {
             .zip(pres)
             .map(|(p, s)| MeshOut { points: p.as_chunks::<3>().0.to_vec(), presence: s.first().map_or(0.0, |&l| 1.0 / (1.0 + (-l).exp())) })
             .collect())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn program(dir: &std::path::Path, name: &str, nodes: &str, weights: &str, data: &[u8]) -> Result<FaceMesh> {
+        let prog = format!(r#"{{"inputs":["x"],"outputs":["identity__741"],"nodes":[{nodes}]}}"#);
+        let header = format!(r#"{{"__metadata__":{{"program":{}}}{weights}}}"#, serde_json::to_string(&prog).unwrap());
+        let p = crate::weights::tests::write(dir, name, &header, data);
+        FaceMesh::load(&Weights::open(&p)?, &Device::Cpu)
+    }
+
+    #[test]
+    fn padding_wider_than_the_kernel_and_huge_reshapes_are_refused() {
+        let dir = crate::tests::scratch("facemesh-bounds");
+        let w = r#","k":{"dtype":"F32","shape":[1,1,3,3],"data_offsets":[0,36]}"#;
+        let conv = |pad: usize| {
+            format!(
+                r#"{{"op":"conv2d","out":"identity__741","inputs":["x"],"weight":"k","stride":[1,1],"padding":[{pad},{pad}]}},{{"op":"sigmoid","out":"identity_1","inputs":["identity__741"]}}"#
+            )
+        };
+        assert_eq!(program(&dir, "ok", &conv(1), w, &[0u8; 36]).unwrap().ops(), 2);
+        assert!(program(&dir, "pad", &conv(3), w, &[0u8; 36]).is_err());
+        let huge = r#"{"op":"reshape","out":"identity__741","inputs":["x"],"shape":[4611686018427387904,4611686018427387904]},{"op":"sigmoid","out":"identity_1","inputs":["identity__741"]}"#;
+        let mesh = program(&dir, "huge", huge, "", &[]).unwrap();
+        let x = candle_core::Tensor::zeros((1, 3, 4, 4), candle_core::DType::F32, &Device::Cpu).unwrap();
+        assert!(mesh.forward(&x).is_err());
     }
 }

@@ -22,18 +22,20 @@ Edit view uses it yet; the Select People masks and the Portrait features build o
   SegFormer-B5 face parser (`jonathandinu/face-parsing`, 339 MB, over the 300 MB limit) and Sapiens (body-part
   segmentation with teeth and lips, 0.3B is about 600 MB).
 - **Download**: asked first (the section's "(Download…)" entry opens a dialog with the size and folder;
-  `parsing.download` needs `confirm: true`), into `~/Library/Application Support/ArtCraft/models/<folder>/` (shared
+  `parsing.download` needs `confirm: true`); the set is used once its download has finished (a download that stops or
+  fails changes nothing, and the section says why); one download at a time; into `~/Library/Application Support/ArtCraft/models/<folder>/` (shared
   with PhotoCraft; `LIGHTCRAFT_PARSING_MODELS` overrides), one row "Downloading model" in the activity stack whose ✕
   stops it, resumable, each file's size and SHA-256 checked. Files a set shares (the face mesh) download once.
 - **Parse**: once per photo and model version, on a worker thread with a row "Finding people parts" (✕ stops it). The
   photo is rendered upright, uncropped, with default settings at 2048 px (the frame face regions use); faces come
   from YuNet when it is installed (Settings ▸ Faces), else from the body model. The result is cached on disk by the
   pixels and the set's version (`~/Library/Caches/LightCraft/people-parsing`, 512 MB, oldest first) and the newest
-  four in memory. A caller that needs the masks now (an export) waits for the run already going instead of starting a
+  four in memory. One model run at a time (runs share one model on the GPU). A caller that needs the masks now (an export) waits for the run already going instead of starting a
   second one (`PeopleParsing::parse(.., wait: true)`). The models stay loaded for a minute after their last use.
 - **Resolution independent**: masks are planes in fractions of the photo at the model's resolution (face crops at
   512², the body at 768 to 1536 px); `lightcraft_parsing::render` draws them at any size and snaps their edges to the
-  photo with a guided filter whose radius is 1.5 model cells, so a preview and a 24 MP export agree.
+  photo with a guided filter whose radius is 1.5 model cells (at least one pixel), using the photo at that size, so a
+  preview and a 24 MP export agree. Each model file's SHA-256 is checked once, the first time it is loaded.
 - **Commands**: `parsing.status`, `parsing.modelSet {set}`, `parsing.download {set?, confirm}`, `parsing.cancel`,
   `parsing.run {ids?, wait?}` (people, faces, landmark counts and each part's area), `parsing.mask {id?, part,
   person?, path, edge?}` (one mask as a grey PNG).

@@ -56,6 +56,7 @@ pub fn best_device() -> Device {
 
 fn open(file: &ModelFile, models: &Path) -> Result<Arc<Weights>> {
     let path = file.path_in(models);
+    file.verify(models)?;
     if !path.is_file() {
         return Err(Error::Missing(format!(
             "{} ({} in {})",

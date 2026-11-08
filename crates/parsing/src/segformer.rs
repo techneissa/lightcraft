@@ -19,6 +19,25 @@ const LN_EPS: f64 = 1e-6;
 /// More blocks per stage than any MiT size has (b5: 3, 6, 40, 3).
 const MAX_DEPTH: usize = 64;
 
+/// Query rows per attention step: the scores of a 1536-px body pass (98,304 × 1,536 in the first stage) would take
+/// about 600 MB at once; in steps of this many rows they take a few tens of MB.
+const ATTENTION_ROWS: usize = 8192;
+
+/// softmax(q·kᵀ / `scale`)·v for `B × heads × N × d` queries, `rows` queries at a time.
+fn attend(q: &Tensor, k: &Tensor, v: &Tensor, scale: f64, rows: usize) -> Result<Tensor> {
+    let n = q.dim(2)?;
+    let kt = k.transpose(2, 3)?.contiguous()?;
+    let mut parts = Vec::with_capacity(n.div_ceil(rows.max(1)));
+    let mut at = 0;
+    while at < n {
+        let len = rows.max(1).min(n - at);
+        let scores = (q.narrow(2, at, len)?.contiguous()?.matmul(&kt)? / scale)?;
+        parts.push(candle_nn::ops::softmax_last_dim(&scores)?.matmul(v)?);
+        at += len;
+    }
+    Ok(Tensor::cat(&parts, 2)?)
+}
+
 struct Attention {
     q: Linear,
     k: Linear,
@@ -46,9 +65,7 @@ impl Attention {
         let m = kv.dim(1)?;
         let k = split(self.k.forward(&kv)?, m)?;
         let v = split(self.v.forward(&kv)?, m)?;
-        let scores = (q.matmul(&k.transpose(2, 3)?.contiguous()?)? / (d as f64).sqrt())?;
-        let probs = candle_nn::ops::softmax_last_dim(&scores)?;
-        let ctx = probs.matmul(&v)?.transpose(1, 2)?.reshape((b, n, c))?;
+        let ctx = attend(&q, &k, &v, (d as f64).sqrt(), ATTENTION_ROWS)?.transpose(1, 2)?.reshape((b, n, c))?;
         Ok(self.out.forward(&ctx)?)
     }
 }
@@ -191,5 +208,25 @@ impl Segformer {
         }
         let fused = self.fuse.forward(&Tensor::cat(&ups, 1)?)?.relu()?;
         Ok(self.classifier.forward(&fused)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use candle_core::Device;
+
+    #[test]
+    fn attention_in_row_steps_equals_attention_at_once() {
+        let dev = Device::Cpu;
+        let t = |n: usize, seed: f64| {
+            Tensor::arange(0f32, (2 * 3 * n * 4) as f32, &dev).unwrap().affine(0.37, seed).unwrap().sin().unwrap().reshape((2, 3, n, 4)).unwrap()
+        };
+        let (q, k, v) = (t(10, 0.1), t(5, 0.7), t(5, 1.3));
+        let whole = attend(&q, &k, &v, 2.0, 1000).unwrap();
+        let steps = attend(&q, &k, &v, 2.0, 3).unwrap();
+        assert_eq!(whole.dims(), &[2, 3, 10, 4]);
+        let diff = (whole - steps).unwrap().abs().unwrap().flatten_all().unwrap().max(0).unwrap().to_scalar::<f32>().unwrap();
+        assert!(diff < 1e-6, "{diff}");
     }
 }

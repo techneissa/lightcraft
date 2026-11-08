@@ -18,7 +18,10 @@ use crate::{Error, Result};
 
 const MAGIC: &[u8; 8] = b"LCPARSE1";
 const MAX_HEADER: usize = 32 << 20;
-const MAX_PLANE_SIDE: u32 = 8192;
+/// No plane a parse makes is wider than the body model's largest input.
+const MAX_PLANE_SIDE: u32 = 1536;
+/// Most mask values one file may decode to (about 1 GB as floats).
+const MAX_VALUES: u64 = 256 << 20;
 const MAX_PEOPLE: usize = 4096;
 const MAX_PLANES: usize = 65_536;
 /// The file name's suffix.
@@ -157,6 +160,11 @@ fn decode_plane(head: &PlaneHead, bytes: &[u8]) -> Result<Plane> {
 
 /// A parse from its bytes.
 pub fn decode(bytes: &[u8]) -> Result<Parsing> {
+    decode_capped(bytes, MAX_VALUES)
+}
+
+/// [`decode`], refusing a file whose planes add up to more than `max_values` values.
+fn decode_capped(bytes: &[u8], max_values: u64) -> Result<Parsing> {
     let bad = |what: &str| Error::Cache(format!("not a parse file: {what}"));
     if bytes.get(..8) != Some(&MAGIC[..]) {
         return Err(bad("wrong start"));
@@ -170,6 +178,14 @@ pub fn decode(bytes: &[u8]) -> Result<Parsing> {
     let head: Head = serde_json::from_slice(json).map_err(|e| Error::Cache(format!("bad header: {e}")))?;
     if head.people.len() > MAX_PEOPLE || head.people.iter().map(|p| p.parts.iter().map(|q| q.1.len()).sum::<usize>()).sum::<usize>() > MAX_PLANES {
         return Err(bad("too many people or planes"));
+    }
+    let values = head
+        .people
+        .iter()
+        .flat_map(|p| p.parts.iter().flat_map(|q| q.1.iter()))
+        .fold(0u64, |a, pl| a.saturating_add(u64::from(pl.width).saturating_mul(u64::from(pl.height))));
+    if values > max_values {
+        return Err(bad("its masks are larger than any parse makes"));
     }
     let mut at = 12 + len;
     let mut people = Vec::with_capacity(head.people.len());
@@ -223,7 +239,11 @@ pub fn store(dir: &Path, key: &str, p: &Parsing) -> Result<()> {
     let bytes = encode(p)?;
     let dest = path(dir, key);
     let tmp = dir.join(format!(".{key}.{}.tmp", std::process::id()));
-    std::fs::write(&tmp, &bytes).map_err(|e| Error::Cache(format!("{}: {e}", tmp.display())))?;
+    if let Err(e) = std::fs::write(&tmp, &bytes) {
+        // a half-written file (a full disk) is not left behind
+        let _ = std::fs::remove_file(&tmp);
+        return Err(Error::Cache(format!("{}: {e}", tmp.display())));
+    }
     std::fs::rename(&tmp, &dest).map_err(|e| {
         let _ = std::fs::remove_file(&tmp);
         Error::Cache(format!("{}: {e}", dest.display()))
@@ -300,6 +320,18 @@ mod tests {
         let last = flipped.len() - 20;
         flipped[last] ^= 0xff;
         let _ = decode(&flipped);
+    }
+
+    #[test]
+    fn planes_larger_than_a_parse_makes_are_refused() {
+        let mut wide = sample();
+        wide.people[0]
+            .parts
+            .insert(Part::Hat, vec![Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: 1600, height: 1, data: vec![0.5; 1600] }]);
+        assert!(decode(&encode(&wide).unwrap()).is_err());
+        let ok = encode(&sample()).unwrap();
+        assert!(decode_capped(&ok, 6).is_ok());
+        assert!(decode_capped(&ok, 5).is_err());
     }
 
     #[test]

@@ -73,3 +73,22 @@ fn an_installed_set_is_chosen_with_one_click() {
     assert_eq!(h.app.session.execute("parsing.status", &json!({})).unwrap()["modelSet"], "bisenet");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn a_failed_download_leaves_the_choice_as_it_was() {
+    let (mut h, dir) = settings("failed");
+    h.app.session.parsing.set_test_fetch(Some(std::sync::Arc::new(|_, _| lightcraft_engine::people_parsing::Download::Failed("no network".into()))));
+    click(&mut h, "button:parsing.set-bisenet");
+    click(&mut h, "button:parsingDownload");
+    for _ in 0..200 {
+        let st = h.app.session.execute("parsing.status", &json!({})).unwrap();
+        if st["sets"].as_array().unwrap().iter().any(|s| s["download"]["state"] == "failed") {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    h.step();
+    let status = h.app.session.execute("parsing.status", &json!({})).unwrap();
+    assert_eq!(status["modelSet"], "segformer", "a download that failed chose its set: {status}");
+    let _ = std::fs::remove_dir_all(&dir);
+}

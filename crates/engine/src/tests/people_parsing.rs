@@ -135,7 +135,7 @@ fn the_chosen_set_is_kept_and_installed_files_count() {
     again.set_paths(Some(dir.join("models")), None, Some(dir.join("parsing-model.json")));
     assert_eq!(again.model_set(), ModelSet::BiSeNet);
     // asking to download what is there is a message
-    assert!(again.start_download(ModelSet::BiSeNet).unwrap_err().contains("already"));
+    assert!(again.start_download(ModelSet::BiSeNet, false).unwrap_err().contains("already"));
 }
 
 #[test]
@@ -191,7 +191,7 @@ fn both_sets_download_and_check_their_files() {
     p.set_paths(Some(dir), None, None);
     for set in ModelSet::ALL {
         if !p.installed(set) {
-            p.start_download(set).unwrap();
+            p.start_download(set, false).unwrap();
         }
         // a guard against a hung download only, not a speed check
         for _ in 0..36_000 {
@@ -202,4 +202,141 @@ fn both_sets_download_and_check_their_files() {
         }
         assert!(p.installed(set), "{set:?}: {:?}", p.download_state(set));
     }
+}
+
+/// A 1200 × 800 photo, dark left of x = 0.55 and light right of it, opened in a session.
+fn two_tone_session(dir: &std::path::Path) -> crate::Session {
+    let (w, h) = (1200usize, 800usize);
+    let data: Vec<[u8; 4]> = (0..w * h).map(|i| if (i % w) * 100 < w * 55 { [40, 40, 40, 255] } else { [220, 220, 220, 255] }).collect();
+    let png = lightcraft_codecs::encode_png(
+        &lightcraft_codecs::EncodeImage::rgba8(&lightcraft_raster::Rgba8 { width: w, height: h, data }),
+        &Default::default(),
+    )
+    .unwrap();
+    std::fs::write(dir.join("two-tone.png"), png).unwrap();
+    let mut s = crate::Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [dir.join("two-tone.png").to_string_lossy()]})).unwrap();
+    s
+}
+
+/// Average `f × f` blocks.
+fn shrink(v: &[f32], w: usize, h: usize, f: usize) -> Vec<f32> {
+    let (sw, sh) = (w / f, h / f);
+    (0..sw * sh).map(|j| (0..f * f).map(|k| v[((j / sw) * f + k / f) * w + (j % sw) * f + k % f]).sum::<f32>() / (f * f) as f32).collect()
+}
+
+#[test]
+fn a_mask_drawn_small_and_large_has_the_same_outline() {
+    let dir = temp_dir("parsing-sizes");
+    let mut s = two_tone_session(&dir);
+    let id = s.active().unwrap();
+    // a mask whose edge (one cell, 13 px at 2048) sits a few pixels left of the photo's edge, within the filter's reach
+    let mut person = Person::default();
+    let data: Vec<f32> = (0..160 * 4).map(|i| if i % 160 < 87 { 0.0 } else { 1.0 }).collect();
+    person.parts.insert(Part::Hair, vec![Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: 160, height: 4, data }]);
+    let parsing = Parsing { people: vec![person], width: 2048, height: 1365, ..Parsing::default() };
+    let (rgb, w, h) = crate::cmd::face_detect::render_rgb(&mut s, id, crate::people_parsing::PARSE_EDGE).unwrap();
+    let parsed = RgbImage::new(w, h, rgb).unwrap();
+    let sel = lightcraft_parsing::render::Select::Everyone(Part::Hair);
+    let (big, bw, bh) = crate::cmd::parsing::mask_values(&mut s, id, &parsing, sel, &parsed, 2048).unwrap();
+    let (small, sw, sh) = crate::cmd::parsing::mask_values(&mut s, id, &parsing, sel, &parsed, 512).unwrap();
+    assert_eq!((bw / 4, bh / 4), (sw, sh));
+    let down = shrink(&big, bw, bh, 4);
+    let worst = down.iter().zip(&small).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    assert!(worst < 0.2, "the outlines differ by {worst}");
+}
+
+/// Wait (a guard against a hang only) until `set`'s download is no longer running.
+fn settled(p: &PeopleParsing, set: ModelSet) -> crate::people_parsing::Download {
+    for _ in 0..2000 {
+        let d = p.download_state(set);
+        if !matches!(d, crate::people_parsing::Download::Running { .. }) {
+            return d;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    p.download_state(set)
+}
+
+#[test]
+fn a_set_is_chosen_only_when_its_download_finishes_and_downloads_go_one_at_a_time() {
+    use crate::people_parsing::Download;
+    let (p, _, _) = parsing("choose");
+    assert_eq!(p.model_set(), ModelSet::Segformer);
+    for end in [Download::Failed("no network".into()), Download::Cancelled] {
+        let e = end.clone();
+        p.set_test_fetch(Some(Arc::new(move |_, _| e.clone())));
+        p.start_download(ModelSet::BiSeNet, true).unwrap();
+        assert_eq!(settled(&p, ModelSet::BiSeNet), end);
+        assert_eq!(p.model_set(), ModelSet::Segformer, "{end:?} chose the set");
+    }
+    // one at a time: a second set waits for the first
+    let gate = Arc::new(AtomicBool::new(false));
+    let g = gate.clone();
+    p.set_test_fetch(Some(Arc::new(move |_, _| {
+        while !g.load(Ordering::Acquire) {
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        Download::Done
+    })));
+    p.start_download(ModelSet::BiSeNet, true).unwrap();
+    assert!(p.start_download(ModelSet::Segformer, false).unwrap_err().contains("one download at a time"));
+    gate.store(true, Ordering::Release);
+    assert_eq!(settled(&p, ModelSet::BiSeNet), Download::Done);
+    assert_eq!(p.model_set(), ModelSet::BiSeNet);
+}
+
+#[test]
+fn parses_started_together_run_one_after_the_other_and_both_come_out_right() {
+    let (p, _, _) = parsing("together");
+    let in_flight = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let overlaps = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let (busy, seen) = (in_flight.clone(), overlaps.clone());
+    // a stand-in model that breaks when two runs overlap, and whose result depends on the picture
+    p.set_runner(Some(Arc::new(move |set, _, img, _, _| {
+        if busy.fetch_add(1, Ordering::SeqCst) > 0 {
+            busy.fetch_sub(1, Ordering::SeqCst);
+            seen.fetch_add(1, Ordering::SeqCst);
+            return Err("two runs at once on one device".into());
+        }
+        std::thread::sleep(Duration::from_millis(40));
+        let mut out = fake_parse(set);
+        out.width = usize::from(img.data[0]);
+        busy.fetch_sub(1, Ordering::SeqCst);
+        Ok(out)
+    })));
+    assert!(matches!(p.parse(picture(10), Vec::new(), false), Outcome::Running));
+    assert!(matches!(p.parse(picture(20), Vec::new(), false), Outcome::Running));
+    let (Outcome::Ready { parsing: a, .. }, Outcome::Ready { parsing: b, .. }) =
+        (p.parse(picture(10), Vec::new(), true), p.parse(picture(20), Vec::new(), true))
+    else {
+        panic!("a run failed: {:?}", p.message())
+    };
+    assert_eq!(overlaps.load(Ordering::SeqCst), 0, "two runs were on the device at once");
+    // the same as one at a time
+    let (alone, _, _) = parsing("alone");
+    alone.set_runner(Some(Arc::new(|set, _, img, _, _| {
+        let mut out = fake_parse(set);
+        out.width = usize::from(img.data[0]);
+        Ok(out)
+    })));
+    for (got, seed) in [(a, 10), (b, 20)] {
+        let Outcome::Ready { parsing: want, .. } = alone.parse(picture(seed), Vec::new(), true) else { panic!() };
+        assert_eq!(*got, *want);
+    }
+}
+
+#[test]
+fn many_finished_runs_keep_the_newest_and_a_late_waiter_gets_the_cached_parse() {
+    let (p, _, _) = parsing("many");
+    p.set_runner(Some(fake_runner()));
+    for seed in 0..20u8 {
+        assert!(matches!(p.parse(picture(100 + seed), Vec::new(), true), Outcome::Ready { cached: false, .. }));
+    }
+    // only the oldest go, never all of them at once
+    assert_eq!(p.finished_kept(), 16);
+    // the first run is no longer filed, and memory holds the last four only: its waiter reads the disk cache
+    let key = cache::key(&picture(100), &[], &p.model_set().version());
+    let Outcome::Ready { parsing, cached: true } = p.wait_for(&key) else { panic!("the first run was dropped") };
+    assert_eq!(parsing.people.len(), 1);
 }

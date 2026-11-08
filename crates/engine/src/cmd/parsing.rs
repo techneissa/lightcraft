@@ -154,6 +154,26 @@ fn run(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"modelSet": s.parsing.model_set().id(), "photos": photos}))
 }
 
+/// A mask of `parsing` with its long side `edge`, refined along the edges of the photo at that very size (the parse's
+/// own picture when that is the size), so a draft and a full-size export draw the same outline.
+pub(crate) fn mask_values(
+    s: &mut Session,
+    id: lightcraft_catalog::PhotoId,
+    parsing: &Parsing,
+    sel: Select,
+    parsed: &RgbImage,
+    edge: usize,
+) -> std::result::Result<(Vec<f32>, usize, usize), String> {
+    let edge = edge.clamp(1, MAX_MASK_EDGE);
+    let guide = if edge == parsed.width.max(parsed.height) {
+        parsed.clone()
+    } else {
+        let (rgb, w, h) = super::face_detect::render_rgb(s, id, edge)?;
+        RgbImage::new(w, h, rgb).map_err(|e| e.to_string())?
+    };
+    Ok((render::refined(parsing, sel, &guide), guide.width, guide.height))
+}
+
 fn mask(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "parsing.mask";
     let part =
@@ -179,14 +199,8 @@ fn mask(s: &mut Session, p: &Value) -> Result<Value> {
     {
         return Err(bad(C, format!("the photo has {} people (person is counted from 0)", parsing.people.len())));
     }
-    let edge = p
-        .get("edge")
-        .and_then(Value::as_u64)
-        .map_or(img.width.max(img.height), |e| usize::try_from(e).unwrap_or(MAX_MASK_EDGE))
-        .clamp(1, MAX_MASK_EDGE);
-    let scale = edge as f32 / img.width.max(img.height) as f32;
-    let (w, h) = (((img.width as f32 * scale).round() as usize).max(1), ((img.height as f32 * scale).round() as usize).max(1));
-    let values = if (w, h) == (img.width, img.height) { render::refined(&parsing, sel, &img) } else { render::mask(&parsing, sel, w, h) };
+    let edge = p.get("edge").and_then(Value::as_u64).map_or(img.width.max(img.height), |e| usize::try_from(e).unwrap_or(MAX_MASK_EDGE));
+    let (values, w, h) = mask_values(s, id, &parsing, sel, &img, edge).map_err(|e| bad(C, e))?;
     render::save_png(std::path::Path::new(path), &values, w, h).map_err(|e| bad(C, e.to_string()))?;
     let covered = values.iter().sum::<f32>() / values.len().max(1) as f32;
     Ok(json!({"path": path, "width": w, "height": h, "coverage": covered}))
@@ -225,7 +239,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "Download People Parts Models",
             [],
             None,
-            "{set?: \"segformer\"|\"bisenet\" (default: the chosen set), confirm: true} — downloads the set's missing models from huggingface.co into the folder shared with the other ArtCraft apps, on a thread with a row in the activity stack (✕ stops it; asking again resumes; sizes and SHA-256 are checked). Without `confirm: true` it is refused: ask the user first → {started: true, bytes}",
+            "{set?: \"segformer\"|\"bisenet\" (default: the chosen set), confirm: true, choose?: bool} — downloads the set's missing models from huggingface.co into the folder shared with the other ArtCraft apps, on a thread with a row in the activity stack (✕ stops it; asking again resumes; sizes and SHA-256 are checked; one download at a time). With `choose`, the set parses from the moment the download has finished; a download that stops or fails changes nothing. Without `confirm: true` it is refused: ask the user first → {started: true, bytes}",
             always,
             |s, p| {
                 const C: &str = "parsing.download";
@@ -240,7 +254,8 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                         ),
                     ));
                 }
-                let bytes = s.parsing.start_download(set).map_err(|e| bad(C, e))?;
+                let choose = p.get("choose").and_then(Value::as_bool).unwrap_or(false);
+                let bytes = s.parsing.start_download(set, choose).map_err(|e| bad(C, e))?;
                 Ok(json!({"started": true, "set": set.id(), "bytes": bytes}))
             }
         ),

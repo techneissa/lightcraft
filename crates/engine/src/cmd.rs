@@ -46,7 +46,7 @@ mod merge;
 pub mod metadata;
 pub mod missing;
 mod organize;
-mod parsing;
+pub(crate) mod parsing;
 mod prefs;
 mod preset_files;
 pub mod previews;

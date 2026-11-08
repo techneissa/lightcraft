@@ -33,9 +33,11 @@ impl PeopleParsing {
         lock(&self.inner.downloads).insert(set, d);
     }
 
-    /// Start downloading the files of `set` that are missing, on a thread. Errors (in words the user can act on):
-    /// already installed, already downloading, no models folder, the thread could not start.
-    pub fn start_download(&self, set: ModelSet) -> Result<u64, String> {
+    /// Start downloading the files of `set` that are missing, on a thread; with `choose`, the set parses from the
+    /// moment every file has arrived and been checked (a download that stops or fails changes nothing). One download
+    /// at a time: sets share files. Errors (in words the user can act on): already installed, a download going, no
+    /// models folder, the thread could not start.
+    pub fn start_download(&self, set: ModelSet, choose: bool) -> Result<u64, String> {
         let Some(models) = self.models_dir() else { return Err("this build has nowhere to keep people parsing models".into()) };
         let missing: Vec<_> = set.files().into_iter().filter(|f| !f.installed_in(&models)).collect();
         if missing.is_empty() {
@@ -44,8 +46,12 @@ impl PeopleParsing {
         let total: u64 = missing.iter().map(|f| f.size).sum();
         {
             let mut d = lock(&self.inner.downloads);
-            if matches!(d.get(&set), Some(Download::Running { .. })) {
-                return Err(format!("the {} models are already downloading", set.label()));
+            if let Some((other, _)) = d.iter().find(|(_, s)| matches!(s, Download::Running { .. })) {
+                return Err(if *other == set {
+                    format!("the {} models are already downloading", set.label())
+                } else {
+                    format!("the {} models are downloading: one download at a time", other.label())
+                });
             }
             d.insert(set, Download::Running { bytes: 0, total });
         }
@@ -60,8 +66,16 @@ impl PeopleParsing {
             .name("parsing-download".into())
             .spawn(move || {
                 let row = row;
-                let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| this.fetch(set, &models, &missing, total, &cancel, &row)));
-                this.set_download(set, outcome.unwrap_or_else(|_| Download::Failed("the download stopped unexpectedly".into())));
+                let outcome =
+                    std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| this.fetch_files(set, &models, &missing, total, &cancel, &row)));
+                let state = outcome.unwrap_or_else(|_| Download::Failed("the download stopped unexpectedly".into()));
+                if choose
+                    && state == Download::Done
+                    && let Err(e) = this.set_model_set(set)
+                {
+                    log::warn!("people parsing: {e}");
+                }
+                this.set_download(set, state);
             })
             .map(|_| total)
             .map_err(|e| {
@@ -75,6 +89,29 @@ impl PeopleParsing {
         for flag in lock(&self.inner.download_flags).drain(..) {
             flag.store(true, std::sync::atomic::Ordering::Relaxed);
         }
+    }
+
+    /// The download itself, or the test stand-in when one is set.
+    fn fetch_files(
+        &self,
+        set: ModelSet,
+        models: &std::path::Path,
+        files: &[lightcraft_parsing::ModelFile],
+        total: u64,
+        cancel: &AtomicBool,
+        row: &crate::activity::TaskGuard,
+    ) -> Download {
+        #[cfg(any(test, feature = "test-hooks"))]
+        if let Some(f) = lock(&self.inner.test_fetch).clone() {
+            return f(set, models);
+        }
+        self.fetch(set, models, files, total, cancel, row)
+    }
+
+    /// Tests (and builds with `test-hooks`) download nothing: `f` stands in for the transfer and says how it ended.
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn set_test_fetch(&self, f: Option<super::TestFetch>) {
+        *lock(&self.inner.test_fetch) = f;
     }
 
     #[cfg(not(target_arch = "wasm32"))]

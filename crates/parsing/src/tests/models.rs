@@ -49,6 +49,18 @@ fn a_damaged_model_file_is_an_error_not_a_panic() {
     assert!(crate::facemesh::FaceMesh::load(&w, &candle_core::Device::Cpu).is_err());
 }
 
+#[test]
+fn a_model_file_of_the_right_size_with_the_wrong_bytes_is_refused() {
+    let dir = super::scratch("wrong-bytes");
+    let set = ModelSet::Segformer;
+    for f in set.files() {
+        std::fs::create_dir_all(dir.join(f.folder)).unwrap();
+        std::fs::File::create(f.path_in(&dir)).unwrap().set_len(f.size).unwrap();
+    }
+    let e = Parser::load_on(set, &dir, candle_core::Device::Cpu).err().unwrap();
+    assert!(e.to_string().contains("SHA-256") && e.to_string().contains(set.face_file().label), "{e}");
+}
+
 /// A smooth synthetic picture with no people.
 fn landscape(w: usize, h: usize) -> RgbImage {
     let mut d = Vec::with_capacity(w * h * 3);

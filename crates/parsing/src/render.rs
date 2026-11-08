@@ -75,14 +75,15 @@ pub fn refined(p: &Parsing, sel: Select, guide: &RgbImage) -> Vec<f32> {
     refined_with(p, sel, guide, CELLS, EPS)
 }
 
-/// [`refined`] with another radius (in the mask's cells; 0: no refinement) and regularisation.
+/// [`refined`] with another radius (in the mask's cells; 0: no refinement) and regularisation. Any positive radius
+/// refines, at least one pixel wide, so a small draft and a full-size export get the same outline.
 pub fn refined_with(p: &Parsing, sel: Select, guide: &RgbImage, cells: f32, eps: f32) -> Vec<f32> {
     let m = mask(p, sel, guide.width, guide.height);
-    let r = radius_px(p, sel, guide.width, guide.height, cells);
-    if m.is_empty() || r < 1.0 {
+    if m.is_empty() || cells.is_nan() || cells <= 0.0 {
         return m;
     }
-    guided_px(guide, &m, r.round() as usize, eps)
+    let r = radius_px(p, sel, guide.width, guide.height, cells);
+    guided_px(guide, &m, (r.round() as usize).max(1), eps)
 }
 
 /// The filter radius in frame pixels: `cells` of the coarsest plane the selection draws from.
@@ -238,6 +239,24 @@ mod tests {
         }
         assert!(mask(&p, Select::Person(3, Part::Hair), 10, 10).iter().all(|&v| v == 0.0));
         assert!(mask(&p, Select::Background, 0, 10).is_empty());
+    }
+
+    #[test]
+    fn a_frame_finer_than_one_cell_still_gets_its_edges_refined() {
+        // a plane with more cells than the frame has pixels: under a one-pixel radius the edge used to stay bilinear
+        let mut person = Person::default();
+        let data: Vec<f32> = (0..64 * 64).map(|i| if (i % 64) < 30 { 0.0 } else { 1.0 }).collect();
+        person.parts.insert(Part::Hair, vec![Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: 64, height: 64, data }]);
+        let p = Parsing { people: vec![person], width: 32, height: 32, ..Parsing::default() };
+        let mut px = vec![0u8; 32 * 32 * 3];
+        for (i, v) in px.iter_mut().enumerate() {
+            *v = if (i / 3) % 32 >= 17 { 255 } else { 0 };
+        }
+        let guide = RgbImage::new(32, 32, px).unwrap();
+        let plain = mask(&p, Select::Everyone(Part::Hair), 32, 32);
+        let fine = refined(&p, Select::Everyone(Part::Hair), &guide);
+        assert!(plain.iter().zip(&fine).any(|(a, b)| (a - b).abs() > 0.01), "not refined");
+        assert!(refined_with(&p, Select::Everyone(Part::Hair), &guide, 0.0, EPS) == plain);
     }
 
     #[test]

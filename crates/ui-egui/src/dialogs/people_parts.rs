@@ -53,8 +53,17 @@ pub fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         }
     });
     for set in &sets {
-        if let Some(e) = set["download"]["error"].as_str() {
-            ui.add(egui::Label::new(RichText::new(crate::i18n::tr(e)).size(11.0).color(t.caution)).wrap());
+        let label = set["label"].as_str().unwrap_or("");
+        let why = match set["download"]["state"].as_str() {
+            Some("failed") => set["download"]["error"].as_str().map(String::from),
+            Some("cancelled") => Some(crate::i18n::tr_format!("The {} download stopped. Choose it again to resume.", label)),
+            _ => None,
+        };
+        if let Some(why) = why {
+            ui.add(egui::Label::new(RichText::new(crate::i18n::tr(&why)).size(11.0).color(t.caution)).wrap());
+        }
+        if set["id"] == chosen.as_str() && set["installed"] != true && set["download"]["state"] != "running" {
+            hint(ui, t, &crate::i18n::tr_format!("{} is not downloaded, so people's parts are not found yet.", label));
         }
     }
     if let Some(m) = status["message"].as_str() {
@@ -99,9 +108,8 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context, sets: &[Value]) {
     if let Some(download) = choice {
         ctx.data_mut(|d| d.remove::<String>(ask_id()));
         if download {
-            let started =
-                app.run("parsing.download", json!({"set": id, "confirm": true})).and_then(|_| app.run("parsing.modelSet", json!({"set": id})));
-            if let Err(e) = started {
+            // the set is used once its download has finished; a download that stops or fails changes nothing
+            if let Err(e) = app.run("parsing.download", json!({"set": id, "confirm": true, "choose": true})) {
                 app.toast(ctx, e);
             }
         }

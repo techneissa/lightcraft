@@ -28,6 +28,40 @@ impl ModelFile {
         models.join(self.folder).join(self.name)
     }
 
+    /// Check the file's SHA-256 against the published one, once per file and process (again when the file's size or
+    /// time changes): a file copied in by hand, or damaged on disk, is an error that names it, never a wrong model.
+    pub fn verify(&self, models: &Path) -> crate::Result<()> {
+        use sha2::{Digest, Sha256};
+        use std::io::Read;
+        static VERIFIED: std::sync::Mutex<Vec<(PathBuf, u64, Option<std::time::SystemTime>)>> = std::sync::Mutex::new(Vec::new());
+        let path = self.path_in(models);
+        let Ok(meta) = std::fs::metadata(&path) else { return Ok(()) };
+        let stamp = (path.clone(), meta.len(), meta.modified().ok());
+        if VERIFIED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).contains(&stamp) {
+            return Ok(());
+        }
+        let bad = |what: String| crate::Error::Model(format!("{} ({}): {what}; download it again", self.label, path.display()));
+        if meta.len() != self.size {
+            return Err(bad(format!("{} bytes, not {}", meta.len(), self.size)));
+        }
+        let mut f = std::fs::File::open(&path).map_err(|e| bad(e.to_string()))?;
+        let mut h = Sha256::new();
+        let mut buf = vec![0u8; 1 << 20];
+        loop {
+            let n = f.read(&mut buf).map_err(|e| bad(e.to_string()))?;
+            if n == 0 {
+                break;
+            }
+            h.update(buf.get(..n).unwrap_or(&[]));
+        }
+        let got: String = h.finalize().iter().map(|b| format!("{b:02x}")).collect();
+        if got != self.sha256 {
+            return Err(bad("its SHA-256 does not match the published one".into()));
+        }
+        VERIFIED.lock().unwrap_or_else(std::sync::PoisonError::into_inner).push(stamp);
+        Ok(())
+    }
+
     /// Whether the file is there with its published size (its hash is checked when downloaded).
     pub fn installed_in(&self, models: &Path) -> bool {
         std::fs::metadata(self.path_in(models)).is_ok_and(|m| m.is_file() && m.len() == self.size)
