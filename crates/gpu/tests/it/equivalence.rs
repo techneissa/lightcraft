@@ -379,6 +379,60 @@ fn cases() -> Vec<(&'static str, Edit)> {
                 },
             ];
         }),
+        ("masks (recolor)", |s| {
+            // issue #83: a coloured area to purple over a grey-ish one to white, overlapping
+            let part = |shape| vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }];
+            s.masks = vec![
+                Mask {
+                    id: 1,
+                    components: part(MaskShape::Radial {
+                        center: Point::new(0.45, 0.55),
+                        rx: 0.3,
+                        ry: 0.25,
+                        angle: 0.0,
+                        feather: 50.0,
+                        invert: false,
+                    }),
+                    adjust: lightcraft_develop::LocalAdjustments {
+                        recolor: 100.0,
+                        recolor_r: 0.48,
+                        recolor_g: 0.25,
+                        recolor_b: 0.69,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Mask {
+                    id: 2,
+                    components: part(MaskShape::Linear { start: Point::new(0.0, 0.2), end: Point::new(0.0, 0.5) }),
+                    adjust: lightcraft_develop::LocalAdjustments {
+                        recolor: 60.0,
+                        recolor_r: 0.95,
+                        recolor_g: 0.95,
+                        recolor_b: 0.95,
+                        exposure: -0.3,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+                Mask {
+                    id: 3,
+                    components: part(MaskShape::Radial { center: Point::new(0.6, 0.4), rx: 0.35, ry: 0.3, angle: 0.0, feather: 40.0, invert: false }),
+                    adjust: lightcraft_develop::LocalAdjustments {
+                        recolor: 100.0,
+                        recolor_r: 0.2,
+                        recolor_g: 0.6,
+                        recolor_b: 0.3,
+                        recolor_range: 60.0,
+                        recolor_from_r: 0.3,
+                        recolor_from_g: 0.4,
+                        recolor_from_b: 0.8,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                },
+            ];
+        }),
         ("masks (brush + ranges)", |s| {
             let stroke = BrushStroke {
                 points: vec![Point::new(0.1, 0.3), Point::new(0.5, 0.4), Point::new(0.8, 0.35)],

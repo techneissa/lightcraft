@@ -307,6 +307,7 @@ pub fn settings_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         ui.add_space(4.0);
         hint(ui, t, &format!("Faces are found by {} ({}, included).", d["name"].as_str().unwrap_or("the detector"), mb(d["sizeBytes"].as_u64())));
     }
+    super::people_parts::section(app, ui, t);
 }
 
 /// How the scan is going: a bar while photos are left, then how many faces it learned.

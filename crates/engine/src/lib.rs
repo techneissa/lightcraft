@@ -52,6 +52,7 @@ pub mod import;
 mod import_move;
 pub mod lama_fill;
 pub mod layers;
+pub mod learn;
 pub mod lens_profiles;
 pub mod lensfun_download;
 pub mod library;
@@ -72,6 +73,7 @@ pub mod names;
 pub mod open_path;
 pub mod originals;
 mod pdf;
+pub mod people_parsing;
 pub mod preset_import;
 pub mod preset_luminar;
 pub mod presets;
@@ -349,6 +351,8 @@ pub struct Session {
     /// Reading focus points for photos imported before they were read (`photo.readFocusPoints`, `focus.pump`).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) focus_scan: focus_scan::FocusScan,
+    /// Match Look (fork, `fork/match-look.md`): a pasted reference and the background match.
+    pub(crate) match_look: cmd::match_look::MatchLook,
     /// Copied develop settings (partial JSON) for Paste.
     pub clipboard: Option<Value>,
     /// The folder on disk the [`LibrarySource::Folder`] view browses.
@@ -391,6 +395,10 @@ pub struct Session {
     pub lama: lama_fill::LamaFill,
     /// Object clicks of the Remove tool on their way to SAM 3 (fork, `fork/object-remove.md`).
     pub object_jobs: spot_area::ObjectJobs,
+    /// Learn My Edits: profiles trained on the user's edits (`fork/learn-my-edits.md`).
+    pub learn: learn::LearnEdits,
+    /// Per-person part masks and face landmarks (`fork/people-parsing.md`).
+    pub parsing: people_parsing::PeopleParsing,
     /// The persistent library this session writes to (`None` = in-memory only).
     pub library: Option<library::Library>,
     /// Identity of current library opening; refreshed only after a successful open.
@@ -574,6 +582,7 @@ impl Session {
             faces: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             focus_scan: Default::default(),
+            match_look: Default::default(),
             clipboard: None,
             meta_clipboard: None,
             browse: None,
@@ -595,6 +604,8 @@ impl Session {
             finds: Default::default(),
             lama: lama_fill::LamaFill::new(activity.clone()),
             object_jobs: Default::default(),
+            learn: learn::LearnEdits::new(activity.clone()),
+            parsing: people_parsing::PeopleParsing::new(activity.clone()),
             library: None,
             library_identity: Arc::new(()),
             xmp: sidecar::XmpPrefs::default(),

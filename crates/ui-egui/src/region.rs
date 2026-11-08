@@ -29,6 +29,8 @@ pub struct RegionView {
     pub window: PixelWindow,
     /// Hash of the render state it was rendered with (develop settings plus any window-safe overlay).
     pub settings: u64,
+    /// The part of `settings` that is how the photo is viewed (the mask overlay, the soft proof), not its edit.
+    pub view: u64,
 }
 
 impl RegionView {
@@ -39,6 +41,14 @@ impl RegionView {
     /// belongs: drafts follow the drag, and waiting for an exact match would show none.
     pub fn is_current(&self, photo: lightcraft_catalog::PhotoId, full: (usize, usize), settings: u64, drafting: bool) -> bool {
         self.photo == photo && self.full == full && (drafting || self.settings == settings)
+    }
+
+    /// Whether this window stays on screen while the window for a new edit of the photo renders: the same photo, zoom
+    /// and `view` (mask overlay, soft proof). The whole-frame render keeps its old picture until the new one arrives;
+    /// a window that dropped out showed the softer whole frame for a moment, so the photo seemed to render again after
+    /// every spot (issue #82). A change of overlay or proof still drops it at once.
+    pub fn stands_in(&self, photo: lightcraft_catalog::PhotoId, full: (usize, usize), view: u64) -> bool {
+        self.photo == photo && self.full == full && self.view == view
     }
 }
 

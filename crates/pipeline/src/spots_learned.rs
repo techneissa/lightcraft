@@ -113,47 +113,69 @@ fn shaped_alpha(spot: &Spot, frame: &Frame, (w, h): (usize, usize), r: f32, b: P
 /// white balance. `reference_long` is the long edge of the original in pixels: the fill sees each crop at the size it
 /// has there. Says, per spot, whether it is done (a spot that is not learned, or got no learned fill, is not).
 pub fn apply(img: &mut Rgb32f, spots: &[Spot], frame: &Frame, ppl: f64, reference_long: f64, provider: &dyn LearnedFill, draft: bool) -> Vec<bool> {
-    let mut done = vec![false; spots.len()];
-    let (w, h) = (img.width, img.height);
-    if w == 0 || h == 0 || !spots.iter().any(is_learned) {
-        return done;
-    }
-    let to_out = frame.norm_to_out(w, h);
-    // render pixels to the original's: the fill sees the crop at the original's size, whatever the render's
-    let k = if ppl.is_finite() && ppl > 0.0 && reference_long.is_finite() && reference_long > 0.0 { reference_long / ppl } else { 1.0 };
     let run = FillRun::new();
-    for (spot, done) in spots.iter().zip(done.iter_mut()) {
-        if !is_learned(spot) {
-            continue;
-        }
-        if run.stopped() {
-            // stopped (✕ on the fill's row): the rest of this render's spots show the Classic fill
-            break;
-        }
-        let r = radius_px(spot.size, ppl) as f32;
-        // (a shaped spot's box and alpha are its shape's, `spot_area`)
-        let pts: Vec<(f32, f32)> = crate::spot_area::box_points(spot)
-            .iter()
-            .map(|p| to_out.apply(*p))
-            .filter(|q| q.x.is_finite() && q.y.is_finite())
-            .map(|q| (q.x as f32, q.y as f32))
-            .collect();
-        let Some(b) = (!pts.is_empty()).then(|| stroke_box(&pts, r, w, h)).flatten() else { continue };
-        let alpha = shaped_alpha(spot, frame, (w, h), r, b).unwrap_or_else(|| stroke_alpha(spot, &pts, r, b));
-        if !alpha.iter().any(|a| *a > 0.0) {
-            // nothing to rebuild (zero opacity): nothing for the Classic fill to draw either
-            *done = true;
-            continue;
-        }
-        // the box and a margin of one box side (at least a few pixels), kept inside the picture
-        let ctx = b.w().max(b.h()).max(min_context(ppl).ceil() as usize);
-        let c = PixelBox { x0: b.x0.saturating_sub(ctx), y0: b.y0.saturating_sub(ctx), x1: (b.x1 + ctx).min(w), y1: (b.y1 + ctx).min(h) };
-        let job = Job { alpha: &alpha, b, c, k };
-        let Some(filled) = fill_crop(img, &job, &run, provider, draft) else { continue };
-        blend(img, &job, &filled);
-        *done = true;
+    let at = Where { frame, ppl, reference_long, draft };
+    spots.iter().map(|spot| apply_one(img, spot, &at, provider, &run)).collect()
+}
+
+/// Where a render draws its learned spots: its frame, output pixels per long edge, the original's long edge (pixels)
+/// and whether it follows a drag (see [`apply`]).
+#[derive(Clone, Copy)]
+pub struct Where<'a> {
+    pub frame: &'a Frame,
+    pub ppl: f64,
+    pub reference_long: f64,
+    pub draft: bool,
+}
+
+/// The stroke of `spot` in a `w × h` render, its box and the crop its fill reads (`None`: it draws nothing there).
+fn boxes(spot: &Spot, frame: &Frame, w: usize, h: usize, ppl: f64) -> Option<(Vec<(f32, f32)>, f32, PixelBox, PixelBox)> {
+    let to_out = frame.norm_to_out(w, h);
+    let r = radius_px(spot.size, ppl) as f32;
+    // (a shaped spot's box is its shape's, outline and Expand: `spot_area`)
+    let pts: Vec<(f32, f32)> = crate::spot_area::box_points(spot)
+        .iter()
+        .map(|p| to_out.apply(*p))
+        .filter(|q| q.x.is_finite() && q.y.is_finite())
+        .map(|q| (q.x as f32, q.y as f32))
+        .collect();
+    let b = (!pts.is_empty()).then(|| stroke_box(&pts, r, w, h)).flatten()?;
+    // the box and a margin of one box side (at least a few pixels), kept inside the picture
+    let ctx = b.w().max(b.h()).max(min_context(ppl).ceil() as usize);
+    let c = PixelBox { x0: b.x0.saturating_sub(ctx), y0: b.y0.saturating_sub(ctx), x1: (b.x1 + ctx).min(w), y1: (b.y1 + ctx).min(h) };
+    Some((pts, r, b, c))
+}
+
+/// Where a learned spot draws (its box) and what its fill reads (the crop), in a `w × h` render: `[x0, y0, x1, y1)`.
+pub fn footprint(spot: &Spot, frame: &Frame, w: usize, h: usize, ppl: f64) -> Option<([usize; 4], [usize; 4])> {
+    if !is_learned(spot) || spot.hidden {
+        return None;
     }
-    done
+    let (_, _, b, c) = boxes(spot, frame, w, h, ppl)?;
+    Some(([b.x0, b.y0, b.x1, b.y1], [c.x0, c.y0, c.x1, c.y1]))
+}
+
+/// Draw one learned spot on `img` (see [`apply`]), sharing `run` with the render's other spots: whether it is done.
+pub fn apply_one(img: &mut Rgb32f, spot: &Spot, at: &Where<'_>, provider: &dyn LearnedFill, run: &FillRun) -> bool {
+    let (w, h) = (img.width, img.height);
+    if w == 0 || h == 0 || !is_learned(spot) || run.stopped() {
+        // (stopped: ✕ on the fill's row; the rest of this render's spots show the Classic fill)
+        return false;
+    }
+    let ppl = at.ppl;
+    // render pixels to the original's: the fill sees the crop at the original's size, whatever the render's
+    let k = if ppl.is_finite() && ppl > 0.0 && at.reference_long.is_finite() && at.reference_long > 0.0 { at.reference_long / ppl } else { 1.0 };
+    let Some((pts, r, b, c)) = boxes(spot, at.frame, w, h, ppl) else { return false };
+    // (a shaped spot's alpha follows its outline, `spot_area`)
+    let alpha = shaped_alpha(spot, at.frame, (w, h), r, b).unwrap_or_else(|| stroke_alpha(spot, &pts, r, b));
+    if !alpha.iter().any(|a| *a > 0.0) {
+        // nothing to rebuild (zero opacity): nothing for the Classic fill to draw either
+        return true;
+    }
+    let job = Job { alpha: &alpha, b, c, k };
+    let Some(filled) = fill_crop(img, &job, run, provider, at.draft) else { return false };
+    blend(img, &job, &filled);
+    true
 }
 
 /// One spot's crop `c` of the picture, the box `b` inside it that `alpha` covers, and the scale `k` from render pixels

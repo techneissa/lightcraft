@@ -363,7 +363,7 @@ pub fn part_rows(app: &mut LightcraftApp, ui: &mut egui::Ui, m: &Mask) {
             let targets = if chosen.contains(&i) { chosen } else { vec![i] };
             super::mask_menus::part_menu(app, ui, m, &targets);
         });
-        range_controls(app, ui, i, &c.shape);
+        crate::widgets::in_repeated_row(ui, i, |ui| range_controls(app, ui, i, &c.shape));
     }
     // a click on the empty space under the list goes back to one submask, as Esc does
     let (rest, resp) = ui.allocate_exact_size(vec2(ui.available_width(), 10.0), Sense::click());

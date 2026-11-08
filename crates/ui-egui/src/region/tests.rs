@@ -608,14 +608,26 @@ fn the_margin_grows_with_the_zoom_up_to_a_cap() {
 #[test]
 fn a_tile_is_drawn_only_while_it_shows_what_the_loupe_shows() {
     use lightcraft_catalog::PhotoId;
-    let v =
-        RegionView { photo: PhotoId(1), before: false, key: 7, full: (6000, 4000), window: PixelWindow { x: 0, y: 0, w: 256, h: 256 }, settings: 11 };
+    let v = RegionView {
+        photo: PhotoId(1),
+        before: false,
+        key: 7,
+        full: (6000, 4000),
+        window: PixelWindow { x: 0, y: 0, w: 256, h: 256 },
+        settings: 11,
+        view: 3,
+    };
     assert!(v.is_current(PhotoId(1), (6000, 4000), 11, false));
     assert!(!v.is_current(PhotoId(2), (6000, 4000), 11, false), "another photo");
     assert!(!v.is_current(PhotoId(1), (6000, 4001), 11, false), "another zoom");
     assert!(!v.is_current(PhotoId(1), (6000, 4000), 12, false), "another look (an edit, an undo)");
     assert!(v.is_current(PhotoId(1), (6000, 4000), 12, true), "a drag's drafts follow the value");
     assert!(!v.is_current(PhotoId(2), (6000, 4000), 12, true), "…of this photo only");
+    // while the window of a new edit renders, the old one stays on screen; not over another photo, zoom or overlay
+    assert!(v.stands_in(PhotoId(1), (6000, 4000), 3));
+    assert!(!v.stands_in(PhotoId(2), (6000, 4000), 3));
+    assert!(!v.stands_in(PhotoId(1), (6000, 4001), 3));
+    assert!(!v.stands_in(PhotoId(1), (6000, 4000), 4), "another mask overlay or proof drops it at once");
 }
 
 // Given a GPU that allows 2048 px textures, no window is wider than that

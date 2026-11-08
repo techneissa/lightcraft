@@ -922,6 +922,26 @@ pub struct LocalAdjustments {
     pub color_sat: f64,
     /// Local vignette/grain are not in Lightroom; we keep the struct extensible.
     pub amount: f64,
+    /// Recolor (0..100; 0 = off): the area takes the colour `recolor_r/g/b` (sRGB-encoded, 0..1) and keeps its
+    /// shading. Not written while 0, so edits without it stay as they were.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_r: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_g: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_b: f64,
+    /// Recolor's Range (−100..100, 0 = automatic): widens or narrows which colours count as the area's main colour.
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_range: f64,
+    /// Recolor's Colour to Replace (sRGB-encoded, 0..1; black = automatic, the area's main colour).
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_from_r: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_from_g: f64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub recolor_from_b: f64,
 }
 
 impl Default for LocalAdjustments {
@@ -947,6 +967,14 @@ impl Default for LocalAdjustments {
             color_hue: 0.0,
             color_sat: 0.0,
             amount: 100.0,
+            recolor: 0.0,
+            recolor_r: 0.0,
+            recolor_g: 0.0,
+            recolor_b: 0.0,
+            recolor_range: 0.0,
+            recolor_from_r: 0.0,
+            recolor_from_g: 0.0,
+            recolor_from_b: 0.0,
         }
     }
 }
@@ -1183,6 +1211,11 @@ pub struct Mask {
     /// edit converts an old one (`lightcraft_pipeline::mask_space::attach`).
     #[serde(default, skip_serializing_if = "is_false")]
     pub on_photo: bool,
+    /// What the parts after the first were (mode, own Invert) before the last Invert Mask rewrote them, so inverting
+    /// again puts them back as they were. Empty when unknown; only used while the parts are still what that Invert
+    /// made (`lightcraft_engine::cmd::mask_invert`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub before_invert: Vec<(MaskOp, bool)>,
 }
 
 fn is_zero(v: &f64) -> bool {
@@ -1204,6 +1237,7 @@ impl Default for Mask {
             adjust: LocalAdjustments::default(),
             refine: 0.0,
             on_photo: true,
+            before_invert: Vec::new(),
         }
     }
 }

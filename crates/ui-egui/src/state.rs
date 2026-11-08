@@ -227,6 +227,9 @@ pub struct UiState {
     /// The Command Palette (⌘P) while it is open.
     #[serde(skip)]
     pub palette: Option<crate::panels::command_palette::State>,
+    /// Photo ▸ Match Look… while it is open or its match runs (fork, `fork/match-look.md`).
+    #[serde(skip)]
+    pub match_look: Option<crate::panels::match_look::State>,
     /// Put the cursor in the Keywords panel's Add keyword box (Add Keywords): the egui pass it was
     /// asked on. A box drawn more than [`FOCUS_KEYWORDS_PASSES`] passes later doesn't take it, so
     /// a request made while the panel can't show expires.
@@ -320,6 +323,9 @@ pub struct UiState {
     pub remove_object: bool,
     pub remove_object_fill: lightcraft_develop::SpotFill,
     pub remove_expand: f32,
+    /// The Learn My Edits window (`fork/learn-my-edits.md`); not saved.
+    #[serde(skip)]
+    pub learn_edits: crate::learn_edits::Window,
     /// Selected Point Color sample.
     pub point_color: usize,
     /// Point Color "Visualize range": the selected sample's range in colour, the rest grey.
@@ -525,6 +531,7 @@ impl Default for UiState {
             search: String::new(),
             focus_search: false,
             palette: None,
+            match_look: None,
             focus_keywords: None,
             rename_row: None,
             renaming_mask: None,
@@ -562,6 +569,7 @@ impl Default for UiState {
             remove_object: false,
             remove_object_fill: lightcraft_develop::SpotFill::Lama,
             remove_expand: 0.005,
+            learn_edits: Default::default(),
             point_color: 0,
             point_color_visualize: false,
             hdr_visualize: false,

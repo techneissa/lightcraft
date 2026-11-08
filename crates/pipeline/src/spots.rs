@@ -405,6 +405,7 @@ pub fn apply_except(img: &mut Rgb32f, spots: &[Spot], done: &[bool], frame: &Fra
             continue;
         };
         let Some(&first) = pts.first() else { continue };
+        crate::spots_keep::note_spot();
         let offset = offset.unwrap_or_else(|| auto_source(img, first, r));
         // alpha of the stroke and source patch in the box
         let mut alpha = vec![0.0f32; bw * bh];

@@ -357,6 +357,10 @@ fn main() -> eframe::Result {
                 session = session.with_default_sam3_model();
                 // the LaMa fill for Remove, from the folder shared with PhotoCraft (fork/lama-fill.md)
                 session = session.with_default_lama_model();
+                // Learn My Edits: its profiles in <config>/learn-profiles, its model shared with PhotoCraft (fork/learn-my-edits.md)
+                session = session.with_default_learn();
+                // people parts (fork/people-parsing.md): models in the shared folder, parses cached in ~/Library/Caches
+                session = session.with_default_parsing_models();
                 // the face and denoise models of the old folders move into the folder shared with PhotoCraft, once
                 // (fork/shared-models.md); on a worker, because checking a 200 MB model takes a second; a failure
                 // leaves both copies and is only logged
@@ -373,7 +377,10 @@ fn main() -> eframe::Result {
                 // HDR display: SDR unless the surface, platform and display all allow HDR
                 hdr_display::report(cc.wgpu_render_state.as_ref().map(|r| r.target_format));
                 let mut app = LightcraftApp::new(session, services(cc, app_log_file.as_deref()));
-                app.set_startup_update_check(true);
+                app.set_startup_update_check(lightcraft_ui_egui::fork_update::check_at_start(
+                    control_port.is_some(),
+                    std::env::var_os("LIGHTCRAFT_NO_UPDATE_CHECK").as_deref(),
+                ));
                 if let Some(ui) = prefs {
                     app.ui = ui;
                 }
