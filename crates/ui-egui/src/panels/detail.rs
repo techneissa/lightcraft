@@ -25,6 +25,7 @@ mod find_overlay;
 mod geometry;
 mod info;
 mod masks;
+mod object_remove;
 mod retouch;
 mod window;
 
