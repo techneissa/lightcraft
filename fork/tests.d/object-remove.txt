@@ -1,5 +1,6 @@
 cargo test -p lightcraft-develop --lib spot_area
-cargo test -p lightcraft-pipeline --lib -- spot_area find::region spots::
+cargo test -p lightcraft-pipeline --lib -- spot_area find::region spots:: learned_fill
+cargo test -p lightcraft-segment --lib whole
 cargo test -p lightcraft-gpu --test it shaped_spot
 cargo test -p lightcraft-engine --features sam --lib -- tests::spot_area spot_area:: tests::find_removals tests::lama_fill
 cargo test -p lightcraft-ui-egui --features lightcraft-engine/sam --lib -- object_remove spot_rows remove_fill
