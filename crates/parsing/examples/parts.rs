@@ -72,7 +72,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let edge: u32 = arg(&args, "--edge").map_or(Ok(2048), |e| e.parse())?;
 
     let t = Instant::now();
-    let photo = image::open(input)?.to_rgb8();
+    let mut decoder = image::ImageReader::open(input)?.with_guessed_format()?.into_decoder()?;
+    let orientation = image::ImageDecoder::orientation(&mut decoder)?;
+    let mut decoded = image::DynamicImage::from_decoder(decoder)?;
+    decoded.apply_orientation(orientation);
+    let photo = decoded.to_rgb8();
     let small = if photo.width().max(photo.height()) > edge {
         image::imageops::thumbnail(
             &photo,

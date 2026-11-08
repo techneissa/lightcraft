@@ -132,7 +132,7 @@ impl Parser {
             }
         }
         let rects: Vec<NormRect> = faces.iter().map(|f| f.rect).collect();
-        let owners = people::assign(&map.person(), map.w, map.h, &rects);
+        let owners = people::assign(&map.person(), &map.skin_or_hair(), map.w, map.h, &rects);
         let count = owners.people.min(opts.max_people);
         let mut people: Vec<Person> = (0..count)
             .map(|k| match faces.get(k) {

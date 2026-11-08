@@ -14,6 +14,8 @@ pub struct Owners {
 
 /// A piece of the person area with no face needs this share of the photo to count as a person.
 const FACELESS_MIN_AREA: f32 = 0.015;
+/// ... and this share of it must be hair, face, arms or legs.
+const FACELESS_MIN_EVIDENCE: f32 = 0.03;
 /// Below this share of the photo a piece is noise.
 const NOISE_AREA: f32 = 0.0004;
 /// Body-map pixels the owners grow into the soft edge around the person area.
@@ -63,8 +65,10 @@ pub fn components(mask: &[bool], w: usize, h: usize) -> (Vec<u32>, Vec<usize>) {
     (label, sizes)
 }
 
-/// Split the person area (`person`, 0 to 1 per body-map pixel) between `faces` (fractions of the photo).
-pub fn assign(person: &[f32], w: usize, h: usize, faces: &[NormRect]) -> Owners {
+/// Split the person area (`person`, 0 to 1 per body-map pixel) between `faces` (fractions of the photo). `skin_or_hair`
+/// marks the pixels that are hair, a face, an arm or a leg: a piece with no face counts as a person only when some of
+/// it is (a dark car or a coat on a chair is "person" to the body model, but has neither).
+pub fn assign(person: &[f32], skin_or_hair: &[bool], w: usize, h: usize, faces: &[NormRect]) -> Owners {
     let n = w * h;
     let mask: Vec<bool> = person.iter().map(|&p| p > 0.5).collect();
     let (label, sizes) = components(&mask, w, h);
@@ -97,11 +101,44 @@ pub fn assign(person: &[f32], w: usize, h: usize, faces: &[NormRect]) -> Owners 
             list.push(k);
         }
     }
+    let mut evidence = vec![0usize; sizes.len()];
+    let mut centre = vec![(0.0f64, 0.0f64); sizes.len()];
+    for (i, &l) in label.iter().enumerate() {
+        if let Some(c) = centre.get_mut(l as usize) {
+            c.0 += (i % w) as f64 + 0.5;
+            c.1 += (i / w) as f64 + 0.5;
+        }
+        if skin_or_hair.get(i).copied().unwrap_or(false)
+            && let Some(e) = evidence.get_mut(l as usize)
+        {
+            *e += 1;
+        }
+    }
+    // a faceless piece where a face's body should be (five faces wide, from a face above it to eight below) is that
+    // person's, cut off from the head by something the model did not call person (a dark shirt, an arm in front)
+    for (l, list) in piece_faces.iter_mut().enumerate().skip(1) {
+        let n = sizes.get(l).copied().unwrap_or(0).max(1) as f64;
+        let Some(&(sx, sy)) = centre.get(l) else { continue };
+        let (x, y) = ((sx / n) as f32, (sy / n) as f32);
+        if list.is_empty()
+            && (n as f32) / total >= NOISE_AREA
+            && let Some(k) = face_px
+                .iter()
+                .enumerate()
+                .filter(|(_, f)| (x - f.0).abs() <= 2.5 * f.2 && y >= f.1 - f.2 && y <= f.1 + 8.0 * f.2)
+                .min_by(|a, b| ((x - a.1.0).abs() / a.1.2).total_cmp(&((x - b.1.0).abs() / b.1.2)))
+                .map(|(k, _)| k)
+        {
+            list.push(k);
+        }
+    }
     let mut people = faces.len();
     let mut piece_owner: Vec<Option<u16>> = vec![None; sizes.len()];
     for (l, list) in piece_faces.iter().enumerate().skip(1) {
         let area = sizes.get(l).copied().unwrap_or(0) as f32 / total;
-        if list.is_empty() && area >= FACELESS_MIN_AREA && people < usize::from(u16::MAX - 1) {
+        let size = sizes.get(l).copied().unwrap_or(0).max(1) as f32;
+        let shows_someone = evidence.get(l).copied().unwrap_or(0) as f32 / size >= FACELESS_MIN_EVIDENCE;
+        if list.is_empty() && area >= FACELESS_MIN_AREA && shows_someone && people < usize::from(u16::MAX - 1) {
             people += 1;
             if let Some(slot) = piece_owner.get_mut(l) {
                 *slot = u16::try_from(people).ok();
@@ -182,7 +219,7 @@ mod tests {
         let (w, h) = (100, 100);
         let p = blob(w, h, &[(10, 10, 90, 100)]);
         let faces = [NormRect::new(0.15, 0.1, 0.35, 0.3), NormRect::new(0.65, 0.1, 0.85, 0.3)];
-        let o = assign(&p, w, h, &faces);
+        let o = assign(&p, &vec![true; w * h], w, h, &faces);
         assert_eq!(o.people, 2);
         assert_eq!(o.owner[50 * w + 20], 1);
         assert_eq!(o.owner[50 * w + 80], 2);
@@ -193,18 +230,32 @@ mod tests {
     fn a_big_piece_without_a_face_is_its_own_person_and_specks_are_dropped() {
         let (w, h) = (100, 100);
         let p = blob(w, h, &[(0, 0, 30, 100), (60, 0, 100, 100), (45, 45, 46, 46)]);
-        let o = assign(&p, w, h, &[NormRect::new(0.05, 0.05, 0.25, 0.2)]);
+        let o = assign(&p, &vec![true; w * h], w, h, &[NormRect::new(0.05, 0.05, 0.25, 0.2)]);
         assert_eq!(o.people, 2);
         assert_eq!(o.owner[50 * w + 10], 1);
         assert_eq!(o.owner[50 * w + 80], 2);
         assert_eq!(o.owner[45 * w + 45], 0);
+        // the same big piece with no hair, face, arm or leg in it is not a person
+        let o = assign(&p, &vec![false; w * h], w, h, &[NormRect::new(0.05, 0.05, 0.25, 0.2)]);
+        assert_eq!(o.people, 1);
+        assert_eq!(o.owner[50 * w + 80], 0);
+    }
+
+    #[test]
+    fn a_body_cut_off_below_its_face_stays_that_persons() {
+        let (w, h) = (100, 100);
+        // a head, a gap (a dark shirt the model missed), the legs
+        let p = blob(w, h, &[(45, 5, 55, 15), (40, 40, 60, 95)]);
+        let o = assign(&p, &vec![true; w * h], w, h, &[NormRect::new(0.45, 0.05, 0.55, 0.15)]);
+        assert_eq!(o.people, 1);
+        assert_eq!(o.owner[60 * w + 50], 1);
     }
 
     #[test]
     fn no_people_and_odd_sizes_never_panic() {
-        assert_eq!(assign(&[], 0, 0, &[]).people, 0);
-        assert_eq!(assign(&[1.0], 1, 1, &[NormRect::new(-1.0, -1.0, 2.0, 2.0)]).people, 1);
-        let o = assign(&[0.0; 4], 2, 2, &[NormRect::new(f32::NAN, 0.0, 1.0, 1.0)]);
+        assert_eq!(assign(&[], &[], 0, 0, &[]).people, 0);
+        assert_eq!(assign(&[1.0], &[], 1, 1, &[NormRect::new(-1.0, -1.0, 2.0, 2.0)]).people, 1);
+        let o = assign(&[0.0; 4], &[false; 4], 2, 2, &[NormRect::new(f32::NAN, 0.0, 1.0, 1.0)]);
         assert!(o.owner.iter().all(|&v| v == 0));
     }
 }

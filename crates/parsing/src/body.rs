@@ -47,6 +47,12 @@ impl BodyMap {
         self.class(BACKGROUND).iter().map(|b| (1.0 - b).clamp(0.0, 1.0)).collect()
     }
 
+    /// The pixels that are hair, a face, an arm or a leg (more likely than not).
+    pub fn skin_or_hair(&self) -> Vec<bool> {
+        let n = self.w * self.h;
+        (0..n).map(|i| [2usize, FACE, 12, 13, 14, 15].iter().map(|&c| self.probs.get(c * n + i).copied().unwrap_or(0.0)).sum::<f32>() > 0.5).collect()
+    }
+
     /// Class `c`'s probability at a point of the photo (fractions), bilinear.
     pub fn at(&self, c: usize, x: f32, y: f32) -> f32 {
         crate::image::bilinear(self.class(c), self.w, self.h, x * self.w as f32 - 0.5, y * self.h as f32 - 0.5)
