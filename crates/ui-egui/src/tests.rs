@@ -86,6 +86,7 @@ mod mask_parts;
 mod mask_tint;
 mod masking;
 mod masking_layout;
+mod match_look;
 mod menubar;
 mod merge_preview;
 mod missing_sweep;

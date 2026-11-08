@@ -146,6 +146,9 @@ fn theme_command(app: &mut LightcraftApp, p: &Value) -> Result<Value, String> {
 
 /// Handle UI commands; `None` means "not a UI command — send it to the engine".
 pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Result<Value, String>> {
+    if let Some(r) = crate::panels::match_look::command(app, id, p) {
+        return Some(r);
+    }
     if id.starts_with("photoMenu.") {
         return Some(crate::panels::photo_menu::command(app, id, p));
     }

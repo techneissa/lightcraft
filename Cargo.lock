@@ -3794,6 +3794,7 @@ dependencies = [
  "lightcraft-heif",
  "lightcraft-lama",
  "lightcraft-lensdb",
+ "lightcraft-look",
  "lightcraft-macraw",
  "lightcraft-map",
  "lightcraft-merge",
@@ -3936,6 +3937,22 @@ dependencies = [
  "lightcraft-develop",
  "lightcraft-geom",
  "quick-xml 0.41.0",
+]
+
+[[package]]
+name = "lightcraft-look"
+version = "0.18.0"
+dependencies = [
+ "lightcraft-codecs",
+ "lightcraft-color",
+ "lightcraft-develop",
+ "lightcraft-fetch",
+ "lightcraft-geom",
+ "lightcraft-pipeline",
+ "lightcraft-raster",
+ "lightcraft-scenes",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -4157,6 +4174,7 @@ dependencies = [
  "lightcraft-faces",
  "lightcraft-fetch",
  "lightcraft-geom",
+ "lightcraft-look",
  "lightcraft-map",
  "lightcraft-merge",
  "lightcraft-meta",

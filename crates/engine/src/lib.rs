@@ -348,6 +348,8 @@ pub struct Session {
     /// Reading focus points for photos imported before they were read (`photo.readFocusPoints`, `focus.pump`).
     #[cfg(not(target_arch = "wasm32"))]
     pub(crate) focus_scan: focus_scan::FocusScan,
+    /// Match Look (fork, `fork/match-look.md`): a pasted reference and the background match.
+    pub(crate) match_look: cmd::match_look::MatchLook,
     /// Copied develop settings (partial JSON) for Paste.
     pub clipboard: Option<Value>,
     /// The folder on disk the [`LibrarySource::Folder`] view browses.
@@ -571,6 +573,7 @@ impl Session {
             faces: Default::default(),
             #[cfg(not(target_arch = "wasm32"))]
             focus_scan: Default::default(),
+            match_look: Default::default(),
             clipboard: None,
             meta_clipboard: None,
             browse: None,

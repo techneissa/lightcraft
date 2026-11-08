@@ -225,6 +225,12 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // {theme: charcoal | midnight | silver | paper}: pick a theme and fix the mode to its family.
     ("view.theme", "Theme", None, ""),
     ("dialog.allMetadata", "All Metadata…", None, "Photo"),
+    // Match Look (fork): {photo?, path?, url?} opens the window with that reference
+    ("dialog.matchLook", "Match Look…", None, "Photo"),
+    // {path?}: an image file as the Match Look reference (asks when omitted)
+    ("matchLook.chooseFile", "Choose Match Look Reference File…", None, ""),
+    // {amount?: 0..100}: run Match Look with the window's reference on the selected photos
+    ("matchLook.apply", "Apply Match Look", None, ""),
     ("dialog.faceModel", "Add Face Model…", None, ""),
     ("dialog.newSmartAlbum", "New Smart Album from Filter…", Some("Cmd+Alt+N"), "File"),
     ("dialog.createPreset", "Create Preset…", Some("Cmd+Shift+P"), "Photo"),
