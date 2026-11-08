@@ -151,6 +151,13 @@ pub fn survey_photos(app: &mut LightcraftApp) -> Vec<PhotoId> {
     v
 }
 
+/// A mask, submask or spot picked on one photo means nothing on another: its index could name that photo's.
+fn clear_part_selection(app: &mut LightcraftApp) {
+    app.session.active_mask = None;
+    app.session.active_component = None;
+    app.session.active_spot = None;
+}
+
 /// Move the active photo `d` steps within the survey.
 pub fn survey_step(app: &mut LightcraftApp, d: isize) -> Result<Value, String> {
     let v = survey_photos(app);
@@ -160,6 +167,7 @@ pub fn survey_step(app: &mut LightcraftApp, d: isize) -> Result<Value, String> {
     let i = app.session.selection.active.and_then(|a| v.iter().position(|x| *x == a)).unwrap_or(0);
     let j = (i as isize + d).clamp(0, v.len() as isize - 1) as usize;
     app.session.selection.active = Some(v[j]);
+    clear_part_selection(app);
     Ok(json!({"active": v[j].0}))
 }
 
@@ -576,6 +584,7 @@ pub fn show_survey(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
         } else if resp.clicked() {
             app.session.selection.active = Some(*id);
+            clear_part_selection(app);
         }
         if resp.double_clicked() {
             let _ = app.run("library.select", json!({"ids": [id.0]}));

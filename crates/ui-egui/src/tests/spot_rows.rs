@@ -175,3 +175,20 @@ fn never_covers_nothing_but_a_click_or_a_drag_still_adds_a_spot() {
     h.step();
     assert!(has(&h, "removePaintFill"), "Auto: the fill is as it was");
 }
+
+/// Moving to another photo in the Survey forgets the selected spot: its index would name that photo's spot, and Delete
+/// would remove it.
+#[test]
+fn a_survey_step_forgets_the_selected_spot_and_mask() {
+    let mut h = remove_panel(3);
+    let vis = h.app.session.visible_cloned();
+    let ids: Vec<u64> = vis.iter().take(3).map(|p| p.0).collect();
+    exec(&mut h, "library.select", json!({"ids": ids, "active": ids[0]}));
+    assert_eq!(h.app.session.active_spot, None, "a new selection starts clean");
+    h.app.session.active_spot = Some(2);
+    h.app.session.active_mask = Some(1);
+    h.app.session.active_component = Some((1, 0));
+    crate::panels::compare::survey_step(&mut h.app, 1).unwrap();
+    assert_eq!(h.app.session.selection.active, Some(vis[1]));
+    assert_eq!((h.app.session.active_spot, h.app.session.active_mask, h.app.session.active_component), (None, None, None));
+}

@@ -87,3 +87,23 @@ fn delete_by_row_is_one_undo_step_and_keeps_the_selection_on_its_spot() {
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(spots(&s).len(), 3, "one undo step brings the spot back");
 }
+
+#[test]
+fn undoing_a_delete_forgets_the_selected_spot_whose_index_moved() {
+    let mut s = three_spots();
+    assert_eq!(s.active_spot, Some(2));
+    s.execute("spot.delete", &json!({"index": 1})).unwrap();
+    assert_eq!(s.active_spot, Some(1), "C moved up a row and is still the selected one");
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(spots(&s).len(), 3);
+    assert_eq!(s.active_spot, None, "B is back at index 1: nothing points at the wrong spot");
+    s.execute("spot.select", &json!({"index": 2})).unwrap();
+    s.execute("edit.redo", &json!({})).unwrap();
+    assert_eq!(spots(&s).len(), 2);
+    assert_eq!(s.active_spot, None, "redo changes the spots again: forgotten again");
+    // an undo that leaves the spot count alone (hide, circle) keeps the selection
+    s.execute("spot.select", &json!({"index": 1})).unwrap();
+    s.execute("spot.visible", &json!({"index": 0, "visible": false})).unwrap();
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(s.active_spot, Some(1));
+}

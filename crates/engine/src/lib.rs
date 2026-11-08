@@ -921,6 +921,7 @@ impl Session {
         if e.book.is_some() {
             return self.book_history_step(e, true);
         }
+        let spots = self.active_spots();
         let redo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,
             Err(err) => {
@@ -929,6 +930,7 @@ impl Session {
             }
         };
         self.show_undone(&e.op);
+        self.reconcile_spot(spots);
         self.reconcile_part();
         self.pending_log.push(e.op);
         self.redo.push(UndoEntry {
@@ -953,6 +955,7 @@ impl Session {
         if e.book.is_some() {
             return self.book_history_step(e, false);
         }
+        let spots = self.active_spots();
         let undo = match self.apply_with_files(&mut e, fs) {
             Ok(r) => r,
             Err(err) => {
@@ -961,6 +964,7 @@ impl Session {
             }
         };
         self.show_undone(&e.op);
+        self.reconcile_spot(spots);
         self.reconcile_part();
         self.pending_log.push(e.op);
         self.undo.push(UndoEntry {
@@ -974,6 +978,21 @@ impl Session {
         });
         self.offer_answered(e.answered_offer.as_deref(), true);
         Ok(e.label)
+    }
+
+    /// The active photo and how many spots it has: what an undo or redo compares to know the selected spot's
+    /// index may point at another spot now.
+    fn active_spots(&self) -> Option<(PhotoId, usize)> {
+        let id = self.active()?;
+        Some((id, self.develop_of(id).map_or(0, |d| d.spots.len())))
+    }
+
+    /// After an undo or redo: the selected spot is forgotten when the active photo's spots were added or removed
+    /// (or another photo became active), since its index may name a different spot now.
+    fn reconcile_spot(&mut self, before: Option<(PhotoId, usize)>) {
+        if self.active_spots() != before {
+            self.active_spot = None;
+        }
     }
 
     /// After an undo or redo that changed one photo (its edit, rating, flag, label, metadata or

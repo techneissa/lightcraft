@@ -6,8 +6,9 @@ use super::{Color32, DevelopSettings, Gesture, LightcraftApp, Point, Pos2, Rect,
 
 /// The Remove tool on the photo: every spot's outline and pin (the selected one with its source),
 /// click a pin to select its spot, drag a target or source to move it, paint elsewhere to add one.
-/// The Tool Overlay mode (Shift+H) says which spots show; a hidden spot can't be grabbed, so a
-/// click there adds a new one.
+/// A spot's own circle setting, else the Tool Overlay mode (Shift+H), says whether its circle shows; a spot whose
+/// circle is not showing can't be grabbed, so a click there adds a new one. A spot hidden with its eye (no effect)
+/// is grabbed like any other while its circle shows.
 pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
     let long = (map.rect.width().max(map.rect.height())) as f64;
     let active = app.session.active_spot.filter(|i| *i < d.spots.len());
