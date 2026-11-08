@@ -1248,7 +1248,7 @@ dependencies = [
 [[package]]
 name = "craft-update"
 version = "0.1.0"
-source = "git+https://github.com/storytold/craft-libs?rev=c5a1cbfb5f9049f9270955caffb5bee5997aebf7#c5a1cbfb5f9049f9270955caffb5bee5997aebf7"
+source = "git+https://github.com/storytold/craft-libs?rev=a231e517c3b371e1bf0ee8af71ed807424a9a05d#a231e517c3b371e1bf0ee8af71ed807424a9a05d"
 dependencies = [
  "chrono",
  "dunce",
@@ -2140,6 +2140,16 @@ name = "foreign-types-shared"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aa9a19cbb55df58761df49b23516a86d432839add4af60fc256da840f66ed35b"
+
+[[package]]
+name = "fs4"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7e72ed92b67c146290f88e9c89d60ca163ea417a446f61ffd7b72df3e7f1dfd5"
+dependencies = [
+ "rustix 1.1.5",
+ "windows-sys 0.61.2",
+]
 
 [[package]]
 name = "futures-core"
@@ -3616,12 +3626,14 @@ dependencies = [
  "lightcraft-sysmem",
  "lightcraft-testkit",
  "lightcraft-ui-egui",
+ "lightcraft-wincolor",
  "log",
  "muda",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
  "objc2-foundation 0.3.2",
  "pollster 1.0.1",
+ "raw-window-handle",
  "rfd",
  "serde_json",
  "winit",
@@ -3724,6 +3736,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "lightcraft-coreml"
+version = "0.18.0"
+dependencies = [
+ "block2 0.6.2",
+ "lightcraft-testkit",
+ "log",
+ "objc2 0.6.5",
+ "objc2-core-ml",
+ "objc2-foundation 0.3.2",
+]
+
+[[package]]
 name = "lightcraft-denoise"
 version = "0.18.0"
 dependencies = [
@@ -3775,6 +3799,7 @@ dependencies = [
  "ab_glyph",
  "chrono",
  "craft-docpath",
+ "fs4",
  "gif",
  "harfrust 0.13.3",
  "jxl-oxide",
@@ -3783,6 +3808,7 @@ dependencies = [
  "lightcraft-catalog",
  "lightcraft-codecs",
  "lightcraft-color",
+ "lightcraft-coreml",
  "lightcraft-denoise",
  "lightcraft-denoise-core",
  "lightcraft-develop",
@@ -3816,11 +3842,13 @@ dependencies = [
  "rayon",
  "serde",
  "serde_json",
+ "sha2",
  "thiserror 2.0.21",
  "trash",
  "unicode-normalization",
  "unicode-segmentation",
  "web-time",
+ "zip 7.4.0",
 ]
 
 [[package]]
@@ -3940,6 +3968,7 @@ dependencies = [
  "candle-nn",
  "image",
  "lightcraft-color",
+ "lightcraft-coreml",
  "lightcraft-develop",
  "lightcraft-geom",
  "lightcraft-testkit",
@@ -4248,6 +4277,14 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+]
+
+[[package]]
+name = "lightcraft-wincolor"
+version = "0.18.0"
+dependencies = [
+ "lightcraft-testkit",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
@@ -4875,6 +4912,17 @@ dependencies = [
  "objc2 0.5.2",
  "objc2-contacts",
  "objc2-foundation 0.2.2",
+]
+
+[[package]]
+name = "objc2-core-ml"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "201b055e6acfa0f9f15568255d3f03ce2b54bc86d1814442dc69138e36813e18"
+dependencies = [
+ "block2 0.6.2",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
 ]
 
 [[package]]
@@ -8391,7 +8439,6 @@ dependencies = [
  "nix",
  "typed-path 0.13.0",
  "windows-sys 0.61.2",
- "zopfli",
 ]
 
 [[package]]
@@ -8405,18 +8452,6 @@ name = "zmij"
 version = "1.0.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29666d0abbfad1e3dc4dcf6144730dd3a3ab225bbbdac83319345b1b44ccfc1b"
-
-[[package]]
-name = "zopfli"
-version = "0.8.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aaf7fc5d30c28483d93805c4a5e12b05bbb52407fa67c5f8bd552374cd01fb11"
-dependencies = [
- "bumpalo",
- "crc32fast",
- "log",
- "simd-adler32",
-]
 
 [[package]]
 name = "zune-core"

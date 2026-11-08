@@ -43,6 +43,8 @@ pub enum Kind {
     /// Load the model and encode the photo (so the first click is fast).
     Prepare,
     Clicks(Vec<lightcraft_segment::Click>),
+    /// Clicks that remove an object (fork, `fork/object-remove.md`): one click takes the whole object.
+    ObjectClicks(Vec<lightcraft_segment::Click>),
     Text(String),
     /// Subject, Sky or Background: like `Text`, with the looser score ([`CONCEPT_THRESHOLD`]); `true`: only the main
     /// subject's instances (Subject and Background).
@@ -487,7 +489,9 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
         Kind::Text(text) => Operation::Text(text),
         Kind::Concept(text, main) => Operation::Concept(text, main),
         Kind::BiRefNet { .. } => return Err("BiRefNet runs on this Mac, not on a remote worker".into()),
-        Kind::Clicks(clicks) => Operation::Clicks(clicks.iter().map(|c| [c.x, c.y, if c.positive { 1.0 } else { 0.0 }]).collect()),
+        Kind::Clicks(clicks) | Kind::ObjectClicks(clicks) => {
+            Operation::Clicks(clicks.iter().map(|c| [c.x, c.y, if c.positive { 1.0 } else { 0.0 }]).collect())
+        }
         Kind::Detail { prompt, region: r } => {
             region = Some(r);
             let (rw, rh) = (r[2] - r[0], r[3] - r[1]);
@@ -550,6 +554,11 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
         Kind::Clicks(clicks) => {
             let (m, enc) = encoded(state, shared, job, placement)?;
             let p = m.segment_clicks(enc, &clicks)?;
+            Ok(Some(SegMask::from_logits(side, &p.logits)))
+        }
+        Kind::ObjectClicks(clicks) => {
+            let (m, enc) = encoded(state, shared, job, placement)?;
+            let p = m.segment_object(enc, &clicks)?;
             Ok(Some(SegMask::from_logits(side, &p.logits)))
         }
         Kind::Text(text) => {

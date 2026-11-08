@@ -107,24 +107,17 @@ fn nothing_happens_with_the_setting_off_or_outside_the_detail_view() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+/// Without an installed model the built-in denoiser (upstream #2982) is used: opening a high-ISO raw switches AI Denoise
+/// on in one step, and no missing-model note is shown.
 #[test]
-fn without_a_model_it_says_so_once_and_changes_nothing() {
-    let (mut app, dir, high, low) = setup("nomodel");
+fn without_a_model_the_built_in_denoiser_switches_it_on() {
+    let (mut app, dir, high, _) = setup("nomodel");
     app.run("denoise.settings", json!({"autoOpen": true})).unwrap();
     let steps = app.session.undo.len();
     open(&mut app, high);
-    assert!(!on(&app, high));
-    assert_eq!(app.session.undo.len(), steps);
-    let first = app.ui.toast.take().map(|t| t.0).expect("the missing model is mentioned once");
-    assert!(first.contains("denoise model"), "{first}");
-    open(&mut app, low);
-    open(&mut app, high);
-    assert!(app.ui.toast.is_none(), "not again on the next photo");
-    // once a model is installed, the same photo gets it the next time it is opened
-    install_model(&mut app, &dir);
-    open(&mut app, low);
-    open(&mut app, high);
     assert!(on(&app, high));
+    assert_eq!(app.session.undo.len(), steps + 1);
+    assert!(app.ui.toast.as_ref().is_none_or(|t| !t.0.contains("denoise model")), "no missing-model note");
     drop(app);
     let _ = std::fs::remove_dir_all(dir);
 }

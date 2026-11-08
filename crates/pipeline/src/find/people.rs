@@ -61,6 +61,7 @@ fn from_mask(kind: Kind, mask: &Mask, source: &'static str, score: impl Fn(&supe
                 score: score(&c),
                 main: false,
                 spots: cover::cover_mask(&c.mask),
+                region: Some(std::sync::Arc::new(c.mask.clone())),
             }
         })
         .collect()

@@ -8,8 +8,9 @@
 //!
 //! An item turned off only leaves the bar: its command still runs from the menu bar (each item's
 //! menu path is shown in the editor), the keyboard, the command palette and the control channel.
-//! The one exception to "off is off" is the Library Status icon, which comes back while saving is
-//! failing, so a warning about unsaved changes is never hidden.
+//! The Library Status icon (the cloud) is not an item: it shows by itself only while saving is failing,
+//! as on the official side, so a warning about unsaved changes is never hidden. A saved list that still
+//! names it (`cloud`, from before 2026-11-09) reads like any unknown id.
 //!
 //! Agents read and set it with `topBar.get`, `topBar.set {hidden}`, `topBar.setItem {item, shown}`
 //! and `topBar.reset`.
@@ -52,7 +53,6 @@ pub const ITEMS: &[Item] = &[
     Item { id: "import", label: "Import Photos", icon: Icon::Plus, command: "file.addPhotos", elsewhere: "" },
     Item { id: "share", label: "Export", icon: Icon::Share, command: "dialog.export", elsewhere: "" },
     Item { id: "help", label: "Keyboard Shortcuts", icon: Icon::Help, command: "app.shortcuts", elsewhere: "" },
-    Item { id: "cloud", label: "Library Status", icon: Icon::Cloud, command: "", elsewhere: "Shows when saving fails" },
 ];
 
 /// The item `id`.

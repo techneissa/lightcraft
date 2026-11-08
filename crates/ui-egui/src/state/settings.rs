@@ -165,6 +165,9 @@ pub struct AppSettings {
     pub map_start_on_osm: bool,
     /// The question about building the missing smart previews was asked once, when the setting was first switched on.
     pub smart_editing_offered: bool,
+    /// Remove Hot Pixels leaves a raw alone when more than this share of its photosites, in percent, would be
+    /// replaced (`app.hotPixelLimit`).
+    pub hot_pixel_limit: f32,
     /// The Info panel's metadata fields with several photos selected: true (the default) shows the
     /// values the selected photos share and marks each field where they differ (Selected Photos),
     /// false shows the active photo's values (Target Photo) (`view.infoSelectedPhotos`).
@@ -181,6 +184,11 @@ pub struct AppSettings {
     /// View ▸ View Options ▸ Show message when loading or rendering photos: the loupe says
     /// "Rendering…" while the photo it shows is not the finished render.
     pub loupe_messages: bool,
+    /// Settings ▸ Performance ▸ Prepare photos in the background, app-wide (a library may keep its
+    /// own in its `prefs.json`): handed to the session at launch and kept in step with it. Read
+    /// leniently: a value this build doesn't know is the defaults, never the other settings lost.
+    #[serde(deserialize_with = "lenient")]
+    pub background_prep: lightcraft_engine::prep::PrepSettings,
     /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
     pub keymap: crate::shortcuts::Keymap,
     /// Auto (follow the system), Dark or Light.
@@ -271,12 +279,14 @@ impl Default for AppSettings {
             smart_previews_for_editing: false,
             map_start_on_osm: false,
             smart_editing_offered: false,
+            hot_pixel_limit: HOT_PIXEL_LIMIT_DEFAULT,
             info_selected_photos: true,
             film_names: true,
             film_badges: true,
             grid_badges: GridBadges::Auto,
             dim_rejected: true,
             loupe_messages: true,
+            background_prep: Default::default(),
             keymap: Default::default(),
             appearance_mode: AppearanceMode::Dark,
             dark_theme: DarkTheme::Charcoal,
@@ -357,6 +367,10 @@ impl EditFile {
 
 /// Preview size limits offered in Settings → Performance (0 = Automatic).
 pub const PREVIEW_LIMITS: [u32; 5] = [0, 1600, 2560, 3840, 5120];
+
+/// Hot pixel limits offered in Settings → Performance (percent of a raw's photosites), and the default.
+pub const HOT_PIXEL_LIMITS: [f32; 5] = [0.05, 0.1, 0.2, 0.5, 1.0];
+pub const HOT_PIXEL_LIMIT_DEFAULT: f32 = 0.2;
 
 /// The most the loupe ever renders in one go (memory and GPU texture size), whatever the setting.
 pub const LOUPE_EDGE_CEILING: u32 = 8192;
@@ -472,6 +486,16 @@ fn deserialize_favorite_themes<'de, D: serde::Deserializer<'de>>(d: D) -> Result
 #[cfg(test)]
 mod loupe_info_tests {
     use super::*;
+
+    /// A background preparation value this build doesn't know (a newer build's scope) reads as the
+    /// defaults and keeps the rest of the settings.
+    #[test]
+    fn an_unknown_background_preparation_value_costs_nothing_else() {
+        let v = serde_json::json!({"filmNames": false, "backgroundPrep": {"culling": {"scope": "someday"}}});
+        let read: AppSettings = serde_json::from_value(v).unwrap();
+        assert_eq!(read.background_prep, lightcraft_engine::prep::PrepSettings::default());
+        assert!(!read.film_names);
+    }
 
     /// The lines chosen in View Options are saved with the app's settings; a settings file from
     /// before they existed, or with a line this build doesn't know, gets the default lines and

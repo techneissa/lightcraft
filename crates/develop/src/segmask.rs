@@ -1,6 +1,9 @@
 //! Model segmentations stored with a mask ([`SegMask`]), so rendering never needs the model.
 
-use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
+use std::collections::HashMap;
+
+use serde::{Deserialize, Serialize, Serializer};
 
 /// Logits are stored in steps of 1/`SCALE`, clamped to ±127/`SCALE` (≈ ±15.9: a sigmoid of
 /// 1 − 1.2e-7, i.e. fully in or out).
@@ -13,9 +16,12 @@ pub const MAX_SIDE: usize = 1024;
 /// normalized `((x + 0.5) / side, (y + 0.5) / side)`), quantized to `i8`, deflated and base64
 /// encoded. Coverage at a point is the sigmoid of the bilinearly sampled logit, so edges stay
 /// smooth at any output size.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct SegMask {
     pub side: u32,
+    /// The grid's bytes (quantized, deflated, base64), unless this is a reference into the
+    /// snapshot's shared grid table (`grid` is set and `data` is empty).
+    #[serde(default)]
     pub data: String,
     /// The part of the image the grid covers, normalized `[x0, y0, x1, y1]` (`None` = all of
     /// it). A zoomed-in pass over one object covers just its surroundings, at a higher
@@ -27,6 +33,14 @@ pub struct SegMask {
     /// reads the selection as SAM 3's and drops the id when it saves.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Index into the catalog snapshot's shared grid table (`Catalog::grids`) this mask refers
+    /// to instead of carrying its own `data`. A serialization detail of snapshots only: the
+    /// snapshot writer sets it (through the interner, into its own table), `Catalog::repair`
+    /// resolves it when a snapshot is read, and no other serialization writes it. A `grid` that
+    /// arrives from any other document (a command, a preset, XMP, a log record) is read but
+    /// never written back, so it cannot point a snapshot at another mask's grid.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub grid: Option<u32>,
 }
 
 impl SegMask {
@@ -34,7 +48,7 @@ impl SegMask {
     pub fn from_logits(side: usize, logits: &[f32]) -> SegMask {
         let q: Vec<u8> = logits.iter().take(side * side).map(|l| ((l * SCALE).round().clamp(-127.0, 127.0) as i8) as u8).collect();
         let z = miniz_oxide::deflate::compress_to_vec(&q, 8);
-        SegMask { side: side as u32, data: base64_encode(&z), rect: None, model: None }
+        SegMask { side: side as u32, data: base64_encode(&z), rect: None, model: None, grid: None }
     }
 
     /// From `side × side` logits over the part `rect` of the image.
@@ -75,6 +89,71 @@ impl SegMask {
             None => SegMask::from_logits(self.side as usize, &logits),
         };
         Some(SegMask { model: self.model.clone(), ..inverted })
+    }
+}
+
+// The grid table a snapshot serialization refers to: each distinct grid's data → its index.
+thread_local! {
+    static INTERNER: RefCell<Option<HashMap<String, u32>>> = const { RefCell::new(None) };
+}
+
+/// Serializes masks as references into a shared grid table (`grid` = index, `data` omitted)
+/// while `f` runs, one thread at a time (snapshot writes). Nested calls are ignored (`None`):
+/// the outermost writer owns the table.
+pub fn with_grid_interner<T>(map: HashMap<String, u32>, f: impl FnOnce() -> T) -> Option<T> {
+    INTERNER.with(|i| {
+        if i.borrow().is_some() {
+            return None;
+        }
+        struct Guard;
+        impl Drop for Guard {
+            fn drop(&mut self) {
+                INTERNER.with(|j| *j.borrow_mut() = None);
+            }
+        }
+        *i.borrow_mut() = Some(map);
+        let _guard = Guard;
+        Some(f())
+    })
+}
+
+impl Serialize for SegMask {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeMap;
+        // While a snapshot is being written with a shared grid table, a mask whose exact bytes
+        // are in the table refers to it by index instead of repeating the blob (issue #2154).
+        if !self.data.is_empty()
+            && let Some(id) = INTERNER.with(|i| i.borrow().as_ref().and_then(|m| m.get(&self.data).copied()))
+        {
+            let len = 2 + usize::from(self.rect.is_some()) + usize::from(self.model.is_some());
+            let mut map = serializer.serialize_map(Some(len))?;
+            map.serialize_entry("side", &self.side)?;
+            map.serialize_entry("grid", &id)?;
+            if let Some(rect) = self.rect {
+                map.serialize_entry("rect", &rect)?;
+            }
+            // (the model that made it: the fork's `model`, kept through the shared grid table too)
+            if let Some(model) = &self.model {
+                map.serialize_entry("model", model)?;
+            }
+            return map.end();
+        }
+        // Without a table hit: exactly the pre-v10 derived form (field order and skips included),
+        // so every serialization that doesn't dedup keeps its bytes (`hash64`, cache keys). `grid`
+        // is never written here: a value read from some document is dropped on save, and only the
+        // interner above can write a reference (into the table of the snapshot being written).
+        let len = 2 + usize::from(self.rect.is_some()) + usize::from(self.model.is_some());
+        let mut map = serializer.serialize_map(Some(len))?;
+        map.serialize_entry("side", &self.side)?;
+        map.serialize_entry("data", &self.data)?;
+        if let Some(rect) = self.rect {
+            map.serialize_entry("rect", &rect)?;
+        }
+        // (the fork's `model`, after `rect` as its derived form wrote it: hashes of masks saved before stay)
+        if let Some(model) = &self.model {
+            map.serialize_entry("model", model)?;
+        }
+        map.end()
     }
 }
 
@@ -235,6 +314,23 @@ mod tests {
         assert_eq!(newer.model.as_deref(), Some("something-newer"));
     }
 
+    /// Merge of the fork's `model` with the shared grid table (#2154): a selection a model made keeps its model id in a
+    /// snapshot that refers to its grid by index, and in the plain form after its `rect`, as the derived form wrote it.
+    #[test]
+    fn the_model_survives_the_shared_grid_table() {
+        let m = SegMask::from_logits(4, &[1.0; 16]).made_by("birefnet");
+        let table = std::collections::HashMap::from([(m.data.clone(), 2u32)]);
+        let referenced = with_grid_interner(table, || serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(referenced, "{\"side\":4,\"grid\":2,\"model\":\"birefnet\"}");
+        let back: SegMask = serde_json::from_str(&referenced).unwrap();
+        assert_eq!((back.grid, back.model.as_deref()), (Some(2), Some("birefnet")));
+        let with_rect = SegMask { rect: Some([0.0, 0.0, 0.5, 0.5]), ..m.clone() };
+        assert_eq!(
+            serde_json::to_string(&with_rect).unwrap(),
+            format!("{{\"side\":4,\"data\":\"{}\",\"rect\":[0.0,0.0,0.5,0.5],\"model\":\"birefnet\"}}", m.data)
+        );
+    }
+
     #[test]
     fn damaged_data_is_none() {
         let mut m = SegMask::from_logits(8, &[1.0; 64]);
@@ -242,7 +338,51 @@ mod tests {
         assert!(m.logits().is_none(), "size mismatch");
         m.side = 100_000;
         assert!(m.logits().is_none(), "absurd size");
-        assert!(SegMask { side: 8, data: "not base64 !".into(), rect: None, model: None }.logits().is_none());
+        assert!(SegMask { side: 8, data: "not base64 !".into(), rect: None, model: None, grid: None }.logits().is_none());
         assert!(SegMask { rect: Some([0.5, 0.0, 0.2, 1.0]), ..SegMask::from_logits(2, &[0.0; 4]) }.bounds().is_none());
+    }
+
+    /// A `grid` read from a document is never written outside the snapshot interner, with or
+    /// without data: the bytes stay the pre-v10 form, so `hash64` and cache keys don't depend on
+    /// a stray value (issue #2154).
+    #[test]
+    fn stray_grid_is_never_written_outside_the_interner() {
+        let empty = SegMask { side: 4, data: String::new(), rect: None, model: None, grid: None };
+        let stray = SegMask { grid: Some(3), ..empty.clone() };
+        assert_eq!(serde_json::to_string(&stray).unwrap(), "{\"side\":4,\"data\":\"\"}");
+        assert_eq!(serde_json::to_string(&stray).unwrap(), serde_json::to_string(&empty).unwrap());
+        let with_data = SegMask { grid: Some(3), ..SegMask::from_logits(4, &[1.0; 16]) };
+        assert!(!serde_json::to_string(&with_data).unwrap().contains("grid"), "no grid key outside the interner");
+    }
+
+    /// Without the snapshot interner the JSON is exactly the derived form it always was; with
+    /// it, a pooled grid serializes as an index and the data is left to the table (issue #2154).
+    #[test]
+    fn serialization_refs_only_under_the_interner() {
+        let m = SegMask::from_logits(4, &[1.0; 16]);
+        let plain = serde_json::to_string(&m).unwrap();
+        assert_eq!(plain, format!("{{\"side\":4,\"data\":\"{}\"}}", m.data), "no interner: unchanged bytes");
+        let with_rect = SegMask { rect: Some([0.0, 0.0, 0.5, 0.5]), ..m.clone() };
+        assert_eq!(serde_json::to_string(&with_rect).unwrap(), format!("{{\"side\":4,\"data\":\"{}\",\"rect\":[0.0,0.0,0.5,0.5]}}", m.data));
+
+        let mut table = std::collections::HashMap::new();
+        table.insert(m.data.clone(), 3u32);
+        let referenced = with_grid_interner(table, || serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(referenced, "{\"side\":4,\"grid\":3}", "pooled grid: an index, no data");
+        // a grid the table doesn't hold, and an empty-data mask, stay inline
+        let other = SegMask::from_logits(2, &[0.0; 4]);
+        let mixed = with_grid_interner(std::collections::HashMap::new(), || serde_json::to_string(&other).unwrap()).unwrap();
+        assert_eq!(mixed, format!("{{\"side\":2,\"data\":\"{}\"}}", other.data));
+        // the interner is gone afterwards: serialization is inline again
+        assert_eq!(serde_json::to_string(&m).unwrap(), plain);
+        // nested calls are ignored: the outer writer keeps its table
+        let outer_table = std::collections::HashMap::from([(m.data.clone(), 0u32)]);
+        let nested = with_grid_interner(outer_table, || {
+            let inner_table = std::collections::HashMap::from([(other.data.clone(), 1u32)]);
+            (with_grid_interner(inner_table, || serde_json::to_string(&other).unwrap()), serde_json::to_string(&m).unwrap())
+        })
+        .unwrap();
+        assert_eq!(nested.0, None, "the nested writer is refused");
+        assert_eq!(nested.1, "{\"side\":4,\"grid\":0}");
     }
 }

@@ -55,7 +55,7 @@ fn product_of(bytes: &[u8], name: &str) -> (DenoiseSpec, std::path::PathBuf) {
 }
 
 fn load_pair(bytes: &[u8], spec: &DenoiseSpec, colour: CameraColour, backend: &dyn super::Backend) -> Loaded {
-    load_bytes_now(Cow::Borrowed(bytes), 4096, Some(spec), false, options(colour), None, backend).unwrap()
+    load_bytes_now(Cow::Borrowed(bytes), 4096, Some(spec), false, options(colour), crate::media::RawDecode::default(), backend).unwrap()
 }
 
 fn worst(a: &Rgb32f, b: &Rgb32f) -> f32 {

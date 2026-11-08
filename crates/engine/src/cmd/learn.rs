@@ -63,6 +63,9 @@ fn status(s: &Session) -> Value {
             "file": s.learn.model_path().map(|p| p.display().to_string()),
             "bytes": lightcraft_learn::ENCODER_BYTES,
             "download": {"state": state, "bytes": bytes, "total": total, "error": error},
+            "runtime": s.learn.runtime().id(),
+            "coremlInstalled": s.learn.coreml_installed(),
+            "backend": s.learn.backend(),
         },
         "profilesFolder": s.learn.profiles_dir().map(|p| p.display().to_string()),
         "job": s.learn.running().map(|(id, name, label)| json!({"profile": id, "name": name, "label": label})),
@@ -212,7 +215,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "Learn My Edits Status",
             [],
             None,
-            "{} → {model: {installed, file, bytes, download: {state, bytes, total, error}}, profilesFolder, job: {profile, name, label}|null, message, profiles: [{id, name, kind, groups, learned, examples, trained, report: {examples, beatsDefaults, beatsPreset, errorVsDefaults, groups: [{group, kept, errorVsDefaults, presetErrorVsDefaults, sliders: [{id, error, defaultError}]}]}|null, problem}]}",
+            "{} → {model: {installed, file, bytes, download: {state, bytes, total, error}, runtime, coremlInstalled, backend}, profilesFolder, job: {profile, name, label}|null, message, profiles: [{id, name, kind, groups, learned, examples, trained, report: {examples, beatsDefaults, beatsPreset, errorVsDefaults, groups: [{group, kept, errorVsDefaults, presetErrorVsDefaults, sliders: [{id, error, defaultError}]}]}|null, problem}]}",
             always,
             |s, _| {
                 take_in(s);

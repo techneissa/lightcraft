@@ -76,9 +76,11 @@ impl Default for MediaCache {
     }
 }
 
-/// Memory for rendered previews out of the cache share.
-fn rendered_budget(share: usize) -> usize {
-    RENDERED_MEM_BYTES.min(share / 4)
+/// Memory for rendered previews out of the cache share: a quarter of it, so a big budget keeps
+/// a whole shoot's previews (a 20 GB budget holds about 230 standard previews, or 1 500 loupe
+/// renders at 1 200 px), and at least [`RENDERED_MEM_BYTES`] where the share allows.
+pub(crate) fn rendered_budget(share: usize) -> usize {
+    (share / 4).max(RENDERED_MEM_BYTES.min(share / 2))
 }
 
 impl MediaCache {
@@ -377,19 +379,23 @@ impl MediaCache {
         // developed with another camera profile, or none, doesn't stand in either; a smart preview has no camera
         // profile, and decoding it again gives the same picture, so it stands in while the original is offline)
         let tag = dcp.as_ref().map(|(id, _)| id.clone());
+        let outliers = p.develop.removes_hot_pixels();
         if cached
-            && let Some(a) = self.get_source(p.id, level).filter(|a| a.serves(wanted))
+            && let Some(a) = self.get_source(p.id, level).filter(|a| a.serves(wanted) && a.fits_outliers(outliers))
             && (a.camera_profile == tag || (a.from_proxy && self.original_offline(p)))
         {
             return SourceRef::Loaded(Box::new(a));
         }
-        // a thumbnail of a photo whose preview is decoded (the one in the loupe) is cut from it; not
+        // a thumbnail of a photo whose preview or full source is decoded (the one in the loupe) is cut from it; not
         // with a denoised picture, which the thumbnail would lose, nor from one decoded with another camera profile
         if cached
             && level == SourceLevel::Thumb
             && self.denoise.spec(p.id).is_none()
-            && let Some(big) = self.get_source(p.id, SourceLevel::Preview).filter(|a| a.serves(wanted))
-            && (big.camera_profile == tag || (big.from_proxy && self.original_offline(p)))
+            && let Some(big) = [SourceLevel::Preview, SourceLevel::Full].into_iter().find_map(|level| {
+                self.get_source(p.id, level).filter(|b| {
+                    b.serves(wanted) && b.fits_outliers(outliers) && (b.camera_profile == tag || (b.from_proxy && self.original_offline(p)))
+                })
+            })
         {
             return SourceRef::Fit { from: Box::new(big), max_edge: level.max_edge() };
         }
@@ -412,15 +418,17 @@ impl MediaCache {
                 return SourceRef::Smart { path: sp };
             }
             let mut r = self.origin_ref(&p.source, max_edge);
-            if let SourceRef::File { fallback, camera_profile, .. } = &mut r {
+            if let SourceRef::File { fallback, camera_profile, outliers: o, .. } = &mut r {
                 *fallback = Some(sp);
                 *camera_profile = dcp;
+                *o = outliers;
             }
             return r;
         }
         let mut r = self.origin_ref(&p.source, max_edge);
-        if let SourceRef::File { camera_profile, .. } = &mut r {
+        if let SourceRef::File { camera_profile, outliers: o, .. } = &mut r {
             *camera_profile = dcp;
+            *o = outliers;
         }
         r
     }
@@ -461,6 +469,7 @@ impl MediaCache {
                         fallback: None,
                         denoise: None,
                         camera_profile: None,
+                        outliers: false,
                         reduced: None,
                         options: LoadOptions::default(),
                     },
@@ -473,6 +482,7 @@ impl MediaCache {
                 fallback: None,
                 denoise: None,
                 camera_profile: None,
+                outliers: false,
                 reduced: None,
                 options: LoadOptions::default(),
             },
