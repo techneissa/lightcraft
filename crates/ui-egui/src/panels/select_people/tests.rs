@@ -85,12 +85,12 @@ pub(super) fn until(h: &mut Headless, what: &str, done: impl Fn(&Headless) -> bo
     h.step();
 }
 
-/// The parts are in a dropdown, closed: the picker is one short row over the photo.
+/// The parts are in a dropdown, closed, on a second line under the chips: the picker is two short rows over the photo.
 fn one_short_row(h: &mut Headless) {
     assert!(rect_of(h, "selectPeople:parts").is_some());
     assert!(rect_of(h, "selectPeople:part:hair").is_none(), "the parts menu starts closed");
     let card = rect_of(h, "selectPeople:card").unwrap();
-    assert!(card[3] < 60.0, "one row: {card:?}");
+    assert!(card[3] < 90.0, "two short rows: {card:?}");
 }
 
 #[test]

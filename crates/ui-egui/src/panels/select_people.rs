@@ -6,8 +6,9 @@
 //! - The people picker (`panels/detail/people_picker.rs`) on the photo, at the image view's top-right corner,
 //!   while Person or Background is chosen or a Select People mask is selected: "All" and a round chip per person,
 //!   then the parts (Entire Person, Entire Face, Facial Skin… Background). A plain click picks one part, ⌘-click
-//!   adds or removes one; a face chip picks whose. With a Select People mask selected, a click changes that mask;
-//!   without one, it makes a new mask. Folded or open is kept in the saved `openFlyouts` ([`FOLDED`]).
+//!   adds or removes one to the selected mask; a face chip picks whose. A plain click makes a mask of its own for
+//!   that part (or selects the one that has it), so each pick keeps its own edits; a mask nobody edited yet is
+//!   changed instead. Folded or open is kept in the saved `openFlyouts` ([`FOLDED`]).
 //! - A photo's people are found once, on a worker thread (the parse's activity row); a mask asked for before then
 //!   is made when they are found.
 
@@ -16,7 +17,7 @@ use std::sync::Arc;
 use egui::Rect;
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::MaskShape;
-use lightcraft_engine::select_people::{Parsed, PeopleState, Pick, current, person_name};
+use lightcraft_engine::select_people::{Parsed, PeopleState, Pick, current, mask_of, person_name};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
@@ -284,15 +285,24 @@ pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, 
             p.parsing.people.iter().enumerate().map(|(i, q)| FaceChip { texture: textures.get(i).map(|t| t.id()), name: person_name(q, i) }).collect()
         })
         .unwrap_or_default();
-    let items: Vec<PartItem> = if ready.is_some() {
-        Pick::ALL.iter().map(|p| PartItem { key: p.id().into(), label: p.label().into(), group: group(*p) }).collect()
-    } else {
-        Vec::new()
-    };
     let now = part.as_ref().and_then(|(_, shape)| current(shape, ready.as_deref()));
     let selected: Vec<usize> = now.iter().flat_map(|(picks, ..)| picks).filter_map(|p| Pick::ALL.iter().position(|q| q == p)).collect();
     let remembered = ctx.data(|d| d.get_temp::<usize>(face_id(photo)));
     let (face, note) = face_and_note(&st, now.as_ref().map(|(_, person, everyone)| (*person, *everyone)), remembered);
+    // a dot on each part that has a mask of its own for the face shown
+    let develop = app.session.develop_of(photo);
+    let has_mask = |p: &Pick| match (&ready, &develop) {
+        (Some(parsed), Some(d)) => {
+            let n = parsed.parsing.people.len();
+            face.is_none_or(|f| f < n) && mask_of(d, parsed, &[*p], face).is_some()
+        }
+        _ => false,
+    };
+    let items: Vec<PartItem> = if ready.is_some() {
+        Pick::ALL.iter().map(|p| PartItem { key: p.id().into(), label: p.label().into(), group: group(*p), marked: has_mask(p) }).collect()
+    } else {
+        Vec::new()
+    };
     let pk = Picker {
         id: "selectPeople",
         faces: &chips,
@@ -307,6 +317,7 @@ pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, 
         app.ui.toggle_flyout(FOLDED);
     }
     let face_value = |f: Option<usize>| f.map_or(json!("all"), |i| json!(i));
+    let ids_of = |sel: &[usize]| -> Vec<&'static str> { sel.iter().filter_map(|i| Pick::ALL.get(*i)).map(|p| p.id()).collect() };
     if let Some(choice) = picked.face {
         ctx.data_mut(|d| match choice {
             Some(i) => {
@@ -316,27 +327,28 @@ pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, 
                 d.remove::<usize>(face_id(photo));
             }
         });
-        let r = match &part {
-            Some((mid, _)) => app.run("selectPeople.set", json!({"id": mid, "face": face_value(choice)})),
-            None => app.run("selectPeople.add", json!({"parts": ["entirePerson"], "face": face_value(choice)})),
-        };
-        if let Err(e) = r {
-            app.toast_error(&ctx, e);
-        }
+        // changes whose the selected mask is (or selects the mask of those parts of that face); one is made when none is selected
+        let parts = if selected.is_empty() { vec!["entirePerson"] } else { ids_of(&selected) };
+        let how = if part.is_some() { "face" } else { "part" };
+        pick(app, &ctx, json!({"parts": parts, "face": face_value(choice), "how": how}));
     }
     if let Some(sel) = picked.parts.filter(|s| !s.is_empty()) {
-        let ids: Vec<&str> = sel.iter().filter_map(|i| Pick::ALL.get(*i)).map(|p| p.id()).collect();
-        let r = match &part {
-            Some((mid, _)) => app.run("selectPeople.set", json!({"id": mid, "parts": ids})),
-            None => app.run("selectPeople.add", json!({"parts": ids, "face": face_value(face)})),
-        };
-        if let Err(e) = r {
-            app.toast_error(&ctx, e);
-        }
+        // a click: a mask of its own (the selected one is kept as it is); ⌘-click: the selected mask gains or loses the part
+        let how = if picked.parts_add { "add" } else { "part" };
+        pick(app, &ctx, json!({"parts": ids_of(&sel), "face": face_value(face), "how": how}));
+    }
+}
+
+/// One click of the picker, by `selectPeople.pick`.
+fn pick(app: &mut LightcraftApp, ctx: &egui::Context, params: Value) {
+    if let Err(e) = app.run("selectPeople.pick", params) {
+        app.toast_error(ctx, e);
     }
 }
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_per_part;
 #[cfg(test)]
 mod tests_round;

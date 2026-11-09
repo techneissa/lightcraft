@@ -3,6 +3,8 @@
 //! - `selectPeople.people {id?, wait?}`: the photo's people (starts finding them when they are not known).
 //! - `selectPeople.add {parts, face?, name?}`: a new mask of those parts of one person or of everyone.
 //! - `selectPeople.set {id?, component?, parts?, face?}`: change which parts and whose a Select People mask selects.
+//! - `selectPeople.pick {parts, face?, how?}`: what a click in the picker does: one mask per part pick, each with its
+//!   own edits (select the mask that already has those parts, else a new one).
 
 use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape};
 use serde_json::{Value, json};
@@ -10,8 +12,8 @@ use serde_json::{Value, json};
 use super::masks::{find, masks_edit};
 use super::{CommandSpec, bad, cmd, has_active};
 use crate::select_people::grid::{self, Selection};
-use crate::select_people::parts::summary;
-use crate::select_people::{Parsed, Pick, current, face_key, person_name};
+use crate::select_people::parts::{picks_of, summary};
+use crate::select_people::{Parsed, Pick, current, face_key, mask_of, person_name};
 use crate::{Result, Session};
 
 /// The `parts` parameter: ids of the parts list (at least one).
@@ -90,6 +92,11 @@ fn name_for(masks: &[Mask], picks: &[Pick]) -> String {
     name(n)
 }
 
+/// Whether `name` is one `name_for` made for `picks` (a name the user gave is not).
+fn generated_name(name: &str, picks: &[Pick]) -> bool {
+    name.strip_prefix(&format!("{} Mask ", summary(picks))).is_some_and(|n| n.parse::<u32>().is_ok())
+}
+
 fn add(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "selectPeople.add";
     let picks = picks_param(p, C)?.unwrap_or_else(|| vec![Pick::EntirePerson]);
@@ -154,7 +161,7 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     masks_edit(s, C, "Select People", |masks, _| {
         let i = find(masks, mid, C)?;
         // (a name the user gave stays)
-        let generated = old_name.strip_prefix(&format!("{} Mask ", summary(&old_picks))).is_some_and(|n| n.parse::<u32>().is_ok());
+        let generated = generated_name(&old_name, &old_picks);
         let name = generated.then(|| name_for(masks, &picks));
         let m = masks.get_mut(i).ok_or_else(|| bad(C, format!("no mask {mid}")))?;
         if let Some(c) = m.components.get_mut(comp) {
@@ -165,6 +172,77 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         }
         Ok(())
     })
+}
+
+/// Whether `m` is a picker's mask nobody has edited: a generated name, one Select People part, the effects it
+/// started with, no Edge, Refine Edges, Decontaminate or Invert.
+fn untouched(s: &Session, m: &Mask) -> bool {
+    let [c] = m.components.as_slice() else { return false };
+    let MaskShape::People { parts, seg: Some(_), edge, .. } = &c.shape else { return false };
+    generated_name(&m.name, &picks_of(parts))
+        && *edge == 0.0
+        && m.refine == 0.0
+        && m.decontaminate == 0.0
+        && !m.invert
+        && !c.invert
+        && m.adjust == super::mask_effects::new_mask_adjust(s, "people")
+}
+
+/// A click in the people picker. `how`: `part` (default; a plain click on a part): select the mask that has exactly
+/// these parts of this face, else change the selected mask when nobody has edited it, else make a new one, so each
+/// part pick keeps its own edits; `add` (⌘-click: `parts` is the whole new list): change the selected mask's parts;
+/// `face` (a face chip): change whose the selected mask is, unless a mask of those parts and that face exists, then
+/// select it. Without a selected Select People mask, `add` and `face` make a new mask.
+fn pick(s: &mut Session, p: &Value) -> Result<Value> {
+    const C: &str = "selectPeople.pick";
+    let how = p.get("how").and_then(Value::as_str).unwrap_or("part");
+    if !matches!(how, "part" | "add" | "face") {
+        return Err(bad(C, "`how` must be part, add or face"));
+    }
+    let id = s.active().ok_or_else(|| bad(C, "no active photo"))?;
+    let parsed = people(s, C)?;
+    let picks = picks_param(p, C)?.unwrap_or_else(|| vec![Pick::EntirePerson]);
+    let face = face_param(p, parsed.parsing.people.len(), C)?;
+    let d = s.develop_of(id).ok_or_else(|| bad(C, "no active photo"))?;
+    let selected = s
+        .active_mask
+        .and_then(|mid| d.masks.iter().find(|m| m.id == mid))
+        .filter(|m| m.components.iter().any(|c| matches!(c.shape, MaskShape::People { seg: Some(_), .. })));
+    // whose: given, else (for `add`) the selected mask's own
+    let person = match (face, selected) {
+        (Some(f), _) => f,
+        (None, Some(m)) if how == "add" => m.components.iter().find_map(|c| current(&c.shape, Some(&parsed))).and_then(|(_, who, _)| who),
+        (None, _) => None,
+    };
+    if how != "add"
+        && let Some(mid) = mask_of(d.as_ref(), &parsed, &picks, person)
+    {
+        // (selecting a mask is not an edit: no undo step)
+        if s.active_mask != Some(mid) {
+            s.active_mask = Some(mid);
+            s.active_component = None;
+        }
+        return Ok(json!({"activeMask": mid, "mask": mid, "selected": true}));
+    }
+    let retarget = match (how, selected) {
+        ("part", Some(m)) => untouched(s, m).then_some(m.id),
+        ("part", None) => None,
+        (_, m) => m.map(|m| m.id),
+    };
+    let mut set_params = json!({"id": retarget, "parts": picks.iter().map(|k| k.id()).collect::<Vec<_>>()});
+    let mut add_params = json!({"parts": set_params["parts"].clone()});
+    if let Some(f) = face.or((how == "part").then_some(None)) {
+        let v = f.map_or(json!("all"), |k| json!(k));
+        set_params["face"] = v.clone();
+        add_params["face"] = v;
+    }
+    match retarget {
+        Some(_) => set(s, &set_params),
+        None => add(s, &add_params).map(|mut o| {
+            o["created"] = json!(true);
+            o
+        }),
+    }
 }
 
 fn people_json(parsed: &Parsed) -> Value {
@@ -223,6 +301,15 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "{parts?: [entirePerson|entireFace|facialSkin|bodySkin|hair|eyebrows|eyeWhites|iris|lips|teeth|clothes|clothesTop|clothesBottom|dress|shoes|hat|bag|background] (default [\"entirePerson\"]; several make one mask), face?: person index|\"all\" (default all), name?} — a new mask of those parts of one person or of everyone, drawn from the photo's people parse (waits for it when it is not known) and stored with the mask → {activeMask, mask}",
             has_active,
             add
+        ),
+        cmd!(
+            "selectPeople.pick",
+            "Select People: Pick Parts",
+            [],
+            None,
+            "{parts?: [part ids as in selectPeople.add] (default [\"entirePerson\"]), face?: person index|\"all\" (default all; for `add`, the selected mask's), how?: part|add|face (default part)} — what a click in the picker does, one mask per part pick so each has its own edits. `part`: select the mask that has exactly these parts of this face; else change the selected Select People mask when it was made by the picker and has no edits yet (default effects, no Edge, Refine Edges, Decontaminate or Invert); else make a new mask and select it (one undo step). `add` (⌘-click; `parts` is the whole new list): change the selected mask's parts. `face` (a face chip): change whose the selected mask is, unless a mask of those parts and that face exists, then select it. `add` and `face` without a selected Select People mask make a new one → {activeMask, mask, selected?: true (an existing mask was selected), created?: true, unchanged?}",
+            has_active,
+            pick
         ),
         cmd!(
             "selectPeople.set",

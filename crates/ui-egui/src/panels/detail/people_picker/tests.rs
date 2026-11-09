@@ -18,7 +18,7 @@ fn a_click_selects_one_and_a_command_click_adds_or_removes() {
 fn parts() -> Vec<PartItem> {
     ["Entire Person", "Entire Face", "Facial Skin", "Hair", "Background"]
         .iter()
-        .map(|l| PartItem { key: l.to_lowercase().replace(' ', "-"), label: l.to_string(), group: None })
+        .map(|l| PartItem { key: l.to_lowercase().replace(' ', "-"), label: l.to_string(), group: None, marked: false })
         .collect()
 }
 
