@@ -47,6 +47,9 @@ mod masks;
 pub mod nn;
 #[cfg(not(target_arch = "wasm32"))]
 mod params;
+// fork: `fork/perf-portrait-draft.md`
+#[cfg(not(target_arch = "wasm32"))]
+mod pre_retouch;
 #[cfg(not(target_arch = "wasm32"))]
 mod render;
 #[cfg(not(target_arch = "wasm32"))]

@@ -18,6 +18,20 @@ use lightcraft_raster::Rgb32f;
 
 use crate::{PixelWindow, Plan, SourceInfo};
 
+thread_local! {
+    static PRE_RETOUCH_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread made the image before the retouch step (white balance, defringe, spots, red eye) on
+/// the CPU, by either renderer: a test counts what a Portrait slider tick redoes with it.
+pub fn pre_retouch_runs() -> usize {
+    PRE_RETOUCH_RUNS.with(std::cell::Cell::get)
+}
+
+pub(crate) fn note_pre_retouch_run() {
+    PRE_RETOUCH_RUNS.with(|c| c.set(c.get().wrapping_add(1)));
+}
+
 /// Whether the step changes anything for `s`.
 ///
 /// Face Reshape is not part of the step (it is a warp in the frame's geometry, [`crate::reshape_step`]): a block with
@@ -145,9 +159,11 @@ pub fn apply(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     let o = s.orientation;
     let view: Box<dyn View> =
         if input.on_photo { Box::new(PhotoView::new(&p.frame, p.w, p.h, o)) } else { Box::new(FrameView::new(&p.frame, p.w, p.h, o)) };
-    for stage in [Stage::Retouch, Stage::Background] {
-        lightcraft_develop::retouch::run::apply(img, &s.retouch, input, view.as_ref(), stage);
-    }
+    crate::timed("retouch", || {
+        for stage in [Stage::Retouch, Stage::Background] {
+            lightcraft_develop::retouch::run::apply(img, &s.retouch, input, view.as_ref(), stage);
+        }
+    });
 }
 
 /// The window a zoomed render of `win` must render so retouching gives the same pixels there as the whole frame
@@ -191,6 +207,41 @@ pub fn window_for_reads(
     let (x, y) = (x0.floor().max(0.0) as usize, y0.floor().max(0.0) as usize);
     let (r, b) = ((x1.ceil().min(fw) as usize).max(x + 1), (y1.ceil().min(fh) as usize).max(y + 1));
     PixelWindow { x, y, w: r - x, h: b - y }.clamped(full_w, full_h)
+}
+
+/// Where the step may change pixels of the plan's `p.w × p.h` render: one `[x0, y0, x1, y1)` box per face, what
+/// retouching reads for it ([`window_for_reads`]'s boxes; a feature changes no pixel it does not read, or zoom would
+/// change a retouch). Empty while the step is off; `None` when it may change any pixel (a picture-wide feature such as
+/// Background, or a face that maps nowhere).
+pub fn write_boxes(info: &SourceInfo, p: &Plan<'_>) -> Option<Vec<crate::spots_keep::Rect>> {
+    let s = &*p.settings;
+    if !active(s) {
+        return Some(Vec::new());
+    }
+    if picture_feature_on(&s.retouch.global) {
+        return None;
+    }
+    let (Some(input), Some(reads)) = (info.retouch.as_deref(), s.retouch.reads()) else { return Some(Vec::new()) };
+    let o = s.orientation;
+    let view: Box<dyn View> =
+        if input.on_photo { Box::new(PhotoView::new(&p.frame, p.w, p.h, o)) } else { Box::new(FrameView::new(&p.frame, p.w, p.h, o)) };
+    let (w, h) = (p.w as f64, p.h as f64);
+    let mut out = Vec::new();
+    for face in input.faces.iter().take(MAX_FACES) {
+        let [x0, y0, x1, y1] = read_box(face, &reads, view.as_ref())?;
+        let (x0, y0, x1, y1) = (x0.floor().clamp(0.0, w), y0.floor().clamp(0.0, h), x1.ceil().clamp(0.0, w), y1.ceil().clamp(0.0, h));
+        if x1 > x0 && y1 > y0 {
+            out.push([x0 as usize, y0 as usize, x1 as usize, y1 as usize]);
+        }
+    }
+    Some(out)
+}
+
+/// A feature that retouches the whole picture (its [`lightcraft_develop::retouch::Scope::Picture`] runs read the
+/// global settings only) is on.
+fn picture_feature_on(global: &lightcraft_develop::retouch::Features) -> bool {
+    use lightcraft_develop::retouch::{FEATURES, Scope};
+    FEATURES.iter().filter(|f| f.scope == Scope::Picture).flat_map(|f| (f.specs)()).any(|spec| global.get(spec.id).is_some_and(|v| v != spec.default))
 }
 
 /// Pixels of a face's box and masks' areas are followed along each edge at this many points (a lens or transform
