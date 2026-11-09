@@ -87,6 +87,9 @@ struct Store {
     busy: Vec<String>,
     /// The last search's failure, per key.
     failed: Vec<(String, String)>,
+    /// Why no search could start for a key (no face model, or one that can't be read): kept so a panel asking every
+    /// frame never reads the model again; forgotten when a model is installed or removed ([`FaceStore::forget_no_model`]).
+    no_model: Vec<(String, String)>,
     /// Keys whose faces a prepared export finds when it runs ([`ExportFaces`]): setting up other renders of them
     /// does not wait.
     deferred: Vec<String>,
@@ -106,6 +109,24 @@ impl FaceStore {
         let mut st = self.lock();
         st.found.clear();
         st.failed.clear();
+        st.no_model.clear();
+    }
+
+    /// Forget why photos found no face model (installing or removing a model does): their next search runs.
+    pub(crate) fn forget_no_model(&self) {
+        self.lock().no_model.clear();
+    }
+
+    fn no_model_for(&self, key: &str) -> Option<String> {
+        self.lock().no_model.iter().find(|(k, _)| k == key).map(|(_, why)| why.clone())
+    }
+
+    fn keep_no_model(&self, key: &str, why: &str) {
+        let mut st = self.lock();
+        st.no_model.retain(|(k, _)| k != key);
+        st.no_model.push((key.to_string(), why.to_string()));
+        let extra = st.no_model.len().saturating_sub(KEEP);
+        st.no_model.drain(..extra);
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Store> {
@@ -261,22 +282,29 @@ impl Session {
         FacesState {
             found: st.found.iter().find(|(k, _)| *k == key).map(|(_, f)| f.clone()),
             busy: st.busy.contains(&key),
-            error: st.failed.iter().find(|(k, _)| *k == key).map(|(_, e)| e.clone()),
+            error: st.failed.iter().chain(&st.no_model).find(|(k, _)| *k == key).map(|(_, e)| e.clone()),
         }
     }
 
     /// Find photo `id`'s faces on a worker thread (once: nothing happens while they are known or being found, and
     /// `again` searches anew). Without a face model nothing starts and the reason comes back; it is not kept as the
-    /// photo's failure, so the search runs once a model is installed.
+    /// photo's failure: the reason is kept for the photo until a face model is installed or removed, so asking every
+    /// frame reads no model again, and the search runs once a model is installed.
     pub fn retouch_search(&mut self, id: PhotoId, again: bool) -> Option<String> {
         let p = self.catalog.photo(id).cloned()?;
         let key = self.retouch_key(&p, &p.develop);
         if !again && (self.retouch_faces.get(&key).is_some() || self.retouch_faces.lock().failed.iter().any(|(k, _)| *k == key)) {
             return None;
         }
+        if !again && let Some(why) = self.retouch_faces.no_model_for(&key) {
+            return Some(why);
+        }
         let source = match self.retouch_source() {
             Ok(source) => source,
-            Err(why) => return Some(why),
+            Err(why) => {
+                self.retouch_faces.keep_no_model(&key, &why);
+                return Some(why);
+            }
         };
         if !self.retouch_faces.claim(&key) {
             return None;

@@ -330,16 +330,23 @@ fn no_panic_with_no_faces_fifty_faces_a_failing_provider_or_a_one_pixel_photo() 
     let _ = std::fs::remove_dir_all(&src);
 }
 
-/// No face model is not a failure of the photo: once a model is there, the next search runs (no restart).
+/// No face model is kept as the photo's reason (the Portrait panel asks every frame, and an unreadable model must not
+/// be read again each time), and is not a failure of the photo: installing or removing a model clears it, and the
+/// next search runs (no restart).
 #[test]
-fn a_missing_face_model_is_not_kept_as_a_failure() {
+fn a_missing_face_model_is_kept_until_a_model_is_installed_or_removed() {
     let mut s = Session::with_demo();
     let id = s.active().unwrap();
-    let _ = s.retouch_search(id, false);
+    let why = s.retouch_search(id, false);
+    assert!(why.is_some());
     let st = s.retouch_faces_of(id);
-    assert!(st.error.is_none() && !st.busy && st.found.is_none());
-    // the model arrives (as installing YuNet does: nothing else is reset)
+    assert_eq!(st.error, why, "kept for the photo");
+    assert!(!st.busy && st.found.is_none());
+    assert_eq!(s.retouch_search(id, false), why, "asked again: the kept reason");
+    // the model arrives (installing or removing a face model forgets the reasons)
     s.retouch_faces.provider = Some(Arc::new(Fake(Mutex::new(vec![ann()]))));
+    s.retouch_faces.forget_no_model();
+    assert!(s.retouch_faces_of(id).error.is_none());
     let _ = s.retouch_search(id, false);
     let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
     while s.retouch_faces_of(id).found.is_none() {

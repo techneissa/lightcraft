@@ -348,6 +348,8 @@ fn install_file(s: &mut Session, c: &str, src: &Path, ins: Inspection, acknowled
         st.enabled = true;
         write_settings(&dir, &st)?;
     }
+    // (portrait retouching's photos that found no face model look again, fork `fork/retouch-foundation.md`)
+    s.retouch_faces.forget_no_model();
     let now = read_settings(&dir);
     let selected = now.embedder.as_deref() == Some(m.id.as_str());
     Ok(json!({"installed": row(s, &m, true, selected, &accepted), "active": {"embedder": now.embedder, "enabled": now.enabled}}))
@@ -513,6 +515,7 @@ fn remove(s: &mut Session, p: &Value) -> Result<Value> {
     for home in &homes {
         std::fs::remove_dir_all(home).map_err(|e| fail("could not remove the model", e))?;
     }
+    s.retouch_faces.forget_no_model();
     let mut st = read_settings(&dir);
     if st.embedder.as_deref() == Some(id) {
         // another installed recogniser takes over, so recognition keeps working; with none left nothing is chosen
