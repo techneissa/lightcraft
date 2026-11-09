@@ -48,6 +48,11 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     /// The part masks it reads: the face search keeps only the parts some feature lists, so a mask no feature
     /// reads takes no memory. By default the parts of a face and its skin ([`FACE_PARTS`]).
     const PARTS: &'static [Part] = FACE_PARTS;
+    /// How far around a pixel the feature reads to change it, a fraction of the face's size. A windowed render
+    /// (the zoomed loupe) grows its window by the largest reach of the features that are on, so that the window
+    /// comes out as the whole render does inside it. A feature reads no statistic of the image as a whole: one it
+    /// needs comes from the face (its landmarks and masks), never from the pixels a window happens to hold.
+    const REACH: f64 = 0.0;
 
     /// Whether these settings leave the picture alone. By default: every slider at its default.
     fn is_off(&self) -> bool {
@@ -128,6 +133,10 @@ pub struct Scene<'a> {
     pub height: usize,
     view: &'a dyn View,
 }
+
+/// How far around a face's box a feature may change pixels, a fraction of the face's size (the neck below the jaw,
+/// the forehead above the face mesh). A windowed render grows its window for the faces that lie this near it.
+pub const AROUND_FACE: f64 = 1.0;
 
 /// Most faces the step retouches (the largest, as the detector ranks them, come first).
 pub const MAX_FACES: usize = 100;

@@ -32,6 +32,9 @@ In the module:
 - **Parts**: `PARTS`, the part masks `apply` reads. The face search keeps only the parts some feature lists
   (`parts_read`), so list every part you read. The default, `FACE_PARTS`, is a face's parts and its skin, without
   Entire Person and the clothes.
+- **Reach**: `REACH`, how far around a pixel `apply` reads to change it, a fraction of the face's size (0 by
+  default). A zoomed render grows its window by the largest reach of the features that are on
+  (`crates/pipeline/src/retouch_step.rs`, `window_for_reads`), so a feature that blurs must declare it.
 - **`apply`**: retouch the image in place (see the rules below). The panel section draws its sliders with
   `cx.slider("retouch.<KEY>.<field>")`, which writes to every face or to the picked one.
 
@@ -54,6 +57,14 @@ example, which writes each person's part masks as grey pictures (`outdir/masks/<
 cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/
 cargo run -p lightcraft-retouch --release --example skin -- in.jpg out.jpg --smoothness 60 --shine 50 \
   --mask outdir/masks/facialSkin-0.png
+```
+
+The parser's `face_input` example writes everything the app's step gets for each face (box, YuNet's five points and
+the face mesh's 478, each part mask with its area) to `dir/faces.json`; the wrinkles example reads it with `--faces`:
+
+```bash
+cargo run -p lightcraft-parsing --release --example face_input -- in.jpg dir/
+cargo run -p lightcraft-retouch --release --example wrinkles -- in.jpg out.png --faces dir/faces.json --amount 60
 ```
 
 ## The input contract (`src/input.rs`)
@@ -99,8 +110,12 @@ Face Light (Facial Skin brightened by up to half again) that shows the masks arr
 - **Models run once per photo**, on a worker thread with an activity row, cached; a slider drag never runs a model.
   `apply` itself runs no model. See the speed target below.
 - The image is scene-linear RGB (linear Rec.2020 primaries in the app; the examples use linear sRGB).
-- A windowed render (the zoomed loupe) gives `apply` a part of the frame: `Scene` maps faces into it, and a feature
-  that reads far around a face reads only what the window holds.
+- **Zoom rule**: a windowed render (the zoomed loupe) gives `apply` a part of the frame, grown by the features'
+  `REACH`; `Scene` maps faces into it. A feature reads no further than its reach around a pixel, and takes any
+  reference value (a typical brightness, a threshold) from the face (its landmarks, its masks) or from pixels within
+  its reach, never from the whole image it is given: a render of a window holding part of a face then equals the
+  whole render inside it. A grid a feature reduces the picture to is counted from the face's corner, not from the
+  image's.
 
 ## Done means
 
@@ -115,6 +130,7 @@ A feature lane is checked against this list, and its test file (`tests/<feature>
 - **Texture is kept**: a retouch that smooths keeps the fine detail (the high-frequency energy inside the mask stays
   within a set ratio of the original's).
 - **No halo**: pixels next to the mask's edge do not take the colour of what is outside it.
+- **Zoom**: a render of a window holding part of the face, grown by the reach, equals the whole render inside it.
 - **Edge cases**: no faces, 50 faces, a face cut by the photo's edge, a 1 × 1 photo, a flat grey photo (stays flat
   when nothing in it calls for a change) and a missing model (faces without masks) run without a panic and give the
   expected result.

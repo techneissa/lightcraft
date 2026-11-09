@@ -115,6 +115,48 @@ impl View for PhotoView {
     }
 }
 
+/// The window a windowed render of `win` works on (its output pixels, in a `full_w × full_h` output of `frame`):
+/// grown, around every face whose retouch can reach into it, by how far the features that are on read around a
+/// pixel ([`lightcraft_develop::retouch::Retouch::reach`], a fraction of the face's size). The step then reads in
+/// the window what it reads in the whole render, and the window comes out as the whole render does inside it.
+pub fn window_for_reads(
+    s: &DevelopSettings,
+    info: &SourceInfo,
+    frame: &crate::geometry::Frame,
+    full_w: usize,
+    full_h: usize,
+    win: crate::PixelWindow,
+) -> crate::PixelWindow {
+    let reach = s.retouch.reach();
+    let Some(input) = info.retouch.as_deref().filter(|_| active(s) && reach > 0.0) else { return win };
+    let o = s.orientation;
+    let view: Box<dyn View> =
+        if input.on_photo { Box::new(PhotoView::new(frame, full_w, full_h, o)) } else { Box::new(FrameView::new(frame, full_w, full_h, o)) };
+    let scene = lightcraft_develop::retouch::Scene::new(input, view.as_ref(), full_w, full_h);
+    let (wx0, wy0, wx1, wy1) = (win.x as f64, win.y as f64, (win.x + win.w) as f64, (win.y + win.h) as f64);
+    let halo = scene
+        .faces
+        .iter()
+        .filter(|f| {
+            // what a face's retouch changes lies within its box and AROUND_FACE of its size around it
+            let d = f.px(lightcraft_develop::retouch::feature::AROUND_FACE + reach);
+            let b = f.bounds;
+            b[0] - d < wx1 && b[2] + d > wx0 && b[1] - d < wy1 && b[3] + d > wy0
+        })
+        .map(|f| f.px(reach))
+        .fold(0.0f64, f64::max);
+    if halo.is_nan() || halo <= 0.0 {
+        return win;
+    }
+    // (a few pixels more: blurs round their radii up)
+    let halo = (halo.ceil() as usize).saturating_add(4);
+    let x = win.x.saturating_sub(halo);
+    let y = win.y.saturating_sub(halo);
+    let right = win.x.saturating_add(win.w).saturating_add(halo).min(full_w);
+    let bottom = win.y.saturating_add(win.h).saturating_add(halo).min(full_h);
+    crate::PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h)
+}
+
 /// Retouch `img` (the plan's output pixels) in place: the retouch stage, then the background stage.
 pub fn apply(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     let s = &*p.settings;
@@ -334,5 +376,65 @@ mod tests {
             shares.push(changed as f64 / plain.data.len() as f64);
         }
         assert!((shares[0] - shares[1]).abs() < 0.02, "the lit share: {shares:?}");
+    }
+
+    /// A face with the 478-point mesh (a frontal face's), Facial Skin over the box and Body Skin under it.
+    fn meshed(r: NormRect) -> Face {
+        use lightcraft_develop::retouch::{Part, PartMask};
+        let five = vec![(r.x0 + 0.3 * r.width(), r.y0 + 0.45 * r.height()); 5];
+        let at = |(fx, fy): (f64, f64)| (r.x0 + fx * r.width(), r.y0 + fy * r.height());
+        let mesh = (0..478).map(|i| at(lightcraft_develop::retouch::wrinkles::areas::frontal(i)));
+        let skin = |area: NormRect| PartMask { plane: lightcraft_raster::Plane::filled(8, 8, 1.0), area };
+        Face {
+            landmarks: five.into_iter().chain(mesh).collect(),
+            masks: vec![(Part::FacialSkin, skin(r)), (Part::BodySkin, skin(NormRect::new(r.x0, r.y1, r.x1, (r.y1 + r.height()).min(1.0))))],
+            ..Face::boxed(r)
+        }
+    }
+
+    /// Wrinkles read about a fifth of a face around each pixel (`fork/retouch-wrinkles.md`): a zoomed window that
+    /// holds part of a face is grown by that reach, and comes out as the whole render does inside it.
+    #[test]
+    fn a_zoomed_window_of_a_face_equals_the_whole_render_inside_it() {
+        // skin with fine dark lines every 5 px, and pores
+        let src = Rgb32f::from_fn(480, 320, |x, y| {
+            let n = ((x * 7 + y * 13) % 11) as f32 / 11.0 - 0.5;
+            let line = if y % 5 == 0 { 0.7 } else { 1.0 };
+            [0.45, 0.3, 0.24].map(|c| c * line * (1.0 + 0.06 * n))
+        });
+        let info = SourceInfo { retouch: Some(Arc::new(Input::new(vec![meshed(NormRect::new(0.3, 0.15, 0.6, 0.6))]))), ..SourceInfo::default() };
+        let mut s = DevelopSettings::default();
+        for id in ["forehead", "crowsFeet", "smileLines", "neck"] {
+            controls::set(&mut s, &format!("retouch.wrinkles.{id}"), 100.0);
+        }
+        let (w, h) = (960, 640);
+        let whole = render(&src, &info, &s, &RenderRequest::fit(w, h)).image;
+        let plain = render(&src, &info, &DevelopSettings::default(), &RenderRequest::fit(w, h)).image;
+        for win in [crate::PixelWindow { x: 420, y: 150, w: 160, h: 120 }, crate::PixelWindow { x: 300, y: 330, w: 200, h: 150 }] {
+            let grown = window_for_reads(&s, &info, &crate::plan(&src, &info, &s, &RenderRequest::fit(w, h)).frame, w, h, win);
+            assert!(grown.w > win.w + 100 && grown.h > win.h + 80, "the window grows by the reach: {grown:?}");
+            let part = render(&src, &info, &s, &RenderRequest { window: Some(win), ..RenderRequest::fit(w, h) }).image;
+            let (mut most, mut changed) = (0u8, 0);
+            for y in 0..win.h {
+                for x in 0..win.w {
+                    let (a, b) = (whole.get(win.x + x, win.y + y), part.get(x, y));
+                    most = most.max((0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0));
+                    changed += usize::from(a != plain.get(win.x + x, win.y + y));
+                }
+            }
+            assert!(changed > 1000, "the window holds retouched pixels: {changed}");
+            assert!(most <= 1, "the window equals the whole render inside it ({win:?}): {most}");
+        }
+        // a window far from the face is not grown
+        let far = crate::PixelWindow { x: 0, y: 0, w: 40, h: 40 };
+        let frame = crate::plan(&src, &info, &s, &RenderRequest::fit(w, h)).frame;
+        let near = NormRect::new(0.8, 0.8, 0.85, 0.85);
+        let small = SourceInfo { retouch: Some(Arc::new(Input::new(vec![meshed(near)]))), ..SourceInfo::default() };
+        assert_eq!(window_for_reads(&s, &small, &frame, w, h, far), far);
+        assert_eq!(window_for_reads(&DevelopSettings::default(), &info, &frame, w, h, win_at(400, 200)), win_at(400, 200), "off: no growth");
+    }
+
+    fn win_at(x: usize, y: usize) -> crate::PixelWindow {
+        crate::PixelWindow { x, y, w: 50, h: 50 }
     }
 }

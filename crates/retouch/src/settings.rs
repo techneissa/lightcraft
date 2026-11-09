@@ -92,6 +92,12 @@ impl Retouch {
         self.global.is_off() && self.faces.iter().all(|f| f.settings.is_off())
     }
 
+    /// How far around a pixel the block reads to change it, a fraction of a face's size: the largest reach of a
+    /// feature on for some face ([`crate::Feature::REACH`]). A windowed render grows its window by it.
+    pub fn reach(&self) -> f64 {
+        self.faces.iter().fold(self.global.reach(), |r, f| r.max(f.settings.reach()))
+    }
+
     /// The block from JSON, leniently: a malformed part reads as off and the rest is kept, so one bad value never
     /// makes a photo's settings unreadable. Values are kept within their sliders' ranges.
     pub fn from_value(v: &Value) -> Retouch {
@@ -210,6 +216,15 @@ macro_rules! features {
             /// Every feature off.
             pub fn is_off(&self) -> bool {
                 true $(&& $crate::Feature::is_off(&self.$key))*
+            }
+
+            /// The largest [`Feature::REACH`](crate::Feature::REACH) of the features that are on (0 when none is).
+            pub fn reach(&self) -> f64 {
+                let mut r = 0.0f64;
+                $(if !$crate::Feature::is_off(&self.$key) {
+                    r = r.max(<$ty as $crate::Feature>::REACH);
+                })*
+                r
             }
 
             /// From JSON, one feature at a time: a missing or malformed feature reads as off.
