@@ -114,32 +114,74 @@ fn prepare(s: &mut Session, id: lightcraft_catalog::PhotoId) -> std::result::Res
     prepare_job(s, id)?.run()
 }
 
-/// [`prepare`] set up on the calling thread, to run elsewhere: portrait retouching finds a photo's faces from its
-/// parse on a worker (`crate::retouch_input`), with the very picture and faces `parsing.run` uses, so both read one
-/// cached parse.
+/// [`prepare`] set up on the calling thread, to run elsewhere (the parse-ahead worker, `fork/parse-ahead.md`), with the
+/// very picture and faces `parsing.run` uses, so both read one cached parse.
 pub(crate) struct Prepare {
     job: crate::RenderJob,
-    detector: Option<std::sync::Arc<lightcraft_faces::yunet::Detector>>,
+    detector: Detect,
     regions: Vec<lightcraft_meta::Region>,
 }
 
+/// The face detector a [`Prepare`] runs.
+enum Detect {
+    None,
+    Loaded(std::sync::Arc<lightcraft_faces::yunet::Detector>),
+    /// Loaded on the thread that runs it (the parse-ahead worker: never on the UI thread). One that does not load
+    /// finds no faces, as [`prepare_job`] without a usable detector.
+    Load(std::path::PathBuf),
+}
+
 pub(crate) fn prepare_job(s: &mut Session, id: lightcraft_catalog::PhotoId) -> std::result::Result<Prepare, String> {
+    let detector = super::face_detect::detector(s).ok().map_or(Detect::None, Detect::Loaded);
+    prepare_with(s, id, detector)
+}
+
+/// [`prepare_job`] for the parse-ahead worker (`fork/parse-ahead.md`): the detector is read there, not here.
+pub(crate) fn prepare_ahead(s: &mut Session, id: lightcraft_catalog::PhotoId) -> std::result::Result<Prepare, String> {
+    let detector = super::face_detect::detector_file(s).map_or(Detect::None, |(path, _)| Detect::Load(path));
+    prepare_with(s, id, detector)
+}
+
+fn prepare_with(s: &mut Session, id: lightcraft_catalog::PhotoId, detector: Detect) -> std::result::Result<Prepare, String> {
     let job = s.preview_job(id, PARSE_EDGE, PARSE_EDGE, false, &lightcraft_develop::DevelopSettings::default()).ok_or("no such photo")?;
-    let detector = super::face_detect::detector(s).ok();
     let regions = s.catalog.photo(id).map(|p| p.meta.regions.clone()).unwrap_or_default();
     Ok(Prepare { job, detector, regions })
+}
+
+/// A [`Prepare`] whose picture is rendered: its faces are found next.
+pub(crate) struct Rendered {
+    img: RgbImage,
+    detector: Detect,
+    regions: Vec<lightcraft_meta::Region>,
 }
 
 impl Prepare {
     /// Render the picture and find its faces (a model run: never on the UI thread).
     pub(crate) fn run(self) -> std::result::Result<(RgbImage, Vec<FaceHint>), String> {
+        self.render()?.detect()
+    }
+
+    /// The first step: render the picture.
+    pub(crate) fn render(self) -> std::result::Result<Rendered, String> {
         let image = self.job.run().rendered?.image;
-        let (w, h) = (image.width, image.height);
         let rgb: Vec<u8> = image.data.iter().flat_map(|px| [px[0], px[1], px[2]]).collect();
-        let img = RgbImage::new(w, h, rgb).map_err(|e| e.to_string())?;
-        let Some(detector) = self.detector else { return Ok((img, Vec::new())) };
+        let img = RgbImage::new(image.width, image.height, rgb).map_err(|e| e.to_string())?;
+        Ok(Rendered { img, detector: self.detector, regions: self.regions })
+    }
+}
+
+impl Rendered {
+    /// The second step: find the faces, each named after the face region of the photo it matches.
+    pub(crate) fn detect(self) -> std::result::Result<(RgbImage, Vec<FaceHint>), String> {
+        let Rendered { img, detector, regions } = self;
+        let detector = match detector {
+            Detect::None => None,
+            Detect::Loaded(d) => Some(d),
+            Detect::Load(path) => super::face_detect::detector_at(&path).map_err(|e| log::info!("parse ahead: {e}")).ok(),
+        };
+        let Some(detector) = detector else { return Ok((img, Vec::new())) };
+        let (w, h) = (img.width, img.height);
         let faces = detector.detect(&img.data, w, h, &lightcraft_faces::yunet::Options::default()).map_err(|e| e.to_string())?;
-        let regions = self.regions;
         let hints = faces
             .into_iter()
             .map(|f| {
@@ -160,20 +202,25 @@ impl Prepare {
 
 /// Parse photo `id` (waiting for the run with `wait`).
 pub(crate) fn parse_photo(s: &mut Session, id: lightcraft_catalog::PhotoId, wait: bool) -> Outcome {
-    // parsed before (ahead of time, or by an earlier request) and unchanged since: no render (`fork/parse-ahead.md`)
+    parse_photo_with(s, id, wait, false).1
+}
+
+/// [`parse_photo`]; with `keep`, also the picture it was parsed from when it had to render it (`None`: the parse was
+/// known, ahead of time or by an earlier request, and read without a render; `fork/parse-ahead.md`).
+fn parse_photo_with(s: &mut Session, id: lightcraft_catalog::PhotoId, wait: bool, keep: bool) -> (Option<RgbImage>, Outcome) {
     if let Some(parsing) = crate::parse_ahead::ready(s, id) {
-        return Outcome::Ready { parsing, cached: true };
+        return (None, Outcome::Ready { parsing, cached: true });
     }
     match prepare(s, id) {
         Ok((img, hints)) => {
-            let key = lightcraft_parsing::cache::key(&img, &hints, &s.parsing.ahead_version());
-            let out = s.parsing.parse(img, hints, wait);
+            let kept = keep.then(|| img.clone());
+            let (filed, out) = s.parsing.parse_filed(img, hints, wait);
             if matches!(out, Outcome::Ready { .. }) {
-                crate::parse_ahead::remember(s, id, key);
+                crate::parse_ahead::remember(s, id, filed);
             }
-            out
+            (kept, out)
         }
-        Err(e) => Outcome::Failed(e),
+        Err(e) => (None, Outcome::Failed(e)),
     }
 }
 
@@ -224,17 +271,24 @@ fn mask(s: &mut Session, p: &Value) -> Result<Value> {
         }
     };
     let id = *s.targets(p)?.first().ok_or_else(|| bad(C, "no photo"))?;
-    let (img, hints) = prepare(s, id).map_err(|e| bad(C, e))?;
-    let parsing = match s.parsing.parse(img.clone(), hints, true) {
-        Outcome::Ready { parsing, .. } => parsing,
-        Outcome::Running => return Err(bad(C, "the parse is still running")),
-        Outcome::Failed(e) => return Err(bad(C, e)),
+    let (img, parsing) = match parse_photo_with(s, id, true, true) {
+        (img, Outcome::Ready { parsing, .. }) => (img, parsing),
+        (_, Outcome::Running) => return Err(bad(C, "the parse is still running")),
+        (_, Outcome::Failed(e)) => return Err(bad(C, e)),
     };
     if let Select::Person(k, _) = sel
         && k >= parsing.people.len()
     {
         return Err(bad(C, format!("the photo has {} people (person is counted from 0)", parsing.people.len())));
     }
+    // (a parse read without a render: the photo is drawn at the parse's size for the edges)
+    let img = match img {
+        Some(img) => img,
+        None => {
+            let (rgb, w, h) = super::face_detect::render_rgb(s, id, parsing.width.max(parsing.height).max(1)).map_err(|e| bad(C, e))?;
+            RgbImage::new(w, h, rgb).map_err(|e| bad(C, e.to_string()))?
+        }
+    };
     let edge = p.get("edge").and_then(Value::as_u64).map_or(img.width.max(img.height), |e| usize::try_from(e).unwrap_or(MAX_MASK_EDGE));
     let (values, w, h) = mask_values(s, id, &parsing, sel, &img, edge).map_err(|e| bad(C, e))?;
     render::save_png(std::path::Path::new(path), &values, w, h).map_err(|e| bad(C, e.to_string()))?;

@@ -5,36 +5,56 @@ List: people parsing runs ahead of time in the background (the photos around the
 ## What it does
 
 People parsing (`fork/people-parsing.md`) takes seconds a photo. This queue runs it before the photo is needed, into
-people parsing's own disk cache, so a request (opening the photo, a portrait preset, `parsing.run`) finds the parse
-there and no model runs.
+people parsing's own disk cache, so a request finds the parse there and no model runs. On this branch the requests
+are `parsing.run` and `parsing.mask`; portrait retouching and Select People do not ask for a parse yet (see When
+other branches merge).
 
 - **Which photos, in order**: the photo open in the filmstrip and its neighbours (4 ahead in the direction of travel,
   2 behind, nearest first); then photos imported since the library opened that have faces (newest import first); then,
   while the user is idle, every other photo with faces, newest first. A neighbour without faces is parsed only while
-  the face scan has not looked at it yet. A photo is parsed once per model set and once per app start (a failure is
-  not retried until the next start; a photo whose file or faces change is done again).
+  the face scan has not looked at it yet. A photo is parsed once per model set and People edge, and once per app
+  start (a failure is not retried until the next start; a photo whose file or faces change is done again).
 - **Never in the way**: one photo at a time on one worker thread, so the GPU turn is given up between photos. Nothing
-  new starts while a slider is dragged, for 1.5 s after the user last dragged, typed or scrolled, while the loupe waits
-  for its render (`prep::foreground_busy`), or while another parse (a request) runs; a model run going then is stopped
-  (unless a request waits for that very photo) and run again once the user lets go. The idle sweep runs only at the
-  face scan's "normal" pace (the user idle for 3 s, or working in another app).
+  new starts while a slider is dragged, for 1.5 s after the user last dragged, typed or scrolled (also in a window
+  without the keyboard), while the loupe waits for its render (`prep::foreground_busy`), while an export, print, book
+  or slideshow output runs (an `export` row in the activity stack), or while another parse (a request) runs; a model
+  run going then is stopped (unless a request waits for that very photo) and run again once the user lets go. The
+  worker waits again before each step (the render, the face detection, the model run), since a render can't be
+  stopped once it runs. The idle sweep runs only at the face scan's "normal" pace (the user idle for 3 s, or working
+  in another app).
+- **Requests go first**: a request for another photo stops the queue's model run at once, so a synchronous
+  `parsing.run` on the UI thread never waits for it (the queue runs that photo again later). A request for the photo
+  the queue is parsing joins its run; if that run is stopped (✕, the setting), the request runs the photo itself. A
+  stopped queue run keeps no result and leaves no message in `parsing.status`.
+- **Light on the UI thread**: the pump never loads YuNet (it reads only whether the file is there, and its size and
+  time); the worker loads it. The worker also reads, lists and writes the index beside the cache. The queue is
+  rebuilt only when what it reads of the catalog changes (faces and other metadata, dates, files, photos added or
+  removed: `Catalog::aspects_since`), at most every 3 s, never while the work is held back; edits and ratings leave it
+  as it is. The app asks for a frame only while there is work the pace allows, now and then while it is held back, and
+  once when the user will count as idle while only photos for an idle user wait.
 - **Power**: nothing in Low Power Mode or on battery below 40 % (`pmset`, read at most once a minute on its own thread).
+  On the Mac nothing starts before the first reading is in (`checkingPower`).
 - **The setting**: Settings ▸ Performance ▸ People Parts ▸ Masks, "Find people's parts ahead of time", on by default
   (`ui.json` `settings.parseAhead`, kept on each Mac, not synced). Off stops the photo going.
 - **One row**: "Finding people parts ahead" with a count (n of m) in the activity stack while there is work; the
   parse itself has no row of its own. Its ✕ stops the photo going and empties the queue until another photo is opened.
-- **Opening a parsed photo** takes milliseconds: an index beside the cache (`ahead-index.json`) files each parse's key
-  by what the parse depends on (the file's content, the render version, the face regions and their names, whether
-  YuNet is installed, the model set's version), so a request reads the parse without rendering the photo first. A
-  request that parses a photo files it there too. A photo whose identity is not listed, or whose parse has left the
-  cache, is parsed as before.
+- **A parsed photo's request** takes milliseconds: an index beside the cache (`ahead-index.json`) files each parse's
+  key by what the parse depends on (the file's content, the render version, the face regions and their names, the
+  installed YuNet's file, and the version the parse is filed under: the model set's, plus `+matting1` or `+vision1`
+  when the People edge is BiRefNet Matting or Apple Vision), so `parsing.run` and `parsing.mask` read the parse
+  without rendering the photo or finding its faces first (`parsing.mask` then renders the photo only to draw the
+  mask's edges). One function gives that version (`PeopleParsing::ahead_version`, the one `PeopleParsing::parse`
+  keys on), and a request files the key its parse was made under, so changing the People edge never reads a parse
+  made for the other. A photo whose identity is not listed, or whose parse has left the cache, is parsed as before.
 - **Cache budget**: people parsing's 512 MB cap now removes the parses used least recently (each lookup marks the file
   as used). The idle sweep stops at 90 % of the cap, so it never pushes out parses for its own; the neighbours and new
   imports may. A parse file is 100–230 KB, so the cap holds a few thousand photos.
 - **Commands**: `parsing.ahead.pump {pace, backward?, enabled?, wait?, timeoutMs?}` (the app calls it every frame;
-  `wait` keeps going until the queue is done) and `parsing.ahead.status` → `{enabled, state, active, queued, queue,
-  working, parsed, cached, skipped, failed, power, indexFile}`; `state` is one of `off`, `battery`, `lowPower`,
-  `noModels`, `noCache`, `stopped`, `paused`, `working`, `done`, `idle`.
+  `wait` keeps going until the queue is done, for 3 s at most, since it holds the UI thread: an agent calls again while
+  the state is `working`, `paused` or `loading`) and `parsing.ahead.status` → `{enabled, state, active, queued, left,
+  queue, working, parsed, cached, skipped, failed, power, indexFile}` (`left`: the queued photos the pace allows now);
+  `state` is one of `off`, `battery`, `lowPower`, `checkingPower`, `noModels`, `noCache`, `stopped`, `loading` (the
+  worker is reading the index), `paused`, `working`, `done`, `idle`.
 - **Never crashes**: a damaged or hostile index is started afresh (keys that could leave the folder are refused); a
   failed render, detection or run counts as failed; a panic in the worker is a failure, not a crash.
 
@@ -66,18 +86,27 @@ while other builds kept the load average between 20 and 56; 2026-11-09):
 - `crates/ui-egui/src/app/frame.rs` (the per-frame pump), `crates/ui-egui/src/dialogs/settings/performance.rs` (the
   switch), `crates/ui-egui/src/state/settings.rs` (`parse_ahead`, on by default),
   `crates/ui-egui/src/settings_sync/rules.rs` (`parseAhead` left out of sync).
+- `crates/engine/src/cmd/face_detect.rs`: `detector_path` split out of `detector`; `detector_file` (the installed
+  YuNet's file and a stamp of it, from the file system only) and `detector_at` (YuNet loaded on a worker thread).
 - Fork files of people parsing: `crates/engine/src/people_parsing.rs` (`mod ahead`; `remembered` marks the file used;
-  `spawn` asks `shown` for its row), `crates/engine/src/cmd/parsing.rs` (`prepare` split into `prepare_job` /
-  `Prepare::run`, the very code of PR #122, so the worker renders and finds faces as a request does; `parse_photo`
-  reads a parse the index knows and files the ones it makes).
+  `spawn` asks `shown` for its row and keeps no result of a stopped queue run; `version_of`, the version `parse` keys
+  on; `parse_filed` says the version and key a parse was filed under; a request stops the queue's runs of other photos
+  and runs a photo itself when the queue's run it joined stops; a run that finished between the cache lookup and the
+  runs' lock is not run again), `crates/engine/src/cmd/parsing.rs` (`prepare` split into `prepare_job` /
+  `prepare_ahead` and the steps `Prepare::render` / `Rendered::detect`, so the worker renders and finds faces as a
+  request does and waits between the steps; `parse_photo` and `parsing.mask` read a parse the index knows and file
+  the ones they make).
 
-## When upstream merges
+## When other branches merge
 
-Not an upstream feature. When `feat/103-hair-edges` (PR #113) merges: its matting edges file parses under the set's
-version plus `+matting1`. `PeopleParsing::ahead_version` (`people_parsing/ahead.rs`) must then return that same
-version (the set's version plus the matting part when BiRefNet Matting is chosen for people), so the index tells
-matted from plain parses. Until it does, nothing wrong is shown: a matted parse is never read through the index
-(its `model_version` differs), so the photo is parsed by the usual path.
+Not an upstream feature; everything it touches is in this fork. Hair edges (#113) and Apple Vision edges (#120) are
+merged: their parses are filed under `+matting1` / `+vision1`, and `PeopleParsing::ahead_version` returns the same
+version, so nothing more is needed for them. When PR #122 (portrait retouching from the people parse) merges, its
+`crate::retouch_input` worker must ask for a parse the way `cmd::parsing::parse_photo` does: `crate::parse_ahead::ready`
+first (no render when the photo was parsed ahead), then `PeopleParsing::parse_filed` and
+`crate::parse_ahead::remember` with the key it returns. #122 changes `prepare` too: keep the step split here
+(`Prepare::render`, `Rendered::detect`) and its `prepare_ahead`. Select People masks, once they ask for a parse, go
+the same way.
 
 ## Tests
 

@@ -1,6 +1,6 @@
 //! Whether the Mac's power lets background parsing run: not in Low Power Mode, and not on battery below
 //! [`MIN_BATTERY`] %. Read from `pmset` (on the Mac) at most once a minute, on a thread of its own, so the pump never
-//! waits for it. Elsewhere, and while nothing has been read yet, power never holds the work back.
+//! waits for it. On the Mac nothing starts before the first reading is in; elsewhere power never holds the work back.
 
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -49,6 +49,14 @@ pub fn parse_low_power(text: &str) -> bool {
         let mut words = l.split_whitespace();
         matches!((words.next(), words.next()), (Some("lowpowermode" | "powermode"), Some("1")))
     })
+}
+
+/// What holds the work back with `power`, `read` or not yet, on a Mac (`mac`) or not.
+fn holds(power: Power, read: bool, mac: bool) -> Option<&'static str> {
+    if mac && !read {
+        return Some("checkingPower");
+    }
+    power.holds_back()
 }
 
 #[cfg(target_os = "macos")]
@@ -106,6 +114,17 @@ impl PowerWatch {
         st.power
     }
 
+    /// What holds background parsing back now ([`Power::holds_back`]); on the Mac also `checkingPower` until the
+    /// first reading is in (a Mac on a low battery never starts before it is known).
+    pub fn holds_back(&self) -> Option<&'static str> {
+        let power = self.now();
+        let read = {
+            let st = self.state.lock().unwrap_or_else(PoisonError::into_inner);
+            st.fixed.is_some() || st.read_at.is_some()
+        };
+        holds(power, read, cfg!(target_os = "macos"))
+    }
+
     /// Tests: use `power` from now on (`None`: the Mac's again).
     #[cfg(test)]
     pub fn fix(&self, power: Option<Power>) {
@@ -140,5 +159,14 @@ mod tests {
         assert_eq!(Power { on_battery: true, percent: Some(MIN_BATTERY), low_power: false }.holds_back(), None);
         // plugged in with a low battery: charging, nothing to save
         assert_eq!(Power { on_battery: false, percent: Some(5), low_power: false }.holds_back(), None);
+    }
+
+    #[test]
+    fn a_mac_waits_for_its_first_power_reading() {
+        assert_eq!(holds(Power::default(), false, true), Some("checkingPower"));
+        assert_eq!(holds(Power::default(), true, true), None);
+        assert_eq!(holds(Power { low_power: true, ..Power::default() }, true, true), Some("lowPower"));
+        // elsewhere nothing is read: power never holds the work back
+        assert_eq!(holds(Power::default(), false, false), None);
     }
 }

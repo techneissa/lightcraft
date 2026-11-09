@@ -136,6 +136,7 @@ fn library(tag: &str, n: usize) -> (Session, PathBuf, Vec<PhotoId>) {
 fn attach(s: &mut Session, dir: &Path) {
     s.parsing.set_paths(Some(dir.join("models")), Some(dir.join("cache")), None);
     s.parse_ahead.power.fix(Some(Power::default()));
+    index_read(s);
 }
 
 fn add_face(s: &mut Session, id: PhotoId, name: Option<&str>) {
@@ -155,6 +156,29 @@ fn open(s: &mut Session, id: PhotoId) {
 
 fn pump(s: &mut Session, p: Value) -> Value {
     s.execute("parsing.ahead.pump", &p).unwrap()
+}
+
+/// Pump at `p`, waiting (a few seconds a call), until the queue is done or stands still, as an agent does.
+fn settle(s: &mut Session, mut p: Value) -> Value {
+    p["wait"] = json!(true);
+    for _ in 0..100 {
+        let st = pump(s, p.clone());
+        if !matches!(st["state"].as_str(), Some("working" | "paused" | "loading")) {
+            return st;
+        }
+    }
+    panic!("parsing ahead never settled");
+}
+
+/// Wait for the worker to read the index beside the cache (nothing is queued before).
+fn index_read(s: &mut Session) {
+    for _ in 0..POLLS {
+        if s.parse_ahead_test_index_read() {
+            return;
+        }
+        std::thread::sleep(POLL);
+    }
+    panic!("never happened: the index is read");
 }
 
 /// Each photo's first rendered pixel, as the parse sees it.
@@ -186,7 +210,7 @@ fn the_open_photos_neighbours_go_first_then_new_imports_then_the_rest_while_idle
     let mut pixels = first_pixels(&mut s, &ids);
     open(&mut s, ids[4]);
     // the user is around: only the photos near the open one, nearest first, ahead before behind
-    let st = pump(&mut s, json!({"pace": "light", "wait": true}));
+    let st = settle(&mut s, json!({"pace": "light"}));
     assert_eq!(st["state"], "done", "{st}");
     let near: Vec<PhotoId> = [4, 5, 3, 6, 2, 7, 8].iter().map(|i| ids[*i]).collect();
     assert_eq!(order_seen(&seen, &pixels), near);
@@ -200,10 +224,10 @@ fn the_open_photos_neighbours_go_first_then_new_imports_then_the_rest_while_idle
     pixels.extend(first_pixels(&mut s, &[new_id]));
     // (an import opens the new photo; the user goes back to the one they were on)
     open(&mut s, ids[4]);
-    let st = pump(&mut s, json!({"pace": "light", "wait": true}));
+    let st = settle(&mut s, json!({"pace": "light"}));
     assert_eq!(order_seen(&seen, &pixels).last(), Some(&new_id), "{st} {:?}", s.active());
     // idle: every other photo with faces, newest first
-    let st = pump(&mut s, json!({"pace": "normal", "wait": true}));
+    let st = settle(&mut s, json!({"pace": "normal"}));
     assert_eq!(st["state"], "done", "{st}");
     let mut rest: Vec<PhotoId> = [0, 1, 9].iter().map(|i| ids[*i]).collect();
     let date = |s: &Session, id: PhotoId| {
@@ -229,7 +253,7 @@ fn photos_without_faces_wait_for_the_face_scan_except_near_the_open_photo() {
     // the face scan looked at photo 1 and found no face: not parsed even beside the open photo
     s.faces.scanned.insert(ids[1].0);
     open(&mut s, ids[0]);
-    let st = pump(&mut s, json!({"pace": "normal", "wait": true}));
+    let st = settle(&mut s, json!({"pace": "normal"}));
     assert_eq!(st["state"], "done", "{st}");
     let pixels = first_pixels(&mut s, &ids);
     // 0 (open, not scanned yet), 2 (near, not scanned yet), 3 (near, with a face); never 1
@@ -263,7 +287,7 @@ fn the_user_working_pauses_the_queue_and_stops_the_model_run_which_runs_again_af
     until("a stop is not news", || s.parsing.message().is_none());
     // the user lets go: the same photo runs again and finishes, then the next
     gate.open(3);
-    let st = pump(&mut s, json!({"pace": "light", "wait": true}));
+    let st = settle(&mut s, json!({"pace": "light"}));
     assert_eq!(st["state"], "done", "{st}");
     assert_eq!(gate.entered.load(Ordering::SeqCst), 4, "the stopped photo ran again: {st}");
     assert_eq!(st["parsed"], 3);
@@ -293,7 +317,7 @@ fn the_photo_on_screen_being_made_and_a_request_go_first() {
     gate.open(1);
     assert!(matches!(request.join().unwrap(), crate::people_parsing::Outcome::Ready { .. }));
     gate.open(2);
-    let st = pump(&mut s, json!({"pace": "normal", "wait": true}));
+    let st = settle(&mut s, json!({"pace": "normal"}));
     assert_eq!(st["parsed"], 2, "{st}");
 }
 
@@ -320,7 +344,7 @@ fn the_rows_cross_stops_the_run_and_empties_the_queue_until_another_photo_is_ope
     assert_eq!(gate.entered.load(Ordering::SeqCst), 1, "nothing runs after ✕");
     // another photo opened: parsing ahead starts again
     open(&mut s, ids[2]);
-    let st = pump(&mut s, json!({"pace": "light", "wait": true}));
+    let st = settle(&mut s, json!({"pace": "light"}));
     assert_eq!(st["state"], "done", "{st}");
     assert_eq!(st["parsed"], 3);
 }
@@ -352,7 +376,7 @@ fn the_setting_off_and_low_power_stop_everything() {
     assert_eq!(gate.entered.load(Ordering::SeqCst), 1);
     s.parse_ahead.power.fix(Some(Power { on_battery: true, percent: Some(80), low_power: false }));
     gate.open(2);
-    let st = pump(&mut s, json!({"pace": "normal", "wait": true}));
+    let st = settle(&mut s, json!({"pace": "normal"}));
     assert_eq!(st["parsed"], 2, "{st}");
 }
 
@@ -362,7 +386,7 @@ fn a_parsed_photo_opens_without_a_model_run_and_cached_photos_are_skipped_after_
     let seen: Seen = Arc::default();
     s.parsing.set_runner(Some(recording_runner(&seen)));
     open(&mut s, ids[1]);
-    let st = pump(&mut s, json!({"pace": "normal", "wait": true}));
+    let st = settle(&mut s, json!({"pace": "normal"}));
     assert_eq!(st["parsed"], 3, "{st}");
     assert_eq!(s.parsing.runs(), 3);
     // opening a photo (a request for its masks) finds the parse ready
@@ -379,13 +403,13 @@ fn a_parsed_photo_opens_without_a_model_run_and_cached_photos_are_skipped_after_
     s.parsing.set_runner(Some(recording_runner(&seen)));
     let ids = s.visible_cloned();
     open(&mut s, ids[1]);
-    let st = pump(&mut s, json!({"pace": "normal", "wait": true}));
+    let st = settle(&mut s, json!({"pace": "normal"}));
     assert_eq!((st["parsed"].as_u64(), st["skipped"].as_u64()), (Some(0), Some(3)), "{st}");
     assert_eq!(s.parsing.runs(), 0);
     // a photo whose faces change is looked at again: its parse (the same picture, no YuNet) is found in the cache
     add_face(&mut s, ids[0], Some("Ann"));
     s.parse_ahead_test_rebuild();
-    let st = pump(&mut s, json!({"pace": "normal", "wait": true}));
+    let st = settle(&mut s, json!({"pace": "normal"}));
     assert_eq!(st["cached"], 1, "{st}");
     assert_eq!(s.parsing.runs(), 0);
     // a parse that left the cache is made again
@@ -403,7 +427,7 @@ fn a_parsed_photo_opens_without_a_model_run_and_cached_photos_are_skipped_after_
     s.parsing.set_runner(Some(recording_runner(&seen)));
     let id = s.visible_cloned()[0];
     open(&mut s, id);
-    let st = pump(&mut s, json!({"pace": "normal", "wait": true}));
+    let st = settle(&mut s, json!({"pace": "normal"}));
     assert_eq!(st["parsed"], 1, "{st}");
 }
 
@@ -437,7 +461,7 @@ fn the_cache_keeps_the_parses_used_last_and_the_idle_sweep_leaves_room() {
         add_face(&mut s, *id, None);
     }
     open(&mut s, ids[0]);
-    let st = pump(&mut s, json!({"pace": "normal", "wait": true}));
+    let st = settle(&mut s, json!({"pace": "normal"}));
     assert_eq!(st["state"], "done", "{st}");
     // 0 open, 1 to 4 ahead; 5 and 6 are only for the idle sweep
     assert_eq!(st["parsed"], 5, "{st}");
@@ -454,7 +478,7 @@ fn a_photo_a_request_parsed_is_skipped_and_opens_again_without_a_render() {
     let r = s.execute("parsing.run", &json!({"ids": [ids[0].0], "wait": true})).unwrap();
     assert_eq!(r["photos"][0]["cached"], false, "{r}");
     open(&mut s, ids[0]);
-    let st = pump(&mut s, json!({"pace": "normal", "wait": true}));
+    let st = settle(&mut s, json!({"pace": "normal"}));
     assert_eq!((st["parsed"].as_u64(), st["skipped"].as_u64()), (Some(1), Some(1)), "{st}");
     assert_eq!(s.parsing.runs(), 2);
     // opening it again reads the parse by the photo's identity; a photo that changed is parsed as usual
@@ -467,4 +491,201 @@ fn a_photo_a_request_parsed_is_skipped_and_opens_again_without_a_render() {
     // another model set: nothing made by the first is taken for it
     s.parsing.set_model_set(ModelSet::BiSeNet).unwrap();
     assert!(crate::parse_ahead::ready(&mut s, ids[0]).is_none());
+}
+
+#[test]
+fn a_parse_made_before_the_people_edge_changed_is_not_taken_for_the_new_edge() {
+    use crate::hair_edges::{Edge, EdgeKind, Matte};
+    let (mut s, _dir, ids) = library("edge", 1);
+    let seen: Seen = Arc::default();
+    s.parsing.set_runner(Some(recording_runner(&seen)));
+    let plain = s.parsing.model_set().version();
+    // a plain parse, filed by a request; parsing ahead finds it
+    let r = s.execute("parsing.run", &json!({"ids": [ids[0].0], "wait": true})).unwrap();
+    assert_eq!(r["photos"][0]["parse"]["version"], plain.as_str(), "{r}");
+    open(&mut s, ids[0]);
+    let st = settle(&mut s, json!({"pace": "normal"}));
+    assert_eq!(st["skipped"], 1, "{st}");
+    // the People edge becomes BiRefNet Matting: the plain parse is not the photo's parse any more
+    s.hair_edges.set_runner(Some(Arc::new(|_, _, _, _| Ok(Matte { side: 8, logits: vec![9.0; 64] }))));
+    s.hair_edges.set_edge(EdgeKind::People, Edge::Matting).unwrap();
+    let matted = s.parsing.ahead_version();
+    assert_eq!(matted, format!("{plain}+{}", crate::hair_edges::VERSION));
+    assert!(crate::parse_ahead::ready(&mut s, ids[0]).is_none(), "the plain parse is not ready for the matted request");
+    // parsing ahead parses it again for the new edge, and a request then reads that parse without a render
+    let st = settle(&mut s, json!({"pace": "normal"}));
+    assert_eq!(st["parsed"], 1, "{st}");
+    let r = s.execute("parsing.run", &json!({"ids": [ids[0].0], "wait": true})).unwrap();
+    assert_eq!((r["photos"][0]["cached"].as_bool(), r["photos"][0]["parse"]["version"].as_str()), (Some(true), Some(matted.as_str())), "{r}");
+    assert_eq!(s.parsing.runs(), 2);
+}
+
+#[test]
+fn an_export_print_book_or_slideshow_holds_the_work_back_and_stops_the_model_run() {
+    let (mut s, _dir, ids) = library("export", 2);
+    let gate = Gate::default();
+    s.parsing.set_runner(Some(gate.runner()));
+    open(&mut s, ids[0]);
+    {
+        // (print, book and slideshow output share the export rows' kind)
+        let _export = s.activity.start("export", "Printing to PDF", crate::activity::Cancel::No);
+        for _ in 0..20 {
+            let st = pump(&mut s, json!({"pace": "normal"}));
+            assert_eq!(st["state"], "paused", "{st}");
+        }
+        assert_eq!(gate.entered.load(Ordering::SeqCst), 0, "nothing starts during an export");
+    }
+    pump_until(&mut s, json!({"pace": "normal"}), "the model run starts", || gate.entered.load(Ordering::SeqCst) == 1);
+    let export = s.activity.start("export", "Exporting", crate::activity::Cancel::No);
+    pump(&mut s, json!({"pace": "normal"}));
+    until("the model run stops", || gate.stopped.load(Ordering::SeqCst) == 1);
+    drop(export);
+    gate.open(2);
+    let st = settle(&mut s, json!({"pace": "normal"}));
+    assert_eq!(st["parsed"], 2, "{st}");
+}
+
+#[test]
+fn edits_leave_the_queue_as_it_is_and_face_changes_rebuild_it_but_not_while_the_user_works() {
+    let (mut s, _dir, ids) = library("aspects", 3);
+    let seen: Seen = Arc::default();
+    s.parsing.set_runner(Some(recording_runner(&seen)));
+    for id in &ids {
+        add_face(&mut s, *id, None);
+    }
+    open(&mut s, ids[0]);
+    settle(&mut s, json!({"pace": "light"}));
+    let built = s.parse_ahead.rebuilds();
+    // a rating (as any edit) changes nothing the queue reads: no rebuild, however long ago it was built
+    s.apply_system(lightcraft_catalog::Op::SetRating { id: ids[1], rating: 3 }).unwrap();
+    s.parse_ahead_test_age();
+    pump(&mut s, json!({"pace": "light"}));
+    assert_eq!(s.parse_ahead.rebuilds(), built, "an edit rebuilt the queue");
+    // a face named: rebuilt, once the user lets go
+    add_face(&mut s, ids[2], Some("Ann"));
+    s.parse_ahead_test_age();
+    pump(&mut s, json!({"pace": "pause"}));
+    assert_eq!(s.parse_ahead.rebuilds(), built, "rebuilt while the user works");
+    pump(&mut s, json!({"pace": "light"}));
+    assert_eq!(s.parse_ahead.rebuilds(), built + 1);
+}
+
+#[test]
+fn a_request_for_another_photo_stops_the_queues_model_run_and_goes_first() {
+    let (mut s, _dir, ids) = library("first", 2);
+    let gate = Gate::default();
+    s.parsing.set_runner(Some(gate.runner()));
+    open(&mut s, ids[0]);
+    pump_until(&mut s, json!({"pace": "light"}), "the queue's run starts", || gate.entered.load(Ordering::SeqCst) == 1);
+    // a synchronous request (the UI thread waits, so nothing pumps): the queue's run gives way at once
+    let parsing = s.parsing.clone();
+    let img = lightcraft_parsing::RgbImage::new(2, 2, vec![3; 12]).unwrap();
+    let request = std::thread::spawn(move || parsing.parse(img, Vec::new(), true));
+    until("the queue's run stops", || gate.stopped.load(Ordering::SeqCst) == 1);
+    until("the request's run starts", || gate.entered.load(Ordering::SeqCst) == 2);
+    gate.open(1);
+    assert!(matches!(request.join().unwrap(), crate::people_parsing::Outcome::Ready { cached: false, .. }));
+    assert!(s.parsing.message().is_none(), "a stopped queue run is not news: {:?}", s.parsing.message());
+    // the queue runs its photo again afterwards
+    gate.open(2);
+    let st = settle(&mut s, json!({"pace": "light"}));
+    assert_eq!(st["parsed"], 2, "{st}");
+}
+
+#[test]
+fn a_request_that_joined_the_queues_run_gets_its_parse_when_that_run_is_stopped() {
+    let (mut s, _dir, ids) = library("joined", 1);
+    let gate = Gate::default();
+    s.parsing.set_runner(Some(gate.runner()));
+    open(&mut s, ids[0]);
+    pump_until(&mut s, json!({"pace": "light"}), "the queue's run starts", || gate.entered.load(Ordering::SeqCst) == 1);
+    let key = s.parse_ahead_test_run().and_then(|r| r.key()).expect("the run's key");
+    // a request for the same photo joins the run going
+    let (img, hints) = crate::cmd::parsing::prepare_job(&mut s, ids[0]).unwrap().run().unwrap();
+    let parsing = s.parsing.clone();
+    let request = std::thread::spawn(move || parsing.parse(img, hints, true));
+    until("the request waits on the queue's run", || s.parsing.waited_on(&key));
+    // ✕ on the queue's row stops the queue's run: the request runs the photo itself
+    let r = row(&s).expect("a row");
+    s.activity.cancel(r.id).unwrap();
+    pump(&mut s, json!({"pace": "light"}));
+    until("the request's own run starts", || gate.entered.load(Ordering::SeqCst) == 2);
+    gate.open(1);
+    assert!(matches!(request.join().unwrap(), crate::people_parsing::Outcome::Ready { .. }), "the request failed");
+    let st = s.execute("parsing.status", &json!({})).unwrap();
+    assert!(st["message"].is_null(), "{st}");
+}
+
+#[test]
+fn a_run_that_finished_a_moment_ago_is_not_run_again() {
+    let dir = temp_dir("ahead-finished");
+    let p = crate::people_parsing::PeopleParsing::new(crate::activity::Activity::default());
+    p.set_paths(Some(dir.join("models")), None, None);
+    let seen: Seen = Arc::default();
+    p.set_runner(Some(recording_runner(&seen)));
+    let img = lightcraft_parsing::RgbImage::new(2, 2, vec![5; 12]).unwrap();
+    // (between a caller's cache lookup and its taking the runs' lock, the run of the same picture ends)
+    let key = cache::key(&img, &[], &p.ahead_version());
+    p.test_finished(&key, fake_parse(p.model_set()));
+    assert!(matches!(p.parse(img, Vec::new(), true), crate::people_parsing::Outcome::Ready { cached: true, .. }));
+    assert_eq!(p.runs(), 0);
+}
+
+#[test]
+fn a_hold_before_the_model_run_has_started_still_stops_it() {
+    let (mut s, _dir, ids) = library("early-stop", 1);
+    let gate = Gate::default();
+    s.parsing.set_runner(Some(gate.runner()));
+    open(&mut s, ids[0]);
+    // the photo is handed over and the user drags at once: the worker is still rendering, the run not started
+    let mut going = None;
+    for _ in 0..POLLS {
+        pump(&mut s, json!({"pace": "light"}));
+        going = s.parse_ahead_test_run();
+        if going.is_some() {
+            break;
+        }
+        // (another test may hold every background build for a moment)
+        std::thread::sleep(POLL);
+    }
+    let run = going.expect("a photo going");
+    pump(&mut s, json!({"pace": "pause"}));
+    assert!(run.stop_pending() || gate.stopped.load(Ordering::SeqCst) == 1, "the stop was lost");
+    // a stop meant for a hold that ended does not stop the run after it
+    gate.open(1);
+    let st = settle(&mut s, json!({"pace": "light"}));
+    assert_eq!((st["parsed"].as_u64(), gate.stopped.load(Ordering::SeqCst)), (Some(1), 0), "{st}");
+}
+
+/// A YuNet folder whose model file is damaged (it does not load).
+fn damaged_yunet(s: &mut Session, dir: &Path) {
+    let home = dir.join("faces").join(lightcraft_faces::known::YUNET_ID);
+    std::fs::create_dir_all(&home).unwrap();
+    std::fs::write(home.join("model.onnx"), b"not a model").unwrap();
+    std::fs::write(home.join("face-model.json"), b"{}").unwrap();
+    s.face_models_dir = Some(dir.join("faces"));
+    s.face_shared_dir = None;
+}
+
+#[test]
+fn the_pump_never_reads_the_face_detector_and_a_parsed_photos_mask_needs_no_parse() {
+    let (mut s, dir, ids) = library("yunet", 2);
+    damaged_yunet(&mut s, &dir);
+    let seen: Seen = Arc::default();
+    s.parsing.set_runner(Some(recording_runner(&seen)));
+    open(&mut s, ids[0]);
+    let reads = || crate::cmd::face_detect::READS.with(std::cell::Cell::get);
+    let before = reads();
+    let st = settle(&mut s, json!({"pace": "light"}));
+    assert_eq!(st["parsed"], 2, "{st}");
+    for _ in 0..10 {
+        pump(&mut s, json!({"pace": "light"}));
+    }
+    assert_eq!(reads(), before, "the pump read the detector on the UI thread");
+    // a mask of a photo parsed ahead: read by the photo's identity, no detection, no model run
+    let path = dir.join("mask.png");
+    let r = s.execute("parsing.mask", &json!({"ids": [ids[1].0], "part": "hair", "path": path.to_string_lossy()})).unwrap();
+    assert!(path.is_file(), "{r}");
+    assert_eq!(reads(), before, "the mask rendered and looked for faces to find the parse");
+    assert_eq!(s.parsing.runs(), 2);
 }

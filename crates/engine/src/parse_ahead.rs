@@ -18,8 +18,9 @@
 //!
 //! Cache: the parse files keep people parsing's size limit, the least recently used going first (a lookup marks a
 //! file as used). The idle sweep stops at [`IDLE_FILL`] of the limit, so it never pushes out parses for its own. A
-//! photo already parsed for the current model set is skipped without being rendered: an index beside the cache
-//! ([`index`]) files each parse's key by what the parse depends on ([`identity`]).
+//! photo already parsed for the current model set and People edge is skipped without being rendered: an index beside
+//! the cache ([`index`]) files each parse's key by what the parse depends on ([`identity`]). The worker reads and
+//! writes that index; the pump queues nothing until it is read.
 
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
@@ -27,27 +28,30 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use lightcraft_catalog::{Photo, PhotoId};
+use lightcraft_catalog::{Aspects, Photo, PhotoId};
 use lightcraft_meta::RegionKind;
 use lightcraft_preview::Hasher128;
 use serde_json::{Value, json};
 
 use crate::Session;
 use crate::activity::{Cancel, TaskGuard};
-use crate::people_parsing::{PARSE_EDGE, QuietRun};
+use crate::people_parsing::{Filed, PARSE_EDGE, QuietRun};
 
 pub(crate) mod index;
 pub mod power;
 pub(crate) mod queue;
 mod worker;
 
-use index::{Index, Listing};
+use index::Slot;
 use queue::Why;
 
 /// The share of the cache's size limit the idle sweep fills at most.
 pub const IDLE_FILL: f64 = 0.9;
 /// How often the queue is rebuilt after the catalog changed (the photos around the open one: at once).
 const REBUILD_EVERY: Duration = Duration::from_secs(3);
+/// What of a photo the queue reads: its faces and the rest of its metadata, its dates, its file, whether it is in the
+/// library. Other changes (edits, ratings) leave the queue as it is.
+const READS: Aspects = Aspects::META.with(Aspects::CAPTURED).with(Aspects::FILE).with(Aspects::PRESENCE);
 
 /// How hard parsing ahead may work, from what the user is doing (the frontend says, as for the face scan).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -106,7 +110,8 @@ struct Stamp {
     photos: usize,
     revision: u64,
     version: String,
-    yunet: bool,
+    /// The installed YuNet's file ([`yunet`]).
+    yunet: u64,
     cache: Option<PathBuf>,
 }
 
@@ -129,7 +134,7 @@ pub struct ParseAhead {
     /// Photos done since the app started (parsed or failed), by identity: a photo that changes is done again.
     tried: HashSet<u128>,
     in_flight: Option<InFlight>,
-    index: Option<(PathBuf, Index, Listing)>,
+    index: Slot,
     row: Option<TaskGuard>,
     row_cancel: Arc<AtomicBool>,
     /// Photos done since the row appeared.
@@ -138,6 +143,10 @@ pub struct ParseAhead {
     stopped_at: Option<Option<PhotoId>>,
     counts: Counts,
     state: &'static str,
+    /// Photos queued that the pace allows now.
+    left: usize,
+    /// Times the queue was rebuilt from the catalog.
+    rebuilds: u64,
 }
 
 impl Default for ParseAhead {
@@ -155,13 +164,15 @@ impl Default for ParseAhead {
             known: None,
             tried: HashSet::new(),
             in_flight: None,
-            index: None,
+            index: Slot::default(),
             row: None,
             row_cancel: Arc::new(AtomicBool::new(false)),
             row_done: 0,
             stopped_at: None,
             counts: Counts::default(),
             state: "idle",
+            left: 0,
+            rebuilds: 0,
         }
     }
 }
@@ -175,9 +186,10 @@ impl std::fmt::Debug for ParseAhead {
 impl Drop for ParseAhead {
     fn drop(&mut self) {
         self.drop_in_flight();
-        if let Some((_, ix, listing)) = self.index.as_mut() {
-            ix.save(listing, true);
-        }
+        // (the app is closing: written here, the worker may not get to it)
+        let mut sh = index::lock(&self.index);
+        let index::Shared { ix, listing, .. } = &mut *sh;
+        ix.save(listing, true);
     }
 }
 
@@ -198,6 +210,11 @@ impl ParseAhead {
     /// Whether a photo is being parsed now.
     pub fn working(&self) -> bool {
         self.in_flight.is_some()
+    }
+
+    /// Times the queue was rebuilt from the catalog.
+    pub fn rebuilds(&self) -> u64 {
+        self.rebuilds
     }
 
     /// Stop the photo going (its model run too) without counting it.
@@ -224,14 +241,14 @@ impl ParseAhead {
 /// What the parse of `p` depends on, as far as the catalog tells: its file, the render that makes its picture, its
 /// faces (the regions and whether YuNet finds them) and the model set's version. Two photos, or one photo before and
 /// after a change, with the same identity are parsed under the same key.
-pub(crate) fn identity(p: &Photo, yunet: bool, version: &str) -> u128 {
+pub(crate) fn identity(p: &Photo, yunet: u64, version: &str) -> u128 {
     let mut h = Hasher128::new();
     h.str("parse-ahead/1")
         .str(&crate::media::content_key(p))
         .u64(crate::media::RENDER_CACHE_VERSION)
         .u64(PARSE_EDGE as u64)
         .str(version)
-        .u64(u64::from(yunet))
+        .u64(yunet)
         .str(&format!("{:?}", p.embedded_lens));
     for r in p.meta.regions.iter().filter(|r| r.kind == RegionKind::Face) {
         h.u64(r.rect.x0.to_bits()).u64(r.rect.y0.to_bits()).u64(r.rect.x1.to_bits()).u64(r.rect.y1.to_bits());
@@ -253,30 +270,49 @@ fn taken(p: &Photo) -> String {
     p.captured.clone().unwrap_or_else(|| p.imported.clone())
 }
 
+/// A stamp of the installed YuNet's file, read from the file system only (0: none): whether faces come from YuNet.
+fn yunet(s: &Session) -> u64 {
+    crate::cmd::face_detect::detector_file(s).map_or(0, |(_, stamp)| stamp)
+}
+
+/// Whether the face scan has looked at photo `id` (the web build has no face scan).
+fn face_scanned(s: &Session, id: PhotoId) -> bool {
+    #[cfg(not(target_arch = "wasm32"))]
+    return s.faces.scanned.contains(id.0);
+    #[cfg(target_arch = "wasm32")]
+    return {
+        let _ = (s, id);
+        false
+    };
+}
+
 /// The photos around the open one worth parsing: those with faces, and those the face scan has not looked at yet.
 fn near_photos(s: &mut Session, backward: bool) -> Vec<PhotoId> {
     let Some(at) = s.active() else { return Vec::new() };
-    let view = s.visible_cloned();
-    queue::near(&view, at, backward)
+    queue::near(s.visible(), at, backward)
         .into_iter()
-        .filter(|id| s.catalog.photo(*id).is_some_and(|p| parseable(p) && (has_faces(p) || !s.faces.scanned.contains(id.0))))
+        .filter(|id| s.catalog.photo(*id).is_some_and(|p| parseable(p) && (has_faces(p) || !face_scanned(s, *id))))
         .collect()
 }
 
 /// Rebuild the photos after the open one's neighbours: new imports with faces and (while the cache has room) every
-/// other photo with faces, minus those whose parse is in the cache. Reads the cache folder and hashes each photo with
-/// faces: done when the catalog changed, not when the user steps to another photo.
+/// other photo with faces, minus those whose parse is in the cache. Hashes each photo with faces: done when what the
+/// queue reads of the catalog changed, not when the user steps to another photo. The worker then lists the cache
+/// folder again, for the next rebuild.
 fn rebuild_rest(s: &mut Session, stamp: &Stamp) {
     if s.parse_ahead.known.as_ref().is_none_or(|(lib, _)| *lib != stamp.library) {
         let ids = s.catalog.photos().map(|p| p.id).collect();
         s.parse_ahead.known = Some((stamp.library, ids));
     }
-    let room = match &mut s.parse_ahead.index {
-        Some((dir, _, listing)) => {
-            *listing = Listing::read(dir);
-            (listing.bytes as f64) < crate::people_parsing::cache_budget() as f64 * IDLE_FILL
+    let room = {
+        let mut sh = index::lock(&s.parse_ahead.index);
+        let room = (sh.listing.bytes as f64) < crate::people_parsing::cache_budget() as f64 * IDLE_FILL;
+        let ask = !std::mem::replace(&mut sh.asked, true);
+        drop(sh);
+        if ask && !send(&mut s.parse_ahead, worker::Job::Relist) {
+            index::lock(&s.parse_ahead.index).asked = false;
         }
-        None => false,
+        room
     };
     let (mut imported, mut idle) = (Vec::new(), Vec::new());
     let known = s.parse_ahead.known.as_ref().map(|k| &k.1);
@@ -298,6 +334,7 @@ fn rebuild_rest(s: &mut Session, stamp: &Stamp) {
     }
     s.parse_ahead.rest = rest;
     s.parse_ahead.built_at = Some(Instant::now());
+    s.parse_ahead.rebuilds += 1;
 }
 
 /// Whether the photo with `ident` needs no parse: done since the app started, or its parse is in the cache (then it
@@ -306,7 +343,10 @@ fn skip(ahead: &mut ParseAhead, ident: u128) -> bool {
     if ahead.tried.contains(&ident) {
         return true;
     }
-    let cached = ahead.index.as_ref().is_some_and(|(_, ix, listing)| ix.get(ident).is_some_and(|k| listing.keys.contains(k)));
+    let cached = {
+        let sh = index::lock(&ahead.index);
+        sh.ix.get(ident).is_some_and(|k| sh.listing.keys.contains(k))
+    };
     if cached {
         ahead.tried.insert(ident);
         ahead.counts.skipped += 1;
@@ -341,7 +381,7 @@ fn collect(s: &mut Session) {
             ahead.in_flight = None;
         }
         match f.ended {
-            worker::Ended::Parsed { key, cached } => {
+            worker::Ended::Parsed { key, bytes, cached } => {
                 ahead.tried.insert(f.identity);
                 if cached {
                     ahead.counts.cached += 1;
@@ -349,14 +389,15 @@ fn collect(s: &mut Session) {
                     ahead.counts.parsed += 1;
                 }
                 ahead.row_done += 1;
-                if let (Some(key), Some((dir, ix, listing))) = (key, ahead.index.as_mut()) {
-                    listing.add(dir, &key);
-                    ix.insert(f.identity, key);
-                    // the cache filled up: the idle sweep ends here
-                    if (listing.bytes as f64) >= crate::people_parsing::cache_budget() as f64 * IDLE_FILL {
-                        ahead.queue.retain(|(why, _)| *why != Why::Idle);
-                        ahead.rest.retain(|(why, _, _)| *why != Why::Idle);
-                    }
+                let Some(key) = key else { continue };
+                let mut sh = index::lock(&ahead.index);
+                sh.listing.add_len(&key, bytes);
+                sh.file(f.identity, key);
+                // the cache filled up: the idle sweep ends here
+                if (sh.listing.bytes as f64) >= crate::people_parsing::cache_budget() as f64 * IDLE_FILL {
+                    drop(sh);
+                    ahead.queue.retain(|(why, _)| *why != Why::Idle);
+                    ahead.rest.retain(|(why, _, _)| *why != Why::Idle);
                 }
             }
             worker::Ended::Failed(e) => {
@@ -376,7 +417,7 @@ fn standing_still(s: &Session) -> Option<&'static str> {
     if !s.parse_ahead.enabled {
         return Some("off");
     }
-    if let Some(why) = s.parse_ahead.power.now().holds_back() {
+    if let Some(why) = s.parse_ahead.power.holds_back() {
         return Some(why);
     }
     if !s.parsing.can_parse() {
@@ -386,6 +427,43 @@ fn standing_still(s: &Session) -> Option<&'static str> {
         return Some("noCache");
     }
     None
+}
+
+/// How the catalog changed since the queue was built.
+#[derive(PartialEq, Eq)]
+enum Change {
+    None,
+    /// Only what the queue does not read (edits, ratings).
+    Unread,
+    /// What the queue reads: rebuilt when [`REBUILD_EVERY`] has passed.
+    Read,
+    /// The library, the photo count, the model version, YuNet or the cache folder: rebuilt at once.
+    All,
+}
+
+fn change(s: &Session, stamp: &Stamp) -> Change {
+    let Some(old) = &s.parse_ahead.stamp else { return Change::All };
+    if old.library != stamp.library
+        || old.photos != stamp.photos
+        || old.version != stamp.version
+        || old.yunet != stamp.yunet
+        || old.cache != stamp.cache
+    {
+        return Change::All;
+    }
+    if old.revision == stamp.revision {
+        return Change::None;
+    }
+    match s.catalog.aspects_since(old.revision) {
+        Some(a) if !a.any_of(READS) => Change::Unread,
+        _ => Change::Read,
+    }
+}
+
+/// Whether the work is held back now (nothing new starts), before the power and the setting: the pace, the photo on
+/// screen being made, another parse (a request), an export.
+fn holding(s: &Session, pace: Pace, mine: Option<&str>) -> bool {
+    pace == Pace::Pause || crate::prep::foreground_busy() || s.parsing.others_running(mine) || worker::exporting(&s.activity)
 }
 
 /// One pump: take in finished photos, follow the pace, rebuild the queue when what it was built from changed, and
@@ -408,46 +486,45 @@ pub(crate) fn pump(s: &mut Session, pace: Pace, backward: bool) {
         }
         s.parse_ahead.stopped_at = None;
     }
-    // the index lives beside the parses
-    open_index(s);
-    let cache = s.parsing.cache_dir();
+    // the index lives beside the parses; nothing is queued until the worker has read it
+    if !open_index(s) {
+        s.parse_ahead.state = "loading";
+        return;
+    }
     let mine = s.parse_ahead.in_flight.as_ref().and_then(|f| f.run.key());
-    let held = pace == Pace::Pause || crate::prep::foreground_busy() || s.parsing.others_running(mine.as_deref());
+    let held = holding(s, pace, mine.as_deref());
     s.parse_ahead.hold.store(held, Ordering::SeqCst);
-    if held {
-        // the model run going gives way, unless a request waits for it
-        if let Some(f) = &s.parse_ahead.in_flight
-            && f.run.running()
-            && !mine.as_deref().is_some_and(|k| s.parsing.waited_on(k))
-        {
-            f.run.stop();
-        }
+    // the model run gives way, unless a request waits for it (also one about to start: the stop waits for it)
+    if held
+        && let Some(f) = &s.parse_ahead.in_flight
+        && !mine.as_deref().is_some_and(|k| s.parsing.waited_on(k))
+    {
+        f.run.stop();
     }
     let near = near_photos(s, backward);
-    let yunet = crate::cmd::face_detect::detector(s).is_ok();
     let stamp = Stamp {
         library: Arc::as_ptr(&s.library_identity) as usize,
         photos: s.catalog.len(),
         revision: s.catalog.revision,
         version: s.parsing.ahead_version(),
-        yunet,
-        cache: cache.clone(),
+        yunet: yunet(s),
+        cache: s.parsing.cache_dir(),
     };
-    let catalog_changed = match &s.parse_ahead.stamp {
-        None => true,
-        Some(old) => {
-            old.library != stamp.library
-                || old.photos != stamp.photos
-                || old.version != stamp.version
-                || old.yunet != stamp.yunet
-                || old.cache != stamp.cache
-                || (old.revision != stamp.revision && s.parse_ahead.built_at.is_none_or(|t| t.elapsed() >= REBUILD_EVERY))
+    let rebuild = match change(s, &stamp) {
+        Change::All => true,
+        Change::Read => s.parse_ahead.built_at.is_none_or(|t| t.elapsed() >= REBUILD_EVERY),
+        Change::Unread => {
+            // (measured from here next time)
+            if let Some(old) = s.parse_ahead.stamp.as_mut() {
+                old.revision = stamp.revision;
+            }
+            false
         }
+        Change::None => false,
     };
-    if catalog_changed {
+    // (never while held: the user is working)
+    if rebuild && !held {
         rebuild_rest(s, &stamp);
-    }
-    if catalog_changed {
         requeue(s, near, &stamp);
         s.parse_ahead.stamp = Some(stamp);
     } else if near != s.parse_ahead.near {
@@ -457,11 +534,15 @@ pub(crate) fn pump(s: &mut Session, pace: Pace, backward: bool) {
     if !held && s.parse_ahead.in_flight.is_none() {
         submit_next(s, pace);
     }
+    ask_save(&mut s.parse_ahead);
+    show(s, pace, held);
+}
+
+/// The state and the row after a pump.
+fn show(s: &mut Session, pace: Pace, held: bool) {
     let ahead = &mut s.parse_ahead;
-    if let Some((_, ix, listing)) = ahead.index.as_mut() {
-        ix.save(listing, false);
-    }
     let left = ahead.queue.iter().filter(|(why, _)| pace == Pace::Pause || pace.allows(*why)).count();
+    ahead.left = left;
     let busy = ahead.in_flight.is_some() || left > 0;
     ahead.state = if !busy {
         "done"
@@ -480,15 +561,51 @@ pub(crate) fn pump(s: &mut Session, pace: Pace, backward: bool) {
     row.progress(ahead.row_done, total);
 }
 
+/// Have the worker write the index when it changed a while ago.
+fn ask_save(ahead: &mut ParseAhead) {
+    let ask = {
+        let mut sh = index::lock(&ahead.index);
+        let ask = !sh.asked && sh.ix.due(false);
+        sh.asked |= ask;
+        ask
+    };
+    if ask && !send(ahead, worker::Job::Save) {
+        index::lock(&ahead.index).asked = false;
+    }
+}
+
+/// The worker, started when there is none.
+fn ensure_worker(s: &mut Session) -> Option<&worker::Worker> {
+    let ahead = &mut s.parse_ahead;
+    if ahead.worker.is_none() {
+        let holds = worker::Holds { hold: ahead.hold.clone(), parsing: s.parsing.clone(), activity: s.activity.clone() };
+        match worker::Worker::start(holds, ahead.index.clone()) {
+            Ok(w) => ahead.worker = Some(w),
+            Err(e) => log::warn!("parse ahead: {e}"),
+        }
+    }
+    ahead.worker.as_ref()
+}
+
+/// Hand the worker `job` (started already); `false` when its thread has gone (a new one next time).
+fn send(ahead: &mut ParseAhead, job: worker::Job) -> bool {
+    let sent = ahead.worker.as_ref().is_some_and(|w| w.send(job));
+    if !sent {
+        ahead.worker = None;
+    }
+    sent
+}
+
 /// Hand the worker the first photo the pace allows.
 fn submit_next(s: &mut Session, pace: Pace) {
-    let yunet = crate::cmd::face_detect::detector(s).is_ok();
+    let yunet = yunet(s);
     let version = s.parsing.ahead_version();
     while let Some(pos) = s.parse_ahead.queue.iter().position(|(why, _)| pace.allows(*why)) {
         let Some((why, id)) = s.parse_ahead.queue.remove(pos) else { return };
         let Some(photo) = s.catalog.photo(id).cloned() else { continue };
         let ident = identity(&photo, yunet, &version);
-        let prepare = match crate::cmd::parsing::prepare_job(s, id) {
+        // (the detector is read by the worker, never here)
+        let prepare = match crate::cmd::parsing::prepare_ahead(s, id) {
             Ok(p) => p,
             Err(e) => {
                 log::info!("parse ahead: photo {}: {e}", id.0);
@@ -496,65 +613,67 @@ fn submit_next(s: &mut Session, pace: Pace) {
                 continue;
             }
         };
-        let ahead = &mut s.parse_ahead;
-        if ahead.worker.is_none() {
-            match worker::Worker::start(s.parsing.clone(), ahead.hold.clone()) {
-                Ok(w) => ahead.worker = Some(w),
-                Err(e) => {
-                    log::warn!("parse ahead: {e}");
-                    ahead.queue.push_front((why, id));
-                    return;
-                }
-            }
+        if ensure_worker(s).is_none() {
+            s.parse_ahead.queue.push_front((why, id));
+            return;
         }
+        let ahead = &mut s.parse_ahead;
         let cancel = Arc::new(AtomicBool::new(false));
         let run = QuietRun::default();
-        let task = worker::Task { id, identity: ident, prepare, cancel: cancel.clone(), run: run.clone() };
-        if ahead.worker.as_ref().is_some_and(|w| w.submit(task)) {
+        let task = worker::Task { id, identity: ident, version: version.clone(), prepare, cancel: cancel.clone(), run: run.clone() };
+        if send(ahead, worker::Job::Parse(Box::new(task))) {
             ahead.in_flight = Some(InFlight { id, why, cancel, run });
         } else {
-            // the thread has gone: a new one next time
-            ahead.worker = None;
             ahead.queue.push_front((why, id));
         }
         return;
     }
 }
 
-/// Open the index beside the cache in use (saving the one of another folder first).
-fn open_index(s: &mut Session) {
+/// Have the worker read the index beside the cache in use (writing the one of another folder first); `true` once it
+/// is read.
+fn open_index(s: &mut Session) -> bool {
     let cache = s.parsing.cache_dir();
-    if s.parse_ahead.index.as_ref().map(|i| &i.0) != cache.as_ref() {
-        if let Some((_, ix, listing)) = s.parse_ahead.index.as_mut() {
-            ix.save(listing, true);
+    let asked = {
+        let mut sh = index::lock(&s.parse_ahead.index);
+        if sh.want == cache {
+            return sh.ready();
         }
-        s.parse_ahead.index = cache.as_ref().map(|d| (d.clone(), Index::open(d), Listing::read(d)));
+        sh.want = cache.clone();
+        cache
+    };
+    let Some(dir) = asked else { return false };
+    if ensure_worker(s).is_none() || !send(&mut s.parse_ahead, worker::Job::Load(dir.clone())) {
+        // (no thread to give it to: read here)
+        index::load(&s.parse_ahead.index, &dir);
     }
+    index::lock(&s.parse_ahead.index).ready()
 }
 
 /// The parse of photo `id`, when one was filed for it as it is now (by parsing ahead or an earlier request): read from
-/// the cache without rendering the photo. `None`: not known (or made by another model version); parse as usual.
+/// the cache without rendering the photo. `None`: not known (or made under another model set or People edge); parse
+/// as usual.
 pub(crate) fn ready(s: &mut Session, id: PhotoId) -> Option<Arc<lightcraft_parsing::Parsing>> {
-    open_index(s);
-    let yunet = crate::cmd::face_detect::detector(s).is_ok();
+    if !open_index(s) {
+        return None;
+    }
     let version = s.parsing.ahead_version();
-    let ident = identity(s.catalog.photo(id)?, yunet, &version);
-    let key = s.parse_ahead.index.as_ref()?.1.get(ident)?.to_string();
-    // (a parse made another way, under a version this one does not name, is not taken for it)
-    s.parsing.cached(&key).filter(|p| p.model_version == version)
+    let ident = identity(s.catalog.photo(id)?, yunet(s), &version);
+    let key = index::lock(&s.parse_ahead.index).ix.get(ident)?.to_string();
+    // (a parse made under a version this one does not name is not taken for it; one of nobody has no edges to draw)
+    s.parsing.cached(&key).filter(|p| p.model_version == version || p.people.is_empty())
 }
 
-/// A request parsed photo `id` under `key`: the next request finds it without a render.
-pub(crate) fn remember(s: &mut Session, id: PhotoId, key: String) {
+/// A request parsed photo `id` as `filed`: the next request finds it without a render.
+pub(crate) fn remember(s: &mut Session, id: PhotoId, filed: Filed) {
     open_index(s);
-    let yunet = crate::cmd::face_detect::detector(s).is_ok();
-    let version = s.parsing.ahead_version();
-    let Some(ident) = s.catalog.photo(id).map(|p| identity(p, yunet, &version)) else { return };
-    if let Some((dir, ix, listing)) = s.parse_ahead.index.as_mut() {
-        listing.add(dir, &key);
-        ix.insert(ident, key);
-        ix.save(listing, false);
+    let yunet = yunet(s);
+    let Some(ident) = s.catalog.photo(id).map(|p| identity(p, yunet, &filed.version)) else { return };
+    let mut sh = index::lock(&s.parse_ahead.index);
+    if let Some(dir) = sh.dir.clone() {
+        sh.listing.add(&dir, &filed.key);
     }
+    sh.file(ident, filed.key);
 }
 
 impl Session {
@@ -583,8 +702,9 @@ pub(crate) fn status(s: &Session) -> Value {
         "cached": c.cached,
         "skipped": c.skipped,
         "failed": c.failed,
+        "left": a.left,
         "power": {"onBattery": p.on_battery, "percent": p.percent, "lowPower": p.low_power, "minBattery": power::MIN_BATTERY},
-        "indexFile": a.index.as_ref().map(|(d, _, _)| d.join(index::FILE).display().to_string()),
+        "indexFile": index::lock(&a.index).dir.as_ref().map(|d| d.join(index::FILE).display().to_string()),
     })
 }
 
@@ -593,5 +713,20 @@ impl Session {
     /// Tests: build the queue anew at the next pump (the catalog changed less than [`REBUILD_EVERY`] ago).
     pub(crate) fn parse_ahead_test_rebuild(&mut self) {
         self.parse_ahead.stamp = None;
+    }
+
+    /// Tests: whether the index beside the cache is read (asking the worker to read it).
+    pub(crate) fn parse_ahead_test_index_read(&mut self) -> bool {
+        open_index(self)
+    }
+
+    /// Tests: the queue was built long ago (a change it reads rebuilds it at the next pump).
+    pub(crate) fn parse_ahead_test_age(&mut self) {
+        self.parse_ahead.built_at = None;
+    }
+
+    /// Tests: the model run going, if any.
+    pub(crate) fn parse_ahead_test_run(&self) -> Option<QuietRun> {
+        self.parse_ahead.in_flight.as_ref().map(|f| f.run.clone())
     }
 }

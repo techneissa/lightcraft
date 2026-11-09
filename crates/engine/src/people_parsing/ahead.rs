@@ -1,9 +1,10 @@
 //! Fork feature (`fork/parse-ahead.md`): what the parse-ahead queue ([`crate::parse_ahead`]) needs from people
 //! parsing. A parse asked for from the queue's worker thread goes through [`PeopleParsing::parse`] like any other (the
 //! same cache key, the same run, a foreground caller that wants the same photo joins it), with two differences:
-//! it has no activity row of its own (the queue keeps one row for all its photos), and the queue learns the key the
-//! parse is filed under and the run's cancel flag, so it can skip the photo next time and stop the run when the user
-//! needs the machine.
+//! it has no activity row of its own (the queue keeps one row for all its photos), and the queue learns the key and
+//! version the parse is filed under and the run's cancel flag, so it can skip the photo next time and stop the run
+//! when the user needs the machine. A request for another photo stops such a run at once (it holds the models); a
+//! stopped one keeps no result and leaves no message.
 //!
 //! Every parse looked up also marks its cache file as just used, so the cache's size limit removes the parses used
 //! least recently ([`lightcraft_parsing::cache::prune`] removes the oldest modification times first).
@@ -27,6 +28,8 @@ pub(crate) struct QuietRun {
 #[derive(Default)]
 struct RunSlot {
     key: Option<String>,
+    /// The version the parse is filed under ([`Filed::version`]).
+    version: Option<String>,
     flag: Option<Arc<AtomicBool>>,
     /// Stop the run as soon as it starts (asked for before its flag was known).
     stop: bool,
@@ -36,11 +39,6 @@ impl QuietRun {
     /// The cache key the parse looked up (known once the parse has started).
     pub(crate) fn key(&self) -> Option<String> {
         lock(&self.slot).key.clone()
-    }
-
-    /// Whether the model run has started (and so can be stopped).
-    pub(crate) fn running(&self) -> bool {
-        lock(&self.slot).flag.is_some()
     }
 
     /// Stop the run now, or as soon as it starts.
@@ -58,6 +56,31 @@ impl QuietRun {
         s.stop = false;
         s.flag = None;
     }
+
+    /// The version the parse is filed under (known once the parse has started).
+    pub(crate) fn version(&self) -> Option<String> {
+        lock(&self.slot).version.clone()
+    }
+
+    /// The parse looks up `key`, filed under `version`.
+    pub(super) fn note(&self, key: &str, version: &str) {
+        let mut s = lock(&self.slot);
+        s.key = Some(key.to_string());
+        s.version = Some(version.to_string());
+    }
+
+    /// Tests: whether a stop waits for the run to start.
+    #[cfg(test)]
+    pub(crate) fn stop_pending(&self) -> bool {
+        lock(&self.slot).stop
+    }
+}
+
+/// Where a parse is filed: the version ([`PeopleParsing::ahead_version`] at the time) and the cache key.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Filed {
+    pub version: String,
+    pub key: String,
 }
 
 thread_local! {
@@ -65,32 +88,23 @@ thread_local! {
     static QUIET: RefCell<Option<QuietRun>> = const { RefCell::new(None) };
 }
 
-fn quiet() -> Option<QuietRun> {
+pub(super) fn quiet() -> Option<QuietRun> {
     QUIET.with(|q| q.borrow().clone())
 }
 
 impl PeopleParsing {
     /// [`Self::parse`] of `img` with `hints`, waiting, for the parse-ahead queue: no row of its own; `run` learns the
-    /// key and the cancel flag. A run stopped through `run` ends as `Failed("cancelled")`, and leaves no message.
+    /// key, the version and the cancel flag. A run stopped through `run`, or by a request for another photo, ends as
+    /// `Failed("cancelled")`; it leaves no message and no result.
     pub(crate) fn parse_quietly(&self, img: RgbImage, hints: Vec<FaceHint>, run: &QuietRun) -> Outcome {
         QUIET.with(|q| *q.borrow_mut() = Some(run.clone()));
         let out = self.parse(img, hints, true);
         QUIET.with(|q| *q.borrow_mut() = None);
-        if matches!(&out, Outcome::Failed(e) if e == "cancelled") {
-            let mut m = lock(&self.inner.message);
-            if m.as_deref() == Some("cancelled") {
-                *m = None;
-            }
-        }
         out
     }
 
-    /// Hook of [`Self::remembered`]: every lookup of `key` marks its cache file as just used; a quiet parse also
-    /// learns the key.
+    /// Hook of [`Self::remembered`]: every lookup of `key` marks its cache file as just used.
     pub(super) fn looked_up(&self, key: &str) {
-        if let Some(q) = quiet() {
-            lock(&q.slot).key = Some(key.to_string());
-        }
         if let Some(dir) = self.cache_dir() {
             touch(&cache::path(&dir, key));
         }
@@ -133,9 +147,16 @@ impl PeopleParsing {
         Some(p)
     }
 
-    /// The version parses of the chosen set are filed under.
+    /// The version a parse is filed under now: the chosen set's, with the People edge's when it is not Current (the
+    /// one [`Self::parse`] keys on).
     pub(crate) fn ahead_version(&self) -> String {
-        self.model_set().version()
+        Self::version_of(self.model_set(), self.matting().as_ref())
+    }
+
+    /// Tests: file a finished run of `key` without caching its parse (a run that ended a moment ago).
+    #[cfg(test)]
+    pub(crate) fn test_finished(&self, key: &str, p: lightcraft_parsing::Parsing) {
+        lock(&self.inner.jobs).finish(key.to_string(), Ok(Arc::new(p)));
     }
 }
 

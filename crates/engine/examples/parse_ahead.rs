@@ -40,7 +40,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for pace in ["light", "normal"] {
         let t = Instant::now();
         let runs = s.parsing.runs();
-        let st = s.execute("parsing.ahead.pump", &json!({ "pace": pace, "wait": true }))?;
+        let st = settle(&mut s, pace)?;
         println!(
             "pace {pace}: {:.1} s, {} model runs, state {}, parsed {}, skipped {}, failed {}, queued {}",
             t.elapsed().as_secs_f64(),
@@ -79,7 +79,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     s.open_library(out.join("library"), false)?;
     s.selection = Selection::single(middle);
     let t = Instant::now();
-    let st = s.execute("parsing.ahead.pump", &json!({ "pace": "normal", "wait": true }))?;
+    let st = settle(&mut s, "normal")?;
     println!(
         "after a restart: {:.2} s, {} model runs, parsed {}, skipped {}",
         t.elapsed().as_secs_f64(),
@@ -101,4 +101,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         );
     }
     Ok(())
+}
+
+/// Pump at `pace` until the queue is done or stands still (a waiting pump returns after a few seconds).
+fn settle(s: &mut Session, pace: &str) -> Result<Value, Box<dyn std::error::Error>> {
+    loop {
+        let st = s.execute("parsing.ahead.pump", &json!({ "pace": pace, "wait": true }))?;
+        if !matches!(st["state"].as_str(), Some("working" | "paused" | "loading")) {
+            return Ok(st);
+        }
+    }
 }
