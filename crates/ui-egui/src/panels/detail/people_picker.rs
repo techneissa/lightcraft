@@ -36,7 +36,7 @@ pub(crate) struct Picker<'a> {
     /// `portrait:more`, `portrait:card`).
     pub id: &'a str,
     pub faces: &'a [FaceChip],
-    /// The face picked; `None`: All.
+    /// The face picked; `None`: All; an index past `faces`: none (a saved face not in this photo).
     pub face: Option<usize>,
     /// The parts row; empty: no row.
     pub parts: &'a [PartItem],

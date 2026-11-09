@@ -17,6 +17,7 @@ use crate::geometry::Frame;
 mod alpha;
 mod brush;
 mod key;
+mod people;
 mod planes;
 
 pub use alpha::note_evaluation;
@@ -528,6 +529,13 @@ fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Fram
             *v = fine.or_else(|| coarse.as_ref().map(|c| c.logit(n))).unwrap_or(-16.0) * gain;
         }
     });
+    // (fork, `fork/select-people.md`: a Select People part's pixels are each filtered with the window of the grid that
+    // gave their logit, so a small face's finer grid keeps its edge)
+    if people::is_people(seg, detail) {
+        people::filter(coarse.as_ref(), seg, &patches, detail, gain, frame, w, log_l, out);
+        out.map_in_place(|l| 1.0 / (1.0 + (-l).exp()));
+        return;
+    }
     // (the coarsest grid sets the window: it leaves the widest uncertain band)
     let cell = coarse.iter().chain(&patches).map(|g| g.cell_px(frame, w)).fold(0.0, f64::max);
     // (fork, `fork/hair-edges.md`: a grid whose edge BiRefNet-matting drew already follows the photo's strands; filtered

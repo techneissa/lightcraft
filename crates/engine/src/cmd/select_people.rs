@@ -140,7 +140,13 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
         None if everyone => None,
         None => Some(old_person.ok_or_else(|| bad(C, "the mask's face is not in the photo any more: pick a face"))?),
     };
-    let MaskShape::People { edge, .. } = old else { return Err(bad(C, "that part is not a Select People part")) };
+    let MaskShape::People { edge, seg: old_seg, .. } = old else { return Err(bad(C, "that part is not a Select People part")) };
+    // the same parts of the same face from the same parse: nothing to draw again (no undo step, no grid in the log)
+    let same_face = if everyone { person.is_none() } else { person.is_some() && person == old_person };
+    let same_parse = old_seg.and_then(|g| g.model) == Some(grid::model_id(&parsed.parsing, &Selection::of(person, &picks)));
+    if picks == old_picks && same_face && same_parse {
+        return Ok(json!({"activeMask": s.active_mask, "unchanged": true}));
+    }
     let mut shape = shape(s, &parsed, person, &picks, C)?;
     if let MaskShape::People { edge: e, .. } = &mut shape {
         *e = edge;
@@ -223,7 +229,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "Select People: Change Parts",
             [],
             None,
-            "{id?: mask id (default the selected mask), component?: part index (default its first Select People part), parts?: [entirePerson|entireFace|facialSkin|bodySkin|hair|eyebrows|eyeWhites|iris|lips|teeth|clothes|clothesTop|clothesBottom|dress|shoes|hat|bag|background], face?: person index|\"all\"} — change which parts, and whose, a Select People mask selects (what is not given stays) → {activeMask}",
+            "{id?: mask id (default the selected mask), component?: part index (default its first Select People part), parts?: [entirePerson|entireFace|facialSkin|bodySkin|hair|eyebrows|eyeWhites|iris|lips|teeth|clothes|clothesTop|clothesBottom|dress|shoes|hat|bag|background], face?: person index|\"all\"} — change which parts, and whose, a Select People mask selects (what is not given stays; the same parts of the same face change nothing) → {activeMask, unchanged?}",
             has_active,
             set
         ),

@@ -11,7 +11,8 @@
 //! A mask remembers its face as portrait retouching does (`crates/retouch/README.md`): by the person's name when the
 //! face is named in People, else by its box on the photo before the user's rotation ([`FaceKey`]).
 
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::DevelopSettings;
@@ -24,6 +25,7 @@ use crate::people_parsing::{Outcome, PARSE_EDGE};
 
 pub mod grid;
 pub mod parts;
+mod rebase;
 
 /// The parser's types, for hosts that show or fake a parse (the UI's tests).
 pub use lightcraft_parsing as parsing;
@@ -44,7 +46,8 @@ pub struct Parsed {
 
 #[derive(Clone)]
 enum Entry {
-    Busy,
+    /// A search is running; only the one started with this ticket files its result.
+    Busy(u64),
     Ready(Arc<Parsed>),
     Failed(String),
 }
@@ -57,15 +60,27 @@ pub struct PeopleState {
     pub error: Option<String>,
 }
 
+#[derive(Default)]
+struct Store {
+    entries: Mutex<Vec<(String, Entry)>>,
+    /// Signalled when a search files its result.
+    done: Condvar,
+    tickets: AtomicU64,
+}
+
+/// How long a command waits for a search already running before it gives up (a guard against a hang only: a parse
+/// takes seconds).
+const WAIT: std::time::Duration = std::time::Duration::from_secs(600);
+
 /// The people found per photo (the newest [`KEEP`]). Cheap to clone; every clone is the same.
 #[derive(Clone, Default)]
 pub struct SelectPeople {
-    entries: Arc<Mutex<Vec<(String, Entry)>>>,
+    store: Arc<Store>,
 }
 
 impl SelectPeople {
     fn lock(&self) -> MutexGuard<'_, Vec<(String, Entry)>> {
-        self.entries.lock().unwrap_or_else(PoisonError::into_inner)
+        self.store.entries.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn get(&self, key: &str) -> Option<Entry> {
@@ -78,14 +93,47 @@ impl SelectPeople {
         st.push((key.to_string(), e));
         // (the oldest finished entries go first; a search still running stays)
         while st.len() > KEEP {
-            let Some(i) = st.iter().position(|(_, e)| !matches!(e, Entry::Busy)) else { break };
+            let Some(i) = st.iter().position(|(_, e)| !matches!(e, Entry::Busy(_))) else { break };
             st.remove(i);
         }
+        drop(st);
+        self.store.done.notify_all();
     }
 
-    /// Forget every photo (the model set or the hair edges changed: their parses differ).
-    pub fn clear(&self) {
-        self.lock().retain(|(_, e)| matches!(e, Entry::Busy));
+    /// Mark a search of `key` as running: its ticket.
+    fn start(&self, key: &str) -> u64 {
+        let ticket = self.store.tickets.fetch_add(1, Ordering::Relaxed);
+        self.put(key, Entry::Busy(ticket));
+        ticket
+    }
+
+    /// File the result of search `ticket`: only while it is the one running for `key` (a search started since, or a
+    /// result filed since, wins).
+    fn finish(&self, key: &str, ticket: u64, e: Entry) {
+        let mut st = self.lock();
+        if let Some(slot) = st.iter_mut().find(|(k, now)| k == key && matches!(now, Entry::Busy(t) if *t == ticket)) {
+            slot.1 = e;
+        }
+        drop(st);
+        self.store.done.notify_all();
+    }
+
+    /// `key`'s entry once no search of it is running (at most [`WAIT`]; still running then: `Busy`).
+    fn settled(&self, key: &str) -> Option<Entry> {
+        let deadline = web_time::Instant::now() + WAIT;
+        let mut st = self.lock();
+        loop {
+            match st.iter().find(|(k, _)| k == key).map(|(_, e)| e.clone()) {
+                Some(Entry::Busy(t)) => {
+                    let left = deadline.saturating_duration_since(web_time::Instant::now());
+                    if left.is_zero() {
+                        return Some(Entry::Busy(t));
+                    }
+                    st = self.store.done.wait_timeout(st, left).unwrap_or_else(PoisonError::into_inner).0;
+                }
+                other => return other,
+            }
+        }
     }
 }
 
@@ -194,11 +242,18 @@ impl Prep {
 }
 
 impl Session {
-    /// The key photo `id`'s people are kept under: its pixels, the parse's model set and the people edge.
+    /// The key photo `id`'s people are kept under: its pixels, the parse's model set, the people edge and the names
+    /// of its faces in People (a face named or renamed since is found again under its new name).
     fn people_key(&self, id: PhotoId) -> Option<String> {
+        use std::hash::{Hash, Hasher};
         let p = self.catalog.photo(id)?;
         let edge = self.hair_edges.edge(crate::hair_edges::EdgeKind::People);
-        Some(format!("{}|{}|{edge:?}", crate::media::content_key(p), self.parsing.model_set().id()))
+        let mut names = std::collections::hash_map::DefaultHasher::new();
+        for r in p.meta.regions.iter().filter(|r| r.kind == lightcraft_meta::RegionKind::Face) {
+            r.name.hash(&mut names);
+            [r.rect.x0, r.rect.y0, r.rect.x1, r.rect.y1].map(f64::to_bits).hash(&mut names);
+        }
+        Some(format!("{}|{}|{edge:?}|{:x}", crate::media::content_key(p), self.parsing.model_set().id(), names.finish()))
     }
 
     fn people_prep(&mut self, id: PhotoId) -> Result<Prep, String> {
@@ -212,7 +267,7 @@ impl Session {
     pub fn people_of(&self, id: PhotoId) -> PeopleState {
         match self.people_key(id).and_then(|k| self.select_people.get(&k)) {
             Some(Entry::Ready(p)) => PeopleState { ready: Some(p), busy: false, error: None },
-            Some(Entry::Busy) => PeopleState { busy: true, ..Default::default() },
+            Some(Entry::Busy(_)) => PeopleState { busy: true, ..Default::default() },
             Some(Entry::Failed(e)) => PeopleState { error: Some(e), ..Default::default() },
             None => PeopleState::default(),
         }
@@ -223,7 +278,7 @@ impl Session {
     pub fn people_find(&mut self, id: PhotoId, again: bool) {
         let Some(key) = self.people_key(id) else { return };
         match self.select_people.get(&key) {
-            Some(Entry::Busy) => return,
+            Some(Entry::Busy(_)) => return,
             Some(_) if !again => return,
             _ => {}
         }
@@ -231,7 +286,7 @@ impl Session {
             Ok(p) => p,
             Err(e) => return self.select_people.put(&key, Entry::Failed(e)),
         };
-        self.select_people.put(&key, Entry::Busy);
+        let ticket = self.select_people.start(&key);
         #[cfg(not(target_arch = "wasm32"))]
         {
             let store = self.select_people.clone();
@@ -246,48 +301,53 @@ impl Session {
                         // (the parse holds its own row while its model runs)
                         drop(row);
                         let (img, hints) = prepared?;
-                        match parsing.parse(img.clone(), hints, true) {
-                            Outcome::Ready { parsing, .. } => Ok(parsed(parsing, &img)),
-                            Outcome::Running => Err("the people parse did not finish".to_string()),
-                            Outcome::Failed(e) => Err(e),
-                        }
+                        parse_now(&parsing, img, hints)
                     }));
                     let entry = match ran {
                         Ok(Ok(p)) => Entry::Ready(p),
                         Ok(Err(e)) => Entry::Failed(e),
                         Err(_) => Entry::Failed("finding people stopped unexpectedly".into()),
                     };
-                    store.put(&key, entry);
+                    store.finish(&key, ticket, entry);
                 }
             });
             if let Err(e) = spawned {
-                store.put(&key, Entry::Failed(format!("could not start finding people: {e}")));
+                store.finish(&key, ticket, Entry::Failed(format!("could not start finding people: {e}")));
             }
         }
         #[cfg(target_arch = "wasm32")]
         {
             let _ = prep;
-            self.select_people.put(&key, Entry::Failed("the web build has no people parsing".into()));
+            self.select_people.finish(&key, ticket, Entry::Failed("the web build has no people parsing".into()));
         }
     }
 
-    /// Photo `id`'s people, found now (waiting for the parse) when they are not known (commands, tests).
+    /// Photo `id`'s people, found now when they are not known (commands, tests). A search already running for them
+    /// is waited for and its result used, so every mask of the photo is drawn from the one parse the picker shows.
     pub fn people_now(&mut self, id: PhotoId) -> Result<Arc<Parsed>, String> {
         let key = self.people_key(id).ok_or("no such photo")?;
-        if let Some(Entry::Ready(p)) = self.select_people.get(&key) {
-            return Ok(p);
+        match self.select_people.settled(&key) {
+            Some(Entry::Ready(p)) => return Ok(p),
+            Some(Entry::Busy(_)) => return Err("finding people did not finish".into()),
+            Some(Entry::Failed(_)) | None => {}
         }
-        let (img, hints) = self.people_prep(id)?.run()?;
-        let result = match self.parsing.parse(img.clone(), hints, true) {
-            Outcome::Ready { parsing, .. } => Ok(parsed(parsing, &img)),
-            Outcome::Running => Err("the people parse did not finish".to_string()),
-            Outcome::Failed(e) => Err(e),
-        };
-        // (a search running for it on a worker files the same result when it ends)
-        self.select_people.put(&key, result.clone().map_or_else(Entry::Failed, Entry::Ready));
+        let ticket = self.select_people.start(&key);
+        let result = self.people_prep(id).and_then(Prep::run).and_then(|(img, hints)| parse_now(&self.parsing, img, hints));
+        self.select_people.finish(&key, ticket, result.clone().map_or_else(Entry::Failed, Entry::Ready));
         result
+    }
+}
+
+/// Parse `img` (waiting for the model) into a photo's people.
+fn parse_now(parsing: &crate::people_parsing::PeopleParsing, img: RgbImage, hints: Vec<FaceHint>) -> Result<Arc<Parsed>, String> {
+    match parsing.parse(img.clone(), hints, true) {
+        Outcome::Ready { parsing, .. } => Ok(parsed(parsing, &img)),
+        Outcome::Running => Err("the people parse did not finish".to_string()),
+        Outcome::Failed(e) => Err(e),
     }
 }
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_round;

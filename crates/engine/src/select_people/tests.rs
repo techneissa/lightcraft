@@ -14,20 +14,20 @@ use super::grid::{Selection, build};
 use super::{Pick, face_key, find_person};
 use crate::Session;
 
-fn temp_dir(tag: &str) -> std::path::PathBuf {
+pub(super) fn temp_dir(tag: &str) -> std::path::PathBuf {
     let d = std::env::temp_dir().join(format!("lc-{tag}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
 }
 
-fn plane(r: NormRect, side: usize) -> Plane {
+pub(super) fn plane(r: NormRect, side: usize) -> Plane {
     Plane { rect: r, width: side, height: side, data: vec![1.0; side * side] }
 }
 
 /// A person whose every part is its own small square inside the box at (`x`, `y`) of side `s`: part `i` of
 /// `Part::ALL` at column `i % 4`, row `i / 4`.
-fn person(x: f32, y: f32, s: f32, name: Option<&str>) -> Person {
+pub(super) fn person(x: f32, y: f32, s: f32, name: Option<&str>) -> Person {
     let mut q = Person {
         face: Some(NormRect::new(x, y, x + s, y + s)),
         face_score: 0.9,
@@ -49,13 +49,13 @@ fn person(x: f32, y: f32, s: f32, name: Option<&str>) -> Person {
     q
 }
 
-fn parse(people: Vec<Person>) -> Parsing {
+pub(super) fn parse(people: Vec<Person>) -> Parsing {
     Parsing { model_set: "segformer".into(), model_version: "1".into(), width: 2048, height: 1365, people }
 }
 
 /// The coverage (0 to 1) the grids select at a point of the mask's frame: a finer grid inside its box, else the
 /// main one (as a render samples them, without the edge filter).
-fn at(main: &SegMask, detail: &[SegMask], x: f64, y: f64) -> f32 {
+pub(super) fn at(main: &SegMask, detail: &[SegMask], x: f64, y: f64) -> f32 {
     let sample = |g: &SegMask| -> Option<f32> {
         let r = g.bounds()?;
         if x < r[0] || x > r[2] || y < r[1] || y > r[3] {
@@ -71,7 +71,7 @@ fn at(main: &SegMask, detail: &[SegMask], x: f64, y: f64) -> f32 {
 }
 
 /// The centre of part `part`'s square in [`person`].
-fn centre(x: f32, y: f32, s: f32, part: Part) -> (f64, f64) {
+pub(super) fn centre(x: f32, y: f32, s: f32, part: Part) -> (f64, f64) {
     let i = Part::ALL.iter().position(|p| *p == part).unwrap();
     let c = s / 4.0;
     (f64::from(x + (i % 4) as f32 * c + c / 2.0), f64::from(y + (i / 4) as f32 * c + c / 2.0))
@@ -193,12 +193,12 @@ fn a_mask_finds_its_face_by_name_or_by_place() {
 
 // ---- the session and its commands
 
-fn fake_people() -> Parsing {
+pub(super) fn fake_people() -> Parsing {
     parse(vec![person(0.08, 0.2, 0.3, Some("Ann")), person(0.6, 0.2, 0.3, None)])
 }
 
 /// A session with a 1200 × 800 photo, a fake parser and (with `dir`) a library on disk.
-fn session(tag: &str) -> (Session, std::path::PathBuf) {
+pub(super) fn session(tag: &str) -> (Session, std::path::PathBuf) {
     let dir = temp_dir(&format!("select-people-{tag}"));
     let (w, h) = (1200usize, 800usize);
     let data: Vec<[u8; 4]> = (0..w * h).map(|i| if (i % w) * 100 < w * 55 { [60, 50, 40, 255] } else { [200, 190, 180, 255] }).collect();
@@ -218,7 +218,7 @@ fn session(tag: &str) -> (Session, std::path::PathBuf) {
     (s, dir)
 }
 
-fn people_part(s: &Session) -> MaskShape {
+pub(super) fn people_part(s: &Session) -> MaskShape {
     let id = s.active().unwrap();
     let d = s.develop_of(id).unwrap();
     let m = d.masks.iter().find(|m| Some(m.id) == s.active_mask).unwrap();

@@ -1219,7 +1219,13 @@ impl Session {
     /// White balance goes on each photo as the active photo's mode or value on the photo's own
     /// scale ([`sync_same`]): As Shot its own camera white, Auto its own (`own_auto`, worked out on
     /// its pixels), a Temp or Tint the same number, only the slider that moved.
-    fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str, own_auto: &std::collections::HashMap<PhotoId, (f64, f64)>) -> Vec<Op> {
+    fn auto_sync_ops(
+        &mut self,
+        id: PhotoId,
+        new: &DevelopSettings,
+        label: &str,
+        own_auto: &std::collections::HashMap<PhotoId, (f64, f64)>,
+    ) -> Vec<Op> {
         if !self.auto_sync_applies(id, label) {
             return Vec::new();
         }
@@ -1251,20 +1257,22 @@ impl Session {
         }
         let ainfo = self.source_info(id);
         let wb_changed = old.wb != new.wb;
-        self.selection
-            .ids
-            .iter()
-            .filter(|x| **x != id)
-            .filter_map(|x| self.develop_of(*x).map(|d| (*x, d)))
-            .filter_map(|(x, d)| {
-                let mut synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
-                if wb_changed {
-                    sync_same::synced_wb(&ainfo, &old, new, &self.source_info(x), &d, own_auto.get(&x).copied(), &mut synced);
-                }
-                let synced = self.fit_constrained_crop(x, synced);
-                (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
-            })
-            .collect()
+        let others: Vec<PhotoId> = self.selection.ids.iter().copied().filter(|x| *x != id).collect();
+        let mut ops = Vec::new();
+        for x in others {
+            let Some(d) = self.develop_of(x) else { continue };
+            let mut synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
+            if wb_changed {
+                sync_same::synced_wb(&ainfo, &old, new, &self.source_info(x), &d, own_auto.get(&x).copied(), &mut synced);
+            }
+            // (fork, `fork/select-people.md`: a Select People part is drawn from this photo's own people)
+            let synced = self.people_rebased(x, &d, synced);
+            let synced = self.fit_constrained_crop(x, synced);
+            if synced != *d {
+                ops.extend(self.develop_op(x, synced, label));
+            }
+        }
+        ops
     }
 
     /// Auto Sync carries an edit of photo `id` labelled `label` to the other selected photos: it is

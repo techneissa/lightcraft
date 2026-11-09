@@ -48,12 +48,18 @@ pub(crate) fn set_mode(ctx: &egui::Context, m: Mode) {
     ctx.data_mut(|d| d.insert_temp(mode_id(), m));
 }
 
-/// A mask asked for before the photo's people were found: its photo and `selectPeople.add` parameters.
+/// A mask asked for before the photo's people were found: its `selectPeople.add` parameters, one per photo (made
+/// when the people are found and the photo is shown, also after showing another photo meanwhile).
 #[derive(Clone)]
-struct Pending(PhotoId, Value);
+struct Pending(Value);
 
-fn pending_id() -> egui::Id {
-    egui::Id::unique("selectPeople-pending")
+fn pending_id(photo: PhotoId) -> egui::Id {
+    egui::Id::unique(("selectPeople-pending", photo.0))
+}
+
+/// The photo whose people the picker asked for since the Masking panel last opened on it.
+fn asked_id() -> egui::Id {
+    egui::Id::unique("selectPeople-asked")
 }
 
 /// The face picked while no Select People mask is selected (for the next new mask), per photo.
@@ -70,7 +76,7 @@ fn add(app: &mut LightcraftApp, ctx: &egui::Context, photo: PhotoId, params: Val
         return;
     }
     app.session.people_find(photo, true);
-    ctx.data_mut(|d| d.insert_temp(pending_id(), Pending(photo, params)));
+    ctx.data_mut(|d| d.insert_temp(pending_id(photo), Pending(params)));
 }
 
 /// The Person / Background / Custom row under Create New Mask. True when the usual tiles show (Custom).
@@ -174,10 +180,15 @@ fn active_part(app: &LightcraftApp, photo: PhotoId) -> Option<(u32, MaskShape)> 
     Some((mid, c.shape.clone()))
 }
 
-/// The textures of the photo's people's face thumbnails, made once per parse.
+/// The textures of the photo's people's face thumbnails, made once per parse. One set is kept: the photo shown.
 fn thumbs(ctx: &egui::Context, photo: PhotoId, parsed: &Arc<Parsed>) -> Arc<Vec<egui::TextureHandle>> {
-    let id = egui::Id::unique(("selectPeopleThumbs", photo.0, Arc::as_ptr(parsed) as usize));
-    if let Some(t) = ctx.data(|d| d.get_temp::<Arc<Vec<egui::TextureHandle>>>(id)) {
+    type Kept = (PhotoId, usize, Arc<Vec<egui::TextureHandle>>);
+    let id = egui::Id::unique("selectPeopleThumbs");
+    let made = Arc::as_ptr(parsed) as usize;
+    if let Some((p, m, t)) = ctx.data(|d| d.get_temp::<Kept>(id))
+        && p == photo
+        && m == made
+    {
         return t;
     }
     let textures: Vec<egui::TextureHandle> = parsed
@@ -191,7 +202,8 @@ fn thumbs(ctx: &egui::Context, photo: PhotoId, parsed: &Arc<Parsed>) -> Arc<Vec<
         })
         .collect();
     let textures = Arc::new(textures);
-    ctx.data_mut(|d| d.insert_temp(id, textures.clone()));
+    // (the set kept before is dropped here, and its textures with it)
+    ctx.data_mut(|d| d.insert_temp::<Kept>(id, (photo, made, textures.clone())));
     textures
 }
 
@@ -199,20 +211,19 @@ fn thumbs(ctx: &egui::Context, photo: PhotoId, parsed: &Arc<Parsed>) -> Arc<Vec<
 pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, photo: PhotoId) {
     let ctx = ui.ctx().clone();
     if app.ui.right != RightPanel::Masking {
+        ctx.data_mut(|d| d.remove::<PhotoId>(asked_id()));
         return;
     }
     let st = app.session.people_of(photo);
     // a mask asked for before the people were found
-    if let Some(Pending(p, params)) = ctx.data(|d| d.get_temp::<Pending>(pending_id())) {
-        if p != photo {
-            ctx.data_mut(|d| d.remove::<Pending>(pending_id()));
-        } else if st.ready.is_some() {
-            ctx.data_mut(|d| d.remove::<Pending>(pending_id()));
+    if let Some(Pending(params)) = ctx.data(|d| d.get_temp::<Pending>(pending_id(photo))) {
+        if st.ready.is_some() {
+            ctx.data_mut(|d| d.remove::<Pending>(pending_id(photo)));
             if let Err(e) = app.run("selectPeople.add", params) {
                 app.toast_error(&ctx, e);
             }
         } else if let Some(e) = &st.error {
-            ctx.data_mut(|d| d.remove::<Pending>(pending_id()));
+            ctx.data_mut(|d| d.remove::<Pending>(pending_id(photo)));
             app.toast_error(&ctx, format!("Select People: {e}"));
         }
     }
@@ -220,7 +231,9 @@ pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, 
     if part.is_none() && mode(&ctx) == Mode::Custom {
         return;
     }
-    if st.ready.is_none() && !st.busy && st.error.is_none() {
+    // (asked once per photo while the panel is open, not from every frame: a click on Person or Background asks again)
+    if ctx.data(|d| d.get_temp::<PhotoId>(asked_id())) != Some(photo) {
+        ctx.data_mut(|d| d.insert_temp(asked_id(), photo));
         app.session.people_find(photo, false);
     }
     if st.busy || st.ready.is_none() {
@@ -239,19 +252,21 @@ pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, 
         .unwrap_or_default();
     let items: Vec<PartItem> =
         if ready.is_some() { Pick::ALL.iter().map(|p| PartItem { key: p.id().into(), label: p.label().into() }).collect() } else { Vec::new() };
-    let (picks, face) = match part.as_ref().and_then(|(_, shape)| current(shape, ready.as_deref())) {
-        Some((picks, person, _)) => (picks, person),
-        None => (Vec::new(), ctx.data(|d| d.get_temp::<usize>(face_id(photo)))),
+    // (a saved face this photo's people don't have: no chip is picked, and the note says so)
+    let (picks, face, missing) = match part.as_ref().and_then(|(_, shape)| current(shape, ready.as_deref())) {
+        Some((picks, person, everyone)) => (picks, person, ready.is_some() && !everyone && person.is_none()),
+        None => (Vec::new(), ctx.data(|d| d.get_temp::<usize>(face_id(photo))), false),
     };
     let selected: Vec<usize> = picks.iter().filter_map(|p| Pick::ALL.iter().position(|q| q == p)).collect();
     let note = match (&ready, &st.error) {
         _ if st.busy => Some("Finding people…".to_string()),
         (Some(p), _) if p.parsing.people.is_empty() => Some("No people found".into()),
+        (Some(_), _) if missing => Some("Face not in this photo".into()),
         (None, Some(e)) => Some(e.clone()),
         (None, None) => Some("Finding people…".into()),
         _ => None,
     };
-    let face = face.filter(|i| *i < chips.len());
+    let face = if missing { Some(chips.len()) } else { face.filter(|i| *i < chips.len()) };
     let pk = Picker {
         id: "selectPeople",
         faces: &chips,

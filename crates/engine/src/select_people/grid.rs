@@ -69,6 +69,11 @@ pub fn build(p: &Parsing, sel: &Selection, orient: Orientation) -> Option<(SegMa
         return None;
     }
     let model = model_id(p, sel);
+    // the people and everything that is not them: the whole photo (their outline would otherwise stay half selected,
+    // where each side's soft edge is at 0.5)
+    if sel.background && sel.parts.contains(&Part::EntirePerson) {
+        return Some((grid(&vec![1.0; MIN_SIDE * MIN_SIDE], MIN_SIDE, &NormRect::new(0.0, 0.0, 1.0, 1.0), &model), Vec::new()));
+    }
     let main_rect = if sel.background { NormRect::new(0.0, 0.0, 1.0, 1.0) } else { padded(union(parts.iter().map(|q| q.rect))?)? };
     let side = side_for(&main_rect, parts.iter().chain(&bodies));
     let draw = |rect: &NormRect, side: usize| draw(rect, side, &parts, &bodies, sel.background, orient);
@@ -97,13 +102,30 @@ pub fn build(p: &Parsing, sel: &Selection, orient: Orientation) -> Option<(SegMa
     Some((main, detail))
 }
 
-/// The model id the grids are marked with: the parse's set, and `+matting` when every part drawn has an edge
-/// BiRefNet Matting drew (Entire Person and Background of a parse with matting edges), so a render does not
-/// filter that edge again (`lightcraft_pipeline::masks::sample_seg`).
-fn model_id(p: &Parsing, sel: &Selection) -> String {
-    let matted = p.model_version.contains("+matting") && sel.parts.iter().all(|&part| part == Part::EntirePerson);
+/// The model id the grids are marked with: the parse's set, and the edge model's mark (`+matting` for BiRefNet
+/// Matting, `+vision` for Apple Vision) when the parse's people edges came from one and the selection takes an edge
+/// it drew: Entire Person, Background (what the people are not) or Hair (it gains the strands the edge found). Such a
+/// grid is not filtered again by a render at any size (`lightcraft_pipeline::masks::sample_seg`), so preview and
+/// export draw the same outline.
+pub fn model_id(p: &Parsing, sel: &Selection) -> String {
     let set = if p.model_set.is_empty() { "people" } else { p.model_set.as_str() };
-    if matted { format!("people:{set}+matting") } else { format!("people:{set}") }
+    let edged = sel.background || sel.parts.iter().any(|part| matches!(part, Part::EntirePerson | Part::Hair));
+    let vision = crate::hair_edges::vision::SUFFIX;
+    let mark = if !edged {
+        ""
+    } else if p.model_version.contains("+matting") {
+        "+matting"
+    } else if p.model_version.contains(vision) {
+        vision
+    } else {
+        ""
+    };
+    format!("people:{set}{mark}")
+}
+
+/// A grid that selects nothing, over the whole photo (a saved face not in this photo, or no parse of it).
+pub fn nothing(model: &str) -> SegMask {
+    grid(&vec![0.0; MIN_SIDE * MIN_SIDE], MIN_SIDE, &NormRect::new(0.0, 0.0, 1.0, 1.0), model)
 }
 
 fn placed(plane: &Plane, person: usize, orient: Orientation) -> Placed<'_> {
