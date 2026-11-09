@@ -338,8 +338,9 @@ fn op_variants_are_versioned() {
     /// records and `Photo.history` steps as patches (`journal_delta`, `history_serde`, #77). A later fork
     /// op or field raises this and `fork_format::VERSION` (and is matched above under no official number). v3: the
     /// develop settings' `look`, Match Look's residual Look (#90). v4: `Mask.decontaminate` (#115). v5: Select People's `MaskShape::People` `face`, `seg`,
-    /// `detail` and `edge`, its grids in the shared table (#123).
-    const NEWEST_FORK_FIELDS: u32 = 5;
+    /// `detail` and `edge`, its grids in the shared table (#123). v8: the Portrait tab's Refine strokes,
+    /// `fork_retouch.refine` and `fork_retouch.faces[].refine` (#99; 6 and 7 go to Face Reshape and Background).
+    const NEWEST_FORK_FIELDS: u32 = 8;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), crate::fork_format::LEGACY_FORK_MAX, "the newest official-numbered op or field");
     assert_eq!(NEWEST_FORK_FIELDS, VERSION, "the newest fork op's or fields' version must be the current format version");

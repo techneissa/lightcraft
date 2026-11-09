@@ -89,14 +89,15 @@ impl View for FrameView {
 struct PhotoView {
     to_photo: crate::geometry::MaskMap,
     to_out: Box<dyn Fn(Point) -> Option<Point> + Sync>,
-    keys: FrameKeyMap,
+    /// The frame Refine strokes are in (after lens corrections and transform, as [`FrameView`]).
+    edit: FrameView,
 }
 
 impl PhotoView {
     fn new(frame: &crate::geometry::Frame, w: usize, h: usize, orient: Orientation) -> PhotoView {
-        let keys = FrameKeyMap::new(frame, orient);
+        let edit = FrameView::new(frame, w, h, orient);
         let frame = frame.for_mask(true);
-        PhotoView { to_photo: frame.out_to_mask(w, h), to_out: Box::new(frame.mask_to_out(w, h)), keys }
+        PhotoView { to_photo: frame.out_to_mask(w, h), to_out: Box::new(frame.mask_to_out(w, h)), edit }
     }
 }
 
@@ -111,7 +112,15 @@ impl View for PhotoView {
     }
 
     fn key_map(&self) -> Option<&dyn KeyMap> {
-        Some(&self.keys)
+        Some(&self.edit.keys)
+    }
+
+    fn to_edit(&self, x: f64, y: f64) -> (f64, f64) {
+        self.edit.to_norm(x, y)
+    }
+
+    fn edit_to_px(&self, nx: f64, ny: f64) -> Option<(f64, f64)> {
+        self.edit.to_px(nx, ny)
     }
 }
 
@@ -151,11 +160,13 @@ pub fn window_for_reads(
     let o = s.orientation;
     let view: Box<dyn View> =
         if input.on_photo { Box::new(PhotoView::new(frame, full_w, full_h, o)) } else { Box::new(FrameView::new(frame, full_w, full_h, o)) };
+    // where Refine Add strokes widen masks: their points' box grown by their radius, in pixels
+    let add = reads.add.and_then(|(b, r)| add_box(b, r, view.as_ref()));
     let (fw, fh) = (full_w as f64, full_h as f64);
     let [wx0, wy0, wx1, wy1] = [win.x as f64, win.y as f64, (win.x + win.w) as f64, (win.y + win.h) as f64];
     let (mut x0, mut y0, mut x1, mut y1) = (wx0, wy0, wx1, wy1);
     for face in input.faces.iter().take(MAX_FACES) {
-        let Some([rx0, ry0, rx1, ry1]) = read_box(face, &reads, view.as_ref()) else { continue };
+        let Some([rx0, ry0, rx1, ry1]) = read_box(face, &reads, add, view.as_ref()) else { continue };
         let (rx0, ry0, rx1, ry1) = (rx0.max(0.0), ry0.max(0.0), rx1.min(fw), ry1.min(fh));
         if rx0 < wx1 && rx1 > wx0 && ry0 < wy1 && ry1 > wy0 {
             (x0, y0, x1, y1) = (x0.min(rx0), y0.min(ry0), x1.max(rx1), y1.max(ry1));
@@ -170,9 +181,25 @@ pub fn window_for_reads(
 /// warp bends them).
 const EDGE_STEPS: usize = 16;
 
+/// The pixels Refine Add strokes can widen a mask to: the box `b` of their points (the frame [`View::to_edit`] speaks)
+/// grown by `r` long edges of that frame. `None` when it maps nowhere.
+fn add_box(b: [f64; 4], r: f64, view: &dyn View) -> Option<[f64; 4]> {
+    let corners = [(b[0], b[1]), (b[2], b[1]), (b[0], b[3]), (b[2], b[3])];
+    let mut out = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    for (x, y) in corners {
+        let (px, py) = view.edit_to_px(x, y).filter(|(x, y)| x.is_finite() && y.is_finite())?;
+        out = [out[0].min(px), out[1].min(py), out[2].max(px), out[3].max(py)];
+    }
+    let (o, ex, ey) = (view.edit_to_px(0.0, 0.0)?, view.edit_to_px(1.0, 0.0)?, view.edit_to_px(0.0, 1.0)?);
+    let len = |a: (f64, f64), b: (f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+    let grow = r * len(o, ex).max(len(o, ey)) + 2.0;
+    grow.is_finite().then_some([out[0] - grow, out[1] - grow, out[2] + grow, out[3] + grow])
+}
+
 /// What retouching reads for `face`, in `view`'s pixels: `[x0, y0, x1, y1]`, unclamped; `None` for a face that is
-/// not a box or maps nowhere.
-fn read_box(face: &Face, reads: &Reads, view: &dyn View) -> Option<[f64; 4]> {
+/// not a box or maps nowhere. `add`: where Refine Add strokes widen masks ([`add_box`]); a face's masks may reach
+/// there.
+fn read_box(face: &Face, reads: &Reads, add: Option<[f64; 4]>, view: &dyn View) -> Option<[f64; 4]> {
     let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
     add_rect(&mut b, &face.bounds, view);
     // the face's size, as the step sees it: the longer side of its box's bounding box
@@ -184,6 +211,9 @@ fn read_box(face: &Face, reads: &Reads, view: &dyn View) -> Option<[f64; 4]> {
         if let Some(m) = face.mask(*p) {
             add_rect(&mut b, &m.area, view);
         }
+    }
+    if let Some(a) = add {
+        b = [b[0].min(a[0]), b[1].min(a[1]), b[2].max(a[2]), b[3].max(a[3])];
     }
     // (and a pixel for rounding)
     let grow = reads.reach * size + 2.0;

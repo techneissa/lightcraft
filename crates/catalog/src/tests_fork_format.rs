@@ -319,7 +319,7 @@ fn a_decontaminated_mask_is_fork_format_4() {
 /// with nothing lost. Its grids go in the shared table, once for both History steps.
 #[test]
 fn a_select_people_mask_is_fork_format_5() {
-    assert_eq!(VERSION, 5);
+    const { assert!(VERSION >= 5) };
     let seg = SegMask::from_logits(8, &[3.0; 64]).made_by("people:segformer");
     let fine = SegMask::from_logits_in(8, &[-3.0; 64], [0.1, 0.1, 0.3, 0.3]).made_by("people:segformer");
     let face = lightcraft_develop::retouch::FaceKey {
@@ -341,7 +341,7 @@ fn a_select_people_mask_is_fork_format_5() {
     m.set(SNAPSHOT, snapshot(FORK_FORMAT, 4, 1, &c.to_snapshot()));
     let (mut j, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
     assert_eq!((r.upgraded_from, loaded.to_snapshot()), (Some(4), c.to_snapshot()));
-    assert_eq!(header(&m), (FORK_FORMAT.to_string(), 5));
+    assert_eq!(header(&m), (FORK_FORMAT.to_string(), u64::from(VERSION)));
     j.snapshot(&loaded).unwrap();
     drop(j);
     let body = String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap();
@@ -351,4 +351,32 @@ fn a_select_people_mask_is_fork_format_5() {
     let p = again.photo(id).unwrap();
     assert_eq!(p.develop.masks[0].components[0].shape, shape);
     assert!(p.history.iter().all(|h| h.settings.masks[0].components[0].shape == shape), "every History step");
+}
+
+/// Fork 8 (#99): Refine strokes, for every face and a face's own, are saved and read back whole, written as fork 8 so
+/// an older build refuses them instead of dropping them; a fork 7 library opens and is upgraded with nothing lost.
+#[test]
+fn refine_strokes_are_fork_format_8() {
+    use lightcraft_develop::retouch::{Face, NormRect, RefineMode, RefineStroke};
+    const { assert!(VERSION >= 8) };
+    let mut d = DevelopSettings::default();
+    let stroke = |mode| RefineStroke { mode, points: vec![(0.2, 0.3), (0.4, 0.35)], pressure: vec![0.5, 0.9], ..RefineStroke::default() };
+    d.retouch.global.set("retouch.skin.smoothness", 40.0);
+    assert!(d.retouch.refine.push("skin", stroke(RefineMode::Reduce)));
+    let face = Face::boxed(NormRect::new(0.1, 0.1, 0.3, 0.3));
+    assert!(d.retouch.own_mut_in(std::slice::from_ref(&face), 0, None).unwrap().refine.push("teethLips", stroke(RefineMode::Add)));
+    let mut c = Catalog::new();
+    let id = photo(&mut c, d.clone(), None);
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snapshot(FORK_FORMAT, 7, 1, &c.to_snapshot()));
+    let (mut j, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.upgraded_from, loaded.to_snapshot()), (Some(7), c.to_snapshot()));
+    assert_eq!(header(&m), (FORK_FORMAT.to_string(), u64::from(VERSION)));
+    j.snapshot(&loaded).unwrap();
+    drop(j);
+    let (_, again, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, None);
+    let p = again.photo(id).unwrap();
+    assert_eq!(p.develop.retouch, d.retouch);
+    assert!(p.history.iter().all(|h| h.settings.retouch == d.retouch), "every History step");
 }
