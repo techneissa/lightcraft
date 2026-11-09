@@ -139,6 +139,7 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
         && let Some(Gesture::Spot { points }) = &app.gesture
     {
         super::brush_outline::painting(
+            ui.ctx(),
             &p,
             map,
             points,
@@ -162,8 +163,8 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
             _ => "remove",
         };
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
-        let params = json!({"mode": mode, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity, "background": true});
-        add_spot(app, mode, params);
+        let params = json!({"mode": mode, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity, "background": true, "lasso": app.ui.remove_lasso});
+        add_spot(app, ui.ctx(), mode, params);
     }
 }
 
@@ -214,7 +215,7 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
             _ => "remove",
         };
         let params = json!({"mode": mode, "points": [[place.0, place.1]], "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity, "background": true});
-        add_spot(app, mode, params);
+        add_spot(app, ui.ctx(), mode, params);
         return true;
     }
     false
@@ -279,9 +280,12 @@ pub(super) fn eye_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
 }
 
 /// Run `spot.add` with `params` (the fill of `mode` added), timed under `LIGHTCRAFT_PROFILE`.
-fn add_spot(app: &mut LightcraftApp, mode: &str, params: serde_json::Value) {
+fn add_spot(app: &mut LightcraftApp, ctx: &egui::Context, mode: &str, params: serde_json::Value) {
     let t = lightcraft_engine::media::dirty::clock();
-    let _ = app.run("spot.add", crate::panels::right::with_fill(app, mode, params));
+    // (a refused lasso, one that would cover most of the photo, says why)
+    if let Err(e) = app.run("spot.add", crate::panels::right::with_fill(app, mode, params)) {
+        app.toast_error(ctx, e);
+    }
     if lightcraft_pipeline::profiling() {
         use lightcraft_engine::media::dirty::{clock, ms};
         eprintln!("  ui: spot.add {:.1} ms (at {:.1})", ms(t, clock()), crate::render::stamp());

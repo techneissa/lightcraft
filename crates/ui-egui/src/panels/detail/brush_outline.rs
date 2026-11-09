@@ -3,7 +3,6 @@
 //! stroke is painted, it is one translucent filled shape. A shaped spot (`object_remove`, a lasso) keeps its own
 //! outline.
 
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 use egui::{Color32, Mesh, Painter, Pos2, Rect, Shape, Stroke};
@@ -17,6 +16,9 @@ use super::geometry::CanvasMap;
 const MAX_PIECES: usize = 8;
 /// Grid side the stroke being painted is measured on (every frame, so coarser than a spot's outline).
 const PAINT_SIDE: usize = 300;
+/// A stroke being painted is measured again once it has this many more points than the last time (the loop test and
+/// the grid are the cost; the pointer's own ring shows where the brush is in between).
+const PAINT_EVERY: usize = 4;
 
 /// The photo's size ratio on screen as `(fx, fy)`: normalized x and y times these are long-edge units (the longer is 1).
 /// `None` when the map is degenerate.
@@ -32,28 +34,35 @@ fn to_long(points: &[Point], (fx, fy): (f64, f64)) -> Vec<Point> {
 }
 
 /// The outline of a stroke spot (rings in spot coordinates), worked out once per stroke and kept in egui's memory
-/// (`slot`: the spot's place in the list, so a changed spot replaces its entry).
+/// (`slot`: the spot's place in the list, so a changed spot replaces its entry). A cheap fingerprint (the number of
+/// points, three of them, the size and the photo's shape on screen) says whether it is still the same stroke: a spot
+/// changes only by moving (its first point moves) or by a new size, never by one point in the middle.
 fn rings(ctx: &egui::Context, map: &CanvasMap, slot: usize, spot: &Spot) -> Arc<Vec<Vec<Point>>> {
     let Some(k) = scale(map) else { return Arc::default() };
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    spot.size.to_bits().hash(&mut h);
-    (k.0.to_bits(), k.1.to_bits()).hash(&mut h);
-    for p in &spot.points {
-        (p.x.to_bits(), p.y.to_bits()).hash(&mut h);
-    }
-    let (id, stamp) = (egui::Id::unique(("lc-brush-outline", slot)), h.finish());
-    if let Some((s, r)) = ctx.data(|d| d.get_temp::<(u64, Arc<Vec<Vec<Point>>>)>(id))
+    let at = |i: usize| spot.points.get(i).map_or((0, 0), |p| (p.x.to_bits(), p.y.to_bits()));
+    let n = spot.points.len();
+    let stamp = (n, at(0), at(n / 2), at(n.saturating_sub(1)), spot.size.to_bits(), k.0.to_bits(), k.1.to_bits());
+    let id = egui::Id::unique(("lc-brush-outline", slot));
+    if let Some((s, r)) = ctx.data(|d| d.get_temp::<(Stamp, Arc<Vec<Vec<Point>>>)>(id))
         && s == stamp
     {
         return r;
     }
-    let rings: Vec<Vec<Point>> = spot_lasso::outline(&to_long(&spot.points, k), spot.size, false, MAX_PIECES)
+    let rings: Vec<Vec<Point>> = spot_lasso::outline(&to_long(&spot.points, k), spot.size, MAX_PIECES)
         .into_iter()
         .map(|ring| ring.into_iter().map(|p| Point::new(p.x / k.0, p.y / k.1)).collect())
         .collect();
     let out = Arc::new(rings);
     ctx.data_mut(|d| d.insert_temp(id, (stamp, out.clone())));
     out
+}
+
+type Stamp = (usize, (u64, u64), (u64, u64), (u64, u64), u64, u64, u64);
+
+/// A line with a dark 1 px halo under it, so it shows on white sky as well as on dark trees.
+pub(super) fn halo_line(p: &Painter, pts: Vec<Pos2>, stroke: Stroke) {
+    p.add(Shape::line(pts.clone(), Stroke::new(stroke.width + 2.0, Color32::from_black_alpha(110))));
+    p.add(Shape::line(pts, stroke));
 }
 
 fn path(map: &CanvasMap, ring: &[Point], offset: Point) -> Vec<Pos2> {
@@ -71,17 +80,31 @@ pub(super) fn outline(ctx: &egui::Context, p: &Painter, map: &CanvasMap, slot: u
         return false;
     }
     for ring in rings(ctx, map, slot, spot).iter() {
-        p.add(Shape::line(path(map, ring, offset), stroke));
+        halo_line(p, path(map, ring, offset), stroke);
     }
     true
 }
 
 /// The stroke being painted: its area as one translucent filled mesh and one outline. A stroke that has come back
-/// near its start fills its inside, as it will once it is let go.
-pub(super) fn painting(p: &Painter, map: &CanvasMap, points: &[Point], radius: f64, fill: Color32, outline: Stroke) {
+/// near its start fills its inside, as it will once it is let go (a lasso, `lightcraft_pipeline::spot_lasso`).
+/// Measured again only when the stroke has grown by [`PAINT_EVERY`] points.
+pub(super) fn painting(ctx: &egui::Context, p: &Painter, map: &CanvasMap, points: &[Point], radius: f64, fill: Color32, outline: Stroke) {
     let Some(k) = scale(map) else { return };
-    let pts = to_long(points, k);
-    let Some(c) = spot_lasso::cover(&pts, radius, spot_lasso::is_loop(&pts, radius), PAINT_SIDE) else { return };
+    let Some(first) = points.first() else { return };
+    let key = ((first.x.to_bits(), first.y.to_bits()), radius.to_bits(), k.0.to_bits(), k.1.to_bits());
+    let id = egui::Id::unique("lc-brush-painting");
+    let cached = ctx.data(|d| d.get_temp::<(usize, PaintKey, Arc<spot_lasso::Shape>)>(id));
+    let shape = match cached {
+        Some((n, kk, s)) if kk == key && points.len() >= n && points.len() < n + PAINT_EVERY => s,
+        _ => {
+            let pts = to_long(points, k);
+            let Some(s) = spot_lasso::shape(&pts, radius, PAINT_SIDE, Some([0.0, 0.0, k.0, k.1]), true) else { return };
+            let s = Arc::new(s);
+            ctx.data_mut(|d| d.insert_temp(id, (points.len(), key, s.clone())));
+            s
+        }
+    };
+    let c = &shape.cover;
     let screen = |x: f64, y: f64| {
         let l = c.at(x, y);
         map.screen(Point::new(l.x / k.0, l.y / k.1))
@@ -104,11 +127,13 @@ pub(super) fn painting(p: &Painter, map: &CanvasMap, points: &[Point], radius: f
         }
     }
     p.add(Shape::mesh(mesh));
-    for ring in spot_lasso::rings(&c, MAX_PIECES) {
+    for ring in spot_lasso::rings(c, MAX_PIECES) {
         let mut pts: Vec<Pos2> = ring.iter().map(|q| map.screen(Point::new(q.x / k.0, q.y / k.1))).collect();
         if let Some(first) = pts.first().copied() {
             pts.push(first);
         }
-        p.add(Shape::line(pts, outline));
+        halo_line(p, pts, outline);
     }
 }
+
+type PaintKey = ((u64, u64), u64, u64, u64);

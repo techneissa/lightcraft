@@ -60,6 +60,11 @@ fn circle_label(c: Option<SpotCircle>) -> &'static str {
     }
 }
 
+/// A lasso made from a stroke, which Make Stroke can undo.
+fn is_lasso(spot: &Spot) -> bool {
+    spot.area.as_ref().is_some_and(|a| a.kind == "lasso" && !a.stroke.is_empty())
+}
+
 /// The rows, under a divider; nothing when the photo has no spot.
 pub(super) fn section(app: &mut LightcraftApp, ui: &mut Ui, spots: &[Spot]) {
     if spots.is_empty() {
@@ -122,7 +127,8 @@ fn row(app: &mut LightcraftApp, ui: &mut Ui, spots: &[Spot], i: usize, sel: bool
         icon,
         if spot.hidden { color } else { t.text_label },
     );
-    let room = (r.width() - 28.0 - (BUTTON_W * 2.0 + MENU_W + 8.0)).max(0.0);
+    let extra = if is_lasso(spot) { BUTTON_W + 2.0 } else { 0.0 };
+    let room = (r.width() - 28.0 - (BUTTON_W * 2.0 + MENU_W + 8.0 + extra)).max(0.0);
     let g = crate::widgets::one_line(ui.painter(), &name, t.font(13.0), color, room);
     let elided = g.elided;
     ui.painter().galley(pos2(r.left() + 28.0, r.center().y - g.size().y / 2.0), g, color);
@@ -170,6 +176,18 @@ fn buttons(app: &mut LightcraftApp, ui: &mut Ui, spot: &Spot, i: usize, r: Rect,
         used = true;
     }
     let now = spot.circle;
+    // a lasso (`fork/brush-area.md`) can go back to the plain stroke it came from
+    if is_lasso(spot)
+        && button(ui, "spotStroke", "Make Stroke", "Make Stroke: back to the plain stroke, without its inside", BUTTON_W, false, &|p, br, col| {
+            paint(p, br.shrink(3.0), Icon::Brush, col)
+        })
+        .clicked()
+    {
+        if let Err(e) = app.run("spot.makeStroke", json!({"index": i})) {
+            app.toast_error(ui.ctx(), e);
+        }
+        used = true;
+    }
     let menu = button(ui, "spotCircle", "Circle on Photo", "When the circle shows on the photo", MENU_W, now.is_some(), &|p, br, col| {
         paint(p, Rect::from_min_size(br.min + vec2(2.0, 0.0), vec2(22.0, br.height())).shrink(4.0), Icon::Circle, col);
         paint(p, Rect::from_center_size(pos2(br.right() - 8.0, br.center().y), vec2(10.0, 10.0)), Icon::ChevronDown, col);

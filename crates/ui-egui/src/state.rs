@@ -328,6 +328,9 @@ pub struct UiState {
     pub remove_object: bool,
     pub remove_object_fill: lightcraft_develop::SpotFill,
     pub remove_expand: f32,
+    /// Fill Closed Loops in the Remove panel: a brushed Remove or Content-Aware stroke that closes on itself covers
+    /// its inside too (`fork/brush-area.md`).
+    pub remove_lasso: bool,
     /// The Learn My Edits window (`fork/learn-my-edits.md`); not saved.
     #[serde(skip)]
     pub learn_edits: crate::learn_edits::Window,
@@ -581,6 +584,7 @@ impl Default for UiState {
             remove_object: false,
             remove_object_fill: lightcraft_develop::SpotFill::Lama,
             remove_expand: 0.005,
+            remove_lasso: true,
             learn_edits: Default::default(),
             point_color: 0,
             point_color_visualize: false,

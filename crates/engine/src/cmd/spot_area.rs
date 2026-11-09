@@ -184,37 +184,62 @@ fn object_stroke(s: &mut Session, p: &Value) -> crate::Result<Value> {
     Ok(out)
 }
 
-/// A brushed Remove or Content-Aware stroke that closes on itself (its end within two brush radii of its start, around
-/// more than its own width) becomes a shaped spot covering the loop's inside as well as the stroke's ribbon: the same
-/// footprint as the stroke, filled in, so drawing around an object removes the object. True when `spot` was changed.
-/// Its `size` is then the Expand (a margin as the brush's, no wider than half of it) and the rest of the brush's radius
-/// is in the shape. Heal and Clone need a source and keep their stroke.
-pub(crate) fn lasso(s: &Session, id: crate::PhotoId, d: &lightcraft_develop::DevelopSettings, spot: &mut Spot) -> bool {
+/// The message for a lasso (or a shape) that would cover most of the photo; the same as Remove This Area's.
+pub(crate) const TOO_BIG: &str = "the area covers most of the photo; Remove rebuilds smaller areas from what is around them";
+
+/// A brushed Remove or Content-Aware stroke that closes on itself becomes a shaped spot (kind `lasso`) covering the
+/// loop's inside as well as the stroke's ribbon, so drawing around an object removes the object. What counts as a
+/// loop is `lightcraft_pipeline::spot_lasso`. The shape is the loop's inside (clipped to the photo) and the spot's
+/// `size` (its Expand) is the brush radius, so it reaches as far past the loop, and feathers as a stroke's ribbon does.
+/// The stroke is kept in the shape, so Make Stroke gives it back. Heal and Clone need a source and keep their stroke.
+/// `Ok(true)` when `spot` was changed; a lasso that would cover most of the photo is an error.
+pub(crate) fn lasso(s: &Session, id: crate::PhotoId, d: &lightcraft_develop::DevelopSettings, spot: &mut Spot) -> crate::Result<bool> {
+    use lightcraft_pipeline::spot_lasso::{Lasso, lasso_area};
     if !matches!(spot.mode, SpotMode::Remove | SpotMode::Fill) || spot.area.is_some() {
-        return false;
+        return Ok(false);
     }
-    let Some(f) = s.mask_frame(id, d) else { return false };
-    let (ow, oh) = (f.ow, f.oh);
-    if !(ow.is_finite() && oh.is_finite() && ow > 0.0 && oh > 0.0) {
-        return false;
-    }
-    let long = ow.max(oh);
-    let to_long = |p: &Point| Point::new(p.x * ow / long, p.y * oh / long);
-    let in_long: Vec<Point> = spot.points.iter().map(to_long).collect();
-    let r = spot.size;
-    if !lightcraft_pipeline::spot_lasso::is_loop(&in_long, r) {
-        return false;
-    }
-    let expand = DEFAULT_EXPAND.min(r / 2.0).clamp(EXPAND_RANGE.0, EXPAND_RANGE.1);
-    let Some(seg) = lightcraft_pipeline::spot_lasso::lasso_area(&spot.points, ow, oh, (r - expand).max(EXPAND_RANGE.0)) else {
-        return false;
+    let Some(f) = s.mask_frame(id, d) else { return Ok(false) };
+    let seg = match lasso_area(&spot.points, f.ow, f.oh, spot.size) {
+        Lasso::No => return Ok(false),
+        Lasso::TooBig => return Err(bad("spot.add", TOO_BIG)),
+        Lasso::Area(seg) => seg,
     };
-    let area = lightcraft_develop::SpotArea::new("lasso", seg);
-    spot.points = vec![crate::spot_area::centre_of(&area).unwrap_or(spot.points.first().copied().unwrap_or(Point::new(0.5, 0.5)))];
-    spot.size = expand;
+    let mut area = lightcraft_develop::SpotArea::new("lasso", seg);
+    area.stroke = std::mem::take(&mut spot.points);
+    area.brush = spot.size;
+    spot.points = vec![crate::spot_area::centre_of(&area).unwrap_or(area.stroke.first().copied().unwrap_or(Point::new(0.5, 0.5)))];
     spot.source_offset = None;
     spot.area = Some(area);
-    true
+    Ok(true)
+}
+
+/// `spot.makeStroke`: a lasso becomes the plain stroke it came from (its points and brush size come back from the shape,
+/// so nothing is lost; a Classic Remove spot picks its source again).
+fn make_stroke(s: &mut Session, p: &Value) -> crate::Result<Value> {
+    let c = "spot.makeStroke";
+    let i = super::masks::spot_index(s, p, c)?;
+    let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+    let d = (*s.develop_of(id).unwrap_or_default()).clone();
+    let spot = d.spots.get(i).ok_or_else(|| bad(c, "no such spot"))?;
+    let Some(area) = spot.area.as_ref().filter(|a| a.kind == "lasso" && !a.stroke.is_empty()) else {
+        return Err(bad(c, "this spot is not a lasso made from a stroke"));
+    };
+    let mut after = spot.clone();
+    after.points = area.stroke.clone();
+    after.size = if area.brush > 0.0 { area.brush.clamp(super::masks::SPOT_SIZE.0, super::masks::SPOT_SIZE.1) } else { spot.size };
+    after.area = None;
+    after.source_offset = None;
+    if !sourceless(&after) && after.mode == SpotMode::Remove {
+        after.source_offset = super::masks::pick_source(s, id, &d, &after, None);
+    }
+    super::masks::spots_edit(s, c, "Make Stroke", |spots| {
+        if let Some(sp) = spots.get_mut(i) {
+            *sp = after;
+        }
+        Ok(())
+    })?;
+    s.active_spot = Some(i);
+    Ok(json!({"index": i}))
 }
 
 /// Whether `spot` reads no source: a shaped spot, or a Remove or Content-Aware spot LaMa fills (both rebuild the area
@@ -282,6 +307,15 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "{id?: maskId (the selected mask), expand?: 0.001..0.05 of the long edge past its outline (0.005), fill?: classic|lama (default lama)} — the mask (any kind: Object, Describe, Subject, Brush, a gradient…) becomes one Remove spot in its shape, rebuilt from its surroundings (no source); the mask stays; one undo step → {index, kind}",
             has_active,
             from_mask
+        ),
+        cmd!(
+            "spot.makeStroke",
+            "Make Stroke",
+            [],
+            None,
+            "{index? (the selected spot)} — a lasso (a stroke that closed on itself and covers its inside) becomes the plain stroke it came from, without its inside; one undo step → {index}",
+            has_active,
+            make_stroke
         ),
         cmd!(
             "spot.object",

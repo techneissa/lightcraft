@@ -22,6 +22,17 @@ pub struct SpotArea {
     pub hint: Vec<Point>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub exclude: Vec<Point>,
+    /// A lasso's brushed stroke (spot coordinates), kept so "Make Stroke" gives back the stroke it came from, lossless.
+    /// Empty for every other kind, and then not written.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub stroke: Vec<Point>,
+    /// The brush radius of that stroke (long edge); 0 when there is no stroke, and then not written.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub brush: f64,
+}
+
+fn is_zero(v: &f64) -> bool {
+    *v == 0.0
 }
 
 /// The kinds [`SpotArea::kind`] names.
@@ -30,7 +41,7 @@ pub const AREA_KINDS: [&str; 5] = ["object", "mask", "person", "wire", "lasso"];
 impl SpotArea {
     /// A shape of `kind` (one of [`AREA_KINDS`]) covering `seg`.
     pub fn new(kind: &str, seg: SegMask) -> SpotArea {
-        SpotArea { kind: kind.to_string(), seg, hint: Vec::new(), exclude: Vec::new() }
+        SpotArea { kind: kind.to_string(), seg, hint: Vec::new(), exclude: Vec::new(), stroke: Vec::new(), brush: 0.0 }
     }
 
     /// The name shown on the spot's row: "Object", "Mask", "Person", "Wire" (else "Area").
@@ -60,6 +71,10 @@ impl SpotArea {
         }
         self.hint.clear();
         self.exclude.clear();
+        // a lasso's stroke moves with it
+        for q in &mut self.stroke {
+            *q = Point::new(q.x + dx, q.y + dy);
+        }
     }
 }
 
@@ -111,6 +126,27 @@ mod tests {
         let a = s.area.unwrap();
         assert_eq!(a.label(), "Area");
         assert!(a.seg.logits().is_none());
+    }
+
+    // Given a lasso's stroke, it round trips, moves with the shape, and is left out of the file when there is none
+    #[test]
+    fn a_lassos_stroke_round_trips_and_moves_with_it() {
+        let mut a = shaped().area.unwrap();
+        assert!(serde_json::to_value(&a).unwrap().get("stroke").is_none() && serde_json::to_value(&a).unwrap().get("brush").is_none());
+        a.kind = "lasso".into();
+        a.stroke = vec![Point::new(0.3, 0.4), Point::new(0.35, 0.45)];
+        a.brush = 0.02;
+        let back: SpotArea = serde_json::from_value(serde_json::to_value(&a).unwrap()).unwrap();
+        assert_eq!(back, a);
+        a.shift(0.1, 0.1);
+        assert!(
+            a.stroke.iter().zip([(0.4, 0.5), (0.45, 0.55)]).all(|(q, (x, y))| (q.x - x).abs() < 1e-12 && (q.y - y).abs() < 1e-12),
+            "{:?}",
+            a.stroke
+        );
+        // (a file from before the stroke was kept reads as no stroke)
+        let old: SpotArea = serde_json::from_value(serde_json::json!({"kind": "lasso", "seg": {"side": 4, "data": ""}})).unwrap();
+        assert!(old.stroke.is_empty() && old.brush == 0.0);
     }
 
     #[test]
