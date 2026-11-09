@@ -53,6 +53,9 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     /// renders all of that around it and cuts back (`crates/pipeline/src/retouch_step.rs`), so zoom never changes
     /// a result. By default [`DEFAULT_REACH`].
     const REACH: f64 = DEFAULT_REACH;
+    /// The part masks a Refine Add stroke widens ([`crate::refine`]): by default the first of [`Feature::PARTS`];
+    /// none (Add is not offered) for a feature that reads no mask.
+    const ADD_PARTS: &'static [Part] = first_part(Self::PARTS);
 
     /// Whether these settings leave the picture alone. By default: every slider at its default.
     fn is_off(&self) -> bool {
@@ -66,6 +69,14 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     /// the export match. Pixels outside the feature's mask must not change, and a face without the masks the
     /// feature needs is left alone.
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>);
+}
+
+/// The first part of `parts` (none of none): [`Feature::ADD_PARTS`]' default.
+pub const fn first_part(parts: &'static [Part]) -> &'static [Part] {
+    match parts {
+        [first, ..] => std::slice::from_ref(first),
+        [] => &[],
+    }
 }
 
 /// [`Feature::REACH`] of a feature that does not set its own: half the face's size past its box and masks.
@@ -86,6 +97,16 @@ pub trait View: Sync {
     /// ([`crate::overrides::resolve_in`]). `None` (the default): such settings pair by person only.
     fn key_map(&self) -> Option<&dyn KeyMap> {
         None
+    }
+    /// Pixel position → normalised coordinates of the frame Refine strokes are kept in (the photo before its crop,
+    /// after orientation, lens corrections and transform, as Remove spots). By default [`View::to_norm`]: the
+    /// same frame as the faces'.
+    fn to_edit(&self, x: f64, y: f64) -> (f64, f64) {
+        self.to_norm(x, y)
+    }
+    /// [`View::to_edit`]'s inverse; `None` for a point that has no place in the image.
+    fn edit_to_px(&self, nx: f64, ny: f64) -> Option<(f64, f64)> {
+        self.to_px(nx, ny)
     }
 }
 
@@ -150,6 +171,11 @@ impl<'a> Scene<'a> {
 
     pub fn view(&self) -> &dyn View {
         self.view
+    }
+
+    /// A scene of faces already mapped (the Refine brush's widened masks, [`crate::refine`]).
+    pub(crate) fn from_parts(faces: Vec<FaceCtx<'a>>, width: usize, height: usize, view: &'a dyn View) -> Scene<'a> {
+        Scene { faces, width, height, view }
     }
 
     /// The mask of `part` of face `face` at pixel (`x`, `y`) of the image; 0 without that mask.

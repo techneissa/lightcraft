@@ -5,6 +5,8 @@
 //! - The input contract: [`input`] (faces, landmarks, persons and part masks, from the engine's providers).
 //! - The step: [`run::apply`], one [`Stage`] at a time, every feature in the fixed order of [`FEATURES`].
 //! - One module per feature, each with its own settings struct, sliders ([`Control`]) and `apply`.
+//! - The Refine brush ([`refine`]): strokes per feature that reduce, restore or add its effect, applied around
+//!   every feature's run, so no feature writes code for it.
 //!
 //! The crate depends on no model, engine, develop, pipeline or UI crate. `crates/retouch/README.md` has the
 //! contract and the rules every feature follows.
@@ -15,6 +17,7 @@ pub mod control;
 pub mod feature;
 pub mod input;
 pub mod overrides;
+pub mod refine;
 pub mod run;
 pub mod settings;
 
@@ -30,8 +33,9 @@ pub mod teeth_lips;
 pub mod wrinkles;
 
 pub use control::{Control, Spec};
-pub use feature::{DEFAULT_REACH, FACE_PARTS, FaceCtx, Feature, MAX_FACES, Scene, Scope, Stage, View, WholePhoto};
+pub use feature::{DEFAULT_REACH, FACE_PARTS, FaceCtx, Feature, MAX_FACES, Scene, Scope, Stage, View, WholePhoto, first_part};
 pub use input::{Face, Input, KeyFrame, KeyMap, NormRect, Part, PartMask};
+pub use refine::{Refine, RefineLayer, RefineMode, RefineStroke};
 pub use settings::{FaceKey, FaceOverride, FeatureInfo, MAX_OVERRIDES, Reads, Retouch};
 
 // The render order: tone and colour retouching first (spots before smoothing, skin before colour, the face before

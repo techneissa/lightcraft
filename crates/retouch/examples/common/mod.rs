@@ -50,7 +50,7 @@ fn run(feature: &str, args: &[String]) -> Result<(), String> {
     if !global.set(&format!("retouch.{feature}.amount"), amount) {
         return Err(format!("{feature} has no Amount slider: set its values in the example"));
     }
-    let r = Retouch { global, faces: Vec::new() };
+    let r = Retouch::with_global(global);
     let input = Input::new(faces);
     let view = WholePhoto { width: w, height: h };
     let t = std::time::Instant::now();

@@ -70,6 +70,8 @@ impl Feature for TeethLips {
     /// It reads only inside its masks' areas: the pixels it changes, and the fixed grid its reference levels come
     /// from (bilinear, a pixel past a grid point at most).
     const REACH: f64 = 0.05;
+    /// Refine Add paints a tooth the teeth mask missed.
+    const ADD_PARTS: &'static [Part] = &[Part::Teeth];
     const CONTROLS: &'static [Control<Self>] = &[
         Control {
             spec: Spec::amount("retouch.teethLips.teethWhitening", "Teeth Whitening"),

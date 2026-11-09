@@ -10,6 +10,7 @@ use serde_json::Value;
 use crate::control::{Control, Spec};
 use crate::feature::{Feature, Scope, Stage};
 use crate::input::{Face, KeyFrame, KeyMap, NormRect};
+use crate::refine::Refine;
 
 /// A feature as the panel and the control list see it, without its settings type.
 #[derive(Clone, Copy, Debug)]
@@ -24,6 +25,8 @@ pub struct FeatureInfo {
     pub parts: &'static [crate::Part],
     /// How far past its face and masks it reads ([`Feature::REACH`]).
     pub reach: f64,
+    /// The masks a Refine Add stroke widens ([`Feature::ADD_PARTS`]); empty: the panel offers no Add.
+    pub add_parts: &'static [crate::Part],
 }
 
 /// What retouching reads around a face: the largest [`Feature::REACH`] of the features on, and the parts whose
@@ -32,6 +35,10 @@ pub struct FeatureInfo {
 pub struct Reads {
     pub reach: f64,
     pub parts: Vec<crate::Part>,
+    /// Where Refine Add strokes of the features that are on can widen their masks: the box of their points
+    /// (normalised, the frame [`crate::View::to_edit`] speaks) and their largest radius (a fraction of the long
+    /// edge). A face's reads reach there too.
+    pub add: Option<([f64; 4], f64)>,
 }
 
 impl Reads {
@@ -48,6 +55,16 @@ impl Reads {
 
     fn merge(&mut self, o: &Reads) {
         self.add(o.reach, &o.parts);
+        if let Some(b) = o.add {
+            self.add_area(b);
+        }
+    }
+
+    fn add_area(&mut self, (b, r): ([f64; 4], f64)) {
+        self.add = Some(match self.add {
+            None => (b, r),
+            Some((a, ra)) => ([a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])], ra.max(r)),
+        });
     }
 }
 
@@ -95,6 +112,9 @@ impl FaceKey {
 pub struct FaceOverride {
     pub face: FaceKey,
     pub settings: crate::Features,
+    /// The face's own Refine strokes ([`crate::refine`]), copied from those for every face when it got its own.
+    #[serde(skip_serializing_if = "Refine::is_empty")]
+    pub refine: Refine,
 }
 
 /// The whole block: `global` for every face, `faces` for faces with their own settings.
@@ -103,6 +123,9 @@ pub struct Retouch {
     pub global: crate::Features,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub faces: Vec<FaceOverride>,
+    /// The Refine strokes for every face ([`crate::refine`]).
+    #[serde(skip_serializing_if = "Refine::is_empty")]
+    pub refine: Refine,
 }
 
 /// Most faces with their own settings kept per photo.
@@ -119,10 +142,21 @@ impl Retouch {
         self.global.is_off() && self.faces.iter().all(|f| f.settings.is_off())
     }
 
-    /// What the features on for some face read ([`Features::reads`]); `None` while the block is off.
+    /// What the features on for some face read ([`Features::reads`], and where their Refine Add strokes widen
+    /// masks); `None` while the block is off.
     pub fn reads(&self) -> Option<Reads> {
         let mut out: Option<Reads> = None;
-        for r in std::iter::once(&self.global).chain(self.faces.iter().map(|f| &f.settings)).filter_map(crate::Features::reads) {
+        let sets = std::iter::once((&self.global, &self.refine)).chain(self.faces.iter().map(|f| (&f.settings, &f.refine)));
+        for (features, refine) in sets {
+            let Some(mut r) = features.reads() else { continue };
+            let adds = crate::FEATURES
+                .iter()
+                .filter(|f| !f.add_parts.is_empty() && features.is_on(f.key))
+                .flat_map(|f| refine.strokes(f.key))
+                .filter(|s| s.mode == crate::refine::RefineMode::Add);
+            if let Some(b) = crate::refine::points_box(adds) {
+                r.add_area(b);
+            }
             out.get_or_insert_with(Reads::default).merge(&r);
         }
         out
@@ -132,6 +166,7 @@ impl Retouch {
     /// makes a photo's settings unreadable. Values are kept within their sliders' ranges.
     pub fn from_value(v: &Value) -> Retouch {
         let global = crate::Features::from_value(v.get("global").unwrap_or(&Value::Null));
+        let refine = Refine::from_value(v.get("refine").unwrap_or(&Value::Null));
         let faces = v
             .get("faces")
             .and_then(Value::as_array)
@@ -140,14 +175,21 @@ impl Retouch {
                     .take(MAX_OVERRIDES)
                     .filter_map(|f| {
                         let face: FaceKey = serde_json::from_value(f.get("face")?.clone()).ok()?;
-                        face.bounds
-                            .is_valid()
-                            .then(|| FaceOverride { face, settings: crate::Features::from_value(f.get("settings").unwrap_or(&Value::Null)) })
+                        face.bounds.is_valid().then(|| FaceOverride {
+                            face,
+                            settings: crate::Features::from_value(f.get("settings").unwrap_or(&Value::Null)),
+                            refine: Refine::from_value(f.get("refine").unwrap_or(&Value::Null)),
+                        })
                     })
                     .collect()
             })
             .unwrap_or_default();
-        Retouch { global, faces }
+        Retouch { global, faces, refine }
+    }
+
+    /// Settings for every face (no face of its own, no Refine strokes).
+    pub fn with_global(global: crate::Features) -> Retouch {
+        Retouch { global, ..Retouch::default() }
     }
 
     /// The settings face `index` of `faces` renders with: its own when an override is matched to it
@@ -174,6 +216,12 @@ impl Retouch {
 
     /// [`Retouch::override_mut`], with `map` to compare keys of the other frame ([`crate::overrides::resolve_in`]).
     pub fn override_mut_in(&mut self, faces: &[Face], index: usize, map: Option<&dyn KeyMap>) -> Option<&mut crate::Features> {
+        self.own_mut_in(faces, index, map).map(|o| &mut o.settings)
+    }
+
+    /// Face `index`'s own entry (its settings and Refine strokes), made from the global ones when it has none yet;
+    /// as [`Retouch::override_mut_in`].
+    pub fn own_mut_in(&mut self, faces: &[Face], index: usize, map: Option<&dyn KeyMap>) -> Option<&mut FaceOverride> {
         let face = faces.get(index)?;
         let found = crate::overrides::resolve_in(self, faces, map).get(index).copied().flatten();
         let i = match found {
@@ -182,11 +230,11 @@ impl Retouch {
                 if self.faces.len() >= MAX_OVERRIDES || !face.bounds.is_valid() {
                     return None;
                 }
-                self.faces.push(FaceOverride { face: FaceKey::of(face), settings: self.global.clone() });
+                self.faces.push(FaceOverride { face: FaceKey::of(face), settings: self.global.clone(), refine: self.refine.clone() });
                 self.faces.len() - 1
             }
         };
-        self.faces.get_mut(i).map(|o| &mut o.settings)
+        self.faces.get_mut(i)
     }
 
     /// Remove face `index`'s own settings, so it follows the global ones again. Whether it had any.
@@ -240,6 +288,7 @@ macro_rules! features {
                 specs: $crate::settings::specs_of::<$ty>,
                 parts: <$ty as $crate::Feature>::PARTS,
                 reach: <$ty as $crate::Feature>::REACH,
+                add_parts: <$ty as $crate::Feature>::ADD_PARTS,
             },)*
         ];
 
@@ -247,6 +296,14 @@ macro_rules! features {
             /// Every feature off.
             pub fn is_off(&self) -> bool {
                 true $(&& $crate::Feature::is_off(&self.$key))*
+            }
+
+            /// Feature `key` is on (false for an unknown key).
+            pub fn is_on(&self, key: &str) -> bool {
+                $(if key == <$ty as $crate::Feature>::KEY {
+                    return !$crate::Feature::is_off(&self.$key);
+                })*
+                false
             }
 
             /// What the features that are on read: the largest [`Feature::REACH`] and the parts' masks
@@ -307,15 +364,16 @@ macro_rules! features {
             }
         }
 
-        /// Run every feature of `stage`, in order.
+        /// Run every feature of `stage`, in order: `global` with its Refine strokes for the picture, and each face
+        /// of `per_face` with its own.
         pub(crate) fn run_stage(
             img: &mut lightcraft_raster::Rgb32f,
             scene: &$crate::Scene<'_>,
-            global: &Features,
-            per_face: &[&Features],
+            global: (&Features, &$crate::refine::Refine),
+            per_face: &[(&Features, &$crate::refine::Refine)],
             stage: $crate::Stage,
         ) {
-            $($crate::run::run_one::<$ty>(img, scene, &global.$key, per_face.iter().map(|f| &f.$key), stage);)*
+            $($crate::run::run_one::<$ty>(img, scene, (&global.0.$key, global.1), per_face.iter().map(|f| (&f.0.$key, f.1)), stage);)*
         }
     };
 }

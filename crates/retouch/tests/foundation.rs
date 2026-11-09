@@ -44,6 +44,7 @@ fn the_block_is_off_by_default_and_round_trips_through_json() {
     r.faces.push(FaceOverride {
         face: FaceKey { person: Some("ann".into()), bounds: NormRect::new(0.1, 0.1, 0.3, 0.4), ..FaceKey::default() },
         settings: Features::default(),
+        ..FaceOverride::default()
     });
     assert!(!r.is_off());
     let v = serde_json::to_value(&r).unwrap();
@@ -51,7 +52,7 @@ fn the_block_is_off_by_default_and_round_trips_through_json() {
     let back: Retouch = serde_json::from_value(v).unwrap();
     assert_eq!(back, r);
     // an override that is off for its face is still a setting, but renders nothing on its own
-    let only_face = Retouch { global: Features::default(), faces: r.faces.clone() };
+    let only_face = Retouch { faces: r.faces.clone(), ..Retouch::default() };
     assert!(only_face.is_off() && !only_face.is_default());
 }
 

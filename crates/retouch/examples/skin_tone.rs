@@ -100,7 +100,7 @@ fn run(args: &[String]) -> Result<(), String> {
     for (px, p) in original.data.iter_mut().zip(rgb.pixels()) {
         *px = [decode_srgb8(p.0[0]), decode_srgb8(p.0[1]), decode_srgb8(p.0[2])];
     }
-    let r = Retouch { global, faces: Vec::new() };
+    let r = Retouch::with_global(global);
     let input = Input::new(faces);
     let view = WholePhoto { width: w, height: h };
     let mut best = f64::INFINITY;
