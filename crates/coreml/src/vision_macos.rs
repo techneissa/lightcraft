@@ -2,8 +2,9 @@
 //!
 //! The same rules as `macos.rs` (README.md): every call runs in an autorelease pool; Objective-C exceptions are not
 //! caught, so Vision is never given a reason to throw: [`supported`] checks the macOS version and, with
-//! `respondsToSelector:`, every class and selector used before any is sent; only indexes Vision listed are asked for;
-//! an output pixel format is set only when Vision lists it. Pixel buffers are read and written only inside their
+//! `respondsToSelector:`, every class and selector it needs before any is sent; the one optional selector
+//! (`supportedOutputPixelFormatsAndReturnError:`, macOS 15) is checked again where it is sent; only indexes Vision
+//! listed are asked for; an output pixel format is set only when Vision lists it. Pixel buffers are read and written only inside their
 //! locked base address, row by row, after checking their format, size and row length.
 
 use std::ptr::NonNull;
@@ -44,7 +45,6 @@ fn selectors(request: Request) -> Vec<(&'static std::ffi::CStr, Sel)> {
         Request::PersonSegmentation => vec![
             (c"VNGeneratePersonSegmentationRequest", sel!(init)),
             (c"VNGeneratePersonSegmentationRequest", sel!(setQualityLevel:)),
-            (c"VNGeneratePersonSegmentationRequest", sel!(supportedOutputPixelFormatsAndReturnError:)),
             (c"VNGeneratePersonSegmentationRequest", sel!(setOutputPixelFormat:)),
             (c"VNGeneratePersonSegmentationRequest", sel!(results)),
             (c"VNPixelBufferObservation", sel!(pixelBuffer)),
@@ -64,6 +64,16 @@ fn selectors(request: Request) -> Vec<(&'static std::ffi::CStr, Sel)> {
     }
 }
 
+/// Whether `class` exists here and its instances answer `s`.
+fn responds(class: &std::ffi::CStr, s: Sel) -> bool {
+    AnyClass::get(class).is_some_and(|c| c.responds_to(s))
+}
+
+/// The selector that lists a request's output formats (macOS 15): float output is asked for only where it is there.
+fn formats_selector() -> Sel {
+    sel!(supportedOutputPixelFormatsAndReturnError:)
+}
+
 pub(crate) fn supported(request: Request) -> bool {
     static OK: [OnceLock<bool>; 3] = [OnceLock::new(), OnceLock::new(), OnceLock::new()];
     let (slot, major) = match request {
@@ -74,7 +84,7 @@ pub(crate) fn supported(request: Request) -> bool {
     *slot.get_or_init(|| {
         autoreleasepool(|_| {
             at_least(major)
-                && common().into_iter().chain(selectors(request)).all(|(class, s)| AnyClass::get(class).is_some_and(|c| c.responds_to(s)))
+                && common().into_iter().chain(selectors(request)).all(|(class, s)| responds(class, s))
                 && AnyClass::get(c"NSIndexSet").is_some_and(|c| c.responds_to(sel!(firstIndex)) && c.responds_to(sel!(indexGreaterThanIndex:)))
         })
     })
@@ -212,12 +222,14 @@ pub(crate) fn person_segmentation(img: &Image) -> Result<Matte> {
         let (handler, _buffer) = handler(img)?;
         // SAFETY: `init` of an NSObject subclass (checked in `supported`); never nil.
         let request = unsafe { VNGeneratePersonSegmentationRequest::init(VNGeneratePersonSegmentationRequest::alloc()) };
-        // SAFETY: setters and a getter checked in `supported`; the quality is a documented value, and the float output
+        // SAFETY: setters checked in `supported`; the quality is a documented value. The format list is asked for only
+        // where the request answers its selector (macOS 15; before, Vision's own format is kept), and the float output
         // format is set only when Vision lists it as supported.
         unsafe {
             request.setQualityLevel(VNGeneratePersonSegmentationRequestQualityLevel::Accurate);
             let float = kCVPixelFormatType_OneComponent32Float;
-            if let Ok(formats) = request.supportedOutputPixelFormatsAndReturnError()
+            if responds(c"VNGeneratePersonSegmentationRequest", formats_selector())
+                && let Ok(formats) = request.supportedOutputPixelFormatsAndReturnError()
                 && formats.iter().any(|n| n.unsignedIntValue() == float)
             {
                 request.setOutputPixelFormat(float);
@@ -248,7 +260,8 @@ fn indexes(set: &NSIndexSet) -> Vec<NSUInteger> {
     out
 }
 
-pub(crate) fn instances(img: &Image, kind: Request) -> Result<Vec<Matte>> {
+/// Each instance mask of `kind` in `img`, handed to `each` as it is read (one mask in memory at a time).
+pub(crate) fn instances(img: &Image, kind: Request, each: &mut dyn FnMut(Matte) -> Result<()>) -> Result<()> {
     autoreleasepool(|_| {
         let (handler, _buffer) = handler(img)?;
         // SAFETY: `init` of NSObject subclasses (checked in `supported`); never nil. `results` is received as optional.
@@ -268,10 +281,9 @@ pub(crate) fn instances(img: &Image, kind: Request) -> Result<Vec<Matte>> {
             }
         };
         // (nobody found: no observation, or one with no instances)
-        let Some(first) = observations.and_then(|o| o.firstObject()) else { return Ok(Vec::new()) };
+        let Some(first) = observations.and_then(|o| o.firstObject()) else { return Ok(()) };
         // SAFETY: a getter checked in `supported`; never nil.
         let all = unsafe { first.allInstances() };
-        let mut out = Vec::new();
         for i in indexes(&all) {
             // (index 0 is the background in Vision's label map, never a person or subject)
             if i == 0 {
@@ -282,8 +294,23 @@ pub(crate) fn instances(img: &Image, kind: Request) -> Result<Vec<Matte>> {
             // that made it, as documented. Failures come back as an NSError.
             let mask = unsafe { first.generateScaledMaskForImageForInstances_fromRequestHandler_error(&one, &handler) }
                 .map_err(|e| Error::Vision(describe(&e)))?;
-            out.push(read_matte(&mask)?);
+            each(read_matte(&mask)?)?;
         }
-        Ok(out)
+        Ok(())
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{common, formats_selector, selectors};
+    use crate::vision::Request;
+
+    /// macOS 14 has every Vision request but not the output-format list (macOS 15): requiring it turned Apple Vision
+    /// off there (PR #120 review).
+    #[test]
+    fn the_macos_15_format_list_is_not_required() {
+        for r in [Request::PersonSegmentation, Request::PersonInstances, Request::ForegroundInstances] {
+            assert!(common().into_iter().chain(selectors(r)).all(|(_, s)| s != formats_selector()), "{r:?}");
+        }
+    }
 }

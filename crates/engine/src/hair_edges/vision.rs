@@ -3,11 +3,13 @@
 //! (`lightcraft_coreml::vision`).
 //!
 //! - **Entire Person / Background**: person segmentation (Accurate, fine hair) draws the edge; Vision's per-person
-//!   masks say whose each pixel is, so where two people meet each keeps their own. Each Vision person is matched to
-//!   the parsed person it overlaps most. The parse still decides who is where; the matte only redraws a band around
-//!   each person's edge ([`super::people`]).
+//!   masks say whose each pixel is, so where two people meet each keeps their own, whether or not the parse has the
+//!   other one. Each Vision person is matched to the parsed person it overlaps most; a parsed person no Vision person
+//!   matches keeps the parse's edge. The parse still decides who is where; the matte only redraws a band around each
+//!   person's edge ([`super::people`]).
 //! - **Subject**: the foreground instance masks (every subject together) redraw the Subject part's edge, the same way
-//!   BiRefNet Matting does ([`subject_edge`]).
+//!   BiRefNet Matting does ([`subject_edge`]); the person segmentation adds the hair of the people who are part of
+//!   the subject ([`subject_people`], [`with_hair`]).
 //!
 //! Runs on the worker thread that asked (the people-parsing thread, the Subject worker), with a "Refining hair edges"
 //! row; a parse made with it is its own cache version ([`VERSION`]). A Mac without the requests, a Vision failure or a
@@ -27,8 +29,9 @@ use crate::activity::Cancel;
 pub const VERSION: &str = "vision1";
 /// The suffix of a Subject part's model id once Apple Vision drew its edge (`birefnet+vision`).
 pub const SUFFIX: &str = "+vision";
-/// Longest side of a people matte (the parse's own picture is 2048 px on its long side).
-const PEOPLE_SIDE: usize = 2048;
+/// Longest side of a people matte: the widest plane a cached parse may have (a full-frame person's new plane is the
+/// matte's side), so a parse with Vision edges is read back rather than made again on every open.
+const PEOPLE_SIDE: usize = lightcraft_parsing::cache::MAX_PLANE_SIDE as usize;
 /// Side of a Subject matte, the size BiRefNet Matting stores (so a document's mask is the same size either way).
 #[cfg_attr(not(feature = "sam"), allow(dead_code))]
 const SUBJECT_SIDE: usize = 1024;
@@ -36,6 +39,9 @@ const SUBJECT_SIDE: usize = 1024;
 const SHARE_FLOOR: f32 = 0.02;
 /// Least overlap (intersection over union) for a Vision person to be a parsed person.
 const MATCH_IOU: f32 = 0.1;
+#[cfg_attr(not(feature = "sam"), allow(dead_code))]
+/// Least share of a Vision person inside the subject for them to be part of it (their hair is then added).
+const SUBJECT_OVERLAP: f32 = 0.5;
 /// Cells a side of the grid the overlap is measured on.
 const MATCH_GRID: usize = 128;
 /// Salt for Subject mattes in the shared matte memory, so a Vision matte never answers for BiRefNet's.
@@ -106,8 +112,8 @@ impl HairEdges {
     }
 
     #[cfg_attr(not(feature = "sam"), allow(dead_code))]
-    /// The Subject matte of an 8-bit RGB picture from Vision's foreground masks (every subject together) and its person
-    /// segmentation (fine hair), the larger at each pixel: from memory
+    /// The Subject matte of an 8-bit RGB picture from Vision's foreground masks (every subject together) and the
+    /// person segmentation (fine hair) of the people who are part of the subject, the larger at each pixel: from memory
     /// when the same pixels were matted before. `Ok(None)`: Vision found no subject.
     pub(crate) fn vision_subject(&self, rgb: &[u8], w: usize, h: usize, cancel: &Arc<AtomicBool>) -> Result<Option<Arc<Matte>>, String> {
         let img = image(rgb, w, h);
@@ -116,23 +122,24 @@ impl HairEdges {
         if let Some(m) = self.remembered(key) {
             return Ok(Some(m));
         }
-        // (the subject mask's edge is hard and drops strands; where the subject is a person, the person segmentation's
-        // fine hair is added: the larger of the two at each pixel, only within the band around the part's edge)
-        let (found, people) = self.with_vision(cancel, || {
-            let found = av::foreground_instances(&img).map_err(|e| e.to_string())?;
-            let people = match found.masks.is_empty() {
+        // (the subject mask's edge is hard and drops strands: where a person is part of the subject, the person
+        // segmentation's fine hair is added, the larger of the two at each pixel; `subject_edge` keeps it to the band
+        // around the part's edge)
+        let found = self.with_vision(cancel, || {
+            let Some(subject) = av::foreground_union(&img).map_err(|e| e.to_string())? else { return Ok(None) };
+            let each = av::person_instances(&img).map_err(|e| e.to_string())?.masks;
+            let theirs = subject_people(&each, &subject);
+            let seg = match theirs.is_empty() {
                 true => None,
                 false => Some(av::person_segmentation(&img).map_err(|e| e.to_string())?),
             };
-            Ok((found, people))
+            Ok(Some((subject, seg, each, theirs)))
         })?;
-        let Some(mut all) = found.union() else { return Ok(None) };
-        if let Some(p) = people {
-            let p = if (p.width, p.height) == (all.width, all.height) { p } else { p.resized(all.width, all.height) };
-            for (a, b) in all.data.iter_mut().zip(&p.data) {
-                *a = a.max(*b);
-            }
-        }
+        let Some((subject, seg, each, theirs)) = found else { return Ok(None) };
+        let all = match seg {
+            Some(seg) => with_hair(subject, &People { all: seg, each }, &theirs),
+            None => subject,
+        };
         let m = Arc::new(to_matte(&all, SUBJECT_SIDE));
         if !m.is_valid() {
             return Err("Apple Vision produced an invalid matte".into());
@@ -212,48 +219,98 @@ pub(crate) fn assign(each: &[av::Matte], people: &[Person]) -> Vec<Option<usize>
     out
 }
 
-/// Person `k`'s matte: the person segmentation, less the share of Vision people that are someone else's. A parsed
-/// person no Vision person matches (often a part of one person the parse split off, such as a hand) takes the
-/// segmentation as it is: less the others' share, their edge would open a ring of background inside the person.
-fn person_matte(v: &People, theirs: &[Option<usize>], k: usize, side: usize) -> Matte {
-    let mine = theirs.get(k).copied().flatten();
-    let others: Vec<usize> = match mine {
-        Some(_) => theirs.iter().enumerate().filter(|(i, _)| *i != k).filter_map(|(_, j)| *j).collect(),
-        None => Vec::new(),
-    };
-    let all = &v.all;
-    let data = (0..all.width * all.height)
-        .map(|i| {
-            let s = all.data.get(i).copied().unwrap_or(0.0);
-            if others.is_empty() {
-                return s;
-            }
-            let (x, y) = (((i % all.width) as f32 + 0.5) / all.width as f32, ((i / all.width) as f32 + 0.5) / all.height as f32);
-            let at: Vec<f32> = v.each.iter().map(|m| m.at(x, y)).collect();
-            let sum: f32 = at.iter().sum();
-            if sum < SHARE_FLOOR {
-                return s;
-            }
-            let theirs: f32 = others.iter().filter_map(|j| at.get(*j)).sum();
-            s * (1.0 - theirs / sum).clamp(0.0, 1.0)
-        })
-        .collect();
-    to_matte(&av::Matte { width: all.width, height: all.height, data }, side)
+/// The centre of pixel `i` of `m`, as a fraction of the photo.
+fn centre(m: &av::Matte, i: usize) -> (f32, f32) {
+    let (w, h) = (m.width.max(1), m.height.max(1));
+    (((i % w) as f32 + 0.5) / w as f32, ((i / w) as f32 + 0.5) / h as f32)
 }
 
-/// Redraw every person's Entire Person edge with Vision's mattes (`super::people::refine`, one matte per person), and
-/// add the strands they gain beside their hair to their Hair. Marks the parse's version.
+/// At each pixel of the person segmentation `seg`, Vision's people `each` added up (once per picture, shared by
+/// every person).
+fn totals(seg: &av::Matte, each: &[av::Matte]) -> Vec<f32> {
+    (0..seg.width * seg.height)
+        .map(|i| {
+            let (x, y) = centre(seg, i);
+            each.iter().map(|m| m.at(x, y)).sum()
+        })
+        .collect()
+}
+
+/// The person segmentation `seg` at its pixel `i`, times the share Vision people `mine` hold there of all of `each`.
+/// Where they together cover less than [`SHARE_FLOOR`], the segmentation alone.
+fn held(seg: &av::Matte, each: &[av::Matte], totals: &[f32], mine: &[usize], i: usize) -> f32 {
+    let s = seg.data.get(i).copied().unwrap_or(0.0);
+    let total = totals.get(i).copied().unwrap_or(0.0);
+    if s <= 0.0 || total < SHARE_FLOOR {
+        return s;
+    }
+    let (x, y) = centre(seg, i);
+    let ours: f32 = mine.iter().filter_map(|j| each.get(*j)).map(|m| m.at(x, y)).sum();
+    s * (ours / total).clamp(0.0, 1.0)
+}
+
+/// The matte of the parsed person Vision person `j` is: the person segmentation less every other Vision person's
+/// share, those the parse has and those it does not.
+fn person_matte(v: &People, totals: &[f32], j: usize, side: usize) -> Matte {
+    let data = (0..v.all.width * v.all.height).map(|i| held(&v.all, &v.each, totals, &[j], i)).collect();
+    to_matte(&av::Matte { width: v.all.width, height: v.all.height, data }, side)
+}
+
+#[cfg_attr(not(feature = "sam"), allow(dead_code))]
+/// The Vision people who are part of `subject`: at least [`SUBJECT_OVERLAP`] of their mask inside it.
+pub(crate) fn subject_people(each: &[av::Matte], subject: &av::Matte) -> Vec<usize> {
+    let inside = |m: &av::Matte| {
+        let (mut inter, mut area) = (0.0f32, 0.0f32);
+        for i in 0..MATCH_GRID * MATCH_GRID {
+            let (x, y) = (((i % MATCH_GRID) as f32 + 0.5) / MATCH_GRID as f32, ((i / MATCH_GRID) as f32 + 0.5) / MATCH_GRID as f32);
+            let a = m.at(x, y);
+            inter += a.min(subject.at(x, y));
+            area += a;
+        }
+        if area > 0.0 { inter / area } else { 0.0 }
+    };
+    each.iter().enumerate().filter(|(_, m)| inside(m) >= SUBJECT_OVERLAP).map(|(j, _)| j).collect()
+}
+
+#[cfg_attr(not(feature = "sam"), allow(dead_code))]
+/// `subject` with the hair of Vision people `theirs` added: at each pixel the larger of the subject and their share of
+/// the person segmentation `v.all`.
+pub(crate) fn with_hair(mut subject: av::Matte, v: &People, theirs: &[usize]) -> av::Matte {
+    if theirs.is_empty() {
+        return subject;
+    }
+    let resized;
+    let seg = if (v.all.width, v.all.height) == (subject.width, subject.height) {
+        &v.all
+    } else {
+        resized = v.all.resized(subject.width, subject.height);
+        &resized
+    };
+    let totals = totals(seg, &v.each);
+    for (i, a) in subject.data.iter_mut().enumerate() {
+        *a = a.max(held(seg, &v.each, &totals, theirs, i));
+    }
+    subject
+}
+
+/// Redraw the Entire Person edge of every parsed person Vision matched with Vision's mattes (`super::people::refine`,
+/// one matte per person), and add the strands they gain beside their hair to their Hair. A parsed person no Vision
+/// person matches (often a part of one person the parse split off, such as a hand, or someone Vision missed) keeps the
+/// parse's edge: the segmentation there is someone else's or nobody's, and drawn from it their edge would open a ring
+/// of background or vanish. Marks the parse's version.
 pub(crate) fn refine_people(parsing: &mut Parsing, v: &People) {
     let side = v.all.width.max(v.all.height).clamp(1, PEOPLE_SIDE);
     let theirs = assign(&v.each, &parsing.people);
     let before: Vec<Person> = parsing.people.clone();
+    let totals = if theirs.iter().any(Option::is_some) { totals(&v.all, &v.each) } else { Vec::new() };
     for (k, person) in parsing.people.iter_mut().enumerate() {
+        let Some(j) = theirs.get(k).copied().flatten() else { continue };
         let Some(rect) = entire_rect(person) else { continue };
-        let matte = person_matte(v, &theirs, k, side);
+        let matte = person_matte(v, &totals, j, side);
         if !matte.is_valid() {
             continue;
         }
-        let others: Vec<&Person> = before.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, p)| p).collect();
+        let others: Vec<&Person> = before.iter().enumerate().filter(|(i, _)| *i != k).map(|(_, p)| p).collect();
         let Some(Refined { entire, gained }) = refine_person(person, &others, rect, &matte) else { continue };
         person.parts.insert(Part::EntirePerson, vec![entire]);
         if let Some(g) = gained

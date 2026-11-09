@@ -43,6 +43,6 @@ fn main() {
         };
         time("person-segmentation", &|| vec![vision::person_segmentation(&img).unwrap()]);
         time("person-instances", &|| vision::person_instances(&img).unwrap().masks);
-        time("foreground", &|| vision::foreground_instances(&img).unwrap().masks);
+        time("foreground", &|| vision::foreground_union(&img).unwrap().into_iter().collect());
     }
 }

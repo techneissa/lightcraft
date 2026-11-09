@@ -2,7 +2,8 @@
 //! Vision runs them on the Neural Engine in a fraction of a second, with no model file to download.
 //!
 //! Every call takes an [`Image`] (8-bit or float RGB) and gives coverage mattes (0 = background, 1 = the person or
-//! subject) at the photo's aspect. A Mac without the request (older than macOS 14), a damaged image or a Vision failure
+//! subject) at the photo's aspect. Instance masks are read one at a time: the subject masks fold into one matte as
+//! they are read, and the per-person masks kept add up to at most [`MAX_KEPT_PIXELS`]. A Mac without the request (older than macOS 14), a damaged image or a Vision failure
 //! is an [`Error`]; the caller falls back to its own masks. The Objective-C calls are in `vision_macos.rs`.
 
 use crate::{Error, Result, imp_vision};
@@ -13,6 +14,8 @@ pub const MAX_SIDE: usize = 16_384;
 pub const MAX_PIXELS: usize = 64 << 20;
 /// Most masks read back from one request (Vision finds at most four people; subjects are capped here).
 pub const MAX_INSTANCES: usize = 16;
+/// Most mask pixels one call keeps (64 M, 256 MB as `f32`): the per-person masks of a large photo add up.
+pub const MAX_KEPT_PIXELS: usize = MAX_PIXELS;
 
 /// The pixels of an [`Image`], row-major RGB without padding.
 #[derive(Clone, Copy, Debug)]
@@ -49,6 +52,7 @@ impl Image<'_> {
     }
 
     /// The pixel at `i` (row-major) as 8-bit RGB.
+    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn rgb8(&self, i: usize) -> [u8; 3] {
         let at = 3 * i;
         match self.pixels {
@@ -117,25 +121,37 @@ impl Matte {
     }
 }
 
-/// The mattes Vision found: one per person or subject (largest first), each at the photo's aspect.
+/// The mattes Vision found: one per person (largest first), each at the photo's aspect.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Instances {
     pub masks: Vec<Matte>,
 }
 
-impl Instances {
-    /// All of them together (the largest coverage at each pixel); `None` when there are none.
-    pub fn union(&self) -> Option<Matte> {
-        let first = self.masks.first()?;
-        let mut out = first.clone();
-        for m in self.masks.iter().skip(1) {
-            let m = if (m.width, m.height) == (out.width, out.height) { m.clone() } else { m.resized(out.width, out.height) };
-            for (o, v) in out.data.iter_mut().zip(&m.data) {
-                *o = o.max(*v);
-            }
+/// `m` folded into `acc`: the largest coverage at each pixel of `acc` (the first matte sets the size).
+pub(crate) fn fold_max(acc: &mut Option<Matte>, m: Matte) {
+    let Some(a) = acc else {
+        *acc = Some(m);
+        return;
+    };
+    if (m.width, m.height) == (a.width, a.height) {
+        for (o, v) in a.data.iter_mut().zip(&m.data) {
+            *o = o.max(*v);
         }
-        Some(out)
+        return;
     }
+    let (w, h) = (a.width.max(1), a.height.max(1));
+    for (i, o) in a.data.iter_mut().enumerate() {
+        *o = o.max(m.at(((i % w) as f32 + 0.5) / w as f32, ((i / w) as f32 + 0.5) / h as f32));
+    }
+}
+
+/// Counts `m` into the pixels kept so far; an error past [`MAX_KEPT_PIXELS`].
+pub(crate) fn keep(kept: &mut usize, m: &Matte) -> Result<()> {
+    *kept = kept.saturating_add(m.data.len());
+    if *kept > MAX_KEPT_PIXELS {
+        return Err(Error::Input(format!("the masks of a {} × {} picture add up to more than {MAX_KEPT_PIXELS} pixels", m.width, m.height)));
+    }
+    Ok(())
 }
 
 /// The Vision requests this crate makes.
@@ -182,26 +198,38 @@ pub fn person_segmentation(img: &Image) -> Result<Matte> {
     checked(m.at_aspect(img.width, img.height))
 }
 
-/// One matte per person in `img` (up to four), each at the photo's size.
+/// One matte per person in `img` (up to four), each at the photo's size, largest first.
 pub fn person_instances(img: &Image) -> Result<Instances> {
     ready(img, Request::PersonInstances)?;
-    instances(imp_vision::instances(img, Request::PersonInstances)?, img)
+    let (mut masks, mut kept) = (Vec::new(), 0usize);
+    imp_vision::instances(img, Request::PersonInstances, &mut |m| {
+        let m = checked(m.at_aspect(img.width, img.height))?;
+        keep(&mut kept, &m)?;
+        masks.push(m);
+        Ok(())
+    })?;
+    largest_first(&mut masks);
+    Ok(Instances { masks })
 }
 
-/// One matte per foreground subject in `img` (people, animals, things), each at the photo's size.
-pub fn foreground_instances(img: &Image) -> Result<Instances> {
+/// Every foreground subject in `img` (people, animals, things) as one matte, the largest coverage at each pixel, at
+/// the photo's size; `None` when Vision found none. Each mask is folded in as it is read.
+pub fn foreground_union(img: &Image) -> Result<Option<Matte>> {
     ready(img, Request::ForegroundInstances)?;
-    instances(imp_vision::instances(img, Request::ForegroundInstances)?, img)
+    let mut out = None;
+    imp_vision::instances(img, Request::ForegroundInstances, &mut |m| {
+        fold_max(&mut out, checked(m.at_aspect(img.width, img.height))?);
+        Ok(())
+    })?;
+    Ok(out)
 }
 
 fn checked(m: Matte) -> Result<Matte> {
     if m.is_valid() { Ok(m) } else { Err(Error::Output(format!("Vision gave a damaged {} × {} matte", m.width, m.height))) }
 }
 
-fn instances(masks: Vec<Matte>, img: &Image) -> Result<Instances> {
-    let mut masks: Vec<Matte> = masks.into_iter().map(|m| checked(m.at_aspect(img.width, img.height))).collect::<Result<_>>()?;
-    // largest first, so callers that keep one keep the main subject
-    let area = |m: &Matte| m.data.iter().map(|v| f64::from(*v)).sum::<f64>() / m.data.len().max(1) as f64;
-    masks.sort_by(|a, b| area(b).total_cmp(&area(a)));
-    Ok(Instances { masks })
+/// Largest first, so callers that keep one keep the main person.
+pub(crate) fn largest_first(masks: &mut [Matte]) {
+    // (a valid matte's mean coverage is finite and not negative, so its bits sort as the number does)
+    masks.sort_by_cached_key(|m| std::cmp::Reverse((m.data.iter().map(|v| f64::from(*v)).sum::<f64>() / m.data.len().max(1) as f64).to_bits()));
 }

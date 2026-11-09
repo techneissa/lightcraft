@@ -36,7 +36,7 @@ pub(crate) mod vision {
         Err(Error::Unavailable)
     }
 
-    pub(crate) fn instances(_img: &Image, _kind: Request) -> Result<Vec<Matte>> {
+    pub(crate) fn instances(_img: &Image, _kind: Request, _each: &mut dyn FnMut(Matte) -> Result<()>) -> Result<()> {
         Err(Error::Unavailable)
     }
 }

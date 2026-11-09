@@ -1,5 +1,8 @@
 use crate::Error;
-use crate::vision::{Image, Instances, MAX_SIDE, Matte, Pixels, Request, foreground_instances, person_instances, person_segmentation, supported};
+use crate::vision::{
+    Image, MAX_KEPT_PIXELS, MAX_SIDE, Matte, Pixels, Request, fold_max, foreground_union, keep, largest_first, person_instances, person_segmentation,
+    supported,
+};
 
 /// A small synthetic picture: a light backdrop with a dark round "head" on a "body" (Vision may or may not call it a
 /// person; the tests check what comes back, not what it finds).
@@ -28,7 +31,7 @@ fn damaged_pictures_are_refused_before_vision() {
     for (w, h, len) in [(0, 4, 0), (4, 0, 0), (2, 2, 11), (2, 2, 13), (MAX_SIDE + 1, 1, 0), (1 << 13, 1 << 13, 0)] {
         let data = vec![0u8; len];
         let img = Image { width: w, height: h, pixels: Pixels::Rgb8(&data) };
-        for r in [person_segmentation(&img).map(|_| ()), person_instances(&img).map(|_| ()), foreground_instances(&img).map(|_| ())] {
+        for r in [person_segmentation(&img).map(|_| ()), person_instances(&img).map(|_| ()), foreground_union(&img).map(|_| ())] {
             assert!(matches!(r, Err(Error::Input(_))), "{w}×{h}, {len}: {r:?}");
         }
     }
@@ -64,15 +67,35 @@ fn a_matte_comes_back_at_the_photo_aspect() {
     assert_eq!(Matte { width: 0, height: 0, data: vec![] }.at(0.5, 0.5), 0.0);
 }
 
+/// Subject masks fold into one matte as they are read: the largest coverage at each pixel, at the first one's size.
 #[test]
-fn the_union_of_instances_is_their_largest_coverage() {
-    let a = Matte { width: 2, height: 1, data: vec![1.0, 0.0] };
-    let b = Matte { width: 4, height: 2, data: vec![0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.8] };
-    let u = Instances { masks: vec![a, b] }.union().unwrap();
+fn subject_masks_fold_into_their_largest_coverage() {
+    let mut acc = None;
+    fold_max(&mut acc, Matte { width: 2, height: 1, data: vec![1.0, 0.0] });
+    fold_max(&mut acc, Matte { width: 4, height: 2, data: vec![0.0, 0.0, 0.0, 0.8, 0.0, 0.0, 0.0, 0.8] });
+    fold_max(&mut acc, Matte { width: 2, height: 1, data: vec![0.5, 0.2] });
+    let u = acc.unwrap();
     assert_eq!((u.width, u.height), (2, 1));
     assert_eq!(u.data[0], 1.0);
     assert!(u.data[1] > 0.3);
-    assert_eq!(Instances::default().union(), None);
+}
+
+/// The per-person masks kept by one call add up to at most `MAX_KEPT_PIXELS`: a large photo's masks are an error,
+/// not gigabytes.
+#[test]
+fn kept_masks_are_capped() {
+    let one = Matte { width: 1, height: 1, data: vec![0.0] };
+    let mut kept = MAX_KEPT_PIXELS - 1;
+    assert!(keep(&mut kept, &one).is_ok());
+    assert!(matches!(keep(&mut kept, &one), Err(Error::Input(_))));
+}
+
+#[test]
+fn people_come_largest_first() {
+    let m = |v: f32| Matte { width: 2, height: 1, data: vec![v, 0.0] };
+    let mut masks = vec![m(0.2), m(1.0), m(0.0), m(0.6)];
+    largest_first(&mut masks);
+    assert_eq!(masks.iter().map(|m| m.data[0]).collect::<Vec<_>>(), vec![1.0, 0.6, 0.2, 0.0]);
 }
 
 /// Real Vision calls on a small synthetic picture, 8-bit and float: each gives valid mattes at the photo's size and
@@ -96,11 +119,10 @@ fn vision_runs_on_a_small_picture() {
             lightcraft_testkit::skip!(System, "Apple Vision instance masks need macOS 14 or later");
             continue;
         }
-        for found in [person_instances(&img).unwrap(), foreground_instances(&img).unwrap()] {
-            for m in &found.masks {
-                assert!(m.is_valid());
-                assert_eq!((m.width, m.height), (w, h), "an instance mask is at the photo's size");
-            }
+        let subject = foreground_union(&img).unwrap();
+        for m in person_instances(&img).unwrap().masks.iter().chain(&subject) {
+            assert!(m.is_valid());
+            assert_eq!((m.width, m.height), (w, h), "an instance mask is at the photo's size");
         }
     }
 }
@@ -121,8 +143,7 @@ fn vision_finds_a_plain_subject() {
         }
     }
     let img = Image { width: w, height: h, pixels: Pixels::Rgb8(&px) };
-    let found = foreground_instances(&img).unwrap();
-    let Some(m) = found.union() else {
+    let Some(m) = foreground_union(&img).unwrap() else {
         lightcraft_testkit::skip!(System, "Apple Vision found no subject in the synthetic picture");
         return;
     };

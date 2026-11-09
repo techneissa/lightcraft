@@ -10,11 +10,14 @@ List: Apple Vision's own person and subject masks as a third hair edge in Settin
 - **Entire Person / Background**: Vision's person segmentation (Accurate quality, fine hair) draws the edge, within
   the same 3 % band around each parsed person's edge as BiRefNet Matting. Vision's per-person masks say whose each
   pixel is: each Vision person is matched to the parsed person they overlap most, and where two people meet, each
-  keeps their own. A parsed person no Vision person matches (often a hand or a patch the parse split off one person)
-  uses the segmentation as it is, so no ring of background opens inside the person.
+  keeps their own, also beside someone only Vision sees (every other Vision person's share is taken off). A parsed
+  person no Vision person matches (often a hand or a patch the parse split off one person, or someone Vision missed)
+  keeps the parse's edge, so no ring of background opens inside the person and no edge is cut away. The matte is at
+  most 1536 px a side, the widest plane the parse cache reads back.
 - **Subject**: Vision's subject masks (every subject together) redraw the Subject part's edge, the same band rule as
-  BiRefNet Matting. Their edge is hard and drops strands, so where the person segmentation is larger (hair) it is
-  used. The part's model ends `+vision` (hover: "…, Apple Vision Edges"); such a grid is sampled without the guided
+  BiRefNet Matting. Their edge is hard and drops strands, so the person segmentation adds the hair of the people who
+  are part of the subject: the Vision people with at least half their mask inside it, each pixel their share of the
+  segmentation where it is larger. A bystander beside the subject adds nothing. The part's model ends `+vision` (hover: "…, Apple Vision Edges"); such a grid is sampled without the guided
   filter, like `+matting`, so preview = export. When Vision finds no subject, the part keeps its own edge.
 - **Runs** once per photo on the worker thread that asked (people parsing, the Subject worker) with the "Refining
   hair edges" row (detail "Apple Vision"). A people parse with Vision edges is cached as its own version
@@ -23,6 +26,8 @@ List: Apple Vision's own person and subject masks as a third hair edge in Settin
 - **Never crashes**: an older macOS, a damaged picture, a Vision error or a panic is a message ("hair edges:
   Apple Vision: …").
 - **`crates/coreml`** gains `vision` (safe API) and `vision_macos.rs` (the `unsafe`): its README lists every call.
+  It runs on macOS 14 (the output-format list, macOS 15, is used only where it is there); subject masks are folded
+  into one matte as they are read, and the person masks one call keeps are capped at 64 M pixels.
 
 ## How it does
 
@@ -67,7 +72,8 @@ Photos (Wikimedia Commons, CC0; 1800–1920 px thumbnails):
   module line.
 - `crates/engine/src/tests.rs`, `crates/ui-egui/src/tests.rs`: `mod` lines. `Cargo.lock`: `objc2-vision`,
   `objc2-core-video` 0.3.2 (Zlib OR Apache-2.0 OR MIT).
-- Fork files of other features: `crates/coreml/{Cargo.toml,README.md,src/lib.rs,src/stub.rs}` (the `vision` module,
+- Fork files of other features: `crates/parsing/src/cache.rs` (`MAX_PLANE_SIDE` public, so the Vision matte keeps to
+  it); `crates/coreml/{Cargo.toml,README.md,src/lib.rs,src/stub.rs}` (the `vision` module,
   `Error::Vision`, the Vision and Core Video bindings); `crates/engine/src/hair_edges.rs` (`Edge::Vision`, `mod
   vision`, `edge` and `set_edge` check Vision runs here); `crates/engine/src/hair_edges/people.rs` (`entire_rect`,
   `Refined`, `refine_person` visible to `vision`); `crates/engine/src/people_parsing.rs` (the edge chosen goes with
@@ -81,9 +87,12 @@ Photos (Wikimedia Commons, CC0; 1800–1920 px thumbnails):
 
 See `fork/tests.d/apple-vision-masks.txt`. The Core ML crate's tests call Vision on small synthetic pictures (8-bit
 and float; a disc on a plain backdrop is found as a subject) and refuse damaged sizes before any call; they skip off
-the Mac or on an older macOS. The engine tests match Vision people to parsed people, keep each person's own edge
-where two meet, keep a split-off parsed person whole (a ring opened before the fix), make a people parse with Vision
-edges once and cache it, keep the choice, and mark and name a Subject part `+vision`; the pipeline test draws a
+the Mac or on an older macOS; the subject masks fold into their largest coverage, the kept person masks are capped,
+and the macOS 15 format list is not required. The engine tests match Vision people to parsed people, keep each
+person's own edge where two meet and beside a neighbour only Vision sees, keep a split-off parsed person whole (a ring
+opened before the fix) and an unmatched person's edge where the segmentation is empty, read a full-frame parse with
+Vision edges back from the cache, add only the subject's people's hair to a Subject matte, make a people parse with
+Vision edges once and cache it, keep the choice, and mark and name a Subject part `+vision`; the pipeline test draws a
 `+vision` grid's outline the same in a preview and an export; the UI test chooses Apple Vision with one click.
 Pictures: `HAIR_EDGES=current,birefnet-matting,apple-vision LIGHTCRAFT_CONFIG_DIR=<scratch> cargo run --release -p
 lightcraft-engine --features sam --example hair_edges -- OUT_DIR PHOTO...`; Vision alone:
