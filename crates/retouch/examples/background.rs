@@ -1,12 +1,113 @@
 //! Try the background feature on a picture without building the app:
-//! `cargo run -p lightcraft-retouch --example background -- in.jpg out.jpg --amount 50 [--face x0,y0,x1,y1]`
+//!
+//! ```text
+//! cargo run -p lightcraft-retouch --release --example background -- in.jpg out.jpg --mask person.png \
+//!   [--blur 0..100] [--swap 0..100] [--clean 0..100] [--colour #RRGGBB | --picture other.jpg] [--depth depth.png]
+//! ```
+//!
+//! `--mask` is the person's matte as a grey picture (white = person), e.g. `outdir/masks/entirePerson-0.png` from
+//! `cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/`; repeat it for more people.
+//! `--depth` is a grey depth map (white = near). The picture is worked on in linear light (sRGB primaries; the app
+//! works in linear Rec.2020, so a swapped colour comes out slightly more saturated here than in the app).
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
-mod common;
+use std::process::ExitCode;
+use std::sync::Arc;
 
-use lightcraft_retouch::Feature;
+use lightcraft_color::transfer::{decode_srgb8, encode_srgb8};
+use lightcraft_raster::{Plane, Rgb32f};
+use lightcraft_retouch::background::{Backdrop, Background, Depth, Swap};
+use lightcraft_retouch::{Face, Features, Input, NormRect, Part, PartMask, Retouch, Stage, WholePhoto};
 
-fn main() -> std::process::ExitCode {
-    common::main(<lightcraft_retouch::background::Background as Feature>::KEY)
+fn main() -> ExitCode {
+    match run(&std::env::args().skip(1).collect::<Vec<_>>()) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            eprintln!("{e}");
+            ExitCode::FAILURE
+        }
+    }
+}
+
+fn read_rgb(path: &str) -> Result<Rgb32f, String> {
+    let rgb = image::open(path).map_err(|e| format!("{path}: {e}"))?.to_rgb8();
+    let (w, h) = (rgb.width() as usize, rgb.height() as usize);
+    let mut img = Rgb32f::new(w, h);
+    for (px, p) in img.data.iter_mut().zip(rgb.pixels()) {
+        *px = [decode_srgb8(p.0[0]), decode_srgb8(p.0[1]), decode_srgb8(p.0[2])];
+    }
+    Ok(img)
+}
+
+fn read_grey(path: &str) -> Result<Plane, String> {
+    let g = image::open(path).map_err(|e| format!("{path}: {e}"))?.to_luma8();
+    let (w, h) = (g.width() as usize, g.height() as usize);
+    Ok(Plane { width: w, height: h, data: g.pixels().map(|p| f32::from(p.0[0]) / 255.0).collect() })
+}
+
+fn run(args: &[String]) -> Result<(), String> {
+    let usage = || {
+        "usage: background in.jpg out.jpg --mask person.png [--blur N] [--swap N] [--clean N] [--colour #RRGGBB | --picture file] [--depth depth.png]"
+            .to_string()
+    };
+    let mut files = Vec::new();
+    let mut b = Background::default();
+    let (mut masks, mut picture, mut depth) = (Vec::new(), None, None);
+    let mut it = args.iter();
+    while let Some(a) = it.next() {
+        let mut value = || it.next().cloned().ok_or_else(usage);
+        match a.as_str() {
+            "--blur" => b.blur = value()?.parse().map_err(|_| usage())?,
+            "--swap" => b.swap = value()?.parse().map_err(|_| usage())?,
+            "--clean" => b.clean = value()?.parse().map_err(|_| usage())?,
+            "--colour" => b.with = Swap::from_hex(&value()?).ok_or_else(usage)?,
+            "--picture" => {
+                let p = value()?;
+                b.with = Swap::File { path: p.clone() };
+                picture = Some(p);
+            }
+            "--mask" => masks.push(value()?),
+            "--depth" => depth = Some(value()?),
+            _ => files.push(a.clone()),
+        }
+    }
+    let [input, output] = files.as_slice() else { return Err(usage()) };
+    let mut img = read_rgb(input)?;
+    let (w, h) = (img.width, img.height);
+    let mut faces = Vec::new();
+    for m in &masks {
+        let plane = read_grey(m)?;
+        let mask = PartMask { plane, area: NormRect::new(0.0, 0.0, 1.0, 1.0) };
+        faces.push(Face { masks: vec![(Part::EntirePerson, mask)], ..Face::boxed(NormRect::new(0.4, 0.1, 0.6, 0.3)) });
+    }
+    let mut input = Input::new(faces);
+    if let Some(p) = &picture {
+        input = input.with_backdrop(Some(Backdrop { image: Arc::new(read_rgb(p)?), key: 1 }));
+    }
+    if let Some(d) = &depth {
+        input = input.with_depth(Some(Depth { plane: Arc::new(read_grey(d)?), key: 2 }));
+    }
+    let r = Retouch { global: Features { background: b, ..Features::default() }, faces: Vec::new() };
+    let view = WholePhoto { width: w, height: h };
+    let t = std::time::Instant::now();
+    lightcraft_retouch::run::apply(&mut img, &r, &input, &view, Stage::Background);
+    let first = t.elapsed();
+    // a second render of the same picture: what a slider drag costs, with the work kept
+    let mut again = read_rgb(input_path(&files))?;
+    let t = std::time::Instant::now();
+    lightcraft_retouch::run::apply(&mut again, &r, &input, &view, Stage::Background);
+    eprintln!(
+        "background: {w}×{h}, {} people, {:.0} ms, then {:.1} ms with the work kept",
+        masks.len(),
+        first.as_secs_f64() * 1e3,
+        t.elapsed().as_secs_f64() * 1e3
+    );
+    let bytes: Vec<u8> = img.data.iter().flat_map(|p| p.map(encode_srgb8)).collect();
+    let out = image::RgbImage::from_raw(w as u32, h as u32, bytes).ok_or("the picture's size changed")?;
+    out.save(output).map_err(|e| format!("{output}: {e}"))
+}
+
+fn input_path(files: &[String]) -> &str {
+    files.first().map_or("", String::as_str)
 }

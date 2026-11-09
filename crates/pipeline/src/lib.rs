@@ -611,6 +611,15 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                 let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
                 work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
             }
+            let halo = retouch_step::reach(s, px_per_long);
+            if halo > 0 {
+                // (fork, `fork/retouch-background.md`: Background reads its blurs around each pixel)
+                let x = work.x.saturating_sub(halo);
+                let y = work.y.saturating_sub(halo);
+                let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
+                let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
+                work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
+            }
             if work != win {
                 keep = Some(PixelWindow { x: win.x - work.x, y: win.y - work.y, ..win });
             }

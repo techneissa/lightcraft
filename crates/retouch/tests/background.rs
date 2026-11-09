@@ -18,18 +18,15 @@ fn no_panic_without_faces_with_many_faces_or_a_one_pixel_photo() {
     common::never_panics::<Background>();
 }
 
-/// The photo seen through a window of `place` (the whole photo is `photo` pixels), with a Swap picture and a depth
-/// map when given.
+/// The photo seen through a window of `place` (the whole photo is `photo` pixels).
 struct Win {
     photo: (usize, usize),
     place: Place,
-    backdrop: Option<Backdrop>,
-    depth: Option<Depth>,
 }
 
 impl Win {
     fn whole(w: usize, h: usize) -> Win {
-        Win { photo: (w, h), place: Place { x: 0, y: 0, width: w, height: h }, backdrop: None, depth: None }
+        Win { photo: (w, h), place: Place { x: 0, y: 0, width: w, height: h } }
     }
 }
 
@@ -44,14 +41,6 @@ impl View for Win {
 
     fn place(&self) -> Option<Place> {
         Some(self.place)
-    }
-
-    fn backdrop(&self) -> Option<&Backdrop> {
-        self.backdrop.as_ref()
-    }
-
-    fn depth(&self) -> Option<&Depth> {
-        self.depth.as_ref()
     }
 }
 
@@ -238,11 +227,11 @@ fn swap_with_a_picture_covers_the_frame() {
     let (w, h) = (240, 160);
     // a square picture: green on the left, magenta on the right
     let pic = Rgb32f::from_fn(100, 100, |x, _| if x < 50 { [0.0, 0.8, 0.0] } else { [0.8, 0.0, 0.8] });
-    let mut view = Win::whole(w, h);
-    view.backdrop = Some(Backdrop { image: Arc::new(pic), key: 1 });
+    let view = Win::whole(w, h);
+    let loaded = input.with_backdrop(Some(Backdrop { image: Arc::new(pic), key: 1 }));
     let before = photo(w, h, &input);
     let mut after = before.clone();
-    run(&mut after, &settings(0.0, 100.0, 0.0, Swap::File { path: "pic.png".into() }), &input, &view);
+    run(&mut after, &settings(0.0, 100.0, 0.0, Swap::File { path: "pic.png".into() }), &loaded, &view);
     let (l, r) = (after.get(5, 80), after.get(w - 5, 80));
     assert!(l[1] > 0.7 && l[0] < 0.05, "{l:?}");
     assert!(r[0] > 0.7 && r[1] < 0.05, "{r:?}");
@@ -252,7 +241,7 @@ fn swap_with_a_picture_covers_the_frame() {
     assert_eq!(waiting.data, before.data);
     // blurred: the two halves meet in a soft ramp
     let mut soft = before.clone();
-    run(&mut soft, &settings(100.0, 100.0, 0.0, Swap::File { path: "pic.png".into() }), &input, &view);
+    run(&mut soft, &settings(100.0, 100.0, 0.0, Swap::File { path: "pic.png".into() }), &loaded, &view);
     let mid = soft.get(w / 2, 4);
     assert!(mid[0] > 0.1 && mid[1] > 0.1, "a blurred seam: {mid:?}");
 }
@@ -348,17 +337,15 @@ fn a_window_draws_what_the_whole_render_draws() {
     let backdrop = Backdrop { image: Arc::new(pic), key: 9 };
     let r = settings(80.0, 40.0, 70.0, Swap::File { path: "p".into() });
     let whole = photo(w, h, &input);
+    let input = input.with_backdrop(Some(backdrop));
     let mut full = whole.clone();
-    let mut view = Win::whole(w, h);
-    view.backdrop = Some(backdrop.clone());
-    run(&mut full, &r, &input, &view);
+    run(&mut full, &r, &input, &Win::whole(w, h));
     let m = reach(w as f64);
     for (wx, wy, ww, wh) in [(120usize, 70usize, 60, 50), (0, 0, 50, 40), (250, 150, 110, 90)] {
         let (x0, y0) = (wx.saturating_sub(m), wy.saturating_sub(m));
         let (x1, y1) = ((wx + ww + m).min(w), (wy + wh + m).min(h));
         let mut part = whole.crop(x0, y0, x1 - x0, y1 - y0);
-        let view =
-            Win { photo: (w, h), place: Place { x: x0 as i64, y: y0 as i64, width: w, height: h }, backdrop: Some(backdrop.clone()), depth: None };
+        let view = Win { photo: (w, h), place: Place { x: x0 as i64, y: y0 as i64, width: w, height: h } };
         run(&mut part, &r, &input, &view);
         for y in wy..wy + wh {
             for x in wx..wx + ww {
@@ -391,11 +378,10 @@ fn a_depth_map_sets_the_blur() {
             *v = 1.0;
         }
     }
-    let mut view = Win::whole(w, h);
-    view.depth = Some(Depth { plane: Arc::new(person_depth), key: 3 });
+    let deep = input.with_depth(Some(Depth { plane: Arc::new(person_depth), key: 3 }));
     let before = photo(w, h, &input);
     let mut after = before.clone();
-    run(&mut after, &settings(100.0, 0.0, 0.0, Swap::default()), &input, &view);
+    run(&mut after, &settings(100.0, 0.0, 0.0, Swap::default()), &deep, &Win::whole(w, h));
     let left = |x: usize, _: usize| x < 60;
     let right = |x: usize, _: usize| x > 240;
     let (dl, dr) = (detail(&after, left) / detail(&before, left), detail(&after, right) / detail(&before, right));

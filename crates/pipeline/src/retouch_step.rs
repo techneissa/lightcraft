@@ -11,6 +11,7 @@
 use std::sync::Arc;
 
 use lightcraft_develop::DevelopSettings;
+use lightcraft_develop::retouch::background::Place;
 use lightcraft_develop::retouch::{Input, KeyMap, Stage, View};
 use lightcraft_geom::{Affine, Orientation, Point};
 use lightcraft_raster::Rgb32f;
@@ -55,16 +56,46 @@ impl KeyMap for FrameKeyMap {
     }
 }
 
+/// How far (output pixels) the step reads around a pixel in a render of `s` whose photo's long side is `long_px`
+/// output pixels: a windowed render (the zoomed loupe) must hold this much around itself. Background reads its
+/// blurs and its edge's colours around each pixel (`fork/retouch-background.md`); the other features read inside
+/// the faces' boxes. 0 while the step is off.
+pub fn reach(s: &DevelopSettings, long_px: f64) -> usize {
+    if !active(s) {
+        return 0;
+    }
+    s.retouch.global.background.reach(long_px)
+}
+
+/// Where the plan's pixels lie in the whole render: its window's top-left pixel and the whole render's size.
+fn place_of(p: &Plan<'_>) -> Place {
+    let (full, fw, fh) = &p.full;
+    let (fw, fh) = (*fw, *fh);
+    if (p.w, p.h) == (fw, fh) {
+        return Place { x: 0, y: 0, width: fw, height: fh };
+    }
+    let n = p.frame.out_to_norm(p.w, p.h).apply(Point::new(0.5, 0.5));
+    let o = full.norm_to_out(fw, fh).apply(n);
+    let at = |v: f64| if v.is_finite() { (v - 0.5).round() as i64 } else { 0 };
+    Place { x: at(o.x), y: at(o.y), width: fw, height: fh }
+}
+
 /// The plan's output pixels ↔ normalised photo coordinates (those of spots and faces).
 struct FrameView {
     to_norm: Affine,
     to_out: Affine,
     keys: FrameKeyMap,
+    place: Place,
 }
 
 impl FrameView {
     fn new(frame: &crate::geometry::Frame, w: usize, h: usize, orient: Orientation) -> FrameView {
-        FrameView { to_norm: frame.out_to_norm(w, h), to_out: frame.norm_to_out(w, h), keys: FrameKeyMap::new(frame, orient) }
+        FrameView {
+            to_norm: frame.out_to_norm(w, h),
+            to_out: frame.norm_to_out(w, h),
+            keys: FrameKeyMap::new(frame, orient),
+            place: Place { x: 0, y: 0, width: w, height: h },
+        }
     }
 }
 
@@ -82,6 +113,10 @@ impl View for FrameView {
     fn key_map(&self) -> Option<&dyn KeyMap> {
         Some(&self.keys)
     }
+
+    fn place(&self) -> Option<Place> {
+        Some(self.place)
+    }
 }
 
 /// The plan's output pixels ↔ normalised coordinates on the photo before lens corrections and transform (faces
@@ -90,13 +125,19 @@ struct PhotoView {
     to_photo: crate::geometry::MaskMap,
     to_out: Box<dyn Fn(Point) -> Option<Point> + Sync>,
     keys: FrameKeyMap,
+    place: Place,
 }
 
 impl PhotoView {
     fn new(frame: &crate::geometry::Frame, w: usize, h: usize, orient: Orientation) -> PhotoView {
         let keys = FrameKeyMap::new(frame, orient);
         let frame = frame.for_mask(true);
-        PhotoView { to_photo: frame.out_to_mask(w, h), to_out: Box::new(frame.mask_to_out(w, h)), keys }
+        PhotoView {
+            to_photo: frame.out_to_mask(w, h),
+            to_out: Box::new(frame.mask_to_out(w, h)),
+            keys,
+            place: Place { x: 0, y: 0, width: w, height: h },
+        }
     }
 }
 
@@ -113,6 +154,10 @@ impl View for PhotoView {
     fn key_map(&self) -> Option<&dyn KeyMap> {
         Some(&self.keys)
     }
+
+    fn place(&self) -> Option<Place> {
+        Some(self.place)
+    }
 }
 
 /// Retouch `img` (the plan's output pixels) in place: the retouch stage, then the background stage.
@@ -124,8 +169,12 @@ pub fn apply(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     let none = Input::default();
     let input: &Input = info.retouch.as_deref().unwrap_or(&none);
     let o = s.orientation;
-    let view: Box<dyn View> =
-        if input.on_photo { Box::new(PhotoView::new(&p.frame, p.w, p.h, o)) } else { Box::new(FrameView::new(&p.frame, p.w, p.h, o)) };
+    let place = place_of(p);
+    let view: Box<dyn View> = if input.on_photo {
+        Box::new(PhotoView { place, ..PhotoView::new(&p.frame, p.w, p.h, o) })
+    } else {
+        Box::new(FrameView { place, ..FrameView::new(&p.frame, p.w, p.h, o) })
+    };
     for stage in [Stage::Retouch, Stage::Background] {
         lightcraft_develop::retouch::run::apply(img, &s.retouch, input, view.as_ref(), stage);
     }
@@ -292,6 +341,53 @@ mod tests {
         assert!(red > 500, "{red} red pixels");
         assert!(red_lit * 100 >= red * 97, "the warped patch is lit: {red_lit} of {red}");
         assert!(grey_lit * 100 <= red * 3, "and little else (its antialiased edge): {grey_lit}");
+    }
+
+    /// One person (a soft ellipse over the middle of the photo), from a people parse.
+    fn a_person() -> SourceInfo {
+        use lightcraft_develop::retouch::{Part, PartMask};
+        let plane = lightcraft_raster::Plane::from_fn(128, 128, |x, y| {
+            let (nx, ny) = ((x as f64 + 0.5) / 128.0, (y as f64 + 0.5) / 128.0);
+            let d = (((nx - 0.5) / 0.15).powi(2) + ((ny - 0.6) / 0.35).powi(2)).sqrt();
+            ((1.0 - d) * 12.0 + 0.5).clamp(0.0, 1.0) as f32
+        });
+        let mask = PartMask { plane, area: NormRect::new(0.0, 0.0, 1.0, 1.0) };
+        let face = Face { masks: vec![(Part::EntirePerson, mask)], ..Face::boxed(NormRect::new(0.42, 0.25, 0.58, 0.45)) };
+        SourceInfo { retouch: Some(Arc::new(Input::new_on_photo(vec![face]))), ..SourceInfo::default() }
+    }
+
+    /// Background reads blurs around each pixel: a zoomed window (grown by its reach) draws what the whole render
+    /// draws inside it, and the window is grown only while Background is on.
+    #[test]
+    fn a_window_with_the_background_on_matches_the_whole_render() {
+        let src = lightcraft_scenes::demo_library()[0].render(480, 320);
+        let info = a_person();
+        let mut s = DevelopSettings::default();
+        controls::set(&mut s, "retouch.background.blur", 80.0);
+        controls::set(&mut s, "retouch.background.clean", 60.0);
+        controls::set(&mut s, "retouch.background.swap", 30.0);
+        let fit = RenderRequest::fit(480, 320);
+        let full = render(&src, &info, &s, &fit).image;
+        let plain = render(&src, &info, &DevelopSettings::default(), &fit).image;
+        assert_ne!(full, plain, "the background changed");
+        for win in [crate::PixelWindow { x: 180, y: 100, w: 120, h: 100 }, crate::PixelWindow { x: 0, y: 0, w: 90, h: 70 }] {
+            let req = RenderRequest { window: Some(win), ..fit };
+            let w = render(&src, &info, &s, &req).image;
+            assert_eq!((w.width, w.height), (win.w, win.h));
+            let mut max = 0u8;
+            for y in 0..win.h {
+                for x in 0..win.w {
+                    let (a, b) = (full.get(win.x + x, win.y + y), w.get(x, y));
+                    max = (0..3).fold(max, |m, k| m.max(a[k].abs_diff(b[k])));
+                }
+            }
+            assert!(max <= 1, "the window at {win:?} differs by {max}");
+            let p = crate::plan(&src, &info, &s, &req);
+            assert!(p.keep.is_some(), "the window was grown");
+        }
+        let plain = DevelopSettings::default();
+        let p = crate::plan(&src, &info, &plain, &RenderRequest { window: Some(crate::PixelWindow { x: 180, y: 100, w: 120, h: 100 }), ..fit });
+        assert!(p.keep.is_none(), "not grown while Background is off");
     }
 
     /// An on-photo face under a crop and a lens distortion: a draft and a render four times its size light the same

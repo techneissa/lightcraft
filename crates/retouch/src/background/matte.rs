@@ -72,10 +72,6 @@ impl Edge {
         let (Some(&a), Some(&b)) = (self.rows.get(y), self.rows.get(y + 1)) else { return &[] };
         self.px.get(a..b).unwrap_or(&[])
     }
-
-    pub fn bytes(&self) -> usize {
-        self.px.len() * std::mem::size_of::<EdgePx>() + self.rows.len() * std::mem::size_of::<usize>()
-    }
 }
 
 pub(crate) fn is_edge(v: f32) -> bool {

@@ -130,11 +130,6 @@ impl Grid {
         }
         (p[3] > min).then(|| [p[0] / p[3], p[1] / p[3], p[2] / p[3]])
     }
-
-    /// Memory held (bytes).
-    pub fn bytes(&self) -> usize {
-        self.cells.data.len() * std::mem::size_of::<[f32; 4]>()
-    }
 }
 
 #[cfg(test)]

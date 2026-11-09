@@ -84,14 +84,6 @@ pub trait View: Sync {
     fn place(&self) -> Option<crate::background::Place> {
         None
     }
-    /// The picture Background Swap uses, when it uses one and the engine has loaded it.
-    fn backdrop(&self) -> Option<&crate::background::Backdrop> {
-        None
-    }
-    /// The photo's depth map, when its file has one.
-    fn depth(&self) -> Option<&crate::background::Depth> {
-        None
-    }
 }
 
 /// The view of an image that is the whole photo (the examples and tests): normalised × size.
@@ -139,6 +131,10 @@ pub struct Scene<'a> {
     pub faces: Vec<FaceCtx<'a>>,
     pub width: usize,
     pub height: usize,
+    /// The picture Background Swap uses ([`Input::backdrop`]).
+    pub backdrop: Option<&'a crate::background::Backdrop>,
+    /// The photo's depth map ([`Input::depth`]).
+    pub depth: Option<&'a crate::background::Depth>,
     view: &'a dyn View,
 }
 
@@ -150,7 +146,7 @@ impl<'a> Scene<'a> {
     /// whose box is not a box or maps nowhere. `face` arguments of [`Feature::apply`] index this list.
     pub fn new(input: &'a Input, view: &'a dyn View, width: usize, height: usize) -> Scene<'a> {
         let faces = input.faces.iter().take(MAX_FACES).enumerate().filter_map(|(i, f)| map_face(f, i, view)).collect();
-        Scene { faces, width, height, view }
+        Scene { faces, width, height, backdrop: input.backdrop.as_ref(), depth: input.depth.as_ref(), view }
     }
 
     pub fn view(&self) -> &dyn View {

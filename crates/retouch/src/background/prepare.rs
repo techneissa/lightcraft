@@ -123,7 +123,7 @@ fn key_of(img: &Rgb32f, scene: &Scene<'_>, place: &Place) -> u64 {
             h.u64(plane_hash(&m.plane.data));
         }
     }
-    h.u64(view.depth().map_or(0, |d| d.key));
+    h.u64(scene.depth.map_or(0, |d| d.key));
     h.0
 }
 
@@ -174,7 +174,7 @@ impl Prepared {
 
     /// Each pixel's share of Blur's radius.
     pub fn shares(&self, scene: &Scene<'_>) -> &Plane {
-        self.shares.get_or_init(|| falloff::shares(scene, self.size, scene.view().depth()))
+        self.shares.get_or_init(|| falloff::shares(scene, self.size, scene.depth))
     }
 
     /// The background blurred at each of [`LEVELS`]: (radius in pixels, blocks).
@@ -266,17 +266,6 @@ impl Prepared {
                 })
                 .collect()
         })
-    }
-
-    /// Memory held (bytes).
-    pub fn bytes(&self) -> usize {
-        let grids = |l: Option<&Vec<(f64, Grid)>>| l.map_or(0, |l| l.iter().map(|(_, g)| g.bytes()).sum());
-        self.alpha.data.len() * 4
-            + self.edge.bytes()
-            + self.shares.get().map_or(0, |p| p.data.len() * 4)
-            + grids(self.levels.get())
-            + self.clean.get().map_or(0, Grid::bytes)
-            + self.grain.get().map_or(0, |p| p.data.len() * 4)
     }
 }
 

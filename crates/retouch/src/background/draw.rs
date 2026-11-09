@@ -88,7 +88,6 @@ fn blurred(levels: &[(f64, Grid)], rho: f64, sharp: [f32; 3], gx: i64, gy: i64) 
 
 /// Redraw `img` with the background of `k`, from the kept work `prep` (made from these very pixels).
 pub(crate) fn draw(img: &mut Rgb32f, scene: &Scene<'_>, prep: &Prepared, k: &Strength, with: &Swap) {
-    let view = scene.view();
     // (everything kept is made from the pixels before they change)
     let shares = (k.blur > 0.0).then(|| prep.shares(scene));
     let levels = (k.blur > 0.0).then(|| prep.levels(img));
@@ -98,7 +97,7 @@ pub(crate) fn draw(img: &mut Rgb32f, scene: &Scene<'_>, prep: &Prepared, k: &Str
         Swap::Colour { rgb } => Some(colour_linear(*rgb)),
         _ => None,
     };
-    let fitted: Option<std::sync::Arc<Fitted>> = if k.swap > 0.0 && colour.is_none() { view.backdrop().and_then(|b| prep.fitted(b)) } else { None };
+    let fitted: Option<std::sync::Arc<Fitted>> = if k.swap > 0.0 && colour.is_none() { scene.backdrop.and_then(|b| prep.fitted(b)) } else { None };
     let picture_levels = fitted.as_deref().filter(|_| k.blur > 0.0).map(|f| prep.picture_levels(f));
     let swap = if colour.is_some() || fitted.is_some() { k.swap } else { 0.0 };
     if k.blur <= 0.0 && k.clean <= 0.0 && swap <= 0.0 {
