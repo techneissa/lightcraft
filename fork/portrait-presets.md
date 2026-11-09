@@ -9,7 +9,7 @@ List: Save Portrait Preset from one face's retouch settings (optionally the whol
   name and an id that stays with the preset, and the face's recognition embedding when the face index has one.
   With All picked it holds the settings for every face and follows nobody: an **All Faces** preset, given to every
   face of the photos it is applied to; Apply to Every Photo is not offered for it.
-- **Face settings only by default.** Include the Photo's Other Settings makes it a whole look: the photo's other
+- **Face settings only by default.** Save the Whole Look adds the photo's other
   develop settings of the default copy groups go in too. Never local masks, spots, red eye or the per-face block.
 - **What a preset carries of a face** (`carry`): per feature, the fields that are numbers (sliders), switches or
   lists of up to four numbers (a colour), so Teeth and Lips, Skin Tone, Blemishes, Face Reshape and every later
@@ -98,7 +98,7 @@ view's menu, and the toast's wording.
 
 ### Portrait Presets That Follow the Person
 - Save a face's portrait settings as a preset from the Portrait tab's Portrait Presets section; it appears in the
-  Presets panel's Portrait group with the name of the person it follows. Tick Include the Photo's Other Settings to
+  Presets panel's Portrait group with the name of the person it follows. Tick Save the Whole Look to
   save the whole look.
 - Applying it changes only the same person's face on each photo, found by name or by face recognition; other people
   in the photo are left alone. A preset saved from All Faces goes to every face.

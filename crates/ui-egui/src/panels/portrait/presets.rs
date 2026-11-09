@@ -78,7 +78,7 @@ pub(super) fn body(cx: &mut super::Ctx<'_>) {
         };
         ui.label(RichText::new(tr_format!("Save {who}'s Settings", who = from)).size(12.0).color(t.text_label));
         let field = TextField::singleline("portrait:presetName", &mut draft.name).hint(tr("Preset Name")).width(ui.available_width() - 4.0).show(ui);
-        let r = ui.checkbox(&mut draft.others, tr("Include the Photo's Other Settings"));
+        let r = ui.checkbox(&mut draft.others, tr("Save the Whole Look"));
         register_response("portrait:presetOthers", r.rect, &r);
         let named = !draft.name.trim().is_empty();
         let save = ui.add_enabled(named, egui::Button::new(tr("Save Portrait Preset")));
