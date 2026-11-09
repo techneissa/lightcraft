@@ -75,7 +75,9 @@ fn run(args: &[String]) -> Result<(), String> {
                 let pts: Vec<(f64, f64)> =
                     value()?.split(';').filter_map(|p| p.split_once(',')).filter_map(|(x, y)| Some((x.parse().ok()?, y.parse().ok()?))).collect();
                 let face = faces.last_mut().ok_or("--mesh comes after its --face")?;
-                face.landmarks = [468, 473, 1, 61, 291].iter().filter_map(|i| pts.get(*i).copied()).chain(pts.iter().copied()).collect();
+                // (any stand-in missing: no landmarks at all, as the app makes them)
+                let five: Option<Vec<(f64, f64)>> = [468, 473, 1, 61, 291].iter().map(|i| pts.get(*i).copied()).collect();
+                face.landmarks = five.map(|f| f.into_iter().chain(pts.iter().copied()).collect()).unwrap_or_default();
             }
             "--mask" => {
                 let (part, path) = value()?.split_once('=').ok_or_else(usage)?;

@@ -3,7 +3,7 @@
 mod common;
 
 use lightcraft_raster::{Plane, Rgb32f};
-use lightcraft_retouch::teeth_lips::{MAX_HUE_TURN, TEETH_CEILING, TeethLips, oklab, rgb};
+use lightcraft_retouch::teeth_lips::{LIP_MARGIN, MAX_HUE_TURN, TEETH_CEILING, TeethLips, oklab, rgb};
 use lightcraft_retouch::{Face, Input, NormRect, Part, PartMask, Retouch, Stage, WholePhoto};
 
 #[test]
@@ -189,6 +189,124 @@ fn lip_hue_turns_and_lip_saturation_scales_the_lips() {
     assert!(chroma(at(&less, 0.3, 0.6)) < c * 0.5 && chroma(at(&more, 0.3, 0.6)) > c * 1.3);
 }
 
+const INNER: [usize; 20] = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95];
+const OUTER_IDS: [usize; 20] = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 375, 321, 405, 314, 17, 84, 181, 91, 146];
+/// The outer lip outline the mesh tests use (an ellipse a little inside the Lips mask's box).
+const OUTER: (f64, f64, f64, f64) = (0.27, 0.32, 0.73, 0.63);
+
+/// Point `i` of `n` around the ellipse in box (x0, y0, x1, y1).
+fn around(i: usize, n: usize, (x0, y0, x1, y1): (f64, f64, f64, f64)) -> (f64, f64) {
+    let t = i as f64 / n as f64 * std::f64::consts::TAU;
+    ((x0 + x1) / 2.0 + (x1 - x0) / 2.0 * t.cos(), (y0 + y1) / 2.0 - (y1 - y0) / 2.0 * t.sin())
+}
+
+/// Landmarks as the app gives them: five stand-ins, then 478 mesh points, all at the mouth's centre but the outer and
+/// inner lip outlines on ellipses in boxes `outer` and `inner`.
+fn mesh(outer: (f64, f64, f64, f64), inner: (f64, f64, f64, f64)) -> Vec<(f64, f64)> {
+    let mut m = vec![(0.5, 0.47); 478];
+    for (k, i) in INNER.iter().enumerate() {
+        m[*i] = around(k, INNER.len(), inner);
+    }
+    for (k, i) in OUTER_IDS.iter().enumerate() {
+        m[*i] = around(k, OUTER_IDS.len(), outer);
+    }
+    let mut l = vec![(0.4, 0.2); 5];
+    l.extend(m);
+    l
+}
+
+/// Whether (`u`, `v`) lies inside the polygon through `pts`.
+fn in_polygon(pts: &[(f64, f64)], u: f64, v: f64) -> bool {
+    let mut inside = false;
+    for (i, a) in pts.iter().enumerate() {
+        let b = pts[(i + 1) % pts.len()];
+        if (a.1 > v) != (b.1 > v) && u < a.0 + (v - a.1) * (b.0 - a.0) / (b.1 - a.1) {
+            inside = !inside;
+        }
+    }
+    inside
+}
+
+/// With the face mesh, the lip colour stays within the outer lip outline's margin ([`LIP_MARGIN`] of the face): a
+/// lip-mask pixel past it keeps its bits.
+#[test]
+fn the_lip_colour_stays_within_the_outer_outlines_margin() {
+    let (w, h) = (320, 240);
+    let img = mouth(w, h);
+    let mut f = face(true);
+    f.landmarks = mesh(OUTER, (0.36, 0.42, 0.64, 0.53));
+    // the face's size in pixels (the longer side of its box), and the margin in pixels
+    let margin = (0.7 * w as f64).max(1.0 * h as f64) * LIP_MARGIN;
+    let outline: Vec<(f64, f64)> = (0..20).map(|k| around(k, 20, OUTER)).collect();
+    let dist = |u: f64, v: f64| {
+        let (px, py) = (u * w as f64, v * h as f64);
+        (0..outline.len())
+            .map(|i| {
+                let (a, b) = (outline[i], outline[(i + 1) % outline.len()]);
+                let (ax, ay, bx, by) = (a.0 * w as f64, a.1 * h as f64, b.0 * w as f64, b.1 * h as f64);
+                let (ex, ey) = (bx - ax, by - ay);
+                let t = (((px - ax) * ex + (py - ay) * ey) / (ex * ex + ey * ey)).clamp(0.0, 1.0);
+                (px - ax - t * ex).hypot(py - ay - t * ey)
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    let out = retouched(&img, &settings(&[("lipColorAmount", 100.0), ("lipSaturation", 100.0)]), vec![f]);
+    let (mut past, mut inside_changed) = (0, 0);
+    for y in 0..h {
+        for x in 0..w {
+            let (u, v) = ((x as f64 + 0.5) / w as f64, (y as f64 + 0.5) / h as f64);
+            let i = y * w + x;
+            if in_polygon(&outline, u, v) {
+                inside_changed += usize::from(!same(img.data[i], out.data[i]));
+            } else if dist(u, v) > margin {
+                // (the Lips mask reaches past the outline and its margin here)
+                past += usize::from(is_lips(u, v));
+                assert!(same(img.data[i], out.data[i]), "({x}, {y}) is past the outer lip outline's margin");
+            }
+        }
+    }
+    assert!(past > 500 && inside_changed > 1000, "{past} lip-mask pixels past the margin, {inside_changed} changed inside");
+}
+
+/// No halo: lips and teeth next to a mask's edge take the same change as their middles; nothing from the other side
+/// of the edge bleeds in.
+#[test]
+fn no_halo_at_the_edges_of_the_lips_and_teeth() {
+    let (w, h) = (160, 120);
+    let (lip, tooth, skin) = (rgb([0.55, 0.12, 0.04]), rgb([0.75, -0.005, 0.05]), rgb([0.7, 0.04, 0.06]));
+    let img = Rgb32f::from_fn(w, h, |x, y| {
+        let (u, v) = ((x as f64 + 0.5) / w as f64, (y as f64 + 0.5) / h as f64);
+        if is_teeth(u, v) {
+            tooth
+        } else if is_lips(u, v) {
+            lip
+        } else {
+            skin
+        }
+    });
+    let out = retouched(&img, &settings(&[("teethWhitening", 100.0), ("lipColorAmount", 100.0)]), vec![face(true)]);
+    let f = face(true);
+    let full = |part: Part, u: f64, v: f64| f.mask(part).map_or(0.0, |m| m.sample(u, v)) == 1.0;
+    let (mid_lip, mid_tooth) = (at(&out, 0.3, 0.6), at(&out, 0.5, 0.5));
+    assert!(!same(mid_lip, lip) && !same(mid_tooth, tooth), "both changed");
+    let mut edge = 0;
+    for y in 0..h {
+        for x in 0..w {
+            let (u, v) = ((x as f64 + 0.5) / w as f64, (y as f64 + 0.5) / h as f64);
+            let p = out.data[y * w + x];
+            let lip_px = full(Part::Lips, u, v) && f.mask(Part::Teeth).map_or(0.0, |m| m.sample(u, v)) == 0.0 && same(img.data[y * w + x], lip);
+            let tooth_px = full(Part::Teeth, u, v) && same(img.data[y * w + x], tooth);
+            for (is, mid) in [(lip_px, mid_lip), (tooth_px, mid_tooth)] {
+                if is {
+                    edge += 1;
+                    assert!((0..3).all(|k| (p[k] - mid[k]).abs() < 1e-5), "({x}, {y}): {p:?} vs {mid:?}");
+                }
+            }
+        }
+    }
+    assert!(edge > 1000, "{edge} pixels checked");
+}
+
 /// With the face mesh, the open mouth inside the lips (here: no Teeth mask) is left out of the lip edits.
 #[test]
 fn the_mesh_keeps_the_open_mouth_out_of_the_lips() {
@@ -201,25 +319,10 @@ fn the_mesh_keeps_the_open_mouth_out_of_the_lips() {
         }
     }
     let mut f = face(false);
-    // five stand-ins, then 478 mesh points all at the mouth's centre, but the inner lip outline on the teeth's box
-    let mut mesh = vec![(0.5, 0.47); 478];
-    let inner = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95];
-    let outer = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 375, 321, 405, 314, 17, 84, 181, 91, 146];
-    let around = |i: usize, n: usize, (x0, y0, x1, y1): (f64, f64, f64, f64)| {
-        let t = i as f64 / n as f64 * std::f64::consts::TAU;
-        ((x0 + x1) / 2.0 + (x1 - x0) / 2.0 * t.cos(), (y0 + y1) / 2.0 - (y1 - y0) / 2.0 * t.sin())
-    };
-    for (k, i) in inner.iter().enumerate() {
-        mesh[*i] = around(k, inner.len(), (0.33, 0.38, 0.67, 0.57));
-    }
-    for (k, i) in outer.iter().enumerate() {
-        mesh[*i] = around(k, outer.len(), (0.2, 0.25, 0.8, 0.7));
-    }
-    f.landmarks = vec![(0.4, 0.2); 5];
-    f.landmarks.extend(mesh);
+    f.landmarks = mesh(OUTER, (0.33, 0.38, 0.67, 0.57));
     let out = retouched(&img, &settings(&[("lipColorAmount", 100.0), ("lipSaturation", 50.0)]), vec![f]);
     assert!(same(at(&img, 0.5, 0.47), at(&out, 0.5, 0.47)), "inside the mouth");
-    assert!(!same(at(&img, 0.27, 0.47), at(&out, 0.27, 0.47)), "on the lips");
+    assert!(!same(at(&img, 0.3, 0.47), at(&out, 0.3, 0.47)), "on the lips");
 }
 
 /// A face cut by the edge, a 1 × 1 and a flat grey photo: no panic, numbers stay numbers.

@@ -10,13 +10,14 @@
 //! - **Lip Hue** turns the lips' hue (up to [`MAX_HUE_TURN`], 30°, each way), **Lip Saturation** scales their chroma.
 //!
 //! Each is off at 0; the colour is only read while Lip Color is above 0. A face without the mask a slider needs (a
-//! closed mouth has no Teeth mask) is left alone. The lips' main colour is measured on the pixels the render holds:
-//! a zoomed window that cuts the lips measures the part it shows.
+//! closed mouth has no Teeth mask) is left alone. The reference levels (the lips' main colour, the teeth's bright
+//! level) are measured on a fixed grid over each mask's area in photo coordinates, so a draft, the loupe, a zoomed
+//! window and an export measure the same points.
 
 use lightcraft_raster::Rgb32f;
 use serde::{Deserialize, Serialize};
 
-use crate::{Control, Feature, Part, Scene, Scope, Spec, Stage};
+use crate::{Control, Feature, NormRect, Part, Scene, Scope, Spec, Stage};
 
 /// Most hue turn of Lip Hue at ±100, in radians (30°).
 pub const MAX_HUE_TURN: f32 = 30.0 * std::f32::consts::PI / 180.0;
@@ -66,6 +67,9 @@ impl Feature for TeethLips {
     const STAGE: Stage = Stage::Retouch;
     const SCOPE: Scope = Scope::Face;
     const PARTS: &'static [Part] = &[Part::Lips, Part::Teeth];
+    /// It reads only inside its masks' areas: the pixels it changes, and the fixed grid its reference levels come
+    /// from (bilinear, a pixel past a grid point at most).
+    const REACH: f64 = 0.05;
     const CONTROLS: &'static [Control<Self>] = &[
         Control {
             spec: Spec::amount("retouch.teethLips.teethWhitening", "Teeth Whitening"),
@@ -139,9 +143,66 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// The part of the mask of `part` of `face` that is above 0, in normalised photo coordinates (a sample's cell and its
+/// neighbours, for the bilinear sampling); `None` without the mask or when it is 0 everywhere. A parser's masks cover
+/// the whole face crop while the lips and teeth are a small part of it: walking only this keeps a slider cheap.
+fn live_area(scene: &Scene<'_>, face: usize, part: Part) -> Option<NormRect> {
+    let mask = scene.faces.get(face)?.face.mask(part)?;
+    let (pw, ph) = (mask.plane.width, mask.plane.height);
+    if pw == 0 || ph == 0 || mask.plane.data.len() != pw.saturating_mul(ph) || !mask.area.is_valid() {
+        return None;
+    }
+    let (mut x0, mut y0, mut x1, mut y1) = (pw, ph, 0, 0);
+    for (i, v) in mask.plane.data.iter().enumerate() {
+        if *v > 0.0 && v.is_finite() {
+            let (x, y) = (i % pw, i / pw);
+            (x0, y0, x1, y1) = (x0.min(x), y0.min(y), x1.max(x + 1), y1.max(y + 1));
+        }
+    }
+    if x0 >= x1 || y0 >= y1 {
+        return None;
+    }
+    let a = mask.area;
+    let (cx, cy) = (a.width() / pw as f64, a.height() / ph as f64);
+    Some(NormRect::new(
+        (a.x0 + (x0 as f64 - 1.0) * cx).max(a.x0),
+        (a.y0 + (y0 as f64 - 1.0) * cy).max(a.y0),
+        (a.x0 + (x1 as f64 + 1.0) * cx).min(a.x1),
+        (a.y0 + (y1 as f64 + 1.0) * cy).min(a.y1),
+    ))
+}
+
+/// The pixels of the image `area` (normalised photo coordinates) can touch: `[x0, y0, x1, y1)`, clamped to the image.
+/// The area's edges are followed at 16 points each (a lens or transform warp bends them), with a pixel to spare.
+fn pixel_box(scene: &Scene<'_>, a: NormRect) -> Option<[usize; 4]> {
+    const STEPS: usize = 16;
+    let view = scene.view();
+    let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for i in 0..=STEPS {
+        let t = i as f64 / STEPS as f64;
+        let (u, v) = (a.x0 + t * a.width(), a.y0 + t * a.height());
+        for (nx, ny) in [(u, a.y0), (u, a.y1), (a.x0, v), (a.x1, v)] {
+            if let Some((px, py)) = view.to_px(nx, ny).filter(|(x, y)| x.is_finite() && y.is_finite()) {
+                (x0, y0, x1, y1) = (x0.min(px), y0.min(py), x1.max(px), y1.max(py));
+            }
+        }
+    }
+    if x0 > x1 || y0 > y1 {
+        return None;
+    }
+    let clamp = |v: f64, max: usize| v.clamp(0.0, max as f64) as usize;
+    let b = [
+        clamp(x0.floor() - 1.0, scene.width),
+        clamp(y0.floor() - 1.0, scene.height),
+        clamp(x1.ceil() + 1.0, scene.width),
+        clamp(y1.ceil() + 1.0, scene.height),
+    ];
+    (b[0] < b[2] && b[1] < b[3]).then_some(b)
+}
+
 /// Each pixel of the mask of `part` of `face` in the image (x, y, mask value > 0), row by row.
 fn masked(scene: &Scene<'_>, face: usize, part: Part, w: usize, h: usize) -> Vec<(usize, usize, f32)> {
-    let Some([x0, y0, x1, y1]) = scene.mask_box(face, part) else { return Vec::new() };
+    let Some([x0, y0, x1, y1]) = live_area(scene, face, part).and_then(|a| pixel_box(scene, a)) else { return Vec::new() };
     let mut out = Vec::new();
     for y in y0..y1.min(h) {
         for x in x0..x1.min(w) {
@@ -154,25 +215,74 @@ fn masked(scene: &Scene<'_>, face: usize, part: Part, w: usize, h: usize) -> Vec
     out
 }
 
+/// Grid points per side of a mask's area that reference levels are measured on.
+const GRID: usize = 64;
+
+/// The cell centres of a [`GRID`] × [`GRID`] grid over the live area ([`live_area`]) of the mask of `part` of `face`, in normalised photo
+/// coordinates, with the mask's value there (only those above 0). Anchored to the mask, not to the image: a draft,
+/// the loupe, a zoomed window and an export measure the same points.
+fn grid(scene: &Scene<'_>, face: usize, part: Part) -> Vec<(f64, f64, f32)> {
+    let Some(mask) = scene.faces.get(face).and_then(|f| f.face.mask(part)) else { return Vec::new() };
+    // (over the part of the mask above 0: the same in every render, and dense where the lips or teeth are)
+    let Some(a) = live_area(scene, face, part) else { return Vec::new() };
+    let n = GRID as f64;
+    (0..GRID * GRID)
+        .filter_map(|i| {
+            let (nx, ny) = (a.x0 + ((i % GRID) as f64 + 0.5) / n * a.width(), a.y0 + ((i / GRID) as f64 + 0.5) / n * a.height());
+            let m = mask.sample(nx, ny);
+            (m > 0.0 && m.is_finite()).then_some((nx, ny, m.min(1.0)))
+        })
+        .collect()
+}
+
+/// The image at pixel position (`x`, `y`), bilinear between pixel centres (held at the edge); `None` outside the
+/// image.
+fn sample(img: &Rgb32f, x: f64, y: f64) -> Option<[f32; 3]> {
+    let (w, h) = (img.width, img.height);
+    if w == 0 || h == 0 || !(0.0..=w as f64).contains(&x) || !(0.0..=h as f64).contains(&y) {
+        return None;
+    }
+    let fx = (x - 0.5).clamp(0.0, (w - 1) as f64);
+    let fy = (y - 0.5).clamp(0.0, (h - 1) as f64);
+    let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
+    let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+    let (tx, ty) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);
+    let at = |x: usize, y: usize| img.data.get(y * w + x).copied();
+    let (a, b, c, d) = (at(x0, y0)?, at(x1, y0)?, at(x0, y1)?, at(x1, y1)?);
+    Some(std::array::from_fn(|k| {
+        let top = a[k] + (b[k] - a[k]) * tx;
+        let bottom = c[k] + (d[k] - c[k]) * tx;
+        top + (bottom - top) * ty
+    }))
+}
+
+/// The teeth's bright level: the lightness most of the solid teeth reach (the 80th percentile on the grid over the
+/// Teeth mask), so gaps and shade are judged against these teeth, at any exposure.
+fn teeth_level(img: &Rgb32f, scene: &Scene<'_>, face: usize) -> Option<f32> {
+    let view = scene.view();
+    let samples: Vec<(f32, f32)> = grid(scene, face, Part::Teeth)
+        .into_iter()
+        .filter_map(|(nx, ny, m)| {
+            let (x, y) = view.to_px(nx, ny)?;
+            let l = oklab(sample(img, x, y)?)[0];
+            l.is_finite().then_some((l, m))
+        })
+        .collect();
+    let mut ls: Vec<f32> = samples.iter().filter(|(_, m)| *m >= 0.5).map(|(l, _)| *l).collect();
+    if ls.is_empty() {
+        ls = samples.iter().map(|(l, _)| *l).collect();
+    }
+    ls.sort_by(f32::total_cmp);
+    ls.get(ls.len() * 4 / 5).copied().filter(|b| *b > 1e-4)
+}
+
 fn whiten_teeth(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, amount: f32) {
     let w = img.width;
     let px = masked(scene, face, Part::Teeth, w, img.height);
     if px.is_empty() {
         return;
     }
-    // the teeth's bright level: the lightness most of the solid teeth reach (the 80th percentile), so gaps and shade
-    // are judged against these teeth, at any exposure
-    let mut ls: Vec<f32> = px
-        .iter()
-        .filter(|(_, _, m)| *m >= 0.5)
-        .filter_map(|(x, y, _)| img.data.get(y * w + x).map(|p| oklab(*p)[0]))
-        .filter(|l| l.is_finite())
-        .collect();
-    if ls.is_empty() {
-        ls = px.iter().filter_map(|(x, y, _)| img.data.get(y * w + x).map(|p| oklab(*p)[0])).filter(|l| l.is_finite()).collect();
-    }
-    ls.sort_by(f32::total_cmp);
-    let Some(bright) = ls.get(ls.len() * 4 / 5).copied().filter(|b| *b > 1e-4) else { return };
+    let Some(bright) = teeth_level(img, scene, face) else { return };
     for (x, y, m) in px {
         let Some(p) = img.data.get_mut(y * w + x) else { continue };
         let [l, a, b] = oklab(*p);
@@ -188,8 +298,8 @@ fn whiten_teeth(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, amount: f32) {
             continue;
         }
         let keep = 1.0 - TEETH_NEUTRAL * k * (0.6 + 0.4 * lit);
-        // yellow (b > 0) goes; a cool cast (b < 0) is kept as it is
-        let (a2, b2) = (a * keep, if b > 0.0 { b * keep } else { b });
+        // yellow (b > 0) goes toward neutral; a cool cast (b ≤ 0) is kept as it is
+        let (a2, b2) = if b > 0.0 { (a * keep, b * keep) } else { (a, b) };
         let l2 = l + TEETH_LIFT * k * lit * (TEETH_CEILING - l).max(0.0);
         *p = in_gamut(*p, [l2, a2, b2]);
     }
@@ -206,15 +316,13 @@ struct Lips {
     saturation: f32,
 }
 
-/// The lips' main colour: lightness, chroma and hue, weighted by the mask and by chroma (a highlight or the dark
-/// line between the lips counts little).
-fn main_colour(img: &Rgb32f, px: &[(usize, usize, f32)]) -> Option<(f32, f32, f32)> {
-    let w = img.width;
+/// The lips' main colour: lightness, chroma and hue of `samples` (weight, colour), lightness weighted by the
+/// weight², hue and chroma also by chroma (a highlight or the dark line between the lips counts little).
+fn main_colour(samples: impl Iterator<Item = (f32, [f32; 3])>) -> Option<(f32, f32, f32)> {
     let (mut sw, mut sl, mut sa, mut sb) = (0.0f64, 0.0f64, 0.0f64, 0.0f64);
     let mut sw_l = 0.0f64;
-    for (x, y, m) in px {
-        let Some(p) = img.data.get(y * w + x) else { continue };
-        let [l, a, b] = oklab(*p);
+    for (m, p) in samples {
+        let [l, a, b] = oklab(p);
         if !(l.is_finite() && a.is_finite() && b.is_finite()) {
             continue;
         }
@@ -236,32 +344,55 @@ fn main_colour(img: &Rgb32f, px: &[(usize, usize, f32)]) -> Option<(f32, f32, f3
     (l > 1e-4 && c.is_finite()).then_some((l, c, b.atan2(a)))
 }
 
+/// The face mesh's lip outlines in pixels, the outer one's margin ([`LIP_MARGIN`]) and the soft edges in pixels
+/// (`edge` inside the outer one's margin, `feather` inside the inner one).
+struct Mesh {
+    outer: Vec<(f64, f64)>,
+    inner: Vec<(f64, f64)>,
+    edge: f64,
+    feather: f64,
+    margin: f64,
+}
+
+/// How much of the lips a pixel position is, given the Lips and Teeth masks there: the lips less the teeth (a
+/// parser's lips can take in an open mouth), held inside the face mesh's outer lip outline (a parser's mask at a
+/// small face spills onto the skin around) and out of its inner one (the open mouth).
+fn lip_share(lips: f32, teeth: f32, mesh: Option<&Mesh>, x: f64, y: f64) -> f32 {
+    let m = lips * (1.0 - teeth.clamp(0.0, 1.0));
+    match mesh {
+        Some(k) if m > 0.0 => m * inside(&k.outer, x, y, k.edge, k.margin) * (1.0 - inside(&k.inner, x, y, k.feather, 0.0)),
+        _ => m,
+    }
+}
+
 fn recolour_lips(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, lips: &Lips) {
     let w = img.width;
-    // the lips less the teeth (a parser's lips can take in an open mouth)
+    let mesh = scene.faces.get(face).and_then(|f| {
+        Some(Mesh {
+            outer: outline(f, &OUTER_LIPS)?,
+            inner: outline(f, &INNER_LIPS)?,
+            edge: f.px(LIP_EDGE),
+            feather: f.px(MOUTH_FEATHER),
+            margin: f.px(LIP_MARGIN),
+        })
+    });
+    let teeth = |x: usize, y: usize| scene.mask_at(face, Part::Teeth, x, y);
     let px: Vec<(usize, usize, f32)> = masked(scene, face, Part::Lips, w, img.height)
         .into_iter()
-        .map(|(x, y, m)| (x, y, m * (1.0 - scene.mask_at(face, Part::Teeth, x, y).clamp(0.0, 1.0))))
+        .map(|(x, y, m)| (x, y, lip_share(m, teeth(x, y), mesh.as_ref(), x as f64 + 0.5, y as f64 + 0.5)))
         .filter(|(_, _, m)| *m > 0.0)
         .collect();
     if px.is_empty() {
         return;
     }
-    // held inside the face mesh's lip outline (a parser's mask at a small face spills onto the skin around), less
-    // the open mouth
-    let mesh = scene.faces.get(face).and_then(|f| Some((outline(f, &OUTER_LIPS)?, outline(f, &INNER_LIPS)?, f.px(MOUTH_FEATHER))));
-    let px: Vec<(usize, usize, f32)> = match &mesh {
-        Some((outer, inner, feather)) => px
-            .into_iter()
-            .map(|(x, y, m)| {
-                let (cx, cy) = (x as f64 + 0.5, y as f64 + 0.5);
-                (x, y, m * inside(outer, cx, cy, *feather, *feather) * (1.0 - inside(inner, cx, cy, *feather, 0.0)))
-            })
-            .filter(|(_, _, m)| *m > 0.0)
-            .collect(),
-        None => px,
-    };
-    let main = main_colour(img, &px);
+    // the main colour from the fixed grid over the Lips mask, never from the pixels this render happens to hold
+    let view = scene.view();
+    let teeth_mask = scene.faces.get(face).and_then(|f| f.face.mask(Part::Teeth));
+    let main = main_colour(grid(scene, face, Part::Lips).into_iter().filter_map(|(nx, ny, m)| {
+        let (x, y) = view.to_px(nx, ny)?;
+        let share = lip_share(m, teeth_mask.map_or(0.0, |t| t.sample(nx, ny)), mesh.as_ref(), x, y);
+        (share > 0.0).then_some((share, sample(img, x, y)?))
+    }));
     let (tl, ta, tb) = (lips.target[0], lips.target[1], lips.target[2]);
     let (tc, th) = ((ta * ta + tb * tb).sqrt(), tb.atan2(ta));
     let sat = if lips.saturation >= 0.0 { 1.0 + LIP_SATURATION_UP * lips.saturation } else { 1.0 + LIP_SATURATION_DOWN * lips.saturation };
@@ -316,8 +447,14 @@ fn recolour_lips(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, lips: &Lips) 
 const INNER_LIPS: [usize; 20] = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95];
 /// Where the face's landmarks hold the 478 of the face mesh: after YuNet's five.
 const MESH_START: usize = 5;
-/// Half the soft edge of the open mouth, as a fraction of the face.
+/// The soft edge inside the inner lip outline (into the open mouth), as a fraction of the face.
 const MOUTH_FEATHER: f64 = 0.006;
+/// How far past the mesh's outer lip outline the lips may reach, as a fraction of the face; nothing past it changes.
+/// The mesh's outline can lie this far inside the lips' real edge (a wide smile's upper lip: about 0.012), so the
+/// outline guards against a mask spilling onto the skin around while the Lips mask draws the edge.
+pub const LIP_MARGIN: f64 = 0.015;
+/// The soft edge inside that margin, as a fraction of the face.
+const LIP_EDGE: f64 = 0.0015;
 
 /// The face mesh's outer lip outline, in order around the mouth.
 const OUTER_LIPS: [usize; 20] = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 375, 321, 405, 314, 17, 84, 181, 91, 146];
@@ -327,8 +464,8 @@ fn outline(f: &crate::FaceCtx<'_>, points: &[usize]) -> Option<Vec<(f64, f64)>> 
     points.iter().map(|i| f.landmarks.get(MESH_START + i).copied().flatten()).collect()
 }
 
-/// How far (`x`, `y`) is inside polygon `poly` grown by `grow` pixels: 1 well inside, 0 well outside, a smooth step
-/// `feather` pixels either side of the edge.
+/// How far (`x`, `y`) is inside polygon `poly` grown by `grow` pixels: 0 on and past the grown edge, 1 from `feather`
+/// pixels inside it, a smooth step between (a hard edge for a feather of 0).
 fn inside(poly: &[(f64, f64)], x: f64, y: f64, feather: f64, grow: f64) -> f32 {
     let (mut inside, mut d2) = (false, f64::INFINITY);
     for (i, a) in poly.iter().enumerate() {
@@ -343,11 +480,10 @@ fn inside(poly: &[(f64, f64)], x: f64, y: f64, feather: f64, grow: f64) -> f32 {
         d2 = d2.min(dx * dx + dy * dy);
     }
     let d = if inside { d2.sqrt() } else { -d2.sqrt() } + grow;
-    if !d.is_finite() {
+    if !d.is_finite() || d <= 0.0 {
         return 0.0;
     }
-    let f = feather.max(0.5);
-    smoothstep(-f as f32, f as f32, d as f32)
+    smoothstep(0.0, feather as f32, d as f32)
 }
 
 /// An angle in −π…π.
