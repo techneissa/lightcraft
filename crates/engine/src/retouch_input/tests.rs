@@ -4,6 +4,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use lightcraft_catalog::PhotoId;
 use lightcraft_develop::retouch::{Face, NormRect};
 use lightcraft_raster::Rgba8;
 use serde_json::{Value, json};
@@ -422,20 +423,35 @@ fn a_faces_own_settings_survive_a_rotation() {
     assert_eq!(b_own, Some(Value::Null), "B never takes them: {listed}");
 }
 
-/// Browsing past [`super::KEEP`] retouched photos must not drop the faces of the ones in use: the cache forgets the
-/// photo used least recently.
+/// The faces kept take at most [`super::KEEP_BYTES`], not a count of photos: many small entries all stay, large
+/// ones push out the photos used least recently, and the newest always stays. One entry per photo: a photo's new
+/// faces replace its old ones.
 #[test]
-fn the_face_cache_forgets_the_photo_used_least_recently() {
+fn the_face_cache_keeps_a_byte_budget_and_one_entry_per_photo() {
+    use lightcraft_develop::retouch::{Part, PartMask};
+    let found = |samples: usize| {
+        let mask = PartMask { plane: lightcraft_raster::Plane::filled(samples, 1, 1.0), area: NormRect::new(0.1, 0.1, 0.3, 0.3) };
+        let face = Face { masks: vec![(Part::FacialSkin, mask)], ..Face::boxed(NormRect::new(0.1, 0.1, 0.3, 0.3)) };
+        super::Found { input: Arc::new(lightcraft_develop::retouch::Input::new(vec![face])), thumbs: Arc::new(Vec::new()) }
+    };
     let store = super::FaceStore::default();
-    let found = || super::Found { input: Arc::new(lightcraft_develop::retouch::Input::default()), thumbs: Arc::new(Vec::new()) };
-    for i in 0..super::KEEP {
-        store.put(&format!("photo {i}"), Ok(found()));
+    for i in 0..super::KEEP * 2 {
+        store.put(&format!("photo {i}"), PhotoId(i as u64 + 1), Ok(found(16)));
     }
-    assert!(store.get("photo 0").is_some(), "the oldest, used again");
-    store.put("one more", Ok(found()));
-    assert!(store.get("photo 0").is_some(), "kept: it was used last but one");
-    assert!(store.get("photo 1").is_none(), "the one used least recently goes");
-    assert!(store.get("one more").is_some());
+    assert_eq!(store.kept().len(), super::KEEP * 2, "small entries are not counted out");
+    // one entry per photo
+    store.put("photo 0 rotated", PhotoId(1), Ok(found(16)));
+    assert!(store.get("photo 0").is_none() && store.get("photo 0 rotated").is_some());
+    assert_eq!(store.kept().iter().filter(|(id, _)| *id == PhotoId(1)).count(), 1);
+    // by bytes: three of five fit; the one used again stays
+    let one = found(1000).bytes();
+    assert!(one > 4000, "{one} bytes for 1000 samples");
+    let mut kept: Vec<(String, PhotoId, super::Found)> = (0..5).map(|i| (format!("{i}"), PhotoId(i), found(1000))).collect();
+    super::trim(&mut kept, 3 * one);
+    assert_eq!(kept.iter().map(|(k, _, _)| k.as_str()).collect::<Vec<_>>(), ["2", "3", "4"]);
+    let mut huge = vec![("big".to_string(), PhotoId(9), found(1000))];
+    super::trim(&mut huge, 10);
+    assert_eq!(huge.len(), 1, "the newest stays, whatever it takes");
 }
 
 #[test]
@@ -447,4 +463,52 @@ fn faces_take_the_names_of_the_regions_they_overlap() {
     assert_eq!(names, [Some("ann"), Some("bob"), None]);
     super::name_faces(&mut [], &regions);
     super::name_faces(&mut faces, &[(NormRect::new(f64::NAN, 0.0, 1.0, 1.0), "x".into())]);
+}
+
+/// One search per photo: drags that change what the faces are found on (Geometry, Lens Distortion) while a search
+/// runs start no second one; when it ends, the preview's key changes, so it is redrawn and asks again.
+#[test]
+fn one_search_runs_per_photo_and_a_render_asking_meanwhile_is_redrawn() {
+    struct Slow(Arc<AtomicBool>);
+    impl FaceProvider for Slow {
+        fn name(&self) -> &str {
+            "Slow"
+        }
+        fn faces(&self, _img: &Rgba8) -> Result<Vec<Face>, String> {
+            // (a hang guard, not a timing check)
+            let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+            while !self.0.load(Ordering::SeqCst) && std::time::Instant::now() < until {
+                std::thread::yield_now();
+            }
+            Ok(vec![ann()])
+        }
+    }
+    let wait_idle = |s: &Session, id| {
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        while s.retouch_faces.lock().busy.iter().any(|(_, p)| *p == id) {
+            assert!(std::time::Instant::now() < until, "the search never ended");
+            std::thread::yield_now();
+        }
+    };
+    let go = Arc::new(AtomicBool::new(false));
+    let mut s = Session::with_demo();
+    s.retouch_faces.set_provider(Arc::new(Slow(go.clone())));
+    let id = s.active().unwrap();
+    s.execute("develop.set", &json!({"control": "retouch.skinTone.amount", "value": 40})).unwrap();
+    let _ = s.render_job(id, 64, 64, false, true).unwrap();
+    for (control, value) in [("geometry.vertical", 10.0), ("geometry.vertical", 20.0), ("optics.distortion", 15.0), ("optics.distortion", 30.0)] {
+        s.execute("develop.set", &json!({"control": control, "value": value})).unwrap();
+        assert!(s.render_job(id, 64, 64, false, true).unwrap().info.retouch.is_none());
+    }
+    assert_eq!(s.retouch_faces.started(), 1, "one search for the photo");
+    let waiting = s.render_job(id, 64, 64, false, true).unwrap().key;
+    go.store(true, Ordering::SeqCst);
+    wait_idle(&s, id);
+    let p = s.catalog.photo(id).unwrap().clone();
+    let redrawn = s.render_job(id, 64, 64, false, true).unwrap();
+    assert_ne!(redrawn.key, waiting, "the preview made meanwhile is redrawn");
+    assert_eq!(s.retouch_faces.started(), 2, "and the faces of the settings now are searched");
+    wait_idle(&s, id);
+    assert!(s.render_job(id, 64, 64, false, true).unwrap().info.retouch.is_some());
+    assert_ne!(s.retouch_salt(&p, &p.develop), 0);
 }

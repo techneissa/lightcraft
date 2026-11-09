@@ -18,8 +18,9 @@ use crate::{Error, Result};
 
 const MAGIC: &[u8; 8] = b"LCPARSE1";
 const MAX_HEADER: usize = 32 << 20;
-/// No plane a parse makes is wider than the body model's largest input.
-const MAX_PLANE_SIDE: u32 = 1536;
+/// No plane a parse makes is wider than the body model's largest input; a file with a wider one is damaged. Steps that
+/// redraw a parse's planes (hair edges) keep to it, or their parse is never read back.
+pub const MAX_PLANE_SIDE: u32 = 1536;
 /// Most mask values one file may decode to (about 1 GB as floats).
 const MAX_VALUES: u64 = 256 << 20;
 const MAX_PEOPLE: usize = 4096;

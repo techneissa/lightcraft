@@ -5,16 +5,35 @@
 //!    of one name, the closest boxes pair up.
 //! 2. Every other face takes the unclaimed settings whose box centre is closest to its own, when its centre lies
 //!    within half the settings' box (width and height) of the settings' centre. Boxes are compared on the photo
-//!    before the user's rotation ([`Face::key_bounds`]).
+//!    before the user's rotation ([`Face::key_bounds`]), in one frame: a key and a face of different frames
+//!    ([`KeyFrame`]: after or before lens corrections and transform) are compared once the photo's [`KeyMap`] has
+//!    taken the one after them to before them; without a map they never pair by place.
 //! 3. Settings made for a person never go to a face named as someone else: re-detecting faces never moves them to
 //!    another person. They may go to an unnamed face at their place (the same face, not recognised this time).
 
-use crate::Retouch;
-use crate::input::{Face, NormRect};
+use crate::input::{Face, KeyFrame, KeyMap, NormRect, edit_box_to_photo};
+use crate::{FaceKey, Retouch};
 
 /// For each face of `faces`, the index into `r.faces` of the settings it takes, or `None` (it takes the global
-/// ones). Each override goes to at most one face.
+/// ones). Each override goes to at most one face. Keys and faces of different frames pair by person only.
 pub fn resolve(r: &Retouch, faces: &[Face]) -> Vec<Option<usize>> {
+    resolve_in(r, faces, None)
+}
+
+/// The face's box and the key's box in one frame: as they are when their frames agree, else the one after lens
+/// corrections and transform taken before them by `map`. `None`: they can't be compared.
+fn same_frame(f: &Face, k: &FaceKey, map: Option<&dyn KeyMap>) -> Option<(NormRect, NormRect)> {
+    let fb = f.key_bounds();
+    match (f.key_frame, k.frame) {
+        (a, b) if a == b => Some((fb, k.bounds)),
+        (KeyFrame::Photo, _) => Some((fb, edit_box_to_photo(map?, &k.bounds)?)),
+        (_, _) => Some((edit_box_to_photo(map?, &fb)?, k.bounds)),
+    }
+}
+
+/// [`resolve`], with `map` (the photo's lens corrections and transform) to compare keys and faces of different
+/// frames by place.
+pub fn resolve_in(r: &Retouch, faces: &[Face], map: Option<&dyn KeyMap>) -> Vec<Option<usize>> {
     let mut taken: Vec<Option<usize>> = vec![None; faces.len()];
     if r.faces.is_empty() || faces.is_empty() {
         return taken;
@@ -26,7 +45,8 @@ pub fn resolve(r: &Retouch, faces: &[Face]) -> Vec<Option<usize>> {
         let Some(name) = f.person.as_deref() else { continue };
         for (oi, o) in r.faces.iter().enumerate() {
             if o.face.person.as_deref() == Some(name) {
-                pairs.push((distance(&f.key_bounds(), &o.face.bounds), f.key_bounds().centre(), fi, oi));
+                let d = same_frame(f, &o.face, map).map_or(f64::INFINITY, |(fb, kb)| distance(&fb, &kb));
+                pairs.push((d, f.key_bounds().centre(), fi, oi));
             }
         }
     }
@@ -47,8 +67,10 @@ pub fn resolve(r: &Retouch, faces: &[Face]) -> Vec<Option<usize>> {
             {
                 continue;
             }
-            if within(&f.key_bounds(), &o.face.bounds) {
-                pairs.push((distance(&f.key_bounds(), &o.face.bounds), f.key_bounds().centre(), fi, oi));
+            if let Some((fb, kb)) = same_frame(f, &o.face, map)
+                && within(&fb, &kb)
+            {
+                pairs.push((distance(&fb, &kb), f.key_bounds().centre(), fi, oi));
             }
         }
     }

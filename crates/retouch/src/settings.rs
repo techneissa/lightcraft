@@ -9,7 +9,7 @@ use serde_json::Value;
 
 use crate::control::{Control, Spec};
 use crate::feature::{Feature, Scope, Stage};
-use crate::input::{Face, NormRect};
+use crate::input::{Face, KeyFrame, KeyMap, NormRect};
 
 /// A feature as the panel and the control list see it, without its settings type.
 #[derive(Clone, Copy, Debug)]
@@ -20,6 +20,8 @@ pub struct FeatureInfo {
     pub scope: Scope,
     /// Its sliders' specs, in panel order.
     pub specs: fn() -> Vec<&'static Spec>,
+    /// The part masks it reads ([`Feature::PARTS`]).
+    pub parts: &'static [crate::Part],
 }
 
 pub(crate) fn specs_of<T: Feature>() -> Vec<&'static Spec> {
@@ -47,12 +49,16 @@ pub struct FaceKey {
     pub person: Option<String>,
     /// The face's box when the settings were made, on the photo before the user's rotation ([`Face::key_bounds`]).
     pub bounds: NormRect,
+    /// The frame `bounds` is in (keys saved before it was kept are [`KeyFrame::Edit`]): a face of the other frame is
+    /// compared after the photo's lens corrections and transform map one into the other ([`crate::overrides`]).
+    #[serde(skip_serializing_if = "KeyFrame::is_edit")]
+    pub frame: KeyFrame,
 }
 
 impl FaceKey {
     /// The key of `face` as detected now.
     pub fn of(face: &Face) -> FaceKey {
-        FaceKey { person: face.person.clone(), bounds: face.key_bounds() }
+        FaceKey { person: face.person.clone(), bounds: face.key_bounds(), frame: face.key_frame }
     }
 }
 
@@ -111,14 +117,29 @@ impl Retouch {
     /// The settings face `index` of `faces` renders with: its own when an override is matched to it
     /// ([`crate::overrides::resolve`]), else the global ones.
     pub fn settings_for<'a>(&'a self, faces: &[Face], index: usize) -> &'a crate::Features {
-        crate::overrides::resolve(self, faces).get(index).copied().flatten().and_then(|i| self.faces.get(i)).map_or(&self.global, |o| &o.settings)
+        self.settings_for_in(faces, index, None)
+    }
+
+    /// [`Retouch::settings_for`], with `map` to compare keys of the other frame ([`crate::overrides::resolve_in`]).
+    pub fn settings_for_in<'a>(&'a self, faces: &[Face], index: usize, map: Option<&dyn KeyMap>) -> &'a crate::Features {
+        crate::overrides::resolve_in(self, faces, map)
+            .get(index)
+            .copied()
+            .flatten()
+            .and_then(|i| self.faces.get(i))
+            .map_or(&self.global, |o| &o.settings)
     }
 
     /// Face `index`'s own settings, made from the global ones when it has none yet (`None` for no such face, or
     /// when [`MAX_OVERRIDES`] faces already have theirs).
     pub fn override_mut(&mut self, faces: &[Face], index: usize) -> Option<&mut crate::Features> {
+        self.override_mut_in(faces, index, None)
+    }
+
+    /// [`Retouch::override_mut`], with `map` to compare keys of the other frame ([`crate::overrides::resolve_in`]).
+    pub fn override_mut_in(&mut self, faces: &[Face], index: usize, map: Option<&dyn KeyMap>) -> Option<&mut crate::Features> {
         let face = faces.get(index)?;
-        let found = crate::overrides::resolve(self, faces).get(index).copied().flatten();
+        let found = crate::overrides::resolve_in(self, faces, map).get(index).copied().flatten();
         let i = match found {
             Some(i) => i,
             None => {
@@ -134,7 +155,12 @@ impl Retouch {
 
     /// Remove face `index`'s own settings, so it follows the global ones again. Whether it had any.
     pub fn remove_override(&mut self, faces: &[Face], index: usize) -> bool {
-        match crate::overrides::resolve(self, faces).get(index).copied().flatten() {
+        self.remove_override_in(faces, index, None)
+    }
+
+    /// [`Retouch::remove_override`], with `map` to compare keys of the other frame ([`crate::overrides::resolve_in`]).
+    pub fn remove_override_in(&mut self, faces: &[Face], index: usize, map: Option<&dyn KeyMap>) -> bool {
+        match crate::overrides::resolve_in(self, faces, map).get(index).copied().flatten() {
             Some(i) if i < self.faces.len() => {
                 self.faces.remove(i);
                 true
@@ -176,6 +202,7 @@ macro_rules! features {
                 stage: <$ty as $crate::Feature>::STAGE,
                 scope: <$ty as $crate::Feature>::SCOPE,
                 specs: $crate::settings::specs_of::<$ty>,
+                parts: <$ty as $crate::Feature>::PARTS,
             },)*
         ];
 

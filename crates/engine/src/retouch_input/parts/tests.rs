@@ -342,3 +342,129 @@ fn several_planes_of_a_part_merge_and_a_plane_turns_exactly() {
     assert!(super::part_mask(&[Plane { width: 3, ..a }], Orientation::Normal).is_none(), "a malformed plane is no mask");
     assert!(super::part_mask(&[], Orientation::Normal).is_none());
 }
+
+/// Faces from the parse are made on the photo with default settings and mapped through the lens corrections and
+/// transform by the step: dragging Geometry, Lens Distortion or the crop angle keeps them, starts no search, and a
+/// preset's thumbnail with another lens distortion is retouched too.
+#[test]
+fn geometry_lens_and_crop_angle_drags_keep_the_faces_and_start_no_search() {
+    let fake = Fake::new(vec![r(0.3, 0.2, 0.7, 0.8)]);
+    let (mut s, id, dir) = grey("drag", 160, 120, &fake);
+    light(&mut s, 100.0);
+    s.execute("retouch.detect", &json!({})).unwrap();
+    for (control, value) in
+        [("geometry.vertical", 20.0), ("geometry.vertical", 35.0), ("optics.distortion", 30.0), ("optics.distortion", -40.0), ("crop.angle", 3.0)]
+    {
+        s.execute("develop.set", &json!({"control": control, "value": value})).unwrap();
+        let job = s.render_job(id, 160, 160, false, true).unwrap();
+        assert!(job.info.retouch.as_ref().is_some_and(|i| i.faces.len() == 1), "{control} at {value}: the faces are kept");
+    }
+    let mut preset = (*s.develop_of(id).unwrap()).clone();
+    preset.optics.distortion = 60.0;
+    assert!(s.variant_job(id, &preset, 64).unwrap().info.retouch.is_some(), "a preset's thumbnail is retouched");
+    assert_eq!(s.retouch_faces.started(), 0, "no search started");
+    assert_eq!(s.parsing.runs(), 1);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A search set up with one model set keeps that set's faces when the set is switched before it runs: the parse is
+/// the one of the set its key names.
+#[test]
+fn a_model_set_switch_during_a_search_keeps_the_first_sets_faces() {
+    let (one, other) = (r(0.1, 0.2, 0.4, 0.6), r(0.55, 0.3, 0.9, 0.7));
+    let fake = Fake::new(vec![one]);
+    let (mut s, id, dir) = grey("switch", 120, 90, &fake);
+    let first = s.parsing.model_set();
+    s.parsing.set_runner(Some(Arc::new(move |set, _, _, _, _| Ok(parse_of(&[if set == first { one } else { other }])))));
+    let p = s.catalog.photo(id).unwrap().clone();
+    let finder = s.retouch_finder(&p, crate::retouch_input::Source::Parts).unwrap();
+    let next = if first == lightcraft_parsing::ModelSet::BiSeNet { "segformer" } else { "bisenet" };
+    s.execute("parsing.modelSet", &json!({"set": next})).unwrap();
+    assert_ne!(s.parsing.model_set(), first);
+    let found = finder.run().unwrap();
+    let (cx, _) = found.input.faces[0].bounds.centre();
+    assert!((cx - 0.25).abs() < 1e-6, "the first set's face, not the other's: {:?}", found.input.faces[0].bounds);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A damaged parse with a sliver of a plane (thousands of samples across a hair's width of the photo) next to a
+/// wide one can't size the merged mask past its cap.
+#[test]
+fn a_sliver_plane_keeps_the_merged_mask_within_its_cap() {
+    let sliver = Plane { rect: r(0.0, 0.1, 1e-7, 0.9), width: 64, height: 4, data: vec![1.0; 256] };
+    let wide = Plane { rect: r(0.0, 0.0, 1.0, 1.0), width: 4, height: 4, data: vec![0.5; 16] };
+    let m = super::part_mask(&[sliver, wide], Orientation::Normal).expect("a mask from the valid planes");
+    let (w, h) = (m.plane.width, m.plane.height);
+    assert!(w <= 1536 && h <= 1536 && w * h <= 1 << 20, "{w}×{h}");
+    assert_eq!(m.plane.data.len(), w * h);
+}
+
+/// The parse keeps only the masks some feature reads: no clothes in the faces portrait retouching keeps.
+#[test]
+fn only_the_parts_a_feature_reads_are_kept() {
+    let mut p = person(r(0.3, 0.2, 0.7, 0.8));
+    p.parts.insert(Part::ClothesTop, vec![Plane { rect: r(0.2, 0.6, 0.8, 1.0), width: 4, height: 4, data: vec![1.0; 16] }]);
+    let parsing = Parsing { people: vec![p], ..parse_of(&[]) };
+    let faces = super::faces_of(&parsing, &[], Orientation::Normal);
+    assert!(faces[0].mask(RetouchPart::FacialSkin).is_some());
+    assert!(faces[0].mask(RetouchPart::ClothesTop).is_none(), "no feature reads the clothes");
+}
+
+/// A face's own settings made while YuNet found the faces (boxes after lens corrections) stay with that face once
+/// the parse finds them (boxes before), across a strong lens distortion; the neighbour standing where the YuNet box
+/// lay does not take them.
+#[test]
+fn an_override_made_under_yunet_stays_with_its_face_under_the_parse_with_a_lens_distortion() {
+    use lightcraft_develop::retouch::NormRect as Box2;
+    use lightcraft_geom::Point;
+    struct Boxes(Vec<Box2>);
+    impl crate::retouch_input::FaceProvider for Boxes {
+        fn name(&self) -> &str {
+            "Boxes"
+        }
+        fn faces(&self, _: &Rgba8) -> Result<Vec<lightcraft_develop::retouch::Face>, String> {
+            Ok(self.0.iter().map(|b| lightcraft_develop::retouch::Face::boxed(*b)).collect())
+        }
+    }
+    let fake = Fake::new(Vec::new());
+    let (mut s, id, dir) = grey("frames", 200, 150, &fake);
+    s.execute("develop.set", &json!({"control": "optics.distortion", "value": -100})).unwrap();
+    let d = s.develop_of(id).unwrap();
+    let frame = s.mask_frame(id, &d).unwrap();
+    let to_edit = |b: Box2| {
+        let f = frame.for_mask(true);
+        let pts = [(b.x0, b.y0), (b.x1, b.y0), (b.x0, b.y1), (b.x1, b.y1), (b.centre().0, b.y0), (b.x0, b.centre().1)];
+        let m: Vec<Point> = pts.iter().map(|(x, y)| f.mask_to_norm(Point::new(*x, *y))).collect();
+        Box2::new(
+            m.iter().map(|p| p.x).fold(f64::INFINITY, f64::min),
+            m.iter().map(|p| p.y).fold(f64::INFINITY, f64::min),
+            m.iter().map(|p| p.x).fold(f64::NEG_INFINITY, f64::max),
+            m.iter().map(|p| p.y).fold(f64::NEG_INFINITY, f64::max),
+        )
+    };
+    let a_photo = Box2::new(0.03, 0.04, 0.07, 0.09);
+    let a_edit = to_edit(a_photo);
+    let (dx, dy) = (a_edit.centre().0 - a_photo.centre().0, a_edit.centre().1 - a_photo.centre().1);
+    assert!(dx.abs() > a_photo.width() || dy.abs() > a_photo.height(), "the distortion moves the face past its box: {a_photo:?} → {a_edit:?}");
+    // the neighbour stands, on the photo, where A's box lies after the lens
+    let b_photo = a_edit;
+    let b_edit = to_edit(b_photo);
+    s.retouch_faces.set_provider(Arc::new(Boxes(vec![a_edit, b_edit])));
+    let listed = s.execute("retouch.detect", &json!({})).unwrap();
+    let near = |listed: &serde_json::Value, b: Box2| {
+        listed["faces"].as_array().unwrap().iter().position(|f| (f["bounds"][0].as_f64().unwrap() - b.x0).abs() < 1e-6).unwrap()
+    };
+    let a = near(&listed, a_edit);
+    s.execute("retouch.set", &json!({"control": "retouch.skinTone.amount", "value": 90, "face": a})).unwrap();
+    // the parse takes over
+    s.retouch_faces.provider = None;
+    *fake.rects.lock().unwrap() = [a_photo, b_photo].iter().map(|b| r(b.x0 as f32, b.y0 as f32, b.x1 as f32, b.y1 as f32)).collect();
+    let parsed = s.execute("retouch.detect", &json!({})).unwrap();
+    let parsed_box = |b: Box2| Box2::new(f64::from(b.x0 as f32), f64::from(b.y0 as f32), f64::from(b.x1 as f32), f64::from(b.y1 as f32));
+    let (pa, pb) = (near(&parsed, parsed_box(a_photo)), near(&parsed, parsed_box(b_photo)));
+    assert_eq!(parsed["faces"][pa]["own"], json!(0), "A keeps its settings: {parsed}");
+    assert_eq!(parsed["faces"][pb]["own"], json!(null), "the neighbour does not take them: {parsed}");
+    let own = s.develop_of(id).unwrap().retouch.faces[0].settings.get("retouch.skinTone.amount");
+    assert_eq!(own, Some(90.0));
+    let _ = std::fs::remove_dir_all(dir);
+}

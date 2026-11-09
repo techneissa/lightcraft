@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use egui::{Align2, Sense, pos2, vec2};
 use lightcraft_catalog::PhotoId;
-use lightcraft_develop::retouch::{Face, Feature};
+use lightcraft_develop::retouch::{Face, Feature, Input};
 use lightcraft_develop::{DevelopSettings, controls};
 use serde_json::{Value, json};
 
@@ -80,8 +80,10 @@ pub(super) struct Ctx<'a> {
     pub photo: PhotoId,
     /// The face picked (an index of `retouch.faces`), `None` for All.
     pub face: Option<usize>,
-    /// The photo's faces as found.
-    pub faces: Arc<Vec<Face>>,
+    /// The photo's faces as found (shared with the store: never copied per frame).
+    pub input: Arc<Input>,
+    /// The photo's lens corrections and transform, to match a face's own settings kept in the other frame.
+    pub keys: Option<lightcraft_pipeline::retouch_step::FrameKeyMap>,
 }
 
 impl Ctx<'_> {
@@ -90,7 +92,10 @@ impl Ctx<'_> {
     pub fn slider(&mut self, id: &str) {
         let Some(spec) = controls::find(id) else { return };
         let v = match self.face {
-            Some(i) => self.d.retouch.settings_for(&self.faces, i).get(id),
+            Some(i) => {
+                let keys = self.keys.as_ref().map(|k| k as &dyn lightcraft_develop::retouch::KeyMap);
+                self.d.retouch.settings_for_in(&self.input.faces, i, keys).get(id)
+            }
             None => self.d.retouch.global.get(id),
         };
         let out = crate::widgets::slider(self.ui, spec, v.unwrap_or(spec.default), true, None);
@@ -129,13 +134,14 @@ pub(crate) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
     if st.busy {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
     }
-    let faces: Arc<Vec<Face>> = Arc::new(st.found.as_ref().map(|f| f.input.faces.clone()).unwrap_or_default());
-    let face = picked(ui.ctx(), photo).filter(|i| *i < faces.len());
+    let input: Arc<Input> = st.found.as_ref().map(|f| f.input.clone()).unwrap_or_default();
+    let face = picked(ui.ctx(), photo).filter(|i| *i < input.faces.len());
     // the face picker is on the photo (`overlay`); here, which face the sliders change
-    editing_line(ui, &st, face.and_then(|i| faces.get(i).map(|f| (i, f))));
+    editing_line(ui, &st, face.and_then(|i| input.faces.get(i).map(|f| (i, f))));
     ui.add_space(6.0);
     divider(ui);
-    let mut cx = Ctx { app, ui, d: &d, photo, face, faces };
+    let keys = app.session.retouch_key_map(photo);
+    let mut cx = Ctx { app, ui, d: &d, photo, face, input, keys };
     for s in SECTIONS {
         let id = format!("portrait.{}", s.key);
         let open = cx.app.ui.section_open(&id);

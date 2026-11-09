@@ -29,6 +29,7 @@ impl Feature for SkinTone {
     const SCOPE: Scope = Scope::Face;
     const CONTROLS: &'static [Control<Self>] =
         &[Control { spec: Spec::amount("retouch.skinTone.amount", "Amount"), get: |s| s.amount, set: |s, v| s.amount = v }];
+    const PARTS: &'static [Part] = &[Part::FacialSkin];
 
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>) {
         let Some(face) = face else { return };
