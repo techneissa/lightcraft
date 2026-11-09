@@ -236,6 +236,15 @@ impl Feature for Background {
     const REACH: f64 = 0.0;
     const READS_AROUND: bool = false;
 
+    /// Everything but the person: one minus the matte the step swaps and blurs behind. Without a person mask, nowhere.
+    fn area(scene: &Scene<'_>, _faces: &[usize]) -> Option<Plane> {
+        let masks = matte::masks(scene)?;
+        let view = scene.view();
+        let mut p = matte::plane(&masks, scene.width, scene.height, &|x, y| view.to_norm(x, y));
+        p.data.iter_mut().for_each(|v| *v = 1.0 - *v);
+        Some(p)
+    }
+
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, _face: Option<usize>) {
         let k = draw::Strength::of(self);
         if k.is_off() || img.width == 0 || img.height == 0 || img.data.len() != img.width * img.height {
