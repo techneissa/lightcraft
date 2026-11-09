@@ -462,7 +462,7 @@ pub(super) fn red_eye(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     if n == 0 {
         return;
     }
-    if app.ui.eye >= n {
+    if app.ui.eye_for(id) >= n {
         app.ui.eye = n - 1;
     }
     let i = app.ui.eye;

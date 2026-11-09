@@ -251,7 +251,13 @@ pub(super) fn eye_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
     let (sx, sy) = (map.screen(Point::new(1.0, 0.0)).distance(o), map.screen(Point::new(0.0, 1.0)).distance(o));
     let per_long = sx.max(sy);
     let p = ui.painter();
-    let selected = app.ui.eye.min(d.red_eye.len().saturating_sub(1));
+    let Some(photo) = app.session.active() else { return };
+    let selected = app.ui.eye_for(photo).min(d.red_eye.len().saturating_sub(1));
+    // a drag that began on another photo ends with it (the photo changed under the pointer)
+    if matches!(app.gesture, Some(Gesture::EyeEdit { photo: was, .. }) if was != photo) {
+        app.gesture = None;
+        let _ = app.run("develop.endInteraction", json!({}));
+    }
     // everything that can be grabbed: (what, screen position)
     let mut grips: Vec<(EyeGrip, Pos2)> = Vec::new();
     for (i, e) in d.red_eye.iter().enumerate() {
@@ -264,14 +270,9 @@ pub(super) fn eye_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
         }
         grips.push((EyeGrip::Pin(i), c));
     }
-    // the handles first (they sit on the edge, away from the pin unless the eye is tiny), then the selected eye's
-    // pin, then the nearest pin
-    let hit = |q: Pos2| {
-        let rank = |g: &(EyeGrip, Pos2)| (matches!(g.0, EyeGrip::Pin(_)), !matches!(g.0, EyeGrip::Pin(i) if i == selected), g.1.distance(q));
-        grips.iter().filter(|g| g.1.distance(q) < PIN_HIT).min_by(|a, b| rank(a).partial_cmp(&rank(b)).unwrap_or(std::cmp::Ordering::Equal)).copied()
-    };
+    let hit = |q: Pos2| eye_grip_at(&grips, selected, q);
     let dragging = match app.gesture {
-        Some(Gesture::EyeEdit { index, handle }) => Some((index, handle)),
+        Some(Gesture::EyeEdit { index, handle, .. }) => Some((index, handle)),
         _ => None,
     };
     let lit = match dragging {
@@ -317,7 +318,7 @@ pub(super) fn eye_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
         };
         app.ui.eye = index;
         let _ = app.run("develop.beginInteraction", json!({"label": "Edit Red Eye"}));
-        app.gesture = Some(Gesture::EyeEdit { index, handle });
+        app.gesture = Some(Gesture::EyeEdit { photo, index, handle });
     } else if resp.drag_started()
         && let Some(q) = press
     {
@@ -328,15 +329,7 @@ pub(super) fn eye_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
         if resp.dragged()
             && let (Some(q), Some(e)) = (resp.interact_pointer_pos(), d.red_eye.get(index))
         {
-            let c = map.screen(e.center);
-            let params = match handle {
-                0 => {
-                    let (n, n0) = (map.norm(q), map.norm(q - resp.drag_delta()));
-                    json!({"index": index, "center": [e.center.x + n.x - n0.x, e.center.y + n.y - n0.y]})
-                }
-                1 | 3 => json!({"index": index, "rx": f64::from((q.x - c.x).abs() / per_long.max(1e-3)).max(0.002)}),
-                _ => json!({"index": index, "ry": f64::from((q.y - c.y).abs() / per_long.max(1e-3)).max(0.002)}),
-            };
+            let params = eye_edit_params(map, e, (index, handle), q, resp.drag_delta(), per_long);
             let _ = app.run("redeye.update", params);
         }
         if resp.drag_stopped() {
@@ -366,19 +359,57 @@ pub(super) fn eye_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
         }
     } else if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
+        && let Some(i) = eye_at(map, d, q, per_long)
     {
-        // a pin (any eye), else inside an ellipse; the pin's reach is at least PIN_HIT wide, so a tiny eye stays clickable
-        let inside = |e: &lightcraft_develop::RedEye| {
-            let c = map.screen(e.center);
-            let (dx, dy) = ((q.x - c.x) / (e.rx as f32 * per_long).max(PIN_HIT), (q.y - c.y) / (e.ry as f32 * per_long).max(PIN_HIT));
-            dx * dx + dy * dy <= 1.0
-        };
-        let at_pin = nearest_within(d.red_eye.iter().map(|e| map.screen(e.center)), q, PIN_HIT)
-            .and_then(|c| d.red_eye.iter().position(|e| map.screen(e.center) == c));
-        if let Some(i) = at_pin.or_else(|| d.red_eye.iter().position(inside)) {
-            app.ui.eye = i;
-        }
+        app.ui.eye = i;
     }
+}
+
+/// The eye a click at `q` selects: one whose pin is within reach, else one whose ellipse holds `q` (an ellipse smaller
+/// than a pin's hit circle counts as that wide, so a tiny eye stays clickable).
+fn eye_at(map: &CanvasMap, d: &DevelopSettings, q: Pos2, per_long: f32) -> Option<usize> {
+    let inside = |e: &lightcraft_develop::RedEye| {
+        let c = map.screen(e.center);
+        let (dx, dy) = ((q.x - c.x) / (e.rx as f32 * per_long).max(PIN_HIT), (q.y - c.y) / (e.ry as f32 * per_long).max(PIN_HIT));
+        dx * dx + dy * dy <= 1.0
+    };
+    let at_pin = nearest_within(d.red_eye.iter().map(|e| map.screen(e.center)), q, PIN_HIT)
+        .and_then(|c| d.red_eye.iter().position(|e| map.screen(e.center) == c));
+    at_pin.or_else(|| d.red_eye.iter().position(inside))
+}
+
+/// The `redeye.update` params for a drag of eye `e`'s pin (`handle` 0, by the frame's `delta`) or an edge handle
+/// (1 and 3 set the horizontal radius, 2 and 4 the vertical one) with the pointer at `q`. The centre stays on the photo.
+fn eye_edit_params(
+    map: &CanvasMap,
+    e: &lightcraft_develop::RedEye,
+    (index, handle): (usize, u8),
+    q: Pos2,
+    delta: egui::Vec2,
+    per_long: f32,
+) -> serde_json::Value {
+    let c = map.screen(e.center);
+    match handle {
+        0 => {
+            let (n, n0) = (map.norm(q), map.norm(q - delta));
+            json!({"index": index, "center": [(e.center.x + n.x - n0.x).clamp(0.0, 1.0), (e.center.y + n.y - n0.y).clamp(0.0, 1.0)]})
+        }
+        1 | 3 => json!({"index": index, "rx": f64::from((q.x - c.x).abs() / per_long.max(1e-3)).max(0.002)}),
+        _ => json!({"index": index, "ry": f64::from((q.y - c.y).abs() / per_long.max(1e-3)).max(0.002)}),
+    }
+}
+
+/// What a press at `q` grabs in the Red Eye tool: the selected eye's pin when `q` is inside its hit circle (so a small
+/// eye can still be moved: its handles are within reach of its pin), else whatever grip is nearest (the selected eye's
+/// edge handles, any eye's pin).
+fn eye_grip_at(grips: &[(EyeGrip, Pos2)], selected: usize, q: Pos2) -> Option<(EyeGrip, Pos2)> {
+    let near = |g: &&(EyeGrip, Pos2)| g.1.distance(q) < PIN_HIT;
+    grips
+        .iter()
+        .filter(near)
+        .find(|g| g.0 == EyeGrip::Pin(selected))
+        .or_else(|| grips.iter().filter(near).min_by(|a, b| a.1.distance(q).total_cmp(&b.1.distance(q))))
+        .copied()
 }
 
 /// Run `spot.add` with `params` (the fill of `mode` added), timed under `LIGHTCRAFT_PROFILE`.

@@ -92,16 +92,36 @@ fn red_eye_update_moves_and_resizes_one_eye() {
     let mut s = demo();
     s.execute("redeye.add", &json!({"center": [0.3, 0.4], "rx": 0.03, "ry": 0.02})).unwrap();
     s.execute("redeye.add", &json!({"center": [0.6, 0.4], "rx": 0.03, "ry": 0.02})).unwrap();
-    s.execute("redeye.update", &json!({"index": 1, "center": [0.7, 1.5]})).unwrap();
+    s.execute("redeye.update", &json!({"index": 1, "center": [0.7, 1.0]})).unwrap();
     let d = active_dev(&s);
-    assert_eq!(d.red_eye[1].center, lightcraft_geom::Point::new(0.7, 1.0), "kept on the photo");
+    assert_eq!(d.red_eye[1].center, lightcraft_geom::Point::new(0.7, 1.0));
     assert_eq!((d.red_eye[1].rx, d.red_eye[1].ry), (0.03, 0.02), "radii untouched");
     assert_eq!(d.red_eye[0].center, lightcraft_geom::Point::new(0.3, 0.4), "the other eye untouched");
     s.execute("redeye.update", &json!({"index": 0, "rx": 0.06, "ry": 9.0})).unwrap();
     let d = active_dev(&s);
     assert_eq!((d.red_eye[0].rx, d.red_eye[0].ry), (0.06, 0.5), "radius capped");
     assert!(s.execute("redeye.update", &json!({"index": 5, "rx": 0.1})).is_err());
-    assert!(s.execute("redeye.update", &json!({"rx": 0.1})).is_err());
+    // bad params are errors that change nothing
+    let before = active_dev(&s);
+    for bad in [
+        json!({"rx": 0.1}),
+        json!({"index": "0", "rx": 0.1}),
+        json!({"index": -1, "rx": 0.1}),
+        json!({"index": 0}),
+        json!({"index": 0, "rx": "wide"}),
+        json!({"index": 0, "rx": -0.1}),
+        json!({"index": 0, "rx": 0.0}),
+        json!({"index": 0, "ry": null}),
+        json!({"index": 0, "rx": 0.1, "ry": f64::NAN}),
+        json!({"index": 0, "center": [0.5, 1.5]}),
+        json!({"index": 0, "center": [-0.1, 0.5]}),
+        json!({"index": 0, "center": [0.5]}),
+        json!({"index": 0, "center": "middle"}),
+        json!({"index": 0, "center": [0.5, 0.5, 0.5]}),
+    ] {
+        assert!(s.execute("redeye.update", &bad).is_err(), "{bad}");
+    }
+    assert_eq!(active_dev(&s), before, "a refused update changes nothing");
     s.execute("edit.undo", &json!({})).unwrap();
     assert_eq!(active_dev(&s).red_eye[0].rx, 0.03, "one undo step");
 }

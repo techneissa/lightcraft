@@ -405,7 +405,8 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
             }
         }
     }
-    let lit = resp.hover_pos().and_then(|h| nearest_within(drawn.iter().map(|d| d.0), h, PIN_HIT));
+    // (the pin a press would take: the nearest grip, when that is a pin)
+    let lit = resp.hover_pos().and_then(|h| grip_at(&grips, active, h)).filter(|g| g.2 == 0).map(|g| g.3);
     for &(q, sel) in &drawn {
         pin_lit(&pins, q, sel, lit == Some(q));
     }
@@ -628,6 +629,18 @@ fn other_pin_at(grips: &[(u32, usize, u8, Pos2)], active: Option<u32>, q: Pos2) 
         .map(|g| g.0)
 }
 
+/// The grip a press at `q` takes: the nearest within [`PIN_HIT`], the `active` mask's first only when equally near. The
+/// pin that lights up under the pointer is this one.
+pub(crate) fn grip_at(grips: &[(u32, usize, u8, Pos2)], active: Option<u32>, q: Pos2) -> Option<(u32, usize, u8, Pos2)> {
+    grips
+        .iter()
+        .filter(|g| g.3.distance(q) < PIN_HIT)
+        .min_by(|a, b| {
+            (a.3.distance(q), Some(a.0) != active).partial_cmp(&(b.3.distance(q), Some(b.0) != active)).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .copied()
+}
+
 /// Smallest distance, in screen points, a pointer may be from a pin and still grab it.
 pub(crate) const PIN_HIT: f32 = 10.0;
 
@@ -638,7 +651,7 @@ pub(crate) fn nearest_within(points: impl IntoIterator<Item = Pos2>, at: Pos2, w
 
 /// What [`pin_select`] found.
 enum PinSelect {
-    /// This frame's press or click was on another mask's pin: it selected that mask; paint or sample nothing.
+    /// This frame's click was on another mask's pin: it selected that mask; paint or sample nothing.
     Taken,
     /// The pointer hovers another mask's pin (a click would select it).
     Over,
@@ -646,26 +659,16 @@ enum PinSelect {
     Away,
 }
 
-/// Brush and Colour Range tools: a click, or a drag starting, on another mask's pin selects that mask (through
-/// `mask.select`, so undo and MCP see it) instead of painting or sampling; the rest of such a drag is swallowed. The
-/// selected mask's own pin is nothing special: painting over it works as anywhere else.
+/// Brush and Colour Range tools: a plain click (press and release without moving past the drag threshold) on another
+/// mask's pin selects that mask (through `mask.select`, so undo and MCP see it) instead of painting a dab or sampling a
+/// colour. A drag that starts on the pin is an ordinary stroke (or sample). The selected mask's own pin is nothing
+/// special: painting over it works as anywhere else.
 fn pin_select(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, grips: &[(u32, usize, u8, Pos2)]) -> PinSelect {
-    let key = egui::Id::unique("pin-select-swallow");
     let active = app.session.active_mask;
-    if ui.data(|m| m.get_temp::<bool>(key)).unwrap_or(false) {
-        if resp.drag_stopped() || !ui.input(|i| i.pointer.any_down()) {
-            ui.data_mut(|m| m.remove::<bool>(key));
-        }
-        return PinSelect::Taken;
-    }
-    let press = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos());
-    if (resp.drag_started() || resp.clicked())
-        && let Some(mid) = press.and_then(|q| other_pin_at(grips, active, q))
+    if resp.clicked()
+        && let Some(mid) = resp.interact_pointer_pos().and_then(|q| other_pin_at(grips, active, q))
     {
         let _ = app.run("mask.select", json!({"id": mid}));
-        if resp.drag_started() {
-            ui.data_mut(|m| m.insert_temp(key, true));
-        }
         return PinSelect::Taken;
     }
     let idle = app.gesture.is_none() && !ui.input(|i| i.pointer.any_down());
@@ -921,16 +924,7 @@ fn grip_gestures(
         return;
     }
     let active = app.session.active_mask;
-    // the grip under the pointer: the selected mask's first, then the nearest
-    let hit = |q: Pos2| {
-        grips
-            .iter()
-            .filter(|g| g.3.distance(q) < PIN_HIT)
-            .min_by(|a, b| {
-                (Some(a.0) != active, a.3.distance(q)).partial_cmp(&(Some(b.0) != active, b.3.distance(q))).unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .copied()
-    };
+    let hit = |q: Pos2| grip_at(grips, active, q);
     if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
         && let Some((mid, ..)) = hit(q)

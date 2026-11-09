@@ -73,10 +73,10 @@ fn two_masks(tool: &str) -> Headless {
     h
 }
 
-/// With the Brush tool, a click on another mask's pin selects that mask and paints no dab; so does a drag that
-/// starts on it. The selected mask's own pin is painted over as anywhere else.
+/// With the Brush tool, a plain click on another mask's pin selects that mask and paints no dab. A drag that starts on
+/// the pin is an ordinary stroke into the selected mask. The selected mask's own pin is painted over as anywhere else.
 #[test]
-fn the_brush_tool_selects_the_mask_whose_pin_is_clicked_without_painting() {
+fn the_brush_tool_selects_on_a_click_but_a_drag_from_a_pin_paints() {
     let mut h = two_masks("brush");
     let before = develop(&h).masks;
     let other = at(&h, "maskPin:1:0");
@@ -85,16 +85,18 @@ fn the_brush_tool_selects_the_mask_whose_pin_is_clicked_without_painting() {
     assert_eq!(h.app.session.active_mask, Some(1), "the pinned mask is selected");
     assert_eq!(develop(&h).masks, before, "no dab was painted");
     assert_eq!(h.app.ui.tool, "brush", "the tool stays on");
-    // a drag that starts on the other pin only selects it too
+    // a drag that starts on the other pin paints into the selected mask and selects nothing
     let pin2 = at(&h, "maskPin:2:0");
     gesture(&mut h, &[pin2, pin2 + egui::vec2(20.0, 0.0), pin2 + egui::vec2(40.0, 10.0)]);
     h.settle(SETTLE);
-    assert_eq!(h.app.session.active_mask, Some(2));
-    assert_eq!(develop(&h).masks, before, "no stroke was painted");
+    assert_eq!(h.app.session.active_mask, Some(1), "a drag selects nothing");
+    assert_ne!(develop(&h).masks, before, "the stroke went into the selected mask");
     // the selected mask's own pin: a click paints
-    click(&mut h, pin2);
+    let before = develop(&h).masks;
+    let own = at(&h, "maskPin:1:0");
+    click(&mut h, own);
     h.settle(SETTLE);
-    assert_eq!(h.app.session.active_mask, Some(2));
+    assert_eq!(h.app.session.active_mask, Some(1));
     assert_ne!(develop(&h).masks, before, "a dab went into the selected mask");
 }
 
@@ -122,6 +124,13 @@ fn colour_range_selects_the_mask_whose_pin_is_clicked_without_sampling() {
     h.settle(SETTLE);
     assert_eq!(h.app.session.active_mask, Some(2), "the pinned mask is selected");
     assert_eq!(samples(&h), 0, "no colour was sampled");
+    // a drag that starts on a pin selects nothing and samples nothing either
+    exec(&mut h, "mask.select", json!({"id": 1}));
+    h.settle(SETTLE);
+    gesture(&mut h, &[pin, pin + egui::vec2(20.0, 0.0), pin + egui::vec2(40.0, 10.0)]);
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.active_mask, Some(1), "a drag from another mask's pin does not select it");
+    assert_eq!(samples(&h), 0);
     // (a click elsewhere on the photo samples for the selected colour range, so the check above can fail)
     exec(&mut h, "mask.select", json!({"id": 1}));
     h.settle(SETTLE);
@@ -208,4 +217,80 @@ fn the_pin_nearest_the_pointer_within_the_hit_distance_is_the_one_found() {
     assert_eq!(nearest_within(pins, egui::pos2(104.0, 100.0), PIN_HIT), Some(pins[1]));
     assert_eq!(nearest_within(pins, egui::pos2(100.0, 109.0), PIN_HIT), Some(pins[0]));
     assert_eq!(nearest_within(pins, egui::pos2(100.0, 111.0), PIN_HIT), None);
+}
+
+/// On a small eye a press near the centre takes the pin (the handles are within reach of it): the eye moves and keeps
+/// its size. A big eye's edge handle still resizes (see the move-and-resize test above).
+#[test]
+fn a_press_inside_the_pins_circle_of_a_small_red_eye_moves_it() {
+    let mut h = detail("panel.redeye");
+    exec(&mut h, "redeye.add", json!({"center": [0.5, 0.5], "rx": 0.008, "ry": 0.008}));
+    h.app.ui.eye = 0;
+    h.settle(SETTLE);
+    let start = develop(&h).red_eye[0];
+    let (pin, edge) = (at(&h, "eyePin:0"), at(&h, "eyeHandle:0:1"));
+    assert!(pin.distance(edge) < 10.0, "the handle is inside the pin's hit circle: {}", pin.distance(edge));
+    // the press is on the handle, which is inside the pin's circle: it moves the eye
+    gesture(&mut h, &[edge, edge + egui::vec2(10.0, 5.0), edge + egui::vec2(30.0, 15.0)]);
+    h.settle(SETTLE);
+    let after = develop(&h).red_eye[0];
+    assert!(after.center.x > start.center.x && after.center.y > start.center.y, "{start:?} -> {after:?}");
+    assert_eq!((after.rx, after.ry), (start.rx, start.ry), "moved, not resized");
+}
+
+/// The selected eye is per photo: another photo starts at its first correction, and a drag that began on one photo
+/// ends when the photo changes.
+#[test]
+fn the_selected_red_eye_follows_the_photo() {
+    let mut h = detail("panel.redeye");
+    let first = h.app.session.active().expect("active photo");
+    exec(&mut h, "redeye.add", json!({"center": [0.3, 0.5], "rx": 0.03, "ry": 0.03}));
+    exec(&mut h, "redeye.add", json!({"center": [0.6, 0.5], "rx": 0.03, "ry": 0.03}));
+    h.app.ui.eye = 1;
+    h.settle(SETTLE);
+    assert_eq!(h.app.ui.eye_for(first), 1);
+    // a drag in progress on the first photo
+    let pin = at(&h, "eyePin:1");
+    let r = h.request("ui.pointer", json!({"events": [{"kind": "down", "x": pin.x, "y": pin.y}, {"kind": "drag", "x": pin.x + 10.0, "y": pin.y}, {"kind": "drag", "x": pin.x + 20.0, "y": pin.y}], "screen": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(matches!(h.app.gesture, Some(crate::panels::detail::Gesture::EyeEdit { photo, .. }) if photo == first), "{:?}", h.app.gesture);
+    // another photo becomes active
+    let other = h.app.session.visible().iter().copied().find(|id| *id != first).expect("another photo");
+    exec(&mut h, "library.select", json!({"ids": [other.0]}));
+    h.settle(SETTLE);
+    assert!(h.app.gesture.is_none(), "the drag ended with the photo change: {:?}", h.app.gesture);
+    assert_eq!(h.app.ui.eye_for(other), 0, "the other photo starts at its first correction");
+    // …and a photo with fewer corrections never shows a stale index
+    assert_eq!(h.app.ui.eye_for(other), 0);
+    let r = h.request("ui.pointer", json!({"events": [{"kind": "up", "x": pin.x, "y": pin.y}], "screen": true}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert_eq!(develop(&h).red_eye.len(), 0, "the other photo got no eye");
+}
+
+/// Where two pins are both within reach, a press takes the nearer one, even when the farther is the selected mask's;
+/// the selected mask's goes first only when they are equally near. The pin that lights is the one taken.
+#[test]
+fn the_nearest_mask_pin_is_taken_not_the_selected_ones() {
+    use crate::panels::detail::masks::grip_at;
+    let grips = [(1, 0, 0u8, egui::pos2(100.0, 100.0)), (2, 0, 0u8, egui::pos2(108.0, 100.0))];
+    // mask 2 is selected; the press is nearer mask 1's pin
+    assert_eq!(grip_at(&grips, Some(2), egui::pos2(102.0, 100.0)).map(|g| g.0), Some(1));
+    assert_eq!(grip_at(&grips, Some(2), egui::pos2(107.0, 100.0)).map(|g| g.0), Some(2));
+    // equally near: the selected one
+    assert_eq!(grip_at(&grips, Some(2), egui::pos2(104.0, 100.0)).map(|g| g.0), Some(2));
+    assert_eq!(grip_at(&grips, Some(1), egui::pos2(104.0, 100.0)).map(|g| g.0), Some(1));
+    assert_eq!(grip_at(&grips, Some(1), egui::pos2(120.0, 100.0)), None);
+
+    // and on the photo: mask 2 (selected) sits a few points from mask 1; a click near mask 1's pin selects mask 1
+    let mut h = detail("panel.masking");
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.5], "rx": 0.05, "ry": 0.05}));
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.52, 0.5], "rx": 0.05, "ry": 0.05}));
+    exec(&mut h, "view.toolOverlay", json!({"mode": "always"}));
+    h.settle(SETTLE);
+    let (p1, p2) = (at(&h, "maskPin:1:0"), at(&h, "maskPin:2:0"));
+    assert!(p1.distance(p2) < 10.0, "both pins are within reach: {}", p1.distance(p2));
+    assert_eq!(h.app.session.active_mask, Some(2));
+    click(&mut h, p1 - egui::vec2(1.0, 0.0));
+    h.settle(SETTLE);
+    assert_eq!(h.app.session.active_mask, Some(1), "the nearer pin was taken");
 }

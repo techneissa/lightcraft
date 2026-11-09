@@ -921,9 +921,12 @@ fn delete_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
         }
         R::RedEye => {
             // the selected eye (its pin and handles are on the photo)
-            let n = app.session.active().and_then(|id| app.session.develop_of(id)).map_or(0, |d| d.red_eye.len());
-            if app.ui.eye < n {
-                let _ = app.run("redeye.delete", json!({"index": app.ui.eye}));
+            if let Some(id) = app.session.active() {
+                let n = app.session.develop_of(id).map_or(0, |d| d.red_eye.len());
+                let eye = app.ui.eye_for(id);
+                if eye < n {
+                    let _ = app.run("redeye.delete", json!({"index": eye}));
+                }
             }
             return true;
         }

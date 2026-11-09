@@ -84,6 +84,7 @@ pub enum Gesture {
     },
     /// Red Eye tool: dragging eye `index`'s pin (`handle` 0) or one of its edge handles (1 right, 2 bottom, 3 left, 4 top).
     EyeEdit {
+        photo: lightcraft_catalog::PhotoId,
         index: usize,
         handle: u8,
     },

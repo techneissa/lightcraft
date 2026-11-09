@@ -1152,28 +1152,41 @@ pub fn specs() -> Vec<CommandSpec> {
             "Edit Red Eye Correction",
             [],
             None,
-            "{index, center?: [x,y] normalized, rx?, ry?: radii as fractions of the long edge} — moves or resizes one correction",
+            "{index, center?: [x,y] on the photo (0..1), rx?, ry?: radii above 0 as fractions of the long edge (at most 0.5)} — moves or resizes one correction; anything else is an error",
             has_active,
             |s, p| {
                 let c = "redeye.update";
                 let i = super::index_req(p, "index", c)?;
+                // each given key must be valid: a wrong type, a non-finite or non-positive radius, or a centre off the
+                // photo is an error, never ignored or quietly corrected
+                let center = match p.get("center") {
+                    None => None,
+                    Some(v) => {
+                        let xy = v.as_array().filter(|a| a.len() == 2).and_then(|a| Some((a.first()?.as_f64()?, a.get(1)?.as_f64()?)));
+                        let (x, y) = xy.ok_or_else(|| bad(c, "`center` must be [x, y] numbers"))?;
+                        if !((0.0..=1.0).contains(&x) && (0.0..=1.0).contains(&y)) {
+                            return Err(bad(c, "`center` must be on the photo (0 to 1)"));
+                        }
+                        Some(Point::new(x, y))
+                    }
+                };
+                let radius = |key: &str| -> Result<Option<f64>> {
+                    let Some(v) = p.get(key) else { return Ok(None) };
+                    match v.as_f64() {
+                        Some(r) if r.is_finite() && r > 0.0 => Ok(Some(r.min(0.5))),
+                        _ => Err(bad(c, format!("`{key}` must be a number above 0"))),
+                    }
+                };
+                let (rx, ry) = (radius("rx")?, radius("ry")?);
+                if center.is_none() && rx.is_none() && ry.is_none() {
+                    return Err(bad(c, "give `center`, `rx` or `ry`"));
+                }
                 let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
                 let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
                 let eye = dd.red_eye.get_mut(i).ok_or_else(|| bad(c, "no such eye"))?;
-                if let Some(center) = point(p, "center") {
-                    if !(center.x.is_finite() && center.y.is_finite()) {
-                        return Err(bad(c, "`center` must be finite"));
-                    }
-                    eye.center = Point::new(center.x.clamp(0.0, 1.0), center.y.clamp(0.0, 1.0));
-                }
-                for (key, radius) in [("rx", &mut eye.rx), ("ry", &mut eye.ry)] {
-                    if let Some(v) = p.get(key).and_then(Value::as_f64) {
-                        if !v.is_finite() {
-                            return Err(bad(c, format!("`{key}` must be finite")));
-                        }
-                        *radius = v.clamp(1e-4, 0.5);
-                    }
-                }
+                eye.center = center.unwrap_or(eye.center);
+                eye.rx = rx.unwrap_or(eye.rx);
+                eye.ry = ry.unwrap_or(eye.ry);
                 s.set_develop(id, dd, "Edit Red Eye")?;
                 Ok(json!({"index": i}))
             }
