@@ -192,7 +192,7 @@ fn draw(rect: &NormRect, side: usize, parts: &[Placed<'_>], bodies: &[Placed<'_>
 /// every other plane by the larger value (#124). Each cell is sampled once per plane.
 fn fill_planes(planes: &[Placed<'_>], out: &mut [f32], rect: &NormRect, side: usize, at: &dyn Fn(usize, usize) -> (f32, f32)) {
     let paint = |buf: &mut [f32], q: &Placed<'_>, join: &dyn Fn(f32, f32) -> f32| {
-        let Some(r) = cells(rect, side, &q.rect) else { return None };
+        let r = cells(rect, side, &q.rect)?;
         for j in r.2..r.3 {
             for i in r.0..r.1 {
                 let (u, v) = at(i, j);
