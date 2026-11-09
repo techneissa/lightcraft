@@ -100,6 +100,7 @@ impl Feature for Blemish {
         !(self.amount.is_finite() && self.amount > 0.0)
     }
 
+    /// The discs of the spots Blemishes repairs (`area::spots`).
     fn area(scene: &Scene<'_>, faces: &[usize]) -> Option<lightcraft_raster::Plane> {
         crate::area::spots(scene, faces)
     }
@@ -199,16 +200,16 @@ pub fn with_spots(img: &Rgb32f, faces: Vec<Face>) -> Vec<Face> {
 }
 
 /// A spot mapped into the image: centre, radius and donor offset in pixels.
-struct Placed {
-    c: (f64, f64),
-    r: f64,
+pub(crate) struct Placed {
+    pub(crate) c: (f64, f64),
+    pub(crate) r: f64,
     offset: Option<(f64, f64)>,
 }
 
 /// Spot `s` in the image (whose mask's box is `b`); `None` when it is too small to see or its centre is outside the
 /// box. Its radius is held to [`MAX_RADIUS`] and its donor to [`MAX_DONOR`] radii, so what the repair reads stays
 /// within [`Blemish::REACH`] of the mask's area (zoom never changes a repair).
-fn place(scene: &Scene<'_>, size: f64, b: [usize; 4], s: &Spot) -> Option<Placed> {
+pub(crate) fn place(scene: &Scene<'_>, size: f64, b: [usize; 4], s: &Spot) -> Option<Placed> {
     let view = scene.view();
     let c = view.to_px(s.at.0, s.at.1)?;
     let r = s.radius.min(MAX_RADIUS) * size;

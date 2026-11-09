@@ -7,6 +7,7 @@
 use lightcraft_raster::Plane;
 
 use crate::feature::union_area;
+use crate::wrinkles::FACE_OVAL;
 use crate::wrinkles::areas::{self, Area};
 use crate::{Part, Scene};
 
@@ -15,21 +16,23 @@ fn centre(x: usize, y: usize) -> (f64, f64) {
     (x as f64 + 0.5, y as f64 + 0.5)
 }
 
-/// Blemishes: a soft disc on each spot the face has (at least a few pixels across, so a small spot shows).
+/// Blemishes: a disc on each spot the repair works on, as the repair places it ([`crate::blemish::place`]: the radius
+/// held to `MAX_RADIUS`, spots too small to see or outside the skin mask's box left out), of the radius it repairs
+/// fully (`CORE` spot radii), edged one pixel soft.
 pub fn spots(scene: &Scene<'_>, faces: &[usize]) -> Option<Plane> {
     union_area(scene, faces, |f| {
         let ctx = scene.faces.get(f)?;
         let spots = ctx.face.spots.as_ref()?;
+        let b = scene.mask_box(f, Part::FacialSkin)?;
         let mut out = Plane::filled(scene.width, scene.height, 0.0);
-        for s in &spots.list {
-            let Some((cx, cy)) = scene.view().to_px(s.at.0, s.at.1).filter(|(x, y)| x.is_finite() && y.is_finite()) else { continue };
-            let r = (s.radius * ctx.size).max(2.0) * 1.3;
-            let (x0, x1) = (((cx - r - 1.0).floor().max(0.0)) as usize, ((cx + r + 1.0).ceil().max(0.0) as usize).min(scene.width));
-            let (y0, y1) = (((cy - r - 1.0).floor().max(0.0)) as usize, ((cy + r + 1.0).ceil().max(0.0) as usize).min(scene.height));
+        for p in spots.list.iter().filter_map(|s| crate::blemish::place(scene, ctx.size, b, s)) {
+            let r = p.r * crate::blemish::CORE;
+            let (x0, x1) = (((p.c.0 - r - 1.0).floor().max(0.0)) as usize, ((p.c.0 + r + 1.0).ceil().max(0.0) as usize).min(scene.width));
+            let (y0, y1) = (((p.c.1 - r - 1.0).floor().max(0.0)) as usize, ((p.c.1 + r + 1.0).ceil().max(0.0) as usize).min(scene.height));
             for y in y0..y1 {
                 for x in x0..x1 {
                     let (px, py) = centre(x, y);
-                    let v = ((r - ((px - cx).powi(2) + (py - cy).powi(2)).sqrt()) / (0.3 * r)).clamp(0.0, 1.0) as f32;
+                    let v = (r + 0.5 - ((px - p.c.0).powi(2) + (py - p.c.1).powi(2)).sqrt()).clamp(0.0, 1.0) as f32;
                     if let Some(o) = out.data.get_mut(y * scene.width + x) {
                         *o = o.max(v);
                     }
@@ -116,34 +119,73 @@ pub fn lenses(scene: &Scene<'_>, faces: &[usize]) -> Option<Plane> {
     })
 }
 
-/// The face mesh's outline, in [`crate::Face::landmarks`] order after YuNet's five (MediaPipe's face oval).
-const OVAL: [usize; 36] = [
-    10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234,
-    127, 162, 21, 54, 103, 67, 109,
-];
-
-/// Face Reshape: the face inside its outline (the mesh's oval; the ellipse of the face's box without a mesh).
+/// Face Reshape: the face inside its outline (the mesh's oval; the ellipse of the face's box without a mesh). The
+/// polygon is filled once per face, by scanlines over its box.
 pub fn outline(scene: &Scene<'_>, faces: &[usize]) -> Option<Plane> {
     union_area(scene, faces, |f| {
         let ctx = scene.faces.get(f)?;
         let first = crate::reshape::MESH;
-        let poly: Vec<(f64, f64)> = if ctx.landmarks.len() >= first + crate::reshape::MESH_POINTS {
-            OVAL.iter().filter_map(|i| ctx.landmarks.get(first + i).copied().flatten()).collect()
+        let mesh: Vec<(f64, f64)> = if ctx.landmarks.len() >= first + crate::reshape::MESH_POINTS {
+            FACE_OVAL.iter().filter_map(|i| ctx.landmarks.get(first + i).copied().flatten()).collect()
         } else {
             Vec::new()
         };
-        let [bx0, by0, bx1, by1] = ctx.bounds;
-        let (c, rx, ry) = (((bx0 + bx1) / 2.0, (by0 + by1) / 2.0), (bx1 - bx0) / 2.0, (by1 - by0) / 2.0);
-        let edge = (ctx.size * 0.02).max(1.0);
-        Some(Plane::from_fn(scene.width, scene.height, |x, y| {
-            let p = centre(x, y);
-            let d = if poly.len() >= 3 {
-                areas::polygon_inside(&poly, p)
-            } else {
-                let k = (((p.0 - c.0) / rx.max(1e-9)).powi(2) + ((p.1 - c.1) / ry.max(1e-9)).powi(2)).sqrt();
-                (1.0 - k) * rx.min(ry)
-            };
-            ((d / edge) * 0.5 + 0.5).clamp(0.0, 1.0) as f32
-        }))
+        let poly = if mesh.len() == FACE_OVAL.len() {
+            mesh
+        } else {
+            let [bx0, by0, bx1, by1] = ctx.bounds;
+            let (c, rx, ry) = (((bx0 + bx1) / 2.0, (by0 + by1) / 2.0), (bx1 - bx0) / 2.0, (by1 - by0) / 2.0);
+            (0..ELLIPSE_POINTS)
+                .map(|i| {
+                    let t = i as f64 * std::f64::consts::TAU / ELLIPSE_POINTS as f64;
+                    (c.0 + rx * t.cos(), c.1 + ry * t.sin())
+                })
+                .collect()
+        };
+        Some(fill_polygon(&poly, scene.width, scene.height))
     })
+}
+
+/// Points of the polygon that stands for the face box's ellipse.
+const ELLIPSE_POINTS: usize = 64;
+/// Sample rows per pixel row of [`fill_polygon`]'s coverage.
+const SUB_ROWS: usize = 4;
+
+/// The coverage (0…1) of the polygon `poly` over a `w × h` image: scanlines at [`SUB_ROWS`] per pixel row over the
+/// polygon's box only, each span giving its exact horizontal coverage. A polygon that is not a polygon (under three
+/// points, or a point that is not a number) covers nothing.
+fn fill_polygon(poly: &[(f64, f64)], w: usize, h: usize) -> Plane {
+    let mut out = Plane::filled(w, h, 0.0);
+    if poly.len() < 3 || poly.iter().any(|p| !p.0.is_finite() || !p.1.is_finite()) {
+        return out;
+    }
+    let (y_lo, y_hi) = poly.iter().fold((f64::INFINITY, f64::NEG_INFINITY), |(lo, hi), p| (lo.min(p.1), hi.max(p.1)));
+    let (row0, row1) = ((y_lo.floor().max(0.0)) as usize, (y_hi.ceil().max(0.0) as usize).min(h));
+    let mut xs: Vec<f64> = Vec::with_capacity(poly.len());
+    for y in row0..row1 {
+        let Some(row) = out.data.get_mut(y * w..(y + 1) * w) else { continue };
+        for sub in 0..SUB_ROWS {
+            let yy = y as f64 + (sub as f64 + 0.5) / SUB_ROWS as f64;
+            xs.clear();
+            for (i, a) in poly.iter().enumerate() {
+                let b = poly.get((i + 1) % poly.len()).unwrap_or(a);
+                if (a.1 > yy) != (b.1 > yy) {
+                    xs.push(a.0 + (yy - a.1) / (b.1 - a.1) * (b.0 - a.0));
+                }
+            }
+            xs.sort_by(f64::total_cmp);
+            let (spans, _) = xs.as_chunks::<2>();
+            for &[xa, xb] in spans {
+                let (x0, x1) = (xa.clamp(0.0, w as f64), xb.clamp(0.0, w as f64));
+                for x in (x0.floor() as usize)..(x1.ceil() as usize).min(w) {
+                    let cover = (x1.min(x as f64 + 1.0) - x0.max(x as f64)).max(0.0) / SUB_ROWS as f64;
+                    if let Some(v) = row.get_mut(x) {
+                        *v += cover as f32;
+                    }
+                }
+            }
+        }
+    }
+    out.data.iter_mut().for_each(|v| *v = v.clamp(0.0, 1.0));
+    out
 }

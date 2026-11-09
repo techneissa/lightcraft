@@ -164,3 +164,31 @@ fn the_portrait_tab_has_the_histogram() {
     h.step();
     assert!(!h.app.widgets.iter().any(|(w, _)| w == "histogram"), "and goes with the setting");
 }
+
+/// The histogram is the photo's, not the grey map's: while ⌥ shows the map, the Portrait tab's histogram is the one the
+/// photo has with ⌥ let go (nothing else changed), and the map's own pixels would give another.
+#[test]
+fn the_histogram_stays_the_photos_during_an_alt_drag() {
+    let mut h = portrait();
+    drag(&mut h, "retouch.skin.smoothness", Modifiers::ALT);
+    h.settle(SETTLE);
+    assert!(matches!(shown(&h), Overlay::RetouchArea { .. }) && tones(&h).2, "the map is on screen");
+    let histogram = |h: &Headless| h.app.renderer.textures.get(&crate::render::Slot::Main).and_then(|t| t.histogram.clone()).expect("a histogram");
+    let during = histogram(&h);
+    // the grey map's own pixels give a histogram with identical channels: not this one
+    assert_ne!(during.r, during.g, "not the grey map's (a photo's channels differ)");
+    // ⌥ let go, the pointer not moved: the same settings, the photo
+    h.app.synthetic.push(Event::ModifiersChanged(Modifiers::NONE));
+    frames(&mut h, 10);
+    h.settle(SETTLE);
+    assert_eq!(shown(&h), Overlay::None);
+    assert!(!tones(&h).2, "the photo again");
+    assert_eq!(histogram(&h), during, "the histogram is the photo's all along");
+}
+
+/// The loupe renders the map as a window when zoomed in (it is made per pixel from the faces), so it is as sharp as
+/// the zoom.
+#[test]
+fn the_area_map_renders_as_a_zoom_window() {
+    assert!(crate::panels::detail::overlay_supports_window(Overlay::RetouchArea { feature: skin(), face: Overlay::ALL_FACES }));
+}

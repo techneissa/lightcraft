@@ -71,6 +71,7 @@ impl Feature for Hair {
     const CONTROLS: &'static [Control<Self>] =
         &[Control { spec: Spec::amount("retouch.hair.amount", "Amount"), get: |s| s.amount, set: |s, v| s.amount = v }];
 
+    /// The cells of the face's strand search that hold a strand (`area::strands`).
     fn area(scene: &Scene<'_>, faces: &[usize]) -> Option<lightcraft_raster::Plane> {
         crate::area::strands(scene, faces)
     }

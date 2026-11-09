@@ -13,8 +13,8 @@
 //!   modifier held; [`Overlay::for_control`] picks one per control): shadow / highlight clipping
 //!   (white or black, with the clipped channels shown), greyscale (Sharpening Amount), the fine
 //!   detail band sharpening works on (Radius / Detail) and the sharpening mask (Masking). The
-//!   sharpening views read the render's own detail planes ([`sharpen_plane`]). A Portrait slider's shows where its
-//!   feature works ([`Overlay::RetouchArea`]).
+//!   sharpening views read the render's own detail planes ([`sharpen_plane`]). A Portrait slider shows a grey / white
+//!   map of where its feature works on the face or faces it changes ([`Overlay::RetouchArea`]).
 
 use std::borrow::Cow;
 
@@ -238,12 +238,18 @@ impl Overlay {
         matches!(self, Overlay::SharpenDetail | Overlay::SharpenMask)
     }
 
-    /// Whether the overlay works pixel by pixel on the finished image, so a window render shows
-    /// the same as the whole frame would.
+    /// Whether the overlay works pixel by pixel on the finished image (a [`Overlay::RetouchArea`] map is made for each
+    /// pixel from the faces, through the render's own view), so a window render shows the same as the whole frame would.
     pub fn per_pixel(self) -> bool {
         matches!(
             self,
-            Overlay::None | Overlay::Mask { .. } | Overlay::ClipShadows | Overlay::ClipHighlights | Overlay::ClipWarnings | Overlay::Grayscale
+            Overlay::None
+                | Overlay::Mask { .. }
+                | Overlay::ClipShadows
+                | Overlay::ClipHighlights
+                | Overlay::ClipWarnings
+                | Overlay::Grayscale
+                | Overlay::RetouchArea { .. }
         )
     }
 

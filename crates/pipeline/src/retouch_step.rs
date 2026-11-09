@@ -322,7 +322,7 @@ pub fn area(info: &SourceInfo, p: &Plan<'_>, feature: u8, face: u8) -> Option<li
     // (a place in the scene's faces; the scene drops a face that maps nowhere)
     let faces: Vec<usize> =
         scene.faces.iter().enumerate().filter(|(_, c)| face == crate::Overlay::ALL_FACES || c.index == face as usize).map(|(i, _)| i).collect();
-    (f.area)(&scene, &faces)
+    crate::timed("retouch area", || (f.area)(&scene, &faces))
 }
 
 /// The window a zoomed render of `win` must render so retouching gives the same pixels there as the whole frame
@@ -1132,5 +1132,32 @@ mod area_tests {
         );
         assert_ne!(o.key(), Overlay::RetouchArea { feature: 3, face: 8 }.key());
         assert_ne!(o.key(), Overlay::RetouchArea { feature: 4, face: 7 }.key());
+    }
+
+    /// A window of the map (the zoomed loupe's window render) is the same pixels of the whole frame's map, for a feature
+    /// made from masks (Skin) and one made from the faces' outlines (Face Reshape), so a zoomed ⌥-drag is as sharp as
+    /// the window is.
+    #[test]
+    fn a_window_of_the_area_map_matches_the_whole_render() {
+        use crate::PixelWindow;
+        let src = lightcraft_scenes::demo_library()[0].render(480, 320);
+        let info = two_faces();
+        let s = DevelopSettings::default();
+        let (w, h) = (960, 640);
+        let win = PixelWindow { x: 100, y: 120, w: 400, h: 300 };
+        assert!(Overlay::RetouchArea { feature: 0, face: Overlay::ALL_FACES }.per_pixel(), "the loupe renders it as a window");
+        for key in ["skin", "reshape"] {
+            let overlay = Overlay::RetouchArea { feature: feature(key), face: Overlay::ALL_FACES };
+            let whole = render(&src, &info, &s, &RenderRequest { overlay, ..RenderRequest::fit(w, h) }).image;
+            let part = render(&src, &info, &s, &RenderRequest { overlay, window: Some(win), ..RenderRequest::fit(w, h) }).image;
+            assert_eq!((part.width, part.height), (win.w, win.h), "{key}: the window's own size");
+            let lit = part.data.iter().filter(|p| p[0] > 0).count();
+            assert!(lit > 1000 && lit < part.data.len(), "{key}: the window holds part of a face: {lit}");
+            for y in 0..win.h {
+                for x in 0..win.w {
+                    assert_eq!(part.get(x, y), whole.get(win.x + x, win.y + y), "{key}: pixel ({x}, {y}) of the window");
+                }
+            }
+        }
     }
 }

@@ -93,7 +93,8 @@ pub fn alt_overlay(app: &crate::LightcraftApp) -> Option<lightcraft_pipeline::Ov
     match app.ui.right {
         RightPanel::Edit => Overlay::for_control(control),
         RightPanel::Masking => mask_slider_overlay(control),
-        // a Portrait slider shows where its feature works; the histogram's zones (Light controls) keep Edit's views
+        // a Portrait slider (`retouch.*`) shows its feature's area; dragging the histogram on this tab moves a Light
+        // control (`light.*`), which keeps the clipping and greyscale views it has on the Edit tab
         RightPanel::Portrait => retouch_area_overlay(control, app.ui.dragging_face).or_else(|| Overlay::for_control(control)),
         _ => None,
     }

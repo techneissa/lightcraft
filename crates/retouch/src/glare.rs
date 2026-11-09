@@ -27,6 +27,7 @@ impl Feature for Glare {
     const CONTROLS: &'static [Control<Self>] =
         &[Control { spec: Spec::amount("retouch.glare.amount", "Amount"), get: |s| s.amount, set: |s, v| s.amount = v }];
 
+    /// The lenses (`area::lenses`).
     fn area(scene: &Scene<'_>, faces: &[usize]) -> Option<lightcraft_raster::Plane> {
         crate::area::lenses(scene, faces)
     }

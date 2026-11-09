@@ -976,6 +976,42 @@ fn overlays_match() {
     }
 }
 
+/// A Portrait slider's ⌥-drag map (`Overlay::RetouchArea`) is made from the faces alone, so the GPU render's map must
+/// equal the CPU render's, pixel for pixel, for features with masks, without and with a person.
+#[test]
+fn retouch_area_overlay_matches() {
+    use lightcraft_develop::retouch::{FEATURES, Face, Input, NormRect, Part, PartMask};
+    use lightcraft_pipeline::Overlay;
+    if !gpu() {
+        return;
+    }
+    let src = scene(0, 900, 600);
+    let blob = |b: NormRect| PartMask {
+        plane: lightcraft_raster::Plane::from_fn(32, 32, |x, y| {
+            let (u, v) = ((x as f32 + 0.5) / 16.0 - 1.0, (y as f32 + 0.5) / 16.0 - 1.0);
+            ((1.0 - (u * u + v * v).sqrt()) * 5.0).clamp(0.0, 1.0)
+        }),
+        area: b,
+    };
+    let face = |b: NormRect| Face {
+        masks: vec![(Part::FacialSkin, blob(b)), (Part::EntirePerson, blob(NormRect::new(b.x0 - 0.05, b.y0 - 0.05, b.x1 + 0.05, b.y1 + 0.2)))],
+        ..Face::boxed(b)
+    };
+    let faces = vec![face(NormRect::new(0.15, 0.2, 0.4, 0.55)), face(NormRect::new(0.58, 0.25, 0.82, 0.6))];
+    let info = SourceInfo { retouch: Some(Arc::new(Input::new_on_photo(faces))), ..Default::default() };
+    let s = DevelopSettings::default();
+    for key in ["skin", "reshape", "background"] {
+        let feature = FEATURES.iter().position(|f| f.key == key).expect("a feature") as u8;
+        for face in [Overlay::ALL_FACES, 1] {
+            let req = RenderRequest { overlay: Overlay::RetouchArea { feature, face }, ..RenderRequest::fit(640, 640) };
+            let cpu = render(&src, &info, &s, &req).image;
+            let gpu = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("gpu").image;
+            assert!(cpu.data.iter().any(|p| p[0] == 255) && cpu.data.iter().any(|p| p[0] == 0), "{key} face {face}: a map");
+            assert_eq!(cpu.data, gpu.data, "{key} face {face}: the GPU map equals the CPU map");
+        }
+    }
+}
+
 #[test]
 fn red_eye_matches() {
     if !gpu() {

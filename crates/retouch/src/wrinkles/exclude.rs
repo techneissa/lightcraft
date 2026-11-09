@@ -14,7 +14,7 @@ use super::heal::smoothstep;
 use crate::FaceCtx;
 
 /// The mesh points of the face's outline, clockwise from the top.
-const OVAL: [usize; 36] = [
+pub const OVAL: [usize; 36] = [
     10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234,
     127, 162, 21, 54, 103, 67, 109,
 ];
