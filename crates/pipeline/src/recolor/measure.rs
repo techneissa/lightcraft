@@ -214,7 +214,8 @@ fn measure(
         info.mattes.as_ref(),
         (&mut alphas, keys),
     );
-    let fp = FinishParams::new(FinishParamsInput { settings: s, frame, info, image_size: (pw, ph), px_per_long, air_pre: p.air, space });
+    let fp =
+        FinishParams::new(FinishParamsInput { settings: s, frame, info, image_size: (pw, ph), px_per_long, air_pre: p.air, space, draft: false });
     let terms = crate::finish::scaled_terms(&p);
     let wanted: Vec<(usize, u32)> = p.masks.iter().enumerate().filter(|(_, m)| ids.contains(&m.id)).map(|(k, m)| (k, m.id)).collect();
     let mut samples: Vec<Vec<([f32; 3], f32)>> = vec![Vec::new(); wanted.len()];

@@ -26,6 +26,7 @@
 pub mod auto;
 pub mod blemish;
 pub mod colorops;
+pub mod crystal;
 pub mod cull;
 pub mod curve;
 pub mod decontam;
@@ -1026,7 +1027,7 @@ fn render_impl(
         return Rendered { histogram: Histogram::of_srgb8(&none), image: none, deep: None };
     }
     if req.depth != OutputDepth::U8 {
-        let deep = finish::finish_deep(&prep, s, frame, info, req.space, req.depth, req.proof);
+        let deep = finish::finish_deep(&prep, s, frame, info, req);
         let deep = match plan.keep {
             Some(k) => deep.crop(k.x, k.y, k.w, k.h),
             None => deep,
@@ -1036,7 +1037,7 @@ fn render_impl(
         lap("finish (deep)", &mut t);
         return Rendered { image, histogram, deep: Some(deep) };
     }
-    let image = finish::finish(&prep, s, frame, info, req.space, req.display.as_ref(), req.proof);
+    let image = finish::finish(&prep, s, frame, info, req);
     lap("finish", &mut t);
     let cut = |i: &Rgba8| match plan.keep {
         Some(k) => i.crop(k.x, k.y, k.w, k.h),
@@ -1193,6 +1194,8 @@ mod tests;
 mod tests_decontam;
 #[cfg(test)]
 mod tests_geometry;
+#[cfg(test)]
+mod tests_grain;
 #[cfg(test)]
 mod tests_hdr;
 #[cfg(test)]
