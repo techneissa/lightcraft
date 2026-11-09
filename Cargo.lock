@@ -3806,6 +3806,7 @@ dependencies = [
  "fs4",
  "gif",
  "harfrust 0.13.3",
+ "image",
  "jxl-oxide",
  "libc",
  "lightcraft-birefnet",

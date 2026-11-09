@@ -212,9 +212,9 @@ impl LamaFill {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    fn run_model(&self, rgb: &[f32], hole: &[f32], w: usize, h: usize, cancel: &dyn Fn() -> bool) -> Result<Vec<f32>, String> {
+    fn run_model(&self, rgb: &[f32], hole: &[f32], w: usize, h: usize, params: Crop, cancel: &dyn Fn() -> bool) -> Result<Vec<f32>, String> {
         let model = self.model()?;
-        let params = lightcraft_lama::region::Params::default();
+        let params = lightcraft_lama::region::Params { work: params.work, context: params.context, grow: params.grow };
         model.fill_region(rgb, hole, w, h, &params, cancel).map_err(|e| match e {
             lightcraft_lama::Error::Cancelled => "cancelled".to_string(),
             other => other.to_string(),
@@ -222,20 +222,21 @@ impl LamaFill {
     }
 
     #[cfg(target_arch = "wasm32")]
-    fn run_model(&self, _: &[f32], _: &[f32], _: usize, _: usize, _: &dyn Fn() -> bool) -> Result<Vec<f32>, String> {
+    fn run_model(&self, _: &[f32], _: &[f32], _: usize, _: usize, _: Crop, _: &dyn Fn() -> bool) -> Result<Vec<f32>, String> {
         Err("the web build has no LaMa fill".into())
     }
 
     /// Fill `hole` of `rgb`, from the cache or with a run (see [`LearnedFill::fill`]). The row `kind` is `lama`, one per
     /// render (`run` holds it until the render's last spot): its ✕ sets the render's stop flag, so the spots that follow
     /// are not started either.
-    fn make(&self, run: &FillRun, rgb: &[f32], hole: &[f32], w: usize, h: usize, key: u64) -> Option<Arc<Vec<f32>>> {
+    fn make(&self, run: &FillRun, job: Job<'_>, use_: &Use) -> Option<Arc<Vec<f32>>> {
+        let Job { rgb, hole, w, h, key } = job;
         if run.stopped() {
             return None;
         }
         if !self.installed() {
             let place = self.dir().map_or_else(|| "its model folder".to_string(), |d| d.display().to_string());
-            self.say(format!("LaMa is not installed ({MODEL_FILE} is not in {place}): spots show the Classic fill"));
+            self.say(format!("LaMa is not installed ({MODEL_FILE} is not in {place}): {}", use_.without));
             return None;
         }
         let _one_at_a_time = self.inner.run.lock().unwrap_or_else(PoisonError::into_inner);
@@ -252,7 +253,7 @@ impl LamaFill {
             run.hold(Box::new(self.inner.activity.start("lama", "Filling with LaMa", Cancel::Flag(run.stop_flag()))));
         }
         let cancelled = || run.stopped() || lightcraft_gpu::shutting_down();
-        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_model(rgb, hole, w, h, &cancelled)));
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run_model(rgb, hole, w, h, use_.params, &cancelled)));
         match ran {
             Ok(Ok(out)) if out.len() == rgb.len() && out.iter().all(|v| v.is_finite()) => {
                 self.clear_message();
@@ -261,19 +262,19 @@ impl LamaFill {
                 Some(out)
             }
             Ok(Ok(_)) => {
-                self.say("LaMa gave a result that does not fit the picture: the spot shows the Classic fill");
+                self.say(format!("LaMa gave a result that does not fit the picture: {}", use_.without));
                 None
             }
             Ok(Err(e)) if e == "cancelled" => {
-                self.say("LaMa fill cancelled: the spot shows the Classic fill");
+                self.say(format!("LaMa fill cancelled: {}", use_.without));
                 None
             }
             Ok(Err(e)) => {
-                self.say(format!("{e}: the spot shows the Classic fill"));
+                self.say(format!("{e}: {}", use_.without));
                 None
             }
             Err(_) => {
-                self.say("LaMa stopped unexpectedly: the spot shows the Classic fill");
+                self.say(format!("LaMa stopped unexpectedly: {}", use_.without));
                 None
             }
         }
@@ -294,6 +295,58 @@ fn key_of(rgb: &[f32], hole: &[f32], w: usize, h: usize) -> u64 {
     hasher.finish()
 }
 
+/// How much of the picture the model sees: the longest side it works at, the context around the hole (a fraction of the
+/// hole's longer side) and how far the hole grows (`lightcraft_lama::region::Params`).
+#[derive(Clone, Copy)]
+struct Crop {
+    work: usize,
+    context: f32,
+    grow: usize,
+}
+
+/// The picture, the hole and what the fill is cached under.
+struct Job<'a> {
+    rgb: &'a [f32],
+    hole: &'a [f32],
+    w: usize,
+    h: usize,
+    key: u64,
+}
+
+/// What a fill is for: how the model is run, and what is said when there is none.
+struct Use {
+    params: Crop,
+    without: &'static str,
+}
+
+impl Use {
+    fn spots() -> Use {
+        Use { params: Crop { work: 512, context: 0.5, grow: 2 }, without: "the spot shows the Classic fill" }
+    }
+
+    /// Wrinkles (`fork/retouch-wrinkles.md`): a face crop of at most 768 px, with little context around the hole.
+    fn wrinkles() -> Use {
+        Use { params: Crop { work: 768, context: 0.15, grow: 2 }, without: "Wrinkles use the built-in heal" }
+    }
+}
+
+impl LamaFill {
+    /// Fill `hole` (one value per pixel) of the linear `w × h` picture `rgb` for Wrinkles' face search: the same run as
+    /// a spot's, at the face crop's resolution, with the same cache, one activity row held by `run` and ✕ on it. `None`:
+    /// not installed, stopped or failed (the search then heals without a model).
+    pub fn fill_wrinkles(&self, run: &FillRun, rgb: &[f32], hole: &[f32], w: usize, h: usize) -> Option<Arc<Vec<f32>>> {
+        if w.checked_mul(h).and_then(|n| n.checked_mul(3)).is_none_or(|n3| w == 0 || h == 0 || rgb.len() != n3 || hole.len() != n3 / 3) {
+            return None;
+        }
+        // (another key than a spot's fill of the same pixels: the model runs at another size)
+        let key = key_of(rgb, hole, w, h) ^ 0x5752_494e_4b4c_4553;
+        if let Some(hit) = self.cached(key) {
+            return Some(hit);
+        }
+        self.make(run, Job { rgb, hole, w, h, key }, &Use::wrinkles())
+    }
+}
+
 impl LearnedFill for LamaFill {
     fn fill(&self, run: &FillRun, rgb: &[f32], hole: &[f32], w: usize, h: usize, draft: bool) -> Option<Arc<Vec<f32>>> {
         if w.checked_mul(h).and_then(|n| n.checked_mul(3)).is_none_or(|n3| w == 0 || h == 0 || rgb.len() != n3 || hole.len() != n3 / 3) {
@@ -307,7 +360,7 @@ impl LearnedFill for LamaFill {
         if draft {
             return None;
         }
-        self.make(run, rgb, hole, w, h, key)
+        self.make(run, Job { rgb, hole, w, h, key }, &Use::spots())
     }
 }
 

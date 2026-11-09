@@ -34,6 +34,8 @@ const SAME_FACE_IOU: f32 = 0.5;
 
 /// A face search from the parse: set up on the calling thread, run on a worker.
 pub(crate) struct PartsFinder {
+    /// The Wrinkles search (the LaMa fill and the activity stack); `None`: none is made.
+    pub(super) wrinkles: Option<super::wrinkles::WrinkleSearch>,
     pub(super) prepare: crate::cmd::parsing::Prepare,
     /// What the parse-ahead index knows of the photo's parse under `choice` (`None`: the photo has gone).
     pub(super) known: Option<crate::parse_ahead::Known>,
@@ -51,7 +53,7 @@ impl PartsFinder {
     pub(super) fn find(self) -> Result<Found, String> {
         let (img, hints) = self.prepare.run()?;
         if let Some(parsing) = self.known.as_ref().and_then(|k| k.read(&self.parsing)) {
-            return Ok(found(&parsing, &hints, &img, self.orient, &self.regions));
+            return Ok(found_with(&parsing, &hints, &img, self.orient, &self.regions, self.wrinkles.as_ref()));
         }
         let (filed, out) = self.parsing.parse_as(self.choice, img.clone(), hints.clone(), true);
         let parsing = match out {
@@ -62,14 +64,27 @@ impl PartsFinder {
         if let Some(k) = &self.known {
             k.file(filed);
         }
-        Ok(found(&parsing, &hints, &img, self.orient, &self.regions))
+        Ok(found_with(&parsing, &hints, &img, self.orient, &self.regions, self.wrinkles.as_ref()))
     }
 }
 
 /// The faces of `parsing` (made from `img` with the faces `hints`) for the retouch step, on the photo turned by
 /// `orient`, named after `regions`, with a picker thumbnail each.
+#[cfg(test)]
 pub(crate) fn found(parsing: &Parsing, hints: &[FaceHint], img: &RgbImage, orient: Orientation, regions: &[(NormRect, String)]) -> Found {
-    let mut faces = with_spots_and_strands(faces_of(parsing, hints, orient), img, orient);
+    found_with(parsing, hints, img, orient, regions, None)
+}
+
+/// [`found`] with the Wrinkles search `wrinkles` run on each face too (`None`: not run).
+pub(crate) fn found_with(
+    parsing: &Parsing,
+    hints: &[FaceHint],
+    img: &RgbImage,
+    orient: Orientation,
+    regions: &[(NormRect, String)],
+    wrinkles: Option<&super::wrinkles::WrinkleSearch>,
+) -> Found {
+    let mut faces = with_spots_and_strands(faces_of(parsing, hints, orient), img, orient, wrinkles);
     arrange(&mut faces, regions);
     let shown = oriented(&Rgba8::from_fn(img.width, img.height, |x, y| rgba(img, x, y)), orient);
     let thumbs = faces.iter().map(|f| thumb(&shown, &f.bounds)).collect();
@@ -78,8 +93,9 @@ pub(crate) fn found(parsing: &Parsing, hints: &[FaceHint], img: &RgbImage, orien
 
 /// `faces` with the spots on their skin (Blemishes) and the stray strands around and across them (Stray Hair), found
 /// once here on the parse's picture, in linear light and turned like the masks, and kept with them: a render, and the
-/// Amount sliders, only repair them. (Run on the face search's worker, under its activity row.)
-fn with_spots_and_strands(faces: Vec<Face>, img: &RgbImage, orient: Orientation) -> Vec<Face> {
+/// Amount sliders, only repair them. Wrinkles' change is found here too ([`super::wrinkles`]) when `wrinkles` is
+/// given. (Run on the face search's worker, under its activity row.)
+fn with_spots_and_strands(faces: Vec<Face>, img: &RgbImage, orient: Orientation, wrinkles: Option<&super::wrinkles::WrinkleSearch>) -> Vec<Face> {
     let skin = faces.iter().any(|f| f.mask(Part::FacialSkin).is_some());
     let hair = faces.iter().any(|f| f.mask(Part::Hair).is_some() || f.mask(Part::FacialSkin).is_some());
     if !skin && !hair {
@@ -93,7 +109,11 @@ fn with_spots_and_strands(faces: Vec<Face>, img: &RgbImage, orient: Orientation)
         orient,
     );
     let faces = if skin { lightcraft_develop::retouch::blemish::with_spots(&linear, faces) } else { faces };
-    lightcraft_develop::retouch::hair::with_strands(&linear, faces)
+    let faces = lightcraft_develop::retouch::hair::with_strands(&linear, faces);
+    match wrinkles {
+        Some(search) if skin => search.run(faces, &linear),
+        _ => faces,
+    }
 }
 
 fn rgba(img: &RgbImage, x: usize, y: usize) -> [u8; 4] {
@@ -144,6 +164,7 @@ fn face_of(p: &Person, hints: &[FaceHint], orient: Orientation, read: &[Part]) -
         key_frame: KeyFrame::Photo,
         spots: None,
         strands: None,
+        wrinkles: None,
     })
 }
 

@@ -7,7 +7,7 @@
 //! retouching step maps them into the pixels of the image it works on (see [`crate::View`]).
 
 use std::fmt;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use lightcraft_raster::Plane;
 use serde::{Deserialize, Serialize};
@@ -267,6 +267,10 @@ pub struct Face {
     /// masks come from ([`crate::hair::with_strands`]). `None`: not looked for yet; Stray Hair then changes nothing
     /// (it never searches in a render).
     pub strands: Option<Strands>,
+    /// The change that takes the face's deep wrinkles away (Wrinkles), found once by the face search
+    /// ([`crate::wrinkles::with_fixes`]) and kept with the masks. `None`: not searched (yet, or it was cancelled, or the
+    /// face has no mesh): Wrinkles then softens the lines as it did before the search existed.
+    pub wrinkles: Option<Arc<crate::wrinkles::Fix>>,
 }
 
 /// The stray strands found for one face (Stray Hair): a grid of cells over `area`, stored only for the tiles of
@@ -468,6 +472,10 @@ impl Input {
                             h.bytes(c);
                         }
                     }
+                }
+                match &f.wrinkles {
+                    None => h.u64(u64::MAX),
+                    Some(w) => w.hash(&mut h),
                 }
                 h.u64(f.masks.len() as u64);
                 for (part, m) in &f.masks {

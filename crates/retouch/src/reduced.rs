@@ -29,6 +29,31 @@ pub(crate) fn factor(b: [usize; 4], max: usize) -> Option<usize> {
     Some(f)
 }
 
+/// The box `b` (`[x0, y0, x1, y1)`, within the image) of `img` reduced by the whole `factor`: each pixel the mean of
+/// the `factor` × `factor` pixels it covers (fewer at the box's far edge).
+pub(crate) fn mean_box(img: &Rgb32f, b: [usize; 4], factor: usize) -> Rgb32f {
+    let [x0, y0] = [b[0], b[1]];
+    let [x1, y1] = [b[2].min(img.width), b[3].min(img.height)];
+    let f = factor.max(1);
+    let (sw, sh) = (x1.saturating_sub(x0).div_ceil(f), y1.saturating_sub(y0).div_ceil(f));
+    let iw = img.width;
+    let mut small = Rgb32f::new(sw, sh);
+    par_rows(&mut small.data, sw.max(1), |sy, row| {
+        for (sx, o) in row.iter_mut().enumerate() {
+            let (xs, ys) = (x0 + sx * f..(x0 + (sx + 1) * f).min(x1), y0 + sy * f..(y0 + (sy + 1) * f).min(y1));
+            let mut acc = [0.0f32; 3];
+            for y in ys.clone() {
+                for p in img.data.get(y * iw + xs.start..y * iw + xs.end).unwrap_or(&[]) {
+                    acc = std::array::from_fn(|c| acc[c] + p[c]);
+                }
+            }
+            let n = (xs.len() * ys.len()).max(1) as f32;
+            *o = acc.map(|v| v / n);
+        }
+    });
+    small
+}
+
 /// Retouch the box `b` of `img` for face `face` of `scene` at 1/`factor` of its size. `run` retouches the reduced
 /// box: an image of its own, the faces of `scene` mapped into it, and the face's place in that scene. Its change
 /// is carried back as a gain per channel, read bilinearly, to the pixels of `b` where `keep` (`x`, `y` in `img`)
@@ -109,10 +134,16 @@ pub(crate) fn retouch(
 
 /// A box of a bigger image, reduced by `factor`: its pixel (`x`, `y`) covers the bigger image's pixels from
 /// (`origin` + (`x`, `y`) × `factor`), `factor` on a side.
-struct BoxView<'a> {
+pub(crate) struct BoxView<'a> {
     inner: &'a dyn View,
     origin: [f64; 2],
     factor: f64,
+}
+
+impl<'a> BoxView<'a> {
+    pub(crate) fn new(inner: &'a dyn View, origin: [f64; 2], factor: f64) -> Self {
+        BoxView { inner, origin, factor }
+    }
 }
 
 impl View for BoxView<'_> {

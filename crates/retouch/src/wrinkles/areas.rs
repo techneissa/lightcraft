@@ -14,7 +14,7 @@ use crate::FaceCtx;
 /// Points the mesh adds after YuNet's five.
 pub const MESH: usize = 478;
 /// The first mesh point in [`crate::Face::landmarks`].
-const FIRST: usize = 5;
+pub(super) const FIRST: usize = 5;
 
 // Face mesh points (the subject's right is "r", left "l").
 const EYE_OUTER_R: usize = 33;
@@ -108,7 +108,7 @@ const NECK_DOWN: f64 = 0.55;
 const NECK_GAP: f64 = 0.01;
 const NECK_FEATHER: f64 = 0.06;
 
-type P = (f64, f64);
+pub(super) type P = (f64, f64);
 
 /// Where mesh point `i` lies on a frontal face, in fractions of the face's box: the points the areas read, the
 /// rest in the middle. For tests and examples that need a face mesh without the face mesh model.
@@ -160,6 +160,21 @@ pub fn frontal(i: usize) -> (f64, f64) {
         365 => (0.78, 0.88),
         397 => (0.82, 0.82),
         288 => (0.85, 0.75),
+        // the rest of the outline (the ears lie beyond its sides) and the nostrils
+        389 => (0.9, 0.36),
+        356 => (0.93, 0.45),
+        454 => (0.94, 0.55),
+        323 => (0.92, 0.65),
+        361 => (0.88, 0.7),
+        162 => (0.1, 0.36),
+        127 => (0.07, 0.45),
+        234 => (0.06, 0.55),
+        93 => (0.08, 0.65),
+        132 => (0.12, 0.7),
+        98 => (0.45, 0.66),
+        240 => (0.44, 0.65),
+        327 => (0.55, 0.66),
+        460 => (0.56, 0.65),
         _ => (0.5, 0.5),
     }
 }
@@ -270,7 +285,7 @@ fn segment_distance(p: P, a: P, b: P) -> f64 {
     ((p.0 - a.0 - t * dx).powi(2) + (p.1 - a.1 - t * dy).powi(2)).sqrt()
 }
 
-fn polygon_inside(pts: &[P], p: P) -> f64 {
+pub(super) fn polygon_inside(pts: &[P], p: P) -> f64 {
     let n = pts.len();
     if n < 3 {
         return f64::NEG_INFINITY;

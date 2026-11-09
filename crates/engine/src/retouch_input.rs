@@ -28,6 +28,7 @@ use lightcraft_raster::Rgba8;
 use crate::{EngineError, Session};
 
 mod parts;
+mod wrinkles;
 
 /// Finds faces (and their part masks) on a picture.
 pub trait FaceProvider: Send + Sync {
@@ -61,6 +62,7 @@ impl FaceProvider for Yunet {
                 key_frame: lightcraft_develop::retouch::KeyFrame::Edit,
                 spots: None,
                 strands: None,
+                wrinkles: None,
             })
             .collect())
     }
@@ -93,10 +95,12 @@ impl Found {
             let masks: usize = f.masks.iter().map(|(_, m)| m.plane.data.len().saturating_mul(4)).sum();
             let spots = f.spots.as_ref().map_or(0, |s| s.list.len().saturating_mul(std::mem::size_of::<lightcraft_develop::retouch::input::Spot>()));
             let strands = f.strands.as_ref().map_or(0, |s| s.cells.len().saturating_mul(3).saturating_add(s.tiles.len().saturating_mul(4)));
+            let wrinkles = f.wrinkles.as_ref().map_or(0, |w| w.bytes());
             masks
                 .saturating_add(f.landmarks.len().saturating_mul(16))
                 .saturating_add(spots)
                 .saturating_add(strands)
+                .saturating_add(wrinkles)
                 .saturating_add(std::mem::size_of::<Face>())
         };
         let faces: usize = self.input.faces.iter().map(face).sum();
@@ -513,6 +517,7 @@ impl Session {
             Source::Parts => {
                 let choice = self.parsing.choice();
                 Finder::Parts(parts::PartsFinder {
+                    wrinkles: Some(wrinkles::WrinkleSearch { lama: self.lama.clone(), activity: self.activity.clone() }),
                     // (the parse-ahead index, `fork/parse-ahead.md`: a photo parsed before is read, not run again)
                     known: crate::parse_ahead::known(self, p.id, &choice.version()),
                     // (YuNet is loaded on the search's worker, never here)

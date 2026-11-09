@@ -31,12 +31,20 @@
 //! one weight per area.
 
 pub mod areas;
+mod exclude;
+mod fix;
+mod hairlike;
+mod heal;
 mod lines;
+mod ridge;
+pub mod search;
 
 use lightcraft_raster::{Plane, Rgb32f, par_rows};
 use serde::{Deserialize, Serialize};
 
 pub use areas::Area;
+pub use fix::Fix;
+pub use search::{Fill, Filler, NoFill, WORK, with_fixes};
 
 use crate::{Control, FaceCtx, Feature, Part, Scene, Scope, Spec, Stage};
 
@@ -138,6 +146,10 @@ fn union(a: [usize; 4], b: [usize; 4]) -> [usize; 4] {
 }
 
 impl Wrinkles {
+    /// How far a window must reach past what it shows for the stored change ([`Fix`]) to give the whole render's pixels:
+    /// the area weight's lattice and soft edges only; the change itself is read at the pixel (a fraction of the face).
+    pub const REACH_OF_FIX: f64 = 0.05;
+
     /// [`Feature::apply`] with `max_box` the most pixels of the face's areas' box worked on at full size
     /// ([`MAX_BOX`] in the step): a bigger box is worked on reduced by a whole factor, as a draft of it is, and the
     /// change is carried back to the full-size skin as a gain, so a huge face is retouched as its draft shows,
@@ -148,6 +160,11 @@ impl Wrinkles {
             return;
         }
         let Some(ctx) = scene.faces.get(face) else { return };
+        // the change the face's search found, when it has been done: the sliders scale it (`fix.rs`)
+        if let Some(fix) = ctx.face.wrinkles.as_deref() {
+            self.apply_fix(img, scene, face, fix);
+            return;
+        }
         let plans: Vec<Plan> = Area::ALL.iter().filter_map(|&area| Plan::new(scene, face, area, strength(area.amount(self)))).collect();
         let Some(all) = plans.iter().map(|p| p.b).reduce(union) else { return };
         if let Some(f) = crate::reduced::factor(all, max_box) {

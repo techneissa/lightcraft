@@ -1,8 +1,48 @@
 # Portrait retouching: Wrinkles
 
-List: the Portrait tab's Wrinkles section: Forehead, Crow's Feet, Smile Lines and Neck soften the lines in each area and keep the pores and the face's shape; areas from the face mesh, sizes in fractions of the face. Branch `feat/retouch-wrinkles`.
+List: the Portrait tab's Wrinkles section: Forehead, Crow's Feet, Smile Lines and Neck take away the deep wrinkles in each area and keep the pores and the face's shape; areas from the face mesh, sizes in fractions of the face. Branches `feat/retouch-wrinkles` (v1), `feat/wrinkles-v2` (v2).
 
-## What it does
+## Wrinkles v2: removal from a stored change
+
+v1 (below) only lifts a crease by part of its depth, so deep wrinkles stayed. v2 takes them away:
+
+- **Once per photo**, in the face search next to Blemishes' spots and Stray Hair's strands (`crates/engine/src/retouch_input/wrinkles.rs`,
+  `crates/retouch/src/wrinkles/search.rs`), for each face with the mesh and a Facial Skin mask, on a crop of the four areas at
+  most 768 px (reduced by a whole factor when bigger):
+  1. **Where a wrinkle may be**: eroded skin (0.6 % of the face) inside an area, and not an ear, a nostril or the face's edge
+     (`exclude.rs`, from the mesh's outline and nostril points), and not a hair across the skin (`hairlike.rs`: a thin
+     bright line that is greyer than the skin; a skin-coloured lit ridge is skin).
+  2. **The mask** (`ridge.rs`): valleys of the log luminance at four widths (0.25–1.8 % of the face; a Hessian ridge filter),
+     crests only, kept when they connect to a strong response and are long enough, grown 0.35 line widths, soft edge 0.35 %.
+  3. **The replacement** (`heal.rs`): LaMa fills the mask (the engine's `lama_fill` runner, crop at 768 px, little context)
+     and only its low band is used (blurred to twice the fine blur); without LaMa the **banded heal** rebuilds the low band
+     from the skin around the mask (normalised convolution at growing widths). The mid band (the crease and its flanks) is not
+     put back. The **fine band** (pores, sigma 0.2 % of the face, at least 2 px) comes back from clean skin nearby (first of 14
+     shifts whose source is outside the mask, with skin all around it weighted by the Facial Skin mask), held to 3 times the
+     skin's own typical fine band so a stray hair or speck is not copied whole.
+  4. **The change** (log light per channel, new over old) is kept in `Face::wrinkles` (`wrinkles::Fix`: a grid over the crop,
+     normalised like the masks, 16-bit cells, trimmed to where there is a change), in the face store and the input's
+     fingerprint. No new saved field: it lives with the faces, not in the settings.
+- **A row** `retouch.wrinkles` ("Smoothing Wrinkles") in the activity stack while it runs; its ✕ stops it (the faces then keep
+  no change, and Wrinkles shows v1's result). LaMa's own row is not added (the search's row is held by the fill's run).
+- **A slider tick** scales the stored change (`fix.rs`): in each area, slider/100 times the area's weight (v1's `areas.rs`,
+  the strongest where areas overlap) is how much of the change is applied, as a gain per channel on the pixels the render has.
+  Slider 0 keeps every bit; 100 gives the stored change inside the area. No model runs. A face whose search has not run (or was
+  cancelled, or has no mesh) shows v1's result; a face whose search found no wrinkles has an empty change and is left alone.
+- **Zoom**: the change is read at the pixel by its normalised place, the weight lattice is anchored to the face's corner, so a
+  zoomed window equals the whole render (tested); a draft and an export make the same change.
+- The Refine brush hook `wrinkles::area_weight` is unchanged: it still gives one weight per area.
+
+Time (release, a test Mac with other work running): the face search per photo, with the parse known, 0.3–1.5 s with LaMa (about
+0.3 s without it, banded heal) for one face including Blemishes' and Stray Hair's searches; the wrinkles part alone 0.3–0.6 s
+with the banded heal on a 1936 px draft. A slider tick (the retouch step, a 1936 px draft, all four sliders at 100): 4.0 ms on a
+head-and-shoulders portrait, 7.6 ms on a tall frame (v1: 34 ms and 12 ms); Forehead alone 1.1 ms.
+
+Not done: lit ridges beside a deep crease stay as pale streaks (taking them too gave a flat, wet look); a face crop over 768 px
+is searched reduced, so pores at an export's size come from the photo itself; stubble in Smile Lines can be softened (the parse
+has no beard class); faces found before LaMa was installed keep the banded heal until the faces are searched again.
+
+## What it does (v1, kept for a face without a search)
 
 The Wrinkles feature of portrait retouching (`fork/retouch-foundation.md`), on the face mesh and the part masks of the
 people parse (`fork/retouch-masks.md`). Four sliders, 0…100, off at 0, for every face or the picked one:
@@ -61,7 +101,10 @@ level.
 
 ## Own files
 
-`crates/retouch/src/wrinkles.rs`, `crates/retouch/src/wrinkles/areas.rs`, `crates/retouch/src/wrinkles/lines.rs`,
+v2: `crates/retouch/src/wrinkles/{search,ridge,heal,hairlike,exclude,fix}.rs`, `crates/retouch/tests/wrinkles_v2.rs`,
+`crates/engine/src/retouch_input/wrinkles.rs`, `crates/engine/examples/wrinkles_v2.rs`.
+
+v1: `crates/retouch/src/wrinkles.rs`, `crates/retouch/src/wrinkles/areas.rs`, `crates/retouch/src/wrinkles/lines.rs`,
 `crates/retouch/examples/wrinkles.rs`, `crates/retouch/tests/wrinkles.rs`, `crates/ui-egui/src/panels/portrait/wrinkles.rs`,
 `fork/retouch-wrinkles.md`, `fork/tests.d/retouch-wrinkles.txt`
 
@@ -86,6 +129,16 @@ In fork files:
   it, so no saved edit changes; a saved `amount` is dropped when settings are read.
 
 ## Tests
+
+v2 (`crates/retouch/tests/wrinkles_v2.rs`, the unit tests in `crates/retouch/src/wrinkles/`, `crates/engine/src/retouch_input/wrinkles.rs`):
+slider 0 and the other areas' sliders leave every bit; at 100 a pixel has the stored change and at 50 half of it; Forehead 100
+takes away most of the lines' depth and the pores come back inside them; a window equals the whole render inside it; a draft and
+an export four times its size leave the same share; a filler's fill and the banded heal both remove the lines (no filler = the
+banded heal; a cancelled search keeps nothing and v1 shows); faces without the mesh or the skin mask get none, a face without
+wrinkles an empty change; the exclusions cover a synthetic ear, nostril and face edge and not the forehead, cheek or neck; a hair
+is not hair-like unless thin, bright and grey; the search's row is there and its cancel stops it; no panic on odd faces.
+
+v1:
 
 `fork/tests.d/retouch-wrinkles.txt`. They cover: off and every slider at 0 give back the original bits; pixels
 outside every mask keep their bits (Facial Skin over half the forehead); a face without the mesh, without the masks,
