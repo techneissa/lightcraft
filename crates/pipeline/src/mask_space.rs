@@ -173,14 +173,11 @@ fn remap(m: &mut Mask, fwd: &dyn Fn(Point) -> Point, back: &dyn Fn(Point) -> Poi
             MaskShape::Prompt { seg, detail, .. }
             | MaskShape::Subject { seg, detail, .. }
             | MaskShape::Sky { seg, detail, .. }
-            | MaskShape::Background { seg, detail, .. } => remap_segs(seg, detail, fwd, back),
+            | MaskShape::Background { seg, detail, .. }
+            | MaskShape::People { seg, detail, .. } => remap_segs(seg, detail, fwd, back),
             // computed from the photo at each render (its mattes follow the warp), or colours,
             // tones and depths, which have no place (a colour range's samples are colours)
-            MaskShape::People { .. }
-            | MaskShape::Landscape { .. }
-            | MaskShape::ColorRange { .. }
-            | MaskShape::LuminanceRange { .. }
-            | MaskShape::DepthRange { .. } => {}
+            MaskShape::Landscape { .. } | MaskShape::ColorRange { .. } | MaskShape::LuminanceRange { .. } | MaskShape::DepthRange { .. } => {}
         }
     }
 }

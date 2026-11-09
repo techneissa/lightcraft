@@ -299,8 +299,9 @@ impl PeopleParsing {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_runner(&self, runner: Option<Runner>) {
+    /// Run parses with `runner` instead of the models (tests; Select People's UI tests through `test-hooks`).
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn set_runner(&self, runner: Option<Runner>) {
         *lock(&self.inner.runner) = runner;
     }
 

@@ -642,9 +642,9 @@ fn people_and_subject_use_person_mattes() {
     assert!(subject.get(10, 50) > 0.99 && subject.get(190, 50) > 0.99 && subject.get(100, 50) < 0.01);
     let background = eval(&MaskShape::background());
     assert!(background.get(100, 50) > 0.99 && background.get(10, 50) < 0.01);
-    let hair = eval(&MaskShape::People { person: 0, parts: vec!["Hair".into()] });
+    let hair = eval(&MaskShape::people(0, vec!["Hair".into()]));
     assert!(hair.get(190, 50) > 0.99 && hair.get(10, 50) < 0.01);
-    let lips = MaskShape::People { person: 0, parts: vec!["Lips".into()] };
+    let lips = MaskShape::people(0, vec!["Lips".into()]);
     assert_eq!(eval(&lips), shape_alpha(&lips, &f, w, h, &img, &l, 0.0, None));
 }
 

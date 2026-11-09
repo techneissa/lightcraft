@@ -456,6 +456,8 @@ fn loupe_paint_and_finish(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
     let nav = navigator(app, ui, canvas, img_rect, id);
     // the Portrait tab's face picker, on the photo (fork, `fork/retouch-foundation.md`)
     super::portrait::overlay(app, ui, canvas, id);
+    // the Select People picker, on the photo (fork, `fork/select-people.md`)
+    super::select_people::overlay(app, ui, canvas, id);
     // what is on screen isn't the render on its way (a stand-in, the last render after an edit,
     // a magnified frame under its window): say so once that has lasted a moment
     let coming = render_coming(app, shown, windows, ViewMode { split, show_before, split_view });

@@ -160,11 +160,15 @@ pub(super) fn shape(h: &mut Words, shape: &MaskShape) {
             h.write(text.as_bytes());
             h.segs(seg, detail, *edge);
         }
-        MaskShape::People { person, parts } => {
+        MaskShape::People { person, parts, seg, detail, edge, .. } => {
             h.word(12);
             h.word(u64::from(*person));
             h.word(parts.len() as u64);
             parts.iter().for_each(|p| h.write(p.as_bytes()));
+            // (fork, `fork/select-people.md`: the stored selection; the face it belongs to only names it)
+            if seg.is_some() || !detail.is_empty() {
+                h.segs(seg, detail, *edge);
+            }
         }
         MaskShape::Landscape { class } => {
             h.word(13);
