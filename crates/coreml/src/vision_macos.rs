@@ -150,7 +150,7 @@ fn pixel_buffer(img: &Image) -> Result<CFRetained<CVPixelBuffer>> {
     let bytes = unsafe { std::slice::from_raw_parts_mut(base.as_ptr(), size) };
     for y in 0..h {
         let Some(line) = bytes.get_mut(y * row..y * row + w * 4) else { return Err(Error::Vision("a pixel buffer is too small".into())) };
-        for (x, px) in line.chunks_exact_mut(4).enumerate() {
+        for (x, px) in line.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             let [r, g, b] = img.rgb8(y * w + x);
             px.copy_from_slice(&[b, g, r, 255]);
         }

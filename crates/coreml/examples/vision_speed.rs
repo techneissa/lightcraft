@@ -18,7 +18,7 @@ fn pgm(path: &std::path::Path, m: &Matte) {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    assert!(args.len() >= 4 && (args.len() - 1) % 3 == 0, "usage: vision_speed OUT_DIR W H PHOTO.rgb ...");
+    assert!(args.len() >= 4 && (args.len() - 1).is_multiple_of(3), "usage: vision_speed OUT_DIR W H PHOTO.rgb ...");
     assert!(vision::available(), "Apple Vision masks need macOS 14 or later");
     let out = std::path::PathBuf::from(&args[0]);
     std::fs::create_dir_all(&out).expect("out dir");

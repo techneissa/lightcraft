@@ -30,6 +30,7 @@ pub const SUFFIX: &str = "+vision";
 /// Longest side of a people matte (the parse's own picture is 2048 px on its long side).
 const PEOPLE_SIDE: usize = 2048;
 /// Side of a Subject matte, the size BiRefNet Matting stores (so a document's mask is the same size either way).
+#[cfg_attr(not(feature = "sam"), allow(dead_code))]
 const SUBJECT_SIDE: usize = 1024;
 /// Where the Vision people together cover less than this, the person segmentation alone decides.
 const SHARE_FLOOR: f32 = 0.02;
@@ -38,6 +39,7 @@ const MATCH_IOU: f32 = 0.1;
 /// Cells a side of the grid the overlap is measured on.
 const MATCH_GRID: usize = 128;
 /// Salt for Subject mattes in the shared matte memory, so a Vision matte never answers for BiRefNet's.
+#[cfg_attr(not(feature = "sam"), allow(dead_code))]
 const SUBJECT_SALT: u64 = 0x5649_5349_4f4e;
 
 /// Whether this Mac runs every Vision request Apple Vision edges use.
@@ -103,6 +105,7 @@ impl HairEdges {
         })
     }
 
+    #[cfg_attr(not(feature = "sam"), allow(dead_code))]
     /// The Subject matte of an 8-bit RGB picture from Vision's foreground masks (every subject together) and its person
     /// segmentation (fine hair), the larger at each pixel: from memory
     /// when the same pixels were matted before. `Ok(None)`: Vision found no subject.
@@ -138,6 +141,7 @@ impl HairEdges {
         Ok(Some(m))
     }
 
+    #[cfg_attr(not(feature = "sam"), allow(dead_code))]
     /// The Subject matte for `edge` (BiRefNet Matting or Apple Vision); `Ok(None)` when Vision found no subject.
     pub(crate) fn subject_matte(&self, edge: Edge, rgb: &[u8], w: usize, h: usize, cancel: &Arc<AtomicBool>) -> Result<Option<Arc<Matte>>, String> {
         match edge {
@@ -208,9 +212,15 @@ pub(crate) fn assign(each: &[av::Matte], people: &[Person]) -> Vec<Option<usize>
     out
 }
 
-/// Person `k`'s matte: the person segmentation, less the share of Vision people that are someone else's.
+/// Person `k`'s matte: the person segmentation, less the share of Vision people that are someone else's. A parsed
+/// person no Vision person matches (often a part of one person the parse split off, such as a hand) takes the
+/// segmentation as it is: less the others' share, their edge would open a ring of background inside the person.
 fn person_matte(v: &People, theirs: &[Option<usize>], k: usize, side: usize) -> Matte {
-    let others: Vec<usize> = theirs.iter().enumerate().filter(|(i, _)| *i != k).filter_map(|(_, j)| *j).collect();
+    let mine = theirs.get(k).copied().flatten();
+    let others: Vec<usize> = match mine {
+        Some(_) => theirs.iter().enumerate().filter(|(i, _)| *i != k).filter_map(|(_, j)| *j).collect(),
+        None => Vec::new(),
+    };
     let all = &v.all;
     let data = (0..all.width * all.height)
         .map(|i| {

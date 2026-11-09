@@ -197,3 +197,19 @@ fn a_people_parse_with_apple_vision_edges_is_made_once_and_cached() {
     assert!(h.vision_subject(&img.data[..10], img.width, img.height, &flag).is_err());
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// A parse that splits one person (a hand found as a second "person" inside the first) while Vision sees one: the
+/// extra parsed person keeps the person segmentation at its edge. Before, it got the segmentation less the first
+/// person's share, which is all of it, and a ring of background opened inside the person (hair-sky-3).
+#[test]
+fn a_parsed_person_vision_does_not_see_keeps_the_segmentation() {
+    let mut parse = parse_of(vec![person(0.5, 0.5, 0.35), person(0.5, 0.7, 0.08)]);
+    let (w, h) = (128, 128);
+    let all = disc(w, h, 0.5, 0.5, 0.37, 1.0);
+    let each = vec![disc(w, h, 0.5, 0.5, 0.37, 1.0)];
+    refine_people(&mut parse, &People { all, each });
+    let hand = &parse.people[1];
+    // just inside the hand's own edge: still the hand's
+    assert!(hand.sample(Part::EntirePerson, 0.5, 0.7 - 0.07) > 0.5, "the hand's edge stays");
+    assert!(hand.sample(Part::EntirePerson, 0.5, 0.7) > 0.5, "the hand stays");
+}

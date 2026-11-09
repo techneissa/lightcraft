@@ -30,3 +30,23 @@ Objective-C helper with `cc`, and LightCraft is pure Rust (CLAUDE.md). Core ML i
 
 `compileModelAtURL:error:` is deprecated in favour of the asynchronous call but still works; it runs on a worker
 thread, once per download.
+
+## Apple Vision masks (`vision`, issue #115)
+
+`vision::person_segmentation` (`VNGeneratePersonSegmentationRequest`, Accurate), `vision::person_instances`
+(`VNGeneratePersonInstanceMaskRequest`, up to four people) and `vision::foreground_instances`
+(`VNGenerateForegroundInstanceMaskRequest`, any subject) take an 8-bit or float RGB `Image` and give coverage mattes
+(0 to 1) at the photo's aspect; instance masks come at the photo's size. All `unsafe` is in `src/vision_macos.rs`;
+off the Mac `src/stub.rs` says unsupported. The same rules as above:
+
+- `vision::supported(request)` checks macOS 12 (segmentation) or 14 (instances) and, with `respondsToSelector:`,
+  `initWithCVPixelBuffer:options:`, `performRequests:error:`, each request's `init` and `results`,
+  `setQualityLevel:`, `supportedOutputPixelFormatsAndReturnError:`, `setOutputPixelFormat:`,
+  `VNPixelBufferObservation`'s `pixelBuffer`, `VNInstanceMaskObservation`'s `allInstances` and
+  `generateScaledMaskForImageForInstances:fromRequestHandler:error:`, and `NSIndexSet`'s `firstIndex` and
+  `indexGreaterThanIndex:`. Every entry point checks it first and the image's size (1 to 16,384 a side, 64 M pixels).
+- The input is an IOSurface-backed 32-bit BGRA pixel buffer (the instance requests refuse any other). The float
+  output format is set only when Vision lists it. Only instance indexes Vision listed are asked for (at most 16).
+- Pixel buffers are read and written only while locked (unlocked on drop), row by row, after checking the format
+  (one component: 8-bit, half or float), that the buffer is not planar, and that every row lies inside its size.
+
