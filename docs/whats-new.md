@@ -40,6 +40,10 @@
 
 ## 2026-11-09
 
+### Stray Hair in the Portrait Tab
+The Portrait tab's Stray Hair section cleans flyaways around the hair and stray strands across the face, for every
+face or the one you pick. Amount sets how much; beards, eyebrows, lashes, clothes and the hair itself are left alone.
+
 ### Portrait Presets That Follow the Person
 - Save a face's portrait settings as a preset from the Portrait tab's Portrait Presets section; it appears in the
   Presets panel's Portrait group with the name of the person it follows. Tick Save the Whole Look to

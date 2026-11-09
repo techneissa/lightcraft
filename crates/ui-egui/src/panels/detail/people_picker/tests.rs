@@ -18,7 +18,7 @@ fn a_click_selects_one_and_a_command_click_adds_or_removes() {
 fn parts() -> Vec<PartItem> {
     ["Entire Person", "Entire Face", "Facial Skin", "Hair", "Background"]
         .iter()
-        .map(|l| PartItem { key: l.to_lowercase().replace(' ', "-"), label: l.to_string() })
+        .map(|l| PartItem { key: l.to_lowercase().replace(' ', "-"), label: l.to_string(), group: None })
         .collect()
 }
 
@@ -56,17 +56,55 @@ fn the_parts_row_takes_several_with_command_click() {
     let pk = Picker { id: "test", faces: &faces, face: None, parts: &parts, selected_parts: &selected, folded: false, note: None };
     frame(&ctx, &pk, Vec::new(), Modifiers::NONE);
     let _ = frame(&ctx, &pk, Vec::new(), Modifiers::NONE);
-    let hair = rect_of(&ctx, "test:part:hair").expect("the parts row lists its items");
+    assert!(rect_of(&ctx, "test:part:hair").is_none(), "the parts menu starts closed");
+    let _ = frame(&ctx, &pk, Vec::new(), Modifiers::NONE);
+    let button = rect_of(&ctx, "test:parts").expect("the parts dropdown");
+    let _ = click(&ctx, &pk, button.center(), Modifiers::NONE);
+    // (a new menu is laid out unseen first)
+    let _ = frame(&ctx, &pk, Vec::new(), Modifiers::NONE);
+    let _ = frame(&ctx, &pk, Vec::new(), Modifiers::NONE);
+    let _ = crate::widgets::take_registry(&ctx);
+    let _ = frame(&ctx, &pk, Vec::new(), Modifiers::NONE);
+    let hair = rect_of(&ctx, "test:part:hair").expect("the open menu lists the parts");
     let _ = frame(&ctx, &pk, Vec::new(), Modifiers::NONE);
     let picked = click(&ctx, &pk, hair.center(), Modifiers::COMMAND);
     assert_eq!(picked.parts, Some(vec![0, 3]), "⌘-click adds Hair to Entire Person");
     let picked = click(&ctx, &pk, hair.center(), Modifiers::NONE);
     assert_eq!(picked.parts, Some(vec![3]), "a plain click selects Hair alone");
+    assert!(!super::parts_menu::is_open(&ctx, &pk), "and closes the menu");
     // the face row is single-select
     let _ = frame(&ctx, &pk, Vec::new(), Modifiers::NONE);
     let face = rect_of(&ctx, "test:face:0").unwrap();
     let picked = click(&ctx, &pk, face.center(), Modifiers::COMMAND);
     assert_eq!((picked.face, picked.parts), (Some(Some(0)), None));
+}
+
+fn key(k: egui::Key) -> Event {
+    Event::Key { key: k, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE }
+}
+
+/// The open menu takes ↓ / ↑ and ↩; Esc closes it.
+#[test]
+fn the_parts_menu_takes_the_arrow_keys_and_return() {
+    let ctx = egui::Context::default();
+    let parts = parts();
+    let selected = [0usize];
+    let pk = Picker { id: "test", faces: &[], face: None, parts: &parts, selected_parts: &selected, folded: false, note: None };
+    frame(&ctx, &pk, Vec::new(), Modifiers::NONE);
+    let button = rect_of(&ctx, "test:parts").expect("the parts dropdown");
+    let _ = click(&ctx, &pk, button.center(), Modifiers::NONE);
+    let _ = frame(&ctx, &pk, vec![key(egui::Key::ArrowDown)], Modifiers::NONE);
+    let _ = frame(&ctx, &pk, vec![key(egui::Key::ArrowDown)], Modifiers::NONE);
+    let _ = frame(&ctx, &pk, vec![key(egui::Key::ArrowDown)], Modifiers::NONE);
+    let _ = frame(&ctx, &pk, vec![key(egui::Key::ArrowUp)], Modifiers::NONE);
+    let picked = frame(&ctx, &pk, vec![key(egui::Key::Enter)], Modifiers::NONE);
+    assert_eq!(picked.parts, Some(vec![1]), "↓↓↓↑ ↩ picks the second part");
+    let _ = frame(&ctx, &pk, Vec::new(), Modifiers::NONE);
+    assert!(!super::parts_menu::is_open(&ctx, &pk), "↩ closes it");
+    let _ = click(&ctx, &pk, button.center(), Modifiers::NONE);
+    assert!(super::parts_menu::is_open(&ctx, &pk));
+    let _ = frame(&ctx, &pk, vec![key(egui::Key::Escape)], Modifiers::NONE);
+    assert!(!super::parts_menu::is_open(&ctx, &pk), "Esc closes it");
 }
 
 #[test]
@@ -76,7 +114,7 @@ fn without_parts_there_is_no_parts_row() {
     frame(&ctx, &pk, Vec::new(), Modifiers::NONE);
     let _ = frame(&ctx, &pk, Vec::new(), Modifiers::NONE);
     let ids: Vec<String> = crate::widgets::take_registry(&ctx).into_iter().map(|(k, _)| k).collect();
-    assert!(ids.iter().any(|k| k == "test:face:all") && !ids.iter().any(|k| k.starts_with("test:part:")), "{ids:?}");
+    assert!(ids.iter().any(|k| k == "test:face:all") && !ids.iter().any(|k| k.starts_with("test:part")), "{ids:?}");
 }
 
 /// The camera-preview badge (top-right of the photo) is drawn first; when it is at the view's corner the card goes

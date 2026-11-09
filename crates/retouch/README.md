@@ -101,6 +101,10 @@ crate only reads it.
   and a donor patch), found once per photo by the provider on the picture its masks come from
   (`blemish::with_spots`; the engine does it with the people parse, so they are kept with the masks). `None`: not
   looked for, and Blemishes looks on the image it retouches (the examples and tests).
+- `Face::strands`: the stray strands around and across the face (Stray Hair: a grid over an area of the photo, kept
+  only for the tiles holding a strand, each cell a weight, a direction across the strand and a polarity), found once
+  on the picture the masks come from (`hair::with_strands`; the engine does it with the people parse). `None`: not
+  looked for yet; Stray Hair then changes nothing (a render never searches).
 - `Input::fingerprint`: a hash of all of it, in the render cache keys (the engine hashes it on the search's worker).
 
 A feature reads the faces through `Scene`: each `FaceCtx` has the box and landmarks in the image's pixels and
