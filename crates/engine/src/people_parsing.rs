@@ -234,6 +234,22 @@ impl PeopleParsing {
         std::fs::write(&path, serde_json::json!({"set": set.id()}).to_string()).map_err(|e| format!("could not keep the choice: {e}"))
     }
 
+    /// The version a parse made now is filed under: the chosen set's, with the hair edges' when they draw it.
+    pub fn version(&self) -> String {
+        let set = self.model_set();
+        // (a parse with matting edges is its own version, so switching the edge never reads the other's file)
+        match self.matting() {
+            Some((_, edge)) => format!("{}+{}-{}", set.version(), crate::hair_edges::VERSION, edge.id()),
+            None => set.version(),
+        }
+    }
+
+    /// Whether a parse can run now: the chosen set is downloaded (or a test runner stands in for it).
+    pub fn ready(&self) -> bool {
+        let has_runner = lock(&self.inner.runner).is_some();
+        self.models_dir().is_some_and(|d| has_runner || self.model_set().installed_in(&d))
+    }
+
     /// The last thing worth telling the user (a failed run), if any.
     pub fn message(&self) -> Option<String> {
         lock(&self.inner.message).clone()
@@ -301,11 +317,7 @@ impl PeopleParsing {
     pub fn parse(&self, img: RgbImage, hints: Vec<FaceHint>, wait: bool) -> Outcome {
         let set = self.model_set();
         let matting = self.matting();
-        // (a parse with matting edges is its own version, so switching the edge never reads the other's file)
-        let version = match &matting {
-            Some((_, edge)) => format!("{}+{}-{}", set.version(), crate::hair_edges::VERSION, edge.id()),
-            None => set.version(),
-        };
+        let version = self.version();
         let key = cache::key(&img, &hints, &version);
         if let Some(p) = self.remembered(&key).or_else(|| self.filed(&key)) {
             self.remember(&key, p.clone());

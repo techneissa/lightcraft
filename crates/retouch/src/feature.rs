@@ -138,6 +138,39 @@ impl<'a> Scene<'a> {
         m.sample(nx, ny)
     }
 
+    /// The pixels of the image the mask of `part` of face `face` can touch: `[x0, y0, x1, y1)`, clamped to the image;
+    /// `None` without that mask or when it lies outside the image. Every pixel outside it has the mask at 0, so a
+    /// feature reads and writes only these. (The area's edges are followed at 16 points each, so a lens or
+    /// transform warp that bends them stays inside, with a pixel to spare.)
+    pub fn mask_box(&self, face: usize, part: Part) -> Option<[usize; 4]> {
+        const STEPS: usize = 16;
+        let a = self.faces.get(face)?.face.mask(part)?.area;
+        if !a.is_valid() || self.width == 0 || self.height == 0 {
+            return None;
+        }
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for i in 0..=STEPS {
+            let t = i as f64 / STEPS as f64;
+            let (u, v) = (a.x0 + t * a.width(), a.y0 + t * a.height());
+            for (nx, ny) in [(u, a.y0), (u, a.y1), (a.x0, v), (a.x1, v)] {
+                if let Some((px, py)) = self.view.to_px(nx, ny).filter(|(x, y)| x.is_finite() && y.is_finite()) {
+                    (x0, y0, x1, y1) = (x0.min(px), y0.min(py), x1.max(px), y1.max(py));
+                }
+            }
+        }
+        if x0 > x1 || y0 > y1 {
+            return None;
+        }
+        let clamp = |v: f64, max: usize| v.clamp(0.0, max as f64) as usize;
+        let b = [
+            clamp(x0.floor() - 1.0, self.width),
+            clamp(y0.floor() - 1.0, self.height),
+            clamp(x1.ceil() + 1.0, self.width),
+            clamp(y1.ceil() + 1.0, self.height),
+        ];
+        (b[0] < b[2] && b[1] < b[3]).then_some(b)
+    }
+
     /// The mask of `part` of face `face`, resampled to the image's pixels; `None` without that mask.
     pub fn mask_plane(&self, face: usize, part: Part) -> Option<Plane> {
         let m = self.faces.get(face)?.face.mask(part)?;

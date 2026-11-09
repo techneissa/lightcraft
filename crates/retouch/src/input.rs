@@ -202,12 +202,16 @@ impl Face {
 #[derive(Clone, Default)]
 pub struct Input {
     pub faces: Vec<Face>,
+    /// The coordinates are on the photo before lens corrections and transform (after the orientation): the frame a
+    /// people parse is made in. The step maps them through the lens and transform warp, as it maps local masks drawn
+    /// on the photo. `false`: after lens corrections and transform (the module docs' frame).
+    pub on_photo: bool,
     fingerprint: OnceLock<u64>,
 }
 
 impl fmt::Debug for Input {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Input").field("faces", &self.faces).finish()
+        f.debug_struct("Input").field("faces", &self.faces).field("on_photo", &self.on_photo).finish()
     }
 }
 
@@ -221,7 +225,12 @@ impl PartialEq for Input {
 
 impl Input {
     pub fn new(faces: Vec<Face>) -> Input {
-        Input { faces, fingerprint: OnceLock::new() }
+        Input { faces, on_photo: false, fingerprint: OnceLock::new() }
+    }
+
+    /// Faces whose coordinates are on the photo before lens corrections and transform ([`Input::on_photo`]).
+    pub fn new_on_photo(faces: Vec<Face>) -> Input {
+        Input { faces, on_photo: true, fingerprint: OnceLock::new() }
     }
 
     /// A stable 64-bit hash of everything here (boxes, landmarks, persons, masks), for render cache keys: a
@@ -230,6 +239,7 @@ impl Input {
         *self.fingerprint.get_or_init(|| {
             let mut h = Fnv::new();
             h.u64(self.faces.len() as u64);
+            h.u64(u64::from(self.on_photo));
             for f in &self.faces {
                 let up = f.key_bounds();
                 for v in [f.bounds.x0, f.bounds.y0, f.bounds.x1, f.bounds.y1, up.x0, up.y0, up.x1, up.y1] {

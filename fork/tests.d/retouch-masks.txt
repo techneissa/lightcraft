@@ -1,0 +1,5 @@
+cargo test -p lightcraft-retouch --test skin_tone
+cargo test -p lightcraft-pipeline --lib -- retouch_step
+cargo test -p lightcraft-engine --lib -- retouch_input
+cargo test -p lightcraft-pipeline --lib -- spots_keep
+cargo test -p lightcraft-ui-egui --lib -- panels::strip tool_strip_order

@@ -9,8 +9,10 @@
 //! - Renders never wait: a photo whose retouching is on and whose faces are unknown starts a search on a worker
 //!   thread, with a row in the activity stack, and renders without faces meanwhile (every feature then changes
 //!   nothing). Exports and synchronous renders find them first ([`Session::retouch_detect_now`]).
-//! - The default provider is YuNet (`crates/faces`, installed in Settings ▸ Faces): boxes and five landmarks, no
-//!   masks. Another provider (the people parser, issue #81) is installed with [`FaceStore::set_provider`].
+//! - While the chosen people-parts set is downloaded, the faces come from the photo's people parse, with every part
+//!   mask and the face mesh (`parts`, `fork/retouch-masks.md`). Else the provider is YuNet (`crates/faces`,
+//!   installed in Settings ▸ Faces): boxes and five landmarks, no masks. A provider installed with
+//!   [`FaceStore::set_provider`] (tests) comes before both.
 //! - A face's person is the name of the photo's named face region it overlaps most (People). Its box is also kept
 //!   as it is on the photo before the user's rotation (`Face::upright`), which per-face settings are matched by. Faces are listed left
 //!   to right.
@@ -23,6 +25,8 @@ use lightcraft_develop::retouch::{Face, Input, NormRect};
 use lightcraft_raster::Rgba8;
 
 use crate::{EngineError, Session};
+
+mod parts;
 
 /// Finds faces (and their part masks) on a picture.
 pub trait FaceProvider: Send + Sync {
@@ -83,6 +87,9 @@ struct Store {
     busy: Vec<String>,
     /// The last search's failure, per key.
     failed: Vec<(String, String)>,
+    /// Why no search could start for a key (no face model, or one that can't be read): kept so a panel asking every
+    /// frame never reads the model again; forgotten when a model is installed or removed ([`FaceStore::forget_no_model`]).
+    no_model: Vec<(String, String)>,
     /// Keys whose faces a prepared export finds when it runs ([`ExportFaces`]): setting up other renders of them
     /// does not wait.
     deferred: Vec<String>,
@@ -102,6 +109,24 @@ impl FaceStore {
         let mut st = self.lock();
         st.found.clear();
         st.failed.clear();
+        st.no_model.clear();
+    }
+
+    /// Forget why photos found no face model (installing or removing a model does): their next search runs.
+    pub(crate) fn forget_no_model(&self) {
+        self.lock().no_model.clear();
+    }
+
+    fn no_model_for(&self, key: &str) -> Option<String> {
+        self.lock().no_model.iter().find(|(k, _)| k == key).map(|(_, why)| why.clone())
+    }
+
+    fn keep_no_model(&self, key: &str, why: &str) {
+        let mut st = self.lock();
+        st.no_model.retain(|(k, _)| k != key);
+        st.no_model.push((key.to_string(), why.to_string()));
+        let extra = st.no_model.len().saturating_sub(KEEP);
+        st.no_model.drain(..extra);
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Store> {
@@ -178,6 +203,34 @@ pub fn key_of(p: &Photo, s: &DevelopSettings) -> String {
     )
 }
 
+/// What finds a photo's faces now: a provider (one installed, else YuNet) on the detect render, or the people parse.
+enum Source {
+    Provider(Arc<dyn FaceProvider>),
+    Parts,
+}
+
+/// A face search set up on the calling thread, to run on a worker (or an export's): it renders and runs models.
+enum Finder {
+    Faces { provider: Arc<dyn FaceProvider>, job: crate::RenderJob, regions: Vec<(NormRect, String)> },
+    Parts(parts::PartsFinder),
+}
+
+impl Finder {
+    fn name(&self) -> String {
+        match self {
+            Finder::Faces { provider, .. } => provider.name().to_string(),
+            Finder::Parts(_) => "People Parts".into(),
+        }
+    }
+
+    fn run(self) -> std::result::Result<Found, String> {
+        match self {
+            Finder::Faces { provider, job, regions } => find(job, provider.as_ref(), &regions),
+            Finder::Parts(p) => p.find(),
+        }
+    }
+}
+
 /// `key` (a render's cache key) with a retouched photo's faces mixed in (`salt` 0: unchanged).
 pub fn salted(key: lightcraft_preview::Hash128, salt: u64) -> lightcraft_preview::Hash128 {
     if salt == 0 { key } else { lightcraft_preview::Hasher128::new().u64(key.0 as u64).u64((key.0 >> 64) as u64).u64(salt).finish() }
@@ -191,7 +244,7 @@ impl Session {
         if !lightcraft_develop::retouch::active(s) {
             return (0, None);
         }
-        match self.retouch_faces.get(&key_of(p, s)) {
+        match self.retouch_faces.get(&self.retouch_key(p, s)) {
             Some(found) => (found.input.fingerprint() | 1, Some(found.input)),
             None => {
                 self.retouch_search(p.id, false);
@@ -205,39 +258,59 @@ impl Session {
         if !lightcraft_develop::retouch::active(s) {
             return 0;
         }
-        self.retouch_faces.get(&key_of(p, s)).map_or(UNKNOWN, |found| found.input.fingerprint() | 1)
+        self.retouch_faces.get(&self.retouch_key(p, s)).map_or(UNKNOWN, |found| found.input.fingerprint() | 1)
+    }
+
+    /// The key photo `p`'s faces are kept under: [`key_of`], and the parse's version while they come from the
+    /// people parse (another set, or the set downloaded later, finds them anew).
+    fn retouch_key(&self, p: &Photo, s: &DevelopSettings) -> String {
+        match self.retouch_source_is_parts() {
+            true => format!("{}|parts:{}", key_of(p, s), self.parsing.version()),
+            false => key_of(p, s),
+        }
+    }
+
+    fn retouch_source_is_parts(&self) -> bool {
+        self.retouch_faces.provider.is_none() && self.parsing.ready()
     }
 
     /// Where photo `id`'s faces stand (no search is started).
     pub fn retouch_faces_of(&self, id: PhotoId) -> FacesState {
         let Some(p) = self.catalog.photo(id) else { return FacesState::default() };
-        let key = key_of(p, &p.develop);
+        let key = self.retouch_key(p, &p.develop);
         let st = self.retouch_faces.lock();
         FacesState {
             found: st.found.iter().find(|(k, _)| *k == key).map(|(_, f)| f.clone()),
             busy: st.busy.contains(&key),
-            error: st.failed.iter().find(|(k, _)| *k == key).map(|(_, e)| e.clone()),
+            error: st.failed.iter().chain(&st.no_model).find(|(k, _)| *k == key).map(|(_, e)| e.clone()),
         }
     }
 
     /// Find photo `id`'s faces on a worker thread (once: nothing happens while they are known or being found, and
     /// `again` searches anew). Without a face model nothing starts and the reason comes back; it is not kept as the
-    /// photo's failure, so the search runs once a model is installed.
+    /// photo's failure: the reason is kept for the photo until a face model is installed or removed, so asking every
+    /// frame reads no model again, and the search runs once a model is installed.
     pub fn retouch_search(&mut self, id: PhotoId, again: bool) -> Option<String> {
         let p = self.catalog.photo(id).cloned()?;
-        let key = key_of(&p, &p.develop);
+        let key = self.retouch_key(&p, &p.develop);
         if !again && (self.retouch_faces.get(&key).is_some() || self.retouch_faces.lock().failed.iter().any(|(k, _)| *k == key)) {
             return None;
         }
-        let provider = match self.retouch_provider() {
-            Ok(provider) => provider,
-            Err(why) => return Some(why),
+        if !again && let Some(why) = self.retouch_faces.no_model_for(&key) {
+            return Some(why);
+        }
+        let source = match self.retouch_source() {
+            Ok(source) => source,
+            Err(why) => {
+                self.retouch_faces.keep_no_model(&key, &why);
+                return Some(why);
+            }
         };
         if !self.retouch_faces.claim(&key) {
             return None;
         }
-        let job = match self.retouch_detect_job(id).map(|job| (provider, job)) {
-            Ok(job) => job,
+        let finder = match self.retouch_finder(&p, source) {
+            Ok(finder) => finder,
             Err(why) => {
                 self.retouch_faces.put(&key, Err(why));
                 return None;
@@ -245,15 +318,13 @@ impl Session {
         };
         #[cfg(not(target_arch = "wasm32"))]
         {
-            let (provider, job) = job;
             let store = self.retouch_faces.clone();
-            let regions = named_regions(&p);
-            let guard = self.activity.start("retouch.faces", &format!("Finding Faces ({})", provider.name()), crate::activity::Cancel::No);
+            let guard = self.activity.start("retouch.faces", &format!("Finding Faces ({})", finder.name()), crate::activity::Cancel::No);
             let spawned = std::thread::Builder::new().name("retouch-faces".into()).spawn({
                 let key = key.clone();
                 let store = store.clone();
                 move || {
-                    let result = find(job, provider.as_ref(), &regions);
+                    let result = finder.run();
                     if let Err(e) = &result {
                         log::warn!("portrait: faces not found: {e}");
                     }
@@ -267,7 +338,7 @@ impl Session {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = job;
+            let _ = finder;
             self.retouch_faces.release(&key);
         }
         None
@@ -277,13 +348,13 @@ impl Session {
     /// `again` searches anew.
     pub fn retouch_detect_now(&mut self, id: PhotoId, again: bool) -> crate::Result<Found> {
         let p = self.catalog.photo(id).cloned().ok_or_else(|| EngineError::Other("no such photo".into()))?;
-        let key = key_of(&p, &p.develop);
+        let key = self.retouch_key(&p, &p.develop);
         if !again && let Some(found) = self.retouch_faces.get(&key) {
             return Ok(found);
         }
         // (claimed first: the render below must not start a search of its own)
         let claimed = self.retouch_faces.claim(&key);
-        let provider = match self.retouch_provider() {
+        let source = match self.retouch_source() {
             Ok(p) => p,
             Err(why) => {
                 if claimed {
@@ -295,8 +366,7 @@ impl Session {
                 });
             }
         };
-        let job = self.retouch_detect_job(id);
-        let result = job.and_then(|job| find(job, provider.as_ref(), &named_regions(&p)));
+        let result = self.retouch_finder(&p, source).and_then(Finder::run);
         self.retouch_faces.put(&key, result.clone());
         result.map_err(EngineError::Other)
     }
@@ -309,7 +379,7 @@ impl Session {
             return;
         }
         // (a prepared export finds them on its own worker)
-        if self.retouch_faces.lock().deferred.contains(&key_of(p, &p.develop)) {
+        if self.retouch_faces.lock().deferred.contains(&self.retouch_key(p, &p.develop)) {
             return;
         }
         if let Err(e) = self.retouch_detect_now(id, false) {
@@ -324,28 +394,46 @@ impl Session {
         if !lightcraft_develop::retouch::active(&p.develop) {
             return None;
         }
-        let key = key_of(&p, &p.develop);
+        let key = self.retouch_key(&p, &p.develop);
         if self.retouch_faces.get(&key).is_some() {
             return None;
         }
-        let provider = self.retouch_provider().ok()?;
+        let source = self.retouch_source().ok()?;
         let claimed = self.retouch_faces.claim(&key);
         self.retouch_faces.lock().deferred.push(key.clone());
         // (dropped unfilled when the render below can't be built: the claim goes again)
-        let mut pending = ExportFaces { store: self.retouch_faces.clone(), key, job: None, provider, regions: named_regions(&p), claimed };
+        let mut pending = ExportFaces { store: self.retouch_faces.clone(), key, finder: None, claimed };
         // (built after the claim: this render starts no search of its own)
-        pending.job = Some(self.retouch_detect_job(id).ok()?);
+        pending.finder = Some(self.retouch_finder(&p, source).ok()?);
         Some(pending)
     }
 
-    fn retouch_provider(&self) -> std::result::Result<Arc<dyn FaceProvider>, String> {
+    /// What finds faces now: an installed provider; else the people parse while its set is downloaded; else YuNet.
+    fn retouch_source(&self) -> std::result::Result<Source, String> {
         if let Some(p) = &self.retouch_faces.provider {
-            return Ok(p.clone());
+            return Ok(Source::Provider(p.clone()));
+        }
+        if self.parsing.ready() {
+            return Ok(Source::Parts);
         }
         match crate::cmd::face_detect::detector(self) {
-            Ok(d) => Ok(Arc::new(Yunet(d))),
+            Ok(d) => Ok(Source::Provider(Arc::new(Yunet(d)))),
             Err(missing) => Err(missing.into_error("retouch.detect").to_string()),
         }
+    }
+
+    /// The search `source` runs for photo `p`, set up here and run anywhere.
+    fn retouch_finder(&mut self, p: &Photo, source: Source) -> std::result::Result<Finder, String> {
+        let regions = named_regions(p);
+        Ok(match source {
+            Source::Provider(provider) => Finder::Faces { provider, job: self.retouch_detect_job(p.id)?, regions },
+            Source::Parts => Finder::Parts(parts::PartsFinder {
+                prepare: crate::cmd::parsing::prepare_job(self, p.id)?,
+                parsing: self.parsing.clone(),
+                orient: p.develop.orientation,
+                regions,
+            }),
+        })
     }
 
     /// The render faces are found on: the photo before its crop, without retouching, at [`DETECT_EDGE`].
@@ -366,9 +454,7 @@ impl Session {
 pub struct ExportFaces {
     store: FaceStore,
     key: String,
-    job: Option<crate::RenderJob>,
-    provider: Arc<dyn FaceProvider>,
-    regions: Vec<(NormRect, String)>,
+    finder: Option<Finder>,
     /// It holds the photo's search claim (else a background search had it first).
     claimed: bool,
 }
@@ -377,8 +463,8 @@ impl ExportFaces {
     /// Find the faces (keeping them for the photo's previews) and hand them to `jobs`. A failure is logged and the
     /// photo renders without faces.
     pub fn fill(mut self, jobs: &mut [&mut crate::RenderJob]) {
-        let Some(job) = self.job.take() else { return };
-        let result = find(job, self.provider.as_ref(), &self.regions);
+        let Some(finder) = self.finder.take() else { return };
+        let result = finder.run();
         // (`put` ends the claim; dropping `self` then ends the deferral)
         match &result {
             Ok(found) => {
@@ -428,12 +514,17 @@ fn find(job: crate::RenderJob, provider: &dyn FaceProvider, regions: &[(NormRect
         let b = orient.inverse().map_norm_rect(lightcraft_geom::Rect { x0: f.bounds.x0, y0: f.bounds.y0, x1: f.bounds.x1, y1: f.bounds.y1 });
         f.upright = Some(NormRect::new(b.x0, b.y0, b.x1, b.y1));
     }
-    faces.truncate(lightcraft_develop::retouch::MAX_FACES);
-    // left to right, as the face picker shows them (per-face settings never depend on the order)
-    faces.sort_by(|a, b| a.bounds.centre().0.total_cmp(&b.bounds.centre().0).then(a.bounds.centre().1.total_cmp(&b.bounds.centre().1)));
-    name_faces(&mut faces, regions);
+    arrange(&mut faces, regions);
     let thumbs = faces.iter().map(|f| thumb(&img, &f.bounds)).collect();
     Ok(Found { input: Arc::new(Input::new(faces)), thumbs: Arc::new(thumbs) })
+}
+
+/// The first [`lightcraft_develop::retouch::MAX_FACES`] faces (the largest, as the finder ranks them), left to right as
+/// the face picker shows them (per-face settings never depend on the order), each named after its region.
+fn arrange(faces: &mut Vec<Face>, regions: &[(NormRect, String)]) {
+    faces.truncate(lightcraft_develop::retouch::MAX_FACES);
+    faces.sort_by(|a, b| a.bounds.centre().0.total_cmp(&b.bounds.centre().0).then(a.bounds.centre().1.total_cmp(&b.bounds.centre().1)));
+    name_faces(faces, regions);
 }
 
 /// Give each face the name of the region it overlaps most (at least a third of the smaller box, by intersection
