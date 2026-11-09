@@ -80,6 +80,10 @@ crate only reads it.
   part the parser found that some feature reads (`Feature::PARTS`), at the resolution the models made them
   (`crates/engine/src/retouch_input/parts.rs`, `fork/retouch-masks.md`); without it, YuNet gives boxes and five
   landmarks and no masks.
+- `Face::spots`: the spots on the face's skin (Blemishes: centre, radius as a fraction of the face, kind, strength
+  and a donor patch), found once per photo by the provider on the picture its masks come from
+  (`blemish::with_spots`; the engine does it with the people parse, so they are kept with the masks). `None`: not
+  looked for, and Blemishes looks on the image it retouches (the examples and tests).
 - `Input::fingerprint`: a hash of all of it, in the render cache keys (the engine hashes it on the search's worker).
 
 A feature reads the faces through `Scene`: each `FaceCtx` has the box and landmarks in the image's pixels and
