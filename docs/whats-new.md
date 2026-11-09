@@ -40,6 +40,9 @@
 
 ## 2026-11-09
 
+### Assisted Culling Checks the Eyes
+- Photo ▸ Assisted Culling now finds photos where people have their eyes closed or out of focus (focused on an ear or the background), runs in the background with a row you can stop, and offers those photos for rejection afterwards; nothing is rejected for its eyes unless you choose it. The best shot of a burst is now the sharpest one with open, sharp eyes. Filter or make smart albums with Eyes Closed and Eyes Out of Focus.
+
 ### Portrait Background: Blur, Swap and Clean Backdrop
 - Blur softens the background more the farther it is behind the person, from an iPhone Portrait photo's depth map or from the distance to the person, with no halo round the hair.
 - Swap puts a colour, a picture or another photo behind the person; strands of hair keep their own colour at the edge. A picture is copied into the library, so the edit keeps working when the original file moves.
