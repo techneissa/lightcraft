@@ -160,7 +160,7 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
         };
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
         let params = json!({"mode": mode, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity, "background": true});
-        let _ = app.run("spot.add", crate::panels::right::with_fill(app, mode, params));
+        add_spot(app, mode, params);
     }
 }
 
@@ -211,7 +211,7 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
             _ => "remove",
         };
         let params = json!({"mode": mode, "points": [[place.0, place.1]], "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity, "background": true});
-        let _ = app.run("spot.add", crate::panels::right::with_fill(app, mode, params));
+        add_spot(app, mode, params);
         return true;
     }
     false
@@ -272,5 +272,15 @@ pub(super) fn eye_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
         })
     {
         app.ui.eye = i;
+    }
+}
+
+/// Run `spot.add` with `params` (the fill of `mode` added), timed under `LIGHTCRAFT_PROFILE`.
+fn add_spot(app: &mut LightcraftApp, mode: &str, params: serde_json::Value) {
+    let t = lightcraft_engine::media::dirty::clock();
+    let _ = app.run("spot.add", crate::panels::right::with_fill(app, mode, params));
+    if lightcraft_pipeline::profiling() {
+        use lightcraft_engine::media::dirty::{clock, ms};
+        eprintln!("  ui: spot.add {:.1} ms (at {:.1})", ms(t, clock()), crate::render::stamp());
     }
 }
