@@ -237,7 +237,10 @@ mod tests {
     #[test]
     fn the_glare_section_has_its_choices_button_and_amount() {
         let t = Duration::from_secs(20);
-        let app = LightcraftApp::new(lightcraft_engine::Session::with_demo(), Services { png: None, ..Default::default() });
+        let session = lightcraft_engine::Session::with_demo();
+        // (a machine with too little memory for FLUX, as CI runners are, offers Fill Glints only: no Lenses row)
+        let low_memory = session.glare.memory_check().is_some();
+        let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
         let mut h = Headless::new(app, [1200.0, 1400.0], 1.0);
         assert_eq!(h.request("ui.set", json!({"view": "detail"}), t)["ok"], true);
         assert_eq!(h.request("ui.clickWidget", json!({"id": "icon:portrait"}), t)["ok"], true);
@@ -248,13 +251,15 @@ mod tests {
         h.step();
         let shown = h.request("ui.widgets", json!({"filter": "portrait:glare"}), t);
         let ids: Vec<&str> = shown["result"].as_array().into_iter().flatten().filter_map(|w| w["id"].as_str()).collect();
-        for id in ["portrait:glare:method", "portrait:glare:lenses", "portrait:glare:repair"] {
+        for id in ["portrait:glare:method", "portrait:glare:repair"] {
             assert!(ids.contains(&id), "{id} missing from {ids:?}");
         }
+        assert_eq!(ids.contains(&"portrait:glare:lenses"), !low_memory, "Lenses shows only where Repaint can run: {ids:?}");
         let slider = h.request("ui.widgets", json!({"filter": "slider:retouch.glare.amount"}), t);
         assert_eq!(slider["result"].as_array().map(Vec::len), Some(1), "{slider}");
         let r = h.request("engine.execute", json!({"command": "retouch.glareRepair", "params": {"method": "flux"}}), t);
         assert_eq!(r["ok"], false, "{r}");
-        assert!(r.to_string().contains("not installed"), "{r}");
+        let why = r.to_string();
+        assert!(why.contains("not installed") || (low_memory && why.contains("memory")), "{r}");
     }
 }
