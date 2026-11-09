@@ -220,8 +220,8 @@ impl Tiles {
     }
 }
 
-/// Everything a render depends on but the spots: when it is the same, a render differs from the last one only where
-/// its spots drew differently.
+/// Everything a render depends on but the spots and the portrait retouching: when it is the same, a render differs from
+/// the last one only where its spots or its retouching drew differently.
 #[derive(Debug, PartialEq)]
 pub(crate) struct Rest {
     settings: DevelopSettings,
@@ -235,6 +235,9 @@ impl Rest {
     pub(crate) fn of(info: &SourceInfo, plan: &Plan<'_>, req: &RenderRequest) -> Rest {
         let mut settings = (*plan.settings).clone();
         settings.spots.clear();
+        // (fork, `fork/perf-portrait-draft.md`: the linear stage says where the portrait retouching changed; Face
+        // Reshape and the window the retouching reads are in the plan's frame, size and window below)
+        settings.retouch = Default::default();
         let mut light = info.clone();
         light.mattes = None;
         light.local_tone = None;
@@ -279,7 +282,7 @@ pub(crate) fn why(rest: Option<&Rest>, last: Option<&Last>) -> &'static str {
     match (rest, last) {
         (None, _) => "not eligible",
         (_, None) => "no last render",
-        (Some(r), Some(l)) if *r != *l.rest => "more than the spots changed",
+        (Some(r), Some(l)) if *r != *l.rest => "more than the spots and the retouching changed",
         _ => "from the last render",
     }
 }

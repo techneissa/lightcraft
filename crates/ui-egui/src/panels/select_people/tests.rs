@@ -85,6 +85,14 @@ pub(super) fn until(h: &mut Headless, what: &str, done: impl Fn(&Headless) -> bo
     h.step();
 }
 
+/// The parts are in a dropdown, closed: the picker is one short row over the photo.
+fn one_short_row(h: &mut Headless) {
+    assert!(rect_of(h, "selectPeople:parts").is_some());
+    assert!(rect_of(h, "selectPeople:part:hair").is_none(), "the parts menu starts closed");
+    let card = rect_of(h, "selectPeople:card").unwrap();
+    assert!(card[3] < 60.0, "one row: {card:?}");
+}
+
 #[test]
 fn person_makes_a_mask_and_the_picker_on_the_photo_changes_it() {
     let (mut h, dir) = app(vec![person(0.1, Some("ann")), person(0.6, None)]);
@@ -99,11 +107,14 @@ fn person_makes_a_mask_and_the_picker_on_the_photo_changes_it() {
     assert!(rect_of(&mut h, "maskNew:subject").is_none(), "Person hides the Custom tiles");
     assert!(rect_of(&mut h, "selectPeople:card").is_some());
     assert!(rect_of(&mut h, "selectPeople:face:1").is_some(), "a chip per person");
-    // a plain click picks one part; ⌘-click adds one; all in the same mask
+    one_short_row(&mut h);
+    // a plain click picks one part (opening the menu first) and closes it; ⌘-click adds one; all in the same mask
     click(&mut h, "selectPeople:part:hair", false);
+    assert!(rect_of(&mut h, "selectPeople:partsMenu").is_none(), "a plain click closes the menu");
     assert_eq!(part(&h).0, ["hair"]);
     click(&mut h, "selectPeople:part:lips", true);
     assert_eq!(part(&h).0, ["hair", "lips"]);
+    assert!(rect_of(&mut h, "selectPeople:partsMenu").is_some(), "⌘-click keeps the menu open");
     click(&mut h, "selectPeople:part:hair", true);
     assert_eq!(part(&h).0, ["lips"]);
     // the last part stays: a mask of nothing is not made
@@ -122,9 +133,9 @@ fn person_makes_a_mask_and_the_picker_on_the_photo_changes_it() {
     // folded into its button, and open again
     click(&mut h, "selectPeople:more", false);
     assert!(h.app.ui.flyout_open(FOLDED));
-    assert!(rect_of(&mut h, "selectPeople:part:hair").is_none());
+    assert!(rect_of(&mut h, "selectPeople:parts").is_none());
     click(&mut h, "selectPeople:more", false);
-    assert!(rect_of(&mut h, "selectPeople:part:hair").is_some());
+    assert!(rect_of(&mut h, "selectPeople:parts").is_some());
     // hidden with the tool overlay
     h.app.ui.tool_overlay = ToolOverlay::Never;
     h.step();

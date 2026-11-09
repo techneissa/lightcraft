@@ -11,10 +11,12 @@ List: Select People masks: Masking ▸ Person / Background / Custom and a picker
   downloaded). The choice is not saved: the panel opens on Custom.
 - **The picker on the photo**: the people picker of the Portrait tab (`fork/retouch-foundation.md`) at the image
   view's top-right corner, while Person or Background is chosen or a Select People mask is selected. Row one:
-  All and a round chip per person (their name from People on hover, else "Person 2"). Then the parts: Entire Person,
-  Entire Face (facial skin, eyebrows, eye whites, irises, lips and teeth together), Facial Skin, Body Skin, Hair,
-  Eyebrows, Eyes (Whites), Iris, Lips, Teeth, Clothes (all of them), Top, Bottom, Dress, Shoes, Hat, Bag,
-  Background. A click picks one part, ⌘-click adds or removes one (the last one stays); a chip picks whose. With a
+  one short row: All and a round chip per person (their name from People on hover, else "Person 2"), then a dropdown
+  naming the parts picked ("Entire Person", "Hair + Lips", "3 Parts"). Its menu groups the parts: Person (Entire
+  Person, Entire Face (facial skin, eyebrows, eye whites, irises, lips and teeth together), Facial Skin, Body Skin),
+  Face (Hair, Eyebrows, Eyes (Whites), Iris, Lips, Teeth), Clothes (Clothes (all of them), Top, Bottom, Dress, Shoes,
+  Hat, Bag), Background, a check mark on each one picked. A click picks one part and closes the menu, ⌘-click adds or
+  removes one (the last one stays) and keeps it open; ↑/↓ and ↩ work in it, Esc closes it. A chip picks whose. With a
   Select People mask selected, a click changes that mask (one undo step, "Select People"); without one, it makes a
   new mask. It folds into its "⋯" button (kept in the saved `openFlyouts` as `selectPeople.folded`, an existing
   `ui.json` key), hides with the tool overlay (View ▸ Tool Overlay ▸ Never) and in the full-screen preview.
@@ -98,7 +100,10 @@ Mac only, like every fork feature.
   `test-hooks`), `crates/engine/src/tests/decontaminate.rs` (`MaskShape::people(..)`),
   `crates/ui-egui/src/panels/detail/people_picker.rs` (`Picker::note`, a line under the faces; a `face` past the
   chips picks none) and its
-  callers (`portrait/overlay.rs`, `people_picker/tests.rs`).
+  callers (`portrait/overlay.rs`, `people_picker/tests.rs`); the parts dropdown in `people_picker/parts_menu.rs`
+  (`PartItem::group` for its headers).
+- `crates/ui-egui/src/widgets.rs` (`register_opener`, `open_menu_for`) and `crates/ui-egui/src/app/control.rs`
+  (`resolve_pending_gestures`): `ui.clickWidget` on a row of the closed parts menu opens it first.
 
 ## Tests
 
@@ -120,7 +125,8 @@ is refused), preview and export drawing the same mask, the mask after closing an
 UI: Person, Background and Custom, the picker making and changing masks, ⌘-click, folding, hiding with the tool
 overlay, and a photo without people. A fake runner stands in for the parser: no test needs a model.
 Pictures: `lightcraft-cli snapshot --script <script>.jsonl -o out.png PHOTO` with `ui.clickWidget` on
-`button:maskMode-person`, `selectPeople:part:<id>` (`"cmd": true` adds) and `selectPeople:face:<n>`.
+`button:maskMode-person`, `selectPeople:parts` (the dropdown), `selectPeople:part:<id>` (opens the menu when it is
+closed; `"cmd": true` adds) and `selectPeople:face:<n>`.
 
 ## What's New entry
 

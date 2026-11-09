@@ -187,6 +187,8 @@ fn the_subject_edge_applies_to_subject_and_background_not_sky() {
     let _ = std::fs::remove_dir_all(dir);
 }
 
+// Without `sam` the build has no BiRefNet Matting at all, so the choice is refused for that reason instead.
+#[cfg(feature = "sam")]
 #[test]
 fn a_missing_or_damaged_model_is_a_message_not_a_panic() {
     let (h, dir, _) = edges("damaged");

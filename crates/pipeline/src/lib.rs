@@ -55,6 +55,8 @@ pub mod redeye;
 pub mod reshape_step;
 pub mod residual_look;
 pub mod retouch_step;
+// fork: `fork/perf-portrait-draft.md`
+pub mod kept_budget;
 pub mod spot_area;
 pub mod spots;
 pub mod spots_keep;
@@ -434,6 +436,9 @@ impl StageCache {
             if let Some((_, l)) = &e.lin {
                 add(Arc::as_ptr(l) as usize, size(l));
             }
+            if let Some(l) = e.pre_retouch.as_ref().and_then(|(_, k)| k.peek()) {
+                add(Arc::as_ptr(&l) as usize, size(&l));
+            }
             let pl = &e.planes;
             let planes = pl.log_l.iter().chain(pl.base.iter().map(|x| &x.1)).chain(pl.clarity.iter().map(|x| &x.1));
             for p in planes.chain(pl.texture.iter().map(|x| &x.1)).chain(pl.sharpen.iter().map(|x| &x.1)).chain(pl.dark.iter().map(|x| &x.1)) {
@@ -472,6 +477,10 @@ impl StageCache {
     fn put(&self, e: CacheEntry) {
         let mut v = self.lock();
         v.retain(|o| !(o.geo == e.geo && Arc::ptr_eq(&o.src, &e.src)));
+        // (another photo's image before its retouching is of no use to this one's sliders)
+        for o in v.iter_mut().filter(|o| !Arc::ptr_eq(&o.src, &e.src)) {
+            o.pre_retouch = None;
+        }
         v.push(e);
         while v.len() > self.capacity {
             v.remove(0);
@@ -485,6 +494,10 @@ struct CacheEntry {
     geo: u64,
     sampled: Arc<Rgb32f>,
     lin: Option<(u64, Arc<Rgb32f>)>,
+    /// Fork (`fork/perf-portrait-draft.md`): the image before the retouch step, by [`Plan::pre_retouch_key`], kept
+    /// while retouching is on, so a Portrait slider redoes only the step and what follows (under
+    /// [`kept_budget::HOST`], which may let it go).
+    pre_retouch: Option<(u64, kept_budget::Kept<Rgb32f>)>,
     /// The joint colour NR's noise model of the whole frame ([`colour_noise`]), keyed by [`Plan::noise_key`].
     colour_noise: Option<(u64, nrc_joint::JointNoise)>,
     planes: local::Planes,
@@ -524,6 +537,9 @@ pub struct Plan<'a> {
     /// [`Self::lin_key`] without the noise-reduction settings: draft renders reuse the smooth
     /// planes of an image that differs from this one only in its noise reduction.
     pub pre_nr_key: u64,
+    /// [`Self::pre_nr_key`] without the portrait retouching (fork, `fork/perf-portrait-draft.md`): the key of the
+    /// image before the retouch step, which a Portrait slider leaves alone.
+    pub pre_retouch_key: u64,
     /// Key of the whole frame's noise model for the joint colour NR ([`colour_noise`]): what it is
     /// measured after (everything before the colour NR), not the colour NR's own settings.
     pub noise_key: u64,
@@ -629,7 +645,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let (wb_t, wb_tint) = local::effective_wb(info, s);
     let eyes = redeye::resolve(src, &s.red_eye, s.orientation, &frame, w, h, px_per_long);
     let d = &s.detail;
-    let pre_nr_key = hash_of((
+    let pre_retouch_key = hash_of((
         geo,
         [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
         format!("{:?}", s.spots),
@@ -644,16 +660,19 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         req.quality == Quality::Draft && s.spots.iter().any(spots_learned::is_learned),
         // and the size a learned fill sees its crops at
         s.spots.iter().any(spots_learned::is_learned).then_some(native_long),
-        retouch_step::key(s, info),
     ));
-    let lin_key = hash_of((
-        pre_nr_key,
+    let pre_nr_key = hash_of((pre_retouch_key, retouch_step::key(s, info)));
+    let nr_key = hash_of((
         [d.nr_luminance, d.nr_detail, d.nr_contrast, d.nr_color, d.nr_color_detail, d.nr_color_smoothness].map(f64::to_bits),
         detail_scale.to_bits(),
         // the process picks the colour filter (Update to Current Process, undo)
         local::joint_colour_nr(s),
     ));
-    let noise_key = hash_of((pre_nr_key, [d.nr_luminance, d.nr_detail].map(f64::to_bits), detail_scale.to_bits()));
+    let lin_key = hash_of((pre_nr_key, nr_key));
+    // (the noise model leaves the retouching out: a Portrait slider never measures it again; but whether a one-tile
+    // frame is measured apart from the retouching, `colour_noise`, is part of it)
+    let noise_key =
+        hash_of((pre_retouch_key, [d.nr_luminance, d.nr_detail].map(f64::to_bits), detail_scale.to_bits(), retouch_step::touches(s, info)));
     Plan {
         settings,
         frame,
@@ -666,6 +685,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         geo,
         lin_key,
         pre_nr_key,
+        pre_retouch_key,
         noise_key,
         eyes,
         fixed_air,
@@ -682,6 +702,9 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
 /// tone-mapped, white-balanced and luminance-denoised like the frame; the retouching and defringing
 /// are left out. `None` when the joint colour NR is off, or when the render is the whole frame and
 /// that is a single tile: the noise is then measured on the image itself, as the CPU and the GPU do.
+/// With portrait retouching on and a face to retouch ([`retouch_step::touches`]), a single tile is measured here too
+/// (fork, `fork/perf-portrait-draft.md`): the retouching then changes no pixel's noise reduction away from the faces,
+/// and a Portrait slider never measures the noise again. [`Plan::noise_key`] holds which way it was measured.
 pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc_joint::JointNoise> {
     let s = &*p.settings;
     if !local::joint_colour_nr(s) || local::nrc_params(s, p.detail_scale).is_none() {
@@ -689,7 +712,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
     }
     let (full, fw, fh) = &p.full;
     let windows = nrc_joint::tiles(*fw, *fh);
-    if (p.w, p.h) == (*fw, *fh) && windows.len() == 1 {
+    if (p.w, p.h) == (*fw, *fh) && windows.len() == 1 && !retouch_step::touches(s, info) {
         return None;
     }
     let t = profiling().then(std::time::Instant::now);
@@ -737,6 +760,14 @@ pub fn lin_needs_cpu(s: &DevelopSettings, info: &SourceInfo) -> bool {
 /// The white-balanced, defringed, retouched image (before noise reduction): the CPU part of the
 /// scene-linear stage, in place.
 pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
+    lin_cpu_pre_retouch(img, info, p);
+    retouch_step::apply(img, info, p);
+}
+
+/// [`lin_cpu`] up to the portrait retouching: the white-balanced, defringed image with its spots and red eye (the
+/// image keyed by [`Plan::pre_retouch_key`]).
+pub fn lin_cpu_pre_retouch(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
+    retouch_step::note_pre_retouch_run();
     let s = &*p.settings;
     // LaMa spots first, before the white balance: the learned fill then depends on the picture alone
     let learned = learned_fill::current().filter(|_| s.spots.iter().any(spots_learned::is_learned));
@@ -749,7 +780,6 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     optics::defringe(img, s, p.px_per_long / optics::DEFRINGE_REF_LONG);
     spots::apply_except(img, &s.spots, &done, &p.frame, p.px_per_long);
     redeye::apply(img, &p.eyes);
-    retouch_step::apply(img, info, p);
 }
 
 /// The settings a render of `s` for `req` uses: the HDR edit for an [`OutputDepth::F32Hdr`]
@@ -876,18 +906,46 @@ fn render_impl(
     lap("sample", &mut t);
 
     let mut colour_noise = cached.as_ref().and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key);
+    // (with retouching on, the image before it is kept: a Portrait slider starts from it, fork
+    // `fork/perf-portrait-draft.md`)
+    let kept_pre_retouch = cached
+        .as_ref()
+        .and_then(|e| e.pre_retouch.clone())
+        .filter(|(k, _)| retouch_step::active(s) && *k == plan.pre_retouch_key)
+        .and_then(|(k, kept)| kept.get().map(|img| (k, kept, img)));
+    let mut pre_retouch = None;
     let lin = match cached.as_ref().and_then(|e| e.lin.clone()).filter(|(k, _)| *k == lin_key) {
-        Some((_, img)) => img,
+        Some((_, img)) => {
+            pre_retouch = kept_pre_retouch.map(|(k, kept, _)| (k, kept));
+            img
+        }
         None => {
-            // Without a cache the resampled buffer is ours: work on it in place.
-            let mut img = if shared.is_some() { (*sampled).clone() } else { Arc::unwrap_or_clone(sampled.clone()) };
-            if let Some((a, c)) = shared {
-                let kept = spots_keep::lin_cpu(&mut img, info, &plan, c.spots.get(a, geo).as_deref());
-                let bytes = kept.as_ref().map_or(0, |k| k.bytes());
-                c.spots.put(a, geo, kept, bytes);
-            } else {
-                lin_cpu(&mut img, info, &plan);
+            let mut img = match (shared, &kept_pre_retouch) {
+                (Some(_), Some((_, _, pre))) => (**pre).clone(),
+                (Some((a, c)), None) => {
+                    let mut img = (*sampled).clone();
+                    let kept = spots_keep::lin_cpu_pre_retouch(&mut img, info, &plan, c.spots.get(a, geo).as_deref());
+                    let bytes = kept.as_ref().map_or(0, |k| k.bytes());
+                    c.spots.put(a, geo, kept, bytes);
+                    img
+                }
+                // Without a cache the resampled buffer is ours: work on it in place.
+                (None, _) => {
+                    let mut img = Arc::unwrap_or_clone(sampled.clone());
+                    lin_cpu_pre_retouch(&mut img, info, &plan);
+                    img
+                }
+            };
+            if shared.is_some() && retouch_step::active(s) {
+                pre_retouch = Some(match kept_pre_retouch {
+                    Some((k, kept, _)) => (k, kept),
+                    None => {
+                        let bytes = img.data.len() * std::mem::size_of::<[f32; 3]>();
+                        (plan.pre_retouch_key, kept_budget::Kept::new(Arc::new(img.clone()), &[(&kept_budget::HOST, bytes)]))
+                    }
+                });
             }
+            retouch_step::apply(&mut img, info, &plan);
             if colour_noise.is_none() {
                 colour_noise = self::colour_noise(src_img, info, &plan).map(|n| (plan.noise_key, n));
             }
@@ -926,7 +984,7 @@ fn render_impl(
     };
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
-        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), colour_noise, planes, masks: alphas, split });
+        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), pre_retouch, colour_noise, planes, masks: alphas, split });
     }
     if let Some(job) = alphas_out {
         let signature = masks::planes_signature(&plan, src_img as *const Rgb32f as usize, job.ask.want);
@@ -1139,6 +1197,8 @@ mod tests_nr_scale;
 mod tests_recolor_render;
 #[cfg(test)]
 mod tests_retouch_blemish;
+#[cfg(test)]
+mod tests_retouch_cache;
 #[cfg(test)]
 mod tests_retouch_teeth_lips;
 #[cfg(test)]
