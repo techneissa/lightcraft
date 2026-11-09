@@ -1,0 +1,3 @@
+# #124: no seam where people's crops and masks meet
+cargo test -p lightcraft-parsing --lib -- where_two_boxes two_people_side_by_side
+cargo test -p lightcraft-engine --lib -- two_people_side_by_side

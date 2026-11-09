@@ -40,6 +40,11 @@
 
 ## 2026-11-09
 
+### Portrait Background: Blur, Swap and Clean Backdrop
+- Blur softens the background more the farther it is behind the person, from an iPhone Portrait photo's depth map or from the distance to the person, with no halo round the hair.
+- Swap puts a colour, a picture or another photo behind the person; strands of hair keep their own colour at the edge. A picture is copied into the library, so the edit keeps working when the original file moves.
+- Clean Backdrop smooths creases, scuffs and banding on studio paper and keeps what stands in front of it.
+
 ### Stray Hair in the Portrait Tab
 The Portrait tab's Stray Hair section cleans flyaways around the hair and stray strands across the face, for every
 face or the one you pick. Amount sets how much; beards, eyebrows, lashes, clothes and the hair itself are left alone.

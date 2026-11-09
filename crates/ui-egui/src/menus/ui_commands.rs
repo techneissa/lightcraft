@@ -172,6 +172,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // fork: the Portrait tab; {section, open?} opens or closes one of its sections
     ("panel.portrait", "Portrait", Some("T"), "Window"),
     ("portrait.section", "Portrait Section", None, ""),
+    // fork: {path?, id?} a picture file for Portrait ▸ Background ▸ Swap (`fork/retouch-background.md`)
+    ("portrait.backgroundPicture", "Choose Background Picture", None, ""),
     ("panel.presets", "Presets", Some("Shift+P"), "Window"),
     ("panel.info", "Info", Some("I"), "Window"),
     ("panel.keywords", "Keywords", Some("K"), "Window"),
