@@ -20,6 +20,8 @@
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 mod census;
+// fork (`fork/retouch-background.md`): the depth map Portrait ▸ Background ▸ Blur reads
+mod depth;
 mod orient;
 /// Lossless synthetic HEIF files for tests, here and in the crates above (feature `testdata`).
 #[cfg(any(test, feature = "testdata"))]
@@ -27,6 +29,8 @@ mod orient;
 pub mod testdata;
 mod vui;
 mod ycc;
+
+pub use depth::{DepthMap, decode_depth};
 
 use std::borrow::Cow;
 

@@ -26,6 +26,8 @@ pub mod encode;
 pub mod exif;
 pub mod gainmap;
 mod heif;
+// fork (`fork/retouch-background.md`)
+pub use heif::decode_depth;
 pub mod icc;
 mod jpeg;
 pub mod jpeg_par;

@@ -561,6 +561,9 @@ pub struct Plan<'a> {
     pub recolor: Vec<(u32, recolor::Reference)>,
     /// The whole frame and its output size (a windowed render's [`Self::frame`] is part of it).
     pub full: (geometry::Frame, usize, usize),
+    /// Fork (`fork/retouch-background.md`): Background's analysis image of the whole frame before the retouch step
+    /// ([`retouch_step::analysis`]); `None` while Background is off.
+    pub retouch_analysis: Option<Arc<lightcraft_develop::retouch::background::Analysis>>,
 }
 
 /// The original's long edge in pixels (an original reported smaller than the source is the source).
@@ -673,7 +676,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     // frame is measured apart from the retouching, `colour_noise`, is part of it)
     let noise_key =
         hash_of((pre_retouch_key, [d.nr_luminance, d.nr_detail].map(f64::to_bits), detail_scale.to_bits(), retouch_step::touches(s, info)));
-    Plan {
+    let mut plan = Plan {
         settings,
         frame,
         w,
@@ -694,7 +697,10 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         draft: req.quality == Quality::Draft,
         recolor,
         full,
-    }
+        retouch_analysis: None,
+    };
+    plan.retouch_analysis = retouch_step::analysis(src, info, &plan);
+    plan
 }
 
 /// The joint colour NR's noise model of the whole frame, measured on fixed tiles of it
@@ -735,6 +741,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
                 mattes: None,
                 recolor: Vec::new(),
                 full: p.full.clone(),
+                retouch_analysis: None,
                 ..*p
             };
             local_tone::apply(&mut img, info, &tile);

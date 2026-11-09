@@ -241,6 +241,9 @@ pub(crate) fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Va
     if id == "portrait.refine" {
         return refine::command(app, p);
     }
+    if id == background::CHOOSE_PICTURE {
+        return background::choose_picture(app, p);
+    }
     if id != "portrait.section" {
         return Err(format!("{id}: unknown command"));
     }

@@ -384,6 +384,30 @@ fn a_face_reshape_is_fork_format_6() {
     assert_eq!((got.global.reshape.slim_face, got.faces[0].settings.reshape.chin), (40.0, 30.0));
 }
 
+/// Fork 7 (#141): Portrait Background's sliders and what Swap puts behind the person are saved and read back, written
+/// as fork 7 so a fork 6 build refuses them instead of dropping them; a fork 6 library opens and is upgraded with
+/// nothing lost.
+#[test]
+fn a_portrait_background_is_fork_format_7() {
+    use lightcraft_develop::retouch::background::{Background, Swap};
+    const { assert!(VERSION >= 7) };
+    let mut d = DevelopSettings::default();
+    let b = Background { blur: 40.0, swap: 70.0, clean: 25.0, with: Swap::Picture { hash: "ab".repeat(32) } };
+    d.retouch.global.background = b.clone();
+    let mut c = Catalog::new();
+    let id = photo(&mut c, d, None);
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snapshot(FORK_FORMAT, 6, 1, &c.to_snapshot()));
+    let (mut j, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.upgraded_from, loaded.to_snapshot()), (Some(6), c.to_snapshot()));
+    assert_eq!(header(&m), (FORK_FORMAT.to_string(), u64::from(VERSION)));
+    j.snapshot(&loaded).unwrap();
+    drop(j);
+    let (_, again, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, None);
+    assert_eq!(again.photo(id).unwrap().develop.retouch.global.background, b);
+}
+
 /// Fork 8 (#99): Refine strokes, for every face and a face's own, are saved and read back whole, written as fork 8 so
 /// an older build refuses them instead of dropping them; a fork 7 library opens and is upgraded with nothing lost.
 #[test]
