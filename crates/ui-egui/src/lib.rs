@@ -357,6 +357,8 @@ pub struct LightcraftApp {
     pub reflection_photo: Option<lightcraft_catalog::PhotoId>,
     /// Fork feature (fork/glare-highlights.md): the Reflections section's mode, area and glare choices.
     pub reflection_glare: reflections_glare::GlarePanel,
+    /// Fork feature (fork/refine-brush.md): the Portrait tab's Refine brush in hand, and Show Refine Strokes.
+    pub portrait_refine: panels::portrait::RefineTool,
     /// An import in progress (the import review dialog's batches).
     pub import: Option<import::ImportTask>,
     /// A folder scan in progress (feeds the import review).

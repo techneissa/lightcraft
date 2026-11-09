@@ -2734,5 +2734,21 @@
   "Welcome": "Benvenuto",
   "Next": "Avanti",
   "Get Started": "Inizia",
-  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto"
+  "Stopped at the scan limit: there may be more photos": "Fermati al limite di scansione: potrebbero esserci altre foto",
+  "Swap With": "Sostituisci con",
+  "White": "Bianco",
+  "Light Grey": "Grigio chiaro",
+  "Grey": "Grigio",
+  "Black": "Nero",
+  "Choose Colour": "Scegli colore",
+  "Choose Picture…": "Scegli immagine…",
+  "Use a Photo…": "Usa una foto…",
+  "Loading…": "Caricamento…",
+  "Choose Background Picture…": "Scegli immagine di sfondo…",
+  "Images": "Immagini",
+  "Background Picture Missing": "Immagine di sfondo mancante",
+  "Blur": "Sfocatura",
+  "Clean Backdrop": "Pulisci fondale",
+  "Loading background picture": "Caricamento dell’immagine di sfondo",
+  "Reading depth map": "Lettura della mappa di profondità"
 }

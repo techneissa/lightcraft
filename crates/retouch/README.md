@@ -40,6 +40,10 @@ In the module:
 - **`apply`**: retouch the image in place (see the rules below). The panel section draws its sliders with
   `cx.slider("retouch.<KEY>.<field>")`, which writes to every face or to the picked one.
 
+- **Refine**: nothing to do. Every feature gets the Refine brush (Reduce, Restore, Add; `src/refine.rs`,
+  `fork/refine-brush.md`) from the step and the tab's section loop. Add widens `Feature::ADD_PARTS`, by default the
+  first of `PARTS`; set it when another part is the one a missed spot belongs to (one line).
+
 Never edit `lib.rs`, `settings.rs`, `run.rs` or the tab's list of sections (`crates/ui-egui/src/panels/portrait.rs`):
 they already list every feature. The tab's Portrait Presets section (`panels/portrait/presets.rs`) has no module here:
 a portrait preset carries, per feature, the fields that are numbers, switches or short lists of numbers (a colour), so

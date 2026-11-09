@@ -34,9 +34,11 @@ mod teeth_lips;
 mod wrinkles;
 
 mod overlay;
+mod refine;
 #[cfg(test)]
 pub(crate) use overlay::FOLDED;
 pub(crate) use overlay::overlay;
+pub(crate) use refine::{RefineTool, canvas as refine_canvas, overlay as refine_overlay};
 
 use lightcraft_develop::retouch as r;
 
@@ -49,10 +51,12 @@ pub(crate) struct Section {
     pub key: &'static str,
     pub title: &'static str,
     body: fn(&mut Ctx<'_>),
+    /// The feature's Refine brush row goes under its sliders (every feature; not Portrait Presets).
+    refine: bool,
 }
 
 const fn feature<F: Feature>(body: fn(&mut Ctx<'_>)) -> Section {
-    Section { key: F::KEY, title: F::LABEL, body }
+    Section { key: F::KEY, title: F::LABEL, body, refine: true }
 }
 
 /// The tab's sections, top to bottom: every retouching feature, then Portrait Presets. (The render order is
@@ -68,7 +72,7 @@ pub(crate) const SECTIONS: &[Section] = &[
     feature::<r::glare::Glare>(glare::body),
     feature::<r::background::Background>(background::body),
     feature::<r::hair::Hair>(hair::body),
-    Section { key: presets::KEY, title: presets::TITLE, body: presets::body },
+    Section { key: presets::KEY, title: presets::TITLE, body: presets::body, refine: false },
 ];
 
 /// What a feature's section draws with.
@@ -153,6 +157,7 @@ pub(crate) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
     let face = picked(ui.ctx(), photo).filter(|i| *i < input.faces.len());
     // the face picker is on the photo (`overlay`); here, which face the sliders change
     editing_line(ui, &st, face.and_then(|i| input.faces.get(i).map(|f| (i, f))));
+    refine::show_switch(app, ui);
     ui.add_space(6.0);
     divider(ui);
     let keys = app.session.retouch_key_map(photo);
@@ -168,6 +173,12 @@ pub(crate) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
         }
         if open {
             (s.body)(&mut cx);
+            // the Refine brush, the same for every feature (fork `fork/refine-brush.md`)
+            if s.refine
+                && let Some(f) = lightcraft_develop::retouch::FEATURES.iter().find(|f| f.key == s.key)
+            {
+                refine::row(&mut cx, f);
+            }
         }
         divider(cx.ui);
     }
@@ -224,8 +235,15 @@ pub(crate) fn save_right<S: serde::Serializer>(right: &RightPanel, s: S) -> Resu
 }
 
 /// The tab's UI commands: `portrait.section {section, open?}` opens the Portrait tab and opens or closes one of its
-/// sections (no `open`: toggles). Any other id: an error.
+/// sections (no `open`: toggles); `portrait.refine` takes or puts down a feature's Refine brush (`portrait/refine.rs`).
+/// Any other id: an error.
 pub(crate) fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, String> {
+    if id == "portrait.refine" {
+        return refine::command(app, p);
+    }
+    if id == background::CHOOSE_PICTURE {
+        return background::choose_picture(app, p);
+    }
     if id != "portrait.section" {
         return Err(format!("{id}: unknown command"));
     }

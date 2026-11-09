@@ -1,0 +1,9 @@
+cargo test -p lightcraft-retouch --test refine
+cargo test -p lightcraft-retouch --lib -- refine
+cargo test -p lightcraft-develop --lib -- retouch
+cargo test -p lightcraft-pipeline --lib -- tests_retouch_refine retouch_step
+cargo test -p lightcraft-catalog --lib -- fork_format format_version
+cargo test -p lightcraft-engine --lib -- retouch_input::tests
+cargo test -p lightcraft-ui-egui --lib -- portrait
+cargo test -p lightcraft-engine --lib -- portrait_presets
+cargo test -p lightcraft-pipeline --lib -- tests_retouch_cache

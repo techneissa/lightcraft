@@ -339,3 +339,86 @@ fn the_wrinkles_section_has_its_four_sliders() {
     let v = h.app.session.develop_of(photo).unwrap().retouch.global.get("retouch.wrinkles.forehead").unwrap_or(0.0);
     assert!(v > 40.0, "Forehead set by the click: {v}");
 }
+
+/// The Refine brush (#99, `portrait/refine.rs`): every feature's section has it; Reduce takes the brush, a drag on the
+/// photo paints one stroke (one undo step) for every face or the picked face alone, ⌥ swaps Reduce and Restore,
+/// Clear and the same button again put it away, and Add is offered only where the feature reads a mask.
+#[test]
+fn the_refine_brush_paints_strokes_for_a_feature() {
+    let mut session = lightcraft_engine::Session::with_demo();
+    session.retouch_faces.set_provider(Arc::new(TwoFaces));
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 1400.0], 1.0);
+    assert_eq!(h.request("ui.set", json!({"view": "detail"}), T)["ok"], true);
+    click(&mut h, "icon:portrait");
+    let photo = h.app.session.active().unwrap();
+    h.app.session.retouch_detect_now(photo, false).unwrap();
+    for f in FEATURES {
+        h.request("engine.execute", json!({"command": "portrait.section", "params": {"section": f.key, "open": true}}), T);
+    }
+    for _ in 0..3 {
+        h.step();
+    }
+    for f in FEATURES {
+        let geometry = f.stage == lightcraft_develop::retouch::Stage::Geometry;
+        assert_eq!(rect_of(&mut h, &format!("portrait:refine.{}.reduce", f.key)).is_some(), !geometry, "{} has Reduce", f.key);
+        assert_eq!(rect_of(&mut h, &format!("portrait:refine.{}.add", f.key)).is_some(), !geometry && !f.add_parts.is_empty(), "{} Add", f.key);
+    }
+    for key in [
+        "portrait.wrinkles",
+        "portrait.eyes",
+        "portrait.teethLips",
+        "portrait.skinTone",
+        "portrait.reshape",
+        "portrait.glare",
+        "portrait.background",
+        "portrait.hair",
+        "portrait.blemish",
+    ] {
+        h.request(
+            "engine.execute",
+            json!({"command": "portrait.section", "params": {"section": key.trim_start_matches("portrait."), "open": false}}),
+            T,
+        );
+    }
+    h.step();
+    click(&mut h, "portrait:refine.skin.reduce");
+    assert_eq!(h.app.portrait_refine.feature, Some("skin"));
+    assert!(rect_of(&mut h, "slider:portrait.refineStrength").is_some(), "the brush's sliders show");
+    let drag = |h: &mut Headless, y: f64| {
+        let r = h.request(
+            "ui.pointer",
+            json!({"events": [{"kind": "down", "x": 0.3, "y": y}, {"kind": "drag", "x": 0.33, "y": y}, {"kind": "drag", "x": 0.4, "y": y}, {"kind": "up", "x": 0.4, "y": y}]}),
+            T,
+        );
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+    };
+    let undo = h.app.session.undo.len();
+    drag(&mut h, 0.3);
+    let d = h.app.session.develop_of(photo).unwrap();
+    let strokes = d.retouch.refine.strokes("skin");
+    assert_eq!(strokes.len(), 1, "one stroke for every face");
+    assert_eq!(strokes[0].mode, lightcraft_develop::retouch::RefineMode::Reduce);
+    assert!(strokes[0].points.len() >= 2 && strokes[0].points.iter().all(|p| p.0 > 0.2 && p.0 < 0.5), "{:?}", strokes[0].points);
+    assert_eq!(h.app.session.undo.len(), undo + 1, "one undo step");
+    // the picked face alone gets its own
+    click(&mut h, "portrait:face:1");
+    drag(&mut h, 0.35);
+    let d = h.app.session.develop_of(photo).unwrap();
+    assert_eq!((d.retouch.refine.count(None), d.retouch.faces.len()), (1, 1));
+    assert_eq!(d.retouch.faces[0].refine.strokes("skin").len(), 2, "the face's own: the global stroke and its own");
+    click(&mut h, "portrait:face:all");
+    // Show Refine Strokes, Clear, and the button again
+    click(&mut h, "portrait:refineStrokes");
+    assert!(h.app.portrait_refine.show);
+    click(&mut h, "portrait:refine.skin.clear");
+    assert!(h.app.session.develop_of(photo).unwrap().retouch.refine.is_empty());
+    click(&mut h, "portrait:refine.skin.reduce");
+    assert_eq!(h.app.portrait_refine.feature, None, "put down");
+    // the command checks what it gets
+    for bad in [json!({"feature": "nope"}), json!({"feature": "reshape"}), json!({"mode": "erase"}), json!({"show": 3})] {
+        let r = h.request("engine.execute", json!({"command": "portrait.refine", "params": bad}), T);
+        assert_eq!(r["ok"], false, "{bad}: {r}");
+    }
+}

@@ -37,7 +37,7 @@ pub fn settings_with<T: Feature>(max: bool) -> Retouch {
         let v = if max { c.spec.max } else { c.spec.default };
         assert!(global.set(c.spec.id, v), "{} is not reachable by id", c.spec.id);
     }
-    Retouch { global, faces: Vec::new() }
+    Retouch::with_global(global)
 }
 
 fn run(img: &mut Rgb32f, r: &Retouch, input: &Input) {

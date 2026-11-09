@@ -356,7 +356,7 @@ fn a_photo_that_cant_take_it_is_reported_and_the_others_still_change() {
                 bounds: NormRect::new(x, 0.9, x + 0.01, 0.95),
                 frame: KeyFrame::Photo,
             },
-            settings: Default::default(),
+            ..Default::default()
         });
     }
     s.set_develop(vis[2], d, "setup").unwrap();
@@ -427,4 +427,33 @@ fn many_photos_are_worked_out_in_the_background_with_an_activity_row() {
     let want = if r["state"] == "cancelled" { 55.0 } else { 10.0 };
     assert!(r["state"] == "cancelled" || r["state"] == "done", "{r}");
     assert_eq!(smoothness_of(&s, ids[0], &[face(LEFT, Some("bob")), face(RIGHT, Some("ann"))]), [0.0, want]);
+}
+
+/// A portrait preset carries a face's sliders, never its Refine strokes (#99): saved from a face with strokes (its
+/// own and every face's), applied to the same person on another photo, the strokes stay on the first photo only.
+#[test]
+fn a_portrait_preset_never_carries_refine_strokes() {
+    let (mut s, vis) = demo_with(vec![face(LEFT, Some("ann")), face(RIGHT, Some("bob"))]);
+    regions(&mut s, vis[0], vec![region(LEFT, Some("Ann")), region(RIGHT, Some("Bob"))]);
+    s.execute("retouch.detect", &json!({})).unwrap();
+    s.execute("retouch.set", &json!({"control": SMOOTH, "value": 70, "face": 0})).unwrap();
+    s.execute("retouch.refine.stroke", &json!({"feature": "skin", "points": [[0.2, 0.3]], "face": 0})).unwrap();
+    s.execute("retouch.refine.stroke", &json!({"feature": "skin", "mode": "add", "points": [[0.25, 0.35]]})).unwrap();
+    let r = s.execute("retouch.savePreset", &json!({"name": "Ann Look", "face": 0, "others": true})).unwrap();
+    let pid = r["id"].as_str().unwrap().to_string();
+    // (the stored preset itself: the list shows names only)
+    let stored = s.presets.iter().find(|p| p.id == pid).unwrap().settings[KEY].to_string();
+    let first = retouch(&s, vis[0]);
+    assert_eq!((first.refine.count(None), first.faces[0].refine.count(None)), (1, 1));
+    // (the JSON that would carry strokes shows the word `strokes`, so this check can fail)
+    assert!(serde_json::to_string(&first).unwrap().contains("\"strokes\""));
+    assert!(stored.contains("smoothness") && stored.contains("70"), "the stored preset has the sliders: {stored}");
+    assert!(!stored.contains("strokes") && !stored.contains("refine"), "no strokes in the saved preset: {stored}");
+    regions(&mut s, vis[1], vec![region(LEFT, Some("Ann"))]);
+    s.execute("preset.apply", &json!({"id": pid, "ids": [vis[1].0]})).unwrap();
+    let got = retouch(&s, vis[1]);
+    assert_eq!(got.faces.len(), 1, "Ann's face got the sliders");
+    assert_eq!(smoothness_of(&s, vis[1], &[face(LEFT, Some("ann"))]), [70.0], "(the preset was applied)");
+    assert!(got.refine.is_empty() && got.faces[0].refine.is_empty(), "and no strokes");
+    assert_eq!(retouch(&s, vis[0]).faces[0].refine.count(None), 1, "the first photo keeps its own");
 }

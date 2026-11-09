@@ -2569,5 +2569,21 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "先以 --control 7980 (或 LIGHTCRAFT_CONTROL_PORT) 启动应用，lightcraft-cli mcp --connect 即可将一个智能体接入其中。",
   "Welcome": "欢迎",
   "Next": "下一步",
-  "Get Started": "开始使用"
+  "Get Started": "开始使用",
+  "Swap With": "替换为",
+  "White": "白色",
+  "Light Grey": "浅灰色",
+  "Grey": "灰色",
+  "Black": "黑色",
+  "Choose Colour": "选择颜色",
+  "Choose Picture…": "选择图片…",
+  "Use a Photo…": "使用照片…",
+  "Loading…": "正在载入…",
+  "Choose Background Picture…": "选择背景图片…",
+  "Images": "图片",
+  "Background Picture Missing": "背景图片缺失",
+  "Blur": "模糊",
+  "Clean Backdrop": "清理背景",
+  "Loading background picture": "正在载入背景图片",
+  "Reading depth map": "正在读取深度图"
 }

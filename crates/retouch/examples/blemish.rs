@@ -92,7 +92,7 @@ fn run(args: &[String]) -> Result<(), String> {
     let find_ms = t.elapsed().as_secs_f64() * 1e3;
     let settings = global.blemish.clone();
     report(&faces, &settings, find_ms, parse.width, parse.height);
-    let r = Retouch { global, faces: Vec::new() };
+    let r = Retouch::with_global(global);
     let input = Input::new(faces);
     let view = WholePhoto { width: w, height: h };
     let mut best = f64::INFINITY;

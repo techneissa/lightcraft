@@ -94,14 +94,17 @@ pub fn active(s: &DevelopSettings) -> bool {
     s.section_enabled("portrait") && !s.retouch.is_off()
 }
 
-/// The stored JSON leaves the block out while it is the default, and its face list while it is empty; JSON that is
-/// copied, merged or compared key by key (copy / paste, presets, sync) states both, so copying an unretouched photo's
-/// Portrait settings turns retouching off and drops the faces' own settings (a merge keeps what a patch leaves out).
+/// The stored JSON leaves the block out while it is the default, and its face list and Refine strokes while they are
+/// empty; JSON that is copied, merged or compared key by key (copy / paste, presets, sync) states them, so copying an
+/// unretouched photo's Portrait settings turns retouching off and drops the faces' own settings and the strokes (a
+/// merge keeps what a patch leaves out).
 pub(crate) fn state_for_merge(v: &mut Value, s: &DevelopSettings) {
     let Some(o) = v.as_object_mut() else { return };
     let block = o.entry(KEY).or_insert_with(|| serde_json::to_value(&s.retouch).unwrap_or(Value::Null));
     if let Some(b) = block.as_object_mut() {
         b.entry("faces").or_insert_with(|| Value::Array(Vec::new()));
+        // (the Refine strokes too: pasting a photo's Portrait settings without strokes takes the target's away)
+        b.entry("refine").or_insert_with(|| Value::Array(Vec::new()));
     }
 }
 
@@ -188,5 +191,30 @@ mod tests {
         assert_eq!(crate::apply_partial(&src, &light, 1.0).retouch, src.retouch);
         // one photo's face edits, like masks and spots: copied only when ticked by hand
         assert!(!SettingsGroup::default_copy().contains(&SettingsGroup::Portrait));
+    }
+
+    /// Refine strokes (#99) go with the Portrait group (copy / paste, sync, `develop.merge`), for every face and a
+    /// face's own; copying a photo without strokes takes the target's away; the JSON round trip keeps them.
+    #[test]
+    fn the_portrait_group_carries_refine_strokes() {
+        let mut src = DevelopSettings::default();
+        controls::set(&mut src, "retouch.skin.smoothness", 40.0);
+        let stroke = |mode| RefineStroke { mode, points: vec![(0.2, 0.3), (0.25, 0.35)], ..RefineStroke::default() };
+        assert!(src.retouch.refine.push("skin", stroke(RefineMode::Reduce)));
+        let face = Face::boxed(NormRect::new(0.1, 0.1, 0.3, 0.3));
+        let own = src.retouch.own_mut_in(std::slice::from_ref(&face), 0, None).unwrap();
+        assert!(own.refine.push("teethLips", stroke(RefineMode::Add)));
+        let part = crate::extract_groups(&src, &[SettingsGroup::Portrait]);
+        let dst = crate::apply_partial(&DevelopSettings::default(), &part, 1.0);
+        assert_eq!(dst.retouch, src.retouch);
+        assert_eq!(dst.retouch.faces[0].refine.strokes("teethLips").len(), 1);
+        // a source with sliders but no strokes takes the target's strokes away
+        let mut plain = DevelopSettings::default();
+        controls::set(&mut plain, "retouch.skin.smoothness", 40.0);
+        let part = crate::extract_groups(&plain, &[SettingsGroup::Portrait]);
+        assert!(crate::apply_partial(&src, &part, 1.0).retouch.refine.is_empty());
+        // stored and read back (sidecar, catalog, history)
+        let back = DevelopSettings::from_json(&src.to_json()).unwrap();
+        assert_eq!(back.retouch, src.retouch);
     }
 }
