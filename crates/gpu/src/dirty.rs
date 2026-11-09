@@ -69,6 +69,31 @@ pub(crate) fn next_frame() -> u64 {
     FRAMES.fetch_add(1, Ordering::Relaxed)
 }
 
+/// What a job made on the host of a render with a view's stages (its colour conversions, its fit), kept with the
+/// stages under that render's frame number: the next job patches it where the next render changed.
+pub type HostData = Arc<dyn std::any::Any + Send + Sync>;
+
+pub(crate) struct HostKept {
+    frame: u64,
+    data: HostData,
+    /// Host memory `data` holds (counted in [`crate::GpuStages::bytes`]).
+    pub(crate) bytes: usize,
+}
+
+/// Keep `data` (holding `bytes` of host memory) as what was made on the host of frame `frame` of the view whose stages
+/// are `stages` (replacing what was kept before).
+pub fn keep_host(stages: &lightcraft_pipeline::StageCache, frame: u64, data: HostData, bytes: usize) {
+    let s = stages.extension::<crate::GpuStages>();
+    *s.host.lock().unwrap_or_else(|e| e.into_inner()) = Some(HostKept { frame, data, bytes });
+}
+
+/// What was kept on the host of frame `frame` ([`keep_host`]), if that is what is kept.
+pub fn host_of(stages: &lightcraft_pipeline::StageCache, frame: u64) -> Option<HostData> {
+    let s = stages.peek_extension::<crate::GpuStages>()?;
+    let g = s.host.lock().unwrap_or_else(|e| e.into_inner());
+    g.as_ref().filter(|k| k.frame == frame).map(|k| k.data.clone())
+}
+
 /// A set of [`TILE`] × [`TILE`] tiles of a `w × h` output.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Tiles {

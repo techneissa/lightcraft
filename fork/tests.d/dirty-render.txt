@@ -1,3 +1,5 @@
 # An edit renders only the tiles it changed (issue #111)
 cargo test -p lightcraft-gpu --lib -- dirty
-cargo test -p lightcraft-gpu --test it -- dirty_render spot_cache equivalence dropped_work_in_an_incremental_render the_kept_chroma_plane
+cargo test -p lightcraft-gpu --test it -- dirty_render spot_cache equivalence dropped_work_in_an_incremental_render a_render_failed_by_another_thread the_kept_chroma_plane
+cargo test -p lightcraft-engine --lib -- media::dirty
+cargo test -p lightcraft-ui-egui --lib -- render:: tests::remove_lag

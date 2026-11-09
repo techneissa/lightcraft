@@ -177,6 +177,55 @@ struct Queued {
     job: RenderJob,
 }
 
+/// Put `color` (a `size` picture for `slot`) into `t`'s texture: only the rectangles `changed` says differ when the
+/// texture shows the picture it was changed from (`shown`: that picture and the texture), else all of it.
+fn upload(
+    t: &mut Tex,
+    slot: Slot,
+    (shown, changed): (Option<(u64, egui::TextureId)>, Option<&lightcraft_engine::media::dirty::Changed>),
+    color: &Arc<egui::ColorImage>,
+    size: [usize; 2],
+) {
+    let t0 = clock();
+    let rects = match (changed.and_then(|c| c.from.map(|f| (f, &c.rects))), shown) {
+        (Some((from, rects)), Some((frame, id))) if from == frame && id == t.tex.id() && t.native.is_none() && t.size == size => Some(rects),
+        _ => None,
+    };
+    match rects {
+        Some(rects) => {
+            for r in rects {
+                t.tex.set_partial([r[0], r[1]], sub_image(color, r), egui::TextureOptions::LINEAR);
+            }
+        }
+        None => t.tex.set(color.clone(), egui::TextureOptions::LINEAR),
+    }
+    if lightcraft_pipeline::profiling() {
+        let how = rects.map_or_else(|| "whole".to_string(), |r| format!("{} rectangles", r.len()));
+        eprintln!("  ui: {slot:?} texture set {:.1} ms, {how} (at {:.1})", ms(t0, clock()), stamp());
+    }
+}
+
+use lightcraft_engine::media::dirty::{clock, ms};
+
+/// The rectangle `[x0, y0, x1, y1)` of `img`, as an image (a partial texture upload).
+pub(crate) fn sub_image(img: &egui::ColorImage, r: &[usize; 4]) -> egui::ColorImage {
+    let [w, h] = img.size;
+    let (x0, x1, y0, y1) = (r[0].min(w), r[2].min(w), r[1].min(h), r[3].min(h));
+    let (x1, y1) = (x1.max(x0), y1.max(y0));
+    let mut pixels = Vec::with_capacity((x1 - x0) * (y1 - y0));
+    for y in y0..y1 {
+        pixels.extend_from_slice(img.pixels.get(y * w + x0..y * w + x1).unwrap_or_default());
+    }
+    egui::ColorImage { size: [x1 - x0, y1 - y0], source_size: egui::vec2((x1 - x0) as f32, (y1 - y0) as f32), pixels }
+}
+
+/// Milliseconds since the first call (`LIGHTCRAFT_PROFILE` lines that follow one edit through the threads; only those
+/// call it).
+pub(crate) fn stamp() -> f64 {
+    static START: std::sync::OnceLock<web_time::Instant> = std::sync::OnceLock::new();
+    START.get_or_init(web_time::Instant::now).elapsed().as_secs_f64() * 1e3
+}
+
 /// The texture of a render: its pixels as egui wants them. Renders are opaque, so the common case
 /// is a plain copy; only a pixel with alpha pays for premultiplying. (The generic conversion, on
 /// the UI thread, was most of the time a 5 MP zoom window took to show.)
@@ -374,7 +423,7 @@ pub struct Renderer {
     /// The frame the loupe last drew in ([`Self::loupe_drawn`]).
     loupe_frame: u64,
     /// Since when the loupe has not been drawn (see [`LOUPE_RELEASE`]).
-    loupe_gone: Option<std::time::Instant>,
+    loupe_gone: Option<web_time::Instant>,
     /// A budget other than the memory budget's share (tests).
     #[cfg(test)]
     pub(crate) stage_budget_override: Option<usize>,
@@ -391,6 +440,9 @@ pub struct Renderer {
     /// screenshot reads it back ([`Self::cpu_textures`]) instead of finding no pixels (a white
     /// photo, review of PR #1065).
     native_frames: HashMap<Slot, lightcraft_engine::media::ScreenFrame>,
+    /// Which render each slot's texture shows, and the texture (issue #111): a later render that changed only some
+    /// rectangles of that one uploads just those.
+    shown_frames: HashMap<Slot, (u64, egui::TextureId)>,
 }
 
 /// How many [`Slot::QuickAhead`] stand-ins the loupe keeps ready.
@@ -499,6 +551,7 @@ impl Renderer {
             screen: None,
             natives: HashMap::new(),
             native_frames: HashMap::new(),
+            shown_frames: HashMap::new(),
         }
     }
 }
@@ -702,11 +755,27 @@ impl Renderer {
 
     /// Run `job` and make its image ready for `display` (on the worker thread).
     fn run_for(job: impl FnOnce() -> RenderResult, display: &Option<Arc<lightcraft_engine::display::Display>>) -> Finished {
+        let t = clock();
         let mut r = job();
+        let t_present = clock();
         if let Some(d) = display {
             lightcraft_engine::display::present(&mut r, d);
         }
+        let t_color = clock();
         let color = r.rendered.as_ref().ok().map(|x| Arc::new(color_image(&x.image)));
+        if lightcraft_pipeline::profiling() {
+            let size = r.rendered.as_ref().map_or((0, 0), |x| (x.image.width, x.image.height));
+            eprintln!(
+                "  worker: job {:.1} ms, present {:.1} ms ({}), colour image {:.1} ms, {}×{} (at {:.1})",
+                ms(t, t_present),
+                ms(t_present, t_color),
+                if display.is_some() { "display" } else { "none" },
+                ms(t_color, clock()),
+                size.0,
+                size.1,
+                stamp()
+            );
+        }
         Finished { look: None, result: r, color }
     }
 
@@ -749,7 +818,7 @@ impl Renderer {
     /// stages were never released otherwise: the open photo's views are never trimmed). `now` is
     /// the clock; a frame after a long idle spell with the loupe open counts the loupe as open.
     /// Returns when to look again, if it is waiting.
-    fn release_closed_loupe(&mut self, now: std::time::Instant) -> Option<std::time::Duration> {
+    fn release_closed_loupe(&mut self, now: web_time::Instant) -> Option<std::time::Duration> {
         // (called at the start of a frame, before the loupe draws: it drew in the last one)
         if self.loupe_frame + 1 >= self.frame || !self.stages.contains_key(&Slot::Main) {
             self.loupe_gone = None;
@@ -849,11 +918,18 @@ impl Renderer {
         let key = job.key;
         let background = matches!(slot, Slot::Thumb(_) | Slot::ThumbQuick(_) | Slot::Prefetch(_));
         let display = self.display.clone();
+        let queued = clock();
+        if lightcraft_pipeline::profiling() && !background {
+            eprintln!("  ui: {slot:?} submitted (at {:.1})", stamp());
+        }
         self.pool.submit(
             slot,
             key,
             priority,
             Box::new(move || {
+                if lightcraft_pipeline::profiling() && !background {
+                    eprintln!("  worker: {slot:?} waited {:.1} ms in the queue (at {:.1})", ms(queued, clock()), stamp());
+                }
                 let look = Some((geometry_look(&job.settings), job.request.apply_crop));
                 let run = || if background { lightcraft_engine::memory::in_background(|| job.run()) } else { job.run() };
                 Finished { look, ..Self::run_for(run, &display) }
@@ -932,12 +1008,16 @@ impl Renderer {
         );
         let key = job.key;
         let display = self.display.clone();
+        let queued = clock();
         let background = matches!(slot, Slot::QuickAhead(_));
         self.pool.submit(
             slot,
             key,
             priority,
             Box::new(move || {
+                if lightcraft_pipeline::profiling() {
+                    eprintln!("  worker: {slot:?} waited {:.1} ms in the queue", ms(queued, clock()));
+                }
                 let run = || if background { lightcraft_engine::memory::in_background(|| job.run()) } else { job.run() };
                 Self::run_for(run, &display)
             }),
@@ -1355,7 +1435,8 @@ impl Renderer {
         self.follow_catalog(&session.catalog, &session.media.availability);
         self.frame += 1;
         self.trim_stages();
-        if let Some(wait) = self.release_closed_loupe(std::time::Instant::now()) {
+        // (`web_time`: the web has no `std::time::Instant`)
+        if let Some(wait) = self.release_closed_loupe(web_time::Instant::now()) {
             ctx.request_repaint_after(wait);
         }
         // wasm: run one job per frame on this thread, timed with the host clock
@@ -1460,6 +1541,15 @@ impl Renderer {
 
     /// Show a render that stayed on the GPU (`r.frame`) in `slot`; whether it could be. When it
     /// can't, views come back as pixels from then on.
+    /// Which picture `slot`'s texture now shows (`changed`: the job's): a later one that changed only some rectangles
+    /// uploads just those. A texture made anew, or a picture that says nothing, forgets it.
+    fn note_shown(&mut self, slot: Slot, changed: Option<&lightcraft_engine::media::dirty::Changed>) {
+        match (changed, self.textures.get(&slot)) {
+            (Some(c), Some(t)) => self.shown_frames.insert(slot, (c.frame, t.tex.id())),
+            _ => self.shown_frames.remove(&slot),
+        };
+    }
+
     fn show_frame(&mut self, ctx: &egui::Context, slot: Slot, r: &RenderResult, look: Option<(u64, bool)>, ms: f64) -> bool {
         let (Some(frame), Ok(rendered)) = (r.frame.as_ref(), r.rendered.as_ref()) else { return false };
         self.failed.remove(&slot);
@@ -1472,6 +1562,8 @@ impl Renderer {
             return false;
         };
         self.natives.insert(slot, id);
+        // (the texture shows no picture a later job patches)
+        self.shown_frames.remove(&slot);
         if self.keep_pixels {
             self.native_frames.insert(slot, frame.clone());
         }
@@ -1638,7 +1730,7 @@ impl Renderer {
             self.free_native(slot);
             match self.textures.get_mut(&slot) {
                 Some(t) => {
-                    t.tex.set(color, egui::TextureOptions::LINEAR);
+                    upload(t, slot, (self.shown_frames.remove(&slot), r.changed.as_ref()), &color, [img.width, img.height]);
                     t.native = None;
                     t.pixels = pixels;
                     t.look = look;
@@ -1668,6 +1760,7 @@ impl Renderer {
                     );
                 }
             }
+            self.note_shown(slot, r.changed.as_ref());
             if first_thumb {
                 self.thumbs_made += 1;
             }
@@ -2166,6 +2259,7 @@ mod color_image_tests {
             display: None,
             frame: None,
             mask_planes: None,
+            changed: None,
         };
         let histogram = Histogram::of_srgb8(&image);
         let ok = Renderer::run_for(|| result(Ok(lightcraft_pipeline::Rendered { image: image.clone(), histogram, deep: None })), &None);
@@ -2206,6 +2300,7 @@ mod color_image_tests {
                     display: None,
                     frame: None,
                     mask_planes: None,
+                    changed: None,
                 };
                 Renderer::run_for(|| result, &None)
             }),
@@ -2241,6 +2336,7 @@ mod color_image_tests {
                 display: None,
                 frame: None,
                 mask_planes: None,
+                changed: None,
             };
             Box::new(move || {
                 std::thread::sleep(std::time::Duration::from_millis(ms));
