@@ -19,6 +19,7 @@
 //!   to right.
 
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::{Duration, Instant};
 
 use lightcraft_catalog::{Photo, PhotoId};
 use lightcraft_develop::DevelopSettings;
@@ -28,6 +29,7 @@ use lightcraft_raster::Rgba8;
 use crate::{EngineError, Session};
 
 pub(crate) mod parts;
+mod wrinkles;
 
 /// Finds faces (and their part masks) on a picture.
 pub trait FaceProvider: Send + Sync {
@@ -62,6 +64,7 @@ impl FaceProvider for Yunet {
                 spots: None,
                 strands: None,
                 patch: None,
+                wrinkles: None,
             })
             .collect())
     }
@@ -69,6 +72,8 @@ impl FaceProvider for Yunet {
 
 /// Long edge of the render faces are found on.
 pub const DETECT_EDGE: usize = 1600;
+/// How long a photo whose Wrinkles search was cancelled waits before a render or the Portrait tab searches it again.
+pub const RETRY_AFTER: Duration = Duration::from_secs(30);
 /// Photos whose failures and missing-model reasons are kept.
 pub const KEEP: usize = 64;
 /// What the faces kept in memory may take together (masks, landmarks, thumbnails); the photo used least recently
@@ -82,12 +87,20 @@ const UNKNOWN: u64 = 0x5245_544f_5543_4800;
 /// One photo's faces as found.
 #[derive(Clone)]
 pub struct Found {
+    /// When Wrinkles' search was cancelled (the faces have no wrinkle change, and Wrinkles shows its old result): the
+    /// photo is searched again after [`RETRY_AFTER`], by an export at once, and by the Portrait tab opening on it.
+    pub retry: Option<Instant>,
     pub input: Arc<Input>,
     /// A square close-up of each face (for the face picker), in the order of `input.faces`.
     pub thumbs: Arc<Vec<Rgba8>>,
 }
 
 impl Found {
+    /// Whether a cancelled Wrinkles search is old enough to run again (`after` has passed since the cancel).
+    pub fn retry_due(&self, after: Duration) -> bool {
+        self.retry.is_some_and(|t| t.elapsed() >= after)
+    }
+
     /// About what it takes in memory.
     pub fn bytes(&self) -> usize {
         let face = |f: &Face| {
@@ -95,11 +108,13 @@ impl Found {
             let spots = f.spots.as_ref().map_or(0, |s| s.list.len().saturating_mul(std::mem::size_of::<lightcraft_develop::retouch::input::Spot>()));
             let strands = f.strands.as_ref().map_or(0, |s| s.cells.len().saturating_mul(3).saturating_add(s.tiles.len().saturating_mul(4)));
             let patch = f.patch.as_ref().map_or(0, |p| p.alpha.data.len().saturating_mul(16));
+            let wrinkles = f.wrinkles.as_ref().map_or(0, |w| w.bytes());
             masks
                 .saturating_add(f.landmarks.len().saturating_mul(16))
                 .saturating_add(patch)
                 .saturating_add(spots)
                 .saturating_add(strands)
+                .saturating_add(wrinkles)
                 .saturating_add(std::mem::size_of::<Face>())
         };
         let faces: usize = self.input.faces.iter().map(face).sum();
@@ -127,6 +142,8 @@ struct Store {
     /// Keys whose faces a prepared export finds when it runs ([`ExportFaces`]): setting up other renders of them
     /// does not wait.
     deferred: Vec<String>,
+    /// [`RETRY_AFTER`] unless a test says otherwise.
+    retry_after: Option<Duration>,
 }
 
 /// The faces found per photo, and the provider that finds them.
@@ -172,6 +189,16 @@ impl FaceStore {
         st.found.clear();
         st.failed.clear();
         st.no_model.clear();
+    }
+
+    /// How long a cancelled Wrinkles search waits before it runs again.
+    fn retry_after(&self) -> Duration {
+        self.lock().retry_after.unwrap_or(RETRY_AFTER)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_retry_after(&self, after: Duration) {
+        self.lock().retry_after = Some(after);
     }
 
     /// Forget why photos found no face model (installing or removing a model does): their next search runs.
@@ -353,6 +380,10 @@ impl Session {
         }
         match self.retouch_faces.get(&self.retouch_key(p, s)) {
             Some(found) => {
+                // (a cancelled Wrinkles search, once it is old enough: the faces stay, the photo is searched again)
+                if found.retry_due(self.retouch_faces.retry_after()) {
+                    self.retouch_search(p.id, false);
+                }
                 // (with Background Swap's picture, loaded now when it is not: `fork/retouch-background.md`)
                 let input = self.with_backdrop(found.input, p, s, true);
                 (input.fingerprint() | 1, Some(input))
@@ -378,12 +409,15 @@ impl Session {
     }
 
     /// The key photo `p`'s faces are kept under: [`key_of`] from a provider. From the people parse: the content,
-    /// the orientation and the parse's version only (another set, or the set downloaded later, finds them anew):
+    /// the orientation, the parse's version and whether LaMa is installed (another set, or the set downloaded later, or
+    /// LaMa installed later, finds them anew):
     /// the parse is made on the photo with default settings, and the step maps it through the lens corrections and
     /// transform, so dragging those, or a preset's thumbnail, finds the same faces.
     pub(crate) fn retouch_key(&self, p: &Photo, s: &DevelopSettings) -> String {
         match self.retouch_source_is_parts() {
-            true => format!("{}|{:?}|parts:{}", crate::media::content_key(p), s.orientation, self.parsing.version()),
+            // (with what LaMa is, if anything: Wrinkles' search fills with it when it is installed, so installing it
+            // searches again)
+            true => format!("{}|{:?}|parts:{}|lama:{:x}", crate::media::content_key(p), s.orientation, self.parsing.version(), self.lama.term()),
             false => key_of(p, s),
         }
     }
@@ -420,7 +454,8 @@ impl Session {
     pub fn retouch_search(&mut self, id: PhotoId, again: bool) -> Option<String> {
         let p = self.catalog.photo(id).cloned()?;
         let key = self.retouch_key(&p, &p.develop);
-        if !again && (self.retouch_faces.get(&key).is_some() || self.retouch_faces.lock().failed.iter().any(|(k, _)| *k == key)) {
+        let retry = self.retouch_faces.get(&key).is_some_and(|f| f.retry_due(self.retouch_faces.retry_after()));
+        if !again && !retry && (self.retouch_faces.get(&key).is_some() || self.retouch_faces.lock().failed.iter().any(|(k, _)| *k == key)) {
             return None;
         }
         if !again && let Some(why) = self.retouch_faces.no_model_for(&key) {
@@ -477,7 +512,8 @@ impl Session {
     pub fn retouch_detect_now(&mut self, id: PhotoId, again: bool) -> crate::Result<Found> {
         let p = self.catalog.photo(id).cloned().ok_or_else(|| EngineError::Other("no such photo".into()))?;
         let key = self.retouch_key(&p, &p.develop);
-        if !again && let Some(found) = self.retouch_faces.get(&key) {
+        // (a photo whose Wrinkles search was cancelled is searched again: an export must match what it will show)
+        if !again && let Some(found) = self.retouch_faces.get(&key).filter(|f| f.retry.is_none()) {
             return Ok(found);
         }
         // (claimed first: the render below must not start a search of its own)
@@ -523,7 +559,7 @@ impl Session {
             return None;
         }
         let key = self.retouch_key(&p, &p.develop);
-        if self.retouch_faces.get(&key).is_some() {
+        if self.retouch_faces.get(&key).is_some_and(|f| f.retry.is_none()) {
             return None;
         }
         let source = self.retouch_source().ok()?;
@@ -558,6 +594,7 @@ impl Session {
             Source::Parts => {
                 let choice = self.parsing.choice();
                 Finder::Parts(parts::PartsFinder {
+                    wrinkles: Some(wrinkles::WrinkleSearch::new(self.lama.clone(), self.activity.clone(), self.retouch_cropper(p.id).map(Arc::new))),
                     // (the parse-ahead index, `fork/parse-ahead.md`: a photo parsed before is read, not run again)
                     known: crate::parse_ahead::known(self, p.id, &choice.version()),
                     // (YuNet is loaded on the search's worker, never here)
@@ -655,7 +692,7 @@ fn find(job: crate::RenderJob, provider: &dyn FaceProvider, regions: &[(NormRect
     }
     arrange(&mut faces, regions);
     let thumbs = faces.iter().map(|f| thumb(&img, &f.bounds)).collect();
-    Ok(Found { input: Arc::new(Input::new(faces)), thumbs: Arc::new(thumbs) })
+    Ok(Found { retry: None, input: Arc::new(Input::new(faces)), thumbs: Arc::new(thumbs) })
 }
 
 /// The first [`lightcraft_develop::retouch::MAX_FACES`] faces (the largest, as the finder ranks them), left to right as

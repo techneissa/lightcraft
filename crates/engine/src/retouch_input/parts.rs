@@ -43,6 +43,8 @@ pub(crate) const FULL_SIZE_CROPS: bool = false;
 
 /// A face search from the parse: set up on the calling thread, run on a worker.
 pub(crate) struct PartsFinder {
+    /// The Wrinkles search (the LaMa fill and the activity stack); `None`: none is made.
+    pub(super) wrinkles: Option<super::wrinkles::WrinkleSearch>,
     pub(super) prepare: crate::cmd::parsing::Prepare,
     /// What the parse-ahead index knows of the photo's parse under `choice` (`None`: the photo has gone).
     pub(super) known: Option<crate::parse_ahead::Known>,
@@ -60,12 +62,12 @@ impl PartsFinder {
     /// come from them); then take the parse the parse-ahead index knows for the photo (made ahead of time or by
     /// `parsing.run`, so no model runs), else the cached one, else wait for its run, and file it in the index.
     pub(super) fn find(self) -> Result<Found, String> {
-        let PartsFinder { prepare, known, parsing: store, choice, orient, regions, cropper } = self;
+        let PartsFinder { wrinkles, prepare, known, parsing: store, choice, orient, regions, cropper } = self;
         let cut = |r| cropper.as_ref()?.crop(r);
         let crops = || cropper.as_ref().map(|c| Crops { size: c.photo_size(), cut: &cut });
         let (img, hints) = prepare.run()?;
         if let Some(parsing) = known.as_ref().and_then(|k| k.read(&store)) {
-            return Ok(found_with(&parsing, &hints, &img, orient, &regions, crops()));
+            return Ok(found_with(&parsing, &hints, &img, orient, &regions, crops(), wrinkles.as_ref()));
         }
         let (filed, out) = store.parse_as(choice, img.clone(), hints.clone(), true);
         let parsing = match out {
@@ -76,7 +78,7 @@ impl PartsFinder {
         if let Some(k) = &known {
             k.file(filed);
         }
-        Ok(found_with(&parsing, &hints, &img, orient, &regions, crops()))
+        Ok(found_with(&parsing, &hints, &img, orient, &regions, crops(), wrinkles.as_ref()))
     }
 }
 
@@ -91,10 +93,11 @@ pub(crate) struct Crops<'a> {
 /// `orient`, named after `regions`, with a picker thumbnail each.
 #[cfg(test)]
 pub(crate) fn found(parsing: &Parsing, hints: &[FaceHint], img: &RgbImage, orient: Orientation, regions: &[(NormRect, String)]) -> Found {
-    found_with(parsing, hints, img, orient, regions, None)
+    found_with(parsing, hints, img, orient, regions, None, None)
 }
 
-/// [`found`] with the strands searched on `crops` of the original instead of on `img`.
+/// [`found`] with the strands searched on `crops` of the original instead of on `img`, and the Wrinkles search
+/// `wrinkles` run on each face too (`None`: not run).
 pub(crate) fn found_with(
     parsing: &Parsing,
     hints: &[FaceHint],
@@ -102,22 +105,30 @@ pub(crate) fn found_with(
     orient: Orientation,
     regions: &[(NormRect, String)],
     crops: Option<Crops<'_>>,
+    wrinkles: Option<&super::wrinkles::WrinkleSearch>,
 ) -> Found {
-    let mut faces = with_spots_and_strands(faces_of(parsing, hints, orient), img, orient, crops);
+    let (mut faces, cancelled) = with_spots_and_strands(faces_of(parsing, hints, orient), img, orient, crops, wrinkles);
     arrange(&mut faces, regions);
     let shown = oriented(&Rgba8::from_fn(img.width, img.height, |x, y| rgba(img, x, y)), orient);
     let thumbs = faces.iter().map(|f| thumb(&shown, &f.bounds)).collect();
-    Found { input: Arc::new(Input::new_on_photo(faces)), thumbs: Arc::new(thumbs) }
+    Found { retry: cancelled.then(std::time::Instant::now), input: Arc::new(Input::new_on_photo(faces)), thumbs: Arc::new(thumbs) }
 }
 
 /// `faces` with the spots on their skin (Blemishes) and the stray strands around and across them (Stray Hair), found
 /// once here on the parse's picture, in linear light and turned like the masks, and kept with them: a render, and the
-/// Amount sliders, only repair them. (Run on the face search's worker, under its activity row.)
-fn with_spots_and_strands(faces: Vec<Face>, img: &RgbImage, orient: Orientation, crops: Option<Crops<'_>>) -> Vec<Face> {
+/// Amount sliders, only repair them. Wrinkles' change is found here too ([`super::wrinkles`]) when `wrinkles` is
+/// given; the flag says its search was cancelled. (Run on the face search's worker, under its activity row.)
+fn with_spots_and_strands(
+    faces: Vec<Face>,
+    img: &RgbImage,
+    orient: Orientation,
+    crops: Option<Crops<'_>>,
+    wrinkles: Option<&super::wrinkles::WrinkleSearch>,
+) -> (Vec<Face>, bool) {
     let skin = faces.iter().any(|f| f.mask(Part::FacialSkin).is_some());
     let hair = faces.iter().any(|f| f.mask(Part::Hair).is_some() || f.mask(Part::FacialSkin).is_some());
     if !skin && !hair {
-        return faces;
+        return (faces, false);
     }
     let linear = oriented(
         &Rgb32f::from_fn(img.width, img.height, |x, y| {
@@ -127,8 +138,17 @@ fn with_spots_and_strands(faces: Vec<Face>, img: &RgbImage, orient: Orientation,
         orient,
     );
     let faces = if skin { lightcraft_develop::retouch::blemish::with_spots(&linear, faces) } else { faces };
+    let faces = with_strands(&linear, faces, crops);
+    match wrinkles {
+        Some(search) if skin => search.run(faces, &linear),
+        _ => (faces, false),
+    }
+}
+
+/// `faces` with their stray strands found, on `crops` of the original when there are any, else on the parse's picture.
+fn with_strands(linear: &Rgb32f, faces: Vec<Face>, crops: Option<Crops<'_>>) -> Vec<Face> {
     let Some(crops) = crops.filter(|c| same_shape(c.size, (linear.width, linear.height))) else {
-        return lightcraft_develop::retouch::hair::with_strands(&linear, faces);
+        return lightcraft_develop::retouch::hair::with_strands(linear, faces);
     };
     // a head the original can't be cut for is searched on the parse's picture, stretched to the crop's size
     let mut cut = |r: lightcraft_develop::retouch::hair::PhotoRect| {
@@ -198,6 +218,7 @@ fn face_of(p: &Person, hints: &[FaceHint], orient: Orientation, read: &[Part]) -
         patch: None,
         spots: None,
         strands: None,
+        wrinkles: None,
     })
 }
 

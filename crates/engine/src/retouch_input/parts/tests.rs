@@ -563,14 +563,142 @@ fn the_strands_are_searched_on_crops_of_the_original() {
             Some(Rgb32f::from_fn(rect[2] - rect[0], rect[3] - rect[1], |x, y| turned.get(rect[0] + x, rect[1] + y)))
         };
         let crops = Crops { size: (turned.width, turned.height), cut: &cut };
-        let found = found_with(&parsing, &[], &flat, orient, &[], Some(crops));
+        let found = found_with(&parsing, &[], &flat, orient, &[], Some(crops), None);
         let strands = found.input.faces[0].strands.as_ref().expect("searched");
         assert!(strands.count >= 1 && !strands.is_empty(), "{orient:?}: the strand is found on the original's pixels");
         assert_eq!(strands.picture, (turned.width, turned.height), "{orient:?}: measured in the original's pixels");
         assert!(!asked.lock().unwrap().is_empty());
         // a photo of another shape than the parse picture is not cut: the parse picture is searched (flat: nothing)
         let wrong = Crops { size: (turned.width, turned.height * 2), cut: &cut };
-        let found = found_with(&parsing, &[], &flat, orient, &[], Some(wrong));
+        let found = found_with(&parsing, &[], &flat, orient, &[], Some(wrong), None);
         assert!(found.input.faces[0].strands.as_ref().is_some_and(|s| s.is_empty()), "{orient:?}");
     }
+}
+
+/// A 16-bit PNG with a dark horizontal ramp (sRGB codes 400…6000 of 65535, which is 1.6…23 of 255).
+fn dark_ramp_png(dir: &std::path::Path, w: u32, h: u32) -> PathBuf {
+    let path = dir.join("ramp.png");
+    let img = image::ImageBuffer::<image::Rgb<u16>, Vec<u16>>::from_fn(w, h, |x, _| {
+        let v = (400.0 + 5600.0 * f64::from(x) / f64::from(w - 1)) as u16;
+        image::Rgb([v, v, v])
+    });
+    img.save(&path).unwrap();
+    path
+}
+
+/// Wrinkles' search reads float crops of the original, rendered at the size it works at, not the 8-bit parse picture: a
+/// dark ramp of a 16-bit file keeps its levels (an 8-bit copy has a couple of dozen), and the crop covers what was asked.
+#[test]
+fn the_wrinkle_search_gets_float_crops_of_the_original() {
+    let dir = crate::tests::xmp::temp_dir("retouch-float-crop");
+    let path = dark_ramp_png(&dir, 600, 400);
+    let mut s = Session::new().with_fs();
+    s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = s.catalog.photos().next().unwrap().id;
+    let cropper = s.retouch_cropper(id).expect("a cropper for the photo");
+    let want = lightcraft_develop::retouch::NormRect::new(0.1, 0.2, 0.9, 0.8);
+    let crop = cropper.crop_float(want, 200).expect("the original is cut");
+    assert!(crop.img.width.max(crop.img.height) <= 200, "at most the work size: {}×{}", crop.img.width, crop.img.height);
+    assert!(crop.img.width >= 190, "reduced, not cut down further: {}", crop.img.width);
+    let r = crop.rect;
+    assert!(r.x0 <= want.x0 + 0.01 && r.y0 <= want.y0 + 0.01 && r.x1 >= want.x1 - 0.01 && r.y1 >= want.y1 - 0.01, "covers {want:?}: {r:?}");
+    assert!(r.width() < want.width() + 0.03, "and not much more: {r:?}");
+    // the ramp's green channel along the middle row: many levels, far more than 8 bits of it could hold
+    let row = crop.img.height / 2;
+    let mut levels: Vec<u32> = (0..crop.img.width).map(|x| crop.img.data[row * crop.img.width + x][1].to_bits()).collect();
+    levels.sort_unstable();
+    levels.dedup();
+    let eight_bit = {
+        let mut v: Vec<u8> =
+            (0..crop.img.width).map(|x| lightcraft_color::transfer::encode_srgb8(crop.img.data[row * crop.img.width + x][1])).collect();
+        v.sort_unstable();
+        v.dedup();
+        v.len()
+    };
+    assert!(eight_bit <= 24, "the same row in 8 bits has {eight_bit} levels");
+    assert!(levels.len() > 3 * eight_bit, "{} float levels against {eight_bit}", levels.len());
+    // a rect that is not a rect, or one off the photo, is no crop
+    assert!(cropper.crop_float(lightcraft_develop::retouch::NormRect::new(0.5, 0.5, 0.5, 0.5), 200).is_none());
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// The search, cancelled, keeps no change and says so: the photo's faces are kept as "to search again" (`Found::retry`).
+#[test]
+fn a_cancelled_wrinkle_search_leaves_the_faces_to_be_searched_again() {
+    use crate::retouch_input::wrinkles::WrinkleSearch;
+    let (w, h) = (400usize, 300usize);
+    let img = lightcraft_parsing::RgbImage { width: w, height: h, data: vec![150; w * h * 3] };
+    let parsing = parse_of(&[r(0.3, 0.15, 0.7, 0.8)]);
+    let activity = crate::activity::Activity::default();
+    let mut search = WrinkleSearch::new(crate::lama_fill::LamaFill::new(activity.clone()), activity, None);
+    let done = super::found_with(&parsing, &[], &img, Orientation::Normal, &[], None, Some(&search));
+    assert!(done.retry.is_none(), "an uncancelled search is final");
+    assert!(done.input.faces[0].wrinkles.is_some(), "and its face was searched");
+    search.cancel_first = true;
+    let cancelled = super::found_with(&parsing, &[], &img, Orientation::Normal, &[], None, Some(&search));
+    assert!(cancelled.retry.is_some(), "stopped: to be searched again");
+    assert!(cancelled.input.faces[0].wrinkles.is_none(), "no change kept");
+    assert!(cancelled.input.faces[0].spots.is_some(), "the other searches' results stay");
+}
+
+/// A cancelled search is not final for the session: the photo is searched again (after the wait; an export at once).
+#[test]
+fn a_photo_whose_wrinkle_search_was_cancelled_is_searched_again() {
+    let fake = Fake::new(vec![r(0.2, 0.1, 0.8, 0.9)]);
+    let (mut s, id, dir) = grey("retry", 200, 150, &fake);
+    s.execute("retouch.detect", &json!({})).unwrap();
+    let found = s.retouch_faces_of(id).found.expect("found");
+    assert!(found.retry.is_none());
+    let p = s.catalog.photo(id).cloned().unwrap();
+    let key = s.retouch_key(&p, &p.develop);
+    let cancelled = || super::super::Found { retry: Some(Instant::now()), ..found.clone() };
+    // cancelled just now, with a long wait: the faces stay, nothing starts
+    s.retouch_faces.set_retry_after(Duration::from_secs(3600));
+    s.retouch_faces.put(&key, id, Ok(cancelled()));
+    let started = s.retouch_faces.started();
+    assert_eq!(s.retouch_search(id, false), None);
+    assert_eq!(s.retouch_faces.started(), started, "not yet");
+    // once it is old enough a render (or the Portrait tab) searches again, and the new faces replace the old
+    s.retouch_faces.set_retry_after(Duration::ZERO);
+    assert_eq!(s.retouch_search(id, false), None);
+    assert_eq!(s.retouch_faces.started(), started + 1, "searched again");
+    wait_until("the second search", || s.retouch_faces_of(id).found.is_some_and(|f| f.retry.is_none()));
+    // an export does not wait for the delay
+    s.retouch_faces.set_retry_after(Duration::from_secs(3600));
+    s.retouch_faces.put(&key, id, Ok(cancelled()));
+    let again = s.retouch_detect_now(id, false).unwrap();
+    assert!(again.retry.is_none(), "searched at once, whatever the wait");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// Installing LaMa changes the key the faces are kept under, so Wrinkles' search runs again with it; taking it away
+/// goes back to the first key.
+#[test]
+fn installing_lama_searches_the_photo_again() {
+    let fake = Fake::new(vec![r(0.2, 0.1, 0.8, 0.9)]);
+    let (mut s, id, dir) = grey("lama-key", 200, 150, &fake);
+    let models = dir.join("lama-models");
+    std::fs::create_dir_all(&models).unwrap();
+    s.lama.set_dir(Some(models.clone()));
+    let p = s.catalog.photo(id).cloned().unwrap();
+    let before = s.retouch_key(&p, &p.develop);
+    assert_eq!(s.lama.term(), 0, "no model, no term");
+    s.execute("retouch.detect", &json!({})).unwrap();
+    assert!(s.retouch_faces_of(id).found.is_some());
+    // the model arrives
+    std::fs::write(models.join(crate::lama_fill::MODEL_FILE), b"not a real model, only its file").unwrap();
+    s.lama.set_dir(Some(models.clone()));
+    let with = s.retouch_key(&p, &p.develop);
+    assert_ne!(before, with, "another key");
+    assert_ne!(s.lama.term(), 0);
+    assert!(s.retouch_faces_of(id).found.is_none(), "the faces kept under the old key do not count");
+    let started = s.retouch_faces.started();
+    s.retouch_search(id, false);
+    assert_eq!(s.retouch_faces.started(), started + 1, "the photo is searched again");
+    wait_until("the search with LaMa", || s.retouch_faces_of(id).found.is_some());
+    // and without it again: the first key
+    std::fs::remove_file(models.join(crate::lama_fill::MODEL_FILE)).unwrap();
+    s.lama.set_dir(Some(models));
+    assert_eq!(s.retouch_key(&p, &p.develop), before);
+    let _ = std::fs::remove_dir_all(dir);
 }

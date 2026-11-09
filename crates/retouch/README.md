@@ -114,6 +114,10 @@ crate only reads it.
   only for the tiles holding a strand, each cell a weight, a direction across the strand and a polarity), found once
   on the picture the masks come from (`hair::with_strands`; the engine does it with the people parse). `None`: not
   looked for yet; Stray Hair then changes nothing (a render never searches).
+- `Face::wrinkles`: the change that takes the face's deep wrinkles away (Wrinkles: a grid of log-light changes over the face's
+  areas, `wrinkles::Fix`), found once on the picture the masks come from (`wrinkles::with_fixes`; the engine runs it with the
+  people parse, LaMa behind the `wrinkles::Filler`). `None`: not searched yet (or cancelled, or no mesh); Wrinkles then runs its
+  old version, which reads the picture. The sliders scale the stored change in their areas; no model runs in a render.
 - `Input::fingerprint`: a hash of all of it, in the render cache keys (the engine hashes it on the search's worker).
 
 A feature reads the faces through `Scene`: each `FaceCtx` has the box and landmarks in the image's pixels and

@@ -6,9 +6,11 @@
 
 use lightcraft_color::transfer::decode_srgb8;
 use lightcraft_develop::DevelopSettings;
+use lightcraft_develop::retouch::NormRect;
 use lightcraft_develop::retouch::hair::PhotoRect;
+use lightcraft_develop::retouch::wrinkles::Crop;
 use lightcraft_geom::Orientation;
-use lightcraft_pipeline::PixelWindow;
+use lightcraft_pipeline::{DeepSamples, OutputDepth, PixelWindow, RenderRequest};
 use lightcraft_raster::Rgb32f;
 
 use super::oriented;
@@ -83,5 +85,64 @@ impl Cropper {
         });
         let turned = oriented(&linear, self.orient);
         ((turned.width, turned.height) == (w, h)).then_some(turned)
+    }
+
+    /// The part of the photo inside `rect` (normalised, in the turned photo's frame) in floating-point linear light, at
+    /// most `max_side` pixels on its longer side (never enlarged): rendered at that size straight from the original with
+    /// the default settings (no retouching), as a 32-bit window (`OutputDepth::F32Linear`), so Wrinkles' search sees
+    /// the shadows' steps an 8-bit picture quantises away. `None` when the render fails or comes back another size.
+    pub(crate) fn crop_float(&self, rect: NormRect, max_side: usize) -> Option<Crop> {
+        if !rect.is_valid() {
+            return None;
+        }
+        let (pw, ph) = self.photo_size();
+        let (fw, fh) = self.frame;
+        // the rect in the stored frame (turned back), as a share of it
+        let back = self.orient.inverse();
+        let m = back.map_norm_rect(lightcraft_geom::Rect { x0: rect.x0, y0: rect.y0, x1: rect.x1, y1: rect.y1 });
+        let (sx0, sy0, sx1, sy1) = (m.x0.clamp(0.0, 1.0), m.y0.clamp(0.0, 1.0), m.x1.clamp(0.0, 1.0), m.y1.clamp(0.0, 1.0));
+        // the longer side of the crop, in the photo's pixels, sets how far the render is reduced
+        let long = ((rect.x1 - rect.x0) * pw as f64).max((rect.y1 - rect.y0) * ph as f64);
+        let scale = if long.is_finite() && long > 0.0 { (max_side as f64 / long).min(1.0) } else { return None };
+        let (ow, oh) = lightcraft_raster::resample::fit_size(
+            fw,
+            fh,
+            ((fw as f64 * scale).round() as usize).max(1),
+            ((fh as f64 * scale).round() as usize).max(1),
+        );
+        let (x0, y0) = ((sx0 * ow as f64).floor() as usize, (sy0 * oh as f64).floor() as usize);
+        let (x1, y1) = (((sx1 * ow as f64).ceil() as usize).min(ow), ((sy1 * oh as f64).ceil() as usize).min(oh));
+        let window = PixelWindow { x: x0, y: y0, w: x1.checked_sub(x0)?, h: y1.checked_sub(y0)? };
+        if window.w == 0 || window.h == 0 {
+            return None;
+        }
+        let mut job = self.job.clone();
+        job.request = RenderRequest { max_w: ow, max_h: oh, depth: OutputDepth::F32Linear, window: Some(window), ..job.request };
+        job.key = lightcraft_preview::Hasher128::new()
+            .u64(job.key)
+            .str("wrinkles-float-crop")
+            .u64(ow as u64)
+            .u64(oh as u64)
+            .u64(window.x as u64)
+            .u64(window.y as u64)
+            .u64(window.w as u64)
+            .u64(window.h as u64)
+            .finish()
+            .0 as u64;
+        let deep = job.run().rendered.ok()?.deep?;
+        let DeepSamples::F32(samples) = &deep.samples else { return None };
+        if (deep.width, deep.height) != (window.w, window.h) || samples.len() != window.w * window.h * 3 {
+            return None;
+        }
+        let linear = Rgb32f { width: window.w, height: window.h, data: samples.as_chunks::<3>().0.to_vec() };
+        let img = oriented(&linear, self.orient);
+        // what it covers, as a share of the stored frame, turned like the faces
+        let covered = self.orient.map_norm_rect(lightcraft_geom::Rect {
+            x0: window.x as f64 / ow as f64,
+            y0: window.y as f64 / oh as f64,
+            x1: (window.x + window.w) as f64 / ow as f64,
+            y1: (window.y + window.h) as f64 / oh as f64,
+        });
+        Some(Crop { img, rect: NormRect::new(covered.x0, covered.y0, covered.x1, covered.y1) })
     }
 }

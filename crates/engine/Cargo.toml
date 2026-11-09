@@ -96,6 +96,8 @@ rawnind-model = ["denoise", "lightcraft-denoise/rawnind-model", "lightcraft-deno
 lightcraft-model = ["denoise", "lightcraft-denoise/lightcraft-model", "lightcraft-denoise-core/lightcraft-model"]
 
 [dev-dependencies]
+# the Wrinkles example writes its pictures
+image = { workspace = true }
 # counts the settings hashes a frame takes (`hash64_calls`)
 lightcraft-develop = { workspace = true, features = ["test-hooks"] }
 # tests record why they skip (`cargo xtask ci` lists the skips)

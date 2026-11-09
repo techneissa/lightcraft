@@ -1,4 +1,4 @@
-//! Wrinkles: Forehead, Crow's Feet, Smile Lines and Neck. Softens the lines in each area and keeps the skin's pores
+//! Wrinkles: Forehead, Crow's Feet, Cheeks and Smile Lines and Neck. Takes the lines in each area away and keeps the skin's pores
 //! and the face's shape.
 //!
 //! Each area ([`Area`]) is a soft shape built from the face mesh ([`areas`]), cut by a skin mask (Facial Skin, or
@@ -31,12 +31,20 @@
 //! one weight per area.
 
 pub mod areas;
+mod exclude;
+mod fix;
+mod hairlike;
+mod heal;
 mod lines;
+mod ridge;
+pub mod search;
 
 use lightcraft_raster::{Plane, Rgb32f, par_rows};
 use serde::{Deserialize, Serialize};
 
 pub use areas::Area;
+pub use fix::Fix;
+pub use search::{Crop, Fill, Filler, LAMA_FACES, NoFill, Picture, Source, WORK, with_fixes, with_fixes_from};
 
 use crate::{Control, FaceCtx, Feature, Part, Scene, Scope, Spec, Stage};
 
@@ -121,7 +129,11 @@ impl Feature for Wrinkles {
     const CONTROLS: &'static [Control<Self>] = &[
         Control { spec: Spec::amount("retouch.wrinkles.forehead", "Forehead"), get: |s| s.forehead, set: |s, v| s.forehead = v },
         Control { spec: Spec::amount("retouch.wrinkles.crowsFeet", "Crow's Feet"), get: |s| s.crows_feet, set: |s, v| s.crows_feet = v },
-        Control { spec: Spec::amount("retouch.wrinkles.smileLines", "Smile Lines"), get: |s| s.smile_lines, set: |s, v| s.smile_lines = v },
+        Control {
+            spec: Spec::amount("retouch.wrinkles.smileLines", "Cheeks and Smile Lines"),
+            get: |s| s.smile_lines,
+            set: |s, v| s.smile_lines = v,
+        },
         Control { spec: Spec::amount("retouch.wrinkles.neck", "Neck"), get: |s| s.neck, set: |s, v| s.neck = v },
     ];
     const PARTS: &'static [Part] = &[Part::FacialSkin, Part::BodySkin];
@@ -148,6 +160,11 @@ impl Wrinkles {
             return;
         }
         let Some(ctx) = scene.faces.get(face) else { return };
+        // the change the face's search found, when it has been done: the sliders scale it (`fix.rs`)
+        if let Some(fix) = ctx.face.wrinkles.as_deref() {
+            self.apply_fix(img, scene, face, fix);
+            return;
+        }
         let plans: Vec<Plan> = Area::ALL.iter().filter_map(|&area| Plan::new(scene, face, area, strength(area.amount(self)))).collect();
         let Some(all) = plans.iter().map(|p| p.b).reduce(union) else { return };
         if let Some(f) = crate::reduced::factor(all, max_box) {

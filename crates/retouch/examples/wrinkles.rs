@@ -2,7 +2,7 @@
 //!
 //! `cargo run -p lightcraft-retouch --release --example wrinkles -- in.jpg out.jpg --faces dir/faces.json
 //! [--amount 50] [--forehead 50] [--crows-feet 50] [--smile-lines 50] [--neck 50] [--width 1936] [--runs 5]
-//! [--areas areas.jpg]`
+//! [--areas areas.jpg] [--search] [--change change.png]`
 //!
 //! - `--faces` reads what the app's retouch step gets for each face (box, landmarks, part masks), written by
 //!   `cargo run -p lightcraft-parsing --release --example face_input -- in.jpg dir/`. `--face x0,y0,x1,y1` instead
@@ -11,6 +11,9 @@
 //!   (0…100).
 //! - `--width` scales the picture first (a draft is about 1936 px wide, the loupe 2560); `--runs` times the step that
 //!   many times (the slider update) and prints the fastest run.
+//! - `--search` first runs Wrinkles' search on the picture (no LaMa: the banded heal) and prints its time; the sliders then
+//!   scale the change it kept, as in the app (without it, the old Wrinkles run).
+//! - `--change` (with `--search`) writes the stored change as a picture: grey is none, lighter is a lift.
 //! - `--areas` also writes the picture with each area's weight, cut by its skin mask, drawn in colour.
 //!
 //! The picture is worked on in linear light (sRGB primaries; the app works in linear Rec.2020).
@@ -26,7 +29,7 @@ use lightcraft_retouch::wrinkles::{Area, areas};
 use lightcraft_retouch::{Face, Input, NormRect, Part, PartMask, Retouch, Scene, Stage, WholePhoto};
 
 const USAGE: &str = "usage: wrinkles in.jpg out.jpg [--faces faces.json | --face x0,y0,x1,y1] [--amount N] [--forehead N] \
-                     [--crows-feet N] [--smile-lines N] [--neck N] [--width px] [--runs n] [--areas areas.jpg]";
+                     [--crows-feet N] [--smile-lines N] [--neck N] [--width px] [--runs n] [--areas areas.jpg] [--search]";
 
 fn main() -> ExitCode {
     match run(&std::env::args().skip(1).collect::<Vec<_>>()) {
@@ -42,7 +45,7 @@ fn run(args: &[String]) -> Result<(), String> {
     let mut files = Vec::new();
     let mut faces = Vec::new();
     let mut r = Retouch::default();
-    let (mut width, mut runs, mut show) = (None, 1usize, None);
+    let (mut width, mut runs, mut show, mut search, mut change) = (None, 1usize, None, false, None::<String>);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = || it.next().ok_or(USAGE.to_string());
@@ -68,6 +71,8 @@ fn run(args: &[String]) -> Result<(), String> {
             "--width" => width = Some(value()?.parse::<u32>().map_err(|_| USAGE.to_string())?),
             "--runs" => runs = value()?.parse::<usize>().map_err(|_| USAGE.to_string())?.max(1),
             "--areas" => show = Some(value()?.clone()),
+            "--search" => search = true,
+            "--change" => change = Some(value()?.clone()),
             _ => files.push(a.clone()),
         }
     }
@@ -81,6 +86,19 @@ fn run(args: &[String]) -> Result<(), String> {
     let mut src = Rgb32f::new(w, h);
     for (px, p) in src.data.iter_mut().zip(rgb.pixels()) {
         *px = [decode_srgb8(p.0[0]), decode_srgb8(p.0[1]), decode_srgb8(p.0[2])];
+    }
+    if search {
+        let t = std::time::Instant::now();
+        faces = lightcraft_retouch::wrinkles::with_fixes(&src, faces, &mut lightcraft_retouch::wrinkles::NoFill);
+        eprintln!("wrinkles: search {:.0} ms ({} faces)", t.elapsed().as_secs_f64() * 1e3, faces.len());
+    }
+    if let (Some(path), Some(Some(fix))) = (&change, faces.first().map(|f| f.wrinkles.clone())) {
+        let pic = Rgb32f::from_fn(w, h, |x, y| {
+            let d = fix.sample((x as f64 + 0.5) / w as f64, (y as f64 + 0.5) / h as f64);
+            let g = (0.5 + 1.2 * (d[0] + d[1] + d[2]) / 3.0).clamp(0.0, 1.0);
+            [g; 3]
+        });
+        save(&pic, path)?;
     }
     let input = Input::new(faces);
     let view = WholePhoto { width: w, height: h };
