@@ -79,6 +79,19 @@ pub trait View: Sync {
     fn key_map(&self) -> Option<&dyn KeyMap> {
         None
     }
+    /// Where the image lies in the whole render (a zoomed loupe renders a window of it), for features that read
+    /// around a pixel ([`crate::background`]). `None` (the default): the image is the whole render.
+    fn place(&self) -> Option<crate::background::Place> {
+        None
+    }
+    /// The picture Background Swap uses, when it uses one and the engine has loaded it.
+    fn backdrop(&self) -> Option<&crate::background::Backdrop> {
+        None
+    }
+    /// The photo's depth map, when its file has one.
+    fn depth(&self) -> Option<&crate::background::Depth> {
+        None
+    }
 }
 
 /// The view of an image that is the whole photo (the examples and tests): normalised × size.
