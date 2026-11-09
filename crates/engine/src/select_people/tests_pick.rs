@@ -137,6 +137,7 @@ fn a_mask_with_other_parts_still_counts_as_its_parts_mask_but_is_never_retargete
     let lips = mask_id(&pick(&mut s, &["lips"], json!("all"), "part"));
     assert_ne!(lips, hair, "an unedited Hair mask with a second part is not re-targeted");
     assert_eq!(masks(&s).len(), 2);
+    s.execute("mask.adjust", &json!({"id": lips, "values": {"saturation": 20.0}})).unwrap();
     // a plain click on Hair selects the mask with the radial
     let r = pick(&mut s, &["hair"], json!("all"), "part");
     assert_eq!((mask_id(&r), r["selected"].clone()), (hair, json!(true)));
@@ -184,7 +185,10 @@ fn a_renamed_part_or_a_changed_mode_stops_the_retarget() {
     s.execute("mask.component", &json!({"id": first, "component": 0, "action": "rename", "name": "Strands"})).unwrap();
     assert_ne!(mask_id(&pick(&mut s, &["lips"], json!("all"), "part")), first, "a named part");
     let second = mask_id(&pick(&mut s, &["teeth"], json!("all"), "part"));
-    s.execute("mask.component", &json!({"id": second, "component": 0, "action": "op", "op": "subtract"})).unwrap();
+    let id = s.active().unwrap();
+    let mut d = (*s.develop_of(id).unwrap()).clone();
+    d.masks.iter_mut().find(|m| m.id == second).unwrap().components[0].op = MaskOp::Subtract;
+    s.set_develop(id, d, "Mode").unwrap();
     assert_ne!(mask_id(&pick(&mut s, &["iris"], json!("all"), "part")), second, "another mode");
     let _ = std::fs::remove_dir_all(dir);
 }

@@ -62,7 +62,7 @@ fn a_plain_click_on_a_part_that_has_a_mask_selects_it() {
 }
 
 #[test]
-fn a_command_click_adds_a_part_to_the_selected_mask() {
+fn a_command_click_adds_a_part_and_the_next_plain_click_still_makes_its_own_mask() {
     let (mut h, dir) = with_person_mask(2);
     click(&mut h, "selectPeople:part:hair", false);
     edit(&mut h, json!({"exposure": 1.5}));
@@ -70,17 +70,100 @@ fn a_command_click_adds_a_part_to_the_selected_mask() {
     assert_eq!(masks(&h).len(), 1, "the same mask gained Lips");
     assert_eq!(part(&h).0, ["hair", "lips"]);
     assert_eq!(masks(&h)[0].adjust.exposure, 1.5, "and kept its edit");
+    // a plain click is a new mask, the Hair + Lips one stays as it is
+    click(&mut h, "selectPeople:part:teeth", false);
+    assert_eq!(masks(&h).len(), 2);
+    assert_eq!(part(&h).0, ["teeth"]);
+    let first = &masks(&h)[0];
+    assert_eq!(first.adjust.exposure, 1.5);
+    assert!(matches!(&first.components[0].shape, lightcraft_develop::MaskShape::People { parts, .. } if parts == &["hair", "lips"]));
     let _ = std::fs::remove_dir_all(dir);
 }
 
 #[test]
-fn an_unedited_picker_mask_is_changed_instead_of_left_empty() {
+fn an_unedited_picker_mask_is_changed_but_an_edited_one_stays() {
     let (mut h, dir) = with_person_mask(2);
     click(&mut h, "selectPeople:part:hair", false);
     click(&mut h, "selectPeople:part:lips", false);
+    assert_eq!(masks(&h).len(), 1, "an unedited mask is changed, not left behind");
+    edit(&mut h, json!({"contrast": 10.0}));
     click(&mut h, "selectPeople:part:teeth", false);
-    assert_eq!(masks(&h).len(), 1, "no empty mask is left behind");
-    assert_eq!(part(&h).0, ["teeth"]);
+    assert_eq!(masks(&h).len(), 2, "an edited one stays");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+#[test]
+fn picking_a_part_that_has_a_mask_removes_the_empty_mask_left_selected() {
+    let (mut h, dir) = with_person_mask(2);
+    click(&mut h, "selectPeople:part:hair", false);
+    edit(&mut h, json!({"exposure": 1.5}));
+    click(&mut h, "selectPeople:part:lips", false);
+    assert_eq!(masks(&h).len(), 2, "an empty Lips mask is selected");
+    click(&mut h, "selectPeople:part:hair", false);
+    assert_eq!(masks(&h).len(), 1, "the empty Lips mask is gone");
+    assert_eq!(h.app.session.active_mask, Some(mask_with(&h, "hair").id));
+    assert_eq!(mask_with(&h, "hair").adjust.exposure, 1.5);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A saved face the photo's people no longer have: the picker shows no chip. A plain click on a part makes the new
+/// mask for everyone, with no error.
+#[test]
+fn a_part_click_on_a_mask_whose_face_is_not_in_the_photo_makes_an_everyone_mask() {
+    let (mut h, dir) = with_person_mask(1);
+    click(&mut h, "selectPeople:face:0", false);
+    click(&mut h, "selectPeople:part:hair", false);
+    edit(&mut h, json!({"exposure": 1.0}));
+    assert_eq!(part(&h), (vec!["hair".to_string()], true), "Ann's Hair");
+    // (pasted from a photo of someone else: the mask's face is named Zed, who is not in this photo)
+    let photo = h.app.session.active().unwrap();
+    let mut d = (*h.app.session.develop_of(photo).unwrap()).clone();
+    for c in &mut d.masks[0].components {
+        if let lightcraft_develop::MaskShape::People { face: Some(face), .. } = &mut c.shape {
+            face.person = Some("zed".into());
+        }
+    }
+    h.app.session.set_develop(photo, d, "Paste").unwrap();
+    h.step();
+    h.step();
+    assert!(rect_of(&mut h, "selectPeople:note").is_some(), "the picker says the face is not in the photo");
+    click(&mut h, "selectPeople:part:lips", false);
+    assert_eq!(masks(&h).len(), 2, "Lips of everyone is a new mask (no error)");
+    assert_eq!(part(&h), (vec!["lips".to_string()], false));
+    assert_eq!(mask_with(&h, "hair").adjust.exposure, 1.0);
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A mask with a brush or radial next to its people part is still that part's mask: dot, and a click selects it.
+#[test]
+fn a_mask_with_other_parts_counts_as_the_parts_mask() {
+    let (mut h, dir) = with_person_mask(2);
+    click(&mut h, "selectPeople:part:hair", false);
+    let photo = h.app.session.active().unwrap();
+    let mut d = (*h.app.session.develop_of(photo).unwrap()).clone();
+    d.masks[0].components.push(lightcraft_develop::MaskComponent {
+        name: None,
+        op: lightcraft_develop::MaskOp::Subtract,
+        invert: false,
+        shape: lightcraft_develop::MaskShape::Radial {
+            center: lightcraft_geom::Point::new(0.5, 0.5),
+            rx: 0.2,
+            ry: 0.2,
+            angle: 0.0,
+            feather: 50.0,
+            invert: false,
+        },
+    });
+    h.app.session.set_develop(photo, d, "Add Part").unwrap();
+    click(&mut h, "selectPeople:part:lips", false);
+    assert_eq!(masks(&h).len(), 2, "the Hair mask with a second part is not re-targeted");
+    edit(&mut h, json!({"saturation": 30.0}));
+    click(&mut h, "selectPeople:parts", false);
+    h.step();
+    assert!(rect_of(&mut h, "selectPeople:partMask:hair").is_some(), "Hair has a dot");
+    click(&mut h, "selectPeople:part:hair", false);
+    assert_eq!(masks(&h).len(), 2);
+    assert_eq!(h.app.session.active_mask, Some(masks(&h)[0].id), "the mask with the radial is selected");
     let _ = std::fs::remove_dir_all(dir);
 }
 

@@ -22,15 +22,22 @@ List: Select People masks: Masking ▸ Person / Background / Custom and a picker
   `selectPeople.folded`, an existing `ui.json` key), hides with the tool overlay (View ▸ Tool Overlay ▸ Never) and
   in the full-screen preview.
 - **One mask per part pick** (`selectPeople.pick`), so one photo can carry several masks with different edits on
-  different parts (Hair with Exposure, Lips with Saturation). A plain click on a part: when a Select People mask of
-  exactly that part and face (one part, nothing else) is on the photo, it is selected (not an edit, no undo step);
-  else a new mask for it is made and selected (one undo step) and the mask selected before keeps its edits. The
-  exception that keeps the list clean: a selected Select People mask the picker made and nobody edited (generated
-  name, effects as a new mask starts with, no Edge, Refine Edges, Decontaminate or Invert) is re-targeted instead
-  of left empty. ⌘-click adds or removes the part in the selected mask (how one mask covers several parts). A
-  face chip changes whose the selected mask is, unless a mask of those parts and that face exists, then that one
-  is selected; with no mask selected the chip makes an Entire Person mask. Masking ▸ Person and Background
-  always add a mask.
+  different parts (Hair with Exposure, Lips with Saturation). A mask counts as a part's mask when one of its Select
+  People parts is exactly that part and face; other parts (a brush, say) do not matter (they get the dot, and a
+  click selects it). A plain click on a part: when such a mask is on the photo, it is selected (not an edit, no undo
+  step; an empty mask the picker made and had selected is deleted in the same undo step); else a new mask for it is
+  made and selected (one undo step) and the mask selected before keeps its edits. The exception that keeps the
+  list clean: a selected Select People mask the picker made and nobody edited is re-targeted instead of left
+  empty. "Unedited" is strict: visible, one part only (named by nobody, mode Add, not inverted), generated name,
+  the effects a new mask starts with (Recolour and Amount included), no Edge, Refine Edges, Decontaminate or Invert.
+  ⌘-click adds or removes the part in the selected mask (how one mask covers several parts); it is refused with
+  "Hair already has a mask" when the result would be exactly the parts and face of another mask. A face chip
+  changes whose the selected mask is, unless a mask of those parts and that face exists, then that one is selected
+  (the same empty-mask rule); with no mask selected the chip makes an Entire Person mask. A selected mask whose face
+  is not in the photo shows no chip; a plain click then makes the new mask for everyone. Masking ▸ Person and
+  Background always add a mask. `selectPeople.pick` checks its input: `how` must be a string (part, add or face),
+  `add` needs `parts` (the whole new list), `face: null` with `add` keeps the mask's face (`"all"` is everyone's),
+  an unknown part or a face past the people is an error.
 - **An ordinary mask**: the parts become a `MaskShape::People` part with a stored selection, like Subject's: one grid
   over the selection (64 to 1024 cells a side, as fine as the parse's own planes) and up to four finer grids over the
   people it draws too coarsely (small faces in a group), marked `people:<set>`. Every mask slider, Edge, Refine
@@ -132,8 +139,10 @@ edge marks, Entire Person with Background, a command waiting for the running sea
 changes nothing, no copy of the main grid, a finer grid's own filter window, and in the picker the missing face,
 a pending mask after another photo, one set of face textures, the search starting on opening; `tests_pick` and
 `tests_per_part` the one-mask-per-part rules, in the engine and through the picker: a plain click after edits makes a
-second mask and leaves the first one's edits, a click on a part that has a mask selects it, ⌘-click adds to the
-selected mask, the unedited-mask exception, the face chip, the dot, the dropdown under the chips): each part makes a mask of its own place, several parts one mask, one face or everyone (and one person's
+second mask and leaves the first one's edits, a click on a part that has a mask selects it (also with other parts in
+it), the empty mask deleted with it, ⌘-click adds to the selected mask or is refused as a copy, the unedited-mask
+exception and each edit that stops it, a missing face, the input checks, the face chip, the dot, the dropdown under
+the chips): each part makes a mask of its own place, several parts one mask, one face or everyone (and one person's
 background holding the others), no people, 50 people (at most four finer grids), a face past the edge, damaged
 planes, a turned photo, faces found again by name or place, the commands (add, change, generated names, undo, what
 is refused), preview and export drawing the same mask, the mask after closing and reopening the library, and in the

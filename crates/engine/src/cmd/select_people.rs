@@ -260,7 +260,10 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
         add_params["face"] = v;
     }
     match retarget {
-        Some(_) => set(s, &set_params),
+        Some(mid) => set(s, &set_params).map(|mut o| {
+            o["mask"] = json!(mid);
+            o
+        }),
         None => add(s, &add_params).map(|mut o| {
             o["created"] = json!(true);
             o
