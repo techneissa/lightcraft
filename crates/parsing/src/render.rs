@@ -39,29 +39,43 @@ fn planes(p: &Parsing, sel: Select) -> Vec<Vec<&Plane>> {
     people.into_iter().map(|q| q.parts.get(&part).into_iter().flatten().collect()).collect()
 }
 
-/// The mask, `width × height` values 0 to 1 over the whole photo (bilinear, no edge refinement). A person's planes
-/// (a face parsed up close over their body) overlap, so they join by the larger value; different people's planes
-/// share out one parse, so they add up: the larger of two people's masks would sag where they meet, a thin line
-/// across a part both have (#124).
+/// The mask, `width × height` values 0 to 1 over the whole photo (bilinear, no edge refinement). The body map gives
+/// each of its cells to one person, so different people's split planes ([`Plane::split`]) share out one parse and add
+/// up: the larger of two would sag where they meet, a thin line across a part both have (#124). A person's own planes
+/// overlap (a face parsed up close over their body), and faces may claim the same cells nobody owns, so every other
+/// plane joins by the larger value.
 pub fn mask(p: &Parsing, sel: Select, width: usize, height: usize) -> Vec<f32> {
     let Some(n) = width.checked_mul(height).filter(|&n| n > 0 && n <= MAX_PIXELS) else { return Vec::new() };
     let mut out = vec![0.0f32; n];
-    let mut one = vec![0.0f32; n];
-    for person in planes(p, sel) {
-        let Some(r) = person.iter().map(|q| q.rect).reduce(|a, b| a.union(&b)).and_then(|r| r.clamped()) else { continue };
-        for plane in &person {
-            draw_max(&mut one, width, height, plane);
-        }
-        // add what this person drew, and clear it for the next, only over their own planes
-        let ((x0, x1), (y0, y1)) = (span(r.x0, r.x1, width), span(r.y0, r.y1, height));
-        for y in y0..y1 {
-            let row = y * width;
-            let (Some(o), Some(v)) = (out.get_mut(row + x0..row + x1), one.get_mut(row + x0..row + x1)) else { continue };
-            for (o, v) in o.iter_mut().zip(v.iter_mut()) {
-                *o = (*o + *v).min(1.0);
-                *v = 0.0;
+    let people = planes(p, sel);
+    // (a frame of its own only for a person with several split planes of the part, rare)
+    let mut one: Vec<f32> = Vec::new();
+    for person in &people {
+        let split: Vec<&Plane> = person.iter().copied().filter(|q| q.split).collect();
+        match split.as_slice() {
+            [] => {}
+            [q] => draw(&mut out, width, height, q, |o, v| (o + v).min(1.0)),
+            many => {
+                one.resize(n, 0.0);
+                for q in many {
+                    draw(&mut one, width, height, q, f32::max);
+                }
+                // add what this person drew, and clear it for the next, only over their own planes
+                let Some(r) = many.iter().map(|q| q.rect).reduce(|a, b| a.union(&b)).and_then(|r| r.clamped()) else { continue };
+                let ((x0, x1), (y0, y1)) = (span(r.x0, r.x1, width), span(r.y0, r.y1, height));
+                for y in y0..y1 {
+                    let row = y * width;
+                    let (Some(o), Some(v)) = (out.get_mut(row + x0..row + x1), one.get_mut(row + x0..row + x1)) else { continue };
+                    for (o, v) in o.iter_mut().zip(v.iter_mut()) {
+                        *o = (*o + *v).min(1.0);
+                        *v = 0.0;
+                    }
+                }
             }
         }
+    }
+    for q in people.iter().flatten().filter(|q| !q.split) {
+        draw(&mut out, width, height, q, f32::max);
     }
     if sel == Select::Background {
         for v in &mut out {
@@ -76,8 +90,8 @@ fn span(a: f32, b: f32, n: usize) -> (usize, usize) {
     ((a * n as f32).floor().max(0.0) as usize, ((b * n as f32).ceil().max(0.0) as usize).min(n))
 }
 
-/// Draw `plane` into a frame, keeping the larger value per pixel.
-fn draw_max(out: &mut [f32], width: usize, height: usize, plane: &Plane) {
+/// Draw `plane` into a frame, each pixel `join(frame, plane)`.
+fn draw(out: &mut [f32], width: usize, height: usize, plane: &Plane, join: impl Fn(f32, f32) -> f32) {
     let Some(r) = plane.rect.clamped() else { return };
     let ((x0, x1), (y0, y1)) = (span(r.x0, r.x1, width), span(r.y0, r.y1, height));
     for y in y0..y1 {
@@ -85,7 +99,7 @@ fn draw_max(out: &mut [f32], width: usize, height: usize, plane: &Plane) {
         for x in x0..x1 {
             let v = plane.sample((x as f32 + 0.5) / width as f32, fy);
             if let Some(o) = out.get_mut(y * width + x) {
-                *o = o.max(v);
+                *o = join(*o, v);
             }
         }
     }
@@ -243,31 +257,53 @@ mod tests {
 
     fn one_square() -> Parsing {
         let mut person = Person::default();
-        let plane = Plane { rect: NormRect::new(0.25, 0.25, 0.75, 0.75), width: 4, height: 4, data: vec![1.0; 16] };
+        let plane = Plane { rect: NormRect::new(0.25, 0.25, 0.75, 0.75), width: 4, height: 4, data: vec![1.0; 16], split: false };
         person.parts.insert(Part::EntirePerson, vec![plane]);
         Parsing { people: vec![person], width: 100, height: 100, ..Parsing::default() }
     }
 
     #[test]
     fn two_people_side_by_side_make_one_mask_without_a_line_where_they_meet() {
-        // one shirt across the photo, the body map's cells 0..4 the first person's and 4..8 the second's, as the parse
-        // shares a part out between people (#124)
+        // one shirt and one body across the photo, the body map's cells 0..4 the first person's and 4..8 the second's,
+        // as the parse shares its cells out between people (#124)
         let half = |mine: &dyn Fn(usize) -> bool| {
-            let data = (0..8 * 4).map(|i| if mine(i % 8) { 1.0 } else { 0.0 }).collect();
+            let data: Vec<f32> = (0..8 * 4).map(|i| if mine(i % 8) { 1.0 } else { 0.0 }).collect();
+            let plane = Plane { rect: NormRect::new(0.0, 0.25, 1.0, 0.75), width: 8, height: 4, data, split: true };
             let mut person = Person::default();
-            person.parts.insert(Part::ClothesTop, vec![Plane { rect: NormRect::new(0.0, 0.25, 1.0, 0.75), width: 8, height: 4, data }]);
+            person.parts.insert(Part::ClothesTop, vec![plane.clone()]);
+            person.parts.insert(Part::EntirePerson, vec![plane]);
             person
         };
         let p = Parsing { people: vec![half(&|x| x < 4), half(&|x| x >= 4)], width: 100, height: 100, ..Parsing::default() };
         let m = mask(&p, Select::Everyone(Part::ClothesTop), 64, 64);
+        let bg = mask(&p, Select::Background, 64, 64);
         for x in 0..64 {
             assert!(m[32 * 64 + x] > 0.99, "x {x}: {}", m[32 * 64 + x]);
+            assert!(bg[32 * 64 + x] < 0.01, "x {x}: background {}", bg[32 * 64 + x]);
+            assert!(p.background((x as f32 + 0.5) / 64.0, 0.5) < 0.01, "x {x}");
         }
-        let bg = mask(&p, Select::Background, 64, 64);
-        assert!(bg[32 * 64 + 32] == 1.0, "the shirt is not Entire Person");
         // each person alone still fades where the other begins
         let first = mask(&p, Select::Person(0, Part::ClothesTop), 64, 64);
         assert!(first[32 * 64 + 4] > 0.99 && first[32 * 64 + 34] < 0.5 && first[32 * 64 + 60] == 0.0);
+    }
+
+    #[test]
+    fn two_faces_on_cells_nobody_owns_are_not_counted_twice() {
+        // two faces parsed up close both claim a gap the body map gave nobody, each at 0.4 there
+        let face = |x0: f32| {
+            let mut person = Person::default();
+            let plane = Plane { rect: NormRect::new(x0, 0.0, x0 + 0.6, 1.0), width: 4, height: 4, data: vec![0.4; 16], split: false };
+            person.parts.insert(Part::EntirePerson, vec![plane]);
+            person
+        };
+        let p = Parsing { people: vec![face(0.0), face(0.4)], width: 100, height: 100, ..Parsing::default() };
+        let m = mask(&p, Select::Everyone(Part::EntirePerson), 20, 20);
+        let bg = mask(&p, Select::Background, 20, 20);
+        // the middle of the overlap (x 0.4 to 0.6)
+        assert!((m[10 * 20 + 10] - 0.4).abs() < 1e-5, "{}", m[10 * 20 + 10]);
+        assert!((bg[10 * 20 + 10] - 0.6).abs() < 1e-5, "{}", bg[10 * 20 + 10]);
+        assert!((p.background(0.5, 0.5) - 0.6).abs() < 1e-5);
+        assert!((crate::joined(&p.people, Part::EntirePerson, 0.5, 0.5) - 0.4).abs() < 1e-5);
     }
 
     #[test]
@@ -289,7 +325,7 @@ mod tests {
         // a plane with more cells than the frame has pixels: under a one-pixel radius the edge used to stay bilinear
         let mut person = Person::default();
         let data: Vec<f32> = (0..64 * 64).map(|i| if (i % 64) < 30 { 0.0 } else { 1.0 }).collect();
-        person.parts.insert(Part::Hair, vec![Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: 64, height: 64, data }]);
+        person.parts.insert(Part::Hair, vec![Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: 64, height: 64, data, split: false }]);
         let p = Parsing { people: vec![person], width: 32, height: 32, ..Parsing::default() };
         let mut px = vec![0u8; 32 * 32 * 3];
         for (i, v) in px.iter_mut().enumerate() {

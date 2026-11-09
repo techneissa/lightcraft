@@ -22,7 +22,7 @@ pub(super) fn temp_dir(tag: &str) -> std::path::PathBuf {
 }
 
 pub(super) fn plane(r: NormRect, side: usize) -> Plane {
-    Plane { rect: r, width: side, height: side, data: vec![1.0; side * side] }
+    Plane { rect: r, width: side, height: side, data: vec![1.0; side * side], split: false }
 }
 
 /// A person whose every part is its own small square inside the box at (`x`, `y`) of side `s`: part `i` of
@@ -155,7 +155,7 @@ fn no_people_fifty_people_and_a_face_cut_by_the_edge() {
     assert!(at(&main, &detail, 0.1, 0.1) > 0.9);
     // damaged planes are skipped, never a panic
     let mut bad = person(0.2, 0.2, 0.4, None);
-    bad.parts.insert(Part::Hair, vec![Plane { rect: NormRect::new(f32::NAN, 0.0, 1.0, 1.0), width: 2, height: 2, data: vec![1.0; 3] }]);
+    bad.parts.insert(Part::Hair, vec![Plane { rect: NormRect::new(f32::NAN, 0.0, 1.0, 1.0), width: 2, height: 2, data: vec![1.0; 3], split: false }]);
     assert!(build(&parse(vec![bad]), &Selection::of(None, &[Pick::Hair]), Orientation::Normal).is_none());
 }
 
@@ -312,7 +312,7 @@ fn two_people_side_by_side_make_one_top_without_a_line_where_they_meet() {
     let half = |mine: &dyn Fn(usize) -> bool| {
         let data = (0..8 * 4).map(|i| if mine(i % 8) { 1.0 } else { 0.0 }).collect();
         let mut q = Person::default();
-        q.parts.insert(Part::ClothesTop, vec![Plane { rect: NormRect::new(0.1, 0.4, 0.9, 0.6), width: 8, height: 4, data }]);
+        q.parts.insert(Part::ClothesTop, vec![Plane { rect: NormRect::new(0.1, 0.4, 0.9, 0.6), width: 8, height: 4, data, split: true }]);
         q
     };
     let p = parse(vec![half(&|x| x < 4), half(&|x| x >= 4)]);

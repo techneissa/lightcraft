@@ -174,31 +174,7 @@ fn draw(rect: &NormRect, side: usize, parts: &[Placed<'_>], bodies: &[Placed<'_>
         let (u, v) = back.map(x, y, 1.0, 1.0);
         (u as f32, v as f32)
     };
-    // a person's planes overlap (a face parsed up close over their body), so they join by the larger value; people
-    // share out one parse, so theirs add up: the larger would sag where two people meet, a thin line (#124)
-    let fill = |planes: &[Placed<'_>], out: &mut Vec<f32>| {
-        let mut people: Vec<usize> = planes.iter().map(|q| q.person).collect();
-        people.sort_unstable();
-        people.dedup();
-        let mut one = vec![0.0f32; n];
-        for person in people {
-            one.fill(0.0);
-            for q in planes.iter().filter(|q| q.person == person) {
-                let Some(r) = cells(rect, side, &q.rect) else { continue };
-                for j in r.2..r.3 {
-                    for i in r.0..r.1 {
-                        let (u, v) = at(i, j);
-                        if let Some(o) = one.get_mut(j * side + i) {
-                            *o = o.max(q.plane.sample(u, v));
-                        }
-                    }
-                }
-            }
-            for (o, v) in out.iter_mut().zip(&one) {
-                *o = (*o + v).min(1.0);
-            }
-        }
-    };
+    let fill = |planes: &[Placed<'_>], out: &mut Vec<f32>| fill_planes(planes, out, rect, side, &at);
     let mut out = vec![0.0f32; n];
     fill(parts, &mut out);
     if background {
@@ -209,6 +185,49 @@ fn draw(rect: &NormRect, side: usize, parts: &[Placed<'_>], bodies: &[Placed<'_>
         }
     }
     out
+}
+
+/// Draw `planes` into `out` (a `side × side` grid over `rect`; `at`: a cell's point on the parse) as
+/// `lightcraft_parsing::render::mask` joins them: split planes add up across people, the larger within a person, and
+/// every other plane by the larger value (#124). Each cell is sampled once per plane.
+fn fill_planes(planes: &[Placed<'_>], out: &mut [f32], rect: &NormRect, side: usize, at: &dyn Fn(usize, usize) -> (f32, f32)) {
+    let paint = |buf: &mut [f32], q: &Placed<'_>, join: &dyn Fn(f32, f32) -> f32| {
+        let Some(r) = cells(rect, side, &q.rect) else { return None };
+        for j in r.2..r.3 {
+            for i in r.0..r.1 {
+                let (u, v) = at(i, j);
+                if let Some(o) = buf.get_mut(j * side + i) {
+                    *o = join(*o, q.plane.sample(u, v));
+                }
+            }
+        }
+        Some(r)
+    };
+    let mut split: Vec<&Placed<'_>> = planes.iter().filter(|q| q.plane.split).collect();
+    split.sort_by_key(|q| q.person);
+    // (a buffer of its own only for a person with several split planes, reused for the next)
+    let mut one: Vec<f32> = Vec::new();
+    for person in split.chunk_by(|a, b| a.person == b.person) {
+        if let [q] = person {
+            paint(out, q, &|o, v| (o + v).min(1.0));
+            continue;
+        }
+        one.resize(out.len(), 0.0);
+        let drawn: Vec<_> = person.iter().filter_map(|q| paint(&mut one, q, &f32::max)).collect();
+        let Some(r) = drawn.into_iter().reduce(|a, b| (a.0.min(b.0), a.1.max(b.1), a.2.min(b.2), a.3.max(b.3))) else { continue };
+        // add what this person drew, and clear it for the next, only over their own cells
+        for j in r.2..r.3 {
+            let row = j * side;
+            let (Some(o), Some(v)) = (out.get_mut(row + r.0..row + r.1), one.get_mut(row + r.0..row + r.1)) else { continue };
+            for (o, v) in o.iter_mut().zip(v.iter_mut()) {
+                *o = (*o + *v).min(1.0);
+                *v = 0.0;
+            }
+        }
+    }
+    for q in planes.iter().filter(|q| !q.plane.split) {
+        paint(out, q, &f32::max);
+    }
 }
 
 /// The cells of a `side × side` grid over `grid` that `r` touches: (i0, i1, j0, j1), ends excluded.

@@ -35,6 +35,9 @@ struct PlaneHead {
     width: u32,
     height: u32,
     bytes: u64,
+    /// [`Plane::split`]
+    #[serde(default)]
+    split: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -112,7 +115,13 @@ pub fn encode(p: &Parsing) -> Result<Vec<u8>> {
             let mut heads = Vec::with_capacity(planes.len());
             for plane in planes {
                 let png = encode_plane(plane)?;
-                heads.push(PlaneHead { rect: plane.rect, width: plane.width as u32, height: plane.height as u32, bytes: png.len() as u64 });
+                heads.push(PlaneHead {
+                    rect: plane.rect,
+                    width: plane.width as u32,
+                    height: plane.height as u32,
+                    bytes: png.len() as u64,
+                    split: plane.split,
+                });
                 blobs.push(png);
             }
             parts.push((*part, heads));
@@ -156,7 +165,7 @@ fn decode_plane(head: &PlaneHead, bytes: &[u8]) -> Result<Plane> {
         return Err(bad("size differs from its header"));
     }
     let data = img.into_raw().into_iter().map(|b| f32::from(b) / 255.0).collect();
-    Ok(Plane { rect: head.rect, width: head.width as usize, height: head.height as usize, data })
+    Ok(Plane { rect: head.rect, width: head.width as usize, height: head.height as usize, data, split: head.split })
 }
 
 /// A parse from its bytes.
@@ -286,7 +295,7 @@ mod tests {
         person.landmarks = vec![Landmark { x: 0.2, y: 0.2, z: -0.01 }; 478];
         person.parts.insert(
             Part::Hair,
-            vec![Plane { rect: NormRect::new(0.0, 0.0, 0.5, 0.5), width: 3, height: 2, data: vec![0.0, 0.5, 1.0, 1.0, 0.25, 0.0] }],
+            vec![Plane { rect: NormRect::new(0.0, 0.0, 0.5, 0.5), width: 3, height: 2, data: vec![0.0, 0.5, 1.0, 1.0, 0.25, 0.0], split: true }],
         );
         Parsing { model_set: "bisenet".into(), model_version: "v".into(), width: 40, height: 30, people: vec![person] }
     }
@@ -299,7 +308,7 @@ mod tests {
         assert_eq!(back.people[0].landmarks.len(), 478);
         assert_eq!(back.people[0].person_id.as_deref(), Some("p1"));
         let (a, b) = (&p.people[0].parts[&Part::Hair][0], &back.people[0].parts[&Part::Hair][0]);
-        assert_eq!((a.width, a.height, a.rect), (b.width, b.height, b.rect));
+        assert_eq!((a.width, a.height, a.rect, a.split), (b.width, b.height, b.rect, b.split));
         assert!(a.data.iter().zip(&b.data).all(|(x, y)| (x - y).abs() <= 0.5 / 255.0 + 1e-6));
     }
 
@@ -328,7 +337,7 @@ mod tests {
         let mut wide = sample();
         wide.people[0]
             .parts
-            .insert(Part::Hat, vec![Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: 1600, height: 1, data: vec![0.5; 1600] }]);
+            .insert(Part::Hat, vec![Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: 1600, height: 1, data: vec![0.5; 1600], split: false }]);
         assert!(decode(&encode(&wide).unwrap()).is_err());
         let ok = encode(&sample()).unwrap();
         assert!(decode_capped(&ok, 6).is_ok());
