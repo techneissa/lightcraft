@@ -534,6 +534,9 @@ pub struct Plan<'a> {
     pub geo: u64,
     /// Key of the white-balanced, retouched, denoised image (and of the planes computed from it).
     pub lin_key: u64,
+    /// [`Self::lin_key`] without the portrait retouching (fork, `fork/perf-decontam-gpu.md`): the image a decontaminated
+    /// edge is estimated from, apart from where the retouch step wrote.
+    pub edge_lin_key: u64,
     /// [`Self::lin_key`] without the noise-reduction settings: draft renders reuse the smooth
     /// planes of an image that differs from this one only in its noise reduction.
     pub pre_nr_key: u64,
@@ -672,6 +675,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         local::joint_colour_nr(s),
     ));
     let lin_key = hash_of((pre_nr_key, nr_key));
+    let edge_lin_key = hash_of((pre_retouch_key, nr_key));
     // (the noise model leaves the retouching out: a Portrait slider never measures it again; but whether a one-tile
     // frame is measured apart from the retouching, `colour_noise`, is part of it)
     let noise_key =
@@ -687,6 +691,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         detail_scale,
         geo,
         lin_key,
+        edge_lin_key,
         pre_nr_key,
         pre_retouch_key,
         noise_key,
@@ -980,7 +985,7 @@ fn render_impl(
     }
     prep.recolor.clone_from(&plan.recolor);
     let ev = s.light.exposure as f32;
-    let split_key = |m: &lightcraft_develop::Mask| hash_of((lin_key, masks::alpha_key(m, keys, ev), px_per_long.to_bits()));
+    let split_key = |m: &lightcraft_develop::Mask| decontam::split_key(lin_key, masks::alpha_key(m, keys, ev), px_per_long);
     // (a request for mask planes draws nothing: it keeps the edges for the next render)
     let split = if alphas_out.is_some() {
         kept_split

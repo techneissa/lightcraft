@@ -276,6 +276,30 @@ fn recolor_masks(d: vec3<f32>, i: u32, n: u32) -> vec3<f32> {
     return oklab_inv(lab);
 }
 
+// `recolor_masks` with mask `ok` reading alpha `ov` instead of its own (`NO_MASK`: none; a decontaminated edge's
+// layers, `wgsl/decontam.wgsl`).
+fn recolor_masks_over(d: vec3<f32>, i: u32, n: u32, ok: u32, ov: f32) -> vec3<f32> {
+    var lab = vec3<f32>(0.0);
+    var found = false;
+    let nm = pu(F_NMASK);
+    for (var m = 0u; m < nm; m++) {
+        let a = select(masks[m * n + i], ov, m == ok);
+        let t = pu(F_MASK_OFF) + m * MASK_TERMS + MASK_RECOLOR;
+        if (a <= 0.0 || aux[t] <= 0.0) {
+            continue;
+        }
+        if (!found) {
+            lab = oklab(d);
+            found = true;
+        }
+        lab = recolor_one(lab, t, a);
+    }
+    if (!found) {
+        return d;
+    }
+    return oklab_inv(lab);
+}
+
 fn color_ops(rgb: vec3<f32>, local_sat: f32, local_hue: f32) -> vec3<f32> {
     if (pu(F_OPS_IDENTITY) != 0u && local_sat == 0.0 && local_hue == 0.0) {
         return rgb;
@@ -514,6 +538,242 @@ fn gamut_apply(r: vec3<f32>, luma: vec3<f32>, tg: f32, top: f32) -> vec3<f32> {
         return yy + (r - yy) * tg;
     }
     return r;
+}
+
+// Fork (`fork/perf-decontam-gpu.md`): the stages of `main` as functions, for `wgsl/decontam.wgsl` to run on a
+// decontaminated edge's two colours. `main` keeps its own copy, so a render without one compiles as before: keep them
+// in step.
+
+// The masks' summed terms at a pixel (`finish::PixelLocalTerms`).
+struct Local {
+    v: array<f32, MASK_SUMS>,
+    tint_on: bool,
+    tint_dir: vec2<f32>,
+    tint_amt: f32,
+}
+
+// No mask's alpha is replaced (`local_terms`, `recolor_masks`).
+const NO_MASK: u32 = 0xffffffffu;
+
+// The sum of the masks' terms at pixel `i` (`finish::pixel_local_terms`); mask `ok` reads alpha `ov` instead of its own.
+fn local_terms(i: u32, n: u32, ok: u32, ov: f32) -> Local {
+    var r: Local;
+    let nm = pu(F_NMASK);
+    for (var m = 0u; m < nm; m++) {
+        let a = select(masks[m * n + i], ov, m == ok);
+        if (a <= 0.0) {
+            continue;
+        }
+        let t = pu(F_MASK_OFF) + m * MASK_TERMS;
+        for (var k = 0u; k < MASK_SUMS; k++) {
+            r.v[k] += a * aux[t + k];
+        }
+        if (aux[t + MASK_SUMS] > 0.0) {
+            r.tint_on = true;
+            r.tint_dir = vec2<f32>(aux[t + MASK_SUMS + 1u], aux[t + MASK_SUMS + 2u]);
+            r.tint_amt = a * aux[t + MASK_SUMS + 3u];
+        }
+    }
+    return r;
+}
+
+// The scene-linear edits of colour `raw` at pixel `i` with terms `lt` (`finish::adjust_scene_pixel`): the colour and
+// its log luminance.
+fn scene_pixel(raw: vec3<f32>, i: u32, n: u32, lt: Local) -> vec4<f32> {
+    let gain = pf(F_GAIN);
+    let ev = pf(F_EV);
+    let nm = pu(F_NMASK);
+    var c = raw;
+    if (gain != 1.0) {
+        c = c * gain;
+    }
+    let l_pre = log_l[i];
+    let l0 = l_pre + ev;
+    let l_exp = lt.v[0];
+    let l_temp = lt.v[1];
+    let l_tint = lt.v[2];
+    let l_noise = lt.v[14];
+    // --- local Moiré (and the colour part of Noise): chromaticity towards its blur
+    let mt = clamp(lt.v[15] + 0.5 * max(l_noise, 0.0), -1.0, 1.0);
+    if (mt != 0.0 && pu(F_HAS_CHROMA) != 0u) {
+        let y = lum2020(c);
+        let ch0 = raw / max(lum2020(raw), 1e-6);
+        let o = nm * n + 3u * i;
+        let cb = vec3<f32>(masks[o], masks[o + 1u], masks[o + 2u]);
+        c = max((ch0 + (cb - ch0) * mt) * y, vec3<f32>(0.0));
+    }
+    // --- local Defringe: desaturate purple / green fringes along edges
+    let df = clamp(lt.v[16], 0.0, 1.0);
+    if (df > 0.0 && pu(F_HAS_TEX) != 0u) {
+        let yd = max(lum2020(c), 1e-6);
+        let purple = (min(c.x, c.z) - c.y) / yd;
+        let green = (c.y - max(c.x, c.z)) / yd;
+        let k = df * sstep(0.04, 0.3, abs(l_pre - tex[i])) * max(sstep(0.02, 0.2, purple), sstep(0.02, 0.2, green));
+        if (k > 0.0) {
+            let y = lum2020(c);
+            c = c + (y - c) * k;
+        }
+    }
+
+    // --- dehaze (scene linear)
+    let dz = pf(F_DEHAZE) + lt.v[10];
+    if (dz != 0.0 && pu(F_HAS_DARK) != 0u) {
+        // the dark channel is a blur, not a patch minimum: never attribute more veil than the
+        // pixel's own minimum channel, or dark pixels next to bright ones crush to black (#2504)
+        let air = pf(F_AIR);
+        let cmin = min(c.x, min(c.y, c.z));
+        let d = clamp(min(select(0.0, dark[i] / pf(F_AIR_PRE), pf(F_AIR_PRE) > 0.0), select(0.0, cmin / air, air > 0.0)), 0.0, 1.0);
+        if (dz > 0.0) {
+            let t = max(1.0 - 0.95 * min(dz, 1.0) * d, 0.12);
+            c = max((c - air * (1.0 - t)) / t, vec3<f32>(0.0));
+        } else {
+            let k = min(-dz, 1.0) * 0.7 * (0.35 + 0.65 * d);
+            c = c + (air * 0.9 - c) * k;
+        }
+    }
+
+    // --- local exposure / temp / tint
+    if (l_exp != 0.0) {
+        c = c * exp2(l_exp);
+    }
+    if (l_temp != 0.0 || l_tint != 0.0) {
+        let y0 = lum2020(c);
+        c = vec3<f32>(c.x * (1.0 + 0.3 * l_temp), c.y * (1.0 - 0.22 * l_tint), c.z * max(1.0 - 0.3 * l_temp, 0.0));
+        let y1 = max(lum2020(c), 1e-9);
+        c = c * y0 / y1;
+    }
+
+    var l1 = l0;
+    if (dz != 0.0 || l_exp != 0.0) {
+        l1 = log_lum(c);
+    }
+    return vec4<f32>(c, l1);
+}
+
+// The local tone stage's change of log luminance (`finish::local_tone_delta`) at pixel `i`.
+fn tone_delta(i: u32, base: f32, l1: f32, lt: Local) -> f32 {
+    let l_pre = log_l[i];
+    let l_noise = lt.v[14];
+    var delta = 0.0;
+    let hh = pf(F_HL) + lt.v[4];
+    let ss = pf(F_SH) + lt.v[5];
+    if (hh != 0.0 || ss != 0.0) {
+        if (pu(F_TONE_V3) != 0u) {
+            let ws = 1.0 - sstep(-5.0, 1.5, base);
+            let wh = sstep(-1.4, 2.8, base);
+            var lift = hh * 1.7 * wh;
+            if (lift > 0.0) {
+                // same shoulder as finish.rs (KNEE 1.0, WHITE 2.45)
+                let lifted = base + lift;
+                if (lifted > 1.0) {
+                    let shoulder = 1.0 + 1.45 * tanh((lifted - 1.0) / 1.45);
+                    lift = max(shoulder - base, 0.0);
+                }
+            }
+            delta += ss * 1.7 * ws + lift;
+        } else {
+            let ws = 1.0 - sstep(-4.8, 0.3, base);
+            let wh = sstep(-1.0, 2.8, base);
+            delta += ss * 1.7 * ws * sqrt(ws) + hh * 1.7 * wh;
+        }
+    }
+    if (lt.v[6] != 0.0) {
+        delta += lt.v[6] * 0.8 * sstep(0.5, 3.0, l1);
+    }
+    if (lt.v[7] != 0.0) {
+        delta += lt.v[7] * 0.8 * (1.0 - sstep(-6.0, -1.5, l1));
+    }
+    if (lt.v[3] != 0.0) {
+        delta += lt.v[3] * 0.14 * clamp(l1, -6.0, 4.0);
+    }
+    let cl = pf(F_CLAR) + lt.v[9];
+    if (cl != 0.0 && pu(F_HAS_CLAR) != 0u) {
+        let det = clamp(l_pre - clar[i], -2.5, 2.5);
+        let q = base / 3.2;
+        let mid = exp(-(q * q));
+        delta += cl * 0.85 * det * (0.35 + 0.65 * mid);
+    }
+    let tx = pf(F_TEX) + lt.v[8];
+    let sp = lt.v[13] * 0.6 + pf(F_SHARPEN);
+    let v3 = pu(F_TONE_V3) != 0u;
+    if ((tx != 0.0 || (sp != 0.0 && !v3)) && pu(F_HAS_TEX) != 0u) {
+        let det = l_pre - tex[i];
+        let tame = 1.0 - 0.6 * sstep(0.4, 1.6, abs(det));
+        delta += tx * 1.1 * clamp(det, -1.0, 1.0) * tame;
+        if (sp != 0.0 && !v3) {
+            let sm = pf(F_SHARPEN_MASK);
+            var mk = 1.0;
+            if (sm > 0.0) {
+                mk = sstep(sm * 0.25, sm * 0.25 + 0.15, abs(det));
+            }
+            delta += sp * 1.3 * clamp(det, -0.8, 0.8) * mk;
+        }
+    }
+    // process V3: sharpening has a band of its own at the Radius slider's scale (`finish::local_tone_delta`)
+    if (sp != 0.0 && v3 && pu(F_HAS_SHARP) != 0u) {
+        let det = l_pre - tex[pu(F_SHARP_OFF) + i];
+        let sm = pf(F_SHARPEN_MASK);
+        var mk = 1.0;
+        if (sm > 0.0) {
+            mk = sstep(sm * 0.08, sm * 0.08 + 0.08, abs(det)); // (V3: `finish::local_tone_delta`)
+        }
+        // `finish::sharpen_gain` (SHARPEN_GAIN), `finish::sharpen_mix` (`SHARPEN_MIX_LO` / `_HI`)
+        let sd = pf(F_SHARPEN_DETAIL);
+        let mixv = sd + (1.0 - sd) * sstep(0.03, 0.15, abs(det));
+        delta += sp * pf(F_SHARPEN_GAIN) * clamp(det, -0.8, 0.8) * mk * mixv;
+    }
+    // local Noise: smooth (or, negative, boost) small-amplitude detail, keep edges
+    if (l_noise != 0.0 && pu(F_HAS_TEX) != 0u) {
+        let det = l_pre - tex[i];
+        delta -= clamp(l_noise, -1.0, 1.0) * 0.9 * det * (1.0 - sstep(0.1, 0.5, abs(det)));
+    }
+    return delta;
+}
+
+// A scene colour after the local tone stage to display linear, before the colour edits: calibration, the tone map,
+// process V4's Contrast and Blacks (`finish_with`'s `to_display`).
+fn to_display(c0: vec3<f32>) -> vec3<f32> {
+    let peak = pf(F_PEAK);
+    var c = c0;
+    // --- calibration (scene linear, before the tone map)
+    if (pu(F_CALIB) != 0u || pf(F_SHADOW_TINT) != 0.0) {
+        c = calibrate(c);
+    }
+
+    // --- tone map on luminance, highlight desaturation
+    let yl = lum2020(c);
+    let o = tone_apply(yl);
+    var d = vec3<f32>(0.0);
+    if (yl > 1e-9) {
+        d = c * o / yl;
+    }
+    let k = chroma_scale(o);
+    if (k != 1.0) {
+        d = vec3<f32>(o) + (d - vec3<f32>(o)) * k;
+    }
+    let mx = max(d.x, max(d.y, d.z));
+    if (mx > peak) {
+        let t = clamp((mx - peak) / max(mx - o, 1e-6), 0.0, 1.0);
+        d = d + (o - d) * t;
+    }
+
+    // --- process V4: calibrated Contrast, Blacks
+    if (pu(F_LIGHT_OPS) != 0u) {
+        d = light_ops(d);
+    }
+
+    return d;
+}
+
+// The colour edits of display colour `d0` at pixel `i` with terms `lt`; mask `ok` reads alpha `ov` (`finish_with`'s
+// `colour`).
+fn colour_pixel(d0: vec3<f32>, i: u32, n: u32, lt: Local, ok: u32, ov: f32) -> vec3<f32> {
+    var d = color_ops(d0, lt.v[11], lt.v[12]);
+    if (lt.tint_on) {
+        let lab = oklab(d);
+        d = oklab_inv(vec3<f32>(lab.x, lab.y + lt.tint_dir.x * 0.08 * lt.tint_amt, lab.z + lt.tint_dir.y * 0.08 * lt.tint_amt));
+    }
+    return recolor_masks_over(d, i, n, ok, ov);
 }
 
 @compute @workgroup_size(16, 16)

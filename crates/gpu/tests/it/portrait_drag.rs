@@ -26,7 +26,7 @@ const SLIDERS: [&str; 5] =
     ["retouch.skin.smoothness", "retouch.eyes.whites", "retouch.skinTone.evenTone", "retouch.teethLips.teethWhitening", "retouch.blemish.amount"];
 
 /// A face in `bounds` on a `w × h` photo with its part masks, five landmarks and its spots.
-fn portrait(w: usize, h: usize, bounds: NormRect) -> (Arc<Rgb32f>, SourceInfo) {
+pub(super) fn portrait(w: usize, h: usize, bounds: NormRect) -> (Arc<Rgb32f>, SourceInfo) {
     let at = |fx: f64, fy: f64| (bounds.x0 + fx * bounds.width(), bounds.y0 + fy * bounds.height());
     let ell = move |x: f64, y: f64, c: (f64, f64), rx: f64, ry: f64| {
         let d = (((x - c.0) / (rx * bounds.width())).powi(2) + ((y - c.1) / (ry * bounds.height())).powi(2)).sqrt();
@@ -75,7 +75,7 @@ fn portrait(w: usize, h: usize, bounds: NormRect) -> (Arc<Rgb32f>, SourceInfo) {
 }
 
 /// A raw's defaults (sharpening, the joint colour noise reduction), tone and clarity: every plane a drag redoes.
-fn edit() -> DevelopSettings {
+pub(super) fn edit() -> DevelopSettings {
     let mut s = DevelopSettings::default();
     s.detail.sharpen_amount = 40.0;
     s.detail.nr_color = 25.0;
@@ -87,7 +87,7 @@ fn edit() -> DevelopSettings {
 
 /// A whole render of `s` that does not depend on the retouch step's boxes: no stages, the retouched image uploaded
 /// whole.
-fn whole(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> lightcraft_raster::Rgba8 {
+pub(super) fn whole(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> lightcraft_raster::Rgba8 {
     lightcraft_gpu::retouch_full_upload(true);
     let img = lightcraft_gpu::render(src, info, s, req, None).expect("gpu").image;
     lightcraft_gpu::retouch_full_upload(false);

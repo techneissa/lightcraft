@@ -4,6 +4,7 @@
 //! threads would change, and `tests/display.rs` and `tests/window_pending.rs` adopt (or wait for) the
 //! window's device, once per process.
 
+mod decontam;
 mod dirty_render;
 mod equivalence;
 mod fallback;

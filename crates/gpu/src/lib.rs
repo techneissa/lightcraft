@@ -35,6 +35,11 @@ pub mod backend;
 pub mod bm3d;
 #[cfg(not(target_arch = "wasm32"))]
 mod ctx;
+// fork: `fork/perf-decontam-gpu.md`
+#[cfg(not(target_arch = "wasm32"))]
+mod decontam;
+#[cfg(not(target_arch = "wasm32"))]
+pub use decontam::edge_uploads;
 #[cfg(not(target_arch = "wasm32"))]
 mod dirty;
 #[cfg(not(target_arch = "wasm32"))]
@@ -711,10 +716,6 @@ fn run(
         // content-aware Fill spots (`spots::fill_box`) and shaped spots (`spot_area`, fork) have no GPU kernel: the
         // CPU renders the photo
         if s.spots.iter().any(|sp| sp.mode == lightcraft_develop::SpotMode::Fill || sp.area.is_some()) {
-            return Err(Fallback::NotTried);
-        }
-        // fork (`fork/decontaminate.md`): a decontaminated mask edge has no GPU kernel yet: the CPU renders the photo
-        if s.masks.iter().any(lightcraft_pipeline::decontam::applies) {
             return Err(Fallback::NotTried);
         }
         // in flight until this returns; not tried once the process is ending (issue #620)
