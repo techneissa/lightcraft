@@ -17,7 +17,7 @@ use lightcraft_engine::media::QuickSource;
 
 mod brush_panel;
 pub(crate) mod brush_preview;
-mod brush_resize;
+pub(crate) mod brush_resize;
 mod crop;
 mod film_bar;
 mod filmstrip;
@@ -25,7 +25,7 @@ mod find_overlay;
 pub(crate) mod geometry;
 mod info;
 mod look_ahead;
-mod masks;
+pub(crate) mod masks;
 mod object_remove;
 // fork: the people picker over the loupe (`fork/retouch-foundation.md`)
 pub(crate) mod people_picker;
@@ -918,6 +918,13 @@ fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
             app.ui.tool.clear();
         }
         return;
+    }
+    // fork feature (fork/refine-brush.md): the Portrait tab's Refine strokes, and its brush when one is in hand
+    if tv.right == RightPanel::Portrait {
+        super::portrait::refine_overlay(app, ui, map, d, tv.id);
+        if super::portrait::refine_canvas(app, ui, resp, map) {
+            return;
+        }
     }
     match tv.right {
         RightPanel::Crop => crop_overlay(app, ui, resp, map, tv.frame, d, tv.id),

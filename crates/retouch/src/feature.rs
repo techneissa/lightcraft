@@ -53,6 +53,9 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     /// renders all of that around it and cuts back (`crates/pipeline/src/retouch_step.rs`), so zoom never changes
     /// a result. By default [`DEFAULT_REACH`].
     const REACH: f64 = DEFAULT_REACH;
+    /// The part masks a Refine Add stroke widens ([`crate::refine`]): by default the first of [`Feature::PARTS`];
+    /// none (Add is not offered) for a feature that reads no mask.
+    const ADD_PARTS: &'static [Part] = first_part(Self::PARTS);
     /// Whether a zoomed render must hold what the feature reads around a face ([`Feature::PARTS`]' areas grown by
     /// [`Feature::REACH`]). `false` for a feature that reads only the pixel itself and the pipeline's whole-frame
     /// [`View::analysis`] image (Background). By default `true`.
@@ -81,6 +84,14 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>);
 }
 
+/// The first part of `parts` (none of none): [`Feature::ADD_PARTS`]' default.
+pub const fn first_part(parts: &'static [Part]) -> &'static [Part] {
+    match parts {
+        [first, ..] => std::slice::from_ref(first),
+        [] => &[],
+    }
+}
+
 /// [`Feature::REACH`] of a feature that does not set its own: half the face's size past its box and masks.
 pub const DEFAULT_REACH: f64 = 0.5;
 
@@ -99,6 +110,16 @@ pub trait View: Sync {
     /// ([`crate::overrides::resolve_in`]). `None` (the default): such settings pair by person only.
     fn key_map(&self) -> Option<&dyn KeyMap> {
         None
+    }
+    /// Pixel position → normalised coordinates of the frame Refine strokes are kept in (the photo before its crop,
+    /// after orientation, lens corrections and transform, as Remove spots). By default [`View::to_norm`]: the
+    /// same frame as the faces'.
+    fn to_edit(&self, x: f64, y: f64) -> (f64, f64) {
+        self.to_norm(x, y)
+    }
+    /// [`View::to_edit`]'s inverse; `None` for a point that has no place in the image.
+    fn edit_to_px(&self, nx: f64, ny: f64) -> Option<(f64, f64)> {
+        self.to_px(nx, ny)
     }
     /// Where the image lies in the whole render (a zoomed loupe renders a window of it), for features that read
     /// around a pixel ([`crate::background`]). `None` (the default): the image is the whole render.
@@ -189,6 +210,20 @@ impl<'a> Scene<'a> {
     {
         let faces = self.faces.iter().filter_map(|f| map_face(f.face, f.index, view)).collect();
         Scene { faces, width, height, backdrop: self.backdrop, depth: self.depth, input_key: self.input_key, view }
+    }
+
+    /// A scene of `faces` already mapped (the Refine brush's widened masks, [`crate::refine`]), with this scene's
+    /// size, view, backdrop, depth and input key.
+    pub(crate) fn with_mapped<'b>(&'b self, faces: Vec<FaceCtx<'b>>) -> Scene<'b> {
+        Scene {
+            faces,
+            width: self.width,
+            height: self.height,
+            backdrop: self.backdrop,
+            depth: self.depth,
+            input_key: self.input_key,
+            view: self.view,
+        }
     }
 
     /// The mask of `part` of face `face` at pixel (`x`, `y`) of the image; 0 without that mask.

@@ -95,7 +95,7 @@ fn run(args: &[String]) -> Result<(), String> {
     if let Some(d) = &depth {
         input = input.with_depth(Some(Depth { plane: Arc::new(read_grey(d)?), key: 2 }));
     }
-    let r = Retouch { global: Features { background: b, ..Features::default() }, faces: Vec::new() };
+    let r = Retouch { global: Features { background: b, ..Features::default() }, faces: Vec::new(), ..Retouch::default() };
     // (the analysis image is the picture itself; the app's is the whole frame at 1600 pixels)
     let analysis = Analysis::new(Arc::new(img.clone()), 1);
     let view = Analysed { whole: WholePhoto { width: w, height: h }, analysis: &analysis };

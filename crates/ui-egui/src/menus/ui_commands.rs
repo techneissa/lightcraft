@@ -172,6 +172,8 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     // fork: the Portrait tab; {section, open?} opens or closes one of its sections
     ("panel.portrait", "Portrait", Some("T"), "Window"),
     ("portrait.section", "Portrait Section", None, ""),
+    // {feature?: key | null, mode?, strength?, show?}: a feature's Refine brush, and Show Refine Strokes
+    ("portrait.refine", "Portrait Refine Brush", None, ""),
     // fork: {path?, id?} a picture file for Portrait ▸ Background ▸ Swap (`fork/retouch-background.md`)
     ("portrait.backgroundPicture", "Choose Background Picture", None, ""),
     ("panel.presets", "Presets", Some("Shift+P"), "Window"),

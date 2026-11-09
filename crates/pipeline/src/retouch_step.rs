@@ -14,7 +14,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use lightcraft_develop::DevelopSettings;
 use lightcraft_develop::retouch::background::{ANALYSIS_LONG, Analysis, Place};
-use lightcraft_develop::retouch::{Face, Input, KeyMap, MAX_FACES, NormRect, Reads, Stage, View};
+use lightcraft_develop::retouch::{Face, Input, KeyMap, MAX_FACES, NormRect, Reads, Scene, Stage, View};
 use lightcraft_geom::{Affine, Orientation, Point};
 use lightcraft_raster::Rgb32f;
 
@@ -230,19 +230,20 @@ impl View for FrameView {
 struct PhotoView {
     to_photo: crate::geometry::MaskMap,
     to_out: Box<dyn Fn(Point) -> Option<Point> + Sync>,
-    keys: FrameKeyMap,
+    /// The frame Refine strokes are in (after lens corrections and transform, as [`FrameView`]).
+    edit: FrameView,
     place: Place,
     analysis: Option<Arc<Analysis>>,
 }
 
 impl PhotoView {
     fn new(frame: &crate::geometry::Frame, w: usize, h: usize, orient: Orientation) -> PhotoView {
-        let keys = FrameKeyMap::new(frame, orient);
+        let edit = FrameView::new(frame, w, h, orient);
         let frame = frame.for_mask(true);
         PhotoView {
             to_photo: frame.out_to_mask(w, h),
             to_out: Box::new(frame.mask_to_out(w, h)),
-            keys,
+            edit,
             place: Place { x: 0, y: 0, width: w, height: h },
             analysis: None,
         }
@@ -260,7 +261,15 @@ impl View for PhotoView {
     }
 
     fn key_map(&self) -> Option<&dyn KeyMap> {
-        Some(&self.keys)
+        Some(&self.edit.keys)
+    }
+
+    fn to_edit(&self, x: f64, y: f64) -> (f64, f64) {
+        self.edit.to_norm(x, y)
+    }
+
+    fn edit_to_px(&self, nx: f64, ny: f64) -> Option<(f64, f64)> {
+        self.edit.to_px(nx, ny)
     }
 
     fn place(&self) -> Option<Place> {
@@ -315,16 +324,27 @@ pub fn window_for_reads(
     let o = s.orientation;
     let view: Box<dyn View> =
         if input.on_photo { Box::new(PhotoView::new(frame, full_w, full_h, o)) } else { Box::new(FrameView::new(frame, full_w, full_h, o)) };
+    // where each face's own Refine Add strokes widen its masks: their points' box grown by their radius, in pixels
+    let scene = Scene::new(input, view.as_ref(), full_w, full_h);
+    let adds = lightcraft_develop::retouch::refine::add_reach(&s.retouch, input, &scene);
     let (fw, fh) = (full_w as f64, full_h as f64);
-    let mut boxes: Vec<[f64; 4]> = input
+    let mut boxes: Vec<[f64; 4]> = scene
         .faces
         .iter()
-        .take(MAX_FACES)
-        .filter_map(|face| match read_box(face, &reads, view.as_ref()) {
-            ReadBox::Skipped => None,
-            ReadBox::At(b) => Some(b),
-            // (part of its reads maps nowhere: all of the frame, to be sure)
-            ReadBox::Unsure => Some([0.0, 0.0, fw, fh]),
+        .zip(&adds)
+        .filter_map(|(f, add)| {
+            let add = match add.map(|(b, r)| add_box(b, r, view.as_ref())) {
+                None => None,
+                Some(Some(a)) => Some(a),
+                // (where the strokes widen maps nowhere: all of the frame, to be sure)
+                Some(None) => return Some([0.0, 0.0, fw, fh]),
+            };
+            match read_box(f.face, &reads, add, view.as_ref()) {
+                ReadBox::Skipped => None,
+                ReadBox::At(b) => Some(b),
+                // (part of its reads maps nowhere: all of the frame, to be sure)
+                ReadBox::Unsure => Some([0.0, 0.0, fw, fh]),
+            }
         })
         .map(|[rx0, ry0, rx1, ry1]| [rx0.max(0.0), ry0.max(0.0), rx1.min(fw), ry1.min(fh)])
         .collect();
@@ -361,10 +381,14 @@ pub fn write_boxes(info: &SourceInfo, p: &Plan<'_>) -> Option<Vec<crate::spots_k
     }
     // Guard: every field of the block, of a face's own settings and of what they read is named here (no `..`), so a
     // new one stops the build until this function says whether its writes stay in the boxes. Refine strokes (#151)
-    // add `refine` and `Reads::add`: a block with any stroke returns `None` (`fork/perf-portrait-draft.md`).
-    let lightcraft_develop::retouch::Retouch { global, faces } = &s.retouch;
+    // add `refine` (for every face and per face): a block with any stroke returns `None`, the whole frame
+    // (`fork/perf-portrait-draft.md`).
+    let lightcraft_develop::retouch::Retouch { global, faces, refine } = &s.retouch;
     if global.writes_outside_faces()
-        || faces.iter().any(|lightcraft_develop::retouch::FaceOverride { face: _, settings }| settings.writes_outside_faces())
+        || faces
+            .iter()
+            .any(|lightcraft_develop::retouch::FaceOverride { face: _, settings, refine }| settings.writes_outside_faces() || !refine.is_empty())
+        || !refine.is_empty()
     {
         return None;
     }
@@ -376,7 +400,7 @@ pub fn write_boxes(info: &SourceInfo, p: &Plan<'_>) -> Option<Vec<crate::spots_k
     let (w, h) = (p.w as f64, p.h as f64);
     let mut out = Vec::new();
     for face in input.faces.iter().take(MAX_FACES) {
-        let [x0, y0, x1, y1] = match read_box(face, &reads, view.as_ref()) {
+        let [x0, y0, x1, y1] = match read_box(face, &reads, None, view.as_ref()) {
             ReadBox::Skipped => continue,
             ReadBox::At(b) => b,
             ReadBox::Unsure => return None,
@@ -393,6 +417,21 @@ pub fn write_boxes(info: &SourceInfo, p: &Plan<'_>) -> Option<Vec<crate::spots_k
 /// warp bends them).
 const EDGE_STEPS: usize = 16;
 
+/// The pixels Refine Add strokes can widen a mask to: the box `b` of their points (the frame [`View::to_edit`] speaks)
+/// grown by `r` long edges of that frame. `None` when it maps nowhere.
+fn add_box(b: [f64; 4], r: f64, view: &dyn View) -> Option<[f64; 4]> {
+    let corners = [(b[0], b[1]), (b[2], b[1]), (b[0], b[3]), (b[2], b[3])];
+    let mut out = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
+    for (x, y) in corners {
+        let (px, py) = view.edit_to_px(x, y).filter(|(x, y)| x.is_finite() && y.is_finite())?;
+        out = [out[0].min(px), out[1].min(py), out[2].max(px), out[3].max(py)];
+    }
+    let (o, ex, ey) = (view.edit_to_px(0.0, 0.0)?, view.edit_to_px(1.0, 0.0)?, view.edit_to_px(0.0, 1.0)?);
+    let len = |a: (f64, f64), b: (f64, f64)| ((a.0 - b.0).powi(2) + (a.1 - b.1).powi(2)).sqrt();
+    let grow = r * len(o, ex).max(len(o, ey)) + 2.0;
+    grow.is_finite().then_some([out[0] - grow, out[1] - grow, out[2] + grow, out[3] + grow])
+}
+
 /// What retouching reads for one face, in a view's pixels.
 enum ReadBox {
     /// Nothing: the step skips the face (its box is not a box or a corner maps nowhere, as `Scene` decides).
@@ -404,8 +443,9 @@ enum ReadBox {
 }
 
 /// What retouching reads for `face` in `view`'s pixels: its box, the areas of the masks `reads` names and of its
-/// strands (Stray Hair repairs them), grown by `reads.reach` times the face's size.
-fn read_box(face: &Face, reads: &Reads, view: &dyn View) -> ReadBox {
+/// strands (Stray Hair repairs them), and `add` (where Refine Add strokes widen its masks, [`add_box`]), grown by
+/// `reads.reach` times the face's size.
+fn read_box(face: &Face, reads: &Reads, add: Option<[f64; 4]>, view: &dyn View) -> ReadBox {
     let fb = &face.bounds;
     let corners = [(fb.x0, fb.y0), (fb.x1, fb.y0), (fb.x1, fb.y1), (fb.x0, fb.y1)];
     if !fb.is_valid() || corners.iter().any(|(x, y)| view.to_px(*x, *y).is_none()) {
@@ -426,6 +466,9 @@ fn read_box(face: &Face, reads: &Reads, view: &dyn View) -> ReadBox {
         if !add_rect(&mut b, area, view) {
             return ReadBox::Unsure;
         }
+    }
+    if let Some(a) = add {
+        b = [b[0].min(a[0]), b[1].min(a[1]), b[2].max(a[2]), b[3].max(a[3])];
     }
     // (and a pixel for rounding)
     let grow = reads.reach * size + 2.0;
@@ -971,7 +1014,7 @@ mod tests {
         let Some(reads) = s.retouch.reads() else { panic!("eyes on") };
         let boxes: Vec<[f64; 4]> = faces
             .iter()
-            .filter_map(|f| match read_box(f, &reads, &view) {
+            .filter_map(|f| match read_box(f, &reads, None, &view) {
                 ReadBox::At(b) => Some(b),
                 _ => None,
             })

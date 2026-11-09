@@ -321,6 +321,38 @@ fn the_step_writes_only_inside_its_boxes() {
     let above = before.data.iter().zip(&img.data).enumerate().filter(|(i, (a, b))| a != b && i / p.w < 50).count();
     assert!(above > 10, "Stray Hair repaired the strand above the face: {above} pixels");
     writes_inside(&src6, &info6, &plain, &whole, "Stray Hair");
+    // Refine strokes (#151): an Add stroke outside the face's box (here, within a face size of it) makes the mask and the
+    // writes reach there, a Reduce stroke is user paint too: the boxes are `None` (anywhere) while any face or the block
+    // has a stroke, and every pixel the step changes is then inside "anywhere"
+    let stroke = |mode| lightcraft_develop::retouch::RefineStroke {
+        mode,
+        points: vec![(0.85, 0.35), (0.88, 0.5)],
+        size: 0.05,
+        ..lightcraft_develop::retouch::RefineStroke::default()
+    };
+    let mut smooth = plain.clone();
+    controls::set(&mut smooth, "retouch.skin.smoothness", 100.0);
+    let p = crate::plan(&src, &info, &smooth, &whole);
+    assert!(retouch_step::write_boxes(&info, &p).is_some_and(|b| b.len() == 1), "without strokes: the face's box");
+    for mode in lightcraft_develop::retouch::RefineMode::ALL {
+        let mut s = smooth.clone();
+        assert!(s.retouch.refine.push("skin", stroke(mode)));
+        assert_eq!(retouch_step::write_boxes(&info, &crate::plan(&src, &info, &s, &whole)), None, "{mode:?} for every face: anywhere");
+        let mut own = smooth.clone();
+        let faces = info.retouch.as_ref().map(|i| i.faces.clone()).unwrap_or_default();
+        let o = own.retouch.own_mut_in(&faces, 0, None).unwrap();
+        assert!(o.refine.push("skin", stroke(mode)));
+        assert_eq!(retouch_step::write_boxes(&info, &crate::plan(&src, &info, &own, &whole)), None, "{mode:?} for one face: anywhere");
+    }
+    let mut added = smooth.clone();
+    added.retouch.refine.push("skin", stroke(lightcraft_develop::retouch::RefineMode::Add));
+    let p = crate::plan(&src, &info, &added, &whole);
+    let mut img = p.frame.sample(&src, p.w, p.h);
+    let before = img.clone();
+    retouch_step::apply(&mut img, &info, &p);
+    let (fx1, near_stroke) = ((0.6 * p.w as f64) as usize, |i: usize| i % p.w > (0.78 * p.w as f64) as usize);
+    let outside_the_box = before.data.iter().zip(&img.data).enumerate().filter(|(i, (a, b))| a != b && i % p.w > fx1 + 30 && near_stroke(*i)).count();
+    assert!(outside_the_box > 50, "the Add stroke smoothed skin beside the face's box: {outside_the_box} pixels");
     // off: nowhere; a feature that writes outside faces: anywhere
     let off = crate::plan(&src, &info, &plain, &whole);
     assert_eq!(retouch_step::write_boxes(&info, &off), Some(Vec::new()), "off: nowhere");
