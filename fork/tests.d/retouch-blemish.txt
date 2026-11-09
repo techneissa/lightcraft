@@ -2,3 +2,4 @@ cargo test -p lightcraft-retouch --test blemish
 cargo test -p lightcraft-retouch --lib -- blemish
 cargo test -p lightcraft-engine --lib -- retouch_input::parts
 cargo test -p lightcraft-ui-egui --lib -- tests::portrait
+cargo test -p lightcraft-pipeline --lib -- tests_retouch_blemish

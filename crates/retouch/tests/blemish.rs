@@ -4,8 +4,8 @@
 mod common;
 
 use lightcraft_raster::{Plane, Rgb32f};
-use lightcraft_retouch::blemish::{Blemish, find, with_spots};
-use lightcraft_retouch::input::{SpotKind, Spots};
+use lightcraft_retouch::blemish::{Blemish, CORE, FEATHER, MAX_RADIUS, find, with_spots};
+use lightcraft_retouch::input::{Spot, SpotKind, Spots};
 use lightcraft_retouch::{Face, Features, Input, NormRect, Part, PartMask, Retouch, Scene, Stage, WholePhoto};
 
 /// The face's box: most of the picture.
@@ -218,28 +218,78 @@ fn pixels_outside_the_mask_never_change() {
     assert!(bare.data.iter().zip(&img.data).all(|(a, b)| a.map(f32::to_bits) == b.map(f32::to_bits)));
 }
 
-/// A spot near the skin's edge, black hair just outside: the repair never takes the hair's colour.
+/// A spot next to the skin's soft edge, black hair just past it, its donor patch and its ring of skin samples reaching
+/// over the edge: the hair's colour never comes into the repair. The same repair with skin where the
+/// hair is gives the same pixels.
 #[test]
 fn no_halo_next_to_dark_hair() {
     let n = 400;
-    let mut img = skin(n);
-    // hair over the top band, outside the mask
     let edge = 0.3;
-    for y in 0..(edge * n as f64) as usize {
+    let hair_rows = (edge * n as f64) as usize;
+    let skin_img = skin(n);
+    let mut hair_img = skin_img.clone();
+    for p in hair_img.data.iter_mut().take(hair_rows * n) {
+        *p = [0.02, 0.015, 0.012];
+    }
+    // the mask starts at the hair's edge and rises to 1 over 2.5 % of the picture, as a parse's soft edge does
+    let mask = Plane::from_fn(128, 128, |_, y| (((y as f32 + 0.5) / 128.0 * 0.9 + 0.05 - edge as f32) / 0.025).clamp(0.0, 1.0));
+    // a spot 2.2 radii below the edge; its donor 3.4 radii away, 30° up, so the patch it lends reaches over the edge
+    let size = FACE.width();
+    let r = 0.012;
+    let at = (0.5, edge + 2.2 * r * size);
+    let (dx, dy) = (3.4 * r * size * 30f64.to_radians().cos(), -3.4 * r * size * 30f64.to_radians().sin());
+    let spot = Spot { at, radius: r, donor: Some((at.0 + dx, at.1 + dy)), kind: SpotKind::Blemish, strength: 1.0 };
+    let f = Face {
+        masks: vec![(Part::FacialSkin, PartMask { plane: mask, area: FACE })],
+        spots: Some(Spots { list: vec![spot], skin: 0.5 }),
+        ..Face::boxed(FACE)
+    };
+    let r100 = settings(100.0, false);
+    let (with_hair, with_skin) = (retouch(&hair_img, &r100, vec![f.clone()]), retouch(&skin_img, &r100, vec![f]));
+    let mut changed = 0;
+    let mut worst = 0.0f32;
+    for y in hair_rows..n {
         for x in 0..n {
-            img.data[y * n + x] = [0.02, 0.015, 0.012];
+            let i = y * n + x;
+            changed += usize::from(with_skin.data[i] != skin_img.data[i]);
+            for c in 0..3 {
+                worst = worst.max((with_hair.data[i][c] / with_skin.data[i][c]).ln().abs());
+            }
         }
     }
-    let mask = Plane::from_fn(128, 128, |_, y| ((y as f32 + 0.5) / 128.0 * 0.9 + 0.05 - edge as f32) * 128.0 / 0.9).map(|v| v.clamp(0.0, 1.0));
-    let f = Face { masks: vec![(Part::FacialSkin, PartMask { plane: mask, area: FACE })], ..Face::boxed(FACE) };
-    let out = retouch(&img, &settings(100.0, false), vec![f]);
-    // no pixel inside the skin gets darker than the darkest skin pixel was (hair is 20 times darker)
-    let lo = (0..n * n).filter(|i| i / n > (edge * n as f64) as usize + 2).map(|i| img.data[i][1]).fold(f32::INFINITY, f32::min);
-    for y in (edge * n as f64) as usize + 2..n {
-        for x in 0..n {
-            assert!(out.data[y * n + x][1] >= lo * 0.95, "({x}, {y}) darkened to {} (skin's darkest {lo})", out.data[y * n + x][1]);
+    assert!(changed > 50, "the spot was repaired ({changed} pixels)");
+    assert!(worst < 0.01, "the hair's colour came into the repair: a pixel {:.1} % off", worst * 100.0);
+}
+
+/// Spots from a provider are held to what the repair may read (`Feature::REACH`): a spot larger than any found is
+/// repaired at the largest radius, and a donor farther than `MAX_DONOR` radii is not used.
+#[test]
+fn a_huge_spot_or_a_far_donor_stays_within_the_reach() {
+    let img = skin(300);
+    let size = FACE.width() * 300.0;
+    let at = PIMPLES[0];
+    let face = |radius: f64, donor: Option<(f64, f64)>| Face {
+        spots: Some(Spots { list: vec![Spot { at, radius, donor, kind: SpotKind::Blemish, strength: 1.0 }], skin: 0.5 }),
+        ..face()
+    };
+    let out = retouch(&img, &settings(100.0, false), vec![face(0.5, None)]);
+    let far = (CORE.max(FEATHER) * MAX_RADIUS * size + 2.0).powi(2);
+    let mut changed = 0;
+    for y in 0..300 {
+        for x in 0..300 {
+            let d2 = (x as f64 + 0.5 - at.0 * 300.0).powi(2) + (y as f64 + 0.5 - at.1 * 300.0).powi(2);
+            if out.data[y * 300 + x] != img.data[y * 300 + x] {
+                changed += 1;
+                assert!(d2 <= far, "({x}, {y}) changed, past the largest spot's repair");
+            }
         }
     }
+    assert!(changed > 20, "the spot is repaired at the largest radius ({changed})");
+    // a donor far across the face is dropped: the same repair as without one
+    let r = 0.01;
+    let (a, b) =
+        (retouch(&img, &settings(100.0, false), vec![face(r, Some((0.9, 0.9)))]), retouch(&img, &settings(100.0, false), vec![face(r, None)]));
+    assert_eq!(a.data, b.data);
 }
 
 /// The app finds spots once on the parse's picture and repairs them at every size: a draft and an export four times

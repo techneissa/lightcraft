@@ -29,13 +29,17 @@ How (`crates/retouch/src/blemish.rs`, `blemish/find.rs`):
   export all repair the same spots; the Amount slider only changes each spot's weight.
 - **Repair, every render.** Each spot is filled from a ring of skin samples three radii out (a smooth fill), times
   the texture of its donor patch (borrowed as a ratio, at whole-pixel offsets, so the pores stay sharp), faded in from
-  1.7 to 2.6 radii and weighted by the mask. Ring samples off the skin or inside another spot count for nothing, so
-  no colour from hair, brows or lips comes in. Spots are repaired in parallel and blended in, in order.
+  1.7 to 2.6 radii and weighted by the mask. Every ring sample and donor pixel is weighted by the mask where it is
+  read, and ring samples inside another spot count for nothing, so no colour from hair, brows, lips or the
+  background comes in at the hairline or the jaw. Spots are repaired in parallel and blended in, in order.
+- **Zoom never changes a repair.** A spot's radius is held to 1.6 % of the face and a donor farther than 3.6 radii
+  is not used, so a repair reads at most 0.11 of the face around a spot; Blemishes declares
+  `REACH` 0.14, and a zoomed loupe renders what the face's repairs read (`crates/pipeline/src/retouch_step.rs`).
 
-Speed (Apple M4 Pro, release, the machine under load ~8): finding the spots of one face on the 2048 px parse
-picture 23–124 ms (techneissa's A7 V portraits 23–64 ms; a face covered in 240 dark spots 124 ms). Repair (the slider):
-0.16–0.91 ms on a 1936 px draft of a head-and-shoulders portrait, 4.2 ms with 242 spots, 6.7 ms for a face filling a
-1780 × 1936 draft with 147 spots. No model runs.
+Speed (a test Mac, release): finding the spots of one face on the 2048 px parse picture 23–124 ms (private test
+portraits 23–64 ms; a face covered in 240 dark spots 124 ms). Repair (the slider): 0.16–0.91 ms on a 1936 px draft
+of a head-and-shoulders portrait, 4.2 ms with 242 spots, 6.6 ms for a synthetic face filling a 1780 × 1936 draft
+with 238 spots. The repair walks only each spot's neighbourhood, never the whole face. No model runs.
 
 A Refine brush per feature comes later (#99): `Blemish::weights` gives one weight per spot, which its strokes will
 scale.
@@ -51,12 +55,15 @@ Moles and Freckles off removes only part of it. Spots smaller than about 2 pixel
 ## Own files
 
 `crates/retouch/src/blemish.rs`, `crates/retouch/src/blemish/find.rs`, `crates/retouch/examples/blemish.rs`,
-`crates/retouch/tests/blemish.rs`, `crates/ui-egui/src/panels/portrait/blemish.rs`, `fork/retouch-blemish.md`,
+`crates/retouch/tests/blemish.rs`, `crates/pipeline/src/tests_retouch_blemish.rs`,
+`crates/ui-egui/src/panels/portrait/blemish.rs`, `fork/retouch-blemish.md`,
 `fork/tests.d/retouch-blemish.txt`
 
 ## Hooks in official files
 
-None. In fork files:
+- `crates/pipeline/src/lib.rs`: `mod tests_retouch_blemish` (tests only).
+
+In fork files:
 - `crates/retouch/src/input.rs`: `Face::spots`, `Spot`, `SpotKind`, `Spots`, in the fingerprint.
 - `crates/engine/src/retouch_input/parts.rs`: `with_spots` in `found` (the parse's faces get their spots);
   `crates/engine/src/retouch_input.rs`: `spots: None` for YuNet's faces and the spots in the store's byte count.
@@ -70,8 +77,11 @@ None. In fork files:
 changes nothing); the switch on by default, a control, and on for settings saved without it; pimples, moles and
 freckles found and told apart on a synthetic face with pores, and pores not taken for spots; pimples removed and
 moles and freckles kept with the switch on, removed with it off; the healed skin keeping about the pores' texture of
-clean skin; pixels outside the mask keeping their bits, and a face without the mask left alone; no darkening next
-to black hair at the mask's edge; a draft and an export four times its size repairing the same spots the same way,
+clean skin; pixels outside the mask keeping their bits, and a face without the mask left alone; a spot at a soft
+skin edge next to black hair, its ring and donor reaching over the edge, repaired as if the hair were skin (no
+halo); a huge spot or a far donor from a provider held within the reach; a zoomed window through a spot giving the
+whole frame's pixels (`crates/pipeline/src/tests_retouch_blemish.rs`); a draft and an export four times its size
+repairing the same spots the same way,
 and the same spots found at both sizes; a face whose provider found no spots left alone (no detection in a render)
 and a larger Amount removing at least as much; the report's counts and area; a flat grey photo staying flat; a face
 cut by the photo's edge; no faces, 50 faces, a 1 × 1 and an empty photo; the parse's faces getting their spots

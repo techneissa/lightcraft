@@ -15,8 +15,8 @@
 //!   detection runs while it moves.
 //!
 //! Sizes are fractions of the face's size, so the draft, the loupe and an export repair the same spots the same way.
-//! The fill reads skin only (ring samples off the mask count for nothing), so no colour from hair, brows or lips
-//! bleeds in: no halo. Pixels where the mask is 0 never change.
+//! The fill reads skin only (every ring sample and donor pixel is weighted by the mask, so those off it count for
+//! nothing), so no colour from hair, brows or lips bleeds in: no halo. Pixels where the mask is 0 never change.
 
 use lightcraft_raster::{Rgb32f, par_rows};
 use serde::{Deserialize, Serialize};
@@ -41,6 +41,15 @@ const RING_SAMPLES: usize = 16;
 const TEXTURE_RANGE: f32 = 1.6;
 /// A spot under this radius in the image's pixels is too small to see at this size: left alone.
 const MIN_PX: f64 = 0.35;
+/// The largest spot radius repaired, a fraction of the face's size: what [`find`] gives at most (its largest size,
+/// 3 % of the face across), with room to spare. A larger one from a provider is repaired at this radius.
+pub const MAX_RADIUS: f64 = 0.016;
+/// The farthest a donor patch may be from its spot, in spot radii ([`find`] puts it 2.6 or 3.4 radii away); a donor
+/// farther away is not used.
+pub const MAX_DONOR: f64 = 3.6;
+/// What a spot's repair reads around its centre, in spot radii: its donor ([`MAX_DONOR`]) and the donor's ring of
+/// skin samples ([`RING`], plus their small averages, half a radius).
+const READS: f64 = MAX_DONOR + RING + 0.5;
 
 /// The Blemishes settings. A field added here is read as its default from settings saved without it.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -81,6 +90,10 @@ impl Feature for Blemish {
     ];
     /// Spots are found and repaired on the Facial Skin mask only.
     const PARTS: &'static [Part] = &[Part::FacialSkin];
+    /// A spot's centre lies in the mask's box, and its repair reads [`READS`] of the largest spot's radius around it
+    /// (0.11 of the face), with a few pixels to spare for small faces. (Reads off the mask count for nothing, so in
+    /// practice it reads the mask's area only.)
+    const REACH: f64 = READS * MAX_RADIUS + 0.03;
 
     /// Off while Amount is 0 (the switch alone changes nothing).
     fn is_off(&self) -> bool {
@@ -188,16 +201,23 @@ struct Placed {
     offset: Option<(f64, f64)>,
 }
 
-fn place(scene: &Scene<'_>, size: f64, s: &Spot) -> Option<Placed> {
+/// Spot `s` in the image (whose mask's box is `b`); `None` when it is too small to see or its centre is outside the
+/// box. Its radius is held to [`MAX_RADIUS`] and its donor to [`MAX_DONOR`] radii, so what the repair reads stays
+/// within [`Blemish::REACH`] of the mask's area (zoom never changes a repair).
+fn place(scene: &Scene<'_>, size: f64, b: [usize; 4], s: &Spot) -> Option<Placed> {
     let view = scene.view();
     let c = view.to_px(s.at.0, s.at.1)?;
-    let r = s.radius * size;
-    if !(r.is_finite() && r >= MIN_PX && c.0.is_finite() && c.1.is_finite()) {
+    let r = s.radius.min(MAX_RADIUS) * size;
+    let inside = c.0 >= b[0] as f64 && c.1 >= b[1] as f64 && c.0 <= b[2] as f64 && c.1 <= b[3] as f64;
+    if !(r.is_finite() && r >= MIN_PX && inside) {
         return None;
     }
     // whole pixels: a fractional offset would blend neighbouring pixels and soften the borrowed pores
-    let offset =
-        s.donor.and_then(|d| view.to_px(d.0, d.1)).map(|d| ((d.0 - c.0).round(), (d.1 - c.1).round())).filter(|o| o.0.is_finite() && o.1.is_finite());
+    let offset = s
+        .donor
+        .and_then(|d| view.to_px(d.0, d.1))
+        .map(|d| ((d.0 - c.0).round(), (d.1 - c.1).round()))
+        .filter(|o| o.0.is_finite() && o.1.is_finite() && (o.0 * o.0 + o.1 * o.1).sqrt() <= MAX_DONOR * r);
     Some(Placed { c, r, offset })
 }
 
@@ -205,7 +225,7 @@ fn place(scene: &Scene<'_>, size: f64, s: &Spot) -> Option<Placed> {
 fn repair(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, spots: &[Spot], weights: &[f32]) {
     let Some(size) = scene.faces.get(face).map(|f| f.size) else { return };
     let Some(b) = scene.mask_box(face, Part::FacialSkin) else { return };
-    let placed: Vec<Option<Placed>> = spots.iter().map(|s| place(scene, size, s)).collect();
+    let placed: Vec<Option<Placed>> = spots.iter().map(|s| place(scene, size, b, s)).collect();
     let h = Healer { scene, face, b, all: &placed };
     // each spot's repair from the image as it is, in parallel; then blended in, in order
     let mut patches: Vec<Vec<Healed>> = vec![Vec::new(); placed.len()];
@@ -277,8 +297,10 @@ impl Healer<'_> {
         self.scene.mask_at(self.face, Part::FacialSkin, x as usize, y as usize)
     }
 
-    /// One ring of skin samples, radius `r`, around `c`: each a small average (radius `small`), its weight the skin mask
-    /// there (0 inside another spot than the `me`-th, or outside the image). `me` `None`: no spot is skipped.
+    /// One ring of skin samples, radius `r`, around `c`: each a small average (radius `small`) weighted by the skin
+    /// mask at each of its points, so hair or background next to the skin never comes in; its weight the mask's mean
+    /// over those points (0 inside another spot than the `me`-th, or outside the image). `me` `None`: no spot is
+    /// skipped.
     fn ring(&self, img: &Rgb32f, c: (f64, f64), r: f64, small: f64, me: Option<usize>) -> [Sample; RING_SAMPLES] {
         std::array::from_fn(|i| {
             let a = i as f64 * std::f64::consts::TAU / RING_SAMPLES as f64;
@@ -295,15 +317,20 @@ impl Healer<'_> {
             let mut acc = [0.0f32; 3];
             let mut n = 0.0f32;
             for (dx, dy) in [(0.0, 0.0), (1.0, 0.0), (-1.0, 0.0), (0.0, 1.0), (0.0, -1.0), (0.7, 0.7), (-0.7, 0.7), (0.7, -0.7), (-0.7, -0.7)] {
-                if let Some(p) = sample(img, q.0 + dx * small, q.1 + dy * small) {
-                    acc = std::array::from_fn(|c| acc[c] + p[c]);
-                    n += 1.0;
+                let (x, y) = (q.0 + dx * small, q.1 + dy * small);
+                let m = self.mask(x, y);
+                if m <= 0.0 {
+                    continue;
+                }
+                if let Some(p) = sample(img, x, y) {
+                    acc = std::array::from_fn(|c| acc[c] + p[c] * m);
+                    n += m;
                 }
             }
-            if n == 0.0 {
+            if n <= 0.0 {
                 return ([0.0; 3], 0.0, q);
             }
-            (acc.map(|v| v / n), self.mask(q.0, q.1) * n / 9.0, q)
+            (acc.map(|v| v / n), n / 9.0, q)
         })
     }
 }
@@ -366,10 +393,12 @@ impl Healer<'_> {
                 }
                 let Some(base) = fill(&here, q, (0.0, 0.0)) else { continue };
                 let new: [f32; 3] = match &donor {
-                    Some((o, ring_d)) => match (sample(img, q.0 + o.0, q.1 + o.1), fill(ring_d, q, (o.0, o.1))) {
-                        (Some(tex), Some(dbase)) => std::array::from_fn(|c| {
+                    // the donor's texture counts as far as the donor pixel is skin: hair or background next to it
+                    // lends nothing
+                    Some((o, ring_d)) => match (sample(img, q.0 + o.0, q.1 + o.1), fill(ring_d, q, (o.0, o.1)), self.mask(q.0 + o.0, q.1 + o.1)) {
+                        (Some(tex), Some(dbase), md) if md > 0.0 => std::array::from_fn(|c| {
                             let t = if dbase[c] > 1e-5 { (tex[c] / dbase[c]).clamp(1.0 / TEXTURE_RANGE, TEXTURE_RANGE) } else { 1.0 };
-                            base[c] * t
+                            base[c] * (1.0 + md * (t - 1.0))
                         }),
                         _ => base,
                     },
