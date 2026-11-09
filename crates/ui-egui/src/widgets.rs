@@ -209,6 +209,41 @@ pub fn take_registries(ctx: &egui::Context) -> (Vec<(String, Rect)>, Vec<(String
     (registry.rects, registry.hits)
 }
 
+/// Closed menus whose rows are widgets named `prefix…`: (prefix, the menu's open flag, the pass it was drawn
+/// closed in).
+#[derive(Clone, Default)]
+struct Openers(Vec<(String, egui::Id, u64)>);
+
+fn openers_id() -> egui::Id {
+    egui::Id::unique("lc-menu-openers")
+}
+
+/// Says a menu drawn closed this pass holds the widgets whose ids start with `prefix`, and that setting the bool
+/// `open` in the context's temp data opens it. `ui.clickWidget` on such a widget opens the menu first.
+pub(crate) fn register_opener(ctx: &egui::Context, prefix: String, open: egui::Id) {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| {
+        let list = &mut d.get_temp_mut_or_default::<Openers>(openers_id()).0;
+        list.retain(|(p, ..)| *p != prefix);
+        list.push((prefix, open, pass));
+    });
+}
+
+/// Open the closed menu holding widget `id`, if one was drawn in the last passes. True when one opened (the widget
+/// shows after the next pass).
+pub(crate) fn open_menu_for(ctx: &egui::Context, id: &str) -> bool {
+    let pass = ctx.cumulative_pass_nr();
+    ctx.data_mut(|d| {
+        let list = &mut d.get_temp_mut_or_default::<Openers>(openers_id()).0;
+        let Some(i) = list.iter().position(|(p, _, seen)| id.starts_with(p.as_str()) && seen.saturating_add(2) >= pass) else {
+            return false;
+        };
+        let (_, open, _) = list.remove(i);
+        d.insert_temp(open, true);
+        true
+    })
+}
+
 /// Take only the registered rectangles (for unit tests that inspect layout).
 pub fn take_registry(ctx: &egui::Context) -> Vec<(String, Rect)> {
     take_registries(ctx).0
