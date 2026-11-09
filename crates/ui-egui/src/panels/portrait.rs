@@ -154,6 +154,11 @@ pub(crate) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
     if st.busy {
         ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
     }
+    // a finished search without a face: one line, no sections (the settings the photo may keep are untouched)
+    if st.no_people() {
+        no_people_line(ui);
+        return;
+    }
     let input: Arc<Input> = st.found.as_ref().map(|f| f.input.clone()).unwrap_or_default();
     let face = picked(ui.ctx(), photo).filter(|i| *i < input.faces.len());
     // the face picker is on the photo (`overlay`); here, which face the sliders change
@@ -184,6 +189,18 @@ pub(crate) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
         divider(cx.ui);
     }
     cx.ui.add_space(40.0);
+}
+
+/// What the tool strip's Portrait icon says (hover text) and the tab's only line, once the face search found no face.
+pub(crate) const NO_PEOPLE: &str = "No People in This Photo";
+
+/// The tab's only line on a photo without people.
+fn no_people_line(ui: &mut egui::Ui) {
+    let t = Tokens::get(ui.ctx());
+    egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 2 }).show(ui, |ui| {
+        let r = ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(NO_PEOPLE)).size(12.5).color(t.text_dim)).wrap());
+        register(ui, "portrait:noPeople", r.rect);
+    });
 }
 
 /// "Portrait", and the eye that turns all retouching off and on for the photo (`develop.sectionEnabled`).

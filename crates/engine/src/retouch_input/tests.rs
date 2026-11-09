@@ -594,3 +594,36 @@ fn add_strokes_are_only_for_faces_and_the_strokes_stay_within_the_work_cap() {
     assert!(e.contains("Add works on or near a face") && e.contains("no face"), "{e}");
     none.execute("retouch.refine.stroke", &json!({"feature": "skin", "points": [[0.5, 0.5]]})).unwrap();
 }
+
+/// A photo whose search found nobody (a landscape): `retouch.faces` says `noPeople`, the commands that need a face
+/// answer with an error that says so (not silence), and the values for every face still work. Before the search
+/// the faces are unknown, which is not "no people".
+#[test]
+fn a_photo_without_people_says_so_and_commands_that_need_a_face_fail_clearly() {
+    let (mut s, fake) = demo_with(vec![]);
+    let id = s.active().unwrap();
+    assert!(!s.retouch_no_people(id), "not searched yet: unknown, not empty");
+    let r = s.execute("retouch.faces", &json!({})).unwrap();
+    assert_eq!(r["noPeople"], false, "{r}");
+    let r = s.execute("retouch.detect", &json!({})).unwrap();
+    assert_eq!((r["found"].clone(), r["noPeople"].clone()), (json!(true), json!(true)), "{r}");
+    assert!(s.retouch_no_people(id));
+    for (cmd, p) in [
+        ("retouch.set", json!({"control": "retouch.skin.smoothness", "value": 1, "face": 0})),
+        ("retouch.resetFace", json!({"face": 0})),
+        ("retouch.reset", json!({"face": 0})),
+        ("retouch.refine.list", json!({"face": 0})),
+        ("retouch.refine.clear", json!({"face": 0})),
+        ("retouch.refine.stroke", json!({"feature": "skin", "points": [[0.5, 0.5]], "face": 0})),
+    ] {
+        let e = s.execute(cmd, &p).unwrap_err().to_string();
+        assert!(e.contains("no people") || e.contains("no face"), "{cmd}: {e}");
+    }
+    assert!(s.execute("retouch.set", &json!({"control": "retouch.skin.smoothness", "value": 30})).is_ok(), "every face's values stay settable");
+    // the same photo with a person in it (searched anew): the tab is back
+    *fake.0.lock().unwrap() = vec![ann()];
+    let r = s.execute("retouch.detect", &json!({"again": true})).unwrap();
+    assert_eq!(r["noPeople"], false, "{r}");
+    assert!(!s.retouch_no_people(id));
+    assert!(s.execute("retouch.set", &json!({"control": "retouch.skin.smoothness", "value": 1, "face": 0})).is_ok());
+}

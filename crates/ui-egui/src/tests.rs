@@ -106,6 +106,7 @@ mod parse_ahead;
 mod people_parts;
 mod portrait;
 mod portrait_background;
+mod portrait_no_people;
 mod portrait_presets;
 mod portrait_teeth_lips;
 mod preset_favorites;

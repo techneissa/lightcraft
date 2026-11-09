@@ -29,6 +29,9 @@ pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, 
         return;
     }
     let st = app.session.retouch_faces_of(photo);
+    if st.no_people() {
+        return;
+    }
     // (the store's faces, read through their `Arc`: their masks are never copied per frame)
     let input = st.found.as_ref().map(|f| f.input.clone()).unwrap_or_default();
     let faces: &[Face] = &input.faces;

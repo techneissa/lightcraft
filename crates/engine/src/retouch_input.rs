@@ -321,6 +321,15 @@ pub struct FacesState {
     pub error: Option<String>,
 }
 
+impl FacesState {
+    /// The search finished and found no face (a photo of a landscape, say): the Portrait tab has nothing to do
+    /// there. False while the faces are unknown (nothing searched yet, a search running or failed, or a cancelled
+    /// Wrinkles search waiting to run again).
+    pub fn no_people(&self) -> bool {
+        !self.busy && self.error.is_none() && self.found.as_ref().is_some_and(|f| f.retry.is_none() && f.input.faces.is_empty())
+    }
+}
+
 /// The key of a photo's faces found by a provider: its content, and every setting that moves pixels before the crop
 /// (the faces are in the photo's coordinates before the crop, after orientation, lens corrections and transform).
 pub fn key_of(p: &Photo, s: &DevelopSettings) -> String {
@@ -444,6 +453,11 @@ impl Session {
             busy: st.busy.iter().any(|(k, _)| *k == key),
             error: st.failed.iter().chain(&st.no_model).find(|(k, _)| *k == key).map(|(_, e)| e.clone()),
         }
+    }
+
+    /// Whether photo `id`'s face search finished and found no face ([`FacesState::no_people`]); starts nothing.
+    pub fn retouch_no_people(&self, id: PhotoId) -> bool {
+        self.retouch_faces_of(id).no_people()
     }
 
     /// Find photo `id`'s faces on a worker thread (once: nothing happens while they are known or being found, or
