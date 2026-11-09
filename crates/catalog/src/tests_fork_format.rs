@@ -319,7 +319,7 @@ fn a_decontaminated_mask_is_fork_format_4() {
 /// with nothing lost. Its grids go in the shared table, once for both History steps.
 #[test]
 fn a_select_people_mask_is_fork_format_5() {
-    assert_eq!(VERSION, 5);
+    const { assert!(VERSION >= 5) };
     let seg = SegMask::from_logits(8, &[3.0; 64]).made_by("people:segformer");
     let fine = SegMask::from_logits_in(8, &[-3.0; 64], [0.1, 0.1, 0.3, 0.3]).made_by("people:segformer");
     let face = lightcraft_develop::retouch::FaceKey {
@@ -341,7 +341,7 @@ fn a_select_people_mask_is_fork_format_5() {
     m.set(SNAPSHOT, snapshot(FORK_FORMAT, 4, 1, &c.to_snapshot()));
     let (mut j, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
     assert_eq!((r.upgraded_from, loaded.to_snapshot()), (Some(4), c.to_snapshot()));
-    assert_eq!(header(&m), (FORK_FORMAT.to_string(), 5));
+    assert_eq!(header(&m), (FORK_FORMAT.to_string(), u64::from(VERSION)));
     j.snapshot(&loaded).unwrap();
     drop(j);
     let body = String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap();
@@ -351,4 +351,35 @@ fn a_select_people_mask_is_fork_format_5() {
     let p = again.photo(id).unwrap();
     assert_eq!(p.develop.masks[0].components[0].shape, shape);
     assert!(p.history.iter().all(|h| h.settings.masks[0].components[0].shape == shape), "every History step");
+}
+
+/// Fork 6 (`fork/retouch-reshape.md`): Face Reshape's sliders, for every face and for a face of its own, are saved and
+/// read back, written as fork 6 so a fork 5 build refuses them instead of dropping them; a fork 5 library opens and is
+/// upgraded with nothing lost.
+#[test]
+fn a_face_reshape_is_fork_format_6() {
+    assert_eq!(VERSION, 6);
+    let mut d = DevelopSettings::default();
+    lightcraft_develop::controls::set(&mut d, "retouch.reshape.slimFace", 40.0);
+    lightcraft_develop::controls::set(&mut d, "retouch.reshape.eyeSize", -25.0);
+    let face = lightcraft_develop::retouch::Face::boxed(lightcraft_develop::retouch::NormRect::new(0.2, 0.2, 0.4, 0.5));
+    if let Some(own) = d.retouch.override_mut(std::slice::from_ref(&face), 0) {
+        own.reshape.chin = 30.0;
+    }
+    let mut c = Catalog::new();
+    let id = photo(&mut c, d.clone(), None);
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snapshot(FORK_FORMAT, 5, 1, &c.to_snapshot()));
+    let (mut j, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.upgraded_from, loaded.to_snapshot()), (Some(5), c.to_snapshot()));
+    assert_eq!(header(&m), (FORK_FORMAT.to_string(), 6));
+    j.snapshot(&loaded).unwrap();
+    drop(j);
+    let body = String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap();
+    assert!(body.contains("slimFace") && body.contains("eyeSize"), "written by name");
+    let (_, again, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, None);
+    let got = &again.photo(id).unwrap().develop.retouch;
+    assert_eq!(got, &d.retouch);
+    assert_eq!((got.global.reshape.slim_face, got.faces[0].settings.reshape.chin), (40.0, 30.0));
 }

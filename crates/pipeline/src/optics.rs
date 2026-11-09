@@ -51,6 +51,9 @@ pub struct Warp {
     pub lens: Option<EmbeddedLens>,
     pub lens_dist: f64,
     pub lens_vig: f64,
+    /// Fork (`fork/retouch-reshape.md`): Face Reshape, on the photo before the lens part (the photo is reshaped
+    /// first): a source point → the point of the unreshaped photo it shows ([`Warp::reshaped`]).
+    pub reshape: Option<std::sync::Arc<lightcraft_develop::retouch::reshape::Field>>,
 }
 
 impl Warp {
@@ -67,6 +70,7 @@ impl Warp {
             lens: None,
             lens_dist: 0.0,
             lens_vig: 0.0,
+            reshape: None,
         }
     }
 
@@ -101,10 +105,33 @@ impl Warp {
 
     /// Whether pixels move at all.
     pub fn moves_pixels(&self) -> bool {
+        self.optics_move() || self.reshape.is_some()
+    }
+
+    /// Whether the lens part or the perspective moves pixels (all but a Face Reshape).
+    fn optics_move(&self) -> bool {
         self.persp != Homography::IDENTITY
             || self.k1 != 0.0
             || self.ca.iter().any(|c| *c != 0.0)
             || (self.lens_dist != 0.0 && self.lens.is_some_and(|l| l.warp.is_some() || l.has_stages()))
+    }
+
+    /// Whether a Face Reshape is all the warp does (fork, `fork/retouch-reshape.md`): no lens part, perspective or
+    /// gain. The resample is then the plain one, redone only over the faces' areas.
+    pub fn reshape_only(&self) -> bool {
+        self.reshape.is_some() && !self.optics_move() && !self.has_gain()
+    }
+
+    /// Source px `g` (after the lens part) → the source px the reshaped photo shows there (fork,
+    /// `fork/retouch-reshape.md`); `g` itself without a reshape. A point on the photo stays on it, so a face at the
+    /// photo's edge never pulls in the blank past it.
+    pub fn reshaped(&self, g: Point) -> Point {
+        let Some(f) = &self.reshape else { return g };
+        let (w, h) = (self.w.max(1e-9), self.h.max(1e-9));
+        let (x, y) = f.source(g.x / w, g.y / h);
+        let q = Point::new(x * w, y * h);
+        let on = (0.0..=self.w).contains(&g.x) && (0.0..=self.h).contains(&g.y);
+        if on && q.x.is_finite() && q.y.is_finite() { Point::new(q.x.clamp(0.0, self.w), q.y.clamp(0.0, self.h)) } else { q }
     }
 
     /// Whether the embedded lens warp is a `WarpRectilinear2` chain, whose degree-14 polynomials are ill-conditioned
@@ -159,7 +186,7 @@ impl Warp {
     /// Lens-corrected px → source px for colour plane `ch` (0 = R, 1 = G, 2 = B).
     pub fn corrected_to_source(&self, p: Point, ch: usize) -> Point {
         let (x, y) = self.corrected_to_source_real(p.x, p.y, ch);
-        Point::new(x, y)
+        self.reshaped(Point::new(x, y))
     }
 
     /// [`Warp::corrected_to_source`] for any [`Real`].
@@ -274,7 +301,9 @@ impl Warp {
     pub fn frame(&self, o2t: &Affine, x: usize, y: usize) -> Option<(Point, Point)> {
         let ((cx, cy), (gx, gy)) = self.framing(o2t, x as f64 + 0.5, y as f64 + 0.5);
         let g = Point::new(gx, gy);
-        self.inside(g).then(|| (Point::new(cx, cy), g))
+        // (whether the pixel shows the photo is decided before the reshape, which keeps it on the photo:
+        // `block_coverage` decides the same)
+        self.inside(g).then(|| (Point::new(cx, cy), self.reshaped(g)))
     }
 
     /// Whether output pixel `(x, y)` shows the image ([`frame`](Self::frame) is `Some`).

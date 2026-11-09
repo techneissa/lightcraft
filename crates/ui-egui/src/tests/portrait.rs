@@ -207,3 +207,92 @@ fn the_skin_section_has_its_three_sliders() {
     let v = h.app.session.develop_of(photo).unwrap().retouch.global.get("retouch.skin.smoothness").unwrap_or(0.0);
     assert!(v > 40.0, "Smoothness set by the click: {v}");
 }
+
+/// One face whose provider found three spots (two blemishes and a mole) on its skin.
+struct SpottedFace;
+
+impl FaceProvider for SpottedFace {
+    fn name(&self) -> &str {
+        "Spotted Face"
+    }
+    fn faces(&self, _img: &lightcraft_raster::Rgba8) -> Result<Vec<Face>, String> {
+        use lightcraft_develop::retouch::input::{Spot, SpotKind, Spots};
+        use lightcraft_develop::retouch::{Part, PartMask};
+        let b = NormRect::new(0.3, 0.2, 0.6, 0.6);
+        let spot = |x, y, kind| Spot { at: (x, y), radius: 0.01, donor: None, kind, strength: 1.0 };
+        let list = vec![spot(0.4, 0.3, SpotKind::Blemish), spot(0.5, 0.4, SpotKind::Blemish), spot(0.45, 0.5, SpotKind::Mole)];
+        Ok(vec![Face {
+            masks: vec![(Part::FacialSkin, PartMask { plane: lightcraft_raster::Plane::filled(8, 8, 1.0), area: b })],
+            spots: Some(Spots { list, skin: 0.5 }),
+            ..Face::boxed(b)
+        }])
+    }
+}
+
+/// The Blemishes section (`portrait/blemish.rs`): Amount, the Keep Moles and Freckles switch (on by default; a click
+/// turns it off for every face) and how many spots the settings remove and keep.
+#[test]
+fn the_blemishes_section_has_amount_the_switch_and_the_report() {
+    let mut session = lightcraft_engine::Session::with_demo();
+    session.retouch_faces.set_provider(Arc::new(SpottedFace));
+    let png = |img: &lightcraft_raster::Rgba8| {
+        lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(img), &lightcraft_codecs::EncodeMeta::default()).unwrap_or_default()
+    };
+    // (what a screenshot needs)
+    let services = Services { png: Some(Box::new(png)), write_new: Some(Box::new(lightcraft_engine::export::write_file_new)), ..Default::default() };
+    let app = LightcraftApp::new(session, services);
+    let mut h = Headless::new(app, [1200.0, 1400.0], 1.0);
+    assert_eq!(h.request("ui.set", json!({"view": "detail"}), T)["ok"], true);
+    click(&mut h, "icon:portrait");
+    click(&mut h, "section:portrait.blemish");
+    let photo = h.app.session.active().unwrap();
+    // (a hang guard, not a timing check)
+    let until = std::time::Instant::now() + T;
+    while h.app.session.retouch_faces_of(photo).found.is_none() {
+        assert!(std::time::Instant::now() < until, "the faces were never found");
+        h.step();
+    }
+    h.step();
+    h.step();
+    assert!(rect_of(&mut h, "slider:retouch.blemish.amount").is_some());
+    assert!(rect_of(&mut h, "portrait:blemish.report").is_some(), "the report shows once the spots are found");
+    let r = h.request("ui.clickWidget", json!({"id": "slider:retouch.blemish.amount", "fx": 0.9}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let d = h.app.session.develop_of(photo).unwrap();
+    assert!(d.retouch.global.blemish.amount > 60.0 && d.retouch.global.blemish.keep_moles);
+    let input = h.app.session.retouch_faces_of(photo).found.unwrap().input;
+    let report = d.retouch.global.blemish.report(input.faces[0].spots.as_ref().unwrap());
+    assert_eq!((report.removed, report.moles), (2, 1), "the mole is kept");
+    if let Some(p) = std::env::var_os("LIGHTCRAFT_TEST_SHOTS") {
+        h.step();
+        let r =
+            h.request("ui.screenshot", json!({"path": std::path::Path::new(&p).join("blemish-section.png").to_string_lossy(), "headless": true}), T);
+        assert_eq!(r["ok"], true, "{r}");
+    }
+    click(&mut h, "portrait:blemish.keepMoles");
+    h.step();
+    assert!(!h.app.session.develop_of(photo).unwrap().retouch.global.blemish.keep_moles, "the click turns the switch off");
+
+/// The Face Reshape section (`portrait/reshape.rs`): its seven −100…+100 sliders; a click right of the middle sets
+/// Slim Face for every face.
+#[test]
+fn the_face_reshape_section_has_its_seven_sliders() {
+    let mut session = lightcraft_engine::Session::with_demo();
+    session.retouch_faces.set_provider(Arc::new(TwoFaces));
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 1600.0], 1.0);
+    assert_eq!(h.request("ui.set", json!({"view": "detail"}), T)["ok"], true);
+    click(&mut h, "icon:portrait");
+    click(&mut h, "section:portrait.reshape");
+    h.step();
+    let photo = h.app.session.active().unwrap();
+    for f in ["slimFace", "jaw", "chin", "doubleChin", "nose", "forehead", "eyeSize"] {
+        assert!(rect_of(&mut h, &format!("slider:retouch.reshape.{f}")).is_some(), "{f} is in the Face Reshape section");
+    }
+    let r = h.request("ui.clickWidget", json!({"id": "slider:retouch.reshape.slimFace", "fx": 0.75}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let v = h.app.session.develop_of(photo).unwrap().retouch.global.get("retouch.reshape.slimFace").unwrap_or(0.0);
+    assert!(v > 30.0 && v < 70.0, "Slim Face set by the click: {v}");
+}

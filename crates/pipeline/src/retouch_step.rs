@@ -2,8 +2,9 @@
 //!
 //! It runs in the scene-linear stage ([`crate::lin_cpu`]), after white balance, spots and red eye and before noise
 //! reduction; the global tone and colour, the local masks, detail and effects all come after it, in the per-pixel
-//! finish. The retouch stage runs first, then the background stage. The geometry stage (face reshape) has its slot
-//! reserved in `lightcraft_retouch::Stage` and is not run yet.
+//! finish. The retouch stage runs first, then the background stage. The geometry stage (Face Reshape) is not run
+//! here: it is a warp in the frame's geometry ([`crate::reshape_step`]), so the faces and masks this step reads
+//! already follow it.
 //!
 //! Skipped entirely, touching no pixel and hashing a 0 into the stage key, while the block is off or the Portrait
 //! tab's eye is off ([`active`]).
@@ -18,8 +19,21 @@ use lightcraft_raster::Rgb32f;
 use crate::{PixelWindow, Plan, SourceInfo};
 
 /// Whether the step changes anything for `s`.
+///
+/// Face Reshape is not part of the step (it is a warp in the frame's geometry, [`crate::reshape_step`]): a block with
+/// only Face Reshape on leaves the step off, so the scene-linear stage can stay on the GPU.
 pub fn active(s: &DevelopSettings) -> bool {
-    lightcraft_develop::retouch::active(s)
+    lightcraft_develop::retouch::active(s) && !only_reshape(&s.retouch)
+}
+
+/// Every feature but Face Reshape is off, for every face.
+fn only_reshape(r: &lightcraft_develop::retouch::Retouch) -> bool {
+    let rest_off = |f: &lightcraft_develop::retouch::Features| {
+        let mut f = f.clone();
+        f.reshape = Default::default();
+        f.is_off()
+    };
+    rest_off(&r.global) && r.faces.iter().all(|o| rest_off(&o.settings))
 }
 
 /// What the step adds to the scene-linear stage's cache key: 0 while it is off; else the settings and the input
@@ -42,7 +56,12 @@ pub struct FrameKeyMap {
 impl FrameKeyMap {
     /// The map of `frame` (any frame of the photo's settings: the warp does not depend on the crop or the size).
     pub fn new(frame: &crate::geometry::Frame, orient: Orientation) -> FrameKeyMap {
-        FrameKeyMap { frame: frame.for_mask(true).into_owned(), orient }
+        let mut frame = frame.for_mask(true).into_owned();
+        // (the lens corrections and transform only: Face Reshape is built from the faces this map matches)
+        if let Some(w) = &mut frame.warp {
+            w.reshape = None;
+        }
+        FrameKeyMap { frame, orient }
     }
 }
 
