@@ -67,6 +67,7 @@ impl crate::Session {
         let salt = self.media.denoise_salt(id, &settings) ^ self.lama.cache_salt(&settings);
         let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
         let lens = super::quick::lens_key(&p);
+        let (retouch, faces) = self.retouch_for(&p, &settings);
         let key = settings_hash
             ^ ((max_w as u64) << 40)
             ^ ((max_h as u64) << 20)
@@ -80,7 +81,8 @@ impl crate::Session {
             ^ lens.rotate_left(31)
             // (an imported camera profile's file: likewise nothing for every other photo)
             ^ profile_salt.rotate_left(43)
-            ^ decoder.rotate_left(47);
+            ^ decoder.rotate_left(47)
+            ^ retouch.rotate_left(53);
         let cache = thumb_bucket.map(|b| {
             let mut k = Hasher128::new();
             k.str(&content_key).u64(settings_hash).u64(b as u64).u64(RENDER_CACHE_VERSION);
@@ -104,6 +106,9 @@ impl crate::Session {
             if decoder != 0 {
                 k.str("decoder").u64(decoder);
             }
+            if retouch != 0 {
+                k.str("retouch").u64(retouch);
+            }
             (self.media.rendered.clone(), k.finish())
         });
         Some(RenderJob {
@@ -114,7 +119,7 @@ impl crate::Session {
             level,
             source,
             origin: p.source.clone(),
-            info: source_info(&p),
+            info: SourceInfo { retouch: faces, ..source_info(&p) },
             settings,
             request,
             key,
@@ -215,6 +220,8 @@ impl crate::Session {
         p.develop = Arc::new(settings.clone());
         let source = self.media.source_ref_for(&p, level, LoadOptions::of(settings));
         let ck = Self::variant_key(&p, settings, edge, self.media.camera_profile_salt(&settings.profile.id));
+        let (retouch, faces) = self.retouch_for(&p, settings);
+        let ck = crate::retouch_input::salted(ck, retouch);
         Some(RenderJob {
             request_id: 0,
             cache_generation: self.media.rendered.generation(),
@@ -223,7 +230,7 @@ impl crate::Session {
             level,
             source,
             origin: p.source.clone(),
-            info: source_info(&p),
+            info: SourceInfo { retouch: faces, ..source_info(&p) },
             settings: Arc::new(settings.clone()),
             request: RenderRequest { apply_crop: true, ..RenderRequest::fit(edge, edge) },
             key: (ck.0 as u64) ^ ((ck.0 >> 64) as u64),
@@ -319,7 +326,7 @@ impl crate::Session {
     #[cfg(test)]
     pub(crate) fn view_key(&self, p: &Photo, apply_crop: bool) -> Hash128 {
         let hash = self.media.settings_hashes.peek(p.id, &p.develop).unwrap_or_else(|| p.develop.hash64() ^ crate::files::hot_pixel_key(&p.develop));
-        let salt = self.media.denoise_salt(p.id, &p.develop);
+        let salt = self.media.denoise_salt(p.id, &p.develop) ^ self.retouch_salt(p, &p.develop).rotate_left(53);
         Self::view_key_with(p, hash, apply_crop, self.media.camera_profile_salt(&p.develop.profile.id), salt)
     }
 
@@ -359,7 +366,7 @@ impl crate::Session {
         let p = self.catalog.photo(id)?;
         let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
         let hash = self.media.settings_hashes.get(id, &p.develop);
-        let salt = self.media.denoise_salt(id, &p.develop);
+        let salt = self.media.denoise_salt(id, &p.develop) ^ self.retouch_salt(p, &p.develop).rotate_left(53);
         job.view_cache = Some((self.media.rendered.clone(), Self::view_key_with(p, hash, apply_crop, profile_salt, salt)));
         Some(job)
     }
@@ -480,7 +487,10 @@ impl crate::Session {
         let p = self.catalog.photo(id)?;
         // (the loupe's render job for this frame has just remembered the hash: a frame draws without hashing the settings)
         let hash = self.media.settings_hashes.peek(id, &p.develop).unwrap_or_else(|| p.develop.hash64() ^ crate::files::hot_pixel_key(&p.develop));
-        Some(Self::quick_key(p, hash, apply_crop, camera_jpeg, self.media.camera_profile_salt(&p.develop.profile.id)))
+        Some(
+            Self::quick_key(p, hash, apply_crop, camera_jpeg, self.media.camera_profile_salt(&p.develop.profile.id))
+                ^ self.retouch_salt(p, &p.develop).rotate_left(53),
+        )
     }
 
     /// The hash of photo `id`'s develop settings as they are now (the memo [`SettingsHashes`] keeps per photo: the
@@ -508,9 +518,10 @@ impl crate::Session {
         // (the thumbnail job itself starts with the cached thumbnail, after the sharper embedded preview)
         let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
         let hash = self.media.settings_hashes.get(id, &p.develop);
-        let salt = self.media.denoise_salt(id, &p.develop);
+        let retouch = self.retouch_salt(&p, &p.develop).rotate_left(53);
+        let salt = self.media.denoise_salt(id, &p.develop) ^ retouch;
         let cached = vec![(self.media.rendered.clone(), Self::view_key_with(&p, hash, apply_crop, profile_salt, salt))];
-        let key = Self::quick_key(&p, hash, apply_crop, camera_jpeg, profile_salt);
+        let key = Self::quick_key(&p, hash, apply_crop, camera_jpeg, profile_salt) ^ retouch;
         let embedded = self.embedded_of(&p).filter(|_| camera_jpeg).map(|(path, l)| (path, l, max_edge.clamp(1, SourceLevel::Preview.max_edge())));
         let embedded_cache = embedded.as_ref().map(|(_, _, edge)| {
             let cache = self.media.rendered.clone();
@@ -613,6 +624,7 @@ impl crate::Session {
     /// Synchronous render (CLI, MCP, tests).
     pub fn render_now(&mut self, id: PhotoId, max_w: usize, max_h: usize) -> Result<Rendered, String> {
         lightcraft_pipeline::check_output_size(max_w, max_h)?;
+        self.retouch_before_export(id);
         let job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
         let r = job.run();
         self.accept(&r);
@@ -644,6 +656,7 @@ impl crate::Session {
         depth: lightcraft_pipeline::OutputDepth,
     ) -> Result<RenderJob, String> {
         lightcraft_pipeline::check_output_size(max_w, max_h)?;
+        self.retouch_before_export(id);
         let mut job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
         // An export develops from a source at least twice its size, so it is resized down with a good filter
         // rather than made from a preview just covering it (for a raw, a binned and box-reduced image)

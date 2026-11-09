@@ -118,6 +118,18 @@ pub const FACE_MESH: ModelFile = ModelFile {
     licence: "Apache-2.0 (Google MediaPipe)",
 };
 
+/// Sapiens2-seg 0.4B (Meta), 29 body-part classes, as MLX's bf16 cast of Meta's checkpoint. Its licence forbids
+/// identifying people: its masks never feed face recognition.
+pub const BODY_SAPIENS2: ModelFile = ModelFile {
+    label: "Sapiens2 0.4B body-part parser",
+    folder: "body-parsing-sapiens2-0.4b",
+    name: "model.safetensors",
+    size: 813_248_053,
+    sha256: "b387d5de2fb0e4bec87671956ba4836de1c91f02cd2aea0118c2fa149c1e0948",
+    url: "https://huggingface.co/mlx-community/sapiens2-seg-0.4b-bf16/resolve/6f68237873d7e7341980ff68b4101d1ba7e20385/model.safetensors",
+    licence: "Sapiens2 License (Meta): free use and redistribution with the licence; forbids surveillance, biometric processing and identifying people",
+};
+
 /// Which face parser a set uses.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FaceModel {
@@ -134,16 +146,19 @@ pub enum ModelSet {
     Segformer,
     /// BiSeNet faces, SegFormer-B2 bodies, face mesh.
     BiSeNet,
+    /// The SegFormer set, with Sapiens2 deciding where skin, hair and clothes are (the B3 names the garments).
+    Sapiens2,
 }
 
 impl ModelSet {
-    pub const ALL: [ModelSet; 2] = [ModelSet::Segformer, ModelSet::BiSeNet];
+    pub const ALL: [ModelSet; 3] = [ModelSet::Segformer, ModelSet::BiSeNet, ModelSet::Sapiens2];
 
     /// The id commands and settings use.
     pub fn id(self) -> &'static str {
         match self {
             ModelSet::Segformer => "segformer",
             ModelSet::BiSeNet => "bisenet",
+            ModelSet::Sapiens2 => "sapiens2",
         }
     }
 
@@ -156,33 +171,45 @@ impl ModelSet {
         match self {
             ModelSet::Segformer => "SegFormer",
             ModelSet::BiSeNet => "BiSeNet",
+            ModelSet::Sapiens2 => "Sapiens2",
         }
     }
 
     pub fn face_file(self) -> ModelFile {
         match self {
-            ModelSet::Segformer => FACE_SEGFORMER_B0,
+            ModelSet::Segformer | ModelSet::Sapiens2 => FACE_SEGFORMER_B0,
             ModelSet::BiSeNet => FACE_BISENET,
         }
     }
 
     pub fn face_model(self) -> FaceModel {
         match self {
-            ModelSet::Segformer => FaceModel::Segformer,
+            ModelSet::Segformer | ModelSet::Sapiens2 => FaceModel::Segformer,
             ModelSet::BiSeNet => FaceModel::BiSeNet,
         }
     }
 
     pub fn body_file(self) -> ModelFile {
         match self {
-            ModelSet::Segformer => BODY_SEGFORMER_B3,
+            ModelSet::Segformer | ModelSet::Sapiens2 => BODY_SEGFORMER_B3,
             ModelSet::BiSeNet => BODY_SEGFORMER_B2,
         }
     }
 
+    /// The body-part parser that decides where skin, hair and clothes are, when the set has one beside its clothes
+    /// parser.
+    pub fn parts_file(self) -> Option<ModelFile> {
+        match self {
+            ModelSet::Sapiens2 => Some(BODY_SAPIENS2),
+            ModelSet::Segformer | ModelSet::BiSeNet => None,
+        }
+    }
+
     /// Every file the set needs.
-    pub fn files(self) -> [ModelFile; 3] {
-        [self.face_file(), self.body_file(), FACE_MESH]
+    pub fn files(self) -> Vec<ModelFile> {
+        let mut files = vec![self.face_file(), self.body_file(), FACE_MESH];
+        files.extend(self.parts_file());
+        files
     }
 
     /// Bytes of all its files.
@@ -212,17 +239,23 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_file_is_pinned_and_under_300_mb() {
+    fn every_file_is_pinned_and_only_sapiens2_is_over_300_mb() {
         for set in ModelSet::ALL {
             for f in set.files() {
                 assert_eq!(f.sha256.len(), 64, "{}", f.label);
-                assert!(f.size > 1_000_000 && f.size < 300_000_000, "{}", f.label);
+                // over 300 MB needs techneissa's yes: given for Sapiens2 (#93), about 0.8 GB
+                let max = if f == BODY_SAPIENS2 { 850_000_000 } else { 300_000_000 };
+                assert!(f.size > 1_000_000 && f.size < max, "{}", f.label);
                 assert!(f.url.starts_with("https://huggingface.co/") && f.url.contains("/resolve/") && f.url.ends_with(f.name), "{}", f.label);
             }
             assert_eq!(ModelSet::from_id(set.id()), Some(set));
             assert!(set.version().starts_with(set.id()));
         }
         assert_ne!(ModelSet::Segformer.version(), ModelSet::BiSeNet.version());
+        assert_ne!(ModelSet::Segformer.version(), ModelSet::Sapiens2.version());
+        // Sapiens2 adds one file to the SegFormer set, so a user with that set downloads only it
+        let more: Vec<ModelFile> = ModelSet::Sapiens2.files().into_iter().filter(|f| !ModelSet::Segformer.files().contains(f)).collect();
+        assert_eq!(more, vec![BODY_SAPIENS2]);
     }
 
     #[test]

@@ -169,6 +169,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("panel.remove", "Remove", Some("H"), "Window"),
     ("panel.masking", "Masking", Some("M"), "Window"),
     ("panel.redeye", "Red Eye", None, "Window"),
+    // fork: the Portrait tab; {section, open?} opens or closes one of its sections
+    ("panel.portrait", "Portrait", Some("T"), "Window"),
+    ("portrait.section", "Portrait Section", None, ""),
     ("panel.presets", "Presets", Some("Shift+P"), "Window"),
     ("panel.info", "Info", Some("I"), "Window"),
     ("panel.keywords", "Keywords", Some("K"), "Window"),

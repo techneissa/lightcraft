@@ -216,6 +216,30 @@ fn mask_edge_refinement_does_not_depend_on_the_window() {
     check_noisy("refine", &s, MID, 3, 0.2);
 }
 
+// Given a decontaminated mask edge (fork, `fork/decontaminate.md`), its colours are estimated over windows a fraction
+// of the whole frame wide: a zoomed window reads them from outside itself, so its edge matches the whole render
+#[test]
+fn a_decontaminated_edge_does_not_depend_on_the_window() {
+    use lightcraft_develop::{LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape};
+    use lightcraft_geom::Point;
+    // a soft edge across the window, the masked side two stops brighter and warmer
+    let shape = MaskShape::Linear { start: Point::new(0.40, 0.5), end: Point::new(0.60, 0.5) };
+    let with = |d: f64| {
+        let mut s = DevelopSettings::default();
+        s.masks.push(Mask {
+            id: 1,
+            components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: shape.clone() }],
+            adjust: LocalAdjustments { exposure: 2.0, temp: 80.0, ..Default::default() },
+            decontaminate: d,
+            ..Default::default()
+        });
+        s
+    };
+    let gap = |d: f64| compare_inset(&full(&with(d)), &window(&with(d), MID), MID, 2).0;
+    let (plain, on) = (gap(0.0), gap(100.0));
+    assert!(on <= plain.max(1), "decontaminated: a window's edge {on} codes from the whole render, {plain} without");
+}
+
 // Given a mask overlay (the Masking panel's view of the selected mask), a window of it matches the
 // same pixels of the whole render with that overlay, for every view and for drawn, AI and
 // refined shapes: the zoomed loupe can show the overlay as a window (issue #547)

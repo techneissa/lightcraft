@@ -11,6 +11,7 @@ use crate::facemesh::FaceMesh;
 use crate::models::{FaceModel, ModelFile, ModelSet};
 use crate::nn::{Layout, Params};
 use crate::people;
+use crate::sapiens::Sapiens2;
 use crate::segformer::Segformer;
 use crate::types::{FaceHint, NormRect, Parsing, Part, Person, Plane};
 use crate::weights::Weights;
@@ -41,6 +42,8 @@ pub struct Parser {
     face: FaceNet,
     face_model: FaceModel,
     body: Segformer,
+    /// The set's body-part parser (Sapiens2), which decides where skin, hair and clothes are.
+    parts: Option<Sapiens2>,
     mesh: FaceMesh,
     dev: Device,
 }
@@ -94,9 +97,13 @@ impl Parser {
         if body.classes() != body::CLASSES {
             return Err(Error::Model(format!("{}: {} classes, not {}", body_file.label, body.classes(), body::CLASSES)));
         }
+        let parts = match set.parts_file() {
+            Some(f) => Some(Sapiens2::load(&Params::new(open(&f, models)?, dev.clone(), Layout::Ohwi)).map_err(|e| named(&f, e))?),
+            None => None,
+        };
         let mesh_file = crate::models::FACE_MESH;
         let mesh = FaceMesh::load(open(&mesh_file, models)?.as_ref(), &dev).map_err(|e| named(&mesh_file, e))?;
-        Ok(Self { set, face, face_model: set.face_model(), body, mesh, dev })
+        Ok(Self { set, face, face_model: set.face_model(), body, parts, mesh, dev })
     }
 
     pub fn set(&self) -> ModelSet {
@@ -123,6 +130,7 @@ impl Parser {
         if cancelled() {
             return Err(Error::Cancelled);
         }
+        // without hints the faces come from the clothes parser's map (Sapiens2 sees faces where there are none)
         let faces = faces_of(&given, hints.is_empty(), &map, iw, opts);
         if hints.is_empty() {
             // the faces were found in the map: look again, closer, when they are small
@@ -133,6 +141,14 @@ impl Parser {
             }
         }
         let rects: Vec<NormRect> = faces.iter().map(|f| f.rect).collect();
+        let map = match &self.parts {
+            Some(net) => {
+                let m = crate::crops::parts_map(&|x| net.forward(x), map, img, &rects, &self.dev, cancelled)?;
+                prof.step("people up close");
+                m
+            }
+            None => map,
+        };
         let owners = people::assign(&map.person(), &map.skin_or_hair(), map.w, map.h, &rects);
         let count = owners.people.min(opts.max_people);
         let mut people: Vec<Person> = (0..count)

@@ -527,7 +527,11 @@ fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Fram
     });
     // (the coarsest grid sets the window: it leaves the widest uncertain band)
     let cell = coarse.iter().chain(&patches).map(|g| g.cell_px(frame, w)).fold(0.0, f64::max);
-    if cell >= 1.0 {
+    // (fork, `fork/hair-edges.md`: a grid whose edge BiRefNet-matting drew already follows the photo's strands; filtered
+    // only where its cells are wider than a pixel, an export would draw another outline than a preview)
+    // (and `+vision`, an edge Apple Vision drew: `fork/apple-vision-masks.md`)
+    let matted = seg.and_then(|s| s.model.as_deref()).is_some_and(|m| m.ends_with("+matting") || m.ends_with("+vision"));
+    if cell >= 1.0 && !matted {
         guided_cross_fast(log_l, out, (SEG_WINDOW * cell) as f32, SEG_EPS, |mean| 1.0 - smooth(3.0 * gain, 7.0 * gain, mean.abs()));
     }
     out.map_in_place(|l| 1.0 / (1.0 + (-l).exp()));
@@ -947,3 +951,7 @@ fn guided_cross_fast(guide: &Plane, p: &mut Plane, sigma: f32, eps: f32, weight:
 mod tests;
 #[cfg(test)]
 mod tests_cache;
+#[cfg(test)]
+mod tests_matting;
+#[cfg(test)]
+mod tests_vision_edges;

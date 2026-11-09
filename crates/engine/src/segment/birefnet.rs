@@ -61,9 +61,19 @@ impl SelectionModel {
 
 /// What a stored selection's model id reads as: `None` is SAM 3; an id this build does not know is shown as it is.
 pub fn label_of(model: Option<&str>) -> String {
+    // (an id from a document: one level only, and an unknown one shown shortened)
+    let plain = |id: &str| SelectionModel::parse(id).map_or_else(|| id.chars().take(60).collect(), |m| m.label().to_string());
     match model {
         None => SelectionModel::Sam3.label().to_string(),
-        Some(id) => SelectionModel::parse(id).map_or_else(|| id.to_string(), |m| m.label().to_string()),
+        // (an edge redrawn by BiRefNet-matting, Apple Vision or another edge model: `fork/hair-edges.md`)
+        Some(id) => {
+            let redrawn =
+                crate::hair_edges::Edge::ALL.into_iter().filter(|e| !e.suffix().is_empty()).find_map(|e| Some((id.strip_suffix(e.suffix())?, e)));
+            match redrawn {
+                Some((base, e)) => format!("{}, {} Edges", plain(base), e.label()),
+                None => plain(id),
+            }
+        }
     }
 }
 
@@ -271,17 +281,51 @@ impl crate::Session {
     pub(super) fn concept_kind(&self, concept: &crate::cmd::concepts::Concept) -> Result<(super::worker::Kind, SelectionModel), String> {
         let model = self.segmenter.concept_model(concept.kind);
         let text = concept.text.trim().to_string();
-        let kind = if model.uses_birefnet() {
-            let dir = self.segmenter.birefnet_dir().filter(|d| lightcraft_birefnet::is_model_dir(d)).ok_or("The BiRefNet model is not installed")?;
+        let matting = self.subject_matting(concept.kind, model);
+        let kind = if model.uses_birefnet() || matting.is_some() {
+            let dir = match model.uses_birefnet() {
+                true => {
+                    self.segmenter.birefnet_dir().filter(|d| lightcraft_birefnet::is_model_dir(d)).ok_or("The BiRefNet model is not installed")?
+                }
+                false => PathBuf::new(),
+            };
             if model.uses_sam3() {
                 self.segmenter.model_dir()?;
             }
-            super::worker::Kind::BiRefNet { combined: model.uses_sam3(), text, main: concept.main_only, dir }
+            super::worker::Kind::BiRefNet { model, text, main: concept.main_only, dir, matting }
         } else {
             self.segmenter.model_dir()?;
             super::worker::Kind::Concept(text, concept.main_only)
         };
         Ok((kind, model))
+    }
+}
+
+#[cfg(feature = "sam")]
+impl crate::Session {
+    /// The hair edges a new `kind` part made by `model` gets (`fork/hair-edges.md`): BiRefNet Matting when it is the
+    /// Subject edge and installed, for Subject and Background only. SAM 3 must run on this Mac for it (a remote worker
+    /// returns masks, not the model).
+    pub(crate) fn subject_matting(&self, kind: &str, model: SelectionModel) -> Option<crate::hair_edges::HairEdges> {
+        use crate::hair_edges::{Edge, EdgeKind};
+        let local = !model.uses_sam3() || (self.segmenter.installed() && self.segmenter.remote_endpoint().is_none());
+        (kind != "sky" && local && self.hair_edges.edge(EdgeKind::Subject) != Edge::Current).then(|| self.hair_edges.clone())
+    }
+}
+
+impl Segmenter {
+    /// Stop the Subject and Background requests in flight (their edge setting changed: `fork/hair-edges.md`), so
+    /// none of them adds a part with the old edge. The number stopped.
+    pub fn cancel_subject_jobs(&mut self) -> usize {
+        let before = self.in_flight.len();
+        self.in_flight.retain(|job| {
+            let subject = matches!(&job.tag, super::Tag::NewConcept { kind, .. } if kind == "subject" || kind == "background");
+            if subject {
+                job.cancel.store(true, std::sync::atomic::Ordering::Relaxed);
+            }
+            !subject
+        });
+        before - self.in_flight.len()
     }
 }
 
@@ -346,5 +390,42 @@ mod tests {
         assert_eq!(s.selection(), SelectionModel::Sam3);
         assert_eq!(s.concept_model("sky"), SelectionModel::Sam3);
         assert!(!s.can_select("subject") && !s.can_select("sky"));
+    }
+
+    /// Changing the Subject edge stops the Subject and Background requests in flight (one queued with BiRefNet
+    /// Matting still added a matted part after the edge was set back to Current); Sky and clicks go on.
+    #[test]
+    fn subject_jobs_stop_and_others_go_on() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let activity = crate::activity::Activity::default();
+        let mut s = Segmenter::default();
+        let photo = lightcraft_catalog::PhotoId(1);
+        let concept = |kind: &str| super::super::Tag::NewConcept {
+            photo,
+            mask: None,
+            op: "add".into(),
+            name: None,
+            kind: kind.into(),
+            invert: kind == "background",
+            model: SelectionModel::BiRefNet,
+        };
+        let mut flags = Vec::new();
+        for (i, tag) in [concept("subject"), concept("background"), concept("sky"), super::super::Tag::Prepare].into_iter().enumerate() {
+            let cancel = Arc::new(AtomicBool::new(false));
+            flags.push(cancel.clone());
+            s.in_flight.push(super::super::InFlight {
+                id: i as u64 + 1,
+                tag,
+                cancel,
+                detail: false,
+                _task: activity.start("segment", "x", crate::activity::Cancel::No),
+            });
+        }
+        assert_eq!(s.cancel_subject_jobs(), 2);
+        assert_eq!(s.in_flight.len(), 2, "Sky and the analysis go on");
+        let stopped: Vec<bool> = flags.iter().map(|f| f.load(Ordering::Relaxed)).collect();
+        assert_eq!(stopped, [true, true, false, false]);
+        assert_eq!(s.cancel_subject_jobs(), 0);
     }
 }

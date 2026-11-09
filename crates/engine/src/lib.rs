@@ -49,7 +49,9 @@ pub mod find_removals;
 #[cfg(not(target_arch = "wasm32"))]
 mod focus_scan;
 pub mod fonts;
+mod gpu_run;
 pub mod guard;
+pub mod hair_edges;
 pub mod import;
 mod import_move;
 pub mod lama_fill;
@@ -90,6 +92,7 @@ pub mod proof;
 pub mod reflections;
 pub mod rename;
 pub mod rename_job;
+pub mod retouch_input;
 pub mod segment;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod settings_folder;
@@ -411,6 +414,8 @@ pub struct Session {
     pub model_runtimes: Arc<model_runtime::ModelRuntimes>,
     /// Per-person part masks and face landmarks (`fork/people-parsing.md`).
     pub parsing: people_parsing::PeopleParsing,
+    /// BiRefNet-matting edges for people and Subject masks (`fork/hair-edges.md`).
+    pub hair_edges: hair_edges::HairEdges,
     /// The persistent library this session writes to (`None` = in-memory only).
     pub library: Option<library::Library>,
     /// Identity of current library opening; refreshed only after a successful open.
@@ -481,6 +486,8 @@ pub struct Session {
     /// Background tasks in flight (imports, exports, preview builds…), for the activity stack and
     /// `activity.list` / `activity.cancel`.
     pub activity: activity::Activity,
+    /// The faces portrait retouching works on, per photo (fork, `fork/retouch-foundation.md`).
+    pub retouch_faces: retouch_input::FaceStore,
     /// The last (or running) slideshow export (`slideshow.export`).
     pub slideshow_export: Option<std::sync::Arc<slideshow_export::ExportRun>>,
     /// The last (or running) animated GIF export (`export.animatedGif`).
@@ -554,6 +561,7 @@ impl Session {
 
     pub fn new() -> Session {
         let activity = activity::Activity::default();
+        let hair_edges = hair_edges::HairEdges::new(activity.clone());
         Session {
             library_generation: LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             auto_sync: false,
@@ -592,6 +600,7 @@ impl Session {
             trasher: Arc::new(file_trash::SystemTrash),
             denoise: Default::default(),
             face_models_dir: None,
+            retouch_faces: Default::default(),
             face_shared_dir: None,
             face_downloads: Default::default(),
             lensfun: Default::default(),
@@ -628,7 +637,8 @@ impl Session {
             learn: learn::LearnEdits::new(activity.clone()),
             parse_ahead: Default::default(),
             model_runtimes: Default::default(),
-            parsing: people_parsing::PeopleParsing::new(activity.clone()),
+            parsing: people_parsing::PeopleParsing::new(activity.clone()).with_hair_edges(hair_edges.clone()),
+            hair_edges,
             library: None,
             library_identity: Arc::new(()),
             xmp: sidecar::XmpPrefs::default(),
@@ -1232,7 +1242,7 @@ impl Session {
         new_json["hdr"] = serde_json::json!(new.hdr);
         let Some(mut delta) = json_delta(&old_json, &new_json) else { return Vec::new() };
         if let Some(o) = delta.as_object_mut() {
-            for k in ["spots", "red_eye", "version", "process"] {
+            for k in ["spots", "red_eye", lightcraft_develop::retouch::KEY, "version", "process"] {
                 o.remove(k);
             }
             if o.is_empty() {

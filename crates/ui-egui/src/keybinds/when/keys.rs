@@ -113,6 +113,7 @@ pub const KEYS: &[KeyDef] = &[
             ("activity", "Activity Panel", "Background tasks"),
             ("keywords", "Keywords Panel", "Keywords of the selected photos"),
             ("info", "Info Panel", "Metadata of the photo"),
+            ("portrait", "Portrait Tool", "Portrait retouching"),
         ]),
     },
     KeyDef { name: "brush", title: "Brush", desc: "The brush is the tool in use on the photo", kind: Kind::Bool { chip: "Brush Active" } },
@@ -261,6 +262,7 @@ impl Context {
                 RightPanel::Activity => 7,
                 RightPanel::Keywords => 8,
                 RightPanel::Info => 9,
+                RightPanel::Portrait => 10,
             },
         );
         c.set_flag(BRUSH, app.ui.tool == "brush");

@@ -63,6 +63,17 @@ impl Params {
         Ok(self.w.read(&key)?.to_device(&self.dev)?)
     }
 
+    /// Tensor `name` on the device in `dtype` (converted on the CPU first, so the device never holds a wider copy).
+    pub fn tensor_as(&self, name: &str, shape: &[usize], dtype: candle_core::DType) -> Result<Tensor> {
+        let key = self.key(name);
+        match self.w.shape(&key) {
+            None => return Err(Error::Model(format!("missing tensor `{key}`"))),
+            Some(s) if s != shape => return Err(Error::Model(format!("shape mismatch for `{key}`: expected {shape:?}, found {s:?}"))),
+            Some(_) => {}
+        }
+        Ok(self.w.read(&key)?.to_dtype(dtype)?.to_device(&self.dev)?)
+    }
+
     pub fn linear(&self, input: usize, output: usize) -> Result<Linear> {
         Ok(Linear::new(self.tensor("weight", &[output, input])?, Some(self.tensor("bias", &[output])?)))
     }

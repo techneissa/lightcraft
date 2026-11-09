@@ -5,7 +5,9 @@
 
 use std::path::{Path, PathBuf};
 
-use super::{Backend, COREML_COMPILED, COREML_DIR, COREML_PACKAGE, ImageEncoder, Runtime};
+#[cfg(target_os = "macos")]
+use super::COREML_PACKAGE;
+use super::{Backend, COREML_COMPILED, COREML_DIR, ImageEncoder, Runtime};
 use crate::{Error, ImageFeatures};
 
 fn scratch(name: &str) -> PathBuf {
@@ -57,6 +59,7 @@ fn fixture() -> (usize, usize, Vec<u8>) {
     (w, h, rgb)
 }
 
+#[cfg(target_os = "macos")]
 fn cosine(a: &[f32], b: &[f32]) -> f32 {
     let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
     let norm = |v: &[f32]| v.iter().map(|x| x * x).sum::<f32>().sqrt();

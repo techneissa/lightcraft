@@ -40,6 +40,30 @@
 
 ## 2026-11-09
 
+### Learn My Edits Runs on the Neural Engine
+On a Mac, Learn My Edits' image model can run through Core ML on the Neural Engine, about 3–5× faster per photo: Settings ▸ Performance ▸ AI Models downloads its Core ML file (43 MB, asked first) and picks Automatic, Core ML or Candle.
+
+### Remove: Glare and Reflection Areas
+- Reflections has a Highlights mode: it finds glare and shine (on glasses, skin, glossy things) and fills it with LaMa,
+  keeping the photo's texture under a veil of light. Threshold and Expand tune what it finds; Paint Glare and Erase
+  Glare correct it on the photo.
+- Reflections and Highlights can work on an Area: a box drawn on the photo, or any mask (a brush, Describe "glasses").
+  The model then sees that part at full detail, and nothing outside it changes.
+- Reflection results now start at Amount 100 %.
+
+### Hair-Accurate Edges for People and Subject Masks
+- Settings ▸ Faces ▸ Hair Edges picks the edge of Entire Person / Background and of Subject masks: Current, or BiRefNet Matting, which keeps flyaway hair and clears the background between strands.
+- BiRefNet Matting is an 885 MB download (MIT licence), offered only after you agree. It runs once per photo; switching back to Current gives the masks you had.
+
+### Match Look: natural limits and a residual Look
+- Match Look keeps each slider within a natural range, and moves a Color Mixer band far only when its colour is a large part of both photos.
+- A new **Residual Look** box in the Match Look window adds a gentle colour lookup after the sliders for what they cannot reach, with its own **Look Amount** in the Edit panel.
+
+### Sapiens2 People Parts
+- A third model set for people's parts, Sapiens2, in Settings ▸ Faces ▸ People Parts. It finds clothes the other
+  sets miss (a light shirt seen from behind, dark coveralls and suits, dark shirts), bare skin and hair, and parses
+  each person up close. About 0.8 GB, downloaded only when you choose it.
+
 ### Remove an Object in One Step
 - The Remove panel has an Object mode: click an object and LightCraft selects it with SAM 3 and removes all of it with one spot in its shape. ⇧-click adds to it, ⌥-click leaves a part out, and a loose stroke over an object snaps to its outline. Expand sets how far past the outline the spot reaches.
 - Any mask can become a Remove spot too: right-click it and choose Remove This Area.

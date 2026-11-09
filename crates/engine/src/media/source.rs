@@ -278,7 +278,13 @@ impl DecodedSource {
     pub fn info_or(&self, header: SourceInfo) -> SourceInfo {
         match &self.info {
             Some(info) => {
-                SourceInfo { native_long: info.native_long.or(header.native_long), lens: pinned_lens(info.lens, header.lens), ..info.clone() }
+                SourceInfo {
+                    native_long: info.native_long.or(header.native_long),
+                    lens: pinned_lens(info.lens, header.lens),
+                    // (the faces portrait retouching works on are the session's, not the decoder's)
+                    retouch: header.retouch,
+                    ..info.clone()
+                }
             }
             None => SourceInfo { camera_tone: self.camera_tone.or(header.camera_tone), ..header },
         }

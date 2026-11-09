@@ -111,7 +111,8 @@ of it.
   Windows assigns to the monitor showing the window, and whether Windows colour-manages that monitor itself),
   `crates/filepanel` (a run-loop timer that makes the macOS open and save panels taller and resizable),
   `crates/macraw` (Core Image's raw decoder through objc2, to give macOS's own raw colours as a base) and
-  `crates/coreml` (Core ML through objc2, to run converted AI models on the Neural Engine). Every other production
+  `crates/coreml` (Core ML through objc2, to run converted AI models on the Neural Engine, and Apple Vision's
+  own person and subject masks). Every other production
   crate root has `#![forbid(unsafe_code)]`. A new unsafe need goes in an isolated, well-tested helper crate like
   them: `// SAFETY:` on every block, a safe API, a safe fallback where possible, and a line here naming it.
 - **Input-derived numbers are hostile:** `get()` instead of `[i]`/`[a..b]` for offsets from files, users, agents or

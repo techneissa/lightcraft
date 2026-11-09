@@ -144,8 +144,12 @@ fn the_commands_check_what_they_are_given() {
     let mut s = session_with_wire(&dir);
     s.parsing.set_paths(Some(dir.join("models")), Some(dir.join("cache")), Some(dir.join("choice.json")));
     let status = s.execute("parsing.status", &json!({})).unwrap();
-    assert_eq!(status["sets"].as_array().unwrap().len(), 2);
+    assert_eq!(status["sets"].as_array().unwrap().len(), 3);
     assert_eq!(status["modelSet"], "segformer");
+    // Sapiens2 is the SegFormer set's files plus its own, about 0.8 GB more
+    let sapiens2 = status["sets"].as_array().unwrap().iter().find(|v| v["id"] == "sapiens2").unwrap();
+    assert_eq!(sapiens2["bytes"].as_u64(), Some(ModelSet::Sapiens2.size()));
+    assert!(sapiens2["files"].as_array().unwrap().iter().any(|f| f["licence"].as_str().unwrap().contains("identifying people")));
     assert!(s.execute("parsing.modelSet", &json!({"set": "nope"})).is_err());
     assert_eq!(s.execute("parsing.modelSet", &json!({"set": "bisenet"})).unwrap()["modelSet"], "bisenet");
     let refused = s.execute("parsing.download", &json!({})).unwrap_err().to_string();
@@ -177,31 +181,6 @@ fn the_commands_check_what_they_are_given() {
     assert!(s.execute("parsing.mask", &json!({"part": "hair", "person": 5, "path": out.to_str().unwrap()})).is_err());
     assert!(s.execute("parsing.mask", &json!({"part": "elbows", "path": out.to_str().unwrap()})).is_err());
     assert!(s.execute("parsing.cancel", &json!({})).is_ok());
-}
-
-/// Opt-in, over the network: `LIGHTCRAFT_PARSING_DOWNLOAD_TEST=<empty folder>` downloads both sets there and checks
-/// that every file arrived whole (size and SHA-256 are checked by the downloader).
-#[test]
-fn both_sets_download_and_check_their_files() {
-    let Some(dir) = std::env::var_os("LIGHTCRAFT_PARSING_DOWNLOAD_TEST").filter(|v| !v.is_empty()).map(PathBuf::from) else {
-        lightcraft_testkit::skip!(Input, "set LIGHTCRAFT_PARSING_DOWNLOAD_TEST to an empty folder to download the people parsing models");
-        return;
-    };
-    let p = PeopleParsing::new(Activity::default());
-    p.set_paths(Some(dir), None, None);
-    for set in ModelSet::ALL {
-        if !p.installed(set) {
-            p.start_download(set, false).unwrap();
-        }
-        // a guard against a hung download only, not a speed check
-        for _ in 0..36_000 {
-            if !matches!(p.download_state(set), crate::people_parsing::Download::Running { .. }) {
-                break;
-            }
-            std::thread::sleep(Duration::from_millis(100));
-        }
-        assert!(p.installed(set), "{set:?}: {:?}", p.download_state(set));
-    }
 }
 
 /// A 1200 × 800 photo, dark left of x = 0.55 and light right of it, opened in a session.

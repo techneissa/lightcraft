@@ -18,9 +18,8 @@ Edit view uses it yet; the Select People masks and the Portrait features build o
   | SegFormer (default) | SegFormer-B0, 19 face classes ([alexkrz/segformer-b0-celebamask_hq](https://huggingface.co/alexkrz/segformer-b0-celebamask_hq) @ `e1e6109`, 14.9 MB) | SegFormer-B3, 18 clothes classes ([sayeed99/segformer_b3_clothes](https://huggingface.co/sayeed99/segformer_b3_clothes) @ `6c12f0e`, 189.0 MB) | MediaPipe face mesh v2 ([SceneWorks/mp-facemesh-v2](https://huggingface.co/SceneWorks/mp-facemesh-v2) @ `4e65de9`, 5.0 MB) | 209 MB | B0: "other" (NVIDIA MiT, non-commercial; CelebAMask-HQ, non-commercial research); B3: MIT on the card, NVIDIA MiT underneath; mesh: Apache-2.0 |
   | BiSeNet | BiSeNet ResNet-18, 19 face classes ([mlx-community/face-parsing-bisenet-bf16](https://huggingface.co/mlx-community/face-parsing-bisenet-bf16) @ `5f2aa21`, 26.6 MB) | SegFormer-B2, 18 clothes classes ([mattmdjaga/segformer_b2_clothes](https://huggingface.co/mattmdjaga/segformer_b2_clothes) @ `584abc1`, 109.5 MB) | the same face mesh | 141 MB | BiSeNet: MIT (CelebAMask-HQ, non-commercial research); B2: MIT on the card, NVIDIA MiT underneath |
 
-  Sizes and SHA-256 are pinned in `crates/parsing/src/models.rs`. No file is over 300 MB. Not wired: the
-  SegFormer-B5 face parser (`jonathandinu/face-parsing`, 339 MB, over the 300 MB limit) and Sapiens (body-part
-  segmentation with teeth and lips, 0.3B is about 600 MB).
+  Sizes and SHA-256 are pinned in `crates/parsing/src/models.rs`. Not wired: the SegFormer-B5 face parser
+  (`jonathandinu/face-parsing`, 339 MB). A third set, Sapiens2, is in [sapiens2-clothes.md](sapiens2-clothes.md).
 - **Download**: asked first (the section's "(Download…)" entry opens a dialog with the size and folder;
   `parsing.download` needs `confirm: true`); the set is used once its download has finished (a download that stops or
   fails changes nothing, and the section says why); one download at a time; into `~/Library/Application Support/ArtCraft/models/<folder>/` (shared
@@ -75,7 +74,5 @@ cargo test -p lightcraft-engine --lib people_parsing
 cargo test -p lightcraft-ui-egui --lib people_parts
 ```
 
-With the models: `LIGHTCRAFT_PARSING_MODELS=<models folder> cargo test -p lightcraft-parsing --lib` also parses a 1 × 1
-photo, a photo with no people and 50 faces. Over the network, opt-in:
-`LIGHTCRAFT_PARSING_DOWNLOAD_TEST=<empty folder> cargo test -p lightcraft-engine --lib both_sets_download` downloads
-both sets and checks them. Pictures: `cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/`.
+With a set in the shared models folder (or `LIGHTCRAFT_PARSING_MODELS`), `cargo test -p lightcraft-parsing --lib`
+also parses a 1 × 1 photo, a photo with no people and 50 faces; no test downloads a model. Pictures: `cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/`.
