@@ -40,6 +40,10 @@
 
 ## 2026-11-09
 
+### Remove Draws One Outline and Fills Loops
+- A brushed Remove, Heal or Clone spot shows one thin outline of the area it covers, instead of a ring for every point, so you can see the photo under it. While you paint, the stroke is one translucent shape.
+- Draw a loop around something with Remove or Content-Aware and let go where you began: the whole inside is removed, not just the line you drew. Fill Closed Loops in the Remove panel turns this off, and a lasso's row has Make Stroke to turn it back into the line you drew.
+
 ### Faster Drags with Decontaminate
 - A mask with Decontaminate on now renders on the graphics card, so dragging its sliders stays smooth.
 
