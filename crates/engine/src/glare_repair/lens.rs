@@ -362,7 +362,7 @@ pub fn feather(mask: &[bool], n: usize) -> Plane {
     }
     for (v, m) in p.data.iter_mut().zip(mask) {
         if *m {
-            *v = v.max(0.999).min(1.0);
+            *v = 1.0;
         }
     }
     p

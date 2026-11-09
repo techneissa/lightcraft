@@ -190,7 +190,6 @@ impl GlareRepair {
 /// One face's crop: the area it covers, the picture (display-encoded sRGB, 0…1) and its linear values, `n × n`.
 struct Crop {
     area: NormRect,
-    eye_px: f64,
     srgb: Rgb32f,
     linear: Rgb32f,
 }
@@ -301,7 +300,7 @@ fn run(inner: &Inner, job: Job, guard: &crate::activity::TaskGuard, stop: &Arc<A
             skipped.push(format!("face {}: no glare on its glasses", i + 1));
             continue;
         }
-        work.push((i, face, Crop { area, eye_px, srgb, linear }, mask));
+        work.push((i, face, Crop { area, srgb, linear }, mask));
     }
     if work.is_empty() {
         return Err(skipped.join("; "));

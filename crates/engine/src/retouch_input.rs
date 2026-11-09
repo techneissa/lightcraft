@@ -202,14 +202,15 @@ impl FaceStore {
     }
 
     /// Keep the end of a search of photo `id` under `key`: its faces replace every other entry of the photo.
-    fn put(&self, key: &str, id: PhotoId, mut result: Result<Found, String>) {
+    fn put(&self, key: &str, id: PhotoId, result: Result<Found, String>) {
         // the glasses repairs made for these faces before (`fork/glare-repair.md`)
         #[cfg(not(target_arch = "wasm32"))]
-        if let Ok(found) = &mut result
-            && let Some(input) = self.repairs.attach(key, &found.input)
-        {
-            found.input = Arc::new(input);
-        }
+        let result = result.map(|mut found| {
+            if let Some(input) = self.repairs.attach(key, &found.input) {
+                found.input = Arc::new(input);
+            }
+            found
+        });
         // (hashed here, on the search's worker, not by the first render that asks for the key)
         if let Ok(found) = &result {
             found.input.fingerprint();
