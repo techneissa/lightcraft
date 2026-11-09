@@ -316,6 +316,8 @@ impl Session {
             }
             None => {
                 self.retouch_search(p.id, false);
+                // (Background Swap's picture loads meanwhile: `fork/retouch-background.md`)
+                self.backdrop_prefetch(s);
                 (self.retouch_faces.unknown_salt(p.id), None)
             }
         }
@@ -461,7 +463,6 @@ impl Session {
         if !lightcraft_develop::retouch::active(&p.develop) {
             return;
         }
-        self.backdrop_now(&p, &p.develop);
         // (a prepared export finds them on its own worker)
         if self.retouch_faces.lock().deferred.contains(&self.retouch_key(&p, &p.develop)) {
             return;
@@ -478,8 +479,6 @@ impl Session {
         if !lightcraft_develop::retouch::active(&p.develop) {
             return None;
         }
-        // (the faces found below come with Background Swap's picture and the depth map)
-        self.backdrop_now(&p, &p.develop);
         let key = self.retouch_key(&p, &p.develop);
         if self.retouch_faces.get(&key).is_some() {
             return None;
@@ -487,10 +486,8 @@ impl Session {
         let source = self.retouch_source().ok()?;
         let claimed = self.retouch_faces.claim(&key, id);
         self.retouch_faces.lock().deferred.push(key.clone());
-        let extras = self.with_backdrop_now(Arc::new(Input::default()), &p, &p.develop);
-        let backdrop = (extras.backdrop.clone(), extras.depth.clone());
         // (dropped unfilled when the render below can't be built: the claim goes again)
-        let mut pending = ExportFaces { store: self.retouch_faces.clone(), key, id, finder: None, claimed, backdrop };
+        let mut pending = ExportFaces { store: self.retouch_faces.clone(), key, id, finder: None, claimed };
         // (built after the claim: this render starts no search of its own)
         pending.finder = Some(self.retouch_finder(&p, source).ok()?);
         Some(pending)
@@ -553,9 +550,6 @@ pub struct ExportFaces {
     finder: Option<Finder>,
     /// It holds the photo's search claim (else a background search had it first).
     claimed: bool,
-    /// Background Swap's picture and the photo's depth map, for the faces handed to the export
-    /// (`fork/retouch-background.md`).
-    backdrop: (Option<lightcraft_develop::retouch::background::Backdrop>, Option<lightcraft_develop::retouch::background::Depth>),
 }
 
 impl ExportFaces {
@@ -567,10 +561,9 @@ impl ExportFaces {
         // (`put` ends the claim; dropping `self` then ends the deferral)
         match &result {
             Ok(found) => {
-                let (b, d) = self.backdrop.clone();
-                let input = self.store.backdrops.with(&found.input, b, d);
+                // (Background's picture and depth map come after: `ExportBackdrop::fill`)
                 for j in jobs.iter_mut() {
-                    j.info.retouch = Some(input.clone());
+                    j.info.retouch = Some(found.input.clone());
                 }
             }
             Err(e) => log::warn!("portrait: the export renders without faces: {e}"),

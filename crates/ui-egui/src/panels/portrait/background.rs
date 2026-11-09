@@ -3,7 +3,7 @@
 //! for the photo: the sliders write the values for every face whichever face is picked.
 //!
 //! UI commands: `portrait.backgroundPicture {path?}` asks for a picture file (or takes `path`) and makes it what Swap
-//! puts behind the person.
+//! puts behind the person (the engine copies it into the library and keeps its hash).
 
 use egui::{Color32, Rect, Sense, Stroke, StrokeKind, vec2};
 use lightcraft_catalog::PhotoId;
@@ -126,12 +126,18 @@ fn swap_with(cx: &mut super::Ctx<'_>) {
     }
 }
 
-/// What the picture line says: the picture's name and whether it is loading or failed; `None` for a colour.
+/// What the picture line says: the picture's name and whether it is loading, missing or failed; `None` for a colour.
 fn picture_line(with: &Swap, status: &Value) -> Option<String> {
-    let name = match with {
-        Swap::Colour { .. } => return None,
-        Swap::File { path } => std::path::Path::new(path).file_name().map_or_else(|| path.clone(), |n| n.to_string_lossy().into_owned()),
-        Swap::Photo { id } => format!("{} {id}", tr("Photo")),
+    if matches!(with, Swap::Colour { .. }) {
+        return None;
+    }
+    if status["missing"] == true {
+        return Some(tr("Background Picture Missing").to_string());
+    }
+    let name = match (with, status["name"].as_str()) {
+        (_, Some(n)) => n.to_string(),
+        (Swap::Photo { id }, None) => format!("{} {id}", tr("Photo")),
+        _ => tr("Photo").to_string(),
     };
     Some(match (status["loading"].as_bool(), status["error"].as_str()) {
         (_, Some(e)) => format!("{name}: {e}"),
@@ -200,4 +206,19 @@ pub(crate) fn choose_picture(app: &mut LightcraftApp, p: &Value) -> Result<Value
         params["id"] = id.clone();
     }
     app.run("retouch.background", params)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_picture_line_names_the_picture_and_says_when_it_is_missing() {
+        let pic = Swap::Picture { hash: "ab".repeat(32) };
+        assert_eq!(picture_line(&Swap::default(), &json!({})), None);
+        assert_eq!(picture_line(&pic, &json!({"missing": true, "name": "wall.jpg"})).as_deref(), Some("Background Picture Missing"));
+        assert_eq!(picture_line(&pic, &json!({"name": "wall.jpg", "loading": true})).as_deref(), Some("wall.jpg (Loading…)"));
+        assert_eq!(picture_line(&pic, &json!({"name": "wall.jpg", "error": "broken"})).as_deref(), Some("wall.jpg: broken"));
+        assert_eq!(picture_line(&Swap::Photo { id: 4 }, &json!({})).as_deref(), Some("Photo 4"));
+    }
 }

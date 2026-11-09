@@ -68,11 +68,18 @@ fn the_background_section_sets_the_photos_sliders_and_what_swap_uses() {
     click(&mut h, "portrait:background:colour:FFFFFF");
     assert_eq!(h.app.session.develop_of(photo).unwrap().retouch.global.background.with, Swap::Colour { rgb: [1.0; 3] });
     let file = std::env::temp_dir().join(format!("lightcraft-backdrop-ui-{}.png", std::process::id()));
-    std::fs::write(&file, b"not really a picture").unwrap();
+    let img = lightcraft_raster::Rgba8::filled(8, 6, [40, 90, 160, 255]);
+    let png = lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &lightcraft_codecs::EncodeMeta::default()).unwrap();
+    std::fs::write(&file, png).unwrap();
     let path = file.to_string_lossy().into_owned();
     let r = h.request("engine.execute", json!({"command": "portrait.backgroundPicture", "params": {"path": path}}), T);
     assert_eq!(r["ok"], true, "{r}");
-    assert_eq!(h.app.session.develop_of(photo).unwrap().retouch.global.background.with, Swap::File { path: path.clone() });
+    let with = h.app.session.develop_of(photo).unwrap().retouch.global.background.with.clone();
+    assert!(matches!(&with, Swap::Picture { hash } if hash.len() == 64), "kept by its hash: {with:?}");
+    // a picture gone from the library: the engine says so (the section shows "Background Picture Missing")
+    let mut d = (*h.app.session.develop_of(photo).unwrap()).clone();
+    d.retouch.global.background.with = Swap::Picture { hash: "cd".repeat(32) };
+    assert_eq!(h.app.session.backdrop_status(&d)["missing"], true);
     click(&mut h, "portrait:background:photos");
     h.step();
     let other = h.app.session.visible_cloned().into_iter().find(|id| *id != photo).unwrap();
