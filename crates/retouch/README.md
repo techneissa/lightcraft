@@ -176,8 +176,9 @@ pass (they are one per-pixel pass there, so the step sits before all of them). S
 
 1. **Retouch** (tone and colour), features in this order: Blemishes, Skin, Wrinkles, Skin Tone, Eyes, Teeth and
    Lips, Glasses Glare, Stray Hair.
-2. **Geometry**: Face Reshape, a geometry step next to Transform. Its slot is reserved and not run yet; the reshape
-   feature wires it into the pipeline's geometry.
+2. **Geometry**: Face Reshape, a geometry step next to Transform. Not run by the step: `reshape::Field` is a warp
+   of the photo before its lens corrections (`crates/pipeline/src/reshape_step.rs` puts it into the frame's warp),
+   so the one resample, masks drawn on the photo, the faces and their part masks all follow the reshaped face.
 3. **Background**: after every retouch, once for the whole picture.
 
 The step is skipped while the block is off or the Portrait tab's eye is off; the scene-linear stage's key then

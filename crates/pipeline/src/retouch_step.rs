@@ -2,8 +2,9 @@
 //!
 //! It runs in the scene-linear stage ([`crate::lin_cpu`]), after white balance, spots and red eye and before noise
 //! reduction; the global tone and colour, the local masks, detail and effects all come after it, in the per-pixel
-//! finish. The retouch stage runs first, then the background stage. The geometry stage (face reshape) has its slot
-//! reserved in `lightcraft_retouch::Stage` and is not run yet.
+//! finish. The retouch stage runs first, then the background stage. The geometry stage (Face Reshape) is not run
+//! here: it is a warp in the frame's geometry ([`crate::reshape_step`]), so the faces and masks this step reads
+//! already follow it.
 //!
 //! Skipped entirely, touching no pixel and hashing a 0 into the stage key, while the block is off or the Portrait
 //! tab's eye is off ([`active`]).
@@ -42,7 +43,12 @@ pub struct FrameKeyMap {
 impl FrameKeyMap {
     /// The map of `frame` (any frame of the photo's settings: the warp does not depend on the crop or the size).
     pub fn new(frame: &crate::geometry::Frame, orient: Orientation) -> FrameKeyMap {
-        FrameKeyMap { frame: frame.for_mask(true).into_owned(), orient }
+        let mut frame = frame.for_mask(true).into_owned();
+        // (the lens corrections and transform only: Face Reshape is built from the faces this map matches)
+        if let Some(w) = &mut frame.warp {
+            w.reshape = None;
+        }
+        FrameKeyMap { frame, orient }
     }
 }
 
