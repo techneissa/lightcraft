@@ -108,14 +108,16 @@ pub(crate) fn draw(img: &mut Rgb32f, scene: &Scene<'_>, prep: &Prepared, frame: 
     let picture_levels = fitted.as_deref().filter(|_| k.blur > 0.0).map(|f| prep.picture_levels(f));
     let alpha = prep.window(scene, img.width, img.height);
     let (w, place) = (img.width, frame.place);
+    // (each column's and row's point on the analysis image, worked out once)
+    let us: Vec<f32> = (0..w).map(|x| frame.to_analysis(x, 0).0).collect();
     par_rows(&mut img.data, w, |y, row| {
-        for (x, px) in row.iter_mut().enumerate() {
+        let v = frame.to_analysis(0, y).1;
+        for ((x, px), &u) in row.iter_mut().enumerate().zip(&us) {
             let a = alpha.data.get(y * w + x).copied().unwrap_or(0.0);
             if a >= EDGE.1 {
                 continue;
             }
             let here = *px;
-            let (u, v) = frame.to_analysis(x, y);
             let (person, behind) = if a <= EDGE.0 {
                 (here, here)
             } else {

@@ -2,11 +2,13 @@
 //!
 //! ```text
 //! cargo run -p lightcraft-retouch --release --example background -- in.jpg out.jpg --mask person.png \
-//!   [--blur 0..100] [--swap 0..100] [--clean 0..100] [--colour #RRGGBB | --picture other.jpg] [--depth depth.png] [--repeat N]
+//!   [--hair hair.png] [--blur 0..100] [--swap 0..100] [--clean 0..100] [--colour #RRGGBB | --picture other.jpg]
+//!   [--depth depth.png] [--repeat N]
 //! ```
 //!
 //! `--mask` is the person's matte as a grey picture (white = person), e.g. `outdir/masks/entirePerson-0.png` from
 //! `cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/`; repeat it for more people.
+//! `--hair` is the first person's Hair mask (`hair-0.png`): small gaps in the person's matte are filled only in it.
 //! `--depth` is a grey depth map (white = near). The picture is worked on in linear light (sRGB primaries; the app
 //! works in linear Rec.2020, so a swapped colour comes out slightly more saturated here than in the app).
 #![forbid(unsafe_code)]
@@ -48,12 +50,12 @@ fn read_grey(path: &str) -> Result<Plane, String> {
 
 fn run(args: &[String]) -> Result<(), String> {
     let usage = || {
-        "usage: background in.jpg out.jpg --mask person.png [--blur N] [--swap N] [--clean N] [--colour #RRGGBB | --picture file] [--depth depth.png] [--repeat N]"
+        "usage: background in.jpg out.jpg --mask person.png [--hair hair.png] [--blur N] [--swap N] [--clean N] [--colour #RRGGBB | --picture file] [--depth depth.png] [--repeat N]"
             .to_string()
     };
     let mut files = Vec::new();
     let mut b = Background::default();
-    let (mut masks, mut picture, mut depth, mut repeat) = (Vec::new(), None, None, 1usize);
+    let (mut masks, mut picture, mut depth, mut repeat, mut hair) = (Vec::new(), None, None, 1usize, None);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = || it.next().cloned().ok_or_else(usage);
@@ -68,6 +70,7 @@ fn run(args: &[String]) -> Result<(), String> {
                 picture = Some(p);
             }
             "--mask" => masks.push(value()?),
+            "--hair" => hair = Some(value()?),
             "--depth" => depth = Some(value()?),
             "--repeat" => repeat = value()?.parse().map_err(|_| usage())?,
             _ => files.push(a.clone()),
@@ -77,10 +80,13 @@ fn run(args: &[String]) -> Result<(), String> {
     let mut img = read_rgb(input)?;
     let (w, h) = (img.width, img.height);
     let mut faces = Vec::new();
-    for m in &masks {
-        let plane = read_grey(m)?;
-        let mask = PartMask { plane, area: NormRect::new(0.0, 0.0, 1.0, 1.0) };
-        faces.push(Face { masks: vec![(Part::EntirePerson, mask)], ..Face::boxed(NormRect::new(0.4, 0.1, 0.6, 0.3)) });
+    let whole = NormRect::new(0.0, 0.0, 1.0, 1.0);
+    for (i, m) in masks.iter().enumerate() {
+        let mut parts = vec![(Part::EntirePerson, PartMask { plane: read_grey(m)?, area: whole })];
+        if let Some(h) = hair.as_ref().filter(|_| i == 0) {
+            parts.push((Part::Hair, PartMask { plane: read_grey(h)?, area: whole }));
+        }
+        faces.push(Face { masks: parts, ..Face::boxed(NormRect::new(0.4, 0.1, 0.6, 0.3)) });
     }
     let mut input = Input::new(faces);
     if let Some(p) = &picture {
