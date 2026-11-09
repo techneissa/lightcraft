@@ -392,7 +392,7 @@ fn a_portrait_background_is_fork_format_7() {
     use lightcraft_develop::retouch::background::{Background, Swap};
     assert_eq!(VERSION, 7);
     let mut d = DevelopSettings::default();
-    let b = Background { blur: 40.0, swap: 70.0, clean: 25.0, with: Swap::File { path: "/backdrops/grey paper.jpg".into() } };
+    let b = Background { blur: 40.0, swap: 70.0, clean: 25.0, with: Swap::Picture { hash: "ab".repeat(32) } };
     d.retouch.global.background = b.clone();
     let mut c = Catalog::new();
     let id = photo(&mut c, d, None);
