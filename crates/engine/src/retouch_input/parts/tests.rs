@@ -500,3 +500,40 @@ fn the_parse_finds_each_faces_spots_once() {
     let found = super::found(&Parsing { people: vec![bare], ..parse_of(&[]) }, &[], &img, Orientation::Normal, &[]);
     assert_eq!(found.input.faces[0].spots, None, "no skin mask, no spots looked for");
 }
+
+/// Stray Hair's strands are found once, with the parse, on its picture (in linear light, turned like the masks), and
+/// kept with the faces: a dark strand across the face's skin is there, in the photo's frame, and a face without a
+/// Hair or Facial Skin mask is not searched.
+#[test]
+fn the_parse_finds_each_faces_strands_once() {
+    let (w, h) = (400usize, 300usize);
+    // a dark hair across the forehead, a pixel wide
+    let on_strand = |x: usize, y: usize| (0.4..0.6).contains(&((x as f32 + 0.5) / w as f32)) && y == (0.35 * h as f32) as usize;
+    let mut data = Vec::with_capacity(w * h * 3);
+    for y in 0..h {
+        for x in 0..w {
+            data.extend(if on_strand(x, y) { [40u8, 30, 25] } else { [200, 150, 130] });
+        }
+    }
+    let img = lightcraft_parsing::RgbImage { width: w, height: h, data };
+    let parsing = parse_of(&[r(0.3, 0.15, 0.7, 0.8)]);
+    for orient in [Orientation::Normal, Orientation::Rotate90] {
+        let found = super::found(&parsing, &[], &img, orient, &[]);
+        let strands = found.input.faces[0].strands.as_ref().expect("the parse's faces have their strands found");
+        assert!(!strands.is_empty(), "{orient:?}: the strand is found");
+        // a cell on the strand's middle has weight
+        let (nx, ny) = orient.map(0.5, (0.35 * h as f64 + 0.5) / h as f64, 1.0, 1.0);
+        let (cx, cy) = (
+            (nx - strands.area.x0) / strands.area.width() * strands.width as f64,
+            (ny - strands.area.y0) / strands.area.height() * strands.height as f64,
+        );
+        let near = (-2..=2)
+            .flat_map(|dy| (-2..=2).map(move |dx| (dx, dy)))
+            .filter_map(|(dx, dy)| strands.cell((cx as i64 + dx) as usize, (cy as i64 + dy) as usize));
+        assert!(near.map(|c| c[0]).max().unwrap_or(0) > 128, "{orient:?}: the strand's cells are where the strand is");
+    }
+    let mut bare = person(r(0.3, 0.15, 0.7, 0.8));
+    bare.parts.clear();
+    let found = super::found(&Parsing { people: vec![bare], ..parse_of(&[]) }, &[], &img, Orientation::Normal, &[]);
+    assert_eq!(found.input.faces[0].strands, None, "no hair or skin mask, no search");
+}
