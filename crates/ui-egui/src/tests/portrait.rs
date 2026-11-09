@@ -273,6 +273,7 @@ fn the_blemishes_section_has_amount_the_switch_and_the_report() {
     click(&mut h, "portrait:blemish.keepMoles");
     h.step();
     assert!(!h.app.session.develop_of(photo).unwrap().retouch.global.blemish.keep_moles, "the click turns the switch off");
+}
 
 /// The Face Reshape section (`portrait/reshape.rs`): its seven −100…+100 sliders; a click right of the middle sets
 /// Slim Face for every face.
