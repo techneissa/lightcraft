@@ -259,6 +259,19 @@ mod tests {
     }
 
     #[test]
+    fn a_parse_made_by_older_code_is_never_served() {
+        // the version of how parts are made is in every cached parse's key: 2 since people's planes join by adding up
+        // where the body map shares cells out (#124)
+        assert_eq!(crate::PARSE_VERSION, 2);
+        for set in ModelSet::ALL {
+            assert!(set.version().ends_with(&format!("-v{}", crate::PARSE_VERSION)), "{}", set.version());
+            let img = crate::RgbImage::new(2, 2, vec![0; 12]).unwrap();
+            let older = set.version().replace(&format!("-v{}", crate::PARSE_VERSION), "-v1");
+            assert_ne!(crate::cache::key(&img, &[], &set.version()), crate::cache::key(&img, &[], &older));
+        }
+    }
+
+    #[test]
     fn a_set_is_installed_only_with_every_file_at_its_size() {
         let dir = crate::tests::scratch("models-installed");
         let set = ModelSet::BiSeNet;

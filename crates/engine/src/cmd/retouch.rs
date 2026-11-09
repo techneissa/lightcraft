@@ -2,14 +2,15 @@
 //!
 //! Every value is also a develop control (`retouch.<feature>.<field>` for every face, `retouchFace.<i>.…` for the
 //! `i`-th face with its own settings), so `develop.set` and `develop.controls` reach them too; these commands add
-//! the faces: which were found, and setting a value for one of them.
+//! the faces: which were found, and setting a value for one of them. `retouch.refine.*` paints and clears the Refine
+//! brush's strokes (fork `fork/refine-brush.md`, issue #99).
 
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, cmd, has_active, index_req, photo_id, str_param};
 use crate::{Result, Session};
 use lightcraft_catalog::PhotoId;
-use lightcraft_develop::retouch::{FEATURES, Face, KeyMap};
+use lightcraft_develop::retouch::{FEATURES, Face, KeyMap, Refine, RefineMode, RefineStroke};
 use lightcraft_pipeline::retouch_step::FrameKeyMap;
 
 /// `keys` as the matcher takes it.
@@ -65,6 +66,105 @@ fn faces_json(s: &Session, id: PhotoId) -> Value {
         })
         .collect();
     json!({"id": id.0, "found": st.found.is_some(), "busy": st.busy, "error": st.error, "faces": list})
+}
+
+/// `feature`: a feature's key, required.
+fn feature_param(p: &Value, c: &str) -> Result<&'static lightcraft_develop::retouch::FeatureInfo> {
+    let keys = || FEATURES.iter().map(|x| x.key).collect::<Vec<_>>().join(", ");
+    let f = str_param(p, "feature").ok_or_else(|| bad(c, format!("missing `feature` (one of {})", keys())))?;
+    FEATURES.iter().find(|x| x.key == f).ok_or_else(|| bad(c, format!("unknown feature `{f}` (one of {})", keys())))
+}
+
+/// A stroke from `retouch.refine.stroke`'s parameters.
+fn stroke_param(p: &Value, c: &str, add_ok: bool) -> Result<RefineStroke> {
+    let mode = match str_param(p, "mode") {
+        None => RefineMode::Reduce,
+        Some(m) => RefineMode::from_name(m).ok_or_else(|| bad(c, format!("`mode` is reduce, restore or add, not `{m}`")))?,
+    };
+    if mode == RefineMode::Add && !add_ok {
+        return Err(bad(c, "this feature reads no mask, so there is nothing for Add to widen"));
+    }
+    let points: Vec<(f64, f64)> = p
+        .get("points")
+        .and_then(Value::as_array)
+        .ok_or_else(|| bad(c, "missing `points` ([[x, y]…], fractions of the photo before its crop)"))?
+        .iter()
+        .map(|q| match (q.get(0).and_then(Value::as_f64), q.get(1).and_then(Value::as_f64)) {
+            (Some(x), Some(y)) => Ok((x, y)),
+            _ => Err(bad(c, format!("a point is [x, y], not {q}"))),
+        })
+        .collect::<Result<_>>()?;
+    let num = |k: &str, d: f64| -> Result<f64> {
+        match p.get(k) {
+            None | Some(Value::Null) => Ok(d),
+            Some(v) => v.as_f64().filter(|v| v.is_finite()).ok_or_else(|| bad(c, format!("`{k}` must be a number"))),
+        }
+    };
+    let d = RefineStroke::default();
+    let pressure =
+        p.get("pressure").and_then(Value::as_array).map(|a| a.iter().filter_map(Value::as_f64).map(|v| v as f32).collect()).unwrap_or_default();
+    let s = RefineStroke {
+        mode,
+        points,
+        size: num("size", d.size)?,
+        feather: num("feather", d.feather)?,
+        flow: num("flow", d.flow)?,
+        strength: num("strength", d.strength)?,
+        pressure,
+    };
+    s.sanitized().ok_or_else(|| bad(c, "the stroke has no point on the photo"))
+}
+
+/// An Add stroke works on or near a face: refused with no face in the photo, or when the face it is for (`face`, else
+/// the nearest) is further than [`lightcraft_develop::retouch::refine::ADD_REACH`] face sizes away.
+fn check_add_near_face(s: &Session, id: PhotoId, face: Option<usize>, stroke: &RefineStroke, c: &str) -> Result<()> {
+    use lightcraft_develop::retouch::refine::{ADD_REACH, add_distance, stroke_centre};
+    const SAY: &str = "Add works on or near a face";
+    let input = found_faces(s, id, c)?;
+    if input.faces.is_empty() {
+        return Err(bad(c, format!("{SAY}: the photo has no face")));
+    }
+    let Some((cx, cy)) = stroke_centre(stroke) else { return Err(bad(c, "the stroke has no point on the photo")) };
+    // (the faces' boxes are in the frame before lens corrections and transform when they come from a people parse)
+    let keys = s.retouch_key_map(id);
+    let centre = match (input.on_photo, as_map(&keys)) {
+        (true, Some(m)) => m.edit_to_photo(cx, cy).unwrap_or((cx, cy)),
+        _ => (cx, cy),
+    };
+    let distance = |i: usize| input.faces.get(i).map_or(f64::INFINITY, |f| add_distance(f, centre));
+    let d = match face {
+        Some(i) => distance(i),
+        None => (0..input.faces.len()).map(distance).fold(f64::INFINITY, f64::min),
+    };
+    if d > ADD_REACH {
+        return Err(bad(c, format!("{SAY}: the stroke is {d:.1} face sizes from {}", if face.is_some() { "that face" } else { "the nearest face" })));
+    }
+    Ok(())
+}
+
+/// The Refine strokes of `face` (its own, made when it has none yet) or, without one, those for every face.
+fn refine_mut<'a>(s: &Session, d: &'a mut lightcraft_develop::DevelopSettings, id: PhotoId, face: Option<usize>, c: &str) -> Result<&'a mut Refine> {
+    match face {
+        None => Ok(&mut d.retouch.refine),
+        Some(i) => {
+            let input = found_faces(s, id, c)?;
+            if i >= input.faces.len() {
+                return Err(bad(c, format!("no face {i}: the photo has {}", input.faces.len())));
+            }
+            let keys = s.retouch_key_map(id);
+            let own = d.retouch.own_mut_in(&input.faces, i, as_map(&keys)).ok_or_else(|| bad(c, "too many faces have their own settings"))?;
+            Ok(&mut own.refine)
+        }
+    }
+}
+
+/// The strokes `face` renders with (its own, else those for every face), read only.
+fn refine_of(s: &Session, d: &lightcraft_develop::DevelopSettings, id: PhotoId, face: Option<usize>, c: &str) -> Result<Refine> {
+    let Some(i) = face else { return Ok(d.retouch.refine.clone()) };
+    let input = found_faces(s, id, c)?;
+    let keys = s.retouch_key_map(id);
+    let own = lightcraft_develop::retouch::overrides::resolve_in(&d.retouch, &input.faces, as_map(&keys)).get(i).copied().flatten();
+    Ok(own.and_then(|o| d.retouch.faces.get(o)).map_or_else(|| d.retouch.refine.clone(), |o| o.refine.clone()))
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -134,6 +234,77 @@ pub fn specs() -> Vec<CommandSpec> {
             }
         ),
         cmd!(
+            "retouch.refine.stroke",
+            "Refine Portrait Feature",
+            [],
+            None,
+            "{feature: key, mode?: reduce|restore|add, points: [[x, y]…], size?: radius (fraction of the long edge), feather?: 0–100, flow?: 1–100, strength?: 0–100, pressure?: [0–1…], face?: index, id?} → {strokes} — paint a Refine stroke for one portrait feature (points are fractions of the photo before its crop, as Remove spots): Reduce weakens the feature there (none at strength 100), Restore brings back its automatic result, Add applies it where its mask missed (features that read a mask), on or near a face (within one face size of its box; with no face in the photo it errors). For every face, or (with `face`) that face alone, which then gets its own settings. One undo step",
+            has_active,
+            |s, p| {
+                let c = "retouch.refine.stroke";
+                let id = target(s, p, c)?;
+                let f = feature_param(p, c)?;
+                if f.stage == lightcraft_develop::retouch::Stage::Geometry {
+                    // (it moves pixels in the geometry step, which the Refine brush does not wrap yet)
+                    return Err(bad(c, format!("{} has no Refine brush yet", f.label)));
+                }
+                let stroke = stroke_param(p, c, !f.add_parts.is_empty())?;
+                let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
+                let face = face_param(p, c)?;
+                if stroke.mode == RefineMode::Add {
+                    check_add_near_face(s, id, face, &stroke, c)?;
+                }
+                let refine = refine_mut(s, &mut d, id, face, c)?;
+                if !refine.push(f.key, stroke) {
+                    return Err(bad(c, format!("{} has the most strokes it keeps ({})", f.label, lightcraft_develop::retouch::refine::MAX_STROKES)));
+                }
+                let n = refine.count(Some(f.key));
+                lightcraft_develop::retouch::refine::check_budget(&d.retouch).map_err(|e| bad(c, e))?;
+                s.set_develop(id, d, &format!("Refine {}", f.label))?;
+                Ok(json!({"strokes": n}))
+            }
+        ),
+        cmd!(
+            "retouch.refine.clear",
+            "Clear Refine Strokes",
+            [],
+            None,
+            "{feature?: key, face?: index, id?} → {removed: bool} — remove the Refine strokes of one feature (every feature without `feature`), for every face or (with `face`) that face's own. One undo step",
+            has_active,
+            |s, p| {
+                let c = "retouch.refine.clear";
+                let id = target(s, p, c)?;
+                let f = match p.get("feature") {
+                    None | Some(Value::Null) => None,
+                    Some(_) => Some(feature_param(p, c)?),
+                };
+                let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
+                let face = face_param(p, c)?;
+                if refine_of(s, &d, id, face, c)?.count(f.map(|f| f.key)) == 0 {
+                    return Ok(json!({"removed": false}));
+                }
+                refine_mut(s, &mut d, id, face, c)?.clear(f.map(|f| f.key));
+                let label = f.map_or_else(|| "Clear Refine Strokes".to_string(), |f| format!("Clear Refine {}", f.label));
+                s.set_develop(id, d, &label)?;
+                Ok(json!({"removed": true}))
+            }
+        ),
+        cmd!(
+            query "retouch.refine.list",
+            "List Refine Strokes",
+            [],
+            None,
+            "{face?: index, id?} → {features: [{feature, strokes: [{mode, points, size, feather, flow, strength, pressure?}]}]} — the Refine strokes the photo renders with, for every face or (with `face`) for that face",
+            has_active,
+            |s, p| {
+                let c = "retouch.refine.list";
+                let id = target(s, p, c)?;
+                let d = s.develop_of(id).unwrap_or_default();
+                let r = refine_of(s, &d, id, face_param(p, c)?, c)?;
+                Ok(json!({"features": r.0}))
+            }
+        ),
+        cmd!(
             "retouch.resetFace",
             "Reset Face to All Faces",
             [],
@@ -159,7 +330,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Reset Portrait",
             [],
             None,
-            "{feature?: key, face?: index, id?} — reset portrait retouching: everything (every face's own settings too), or one feature (`skin`, `eyes`…) for every face or for one face",
+            "{feature?: key, face?: index, id?} — reset portrait retouching: everything (every face's own settings too), or one feature (`skin`, `eyes`…) for every face or for one face; its Refine strokes go too",
             has_active,
             |s, p| {
                 let c = "retouch.reset";
@@ -176,6 +347,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     (None, None) => d.retouch = Default::default(),
                     (Some(f), None) => {
                         d.retouch.global.reset_feature(f);
+                        d.retouch.refine.clear(Some(f));
                     }
                     (f, Some(i)) => {
                         let input = found_faces(s, id, c)?;
@@ -186,8 +358,12 @@ pub fn specs() -> Vec<CommandSpec> {
                         match f {
                             Some(f) => {
                                 own.settings.reset_feature(f);
+                                own.refine.clear(Some(f));
                             }
-                            None => own.settings = Default::default(),
+                            None => {
+                                own.settings = Default::default();
+                                own.refine = Default::default();
+                            }
                         }
                     }
                 }

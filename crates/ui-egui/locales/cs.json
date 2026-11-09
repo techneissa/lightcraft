@@ -2627,5 +2627,21 @@
   "Reject Photos?": "Reject Photos?",
   "Eyes Closed": "Eyes Closed",
   "Eyes Out of Focus": "Eyes Out of Focus",
-  "Reject Suggested Photos": "Reject Suggested Photos"
+  "Reject Suggested Photos": "Reject Suggested Photos",
+  "Swap With": "Nahradit čím",
+  "White": "Bílá",
+  "Light Grey": "Světle šedá",
+  "Grey": "Šedá",
+  "Black": "Černá",
+  "Choose Colour": "Vybrat barvu",
+  "Choose Picture…": "Vybrat obrázek…",
+  "Use a Photo…": "Použít fotku…",
+  "Loading…": "Načítání…",
+  "Choose Background Picture…": "Vybrat obrázek pozadí…",
+  "Images": "Obrázky",
+  "Background Picture Missing": "Obrázek pozadí chybí",
+  "Blur": "Rozostření",
+  "Clean Backdrop": "Vyčistit pozadí",
+  "Loading background picture": "Načítání obrázku pozadí",
+  "Reading depth map": "Čtení hloubkové mapy"
 }

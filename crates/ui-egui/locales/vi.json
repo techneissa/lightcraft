@@ -2746,5 +2746,21 @@
   "Reject Photos?": "Reject Photos?",
   "Eyes Closed": "Eyes Closed",
   "Eyes Out of Focus": "Eyes Out of Focus",
-  "Reject Suggested Photos": "Reject Suggested Photos"
+  "Reject Suggested Photos": "Reject Suggested Photos",
+  "Swap With": "Thay bằng",
+  "White": "Trắng",
+  "Light Grey": "Xám nhạt",
+  "Grey": "Xám",
+  "Black": "Đen",
+  "Choose Colour": "Chọn màu",
+  "Choose Picture…": "Chọn ảnh…",
+  "Use a Photo…": "Dùng một ảnh…",
+  "Loading…": "Đang tải…",
+  "Choose Background Picture…": "Chọn ảnh nền…",
+  "Images": "Hình ảnh",
+  "Background Picture Missing": "Thiếu ảnh nền",
+  "Blur": "Làm mờ",
+  "Clean Backdrop": "Làm sạch phông",
+  "Loading background picture": "Đang tải ảnh nền",
+  "Reading depth map": "Đang đọc bản đồ độ sâu"
 }

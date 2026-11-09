@@ -45,11 +45,10 @@ slider redid all of it and everything after it:
 
 ## Merge hazards
 
-- **Refine brush (#151, `feat/99-refine-brush`).** Its Add strokes widen a feature's masks outside the face box
-  (`Reads::add`), and Reduce strokes are user paint too. `write_boxes` names every field of `Retouch`,
-  `FaceOverride` and `Reads` without `..`, so the merge does not build until it handles them: return `None` while the
-  block or any face has a stroke (Add or Reduce). Then add an Add stroke outside the face box to
-  `the_step_writes_only_inside_its_boxes` (`tests_retouch_cache.rs`).
+- **Refine brush (#151, `feat/99-refine-brush`).** Handled in that PR: its Add strokes widen a feature's masks outside the
+  face box and Reduce strokes are user paint, so `write_boxes` returns `None` (the whole frame, no dirty path) while the
+  block or any face's own settings have a stroke; `Reads` no longer carries the strokes, the zoomed window takes each face's
+  own Add strokes (`refine::add_reach`). `the_step_writes_only_inside_its_boxes` checks an Add stroke beside the face box.
 - **Background (#148).** A picture feature: `writes_near_face` is `false` by default for `Scope::Picture`, so with it on
   every tick redoes the whole frame. If it ever bounds its writes, override `writes_near_face` and add it to the box
   test.

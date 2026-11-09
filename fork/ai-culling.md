@@ -26,7 +26,7 @@ the eyes of each photo's faces, from the face mesh's 478 points:
   A near-flat frame (a blank wall: almost no detail to compare the eyes with) has an unknown focus. A face one of
   whose eyes cannot be read (a missing landmark) is read from the other eye, with the one-eye line.
 - **Stored** with the other culling scores (`Analysis.eyes`: faces, main faces, closed, focus): fork catalog format 9
-  (7 and 8 are held for Background and the Refine brush). Rule-editor / smart-album fields `eyesClosed` and
+  (7 and 8 are Background and the Refine brush). Rule-editor / smart-album fields `eyesClosed` and
   `eyesOutOfFocus` (Assisted Culling group); unknown eyes match neither yes nor no.
 - **Bursts**: a burst's best is the sharpest frame whose eyes are open and in focus (a closed-eyes frame loses 100
   focus points, a soft-eyes frame 30, a frame whose eyes could not be read 15: it ranks below an open, sharp frame a

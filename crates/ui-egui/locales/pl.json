@@ -2502,5 +2502,21 @@
   "Reject Photos?": "Reject Photos?",
   "Eyes Closed": "Eyes Closed",
   "Eyes Out of Focus": "Eyes Out of Focus",
-  "Reject Suggested Photos": "Reject Suggested Photos"
+  "Reject Suggested Photos": "Reject Suggested Photos",
+  "Swap With": "Zastąp przez",
+  "White": "Biały",
+  "Light Grey": "Jasnoszary",
+  "Grey": "Szary",
+  "Black": "Czarny",
+  "Choose Colour": "Wybierz kolor",
+  "Choose Picture…": "Wybierz obraz…",
+  "Use a Photo…": "Użyj zdjęcia…",
+  "Loading…": "Wczytywanie…",
+  "Choose Background Picture…": "Wybierz obraz tła…",
+  "Images": "Obrazy",
+  "Background Picture Missing": "Brak obrazu tła",
+  "Blur": "Rozmycie",
+  "Clean Backdrop": "Oczyść tło",
+  "Loading background picture": "Wczytywanie obrazu tła",
+  "Reading depth map": "Odczyt mapy głębi"
 }

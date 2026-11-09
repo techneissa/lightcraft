@@ -47,7 +47,7 @@ fn pump_until(s: &mut Session, p: Value, what: &str, mut cond: impl FnMut() -> b
 
 pub(super) fn fake_parse(set: ModelSet) -> Parsing {
     let mut person = Person { face: Some(NormRect::new(0.4, 0.2, 0.6, 0.5)), face_score: 0.9, ..Person::default() };
-    person.parts.insert(Part::Hair, vec![Plane { rect: NormRect::new(0.3, 0.1, 0.7, 0.3), width: 4, height: 2, data: vec![1.0; 8] }]);
+    person.parts.insert(Part::Hair, vec![Plane { rect: NormRect::new(0.3, 0.1, 0.7, 0.3), width: 4, height: 2, data: vec![1.0; 8], split: false }]);
     Parsing { model_set: set.id().into(), model_version: set.version(), width: 32, height: 24, people: vec![person] }
 }
 

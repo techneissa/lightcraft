@@ -30,7 +30,7 @@ fn person(r: NormRect) -> Person {
     let mesh =
         (0..478).map(|i| Landmark { x: r.x0 + r.width() * (i % 22) as f32 / 22.0, y: r.y0 + r.height() * (i / 22) as f32 / 22.0, z: 0.0 }).collect();
     let mut p = Person { face: Some(r), face_score: 0.9, landmarks: mesh, landmark_score: 0.9, bounds: Some(r), ..Person::default() };
-    p.parts.insert(Part::FacialSkin, vec![Plane { rect: r, width: 32, height: 32, data: disc }]);
+    p.parts.insert(Part::FacialSkin, vec![Plane { rect: r, width: 32, height: 32, data: disc, split: false }]);
     p
 }
 
@@ -329,8 +329,8 @@ fn another_model_set_finds_the_faces_anew() {
 
 #[test]
 fn several_planes_of_a_part_merge_and_a_plane_turns_exactly() {
-    let a = Plane { rect: r(0.0, 0.0, 0.5, 0.5), width: 2, height: 2, data: vec![1.0, 0.0, 0.0, 0.0] };
-    let b = Plane { rect: r(0.5, 0.5, 1.0, 1.0), width: 2, height: 2, data: vec![0.0, 0.0, 0.0, f32::NAN] };
+    let a = Plane { rect: r(0.0, 0.0, 0.5, 0.5), width: 2, height: 2, data: vec![1.0, 0.0, 0.0, 0.0], split: false };
+    let b = Plane { rect: r(0.5, 0.5, 1.0, 1.0), width: 2, height: 2, data: vec![0.0, 0.0, 0.0, f32::NAN], split: false };
     let m = super::part_mask(&[a.clone(), b], Orientation::Normal).unwrap();
     assert_eq!(m.area, lightcraft_develop::retouch::NormRect::new(0.0, 0.0, 1.0, 1.0));
     assert_eq!((m.plane.width, m.plane.height), (4, 4));
@@ -391,8 +391,8 @@ fn a_model_set_switch_during_a_search_keeps_the_first_sets_faces() {
 /// wide one can't size the merged mask past its cap.
 #[test]
 fn a_sliver_plane_keeps_the_merged_mask_within_its_cap() {
-    let sliver = Plane { rect: r(0.0, 0.1, 1e-7, 0.9), width: 64, height: 4, data: vec![1.0; 256] };
-    let wide = Plane { rect: r(0.0, 0.0, 1.0, 1.0), width: 4, height: 4, data: vec![0.5; 16] };
+    let sliver = Plane { rect: r(0.0, 0.1, 1e-7, 0.9), width: 64, height: 4, data: vec![1.0; 256], split: false };
+    let wide = Plane { rect: r(0.0, 0.0, 1.0, 1.0), width: 4, height: 4, data: vec![0.5; 16], split: false };
     let m = super::part_mask(&[sliver, wide], Orientation::Normal).expect("a mask from the valid planes");
     let (w, h) = (m.plane.width, m.plane.height);
     assert!(w <= 1536 && h <= 1536 && w * h <= 1 << 20, "{w}×{h}");
@@ -403,7 +403,7 @@ fn a_sliver_plane_keeps_the_merged_mask_within_its_cap() {
 #[test]
 fn only_the_parts_a_feature_reads_are_kept() {
     let mut p = person(r(0.3, 0.2, 0.7, 0.8));
-    p.parts.insert(Part::ClothesTop, vec![Plane { rect: r(0.2, 0.6, 0.8, 1.0), width: 4, height: 4, data: vec![1.0; 16] }]);
+    p.parts.insert(Part::ClothesTop, vec![Plane { rect: r(0.2, 0.6, 0.8, 1.0), width: 4, height: 4, data: vec![1.0; 16], split: false }]);
     let parsing = Parsing { people: vec![p], ..parse_of(&[]) };
     let faces = super::faces_of(&parsing, &[], Orientation::Normal);
     assert!(faces[0].mask(RetouchPart::FacialSkin).is_some());

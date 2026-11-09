@@ -37,7 +37,7 @@ pub(super) fn travel(size: f32, feather: f32, dx: f32, dy: f32, long: f32, limit
 /// photo's long side on screen and `scale` the factor of the Size slider (the number the label
 /// shows). True while a resize lasts (and on its last frame), when the tool must neither paint nor
 /// draw its own cursor. A press without ⌃⌥ never turns into a resize.
-pub(super) fn resize_drag(
+pub(crate) fn resize_drag(
     app: &mut LightcraftApp,
     ui: &egui::Ui,
     resp: &egui::Response,

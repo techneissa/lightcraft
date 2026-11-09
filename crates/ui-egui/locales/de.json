@@ -3662,5 +3662,21 @@
   "Reject Photos?": "Reject Photos?",
   "Eyes Closed": "Eyes Closed",
   "Eyes Out of Focus": "Eyes Out of Focus",
-  "Reject Suggested Photos": "Reject Suggested Photos"
+  "Reject Suggested Photos": "Reject Suggested Photos",
+  "Swap With": "Ersetzen durch",
+  "White": "Weiß",
+  "Light Grey": "Hellgrau",
+  "Grey": "Grau",
+  "Black": "Schwarz",
+  "Choose Colour": "Farbe wählen",
+  "Choose Picture…": "Bild wählen…",
+  "Use a Photo…": "Foto verwenden…",
+  "Loading…": "Wird geladen…",
+  "Choose Background Picture…": "Hintergrundbild wählen…",
+  "Images": "Bilder",
+  "Background Picture Missing": "Hintergrundbild fehlt",
+  "Blur": "Weichzeichnen",
+  "Clean Backdrop": "Hintergrund säubern",
+  "Loading background picture": "Hintergrundbild wird geladen",
+  "Reading depth map": "Tiefenkarte wird gelesen"
 }

@@ -305,7 +305,7 @@ fn planes(img: &RgbImage, crop: &Crop, groups: &[Vec<f32>], mesh: &MeshEyes, sce
     let face_hat = at(G::Hat);
     let hat: Vec<f32> = face_hat.iter().zip(&photo).map(|(h, &(x, y))| h * smoothstep(0.15, 0.4, (scene.body_hat)(x / iw, y / ih))).collect();
     let hair: Vec<f32> = at(G::Hair).iter().zip(face_hat.iter().zip(&hat)).map(|(r, (f, h))| (r + f - h).min(1.0)).collect();
-    let plane = |data: Vec<f32>| Plane { rect, width: pw, height: ph, data };
+    let plane = |data: Vec<f32>| Plane { rect, width: pw, height: ph, data, split: false };
     vec![
         (Part::EntirePerson, plane(at(G::Person))),
         (Part::FacialSkin, plane(skin)),

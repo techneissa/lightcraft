@@ -35,6 +35,13 @@ Edit view uses it yet; the Select People masks and the Portrait features build o
   512², the body at 768 to 1536 px); `lightcraft_parsing::render` draws them at any size and snaps their edges to the
   photo with a guided filter whose radius is 1.5 model cells (at least one pixel), using the photo at that size, so a
   preview and a 24 MP export agree. Each model file's SHA-256 is checked once, the first time it is loaded.
+- **Several people's masks** (issue #124): the body map gives each of its cells to one person, so the planes cut from
+  it (`Plane::split`) add up across people; face planes (which may all claim cells nobody owns) and matte-redrawn
+  edges join by the larger value. `render::mask`, Select People's grids, `Parsing::background` and the hair-edge guard
+  all join this way (`lightcraft_parsing::joined` at a point). Taking the larger of everything left a thin line where
+  two people meet. Cached parses from before are parsed again (`PARSE_VERSION` 2). A saved Select People mask keeps
+  the grid it stored until its parts or face change or it is pasted to another photo; it is then drawn with this
+  join.
 - **Commands**: `parsing.status`, `parsing.modelSet {set}`, `parsing.download {set?, confirm}`, `parsing.cancel`,
   `parsing.run {ids?, wait?}` (people, faces, landmark counts and each part's area), `parsing.mask {id?, part,
   person?, path, edge?}` (one mask as a grey PNG).

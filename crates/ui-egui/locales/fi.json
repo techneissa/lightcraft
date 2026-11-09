@@ -2418,5 +2418,21 @@
   "Reject Photos?": "Reject Photos?",
   "Eyes Closed": "Eyes Closed",
   "Eyes Out of Focus": "Eyes Out of Focus",
-  "Reject Suggested Photos": "Reject Suggested Photos"
+  "Reject Suggested Photos": "Reject Suggested Photos",
+  "Swap With": "Korvaa kohteella",
+  "White": "Valkoinen",
+  "Light Grey": "Vaaleanharmaa",
+  "Grey": "Harmaa",
+  "Black": "Musta",
+  "Choose Colour": "Valitse väri",
+  "Choose Picture…": "Valitse kuva…",
+  "Use a Photo…": "Käytä kuvaa…",
+  "Loading…": "Ladataan…",
+  "Choose Background Picture…": "Valitse taustakuva…",
+  "Images": "Kuvat",
+  "Background Picture Missing": "Taustakuva puuttuu",
+  "Blur": "Sumennus",
+  "Clean Backdrop": "Siisti tausta",
+  "Loading background picture": "Ladataan taustakuvaa",
+  "Reading depth map": "Luetaan syvyyskarttaa"
 }

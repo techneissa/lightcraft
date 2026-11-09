@@ -2521,5 +2521,21 @@
   "Reject Photos?": "Reject Photos?",
   "Eyes Closed": "Eyes Closed",
   "Eyes Out of Focus": "Eyes Out of Focus",
-  "Reject Suggested Photos": "Reject Suggested Photos"
+  "Reject Suggested Photos": "Reject Suggested Photos",
+  "Swap With": "Ersätt med",
+  "White": "Vit",
+  "Light Grey": "Ljusgrå",
+  "Grey": "Grå",
+  "Black": "Svart",
+  "Choose Colour": "Välj färg",
+  "Choose Picture…": "Välj bild…",
+  "Use a Photo…": "Använd ett foto…",
+  "Loading…": "Läser in…",
+  "Choose Background Picture…": "Välj bakgrundsbild…",
+  "Images": "Bilder",
+  "Background Picture Missing": "Bakgrundsbild saknas",
+  "Blur": "Oskärpa",
+  "Clean Backdrop": "Rensa bakgrund",
+  "Loading background picture": "Läser in bakgrundsbild",
+  "Reading depth map": "Läser djupkarta"
 }

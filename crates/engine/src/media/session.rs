@@ -625,6 +625,12 @@ impl crate::Session {
     pub fn render_now(&mut self, id: PhotoId, max_w: usize, max_h: usize) -> Result<Rendered, String> {
         lightcraft_pipeline::check_output_size(max_w, max_h)?;
         self.retouch_before_export(id);
+        // (fork, `fork/retouch-background.md`: Background Swap's picture, loaded here on this thread)
+        if let Some(p) = self.catalog.photo(id).cloned()
+            && let Err(e) = self.backdrop_now(&p, &p.develop)
+        {
+            log::warn!("portrait: photo {} renders without its background picture: {e}", id.0);
+        }
         let job = self.render_job(id, max_w, max_h, false, true).ok_or("no such photo")?;
         let r = job.run();
         self.accept(&r);
@@ -641,6 +647,12 @@ impl crate::Session {
         space: lightcraft_pipeline::OutputSpace,
         depth: lightcraft_pipeline::OutputDepth,
     ) -> Result<Rendered, String> {
+        // (fork, `fork/retouch-background.md`: Background Swap's picture, loaded here; a missing one fails the export)
+        if let Some(p) = self.catalog.photo(id).cloned()
+            && lightcraft_develop::retouch::active(&p.develop)
+        {
+            self.backdrop_now(&p, &p.develop).map_err(|e| format!("{}: {e}", p.file_name))?;
+        }
         let r = self.export_job(id, max_w, max_h, space, depth)?.run();
         self.accept(&r);
         r.rendered

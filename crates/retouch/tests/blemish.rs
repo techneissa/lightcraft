@@ -73,7 +73,7 @@ fn settings(amount: f64, keep: bool) -> Retouch {
     let mut global = Features::default();
     assert!(global.set("retouch.blemish.amount", amount));
     assert!(global.set("retouch.blemish.keepMoles", if keep { 1.0 } else { 0.0 }));
-    Retouch { global, faces: Vec::new() }
+    Retouch::with_global(global)
 }
 
 fn retouch(img: &Rgb32f, r: &Retouch, faces: Vec<Face>) -> Rgb32f {

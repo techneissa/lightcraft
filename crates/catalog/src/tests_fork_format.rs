@@ -384,21 +384,73 @@ fn a_face_reshape_is_fork_format_6() {
     assert_eq!((got.global.reshape.slim_face, got.faces[0].settings.reshape.chin), (40.0, 30.0));
 }
 
+/// Fork 7 (#141): Portrait Background's sliders and what Swap puts behind the person are saved and read back, written
+/// as fork 7 so a fork 6 build refuses them instead of dropping them; a fork 6 library opens and is upgraded with
+/// nothing lost.
+#[test]
+fn a_portrait_background_is_fork_format_7() {
+    use lightcraft_develop::retouch::background::{Background, Swap};
+    const { assert!(VERSION >= 7) };
+    let mut d = DevelopSettings::default();
+    let b = Background { blur: 40.0, swap: 70.0, clean: 25.0, with: Swap::Picture { hash: "ab".repeat(32) } };
+    d.retouch.global.background = b.clone();
+    let mut c = Catalog::new();
+    let id = photo(&mut c, d, None);
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snapshot(FORK_FORMAT, 6, 1, &c.to_snapshot()));
+    let (mut j, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.upgraded_from, loaded.to_snapshot()), (Some(6), c.to_snapshot()));
+    assert_eq!(header(&m), (FORK_FORMAT.to_string(), u64::from(VERSION)));
+    j.snapshot(&loaded).unwrap();
+    drop(j);
+    let (_, again, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, None);
+    assert_eq!(again.photo(id).unwrap().develop.retouch.global.background, b);
+}
+
+/// Fork 8 (#99): Refine strokes, for every face and a face's own, are saved and read back whole, written as fork 8 so
+/// an older build refuses them instead of dropping them; a fork 7 library opens and is upgraded with nothing lost.
+#[test]
+fn refine_strokes_are_fork_format_8() {
+    use lightcraft_develop::retouch::{Face, NormRect, RefineMode, RefineStroke};
+    const { assert!(VERSION >= 8) };
+    let mut d = DevelopSettings::default();
+    let stroke = |mode| RefineStroke { mode, points: vec![(0.2, 0.3), (0.4, 0.35)], pressure: vec![0.5, 0.9], ..RefineStroke::default() };
+    d.retouch.global.set("retouch.skin.smoothness", 40.0);
+    assert!(d.retouch.refine.push("skin", stroke(RefineMode::Reduce)));
+    let face = Face::boxed(NormRect::new(0.1, 0.1, 0.3, 0.3));
+    assert!(d.retouch.own_mut_in(std::slice::from_ref(&face), 0, None).unwrap().refine.push("teethLips", stroke(RefineMode::Add)));
+    let mut c = Catalog::new();
+    let id = photo(&mut c, d.clone(), None);
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snapshot(FORK_FORMAT, 7, 1, &c.to_snapshot()));
+    let (mut j, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.upgraded_from, loaded.to_snapshot()), (Some(7), c.to_snapshot()));
+    assert_eq!(header(&m), (FORK_FORMAT.to_string(), u64::from(VERSION)));
+    j.snapshot(&loaded).unwrap();
+    drop(j);
+    let (_, again, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, None);
+    let p = again.photo(id).unwrap();
+    assert_eq!(p.develop.retouch, d.retouch);
+    assert!(p.history.iter().all(|h| h.settings.retouch == d.retouch), "every History step");
+}
+
 /// Fork 9 (`fork/ai-culling.md`): Assisted Culling's eyes are saved with the photo's other culling scores and read
-/// back, written as fork 9 so an older fork build refuses them instead of dropping them; a fork 6 library, whose
+/// back, written as fork 9 so an older fork build refuses them instead of dropping them; a fork 8 library, whose
 /// scores have no eyes, opens and is upgraded with nothing lost.
 #[test]
 fn culling_eyes_are_fork_format_9() {
-    assert_eq!(VERSION, 9);
+    const { assert!(VERSION >= 9) };
     let mut c = Catalog::new();
     let id = photo(&mut c, DevelopSettings::default(), None);
     let old = Analysis { sharpness: 61.0, clipped: 0.01, group: Some(3), best: true, eyes: None };
     c.apply(Op::SetAnalysis { id, analysis: Some(old) }).unwrap();
     let m = MemStore::new();
-    m.set(SNAPSHOT, snapshot(FORK_FORMAT, 6, 1, &c.to_snapshot()));
+    m.set(SNAPSHOT, snapshot(FORK_FORMAT, 8, 1, &c.to_snapshot()));
     let (mut j, mut loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
-    assert_eq!((r.upgraded_from, loaded.photo(id).unwrap().analysis), (Some(6), Some(old)));
-    assert_eq!(header(&m), (FORK_FORMAT.to_string(), 9));
+    assert_eq!((r.upgraded_from, loaded.photo(id).unwrap().analysis), (Some(8), Some(old)));
+    assert_eq!(header(&m), (FORK_FORMAT.to_string(), u64::from(VERSION)));
     let eyes = Eyes { faces: 2, main: 1, closed: Some(true), focus: Some(22.5) };
     let op = Op::SetAnalysis { id, analysis: Some(Analysis { eyes: Some(eyes), ..old }) };
     loaded.apply(op.clone()).unwrap();

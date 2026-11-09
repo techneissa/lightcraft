@@ -2745,5 +2745,21 @@
   "Reject Photos?": "Reject Photos?",
   "Eyes Closed": "Eyes Closed",
   "Eyes Out of Focus": "Eyes Out of Focus",
-  "Reject Suggested Photos": "Reject Suggested Photos"
+  "Reject Suggested Photos": "Reject Suggested Photos",
+  "Swap With": "Sostituisci con",
+  "White": "Bianco",
+  "Light Grey": "Grigio chiaro",
+  "Grey": "Grigio",
+  "Black": "Nero",
+  "Choose Colour": "Scegli colore",
+  "Choose Picture…": "Scegli immagine…",
+  "Use a Photo…": "Usa una foto…",
+  "Loading…": "Caricamento…",
+  "Choose Background Picture…": "Scegli immagine di sfondo…",
+  "Images": "Immagini",
+  "Background Picture Missing": "Immagine di sfondo mancante",
+  "Blur": "Sfocatura",
+  "Clean Backdrop": "Pulisci fondale",
+  "Loading background picture": "Caricamento dell’immagine di sfondo",
+  "Reading depth map": "Lettura della mappa di profondità"
 }

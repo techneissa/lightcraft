@@ -2581,5 +2581,21 @@
   "Reject Photos?": "Reject Photos?",
   "Eyes Closed": "Eyes Closed",
   "Eyes Out of Focus": "Eyes Out of Focus",
-  "Reject Suggested Photos": "Reject Suggested Photos"
+  "Reject Suggested Photos": "Reject Suggested Photos",
+  "Swap With": "替換為",
+  "White": "白色",
+  "Light Grey": "淺灰色",
+  "Grey": "灰色",
+  "Black": "黑色",
+  "Choose Colour": "選擇顏色",
+  "Choose Picture…": "選擇圖片…",
+  "Use a Photo…": "使用照片…",
+  "Loading…": "正在載入…",
+  "Choose Background Picture…": "選擇背景圖片…",
+  "Images": "圖片",
+  "Background Picture Missing": "背景圖片遺失",
+  "Blur": "模糊",
+  "Clean Backdrop": "清理背景",
+  "Loading background picture": "正在載入背景圖片",
+  "Reading depth map": "正在讀取深度圖"
 }

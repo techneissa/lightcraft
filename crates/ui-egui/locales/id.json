@@ -2432,5 +2432,21 @@
   "Reject Photos?": "Reject Photos?",
   "Eyes Closed": "Eyes Closed",
   "Eyes Out of Focus": "Eyes Out of Focus",
-  "Reject Suggested Photos": "Reject Suggested Photos"
+  "Reject Suggested Photos": "Reject Suggested Photos",
+  "Swap With": "Ganti dengan",
+  "White": "Putih",
+  "Light Grey": "Abu-abu muda",
+  "Grey": "Abu-abu",
+  "Black": "Hitam",
+  "Choose Colour": "Pilih warna",
+  "Choose Picture…": "Pilih gambar…",
+  "Use a Photo…": "Gunakan foto…",
+  "Loading…": "Memuat…",
+  "Choose Background Picture…": "Pilih gambar latar…",
+  "Images": "Gambar",
+  "Background Picture Missing": "Gambar latar tidak ada",
+  "Blur": "Buram",
+  "Clean Backdrop": "Bersihkan latar",
+  "Loading background picture": "Memuat gambar latar",
+  "Reading depth map": "Membaca peta kedalaman"
 }
