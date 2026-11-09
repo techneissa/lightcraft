@@ -111,6 +111,18 @@ impl LightcraftApp {
                 }));
                 continue;
             }
+            // a widget in a closed menu (the people picker's parts): open the menu, and resolve after two more layouts
+            // (a new egui area is laid out unseen first)
+            if matches!(gesture.method.as_str(), "ui.clickWidget" | "ui.hoverWidget")
+                && let Some(id) = gesture.params.get("id").and_then(serde_json::Value::as_str)
+                && control::widget_rect(self, id).is_none()
+                && crate::widgets::open_menu_for(ctx, id)
+            {
+                gesture.admitted_epoch = epoch.wrapping_add(1);
+                ctx.request_repaint();
+                keep.push(gesture);
+                continue;
+            }
             let before = self.synthetic.len();
             match control::gesture_events(self, ctx, &gesture.method, &gesture.params) {
                 Ok(outcome) => {

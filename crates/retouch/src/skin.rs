@@ -62,8 +62,9 @@ const SHINE_KEEP: f32 = 0.2;
 /// Shine never takes more than this share of a channel away.
 const SHINE_MOST: f32 = 0.6;
 
-/// Most pixels of the mask's box the step works on (2²⁶, about 67 M: a face filling a 100 MP export).
-const MAX_BOX: usize = 1 << 26;
+/// Most pixels of the mask's box the step works on at full size (2²⁶, about 67 M: a face filling a 100 MP export).
+/// A bigger box is worked on reduced, as a draft is, and the change carried back ([`Skin::apply_capped`]).
+pub const MAX_BOX: usize = 1 << 26;
 
 /// The Skin settings. A field added here is read as its default from settings saved without it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -93,13 +94,27 @@ impl Feature for Skin {
     ];
 
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>) {
+        self.apply_capped(img, scene, face, MAX_BOX);
+    }
+}
+
+impl Skin {
+    /// [`Feature::apply`] with `max_box` the most pixels of the mask's box worked on at full size ([`MAX_BOX`] in
+    /// the step): a bigger box is worked on reduced by a whole factor, as a draft of it is, and the change is
+    /// carried back to the full-size skin as a gain, so a huge face is retouched as its draft shows, never skipped.
+    pub fn apply_capped(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>, max_box: usize) {
         let Some(face) = face else { return };
         let k = Strength::of(self);
         if k.is_none() || img.data.len() != img.width.saturating_mul(img.height) {
             return;
         }
         let Some(size) = scene.faces.get(face).map(|f| f.size) else { return };
-        let Some(b) = scene.mask_box(face, Part::FacialSkin).filter(|b| (b[2] - b[0]).saturating_mul(b[3] - b[1]) <= MAX_BOX) else { return };
+        let Some(b) = scene.mask_box(face, Part::FacialSkin) else { return };
+        if let Some(f) = crate::reduced::factor(b, max_box) {
+            let keep = |x, y| scene.mask_at(face, Part::FacialSkin, x, y) > 0.0;
+            crate::reduced::retouch(img, scene, face, b, f, keep, |small, sub, at| self.apply_capped(small, sub, Some(at), usize::MAX));
+            return;
+        }
         let Some(m) = skin_mask(scene, face, b) else { return };
         let out = retouch(crop(img, b), &m, size, k);
         paste(img, b, &out, &m);

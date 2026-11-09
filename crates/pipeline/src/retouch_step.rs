@@ -18,6 +18,20 @@ use lightcraft_raster::Rgb32f;
 
 use crate::{PixelWindow, Plan, SourceInfo};
 
+thread_local! {
+    static PRE_RETOUCH_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread made the image before the retouch step (white balance, defringe, spots, red eye) on
+/// the CPU, by either renderer: a test counts what a Portrait slider tick redoes with it.
+pub fn pre_retouch_runs() -> usize {
+    PRE_RETOUCH_RUNS.with(std::cell::Cell::get)
+}
+
+pub(crate) fn note_pre_retouch_run() {
+    PRE_RETOUCH_RUNS.with(|c| c.set(c.get().wrapping_add(1)));
+}
+
 /// Whether the step changes anything for `s`.
 ///
 /// Face Reshape is not part of the step (it is a warp in the frame's geometry, [`crate::reshape_step`]): a block with
@@ -145,15 +159,17 @@ pub fn apply(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     let o = s.orientation;
     let view: Box<dyn View> =
         if input.on_photo { Box::new(PhotoView::new(&p.frame, p.w, p.h, o)) } else { Box::new(FrameView::new(&p.frame, p.w, p.h, o)) };
-    for stage in [Stage::Retouch, Stage::Background] {
-        lightcraft_develop::retouch::run::apply(img, &s.retouch, input, view.as_ref(), stage);
-    }
+    crate::timed("retouch", || {
+        for stage in [Stage::Retouch, Stage::Background] {
+            lightcraft_develop::retouch::run::apply(img, &s.retouch, input, view.as_ref(), stage);
+        }
+    });
 }
 
 /// The window a zoomed render of `win` must render so retouching gives the same pixels there as the whole frame
-/// does: `win` grown to hold everything retouching reads for each face whose reads reach into it (the face's box
-/// and the areas of the masks the features on read, grown by their [`lightcraft_develop::retouch::Feature::REACH`]
-/// times the face's size). The result is cut back to `win` ([`crate::Plan::keep`]), so zoom never changes a
+/// does: `win` grown to hold everything retouching reads for each face whose reads reach into it, then for each
+/// face whose reads reach into that, and so on (the face's box and the areas of the masks the features on read,
+/// grown by their [`lightcraft_develop::retouch::Feature::REACH`] times the face's size). The result is cut back to `win` ([`crate::Plan::keep`]), so zoom never changes a
 /// retouch. `frame` is the whole frame, `full_w × full_h` its output size.
 pub fn window_for_reads(
     s: &DevelopSettings,
@@ -171,58 +187,142 @@ pub fn window_for_reads(
     let view: Box<dyn View> =
         if input.on_photo { Box::new(PhotoView::new(frame, full_w, full_h, o)) } else { Box::new(FrameView::new(frame, full_w, full_h, o)) };
     let (fw, fh) = (full_w as f64, full_h as f64);
-    let [wx0, wy0, wx1, wy1] = [win.x as f64, win.y as f64, (win.x + win.w) as f64, (win.y + win.h) as f64];
-    let (mut x0, mut y0, mut x1, mut y1) = (wx0, wy0, wx1, wy1);
-    for face in input.faces.iter().take(MAX_FACES) {
-        let Some([rx0, ry0, rx1, ry1]) = read_box(face, &reads, view.as_ref()) else { continue };
-        let (rx0, ry0, rx1, ry1) = (rx0.max(0.0), ry0.max(0.0), rx1.min(fw), ry1.min(fh));
-        if rx0 < wx1 && rx1 > wx0 && ry0 < wy1 && ry1 > wy0 {
-            (x0, y0, x1, y1) = (x0.min(rx0), y0.min(ry0), x1.max(rx1), y1.max(ry1));
-        }
+    let mut boxes: Vec<[f64; 4]> = input
+        .faces
+        .iter()
+        .take(MAX_FACES)
+        .filter_map(|face| match read_box(face, &reads, view.as_ref()) {
+            ReadBox::Skipped => None,
+            ReadBox::At(b) => Some(b),
+            // (part of its reads maps nowhere: all of the frame, to be sure)
+            ReadBox::Unsure => Some([0.0, 0.0, fw, fh]),
+        })
+        .map(|[rx0, ry0, rx1, ry1]| [rx0.max(0.0), ry0.max(0.0), rx1.min(fw), ry1.min(fh)])
+        .collect();
+    let [mut x0, mut y0, mut x1, mut y1] = [win.x as f64, win.y as f64, (win.x + win.w) as f64, (win.y + win.h) as f64];
+    // Until no face's reads touch the window without lying inside it: the features run feature by feature over
+    // every face, so a face's later feature reads what an earlier one changed for a neighbouring face, and that
+    // change is right only when the window holds all the neighbour reads too. (Within one face the box already
+    // holds every pixel any of its features reads, so an earlier feature's changes inside it are the whole
+    // frame's.) At most one pass per face.
+    while let Some(i) = boxes.iter().position(|r| r[0] < x1 && r[2] > x0 && r[1] < y1 && r[3] > y0) {
+        let r = boxes.swap_remove(i);
+        (x0, y0, x1, y1) = (x0.min(r[0]), y0.min(r[1]), x1.max(r[2]), y1.max(r[3]));
     }
     let (x, y) = (x0.floor().max(0.0) as usize, y0.floor().max(0.0) as usize);
     let (r, b) = ((x1.ceil().min(fw) as usize).max(x + 1), (y1.ceil().min(fh) as usize).max(y + 1));
     PixelWindow { x, y, w: r - x, h: b - y }.clamped(full_w, full_h)
 }
 
+/// Whether the step may change any pixel of a photo with `info`'s faces: it is on, and there is a face to retouch or a
+/// feature on that retouches more than faces. Without faces, Portrait settings leave everything as it was (the noise
+/// measurement included, [`crate::colour_noise`]).
+pub fn touches(s: &DevelopSettings, info: &SourceInfo) -> bool {
+    active(s) && (info.retouch.as_ref().is_some_and(|i| !i.faces.is_empty()) || s.retouch.global.writes_outside_faces())
+}
+
+/// Where the step may change pixels of the plan's `p.w × p.h` render: one `[x0, y0, x1, y1)` box per face, what
+/// retouching reads for it ([`window_for_reads`]'s boxes: every face feature writes inside them,
+/// [`lightcraft_develop::retouch::Feature::writes_near_face`]). Empty while the step is off; `None` when it may change
+/// any pixel: a feature on writes outside its face (Background, strokes), or part of a face's reads maps nowhere.
+pub fn write_boxes(info: &SourceInfo, p: &Plan<'_>) -> Option<Vec<crate::spots_keep::Rect>> {
+    let s = &*p.settings;
+    if !active(s) {
+        return Some(Vec::new());
+    }
+    // Guard: every field of the block, of a face's own settings and of what they read is named here (no `..`), so a
+    // new one stops the build until this function says whether its writes stay in the boxes. Refine strokes (#151)
+    // add `refine` and `Reads::add`: a block with any stroke returns `None` (`fork/perf-portrait-draft.md`).
+    let lightcraft_develop::retouch::Retouch { global, faces } = &s.retouch;
+    if global.writes_outside_faces()
+        || faces.iter().any(|lightcraft_develop::retouch::FaceOverride { face: _, settings }| settings.writes_outside_faces())
+    {
+        return None;
+    }
+    let (Some(input), Some(reads)) = (info.retouch.as_deref(), s.retouch.reads()) else { return Some(Vec::new()) };
+    let Reads { reach: _, parts: _ } = &reads;
+    let o = s.orientation;
+    let view: Box<dyn View> =
+        if input.on_photo { Box::new(PhotoView::new(&p.frame, p.w, p.h, o)) } else { Box::new(FrameView::new(&p.frame, p.w, p.h, o)) };
+    let (w, h) = (p.w as f64, p.h as f64);
+    let mut out = Vec::new();
+    for face in input.faces.iter().take(MAX_FACES) {
+        let [x0, y0, x1, y1] = match read_box(face, &reads, view.as_ref()) {
+            ReadBox::Skipped => continue,
+            ReadBox::At(b) => b,
+            ReadBox::Unsure => return None,
+        };
+        let (x0, y0, x1, y1) = (x0.floor().clamp(0.0, w), y0.floor().clamp(0.0, h), x1.ceil().clamp(0.0, w), y1.ceil().clamp(0.0, h));
+        if x1 > x0 && y1 > y0 {
+            out.push([x0 as usize, y0 as usize, x1 as usize, y1 as usize]);
+        }
+    }
+    Some(out)
+}
+
 /// Pixels of a face's box and masks' areas are followed along each edge at this many points (a lens or transform
 /// warp bends them).
 const EDGE_STEPS: usize = 16;
 
-/// What retouching reads for `face`, in `view`'s pixels: `[x0, y0, x1, y1]`, unclamped; `None` for a face that is
-/// not a box or maps nowhere.
-fn read_box(face: &Face, reads: &Reads, view: &dyn View) -> Option<[f64; 4]> {
+/// What retouching reads for one face, in a view's pixels.
+enum ReadBox {
+    /// Nothing: the step skips the face (its box is not a box or a corner maps nowhere, as `Scene` decides).
+    Skipped,
+    /// `[x0, y0, x1, y1]`, unclamped.
+    At([f64; 4]),
+    /// Part of what it reads maps nowhere (a face partly off a warped frame): the box is not known.
+    Unsure,
+}
+
+/// What retouching reads for `face` in `view`'s pixels: its box, the areas of the masks `reads` names and of its
+/// strands (Stray Hair repairs them), grown by `reads.reach` times the face's size.
+fn read_box(face: &Face, reads: &Reads, view: &dyn View) -> ReadBox {
+    let fb = &face.bounds;
+    let corners = [(fb.x0, fb.y0), (fb.x1, fb.y0), (fb.x1, fb.y1), (fb.x0, fb.y1)];
+    if !fb.is_valid() || corners.iter().any(|(x, y)| view.to_px(*x, *y).is_none()) {
+        return ReadBox::Skipped;
+    }
     let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
-    add_rect(&mut b, &face.bounds, view);
+    if !add_rect(&mut b, fb, view) {
+        return ReadBox::Unsure;
+    }
     // the face's size, as the step sees it: the longer side of its box's bounding box
     let size = (b[2] - b[0]).max(b[3] - b[1]);
     if !(size.is_finite() && size > 0.0) {
-        return None;
+        return ReadBox::Skipped;
     }
-    for p in &reads.parts {
-        if let Some(m) = face.mask(*p) {
-            add_rect(&mut b, &m.area, view);
+    let masks = reads.parts.iter().filter_map(|p| face.mask(*p)).map(|m| &m.area);
+    let strands = face.strands.as_ref().map(|s| &s.area);
+    for area in masks.chain(strands) {
+        if !add_rect(&mut b, area, view) {
+            return ReadBox::Unsure;
         }
     }
     // (and a pixel for rounding)
     let grow = reads.reach * size + 2.0;
-    grow.is_finite().then_some([b[0] - grow, b[1] - grow, b[2] + grow, b[3] + grow])
+    if !grow.is_finite() {
+        return ReadBox::Unsure;
+    }
+    ReadBox::At([b[0] - grow, b[1] - grow, b[2] + grow, b[3] + grow])
 }
 
-/// Grow the pixel box `b` to hold normalised rectangle `r` as `view` maps it.
-fn add_rect(b: &mut [f64; 4], r: &NormRect, view: &dyn View) {
+/// Grow the pixel box `b` to hold normalised rectangle `r` as `view` maps it; `false` when a point of its edge maps
+/// nowhere (an empty or malformed rectangle adds nothing).
+fn add_rect(b: &mut [f64; 4], r: &NormRect, view: &dyn View) -> bool {
     if !r.is_valid() {
-        return;
+        return true;
     }
     for i in 0..=EDGE_STEPS {
         let t = i as f64 / EDGE_STEPS as f64;
         let (u, v) = (r.x0 + t * r.width(), r.y0 + t * r.height());
         for (nx, ny) in [(u, r.y0), (u, r.y1), (r.x0, v), (r.x1, v)] {
-            if let Some((px, py)) = view.to_px(nx, ny).filter(|(x, y)| x.is_finite() && y.is_finite()) {
-                *b = [b[0].min(px), b[1].min(py), b[2].max(px), b[3].max(py)];
+            match view.to_px(nx, ny).filter(|(x, y)| x.is_finite() && y.is_finite()) {
+                Some((px, py)) => *b = [b[0].min(px), b[1].min(py), b[2].max(px), b[3].max(py)],
+                None => return false,
             }
         }
     }
+    true
 }
 
 /// The faces of a photo for its [`SourceInfo`] (shared: one detection serves every render of the photo).
@@ -444,6 +544,66 @@ mod tests {
         assert!((shares[0] - shares[1]).abs() < 0.02, "the lit share: {shares:?}");
     }
 
+    /// A face with the 478-point mesh (a frontal face's), Facial Skin over the box and Body Skin under it.
+    fn meshed(r: NormRect) -> Face {
+        use lightcraft_develop::retouch::{Part, PartMask};
+        let five = vec![(r.x0 + 0.3 * r.width(), r.y0 + 0.45 * r.height()); 5];
+        let at = |(fx, fy): (f64, f64)| (r.x0 + fx * r.width(), r.y0 + fy * r.height());
+        let mesh = (0..478).map(|i| at(lightcraft_develop::retouch::wrinkles::areas::frontal(i)));
+        let skin = |area: NormRect| PartMask { plane: lightcraft_raster::Plane::filled(8, 8, 1.0), area };
+        Face {
+            landmarks: five.into_iter().chain(mesh).collect(),
+            masks: vec![(Part::FacialSkin, skin(r)), (Part::BodySkin, skin(NormRect::new(r.x0, r.y1, r.x1, (r.y1 + r.height()).min(1.0))))],
+            ..Face::boxed(r)
+        }
+    }
+
+    /// Wrinkles read about a fifth of a face around each pixel (`fork/retouch-wrinkles.md`): a zoomed window that
+    /// holds part of a face is grown by that reach, and comes out as the whole render does inside it.
+    #[test]
+    fn a_zoomed_window_of_a_face_equals_the_whole_render_inside_it() {
+        // skin with fine dark lines every 5 px, and pores
+        let src = Rgb32f::from_fn(480, 320, |x, y| {
+            let n = ((x * 7 + y * 13) % 11) as f32 / 11.0 - 0.5;
+            let line = if y % 5 == 0 { 0.7 } else { 1.0 };
+            [0.45, 0.3, 0.24].map(|c| c * line * (1.0 + 0.06 * n))
+        });
+        let info = SourceInfo { retouch: Some(Arc::new(Input::new(vec![meshed(NormRect::new(0.3, 0.15, 0.6, 0.6))]))), ..SourceInfo::default() };
+        let mut s = DevelopSettings::default();
+        for id in ["forehead", "crowsFeet", "smileLines", "neck"] {
+            controls::set(&mut s, &format!("retouch.wrinkles.{id}"), 100.0);
+        }
+        let (w, h) = (960, 640);
+        let whole = render(&src, &info, &s, &RenderRequest::fit(w, h)).image;
+        let plain = render(&src, &info, &DevelopSettings::default(), &RenderRequest::fit(w, h)).image;
+        for win in [crate::PixelWindow { x: 420, y: 150, w: 160, h: 120 }, crate::PixelWindow { x: 300, y: 330, w: 200, h: 150 }] {
+            let grown = window_for_reads(&s, &info, &crate::plan(&src, &info, &s, &RenderRequest::fit(w, h)).frame, w, h, win);
+            assert!(grown.w > win.w + 100 && grown.h > win.h + 80, "the window grows by the reach: {grown:?}");
+            let part = render(&src, &info, &s, &RenderRequest { window: Some(win), ..RenderRequest::fit(w, h) }).image;
+            let (mut most, mut changed) = (0u8, 0);
+            for y in 0..win.h {
+                for x in 0..win.w {
+                    let (a, b) = (whole.get(win.x + x, win.y + y), part.get(x, y));
+                    most = most.max((0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0));
+                    changed += usize::from(a != plain.get(win.x + x, win.y + y));
+                }
+            }
+            assert!(changed > 1000, "the window holds retouched pixels: {changed}");
+            assert!(most <= 1, "the window equals the whole render inside it ({win:?}): {most}");
+        }
+        // a window far from the face is not grown
+        let far = crate::PixelWindow { x: 0, y: 0, w: 40, h: 40 };
+        let frame = crate::plan(&src, &info, &s, &RenderRequest::fit(w, h)).frame;
+        let near = NormRect::new(0.8, 0.8, 0.85, 0.85);
+        let small = SourceInfo { retouch: Some(Arc::new(Input::new(vec![meshed(near)]))), ..SourceInfo::default() };
+        assert_eq!(window_for_reads(&s, &small, &frame, w, h, far), far);
+        assert_eq!(window_for_reads(&DevelopSettings::default(), &info, &frame, w, h, win_at(400, 200)), win_at(400, 200), "off: no growth");
+    }
+
+    fn win_at(x: usize, y: usize) -> crate::PixelWindow {
+        crate::PixelWindow { x, y, w: 50, h: 50 }
+    }
+
     /// A synthetic face (skin, a bluish dark circle under each eye, whites, irises) with YuNet's five points and the
     /// Facial Skin, Eye Whites and Iris masks, as a people parse gives them; the photo is `w × h`.
     fn face_photo(w: usize, h: usize) -> (Rgb32f, SourceInfo) {
@@ -528,6 +688,73 @@ mod tests {
         }
     }
 
+    /// Stray Hair reads furthest (a band half a face past the hair): a zoomed window on a flyaway against the sky
+    /// gives the whole frame's repair.
+    #[test]
+    fn a_zoomed_window_on_a_flyaway_gives_the_whole_frames_repair() {
+        use lightcraft_develop::retouch::{Part, PartMask};
+        let (w, h) = (640, 480);
+        let ell = |nx: f64, ny: f64, c: (f64, f64), rx: f64, ry: f64| ((nx - c.0) / rx).powi(2) + ((ny - c.1) / ry).powi(2) <= 1.0;
+        let face_at = move |nx: f64, ny: f64| ell(nx, ny, (0.5, 0.55), 0.08, 0.13);
+        let hair_at = move |nx: f64, ny: f64| ell(nx, ny, (0.5, 0.47), 0.12, 0.14) && ny < 0.52 && !face_at(nx, ny);
+        // a dark strand a pixel wide in the sky beside the hair
+        let strand = |nx: f64, ny: f64| {
+            let (ax, ay, bx, by) = (0.345 * 640.0, 0.5 * 480.0, 0.335 * 640.0, 0.36 * 480.0);
+            let (px, py) = (nx * 640.0, ny * 480.0);
+            let t = (((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / ((bx - ax).powi(2) + (by - ay).powi(2))).clamp(0.0, 1.0);
+            ((px - ax - t * (bx - ax)).powi(2) + (py - ay - t * (by - ay)).powi(2)).sqrt() < 0.6
+        };
+        let src = Rgb32f::from_fn(w, h, |x, y| {
+            let (nx, ny) = ((x as f64 + 0.5) / w as f64, (y as f64 + 0.5) / h as f64);
+            if strand(nx, ny) || hair_at(nx, ny) {
+                [0.03, 0.02, 0.015]
+            } else if face_at(nx, ny) {
+                [0.5, 0.36, 0.28]
+            } else {
+                [0.55, 0.65, 0.78]
+            }
+        });
+        // the masks cover the head only: the strand lies outside them, in the band Stray Hair searches past the hair
+        let area = NormRect::new(0.375, 0.32, 0.625, 0.69);
+        let mask = |f: &dyn Fn(f64, f64) -> bool| {
+            let n = 96;
+            let plane = lightcraft_raster::Plane::from_fn(n, n, |x, y| {
+                f64::from(u8::from(f(area.x0 + (x as f64 + 0.5) / n as f64 * area.width(), area.y0 + (y as f64 + 0.5) / n as f64 * area.height())))
+                    as f32
+            });
+            PartMask { plane, area }
+        };
+        let face = Face {
+            masks: vec![(Part::Hair, mask(&hair_at)), (Part::FacialSkin, mask(&face_at))],
+            ..Face::boxed(NormRect::new(0.42, 0.42, 0.58, 0.68))
+        };
+        // the strands are searched once, on the photo, as the face provider does with the people parse
+        let faces = lightcraft_develop::retouch::hair::with_strands(&src, vec![face]);
+        let info = SourceInfo { retouch: Some(Arc::new(Input::new_on_photo(faces))), ..SourceInfo::default() };
+        let mut s = DevelopSettings::default();
+        s.detail.nr_color = 0.0;
+        let plain = s.clone();
+        controls::set(&mut s, "retouch.hair.amount", 100.0);
+        let req = RenderRequest::fit(w, h);
+        // (its left edge on the strand, clear of the masks' area: only the reach makes the window see what is
+        // beside the strand there)
+        let win = crate::PixelWindow { x: 217, y: 180, w: 20, h: 50 };
+        let full = render(&src, &info, &s, &req).image;
+        let before = render(&src, &info, &plain, &req).image;
+        let zoomed = render(&src, &info, &s, &RenderRequest { window: Some(win), ..req }).image;
+        assert_eq!((zoomed.width, zoomed.height), (win.w, win.h));
+        let (mut worst, mut changed) = (0u8, 0);
+        for y in 0..win.h {
+            for x in 0..win.w {
+                let (a, b, c) = (full.get(win.x + x, win.y + y), zoomed.get(x, y), before.get(win.x + x, win.y + y));
+                worst = worst.max((0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0));
+                changed += usize::from(a != c);
+            }
+        }
+        assert!(changed > 20, "the strand is repaired in the window ({changed} changed)");
+        assert!(worst <= 1, "the zoomed window differs from the whole frame by {worst}");
+    }
+
     /// The window grows only for a face whose reads reach it, and not at all with retouching off.
     #[test]
     fn the_window_grows_for_a_retouched_face_it_touches() {
@@ -549,5 +776,65 @@ mod tests {
         let on = crate::PixelWindow { x: 400, y: 300, w: 10, h: 10 };
         let g = window_for_reads(&s, &small, &frame, w, h, on);
         assert!(g.x < 384 && g.y < 288 && g.x + g.w >= 432 && g.y + g.h >= 324, "the corner face's reads: {g:?}");
+    }
+
+    /// A face's later feature reads what an earlier feature changed for a neighbouring face, so a window that
+    /// touches one face holds the reads of every face whose reads touch it, in a chain: three faces in a row, each
+    /// one's reads overlapping the next's, and a window at the far end of the last.
+    #[test]
+    fn the_window_holds_the_reads_of_faces_chained_to_it() {
+        let (w, h) = (480, 360);
+        let (src, _) = face_photo(w, h);
+        let faces: Vec<Face> = [0.1, 0.3, 0.5].iter().map(|x| Face::boxed(NormRect::new(*x, 0.4, x + 0.1, 0.5))).collect();
+        let info = SourceInfo { retouch: Some(Arc::new(Input::new(faces.clone()))), ..SourceInfo::default() };
+        let mut s = DevelopSettings::default();
+        controls::set(&mut s, "retouch.eyes.whites", 50.0);
+        let frame = crate::plan(&src, &info, &s, &RenderRequest::fit(w, h)).frame;
+        let view = FrameView::new(&frame, w, h, s.orientation);
+        let Some(reads) = s.retouch.reads() else { panic!("eyes on") };
+        let boxes: Vec<[f64; 4]> = faces
+            .iter()
+            .filter_map(|f| match read_box(f, &reads, &view) {
+                ReadBox::At(b) => Some(b),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(boxes.len(), 3);
+        // (each face's reads overlap the next one's, not the one after)
+        assert!(boxes[0][2] > boxes[1][0] && boxes[1][2] > boxes[2][0] && boxes[0][2] < boxes[2][0], "{boxes:?}");
+        let win = crate::PixelWindow { x: 310, y: 190, w: 8, h: 8 };
+        assert!(boxes[2][2] > 318.0 && boxes[1][2] < 310.0, "the window touches only the last face's reads: {boxes:?}");
+        let g = window_for_reads(&s, &info, &frame, w, h, win);
+        let (gx0, gx1) = (g.x as f64, (g.x + g.w) as f64);
+        for b in &boxes {
+            assert!(gx0 <= b[0].max(0.0) && gx1 >= b[2].min(w as f64), "the window {g:?} holds the reads {b:?}");
+        }
+    }
+
+    /// Several features on one face, run one after another, read only inside the face's read box, so the largest
+    /// reach is enough: a zoomed window still equals the whole frame.
+    #[test]
+    fn chained_features_on_one_face_match_the_whole_frame() {
+        let (w, h) = (480, 360);
+        let (src, info) = face_photo(w, h);
+        let mut s = DevelopSettings::default();
+        s.detail.nr_color = 0.0;
+        for id in ["skin.smoothness", "skin.shine", "skinTone.evenTone", "skinTone.redness", "eyes.whites", "eyes.darkCircles", "eyes.eyeBags"] {
+            controls::set(&mut s, &format!("retouch.{id}"), 100.0);
+        }
+        controls::set(&mut s, "retouch.skinTone.faceLight", 50.0);
+        let req = RenderRequest::fit(w, h);
+        let full = render(&src, &info, &s, &req).image;
+        for win in [crate::PixelWindow { x: 170, y: 136, w: 30, h: 40 }, crate::PixelWindow { x: 200, y: 220, w: 40, h: 30 }] {
+            let zoomed = render(&src, &info, &s, &RenderRequest { window: Some(win), ..req }).image;
+            let mut worst = 0u8;
+            for y in 0..win.h {
+                for x in 0..win.w {
+                    let (a, b) = (full.get(win.x + x, win.y + y), zoomed.get(x, y));
+                    worst = worst.max((0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0));
+                }
+            }
+            assert!(worst <= 1, "{win:?}: the zoomed window differs from the whole frame by {worst}");
+        }
     }
 }

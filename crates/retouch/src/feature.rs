@@ -54,6 +54,15 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     /// a result. By default [`DEFAULT_REACH`].
     const REACH: f64 = DEFAULT_REACH;
 
+    /// Whether every pixel these settings change lies in their face's read box: the face's box, the areas of its
+    /// [`Feature::PARTS`] masks and of its spots and strands, grown by [`Feature::REACH`]. A render then redoes only
+    /// those boxes when a slider moves (`crates/pipeline/src/retouch_step.rs`, `write_boxes`). A feature that changes
+    /// pixels elsewhere (the whole picture, or strokes the user paints) returns `false`, and a change redoes the
+    /// whole frame. By default: a [`Scope::Face`] feature stays in its box, a [`Scope::Picture`] one does not.
+    fn writes_near_face(&self) -> bool {
+        matches!(Self::SCOPE, Scope::Face)
+    }
+
     /// Whether these settings leave the picture alone. By default: every slider at its default.
     fn is_off(&self) -> bool {
         Self::CONTROLS.iter().all(|c| c.read(self) == c.spec.default)
@@ -150,6 +159,16 @@ impl<'a> Scene<'a> {
 
     pub fn view(&self) -> &dyn View {
         self.view
+    }
+
+    /// The same faces mapped through `view` into a `width × height` image (a part of this one, reduced:
+    /// `crate::reduced`). A face keeps its [`FaceCtx::index`]; its place in the list may differ.
+    pub(crate) fn through<'b>(&self, view: &'b dyn View, width: usize, height: usize) -> Scene<'b>
+    where
+        'a: 'b,
+    {
+        let faces = self.faces.iter().filter_map(|f| map_face(f.face, f.index, view)).collect();
+        Scene { faces, width, height, view }
     }
 
     /// The mask of `part` of face `face` at pixel (`x`, `y`) of the image; 0 without that mask.

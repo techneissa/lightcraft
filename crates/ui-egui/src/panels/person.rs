@@ -159,6 +159,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, name: &str) {
         if rename.clicked() {
             super::people::open_rename(app, &shown_name);
         }
+        // fork (`fork/portrait-presets.md`): a portrait preset to every photo of them
+        super::portrait::apply_preset_menu(app, ui, &shown_name);
         let count = if page.total == 1 { "1 face".to_string() } else { format!("{} faces", page.total) };
         ui.label(RichText::new(count).color(t.text_dim));
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {

@@ -59,6 +59,7 @@ mod model_runtime;
 mod organize;
 mod parse_ahead;
 pub(crate) mod parsing;
+mod portrait_presets;
 mod prefs;
 mod preset_files;
 pub mod previews;
@@ -235,6 +236,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(match_look::specs());
         v.extend(activity::specs());
         v.extend(retouch::specs());
+        v.extend(portrait_presets::specs());
         v.extend(map::specs());
         v
     })
