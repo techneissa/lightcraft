@@ -30,8 +30,8 @@ pub mod teeth_lips;
 pub mod wrinkles;
 
 pub use control::{Control, Spec};
-pub use feature::{FaceCtx, Feature, MAX_FACES, Scene, Scope, Stage, View, WholePhoto};
-pub use input::{Face, Input, NormRect, Part, PartMask};
+pub use feature::{FACE_PARTS, FaceCtx, Feature, MAX_FACES, Scene, Scope, Stage, View, WholePhoto};
+pub use input::{Face, Input, KeyFrame, KeyMap, NormRect, Part, PartMask};
 pub use settings::{FaceKey, FaceOverride, FeatureInfo, MAX_OVERRIDES, Retouch};
 
 // The render order: tone and colour retouching first (spots before smoothing, skin before colour, the face before
@@ -52,6 +52,11 @@ settings::features! {
 /// Every slider of every feature, in panel order.
 pub fn controls() -> impl Iterator<Item = &'static Spec> {
     FEATURES.iter().flat_map(|f| (f.specs)())
+}
+
+/// The parts some feature reads ([`Feature::PARTS`]), in [`Part::ALL`] order: the only masks the face search keeps.
+pub fn parts_read() -> Vec<Part> {
+    Part::ALL.into_iter().filter(|p| FEATURES.iter().any(|f| f.parts.contains(p))).collect()
 }
 
 /// The spec of control `id` (`retouch.<feature>.<field>`).

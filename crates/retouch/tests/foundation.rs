@@ -42,7 +42,7 @@ fn the_block_is_off_by_default_and_round_trips_through_json() {
     let mut r = Retouch::default();
     r.global.set("retouch.skin.amount", 40.0);
     r.faces.push(FaceOverride {
-        face: FaceKey { person: Some("ann".into()), bounds: NormRect::new(0.1, 0.1, 0.3, 0.4) },
+        face: FaceKey { person: Some("ann".into()), bounds: NormRect::new(0.1, 0.1, 0.3, 0.4), ..FaceKey::default() },
         settings: Features::default(),
     });
     assert!(!r.is_off());
