@@ -562,15 +562,15 @@ fn the_strands_are_searched_on_crops_of_the_original() {
             asked.lock().unwrap().push(rect);
             Some(Rgb32f::from_fn(rect[2] - rect[0], rect[3] - rect[1], |x, y| turned.get(rect[0] + x, rect[1] + y)))
         };
-        let crops = Crops { size: (turned.width, turned.height), cut: &cut };
-        let found = found_with(&parsing, &[], &flat, orient, &[], Some(crops));
+        let crops = Crops { size: (turned.width, turned.height), cut: &cut, v1: true };
+        let found = found_with(&parsing, &[], &flat, orient, &[], Some(crops), None);
         let strands = found.input.faces[0].strands.as_ref().expect("searched");
         assert!(strands.count >= 1 && !strands.is_empty(), "{orient:?}: the strand is found on the original's pixels");
         assert_eq!(strands.picture, (turned.width, turned.height), "{orient:?}: measured in the original's pixels");
         assert!(!asked.lock().unwrap().is_empty());
         // a photo of another shape than the parse picture is not cut: the parse picture is searched (flat: nothing)
-        let wrong = Crops { size: (turned.width, turned.height * 2), cut: &cut };
-        let found = found_with(&parsing, &[], &flat, orient, &[], Some(wrong));
+        let wrong = Crops { size: (turned.width, turned.height * 2), cut: &cut, v1: true };
+        let found = found_with(&parsing, &[], &flat, orient, &[], Some(wrong), None);
         assert!(found.input.faces[0].strands.as_ref().is_some_and(|s| s.is_empty()), "{orient:?}");
     }
 }

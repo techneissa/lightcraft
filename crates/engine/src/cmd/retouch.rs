@@ -44,11 +44,21 @@ fn found_faces(s: &Session, id: PhotoId, c: &str) -> Result<std::sync::Arc<light
 
 /// How a face's Stray Hair search went, for `retouch.faces`: `status` is `searched` (`count` strands found, in `ms`
 /// milliseconds, on a face `facePx` pixels tall in the searched picture), `tooSmall`, `noParts` (no Hair or Facial
-/// Skin mask) or `notSearched` (the face came without the people parse, so there is nothing to search with).
+/// Skin mask) or `notSearched` (the face came without the people parse, so there is nothing to search with). `removed`
+/// (with `removeMs`) is how many of `count` the strand removal (Apple Vision's matte and LaMa) took away; absent when it
+/// did not run for the face.
 fn strands_json(s: Option<&Strands>) -> Value {
     let Some(s) = s else { return json!({"status": "notSearched"}) };
     match s.searched {
-        Searched::Yes => json!({"status": "searched", "count": s.count, "ms": s.ms, "cropMs": s.crop_ms, "facePx": s.face_px}),
+        Searched::Yes => {
+            let mut v = json!({"status": "searched", "count": s.count, "ms": s.ms, "cropMs": s.crop_ms, "facePx": s.face_px});
+            if let (Some(r), Some(o)) = (&s.removal, v.as_object_mut()) {
+                o.insert("removed".into(), json!(r.count));
+                o.insert("removeMs".into(), json!(r.ms));
+                o.insert("removeCropMs".into(), json!(r.crop_ms));
+            }
+            v
+        }
         Searched::TooSmall => json!({"status": "tooSmall", "facePx": s.face_px}),
         Searched::NoParts => json!({"status": "noParts", "facePx": s.face_px}),
     }
@@ -188,7 +198,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "List Portrait Faces",
             [],
             None,
-            "{id?} → {id, found, busy, error?, faces: [{index, bounds: [x0, y0, x1, y1], landmarks: [[x, y]…], score, person?, masks: [part…], own?, strands: {status: searched|tooSmall|noParts|notSearched, count?, ms?, cropMs?, facePx?}}]} — the faces portrait retouching found on the photo (fractions of the photo before its crop); `own` is the index of the face's own settings (`retouchFace.<own>.…`); `strands` is how the Stray Hair search went for it (`count` strands found, in `ms` milliseconds after `cropMs` to cut the head's full-size crop, on a face `facePx` pixels tall; `notSearched`: the faces came without the people parse). Starts nothing: see retouch.detect",
+            "{id?} → {id, found, busy, error?, faces: [{index, bounds: [x0, y0, x1, y1], landmarks: [[x, y]…], score, person?, masks: [part…], own?, strands: {status: searched|tooSmall|noParts|notSearched, count?, ms?, cropMs?, facePx?, removed?, removeMs?, removeCropMs?}}]} — the faces portrait retouching found on the photo (fractions of the photo before its crop); `own` is the index of the face's own settings (`retouchFace.<own>.…`); `strands` is how the Stray Hair search went for it (`count` strands found, in `ms` milliseconds after `cropMs` to cut the head's full-size crop, on a face `facePx` pixels tall; `removed` of them taken away with Apple Vision's matte and LaMa in `removeMs` after `removeCropMs`; `notSearched`: the faces came without the people parse). Starts nothing: see retouch.detect",
             has_active,
             |s, p| {
                 let id = target(s, p, "retouch.faces")?;

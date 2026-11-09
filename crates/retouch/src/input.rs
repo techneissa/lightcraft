@@ -7,7 +7,7 @@
 //! retouching step maps them into the pixels of the image it works on (see [`crate::View`]).
 
 use std::fmt;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use lightcraft_raster::Plane;
 use serde::{Deserialize, Serialize};
@@ -302,6 +302,10 @@ pub struct Strands {
     pub ms: u32,
     /// Of `ms`, what cutting and reducing the head's crop took.
     pub crop_ms: u32,
+    /// The change that takes the strands outside the hair away (v2, [`crate::hair::with_removals`]), found once per photo
+    /// with a person matte and a learned fill. `None`: not searched (no matte or fill, a small face, a failed or
+    /// cancelled search): v1 then looks for those strands too. `count` includes the strands it took.
+    pub removal: Option<Arc<crate::hair::Removal>>,
 }
 
 /// How a face's strand search went.
@@ -518,6 +522,11 @@ impl Input {
                         }
                         for c in &s.cells {
                             h.bytes(c);
+                        }
+                        // (only when there: an input without it keeps the fingerprint it had before it existed)
+                        if let Some(r) = &s.removal {
+                            h.bytes(b"removal");
+                            r.hash(&mut h);
                         }
                     }
                 }

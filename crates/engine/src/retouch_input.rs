@@ -28,6 +28,7 @@ use lightcraft_raster::Rgba8;
 use crate::{EngineError, Session};
 
 mod parts;
+mod strand_removal;
 
 /// Finds faces (and their part masks) on a picture.
 pub trait FaceProvider: Send + Sync {
@@ -92,7 +93,13 @@ impl Found {
         let face = |f: &Face| {
             let masks: usize = f.masks.iter().map(|(_, m)| m.plane.data.len().saturating_mul(4)).sum();
             let spots = f.spots.as_ref().map_or(0, |s| s.list.len().saturating_mul(std::mem::size_of::<lightcraft_develop::retouch::input::Spot>()));
-            let strands = f.strands.as_ref().map_or(0, |s| s.cells.len().saturating_mul(3).saturating_add(s.tiles.len().saturating_mul(4)));
+            let strands = f.strands.as_ref().map_or(0, |s| {
+                s.cells
+                    .len()
+                    .saturating_mul(3)
+                    .saturating_add(s.tiles.len().saturating_mul(4))
+                    .saturating_add(s.removal.as_ref().map_or(0, |r| r.bytes()))
+            });
             masks
                 .saturating_add(f.landmarks.len().saturating_mul(16))
                 .saturating_add(spots)
@@ -529,8 +536,14 @@ impl Session {
                     choice,
                     orient: p.develop.orientation,
                     regions,
-                    // (Stray Hair's full-size crops of the original, `parts/crop.rs`: off for now)
-                    cropper: if parts::FULL_SIZE_CROPS { self.retouch_cropper(p.id).map(Box::new) } else { None },
+                    // (Stray Hair's full-size crops of the original, `parts/crop.rs`: v1 searches them only when
+                    // `FULL_SIZE_CROPS`; v2's strand removal needs them, and Apple Vision and LaMa to run)
+                    removal: Some(strand_removal::StrandRemoval { lama: self.lama.clone(), activity: self.activity.clone() }),
+                    cropper: if parts::FULL_SIZE_CROPS || strand_removal::possible(&self.lama) {
+                        self.retouch_cropper(p.id).map(Box::new)
+                    } else {
+                        None
+                    },
                 })
             }
         })

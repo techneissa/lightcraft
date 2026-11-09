@@ -1,6 +1,6 @@
 # Portrait retouching: Stray Hair
 
-List: the Portrait tab's Stray Hair section: Amount cleans flyaways at the hair's outer edge and stray strands across the face, per face, off by default; strands are found once per photo with the people parse; beards, eyebrows, lashes, clothes and the hair itself are left alone. Branch `feat/retouch-hair`.
+List: the Portrait tab's Stray Hair section: Amount cleans flyaways at the hair's outer edge and stray strands across the face, per face, off by default; strands are found once per photo with the people parse; beards, eyebrows, lashes, clothes and the hair itself are left alone. Branches `feat/retouch-hair` (v1), `feat/stray-hair-v2` (v2).
 
 ## What it does
 
@@ -85,6 +85,71 @@ Speed (on a test Mac with other work running, release, one face, the example's s
 once per photo on the 2048 px picture, 100–360 ms; the repair (a slider drag, or the Stray Hair share of any other
 drag) 2.0–6.4 ms. A Skin drag with Stray Hair on runs Skin and the repair, never the search. No model runs.
 
+## Stray Hair v2 (`feat/stray-hair-v2`): the strands outside the hair are taken away with Apple Vision and LaMa
+
+v1 (below) fills each strand from its sides and found sensor grain and background lines at full size. v2 finds the
+strands outside the hair mass with a person matte and takes them away with a learned fill, **once per photo** in the
+face search (`crates/engine/src/retouch_input/strand_removal.rs`, `crates/retouch/src/hair/removal.rs`), and the
+Amount slider only scales what was kept. On a Mac with Apple Vision (macOS 14 or later) and the LaMa model installed;
+otherwise nothing of this runs and Stray Hair is v1 alone (non-macOS builds compile the same, `coreml`'s stub has no Vision).
+
+1. **The crop**: the face's search grid (box and masks grown by the hair band) plus a read margin, cut from the
+   **full-size** photo (`parts/crop.rs`, `Cropper`, as v1's crop search) and reduced to at most 3072 px
+   (`hair::MAX_CROP`). `FULL_SIZE_CROPS` still only gates v1's use of the crops (`Crops::v1`).
+2. **The matte**: Apple Vision's person segmentation (Accurate) on the crop (`lightcraft_coreml::vision`), 0.1–0.4 s.
+3. **The strand mask** (`hair/removal/strand_mask.rs`, on the crop at most 3072 px, `removal::MAX_WORK`, sizes as fractions
+   of the face): the solid = the matte over 0.85, opened at 1.2 % of the face and its gaps closed at 3 %; its rim (1.2 %)
+   is never looked at. **Strands are the picture's thin lines** (what stands out of the cube-root luminance by more than it
+   is wide, dark or light: closing and opening at 0.4 %) **where the matte sees the person at all** (over 0.03), outside
+   the solid, not over Facial Skin, glasses and jewellery (Others) or clothes, and not where lines crowd (a tuft is hair:
+   over half the area at 2 % blur). A piece counts when it is long (6 % of the face), stands out by 0.07 and lies more than
+   5 % from the solid; it then grows 0.3 % back to its root and width.
+   *What did not work*: the matte's own thin features (its top-hat) find only a grey cloud where flyaways are faint; the
+   parse's Hair part takes in the flyaways, so it can't define the solid (the first made nothing, the second ate the
+   hair's edge); looser settings (long strands from 3 %, lines from 0.04, 3 % from the solid) removed dense fringe and
+   left flat patches on the edge of dark locks. The settings kept take few strands and leave the cloud of faint ones.
+4. **The removal**: LaMa (the engine's runner, `LamaFill::fill_strands`, crop at 1024 px, little context, hole grown 1 px) fills the mask; only its
+   low band is used (blurred 1.5 × the fine blur), held within 0.2 (log light) of the plain background around (matte
+   under 0.1), as a learned fill made pale patches in a tangle of hair; the background's fine band (grain, 0.2 % of the
+   face, at least 2 px) is put back from clean pixels of the same tone nearby (first of 14 shifts, held to 3 × the typical
+   fine band).
+5. **What is kept** (`Strands::removal`, `hair::Removal`, in the face store and the input's fingerprint): per pixel of the
+   crop a coverage (the mask grown 1 px and softened) and the **change** (log of new over old light), 16-bit, only for the
+   16 × 16 tiles with a strand, plus copies at 1/2, 1/4 and 1/8 (the change of each block's mean light, so a draft
+   takes only the strand's share of its pixel). *Not the background's colour*: the step runs on the photo as edited and
+   the search's picture is not edited, so a colour put there showed as pale patches on a raw. A ratio carries across, but
+   not far: a render finer than the search's picture (an export above the original's size) takes out less, because
+   its pixels hold more of the strand than the search's.
+6. **A render** (`Removal::apply`): a pixel in the coverage takes the stored change, `amount` of the way in light, on the
+   blocks of pixels the occupied tiles can touch; never past the lightest and darkest pixel within 1.5 % of the face
+   round it (a change worked out on the unedited picture can overshoot); no model, no search. Amount 0 keeps every bit; a draft, an export and a zoomed window
+   make the same change (the pixel is read at its normalised place; the copy is picked by the render's face size).
+7. **v1 stays** for the strands across the face's skin, and for every strand when v2 did not run for the face
+   (no Vision, no LaMa, no matte, a failed fill, a face under 160 px of the original, a cancelled search): for a face
+   with a change `region::weights(…, skin_only)` drops the band outside the hair.
+8. **The readout** counts v1's and v2's strands ("Searched N Faces · M Strands"); `retouch.faces` adds `removed`,
+   `removeMs`, `removeCropMs`. The search shows a row `retouch.strands` ("Removing Stray Hair") in the activity stack,
+   held with LaMa's run; its ✕ stops it.
+
+How it does (a test Mac, release, one face each; pictures in the PR for the two CC0 portraits, private ones not):
+
+| Photo | Strands v2 took | v2 search (+ crop) | Stray Hair's apply alone (1920 px) |
+|---|---|---|---|
+| [Portrait with black hair](https://commons.wikimedia.org/wiki/File:Portrait_with_black_hair,_3080644.jpg) (CC0), 5340 × 3336 | 7 of 9 | 699 ms (+ 154) | 0.75 ms |
+| [Seated woman with blonde hair](https://commons.wikimedia.org/wiki/File:Seated_woman_with_blonde_hair-3177506.jpg) (CC0), 3891 × 3264 | 1 of 2 | 838 ms (+ 307) | 0.73 ms |
+| 4 private portraits (33 MP raws, curls, stubble, short dark hair; 5 faces) | 0 | 109–574 ms (+ 460–690) | – |
+
+- On the black-haired portrait it takes the long, isolated strands away and leaves the cloud of faint ones and the
+  dense fringe. At 100 % one long strand taken from beside a lock leaves a grey smear, and a few small flat patches
+  appear on a lock's edge. On the blonde portrait one light strand over the dark background goes cleanly.
+- The private portraits have few separate strands: none passes the length and contrast gates, so Stray Hair there is v1
+  alone, as before.
+- A slider tick of the whole draft render (Stray Hair or Skin) is 70–530 ms on these photos with or without Stray Hair:
+  the render dominates. Stray Hair's own share is 0.4–1.4 ms (the ≤ 30 ms target holds).
+- The search per face, with the parse known: 0.7–1.2 s on the matte, LaMa (1024 px) and the change, plus the crop's 0.15–0.7 s.
+
+
+
 ## Step 1 of the rework (`feat/stray-hair-v2-step1`): measured on 12 private test portraits (crop search kept off)
 
 Test Mac, 33 MP raws, 13 faces (the photos are men with short dark hair and beards: few real flyaways). Search per
@@ -134,7 +199,9 @@ What it shows:
 
 `crates/retouch/src/hair.rs`, `crates/retouch/src/hair/{detect,grid,region,repair}.rs`,
 `crates/retouch/examples/hair.rs`, `crates/retouch/tests/hair.rs`, `crates/ui-egui/src/panels/portrait/hair.rs`,
-`crates/engine/src/retouch_input/parts/crop.rs`, `fork/retouch-hair.md`, `fork/tests.d/retouch-hair.txt`
+`crates/engine/src/retouch_input/parts/crop.rs`, `crates/retouch/src/hair/removal.rs`, `crates/retouch/src/hair/removal/{strand_mask,replace,change}.rs`,
+`crates/retouch/tests/hair_removal.rs`, `crates/engine/src/retouch_input/strand_removal.rs`, `crates/engine/examples/stray_hair_v2.rs`,
+`fork/retouch-hair.md`, `fork/tests.d/retouch-hair.txt`
 
 ## Hooks in official files
 
@@ -148,12 +215,27 @@ In fork files:
   spots from one linear picture and their strands from full-size crops, `Crops`); `crates/engine/src/retouch_input.rs`:
   the finder's `Cropper`; `crates/engine/src/cmd/retouch.rs`: `strands` in `retouch.faces`; `crates/engine/src/retouch_input.rs`: `strands: None` for YuNet's faces and
   the strands in the store's byte count; `crates/engine/src/retouch_input/parts/tests.rs`: two tests.
+- v2: `crates/retouch/src/input.rs`: `Strands::removal` (in the fingerprint when there); `crates/retouch/src/hair.rs`: `apply` runs
+  it, `keep` merges it and its count, `search(…, skin_only)`; `hair/region.rs`: `weights(…, skin_only)`;
+  `crates/engine/src/lama_fill.rs`: the `Use`/`Crop`/`Job` split (as Wrinkles v2's) and `fill_strands`;
+  `crates/engine/src/retouch_input.rs` and `parts.rs`: `StrandRemoval` in the finder, `Crops::v1`, `found_with(…, removal)`;
+  `crates/engine/src/cmd/retouch.rs`: `removed`, `removeMs`, `removeCropMs`; `crates/engine/Cargo.toml`: `image` for the example;
+  `crates/pipeline/src/retouch_step.rs`: `read_box` includes the change's area.
 - `crates/pipeline/src/retouch_step.rs`: a zoom test on a flyaway. `crates/ui-egui/src/tests/portrait.rs`: a test of
   the section.
 
 ## Tests
 
-`fork/tests.d/retouch-hair.txt`. They cover: off and Amount 0 giving the original bits; a strand across the forehead
+v2 (`crates/retouch/tests/hair_removal.rs`, the unit tests of `hair/removal/`, `crates/engine/src/retouch_input/strand_removal.rs`):
+a thin strand off a matte's head is kept and the head, its rim, a thick lock, a speck, skin and glasses are not; the
+flyaway goes (under a quarter left) and half the Amount leaves about half; Amount 0 gives the original bits; only pixels
+at the strand change, never the head, hair mass or face; a draft (a quarter of the size) and an export four times it
+remove the same strand; a render finer than the grid replaces the strand and touches nothing beside it; a window equals
+the whole render; with no matte, no fill or a stop the face keeps no change and v1 finds its strands; a face with a
+change is left to v1 over its skin only; the search shows its row, ✕ stops it, no LaMa model means not available; odd
+faces, crops and mattes do not panic.
+
+v1 (`fork/tests.d/retouch-hair.txt`). They cover: off and Amount 0 giving the original bits; a strand across the forehead
 and a flyaway against the sky going (under 30 % left), half the Amount taking about half; only pixels within a few
 pixels of a strand changing, never the hair mass, the eyebrows or the skin beside (no dark halo at a strand's side or
 past its tip); a beard left alone; a face without Hair and Facial Skin left alone, and one with Facial Skin only

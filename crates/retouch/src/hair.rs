@@ -31,7 +31,10 @@
 mod detect;
 mod grid;
 mod region;
+mod removal;
 mod repair;
+
+pub use removal::{Fill, MAX_WORK as REMOVAL_WORK, Removal, Remover, with_removals};
 
 use lightcraft_raster::Rgb32f;
 use serde::{Deserialize, Serialize};
@@ -77,7 +80,11 @@ impl Feature for Hair {
         if amount <= 0.0 || img.width == 0 || img.height == 0 || img.data.len() != img.width.saturating_mul(img.height) {
             return;
         }
-        let Some(strands) = scene.faces.get(face).and_then(|f| f.face.strands.as_ref()) else { return };
+        let Some((ctx, strands)) = scene.faces.get(face).and_then(|f| Some((f, f.face.strands.as_ref()?))) else { return };
+        // the strands outside the hair that the search took away (v2), then the rest repaired from their sides (v1)
+        if let Some(removal) = &strands.removal {
+            removal.apply(img, scene.view(), ctx.size, amount);
+        }
         if strands.is_empty() {
             return;
         }
@@ -96,7 +103,7 @@ pub fn with_strands(img: &Rgb32f, faces: Vec<Face>) -> Vec<Face> {
     let found: Vec<(usize, Strands)> = {
         let view = WholePhoto { width: img.width, height: img.height };
         let scene = Scene::new(&input, &view, img.width, img.height);
-        scene.faces.iter().enumerate().map(|(i, f)| (f.index, search(img, &scene, i, &photo))).collect()
+        scene.faces.iter().enumerate().map(|(i, f)| (f.index, search(img, &scene, i, &photo, taken_away(&input, f.index)))).collect()
     };
     keep(input, found)
 }
@@ -130,15 +137,25 @@ fn on_crops(photo: (usize, usize), faces: Vec<Face>, crop: &mut dyn FnMut(PhotoR
 /// `input`'s faces with their `found` strands (every face gets some: empty when not searched).
 fn keep(input: Input, found: Vec<(usize, Strands)>) -> Vec<Face> {
     let mut faces = input.faces;
-    for f in &mut faces {
-        f.strands = Some(Strands::default());
+    // (what the face keeps of v2's search, [`removal::with_removals`], stays and its strands are counted)
+    let before: Vec<_> = faces.iter_mut().map(|f| f.strands.take().map(|s| (s.removal, s.count)).unwrap_or_default()).collect();
+    for (f, (removal, count)) in faces.iter_mut().zip(&before) {
+        f.strands = Some(Strands { removal: removal.clone(), count: *count, ..Strands::default() });
     }
     for (i, s) in found {
-        if let Some(f) = faces.get_mut(i) {
-            f.strands = Some(s);
+        if let (Some(f), Some((removal, taken))) = (faces.get_mut(i), before.get(i)) {
+            // (a face v2 searched is searched, however small it is in the parse's picture)
+            let searched = if removal.is_some() { Searched::Yes } else { s.searched };
+            f.strands = Some(Strands { removal: removal.clone(), searched, count: s.count.saturating_add(*taken), ..s });
         }
     }
     faces
+}
+
+/// Whether strand search v2 found the strands outside the hair of face `index` of `input`: v1 then looks over the skin
+/// only.
+fn taken_away(input: &Input, index: usize) -> bool {
+    input.faces.get(index).and_then(|f| f.strands.as_ref()).is_some_and(|s| s.removal.is_some())
 }
 
 /// A search's picture: the photo's pixels `[x0, y0, …)` reduced by `scale` (1: as they are). Its pixel (`x`, `y`) is
@@ -211,7 +228,7 @@ fn search_crop(
     let view = Crop { photo, x0: rect[0] as f64, y0: rect[1] as f64, scale };
     let scene = Scene::new(input, &view, img.width, img.height);
     let Some(at) = scene.faces.iter().position(|f| f.index == ctx.index) else { return Strands::default() };
-    let mut s = search(&img, &scene, at, &view);
+    let mut s = search(&img, &scene, at, &view, taken_away(input, ctx.index));
     s.face_px = face_px(ctx.size);
     s.crop_ms = crop_ms;
     s.ms = u32::try_from(start.elapsed().as_millis()).unwrap_or(u32::MAX).saturating_sub(crop_ms);
@@ -243,7 +260,7 @@ fn face_px(size: f64) -> u32 {
 }
 
 /// The strands of face `face` of `scene` (on `img`, the whole searched picture, placed in the photo by `crop`).
-fn search(img: &Rgb32f, scene: &Scene<'_>, face: usize, crop: &Crop) -> Strands {
+fn search(img: &Rgb32f, scene: &Scene<'_>, face: usize, crop: &Crop, skin_only: bool) -> Strands {
     let start = std::time::Instant::now();
     let Some(ctx) = scene.faces.get(face) else { return Strands::default() };
     if img.width == 0 || img.height == 0 {
@@ -256,7 +273,7 @@ fn search(img: &Rgb32f, scene: &Scene<'_>, face: usize, crop: &Crop) -> Strands 
         return Strands { searched: Searched::NoParts, face_px: face_px(ctx.size), ..Strands::default() };
     };
     let coarse = grid.coarser(grid.cells(region::COARSE).round());
-    let Some(area) = region::weights(scene, face, &coarse) else {
+    let Some(area) = region::weights(scene, face, &coarse, skin_only) else {
         return Strands { searched: Searched::NoParts, face_px: face_px(ctx.size), ..Strands::default() };
     };
     let up = |v: &[f32]| grid.resample_from(&coarse, v);

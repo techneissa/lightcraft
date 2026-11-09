@@ -64,8 +64,9 @@ pub(super) struct Area {
 }
 
 /// Where to look on `grid` (a coarse grid of face `face`), or `None` when the face has neither a Hair nor a Facial
-/// Skin mask.
-pub(super) fn weights(scene: &Scene<'_>, face: usize, grid: &Grid) -> Option<Area> {
+/// Skin mask. `skin_only`: the strands outside the hair are taken away by another search ([`super::removal`]), so only
+/// the skin is looked at.
+pub(super) fn weights(scene: &Scene<'_>, face: usize, grid: &Grid, skin_only: bool) -> Option<Area> {
     let ctx = scene.faces.get(face)?;
     let has = |p: Part| ctx.face.mask(p).is_some();
     if !has(Part::Hair) && !has(Part::FacialSkin) {
@@ -116,7 +117,7 @@ pub(super) fn weights(scene: &Scene<'_>, face: usize, grid: &Grid) -> Option<Are
         let d = if has_hair { dist.data.get(k).copied().unwrap_or(f32::INFINITY) } else { f32::INFINITY };
         let fade = smoothstep(FADE.0, FADE.1, d);
         let band = 1.0 - smoothstep(0.6 * BAND as f32, BAND as f32, d);
-        let outer = if has_hair { band } else { 0.0 };
+        let outer = if has_hair && !skin_only { band } else { 0.0 };
         let mut keep = 1.0f32;
         for l in left_alone.iter().chain(clothes.iter()) {
             keep *= 1.0 - at(l);

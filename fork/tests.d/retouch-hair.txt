@@ -4,3 +4,5 @@ cargo test -p lightcraft-pipeline --lib -- retouch_step
 cargo test -p lightcraft-engine --lib -- retouch_input::parts
 cargo test -p lightcraft-ui-egui --lib -- tests::portrait::the_stray_hair_section
 cargo test -p lightcraft-ui-egui --lib -- panels::portrait::hair
+cargo test -p lightcraft-retouch --test hair_removal
+cargo test -p lightcraft-engine --lib -- retouch_input::strand_removal

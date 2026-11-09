@@ -51,8 +51,12 @@ pub(crate) struct PartsFinder {
     pub(super) choice: Choice,
     pub(super) orient: Orientation,
     pub(super) regions: Vec<(NormRect, String)>,
-    /// Cuts the heads' full-size crops the strands are searched on (`None`: on the parse's picture).
+    /// Cuts the heads' full-size crops the strands are searched on (`None`: on the parse's picture, and no strand
+    /// removal).
     pub(super) cropper: Option<Box<Cropper>>,
+    /// Stray Hair v2 (`fork/retouch-hair.md`): the strands outside the hair taken away with a person matte and LaMa;
+    /// `None`: not made.
+    pub(super) removal: Option<super::strand_removal::StrandRemoval>,
 }
 
 impl PartsFinder {
@@ -60,12 +64,12 @@ impl PartsFinder {
     /// come from them); then take the parse the parse-ahead index knows for the photo (made ahead of time or by
     /// `parsing.run`, so no model runs), else the cached one, else wait for its run, and file it in the index.
     pub(super) fn find(self) -> Result<Found, String> {
-        let PartsFinder { prepare, known, parsing: store, choice, orient, regions, cropper } = self;
+        let PartsFinder { prepare, known, parsing: store, choice, orient, regions, cropper, removal } = self;
         let cut = |r| cropper.as_ref()?.crop(r);
-        let crops = || cropper.as_ref().map(|c| Crops { size: c.photo_size(), cut: &cut });
+        let crops = || cropper.as_ref().map(|c| Crops { size: c.photo_size(), cut: &cut, v1: FULL_SIZE_CROPS });
         let (img, hints) = prepare.run()?;
         if let Some(parsing) = known.as_ref().and_then(|k| k.read(&store)) {
-            return Ok(found_with(&parsing, &hints, &img, orient, &regions, crops()));
+            return Ok(found_with(&parsing, &hints, &img, orient, &regions, crops(), removal.as_ref()));
         }
         let (filed, out) = store.parse_as(choice, img.clone(), hints.clone(), true);
         let parsing = match out {
@@ -76,7 +80,7 @@ impl PartsFinder {
         if let Some(k) = &known {
             k.file(filed);
         }
-        Ok(found_with(&parsing, &hints, &img, orient, &regions, crops()))
+        Ok(found_with(&parsing, &hints, &img, orient, &regions, crops(), removal.as_ref()))
     }
 }
 
@@ -85,16 +89,19 @@ impl PartsFinder {
 pub(crate) struct Crops<'a> {
     pub size: (usize, usize),
     pub cut: &'a dyn Fn(lightcraft_develop::retouch::hair::PhotoRect) -> Option<Rgb32f>,
+    /// Whether v1's strand search reads them too ([`FULL_SIZE_CROPS`]); else only strand removal does.
+    pub v1: bool,
 }
 
 /// The faces of `parsing` (made from `img` with the faces `hints`) for the retouch step, on the photo turned by
 /// `orient`, named after `regions`, with a picker thumbnail each.
 #[cfg(test)]
 pub(crate) fn found(parsing: &Parsing, hints: &[FaceHint], img: &RgbImage, orient: Orientation, regions: &[(NormRect, String)]) -> Found {
-    found_with(parsing, hints, img, orient, regions, None)
+    found_with(parsing, hints, img, orient, regions, None, None)
 }
 
-/// [`found`] with the strands searched on `crops` of the original instead of on `img`.
+/// [`found`] with the strands searched on `crops` of the original instead of on `img` (when `crops.v1`), and the
+/// strands outside the hair taken away by `removal` (when it can run: `StrandRemoval::available`).
 pub(crate) fn found_with(
     parsing: &Parsing,
     hints: &[FaceHint],
@@ -102,8 +109,9 @@ pub(crate) fn found_with(
     orient: Orientation,
     regions: &[(NormRect, String)],
     crops: Option<Crops<'_>>,
+    removal: Option<&super::strand_removal::StrandRemoval>,
 ) -> Found {
-    let mut faces = with_spots_and_strands(faces_of(parsing, hints, orient), img, orient, crops);
+    let mut faces = with_spots_and_strands(faces_of(parsing, hints, orient), img, orient, crops, removal);
     arrange(&mut faces, regions);
     let shown = oriented(&Rgba8::from_fn(img.width, img.height, |x, y| rgba(img, x, y)), orient);
     let thumbs = faces.iter().map(|f| thumb(&shown, &f.bounds)).collect();
@@ -113,7 +121,13 @@ pub(crate) fn found_with(
 /// `faces` with the spots on their skin (Blemishes) and the stray strands around and across them (Stray Hair), found
 /// once here on the parse's picture, in linear light and turned like the masks, and kept with them: a render, and the
 /// Amount sliders, only repair them. (Run on the face search's worker, under its activity row.)
-fn with_spots_and_strands(faces: Vec<Face>, img: &RgbImage, orient: Orientation, crops: Option<Crops<'_>>) -> Vec<Face> {
+fn with_spots_and_strands(
+    faces: Vec<Face>,
+    img: &RgbImage,
+    orient: Orientation,
+    crops: Option<Crops<'_>>,
+    removal: Option<&super::strand_removal::StrandRemoval>,
+) -> Vec<Face> {
     let skin = faces.iter().any(|f| f.mask(Part::FacialSkin).is_some());
     let hair = faces.iter().any(|f| f.mask(Part::Hair).is_some() || f.mask(Part::FacialSkin).is_some());
     if !skin && !hair {
@@ -127,7 +141,14 @@ fn with_spots_and_strands(faces: Vec<Face>, img: &RgbImage, orient: Orientation,
         orient,
     );
     let faces = if skin { lightcraft_develop::retouch::blemish::with_spots(&linear, faces) } else { faces };
-    let Some(crops) = crops.filter(|c| same_shape(c.size, (linear.width, linear.height))) else {
+    let crops = crops.filter(|c| same_shape(c.size, (linear.width, linear.height)));
+    // the strands outside the hair: taken away here (a face it can't be done for keeps none and v1 looks for its
+    // strands as before; a face that has it is looked at by v1 over its skin only)
+    let faces = match (&crops, removal) {
+        (Some(c), Some(r)) if r.available() => r.run(faces, c.size, &mut |rect| (c.cut)(rect)),
+        _ => faces,
+    };
+    let Some(crops) = crops.filter(|c| c.v1) else {
         return lightcraft_develop::retouch::hair::with_strands(&linear, faces);
     };
     // a head the original can't be cut for is searched on the parse's picture, stretched to the crop's size

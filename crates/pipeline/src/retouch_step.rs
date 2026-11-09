@@ -461,7 +461,7 @@ fn read_box(face: &Face, reads: &Reads, add: Option<[f64; 4]>, view: &dyn View) 
         return ReadBox::Skipped;
     }
     let masks = reads.parts.iter().filter_map(|p| face.mask(*p)).map(|m| &m.area);
-    let strands = face.strands.as_ref().map(|s| &s.area);
+    let strands = face.strands.iter().flat_map(|s| std::iter::once(&s.area).chain(s.removal.as_ref().map(|r| &r.area)));
     for area in masks.chain(strands) {
         if !add_rect(&mut b, area, view) {
             return ReadBox::Unsure;
