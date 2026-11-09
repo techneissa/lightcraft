@@ -110,7 +110,7 @@ pub(crate) fn finish_render(image: &mut Rgba8, display: &Display, full_srgb: boo
 
 /// The pixels [`Histogram::of_srgb8`] reads (at most ~1 MP, a regular grid), as an image of
 /// their own (which it then reads whole).
-fn histogram_sample(img: &Rgba8) -> Rgba8 {
+pub(crate) fn histogram_sample(img: &Rgba8) -> Rgba8 {
     let step = ((img.len() as f64 / 1_000_000.0).sqrt().ceil() as usize).max(1);
     if step == 1 {
         return img.clone();

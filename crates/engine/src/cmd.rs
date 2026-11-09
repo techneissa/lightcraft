@@ -15,6 +15,10 @@ pub(crate) mod convert;
 mod cull;
 pub mod curves;
 pub mod dcp_profiles;
+mod decontaminate;
+#[cfg(test)]
+pub(crate) use decontaminate::default_for as decontaminate_default;
+pub use decontaminate::start_value as decontaminate_start;
 pub(crate) mod denoise;
 mod develop;
 mod edit;
@@ -27,6 +31,7 @@ pub mod filters;
 mod find_removals;
 mod focus;
 pub mod geocode;
+mod hair_edges;
 pub mod keywords;
 mod lama;
 mod learn;
@@ -59,6 +64,7 @@ mod print;
 mod query;
 pub mod recheck;
 pub mod reload;
+mod retouch;
 pub mod similar;
 mod slideshow;
 pub mod smart_editing;
@@ -181,6 +187,8 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(learn::specs());
         v.extend(model_runtime::specs());
         v.extend(parsing::specs());
+        v.extend(hair_edges::specs());
+        v.extend(decontaminate::specs());
         v.extend(organize::specs());
         v.extend(keywords::specs());
         v.extend(manage::specs());
@@ -221,6 +229,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(focus::specs());
         v.extend(match_look::specs());
         v.extend(activity::specs());
+        v.extend(retouch::specs());
         v.extend(map::specs());
         v
     })

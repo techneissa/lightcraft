@@ -111,26 +111,51 @@ fn iou(a: &lightcraft_geom::Rect, b: &NormRect) -> f64 {
 /// The photo as the parse sees it (upright, uncropped, default settings) and its faces: YuNet's when it is
 /// installed, each named after the face region of the photo it matches; none (the parse finds them) without it.
 fn prepare(s: &mut Session, id: lightcraft_catalog::PhotoId) -> std::result::Result<(RgbImage, Vec<FaceHint>), String> {
-    let (rgb, w, h) = super::face_detect::render_rgb(s, id, PARSE_EDGE)?;
-    let img = RgbImage::new(w, h, rgb).map_err(|e| e.to_string())?;
-    let Ok(detector) = super::face_detect::detector(s) else { return Ok((img, Vec::new())) };
-    let faces = detector.detect(&img.data, w, h, &lightcraft_faces::yunet::Options::default()).map_err(|e| e.to_string())?;
+    prepare_job(s, id)?.run()
+}
+
+/// [`prepare`] set up on the calling thread, to run elsewhere: portrait retouching finds a photo's faces from its
+/// parse on a worker (`crate::retouch_input`), with the very picture and faces `parsing.run` uses, so both read one
+/// cached parse.
+pub(crate) struct Prepare {
+    job: crate::RenderJob,
+    detector: Option<std::sync::Arc<lightcraft_faces::yunet::Detector>>,
+    regions: Vec<lightcraft_meta::Region>,
+}
+
+pub(crate) fn prepare_job(s: &mut Session, id: lightcraft_catalog::PhotoId) -> std::result::Result<Prepare, String> {
+    let job = s.preview_job(id, PARSE_EDGE, PARSE_EDGE, false, &lightcraft_develop::DevelopSettings::default()).ok_or("no such photo")?;
+    let detector = super::face_detect::detector(s).ok();
     let regions = s.catalog.photo(id).map(|p| p.meta.regions.clone()).unwrap_or_default();
-    let hints = faces
-        .into_iter()
-        .map(|f| {
-            let rect = NormRect::new(f.x0, f.y0, f.x1, f.y1);
-            let person_id = regions
-                .iter()
-                .filter(|r| r.kind == lightcraft_meta::RegionKind::Face && r.name.is_some())
-                .map(|r| (iou(&r.rect, &rect), r))
-                .filter(|(o, _)| *o >= SAME_FACE_IOU)
-                .max_by(|a, b| a.0.total_cmp(&b.0))
-                .and_then(|(_, r)| r.name.clone());
-            FaceHint { rect, landmarks: Some(f.landmarks), score: f.score, person_id }
-        })
-        .collect();
-    Ok((img, hints))
+    Ok(Prepare { job, detector, regions })
+}
+
+impl Prepare {
+    /// Render the picture and find its faces (a model run: never on the UI thread).
+    pub(crate) fn run(self) -> std::result::Result<(RgbImage, Vec<FaceHint>), String> {
+        let image = self.job.run().rendered?.image;
+        let (w, h) = (image.width, image.height);
+        let rgb: Vec<u8> = image.data.iter().flat_map(|px| [px[0], px[1], px[2]]).collect();
+        let img = RgbImage::new(w, h, rgb).map_err(|e| e.to_string())?;
+        let Some(detector) = self.detector else { return Ok((img, Vec::new())) };
+        let faces = detector.detect(&img.data, w, h, &lightcraft_faces::yunet::Options::default()).map_err(|e| e.to_string())?;
+        let regions = self.regions;
+        let hints = faces
+            .into_iter()
+            .map(|f| {
+                let rect = NormRect::new(f.x0, f.y0, f.x1, f.y1);
+                let person_id = regions
+                    .iter()
+                    .filter(|r| r.kind == lightcraft_meta::RegionKind::Face && r.name.is_some())
+                    .map(|r| (iou(&r.rect, &rect), r))
+                    .filter(|(o, _)| *o >= SAME_FACE_IOU)
+                    .max_by(|a, b| a.0.total_cmp(&b.0))
+                    .and_then(|(_, r)| r.name.clone());
+                FaceHint { rect, landmarks: Some(f.landmarks), score: f.score, person_id }
+            })
+            .collect();
+        Ok((img, hints))
+    }
 }
 
 /// Parse photo `id` (waiting for the run with `wait`).

@@ -258,7 +258,7 @@ fn colour_at(
 ) -> [f32; 3] {
     let i = y * p.img.width + x;
     let raw = p.img.data.get(i).copied().unwrap_or_default();
-    let local = crate::finish::pixel_local_terms(p, terms, active, x, y);
+    let local = crate::finish::pixel_local_terms(p, terms, active, x, y, None);
     let (l_sat, l_hue) = (local.values.get(11).copied().unwrap_or(0.0), local.values.get(12).copied().unwrap_or(0.0));
     let l0 = p.log_l.data.get(i).copied().unwrap_or(0.0) + fp.ev;
     let (mut c, l1) = crate::finish::adjust_scene_pixel(p, fp, i, raw, &local);

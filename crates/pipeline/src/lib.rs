@@ -28,6 +28,7 @@ pub mod blemish;
 pub mod colorops;
 pub mod cull;
 pub mod curve;
+pub mod decontam;
 pub mod dust;
 pub mod find;
 pub mod finish;
@@ -52,6 +53,7 @@ pub mod profiles;
 pub mod recolor;
 pub mod redeye;
 pub mod residual_look;
+pub mod retouch_step;
 pub mod spot_area;
 pub mod spots;
 pub mod spots_keep;
@@ -116,6 +118,9 @@ pub struct SourceInfo {
     /// Noise reduction sizes its radii in the original's pixels ([`Plan::detail_scale`]), so a
     /// preview looks like the full-size render scaled down (issue #960).
     pub native_long: Option<usize>,
+    /// The faces (boxes, landmarks, persons, part masks) portrait retouching works on (fork,
+    /// `fork/retouch-foundation.md`); `None`: not found yet, or none.
+    pub retouch: Option<retouch_step::Faces>,
     /// The raw has no colour matrices of its own, but its camera model has matrices from measured
     /// spectral sensitivities, so the photo's Profile option can start from them instead of the
     /// look fitted to its JPEG (`lightcraft_develop::CameraColour`).
@@ -181,6 +186,7 @@ impl Default for SourceInfo {
             mattes: None,
             local_tone: None,
             native_long: None,
+            retouch: None,
             colorimetric: false,
             colour_note: None,
             macos_offered: false,
@@ -325,6 +331,8 @@ pub(crate) struct Prepared {
     pub px_per_long: f64,
     /// The recolored masks' references ([`Plan::recolor`]).
     pub recolor: Vec<(u32, recolor::Reference)>,
+    /// Fork (`fork/decontaminate.md`): each decontaminated mask's edge colours ([`decontam::Split`]).
+    pub split: Vec<decontam::Split>,
 }
 
 /// Output size for a source of `src_w × src_h` under `s`, fitting `max_w × max_h`.
@@ -431,6 +439,9 @@ impl StageCache {
             }
             // (the alphas and brush planes, and the spots' patches: each held once by its cache)
             masks_bytes += e.masks.bytes();
+            for (_, edge) in &e.split {
+                add(Arc::as_ptr(edge) as usize, edge.bytes());
+            }
         }
         masks_bytes += self.spots.bytes();
         total + masks_bytes
@@ -475,6 +486,8 @@ struct CacheEntry {
     /// Alphas of the last render's masks, and the brush parts they were built from (kept across
     /// changes to the image: those of masks that don't read it stay valid).
     masks: masks::AlphaCache,
+    /// Fork (`fork/decontaminate.md`): the decontaminated masks' edges of the last render, by what they are estimated from.
+    split: decontam::Kept,
 }
 
 pub(crate) fn hash_of(parts: impl std::hash::Hash) -> u64 {
@@ -589,6 +602,15 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                 let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
                 work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
             }
+            if s.masks.iter().any(decontam::applies) {
+                // (fork, `fork/decontaminate.md`: a decontaminated edge's colours are read from windows around it)
+                let halo = decontam::reach(px_per_long);
+                let x = work.x.saturating_sub(halo);
+                let y = work.y.saturating_sub(halo);
+                let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
+                let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
+                work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
+            }
             if work != win {
                 keep = Some(PixelWindow { x: win.x - work.x, y: win.y - work.y, ..win });
             }
@@ -615,6 +637,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         req.quality == Quality::Draft && s.spots.iter().any(spots_learned::is_learned),
         // and the size a learned fill sees its crops at
         s.spots.iter().any(spots_learned::is_learned).then_some(native_long),
+        retouch_step::key(s, info),
     ));
     let lin_key = hash_of((
         pre_nr_key,
@@ -701,7 +724,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
 pub fn lin_needs_cpu(s: &DevelopSettings, info: &SourceInfo) -> bool {
     let o = &s.optics;
     let defringe = s.section_enabled("optics") && (o.defringe_purple_amount > 0.0 || o.defringe_green_amount > 0.0);
-    defringe || !s.spots.is_empty() || local_tone::enabled(info, s)
+    defringe || !s.spots.is_empty() || local_tone::enabled(info, s) || retouch_step::active(s)
 }
 
 /// The white-balanced, defringed, retouched image (before noise reduction): the CPU part of the
@@ -719,6 +742,7 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     optics::defringe(img, s, p.px_per_long / optics::DEFRINGE_REF_LONG);
     spots::apply_except(img, &s.spots, &done, &p.frame, p.px_per_long);
     redeye::apply(img, &p.eyes);
+    retouch_step::apply(img, info, p);
 }
 
 /// The settings a render of `s` for `req` uses: the HDR edit for an [`OutputDepth::F32Hdr`]
@@ -866,6 +890,7 @@ fn render_impl(
     };
     lap("wb/spots/nr", &mut t);
     let mut alphas = cached.as_ref().map(|e| e.masks.clone()).unwrap_or_default();
+    let kept_split = cached.as_ref().map(|e| e.split.clone()).unwrap_or_default();
     let mut planes = match cached.map(|e| e.planes) {
         Some(p) if p.key == lin_key => p,
         // A draft while noise reduction changes (a slider drag): the wide, edge-aware planes of the
@@ -882,9 +907,19 @@ fn render_impl(
         prep.air = a;
     }
     prep.recolor.clone_from(&plan.recolor);
+    let ev = s.light.exposure as f32;
+    let split_key = |m: &lightcraft_develop::Mask| hash_of((lin_key, masks::alpha_key(m, keys, ev), px_per_long.to_bits()));
+    // (a request for mask planes draws nothing: it keeps the edges for the next render)
+    let split = if alphas_out.is_some() {
+        kept_split
+    } else {
+        let (split, used) = decontam::splits(&prep, &s.masks, split_key, &kept_split);
+        prep.split = split;
+        used
+    };
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
-        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), colour_noise, planes, masks: alphas });
+        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), colour_noise, planes, masks: alphas, split });
     }
     if let Some(job) = alphas_out {
         let signature = masks::planes_signature(&plan, src_img as *const Rgb32f as usize, job.ask.want);
@@ -1073,6 +1108,8 @@ fn plan_preserves_matching_box_size() {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_decontam;
 #[cfg(test)]
 mod tests_geometry;
 #[cfg(test)]

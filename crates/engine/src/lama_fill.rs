@@ -239,6 +239,8 @@ impl LamaFill {
             return None;
         }
         let _one_at_a_time = self.inner.run.lock().unwrap_or_else(PoisonError::into_inner);
+        // (one model on the GPU at a time: `crate::gpu_run`)
+        let _gpu = crate::gpu_run::turn();
         // another render may have made it while this one waited
         if let Some(hit) = self.cached(key) {
             return Some(hit);

@@ -42,6 +42,7 @@ use slideshow_export::slideshow_export_body;
 pub mod animated_gif;
 pub mod credits;
 pub mod faces;
+pub mod hair_edges;
 pub mod import;
 pub mod keymap;
 pub mod lightroom_destination;

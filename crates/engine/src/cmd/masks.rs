@@ -283,6 +283,7 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let kind = str_param(p, "kind").unwrap_or("radial").to_string();
                 let mut shape = shape_from(&kind, p, "mask.add")?;
+                let shape_kind = shape.clone();
                 let later = resolve_ai(s, &mut shape, "mask.add")?;
                 let name = str_param(p, "name").map(str::to_string);
                 if let Later::Text(text) = &later {
@@ -304,6 +305,7 @@ pub fn specs() -> Vec<CommandSpec> {
                         name: name.unwrap_or_else(|| super::mask_names::next(masks, &kind)),
                         components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape }],
                         adjust,
+                        decontaminate: super::decontaminate::default_for(&kind, &shape_kind),
                         ..Default::default()
                     });
                     *active = Some(next);

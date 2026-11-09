@@ -1,0 +1,4 @@
+cargo test -p lightcraft-pipeline --lib -- decontam tests_window::a_decontaminated
+cargo test -p lightcraft-catalog --lib -- fork_format
+cargo test -p lightcraft-engine --features sam --lib -- decontaminate hair_edges
+cargo test -p lightcraft-ui-egui --lib -- decontaminate

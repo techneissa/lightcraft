@@ -368,6 +368,7 @@ pub(super) fn load_bytes_now(
                 local_tone,
                 // (the catalog knows the original's size: `media::source_info`)
                 native_long: None,
+                retouch: None,
                 colorimetric,
                 colour_note: local.note,
                 macos_offered,

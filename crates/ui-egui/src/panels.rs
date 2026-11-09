@@ -9,6 +9,7 @@ pub mod clipping;
 pub mod command_palette;
 pub mod compare;
 pub mod crop_overlay;
+pub mod decontaminate;
 pub mod denoise;
 pub mod denoise_auto;
 pub mod detail;
@@ -38,6 +39,8 @@ pub mod people;
 pub mod person;
 pub mod photo_menu;
 pub mod presets;
+// fork: the Portrait tab (`fork/retouch-foundation.md`)
+pub mod portrait;
 pub mod profiles;
 pub mod quick_filters;
 pub mod right;

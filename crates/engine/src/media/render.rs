@@ -154,6 +154,8 @@ pub struct RenderResult {
     pub frame: Option<ScreenFrame>,
     /// The masks' alphas, when the job asked for them ([`RenderJob::mask_planes`]).
     pub mask_planes: Option<Arc<MaskPlanes>>,
+    /// Which picture of the view this image is, and what it changed from an earlier one (issue #111).
+    pub changed: Option<crate::media::dirty::Changed>,
 }
 
 impl RenderJob {
@@ -299,6 +301,7 @@ impl RenderJob {
             display: None,
             frame: None,
             mask_planes: None,
+            changed: None,
         }
     }
 
@@ -375,8 +378,10 @@ impl RenderJob {
                 display: None,
                 frame: None,
                 mask_planes: None,
+                changed: None,
             };
         }
+        let t_job = crate::media::dirty::clock();
         if let Some((cache, key)) = &self.cache
             && let Some(img) = cache.get_at(self.cache_generation, *key)
         {
@@ -395,6 +400,7 @@ impl RenderJob {
                 display: None,
                 frame: None,
                 mask_planes: None,
+                changed: None,
             };
         }
         // a face tile of an unedited raw: cut from the camera's embedded preview when it is big enough
@@ -417,6 +423,7 @@ impl RenderJob {
                 display: None,
                 frame: None,
                 mask_planes: None,
+                changed: None,
             };
         }
         let was_loaded = matches!(self.source, SourceRef::Loaded(_));
@@ -467,10 +474,12 @@ impl RenderJob {
                         display: None,
                         frame: None,
                         mask_planes: Some(planes),
+                        changed: None,
                     };
                 }
                 let pixels_needed =
                     self.cache.is_some() || self.display.is_some() || (self.view_cache.is_some() && self.request.quality == Quality::Full);
+                crate::media::dirty::Patch::clear();
                 let frame = (self.on_screen && !pixels_needed && gpu)
                     .then(|| develop_on_screen(src, &info, &self.settings, &request, self.stages.as_deref()));
                 let mut fitted: Option<Rgba8> = None;
@@ -493,19 +502,31 @@ impl RenderJob {
                             display: None,
                             frame: Some(frame),
                             mask_planes: None,
+                            changed: None,
                         };
                     }
                     Some(OnScreen::Pixels(r)) => (r, None),
                     None => {
                         // the display fit is made on the device before the readback when nothing is converted for a monitor after it
                         let fit = self.display_fit.filter(|_| self.request.quality == Quality::Full && self.display.is_none());
+                        let t = crate::media::dirty::clock();
                         let (r, fallback, f) = develop_reporting_fit(src, &info, &self.settings, &request, self.stages.as_deref(), gpu, fit);
+                        if lightcraft_pipeline::profiling() {
+                            use crate::media::dirty::{clock, ms};
+                            eprintln!("  job: before develop {:.1} ms, develop {:.1} ms", ms(t_job, t), ms(t, clock()));
+                        }
                         fitted = f;
                         (r, fallback)
                     }
                 };
+                // what the render changed since the view's last one, and what the last job kept of that (issue #111)
+                let plain =
+                    self.request.overlay == lightcraft_pipeline::Overlay::None && self.request.quality == Quality::Full && rendered.deep.is_none();
+                let converts = self.display.as_ref().filter(|_| self.request.display.is_some()).map(|d| d.id());
+                let patch = plain.then(|| crate::media::dirty::Patch::after_render(self.stages.as_deref(), &rendered.image, converts));
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
+                let t_display = crate::media::dirty::clock();
                 let mut srgb = None;
                 let display = match (&self.display, self.request.display) {
                     // a diagnostic view: the histogram stays the photo's (taken before the overlay
@@ -519,7 +540,9 @@ impl RenderJob {
                     }
                     (Some(d), Some(_)) => {
                         let keep = self.view_cache.is_some() && self.request.quality == Quality::Full;
-                        let (s, h) = crate::display::finish_render(&mut rendered.image, d, keep);
+                        // (only the rectangles the render changed, when the last job's images are kept)
+                        let patched = patch.as_ref().and_then(|p| p.convert(&mut rendered.image, d, keep));
+                        let (s, h) = patched.unwrap_or_else(|| crate::display::finish_render(&mut rendered.image, d, keep));
                         // (an HDR edit's HDR histogram stays)
                         if let Some(h) = h.filter(|_| rendered.histogram.hdr.is_none()) {
                             rendered.histogram = h;
@@ -529,27 +552,72 @@ impl RenderJob {
                     }
                     _ => None,
                 };
+                let t_caches = crate::media::dirty::clock();
                 if let Some((cache, key)) = &self.cache {
                     cache.put_at(self.cache_generation, *key, Arc::new(rendered.image.clone()));
                 }
+                let srgb = srgb.map(Arc::new);
                 if let Some((cache, key)) = &self.view_cache
                     && self.request.quality == Quality::Full
                     && (display.is_none() || srgb.is_some())
                 {
-                    cache.put_deferred_at(self.cache_generation, *key, Arc::new(srgb.unwrap_or_else(|| rendered.image.clone())));
+                    cache.put_deferred_at(self.cache_generation, *key, srgb.clone().unwrap_or_else(|| Arc::new(rendered.image.clone())));
                 }
+                let t_fit = crate::media::dirty::clock();
                 // the display fit, after the caches have the full render
+                let mut fit_made: Option<(Arc<Rgba8>, Option<Vec<crate::media::dirty::Rect>>, bool)> = None;
                 if let Some((fw, fh)) = self.display_fit
                     && self.request.quality == Quality::Full
                 {
                     let (w, h) = (rendered.image.width, rendered.image.height);
                     if w > fw.max(1) || h > fh.max(1) {
                         let size = lightcraft_raster::resample::fit_size(w, h, fw.max(1), fh.max(1));
-                        rendered.image = match fitted.take() {
-                            Some(f) if (f.width, f.height) == size => f,
-                            _ => fit_for_display(&rendered.image, fw, fh),
+                        let p = patch.as_ref();
+                        let (img, rects, device) = match fitted.take() {
+                            Some(f) if (f.width, f.height) == size => {
+                                (f, p.and_then(|p| p.rects()).map(|r| crate::media::dirty::fitted_rects((w, h), size, r)), true)
+                            }
+                            _ => match p.and_then(|p| p.fit(&rendered.image, (fw, fh))) {
+                                Some((f, rects)) => (f, Some(rects), false),
+                                None => (fit_for_display(&rendered.image, fw, fh), None, false),
+                            },
                         };
+                        let full = std::mem::replace(&mut rendered.image, img);
+                        fit_made = Some((Arc::new(full), rects, device));
                     }
+                }
+                let changed = patch.and_then(|p| {
+                    let rects = match &fit_made {
+                        Some((_, rects, _)) => rects.clone(),
+                        None => p.rects().map(<[_]>::to_vec),
+                    };
+                    let size = fit_made.as_ref().map_or((rendered.image.width, rendered.image.height), |(f, ..)| (f.width, f.height));
+                    let fitted = fit_made.as_ref().map(|(.., device)| *device);
+                    // (a copy of the picture only where the next job starts from it: a job that keeps what it made, the
+                    // picture converted for a display, a fit made on the host)
+                    let converts_here = converts.is_some();
+                    let made = p.keeps(self.stages.as_deref()).then(|| match fit_made {
+                        Some((full, _, device)) => crate::media::dirty::Made {
+                            srgb,
+                            converted: converts_here.then_some(full),
+                            fit: (!device).then(|| Arc::new(rendered.image.clone())),
+                        },
+                        None => crate::media::dirty::Made { srgb, converted: converts_here.then(|| Arc::new(rendered.image.clone())), fit: None },
+                    });
+                    p.finish(self.stages.as_deref(), (converts, size, fitted), made, rects)
+                });
+                if lightcraft_pipeline::profiling() {
+                    use crate::media::dirty::ms;
+                    let end = crate::media::dirty::clock();
+                    eprintln!(
+                        "  job: display {:.1} ms ({}), caches {:.1} ms, fit {:.1} ms ({}), whole job {:.1} ms",
+                        ms(t_display, t_caches),
+                        if self.display.is_some() { "converted" } else { "none" },
+                        ms(t_caches, t_fit),
+                        ms(t_fit, end),
+                        if self.display_fit.is_some() { "asked" } else { "none" },
+                        ms(t_job, end)
+                    );
                 }
                 RenderResult {
                     request_id: self.request_id,
@@ -564,6 +632,7 @@ impl RenderJob {
                     display,
                     frame: None,
                     mask_planes: None,
+                    changed,
                 }
             }
             Err(e) => self.failed(e),

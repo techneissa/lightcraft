@@ -22,3 +22,21 @@ pub(crate) fn load(_compiled: &Path, _units: ComputeUnits) -> Result<(Handle, Ve
 pub(crate) fn predict(_handle: &Handle, _input: &str, _shape: &[usize], _data: &[f32], _output: &str) -> Result<Output> {
     Err(Error::Unavailable)
 }
+
+/// Apple Vision where it is absent: no request is supported.
+pub(crate) mod vision {
+    use crate::vision::{Image, Matte, Request};
+    use crate::{Error, Result};
+
+    pub(crate) fn supported(_request: Request) -> bool {
+        false
+    }
+
+    pub(crate) fn person_segmentation(_img: &Image) -> Result<Matte> {
+        Err(Error::Unavailable)
+    }
+
+    pub(crate) fn instances(_img: &Image, _kind: Request, _each: &mut dyn FnMut(Matte) -> Result<()>) -> Result<()> {
+        Err(Error::Unavailable)
+    }
+}

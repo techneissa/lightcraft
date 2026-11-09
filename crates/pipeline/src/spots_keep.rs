@@ -459,6 +459,8 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, kept: Option<&
         true
     });
     crate::redeye::apply(img, &p.eyes);
+    // (`crate::lin_cpu`'s order: portrait retouching after red eye, fork `fork/retouch-foundation.md`)
+    crate::retouch_step::apply(img, info, p);
     Some(Arc::new(CpuKept { learned, classic }))
 }
 

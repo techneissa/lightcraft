@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 
-use super::Tool::{Activity, Crop, Edit, Info, Keywords, Masking, Presets, RedEye, Remove, Versions};
+use super::Tool::{Activity, Crop, Edit, Info, Keywords, Masking, Portrait, Presets, RedEye, Remove, Versions};
 use super::*;
 use crate::headless::Headless;
 use crate::state::RightPanel;
@@ -14,7 +14,7 @@ fn order(o: &ToolStripOrder) -> Vec<Tool> {
     o.tools().to_vec()
 }
 
-const USUAL: [Tool; 10] = [Presets, Edit, Crop, Remove, Masking, RedEye, Versions, Activity, Keywords, Info];
+const USUAL: [Tool; 11] = [Presets, Edit, Crop, Remove, Masking, Portrait, RedEye, Versions, Activity, Keywords, Info];
 
 #[test]
 fn a_new_strip_has_the_usual_order() {
@@ -56,10 +56,22 @@ fn the_order_survives_saving_and_an_old_state_loads_in_the_usual_order() {
 fn a_damaged_saved_order_is_made_whole() {
     let read = |v: Value| serde_json::from_value::<ToolStripOrder>(v).unwrap();
     let o = read(json!(["info", "nope", "info", 3, null, "crop"]));
-    assert_eq!(order(&o), [Info, Crop, Presets, Edit, Remove, Masking, RedEye, Versions, Activity, Keywords]);
+    assert_eq!(order(&o), [Info, Crop, Presets, Edit, Remove, Masking, Portrait, RedEye, Versions, Activity, Keywords]);
     for bad in [json!(null), json!("edit"), json!({"edit": 1}), json!([])] {
         assert!(read(bad).is_default());
     }
+}
+
+/// Fork: an order saved before the Portrait icon existed gets it after Masking, so it does not take a bottom place.
+#[test]
+fn an_order_saved_before_portrait_gets_it_after_masking() {
+    let o = serde_json::from_value::<ToolStripOrder>(json!([
+        "presets", "edit", "crop", "remove", "masking", "redeye", "versions", "activity", "keywords", "info"
+    ]))
+    .unwrap();
+    assert!(o.is_default(), "{:?}", order(&o));
+    let o = serde_json::from_value::<ToolStripOrder>(json!(["info", "masking", "crop"])).unwrap();
+    assert_eq!(order(&o)[..4], [Info, Masking, Portrait, Crop]);
 }
 
 #[test]
@@ -144,7 +156,7 @@ fn dragging_an_icon_moves_it_and_shows_where_it_goes() {
     release(&mut h, to);
     assert_eq!(h.app.ui.dragging_tool, None);
     assert!(!has(&h, "toolStripDrop"));
-    assert_eq!(order(&h.app.ui.tool_strip), [Presets, Keywords, Edit, Crop, Remove, Masking, RedEye, Versions, Activity, Info]);
+    assert_eq!(order(&h.app.ui.tool_strip), [Presets, Keywords, Edit, Crop, Remove, Masking, Portrait, RedEye, Versions, Activity, Info]);
     assert!(icon(&h, Keywords).top() < icon(&h, Edit).top(), "drawn in the new order");
     assert_eq!(h.app.ui.right, right_before, "a drag opens nothing");
     // last: dragged below everything
@@ -201,7 +213,7 @@ fn the_commands_move_read_and_reset() {
     let mut h = strip_app();
     let r = exec(&mut h, "view.toolStripMove", json!({"tool": "info", "direction": "up"}));
     assert_eq!(r["moved"], true);
-    assert_eq!(r["order"][8], "info");
+    assert_eq!(r["order"][9], "info");
     let r = exec(&mut h, "view.toolStripMove", json!({"tool": "info", "before": "presets"}));
     assert_eq!(r["order"][0], "info");
     assert!(icon(&h, Info).top() < icon(&h, Presets).top(), "the strip is redrawn");
