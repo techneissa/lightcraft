@@ -82,6 +82,10 @@ impl Feature for Skin {
     const LABEL: &'static str = "Skin";
     const STAGE: Stage = Stage::Retouch;
     const SCOPE: Scope = Scope::Face;
+    const PARTS: &'static [Part] = &[Part::FacialSkin];
+    /// Skin works inside its Facial Skin mask's box ([`Scene::mask_box`], a pixel past the mask's area) and its
+    /// blurs stop at the box's edges: it reads nothing farther (a hair of margin for the box's own pixel).
+    const REACH: f64 = 0.02;
     const CONTROLS: &'static [Control<Self>] = &[
         Control { spec: Spec::amount("retouch.skin.smoothness", "Smoothness"), get: |s| s.smoothness, set: |s, v| s.smoothness = v },
         Control { spec: Spec::amount("retouch.skin.texture", "Texture"), get: |s| s.texture, set: |s, v| s.texture = v },

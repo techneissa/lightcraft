@@ -25,9 +25,9 @@ fn mcp_reads_and_sets_a_portrait_value() {
     let d = r.structured.clone().unwrap_or_else(|| serde_json::from_str(r.content[0]["text"].as_str().unwrap()).unwrap());
     assert_eq!(d["fork_retouch"]["global"]["skin"]["smoothness"], json!(35.0), "{d}");
     // and through the retouch commands
-    let r = call_tool(&mut b, &crate::command_tool_name("retouch.set"), &json!({"control": "retouch.eyes.amount", "value": 20}));
+    let r = call_tool(&mut b, &crate::command_tool_name("retouch.set"), &json!({"control": "retouch.eyes.whites", "value": 20}));
     assert!(!r.is_error, "{r:?}");
-    assert_eq!(b.session.develop_of(first).unwrap().retouch.global.get("retouch.eyes.amount"), Some(20.0));
+    assert_eq!(b.session.develop_of(first).unwrap().retouch.global.get("retouch.eyes.whites"), Some(20.0));
     let r = call_tool(&mut b, &crate::command_tool_name("retouch.faces"), &json!({}));
     assert!(!r.is_error, "{r:?}");
     assert!(call_tool(&mut b, "set_develop", &json!({"values": {"retouch.nope.amount": 1}})).is_error);

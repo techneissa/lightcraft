@@ -58,16 +58,16 @@ fn the_block_is_off_by_default_and_round_trips_through_json() {
 #[test]
 fn a_malformed_block_reads_as_off_and_keeps_what_it_can() {
     let v = json!({
-        "global": {"skin": {"smoothness": "lots"}, "eyes": {"amount": 30.0}, "future": {"x": 1}, "teeth_lips": 5},
+        "global": {"skin": {"smoothness": "lots"}, "eyes": {"whites": 30.0}, "future": {"x": 1}, "teeth_lips": 5},
         "faces": [{"face": {"bounds": {"x0": 0.0, "y0": 0.0, "x1": 0.0, "y1": 0.0}}, "settings": {}}, {"face": 3}, "x",
-                  {"face": {"bounds": {"x0": 0.1, "y0": 0.1, "x1": 0.2, "y1": 0.2}}, "settings": {"eyes": {"amount": 1e9}}}]
+                  {"face": {"bounds": {"x0": 0.1, "y0": 0.1, "x1": 0.2, "y1": 0.2}}, "settings": {"eyes": {"whites": 1e9}}}]
     });
     let r: Retouch = serde_json::from_value(v).unwrap();
     assert_eq!(r.global.get("retouch.skin.smoothness"), Some(0.0));
-    assert_eq!(r.global.get("retouch.eyes.amount"), Some(30.0));
+    assert_eq!(r.global.get("retouch.eyes.whites"), Some(30.0));
     assert_eq!(r.global.get("retouch.teethLips.amount"), Some(0.0));
     assert_eq!(r.faces.len(), 1, "overrides without a usable box are dropped");
-    assert_eq!(r.faces[0].settings.get("retouch.eyes.amount"), Some(100.0), "clamped on read");
+    assert_eq!(r.faces[0].settings.get("retouch.eyes.whites"), Some(100.0), "clamped on read");
     for bad in [json!(null), json!(7), json!("x"), json!([]), json!({"global": []})] {
         assert!(serde_json::from_value::<Retouch>(bad).unwrap().is_default());
     }

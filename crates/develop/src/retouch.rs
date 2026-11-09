@@ -140,7 +140,7 @@ mod tests {
         assert!(controls::set(&mut s, "retouchFace.0.skin.smoothness", 250.0));
         assert_eq!(controls::get(&s, "retouchFace.0.skin.smoothness"), Some(100.0), "clamped by the spec");
         assert_eq!(controls::get(&s, "retouch.skin.smoothness"), Some(0.0), "the global value is apart");
-        assert_eq!(controls::find("retouchFace.4.eyes.amount").map(|c| c.id), Some("retouch.eyes.amount"));
+        assert_eq!(controls::find("retouchFace.4.eyes.whites").map(|c| c.id), Some("retouch.eyes.whites"));
         for bad in ["retouchFace.+0.skin.smoothness", "retouchFace..skin.smoothness", "retouchFace.0", "retouchFace.x.skin.smoothness"] {
             assert!(controls::get(&s, bad).is_none() && controls::find(bad).is_none(), "{bad}");
         }
@@ -155,7 +155,7 @@ mod tests {
         assert!(s.to_json().get(KEY).is_none());
         assert_eq!(s.hash64(), DevelopSettings::from_json(&s.to_json()).unwrap().hash64());
         let mut r = s.clone();
-        controls::set(&mut r, "retouch.eyes.amount", 40.0);
+        controls::set(&mut r, "retouch.eyes.whites", 40.0);
         assert_eq!(r.to_json()[KEY]["global"]["eyes"]["amount"], json!(40.0));
         assert_ne!(r.hash64(), s.hash64());
         assert_eq!(DevelopSettings::from_json(&r.to_json()).unwrap(), r);
@@ -176,7 +176,7 @@ mod tests {
         let mut src = DevelopSettings::default();
         let face = Face { person: Some("ann".into()), ..Face::boxed(NormRect::new(0.1, 0.1, 0.3, 0.3)) };
         src.retouch.override_mut(std::slice::from_ref(&face), 0).map(|f| f.set("retouch.skin.smoothness", 35.0));
-        controls::set(&mut src, "retouch.eyes.amount", 25.0);
+        controls::set(&mut src, "retouch.eyes.whites", 25.0);
         let part = crate::extract_groups(&src, &[SettingsGroup::Portrait]);
         let dst = crate::apply_partial(&DevelopSettings::default(), &part, 1.0);
         assert_eq!(dst.retouch, src.retouch);
