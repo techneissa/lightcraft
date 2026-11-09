@@ -40,6 +40,9 @@
 
 ## 2026-11-09
 
+### Faster Drags with Decontaminate
+- A mask with Decontaminate on now renders on the graphics card, so dragging its sliders stays smooth.
+
 ### Repair Glasses Glare in the Portrait Tab
 Portrait ▸ Glasses Glare can repair the lenses of a face, or of every face with glasses. Repaint (FLUX) redraws a lens
 where glare hides the eye with FLUX.1 Fill, if you have its files, in two to three minutes a face; Fill Glints (LaMa)
