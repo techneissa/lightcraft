@@ -10,8 +10,8 @@
 //!   cover the frame (and blurred like the background when Blur is on); Swap is how much of it shows.
 //! - **Clean Backdrop** (0…100): on a studio backdrop, creases, scuffs and banding are smoothed away (the background
 //!   blurred by [`CLEAN`] of the long side, faded out where it differs from the blur by more than a crease does, so a
-//!   light stand or a chair stays). The paper's fine grain is kept ([`prepare::GRAIN`]), and a light dither stops
-//!   the smoothed paper from banding in an 8-bit export.
+//!   light stand or a chair stays, and by colour, so a coloured object does too). A light dither of about one 8-bit
+//!   step stops the smoothed paper from banding in an export and gives grainy paper a grain of its own strength.
 //!
 //! The person is drawn over the new background with their edge's own colours ([`matte`]: blur-fusion foreground
 //! estimation, as a mask's Decontaminate), so no old background stays between strands. Pixels wholly person never
@@ -37,7 +37,7 @@ pub mod holes;
 mod matte;
 mod prepare;
 
-pub use prepare::{GRAIN, forget, kept};
+pub use prepare::{forget, kept};
 
 /// The blur radius at Blur 100 on the farthest background, a fraction of the photo's long side.
 pub const BLUR_MAX: f64 = 0.03;

@@ -31,7 +31,6 @@ pub(crate) struct Prepared {
     shares: OnceLock<Plane>,
     levels: OnceLock<Vec<(f64, Grid)>>,
     clean: OnceLock<Grid>,
-    grain: OnceLock<Plane>,
     backdrop: Mutex<Option<(u64, Arc<Fitted>)>>,
 }
 
@@ -77,7 +76,6 @@ pub(crate) fn prepared(img: &Rgb32f, scene: &Scene<'_>) -> Option<(Arc<Prepared>
         shares: OnceLock::new(),
         levels: OnceLock::new(),
         clean: OnceLock::new(),
-        grain: OnceLock::new(),
         backdrop: Mutex::new(None),
     });
     if keep {
@@ -229,34 +227,6 @@ impl Prepared {
         })
     }
 
-    /// The backdrop's grain Clean Backdrop keeps: each background pixel's brightness over its [`GRAIN`] blur's,
-    /// faded to 1 (none) where it differs by more than grain does ([`GRAIN_MAX`]: a scuff or a dot is not grain).
-    pub fn grain(&self, img: &Rgb32f) -> &Plane {
-        self.grain.get_or_init(|| {
-            let sigma = GRAIN * self.size.long();
-            let s = ((sigma / 1.5).round() as usize).max(1);
-            let g =
-                Grid::pool(img.width, img.height, (self.place.x, self.place.y), s, &|x, y| self.plate(img, x, y)).gauss((sigma / s as f64) as f32);
-            let (w, place) = (img.width, self.place);
-            let mut out = Plane::new(img.width, img.height);
-            par_rows(&mut out.data, w.max(1), |y, row| {
-                for (x, o) in row.iter_mut().enumerate() {
-                    let (c, wt) = self.plate(img, x, y);
-                    let fine = g.read(place.x + x as i64, place.y + y as i64, 1e-3);
-                    *o = match fine {
-                        Some(f) if wt > 0.0 => {
-                            let r = luma(c) / luma(f).max(1e-5);
-                            let fade = ((r - 1.0).abs() / GRAIN_MAX - 1.0).clamp(0.0, 1.0);
-                            r + (1.0 - r) * fade
-                        }
-                        _ => 1.0,
-                    };
-                }
-            });
-            out
-        })
-    }
-
     /// The Swap picture fitted to the render (kept while the picture stays the same).
     pub fn fitted(&self, b: &Backdrop) -> Option<Arc<Fitted>> {
         let mut slot = self.backdrop.lock().unwrap_or_else(PoisonError::into_inner);
@@ -296,11 +266,6 @@ impl Prepared {
         })
     }
 }
-
-/// The scale of the grain Clean Backdrop keeps (a Gaussian's sigma), a fraction of the photo's long side.
-pub const GRAIN: f64 = 0.0015;
-/// Grain changes brightness by up to this share; a pixel that differs more fades to none of it by twice this.
-pub const GRAIN_MAX: f32 = 0.08;
 
 /// Luminance weights (Rec.2020).
 pub(crate) fn luma(p: [f32; 3]) -> f32 {

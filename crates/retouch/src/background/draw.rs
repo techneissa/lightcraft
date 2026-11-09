@@ -31,9 +31,10 @@ impl Strength {
 /// Where Clean Backdrop fades out: a pixel whose colour (in any channel) differs from the smoothed backdrop by this
 /// share of its brightness is still a crease or a scuff (cleaned fully)…
 const CLEAN_KEEP: (f32, f32) = (0.2, 0.45);
-/// …and the dither on the cleaned backdrop, at most this share of its brightness (about an 8-bit step on a light
-/// backdrop), never more than twice what was smoothed away (a flat backdrop stays flat).
-const DITHER: f32 = 0.004;
+/// …and the dither on the cleaned backdrop, at most this share of its brightness (about an 8-bit step of a light
+/// backdrop in the export), never more than twice what was smoothed away there: a flat backdrop stays flat, and
+/// paper with grain gets a fine grain of about its own strength.
+const DITHER: f32 = 0.012;
 /// The least share of background near a pixel a blur reads (else the next one, or the pixel's own).
 const MIN_WEIGHT: f32 = 1e-3;
 
@@ -92,7 +93,6 @@ pub(crate) fn draw(img: &mut Rgb32f, scene: &Scene<'_>, prep: &Prepared, k: &Str
     let shares = (k.blur > 0.0).then(|| prep.shares(scene));
     let levels = (k.blur > 0.0).then(|| prep.levels(img));
     let clean = (k.clean > 0.0).then(|| prep.clean(img));
-    let grain = (k.clean > 0.0).then(|| prep.grain(img));
     let colour = match with {
         Swap::Colour { rgb } => Some(colour_linear(*rgb)),
         _ => None,
@@ -140,8 +140,7 @@ pub(crate) fn draw(img: &mut Rgb32f, scene: &Scene<'_>, prep: &Prepared, k: &Str
                 let dev = (0..3).map(|ch| (behind[ch] - c[ch]).abs()).fold(0.0f32, f32::max) / lc;
                 let keep = smoothstep((dev - CLEAN_KEEP.0) / (CLEAN_KEEP.1 - CLEAN_KEEP.0));
                 let d = dither(gx, gy) * (DITHER * lc).min(2.0 * (lb - lc).abs());
-                let g = grain.and_then(|p| p.data.get(i).copied()).unwrap_or(1.0);
-                let target = c.map(|v| (v * g + d).max(0.0));
+                let target = c.map(|v| (v + d).max(0.0));
                 bg = lerp(bg, target, k.clean * (1.0 - keep));
             }
             if swap > 0.0 {
