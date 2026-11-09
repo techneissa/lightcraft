@@ -36,18 +36,16 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
         let p = if painting && own == ToolOverlay::Auto { &quiet } else { &p };
         let col = Color32::from_white_alpha(if sel { 230 } else { 150 });
         // (a spot in an object's shape shows its outline, `object_remove`)
+        // (a brushed spot shows ONE outline, the contour of the area it covers, `brush_outline`)
+        let line = Stroke::new(if sel { 1.5 } else { 1.0 }, col);
         if !super::object_remove::outline(ui.ctx(), p, map, s, sel) {
-            for q in &s.points {
-                p.circle_stroke(map.screen(*q), r, Stroke::new(if sel { 1.5 } else { 1.0 }, col));
-            }
+            super::brush_outline::outline(ui.ctx(), p, map, i, s, Point::new(0.0, 0.0), line);
         }
         let Some(&t) = s.points.first() else { continue };
         let tq = map.screen(t);
         if let Some(o) = s.source_offset.filter(|_| sel) {
             let sq = map.screen(Point::new(t.x + o.x, t.y + o.y));
-            for q in &s.points {
-                p.circle_stroke(map.screen(Point::new(q.x + o.x, q.y + o.y)), r, Stroke::new(1.0, Color32::from_white_alpha(170)));
-            }
+            super::brush_outline::outline(ui.ctx(), p, map, i, s, o, Stroke::new(1.0, Color32::from_white_alpha(170)));
             let dir = (tq - sq).normalized();
             p.arrow(sq + dir * r, (tq - sq) - dir * (2.0 * r).min((tq - sq).length()), Stroke::new(1.0, Color32::from_white_alpha(200)));
             register(ui, format!("spotSource:{i}"), Rect::from_center_size(sq, vec2(14.0, 14.0)));
@@ -135,9 +133,15 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
     if mode != ToolOverlay::Never
         && let Some(Gesture::Spot { points }) = &app.gesture
     {
-        for q in points {
-            p.circle_filled(map.screen(*q), r, Color32::from_white_alpha(60));
-        }
+        super::brush_outline::painting(
+            ui.ctx(),
+            &p,
+            map,
+            points,
+            app.ui.remove_size as f64,
+            Color32::from_white_alpha(60),
+            Stroke::new(1.0, Color32::from_white_alpha(200)),
+        );
         register(ui, "removePaintFill", map.rect);
     }
     if (resp.drag_stopped() || resp.clicked())
@@ -154,8 +158,8 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
             _ => "remove",
         };
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
-        let params = json!({"mode": mode, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity, "background": true});
-        add_spot(app, mode, params);
+        let params = json!({"mode": mode, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity, "background": true, "lasso": app.ui.remove_lasso});
+        add_spot(app, ui.ctx(), mode, params);
     }
 }
 
@@ -225,7 +229,7 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
             _ => "remove",
         };
         let params = json!({"mode": mode, "points": [[place.0, place.1]], "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity, "background": true});
-        add_spot(app, mode, params);
+        add_spot(app, ui.ctx(), mode, params);
         return true;
     }
     false
@@ -413,9 +417,12 @@ fn eye_grip_at(grips: &[(EyeGrip, Pos2)], selected: usize, q: Pos2) -> Option<(E
 }
 
 /// Run `spot.add` with `params` (the fill of `mode` added), timed under `LIGHTCRAFT_PROFILE`.
-fn add_spot(app: &mut LightcraftApp, mode: &str, params: serde_json::Value) {
+fn add_spot(app: &mut LightcraftApp, ctx: &egui::Context, mode: &str, params: serde_json::Value) {
     let t = lightcraft_engine::media::dirty::clock();
-    let _ = app.run("spot.add", crate::panels::right::with_fill(app, mode, params));
+    // (a refused lasso, one that would cover most of the photo, says why)
+    if let Err(e) = app.run("spot.add", crate::panels::right::with_fill(app, mode, params)) {
+        app.toast_error(ctx, e);
+    }
     if lightcraft_pipeline::profiling() {
         use lightcraft_engine::media::dirty::{clock, ms};
         eprintln!("  ui: spot.add {:.1} ms (at {:.1})", ms(t, clock()), crate::render::stamp());

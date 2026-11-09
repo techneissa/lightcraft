@@ -932,7 +932,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Add Remove Spot",
             [],
             None,
-            "{mode?: remove|heal|clone|fill (content-aware), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby), fill?: classic|lama (default classic; for remove and fill spots; LaMa needs its model, else the spot shows the Classic fill), background?: true (in the window: the best match is found on a worker and the spot is added with it a moment later, as its own undo step; returns {pending: true}; elsewhere the search runs at once)} — selects the new spot; returns {index}, or {pending: true} while earlier spots wait for their source",
+            "{mode?: remove|heal|clone|fill (content-aware), points: [[x,y],…], size?: fraction of long edge, feather?, opacity?, source?: [dx,dy] (default: the best match nearby), fill?: classic|lama (default classic; for remove and fill spots; LaMa needs its model, else the spot shows the Classic fill), lasso?: bool (default true: a Remove or Content-Aware stroke without `source` that ends within two brush radii of its start and encloses at least three brush discs of area beyond its own width becomes a shape covering the inside of the loop as well, with no source; refused when the loop covers most of the photo), background?: true (in the window: the best match is found on a worker and the spot is added with it a moment later, as its own undo step; returns {pending: true}; elsewhere the search runs at once)} — selects the new spot; returns {index}, or {pending: true} while earlier spots wait for their source",
             has_active,
             |s, p| {
                 let mode: SpotMode =
@@ -959,6 +959,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 };
                 let id = s.active().ok_or_else(|| bad("spot.add", "no active photo"))?;
                 let dd = (*s.develop_of(id).unwrap_or_default()).clone();
+                // a stroke that comes back to its start covers its inside too (`spot_area::lasso`), unless it names its
+                // source (then it is a stroke that copies from there) or `lasso` is false
+                let lasso = bool_or(p, "lasso", true) && spot.source_offset.is_none() && super::spot_area::lasso(s, id, &dd, &mut spot)?;
                 let search = spot.source_offset.is_none() && spot.mode != SpotMode::Fill;
                 if super::spot_area::sourceless(&spot) {
                     // LaMa rebuilds a Remove spot from its surroundings: it reads no source and shows no pin
@@ -978,6 +981,9 @@ pub fn specs() -> Vec<CommandSpec> {
                     Some(i) => json!({"index": i}),
                     None => json!({"pending": true}),
                 };
+                if lasso {
+                    out["lasso"] = json!(true);
+                }
                 describe(s, fill, &mut out);
                 Ok(out)
             }

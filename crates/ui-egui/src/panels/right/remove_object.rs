@@ -82,6 +82,11 @@ pub(super) fn section(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         });
     });
     if !app.ui.remove_object {
+        // a stroke that closes on itself covers its inside too (`fork/brush-area.md`)
+        padded(ui, |ui| {
+            let r = ui.checkbox(&mut app.ui.remove_lasso, crate::i18n::tr("Fill Closed Loops"));
+            register(ui, "removeLasso", r.rect);
+        });
         return;
     }
     if !app.session.segmenter.has_model() {

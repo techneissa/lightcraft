@@ -48,7 +48,7 @@ pub(super) fn outline(ctx: &egui::Context, p: &Painter, map: &CanvasMap, spot: &
         if let Some(first) = pts.first().copied() {
             pts.push(first);
         }
-        p.add(egui::Shape::line(pts, Stroke::new(if sel { 1.5 } else { 1.0 }, col)));
+        super::brush_outline::halo_line(p, pts, Stroke::new(if sel { 1.5 } else { 1.0 }, col));
     }
     true
 }

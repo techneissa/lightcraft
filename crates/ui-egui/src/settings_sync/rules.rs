@@ -95,6 +95,7 @@ pub const SYNCED: &[&str] = &[
     "removeObject",
     "removeObjectFill",
     "removeExpand",
+    "removeLasso",
     "pointColorVisualize",
     "hdrVisualize",
     "visualizeSpots",
