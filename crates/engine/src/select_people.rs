@@ -25,6 +25,8 @@ use crate::people_parsing::{Outcome, PARSE_EDGE};
 pub mod grid;
 pub mod parts;
 
+/// The parser's types, for hosts that show or fake a parse (the UI's tests).
+pub use lightcraft_parsing as parsing;
 pub use parts::Pick;
 
 /// Photos whose parse is kept here.

@@ -43,6 +43,9 @@ pub(crate) struct Picker<'a> {
     /// Indexes of `parts` selected now.
     pub selected_parts: &'a [usize],
     pub folded: bool,
+    /// A line under the faces ("Finding people…", why there are none); `None`: no line (Select People,
+    /// `fork/select-people.md`).
+    pub note: Option<&'a str>,
 }
 
 /// What was clicked this frame.
@@ -107,10 +110,16 @@ pub(crate) fn show(ui: &mut egui::Ui, canvas: Rect, pk: &Picker<'_>) -> Picked {
         })
         .collect();
     let part_rows = wrap(pills.iter().map(|(w, _)| *w), max_w - 2.0 * PAD);
+    let note = pk.note.map(|n| p.layout(crate::i18n::tr(n).to_string(), font.clone(), Color32::from_gray(205), max_w - 2.0 * PAD));
+    let note_h = note.as_ref().map_or(0.0, |g| GAP + g.size().y);
+    let note_w = note.as_ref().map_or(0.0, |g| g.size().x);
     let parts_w = part_rows.iter().map(|r| r.1).fold(0.0, f32::max);
     let parts_h = if pills.is_empty() { 0.0 } else { GAP + part_rows.len() as f32 * (PART_H + GAP) - GAP };
-    let size =
-        if pk.folded { vec2(BUTTON + 2.0 * PAD, BUTTON + 2.0 * PAD) } else { vec2(2.0 * PAD + row1_w.max(parts_w), 2.0 * PAD + row1_h + parts_h) };
+    let size = if pk.folded {
+        vec2(BUTTON + 2.0 * PAD, BUTTON + 2.0 * PAD)
+    } else {
+        vec2(2.0 * PAD + row1_w.max(parts_w).max(note_w), 2.0 * PAD + row1_h + note_h + parts_h)
+    };
     let mut top = canvas.top() + MARGIN;
     let mut card = Rect::from_min_size(pos2(canvas.right() - MARGIN - size.x, top), size);
     if let Some(badge) = registered(ui.ctx(), "loupe:cameraPreview").filter(|b| b.intersects(card.expand(4.0))) {
@@ -163,9 +172,15 @@ pub(crate) fn show(ui: &mut egui::Ui, canvas: Rect, pk: &Picker<'_>) -> Picked {
             out.face = Some(face);
         }
     }
-    // row 2
-    let add = ui.input(|i| i.modifiers.command);
+    // the note, then row 2
     let mut y = card.top() + PAD + row1_h + GAP;
+    if let Some(g) = note {
+        let h = g.size().y;
+        register(ui, format!("{}:note", pk.id), Rect::from_min_size(pos2(card.left() + PAD, y), g.size()));
+        p.galley(pos2(card.left() + PAD, y), g, Color32::from_gray(205));
+        y += h + GAP;
+    }
+    let add = ui.input(|i| i.modifiers.command);
     let mut n = 0;
     for (count, _) in &part_rows {
         let mut x = card.left() + PAD;

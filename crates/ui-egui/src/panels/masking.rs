@@ -104,6 +104,8 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 10 }).show(ui, |ui| {
         ui.label(egui::RichText::new(crate::i18n::tr("Create New Mask")).color(t.text_dim));
         ui.add_space(6.0);
+        // (fork, `fork/select-people.md`: Person / Background / Custom; the tiles are Custom's)
+        let custom = super::select_people::mode_row(app, ui, id);
         let tiles: [(&str, &str, Icon); 10] = [
             ("object", "Object", Icon::ObjectSelect),
             ("prompt", "Describe", Icon::Describe),
@@ -126,7 +128,7 @@ fn show_mask_panel(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
         };
         let (cols, tile, size) = super::mask_tiles::layout(ui.available_width(), tiles.len(), widest);
         egui::Grid::new("mask-tiles").spacing(vec2(super::mask_tiles::GAP, super::mask_tiles::GAP)).show(ui, |ui| {
-            for (i, (kind, label, icon)) in tiles.iter().enumerate() {
+            for (i, (kind, label, icon)) in tiles.iter().enumerate().take(if custom { tiles.len() } else { 0 }) {
                 let (r, resp) = ui.allocate_exact_size(vec2(tile, 52.0), Sense::click());
                 crate::widgets::announce(&resp, crate::i18n::tr(label));
                 register(ui, format!("maskNew:{kind}"), r);

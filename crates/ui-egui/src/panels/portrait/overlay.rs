@@ -34,7 +34,7 @@ pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, 
     let chips: Vec<FaceChip> =
         faces.iter().enumerate().map(|(i, f)| FaceChip { texture: textures.get(i).map(|t| t.id()), name: face_name(f, i) }).collect();
     let face = super::picked(ui.ctx(), photo).filter(|i| *i < faces.len());
-    let pk = Picker { id: "portrait", faces: &chips, face, parts: &[], selected_parts: &[], folded: app.ui.flyout_open(FOLDED) };
+    let pk = Picker { id: "portrait", faces: &chips, face, parts: &[], selected_parts: &[], folded: app.ui.flyout_open(FOLDED), note: None };
     let picked = people_picker::show(ui, canvas, &pk);
     if picked.toggle_fold {
         app.ui.toggle_flyout(FOLDED);
