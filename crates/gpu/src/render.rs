@@ -32,6 +32,8 @@ pub struct GpuStages {
     /// host: a spot edit draws only what it reaches.
     spots: KeptStore<Kept<Buf, Buf>>,
     spots_cpu: KeptStore<CpuKept>,
+    /// What the job that showed the last render made of it on the host, by that render's frame number (issue #111).
+    pub(crate) host: Mutex<Option<crate::dirty::HostKept>>,
 }
 
 const CAPACITY: usize = 2;
@@ -42,28 +44,39 @@ struct Entry {
     geo: u64,
     sampled: Arc<Buf>,
     lin: Option<(u64, Arc<Buf>)>,
+    /// The image after the spots (`spots_keep`) `lin` was made from (issue #111).
+    post: std::sync::Weak<Buf>,
     /// The joint colour NR's noise model of the whole frame, keyed by `Plan::noise_key`.
     colour_noise: Option<(u64, JointNoise)>,
     planes: Planes,
+    /// The finished render these stages made (issue #111): the next starts from it.
+    last: Option<crate::dirty::Last>,
 }
 
 /// Spatial planes of one linear image (`key` = its `lin_key`), each tagged with its radius.
 #[derive(Clone, Default)]
-struct Planes {
-    key: u64,
-    log_l: Option<Arc<Buf>>,
-    base: Option<(local::BaseKey, Arc<Buf>)>,
-    clarity: Option<(u32, Arc<Buf>)>,
-    texture: Option<(u32, Arc<Buf>)>,
+pub(crate) struct Planes {
+    pub(crate) key: u64,
+    pub(crate) log_l: Option<Arc<Buf>>,
+    pub(crate) base: Option<(local::BaseKey, Arc<Buf>)>,
+    pub(crate) clarity: Option<(u32, Arc<Buf>)>,
+    pub(crate) texture: Option<(u32, Arc<Buf>)>,
     /// Process V3: the sharpening band at the Radius slider's scale.
-    sharpen: Option<(u32, Arc<Buf>)>,
-    dark: Option<(u32, Arc<Buf>, f32)>,
-    chroma: Option<(u32, Arc<Buf>)>,
+    pub(crate) sharpen: Option<(u32, Arc<Buf>)>,
+    pub(crate) dark: Option<(u32, Arc<Buf>, f32)>,
+    pub(crate) chroma: Option<(u32, Arc<Buf>)>,
 }
 
 impl GpuStages {
     fn get(&self, src: &Arc<Rgb32f>, geo: u64) -> Option<Entry> {
         self.lock().iter().find(|e| e.geo == geo && Arc::ptr_eq(&e.src, src)).cloned()
+    }
+
+    /// Keep `last` with the entry of `src` at `geo`.
+    fn set_last(&self, src: &Arc<Rgb32f>, geo: u64, last: crate::dirty::Last) {
+        if let Some(e) = self.lock().iter_mut().find(|e| e.geo == geo && Arc::ptr_eq(&e.src, src)) {
+            e.last = Some(last);
+        }
     }
 
     fn put(&self, e: Entry) {
@@ -97,7 +110,8 @@ impl GpuStages {
         self.lock().len()
     }
 
-    /// Device bytes held (each buffer counted once).
+    /// Bytes held: device buffers (each counted once), and the images a loupe job kept on the host with them
+    /// (`dirty::keep_host`, issue #111).
     pub fn bytes(&self) -> usize {
         let mut seen: Vec<*const Buf> = Vec::new();
         let mut total = 0;
@@ -115,6 +129,9 @@ impl GpuStages {
             if let Some((_, b)) = &e.lin {
                 add(b);
             }
+            if let Some(l) = &e.last {
+                add(&l.out);
+            }
             let p = &e.planes;
             p.log_l.iter().for_each(&mut add);
             p.base.iter().for_each(|(_, b)| add(b));
@@ -122,13 +139,15 @@ impl GpuStages {
             p.texture.iter().for_each(|(_, b)| add(b));
             p.sharpen.iter().for_each(|(_, b)| add(b));
             p.dark.iter().for_each(|(_, b, _)| add(b));
+            p.chroma.iter().for_each(|(_, b)| add(b));
         }
         if let Some((_, b)) = &*self.source.lock().unwrap_or_else(|e| e.into_inner()) {
             add(b);
         }
         self.alphas.each(&mut add);
         patches += self.spots.bytes();
-        total + patches
+        let host = self.host.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |k| k.bytes);
+        total + patches + host
     }
 
     /// Drop everything (e.g. when memory is needed).
@@ -138,6 +157,7 @@ impl GpuStages {
         self.alphas.clear();
         self.spots.clear();
         self.spots_cpu.clear();
+        *self.host.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -290,19 +310,39 @@ pub(crate) fn rgb_words(img: &Rgb32f) -> &[f32] {
 /// priming sum stays a small share of the work).
 const CHUNK: usize = 16;
 
+/// Largest radius whose vertical box pass sums each pixel's window directly: its result then depends on that
+/// window alone, as the horizontal pass's does, so a cut of the image with that margin gives the same bits (issue
+/// #111). Larger radii slide a running sum over [`box_chunk`] rows, whose rounding a changed row carries down the run.
+pub(crate) const BOX_DIRECT_MAX: usize = 7;
+
+/// Rows each `box_v` thread covers for radius `r` (1: it sums each window directly).
+pub(crate) fn box_chunk(r: usize) -> usize {
+    if r <= BOX_DIRECT_MAX { 1 } else { (2 * r + 1).clamp(CHUNK, 128) }
+}
+
 /// One box pass of radius `r` (clamped edges) over a `w × h` image of `nc` interleaved channels,
-/// `src → dst`: horizontal or vertical.
-fn box_pass(cx: &mut Cx<'_>, horizontal: bool, src: &Buf, dst: &Buf, (w, h): (usize, usize), nc: usize, r: usize) {
-    let chunk = (2 * r + 1).clamp(CHUNK, 128);
-    let p = [w as u32, h as u32, nc as u32, r as u32, chunk as u32];
-    let (k, groups) = if horizontal { ("box_h", groups2(w, h, [64, 4])) } else { ("box_v", groups2(w, h.div_ceil(chunk), [64, 4])) };
+/// `src → dst`: horizontal or vertical. `y0`: the image's first row in the whole image it was cut from (0 for a whole
+/// image), where the vertical pass's runs start.
+fn box_pass(cx: &mut Cx<'_>, (horizontal, r): (bool, usize), src: &Buf, dst: &Buf, (w, h): (usize, usize), nc: usize, y0: usize) {
+    let chunk = box_chunk(r);
+    let phase = (y0 % chunk) as u32;
+    let p = [w as u32, h as u32, nc as u32, r as u32, chunk as u32, phase];
+    let (k, groups) =
+        if horizontal { ("box_h", groups2(w, h, [64, 4])) } else { ("box_v", groups2(w, (h + phase as usize).div_ceil(chunk), [64, 4])) };
     cx.run(k, &p, &[Some(src), Some(dst)], groups);
 }
 
 /// Gaussian blur of a `w × h` image of `nc` interleaved channels: three box passes each way
 /// (`lightcraft_raster::blur::gaussian`).
 pub(crate) fn gaussian(cx: &mut Cx<'_>, src: &Buf, w: usize, h: usize, nc: usize, sigma: f32) -> Buf {
-    let Some(radii) = lightcraft_raster::blur::radii_for(sigma, w, h) else {
+    gaussian_at(cx, src, (w, h), nc, sigma, ((w, h), 0))
+}
+
+/// [`gaussian`] of a `w × h` cut of a whole image (`whole`: its size and the cut's first row): the radii are the whole
+/// image's, and the vertical runs start on its rows.
+pub(crate) fn gaussian_at(cx: &mut Cx<'_>, src: &Buf, (w, h): (usize, usize), nc: usize, sigma: f32, whole: ((usize, usize), usize)) -> Buf {
+    let ((fw, fh), y0) = whole;
+    let Some(radii) = lightcraft_raster::blur::radii_for(sigma, fw, fh) else {
         return cx.copy(src);
     };
     let passes: Vec<(bool, usize)> = radii.iter().map(|r| (true, *r)).chain(radii.iter().map(|r| (false, *r))).filter(|p| p.1 > 0).collect();
@@ -313,7 +353,7 @@ pub(crate) fn gaussian(cx: &mut Cx<'_>, src: &Buf, w: usize, h: usize, nc: usize
     let mut bufs = [cx.gpu.buffer(w * h * nc), cx.gpu.buffer(w * h * nc)];
     for (i, (horizontal, r)) in passes.iter().enumerate() {
         let (out, prev) = (&bufs[i % 2], &bufs[(i + 1) % 2]);
-        box_pass(cx, *horizontal, if i == 0 { src } else { prev }, out, (w, h), nc, *r);
+        box_pass(cx, (*horizontal, *r), if i == 0 { src } else { prev }, out, (w, h), nc, y0);
     }
     let last = (passes.len() - 1) % 2;
     let [a, b] = std::mem::replace(&mut bufs, [cx.gpu.buffer(0), cx.gpu.buffer(0)]);
@@ -322,12 +362,17 @@ pub(crate) fn gaussian(cx: &mut Cx<'_>, src: &Buf, w: usize, h: usize, nc: usize
 
 /// Resample taps of `lightcraft_raster::resample::resize`, packed for the `resize_*` kernels.
 fn taps(src: usize, dst: usize, filter: Filter) -> Vec<u32> {
-    let w = lightcraft_raster::resample::weights(src, dst, filter);
-    let mut t = Vec::with_capacity(dst * 3);
+    pack_taps(&lightcraft_raster::resample::weights(src, dst, filter), 0)
+}
+
+/// Taps (first source index and weights, per output index) packed for the `resize_*` kernels, the source indices less
+/// `shift` (a cut of the source starting there).
+pub(crate) fn pack_taps(w: &[(usize, Vec<f32>)], shift: usize) -> Vec<u32> {
+    let mut t = Vec::with_capacity(w.len() * 3);
     let mut weights = Vec::new();
-    let base = dst * 3;
-    for (lo, ws) in &w {
-        t.extend_from_slice(&[*lo as u32, ws.len() as u32, (base + weights.len()) as u32]);
+    let base = w.len() * 3;
+    for (lo, ws) in w {
+        t.extend_from_slice(&[lo.saturating_sub(shift) as u32, ws.len() as u32, (base + weights.len()) as u32]);
         weights.extend(ws.iter().map(|v| v.to_bits()));
     }
     t.extend(weights);
@@ -340,10 +385,22 @@ pub(crate) fn resize(cx: &mut Cx<'_>, src: &Buf, (sw, sh): (usize, usize), (dw, 
     if (sw, sh) == (dw, dh) {
         return cx.copy(src);
     }
-    let tx = cx.gpu.upload(&taps(sw, dw, filter));
+    resize_with(cx, src, (sw, sh), (dw, dh), nc, (&taps(sw, dw, filter), &taps(sh, dh, filter)))
+}
+
+/// Resample an `nc`-channel `sw × sh` image to `dw × dh` with packed taps ([`pack_taps`]) across and down.
+pub(crate) fn resize_with(
+    cx: &mut Cx<'_>,
+    src: &Buf,
+    (sw, sh): (usize, usize),
+    (dw, dh): (usize, usize),
+    nc: usize,
+    (tx, ty): (&[u32], &[u32]),
+) -> Buf {
+    let tx = cx.gpu.upload(tx);
     let tmp = cx.gpu.buffer(dw * sh * nc);
     cx.run("resize_h", &[sw as u32, sh as u32, dw as u32, nc as u32], &[Some(src), Some(&tx), Some(&tmp)], groups2(dw, sh, [16, 16]));
-    let ty = cx.gpu.upload(&taps(sh, dh, filter));
+    let ty = cx.gpu.upload(ty);
     let out = cx.gpu.buffer(dw * dh * nc);
     cx.run("resize_v", &[dw as u32, sh as u32, dh as u32, nc as u32], &[Some(&tmp), Some(&ty), Some(&out)], groups2(dw, dh, [16, 16]));
     out
@@ -358,7 +415,12 @@ pub(crate) fn map(cx: &mut Cx<'_>, k: &str, n: usize, extra: &[u32], ins: [Optio
 
 /// Self-guided filter of a plane (`local::guided`).
 fn guided(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, sigma: f32, eps: f32) -> Buf {
-    let ab = guided_coeffs(cx, p, w, h, sigma, eps);
+    guided_at(cx, p, (w, h), sigma, eps, ((w, h), 0))
+}
+
+/// [`guided`] of a `w × h` cut of a whole image (`whole`, as [`gaussian_at`]).
+pub(crate) fn guided_at(cx: &mut Cx<'_>, p: &Buf, (w, h): (usize, usize), sigma: f32, eps: f32, whole: ((usize, usize), usize)) -> Buf {
+    let ab = guided_coeffs_at(cx, p, (w, h), sigma, eps, whole);
     let q = cx.gpu.buffer(w * h);
     map(cx, "guided_apply", w * h, &[], [Some(p), Some(&ab), None], &q);
     q
@@ -366,17 +428,22 @@ fn guided(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, sigma: f32, eps: f32) ->
 
 /// Blurred (a, b) coefficients, interleaved.
 fn guided_coeffs(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, sigma: f32, eps: f32) -> Buf {
+    guided_coeffs_at(cx, p, (w, h), sigma, eps, ((w, h), 0))
+}
+
+/// [`guided_coeffs`] of a `w × h` cut of a whole image (`whole`, as [`gaussian_at`]).
+pub(crate) fn guided_coeffs_at(cx: &mut Cx<'_>, p: &Buf, (w, h): (usize, usize), sigma: f32, eps: f32, whole: ((usize, usize), usize)) -> Buf {
     let n = w * h;
     let pp = cx.gpu.buffer(2 * n);
     map(cx, "guided_pre", n, &[], [Some(p), None, None], &pp);
-    let m = gaussian(cx, &pp, w, h, 2, sigma);
+    let m = gaussian_at(cx, &pp, (w, h), 2, sigma, whole);
     let ab = cx.gpu.buffer(2 * n);
     map(cx, "guided_ab", n, &[eps.to_bits()], [Some(&m), None, None], &ab);
-    gaussian(cx, &ab, w, h, 2, sigma)
+    gaussian_at(cx, &ab, (w, h), 2, sigma, whole)
 }
 
 /// Separable median of a plane (`local::median_hv`).
-fn median_hv(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, r: usize) -> Buf {
+pub(crate) fn median_hv(cx: &mut Cx<'_>, p: &Buf, w: usize, h: usize, r: usize) -> Buf {
     if r == 0 || w * h == 0 {
         return cx.copy(p);
     }
@@ -728,6 +795,18 @@ pub fn render(
     }
     let s = &*plan.settings;
     let cached = stages.and_then(|c| c.get(src, plan.geo));
+    // the view's last render at this size, when this one differs from it only in its spots (issue #111)
+    crate::dirty::note_frame(None);
+    let rest = stages
+        // (a dropped dispatch, or a device failing elsewhere, may: they fail an incremental render too, and the checks
+        // must catch them)
+        .filter(|_| fault.is_none_or(|f| matches!(f, crate::Fault::DropWork | crate::Fault::BrokenElsewhere)))
+        .filter(|_| !matches!(want, Want::MaskPlanes(_)) && crate::dirty::eligible(info, &plan))
+        .map(|_| Arc::new(crate::dirty::Rest::of(info, &plan, req)));
+    let start = cached.as_ref().and_then(|e| e.last.clone()).filter(|l| rest.as_deref() == Some(&*l.rest));
+    if profiling() {
+        eprintln!("  gpu dirty: {}", crate::dirty::why(rest.as_deref(), cached.as_ref().and_then(|e| e.last.as_ref())));
+    }
     let mut host = Host::default();
     let mut cx = Cx::new(gpu);
     lap("plan", &mut t, &mut cx);
@@ -757,40 +836,15 @@ pub fn render(
     lap("sample", &mut t, &mut cx);
 
     // 2. white balance, defringe, spots, noise reduction
-    let mut colour_noise = cached.as_ref().and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key);
-    let lin = match cached.as_ref().and_then(|e| e.lin.clone()).filter(|(k, _)| *k == plan.lin_key) {
-        Some((_, b)) => b,
-        None => {
-            if colour_noise.is_none() {
-                colour_noise = lightcraft_pipeline::colour_noise(src, info, &plan).map(|n| (plan.noise_key, n));
-            }
-            let kept = stages.map(|c| (c.spots.get(src, plan.geo), c.spots_cpu.get(src, plan.geo))).unwrap_or_default();
-            let (b, k) =
-                linear(&mut cx, &sampled, info, &plan, &mut host, (kept.0.as_deref(), kept.1.as_deref()), colour_noise.as_ref().map(|c| &c.1));
-            if let Some(c) = stages {
-                let device = k.0.as_ref().map_or(0, |k| crate::spots_keep::bytes(k));
-                c.spots.put(src, plan.geo, k.0, device);
-                let host = k.1.as_ref().map_or(0, |k| k.bytes());
-                c.spots_cpu.put(src, plan.geo, k.1, host);
-            }
-            Arc::new(b)
-        }
-    };
+    let at = ViewAt { stages, src, cached: cached.as_ref(), start: start.as_ref() };
+    let Linear { lin, tiles: t_lin, post, colour_noise } = linear_stage(&mut cx, &at, &sampled, info, &plan, &mut host);
     lap("wb/nr", &mut t, &mut cx);
 
-    // 3. spatial planes
-    let mut planes = match cached.map(|e| e.planes) {
-        Some(p) if p.key == plan.lin_key => p,
-        _ => Planes { key: plan.lin_key, ..Default::default() },
-    };
-    let mut prep = prepare(&mut cx, &lin, &plan, req, &mut planes);
-    // a window dehazes with the whole frame's airlight
-    if let Some(a) = plan.fixed_air {
-        prep.air = a;
-    }
+    // 3. spatial planes (`t_out`: the output tiles that change from `start`'s)
+    let (planes, prep, t_out) = planes_stage(&mut cx, &at, (&lin, t_lin.as_ref()), &plan, req);
     lap("planes", &mut t, &mut cx);
     if let Some(c) = stages {
-        c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), colour_noise, planes });
+        c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), post, colour_noise, planes, last: None });
     }
 
     // 4. masks
@@ -843,47 +897,93 @@ pub fn render(
         return None; // a malformed parameter block failed the render: the CPU fallback redoes it
     }
     let aux = gpu.upload(&aux);
-    // cleared, so that work which never ran cannot pass for an image (see the check below)
-    let out = cx.zeroed(if deep { 3 * n } else { n });
+    // the last output where only `t_out` changes (issue #111; never a float render: its output is three words a pixel,
+    // and `Rest` holds the request, so a float render never starts from an 8-bit one); else cleared, so that work which
+    // never ran cannot pass for an image (see the check below)
+    let from = start.as_ref().zip(t_out.as_ref()).filter(|_| !deep);
+    let out = Arc::new(match from {
+        Some((l, _)) => cx.copy(&l.out),
+        None => cx.zeroed(if deep { 3 * n } else { n }),
+    });
     if fault == Some(crate::Fault::Validation) {
         // a dispatch the device rejects (too many workgroups)
         cx.run("box_h", &[0; 5], &[Some(&aux), Some(&out)], [gpu.device.limits().max_compute_workgroups_per_dimension + 1, 1, 1]);
     }
     // in bands of rows: each dispatch (and submission) stays short on a slow GPU
-    let rows = (BAND_PIXELS / w.max(1) / 16 * 16).max(16); // whole workgroups: bands never overlap
     let y0_at = crate::params::index("Y0").unwrap_or(0);
+    let x0_at = crate::params::index("X0").unwrap_or(0);
     let mut p = p;
-    for y0 in (0..h).step_by(rows).filter(|_| fault != Some(crate::Fault::DropWork)) {
-        p[y0_at] = y0 as u32;
-        cx.run(
-            "main",
-            &p,
-            &[
-                Some(&lin),
-                Some(&prep.log_l),
-                Some(&prep.base),
-                prep.clarity.as_deref(),
-                tex_buf.as_deref(),
-                prep.dark.as_deref(),
-                masks.as_ref(),
-                Some(&aux),
-                Some(&out),
-            ],
-            groups2(w, rows.min(h - y0), [16, 16]),
+    let whole = [[0, 0, w, h]];
+    let rects = from.map_or_else(|| whole.to_vec(), |(_, tiles)| tiles.rects());
+    if from.is_some() {
+        // the copied output is written everywhere: cleared where this render writes, so that work which never runs
+        // there still fails the checks below (and the display's)
+        for r in &rects {
+            crate::dirty::cut::clear_rect(&mut cx, 1, &out, w, r);
+        }
+    }
+    if stages.is_some() {
+        crate::dirty::note_tiles(from.map_or_else(|| crate::dirty::Tiles::all((w, h)).len(), |(_, tiles)| tiles.count()));
+    }
+    if profiling() && stages.is_some() {
+        let all = crate::dirty::Tiles::all((w, h)).len();
+        eprintln!(
+            "  gpu tiles: {} of {all} (linear {:?}, start {})",
+            from.map_or(all, |(_, t)| t.count()),
+            t_lin.as_ref().map(|t| t.count()),
+            start.is_some()
         );
+    }
+    for r in rects.iter().filter(|_| fault != Some(crate::Fault::DropWork)) {
+        let rw = r[2].saturating_sub(r[0]);
+        let rows = (BAND_PIXELS / rw.max(1) / 16 * 16).max(16); // whole workgroups: bands never overlap
+        for y0 in (r[1]..r[3]).step_by(rows) {
+            p[y0_at] = y0 as u32;
+            p[x0_at] = r[0] as u32;
+            cx.run(
+                "main",
+                &p,
+                &[
+                    Some(&lin),
+                    Some(&prep.log_l),
+                    Some(&prep.base),
+                    prep.clarity.as_deref(),
+                    tex_buf.as_deref(),
+                    prep.dark.as_deref(),
+                    masks.as_ref(),
+                    Some(&aux),
+                    Some(&out),
+                ],
+                groups2(rw, rows.min(r[3] - y0), [16, 16]),
+            );
+        }
     }
     if deep {
         let rendered = read_deep(&mut cx, &out, &plan, req);
         lap("finish + readback (deep)", &mut t, &mut cx);
         return rendered.map(Output::Image);
     }
+    // what to keep for the next render, once this one is known to be good
+    let keep_last = || {
+        let (Some(c), Some(rest)) = (stages, rest.clone()) else { return };
+        let frame = crate::dirty::next_frame();
+        let air = prep.air.to_bits();
+        c.set_last(src, plan.geo, crate::dirty::Last { rest, lin_key: plan.lin_key, out: out.clone(), frame, air });
+        let changed =
+            from.filter(|_| plan.keep.is_none() && req.overlay == lightcraft_pipeline::Overlay::None).map(|(l, _)| (l.frame, rects.clone()));
+        crate::dirty::note_frame(Some(crate::dirty::FrameNote { frame, changed }));
+    };
     // (recorded before the readback below, which submits it)
     let fitted = match want {
         Want::ImageFit(max) if plan.keep.is_none() && req.overlay == lightcraft_pipeline::Overlay::None => fit_on_device(&mut cx, &out, (w, h), max),
         _ => None,
     };
     if want == Want::Display && can_display(gpu, &plan, req) {
-        return to_texture(&mut cx, &out, w, h).map(|(frame, histogram)| Output::Display { frame, histogram });
+        let shown = to_texture(&mut cx, &out, w, h);
+        if shown.is_some() {
+            keep_last();
+        }
+        return shown.map(|(frame, histogram)| Output::Display { frame, histogram });
     }
     // the alpha a mask overlay shows: copied out before the readback below submits
     let overlay_mask = req.overlay.mask(s).map(|m| {
@@ -937,6 +1037,7 @@ pub fn render(
         fail(FailKind::Blank, "the GPU result is entirely black; rendering it on the CPU to be sure".into());
         return None;
     }
+    keep_last();
     let mut image = image;
     let overlay_mask = overlay_mask.map(|r| match r {
         Ok(b) => cx.read_plane(&b, w, h),
@@ -969,6 +1070,103 @@ pub fn render(
         return None;
     }
     Some(Output::ImageFit(rendered, Some(Rgba8 { width: fw, height: fh, data })))
+}
+
+/// A view's stages and what they kept for this render's size: the entry, and the last render when this one differs
+/// from it only in its spots (issue #111).
+struct ViewAt<'a> {
+    stages: Option<&'a GpuStages>,
+    src: &'a Arc<Rgb32f>,
+    cached: Option<&'a Entry>,
+    start: Option<&'a crate::dirty::Last>,
+}
+
+/// What the linear stage made (`linear_stage`).
+struct Linear {
+    /// The white-balanced, retouched, denoised image.
+    lin: Arc<Buf>,
+    /// The tiles of it that differ from the one `start` was made from (when it was).
+    tiles: Option<crate::dirty::Tiles>,
+    /// The image after the spots it was made from.
+    post: std::sync::Weak<Buf>,
+    /// The joint colour NR's noise model of the whole frame (`Entry::colour_noise`).
+    colour_noise: Option<(u64, JointNoise)>,
+}
+
+/// The white-balanced, retouched, denoised image and what goes with it ([`Linear`]).
+fn linear_stage(cx: &mut Cx<'_>, at: &ViewAt<'_>, sampled: &Buf, info: &SourceInfo, plan: &Plan<'_>, host: &mut Host) -> Linear {
+    let (src, size) = (at.src, (plan.w, plan.h));
+    let old_lin = at.cached.and_then(|e| e.lin.clone());
+    let old_post = at.cached.map_or_else(std::sync::Weak::new, |e| e.post.clone());
+    let mut colour_noise = at.cached.and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key);
+    if let Some((_, b)) = old_lin.clone().filter(|(k, _)| *k == plan.lin_key) {
+        let same = at.start.is_some_and(|l| l.lin_key == plan.lin_key).then(|| crate::dirty::Tiles::none(size));
+        return Linear { lin: b, tiles: same, post: old_post, colour_noise };
+    }
+    if colour_noise.is_none() {
+        colour_noise = lightcraft_pipeline::colour_noise(src, info, plan).map(|n| (plan.noise_key, n));
+    }
+    let kept = at.stages.map(|c| (c.spots.get(src, plan.geo), c.spots_cpu.get(src, plan.geo))).unwrap_or_default();
+    let (pre, k, redone) = linear(cx, sampled, info, plan, host, (kept.0.as_deref(), kept.1.as_deref()));
+    let post = k.0.as_ref().map_or_else(std::sync::Weak::new, |k| Arc::downgrade(&k.post));
+    if let Some(c) = at.stages {
+        let device = k.0.as_ref().map_or(0, |k| crate::spots_keep::bytes(k));
+        c.spots.put(src, plan.geo, k.0, device);
+        let host = k.1.as_ref().map_or(0, |k| k.bytes());
+        c.spots_cpu.put(src, plan.geo, k.1, host);
+    }
+    let noise = colour_noise.as_ref().map(|c| &c.1);
+    // only the boxes the spots rewrote, when the kept linear image was made from the image they started from
+    let dirty = match (at.start, &redone, &old_lin) {
+        (Some(l), Some(r), Some((k, old))) if *k == l.lin_key && std::sync::Weak::ptr_eq(&r.from, &old_post) => {
+            crate::dirty::linear(cx, &pre, old, plan, &crate::dirty::Tiles::of(size, &r.rects), noise)
+        }
+        _ => None,
+    };
+    let (lin, tiles) = match dirty {
+        Some((b, tiles)) => (Arc::new(b), Some(tiles)),
+        None => (Arc::new(denoise(cx, pre, plan, noise)), None),
+    };
+    Linear { lin, tiles, post, colour_noise }
+}
+
+/// The planes of `lin` (with its tiles that changed from `start`'s, only there) and the output tiles that change from
+/// `start`'s output (`None`: all of them, or no `start`).
+fn planes_stage(
+    cx: &mut Cx<'_>,
+    at: &ViewAt<'_>,
+    (lin, t_lin): (&Arc<Buf>, Option<&crate::dirty::Tiles>),
+    plan: &Plan<'_>,
+    req: &RenderRequest,
+) -> (Planes, Prep, Option<crate::dirty::Tiles>) {
+    let old = at.cached.map(|e| e.planes.clone());
+    let dirty = match (t_lin, &old, at.start) {
+        (Some(tiles), Some(p), Some(l)) if p.key == l.lin_key && p.key != plan.lin_key => crate::dirty::planes(cx, lin, plan, req, p, tiles),
+        _ => None,
+    };
+    let (planes, mut prep, mut t_out) = match dirty {
+        Some((planes, prep, tiles)) => (planes, prep, Some(tiles)),
+        None => {
+            let mut planes = match old {
+                Some(p) if p.key == plan.lin_key => p,
+                _ => Planes { key: plan.lin_key, ..Default::default() },
+            };
+            let prep = prepare(cx, lin, plan, req, &mut planes);
+            // (the same linear image gives the same planes)
+            (planes, prep, t_lin.filter(|tiles| tiles.count() == 0).cloned())
+        }
+    };
+    // a window dehazes with the whole frame's airlight
+    if let Some(a) = plan.fixed_air {
+        prep.air = a;
+    }
+    // an airlight that moved changes every pixel
+    if let (Some(l), Some(tiles)) = (at.start, &mut t_out)
+        && l.air != prep.air.to_bits()
+    {
+        *tiles = crate::dirty::Tiles::all((plan.w, plan.h));
+    }
+    (planes, prep, t_out)
 }
 
 static DEVICE_FITS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -1131,8 +1329,8 @@ fn unwritten(data: &[[u8; 4]]) -> usize {
 /// What a view keeps of its last render's spots, on the device and on the host.
 type KeptSpots = (Option<Arc<Kept<Buf, Buf>>>, Option<Arc<CpuKept>>);
 
-/// The white-balanced, retouched, denoised image, drawing only the spots an edit reaches when `kept` (the view's last
-/// spots) allows; with what to keep for the next render (`colour_noise`: see `denoise`).
+/// The white-balanced, retouched image before noise reduction, drawing only the spots an edit reaches when `kept` (the
+/// view's last spots) allows; with what to keep for the next render, and what the spots redrew (issue #111).
 fn linear(
     cx: &mut Cx<'_>,
     sampled: &Buf,
@@ -1140,9 +1338,9 @@ fn linear(
     plan: &Plan<'_>,
     host: &mut Host,
     kept: (Option<&Kept<Buf, Buf>>, Option<&CpuKept>),
-    colour_noise: Option<&JointNoise>,
-) -> (Buf, KeptSpots) {
+) -> (Buf, KeptSpots, Option<crate::dirty::Redone>) {
     let mut keep: KeptSpots = (None, None);
+    let mut redone = None;
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let s = &*plan.settings;
@@ -1161,7 +1359,7 @@ fn linear(
         cx.gpu.upload(rgb_words(&img))
     } else {
         // `lin_cpu`'s order: white balance, defringe, spots, red eye
-        let (out, k) = crate::spots_keep::spots(cx, info, plan, kept.0, |cx| {
+        let (out, k, r) = crate::spots_keep::spots(cx, info, plan, kept.0, |cx| {
             let m = local::wb_matrix_for(info, s);
             let mut p = vec![m.is_some() as u32];
             p.extend(m.unwrap_or_default().iter().flatten().map(|v| v.to_bits()));
@@ -1170,6 +1368,7 @@ fn linear(
             defringe(cx, out, plan)
         });
         keep.0 = k;
+        redone = r;
         if plan.eyes.is_empty() {
             out
         } else {
@@ -1180,7 +1379,7 @@ fn linear(
             eyed
         }
     };
-    (denoise(cx, img, plan, colour_noise), keep)
+    (img, keep, redone)
 }
 
 /// Defringe (`optics::defringe`) of the white-balanced image.
@@ -1276,7 +1475,7 @@ fn histogram(cx: &mut Cx<'_>, out: &Buf, w: usize, region: (usize, usize, usize,
 
 /// Noise reduction (`local::denoise`). `colour_noise`: the whole frame's noise model for the joint colour
 /// NR (`lightcraft_pipeline::colour_noise`); `None`: measured on `img`.
-fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>, colour_noise: Option<&JointNoise>) -> Buf {
+pub(crate) fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>, colour_noise: Option<&JointNoise>) -> Buf {
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let (lum, col) = local::nr_params(&plan.settings, plan.detail_scale);
@@ -1315,7 +1514,7 @@ fn denoise(cx: &mut Cx<'_>, img: Buf, plan: &Plan<'_>, colour_noise: Option<&Joi
 }
 
 /// Run a `nrcj.wgsl` kernel on `n` items with inputs `a`, `b` and output `out`.
-fn nrcj(cx: &mut Cx<'_>, k: &str, n: usize, p: &[u32], a: &Buf, b: Option<&Buf>, out: &Buf) {
+pub(crate) fn nrcj(cx: &mut Cx<'_>, k: &str, n: usize, p: &[u32], a: &Buf, b: Option<&Buf>, out: &Buf) {
     cx.run(k, p, &[Some(a), b, Some(out)], groups1(n));
 }
 
@@ -1410,11 +1609,7 @@ fn color_nr_joint(
     }
     let sigma = p.passes.last().map_or(0.0, |q| q.sigma);
     let plan = nrc_joint::scale_plan(sigma, w, h);
-    // Rows a kept pixel depends on: a wrong value at a band edge (treated as an image border) moves
-    // inwards by delta per vertical sweep, two sweeps per scale; at the farthest row it reaches, a
-    // scale's weight and path still read up to delta rows further (at most the largest delta); the
-    // guide's blur and pilot reach a few rows, the speck brake two more. Hence 2·Σdelta + max delta + 10.
-    let halo = plan.iter().map(|d| 2 * d.0).sum::<usize>() + plan.last().map_or(0, |d| d.0) + 10;
+    let halo = joint_halo(&plan);
     // Memory: the whole output (3 values per pixel) is held besides the input; a band then holds about
     // 12 values per pixel (guide 3, two chroma buffers 2 + 2, paths 2, weights 2; up to 12 while the
     // speck brake and the guide run). The budget for both together is `band_budget_from` the device memory
@@ -1470,9 +1665,18 @@ fn color_nr_joint(
     Some(out)
 }
 
+/// Rows (and columns) a pixel of the joint colour NR with the scales `plan` depends on: a wrong value at a band edge
+/// (treated as an image border) moves inwards by delta per sweep, two sweeps per scale; at the farthest row it reaches,
+/// a scale's weight and path still read up to delta rows further (at most the largest delta); the guide's blur and
+/// pilot reach a few rows, the speck brake two more. Hence 2·Σdelta + max delta + 10. The sweeps go across as they go
+/// down, so a cut of the image with this margin on every side gives the whole image's result inside it (issue #111).
+pub(crate) fn joint_halo(plan: &[(usize, f32)]) -> usize {
+    plan.iter().map(|d| 2 * d.0).sum::<usize>() + plan.last().map_or(0, |d| d.0) + 10
+}
+
 /// The filtered chroma pairs of rows `b0 .. b0 + bh` of the image, treated as an image of their own.
 #[allow(clippy::too_many_arguments)]
-fn joint_band(
+pub(crate) fn joint_band(
     cx: &mut Cx<'_>,
     img: &Buf,
     w: usize,
@@ -1537,15 +1741,15 @@ fn joint_band(
 /// The planes the per-pixel stage reads.
 pub(crate) struct Prep {
     pub(crate) log_l: Arc<Buf>,
-    base: Arc<Buf>,
-    clarity: Option<Arc<Buf>>,
-    texture: Option<Arc<Buf>>,
+    pub(crate) base: Arc<Buf>,
+    pub(crate) clarity: Option<Arc<Buf>>,
+    pub(crate) texture: Option<Arc<Buf>>,
     /// Process V3: the sharpening band.
-    sharpen: Option<Arc<Buf>>,
-    dark: Option<Arc<Buf>>,
+    pub(crate) sharpen: Option<Arc<Buf>>,
+    pub(crate) dark: Option<Arc<Buf>>,
     /// Blurred chromaticity (local Moiré / Noise).
     pub(crate) chroma: Option<Arc<Buf>>,
-    air: f32,
+    pub(crate) air: f32,
 }
 
 /// The spatial planes (`local::prepare`), reusing those in `planes`.
@@ -1772,7 +1976,7 @@ mod tests {
             // noise reduction's radii, Texture's and Dehaze's at 6000 px
             for r in [2, 11, 120] {
                 for (k, horizontal) in [("box_h", true), ("box_v", false)] {
-                    time(&format!("{k} nc={nc} r={r}"), &mut |cx| box_pass(cx, horizontal, &src, &out, (w, h), nc, r));
+                    time(&format!("{k} nc={nc} r={r}"), &mut |cx| box_pass(cx, (horizontal, r), &src, &out, (w, h), nc, 0));
                 }
             }
         }
