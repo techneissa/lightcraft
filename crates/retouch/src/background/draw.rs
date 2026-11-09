@@ -91,8 +91,9 @@ fn blurred(levels: &[(f64, Grid)], rho: f64, sharp: [f32; 3], gx: i64, gy: i64) 
 pub(crate) fn draw(img: &mut Rgb32f, scene: &Scene<'_>, prep: &Prepared, k: &Strength, with: &Swap) {
     // (everything kept is made from the pixels before they change)
     let shares = (k.blur > 0.0).then(|| prep.shares(scene));
-    let levels = (k.blur > 0.0).then(|| prep.levels(img));
-    let clean = (k.clean > 0.0).then(|| prep.clean(img));
+    let all_swapped = k.swap >= 1.0 && (matches!(with, Swap::Colour { .. }) || scene.backdrop.is_some());
+    let levels = (k.blur > 0.0 && !all_swapped).then(|| prep.levels(img));
+    let clean = (k.clean > 0.0 && !all_swapped).then(|| prep.clean(img));
     let colour = match with {
         Swap::Colour { rgb } => Some(colour_linear(*rgb)),
         _ => None,
@@ -130,11 +131,13 @@ pub(crate) fn draw(img: &mut Rgb32f, scene: &Scene<'_>, prep: &Prepared, k: &Str
                 (Some(s), true) => f64::from(k.blur) * prep.radius * f64::from(s.data.get(i).copied().unwrap_or(1.0)),
                 _ => 0.0,
             };
+            // (all swapped: what was behind is not read)
+            let covered = swap >= 1.0;
             let mut bg = match levels {
-                Some(l) if rho > 0.0 => blurred(l, rho, behind, gx, gy),
+                Some(l) if rho > 0.0 && !covered => blurred(l, rho, behind, gx, gy),
                 _ => behind,
             };
-            if let Some(c) = clean.and_then(|g| g.read(gx, gy, MIN_WEIGHT)) {
+            if let Some(c) = clean.filter(|_| !covered).and_then(|g| g.read(gx, gy, MIN_WEIGHT)) {
                 let (lb, lc) = (luma(behind), luma(c).max(1e-4));
                 // (by channel: a crease darkens the paper's own colour, a coloured object differs in one channel)
                 let dev = (0..3).map(|ch| (behind[ch] - c[ch]).abs()).fold(0.0f32, f32::max) / lc;
