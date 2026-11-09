@@ -36,6 +36,8 @@ pub mod bm3d;
 #[cfg(not(target_arch = "wasm32"))]
 mod ctx;
 #[cfg(not(target_arch = "wasm32"))]
+mod dirty;
+#[cfg(not(target_arch = "wasm32"))]
 mod exit;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod faces;
@@ -52,6 +54,8 @@ mod spots_keep;
 #[cfg(not(target_arch = "wasm32"))]
 mod vram;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use dirty::{FrameNote, TILE, take_frame_note, tiles_rendered};
 #[cfg(not(target_arch = "wasm32"))]
 pub use render::{DisplayFrame, GpuStages, Output, device_fits};
 /// The wgpu the renderer is built on (the same crate eframe uses: hosts hand over its device).
@@ -730,6 +734,7 @@ fn run(
                 if let Some(e) = &ext {
                     e.clear();
                 }
+                dirty::note_frame(None);
                 let what = match &r {
                     Some(Output::Image(r)) => format!("{}×{}", r.image.width, r.image.height),
                     Some(Output::Display { frame, .. }) => format!("{}×{}", frame.width, frame.height),
