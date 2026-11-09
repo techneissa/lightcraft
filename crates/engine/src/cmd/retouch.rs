@@ -217,6 +217,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 let c = "retouch.refine.stroke";
                 let id = target(s, p, c)?;
                 let f = feature_param(p, c)?;
+                if f.stage == lightcraft_develop::retouch::Stage::Geometry {
+                    // (it moves pixels in the geometry step, which the Refine brush does not wrap yet)
+                    return Err(bad(c, format!("{} has no Refine brush yet", f.label)));
+                }
                 let stroke = stroke_param(p, c, !f.add_parts.is_empty())?;
                 let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
                 let face = face_param(p, c)?;

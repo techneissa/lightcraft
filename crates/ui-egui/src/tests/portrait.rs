@@ -341,8 +341,9 @@ fn the_refine_brush_paints_strokes_for_a_feature() {
         h.step();
     }
     for f in FEATURES {
-        assert!(rect_of(&mut h, &format!("portrait:refine.{}.reduce", f.key)).is_some(), "{} has Reduce", f.key);
-        assert_eq!(rect_of(&mut h, &format!("portrait:refine.{}.add", f.key)).is_some(), !f.add_parts.is_empty(), "{} Add", f.key);
+        let geometry = f.stage == lightcraft_develop::retouch::Stage::Geometry;
+        assert_eq!(rect_of(&mut h, &format!("portrait:refine.{}.reduce", f.key)).is_some(), !geometry, "{} has Reduce", f.key);
+        assert_eq!(rect_of(&mut h, &format!("portrait:refine.{}.add", f.key)).is_some(), !geometry && !f.add_parts.is_empty(), "{} Add", f.key);
     }
     for key in [
         "portrait.wrinkles",
@@ -397,7 +398,7 @@ fn the_refine_brush_paints_strokes_for_a_feature() {
     click(&mut h, "portrait:refine.skin.reduce");
     assert_eq!(h.app.portrait_refine.feature, None, "put down");
     // the command checks what it gets
-    for bad in [json!({"feature": "nope"}), json!({"feature": "reshape", "mode": "add"}), json!({"mode": "erase"}), json!({"show": 3})] {
+    for bad in [json!({"feature": "nope"}), json!({"feature": "reshape"}), json!({"mode": "erase"}), json!({"show": 3})] {
         let r = h.request("engine.execute", json!({"command": "portrait.refine", "params": bad}), T);
         assert_eq!(r["ok"], false, "{bad}: {r}");
     }

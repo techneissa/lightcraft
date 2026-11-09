@@ -548,7 +548,8 @@ fn refine_strokes_are_commands_with_one_undo_step_each() {
         json!({"feature": "skin", "points": [[0.1]]}),
         json!({"feature": "skin", "points": [[0.1, 0.1]], "size": "big"}),
         json!({"feature": "skin", "points": [[0.1, 0.1]], "face": 9}),
-        json!({"feature": "reshape", "mode": "add", "points": [[0.1, 0.1]]}),
+        json!({"feature": "reshape", "points": [[0.1, 0.1]]}),
+        json!({"feature": "glare", "mode": "add", "points": [[0.1, 0.1]], "face": 7}),
     ] {
         assert!(s.execute("retouch.refine.stroke", &bad).is_err(), "{bad}");
     }

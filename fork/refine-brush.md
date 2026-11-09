@@ -29,7 +29,7 @@ those for every face, strokes included); otherwise to every face.
   work; one with strokes runs through `refine::run_refined`. The panel draws the row from the tab's section loop
   (`panels/portrait.rs` → `panels/portrait/refine.rs`). A feature declares nothing; `Feature::ADD_PARTS` (the part
   masks Add widens) defaults to the first of its `PARTS`, so a feature lane changes it with one line when that is
-  not the right one (Eyes: Eye Whites; Teeth and Lips: Teeth; Face Reshape reads no mask, so it has no Add).
+  not the right one (Eyes: Eye Whites; Teeth and Lips: Teeth).
 - **Reduce** saves the pixels under the strokes before the feature runs and mixes the result back toward them by
   the cut there (1 at a full Reduce: the saved bits). **Restore** lowers the cut and the added mask. **Add** widens
   each mask in `ADD_PARTS` (the larger of the mask and the painted coverage) for the face nearest the stroke, so
@@ -54,6 +54,8 @@ strength?, show?}`; widgets `portrait:refine.<feature>.<mode>`, `portrait:refine
 
 ## Limits
 
+- Face Reshape has no Refine row yet: it moves pixels in the geometry step (next to Transform), outside the run the
+  brush wraps; `retouch.refine.stroke` refuses it. Its warp would need to read the cut as a weight.
 - Strokes don't turn with Rotate Left / Right or a flip (as Remove spots don't).
 - Add widens masks; it can't make Blemishes find spots its once-per-photo search did not find, and it does nothing
   for a feature that reads no mask.

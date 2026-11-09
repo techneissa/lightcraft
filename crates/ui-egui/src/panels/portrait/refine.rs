@@ -42,6 +42,11 @@ pub(super) fn strokes_for<'a>(d: &'a DevelopSettings, input: &Input, face: Optio
     own.and_then(|o| d.retouch.faces.get(o)).map_or(&d.retouch.refine, |o| &o.refine)
 }
 
+/// Whether the Refine brush works on `f`: every feature the retouch run applies (not the geometry step).
+pub(super) fn refinable(f: &FeatureInfo) -> bool {
+    f.stage != lightcraft_develop::retouch::Stage::Geometry
+}
+
 /// The mode a stroke paints in: `mode`, or with ⌥ held its other one.
 fn swapped(mode: RefineMode, alt: bool) -> RefineMode {
     match (mode, alt) {
@@ -61,6 +66,10 @@ fn colour(mode: RefineMode) -> Color32 {
 
 /// The Refine row of feature `f`'s section.
 pub(super) fn row(cx: &mut super::Ctx<'_>, f: &FeatureInfo) {
+    // (Face Reshape moves pixels in the geometry step, outside the run Refine wraps: no brush for it yet)
+    if !refinable(f) {
+        return;
+    }
     let keys = cx.keys.as_ref().map(|k| k as &dyn KeyMap);
     let count = strokes_for(cx.d, &cx.input, cx.face, keys).count(Some(f.key));
     let tool = cx.app.portrait_refine.clone();
@@ -157,6 +166,9 @@ pub(super) fn command(app: &mut LightcraftApp, p: &Value) -> Result<Value, Strin
                 .iter()
                 .find(|f| f.key == key)
                 .ok_or_else(|| format!("{id}: unknown feature `{key}` ({})", FEATURES.iter().map(|f| f.key).collect::<Vec<_>>().join("|")))?;
+            if !refinable(f) {
+                return Err(format!("{id}: {} has no Refine brush yet", f.label));
+            }
             tool.feature = Some(f.key);
         }
     }
