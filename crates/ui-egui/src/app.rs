@@ -124,6 +124,7 @@ impl LightcraftApp {
             reflection_open: true,
             reflection_photo: None,
             reflection_glare: Default::default(),
+            portrait_refine: Default::default(),
             import: None,
             scan: None,
             scans_stopping: Default::default(),

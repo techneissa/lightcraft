@@ -10,6 +10,8 @@ pub(super) fn active(app: &LightcraftApp) -> Option<bool> {
     match app.ui.right {
         RightPanel::Masking if app.ui.tool == "brush" => Some(false),
         RightPanel::Remove => Some(true),
+        // (the Portrait tab's Refine brush is the Masking brush)
+        RightPanel::Portrait if app.portrait_refine.feature.is_some() => Some(false),
         _ => None,
     }
 }
