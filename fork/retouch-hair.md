@@ -36,8 +36,7 @@ fills each from what is beside it:
   box; reference tones from the face's whole grid.
 - The Refine brush (#99) adds or takes away its strokes in `hair::region::weights`.
 
-How it does, on four of techneissa's portraits and three CC0 portraits from Wikimedia Commons (pictures in the PR and
-in `$WORKSPACE/assets/lightcraft/shots/portrait/hair-stray/`):
+How it does, on four private test portraits and three CC0 portraits from Wikimedia Commons (pictures in the PR):
 
 - A flyaway cloud against a pale sky ([Long-haired woman laughing](https://commons.wikimedia.org/wiki/File:Long-haired_woman_laughing_(Unsplash).jpg)):
   most strands go; at 1:1 the densest crossings leave faint blotches.
@@ -48,8 +47,8 @@ in `$WORKSPACE/assets/lightcraft/shots/portrait/hair-stray/`):
   small changes in the out-of-focus flowers, not visible at full view.
 - Curly hair, beards, stubble, a balding crown, clear glasses: left alone apart from a few isolated hairs.
 
-Time (Apple M4 Pro, other work running, load average 14–27; the example's step alone, one face, faces from the
-`face_input` example): the search once per photo 89–390 ms at a draft's 1936 px, the slider on kept fills 2.2–6.6 ms.
+Time (on a test Mac with other work running; the example's step alone, one face, faces from the `face_input`
+example): the search once per photo 89–390 ms at a draft's 1936 px, the slider on kept fills 2.2–6.6 ms.
 No model runs.
 
 ## Branch
