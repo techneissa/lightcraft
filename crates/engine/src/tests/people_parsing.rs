@@ -22,7 +22,7 @@ fn picture(seed: u8) -> RgbImage {
 /// One person whose Hair is a square.
 fn fake_parse(set: ModelSet) -> Parsing {
     let mut person = Person { face: Some(NormRect::new(0.4, 0.2, 0.6, 0.5)), face_score: 0.9, ..Person::default() };
-    person.parts.insert(Part::Hair, vec![Plane { rect: NormRect::new(0.3, 0.1, 0.7, 0.3), width: 4, height: 2, data: vec![1.0; 8] }]);
+    person.parts.insert(Part::Hair, vec![Plane { rect: NormRect::new(0.3, 0.1, 0.7, 0.3), width: 4, height: 2, data: vec![1.0; 8], split: false }]);
     Parsing { model_set: set.id().into(), model_version: set.version(), width: 24, height: 16, people: vec![person] }
 }
 
@@ -212,7 +212,7 @@ fn a_mask_drawn_small_and_large_has_the_same_outline() {
     // a mask whose edge (one cell, 13 px at 2048) sits a few pixels left of the photo's edge, within the filter's reach
     let mut person = Person::default();
     let data: Vec<f32> = (0..160 * 4).map(|i| if i % 160 < 87 { 0.0 } else { 1.0 }).collect();
-    person.parts.insert(Part::Hair, vec![Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: 160, height: 4, data }]);
+    person.parts.insert(Part::Hair, vec![Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: 160, height: 4, data, split: false }]);
     let parsing = Parsing { people: vec![person], width: 2048, height: 1365, ..Parsing::default() };
     let (rgb, w, h) = crate::cmd::face_detect::render_rgb(&mut s, id, crate::people_parsing::PARSE_EDGE).unwrap();
     let parsed = RgbImage::new(w, h, rgb).unwrap();

@@ -84,15 +84,16 @@ pub(super) fn refine_person(p: &Person, others: &[&Person], r: NormRect, matte: 
         let w = 1.0 - t * t * (3.0 - 2.0 * t);
         let mut v = w * matte.coverage(x, y) + (1.0 - w) * o;
         // (never into another person: where someone else is, this person may only lose)
-        if v > o && others.iter().any(|q| q.sample(Part::EntirePerson, x, y) > 0.5) {
+        // (the others joined as the masks draw them: two people's soft edges at 0.45 each are someone, #124)
+        if v > o && lightcraft_parsing::joined(others.iter().copied(), Part::EntirePerson, x, y) > 0.5 {
             v = o;
         }
         entire.push(v.clamp(0.0, 1.0));
         let g = if hair_near.get(i).copied().unwrap_or(false) { (v - o).max(0.0) } else { 0.0 };
         gained.push(g);
     }
-    let gained = gained.iter().any(|g| *g > 0.05).then_some(Plane { rect: r, width: gw, height: gh, data: gained });
-    Some(Refined { entire: Plane { rect: r, width: gw, height: gh, data: entire }, gained })
+    let gained = gained.iter().any(|g| *g > 0.05).then_some(Plane { rect: r, width: gw, height: gh, data: gained, split: false });
+    Some(Refined { entire: Plane { rect: r, width: gw, height: gh, data: entire, split: false }, gained })
 }
 
 /// Which cells lie within `band` cells of the person's `part` (none when they have no such part).

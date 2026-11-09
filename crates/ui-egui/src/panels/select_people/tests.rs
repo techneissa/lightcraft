@@ -27,7 +27,7 @@ pub(super) fn person(x: f32, name: Option<&str>) -> Person {
     for (i, part) in Part::ALL.into_iter().enumerate() {
         let y = 0.1 + i as f32 * 0.05;
         let r = if part == Part::EntirePerson { NormRect::new(x, 0.1, x + 0.25, 0.95) } else { NormRect::new(x + 0.02, y, x + 0.2, y + 0.04) };
-        q.parts.insert(part, vec![Plane { rect: r, width: 8, height: 8, data: vec![1.0; 64] }]);
+        q.parts.insert(part, vec![Plane { rect: r, width: 8, height: 8, data: vec![1.0; 64], split: false }]);
     }
     q
 }

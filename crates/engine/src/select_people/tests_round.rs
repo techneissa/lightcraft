@@ -157,7 +157,7 @@ fn entire_person_and_background_select_the_whole_photo() {
         .collect();
     soft.parts.insert(
         Part::EntirePerson,
-        vec![lightcraft_parsing::Plane { rect: lightcraft_parsing::NormRect::new(0.2, 0.2, 0.6, 0.6), width: n, height: n, data }],
+        vec![lightcraft_parsing::Plane { rect: lightcraft_parsing::NormRect::new(0.2, 0.2, 0.6, 0.6), width: n, height: n, data, split: false }],
     );
     let p = parse(vec![soft, person(0.65, 0.3, 0.2, None)]);
     let (main, detail) = build(&p, &Selection::of(None, &[Pick::EntirePerson, Pick::Background]), Orientation::Normal).unwrap();
@@ -276,7 +276,7 @@ fn one_person_alone_gets_no_copy_of_the_main_grid() {
     let mut q = person(0.1, 0.1, 0.8, None);
     for planes in q.parts.values_mut() {
         let r = planes[0].rect;
-        planes[0] = lightcraft_parsing::Plane { rect: r, width: 1500, height: 1500, data: vec![1.0; 1500 * 1500] };
+        planes[0] = lightcraft_parsing::Plane { rect: r, width: 1500, height: 1500, data: vec![1.0; 1500 * 1500], split: false };
     }
     let p = parse(vec![q]);
     let (main, detail) = build(&p, &Selection::of(Some(0), &[Pick::EntirePerson]), Orientation::Normal).unwrap();
