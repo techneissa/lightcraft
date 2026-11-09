@@ -32,6 +32,19 @@ struct Row {
     id: String,
     name: String,
     person: Option<String>,
+    /// Saved from All Faces: it goes to every face, and follows nobody.
+    any_face: bool,
+}
+
+/// What a portrait preset's row says after its name: the person it follows, "All Faces", or "By Face" (a face
+/// known only to recognition). `None` for a preset that is not a portrait one.
+pub(crate) fn tag(p: &lightcraft_develop::Preset) -> Option<String> {
+    let part = pp::split(p).1?;
+    Some(match part.who.person {
+        Some(n) => super::overlay::title_case(&n),
+        None if part.is_any_face() => tr("All Faces").to_string(),
+        None => tr("By Face").to_string(),
+    })
 }
 
 fn rows(app: &crate::LightcraftApp) -> Vec<Row> {
@@ -39,10 +52,14 @@ fn rows(app: &crate::LightcraftApp) -> Vec<Row> {
         .presets
         .iter()
         .filter(|p| pp::is_portrait(p))
-        .map(|p| Row {
-            id: p.id.clone(),
-            name: p.name.clone(),
-            person: pp::split(p).1.and_then(|x| x.who.person).map(|n| super::overlay::title_case(&n)),
+        .map(|p| {
+            let part = pp::split(p).1;
+            Row {
+                id: p.id.clone(),
+                name: p.name.clone(),
+                person: part.as_ref().and_then(|x| x.who.person.as_deref()).map(super::overlay::title_case),
+                any_face: part.as_ref().is_none_or(pp::Portrait::is_any_face),
+            }
         })
         .collect()
 }
@@ -61,7 +78,7 @@ pub(super) fn body(cx: &mut super::Ctx<'_>) {
         };
         ui.label(RichText::new(tr_format!("Save {who}'s Settings", who = from)).size(12.0).color(t.text_label));
         let field = TextField::singleline("portrait:presetName", &mut draft.name).hint(tr("Preset Name")).width(ui.available_width() - 4.0).show(ui);
-        let r = ui.checkbox(&mut draft.others, tr("Include Other Settings"));
+        let r = ui.checkbox(&mut draft.others, tr("Include the Photo's Other Settings"));
         register_response("portrait:presetOthers", r.rect, &r);
         let named = !draft.name.trim().is_empty();
         let save = ui.add_enabled(named, egui::Button::new(tr("Save Portrait Preset")));
@@ -83,9 +100,12 @@ pub(super) fn body(cx: &mut super::Ctx<'_>) {
             ui.horizontal(|ui| {
                 let label = ui.label(RichText::new(&row.name).size(12.5).color(t.text));
                 register(ui, format!("portrait:preset:{n}"), label.rect);
-                if let Some(p) = &row.person {
-                    ui.label(RichText::new(p).size(11.5).color(t.text_dim));
-                }
+                let tag = match &row.person {
+                    Some(p) => p.clone(),
+                    None if row.any_face => tr("All Faces").to_string(),
+                    None => tr("By Face").to_string(),
+                };
+                ui.label(RichText::new(tag).size(11.5).color(t.text_dim));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     let more = ui.menu_button("…", |ui| {
                         if let Some(p) = &row.person
@@ -119,7 +139,7 @@ pub(super) fn body(cx: &mut super::Ctx<'_>) {
         {
             ui.add_space(8.0);
             let name = who.person.as_deref().map(super::overlay::title_case).unwrap_or_else(|| super::overlay::face_name(f, i));
-            let b = ui.button(tr_format!("Apply to Every Photo of {who}", who = name)).on_hover_text(tr("This face's settings"));
+            let b = ui.button(tr_format!("Apply to Every Photo of {who}", who = name));
             register_response("portrait:applyToPerson", b.rect, &b);
             if b.clicked() {
                 message = done(cx.app.run("retouch.applyToPerson", json!({"face": i, "id": cx.photo.0})));
@@ -132,15 +152,42 @@ pub(super) fn body(cx: &mut super::Ctx<'_>) {
     }
 }
 
-/// "Applied to 12 photos", or the error.
+/// What Apply to Every Photo did: "Applied to 12 photos", the photos that could not take it, or the error. `None`
+/// while it runs in the background (its row is in the activity stack; [`pump`] says how it ended).
 fn done(r: Result<Value, String>) -> Option<String> {
-    Some(match r {
-        Ok(v) => {
+    let v = match r {
+        Ok(v) => v,
+        Err(e) => return Some(e),
+    };
+    match v["state"].as_str() {
+        Some("running") => None,
+        Some("cancelled") => Some(tr("Stopped: no photo was changed").to_string()),
+        _ => {
             let n = v["count"].as_u64().unwrap_or(0);
-            if n == 1 { tr("Applied to 1 photo").to_string() } else { tr_format!("Applied to {n} photos", n = n) }
+            let applied = if n == 1 { tr("Applied to 1 photo").to_string() } else { tr_format!("Applied to {n} photos", n = n) };
+            let failed = v["failed"].as_array().map_or(0, Vec::len);
+            Some(match failed {
+                0 => applied,
+                1 => tr_format!("{applied}; 1 photo could not take it (too many faces with their own settings)", applied = applied),
+                f => tr_format!("{applied}; {f} photos could not take it (too many faces with their own settings)", applied = applied, f = f),
+            })
         }
-        Err(e) => e,
-    })
+    }
+}
+
+/// Every frame: finish Apply to Every Photo running in the background, and say how it went.
+pub(crate) fn pump(app: &mut crate::LightcraftApp, ctx: &egui::Context) {
+    if !app.session.portrait_job_running() {
+        return;
+    }
+    match app.session.portrait_pump() {
+        Some(r) => {
+            if let Some(m) = done(r.map_err(|e| e.to_string())) {
+                app.toast(ctx, m);
+            }
+        }
+        None => ctx.request_repaint_after(std::time::Duration::from_millis(100)),
+    }
 }
 
 /// After `preset.apply`: how many photos did not have the person, when some did not.
@@ -152,7 +199,8 @@ fn skipped(v: &Value) -> Option<String> {
 
 /// The People view's menu on a person's page: each portrait preset, to every photo of `person`.
 pub(super) fn person_menu(app: &mut crate::LightcraftApp, ui: &mut egui::Ui, person: &str) {
-    let list = rows(app);
+    // a preset from All Faces follows nobody: not offered here
+    let list: Vec<Row> = rows(app).into_iter().filter(|r| !r.any_face).collect();
     if list.is_empty() {
         return;
     }
@@ -168,5 +216,20 @@ pub(super) fn person_menu(app: &mut crate::LightcraftApp, ui: &mut egui::Ui, per
     register(ui, "person:portraitPreset", menu.response.rect);
     if let Some(m) = message {
         app.toast(ui.ctx(), m);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    /// The toast says how many photos changed and how many could not take it; nothing while it runs on.
+    #[test]
+    fn the_message_says_what_changed_and_what_could_not() {
+        assert_eq!(super::done(Ok(json!({"state": "done", "count": 3, "failed": []}))).as_deref(), Some("Applied to 3 photos"));
+        let m = super::done(Ok(json!({"state": "done", "count": 2, "failed": [{"id": 4, "why": "full"}]}))).unwrap();
+        assert!(m.starts_with("Applied to 2 photos; 1 photo could not take it"), "{m}");
+        assert_eq!(super::done(Ok(json!({"state": "running"}))), None);
+        assert_eq!(super::done(Err("nothing was changed: x".into())).as_deref(), Some("nothing was changed: x"));
     }
 }

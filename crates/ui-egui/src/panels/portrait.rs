@@ -109,6 +109,16 @@ pub(crate) fn apply_preset_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, pers
     presets::person_menu(app, ui, person);
 }
 
+/// Every frame: Apply to Every Photo running in the background (`portrait/presets.rs`).
+pub(crate) fn pump(app: &mut LightcraftApp, ctx: &egui::Context) {
+    presets::pump(app, ctx);
+}
+
+/// What a portrait preset's row in the Presets panel says after its name (`portrait/presets.rs`).
+pub(crate) fn preset_tag(p: &lightcraft_develop::Preset) -> Option<String> {
+    presets::tag(p)
+}
+
 /// The face picked for `photo` (`None`: All).
 pub(crate) fn picked(ctx: &egui::Context, photo: PhotoId) -> Option<usize> {
     ctx.data(|d| d.get_temp::<usize>(pick_id(photo)))
