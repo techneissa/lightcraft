@@ -183,7 +183,7 @@ impl PeopleParsing {
     }
 
     /// The hair edges to draw parses with now, and their edge model, if one other than Current is chosen for people
-    /// (and here).
+    /// (and here: BiRefNet Matting installed, Apple Vision on a Mac that runs it).
     fn matting(&self) -> Option<(crate::hair_edges::HairEdges, crate::hair_edges::Edge)> {
         use crate::hair_edges::{Edge, EdgeKind};
         let edges = lock(&self.inner.hair_edges).clone()?;
@@ -302,8 +302,8 @@ impl PeopleParsing {
         let set = self.model_set();
         let matting = self.matting();
         // (a parse with matting edges is its own version, so switching the edge never reads the other's file)
-        let version = match &matting {
-            Some((_, edge)) => format!("{}+{}-{}", set.version(), crate::hair_edges::VERSION, edge.id()),
+        let version = match matting.as_ref().and_then(|(_, e)| crate::hair_edges::vision::version(*e)) {
+            Some(edge) => format!("{}+{edge}", set.version()),
             None => set.version(),
         };
         let key = cache::key(&img, &hints, &version);
@@ -396,6 +396,7 @@ impl PeopleParsing {
                 let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let p = this.run(set, &models, &img, &hints, &cancelled)?;
                     match &matting {
+                        Some((edges, crate::hair_edges::Edge::Vision)) => crate::hair_edges::vision::people_edged(edges, p, &img, &flag),
                         Some((edges, edge)) => hair_edged(edges, *edge, p, &img, &flag),
                         None => Ok(p),
                     }

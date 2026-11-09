@@ -119,10 +119,12 @@ pub(super) fn run(state: &mut State, shared: &Shared, job: &mut Job, placement: 
     let (Some(edges), Some(base)) = (matting, base.as_ref()) else { return Ok(base) };
     job.render = saved;
     let input = render(job)?;
-    let m = edges.matte_for(edge, kind, &input.rgb, input.w, input.h, &job.cancel).map_err(|e| match job.cancel.load(Ordering::Relaxed) {
+    let m = edges.subject_matte(edge, &input.rgb, input.w, input.h, &job.cancel).map_err(|e| match job.cancel.load(Ordering::Relaxed) {
         true => Failure::Cancelled,
         false => Failure::Other(format!("Hair edges: {e}")),
     })?;
+    // (Vision found no subject: the part keeps its own edge)
+    let Some(m) = m else { return Ok(Some(base.clone())) };
     Ok(crate::hair_edges::subject_edge(base, &m, edge))
 }
 
