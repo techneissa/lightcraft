@@ -227,8 +227,10 @@ pub fn reads(m: &Mask) -> (bool, bool) {
             MaskShape::Prompt { seg, detail, .. } => (seg.is_some() || !detail.is_empty(), false),
             MaskShape::Object { hint, seg, detail, .. } => (!hint.is_empty() || seg.is_some() || !detail.is_empty(), false),
             MaskShape::Brush { strokes } => (strokes.iter().any(|s| s.auto_mask), false),
-            // (the heuristic reads the exposure too; with a stored segmentation or a source matte it doesn't: counted as if it did)
-            MaskShape::LuminanceRange { .. } | MaskShape::ColorRange { .. } | MaskShape::Sky { .. } => (true, true),
+            // Sky: the heuristic reads the exposure (`shape_alpha`); a stored segmentation is filtered by the log
+            // luminance before exposure and doesn't (a source matte doesn't either: counted as if it did)
+            MaskShape::Sky { seg, detail, .. } => (true, seg.is_none() && detail.is_empty()),
+            MaskShape::LuminanceRange { .. } | MaskShape::ColorRange { .. } => (true, true),
             MaskShape::Subject { .. } | MaskShape::Background { .. } | MaskShape::People { .. } => (true, false),
         };
         image |= i;

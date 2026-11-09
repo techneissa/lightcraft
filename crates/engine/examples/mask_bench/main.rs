@@ -5,7 +5,7 @@
 //! `overlay`, `hash`; `CONFIG=<word>` keeps the configurations whose name has the word: `one`,
 //! `submasks`, `long`, `dense`, `pressure`, `auto`, `cpumask`; `ALL=1` runs Auto Mask at every
 //! stroke count, which is slow on the CPU; `LOUPE=3500x2200` the loupe's render size for the
-//! `loupe` rows; `SIZE=6000` is a 24 MP source).
+//! `loupe` rows; `SIZE=6000` is a 24 MP source; `MASK=<word>` keeps the `cpumask` rows whose name has the word).
 //!
 //! Every row is one render of a ~2.5 MP loupe (1920 × 1280) with a warm stage cache, as the loupe
 //! does while editing:

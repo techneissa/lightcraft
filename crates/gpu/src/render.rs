@@ -326,9 +326,10 @@ pub(crate) fn rgb_words(img: &Rgb32f) -> &[f32] {
 /// priming sum stays a small share of the work).
 const CHUNK: usize = 16;
 
-/// Largest radius whose vertical box pass sums each pixel's window directly: its result then depends on that
-/// window alone, as the horizontal pass's does, so a cut of the image with that margin gives the same bits (issue
-/// #111). Larger radii slide a running sum over [`box_chunk`] rows, whose rounding a changed row carries down the run.
+/// Largest radius whose box pass sums each pixel's window directly: its result then depends on that window alone, so
+/// a cut of the image with that margin gives the same bits (issue #111). Larger radii slide a running sum over
+/// [`box_chunk`] rows (vertical) or pixels (horizontal: `box_h_run`, whose runs start on the row's first pixel, so a cut
+/// of whole rows is unaffected), whose rounding a changed value carries down the run.
 pub(crate) const BOX_DIRECT_MAX: usize = 7;
 
 /// Rows each `box_v` thread covers for radius `r` (1: it sums each window directly).
@@ -343,8 +344,12 @@ fn box_pass(cx: &mut Cx<'_>, (horizontal, r): (bool, usize), src: &Buf, dst: &Bu
     let chunk = box_chunk(r);
     let phase = (y0 % chunk) as u32;
     let p = [w as u32, h as u32, nc as u32, r as u32, chunk as u32, phase];
-    let (k, groups) =
-        if horizontal { ("box_h", groups2(w, h, [64, 4])) } else { ("box_v", groups2(w, (h + phase as usize).div_ceil(chunk), [64, 4])) };
+    let (k, groups) = match (horizontal, r > BOX_DIRECT_MAX) {
+        // (a large radius slides a running sum along runs of `chunk` pixels, as `box_v` does down a column)
+        (true, true) => ("box_h_run", groups2(w.div_ceil(chunk), h, [64, 4])),
+        (true, false) => ("box_h", groups2(w, h, [64, 4])),
+        (false, _) => ("box_v", groups2(w, (h + phase as usize).div_ceil(chunk), [64, 4])),
+    };
     cx.run(k, &p, &[Some(src), Some(dst)], groups);
 }
 

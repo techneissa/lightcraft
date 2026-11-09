@@ -7,11 +7,13 @@ use lightcraft_develop::BrushStroke;
 use lightcraft_pipeline::Plan;
 use lightcraft_pipeline::finish::{MASK_TERMS, effect_terms_with};
 use lightcraft_pipeline::geometry::Frame;
-use lightcraft_pipeline::masks::{AlphaKeys, BRUSH_ENTRIES, Mattes, alpha_key, brush_base, brush_chain, brush_dabs, note_evaluation, note_stroke};
+use lightcraft_pipeline::masks::{
+    AlphaKeys, BRUSH_ENTRIES, Mattes, alpha_key, brush_base, brush_chain, brush_dabs, note_evaluation, note_filtered, note_stroke,
+};
 use lightcraft_raster::Rgb32f;
 
 use crate::ctx::{Buf, groups1, groups2};
-use crate::render::{Cx, Host, Prep, gaussian, map};
+use crate::render::{Cx, Host, Prep, gaussian_at, map};
 
 /// The alphas of the last render's masks and the brush parts they were built from, on the device: the
 /// GPU twin of `lightcraft_pipeline::masks::AlphaCache`, kept next to the view's other stages. An
@@ -162,38 +164,46 @@ fn stamp_stroke(cx: &mut Cx<'_>, env: &BrushEnv<'_>, s: &BrushStroke, plane: &Bu
     p[18] = 1;
     cx.run("stroke", &p, &[Some(env.lin), Some(env.log_l), Some(&aux), Some(&own), None], grid);
     let (sigma, eps) = lightcraft_pipeline::masks::auto_refine(bd.r);
-    let refined = guided_cross(cx, env.log_l, &own, w, h, sigma, eps, Combine::Max);
+    // The filter only moves alpha within its reach of the stroke (two Gaussians in a row: twice the sum of the box radii,
+    // and a little over): it runs on that cut of the frame, not on all of it. Past the cut the refined alpha is 0.
+    let reach = lightcraft_raster::blur::radii_for(sigma, w, h).map_or(0, |r| 2 * r.iter().sum::<usize>() + 2);
+    let (cx0, cy0) = (x0.saturating_sub(reach), y0.saturating_sub(reach));
+    let (cx1, cy1) = (x1.saturating_add(reach).min(w), y1.saturating_add(reach).min(h));
+    let (cw, ch) = (cx1 - cx0, cy1 - cy0);
+    let cut = |cx: &mut Cx<'_>, plane: &Buf| {
+        let out = cx.gpu.buffer(cw * ch);
+        map(cx, "crop_k", cw * ch, &[cw as u32, w as u32, cx0 as u32, cy0 as u32], [Some(plane), None, None], &out);
+        out
+    };
+    let (guide, alone) = (cut(cx, env.log_l), cut(cx, &own));
+    note_filtered(cw * ch);
+    let ab = guided_ab(cx, &guide, &alone, (cw, ch), ((w, h), cy0), sigma, eps);
     let op = if bd.erase { 2 } else { 1 };
-    cx.run("combine", &[n as u32, 0, 0, op], &[None, None, None, Some(&refined), Some(plane)], groups1(n));
+    map(cx, "xguided_stamp", cw * ch, &[cw as u32, w as u32, cx0 as u32, cy0 as u32, op], [Some(&guide), Some(&ab), Some(&alone)], plane);
     true
 }
 
-/// How [`guided_cross`] combines the filtered plane with its input.
-#[derive(Clone, Copy)]
-enum Combine {
-    /// The larger of the two (Auto Mask strokes).
-    Max,
-    /// The input moved towards the filtered plane by this much (Refine Edges).
-    Mix(f32),
-}
-
-/// Cross guided filter (`masks::guided_cross`) of `p` steered by `guide`, combined with `p`.
+/// The blurred coefficients of the cross guided filter (`masks::guided_cross`) of `p` steered by `guide`, both `w × h` cuts of a
+/// frame (`whole`: its size and the cut's first row, as `gaussian_at`): interleaved (a, b), the model `q = a · guide + b`.
 #[allow(clippy::too_many_arguments)]
-fn guided_cross(cx: &mut Cx<'_>, guide: &Buf, p: &Buf, w: usize, h: usize, sigma: f32, eps: f32, how: Combine) -> Buf {
+fn guided_ab(cx: &mut Cx<'_>, guide: &Buf, p: &Buf, (w, h): (usize, usize), whole: ((usize, usize), usize), sigma: f32, eps: f32) -> Buf {
     let n = w * h;
     let (m0, m1) = (cx.gpu.buffer(2 * n), cx.gpu.buffer(2 * n));
     map(cx, "xguided_pre", n, &[0], [Some(guide), Some(p), None], &m0);
     map(cx, "xguided_pre", n, &[1], [Some(guide), Some(p), None], &m1);
-    let (b0, b1) = (gaussian(cx, &m0, w, h, 2, sigma), gaussian(cx, &m1, w, h, 2, sigma));
+    let (b0, b1) = (gaussian_at(cx, &m0, (w, h), 2, sigma, whole), gaussian_at(cx, &m1, (w, h), 2, sigma, whole));
     let ab = cx.gpu.buffer(2 * n);
     map(cx, "xguided_ab", n, &[eps.to_bits()], [Some(&b0), Some(&b1), None], &ab);
-    let ab = gaussian(cx, &ab, w, h, 2, sigma);
+    gaussian_at(cx, &ab, (w, h), 2, sigma, whole)
+}
+
+/// Cross guided filter (`masks::guided_cross`) of `p` steered by `guide`, with `p` moved towards it by `mix` (Refine Edges).
+#[allow(clippy::too_many_arguments)]
+fn guided_cross(cx: &mut Cx<'_>, guide: &Buf, p: &Buf, w: usize, h: usize, sigma: f32, eps: f32, mix: f32) -> Buf {
+    let n = w * h;
+    let ab = guided_ab(cx, guide, p, (w, h), ((w, h), 0), sigma, eps);
     let q = cx.gpu.buffer(n);
-    let mode = match how {
-        Combine::Max => [0, 0],
-        Combine::Mix(k) => [1, k.to_bits()],
-    };
-    map(cx, "xguided_apply", n, &mode, [Some(guide), Some(&ab), Some(p)], &q);
+    map(cx, "xguided_apply", n, &[1, mix.to_bits()], [Some(guide), Some(&ab), Some(p)], &q);
     q
 }
 
@@ -343,7 +353,7 @@ pub(crate) fn masks(
             let k = (m.refine / 100.0).clamp(0.0, 1.0) as f32;
             let sigma = (0.04 * frame.output_long(w, h) as f32 * k).max(1.0);
             let plane = cx.slice(&alpha, mi * n, n);
-            let refined = guided_cross(cx, &prep.log_l, &plane, w, h, sigma, 0.02, Combine::Mix(k.sqrt()));
+            let refined = guided_cross(cx, &prep.log_l, &plane, w, h, sigma, 0.02, k.sqrt());
             cx.copy_into(&refined, &alpha, mi * n);
         }
         // (the mask's Amount scales its effect terms, not its alpha: see `effect_terms`)

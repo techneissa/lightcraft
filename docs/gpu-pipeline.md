@@ -500,7 +500,9 @@ bounding box. Each 16 × 16 tile first picks, 256 dabs at a time, the dabs that 
 memory, so a stroke of tens of thousands of dabs costs what its box and its dabs near each pixel cost; the
 old kernel took at most 4,096 dabs across the whole mask and sent the part to the CPU past that. A dab is
 five words (x, y, radius, hard core, flow), pen pressure applied on the CPU, so pressure stays on the
-device. An Auto Mask stroke is stamped alone, refined with the guided filter and combined in order. A part
+device. An Auto Mask stroke is stamped alone, refined with the guided filter and combined in order; the filter runs
+on a cut of the frame, the stroke's box plus twice the filter's reach, and `xguided_stamp` combines the refined
+alpha back into the part (`lightcraft_pipeline::masks::auto_pixels_filtered` counts the pixels filtered). A part
 whose strokes extend a held part stamps only the new strokes over a copy of its plane; the last four parts
 stay on the device.
 
@@ -521,7 +523,11 @@ A mask without a kernel (Subject, Object, Sky and Background selections, Color R
 from the image read back once; its alpha is then kept with the view's stages like any other, so the effect ticks that follow
 read back only the finished picture and its histogram (`lightcraft_gpu::readbacks` counts them; tested). A Sky, Luminance or
 Color Range mask reads the global Exposure, so an Exposure drag evaluates it again on the CPU, with the image read back, each
-tick.
+tick; a Sky mask with a stored segmentation reads none (`masks::reads`), so only the heuristic Sky (no model) does.
+
+The box blur's horizontal pass sums each pixel's window directly up to radius 7 (`box_h`), and past that slides a running sum
+along runs of up to 128 pixels (`box_h_run`, as `box_v` does down a column): Refine Edges' filter (sigma up to about 140 px
+at 3468 × 2179) is a dozen passes of radius 100 and more.
 
 The keys that find a mask's kept alpha and brush parts (`masks::alpha_key`, `masks::brush_chain`) hash the raw bits of every
 number with a word-at-a-time hasher (`masks/key.rs`), not the `{:?}` text of every stroke, which cost more than a cache hit on a
