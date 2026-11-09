@@ -245,7 +245,7 @@ impl<'a> Scene<'a> {
             .faces
             .iter()
             .zip(faces)
-            .map(|(f, w)| crate::FaceCtx { face: *w, index: f.index, bounds: f.bounds, landmarks: f.landmarks.clone(), size: f.size })
+            .map(|(f, w)| crate::FaceCtx { face: w, index: f.index, bounds: f.bounds, landmarks: f.landmarks.clone(), size: f.size })
             .collect();
         Scene::from_parts(list, self.width, self.height, self.view())
     }

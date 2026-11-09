@@ -50,7 +50,7 @@ those for every face, strokes included); otherwise to every face.
 Commands: `retouch.refine.stroke {feature, mode, points, size?, feather?, flow?, strength?, pressure?, face?}`,
 `retouch.refine.clear {feature?, face?}`, `retouch.refine.list {face?}`; UI: `portrait.refine {feature?, mode?,
 strength?, show?}`; widgets `portrait:refine.<feature>.<mode>`, `portrait:refine.<feature>.clear`,
-`portrait:refine.strength`, `portrait:refineStrokes`.
+`slider:portrait.refineStrength`, `portrait:refineStrokes`.
 
 ## Limits
 

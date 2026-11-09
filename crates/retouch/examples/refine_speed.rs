@@ -25,7 +25,8 @@ fn main() {
     let mut plain = Retouch::default();
     plain.global.set("retouch.skin.smoothness", 60.0);
     let mut refined = plain.clone();
-    let line = |mode, x: f64| RefineStroke { mode, points: (0..60).map(|i| (x, 0.3 + i as f64 * 0.006)).collect(), size: 0.02, ..RefineStroke::default() };
+    let line =
+        |mode, x: f64| RefineStroke { mode, points: (0..60).map(|i| (x, 0.3 + i as f64 * 0.006)).collect(), size: 0.02, ..RefineStroke::default() };
     refined.refine.push("skin", line(RefineMode::Reduce, 0.45));
     refined.refine.push("skin", line(RefineMode::Add, 0.66));
     let time = |r: &Retouch| {

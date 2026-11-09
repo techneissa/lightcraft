@@ -81,12 +81,17 @@ pub(super) fn row(cx: &mut super::Ctx<'_>, f: &FeatureInfo) {
                 pick = Some((!on).then_some(mode));
             }
         }
-        if count > 0 {
+    });
+    if count > 0 {
+        cx.ui.horizontal(|ui| {
+            ui.add_space(10.0);
+            let n = if count == 1 { tr("1 Stroke").to_string() } else { crate::i18n::tr_format!("{n} Strokes", n = count) };
+            ui.label(egui::RichText::new(n).size(11.5).weak());
             let r = ui.small_button(tr("Clear")).on_hover_text(tr("Clear Refine Strokes"));
             register(ui, format!("portrait:refine.{}.clear", f.key), r.rect);
             clear = r.clicked();
-        }
-    });
+        });
+    }
     if let Some(choice) = pick {
         let p = match choice {
             Some(m) => json!({"feature": f.key, "mode": m.name()}),
@@ -104,21 +109,26 @@ pub(super) fn row(cx: &mut super::Ctx<'_>, f: &FeatureInfo) {
     }
 }
 
-/// Size, Feather and Flow (the Masking brush's) and Strength, while the brush is in hand.
+/// Size, Feather and Flow (the Masking brush's, as its panel draws them) and Strength, while the brush is in hand.
 fn brush_sliders(app: &mut LightcraftApp, ui: &mut egui::Ui) {
-    ui.horizontal(|ui| {
-        ui.add_space(10.0);
-        ui.vertical(|ui| {
-            let mut shown = (app.ui.brush_size * 400.0).clamp(1.0, 100.0);
-            if ui.add(egui::Slider::new(&mut shown, 1.0..=100.0).text(tr("Size")).integer()).changed() {
-                app.ui.brush_size = shown / 400.0;
+    use lightcraft_develop::controls::{ControlSpec, Section, Track};
+    for (id, label, min, max, get) in [
+        ("ui.brushSize", "Size", 1.0, 100.0, f64::from(app.ui.brush_size * 400.0)),
+        ("ui.brushFeather", "Feather", 0.0, 100.0, f64::from(app.ui.brush_feather)),
+        ("ui.brushFlow", "Flow", 1.0, 100.0, f64::from(app.ui.brush_flow)),
+        ("portrait.refineStrength", "Strength", 0.0, 100.0, f64::from(app.portrait_refine.strength)),
+    ] {
+        let s = ControlSpec { id, label, section: Section::Portrait, min, max, default: min, step: 1.0, decimals: 0, track: Track::Plain };
+        let out = crate::widgets::slider(ui, &s, get, true, None);
+        if let Some(v) = out.value {
+            match id {
+                "ui.brushSize" => app.ui.brush_size = (v / 400.0) as f32,
+                "ui.brushFeather" => app.ui.brush_feather = v as f32,
+                "ui.brushFlow" => app.ui.brush_flow = v as f32,
+                _ => app.portrait_refine.strength = v as f32,
             }
-            ui.add(egui::Slider::new(&mut app.ui.brush_feather, 0.0..=100.0).text(tr("Feather")).integer());
-            ui.add(egui::Slider::new(&mut app.ui.brush_flow, 1.0..=100.0).text(tr("Flow")).integer());
-            let r = ui.add(egui::Slider::new(&mut app.portrait_refine.strength, 0.0..=100.0).text(tr("Strength")).integer());
-            register(ui, "portrait:refine.strength", r.rect);
-        });
-    });
+        }
+    }
 }
 
 /// The "Show Refine Strokes" switch, under the line that says which faces the sliders change.
@@ -205,16 +215,46 @@ pub(crate) fn overlay(app: &LightcraftApp, ui: &egui::Ui, map: &CanvasMap, d: &D
     }
 }
 
+/// A stroke `r` points wide on each side of `pts`, with round ends: a band along the points and a half disc past
+/// each end (no part painted twice at the ends, so a translucent colour stays even there).
 fn path(p: &egui::Painter, pts: &[Pos2], r: f32, c: Color32) {
-    match pts {
+    // (points closer than a pixel add nothing but kinks)
+    let mut line: Vec<Pos2> = Vec::with_capacity(pts.len());
+    for q in pts {
+        if line.last().is_none_or(|l: &Pos2| l.distance(*q) >= 1.0) {
+            line.push(*q);
+        }
+    }
+    match line.as_slice() {
         [] => {}
         [one] => {
             p.circle_filled(*one, r, c);
         }
         _ => {
-            p.add(egui::Shape::line(pts.to_vec(), Stroke::new(2.0 * r, c)));
+            p.add(egui::Shape::line(line.clone(), Stroke::new(2.0 * r, c)));
+            if let (Some(a), Some(b), Some(y), Some(z)) = (line.first(), line.get(1), line.get(line.len().saturating_sub(2)), line.last()) {
+                cap(p, *a, *a - *b, r, c);
+                cap(p, *z, *z - *y, r, c);
+            }
         }
     }
+}
+
+/// The half disc of radius `r` at `at` on the side `out` points to.
+fn cap(p: &egui::Painter, at: Pos2, out: egui::Vec2, r: f32, c: Color32) {
+    let d = out.normalized();
+    if !d.x.is_finite() || !d.y.is_finite() || r <= 0.0 {
+        return;
+    }
+    let n = egui::vec2(-d.y, d.x);
+    let steps = 16;
+    let pts: Vec<Pos2> = (0..=steps)
+        .map(|i| {
+            let a = std::f32::consts::PI * (i as f32 / steps as f32 - 0.5);
+            at + n * (r * a.sin()) + d * (r * a.cos())
+        })
+        .collect();
+    p.add(egui::Shape::convex_polygon(pts, c, Stroke::NONE));
 }
 
 /// The brush on the photo while a Refine brush is in hand: its cursor, the stroke being painted and its commit.

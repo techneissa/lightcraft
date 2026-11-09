@@ -318,7 +318,7 @@ fn the_refine_brush_paints_strokes_for_a_feature() {
     h.step();
     click(&mut h, "portrait:refine.skin.reduce");
     assert_eq!(h.app.portrait_refine.feature, Some("skin"));
-    assert!(rect_of(&mut h, "portrait:refine.strength").is_some(), "the brush's sliders show");
+    assert!(rect_of(&mut h, "slider:portrait.refineStrength").is_some(), "the brush's sliders show");
     let drag = |h: &mut Headless, y: f64| {
         let r = h.request(
             "ui.pointer",
