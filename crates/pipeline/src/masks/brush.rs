@@ -13,6 +13,19 @@ use crate::geometry::Frame;
 
 thread_local! {
     static STROKES: Cell<usize> = const { Cell::new(0) };
+    static FILTERED: Cell<usize> = const { Cell::new(0) };
+}
+
+/// Count `px` pixels filtered by an Auto Mask stroke's guided filter ([`auto_pixels_filtered`]): for a renderer that
+/// filters strokes itself.
+pub fn note_filtered(px: usize) {
+    FILTERED.with(|c| c.set(c.get().saturating_add(px)));
+}
+
+/// How many pixels Auto Mask strokes' guided filters have covered on this thread: a test checks that a small stroke
+/// filters a small part of the frame.
+pub fn auto_pixels_filtered() -> usize {
+    FILTERED.with(Cell::get)
 }
 
 /// How many strokes have been stamped into a brush plane on this thread: a test counts what adding
@@ -226,6 +239,7 @@ fn stamp(s: &BrushStroke, frame: &Frame, img: &Rgb32f, log_l: &Plane, out: &mut 
                 d.copy_from_slice(src);
             }
         }
+        note_filtered(guide.width * guide.height);
         let q = guided_cross(&guide, &padded, sigma, eps);
         region = (x0.saturating_sub(reach).max(cx0), y0.saturating_sub(reach).max(cy0), (x1 + reach).min(cx1), (y1 + reach).min(cy1));
         let (rx0, ry0, rx1, ry1) = region;

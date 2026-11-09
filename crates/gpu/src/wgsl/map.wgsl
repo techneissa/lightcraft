@@ -121,6 +121,39 @@ fn xguided_apply(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workg
     }
 }
 
+// Cut a rectangle out of plane a into dst. P: count (1), crop width (1), source width (2), first column (3),
+// first row (4).
+@compute @workgroup_size(256)
+fn crop_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
+    let i = lin_index(g, nw);
+    if (i >= pu(0u)) {
+        return;
+    }
+    let cw = pu(1u);
+    dst[i] = a[(pu(4u) + i / cw) * pu(2u) + pu(3u) + i % cw];
+}
+
+// An Auto Mask stroke refined inside a rectangle of the frame (the `xguided_apply` of a cut, a: guide, b: blurred
+// coefficients, c: the stroke's own alpha, all of the cut) and combined into the part dst (the whole frame): the larger
+// of the two, then P[5] = 1: max into the part, 2: subtract from it (`combine`). Outside the cut the refined alpha is 0,
+// which changes neither. P: count (0), cut width (1), frame width (2), first column (3), first row (4), op (5).
+@compute @workgroup_size(256)
+fn xguided_stamp(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {
+    let i = lin_index(g, nw);
+    if (i >= pu(0u)) {
+        return;
+    }
+    let cw = pu(1u);
+    let j = (pu(4u) + i / cw) * pu(2u) + pu(3u) + i % cw;
+    let q = clamp(b[2u * i] * a[i] + b[2u * i + 1u], 0.0, 1.0);
+    let v = max(c[i], q);
+    if (pu(5u) == 1u) {
+        dst[j] = max(dst[j], v);
+    } else {
+        dst[j] = dst[j] * (1.0 - v);
+    }
+}
+
 // White balance: 3×3 matrix (P[1] = has matrix, P[2..11] row-major), clamped at 0.
 @compute @workgroup_size(256)
 fn wb_k(@builtin(global_invocation_id) g: vec3<u32>, @builtin(num_workgroups) nw: vec3<u32>) {

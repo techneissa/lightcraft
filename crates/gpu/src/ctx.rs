@@ -31,7 +31,7 @@ const MODULES: &[Module] = &[
     Module {
         src: include_str!("wgsl/blur.wgsl"),
         bindings: &[("src", false, "f32"), ("dst", true, "f32")],
-        entries: &["box_h", "box_v", "minmax", "median_h", "median_v"],
+        entries: &["box_h", "box_h_run", "box_v", "minmax", "median_h", "median_v"],
     },
     Module {
         src: include_str!("wgsl/gauss.wgsl"),
@@ -61,6 +61,8 @@ const MODULES: &[Module] = &[
             "xguided_pre",
             "xguided_ab",
             "xguided_apply",
+            "xguided_stamp",
+            "crop_k",
             "fringe_lab",
             "fringe_apply",
         ],

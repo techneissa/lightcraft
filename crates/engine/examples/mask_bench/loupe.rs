@@ -52,6 +52,9 @@ impl Loupe {
         let mut job = self.template.clone();
         job.settings = Arc::new(settings.clone());
         job.stages = Some(stages.clone());
+        // (the template's view key is the demo photo's, the same for every row: kept, the second render would be
+        // answered from the view cache and time nothing)
+        job.view_cache = None;
         job.with_display_fit(self.fit[0], self.fit[1])
     }
 
@@ -323,6 +326,7 @@ fn cpu_masks() -> Vec<(&'static str, DevelopSettings)> {
             0.0,
         ),
         make("sky (stored segmentation)", MaskShape::Sky { seg: Some(seg), detail: Vec::new(), edge: 0.0 }, 0.0),
+        make("sky (heuristic, no model)", MaskShape::Sky { seg: None, detail: Vec::new(), edge: 0.0 }, 0.0),
         make(
             "refine edges (radial, 60)",
             MaskShape::Radial { center: Point::new(0.5, 0.33), rx: 0.3, ry: 0.2, angle: 0.0, feather: 50.0, invert: false },
@@ -342,7 +346,8 @@ fn cpu_masks() -> Vec<(&'static str, DevelopSettings)> {
 pub fn cpu_mask_rows(loupe: &Loupe, out: &Out<'_>) {
     let Out { n, backends, columns, .. } = *out;
     println!("\n== masks that run on the CPU inside a render, loupe job at rest");
-    for (name, base) in cpu_masks() {
+    let only = std::env::var("MASK").unwrap_or_default();
+    for (name, base) in cpu_masks().into_iter().filter(|(name, _)| only.is_empty() || name.contains(only.as_str())) {
         for (label, control) in [("first render", 0), ("mask exposure tick", 1), ("global exposure tick", 2)] {
             let ms: Vec<f64> = backends
                 .iter()

@@ -170,6 +170,32 @@ fn the_brush_planes_held_are_bounded() {
     assert!(cache.bytes() <= 5 * w * h * 4, "{} bytes held", cache.bytes());
 }
 
+/// A Sky mask with a stored segmentation reads no exposure, so a global Exposure tick evaluates nothing; the
+/// heuristic (no segmentation) selects on the exposed values and is evaluated again.
+#[test]
+fn a_stored_sky_is_not_evaluated_again_by_a_global_exposure_tick() {
+    let (w, h) = (96, 64);
+    let (img, l) = scene(w, h);
+    let f = frame(w, h);
+    let keys = AlphaKeys { geo: 1, image: 2 };
+    let sky = |seg| Mask {
+        id: 1,
+        components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: MaskShape::Sky { seg, detail: Vec::new(), edge: 0.0 } }],
+        ..Mask::default()
+    };
+    for (name, seg, evaluated) in [("stored segmentation", Some(lightcraft_develop::SegMask::from_logits(8, &[2.0; 64])), 0), ("heuristic", None, 4)]
+    {
+        let m = sky(seg);
+        let mut cache = AlphaCache::default();
+        let _ = evaluate_cached(std::slice::from_ref(&m), &f, w, h, &img, &l, 0.0, None, keys, &mut cache);
+        let before = mask_evaluations();
+        for k in 1..5 {
+            let _ = evaluate_cached(std::slice::from_ref(&m), &f, w, h, &img, &l, 0.1 * k as f32, None, keys, &mut cache);
+        }
+        assert_eq!(mask_evaluations() - before, evaluated, "{name}: evaluations over four global Exposure ticks");
+    }
+}
+
 /// An effect slider and the Amount change what the mask does, not where it is: its alpha is not evaluated again.
 #[test]
 fn effects_and_amount_do_not_change_a_masks_alpha() {
