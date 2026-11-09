@@ -151,14 +151,14 @@ mod tests {
     #[test]
     fn an_active_block_keys_its_settings_and_its_faces() {
         let mut s = DevelopSettings::default();
-        controls::set(&mut s, "retouch.eyes.amount", 40.0);
+        controls::set(&mut s, "retouch.eyes.whites", 40.0);
         assert!(active(&s) && crate::lin_needs_cpu(&s, &SourceInfo::default()));
         let none = key(&s, &SourceInfo::default());
         assert_ne!(none, 0);
         assert_ne!(key(&s, &faces(1)), none, "faces found later redo the stage");
         assert_ne!(key(&s, &faces(1)), key(&s, &faces(2)));
         let mut more = s.clone();
-        controls::set(&mut more, "retouch.eyes.amount", 41.0);
+        controls::set(&mut more, "retouch.eyes.whites", 41.0);
         assert_ne!(key(&more, &faces(1)), key(&s, &faces(1)));
     }
 
