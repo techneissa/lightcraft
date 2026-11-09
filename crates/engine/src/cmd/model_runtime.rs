@@ -168,9 +168,11 @@ mod tests {
         assert_eq!(listed["models"][1]["model"], "face-parsing-segformer-b0");
         assert_eq!(listed["models"][2]["model"], "human-parsing-segformer-b3");
         assert_eq!(listed["models"][2]["coremlInstalled"], false);
+        assert_eq!(listed["models"][3]["model"], "facemesh-v2");
         s.execute("models.runtime", &json!({"model": "human-parsing-segformer-b3", "runtime": "candle"})).unwrap();
         s.execute("models.runtime", &json!({"model": "face-parsing-segformer-b0", "runtime": "coreml"})).unwrap();
-        assert_eq!(s.parsing.runtimes(), lightcraft_parsing::Runtimes { face: Runtime::CoreMl, body: Runtime::Candle });
+        s.execute("models.runtime", &json!({"model": "facemesh-v2", "runtime": "candle"})).unwrap();
+        assert_eq!(s.parsing.runtimes(), lightcraft_parsing::Runtimes { face: Runtime::CoreMl, body: Runtime::Candle, mesh: Runtime::Candle });
         assert_eq!(s.learn.runtime(), Runtime::Candle);
         reopened.open(Some(file.clone()));
         assert_eq!(reopened.get("human-parsing-segformer-b3"), Runtime::Candle);

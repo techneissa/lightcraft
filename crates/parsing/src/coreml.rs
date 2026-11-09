@@ -1,5 +1,6 @@
-//! The SegFormer set's two parsers through Apple's Core ML on the GPU (issue #105, `fork/coreml.md`): the face parser
-//! (SegFormer-B0) and the clothes parser (SegFormer-B3), converted once by `tools/convert-coreml-parsing.py`.
+//! The SegFormer set's two parsers and every set's face mesh through Apple's Core ML on the GPU (issue #105,
+//! `fork/coreml.md`): the face parser (SegFormer-B0) and the clothes parser (SegFormer-B3), converted once by
+//! `tools/convert-coreml-parsing.py`, and MediaPipe's face mesh, by `tools/convert-coreml-facemesh.py`.
 //!
 //! The converted models live next to the candle weights in the models folder: `<models>/<folder>/coreml/<folder>.mlpackage`,
 //! compiled once for this Mac into `<folder>.mlmodelc` beside it (again when the package changes). candle stays the
@@ -9,21 +10,24 @@
 //! The face parser takes up to [`FACE_BATCH`] crops per call and gives the ten face groups of `face.rs` at 512² (the
 //! resize, softmax and group sums are inside the model). The clothes parser takes the photo's grid in the top-left of
 //! one of [`BODY_CANVASES`] with a fourth channel marking where the photo is, and gives the class probabilities over
-//! the canvas; the model ignores the padding, so the photo's part equals candle's run on the photo alone.
+//! the canvas; the model ignores the padding, so the photo's part equals candle's run on the photo alone. The face mesh
+//! takes up to [`FACE_BATCH`] crops of 256² and gives each one's 478 points and face score in one row, in float32.
 
 use std::path::{Path, PathBuf};
 
 pub use lightcraft_coreml::Runtime;
 use lightcraft_coreml::{ComputeUnits, Error, Model};
 
-use crate::models::{BODY_SEGFORMER_B3, FACE_SEGFORMER_B0, ModelFile};
+use crate::facemesh::MeshOut;
+use crate::models::{BODY_SEGFORMER_B3, FACE_MESH, FACE_SEGFORMER_B0, ModelFile};
 
 /// The Core ML files' folder inside a model's folder.
 pub const COREML_DIR: &str = "coreml";
 const INPUT: &str = "pixels";
 const FACE_OUTPUT: &str = "groups";
 const BODY_OUTPUT: &str = "probs";
-/// Most face crops per call (the converted face parser takes 1 to 8).
+const MESH_OUTPUT: &str = "mesh";
+/// Most face crops per call (the converted face parser and face mesh take 1 to 8).
 pub const FACE_BATCH: usize = 8;
 
 /// The canvases (height, width) the converted clothes parser takes, as `tools/convert-coreml-parsing.py`
@@ -61,7 +65,7 @@ pub const BODY_CANVASES: [(usize, usize); 28] = [
 ];
 
 /// The model files that have a Core ML version, with the id Settings and `models.runtime` use for each (its folder).
-pub const CONVERTED: [ModelFile; 2] = [FACE_SEGFORMER_B0, BODY_SEGFORMER_B3];
+pub const CONVERTED: [ModelFile; 3] = [FACE_SEGFORMER_B0, BODY_SEGFORMER_B3, FACE_MESH];
 
 /// Where `file`'s Core ML package and compiled model are under `models`.
 pub fn paths(models: &Path, file: &ModelFile) -> (PathBuf, PathBuf) {
@@ -109,6 +113,24 @@ pub(crate) fn load_face(models: &Path) -> Result<Model, Error> {
 /// The converted clothes parser, on the GPU: the Neural Engine compiler takes over 15 minutes for one large canvas.
 pub(crate) fn load_body(models: &Path) -> Result<Model, Error> {
     load(models, &BODY_SEGFORMER_B3, BODY_OUTPUT, ComputeUnits::CpuAndGpu)
+}
+
+/// The converted face mesh, on the GPU in float32: as fast as float16 for this small network and equal to float32
+/// PyTorch to 0.001 px (float16 moved points by up to 0.5 px, the Neural Engine by 3.5 px).
+pub(crate) fn load_mesh(models: &Path) -> Result<Model, Error> {
+    load(models, &FACE_MESH, MESH_OUTPUT, ComputeUnits::CpuAndGpu)
+}
+
+/// The face mesh of `n` crops of [`crate::facemesh::SIDE`]² (`n × 3 × side × side`, values 0 to 1), `n` at most
+/// [`FACE_BATCH`].
+pub(crate) fn meshes(model: &Model, px: &[f32], n: usize) -> Result<Vec<MeshOut>, Error> {
+    let side = crate::facemesh::SIDE;
+    let row = crate::facemesh::POINTS * 3 + 1;
+    let out = model.predict(INPUT, &[n, 3, side, side], px, MESH_OUTPUT)?;
+    if out.shape != [n, row] || out.data.len() != n * row {
+        return Err(Error::Output(format!("the face mesh gave {:?}, not [{n}, {row}]", out.shape)));
+    }
+    out.data.chunks_exact(row).map(|r| MeshOut::from_row(r).ok_or_else(|| Error::Output("a face mesh row of another size".into()))).collect()
 }
 
 /// The face groups of `n` crops of [`crate::face::SIDE`]² (`n × 3 × side × side` normalised pixels), `n` at most

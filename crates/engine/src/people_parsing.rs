@@ -336,22 +336,20 @@ impl PeopleParsing {
     /// (the loaded models are dropped). False for a model that is not one of them. Never waits for a load going (the
     /// Settings window calls it).
     pub fn set_runtime(&self, model: &str, runtime: crate::model_runtime::Runtime) -> bool {
-        let face = model == COREML_MODELS[0];
-        if !face && model != COREML_MODELS[1] {
-            return false;
-        }
+        let Some(k) = COREML_MODELS.iter().position(|m| *m == model) else { return false };
         #[cfg(not(target_arch = "wasm32"))]
         {
             // the runtimes change before the set goes stale, so a load that read the old ones is not kept
             let mut r = lock(&self.inner.runtimes);
-            if face {
-                r.face = runtime;
-            } else {
-                r.body = runtime;
-            }
+            let slot = match k {
+                0 => &mut r.face,
+                1 => &mut r.body,
+                _ => &mut r.mesh,
+            };
+            *slot = runtime;
         }
         #[cfg(target_arch = "wasm32")]
-        let _ = runtime;
+        let _ = (k, runtime);
         self.unload();
         true
     }
@@ -381,6 +379,9 @@ impl PeopleParsing {
             }
             if l.set.body_file().folder == model {
                 return Some(body.id());
+            }
+            if lightcraft_parsing::models::FACE_MESH.folder == model {
+                return Some(l.parser.mesh_backend().id());
             }
         }
         let _ = model;
@@ -647,8 +648,13 @@ impl PeopleParsing {
     }
 }
 
-/// The parsers with a Core ML version (`fork/coreml.md`): their ids (folders) in `models.runtime` and Settings.
-pub const COREML_MODELS: [&str; 2] = [lightcraft_parsing::models::FACE_SEGFORMER_B0.folder, lightcraft_parsing::models::BODY_SEGFORMER_B3.folder];
+/// The parsing models with a Core ML version (`fork/coreml.md`): their ids (folders) in `models.runtime` and Settings;
+/// the face parser, the clothes parser, the face mesh.
+pub const COREML_MODELS: [&str; 3] = [
+    lightcraft_parsing::models::FACE_SEGFORMER_B0.folder,
+    lightcraft_parsing::models::BODY_SEGFORMER_B3.folder,
+    lightcraft_parsing::models::FACE_MESH.folder,
+];
 
 /// `p` with its Entire Person edges drawn by BiRefNet Matting from `img` (the picture it was parsed from).
 fn hair_edged(

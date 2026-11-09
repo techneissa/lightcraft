@@ -1,22 +1,36 @@
 //! Core ML against candle (issue #105, `fork/coreml.md`). The tests read the models where the app keeps them, the
-//! folder shared with PhotoCraft (`~/Library/Application Support/ArtCraft/models`: each parser's `model.safetensors`
-//! and `coreml/<folder>.mlpackage` from `tools/convert-coreml-parsing.py`), only through links in a temporary folder
-//! (Core ML compiles there), and skip without them. Nothing is downloaded and nothing is written in the shared folder.
+//! folder shared with PhotoCraft (`~/Library/Application Support/ArtCraft/models`: each model's weights and
+//! `coreml/<folder>.mlpackage` from `tools/convert-coreml-parsing.py` and `tools/convert-coreml-facemesh.py`), only
+//! through links in a temporary folder (Core ML compiles there), and skip without them. Nothing is downloaded and
+//! nothing is written in the shared folder.
 
 use std::path::{Path, PathBuf};
 
 use crate::coreml::{CONVERTED, paths};
 use crate::image::Crop;
-use crate::models::{ModelFile, ModelSet};
+use crate::models::{BODY_SEGFORMER_B3, FACE_MESH, FACE_SEGFORMER_B0, ModelFile, ModelSet};
 use crate::{Backend, Error, Parser, RgbImage, Runtimes};
 use lightcraft_coreml::Runtime;
 
-/// The shared models folder, when it holds the SegFormer set and both Core ML packages.
-fn shared() -> Option<PathBuf> {
+/// The two SegFormer parsers with a Core ML version.
+const PARSERS: [ModelFile; 2] = [FACE_SEGFORMER_B0, BODY_SEGFORMER_B3];
+
+/// The shared models folder, when it holds the SegFormer set and the Core ML packages of `packages`.
+fn shared_with(packages: &[ModelFile]) -> Option<PathBuf> {
     let home = PathBuf::from(std::env::var_os("HOME")?);
     let dir = home.join("Library/Application Support/ArtCraft/models");
-    let ok = ModelSet::Segformer.installed_in(&dir) && CONVERTED.iter().all(|f| paths(&dir, f).0.is_dir());
+    let ok = ModelSet::Segformer.installed_in(&dir) && packages.iter().all(|f| paths(&dir, f).0.is_dir());
     ok.then_some(dir)
+}
+
+/// The shared models folder, when it holds the SegFormer set and both parsers' Core ML packages.
+fn shared() -> Option<PathBuf> {
+    shared_with(&PARSERS)
+}
+
+/// Every model on `runtime`.
+fn all(runtime: Runtime) -> Runtimes {
+    Runtimes { face: runtime, body: runtime, mesh: runtime }
 }
 
 fn link(from: &Path, to: &Path) {
@@ -85,12 +99,12 @@ fn core_ml_parses_as_candle_does() {
         lightcraft_testkit::skip!(Model, "Core ML runs only on a Mac");
         return;
     }
-    let dir = linked("coreml-vs-candle", &models, &CONVERTED);
+    let dir = linked("coreml-vs-candle", &models, &PARSERS);
     // candle on the GPU, as the app runs it: candle 0.9.2's CPU convolution gives other numbers for the face parser's
     // 4 × 4 stride-4 reduction (its Metal one matches PyTorch)
     let dev = crate::best_device();
-    let coreml = Parser::load_with(ModelSet::Segformer, &dir, dev.clone(), Runtimes { face: Runtime::CoreMl, body: Runtime::CoreMl }).unwrap();
-    let candle = Parser::load_with(ModelSet::Segformer, &dir, dev, Runtimes { face: Runtime::Candle, body: Runtime::Candle }).unwrap();
+    let coreml = Parser::load_with(ModelSet::Segformer, &dir, dev.clone(), Runtimes { mesh: Runtime::Candle, ..all(Runtime::CoreMl) }).unwrap();
+    let candle = Parser::load_with(ModelSet::Segformer, &dir, dev, all(Runtime::Candle)).unwrap();
     assert_eq!(coreml.backends(), (Backend::CoreMl, Backend::CoreMl));
     assert_eq!(candle.backends(), (Backend::Candle, Backend::Candle));
     let img = fixture();
@@ -137,8 +151,11 @@ fn a_missing_or_damaged_core_ml_model_falls_back_to_candle() {
     let dir = linked("coreml-missing", &models, &[]);
     let p = Parser::load_with(ModelSet::Segformer, &dir, dev.clone(), Runtimes::default()).unwrap();
     assert_eq!(p.backends(), (Backend::Candle, Backend::Candle));
-    let e = Parser::load_with(ModelSet::Segformer, &dir, dev.clone(), Runtimes { face: Runtime::CoreMl, body: Runtime::Candle }).err().unwrap();
-    assert!(matches!(&e, Error::Model(m) if m.contains("Core ML")), "{e}");
+    assert_eq!(p.mesh_backend(), Backend::Candle);
+    for chosen in [Runtimes { face: Runtime::CoreMl, ..all(Runtime::Candle) }, Runtimes { mesh: Runtime::CoreMl, ..all(Runtime::Candle) }] {
+        let e = Parser::load_with(ModelSet::Segformer, &dir, dev.clone(), chosen).err().unwrap();
+        assert!(matches!(&e, Error::Model(m) if m.contains("Core ML")), "{e}");
+    }
     // a damaged compiled model with no package: Automatic is candle
     let dir = linked("coreml-damaged", &models, &[]);
     for f in CONVERTED {
@@ -148,13 +165,14 @@ fn a_missing_or_damaged_core_ml_model_falls_back_to_candle() {
     }
     let p = Parser::load_with(ModelSet::Segformer, &dir, dev.clone(), Runtimes::default()).unwrap();
     assert_eq!(p.backends(), (Backend::Candle, Backend::Candle));
+    assert_eq!(p.mesh_backend(), Backend::Candle);
     // the BiSeNet set has no Core ML version: Core ML is an error, Automatic is candle
     if ModelSet::BiSeNet.installed_in(&models) {
         let dir = super::scratch("coreml-bisenet");
         for f in ModelSet::BiSeNet.files() {
             link(&f.path_in(&models), &f.path_in(&dir));
         }
-        let e = Parser::load_with(ModelSet::BiSeNet, &dir, dev.clone(), Runtimes { face: Runtime::CoreMl, body: Runtime::Automatic }).err().unwrap();
+        let e = Parser::load_with(ModelSet::BiSeNet, &dir, dev.clone(), Runtimes { face: Runtime::CoreMl, ..Runtimes::default() }).err().unwrap();
         assert!(e.to_string().contains("no Core ML version"), "{e}");
         let p = Parser::load_with(ModelSet::BiSeNet, &dir, dev, Runtimes::default()).unwrap();
         assert_eq!(p.backends(), (Backend::Candle, Backend::Candle));
@@ -180,10 +198,10 @@ fn core_ml_failing_on_the_first_faces_gives_the_masks_of_candle_one_face_at_a_ti
         lightcraft_testkit::skip!(Model, "Core ML runs only on a Mac");
         return;
     }
-    let dir = linked("coreml-fails", &models, &CONVERTED);
+    let dir = linked("coreml-fails", &models, &PARSERS);
     let dev = crate::best_device();
     let coreml = Parser::load_with(ModelSet::Segformer, &dir, dev.clone(), Runtimes::default()).unwrap();
-    let candle = Parser::load_with(ModelSet::Segformer, &dir, dev, Runtimes { face: Runtime::Candle, body: Runtime::Candle }).unwrap();
+    let candle = Parser::load_with(ModelSet::Segformer, &dir, dev, all(Runtime::Candle)).unwrap();
     assert_eq!(coreml.backends().0, Backend::CoreMl);
     let img = fixture();
     let crops: Vec<Crop> = [(300.0, 120.0, 0.0), (310.0, 130.0, 0.3), (280.0, 200.0, -0.2)]
@@ -215,10 +233,60 @@ fn candle_parses_a_face_on_the_cpu_as_on_the_gpu() {
         return;
     }
     let dir = linked("candle-cpu-gpu", &models, &[]);
-    let on = |dev| Parser::load_with(ModelSet::Segformer, &dir, dev, Runtimes { face: Runtime::Candle, body: Runtime::Candle }).unwrap();
+    let on = |dev| Parser::load_with(ModelSet::Segformer, &dir, dev, all(Runtime::Candle)).unwrap();
     let crop = [Crop { cx: 300.0, cy: 120.0, scale: 0.4, angle: 0.1, side: crate::face::SIDE }];
     let img = fixture();
     let (cpu, metal) = (on(candle_core::Device::Cpu).face_groups(&img, &crop).unwrap(), on(gpu).face_groups(&img, &crop).unwrap());
     let d = groups_diff(&cpu, &metal);
     assert!(d < 1e-3, "largest difference {d}");
+}
+
+/// The Core ML face mesh gives candle's points and face scores (float32 on the GPU), a call of three faces as each
+/// alone, and a whole parse with it gives candle's landmarks.
+#[test]
+fn the_core_ml_face_mesh_gives_the_points_candle_gives() {
+    let Some(models) = shared_with(&[FACE_MESH]) else {
+        lightcraft_testkit::skip!(Model, "the SegFormer set and the face mesh's Core ML package are not in the shared models folder");
+        return;
+    };
+    if !lightcraft_coreml::available() {
+        lightcraft_testkit::skip!(Model, "Core ML runs only on a Mac");
+        return;
+    }
+    let dir = linked("coreml-mesh", &models, &[FACE_MESH]);
+    let dev = crate::best_device();
+    let coreml = Parser::load_with(ModelSet::Segformer, &dir, dev.clone(), Runtimes { mesh: Runtime::CoreMl, ..all(Runtime::Candle) }).unwrap();
+    let candle = Parser::load_with(ModelSet::Segformer, &dir, dev, all(Runtime::Candle)).unwrap();
+    assert_eq!((coreml.mesh_backend(), candle.mesh_backend()), (Backend::CoreMl, Backend::Candle));
+    let img = fixture();
+    let side = crate::facemesh::SIDE;
+    let crops: Vec<Crop> = [(300.0, 120.0, 0.0), (310.0, 130.0, 0.3), (280.0, 200.0, -0.2)]
+        .iter()
+        .map(|&(cx, cy, angle)| Crop { cx, cy, scale: 0.3, angle, side })
+        .collect();
+    let (a, b) = (coreml.meshes(&img, &crops).unwrap(), candle.meshes(&img, &crops).unwrap());
+    assert_eq!((a.len(), b.len()), (3, 3));
+    for (k, (ma, mb)) in a.iter().zip(&b).enumerate() {
+        assert_eq!(ma.points.len(), crate::facemesh::POINTS);
+        let d = ma.points.iter().zip(&mb.points).flat_map(|(p, q)| p.iter().zip(q).map(|(x, y)| (x - y).abs())).fold(0.0f32, f32::max);
+        assert!(
+            d < 0.02 && (ma.presence - mb.presence).abs() < 1e-3,
+            "face {k}: points differ by {d} px, presence {} against {}",
+            ma.presence,
+            mb.presence
+        );
+        let alone = coreml.meshes(&img, std::slice::from_ref(&crops[k])).unwrap().remove(0);
+        let d = ma.points.iter().zip(&alone.points).flat_map(|(p, q)| p.iter().zip(q).map(|(x, y)| (x - y).abs())).fold(0.0f32, f32::max);
+        assert!(d < 1e-3, "face {k}: {d} px from the face alone");
+    }
+    let hint = crate::FaceHint { rect: crate::NormRect::new(0.43, 0.15, 0.57, 0.45), landmarks: None, score: 0.9, person_id: None };
+    let opts = crate::Options::default();
+    let (pa, pb) =
+        (coreml.parse(&img, std::slice::from_ref(&hint), &opts, &|| false).unwrap(), candle.parse(&img, &[hint], &opts, &|| false).unwrap());
+    assert_eq!(pa.people.len(), pb.people.len());
+    for (x, y) in pa.people.iter().zip(&pb.people) {
+        assert_eq!(x.landmarks.len(), y.landmarks.len());
+        let d = x.landmarks.iter().zip(&y.landmarks).map(|(p, q)| (p.x - q.x).abs().max((p.y - q.y).abs())).fold(0.0f32, f32::max);
+        assert!(d < 1e-4 && (x.landmark_score - y.landmark_score).abs() < 1e-3, "landmarks differ by {d} of the photo");
+    }
 }

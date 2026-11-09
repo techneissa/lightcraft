@@ -9,7 +9,7 @@ use candle_core::Device;
 use crate::body;
 use crate::coreml::{self, Runtime};
 use crate::face::{self, FaceNet, Groups, Job, Nets};
-use crate::facemesh::FaceMesh;
+use crate::facemesh::{FaceMesh, MeshOut};
 use crate::image::Crop;
 use crate::models::{FaceModel, ModelFile, ModelSet};
 use crate::nn::{Layout, Params};
@@ -40,12 +40,13 @@ impl Default for Options {
     }
 }
 
-/// Which engine runs the face parser and the clothes parser. Only the SegFormer set's two have a Core ML version; the
-/// others always run on candle.
+/// Which engine runs the face parser, the clothes parser and the face mesh. Of the parsers only the SegFormer set's two
+/// have a Core ML version; the others always run on candle. Every set has the same face mesh.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Runtimes {
     pub face: Runtime,
     pub body: Runtime,
+    pub mesh: Runtime,
 }
 
 /// Which engine runs a model.
@@ -177,7 +178,7 @@ pub struct Parser {
     body: Engine<Segformer>,
     /// The set's body-part parser (Sapiens2), which decides where skin, hair and clothes are.
     parts: Option<Sapiens2>,
-    mesh: FaceMesh,
+    mesh: Engine<FaceMesh>,
     dev: Device,
 }
 
@@ -223,6 +224,11 @@ fn load_face_net(set: ModelSet, models: &Path, dev: &Device) -> Result<FaceNet> 
     })
 }
 
+fn load_mesh_net(models: &Path, dev: &Device) -> Result<FaceMesh> {
+    let file = crate::models::FACE_MESH;
+    FaceMesh::load(open(&file, models)?.as_ref(), dev).map_err(|e| named(&file, e))
+}
+
 fn load_body_net(set: ModelSet, models: &Path, dev: &Device) -> Result<Segformer> {
     let file = set.body_file();
     let body = Segformer::load(&Params::new(open(&file, models)?, dev.clone(), Layout::Oihw)).map_err(|e| named(&file, e))?;
@@ -242,8 +248,8 @@ impl Parser {
         Self::load_with(set, models, dev, Runtimes::default())
     }
 
-    /// Load `set` with its face and clothes parsers on the engines `runtimes` asks for; the face mesh, and candle's
-    /// parsers, run on `dev`.
+    /// Load `set` with its face and clothes parsers and the face mesh on the engines `runtimes` asks for; Sapiens2, and
+    /// candle's models, run on `dev`.
     pub fn load_with(set: ModelSet, models: &Path, dev: Device, runtimes: Runtimes) -> Result<Self> {
         let (face_file, body_file) = (set.face_file(), set.body_file());
         let face_coreml = || coreml::load_face(models);
@@ -257,8 +263,9 @@ impl Parser {
             Some(f) => Some(Sapiens2::load(&Params::new(open(&f, models)?, dev.clone(), Layout::Ohwi)).map_err(|e| named(&f, e))?),
             None => None,
         };
-        let mesh_file = crate::models::FACE_MESH;
-        let mesh = FaceMesh::load(open(&mesh_file, models)?.as_ref(), &dev).map_err(|e| named(&mesh_file, e))?;
+        let mesh_coreml = || coreml::load_mesh(models);
+        let mesh_loader: &dyn Fn() -> CoreMlResult<lightcraft_coreml::Model> = &mesh_coreml;
+        let mesh = Engine::load(&crate::models::FACE_MESH, runtimes.mesh, Some(mesh_loader), || load_mesh_net(models, &dev))?;
         Ok(Self { set, models: models.to_path_buf(), face, face_model: set.face_model(), body, parts, mesh, dev })
     }
 
@@ -273,6 +280,26 @@ impl Parser {
     /// The engines the next photo's face and clothes parsers run on.
     pub fn backends(&self) -> (Backend, Backend) {
         (self.face.backend(), self.body.backend())
+    }
+
+    /// The engine the next photo's face mesh runs on.
+    pub fn mesh_backend(&self) -> Backend {
+        self.mesh.backend()
+    }
+
+    /// The face mesh of `crops` (of [`crate::facemesh::SIDE`]²).
+    pub(crate) fn meshes(&self, img: &crate::RgbImage, crops: &[Crop]) -> Result<Vec<MeshOut>> {
+        self.mesh.run(
+            |m| {
+                let mut out = Vec::with_capacity(crops.len());
+                for chunk in crops.chunks(coreml::FACE_BATCH) {
+                    out.extend(coreml::meshes(m, &face::batch_pixels(img, chunk, false), chunk.len())?);
+                }
+                Ok(out)
+            },
+            |net| face::mesh_batch(net, img, crops, &self.dev),
+            || load_mesh_net(&self.models, &self.dev),
+        )
     }
 
     /// The clothes parser's map of the photo at long side `side`.
@@ -373,9 +400,11 @@ impl Parser {
             }
         }
         let parse = |img: &crate::RgbImage, crops: &[Crop]| self.face_groups(img, crops);
-        let nets = Nets { parse: &parse, mesh: &self.mesh, dev: &self.dev };
+        let mesh = |img: &crate::RgbImage, crops: &[Crop]| self.meshes(img, crops);
+        let nets = Nets { parse: &parse, mesh: &mesh };
         let scene = face::Scene { claims: &claims, body_hat: &|x, y| map.at(body::HAT, x, y) };
-        let batch = if self.face.backend() == Backend::CoreMl { coreml::FACE_BATCH } else { opts.batch };
+        let on_coreml = self.face.backend() == Backend::CoreMl || self.mesh.backend() == Backend::CoreMl;
+        let batch = if on_coreml { coreml::FACE_BATCH } else { opts.batch };
         for f in face::run(&nets, img, &jobs, batch, &scene, cancelled)? {
             if let Some(p) = people.get_mut(f.person) {
                 for (part, plane) in f.planes {

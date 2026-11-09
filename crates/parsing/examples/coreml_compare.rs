@@ -4,11 +4,12 @@
 //! `cargo run -p lightcraft-parsing --release --example coreml_compare -- in.jpg [--models DIR] [--edge 2048]`
 //!
 //! Three runs, each loading the set and then parsing the photo twice (the first parse includes Core ML's first call
-//! per input size): candle as the app runs it (faces in batches of 4), candle one face at a time (the reference: on
-//! Metal, candle 0.9.2 gives the faces after the first in a batch other numbers), and Core ML. Faces come from YuNet
-//! in the shared models folder when it is there, as in the app. Agreement of Core ML with the reference is per part,
-//! over every person, on the masks as the app draws them (`render::refined`, at the parsed picture's size, on at 0.5):
-//! the share of pixels both call the same, and the intersection over union of the part's pixels.
+//! per input size): candle as the app runs it (the reference; on the GPU its face parser takes one face a call),
+//! Core ML for the two parsers with the face mesh on candle, and Core ML for all three. Faces come from YuNet in the
+//! shared models folder when it is there, as in the app. Agreement of Core ML with candle is per part, over every
+//! person, on the masks as the app draws them (`render::refined`, at the parsed picture's size, on at 0.5): the share
+//! of pixels both call the same, and the intersection over union of the part's pixels; then the landmarks' largest
+//! distance, in pixels of the parsed picture.
 
 use std::path::PathBuf;
 use std::time::Instant;
@@ -39,17 +40,16 @@ fn ms(t: Instant) -> f64 {
     t.elapsed().as_secs_f64() * 1e3
 }
 
-/// Load the set on `runtime` and parse twice: (parse, load ms, first parse ms, second parse ms).
+/// Load the set on `runtimes` and parse twice: (parse, load ms, first parse ms, second parse ms).
 fn timed(
     models: &std::path::Path,
-    runtime: Runtime,
-    batch: usize,
+    runtimes: Runtimes,
     img: &RgbImage,
     hints: &[FaceHint],
 ) -> Result<(Parsing, f64, f64, f64), Box<dyn std::error::Error>> {
-    let opts = Options { batch, ..Options::default() };
+    let opts = Options::default();
     let t = Instant::now();
-    let parser = Parser::load_with(ModelSet::Segformer, models, best_device(), Runtimes { face: runtime, body: runtime })?;
+    let parser = Parser::load_with(ModelSet::Segformer, models, best_device(), runtimes)?;
     let load = ms(t);
     let t = Instant::now();
     parser.parse(img, hints, &opts, &|| false)?;
@@ -58,8 +58,9 @@ fn timed(
     let parsing = parser.parse(img, hints, &opts, &|| false)?;
     let second = ms(t);
     println!(
-        "{runtime:?} (faces per call {batch}): backends {:?}, load {load:.0} ms, parse {first:.0} ms then {second:.0} ms, {} people",
+        "{runtimes:?}: backends {:?} and mesh {:?}, load {load:.0} ms, parse {first:.0} ms then {second:.0} ms, {} people",
         parser.backends(),
+        parser.mesh_backend(),
         parsing.people.len()
     );
     Ok((parsing, load, first, second))
@@ -84,9 +85,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let hints = yunet(&img).unwrap_or_default();
     println!("{}: {}×{}, {} faces (YuNet)", input, img.width, img.height, hints.len());
 
-    timed(&models, Runtime::Candle, Options::default().batch, &img, &hints)?;
-    let (a, ..) = timed(&models, Runtime::Candle, 1, &img, &hints)?;
-    let (b, ..) = timed(&models, Runtime::CoreMl, Options::default().batch, &img, &hints)?;
+    let all = |r: Runtime| Runtimes { face: r, body: r, mesh: r };
+    let (a, ..) = timed(&models, all(Runtime::Candle), &img, &hints)?;
+    timed(&models, Runtimes { mesh: Runtime::Candle, ..all(Runtime::CoreMl) }, &img, &hints)?;
+    let (b, ..) = timed(&models, all(Runtime::CoreMl), &img, &hints)?;
     println!("| Part | Pixels agreeing | IoU |");
     println!("| --- | ---: | ---: |");
     for part in Part::ALL {
@@ -105,5 +107,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let n = ma.len().max(1) as f64;
         println!("| {} | {:.2} % | {:.3} |", part.id(), same as f64 / n * 100.0, both as f64 / either as f64);
     }
+    let (w, h) = (img.width as f32, img.height as f32);
+    let far = a
+        .people
+        .iter()
+        .zip(&b.people)
+        .flat_map(|(x, y)| x.landmarks.iter().zip(&y.landmarks).map(|(p, q)| ((p.x - q.x) * w).abs().max(((p.y - q.y) * h).abs())))
+        .fold(0.0f32, f32::max);
+    println!("landmarks: largest distance {far:.3} px");
     Ok(())
 }

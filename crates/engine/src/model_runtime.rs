@@ -25,6 +25,7 @@ pub const MODELS: &[(&str, &str)] = &[
     (lightcraft_learn::ENCODER_ID, "Learn My Edits"),
     (crate::people_parsing::COREML_MODELS[0], "People Parts: Faces"),
     (crate::people_parsing::COREML_MODELS[1], "People Parts: Bodies"),
+    (crate::people_parsing::COREML_MODELS[2], "People Parts: Face Mesh"),
 ];
 
 /// `<config>/model-runtimes.json`.
