@@ -182,7 +182,7 @@ fn the_block_round_trips_through_the_sidecar_and_the_catalog() {
     let id = s.catalog.photos().next().unwrap().id;
     s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
     s.execute("retouch.detect", &json!({})).unwrap();
-    s.execute("retouch.set", &json!({"control": "retouch.teethLips.amount", "value": 40})).unwrap();
+    s.execute("retouch.set", &json!({"control": "retouch.teethLips.teethWhitening", "value": 40})).unwrap();
     s.execute("retouch.set", &json!({"control": "retouch.eyes.whites", "value": 65, "face": 0})).unwrap();
     let want = retouch_of(&s);
     assert!(!want.is_off() && want.faces.len() == 1);
