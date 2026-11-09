@@ -1200,6 +1200,8 @@ mod tests_retouch_blemish;
 #[cfg(test)]
 mod tests_retouch_cache;
 #[cfg(test)]
+mod tests_retouch_glare;
+#[cfg(test)]
 mod tests_retouch_teeth_lips;
 #[cfg(test)]
 mod tests_sharpen;

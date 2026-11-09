@@ -63,7 +63,7 @@ struct Inner {
     kept: Vec<(String, Vec<Saved>)>,
 }
 
-fn iou(a: &NormRect, b: &NormRect) -> f64 {
+pub(crate) fn iou(a: &NormRect, b: &NormRect) -> f64 {
     let ix = (a.x1.min(b.x1) - a.x0.max(b.x0)).max(0.0);
     let iy = (a.y1.min(b.y1) - a.y0.max(b.y0)).max(0.0);
     let inter = ix * iy;
@@ -99,7 +99,10 @@ impl Repairs {
 
     /// The repairs of faces key `key` (read from disk the first time).
     pub fn of(&self, key: &str) -> Vec<Saved> {
-        let mut st = self.lock();
+        Self::of_in(&mut self.lock(), key)
+    }
+
+    fn of_in(st: &mut Inner, key: &str) -> Vec<Saved> {
         if let Some(i) = st.kept.iter().position(|(k, _)| k == key) {
             let hit = st.kept.remove(i);
             let out = hit.1.clone();
@@ -114,30 +117,33 @@ impl Repairs {
     }
 
     /// Keep `saved` for `key`, replacing the repair of the same face; written to disk. An error says why it could
-    /// not be written (it is kept in memory anyway).
+    /// not be written (it is kept in memory anyway). Read, change and write happen under one lock, so two changes
+    /// at once (a repair kept while another face's is cleared) never lose one another.
     pub fn add(&self, key: &str, saved: Saved) -> Result<(), String> {
-        let mut list = self.of(key);
+        let mut st = self.lock();
+        let mut list = Self::of_in(&mut st, key);
         list.retain(|s| iou(&s.key_box, &saved.key_box) < 0.5);
         list.push(saved);
-        self.put(key, list)
+        Self::put_in(&mut st, key, list)
     }
 
     /// Drop the repair of the face whose key box is `key_box` (`None`: every face of the photo).
     pub fn clear(&self, key: &str, key_box: Option<&NormRect>) -> Result<(), String> {
-        let mut list = self.of(key);
+        let mut st = self.lock();
+        let mut list = Self::of_in(&mut st, key);
         match key_box {
             Some(b) => list.retain(|s| iou(&s.key_box, b) < 0.5),
             None => list.clear(),
         }
-        self.put(key, list)
+        Self::put_in(&mut st, key, list)
     }
 
-    fn put(&self, key: &str, list: Vec<Saved>) -> Result<(), String> {
-        let mut st = self.lock();
+    /// Replaces the repairs of `key` in memory and on disk (the lock is held by the caller across the write, so the
+    /// file always holds the latest list).
+    fn put_in(st: &mut Inner, key: &str, list: Vec<Saved>) -> Result<(), String> {
         st.kept.retain(|(k, _)| k != key);
         st.kept.push((key.to_string(), list.clone()));
         let Some(dir) = st.dir.clone() else { return Ok(()) };
-        drop(st);
         let path = Self::file(&dir, key);
         if list.is_empty() {
             return match std::fs::remove_file(&path) {
@@ -323,6 +329,28 @@ mod tests {
         again.clear("photo", None).unwrap();
         assert!(!Repairs::file(&d, "photo").exists());
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// Faces' repairs kept at once (and a clear running beside them) never lose one another: every face stays.
+    #[test]
+    fn adds_and_clears_at_once_lose_nothing() {
+        let r = Repairs::default();
+        r.set_dir(None);
+        let n = 24;
+        std::thread::scope(|s| {
+            for i in 0..n {
+                let r = &r;
+                s.spawn(move || {
+                    let mut one = saved(0.0, i as u64 + 1);
+                    // narrow boxes side by side: no face is another's
+                    one.key_box = NormRect::new(i as f64 * 0.04, 0.1, i as f64 * 0.04 + 0.03, 0.5);
+                    r.add("photo", one).unwrap();
+                    // a clear of a face nobody has, at the same time
+                    r.clear("photo", Some(&NormRect::new(5.0, 5.0, 6.0, 6.0))).unwrap();
+                });
+            }
+        });
+        assert_eq!(r.of("photo").len(), n);
     }
 
     #[test]

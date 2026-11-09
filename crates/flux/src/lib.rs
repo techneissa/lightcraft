@@ -18,6 +18,7 @@
 
 mod clip_tokenizer;
 mod fill;
+mod gguf;
 mod lora;
 mod model;
 mod t5_tokenizer;
@@ -29,6 +30,8 @@ use std::path::{Path, PathBuf};
 use candle_core::Device;
 
 pub use fill::{FillModel, MAX_SIDE, MULTIPLE, Request};
+/// Checks a GGUF's header against its file's size before anything is loaded from it (a hostile file is an error).
+pub use gguf::check as check_gguf;
 pub use text::Prompt;
 
 /// Why a FLUX call failed. Every failure is an error the caller can show; nothing panics.

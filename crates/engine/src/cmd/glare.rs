@@ -4,10 +4,11 @@ use serde_json::{Value, json};
 
 use super::retouch::{as_map, face_param, found_faces, target};
 use super::{CommandSpec, bad, cmd, has_active, str_param};
-use crate::glare_repair::{Job, Method, lens};
+use crate::glare_repair::store;
+use crate::glare_repair::{Finished, Job, Method, lens};
 use crate::{Result, Session};
 use lightcraft_catalog::PhotoId;
-use lightcraft_develop::retouch::{Face, Input, Part};
+use lightcraft_develop::retouch::{Face, Input, KeyMap, Part, Retouch};
 
 /// The long edge the photo is rendered at for a repair: enough that the crop around the glasses of the face with
 /// the eyes closest together is at least [`lens::SIDE`] pixels, within 1536…8192.
@@ -27,7 +28,8 @@ fn render_edge(faces: &[(usize, Face)]) -> usize {
 fn method_param(s: &Session, p: &Value, c: &str) -> Result<Method> {
     match str_param(p, "method") {
         Some(m) => Method::from_name(m).ok_or_else(|| bad(c, "`method` must be \"flux\" or \"lama\"")),
-        None => Ok(if s.glare.weights().is_ok() { Method::Flux } else { Method::Lama }),
+        // (FLUX when its files are in place and the Mac has the memory for it; else the glints)
+        None => Ok(if s.glare.weights().is_ok() && s.glare.memory_check().is_none() { Method::Flux } else { Method::Lama }),
     }
 }
 
@@ -53,28 +55,67 @@ fn targets(input: &Input, face: Option<usize>, c: &str) -> Result<Vec<(usize, Fa
     Ok(list)
 }
 
-/// Turn the Amount of the faces being repaired up to 100 where it is 0, so the repair shows when it lands.
-fn show_repair(s: &mut Session, id: PhotoId, input: &Input, face: Option<usize>) -> Result<()> {
-    const AMOUNT: &str = "retouch.glare.amount";
-    let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
-    let keys = s.retouch_key_map(id);
-    let now = match face {
-        None => d.retouch.global.get(AMOUNT),
-        Some(i) => d.retouch.settings_for_in(&input.faces, i, as_map(&keys)).get(AMOUNT),
-    };
-    if now.is_some_and(|v| v > 0.0) {
+const AMOUNT: &str = "retouch.glare.amount";
+
+/// Turns Glasses Glare's Amount up to 100 for the faces `targets` (indices of `faces`) that don't show a repair
+/// (Amount 0, or none). For every face (`all`) the global Amount is the one turned up when it is 0; a face with its
+/// own override at 0 gets its own Amount turned up too. Whether anything changed.
+fn show_amounts(retouch: &mut Retouch, faces: &[Face], targets: &[usize], all: bool, map: Option<&dyn KeyMap>) -> bool {
+    let shown = |r: &Retouch, i: usize| r.settings_for_in(faces, i, map).get(AMOUNT).is_some_and(|v| v > 0.0);
+    let mut changed = false;
+    if all && targets.iter().any(|i| !shown(retouch, *i)) && !retouch.global.get(AMOUNT).is_some_and(|v| v > 0.0) {
+        retouch.global.set(AMOUNT, 100.0);
+        changed = true;
+    }
+    for &i in targets {
+        if !shown(retouch, i)
+            && let Some(own) = retouch.override_mut_in(faces, i, map)
+        {
+            own.set(AMOUNT, 100.0);
+            changed = true;
+        }
+    }
+    changed
+}
+
+/// Shows a finished repair: its faces' Amount goes up to 100 where it hides it, as one undo step ("Glasses Glare").
+fn show_repair(s: &mut Session, done: &Finished) -> Result<()> {
+    let Some(found) = s.retouch_faces_of(done.photo).found else { return Ok(()) };
+    let input = found.input;
+    // the faces repaired, found again by their key boxes (their indices may have changed since the run began)
+    let targets: Vec<usize> = done
+        .key_boxes
+        .iter()
+        .filter_map(|b| {
+            let best = input.faces.iter().enumerate().map(|(i, f)| (store::iou(&f.key_bounds(), b), i)).filter(|(o, _)| *o >= 0.5);
+            best.max_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, i)| i)
+        })
+        .collect();
+    if targets.is_empty() {
         return Ok(());
     }
-    match face {
-        None => {
-            d.retouch.global.set(AMOUNT, 100.0);
-        }
-        Some(i) => {
-            let Some(own) = d.retouch.override_mut_in(&input.faces, i, as_map(&keys)) else { return Ok(()) };
-            own.set(AMOUNT, 100.0);
-        }
+    let keys = s.retouch_key_map(done.photo);
+    let mut d = (*s.develop_of(done.photo).unwrap_or_default()).clone();
+    if !show_amounts(&mut d.retouch, &input.faces, &targets, done.all_faces, as_map(&keys)) {
+        return Ok(());
     }
-    s.set_develop(id, d, "Glasses Glare")
+    s.set_develop(done.photo, d, "Glasses Glare")
+}
+
+impl Session {
+    /// Shows the repairs finished since the last call (the Amount of their faces goes up to 100 where it was 0, one
+    /// undo step each). Called every frame by the window and by every `retouch.glare*` command; the number shown.
+    /// A run that stopped before it kept anything, found no glare or failed to start changes nothing.
+    pub fn poll_glare(&mut self) -> usize {
+        let finished = self.glare.take_finished();
+        let n = finished.len();
+        for f in &finished {
+            if let Err(e) = show_repair(self, f) {
+                log::warn!("glare repair: the Amount could not be turned up: {e}");
+            }
+        }
+        n
+    }
 }
 
 fn status(s: &Session, id: PhotoId) -> Value {
@@ -99,6 +140,7 @@ fn status(s: &Session, id: PhotoId) -> Value {
             "installed": weights.is_ok(),
             "folder": s.glare.dir().map(|d| d.display().to_string()),
             "error": weights.err(),
+            "memoryError": s.glare.memory_check(),
         },
         "lama": {"installed": s.lama.installed()},
         "running": s.glare.running().map(|r| json!({"photo": r.photo.0, "faces": r.faces, "method": r.method.name()})),
@@ -114,10 +156,11 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "Repair Glare",
             [],
             None,
-            "{face?: index, method?: \"flux\"|\"lama\", lenses?: \"auto\"|\"whole\"|\"glints\", id?} — repaint the glasses of one face (an index of retouch.faces) or of every face with glasses, on a worker with a row in the activity stack (✕ stops it). `flux` (FLUX.1 Fill, minutes a face) repaints whole lenses where glare hides the eyes; `lama` (seconds) fills the glints only. `lenses` (flux): `auto` repaints a whole lens where glare covers enough of it to hide the eye, `whole` every lens, `glints` the glints only. Default: flux when its files are in place. Glasses Glare's Amount shows the result (set to 100 when it was 0) → {started: true, faces, method}",
+            "{face?: index, method?: \"flux\"|\"lama\", lenses?: \"auto\"|\"whole\"|\"glints\", id?} — repaint the glasses of one face (an index of retouch.faces) or of every face with glasses, on a worker with a row in the activity stack (✕ stops it). `flux` (FLUX.1 Fill, minutes a face) repaints whole lenses where glare hides the eyes; `lama` (seconds) fills the glints only. `lenses` (flux): `auto` repaints a whole lens where glare covers enough of it to hide the eye, `whole` every lens, `glints` the glints only. Default: flux when its files are in place. Glasses Glare's Amount shows the result (turned up to 100 once a repair is kept, when it was 0) → {started: true, faces, method}",
             has_active,
             |s, p| {
                 let c = "retouch.glareRepair";
+                s.poll_glare();
                 let id = target(s, p, c)?;
                 let method = method_param(s, p, c)?;
                 let lenses = match str_param(p, "lenses") {
@@ -127,6 +170,9 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                 match method {
                     Method::Flux => {
                         s.glare.weights().map_err(|e| bad(c, format!("FLUX.1 Fill is not installed: {e}")))?;
+                        if let Some(m) = s.glare.memory_check() {
+                            return Err(bad(c, m));
+                        }
                     }
                     Method::Lama if !s.lama.installed() => return Err(bad(c, "LaMa is not installed (lama.download)")),
                     Method::Lama => {}
@@ -142,7 +188,6 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                 let edge = render_edge(&faces);
                 let render =
                     s.preview_job(id, edge, edge, false, &lightcraft_develop::DevelopSettings::default()).ok_or_else(|| bad(c, "no such photo"))?;
-                show_repair(s, id, &input, face)?;
                 let indices: Vec<usize> = faces.iter().map(|(i, _)| *i).collect();
                 let store = s.retouch_faces.clone();
                 let done_key = key.clone();
@@ -152,6 +197,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
                     render,
                     orient: photo.develop.orientation,
                     faces,
+                    all_faces: face.is_none(),
                     method,
                     lenses,
                     lama: s.lama.clone(),
@@ -166,10 +212,11 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "Glare Repair Status",
             [],
             None,
-            "{id?} → {flux: {installed, folder, error?}, lama: {installed}, running?: {photo, faces, method}, message?, repaired: [{face, method}]} — what Repair Glare can use, what runs, and which faces of the photo have a repair",
+            "{id?} → {flux: {installed, folder, error?, memoryError?}, lama: {installed}, running?: {photo, faces, method}, message?, repaired: [{face, method}]} — what Repair Glare can use, what runs, and which faces of the photo have a repair",
             has_active,
             |s, p| {
                 let id = target(s, p, "retouch.glareStatus")?;
+                s.poll_glare();
                 Ok(status(s, id))
             }
         ),
@@ -182,6 +229,9 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             has_active,
             |s, p| {
                 let c = "retouch.glareClear";
+                if s.glare.running().is_some() {
+                    return Err(bad(c, "Repair Running: wait for the glare repair to finish, or stop it, then remove it"));
+                }
                 let id = target(s, p, c)?;
                 let photo = s.catalog.photo(id).cloned().ok_or_else(|| bad(c, "no such photo"))?;
                 let key = s.retouch_key(&photo, &photo.develop);
@@ -230,5 +280,65 @@ mod tests {
         let two = Input::new_on_photo(vec![Face::boxed(NormRect::new(0.5, 0.1, 0.6, 0.2)), glasses]);
         assert_eq!(targets(&two, None, c).map(|v| v.iter().map(|(i, _)| *i).collect::<Vec<_>>()).ok(), Some(vec![1]));
         assert!(targets(&two, Some(0), c).is_err());
+    }
+
+    fn faces() -> Vec<Face> {
+        vec![Face::boxed(NormRect::new(0.1, 0.1, 0.3, 0.4)), Face::boxed(NormRect::new(0.6, 0.1, 0.8, 0.4))]
+    }
+
+    fn amount(r: &Retouch, faces: &[Face], i: usize) -> Option<f64> {
+        r.settings_for_in(faces, i, None).get(AMOUNT)
+    }
+
+    #[test]
+    fn all_faces_turns_up_a_face_whose_own_amount_is_zero_too() {
+        let faces = faces();
+        let mut r = Retouch::default();
+        // the global Amount is 0, and face 2 has its own override, also at 0
+        assert!(r.override_mut_in(&faces, 1, None).is_some_and(|o| o.set(AMOUNT, 0.0)));
+        assert_eq!(amount(&r, &faces, 0), Some(0.0));
+        assert_eq!(amount(&r, &faces, 1), Some(0.0));
+        assert!(show_amounts(&mut r, &faces, &[0, 1], true, None));
+        assert_eq!(amount(&r, &faces, 0), Some(100.0), "the global Amount shows face 1");
+        assert_eq!(amount(&r, &faces, 1), Some(100.0), "face 2's own Amount is turned up as well");
+        // nothing to do now
+        assert!(!show_amounts(&mut r, &faces, &[0, 1], true, None));
+    }
+
+    #[test]
+    fn a_face_already_showing_the_repair_keeps_its_amount() {
+        let faces = faces();
+        let mut r = Retouch::default();
+        assert!(r.global.set(AMOUNT, 40.0));
+        assert!(!show_amounts(&mut r, &faces, &[0, 1], true, None));
+        assert_eq!(amount(&r, &faces, 0), Some(40.0));
+        // one face asked for: only that face gets an override, the other follows the global Amount
+        let mut r = Retouch::default();
+        assert!(show_amounts(&mut r, &faces, &[1], false, None));
+        assert_eq!(amount(&r, &faces, 1), Some(100.0));
+        assert_eq!(amount(&r, &faces, 0), Some(0.0));
+    }
+
+    #[test]
+    fn nothing_kept_leaves_the_amount_and_the_history_alone() {
+        let mut s = Session::with_demo();
+        let id = s.active().unwrap();
+        let before = (s.develop_of(id).unwrap(), s.undo.len());
+        // a start that fails (no faces known), a poll with nothing finished, and a run noted for faces not found
+        assert!(s.execute("retouch.glareRepair", &json!({"method": "lama"})).is_err());
+        assert_eq!(s.poll_glare(), 0);
+        s.glare.note_finished(Finished { photo: id, key_boxes: vec![NormRect::new(0.1, 0.1, 0.3, 0.4)], all_faces: true });
+        assert_eq!(s.poll_glare(), 1);
+        let after = (s.develop_of(id).unwrap(), s.undo.len());
+        assert_eq!(before.1, after.1, "no undo step");
+        assert_eq!(before.0, after.0, "no change of settings");
+    }
+
+    #[test]
+    fn remove_repair_is_refused_while_a_repair_runs() {
+        let mut s = Session::with_demo();
+        s.glare.mark_running_for_test();
+        let e = s.execute("retouch.glareClear", &json!({})).unwrap_err().to_string();
+        assert!(e.contains("Repair Running"), "{e}");
     }
 }

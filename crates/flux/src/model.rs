@@ -484,3 +484,28 @@ impl Flux {
         self.final_layer.forward(&img, &vec_)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use candle_core::quantized::{GgmlDType, QTensor};
+
+    use super::*;
+
+    /// candle 0.9.2's Metal quantised matmul ignores a view's start offset (a `narrow` along the tokens): [`Linear`]
+    /// copies such a view first, so a view and the same rows copied out give the same result. (On the CPU candle is
+    /// right anyway; on a Mac the test runs on Metal, where it fails without the copy.)
+    #[test]
+    fn a_linear_layer_reads_a_view_that_starts_past_the_beginning_of_its_buffer() {
+        let dev = crate::best_device();
+        let w = Tensor::randn(0f32, 1., (64, 64), &dev).unwrap();
+        let q = std::sync::Arc::new(QTensor::quantize(&w, GgmlDType::Q4_0).unwrap());
+        let layer = Linear { base: quantized_nn::Linear::from_arc(q, None).unwrap(), lora: None };
+        let x = Tensor::randn(0f32, 1., (1, 6, 64), &dev).unwrap();
+        let view = x.narrow(1, 2, 3).unwrap();
+        assert_ne!(view.layout().start_offset(), 0, "the view starts past the beginning");
+        let copied = Tensor::from_vec(view.flatten_all().unwrap().to_vec1::<f32>().unwrap(), (1, 3, 64), &dev).unwrap();
+        let (a, b) = (layer.forward(&view).unwrap(), layer.forward(&copied).unwrap());
+        let diff = (&a - &b).unwrap().abs().unwrap().max_all().unwrap().to_scalar::<f32>().unwrap();
+        assert!(diff < 1e-3, "a view and its copy differ by {diff}");
+    }
+}

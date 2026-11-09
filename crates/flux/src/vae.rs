@@ -22,6 +22,29 @@ const LATENT: usize = 16;
 /// The largest unrolled band a convolution makes, bytes.
 const BAND_BYTES: usize = 64 << 20;
 
+thread_local! {
+    /// The cancel flag of the fill running on this thread: a convolution asks it between bands.
+    static STOP: std::cell::RefCell<Option<std::sync::Arc<std::sync::atomic::AtomicBool>>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Makes the convolutions run on this thread stop (with an error) once `flag` is set, until the guard drops.
+pub(crate) fn stop_on(flag: Option<std::sync::Arc<std::sync::atomic::AtomicBool>>) -> StopScope {
+    STOP.with(|s| *s.borrow_mut() = flag);
+    StopScope
+}
+
+pub(crate) struct StopScope;
+
+impl Drop for StopScope {
+    fn drop(&mut self) {
+        STOP.with(|s| *s.borrow_mut() = None);
+    }
+}
+
+fn stopped() -> bool {
+    STOP.with(|s| s.borrow().as_ref().is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed)))
+}
+
 /// A convolution (square kernel, zero padding) run in bands of output rows.
 struct Conv {
     w: Tensor,
@@ -59,6 +82,9 @@ impl Conv {
         let mut parts = Vec::with_capacity(h_out.div_ceil(band));
         let mut r0 = 0;
         while r0 < h_out {
+            if stopped() {
+                candle_core::bail!("VAE: stopped between bands")
+            }
             let r1 = (r0 + band).min(h_out);
             let rows = x.narrow(2, r0 * s, (r1 - 1) * s + k - r0 * s)?;
             parts.push(rows.conv2d(&self.w, cfg.padding, cfg.stride, cfg.dilation, cfg.groups)?);
@@ -288,6 +314,24 @@ impl Vae {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stop asked for between bands ends the convolution with an error, and the flag is gone with its scope.
+    #[test]
+    fn a_stop_between_bands_ends_the_convolution() {
+        let dev = Device::Cpu;
+        let x = Tensor::randn(0f32, 1., (1, 3, 23, 17), &dev).unwrap();
+        let c =
+            Conv { w: Tensor::randn(0f32, 1., (4, 3, 3, 3), &dev).unwrap(), b: Tensor::zeros(4, DType::F32, &dev).unwrap(), k: 3, stride: 1, pad: 1 };
+        let flag = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        {
+            let _scope = stop_on(Some(flag.clone()));
+            assert!(c.run(&x, 1).is_ok(), "not stopped yet");
+            flag.store(true, std::sync::atomic::Ordering::Relaxed);
+            let e = c.run(&x, 1).unwrap_err().to_string();
+            assert!(e.contains("stopped"), "{e}");
+        }
+        assert!(c.run(&x, 1).is_ok(), "the scope ended, so did the stop");
+    }
 
     /// Banded convolution equals one convolution over the whole input, for every stride and padding used here.
     #[test]

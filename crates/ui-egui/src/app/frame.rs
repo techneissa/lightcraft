@@ -192,6 +192,16 @@ impl LightcraftApp {
             self.session.poll_spot_sources();
             ctx.request_repaint_after(std::time::Duration::from_millis(16));
         }
+        // a Glasses Glare repair that kept its faces (a worker): their Amount goes up to 100 where it hid the repair
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            if self.session.glare.has_finished() {
+                self.session.poll_glare();
+            }
+            if self.session.glare.running().is_some() {
+                ctx.request_repaint_after(std::time::Duration::from_millis(500));
+            }
+        }
         // the open photo's thumbnail held back during a burst of spot edits renders once they pause
         if let Some(left) = self.edited_thumb.left(self.tick_now()) {
             ctx.request_repaint_after(std::time::Duration::from_secs_f64(left + 0.02));

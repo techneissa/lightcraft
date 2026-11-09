@@ -80,7 +80,7 @@ pub fn encode(w: &Weights, prompt: &str, dev: &Device, cancelled: &dyn Fn() -> b
     if cancelled() {
         return Err(Error::Cancelled);
     }
-    let t5 = t5_states(w, prompt, dev)?;
+    let t5 = t5_states(w, prompt, dev, cancelled)?;
     Ok(Prompt { tokens: T5_TOKENS, t5, clip })
 }
 
@@ -97,7 +97,7 @@ fn clip_pooled(w: &Weights, prompt: &str, dev: &Device) -> Result<Vec<f32>> {
     Ok(pooled)
 }
 
-fn t5_states(w: &Weights, prompt: &str, dev: &Device) -> Result<Vec<f32>> {
+fn t5_states(w: &Weights, prompt: &str, dev: &Device, cancelled: &dyn Fn() -> bool) -> Result<Vec<f32>> {
     let ids = T5Tokenizer::load(&w.t5_tokenizer)?.encode(prompt, T5_TOKENS);
     let cfg_text = std::fs::read_to_string(&w.t5_config).map_err(|e| Error::Model(format!("T5 config: {e}")))?;
     let mut cfg: t5::Config = serde_json::from_str(&cfg_text).map_err(|e| Error::Model(format!("T5 config: {e}")))?;
@@ -106,10 +106,20 @@ fn t5_states(w: &Weights, prompt: &str, dev: &Device) -> Result<Vec<f32>> {
     let dtype = if dev.is_cpu() { DType::F32 } else { DType::BF16 };
     let mut tensors = HashMap::new();
     for shard in &w.t5 {
+        // loading a shard (several GB) is what takes the time: ask between them, and before the model runs
+        if cancelled() {
+            return Err(Error::Cancelled);
+        }
         tensors.extend(candle_core::safetensors::load(shard, dev)?);
+    }
+    if cancelled() {
+        return Err(Error::Cancelled);
     }
     let vb = VarBuilder::from_tensors(tensors, dtype, dev);
     let mut model = t5::T5EncoderModel::load(vb, &cfg)?;
+    if cancelled() {
+        return Err(Error::Cancelled);
+    }
     let ids = Tensor::new(ids.as_slice(), dev)?.unsqueeze(0)?;
     let states: CResult<Vec<f32>> = model.forward(&ids)?.to_dtype(DType::F32)?.flatten_all()?.to_vec1::<f32>();
     let states = states?;

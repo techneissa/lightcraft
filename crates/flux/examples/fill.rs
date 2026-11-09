@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let model = FillModel::load(&w, &dev)?;
     eprintln!("load: {:.1} s", t.elapsed().as_secs_f64());
     let t = Instant::now();
-    let req = Request { rgb: &rgb, mask: &mask, side, steps: steps.unwrap_or(w.default_steps()), guidance, seed };
+    let req = Request { rgb: &rgb, mask: &mask, side, steps: steps.unwrap_or(w.default_steps()), guidance, seed, cancel: None };
     let res = model.fill(&req, &emb, &mut |d, n| {
         eprintln!("step {d}/{n} at {:.1} s", t.elapsed().as_secs_f64());
         true

@@ -403,7 +403,12 @@ impl HairEdges {
         row.detail(edge.label());
         let _one_at_a_time = lock(&self.inner.one_run);
         // (one model on the GPU at a time, people parsing and LaMa included: `crate::gpu_run`)
+        if let Some(text) = crate::gpu_run::waiting_text() {
+            // (a Glare Repair repaint holds the GPU for minutes: say so instead of looking stuck)
+            row.detail(&text);
+        }
         let _gpu = crate::gpu_run::turn();
+        row.detail(edge.label());
         // (another caller may have made it while this one waited)
         if let Some(m) = self.remembered(key) {
             return Ok(m);

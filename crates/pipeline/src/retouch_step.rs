@@ -293,7 +293,9 @@ fn read_box(face: &Face, reads: &Reads, view: &dyn View) -> ReadBox {
     }
     let masks = reads.parts.iter().filter_map(|p| face.mask(*p)).map(|m| &m.area);
     let strands = face.strands.as_ref().map(|s| &s.area);
-    for area in masks.chain(strands) {
+    // (a kept Glasses Glare repair writes over its own area, which can reach past the face's box and its reach)
+    let repair = face.patch.as_deref().map(|p| &p.area);
+    for area in masks.chain(strands).chain(repair) {
         if !add_rect(&mut b, area, view) {
             return ReadBox::Unsure;
         }

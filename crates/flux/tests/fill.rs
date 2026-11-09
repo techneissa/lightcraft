@@ -16,6 +16,8 @@ fn repaints_only_the_hole_and_keeps_the_rest() {
             return;
         }
     };
+    // the real transformer's header passes the hostile-file check
+    lightcraft_flux::check_gguf(&w.transformer).unwrap();
     let dev = best_device();
     let prompt = text::encode(&w, "A grey wall.", &dev, &|| false).unwrap();
     assert!(prompt.t5.iter().chain(&prompt.clip).all(|v| v.is_finite()));
@@ -31,7 +33,7 @@ fn repaints_only_the_hole_and_keeps_the_rest() {
     let mask: Vec<f32> =
         (0..side * side).map(|i| if (96..160).contains(&(i % side)) && (96..160).contains(&(i / side)) { 1.0 } else { 0.0 }).collect();
     let mut calls = Vec::new();
-    let req = Request { rgb: &rgb, mask: &mask, side, steps: w.default_steps(), guidance: 30.0, seed: 1 };
+    let req = Request { rgb: &rgb, mask: &mask, side, steps: w.default_steps(), guidance: 30.0, seed: 1, cancel: None };
     let out = model
         .fill(&req, &prompt, &mut |d, n| {
             calls.push((d, n));

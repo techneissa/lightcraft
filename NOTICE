@@ -63,10 +63,12 @@ Forest Labs' reference code (https://github.com/black-forest-labs/flux, Apache L
 adapts the CLIP tokenizer of crates/segment. The port was modified by the LightCraft contributors
 (2026): the FLUX.1 Fill input layout, LoRA layers added at run time, a VAE that reads the diffusers
 layout and convolves in bands; each ported file says so. Because of this, crates/flux is licensed
-under the Apache License 2.0 only. The FLUX.1 Fill dev weights, its text encoders and VAE, and any
-LoRA are not part of LightCraft and are never distributed with it: FLUX.1 [dev] models are under
-Black Forest Labs' FLUX.1 [dev] Non-Commercial License, and a user places them in the models folder
-only when they choose to.
+under the Apache License 2.0 only. No model file is part of LightCraft: nothing is bundled and nothing
+is downloaded, a user places the files in the models folder only when they choose to. The licences
+of the files are the user's to follow: FLUX.1 Fill [dev] (the GGUF transformer) and the FLUX.1 Turbo
+LoRA are under Black Forest Labs' FLUX.1 [dev] Non-Commercial License; the T5-XXL text encoder
+(Google), the CLIP-L text encoder (OpenAI) and the FLUX VAE are under the licences their model cards
+in the FLUX.1 Fill [dev] repository give.
 
 crates/parsing (lightcraft-parsing) runs SegFormer (Xie et al., 2021), BiSeNet (Yu et al., 2018) and
 MediaPipe's face landmark model v2 (Google, Apache-2.0), written for candle from the papers and the

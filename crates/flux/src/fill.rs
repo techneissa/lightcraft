@@ -6,6 +6,8 @@
 //! noise to picture, Euler steps on the time-shifted schedule of FLUX.1 dev, guidance embedded (no second pass).
 
 use std::path::Path;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use candle_core::{DType, Device, Tensor};
 use candle_transformers::models::flux::sampling;
@@ -34,6 +36,8 @@ pub struct Request<'a> {
     /// The embedded guidance (FLUX.1 Fill: 30).
     pub guidance: f64,
     pub seed: u64,
+    /// Set by the caller to stop: checked between steps and between the VAE's convolution bands.
+    pub cancel: Option<Arc<AtomicBool>>,
 }
 
 /// The loaded transformer (with its LoRA) and VAE.
@@ -81,7 +85,11 @@ impl FillModel {
             return Err(Error::Cancelled);
         }
         let dev = &self.device;
-        let (img_cond, h, w) = self.condition(req)?;
+        let _scope = crate::vae::stop_on(req.cancel.clone());
+        // a convolution that stopped between bands reports an error; to the caller it is a cancel
+        let cancelled = || req.cancel.as_ref().is_some_and(|f| f.load(Ordering::Relaxed));
+        let or_cancel = |e: Error| if cancelled() { Error::Cancelled } else { e };
+        let (img_cond, h, w) = self.condition(req).map_err(or_cancel)?;
         let noise = noise(req.seed, 16 * h * w);
         let noise = Tensor::from_vec(noise, (1, 16, h, w), dev)?;
         let state_img = pack(&noise)?;
@@ -108,7 +116,7 @@ impl FillModel {
             }
         }
         let latents = sampling::unpack(&img, s, s)?;
-        let out = self.vae.decode(&latents)?;
+        let out = self.vae.decode(&latents).map_err(|e| or_cancel(e.into()))?;
         let out = ((out.clamp(-1f32, 1f32)? + 1.0)? * 0.5)?;
         let out = out.squeeze(0)?.permute((1, 2, 0))?.flatten_all()?.to_dtype(DType::F32)?.to_vec1::<f32>()?;
         if out.len() != px * 3 {
@@ -136,6 +144,8 @@ impl FillModel {
 }
 
 fn load_flux(path: &Path, cfg: &Config, lora: &LoraSet, dev: &Device) -> Result<Flux> {
+    // the header is checked against the file's size before candle allocates anything from it
+    crate::gguf::check(path)?;
     let vb = VarBuilder::from_gguf(path, dev)?;
     if !vb.contains_key("img_in.weight") || !vb.contains_key("double_blocks.0.img_attn.qkv.weight") {
         return Err(Error::Model(format!("{} is not a FLUX.1 GGUF", path.display())));
