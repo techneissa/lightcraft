@@ -86,6 +86,10 @@ impl GpuStages {
     fn put(&self, e: Entry) {
         let mut v = self.lock();
         v.retain(|o| !(o.geo == e.geo && Arc::ptr_eq(&o.src, &e.src)));
+        // (another photo's image before its retouching is of no use to this one's sliders)
+        for o in v.iter_mut().filter(|o| !Arc::ptr_eq(&o.src, &e.src)) {
+            o.pre_retouch = None;
+        }
         v.push(e);
         while v.len() > CAPACITY {
             v.remove(0);
@@ -136,7 +140,7 @@ impl GpuStages {
             if let Some(l) = &e.last {
                 add(&l.out);
             }
-            if let Some(p) = &e.pre_retouch {
+            if let Some(p) = e.pre_retouch.as_ref().and_then(|p| p.kept.peek()) {
                 add(&p.dev);
                 patches += p.host_bytes();
             }
@@ -1136,7 +1140,7 @@ fn linear_stage(cx: &mut Cx<'_>, at: &ViewAt<'_>, sampled: &Buf, info: &SourceIn
             let host = drawn.as_ref().map_or(0, |k| k.bytes());
             c.spots_cpu.put(src, plan.geo, drawn, host);
         }
-        let from = Arc::downgrade(&r.pre.dev);
+        let from = r.from;
         let redone =
             crate::pre_retouch::changed(old_retouch.as_deref(), r.boxes.as_deref()).map(|rects| crate::dirty::Redone { from: from.clone(), rects });
         (r.img, from, redone, Some(r.pre), r.boxes)
@@ -1149,8 +1153,9 @@ fn linear_stage(cx: &mut Cx<'_>, at: &ViewAt<'_>, sampled: &Buf, info: &SourceIn
             let host = k.1.as_ref().map_or(0, |k| k.bytes());
             c.spots_cpu.put(src, plan.geo, k.1, host);
         }
-        // (no retouching drew on it)
-        (pre, post, redone, None, Some(Vec::new()))
+        // (no retouching drew on it, or the CPU stage did without saying where)
+        let boxes = (!lightcraft_pipeline::retouch_step::active(s)).then(Vec::new);
+        (pre, post, redone, None, boxes)
     };
     let noise = colour_noise.as_ref().map(|c| &c.1);
     // only the boxes the spots rewrote, when the kept linear image was made from the image they started from

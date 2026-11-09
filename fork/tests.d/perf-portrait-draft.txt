@@ -1,4 +1,4 @@
 # Performance: Portrait slider drags (branch perf/portrait-draft)
-cargo test -p lightcraft-pipeline --lib -- tests_retouch_cache retouch_step tests_retouch tests_window spots_keep reshape_step
+cargo test -p lightcraft-pipeline --lib -- tests_retouch_cache kept_budget retouch_step tests_retouch tests_window spots_keep reshape_step
 cargo test -p lightcraft-gpu --lib -- pre_retouch dirty reshape
 cargo test -p lightcraft-gpu --test it -- portrait_drag dirty_render spot_cache equivalence

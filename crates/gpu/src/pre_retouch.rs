@@ -2,10 +2,12 @@
 //! the CPU; the image before it (white balance, defringe, spots, red eye) is kept on the host and on the device, keyed
 //! by [`Plan::pre_retouch_key`], so a Portrait slider tick neither reads the frame back nor redoes those. The step's
 //! result goes up only in the rows of the boxes it may write ([`lightcraft_pipeline::retouch_step::write_boxes`]),
-//! and those boxes are the dirty rectangles the later stages redo (issue #111's tiles).
+//! and those boxes are the dirty rectangles the later stages redo (issue #111's tiles). The kept images count against
+//! [`lightcraft_pipeline::kept_budget::HOST`] and [`DEVICE`], which let the oldest go.
 
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
+use lightcraft_pipeline::kept_budget::{Budget, HOST, Kept};
 use lightcraft_pipeline::spots_keep::{CpuKept, Rect};
 use lightcraft_pipeline::{Plan, SourceInfo, retouch_step};
 use lightcraft_raster::Rgb32f;
@@ -13,27 +15,46 @@ use lightcraft_raster::Rgb32f;
 use crate::ctx::Buf;
 use crate::render::{Cx, rgb_words};
 
+thread_local! {
+    static FULL_UPLOAD: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Test hook: renders on this thread upload the retouched image whole instead of the rows of the step's boxes, so a
+/// test can compare a tick with a render that does not depend on the boxes.
+pub fn full_upload(on: bool) {
+    FULL_UPLOAD.with(|c| c.set(on));
+}
+
+/// The device's budget for kept images before the retouch step, across every view.
+pub(crate) static DEVICE: Budget = Budget::new(512 << 20);
+
 /// The image before the retouch step, on the host and on the device.
-#[derive(Clone)]
-pub(crate) struct PreRetouch {
-    pub(crate) key: u64,
-    pub(crate) host: Arc<Rgb32f>,
+pub(crate) struct Images {
+    pub(crate) host: Rgb32f,
     pub(crate) dev: Arc<Buf>,
 }
 
-impl PreRetouch {
+impl Images {
     /// Bytes held on the host (the device buffer is counted with the stages' buffers).
     pub(crate) fn host_bytes(&self) -> usize {
         self.host.data.len() * std::mem::size_of::<[f32; 3]>()
     }
 }
 
+/// [`Images`] by [`Plan::pre_retouch_key`], under the budgets.
+#[derive(Clone)]
+pub(crate) struct PreRetouch {
+    pub(crate) key: u64,
+    pub(crate) kept: Kept<Images>,
+}
+
 /// What [`linear`] made.
 pub(crate) struct Retouched {
     /// The retouched image before noise reduction, on the device.
     pub(crate) img: Buf,
-    /// The image it was made from, to keep.
+    /// The image it was made from, to keep, and its device buffer (what the next tick's image is made from).
     pub(crate) pre: PreRetouch,
+    pub(crate) from: Weak<Buf>,
     /// The boxes the step may have written; `None`: anywhere.
     pub(crate) boxes: Option<Vec<Rect>>,
     /// The spots of the image before the step, to keep (`None` when the spots were not drawn again).
@@ -54,22 +75,28 @@ pub(crate) fn linear(
 ) -> Retouched {
     let (w, h) = (plan.w, plan.h);
     let t = crate::render::profiling().then(std::time::Instant::now);
-    let (pre, drawn) = match kept.filter(|k| k.key == plan.pre_retouch_key) {
-        Some(k) => (k.clone(), None),
+    let reused = kept.filter(|k| k.key == plan.pre_retouch_key).and_then(|k| k.kept.get().map(|i| (k.clone(), i)));
+    let (pre, images, drawn) = match reused {
+        Some((k, i)) => (k, i, None),
         None => {
             let mut img = host_sampled.unwrap_or_else(|| cx.read_rgb(sampled, w, h));
             let kept_spots = lightcraft_pipeline::spots_keep::lin_cpu_pre_retouch(&mut img, info, plan, spots);
             let dev = Arc::new(cx.gpu.upload(rgb_words(&img)));
-            (PreRetouch { key: plan.pre_retouch_key, host: Arc::new(img), dev }, Some(kept_spots))
+            let images = Arc::new(Images { host: img, dev });
+            let bytes = images.host_bytes();
+            let kept = Kept::new(images.clone(), &[(&HOST, bytes), (&DEVICE, bytes)]);
+            (PreRetouch { key: plan.pre_retouch_key, kept }, images, Some(kept_spots))
         }
     };
     let t1 = crate::render::profiling().then(std::time::Instant::now);
-    let mut img = (*pre.host).clone();
+    let mut img = images.host.clone();
     retouch_step::apply(&mut img, info, plan);
     let t2 = crate::render::profiling().then(std::time::Instant::now);
     let boxes = retouch_step::write_boxes(info, plan);
-    let out = match &boxes {
-        Some(b) => upload_rows(cx, &pre.dev, &img, b),
+    // (a box whose rows are not in the image uploads it whole)
+    let rows = boxes.as_deref().filter(|_| !FULL_UPLOAD.with(std::cell::Cell::get));
+    let out = match rows.and_then(|b| upload_rows(cx, &images.dev, &img, b)) {
+        Some(b) => b,
         None => cx.gpu.upload(rgb_words(&img)),
     };
     if let (Some(t), Some(t1), Some(t2)) = (t, t1, t2) {
@@ -83,23 +110,27 @@ pub(crate) fn linear(
             ms(t2, std::time::Instant::now())
         );
     }
-    Retouched { img: out, pre, boxes, spots: drawn }
+    Retouched { img: out, from: Arc::downgrade(&images.dev), pre, boxes, spots: drawn }
 }
 
-/// A copy of `base` (the image before the step, on the device) with the rows of `boxes` taken from `img`.
-fn upload_rows(cx: &mut Cx<'_>, base: &Buf, img: &Rgb32f, boxes: &[Rect]) -> Buf {
-    let out = cx.copy(base);
+/// A copy of `base` (the image before the step, on the device) with the rows of `boxes` taken from `img`; `None` when
+/// a box's rows are not all in the image or `base` is not its size (the caller uploads it whole).
+fn upload_rows(cx: &mut Cx<'_>, base: &Buf, img: &Rgb32f, boxes: &[Rect]) -> Option<Buf> {
     let words = rgb_words(img);
     let row = img.width * 3;
-    for (y0, y1) in row_spans(boxes) {
-        let Some(part) = words.get(y0.saturating_mul(row)..y1.saturating_mul(row)) else { continue };
-        if part.is_empty() {
-            continue;
-        }
-        let up = cx.gpu.upload(part);
-        cx.copy_into(&up, &out, y0 * row);
+    if base.len != words.len() {
+        return None;
     }
-    out
+    let parts: Vec<(usize, &[f32])> = row_spans(boxes)
+        .into_iter()
+        .map(|(y0, y1)| Some((y0 * row, words.get(y0.checked_mul(row)?..y1.checked_mul(row)?)?)))
+        .collect::<Option<_>>()?;
+    let out = cx.copy(base);
+    for (at, part) in parts.into_iter().filter(|(_, p)| !p.is_empty()) {
+        let up = cx.gpu.upload(part);
+        cx.copy_into(&up, &out, at);
+    }
+    Some(out)
 }
 
 /// The rows `[y0, y1)` the boxes cover, overlapping spans merged.

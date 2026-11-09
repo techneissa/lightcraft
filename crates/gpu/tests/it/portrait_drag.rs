@@ -85,12 +85,22 @@ fn edit() -> DevelopSettings {
     s
 }
 
-/// Render `s` with `cache`: (output tiles computed, image before-the-step runs), checked against a whole render.
+/// A whole render of `s` that does not depend on the retouch step's boxes: no stages, the retouched image uploaded
+/// whole.
+fn whole(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest) -> lightcraft_raster::Rgba8 {
+    lightcraft_gpu::retouch_full_upload(true);
+    let img = lightcraft_gpu::render(src, info, s, req, None).expect("gpu").image;
+    lightcraft_gpu::retouch_full_upload(false);
+    img
+}
+
+/// Render `s` with `cache`: (output tiles computed, image before-the-step runs), checked against [`whole`]: a box
+/// that misses a pixel the step wrote leaves that pixel unretouched, and the tiles around it stale.
 fn tick(src: &Arc<Rgb32f>, info: &SourceInfo, s: &DevelopSettings, req: &RenderRequest, cache: &StageCache, what: &str) -> (usize, usize) {
     let (tiles, runs) = (tiles_rendered(), pre_retouch_runs());
     let img = lightcraft_gpu::render(src, info, s, req, Some(cache)).expect("gpu").image;
     let counts = (tiles_rendered() - tiles, pre_retouch_runs() - runs);
-    let whole = lightcraft_gpu::render(src, info, s, req, None).expect("gpu").image;
+    let whole = whole(src, info, s, req);
     let differ = img.data.iter().zip(&whole.data).filter(|(a, b)| a != b).count();
     assert_eq!(differ, 0, "{what}: pixels that differ from a whole render");
     counts
@@ -133,4 +143,36 @@ fn a_portrait_slider_tick_redoes_only_the_face_with_a_whole_render_s_pixels() {
     controls::set(&mut s, "retouch.skin.smoothness", 45.0);
     let (_, runs) = tick(&src, &info, &s, &req, &cache, "face-filling tick");
     assert_eq!(runs, 0, "face-filling: the image before the step is kept");
+}
+
+/// A frame of one noise tile with one view's stages: a Skin slider taken to 0 and back renders what fresh renders do
+/// (the noise is measured apart from the retouching only while it is on).
+#[test]
+fn a_one_tile_frame_measures_its_noise_as_a_fresh_render_does() {
+    if !gpu() {
+        return;
+    }
+    let (clean, info) = portrait(360, 240, NormRect::new(0.3, 0.1, 0.7, 0.9));
+    // (colour noise, for the noise reduction to measure, and a large clone the tile measurement leaves out)
+    let mut noisy = (*clean).clone();
+    for (i, p) in noisy.data.iter_mut().enumerate() {
+        let n = |k: u32| ((i as u32).wrapping_mul(2_654_435_761).wrapping_add(k.wrapping_mul(40_503)) >> 16) as f32 / 65_535.0 - 0.5;
+        p[0] = (p[0] * (1.0 + 0.3 * n(1))).max(0.0);
+        p[2] = (p[2] * (1.0 + 0.3 * n(2))).max(0.0);
+    }
+    let src = Arc::new(noisy);
+    let req = RenderRequest { quality: Quality::Draft, ..RenderRequest::fit(360, 240) };
+    let cache = StageCache::default();
+    let mut s = edit();
+    s.spots = vec![lightcraft_develop::Spot {
+        mode: lightcraft_develop::SpotMode::Clone,
+        points: vec![lightcraft_geom::Point::new(0.15, 0.5)],
+        size: 0.12,
+        source_offset: Some(lightcraft_geom::Point::new(0.35, 0.0)),
+        ..Default::default()
+    }];
+    for v in [40.0, 0.0, 40.0, 0.0] {
+        controls::set(&mut s, "retouch.skin.smoothness", v);
+        tick(&src, &info, &s, &req, &cache, &format!("Skin {v}"));
+    }
 }
