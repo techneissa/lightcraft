@@ -521,6 +521,8 @@ impl Session {
                     choice,
                     orient: p.develop.orientation,
                     regions,
+                    // (Stray Hair is searched on full-size crops of the original: `parts/crop.rs`)
+                    cropper: self.retouch_cropper(p.id).map(Box::new),
                 })
             }
         })

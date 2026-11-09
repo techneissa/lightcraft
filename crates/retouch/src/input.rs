@@ -292,6 +292,30 @@ pub struct Strands {
     /// (0…255 for 0…π, in the searched picture's pixels, x right and y down) and the polarity (0 none, 1 darker than
     /// its sides, 2 lighter).
     pub cells: Vec<[u8; 3]>,
+    /// How the search went: what a readout says when no strand was found.
+    pub searched: Searched,
+    /// The strands found: runs of cells above half a weight that are long enough to be a strand.
+    pub count: u32,
+    /// The face's size in the searched picture's pixels, and the search's time in milliseconds (a readout; the
+    /// time is not part of [`Input::fingerprint`]).
+    pub face_px: u32,
+    pub ms: u32,
+    /// Of `ms`, what cutting and reducing the head's crop took.
+    pub crop_ms: u32,
+}
+
+/// How a face's strand search went.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum Searched {
+    /// Searched (maybe nothing found).
+    #[default]
+    Yes,
+    /// The face is under [`crate::hair::MIN_FACE_PX`] pixels in the searched picture: its strands are thinner than a
+    /// pixel there.
+    TooSmall,
+    /// The face has neither a Hair nor a Facial Skin mask: there is nowhere to look.
+    NoParts,
 }
 
 impl Strands {
@@ -458,7 +482,7 @@ impl Input {
                         for v in [s.area.x0, s.area.y0, s.area.x1, s.area.y1, s.side, s.step] {
                             h.u64(v.to_bits());
                         }
-                        for v in [s.width, s.height, s.picture.0, s.picture.1, s.tiles.len(), s.cells.len()] {
+                        for v in [s.width, s.height, s.picture.0, s.picture.1, s.tiles.len(), s.cells.len(), s.searched as usize, s.count as usize] {
                             h.u64(v as u64);
                         }
                         for t in &s.tiles {

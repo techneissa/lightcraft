@@ -8,10 +8,15 @@ One slider in the Portrait tab's Stray Hair section, **Amount**, 0 to 100, off a
 (`retouch.hair.amount`; per face `retouchFace.<i>.hair.amount`). It finds thin, high-contrast, line-like strands once
 per photo and, in every render, fills each from what is beside it.
 
-**The search, once per photo** (`hair::with_strands`), as Blemishes finds its spots: the face search runs it with the
-people parse (`crates/engine/src/retouch_input/parts.rs`, `found`), on the parse's picture (the photo before any
-retouching, 2048 px, in linear light, turned like the masks), on its worker and under its "Finding Faces" row in the
-activity stack. What it finds is kept with each face (`Face::strands`): a grid of cells over the searched area in the
+**The search, once per photo** (`hair::with_strands_on_crops`), as Blemishes finds its spots: the face search runs it
+with the people parse (`crates/engine/src/retouch_input/parts.rs`, `found_with`), on its worker and under its "Finding
+Faces" row in the activity stack. Per face it searches a **crop of the head cut from the full-size photo** (not the
+2048 px parse picture, where a strand is thinner than a pixel): the pixels the face's grid covers and a margin to read
+beside them (`PAD`), rendered like the parse picture (default settings, linear light, turned like the masks) as a window
+of the original (`parts/crop.rs`, `Cropper`), reduced to at most 3072 px along its longer side (`MAX_CROP`). Strand
+width stays a face fraction and the result stays in the photo's normalised frame, with the crop's pixels as the
+picture the directions and distances are measured in (`Strands::picture`: the photo's size at the crop's reduction).
+A photo whose size is not the parse picture's shape, or a head that can't be cut, falls back to the parse picture. What it finds is kept with each face (`Face::strands`): a grid of cells over the searched area in the
 photo's normalised frame, stored only for the 16 × 16-cell tiles holding a strand (each cell: weight, direction across
 the strand, polarity). A render never searches: until the search has run, a face gets no Stray Hair.
 
@@ -32,7 +37,16 @@ the strand, polarity). A render never searches: until the search has run, a face
   tone, measured over the face's grid), contrast above a crease's, and not sit in a beard. The kept strands are grown
   by two cells and softened (to cover a strand's soft edge and the sharpening halo beside it), then cut again to where
   to look, so their edge never reaches clothes, a part left alone or the hair mass.
-- Faces smaller than 120 px in the searched picture are not searched (their strands are thinner than a pixel there).
+- Faces smaller than 120 px in the searched picture are not searched (their strands are thinner than a pixel there);
+  on the full-size crop that is a face of 120 px of the original, not of the 2048 px picture.
+
+**What the section says** (`panels/portrait/hair.rs`, and `retouch.faces`' `strands` per face): "Searched N Faces · M
+Strands" (a strand: a run of at least 20 cells of the search grid above half a weight, `count_strands`); why not:
+"Faces Not Found Yet" (no faces yet), "Face Parts Not Found: Settings…" (the faces came from YuNet, without the people
+parse: its models are not installed, so there is nothing to search with; the button opens Settings ▸ Faces), "Face Too
+Small", "Face Parts Not Found" (a face with neither a Hair nor a Facial Skin mask). `Strands::{searched, count,
+face_px, ms, crop_ms}` hold it; `retouch.faces` gives `strands: {status: searched|tooSmall|noParts|notSearched, count,
+ms, cropMs, facePx}` (the time is not in the fingerprint).
 
 **The repair, every render** (`hair/repair.rs`), per strand cell, never per pixel of the face: the cell's centre is
 mapped into the image through the view, with its tile's local scale for the direction and distances. One fill per
@@ -68,6 +82,46 @@ Speed (on a test Mac with other work running, release, one face, the example's s
 once per photo on the 2048 px picture, 100–360 ms; the repair (a slider drag, or the Stray Hair share of any other
 drag) 2.0–6.4 ms. A Skin drag with Stray Hair on runs Skin and the repair, never the search. No model runs.
 
+## Step 1 of the rework (`feat/stray-hair-v2-step1`): measured on 12 private test portraits
+
+Test Mac, 33 MP raws, 13 faces (the photos are men with short dark hair and beards: few real flyaways). Search per
+face before (the parse picture, 2048 px) → after (a full-size head crop); strands = the readout's count.
+
+| Face (px in the picture searched) | Strands before → after | Search ms before → after (+ crop ms) |
+|---|---|---|
+| 634 → 2171 | 17 → 22 | 172 → 122 (+763) |
+| 576 → 1972 | 5 → 5 | 242 → 106 (+729) |
+| 505 → 1728 | 13 → 12 | 311 → 122 (+616) |
+| 849 → 2905 | 16 → 12 | 235 → 90 (+806) |
+| 766 → 2620 | 1 → 2 | 857 → 93 (+707) |
+| 763 → 2612 | 15 → 14 | 687 → 87 (+602) |
+| 417 → 1426 | 2 → 2 | 1165 → 122 (+624) |
+| 361 → 1236 | 20 → 44 | 283 → 110 (+639) |
+| 344 → 1179 | 19 → 39 | 1082 → 110 (+584) |
+| 212 → 725 (padel hall, ISO noise) | 12 → 277 | 172 → 101 (+632) |
+| 254 → 870 | 23 → 210 | 368 → 110 (+592) |
+| 67 → 230 (too small before) | – → 226 | – → 76 (+554) |
+| 122 → 417 | 4 → 282 | 66 → 119 (+651) |
+
+What it shows:
+- **Silent no-op: holds.** Without the people-parse models the faces come from YuNet, `strands` is `None` and Stray Hair
+  does nothing with no message. Now the section says so. With the models installed (here) every face is searched.
+- **Gates multiply: does not hold.** Counting cells per face (a temporary counter, not kept): of cells that pass the
+  contrast and line gates at 0.5 (hundreds to ~12 000 of ~200 000 to 390 000 searched), 0 to 37 end below a full
+  weight because the product is small, 0 are cut by the density gate, and the straight-run gate cuts 5 to 25 %.
+  The gate that rejects is the contrast floor (`SKIN_CONTRAST` 0.05, or 1.5 × the texture): of ~100 000 line-like cells
+  only ~1 000 stand out enough. No threshold changed: no photo here showed strands rejected by a gate that I could
+  attribute to one (the flyaways visible at 100 % are thin curls, 1 to 2 px wide, that were mostly not found on either
+  picture).
+- **The full-size crop finds more, and not only strands.** On the two clean faces few strands change; on noisy,
+  small faces in a dark hall the count goes up 15 to 70 times: sensor grain and background lines (court bars, wall
+  stripes) pass the gates at full size, and a beard's stubble and an ear's rim were already repaired on the parse
+  picture too. The cell size was left at 400 across the face: 700 took about a second a face and counted grain.
+- **Speed.** The search is 76–122 ms a face on the crop (it was 66–1165 ms on the parse picture), plus 550–810 ms to
+  render the head's window from the decoded original (once per face; the original decodes once per photo). A face
+  stays under 1 s.
+- Pictures (private test portraits, so only in `$WORKSPACE/assets/lightcraft/shots/portrait/hair-stray/v2-step1/`).
+
 ## Branch
 
 `feat/retouch-hair`
@@ -76,7 +130,7 @@ drag) 2.0–6.4 ms. A Skin drag with Stray Hair on runs Skin and the repair, nev
 
 `crates/retouch/src/hair.rs`, `crates/retouch/src/hair/{detect,grid,region,repair}.rs`,
 `crates/retouch/examples/hair.rs`, `crates/retouch/tests/hair.rs`, `crates/ui-egui/src/panels/portrait/hair.rs`,
-`fork/retouch-hair.md`, `fork/tests.d/retouch-hair.txt`
+`crates/engine/src/retouch_input/parts/crop.rs`, `fork/retouch-hair.md`, `fork/tests.d/retouch-hair.txt`
 
 ## Hooks in official files
 
@@ -86,9 +140,10 @@ drag) 2.0–6.4 ms. A Skin drag with Stray Hair on runs Skin and the repair, nev
 
 In fork files:
 - `crates/retouch/src/input.rs`: `Face::strands`, `Strands`, in the fingerprint.
-- `crates/engine/src/retouch_input/parts.rs`: `with_spots_and_strands` in `found` (the parse's faces get their spots
-  and strands from one linear picture); `crates/engine/src/retouch_input.rs`: `strands: None` for YuNet's faces and
-  the strands in the store's byte count; `crates/engine/src/retouch_input/parts/tests.rs`: a test.
+- `crates/engine/src/retouch_input/parts.rs`: `with_spots_and_strands` in `found_with` (the parse's faces get their
+  spots from one linear picture and their strands from full-size crops, `Crops`); `crates/engine/src/retouch_input.rs`:
+  the finder's `Cropper`; `crates/engine/src/cmd/retouch.rs`: `strands` in `retouch.faces`; `crates/engine/src/retouch_input.rs`: `strands: None` for YuNet's faces and
+  the strands in the store's byte count; `crates/engine/src/retouch_input/parts/tests.rs`: two tests.
 - `crates/pipeline/src/retouch_step.rs`: a zoom test on a flyaway. `crates/ui-egui/src/tests/portrait.rs`: a test of
   the section.
 
@@ -104,10 +159,10 @@ searched yet: no change) and the same input giving the same pixels; a brighter r
 still losing the strands with no new search; a new parse with another Hair mask finding other strands; a face too
 small to search left alone; a flyaway running into a sweater repaired with the sweater's pixels and stored cells
 untouched, and the strands' grown edge stopping where nothing may change (it reached two cells in before the cut); no
-faces, 50 faces, faces past the edge, a 1 × 1 and an empty photo. In the engine: the parse's faces get their strands,
+faces, 50 faces, faces past the edge, a 1 × 1 and an empty photo. A head crop cut from a full-size photo finds the strands, in the photo's frame, with the count; a face too small or without parts says why; a crop that fails leaves nothing; a crop is reduced to the cap; the engine searches the crops (also turned) and falls back to the parse picture for a photo of another shape. In the engine: the parse's faces get their strands,
 in the photo's frame, also turned; a face without Hair or Facial Skin is not searched. In the pipeline: a zoomed
 window whose edge lies on a flyaway equals the whole frame's render (2 levels apart with no reach). In the UI: the
-section's Amount set by a click. Pictures: `cargo run -p lightcraft-retouch --release --example hair -- in.jpg
+section's Amount set by a click, and its readout's words. Pictures: `cargo run -p lightcraft-retouch --release --example hair -- in.jpg
 out.jpg --faces dir/faces.json --amount 100 --changes changes.png [--width 1936 --runs 10 --skin 50]` (faces from the
 parsing crate's `face_input` example).
 

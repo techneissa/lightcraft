@@ -103,7 +103,7 @@ fn strand(area: NormRect, picture: (usize, usize)) -> (impl Fn(f64, f64) -> bool
     }
     let mut tiles = vec![u32::MAX; (N / Strands::TILE) * (N / Strands::TILE)];
     tiles[0] = 0;
-    let strands = Strands { area, width: N, height: N, picture, side: 3.0, step: 1.0, tiles, cells };
+    let strands = Strands { area, width: N, height: N, picture, side: 3.0, step: 1.0, tiles, cells, ..Strands::default() };
     let (y0, y1) = (area.y0 + ROW as f64 / N as f64 * area.height(), area.y0 + (ROW + 1) as f64 / N as f64 * area.height());
     let x1 = area.x0 + Strands::TILE as f64 / N as f64 * area.width();
     (move |x: f64, y: f64| x >= area.x0 && x < x1 && y >= y0 && y < y1, strands)
