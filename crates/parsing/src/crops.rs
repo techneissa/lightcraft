@@ -43,11 +43,18 @@ fn body_box(face: &NormRect, aspect: f32) -> NormRect {
     NormRect::new(cx - BODY_WIDE * fw / 2.0, face.y0 - BODY_ABOVE * fh, cx + BODY_WIDE * fw / 2.0, face.y0 + BODY_BELOW * fh)
 }
 
+/// The people's boxes (see [`placed`]).
+#[cfg(test)]
+fn people_boxes(body: &BodyMap, faces: &[NormRect], img: &RgbImage) -> Vec<NormRect> {
+    placed(body, faces, img).0
+}
+
 /// Where each person is: the body box around their face, grown to take in what the clothes parser saw of them close
 /// by (an arm held out), or for a person without a face the clothes parser's piece; largest face first. Sapiens2
 /// decides only inside these boxes: it is trained on pictures with people in them, and in a photo without any (a car
-/// at night) it calls much of the picture a person.
-pub fn people_boxes(body: &BodyMap, faces: &[NormRect], img: &RgbImage) -> Vec<NormRect> {
+/// at night) it calls much of the picture a person. With them, for each cell of the body map, the box of the person
+/// the clothes parser sees there (`None`: nobody, or a person without a box).
+fn placed(body: &BodyMap, faces: &[NormRect], img: &RgbImage) -> (Vec<NormRect>, Vec<Option<usize>>) {
     let (w, h) = (body.w, body.h);
     let owners = crate::people::assign(&body.person(), &body.skin_or_hair(), w, h, faces);
     let mut extent = vec![(usize::MAX, usize::MAX, 0usize, 0usize); owners.people];
@@ -60,6 +67,7 @@ pub fn people_boxes(body: &BodyMap, faces: &[NormRect], img: &RgbImage) -> Vec<N
     // a face's box is a fraction of the photo; its pixels are wider or taller by the photo's shape
     let aspect = img.width.max(1) as f32 / img.height.max(1) as f32;
     let mut out = Vec::new();
+    let mut box_of = vec![None; owners.people];
     for (k, e) in extent.iter().enumerate() {
         let piece = (e.0 < e.2 && e.1 < e.3)
             .then(|| NormRect::new(e.0 as f32 / w as f32, e.1 as f32 / h as f32, e.2 as f32 / w as f32, e.3 as f32 / h as f32));
@@ -75,10 +83,14 @@ pub fn people_boxes(body: &BodyMap, faces: &[NormRect], img: &RgbImage) -> Vec<N
             (None, None) => continue,
         };
         if let Some(b) = grow(&b, 0.05).clamped() {
+            if let Some(slot) = box_of.get_mut(k) {
+                *slot = Some(out.len());
+            }
             out.push(b);
         }
     }
-    out
+    let stands = owners.owner.iter().map(|&o| usize::from(o).checked_sub(1).and_then(|k| box_of.get(k).copied().flatten())).collect();
+    (out, stands)
 }
 
 /// Which people's boxes get a pass of their own: the first `max` of those under half the photo (a box over most of
@@ -112,32 +124,83 @@ fn weights(b: &NormRect, w: usize, h: usize) -> impl Iterator<Item = (usize, f32
     (0..ch).flat_map(move |y| (0..cw).map(move |x| ((gy0 + y) * w + gx0 + x, fade(x, cw, gx0, w).min(fade(y, ch, gy0, h)))))
 }
 
-/// How much Sapiens2 counts at each cell of a `w × h` grid: 1 inside a person's box, fading to 0 at its inner edges.
+/// How much Sapiens2 counts at each cell of a `w × h` grid: 1 inside the people's boxes, fading to 0 toward the edge of
+/// the area they cover together. Where one box meets another it does not fade: a dip there would hand a thin line
+/// across both people back to the clothes parser (#124).
 pub fn presence(people: &[NormRect], w: usize, h: usize) -> Vec<f32> {
-    let mut out = vec![0.0f32; w * h];
+    let n = w * h;
+    let mut covered = vec![false; n];
+    // how far each cell's fade reaches along each axis: the longest of its boxes'
+    let mut reach = vec![(0.0f32, 0.0f32); n];
     for b in people {
-        for (i, v) in weights(b, w, h) {
-            if let Some(o) = out.get_mut(i) {
-                *o = o.max(v);
+        let (_, _, cw, ch) = cells(b, w, h);
+        let r = ((FEATHER * cw as f32).max(1.0), (FEATHER * ch as f32).max(1.0));
+        for (i, _) in weights(b, w, h) {
+            if let (Some(c), Some(o)) = (covered.get_mut(i), reach.get_mut(i)) {
+                *c = true;
+                *o = (o.0.max(r.0), o.1.max(r.1));
             }
+        }
+    }
+    let at = |i: usize| covered.get(i).copied().unwrap_or(false);
+    let dx = inward(w, h, |line, k| at(line * w + k));
+    let dy = inward(h, w, |line, k| at(k * w + line));
+    let mut out = vec![0.0f32; n];
+    for (i, o) in out.iter_mut().enumerate() {
+        let (Some(&r), Some(&x), Some(&y)) = (reach.get(i), dx.get(i), dy.get((i % w) * h + i / w)) else { continue };
+        if at(i) {
+            *o = (x / r.0).min(y / r.1).min(1.0);
         }
     }
     out
 }
 
-/// The box each cell belongs to: the one it is deepest inside (the greatest say), the smaller box on a tie (a person
-/// in front of or inside another's box); `None` outside every box.
-fn owners(people: &[NormRect], w: usize, h: usize) -> Vec<Option<usize>> {
+/// Along each of `lines` lines of `len` cells, how far each covered cell is from the nearest uncovered one, less half
+/// a cell (infinite toward the photo's border, which never fades); `line * len + k` order.
+fn inward(len: usize, lines: usize, covered: impl Fn(usize, usize) -> bool) -> Vec<f32> {
+    let mut out = vec![f32::INFINITY; len * lines];
+    for line in 0..lines {
+        let row = out.get_mut(line * len..(line + 1) * len).unwrap_or_default();
+        let mut last = None;
+        for (k, o) in row.iter_mut().enumerate() {
+            if !covered(line, k) {
+                last = Some(k);
+            }
+            *o = last.map_or(f32::INFINITY, |l| (k - l) as f32 - 0.5);
+        }
+        let mut next = None;
+        for (k, o) in row.iter_mut().enumerate().rev() {
+            if !covered(line, k) {
+                next = Some(k);
+            }
+            *o = o.min(next.map_or(f32::INFINITY, |l| (l - k) as f32 - 0.5));
+        }
+    }
+    out
+}
+
+/// The box each cell belongs to: the box of the person the clothes parser sees there (`stands`, per cell) when it
+/// covers the cell; else the box it is deepest inside (the greatest say), on a tie the one whose middle is nearest,
+/// then the smaller box (a person in front of or inside another's box); `None` outside every box. Two
+/// boxes of people side by side both count fully over much of their overlap: without the first two rules the smaller
+/// one's pass decided the other person's body there, cut off along a straight line (#124).
+fn owners(people: &[NormRect], stands: &[Option<usize>], w: usize, h: usize) -> Vec<Option<usize>> {
     let mut owner = vec![None; w * h];
-    let mut best = vec![(0.0f32, f32::INFINITY); w * h];
+    let mut best = vec![(false, 0.0f32, f32::NEG_INFINITY, f32::INFINITY); w * h];
     for (k, b) in people.iter().enumerate() {
         let area = b.width() * b.height();
+        let (mx, my) = b.centre();
+        let (mx, my) = (mx * w as f32, my * h as f32);
         for (i, v) in weights(b, w, h) {
+            let here = stands.get(i).copied().flatten() == Some(k);
+            let (u, t) = ((i % w) as f32 + 0.5, (i / w) as f32 + 0.5);
+            let near = -((u - mx).powi(2) + (t - my).powi(2));
+            let key = (here, v, near, area);
             if let (Some(o), Some(m)) = (owner.get_mut(i), best.get_mut(i))
-                && (v > m.0 || (v == m.0 && area < m.1))
+                && (key.0, key.1, key.2, -key.3).partial_cmp(&(m.0, m.1, m.2, -m.3)) == Some(std::cmp::Ordering::Greater)
             {
                 *o = Some(k);
-                *m = (v, area);
+                *m = key;
             }
         }
     }
@@ -168,13 +231,13 @@ fn parts_map_with(
     cancelled: &dyn Fn() -> bool,
     max: usize,
 ) -> Result<BodyMap> {
-    let people = people_boxes(&map, faces, img);
+    let (people, stands) = placed(&map, faces, img);
     if people.is_empty() {
         return Ok(map);
     }
     let (w, h) = (map.w, map.h);
     let cropped = crops(&people, max);
-    let owner = owners(&people, w, h);
+    let owner = owners(&people, &stands, w, h);
     let uncropped = |k: &usize| !cropped.get(*k).copied().unwrap_or(false);
     let mut probs = if owner.iter().flatten().any(uncropped) { crate::fuse::run(net, img, w, h, dev)? } else { vec![0.0; sapiens::CLASSES * w * h] };
     let mine: Vec<(usize, &NormRect)> = people.iter().enumerate().filter(|(k, _)| !uncropped(k)).collect();
@@ -428,6 +491,27 @@ mod tests {
     }
 
     #[test]
+    fn where_two_boxes_meet_the_mask_runs_on_without_a_seam() {
+        // two people side by side whose boxes just meet; both shirts are red, and the clothes parser sees nothing, so
+        // a dip in Sapiens2's say at the boxes' shared edge would show as a line of background (#124)
+        let img = photo(&[((0, 0, 40, 24), [255, 0, 0])]);
+        let faces = [NormRect::new(0.23, 0.1, 0.33, 0.2), NormRect::new(0.67, 0.1, 0.77, 0.2)];
+        let people = people_boxes(&nothing(), &faces, &img);
+        let (a, b) = (cells(&people[0], 40, 24), cells(&people[1], 40, 24));
+        assert!(a.0 + a.2 >= b.0 && a.0 + a.2 <= b.0 + 1, "the boxes meet with at most a cell in common: {a:?} {b:?}");
+        let net = |x: &Tensor| logits(x, &by_colour);
+        let m = parts_map(&net, nothing(), &img, &faces, &Device::Cpu, &|| false).unwrap();
+        for y in 6..18 {
+            for x in 11..29 {
+                assert!(atr(&m, UPPER, x, y) > 0.95, "({x}, {y}) breaks the shirt: {}", atr(&m, UPPER, x, y));
+            }
+        }
+        let p = presence(&people, 40, 24);
+        assert!(p[12 * 40 + a.0 + a.2 - 1] == 1.0 && p[12 * 40 + b.0] == 1.0, "no fade where one box meets another");
+        assert!(p[12 * 40 + a.0] < 1.0 && p[12 * 40 + b.0 + b.2 - 1] < 1.0, "the outer edges still fade");
+    }
+
+    #[test]
     fn a_person_without_a_pass_inside_anothers_box_keeps_the_whole_photo_pass() {
         let img = photo(&[]);
         // a large face, and a small one inside its body box; only the first gets a pass
@@ -466,10 +550,28 @@ mod tests {
     fn the_smaller_box_owns_a_cell_both_cover_fully() {
         let big = NormRect::new(0.0, 0.0, 1.0, 1.0);
         let small = NormRect::new(0.3, 0.3, 0.7, 0.7);
-        let o = owners(&[big, small], 10, 10);
+        let o = owners(&[big, small], &[], 10, 10);
         assert_eq!(o[5 * 10 + 5], Some(1));
         assert_eq!(o[0], Some(0));
-        assert_eq!(owners(&[], 2, 2), vec![None; 4]);
+        assert_eq!(owners(&[], &[], 2, 2), vec![None; 4]);
         assert_eq!(crops(&[small, big, small, small], 2), vec![true, false, true, false], "the big one never counts toward the cap");
+    }
+
+    #[test]
+    fn where_two_boxes_count_fully_a_person_keeps_their_own_pass() {
+        // two people side by side whose boxes cover most of the photo between them; the second box is smaller
+        let (a, b) = (NormRect::new(0.0, 0.0, 0.8, 1.0), NormRect::new(0.3, 0.0, 0.95, 1.0));
+        let (w, h) = (20, 10);
+        let o = owners(&[a, b], &[], w, h);
+        // the middle of both boxes: each side goes to the box whose middle is nearer, not all to the smaller box
+        assert_eq!(o[5 * w + 8], Some(0), "x 0.43 is nearer the first box's middle");
+        assert_eq!(o[5 * w + 14], Some(1), "x 0.73 is nearer the second's");
+        // where the clothes parser sees the first person, their own pass decides
+        let mut stands = vec![None; w * h];
+        stands[5 * w + 14] = Some(0);
+        assert_eq!(owners(&[a, b], &stands, w, h)[5 * w + 14], Some(0));
+        // a person seen outside their own box does not pull the cell out of the other's
+        stands[5 * w + 18] = Some(0);
+        assert_eq!(owners(&[a, b], &stands, w, h)[5 * w + 18], Some(1));
     }
 }

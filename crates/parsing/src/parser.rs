@@ -519,7 +519,7 @@ pub fn trim(p: Plane) -> Option<Plane> {
     let fx = |x: usize| r.x0 + x as f32 / w as f32 * r.width();
     let fy = |y: usize| r.y0 + y as f32 / h as f32 * r.height();
     let rect = NormRect::new(fx(x0), fy(y0), fx(x1), fy(y1));
-    let t = Plane { rect, width: nw, height: nh, data };
+    let t = Plane { rect, width: nw, height: nh, data, split: p.split };
     t.is_valid().then_some(t)
 }
 
@@ -537,7 +537,7 @@ mod tests {
     fn trimming_keeps_the_values_and_their_place() {
         let mut data = vec![0.0; 100];
         data[5 * 10 + 5] = 1.0;
-        let p = Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: 10, height: 10, data };
+        let p = Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: 10, height: 10, data, split: false };
         let t = trim(p.clone()).unwrap();
         assert_eq!((t.width, t.height), (3, 3));
         assert!((t.sample(0.55, 0.55) - p.sample(0.55, 0.55)).abs() < 1e-5);
