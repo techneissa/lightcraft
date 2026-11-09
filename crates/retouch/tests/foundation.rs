@@ -29,7 +29,7 @@ fn every_feature_has_a_section_and_unique_reachable_controls() {
     assert!(!f.set("retouch.nope.amount", 1.0) && !f.set("retouch.skin", 1.0) && f.get("light.exposure").is_none());
     // a feature whose key starts like another's is not confused with it
     assert!(f.set("retouch.skinTone.amount", 30.0));
-    assert_eq!((f.get("retouch.skin.amount"), f.get("retouch.skinTone.amount")), (Some(0.0), Some(30.0)));
+    assert_eq!((f.get("retouch.skin.smoothness"), f.get("retouch.skinTone.amount")), (Some(0.0), Some(30.0)));
     let mut keys: Vec<&str> = FEATURES.iter().map(|f| f.key).collect();
     keys.dedup();
     assert_eq!(keys.len(), FEATURES.len());
@@ -40,14 +40,14 @@ fn the_block_is_off_by_default_and_round_trips_through_json() {
     let r = Retouch::default();
     assert!(r.is_default() && r.is_off());
     let mut r = Retouch::default();
-    r.global.set("retouch.skin.amount", 40.0);
+    r.global.set("retouch.skin.smoothness", 40.0);
     r.faces.push(FaceOverride {
         face: FaceKey { person: Some("ann".into()), bounds: NormRect::new(0.1, 0.1, 0.3, 0.4), ..FaceKey::default() },
         settings: Features::default(),
     });
     assert!(!r.is_off());
     let v = serde_json::to_value(&r).unwrap();
-    assert_eq!(v["global"]["skin"]["amount"], json!(40.0));
+    assert_eq!(v["global"]["skin"]["smoothness"], json!(40.0));
     let back: Retouch = serde_json::from_value(v).unwrap();
     assert_eq!(back, r);
     // an override that is off for its face is still a setting, but renders nothing on its own
@@ -58,12 +58,12 @@ fn the_block_is_off_by_default_and_round_trips_through_json() {
 #[test]
 fn a_malformed_block_reads_as_off_and_keeps_what_it_can() {
     let v = json!({
-        "global": {"skin": {"amount": "lots"}, "eyes": {"amount": 30.0}, "future": {"x": 1}, "teeth_lips": 5},
+        "global": {"skin": {"smoothness": "lots"}, "eyes": {"amount": 30.0}, "future": {"x": 1}, "teeth_lips": 5},
         "faces": [{"face": {"bounds": {"x0": 0.0, "y0": 0.0, "x1": 0.0, "y1": 0.0}}, "settings": {}}, {"face": 3}, "x",
                   {"face": {"bounds": {"x0": 0.1, "y0": 0.1, "x1": 0.2, "y1": 0.2}}, "settings": {"eyes": {"amount": 1e9}}}]
     });
     let r: Retouch = serde_json::from_value(v).unwrap();
-    assert_eq!(r.global.get("retouch.skin.amount"), Some(0.0));
+    assert_eq!(r.global.get("retouch.skin.smoothness"), Some(0.0));
     assert_eq!(r.global.get("retouch.eyes.amount"), Some(30.0));
     assert_eq!(r.global.get("retouch.teethLips.amount"), Some(0.0));
     assert_eq!(r.faces.len(), 1, "overrides without a usable box are dropped");
@@ -80,10 +80,10 @@ fn an_override_stays_with_its_person_whatever_order_faces_come_in() {
     let anon = Face::boxed(NormRect::new(0.4, 0.5, 0.5, 0.7));
     let faces = vec![ann.clone(), bob.clone(), anon.clone()];
     let mut r = Retouch::default();
-    r.override_mut(&faces, 0).unwrap().set("retouch.skin.amount", 10.0);
-    r.override_mut(&faces, 2).unwrap().set("retouch.skin.amount", 30.0);
+    r.override_mut(&faces, 0).unwrap().set("retouch.skin.smoothness", 10.0);
+    r.override_mut(&faces, 2).unwrap().set("retouch.skin.smoothness", 30.0);
     assert_eq!(r.faces.len(), 2);
-    let amount = |r: &Retouch, faces: &[Face], i: usize| r.settings_for(faces, i).get("retouch.skin.amount");
+    let amount = |r: &Retouch, faces: &[Face], i: usize| r.settings_for(faces, i).get("retouch.skin.smoothness");
     for order in [[0, 1, 2], [2, 1, 0], [1, 2, 0], [2, 0, 1]] {
         let shuffled: Vec<Face> = order.iter().map(|&i| faces[i].clone()).collect();
         for (pos, &i) in order.iter().enumerate() {

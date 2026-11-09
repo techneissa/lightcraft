@@ -167,7 +167,7 @@ mod tests {
         assert!(!off.retouch.is_default() && off.retouch.is_off());
         // a feature on, but the Portrait tab's eye off
         let mut eye_off = plain.clone();
-        controls::set(&mut eye_off, "retouch.skin.amount", 60.0);
+        controls::set(&mut eye_off, "retouch.skin.smoothness", 60.0);
         eye_off.set_section_enabled("portrait", false);
         for depth in [OutputDepth::U8, OutputDepth::F32Linear] {
             let req = RenderRequest { depth, ..RenderRequest::fit(120, 120) };

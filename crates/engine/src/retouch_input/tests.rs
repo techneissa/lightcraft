@@ -68,10 +68,10 @@ fn faces_are_found_by_the_provider_and_listed() {
 fn a_value_for_one_face_stays_with_its_person_when_faces_come_back_in_another_order() {
     let (mut s, fake) = demo_with(vec![ann(), bob()]);
     s.execute("retouch.detect", &json!({})).unwrap();
-    s.execute("retouch.set", &json!({"control": "retouch.skin.amount", "value": 20})).unwrap();
-    s.execute("retouch.set", &json!({"control": "retouch.skin.amount", "value": 70, "face": 1})).unwrap();
+    s.execute("retouch.set", &json!({"control": "retouch.skin.smoothness", "value": 20})).unwrap();
+    s.execute("retouch.set", &json!({"control": "retouch.skin.smoothness", "value": 70, "face": 1})).unwrap();
     let r = retouch_of(&s);
-    assert_eq!(r.global.get("retouch.skin.amount"), Some(20.0));
+    assert_eq!(r.global.get("retouch.skin.smoothness"), Some(20.0));
     assert_eq!(r.faces.len(), 1);
     assert_eq!(r.faces[0].face.person.as_deref(), Some("bob"));
     // a new detection (of another crop of the scene) finds them the other way round: Ann where Bob was, Bob far left
@@ -82,17 +82,17 @@ fn a_value_for_one_face_stays_with_its_person_when_faces_come_back_in_another_or
     assert_eq!(listed["faces"][1]["own"], Value::Null, "Ann follows every face's: {listed}");
     let faces: Vec<Face> = s.retouch_faces_of(s.active().unwrap()).found.unwrap().input.faces.clone();
     let r = retouch_of(&s);
-    assert_eq!(r.settings_for(&faces, 0).get("retouch.skin.amount"), Some(70.0));
-    assert_eq!(r.settings_for(&faces, 1).get("retouch.skin.amount"), Some(20.0));
+    assert_eq!(r.settings_for(&faces, 0).get("retouch.skin.smoothness"), Some(70.0));
+    assert_eq!(r.settings_for(&faces, 1).get("retouch.skin.smoothness"), Some(20.0));
     // and the per-face value is a develop control too
-    assert_eq!(s.execute("develop.set", &json!({"control": "retouchFace.0.skin.amount", "value": 15})).unwrap(), Value::Null);
-    assert_eq!(retouch_of(&s).faces[0].settings.get("retouch.skin.amount"), Some(15.0));
+    assert_eq!(s.execute("develop.set", &json!({"control": "retouchFace.0.skin.smoothness", "value": 15})).unwrap(), Value::Null);
+    assert_eq!(retouch_of(&s).faces[0].settings.get("retouch.skin.smoothness"), Some(15.0));
     // a face index past the list, a bad control, an unknown feature: errors, nothing changes
     let before = retouch_of(&s);
-    assert!(s.execute("retouch.set", &json!({"control": "retouch.skin.amount", "value": 1, "face": 9})).is_err());
+    assert!(s.execute("retouch.set", &json!({"control": "retouch.skin.smoothness", "value": 1, "face": 9})).is_err());
     assert!(s.execute("retouch.set", &json!({"control": "light.exposure", "value": 1})).is_err());
-    assert!(s.execute("retouch.set", &json!({"control": "retouchFace.0.skin.amount", "value": 1})).is_err());
-    assert!(s.execute("retouch.set", &json!({"control": "retouch.skin.amount", "value": 1, "face": -1})).is_err());
+    assert!(s.execute("retouch.set", &json!({"control": "retouchFace.0.skin.smoothness", "value": 1})).is_err());
+    assert!(s.execute("retouch.set", &json!({"control": "retouch.skin.smoothness", "value": 1, "face": -1})).is_err());
     assert!(s.execute("retouch.reset", &json!({"feature": "nope"})).is_err());
     assert_eq!(retouch_of(&s), before);
     // back to every face's settings, then all off
@@ -101,7 +101,7 @@ fn a_value_for_one_face_stays_with_its_person_when_faces_come_back_in_another_or
     s.execute("retouch.reset", &json!({})).unwrap();
     assert!(retouch_of(&s).is_default());
     s.execute("edit.undo", &json!({})).unwrap();
-    assert_eq!(retouch_of(&s).global.get("retouch.skin.amount"), Some(20.0), "one undo step each");
+    assert_eq!(retouch_of(&s).global.get("retouch.skin.smoothness"), Some(20.0), "one undo step each");
 }
 
 #[test]
@@ -110,7 +110,7 @@ fn copy_paste_sync_and_presets_carry_the_block_and_the_faces() {
     let vis = s.visible_cloned();
     s.execute("retouch.detect", &json!({})).unwrap();
     s.execute("retouch.set", &json!({"control": "retouch.eyes.amount", "value": 30})).unwrap();
-    s.execute("retouch.set", &json!({"control": "retouch.skin.amount", "value": 55, "face": 0})).unwrap();
+    s.execute("retouch.set", &json!({"control": "retouch.skin.smoothness", "value": 55, "face": 0})).unwrap();
     let want = retouch_of(&s);
     assert_eq!(want.faces.len(), 1);
     // copy / paste with Portrait ticked (it is not in the default copy groups)
@@ -143,9 +143,9 @@ fn default_copy_and_auto_sync_leave_the_portrait_settings_alone() {
     let vis = s.visible_cloned();
     s.execute("library.select", &json!({"ids": [vis[0].0, vis[1].0]})).unwrap();
     s.execute("develop.autoSync", &json!({"on": true})).unwrap();
-    s.execute("develop.set", &json!({"control": "retouch.skin.amount", "value": 40})).unwrap();
+    s.execute("develop.set", &json!({"control": "retouch.skin.smoothness", "value": 40})).unwrap();
     s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.5})).unwrap();
-    assert_eq!(s.develop_of(vis[0]).unwrap().retouch.global.get("retouch.skin.amount"), Some(40.0));
+    assert_eq!(s.develop_of(vis[0]).unwrap().retouch.global.get("retouch.skin.smoothness"), Some(40.0));
     let other = s.develop_of(vis[1]).unwrap();
     assert_eq!(other.light.exposure, 0.5, "Auto Sync is on");
     assert!(other.retouch.is_default(), "Auto Sync does not carry face edits");
@@ -223,7 +223,7 @@ fn an_all_off_block_renders_like_no_block_and_adds_nothing_to_the_keys() {
     let plain = s.render_now(id, 96, 96).unwrap().image;
     s.execute("retouch.detect", &json!({})).unwrap();
     // a face with its own settings, all off
-    s.execute("retouch.set", &json!({"control": "retouch.skin.amount", "value": 0, "face": 0})).unwrap();
+    s.execute("retouch.set", &json!({"control": "retouch.skin.smoothness", "value": 0, "face": 0})).unwrap();
     assert!(!retouch_of(&s).is_default() && retouch_of(&s).is_off());
     let p = s.catalog.photo(id).unwrap().clone();
     assert_eq!(s.retouch_salt(&p, &p.develop), 0);
@@ -249,7 +249,7 @@ fn a_retouched_photo_gets_its_faces_in_the_background_with_an_activity_row() {
     let mut s = Session::with_demo();
     s.retouch_faces.set_provider(Arc::new(Slow(go.clone())));
     let id = s.active().unwrap();
-    s.execute("develop.set", &json!({"control": "retouch.skin.amount", "value": 40})).unwrap();
+    s.execute("develop.set", &json!({"control": "retouch.skin.smoothness", "value": 40})).unwrap();
     let first = s.render_job(id, 64, 64, false, true).unwrap();
     assert!(first.info.retouch.is_none(), "renders don't wait");
     assert!(s.retouch_faces_of(id).busy);
@@ -307,7 +307,7 @@ fn no_panic_with_no_faces_fifty_faces_a_failing_provider_or_a_one_pixel_photo() 
     let mut s = Session::with_demo();
     s.retouch_faces.set_provider(Arc::new(Failing));
     let id = s.active().unwrap();
-    s.execute("develop.set", &json!({"control": "retouch.skin.amount", "value": 40})).unwrap();
+    s.execute("develop.set", &json!({"control": "retouch.skin.smoothness", "value": 40})).unwrap();
     assert!(s.render_now(id, 32, 32).is_ok());
     assert!(s.execute("retouch.detect", &json!({})).is_err());
     assert_eq!(s.retouch_faces_of(id).error.as_deref(), Some("the model is damaged"));
@@ -325,7 +325,7 @@ fn no_panic_with_no_faces_fifty_faces_a_failing_provider_or_a_one_pixel_photo() 
     s.execute("library.import", &json!({"paths": [png.to_string_lossy()]})).unwrap();
     let id = s.catalog.photos().next().unwrap().id;
     s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
-    s.execute("develop.set", &json!({"control": "retouch.skin.amount", "value": 100})).unwrap();
+    s.execute("develop.set", &json!({"control": "retouch.skin.smoothness", "value": 100})).unwrap();
     assert!(s.render_now(id, 16, 16).is_ok());
     assert_eq!(s.execute("retouch.detect", &json!({})).unwrap()["faces"].as_array().unwrap().len(), 1);
     let _ = std::fs::remove_dir_all(&src);
@@ -383,7 +383,7 @@ fn a_background_export_finds_the_faces_when_it_runs_not_when_it_is_set_up() {
     let mut s = Session::with_demo();
     s.retouch_faces.set_provider(Arc::new(Gate { go: go.clone(), calls: calls.clone() }));
     let id = s.active().unwrap();
-    s.execute("develop.set", &json!({"control": "retouch.skin.amount", "value": 40})).unwrap();
+    s.execute("develop.set", &json!({"control": "retouch.skin.smoothness", "value": 40})).unwrap();
     let opts = crate::export::ExportOptions { resize: Some(crate::export::Resize::long_edge(64)), ..Default::default() };
     let items = crate::export::prepare_batch(&mut s, &[id], &opts).unwrap();
     assert_eq!(calls.load(Ordering::SeqCst), 0, "setting up the export ran no face search");

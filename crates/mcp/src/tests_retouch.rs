@@ -13,17 +13,17 @@ fn mcp_reads_and_sets_a_portrait_value() {
     let r = call_tool(&mut b, "list_controls", &json!({"section": "portrait"}));
     assert!(!r.is_error, "{r:?}");
     let listed = r.structured.clone().unwrap_or_else(|| serde_json::from_str(r.content[0]["text"].as_str().unwrap()).unwrap());
-    let skin = listed.as_array().unwrap().iter().find(|c| c["id"] == "retouch.skin.amount").cloned().unwrap_or_default();
+    let skin = listed.as_array().unwrap().iter().find(|c| c["id"] == "retouch.skin.smoothness").cloned().unwrap_or_default();
     assert_eq!((skin["value"].clone(), skin["section"].clone()), (json!(0.0), json!("portrait")), "{listed}");
     // set like any slider
-    let r = call_tool(&mut b, "set_develop", &json!({"id": first.0, "values": {"retouch.skin.amount": 35}}));
+    let r = call_tool(&mut b, "set_develop", &json!({"id": first.0, "values": {"retouch.skin.smoothness": 35}}));
     assert!(!r.is_error, "{r:?}");
-    assert_eq!(b.session.develop_of(first).unwrap().retouch.global.get("retouch.skin.amount"), Some(35.0));
+    assert_eq!(b.session.develop_of(first).unwrap().retouch.global.get("retouch.skin.smoothness"), Some(35.0));
     // read back in the settings JSON, under the fork's key
     let r = call_tool(&mut b, "get_develop", &json!({"id": first.0}));
     assert!(!r.is_error, "{r:?}");
     let d = r.structured.clone().unwrap_or_else(|| serde_json::from_str(r.content[0]["text"].as_str().unwrap()).unwrap());
-    assert_eq!(d["fork_retouch"]["global"]["skin"]["amount"], json!(35.0), "{d}");
+    assert_eq!(d["fork_retouch"]["global"]["skin"]["smoothness"], json!(35.0), "{d}");
     // and through the retouch commands
     let r = call_tool(&mut b, &crate::command_tool_name("retouch.set"), &json!({"control": "retouch.eyes.amount", "value": 20}));
     assert!(!r.is_error, "{r:?}");
