@@ -139,6 +139,10 @@ impl Feature for Wrinkles {
     const PARTS: &'static [Part] = &[Part::FacialSkin, Part::BodySkin];
     const REACH: f64 = reach();
 
+    fn area(scene: &Scene<'_>, faces: &[usize]) -> Option<lightcraft_raster::Plane> {
+        crate::area::wrinkles(scene, faces)
+    }
+
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>) {
         self.apply_capped(img, scene, face, MAX_BOX);
     }

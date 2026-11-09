@@ -93,8 +93,20 @@ pub fn alt_overlay(app: &crate::LightcraftApp) -> Option<lightcraft_pipeline::Ov
     match app.ui.right {
         RightPanel::Edit => Overlay::for_control(control),
         RightPanel::Masking => mask_slider_overlay(control),
+        // a Portrait slider shows where its feature works; the histogram's zones (Light controls) keep Edit's views
+        RightPanel::Portrait => retouch_area_overlay(control, app.ui.dragging_face).or_else(|| Overlay::for_control(control)),
         _ => None,
     }
+}
+
+/// The map of where the feature of Portrait control `id` (`retouch.<feature>.<field>`) works, on face `face` (`None`:
+/// every face).
+fn retouch_area_overlay(id: &str, face: Option<usize>) -> Option<lightcraft_pipeline::Overlay> {
+    use lightcraft_pipeline::Overlay;
+    let key = lightcraft_develop::retouch::feature_of(id)?.key;
+    let feature = lightcraft_develop::retouch::FEATURES.iter().position(|f| f.key == key)?;
+    let face = face.map_or(Overlay::ALL_FACES, |i| i.min(usize::from(Overlay::ALL_FACES) - 1) as u8);
+    Some(Overlay::RetouchArea { feature: u8::try_from(feature).ok()?, face })
 }
 
 /// The preview a mask's slider (bare id) asks for.

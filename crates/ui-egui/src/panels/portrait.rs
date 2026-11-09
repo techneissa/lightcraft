@@ -104,6 +104,10 @@ impl Ctx<'_> {
         };
         let out = crate::widgets::slider(self.ui, spec, v.unwrap_or(spec.default), true, None);
         let face = self.face;
+        if out.drag_started && !out.reset {
+            // (the ⌥-drag preview shows where the feature works on this face)
+            self.app.ui.dragging_face = face;
+        }
         crate::panels::edit::apply_slider_out(self.app, spec, out, |app, v| app.run("retouch.set", json!({"control": id, "value": v, "face": face})));
     }
 }

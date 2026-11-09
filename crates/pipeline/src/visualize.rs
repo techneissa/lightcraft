@@ -13,7 +13,8 @@
 //!   modifier held; [`Overlay::for_control`] picks one per control): shadow / highlight clipping
 //!   (white or black, with the clipped channels shown), greyscale (Sharpening Amount), the fine
 //!   detail band sharpening works on (Radius / Detail) and the sharpening mask (Masking). The
-//!   sharpening views read the render's own detail planes ([`sharpen_plane`]).
+//!   sharpening views read the render's own detail planes ([`sharpen_plane`]). A Portrait slider's shows where its
+//!   feature works ([`Overlay::RetouchArea`]).
 
 use std::borrow::Cow;
 
@@ -60,6 +61,10 @@ pub enum Overlay {
     /// Clipping warnings (J): the photo with every pixel that has a channel at 255 painted
     /// [`CLIP_HIGH`] and every other pixel with a channel at 0 painted [`CLIP_LOW`].
     ClipWarnings,
+    /// Where Portrait retouching feature `feature` (a place in `lightcraft_develop::retouch::FEATURES`) works, as a
+    /// grey / white map, for face `face` (a place in the photo's faces; [`Overlay::ALL_FACES`] for every face)
+    /// (Alt-drag on a Portrait slider).
+    RetouchArea { feature: u8, face: u8 },
 }
 
 /// [`Overlay::ClipWarnings`] colour of clipped highlights.
@@ -157,6 +162,7 @@ impl Overlay {
             Overlay::SharpenDetail => (9, 0.0),
             Overlay::SharpenMask => (10, 0.0),
             Overlay::ClipWarnings => (11, 0.0),
+            Overlay::RetouchArea { feature, face } => (12, (feature as u32 | (face as u32) << 8) as f64),
         }
     }
 
@@ -181,6 +187,7 @@ impl Overlay {
             9 => Overlay::SharpenDetail,
             10 => Overlay::SharpenMask,
             11 => Overlay::ClipWarnings,
+            12 if v.is_finite() && v >= 0.0 => Overlay::RetouchArea { feature: v as u32 as u8, face: (v as u32 >> 8) as u8 },
             _ => Overlay::None,
         }
     }
@@ -200,6 +207,7 @@ impl Overlay {
             Overlay::SharpenDetail => 0x5003,
             Overlay::SharpenMask => 0x5004,
             Overlay::ClipWarnings => 0x5005,
+            Overlay::RetouchArea { feature, face } => 0x1_0000 + ((feature as u64) << 8 | face as u64),
         }
     }
 
@@ -215,6 +223,9 @@ impl Overlay {
             _ => None,
         }
     }
+
+    /// [`Overlay::RetouchArea`]'s `face` for every face.
+    pub const ALL_FACES: u8 = u8::MAX;
 
     /// The clipping previews, which test the sRGB values the histogram counts (a render for a
     /// display profile draws them in sRGB, then converts).
@@ -317,6 +328,18 @@ pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, plane: Option<&Plane>
         Overlay::ClipShadows => clipping(img, false),
         Overlay::ClipHighlights => clipping(img, true),
         Overlay::ClipWarnings => clip_warnings(img),
+        Overlay::RetouchArea { .. } => {
+            // the map where the feature has one; black where it has none (no faces, no masks)
+            let plane = plane.filter(|a| (a.width, a.height) == (img.width, img.height));
+            let w = img.width;
+            for_rows(&mut img.data, w, |y, row| {
+                for (x, px) in row.iter_mut().enumerate() {
+                    let v = plane.and_then(|p| p.data.get(y * w + x)).copied().unwrap_or(0.0);
+                    let g = (255.0 * if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }).round() as u8;
+                    *px = [g, g, g, 255];
+                }
+            });
+        }
         Overlay::Grayscale => grayscale(img),
         Overlay::SharpenDetail | Overlay::SharpenMask => {
             if let Some(p) = plane.filter(|a| (a.width, a.height) == (img.width, img.height)) {

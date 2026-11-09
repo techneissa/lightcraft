@@ -304,6 +304,27 @@ pub fn apply(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     });
 }
 
+/// The map of where feature `feature` (a place in [`lightcraft_develop::retouch::FEATURES`]) works on face `face` of
+/// the photo's faces (every face for [`crate::Overlay::ALL_FACES`]), over the plan's output pixels: 1 where it works
+/// fully, 0 where not (`Overlay::RetouchArea`). `None` without faces, masks or a feature of that number.
+pub fn area(info: &SourceInfo, p: &Plan<'_>, feature: u8, face: u8) -> Option<lightcraft_raster::Plane> {
+    let f = lightcraft_develop::retouch::FEATURES.get(feature as usize)?;
+    let input: &Input = info.retouch.as_deref()?;
+    let place = place_of(p);
+    let analysis = p.retouch_analysis.clone();
+    let o = p.settings.orientation;
+    let view: Box<dyn View> = if input.on_photo {
+        Box::new(PhotoView { place, analysis, ..PhotoView::new(&p.frame, p.w, p.h, o) })
+    } else {
+        Box::new(FrameView { place, analysis, ..FrameView::new(&p.frame, p.w, p.h, o) })
+    };
+    let scene = Scene::new(input, view.as_ref(), p.w, p.h);
+    // (a place in the scene's faces; the scene drops a face that maps nowhere)
+    let faces: Vec<usize> =
+        scene.faces.iter().enumerate().filter(|(_, c)| face == crate::Overlay::ALL_FACES || c.index == face as usize).map(|(i, _)| i).collect();
+    (f.area)(&scene, &faces)
+}
+
 /// The window a zoomed render of `win` must render so retouching gives the same pixels there as the whole frame
 /// does: `win` grown to hold everything retouching reads for each face whose reads reach into it, then for each
 /// face whose reads reach into that, and so on (the face's box and the areas of the masks the features on read,
@@ -1058,5 +1079,58 @@ mod tests {
             }
             assert!(worst <= 1, "{win:?}: the zoomed window differs from the whole frame by {worst}");
         }
+    }
+}
+
+#[cfg(test)]
+mod area_tests {
+    use super::*;
+    use crate::{Overlay, RenderRequest, render};
+    use lightcraft_develop::retouch::{Face, NormRect, Part, PartMask};
+
+    /// Two faces with a Facial Skin mask of 1 over their box, on the photo.
+    fn two_faces() -> SourceInfo {
+        let face = |b: NormRect| {
+            let mask = PartMask { plane: lightcraft_raster::Plane::filled(4, 4, 1.0), area: b };
+            Face { masks: vec![(Part::FacialSkin, mask)], ..Face::boxed(b) }
+        };
+        let faces = vec![face(NormRect::new(0.1, 0.2, 0.3, 0.5)), face(NormRect::new(0.6, 0.3, 0.8, 0.7))];
+        SourceInfo { retouch: Some(Arc::new(Input::new_on_photo(faces))), ..SourceInfo::default() }
+    }
+
+    fn feature(key: &str) -> u8 {
+        lightcraft_develop::retouch::FEATURES.iter().position(|f| f.key == key).map(|i| i as u8).unwrap_or(255)
+    }
+
+    /// The map of Skin: white on the faces it is for (every face, or the one asked), black elsewhere, as a grey image.
+    #[test]
+    fn the_retouch_area_overlay_is_a_grey_map_of_the_faces_skin() {
+        let src = lightcraft_scenes::demo_library()[0].render(240, 160);
+        let info = two_faces();
+        let s = DevelopSettings::default();
+        let at = |img: &lightcraft_raster::Rgba8, nx: f64, ny: f64| img.get((nx * img.width as f64) as usize, (ny * img.height as f64) as usize);
+        for (face, first, second) in [(Overlay::ALL_FACES, 255, 255), (0, 255, 0), (1, 0, 255)] {
+            let req = RenderRequest { overlay: Overlay::RetouchArea { feature: feature("skin"), face }, ..RenderRequest::fit(240, 160) };
+            let img = render(&src, &info, &s, &req).image;
+            assert!(img.data.iter().all(|p| p[0] == p[1] && p[1] == p[2] && p[3] == 255), "grey");
+            assert_eq!(at(&img, 0.2, 0.35)[0], first, "face {face}: the first face");
+            assert_eq!(at(&img, 0.7, 0.5)[0], second, "face {face}: the second face");
+            assert_eq!(at(&img, 0.45, 0.9)[0], 0, "face {face}: black elsewhere");
+        }
+        // no faces: black everywhere, not the photo
+        let req =
+            RenderRequest { overlay: Overlay::RetouchArea { feature: feature("skin"), face: Overlay::ALL_FACES }, ..RenderRequest::fit(240, 160) };
+        assert!(render(&src, &SourceInfo::default(), &s, &req).image.data.iter().all(|p| p[..3] == [0, 0, 0]));
+        // (the overlay's parts and key round trip, and differ per feature and face)
+        let o = Overlay::RetouchArea { feature: 3, face: 7 };
+        assert_eq!(
+            {
+                let (k, v) = o.to_parts();
+                Overlay::from_parts(k, v)
+            },
+            o
+        );
+        assert_ne!(o.key(), Overlay::RetouchArea { feature: 3, face: 8 }.key());
+        assert_ne!(o.key(), Overlay::RetouchArea { feature: 4, face: 7 }.key());
     }
 }

@@ -100,6 +100,10 @@ impl Feature for Blemish {
         !(self.amount.is_finite() && self.amount > 0.0)
     }
 
+    fn area(scene: &Scene<'_>, faces: &[usize]) -> Option<lightcraft_raster::Plane> {
+        crate::area::spots(scene, faces)
+    }
+
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>) {
         let Some(face) = face else { return };
         if self.is_off() || img.data.len() != img.width.saturating_mul(img.height) {

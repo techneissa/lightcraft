@@ -1047,7 +1047,7 @@ fn render_impl(
     };
     lap("histogram", &mut t);
     let mut image = image;
-    let mask = overlay_alpha(req.overlay, &plan, &prep);
+    let mask = overlay_alpha(req.overlay, &plan, &prep, info);
     let masks = overlay_alphas_all(req.overlay, &plan, &prep);
     visualize::apply(&mut image, req.overlay, &plan, mask.as_ref(), masks.as_deref());
     let mut image = if plan.keep.is_some() { cut(&image) } else { image };
@@ -1096,7 +1096,10 @@ pub fn color_range_sample(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, 
 
 /// The plane an overlay shows: a sharpening view's detail plane, or the alpha of a mask overlay
 /// (the one the render evaluated, or for a hidden mask a fresh evaluation).
-fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Plane> {
+fn overlay_alpha(o: Overlay, plan: &Plan<'_>, prep: &Prepared, info: &SourceInfo) -> Option<Plane> {
+    if let Overlay::RetouchArea { feature, face } = o {
+        return retouch_step::area(info, plan, feature, face);
+    }
     if o.reads_detail() {
         let v3 = plan.settings.process >= lightcraft_develop::Process::V3.version();
         let band = if v3 { prep.sharpen_blur.as_deref() } else { prep.texture_blur.as_deref() };

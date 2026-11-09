@@ -312,7 +312,7 @@ fn segment_distance(p: P, a: P, b: P) -> f64 {
     ((p.0 - a.0 - t * dx).powi(2) + (p.1 - a.1 - t * dy).powi(2)).sqrt()
 }
 
-pub(super) fn polygon_inside(pts: &[P], p: P) -> f64 {
+pub fn polygon_inside(pts: &[P], p: P) -> f64 {
     let n = pts.len();
     if n < 3 {
         return f64::NEG_INFINITY;

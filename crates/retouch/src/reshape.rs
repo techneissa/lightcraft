@@ -67,5 +67,9 @@ impl Feature for Reshape {
 
     /// The warp is not a change of the image's pixels: the pipeline builds it from [`Field::build`] and samples the
     /// photo through it. Nothing to do here.
+    fn area(scene: &Scene<'_>, faces: &[usize]) -> Option<lightcraft_raster::Plane> {
+        crate::area::outline(scene, faces)
+    }
+
     fn apply(&self, _img: &mut Rgb32f, _scene: &Scene<'_>, _face: Option<usize>) {}
 }

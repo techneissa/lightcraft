@@ -1125,6 +1125,15 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
         if app.renderer.keep_brush_pixels {
             job.key ^= brush_preview::BRUSH_KEY_SALT;
         }
+        // a Portrait slider's area map reads the faces, which a render carries only while some retouching is on
+        // (the slider back at 0 turns it off): give it the photo's faces
+        if matches!(overlay, lightcraft_pipeline::Overlay::RetouchArea { .. })
+            && job.info.retouch.is_none()
+            && let Some(found) = app.session.retouch_faces_of(id).found
+        {
+            job.key ^= found.input.fingerprint();
+            job.info.retouch = Some(found.input.clone());
+        }
         request_planes(app, (Slot::Alpha, Slot::Main), &job, a.tint);
         app.renderer.request(Slot::Main, job, 100);
         // the photo on screen comes first: background preparation waits while it is being made
