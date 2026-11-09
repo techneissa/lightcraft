@@ -230,6 +230,17 @@ fn face_and_note(st: &PeopleState, now: Option<(Option<usize>, bool)>, remembere
     (face, note)
 }
 
+/// The menu group part `p` starts, with its header (`""`: a divider only).
+fn group(p: Pick) -> Option<&'static str> {
+    match p {
+        Pick::EntirePerson => Some("Person"),
+        Pick::Hair => Some("Face"),
+        Pick::Clothes => Some("Clothes"),
+        Pick::Background => Some(""),
+        _ => None,
+    }
+}
+
 /// Draw the picker over `canvas` (the image view) for `photo`, and make or change masks from its clicks.
 pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, photo: PhotoId) {
     let ctx = ui.ctx().clone();
@@ -273,8 +284,11 @@ pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, 
             p.parsing.people.iter().enumerate().map(|(i, q)| FaceChip { texture: textures.get(i).map(|t| t.id()), name: person_name(q, i) }).collect()
         })
         .unwrap_or_default();
-    let items: Vec<PartItem> =
-        if ready.is_some() { Pick::ALL.iter().map(|p| PartItem { key: p.id().into(), label: p.label().into() }).collect() } else { Vec::new() };
+    let items: Vec<PartItem> = if ready.is_some() {
+        Pick::ALL.iter().map(|p| PartItem { key: p.id().into(), label: p.label().into(), group: group(*p) }).collect()
+    } else {
+        Vec::new()
+    };
     let now = part.as_ref().and_then(|(_, shape)| current(shape, ready.as_deref()));
     let selected: Vec<usize> = now.iter().flat_map(|(picks, ..)| picks).filter_map(|p| Pick::ALL.iter().position(|q| q == p)).collect();
     let remembered = ctx.data(|d| d.get_temp::<usize>(face_id(photo)));
