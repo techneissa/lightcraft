@@ -75,7 +75,7 @@ fn photo(w: usize, h: usize, input: &Input) -> Rgb32f {
     Rgb32f::from_fn(w, h, |x, y| {
         let a = alpha_at(input, x, y, w, h);
         // (in fractions of the photo: a draft and an export show the same picture)
-        let checker = if (x * 80 / w + y * 80 / w) % 2 == 0 { 0.08 } else { 0.0 };
+        let checker = if (x * 80 / w + y * 80 / w).is_multiple_of(2) { 0.08 } else { 0.0 };
         let bg = [0.10 + checker + 0.2 * x as f32 / w as f32, 0.15 + checker, 0.30 + checker];
         let skin = [0.6, 0.35, 0.25];
         std::array::from_fn(|c| a * skin[c] + (1.0 - a) * bg[c])
@@ -164,7 +164,7 @@ fn no_halo_round_the_person() {
     let (w, h) = (300, 200);
     let before = Rgb32f::from_fn(w, h, |x, y| {
         let a = alpha_at(&input, x, y, w, h);
-        let bg = if (x / 4 + y / 4) % 2 == 0 { 0.05 } else { 0.02 };
+        let bg = if (x / 4 + y / 4).is_multiple_of(2) { 0.05 } else { 0.02 };
         [a + (1.0 - a) * bg; 3]
     });
     for r in [settings(100.0, 0.0, 0.0, Swap::default()), settings(0.0, 0.0, 100.0, Swap::default()), settings(100.0, 0.0, 100.0, Swap::default())] {

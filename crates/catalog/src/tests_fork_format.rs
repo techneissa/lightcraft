@@ -319,7 +319,7 @@ fn a_decontaminated_mask_is_fork_format_4() {
 /// with nothing lost. Its grids go in the shared table, once for both History steps.
 #[test]
 fn a_select_people_mask_is_fork_format_5() {
-    assert!(VERSION >= 5);
+    const { assert!(VERSION >= 5) };
     let seg = SegMask::from_logits(8, &[3.0; 64]).made_by("people:segformer");
     let fine = SegMask::from_logits_in(8, &[-3.0; 64], [0.1, 0.1, 0.3, 0.3]).made_by("people:segformer");
     let face = lightcraft_develop::retouch::FaceKey {

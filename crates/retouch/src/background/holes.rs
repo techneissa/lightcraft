@@ -5,6 +5,7 @@
 //!   longer side across is filled, with its soft rim ([`SEAL`]);
 //! - a pixel of at least [`FAINT`] with no background (mask under 0.5) within [`INSIDE`] of the mask's longer side
 //!   is wholly person.
+//!
 //! Done on the mask itself (in the photo's normalised frame), so every render and every window of one sees the same
 //! mask; the newest masks are kept by their bits.
 
