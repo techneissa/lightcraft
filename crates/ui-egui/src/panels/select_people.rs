@@ -294,7 +294,7 @@ pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, 
     let has_mask = |p: &Pick| match (&ready, &develop) {
         (Some(parsed), Some(d)) => {
             let n = parsed.parsing.people.len();
-            face.is_none_or(|f| f < n) && mask_of(d, parsed, &[*p], face).is_some()
+            face.is_none_or(|f| f < n) && mask_of(d, parsed, &[*p], face, None).is_some()
         }
         _ => false,
     };
@@ -334,8 +334,15 @@ pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, 
     }
     if let Some(sel) = picked.parts.filter(|s| !s.is_empty()) {
         // a click: a mask of its own (the selected one is kept as it is); ⌘-click: the selected mask gains or loses the part
-        let how = if picked.parts_add { "add" } else { "part" };
-        pick(app, &ctx, json!({"parts": ids_of(&sel), "face": face_value(face), "how": how}));
+        // (a face this photo's people don't have, shown as no chip, is everyone's here: never an index past them)
+        let shown = face.filter(|i| *i < chips.len());
+        let (how, whose) = match (picked.parts_add, &part) {
+            // the selected mask keeps its own face
+            (true, Some(_)) => ("add", Value::Null),
+            (true, None) => ("add", face_value(shown)),
+            (false, _) => ("part", face_value(shown)),
+        };
+        pick(app, &ctx, json!({"parts": ids_of(&sel), "face": whose, "how": how}));
     }
 }
 

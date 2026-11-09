@@ -174,12 +174,16 @@ fn set(s: &mut Session, p: &Value) -> Result<Value> {
     })
 }
 
-/// Whether `m` is a picker's mask nobody has edited: a generated name, one Select People part, the effects it
-/// started with, no Edge, Refine Edges, Decontaminate or Invert.
+/// Whether `m` is a picker's mask nobody has edited: visible, one Select People part (the default mode, not
+/// renamed, not inverted) and nothing else, a generated name, the effects it started with, no Edge, Refine Edges,
+/// Decontaminate or Invert.
 fn untouched(s: &Session, m: &Mask) -> bool {
     let [c] = m.components.as_slice() else { return false };
     let MaskShape::People { parts, seg: Some(_), edge, .. } = &c.shape else { return false };
-    generated_name(&m.name, &picks_of(parts))
+    m.visible
+        && c.name.is_none()
+        && c.op == MaskOp::Add
+        && generated_name(&m.name, &picks_of(parts))
         && *edge == 0.0
         && m.refine == 0.0
         && m.decontaminate == 0.0
@@ -189,20 +193,27 @@ fn untouched(s: &Session, m: &Mask) -> bool {
 }
 
 /// A click in the people picker. `how`: `part` (default; a plain click on a part): select the mask that has exactly
-/// these parts of this face, else change the selected mask when nobody has edited it, else make a new one, so each
-/// part pick keeps its own edits; `add` (⌘-click: `parts` is the whole new list): change the selected mask's parts;
-/// `face` (a face chip): change whose the selected mask is, unless a mask of those parts and that face exists, then
-/// select it. Without a selected Select People mask, `add` and `face` make a new mask.
+/// these parts of this face (an empty mask the picker made and the picker's selection leaves is deleted with the
+/// same undo step), else change the selected mask when nobody has edited it, else make a new one, so each part
+/// pick keeps its own edits; `add` (⌘-click: `parts` is the whole new list): change the selected mask's parts, unless
+/// another mask has exactly those parts (refused: "Hair already has a mask"); `face` (a face chip): change whose the
+/// selected mask is, unless a mask of those parts and that face exists, then select it. Without a selected Select
+/// People mask, `add` and `face` make a new mask. `face` null with `add` keeps the selected mask's face.
 fn pick(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "selectPeople.pick";
-    let how = p.get("how").and_then(Value::as_str).unwrap_or("part");
-    if !matches!(how, "part" | "add" | "face") {
-        return Err(bad(C, "`how` must be part, add or face"));
+    let how = match p.get("how") {
+        None | Some(Value::Null) => "part",
+        Some(Value::String(h)) if matches!(h.as_str(), "part" | "add" | "face") => h.as_str(),
+        Some(_) => return Err(bad(C, "`how` must be \"part\", \"add\" or \"face\"")),
+    };
+    if how == "add" && p.get("parts").is_none_or(Value::is_null) {
+        return Err(bad(C, "`add` needs `parts`: the whole new list"));
     }
     let id = s.active().ok_or_else(|| bad(C, "no active photo"))?;
     let parsed = people(s, C)?;
     let picks = picks_param(p, C)?.unwrap_or_else(|| vec![Pick::EntirePerson]);
-    let face = face_param(p, parsed.parsing.people.len(), C)?;
+    let keep_face = how == "add" && p.get("face").is_none_or(Value::is_null);
+    let face = if keep_face { None } else { face_param(p, parsed.parsing.people.len(), C)? };
     let d = s.develop_of(id).ok_or_else(|| bad(C, "no active photo"))?;
     let selected = s
         .active_mask
@@ -214,11 +225,22 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
         (None, Some(m)) if how == "add" => m.components.iter().find_map(|c| current(&c.shape, Some(&parsed))).and_then(|(_, who, _)| who),
         (None, _) => None,
     };
+    if how == "add" && mask_of(d.as_ref(), &parsed, &picks, person, selected.map(|m| m.id)).is_some() {
+        return Err(bad(C, format!("{} already has a mask", summary(&picks))));
+    }
     if how != "add"
-        && let Some(mid) = mask_of(d.as_ref(), &parsed, &picks, person)
+        && let Some(mid) = mask_of(d.as_ref(), &parsed, &picks, person, None)
     {
-        // (selecting a mask is not an edit: no undo step)
-        if s.active_mask != Some(mid) {
+        // the picker's own empty mask is not left behind (the same undo step); selecting a mask is not an edit
+        let empty = selected.filter(|m| m.id != mid && untouched(s, m)).map(|m| m.id);
+        if let Some(empty) = empty {
+            masks_edit(s, C, "Select People", |masks, active| {
+                let i = find(masks, empty, C)?;
+                masks.remove(i);
+                *active = Some(mid);
+                Ok(())
+            })?;
+        } else if s.active_mask != Some(mid) {
             s.active_mask = Some(mid);
             s.active_component = None;
         }
@@ -229,9 +251,10 @@ fn pick(s: &mut Session, p: &Value) -> Result<Value> {
         ("part", None) => None,
         (_, m) => m.map(|m| m.id),
     };
-    let mut set_params = json!({"id": retarget, "parts": picks.iter().map(|k| k.id()).collect::<Vec<_>>()});
-    let mut add_params = json!({"parts": set_params["parts"].clone()});
-    if let Some(f) = face.or((how == "part").then_some(None)) {
+    let ids: Vec<&str> = picks.iter().map(|k| k.id()).collect();
+    let mut set_params = json!({"id": retarget, "parts": ids});
+    let mut add_params = json!({"parts": ids});
+    if let Some(f) = face.or((how != "add").then_some(None)) {
         let v = f.map_or(json!("all"), |k| json!(k));
         set_params["face"] = v.clone();
         add_params["face"] = v;
