@@ -1,5 +1,5 @@
 use super::geometry::CanvasMap;
-use super::masks::{pin, pins_live};
+use super::masks::{PIN_HIT, nearest_within, pin_lit, pins_live};
 use super::{Color32, DevelopSettings, Gesture, LightcraftApp, Point, Pos2, Rect, Stroke, ToolOverlay, json, register, vec2};
 
 // ------------------------------------------------------------------------ remove
@@ -23,6 +23,8 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
     quiet.set_invisible();
     // (spot, is source, screen centre, radius) of everything that can be grabbed
     let mut grips: Vec<(usize, bool, Pos2, f32)> = Vec::new();
+    // each pin to draw (spot, position, selected, painter), after the loop so the one under the pointer shows lit
+    let mut drawn: Vec<(usize, Pos2, bool, &egui::Painter)> = Vec::new();
     for (i, s) in d.spots.iter().enumerate() {
         let r = (s.size * long) as f32;
         let sel = Some(i) == active;
@@ -51,26 +53,19 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
             register(ui, format!("spotSource:{i}"), Rect::from_center_size(sq, vec2(14.0, 14.0)));
             grips.push((i, true, sq, r));
         }
-        pin(p, tq, sel);
+        drawn.push((i, tq, sel, p));
         register(ui, format!("spotPin:{i}"), Rect::from_center_size(tq, vec2(14.0, 14.0)));
         grips.push((i, false, tq, r));
     }
+    let hit = |q: Pos2| spot_grip_at(&grips, active, q);
+    // the pin under the pointer shows lit (a spot's source has none)
+    draw_spot_pins(&drawn, resp.hover_pos().and_then(hit).filter(|g| !g.1).map(|g| g.0));
     if spot_keys(app, ui, map, d, &grips) {
         return;
     }
     if super::find_overlay::show(app, ui, resp, map) {
         return;
     }
-    // a target or source under `q`: the selected spot's first, then the nearest pin
-    let hit = |q: Pos2| {
-        grips
-            .iter()
-            .filter(|g| g.2.distance(q) < g.3.max(8.0))
-            .min_by(|a, b| {
-                (Some(a.0) != active, a.2.distance(q)).partial_cmp(&(Some(b.0) != active, b.2.distance(q))).unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .copied()
-    };
     // ⌃⌥-drag resizes the brush (sideways its size, up and down its feather) instead of painting or moving a pin
     if super::brush_resize::resize_drag(app, ui, resp, &p, long as f32, 1000.0, true) {
         return;
@@ -164,6 +159,25 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
     }
 }
 
+/// A target or source under `q`: the selected spot's first, then the nearest pin (at least [`PIN_HIT`] wide, so a
+/// small spot's pin stays easy to hit).
+fn spot_grip_at(grips: &[(usize, bool, Pos2, f32)], active: Option<usize>, q: Pos2) -> Option<(usize, bool, Pos2, f32)> {
+    grips
+        .iter()
+        .filter(|g| g.2.distance(q) < g.3.max(PIN_HIT))
+        .min_by(|a, b| {
+            (Some(a.0) != active, a.2.distance(q)).partial_cmp(&(Some(b.0) != active, b.2.distance(q))).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .copied()
+}
+
+/// Draw each spot pin (spot, position, selected, painter); the `lit` spot's shows under the pointer.
+fn draw_spot_pins(drawn: &[(usize, Pos2, bool, &egui::Painter)], lit: Option<usize>) {
+    for &(i, q, sel, painter) in drawn {
+        pin_lit(painter, q, sel, lit == Some(i));
+    }
+}
+
 /// Keyboard stand-ins for the Remove tool: each spot's target and source (an arrow press moves
 /// it a step, one undo step; Return selects the spot), and a placement point that the arrows move
 /// and Return turns into a new spot of the brush's size there. True when a spot was added.
@@ -219,30 +233,117 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
 
 // ------------------------------------------------------------------------ red eye
 
-/// Red Eye tool: drag an ellipse over an eye (a new correction), click one to select it.
+/// What a press in the Red Eye tool can grab.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum EyeGrip {
+    /// An eye's pin (any eye): drag moves it, a click selects it.
+    Pin(usize),
+    /// The selected eye's edge handle: 1 right, 2 bottom, 3 left, 4 top; a drag sets that radius.
+    Edge(usize, u8),
+}
+
+/// Red Eye tool: drag an ellipse over an eye (a new correction), click one to select it. Every eye has a pin
+/// (click selects, drag moves); the selected one has a handle on each edge (drag resizes about its centre), and
+/// Delete removes it (`redeye.delete`).
 pub(super) fn eye_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Response, map: &CanvasMap, d: &DevelopSettings) {
     // screen points per long-edge unit
     let o = map.screen(Point::new(0.0, 0.0));
     let (sx, sy) = (map.screen(Point::new(1.0, 0.0)).distance(o), map.screen(Point::new(0.0, 1.0)).distance(o));
     let per_long = sx.max(sy);
     let p = ui.painter();
+    let selected = app.ui.eye.min(d.red_eye.len().saturating_sub(1));
+    // everything that can be grabbed: (what, screen position)
+    let mut grips: Vec<(EyeGrip, Pos2)> = Vec::new();
     for (i, e) in d.red_eye.iter().enumerate() {
         let c = map.screen(e.center);
         let r = vec2(e.rx as f32 * per_long, e.ry as f32 * per_long);
-        let sel = i == app.ui.eye;
+        if i == selected {
+            for (h, at) in [(1, vec2(r.x, 0.0)), (2, vec2(0.0, r.y)), (3, vec2(-r.x, 0.0)), (4, vec2(0.0, -r.y))] {
+                grips.push((EyeGrip::Edge(i, h), c + at));
+            }
+        }
+        grips.push((EyeGrip::Pin(i), c));
+    }
+    // the handles first (they sit on the edge, away from the pin unless the eye is tiny), then the selected eye's
+    // pin, then the nearest pin
+    let hit = |q: Pos2| {
+        let rank = |g: &(EyeGrip, Pos2)| (matches!(g.0, EyeGrip::Pin(_)), !matches!(g.0, EyeGrip::Pin(i) if i == selected), g.1.distance(q));
+        grips.iter().filter(|g| g.1.distance(q) < PIN_HIT).min_by(|a, b| rank(a).partial_cmp(&rank(b)).unwrap_or(std::cmp::Ordering::Equal)).copied()
+    };
+    let dragging = match app.gesture {
+        Some(Gesture::EyeEdit { index, handle }) => Some((index, handle)),
+        _ => None,
+    };
+    let lit = match dragging {
+        Some((i, 0)) => Some(EyeGrip::Pin(i)),
+        Some((i, h)) => Some(EyeGrip::Edge(i, h)),
+        None => resp.hover_pos().and_then(hit).map(|g| g.0),
+    };
+    for (i, e) in d.red_eye.iter().enumerate() {
+        let c = map.screen(e.center);
+        let r = vec2(e.rx as f32 * per_long, e.ry as f32 * per_long);
+        let sel = i == selected;
         let col = if sel { Color32::WHITE } else { Color32::from_white_alpha(150) };
         p.add(egui::Shape::ellipse_stroke(c, r, Stroke::new(if sel { 1.5 } else { 1.0 }, col)));
-        p.line_segment([c - vec2(4.0, 0.0), c + vec2(4.0, 0.0)], Stroke::new(1.0, col));
-        p.line_segment([c - vec2(0.0, 4.0), c + vec2(0.0, 4.0)], Stroke::new(1.0, col));
+        pin_lit(p, c, sel, lit == Some(EyeGrip::Pin(i)));
+        register(ui, format!("eyePin:{i}"), Rect::from_center_size(c, vec2(14.0, 14.0)));
+    }
+    for &(g, at) in &grips {
+        if let EyeGrip::Edge(i, h) = g {
+            let on = lit == Some(g);
+            let blue = Color32::from_rgb(1, 101, 221);
+            if on {
+                p.circle_filled(at, 5.0, blue);
+            }
+            p.circle_stroke(at, 5.0, Stroke::new(1.5, if on { Color32::WHITE } else { blue }));
+            register(ui, format!("eyeHandle:{i}:{h}"), Rect::from_center_size(at, vec2(14.0, 14.0)));
+        }
     }
     if resp.hover_pos().is_some() {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+        ui.ctx().set_cursor_icon(match lit {
+            Some(EyeGrip::Pin(_)) => egui::CursorIcon::Grab,
+            Some(EyeGrip::Edge(_, h)) if h % 2 == 1 => egui::CursorIcon::ResizeHorizontal,
+            Some(EyeGrip::Edge(..)) => egui::CursorIcon::ResizeVertical,
+            None => egui::CursorIcon::Crosshair,
+        });
     }
+    let press = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos());
     if resp.drag_started()
-        && let Some(q) = ui.input(|i| i.pointer.press_origin()).or(resp.interact_pointer_pos())
+        && let Some(grip) = press.and_then(hit).map(|g| g.0)
+    {
+        let (index, handle) = match grip {
+            EyeGrip::Pin(i) => (i, 0),
+            EyeGrip::Edge(i, h) => (i, h),
+        };
+        app.ui.eye = index;
+        let _ = app.run("develop.beginInteraction", json!({"label": "Edit Red Eye"}));
+        app.gesture = Some(Gesture::EyeEdit { index, handle });
+    } else if resp.drag_started()
+        && let Some(q) = press
     {
         // from where the button went down (a drag is recognized only after some movement)
         app.gesture = Some(Gesture::Eye { a: map.norm(q) });
+    }
+    if let Some((index, handle)) = dragging {
+        if resp.dragged()
+            && let (Some(q), Some(e)) = (resp.interact_pointer_pos(), d.red_eye.get(index))
+        {
+            let c = map.screen(e.center);
+            let params = match handle {
+                0 => {
+                    let (n, n0) = (map.norm(q), map.norm(q - resp.drag_delta()));
+                    json!({"index": index, "center": [e.center.x + n.x - n0.x, e.center.y + n.y - n0.y]})
+                }
+                1 | 3 => json!({"index": index, "rx": f64::from((q.x - c.x).abs() / per_long.max(1e-3)).max(0.002)}),
+                _ => json!({"index": index, "ry": f64::from((q.y - c.y).abs() / per_long.max(1e-3)).max(0.002)}),
+            };
+            let _ = app.run("redeye.update", params);
+        }
+        if resp.drag_stopped() {
+            app.gesture = None;
+            let _ = app.run("develop.endInteraction", json!({}));
+        }
+        return;
     }
     if let Some(Gesture::Eye { a }) = app.gesture
         && let Some(q) = resp.interact_pointer_pos()
@@ -265,13 +366,18 @@ pub(super) fn eye_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
         }
     } else if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
-        && let Some(i) = d.red_eye.iter().position(|e| {
-            let c = map.screen(e.center);
-            let (dx, dy) = ((q.x - c.x) / (e.rx as f32 * per_long).max(4.0), (q.y - c.y) / (e.ry as f32 * per_long).max(4.0));
-            dx * dx + dy * dy <= 1.0
-        })
     {
-        app.ui.eye = i;
+        // a pin (any eye), else inside an ellipse; the pin's reach is at least PIN_HIT wide, so a tiny eye stays clickable
+        let inside = |e: &lightcraft_develop::RedEye| {
+            let c = map.screen(e.center);
+            let (dx, dy) = ((q.x - c.x) / (e.rx as f32 * per_long).max(PIN_HIT), (q.y - c.y) / (e.ry as f32 * per_long).max(PIN_HIT));
+            dx * dx + dy * dy <= 1.0
+        };
+        let at_pin = nearest_within(d.red_eye.iter().map(|e| map.screen(e.center)), q, PIN_HIT)
+            .and_then(|c| d.red_eye.iter().position(|e| map.screen(e.center) == c));
+        if let Some(i) = at_pin.or_else(|| d.red_eye.iter().position(inside)) {
+            app.ui.eye = i;
+        }
     }
 }
 

@@ -1147,6 +1147,37 @@ pub fn specs() -> Vec<CommandSpec> {
                 ok()
             }
         ),
+        cmd!(
+            "redeye.update",
+            "Edit Red Eye Correction",
+            [],
+            None,
+            "{index, center?: [x,y] normalized, rx?, ry?: radii as fractions of the long edge} — moves or resizes one correction",
+            has_active,
+            |s, p| {
+                let c = "redeye.update";
+                let i = super::index_req(p, "index", c)?;
+                let id = s.active().ok_or_else(|| bad(c, "no active photo"))?;
+                let mut dd = (*s.develop_of(id).unwrap_or_default()).clone();
+                let eye = dd.red_eye.get_mut(i).ok_or_else(|| bad(c, "no such eye"))?;
+                if let Some(center) = point(p, "center") {
+                    if !(center.x.is_finite() && center.y.is_finite()) {
+                        return Err(bad(c, "`center` must be finite"));
+                    }
+                    eye.center = Point::new(center.x.clamp(0.0, 1.0), center.y.clamp(0.0, 1.0));
+                }
+                for (key, radius) in [("rx", &mut eye.rx), ("ry", &mut eye.ry)] {
+                    if let Some(v) = p.get(key).and_then(Value::as_f64) {
+                        if !v.is_finite() {
+                            return Err(bad(c, format!("`{key}` must be finite")));
+                        }
+                        *radius = v.clamp(1e-4, 0.5);
+                    }
+                }
+                s.set_develop(id, dd, "Edit Red Eye")?;
+                Ok(json!({"index": i}))
+            }
+        ),
         cmd!("redeye.delete", "Delete Red Eye Correction", [], None, "{index}", has_active, |s, p| {
             let c = "redeye.delete";
             let i = super::index_req(p, "index", c)?;

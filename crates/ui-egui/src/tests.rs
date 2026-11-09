@@ -104,6 +104,7 @@ mod open_lightroom;
 pub(super) mod panels;
 mod parse_ahead;
 mod people_parts;
+mod pins;
 mod portrait;
 mod portrait_background;
 mod portrait_presets;

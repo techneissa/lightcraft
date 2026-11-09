@@ -82,6 +82,11 @@ pub enum Gesture {
         spot: usize,
         source: bool,
     },
+    /// Red Eye tool: dragging eye `index`'s pin (`handle` 0) or one of its edge handles (1 right, 2 bottom, 3 left, 4 top).
+    EyeEdit {
+        index: usize,
+        handle: u8,
+    },
     CropHandle {
         handle: u8,
         start: lightcraft_geom::Rect,
