@@ -1,0 +1,4 @@
+cargo test -p lightcraft-engine --lib -- tests::portrait_presets
+cargo test -p lightcraft-engine --lib -- retouch_input
+cargo test -p lightcraft-engine --lib -- presets
+cargo test -p lightcraft-ui-egui --lib -- tests::portrait

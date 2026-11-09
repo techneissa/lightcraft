@@ -36,7 +36,10 @@ In the module:
   `cx.slider("retouch.<KEY>.<field>")`, which writes to every face or to the picked one.
 
 Never edit `lib.rs`, `settings.rs`, `run.rs` or the tab's list of sections (`crates/ui-egui/src/panels/portrait.rs`):
-they already list every feature. The tab's Portrait Presets section (`panels/portrait/presets.rs`) has no module here.
+they already list every feature. The tab's Portrait Presets section (`panels/portrait/presets.rs`) has no module here:
+a portrait preset carries a face's whole `Features` as serde writes it (`fork/portrait-presets.md`), so a new field or
+feature is in presets with no change. Keep marks made for one photo (Refine brush strokes) out of `Features`: a preset
+would carry them to other photos.
 Clothes recolouring is not one of them: it is a local-mask effect (issue #83), so it works on any mask; the clothes
 parts of `Part` are there for its masks.
 

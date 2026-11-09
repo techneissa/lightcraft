@@ -104,6 +104,11 @@ impl Ctx<'_> {
     }
 }
 
+/// The People view's "Apply Portrait Preset" menu for `person` (`portrait/presets.rs`).
+pub(crate) fn apply_preset_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, person: &str) {
+    presets::person_menu(app, ui, person);
+}
+
 /// The face picked for `photo` (`None`: All).
 pub(crate) fn picked(ctx: &egui::Context, photo: PhotoId) -> Option<usize> {
     ctx.data(|d| d.get_temp::<usize>(pick_id(photo)))
