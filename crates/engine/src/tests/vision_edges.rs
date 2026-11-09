@@ -33,9 +33,11 @@ fn person(cx: f32, cy: f32, r: f32) -> Person {
     let entire = disc(n, n, cx, cy, r, 1.0).data;
     let mut p = Person { face: Some(NormRect::new(cx - 0.1, cy - 0.1, cx + 0.1, cy + 0.1)), face_score: 0.9, ..Person::default() };
     p.bounds = Some(NormRect::new(cx - r, cy - r, cx + r, cy + r));
-    p.parts.insert(Part::EntirePerson, vec![Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: n, height: n, data: entire }]);
-    p.parts
-        .insert(Part::Hair, vec![Plane { rect: NormRect::new(cx - 0.2, cy - r, cx + 0.2, cy - r + 0.13), width: 8, height: 4, data: vec![1.0; 32] }]);
+    p.parts.insert(Part::EntirePerson, vec![Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: n, height: n, data: entire, split: false }]);
+    p.parts.insert(
+        Part::Hair,
+        vec![Plane { rect: NormRect::new(cx - 0.2, cy - r, cx + 0.2, cy - r + 0.13), width: 8, height: 4, data: vec![1.0; 32], split: false }],
+    );
     p
 }
 
@@ -256,7 +258,10 @@ fn a_neighbour_only_vision_sees_is_not_taken() {
 #[test]
 fn a_full_frame_parse_with_vision_edges_reads_back_from_the_cache() {
     let mut whole = person(0.5, 0.5, 0.2);
-    whole.parts.insert(Part::EntirePerson, vec![Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: 32, height: 32, data: vec![1.0; 32 * 32] }]);
+    whole.parts.insert(
+        Part::EntirePerson,
+        vec![Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: 32, height: 32, data: vec![1.0; 32 * 32], split: false }],
+    );
     let mut parse = parse_of(vec![whole]);
     let (w, h) = (2048, 1536);
     let all = VMatte { width: w, height: h, data: vec![1.0; w * h] };
