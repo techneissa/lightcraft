@@ -1,0 +1,2 @@
+cargo test -p lightcraft-retouch --test eyes --test foundation
+cargo test -p lightcraft-ui-egui --lib -- panels::portrait::eyes

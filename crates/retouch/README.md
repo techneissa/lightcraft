@@ -44,7 +44,9 @@ cargo run -p lightcraft-retouch --example skin -- in.jpg out.jpg --amount 50 --f
 ```
 
 `--face x0,y0,x1,y1` gives a face box in fractions of the picture (repeat it for more); the examples have no
-landmarks or masks unless a feature's example adds a way to load them.
+landmarks or masks unless a feature's example adds a way to load them. To get what the app's step gets for each face
+(box, landmarks, the model's part masks), run `cargo run -p lightcraft-parsing --release --example face_input --
+in.jpg dir/`; the eyes example reads it with `--faces dir/faces.json`.
 
 ## The input contract (`src/input.rs`)
 
