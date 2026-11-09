@@ -40,55 +40,122 @@ pub(super) struct Sizes {
     pub grid: [i64; 2],
 }
 
-/// Lift the lines of the region `c` (skin mask `m`, area weight `a`, above 0 only inside `inner`: x0, y0, x1, y1 in
-/// the region's pixels) by `k` of their depth. False when nothing changed.
+/// One skin mask's pixels over a box, shared by every area it cuts: each channel's log (0 where the mask is 0) and
+/// the fine blur of the masked log, built once for all of them.
+pub(super) struct Skin<'a> {
+    width: usize,
+    mask: &'a Plane,
+    log: Vec<[f32; 3]>,
+    /// The fine blur over `fine_box` (x0, y0, x1, y1 in the box's pixels).
+    fine: Image<[f32; 4]>,
+    fine_box: [usize; 4],
+}
+
+impl<'a> Skin<'a> {
+    /// The skin of the box `c` (its pixels) under mask `m` (the same size), with the fine blur over `inner` (the
+    /// areas' bounds, in the box's pixels) and as far around it as it reads; `face` is the face's size in pixels.
+    /// `None` when the sizes differ or `inner` is empty.
+    pub(super) fn new(c: &Rgb32f, m: &'a Plane, inner: [usize; 4], face: f64) -> Option<Skin<'a>> {
+        let (w, h) = (c.width, c.height);
+        let [ix0, iy0, ix1, iy1] = [inner[0].min(w), inner[1].min(h), inner[2].min(w), inner[3].min(h)];
+        if w == 0 || h == 0 || ix0 >= ix1 || iy0 >= iy1 || c.data.len() != m.data.len() || m.width != w {
+            return None;
+        }
+        let mask = |i: usize| m.data.get(i).copied().unwrap_or(0.0);
+        let mut log = vec![[0.0f32; 3]; c.data.len()];
+        par_rows(&mut log, w, |y, row| {
+            for (x, o) in row.iter_mut().enumerate() {
+                let i = y * w + x;
+                if mask(i) > 0.0 {
+                    *o = c.data.get(i).map_or([0.0; 3], |p| p.map(|v| v.max(DARK).ln()));
+                }
+            }
+        });
+        let sigma = px(FINE, face);
+        let pad = (3.0 * sigma).ceil() as usize + 1;
+        let fine_box = [ix0.saturating_sub(pad), iy0.saturating_sub(pad), (ix1 + pad).min(w), (iy1 + pad).min(h)];
+        let fw = fine_box[2] - fine_box[0];
+        let fine = blur(
+            &filled(fw, fine_box[3] - fine_box[1], |_, x, y| {
+                let i = (fine_box[1] + y) * w + fine_box[0] + x;
+                let (l, mv) = (log.get(i).copied().unwrap_or_default(), mask(i));
+                [l[0] * mv, l[1] * mv, l[2] * mv, mv]
+            }),
+            sigma,
+        );
+        Some(Skin { width: w, mask: m, log, fine, fine_box })
+    }
+
+    fn mask(&self, i: usize) -> f32 {
+        self.mask.data.get(i).copied().unwrap_or(0.0)
+    }
+
+    fn log(&self, i: usize) -> [f32; 3] {
+        self.log.get(i).copied().unwrap_or_default()
+    }
+
+    /// The fine blur at pixel (`x`, `y`) of the box, back to log colour; `l` outside its box or where it is empty.
+    fn fine(&self, x: usize, y: usize, l: [f32; 3]) -> [f32; 3] {
+        let [fx0, fy0, fx1, fy1] = self.fine_box;
+        if !(fx0..fx1).contains(&x) || !(fy0..fy1).contains(&y) {
+            return l;
+        }
+        self.fine.data.get((y - fy0) * self.fine.width + x - fx0).map_or(l, |p| unweight(*p, l))
+    }
+}
+
+/// `f` of the face's size `face`, in pixels (0 for a value that is not a number).
+fn px(f: f64, face: f64) -> f32 {
+    let v = (f * face) as f32;
+    if v.is_finite() { v.max(0.0) } else { 0.0 }
+}
+
+/// Lift the lines of one area in `c` (the box `skin` was built from; areas run one after another on it, each from
+/// the box's original pixels, their lifts multiplying where two meet): its coarse blurs' cells over `region` and
+/// the change inside `inner` (x0, y0, x1, y1 in the box's pixels), where the area weight `a` (over `inner`) is
+/// above 0, by `k` of the lines' depth. False when nothing changed. Pixels where the mask is 0 are skipped
+/// throughout: they weigh nothing in the blurs and never change.
 ///
 /// Each channel's log is split into bands, so a crease (darker and, light passing through skin, redder than the
 /// skin around it) takes the colour of the skin around it, not only its brightness. Whether a pixel is in a crease,
 /// and how deep, is read from the luminance of the bands. The region's margin around `inner` only feeds the coarse
-/// blurs' cells; the fine blur and the change run inside `inner`.
-pub(super) fn reduce(c: &mut Rgb32f, m: &Plane, a: &Plane, sizes: Sizes, inner: [usize; 4], k: f32) -> bool {
-    let px = |f: f64| {
-        let v = (f * sizes.face) as f32;
-        if v.is_finite() { v.max(0.0) } else { 0.0 }
-    };
+/// blurs' cells; the change runs inside `inner`.
+pub(super) fn reduce(c: &mut Rgb32f, skin: &Skin<'_>, a: &Plane, sizes: Sizes, region: [usize; 4], inner: [usize; 4], k: f32) -> bool {
     let (w, h) = (c.width, c.height);
-    let [ix0, iy0, ix1, iy1] = [inner[0].min(w), inner[1].min(h), inner[2].min(w), inner[3].min(h)];
-    if w == 0 || h == 0 || ix0 >= ix1 || iy0 >= iy1 || c.data.len() != m.data.len() || c.data.len() != a.data.len() {
+    let [rx0, ry0, rx1, ry1] = [region[0].min(w), region[1].min(h), region[2].min(w), region[3].min(h)];
+    let [ix0, iy0, ix1, iy1] = [inner[0].max(rx0), inner[1].max(ry0), inner[2].min(rx1), inner[3].min(ry1)];
+    if skin.width != w || c.data.len() != skin.log.len() || ix0 >= ix1 || iy0 >= iy1 || a.width != inner[2].saturating_sub(inner[0]) {
         return false;
     }
-    let mut log = vec![[0.0f32; 3]; c.data.len()];
-    par_rows(&mut log, w, |y, row| {
-        for (x, o) in row.iter_mut().enumerate() {
-            *o = c.data.get(y * w + x).map_or([0.0; 3], |p| p.map(|v| v.max(DARK).ln()));
-        }
-    });
-    let mask = |i: usize| m.data.get(i).copied().unwrap_or(0.0);
-    let log_at = |i: usize| log.get(i).copied().unwrap_or_default();
+    let (aw, ah) = (a.width, a.height);
+    let weight = |x: usize, y: usize| if y - inner[1] < ah { a.data.get((y - inner[1]) * aw + x - inner[0]).copied().unwrap_or(0.0) } else { 0.0 };
     let weigh = |l: [f32; 3], mv: f32| [l[0] * mv, l[1] * mv, l[2] * mv, mv];
-    let sigma = px(sizes.coarse);
-    let grid = Grid::new(w, h, sigma, sizes.grid);
-    let first = grid.blur(grid.cells(|i, _, _| weigh(log_at(i), mask(i))), sigma);
-    // the second blur leaves out the pixels darker than their surroundings: the creases
-    let second = grid.blur(
-        grid.cells(|i, x, y| {
-            let l = log_at(i);
-            let d = (luma(sub(unweight(grid.cell(&first, x, y), l), l)) / CREASE).max(0.0);
-            weigh(l, mask(i) / (1.0 + d * d))
+    // (the grid's pixel (x, y) is the box's (rx0 + x, ry0 + y))
+    let at = |x: usize, y: usize| (ry0 + y) * w + rx0 + x;
+    let sigma = px(sizes.coarse, sizes.face);
+    let grid = Grid::new(rx1 - rx0, ry1 - ry0, sigma, sizes.grid);
+    let first = grid.blur(
+        grid.cells(|x, y, _| {
+            let i = at(x, y);
+            weigh(skin.log(i), skin.mask(i))
         }),
         sigma,
     );
-    // the fine blur over `inner` and as far around it as it reads
-    let pad = (3.0 * px(FINE)).ceil() as usize + 1;
-    let [fx0, fy0] = [ix0.saturating_sub(pad), iy0.saturating_sub(pad)];
-    let [fx1, fy1] = [(ix1 + pad).min(w), (iy1 + pad).min(h)];
-    let fw = fx1 - fx0;
-    let fine = blur(
-        &filled(fw, fy1 - fy0, |_, x, y| {
-            let i = (fy0 + y) * w + fx0 + x;
-            weigh(log_at(i), mask(i))
+    // (each cell's average log luminance, where it has skin)
+    let means: Vec<Option<f32>> = first.data.iter().map(|p| (p[3] > 1e-6).then(|| luma([p[0] / p[3], p[1] / p[3], p[2] / p[3]]))).collect();
+    // the second blur leaves out the pixels darker than their surroundings: the creases
+    let second = grid.blur(
+        grid.cells(|x, y, cell| {
+            let i = at(x, y);
+            let mv = skin.mask(i);
+            if mv <= 0.0 {
+                return [0.0; 4];
+            }
+            let l = skin.log(i);
+            let d = means.get(cell).copied().flatten().map_or(0.0, |m| ((m - luma(l)) / CREASE).max(0.0));
+            weigh(l, mv / (1.0 + d * d))
         }),
-        px(FINE),
+        sigma,
     );
     par_rows(&mut c.data, w, |y, row| {
         if !(iy0..iy1).contains(&y) {
@@ -96,16 +163,17 @@ pub(super) fn reduce(c: &mut Rgb32f, m: &Plane, a: &Plane, sizes: Sizes, inner: 
         }
         for (x, o) in row.iter_mut().enumerate().take(ix1).skip(ix0) {
             let i = y * w + x;
-            let wt = mask(i) * a.data.get(i).copied().unwrap_or(0.0);
+            let wt = skin.mask(i) * weight(x, y);
             if wt <= 0.0 {
                 continue;
             }
-            let l = log_at(i);
-            let lf = fine.data.get((y - fy0) * fw + x - fx0).map_or(l, |p| unweight(*p, l));
+            let l = skin.log(i);
+            let lf = skin.fine(x, y, l);
             // only a pixel darker than the plain average around it is in a crease; the rest of the skin stays
-            let mean = unweight(grid.read(&first, x, y), lf);
+            let (gx, gy) = (x - rx0, y - ry0);
+            let mean = unweight(grid.read(&first, gx, gy), lf);
             let gate = smooth01((luma(sub(mean, lf)) - GATE_START) / (GATE_FULL - GATE_START));
-            let band = sub(unweight(grid.read(&second, x, y), lf), lf);
+            let band = sub(unweight(grid.read(&second, gx, gy), lf), lf);
             let depth = luma(band);
             if gate <= 0.0 || depth.is_nan() || depth <= 0.0 {
                 continue;
@@ -154,8 +222,9 @@ impl Grid {
         Grid { factor, offset, size: [w, h], cells }
     }
 
-    /// The cells of `f(index, x, y)` over the region's pixels: each cell the mean of its `factor × factor` pixels
-    /// (a cell cut by the region's edge counts the pixels it holds as that many of `factor²`).
+    /// The cells of `f(x, y, cell)` over the region's pixels (`cell`: the index of the cell that holds the pixel):
+    /// each cell the mean of its `factor × factor` pixels (a cell cut by the region's edge counts the pixels it
+    /// holds as that many of `factor²`).
     fn cells(&self, f: impl Fn(usize, usize, usize) -> [f32; 4] + Sync) -> Image<[f32; 4]> {
         let ([w, h], [cw, ch], k) = (self.size, self.cells, self.factor);
         let mut small = Image::<[f32; 4]>::new(cw, ch);
@@ -167,7 +236,7 @@ impl Grid {
                 let mut acc = [0.0f32; 4];
                 for y in ys.clone() {
                     for x in xs.clone() {
-                        let p = f(y * w + x, x, y);
+                        let p = f(x, y, cy * cw + cx);
                         acc = std::array::from_fn(|c| acc[c] + p[c]);
                     }
                 }
@@ -180,12 +249,6 @@ impl Grid {
     /// The cells blurred by `sigma` pixels.
     fn blur(&self, cells: Image<[f32; 4]>, sigma: f32) -> Image<[f32; 4]> {
         blur(&cells, sigma / self.factor as f32)
-    }
-
-    /// The blurred cell that holds pixel (`x`, `y`) of the region.
-    fn cell(&self, b: &Image<[f32; 4]>, x: usize, y: usize) -> [f32; 4] {
-        let (cx, cy) = ((x + self.offset[0]) / self.factor, (y + self.offset[1]) / self.factor);
-        b.data.get(cy * b.width + cx).copied().unwrap_or_default()
     }
 
     /// The blurred cells `b` read back at pixel (`x`, `y`) of the region, bilinearly.

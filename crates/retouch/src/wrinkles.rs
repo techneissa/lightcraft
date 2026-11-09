@@ -18,9 +18,14 @@
 //! Every blur reads only the skin (a blur of the picture weighted by the mask, divided by the blur of the mask), so
 //! hair, eyes, lips, clothes and the background never bleed in, and pixels outside the masks never change.
 //!
-//! Zoom rule: a pixel's change reads the picture at most [`Wrinkles::REACH`] of the face's size away from it, and no
-//! statistic is taken from the image as a whole, so a render of a window grown by the reach equals the whole render
-//! inside it.
+//! Zoom rule: every read stays inside the skin masks' boxes, and a pixel's change reads the picture at most
+//! [`Wrinkles::REACH`] of the face's size away from it (less than the step allows past the masks' areas); no
+//! statistic is taken from the image as a whole, and the cells and the weight's lattice are counted from the face's
+//! corner, so a zoomed render equals the whole render inside it.
+//!
+//! Speed: each skin mask is sampled, and its log and fine blur built, once per face for all the areas it cuts;
+//! pixels where the mask is 0 are skipped; an area's weight is measured only inside its bounds. A face too big for
+//! full-size work ([`MAX_BOX`]) is worked on reduced, never skipped ([`Wrinkles::apply_capped`]).
 //!
 //! A later Refine brush (#99) paints over each area's weight: [`area_weight`] is where its strokes will be applied,
 //! one weight per area.
@@ -151,15 +156,24 @@ impl Wrinkles {
             crate::reduced::retouch(img, scene, face, all, f, keep, |small, sub, at| self.apply_capped(small, sub, Some(at), usize::MAX));
             return;
         }
-        // each skin mask is sampled once, over the boxes of every area it cuts
+        // each skin mask is sampled, and its log and fine blur built, once, over the boxes of every area it cuts
         for part in [Part::FacialSkin, Part::BodySkin] {
             let mine: Vec<&Plan> = plans.iter().filter(|p| p.area.part() == part).collect();
             let Some(u) = mine.iter().map(|p| p.b).reduce(union) else {
                 continue;
             };
             let Some(mask) = skin_mask(scene, face, part, u) else { continue };
-            for plan in mine {
-                plan.run(img, ctx, &sub_plane(&mask, u, plan.b));
+            // (the areas' bounds, in the box's pixels)
+            let inners: Vec<[usize; 4]> = mine.iter().map(|p| p.inner(u)).collect();
+            let Some(all) = inners.iter().copied().filter(|b| b[0] < b[2] && b[1] < b[3]).reduce(union) else { continue };
+            let mut c = crop(img, u);
+            let Some(skin) = lines::Skin::new(&c, &mask, all, ctx.size) else { continue };
+            let mut changed = false;
+            for (plan, inner) in mine.iter().zip(inners) {
+                changed |= plan.run(&mut c, &skin, ctx, u, inner);
+            }
+            if changed {
+                paste(img, u, &c, &mask, all);
             }
         }
     }
@@ -197,41 +211,28 @@ impl Plan {
         (b[0] < b[2] && b[1] < b[3]).then_some(Plan { area, k, regions, r, b })
     }
 
-    /// Lift the area's lines in `img`, cut by the skin mask `m` over the plan's box.
-    fn run(&self, img: &mut Rgb32f, ctx: &FaceCtx<'_>, m: &Plane) {
+    /// The area's bounds within the box `u` (in its pixels; empty when they miss the plan's box).
+    fn inner(&self, u: [usize; 4]) -> [usize; 4] {
         let (b, r) = (self.b, self.r);
-        if !m.data.iter().any(|v| *v > 0.0) {
-            return;
+        let ib = [clamp_px(r[0], b[0], b[2]), clamp_px(r[1], b[1], b[3]), clamp_px(r[2] + 1.0, b[0], b[2]), clamp_px(r[3] + 1.0, b[1], b[3])];
+        [ib[0].saturating_sub(u[0]), ib[1].saturating_sub(u[1]), ib[2].saturating_sub(u[0]), ib[3].saturating_sub(u[1])]
+    }
+
+    /// Lift the area's lines in `c` (the box `u` of the picture, `skin` built from it), inside `inner` (its
+    /// [`Plan::inner`]). False when nothing changed.
+    fn run(&self, c: &mut Rgb32f, skin: &lines::Skin<'_>, ctx: &FaceCtx<'_>, u: [usize; 4], inner: [usize; 4]) -> bool {
+        if inner[0] >= inner[2] || inner[1] >= inner[3] {
+            return false;
         }
         // the coarse blurs' cells and the weight's lattice are anchored to the face, so a window of the photo uses
-        // the same ones
+        // the same ones; the weight is above 0 only inside the area's bounds, so it is measured there only
         let corner = [ctx.bounds[0].floor(), ctx.bounds[1].floor()];
-        let a = area_weight(&self.regions, b, corner, ctx.px(LATTICE));
-        let mut c = crop(img, b);
+        let a = area_weight(&self.regions, [u[0] + inner[0], u[1] + inner[1], u[0] + inner[2], u[1] + inner[3]], corner, ctx.px(LATTICE));
+        let b = self.b;
+        let region = [b[0].saturating_sub(u[0]), b[1].saturating_sub(u[1]), b[2].saturating_sub(u[0]), b[3].saturating_sub(u[1])];
         let grid = [b[0] as i64 - corner[0] as i64, b[1] as i64 - corner[1] as i64];
-        let inner = [
-            clamp_px(r[0], b[0], b[2]) - b[0],
-            clamp_px(r[1], b[1], b[3]) - b[1],
-            clamp_px(r[2] + 1.0, b[0], b[2]) - b[0],
-            clamp_px(r[3] + 1.0, b[1], b[3]) - b[1],
-        ];
-        if lines::reduce(&mut c, m, &a, lines::Sizes { face: ctx.size, coarse: self.area.coarse(), grid }, inner, self.k) {
-            paste(img, b, &c, m, &a);
-        }
+        lines::reduce(c, skin, &a, lines::Sizes { face: ctx.size, coarse: self.area.coarse(), grid }, region, inner, self.k)
     }
-}
-
-/// The part of `plane` (over the box `u`) over the box `b` inside it.
-fn sub_plane(plane: &Plane, u: [usize; 4], b: [usize; 4]) -> Plane {
-    let w = b[2].saturating_sub(b[0]);
-    let mut p = Plane::new(w, b[3].saturating_sub(b[1]));
-    par_rows(&mut p.data, w.max(1), |y, row| {
-        let start = (b[1] + y).saturating_sub(u[1]) * plane.width + b[0].saturating_sub(u[0]);
-        if let Some(src) = plane.data.get(start..start + w) {
-            row.copy_from_slice(src);
-        }
-    });
-    p
 }
 
 /// A slider (0…100) as the share of a line's depth lifted (a value that is not a number is 0).
@@ -289,7 +290,7 @@ pub fn area_weight(regions: &[areas::Region], b: [usize; 4], corner: [f64; 2], s
 
 /// The mask of `part` of `face` over the box `b` (0…1); `None` when it is 0 everywhere there.
 fn skin_mask(scene: &Scene<'_>, face: usize, part: Part, b: [usize; 4]) -> Option<Plane> {
-    let mask = scene.faces.get(face)?.face.mask(part)?;
+    let mask = scene.faces.get(face)?.face.mask(part)?.sampler()?;
     let view = scene.view();
     let [x0, y0, x1, y1] = b;
     let w = x1 - x0;
@@ -297,7 +298,7 @@ fn skin_mask(scene: &Scene<'_>, face: usize, part: Part, b: [usize; 4]) -> Optio
     par_rows(&mut m.data, w.max(1), |y, row| {
         for (x, v) in row.iter_mut().enumerate() {
             let (nx, ny) = view.to_norm((x0 + x) as f64 + 0.5, (y0 + y) as f64 + 0.5);
-            let s = mask.sample(nx, ny);
+            let s = mask.at(nx, ny);
             *v = if s.is_finite() { s.clamp(0.0, 1.0) } else { 0.0 };
         }
     });
@@ -317,18 +318,26 @@ fn crop(img: &Rgb32f, b: [usize; 4]) -> Rgb32f {
     c
 }
 
-/// Write `out` into `img` over the box `b`, only where the mask and the area's weight are both above 0.
-fn paste(img: &mut Rgb32f, b: [usize; 4], out: &Rgb32f, m: &Plane, a: &Plane) {
+/// Write `out` into `img` over the box `b`, inside `inner` (in the box's pixels: what the areas can change) and
+/// only where the mask `m` is above 0 (elsewhere `out` holds the picture's own pixels).
+fn paste(img: &mut Rgb32f, b: [usize; 4], out: &Rgb32f, m: &Plane, inner: [usize; 4]) {
     let [x0, y0, x1, _] = b;
-    let (w, iw) = (x1 - x0, img.width);
-    let rows = out.data.chunks(w.max(1)).zip(m.data.chunks(w.max(1))).zip(a.data.chunks(w.max(1)));
-    for (y, ((orow, mrow), arow)) in rows.enumerate() {
-        let start = (y0 + y) * iw + x0;
-        let Some(dst) = img.data.get_mut(start..start + w) else { return };
-        for (((d, o), mv), av) in dst.iter_mut().zip(orow).zip(mrow).zip(arow) {
-            if *mv > 0.0 && *av > 0.0 {
+    let w = x1 - x0;
+    let [ix0, iy0, ix1, iy1] = [inner[0].min(w), inner[1], inner[2].min(w), inner[3].min(out.height)];
+    if ix0 >= ix1 {
+        return;
+    }
+    par_rows(&mut img.data, img.width.max(1), |y, row| {
+        let Some(oy) = y.checked_sub(y0).filter(|oy| (iy0..iy1).contains(oy)) else { return };
+        let (Some(dst), Some(src), Some(mrow)) =
+            (row.get_mut(x0 + ix0..x0 + ix1), out.data.get(oy * w + ix0..oy * w + ix1), m.data.get(oy * w + ix0..oy * w + ix1))
+        else {
+            return;
+        };
+        for ((d, o), mv) in dst.iter_mut().zip(src).zip(mrow) {
+            if *mv > 0.0 {
                 *d = *o;
             }
         }
-    }
+    });
 }
