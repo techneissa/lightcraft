@@ -140,7 +140,7 @@ fn parts_from(map: &BodyMap, rect: NormRect, mine: &dyn Fn(usize) -> bool, facia
                 }
             }
         }
-        Plane { rect: plane_rect, width: pw, height: ph, data }
+        Plane { rect: plane_rect, width: pw, height: ph, data, split: true }
     };
     let n = w * h;
     let sum = |classes: &[usize], i: usize| classes.iter().map(|&c| map.probs.get(c * n + i).copied().unwrap_or(0.0)).sum::<f32>();

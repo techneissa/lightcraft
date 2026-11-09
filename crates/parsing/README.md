@@ -15,7 +15,7 @@ the same at any resolution.
 | `Parsing` | `model_set`, `model_version`, the parsed picture's `width × height`, and `people` (largest first) |
 | `Person` | `face: Option<NormRect>`, `face_score`, `landmarks: Vec<Landmark>`, `landmark_score`, `person_id` (passed through from the caller's `FaceHint`), `bounds`, `parts: BTreeMap<Part, Vec<Plane>>` |
 | `Part` | `EntirePerson`, `FacialSkin`, `BodySkin`, `Hair`, `Eyebrows`, `EyeWhites`, `Iris`, `Lips`, `Teeth`, `ClothesTop`, `ClothesBottom`, `Dress`, `Shoes`, `Hat`, `Bag`, `Others`; ids `entirePerson` … via `Part::id` |
-| `Plane` | one mask over `rect: NormRect`, `width × height` `f32` values 0 to 1, row-major, at the resolution the model saw it. A part's mask is the per-pixel maximum of its planes (`Person::sample`) |
+| `Plane` | one mask over `rect: NormRect`, `width × height` `f32` values 0 to 1, row-major, at the resolution the model saw it. A part's mask is the per-pixel maximum of its planes (`Person::sample`); over everybody (`render::Select::Everyone`) the people's masks add up, since they share out one parse |
 | `Landmark` | `x`, `y` in fractions of the photo, `z` (depth, toward the camera negative) in fractions of the photo's width. MediaPipe order: 468 face points, then right iris 468–472 and left iris 473–477 (centre first) |
 | `FaceHint` (input) | a face from a detector: `rect`, optional YuNet 5 landmarks (used to turn the face upright), `score`, `person_id` |
 
@@ -79,11 +79,14 @@ Sapiens2's clothes (Top, Bottom, Dress, Hat, Bag, Others), which Sapiens2 has no
    the people further back. The box is sampled at 1.5 model pixels per body-map cell (long side at least 384, at most
    the trained 1024 × 768 patches); all the passes together see at most twice the trained patches, past which each is
    made smaller by the same factor (eight large people would otherwise take about 20 s).
-3. Each body-map cell belongs to one box: the one whose say there is greatest (1 inside, fading at its inner edges),
-   the smaller box on a tie (a person inside another's box). It takes that box's pass, or the whole photo's pass (half
+3. Each body-map cell belongs to one box: the box of the person the B3 sees there, when it covers the cell; else the
+   one whose say there is greatest (1 inside, fading at its inner edges), on a tie the one whose middle is nearest,
+   then the smaller box (a person inside another's box). Without the first rule, where two people's boxes both count
+   fully the smaller box's pass decided the other person's body, cut off along a straight line. It takes that box's pass, or the whole photo's pass (half
    the trained patches) when that box had none (a portrait that fills the frame, the ninth person); the whole photo's
    pass runs only then. Passes never mix, and they are written straight into the one probability grid.
-4. Sapiens2 has a say only inside the people's boxes, fading at their edges; elsewhere the B3's map stays. Sapiens2 is
+4. Sapiens2 has a say only inside the people's boxes, fading toward the edge of the area they cover together (not
+   where one box meets another, which would leave a thin line of the B3's map between two people); elsewhere the B3's map stays. Sapiens2 is
    trained on pictures with people and calls much of a picture without any (a car at night) a person.
 5. Each Sapiens2 class goes to its B3 class: background, hair, face (with lips, teeth and tongue; below a face's chin
    its face-and-neck class is the neck, Body Skin), eyeglasses (Others), shoes and socks (Shoes), arms, hands, legs,

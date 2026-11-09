@@ -63,8 +63,8 @@ fn person_parse(set: ModelSet) -> Parsing {
     let entire = disc(n, 0.5, 0.5, 0.27, 1.0).iter().map(|v| v.max(0.0)).collect();
     let mut p = Person { face: Some(NormRect::new(0.4, 0.35, 0.6, 0.55)), face_score: 0.9, ..Person::default() };
     p.bounds = Some(NormRect::new(0.23, 0.23, 0.77, 0.77));
-    p.parts.insert(Part::EntirePerson, vec![Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: n, height: n, data: entire }]);
-    p.parts.insert(Part::Hair, vec![Plane { rect: NormRect::new(0.3, 0.23, 0.7, 0.36), width: 8, height: 4, data: vec![1.0; 32] }]);
+    p.parts.insert(Part::EntirePerson, vec![Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: n, height: n, data: entire, split: false }]);
+    p.parts.insert(Part::Hair, vec![Plane { rect: NormRect::new(0.3, 0.23, 0.7, 0.36), width: 8, height: 4, data: vec![1.0; 32], split: false }]);
     Parsing { model_set: set.id().into(), model_version: set.version(), width: 32, height: 32, people: vec![p] }
 }
 
@@ -142,12 +142,29 @@ fn a_person_never_grows_into_the_next_person() {
     let mut other = parse.people[0].clone();
     let n = 32;
     let data = disc(n, 0.5 + 0.56, 0.5, 0.27, 1.0).iter().map(|v| v.max(0.0)).collect();
-    other.parts.insert(Part::EntirePerson, vec![Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: n, height: n, data }]);
+    other.parts.insert(Part::EntirePerson, vec![Plane { rect: NormRect::new(0.0, 0.0, 1.0, 1.0), width: n, height: n, data, split: false }]);
     other.parts.remove(&Part::Hair);
     parse.people.push(other);
     crate::hair_edges::people::refine(&mut parse, &matte);
     // 0.78 is inside the second person and within the first's band: it stays the second's only
     assert!(parse.people[0].sample(Part::EntirePerson, 0.785, 0.5) < 0.5);
+    assert!(parse.people[0].sample(Part::EntirePerson, 0.5, 0.5 + 0.285) > 0.5, "free strands still come in");
+}
+
+#[test]
+fn a_person_never_grows_into_two_people_who_share_the_cells_next_to_them() {
+    let matte = Matte { side: SIDE, logits: vec![9.0; SIDE * SIDE] };
+    let mut parse = person_parse(ModelSet::Segformer);
+    // right of the first person, inside their band, two people's soft edges share the body map's cells: 0.45 each,
+    // joined 0.9, someone is there (#124)
+    for _ in 0..2 {
+        let mut other = Person::default();
+        let plane = Plane { rect: NormRect::new(0.75, 0.0, 1.0, 1.0), width: 4, height: 4, data: vec![0.45; 16], split: true };
+        other.parts.insert(Part::EntirePerson, vec![plane]);
+        parse.people.push(other);
+    }
+    crate::hair_edges::people::refine(&mut parse, &matte);
+    assert!(parse.people[0].sample(Part::EntirePerson, 0.79, 0.5) < 0.5, "{}", parse.people[0].sample(Part::EntirePerson, 0.79, 0.5));
     assert!(parse.people[0].sample(Part::EntirePerson, 0.5, 0.5 + 0.285) > 0.5, "free strands still come in");
 }
 

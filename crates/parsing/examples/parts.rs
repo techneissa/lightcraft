@@ -6,7 +6,7 @@
 //! Writes `outdir/<part>.png` (the photo dimmed, the part in colour, one colour per person), `outdir/all.png` (every
 //! part in its own colour), `outdir/landmarks.png`, `outdir/people.json` (with each face's mesh points, which the
 //! Face Reshape example reads) and each person's masks as grey pictures (`outdir/masks/<part>-<person>.png`, white =
-//! the part; the retouch examples read them), and prints the time each step took.
+//! the part; the retouch examples read them) and everybody's (`outdir/masks/<part>-all.png`), and prints the time each step took.
 //! Faces come from the YuNet detector in the shared models folder when it is there (as in the app), else from the
 //! body model. `--models` defaults to `LIGHTCRAFT_PARSING_MODELS`, else `~/Library/Application Support/ArtCraft/models`.
 
@@ -146,6 +146,10 @@ fn write(
         }
         if any {
             save(&out.join(format!("{}.png", part.id())), w, h, &pic)?;
+            // the part over everybody, as the app's masks draw it
+            let m = render::refined_with(parsing, Select::Everyone(part), img, radius, eps);
+            let grey: Vec<u8> = m.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+            image::GrayImage::from_raw(w as u32, h as u32, grey).ok_or("bad size")?.save(out.join(format!("masks/{}-all.png", part.id())))?;
         }
     }
     let bg = render::refined_with(parsing, Select::Background, img, radius, eps);
