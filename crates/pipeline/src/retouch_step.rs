@@ -12,7 +12,7 @@
 use std::sync::Arc;
 
 use lightcraft_develop::DevelopSettings;
-use lightcraft_develop::retouch::{Face, Input, KeyMap, MAX_FACES, NormRect, Reads, Stage, View};
+use lightcraft_develop::retouch::{Face, Input, KeyMap, NormRect, Reads, Scene, Stage, View};
 use lightcraft_geom::{Affine, Orientation, Point};
 use lightcraft_raster::Rgb32f;
 
@@ -179,14 +179,15 @@ pub fn window_for_reads(
     let o = s.orientation;
     let view: Box<dyn View> =
         if input.on_photo { Box::new(PhotoView::new(frame, full_w, full_h, o)) } else { Box::new(FrameView::new(frame, full_w, full_h, o)) };
-    // where Refine Add strokes widen masks: their points' box grown by their radius, in pixels
-    let add = reads.add.and_then(|(b, r)| add_box(b, r, view.as_ref()));
+    // where each face's own Refine Add strokes widen its masks: their points' box grown by their radius, in pixels
+    let scene = Scene::new(input, view.as_ref(), full_w, full_h);
+    let adds = lightcraft_develop::retouch::refine::add_reach(&s.retouch, input, &scene);
     let (fw, fh) = (full_w as f64, full_h as f64);
-    let mut boxes: Vec<[f64; 4]> = input
+    let mut boxes: Vec<[f64; 4]> = scene
         .faces
         .iter()
-        .take(MAX_FACES)
-        .filter_map(|face| read_box(face, &reads, add, view.as_ref()))
+        .zip(&adds)
+        .filter_map(|(f, add)| read_box(f.face, &reads, add.and_then(|(b, r)| add_box(b, r, view.as_ref())), view.as_ref()))
         .map(|[rx0, ry0, rx1, ry1]| [rx0.max(0.0), ry0.max(0.0), rx1.min(fw), ry1.min(fh)])
         .collect();
     let [mut x0, mut y0, mut x1, mut y1] = [win.x as f64, win.y as f64, (win.x + win.w) as f64, (win.y + win.h) as f64];

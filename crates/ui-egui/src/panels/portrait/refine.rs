@@ -114,6 +114,12 @@ pub(super) fn row(cx: &mut super::Ctx<'_>, f: &FeatureInfo) {
         cx.app.toast(cx.ui.ctx(), e);
     }
     if cx.app.portrait_refine.feature == Some(f.key) {
+        if cx.app.portrait_refine.mode == RefineMode::Add && cx.input.faces.is_empty() {
+            cx.ui.horizontal(|ui| {
+                ui.add_space(10.0);
+                ui.label(egui::RichText::new(tr("Add works on or near a face, and none was found.")).size(11.5).weak());
+            });
+        }
         brush_sliders(cx.app, cx.ui);
     }
 }

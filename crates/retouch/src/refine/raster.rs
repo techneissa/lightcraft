@@ -18,6 +18,14 @@ const GRID_MAX: usize = 1024;
 const CELLS_PER_RADIUS: f64 = 6.0;
 /// Most dabs one stroke lays (a hostile stroke spanning the photo with the smallest brush stops there).
 const MAX_DABS: usize = 200_000;
+/// The finest cell a grid has: a 1024th of the photo's long edge, whatever the brush, so no grid is finer than the
+/// photo can show and one grid is at most 1024 × 1024 cells.
+const MIN_CELL: f64 = 1.0 / GRID_MAX as f64;
+/// Cell visits one feature's strokes (one set of them) may cost to rasterise: dabs × the cells each covers. Over it
+/// the strokes are refused by the command and left out of a render.
+pub const FEATURE_WORK_CAP: f64 = 150e6;
+/// Cell visits all the strokes of a photo (every feature, for every face and each face's own) may cost.
+pub const TOTAL_WORK_CAP: f64 = 600e6;
 /// Memory the cache of grids may hold.
 const CACHE_BYTES: usize = 64 << 20;
 /// Grids the cache holds at most.
@@ -63,6 +71,32 @@ impl Shape {
     }
 }
 
+/// What rasterising `strokes` (one feature's, one set) costs at most, in cell visits: each stroke's dabs times the
+/// cells a dab can cover at the finest cell the strokes give (an Add stroke twice: it goes in two grids). Never
+/// below what [`rasterise`] does, and made from the strokes alone, so a command and a render agree on it.
+pub fn work(strokes: &[RefineStroke]) -> f64 {
+    let r_min = strokes.iter().map(|s| s.size).fold(f64::INFINITY, f64::min);
+    let cell = (r_min / CELLS_PER_RADIUS).max(MIN_CELL);
+    let side_max = (GRID_MAX * GRID_MAX) as f64;
+    let mut total = 0.0;
+    for s in strokes {
+        let r = s.size;
+        let step = (r * 0.25).max(1e-6);
+        let mut dabs = 1.0f64;
+        for w in s.points.windows(2) {
+            let d = ((w[1].0 - w[0].0).powi(2) + (w[1].1 - w[0].1).powi(2)).sqrt();
+            if d.is_finite() && d > 0.0 {
+                dabs += (d / step).ceil().max(1.0);
+            }
+        }
+        let dabs = dabs.min(MAX_DABS as f64);
+        let per_dab = ((2.0 * r / cell + 1.0).powi(2)).min(side_max);
+        let times = if s.mode == RefineMode::Add { 2.0 } else { 1.0 };
+        total += dabs * per_dab * times;
+    }
+    total
+}
+
 /// A stroke `raises` the grid of `kind` (Reduce the cut, Add the add) or lowers it (Restore both, Add the cut).
 fn raises(kind: Kind, m: RefineMode) -> bool {
     matches!((kind, m), (Kind::Cut, RefineMode::Reduce) | (Kind::Add, RefineMode::Add))
@@ -78,7 +112,7 @@ pub(crate) fn grid(strokes: &[RefineStroke], keep: &dyn Fn(usize) -> bool, kind:
     let used: Vec<(usize, &RefineStroke)> =
         strokes.iter().enumerate().filter(|(i, s)| (raises(kind, s.mode) && (kind == Kind::Cut || keep(*i))) || lowers(kind, s.mode)).collect();
     let raising: Vec<&RefineStroke> = used.iter().filter(|(_, s)| raises(kind, s.mode)).map(|(_, s)| *s).collect();
-    if raising.is_empty() {
+    if raising.is_empty() || work(strokes) > FEATURE_WORK_CAP {
         return None;
     }
     let mut h = Fnv::new();
@@ -141,7 +175,7 @@ fn rasterise(used: &[(usize, &RefineStroke)], raising: &[&RefineStroke], kind: K
     }
     let (ew, eh) = (area.width() * shape.kx, area.height() * shape.ky);
     let r_min = used.iter().map(|(_, s)| s.size).fold(f64::INFINITY, f64::min);
-    let cell = (r_min / CELLS_PER_RADIUS).max(ew.max(eh) / GRID_MAX as f64);
+    let cell = (r_min / CELLS_PER_RADIUS).max(ew.max(eh) / GRID_MAX as f64).max(MIN_CELL);
     if !(cell.is_finite() && cell > 0.0) {
         return None;
     }
@@ -332,5 +366,31 @@ mod tests {
         let (_, g) = grid(&[s], &|_| true, Kind::Cut, shape).unwrap();
         assert!(g.plane.width <= GRID_MAX && g.plane.height <= GRID_MAX);
         assert!(Shape::from_aspect(f64::NAN).is_none() && Shape::from_aspect(0.0).is_none());
+    }
+
+    /// A tiny brush next to a huge one zigzagging over the photo: the grid is as fine as the tiny brush, and each of
+    /// the huge brush's 200 000 dabs would cover all of it. The work is over its cap, so no grid is made (and the
+    /// run ends at once instead of spending minutes).
+    #[test]
+    fn a_zigzag_of_a_huge_brush_over_a_tiny_one_is_over_the_work_cap() {
+        let shape = Shape::from_aspect(1.0).unwrap();
+        let zig: Vec<(f64, f64)> = (0..20_000).map(|i| if i % 2 == 0 { (0.1, 0.1) } else { (0.9, 0.9) }).collect();
+        let tiny = RefineStroke { size: 0.001, ..stroke(RefineMode::Reduce, &[(0.5, 0.5), (0.52, 0.5)]) };
+        let huge = RefineStroke { size: 0.5, ..stroke(RefineMode::Reduce, &zig) }.sanitized().unwrap();
+        let both = vec![tiny.clone(), huge.clone()];
+        assert!(work(&both) > FEATURE_WORK_CAP, "{}", work(&both));
+        assert!(grid(&both, &|_| true, Kind::Cut, shape).is_none());
+        // each alone is fine, and an ordinary session of strokes is far under the cap
+        assert!(work(&[huge]) <= FEATURE_WORK_CAP && work(&[tiny]) < 1e6);
+        let ordinary: Vec<RefineStroke> = (0..200).map(|i| stroke(RefineMode::Reduce, &[(0.1 + i as f64 * 0.004, 0.3), (0.3, 0.6), (0.5, 0.4)])).collect();
+        assert!(work(&ordinary) < FEATURE_WORK_CAP / 10.0, "{}", work(&ordinary));
+    }
+
+    #[test]
+    fn no_grid_is_finer_than_a_1024th_of_the_photo() {
+        let shape = Shape::from_aspect(1.0).unwrap();
+        let s = RefineStroke { size: 0.001, ..stroke(RefineMode::Reduce, &[(0.1, 0.1), (0.9, 0.9)]) };
+        let (_, g) = grid(&[s], &|_| true, Kind::Cut, shape).unwrap();
+        assert!(g.plane.width <= GRID_MAX && g.plane.height <= GRID_MAX);
     }
 }

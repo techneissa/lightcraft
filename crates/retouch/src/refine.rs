@@ -2,10 +2,11 @@
 //! and how strongly.
 //!
 //! - **Reduce** weakens the feature where it is painted, down to none at Strength 100: the pixels there are what
-//!   they were before the feature ran, bit for bit.
+//!   they were before this feature ran (not the photo's: features that ran earlier stay), bit for bit.
 //! - **Restore** takes Reduce and Add back where it is painted (the automatic result again).
 //! - **Add** paints the feature where its automatic mask missed: it widens the masks the feature declares
-//!   ([`crate::Feature::ADD_PARTS`]) for the face nearest the stroke.
+//!   ([`crate::Feature::ADD_PARTS`]) for the face it works on: the face the stroke was painted for (a picked face's
+//!   own strokes belong to it), else the face nearest it, and only on or near that face ([`ADD_REACH`]).
 //!
 //! Strokes are kept per feature ([`Refine`]): for every face in [`crate::Retouch::refine`], and for a face with its
 //! own settings in [`crate::FaceOverride::refine`]. Points are normalised like Remove spots (the photo before its
@@ -22,7 +23,7 @@ mod blend;
 mod raster;
 
 pub(crate) use blend::run_refined;
-pub use raster::grids_made;
+pub use raster::{FEATURE_WORK_CAP, TOTAL_WORK_CAP, grids_made, work};
 
 /// Most strokes one feature keeps (per face); more are not read from settings and not added.
 pub const MAX_STROKES: usize = 2000;
@@ -232,4 +233,94 @@ pub fn points_box<'a>(strokes: impl IntoIterator<Item = &'a RefineStroke>) -> Op
         r = r.max(s.size);
     }
     (b[0] <= b[2] && b[1] <= b[3]).then_some((b, r))
+}
+
+/// How far from a face's box (in face sizes) an Add stroke still works on that face: a stroke further away is
+/// refused by the command and ignored by a render.
+pub const ADD_REACH: f64 = 1.0;
+
+/// The middle of a stroke's points (normalised, the strokes' frame).
+pub fn stroke_centre(s: &RefineStroke) -> Option<(f64, f64)> {
+    let n = s.points.len();
+    if n == 0 {
+        return None;
+    }
+    let (sx, sy) = s.points.iter().fold((0.0, 0.0), |a, p| (a.0 + p.0, a.1 + p.1));
+    let c = (sx / n as f64, sy / n as f64);
+    (c.0.is_finite() && c.1.is_finite()).then_some(c)
+}
+
+/// How far point `(x, y)` (normalised, in `face`'s frame) is from the face's box, in the face's sizes (its longer
+/// side, normalised); infinite for a face that is not a box.
+pub fn add_distance(face: &crate::Face, (x, y): (f64, f64)) -> f64 {
+    let b = face.bounds;
+    let size = b.width().max(b.height());
+    let dx = (b.x0 - x).max(x - b.x1).max(0.0);
+    let dy = (b.y0 - y).max(y - b.y1).max(0.0);
+    let d = (dx * dx + dy * dy).sqrt() / size;
+    if d.is_finite() && size > 0.0 { d } else { f64::INFINITY }
+}
+
+/// One feature's strokes as a run sees them: the strokes, and whether they are one face's own (painted with that face
+/// picked) or for every face.
+#[derive(Clone, Copy)]
+pub(crate) struct Layer<'a> {
+    pub strokes: &'a Refine,
+    pub picked: bool,
+}
+
+/// The face (its place in `scene.faces`) an Add stroke works on: `picked` for a picked face's own strokes, else the
+/// nearest; `None` for a stroke that is not Add, or that is further than [`ADD_REACH`] from that face.
+pub(crate) fn add_owner(scene: &crate::Scene<'_>, s: &RefineStroke, picked: Option<usize>) -> Option<usize> {
+    if s.mode != RefineMode::Add {
+        return None;
+    }
+    let (cx, cy) = stroke_centre(s)?;
+    let (px, py) = scene.view().edit_to_px(cx, cy)?;
+    let c = scene.view().to_norm(px, py);
+    let dist = |k: usize| scene.faces.get(k).map_or(f64::INFINITY, |f| add_distance(f.face, c));
+    let k = match picked {
+        Some(k) => k,
+        None => (0..scene.faces.len()).min_by(|a, b| dist(*a).total_cmp(&dist(*b)))?,
+    };
+    (dist(k) <= ADD_REACH).then_some(k)
+}
+
+/// For each face of `scene` (same order), where the Add strokes it owns (of the features that are on and read a
+/// mask) can widen its masks: the box of their points and their largest radius (see [`points_box`]). A zoomed
+/// render reads up to there.
+pub fn add_reach(r: &crate::Retouch, input: &crate::Input, scene: &crate::Scene<'_>) -> Vec<Option<([f64; 4], f64)>> {
+    let layers = crate::run::layers(r, input, scene, check_budget(r).is_ok());
+    layers
+        .iter()
+        .enumerate()
+        .map(|(k, (features, layer))| {
+            let adds = crate::FEATURES
+                .iter()
+                .filter(|f| !f.add_parts.is_empty() && features.is_on(f.key))
+                .flat_map(|f| layer.strokes.strokes(f.key))
+                .filter(|s| add_owner(scene, s, layer.picked.then_some(k)) == Some(k));
+            points_box(adds)
+        })
+        .collect()
+}
+
+/// Whether the strokes of `r` stay within what a render rasterises ([`FEATURE_WORK_CAP`] for each feature of each
+/// set of strokes, [`TOTAL_WORK_CAP`] for all of them); the reason when not. Commands refuse a stroke that would
+/// break it, and a render of a photo that already does (an old sidecar) leaves its Refine strokes out.
+pub fn check_budget(r: &crate::Retouch) -> Result<(), String> {
+    let mut total = 0.0;
+    for refine in std::iter::once(&r.refine).chain(r.faces.iter().map(|f| &f.refine)) {
+        for l in &refine.0 {
+            let w = work(&l.strokes);
+            if w > FEATURE_WORK_CAP {
+                return Err(format!("the Refine strokes of {} are too many or too large to render: use fewer, shorter or smaller ones", l.feature));
+            }
+            total += w;
+        }
+    }
+    if total > TOTAL_WORK_CAP {
+        return Err("the Refine strokes of this photo are too many or too large to render: clear some".to_string());
+    }
+    Ok(())
 }

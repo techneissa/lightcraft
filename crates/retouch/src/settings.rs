@@ -35,10 +35,6 @@ pub struct FeatureInfo {
 pub struct Reads {
     pub reach: f64,
     pub parts: Vec<crate::Part>,
-    /// Where Refine Add strokes of the features that are on can widen their masks: the box of their points
-    /// (normalised, the frame [`crate::View::to_edit`] speaks) and their largest radius (a fraction of the long
-    /// edge). A face's reads reach there too.
-    pub add: Option<([f64; 4], f64)>,
 }
 
 impl Reads {
@@ -55,16 +51,6 @@ impl Reads {
 
     fn merge(&mut self, o: &Reads) {
         self.add(o.reach, &o.parts);
-        if let Some(b) = o.add {
-            self.add_area(b);
-        }
-    }
-
-    fn add_area(&mut self, (b, r): ([f64; 4], f64)) {
-        self.add = Some(match self.add {
-            None => (b, r),
-            Some((a, ra)) => ([a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])], ra.max(r)),
-        });
     }
 }
 
@@ -142,21 +128,10 @@ impl Retouch {
         self.global.is_off() && self.faces.iter().all(|f| f.settings.is_off())
     }
 
-    /// What the features on for some face read ([`Features::reads`], and where their Refine Add strokes widen
-    /// masks); `None` while the block is off.
+    /// What the features on for some face read ([`Features::reads`]); `None` while the block is off.
     pub fn reads(&self) -> Option<Reads> {
         let mut out: Option<Reads> = None;
-        let sets = std::iter::once((&self.global, &self.refine)).chain(self.faces.iter().map(|f| (&f.settings, &f.refine)));
-        for (features, refine) in sets {
-            let Some(mut r) = features.reads() else { continue };
-            let adds = crate::FEATURES
-                .iter()
-                .filter(|f| !f.add_parts.is_empty() && features.is_on(f.key))
-                .flat_map(|f| refine.strokes(f.key))
-                .filter(|s| s.mode == crate::refine::RefineMode::Add);
-            if let Some(b) = crate::refine::points_box(adds) {
-                r.add_area(b);
-            }
+        for r in std::iter::once(&self.global).chain(self.faces.iter().map(|f| &f.settings)).filter_map(crate::Features::reads) {
             out.get_or_insert_with(Reads::default).merge(&r);
         }
         out
@@ -369,8 +344,8 @@ macro_rules! features {
         pub(crate) fn run_stage(
             img: &mut lightcraft_raster::Rgb32f,
             scene: &$crate::Scene<'_>,
-            global: (&Features, &$crate::refine::Refine),
-            per_face: &[(&Features, &$crate::refine::Refine)],
+            global: (&Features, $crate::refine::Layer<'_>),
+            per_face: &[(&Features, $crate::refine::Layer<'_>)],
             stage: $crate::Stage,
         ) {
             $($crate::run::run_one::<$ty>(img, scene, (&global.0.$key, global.1), per_face.iter().map(|f| (&f.0.$key, f.1)), stage);)*

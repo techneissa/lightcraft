@@ -1,6 +1,6 @@
-//! One feature run with its Refine strokes: Add widens the masks the feature reads for the face nearest each Add
-//! stroke, and Reduce mixes the run's result back toward the pixels before it (all the way at a full Reduce, which
-//! then leaves the original bits).
+//! One feature run with its Refine strokes: Add widens the masks the feature reads for the face each Add stroke works
+//! on, and Reduce mixes the run's result back toward the pixels before this feature ran (all the way at a full
+//! Reduce, which then leaves those bits: what earlier features made of the photo, not the photo itself).
 
 use std::sync::{Arc, Mutex, PoisonError};
 
@@ -8,6 +8,7 @@ use lightcraft_raster::{Plane, Rgb32f, par_rows};
 
 use super::RefineStroke;
 use super::raster::{Kind, Shape, grid};
+use super::add_owner;
 use crate::feature::{Feature, Scene, View};
 use crate::input::{Face, Fnv, NormRect, PartMask};
 
@@ -15,15 +16,21 @@ use crate::input::{Face, Fnv, NormRect, PartMask};
 const MASK_MAX: usize = 1024;
 /// Widened masks kept (each per face, part and strokes).
 const CACHE_ENTRIES: usize = 16;
+/// Memory the widened masks kept may hold.
+const CACHE_BYTES: usize = 64 << 20;
+/// Memory the saved pixels of a Reduce may take (12 bytes a pixel: about 44 megapixels). A render that would need
+/// more leaves Reduce out for that run.
+const SAVED_MAX_BYTES: usize = 512 << 20;
 
-/// Run `s` on `img` for `face` (`None`: the whole picture) with `strokes`, the feature's Refine strokes for it.
-pub(crate) fn run_refined<T: Feature>(img: &mut Rgb32f, scene: &Scene<'_>, s: &T, face: Option<usize>, strokes: &[RefineStroke]) {
+/// Run `s` on `img` for `face` (`None`: the whole picture) with `strokes`, the feature's Refine strokes for it
+/// (`picked`: a picked face's own, so its Add strokes belong to `face`).
+pub(crate) fn run_refined<T: Feature>(img: &mut Rgb32f, scene: &Scene<'_>, s: &T, face: Option<usize>, strokes: &[RefineStroke], picked: bool) {
     let Some(shape) = edit_shape(scene.view()) else {
         s.apply(img, scene, face);
         return;
     };
     let cut = grid(strokes, &|_| true, Kind::Cut, shape).map(|(_, g)| g);
-    let widened = widen::<T>(scene, face, strokes, shape);
+    let widened = widen::<T>(scene, face, strokes, shape, picked);
     let saved = cut.as_ref().and_then(|g| Saved::take(img, scene.view(), &g.area));
     match &widened {
         Some(faces) => {
@@ -71,6 +78,9 @@ struct Saved {
 impl Saved {
     fn take(img: &Rgb32f, view: &dyn View, area: &NormRect) -> Option<Saved> {
         let b = pixel_box(view, area, img.width, img.height)?;
+        if (b[2] - b[0]).saturating_mul(b[3] - b[1]).saturating_mul(std::mem::size_of::<[f32; 3]>()) > SAVED_MAX_BYTES {
+            return None;
+        }
         let mut px = Vec::with_capacity((b[2] - b[0]) * (b[3] - b[1]));
         for y in b[1]..b[3] {
             px.extend_from_slice(img.data.get(y * img.width + b[0]..y * img.width + b[2])?);
@@ -101,13 +111,14 @@ impl Saved {
     }
 }
 
-/// The faces of `scene` with the masks `T` widens ([`Feature::ADD_PARTS`]) widened by the Add strokes nearest each
-/// of them (`None` for a face they leave as it is); `None` when no Add stroke widens anything this run reads.
-fn widen<T: Feature>(scene: &Scene<'_>, face: Option<usize>, strokes: &[RefineStroke], shape: Shape) -> Option<Vec<Option<Arc<Face>>>> {
+/// The faces of `scene` with the masks `T` widens ([`Feature::ADD_PARTS`]) widened by the Add strokes that work on
+/// each of them (`None` for a face they leave as it is); `None` when no Add stroke widens anything this run reads.
+/// A picked face's own strokes work on `face`; strokes for every face on the face nearest each, if near enough.
+fn widen<T: Feature>(scene: &Scene<'_>, face: Option<usize>, strokes: &[RefineStroke], shape: Shape, picked: bool) -> Option<Vec<Option<Arc<Face>>>> {
     if T::ADD_PARTS.is_empty() || !strokes.iter().any(|s| s.mode == super::RefineMode::Add) {
         return None;
     }
-    let owner: Vec<Option<usize>> = strokes.iter().map(|s| nearest_face(scene, s)).collect();
+    let owner: Vec<Option<usize>> = strokes.iter().map(|s| add_owner(scene, s, face.filter(|_| picked))).collect();
     let mut out: Vec<Option<Arc<Face>>> = vec![None; scene.faces.len()];
     for (k, slot) in out.iter_mut().enumerate() {
         if face.is_some_and(|f| f != k) {
@@ -126,23 +137,6 @@ fn widen<T: Feature>(scene: &Scene<'_>, face: Option<usize>, strokes: &[RefineSt
         *slot = Some(Arc::new(wide));
     }
     (!out.iter().all(Option::is_none)).then_some(out)
-}
-
-/// The face an Add stroke widens: the one whose box is nearest its points' centre, in units of the face's size.
-fn nearest_face(scene: &Scene<'_>, s: &RefineStroke) -> Option<usize> {
-    if s.mode != super::RefineMode::Add {
-        return None;
-    }
-    let n = s.points.len().max(1) as f64;
-    let (sx, sy) = s.points.iter().fold((0.0, 0.0), |a, p| (a.0 + p.0, a.1 + p.1));
-    let (px, py) = scene.view().edit_to_px(sx / n, sy / n)?;
-    let dist = |b: &[f64; 4], size: f64| {
-        let dx = (b[0] - px).max(px - b[2]).max(0.0);
-        let dy = (b[1] - py).max(py - b[3]).max(0.0);
-        let d = (dx * dx + dy * dy).sqrt() / size.max(1e-9);
-        if d.is_finite() { d } else { f64::INFINITY }
-    };
-    scene.faces.iter().enumerate().map(|(k, f)| (k, dist(&f.bounds, f.size))).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(k, _)| k)
 }
 
 static WIDE: Mutex<Vec<(u64, Arc<PartMask>)>> = Mutex::new(Vec::new());
@@ -206,7 +200,8 @@ fn widened_mask(view: &dyn View, old: Option<&PartMask>, add: &PartMask, add_key
     let mut c = WIDE.lock().unwrap_or_else(PoisonError::into_inner);
     c.retain(|(k, _)| *k != key);
     c.push((key, m.clone()));
-    while c.len() > CACHE_ENTRIES {
+    let bytes = |c: &[(u64, Arc<PartMask>)]| c.iter().map(|(_, m)| m.plane.data.len() * 4).sum::<usize>();
+    while c.len() > 1 && (c.len() > CACHE_ENTRIES || bytes(&c) > CACHE_BYTES) {
         c.remove(0);
     }
     m

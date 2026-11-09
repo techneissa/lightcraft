@@ -441,12 +441,19 @@ fn a_portrait_preset_never_carries_refine_strokes() {
     s.execute("retouch.refine.stroke", &json!({"feature": "skin", "mode": "add", "points": [[0.25, 0.35]]})).unwrap();
     let r = s.execute("retouch.savePreset", &json!({"name": "Ann Look", "face": 0, "others": true})).unwrap();
     let pid = r["id"].as_str().unwrap().to_string();
-    let list = s.execute("presets.list", &json!({})).unwrap().to_string();
-    assert!(list.contains("Ann Look") && !list.contains("\"refine\""), "no strokes in the saved preset");
+    // (the stored preset itself: the list shows names only)
+    let stored = s.presets.iter().find(|p| p.id == pid).unwrap().settings[KEY].to_string();
+    let first = retouch(&s, vis[0]);
+    assert_eq!((first.refine.count(None), first.faces[0].refine.count(None)), (1, 1));
+    // (the JSON that would carry strokes shows the word `strokes`, so this check can fail)
+    assert!(serde_json::to_string(&first).unwrap().contains("\"strokes\""));
+    assert!(stored.contains("smoothness") && stored.contains("70"), "the stored preset has the sliders: {stored}");
+    assert!(!stored.contains("strokes") && !stored.contains("refine"), "no strokes in the saved preset: {stored}");
     regions(&mut s, vis[1], vec![region(LEFT, Some("Ann"))]);
     s.execute("preset.apply", &json!({"id": pid, "ids": [vis[1].0]})).unwrap();
     let got = retouch(&s, vis[1]);
     assert_eq!(got.faces.len(), 1, "Ann's face got the sliders");
+    assert_eq!(smoothness_of(&s, vis[1], &[face(LEFT, Some("ann"))]), [70.0], "(the preset was applied)");
     assert!(got.refine.is_empty() && got.faces[0].refine.is_empty(), "and no strokes");
     assert_eq!(retouch(&s, vis[0]).faces[0].refine.count(None), 1, "the first photo keeps its own");
 }

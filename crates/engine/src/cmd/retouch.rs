@@ -115,6 +115,33 @@ fn stroke_param(p: &Value, c: &str, add_ok: bool) -> Result<RefineStroke> {
     s.sanitized().ok_or_else(|| bad(c, "the stroke has no point on the photo"))
 }
 
+/// An Add stroke works on or near a face: refused with no face in the photo, or when the face it is for (`face`, else
+/// the nearest) is further than [`lightcraft_develop::retouch::refine::ADD_REACH`] face sizes away.
+fn check_add_near_face(s: &Session, id: PhotoId, face: Option<usize>, stroke: &RefineStroke, c: &str) -> Result<()> {
+    use lightcraft_develop::retouch::refine::{ADD_REACH, add_distance, stroke_centre};
+    const SAY: &str = "Add works on or near a face";
+    let input = found_faces(s, id, c)?;
+    if input.faces.is_empty() {
+        return Err(bad(c, format!("{SAY}: the photo has no face")));
+    }
+    let Some((cx, cy)) = stroke_centre(stroke) else { return Err(bad(c, "the stroke has no point on the photo")) };
+    // (the faces' boxes are in the frame before lens corrections and transform when they come from a people parse)
+    let keys = s.retouch_key_map(id);
+    let centre = match (input.on_photo, as_map(&keys)) {
+        (true, Some(m)) => m.edit_to_photo(cx, cy).unwrap_or((cx, cy)),
+        _ => (cx, cy),
+    };
+    let distance = |i: usize| input.faces.get(i).map_or(f64::INFINITY, |f| add_distance(f, centre));
+    let d = match face {
+        Some(i) => distance(i),
+        None => (0..input.faces.len()).map(distance).fold(f64::INFINITY, f64::min),
+    };
+    if d > ADD_REACH {
+        return Err(bad(c, format!("{SAY}: the stroke is {d:.1} face sizes from {}", if face.is_some() { "that face" } else { "the nearest face" })));
+    }
+    Ok(())
+}
+
 /// The Refine strokes of `face` (its own, made when it has none yet) or, without one, those for every face.
 fn refine_mut<'a>(s: &Session, d: &'a mut lightcraft_develop::DevelopSettings, id: PhotoId, face: Option<usize>, c: &str) -> Result<&'a mut Refine> {
     match face {
@@ -211,7 +238,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Refine Portrait Feature",
             [],
             None,
-            "{feature: key, mode?: reduce|restore|add, points: [[x, y]…], size?: radius (fraction of the long edge), feather?: 0–100, flow?: 1–100, strength?: 0–100, pressure?: [0–1…], face?: index, id?} → {strokes} — paint a Refine stroke for one portrait feature (points are fractions of the photo before its crop, as Remove spots): Reduce weakens the feature there (none at strength 100), Restore brings back its automatic result, Add applies it where its mask missed (features that read a mask). For every face, or (with `face`) that face alone, which then gets its own settings. One undo step",
+            "{feature: key, mode?: reduce|restore|add, points: [[x, y]…], size?: radius (fraction of the long edge), feather?: 0–100, flow?: 1–100, strength?: 0–100, pressure?: [0–1…], face?: index, id?} → {strokes} — paint a Refine stroke for one portrait feature (points are fractions of the photo before its crop, as Remove spots): Reduce weakens the feature there (none at strength 100), Restore brings back its automatic result, Add applies it where its mask missed (features that read a mask), on or near a face (within one face size of its box; with no face in the photo it errors). For every face, or (with `face`) that face alone, which then gets its own settings. One undo step",
             has_active,
             |s, p| {
                 let c = "retouch.refine.stroke";
@@ -224,11 +251,15 @@ pub fn specs() -> Vec<CommandSpec> {
                 let stroke = stroke_param(p, c, !f.add_parts.is_empty())?;
                 let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
                 let face = face_param(p, c)?;
+                if stroke.mode == RefineMode::Add {
+                    check_add_near_face(s, id, face, &stroke, c)?;
+                }
                 let refine = refine_mut(s, &mut d, id, face, c)?;
                 if !refine.push(f.key, stroke) {
                     return Err(bad(c, format!("{} has the most strokes it keeps ({})", f.label, lightcraft_develop::retouch::refine::MAX_STROKES)));
                 }
                 let n = refine.count(Some(f.key));
+                lightcraft_develop::retouch::refine::check_budget(&d.retouch).map_err(|e| bad(c, e))?;
                 s.set_develop(id, d, &format!("Refine {}", f.label))?;
                 Ok(json!({"strokes": n}))
             }

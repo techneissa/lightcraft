@@ -559,3 +559,38 @@ fn refine_strokes_are_commands_with_one_undo_step_each() {
     s.execute("retouch.reset", &json!({"feature": "skin"})).unwrap();
     assert!(retouch_of(&s).refine.is_empty());
 }
+
+/// Add works on or near a face (#99): a stroke further than a face's size from the face it is for is refused, so is
+/// any Add stroke in a photo without a face, and strokes over the work cap; nothing is saved by a refusal.
+#[test]
+fn add_strokes_are_only_for_faces_and_the_strokes_stay_within_the_work_cap() {
+    let (mut s, _) = demo_with(vec![ann(), bob()]);
+    s.execute("retouch.detect", &json!({})).unwrap();
+    let add = |points: Value, face: Option<usize>| json!({"feature": "skin", "mode": "add", "points": points, "face": face});
+    // beside a face, and a stroke from one face toward the other, centre nearer it
+    s.execute("retouch.refine.stroke", &add(json!([[0.35, 0.3], [0.4, 0.32]]), None)).unwrap();
+    s.execute("retouch.refine.stroke", &add(json!([[0.25, 0.3], [0.65, 0.3]]), Some(0))).unwrap();
+    let kept = retouch_of(&s);
+    // (a size is the longer side of the box: 0.3 here, so 0.3 away is one size)
+    let far = s.execute("retouch.refine.stroke", &add(json!([[0.45, 0.9], [0.5, 0.95]]), None)).unwrap_err().to_string();
+    assert!(far.contains("Add works on or near a face"), "{far}");
+    let far_from_one = s.execute("retouch.refine.stroke", &add(json!([[0.95, 0.35]]), Some(0))).unwrap_err().to_string();
+    assert!(far_from_one.contains("Add works on or near a face"), "{far_from_one}");
+    assert_eq!(retouch_of(&s), kept, "refusals saved nothing");
+    // the same stroke is fine for the face it is near, and Reduce and Restore go anywhere
+    s.execute("retouch.refine.stroke", &add(json!([[0.95, 0.35]]), Some(1))).unwrap();
+    s.execute("retouch.refine.stroke", &json!({"feature": "skin", "points": [[0.45, 0.9]]})).unwrap();
+    // over the work cap: a tiny brush with a huge one zigzagging over the photo
+    s.execute("retouch.refine.stroke", &json!({"feature": "eyes", "points": [[0.5, 0.5], [0.52, 0.5]], "size": 0.001})).unwrap();
+    let zig: Vec<Value> = (0..20_000).map(|i| if i % 2 == 0 { json!([0.1, 0.1]) } else { json!([0.9, 0.9]) }).collect();
+    let before = retouch_of(&s);
+    let over = s.execute("retouch.refine.stroke", &json!({"feature": "eyes", "points": zig, "size": 0.5})).unwrap_err().to_string();
+    assert!(over.contains("too many or too large"), "{over}");
+    assert_eq!(retouch_of(&s), before, "nothing saved");
+    // no face at all: Add errors
+    let (mut none, _) = demo_with(Vec::new());
+    none.execute("retouch.detect", &json!({})).unwrap();
+    let e = none.execute("retouch.refine.stroke", &add(json!([[0.5, 0.5]]), None)).unwrap_err().to_string();
+    assert!(e.contains("Add works on or near a face") && e.contains("no face"), "{e}");
+    none.execute("retouch.refine.stroke", &json!({"feature": "skin", "points": [[0.5, 0.5]]})).unwrap();
+}

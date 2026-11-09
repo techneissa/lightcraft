@@ -73,7 +73,7 @@ fn disc(img: &Rgb32f, u: f64, v: f64, r: f64) -> Vec<(usize, [f32; 3])> {
 }
 
 #[test]
-fn a_full_reduce_gives_back_the_original_bits_there_and_nowhere_else() {
+fn a_full_reduce_gives_back_the_pixels_from_before_the_feature_there_and_nowhere_else() {
     let img = picture(120, 90);
     let faces = [half_skin_face()];
     let smoothed = run(&img, &smooth_skin(), &faces);
@@ -82,7 +82,7 @@ fn a_full_reduce_gives_back_the_original_bits_there_and_nowhere_else() {
     let out = run(&img, &r, &faces);
     let inside = disc(&out, 0.3, 0.5, 0.06);
     assert!(!inside.is_empty());
-    assert!(inside.iter().all(|(i, p)| same_bits(*p, img.data[*i])), "inside a full Reduce: the original pixels");
+    assert!(inside.iter().all(|(i, p)| same_bits(*p, img.data[*i])), "inside a full Reduce: the pixels from before the feature ran");
     assert!(inside.iter().any(|(i, _)| !same_bits(smoothed.data[*i], img.data[*i])), "the skin feature did change them");
     // away from the stroke the smoothing stays as it was
     for (i, p) in disc(&out, 0.2, 0.2, 0.03) {
@@ -134,7 +134,8 @@ fn add_applies_the_feature_past_its_automatic_mask() {
 fn every_feature_gets_reduce_without_code_of_its_own() {
     let img = common::picture(64, 48);
     let faces = [common::face(0.2, 0.15, 0.8, 0.85)];
-    // a full Reduce over the whole picture: every feature at full strength gives back the original
+    // a full Reduce over the whole picture: every feature at full strength gives back the pixels from before it ran
+    // (this feature is the only one on, so those are the picture's)
     let cover: Vec<(f64, f64)> = vec![(0.0, 0.0), (1.0, 0.0), (1.0, 0.5), (0.0, 0.5), (0.0, 1.0), (1.0, 1.0)];
     for f in FEATURES {
         let mut r = Retouch::default();
@@ -146,25 +147,136 @@ fn every_feature_gets_reduce_without_code_of_its_own() {
         }
         assert!(r.refine.push(f.key, stroke(RefineMode::Reduce, &cover, 0.5)), "{}", f.key);
         let out = run(&img, &r, &faces);
-        assert!(out.data.iter().zip(&img.data).all(|(a, b)| same_bits(*a, *b)), "{}: a full Reduce everywhere is the original", f.key);
+        assert!(out.data.iter().zip(&img.data).all(|(a, b)| same_bits(*a, *b)), "{}: a full Reduce everywhere gives back the pixels from before the feature", f.key);
     }
 }
 
+/// A smooth, teeth-coloured picture: the same scene at every size.
+fn smooth(w: usize, h: usize) -> Rgb32f {
+    Rgb32f::from_fn(w, h, |x, y| {
+        let (u, v) = ((x as f32 + 0.5) / w as f32, (y as f32 + 0.5) / h as f32);
+        [0.78 + 0.08 * u, 0.7 + 0.06 * v, 0.55 + 0.05 * u * v]
+    })
+}
+
+/// A face whose Teeth mask covers its left half only.
+fn half_teeth_face() -> Face {
+    let left = Plane::from_fn(32, 32, |x, _| if x < 16 { 1.0 } else { 0.0 });
+    Face { masks: vec![(Part::Teeth, PartMask { plane: left, area: NormRect::new(0.1, 0.1, 0.9, 0.9) })], ..half_skin_face() }
+}
+
+/// The picture sampled at normalised (`u`, `v`), bilinear between pixel centres.
+fn sample(img: &Rgb32f, u: f64, v: f64) -> [f32; 3] {
+    let (fx, fy) = ((u * img.width as f64 - 0.5).clamp(0.0, (img.width - 1) as f64), (v * img.height as f64 - 0.5).clamp(0.0, (img.height - 1) as f64));
+    let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
+    let (x1, y1) = ((x0 + 1).min(img.width - 1), (y0 + 1).min(img.height - 1));
+    let (tx, ty) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);
+    let px = |x: usize, y: usize| img.data[y * img.width + x];
+    let mut out = [0.0; 3];
+    for k in 0..3 {
+        let top = px(x0, y0)[k] * (1.0 - tx) + px(x1, y0)[k] * tx;
+        let bottom = px(x0, y1)[k] * (1.0 - tx) + px(x1, y1)[k] * tx;
+        out[k] = top * (1.0 - ty) + bottom * ty;
+    }
+    out
+}
+
+/// A draft and an export four times its size sample the same strokes: every pixel of the draft is the export's
+/// there, to within a level of 255, with Reduce (taking the whitening back on the left) and Add (whitening where the
+/// mask missed, on the right) both changing pixels.
 #[test]
 fn preview_equals_export() {
-    // a draft and an export four times its size: the same pixels go back to the original, and Add smooths the
-    // same place
-    let faces = [half_skin_face()];
-    let mut r = smooth_skin();
-    r.refine.push("skin", stroke(RefineMode::Reduce, &[(0.25, 0.4), (0.3, 0.6)], 0.06));
-    r.refine.push("skin", stroke(RefineMode::Add, &[(0.7, 0.5)], 0.06));
-    let (small, big) = (picture(80, 60), picture(320, 240));
+    let faces = [half_teeth_face()];
+    let mut plain = Retouch::default();
+    assert!(plain.global.set("retouch.teethLips.teethWhitening", 100.0));
+    let mut r = plain.clone();
+    // (soft brushes, as painted: a hard edge is one grid cell wide and a draft's pixels fall differently on it)
+    let soft = |mode, points: &[(f64, f64)]| RefineStroke { feather: 100.0, ..stroke(mode, points, 0.07) };
+    r.refine.push("teethLips", soft(RefineMode::Reduce, &[(0.25, 0.4), (0.3, 0.6)]));
+    r.refine.push("teethLips", soft(RefineMode::Add, &[(0.7, 0.5), (0.72, 0.62)]));
+    let (small, big) = (smooth(80, 60), smooth(320, 240));
     let (a, b) = (run(&small, &r, &faces), run(&big, &r, &faces));
-    for (u, v) in [(0.27, 0.5), (0.25, 0.42), (0.15, 0.2), (0.7, 0.5), (0.72, 0.52), (0.85, 0.2)] {
-        let ka = same_bits(at(&a, u, v), at(&small, u, v));
-        let kb = same_bits(at(&b, u, v), at(&big, u, v));
-        assert_eq!(ka, kb, "({u}, {v}) kept in the draft and the export alike");
+    let base = run(&small, &plain, &faces);
+    let (mut reduced, mut added) = (0, 0);
+    let (mut worst, mut at_worst) = (0.0f32, (0, 0));
+    for y in 0..small.height {
+        for x in 0..small.width {
+            let (u, v) = ((x as f64 + 0.5) / small.width as f64, (y as f64 + 0.5) / small.height as f64);
+            let (p, q, o) = (a.data[y * small.width + x], sample(&b, u, v), base.data[y * small.width + x]);
+            let d = (0..3).map(|k| (p[k] - q[k]).abs()).fold(0.0, f32::max);
+            if d > worst {
+                (worst, at_worst) = (d, (x, y));
+            }
+            let moved = (0..3).map(|k| (p[k] - o[k]).abs()).fold(0.0, f32::max) > 0.01;
+            if moved && u < 0.5 {
+                reduced += 1;
+            }
+            if moved && u > 0.5 {
+                added += 1;
+            }
+        }
     }
+    assert!(reduced > 20 && added > 20, "Reduce and Add both change the draft ({reduced}, {added})");
+    assert!(worst <= 1.0 / 255.0, "the draft differs from the export by {worst} at {at_worst:?}");
+}
+
+/// Faces A (left) and B (right) have no Teeth mask; whitening is on for A alone. A's own stroke starts in A's box and
+/// runs toward B, its centre over B: it is A's, so it applies to A; for every face it would be B's, and B is off.
+#[test]
+fn a_picked_face_owns_its_add_stroke() {
+    let img = smooth(160, 80);
+    let a = Face::boxed(NormRect::new(0.05, 0.15, 0.4, 0.85));
+    let b = Face::boxed(NormRect::new(0.6, 0.15, 0.95, 0.85));
+    let faces = [a, b];
+    let along = [(0.3, 0.5), (0.45, 0.5), (0.8, 0.5)];
+    let mut picked = Retouch::default();
+    let own = picked.own_mut_in(&faces, 0, None).unwrap();
+    assert!(own.settings.set("retouch.teethLips.teethWhitening", 100.0));
+    own.refine.push("teethLips", stroke(RefineMode::Add, &along, 0.05));
+    let out = run(&img, &picked, &faces);
+    assert!(disc(&out, 0.3, 0.5, 0.03).iter().any(|(i, p)| !same_bits(*p, img.data[*i])), "the picked face's stroke applies to it");
+    // the same stroke for every face goes to the face nearest its centre, B, which is off
+    let mut shared = Retouch::default();
+    let own = shared.own_mut_in(&faces, 0, None).unwrap();
+    assert!(own.settings.set("retouch.teethLips.teethWhitening", 100.0));
+    shared.refine.push("teethLips", stroke(RefineMode::Add, &along, 0.05));
+    let out = run(&img, &shared, &faces);
+    assert!(out.data == img.data, "for every face the stroke is B's, and B is off");
+}
+
+/// An Add stroke further than a face's size from every face is left out of a render.
+#[test]
+fn an_add_stroke_far_from_every_face_does_nothing() {
+    let img = smooth(160, 80);
+    let faces = [Face::boxed(NormRect::new(0.05, 0.1, 0.25, 0.4))];
+    let mut r = Retouch::default();
+    assert!(r.global.set("retouch.teethLips.teethWhitening", 100.0));
+    r.refine.push("teethLips", stroke(RefineMode::Add, &[(0.9, 0.9), (0.95, 0.9)], 0.04));
+    assert!(run(&img, &r, &faces).data == img.data);
+    let mut near = smooth_teeth();
+    near.refine.push("teethLips", stroke(RefineMode::Add, &[(0.3, 0.3), (0.32, 0.3)], 0.04));
+    assert!(run(&img, &near, &faces).data != img.data, "a stroke beside the face works");
+}
+
+fn smooth_teeth() -> Retouch {
+    let mut r = Retouch::default();
+    assert!(r.global.set("retouch.teethLips.teethWhitening", 100.0));
+    r
+}
+
+/// Strokes over the work cap are refused by the budget check, and a render leaves them out instead of hanging.
+#[test]
+fn strokes_over_the_work_cap_are_left_out() {
+    let img = smooth(160, 80);
+    let faces = [half_teeth_face()];
+    let zig: Vec<(f64, f64)> = (0..20_000).map(|i| if i % 2 == 0 { (0.1, 0.1) } else { (0.9, 0.9) }).collect();
+    let mut r = smooth_teeth();
+    r.refine.push("teethLips", stroke(RefineMode::Reduce, &[(0.5, 0.5), (0.52, 0.5)], 0.001));
+    assert!(lightcraft_retouch::refine::check_budget(&r).is_ok());
+    r.refine.push("teethLips", stroke(RefineMode::Reduce, &zig, 0.5));
+    let reason = lightcraft_retouch::refine::check_budget(&r).unwrap_err();
+    assert!(reason.contains("teethLips"), "{reason}");
+    assert!(run(&img, &r, &faces).data == run(&img, &smooth_teeth(), &faces).data, "the strokes are left out");
 }
 
 #[test]

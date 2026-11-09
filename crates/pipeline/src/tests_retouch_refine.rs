@@ -89,3 +89,76 @@ fn a_draft_and_a_bigger_render_agree() {
     let ((a0, b0), (a1, b1)) = (shares[0], shares[1]);
     assert!((a0 - a1).abs() < 0.03 && (b0 - b1).abs() < 0.02, "the smoothed shares: {shares:?}");
 }
+
+/// Textured skin and a face on the left of the frame whose Facial Skin mask covers its left half; an Add stroke far
+/// to the right of the face box (but within a face size of it) smooths skin the mask left out. A window over the
+/// stroke, which the face's own reads do not reach, must grow to hold the face and still equal the whole frame.
+#[test]
+fn a_zoomed_window_over_an_add_stroke_outside_the_face_box_gives_the_whole_frames_pixels() {
+    let (w, h) = (480, 360);
+    let src = Rgb32f::from_fn(w, h, |x, y| {
+        let t = 1.0 + 0.08 * (((x * 7 + y * 13) % 5) as f32 - 2.0) / 2.0 + 0.1 * ((x as f32 / 3.1).sin() * (y as f32 / 2.9).sin());
+        [0.5 * t, 0.36 * t, 0.28 * t]
+    });
+    let bounds = NormRect::new(0.1, 0.2, 0.45, 0.8);
+    let plane = lightcraft_raster::Plane::from_fn(64, 64, |x, _| if x < 32 { 1.0 } else { 0.0 });
+    let face = Face { masks: vec![(Part::FacialSkin, PartMask { plane, area: bounds })], ..Face::boxed(bounds) };
+    let info = SourceInfo { retouch: Some(Arc::new(Input::new(vec![face]))), ..SourceInfo::default() };
+    let mut s = DevelopSettings::default();
+    s.detail.nr_color = 0.0;
+    controls::set(&mut s, "retouch.skin.smoothness", 100.0);
+    s.retouch.refine.push("skin", stroke(RefineMode::Add, &[(0.8, 0.4), (0.84, 0.6)], 0.06));
+    let mut plain = s.clone();
+    controls::set(&mut plain, "retouch.skin.smoothness", 0.0);
+    let req = RenderRequest::fit(w, h);
+    let frame = crate::plan(&src, &info, &s, &req).frame;
+    let full = render(&src, &info, &s, &req).image;
+    let base = render(&src, &info, &plain, &req).image;
+    let win = PixelWindow { x: 380, y: 150, w: 30, h: 60 };
+    let grown = crate::retouch_step::window_for_reads(&s, &info, &frame, w, h, win);
+    assert!(grown.x < win.x - 100, "the window grows toward the face to hold what the Add mask reads: {grown:?}");
+    let mut no_add = s.clone();
+    no_add.retouch.refine.clear(None);
+    assert_eq!(crate::retouch_step::window_for_reads(&no_add, &info, &frame, w, h, win), win, "without the stroke the face's reads stop short");
+    let zoomed = render(&src, &info, &s, &RenderRequest { window: Some(win), ..req }).image;
+    let (mut worst, mut changed) = (0u8, 0);
+    for y in 0..win.h {
+        for x in 0..win.w {
+            let (a, b, c) = (full.get(win.x + x, win.y + y), zoomed.get(x, y), base.get(win.x + x, win.y + y));
+            worst = worst.max((0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0));
+            changed += usize::from(a != c);
+        }
+    }
+    assert!(changed > win.w * win.h / 8, "the stroke smooths the window ({changed} changed)");
+    assert!(worst <= 1, "the zoomed window differs from the whole frame by {worst}");
+}
+
+/// A window grows by the Add strokes that work on a face, not by every Add stroke of the photo: a stroke beside the
+/// second face leaves a window over the first face's eye as it was; one beside the first face grows it.
+#[test]
+fn a_window_grows_only_by_the_add_strokes_of_the_faces_it_reaches() {
+    let (w, h) = (960, 640);
+    let src = Rgb32f::from_fn(w, h, |_, _| [0.5, 0.36, 0.28]);
+    let faces = vec![Face::boxed(NormRect::new(0.05, 0.05, 0.25, 0.3)), Face::boxed(NormRect::new(0.7, 0.65, 0.95, 0.95))];
+    let info = SourceInfo { retouch: Some(Arc::new(Input::new(faces))), ..SourceInfo::default() };
+    let mut plain = DevelopSettings::default();
+    controls::set(&mut plain, "retouch.skin.smoothness", 100.0);
+    let frame = crate::plan(&src, &info, &plain, &RenderRequest::fit(w, h)).frame;
+    // a window over the first face's eye
+    let eye = PixelWindow { x: 100, y: 60, w: 40, h: 30 };
+    let base = crate::retouch_step::window_for_reads(&plain, &info, &frame, w, h, eye);
+    let with = |points: &[(f64, f64)]| {
+        let mut s = plain.clone();
+        s.retouch.refine.push("skin", stroke(RefineMode::Add, points, 0.04));
+        crate::retouch_step::window_for_reads(&s, &info, &frame, w, h, eye)
+    };
+    assert_eq!(with(&[(0.6, 0.6), (0.62, 0.62)]), base, "a stroke by the second face is that face's");
+    let beside_first = with(&[(0.3, 0.15), (0.34, 0.2)]);
+    assert!(beside_first.w > base.w + 100, "a stroke by the first face grows the window: {base:?} → {beside_first:?}");
+    // a picked face's own stroke belongs to it, wherever its centre falls
+    let mut own = plain.clone();
+    let faces = info.retouch.as_ref().map(|i| i.faces.clone()).unwrap_or_default();
+    let picked = own.retouch.own_mut_in(&faces, 1, None).unwrap();
+    picked.refine.push("skin", stroke(RefineMode::Add, &[(0.3, 0.15), (0.34, 0.2)], 0.04));
+    assert_eq!(crate::retouch_step::window_for_reads(&own, &info, &frame, w, h, eye), base, "the second face's own stroke is not the first's");
+}
