@@ -22,11 +22,13 @@ mod crop;
 mod film_bar;
 mod filmstrip;
 mod find_overlay;
-mod geometry;
+pub(crate) mod geometry;
 mod info;
 mod look_ahead;
 mod masks;
 mod object_remove;
+// fork: the people picker over the loupe (`fork/retouch-foundation.md`)
+pub(crate) mod people_picker;
 mod retouch;
 mod window;
 
@@ -452,6 +454,8 @@ fn loupe_paint_and_finish(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
     crate::space_hand::interact(app, ui, canvas, (main_area, img_rect), split.then(|| (areas[0], before_img)));
     // drawn and hit-tested above the loupe and its tools: clicks on it pan
     let nav = navigator(app, ui, canvas, img_rect, id);
+    // the Portrait tab's face picker, on the photo (fork, `fork/retouch-foundation.md`)
+    super::portrait::overlay(app, ui, canvas, id);
     // what is on screen isn't the render on its way (a stand-in, the last render after an edit,
     // a magnified frame under its window): say so once that has lasted a moment
     let coming = render_coming(app, shown, windows, ViewMode { split, show_before, split_view });
@@ -916,7 +920,12 @@ fn tool_interaction(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egui::Res
     match tv.right {
         RightPanel::Crop => crop_overlay(app, ui, resp, map, tv.frame, d, tv.id),
         RightPanel::Masking => mask_overlay(app, ui, resp, map, d),
-        RightPanel::Remove => remove_overlay(app, ui, resp, map, d),
+        // fork feature (fork/glare-highlights.md): the Reflections section's box and glare brush come first
+        RightPanel::Remove => {
+            if !crate::reflections_glare::overlay(app, ui, resp, map, d) {
+                remove_overlay(app, ui, resp, map, d)
+            }
+        }
         RightPanel::RedEye => eye_overlay(app, ui, resp, map, d),
         _ => {
             // side by side / stacked: Before shows the same frame, so a click in its view (white
@@ -1339,6 +1348,7 @@ fn prefetch_slot(at: usize) -> Slot {
 pub fn prep_mode(app: &LightcraftApp) -> lightcraft_engine::prep::Mode {
     match app.ui.right {
         RightPanel::Edit | RightPanel::Crop | RightPanel::Remove | RightPanel::Masking | RightPanel::RedEye => lightcraft_engine::prep::Mode::Develop,
+        RightPanel::Portrait => lightcraft_engine::prep::Mode::Develop,
         _ => lightcraft_engine::prep::Mode::of(&app.session),
     }
 }

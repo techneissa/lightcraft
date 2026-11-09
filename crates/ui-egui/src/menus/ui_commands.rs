@@ -169,6 +169,9 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("panel.remove", "Remove", Some("H"), "Window"),
     ("panel.masking", "Masking", Some("M"), "Window"),
     ("panel.redeye", "Red Eye", None, "Window"),
+    // fork: the Portrait tab; {section, open?} opens or closes one of its sections
+    ("panel.portrait", "Portrait", Some("T"), "Window"),
+    ("portrait.section", "Portrait Section", None, ""),
     ("panel.presets", "Presets", Some("Shift+P"), "Window"),
     ("panel.info", "Info", Some("I"), "Window"),
     ("panel.keywords", "Keywords", Some("K"), "Window"),
@@ -266,6 +269,13 @@ pub const UI_COMMANDS: &[UiCommand] = &[
     ("reflection.instructions", "Model download instructions", None, ""),
     ("reflection.models", "Reflection Models", None, ""),
     ("reflection.status", "Reflection Status", None, ""),
+    // fork feature (fork/glare-highlights.md): {mode}, {area}, {threshold?, expand?, fill?}, {points, size?, erase?} |
+    // {clear}, {tool}
+    ("reflection.mode", "Reflection Mode", None, ""),
+    ("reflection.area", "Reflection Area", None, ""),
+    ("reflection.glare", "Glare Settings", None, ""),
+    ("reflection.paint", "Paint Glare", None, ""),
+    ("reflection.tool", "Reflection Tool", None, ""),
     // {ids?, app?, wait?, format?, colorSpace?, bitDepth?, dir?}: two or more photos, rendered with their
     // edits, become the layers of one new PhotoCraft document (the active photo on top)
     ("photo.openAsLayersInPhotocraft", "Open as Layers in PhotoCraft…", None, "Photo>Edit In"),

@@ -63,7 +63,10 @@ distributed with it: a user downloads them only when they choose to, from Huggin
 (alexkrz/segformer-b0-celebamask_hq, sayeed99/segformer_b3_clothes, mattmdjaga/segformer_b2_clothes,
 mlx-community/face-parsing-bisenet-bf16, SceneWorks/mp-facemesh-v2), under their own terms: the
 SegFormer fine-tunes derive from NVIDIA's MiT weights (NVIDIA Source Code License, non-commercial)
-and the face parsers were trained on CelebAMask-HQ (non-commercial research).
+and the face parsers were trained on CelebAMask-HQ (non-commercial research). The Sapiens2 set adds
+Meta's Sapiens2-seg 0.4B (Khirodkar et al., 2026; mlx-community/sapiens2-seg-0.4b-bf16), under the
+Sapiens2 License (https://github.com/facebookresearch/sapiens2/blob/main/LICENSE.md), which forbids
+surveillance, biometric processing and identifying people: its masks never feed face recognition.
 
 AI denoise weights are not part of LightCraft and are never distributed with it.
 The default build offers user-supplied models only. The optional rawnind-model

@@ -5,7 +5,7 @@ use super::{Affine, Frame, LightcraftApp, PhotoId, Point, Pos2, Rect, Zoom, json
 /// Screen ↔ normalized-image mapping for the displayed frame.
 #[derive(Clone)]
 pub struct CanvasMap {
-    pub(super) rect: Rect,
+    pub(crate) rect: Rect,
     to_norm: Affine,
     from_norm: Affine,
     k: f32,

@@ -42,10 +42,12 @@ pub enum SettingsGroup {
     RedEye,
     LensBlur,
     Calibration,
+    /// Portrait retouching (fork, `fork/retouch-foundation.md`): the whole block with the per-face settings.
+    Portrait,
 }
 
 impl SettingsGroup {
-    pub const ALL: [SettingsGroup; 20] = [
+    pub const ALL: [SettingsGroup; 21] = [
         SettingsGroup::Profile,
         SettingsGroup::Treatment,
         SettingsGroup::WhiteBalance,
@@ -66,13 +68,17 @@ impl SettingsGroup {
         SettingsGroup::RedEye,
         SettingsGroup::LensBlur,
         SettingsGroup::Calibration,
+        SettingsGroup::Portrait,
     ];
 
-    /// Groups included by default when copying (Lightroom excludes crop, masks and spots by default).
+    /// Groups included by default when copying (Lightroom excludes crop, masks and spots by default; Portrait holds
+    /// one photo's face edits like them).
     pub fn default_copy() -> Vec<SettingsGroup> {
         SettingsGroup::ALL
             .into_iter()
-            .filter(|g| !matches!(g, SettingsGroup::Crop | SettingsGroup::Masks | SettingsGroup::Spots | SettingsGroup::RedEye))
+            .filter(|g| {
+                !matches!(g, SettingsGroup::Crop | SettingsGroup::Masks | SettingsGroup::Spots | SettingsGroup::RedEye | SettingsGroup::Portrait)
+            })
             .collect()
     }
 
@@ -98,13 +104,14 @@ impl SettingsGroup {
             SettingsGroup::RedEye => "Red Eye",
             SettingsGroup::LensBlur => "Lens Blur",
             SettingsGroup::Calibration => "Calibration",
+            SettingsGroup::Portrait => "Portrait",
         }
     }
 
     /// Top-level JSON keys of `DevelopSettings` that belong to the group.
     pub fn keys(self) -> &'static [&'static str] {
         match self {
-            SettingsGroup::Profile => &["profile"],
+            SettingsGroup::Profile => &["profile", "look"],
             SettingsGroup::Treatment => &["treatment"],
             SettingsGroup::WhiteBalance => &["wb"],
             SettingsGroup::Light => &["light", "hdr"],
@@ -124,6 +131,7 @@ impl SettingsGroup {
             SettingsGroup::RedEye => &["red_eye"],
             SettingsGroup::LensBlur => &["lens_blur"],
             SettingsGroup::Calibration => &["calibration"],
+            SettingsGroup::Portrait => &[crate::retouch::KEY],
         }
     }
 }
@@ -150,6 +158,11 @@ pub fn extract_groups(s: &DevelopSettings, groups: &[SettingsGroup]) -> Value {
             _ => Value::Null,
         };
         profile.insert("camera_profile".to_string(), id);
+    }
+    // Match Look's residual Look (fork) is part of the Profile group; left out of the settings while empty, the group
+    // still carries it, so applying it removes the Look of a photo that has one
+    if groups.contains(&SettingsGroup::Profile) && !out.contains_key("look") {
+        out.insert("look".to_string(), serde_json::to_value(&s.look).unwrap_or(Value::Null));
     }
     Value::Object(out)
 }

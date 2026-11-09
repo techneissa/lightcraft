@@ -39,11 +39,14 @@ pub enum RightPanel {
     Info,
     /// The profile browser (part of Edit).
     Profiles,
+    /// Portrait retouching (fork, `fork/retouch-foundation.md`).
+    Portrait,
 }
 
 impl RightPanel {
     pub fn is_edit_tool(self) -> bool {
         matches!(self, RightPanel::Edit | RightPanel::Profiles | RightPanel::Crop | RightPanel::Remove | RightPanel::Masking | RightPanel::RedEye)
+            || self == RightPanel::Portrait
     }
 }
 

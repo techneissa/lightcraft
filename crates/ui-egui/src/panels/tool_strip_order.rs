@@ -1,5 +1,6 @@
 //! The order of the tool strip's icons (Presets, Edit, Crop, Remove, Masking, Red Eye, Versions,
-//! Activity, Keywords, Info), and the drag that changes it.
+//! Activity, Keywords, Info), and the drag that changes it. The fork adds Portrait after Masking
+//! (`fork/retouch-foundation.md`): eleven places, five between the dividers.
 //!
 //! The strip has ten places: two above the first divider, four between the dividers, two below
 //! the second and two pinned to the bottom (the About button stays after the eighth). An icon
@@ -31,6 +32,8 @@ pub enum Tool {
     Crop,
     Remove,
     Masking,
+    /// Fork: portrait retouching (`fork/retouch-foundation.md`).
+    Portrait,
     RedEye,
     Versions,
     Activity,
@@ -40,12 +43,13 @@ pub enum Tool {
 
 impl Tool {
     /// Every icon, in the order the strip starts with.
-    pub const ALL: [Tool; 10] = [
+    pub const ALL: [Tool; 11] = [
         Tool::Presets,
         Tool::Edit,
         Tool::Crop,
         Tool::Remove,
         Tool::Masking,
+        Tool::Portrait,
         Tool::RedEye,
         Tool::Versions,
         Tool::Activity,
@@ -62,6 +66,7 @@ impl Tool {
             Tool::Remove => "remove",
             Tool::Masking => "masking",
             Tool::RedEye => "redeye",
+            Tool::Portrait => "portrait",
             Tool::Versions => "versions",
             Tool::Activity => "activity",
             Tool::Keywords => "keywords",
@@ -78,6 +83,7 @@ impl Tool {
             Tool::Remove => "Remove",
             Tool::Masking => "Masking",
             Tool::RedEye => "Red Eye",
+            Tool::Portrait => "Portrait",
             Tool::Versions => "Versions",
             Tool::Activity => "History & Activity",
             Tool::Keywords => "Keywords",
@@ -94,6 +100,7 @@ impl Tool {
             Tool::Remove => Icon::Eraser,
             Tool::Masking => Icon::Mask,
             Tool::RedEye => Icon::Eye,
+            Tool::Portrait => Icon::Subject,
             Tool::Versions => Icon::Versions,
             Tool::Activity => Icon::Activity,
             Tool::Keywords => Icon::Tag,
@@ -133,7 +140,14 @@ impl From<ToolStripOrder> for Vec<&'static str> {
 impl From<Value> for ToolStripOrder {
     fn from(saved: Value) -> Self {
         let entries = saved.as_array().map(Vec::as_slice).unwrap_or_default();
-        Self::from_tools(entries.iter().filter_map(|e| Tool::from_id(e.as_str()?)))
+        let mut tools: Vec<Tool> = entries.iter().filter_map(|e| Tool::from_id(e.as_str()?)).collect();
+        // fork: an order saved before the Portrait icon gets it after Masking, not last (a bottom place)
+        if !tools.contains(&Tool::Portrait)
+            && let Some(at) = tools.iter().position(|t| *t == Tool::Masking)
+        {
+            tools.insert(at + 1, Tool::Portrait);
+        }
+        Self::from_tools(tools)
     }
 }
 

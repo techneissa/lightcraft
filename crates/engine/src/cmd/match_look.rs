@@ -113,6 +113,7 @@ fn options(p: &Value) -> MatchOptions {
     o.mixer = flag("mixer", o.mixer);
     o.grading = flag("grading", o.grading);
     o.curve = flag("curve", o.curve);
+    o.look = flag("look", o.look);
     o
 }
 
@@ -217,6 +218,7 @@ fn apply(s: &mut Session, done: Done, amount: f64) -> Result<Value> {
                     "id": id.0,
                     "changes": m.changes,
                     "curve": m.curve.as_ref().map(|c| c.iter().map(|p| [p.x, p.y]).collect::<Vec<_>>()),
+                    "look": m.look,
                     "lossBefore": m.loss_before,
                     "lossAfter": m.loss_after,
                     "renders": m.evals,
@@ -316,7 +318,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Match Look",
             [],
             None,
-            "{reference: {photo: id} | {path: string} | {url: \"https://…\"} | {pasted: true}, ids?: [photo], amount?: 0..100 (100), options?: {whiteBalance?, mixer?, grading?, curve?: bool}, wait?: bool (true)} → {photos: [{id, changes: [{id, from, to}], curve?, lossBefore, lossAfter, renders}], failed: [{id, error}], cancelled, seconds} — give the photos (default: the selection) the colour and tone of the reference as slider values (white balance, Light, Vibrance/Saturation, Color Mixer, Color Grading, a master tone curve), one undo step. The reference is never imported; a web address must be https (at most 64 MB, kept in the cache). With `wait: false` it runs in the background (activity row) and `develop.matchLookPump` applies it",
+            "{reference: {photo: id} | {path: string} | {url: \"https://…\"} | {pasted: true}, ids?: [photo], amount?: 0..100 (100), options?: {whiteBalance?, mixer?, grading?, curve?, look?: bool}, wait?: bool (true)} → {photos: [{id, changes: [{id, from, to}], curve?, look?, lossBefore, lossAfter, renders}], failed: [{id, error}], cancelled, seconds} — give the photos (default: the selection) the colour and tone of the reference as slider values (white balance, Light, Vibrance/Saturation, Color Mixer, Color Grading, a master tone curve; with `options.look` also a residual Look, a colour lookup with its own `look.amount`), one undo step. The reference is never imported; a web address must be https (at most 64 MB, kept in the cache). With `wait: false` it runs in the background (activity row) and `develop.matchLookPump` applies it",
             super::has_selection,
             run
         ),

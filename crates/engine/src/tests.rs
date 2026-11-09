@@ -60,6 +60,7 @@ mod shared_models;
 // macOS Colour needs macOS's own raw decoder: the test only means something on the Mac (fork is Mac only)
 #[cfg(feature = "sam")]
 mod birefnet;
+mod journal_growth;
 #[cfg(target_os = "macos")]
 mod macos_colour;
 mod macos_wb;

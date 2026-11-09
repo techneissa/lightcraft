@@ -35,6 +35,8 @@ pub const DEFAULT_ADDR: &str = "127.0.0.1:7980";
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_retouch;
 
 /// Held by tests that start a child process (a copy of the test binary) and by tests that run a
 /// loopback socket server, so the two never overlap. On Windows the child can inherit a socket the

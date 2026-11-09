@@ -272,3 +272,19 @@ fn an_upgrade_without_its_copy_leaves_the_library_unchanged() {
     assert!(matches!(&e, CatalogError::Io(msg) if msg.contains("left unchanged")), "{e:?}");
     assert_eq!(*m.files.lock().unwrap(), before);
 }
+
+/// Fork 3 (#90): a library with a residual Look is written as fork 3, so a fork 2 build refuses it instead of
+/// dropping the Look; a fork 2 library opens and is upgraded with nothing lost.
+#[test]
+fn a_residual_look_is_fork_format_3() {
+    assert_eq!(VERSION, 3);
+    let mut c = Catalog::new();
+    let mut d = DevelopSettings::default();
+    d.look.cast[1] = [0.01, -0.02];
+    photo(&mut c, d, None);
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snapshot(FORK_FORMAT, 2, 1, &c.to_snapshot()));
+    let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.upgraded_from, loaded.to_snapshot()), (Some(2), c.to_snapshot()));
+    assert_eq!(header(&m), (FORK_FORMAT.to_string(), 3));
+}

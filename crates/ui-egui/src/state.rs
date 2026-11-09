@@ -48,6 +48,7 @@ pub struct UiState {
     pub frame_rate: bool,
     pub view: ViewMode,
     pub left_panel: bool,
+    #[serde(serialize_with = "crate::panels::portrait::save_right")]
     pub right: RightPanel,
     /// The right panel F8 (`view.rightPanel`) hid, which the next F8 shows again.
     #[serde(skip)]

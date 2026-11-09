@@ -3786,6 +3786,7 @@ version = "0.18.0"
 dependencies = [
  "lightcraft-color",
  "lightcraft-geom",
+ "lightcraft-retouch",
  "miniz_oxide 0.9.1",
  "proptest",
  "serde",
@@ -3818,6 +3819,7 @@ dependencies = [
  "lightcraft-geom",
  "lightcraft-gpu",
  "lightcraft-heif",
+ "lightcraft-inpaint",
  "lightcraft-lama",
  "lightcraft-learn",
  "lightcraft-lensdb",
@@ -4166,6 +4168,17 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "lightcraft-retouch"
+version = "0.18.0"
+dependencies = [
+ "image",
+ "lightcraft-color",
+ "lightcraft-raster",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
