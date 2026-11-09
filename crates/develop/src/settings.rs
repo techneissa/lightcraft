@@ -1170,6 +1170,19 @@ pub enum MaskShape {
     People {
         person: u32,
         parts: Vec<String>,
+        /// Fork (`fork/select-people.md`): the face the parts belong to (`None`: everyone), by its person when named,
+        /// else by its box on the photo before the user's rotation, as portrait retouching keeps faces.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        face: Option<crate::retouch::FaceKey>,
+        /// Fork: the parts as the people parser drew them, stored like an AI selection so renders never need the
+        /// model. Without it (a mask from before, or another build) the parts are approximated as before.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seg: Option<crate::SegMask>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "crate::segmask::de_detail")]
+        detail: Vec<crate::SegMask>,
+        /// Edge −100..100, as for `Object`.
+        #[serde(default, skip_serializing_if = "is_zero")]
+        edge: f64,
     },
     Landscape {
         class: String,
@@ -1192,6 +1205,11 @@ impl MaskShape {
         MaskShape::Background { seg: None, detail: Vec::new(), edge: 0.0 }
     }
 
+    /// A People shape of `parts` of person `person`, without a stored selection (fork, `fork/select-people.md`).
+    pub fn people(person: u32, parts: Vec<String>) -> Self {
+        MaskShape::People { person, parts, face: None, seg: None, detail: Vec::new(), edge: 0.0 }
+    }
+
     /// The segmentation mask data for shapes that carry one (Object, Describe/Prompt, Subject, Sky, Background).
     pub fn seg(&self) -> Option<&crate::SegMask> {
         match self {
@@ -1199,7 +1217,8 @@ impl MaskShape {
             | MaskShape::Prompt { seg, .. }
             | MaskShape::Subject { seg, .. }
             | MaskShape::Sky { seg, .. }
-            | MaskShape::Background { seg, .. } => seg.as_ref(),
+            | MaskShape::Background { seg, .. }
+            | MaskShape::People { seg, .. } => seg.as_ref(),
             _ => None,
         }
     }
@@ -1274,7 +1293,7 @@ impl Default for Mask {
 
 impl DevelopSettings {
     /// Calls `f` for every segmentation grid stored in these settings (the `seg` and `detail`
-    /// of Object and Prompt mask shapes).
+    /// of Object and Prompt mask shapes, and the fork's Select People parts: `fork/select-people.md`).
     pub fn visit_seg_masks(&self, f: &mut impl FnMut(&crate::SegMask)) {
         for mask in &self.masks {
             for component in &mask.components {
@@ -1312,6 +1331,15 @@ fn visit_shape(shape: &MaskShape, f: &mut impl FnMut(&crate::SegMask)) {
                 f(d);
             }
         }
+        // (fork, `fork/select-people.md`: its grids are shared by a snapshot's History steps and copies too)
+        MaskShape::People { seg, detail, .. } => {
+            if let Some(seg) = seg {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
         _ => {}
     }
 }
@@ -1327,6 +1355,15 @@ fn visit_shape_mut(shape: &mut MaskShape, f: &mut impl FnMut(&mut crate::SegMask
             }
         }
         MaskShape::Prompt { seg, detail, .. } => {
+            if let Some(seg) = seg.as_mut() {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        // (fork, `fork/select-people.md`: its grids are shared by a snapshot's History steps and copies too)
+        MaskShape::People { seg, detail, .. } => {
             if let Some(seg) = seg.as_mut() {
                 f(seg);
             }

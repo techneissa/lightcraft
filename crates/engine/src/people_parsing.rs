@@ -20,7 +20,9 @@ use lightcraft_parsing::{FaceHint, ModelSet, Parsing, RgbImage, cache};
 
 use crate::activity::{Activity, Cancel};
 
+mod ahead;
 mod download;
+pub(crate) use ahead::{Filed, QuietRun, cache_budget};
 pub use download::Download;
 
 /// The newest parses kept in memory.
@@ -46,11 +48,7 @@ pub struct Choice {
 impl Choice {
     /// The version a parse with this choice is filed under: the set's, with the hair edges' when they draw it.
     pub fn version(&self) -> String {
-        // (a parse with matting edges is its own version, so switching the edge never reads the other's file)
-        match self.matting.as_ref().and_then(|(_, e)| crate::hair_edges::vision::version(*e)) {
-            Some(edge) => format!("{}+{edge}", self.set.version()),
-            None => self.set.version(),
-        }
+        PeopleParsing::version_of(self.set, self.matting.as_ref())
     }
 }
 
@@ -89,11 +87,14 @@ struct Jobs {
     map: HashMap<String, Job>,
     waiters: HashMap<String, usize>,
     finished: u64,
+    /// The runs going for the parse-ahead queue (`fork/parse-ahead.md`): a request stops them.
+    quiet: std::collections::HashSet<String>,
 }
 
 impl Jobs {
     /// File a finished run, then let the oldest finished runs nobody waits on go, down to [`KEEP_FINISHED`].
     fn finish(&mut self, key: String, result: Result<Arc<Parsing>, String>) {
+        self.quiet.remove(&key);
         self.finished += 1;
         self.map.insert(key, Job::Done(result, self.finished));
         while self.map.values().filter(|j| matches!(j, Job::Done(..))).count() > KEEP_FINISHED {
@@ -146,8 +147,19 @@ struct Inner {
     /// One model run at a time: runs share one loaded model and its GPU device, whose buffers are safe with one graph
     /// in flight only.
     one_run: Mutex<()>,
+    /// The loaded set. Held only to look or swap, never while a set loads (the Settings window takes it).
     #[cfg(not(target_arch = "wasm32"))]
     loaded: Mutex<Option<Loaded>>,
+    /// Counts the times the loaded set went stale (new folders or runtimes), under `loaded`: a set loaded meanwhile
+    /// serves the run that loaded it and is not kept.
+    #[cfg(not(target_arch = "wasm32"))]
+    stale: std::sync::atomic::AtomicU64,
+    /// The engines the face and clothes parsers run on (`fork/coreml.md`).
+    #[cfg(not(target_arch = "wasm32"))]
+    runtimes: Mutex<lightcraft_parsing::Runtimes>,
+    /// Called by a run just before it loads the set (tests hold a load there).
+    #[cfg(test)]
+    before_load: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     watcher: AtomicBool,
     runs: std::sync::atomic::AtomicUsize,
     message: Mutex<Option<String>>,
@@ -186,6 +198,12 @@ impl PeopleParsing {
                 one_run: Mutex::new(()),
                 #[cfg(not(target_arch = "wasm32"))]
                 loaded: Mutex::new(None),
+                #[cfg(not(target_arch = "wasm32"))]
+                stale: std::sync::atomic::AtomicU64::new(0),
+                #[cfg(not(target_arch = "wasm32"))]
+                runtimes: Mutex::new(lightcraft_parsing::Runtimes::default()),
+                #[cfg(test)]
+                before_load: Mutex::new(None),
                 watcher: AtomicBool::new(false),
                 runs: std::sync::atomic::AtomicUsize::new(0),
                 message: Mutex::new(None),
@@ -215,9 +233,19 @@ impl PeopleParsing {
         let saved = choice.as_deref().and_then(read_choice);
         *lock(&self.inner.paths) = Paths { models, cache, choice };
         *lock(&self.inner.set) = saved;
+        self.unload();
+    }
+
+    /// Drop the loaded set (the next run loads it again), and keep a load going now from being kept.
+    fn unload(&self) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            *lock(&self.inner.loaded) = None;
+            // (the set is dropped after the lock is released)
+            let _old = {
+                let mut slot = lock(&self.inner.loaded);
+                self.inner.stale.fetch_add(1, Ordering::AcqRel);
+                slot.take()
+            };
         }
     }
 
@@ -299,12 +327,76 @@ impl PeopleParsing {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn set_runner(&self, runner: Option<Runner>) {
+    /// The engines the face and clothes parsers run on.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn runtimes(&self) -> lightcraft_parsing::Runtimes {
+        *lock(&self.inner.runtimes)
+    }
+
+    /// Run `model` (a parser's folder id, `lightcraft_parsing::coreml::CONVERTED`) on `runtime` from the next run on
+    /// (the loaded models are dropped). False for a model that is not one of them. Never waits for a load going (the
+    /// Settings window calls it).
+    pub fn set_runtime(&self, model: &str, runtime: crate::model_runtime::Runtime) -> bool {
+        let Some(k) = COREML_MODELS.iter().position(|m| *m == model) else { return false };
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            // the runtimes change before the set goes stale, so a load that read the old ones is not kept
+            let mut r = lock(&self.inner.runtimes);
+            let slot = match k {
+                0 => &mut r.face,
+                1 => &mut r.body,
+                _ => &mut r.mesh,
+            };
+            *slot = runtime;
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = (k, runtime);
+        self.unload();
+        true
+    }
+
+    /// Whether `model`'s Core ML version is in the models folder.
+    pub fn coreml_installed(&self, model: &str) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.models_dir().is_some_and(|d| {
+            lightcraft_parsing::coreml::CONVERTED.iter().any(|f| f.folder == model && lightcraft_parsing::coreml::installed(&d, f))
+        });
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = model;
+            false
+        }
+    }
+
+    /// The engine `model` runs on in the loaded set (`coreml` or `candle`); `None` before a run has loaded it.
+    pub fn backend(&self, model: &str) -> Option<&'static str> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let slot = lock(&self.inner.loaded);
+            let l = slot.as_ref()?;
+            let (face, body) = l.parser.backends();
+            if l.set.face_file().folder == model {
+                return Some(face.id());
+            }
+            if l.set.body_file().folder == model {
+                return Some(body.id());
+            }
+            if lightcraft_parsing::models::FACE_MESH.folder == model {
+                return Some(l.parser.mesh_backend().id());
+            }
+        }
+        let _ = model;
+        None
+    }
+
+    /// Run parses with `runner` instead of the models (tests; Select People's UI tests through `test-hooks`).
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn set_runner(&self, runner: Option<Runner>) {
         *lock(&self.inner.runner) = runner;
     }
 
     fn remembered(&self, key: &str) -> Option<Arc<Parsing>> {
+        self.looked_up(key);
         lock(&self.inner.memory).iter().find(|e| e.0 == key).map(|e| e.1.clone())
     }
 
@@ -334,52 +426,105 @@ impl PeopleParsing {
     /// else a run on a worker thread. With `wait`, the call returns when the run (this one, or one already going for
     /// the same picture) has ended; without, it returns [`Outcome::Running`].
     pub fn parse(&self, img: RgbImage, hints: Vec<FaceHint>, wait: bool) -> Outcome {
-        self.parse_as(self.choice(), img, hints, wait)
+        self.parse_as(self.choice(), img, hints, wait).1
     }
 
-    /// [`PeopleParsing::parse`] with the set and hair edges of `choice` (taken earlier), not those chosen now.
-    pub fn parse_as(&self, choice: Choice, img: RgbImage, hints: Vec<FaceHint>, wait: bool) -> Outcome {
+    /// The version parses with `set` and the hair edges `matting` are filed under: the set's, plus the edge's when an
+    /// edge other than Current draws people's edges (so switching the edge never reads the other's file). The one
+    /// version function: [`Choice::version`] (so [`Self::parse_as`] and [`Self::version`]), the parse-ahead index
+    /// ([`Self::ahead_version`]) and the portrait retouching's face store key on it.
+    fn version_of(set: ModelSet, matting: Option<&(crate::hair_edges::HairEdges, crate::hair_edges::Edge)>) -> String {
+        match matting.and_then(|(_, e)| crate::hair_edges::vision::version(*e)) {
+            Some(edge) => format!("{}+{edge}", set.version()),
+            None => set.version(),
+        }
+    }
+
+    /// [`PeopleParsing::parse`] with the set and hair edges of `choice` (taken earlier: a face search parses with
+    /// those it started with, however the choice changes meanwhile), also saying the version and cache key the parse
+    /// is filed under (what the parse-ahead index files, `fork/parse-ahead.md`).
+    pub(crate) fn parse_as(&self, choice: Choice, img: RgbImage, hints: Vec<FaceHint>, wait: bool) -> (Filed, Outcome) {
         let version = choice.version();
         let Choice { set, matting } = choice;
         let key = cache::key(&img, &hints, &version);
+        let quiet = ahead::quiet();
+        if let Some(q) = &quiet {
+            q.note(&key, &version);
+        }
+        let filed = Filed { version, key: key.clone() };
         if let Some(p) = self.remembered(&key).or_else(|| self.filed(&key)) {
             self.remember(&key, p.clone());
-            return Outcome::Ready { parsing: p, cached: true };
+            return (filed, Outcome::Ready { parsing: p, cached: true });
         }
         let has_runner = lock(&self.inner.runner).is_some();
         let Some(models) = self.models_dir().filter(|d| has_runner || set.installed_in(d)) else {
-            return Outcome::Failed(format!(
-                "the {} people parsing models are not downloaded yet ({} MB; parsing.download)",
-                set.label(),
-                set.size().div_ceil(1_000_000)
-            ));
+            let e =
+                format!("the {} people parsing models are not downloaded yet ({} MB; parsing.download)", set.label(), set.size().div_ceil(1_000_000));
+            return (filed, Outcome::Failed(e));
         };
-        {
-            let mut jobs = lock(&self.inner.jobs);
-            match jobs.map.get(&key) {
-                Some(Job::Running(_)) if !wait => return Outcome::Running,
-                Some(Job::Running(_)) => {}
-                _ => {
-                    let flag = Arc::new(AtomicBool::new(false));
-                    jobs.map.insert(key.clone(), Job::Running(flag.clone()));
-                    drop(jobs);
-                    if let Err(e) = self.spawn(key.clone(), set, models, (img, hints), matting, flag) {
-                        lock(&self.inner.jobs).finish(key.clone(), Err(e.clone()));
-                        self.inner.done.notify_all();
-                        return Outcome::Failed(e);
-                    }
-                    if !wait {
-                        return Outcome::Running;
+        // a request goes before the queue's run of another photo, which holds the models (`fork/parse-ahead.md`)
+        if quiet.is_none() {
+            self.stop_quiet_runs(&key);
+        }
+        let mut picture = Some((img, hints));
+        // (a request that joined the queue's run of this photo, which was stopped, runs it itself: at most once)
+        for _ in 0..2 {
+            {
+                let mut jobs = lock(&self.inner.jobs);
+                match jobs.map.get(&key) {
+                    Some(Job::Running(_)) if !wait => return (filed, Outcome::Running),
+                    Some(Job::Running(_)) => {}
+                    // (finished between the cache check above and this lock: no second run)
+                    Some(Job::Done(Ok(p), _)) => return (filed, Outcome::Ready { parsing: p.clone(), cached: true }),
+                    _ => {
+                        let Some(pic) = picture.take() else { break };
+                        let flag = Arc::new(AtomicBool::new(false));
+                        jobs.map.insert(key.clone(), Job::Running(flag.clone()));
+                        if quiet.is_some() {
+                            jobs.quiet.insert(key.clone());
+                        }
+                        drop(jobs);
+                        if let Err(e) = self.spawn(key.clone(), set, models.clone(), pic, matting.clone(), flag) {
+                            lock(&self.inner.jobs).finish(key.clone(), Err(e.clone()));
+                            self.inner.done.notify_all();
+                            return (filed, Outcome::Failed(e));
+                        }
+                        if !wait {
+                            return (filed, Outcome::Running);
+                        }
                     }
                 }
             }
+            if let Some(out) = self.wait_ended(&key) {
+                return (filed, out);
+            }
+            // the run was dropped: the queue's run stopped (it keeps no result)
+            if quiet.is_some() {
+                return (filed, Outcome::Failed("cancelled".into()));
+            }
         }
-        self.wait_for(&key)
+        (filed, Outcome::Failed("the run was dropped".into()))
+    }
+
+    /// Stop the queue's runs going, but for the one of `key` (a caller that wants it joins it).
+    fn stop_quiet_runs(&self, key: &str) {
+        let jobs = lock(&self.inner.jobs);
+        for k in jobs.quiet.iter().filter(|k| k.as_str() != key) {
+            if let Some(Job::Running(flag)) = jobs.map.get(k) {
+                flag.store(true, Ordering::SeqCst);
+            }
+        }
     }
 
     /// Wait until the run for `key` has ended. Its result stays filed while this waits; a run no longer filed (it
     /// finished long ago) gives its cached parse.
+    #[cfg(test)]
     pub(crate) fn wait_for(&self, key: &str) -> Outcome {
+        self.wait_ended(key).unwrap_or_else(|| Outcome::Failed("the run was dropped".into()))
+    }
+
+    /// [`Self::wait_for`]; `None`: the run is no longer filed and its parse is not cached (a stopped queue run).
+    fn wait_ended(&self, key: &str) -> Option<Outcome> {
         let mut jobs = lock(&self.inner.jobs);
         *jobs.waiters.entry(key.to_string()).or_default() += 1;
         let outcome = loop {
@@ -399,10 +544,7 @@ impl PeopleParsing {
             }
         }
         drop(jobs);
-        outcome.unwrap_or_else(|| match self.remembered(key).or_else(|| self.filed(key)) {
-            Some(parsing) => Outcome::Ready { parsing, cached: true },
-            None => Outcome::Failed("the run was dropped".into()),
-        })
+        outcome.or_else(|| self.remembered(key).or_else(|| self.filed(key)).map(|parsing| Outcome::Ready { parsing, cached: true }))
     }
 
     #[cfg(test)]
@@ -420,7 +562,8 @@ impl PeopleParsing {
         flag: Arc<AtomicBool>,
     ) -> Result<(), String> {
         let row = self.inner.activity.start("parsing", "Finding people parts", Cancel::Flag(flag.clone()));
-        row.detail(set.label());
+        let quiet = ahead::quiet().is_some();
+        let row = self.shown(row, set, &flag);
         let this = self.clone();
         std::thread::Builder::new()
             .name("people-parsing".into())
@@ -448,6 +591,16 @@ impl PeopleParsing {
                         this.remember(&key, p.clone());
                         *lock(&this.inner.message) = None;
                         Ok(p)
+                    }
+                    // (the queue's run stopped, in the model or its hair edges: nothing to tell, nothing kept; a
+                    // request that joined it runs it again)
+                    Ok(Err(_)) if quiet && flag.load(Ordering::Relaxed) => {
+                        let mut jobs = lock(&this.inner.jobs);
+                        jobs.map.remove(&key);
+                        jobs.quiet.remove(&key);
+                        drop(jobs);
+                        this.inner.done.notify_all();
+                        return;
                     }
                     Ok(Err(e)) => {
                         this.say(&e);
@@ -482,23 +635,51 @@ impl PeopleParsing {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn run_models(&self, set: ModelSet, models: &Path, img: &RgbImage, hints: &[FaceHint], cancelled: &dyn Fn() -> bool) -> Result<Parsing, String> {
-        let parser = {
-            let mut slot = lock(&self.inner.loaded);
-            match slot.as_mut().filter(|l| l.set == set) {
-                Some(l) => {
-                    l.last_used = Instant::now();
-                    l.parser.clone()
+        let parser = match self.loaded_parser(set) {
+            Some(p) => p,
+            None => {
+                // read before the runtimes: a change after this makes the set loaded below stale
+                let stale = self.inner.stale.load(Ordering::Acquire);
+                let runtimes = self.runtimes();
+                #[cfg(test)]
+                if let Some(f) = lock(&self.inner.before_load).clone() {
+                    f();
                 }
-                None => {
-                    *slot = None;
-                    let p = Arc::new(lightcraft_parsing::Parser::load(set, models).map_err(|e| e.to_string())?);
+                // without `loaded` held: the first Core ML load compiles its model (seconds), and the Settings window
+                // reads and changes the loaded set meanwhile
+                let p = Arc::new(
+                    lightcraft_parsing::Parser::load_with(set, models, lightcraft_parsing::best_device(), runtimes).map_err(|e| e.to_string())?,
+                );
+                let mut slot = lock(&self.inner.loaded);
+                if self.inner.stale.load(Ordering::Acquire) == stale {
                     *slot = Some(Loaded { set, parser: p.clone(), last_used: Instant::now() });
-                    p
                 }
+                p
             }
         };
         self.watch();
         parser.parse(img, hints, &lightcraft_parsing::Options::default(), cancelled).map_err(|e| e.to_string())
+    }
+
+    /// The loaded parser of `set`, marked used; another set loaded is dropped (before `set` loads, so both are never
+    /// in memory).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn loaded_parser(&self, set: ModelSet) -> Option<Arc<lightcraft_parsing::Parser>> {
+        let mut slot = lock(&self.inner.loaded);
+        if let Some(l) = slot.as_mut().filter(|l| l.set == set) {
+            l.last_used = Instant::now();
+            return Some(l.parser.clone());
+        }
+        let old = slot.take();
+        drop(slot);
+        drop(old);
+        None
+    }
+
+    /// Hold every load at its start with `f` (it runs on the parse's thread, without `loaded` held).
+    #[cfg(test)]
+    pub(crate) fn set_before_load(&self, f: Option<Arc<dyn Fn() + Send + Sync>>) {
+        *lock(&self.inner.before_load) = f;
     }
 
     #[cfg(target_arch = "wasm32")]
@@ -530,6 +711,14 @@ impl PeopleParsing {
         }
     }
 }
+
+/// The parsing models with a Core ML version (`fork/coreml.md`): their ids (folders) in `models.runtime` and Settings;
+/// the face parser, the clothes parser, the face mesh.
+pub const COREML_MODELS: [&str; 3] = [
+    lightcraft_parsing::models::FACE_SEGFORMER_B0.folder,
+    lightcraft_parsing::models::BODY_SEGFORMER_B3.folder,
+    lightcraft_parsing::models::FACE_MESH.folder,
+];
 
 /// `p` with its Entire Person edges drawn by BiRefNet Matting from `img` (the picture it was parsed from).
 fn hair_edged(
@@ -572,6 +761,10 @@ impl crate::Session {
             crate::config::cache_dir().map(|d| d.join("people-parsing")),
             crate::config::config_dir().map(|d| d.join("parsing-model.json")),
         );
+        // the runtime choices (`with_default_learn` opened their file)
+        for f in COREML_MODELS {
+            self.parsing.set_runtime(f, self.model_runtimes.get(f));
+        }
         // (the hair edges share the models folder; `fork/hair-edges.md`)
         let models = std::env::var_os("LIGHTCRAFT_BIREFNET_DIR").filter(|v| !v.is_empty()).map(PathBuf::from).or_else(default_models_dir);
         self.hair_edges.set_paths(models, crate::config::config_dir().map(|d| d.join(crate::hair_edges::CHOICE_FILE)));

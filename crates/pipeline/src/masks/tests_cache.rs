@@ -477,7 +477,7 @@ fn a_change_to_any_one_number_of_a_mask_is_a_new_key() {
             MaskShape::Prompt { text: "the car".into(), seg: None, detail: Vec::new(), edge: 0.0 },
             MaskShape::Prompt { text: "the cat".into(), seg: None, detail: Vec::new(), edge: 0.0 },
         ),
-        ("people", MaskShape::People { person: 1, parts: vec!["face".into()] }, MaskShape::People { person: 1, parts: vec!["hair".into()] }),
+        ("people", MaskShape::people(1, vec!["face".into()]), MaskShape::people(1, vec!["hair".into()])),
         ("landscape", MaskShape::Landscape { class: "water".into() }, MaskShape::Landscape { class: "sky".into() }),
     ];
     let mut all = std::collections::HashSet::new();

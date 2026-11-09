@@ -1,6 +1,6 @@
 # Portrait retouching: part masks from the people parse
 
-List: portrait retouching gets each face's part masks (skin, hair, brows, eyes, lips, teeth, clothes) and face mesh from the cached people parse, mapped through rotation, lens corrections and transform; Skin Tone's Amount lights Facial Skin to show them. Branch `feat/retouch-masks`.
+List: portrait retouching gets each face's part masks (skin, hair, brows, eyes, lips, teeth, clothes) and face mesh from the cached people parse, mapped through rotation, lens corrections and transform; Skin Tone's Face Light showed them first. Branch `feat/retouch-masks`.
 
 ## What it does
 
@@ -13,7 +13,8 @@ The link between people parsing (`fork/people-parsing.md`) and the retouch step 
   Background; never the clothes). People without a face (seen from behind) are
   not faces. Without the set, faces come from YuNet as before (boxes, no masks).
 - **One parse per photo, shared**: the parse is the one `parsing.run` and `parsing.mask` read (same picture, same
-  faces, same cache on disk). Faces found from it are kept under the parse's version, so another model set or
+  faces, same cache on disk). A photo parsed before (ahead of time or by a request) is read through the parse-ahead
+  index with no model run, and a parse the search makes is filed there (`fork/parse-ahead.md`). Faces found from it are kept under the parse's version, so another model set or
   hair-edge choice finds them anew.
 - **Never in a render**: a preview of a photo without its faces renders on no faces (the original pixels with Face
   Light on) and starts the face search; the search's worker renders the parse picture, runs YuNet and waits for the
@@ -36,11 +37,11 @@ The link between people parsing (`fork/people-parsing.md`) and the retouch step 
   its frame (`FaceKey::frame`: after lens and transform for YuNet's faces, before them for the parse's); a key and a
   face of different frames are compared through the photo's lens and transform, so settings made under YuNet stay
   with their face once the parse finds it, and never go to the neighbour standing where the YuNet box lay.
-- **Proof feature**: Skin Tone's Amount brightens Facial Skin by up to half again (Face Light); pixels outside the
-  mask never change. The Skin Tone lane replaces it.
+- **Proof feature**: Skin Tone's Amount brightened Facial Skin to show the masks arrive; Skin Tone
+  (`fork/retouch-skin-tone.md`) replaced it with Face Light, and the tests here use Face Light.
 - `Scene::mask_box` (new): the pixels a face's mask can touch, so a feature reads and writes only those.
 
-Mask sampling per render (Apple M4 Pro, release, load ~20; Facial Skin over 30 % × 40 % of the photo, a 512² mask):
+Mask sampling per render (a test Mac, release, other work running; Facial Skin over 30 % × 40 % of the photo, a 512² mask):
 Face Light at draft 1936 × 1291 3.4 ms, loupe 2560 × 1707 5.9 ms, 24 MP 38.6 ms; a full-frame `mask_plane` 8.2 / 13.9
 / 157 ms.
 
@@ -97,7 +98,8 @@ mask as it is); the face picker's thumbnails and `retouch.faces` boxes ignore le
   `retouch_key_map`), `crates/engine/src/cmd/retouch.rs` (matching through the key map),
   `crates/ui-egui/src/panels/portrait.rs` and `portrait/overlay.rs` (faces through the `Arc`, the key map).
 - `crates/engine/src/people_parsing.rs` (`PeopleParsing::version`, `ready`, `choice`, `parse_as`); `crates/engine/src/cmd/parsing.rs`
-  (`prepare` split into `prepare_job` and `Prepare::run`, so a worker makes the very picture `parsing.run` does).
+  (`prepare` split into `prepare_job` and `Prepare::run`, so a worker makes the very picture `parsing.run` does; the
+  search uses `prepare_ahead`, which loads YuNet on its worker).
 
 ## Tests
 

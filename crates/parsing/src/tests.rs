@@ -11,4 +11,6 @@ pub(crate) fn scratch(name: &str) -> PathBuf {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+mod coreml;
+#[cfg(not(target_arch = "wasm32"))]
 mod models;

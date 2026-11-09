@@ -77,6 +77,7 @@ pub mod model_runtime;
 pub mod names;
 pub mod open_path;
 pub mod originals;
+pub mod parse_ahead;
 mod pdf;
 pub mod people_parsing;
 pub mod prep;
@@ -93,6 +94,7 @@ pub mod rename;
 pub mod rename_job;
 pub mod retouch_input;
 pub mod segment;
+pub mod select_people;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod settings_folder;
 pub mod shared_models;
@@ -407,12 +409,16 @@ pub struct Session {
     pub object_jobs: spot_area::ObjectJobs,
     /// Learn My Edits: profiles trained on the user's edits (`fork/learn-my-edits.md`).
     pub learn: learn::LearnEdits,
+    /// People parsing ahead of time (`fork/parse-ahead.md`).
+    pub parse_ahead: parse_ahead::ParseAhead,
     /// Which engine runs each AI model that has a Core ML version (`fork/coreml.md`).
     pub model_runtimes: Arc<model_runtime::ModelRuntimes>,
     /// Per-person part masks and face landmarks (`fork/people-parsing.md`).
     pub parsing: people_parsing::PeopleParsing,
     /// BiRefNet-matting edges for people and Subject masks (`fork/hair-edges.md`).
     pub hair_edges: hair_edges::HairEdges,
+    /// Each photo's people for Select People masks (`fork/select-people.md`).
+    pub select_people: select_people::SelectPeople,
     /// The persistent library this session writes to (`None` = in-memory only).
     pub library: Option<library::Library>,
     /// Identity of current library opening; refreshed only after a successful open.
@@ -632,9 +638,11 @@ impl Session {
             lama: lama_fill::LamaFill::new(activity.clone()),
             object_jobs: Default::default(),
             learn: learn::LearnEdits::new(activity.clone()),
+            parse_ahead: Default::default(),
             model_runtimes: Default::default(),
             parsing: people_parsing::PeopleParsing::new(activity.clone()).with_hair_edges(hair_edges.clone()),
             hair_edges,
+            select_people: Default::default(),
             library: None,
             library_identity: Arc::new(()),
             xmp: sidecar::XmpPrefs::default(),
@@ -1215,7 +1223,13 @@ impl Session {
     /// White balance goes on each photo as the active photo's mode or value on the photo's own
     /// scale ([`sync_same`]): As Shot its own camera white, Auto its own (`own_auto`, worked out on
     /// its pixels), a Temp or Tint the same number, only the slider that moved.
-    fn auto_sync_ops(&self, id: PhotoId, new: &DevelopSettings, label: &str, own_auto: &std::collections::HashMap<PhotoId, (f64, f64)>) -> Vec<Op> {
+    fn auto_sync_ops(
+        &mut self,
+        id: PhotoId,
+        new: &DevelopSettings,
+        label: &str,
+        own_auto: &std::collections::HashMap<PhotoId, (f64, f64)>,
+    ) -> Vec<Op> {
         if !self.auto_sync_applies(id, label) {
             return Vec::new();
         }
@@ -1247,20 +1261,22 @@ impl Session {
         }
         let ainfo = self.source_info(id);
         let wb_changed = old.wb != new.wb;
-        self.selection
-            .ids
-            .iter()
-            .filter(|x| **x != id)
-            .filter_map(|x| self.develop_of(*x).map(|d| (*x, d)))
-            .filter_map(|(x, d)| {
-                let mut synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
-                if wb_changed {
-                    sync_same::synced_wb(&ainfo, &old, new, &self.source_info(x), &d, own_auto.get(&x).copied(), &mut synced);
-                }
-                let synced = self.fit_constrained_crop(x, synced);
-                (synced != *d).then(|| self.develop_op(x, synced, label)).flatten()
-            })
-            .collect()
+        let others: Vec<PhotoId> = self.selection.ids.iter().copied().filter(|x| *x != id).collect();
+        let mut ops = Vec::new();
+        for x in others {
+            let Some(d) = self.develop_of(x) else { continue };
+            let mut synced = lightcraft_develop::apply_partial(&d, &delta, 1.0);
+            if wb_changed {
+                sync_same::synced_wb(&ainfo, &old, new, &self.source_info(x), &d, own_auto.get(&x).copied(), &mut synced);
+            }
+            // (fork, `fork/select-people.md`: a Select People part is drawn from this photo's own people)
+            let synced = self.people_rebased(x, &d, synced);
+            let synced = self.fit_constrained_crop(x, synced);
+            if synced != *d {
+                ops.extend(self.develop_op(x, synced, label));
+            }
+        }
+        ops
     }
 
     /// Auto Sync carries an edit of photo `id` labelled `label` to the other selected photos: it is

@@ -178,6 +178,18 @@ pub(crate) fn merge_settings_for_photo(
 }
 
 /// `v` as a list of numbers; `None` unless it is an array of nothing but numbers.
+/// The ops that merge `partial` into each of `ids`' settings (Paste, Paste from Previous, Sync), each Select People part
+/// drawn again from that photo's own people (fork, `fork/select-people.md`).
+fn pasted(s: &mut Session, ids: &[PhotoId], partial: &Value, label: &str) -> Vec<Op> {
+    let mut ops = Vec::new();
+    for &id in ids {
+        let Some(d) = s.develop_of(id) else { continue };
+        let merged = s.people_rebased(id, &d, lightcraft_develop::apply_partial(&d, partial, 1.0));
+        ops.extend(s.develop_op(id, merged, label));
+    }
+    ops
+}
+
 fn numbers(v: Option<&Value>) -> Option<Vec<f64>> {
     v?.as_array()?.iter().map(Value::as_f64).collect()
 }
@@ -1075,11 +1087,7 @@ pub fn specs() -> Vec<CommandSpec> {
                 let groups = groups_param(p, c)?.unwrap_or_else(|| s.copy_groups.clone());
                 let partial = lightcraft_develop::extract_groups(&s.develop_of(prev).unwrap_or_default(), &groups);
                 let ids: Vec<PhotoId> = s.targets(p)?.into_iter().filter(|id| *id != prev).collect();
-                let ops = ids
-                    .iter()
-                    .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                    .filter_map(|(id, d)| s.develop_op(id, lightcraft_develop::apply_partial(&d, &partial, 1.0), "Paste from Previous"))
-                    .collect::<Vec<_>>();
+                let ops = pasted(s, &ids, &partial, "Paste from Previous");
                 let n = ops.len();
                 s.commit("Paste from Previous", Op::Batch { ops })?;
                 Ok(json!({"changed": n, "from": prev.0}))
@@ -1102,11 +1110,7 @@ pub fn specs() -> Vec<CommandSpec> {
                     clip = lightcraft_develop::extract_groups(&full, &only);
                 }
                 let ids = s.targets(p)?;
-                let ops = ids
-                    .iter()
-                    .filter_map(|id| s.develop_of(*id).map(|d| (*id, d)))
-                    .filter_map(|(id, d)| s.develop_op(id, lightcraft_develop::apply_partial(&d, &clip, 1.0), "Paste Settings"))
-                    .collect::<Vec<_>>();
+                let ops = pasted(s, &ids, &clip, "Paste Settings");
                 let n = ops.len();
                 s.commit("Paste Settings", Op::Batch { ops })?;
                 Ok(json!({"changed": n}))
@@ -1125,15 +1129,8 @@ pub fn specs() -> Vec<CommandSpec> {
                 let groups = groups_param(p, c)?.unwrap_or_else(SettingsGroup::default_copy);
                 let d = s.develop_of(id).unwrap_or_default();
                 let partial = lightcraft_develop::extract_groups(&d, &groups);
-                let ops = s
-                    .selection
-                    .ids
-                    .clone()
-                    .into_iter()
-                    .filter(|x| *x != id)
-                    .filter_map(|x| s.develop_of(x).map(|d| (x, d)))
-                    .filter_map(|(x, dd)| s.develop_op(x, lightcraft_develop::apply_partial(&dd, &partial, 1.0), "Sync Settings"))
-                    .collect::<Vec<_>>();
+                let ids: Vec<PhotoId> = s.selection.ids.iter().copied().filter(|x| *x != id).collect();
+                let ops = pasted(s, &ids, &partial, "Sync Settings");
                 let n = ops.len();
                 s.commit("Sync Settings", Op::Batch { ops })?;
                 Ok(json!({"changed": n}))

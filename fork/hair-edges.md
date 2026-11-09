@@ -17,7 +17,7 @@ List: hair-accurate edges for Entire Person / Background and Subject masks: BiRe
 How it does (three CC0 portraits with flyaway hair from Wikimedia Commons, 2026-11-09; pictures in the PR):
 - Entire Person / Background: the clearest gain. The parse's edge keeps a blur of background between loose strands and cuts off thin strands; with BiRefNet Matting the background between strands goes and thin strands stay (2.6 to 5.7 % of the photo's pixels change).
 - Subject: when BiRefNet already makes the part (the default with it installed), its edge was fine already: matting changes 0.1 to 0.4 % of the pixels, slightly softer strand tips. The gain is larger over SAM 3's coarse edge.
-- Time per photo (M4 Pro, Metal, load average 45 to 60 from other work): the matting step adds about 7 to 9 s (Subject with BiRefNet: 8.1 to 10.5 s, with matting 15.0 to 18.9 s; people parse: 4.3 to 5.4 s, with matting 11.6 to 13.6 s, the first run including the model's load). A second request on the same photo reuses the matte.
+- Time per photo (a test Mac, Metal, other work running): the matting step adds about 7 to 9 s (Subject with BiRefNet: 8.1 to 10.5 s, with matting 15.0 to 18.9 s; people parse: 4.3 to 5.4 s, with matting 11.6 to 13.6 s, the first run including the model's load). A second request on the same photo reuses the matte.
 
 ## Branch
 

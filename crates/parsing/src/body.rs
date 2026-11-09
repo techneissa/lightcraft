@@ -79,15 +79,21 @@ pub fn grid(width: usize, height: usize, side: usize) -> (usize, usize) {
     }
 }
 
-/// Run the clothes parser over the whole photo.
-pub fn run(model: &Segformer, img: &RgbImage, side: usize, dev: &Device) -> Result<BodyMap> {
-    if model.classes() != CLASSES {
-        return Err(Error::Model(format!("the body model has {} classes, not the clothes parser's {CLASSES}", model.classes())));
-    }
+/// The photo resampled to the body model's grid for a long side of `side`, ImageNet-normalised: (width, height, three
+/// planes).
+pub fn pixels(img: &RgbImage, side: usize) -> (usize, usize, Vec<f32>) {
     let (w, h) = grid(img.width, img.height, side);
     let (sx, sy) = (img.width as f32 / w as f32, img.height as f32 / h as f32);
     let mut px = sample_grid(img, w, h, sx.max(sy), [0.485, 0.456, 0.406], |u, v| (u * sx, v * sy));
     imagenet(&mut px, w * h);
+    (w, h, px)
+}
+
+/// Run the clothes parser (candle) on [`pixels`]' output.
+pub fn run(model: &Segformer, (w, h, px): (usize, usize, Vec<f32>), dev: &Device) -> Result<BodyMap> {
+    if model.classes() != CLASSES {
+        return Err(Error::Model(format!("the body model has {} classes, not the clothes parser's {CLASSES}", model.classes())));
+    }
     let x = Tensor::from_vec(px, (1, 3, h, w), dev)?;
     let logits = model.forward(&x)?;
     let up = crate::nn::resize(&logits, h, w, false)?;

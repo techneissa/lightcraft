@@ -611,6 +611,8 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                 let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
                 work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
             }
+            // (fork, `fork/retouch-eyes.md`: portrait retouching reads around a face; the window holds all of it)
+            work = retouch_step::window_for_reads(s, info, &frame, full_w, full_h, work);
             if work != win {
                 keep = Some(PixelWindow { x: win.x - work.x, y: win.y - work.y, ..win });
             }
@@ -1130,6 +1132,8 @@ mod tests_mask_geometry;
 mod tests_nr_scale;
 #[cfg(test)]
 mod tests_recolor_render;
+#[cfg(test)]
+mod tests_retouch_teeth_lips;
 #[cfg(test)]
 mod tests_sharpen;
 #[cfg(test)]

@@ -55,6 +55,7 @@ pub mod menus;
 mod missing_sweep;
 mod model_remove;
 pub mod panels;
+mod parse_ahead;
 pub mod pick;
 pub mod recheck;
 pub mod reflections;

@@ -451,7 +451,7 @@ table row 10); the official LightCraft refuses a library this build has opened a
 The number 10 is this fork's: if the official project reaches 10 with another meaning, the merge conflicts on `VERSION`
 and the table, and this feature takes the next free number.
 
-**Measured** (2026-10-28, macOS 27.0.1, Apple M4 Pro, A7 V ARW 7008×4672, the machine at load 4 to 13 while measuring; times
+**Measured** (2026-10-28, macOS 27.0.1, a test Mac, A7 V ARW 7008×4672, the machine busy with other work while measuring; times
 are medians of 2 to 3 runs, with `cm` for Camera Matching on the same files):
 
 | What | macOS Colour | Camera Matching |

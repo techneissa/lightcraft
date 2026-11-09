@@ -314,7 +314,7 @@ fn a_spot_does_not_skip_portrait_retouching() {
     let mut s = DevelopSettings { spots: vec![spot(SpotMode::Remove, 0.1, 0.1, Some((0.0, 0.05)))], ..Default::default() };
     let req = RenderRequest::fit(480, 480);
     let plain = render(&src, &info, &s, &req).image;
-    lightcraft_develop::controls::set(&mut s, "retouch.skinTone.amount", 100.0);
+    lightcraft_develop::controls::set(&mut s, "retouch.skinTone.faceLight", 100.0);
     let whole = render(&src, &info, &s, &req).image;
     assert_ne!(whole.data, plain.data, "the retouch shows");
     let kept = render_cached(&src, &info, &s, &req, &cache).image;

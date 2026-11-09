@@ -1,0 +1,3 @@
+cargo test -p lightcraft-engine --lib parse_ahead
+cargo test -p lightcraft-engine --lib people_parsing
+cargo test -p lightcraft-ui-egui --lib tests::parse_ahead

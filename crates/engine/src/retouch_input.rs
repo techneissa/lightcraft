@@ -504,13 +504,19 @@ impl Session {
         let regions = named_regions(p);
         Ok(match source {
             Source::Provider(provider) => Finder::Faces { provider, job: self.retouch_detect_job(p.id)?, regions },
-            Source::Parts => Finder::Parts(parts::PartsFinder {
-                prepare: crate::cmd::parsing::prepare_job(self, p.id)?,
-                parsing: self.parsing.clone(),
-                choice: self.parsing.choice(),
-                orient: p.develop.orientation,
-                regions,
-            }),
+            Source::Parts => {
+                let choice = self.parsing.choice();
+                Finder::Parts(parts::PartsFinder {
+                    // (the parse-ahead index, `fork/parse-ahead.md`: a photo parsed before is read, not run again)
+                    known: crate::parse_ahead::known(self, p.id, &choice.version()),
+                    // (YuNet is loaded on the search's worker, never here)
+                    prepare: crate::cmd::parsing::prepare_ahead(self, p.id)?,
+                    parsing: self.parsing.clone(),
+                    choice,
+                    orient: p.develop.orientation,
+                    regions,
+                })
+            }
         })
     }
 

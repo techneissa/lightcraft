@@ -109,7 +109,7 @@ fn copy_paste_sync_and_presets_carry_the_block_and_the_faces() {
     let (mut s, _) = demo_with(vec![ann(), bob()]);
     let vis = s.visible_cloned();
     s.execute("retouch.detect", &json!({})).unwrap();
-    s.execute("retouch.set", &json!({"control": "retouch.eyes.amount", "value": 30})).unwrap();
+    s.execute("retouch.set", &json!({"control": "retouch.eyes.whites", "value": 30})).unwrap();
     s.execute("retouch.set", &json!({"control": "retouch.skin.smoothness", "value": 55, "face": 0})).unwrap();
     let want = retouch_of(&s);
     assert_eq!(want.faces.len(), 1);
@@ -182,8 +182,8 @@ fn the_block_round_trips_through_the_sidecar_and_the_catalog() {
     let id = s.catalog.photos().next().unwrap().id;
     s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
     s.execute("retouch.detect", &json!({})).unwrap();
-    s.execute("retouch.set", &json!({"control": "retouch.teethLips.amount", "value": 40})).unwrap();
-    s.execute("retouch.set", &json!({"control": "retouch.eyes.amount", "value": 65, "face": 0})).unwrap();
+    s.execute("retouch.set", &json!({"control": "retouch.teethLips.teethWhitening", "value": 40})).unwrap();
+    s.execute("retouch.set", &json!({"control": "retouch.eyes.whites", "value": 65, "face": 0})).unwrap();
     let want = retouch_of(&s);
     assert!(!want.is_off() && want.faces.len() == 1);
     s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
@@ -405,7 +405,7 @@ fn a_faces_own_settings_survive_a_rotation() {
     let a = NormRect::new(0.1, 0.1, 0.3, 0.4);
     let (mut s, fake) = demo_with(vec![face(a.x0, a.y0, a.x1, a.y1, None)]);
     s.execute("retouch.detect", &json!({})).unwrap();
-    s.execute("retouch.set", &json!({"control": "retouch.eyes.amount", "value": 60, "face": 0})).unwrap();
+    s.execute("retouch.set", &json!({"control": "retouch.eyes.whites", "value": 60, "face": 0})).unwrap();
     s.execute("photo.rotateRight", &json!({})).unwrap();
     let o = s.develop_of(s.active().unwrap()).unwrap().orientation;
     assert_ne!(o, lightcraft_geom::Orientation::Normal);
@@ -494,7 +494,7 @@ fn one_search_runs_per_photo_and_a_render_asking_meanwhile_is_redrawn() {
     let mut s = Session::with_demo();
     s.retouch_faces.set_provider(Arc::new(Slow(go.clone())));
     let id = s.active().unwrap();
-    s.execute("develop.set", &json!({"control": "retouch.skinTone.amount", "value": 40})).unwrap();
+    s.execute("develop.set", &json!({"control": "retouch.skinTone.faceLight", "value": 40})).unwrap();
     let _ = s.render_job(id, 64, 64, false, true).unwrap();
     for (control, value) in [("geometry.vertical", 10.0), ("geometry.vertical", 20.0), ("optics.distortion", 15.0), ("optics.distortion", 30.0)] {
         s.execute("develop.set", &json!({"control": control, "value": value})).unwrap();
