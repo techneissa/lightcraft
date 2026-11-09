@@ -5,7 +5,7 @@
 /// One slider: id, label, range, default and how it is shown.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Spec {
-    /// `retouch.<feature>.<field>`, e.g. `retouch.skin.amount`.
+    /// `retouch.<feature>.<field>`, e.g. `retouch.skin.smoothness`.
     pub id: &'static str,
     /// Title Case, shown on the slider.
     pub label: &'static str,

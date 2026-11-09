@@ -22,6 +22,33 @@ pub struct FeatureInfo {
     pub specs: fn() -> Vec<&'static Spec>,
     /// The part masks it reads ([`Feature::PARTS`]).
     pub parts: &'static [crate::Part],
+    /// How far past its face and masks it reads ([`Feature::REACH`]).
+    pub reach: f64,
+}
+
+/// What retouching reads around a face: the largest [`Feature::REACH`] of the features on, and the parts whose
+/// masks they read.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Reads {
+    pub reach: f64,
+    pub parts: Vec<crate::Part>,
+}
+
+impl Reads {
+    pub(crate) fn add(&mut self, reach: f64, parts: &[crate::Part]) {
+        if reach.is_finite() {
+            self.reach = self.reach.max(reach);
+        }
+        for p in parts {
+            if !self.parts.contains(p) {
+                self.parts.push(*p);
+            }
+        }
+    }
+
+    fn merge(&mut self, o: &Reads) {
+        self.add(o.reach, &o.parts);
+    }
 }
 
 pub(crate) fn specs_of<T: Feature>() -> Vec<&'static Spec> {
@@ -90,6 +117,15 @@ impl Retouch {
     /// Whether the block changes no pixel: every feature is off for every face.
     pub fn is_off(&self) -> bool {
         self.global.is_off() && self.faces.iter().all(|f| f.settings.is_off())
+    }
+
+    /// What the features on for some face read ([`Features::reads`]); `None` while the block is off.
+    pub fn reads(&self) -> Option<Reads> {
+        let mut out: Option<Reads> = None;
+        for r in std::iter::once(&self.global).chain(self.faces.iter().map(|f| &f.settings)).filter_map(crate::Features::reads) {
+            out.get_or_insert_with(Reads::default).merge(&r);
+        }
+        out
     }
 
     /// The block from JSON, leniently: a malformed part reads as off and the rest is kept, so one bad value never
@@ -203,6 +239,7 @@ macro_rules! features {
                 scope: <$ty as $crate::Feature>::SCOPE,
                 specs: $crate::settings::specs_of::<$ty>,
                 parts: <$ty as $crate::Feature>::PARTS,
+                reach: <$ty as $crate::Feature>::REACH,
             },)*
         ];
 
@@ -210,6 +247,16 @@ macro_rules! features {
             /// Every feature off.
             pub fn is_off(&self) -> bool {
                 true $(&& $crate::Feature::is_off(&self.$key))*
+            }
+
+            /// What the features that are on read: the largest [`Feature::REACH`] and the parts' masks
+            /// ([`Feature::PARTS`]); `None` while every feature is off.
+            pub fn reads(&self) -> Option<$crate::settings::Reads> {
+                let mut out: Option<$crate::settings::Reads> = None;
+                $(if !$crate::Feature::is_off(&self.$key) {
+                    out.get_or_insert_with(Default::default).add(<$ty as $crate::Feature>::REACH, <$ty as $crate::Feature>::PARTS);
+                })*
+                out
             }
 
             /// From JSON, one feature at a time: a missing or malformed feature reads as off.

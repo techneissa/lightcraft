@@ -17,6 +17,7 @@ use crate::geometry::Frame;
 mod alpha;
 mod brush;
 mod key;
+mod people;
 mod planes;
 
 pub use alpha::note_evaluation;
@@ -117,6 +118,8 @@ impl Mattes {
             MaskShape::Sky { .. } => self.of(&[Sky]),
             // Background is the person matte turned around ([`shape_alpha`])
             MaskShape::Subject { .. } | MaskShape::Background { .. } => person(),
+            // (fork, `fork/select-people.md`: a part the people parser drew keeps its own selection)
+            MaskShape::People { seg, detail, .. } if seg.is_some() || !detail.is_empty() => Vec::new(),
             MaskShape::People { parts, .. } => {
                 let wanted: Vec<MatteKind> = parts
                     .iter()
@@ -389,6 +392,7 @@ fn shape_alpha_in(
         | MaskShape::Subject { seg, detail, edge }
         | MaskShape::Sky { seg, detail, edge }
         | MaskShape::Background { seg, detail, edge }
+        | MaskShape::People { seg, detail, edge, .. }
             if seg.is_some() || !detail.is_empty() =>
         {
             // Edge: below 0 a steeper transition (up to 8× the logits), above 0 feathered (up to
@@ -525,6 +529,13 @@ fn sample_seg(seg: Option<&SegMask>, detail: &[SegMask], gain: f32, frame: &Fram
             *v = fine.or_else(|| coarse.as_ref().map(|c| c.logit(n))).unwrap_or(-16.0) * gain;
         }
     });
+    // (fork, `fork/select-people.md`: a Select People part's pixels are each filtered with the window of the grid that
+    // gave their logit, so a small face's finer grid keeps its edge)
+    if people::is_people(seg, detail) {
+        people::filter(coarse.as_ref(), seg, &patches, detail, gain, frame, w, log_l, out);
+        out.map_in_place(|l| 1.0 / (1.0 + (-l).exp()));
+        return;
+    }
     // (the coarsest grid sets the window: it leaves the widest uncertain band)
     let cell = coarse.iter().chain(&patches).map(|g| g.cell_px(frame, w)).fold(0.0, f64::max);
     // (fork, `fork/hair-edges.md`: a grid whose edge BiRefNet-matting drew already follows the photo's strands; filtered
@@ -953,5 +964,7 @@ mod tests;
 mod tests_cache;
 #[cfg(test)]
 mod tests_matting;
+#[cfg(test)]
+mod tests_people;
 #[cfg(test)]
 mod tests_vision_edges;

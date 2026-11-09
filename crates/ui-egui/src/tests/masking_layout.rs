@@ -59,7 +59,7 @@ fn masking_tile_labels_fit_without_eliding_at_supported_panel_widths() {
                     let label = crate::i18n::tr(label).to_string();
                     crate::i18n::set_language(Locale::En);
                     let tile = widgets.iter().find(|(id, _)| id == &format!("maskNew:{kind}")).unwrap().1;
-                    let text = texts.iter().find(|t| t.galley.job.text == label && t.pos.y < tile.bottom()).unwrap();
+                    let text = texts.iter().find(|t| t.galley.job.text == label && t.pos.y >= tile.top() && t.pos.y < tile.bottom()).unwrap();
                     assert!(!text.galley.elided, "{locale:?} {width} {label} should be readable in full");
                     assert!(
                         tile.shrink2(vec2(2.0, 0.0)).contains_rect(text.visual_bounding_rect()),
@@ -111,7 +111,7 @@ fn create_new_mask_tiles_follow_the_side_bars_width() {
         columns.push(first_row);
         for (kind, label) in [("object", "Object"), ("background", "Background"), ("luminanceRange", "Luminance"), ("prompt", "Describe")] {
             let tile = widgets.iter().find(|(id, _)| id == &format!("maskNew:{kind}")).unwrap().1;
-            let text = texts.iter().find(|t| t.galley.job.text == label && t.pos.y < tile.bottom()).unwrap();
+            let text = texts.iter().find(|t| t.galley.job.text == label && t.pos.y >= tile.top() && t.pos.y < tile.bottom()).unwrap();
             assert!(!text.galley.elided, "{width}: {label} is cut");
         }
     }

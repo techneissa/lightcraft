@@ -95,6 +95,21 @@ pub struct MeshOut {
     pub presence: f32,
 }
 
+impl MeshOut {
+    /// One crop's numbers as the converted model gives them (`coreml.rs`): the 478 points' x, y, z, then the face
+    /// score before its sigmoid. `None` for another count.
+    pub(crate) fn from_row(row: &[f32]) -> Option<Self> {
+        let (points, rest) = row.split_at_checked(POINTS * 3)?;
+        let &[logit] = rest else { return None };
+        Some(Self { points: points.as_chunks::<3>().0.to_vec(), presence: presence(logit) })
+    }
+}
+
+/// The face score from the network's number for it.
+fn presence(logit: f32) -> f32 {
+    1.0 / (1.0 + (-logit).exp())
+}
+
 fn bad(what: impl std::fmt::Display) -> Error {
     Error::Model(format!("face mesh: {what}"))
 }
@@ -286,7 +301,7 @@ impl FaceMesh {
         Ok(pts
             .into_iter()
             .zip(pres)
-            .map(|(p, s)| MeshOut { points: p.as_chunks::<3>().0.to_vec(), presence: s.first().map_or(0.0, |&l| 1.0 / (1.0 + (-l).exp())) })
+            .map(|(p, s)| MeshOut { points: p.as_chunks::<3>().0.to_vec(), presence: s.first().map_or(0.0, |&l| presence(l)) })
             .collect())
     }
 }

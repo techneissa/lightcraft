@@ -53,7 +53,7 @@ fn the_parts_row_takes_several_with_command_click() {
     let parts = parts();
     let faces = [FaceChip { texture: None, name: "Face 1".into() }];
     let selected = [0usize];
-    let pk = Picker { id: "test", faces: &faces, face: None, parts: &parts, selected_parts: &selected, folded: false };
+    let pk = Picker { id: "test", faces: &faces, face: None, parts: &parts, selected_parts: &selected, folded: false, note: None };
     frame(&ctx, &pk, Vec::new(), Modifiers::NONE);
     let _ = frame(&ctx, &pk, Vec::new(), Modifiers::NONE);
     let hair = rect_of(&ctx, "test:part:hair").expect("the parts row lists its items");
@@ -72,7 +72,7 @@ fn the_parts_row_takes_several_with_command_click() {
 #[test]
 fn without_parts_there_is_no_parts_row() {
     let ctx = egui::Context::default();
-    let pk = Picker { id: "test", faces: &[], face: None, parts: &[], selected_parts: &[], folded: false };
+    let pk = Picker { id: "test", faces: &[], face: None, parts: &[], selected_parts: &[], folded: false, note: None };
     frame(&ctx, &pk, Vec::new(), Modifiers::NONE);
     let _ = frame(&ctx, &pk, Vec::new(), Modifiers::NONE);
     let ids: Vec<String> = crate::widgets::take_registry(&ctx).into_iter().map(|(k, _)| k).collect();
@@ -84,7 +84,7 @@ fn without_parts_there_is_no_parts_row() {
 #[test]
 fn the_card_moves_below_the_camera_preview_badge() {
     let ctx = egui::Context::default();
-    let pk = Picker { id: "test", faces: &[], face: None, parts: &[], selected_parts: &[], folded: false };
+    let pk = Picker { id: "test", faces: &[], face: None, parts: &[], selected_parts: &[], folded: false, note: None };
     let view = Rect::from_min_size(pos2(0.0, 0.0), vec2(800.0, 600.0));
     let badge = Rect::from_min_size(pos2(680.0, 8.0), vec2(112.0, 18.0));
     for with_badge in [false, true] {

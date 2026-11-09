@@ -22,7 +22,9 @@ pub(super) fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
                 app.toast(ui.ctx(), e);
             }
         });
-        if cfg!(target_os = "macos") && !app.session.learn.coreml_installed() {
+        let installed =
+            if *model == lightcraft_learn::ENCODER_ID { app.session.learn.coreml_installed() } else { app.session.parsing.coreml_installed(model) };
+        if cfg!(target_os = "macos") && !installed {
             download_row(app, ui, t, model);
         }
     }

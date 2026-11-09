@@ -38,7 +38,7 @@ fn the_amount_is_set_and_clamped() {
 #[test]
 fn whole_people_start_decontaminated_and_their_parts_not() {
     use lightcraft_develop::MaskShape;
-    let people = |parts: &[&str]| MaskShape::People { person: 0, parts: parts.iter().map(|p| p.to_string()).collect() };
+    let people = |parts: &[&str]| MaskShape::people(0, parts.iter().map(|p| p.to_string()).collect());
     assert_eq!(crate::cmd::decontaminate_default("people", &people(&["Entire Person"])), 100.0);
     assert_eq!(crate::cmd::decontaminate_default("people", &people(&[])), 100.0);
     assert_eq!(crate::cmd::decontaminate_default("people", &people(&["hair"])), 0.0);

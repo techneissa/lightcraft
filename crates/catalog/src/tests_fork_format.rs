@@ -292,7 +292,7 @@ fn a_residual_look_is_fork_format_3() {
 /// fork 3 build refuses it instead of dropping the amount; a fork 3 library opens and is upgraded with nothing lost.
 #[test]
 fn a_decontaminated_mask_is_fork_format_4() {
-    assert_eq!(VERSION, 4);
+    const { assert!(VERSION >= 4) };
     let mut c = Catalog::new();
     let mut d = DevelopSettings::default();
     let shape = MaskShape::background();
@@ -307,9 +307,48 @@ fn a_decontaminated_mask_is_fork_format_4() {
     m.set(SNAPSHOT, snapshot(FORK_FORMAT, 3, 1, &c.to_snapshot()));
     let (_, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
     assert_eq!((r.upgraded_from, loaded.to_snapshot()), (Some(3), c.to_snapshot()));
-    assert_eq!(header(&m), (FORK_FORMAT.to_string(), 4));
+    assert_eq!(header(&m), (FORK_FORMAT.to_string(), u64::from(VERSION)));
     // and the upgraded library reads back the amount
     let (_, again, r) = Journal::open(Box::new(m.clone())).unwrap();
     assert_eq!(r.upgraded_from, None);
     assert_eq!(again.photo(id).unwrap().develop.masks[0].decontaminate, 100.0);
+}
+
+/// Fork 5 (#123): a Select People mask (its face, its grids and its Edge) is saved and read back whole, written as fork 5
+/// so a fork 4 build refuses it instead of reading it as the old People shape; a fork 4 library opens and is upgraded
+/// with nothing lost. Its grids go in the shared table, once for both History steps.
+#[test]
+fn a_select_people_mask_is_fork_format_5() {
+    assert_eq!(VERSION, 5);
+    let seg = SegMask::from_logits(8, &[3.0; 64]).made_by("people:segformer");
+    let fine = SegMask::from_logits_in(8, &[-3.0; 64], [0.1, 0.1, 0.3, 0.3]).made_by("people:segformer");
+    let face = lightcraft_develop::retouch::FaceKey {
+        person: Some("ann".into()),
+        bounds: lightcraft_develop::retouch::NormRect::new(0.1, 0.1, 0.3, 0.3),
+        frame: lightcraft_develop::retouch::KeyFrame::Photo,
+    };
+    let shape =
+        MaskShape::People { person: 0, parts: vec!["hair".into()], face: Some(face), seg: Some(seg.clone()), detail: vec![fine.clone()], edge: 25.0 };
+    let mut d = DevelopSettings::default();
+    d.masks.push(Mask {
+        id: 1,
+        components: vec![MaskComponent { name: None, op: MaskOp::Add, invert: false, shape: shape.clone() }],
+        ..Default::default()
+    });
+    let mut c = Catalog::new();
+    let id = photo(&mut c, d, None);
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snapshot(FORK_FORMAT, 4, 1, &c.to_snapshot()));
+    let (mut j, loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.upgraded_from, loaded.to_snapshot()), (Some(4), c.to_snapshot()));
+    assert_eq!(header(&m), (FORK_FORMAT.to_string(), 5));
+    j.snapshot(&loaded).unwrap();
+    drop(j);
+    let body = String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap();
+    assert_eq!(body.match_indices(seg.data.as_str()).count(), 1, "the grid once, in the shared table");
+    let (_, again, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, None);
+    let p = again.photo(id).unwrap();
+    assert_eq!(p.develop.masks[0].components[0].shape, shape);
+    assert!(p.history.iter().all(|h| h.settings.masks[0].components[0].shape == shape), "every History step");
 }

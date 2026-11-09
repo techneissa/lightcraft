@@ -48,6 +48,11 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     /// The part masks it reads: the face search keeps only the parts some feature lists, so a mask no feature
     /// reads takes no memory. By default the parts of a face and its skin ([`FACE_PARTS`]).
     const PARTS: &'static [Part] = FACE_PARTS;
+    /// How far past its face's box and the areas of its [`Feature::PARTS`] masks the feature reads pixels to work
+    /// out any pixel, as a fraction of the face's size ([`FaceCtx::size`]). A zoomed render that touches a face
+    /// renders all of that around it and cuts back (`crates/pipeline/src/retouch_step.rs`), so zoom never changes
+    /// a result. By default [`DEFAULT_REACH`].
+    const REACH: f64 = DEFAULT_REACH;
 
     /// Whether these settings leave the picture alone. By default: every slider at its default.
     fn is_off(&self) -> bool {
@@ -62,6 +67,9 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     /// feature needs is left alone.
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>);
 }
+
+/// [`Feature::REACH`] of a feature that does not set its own: half the face's size past its box and masks.
+pub const DEFAULT_REACH: f64 = 0.5;
 
 /// The parts [`Feature::PARTS`] lists by default: a face, its skin, and what is worn on the face (glasses are
 /// [`Part::Others`]); not the clothes (recoloured through local masks, issue #83) nor the whole person.

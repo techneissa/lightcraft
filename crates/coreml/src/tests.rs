@@ -29,6 +29,25 @@ fn half_floats_read_right() {
     assert_eq!(f16_to_f32(0x0001), 2f32.powi(-24));
     assert_eq!(f16_to_f32(0x7c00), f32::INFINITY);
     assert!(f16_to_f32(0x7e00).is_nan());
+    assert_eq!(f16_to_f32(0x8001), -(2f32.powi(-24)));
+    assert_eq!(f16_to_f32(0x8000).to_bits(), (-0.0f32).to_bits());
+    assert_eq!(f16_to_f32(0x7bff), 65504.0);
+    assert_eq!(f16_to_f32(0x0400), 2f32.powi(-14));
+}
+
+/// Rows read whole equal the numbers read one by one, padded or not, in every rank.
+#[test]
+fn rows_read_whole_equal_numbers_read_one_by_one() {
+    // 2 x 2 x 3, rows padded to 4: the last dimension dense
+    let values: Vec<f32> = (0..16).map(|v| v as f32).collect();
+    let stored: Vec<u8> = values.iter().flat_map(|v| v.to_ne_bytes()).collect();
+    let got = gather(&[2, 2, 3], &[8, 4, 1], Elem::F32, &stored).unwrap();
+    assert_eq!(got, vec![0., 1., 2., 4., 5., 6., 8., 9., 10., 12., 13., 14.]);
+    // the same tensor stored transposed (last stride not 1) is read number by number
+    let got = gather(&[3, 2], &[1, 3], Elem::F32, &stored).unwrap();
+    assert_eq!(got, vec![0., 3., 1., 4., 2., 5.]);
+    // a padded last row that ends past the buffer is an error
+    assert!(matches!(gather(&[2, 3], &[7, 1], Elem::F32, &stored[..36]), Err(Error::Output(_))));
 }
 
 #[test]
@@ -119,6 +138,27 @@ fn a_new_manifest_is_a_new_cache_key() {
     assert_ne!(package_key(&package).unwrap(), first);
     assert!(matches!(package_key(&dir.join("none.mlpackage")), Err(Error::Io(_))));
     assert_eq!(key_path(&dir.join("m.mlmodelc")), dir.join("m.mlmodelc.key"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A model or weights file replaced inside a package (the manifest unchanged) is a new key: it compiled from the old
+/// copy before.
+#[test]
+fn a_new_model_or_weights_file_is_a_new_cache_key() {
+    let dir = scratch("key-files");
+    let package = dir.join("m.mlpackage");
+    let data = package.join("Data/com.apple.CoreML");
+    std::fs::create_dir_all(data.join("weights")).unwrap();
+    std::fs::write(package.join("Manifest.json"), br#"{"itemInfoEntries": {"A": {}}}"#).unwrap();
+    std::fs::write(data.join("model.mlmodel"), b"model one").unwrap();
+    std::fs::write(data.join("weights/weight.bin"), b"weights one").unwrap();
+    let first = package_key(&package).unwrap();
+    assert_eq!(package_key(&package).unwrap(), first);
+    std::fs::write(data.join("weights/weight.bin"), b"weights two, longer").unwrap();
+    let second = package_key(&package).unwrap();
+    assert_ne!(second, first);
+    std::fs::write(data.join("model.mlmodel"), b"model two, longer").unwrap();
+    assert_ne!(package_key(&package).unwrap(), second);
     let _ = std::fs::remove_dir_all(&dir);
 }
 

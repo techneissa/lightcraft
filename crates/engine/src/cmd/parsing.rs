@@ -137,25 +137,35 @@ impl Prepare {
         let (w, h) = (image.width, image.height);
         let rgb: Vec<u8> = image.data.iter().flat_map(|px| [px[0], px[1], px[2]]).collect();
         let img = RgbImage::new(w, h, rgb).map_err(|e| e.to_string())?;
-        let Some(detector) = self.detector else { return Ok((img, Vec::new())) };
-        let faces = detector.detect(&img.data, w, h, &lightcraft_faces::yunet::Options::default()).map_err(|e| e.to_string())?;
-        let regions = self.regions;
-        let hints = faces
-            .into_iter()
-            .map(|f| {
-                let rect = NormRect::new(f.x0, f.y0, f.x1, f.y1);
-                let person_id = regions
-                    .iter()
-                    .filter(|r| r.kind == lightcraft_meta::RegionKind::Face && r.name.is_some())
-                    .map(|r| (iou(&r.rect, &rect), r))
-                    .filter(|(o, _)| *o >= SAME_FACE_IOU)
-                    .max_by(|a, b| a.0.total_cmp(&b.0))
-                    .and_then(|(_, r)| r.name.clone());
-                FaceHint { rect, landmarks: Some(f.landmarks), score: f.score, person_id }
-            })
-            .collect();
+        let hints = hints_for(self.detector.as_deref(), &img, &self.regions)?;
         Ok((img, hints))
     }
+}
+
+/// The faces of `img` as hints for a parse: `detector`'s (none without one), each named after the face region of
+/// `regions` it matches (Select People prepares its parses off the main thread with it, `fork/select-people.md`).
+pub(crate) fn hints_for(
+    detector: Option<&lightcraft_faces::yunet::Detector>,
+    img: &RgbImage,
+    regions: &[lightcraft_meta::Region],
+) -> std::result::Result<Vec<FaceHint>, String> {
+    let Some(detector) = detector else { return Ok(Vec::new()) };
+    let faces = detector.detect(&img.data, img.width, img.height, &lightcraft_faces::yunet::Options::default()).map_err(|e| e.to_string())?;
+    let hints = faces
+        .into_iter()
+        .map(|f| {
+            let rect = NormRect::new(f.x0, f.y0, f.x1, f.y1);
+            let person_id = regions
+                .iter()
+                .filter(|r| r.kind == lightcraft_meta::RegionKind::Face && r.name.is_some())
+                .map(|r| (iou(&r.rect, &rect), r))
+                .filter(|(o, _)| *o >= SAME_FACE_IOU)
+                .max_by(|a, b| a.0.total_cmp(&b.0))
+                .and_then(|(_, r)| r.name.clone());
+            FaceHint { rect, landmarks: Some(f.landmarks), score: f.score, person_id }
+        })
+        .collect();
+    Ok(hints)
 }
 
 /// Parse photo `id` (waiting for the run with `wait`).
