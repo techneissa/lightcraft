@@ -14,6 +14,19 @@ use crate::widgets::{icon_button, icon_button_sense};
 const BUTTON_H: f32 = 40.0;
 /// Space between tool buttons.
 const GAP: f32 = 6.0;
+/// The shortest a button gets in a short strip.
+const MIN_BUTTON_H: f32 = 24.0;
+
+/// The button height and gap that fit `top` icons (and the About button, after a divider) above the bottom pair in a
+/// strip `avail` tall: the usual ones when they fit, else both shrunk alike.
+fn fit(avail: f32, top: usize) -> (f32, f32) {
+    let dividers = DIVIDERS_BEFORE.iter().filter(|i| **i < top).count() + 1;
+    let (buttons, items) = (top + 1 + BOTTOM_PLACES, top + 1 + dividers + BOTTOM_PLACES);
+    // (one gap between every two items, the space between the groups included)
+    let need = buttons as f32 * BUTTON_H + dividers as f32 + items.saturating_sub(1) as f32 * GAP;
+    let k = if avail.is_finite() && need > 0.0 { ((avail - dividers as f32) / (need - dividers as f32)).clamp(0.0, 1.0) } else { 1.0 };
+    ((BUTTON_H * k).max(MIN_BUTTON_H), GAP * k)
+}
 
 pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let t = Tokens::get(ui.ctx());
@@ -32,9 +45,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             let order = app.ui.tool_strip.tools().to_vec();
             let (top, bottom) = order.split_at(order.len().saturating_sub(BOTTOM_PLACES));
             let mut placed: Placed = Vec::with_capacity(order.len());
+            // (a short window: shorter buttons, so the top group never runs into the bottom pair)
+            let (button_h, gap) = fit(ui.max_rect().height(), top.len());
+            let sz = vec2(t.strip_w, button_h);
             ui.vertical_centered(|ui| {
-                ui.spacing_mut().item_spacing.y = GAP;
-                let sz = vec2(t.strip_w, BUTTON_H);
+                ui.spacing_mut().item_spacing.y = gap;
                 for (i, tool) in top.iter().enumerate() {
                     // the dividers stay in their places while the icons move
                     if DIVIDERS_BEFORE.contains(&i) {
@@ -51,12 +66,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             // the first starts at the top one
             let bottom_edge = ui.max_rect().bottom();
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(egui::Rect::from_min_max(
-                egui::pos2(ui.max_rect().left(), bottom_edge - (2.0 * BUTTON_H + GAP)),
+                egui::pos2(ui.max_rect().left(), bottom_edge - (2.0 * button_h + gap)),
                 ui.max_rect().right_bottom(),
             )));
             child.vertical_centered(|ui| {
-                ui.spacing_mut().item_spacing.y = GAP;
-                let sz = vec2(t.strip_w, BUTTON_H);
+                ui.spacing_mut().item_spacing.y = gap;
                 for tool in bottom {
                     placed.push((*tool, tool_button(app, ui, *tool, sz, has_photo)));
                 }
@@ -129,5 +143,25 @@ mod tests {
         let (top, bottom) = (presets.top(), 700.0 - info.bottom());
         assert!((top - bottom).abs() < 0.5, "Presets starts {top} below the top, Info ends {bottom} above the bottom");
         assert_eq!(info.top() - keywords.bottom(), GAP, "the bottom buttons are spaced like the top ones");
+    }
+
+    /// Eleven icons need about 575 pt: in a shorter strip (the window's 560 pt minimum leaves less) the buttons get
+    /// shorter, so the top group never runs into the two icons pinned to the bottom, and every icon stays inside.
+    #[test]
+    fn a_short_strip_keeps_the_top_group_clear_of_the_bottom_icons() {
+        for h in [440.0, 480.0, 520.0, 560.0, 600.0, 700.0] {
+            let mut app = LightcraftApp::new(lightcraft_engine::Session::new(), Services::default());
+            let mut view = HeadlessView::new();
+            let mut widgets = vec![];
+            for frame in 0..3 {
+                let raw = HeadlessView::raw_input(vec2(300.0, h), 1.0, frame as f64 / 60.0, vec![]);
+                view.run(raw, |ui| show(&mut app, ui));
+                widgets = crate::widgets::take_registry(&view.ctx);
+            }
+            let rect = |id: &str| widgets.iter().find(|(w, _)| w == id).unwrap_or_else(|| panic!("{id} not registered: {widgets:?}")).1;
+            let (about, keywords, info) = (rect("icon:more"), rect("icon:keywords"), rect("icon:info"));
+            assert!(about.bottom() <= keywords.top() - 1.0, "at {h} pt About ends at {} and Keywords starts at {}", about.bottom(), keywords.top());
+            assert!(info.bottom() <= h && rect("icon:presets").top() >= 0.0, "at {h} pt every icon is inside");
+        }
     }
 }
