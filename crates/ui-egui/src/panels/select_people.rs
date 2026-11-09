@@ -16,7 +16,7 @@ use std::sync::Arc;
 use egui::Rect;
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::MaskShape;
-use lightcraft_engine::select_people::{Parsed, Pick, current, person_name};
+use lightcraft_engine::select_people::{Parsed, PeopleState, Pick, current, person_name};
 use serde_json::{Value, json};
 
 use crate::LightcraftApp;
@@ -207,6 +207,29 @@ fn thumbs(ctx: &egui::Context, photo: PhotoId, parsed: &Arc<Parsed>) -> Arc<Vec<
     textures
 }
 
+/// The face chip the picker shows picked and the line under the faces, for photo people `st` and the selected Select
+/// People part's (person, everyone's) when one is selected (else the face picked last on the photo, `remembered`).
+/// A saved face this photo's people don't have picks no chip (an index past them) and says so.
+fn face_and_note(st: &PeopleState, now: Option<(Option<usize>, bool)>, remembered: Option<usize>) -> (Option<usize>, Option<String>) {
+    let people = st.ready.as_ref().map(|p| p.parsing.people.len());
+    let missing = people.is_some() && matches!(now, Some((None, false)));
+    let note = match (people, &st.error) {
+        _ if st.busy => Some("Finding people…".to_string()),
+        (Some(0), _) => Some("No people found".into()),
+        (Some(_), _) if missing => Some("Face not in this photo".into()),
+        (None, Some(e)) => Some(e.clone()),
+        (None, None) => Some("Finding people…".into()),
+        _ => None,
+    };
+    let n = people.unwrap_or(0);
+    let face = match now {
+        _ if missing => Some(n),
+        Some((person, _)) => person.filter(|i| *i < n),
+        None => remembered.filter(|i| *i < n),
+    };
+    (face, note)
+}
+
 /// Draw the picker over `canvas` (the image view) for `photo`, and make or change masks from its clicks.
 pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, photo: PhotoId) {
     let ctx = ui.ctx().clone();
@@ -252,21 +275,10 @@ pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, 
         .unwrap_or_default();
     let items: Vec<PartItem> =
         if ready.is_some() { Pick::ALL.iter().map(|p| PartItem { key: p.id().into(), label: p.label().into() }).collect() } else { Vec::new() };
-    // (a saved face this photo's people don't have: no chip is picked, and the note says so)
-    let (picks, face, missing) = match part.as_ref().and_then(|(_, shape)| current(shape, ready.as_deref())) {
-        Some((picks, person, everyone)) => (picks, person, ready.is_some() && !everyone && person.is_none()),
-        None => (Vec::new(), ctx.data(|d| d.get_temp::<usize>(face_id(photo))), false),
-    };
-    let selected: Vec<usize> = picks.iter().filter_map(|p| Pick::ALL.iter().position(|q| q == p)).collect();
-    let note = match (&ready, &st.error) {
-        _ if st.busy => Some("Finding people…".to_string()),
-        (Some(p), _) if p.parsing.people.is_empty() => Some("No people found".into()),
-        (Some(_), _) if missing => Some("Face not in this photo".into()),
-        (None, Some(e)) => Some(e.clone()),
-        (None, None) => Some("Finding people…".into()),
-        _ => None,
-    };
-    let face = if missing { Some(chips.len()) } else { face.filter(|i| *i < chips.len()) };
+    let now = part.as_ref().and_then(|(_, shape)| current(shape, ready.as_deref()));
+    let selected: Vec<usize> = now.iter().flat_map(|(picks, ..)| picks).filter_map(|p| Pick::ALL.iter().position(|q| q == p)).collect();
+    let remembered = ctx.data(|d| d.get_temp::<usize>(face_id(photo)));
+    let (face, note) = face_and_note(&st, now.as_ref().map(|(_, person, everyone)| (*person, *everyone)), remembered);
     let pk = Picker {
         id: "selectPeople",
         faces: &chips,
@@ -312,3 +324,5 @@ pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, 
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_round;

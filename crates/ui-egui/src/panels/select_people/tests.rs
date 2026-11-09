@@ -14,9 +14,9 @@ use crate::headless::Headless;
 use crate::state::{RightPanel, ToolOverlay};
 use crate::{LightcraftApp, Services};
 
-const T: Duration = Duration::from_secs(20);
+pub(super) const T: Duration = Duration::from_secs(20);
 
-fn person(x: f32, name: Option<&str>) -> Person {
+pub(super) fn person(x: f32, name: Option<&str>) -> Person {
     let mut q = Person {
         face: Some(NormRect::new(x + 0.05, 0.1, x + 0.2, 0.35)),
         face_score: 0.9,
@@ -32,7 +32,7 @@ fn person(x: f32, name: Option<&str>) -> Person {
     q
 }
 
-fn app(people: Vec<Person>) -> (Headless, std::path::PathBuf) {
+pub(super) fn app(people: Vec<Person>) -> (Headless, std::path::PathBuf) {
     let dir = std::env::temp_dir().join(format!("lc-ui-select-people-{}-{}", people.len(), std::process::id()));
     let _ = std::fs::create_dir_all(&dir);
     let session = lightcraft_engine::Session::with_demo();
@@ -48,24 +48,24 @@ fn app(people: Vec<Person>) -> (Headless, std::path::PathBuf) {
     (h, dir)
 }
 
-fn rect_of(h: &mut Headless, id: &str) -> Option<[f64; 4]> {
+pub(super) fn rect_of(h: &mut Headless, id: &str) -> Option<[f64; 4]> {
     let r = h.request("ui.widgets", json!({"filter": id}), T);
     r["result"].as_array().into_iter().flatten().find(|w| w["id"] == id).and_then(|w| serde_json::from_value(w["rect"].clone()).ok())
 }
 
-fn click(h: &mut Headless, id: &str, cmd: bool) {
+pub(super) fn click(h: &mut Headless, id: &str, cmd: bool) {
     let r = h.request("ui.clickWidget", json!({"id": id, "cmd": cmd}), T);
     assert_eq!(r["ok"], true, "click {id}: {r}");
     h.step();
 }
 
-fn masks(h: &Headless) -> Vec<lightcraft_develop::Mask> {
+pub(super) fn masks(h: &Headless) -> Vec<lightcraft_develop::Mask> {
     let id = h.app.session.active().unwrap();
     h.app.session.develop_of(id).map(|d| d.masks.clone()).unwrap_or_default()
 }
 
 /// The selected mask's Select People part: (its part ids, whether it has a face).
-fn part(h: &Headless) -> (Vec<String>, bool) {
+pub(super) fn part(h: &Headless) -> (Vec<String>, bool) {
     let mid = h.app.session.active_mask.unwrap();
     let m = masks(h).into_iter().find(|m| m.id == mid).unwrap();
     match &m.components[0].shape {
@@ -75,7 +75,7 @@ fn part(h: &Headless) -> (Vec<String>, bool) {
 }
 
 /// Step until `done` (a guard against a hang only).
-fn until(h: &mut Headless, what: &str, done: impl Fn(&Headless) -> bool) {
+pub(super) fn until(h: &mut Headless, what: &str, done: impl Fn(&Headless) -> bool) {
     let end = Instant::now() + Duration::from_secs(60);
     while !done(h) {
         assert!(Instant::now() < end, "never: {what}");
