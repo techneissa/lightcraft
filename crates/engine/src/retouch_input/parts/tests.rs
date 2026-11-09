@@ -13,9 +13,10 @@ use lightcraft_catalog::PhotoId;
 use lightcraft_develop::retouch::Part as RetouchPart;
 use lightcraft_geom::Orientation;
 use lightcraft_parsing::{Landmark, NormRect, Parsing, Part, Person, Plane};
-use lightcraft_raster::Rgba8;
+use lightcraft_raster::{Rgb32f, Rgba8};
 use serde_json::json;
 
+use super::oriented;
 use crate::Session;
 use crate::people_parsing::Runner;
 
@@ -536,4 +537,40 @@ fn the_parse_finds_each_faces_strands_once() {
     bare.parts.clear();
     let found = super::found(&Parsing { people: vec![bare], ..parse_of(&[]) }, &[], &img, Orientation::Normal, &[]);
     assert_eq!(found.input.faces[0].strands, None, "no hair or skin mask, no search");
+}
+
+/// Stray Hair's strands are searched on crops of the original when the finder has them: a strand a pixel wide at the
+/// original's size is found there, kept in the photo's frame (also turned), with the original's pixels as the picture
+/// they are measured in; and a photo whose shape is not the parse picture's is searched on the parse picture.
+#[test]
+fn the_strands_are_searched_on_crops_of_the_original() {
+    use super::{Crops, found_with};
+    use lightcraft_color::transfer::decode_srgb8;
+    let (fw, fh) = (1600usize, 1200usize);
+    let on_strand = |x: usize, y: usize| (0.4..0.6).contains(&((x as f32 + 0.5) / fw as f32)) && y == (0.35 * fh as f32) as usize;
+    let original = Rgb32f::from_fn(fw, fh, |x, y| {
+        let p: [u8; 3] = if on_strand(x, y) { [40, 30, 25] } else { [200, 150, 130] };
+        [decode_srgb8(p[0]), decode_srgb8(p[1]), decode_srgb8(p[2])]
+    });
+    // the parse picture: the same photo at a quarter of the size, flat (the strand is gone)
+    let flat = lightcraft_parsing::RgbImage { width: 400, height: 300, data: [200u8, 150, 130].repeat(400 * 300) };
+    let parsing = parse_of(&[r(0.3, 0.15, 0.7, 0.8)]);
+    for orient in [Orientation::Normal, Orientation::Rotate90] {
+        let turned = oriented(&original, orient);
+        let asked = std::sync::Mutex::new(Vec::new());
+        let cut = |rect: [usize; 4]| {
+            asked.lock().unwrap().push(rect);
+            Some(Rgb32f::from_fn(rect[2] - rect[0], rect[3] - rect[1], |x, y| turned.get(rect[0] + x, rect[1] + y)))
+        };
+        let crops = Crops { size: (turned.width, turned.height), cut: &cut };
+        let found = found_with(&parsing, &[], &flat, orient, &[], Some(crops));
+        let strands = found.input.faces[0].strands.as_ref().expect("searched");
+        assert!(strands.count >= 1 && !strands.is_empty(), "{orient:?}: the strand is found on the original's pixels");
+        assert_eq!(strands.picture, (turned.width, turned.height), "{orient:?}: measured in the original's pixels");
+        assert!(!asked.lock().unwrap().is_empty());
+        // a photo of another shape than the parse picture is not cut: the parse picture is searched (flat: nothing)
+        let wrong = Crops { size: (turned.width, turned.height * 2), cut: &cut };
+        let found = found_with(&parsing, &[], &flat, orient, &[], Some(wrong));
+        assert!(found.input.faces[0].strands.as_ref().is_some_and(|s| s.is_empty()), "{orient:?}");
+    }
 }

@@ -529,6 +529,8 @@ impl Session {
                     choice,
                     orient: p.develop.orientation,
                     regions,
+                    // (Stray Hair's full-size crops of the original, `parts/crop.rs`: off for now)
+                    cropper: if parts::FULL_SIZE_CROPS { self.retouch_cropper(p.id).map(Box::new) } else { None },
                 })
             }
         })
