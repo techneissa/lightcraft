@@ -412,11 +412,20 @@ fn layer(
 /// reaches are drawn, LaMa and Classic alike, and the white balance runs only when the image the Classic spots are
 /// drawn on changed. Returns what to keep for the next render (`None` without spots).
 pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, kept: Option<&CpuKept>) -> Option<Arc<CpuKept>> {
+    let kept = lin_cpu_pre_retouch(img, info, p, kept);
+    // (`crate::lin_cpu`'s order: portrait retouching after red eye, fork `fork/retouch-foundation.md`)
+    crate::retouch_step::apply(img, info, p);
+    kept
+}
+
+/// [`lin_cpu`] up to the portrait retouching ([`crate::lin_cpu_pre_retouch`]).
+pub fn lin_cpu_pre_retouch(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, kept: Option<&CpuKept>) -> Option<Arc<CpuKept>> {
     let s = &*p.settings;
     if s.spots.is_empty() {
-        crate::lin_cpu(img, info, p);
+        crate::lin_cpu_pre_retouch(img, info, p);
         return None;
     }
+    crate::retouch_step::note_pre_retouch_run();
     let (w, h, ppl) = (img.width, img.height, p.px_per_long);
     // 1. LaMa spots, on the resampled source: each asks its fill (and the fill's cache) only when it is drawn again
     let lnew: Vec<Option<Drawn>> = s
@@ -459,8 +468,6 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, kept: Option<&
         true
     });
     crate::redeye::apply(img, &p.eyes);
-    // (`crate::lin_cpu`'s order: portrait retouching after red eye, fork `fork/retouch-foundation.md`)
-    crate::retouch_step::apply(img, info, p);
     Some(Arc::new(CpuKept { learned, classic }))
 }
 

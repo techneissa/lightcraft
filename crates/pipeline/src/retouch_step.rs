@@ -18,6 +18,20 @@ use lightcraft_raster::Rgb32f;
 
 use crate::{PixelWindow, Plan, SourceInfo};
 
+thread_local! {
+    static PRE_RETOUCH_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// How many times this thread made the image before the retouch step (white balance, defringe, spots, red eye) on
+/// the CPU, by either renderer: a test counts what a Portrait slider tick redoes with it.
+pub fn pre_retouch_runs() -> usize {
+    PRE_RETOUCH_RUNS.with(std::cell::Cell::get)
+}
+
+pub(crate) fn note_pre_retouch_run() {
+    PRE_RETOUCH_RUNS.with(|c| c.set(c.get().wrapping_add(1)));
+}
+
 /// Whether the step changes anything for `s`.
 ///
 /// Face Reshape is not part of the step (it is a warp in the frame's geometry, [`crate::reshape_step`]): a block with
@@ -145,9 +159,11 @@ pub fn apply(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     let o = s.orientation;
     let view: Box<dyn View> =
         if input.on_photo { Box::new(PhotoView::new(&p.frame, p.w, p.h, o)) } else { Box::new(FrameView::new(&p.frame, p.w, p.h, o)) };
-    for stage in [Stage::Retouch, Stage::Background] {
-        lightcraft_develop::retouch::run::apply(img, &s.retouch, input, view.as_ref(), stage);
-    }
+    crate::timed("retouch", || {
+        for stage in [Stage::Retouch, Stage::Background] {
+            lightcraft_develop::retouch::run::apply(img, &s.retouch, input, view.as_ref(), stage);
+        }
+    });
 }
 
 /// The window a zoomed render of `win` must render so retouching gives the same pixels there as the whole frame
@@ -175,7 +191,12 @@ pub fn window_for_reads(
         .faces
         .iter()
         .take(MAX_FACES)
-        .filter_map(|face| read_box(face, &reads, view.as_ref()))
+        .filter_map(|face| match read_box(face, &reads, view.as_ref()) {
+            ReadBox::Skipped => None,
+            ReadBox::At(b) => Some(b),
+            // (part of its reads maps nowhere: all of the frame, to be sure)
+            ReadBox::Unsure => Some([0.0, 0.0, fw, fh]),
+        })
         .map(|[rx0, ry0, rx1, ry1]| [rx0.max(0.0), ry0.max(0.0), rx1.min(fw), ry1.min(fh)])
         .collect();
     let [mut x0, mut y0, mut x1, mut y1] = [win.x as f64, win.y as f64, (win.x + win.w) as f64, (win.y + win.h) as f64];
@@ -193,44 +214,115 @@ pub fn window_for_reads(
     PixelWindow { x, y, w: r - x, h: b - y }.clamped(full_w, full_h)
 }
 
+/// Whether the step may change any pixel of a photo with `info`'s faces: it is on, and there is a face to retouch or a
+/// feature on that retouches more than faces. Without faces, Portrait settings leave everything as it was (the noise
+/// measurement included, [`crate::colour_noise`]).
+pub fn touches(s: &DevelopSettings, info: &SourceInfo) -> bool {
+    active(s) && (info.retouch.as_ref().is_some_and(|i| !i.faces.is_empty()) || s.retouch.global.writes_outside_faces())
+}
+
+/// Where the step may change pixels of the plan's `p.w × p.h` render: one `[x0, y0, x1, y1)` box per face, what
+/// retouching reads for it ([`window_for_reads`]'s boxes: every face feature writes inside them,
+/// [`lightcraft_develop::retouch::Feature::writes_near_face`]). Empty while the step is off; `None` when it may change
+/// any pixel: a feature on writes outside its face (Background, strokes), or part of a face's reads maps nowhere.
+pub fn write_boxes(info: &SourceInfo, p: &Plan<'_>) -> Option<Vec<crate::spots_keep::Rect>> {
+    let s = &*p.settings;
+    if !active(s) {
+        return Some(Vec::new());
+    }
+    // Guard: every field of the block, of a face's own settings and of what they read is named here (no `..`), so a
+    // new one stops the build until this function says whether its writes stay in the boxes. Refine strokes (#151)
+    // add `refine` and `Reads::add`: a block with any stroke returns `None` (`fork/perf-portrait-draft.md`).
+    let lightcraft_develop::retouch::Retouch { global, faces } = &s.retouch;
+    if global.writes_outside_faces()
+        || faces.iter().any(|lightcraft_develop::retouch::FaceOverride { face: _, settings }| settings.writes_outside_faces())
+    {
+        return None;
+    }
+    let (Some(input), Some(reads)) = (info.retouch.as_deref(), s.retouch.reads()) else { return Some(Vec::new()) };
+    let Reads { reach: _, parts: _ } = &reads;
+    let o = s.orientation;
+    let view: Box<dyn View> =
+        if input.on_photo { Box::new(PhotoView::new(&p.frame, p.w, p.h, o)) } else { Box::new(FrameView::new(&p.frame, p.w, p.h, o)) };
+    let (w, h) = (p.w as f64, p.h as f64);
+    let mut out = Vec::new();
+    for face in input.faces.iter().take(MAX_FACES) {
+        let [x0, y0, x1, y1] = match read_box(face, &reads, view.as_ref()) {
+            ReadBox::Skipped => continue,
+            ReadBox::At(b) => b,
+            ReadBox::Unsure => return None,
+        };
+        let (x0, y0, x1, y1) = (x0.floor().clamp(0.0, w), y0.floor().clamp(0.0, h), x1.ceil().clamp(0.0, w), y1.ceil().clamp(0.0, h));
+        if x1 > x0 && y1 > y0 {
+            out.push([x0 as usize, y0 as usize, x1 as usize, y1 as usize]);
+        }
+    }
+    Some(out)
+}
+
 /// Pixels of a face's box and masks' areas are followed along each edge at this many points (a lens or transform
 /// warp bends them).
 const EDGE_STEPS: usize = 16;
 
-/// What retouching reads for `face`, in `view`'s pixels: `[x0, y0, x1, y1]`, unclamped; `None` for a face that is
-/// not a box or maps nowhere.
-fn read_box(face: &Face, reads: &Reads, view: &dyn View) -> Option<[f64; 4]> {
+/// What retouching reads for one face, in a view's pixels.
+enum ReadBox {
+    /// Nothing: the step skips the face (its box is not a box or a corner maps nowhere, as `Scene` decides).
+    Skipped,
+    /// `[x0, y0, x1, y1]`, unclamped.
+    At([f64; 4]),
+    /// Part of what it reads maps nowhere (a face partly off a warped frame): the box is not known.
+    Unsure,
+}
+
+/// What retouching reads for `face` in `view`'s pixels: its box, the areas of the masks `reads` names and of its
+/// strands (Stray Hair repairs them), grown by `reads.reach` times the face's size.
+fn read_box(face: &Face, reads: &Reads, view: &dyn View) -> ReadBox {
+    let fb = &face.bounds;
+    let corners = [(fb.x0, fb.y0), (fb.x1, fb.y0), (fb.x1, fb.y1), (fb.x0, fb.y1)];
+    if !fb.is_valid() || corners.iter().any(|(x, y)| view.to_px(*x, *y).is_none()) {
+        return ReadBox::Skipped;
+    }
     let mut b = [f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY];
-    add_rect(&mut b, &face.bounds, view);
+    if !add_rect(&mut b, fb, view) {
+        return ReadBox::Unsure;
+    }
     // the face's size, as the step sees it: the longer side of its box's bounding box
     let size = (b[2] - b[0]).max(b[3] - b[1]);
     if !(size.is_finite() && size > 0.0) {
-        return None;
+        return ReadBox::Skipped;
     }
-    for p in &reads.parts {
-        if let Some(m) = face.mask(*p) {
-            add_rect(&mut b, &m.area, view);
+    let masks = reads.parts.iter().filter_map(|p| face.mask(*p)).map(|m| &m.area);
+    let strands = face.strands.as_ref().map(|s| &s.area);
+    for area in masks.chain(strands) {
+        if !add_rect(&mut b, area, view) {
+            return ReadBox::Unsure;
         }
     }
     // (and a pixel for rounding)
     let grow = reads.reach * size + 2.0;
-    grow.is_finite().then_some([b[0] - grow, b[1] - grow, b[2] + grow, b[3] + grow])
+    if !grow.is_finite() {
+        return ReadBox::Unsure;
+    }
+    ReadBox::At([b[0] - grow, b[1] - grow, b[2] + grow, b[3] + grow])
 }
 
-/// Grow the pixel box `b` to hold normalised rectangle `r` as `view` maps it.
-fn add_rect(b: &mut [f64; 4], r: &NormRect, view: &dyn View) {
+/// Grow the pixel box `b` to hold normalised rectangle `r` as `view` maps it; `false` when a point of its edge maps
+/// nowhere (an empty or malformed rectangle adds nothing).
+fn add_rect(b: &mut [f64; 4], r: &NormRect, view: &dyn View) -> bool {
     if !r.is_valid() {
-        return;
+        return true;
     }
     for i in 0..=EDGE_STEPS {
         let t = i as f64 / EDGE_STEPS as f64;
         let (u, v) = (r.x0 + t * r.width(), r.y0 + t * r.height());
         for (nx, ny) in [(u, r.y0), (u, r.y1), (r.x0, v), (r.x1, v)] {
-            if let Some((px, py)) = view.to_px(nx, ny).filter(|(x, y)| x.is_finite() && y.is_finite()) {
-                *b = [b[0].min(px), b[1].min(py), b[2].max(px), b[3].max(py)];
+            match view.to_px(nx, ny).filter(|(x, y)| x.is_finite() && y.is_finite()) {
+                Some((px, py)) => *b = [b[0].min(px), b[1].min(py), b[2].max(px), b[3].max(py)],
+                None => return false,
             }
         }
     }
+    true
 }
 
 /// The faces of a photo for its [`SourceInfo`] (shared: one detection serves every render of the photo).
@@ -700,7 +792,13 @@ mod tests {
         let frame = crate::plan(&src, &info, &s, &RenderRequest::fit(w, h)).frame;
         let view = FrameView::new(&frame, w, h, s.orientation);
         let Some(reads) = s.retouch.reads() else { panic!("eyes on") };
-        let boxes: Vec<[f64; 4]> = faces.iter().filter_map(|f| read_box(f, &reads, &view)).collect();
+        let boxes: Vec<[f64; 4]> = faces
+            .iter()
+            .filter_map(|f| match read_box(f, &reads, &view) {
+                ReadBox::At(b) => Some(b),
+                _ => None,
+            })
+            .collect();
         assert_eq!(boxes.len(), 3);
         // (each face's reads overlap the next one's, not the one after)
         assert!(boxes[0][2] > boxes[1][0] && boxes[1][2] > boxes[2][0] && boxes[0][2] < boxes[2][0], "{boxes:?}");
