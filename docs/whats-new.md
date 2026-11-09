@@ -40,6 +40,12 @@
 
 ## 2026-11-09
 
+### Repair Glasses Glare in the Portrait Tab
+Portrait ▸ Glasses Glare can repair the lenses of a face, or of every face with glasses. Repaint (FLUX) redraws a lens
+where glare hides the eye with FLUX.1 Fill, if you have its files, in two to three minutes a face; Fill Glints (LaMa)
+fills small glints in seconds. The frames stay as they are, and Amount blends the repair in. Repaint needs a Mac
+with 32 GB of memory or more.
+
 ### Assisted Culling Checks the Eyes
 - Photo ▸ Assisted Culling now finds photos where people have their eyes closed or out of focus (focused on an ear or the background), runs in the background with a row you can stop, and offers those photos for rejection afterwards; nothing is rejected for its eyes unless you choose it. The best shot of a burst is now the sharpest one with open, sharp eyes. Filter or make smart albums with Eyes Closed and Eyes Out of Focus.
 
