@@ -1,0 +1,6 @@
+cargo test -p lightcraft-retouch --test reshape
+cargo test -p lightcraft-retouch --lib -- reshape
+cargo test -p lightcraft-pipeline --lib -- reshape_step retouch_step
+cargo test -p lightcraft-gpu --test reshape
+cargo test -p lightcraft-catalog --lib -- fork_format format_version
+cargo test -p lightcraft-ui-egui --lib -- portrait

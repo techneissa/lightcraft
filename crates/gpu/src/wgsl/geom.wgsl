@@ -161,6 +161,58 @@ fn warp_gain(s: vec2<f32>) -> f32 {
     return g;
 }
 
+// Fork (`fork/retouch-reshape.md`): Face Reshape, `Warp::reshaped` (reference: `reshape::Field::source`). `field`
+// is `Field::gpu_table` (the zeroed dummy without a reshape): source px `g` → the source px the reshaped photo shows.
+fn field_u(i: u32) -> u32 {
+    return bitcast<u32>(field[i]);
+}
+
+fn field_d(off: u32, nx: u32, i: u32, j: u32) -> vec2<f32> {
+    let k = off + 2u * (j * nx + i);
+    return vec2<f32>(field[k], field[k + 1u]);
+}
+
+fn reshaped(g: vec2<f32>) -> vec2<f32> {
+    let n = field_u(0u);
+    if (n == 0u) {
+        return g;
+    }
+    let w = pf(12u);
+    let h = pf(13u);
+    let fs = vec2<f32>(field[1u], field[2u]);
+    let start = g / vec2<f32>(w, h) * fs;
+    var p = start;
+    for (var i = 0u; i < n; i++) {
+        let o = 3u + 6u * i;
+        let cell = field[o + 2u];
+        let nx = field_u(o + 3u);
+        let ny = field_u(o + 4u);
+        let off = field_u(o + 5u);
+        let f = (p - vec2<f32>(field[o], field[o + 1u])) / cell;
+        if (nx < 2u || ny < 2u || f.x < 0.0 || f.y < 0.0 || f.x >= f32(nx - 1u) || f.y >= f32(ny - 1u)) {
+            continue;
+        }
+        let ix = u32(floor(f.x));
+        let iy = u32(floor(f.y));
+        let t = f - floor(f);
+        let a = field_d(off, nx, ix, iy);
+        let b = field_d(off, nx, ix + 1u, iy);
+        let c = field_d(off, nx, ix, iy + 1u);
+        let d = field_d(off, nx, ix + 1u, iy + 1u);
+        let top = a + (b - a) * t.x;
+        let bot = c + (d - c) * t.x;
+        p = p + top + (bot - top) * t.y;
+    }
+    if (all(p == start)) {
+        return g;
+    }
+    var q = p / fs * vec2<f32>(w, h);
+    if (g.x >= 0.0 && g.y >= 0.0 && g.x <= w && g.y <= h) {
+        q = clamp(q, vec2<f32>(0.0), vec2<f32>(w, h));
+    }
+    return q;
+}
+
 @compute @workgroup_size(16, 16)
 fn sample_warp(@builtin(global_invocation_id) g: vec3<u32>) {
     let w = pu(2u);
@@ -183,15 +235,16 @@ fn sample_warp(@builtin(global_invocation_id) g: vec3<u32>) {
         put(g.y * w + g.x, vec3<f32>(BLANK_R, BLANK_G, BLANK_B));
         return;
     }
-    var v = bilinear(bw, bh, s.x * sx, s.y * sy);
+    let r = reshaped(s);
+    var v = bilinear(bw, bh, r.x * sx, r.y * sy);
     if (pu(63u) != 0u) {
-        let qr = corrected_to_source(c, 0u);
+        let qr = reshaped(corrected_to_source(c, 0u));
         v.x = bilinear(bw, bh, qr.x * sx, qr.y * sy).x;
-        let qb = corrected_to_source(c, 2u);
+        let qb = reshaped(corrected_to_source(c, 2u));
         v.z = bilinear(bw, bh, qb.x * sx, qb.y * sy).z;
     }
     if (pu(64u) != 0u) {
-        v = v * warp_gain(s);
+        v = v * warp_gain(r);
     }
     put(g.y * w + g.x, v);
 }

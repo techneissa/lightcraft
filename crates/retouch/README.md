@@ -90,6 +90,10 @@ crate only reads it.
   part the parser found that some feature reads (`Feature::PARTS`), at the resolution the models made them
   (`crates/engine/src/retouch_input/parts.rs`, `fork/retouch-masks.md`); without it, YuNet gives boxes and five
   landmarks and no masks.
+- `Face::spots`: the spots on the face's skin (Blemishes: centre, radius as a fraction of the face, kind, strength
+  and a donor patch), found once per photo by the provider on the picture its masks come from
+  (`blemish::with_spots`; the engine does it with the people parse, so they are kept with the masks). `None`: not
+  looked for, and Blemishes looks on the image it retouches (the examples and tests).
 - `Input::fingerprint`: a hash of all of it, in the render cache keys (the engine hashes it on the search's worker).
 
 A feature reads the faces through `Scene`: each `FaceCtx` has the box and landmarks in the image's pixels and
@@ -196,8 +200,9 @@ pass (they are one per-pixel pass there, so the step sits before all of them). S
 
 1. **Retouch** (tone and colour), features in this order: Blemishes, Skin, Wrinkles, Skin Tone, Eyes, Teeth and
    Lips, Glasses Glare, Stray Hair.
-2. **Geometry**: Face Reshape, a geometry step next to Transform. Its slot is reserved and not run yet; the reshape
-   feature wires it into the pipeline's geometry.
+2. **Geometry**: Face Reshape, a geometry step next to Transform. Not run by the step: `reshape::Field` is a warp
+   of the photo before its lens corrections (`crates/pipeline/src/reshape_step.rs` puts it into the frame's warp),
+   so the one resample, masks drawn on the photo, the faces and their part masks all follow the reshaped face.
 3. **Background**: after every retouch, once for the whole picture.
 
 The step is skipped while the block is off or the Portrait tab's eye is off; the scene-linear stage's key then

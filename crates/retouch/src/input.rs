@@ -214,6 +214,45 @@ pub struct Face {
     pub masks: Vec<(Part, PartMask)>,
     /// The frame [`Face::key_bounds`] is in: [`KeyFrame::Photo`] for faces from the people parse.
     pub key_frame: KeyFrame,
+    /// The spots on the face's skin (Blemishes), found once by the provider on the picture its masks come from
+    /// ([`crate::blemish::with_spots`]). `None`: not looked for; Blemishes then looks on the image it retouches.
+    pub spots: Option<Spots>,
+}
+
+/// What a spot on the skin is ([`Spot::kind`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SpotKind {
+    /// A blemish: a pimple, a red or dark mark. Always removed.
+    #[default]
+    Blemish,
+    /// A mole: darker, round, sharp-edged and brown. Kept while Keep Moles and Freckles is on.
+    Mole,
+    /// One of many small faint brown spots grouped together. Kept while Keep Moles and Freckles is on.
+    Freckle,
+}
+
+/// One spot on a face's skin. Points are normalised like the face's box (same frame); sizes are fractions of the
+/// face's size ([`crate::FaceCtx::size`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Spot {
+    pub at: (f64, f64),
+    /// The spot's radius, a fraction of the face's size.
+    pub radius: f64,
+    /// Where its skin texture is taken from (the centre of a clean patch of skin next to it); `None` when no patch
+    /// next to it is all skin (the spot is then filled from the skin around it alone).
+    pub donor: Option<(f64, f64)>,
+    pub kind: SpotKind,
+    /// How much it stands out (0…1): a low Amount removes the strongest spots only.
+    pub strength: f32,
+}
+
+/// The spots found on one face, and the area of its skin they were looked for on.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Spots {
+    pub list: Vec<Spot>,
+    /// The face's skin area (its Facial Skin mask's sum), in units of the face's size squared.
+    pub skin: f64,
 }
 
 impl Face {
@@ -294,6 +333,21 @@ impl Input {
                 h.u64(u64::from(f.score.to_bits()));
                 h.bytes(f.person.as_deref().unwrap_or("\u{0}").as_bytes());
                 h.u64(u64::from(f.key_frame == KeyFrame::Photo));
+                match &f.spots {
+                    None => h.u64(u64::MAX),
+                    Some(s) => {
+                        h.u64(s.list.len() as u64);
+                        h.u64(s.skin.to_bits());
+                        for p in &s.list {
+                            let (dx, dy) = p.donor.unwrap_or((f64::NAN, f64::NAN));
+                            for v in [p.at.0, p.at.1, p.radius, dx, dy] {
+                                h.u64(v.to_bits());
+                            }
+                            h.u64(p.kind as u64);
+                            h.u64(u64::from(p.strength.to_bits()));
+                        }
+                    }
+                }
                 h.u64(f.masks.len() as u64);
                 for (part, m) in &f.masks {
                     h.u64(*part as u64);
