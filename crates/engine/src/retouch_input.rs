@@ -123,6 +123,8 @@ struct Store {
 pub struct FaceStore {
     store: Arc<Mutex<Store>>,
     provider: Option<Arc<dyn FaceProvider>>,
+    /// The pictures Background Swap uses (`fork/retouch-background.md`).
+    pub(crate) backdrops: crate::retouch_background::Backdrops,
 }
 
 impl FaceStore {
@@ -305,7 +307,11 @@ impl Session {
             return (0, None);
         }
         match self.retouch_faces.get(&self.retouch_key(p, s)) {
-            Some(found) => (found.input.fingerprint() | 1, Some(found.input)),
+            Some(found) => {
+                // (with Background Swap's picture, loaded now when it is not: `fork/retouch-background.md`)
+                let input = self.with_backdrop(found.input, s, true);
+                (input.fingerprint() | 1, Some(input))
+            }
             None => {
                 self.retouch_search(p.id, false);
                 (self.retouch_faces.unknown_salt(p.id), None)
@@ -319,7 +325,13 @@ impl Session {
             return 0;
         }
         match self.retouch_faces.get(&self.retouch_key(p, s)) {
-            Some(found) => found.input.fingerprint() | 1,
+            Some(found) => {
+                let input = match crate::retouch_background::picture_key(s).and_then(|k| self.retouch_faces.backdrops.get(&k)) {
+                    Some(b) => self.retouch_faces.backdrops.with(&found.input, b),
+                    None => found.input,
+                };
+                input.fingerprint() | 1
+            }
             None => self.retouch_faces.unknown_salt(p.id),
         }
     }
@@ -449,12 +461,13 @@ impl Session {
     /// Exports and synchronous renders: find a retouched photo's faces first, so the result matches the preview.
     /// A failure is logged and the photo renders without faces.
     pub(crate) fn retouch_before_export(&mut self, id: PhotoId) {
-        let Some(p) = self.catalog.photo(id) else { return };
+        let Some(p) = self.catalog.photo(id).cloned() else { return };
         if !lightcraft_develop::retouch::active(&p.develop) {
             return;
         }
+        self.backdrop_now(&p.develop);
         // (a prepared export finds them on its own worker)
-        if self.retouch_faces.lock().deferred.contains(&self.retouch_key(p, &p.develop)) {
+        if self.retouch_faces.lock().deferred.contains(&self.retouch_key(&p, &p.develop)) {
             return;
         }
         if let Err(e) = self.retouch_detect_now(id, false) {
@@ -469,6 +482,8 @@ impl Session {
         if !lightcraft_develop::retouch::active(&p.develop) {
             return None;
         }
+        // (the faces found below come with Background Swap's picture)
+        self.backdrop_now(&p.develop);
         let key = self.retouch_key(&p, &p.develop);
         if self.retouch_faces.get(&key).is_some() {
             return None;
@@ -476,8 +491,9 @@ impl Session {
         let source = self.retouch_source().ok()?;
         let claimed = self.retouch_faces.claim(&key, id);
         self.retouch_faces.lock().deferred.push(key.clone());
+        let backdrop = crate::retouch_background::picture_key(&p.develop).and_then(|k| self.retouch_faces.backdrops.get(&k));
         // (dropped unfilled when the render below can't be built: the claim goes again)
-        let mut pending = ExportFaces { store: self.retouch_faces.clone(), key, id, finder: None, claimed };
+        let mut pending = ExportFaces { store: self.retouch_faces.clone(), key, id, finder: None, claimed, backdrop };
         // (built after the claim: this render starts no search of its own)
         pending.finder = Some(self.retouch_finder(&p, source).ok()?);
         Some(pending)
@@ -534,6 +550,8 @@ pub struct ExportFaces {
     finder: Option<Finder>,
     /// It holds the photo's search claim (else a background search had it first).
     claimed: bool,
+    /// Background Swap's picture, for the faces handed to the export (`fork/retouch-background.md`).
+    backdrop: Option<lightcraft_develop::retouch::background::Backdrop>,
 }
 
 impl ExportFaces {
@@ -545,8 +563,12 @@ impl ExportFaces {
         // (`put` ends the claim; dropping `self` then ends the deferral)
         match &result {
             Ok(found) => {
+                let input = match self.backdrop.clone() {
+                    Some(b) => self.store.backdrops.with(&found.input, b),
+                    None => found.input.clone(),
+                };
                 for j in jobs.iter_mut() {
-                    j.info.retouch = Some(found.input.clone());
+                    j.info.retouch = Some(input.clone());
                 }
             }
             Err(e) => log::warn!("portrait: the export renders without faces: {e}"),

@@ -79,6 +79,7 @@ mod print;
 mod process;
 mod quick_filters;
 mod recheck;
+mod retouch_background;
 mod saved_locations;
 mod segment;
 mod settings_files;

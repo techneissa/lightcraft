@@ -65,6 +65,7 @@ mod query;
 pub mod recheck;
 pub mod reload;
 mod retouch;
+mod retouch_background;
 mod select_people;
 pub mod similar;
 mod slideshow;
@@ -232,6 +233,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(match_look::specs());
         v.extend(activity::specs());
         v.extend(retouch::specs());
+        v.extend(retouch_background::specs());
         v.extend(map::specs());
         v
     })
