@@ -150,7 +150,6 @@
   "Running on the processor: {}.": "Běží na procesoru: {}.",
   "Running on {}.": "Běží na {}.",
   "Saved export preset “{}”": "Přednastavení exportu „{}“ bylo uloženo",
-  "Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).": "Vyhodnotí {scope} podle zaostření a expozice a najde podobné snímky pořízené v rozmezí několika sekund (série).",
   "Show {hidden} hidden location{}": "Zobrazit skrytá umístění: {hidden}{:.0}",
   "Showing {n} of {}": "Zobrazeno {n} z {}",
   "Shows the model's terms, then downloads {} from {host}, installs it and starts using it. Nothing else is sent.": "Zobrazí podmínky modelu, poté stáhne {} z {host}, nainstaluje jej a začne používat. Nic dalšího se neodesílá.",
@@ -345,5 +344,9 @@
   "View › Detail View ({keys}).": "Zobrazení › Zobrazení detailu ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Soubor › Exportovat… · Soubor › Tisk… ({keys}).",
   "{n} folder{} could not be read": "Složky, které se nepodařilo přečíst: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Přeskočené soubory (nejde o podporovaný typ fotografie): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Přeskočené soubory (nejde o podporovaný typ fotografie): {n}{:.0}",
+  "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).": "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).",
+  "Assisted Culling scored {n} photos": "Assisted Culling scored {n} photos",
+  " · {groups} bursts": " · {groups} bursts",
+  "eyes not checked: {why}": "eyes not checked: {why}"
 }

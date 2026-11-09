@@ -175,7 +175,6 @@
   "Running on {}.": "Körs på {}.",
   "Saved export preset “{}”": "Exportförinställningen ”{}” har sparats",
   "Saved template {name}": "Mallen {name} har sparats",
-  "Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).": "Bedömer {scope} efter fokus och exponering och hittar likartade bilder tagna inom några sekunder från varandra (serier).",
   "Show {hidden} hidden location{}": "Visa {hidden} dold plats{}",
   "Showing {n} of {}": "Visar {n} av {}",
   "Shows the model's terms, then downloads {} from {host}, installs it and starts using it. Nothing else is sent.": "Visar modellens villkor, hämtar sedan {} från {host}, installerar den och börjar använda den. Inget annat skickas.",
@@ -325,5 +324,9 @@
   "View › Detail View ({keys}).": "Visa › Detaljvy ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Fil › Exportera… · Fil › Skriv ut… ({keys}).",
   "{n} folder{} could not be read": "Mappar som inte gick att läsa: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Hoppade över filer (fotoformat som inte stöds): {n}{:.0}",
+  "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).": "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).",
+  "Assisted Culling scored {n} photos": "Assisted Culling scored {n} photos",
+  " · {groups} bursts": " · {groups} bursts",
+  "eyes not checked: {why}": "eyes not checked: {why}"
 }

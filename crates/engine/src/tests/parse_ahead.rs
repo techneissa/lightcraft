@@ -45,7 +45,7 @@ fn pump_until(s: &mut Session, p: Value, what: &str, mut cond: impl FnMut() -> b
     panic!("never happened: {what}");
 }
 
-fn fake_parse(set: ModelSet) -> Parsing {
+pub(super) fn fake_parse(set: ModelSet) -> Parsing {
     let mut person = Person { face: Some(NormRect::new(0.4, 0.2, 0.6, 0.5)), face_score: 0.9, ..Person::default() };
     person.parts.insert(Part::Hair, vec![Plane { rect: NormRect::new(0.3, 0.1, 0.7, 0.3), width: 4, height: 2, data: vec![1.0; 8], split: false }]);
     Parsing { model_set: set.id().into(), model_version: set.version(), width: 32, height: 24, people: vec![person] }
@@ -122,7 +122,7 @@ fn import(s: &mut Session, paths: &[PathBuf]) {
 
 /// A session with `n` photos in a scratch folder, its own parse cache, mains power, and no models (the test sets a
 /// runner).
-fn library(tag: &str, n: usize) -> (Session, PathBuf, Vec<PhotoId>) {
+pub(super) fn library(tag: &str, n: usize) -> (Session, PathBuf, Vec<PhotoId>) {
     let dir = temp_dir(&format!("ahead-{tag}"));
     let paths: Vec<PathBuf> = (0..n).map(|i| write_photo(&dir, i)).collect();
     let mut s = Session::new().with_fs();
@@ -150,7 +150,7 @@ fn add_face(s: &mut Session, id: PhotoId, name: Option<&str>) {
     s.apply_system(lightcraft_catalog::Op::SetMeta { id, meta: Box::new(meta) }).unwrap();
 }
 
-fn open(s: &mut Session, id: PhotoId) {
+pub(super) fn open(s: &mut Session, id: PhotoId) {
     s.selection = crate::Selection::single(id);
 }
 
@@ -159,7 +159,7 @@ fn pump(s: &mut Session, p: Value) -> Value {
 }
 
 /// Pump at `p`, waiting (a few seconds a call), until the queue is done or stands still, as an agent does.
-fn settle(s: &mut Session, mut p: Value) -> Value {
+pub(super) fn settle(s: &mut Session, mut p: Value) -> Value {
     p["wait"] = json!(true);
     for _ in 0..100 {
         let st = pump(s, p.clone());

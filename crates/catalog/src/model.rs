@@ -344,6 +344,36 @@ pub struct Analysis {
     pub group: Option<u32>,
     /// The best photo of its group.
     pub best: bool,
+    /// What the faces' eyes say (fork, `fork/ai-culling.md`): `None` when they were not measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub eyes: Option<Eyes>,
+}
+
+/// What assisted culling read from the eyes of a photo's main faces (the largest ones), from the face mesh.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Eyes {
+    /// Faces found.
+    pub faces: u32,
+    /// Main faces (the largest, and those nearly as large).
+    pub main: u32,
+    /// Whether a main face has its eyes closed; `None` when no main face's eyes could be read (too small, turned
+    /// away, no faces).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub closed: Option<bool>,
+    /// Eye focus 0..100: the detail in the sharpest eye of the main faces against the sharpest parts of the face
+    /// and the photo (100: the eyes are the sharpest); `None` when it could not be measured.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focus: Option<f32>,
+}
+
+impl Eyes {
+    /// Below this eye focus, a photo's eyes are out of focus.
+    pub const FOCUS_MIN: f32 = 35.0;
+
+    /// Whether the main faces' eyes are out of focus (`None`: not measured).
+    pub fn out_of_focus(&self) -> Option<bool> {
+        self.focus.filter(|f| f.is_finite()).map(|f| f < Self::FOCUS_MIN)
+    }
 }
 
 /// Raw formats whose files carry vendor white-balance multipliers but no colour matrices: their starting

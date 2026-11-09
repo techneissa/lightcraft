@@ -125,7 +125,6 @@
   "Restore {} Photo{}": "Відновити фото: {}{:.0}",
   "Restored {} photo{} from Recently Deleted": "Відновлено з нещодавно видалених фото: {}{:.0}",
   "Saved export preset “{}”": "Набір налаштувань експорту «{}» збережено",
-  "Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).": "Оцінює фокус і експозицію ({scope}) та знаходить подібні знімки з різницею в кілька секунд (серії).",
   "Show {hidden} hidden location{}": "Показати приховані розташування: {hidden}{:.0}",
   "Showing {n} of {}": "Показано {n} із {}",
   "Smart album: {}": "Смарт-альбом: {}",
@@ -346,5 +345,9 @@
   "In use: {url} (up to zoom {zoom})": "Використовується: {url} (до масштабу {zoom})",
   "Bring photos in with File › Import Photos… ({keys}).": "Фотографії імпортуйте через Файл › Імпортувати фото… ({keys}).",
   "View › Detail View ({keys}).": "Вигляд › Детальне подання ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Файл › Експортувати… · Файл › Друк… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Файл › Експортувати… · Файл › Друк… ({keys}).",
+  "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).": "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).",
+  "Assisted Culling scored {n} photos": "Assisted Culling scored {n} photos",
+  " · {groups} bursts": " · {groups} bursts",
+  "eyes not checked: {why}": "eyes not checked: {why}"
 }

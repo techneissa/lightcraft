@@ -187,6 +187,12 @@ pub fn confirm_dialog(app: &mut LightcraftApp, dlg: &Dialog) -> Result<serde_jso
             app.ui.cull_burst = Some((*burst_gap, *similarity));
             app.run("photo.analyze", cull_params(*reject_below, *pick_best, *burst_gap, *similarity))
         }
+        Dialog::CullSuggest { closed, soft, reject_closed, reject_soft } => {
+            let ids = crate::assisted_culling::chosen(closed, soft, *reject_closed, *reject_soft);
+            app.session
+                .execute_fn("photo.flag", |s| lightcraft_engine::cmd::cull_run::reject(s, &ids).map(|n| serde_json::json!({"rejected": n})))
+                .map_err(|e| e.to_string())
+        }
         Dialog::SmartRules { id, name, rules, parent } => {
             // refused before anything changes (not even the name)
             if let Some(problem) = rules.check_for(&app.session.catalog, id.map(lightcraft_catalog::AlbumId)).first() {

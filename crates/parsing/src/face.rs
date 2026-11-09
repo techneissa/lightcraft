@@ -131,6 +131,29 @@ impl Job {
     }
 }
 
+impl Job {
+    /// The face mesh's crop of this face.
+    pub fn mesh_crop(&self, img: &RgbImage) -> Crop {
+        self.crop(img, MESH_CROP, crate::facemesh::SIDE)
+    }
+}
+
+/// The mesh's points in fractions of the photo (none when the mesh was not sure it saw a face).
+pub fn landmarks_of(m: &MeshOut, crop: &Crop, img: &RgbImage) -> Vec<Landmark> {
+    // (`!(presence >= 0.5)`: a NaN presence drops the points too)
+    if m.presence.is_nan() || m.presence < 0.5 {
+        return Vec::new();
+    }
+    let (w, h) = (img.width as f32, img.height as f32);
+    m.points
+        .iter()
+        .map(|q| {
+            let (x, y) = crop.to_photo(q[0], q[1]);
+            Landmark { x: x / w, y: y / h, z: q[2] * crop.scale / w }
+        })
+        .collect()
+}
+
 /// What one face gave.
 pub struct FaceOut {
     pub person: usize,
@@ -321,27 +344,29 @@ pub fn run(nets: &Nets, img: &RgbImage, jobs: &[Job], batch: usize, scene: &Scen
             return Err(crate::Error::Cancelled);
         }
         let parse_crops: Vec<Crop> = chunk.iter().map(|j| j.crop(img, PARSE_CROP, SIDE)).collect();
-        let mesh_crops: Vec<Crop> = chunk.iter().map(|j| j.crop(img, MESH_CROP, crate::facemesh::SIDE)).collect();
+        let mesh_crops: Vec<Crop> = chunk.iter().map(|j| j.mesh_crop(img)).collect();
         let groups = parse(img, &parse_crops)?;
         let meshes = mesh(img, &mesh_crops)?;
         for (((job, pc), mc), (g, m)) in chunk.iter().zip(&parse_crops).zip(&mesh_crops).zip(groups.iter().zip(&meshes)) {
             let eyes = MeshEyes::from_mesh(m, mc);
             let p = job.person;
             let planes = planes(img, pc, g, &eyes, scene, p);
-            let (w, h) = (img.width as f32, img.height as f32);
-            let landmarks = if m.presence >= 0.5 {
-                m.points
-                    .iter()
-                    .map(|q| {
-                        let (x, y) = mc.to_photo(q[0], q[1]);
-                        Landmark { x: x / w, y: y / h, z: q[2] * mc.scale / w }
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            out.push(FaceOut { person: p, planes, landmarks, landmark_score: m.presence });
+            out.push(FaceOut { person: p, planes, landmarks: landmarks_of(m, mc, img), landmark_score: m.presence });
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A mesh the network is not sure of (low or NaN presence) gives no points; a sure one gives them.
+    #[test]
+    fn landmarks_need_a_presence_of_at_least_half() {
+        let img = RgbImage { width: 4, height: 4, data: vec![0; 48] };
+        let crop = Crop { cx: 2.0, cy: 2.0, scale: 1.0, angle: 0.0, side: 4 };
+        let out = |presence: f32| landmarks_of(&MeshOut { points: vec![[1.0, 1.0, 0.0]; 3], presence }, &crop, &img).len();
+        assert_eq!((out(f32::NAN), out(0.2), out(0.5), out(0.9)), (0, 0, 3, 3));
+    }
 }

@@ -70,6 +70,7 @@ fn confirm_buttons_name_their_action() {
         ("rename person", json!({"kind": "renamePerson", "from": "Ann", "to": "Anna", "merge": false}), "Rename"),
         ("merge keywords", json!({"kind": "mergeKeywords", "from": ["a"], "into": "b"}), "Merge Keywords"),
         ("assisted culling", json!({"kind": "cull", "reject_below": 0.0, "pick_best": true, "burst_gap": 10.0, "similarity": 0.93}), "Cull"),
+        ("culling suggestions", json!({"kind": "cullSuggest", "closed": [1], "soft": [], "reject_closed": true, "reject_soft": false}), "Reject"),
         ("new preset", json!({"kind": "createPreset", "name": "", "group": ""}), "Create"),
         ("copy settings", json!({"kind": "copySettings", "groups": []}), "Copy"),
         ("paste settings", json!({"kind": "pasteSettings", "groups": []}), "Paste"),

@@ -193,6 +193,10 @@ pub fn run_ui_command(app: &mut LightcraftApp, id: &str, p: &Value) -> Option<Re
         // the photos are read in the background (the first search reads the whole library)
         return Some(crate::find_similar::command(app, p));
     }
+    if id == "photo.analyze" {
+        // fork (`fork/ai-culling.md`): read in the background (renders and face models per photo)
+        return Some(crate::assisted_culling::command(app, p));
+    }
     if let Some(language) = language_from_command(id) {
         app.ui.language = language;
         // Immediately, not on the next frame: the reply and anything else run this frame

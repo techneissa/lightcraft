@@ -37,6 +37,27 @@ pub fn parse_gap(text: &str) -> Option<f64> {
     seen.then_some(total)
 }
 
+/// Fork (`fork/ai-culling.md`): the body of the dialog offering Assisted Culling's Reject suggestions.
+pub(super) fn cull_suggest_body(ui: &mut egui::Ui, t: &crate::theme::Tokens, dlg: &mut crate::state::Dialog) {
+    let crate::state::Dialog::CullSuggest { closed, soft, reject_closed, reject_soft } = dlg else { return };
+    ui.label(
+        egui::RichText::new(crate::i18n::tr("Some photos may need a second look. Nothing is rejected unless you choose Reject.")).color(t.text_label),
+    );
+    ui.add_space(6.0);
+    for (on, list, [one, many], id) in [
+        (reject_closed, &*closed, ["Eyes Closed: 1 photo", "Eyes Closed: {n} photos"], "check:cullRejectClosed"),
+        (reject_soft, &*soft, ["Eyes Out of Focus: 1 photo", "Eyes Out of Focus: {n} photos"], "check:cullRejectSoft"),
+    ] {
+        if list.is_empty() {
+            continue;
+        }
+        let text = if list.len() == 1 { crate::i18n::tr(one).to_string() } else { crate::i18n::tr(many).replace("{n}", &list.len().to_string()) };
+        let r = ui.checkbox(on, text);
+        crate::widgets::register(ui, id, r.rect);
+    }
+    ui.label(egui::RichText::new(crate::i18n::tr("Filter by Eyes Closed or Eyes Out of Focus to look at them first.")).color(t.text_dim));
+}
+
 /// The longest burst gap `photo.analyze` accepts: a day.
 pub const MAX_BURST_GAP: f32 = 86_400.0;
 

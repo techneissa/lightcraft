@@ -122,7 +122,6 @@
   "Restore {} Photo{}": "Ripristina {} foto{:.0}",
   "Restored {} photo{} from Recently Deleted": "Foto ripristinate da Eliminate di recente: {}{:.0}",
   "Saved export preset “{}”": "Preset di esportazione “{}” salvato",
-  "Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).": "Valuta messa a fuoco ed esposizione di {scope} e trova scatti simili fatti a pochi secondi di distanza (raffiche).",
   "Show {hidden} hidden location{}": "Mostra le posizioni nascoste: {hidden}{:.0}",
   "Showing {n} of {}": "Mostrate {n} di {}",
   "Smart album: {}": "Album smart: {}",
@@ -345,5 +344,9 @@
   "View › Detail View ({keys}).": "Visualizza › Vista dettaglio ({keys}).",
   "File › Export… · File › Print… ({keys}).": "File › Esporta… · File › Stampa… ({keys}).",
   "{n} folder{} could not be read": "Cartelle non leggibili: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "File saltati (non è un tipo di foto supportato): {n}{:.0}",
+  "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).": "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).",
+  "Assisted Culling scored {n} photos": "Assisted Culling scored {n} photos",
+  " · {groups} bursts": " · {groups} bursts",
+  "eyes not checked: {why}": "eyes not checked: {why}"
 }
