@@ -1,7 +1,8 @@
 //! Fork feature (`fork/hair-edges.md`, issue #103): Settings ▸ Faces ▸ Hair Edges, the edge of Entire Person /
-//! Background and Subject masks: Current (the default), BiRefNet Matting, or Apple Vision on a Mac that runs it. Without the model, BiRefNet Matting reads
-//! "(Download…)": choosing it asks first (its size, where it goes), downloads only on Download, with a row in the
-//! activity stack, and is chosen once the download has finished.
+//! Background and Subject masks: Current (the default), BiRefNet Matting, or Apple Vision on a Mac that runs it
+//! (`fork/apple-vision-masks.md`). Without the model, BiRefNet Matting reads "(Download…)": choosing it asks first
+//! (its size, where it goes), downloads only on Download, with a row in the activity stack, and is chosen once the
+//! download has finished.
 
 use egui::RichText;
 use serde_json::{Value, json};
