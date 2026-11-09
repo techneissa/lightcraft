@@ -5,7 +5,7 @@
 mod common;
 
 use lightcraft_raster::{Plane, Rgb32f};
-use lightcraft_retouch::hair::Hair;
+use lightcraft_retouch::hair::{Hair, MIN_FACE_PX, with_strands};
 use lightcraft_retouch::{Face, Feature, Input, NormRect, Part, PartMask, Retouch, Stage, View, WholePhoto};
 
 #[test]
@@ -130,11 +130,22 @@ fn run_in(img: &mut Rgb32f, r: &Retouch, input: &Input, view: &dyn View) {
     }
 }
 
-fn retouched(src: &Rgb32f, amount: f64, parts: &[Part]) -> Rgb32f {
+/// The faces with their strands searched on `picture` (as the provider searches the parse's picture).
+fn searched(picture: &Rgb32f, faces: Vec<Face>) -> Input {
+    Input::new(with_strands(picture, faces))
+}
+
+/// `src` retouched with `input`'s faces.
+fn render(src: &Rgb32f, amount: f64, input: &Input) -> Rgb32f {
     let mut img = src.clone();
     let view = WholePhoto { width: img.width, height: img.height };
-    run_in(&mut img, &settings(amount), &Input::new(vec![face(parts)]), &view);
+    run_in(&mut img, &settings(amount), input, &view);
     img
+}
+
+/// `src` retouched, its strands searched on itself.
+fn retouched(src: &Rgb32f, amount: f64, parts: &[Part]) -> Rgb32f {
+    render(src, amount, &searched(src, vec![face(parts)]))
 }
 
 fn diff(a: [f32; 3], b: [f32; 3]) -> f32 {
@@ -288,14 +299,17 @@ fn a_flat_grey_photo_stays_flat() {
     assert!(after.data.iter().zip(&src.data).all(|(a, b)| a.map(f32::to_bits) == b.map(f32::to_bits)));
 }
 
-/// A draft and an export four times its size remove the same strands (sizes are fractions of the face).
+/// A draft and an export four times its size remove the same strands: they are searched once, on the parse's
+/// picture, and kept in the photo's frame.
 #[test]
 fn a_draft_and_an_export_agree() {
     let (dw, ew) = (400, 1600);
     let draft = (picture(dw, dw, true, false), picture(dw, dw, false, false));
     let export = (picture(ew, ew, true, false), picture(ew, ew, false, false));
-    let d_after = retouched(&draft.0, 100.0, &every_part());
-    let e_after = retouched(&export.0, 100.0, &every_part());
+    // the strands are searched once, on the parse's picture, and every render repairs them
+    let input = searched(&picture(800, 800, true, false), vec![face(&every_part())]);
+    let d_after = render(&draft.0, 100.0, &input);
+    let e_after = render(&export.0, 100.0, &input);
     for (name, s) in [("forehead", FOREHEAD), ("flyaway", FLYAWAY)] {
         let d = left_of(&d_after, &draft.0, &draft.1, on(s));
         let e = left_of(&e_after, &export.0, &export.1, on(s));
@@ -383,7 +397,7 @@ fn a_zoomed_window_gives_the_whole_frames_result() {
         ],
         ..Face::boxed(bounds)
     };
-    let input = Input::new(vec![f]);
+    let input = searched(&src, vec![f]);
     let r = settings(100.0);
     let mut full = src.clone();
     run_in(&mut full, &r, &input, &WholePhoto { width: w, height: h });
@@ -408,18 +422,123 @@ fn a_zoomed_window_gives_the_whole_frames_result() {
     assert!(worst <= 1.0 / 255.0, "the window differs from the whole frame by {worst}");
 }
 
+/// A render only repairs what the search found: faces not searched yet get no Stray Hair, the same input gives the
+/// same pixels, and a photo without strands is nearly untouched.
 #[test]
-fn the_same_pixels_give_the_same_result_and_other_pixels_their_own() {
+fn a_render_never_searches_and_repairs_the_same_strands_every_time() {
     let (w, h) = (300, 300);
     let src = picture(w, h, true, false);
-    let first = retouched(&src, 100.0, &every_part());
-    let again = retouched(&src, 100.0, &every_part());
+    let not_yet = render(&src, 100.0, &Input::new(vec![face(&every_part())]));
+    assert!(not_yet.data.iter().zip(&src.data).all(|(a, b)| a.map(f32::to_bits) == b.map(f32::to_bits)), "no search, no change");
+    let input = searched(&src, vec![face(&every_part())]);
+    let (first, again) = (render(&src, 100.0, &input), render(&src, 100.0, &input));
+    assert!(first.data.iter().zip(&src.data).any(|(a, b)| a != b), "the strands are repaired");
     assert!(first.data.iter().zip(&again.data).all(|(a, b)| a.map(f32::to_bits) == b.map(f32::to_bits)));
-    // the same photo without the strands: nothing to repair (a kept search of the other pixels is not used)
     let clean = picture(w, h, false, false);
     let after = retouched(&clean, 100.0, &every_part());
     let changed = after.data.iter().zip(&clean.data).filter(|(a, b)| a != b).count();
     assert!(changed < 20, "{changed} pixels changed on a photo without strands");
+}
+
+/// The repair reads the pixels the render has: a brighter render (an exposure or a Skin change before the step)
+/// still loses the strands, with no new search.
+#[test]
+fn a_change_before_the_step_needs_no_new_search() {
+    let (w, h) = (400, 400);
+    let input = searched(&picture(w, h, true, false), vec![face(&every_part())]);
+    let brighter = |img: Rgb32f| -> Rgb32f { Rgb32f::from_fn(img.width, img.height, |x, y| img.get(x, y).map(|v| v * 1.6)) };
+    let (src, clean) = (brighter(picture(w, h, true, false)), brighter(picture(w, h, false, false)));
+    let after = render(&src, 100.0, &input);
+    for (name, s) in [("forehead", FOREHEAD), ("flyaway", FLYAWAY)] {
+        let left = left_of(&after, &src, &clean, on(s));
+        assert!(left < 0.3, "{name}: {left:.2} left on the brighter render");
+    }
+}
+
+/// A new parse with another Hair mask (another hair edge, another parts set) gives other strands: here the flyaway
+/// is inside the new mask's hair, so it is hair and stays.
+#[test]
+fn a_new_parse_with_another_hair_mask_finds_other_strands() {
+    let (w, h) = (400, 400);
+    let (src, clean) = (picture(w, h, true, false), picture(w, h, false, false));
+    let first = searched(&src, vec![face(&every_part())]);
+    let wider = |nx: f64, ny: f64| (in_hair(nx, ny) || ((0.2..0.3).contains(&nx) && (0.25..0.45).contains(&ny))) && !in_face(nx, ny);
+    let mut f = face(&every_part());
+    for (p, m) in &mut f.masks {
+        if *p == Part::Hair {
+            *m = mask(wider);
+        }
+    }
+    let second = searched(&src, vec![f]);
+    assert_ne!(first.fingerprint(), second.fingerprint(), "another parse renders anew");
+    assert!(left_of(&render(&src, 100.0, &first), &src, &clean, on(FLYAWAY)) < 0.3, "the first parse's flyaway goes");
+    assert!(left_of(&render(&src, 100.0, &second), &src, &clean, on(FLYAWAY)) > 0.8, "inside the new hair mask it stays");
+}
+
+/// A face under the least size searched gets no strands, and no change.
+#[test]
+fn a_face_too_small_to_search_is_left_alone() {
+    let side = (MIN_FACE_PX / 0.4 * 0.8) as usize;
+    let src = picture(side, side, true, false);
+    let input = searched(&src, vec![face(&every_part())]);
+    assert!(input.faces.iter().all(|f| f.strands.as_ref().is_some_and(|s| s.is_empty())));
+    let after = render(&src, 100.0, &input);
+    assert!(after.data.iter().zip(&src.data).all(|(a, b)| a.map(f32::to_bits) == b.map(f32::to_bits)));
+}
+
+const SWEATER: [f32; 3] = [0.03, 0.03, 0.04];
+
+fn in_sweater(nx: f64, ny: f64) -> bool {
+    (0.12..0.24).contains(&nx) && (0.5..0.8).contains(&ny)
+}
+
+/// A flyaway across the sky that runs into a dark sweater's edge (clothes: the person's pixels that are neither hair
+/// nor skin) is repaired, the sweater keeps every bit, and no strand found reaches into it: the strands' grown,
+/// softened edge is cut at the clothes' margin (it reached two cells in before the cut).
+#[test]
+fn a_flyaway_beside_a_sweater_leaves_the_sweater_alone() {
+    let (w, h) = (400, 400);
+    let strand = |nx: f64, ny: f64| (ny - 0.6).abs() < HALF && (0.2..0.3).contains(&nx);
+    let draw = |strands: bool| {
+        Rgb32f::from_fn(w, h, move |x, y| {
+            let (nx, ny) = ((x as f64 + 0.5) / w as f64, (y as f64 + 0.5) / h as f64);
+            if in_sweater(nx, ny) {
+                SWEATER
+            } else if strands && strand(nx, ny) {
+                mix(SKY, HAIR, 0.9)
+            } else {
+                colour(nx, ny, false, false)
+            }
+        })
+    };
+    let (src, clean) = (draw(true), draw(false));
+    let mut f = face(&every_part());
+    for (p, m) in &mut f.masks {
+        if *p == Part::EntirePerson {
+            *m = mask(|x, y| in_hair(x, y) || in_face(x, y) || in_sweater(x, y));
+        }
+    }
+    let input = searched(&src, vec![f]);
+    let after = render(&src, 100.0, &input);
+    let left = left_of(&after, &src, &clean, |nx, ny| (ny - 0.6).abs() < HALF * 2.0 && (0.27..0.3).contains(&nx));
+    assert!(left < 0.3, "the flyaway goes: {left:.2} left");
+    for y in 0..h {
+        for x in 0..w {
+            let (nx, ny) = ((x as f64 + 0.5) / w as f64, (y as f64 + 0.5) / h as f64);
+            if in_sweater(nx, ny) {
+                assert_eq!(after.get(x, y).map(f32::to_bits), src.get(x, y).map(f32::to_bits), "the sweater changed at {x},{y}");
+            }
+        }
+    }
+    let Some(s) = input.faces.first().and_then(|f| f.strands.as_ref()) else { panic!("searched") };
+    let (cw, ch) = (s.area.width() / s.width as f64, s.area.height() / s.height as f64);
+    for cy in 0..s.height {
+        for cx in 0..s.width {
+            let (nx, ny) = (s.area.x0 + (cx as f64 + 0.5) * cw, s.area.y0 + (cy as f64 + 0.5) * ch);
+            let weight = s.cell(cx, cy).map_or(0, |c| c[0]);
+            assert!(!(in_sweater(nx, ny) && weight > 0), "a strand cell reaches into the sweater at {nx:.3},{ny:.3} ({weight})");
+        }
+    }
 }
 
 #[test]

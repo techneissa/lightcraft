@@ -568,14 +568,17 @@ mod tests {
             masks: vec![(Part::Hair, mask(&hair_at)), (Part::FacialSkin, mask(&face_at))],
             ..Face::boxed(NormRect::new(0.42, 0.42, 0.58, 0.68))
         };
-        let info = SourceInfo { retouch: Some(Arc::new(Input::new(vec![face]))), ..SourceInfo::default() };
+        // the strands are searched once, on the photo, as the face provider does with the people parse
+        let faces = lightcraft_develop::retouch::hair::with_strands(&src, vec![face]);
+        let info = SourceInfo { retouch: Some(Arc::new(Input::new_on_photo(faces))), ..SourceInfo::default() };
         let mut s = DevelopSettings::default();
         s.detail.nr_color = 0.0;
         let plain = s.clone();
         controls::set(&mut s, "retouch.hair.amount", 100.0);
         let req = RenderRequest::fit(w, h);
-        // (on the strand, clear of the masks' area: only the reach makes the window see the hair beside it)
-        let win = crate::PixelWindow { x: 205, y: 180, w: 26, h: 50 };
+        // (its left edge on the strand, clear of the masks' area: only the reach makes the window see what is
+        // beside the strand there)
+        let win = crate::PixelWindow { x: 217, y: 180, w: 20, h: 50 };
         let full = render(&src, &info, &s, &req).image;
         let before = render(&src, &info, &plain, &req).image;
         let zoomed = render(&src, &info, &s, &RenderRequest { window: Some(win), ..req }).image;

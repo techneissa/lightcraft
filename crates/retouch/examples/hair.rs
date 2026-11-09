@@ -5,10 +5,11 @@
 //!
 //! `--faces` reads what the app's retouch step gets for each face (box, landmarks, part masks), written by
 //! `cargo run -p lightcraft-parsing --release --example face_input -- in.jpg dir/`. `--face x0,y0,x1,y1` instead
-//! gives a bare box (no masks: nothing changes). `--width` scales the picture first (a draft is about 1936 px wide,
-//! the loupe 2560). The first run searches for strands (the detection time); `--runs` repeats the step that many
-//! times on the same pixels, which finds the search kept and only blends (the slider time; the best run is printed).
-//! `--changes` writes what changed, brightened, on black.
+//! gives a bare box (no masks: nothing changes). The strands are searched once on the picture as given (the app
+//! searches the people parse's picture, 2048 px); `--width` then scales it for the render (a draft is about 1936 px
+//! wide, the loupe 2560), and `--runs` times the step that many times (the slider: the best run is printed).
+//! `--skin` also times a Skin Smoothness drag with Stray Hair on. `--changes` writes what changed, brightened, on
+//! black.
 #![forbid(unsafe_code)]
 #![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
@@ -19,8 +20,7 @@ use lightcraft_color::transfer::{decode_srgb8, encode_srgb8};
 use lightcraft_raster::{Plane, Rgb32f};
 use lightcraft_retouch::{Face, Input, NormRect, Part, PartMask, Retouch, Stage, WholePhoto};
 
-const USAGE: &str =
-    "usage: hair in.jpg out.jpg [--faces faces.json | --face x0,y0,x1,y1] [--amount 0..100] [--width px] [--runs n] [--changes out.png]";
+const USAGE: &str = "usage: hair in.jpg out.jpg [--faces faces.json | --face x0,y0,x1,y1] [--amount 0..100] [--width px] [--runs n] [--changes out.png] [--skin 0..100]";
 
 fn main() -> ExitCode {
     match run(&std::env::args().skip(1).collect::<Vec<_>>()) {
@@ -36,7 +36,7 @@ fn run(args: &[String]) -> Result<(), String> {
     let mut files = Vec::new();
     let mut faces = Vec::new();
     let mut r = Retouch::default();
-    let (mut width, mut runs, mut changes) = (None, 1usize, None);
+    let (mut width, mut runs, mut changes, mut skin) = (None, 1usize, None, None);
     let mut amount = 100.0;
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -52,36 +52,63 @@ fn run(args: &[String]) -> Result<(), String> {
             "--width" => width = Some(value()?.parse::<u32>().map_err(|_| USAGE.to_string())?),
             "--runs" => runs = value()?.parse::<usize>().map_err(|_| USAGE.to_string())?.max(1),
             "--changes" => changes = Some(value()?.clone()),
+            "--skin" => skin = Some(value()?.parse::<f64>().map_err(|_| USAGE.to_string())?),
             _ => files.push(a.clone()),
         }
     }
     r.global.set("retouch.hair.amount", amount);
     let [input, output] = files.as_slice() else { return Err(USAGE.into()) };
-    let mut rgb = image::open(input).map_err(|e| format!("{input}: {e}"))?.to_rgb8();
-    if let Some(nw) = width {
-        let nh = (u64::from(rgb.height()) * u64::from(nw) / u64::from(rgb.width().max(1))).max(1) as u32;
-        rgb = image::imageops::resize(&rgb, nw, nh, image::imageops::FilterType::Triangle);
-    }
-    let (w, h) = (rgb.width() as usize, rgb.height() as usize);
-    let mut src = Rgb32f::new(w, h);
-    for (px, p) in src.data.iter_mut().zip(rgb.pixels()) {
-        *px = [decode_srgb8(p.0[0]), decode_srgb8(p.0[1]), decode_srgb8(p.0[2])];
-    }
+    let rgb = image::open(input).map_err(|e| format!("{input}: {e}"))?.to_rgb8();
+    let linear = |rgb: &image::RgbImage| {
+        let mut img = Rgb32f::new(rgb.width() as usize, rgb.height() as usize);
+        for (px, p) in img.data.iter_mut().zip(rgb.pixels()) {
+            *px = [decode_srgb8(p.0[0]), decode_srgb8(p.0[1]), decode_srgb8(p.0[2])];
+        }
+        img
+    };
+    // the search, once, on the picture as given (as the app searches the parse's picture)
+    let t = std::time::Instant::now();
+    let faces = lightcraft_retouch::hair::with_strands(&linear(&rgb), faces);
+    let search = t.elapsed().as_secs_f64() * 1e3;
+    let found: usize = faces.iter().filter_map(|f| f.strands.as_ref()).map(|s| s.cells.iter().filter(|c| c[0] > 0).count()).sum();
+    // the render, at `--width`
+    let rgb = match width {
+        Some(nw) => {
+            let nh = (u64::from(rgb.height()) * u64::from(nw) / u64::from(rgb.width().max(1))).max(1) as u32;
+            image::imageops::resize(&rgb, nw, nh, image::imageops::FilterType::Triangle)
+        }
+        None => rgb,
+    };
+    let src = linear(&rgb);
+    let (w, h) = (src.width, src.height);
     let input = Input::new(faces);
     let view = WholePhoto { width: w, height: h };
-    let mut img = src.clone();
-    let t = std::time::Instant::now();
-    lightcraft_retouch::run::apply(&mut img, &r, &input, &view, Stage::Retouch);
-    let search = t.elapsed().as_secs_f64() * 1e3;
-    let mut best = f64::INFINITY;
-    for _ in 1..runs {
-        img = src.clone();
-        let t = std::time::Instant::now();
-        lightcraft_retouch::run::apply(&mut img, &r, &input, &view, Stage::Retouch);
-        best = best.min(t.elapsed().as_secs_f64() * 1e3);
+    let step = |r: &Retouch| {
+        let mut best = f64::INFINITY;
+        let mut img = src.clone();
+        for _ in 0..runs {
+            img = src.clone();
+            let t = std::time::Instant::now();
+            lightcraft_retouch::run::apply(&mut img, r, &input, &view, Stage::Retouch);
+            best = best.min(t.elapsed().as_secs_f64() * 1e3);
+        }
+        (img, best)
+    };
+    let (img, best) = step(&r);
+    if let Some(v) = skin {
+        // a Skin drag with Stray Hair on: the whole step, against Skin alone
+        let mut both = r.clone();
+        both.global.set("retouch.skin.smoothness", v);
+        let mut alone = Retouch::default();
+        alone.global.set("retouch.skin.smoothness", v);
+        let ((_, with_hair), (_, skin_only)) = (step(&both), step(&alone));
+        eprintln!("hair: Skin {v} drag: {with_hair:.1} ms with Stray Hair on, {skin_only:.1} ms without");
     }
     let changed = img.data.iter().zip(&src.data).filter(|(a, b)| a != b).count();
-    eprintln!("hair: {w}×{h}, {} faces, search {search:.1} ms, kept {best:.1} ms, {changed} pixels changed", input.faces.len());
+    eprintln!(
+        "hair: {w}×{h}, {} faces, search {search:.1} ms ({found} strand cells), slider {best:.1} ms, {changed} pixels changed",
+        input.faces.len()
+    );
     if let Some(path) = changes {
         let bytes: Vec<u8> = img
             .data

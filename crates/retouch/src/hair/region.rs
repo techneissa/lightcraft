@@ -47,11 +47,16 @@ const BROWS: f64 = 0.025;
 const EYES: f64 = 0.06;
 const MOUTH: f64 = 0.02;
 const OTHERS: f64 = 0.015;
+/// How far clothes are grown, in faces (a flyaway just outside a sweater leaves the sweater alone).
+const CLOTHES: f64 = 0.02;
 
 /// Where to look, per cell of a coarse grid (each 0…1).
 pub(super) struct Area {
     /// How much to look for strands.
     pub weight: Vec<f32>,
+    /// What may change at all: 0 on the parts left alone and on clothes (each grown by a margin). The repair's
+    /// weight is cut to it after it is grown and softened, so a strand's soft edge never reaches them.
+    pub allowed: Vec<f32>,
     /// Skin: Facial Skin (closed) and Body Skin.
     pub skin: Vec<f32>,
     /// The main hair mass.
@@ -94,29 +99,35 @@ pub(super) fn weights(scene: &Scene<'_>, face: usize, grid: &Grid) -> Option<Are
         grow(&[Part::Lips, Part::Teeth], MOUTH),
         grow(&[Part::Others], OTHERS),
     ];
-    let person = get(Part::EntirePerson);
+    // clothes: the person's pixels that are neither hair nor skin, grown by a margin like the parts left alone
     let body = plane(Part::BodySkin);
+    let clothes = get(Part::EntirePerson).map(|p| {
+        let c = Plane::from_fn(grid.w, grid.h, |x, y| {
+            let k = y * grid.w + x;
+            let at = |q: &Plane| q.data.get(k).copied().unwrap_or(0.0);
+            smoothstep(0.3, 0.7, (at(p) - at(hair).max(at(&skin)).max(at(body))).max(0.0))
+        });
+        max_filter(&c, r(CLOTHES))
+    });
+    let mut allowed = vec![1.0f32; grid.len()];
     let mut out = vec![0.0f32; grid.len()];
-    for (k, o) in out.iter_mut().enumerate() {
+    for (k, (o, a)) in out.iter_mut().zip(allowed.iter_mut()).enumerate() {
         let at = |p: &Plane| p.data.get(k).copied().unwrap_or(0.0);
         let d = if has_hair { dist.data.get(k).copied().unwrap_or(f32::INFINITY) } else { f32::INFINITY };
         let fade = smoothstep(FADE.0, FADE.1, d);
         let band = 1.0 - smoothstep(0.6 * BAND as f32, BAND as f32, d);
         let outer = if has_hair { band } else { 0.0 };
-        let mut w = outer.max(at(&skin)) * fade;
-        for a in &left_alone {
-            w *= 1.0 - at(a);
+        let mut keep = 1.0f32;
+        for l in left_alone.iter().chain(clothes.iter()) {
+            keep *= 1.0 - at(l);
         }
-        // clothes: the person's pixels that are neither hair nor skin
-        if let Some(p) = person {
-            let clothes = (at(p) - at(hair).max(at(&skin)).max(at(body))).max(0.0);
-            w *= 1.0 - smoothstep(0.3, 0.7, clothes);
-        }
+        let w = outer.max(at(&skin)) * fade * keep;
         *o = if w.is_finite() { w.clamp(0.0, 1.0) } else { 0.0 };
+        *a = if keep.is_finite() { keep.clamp(0.0, 1.0) } else { 0.0 };
     }
     // skin for the strand rules: the face's and the body's (a lock over a hand is not stray)
     let skin = skin.zip_map(body, |f, b| f.max(smoothstep(0.2, 0.6, b)));
-    Some(Area { weight: out, skin: skin.data, core: core.data })
+    Some(Area { weight: out, allowed, skin: skin.data, core: core.data })
 }
 
 /// The face's masks of [`PARTS`] on `grid`'s cells.

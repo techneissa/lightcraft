@@ -54,12 +54,13 @@ const MIN_WEIGHT: f32 = 0.02;
 /// Where to look, per cell of the fine grid (see [`super::region::Area`]).
 pub(super) struct Near<'a> {
     pub weight: &'a [f32],
+    pub allowed: &'a [f32],
     pub skin: &'a [f32],
     pub core: &'a [f32],
 }
 
 /// What the search found per cell of the fine grid.
-pub(super) struct Strands {
+pub(super) struct Found {
     /// How surely a strand covers the cell (0…1), grown by a cell and softened.
     pub weight: Vec<f32>,
     /// The direction across the strand (unit), from the surest strand cell beside it.
@@ -84,12 +85,17 @@ struct Cell {
 }
 
 /// The strands of the fine `grid`, where `near` says to look.
-pub(super) fn strands(img: &Rgb32f, grid: &Grid, near: &Near<'_>) -> Strands {
+pub(super) fn strands(img: &Rgb32f, grid: &Grid, near: &Near<'_>) -> Found {
     let (w, h) = (grid.w, grid.h);
     let sigma = grid.cells(STRAND).max(MIN_SIGMA);
-    let mut out = Strands { weight: vec![0.0; grid.len()], across: vec![(1.0, 0.0); grid.len()], polarity: vec![0.0; grid.len()], sigma };
+    let mut out = Found { weight: vec![0.0; grid.len()], across: vec![(1.0, 0.0); grid.len()], polarity: vec![0.0; grid.len()], sigma };
     let n = grid.len();
-    if near.weight.len() != n || near.skin.len() != n || near.core.len() != n || !near.weight.iter().any(|v| *v > MIN_WEIGHT) {
+    if near.weight.len() != n
+        || near.allowed.len() != n
+        || near.skin.len() != n
+        || near.core.len() != n
+        || !near.weight.iter().any(|v| *v > MIN_WEIGHT)
+    {
         return out;
     }
     let weight = |k: usize| near.weight.get(k).copied().unwrap_or(0.0);
@@ -164,6 +170,11 @@ pub(super) fn strands(img: &Rgb32f, grid: &Grid, near: &Near<'_>) -> Strands {
         }
     }
     grow(&mut out, &kept, w, h);
+    // grown and softened, a strand's edge may reach a part left alone, clothes or the hair mass: cut it to where to
+    // look again (the parts left alone and clothes are 0 there, with a margin; the mass fades in)
+    for ((o, w), a) in out.weight.iter_mut().zip(near.weight).zip(near.allowed) {
+        *o *= (w * a).clamp(0.0, 1.0);
+    }
     out
 }
 
@@ -274,7 +285,7 @@ fn blur(p: &Plane, sigma: f64) -> Plane {
 /// edge and the sharpening halo beside it are covered. Each cell the softened weight reaches takes the direction and
 /// polarity of the surest strand cell within a cell more (the softening's reach); a cell with none has no polarity,
 /// and is never repaired.
-fn grow(out: &mut Strands, kept: &[f32], w: usize, h: usize) {
+fn grow(out: &mut Found, kept: &[f32], w: usize, h: usize) {
     let surest = |x: usize, y: usize, r: isize| -> (f32, usize) {
         let mut best = (0.0f32, y * w + x);
         for dy in -r..=r {
@@ -313,4 +324,36 @@ fn grow(out: &mut Strands, kept: &[f32], w: usize, h: usize) {
     out.weight = soft.data;
     out.across = across;
     out.polarity = polarity;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A dark strand across a pale sky that ends at an area not allowed (clothes, a part left alone): the strand is
+    /// found, and its grown, softened weight stops at that area's edge (it reached two cells in before the cut).
+    #[test]
+    fn a_strands_grown_edge_stops_where_nothing_may_change() {
+        let (w, h) = (120usize, 80usize);
+        let grid = Grid { ox: 0.0, oy: 0.0, cell: 1.0, face: 400.0, i0: 0, j0: 0, w, h, px: [0, 0, w, h] };
+        let img = Rgb32f::from_fn(w, h, |x, y| {
+            if x >= 60 {
+                [0.03, 0.03, 0.04]
+            } else if y == 40 && x >= 20 {
+                [0.06, 0.07, 0.09]
+            } else {
+                [0.55, 0.65, 0.78]
+            }
+        });
+        let open: Vec<f32> = (0..w * h).map(|k| if k % w < 60 { 1.0 } else { 0.0 }).collect();
+        let zero = vec![0.0f32; w * h];
+        let found = strands(&img, &grid, &Near { weight: &open, allowed: &open, skin: &zero, core: &zero });
+        let at = |x: usize, y: usize| found.weight.get(y * w + x).copied().unwrap_or(0.0);
+        assert!(at(40, 40) > 0.5, "the strand is found: {}", at(40, 40));
+        for y in 30..50 {
+            for x in 60..70 {
+                assert_eq!(at(x, y), 0.0, "the strand's edge reaches {x},{y}");
+            }
+        }
+    }
 }
