@@ -29,6 +29,9 @@ In the module:
   `Spec::signed` for −100…+100). Each becomes a develop control (section Portrait): the control channel, MCP,
   presets and copy / paste reach it with no other change. `is_off` defaults to "every slider at its default";
   override it when the feature has flags.
+- **Parts**: `PARTS`, the part masks `apply` reads. The face search keeps only the parts some feature lists
+  (`parts_read`), so list every part you read. The default, `FACE_PARTS`, is a face's parts and its skin, without
+  Entire Person and the clothes.
 - **`apply`**: retouch the image in place (see the rules below). The panel section draws its sliders with
   `cx.slider("retouch.<KEY>.<field>")`, which writes to every face or to the picked one.
 
@@ -53,22 +56,29 @@ crate only reads it.
 
 - `Input::faces`: one `Face` per face, in the provider's order (which may change between detections).
 - `Face::bounds`: the face box, normalised to the photo **before its crop** (0…1 across width and height, y down,
-  after orientation, lens corrections and transform: the frame Remove spots use).
+  after orientation, lens corrections and transform: the frame Remove spots use). With `Input::on_photo` (faces from
+  the people parse) every coordinate is before lens corrections and transform instead (after the orientation), and
+  the step maps it through their warp, per pixel, as local masks drawn on the photo are.
 - `Face::upright`: the same box on the photo before the user's rotation (Rotate Left / Right, flips), when the
   provider knows it; per-face settings are keyed and matched by it (`Face::key_bounds`). Lens corrections and
-  transform are not undone.
+  transform are not undone: `Face::key_frame` says whether the box is after them (`KeyFrame::Edit`, YuNet) or before
+  them (`KeyFrame::Photo`, the people parse).
 - `Face::landmarks`: normalised points; the first five are always YuNet's (the subject's right eye, left eye,
   nose tip, right and left mouth corner); a provider with more appends them after these.
 - `Face::person`: the name of the photo's named face (People) the face overlaps, trimmed and lower case.
 - `Face::masks`: `(Part, PartMask)` pairs, at most one per `Part` (Entire Person, Facial Skin, Body Skin, Hair,
   Eyebrows, Eye Whites, Iris, Lips, Teeth, Clothes Top, Clothes Bottom, Dress, Shoes, Hat, Bag, Others). A
   `PartMask` is a float `Plane` (0…1) at any resolution, covering `area` (a normalised rectangle) of the photo;
-  0 outside it. Empty today: the YuNet provider gives boxes and landmarks only, and the people parser (#81)
-  installs its own provider with masks (`FaceStore::set_provider`).
-- `Input::fingerprint`: a hash of all of it, in the render cache keys.
+  0 outside it. While the chosen people-parts set is downloaded, faces come from the photo's people parse with every
+  part the parser found that some feature reads (`Feature::PARTS`), at the resolution the models made them
+  (`crates/engine/src/retouch_input/parts.rs`, `fork/retouch-masks.md`); without it, YuNet gives boxes and five
+  landmarks and no masks.
+- `Input::fingerprint`: a hash of all of it, in the render cache keys (the engine hashes it on the search's worker).
 
 A feature reads the faces through `Scene`: each `FaceCtx` has the box and landmarks in the image's pixels and
-`size`, the face's size in pixels; `Scene::mask_at` / `Scene::mask_plane` sample a part mask in the image's pixels.
+`size`, the face's size in pixels; `Scene::mask_at` / `Scene::mask_plane` sample a part mask in the image's pixels,
+and `Scene::mask_box` gives the pixels a mask can touch (read and write only those). Skin Tone's Amount is a stand-in
+Face Light (Facial Skin brightened by up to half again) that shows the masks arrive; its feature lane replaces it.
 
 ## Rules every feature follows
 
@@ -100,15 +110,17 @@ Every feature lane builds to this, and its PR reports both numbers below:
   it off). Measure with `LIGHTCRAFT_PROFILE=1` or a bench, never in a test.
 
 Running ahead of time is not wired yet. Today faces are found when the Portrait tab opens on a photo and kept in
-memory for the 64 photos used last. What it takes:
+memory, one entry per photo, for the photos used last within 256 MB. Faces from the people parse are already in
+step 1's frame: they are kept by the file, the orientation and the parse's version, so lens, transform and crop
+drags reuse them. What it takes:
 
 1. **One frame for faces.** Find faces (and their masks) on the photo as the background face scan sees it
    (upright, uncropped, default settings, 2048 px: `crates/engine/src/faces_worker.rs`, the frame people parsing
    uses too), and map them into the edit's frame (orientation, lens corrections, transform) when a render needs
    them. A result then no longer depends on the edit, and per-face settings can be keyed by that frame.
 2. **A disk cache** of each photo's faces, keyed by the file's pixels and the provider's version, like people
-   parsing's (`~/Library/Caches/LightCraft/people-parsing`), so the work survives a restart and the 64-photo memory
-   cache only holds what is open.
+   parsing's (`~/Library/Caches/LightCraft/people-parsing`), so the work survives a restart and the memory cache
+   only holds what is open.
 3. **A queue in the background face scan** (`faces.pump`, paced by what the user is doing): photos imported or not
    yet parsed get their faces and masks while the pace allows, after the scan's own work for the photo, reusing its
    render.
@@ -119,11 +131,14 @@ memory for the 64 photos used last. What it takes:
 malformed block, reads it as off; it is not written while it is the default):
 
 - `global`: a `Features` struct, one field per feature, for every face.
-- `faces`: faces with their own settings (`FaceOverride`): the face's key (`FaceKey`: its person when named, and
-  its box on the photo before the user's rotation) and a whole `Features`, copied from `global` when the face first gets its own.
-- Matching (`overrides::resolve`, independent of detection order): a named face takes its person's settings;
+- `faces`: faces with their own settings (`FaceOverride`): the face's key (`FaceKey`: its person when named, its box
+  on the photo before the user's rotation, and the frame of that box, `frame`, written only when it is `photo`) and
+  a whole `Features`, copied from `global` when the face first gets its own.
+- Matching (`overrides::resolve_in`, independent of detection order): a named face takes its person's settings;
   another face takes the unclaimed settings whose box centre is nearest, within half that box; settings made for a
-  person never go to a face named as someone else.
+  person never go to a face named as someone else. A key and a face of different frames are compared after the
+  photo's `KeyMap` (its lens corrections and transform; the step's `View::key_map`, the engine's
+  `Session::retouch_key_map`) takes the one after them to before them; without a map they pair by person only.
 - Control ids: `retouch.<feature>.<field>` (every face), `retouchFace.<i>.<feature>.<field>` (the `i`-th face with
   its own settings).
 

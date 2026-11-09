@@ -36,6 +36,24 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+/// The set and hair edges a parse uses ([`PeopleParsing::choice`]).
+#[derive(Clone)]
+pub struct Choice {
+    set: ModelSet,
+    matting: Option<(crate::hair_edges::HairEdges, crate::hair_edges::Edge)>,
+}
+
+impl Choice {
+    /// The version a parse with this choice is filed under: the set's, with the hair edges' when they draw it.
+    pub fn version(&self) -> String {
+        // (a parse with matting edges is its own version, so switching the edge never reads the other's file)
+        match self.matting.as_ref().and_then(|(_, e)| crate::hair_edges::vision::version(*e)) {
+            Some(edge) => format!("{}+{edge}", self.set.version()),
+            None => self.set.version(),
+        }
+    }
+}
+
 /// How a request for a photo's parse ended.
 #[derive(Clone, Debug)]
 pub enum Outcome {
@@ -234,6 +252,23 @@ impl PeopleParsing {
         std::fs::write(&path, serde_json::json!({"set": set.id()}).to_string()).map_err(|e| format!("could not keep the choice: {e}"))
     }
 
+    /// The version a parse made now is filed under: the chosen set's, with the hair edges' when they draw it.
+    pub fn version(&self) -> String {
+        self.choice().version()
+    }
+
+    /// The set and hair edges a parse made now uses: a search taking it when it starts parses with them however the
+    /// choice changes meanwhile ([`PeopleParsing::parse_as`]).
+    pub fn choice(&self) -> Choice {
+        Choice { set: self.model_set(), matting: self.matting() }
+    }
+
+    /// Whether a parse can run now: the chosen set is downloaded (or a test runner stands in for it).
+    pub fn ready(&self) -> bool {
+        let has_runner = lock(&self.inner.runner).is_some();
+        self.models_dir().is_some_and(|d| has_runner || self.model_set().installed_in(&d))
+    }
+
     /// The last thing worth telling the user (a failed run), if any.
     pub fn message(&self) -> Option<String> {
         lock(&self.inner.message).clone()
@@ -299,13 +334,13 @@ impl PeopleParsing {
     /// else a run on a worker thread. With `wait`, the call returns when the run (this one, or one already going for
     /// the same picture) has ended; without, it returns [`Outcome::Running`].
     pub fn parse(&self, img: RgbImage, hints: Vec<FaceHint>, wait: bool) -> Outcome {
-        let set = self.model_set();
-        let matting = self.matting();
-        // (a parse with matting edges is its own version, so switching the edge never reads the other's file)
-        let version = match matting.as_ref().and_then(|(_, e)| crate::hair_edges::vision::version(*e)) {
-            Some(edge) => format!("{}+{edge}", set.version()),
-            None => set.version(),
-        };
+        self.parse_as(self.choice(), img, hints, wait)
+    }
+
+    /// [`PeopleParsing::parse`] with the set and hair edges of `choice` (taken earlier), not those chosen now.
+    pub fn parse_as(&self, choice: Choice, img: RgbImage, hints: Vec<FaceHint>, wait: bool) -> Outcome {
+        let version = choice.version();
+        let Choice { set, matting } = choice;
         let key = cache::key(&img, &hints, &version);
         if let Some(p) = self.remembered(&key).or_else(|| self.filed(&key)) {
             self.remember(&key, p.clone());

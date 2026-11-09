@@ -29,7 +29,9 @@ pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, 
         return;
     }
     let st = app.session.retouch_faces_of(photo);
-    let faces: Vec<Face> = st.found.as_ref().map(|f| f.input.faces.clone()).unwrap_or_default();
+    // (the store's faces, read through their `Arc`: their masks are never copied per frame)
+    let input = st.found.as_ref().map(|f| f.input.clone()).unwrap_or_default();
+    let faces: &[Face] = &input.faces;
     let textures = st.found.as_ref().map(|f| thumbs(ui.ctx(), photo, f)).unwrap_or_default();
     let chips: Vec<FaceChip> =
         faces.iter().enumerate().map(|(i, f)| FaceChip { texture: textures.get(i).map(|t| t.id()), name: face_name(f, i) }).collect();

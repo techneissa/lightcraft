@@ -301,3 +301,22 @@ fn kept_spots_stay_under_their_byte_cap() {
     store.put(&a, 4, Some(Arc::new(4)), 300);
     assert_eq!((store.get(&a, 4), store.bytes()), (None, 200), "one over the cap alone is not kept");
 }
+
+/// A photo with a Remove spot is still retouched in the cached render (which the GPU's scene-linear stage also
+/// runs): the cached render matches the uncached one, and both show the retouch.
+#[test]
+fn a_spot_does_not_skip_portrait_retouching() {
+    use lightcraft_develop::retouch::{Face, Input, NormRect, Part, PartMask};
+    let (src, cache) = (scene(), StageCache::default());
+    let area = NormRect::new(0.3, 0.2, 0.7, 0.8);
+    let face = Face { masks: vec![(Part::FacialSkin, PartMask { plane: lightcraft_raster::Plane::filled(4, 4, 1.0), area })], ..Face::boxed(area) };
+    let info = SourceInfo { retouch: Some(Arc::new(Input::new(vec![face]))), ..SourceInfo::default() };
+    let mut s = DevelopSettings { spots: vec![spot(SpotMode::Remove, 0.1, 0.1, Some((0.0, 0.05)))], ..Default::default() };
+    let req = RenderRequest::fit(480, 480);
+    let plain = render(&src, &info, &s, &req).image;
+    lightcraft_develop::controls::set(&mut s, "retouch.skinTone.amount", 100.0);
+    let whole = render(&src, &info, &s, &req).image;
+    assert_ne!(whole.data, plain.data, "the retouch shows");
+    let kept = render_cached(&src, &info, &s, &req, &cache).image;
+    assert!(kept.data == whole.data, "the cached render with a spot is retouched too");
+}

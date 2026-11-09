@@ -15,7 +15,7 @@ pub fn apply(img: &mut Rgb32f, r: &Retouch, input: &Input, view: &dyn View, stag
     }
     let scene = Scene::new(input, view, img.width, img.height);
     let n = input.faces.len().min(crate::feature::MAX_FACES);
-    let own = crate::overrides::resolve(r, input.faces.get(..n).unwrap_or(&[]));
+    let own = crate::overrides::resolve_in(r, input.faces.get(..n).unwrap_or(&[]), view.key_map());
     let per_face: Vec<&Features> =
         scene.faces.iter().map(|f| own.get(f.index).copied().flatten().and_then(|i| r.faces.get(i)).map_or(&r.global, |o| &o.settings)).collect();
     crate::run_stage(img, &scene, &r.global, &per_face, stage);

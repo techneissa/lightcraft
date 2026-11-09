@@ -37,8 +37,8 @@ Nothing changes in a photo yet: every feature is an empty stub. What is there fo
   before its crop, without retouching; the default is YuNet (Settings ▸ Faces: boxes and five landmarks, no masks),
   so features that need masks change nothing until the people parser (#81) installs its provider
   (`FaceStore::set_provider`). Found once per photo on a worker thread with the activity row "Finding Faces", kept
-  in memory for the 64 photos used last, with a round thumbnail per face; a missing face model is not remembered
-  as the photo's failure, so the search runs once a model is installed; a face's person is the named People region it
+  in memory for the 64 photos used last, with a round thumbnail per face; a missing or unreadable face model is kept
+  as the photo's reason (shown, never read again each frame) until a face model is installed or removed, and the search then runs; a face's person is the named People region it
   overlaps. Renders never wait (a preview without faces is redrawn once they are found: their fingerprint is in the
   render keys). A background export sets up without waiting and finds the faces on its own worker, under its
   activity row, before rendering; synchronous renders and exports find them first.
