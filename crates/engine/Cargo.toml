@@ -40,6 +40,8 @@ lightcraft-slideshow = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+# a Background Swap picture's name in the library (fork/retouch-background.md); the Core ML download test's fixture hash
+sha2 = { workspace = true }
 thiserror = { workspace = true }
 log = { workspace = true }
 ab_glyph = { workspace = true }
@@ -96,8 +98,6 @@ lightcraft-model = ["denoise", "lightcraft-denoise/lightcraft-model", "lightcraf
 lightcraft-develop = { workspace = true, features = ["test-hooks"] }
 # tests record why they skip (`cargo xtask ci` lists the skips)
 lightcraft-testkit = { workspace = true }
-# the Core ML download test's fixture hash (fork/coreml.md)
-sha2 = { workspace = true }
 # HDR JPEG XL tests read the file's colour encoding
 jxl-oxide = { workspace = true }
 # Lossless synthetic HEIC files (the import test; decoded when the codecs' `heif` feature is on).

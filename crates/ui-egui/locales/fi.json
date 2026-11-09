@@ -2407,5 +2407,21 @@
   "Selecting with SAM 3": "Valinta SAM 3:lla",
   "Rough mask. Click to install SAM 3.": "Karkea maski. Asenna SAM 3 napsauttamalla.",
   "Rough mask. Add it again to use SAM 3.": "Karkea maski. Lisää se uudelleen käyttääksesi SAM 3:a.",
-  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää"
+  "Stopped at the scan limit: there may be more photos": "Skannauksen raja saavutettiin: valokuvia voi olla lisää",
+  "Swap With": "Korvaa kohteella",
+  "White": "Valkoinen",
+  "Light Grey": "Vaaleanharmaa",
+  "Grey": "Harmaa",
+  "Black": "Musta",
+  "Choose Colour": "Valitse väri",
+  "Choose Picture…": "Valitse kuva…",
+  "Use a Photo…": "Käytä kuvaa…",
+  "Loading…": "Ladataan…",
+  "Choose Background Picture…": "Valitse taustakuva…",
+  "Images": "Kuvat",
+  "Background Picture Missing": "Taustakuva puuttuu",
+  "Blur": "Sumennus",
+  "Clean Backdrop": "Siisti tausta",
+  "Loading background picture": "Ladataan taustakuvaa",
+  "Reading depth map": "Luetaan syvyyskarttaa"
 }

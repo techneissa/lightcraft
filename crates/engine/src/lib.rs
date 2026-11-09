@@ -93,6 +93,7 @@ pub mod proof;
 pub mod reflections;
 pub mod rename;
 pub mod rename_job;
+pub mod retouch_background;
 pub mod retouch_input;
 pub mod segment;
 pub mod select_people;

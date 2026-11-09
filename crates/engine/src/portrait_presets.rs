@@ -112,7 +112,9 @@ impl Portrait {
         {
             who.person_id = Some(new_person_id(n));
         }
-        Portrait { features: carry(&serde_json::to_value(features).unwrap_or(Value::Null)), who }
+        // (Background: a Swap colour, never a picture: `fork/retouch-background.md`)
+        let features = Features { background: features.background.for_preset(), ..features.clone() };
+        Portrait { features: carry(&serde_json::to_value(&features).unwrap_or(Value::Null)), who }
     }
 
     /// An "any face" preset: it goes to every face of the photos it is applied to.
@@ -162,10 +164,20 @@ pub fn carry(features: &Value) -> Value {
     let mut out = Map::new();
     for (feature, fields) in features.as_object().into_iter().flatten() {
         let Some(fields) = fields.as_object() else { continue };
-        let kept: Map<String, Value> = fields.iter().filter(|(k, v)| carried(k, v)).map(|(k, v)| (k.clone(), v.clone())).collect();
+        let mut kept: Map<String, Value> = fields.iter().filter(|(k, v)| carried(k, v)).map(|(k, v)| (k.clone(), v.clone())).collect();
+        // (fork, `fork/retouch-background.md`: Background Swap's colour, never a picture or a photo)
+        if let Some(c) = fields.get("with").and_then(swap_colour) {
+            kept.insert("with".into(), c);
+        }
         out.insert(feature.clone(), Value::Object(kept));
     }
     Value::Object(out)
+}
+
+/// A Background Swap colour (`{kind: "colour", rgb: [r, g, b]}`), rebuilt from its numbers; `None` for anything else.
+fn swap_colour(v: &Value) -> Option<Value> {
+    let rgb = v.get("rgb")?.as_array().filter(|a| a.len() == 3 && a.iter().all(Value::is_number))?;
+    (v.get("kind")?.as_str()? == "colour").then(|| json!({"kind": "colour", "rgb": rgb}))
 }
 
 fn carried(name: &str, v: &Value) -> bool {
@@ -422,6 +434,26 @@ mod tests {
         let p = Portrait::from_value(&json!({"features": face, "embedding": {"model": "m", "vector": vec![0.5; MAX_DIM + 1]}})).unwrap();
         assert_eq!(p.features, c);
         assert_eq!(p.who.embedding, None, "an embedding past the length is never read");
+    }
+
+    /// Background (fork, `fork/retouch-background.md`): a preset carries Blur, Clean Backdrop and a Swap colour,
+    /// never a Swap picture or photo of this library.
+    #[test]
+    fn a_preset_carries_a_swap_colour_and_never_a_picture() {
+        use lightcraft_develop::retouch::background::{Background, Swap};
+        let with = |with: Swap| Features { background: Background { blur: 30.0, swap: 80.0, clean: 20.0, with }, ..Features::default() };
+        let colour = Portrait::of(&with(Swap::from_hex("#336699").unwrap_or_default()), Who::default());
+        assert_eq!(colour.features["background"]["with"]["kind"], "colour");
+        assert_eq!(colour.features["background"]["swap"], 80.0);
+        assert_eq!(Portrait::from_value(&colour.to_value()).map(|p| p.features), Some(colour.features.clone()), "read back from a file");
+        for w in [Swap::Picture { hash: "ab".repeat(32) }, Swap::Photo { id: 9 }] {
+            let p = Portrait::of(&with(w), Who::default());
+            let b = &p.features["background"];
+            let no_picture = b.get("with").is_none_or(|w| w["kind"] == "colour");
+            assert!(no_picture && b["swap"] == 0.0 && b["blur"] == 30.0 && b["clean"] == 20.0, "{b}");
+        }
+        let file = json!({"features": {"background": {"swap": 50.0, "with": {"kind": "picture", "hash": "cd"}}}});
+        assert!(Portrait::from_value(&file).is_some_and(|p| p.features["background"].get("with").is_none()), "a file's picture is dropped");
     }
 
     /// Applying keeps what the preset does not carry: the face's own marks stay on its photo.

@@ -97,6 +97,22 @@ pub(crate) fn decode(bytes: &[u8], opts: &DecodeOptions) -> Result<Decoded> {
     finish(F, raw, meta, (info.width, info.height), opts)
 }
 
+/// Fork (`fork/retouch-background.md`): the depth map of a HEIF photo (an iPhone Portrait photo's), 0…1 as stored
+/// (larger is nearer), in the picture's orientation: `(width, height, values)`. `None` when the file has none, can't
+/// be read, or this build has no HEIF decoder.
+pub fn decode_depth(bytes: &[u8]) -> Option<(usize, usize, Vec<f32>)> {
+    #[cfg(feature = "heif")]
+    {
+        let d = lightcraft_heif::decode_depth(bytes, &lightcraft_heif::Options::default()).ok()??;
+        Some((d.width, d.height, d.data))
+    }
+    #[cfg(not(feature = "heif"))]
+    {
+        let _ = bytes;
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::{Format, sniff};
