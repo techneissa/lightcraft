@@ -98,7 +98,7 @@ All pure Rust, verified with `cargo info` / `cargo tree`:
 Deliberately **not** used: anything AGPL from imazen (heic, zenjpeg, jxl-encoder, rav1d-safe),
 jpegxl-rs / imagequant (GPL / C), dav1d / libheif (C).
 
-## Performance (Apple M-series, release, synthetic 24 MP JPEG q90 4:2:0)
+## Performance (a test Mac, release, synthetic 24 MP JPEG q90 4:2:0)
 
 Run `cargo test --release -p lightcraft-codecs --test it bench:: -- --ignored --nocapture`.
 

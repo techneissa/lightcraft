@@ -46,6 +46,7 @@ pub mod quick_filters;
 pub mod right;
 pub mod rough_mask;
 pub mod second;
+pub mod select_people;
 pub mod selection_model;
 pub mod selection_order;
 pub mod slideshow;

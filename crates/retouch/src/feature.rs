@@ -48,11 +48,11 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     /// The part masks it reads: the face search keeps only the parts some feature lists, so a mask no feature
     /// reads takes no memory. By default the parts of a face and its skin ([`FACE_PARTS`]).
     const PARTS: &'static [Part] = FACE_PARTS;
-    /// How far around a pixel the feature reads to change it, a fraction of the face's size. A windowed render
-    /// (the zoomed loupe) grows its window by the largest reach of the features that are on, so that the window
-    /// comes out as the whole render does inside it. A feature reads no statistic of the image as a whole: one it
-    /// needs comes from the face (its landmarks and masks), never from the pixels a window happens to hold.
-    const REACH: f64 = 0.0;
+    /// How far past its face's box and the areas of its [`Feature::PARTS`] masks the feature reads pixels to work
+    /// out any pixel, as a fraction of the face's size ([`FaceCtx::size`]). A zoomed render that touches a face
+    /// renders all of that around it and cuts back (`crates/pipeline/src/retouch_step.rs`), so zoom never changes
+    /// a result. By default [`DEFAULT_REACH`].
+    const REACH: f64 = DEFAULT_REACH;
 
     /// Whether these settings leave the picture alone. By default: every slider at its default.
     fn is_off(&self) -> bool {
@@ -67,6 +67,9 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     /// feature needs is left alone.
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>);
 }
+
+/// [`Feature::REACH`] of a feature that does not set its own: half the face's size past its box and masks.
+pub const DEFAULT_REACH: f64 = 0.5;
 
 /// The parts [`Feature::PARTS`] lists by default: a face, its skin, and what is worn on the face (glasses are
 /// [`Part::Others`]); not the clothes (recoloured through local masks, issue #83) nor the whole person.
@@ -133,10 +136,6 @@ pub struct Scene<'a> {
     pub height: usize,
     view: &'a dyn View,
 }
-
-/// How far around a face's box a feature may change pixels, a fraction of the face's size (the neck below the jaw,
-/// the forehead above the face mesh). A windowed render grows its window for the faces that lie this near it.
-pub const AROUND_FACE: f64 = 1.0;
 
 /// Most faces the step retouches (the largest, as the detector ranks them, come first).
 pub const MAX_FACES: usize = 100;

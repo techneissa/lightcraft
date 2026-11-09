@@ -332,7 +332,7 @@ fn a_window_grown_by_the_reach_equals_the_whole_render_inside_it() {
     let img = forehead_lines(w, h, 1.0, 0.05);
     let r = wrinkles(100.0, 80.0, 60.0, 40.0);
     let whole = retouched(&img, &r, vec![meshed(FACE)]);
-    let reach = (r.reach() * 200.0).ceil() as usize + 4;
+    let reach = (Wrinkles::REACH * 200.0).ceil() as usize + 4;
     assert!(reach > 4, "the feature declares its reach");
     // windows holding part of the face: the forehead's right half, an eye, a mouth corner and the neck
     for (x, y, ww, wh) in [(160usize, 40usize, 100usize, 70usize), (60, 110, 70, 60), (120, 170, 50, 50), (100, 230, 120, 80)] {
@@ -356,8 +356,10 @@ fn a_window_grown_by_the_reach_equals_the_whole_render_inside_it() {
 #[test]
 fn the_reach_is_declared_and_covers_every_area() {
     assert!(Wrinkles::REACH >= 6.0 * Area::ALL.iter().map(|a| a.coarse()).fold(0.0, f64::max));
-    assert_eq!(wrinkles(0.0, 0.0, 0.0, 0.0).reach(), 0.0, "an off block reads nothing around a pixel");
-    assert_eq!(wrinkles(0.0, 0.0, 0.0, 10.0).reach(), Wrinkles::REACH);
+    assert_eq!(wrinkles(0.0, 0.0, 0.0, 0.0).reads(), None, "an off block reads nothing");
+    let reads = wrinkles(0.0, 0.0, 0.0, 10.0).reads();
+    assert_eq!(reads.as_ref().map(|r| r.reach), Some(Wrinkles::REACH));
+    assert!(reads.is_some_and(|r| r.parts.contains(&Part::FacialSkin) && r.parts.contains(&Part::BodySkin)), "the skin masks it cuts by");
 }
 
 #[test]

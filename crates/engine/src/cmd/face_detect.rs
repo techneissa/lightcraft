@@ -57,9 +57,14 @@ impl NoDetector {
 /// The YuNet loaded last, and from where.
 static LOADED: Mutex<Option<(PathBuf, Arc<Detector>)>> = Mutex::new(None);
 
-/// The installed YuNet, loaded once and kept (a new one is loaded when the model folder changes).
-/// (also used by the background scan, which aligns faces by the detector's landmarks and finds faces in photos that have none)
-pub(crate) fn detector(s: &Session) -> std::result::Result<Arc<Detector>, NoDetector> {
+#[cfg(test)]
+thread_local! {
+    /// Tests: how often [`detector`] read the model's file on this thread.
+    pub(crate) static READS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Where the installed YuNet's file is, from the files alone (nothing read or loaded).
+fn detector_path(s: &Session) -> std::result::Result<PathBuf, NoDetector> {
     let roots = s.face_roots().ok_or_else(|| NoDetector::Unusable("this build has nowhere to keep face models (the desktop app does)".into()))?;
     let home = roots.existing_home(YUNET_ID, &["model.onnx", "face-model.json"]).unwrap_or_else(|| roots.install_home(YUNET_ID));
     let path = home.join("model.onnx");
@@ -67,6 +72,39 @@ pub(crate) fn detector(s: &Session) -> std::result::Result<Arc<Detector>, NoDete
     if !path.is_file() || !home.join("face-model.json").is_file() {
         return Err(NoDetector::NotInstalled);
     }
+    Ok(path)
+}
+
+/// Fork (`fork/parse-ahead.md`): the installed YuNet's file and a stamp of it (its size and time), read from the
+/// file system only, so the parse-ahead pump can tell what a parse depends on without loading the model on the UI
+/// thread. `None`: not installed.
+pub(crate) fn detector_file(s: &Session) -> Option<(PathBuf, u64)> {
+    let path = detector_path(s).ok()?;
+    let meta = std::fs::metadata(&path).ok()?;
+    let at = meta.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_nanos() as u64);
+    Some((path, meta.len().rotate_left(32) ^ at ^ 1))
+}
+
+/// Fork (`fork/parse-ahead.md`): the YuNet at `path`, for a worker thread: the one the session loaded when it is
+/// that file, else read from it (not kept: the session's own load also offers it the GPU).
+pub(crate) fn detector_at(path: &std::path::Path) -> std::result::Result<Arc<Detector>, String> {
+    if let Some((p, d)) = LOADED.lock().unwrap_or_else(PoisonError::into_inner).as_ref()
+        && p == path
+    {
+        return Ok(d.clone());
+    }
+    let len = std::fs::metadata(path).map_err(|e| format!("could not read the detector: {e}"))?.len();
+    if len > MAX_MODEL_BYTES {
+        return Err("the detector's file is far bigger than YuNet".into());
+    }
+    let bytes = std::fs::read(path).map_err(|e| format!("could not read the detector: {e}"))?;
+    Detector::new(&bytes).map(Arc::new).map_err(|e| e.to_string())
+}
+
+/// The installed YuNet, loaded once and kept (a new one is loaded when the model folder changes).
+/// (also used by the background scan, which aligns faces by the detector's landmarks and finds faces in photos that have none)
+pub(crate) fn detector(s: &Session) -> std::result::Result<Arc<Detector>, NoDetector> {
+    let path = detector_path(s)?;
     let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
     if let Some((p, d)) = loaded.as_ref()
         && *p == path
@@ -77,6 +115,8 @@ pub(crate) fn detector(s: &Session) -> std::result::Result<Arc<Detector>, NoDete
     if len > MAX_MODEL_BYTES {
         return Err(NoDetector::Unusable("the detector's file is far bigger than YuNet: remove it in Settings > Faces and download it again".into()));
     }
+    #[cfg(test)]
+    READS.with(|n| n.set(n.get() + 1));
     let bytes = std::fs::read(&path).map_err(|e| NoDetector::Unusable(format!("could not read the detector: {e}")))?;
     let d = Arc::new(
         Detector::new(&bytes).map_err(|e| NoDetector::Unusable(format!("{e}: remove the detector in Settings > Faces and download it again")))?,

@@ -24,7 +24,7 @@ blurred mask), so hair, eyes, lips and background never bleed in: no halo at the
 by the mask; pixels outside it never change. The blurs run on the mask's box reduced so each is at least 2.5 reduced
 pixels wide, and are read back bilinearly.
 
-Speed (Apple M4 Pro, release, one face, all three sliders on, fastest of 20, the machine under load ~18): draft
+Speed (a test Mac, release, one face, all three sliders on, fastest of 20, other work running): draft
 (1936 px long edge) 3.3–4.7 ms on portraits framed head and shoulders, 13.6 ms on a face filling the frame; loupe
 (2560 px) 4.6–7.0 ms and 22 ms. The step runs on the CPU (on the GPU, a retouched photo's scene-linear stage already
 runs on the CPU), on the parse's cached masks; no model runs while a slider moves.

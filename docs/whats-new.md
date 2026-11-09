@@ -40,6 +40,28 @@
 
 ## 2026-11-09
 
+### Apple Vision Hair Edges
+- Settings ▸ Faces ▸ Hair Edges has a third choice, Apple Vision: the Mac's own person and subject masks draw the
+  edge of Entire Person / Background and Subject masks. No download, about a tenth of a second per photo.
+
+### Decontaminate Mask Edges
+- A mask's Decontaminate slider separates the colour of hair from the background behind it at the mask's edge, so changing the background no longer leaves a blue or green fringe between strands. On by default for Background masks.
+
+### People Parts Ahead of Time
+- People's part masks (skin, hair, eyes, lips, clothes) are found in the background before you need them: for the photos around the one you have open, for new imports with faces, and, while the computer is idle, for every photo with faces. Opening such a photo finds its masks ready at once.
+- It pauses while you edit, and stops on battery below 40 % and in Low Power Mode. Settings ▸ Performance ▸ People Parts turns it off.
+
+### Eyes Retouching in the Portrait Tab
+The Portrait tab's Eyes section has four sliders, for every face or the one you pick: Whites brightens the eye whites
+and takes out their yellow or red, Iris brightens and sharpens the iris, Dark Circles lifts the shadow under each eye
+toward your cheek's colour, and Eye Bags softens the bag's shading. Each keeps the skin's texture and works through
+clear glasses.
+
+### Select People Masks
+- Masking ▸ Create New Mask now starts with Person, Background and Custom. Person and Background make a mask of people or of everything around them; Custom has the usual tools.
+- A picker on the photo chooses whose (everyone or one face) and which parts: Entire Person, Entire Face, Facial and Body Skin, Hair, Eyebrows, Eyes, Iris, Lips, Teeth, Clothes and its kinds, Background. ⌘-click adds more parts to the same mask.
+- These are ordinary masks: every mask slider, Refine Edges and Recolour work on them, and exports match the preview.
+
 ### Learn My Edits Runs on the Neural Engine
 On a Mac, Learn My Edits' image model can run through Core ML on the Neural Engine, about 3–5× faster per photo: Settings ▸ Performance ▸ AI Models downloads its Core ML file (43 MB, asked first) and picks Automatic, Core ML or Candle.
 

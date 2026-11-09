@@ -48,16 +48,29 @@ pub(crate) fn contiguous(shape: &[usize]) -> Vec<usize> {
     out
 }
 
-/// IEEE half to single precision.
+/// IEEE half to single precision (exact: every half is a single).
 pub(crate) fn f16_to_f32(h: u16) -> f32 {
-    let sign = if h & 0x8000 != 0 { -1.0f32 } else { 1.0 };
-    let exp = i32::from((h >> 10) & 0x1f);
-    let frac = f32::from(h & 0x3ff);
+    let sign = u32::from(h & 0x8000) << 16;
+    let exp = u32::from((h >> 10) & 0x1f);
+    let frac = u32::from(h & 0x3ff);
     match exp {
-        0 => sign * frac * 2f32.powi(-24),
-        31 if frac == 0.0 => sign * f32::INFINITY,
-        31 => f32::NAN,
-        e => sign * (1.0 + frac / 1024.0) * 2f32.powi(e - 15),
+        // zero and the subnormals: frac × 2⁻²⁴
+        0 => {
+            let v = frac as f32 * 2f32.powi(-24);
+            if sign == 0 { v } else { -v }
+        }
+        // infinities and NaNs keep their payload
+        31 => f32::from_bits(sign | 0x7f80_0000 | (frac << 13)),
+        e => f32::from_bits(sign | ((e + 112) << 23) | (frac << 13)),
+    }
+}
+
+/// The numbers of `elem` in `raw`, appended to `out`.
+fn convert(elem: Elem, raw: &[u8], out: &mut Vec<f32>) {
+    match elem {
+        Elem::F16 => out.extend(raw.as_chunks::<2>().0.iter().map(|c| f16_to_f32(u16::from_ne_bytes(*c)))),
+        Elem::F32 => out.extend(raw.as_chunks::<4>().0.iter().map(|c| f32::from_ne_bytes(*c))),
+        Elem::F64 => out.extend(raw.as_chunks::<8>().0.iter().map(|c| f64::from_ne_bytes(*c) as f32)),
     }
 }
 
@@ -72,19 +85,18 @@ pub(crate) fn gather(shape: &[usize], strides: &[usize], elem: Elem, bytes: &[u8
     let count = check_shape(shape, count).map_err(|e| Error::Output(e.to_string()))?;
     let size = elem.bytes();
     let mut out = Vec::with_capacity(count);
-    let mut index = vec![0usize; shape.len()];
-    for _ in 0..count {
+    // whole rows at a time when the last dimension is stored densely (the usual case, padded rows included)
+    let dense = strides.last() == Some(&1);
+    let run = if dense { shape.last().copied().unwrap_or(1) } else { 1 };
+    let lead = shape.len() - usize::from(dense);
+    let mut index = vec![0usize; lead];
+    for _ in 0..count / run.max(1) {
         let offset = index.iter().zip(strides).try_fold(0usize, |o, (&i, &s)| i.checked_mul(s).and_then(|v| o.checked_add(v)));
         let at = offset.and_then(|o| o.checked_mul(size));
-        let Some(raw) = at.and_then(|a| bytes.get(a..a.checked_add(size)?)) else {
+        let Some(raw) = at.and_then(|a| bytes.get(a..a.checked_add(run.checked_mul(size)?)?)) else {
             return Err(Error::Output(format!("shape {shape:?} with strides {strides:?} reads past {} bytes", bytes.len())));
         };
-        out.push(match (elem, raw) {
-            (Elem::F16, &[a, b]) => f16_to_f32(u16::from_ne_bytes([a, b])),
-            (Elem::F32, &[a, b, c, d]) => f32::from_ne_bytes([a, b, c, d]),
-            (Elem::F64, &[a, b, c, d, e, f, g, h]) => f64::from_ne_bytes([a, b, c, d, e, f, g, h]) as f32,
-            _ => return Err(Error::Output("bad element size".into())),
-        });
+        convert(elem, raw, &mut out);
         // the next index, last dimension fastest
         for (i, d) in index.iter_mut().zip(shape).rev() {
             *i += 1;

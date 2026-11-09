@@ -876,7 +876,7 @@ fn snapshot(args: &[String]) -> Result<(), String> {
     }
     lightcraft_ui_egui::headless::viewport_pixels(size, scale).map_err(|e| format!("snapshot: bad --size/--scale: {e}"))?;
     let t0 = Instant::now();
-    let mut session = match &library {
+    let session = match &library {
         Some(dir) => {
             let mut s = Session::new()
                 .with_fs()
@@ -908,6 +908,8 @@ fn snapshot(args: &[String]) -> Result<(), String> {
             .with_default_lens_database()
             .with_default_slide_templates(),
     };
+    // (fork, `fork/select-people.md`: people parts as in the app, so a script can show Select People)
+    let mut session = session.with_default_parsing_models();
     // Apply compute policy before imports or the first scripted query can discover an adapter.
     session.execute("app.gpu", &json!({"enabled": false})).map_err(|e| e.to_string())?;
     if !files.is_empty() {

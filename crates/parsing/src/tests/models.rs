@@ -126,3 +126,37 @@ fn sapiens2_finds_no_person_in_a_landscape_or_a_one_pixel_photo() {
     let one = parser.parse(&RgbImage::new(1, 1, vec![9, 9, 9]).unwrap(), &[], &opts, &|| false).unwrap();
     assert!(one.people.is_empty());
 }
+
+/// The face mesh takes a step's faces in one call (eight on the Core ML path): on the device the app runs it on, each
+/// face of a call gives what it gives alone. (Unlike the face parser on Metal, `fork/coreml.md`; were this to change,
+/// the mesh would go one face a call too.)
+#[test]
+fn the_face_mesh_gives_each_face_of_a_call_what_it_gives_alone() {
+    let Some(dir) = models_dir().filter(|d| FACE_MESH.installed_in(d)) else {
+        lightcraft_testkit::skip!(Model, "the face mesh is not in the models folder");
+        return;
+    };
+    let dev = best_device();
+    let w = crate::weights::Weights::open(&FACE_MESH.path_in(&dir)).unwrap();
+    let mesh = crate::facemesh::FaceMesh::load(&w, &dev).unwrap();
+    let img = landscape(600, 400);
+    let side = crate::facemesh::SIDE;
+    let crops: Vec<crate::image::Crop> = [(300.0, 160.0, 0.0), (200.0, 220.0, 0.4), (420.0, 120.0, -0.3)]
+        .iter()
+        .map(|&(cx, cy, angle)| crate::image::Crop { cx, cy, scale: 0.5, angle, side })
+        .collect();
+    let tensor =
+        |c: &[crate::image::Crop]| candle_core::Tensor::from_vec(crate::face::batch_pixels(&img, c, false), (c.len(), 3, side, side), &dev).unwrap();
+    let all = mesh.forward(&tensor(&crops)).unwrap();
+    assert_eq!(all.len(), crops.len());
+    for (k, (c, got)) in crops.iter().zip(&all).enumerate() {
+        let want = mesh.forward(&tensor(std::slice::from_ref(c))).unwrap().remove(0);
+        let d = got.points.iter().zip(&want.points).flat_map(|(a, b)| a.iter().zip(b).map(|(x, y)| (x - y).abs())).fold(0.0f32, f32::max);
+        assert!(
+            d < 1e-3 && (got.presence - want.presence).abs() < 1e-5,
+            "face {k}: points differ by {d}, presence {} against {}",
+            got.presence,
+            want.presence
+        );
+    }
+}

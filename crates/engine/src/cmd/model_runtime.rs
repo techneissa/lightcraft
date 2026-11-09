@@ -32,6 +32,16 @@ fn published(model: &str) -> Option<(u64, &'static str)> {
     }
 }
 
+/// Whether `model`'s Core ML file is installed.
+fn coreml_installed(s: &Session, model: &str) -> bool {
+    if model == lightcraft_learn::ENCODER_ID { s.learn.coreml_installed() } else { s.parsing.coreml_installed(model) }
+}
+
+/// The engine `model` runs on, once loaded.
+fn backend(s: &Session, model: &str) -> Option<&'static str> {
+    if model == lightcraft_learn::ENCODER_ID { s.learn.backend() } else { s.parsing.backend(model) }
+}
+
 /// The models' rows: their runtime, whether Core ML can run here and its file is there, and the engine in use.
 fn rows(s: &Session) -> Value {
     let models: Vec<Value> = MODELS
@@ -42,8 +52,8 @@ fn rows(s: &Session) -> Value {
                 "feature": feature,
                 "runtime": s.model_runtimes.get(model).id(),
                 "coremlAvailable": lightcraft_coreml::available(),
-                "coremlInstalled": s.learn.coreml_installed(),
-                "backend": s.learn.backend(),
+                "coremlInstalled": coreml_installed(s, model),
+                "backend": backend(s, model),
                 "coremlBytes": published(model).map(|(b, _)| b),
                 "license": published(model).map(|(_, l)| l),
                 "download": download_json(s.model_runtimes.download_state(model)),
@@ -60,6 +70,8 @@ fn run(s: &mut Session, p: &Value) -> crate::Result<Value> {
         s.model_runtimes.set(model, runtime).map_err(|e| bad(ID, e))?;
         if model == lightcraft_learn::ENCODER_ID {
             s.learn.set_runtime(runtime);
+        } else {
+            s.parsing.set_runtime(model, runtime);
         }
     }
     Ok(rows(s))
@@ -116,7 +128,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "AI Model Runtime",
             [],
             None,
-            "{model?: \"dinov2-small\", runtime?: \"automatic\"|\"coreml\"|\"candle\"} — sets the engine a model runs on (Automatic: Core ML on a Mac when its model is installed, else candle), or with no `runtime` lists them → {models: [{model, feature, runtime, coremlAvailable, coremlInstalled, backend: \"coreml\"|\"candle\"|null, coremlBytes, license, download: {state, bytes?, total?, error?}}]}",
+            "{model?: \"dinov2-small\"|\"face-parsing-segformer-b0\"|\"human-parsing-segformer-b3\", runtime?: \"automatic\"|\"coreml\"|\"candle\"} — sets the engine a model runs on (Automatic: Core ML on a Mac when its model is installed, else candle), or with no `runtime` lists them → {models: [{model, feature, runtime, coremlAvailable, coremlInstalled, backend: \"coreml\"|\"candle\"|null, coremlBytes, license, download: {state, bytes?, total?, error?}}]}",
             always,
             run
         ),
@@ -151,6 +163,19 @@ mod tests {
         assert!(s.execute("models.runtime", &json!({"model": "dinov2-small", "runtime": "fast"})).is_err());
         assert!(s.execute("models.runtime", &json!({"model": "sam3", "runtime": "coreml"})).is_err());
         assert!(s.execute("models.runtime", &json!({"runtime": "coreml"})).is_err());
+
+        // the people-parsing SegFormers have a row each, and their choice reaches the parser
+        assert_eq!(listed["models"][1]["model"], "face-parsing-segformer-b0");
+        assert_eq!(listed["models"][2]["model"], "human-parsing-segformer-b3");
+        assert_eq!(listed["models"][2]["coremlInstalled"], false);
+        assert_eq!(listed["models"][3]["model"], "facemesh-v2");
+        s.execute("models.runtime", &json!({"model": "human-parsing-segformer-b3", "runtime": "candle"})).unwrap();
+        s.execute("models.runtime", &json!({"model": "face-parsing-segformer-b0", "runtime": "coreml"})).unwrap();
+        s.execute("models.runtime", &json!({"model": "facemesh-v2", "runtime": "candle"})).unwrap();
+        assert_eq!(s.parsing.runtimes(), lightcraft_parsing::Runtimes { face: Runtime::CoreMl, body: Runtime::Candle, mesh: Runtime::Candle });
+        assert_eq!(s.learn.runtime(), Runtime::Candle);
+        reopened.open(Some(file.clone()));
+        assert_eq!(reopened.get("human-parsing-segformer-b3"), Runtime::Candle);
         std::fs::write(&file, b"{ damaged").unwrap();
         reopened.open(Some(file));
         assert_eq!(reopened.get("dinov2-small"), Runtime::Automatic);
