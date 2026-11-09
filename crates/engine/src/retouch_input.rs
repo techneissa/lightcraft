@@ -345,8 +345,8 @@ enum Source {
 
 /// A face search set up on the calling thread, to run on a worker (or an export's): it renders and runs models.
 enum Finder {
-    Faces { provider: Arc<dyn FaceProvider>, job: crate::RenderJob, regions: Vec<(NormRect, String)> },
-    Parts(parts::PartsFinder),
+    Faces { provider: Arc<dyn FaceProvider>, job: Box<crate::RenderJob>, regions: Vec<(NormRect, String)> },
+    Parts(Box<parts::PartsFinder>),
 }
 
 impl Finder {
@@ -359,7 +359,7 @@ impl Finder {
 
     fn run(self) -> std::result::Result<Found, String> {
         match self {
-            Finder::Faces { provider, job, regions } => find(job, provider.as_ref(), &regions),
+            Finder::Faces { provider, job, regions } => find(*job, provider.as_ref(), &regions),
             Finder::Parts(p) => p.find(),
         }
     }
@@ -590,10 +590,10 @@ impl Session {
     fn retouch_finder(&mut self, p: &Photo, source: Source) -> std::result::Result<Finder, String> {
         let regions = named_regions(p);
         Ok(match source {
-            Source::Provider(provider) => Finder::Faces { provider, job: self.retouch_detect_job(p.id)?, regions },
+            Source::Provider(provider) => Finder::Faces { provider, job: Box::new(self.retouch_detect_job(p.id)?), regions },
             Source::Parts => {
                 let choice = self.parsing.choice();
-                Finder::Parts(parts::PartsFinder {
+                Finder::Parts(Box::new(parts::PartsFinder {
                     wrinkles: Some(wrinkles::WrinkleSearch::new(self.lama.clone(), self.activity.clone(), self.retouch_cropper(p.id).map(Arc::new))),
                     // (the parse-ahead index, `fork/parse-ahead.md`: a photo parsed before is read, not run again)
                     known: crate::parse_ahead::known(self, p.id, &choice.version()),
@@ -605,7 +605,7 @@ impl Session {
                     regions,
                     // (Stray Hair's full-size crops of the original, `parts/crop.rs`: off for now)
                     cropper: if parts::FULL_SIZE_CROPS { self.retouch_cropper(p.id).map(Box::new) } else { None },
-                })
+                }))
             }
         })
     }
