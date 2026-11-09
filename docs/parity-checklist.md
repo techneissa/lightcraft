@@ -294,7 +294,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 
 | Id | Feature | Tier | Status | Evidence | Missing / notes |
 |---|---|---|---|---|---|
-| LR-EYE-RED | Red-eye correction | P1 | ✅ | `cmd:panel.redeye`, `cmd:redeye.add`, `cmd:redeye.delete`, `cmd:redeye.catchlight` | red eye and pet eye (with catchlight) |
+| LR-EYE-RED | Red-eye correction | P1 | ✅ | `cmd:panel.redeye`, `cmd:redeye.add`, `cmd:redeye.update`, `cmd:redeye.delete`, `cmd:redeye.catchlight` | red eye and pet eye (with catchlight); a selected eye has a pin and edge handles to move and resize it |
 | LR-EYE-PET | Pet eye | P2 | ✅ | `cmd:redeye.add` (`pet`), `cmd:redeye.catchlight` | |
 
 ## K. Masking (MASK)

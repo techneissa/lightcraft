@@ -339,6 +339,8 @@ pub struct UiState {
     pub hdr_visualize: bool,
     /// Red Eye panel: selected correction, and whether new ones are pet eyes.
     pub eye: usize,
+    /// The photo `eye` was chosen on: another photo starts at its first correction ([`UiState::eye_for`]).
+    pub eye_photo: Option<lightcraft_catalog::PhotoId>,
     pub eye_pet: bool,
     /// Remove tool: Visualize Spots (high-pass black/white view) and its threshold 0..100.
     pub visualize_spots: bool,
@@ -586,6 +588,7 @@ impl Default for UiState {
             point_color_visualize: false,
             hdr_visualize: false,
             eye: 0,
+            eye_photo: None,
             eye_pet: false,
             visualize_spots: false,
             spots_threshold: 50.0,
@@ -633,6 +636,15 @@ impl Default for UiState {
 }
 
 impl UiState {
+    /// The selected Red Eye correction of `photo`: a photo other than the one it was chosen on starts at its first.
+    pub fn eye_for(&mut self, photo: lightcraft_catalog::PhotoId) -> usize {
+        if self.eye_photo != Some(photo) {
+            self.eye_photo = Some(photo);
+            self.eye = 0;
+        }
+        self.eye
+    }
+
     /// Which colour grading wheels (shadows, midtones, highlights) are hidden for viewing `photo`.
     pub fn grading_hidden_for(&self, photo: lightcraft_catalog::PhotoId) -> [bool; 3] {
         match self.grading_hidden {

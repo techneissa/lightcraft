@@ -378,6 +378,8 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
     if mode == ToolOverlay::Auto && matches!(app.gesture, Some(Gesture::Brush { .. })) {
         pins.set_invisible();
     }
+    // (screen position, selected) of each pin, drawn after the loop so the one under the pointer shows lit
+    let mut drawn: Vec<(Pos2, bool)> = Vec::new();
     for m in &d.masks {
         let sel = Some(m.id) == active;
         // (its coordinates on the photo, or an old mask's on the corrected frame)
@@ -397,18 +399,32 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
                 && let Some(at) = component_pin(&c.shape)
             {
                 let q = map.screen(at);
-                pin(&pins, q, sel);
+                drawn.push((q, sel));
                 register(ui, format!("maskPin:{}:{ci}", m.id), Rect::from_center_size(q, vec2(14.0, 14.0)));
                 grips.push((m.id, ci, 0, q));
             }
         }
     }
+    // (the pin a press would take: the nearest grip, when that is a pin)
+    let lit = resp.hover_pos().and_then(|h| grip_at(&grips, active, h)).filter(|g| g.2 == 0).map(|g| g.3);
+    for &(q, sel) in &drawn {
+        pin_lit(&pins, q, sel, lit == Some(q));
+    }
     mask_keys(app, ui, map, d, &grips);
     object_marks(app, p, map, d, active);
     // Colour Range "Pick": the Masking panel owns the loupe's clicks (general_interaction
     // never runs while it is open), so the eyedropper is handled here too.
+    // Brush and Colour Range: a click or drag that starts on another mask's pin selects that mask
+    // (no dab, no colour sample)
+    let over_pin = matches!(app.ui.tool.as_str(), "colorRange" | "brush") && {
+        match pin_select(app, ui, resp, &grips) {
+            PinSelect::Taken => return,
+            PinSelect::Over => true,
+            PinSelect::Away => false,
+        }
+    };
     if app.ui.tool == "colorRange" {
-        if resp.hovered() {
+        if resp.hovered() && !over_pin {
             ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
         }
         color_range_pick(app, ui, resp, map);
@@ -419,6 +435,7 @@ pub(super) fn mask_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &eg
         return;
     }
     if app.ui.tool == "brush" {
+        ui.data_mut(|m| m.insert_temp(egui::Id::unique("brush-over-pin"), over_pin));
         brush_tool(app, ui, resp, map, p, clip, d);
         return;
     }
@@ -607,14 +624,66 @@ fn object_marks(app: &LightcraftApp, p: &egui::Painter, map: &CanvasMap, d: &Dev
 fn other_pin_at(grips: &[(u32, usize, u8, Pos2)], active: Option<u32>, q: Pos2) -> Option<u32> {
     grips
         .iter()
-        .filter(|g| Some(g.0) != active && g.2 == 0 && g.3.distance(q) < 10.0)
+        .filter(|g| Some(g.0) != active && g.2 == 0 && g.3.distance(q) < PIN_HIT)
         .min_by(|a, b| a.3.distance(q).total_cmp(&b.3.distance(q)))
         .map(|g| g.0)
 }
 
+/// The grip a press at `q` takes: the nearest within [`PIN_HIT`], the `active` mask's first only when equally near. The
+/// pin that lights up under the pointer is this one.
+pub(crate) fn grip_at(grips: &[(u32, usize, u8, Pos2)], active: Option<u32>, q: Pos2) -> Option<(u32, usize, u8, Pos2)> {
+    grips
+        .iter()
+        .filter(|g| g.3.distance(q) < PIN_HIT)
+        .min_by(|a, b| {
+            (a.3.distance(q), Some(a.0) != active).partial_cmp(&(b.3.distance(q), Some(b.0) != active)).unwrap_or(std::cmp::Ordering::Equal)
+        })
+        .copied()
+}
+
+/// Smallest distance, in screen points, a pointer may be from a pin and still grab it.
+pub(crate) const PIN_HIT: f32 = 10.0;
+
+/// The point of `points` nearest to `at` and closer than `within`.
+pub(crate) fn nearest_within(points: impl IntoIterator<Item = Pos2>, at: Pos2, within: f32) -> Option<Pos2> {
+    points.into_iter().filter(|q| q.distance(at) < within).min_by(|a, b| a.distance(at).total_cmp(&b.distance(at)))
+}
+
+/// What [`pin_select`] found.
+enum PinSelect {
+    /// This frame's click was on another mask's pin: it selected that mask; paint or sample nothing.
+    Taken,
+    /// The pointer hovers another mask's pin (a click would select it).
+    Over,
+    /// No other pin involved.
+    Away,
+}
+
+/// Brush and Colour Range tools: a plain click (press and release without moving past the drag threshold) on another
+/// mask's pin selects that mask (through `mask.select`, so undo and MCP see it) instead of painting a dab or sampling a
+/// colour. A drag that starts on the pin is an ordinary stroke (or sample). The selected mask's own pin is nothing
+/// special: painting over it works as anywhere else.
+fn pin_select(app: &mut LightcraftApp, ui: &egui::Ui, resp: &egui::Response, grips: &[(u32, usize, u8, Pos2)]) -> PinSelect {
+    let active = app.session.active_mask;
+    if resp.clicked()
+        && let Some(mid) = resp.interact_pointer_pos().and_then(|q| other_pin_at(grips, active, q))
+    {
+        let _ = app.run("mask.select", json!({"id": mid}));
+        return PinSelect::Taken;
+    }
+    let idle = app.gesture.is_none() && !ui.input(|i| i.pointer.any_down());
+    match resp.hover_pos().and_then(|h| other_pin_at(grips, active, h)) {
+        Some(_) if idle => {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+            PinSelect::Over
+        }
+        _ => PinSelect::Away,
+    }
+}
+
 /// Whether `q` is on one of the `active` mask's own pins (within the same 10 px).
 fn own_pin_at(grips: &[(u32, usize, u8, Pos2)], active: Option<u32>, q: Pos2) -> bool {
-    active.is_some_and(|a| grips.iter().any(|g| g.0 == a && g.2 == 0 && g.3.distance(q) < 10.0))
+    active.is_some_and(|a| grips.iter().any(|g| g.0 == a && g.2 == 0 && g.3.distance(q) < PIN_HIT))
 }
 
 /// Object tool: a click includes what's under it, ⌥-click leaves it out. A click on another
@@ -683,7 +752,9 @@ fn brush_tool(
     if super::brush_resize::resize_drag(app, ui, resp, p, long as f32, 400.0, false) {
         return;
     }
-    if let Some(h) = resp.hover_pos() {
+    // (over another mask's pin the pointing hand shows instead of the brush: a click selects that mask)
+    let over_pin = ui.data(|m| m.get_temp::<bool>(egui::Id::unique("brush-over-pin"))).unwrap_or(false);
+    if let Some(h) = resp.hover_pos().filter(|_| !over_pin) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::None);
         p.circle_stroke(h, r, Stroke::new(1.0, Color32::WHITE));
         p.circle_stroke(h, r * (1.0 - app.ui.brush_feather / 100.0).max(0.05), Stroke::new(1.0, Color32::from_white_alpha(120)));
@@ -853,16 +924,7 @@ fn grip_gestures(
         return;
     }
     let active = app.session.active_mask;
-    // the grip under the pointer: the selected mask's first, then the nearest
-    let hit = |q: Pos2| {
-        grips
-            .iter()
-            .filter(|g| g.3.distance(q) < 10.0)
-            .min_by(|a, b| {
-                (Some(a.0) != active, a.3.distance(q)).partial_cmp(&(Some(b.0) != active, b.3.distance(q))).unwrap_or(std::cmp::Ordering::Equal)
-            })
-            .copied()
-    };
+    let hit = |q: Pos2| grip_at(grips, active, q);
     if resp.clicked()
         && let Some(q) = resp.interact_pointer_pos()
         && let Some((mid, ..)) = hit(q)
@@ -1005,9 +1067,24 @@ pub(super) fn pins_live(app: &LightcraftApp, resp: &egui::Response, map: &Canvas
         || crate::canvas_keys::has_focus(&resp.ctx)
 }
 
-pub(super) fn pin(p: &egui::Painter, c: Pos2, sel: bool) {
-    p.circle_filled(c, 6.0, if sel { Color32::from_rgb(1, 101, 221) } else { Color32::from_gray(200) });
-    p.circle_stroke(c, 6.0, Stroke::new(1.5, Color32::WHITE));
+/// A pin; `lit` (the pointer is over it) makes it larger, brighter and haloed.
+pub(super) fn pin_lit(p: &egui::Painter, c: Pos2, sel: bool, lit: bool) {
+    if lit {
+        p.circle_filled(c, 11.0, Color32::from_white_alpha(70));
+    }
+    let fill = match (sel, lit) {
+        (true, true) => Color32::from_rgb(60, 150, 255),
+        (true, false) => Color32::from_rgb(1, 101, 221),
+        (false, true) => Color32::from_rgb(150, 200, 255),
+        (false, false) => Color32::from_gray(200),
+    };
+    let r = if lit { 7.5 } else { 6.0 };
+    if lit {
+        // a dark keyline outside the white ring, so the lit pin stands out on a light photo too
+        p.circle_stroke(c, r + 1.5, Stroke::new(1.5, Color32::from_black_alpha(150)));
+    }
+    p.circle_filled(c, r, fill);
+    p.circle_stroke(c, r, Stroke::new(if lit { 2.0 } else { 1.5 }, Color32::WHITE));
 }
 
 /// The pen pressure (0..1) reported this frame: the force of the latest touch or pen event that carries one (winit

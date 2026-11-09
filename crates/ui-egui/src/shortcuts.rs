@@ -919,7 +919,17 @@ fn delete_key(app: &mut LightcraftApp, ctx: &egui::Context) -> bool {
             delete_selected_guide(app);
             return true;
         }
-        R::RedEye => return true,
+        R::RedEye => {
+            // the selected eye (its pin and handles are on the photo)
+            if let Some(id) = app.session.active() {
+                let n = app.session.develop_of(id).map_or(0, |d| d.red_eye.len());
+                let eye = app.ui.eye_for(id);
+                if eye < n {
+                    let _ = app.run("redeye.delete", json!({"index": eye}));
+                }
+            }
+            return true;
+        }
         _ => {}
     }
     // in an album, Delete takes the photos out of the album only, as in Lightroom: they
