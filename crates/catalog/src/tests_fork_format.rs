@@ -292,7 +292,7 @@ fn a_residual_look_is_fork_format_3() {
 /// fork 3 build refuses it instead of dropping the amount; a fork 3 library opens and is upgraded with nothing lost.
 #[test]
 fn a_decontaminated_mask_is_fork_format_4() {
-    assert!(VERSION >= 4);
+    const { assert!(VERSION >= 4) };
     let mut c = Catalog::new();
     let mut d = DevelopSettings::default();
     let shape = MaskShape::background();
