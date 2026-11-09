@@ -66,8 +66,8 @@ branches merge).
 - **Never crashes**: a damaged or hostile index is started afresh (keys that could leave the folder are refused); a
   failed render, detection or run counts as failed; a panic in the worker is a failure, not a crash.
 
-How it does (6 of techneissa's A7 V raws with people, copied to a scratch library; M4 Pro, SegFormer set, four runs
-while other builds kept the load average between 20 and 56; 2026-11-09):
+How it does (6 private test raws with people, copied to a scratch library; a test Mac, SegFormer set, four runs
+while other builds were running; 2026-11-09):
 - Parsed ahead: the open photo and its 4 neighbours in 11–50 s (2–10 s a photo, the first including loading the
   models), the sixth at the idle pace in 2–10 s. The parses a request makes afterwards have the same cache keys.
 - Opening each of the 6 afterwards: no model run, 0.1–6 ms each. Before, a request took about 1 s even when its parse

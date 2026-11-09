@@ -26,7 +26,7 @@ texture finer than a cell keeps its contrast, and a pixel outside the mask keeps
 four times larger. Face Light blurs the face's area on a coarser grid (48 cells across the face) and lights where the
 blur is above half, ramping to full at 0.92.
 
-Per draft render with every slider on (Apple M4 Pro, release, the machine under load 15–35; one face, its Facial
+Per draft render with every slider on (a test Mac, release, other work running; one face, its Facial
 Skin and Body Skin masks from the parse): draft (1936 px long edge) 2.8–4.2 ms on head-and-shoulders portraits,
 8.6 ms with three people; loupe (2560 px) 4.8–6.7 ms and 11.5 ms. The step runs on the CPU (on the GPU, a retouched
 photo's scene-linear stage already runs there), on the parse's cached masks; no model runs while a slider moves. No

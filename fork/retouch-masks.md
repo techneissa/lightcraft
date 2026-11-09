@@ -41,7 +41,7 @@ The link between people parsing (`fork/people-parsing.md`) and the retouch step 
   (`fork/retouch-skin-tone.md`) replaced it with Face Light, and the tests here use Face Light.
 - `Scene::mask_box` (new): the pixels a face's mask can touch, so a feature reads and writes only those.
 
-Mask sampling per render (Apple M4 Pro, release, load ~20; Facial Skin over 30 % × 40 % of the photo, a 512² mask):
+Mask sampling per render (a test Mac, release, other work running; Facial Skin over 30 % × 40 % of the photo, a 512² mask):
 Face Light at draft 1936 × 1291 3.4 ms, loupe 2560 × 1707 5.9 ms, 24 MP 38.6 ms; a full-frame `mask_plane` 8.2 / 13.9
 / 157 ms.
 

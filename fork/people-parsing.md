@@ -41,7 +41,7 @@ Edit view uses it yet; the Select People masks and the Portrait features build o
 - **Never crashes**: a missing or damaged model file is an error naming the file; a damaged cache file is parsed again;
   a panic in the run is a message; no people, 50 faces, faces cut by the edge and a 1 × 1 photo are tested.
 
-How it does on photos (techneissa's A7 V photos and CC0 photos, 2026-11-08):
+How it does on photos (private test photos and CC0 photos, 2026-11-08):
 - Both sets: faces, eyes (cut to the mesh's eye openings, iris from the mesh), lips, brows, hands and arms are right on
   portraits and groups; a group of 29 with 30-px faces gets tops, trousers, hands and shoes per person.
 - SegFormer set: better clothes (a thobe is a top, patterned scarves and dark shirts are clothes), finds glasses more
