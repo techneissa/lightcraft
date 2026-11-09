@@ -131,6 +131,8 @@ struct Store {
 pub struct FaceStore {
     store: Arc<Mutex<Store>>,
     provider: Option<Arc<dyn FaceProvider>>,
+    /// The pictures Background Swap uses (`fork/retouch-background.md`).
+    pub(crate) backdrops: crate::retouch_background::Backdrops,
 }
 
 impl FaceStore {
@@ -313,9 +315,15 @@ impl Session {
             return (0, None);
         }
         match self.retouch_faces.get(&self.retouch_key(p, s)) {
-            Some(found) => (found.input.fingerprint() | 1, Some(found.input)),
+            Some(found) => {
+                // (with Background Swap's picture, loaded now when it is not: `fork/retouch-background.md`)
+                let input = self.with_backdrop(found.input, p, s, true);
+                (input.fingerprint() | 1, Some(input))
+            }
             None => {
                 self.retouch_search(p.id, false);
+                // (Background Swap's picture loads meanwhile: `fork/retouch-background.md`)
+                self.backdrop_prefetch(s);
                 (self.retouch_faces.unknown_salt(p.id), None)
             }
         }
@@ -327,7 +335,7 @@ impl Session {
             return 0;
         }
         match self.retouch_faces.get(&self.retouch_key(p, s)) {
-            Some(found) => found.input.fingerprint() | 1,
+            Some(found) => self.with_backdrop_now(found.input, p, s).fingerprint() | 1,
             None => self.retouch_faces.unknown_salt(p.id),
         }
     }
@@ -457,12 +465,12 @@ impl Session {
     /// Exports and synchronous renders: find a retouched photo's faces first, so the result matches the preview.
     /// A failure is logged and the photo renders without faces.
     pub(crate) fn retouch_before_export(&mut self, id: PhotoId) {
-        let Some(p) = self.catalog.photo(id) else { return };
+        let Some(p) = self.catalog.photo(id).cloned() else { return };
         if !lightcraft_develop::retouch::active(&p.develop) {
             return;
         }
         // (a prepared export finds them on its own worker)
-        if self.retouch_faces.lock().deferred.contains(&self.retouch_key(p, &p.develop)) {
+        if self.retouch_faces.lock().deferred.contains(&self.retouch_key(&p, &p.develop)) {
             return;
         }
         if let Err(e) = self.retouch_detect_now(id, false) {
@@ -559,6 +567,7 @@ impl ExportFaces {
         // (`put` ends the claim; dropping `self` then ends the deferral)
         match &result {
             Ok(found) => {
+                // (Background's picture and depth map come after: `ExportBackdrop::fill`)
                 for j in jobs.iter_mut() {
                     j.info.retouch = Some(found.input.clone());
                 }

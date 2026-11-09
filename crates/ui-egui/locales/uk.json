@@ -2566,5 +2566,21 @@
   "Start the app with --control 7980 (or LIGHTCRAFT_CONTROL_PORT), then lightcraft-cli mcp --connect attaches one to it.": "Запустіть програму з --control 7980 (або LIGHTCRAFT_CONTROL_PORT), і lightcraft-cli mcp --connect під'єднає до неї одного агента.",
   "Welcome": "Ласкаво просимо",
   "Next": "Далі",
-  "Get Started": "Почати"
+  "Get Started": "Почати",
+  "Swap With": "Замінити на",
+  "White": "Білий",
+  "Light Grey": "Світло-сірий",
+  "Grey": "Сірий",
+  "Black": "Чорний",
+  "Choose Colour": "Вибрати колір",
+  "Choose Picture…": "Вибрати зображення…",
+  "Use a Photo…": "Використати фото…",
+  "Loading…": "Завантаження…",
+  "Choose Background Picture…": "Вибрати фонове зображення…",
+  "Images": "Зображення",
+  "Background Picture Missing": "Фонове зображення відсутнє",
+  "Blur": "Розмиття",
+  "Clean Backdrop": "Очистити фон",
+  "Loading background picture": "Завантаження фонового зображення",
+  "Reading depth map": "Читання карти глибини"
 }

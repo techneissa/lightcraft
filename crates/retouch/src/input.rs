@@ -390,12 +390,21 @@ pub struct Input {
     /// people parse is made in. The step maps them through the lens and transform warp, as it maps local masks drawn
     /// on the photo. `false`: after lens corrections and transform (the module docs' frame).
     pub on_photo: bool,
+    /// The picture Background Swap uses, once the engine has loaded it ([`Input::with_backdrop`]).
+    pub backdrop: Option<crate::background::Backdrop>,
+    /// The photo's depth map, when its file has one, in the faces' frame ([`Input::with_depth`]).
+    pub depth: Option<crate::background::Depth>,
     fingerprint: OnceLock<u64>,
 }
 
 impl fmt::Debug for Input {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Input").field("faces", &self.faces).field("on_photo", &self.on_photo).finish()
+        f.debug_struct("Input")
+            .field("faces", &self.faces)
+            .field("on_photo", &self.on_photo)
+            .field("backdrop", &self.backdrop)
+            .field("depth", &self.depth)
+            .finish()
     }
 }
 
@@ -409,12 +418,22 @@ impl PartialEq for Input {
 
 impl Input {
     pub fn new(faces: Vec<Face>) -> Input {
-        Input { faces, on_photo: false, fingerprint: OnceLock::new() }
+        Input { faces, on_photo: false, backdrop: None, depth: None, fingerprint: OnceLock::new() }
     }
 
     /// Faces whose coordinates are on the photo before lens corrections and transform ([`Input::on_photo`]).
     pub fn new_on_photo(faces: Vec<Face>) -> Input {
-        Input { faces, on_photo: true, fingerprint: OnceLock::new() }
+        Input { faces, on_photo: true, backdrop: None, depth: None, fingerprint: OnceLock::new() }
+    }
+
+    /// These faces with Background Swap's picture (`None`: without one). Copies the faces.
+    pub fn with_backdrop(&self, backdrop: Option<crate::background::Backdrop>) -> Input {
+        Input { faces: self.faces.clone(), on_photo: self.on_photo, backdrop, depth: self.depth.clone(), fingerprint: OnceLock::new() }
+    }
+
+    /// These faces with the photo's depth map. Copies the faces.
+    pub fn with_depth(&self, depth: Option<crate::background::Depth>) -> Input {
+        Input { faces: self.faces.clone(), on_photo: self.on_photo, backdrop: self.backdrop.clone(), depth, fingerprint: OnceLock::new() }
     }
 
     /// A stable 64-bit hash of everything here (boxes, landmarks, persons, masks), for render cache keys: a
@@ -424,6 +443,15 @@ impl Input {
             let mut h = Fnv::new();
             h.u64(self.faces.len() as u64);
             h.u64(u64::from(self.on_photo));
+            // (only when there: an input without them keeps the fingerprint it had before they existed)
+            if let Some(b) = &self.backdrop {
+                h.bytes(b"backdrop");
+                h.u64(b.key);
+            }
+            if let Some(d) = &self.depth {
+                h.bytes(b"depth");
+                h.u64(d.key);
+            }
             for f in &self.faces {
                 let up = f.key_bounds();
                 for v in [f.bounds.x0, f.bounds.y0, f.bounds.x1, f.bounds.y1, up.x0, up.y0, up.x1, up.y1] {

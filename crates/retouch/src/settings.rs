@@ -254,11 +254,12 @@ macro_rules! features {
                 false $(|| (!$crate::Feature::is_off(&self.$key) && !$crate::Feature::writes_near_face(&self.$key)))*
             }
 
-            /// What the features that are on read: the largest [`Feature::REACH`] and the parts' masks
-            /// ([`Feature::PARTS`]); `None` while every feature is off.
+            /// What the features that are on read around a face: the largest [`Feature::REACH`] and the parts'
+            /// masks ([`Feature::PARTS`]); `None` while every feature that reads around a face
+            /// ([`Feature::READS_AROUND`]) is off.
             pub fn reads(&self) -> Option<$crate::settings::Reads> {
                 let mut out: Option<$crate::settings::Reads> = None;
-                $(if !$crate::Feature::is_off(&self.$key) {
+                $(if <$ty as $crate::Feature>::READS_AROUND && !$crate::Feature::is_off(&self.$key) {
                     out.get_or_insert_with(Default::default).add(<$ty as $crate::Feature>::REACH, <$ty as $crate::Feature>::PARTS);
                 })*
                 out

@@ -53,6 +53,10 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     /// renders all of that around it and cuts back (`crates/pipeline/src/retouch_step.rs`), so zoom never changes
     /// a result. By default [`DEFAULT_REACH`].
     const REACH: f64 = DEFAULT_REACH;
+    /// Whether a zoomed render must hold what the feature reads around a face ([`Feature::PARTS`]' areas grown by
+    /// [`Feature::REACH`]). `false` for a feature that reads only the pixel itself and the pipeline's whole-frame
+    /// [`View::analysis`] image (Background). By default `true`.
+    const READS_AROUND: bool = true;
 
     /// Whether every pixel these settings change lies in their face's read box: the face's box, the areas of its
     /// [`Feature::PARTS`] masks and of its spots and strands, grown by [`Feature::REACH`]. A render then redoes only
@@ -94,6 +98,16 @@ pub trait View: Sync {
     /// The photo's lens corrections and transform, to match per-face settings kept in the other frame
     /// ([`crate::overrides::resolve_in`]). `None` (the default): such settings pair by person only.
     fn key_map(&self) -> Option<&dyn KeyMap> {
+        None
+    }
+    /// Where the image lies in the whole render (a zoomed loupe renders a window of it), for features that read
+    /// around a pixel ([`crate::background`]). `None` (the default): the image is the whole render.
+    fn place(&self) -> Option<crate::background::Place> {
+        None
+    }
+    /// The whole frame before the Background step at a fixed size, made by the pipeline
+    /// ([`crate::background::Analysis`]). `None` (the default): the image itself, when it is the whole render.
+    fn analysis(&self) -> Option<&crate::background::Analysis> {
         None
     }
 }
@@ -143,6 +157,12 @@ pub struct Scene<'a> {
     pub faces: Vec<FaceCtx<'a>>,
     pub width: usize,
     pub height: usize,
+    /// The picture Background Swap uses ([`Input::backdrop`]).
+    pub backdrop: Option<&'a crate::background::Backdrop>,
+    /// The photo's depth map ([`Input::depth`]).
+    pub depth: Option<&'a crate::background::Depth>,
+    /// [`Input::fingerprint`]: what the faces, their masks and the above are (work made from them is kept by it).
+    pub input_key: u64,
     view: &'a dyn View,
 }
 
@@ -154,7 +174,7 @@ impl<'a> Scene<'a> {
     /// whose box is not a box or maps nowhere. `face` arguments of [`Feature::apply`] index this list.
     pub fn new(input: &'a Input, view: &'a dyn View, width: usize, height: usize) -> Scene<'a> {
         let faces = input.faces.iter().take(MAX_FACES).enumerate().filter_map(|(i, f)| map_face(f, i, view)).collect();
-        Scene { faces, width, height, view }
+        Scene { faces, width, height, backdrop: input.backdrop.as_ref(), depth: input.depth.as_ref(), input_key: input.fingerprint(), view }
     }
 
     pub fn view(&self) -> &dyn View {
@@ -168,7 +188,7 @@ impl<'a> Scene<'a> {
         'a: 'b,
     {
         let faces = self.faces.iter().filter_map(|f| map_face(f.face, f.index, view)).collect();
-        Scene { faces, width, height, view }
+        Scene { faces, width, height, backdrop: self.backdrop, depth: self.depth, input_key: self.input_key, view }
     }
 
     /// The mask of `part` of face `face` at pixel (`x`, `y`) of the image; 0 without that mask.

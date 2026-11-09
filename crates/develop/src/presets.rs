@@ -310,7 +310,12 @@ pub struct Preset {
 
 impl Preset {
     pub fn from_settings(id: &str, name: &str, group: &str, s: &DevelopSettings, groups: &[SettingsGroup]) -> Preset {
-        Preset { id: id.into(), name: name.into(), group: group.into(), settings: extract_groups(s, groups), favorite: false, builtin: false }
+        let mut settings = extract_groups(s, groups);
+        // (fork, `fork/retouch-background.md`: a preset never carries a Background Swap picture of this library)
+        if let Some(r) = settings.get_mut(crate::retouch::KEY) {
+            crate::retouch::background::strip_pictures(r);
+        }
+        Preset { id: id.into(), name: name.into(), group: group.into(), settings, favorite: false, builtin: false }
     }
     /// Apply at `amount` (1.0 = 100 %), with `s` as both the photo's current and its original
     /// settings (see [`Preset::apply_on`]): right for the import default preset and for scratch
@@ -359,6 +364,22 @@ fn add_masks(out: &mut DevelopSettings, masks: &[Value], amount: f64) {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    /// Fork (`fork/retouch-background.md`): a preset with the Portrait group never carries a Background Swap
+    /// picture (a file of this library, or one of its photos); a copy of the settings to another photo does.
+    #[test]
+    fn a_preset_carries_no_swap_picture() {
+        use crate::retouch::background::Swap;
+        let mut a = DevelopSettings::default();
+        a.retouch.global.background.swap = 80.0;
+        a.retouch.global.background.blur = 30.0;
+        a.retouch.global.background.with = Swap::Picture { hash: "ab".repeat(32) };
+        let p = Preset::from_settings("p", "P", "User", &a, &[SettingsGroup::Portrait]);
+        assert!(!p.settings.to_string().contains(&"ab".repeat(32)), "{}", p.settings);
+        let b = p.apply(&DevelopSettings::default(), 1.0);
+        assert_eq!((b.retouch.global.background.blur, b.retouch.global.background.swap), (30.0, 0.0));
+        assert!(extract_groups(&a, &[SettingsGroup::Portrait]).to_string().contains(&"ab".repeat(32)), "a copy to another photo keeps it");
+    }
 
     #[test]
     fn extract_and_apply_roundtrip() {

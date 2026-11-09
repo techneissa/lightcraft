@@ -2510,5 +2510,21 @@
   "Selecting with SAM 3": "Markering med SAM 3",
   "Rough mask. Click to install SAM 3.": "Grov mask. Klicka för att installera SAM 3.",
   "Rough mask. Add it again to use SAM 3.": "Grov mask. Lägg till den igen för att använda SAM 3.",
-  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton"
+  "Stopped at the scan limit: there may be more photos": "Stoppade vid skanningsgränsen: det kan finnas fler foton",
+  "Swap With": "Ersätt med",
+  "White": "Vit",
+  "Light Grey": "Ljusgrå",
+  "Grey": "Grå",
+  "Black": "Svart",
+  "Choose Colour": "Välj färg",
+  "Choose Picture…": "Välj bild…",
+  "Use a Photo…": "Använd ett foto…",
+  "Loading…": "Läser in…",
+  "Choose Background Picture…": "Välj bakgrundsbild…",
+  "Images": "Bilder",
+  "Background Picture Missing": "Bakgrundsbild saknas",
+  "Blur": "Oskärpa",
+  "Clean Backdrop": "Rensa bakgrund",
+  "Loading background picture": "Läser in bakgrundsbild",
+  "Reading depth map": "Läser djupkarta"
 }
