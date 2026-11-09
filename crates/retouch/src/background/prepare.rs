@@ -56,14 +56,15 @@ impl Fitted {
 
 static KEPT: Mutex<Vec<(u64, Arc<Prepared>)>> = Mutex::new(Vec::new());
 
-/// The kept work for `img` in `scene`, made now when it is not kept; `None` when there is no person to work around.
-pub(crate) fn prepared(img: &Rgb32f, scene: &Scene<'_>) -> Option<Arc<Prepared>> {
+/// The kept work for `img` in `scene` and whether it was kept, made now when it is not; `None` when there is no
+/// person to work around.
+pub(crate) fn prepared(img: &Rgb32f, scene: &Scene<'_>) -> Option<(Arc<Prepared>, bool)> {
     let size = PhotoSize::of(scene)?;
     let place = scene.view().place().unwrap_or(Place { x: 0, y: 0, width: img.width, height: img.height });
     let key = key_of(img, scene, &place);
     let keep = img.width.saturating_mul(img.height) <= KEEP_MAX_PX;
     if keep && let Some(p) = KEPT.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(k, _)| *k == key).map(|(_, p)| p.clone()) {
-        return Some(p);
+        return Some((p, true));
     }
     let alpha = matte::person(scene)?;
     let edge = matte::edge(img, &alpha, size.long());
@@ -85,7 +86,7 @@ pub(crate) fn prepared(img: &Rgb32f, scene: &Scene<'_>) -> Option<Arc<Prepared>>
         kept.insert(0, (key, p.clone()));
         kept.truncate(KEEP);
     }
-    Some(p)
+    Some((p, false))
 }
 
 /// Drop every kept picture (tests).
@@ -142,15 +143,34 @@ fn pixels_hash(img: &Rgb32f) -> u64 {
             *o = h;
         }
     });
-    let mut f = Fnv::new();
-    for r in rows {
-        f.u64(r);
-    }
-    f.0
+    fold(&rows)
 }
 
+/// A fast hash of a plane's bits (chunks hashed in parallel, then folded).
 fn plane_hash(data: &[f32]) -> u64 {
-    data.iter().fold(0x2545_f491_4f6c_dd1du64, |h, v| (h ^ u64::from(v.to_bits())).wrapping_mul(0xff51_afd7_ed55_8ccd).rotate_left(27))
+    const CHUNK: usize = 1 << 14;
+    let mut parts = vec![0u64; data.len().div_ceil(CHUNK)];
+    par_rows(&mut parts, 1, |k, out| {
+        let start = k * CHUNK;
+        let chunk = data.get(start..(start + CHUNK).min(data.len())).unwrap_or(&[]);
+        let h = chunk.chunks(2).fold(0x2545_f491_4f6c_dd1du64 ^ k as u64, |h, v| {
+            let bits = v.iter().enumerate().fold(0u64, |a, (i, f)| a | (u64::from(f.to_bits()) << (32 * i)));
+            (h ^ bits).wrapping_mul(0xff51_afd7_ed55_8ccd).rotate_left(27)
+        });
+        if let Some(o) = out.first_mut() {
+            *o = h;
+        }
+    });
+    fold(&parts)
+}
+
+fn fold(parts: &[u64]) -> u64 {
+    let mut f = Fnv::new();
+    f.u64(parts.len() as u64);
+    for r in parts {
+        f.u64(*r);
+    }
+    f.0
 }
 
 impl Prepared {

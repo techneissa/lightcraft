@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! cargo run -p lightcraft-retouch --release --example background -- in.jpg out.jpg --mask person.png \
-//!   [--blur 0..100] [--swap 0..100] [--clean 0..100] [--colour #RRGGBB | --picture other.jpg] [--depth depth.png]
+//!   [--blur 0..100] [--swap 0..100] [--clean 0..100] [--colour #RRGGBB | --picture other.jpg] [--depth depth.png] [--repeat N]
 //! ```
 //!
 //! `--mask` is the person's matte as a grey picture (white = person), e.g. `outdir/masks/entirePerson-0.png` from
@@ -48,12 +48,12 @@ fn read_grey(path: &str) -> Result<Plane, String> {
 
 fn run(args: &[String]) -> Result<(), String> {
     let usage = || {
-        "usage: background in.jpg out.jpg --mask person.png [--blur N] [--swap N] [--clean N] [--colour #RRGGBB | --picture file] [--depth depth.png]"
+        "usage: background in.jpg out.jpg --mask person.png [--blur N] [--swap N] [--clean N] [--colour #RRGGBB | --picture file] [--depth depth.png] [--repeat N]"
             .to_string()
     };
     let mut files = Vec::new();
     let mut b = Background::default();
-    let (mut masks, mut picture, mut depth) = (Vec::new(), None, None);
+    let (mut masks, mut picture, mut depth, mut repeat) = (Vec::new(), None, None, 1usize);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = || it.next().cloned().ok_or_else(usage);
@@ -69,6 +69,7 @@ fn run(args: &[String]) -> Result<(), String> {
             }
             "--mask" => masks.push(value()?),
             "--depth" => depth = Some(value()?),
+            "--repeat" => repeat = value()?.parse().map_err(|_| usage())?,
             _ => files.push(a.clone()),
         }
     }
@@ -93,15 +94,19 @@ fn run(args: &[String]) -> Result<(), String> {
     let t = std::time::Instant::now();
     lightcraft_retouch::run::apply(&mut img, &r, &input, &view, Stage::Background);
     let first = t.elapsed();
-    // a second render of the same picture: what a slider drag costs, with the work kept
-    let mut again = read_rgb(input_path(&files))?;
-    let t = std::time::Instant::now();
-    lightcraft_retouch::run::apply(&mut again, &r, &input, &view, Stage::Background);
+    // renders of the same picture: what a slider drag costs, with the work kept (the fastest of `--repeat`)
+    let source = read_rgb(input_path(&files))?;
+    let mut best = f64::INFINITY;
+    for _ in 0..repeat.max(1) {
+        let mut again = source.clone();
+        let t = std::time::Instant::now();
+        lightcraft_retouch::run::apply(&mut again, &r, &input, &view, Stage::Background);
+        best = best.min(t.elapsed().as_secs_f64() * 1e3);
+    }
     eprintln!(
-        "background: {w}×{h}, {} people, {:.0} ms, then {:.1} ms with the work kept",
+        "background: {w}×{h}, {} people, {:.0} ms, then {best:.1} ms with the work kept (fastest of {repeat})",
         masks.len(),
-        first.as_secs_f64() * 1e3,
-        t.elapsed().as_secs_f64() * 1e3
+        first.as_secs_f64() * 1e3
     );
     let bytes: Vec<u8> = img.data.iter().flat_map(|p| p.map(encode_srgb8)).collect();
     let out = image::RgbImage::from_raw(w as u32, h as u32, bytes).ok_or("the picture's size changed")?;

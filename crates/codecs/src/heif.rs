@@ -149,3 +149,19 @@ mod tests {
         assert!(matches!(&r, Err(crate::Error::Unsupported(Format::Heif, why)) if why.contains("sequence")), "{r:?}");
     }
 }
+
+/// Fork (`fork/retouch-background.md`): the depth map of a HEIF photo (an iPhone Portrait photo's), 0…1 as stored
+/// (larger is nearer), in the picture's orientation: `(width, height, values)`. `None` when the file has none, can't
+/// be read, or this build has no HEIF decoder.
+pub fn decode_depth(bytes: &[u8]) -> Option<(usize, usize, Vec<f32>)> {
+    #[cfg(feature = "heif")]
+    {
+        let d = lightcraft_heif::decode_depth(bytes, &lightcraft_heif::Options::default()).ok()??;
+        Some((d.width, d.height, d.data))
+    }
+    #[cfg(not(feature = "heif"))]
+    {
+        let _ = bytes;
+        None
+    }
+}

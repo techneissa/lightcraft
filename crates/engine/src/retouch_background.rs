@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use lightcraft_develop::DevelopSettings;
 use lightcraft_develop::retouch::Input;
-use lightcraft_develop::retouch::background::Backdrop;
+use lightcraft_develop::retouch::background::{Backdrop, Depth};
 use lightcraft_raster::{Rgb32f, Rgba8};
 use serde_json::{Value, json};
 
@@ -30,8 +30,12 @@ struct State {
     loaded: Vec<(String, Backdrop)>,
     busy: Vec<String>,
     failed: Vec<(String, String)>,
-    /// The faces of a photo with a picture: (the faces' fingerprint, the picture's key, both), newest first.
-    with: Vec<(u64, u64, Arc<Input>)>,
+    /// The faces of a photo with a picture and a depth map: (the faces' fingerprint, the picture's and the depth
+    /// map's keys, all of them), newest first.
+    with: Vec<(u64, u64, u64, Arc<Input>)>,
+    /// Photos' depth maps by file path (`None`: the file has none), newest first.
+    depths: Vec<(String, Option<Depth>)>,
+    depth_busy: Vec<String>,
 }
 
 /// The loaded Swap pictures (shared by the session and its workers).
@@ -92,18 +96,34 @@ impl Backdrops {
         }
     }
 
-    /// `input` with picture `b`, kept so every render of the photo shares one copy of its faces.
-    pub fn with(&self, input: &Arc<Input>, b: Backdrop) -> Arc<Input> {
+    /// `input` with picture `b` and depth map `d`, kept so every render of the photo shares one copy of its faces.
+    pub fn with(&self, input: &Arc<Input>, b: Option<Backdrop>, d: Option<Depth>) -> Arc<Input> {
+        if b.is_none() && d.is_none() {
+            return input.clone();
+        }
         let fp = input.fingerprint();
+        let (bk, dk) = (b.as_ref().map_or(0, |b| b.key), d.as_ref().map_or(0, |d| d.key));
         let mut st = self.lock();
-        if let Some((_, _, i)) = st.with.iter().find(|(f, k, _)| *f == fp && *k == b.key) {
+        if let Some((_, _, _, i)) = st.with.iter().find(|(f, x, y, _)| *f == fp && *x == bk && *y == dk) {
             return i.clone();
         }
-        let key = b.key;
-        let made = Arc::new(input.with_backdrop(Some(b)));
-        st.with.insert(0, (fp, key, made.clone()));
+        let made = Arc::new(input.with_backdrop(b).with_depth(d));
+        st.with.insert(0, (fp, bk, dk, made.clone()));
         st.with.truncate(KEEP_WITH);
         made
+    }
+
+    /// The depth map of the photo file at `path`: `Some(None)` when it has none, `None` while not read.
+    fn depth(&self, path: &str) -> Option<Option<Depth>> {
+        self.lock().depths.iter().find(|(p, _)| p == path).map(|(_, d)| d.clone())
+    }
+
+    fn put_depth(&self, path: &str, d: Option<Depth>) {
+        let mut st = self.lock();
+        st.depth_busy.retain(|p| p != path);
+        st.depths.retain(|(p, _)| p != path);
+        st.depths.insert(0, (path.to_string(), d));
+        st.depths.truncate(KEEP_WITH);
     }
 
     /// Forget picture `key` (a file changed on disk, a photo re-edited: Swap with it again loads it anew).
@@ -131,11 +151,63 @@ fn load(job: Job) -> Result<Rgb32f, String> {
     }
 }
 
+/// The depth map of the photo file at `path` (`None`: it has none, or it can't be read).
+fn read_depth(path: &str) -> Option<Depth> {
+    let bytes = std::fs::read(path).ok()?;
+    let (w, h, data) = lightcraft_codecs::decode_depth(&bytes)?;
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    hash.write(path.as_bytes());
+    hash.write(&(bytes.len() as u64).to_le_bytes());
+    let plane = lightcraft_raster::Plane { width: w, height: h, data };
+    (plane.data.len() == w.saturating_mul(h) && w > 0 && h > 0).then(|| Depth { plane: Arc::new(plane), key: hash.finish() })
+}
+
+/// The path of photo `p`'s file when Blur could read a depth map from it (a HEIF photo) and Blur is on.
+fn depth_path(p: &lightcraft_catalog::Photo, s: &DevelopSettings) -> Option<String> {
+    let b = &s.retouch.global.background;
+    if !(b.blur.is_finite() && b.blur > 0.0) {
+        return None;
+    }
+    let lightcraft_catalog::Source::File { path } = &p.source else { return None };
+    let ext = std::path::Path::new(path).extension()?.to_string_lossy().to_ascii_lowercase();
+    matches!(ext.as_str(), "heic" | "heif" | "hif").then(|| path.clone())
+}
+
 /// 8-bit sRGB → linear Rec.2020.
 fn srgb8_to_working(img: &Rgba8) -> Rgb32f {
     let m = lightcraft_color::SRGB.to_space(&lightcraft_color::REC2020);
     let lin = img.to_linear();
     lin.map(|p| m.apply_f32(p))
+}
+
+/// Read the depth map of the file at `path` on a worker, unless it is being read.
+fn depth_load(store: &Backdrops, path: String, activity: &crate::activity::Activity) {
+    {
+        let mut st = store.lock();
+        if st.depth_busy.contains(&path) {
+            return;
+        }
+        st.depth_busy.push(path.clone());
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let guard = activity.start("retouch.depth", "Reading Depth Map", crate::activity::Cancel::No);
+        let worker = store.clone();
+        let p = path.clone();
+        let spawned = std::thread::Builder::new().name("retouch-depth".into()).spawn(move || {
+            let d = crate::guard::catch("the depth map", || read_depth(&p)).ok().flatten();
+            worker.put_depth(&p, d);
+            drop(guard);
+        });
+        if spawned.is_err() {
+            store.put_depth(&path, None);
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = activity;
+        store.put_depth(&path, read_depth(&path));
+    }
 }
 
 impl Session {
@@ -185,10 +257,16 @@ impl Session {
         store.put(key, load(job));
     }
 
-    /// Load the Swap picture of `s` now, on this thread, when it is not loaded (exports, synchronous renders).
-    pub(crate) fn backdrop_now(&mut self, s: &DevelopSettings) {
-        let Some(key) = picture_key(s) else { return };
+    /// Load the Swap picture of photo `p` with settings `s` and its depth map now, on this thread, when they are not
+    /// loaded (exports, synchronous renders).
+    pub(crate) fn backdrop_now(&mut self, p: &lightcraft_catalog::Photo, s: &DevelopSettings) {
         let store = self.retouch_faces.backdrops.clone();
+        if let Some(path) = depth_path(p, s)
+            && store.depth(&path).is_none()
+        {
+            store.put_depth(&path, read_depth(&path));
+        }
+        let Some(key) = picture_key(s) else { return };
         if store.get(&key).is_some() {
             return;
         }
@@ -199,20 +277,29 @@ impl Session {
         store.put(&key, result);
     }
 
-    /// `input` with the Swap picture `s` uses, when it uses one and it is loaded; starts loading it otherwise
-    /// (`start`).
-    pub(crate) fn with_backdrop(&mut self, input: Arc<Input>, s: &DevelopSettings, start: bool) -> Arc<Input> {
-        let Some(key) = picture_key(s) else { return input };
+    /// `input` with what Background reads besides the faces, when it is loaded: Swap's picture and the photo's depth
+    /// map. Starts loading what is not (`start`).
+    pub(crate) fn with_backdrop(&mut self, input: Arc<Input>, p: &lightcraft_catalog::Photo, s: &DevelopSettings, start: bool) -> Arc<Input> {
         let store = self.retouch_faces.backdrops.clone();
-        match store.get(&key) {
-            Some(b) => store.with(&input, b),
-            None => {
-                if start {
-                    self.backdrop_load(&key);
-                }
-                input
-            }
+        let picture = picture_key(s);
+        let b = picture.as_deref().and_then(|k| store.get(k));
+        if start && let Some(k) = picture.as_deref().filter(|_| b.is_none()) {
+            self.backdrop_load(k);
         }
+        let path = depth_path(p, s);
+        let d = path.as_deref().and_then(|path| store.depth(path)).flatten();
+        if start && let Some(path) = path.filter(|path| store.depth(path).is_none()) {
+            depth_load(&store, path, &self.activity);
+        }
+        store.with(&input, b, d)
+    }
+
+    /// [`Self::with_backdrop`] without starting anything (cache keys of renders made elsewhere).
+    pub(crate) fn with_backdrop_now(&self, input: Arc<Input>, p: &lightcraft_catalog::Photo, s: &DevelopSettings) -> Arc<Input> {
+        let store = &self.retouch_faces.backdrops;
+        let b = picture_key(s).and_then(|k| store.get(&k));
+        let d = depth_path(p, s).and_then(|path| store.depth(&path)).flatten();
+        store.with(&input, b, d)
     }
 
     /// The state of the Swap picture of photo `s`'s settings: `{picture?, loaded, loading, error?}`.
@@ -256,7 +343,7 @@ mod tests {
         store.put("file:a.png", Ok(Rgb32f::filled(4, 3, [0.5; 3])));
         let b = store.get("file:a.png").unwrap();
         let input = Arc::new(Input::new(Vec::new()));
-        let (x, y) = (store.with(&input, b.clone()), store.with(&input, b.clone()));
+        let (x, y) = (store.with(&input, Some(b.clone()), None), store.with(&input, Some(b.clone()), None));
         assert!(Arc::ptr_eq(&x, &y));
         assert_ne!(x.fingerprint(), input.fingerprint(), "the picture is in the render keys");
         for i in 0..6 {

@@ -309,7 +309,7 @@ impl Session {
         match self.retouch_faces.get(&self.retouch_key(p, s)) {
             Some(found) => {
                 // (with Background Swap's picture, loaded now when it is not: `fork/retouch-background.md`)
-                let input = self.with_backdrop(found.input, s, true);
+                let input = self.with_backdrop(found.input, p, s, true);
                 (input.fingerprint() | 1, Some(input))
             }
             None => {
@@ -325,13 +325,7 @@ impl Session {
             return 0;
         }
         match self.retouch_faces.get(&self.retouch_key(p, s)) {
-            Some(found) => {
-                let input = match crate::retouch_background::picture_key(s).and_then(|k| self.retouch_faces.backdrops.get(&k)) {
-                    Some(b) => self.retouch_faces.backdrops.with(&found.input, b),
-                    None => found.input,
-                };
-                input.fingerprint() | 1
-            }
+            Some(found) => self.with_backdrop_now(found.input, p, s).fingerprint() | 1,
             None => self.retouch_faces.unknown_salt(p.id),
         }
     }
@@ -465,7 +459,7 @@ impl Session {
         if !lightcraft_develop::retouch::active(&p.develop) {
             return;
         }
-        self.backdrop_now(&p.develop);
+        self.backdrop_now(&p, &p.develop);
         // (a prepared export finds them on its own worker)
         if self.retouch_faces.lock().deferred.contains(&self.retouch_key(&p, &p.develop)) {
             return;
@@ -482,8 +476,8 @@ impl Session {
         if !lightcraft_develop::retouch::active(&p.develop) {
             return None;
         }
-        // (the faces found below come with Background Swap's picture)
-        self.backdrop_now(&p.develop);
+        // (the faces found below come with Background Swap's picture and the depth map)
+        self.backdrop_now(&p, &p.develop);
         let key = self.retouch_key(&p, &p.develop);
         if self.retouch_faces.get(&key).is_some() {
             return None;
@@ -491,7 +485,8 @@ impl Session {
         let source = self.retouch_source().ok()?;
         let claimed = self.retouch_faces.claim(&key, id);
         self.retouch_faces.lock().deferred.push(key.clone());
-        let backdrop = crate::retouch_background::picture_key(&p.develop).and_then(|k| self.retouch_faces.backdrops.get(&k));
+        let extras = self.with_backdrop_now(Arc::new(Input::default()), &p, &p.develop);
+        let backdrop = (extras.backdrop.clone(), extras.depth.clone());
         // (dropped unfilled when the render below can't be built: the claim goes again)
         let mut pending = ExportFaces { store: self.retouch_faces.clone(), key, id, finder: None, claimed, backdrop };
         // (built after the claim: this render starts no search of its own)
@@ -550,8 +545,9 @@ pub struct ExportFaces {
     finder: Option<Finder>,
     /// It holds the photo's search claim (else a background search had it first).
     claimed: bool,
-    /// Background Swap's picture, for the faces handed to the export (`fork/retouch-background.md`).
-    backdrop: Option<lightcraft_develop::retouch::background::Backdrop>,
+    /// Background Swap's picture and the photo's depth map, for the faces handed to the export
+    /// (`fork/retouch-background.md`).
+    backdrop: (Option<lightcraft_develop::retouch::background::Backdrop>, Option<lightcraft_develop::retouch::background::Depth>),
 }
 
 impl ExportFaces {
@@ -563,10 +559,8 @@ impl ExportFaces {
         // (`put` ends the claim; dropping `self` then ends the deferral)
         match &result {
             Ok(found) => {
-                let input = match self.backdrop.clone() {
-                    Some(b) => self.store.backdrops.with(&found.input, b),
-                    None => found.input.clone(),
-                };
+                let (b, d) = self.backdrop.clone();
+                let input = self.store.backdrops.with(&found.input, b, d);
                 for j in jobs.iter_mut() {
                     j.info.retouch = Some(input.clone());
                 }

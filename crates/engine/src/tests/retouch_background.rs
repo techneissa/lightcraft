@@ -97,3 +97,42 @@ fn an_export_loads_the_picture_first() {
     let job = s.export_job(id, 120, 120, Default::default(), Default::default()).unwrap();
     assert!(job.info.retouch.as_ref().is_some_and(|i| i.backdrop.is_some()), "the export renders with the picture");
 }
+
+/// An iPhone Portrait photo's depth map reaches Blur with the faces (read once, off the UI thread; an export reads
+/// it itself). A build without HEIF reads none and renders as before.
+#[test]
+fn a_heic_photos_depth_map_reaches_the_render_when_blur_is_on() {
+    use lightcraft_heif::testdata::{Spec, build};
+    let dir = std::env::temp_dir().join(format!("lightcraft-depth-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let photo = |x: u32, y: u32| [((x * 7 + y * 13) % 200 + 30) as u16, 110, 150];
+    let mut spec = Spec::new(96, 64, &photo);
+    spec.ignored_aux = vec!["urn:mpeg:hevc:2015:auxid:2"];
+    let bytes = build(&spec);
+    let path = dir.join("IMG_0003.HEIC");
+    std::fs::write(&path, &bytes).unwrap();
+    let readable = lightcraft_codecs::Format::Heif.can_decode();
+    assert_eq!(lightcraft_codecs::decode_depth(&bytes).is_some(), readable);
+    if !readable {
+        let _ = std::fs::remove_dir_all(&dir);
+        return;
+    }
+    let mut s = Session::new().with_fs();
+    s.retouch_faces.set_provider(Arc::new(OnePerson));
+    let r = s.execute("library.import", &json!({"paths": [path.to_string_lossy()]})).unwrap();
+    let id = crate::catalog::PhotoId(r["imported"][0].as_u64().unwrap());
+    s.execute("library.select", &json!({"ids": [id.0], "active": id.0})).unwrap();
+    s.execute("retouch.detect", &json!({})).unwrap();
+    s.execute("develop.set", &json!({"control": "retouch.background.blur", "value": 60})).unwrap();
+    // the export reads it now
+    let job = s.export_job(id, 96, 96, Default::default(), Default::default()).unwrap();
+    let input = job.info.retouch.clone().unwrap();
+    let depth = input.depth.as_ref().expect("the depth map");
+    assert_eq!((depth.plane.width, depth.plane.height), (96, 64));
+    // Blur off: no depth map, and the faces are the found ones
+    s.execute("develop.set", &json!({"control": "retouch.background.blur", "value": 0})).unwrap();
+    s.execute("develop.set", &json!({"control": "retouch.background.clean", "value": 50})).unwrap();
+    let job = s.render_job(id, 96, 96, false, true).unwrap();
+    assert!(job.info.retouch.as_ref().is_some_and(|i| i.depth.is_none()));
+    let _ = std::fs::remove_dir_all(&dir);
+}

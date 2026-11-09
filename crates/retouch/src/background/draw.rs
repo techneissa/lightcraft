@@ -28,8 +28,8 @@ impl Strength {
     }
 }
 
-/// Where Clean Backdrop fades out: a pixel that differs from the smoothed backdrop by this share of its brightness
-/// is still a crease or a scuff (cleaned fully)…
+/// Where Clean Backdrop fades out: a pixel whose colour (in any channel) differs from the smoothed backdrop by this
+/// share of its brightness is still a crease or a scuff (cleaned fully)…
 const CLEAN_KEEP: (f32, f32) = (0.2, 0.45);
 /// …and the dither on the cleaned backdrop, at most this share of its brightness (about an 8-bit step on a light
 /// backdrop), never more than twice what was smoothed away (a flat backdrop stays flat).
@@ -136,7 +136,9 @@ pub(crate) fn draw(img: &mut Rgb32f, scene: &Scene<'_>, prep: &Prepared, k: &Str
             };
             if let Some(c) = clean.and_then(|g| g.read(gx, gy, MIN_WEIGHT)) {
                 let (lb, lc) = (luma(behind), luma(c).max(1e-4));
-                let keep = smoothstep(((lb - lc).abs() / lc - CLEAN_KEEP.0) / (CLEAN_KEEP.1 - CLEAN_KEEP.0));
+                // (by channel: a crease darkens the paper's own colour, a coloured object differs in one channel)
+                let dev = (0..3).map(|ch| (behind[ch] - c[ch]).abs()).fold(0.0f32, f32::max) / lc;
+                let keep = smoothstep((dev - CLEAN_KEEP.0) / (CLEAN_KEEP.1 - CLEAN_KEEP.0));
                 let d = dither(gx, gy) * (DITHER * lc).min(2.0 * (lb - lc).abs());
                 let g = grain.and_then(|p| p.data.get(i).copied()).unwrap_or(1.0);
                 let target = c.map(|v| (v * g + d).max(0.0));

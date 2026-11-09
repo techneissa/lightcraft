@@ -148,6 +148,12 @@ impl std::fmt::Debug for Depth {
     }
 }
 
+/// `LIGHTCRAFT_PROFILE=1` prints how long Background took (as the pipeline's stages do).
+fn profiling() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LIGHTCRAFT_PROFILE").is_some_and(|v| v != "0"))
+}
+
 /// How far (pixels) Background reads around a pixel in a render whose photo has a long side of `long_px` pixels,
 /// with every slider on: a window of the render must hold this much around itself ([`Background::reach`] for given
 /// settings).
@@ -188,8 +194,15 @@ impl Feature for Background {
         if k.is_off() || img.width == 0 || img.height == 0 || img.data.len() != img.width * img.height {
             return;
         }
-        let Some(prep) = prepare::prepared(img, scene) else { return };
+        let t = profiling().then(std::time::Instant::now);
+        let Some((prep, kept)) = prepare::prepared(img, scene) else { return };
+        let t1 = t.map(|t| t.elapsed());
         draw::draw(img, scene, &prep, &k, &self.with);
+        if let (Some(t), Some(t1)) = (t, t1) {
+            let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
+            let what = if kept { "kept" } else { "made" };
+            eprintln!("    retouch background {}×{}: {what} {:.1} ms, drawn {:.1} ms", img.width, img.height, ms(t1), ms(t.elapsed() - t1));
+        }
     }
 }
 
