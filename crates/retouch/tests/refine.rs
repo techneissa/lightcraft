@@ -48,12 +48,6 @@ fn stroke(mode: RefineMode, points: &[(f64, f64)], size: f64) -> RefineStroke {
     RefineStroke { mode, points: points.to_vec(), size, feather: 0.0, flow: 100.0, strength: 100.0, pressure: Vec::new() }
 }
 
-/// The pixel at normalised (`u`, `v`).
-fn at(img: &Rgb32f, u: f64, v: f64) -> [f32; 3] {
-    let (x, y) = (((u * img.width as f64) as usize).min(img.width - 1), ((v * img.height as f64) as usize).min(img.height - 1));
-    img.data[y * img.width + x]
-}
-
 fn same_bits(a: [f32; 3], b: [f32; 3]) -> bool {
     a.map(f32::to_bits) == b.map(f32::to_bits)
 }
@@ -147,7 +141,11 @@ fn every_feature_gets_reduce_without_code_of_its_own() {
         }
         assert!(r.refine.push(f.key, stroke(RefineMode::Reduce, &cover, 0.5)), "{}", f.key);
         let out = run(&img, &r, &faces);
-        assert!(out.data.iter().zip(&img.data).all(|(a, b)| same_bits(*a, *b)), "{}: a full Reduce everywhere gives back the pixels from before the feature", f.key);
+        assert!(
+            out.data.iter().zip(&img.data).all(|(a, b)| same_bits(*a, *b)),
+            "{}: a full Reduce everywhere gives back the pixels from before the feature",
+            f.key
+        );
     }
 }
 
@@ -167,7 +165,8 @@ fn half_teeth_face() -> Face {
 
 /// The picture sampled at normalised (`u`, `v`), bilinear between pixel centres.
 fn sample(img: &Rgb32f, u: f64, v: f64) -> [f32; 3] {
-    let (fx, fy) = ((u * img.width as f64 - 0.5).clamp(0.0, (img.width - 1) as f64), (v * img.height as f64 - 0.5).clamp(0.0, (img.height - 1) as f64));
+    let (fx, fy) =
+        ((u * img.width as f64 - 0.5).clamp(0.0, (img.width - 1) as f64), (v * img.height as f64 - 0.5).clamp(0.0, (img.height - 1) as f64));
     let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
     let (x1, y1) = ((x0 + 1).min(img.width - 1), (y0 + 1).min(img.height - 1));
     let (tx, ty) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);

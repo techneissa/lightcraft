@@ -256,7 +256,9 @@ pub fn write_boxes(info: &SourceInfo, p: &Plan<'_>) -> Option<Vec<crate::spots_k
     // (`fork/perf-portrait-draft.md`).
     let lightcraft_develop::retouch::Retouch { global, faces, refine } = &s.retouch;
     if global.writes_outside_faces()
-        || faces.iter().any(|lightcraft_develop::retouch::FaceOverride { face: _, settings, refine }| settings.writes_outside_faces() || !refine.is_empty())
+        || faces
+            .iter()
+            .any(|lightcraft_develop::retouch::FaceOverride { face: _, settings, refine }| settings.writes_outside_faces() || !refine.is_empty())
         || !refine.is_empty()
     {
         return None;

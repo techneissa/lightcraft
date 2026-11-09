@@ -1,17 +1,19 @@
 # Portrait retouching: the Refine brush
 
-List: a Refine brush under every Portrait feature's sliders: Reduce weakens the feature where painted (none at Strength 100), Restore brings back its automatic result, Add paints it where its mask missed; one undo step per stroke and Show Refine Strokes. Branch `feat/99-refine-brush`.
+List: a Refine brush under every Portrait feature's sliders: Reduce weakens the feature where painted (none at Strength 100: the pixels from before this feature), Restore brings back its automatic result, Add paints it where its mask missed, on or near a face; one undo step per stroke and Show Refine Strokes. Branch `feat/99-refine-brush`. Merge order: Background (#148, fork format 7) merges before this; this keeps format 8.
 
 ## What it does
 
 Issue #99, on the base of portrait retouching (`fork/retouch-foundation.md`). Under each feature's sliders in the
 Portrait tab, a **Refine** row:
 
-- **Reduce**: paint to weaken the feature there. At Strength 100 the pixels there are what they were before the
-  feature ran, bit for bit; at 50, half way.
+- **Reduce**: paint to weaken the feature there. At Strength 100 the pixels there are what they were before this
+  feature ran, bit for bit (what the features before it made of the photo, not the photo itself); at 50, half way.
 - **Restore**: paint to take Reduce and Add back: the automatic result again.
 - **Add**: paint to apply the feature where its automatic mask missed (a cheek the skin mask skipped, a tooth the
-  teeth mask missed). Offered for features that read a mask.
+  teeth mask missed). Offered for features that read a mask. It works on or near a face: the command refuses a
+  stroke whose centre is further than one face size from its face's box (`ADD_REACH`; the error says "Add works on
+  or near a face"), and with no face in the photo it errors and the panel says so.
 - **Clear** removes the feature's strokes (for every face, or the picked face's own).
 - While a brush is in hand: Size, Feather and Flow (the Masking brush's own, shared with it) and Strength.
 - **Show Refine Strokes**, under the line that says which faces the sliders change, draws the strokes on the photo
@@ -31,16 +33,26 @@ those for every face, strokes included); otherwise to every face.
   masks Add widens) defaults to the first of its `PARTS`, so a feature lane changes it with one line when that is
   not the right one (Eyes: Eye Whites; Teeth and Lips: Teeth).
 - **Reduce** saves the pixels under the strokes before the feature runs and mixes the result back toward them by
-  the cut there (1 at a full Reduce: the saved bits). **Restore** lowers the cut and the added mask. **Add** widens
-  each mask in `ADD_PARTS` (the larger of the mask and the painted coverage) for the face nearest the stroke, so
-  the feature works there as on its own mask; a face without that mask gets one from Add.
+  the cut there (1 at a full Reduce: the saved bits, from before this feature). The copy is capped at 512 MiB (about
+  44 megapixels of the Reduce's box); a render that would need more leaves Reduce out. **Restore** lowers the cut and
+  the added mask. **Add** widens each mask in `ADD_PARTS` (the larger of the mask and the painted coverage) for the
+  face the stroke works on, so the feature works there as on its own mask; a face without that mask gets one from
+  Add. A stroke painted with a face picked is in that face's own strokes and belongs to that face, whatever its
+  centre; a stroke for every face belongs to the face nearest its centre, and counts only within one face size.
 - **Coordinates.** Points are normalised on the photo before its crop, after orientation, lens corrections and
   transform (the frame of Remove spots); sizes are fractions of its long edge. `View::to_edit` / `edit_to_px` map
   them; faces from a people parse (before the warp) are mapped through the warp as before.
 - **Rasterised once per change.** Strokes become grids over the photo (a sixth of the smallest brush radius per
-  cell, at most 1024 per side) cached by the strokes' hash; widened masks are cached too. A draft, the zoomed loupe
-  and an export sample the same grids, so preview equals export, and a zoomed window grows to where Add strokes
-  widen masks (`Reads::add`, `window_for_reads`).
+  cell, never finer than a 1024th of the long edge, at most 1024 per side) cached by the strokes' hash; the caches
+  are capped by bytes (64 MiB each), widened masks included. A draft, the zoomed loupe and an export sample the same
+  grids, so preview equals export, and a zoomed window grows, for each face, to where that face's own Add strokes
+  widen its masks (`refine::add_reach`, `window_for_reads`), not to every Add stroke of the photo.
+- **Work cap.** What rasterising a feature's strokes costs (dabs × the cells a dab covers) is capped per feature
+  per set of strokes (150 M cell visits) and over the photo (600 M): `refine::work`, `check_budget`. The command
+  errors ("too many or too large to render") instead of saving them; a photo that already has more (an old sidecar)
+  renders without its Refine strokes. An ordinary session of strokes is far under it.
+- **Write boxes.** A photo with any Refine stroke takes the Portrait speed-up's dirty path out (`write_boxes` returns
+  `None`: the whole frame), since Add strokes reach outside the face box (`fork/perf-portrait-draft.md`).
 - **Saved** in the retouch block: `fork_retouch.refine` and `fork_retouch.faces[].refine`, left out while empty;
   fork catalog format 8. Sidecar (`lc:settings`), catalog and History carry them; Copy / Paste and Sync with
   Portrait ticked replace them (copying a photo without strokes takes them away). Portrait Presets (#145) carry a
@@ -69,11 +81,11 @@ of 20 runs, on a test Mac under heavy load from other builds): Skin alone 7.45 m
 
 ## Tests
 
-`fork/tests.d/refine-brush.txt`: `crates/retouch/tests/refine.rs` (full Reduce gives back the original bits, a
+`fork/tests.d/refine-brush.txt`: `crates/retouch/tests/refine.rs` (full Reduce gives back the pixels from before the feature, a
 partial one mixes half way and Restore takes it back, Add smooths past the mask, every feature gets Reduce, preview
-equals export, a face's own strokes stay with it, strokes alone change nothing, JSON round trip and malformed
+equals export (every pixel of a draft within a level of the export's), a picked face owns its Add stroke, an Add stroke far from every face does nothing, strokes over the work cap are left out, a face's own strokes stay with it, strokes alone change nothing, JSON round trip and malformed
 strokes, hostile strokes), `crates/pipeline/src/tests_retouch_refine.rs` (zoom equals the whole frame; a draft and a
-render four times its size agree under a crop and a lens warp with faces before the warp),
+render four times its size agree under a crop and a lens warp with faces before the warp; a window over an Add stroke outside the face box equals the whole frame; a window grows only by the Add strokes of the faces it reaches), `crates/pipeline/src/tests_retouch_cache.rs` (strokes make the write boxes the whole frame, an Add stroke beside the face box changes pixels there),
 `crates/develop/src/retouch.rs` (the Portrait group carries and clears strokes), `crates/catalog` (fork format 8),
-`crates/engine/src/retouch_input/tests.rs` (commands, one undo step, copy / paste, sync, sidecar and catalog), and
+`crates/engine/src/retouch_input/tests.rs` (commands, one undo step, Add only near a face, the work cap, copy / paste, sync, sidecar and catalog), `crates/engine/src/tests/portrait_presets.rs` (presets carry no strokes), and
 `crates/ui-egui/src/tests/portrait.rs` (the row in every section, painting on the photo, the picked face, Clear).

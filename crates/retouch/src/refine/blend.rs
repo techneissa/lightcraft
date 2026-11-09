@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use lightcraft_raster::{Plane, Rgb32f, par_rows};
 
 use super::RefineStroke;
-use super::raster::{Kind, Shape, grid};
 use super::add_owner;
+use super::raster::{Kind, Shape, grid};
 use crate::feature::{Feature, Scene, View};
 use crate::input::{Face, Fnv, NormRect, PartMask};
 

@@ -382,7 +382,8 @@ mod tests {
         assert!(grid(&both, &|_| true, Kind::Cut, shape).is_none());
         // each alone is fine, and an ordinary session of strokes is far under the cap
         assert!(work(&[huge]) <= FEATURE_WORK_CAP && work(&[tiny]) < 1e6);
-        let ordinary: Vec<RefineStroke> = (0..200).map(|i| stroke(RefineMode::Reduce, &[(0.1 + i as f64 * 0.004, 0.3), (0.3, 0.6), (0.5, 0.4)])).collect();
+        let ordinary: Vec<RefineStroke> =
+            (0..200).map(|i| stroke(RefineMode::Reduce, &[(0.1 + i as f64 * 0.004, 0.3), (0.3, 0.6), (0.5, 0.4)])).collect();
         assert!(work(&ordinary) < FEATURE_WORK_CAP / 10.0, "{}", work(&ordinary));
     }
 

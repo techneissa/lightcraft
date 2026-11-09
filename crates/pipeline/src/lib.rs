@@ -1198,8 +1198,9 @@ mod tests_recolor_render;
 #[cfg(test)]
 mod tests_retouch_blemish;
 #[cfg(test)]
-mod tests_retouch_refine;
 mod tests_retouch_cache;
+#[cfg(test)]
+mod tests_retouch_refine;
 #[cfg(test)]
 mod tests_retouch_teeth_lips;
 #[cfg(test)]
