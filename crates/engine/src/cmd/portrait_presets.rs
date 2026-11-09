@@ -1,6 +1,8 @@
-//! `retouch.savePreset` and `retouch.applyToPerson`: portrait presets (fork feature, `fork/portrait-presets.md`,
-//! issue #106). Applying one to chosen photos is `preset.apply`, which gives a portrait preset's face settings to
-//! the same person's face on each photo (`crate::portrait_presets`).
+//! `retouch.savePreset`, `retouch.applyToPerson` and `retouch.applyStatus`: portrait presets (fork feature,
+//! `fork/portrait-presets.md`, issue #106). Applying one to chosen photos is `preset.apply`, which gives a portrait
+//! preset's face settings to the same person's face on each photo (`crate::portrait_presets`).
+
+use std::time::{Duration, Instant};
 
 use lightcraft_catalog::PhotoId;
 use lightcraft_develop::presets::{SettingsGroup, extract_groups};
@@ -8,11 +10,15 @@ use lightcraft_develop::retouch::{Features, KeyMap};
 use serde_json::{Value, json};
 
 use super::{CommandSpec, bad, cmd, has_active, photo_id, str_param};
+use crate::portrait_presets::person::Request;
 use crate::portrait_presets::{self as pp, Matcher, Portrait, Who};
 use crate::{Result, Session};
 
 /// Longest preset name or group.
 const MAX_TEXT: usize = 100;
+
+/// Longest `retouch.applyStatus` waits.
+const MAX_WAIT: Duration = Duration::from_secs(30);
 
 fn target(s: &Session, p: &Value, c: &str) -> Result<PhotoId> {
     let id = photo_id(p, c)?.or_else(|| s.active()).ok_or_else(|| bad(c, "no photo"))?;
@@ -61,13 +67,14 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
         None | Some(Value::Null) => Vec::new(),
         Some(v) => serde_json::from_value(v.clone()).map_err(|e| bad(C, format!("invalid `groups`: {e}")))?,
     };
+    // a picked face: that face and who it is; All Faces: the settings for every face, for any face
     let (features, who) = match face_param(p, C)? {
         Some(i) => face_of(s, id, i, C)?,
-        None => (s.develop_of(id).unwrap_or_default().retouch.global.clone(), s.portrait_lone_who(id)),
+        None => (s.develop_of(id).unwrap_or_default().retouch.global.clone(), Who::default()),
     };
     let d = s.develop_of(id).unwrap_or_default();
     let others = extract_groups(&d, &pp::other_groups(&groups));
-    let portrait = Portrait { features, who };
+    let portrait = Portrait::of(&features, who);
     let preset = pp::make(&name, &group, &portrait, others);
     let pid = match s.add_presets(vec![preset.clone()]).into_iter().next() {
         Some(pid) => pid,
@@ -84,7 +91,9 @@ fn save(s: &mut Session, p: &Value) -> Result<Value> {
         "name": name,
         "group": group,
         "person": portrait.who.person,
+        "anyFace": portrait.is_any_face(),
         "byFace": portrait.who.embedding.is_some(),
+        "wholeLook": preset.settings.as_object().is_some_and(|o| o.len() > 1),
     }))
 }
 
@@ -101,7 +110,7 @@ fn apply_to_person(s: &mut Session, p: &Value) -> Result<Value> {
         }
         None => None,
     };
-    // who, and (without a preset) the settings: a face of a photo, or a person by name
+    // who, and (without a preset) the settings: a face of a photo, a person by name, or the preset's person
     let (who, from_face, source) = match (text(p, "name", C)?, face_param(p, C)?) {
         (Some(name), _) => (Who::named(&name), None, None),
         (None, Some(i)) => {
@@ -109,51 +118,56 @@ fn apply_to_person(s: &mut Session, p: &Value) -> Result<Value> {
             let (features, who) = face_of(s, id, i, C)?;
             (who, Some(features), Some(id))
         }
-        (None, None) => return Err(bad(C, "pass `name` (a person) or `face` (an index of retouch.faces)")),
+        (None, None) => match &preset {
+            Some(pr) => (pp::split(pr).1.map(|x| x.who).unwrap_or_default(), None, None),
+            None => return Err(bad(C, "pass `name` (a person), `face` (an index of retouch.faces) or `preset`")),
+        },
     };
     if !who.is_known() {
-        return Err(bad(C, "that face is not named and has no recognition data yet: name it in People first"));
+        return Err(bad(
+            C,
+            "nobody to follow: name the face in People first (a preset saved from All Faces goes to any face: apply it with preset.apply)",
+        ));
     }
     let (rest, portrait) = match &preset {
         Some(pr) => {
             let (rest, part) = pp::split(pr);
-            (Some(rest.into_owned()), part.unwrap_or_default())
+            let rest = rest.into_owned();
+            let has_rest = rest.settings.as_object().is_some_and(|o| !o.is_empty());
+            (has_rest.then_some(rest), part.unwrap_or_default())
         }
         None => {
             let features = from_face.ok_or_else(|| bad(C, "pass `preset` to apply to a person by name"))?;
-            (None, Portrait { features, who: who.clone() })
+            (None, Portrait::of(&features, who.clone()))
         }
     };
     let label = match &preset {
         Some(pr) => format!("Portrait Preset: {}", pr.name),
         None => "Apply Face to Person".to_string(),
     };
-    let m = Matcher::new(s, &who, true, false);
-    let ids: Vec<PhotoId> = s.catalog.photos().filter(|ph| ph.in_library()).map(|ph| ph.id).filter(|id| Some(*id) != source).collect();
-    let mut applied = Vec::new();
-    for id in ids {
-        let Ok(target) = m.find(s, id) else { continue };
-        let Some(mut d) = (match &rest {
-            Some(r) => s.preset_applied(id, r, 1.0),
-            None => s.develop_of(id).map(|d| (*d).clone()),
-        }) else {
-            continue;
-        };
-        let keys = s.retouch_key_map(id);
-        if !pp::set_face(&mut d, &target, &portrait.features, 1.0, keys.as_ref().map(|k| k as &dyn KeyMap)) {
-            continue;
-        }
-        if s.develop_of(id).is_some_and(|now| *now == d) {
-            applied.push(id.0);
-            continue;
-        }
-        // one undo step per photo
-        if let Some(op) = s.develop_op(id, d, &label) {
-            s.commit(&label, op)?;
-            applied.push(id.0);
-        }
+    let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(false);
+    s.portrait_apply_to_person(Request { who, portrait, rest, exclude: source, label }, wait)
+}
+
+/// `retouch.applyStatus`.
+fn status(s: &mut Session, p: &Value) -> Result<Value> {
+    if p.get("cancel").and_then(Value::as_bool).unwrap_or(false) {
+        s.portrait_cancel();
     }
-    Ok(json!({"person": who.person, "applied": applied, "count": applied.len()}))
+    let wait = p.get("wait").and_then(Value::as_bool).unwrap_or(false);
+    let until = Instant::now() + p.get("timeoutMs").and_then(Value::as_u64).map_or(MAX_WAIT, Duration::from_millis).min(MAX_WAIT);
+    loop {
+        if let Some(r) = s.portrait_pump() {
+            return r;
+        }
+        if !s.portrait_job_running() {
+            return Ok(json!({"state": "idle"}));
+        }
+        if !wait || Instant::now() >= until {
+            return Ok(json!({"state": "running"}));
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
 }
 
 pub fn specs() -> Vec<CommandSpec> {
@@ -163,7 +177,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Save Portrait Preset",
             [],
             None,
-            "{name, face?: index of retouch.faces, id?, group?: default Portrait, others?: bool, groups?: [settingsGroup]} → {id, name, group, person?, byFace} — save one face's portrait settings (every feature; without `face`, those for every face) as a preset that follows that person: applied with preset.apply, it changes only the same person's face on each photo (by name, else by face recognition; a photo with one face gets it on that face). `others` adds the photo's other develop settings of the default copy groups, `groups` names them; spots, red eye and Refine strokes are never in it",
+            "{name, face?: index of retouch.faces, id?, group?: default Portrait, others?: bool, groups?: [settingsGroup]} → {id, name, group, person?, anyFace, byFace, wholeLook} — save portrait settings as a preset. With `face` it follows that person: applied with preset.apply it changes only their face on each photo (by name, else by face recognition). Without `face` (All Faces) it goes to every face of the photos it is applied to (`anyFace`). Face settings only by default; `others: true` makes it a whole look, adding the photo's other develop settings of the default copy groups (`groups` names them). Never local masks, spots, red eye or Refine strokes",
             has_active,
             save
         ),
@@ -172,14 +186,23 @@ pub fn specs() -> Vec<CommandSpec> {
             "Apply to Every Photo of This Person",
             [],
             None,
-            "{name?: person, face?: index of retouch.faces, id?, preset?: portrait preset id} → {person, applied: [photo ids], count} — give a portrait preset (or, from `face`, that face's settings) to the person's face on every photo where they are named or recognised; photos without them are left alone. One undo step per photo",
+            "{name?: person, face?: index of retouch.faces, id?, preset?: portrait preset id, wait?: bool} → {state: done | running, person, applied: [photo ids], count, changed, failed: [{id, why}]} — give a portrait preset (or, from `face`, that face's settings) to the person's face on every photo where they are named or recognised, as one undo step; photos without them are left alone. Over 24 photos with faces it runs in the background (`state: running`): finish it with retouch.applyStatus, or pass `wait`",
             super::always,
             apply_to_person
+        ),
+        cmd!(
+            "retouch.applyStatus",
+            "Portrait Apply Status",
+            [],
+            None,
+            "{wait?: bool, timeoutMs?: up to 30000, cancel?: bool} → {state: idle | running | done | cancelled, …as retouch.applyToPerson} — how Apply to Every Photo in the background is going; once its work is done this commits it (one undo step) and says what happened. `cancel` stops it with nothing changed",
+            super::always,
+            status
         ),
     ]
 }
 
-/// What `preset.apply` adds for a portrait preset: the face part and how it went. `preset` is the whole preset.
+/// What `preset.apply` adds for a portrait preset: the face part and how it went.
 pub(crate) struct PresetFaces {
     pub portrait: Portrait,
     pub matcher: Matcher,
@@ -188,10 +211,11 @@ pub(crate) struct PresetFaces {
 }
 
 impl PresetFaces {
-    /// For `preset.apply`: `None` for a preset without a face part.
+    /// For `preset.apply`: `None` for a preset without a face part. A photo's only face may take it when it can't
+    /// be compared: the user picked these photos.
     pub fn new(s: &Session, preset: &lightcraft_develop::presets::Preset) -> Option<PresetFaces> {
         let portrait = pp::split(preset).1?;
-        let matcher = Matcher::new(s, &portrait.who, true, true);
+        let matcher = Matcher::new(s, &portrait.who, true);
         Some(PresetFaces { portrait, matcher, applied: Vec::new(), skipped: Vec::new() })
     }
 
@@ -204,6 +228,6 @@ impl PresetFaces {
     }
 
     pub fn report(&self) -> Value {
-        json!({"applied": self.applied, "skipped": self.skipped})
+        json!({"applied": self.applied, "skipped": self.skipped, "anyFace": self.portrait.is_any_face()})
     }
 }

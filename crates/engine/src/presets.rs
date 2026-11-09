@@ -106,8 +106,20 @@ pub fn slug(s: &str) -> String {
 }
 
 /// Serialise presets as a `.lcpreset` file (favourite/built-in flags are not exported).
+/// Portrait presets (fork, `fork/portrait-presets.md`) leave without the face's embedding or the person.
 pub fn to_lcpreset(presets: &[Preset]) -> String {
-    let presets = presets.iter().map(|p| Preset { favorite: false, builtin: false, ..p.clone() }).collect();
+    lcpreset_of(presets, false)
+}
+
+/// [`to_lcpreset`] for Settings Sync to the same user's other Macs: portrait presets keep the person they follow (by
+/// name and id), never the face's embedding (fork, `fork/portrait-presets.md`).
+pub fn to_lcpreset_synced(presets: &[Preset]) -> String {
+    lcpreset_of(presets, true)
+}
+
+fn lcpreset_of(presets: &[Preset], person: bool) -> String {
+    let presets =
+        presets.iter().map(|p| Preset { favorite: false, builtin: false, ..crate::portrait_presets::for_file(p, person).into_owned() }).collect();
     serde_json::to_string_pretty(&PresetFile { format: LCPRESET_FORMAT.into(), version: 1, presets }).unwrap_or_default()
 }
 
@@ -196,7 +208,8 @@ impl Session {
         let (rest, portrait) = crate::portrait_presets::split(preset);
         let mut out = rest.apply_on(&current, original, amount);
         if let Some(p) = portrait {
-            let m = crate::portrait_presets::Matcher::new(self, &p.who, false, true);
+            // the same matcher a click uses (the library's named people, kept between calls)
+            let m = crate::portrait_presets::Matcher::new(self, &p.who, true);
             let _ = self.portrait_onto(id, &mut out, &p, &m, amount);
         }
         Some(out)
