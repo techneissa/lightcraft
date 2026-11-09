@@ -7,7 +7,7 @@ use candle_core::{Device, Tensor};
 use crate::Result;
 use crate::bisenet::BiSeNet;
 use crate::eyes::{MeshEyes, smoothstep};
-use crate::facemesh::FaceMesh;
+use crate::facemesh::{FaceMesh, MeshOut};
 use crate::image::{Crop, RgbImage, imagenet, sample_grid};
 use crate::models::FaceModel;
 use crate::segformer::Segformer;
@@ -139,7 +139,8 @@ pub struct FaceOut {
     pub landmark_score: f32,
 }
 
-fn batch_tensor(img: &RgbImage, crops: &[Crop], normalise: bool, dev: &Device) -> Result<Tensor> {
+/// The crops' pixels, `crops.len() × 3 × side × side` (ImageNet-normalised when `normalise`).
+pub fn batch_pixels(img: &RgbImage, crops: &[Crop], normalise: bool) -> Vec<f32> {
     let mut all = Vec::new();
     let side = crops.first().map_or(1, |c| c.side);
     for c in crops {
@@ -149,11 +150,27 @@ fn batch_tensor(img: &RgbImage, crops: &[Crop], normalise: bool, dev: &Device) -
         }
         all.extend(px);
     }
-    Ok(Tensor::from_vec(all, (crops.len(), 3, side, side), dev)?)
+    all
 }
 
-/// Parse a batch of faces: class probabilities at [`SIDE`]², per crop, grouped.
-fn parse_batch(net: &FaceNet, model: FaceModel, img: &RgbImage, crops: &[Crop], dev: &Device) -> Result<Vec<Vec<Vec<f32>>>> {
+fn batch_tensor(img: &RgbImage, crops: &[Crop], normalise: bool, dev: &Device) -> Result<Tensor> {
+    let side = crops.first().map_or(1, |c| c.side);
+    Ok(Tensor::from_vec(batch_pixels(img, crops, normalise), (crops.len(), 3, side, side), dev)?)
+}
+
+/// The face mesh of `crops` with candle, in one call (each face of a call gives what it gives alone: `tests/models.rs`).
+pub fn mesh_batch(mesh: &FaceMesh, img: &RgbImage, crops: &[Crop], dev: &Device) -> Result<Vec<MeshOut>> {
+    mesh.forward(&batch_tensor(img, crops, false, dev)?)
+}
+
+/// Class probabilities at [`SIDE`]², per crop, summed into [`GROUPS`] (in that order): what a face parser gives.
+pub type Groups = Vec<Vec<Vec<f32>>>;
+
+/// The number of face groups a parser gives per crop.
+pub const GROUP_COUNT: usize = GROUPS.len();
+
+/// Parse a batch of faces with candle: class probabilities at [`SIDE`]², per crop, grouped.
+pub fn parse_batch(net: &FaceNet, model: FaceModel, img: &RgbImage, crops: &[Crop], dev: &Device) -> Result<Groups> {
     let x = batch_tensor(img, crops, true, dev)?;
     let logits = match net {
         FaceNet::Segformer(m) => m.forward(&x)?,
@@ -281,12 +298,10 @@ fn planes(img: &RgbImage, crop: &Crop, groups: &[Vec<f32>], mesh: &MeshEyes, sce
     ]
 }
 
-/// The face models of a set, on their device.
+/// The face models of a set, each candle or Core ML: the parser (crops in, [`Groups`] out) and the mesh.
 pub struct Nets<'a> {
-    pub net: &'a FaceNet,
-    pub model: FaceModel,
-    pub mesh: &'a FaceMesh,
-    pub dev: &'a Device,
+    pub parse: &'a dyn Fn(&RgbImage, &[Crop]) -> Result<Groups>,
+    pub mesh: &'a dyn Fn(&RgbImage, &[Crop]) -> Result<Vec<MeshOut>>,
 }
 
 /// What the whole-photo body map tells the face parts, at points in fractions of the photo.
@@ -299,7 +314,7 @@ pub struct Scene<'a> {
 
 /// Parse `jobs` in batches of `batch`: face classes, mesh points and planes. `cancelled` is asked between batches.
 pub fn run(nets: &Nets, img: &RgbImage, jobs: &[Job], batch: usize, scene: &Scene, cancelled: &dyn Fn() -> bool) -> Result<Vec<FaceOut>> {
-    let Nets { net, model, mesh, dev } = *nets;
+    let Nets { parse, mesh } = *nets;
     let mut out = Vec::with_capacity(jobs.len());
     for chunk in jobs.chunks(batch.max(1)) {
         if cancelled() {
@@ -307,8 +322,8 @@ pub fn run(nets: &Nets, img: &RgbImage, jobs: &[Job], batch: usize, scene: &Scen
         }
         let parse_crops: Vec<Crop> = chunk.iter().map(|j| j.crop(img, PARSE_CROP, SIDE)).collect();
         let mesh_crops: Vec<Crop> = chunk.iter().map(|j| j.crop(img, MESH_CROP, crate::facemesh::SIDE)).collect();
-        let groups = parse_batch(net, model, img, &parse_crops, dev)?;
-        let meshes = mesh.forward(&batch_tensor(img, &mesh_crops, false, dev)?)?;
+        let groups = parse(img, &parse_crops)?;
+        let meshes = mesh(img, &mesh_crops)?;
         for (((job, pc), mc), (g, m)) in chunk.iter().zip(&parse_crops).zip(&mesh_crops).zip(groups.iter().zip(&meshes)) {
             let eyes = MeshEyes::from_mesh(m, mc);
             let p = job.person;

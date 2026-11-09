@@ -6,7 +6,8 @@
 //! SegFormer-B2 bodies, or the SegFormer set with Sapiens2 deciding where skin, hair and clothes are; all use
 //! MediaPipe's face mesh v2. The weights are not part of LightCraft: they are downloaded
 //! into the models folder ([`models`]) and read from there ([`Parser::load`]). On macOS the models run on the GPU
-//! through Metal, elsewhere on the CPU. No UI dependencies (L3).
+//! through Metal, elsewhere on the CPU; on a Mac the SegFormer face and clothes parsers run through Core ML when
+//! their converted models are there ([`coreml`]). No UI dependencies (L3).
 //!
 //! Masks are resolution independent: each is a [`Plane`] over a rectangle given in fractions of the photo, at the
 //! resolution the model saw it; [`render`] samples it at any size and refines its edges along the photo's own edges
@@ -25,6 +26,8 @@ mod types;
 mod bisenet;
 #[cfg(not(target_arch = "wasm32"))]
 mod body;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod coreml;
 #[cfg(not(target_arch = "wasm32"))]
 mod crops;
 #[cfg(not(target_arch = "wasm32"))]
@@ -51,7 +54,7 @@ mod weights;
 pub use image::RgbImage;
 pub use models::{ModelFile, ModelSet};
 #[cfg(not(target_arch = "wasm32"))]
-pub use parser::{Options, Parser, best_device};
+pub use parser::{Backend, Options, Parser, Runtimes, best_device};
 pub use types::{FaceHint, Landmark, NormRect, Parsing, Part, Person, Plane};
 
 /// The version of how parts are made from the models' outputs; part of every cached parse's key.
