@@ -55,7 +55,21 @@ impl NoDetector {
 }
 
 /// The YuNet loaded last, and from where.
-static LOADED: Mutex<Option<(PathBuf, Arc<Detector>)>> = Mutex::new(None);
+/// (the third: the GPU was offered to it, which the session thread does, so a net a worker loaded first gets it later)
+static LOADED: Mutex<Option<(PathBuf, Arc<Detector>, bool)>> = Mutex::new(None);
+
+/// Tests: how many YuNets were built from a file, in this process.
+#[cfg(any(test, feature = "test-hooks"))]
+static LOADS: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+impl Session {
+    /// Tests: how many YuNets have been built from a file in this process.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn face_detector_loads(&self) -> usize {
+        LOADS.load(std::sync::atomic::Ordering::SeqCst)
+    }
+}
 
 #[cfg(test)]
 thread_local! {
@@ -86,9 +100,11 @@ pub(crate) fn detector_file(s: &Session) -> Option<(PathBuf, u64)> {
 }
 
 /// Fork (`fork/parse-ahead.md`): the YuNet at `path`, for a worker thread: the one the session loaded when it is
-/// that file, else read from it (not kept: the session's own load also offers it the GPU).
+/// that file, else read from it and kept for the session (the session's own call then offers it the GPU), so the net
+/// is built once.
 pub(crate) fn detector_at(path: &std::path::Path) -> std::result::Result<Arc<Detector>, String> {
-    if let Some((p, d)) = LOADED.lock().unwrap_or_else(PoisonError::into_inner).as_ref()
+    let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
+    if let Some((p, d, _)) = loaded.as_ref()
         && p == path
     {
         return Ok(d.clone());
@@ -98,7 +114,11 @@ pub(crate) fn detector_at(path: &std::path::Path) -> std::result::Result<Arc<Det
         return Err("the detector's file is far bigger than YuNet".into());
     }
     let bytes = std::fs::read(path).map_err(|e| format!("could not read the detector: {e}"))?;
-    Detector::new(&bytes).map(Arc::new).map_err(|e| e.to_string())
+    let d = Arc::new(Detector::new(&bytes).map_err(|e| e.to_string())?);
+    #[cfg(any(test, feature = "test-hooks"))]
+    LOADS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    *loaded = Some((path.to_path_buf(), d.clone(), false));
+    Ok(d)
 }
 
 /// The installed YuNet, loaded once and kept (a new one is loaded when the model folder changes).
@@ -106,9 +126,18 @@ pub(crate) fn detector_at(path: &std::path::Path) -> std::result::Result<Arc<Det
 pub(crate) fn detector(s: &Session) -> std::result::Result<Arc<Detector>, NoDetector> {
     let path = detector_path(s)?;
     let mut loaded = LOADED.lock().unwrap_or_else(PoisonError::into_inner);
-    if let Some((p, d)) = loaded.as_ref()
+    if let Some((p, d, offered)) = loaded.as_mut()
         && *p == path
     {
+        // (loaded first by a worker, which cannot offer the GPU: done here)
+        #[cfg(not(target_arch = "wasm32"))]
+        if !*offered {
+            *offered = true;
+            let net = d.clone();
+            offer_gpu(s, "detection", move |gpu| net.accelerate(gpu, true));
+        }
+        #[cfg(target_arch = "wasm32")]
+        let _ = offered;
         return Ok(d.clone());
     }
     let len = std::fs::metadata(&path).map_err(|e| NoDetector::Unusable(format!("could not read the detector: {e}")))?.len();
@@ -126,7 +155,9 @@ pub(crate) fn detector(s: &Session) -> std::result::Result<Arc<Detector>, NoDete
         let net = d.clone();
         offer_gpu(s, "detection", move |gpu| net.accelerate(gpu, true));
     }
-    *loaded = Some((path, d.clone()));
+    #[cfg(any(test, feature = "test-hooks"))]
+    LOADS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    *loaded = Some((path, d.clone(), true));
     Ok(d)
 }
 
@@ -212,7 +243,7 @@ fn gpu(s: &mut Session, p: &Value) -> Result<Value> {
         let cpu = cpu.as_bool().ok_or_else(|| bad(C, "`cpuOnly` is true or false"))?;
         let dir = s.face_models_dir.clone().ok_or_else(|| bad(C, "this build has nowhere to keep face models (the desktop app does)"))?;
         super::face_models::set_cpu_only(&dir, cpu)?;
-        let detector = LOADED.lock().unwrap_or_else(PoisonError::into_inner).as_ref().map(|(_, d)| d.clone());
+        let detector = LOADED.lock().unwrap_or_else(PoisonError::into_inner).as_ref().map(|(_, d, _)| d.clone());
         #[cfg(not(target_arch = "wasm32"))]
         let embedder = s.faces.embedder.as_ref().map(|(_, e)| e.clone());
         #[cfg(target_arch = "wasm32")]

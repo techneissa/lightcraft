@@ -139,6 +139,9 @@ struct Store {
     /// Why no search could start for a key (no face model, or one that can't be read): kept so a panel asking every
     /// frame never reads the model again; forgotten when a model is installed or removed ([`FaceStore::forget_no_model`]).
     no_model: Vec<(String, String)>,
+    /// Photos the early check saw no face in, by key (`parse_ahead::peek`): a hint for the Portrait icon and tab,
+    /// never a result of the face search; dropped when a search of the photo ends with faces.
+    hints: Vec<(String, PhotoId)>,
     /// Keys whose faces a prepared export finds when it runs ([`ExportFaces`]): setting up other renders of them
     /// does not wait.
     deferred: Vec<String>,
@@ -187,6 +190,7 @@ impl FaceStore {
         self.provider = Some(provider);
         let mut st = self.lock();
         st.found.clear();
+        st.hints.clear();
         st.failed.clear();
         st.no_model.clear();
     }
@@ -242,10 +246,19 @@ impl FaceStore {
             || st.no_model.iter().any(|(k, _)| k == key)
     }
 
-    /// Keep that photo `id` has no face under `key` (found by the early check, `parse_ahead::peek`), as the search
-    /// would have: the Portrait tab reuses it. Ends the claim made by [`Self::claim`].
-    pub(crate) fn put_nobody(&self, key: &str, id: PhotoId) {
-        self.put(key, id, Ok(Found { retry: None, input: Arc::new(Input::new(Vec::new())), thumbs: Arc::new(Vec::new()) }));
+    /// Remember as a hint that photo `id` has no face under `key` (the early check, `parse_ahead::peek`). Not a
+    /// search result: [`Self::get`] and every render and export ignore it, and a search of the photo replaces it.
+    pub(crate) fn hint_nobody(&self, key: &str, id: PhotoId) {
+        let mut st = self.lock();
+        st.hints.retain(|(k, p)| k != key && *p != id);
+        st.hints.push((key.to_string(), id));
+        let extra = st.hints.len().saturating_sub(KEEP);
+        st.hints.drain(..extra);
+    }
+
+    /// Whether the early check saw no face under `key`.
+    pub(crate) fn hinted(&self, key: &str) -> bool {
+        self.lock().hints.iter().any(|(k, _)| k == key)
     }
 
     /// The salt of photo `id`'s renders while its faces are unknown: [`UNKNOWN`], changed each time one of its
@@ -280,6 +293,8 @@ impl FaceStore {
         *n = n.wrapping_add(1);
         match result {
             Ok(found) => {
+                // (a search's answer, with faces or not, replaces the hint)
+                st.hints.retain(|(k, p)| k != key && *p != id);
                 st.found.push((key.to_string(), id, found));
                 trim(&mut st.found, KEEP_BYTES);
             }
@@ -335,14 +350,21 @@ pub struct FacesState {
     pub busy: bool,
     /// Why the last search failed.
     pub error: Option<String>,
+    /// The early check saw no face ([`FaceStore::hint_nobody`]): a hint, not a search result.
+    pub hint: bool,
 }
 
 impl FacesState {
-    /// The search finished and found no face (a photo of a landscape, say): the Portrait tab has nothing to do
-    /// there. False while the faces are unknown (nothing searched yet, a search running or failed, or a cancelled
-    /// Wrinkles search waiting to run again).
+    /// Nobody to retouch in the photo, as far as is known: the face search finished and found no face, or (the search
+    /// not having run) the early check ([`FaceStore::hint_nobody`]) saw none. A hint only: the Portrait icon and tab
+    /// go by it, the face search, renders and exports never do. False while the faces are unknown (nothing known,
+    /// the search failed or a cancelled Wrinkles search waits to run again), and once a search found a face.
     pub fn no_people(&self) -> bool {
-        !self.busy && self.error.is_none() && self.found.as_ref().is_some_and(|f| f.retry.is_none() && f.input.faces.is_empty())
+        self.error.is_none()
+            && match &self.found {
+                Some(f) => f.retry.is_none() && f.input.faces.is_empty(),
+                None => self.hint,
+            }
     }
 }
 
@@ -485,6 +507,7 @@ impl Session {
             found: st.found.iter().find(|(k, _, _)| *k == key).map(|(_, _, f)| f.clone()),
             busy: st.busy.iter().any(|(k, _)| *k == key),
             error: st.failed.iter().chain(&st.no_model).find(|(k, _)| *k == key).map(|(_, e)| e.clone()),
+            hint: st.hints.iter().any(|(k, _)| *k == key),
         }
     }
 

@@ -1,6 +1,7 @@
-//! The Portrait tab on a photo without people (fork, `fork/retouch-foundation.md`, issue #167): once the face search
-//! found nobody, the tool strip's Portrait icon is off (in its place), shortcut T does nothing, and the open tab is
-//! one line with no sections; a photo with faces has them all.
+//! The Portrait tab on a photo without people (fork, `fork/retouch-foundation.md`, issue #167): once nobody is seen in
+//! the photo (the face search found none, or the early check did: a hint), the tool strip's Portrait icon is dimmed
+//! in its place but still opens the tab, which is one line, "No People in This Photo", and "Search Again" (the real
+//! face search); a photo with faces has all its sections.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -61,7 +62,7 @@ fn select(h: &mut Headless, id: lightcraft_catalog::PhotoId) {
 }
 
 #[test]
-fn the_portrait_icon_is_off_without_people_and_stays_in_its_place() {
+fn the_portrait_icon_stays_in_its_place_and_opens_the_tab_without_people() {
     let (mut h, landscape, portrait) = two_photos();
     h.app.ui.right = RightPanel::Edit;
     select(&mut h, portrait);
@@ -74,14 +75,12 @@ fn the_portrait_icon_is_off_without_people_and_stays_in_its_place() {
     select(&mut h, landscape);
     let off = (rect_of(&mut h, "icon:portrait").unwrap(), rect_of(&mut h, "icon:masking").unwrap(), rect_of(&mut h, "icon:redeye").unwrap());
     assert_eq!(on, off, "no icon moves");
-    let _ = h.request("ui.clickWidget", json!({"id": "icon:portrait"}), T);
-    settle(&mut h);
-    assert_eq!(h.app.ui.right, RightPanel::Edit, "without people the icon does nothing");
-    // another icon still works
-    let r = h.request("ui.clickWidget", json!({"id": "icon:masking"}), T);
+    let r = h.request("ui.clickWidget", json!({"id": "icon:portrait"}), T);
     assert_eq!(r["ok"], true, "{r}");
     settle(&mut h);
-    assert_eq!(h.app.ui.right, RightPanel::Masking);
+    assert_eq!(h.app.ui.right, RightPanel::Portrait, "the dimmed icon still opens the tab");
+    assert!(rect_of(&mut h, "portrait:noPeople").is_some(), "which says so");
+    assert!(rect_of(&mut h, "button:portraitSearchAgain").is_some(), "and can search again");
 }
 
 #[test]
@@ -127,20 +126,18 @@ fn the_open_tab_is_one_line_without_people_and_follows_the_photo() {
     assert!(rect_of(&mut h, "section:portrait.skin").is_none());
 }
 
+/// The real key: T opens the Portrait tab also on a photo without people, where it says so.
 #[test]
-fn shortcut_t_does_nothing_on_a_photo_without_people() {
-    let (mut h, landscape, portrait) = two_photos();
+fn shortcut_t_opens_the_tab_on_a_photo_without_people_and_says_so() {
+    let (mut h, landscape, _) = two_photos();
     h.app.ui.right = RightPanel::Edit;
     select(&mut h, landscape);
-    let r = h.request("engine.execute", json!({"command": "panel.portrait", "params": {}}), T);
+    let r = h.request("ui.key", json!({"key": "t"}), T);
     assert_eq!(r["ok"], true, "{r}");
     settle(&mut h);
-    assert_eq!(h.app.ui.right, RightPanel::Edit, "no tab for a landscape");
-    assert!(h.app.ui.toast.as_ref().is_some_and(|t| t.0 == "No People in This Photo"), "it says why");
-    select(&mut h, portrait);
-    let r = h.request("engine.execute", json!({"command": "panel.portrait", "params": {}}), T);
-    assert_eq!(r["ok"], true, "{r}");
-    assert_eq!(h.app.ui.right, RightPanel::Portrait, "with faces it opens");
+    assert_eq!(h.app.ui.right, RightPanel::Portrait, "T opens the tab");
+    assert!(rect_of(&mut h, "portrait:noPeople").is_some(), "with its one line");
+    assert!(rect_of(&mut h, "section:portrait.skin").is_none());
 }
 
 /// A photo that keeps Portrait settings but shows no face (its faces were deleted) keeps them.
@@ -157,57 +154,91 @@ fn stored_portrait_settings_stay_when_the_photo_shows_no_face() {
     assert_eq!(after.global.get("retouch.skin.smoothness"), Some(40.0), "looking at the collapsed tab changes nothing");
 }
 
-/// A detector that finds nobody and counts its runs.
-struct Counting(Arc<std::sync::atomic::AtomicUsize>);
+/// A detector that finds a face while `people` is set (nobody else), and counts its runs.
+struct Counting {
+    runs: Arc<std::sync::atomic::AtomicUsize>,
+    people: Arc<AtomicBool>,
+}
 
 impl FaceProvider for Counting {
     fn name(&self) -> &str {
         "Counting"
     }
     fn faces(&self, _img: &lightcraft_raster::Rgba8) -> Result<Vec<Face>, String> {
-        self.0.fetch_add(1, Ordering::SeqCst);
-        Ok(vec![])
+        self.runs.fetch_add(1, Ordering::SeqCst);
+        Ok(if self.people.load(Ordering::SeqCst) { vec![Face::boxed(NormRect::new(0.2, 0.2, 0.35, 0.45))] } else { vec![] })
     }
 }
 
-fn counting_app(parse_ahead: bool) -> (Headless, Arc<std::sync::atomic::AtomicUsize>) {
-    let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+fn counting_app(parse_ahead: bool) -> (Headless, Arc<std::sync::atomic::AtomicUsize>, Arc<AtomicBool>) {
+    let (runs, people) = (Arc::new(std::sync::atomic::AtomicUsize::new(0)), Arc::new(AtomicBool::new(false)));
     let mut session = lightcraft_engine::Session::with_demo();
-    session.retouch_faces.set_provider(Arc::new(Counting(runs.clone())));
+    session.retouch_faces.set_provider(Arc::new(Counting { runs: runs.clone(), people: people.clone() }));
     // (mains power: the test does not depend on the Mac it runs on)
     session.parse_ahead_fix_power(Some(lightcraft_engine::parse_ahead::power::Power::default()));
     let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
     let mut h = Headless::new(app, [1200.0, 1400.0], 1.0);
     h.app.ui.settings.parse_ahead = parse_ahead;
     assert_eq!(h.request("ui.set", json!({"view": "detail"}), T)["ok"], true);
-    (h, runs)
+    (h, runs, people)
 }
 
-/// A photo without faces greys the Portrait icon as it opens, without the tab ever being opened.
+/// A photo without faces dims the Portrait icon as it opens, without the tab ever being opened (a hint: nothing was
+/// searched); the tab then says so without searching, and "Search Again" runs the real search, which fills the tab
+/// when it finds a face.
 #[test]
-fn the_icon_is_off_for_a_photo_without_faces_before_the_tab_is_opened() {
-    let (mut h, runs) = counting_app(true);
+fn the_early_check_dims_the_icon_and_search_again_runs_the_real_search() {
+    let (mut h, runs, people) = counting_app(true);
     let photo = h.app.session.active().unwrap();
     assert_ne!(h.app.ui.right, RightPanel::Portrait);
     let found = h.step_until(Duration::from_secs(60), |h| h.app.session.retouch_no_people(photo));
     assert!(found, "the photo was never found to have no face");
     assert_eq!(runs.load(Ordering::SeqCst), 1);
-    settle(&mut h);
+    let st = h.app.session.retouch_faces_of(photo);
+    assert!(st.found.is_none() && st.hint, "a hint, not a search result");
+    // the icon opens the tab, which does not search by itself
     let r = h.request("ui.clickWidget", json!({"id": "icon:portrait"}), T);
     assert_eq!(r["ok"], true, "{r}");
     settle(&mut h);
-    assert_ne!(h.app.ui.right, RightPanel::Portrait, "the greyed icon opened the tab");
-    // the tab later (by another way in): one line, and no search of its own
+    assert_eq!(h.app.ui.right, RightPanel::Portrait);
+    assert!(rect_of(&mut h, "portrait:noPeople").is_some());
+    assert!(rect_of(&mut h, "section:portrait.skin").is_none());
+    assert_eq!(runs.load(Ordering::SeqCst), 1, "the tab searched by itself");
+    // Search Again: the real search, now finding a face (the early check had missed it)
+    people.store(true, Ordering::SeqCst);
+    let r = h.request("ui.clickWidget", json!({"id": "button:portraitSearchAgain"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let found = h.step_until(Duration::from_secs(60), |h| h.app.session.retouch_faces_of(photo).found.is_some());
+    assert!(found, "the search never finished");
+    settle(&mut h);
+    assert_eq!(runs.load(Ordering::SeqCst), 2);
+    assert!(!h.app.session.retouch_no_people(photo), "the icon is normal again");
+    assert!(rect_of(&mut h, "portrait:noPeople").is_none());
+    assert!(rect_of(&mut h, "section:portrait.skin").is_some(), "the tab fills");
+}
+
+/// Search Again that finds nobody again leaves the tab as it was, with its button back.
+#[test]
+fn search_again_that_finds_nobody_leaves_the_one_line() {
+    let (mut h, runs, _) = counting_app(true);
+    let photo = h.app.session.active().unwrap();
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.session.retouch_no_people(photo)));
     h.app.ui.right = RightPanel::Portrait;
     settle(&mut h);
-    assert!(rect_of(&mut h, "portrait:noPeople").is_some());
-    assert_eq!(runs.load(Ordering::SeqCst), 1, "the tab searched again");
+    let r = h.request("ui.clickWidget", json!({"id": "button:portraitSearchAgain"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.step_until(Duration::from_secs(60), |h| h.app.session.retouch_faces_of(photo).found.is_some()));
+    settle(&mut h);
+    assert_eq!(runs.load(Ordering::SeqCst), 2);
+    let st = h.app.session.retouch_faces_of(photo);
+    assert!(st.no_people() && !st.hint, "now a real answer");
+    assert!(rect_of(&mut h, "portrait:noPeople").is_some() && rect_of(&mut h, "button:portraitSearchAgain").is_some());
 }
 
 /// With the setting off in Settings ▸ Performance no check runs: the icon stays on until the tab is opened.
 #[test]
 fn no_check_runs_while_parsing_ahead_is_switched_off() {
-    let (mut h, runs) = counting_app(false);
+    let (mut h, runs, _) = counting_app(false);
     let photo = h.app.session.active().unwrap();
     for _ in 0..90 {
         h.step();

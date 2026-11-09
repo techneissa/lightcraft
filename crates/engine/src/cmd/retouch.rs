@@ -88,7 +88,7 @@ fn faces_json(s: &Session, id: PhotoId) -> Value {
             })
         })
         .collect();
-    json!({"id": id.0, "found": st.found.is_some(), "noPeople": st.no_people(), "busy": st.busy, "error": st.error, "faces": list})
+    json!({"id": id.0, "found": st.found.is_some(), "noPeople": st.no_people(), "nobodyHint": st.hint, "busy": st.busy, "error": st.error, "faces": list})
 }
 
 /// `feature`: a feature's key, required.
@@ -183,7 +183,11 @@ fn refine_mut<'a>(s: &Session, d: &'a mut lightcraft_develop::DevelopSettings, i
 fn refine_of(s: &Session, d: &lightcraft_develop::DevelopSettings, id: PhotoId, face: Option<usize>, c: &str) -> Result<Refine> {
     let Some(i) = face else { return Ok(d.retouch.refine.clone()) };
     let input = found_faces(s, id, c)?;
-    check_face(&input, i, c)?;
+    // (a face past the last one reads the strokes for every face, as it always has; but a photo whose search found
+    // nobody has no face to ask about)
+    if input.faces.is_empty() {
+        check_face(&input, i, c)?;
+    }
     let keys = s.retouch_key_map(id);
     let own = lightcraft_develop::retouch::overrides::resolve_in(&d.retouch, &input.faces, as_map(&keys)).get(i).copied().flatten();
     Ok(own.and_then(|o| d.retouch.faces.get(o)).map_or_else(|| d.retouch.refine.clone(), |o| o.refine.clone()))
@@ -196,7 +200,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "List Portrait Faces",
             [],
             None,
-            "{id?} → {id, found, noPeople, busy, error?, faces: [{index, bounds: [x0, y0, x1, y1], landmarks: [[x, y]…], score, person?, masks: [part…], own?, strands: {status: searched|tooSmall|noParts|notSearched, count?, ms?, cropMs?, facePx?}}]} — the faces portrait retouching found on the photo (fractions of the photo before its crop); `own` is the index of the face's own settings (`retouchFace.<own>.…`); `strands` is how the Stray Hair search went for it (`count` strands found, in `ms` milliseconds after `cropMs` to cut the head's full-size crop, on a face `facePx` pixels tall; `notSearched`: the faces came without the people parse). `noPeople` is true once the search found no face (the Portrait tab is then off for the photo; commands that need a face, such as `face` on retouch.set, answer with an error). Starts nothing: see retouch.detect",
+            "{id?} → {id, found, noPeople, nobodyHint, busy, error?, faces: [{index, bounds: [x0, y0, x1, y1], landmarks: [[x, y]…], score, person?, masks: [part…], own?, strands: {status: searched|tooSmall|noParts|notSearched, count?, ms?, cropMs?, facePx?}}]} — the faces portrait retouching found on the photo (fractions of the photo before its crop); `own` is the index of the face's own settings (`retouchFace.<own>.…`); `strands` is how the Stray Hair search went for it (`count` strands found, in `ms` milliseconds after `cropMs` to cut the head's full-size crop, on a face `facePx` pixels tall; `notSearched`: the faces came without the people parse). `noPeople` is true once the search found no face, or the early check saw none when it has not searched (`nobodyHint`: a hint only, renders and exports ignore it; the Portrait icon and tab are then dimmed, and a command that needs a face, such as `face` on retouch.set, answers with an error once a search found none). See retouch.search. Starts nothing: see retouch.detect",
             has_active,
             |s, p| {
                 let id = target(s, p, "retouch.faces")?;
@@ -215,6 +219,23 @@ pub fn specs() -> Vec<CommandSpec> {
                 let id = target(s, p, c)?;
                 let again = p.get("again").and_then(Value::as_bool).unwrap_or(false);
                 s.retouch_detect_now(id, again)?;
+                Ok(faces_json(s, id))
+            }
+        ),
+        cmd!(
+            "retouch.search",
+            "Search Portrait Faces",
+            [],
+            None,
+            "{id?, again?: bool} → as retouch.faces — start the real face search of the photo in the background (the Portrait tab's \"Search Again\": `again` searches anew, ignoring what was found or hinted before), with one \"Finding Faces\" row in the activity stack; read the result with retouch.faces. Answers with the reason when no face model is installed",
+            has_active,
+            |s, p| {
+                let c = "retouch.search";
+                let id = target(s, p, c)?;
+                let again = p.get("again").and_then(Value::as_bool).unwrap_or(false);
+                if let Some(why) = s.retouch_search(id, again) {
+                    return Err(bad(c, why));
+                }
                 Ok(faces_json(s, id))
             }
         ),

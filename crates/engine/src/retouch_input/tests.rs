@@ -627,3 +627,17 @@ fn a_photo_without_people_says_so_and_commands_that_need_a_face_fail_clearly() {
     assert!(!s.retouch_no_people(id));
     assert!(s.execute("retouch.set", &json!({"control": "retouch.skin.smoothness", "value": 1, "face": 0})).is_ok());
 }
+
+/// `retouch.refine.list` for a face past the last one reads the strokes for every face, as it always has, except on a
+/// photo whose search found nobody, which has no face to ask about.
+#[test]
+fn refine_list_of_a_face_past_the_last_falls_back_to_every_face_unless_nobody_was_found() {
+    let (mut s, fake) = demo_with(vec![ann()]);
+    s.execute("retouch.detect", &json!({})).unwrap();
+    s.execute("retouch.refine.stroke", &json!({"feature": "eyes", "points": [[0.2, 0.3], [0.25, 0.3]]})).unwrap();
+    let all = s.execute("retouch.refine.list", &json!({})).unwrap();
+    assert_eq!(s.execute("retouch.refine.list", &json!({"face": 5})).unwrap(), all);
+    *fake.0.lock().unwrap() = vec![];
+    s.execute("retouch.detect", &json!({"again": true})).unwrap();
+    assert!(s.execute("retouch.refine.list", &json!({"face": 5})).is_err());
+}

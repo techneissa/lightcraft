@@ -152,7 +152,8 @@ pub(crate) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
     let mut st = app.session.retouch_faces_of(photo);
     // the faces are found once per photo, when the tab is first open on it (without a face model: why not)
     // (and again when its Wrinkles search was cancelled, once that is old enough: `Found::retry`)
-    if (st.found.as_ref().is_none_or(|f| f.retry.is_some())) && !st.busy && st.error.is_none() {
+    // (not when the early check saw nobody: the tab then says so and "Search Again" runs the real search)
+    if (st.found.as_ref().is_none_or(|f| f.retry.is_some())) && !st.busy && st.error.is_none() && !st.hint {
         st.error = app.session.retouch_search(photo, false);
     }
     if st.busy {
@@ -160,7 +161,7 @@ pub(crate) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
     }
     // a finished search without a face: one line, no sections (the settings the photo may keep are untouched)
     if st.no_people() {
-        no_people_line(ui);
+        no_people_view(app, ui, photo, st.busy);
         return;
     }
     let input: Arc<Input> = st.found.as_ref().map(|f| f.input.clone()).unwrap_or_default();
@@ -195,16 +196,31 @@ pub(crate) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
     cx.ui.add_space(40.0);
 }
 
-/// What the tool strip's Portrait icon says (hover text) and the tab's only line, once the face search found no face.
+/// The tab's only line on a photo without people, as the Portrait icon's hover text continues it.
 pub(crate) const NO_PEOPLE: &str = "No People in This Photo";
 
-/// The tab's only line on a photo without people.
-fn no_people_line(ui: &mut egui::Ui) {
+/// The tab on a photo without people: one line, and "Search Again" (the real face search, `retouch.search`) or, while
+/// it runs, "Finding Faces…". Nothing else: the photo's stored settings are not touched.
+fn no_people_view(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId, busy: bool) {
     let t = Tokens::get(ui.ctx());
+    let mut again = false;
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 2 }).show(ui, |ui| {
         let r = ui.add(egui::Label::new(egui::RichText::new(crate::i18n::tr(NO_PEOPLE)).size(12.5).color(t.text_dim)).wrap());
         register(ui, "portrait:noPeople", r.rect);
+        ui.add_space(6.0);
+        if busy {
+            ui.label(egui::RichText::new(crate::i18n::tr("Finding Faces…")).size(11.5).color(t.text_dim));
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(250));
+        } else {
+            again = crate::widgets::text_button(ui, "portraitSearchAgain", "Search Again", false).clicked();
+        }
     });
+    if again {
+        if let Err(e) = app.run("retouch.search", json!({"id": photo.0, "again": true})) {
+            app.toast(ui.ctx(), e);
+        }
+        ui.ctx().request_repaint();
+    }
 }
 
 /// "Portrait", and the eye that turns all retouching off and on for the photo (`develop.sectionEnabled`).

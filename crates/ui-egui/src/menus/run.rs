@@ -1016,12 +1016,7 @@ fn ui_commands_7(app: &mut LightcraftApp, ctx: &egui::Context, id: &str, p: &Val
             Ok(Value::Null)
         }
         "panel.portrait" => {
-            // no people in the photo (the face search finished): the shortcut and menu do nothing but say why
-            if app.session.active().is_some_and(|p| app.session.retouch_no_people(p)) {
-                app.toast(ctx, crate::i18n::tr(crate::panels::portrait::NO_PEOPLE));
-            } else {
-                panel(app, ctx, RightPanel::Portrait, "Portrait");
-            }
+            panel(app, ctx, RightPanel::Portrait, "Portrait");
             Ok(Value::Null)
         }
         "panel.info" => {

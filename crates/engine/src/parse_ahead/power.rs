@@ -126,6 +126,7 @@ impl PowerWatch {
     }
 
     /// Tests: use `power` from now on (`None`: the Mac's again).
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn fix(&self, power: Option<Power>) {
         self.state.lock().unwrap_or_else(PoisonError::into_inner).fixed = power;
     }

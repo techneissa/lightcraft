@@ -761,12 +761,14 @@ impl Known {
 impl Session {
     /// Tests and tools: use `power` instead of the Mac's from now on (`None`: the Mac's again).
     #[doc(hidden)]
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn parse_ahead_fix_power(&mut self, power: Option<power::Power>) {
         self.parse_ahead.power.fix(power);
     }
 
     /// Tests and tools: how many early checks for faces (`peek`) have started.
     #[doc(hidden)]
+    #[cfg(any(test, feature = "test-hooks"))]
     pub fn parse_ahead_peeks(&self) -> usize {
         self.parse_ahead.peek.started()
     }

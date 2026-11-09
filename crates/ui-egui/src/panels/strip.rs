@@ -104,12 +104,12 @@ fn tool_button(app: &mut LightcraftApp, ui: &mut egui::Ui, tool: Tool, sz: egui:
         None => app.ui.presets,
         Some(p) => app.ui.right == p || (p == RightPanel::Edit && app.ui.right == RightPanel::Profiles),
     };
-    // (Portrait: off once the face search found nobody in the photo; the icon stays in its place)
+    // (Portrait: dimmed, still clickable, once nobody is seen in the photo: its tab says so and can search again)
     let no_people = tool == Tool::Portrait && app.session.active().is_some_and(|p| app.session.retouch_no_people(p));
-    let enabled = (has_photo || tool == Tool::Activity) && !no_people;
-    let tip = if no_people { crate::panels::portrait::NO_PEOPLE } else { tip };
+    let enabled = has_photo || tool == Tool::Activity;
+    let tip = if no_people { "Portrait: No People in This Photo" } else { tip };
     let id = tool.id();
-    let resp = icon_button_sense(ui, id, icon, sz, on, enabled, tip, true);
+    let resp = icon_button_sense(ui, id, icon, sz, on, enabled, no_people, tip, true);
     if resp.clicked() {
         let _ = app.run(&format!("panel.{id}"), json!({}));
     }

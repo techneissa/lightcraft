@@ -55,12 +55,7 @@ Nothing changes in a photo yet: every feature is an empty stub. What is there fo
   Glare, Background, Stray Hair, and Portrait Presets (no feature module yet). Sections start closed; open ones are
   kept in the saved `openSections` as `portrait.<key>` (a key already there, so no new `ui.json` key; Edit's Solo
   Mode leaves them alone). `ui.json` saves the open Portrait tab as Edit: a build without the tab cannot read
-  `right: "portrait"` and would drop the whole file. Opening the tab finds the photo's faces; so does opening the photo, early, when parsing ahead is on (`fork/parse-ahead.md`, the early check: only "nobody" is kept). **A photo with no people** (the search finished and found
-  no face; not while it is unknown, running or failed): the tool strip's Portrait icon is greyed in its place, with the
-  hover text "No People in This Photo"; shortcut T (and Window ▸ Portrait) does nothing but toast that text; an open tab
-  shows the title row and that one line, with no sections, "Editing" line or face picker; switching photos follows. The
-  photo's stored Portrait settings are not touched. `retouch.faces` says `noPeople`, and `face` commands
-  (`retouch.set`, `resetFace`, `reset`, `refine.*`) answer "no face N: the photo has no people" (issue #167). Sliders in a feature's section change the picked
+  `right: "portrait"` and would drop the whole file. Opening the tab finds the photo's faces; so does opening the photo, early, when parsing ahead is on (`fork/parse-ahead.md`, the early check: only "nobody" is kept). **A photo with no people** (the face search finished and found no face, or the early check saw none while nothing was searched: `FacesState::no_people`, a *hint*, which only the icon and the tab read; the face search, renders and exports ignore it, so a photo the early check missed is still searched and retouched; unknown, running or failed searches are not "no people"): the tool strip's Portrait icon is drawn dimmed in its place, still clickable, with the hover text "Portrait: No People in This Photo"; the tab (opened by the icon, T or Window ▸ Portrait) shows the title row, the line "No People in This Photo" and the button "Search Again" (`retouch.search {again: true}`: the real search in the background, one "Finding Faces" row; "Finding Faces…" meanwhile; when it finds a face the tab fills and the icon is normal), with no sections, "Editing" line or face picker, and does not search by itself; switching photos follows. The photo's stored Portrait settings are not touched. `retouch.faces` says `noPeople` and `nobodyHint`, and `face` commands (`retouch.set`, `resetFace`, `reset`, `refine.*`) answer "no face N: the photo has no people" once a search found nobody (`retouch.refine.list` with a face past the last still reads the strokes for every face when the photo has faces) (issue #167). Sliders in a feature's section change the picked
   face. Select People's parts stay in the Masking panel.
 - **Face picker on the loupe** (`portrait/overlay.rs`), while the Portrait tab is open: the people picker
   (`panels/detail/people_picker.rs`), a semi-opaque dark card at the image view's top-right corner, 12 points from
@@ -143,7 +138,7 @@ set up; a missing model not kept as a failure; the face cache forgetting the pho
 Portrait tab (its strip icon and shortcut, a section per feature and Portrait Presets opening and closing, the
 eye, the face picker only while it is open, an old saved strip order); the face picker keeping to the view's corner for photos of other shapes and at 100 %,
 picking, folding into the overflow button and hiding with the tool overlay; the picker's parts row (⌘-click
-multi-select, with a dummy list) and its place below the camera-preview badge; the Portrait icon off, the tab one line, T doing nothing and the face commands failing clearly on a photo without people (`tests/portrait_no_people.rs`); no panic with no faces, 50 faces, a failing provider or a 1 × 1 photo.
+multi-select, with a dummy list) and its place below the camera-preview badge; the Portrait icon dimmed but clickable, the tab one line with Search Again, T opening it and the face commands failing clearly on a photo without people (`tests/portrait_no_people.rs`); no panic with no faces, 50 faces, a failing provider or a 1 × 1 photo.
 No test needs a model: the engine and UI tests install a fake provider.
 
 ## Parity rows
