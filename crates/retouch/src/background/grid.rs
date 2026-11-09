@@ -1,10 +1,9 @@
-//! Blurs of the background on grids of blocks anchored to the whole render's pixels.
+//! Blurs of the background on grids of blocks of the analysis image (the whole frame at a fixed size).
 //!
 //! A blur of `R` pixels runs on blocks of about `R / 3` pixels (the image weighted by how much of each pixel is
 //! background, summed per block), with a disc of `R` (a lens's out-of-focus spot) or a Gaussian, and is read back
-//! bilinearly. Blocks start at multiples of their size in the whole render's pixels ([`super::Place`]), so a window
-//! of the render (the zoomed loupe) pools the same pixels into the same blocks as the whole render, and reads the same
-//! values wherever the window holds the blur's reach.
+//! bilinearly at any point of the image (a render pixel mapped onto it), so every render and every window of one
+//! reads the same values.
 
 use lightcraft_raster::{Image, par_rows};
 
@@ -105,24 +104,25 @@ impl Grid {
         Grid { s: self.s, b0: self.b0, cells: lightcraft_raster::blur::gaussian(&self.cells, sigma) }
     }
 
-    /// Where render pixel (`gx`, `gy`) reads the grid: four cells and their bilinear weights.
-    pub fn taps(&self, gx: i64, gy: i64) -> Option<([usize; 4], [f32; 4])> {
+    /// Where image point (`u`, `v`) (pixel centres at whole numbers) reads the grid: four cells and their bilinear
+    /// weights.
+    pub fn taps(&self, u: f32, v: f32) -> Option<([usize; 4], [f32; 4])> {
         let (w, h) = (self.cells.width, self.cells.height);
-        if w == 0 || h == 0 {
+        if w == 0 || h == 0 || !u.is_finite() || !v.is_finite() {
             return None;
         }
         let s = self.s as f32;
-        let u = ((gx as f32 + 0.5) / s - 0.5 - self.b0.0 as f32).clamp(0.0, (w - 1) as f32);
-        let v = ((gy as f32 + 0.5) / s - 0.5 - self.b0.1 as f32).clamp(0.0, (h - 1) as f32);
-        let (x0, y0) = (u as usize, v as usize);
+        let cu = ((u + 0.5) / s - 0.5 - self.b0.0 as f32).clamp(0.0, (w - 1) as f32);
+        let cv = ((v + 0.5) / s - 0.5 - self.b0.1 as f32).clamp(0.0, (h - 1) as f32);
+        let (x0, y0) = (cu as usize, cv as usize);
         let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
-        let (tx, ty) = (u - x0 as f32, v - y0 as f32);
+        let (tx, ty) = (cu - x0 as f32, cv - y0 as f32);
         Some(([y0 * w + x0, y0 * w + x1, y1 * w + x0, y1 * w + x1], [(1.0 - tx) * (1.0 - ty), tx * (1.0 - ty), (1.0 - tx) * ty, tx * ty]))
     }
 
-    /// The colour at render pixel (`gx`, `gy`), when enough background is near it (`min` of the weight).
-    pub fn read(&self, gx: i64, gy: i64, min: f32) -> Option<[f32; 3]> {
-        let (at, wt) = self.taps(gx, gy)?;
+    /// The colour at image point (`u`, `v`), when enough background is near it (`min` of the weight).
+    pub fn read(&self, u: f32, v: f32, min: f32) -> Option<[f32; 3]> {
+        let (at, wt) = self.taps(u, v)?;
         let mut p = [0.0f32; 4];
         for (i, k) in at.iter().zip(wt) {
             let v = self.cells.data.get(*i)?;
@@ -151,7 +151,7 @@ mod tests {
         // a window that starts inside a block
         let odd = Grid::pool(10, 10, (5, 7), 4, &f(5, 7));
         assert_eq!(odd.b0, (1, 1));
-        let (a, b) = (odd.read(9, 10, 0.0), whole.read(9, 10, 0.0));
+        let (a, b) = (odd.read(9.0, 10.0, 0.0), whole.read(9.0, 10.0, 0.0));
         assert!(a.is_some() && b.is_some());
     }
 
@@ -159,9 +159,10 @@ mod tests {
     fn a_disc_keeps_a_flat_field_flat_and_reads_nothing_where_nothing_was_pooled() {
         let g = Grid::pool(32, 32, (0, 0), 2, &|x, _| ([0.5, 0.25, 0.125], if x < 16 { 1.0 } else { 0.0 }));
         let d = g.disc(3.0);
-        let p = d.read(4, 16, 1e-3).unwrap();
+        let p = d.read(4.0, 16.0, 1e-3).unwrap();
         assert!((p[0] - 0.5).abs() < 1e-5 && (p[2] - 0.125).abs() < 1e-5);
-        assert!(d.read(31, 16, 1e-3).is_none());
-        assert!(Grid::pool(0, 0, (0, 0), 3, &|_, _| ([0.0; 3], 1.0)).read(0, 0, 0.0).is_none());
+        assert!(d.read(31.0, 16.0, 1e-3).is_none());
+        assert!(Grid::pool(0, 0, (0, 0), 3, &|_, _| ([0.0; 3], 1.0)).read(0.0, 0.0, 0.0).is_none());
+        assert!(d.read(f32::NAN, 1.0, 0.0).is_none());
     }
 }

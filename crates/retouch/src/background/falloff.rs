@@ -158,7 +158,7 @@ fn smoothstep(t: f32) -> f32 {
 }
 
 /// A plane sampled bilinearly at normalised (`nx`, `ny`) (held at the edges).
-fn sample(p: &Plane, nx: f64, ny: f64) -> f32 {
+pub(crate) fn sample(p: &Plane, nx: f64, ny: f64) -> f32 {
     let (w, h) = (p.width, p.height);
     if w == 0 || h == 0 || p.data.len() != w * h || !nx.is_finite() || !ny.is_finite() {
         return 0.0;
@@ -210,17 +210,37 @@ fn depth_range(scene: &Scene<'_>, depth: &Depth) -> Option<(f32, f32)> {
     (near - far > 0.05).then_some((near, far))
 }
 
-/// Each pixel's share of Blur's radius (0…1), in the image's pixels.
-pub(crate) fn shares(scene: &Scene<'_>, size: PhotoSize, depth: Option<&Depth>) -> Plane {
-    let (w, h) = (scene.width, scene.height);
-    let view = scene.view();
+/// How far a depth map's shape (width over height) may be from the photo's before it is taken for another picture's
+/// and left out (the distance from the person is used instead).
+pub const DEPTH_SHAPE: f64 = 0.01;
+
+/// Whether `depth` has the photo's shape (within [`DEPTH_SHAPE`]).
+pub(crate) fn depth_fits(depth: &Depth, size: PhotoSize) -> bool {
+    let (w, h) = (depth.plane.width as f64, depth.plane.height as f64);
+    if w <= 0.0 || h <= 0.0 {
+        return false;
+    }
+    let (a, b) = (w / h, size.w / size.h);
+    a.is_finite() && b.is_finite() && (a / b - 1.0).abs() <= DEPTH_SHAPE
+}
+
+/// Each pixel's share of Blur's radius (0…1) over a `w × h` image whose pixel centre (`x + 0.5`, `y + 0.5`) is at
+/// normalised `to_norm(x + 0.5, y + 0.5)`.
+pub(crate) fn shares(
+    scene: &Scene<'_>,
+    size: PhotoSize,
+    depth: Option<&Depth>,
+    w: usize,
+    h: usize,
+    to_norm: &(impl Fn(f64, f64) -> (f64, f64) + Sync),
+) -> Plane {
     let mut out = Plane::new(w, h);
-    if let Some(d) = depth
+    if let Some(d) = depth.filter(|d| depth_fits(d, size))
         && let Some((near, far)) = depth_range(scene, d)
     {
         par_rows(&mut out.data, w.max(1), |y, row| {
             for (x, o) in row.iter_mut().enumerate() {
-                let (nx, ny) = view.to_norm(x as f64 + 0.5, y as f64 + 0.5);
+                let (nx, ny) = to_norm(x as f64 + 0.5, y as f64 + 0.5);
                 let t = (near - sample(&d.plane, nx, ny)) / (near - far);
                 *o = DEPTH_FLOOR + (1.0 - DEPTH_FLOOR) * smoothstep(t);
             }
@@ -237,7 +257,7 @@ pub(crate) fn shares(scene: &Scene<'_>, size: PhotoSize, depth: Option<&Depth>) 
     let dist = Plane { width: grid.w, height: grid.h, data: grid.distances().into_iter().map(|d| smoothstep(d / fall as f32)).collect() };
     par_rows(&mut out.data, w.max(1), |y, row| {
         for (x, o) in row.iter_mut().enumerate() {
-            let (nx, ny) = view.to_norm(x as f64 + 0.5, y as f64 + 0.5);
+            let (nx, ny) = to_norm(x as f64 + 0.5, y as f64 + 0.5);
             *o = NEAR + (1.0 - NEAR) * sample(&dist, nx, ny);
         }
     });
@@ -256,5 +276,16 @@ mod tests {
         assert!(edt_1d(&[]).is_empty());
         let none = edt_1d(&[FAR; 3]);
         assert!(none.iter().all(|v| *v >= FAR));
+    }
+
+    #[test]
+    fn a_depth_map_of_another_shape_is_left_out() {
+        let d = |w: usize, h: usize| Depth { plane: std::sync::Arc::new(Plane::new(w, h)), key: 0 };
+        let size = PhotoSize { w: 3000.0, h: 2000.0 };
+        assert!(depth_fits(&d(300, 200), size));
+        assert!(depth_fits(&d(301, 200), size), "within a percent");
+        assert!(!depth_fits(&d(200, 300), size), "turned");
+        assert!(!depth_fits(&d(320, 200), size));
+        assert!(!depth_fits(&d(0, 0), size));
     }
 }

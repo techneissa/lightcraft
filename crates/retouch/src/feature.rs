@@ -53,6 +53,10 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     /// renders all of that around it and cuts back (`crates/pipeline/src/retouch_step.rs`), so zoom never changes
     /// a result. By default [`DEFAULT_REACH`].
     const REACH: f64 = DEFAULT_REACH;
+    /// Whether a zoomed render must hold what the feature reads around a face ([`Feature::PARTS`]' areas grown by
+    /// [`Feature::REACH`]). `false` for a feature that reads only the pixel itself and the pipeline's whole-frame
+    /// [`View::analysis`] image (Background). By default `true`.
+    const READS_AROUND: bool = true;
 
     /// Whether these settings leave the picture alone. By default: every slider at its default.
     fn is_off(&self) -> bool {
@@ -90,6 +94,11 @@ pub trait View: Sync {
     /// Where the image lies in the whole render (a zoomed loupe renders a window of it), for features that read
     /// around a pixel ([`crate::background`]). `None` (the default): the image is the whole render.
     fn place(&self) -> Option<crate::background::Place> {
+        None
+    }
+    /// The whole frame before the Background step at a fixed size, made by the pipeline
+    /// ([`crate::background::Analysis`]). `None` (the default): the image itself, when it is the whole render.
+    fn analysis(&self) -> Option<&crate::background::Analysis> {
         None
     }
 }
@@ -143,6 +152,8 @@ pub struct Scene<'a> {
     pub backdrop: Option<&'a crate::background::Backdrop>,
     /// The photo's depth map ([`Input::depth`]).
     pub depth: Option<&'a crate::background::Depth>,
+    /// [`Input::fingerprint`]: what the faces, their masks and the above are (work made from them is kept by it).
+    pub input_key: u64,
     view: &'a dyn View,
 }
 
@@ -154,7 +165,7 @@ impl<'a> Scene<'a> {
     /// whose box is not a box or maps nowhere. `face` arguments of [`Feature::apply`] index this list.
     pub fn new(input: &'a Input, view: &'a dyn View, width: usize, height: usize) -> Scene<'a> {
         let faces = input.faces.iter().take(MAX_FACES).enumerate().filter_map(|(i, f)| map_face(f, i, view)).collect();
-        Scene { faces, width, height, backdrop: input.backdrop.as_ref(), depth: input.depth.as_ref(), view }
+        Scene { faces, width, height, backdrop: input.backdrop.as_ref(), depth: input.depth.as_ref(), input_key: input.fingerprint(), view }
     }
 
     pub fn view(&self) -> &dyn View {

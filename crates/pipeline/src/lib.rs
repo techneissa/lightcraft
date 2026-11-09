@@ -545,6 +545,9 @@ pub struct Plan<'a> {
     pub recolor: Vec<(u32, recolor::Reference)>,
     /// The whole frame and its output size (a windowed render's [`Self::frame`] is part of it).
     pub full: (geometry::Frame, usize, usize),
+    /// Fork (`fork/retouch-background.md`): Background's analysis image of the whole frame before the retouch step
+    /// ([`retouch_step::analysis`]); `None` while Background is off.
+    pub retouch_analysis: Option<Arc<lightcraft_develop::retouch::background::Analysis>>,
 }
 
 /// The original's long edge in pixels (an original reported smaller than the source is the source).
@@ -616,16 +619,6 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                 let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
                 work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
             }
-            // (fork, `fork/retouch-background.md`: Background reads its blurs around every pixel, faces or not;
-            // first, so the faces it reaches are read whole below)
-            let halo = retouch_step::reach(s, px_per_long);
-            if halo > 0 {
-                let x = work.x.saturating_sub(halo);
-                let y = work.y.saturating_sub(halo);
-                let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
-                let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
-                work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
-            }
             // (fork, `fork/retouch-eyes.md`: portrait retouching reads around a face; the window holds all of it)
             work = retouch_step::window_for_reads(s, info, &frame, full_w, full_h, work);
             if work != win {
@@ -664,7 +657,7 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         local::joint_colour_nr(s),
     ));
     let noise_key = hash_of((pre_nr_key, [d.nr_luminance, d.nr_detail].map(f64::to_bits), detail_scale.to_bits()));
-    Plan {
+    let mut plan = Plan {
         settings,
         frame,
         w,
@@ -684,7 +677,10 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         draft: req.quality == Quality::Draft,
         recolor,
         full,
-    }
+        retouch_analysis: None,
+    };
+    plan.retouch_analysis = retouch_step::analysis(src, info, &plan);
+    plan
 }
 
 /// The joint colour NR's noise model of the whole frame, measured on fixed tiles of it
@@ -722,6 +718,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
                 mattes: None,
                 recolor: Vec::new(),
                 full: p.full.clone(),
+                retouch_analysis: None,
                 ..*p
             };
             local_tone::apply(&mut img, info, &tile);

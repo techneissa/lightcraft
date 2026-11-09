@@ -17,11 +17,11 @@
 //! estimation, as a mask's Decontaminate), so no old background stays between strands. Pixels wholly person never
 //! change. Sizes are fractions of the photo's long side or of the person's box, never pixels.
 //!
-//! Everything a slider does not change is computed once and kept ([`prepare`]): the matte, its edge's colours, the
-//! blur's shares and the blurred and cleaned background. A slider drag then only mixes them per pixel ([`draw`]).
-//! A window of the render (the zoomed loupe) must hold [`reach`] around itself; the blurs run on blocks anchored to
-//! the whole render ([`Place`]) and the distances on a grid over the whole photo, so it draws what the whole render
-//! draws inside it.
+//! Everything a slider does not change is made once from the [`Analysis`] image (the whole frame before this step, at
+//! a fixed size, from the pipeline) and kept with it ([`prepare`]): the matte, its edge's colours, the blur's shares,
+//! the blurred and cleaned background and the fitted Swap picture. A slider drag, a loupe pan or another render size
+//! then only mixes them per pixel ([`draw`]), so a window of the render (the zoomed loupe) draws what the whole render
+//! draws inside it and reads nothing around itself.
 
 use std::sync::Arc;
 
@@ -36,8 +36,6 @@ mod grid;
 pub mod holes;
 mod matte;
 mod prepare;
-
-pub use prepare::{forget, kept};
 
 /// The blur radius at Blur 100 on the farthest background, a fraction of the photo's long side.
 pub const BLUR_MAX: f64 = 0.03;
@@ -58,14 +56,15 @@ pub struct Background {
     pub with: Swap,
 }
 
-/// What Background Swap puts behind the person.
+/// What Background Swap puts behind the person. Never a file path: a picture the user picks is copied into the
+/// library's own folder and named by its content.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", tag = "kind")]
 pub enum Swap {
     /// A solid colour: sRGB, 0…1 per channel (as a colour picker shows it), turned linear for the render.
     Colour { rgb: [f64; 3] },
-    /// A picture file (any format the app reads), by its path.
-    File { path: String },
+    /// A picture copied into the library (`<library>/Backgrounds/<hash>.<ext>`), by the SHA-256 of its bytes (hex).
+    Picture { hash: String },
     /// A photo of the library, as it is developed, by its id.
     Photo { id: u64 },
 }
@@ -80,11 +79,11 @@ impl Default for Swap {
 }
 
 impl Swap {
-    /// The picture this swap needs loaded, when it is one: `file:<path>` or `photo:<id>` (the engine's key).
+    /// The picture this swap needs loaded, when it is one: `picture:<hash>` or `photo:<id>` (the engine's key).
     pub fn picture(&self) -> Option<String> {
         match self {
             Swap::Colour { .. } => None,
-            Swap::File { path } => Some(format!("file:{path}")),
+            Swap::Picture { hash } => Some(format!("picture:{hash}")),
             Swap::Photo { id } => Some(format!("photo:{id}")),
         }
     }
@@ -149,32 +148,55 @@ impl std::fmt::Debug for Depth {
     }
 }
 
+/// The long side (pixels) of the [`Analysis`] image the pipeline makes.
+pub const ANALYSIS_LONG: usize = 1600;
+
+/// The whole frame of a render before the Background step, at a fixed size ([`ANALYSIS_LONG`] on its long side for
+/// the pipeline's), scene-linear: what Background's blurs, matte colours and cleaned backdrop are made from, and where
+/// that work is kept (for the newest few faces, depth maps and Swap pictures).
+pub struct Analysis {
+    pub image: Arc<Rgb32f>,
+    /// What the image is made from (the source, the settings before the step, the frame and the size).
+    pub key: u64,
+    kept: prepare::Kept,
+}
+
+impl Analysis {
+    pub fn new(image: Arc<Rgb32f>, key: u64) -> Analysis {
+        Analysis { image, key, kept: prepare::Kept::default() }
+    }
+
+    /// How many sets of work are kept with it.
+    pub fn kept(&self) -> usize {
+        self.kept.len()
+    }
+
+    /// Memory held (bytes): the image and the work kept with it.
+    pub fn bytes(&self) -> usize {
+        self.image.data.len() * std::mem::size_of::<[f32; 3]>() + self.kept.bytes()
+    }
+}
+
+impl std::fmt::Debug for Analysis {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Analysis({}×{}, {:016x}, {} kept)", self.image.width, self.image.height, self.key, self.kept())
+    }
+}
+
 /// `LIGHTCRAFT_PROFILE=1` prints how long Background took (as the pipeline's stages do).
 fn profiling() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LIGHTCRAFT_PROFILE").is_some_and(|v| v != "0"))
 }
 
-/// How far (pixels) Background reads around a pixel in a render whose photo has a long side of `long_px` pixels,
-/// with every slider on: a window of the render must hold this much around itself ([`Background::reach`] for given
-/// settings).
-pub fn reach(long_px: f64) -> usize {
-    Background { blur: 1.0, swap: 1.0, clean: 1.0, with: Swap::default() }.reach(long_px)
-}
-
 impl Background {
-    /// How far (pixels) these settings read around a pixel in a render whose photo has a long side of `long_px`
-    /// pixels: the edge's colours read their windows, and the blur and the clean read the background (and those
-    /// colours) around them, a block more each. 0 while off.
-    pub fn reach(&self, long_px: f64) -> usize {
-        let k = draw::Strength::of(self);
-        if k.is_off() {
-            return 0;
+    /// These settings as a portrait preset keeps them: Blur, Clean Backdrop and a Swap colour, never a Swap picture
+    /// (a picture of one library, or a photo of it, means nothing elsewhere): a picture's Swap is left off.
+    pub fn for_preset(&self) -> Background {
+        match self.with {
+            Swap::Colour { .. } => self.clone(),
+            _ => Background { swap: 0.0, with: Swap::default(), ..self.clone() },
         }
-        let blur = if k.blur > 0.0 { BLUR_MAX * (1.0 + 2.0 / 3.0) } else { 0.0 };
-        let clean = if k.clean > 0.0 { CLEAN * 4.0 } else { 0.0 };
-        let r = (blur.max(clean) + matte::WIDE + matte::NARROW) * long_px;
-        if r.is_finite() { (r.ceil().max(0.0) as usize).saturating_add(4) } else { 0 }
     }
 }
 
@@ -188,10 +210,12 @@ impl Feature for Background {
         Control { spec: Spec::amount("retouch.background.swap", "Swap"), get: |s| s.swap, set: |s, v| s.swap = v },
         Control { spec: Spec::amount("retouch.background.clean", "Clean Backdrop"), get: |s| s.clean, set: |s, v| s.clean = v },
     ];
-    const PARTS: &'static [Part] = &[Part::EntirePerson];
-    /// Nothing past the masks around a face: Background reads around every pixel, faces or not, by fractions of the
-    /// picture ([`reach`]), and the pipeline grows a zoomed window by that (`retouch_step::reach`).
+    /// The person, and their hair (small gaps in it are the person: [`holes`]).
+    const PARTS: &'static [Part] = &[Part::EntirePerson, Part::Hair];
+    /// Nothing around a face: Background reads the [`Analysis`] image of the whole frame, so a zoomed window needs no
+    /// more pixels around itself.
     const REACH: f64 = 0.0;
+    const READS_AROUND: bool = false;
 
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, _face: Option<usize>) {
         let k = draw::Strength::of(self);
@@ -199,9 +223,24 @@ impl Feature for Background {
             return;
         }
         let t = profiling().then(std::time::Instant::now);
-        let Some((prep, kept)) = prepare::prepared(img, scene) else { return };
+        // the pipeline's analysis image; without one (the examples, the crate's tests) the image itself, when it is
+        // the whole render
+        let own;
+        let analysis = match scene.view().analysis() {
+            Some(a) => a,
+            None => {
+                let whole = scene.view().place().is_none_or(|p| p.x == 0 && p.y == 0 && (p.width, p.height) == (img.width, img.height));
+                if !whole {
+                    return;
+                }
+                own = Analysis::new(Arc::new(img.clone()), 0);
+                &own
+            }
+        };
+        let Some((prep, kept)) = prepare::prepared(analysis, scene, img.width, img.height) else { return };
+        let frame = prepare::frame_of(analysis, scene, img.width, img.height);
         let t1 = t.map(|t| t.elapsed());
-        draw::draw(img, scene, &prep, &k, &self.with);
+        draw::draw(img, scene, &prep, &frame, &k, &self.with);
         if let (Some(t), Some(t1)) = (t, t1) {
             let ms = |d: std::time::Duration| d.as_secs_f64() * 1e3;
             let what = if kept { "kept" } else { "made" };
@@ -222,7 +261,7 @@ mod tests {
             assert_eq!(Swap::from_hex(bad), None, "{bad}");
         }
         assert_eq!(Swap::Colour { rgb: [f64::NAN, 2.0, -1.0] }.hex().as_deref(), Some("#00FF00"));
-        assert_eq!(Swap::File { path: "/a b.jpg".into() }.picture().as_deref(), Some("file:/a b.jpg"));
+        assert_eq!(Swap::Picture { hash: "ab12".into() }.picture().as_deref(), Some("picture:ab12"));
     }
 
     #[test]
@@ -235,12 +274,12 @@ mod tests {
     }
 
     #[test]
-    fn the_reach_grows_with_the_render() {
-        assert!(reach(2000.0) > 250 && reach(2000.0) < 330, "{}", reach(2000.0));
-        assert_eq!(reach(f64::NAN), 0);
-        assert!(reach(4000.0) > reach(2000.0));
-        let blur = Background { blur: 50.0, ..Background::default() };
-        assert!(blur.reach(2000.0) < reach(2000.0) && blur.reach(2000.0) > 150);
-        assert_eq!(Background::default().reach(2000.0), 0);
+    fn a_preset_keeps_a_colour_and_never_a_picture() {
+        let colour = Background { blur: 30.0, swap: 80.0, clean: 10.0, with: Swap::from_hex("#112233").unwrap_or_default() };
+        assert_eq!(colour.for_preset(), colour);
+        let picture = Background { blur: 30.0, swap: 80.0, clean: 10.0, with: Swap::Picture { hash: "ab".into() } };
+        assert_eq!(picture.for_preset(), Background { blur: 30.0, clean: 10.0, ..Background::default() });
+        let photo = Background { swap: 50.0, with: Swap::Photo { id: 3 }, ..Background::default() };
+        assert!(photo.for_preset().with.picture().is_none());
     }
 }

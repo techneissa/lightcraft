@@ -1,84 +1,57 @@
 //! The person's matte and the two colours of its soft edge.
 //!
 //! The matte is the largest Entire Person mask of every face at each pixel (the people parse's, with the hair edge
-//! Settings ▸ Faces ▸ Hair Edges chooses, `fork/hair-edges.md`). At its soft edge a pixel is a mix,
-//! `I = a·F + (1 − a)·U`, of the person's colour `F` and the background behind it `U`. Both are estimated by
-//! blur-fusion foreground estimation (Forte and Pitié 2021), as a mask's Decontaminate does
-//! (`fork/decontaminate.md`, `crates/pipeline/src/decontam/`): box means of the person's and the background's colours
-//! in a wide and a narrow window (fractions of the photo's long side), corrected so that they mix back to the pixel.
-//! The person is then drawn over a new background with `F`, so no old background colour stays between strands.
+//! Settings ▸ Faces ▸ Hair Edges chooses, `fork/hair-edges.md`), with the small gaps of the hair filled
+//! ([`super::holes`]). At its soft edge a pixel is a mix, `I = a·F + (1 − a)·U`, of the person's colour `F` and the
+//! background behind it `U`. Both are estimated on the analysis image by blur-fusion foreground estimation (Forte and
+//! Pitié 2021), as a mask's Decontaminate does (`fork/decontaminate.md`): box means of the person's and the
+//! background's colours in a wide and a narrow window (fractions of the image's long side). A render reads them
+//! bilinearly and corrects them so that they mix back to its own pixel exactly ([`mix_back`]). The person is then
+//! drawn over a new background with `F`, so no old background colour stays between strands.
+
+use std::sync::Arc;
 
 use lightcraft_raster::{Plane, Rgb32f, par_rows};
 
-use crate::{Part, Scene};
+use crate::{Part, PartMask, Scene};
 
 /// Below and above these values of the matte a pixel is wholly background or wholly person.
 pub(crate) const EDGE: (f32, f32) = (0.002, 0.998);
-/// The wide and narrow windows, fractions of the photo's long side (as Decontaminate's).
+/// The wide and narrow windows, fractions of the image's long side (as Decontaminate's).
 pub(crate) const WIDE: f64 = 0.045;
 pub(crate) const NARROW: f64 = 0.003;
-/// Rows estimated together.
-const BAND: usize = 512;
 
-/// The matte of every person in the image's pixels (0 everywhere in a window of the render the person is not in);
-/// `None` when no face has an Entire Person mask with a person in it.
-pub(crate) fn person(scene: &Scene<'_>) -> Option<Plane> {
-    let (w, h) = (scene.width, scene.height);
-    let any =
-        scene.faces.iter().filter_map(|f| f.face.mask(Part::EntirePerson)).any(|m| {
-            m.area.is_valid() && m.plane.data.len() == m.plane.width.saturating_mul(m.plane.height) && m.plane.data.iter().any(|v| *v > EDGE.0)
-        });
-    if !any || w == 0 || h == 0 {
-        return None;
-    }
-    let boxes: Vec<(usize, [usize; 4])> = (0..scene.faces.len()).filter_map(|i| Some((i, scene.mask_box(i, Part::EntirePerson)?))).collect();
-    // (small holes, gaps between curls, are the person: `holes`)
-    let masks: Vec<Option<std::sync::Arc<crate::PartMask>>> =
-        scene.faces.iter().map(|f| f.face.mask(Part::EntirePerson).map(|m| super::holes::filled_kept(m, super::prepare::mask_key(m)))).collect();
-    let view = scene.view();
+/// Every face's Entire Person mask with the small gaps of its hair filled (kept: [`super::holes::filled_kept`]);
+/// `None` when no face has one with a person in it.
+pub(crate) fn masks(scene: &Scene<'_>) -> Option<Vec<Arc<PartMask>>> {
+    let out: Vec<Arc<PartMask>> = scene
+        .faces
+        .iter()
+        .filter_map(|f| {
+            let m = f.face.mask(Part::EntirePerson)?;
+            let ok =
+                m.area.is_valid() && m.plane.data.len() == m.plane.width.saturating_mul(m.plane.height) && m.plane.data.iter().any(|v| *v > EDGE.0);
+            ok.then(|| super::holes::filled_kept(m, f.face.mask(Part::Hair)))
+        })
+        .collect();
+    (!out.is_empty()).then_some(out)
+}
+
+/// The matte at normalised point (`nx`, `ny`).
+pub(crate) fn at(masks: &[Arc<PartMask>], nx: f64, ny: f64) -> f32 {
+    masks.iter().map(|m| m.sample(nx, ny)).fold(0.0, f32::max)
+}
+
+/// The matte over a `w × h` image whose pixel centre (`x + 0.5`, `y + 0.5`) is at normalised `to_norm(x + 0.5, y + 0.5)`.
+pub(crate) fn plane(masks: &[Arc<PartMask>], w: usize, h: usize, to_norm: &(impl Fn(f64, f64) -> (f64, f64) + Sync)) -> Plane {
     let mut a = Plane::new(w, h);
-    par_rows(&mut a.data, w, |y, row| {
-        for (i, b) in &boxes {
-            if y < b[1] || y >= b[3] {
-                continue;
-            }
-            let Some(m) = masks.get(*i).and_then(Option::as_deref) else { continue };
-            for x in b[0]..b[2].min(w) {
-                let (nx, ny) = view.to_norm(x as f64 + 0.5, y as f64 + 0.5);
-                if let Some(v) = row.get_mut(x) {
-                    *v = v.max(m.sample(nx, ny));
-                }
-            }
+    par_rows(&mut a.data, w.max(1), |y, row| {
+        for (x, v) in row.iter_mut().enumerate() {
+            let (nx, ny) = to_norm(x as f64 + 0.5, y as f64 + 0.5);
+            *v = at(masks, nx, ny);
         }
     });
-    Some(a)
-}
-
-/// One edge pixel: its index in the image and its person and background colours.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub(crate) struct EdgePx {
-    pub i: usize,
-    pub person: [f32; 3],
-    pub behind: [f32; 3],
-}
-
-/// The edge pixels of a matte, in image order, and where each row's start.
-#[derive(Debug, Default)]
-pub(crate) struct Edge {
-    rows: Vec<usize>,
-    px: Vec<EdgePx>,
-}
-
-impl Edge {
-    /// The edge pixels of row `y`.
-    pub fn row(&self, y: usize) -> &[EdgePx] {
-        let (Some(&a), Some(&b)) = (self.rows.get(y), self.rows.get(y + 1)) else { return &[] };
-        self.px.get(a..b).unwrap_or(&[])
-    }
-}
-
-pub(crate) fn is_edge(v: f32) -> bool {
-    v > EDGE.0 && v < EDGE.1
+    a
 }
 
 /// A rectangle of pixels, right and bottom exclusive.
@@ -97,15 +70,6 @@ impl Rect {
 
     fn h(self) -> usize {
         self.y1.saturating_sub(self.y0)
-    }
-
-    fn grow(self, r: usize, w: usize, h: usize) -> Rect {
-        Rect {
-            x0: self.x0.saturating_sub(r),
-            y0: self.y0.saturating_sub(r),
-            x1: self.x1.saturating_add(r).min(w),
-            y1: self.y1.saturating_add(r).min(h),
-        }
     }
 }
 
@@ -195,60 +159,46 @@ fn pass(img: &Rgb32f, alpha: &Plane, prev: Option<(&Region, &Region)>, inp: Rect
     (Region { at: out, data: f }, Region { at: out, data: u })
 }
 
-/// The person and background colours of the edge pixels of `img` under `alpha` (same size), with windows for a photo
-/// whose long side is `long_px` pixels.
-pub(crate) fn edge(img: &Rgb32f, alpha: &Plane, long_px: f64) -> Edge {
+/// The person and background colours of every pixel of `img` under `alpha` (same size), with windows for an image
+/// whose long side is `long_px` pixels: estimated at the edge, the pixel itself where it is wholly one or the other,
+/// and the windows' extrapolation of the other there (so a render between two pixels reads sensible colours).
+pub(crate) fn colours(img: &Rgb32f, alpha: &Plane, long_px: f64) -> (Rgb32f, Rgb32f) {
     let (w, h) = (img.width, img.height);
     if alpha.width != w || alpha.height != h || w == 0 || h == 0 {
-        return Edge::default();
+        return (img.clone(), img.clone());
     }
     let radius = |f: f64| ((f * long_px).round().max(1.0) as usize).min(w.max(h));
-    let (rw, rn) = (radius(WIDE), radius(NARROW));
-    let spans: Vec<Option<(usize, usize)>> = (0..h)
-        .map(|y| {
-            let row = alpha.data.get(y * w..(y + 1) * w)?;
-            let first = row.iter().position(|v| is_edge(*v))?;
-            let last = row.iter().rposition(|v| is_edge(*v)).unwrap_or(first);
-            Some((first, last + 1))
-        })
-        .collect();
-    let mut edge = Edge { rows: Vec::with_capacity(h + 1), px: Vec::new() };
-    edge.rows.push(0);
-    for y0 in (0..h).step_by(BAND) {
-        let y1 = (y0 + BAND).min(h);
-        let (x0, x1) = spans.get(y0..y1).unwrap_or(&[]).iter().flatten().fold((usize::MAX, 0), |(a, b), &(l, r)| (a.min(l), b.max(r)));
-        if x1 <= x0 {
-            edge.rows.extend(std::iter::repeat_n(edge.px.len(), y1 - y0));
-            continue;
-        }
-        let o = Rect { x0, y0, x1, y1 };
-        let p = o.grow(rn, w, h);
-        let q = p.grow(rw, w, h);
-        let (f1, u1) = pass(img, alpha, None, q, p, rw);
-        let (f, u) = pass(img, alpha, Some((&f1, &u1)), p, o, rn);
-        drop((f1, u1));
-        for y in y0..y1 {
-            for x in x0..x1 {
-                let raw = alpha.data.get(y * w + x).copied().unwrap_or(0.0);
-                if !is_edge(raw) {
-                    continue;
-                }
-                let al = sane(raw);
-                let px = img.data.get(y * w + x).copied().unwrap_or([0.0; 3]);
-                let (mut fp, mut up) = (f.get(x, y), u.get(x, y));
-                // the smallest change that makes `a·F + (1 − a)·U` the pixel, shared by the two colours
-                let norm = al * al + (1.0 - al) * (1.0 - al);
-                for c in 0..3 {
-                    let r = (px[c] - (al * fp[c] + (1.0 - al) * up[c])) / norm;
-                    fp[c] = (fp[c] + al * r).max(0.0);
-                    up[c] = (up[c] + (1.0 - al) * r).max(0.0);
-                }
-                edge.px.push(EdgePx { i: y * w + x, person: fp, behind: up });
-            }
-            edge.rows.push(edge.px.len());
-        }
+    let all = Rect { x0: 0, y0: 0, x1: w, y1: h };
+    let (f1, u1) = pass(img, alpha, None, all, all, radius(WIDE));
+    let (f, u) = pass(img, alpha, Some((&f1, &u1)), all, all, radius(NARROW));
+    drop((f1, u1));
+    let (mut fo, mut uo) = (Rgb32f::new(w, h), Rgb32f::new(w, h));
+    for (i, ((fp, up), px)) in fo.data.iter_mut().zip(uo.data.iter_mut()).zip(&img.data).enumerate() {
+        let a = sane(alpha.data.get(i).copied().unwrap_or(0.0));
+        let (fe, ue) = (f.data.get(i).copied().unwrap_or(*px), u.data.get(i).copied().unwrap_or(*px));
+        (*fp, *up) = if a >= EDGE.1 {
+            (*px, ue)
+        } else if a <= EDGE.0 {
+            (fe, *px)
+        } else {
+            mix_back(a, *px, fe, ue)
+        };
     }
-    edge
+    (fo, uo)
+}
+
+/// Person and background colours `f`, `u` corrected so that `a·F + (1 − a)·U` is pixel `px`: the smallest change,
+/// shared by the two in proportion to their weights.
+pub(crate) fn mix_back(a: f32, px: [f32; 3], f: [f32; 3], u: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    let a = sane(a);
+    let norm = (a * a + (1.0 - a) * (1.0 - a)).max(1e-6);
+    let (mut fo, mut uo) = (f, u);
+    for c in 0..3 {
+        let r = (px[c] - (a * f[c] + (1.0 - a) * u[c])) / norm;
+        fo[c] = (f[c] + a * r).max(0.0);
+        uo[c] = (u[c] + (1.0 - a) * r).max(0.0);
+    }
+    (fo, uo)
 }
 
 #[cfg(test)]
@@ -267,20 +217,22 @@ mod tests {
             let a = alpha.get(x, y);
             std::array::from_fn(|c| a * hair[c] + (1.0 - a) * sky[c])
         });
-        let e = edge(&img, &alpha, 1000.0);
-        let row = e.row(40);
-        assert!(!row.is_empty());
-        for p in row {
-            let a = alpha.data[p.i];
-            let px = img.data[p.i];
+        let (f, u) = colours(&img, &alpha, 1000.0);
+        let mut edges = 0;
+        for x in 0..w {
+            let i = 40 * w + x;
+            let (a, px) = (alpha.data[i], img.data[i]);
             for c in 0..3 {
-                assert!((a * p.person[c] + (1.0 - a) * p.behind[c] - px[c]).abs() < 1e-4);
+                assert!((a * f.data[i][c] + (1.0 - a) * u.data[i][c] - px[c]).abs() < 1e-4, "mixes back at {x}");
             }
             if (0.3..0.7).contains(&a) {
-                assert!((p.person[2] - hair[2]).abs() < 0.1, "no blue in the strand: {:?} at {a}", p.person);
-                assert!((p.behind[0] - sky[0]).abs() < 0.1, "no hair in the sky: {:?}", p.behind);
+                edges += 1;
+                assert!((f.data[i][2] - hair[2]).abs() < 0.1, "no blue in the strand: {:?} at {a}", f.data[i]);
+                assert!((u.data[i][0] - sky[0]).abs() < 0.1, "no hair in the sky: {:?}", u.data[i]);
             }
         }
-        assert!(e.row(500).is_empty());
+        assert!(edges > 3);
+        let (fo, uo) = mix_back(0.5, [0.4; 3], [0.0; 3], [0.0; 3]);
+        assert!((0.5 * fo[0] + 0.5 * uo[0] - 0.4).abs() < 1e-6);
     }
 }

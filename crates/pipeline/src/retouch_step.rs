@@ -9,10 +9,11 @@
 //! Skipped entirely, touching no pixel and hashing a 0 into the stage key, while the block is off or the Portrait
 //! tab's eye is off ([`active`]).
 
-use std::sync::Arc;
+use std::borrow::Cow;
+use std::sync::{Arc, Mutex, PoisonError};
 
 use lightcraft_develop::DevelopSettings;
-use lightcraft_develop::retouch::background::Place;
+use lightcraft_develop::retouch::background::{ANALYSIS_LONG, Analysis, Place};
 use lightcraft_develop::retouch::{Face, Input, KeyMap, MAX_FACES, NormRect, Reads, Stage, View};
 use lightcraft_geom::{Affine, Orientation, Point};
 use lightcraft_raster::Rgb32f;
@@ -75,16 +76,82 @@ impl KeyMap for FrameKeyMap {
     }
 }
 
-/// How far (output pixels) the step reads around a pixel in a render of `s` whose photo's long side is `long_px`
-/// output pixels: a windowed render (the zoomed loupe) must hold this much around itself. Background reads its
-/// blurs and its edge's colours around each pixel (`fork/retouch-background.md`); the other features read inside
-/// the faces' boxes. 0 while the step is off.
-pub fn reach(s: &DevelopSettings, long_px: f64) -> usize {
-    if !active(s) {
-        return 0;
+/// Background's analysis image (`fork/retouch-background.md`): the whole frame of the render before the step, at
+/// [`ANALYSIS_LONG`] pixels on its long side (or the render's size, when smaller) whatever the window, so a zoomed
+/// loupe window and the whole render read the same blurs, matte colours and cleaned backdrop. Made once per source and per setting
+/// that changes the image before the step (white balance, spots, red eye, defringe, the local tone map), kept for
+/// the newest [`ANALYSES_KEPT`]; the work Background makes from it is kept inside it. `None` while Background is off.
+pub fn analysis(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<Arc<Analysis>> {
+    let s = &*p.settings;
+    if !active(s) || lightcraft_develop::retouch::Feature::is_off(&s.retouch.global.background) {
+        return None;
     }
-    s.retouch.global.background.reach(long_px)
+    let (full, fw, fh) = &p.full;
+    // (a render smaller than that, a thumbnail or a fitted preview, is its own size)
+    let k = (ANALYSIS_LONG as f64 / (*fw).max(*fh).max(1) as f64).min(1.0);
+    let (aw, ah) = (((*fw as f64 * k).round() as usize).max(1), ((*fh as f64 * k).round() as usize).max(1));
+    let mut before = s.clone();
+    // (the image before the step: retouching off, so the step does not run in it)
+    before.retouch = Default::default();
+    let px_per_long = full.px_per_long(aw);
+    let eyes = crate::redeye::resolve(src, &before.red_eye, before.orientation, full, aw, ah, px_per_long);
+    let (wb_t, wb_tint) = crate::local::effective_wb(info, &before);
+    let key = crate::hash_of((
+        crate::optics::fingerprint(src),
+        format!("{full:?}"),
+        aw,
+        ah,
+        [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
+        format!("{:?}", before.spots),
+        format!("{eyes:?}"),
+        format!("{:?}", before.optics),
+        crate::spots_keep::pre_spot_sections(&before),
+        crate::local_tone::enabled(info, &before),
+        p.src_long,
+        p.native_long,
+    ));
+    let found = |c: &[(u64, Arc<Analysis>)]| c.iter().find(|(k, _)| *k == key).map(|(_, a)| a.clone());
+    if let Some(a) = found(&ANALYSES.lock().unwrap_or_else(PoisonError::into_inner)) {
+        return Some(a);
+    }
+    let t = crate::profiling().then(std::time::Instant::now);
+    let sub = Plan {
+        settings: Cow::Owned(before),
+        frame: full.clone(),
+        w: aw,
+        h: ah,
+        px_per_long,
+        detail_scale: crate::local::detail_scale(px_per_long, p.native_long),
+        geo: 0,
+        lin_key: 0,
+        pre_nr_key: 0,
+        noise_key: 0,
+        eyes,
+        fixed_air: None,
+        keep: None,
+        mattes: p.mattes.clone(),
+        draft: true,
+        recolor: Vec::new(),
+        full: (full.clone(), aw, ah),
+        retouch_analysis: None,
+        ..*p
+    };
+    let mut img = Rgb32f::clone(&crate::local::frame_proxy(src, full, aw, ah));
+    crate::lin_cpu(&mut img, info, &sub);
+    let a = Arc::new(Analysis::new(Arc::new(img), key));
+    if let Some(t) = t {
+        eprintln!("    retouch background analysis {aw}×{ah}: {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
+    }
+    let mut c = ANALYSES.lock().unwrap_or_else(PoisonError::into_inner);
+    c.retain(|(k, _)| *k != key);
+    c.insert(0, (key, a.clone()));
+    c.truncate(ANALYSES_KEPT);
+    Some(a)
 }
+
+/// Analysis images kept (a draft's source and the full source's, or two photos).
+const ANALYSES_KEPT: usize = 2;
+static ANALYSES: Mutex<Vec<(u64, Arc<Analysis>)>> = Mutex::new(Vec::new());
 
 /// Where the plan's pixels lie in the whole render: its window's top-left pixel and the whole render's size.
 fn place_of(p: &Plan<'_>) -> Place {
@@ -105,6 +172,7 @@ struct FrameView {
     to_out: Affine,
     keys: FrameKeyMap,
     place: Place,
+    analysis: Option<Arc<Analysis>>,
 }
 
 impl FrameView {
@@ -114,6 +182,7 @@ impl FrameView {
             to_out: frame.norm_to_out(w, h),
             keys: FrameKeyMap::new(frame, orient),
             place: Place { x: 0, y: 0, width: w, height: h },
+            analysis: None,
         }
     }
 }
@@ -136,6 +205,10 @@ impl View for FrameView {
     fn place(&self) -> Option<Place> {
         Some(self.place)
     }
+
+    fn analysis(&self) -> Option<&Analysis> {
+        self.analysis.as_deref()
+    }
 }
 
 /// The plan's output pixels ↔ normalised coordinates on the photo before lens corrections and transform (faces
@@ -145,6 +218,7 @@ struct PhotoView {
     to_out: Box<dyn Fn(Point) -> Option<Point> + Sync>,
     keys: FrameKeyMap,
     place: Place,
+    analysis: Option<Arc<Analysis>>,
 }
 
 impl PhotoView {
@@ -156,6 +230,7 @@ impl PhotoView {
             to_out: Box::new(frame.mask_to_out(w, h)),
             keys,
             place: Place { x: 0, y: 0, width: w, height: h },
+            analysis: None,
         }
     }
 }
@@ -177,6 +252,10 @@ impl View for PhotoView {
     fn place(&self) -> Option<Place> {
         Some(self.place)
     }
+
+    fn analysis(&self) -> Option<&Analysis> {
+        self.analysis.as_deref()
+    }
 }
 
 /// Retouch `img` (the plan's output pixels) in place: the retouch stage, then the background stage.
@@ -189,10 +268,11 @@ pub fn apply(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     let input: &Input = info.retouch.as_deref().unwrap_or(&none);
     let o = s.orientation;
     let place = place_of(p);
+    let analysis = p.retouch_analysis.clone();
     let view: Box<dyn View> = if input.on_photo {
-        Box::new(PhotoView { place, ..PhotoView::new(&p.frame, p.w, p.h, o) })
+        Box::new(PhotoView { place, analysis, ..PhotoView::new(&p.frame, p.w, p.h, o) })
     } else {
-        Box::new(FrameView { place, ..FrameView::new(&p.frame, p.w, p.h, o) })
+        Box::new(FrameView { place, analysis, ..FrameView::new(&p.frame, p.w, p.h, o) })
     };
     for stage in [Stage::Retouch, Stage::Background] {
         lightcraft_develop::retouch::run::apply(img, &s.retouch, input, view.as_ref(), stage);
@@ -464,8 +544,8 @@ mod tests {
         SourceInfo { retouch: Some(Arc::new(Input::new_on_photo(vec![face]))), ..SourceInfo::default() }
     }
 
-    /// Background reads blurs around each pixel: a zoomed window (grown by its reach) draws what the whole render
-    /// draws inside it, and the window is grown only while Background is on.
+    /// Background reads the analysis image of the whole frame: a zoomed window, not grown at all, draws what the
+    /// whole render draws inside it, and a pan reuses the work the whole render made.
     #[test]
     fn a_window_with_the_background_on_matches_the_whole_render() {
         let src = lightcraft_scenes::demo_library()[0].render(480, 320);
@@ -491,11 +571,12 @@ mod tests {
             }
             assert!(max <= 1, "the window at {win:?} differs by {max}");
             let p = crate::plan(&src, &info, &s, &req);
-            assert!(p.keep.is_some(), "the window was grown");
+            assert!(p.keep.is_none(), "the window is not grown");
+            let a = p.retouch_analysis.as_deref().map(|a| (a.image.width, a.kept()));
+            assert_eq!(a, Some((480, 1)), "one analysis image (the render's size: under 1600), its work made once for every window");
         }
         let plain = DevelopSettings::default();
-        let p = crate::plan(&src, &info, &plain, &RenderRequest { window: Some(crate::PixelWindow { x: 180, y: 100, w: 120, h: 100 }), ..fit });
-        assert!(p.keep.is_none(), "not grown while Background is off");
+        assert!(crate::plan(&src, &info, &plain, &fit).retouch_analysis.is_none(), "none while Background is off");
     }
 
     /// An on-photo face under a crop and a lens distortion: a draft and a render four times its size light the same

@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use lightcraft_color::transfer::{decode_srgb8, encode_srgb8};
 use lightcraft_raster::{Plane, Rgb32f};
-use lightcraft_retouch::background::{Backdrop, Background, Depth, Swap};
-use lightcraft_retouch::{Face, Features, Input, NormRect, Part, PartMask, Retouch, Stage, WholePhoto};
+use lightcraft_retouch::background::{Analysis, Backdrop, Background, Depth, Swap};
+use lightcraft_retouch::{Face, Features, Input, NormRect, Part, PartMask, Retouch, Stage, View, WholePhoto};
 
 fn main() -> ExitCode {
     match run(&std::env::args().skip(1).collect::<Vec<_>>()) {
@@ -64,7 +64,7 @@ fn run(args: &[String]) -> Result<(), String> {
             "--colour" => b.with = Swap::from_hex(&value()?).ok_or_else(usage)?,
             "--picture" => {
                 let p = value()?;
-                b.with = Swap::File { path: p.clone() };
+                b.with = Swap::Picture { hash: "example".into() };
                 picture = Some(p);
             }
             "--mask" => masks.push(value()?),
@@ -90,7 +90,9 @@ fn run(args: &[String]) -> Result<(), String> {
         input = input.with_depth(Some(Depth { plane: Arc::new(read_grey(d)?), key: 2 }));
     }
     let r = Retouch { global: Features { background: b, ..Features::default() }, faces: Vec::new() };
-    let view = WholePhoto { width: w, height: h };
+    // (the analysis image is the picture itself; the app's is the whole frame at 1600 pixels)
+    let analysis = Analysis::new(Arc::new(img.clone()), 1);
+    let view = Analysed { whole: WholePhoto { width: w, height: h }, analysis: &analysis };
     let t = std::time::Instant::now();
     lightcraft_retouch::run::apply(&mut img, &r, &input, &view, Stage::Background);
     let first = t.elapsed();
@@ -111,6 +113,26 @@ fn run(args: &[String]) -> Result<(), String> {
     let bytes: Vec<u8> = img.data.iter().flat_map(|p| p.map(encode_srgb8)).collect();
     let out = image::RgbImage::from_raw(w as u32, h as u32, bytes).ok_or("the picture's size changed")?;
     out.save(output).map_err(|e| format!("{output}: {e}"))
+}
+
+/// The whole picture, with its analysis image (so the work is kept between renders, as in the app).
+struct Analysed<'a> {
+    whole: WholePhoto,
+    analysis: &'a Analysis,
+}
+
+impl View for Analysed<'_> {
+    fn to_norm(&self, x: f64, y: f64) -> (f64, f64) {
+        self.whole.to_norm(x, y)
+    }
+
+    fn to_px(&self, nx: f64, ny: f64) -> Option<(f64, f64)> {
+        self.whole.to_px(nx, ny)
+    }
+
+    fn analysis(&self) -> Option<&Analysis> {
+        Some(self.analysis)
+    }
 }
 
 fn input_path(files: &[String]) -> &str {

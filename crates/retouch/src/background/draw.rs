@@ -1,11 +1,13 @@
 //! The per-pixel part of Background, all a slider drag redoes: each pixel's background is the kept blur at its
 //! radius, cleaned and swapped by the sliders' amounts, and the person is drawn over it with their edge's colours.
+//! Each render pixel reads the kept work at its point of the analysis image, so a window of the render draws what
+//! the whole render draws there.
 
 use lightcraft_raster::{Rgb32f, par_rows};
 
 use super::grid::Grid;
-use super::matte::EDGE;
-use super::prepare::{Fitted, Prepared, luma};
+use super::matte::{self, EDGE};
+use super::prepare::{Fitted, Frame, Prepared, luma, plane_at};
 use super::{Background, Swap};
 use crate::Scene;
 
@@ -67,10 +69,10 @@ fn dither(gx: i64, gy: i64) -> f32 {
     a + b - 1.0
 }
 
-/// `levels` read at radius `rho` (pixels) at render pixel (`gx`, `gy`): between the two levels around it, on a log
-/// scale; between `sharp` and the first below it. A level with no background near falls back to the next.
-fn blurred(levels: &[(f64, Grid)], rho: f64, sharp: [f32; 3], gx: i64, gy: i64) -> [f32; 3] {
-    let read = |k: usize| levels.get(k).and_then(|(_, g)| g.read(gx, gy, MIN_WEIGHT));
+/// `levels` read at radius `rho` (analysis pixels) at analysis point (`u`, `v`): between the two levels around it, on
+/// a log scale; between `sharp` and the first below it. A level with no background near falls back to the next.
+fn blurred(levels: &[(f64, Grid)], rho: f64, sharp: [f32; 3], u: f32, v: f32) -> [f32; 3] {
+    let read = |k: usize| levels.get(k).and_then(|(_, g)| g.read(u, v, MIN_WEIGHT));
     let Some(r1) = levels.first().map(|(r, _)| *r) else { return sharp };
     if rho <= r1 || r1 <= 0.0 {
         let t = if r1 > 0.0 { (rho / r1).clamp(0.0, 1.0) as f32 } else { 1.0 };
@@ -87,57 +89,50 @@ fn blurred(levels: &[(f64, Grid)], rho: f64, sharp: [f32; 3], gx: i64, gy: i64) 
     }
 }
 
-/// Redraw `img` with the background of `k`, from the kept work `prep` (made from these very pixels).
-pub(crate) fn draw(img: &mut Rgb32f, scene: &Scene<'_>, prep: &Prepared, k: &Strength, with: &Swap) {
-    // (everything kept is made from the pixels before they change)
-    let shares = (k.blur > 0.0).then(|| prep.shares(scene));
-    let all_swapped = k.swap >= 1.0 && (matches!(with, Swap::Colour { .. }) || scene.backdrop.is_some());
-    let levels = (k.blur > 0.0 && !all_swapped).then(|| prep.levels(img));
-    let clean = (k.clean > 0.0 && !all_swapped).then(|| prep.clean(img));
+/// Redraw `img` with the background of `k`, from the kept work `prep` (made from the analysis image of `frame`).
+pub(crate) fn draw(img: &mut Rgb32f, scene: &Scene<'_>, prep: &Prepared, frame: &Frame, k: &Strength, with: &Swap) {
     let colour = match with {
         Swap::Colour { rgb } => Some(colour_linear(*rgb)),
         _ => None,
     };
-    let fitted: Option<std::sync::Arc<Fitted>> = if k.swap > 0.0 && colour.is_none() { scene.backdrop.and_then(|b| prep.fitted(b)) } else { None };
-    let picture_levels = fitted.as_deref().filter(|_| k.blur > 0.0).map(|f| prep.picture_levels(f));
+    let fitted: Option<std::sync::Arc<Fitted>> =
+        if k.swap > 0.0 && colour.is_none() { scene.backdrop.and_then(|b| prep.fitted(b, frame.w, frame.h)) } else { None };
     let swap = if colour.is_some() || fitted.is_some() { k.swap } else { 0.0 };
     if k.blur <= 0.0 && k.clean <= 0.0 && swap <= 0.0 {
         return;
     }
-    let (w, place) = (img.width, prep.place);
+    let all_swapped = swap >= 1.0;
+    let shares = (k.blur > 0.0).then(|| prep.shares(scene, frame));
+    let levels = (k.blur > 0.0 && !all_swapped).then(|| prep.levels());
+    let clean = (k.clean > 0.0 && !all_swapped).then(|| prep.clean());
+    let picture_levels = fitted.as_deref().filter(|_| k.blur > 0.0).map(|f| prep.picture_levels(f));
+    let alpha = prep.window(scene, img.width, img.height);
+    let (w, place) = (img.width, frame.place);
     par_rows(&mut img.data, w, |y, row| {
-        let edge = prep.edge.row(y);
-        let mut e = 0usize;
         for (x, px) in row.iter_mut().enumerate() {
-            let i = y * w + x;
-            let a = prep.alpha.data.get(i).copied().unwrap_or(0.0);
+            let a = alpha.data.get(y * w + x).copied().unwrap_or(0.0);
             if a >= EDGE.1 {
                 continue;
             }
             let here = *px;
-            let (a, person, behind) = if a <= EDGE.0 {
-                (0.0, here, here)
+            let (u, v) = frame.to_analysis(x, y);
+            let (person, behind) = if a <= EDGE.0 {
+                (here, here)
             } else {
-                while edge.get(e).is_some_and(|p| p.i < i) {
-                    e += 1;
-                }
-                match edge.get(e).filter(|p| p.i == i) {
-                    Some(p) => (a, p.person, p.behind),
-                    None => (a, here, here),
-                }
+                // (the analysis image's colours, made to mix back to this very pixel)
+                let (f, b) = (prep.person.sample_bilinear(u + 0.5, v + 0.5), prep.behind.sample_bilinear(u + 0.5, v + 0.5));
+                matte::mix_back(a, here, f, b)
             };
             let (gx, gy) = (place.x + x as i64, place.y + y as i64);
-            let rho = match (shares, k.blur > 0.0) {
-                (Some(s), true) => f64::from(k.blur) * prep.radius * f64::from(s.data.get(i).copied().unwrap_or(1.0)),
-                _ => 0.0,
+            let rho = match shares {
+                Some(s) => f64::from(k.blur) * prep.radius * f64::from(plane_at(s, u, v)),
+                None => 0.0,
             };
-            // (all swapped: what was behind is not read)
-            let covered = swap >= 1.0;
             let mut bg = match levels {
-                Some(l) if rho > 0.0 && !covered => blurred(l, rho, behind, gx, gy),
+                Some(l) if rho > 0.0 => blurred(l, rho, behind, u, v),
                 _ => behind,
             };
-            if let Some(c) = clean.filter(|_| !covered).and_then(|g| g.read(gx, gy, MIN_WEIGHT)) {
+            if let Some(c) = clean.and_then(|g| g.read(u, v, MIN_WEIGHT)) {
                 let (lb, lc) = (luma(behind), luma(c).max(1e-4));
                 // (by channel: a crease darkens the paper's own colour, a coloured object differs in one channel)
                 let dev = (0..3).map(|ch| (behind[ch] - c[ch]).abs()).fold(0.0f32, f32::max) / lc;
@@ -150,9 +145,9 @@ pub(crate) fn draw(img: &mut Rgb32f, scene: &Scene<'_>, prep: &Prepared, k: &Str
                 let s = match (colour, fitted.as_deref()) {
                     (Some(c), _) => c,
                     (None, Some(f)) => {
-                        let sharp = f.at(&place, gx as f64 + 0.5, gy as f64 + 0.5);
+                        let sharp = f.at(gx as f64 + 0.5, gy as f64 + 0.5);
                         match picture_levels {
-                            Some(l) if rho > 0.0 => blurred(l, rho, sharp, gx, gy),
+                            Some(l) if rho > 0.0 => blurred(l, rho, sharp, u, v),
                             _ => sharp,
                         }
                     }
