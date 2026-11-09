@@ -2,7 +2,7 @@
 
 ## What it does
 
-Sharpening Radius (`detail.sharpenRadius`) works in process V3 (its own pixel-scale Gaussian band, 1.5 x Radius original pixels, preview matches export; Amount / Detail / Masking retuned); the post-crop Vignette has a smooth, natural response in V3 (-100 is about -2.8 stops, not black); V1 / V2 edits keep their look. The ⌥-drag Masking preview shows V3's own band and mask range (the weight the sharpening uses). Measured 2026-11-01: on a real ISO 2500 raw (A7S III) V3 Amount 60 adds about the flat-area noise V2 Amount 40 did (x1.30 vs x1.31), V3 Amount 40 x1.20; GPU and CPU differ by at most 1 LSB (mean 0.0002) on an Apple M4 Pro. Numbers and pictures: `docs/slider-strength.md`.
+Sharpening Radius (`detail.sharpenRadius`) works in process V3 (its own pixel-scale Gaussian band, 1.5 x Radius original pixels, preview matches export; Amount / Detail / Masking retuned); the post-crop Vignette has a smooth, natural response in V3 (-100 is about -2.8 stops, not black); V1 / V2 edits keep their look. The ⌥-drag Masking preview shows V3's own band and mask range (the weight the sharpening uses). Measured 2026-11-01: on a real ISO 2500 raw (A7S III) V3 Amount 60 adds about the flat-area noise V2 Amount 40 did (x1.30 vs x1.31), V3 Amount 40 x1.20; GPU and CPU differ by at most 1 LSB (mean 0.0002) on a test Mac. Numbers and pictures: `docs/slider-strength.md`.
 
 ## Branch
 

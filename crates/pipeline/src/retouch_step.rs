@@ -316,7 +316,7 @@ mod tests {
 
     fn lit() -> DevelopSettings {
         let mut s = DevelopSettings::default();
-        controls::set(&mut s, "retouch.skinTone.amount", 100.0);
+        controls::set(&mut s, "retouch.skinTone.faceLight", 100.0);
         s
     }
 
@@ -353,19 +353,33 @@ mod tests {
         let p = crate::plan(&src, &SourceInfo::default(), &s, &req);
         assert!(p.frame.for_mask(true).mask_warp().is_some(), "the distortion warps the picture");
         let mut off = s.clone();
-        controls::set(&mut off, "retouch.skinTone.amount", 0.0);
+        controls::set(&mut off, "retouch.skinTone.faceLight", 0.0);
         let plain = render(&src, &SourceInfo::default(), &off, &req).image;
         let done = render(&src, &skin_on_photo(area), &s, &req).image;
-        let (mut red, mut red_lit, mut grey_lit) = (0, 0, 0);
-        for (a, b) in plain.data.iter().zip(&done.data) {
-            let is_red = a[0] > a[1].saturating_add(60);
-            let is_grey = a[0].abs_diff(a[1]) < 4;
-            red += usize::from(is_red);
-            red_lit += usize::from(is_red && b[0] > a[0]);
-            grey_lit += usize::from(is_grey && b != a);
+        let is_red = |a: [u8; 4]| a[0] > a[1].saturating_add(60);
+        // Face Light's soft edge falls to nothing at the mask's border: its inner part is the red pixels at least an
+        // edge's width (LIGHT_EDGE of the face's size, the patch's longer side) from anything not red
+        let edge = (lightcraft_develop::retouch::skin_tone::LIGHT_EDGE * (area.width() * w as f64).max(area.height() * h as f64)).ceil() as usize;
+        let (pw, ph) = (plain.width, plain.height);
+        let deep = |x: usize, y: usize| {
+            (y.saturating_sub(edge)..=(y + edge).min(ph - 1))
+                .all(|yy| (x.saturating_sub(edge)..=(x + edge).min(pw - 1)).all(|xx| is_red(plain.get(xx, yy))))
+        };
+        let (mut red, mut inner, mut inner_lit, mut grey_lit) = (0, 0, 0, 0);
+        for y in 0..ph {
+            for x in 0..pw {
+                let (a, b) = (plain.get(x, y), done.get(x, y));
+                let is_grey = a[0].abs_diff(a[1]) < 4;
+                red += usize::from(is_red(a));
+                if is_red(a) && deep(x, y) {
+                    inner += 1;
+                    inner_lit += usize::from(b[0] > a[0]);
+                }
+                grey_lit += usize::from(is_grey && b != a);
+            }
         }
-        assert!(red > 500, "{red} red pixels");
-        assert!(red_lit * 100 >= red * 97, "the warped patch is lit: {red_lit} of {red}");
+        assert!(inner > 500, "{inner} red pixels an edge's width inside the patch");
+        assert!(inner_lit * 100 >= inner * 97, "the warped patch is lit: {inner_lit} of {inner}");
         assert!(grey_lit * 100 <= red * 3, "and little else (its antialiased edge): {grey_lit}");
     }
 
@@ -384,7 +398,7 @@ mod tests {
         s.optics.distortion = 80.0;
         s.crop.geometry.rect = lightcraft_geom::Rect { x0: 0.1, y0: 0.1, x1: 0.8, y1: 0.85 };
         let mut off = s.clone();
-        controls::set(&mut off, "retouch.skinTone.amount", 0.0);
+        controls::set(&mut off, "retouch.skinTone.faceLight", 0.0);
         let mut shares = Vec::new();
         for (rw, rh) in [(150, 100), (600, 400)] {
             let req = RenderRequest { apply_crop: true, ..RenderRequest::fit(rw, rh) };
@@ -467,11 +481,17 @@ mod tests {
         let mut skin = s.clone();
         controls::set(&mut skin, "retouch.skin.smoothness", 100.0);
         controls::set(&mut skin, "retouch.skin.shine", 100.0);
+        let mut tone = s.clone();
+        controls::set(&mut tone, "retouch.skinTone.evenTone", 100.0);
+        controls::set(&mut tone, "retouch.skinTone.redness", 100.0);
+        controls::set(&mut tone, "retouch.skinTone.faceLight", 50.0);
         let req = RenderRequest::fit(w, h);
         // (the left eye's outer half and the skin under it; a patch of cheek)
         let eye_win = crate::PixelWindow { x: 170, y: 136, w: 30, h: 40 };
         let cheek_win = crate::PixelWindow { x: 200, y: 220, w: 40, h: 30 };
-        for (name, st, win) in [("eyes", &eyes, eye_win), ("skin", &skin, cheek_win)] {
+        // (Skin Tone: a window over part of a cheek, under the dark circle Even Tone evens)
+        let tone_win = crate::PixelWindow { x: 180, y: 150, w: 30, h: 30 };
+        for (name, st, win) in [("eyes", &eyes, eye_win), ("skin", &skin, cheek_win), ("skin tone", &tone, tone_win)] {
             let full = render(&src, &info, st, &req).image;
             let plain = render(&src, &SourceInfo::default(), &s, &req).image;
             let zoomed = render(&src, &info, st, &RenderRequest { window: Some(win), ..req }).image;

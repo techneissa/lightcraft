@@ -40,6 +40,14 @@
 
 ## 2026-11-09
 
+### Portrait Skin Tone
+- The Portrait tab's Skin Tone section evens blotchy skin colour (Even Tone), lowers red patches (Redness) and lightens or darkens the face against the rest of the photo with a soft edge (Face Light), for every face or one. It works on the skin masks found by people parsing; pores and natural gradients stay, and nothing outside the skin changes.
+
+### Teeth and Lips
+- The Portrait tab whitens teeth and colours lips, per face: Teeth Whitening takes the yellow out and brightens the
+  teeth while keeping their gaps and shading; Lip Color gives the lips a picked colour or one of six lipstick shades
+  and keeps their lines and highlights; Lip Hue and Lip Saturation fine-tune them.
+
 ### Apple Vision Hair Edges
 - Settings ▸ Faces ▸ Hair Edges has a third choice, Apple Vision: the Mac's own person and subject masks draw the
   edge of Entire Person / Background and Subject masks. No download, about a tenth of a second per photo.

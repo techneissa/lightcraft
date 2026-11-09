@@ -156,7 +156,7 @@ mod tests {
         assert_eq!(s.hash64(), DevelopSettings::from_json(&s.to_json()).unwrap().hash64());
         let mut r = s.clone();
         controls::set(&mut r, "retouch.eyes.whites", 40.0);
-        assert_eq!(r.to_json()[KEY]["global"]["eyes"]["amount"], json!(40.0));
+        assert_eq!(r.to_json()[KEY]["global"]["eyes"]["whites"], json!(40.0));
         assert_ne!(r.hash64(), s.hash64());
         assert_eq!(DevelopSettings::from_json(&r.to_json()).unwrap(), r);
     }

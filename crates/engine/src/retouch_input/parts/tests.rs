@@ -83,7 +83,7 @@ fn grey(tag: &str, w: usize, h: usize, fake: &Fake) -> (Session, PhotoId, PathBu
 }
 
 fn light(s: &mut Session, amount: f64) {
-    s.execute("develop.set", &json!({"control": "retouch.skinTone.amount", "value": amount})).unwrap();
+    s.execute("develop.set", &json!({"control": "retouch.skinTone.faceLight", "value": amount})).unwrap();
 }
 
 fn render(s: &mut Session, id: PhotoId, edge: usize) -> Rgba8 {
@@ -290,12 +290,12 @@ fn a_faces_own_settings_stay_with_their_person_when_the_parse_changes() {
     let listed = s.execute("retouch.detect", &json!({})).unwrap();
     let names: Vec<_> = listed["faces"].as_array().unwrap().iter().map(|f| f["person"].clone()).collect();
     assert_eq!(names, [json!("ann"), json!("bob"), json!(null)], "named from the faces catalog: {listed}");
-    s.execute("retouch.set", &json!({"control": "retouch.skinTone.amount", "value": 30, "face": 1})).unwrap();
-    s.execute("retouch.set", &json!({"control": "retouch.skinTone.amount", "value": 90, "face": 2})).unwrap();
+    s.execute("retouch.set", &json!({"control": "retouch.skinTone.faceLight", "value": 30, "face": 1})).unwrap();
+    s.execute("retouch.set", &json!({"control": "retouch.skinTone.faceLight", "value": 90, "face": 2})).unwrap();
     let own_of =
         |listed: &serde_json::Value, who: &str| listed["faces"].as_array().unwrap().iter().find(|f| f["person"] == who).map(|f| f["own"].clone());
     let value_of = |s: &Session, own: &serde_json::Value| {
-        s.develop_of(id).unwrap().retouch.faces[own.as_u64().unwrap() as usize].settings.get("retouch.skinTone.amount")
+        s.develop_of(id).unwrap().retouch.faces[own.as_u64().unwrap() as usize].settings.get("retouch.skinTone.faceLight")
     };
     // the parse comes back largest first in another order, with boxes moved a little
     *fake.rects.lock().unwrap() = vec![r(0.73, 0.31, 0.91, 0.61), r(0.41, 0.21, 0.66, 0.61), r(0.06, 0.2, 0.31, 0.6)];
@@ -455,7 +455,7 @@ fn an_override_made_under_yunet_stays_with_its_face_under_the_parse_with_a_lens_
         listed["faces"].as_array().unwrap().iter().position(|f| (f["bounds"][0].as_f64().unwrap() - b.x0).abs() < 1e-6).unwrap()
     };
     let a = near(&listed, a_edit);
-    s.execute("retouch.set", &json!({"control": "retouch.skinTone.amount", "value": 90, "face": a})).unwrap();
+    s.execute("retouch.set", &json!({"control": "retouch.skinTone.faceLight", "value": 90, "face": a})).unwrap();
     // the parse takes over
     s.retouch_faces.provider = None;
     *fake.rects.lock().unwrap() = [a_photo, b_photo].iter().map(|b| r(b.x0 as f32, b.y0 as f32, b.x1 as f32, b.y1 as f32)).collect();
@@ -464,7 +464,7 @@ fn an_override_made_under_yunet_stays_with_its_face_under_the_parse_with_a_lens_
     let (pa, pb) = (near(&parsed, parsed_box(a_photo)), near(&parsed, parsed_box(b_photo)));
     assert_eq!(parsed["faces"][pa]["own"], json!(0), "A keeps its settings: {parsed}");
     assert_eq!(parsed["faces"][pb]["own"], json!(null), "the neighbour does not take them: {parsed}");
-    let own = s.develop_of(id).unwrap().retouch.faces[0].settings.get("retouch.skinTone.amount");
+    let own = s.develop_of(id).unwrap().retouch.faces[0].settings.get("retouch.skinTone.faceLight");
     assert_eq!(own, Some(90.0));
     let _ = std::fs::remove_dir_all(dir);
 }

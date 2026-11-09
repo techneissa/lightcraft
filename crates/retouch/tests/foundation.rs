@@ -28,8 +28,8 @@ fn every_feature_has_a_section_and_unique_reachable_controls() {
     }
     assert!(!f.set("retouch.nope.amount", 1.0) && !f.set("retouch.skin", 1.0) && f.get("light.exposure").is_none());
     // a feature whose key starts like another's is not confused with it
-    assert!(f.set("retouch.skinTone.amount", 30.0));
-    assert_eq!((f.get("retouch.skin.smoothness"), f.get("retouch.skinTone.amount")), (Some(0.0), Some(30.0)));
+    assert!(f.set("retouch.skinTone.faceLight", 30.0));
+    assert_eq!((f.get("retouch.skin.smoothness"), f.get("retouch.skinTone.faceLight")), (Some(0.0), Some(30.0)));
     let mut keys: Vec<&str> = FEATURES.iter().map(|f| f.key).collect();
     keys.dedup();
     assert_eq!(keys.len(), FEATURES.len());
@@ -65,7 +65,7 @@ fn a_malformed_block_reads_as_off_and_keeps_what_it_can() {
     let r: Retouch = serde_json::from_value(v).unwrap();
     assert_eq!(r.global.get("retouch.skin.smoothness"), Some(0.0));
     assert_eq!(r.global.get("retouch.eyes.whites"), Some(30.0));
-    assert_eq!(r.global.get("retouch.teethLips.amount"), Some(0.0));
+    assert_eq!(r.global.get("retouch.teethLips.teethWhitening"), Some(0.0));
     assert_eq!(r.faces.len(), 1, "overrides without a usable box are dropped");
     assert_eq!(r.faces[0].settings.get("retouch.eyes.whites"), Some(100.0), "clamped on read");
     for bad in [json!(null), json!(7), json!("x"), json!([]), json!({"global": []})] {

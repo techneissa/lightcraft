@@ -93,6 +93,31 @@ fn the_portrait_tab_has_a_section_per_feature_and_shows_the_face_picker() {
     assert!(rect_of(&mut h, "portrait:card").is_none());
 }
 
+/// The Skin Tone section (`portrait/skin_tone.rs`): Even Tone, Redness and Face Light; a click on a track sets the
+/// value for every face (Face Light is centred: a click right of the middle lightens).
+#[test]
+fn the_skin_tone_section_has_its_three_sliders() {
+    let mut session = lightcraft_engine::Session::with_demo();
+    session.retouch_faces.set_provider(Arc::new(TwoFaces));
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 1400.0], 1.0);
+    assert_eq!(h.request("ui.set", json!({"view": "detail"}), T)["ok"], true);
+    click(&mut h, "icon:portrait");
+    click(&mut h, "section:portrait.skinTone");
+    h.step();
+    let photo = h.app.session.active().unwrap();
+    for id in ["retouch.skinTone.evenTone", "retouch.skinTone.redness", "retouch.skinTone.faceLight"] {
+        assert!(rect_of(&mut h, &format!("slider:{id}")).is_some(), "{id} is in the Skin Tone section");
+    }
+    for (id, least) in [("retouch.skinTone.evenTone", 40.0), ("retouch.skinTone.faceLight", 20.0)] {
+        let r = h.request("ui.clickWidget", json!({"id": format!("slider:{id}"), "fx": 0.75}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+        let v = h.app.session.develop_of(photo).unwrap().retouch.global.get(id).unwrap_or(0.0);
+        assert!(v > least, "{id} set by the click: {v}");
+    }
+}
+
 fn rect_of(h: &mut Headless, id: &str) -> Option<[f64; 4]> {
     let r = h.request("ui.widgets", json!({"filter": id}), T);
     r["result"].as_array().into_iter().flatten().find(|w| w["id"] == id).and_then(|w| serde_json::from_value(w["rect"].clone()).ok())
