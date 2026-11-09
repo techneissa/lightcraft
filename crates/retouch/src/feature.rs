@@ -152,6 +152,16 @@ impl<'a> Scene<'a> {
         self.view
     }
 
+    /// The same faces mapped through `view` into a `width × height` image (a part of this one, reduced:
+    /// `crate::reduced`). A face keeps its [`FaceCtx::index`]; its place in the list may differ.
+    pub(crate) fn through<'b>(&self, view: &'b dyn View, width: usize, height: usize) -> Scene<'b>
+    where
+        'a: 'b,
+    {
+        let faces = self.faces.iter().filter_map(|f| map_face(f.face, f.index, view)).collect();
+        Scene { faces, width, height, view }
+    }
+
     /// The mask of `part` of face `face` at pixel (`x`, `y`) of the image; 0 without that mask.
     pub fn mask_at(&self, face: usize, part: Part, x: usize, y: usize) -> f32 {
         let Some(m) = self.faces.get(face).and_then(|f| f.face.mask(part)) else { return 0.0 };

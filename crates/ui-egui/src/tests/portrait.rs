@@ -297,3 +297,26 @@ fn the_face_reshape_section_has_its_seven_sliders() {
     let v = h.app.session.develop_of(photo).unwrap().retouch.global.get("retouch.reshape.slimFace").unwrap_or(0.0);
     assert!(v > 30.0 && v < 70.0, "Slim Face set by the click: {v}");
 }
+
+/// The Wrinkles section (`portrait/wrinkles.rs`): Forehead, Crow's Feet, Smile Lines and Neck; a click on a track sets
+/// the value for every face.
+#[test]
+fn the_wrinkles_section_has_its_four_sliders() {
+    let mut session = lightcraft_engine::Session::with_demo();
+    session.retouch_faces.set_provider(Arc::new(TwoFaces));
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 1400.0], 1.0);
+    assert_eq!(h.request("ui.set", json!({"view": "detail"}), T)["ok"], true);
+    click(&mut h, "icon:portrait");
+    click(&mut h, "section:portrait.wrinkles");
+    h.step();
+    let photo = h.app.session.active().unwrap();
+    for id in ["retouch.wrinkles.forehead", "retouch.wrinkles.crowsFeet", "retouch.wrinkles.smileLines", "retouch.wrinkles.neck"] {
+        assert!(rect_of(&mut h, &format!("slider:{id}")).is_some(), "{id} is in the Wrinkles section");
+    }
+    let r = h.request("ui.clickWidget", json!({"id": "slider:retouch.wrinkles.forehead", "fx": 0.75}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let v = h.app.session.develop_of(photo).unwrap().retouch.global.get("retouch.wrinkles.forehead").unwrap_or(0.0);
+    assert!(v > 40.0, "Forehead set by the click: {v}");
+}

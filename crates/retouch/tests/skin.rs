@@ -325,3 +325,40 @@ fn a_face_with_its_own_settings_is_the_only_one_retouched() {
     }
     assert!((0..w * h).any(|i| img.data[i] != out.data[i]), "face 1 is retouched");
 }
+
+/// A face whose skin box is past the most pixels Skin works on at full size (a face filling a very large export)
+/// is worked on reduced and the change carried back: never skipped, close to the full-size change, and the pixels
+/// outside the mask keep their bits.
+#[test]
+fn a_face_too_big_for_full_size_work_is_retouched_reduced_not_skipped() {
+    let w = 400;
+    let face = face_with_skin(0.05, 0.05, 0.95, 0.95);
+    let img = skin_picture(w, w, w as f32 / 10.0, 0.12, 0.02);
+    let input = Input::new(vec![face.clone()]);
+    let view = WholePhoto { width: w, height: w };
+    let scene = lightcraft_retouch::Scene::new(&input, &view, w, w);
+    let s = skin(80.0, 30.0, 60.0).global.skin;
+    let mut full = img.clone();
+    s.apply_capped(&mut full, &scene, Some(0), usize::MAX);
+    for max in [w * w / 4, w * w / 16] {
+        let mut capped = img.clone();
+        s.apply_capped(&mut capped, &scene, Some(0), max);
+        let (mut diff, mut change, mut changed) = (0.0f64, 0.0f64, 0usize);
+        for y in 0..w {
+            for x in 0..w {
+                let i = y * w + x;
+                if mask_at(&face, w, w, x, y) == 0.0 {
+                    assert_eq!(capped.data[i].map(f32::to_bits), img.data[i].map(f32::to_bits), "({x}, {y}) is outside the mask");
+                    continue;
+                }
+                let (cf, cc) = (luma(full.data[i]) - luma(img.data[i]), luma(capped.data[i]) - luma(img.data[i]));
+                diff += f64::from((cf - cc).abs());
+                change += f64::from(cf.abs());
+                changed += usize::from(capped.data[i] != img.data[i]);
+            }
+        }
+        assert!(changed > w * w / 2, "cap {max}: the face is retouched ({changed} pixels changed)");
+        let ratio = diff / change.max(1e-9);
+        assert!(ratio < 0.2, "cap {max}: the reduced change differs from the full-size one by {:.1} %", ratio * 100.0);
+    }
+}
