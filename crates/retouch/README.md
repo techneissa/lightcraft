@@ -32,11 +32,16 @@ In the module:
 - **Parts**: `PARTS`, the part masks `apply` reads. The face search keeps only the parts some feature lists
   (`parts_read`), so list every part you read. The default, `FACE_PARTS`, is a face's parts and its skin, without
   Entire Person and the clothes.
+- **Reach**: `REACH`, how far past its face's box and the areas of its `PARTS` masks `apply` reads, a fraction of
+  the face's size (`DEFAULT_REACH`, half the face, when it declares none). See the zoom rule below.
 - **`apply`**: retouch the image in place (see the rules below). The panel section draws its sliders with
   `cx.slider("retouch.<KEY>.<field>")`, which writes to every face or to the picked one.
 
 Never edit `lib.rs`, `settings.rs`, `run.rs` or the tab's list of sections (`crates/ui-egui/src/panels/portrait.rs`):
-they already list every feature. The tab's Portrait Presets section (`panels/portrait/presets.rs`) has no module here.
+they already list every feature. The tab's Portrait Presets section (`panels/portrait/presets.rs`) has no module here:
+a portrait preset carries, per feature, the fields that are numbers, switches or short lists of numbers (a colour), so
+a new slider or switch is in presets with no change; lists of points or shapes (Refine strokes, spots) and fields
+named like them never are (`carry` in `crates/engine/src/portrait_presets.rs`, `fork/portrait-presets.md`).
 Clothes recolouring is not one of them: it is a local-mask effect (issue #83), so it works on any mask; the clothes
 parts of `Part` are there for its masks.
 
@@ -59,11 +64,13 @@ cargo run -p lightcraft-retouch --release --example skin_tone -- in.jpg out.jpg 
 ```
 
 For what the app's step gets for each face (box, YuNet's five then the 478 mesh landmarks, the model's part masks,
-merged as the app merges them), the parser's `face_input` example writes `dir/faces.json`; the eyes example reads it:
+merged as the app merges them), the parser's `face_input` example writes `dir/faces.json`; the eyes and wrinkles
+examples read it:
 
 ```bash
 cargo run -p lightcraft-parsing --release --example face_input -- in.jpg dir/
 cargo run -p lightcraft-retouch --release --example eyes -- in.jpg out.jpg --faces dir/faces.json --dark 60
+cargo run -p lightcraft-retouch --release --example wrinkles -- in.jpg out.png --faces dir/faces.json --amount 60
 ```
 
 ## The input contract (`src/input.rs`)
@@ -119,6 +126,12 @@ and `Scene::mask_box` gives the pixels a mask can touch (read and write only tho
   reduction's halo does), so `apply` sees the same pixels around the face as in a whole-frame render. A feature
   keeps its reads within its `REACH` (clamp what landmarks or masks could throw far away), and works on grids and
   boxes anchored to the face (its box, an eye, a mask's area), never to the image's corner, which a window moves.
+  The window also holds the reads of every face whose reads touch it, in a chain: features run one after another
+  over every face, so a face's later feature reads what an earlier one changed for its neighbour. Within one face
+  the largest `REACH` is enough: the window holds every pixel any of its features reads.
+- **A big face is never skipped.** A feature that caps the pixels it works on at full size (Skin and Wrinkles:
+  `MAX_BOX`, about 67 M) works on a bigger box reduced by a whole factor, as a draft of it, and carries the change
+  back as a gain (`src/reduced.rs`), so a very large export makes the change its draft shows.
 - **Reference stats come from the whole face**, never from the pixels a render happens to hold: a level, a target
   colour or the skin's colour (Eyes: the whites' level, the cheek's colour, the skin's colour; Teeth and Lips: the
   lips' main colour) is measured on a fixed grid over the face's box or a mask's area, in photo coordinates, so a
@@ -139,6 +152,7 @@ A feature lane is checked against this list, and its test file (`tests/<feature>
 - **Texture is kept**: a retouch that smooths keeps the fine detail (the high-frequency energy inside the mask stays
   within a set ratio of the original's).
 - **No halo**: pixels next to the mask's edge do not take the colour of what is outside it.
+- **Zoom**: a render of a window holding part of the face, grown by the reach, equals the whole render inside it.
 - **Edge cases**: no faces, 50 faces, a face cut by the photo's edge, a 1 × 1 photo, a flat grey photo (stays flat
   when nothing in it calls for a change) and a missing model (faces without masks) run without a panic and give the
   expected result.

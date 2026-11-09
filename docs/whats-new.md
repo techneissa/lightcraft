@@ -40,6 +40,15 @@
 
 ## 2026-11-09
 
+### Portrait Presets That Follow the Person
+- Save a face's portrait settings as a preset from the Portrait tab's Portrait Presets section; it appears in the
+  Presets panel's Portrait group with the name of the person it follows. Tick Save the Whole Look to
+  save the whole look.
+- Applying it changes only the same person's face on each photo, found by name or by face recognition; other people
+  in the photo are left alone. A preset saved from All Faces goes to every face.
+- Apply to Every Photo of a person, from the Portrait tab or from their page in People, gives the look to every
+  photo they are on in one step you can undo.
+
 ### Portrait Skin Tone
 - The Portrait tab's Skin Tone section evens blotchy skin colour (Even Tone), lowers red patches (Redness) and lightens or darkens the face against the rest of the photo with a soft edge (Face Light), for every face or one. It works on the skin masks found by people parsing; pores and natural gradients stay, and nothing outside the skin changes.
 

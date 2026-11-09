@@ -147,6 +147,52 @@ impl PartMask {
         let bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * tx;
         top + (bottom - top) * ty
     }
+
+    /// The mask for sampling at many points (a feature's every pixel): the plane's values made finite and clamped
+    /// to 0…1 once, the area's scale worked out once. It gives [`PartMask::sample`]'s value to within rounding.
+    /// `None` for an empty or malformed plane or area (where `sample` gives 0 everywhere).
+    pub fn sampler(&self) -> Option<MaskSampler> {
+        let (w, h) = (self.plane.width, self.plane.height);
+        if w == 0 || h == 0 || self.plane.data.len() != w.saturating_mul(h) || !self.area.is_valid() {
+            return None;
+        }
+        let data = self.plane.data.iter().map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }).collect();
+        let a = self.area;
+        Some(MaskSampler { data, w, h, origin: [a.x0, a.y0], scale: [w as f64 / a.width(), h as f64 / a.height()] })
+    }
+}
+
+/// A part mask ready to sample at many points ([`PartMask::sampler`]).
+#[derive(Clone, Debug)]
+pub struct MaskSampler {
+    data: Vec<f32>,
+    w: usize,
+    h: usize,
+    origin: [f64; 2],
+    /// Samples per normalised unit, across and down.
+    scale: [f64; 2],
+}
+
+impl MaskSampler {
+    /// The mask at normalised point (`nx`, `ny`): as [`PartMask::sample`].
+    pub fn at(&self, nx: f64, ny: f64) -> f32 {
+        let (w, h) = (self.w, self.h);
+        let (sx, sy) = ((nx - self.origin[0]) * self.scale[0], (ny - self.origin[1]) * self.scale[1]);
+        // (also false for a point that is not a number)
+        if !((0.0..=w as f64).contains(&sx) && (0.0..=h as f64).contains(&sy)) {
+            return 0.0;
+        }
+        let fx = (sx - 0.5).clamp(0.0, (w - 1) as f64);
+        let fy = (sy - 0.5).clamp(0.0, (h - 1) as f64);
+        let (x0, y0) = (fx as usize, fy as usize);
+        let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+        let (tx, ty) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);
+        let at = |x: usize, y: usize| self.data.get(y * w + x).copied().unwrap_or(0.0);
+        let (a, b, c, d) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
+        let top = a + (b - a) * tx;
+        let bottom = c + (d - c) * tx;
+        top + (bottom - top) * ty
+    }
 }
 
 /// The landmarks every face has first, in this order (YuNet's): the subject's right eye, left eye, nose tip, right

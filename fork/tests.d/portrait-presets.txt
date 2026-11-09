@@ -1,0 +1,4 @@
+cargo test -p lightcraft-engine --lib -- portrait_presets
+cargo test -p lightcraft-engine --lib -- retouch_input
+cargo test -p lightcraft-engine --lib -- presets face_recognize
+cargo test -p lightcraft-ui-egui --lib -- tests::portrait panels::portrait panels::presets settings_sync

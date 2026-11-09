@@ -172,6 +172,8 @@ fn rename_person(s: &mut Session, p: &Value) -> Result<Value> {
     }
     let photos = ops.len();
     s.commit(if other { "Merge People" } else { "Rename Person" }, Op::Batch { ops })?;
+    // portrait presets follow the person to the new name (fork, `fork/portrait-presets.md`)
+    crate::portrait_presets::rename_person(&mut s.presets, &from, &to);
     s.skip_auto_write = true;
     if s.filter.person.as_deref().is_some_and(|n| n.trim().to_lowercase() == from_key) {
         s.filter.person = Some(to.clone());

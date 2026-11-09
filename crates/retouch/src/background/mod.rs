@@ -200,6 +200,25 @@ impl Background {
     }
 }
 
+/// A retouch block as JSON (`{global, faces: [{settings}]}`) as a preset keeps it: every Background without a Swap
+/// picture ([`Background::for_preset`]).
+pub fn strip_pictures(retouch: &mut serde_json::Value) {
+    let fix = |features: Option<&mut serde_json::Value>| {
+        let Some(b) = features.and_then(|f| f.get_mut("background")).and_then(serde_json::Value::as_object_mut) else { return };
+        let colour = b.get("with").is_none_or(|w| w.get("kind").and_then(serde_json::Value::as_str) == Some("colour"));
+        if !colour {
+            b.remove("with");
+            b.insert("swap".into(), serde_json::Value::from(0.0));
+        }
+    };
+    fix(retouch.get_mut("global"));
+    if let Some(faces) = retouch.get_mut("faces").and_then(serde_json::Value::as_array_mut) {
+        for f in faces {
+            fix(f.get_mut("settings"));
+        }
+    }
+}
+
 impl Feature for Background {
     const KEY: &'static str = "background";
     const LABEL: &'static str = "Background";
@@ -271,6 +290,19 @@ mod tests {
         let b = Background { swap: 60.0, with: Swap::Photo { id: 7 }, ..Background::default() };
         let back: Background = serde_json::from_value(serde_json::to_value(&b).unwrap_or_default()).unwrap_or_default();
         assert_eq!(back, b);
+    }
+
+    #[test]
+    fn a_presets_retouch_block_keeps_no_picture() {
+        let mut v = serde_json::json!({
+            "global": {"background": {"blur": 20.0, "swap": 70.0, "with": {"kind": "picture", "hash": "ab"}}},
+            "faces": [{"settings": {"background": {"swap": 50.0, "with": {"kind": "photo", "id": 3}}}}, {"settings": {"background": {"swap": 40.0, "with": {"kind": "colour", "rgb": [1.0, 0.0, 0.0]}}}}]
+        });
+        strip_pictures(&mut v);
+        assert_eq!(v["global"]["background"], serde_json::json!({"blur": 20.0, "swap": 0.0}));
+        assert_eq!(v["faces"][0]["settings"]["background"], serde_json::json!({"swap": 0.0}));
+        assert_eq!(v["faces"][1]["settings"]["background"]["with"]["kind"], "colour");
+        assert!(!v.to_string().contains("ab\""));
     }
 
     #[test]

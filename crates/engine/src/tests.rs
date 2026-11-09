@@ -73,6 +73,7 @@ mod move_to_share;
 mod organize;
 mod parse_ahead;
 mod persist;
+mod portrait_presets;
 mod prefs;
 mod presets_scale;
 mod preview_prep;

@@ -47,7 +47,7 @@ pub(crate) fn overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, canvas: Rect, 
 }
 
 /// `name` with each word's first letter in capitals (the stored person is lower case).
-fn title_case(name: &str) -> String {
+pub(super) fn title_case(name: &str) -> String {
     name.split(' ')
         .map(|w| {
             let mut c = w.chars();
