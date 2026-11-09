@@ -93,11 +93,14 @@ pub fn build(p: &Parsing, sel: &Selection, orient: Orientation) -> Option<(SegMa
     detail.sort_by(|a, b| b.0.total_cmp(&a.0));
     let detail = detail
         .into_iter()
-        .take(MAX_DETAIL)
-        .map(|(_, rect)| {
+        .filter_map(|(_, rect)| {
             let side = side_for(&rect, parts.iter().filter(|q| overlaps(&q.rect, &rect)));
-            grid(&draw(&rect, side), side, &rect, &model)
+            // (a grid no finer than the main one adds nothing: one person alone, whose box is the main grid's, at the
+            // largest side both)
+            let cell = (f64::from(rect.width()) / side as f64, f64::from(rect.height()) / side as f64);
+            (main_cell.0 > DETAIL_GAIN * cell.0 || main_cell.1 > DETAIL_GAIN * cell.1).then(|| grid(&draw(&rect, side), side, &rect, &model))
         })
+        .take(MAX_DETAIL)
         .collect();
     Some((main, detail))
 }

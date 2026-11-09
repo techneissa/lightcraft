@@ -268,3 +268,18 @@ fn only_the_search_started_last_files_its_result() {
     store.finish("k", second, Entry::Failed("late".into()));
     assert!(matches!(store.get("k"), Some(Entry::Ready(_))));
 }
+
+#[test]
+fn one_person_alone_gets_no_copy_of_the_main_grid() {
+    // a person whose parts are finer than the largest grid can draw: the main grid is over them already, so a finer
+    // grid over the same box would be the same grid again
+    let mut q = person(0.1, 0.1, 0.8, None);
+    for planes in q.parts.values_mut() {
+        let r = planes[0].rect;
+        planes[0] = lightcraft_parsing::Plane { rect: r, width: 1500, height: 1500, data: vec![1.0; 1500 * 1500] };
+    }
+    let p = parse(vec![q]);
+    let (main, detail) = build(&p, &Selection::of(Some(0), &[Pick::EntirePerson]), Orientation::Normal).unwrap();
+    assert_eq!(main.side as usize, lightcraft_develop::segmask::MAX_SIDE);
+    assert!(detail.is_empty(), "{} finer grids", detail.len());
+}

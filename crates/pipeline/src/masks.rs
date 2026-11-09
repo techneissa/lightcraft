@@ -965,4 +965,6 @@ mod tests_cache;
 #[cfg(test)]
 mod tests_matting;
 #[cfg(test)]
+mod tests_people;
+#[cfg(test)]
 mod tests_vision_edges;
