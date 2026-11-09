@@ -30,23 +30,30 @@ How (`crates/retouch/src/wrinkles.rs`, `wrinkles/areas.rs`, `wrinkles/lines.rs`)
   core goes with it.
 - **No halo**: every blur reads the skin only (the picture weighted by the mask, divided by the blurred mask), so
   hair, eyes, lips, clothes and the background never bleed in, and pixels outside the masks keep their bits.
-- **Zoom rule**: the feature declares `REACH`, how far around a pixel it reads (about a fifth of the face). A zoomed
-  window is grown by it around every face that can reach into it (`crates/pipeline/src/retouch_step.rs`,
-  `window_for_reads`, called where `plan` grows windows for spots). No statistic comes from the window's pixels; the
-  coarse blurs' cells and the weight's lattice are counted from the face's corner. A window holding part of a face
-  equals the whole render inside it.
+- **Zoom rule**: every read stays inside the skin masks' boxes, within `Wrinkles::REACH` (about a fifth of the
+  face) of each pixel; the step's zoom rule (`crates/pipeline/src/retouch_step.rs`, `window_for_reads`, see
+  `crates/retouch/README.md`) renders a face's whole read area around a zoomed window. No statistic comes from the
+  window's pixels; the coarse blurs' cells and the weight's lattice are counted from the face's corner. A window
+  holding part of a face equals the whole render inside it.
+- **A big face**: past `MAX_BOX` pixels (about 67 M, a face filling a very large export) the face's areas are worked
+  on reduced by a whole factor and the change carried back as a gain (`crates/retouch/src/reduced.rs`), never
+  skipped.
 - **Speed**: the coarse blurs run on cells of at least 2.5 per sigma, read back bilinearly; the wide margin only
-  feeds them, and the fine blur and the change run inside the area. Each skin mask is sampled once per face for all
-  its areas, both sides of a face share one box, and an area's weight is measured on a lattice (0.4 % of the face)
-  and read bilinearly. On the CPU, on the parse's cached masks; no model runs while a slider moves.
+  feeds them. Each skin mask is sampled once per face (`PartMask::sampler`), and its log and fine blur are built
+  once for every area it cuts; pixels where the mask is 0 are skipped; an area's weight is measured on a lattice
+  (0.4 % of the face) only inside its bounds and read bilinearly. Areas each start from the face's own pixels, their
+  lifts multiplying where two meet. On the CPU, on the parse's cached masks; no model runs while a slider moves.
 
-Speed (Apple M4 Pro, release, one face, all four sliders at 60, fastest of 20; the machine under load ~9 from other
-builds):
+Speed (release, one face, all four sliders at 60, fastest of 60 runs on a test Mac with other work running; CC0
+portraits):
 
 | | Draft (1936 px) | Loupe (2560 px) |
 | --- | --- | --- |
-| Head-and-shoulders portraits | 7.0–8.0 ms | 8.4–11.9 ms |
-| A face filling the frame | 20 ms | 32 ms |
+| Head-and-shoulders portraits | 6.2–11.8 ms | 6.6–13.1 ms |
+| A face filling the frame | 13.9 ms (was 23.9 ms in the same run) | 22.0 ms (was 33.6 ms) |
+
+Single-threaded, the face-filling frame went from 106 ms to 66 ms. The output is the same as before within one 8-bit
+level.
 
 ## Branch
 
@@ -60,17 +67,20 @@ builds):
 
 ## Hooks in official files
 
-- `crates/pipeline/src/lib.rs` (`plan`): one call to `retouch_step::window_for_reads` where windows grow for spots,
-  joint colour noise reduction and decontamination.
+None: the zoomed window's call to `retouch_step::window_for_reads` in `crates/pipeline/src/lib.rs` came with
+Eyes (`fork/retouch-eyes.md`).
 
 In fork files:
 
-- `crates/retouch/src/feature.rs`: `Feature::REACH` (0 by default) and `AROUND_FACE`. `crates/retouch/src/settings.rs`:
-  `Features::reach` and `Retouch::reach`. `crates/retouch/README.md`: the zoom rule, `REACH`, the Done-means line for
-  it, and the `face_input` example.
-- `crates/pipeline/src/retouch_step.rs`: `window_for_reads` and its test.
-- `crates/parsing/examples/face_input.rs`: the same file as on `feat/retouch-eyes` (what the app's step gets for
-  each face, for the retouch examples); identical, so the two branches merge without a conflict.
+- `crates/pipeline/src/retouch_step.rs`: `window_for_reads` grows the window until no face's reads touch it
+  without lying inside it (faces chained by their reads); tests of a zoomed face, of chained faces, and of seven
+  sliders of three features on one face.
+- `crates/retouch/src/reduced.rs` (new) and `Scene::through` in `src/feature.rs`: a face too big for full-size
+  work, worked on reduced. `src/skin.rs`: Skin uses it too (`Skin::apply_capped`) instead of skipping the face.
+- `crates/retouch/src/input.rs`: `PartMask::sampler`, a mask sampled at every pixel with its checks done once.
+- `crates/retouch/README.md`: the `REACH` line, chained faces in the zoom rule, a big face never skipped, the
+  wrinkles example in the `face_input` paragraph.
+- `crates/parsing/examples/face_input.rs`: the same file as on `feat/retouch-eyes`.
 - `crates/ui-egui/src/tests/portrait.rs`: a test of the Wrinkles section.
 - The stub's control `retouch.wrinkles.amount` is now four controls. The stub had no effect and nothing referred to
   it, so no saved edit changes; a saved `amount` is dropped when settings are read.
@@ -88,4 +98,7 @@ corner, the neck), grown by the reach, equal to the whole render inside them (fa
 window); in the pipeline, a zoomed render of a face equal to the whole render inside it, within one 8-bit level
 (fails without `window_for_reads`), and no growth far from faces or with the block off; no faces, 50 faces, faces
 past the edges, a mesh of one point or of points that are not numbers, 1 × 1 and empty photos; a face with its own
-settings the only one retouched; the Wrinkles section's four sliders and a click setting Forehead.
+settings the only one retouched; the Wrinkles section's four sliders and a click setting Forehead. A face too big
+for full-size work (a small cap in the test) retouched reduced, close to the full-size change, outside the masks
+unchanged (Wrinkles and Skin; both failed with the old skip); a zoomed window holding the reads of three faces
+chained by their reads (failed with one pass); a mask's sampler equal to `PartMask::sample`.

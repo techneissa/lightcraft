@@ -97,7 +97,8 @@ pub(crate) fn retouch(
             if g.iter().all(|v| *v == [1.0; 3]) || !keep(x, y) {
                 continue;
             }
-            let k: [f32; 3] = std::array::from_fn(|c| (g[0][c] * (1.0 - tx) + g[1][c] * tx) * (1.0 - ty) + (g[2][c] * (1.0 - tx) + g[3][c] * tx) * ty);
+            let k: [f32; 3] =
+                std::array::from_fn(|c| (g[0][c] * (1.0 - tx) + g[1][c] * tx) * (1.0 - ty) + (g[2][c] * (1.0 - tx) + g[3][c] * tx) * ty);
             let new: [f32; 3] = std::array::from_fn(|c| p[c] * k[c]);
             if new.iter().all(|v| v.is_finite()) {
                 *p = new;

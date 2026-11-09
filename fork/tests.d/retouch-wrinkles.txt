@@ -1,4 +1,6 @@
 cargo test -p lightcraft-retouch --test wrinkles
 cargo test -p lightcraft-retouch --test foundation
+cargo test -p lightcraft-retouch --test skin
+cargo test -p lightcraft-retouch --lib -- reduced
 cargo test -p lightcraft-pipeline --lib -- retouch_step
 cargo test -p lightcraft-ui-egui --lib -- portrait

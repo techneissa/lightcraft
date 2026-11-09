@@ -32,9 +32,8 @@ In the module:
 - **Parts**: `PARTS`, the part masks `apply` reads. The face search keeps only the parts some feature lists
   (`parts_read`), so list every part you read. The default, `FACE_PARTS`, is a face's parts and its skin, without
   Entire Person and the clothes.
-- **Reach**: `REACH`, how far around a pixel `apply` reads to change it, a fraction of the face's size (0 by
-  default). A zoomed render grows its window by the largest reach of the features that are on
-  (`crates/pipeline/src/retouch_step.rs`, `window_for_reads`), so a feature that blurs must declare it.
+- **Reach**: `REACH`, how far past its face's box and the areas of its `PARTS` masks `apply` reads, a fraction of
+  the face's size (`DEFAULT_REACH`, half the face, when it declares none). See the zoom rule below.
 - **`apply`**: retouch the image in place (see the rules below). The panel section draws its sliders with
   `cx.slider("retouch.<KEY>.<field>")`, which writes to every face or to the picked one.
 
@@ -120,6 +119,12 @@ and `Scene::mask_box` gives the pixels a mask can touch (read and write only tho
   reduction's halo does), so `apply` sees the same pixels around the face as in a whole-frame render. A feature
   keeps its reads within its `REACH` (clamp what landmarks or masks could throw far away), and works on grids and
   boxes anchored to the face (its box, an eye, a mask's area), never to the image's corner, which a window moves.
+  The window also holds the reads of every face whose reads touch it, in a chain: features run one after another
+  over every face, so a face's later feature reads what an earlier one changed for its neighbour. Within one face
+  the largest `REACH` is enough: the window holds every pixel any of its features reads.
+- **A big face is never skipped.** A feature that caps the pixels it works on at full size (Skin and Wrinkles:
+  `MAX_BOX`, about 67 M) works on a bigger box reduced by a whole factor, as a draft of it, and carries the change
+  back as a gain (`src/reduced.rs`), so a very large export makes the change its draft shows.
 - **Reference stats come from the whole face**, never from the pixels a render happens to hold: a level, a target
   colour or the skin's colour (Eyes: the whites' level, the cheek's colour, the skin's colour; Teeth and Lips: the
   lips' main colour) is measured on a fixed grid over the face's box or a mask's area, in photo coordinates, so a
