@@ -82,6 +82,15 @@ pub enum Kind {
     Scale(f64),
 }
 
+/// How far from the photo's edge a move across it is faded out, a fraction of the face's smaller side.
+const EDGE_MARGIN: f64 = 0.15;
+
+/// 0 at and past the photo's edge (`t` ≤ 0), 1 from `t` = 1 inward, smooth (C¹) between.
+fn edge_ramp(t: f64) -> f64 {
+    let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
+    t * t * (3.0 - 2.0 * t)
+}
+
 /// The Wendland bump: 1 at the centre, 0 from `q = 1` on, smooth (C²) all the way.
 fn bump(q: f64) -> f64 {
     if q >= 1.0 {
@@ -262,7 +271,9 @@ struct Patch {
 
 impl Patch {
     /// The grid over every kernel's reach, with a cell to spare (so its edge points don't move); `None` for no kernels.
-    fn sample(kernels: &[Kernel], cell: f64) -> Option<Patch> {
+    /// `photo`: the photo's size (photo units) and the margin its edges hold within: a move across an edge fades to
+    /// nothing at it, so the photo's border maps onto itself and nothing is read from past it.
+    fn sample(kernels: &[Kernel], cell: f64, photo: Option<([f64; 2], f64)>) -> Option<Patch> {
         let reach = |f: fn(&Kernel) -> f64| kernels.iter().map(f).fold(f64::NAN, f64::min);
         let x0 = reach(|k| k.centre[0] - k.radius) - cell;
         let y0 = reach(|k| k.centre[1] - k.radius) - cell;
@@ -279,7 +290,14 @@ impl Patch {
         for j in 0..ny {
             for i in 0..nx {
                 let p = [x0 + i as f64 * cell, y0 + j as f64 * cell];
-                let d = kernels.iter().fold([0.0, 0.0], |a, k| add(a, k.back(p)));
+                let mut d = kernels.iter().fold([0.0, 0.0], |a, k| add(a, k.back(p)));
+                if let Some((size, margin)) = photo {
+                    for (k, dk) in d.iter_mut().enumerate() {
+                        let at = p.get(k).copied().unwrap_or(0.0);
+                        let end = size.get(k).copied().unwrap_or(0.0);
+                        *dk *= edge_ramp(at / margin) * edge_ramp((end - at) / margin);
+                    }
+                }
                 back.push([d[0] as f32, d[1] as f32]);
             }
         }
@@ -386,7 +404,8 @@ impl Field {
             let mesh: Vec<[f64; 2]> = mesh.iter().map(|(x, y)| [x * sx, y * sy]).collect();
             let ks = kernels(&mesh, s);
             let Some(g) = FaceGeom::new(&mesh) else { continue };
-            if let Some(mut p) = Patch::sample(&ks, g.w.min(g.h) * CELL) {
+            let size = g.w.min(g.h);
+            if let Some(mut p) = Patch::sample(&ks, size * CELL, Some(([sx, sy], EDGE_MARGIN * size))) {
                 p.unfold();
                 if p.back.iter().any(|d| d[0] != 0.0 || d[1] != 0.0) {
                     patches.push(p);
@@ -431,6 +450,25 @@ impl Field {
                 [p.x0 / self.sx, p.y0 / self.sy, x1 / self.sx, y1 / self.sy]
             })
             .collect()
+    }
+
+    /// The warp as one flat table, for a GPU kernel that reads it as `f32`s (the counts and offsets are `u32` bits,
+    /// read back with `bitcast<u32>`): `[faces, sx, sy]`, then per face `[x0, y0, cell, nx, ny, offset]`, then each
+    /// face's grid from its `offset` on, `nx · ny` pairs row by row (x then y, photo units). [`Field::source`] is the
+    /// reference.
+    pub fn gpu_table(&self) -> Vec<f32> {
+        let bits = |v: usize| f32::from_bits(u32::try_from(v).unwrap_or(u32::MAX));
+        let head = 3 + 6 * self.patches.len();
+        let mut out = vec![bits(self.patches.len()), self.sx as f32, self.sy as f32];
+        let mut offset = head;
+        for p in &self.patches {
+            out.extend([p.x0 as f32, p.y0 as f32, p.cell as f32, bits(p.nx), bits(p.ny), bits(offset)]);
+            offset += 2 * p.back.len();
+        }
+        for p in &self.patches {
+            out.extend(p.back.iter().flatten());
+        }
+        out
     }
 
     /// A hash of every grid value, for cache keys.
@@ -527,7 +565,7 @@ mod tests {
             Kernel { centre: [0.0, 0.0], radius: 0.2, kind: Kind::Move([0.15, 0.0]) },
             Kernel { centre: [0.08, 0.0], radius: 0.2, kind: Kind::Move([-0.15, 0.0]) },
         ];
-        let mut p = Patch::sample(&ks, 0.005).expect("a grid");
+        let mut p = Patch::sample(&ks, 0.005, None).expect("a grid");
         assert!(!p.holds(1.0), "the test's moves must fold");
         let kept = p.unfold();
         assert!(kept > 0.05 && kept < 1.0, "{kept}");

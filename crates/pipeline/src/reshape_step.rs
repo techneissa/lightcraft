@@ -27,7 +27,7 @@ use crate::retouch_step::FrameKeyMap;
 /// The Face Reshape warp of `s` for the faces of `info` on `frame` (built without a reshape); `None` when nothing
 /// moves.
 pub fn field(info: &SourceInfo, s: &DevelopSettings, frame: &Frame) -> Option<Arc<Field>> {
-    if !crate::retouch_step::active(s) {
+    if !lightcraft_develop::retouch::active(s) {
         return None;
     }
     let r = &s.retouch;

@@ -1,6 +1,6 @@
-//! Fork (`fork/retouch-reshape.md`): Face Reshape on the GPU renderer. Its warp is sampled on the CPU (the GPU's warp
-//! kernel doesn't know it), so the GPU render shows the same reshaped face as the CPU render, within the CPU ↔ GPU
-//! bounds of `tests/it/equivalence.rs`.
+//! Fork (`fork/retouch-reshape.md`): Face Reshape on the GPU renderer. The device's warp kernel reads the reshape's
+//! grid (`sample_warp`), and the whole GPU render shows the same reshaped face as the CPU render, within the
+//! CPU ↔ GPU bounds of `tests/it/equivalence.rs`. (`src/render/tests_reshape.rs` checks the resample alone.)
 
 use std::sync::Arc;
 

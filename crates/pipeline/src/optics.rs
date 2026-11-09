@@ -122,12 +122,6 @@ impl Warp {
         self.reshape.is_some() && !self.optics_move() && !self.has_gain()
     }
 
-    /// Whether the warp must be sampled on the CPU: [`Warp::needs_f64`], or a Face Reshape (fork,
-    /// `fork/retouch-reshape.md`), which the GPU's warp kernel doesn't know.
-    pub fn cpu_only(&self) -> bool {
-        self.needs_f64() || self.reshape.is_some()
-    }
-
     /// Source px `g` (after the lens part) → the source px the reshaped photo shows there (fork,
     /// `fork/retouch-reshape.md`); `g` itself without a reshape. A point on the photo stays on it, so a face at the
     /// photo's edge never pulls in the blank past it.

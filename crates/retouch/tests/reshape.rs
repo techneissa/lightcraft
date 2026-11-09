@@ -45,7 +45,7 @@ fn every_setting() -> Vec<Reshape> {
 }
 
 #[test]
-fn off_by_default_and_amount_zero_changes_nothing() {
+fn off_by_default_and_every_slider_at_zero_changes_nothing() {
     common::off_changes_nothing::<Reshape>();
     // at 0 there is no warp at all: the pipeline's frame is the frame without it
     assert!(field(&Reshape::default(), 300.0, 200.0).is_none());

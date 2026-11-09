@@ -3,6 +3,7 @@ use std::sync::Arc;
 use lightcraft_develop::retouch::reshape::{MESH, sketch_mesh};
 use lightcraft_develop::retouch::{Face, Input, NormRect};
 use lightcraft_develop::{Mask, MaskComponent, MaskOp, MaskShape, controls};
+use lightcraft_geom::Point;
 use lightcraft_raster::{Plane, Rgb32f};
 
 use super::*;
@@ -62,7 +63,7 @@ fn only_the_face_moves() {
     let req = RenderRequest::fit(w, h);
     let p = crate::plan(&src, &info(), &s, &req);
     let warp = p.frame.warp.as_ref().expect("a warp");
-    assert!(warp.cpu_only());
+    assert!(warp.reshape_only());
     let areas = warp.reshape.as_ref().expect("a reshape").areas();
     // the same render with every Portrait setting at 0 but the faces found: no reshape
     let plain = render(&src, &info(), &DevelopSettings::default(), &req).image;
@@ -191,4 +192,120 @@ fn a_window_matches_the_whole_render() {
         }
     }
     assert!(worst <= 1, "{worst}");
+}
+
+/// Upright and Auto straighten read the photo without its Face Reshape: their analysis is cached by the optics and
+/// orientation only, so a reshaped analysis image would go stale after a slider change (and the uncached Auto
+/// straighten would disagree with it).
+#[test]
+fn upright_and_straighten_read_the_unreshaped_photo() {
+    let src = lines(300, 200);
+    let plain = crate::upright::analysis_plane(&src, &info(), &DevelopSettings::default());
+    for (id, v) in [("retouch.reshape.slimFace", 100.0), ("retouch.reshape.chin", -100.0)] {
+        let s = reshaped(id, v);
+        assert!(field(&info(), &s, &crate::frame_for(&src, &info(), &s, false)).is_some(), "{id} reshapes the render");
+        let got = crate::upright::analysis_plane(&src, &info(), &s);
+        assert!(got.data == plain.data, "{id}: the analysis image moved with the face");
+    }
+}
+
+/// Fine texture (pores a few pixels across) on a face of 360 px: the high-frequency energy inside the reshaped face
+/// stays within a set ratio of the original's, with every slider at ±100.
+#[test]
+fn texture_is_kept_inside_a_warped_face() {
+    let (w, h) = (1200, 800);
+    let src = Rgb32f::from_fn(w, h, |x, y| {
+        let (x, y) = (x as f32, y as f32);
+        let t = (x * 1.13 + y * 0.31).sin() + (x * 0.27 - y * 0.97).sin() + (x * 0.71 + y * 0.83).sin() + (x * -0.52 + y * 0.64).sin();
+        let v = 0.3 + 0.04 * t;
+        [v, v * 0.8, v * 0.7]
+    });
+    let energy = |img: &Rgb32f| {
+        let (x0, x1) = ((FACE.x0 * w as f64) as usize + 20, (FACE.x1 * w as f64) as usize - 20);
+        let (y0, y1) = ((FACE.y0 * h as f64) as usize + 20, (FACE.y1 * h as f64) as usize - 20);
+        let g = |x: usize, y: usize| img.get(x, y)[1];
+        let mut e = 0.0f64;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let lap = 4.0 * g(x, y) - g(x - 1, y) - g(x + 1, y) - g(x, y - 1) - g(x, y + 1);
+                e += f64::from(lap * lap);
+            }
+        }
+        e
+    };
+    let req = RenderRequest::fit(w, h);
+    let original = energy(&crate::plan(&src, &info(), &DevelopSettings::default(), &req).frame.sample(&src, w, h));
+    for v in [-100.0, 100.0] {
+        let mut s = DevelopSettings::default();
+        for spec in lightcraft_develop::retouch::reshape::Reshape::CONTROLS {
+            controls::set(&mut s, spec.spec.id, v);
+        }
+        let p = crate::plan(&src, &info(), &s, &req);
+        assert!(p.frame.warp.as_ref().is_some_and(|w| w.reshape.is_some()));
+        let ratio = energy(&p.frame.sample(&src, w, h)) / original;
+        assert!((0.9..=1.1).contains(&ratio), "every slider at {v}: the texture's energy is {ratio:.3} of the original's");
+    }
+}
+
+/// A face at the photo's edge, every slider at ±100: each point of the reshaped photo maps back to the output
+/// (`Warp::from_source`, which the Portrait features use for faces, landmarks and masks), and back again to itself.
+#[test]
+fn the_warp_inverts_near_the_photos_edge() {
+    let (w, h) = (300, 200);
+    let src = lines(w, h);
+    for b in [NormRect::new(-0.08, 0.1, 0.22, 0.6), NormRect::new(0.75, 0.45, 1.05, 0.98), NormRect::new(0.3, -0.1, 0.6, 0.35)] {
+        let face = Face { landmarks: sketch_mesh(b), ..Face::boxed(b) };
+        let info = SourceInfo { retouch: Some(Arc::new(Input::new_on_photo(vec![face.clone()]))), ..SourceInfo::default() };
+        for v in [-100.0, 100.0] {
+            let mut s = DevelopSettings::default();
+            for spec in lightcraft_develop::retouch::reshape::Reshape::CONTROLS {
+                controls::set(&mut s, spec.spec.id, v);
+            }
+            let frame = crate::frame_for(&src, &info, &s, true);
+            let warp = frame.warp.as_ref().expect("a warp");
+            assert!(warp.reshape.is_some());
+            let (ow, oh) = (w as f64, h as f64);
+            let mut checked = 0;
+            for j in 0..=40 {
+                for i in 0..=40 {
+                    let t = Point::new(ow * i as f64 / 40.0, oh * j as f64 / 40.0);
+                    let s = warp.to_source(t, 1);
+                    let back = warp.from_source(s).unwrap_or_else(|| panic!("{b:?} at {v}: {s:?} (from {t:?}) does not map back"));
+                    let again = warp.to_source(back, 1);
+                    assert!((again.x - s.x).abs() < 0.02 && (again.y - s.y).abs() < 0.02, "{b:?} at {v}: {s:?} → {back:?} → {again:?}");
+                    checked += 1;
+                }
+            }
+            assert!(checked > 1000);
+            // every landmark of the face finds its place in the output
+            let to_out = frame.for_mask(true).mask_to_out(w, h);
+            for (k, (x, y)) in face.landmarks.iter().enumerate() {
+                let on = (0.0..=1.0).contains(x) && (0.0..=1.0).contains(y);
+                assert!(!on || to_out(Point::new(*x, *y)).is_some(), "{b:?} at {v}: landmark {k} lost");
+            }
+        }
+    }
+}
+
+/// Face Reshape alone is a geometry change only: the per-pixel retouch step stays off (its key is 0), so the GPU keeps
+/// the scene-linear stage; with another Portrait setting on, the step runs as before.
+#[test]
+fn face_reshape_alone_leaves_the_retouch_step_off() {
+    let src = lines(300, 200);
+    let s = reshaped("retouch.reshape.slimFace", 60.0);
+    assert!(lightcraft_develop::retouch::active(&s), "the faces are still searched for");
+    assert!(!crate::retouch_step::active(&s) && !crate::lin_needs_cpu(&s, &info()));
+    assert_eq!(crate::retouch_step::key(&s, &info()), 0);
+    assert!(field(&info(), &s, &crate::frame_for(&src, &info(), &s, true)).is_some(), "and the face is reshaped");
+    let mut both = s.clone();
+    controls::set(&mut both, "retouch.skin.smoothness", 30.0);
+    assert!(crate::retouch_step::active(&both) && crate::lin_needs_cpu(&both, &info()));
+    // a face's own settings count too
+    let mut own = DevelopSettings::default();
+    let face = Face { landmarks: sketch_mesh(FACE), ..Face::boxed(FACE) };
+    if let Some(f) = own.retouch.override_mut(std::slice::from_ref(&face), 0) {
+        f.reshape.chin = 50.0;
+        f.skin.smoothness = 20.0;
+    }
+    assert!(crate::retouch_step::active(&own));
 }

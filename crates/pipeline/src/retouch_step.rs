@@ -19,8 +19,21 @@ use lightcraft_raster::Rgb32f;
 use crate::{PixelWindow, Plan, SourceInfo};
 
 /// Whether the step changes anything for `s`.
+///
+/// Face Reshape is not part of the step (it is a warp in the frame's geometry, [`crate::reshape_step`]): a block with
+/// only Face Reshape on leaves the step off, so the scene-linear stage can stay on the GPU.
 pub fn active(s: &DevelopSettings) -> bool {
-    lightcraft_develop::retouch::active(s)
+    lightcraft_develop::retouch::active(s) && !only_reshape(&s.retouch)
+}
+
+/// Every feature but Face Reshape is off, for every face.
+fn only_reshape(r: &lightcraft_develop::retouch::Retouch) -> bool {
+    let rest_off = |f: &lightcraft_develop::retouch::Features| {
+        let mut f = f.clone();
+        f.reshape = Default::default();
+        f.is_off()
+    };
+    rest_off(&r.global) && r.faces.iter().all(|o| rest_off(&o.settings))
 }
 
 /// What the step adds to the scene-linear stage's cache key: 0 while it is off; else the settings and the input

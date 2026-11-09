@@ -105,7 +105,7 @@ const MODULES: &[Module] = &[
     Module { src: include_str!("wgsl/dirty.wgsl"), bindings: &[("src", false, "f32"), ("dst", true, "f32")], entries: &["rect_copy", "rect_clear"] },
     Module {
         src: include_str!("wgsl/geom.wgsl"),
-        bindings: &[("src", false, "f32"), ("dst", true, "f32"), ("coverage", false, "u32")],
+        bindings: &[("src", false, "f32"), ("dst", true, "f32"), ("coverage", false, "u32"), ("field", false, "f32")],
         entries: &["orient", "sample_affine", "sample_warp"],
     },
 ];
