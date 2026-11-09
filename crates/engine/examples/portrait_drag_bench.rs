@@ -2,14 +2,16 @@
 //! Portrait feature's slider, warm stage cache, on the CPU and (when an adapter exists) the GPU.
 //! `cargo run --release -p lightcraft-engine --example portrait_drag_bench` (`N=9` ticks per row, `ONLY=skin,eyes`,
 //! `LIGHTCRAFT_GPU=0` for the CPU only, `GPU_ONLY=1` for the GPU only, `LIGHTCRAFT_PROFILE=1` for the stage table of
-//! every tick). Two framings: a face filling the frame and a half-length portrait (a face about a fifth of its height).
+//! every tick, `DC=100` to add a Background mask recoloured and decontaminated (to that
+//! amount; `DC=0` for the same mask without) around the face (`DC_EDGE=0.85`: its edge a vertical line at that
+//! share of the width instead, away from the face), as a mask beside the Portrait sliders: `fork/perf-decontam-gpu.md`). Two framings: a face filling the frame and a half-length portrait (a face about a fifth of its height).
 #![allow(clippy::unwrap_used, clippy::expect_used)]
 
 use std::sync::Arc;
 use std::time::Instant;
 
 use lightcraft_develop::retouch::{Face, Input, NormRect, Part, PartMask};
-use lightcraft_develop::{DevelopSettings, controls};
+use lightcraft_develop::{DevelopSettings, LocalAdjustments, Mask, MaskComponent, MaskOp, MaskShape, SegMask, controls};
 use lightcraft_engine::media::develop;
 use lightcraft_pipeline::{Quality, RenderRequest, SourceInfo, StageCache};
 use lightcraft_raster::{Plane, Rgb32f};
@@ -77,6 +79,37 @@ fn typical() -> DevelopSettings {
     s
 }
 
+/// `DC=<amount>`: a Background mask, its matte soft along an ellipse around `bounds`, recoloured, Decontaminate `amount`.
+fn decontaminated_background(bounds: NormRect, amount: f64) -> Mask {
+    let side = 512;
+    let (cx, cy) = ((bounds.x0 + bounds.x1) / 2.0, (bounds.y0 + bounds.y1) / 2.0);
+    let (rx, ry) = (bounds.width() * 0.6, bounds.height() * 0.6);
+    let line: Option<f64> = std::env::var("DC_EDGE").ok().and_then(|v| v.parse().ok());
+    let logits: Vec<f32> = (0..side * side)
+        .map(|i| {
+            let (nx, ny) = (((i % side) as f64 + 0.5) / side as f64, ((i / side) as f64 + 0.5) / side as f64);
+            if let Some(x) = line {
+                return ((nx - x) * 400.0).clamp(-20.0, 20.0) as f32;
+            }
+            let d = (((nx - cx) / rx).powi(2) + ((ny - cy) / ry).powi(2)).sqrt();
+            (((d - 1.0) * 60.0).clamp(-20.0, 20.0)) as f32
+        })
+        .collect();
+    let adjust = LocalAdjustments { exposure: 0.3, recolor: 100.0, recolor_r: 1.0, recolor_g: 0.55, recolor_b: 0.1, ..Default::default() };
+    Mask {
+        id: 1,
+        components: vec![MaskComponent {
+            name: None,
+            op: MaskOp::Add,
+            invert: false,
+            shape: MaskShape::Background { seg: Some(SegMask::from_logits(side, &logits)), detail: Vec::new(), edge: 0.0 },
+        }],
+        adjust,
+        decontaminate: amount,
+        ..Default::default()
+    }
+}
+
 fn main() {
     let n: usize = std::env::var("N").ok().and_then(|v| v.parse().ok()).unwrap_or(9);
     let only = std::env::var("ONLY").unwrap_or_default();
@@ -109,6 +142,9 @@ fn main() {
             for &g in &backends {
                 let cache = StageCache::default();
                 let mut s = typical();
+                if let Some(amount) = std::env::var("DC").ok().and_then(|v| v.parse().ok()) {
+                    s.masks.push(decontaminated_background(bounds, amount));
+                }
                 if id.starts_with("retouch.") {
                     controls::set(&mut s, id, base);
                 }

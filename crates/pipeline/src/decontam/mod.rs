@@ -68,6 +68,24 @@ impl Edge {
         self.px.len() * std::mem::size_of::<EdgePx>() + self.rows.len() * std::mem::size_of::<usize>()
     }
 
+    /// Which `cell` × `cell` squares of a frame `width` pixels wide hold an edge pixel: `width.div_ceil(cell)` columns by
+    /// `height.div_ceil(cell)` rows, row-major (fork, `fork/perf-decontam-gpu.md`: where a retouched region can reach
+    /// the edge's estimate).
+    pub fn occupied(&self, cell: usize, width: usize) -> Vec<bool> {
+        let (cell, rows) = (cell.max(1), self.rows.len().saturating_sub(1));
+        let cols = width.div_ceil(cell);
+        let mut hit = vec![false; cols.saturating_mul(rows.div_ceil(cell))];
+        for y in 0..rows {
+            let (Some(&a), Some(&b)) = (self.rows.get(y), self.rows.get(y + 1)) else { continue };
+            for p in self.px.get(a..b).unwrap_or(&[]) {
+                if let Some(c) = hit.get_mut((y / cell).saturating_mul(cols).saturating_add(p.x as usize / cell)) {
+                    *c = true;
+                }
+            }
+        }
+        hit
+    }
+
     /// The edge as the GPU's finish kernel reads it (fork, `fork/perf-decontam-gpu.md`): `height + 1` row starts
     /// (pixel indices, as `u32` bits), then [`PX_WORDS`] words a pixel: its column (`u32` bits), its selected and its
     /// unselected colour. `None` when a count doesn't fit in 32 bits or the edge was estimated for another height.

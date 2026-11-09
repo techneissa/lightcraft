@@ -861,6 +861,7 @@ pub fn render(
     // 3. spatial planes (`t_out`: the output tiles that change from `start`'s)
     let (planes, prep, t_out) = planes_stage(&mut cx, &at, (&lin, t_lin.as_ref()), &plan, req);
     lap("planes", &mut t, &mut cx);
+    let edge_boxes = retouch_boxes.clone();
     if let Some(c) = stages {
         let lin = Some((plan.lin_key, lin.clone()));
         c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin, post, colour_noise, planes, last: None, pre_retouch, retouch_boxes });
@@ -873,7 +874,8 @@ pub fn render(
         return Some(Output::Masks(mask_planes(&mut cx, masks.as_ref(), &plan, (&lin, &prep.log_l), Arc::as_ptr(src) as usize, ask)));
     }
     // fork (`fork/perf-decontam-gpu.md`): the decontaminated masks' edges, after the alphas
-    let (masks, dc) = crate::decontam::with_edges(&mut cx, &plan, masks, &terms, &lin, &mut host, stages.map(|c| &c.decontam))?;
+    let edge_lin = crate::decontam::Lin { buf: &lin, boxes: edge_boxes.as_deref() };
+    let (masks, dc) = crate::decontam::with_edges(&mut cx, &plan, masks, &terms, &edge_lin, &mut host, stages.map(|c| (&c.decontam, src)))?;
 
     // 5. per-pixel stage
     let mut fp = FinishParams::new(FinishParamsInput {
