@@ -16,6 +16,7 @@
 //! MCP, tests) they wait for the worker.
 
 pub mod birefnet;
+pub(crate) mod clicks_request;
 #[cfg(feature = "sam")]
 mod download;
 pub(crate) mod request;
@@ -580,6 +581,21 @@ impl Session {
         reply: std::sync::mpsc::Sender<worker::Outcome>,
         region: Option<[f64; 4]>,
     ) -> Result<worker::Job, String> {
+        self.segment_job_in(id, kind, tag, reply, region, false)
+    }
+
+    /// [`Self::segment_job`]; `without_spots`: the model sees the photo without its Remove spots (the Remove tool's
+    /// Object clicks, `fork/object-remove.md`: a spot already over the object would hide it).
+    #[cfg(feature = "sam")]
+    fn segment_job_in(
+        &mut self,
+        id: PhotoId,
+        kind: worker::Kind,
+        tag: Tag,
+        reply: std::sync::mpsc::Sender<worker::Outcome>,
+        region: Option<[f64; 4]>,
+        without_spots: bool,
+    ) -> Result<worker::Job, String> {
         // (BiRefNet alone needs no SAM 3: its job carries its own folder)
         let dir = match &kind {
             worker::Kind::BiRefNet { combined: false, dir, .. } => dir.clone(),
@@ -592,7 +608,11 @@ impl Session {
             self.apply_silent(lightcraft_catalog::Op::SetDevelop { id, settings: std::sync::Arc::new(on), label: "Masks".into(), edited: None })
                 .map_err(|e| e.to_string())?;
         }
-        let (key, mut d) = self.segment_key(id).ok_or("no such photo")?;
+        let (mut key, mut d) = self.segment_key(id).ok_or("no such photo")?;
+        if without_spots && !d.spots.is_empty() {
+            d.spots.clear();
+            key = mix(key, d.hash64() ^ 0x5350_4f54);
+        }
         let p = self.catalog.photo(id).ok_or("no such photo")?.clone();
         let missing = match &p.source {
             lightcraft_catalog::Source::File { path } if !std::path::Path::new(path).exists() => Some(path.clone()),
@@ -849,8 +869,9 @@ impl Session {
     /// their messages. Cheap when nothing is pending: call it every frame.
     pub fn segment_poll(&mut self) -> Polled {
         self.reconcile_segmenter();
-        #[cfg_attr(not(feature = "sam"), allow(unused_mut))]
         let mut polled = Polled { messages: std::mem::take(&mut self.segmenter.messages), ..Default::default() };
+        // Object clicks of the Remove tool (fork, `fork/object-remove.md`)
+        polled.changed |= self.poll_object_jobs(&mut polled.messages);
         #[cfg(feature = "sam")]
         {
             // (before draining: a worker that is idle now has sent everything)
@@ -1203,7 +1224,7 @@ mod tests {
     fn no_region_for_nothing_or_most_of_the_photo() {
         assert!(detail_region(&seg_box(50, 0, 0, 0, 0), 1.0).is_none());
         assert!(detail_region(&seg_box(50, 2, 2, 48, 48), 1.0).is_none());
-        let damaged = SegMask { side: 50, data: "?".into(), rect: None, model: None };
+        let damaged = SegMask { side: 50, data: "?".into(), rect: None, model: None, grid: None };
         assert!(detail_region(&damaged, 1.0).is_none());
     }
 }

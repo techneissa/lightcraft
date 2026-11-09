@@ -1,5 +1,121 @@
 # What's new in LightCraft
 
+## Unreleased
+
+### Colour noise reduction (process V6)
+- Colour noise reduction removes colour noise at the raw default 25, where it used to leave most of it, and keeps
+  colour edges at high values instead of bleeding them into fringes (issue #815). It filters the colour differences
+  R−Y and B−Y, leaving brightness exactly as it was, along edges found in a denoised guide, and takes isolated
+  coloured specks out. New photos get it; photos edited before keep their look until Update to Current Process. A zoomed
+  view is smoothed like the same part of the whole photo and the export.
+
+### The web build can be embedded
+- A page framing LightCraft in an iframe can open it with `?host=parent` and speak to it over `postMessage`, the
+  protocol PdfCraft, GridCraft and DeckCraft share: it hands photos in, receives exports and backups instead of
+  downloads, runs commands and hears whether closing would lose unsaved changes (issue #2270; `docs/web.md`).
+  A parent on another origin, or a page with an opaque origin, keeps the normal downloads.
+- A page can also run LightCraft in its own document, with no iframe: `data-host="page"` on the canvas carries the same
+  messages as `CustomEvent`s on the canvas instead of `postMessage` (issue #2270; `docs/web.md`). `?host=parent` wins
+  when a page asks for both.
+
+### Remove Hot Pixels
+- Detail ▸ Noise Reduction has a new box, Remove Hot Pixels (raws only), on for newly imported raws (issue #1345).
+  At high ISO single photosites read far brighter than all their neighbours and turn into small red, green or blue
+  dots that noise reduction only makes fainter. They are now replaced before the raw is developed. A point of light
+  spread over neighbouring photosites, such as a star, is kept; untick the box for star fields that need every
+  single-photosite point. Photos edited earlier keep their look: the box is off for them.
+- A raw that would have more than 0.2 % of its photosites replaced is left unchanged: such a photo doesn't look like
+  hot pixels on a sensor. Stars and other points of light that are kept don't count, so a dense star field still
+  loses its hot pixels. Settings ▸ Performance ▸ Hot pixel limit sets the share (0.05 % to 1 %).
+
+### Raising Exposure keeps raw highlights (process 5)
+- Raising Exposure on a raw no longer turns the brightest tones the sensor recorded white (issue #1632). The tone
+  curve now eases into white a stop at a time instead of reaching it within about a stop of the sensor's white: at
+  Exposure +1 and +2 a sky, a lit wall or a face keeps its detail where it used to go flat white. At Exposure 0 the
+  brightest tones render a few codes darker (on average 1 code or less on the photos measured), and fully clipped
+  areas such as a blown sky stay slightly below pure white until Exposure lifts them further. A DNG whose own tone
+  curve already reaches white at the sensor's white renders as before. This is rendering
+  process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
+  to Current Process. See [process versions](process-versions.md).
+
+## 2026-11-09
+
+### Remove an Object in One Step
+- The Remove panel has an Object mode: click an object and LightCraft selects it with SAM 3 and removes all of it with one spot in its shape. ⇧-click adds to it, ⌥-click leaves a part out, and a loose stroke over an object snaps to its outline. Expand sets how far past the outline the spot reaches.
+- Any mask can become a Remove spot too: right-click it and choose Remove This Area.
+- These spots fill with LaMa unless you pick Classic. Find People and Find Wires now remove each find with one spot in its shape.
+- Remove spots that use LaMa, and Content-Aware spots, no longer show a source pin: they rebuild the area from what is around it.
+
+### Recolor
+- A mask can now recolor what it selects: pick a colour (picker, hex value or eyedropper) and the area's main colour takes it while keeping its own folds, gradients and highlights. Other colours inside the mask (a logo, dust, a white lining) stay; Range and Color to Replace choose which colour changes. Red boots become purple boots with the same light on them; a black shirt can become white with its folds in place.
+- Works with every mask, including Describe ("boots", "red dress"). Saved with the mask and carried by Sync, Copy / Paste and presets.
+
+## 2026-11-08
+
+### Learn My Edits
+- Photo ▸ Learn My Edits… learns how you edit a kind of photo from 10 to 200 photos you have already edited, then applies it to new photos as ordinary slider values you can adjust: white balance, tone, presence, colour mixer, colour grading and tone curve.
+- Make several profiles ("Portraits", "Landscapes", "Skin Tones"…). Each says how close it came to your edits on photos it had not seen, and drops what your edits don't follow a pattern in. Add a photo you adjusted after applying and it learns again.
+- It needs an 88 MB image model, downloaded only after you agree. Profiles export and import as one file.
+
+### Match Look
+- Photo ▸ Match Look… gives the selected photos the colour and tone of a reference: a photo of the view, an image file, a pasted image or a web address. The result is ordinary slider values (white balance, Light, Vibrance and Saturation, Color Mixer, Color Grading, a tone curve), one undo step, with an Amount. A reference from outside the library is never imported.
+
+### Spot Rows in Remove
+- Every Remove, Content-Aware, Heal and Clone spot has a row in the Remove panel: click it to select the spot, use the eye to hide or show its effect, the trash can to delete it, and the circle menu to set when its circle shows on the photo (Use Global, Auto, Always, Selected or Never).
+- With Tool Overlay at Never, the brush rings and the white painting fill are gone too; a small crosshair shows where the brush is.
+
+### Fine-Edged Subject Masks With BiRefNet
+- Subject and Background masks can use BiRefNet, a model that cuts hair, fur and lace out far more finely than SAM 3. Masking has a model dropdown on its heading (SAM 3, BiRefNet, SAM 3 + BiRefNet Edges) for new parts; each part keeps the model that made it, and its row says so on hover.
+- BiRefNet is a 444 MB download (MIT licence), offered as "Get BiRefNet" on the Masking heading and only after you agree. It runs on the Mac's GPU in a few seconds per photo.
+- An older build reads a BiRefNet part as a SAM 3 selection.
+
+### Hover Help and a Solo Mode Button
+- Controls that showed nothing on hover now say what they do: the eye on each Develop section, the stars, flags, zoom menus, the masking buttons, the Crop and Remove buttons and more.
+- Each Develop section header has a Solo Mode button beside the eye: one click turns Solo Mode on or off, and it is lit on every header while it is on.
+
+### LaMa Fill for Remove
+- The Remove panel has a Fill choice, Classic or LaMa. LaMa is a learned fill that rebuilds lines, windows and textures where the Classic fill leaves a grey smudge, best on large or busy areas. It sets the fill for new spots; each spot keeps its own. Find People and Find Wires use it too.
+- LaMa needs its 206 MB model: choose LaMa and LightCraft asks before it downloads it (or copy `big-lama.pt` into the models folder it shares with PhotoCraft). Without it, spots show the Classic fill.
+
+### Combine Masks From The Right-Click Menu
+- A mask's menu has Add to Mask, Subtract from Mask and Intersect Mask with, each listing every kind of submask, plus Delete Empty Masks and Delete All Masks. The Brush can now intersect.
+- ⌘-click and ⇧-click select several submasks; the submask menu duplicates, inverts, changes the mode of and deletes them together, or copies them into a new mask.
+- Submasks are named by kind and number ("Brush Submask 2"); the panel says Submask where it said Part.
+
+### Real Subject, Sky and Background Masks
+- With SAM 3 installed, Subject, Sky and Background are real selections: Subject finds the people (else an animal, a vehicle or the main object), Sky the sky, Background everything else. The mask appears when SAM 3 has found it, with a "Selecting with SAM 3" row in the activity stack that you can cancel; the selection is stored with the mask, so previews, exports and reopening need no model, and Edge works on them.
+- Subject keeps the main subject: the largest person (or animal, vehicle) and any other at least a third of its size, not small figures far away. Use Object to click one of those.
+- A photo with an embedded sky or person matte (a DNG from an iPhone) keeps using it.
+- Without SAM 3 the mask is the same rough one as before, and the part says "Rough mask. Click to install SAM 3." Masks saved earlier look the same.
+- A new mask is named after its first part: "Subject Mask 1", "Sky Mask 1", "Brush Mask 2"; a number is never used twice for a kind. A name too long for its row gets a smaller font, then "…".
+
+### Remove: Reflections
+- The Remove panel has a Reflections section (also Photo ▸ Remove Reflections) that separates a reflection, such as a window's, from the photo with a local DSRNet model (S, L or L Nature) at Preview, Standard or High quality. Nothing leaves the Mac. Amount, Protect Sky, Detail Protection and Limit to Area change the result without running the model again. It is the official experimental feature, taken early.
+- The model is not bundled: convert it once as `docs/ai-reflections.md` says, then pick its folder with Install Reflection Model…. It is kept in `~/Library/Application Support/ArtCraft/models/<model-id>` (shared with PhotoCraft).
+
+### Arrange the tool strip and the Edit panel by dragging
+
+Drag an icon in the tool strip, or a section heading in the Edit panel, up or down to put it where you want it. A line shows where it will land. The order is remembered. Right-click a strip icon for Move Up, Move Down and Reset Order.
+
+### Settings Sync
+- Settings ▸ Sync moves all your settings to another Mac: Export Settings… and Import Settings… use one file, or Save to Folder and Load from Folder use a folder you choose, such as one in iCloud Drive. Keep in Sync saves there when you quit and offers a newer file from another Mac when you start.
+- Appearance, keyboard shortcuts, arrangements, tool defaults and your presets go along; window sizes, panel positions and folders of one Mac stay. Loading names when and on which Mac the file was saved, and asks first.
+- PhotoCraft uses the same folder, with its own file.
+
+### One models folder for every ArtCraft app
+Face and denoise models now live in the folder LightCraft shares with PhotoCraft, so a model is downloaded once. Models already in LightCraft's own folders move there at the first start. Removing a shared model asks "Remove for Every ArtCraft App?".
+
+### Keyboard Shortcuts window
+
+The Keyboard Shortcuts window is one resizable window that remembers its size. Click a shortcut and press the keys: each combination is added, two make a chord, a warning shows before Enter if another command has the key, Enter saves and Esc cancels. Remove a shortcut with ⌫ / Delete, the trash icon or the right-click menu; the ↺ on a changed row puts it back. The search finds shortcuts by modifier (`cmd shift`, `⌘⇧`).
+
+## 2026-11-02
+
+### The Windows title bar is readable from the moment the window opens
+- When LightCraft's appearance differs from the one set in Windows (the dark default on a light Windows, for one), the
+  title bar kept the system's colour with the title in LightCraft's, so the title looked blank until focus moved to
+  another window. It now takes LightCraft's colours as soon as the window has focus.
+
 ## 2026-11-01
 
 ### Korean and Vietnamese text in exports draws whole
@@ -59,6 +175,13 @@
 - AI masks look for the SAM 3 model in `~/Library/Application Support/ArtCraft/models/sam3` (shared with PhotoCraft) first, and a download goes there.
 
 ## 2026-10-30
+
+### Lightroom catalogs with a print inside a collection import their collections
+- Lightroom Classic can keep a saved print, book, slideshow or web gallery inside a plain collection, but a
+  LightCraft album sits only inside a folder. Importing such a catalog stopped at the end with "parent must be an
+  existing folder" and brought over no collections, and photos whose originals were offline were lost with them
+  (issues #2165, #2532). Such a collection now joins the nearest collection set above it, or the top level, and the
+  import result names it under warnings; so does one whose parent is system-only or gone from the catalog.
 
 ### Lens distortion correction for the Sony A7 III
 - Raws from the Sony A7 III (ILCE-7M3) now get the camera's own distortion correction, read from the file, like
@@ -668,6 +791,24 @@
 
 ## 2026-10-24
 
+### AI Denoise follows the photo's real noise
+- The built-in denoiser used to read a photo's fine texture as noise, so it always believed a photo was at least as noisy as
+  about ISO 12800 and over-smoothed quiet photos while under-cleaning noisy ones. It now measures each colour channel
+  separately, ignores texture, and sets its strength from the noise it actually finds. On clean photos from a Canon EOS R and
+  an R6 Mark III with noise added at real ISO levels, the result at ISO 25600 is 2.2 to 2.7 dB closer to the original, and at
+  ISO 51200 about 5.5 dB closer; at ISO 6400 it is 0.6 to 1.0 dB closer, and quiet photos are no longer smoothed
+  needlessly. Photos denoised before are denoised again when they are next needed. See [AI Denoise](denoise.md).
+
+### Better built-in AI Denoise
+- The built-in denoiser now cleans with block-matching collaborative filtering: similar blocks of the picture are
+  grouped, transformed together and thresholded, so more fine detail survives at the same level of cleaning. On a
+  public raw with added noise it scores 0.25 to 0.6 dB higher than before at every noise level and keeps more
+  texture at medium to extreme noise (medium: 44 % of it against 42 %; extreme: 12 % against 9 %), a little less at
+  light noise (58 % against 62 %), with no colour blotches or isolated specks. It is as fast as the old filter on the processor, and when the computer has a graphics card that is faster
+  it runs there: on an RTX 4080 SUPER a photo's tiles go about 6 to 10 times faster, with the same picture (Settings ▸ AI
+  Denoise ▸ Run on chooses; Automatic times both). Photos
+  denoised before are denoised again the next time they are needed. See [AI Denoise](denoise.md).
+
 ### A right-click on a text field while you carry photos opens no menu
 - While you drag photos from the grid, a right-click on a text field, such as the search box, opens no Cut, Copy and
   Paste menu. Before, the menu opened over the field the photos were on. Right-clicking a field without a drag works
@@ -748,6 +889,17 @@
   nothing and says nothing when none of them is left, and counts only the photos it changed.
 
 ## 2026-10-23
+
+### AI Denoise works out of the box
+- Turning on AI Denoise no longer asks for an ONNX model and a `denoise-model.json`: LightCraft's own built-in
+  denoiser runs automatically. Installing a model of your own is optional (Settings ▸ AI Denoise ▸ Your own model);
+  Stop using returns to the built-in one. The set-up prompt and its "resume after installing" flow are gone. See
+  [AI Denoise](denoise.md).
+- The built-in denoiser measures the photo's noise once, cleans the four colour planes together on variance-stabilised
+  data (so colour blotches go too), and cleans harder, with a second pass, the noisier the photo is. Colour noise gets
+  a wider pass of its own, and in heavy noise isolated specks are smoothed away. On a public raw with added noise it
+  scores 3.7 to 10.4 dB higher than the noisy picture, the most at heavy noise, and keeps more fine texture there
+  than before (heavy noise: 22 % of it against 20 %; extreme: 9 % against 7 %).
 
 ### Export subfolders stay inside the export folder
 - An export subfolder (typed in the Export dialog, saved in a preset or passed to `export`) can no longer lead
@@ -1107,6 +1259,16 @@
   Photos and export file names take them too.
 
 ## 2026-10-20
+
+### Windows: photos follow the monitor's colour profile
+- On Windows, photos are now shown through the colour profile Windows assigns to the monitor the window is on
+  (Settings ▸ System ▸ Display ▸ Color profile, Color Management, or a calibrator's profile), while no monitor profile
+  is chosen in Settings ▸ Display. Before, they were shown as sRGB, so a wide-gamut monitor showed them oversaturated
+  and a calibration was ignored unless you picked the profile by hand. Moving the window to another monitor, or
+  changing the profile in Windows, is followed within about a second.
+- While Windows manages colour itself (HDR on, or Auto Color Management on Windows 11), photos stay sRGB: Windows
+  converts them for the monitor then. Settings ▸ Display ▸ **Use Screen Profile** goes back to this after choosing a
+  profile by hand. See [display profiles](display-profiles.md).
 
 ### Smart albums check File Path rules faster
 - A smart album rule on File Path (contains, doesn't contain, is, isn't, starts with, ends with, is empty, isn't
@@ -2247,7 +2409,7 @@
 
 ### AI RAW denoise
 - Detail has a per-photo AI Denoise switch and Amount. Bayer RAW photos use a disposable cache, with matching previews and exports and pure-Rust CPU/GPU inference.
-- Models are installed separately after accepting their terms; no weights are bundled. See [setup and limitations](denoise.md).
+- Optional models are installed separately after accepting their terms; no weights are bundled. See [setup and limitations](denoise.md).
 
 ### Library keyboard culling
 - Colour labels tint thumbnail surrounds in Square Grid and the Detail filmstrip, and a translucent footer along the bottom of the photo in Photo Grid. Label confirmations use a matching pale colour.

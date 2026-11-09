@@ -426,3 +426,25 @@ fn kept_alphas_never_outlive_their_source() {
         }
     }
 }
+
+/// A mask's Moiré keeps the blurred chromaticity plane with the view's stages: it counts in their bytes, so the trim
+/// sees it (issue #111).
+#[test]
+fn the_kept_chroma_plane_counts_with_the_stages() {
+    if !gpu() {
+        return;
+    }
+    let (w, h) = (720usize, 480usize);
+    let src = scene(w, h);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(w, h);
+    let radial = MaskShape::Radial { center: Point::new(0.5, 0.4), rx: 0.2, ry: 0.15, angle: 0.0, feather: 60.0, invert: false };
+    let mut s = with_masks(vec![Mask { id: 1, components: vec![comp(MaskOp::Add, radial)], adjust: adjust(), ..Default::default() }]);
+    let cache = StageCache::default();
+    lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu");
+    let without = lightcraft_gpu::stage_bytes(&cache);
+    s.masks[0].adjust.moire = 60.0;
+    lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).expect("gpu");
+    let with = lightcraft_gpu::stage_bytes(&cache);
+    assert!(with >= without + 3 * 4 * w * h, "the chroma plane (3 floats a pixel) is counted: {without} → {with} bytes");
+}

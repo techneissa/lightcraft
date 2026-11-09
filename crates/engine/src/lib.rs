@@ -9,6 +9,7 @@
 //! of decoded source proxies. Rendering is done by [`RenderJob`]s that are `Send` so frontends can
 //! run them off the UI thread.
 #![forbid(unsafe_code)]
+#![deny(clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::unimplemented, clippy::todo, clippy::unreachable)]
 
 // Model/cache types remain available without linking the optional inference crate.
 #[cfg(not(feature = "denoise"))]
@@ -30,6 +31,7 @@ pub mod crs_masks;
 pub mod demo;
 pub mod denoise;
 pub mod devices;
+pub mod disk_space;
 pub mod display;
 pub mod doc_path;
 pub mod edit_copies;
@@ -69,11 +71,13 @@ pub mod media;
 pub mod memory;
 pub mod merge;
 mod model_download;
+pub mod model_runtime;
 pub mod names;
 pub mod open_path;
 pub mod originals;
 mod pdf;
 pub mod people_parsing;
+pub mod prep;
 pub mod preset_import;
 pub mod preset_luminar;
 pub mod presets;
@@ -98,6 +102,8 @@ pub mod slide_title;
 pub mod slideshow;
 pub mod slideshow_export;
 pub mod smart;
+pub mod spot_area;
+pub mod spot_source;
 pub mod sync;
 mod sync_same;
 pub mod text;
@@ -390,10 +396,16 @@ pub struct Session {
     pub active_spot: Option<usize>,
     /// Find People / Find Wires: the candidates for the Remove tool and the searches that make them.
     pub finds: find_removals::Finds,
+    /// New spots waiting for their automatic source, found on workers (`spot_source`).
+    pub spot_sources: spot_source::SpotSources,
     /// The LaMa fill behind Remove spots whose fill is LaMa (`fork/lama-fill.md`).
     pub lama: lama_fill::LamaFill,
+    /// Object clicks of the Remove tool on their way to SAM 3 (fork, `fork/object-remove.md`).
+    pub object_jobs: spot_area::ObjectJobs,
     /// Learn My Edits: profiles trained on the user's edits (`fork/learn-my-edits.md`).
     pub learn: learn::LearnEdits,
+    /// Which engine runs each AI model that has a Core ML version (`fork/coreml.md`).
+    pub model_runtimes: Arc<model_runtime::ModelRuntimes>,
     /// Per-person part masks and face landmarks (`fork/people-parsing.md`).
     pub parsing: people_parsing::PeopleParsing,
     /// The persistent library this session writes to (`None` = in-memory only).
@@ -472,10 +484,18 @@ pub struct Session {
     pub animated_gif: Option<std::sync::Arc<slideshow_export::ExportRun>>,
     /// The last (or running) Build Previews.
     pub preview_build: Option<std::sync::Arc<cmd::previews::PreviewBuild>>,
+    /// Preparing photos in the background: settings (app-wide and this library's) and the build
+    /// it runs ([`prep`]).
+    pub prep: prep::PrepState,
+    /// The long edge (px) the loupe renders at on this screen, as the frontend last said
+    /// (0: not known). Standard previews are built at least this big, so the loupe can use them.
+    pub loupe_edge: usize,
     /// Develop defaults applied on import (persisted in prefs.json).
     pub import_defaults: import::ImportDefaults,
     /// Disk budget of the library's thumbnail cache in MB (0 = default; persisted in prefs.json).
     pub cache_mb: u32,
+    /// The once-per-session alert for a drive running low under the preview cache ([`disk_space`]).
+    pub(crate) disk_alert: disk_space::DiskAlertState,
     /// Slideshow playback settings (`slideshow.playback`; persisted in prefs.json).
     pub slideshow: slideshow::PlaybackSettings,
     /// Slideshow slide layout: Layout, Options and Backdrop (`slideshow.layout`; persisted in
@@ -599,8 +619,11 @@ impl Session {
             segmenter: segment::Segmenter::default(),
             active_spot: None,
             finds: Default::default(),
+            spot_sources: Default::default(),
             lama: lama_fill::LamaFill::new(activity.clone()),
+            object_jobs: Default::default(),
             learn: learn::LearnEdits::new(activity.clone()),
+            model_runtimes: Default::default(),
             parsing: people_parsing::PeopleParsing::new(activity.clone()),
             library: None,
             library_identity: Arc::new(()),
@@ -632,10 +655,13 @@ impl Session {
             folder_changes: None,
             activity,
             preview_build: None,
+            prep: Default::default(),
+            loupe_edge: 0,
             slideshow_export: None,
             animated_gif: None,
             import_defaults: import::ImportDefaults::default(),
             cache_mb: 0,
+            disk_alert: Default::default(),
             slideshow: slideshow::PlaybackSettings::default(),
             slide_layout: slide::SlideSettings::default(),
             slide_overlays: slide_overlay::OverlaySettings::default(),
@@ -928,6 +954,8 @@ impl Session {
     }
 
     pub(crate) fn undo_step_with(&mut self, fs: &dyn rename::MoveFs) -> Result<String> {
+        // a spot clicked a moment ago is the step to undo, not the one before it (`spot_source`)
+        self.finish_spot_sources();
         let mut e = self.undo.pop().ok_or_else(|| EngineError::Other("nothing to undo".into()))?;
         if e.book.is_some() {
             return self.book_history_step(e, true);
@@ -962,6 +990,7 @@ impl Session {
     }
 
     pub(crate) fn redo_step_with(&mut self, fs: &dyn rename::MoveFs) -> Result<String> {
+        self.finish_spot_sources();
         let mut e = self.redo.pop().ok_or_else(|| EngineError::Other("nothing to redo".into()))?;
         if e.book.is_some() {
             return self.book_history_step(e, false);
@@ -1181,8 +1210,9 @@ impl Session {
             return Vec::new();
         }
         let Some(old) = self.develop_of(id) else { return Vec::new() };
-        let mut old_json = old.to_json();
-        let mut new_json = new.to_json();
+        // (Remove Hot Pixels, omitted when off, is stated: switching it off is a change)
+        let mut old_json = old.to_json_for_merge();
+        let mut new_json = new.to_json_for_merge();
         // False is omitted from stored profile JSON. Keep it explicit for this comparison so
         // switching camera local tone mapping off is a change without copying untouched values.
         old_json["profile"]["camera_local_tone"] = Value::Bool(old.profile.camera_local_tone);
@@ -1320,6 +1350,7 @@ impl Session {
     /// Commit the interaction as one undo step (no-op if nothing changed).
     pub fn end_interaction(&mut self) -> Result<()> {
         let Some(i) = self.interaction.take() else { return Ok(()) };
+        self.spot_sources.drag_ended(i.photo);
         let Some(cur) = self.develop_of(i.photo) else { return Ok(()) };
         if *cur == *i.original {
             return Ok(());
@@ -1337,6 +1368,8 @@ impl Session {
 
     pub fn cancel_interaction(&mut self) -> Result<()> {
         if let Some(i) = self.interaction.take() {
+            // spots clicked during the drag go with it (`spot_source`)
+            self.spot_sources.drag_cancelled(i.photo);
             self.apply_silent(Op::SetDevelop { id: i.photo, settings: i.original, label: i.label, edited: None })?;
         }
         Ok(())

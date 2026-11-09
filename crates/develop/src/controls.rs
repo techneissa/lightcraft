@@ -180,6 +180,7 @@ use Track::*;
 
 controls! {
     "profile.amount" => profile.amount, "Amount", Profile, 0, 200, 100, 1, 0, Plain;
+    "look.amount" => look.amount, "Look Amount", Profile, 0, 100, 100, 1, 0, Plain;
     "wb.temp" => wb.temp, "Temp", Color, 2000, 50000, 6500, 50, 0, Temp;
     "wb.tint" => wb.tint, "Tint", Color, -150, 150, 0, 1, 0, Tint;
     "light.exposure" => light.exposure, "Exposure", Light, -5, 5, 0, 0.01, 2, Centered;

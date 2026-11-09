@@ -165,6 +165,8 @@ impl ImportJob {
     pub fn new(s: &mut Session, opts: ImportOptions) -> crate::Result<Self> {
         // the import reads (and with Move, moves) sidecars: the queued automatic writes land first
         s.finish_sidecar_writes();
+        // a recipe is checked before any file is read or placed, not when the photos are committed
+        crate::cmd::check_recipe(&opts.recipe).map_err(|e| crate::cmd::bad("library.import", e))?;
         let mode = opts.mode;
         // Only a library on disk has an `Originals/` folder. The browser build keeps the bytes of
         // every added file in its own storage already, so "copy" there means "add".
@@ -531,6 +533,8 @@ impl Session {
             key,
             cached: Vec::new(),
             embedded,
+            embedded_cache: None,
+            embedded_on_disk: false,
             minimum_embedded_edge,
             small: Some(Box::new(small)),
         })

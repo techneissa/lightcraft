@@ -7,15 +7,20 @@ use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock, Weak};
 
 #[cfg(not(target_arch = "wasm32"))]
+pub mod area;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod dirs;
+pub mod glare;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod highlights;
 mod shared_models;
+pub mod tiles;
 
-const MAGIC: &[u8; 8] = b"LCREFL01";
-const MAX_EDGE: usize = 1024;
+const MAGIC: &[u8; 8] = tiles::MAGIC_V1;
 type Mix = (Reflection, Weak<Rgb32f>, Arc<Rgb32f>);
 #[derive(Default)]
 struct Cache {
-    grids: HashMap<String, Arc<Rgb32f>>,
+    grids: HashMap<String, Arc<Vec<tiles::Tile>>>,
     mix: Option<Mix>,
 }
 static CACHE: OnceLock<Mutex<Cache>> = OnceLock::new();
@@ -58,7 +63,7 @@ pub fn apply(
     let grid = match cache.grids.get(&r.correction) {
         Some(g) => g.clone(),
         None => {
-            let g = Arc::new(read_grid(&r.correction)?);
+            let g = Arc::new(tiles::read(&r.correction)?);
             if cache.grids.len() >= 8 {
                 cache.grids.clear();
             }
@@ -66,7 +71,6 @@ pub fn apply(
             g
         }
     };
-    let resized = lightcraft_raster::resample::resize(&grid, src.width, src.height, lightcraft_raster::resample::Filter::Bilinear);
     let sky = if r.protect_sky {
         let small = lightcraft_raster::resample::fit(src, 384, 384, lightcraft_raster::resample::Filter::Lanczos3);
         let frame = lightcraft_pipeline::frame_for(&small, &Default::default(), &Default::default(), false);
@@ -86,18 +90,45 @@ pub fn apply(
     };
     let mut image = (**src).clone();
     let amount = r.amount as f32 / 100.0;
-    for (i, (pixel, delta)) in image.data.iter_mut().zip(&resized.data).enumerate() {
-        let x = (i % src.width) as f64 + 0.5;
-        let y = (i / src.width) as f64 + 0.5;
-        if r.limit_region
-            && (x * 100.0 / (src.width as f64) < r.left
-                || x * 100.0 / (src.width as f64) > r.right
-                || y * 100.0 / (src.height as f64) < r.top
-                || y * 100.0 / (src.height as f64) > r.bottom)
-        {
-            continue;
+    let correct = Correct { r, amount, sky: sky.as_ref(), width: src.width, height: src.height };
+    // Fork feature (fork/glare-highlights.md): each tile covers its own box (the whole photo for a v1 file)
+    for tile in grid.iter() {
+        let Some([x0, y0, x1, y1]) = tile.pixel_box(src.width, src.height) else { continue };
+        let resized = lightcraft_raster::resample::resize(&tile.grid, x1 - x0, y1 - y0, lightcraft_raster::resample::Filter::Bilinear);
+        for (k, delta) in resized.data.iter().enumerate() {
+            let i = (y0 + k / resized.width) * src.width + x0 + k % resized.width;
+            let Some(pixel) = image.data.get_mut(i) else { continue };
+            correct.pixel(pixel, delta, i);
         }
-        let mut a = amount * (1.0 - sky.as_ref().and_then(|s| s.data.get(i)).copied().unwrap_or(0.0).clamp(0.0, 1.0));
+    }
+    let image = Arc::new(image);
+    cache.mix = Some((r.clone(), Arc::downgrade(src), image.clone()));
+    Ok(image)
+}
+
+/// How one render corrects its pixels: the settings, their Amount as a fraction, the sky's protection and the size.
+struct Correct<'a> {
+    r: &'a Reflection,
+    amount: f32,
+    sky: Option<&'a lightcraft_raster::Plane>,
+    width: usize,
+    height: usize,
+}
+
+impl Correct<'_> {
+    /// The correction of pixel `i` by `delta`.
+    fn pixel(&self, pixel: &mut [f32; 3], delta: &[f32; 3], i: usize) {
+        // no change here (a tile's margin): the pixel stays exactly as it was, negative values included
+        if delta.iter().all(|d| *d == 0.0) {
+            return;
+        }
+        let (r, w, h) = (self.r, self.width as f64, self.height as f64);
+        let x = (i % self.width.max(1)) as f64 + 0.5;
+        let y = (i / self.width.max(1)) as f64 + 0.5;
+        if r.limit_region && (x * 100.0 / w < r.left || x * 100.0 / w > r.right || y * 100.0 / h < r.top || y * 100.0 / h > r.bottom) {
+            return;
+        }
+        let mut a = self.amount * (1.0 - self.sky.and_then(|s| s.data.get(i)).copied().unwrap_or(0.0).clamp(0.0, 1.0));
         if r.detail_protection > 0.0 {
             let brightness = pixel.iter().copied().fold(0.0f32, f32::max);
             let largest = delta.iter().map(|v| v.abs()).fold(0.0f32, f32::max);
@@ -107,45 +138,12 @@ pub fn apply(
             }
         }
         if a <= 0.0 {
-            continue;
+            return;
         }
         for (v, d) in pixel.iter_mut().zip(delta) {
             *v = (*v - a * d).max(0.0);
         }
     }
-    let image = Arc::new(image);
-    cache.mix = Some((r.clone(), Arc::downgrade(src), image.clone()));
-    Ok(image)
-}
-
-fn read_grid(path: &str) -> Result<Rgb32f, String> {
-    use std::io::Read;
-    let mut file = std::fs::File::open(path).map_err(|e| format!("Reflection correction missing: {e}. Recalculate or reset reflection removal."))?;
-    let mut bytes = Vec::new();
-    file.by_ref().take((16 + MAX_EDGE * MAX_EDGE * 12 + 1) as u64).read_to_end(&mut bytes).map_err(|e| e.to_string())?;
-    if bytes.get(..8) != Some(MAGIC.as_slice()) {
-        return Err("Invalid reflection correction".into());
-    }
-    let u32_at = |n| -> Result<usize, String> {
-        let b: [u8; 4] = bytes.get(n..n + 4).ok_or("Truncated correction")?.try_into().map_err(|_| "Truncated correction")?;
-        Ok(u32::from_le_bytes(b) as usize)
-    };
-    let (w, h) = (u32_at(8)?, u32_at(12)?);
-    if w == 0 || h == 0 || w > MAX_EDGE || h > MAX_EDGE || bytes.len() != 16 + w * h * 12 {
-        return Err("Invalid reflection dimensions".into());
-    }
-    let mut data = Vec::with_capacity(w * h);
-    for b in bytes.get(16..).ok_or("Truncated correction")?.as_chunks::<12>().0 {
-        let mut p = [0.0; 3];
-        for (v, b) in p.iter_mut().zip(b.as_chunks::<4>().0.iter()) {
-            *v = f32::from_le_bytes(*b);
-            if !v.is_finite() || v.abs() > 4.0 {
-                return Err("Invalid reflection values".into());
-            }
-        }
-        data.push(p);
-    }
-    Ok(Rgb32f { width: w, height: h, data })
 }
 
 /// Models live under the platform's application support directory, or an explicit override.
@@ -185,7 +183,8 @@ pub fn make(source: crate::media::SourceRef, key: Option<Hash128>, edge: u32, mo
     let matrix = lightcraft_color::REC2020.to_space(&lightcraft_color::SRGB);
     let bytes: Vec<u8> = small.data.iter().flat_map(|p| matrix.apply_f32(*p).map(lightcraft_color::transfer::encode_srgb8)).collect();
     let clean = net.infer(&bytes, small.width, small.height)?;
-    let root = crate::config::config_dir().ok_or("No local configuration directory")?.join("reflection-cache");
+    // Fork (fork/glare-highlights.md): the folder tests can replace
+    let root = area::cache_root()?;
     std::fs::create_dir_all(&root).map_err(|e| e.to_string())?;
     let nonce = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_err(|e| e.to_string())?.as_nanos();
     let path = root.join(format!("{}-{nonce}.lcr", std::process::id()));
@@ -211,7 +210,9 @@ pub fn make(source: crate::media::SourceRef, key: Option<Hash128>, edge: u32, mo
             enabled: true,
             correction: path.to_string_lossy().into(),
             source_key: identity(key),
-            amount: 35.0,
+            // Fork (fork/glare-highlights.md): the full result; at 35 % with Detail Protection 60 % only about a fifth
+            // of the model's change showed, which read as "does nothing"
+            amount: 100.0,
             quality: edge,
             model: model.into(),
             protect_sky: true,
@@ -344,12 +345,28 @@ mod tests {
         assert!(d.reflection.top < d.reflection.bottom);
     }
     #[test]
+    fn a_tile_with_no_change_leaves_its_pixels_exactly_as_they_were() {
+        // negative linear values (outside the gamut) under a tile's zero margin must not be clamped to 0
+        let dir = std::env::temp_dir().join(format!("lc-reflection-zero-{}", std::process::id()));
+        let mut grid = Rgb32f::filled(4, 4, [0.0; 3]);
+        grid.data[5] = [0.1, 0.1, 0.1];
+        let tile = tiles::Tile { rect: [0.0, 0.0, 1.0, 1.0], grid };
+        let key = Some(Hash128(4321));
+        let r = area::save_in(&dir, &[tile], key, Reflection { amount: 100.0, ..Default::default() }).unwrap();
+        let src = Arc::new(Rgb32f::filled(8, 8, [-0.05, 0.5, -0.01]));
+        let out = apply(&src, &r, key, None).unwrap();
+        assert_eq!(out.data[0], src.data[0]);
+        assert_eq!(out.data[63], src.data[63]);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn corrupt_reflection_file_is_an_error_not_a_panic() {
         let path = std::env::temp_dir().join(format!("lc-reflection-corrupt-{}", std::process::id()));
         std::fs::write(&path, b"LCREFL01").unwrap();
-        assert!(read_grid(&path.to_string_lossy()).is_err());
+        assert!(tiles::read(&path.to_string_lossy()).is_err());
         grid(&path, f32::NAN);
-        assert!(read_grid(&path.to_string_lossy()).is_err());
+        assert!(tiles::read(&path.to_string_lossy()).is_err());
         std::fs::remove_file(path).unwrap();
     }
 }

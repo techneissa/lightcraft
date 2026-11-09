@@ -33,8 +33,11 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
         }
         let p = if painting && own == ToolOverlay::Auto { &quiet } else { &p };
         let col = Color32::from_white_alpha(if sel { 230 } else { 150 });
-        for q in &s.points {
-            p.circle_stroke(map.screen(*q), r, Stroke::new(if sel { 1.5 } else { 1.0 }, col));
+        // (a spot in an object's shape shows its outline, `object_remove`)
+        if !super::object_remove::outline(ui.ctx(), p, map, s, sel) {
+            for q in &s.points {
+                p.circle_stroke(map.screen(*q), r, Stroke::new(if sel { 1.5 } else { 1.0 }, col));
+            }
         }
         let Some(&t) = s.points.first() else { continue };
         let tq = map.screen(t);
@@ -145,6 +148,10 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
     if (resp.drag_stopped() || resp.clicked())
         && let Some(Gesture::Spot { points }) = app.gesture.take()
     {
+        // Object mode: the object under the click or stroke (`object_remove`)
+        if super::object_remove::commit(app, ui.ctx(), &points, resp.clicked()) {
+            return;
+        }
         let mode = match app.ui.tool.as_str() {
             "heal" => "heal",
             "clone" => "clone",
@@ -152,8 +159,7 @@ pub(super) fn remove_overlay(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &
             _ => "remove",
         };
         let pts: Vec<[f64; 2]> = points.iter().map(|q| [q.x, q.y]).collect();
-        let params =
-            json!({"mode": mode, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity});
+        let params = json!({"mode": mode, "points": pts, "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity, "background": true});
         let t_add = std::time::Instant::now();
         let _ = app.run("spot.add", crate::panels::right::with_fill(app, mode, params));
         if lightcraft_pipeline::profiling() {
@@ -208,7 +214,7 @@ fn spot_keys(app: &mut LightcraftApp, ui: &mut egui::Ui, map: &CanvasMap, d: &De
             "fill" => "fill",
             _ => "remove",
         };
-        let params = json!({"mode": mode, "points": [[place.0, place.1]], "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity});
+        let params = json!({"mode": mode, "points": [[place.0, place.1]], "size": app.ui.remove_size, "feather": app.ui.remove_feather, "opacity": app.ui.remove_opacity, "background": true});
         let t_add = std::time::Instant::now();
         let _ = app.run("spot.add", crate::panels::right::with_fill(app, mode, params));
         if lightcraft_pipeline::profiling() {

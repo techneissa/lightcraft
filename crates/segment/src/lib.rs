@@ -46,6 +46,7 @@ mod tracker;
 mod vit;
 #[cfg(not(target_arch = "wasm32"))]
 mod weights;
+pub mod whole;
 
 use std::path::{Path, PathBuf};
 #[cfg(not(target_arch = "wasm32"))]
@@ -241,6 +242,23 @@ impl Sam3 {
         let f = enc.tracker.as_ref().ok_or_else(|| Error::Model("tracker features".into()))?;
         // one click: SAM's three alternatives, best by predicted IoU; more: the single mask
         let p = tracker.predict(f, clicks, clicks.len() == 1)?;
+        Ok(Prediction { logits: p.logits, score: p.iou * sigmoid(p.object_score) })
+    }
+
+    /// Segment one object to remove it (fork, `fork/object-remove.md`): one include click takes the alternative that
+    /// covers the whole object ([`whole::whole_object`]), not the best scoring part; anything else as
+    /// [`Sam3::segment_clicks`] (an exclude click narrows as it always did).
+    pub fn segment_object(&mut self, enc: &mut Encoded, clicks: &[Click]) -> Result<Prediction> {
+        if !(clicks.len() == 1 && clicks.iter().all(|c| c.positive)) {
+            return self.segment_clicks(enc, clicks);
+        }
+        let (neck, tracker) = self.tracker_parts()?;
+        if enc.tracker.is_none() {
+            let levels = neck.forward(&enc.backbone, 3)?;
+            enc.tracker = Some(tracker.features(&levels)?);
+        }
+        let f = enc.tracker.as_ref().ok_or_else(|| Error::Model("tracker features".into()))?;
+        let p = tracker.predict_whole(f, clicks)?;
         Ok(Prediction { logits: p.logits, score: p.iou * sigmoid(p.object_score) })
     }
 

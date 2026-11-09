@@ -205,7 +205,7 @@ fn ai_shapes_without_a_segmentation_select_nothing() {
         MaskShape::Prompt { text: "sky".into(), seg: None, detail: vec![], edge: 0.0 },
         MaskShape::Prompt {
             text: "sky".into(),
-            seg: Some(SegMask { side: 4, data: "damaged!".into(), rect: None, model: None }),
+            seg: Some(SegMask { side: 4, data: "damaged!".into(), rect: None, model: None, grid: None }),
             detail: vec![],
             edge: 0.0,
         },
@@ -773,4 +773,15 @@ fn invert_mask_turns_the_base_around_and_later_parts_work_on_the_inverted_mask()
     // an inverted mask with no part selects everything
     let a = alpha(&Mask { invert: true, ..Default::default() });
     assert!(at(&a, 5) > 0.99 && at(&a, 95) > 0.99);
+}
+
+#[test]
+fn intersect_first_component_selects_its_shape() {
+    let f = frame(100, 100);
+    let img = Rgb32f::new(100, 100);
+    let l = Plane::new(100, 100);
+    let shape = MaskShape::Radial { center: Point::new(0.5, 0.5), rx: 0.2, ry: 0.2, angle: 0.0, feather: 20.0, invert: false };
+    let m = Mask { components: vec![MaskComponent { name: None, op: MaskOp::Intersect, invert: false, shape }], ..Default::default() };
+    let a = evaluate_one(&m, &f, 100, 100, &img, &l, 0.0, None);
+    assert!(a.get(50, 50) > 0.99 && a.get(5, 5) < 0.01, "intersect first: {} {}", a.get(50, 50), a.get(5, 5));
 }

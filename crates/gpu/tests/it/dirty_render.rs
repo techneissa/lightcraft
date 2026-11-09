@@ -134,7 +134,8 @@ fn a_spot_edit_renders_only_the_tiles_it_reaches_with_a_whole_render_s_pixels() 
     small(n, "delete");
     s = shown;
     let (n, _) = v.render(&s, "undo the delete and the hide");
-    small(n, "undo");
+    // (two spots come back at once, each as far as the joint colour noise reduction reaches, about 170 px here)
+    assert!(n > 0 && n * 2 < all, "undo: {n} of {all} tiles");
     let (n, _) = v.render(&s, "the same settings again");
     assert_eq!(n, 0, "nothing changed, nothing rendered");
     s.light.exposure = 0.5;

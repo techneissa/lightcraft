@@ -110,6 +110,12 @@ fn a_search_from_the_menu_reads_off_the_ui_thread_and_the_window_goes_on() {
     }
     // nothing has been read yet: the command and the frames waited for none of it
     assert_eq!(h.app.session.filter, Default::default(), "no answer before the files are read");
+    // the worker sets the row's total when it starts, which a loaded machine can leave for later
+    let waited = Instant::now();
+    while rows(&h)[0].total == 0 && waited.elapsed() < T {
+        h.step();
+        std::thread::sleep(Duration::from_millis(1));
+    }
     let row = &rows(&h)[0];
     assert_eq!(row.label, LABEL);
     assert_eq!(row.total, PHOTOS);

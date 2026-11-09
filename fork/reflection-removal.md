@@ -75,7 +75,7 @@ Download… in the panel works for DIRS-MuGI, DIRS-PAIR and RDNet (asks first, r
 
 RDNet notes: the Space runs inputs resized down to a multiple of 32; this port pads by edge replication instead (the same in the PyTorch reference used for the check). Only the decoder branch that gives the reflection is run, once, after the last sub-network. The Space's own `app.py` feeds 0-255 values; the port feeds 0-1, as the authors' dataset code does.
 
-### UnReflectAnything: not ported yet (stopped for context, not because it cannot be done)
+### UnReflectAnything: not ported (decision 2026-11-08, #100: 3.9 GB, no faces or glasses in its paper, below DHAN-SHR on paired tests; glare is handled by the Highlights mode, [glare-highlights.md](glare-highlights.md))
 - Needs: DINOv3 ViT-L/16 encoder with RoPE (24 layers at 896 px, from `facebook/dinov3-vitl16-pretrain-lvd1689m`), two DPT decoders (diffuse and highlight), the `TokenInpainter_Prior` (6 blocks, 16 heads, local prior blending) and the mask logic of `inference.py` (brightness threshold 0.7, mask dilation 11). Code: github.com/alberto-rota/UnReflectAnything (`models.py` 1660 lines, `token_inpainters.py`, `utilities/inference.py`); layout in `config/pretrained_config.yaml`.
 - `full_model_weights.pt` is a pickle holding a `dotmap.DotMap` object next to the tensors: PyTorch's `weights_only` loader refuses it. Candle's reader must be tested on it; if it refuses too, a small restricted unpickler is needed (never run the pickle).
 - It removes highlights on shiny objects (endoscopy, glossy products), so it needs its own "Highlights" mode in the panel.

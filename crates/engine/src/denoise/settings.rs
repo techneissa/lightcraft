@@ -1,3 +1,5 @@
+#[cfg(feature = "denoise")]
+use super::builtin::{builtin_marker, forget_builtin_card};
 use super::gpu::GPU_SETUP_MARKER;
 use super::model::RunOn;
 use super::{DenoiserManifest, Deserialize, Duration, Path, PathBuf, Serialize, Value};
@@ -143,7 +145,7 @@ fn installed_in(dir: &Path, shared: bool) -> Vec<Installed> {
         let p = e.path();
         let Some(name) = p.file_name().and_then(|n| n.to_str()).map(str::to_string) else { continue };
         let onnx = p.join("model.onnx");
-        if !lightcraft_denoise::licence::valid_id(&name) || !p.is_dir() || !onnx.is_file() {
+        if name == lightcraft_denoise::builtin::ID || !lightcraft_denoise::licence::valid_id(&name) || !p.is_dir() || !onnx.is_file() {
             continue;
         }
         let Some(m) = read_capped(&p.join("denoise-model.json"), lightcraft_denoise::manifest::MAX_MANIFEST_BYTES)
@@ -167,4 +169,7 @@ pub(crate) fn forget_gpu_set_ups(roots: &ModelRoots) {
     for i in installed_models(roots) {
         let _ = std::fs::remove_file(i.onnx.with_file_name(GPU_SETUP_MARKER));
     }
+    // (the built-in denoiser keeps its card marker in the library's own models folder, as `denoise_refresh_active` names it)
+    #[cfg(feature = "denoise")]
+    forget_builtin_card(&builtin_marker(&roots.old.join(lightcraft_denoise::builtin::ID)));
 }

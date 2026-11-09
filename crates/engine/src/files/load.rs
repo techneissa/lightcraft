@@ -5,6 +5,7 @@ use super::probe::preview_reason;
 use super::{
     Arc, CameraColourModel, DcpProfile, DenoiseSpec, Filter, HIGHLIGHT_CLIP, LoadOptions, Orientation, Rgb32f, SourceInfo, fit, xy_to_temp_tint,
 };
+use crate::media::RawDecode;
 
 /// Decode a file into a linear Rec.2020 image no larger than `max_edge`, oriented.
 ///
@@ -12,41 +13,41 @@ use super::{
 /// instead of each one waking the pool from outside and waiting for it (which costs more than the
 /// loops themselves when the machine is busy).
 pub fn load_bytes(bytes: &[u8], max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    load_bytes_with(bytes, max_edge, LoadOptions::default(), None)
+    load_bytes_decoded(bytes, max_edge, LoadOptions::default(), RawDecode::default())
 }
 
 /// [`load_bytes`] with the photo's settings the decode depends on, developing a raw file with an imported camera
 /// profile (`dcp`) in place of its own colour model.
 pub fn load_bytes_with(bytes: &[u8], max_edge: usize, options: LoadOptions, dcp: Option<&DcpProfile>) -> Result<(Rgb32f, SourceInfo), String> {
+    load_bytes_decoded(bytes, max_edge, options, RawDecode { dcp, outliers: false })
+}
+
+/// [`load_bytes`] with the photo's settings the decode depends on, decoding a raw file as `with` says.
+pub fn load_bytes_decoded(bytes: &[u8], max_edge: usize, options: LoadOptions, with: RawDecode<'_>) -> Result<(Rgb32f, SourceInfo), String> {
     rayon::scope(|_| {
-        load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None, false, options, dcp, &macos::System).map(|(img, _, info, _)| (img, info))
+        load_bytes_now(std::borrow::Cow::Borrowed(bytes), max_edge, None, false, options, with, &macos::System).map(|(img, _, info, _)| (img, info))
     })
 }
 
 /// [`load_bytes`] taking the file's bytes: a raw file's bytes are freed as soon as it is decoded
 /// (less memory held while it is developed).
 pub fn load_vec(bytes: Vec<u8>, max_edge: usize) -> Result<(Rgb32f, SourceInfo), String> {
-    load_vec_with(bytes, max_edge, LoadOptions::default(), None)
+    load_vec_with(bytes, max_edge, LoadOptions::default(), RawDecode::default())
 }
 
-/// [`load_vec`] with the photo's settings the decode depends on and its imported camera profile (`dcp`).
-pub fn load_vec_with(bytes: Vec<u8>, max_edge: usize, options: LoadOptions, dcp: Option<&DcpProfile>) -> Result<(Rgb32f, SourceInfo), String> {
+/// [`load_vec`] with the photo's settings the decode depends on, decoding a raw file as `with` says.
+pub fn load_vec_with(bytes: Vec<u8>, max_edge: usize, options: LoadOptions, with: RawDecode<'_>) -> Result<(Rgb32f, SourceInfo), String> {
     rayon::scope(move |_| {
-        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, false, options, dcp, &macos::System).map(|(img, _, info, _)| (img, info))
+        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, false, options, with, &macos::System).map(|(img, _, info, _)| (img, info))
     })
 }
 
 /// [`load_vec`] for a thumbnail: a DNG that keeps reduced-resolution copies of its raw image (Lightroom's HDR and
 /// panorama merges) develops the smallest that covers `max_edge` instead of the whole image. The flag says whether
 /// it did: such a picture is not the full image, and an export never renders from it.
-pub fn load_vec_reduced(
-    bytes: Vec<u8>,
-    max_edge: usize,
-    options: LoadOptions,
-    dcp: Option<&DcpProfile>,
-) -> Result<(Rgb32f, SourceInfo, bool), String> {
+pub fn load_vec_reduced(bytes: Vec<u8>, max_edge: usize, options: LoadOptions, with: RawDecode<'_>) -> Result<(Rgb32f, SourceInfo, bool), String> {
     rayon::scope(move |_| {
-        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, true, options, dcp, &macos::System)
+        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, None, true, options, with, &macos::System)
             .map(|(img, _, info, reduced)| (img, info, reduced))
     })
 }
@@ -59,10 +60,10 @@ pub fn load_vec_pair(
     max_edge: usize,
     spec: &DenoiseSpec,
     options: LoadOptions,
-    dcp: Option<&DcpProfile>,
+    with: RawDecode<'_>,
 ) -> Result<(Rgb32f, Option<Rgb32f>, SourceInfo), String> {
     rayon::scope(move |_| {
-        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec), false, options, dcp, &macos::System)
+        load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, Some(spec), false, options, with, &macos::System)
             .map(|(img, twin, info, _)| (img, twin, info))
     })
 }
@@ -77,10 +78,10 @@ pub(crate) fn load_file(
     denoise: Option<&DenoiseSpec>,
     allow_reduced: bool,
     options: LoadOptions,
-    dcp: Option<&DcpProfile>,
+    with: RawDecode<'_>,
 ) -> Result<Loaded, String> {
     let job = macos::FileJob::current(path);
-    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, denoise, allow_reduced, options, dcp, &job))
+    rayon::scope(move |_| load_bytes_now(std::borrow::Cow::Owned(bytes), max_edge, denoise, allow_reduced, options, with, &job))
 }
 
 /// The denoised camera RGB of `raw` from its cached product, as the plain development would have it: the default
@@ -114,9 +115,10 @@ pub(super) fn load_bytes_now(
     denoise: Option<&DenoiseSpec>,
     allow_reduced: bool,
     options: LoadOptions,
-    dcp: Option<&DcpProfile>,
+    with: RawDecode<'_>,
     backend: &dyn Backend,
 ) -> Result<Loaded, String> {
+    let dcp = with.dcp;
     if lightcraft_raw::probe(&bytes).is_some() {
         // macOS Colour: the Mac's decoder makes the picture from the file's header alone (the mosaic is never
         // unpacked); when it cannot, the photo is decoded as Camera Matching below and says why
@@ -179,6 +181,14 @@ pub(super) fn load_bytes_now(
             }
             Err(Err(e)) => return Err(e),
         };
+        // single outlier photosites, replaced in the mosaic before anything is developed from it (#1345)
+        if with.outliers {
+            let t = std::time::Instant::now();
+            let n = raw.suppress_hot_pixels_with(super::hot_pixel_limit());
+            if lightcraft_pipeline::profiling() {
+                eprintln!("[profile] raw outliers: {n} photosites replaced in {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+            }
+        }
         // Embedded lens corrections are applied by the pipeline ("Enable Profile Corrections"), not baked in
         // (removed before the camera look's binned sensor proxy too, which needs an empty `OpcodeList3`).
         let info = raw.info();

@@ -335,6 +335,8 @@ fn a_grading_hue_scales_along_the_shorter_arc() {
             Change { id: "grading.shadows.sat".into(), from: 20.0, to: 40.0 },
         ],
         curve: None,
+        look: None,
+        look_from: Default::default(),
         loss_before: 0.0,
         loss_after: 0.0,
         evals: 0,
@@ -374,4 +376,177 @@ fn pictures_past_the_pixel_cap_are_refused_and_large_ones_made_small() {
     // a picture already small is kept as it is
     let little = Rgba8::from_fn(300, 200, |x, _| [x as u8, 0, 0, 255]);
     assert_eq!(reference::fit_edge(&little, reference::EDGE).unwrap().data, little.data);
+}
+
+fn fit_with(src: &Rgb32f, settings: &DevelopSettings, reference: &Rgba8, opts: &MatchOptions) -> MatchResult {
+    let info = SourceInfo::default();
+    let never = AtomicBool::new(false);
+    match_look(&Target { src, info: &info, settings }, reference, &[RegionPair::whole()], opts, &never, &|_, _| {}).unwrap()
+}
+
+/// The furthest a change to `id` may go (the fit's caps, plus rounding).
+fn cap_of(c: &Change) -> f64 {
+    use params::{Param, Zone};
+    let id = c.id.as_str();
+    let p = match id {
+        "wb.temp" => return f64::INFINITY,
+        "wb.tint" => Param::Tint,
+        _ if id.starts_with("grading.") && id.ends_with(".hue") => return f64::INFINITY,
+        _ if id.starts_with("grading.") => Param::Wheel(Zone::Shadows, false),
+        _ => Param::Control(lightcraft_develop::CONTROLS.iter().find(|s| s.id == id).map(|s| s.id).unwrap()),
+    };
+    p.cap(true) + 0.51
+}
+
+#[test]
+fn the_fit_never_moves_a_slider_past_its_cap() {
+    let src = scene(Kind::Canyon, 17);
+    // a reference far away in every way: the fit would push sliders to their ends without the caps
+    let wild = edited(|d| {
+        d.light.contrast = 100.0;
+        d.light.shadows = -100.0;
+        d.color.saturation = 100.0;
+        d.color.vibrance = 100.0;
+        controls::set(d, "mixer.blue.lum", -100.0);
+        controls::set(d, "mixer.orange.sat", 100.0);
+        d.wb.mode = lightcraft_develop::WbMode::Custom;
+        d.wb.temp = 3000.0;
+    });
+    let r = fit(&src, &DevelopSettings::default(), &render(&scene(Kind::AlpineLake, 5), &wild));
+    eprintln!("{:#?}", r.changes);
+    for c in &r.changes {
+        assert!((c.to - c.from).abs() <= cap_of(c), "{} moved {} → {}", c.id, c.from, c.to);
+        if let Some(spec) = lightcraft_develop::CONTROLS.iter().find(|s| s.id == c.id && !c.id.starts_with("grading.") && c.id != "wb.temp") {
+            let (lo, hi) = params::Param::Control(spec.id).band();
+            assert!(c.to >= lo - 0.51 && c.to <= hi + 0.51, "{} at {} is outside {lo}..{hi}", c.id, c.to);
+        }
+        if c.id.starts_with("mixer.") {
+            assert!((c.to - c.from).abs() <= 35.5, "{} moved {} → {}", c.id, c.from, c.to);
+        }
+    }
+    let mired = |t: f64| 1e6 / t;
+    assert!((mired(value(&r, "wb.temp")) - mired(DevelopSettings::default().wb.temp)).abs() <= 81.0);
+}
+
+#[test]
+fn a_near_identical_pair_moves_little() {
+    let src = scene(Kind::AlpineLake, 3);
+    let d = DevelopSettings::default();
+    let near = edited(|d| {
+        d.light.exposure = 0.05;
+        d.color.saturation = 3.0;
+    });
+    let r = fit(&src, &d, &render(&src, &near));
+    eprintln!("{:#?}", r.changes);
+    for c in &r.changes {
+        let tol = match c.id.as_str() {
+            "light.exposure" => 0.2,
+            "wb.temp" => 250.0,
+            _ => 8.0,
+        };
+        assert!((c.to - c.from).abs() <= tol, "{} moved {} → {}", c.id, c.from, c.to);
+    }
+}
+
+#[test]
+fn the_residual_look_is_off_by_default_and_empty_for_the_same_look() {
+    let src = scene(Kind::AlpineLake, 11);
+    let d = edited(|d| d.light.exposure = 0.2);
+    let reference = render(&src, &d);
+    assert!(fit(&src, &d, &reference).look.is_none(), "off by default");
+    let on = MatchOptions { look: true, ..MatchOptions::default() };
+    let r = fit_with(&src, &d, &reference, &on);
+    assert!(r.look.is_none() && r.settings.look.is_identity(), "{:?}", r.look);
+}
+
+#[test]
+fn the_residual_look_carries_a_cast_the_sliders_leave() {
+    let src = scene(Kind::Canyon, 17);
+    // a look no slider makes: a green cast in the highlights only, and bluer shadows
+    let look = lightcraft_develop::ResidualLook { cast: [[0.0, -0.03], [0.0, 0.0], [-0.03, 0.0]], ..Default::default() };
+    let reference = render(&src, &edited(|d| d.look = look.clone()));
+    let off = MatchOptions { grading: false, ..MatchOptions::default() };
+    let without = fit_with(&src, &DevelopSettings::default(), &reference, &off);
+    let with = fit_with(&src, &DevelopSettings::default(), &reference, &MatchOptions { look: true, ..off });
+    eprintln!("look {:?} loss {} vs {}", with.look, with.loss_after, without.loss_after);
+    let fitted = with.look.as_ref().expect("a Look");
+    assert!(with.loss_after < without.loss_after);
+    assert_eq!(with.settings.look, *fitted);
+    // its Amount scales with Match Look's, and Amount 0 leaves no Look
+    assert_eq!(with.scaled(0.5).look.map(|l| l.amount), Some(50.0));
+    assert!(with.scaled(0.0).look.is_none());
+}
+
+#[test]
+fn a_match_keeps_the_photos_look_unless_it_fits_a_new_one() {
+    let src = scene(Kind::AlpineLake, 11);
+    let mut d = DevelopSettings::default();
+    d.look.cast[1] = [0.02, 0.02];
+    let reference = render(&src, &DevelopSettings::default());
+    let kept = fit(&src, &d, &reference);
+    assert!(kept.look.is_none() && kept.settings.look == d.look, "unticked keeps the Look: {:?}", kept.settings.look);
+    let on = MatchOptions { look: true, ..MatchOptions::default() };
+    let r = fit_with(&src, &d, &reference, &on);
+    assert!(r.settings.look.is_identity(), "a new fit replaces it: {:?}", r.settings.look);
+}
+
+#[test]
+fn a_small_amount_stays_close_to_the_photos_earlier_look() {
+    let mut from = lightcraft_develop::ResidualLook::default();
+    from.cast[1] = [0.02, 0.0];
+    let mut to = lightcraft_develop::ResidualLook::default();
+    to.cast[1] = [0.0, 0.03];
+    let r = MatchResult {
+        settings: DevelopSettings::default(),
+        changes: Vec::new(),
+        curve: None,
+        look: Some(to.clone()),
+        look_from: from.clone(),
+        loss_before: 0.0,
+        loss_after: 0.0,
+        evals: 0,
+    };
+    let one = r.scaled(0.01).look.unwrap();
+    assert!((one.cast[1][0] - 0.0198).abs() < 1e-6 && (one.cast[1][1] - 0.0003).abs() < 1e-6 && one.amount == 100.0, "{one:?}");
+    assert_eq!(r.scaled(1.0).look, Some(to));
+    assert!(r.scaled(0.0).look.is_none(), "Amount 0 leaves the Look as it was");
+}
+
+/// Caps bound the final value too: a photo already at Saturation 40 matched to a far more colourful reference
+/// stops at the band's 50, not 40 + 35.
+#[test]
+fn the_fit_keeps_each_slider_within_its_band() {
+    let src = scene(Kind::Canyon, 17);
+    let start = edited(|d| d.color.saturation = 40.0);
+    let reference = render(&src, &edited(|d| d.color.saturation = 100.0));
+    let r = fit(&src, &start, &reference);
+    let sat = value(&r, "color.saturation");
+    assert!(sat <= 50.5, "saturation {sat}");
+    // a photo already past the band is not pulled in, only kept from going further
+    let past = edited(|d| d.color.saturation = 70.0);
+    let r = fit(&src, &past, &reference);
+    assert!(value(&r, "color.saturation") <= 70.5, "saturation {}", value(&r, "color.saturation"));
+}
+
+/// The residual Look has renders of its own: a budget the sliders use up still leaves it room.
+#[test]
+fn the_look_runs_when_the_sliders_use_their_renders() {
+    let src = scene(Kind::Canyon, 17);
+    let look = lightcraft_develop::ResidualLook { cast: [[0.0, -0.03], [0.0, 0.0], [-0.03, 0.0]], ..Default::default() };
+    let reference = render(&src, &edited(|d| d.look = look.clone()));
+    let opts = MatchOptions { budget: 60, look: true, grading: false, ..MatchOptions::default() };
+    let r = fit_with(&src, &DevelopSettings::default(), &reference, &opts);
+    assert!(r.look.is_some(), "a Look within {} renders", r.evals);
+}
+
+/// A grading wheel from a damaged file (an infinite hue) is no panic: the fit leaves that wheel alone.
+#[test]
+fn non_finite_settings_are_no_panic() {
+    let src = scene(Kind::AlpineLake, 3);
+    let mut d = DevelopSettings::default();
+    d.grading.shadows.hue = f64::INFINITY;
+    d.grading.shadows.sat = 20.0;
+    d.grading.highlights.sat = f64::NAN;
+    let r = fit(&src, &d, &render(&src, &edited(|d| d.light.exposure = 0.5)));
+    assert!(r.loss_after.is_finite() || r.loss_after == f64::MAX);
 }

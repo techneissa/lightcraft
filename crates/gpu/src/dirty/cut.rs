@@ -3,11 +3,14 @@
 //! directly or starting its runs on the whole image's rows, see [`box_chunk`]), medians, resampling taps and
 //! pointwise kernels. So a cut with the margin this module computes gives the whole image's bits in the rectangle.
 
+use lightcraft_pipeline::nrc_joint::{self, JointNoise};
 use lightcraft_pipeline::{Plan, local};
 use lightcraft_raster::resample::{Filter, weights};
 
 use crate::ctx::{Buf, groups2};
-use crate::render::{BOX_DIRECT_MAX, Cx, box_chunk, gaussian_at, guided_at, guided_coeffs_at, map, median_hv, pack_taps, resize_with};
+use crate::render::{
+    BOX_DIRECT_MAX, Cx, box_chunk, gaussian_at, guided_at, guided_coeffs_at, joint_band, joint_halo, map, median_hv, nrcj, pack_taps, resize_with,
+};
 
 /// `[x0, y0, x1, y1)` in pixels of the whole image.
 pub(crate) type Rect = [usize; 4];
@@ -72,6 +75,16 @@ pub(crate) fn copy_rect(
     }
     let p = [nc, sw, from.0, from.1, dw, to.0, to.1, rw, rh].map(|v| v as u32);
     cx.run("rect_copy", &p, &[Some(src), Some(dst)], groups2(rw, rh, [16, 16]));
+}
+
+/// Clear the rectangle `r` of the whole image `dst` (rows of `w` pixels, `nc` channels) to zero words.
+pub(crate) fn clear_rect(cx: &mut Cx<'_>, nc: usize, dst: &Buf, w: usize, r: &Rect) {
+    let (rw, rh) = (width(r), height(r));
+    if rw == 0 || rh == 0 {
+        return;
+    }
+    let p = [nc, w, r[0], r[1], rw, rh].map(|v| v as u32);
+    cx.run("rect_clear", &p, &[None, Some(dst)], groups2(rw, rh, [16, 16]));
 }
 
 /// The rectangle `r` of `part` as an image of its own; `None` when `part` does not hold all of it.
@@ -224,16 +237,68 @@ pub(crate) fn denoise_reach(plan: &Plan<'_>) -> Reach {
     let whole = (plan.w, plan.h);
     let (lum, col) = local::nr_params(&plan.settings, plan.detail_scale);
     let l = lum.map_or((0, 0), |nr| twice(gauss_reach(nr.sigma, whole)));
-    let c = col.map_or((0, 0), |nr| gauss_reach(nr.sigma, whole));
+    let c = match joint_scales(plan) {
+        Some(scales) => (joint_halo(&scales), joint_halo(&scales)),
+        None => col.map_or((0, 0), |nr| gauss_reach(nr.sigma, whole)),
+    };
     add(l, c)
 }
 
-/// Noise reduction (`render::denoise`) of the image `part` (3 channels), for `out`.
-pub(crate) fn denoise(cx: &mut Cx<'_>, part: &Part<'_>, plan: &Plan<'_>, out: &Rect) -> Option<Buf> {
+/// The scales of the joint colour NR (`render::color_nr_joint`) in `plan`, when it takes the colour step (empty when
+/// it then filters nothing, as `render::denoise` leaves the image).
+fn joint_scales(plan: &Plan<'_>) -> Option<Vec<(usize, f32)>> {
+    let (_, col) = local::nr_params(&plan.settings, plan.detail_scale);
+    if col.is_none() || !local::joint_colour_nr(&plan.settings) {
+        return None;
+    }
+    let Some(p) = local::nrc_params(&plan.settings, plan.detail_scale) else { return Some(Vec::new()) };
+    let sigma = p.passes.last().map_or(0.0, |q| q.sigma);
+    Some(nrc_joint::scale_plan(sigma, plan.w, plan.h))
+}
+
+/// The joint colour NR (`render::color_nr_joint`) of the image `part` (3 channels) for `out`: the filter run on `out`
+/// with [`joint_halo`] around it, as one band, with the whole frame's noise model `noise`. `None` without one (the
+/// noise is then measured on the whole image, which a spot changes), or when the cut is too small for the filter.
+fn colour_joint(cx: &mut Cx<'_>, part: &Part<'_>, plan: &Plan<'_>, noise: Option<&JointNoise>, out: &Rect) -> Option<Buf> {
+    let whole = (plan.w, plan.h);
+    let d = &plan.settings.detail;
+    let (detail, amount) = ((d.nr_color_detail / 100.0) as f32, (d.nr_color / 100.0) as f32);
+    let scales = joint_scales(plan)?;
+    let strength = nrc_joint::strength(amount);
+    if scales.is_empty() || strength <= 0.0 {
+        return cut(cx, part, out);
+    }
+    let mut noise = *noise?;
+    noise.tolerance = nrc_joint::tolerance(detail);
+    let halo = joint_halo(&scales);
+    let r = grow(out, (halo, halo), whole);
+    let (rw, rh) = (width(&r), height(&r));
+    // (a cut too big for one buffer is denoised whole, in bands)
+    if rw < 3 || rh < 3 || !cx.gpu.fits(3 * area(&r)) {
+        return None;
+    }
+    let img = cut(cx, part, &r)?;
+    let filtered = joint_band(cx, &img, rw, 0, rh, &noise, nrc_joint::speck_brake(amount), &scales);
+    let n = area(&r);
+    let o = cx.gpu.buffer(3 * n);
+    nrcj(cx, "nrcj_recon", n, &[n as u32, strength.to_bits(), 0, 0], &img, Some(&filtered), &o);
+    cut(cx, &Part { buf: &o, at: r, nc: 3 }, out)
+}
+
+/// Noise reduction (`render::denoise`) of the image `part` (3 channels), for `out`; `noise`: the whole frame's noise
+/// model of the joint colour NR, as `render::denoise` takes it.
+pub(crate) fn denoise(cx: &mut Cx<'_>, part: &Part<'_>, plan: &Plan<'_>, noise: Option<&JointNoise>, out: &Rect) -> Option<Buf> {
     let whole = (plan.w, plan.h);
     let (lum, col) = local::nr_params(&plan.settings, plan.detail_scale);
-    // what each step makes: the colour step `out`, the luminance step the colour blur's margin around it
-    let r1 = col.map_or(*out, |nr| grow(out, gauss_reach(nr.sigma, whole), whole));
+    let joint = joint_scales(plan);
+    if joint.is_some() && noise.is_none() {
+        return None; // the noise model is measured on the whole image, which a spot changes: denoise it whole
+    }
+    // what each step makes: the colour step `out`, the luminance step the colour filter's margin around it
+    let r1 = match &joint {
+        Some(scales) => grow(out, (joint_halo(scales), joint_halo(scales)), whole),
+        None => col.map_or(*out, |nr| grow(out, gauss_reach(nr.sigma, whole), whole)),
+    };
     let r0 = lum.map_or(r1, |nr| grow(&r1, twice(gauss_reach(nr.sigma, whole)), whole));
     let img0 = cut(cx, part, &r0)?;
     let img1 = match lum {
@@ -250,6 +315,9 @@ pub(crate) fn denoise(cx: &mut Cx<'_>, part: &Part<'_>, plan: &Plan<'_>, out: &R
         }
         None => img0,
     };
+    if joint.is_some() {
+        return colour_joint(cx, &Part { buf: &img1, at: r1, nc: 3 }, plan, noise, out);
+    }
     match col {
         Some(nr) => {
             let n1 = area(&r1);

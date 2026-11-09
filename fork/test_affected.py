@@ -327,7 +327,7 @@ class Drift(unittest.TestCase):
         body = src.split("let mut steps: Vec<Step> = vec![", 1)[1].split("\n    ];", 1)[0]
         names = set(re.findall(r'^\s{12}"([a-z-]+)",$', body, re.M))
         names |= set(re.findall(r'steps\.push\(\(\s*"([a-z-]+)"', src))
-        known = {"fmt", "clippy", "heif", "test", "gpu-backends", "parity", "layers", "assets", "wasm"}
+        known = {"fmt", "clippy", "heif", "test", "gpu-backends", "parity", "layers", "assets", "roots", "wasm"}
         self.assertEqual(names, known)
         script = (ROOT / "fork/ci.sh").read_text(encoding="utf-8")
         for step in known - {"gpu-backends"}:  # no GPU on the runners

@@ -1,7 +1,7 @@
 //! Match one picture's look to another's without the app, for tuning:
 //!
 //! `cargo run --release -p lightcraft-look --example match -- target.jpg reference.jpg out.jpg [--sheet sheet.jpg]
-//! [--size 256] [--budget 320]`
+//! [--size 256] [--budget 320] [--look]`
 //!
 //! Prints the fitted sliders, the loss before and after, the renders used and the time, and writes the target
 //! rendered with them. `--sheet` also writes the before, the reference and the after side by side.
@@ -66,11 +66,12 @@ fn main() {
             "--size" => opts.size = it.next().and_then(|v| v.parse().ok()).expect("--size N"),
             "--budget" => opts.budget = it.next().and_then(|v| v.parse().ok()).expect("--budget N"),
             "--sheet" => sheet_path = it.next().cloned(),
+            "--look" => opts.look = true,
             _ => pos.push(a.clone()),
         }
     }
     let [target, refpath, out] = pos.as_slice() else {
-        eprintln!("usage: match target.jpg reference.jpg|https://… out.jpg [--sheet sheet.jpg] [--size N] [--budget N]");
+        eprintln!("usage: match target.jpg reference.jpg|https://… out.jpg [--sheet sheet.jpg] [--size N] [--budget N] [--look]");
         std::process::exit(2);
     };
     let src = load_working(target, 512);
@@ -98,6 +99,9 @@ fn main() {
     }
     if let Some(c) = &r.curve {
         println!("curve.master {:?}", c.iter().map(|p| format!("({:.3}, {:.3})", p.x, p.y)).collect::<Vec<_>>());
+    }
+    if let Some(l) = &r.look {
+        println!("look {l:?}");
     }
     println!("loss {:.5} → {:.5}, {} renders, {:.2} s", r.loss_before, r.loss_after, r.evals, secs);
     if std::env::var_os("LOOK_DEBUG").is_some() {
