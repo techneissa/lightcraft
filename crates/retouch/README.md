@@ -44,7 +44,14 @@ cargo run -p lightcraft-retouch --example skin -- in.jpg out.jpg --amount 50 --f
 ```
 
 `--face x0,y0,x1,y1` gives a face box in fractions of the picture (repeat it for more); the examples have no
-landmarks or masks unless a feature's example adds a way to load them.
+landmarks or masks unless a feature's example adds a way to load them. Masks for them come from the people parser's
+example, which writes each person's part masks as grey pictures (`outdir/masks/<part>-<person>.png`):
+
+```bash
+cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/
+cargo run -p lightcraft-retouch --release --example skin -- in.jpg out.jpg --smoothness 60 --shine 50 \
+  --mask outdir/masks/facialSkin-0.png
+```
 
 ## The input contract (`src/input.rs`)
 

@@ -4,7 +4,9 @@
 //! [--models DIR] [--edge 2048] [--no-yunet] [--cells 1.5] [--eps 0.0002]`
 //!
 //! Writes `outdir/<part>.png` (the photo dimmed, the part in colour, one colour per person), `outdir/all.png` (every
-//! part in its own colour), `outdir/landmarks.png` and `outdir/people.json`, and prints the time each step took.
+//! part in its own colour), `outdir/landmarks.png`, `outdir/people.json` and each person's masks as grey pictures
+//! (`outdir/masks/<part>-<person>.png`, white = the part; the retouch examples read them), and prints the time each
+//! step took.
 //! Faces come from the YuNet detector in the shared models folder when it is there (as in the app), else from the
 //! body model. `--models` defaults to `LIGHTCRAFT_PARSING_MODELS`, else `~/Library/Application Support/ArtCraft/models`.
 
@@ -126,6 +128,11 @@ fn write(
         let mut any = false;
         for (k, _) in parsing.people.iter().enumerate() {
             let m = render::refined_with(parsing, Select::Person(k, part), img, radius, eps);
+            if m.iter().any(|v| *v > 0.0) {
+                let grey: Vec<u8> = m.iter().map(|v| (v.clamp(0.0, 1.0) * 255.0).round() as u8).collect();
+                std::fs::create_dir_all(out.join("masks"))?;
+                image::GrayImage::from_raw(w as u32, h as u32, grey).ok_or("bad size")?.save(out.join(format!("masks/{}-{k}.png", part.id())))?;
+            }
             let c = COLOURS[k % COLOURS.len()];
             for (i, &v) in m.iter().enumerate() {
                 if v > 0.0 {
