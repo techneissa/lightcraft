@@ -110,7 +110,8 @@ impl GpuStages {
         self.lock().len()
     }
 
-    /// Device bytes held (each buffer counted once).
+    /// Bytes held: device buffers (each counted once), and the images a loupe job kept on the host with them
+    /// (`dirty::keep_host`, issue #111).
     pub fn bytes(&self) -> usize {
         let mut seen: Vec<*const Buf> = Vec::new();
         let mut total = 0;
@@ -145,7 +146,8 @@ impl GpuStages {
         }
         self.alphas.each(&mut add);
         patches += self.spots.bytes();
-        total + patches
+        let host = self.host.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |k| k.bytes);
+        total + patches + host
     }
 
     /// Drop everything (e.g. when memory is needed).
@@ -796,8 +798,9 @@ pub fn render(
     // the view's last render at this size, when this one differs from it only in its spots (issue #111)
     crate::dirty::note_frame(None);
     let rest = stages
-        // (a dropped dispatch may: it is how a driver fails an incremental render too, and the checks must catch it)
-        .filter(|_| fault.is_none_or(|f| f == crate::Fault::DropWork))
+        // (a dropped dispatch, or a device failing elsewhere, may: they fail an incremental render too, and the checks
+        // must catch them)
+        .filter(|_| fault.is_none_or(|f| matches!(f, crate::Fault::DropWork | crate::Fault::BrokenElsewhere)))
         .filter(|_| !matches!(want, Want::MaskPlanes(_)) && crate::dirty::eligible(info, &plan))
         .map(|_| Arc::new(crate::dirty::Rest::of(info, &plan, req)));
     let start = cached.as_ref().and_then(|e| e.last.clone()).filter(|l| rest.as_deref() == Some(&*l.rest));

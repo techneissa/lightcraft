@@ -171,3 +171,30 @@ fn dropped_work_in_an_incremental_render_falls_back() {
     let differ = next.data.iter().zip(&whole.data).filter(|(a, b)| a != b).count();
     assert_eq!(differ, 0, "the render after the failed one starts from nothing it left");
 }
+
+/// Issue #111: a render that kept its output for the next edit, and then failed because the device failed elsewhere,
+/// leaves nothing behind: no note of what it changed (the CPU's image would be patched with it) and no stages.
+#[test]
+fn a_render_failed_by_another_thread_leaves_no_note() {
+    if !lightcraft_gpu::available() {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter ({})", lightcraft_gpu::unavailable_reason().unwrap_or_default());
+        return;
+    }
+    let (w, h) = (1200, 800);
+    let src = Arc::new(lightcraft_scenes::demo_library()[0].render(w, h));
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let req = RenderRequest::fit(w, h);
+    let mut s = DevelopSettings::default();
+    s.light.exposure = 0.3;
+    let cache = lightcraft_pipeline::StageCache::default();
+    assert!(lightcraft_gpu::render(&src, &info, &s, &req, Some(&cache)).is_some(), "the first render");
+    s.light.exposure = 0.4;
+    lightcraft_gpu::inject_fault(Fault::BrokenElsewhere);
+    match lightcraft_gpu::try_render(&src, &info, &s, &req, Some(&cache)) {
+        Err(Fallback::Failed(why)) => assert!(why.contains("device failure"), "{why}"),
+        other => panic!("a render during a device failure is redone on the CPU: {:?}", other.map(|_| ())),
+    }
+    assert_eq!(lightcraft_gpu::take_frame_note(), None, "a failed render says nothing about what it changed");
+    assert_eq!(lightcraft_gpu::stage_bytes(&cache), 0, "the failed render's stages are let go");
+    assert!(lightcraft_gpu::available(), "the failure was another thread's");
+}

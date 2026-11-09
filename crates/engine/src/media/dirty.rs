@@ -17,6 +17,28 @@ use lightcraft_raster::{Histogram, Rgba8};
 /// `[x0, y0, x1, y1)` in pixels.
 pub type Rect = [usize; 4];
 
+/// What a render says it changed ([`lightcraft_gpu::FrameNote`]).
+#[cfg(not(target_arch = "wasm32"))]
+use lightcraft_gpu::FrameNote;
+
+/// The web renders on the CPU, which says nothing about what changed: the same shape, never made.
+#[cfg(target_arch = "wasm32")]
+struct FrameNote {
+    frame: u64,
+    changed: Option<(u64, Vec<Rect>)>,
+}
+
+/// A clock read for a `LIGHTCRAFT_PROFILE` timing line: the time now when profiling, else `None`, so that nothing reads
+/// a clock otherwise (and `web_time`: the web has no `std::time::Instant`).
+pub fn clock() -> Option<web_time::Instant> {
+    lightcraft_pipeline::profiling().then(web_time::Instant::now)
+}
+
+/// Milliseconds from `a` to `b` (0 without both).
+pub fn ms(a: Option<web_time::Instant>, b: Option<web_time::Instant>) -> f64 {
+    a.zip(b).map_or(0.0, |(a, b)| b.saturating_duration_since(a).as_secs_f64() * 1e3)
+}
+
 /// Which picture of a view a job's image is, and the rectangles where it differs from an earlier one.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Changed {
@@ -27,21 +49,44 @@ pub struct Changed {
     pub rects: Vec<Rect>,
 }
 
-/// What a job kept of one render on the host.
+/// What a job kept of one render on the host: always what the next job checks it against, and an image only where the
+/// next job starts from it.
 struct Kept {
-    /// The display it was converted for (`None`: not converted), whether the sRGB twin was made, the render's size and
-    /// the size it was fitted to.
+    /// The display it was converted for (`None`: not converted).
     display: Option<u64>,
+    /// The render's size.
+    size: (usize, usize),
+    /// The sRGB twin of the converted image, when one was made (the view cache's).
     srgb: Option<Arc<Rgba8>>,
-    converted: Arc<Rgba8>,
-    fitted: Option<Arc<Rgba8>>,
+    /// The image converted for `display` ([`Patch::convert`] starts from it; not kept when nothing was converted).
+    converted: Option<Arc<Rgba8>>,
+    /// Whether the picture was fitted to the drawn size.
+    fitted: bool,
+    /// The fit, when it was made on the host ([`Patch::fit`] starts from it).
+    fit: Option<Arc<Rgba8>>,
     /// The fit was made on the device (its bits differ from the CPU's within a level of rounding).
     device_fit: bool,
 }
 
+impl Kept {
+    /// Bytes of the images it holds.
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    fn bytes(&self) -> usize {
+        [&self.srgb, &self.converted, &self.fit].into_iter().flatten().map(|i| i.data.len() * 4).sum()
+    }
+}
+
+/// The images a job made of one render that the next job starts from ([`Patch::finish`]): the image converted for the
+/// display (before any fit), its sRGB twin, and the fit made on the host.
+pub(super) struct Made {
+    pub srgb: Option<Arc<Rgba8>>,
+    pub converted: Option<Arc<Rgba8>>,
+    pub fit: Option<Arc<Rgba8>>,
+}
+
 /// The job's work on one render, between the readback and the result.
 pub(super) struct Patch {
-    note: Option<lightcraft_gpu::FrameNote>,
+    note: Option<FrameNote>,
     from: Option<Arc<Kept>>,
     /// Rectangles of the render that changed, when `from` holds the earlier render's images.
     rects: Option<Vec<Rect>>,
@@ -57,6 +102,16 @@ fn kept_of(_: Option<&lightcraft_pipeline::StageCache>, _: u64) -> Option<Arc<Ke
     None
 }
 
+/// Keep `kept` with `stages` as what the job made of render `frame`, counted in the stages' bytes.
+#[cfg(not(target_arch = "wasm32"))]
+fn keep(stages: &lightcraft_pipeline::StageCache, frame: u64, kept: Kept) {
+    let bytes = kept.bytes();
+    lightcraft_gpu::keep_host(stages, frame, Arc::new(kept), bytes);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn keep(_: &lightcraft_pipeline::StageCache, _: u64, _: Kept) {}
+
 impl Patch {
     /// Forget what an earlier render on this thread said (before a render).
     pub(super) fn clear() {
@@ -70,9 +125,9 @@ impl Patch {
         #[cfg(not(target_arch = "wasm32"))]
         let note = lightcraft_gpu::take_frame_note();
         #[cfg(target_arch = "wasm32")]
-        let note: Option<lightcraft_gpu::FrameNote> = None;
+        let note: Option<FrameNote> = None;
         let from = note.as_ref().and_then(|n| n.changed.as_ref()).and_then(|(from, _)| kept_of(stages, *from));
-        let from = from.filter(|k| k.display == display && (k.converted.width, k.converted.height) == (raw.width, raw.height));
+        let from = from.filter(|k| k.display == display && k.size == (raw.width, raw.height));
         let rects = from.as_ref().and(note.as_ref()).and_then(|n| n.changed.as_ref()).map(|(_, r)| r.clone());
         Patch { note, from, rects }
     }
@@ -85,7 +140,7 @@ impl Patch {
             return None;
         }
         let warn = |e: String| log::warn!("display profile: {e}");
-        let mut converted = (*from.converted).clone();
+        let mut converted = (**from.converted.as_ref()?).clone();
         let mut srgb = if full_srgb { from.srgb.as_ref().map(|s| (**s).clone()) } else { None };
         for r in rects {
             let part = cut(raw, r);
@@ -108,35 +163,48 @@ impl Patch {
     /// rectangles of the fitted image that changed. `None` when there is nothing to start from.
     pub(super) fn fit(&self, img: &Rgba8, max: (usize, usize)) -> Option<(Rgba8, Vec<Rect>)> {
         let (from, rects) = (self.from.as_ref()?, self.rects.as_ref()?);
-        let fitted = from.fitted.as_ref().filter(|_| !from.device_fit)?;
+        let fitted = from.fit.as_ref().filter(|_| !from.device_fit)?;
         let size = fit_size(img.width, img.height, max.0.max(1), max.1.max(1));
         if (fitted.width, fitted.height) != size {
             return None;
+        }
+        if fit_whole(rects, (img.width, img.height)) {
+            let out = crate::media::fit_for_display(img, max.0, max.1);
+            let changed = fitted_rects((img.width, img.height), (out.width, out.height), rects);
+            return Some((out, changed));
         }
         let mut out = (**fitted).clone();
         let changed = fit_rects(img, &mut out, rects)?;
         Some((out, changed))
     }
 
-    /// Keep what this job made of the render (`converted`: the image before any fit, `fitted`: after) for the next job,
-    /// and say which picture the result is: `rects` (in the result's pixels) where it differs from the last one.
+    /// Whether this job keeps what it makes for the next one ([`Self::finish`]): the render is numbered and the view's
+    /// stages hold it. Only then is a copy of the picture worth making.
+    pub(super) fn keeps(&self, stages: Option<&lightcraft_pipeline::StageCache>) -> bool {
+        self.note.is_some() && stages.is_some()
+    }
+
+    /// Keep what this job made of the render (`made`, when [`Self::keeps`]: the images the next job starts from) for
+    /// the next job, and say which picture the result is: `rects` (in the result's pixels) where it differs from the
+    /// last one. `fitted`: whether the picture was fitted (`Some(true)` on the device), `size`: the render's size.
     pub(super) fn finish(
         self,
         stages: Option<&lightcraft_pipeline::StageCache>,
-        display: Option<u64>,
-        (srgb, converted, fitted, device_fit): (Option<Arc<Rgba8>>, Arc<Rgba8>, Option<Arc<Rgba8>>, bool),
+        (display, size, fitted): (Option<u64>, (usize, usize), Option<bool>),
+        made: Option<Made>,
         rects: Option<Vec<Rect>>,
     ) -> Option<Changed> {
         let note = self.note?;
+        let device_fit = fitted == Some(true);
         // (a picture fitted another way than the last one differs from it in rounding everywhere)
-        let same_fit = self.from.as_ref().is_some_and(|k| k.fitted.is_some() == fitted.is_some() && k.device_fit == device_fit);
+        let same_fit = self.from.as_ref().is_some_and(|k| k.fitted == fitted.is_some() && k.device_fit == device_fit);
         let rects = rects.filter(|_| same_fit);
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Some(st) = stages {
-            lightcraft_gpu::keep_host(st, note.frame, Arc::new(Kept { display, srgb, converted, fitted, device_fit }));
+        if let (Some(st), Some(m)) = (stages, made) {
+            // (the next job converts from it only when it converts, and fits on the host from a host fit only)
+            let converted = m.converted.filter(|_| display.is_some());
+            let kept = Kept { display, size, srgb: m.srgb, converted, fitted: fitted.is_some(), fit: m.fit.filter(|_| !device_fit), device_fit };
+            keep(st, note.frame, kept);
         }
-        #[cfg(target_arch = "wasm32")]
-        let _ = (stages, display, srgb, converted, fitted);
         let from = note.changed.as_ref().map(|(from, _)| *from).filter(|_| rects.is_some());
         Some(Changed { frame: note.frame, from, rects: rects.unwrap_or_default() })
     }
@@ -168,6 +236,13 @@ fn paste(img: &mut Rgba8, r: &Rect, part: &Rgba8) {
             d.copy_from_slice(s);
         }
     }
+}
+
+/// Whether a fit after a change of `rects` of a `w × h` picture is the whole fit: when they cover more than half of it,
+/// `fit_for_display` (on every core) makes the same bits sooner than [`fit_rects`] (on one).
+fn fit_whole(rects: &[Rect], (w, h): (usize, usize)) -> bool {
+    let area = rects.iter().map(|r| r[2].saturating_sub(r[0]).saturating_mul(r[3].saturating_sub(r[1]))).fold(0usize, usize::saturating_add);
+    area.saturating_mul(2) > w.saturating_mul(h)
 }
 
 /// The output indices `[a, b)` whose taps read a source index in `[lo, hi)`.

@@ -76,13 +76,15 @@ pub type HostData = Arc<dyn std::any::Any + Send + Sync>;
 pub(crate) struct HostKept {
     frame: u64,
     data: HostData,
+    /// Host memory `data` holds (counted in [`crate::GpuStages::bytes`]).
+    pub(crate) bytes: usize,
 }
 
-/// Keep `data` as what was made on the host of frame `frame` of the view whose stages are `stages` (replacing what was
-/// kept before).
-pub fn keep_host(stages: &lightcraft_pipeline::StageCache, frame: u64, data: HostData) {
+/// Keep `data` (holding `bytes` of host memory) as what was made on the host of frame `frame` of the view whose stages
+/// are `stages` (replacing what was kept before).
+pub fn keep_host(stages: &lightcraft_pipeline::StageCache, frame: u64, data: HostData, bytes: usize) {
     let s = stages.extension::<crate::GpuStages>();
-    *s.host.lock().unwrap_or_else(|e| e.into_inner()) = Some(HostKept { frame, data });
+    *s.host.lock().unwrap_or_else(|e| e.into_inner()) = Some(HostKept { frame, data, bytes });
 }
 
 /// What was kept on the host of frame `frame` ([`keep_host`]), if that is what is kept.

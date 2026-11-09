@@ -381,7 +381,7 @@ impl RenderJob {
                 changed: None,
             };
         }
-        let t_job = std::time::Instant::now();
+        let t_job = crate::media::dirty::clock();
         if let Some((cache, key)) = &self.cache
             && let Some(img) = cache.get_at(self.cache_generation, *key)
         {
@@ -509,14 +509,11 @@ impl RenderJob {
                     None => {
                         // the display fit is made on the device before the readback when nothing is converted for a monitor after it
                         let fit = self.display_fit.filter(|_| self.request.quality == Quality::Full && self.display.is_none());
-                        let t = std::time::Instant::now();
+                        let t = crate::media::dirty::clock();
                         let (r, fallback, f) = develop_reporting_fit(src, &info, &self.settings, &request, self.stages.as_deref(), gpu, fit);
                         if lightcraft_pipeline::profiling() {
-                            eprintln!(
-                                "  job: before develop {:.1} ms, develop {:.1} ms",
-                                (t - t_job).as_secs_f64() * 1e3,
-                                t.elapsed().as_secs_f64() * 1e3
-                            );
+                            use crate::media::dirty::{clock, ms};
+                            eprintln!("  job: before develop {:.1} ms, develop {:.1} ms", ms(t_job, t), ms(t, clock()));
                         }
                         fitted = f;
                         (r, fallback)
@@ -529,7 +526,7 @@ impl RenderJob {
                 let patch = plain.then(|| crate::media::dirty::Patch::after_render(self.stages.as_deref(), &rendered.image, converts));
                 // for a display profile: the image goes to the display's values, the histogram
                 // and the cached view preview stay sRGB
-                let t_display = std::time::Instant::now();
+                let t_display = crate::media::dirty::clock();
                 let mut srgb = None;
                 let display = match (&self.display, self.request.display) {
                     // a diagnostic view: the histogram stays the photo's (taken before the overlay
@@ -555,7 +552,7 @@ impl RenderJob {
                     }
                     _ => None,
                 };
-                let t_caches = std::time::Instant::now();
+                let t_caches = crate::media::dirty::clock();
                 if let Some((cache, key)) = &self.cache {
                     cache.put_at(self.cache_generation, *key, Arc::new(rendered.image.clone()));
                 }
@@ -566,7 +563,7 @@ impl RenderJob {
                 {
                     cache.put_deferred_at(self.cache_generation, *key, srgb.clone().unwrap_or_else(|| Arc::new(rendered.image.clone())));
                 }
-                let t_fit = std::time::Instant::now();
+                let t_fit = crate::media::dirty::clock();
                 // the display fit, after the caches have the full render
                 let mut fit_made: Option<(Arc<Rgba8>, Option<Vec<crate::media::dirty::Rect>>, bool)> = None;
                 if let Some((fw, fh)) = self.display_fit
@@ -594,15 +591,24 @@ impl RenderJob {
                         Some((_, rects, _)) => rects.clone(),
                         None => p.rects().map(<[_]>::to_vec),
                     };
-                    let (converted, fitted, device) = match fit_made {
-                        Some((full, _, device)) => (full, Some(Arc::new(rendered.image.clone())), device),
-                        None => (Arc::new(rendered.image.clone()), None, false),
-                    };
-                    p.finish(self.stages.as_deref(), converts, (srgb, converted, fitted, device), rects)
+                    let size = fit_made.as_ref().map_or((rendered.image.width, rendered.image.height), |(f, ..)| (f.width, f.height));
+                    let fitted = fit_made.as_ref().map(|(.., device)| *device);
+                    // (a copy of the picture only where the next job starts from it: a job that keeps what it made, the
+                    // picture converted for a display, a fit made on the host)
+                    let converts_here = converts.is_some();
+                    let made = p.keeps(self.stages.as_deref()).then(|| match fit_made {
+                        Some((full, _, device)) => crate::media::dirty::Made {
+                            srgb,
+                            converted: converts_here.then_some(full),
+                            fit: (!device).then(|| Arc::new(rendered.image.clone())),
+                        },
+                        None => crate::media::dirty::Made { srgb, converted: converts_here.then(|| Arc::new(rendered.image.clone())), fit: None },
+                    });
+                    p.finish(self.stages.as_deref(), (converts, size, fitted), made, rects)
                 });
                 if lightcraft_pipeline::profiling() {
-                    let ms = |a: std::time::Instant, b: std::time::Instant| (b - a).as_secs_f64() * 1e3;
-                    let end = std::time::Instant::now();
+                    use crate::media::dirty::ms;
+                    let end = crate::media::dirty::clock();
                     eprintln!(
                         "  job: display {:.1} ms ({}), caches {:.1} ms, fit {:.1} ms ({}), whole job {:.1} ms",
                         ms(t_display, t_caches),
