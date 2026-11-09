@@ -65,7 +65,7 @@ fn a_malformed_block_reads_as_off_and_keeps_what_it_can() {
     let r: Retouch = serde_json::from_value(v).unwrap();
     assert_eq!(r.global.get("retouch.skin.amount"), Some(0.0));
     assert_eq!(r.global.get("retouch.eyes.amount"), Some(30.0));
-    assert_eq!(r.global.get("retouch.teethLips.amount"), Some(0.0));
+    assert_eq!(r.global.get("retouch.teethLips.teethWhitening"), Some(0.0));
     assert_eq!(r.faces.len(), 1, "overrides without a usable box are dropped");
     assert_eq!(r.faces[0].settings.get("retouch.eyes.amount"), Some(100.0), "clamped on read");
     for bad in [json!(null), json!(7), json!("x"), json!([]), json!({"global": []})] {

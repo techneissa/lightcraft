@@ -1,0 +1,3 @@
+cargo test -p lightcraft-retouch --test teeth_lips --test foundation
+cargo test -p lightcraft-engine --lib -- retouch_input
+cargo test -p lightcraft-ui-egui --lib -- portrait_teeth_lips

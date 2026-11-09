@@ -104,6 +104,7 @@ mod open_lightroom;
 pub(super) mod panels;
 mod people_parts;
 mod portrait;
+mod portrait_teeth_lips;
 mod preset_favorites;
 mod preset_import;
 mod preview_limit;
