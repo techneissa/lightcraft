@@ -359,6 +359,7 @@ impl LightcraftApp {
         // (the first library shown takes the place of none: nothing was searching another one)
         if self.shown_library.is_some() {
             crate::find_similar::library_changed(self);
+            crate::assisted_culling::library_changed(self);
         }
         self.shown_library = Some(generation);
         crate::local_profile_offer::check(self);

@@ -134,6 +134,8 @@ pub const FIELDS: &[(&str, &str, Kind)] = &[
     // Assisted Culling
     ("sharpness", "Focus (assisted culling)", Kind::Number),
     ("bestOfGroup", "Best of Similar Shots", Kind::Bool),
+    ("eyesClosed", "Eyes Closed", Kind::Bool),
+    ("eyesOutOfFocus", "Eyes Out of Focus", Kind::Bool),
 ];
 
 /// The fields the field menu shows at its top level, before the groups.
@@ -151,7 +153,7 @@ pub const FIELD_GROUPS: &[(&str, &[&str])] = &[
     ("Location", &["location", "city", "state", "country", "hasGps", "gpsArea", "gpsRadius"]),
     ("Size", &["longEdge", "shortEdge", "aspect", "megapixels"]),
     ("Develop", &["edited", "cropped", "treatment"]),
-    ("Assisted Culling", &["sharpness", "bestOfGroup"]),
+    ("Assisted Culling", &["sharpness", "bestOfGroup", "eyesClosed", "eyesOutOfFocus"]),
 ];
 
 /// The field-menu group `field` sits in; `None` for a top-level or unknown field.
@@ -1341,6 +1343,9 @@ impl Rule {
             }
             "sharpness" => num_op(op, p.analysis.map(|a| a.sharpness as f64), value),
             "bestOfGroup" => yes(p.analysis.is_some_and(|a| a.best || a.group.is_none())),
+            // (eyes that could not be read match neither yes nor no)
+            "eyesClosed" => p.analysis.and_then(|a| a.eyes?.closed).is_some_and(yes),
+            "eyesOutOfFocus" => p.analysis.and_then(|a| a.eyes?.out_of_focus()).is_some_and(yes),
             "album" => {
                 let id = album_rule_id(value);
                 // a smart album's photos are its matches; one being evaluated (a loop) holds none

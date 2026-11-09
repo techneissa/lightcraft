@@ -144,6 +144,12 @@ pub(crate) fn prepare_ahead(s: &mut Session, id: lightcraft_catalog::PhotoId) ->
     prepare_with(s, id, detector)
 }
 
+/// Fork (`fork/ai-culling.md`): [`prepare_job`] without a detector, for Assisted Culling's eyes, which find the faces
+/// themselves only when the photo has no parse ([`Rendered::into_parts`]).
+pub(crate) fn prepare_plain(s: &mut Session, id: lightcraft_catalog::PhotoId) -> std::result::Result<Prepare, String> {
+    prepare_with(s, id, Detect::None)
+}
+
 fn prepare_with(s: &mut Session, id: lightcraft_catalog::PhotoId, detector: Detect) -> std::result::Result<Prepare, String> {
     let job = s.preview_job(id, PARSE_EDGE, PARSE_EDGE, false, &lightcraft_develop::DevelopSettings::default()).ok_or("no such photo")?;
     let regions = s.catalog.photo(id).map(|p| p.meta.regions.clone()).unwrap_or_default();
@@ -173,6 +179,11 @@ impl Prepare {
 }
 
 impl Rendered {
+    /// The picture and the photo's regions (to name the faces found on it).
+    pub(crate) fn into_parts(self) -> (RgbImage, Vec<lightcraft_meta::Region>) {
+        (self.img, self.regions)
+    }
+
     /// The second step: find the faces, each named after the face region of the photo it matches.
     pub(crate) fn detect(self) -> std::result::Result<(RgbImage, Vec<FaceHint>), String> {
         let Rendered { img, detector, regions } = self;

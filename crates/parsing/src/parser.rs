@@ -65,11 +65,11 @@ impl Backend {
     }
 }
 
-type CoreMlResult<T> = std::result::Result<T, lightcraft_coreml::Error>;
+pub(crate) type CoreMlResult<T> = std::result::Result<T, lightcraft_coreml::Error>;
 
 /// One parser of a set: its Core ML version when it has one and it loaded, and its candle port, loaded at once when
 /// it is the one that runs, else only when Core ML fails.
-struct Engine<T> {
+pub(crate) struct Engine<T> {
     label: &'static str,
     runtime: Runtime,
     coreml: Option<lightcraft_coreml::Model>,
@@ -83,7 +83,7 @@ struct Engine<T> {
 
 impl<T> Engine<T> {
     /// `coreml`: the loader of `file`'s Core ML version, when it has one. `candle`: the candle port's loader.
-    fn load(
+    pub(crate) fn load(
         file: &ModelFile,
         runtime: Runtime,
         coreml: Option<&dyn Fn() -> CoreMlResult<lightcraft_coreml::Model>>,
@@ -118,12 +118,12 @@ impl<T> Engine<T> {
         Ok(me)
     }
 
-    fn backend(&self) -> Backend {
+    pub(crate) fn backend(&self) -> Backend {
         if self.coreml.is_some() && !self.failed.load(Ordering::Relaxed) { Backend::CoreMl } else { Backend::Candle }
     }
 
     /// Run on Core ML, or on candle (loaded by `load_candle` the first time it is needed).
-    fn run<R>(
+    pub(crate) fn run<R>(
         &self,
         on_coreml: impl FnOnce(&lightcraft_coreml::Model) -> CoreMlResult<R>,
         on_candle: impl FnOnce(&T) -> Result<R>,
@@ -224,7 +224,7 @@ fn load_face_net(set: ModelSet, models: &Path, dev: &Device) -> Result<FaceNet> 
     })
 }
 
-fn load_mesh_net(models: &Path, dev: &Device) -> Result<FaceMesh> {
+pub(crate) fn load_mesh_net(models: &Path, dev: &Device) -> Result<FaceMesh> {
     let file = crate::models::FACE_MESH;
     FaceMesh::load(open(&file, models)?.as_ref(), dev).map_err(|e| named(&file, e))
 }
@@ -474,7 +474,7 @@ impl Profile {
 }
 
 /// The eye line's angle in photo pixels (0 without landmarks or for a face turned more than 60°).
-fn eye_angle(f: &FaceHint, iw: f32, ih: f32) -> f32 {
+pub(crate) fn eye_angle(f: &FaceHint, iw: f32, ih: f32) -> f32 {
     let Some(l) = f.landmarks else { return 0.0 };
     // the subject's right eye is on the left of the picture
     let ((x0, y0), (x1, y1)) = (l[0], l[1]);

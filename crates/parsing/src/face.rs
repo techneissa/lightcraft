@@ -131,6 +131,28 @@ impl Job {
     }
 }
 
+impl Job {
+    /// The face mesh's crop of this face.
+    pub fn mesh_crop(&self, img: &RgbImage) -> Crop {
+        self.crop(img, MESH_CROP, crate::facemesh::SIDE)
+    }
+}
+
+/// The mesh's points in fractions of the photo (none when the mesh was not sure it saw a face).
+pub fn landmarks_of(m: &MeshOut, crop: &Crop, img: &RgbImage) -> Vec<Landmark> {
+    if m.presence < 0.5 {
+        return Vec::new();
+    }
+    let (w, h) = (img.width as f32, img.height as f32);
+    m.points
+        .iter()
+        .map(|q| {
+            let (x, y) = crop.to_photo(q[0], q[1]);
+            Landmark { x: x / w, y: y / h, z: q[2] * crop.scale / w }
+        })
+        .collect()
+}
+
 /// What one face gave.
 pub struct FaceOut {
     pub person: usize,
@@ -321,26 +343,14 @@ pub fn run(nets: &Nets, img: &RgbImage, jobs: &[Job], batch: usize, scene: &Scen
             return Err(crate::Error::Cancelled);
         }
         let parse_crops: Vec<Crop> = chunk.iter().map(|j| j.crop(img, PARSE_CROP, SIDE)).collect();
-        let mesh_crops: Vec<Crop> = chunk.iter().map(|j| j.crop(img, MESH_CROP, crate::facemesh::SIDE)).collect();
+        let mesh_crops: Vec<Crop> = chunk.iter().map(|j| j.mesh_crop(img)).collect();
         let groups = parse(img, &parse_crops)?;
         let meshes = mesh(img, &mesh_crops)?;
         for (((job, pc), mc), (g, m)) in chunk.iter().zip(&parse_crops).zip(&mesh_crops).zip(groups.iter().zip(&meshes)) {
             let eyes = MeshEyes::from_mesh(m, mc);
             let p = job.person;
             let planes = planes(img, pc, g, &eyes, scene, p);
-            let (w, h) = (img.width as f32, img.height as f32);
-            let landmarks = if m.presence >= 0.5 {
-                m.points
-                    .iter()
-                    .map(|q| {
-                        let (x, y) = mc.to_photo(q[0], q[1]);
-                        Landmark { x: x / w, y: y / h, z: q[2] * mc.scale / w }
-                    })
-                    .collect()
-            } else {
-                Vec::new()
-            };
-            out.push(FaceOut { person: p, planes, landmarks, landmark_score: m.presence });
+            out.push(FaceOut { person: p, planes, landmarks: landmarks_of(m, mc, img), landmark_score: m.presence });
         }
     }
     Ok(out)

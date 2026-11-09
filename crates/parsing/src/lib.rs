@@ -39,6 +39,8 @@ mod facemesh;
 #[cfg(not(target_arch = "wasm32"))]
 mod fuse;
 #[cfg(not(target_arch = "wasm32"))]
+pub mod mesher;
+#[cfg(not(target_arch = "wasm32"))]
 mod nn;
 #[cfg(not(target_arch = "wasm32"))]
 mod parser;

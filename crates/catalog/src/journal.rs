@@ -72,6 +72,7 @@
 //! | fork 4 | a mask's Decontaminate amount (#115) | `Mask.decontaminate` (develop settings), left out at 0 |
 //! | fork 5 | Select People masks (#123) | `MaskShape::People` `face`, `seg`, `detail` and `edge` (develop settings), left out when empty; their grids go in the snapshot's shared grid table |
 //! | fork 6 | Face Reshape (`fork/retouch-reshape.md`) | the `fork_retouch` block's `reshape` (`slimFace`, `jaw`, `chin`, `doubleChin`, `nose`, `forehead`, `eyeSize`), for every face and per face |
+//! | fork 9 | Assisted Culling's eyes (`fork/ai-culling.md`; 7 and 8 are held for other branches) | `Analysis.eyes` (`Eyes`: `faces`, `main`, `closed`, `focus`), in `SetAnalysis` bodies and `Photo.analysis`, left out when not measured |
 //!
 //! Versions 1–14 are `"format":"lightcraft-catalog"`; the fork writes `"format":"lightcraft-catalog-fork"` from
 //! its version 1 on, with its own counter, so an official build refuses a fork library untouched and the same

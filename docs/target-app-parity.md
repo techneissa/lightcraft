@@ -101,7 +101,7 @@ search embeddings; generative remove runs in Adobe's cloud.
 | Generative remove, distractions, reflections | — (generative is out of scope: cloud) | ⬜ |
 | Dust detection | ✅ | ✅ |
 | Faces / People | YuNet detection, SFace / AuraFace recognition (opt-in downloads), People view | ✅ (MVP, [faces.md](faces.md)) |
-| Assisted culling | focus, bursts | 🟡 (no eyes-open / aesthetics scores) |
+| Assisted culling | focus, bursts, eyes closed and eyes out of focus (fork) | 🟡 (no aesthetics scores) |
 | Auto (tone), adaptive presets | Auto calibrated on Lightroom's Auto results (#628); no adaptive presets | 🟡 |
 | Natural-language search | — | ⬜ |
 
@@ -299,6 +299,7 @@ P2 items 12–25 h; look tuning, performance, packaging, hardening 25–45 h.
 
 | Date | Change | Summary |
 |---|---|---|
+| 2026-11-09 | patch | AI features table: Assisted culling reads eyes closed and eyes out of focus (fork, `fork/ai-culling.md`); still 🟡 (no aesthetics scores); no headline number changes. |
 | 2026-11-07 | correction | Compressed ORF sensor support withdrawn pending provenance review; embedded preview fallback remains. Coverage regenerated without the removed decoder: 557 verified, 665 unverified, 187 preview-only, 37 unsupported; 94% use-weighted coverage. |
 | 2026-11-04 | minor | Compressed ORF support was introduced in #3775; subsequently withdrawn pending provenance review. Earlier clean-room and verification claims are withdrawn; compressed files use embedded previews when available. See [ORF status](orf-compression.md). |
 | 2026-10-24 | patch | Stability, the stability discount, the Beta-needs list and the estimate history: tests run in CI on Linux x64 since #2667 (FreeBSD nightly), not on macOS or Windows (gap 9); percentages and hours unchanged |

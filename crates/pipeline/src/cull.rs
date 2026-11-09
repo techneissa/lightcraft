@@ -4,6 +4,8 @@
 
 use lightcraft_raster::Rgb32f;
 
+pub mod eyes;
+
 /// Long edge the measurements run at.
 const EDGE: usize = 512;
 

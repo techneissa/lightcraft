@@ -189,6 +189,14 @@ pub enum Dialog {
         burst_gap: f32,
         similarity: f32,
     },
+    /// Fork (`fork/ai-culling.md`): after Assisted Culling, the photos whose main faces have their eyes closed or out
+    /// of focus, offered for rejection (each kind ticked while it has photos).
+    CullSuggest {
+        closed: Vec<u64>,
+        soft: Vec<u64>,
+        reject_closed: bool,
+        reject_soft: bool,
+    },
     /// Help ▸ System Info: (label, value) rows.
     DenoiseModel {
         info: serde_json::Value,
