@@ -2616,5 +2616,21 @@
   "Welcome": "Vítejte",
   "Next": "Další",
   "Get Started": "Začít",
-  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie"
+  "Stopped at the scan limit: there may be more photos": "Zastaveno na limitu skenování: je možné, že existují další fotografie",
+  "Swap With": "Nahradit čím",
+  "White": "Bílá",
+  "Light Grey": "Světle šedá",
+  "Grey": "Šedá",
+  "Black": "Černá",
+  "Choose Colour": "Vybrat barvu",
+  "Choose Picture…": "Vybrat obrázek…",
+  "Use a Photo…": "Použít fotku…",
+  "Loading…": "Načítání…",
+  "Choose Background Picture…": "Vybrat obrázek pozadí…",
+  "Images": "Obrázky",
+  "Background Picture Missing": "Obrázek pozadí chybí",
+  "Blur": "Rozostření",
+  "Clean Backdrop": "Vyčistit pozadí",
+  "Loading background picture": "Načítání obrázku pozadí",
+  "Reading depth map": "Čtení hloubkové mapy"
 }
