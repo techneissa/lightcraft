@@ -9,7 +9,13 @@ use serde_json::{Value, json};
 use super::{CommandSpec, bad, cmd, has_active, index_req, photo_id, str_param};
 use crate::{Result, Session};
 use lightcraft_catalog::PhotoId;
-use lightcraft_develop::retouch::{FEATURES, Face};
+use lightcraft_develop::retouch::{FEATURES, Face, KeyMap};
+use lightcraft_pipeline::retouch_step::FrameKeyMap;
+
+/// `keys` as the matcher takes it.
+fn as_map(keys: &Option<FrameKeyMap>) -> Option<&dyn KeyMap> {
+    keys.as_ref().map(|k| k as &dyn KeyMap)
+}
 
 fn target(s: &Session, p: &Value, c: &str) -> Result<PhotoId> {
     let id = photo_id(p, c)?.or_else(|| s.active()).ok_or_else(|| bad(c, "no photo"))?;
@@ -25,10 +31,10 @@ fn face_param(p: &Value, c: &str) -> Result<Option<usize>> {
 }
 
 /// The faces of `id` as found, for a face index a command was given.
-fn found_faces(s: &Session, id: PhotoId, c: &str) -> Result<Vec<Face>> {
+fn found_faces(s: &Session, id: PhotoId, c: &str) -> Result<std::sync::Arc<lightcraft_develop::retouch::Input>> {
     let st = s.retouch_faces_of(id);
     match st.found {
-        Some(f) => Ok(f.input.faces.clone()),
+        Some(f) => Ok(f.input),
         None if st.busy => Err(bad(c, "the photo's faces are still being found: try again in a moment")),
         None => Err(bad(c, "the photo's faces are not known yet: run retouch.detect first")),
     }
@@ -37,8 +43,10 @@ fn found_faces(s: &Session, id: PhotoId, c: &str) -> Result<Vec<Face>> {
 fn faces_json(s: &Session, id: PhotoId) -> Value {
     let st = s.retouch_faces_of(id);
     let d = s.develop_of(id).unwrap_or_default();
-    let faces: Vec<Face> = st.found.as_ref().map(|f| f.input.faces.clone()).unwrap_or_default();
-    let own = lightcraft_develop::retouch::overrides::resolve(&d.retouch, &faces);
+    let input = st.found.as_ref().map(|f| f.input.clone()).unwrap_or_default();
+    let faces: &[Face] = &input.faces;
+    let keys = s.retouch_key_map(id);
+    let own = lightcraft_develop::retouch::overrides::resolve_in(&d.retouch, faces, as_map(&keys));
     let list: Vec<Value> = faces
         .iter()
         .enumerate()
@@ -109,11 +117,15 @@ pub fn specs() -> Vec<CommandSpec> {
                         d.retouch.global.set(control, value);
                     }
                     Some(i) => {
-                        let faces = found_faces(s, id, c)?;
-                        if i >= faces.len() {
-                            return Err(bad(c, format!("no face {i}: the photo has {}", faces.len())));
+                        let input = found_faces(s, id, c)?;
+                        if i >= input.faces.len() {
+                            return Err(bad(c, format!("no face {i}: the photo has {}", input.faces.len())));
                         }
-                        let own = d.retouch.override_mut(&faces, i).ok_or_else(|| bad(c, "too many faces have their own settings"))?;
+                        let keys = s.retouch_key_map(id);
+                        let own = d
+                            .retouch
+                            .override_mut_in(&input.faces, i, as_map(&keys))
+                            .ok_or_else(|| bad(c, "too many faces have their own settings"))?;
                         own.set(control, value);
                     }
                 }
@@ -132,9 +144,10 @@ pub fn specs() -> Vec<CommandSpec> {
                 let c = "retouch.resetFace";
                 let id = target(s, p, c)?;
                 let i = index_req(p, "face", c)?;
-                let faces = found_faces(s, id, c)?;
+                let input = found_faces(s, id, c)?;
                 let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
-                if !d.retouch.remove_override(&faces, i) {
+                let keys = s.retouch_key_map(id);
+                if !d.retouch.remove_override_in(&input.faces, i, as_map(&keys)) {
                     return Ok(json!({"removed": false}));
                 }
                 s.set_develop(id, d, "Reset Face")?;
@@ -165,8 +178,10 @@ pub fn specs() -> Vec<CommandSpec> {
                         d.retouch.global.reset_feature(f);
                     }
                     (f, Some(i)) => {
-                        let faces = found_faces(s, id, c)?;
-                        let own = lightcraft_develop::retouch::overrides::resolve(&d.retouch, &faces).get(i).copied().flatten();
+                        let input = found_faces(s, id, c)?;
+                        let keys = s.retouch_key_map(id);
+                        let own =
+                            lightcraft_develop::retouch::overrides::resolve_in(&d.retouch, &input.faces, as_map(&keys)).get(i).copied().flatten();
                         let Some(own) = own.and_then(|o| d.retouch.faces.get_mut(o)) else { return Ok(Value::Null) };
                         match f {
                             Some(f) => {

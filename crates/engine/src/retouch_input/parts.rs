@@ -12,16 +12,19 @@
 
 use std::sync::Arc;
 
-use lightcraft_develop::retouch::{Face, Input, MAX_FACES, NormRect, Part, PartMask};
+use lightcraft_develop::retouch::{Face, Input, KeyFrame, MAX_FACES, NormRect, Part, PartMask};
 use lightcraft_geom::{Orientation, Rect};
 use lightcraft_parsing::{FaceHint, Landmark, Parsing, Person, RgbImage};
 use lightcraft_raster::{Image, Plane, Rgba8};
 
 use super::{Found, arrange, thumb};
-use crate::people_parsing::{Outcome, PeopleParsing};
+use crate::people_parsing::{Choice, Outcome, PeopleParsing};
 
 /// Most samples in a part mask merged from several planes (one plane is kept as the parser made it).
 const MAX_MERGED: usize = 1 << 20;
+/// Most samples along either side of a merged mask, before its area is counted: a damaged parse (a sliver of a
+/// plane, thousands of samples across a hair's width of the photo) can't size it past this.
+const MAX_MERGED_SIDE: f32 = 1536.0;
 /// The face mesh's points that stand in for YuNet's five when the parse has no YuNet face to match: the subject's
 /// right and left iris centre, the nose tip, the right and left mouth corner.
 const MESH_FIVE: [usize; 5] = [468, 473, 1, 61, 291];
@@ -32,6 +35,8 @@ const SAME_FACE_IOU: f32 = 0.5;
 pub(crate) struct PartsFinder {
     pub(super) prepare: crate::cmd::parsing::Prepare,
     pub(super) parsing: PeopleParsing,
+    /// The set and hair edges when the search was set up: its faces are kept under their version.
+    pub(super) choice: Choice,
     pub(super) orient: Orientation,
     pub(super) regions: Vec<(NormRect, String)>,
 }
@@ -40,7 +45,7 @@ impl PartsFinder {
     /// Render the parse's picture, find its YuNet faces, and take the parse from the cache or wait for its run.
     pub(super) fn find(self) -> Result<Found, String> {
         let (img, hints) = self.prepare.run()?;
-        let parsing = match self.parsing.parse(img.clone(), hints.clone(), true) {
+        let parsing = match self.parsing.parse_as(self.choice, img.clone(), hints.clone(), true) {
             Outcome::Ready { parsing, .. } => parsing,
             Outcome::Running => return Err("the people parse is still running".into()),
             Outcome::Failed(e) => return Err(e),
@@ -68,12 +73,14 @@ fn rgba(img: &RgbImage, x: usize, y: usize) -> [u8; 4] {
 }
 
 /// One face per person of `parsing` who has a face (a person seen from behind has none, and no face to retouch),
-/// largest first, at most [`MAX_FACES`].
+/// largest first, at most [`MAX_FACES`], with the masks of the parts some feature reads
+/// ([`lightcraft_develop::retouch::parts_read`]).
 pub(crate) fn faces_of(parsing: &Parsing, hints: &[FaceHint], orient: Orientation) -> Vec<Face> {
-    parsing.people.iter().filter_map(|p| face_of(p, hints, orient)).take(MAX_FACES).collect()
+    let read = lightcraft_develop::retouch::parts_read();
+    parsing.people.iter().filter_map(|p| face_of(p, hints, orient, &read)).take(MAX_FACES).collect()
 }
 
-fn face_of(p: &Person, hints: &[FaceHint], orient: Orientation) -> Option<Face> {
+fn face_of(p: &Person, hints: &[FaceHint], orient: Orientation, read: &[Part]) -> Option<Face> {
     let r = p.face.filter(lightcraft_parsing::NormRect::is_valid)?;
     let upright = NormRect::new(f64::from(r.x0), f64::from(r.y0), f64::from(r.x1), f64::from(r.y1));
     let point = |x: f32, y: f32| orient.map(f64::from(x), f64::from(y), 1.0, 1.0);
@@ -88,7 +95,13 @@ fn face_of(p: &Person, hints: &[FaceHint], orient: Orientation) -> Option<Face> 
         }
         None => Vec::new(),
     };
-    let masks = p.parts.iter().filter_map(|(part, planes)| Some((part_of(*part), part_mask(planes, orient)?))).collect();
+    let masks = p
+        .parts
+        .iter()
+        .map(|(part, planes)| (part_of(*part), planes))
+        .filter(|(part, _)| read.contains(part))
+        .filter_map(|(part, planes)| Some((part, part_mask(planes, orient)?)))
+        .collect();
     Some(Face {
         bounds: map_rect(orient, upright),
         upright: Some(upright),
@@ -96,6 +109,7 @@ fn face_of(p: &Person, hints: &[FaceHint], orient: Orientation) -> Option<Face> 
         score: if p.face_score.is_finite() { p.face_score.clamp(0.0, 1.0) } else { 0.0 },
         person: None,
         masks,
+        key_frame: KeyFrame::Photo,
     })
 }
 
@@ -133,7 +147,8 @@ fn part_of(p: lightcraft_parsing::Part) -> Part {
 }
 
 /// A part's planes as one mask, turned by `orient`: one plane as it is; several merged (their maximum) over the box
-/// holding them all, at the finest plane's resolution, at most [`MAX_MERGED`] samples. `None` when no plane is valid.
+/// holding them all, at the finest plane's resolution, at most [`MAX_MERGED_SIDE`] samples a side and
+/// [`MAX_MERGED`] in all. `None` when no plane is valid.
 pub(crate) fn part_mask(planes: &[lightcraft_parsing::Plane], orient: Orientation) -> Option<PartMask> {
     let valid: Vec<&lightcraft_parsing::Plane> = planes.iter().filter(|p| p.is_valid()).collect();
     let (rect, plane) = match valid.as_slice() {
@@ -155,16 +170,18 @@ fn merged(planes: &[&lightcraft_parsing::Plane]) -> Option<(lightcraft_parsing::
     // samples per unit of the photo, the finest plane's
     let dx = planes.iter().map(|p| p.width as f32 / p.rect.width()).fold(1.0f32, f32::max);
     let dy = planes.iter().map(|p| p.height as f32 / p.rect.height()).fold(1.0f32, f32::max);
-    let (mut w, mut h) = ((rect.width() * dx).ceil().max(1.0), (rect.height() * dy).ceil().max(1.0));
+    // (each side first: a sliver gives one side millions of samples and the other one)
+    let side = |v: f32| if v.is_finite() { v.ceil().clamp(1.0, MAX_MERGED_SIDE) } else { MAX_MERGED_SIDE };
+    let (mut w, mut h) = (side(rect.width() * dx), side(rect.height() * dy));
     let n = w * h;
-    if !n.is_finite() {
-        return None;
-    }
     if n > MAX_MERGED as f32 {
         let k = (MAX_MERGED as f32 / n).sqrt();
         (w, h) = ((w * k).floor().max(1.0), (h * k).floor().max(1.0));
     }
     let (w, h) = (w as usize, h as usize);
+    if w.saturating_mul(h) > MAX_MERGED {
+        return None;
+    }
     let plane = Plane::from_fn(w, h, |x, y| {
         let px = rect.x0 + (x as f32 + 0.5) / w as f32 * rect.width();
         let py = rect.y0 + (y as f32 + 0.5) / h as f32 * rect.height();

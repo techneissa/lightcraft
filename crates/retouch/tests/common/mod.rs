@@ -26,6 +26,7 @@ pub fn face(x0: f64, y0: f64, x1: f64, y1: f64) -> Face {
             .iter()
             .map(|p| (*p, PartMask { plane: lightcraft_raster::Plane::filled(8, 8, 1.0), area: NormRect::new(x0, y0, x1, y1) }))
             .collect(),
+        ..Face::default()
     }
 }
 
