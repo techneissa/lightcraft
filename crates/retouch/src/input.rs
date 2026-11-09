@@ -263,6 +263,64 @@ pub struct Face {
     /// The spots on the face's skin (Blemishes), found once by the provider on the picture its masks come from
     /// ([`crate::blemish::with_spots`]). `None`: not looked for; Blemishes then looks on the image it retouches.
     pub spots: Option<Spots>,
+    /// The stray strands around the face and across it (Stray Hair), found once by the provider on the picture its
+    /// masks come from ([`crate::hair::with_strands`]). `None`: not looked for yet; Stray Hair then changes nothing
+    /// (it never searches in a render).
+    pub strands: Option<Strands>,
+}
+
+/// The stray strands found for one face (Stray Hair): a grid of cells over `area`, stored only for the tiles of
+/// [`Strands::TILE`] × [`Strands::TILE`] cells that hold a strand. The render repairs the cells with a weight from
+/// the pixels beside them, across the strand.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Strands {
+    /// The rectangle the grid covers, normalised like the face's box (same frame).
+    pub area: NormRect,
+    /// Cells across and down.
+    pub width: usize,
+    pub height: usize,
+    /// The searched picture's size in pixels: the frame `across` and the distances below are measured in.
+    pub picture: (usize, usize),
+    /// How far across a strand its sides are read, and the spacing of the samples along it, in the searched
+    /// picture's pixels.
+    pub side: f64,
+    pub step: f64,
+    /// Per tile, row by row (`width` and `height` divided by [`Strands::TILE`], rounded up): its place in `cells`
+    /// divided by `TILE²`, or `u32::MAX` for a tile without a strand.
+    pub tiles: Vec<u32>,
+    /// `TILE²` cells per stored tile, row by row: the weight (0…255 for 0…1), the direction across the strand
+    /// (0…255 for 0…π, in the searched picture's pixels, x right and y down) and the polarity (0 none, 1 darker than
+    /// its sides, 2 lighter).
+    pub cells: Vec<[u8; 3]>,
+}
+
+impl Strands {
+    /// A tile's side, in cells.
+    pub const TILE: usize = 16;
+
+    /// The tiles across and down.
+    pub fn tiles_size(&self) -> (usize, usize) {
+        (self.width.div_ceil(Self::TILE), self.height.div_ceil(Self::TILE))
+    }
+
+    /// Cell (`x`, `y`): weight, direction and polarity; `None` outside the grid or in a tile without a strand.
+    pub fn cell(&self, x: usize, y: usize) -> Option<[u8; 3]> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        let (tw, _) = self.tiles_size();
+        let t = *self.tiles.get((y / Self::TILE).saturating_mul(tw).saturating_add(x / Self::TILE))?;
+        if t == u32::MAX {
+            return None;
+        }
+        let i = (t as usize).saturating_mul(Self::TILE * Self::TILE).saturating_add((y % Self::TILE) * Self::TILE + x % Self::TILE);
+        self.cells.get(i).copied()
+    }
+
+    /// Whether no strand was found.
+    pub fn is_empty(&self) -> bool {
+        self.cells.is_empty()
+    }
 }
 
 /// What a spot on the skin is ([`Spot::kind`]).
@@ -391,6 +449,23 @@ impl Input {
                             }
                             h.u64(p.kind as u64);
                             h.u64(u64::from(p.strength.to_bits()));
+                        }
+                    }
+                }
+                match &f.strands {
+                    None => h.u64(u64::MAX),
+                    Some(s) => {
+                        for v in [s.area.x0, s.area.y0, s.area.x1, s.area.y1, s.side, s.step] {
+                            h.u64(v.to_bits());
+                        }
+                        for v in [s.width, s.height, s.picture.0, s.picture.1, s.tiles.len(), s.cells.len()] {
+                            h.u64(v as u64);
+                        }
+                        for t in &s.tiles {
+                            h.u64(u64::from(*t));
+                        }
+                        for c in &s.cells {
+                            h.bytes(c);
                         }
                     }
                 }

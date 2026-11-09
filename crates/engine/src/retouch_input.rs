@@ -60,6 +60,7 @@ impl FaceProvider for Yunet {
                 masks: Vec::new(),
                 key_frame: lightcraft_develop::retouch::KeyFrame::Edit,
                 spots: None,
+                strands: None,
             })
             .collect())
     }
@@ -91,7 +92,12 @@ impl Found {
         let face = |f: &Face| {
             let masks: usize = f.masks.iter().map(|(_, m)| m.plane.data.len().saturating_mul(4)).sum();
             let spots = f.spots.as_ref().map_or(0, |s| s.list.len().saturating_mul(std::mem::size_of::<lightcraft_develop::retouch::input::Spot>()));
-            masks.saturating_add(f.landmarks.len().saturating_mul(16)).saturating_add(spots).saturating_add(std::mem::size_of::<Face>())
+            let strands = f.strands.as_ref().map_or(0, |s| s.cells.len().saturating_mul(3).saturating_add(s.tiles.len().saturating_mul(4)));
+            masks
+                .saturating_add(f.landmarks.len().saturating_mul(16))
+                .saturating_add(spots)
+                .saturating_add(strands)
+                .saturating_add(std::mem::size_of::<Face>())
         };
         let faces: usize = self.input.faces.iter().map(face).sum();
         let thumbs: usize = self.thumbs.iter().map(|t| t.data.len().saturating_mul(4)).sum();
