@@ -1,7 +1,7 @@
 //! Fork feature (`fork/decontaminate.md`, issue #115): a mask's Decontaminate amount (`mask.decontaminate`), and the
 //! amount a new mask starts with: on (100) for Background and Entire Person, off for every other kind.
 
-use lightcraft_develop::MaskShape;
+use lightcraft_develop::{Mask, MaskShape};
 use serde_json::Value;
 
 use super::masks::{find, mask_id, masks_edit};
@@ -18,6 +18,11 @@ pub(crate) fn default_for(kind: &str, shape: &MaskShape) -> f64 {
         _ if kind == "background" => 100.0,
         _ => 0.0,
     }
+}
+
+/// The amount mask `m` started with, from the kind of its first part: what its Decontaminate slider resets to.
+pub fn start_value(m: &Mask) -> f64 {
+    m.components.first().map_or(0.0, |c| default_for("", &c.shape))
 }
 
 pub fn specs() -> Vec<CommandSpec> {

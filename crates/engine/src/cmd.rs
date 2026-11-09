@@ -18,6 +18,7 @@ pub mod dcp_profiles;
 mod decontaminate;
 #[cfg(test)]
 pub(crate) use decontaminate::default_for as decontaminate_default;
+pub use decontaminate::start_value as decontaminate_start;
 pub(crate) mod denoise;
 mod develop;
 mod edit;

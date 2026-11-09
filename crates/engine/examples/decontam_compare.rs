@@ -5,6 +5,9 @@
 //! `LIGHTCRAFT_CONFIG_DIR=<scratch> cargo run --release -p lightcraft-engine --features sam --example decontam_compare -- OUT_DIR PHOTO=RRGGBB...`
 //!
 //! Writes `OUT_DIR/<stem>.<edge>.d<0|100>.png` (1600 px on the long side) and `OUT_DIR/timings.json`.
+//!
+//! A manual tool for making the comparison pictures: not part of the app or of any check; it stops with a message on
+//! bad arguments.
 use std::time::Instant;
 
 use lightcraft_engine::Session;
@@ -22,7 +25,11 @@ fn main() {
     let mut timings: Vec<Value> = Vec::new();
     for arg in &args[1..] {
         let (path, hex) = arg.rsplit_once('=').expect("PHOTO=RRGGBB");
-        let rgb: Vec<f64> = (0..3).map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).expect("hex") as f64 / 255.0).collect();
+        let channel = |i: usize| hex.get(i * 2..i * 2 + 2).and_then(|h| u8::from_str_radix(h, 16).ok());
+        let Some(rgb) = (0..3).map(|i| channel(i).map(|v| f64::from(v) / 255.0)).collect::<Option<Vec<f64>>>() else {
+            eprintln!("{arg}: the colour must be six hex digits (RRGGBB)");
+            continue;
+        };
         let full = std::fs::canonicalize(path).expect("photo").to_string_lossy().to_string();
         let r = s.execute("library.import", &json!({"paths": [full]})).expect("import");
         let id = PhotoId(r["imported"][0].as_u64().expect("imported"));

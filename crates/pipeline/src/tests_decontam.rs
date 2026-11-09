@@ -31,6 +31,11 @@ fn swapped(d: f64) -> DevelopSettings {
 
 /// Hair and sky mixed by the mask's own alpha (as a matte describes a strand), with fine hair texture.
 fn scene(w: usize, h: usize, s: &DevelopSettings) -> Rgb32f {
+    scene_of(w, h, s, HAIR, SKY)
+}
+
+/// [`scene`] with these colours.
+fn scene_of(w: usize, h: usize, s: &DevelopSettings, hair: [f32; 3], sky: [f32; 3]) -> Rgb32f {
     let frame = crate::geometry::Frame::new(w, h, s, true);
     let flat = Rgb32f::new(w, h);
     let log_l = lightcraft_raster::Plane::new(w, h);
@@ -38,7 +43,7 @@ fn scene(w: usize, h: usize, s: &DevelopSettings) -> Rgb32f {
     Rgb32f::from_fn(w, h, |x, y| {
         let t = a.get(x, y);
         let shade = 0.85 + 0.15 * ((x * 7 + y * 3) % 5) as f32 / 4.0;
-        std::array::from_fn(|c| (1.0 - t) * HAIR[c] * shade + t * SKY[c])
+        std::array::from_fn(|c| (1.0 - t) * hair[c] * shade + t * sky[c])
     })
 }
 
@@ -123,4 +128,117 @@ fn a_preview_and_an_export_decontaminate_alike() {
     let (plain, on) = (gap(0.0), gap(100.0));
     eprintln!("preview vs export: {plain} without, {on} with");
     assert!(on <= plain + 4.0, "decontaminated preview and export {on} apart, {plain} without");
+}
+
+/// A raw's tone map (process V4 without a camera curve: `ToneMap::hdr`) with Contrast +100, on a source bright
+/// enough to reach its shoulder.
+fn raw_like(mut s: DevelopSettings) -> DevelopSettings {
+    s.process = lightcraft_develop::Process::V4.version();
+    s.light.contrast = 100.0;
+    s
+}
+
+fn raw_shot(src: &Rgb32f, s: &DevelopSettings, w: usize, h: usize) -> Rgba8 {
+    let info = SourceInfo { raw: true, ..Default::default() };
+    render(src, &info, s, &RenderRequest::fit(w, h)).image
+}
+
+/// Dark hair against a sky three stops over mid grey, as a raw holds them.
+fn bright(w: usize, h: usize, s: &DevelopSettings) -> Rgb32f {
+    scene_of(w, h, s, [0.05, 0.025, 0.012], [0.9, 1.6, 3.2])
+}
+
+/// The largest difference of any channel of any pixel.
+fn worst(a: &Rgba8, b: &Rgba8) -> u8 {
+    a.data.iter().zip(&b.data).flat_map(|(a, b)| (0..3).map(move |c| a[c].abs_diff(b[c]))).max().unwrap_or(0)
+}
+
+/// The composite of the two colours is tone-mapped once: on a raw with Contrast +100, a decontaminated mask with
+/// nothing (or next to nothing) to edit apart changes no pixel (each colour tone-mapped on its own, then mixed, shifted
+/// the edge's colour).
+#[test]
+fn an_idle_mask_on_a_raw_with_contrast_changes_nothing() {
+    let (w, h) = (240, 60);
+    let idle = [
+        ("nothing", LocalAdjustments::default()),
+        ("a trace of Exposure", LocalAdjustments { exposure: 0.002, ..Default::default() }),
+        ("a trace of Saturation", LocalAdjustments { saturation: 0.2, ..Default::default() }),
+    ];
+    for (name, adjust) in idle {
+        let mut s = raw_like(swapped(100.0));
+        s.masks[0].adjust = adjust;
+        let src = bright(w, h, &s);
+        let plain = raw_shot(&src, &raw_like(DevelopSettings::default()), w, h);
+        let worst = worst(&plain, &raw_shot(&src, &s, w, h));
+        assert!(worst <= 1, "{name}: a decontaminated mask changed a pixel by {worst}");
+    }
+}
+
+/// Highlights, Clarity and Texture read the mixed pixel's neighbourhood: they run once on the composite, so a
+/// decontaminated edge draws no bright rim with them (with a trace of Exposure, so the edge is split).
+#[test]
+fn tone_edits_draw_no_rim_at_a_decontaminated_edge() {
+    let (w, h) = (240, 60);
+    let trace = LocalAdjustments { exposure: 0.002, ..Default::default() };
+    let edits = [
+        ("highlights", LocalAdjustments { highlights: -100.0, ..trace }),
+        ("clarity", LocalAdjustments { clarity: 100.0, ..trace }),
+        ("texture", LocalAdjustments { texture: 100.0, ..trace }),
+        ("highlights alone", LocalAdjustments { highlights: -100.0, ..Default::default() }),
+    ];
+    for (name, adjust) in edits {
+        let with = |d: f64| {
+            let mut s = raw_like(swapped(d));
+            s.masks[0].adjust = adjust;
+            s
+        };
+        let src = bright(w, h, &with(0.0));
+        let worst = worst(&raw_shot(&src, &with(0.0), w, h), &raw_shot(&src, &with(100.0), w, h));
+        assert!(worst <= 1, "{name}: decontaminating moved a pixel by {worst}");
+    }
+}
+
+/// Two decontaminated masks on one edge: each is split, not only the first. The second swaps the background as it
+/// does with the first one not decontaminated.
+#[test]
+fn every_decontaminated_mask_at_an_edge_is_split() {
+    let (w, h) = (240, 60);
+    let both = |first_d: f64, d: f64| {
+        let mut s = swapped(d);
+        let mut first = s.masks[0].clone();
+        first.id = 2;
+        // (the first barely edits; the second swaps the colour)
+        first.adjust = LocalAdjustments { exposure: 0.05, ..Default::default() };
+        first.decontaminate = first_d;
+        s.masks.insert(0, first);
+        s
+    };
+    let src = scene(w, h, &swapped(0.0));
+    let off = edge_blue(&shot(&src, &both(0.0, 0.0), w, h));
+    let second = edge_blue(&shot(&src, &both(0.0, 100.0), w, h));
+    let on = edge_blue(&shot(&src, &both(100.0, 100.0), w, h));
+    assert!(second > off + 0.02, "the second alone: OkLab b {second:.3} across the edge, {off:.3} without");
+    assert!((on - second).abs() < 0.005, "both decontaminated: OkLab b {on:.3} across the edge, {second:.3} with the second alone");
+}
+
+/// The split is kept with the render's other stages: an edit that doesn't change the mask's alpha (its Amount, its
+/// sliders, the global sliders) doesn't estimate it again.
+#[test]
+fn the_split_is_kept_while_only_the_edits_change() {
+    let (w, h) = (240, 60);
+    let mut s = swapped(100.0);
+    let src = std::sync::Arc::new(scene(w, h, &s));
+    let cache = crate::StageCache::default();
+    let req = RenderRequest::fit(w, h);
+    let before = crate::decontam::estimates();
+    let first = crate::render_cached(&src, &SourceInfo::default(), &s, &req, &cache).image;
+    s.masks[0].adjust.amount = 60.0;
+    s.masks[0].adjust.exposure = 0.5;
+    s.light.contrast = 30.0;
+    let _ = crate::render_cached(&src, &SourceInfo::default(), &s, &req, &cache);
+    assert_eq!(crate::decontam::estimates() - before, 1, "the split was estimated again");
+    // and a kept split renders as a fresh one
+    let fresh = shot(&src, &s, w, h);
+    assert_eq!(crate::render_cached(&src, &SourceInfo::default(), &s, &req, &cache).image.data, fresh.data);
+    assert_ne!(first.data, fresh.data);
 }
