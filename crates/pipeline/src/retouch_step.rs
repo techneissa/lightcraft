@@ -489,6 +489,70 @@ mod tests {
         }
     }
 
+    /// Stray Hair reads furthest (a band half a face past the hair): a zoomed window on a flyaway against the sky
+    /// gives the whole frame's repair.
+    #[test]
+    fn a_zoomed_window_on_a_flyaway_gives_the_whole_frames_repair() {
+        use lightcraft_develop::retouch::{Part, PartMask};
+        let (w, h) = (640, 480);
+        let ell = |nx: f64, ny: f64, c: (f64, f64), rx: f64, ry: f64| ((nx - c.0) / rx).powi(2) + ((ny - c.1) / ry).powi(2) <= 1.0;
+        let face_at = move |nx: f64, ny: f64| ell(nx, ny, (0.5, 0.55), 0.08, 0.13);
+        let hair_at = move |nx: f64, ny: f64| ell(nx, ny, (0.5, 0.47), 0.12, 0.14) && ny < 0.52 && !face_at(nx, ny);
+        // a dark strand a pixel wide in the sky beside the hair
+        let strand = |nx: f64, ny: f64| {
+            let (ax, ay, bx, by) = (0.345 * 640.0, 0.5 * 480.0, 0.335 * 640.0, 0.36 * 480.0);
+            let (px, py) = (nx * 640.0, ny * 480.0);
+            let t = (((px - ax) * (bx - ax) + (py - ay) * (by - ay)) / ((bx - ax).powi(2) + (by - ay).powi(2))).clamp(0.0, 1.0);
+            ((px - ax - t * (bx - ax)).powi(2) + (py - ay - t * (by - ay)).powi(2)).sqrt() < 0.6
+        };
+        let src = Rgb32f::from_fn(w, h, |x, y| {
+            let (nx, ny) = ((x as f64 + 0.5) / w as f64, (y as f64 + 0.5) / h as f64);
+            if strand(nx, ny) || hair_at(nx, ny) {
+                [0.03, 0.02, 0.015]
+            } else if face_at(nx, ny) {
+                [0.5, 0.36, 0.28]
+            } else {
+                [0.55, 0.65, 0.78]
+            }
+        });
+        // the masks cover the head only: the strand lies outside them, in the band Stray Hair searches past the hair
+        let area = NormRect::new(0.375, 0.32, 0.625, 0.69);
+        let mask = |f: &dyn Fn(f64, f64) -> bool| {
+            let n = 96;
+            let plane = lightcraft_raster::Plane::from_fn(n, n, |x, y| {
+                f64::from(u8::from(f(area.x0 + (x as f64 + 0.5) / n as f64 * area.width(), area.y0 + (y as f64 + 0.5) / n as f64 * area.height())))
+                    as f32
+            });
+            PartMask { plane, area }
+        };
+        let face = Face {
+            masks: vec![(Part::Hair, mask(&hair_at)), (Part::FacialSkin, mask(&face_at))],
+            ..Face::boxed(NormRect::new(0.42, 0.42, 0.58, 0.68))
+        };
+        let info = SourceInfo { retouch: Some(Arc::new(Input::new(vec![face]))), ..SourceInfo::default() };
+        let mut s = DevelopSettings::default();
+        s.detail.nr_color = 0.0;
+        let plain = s.clone();
+        controls::set(&mut s, "retouch.hair.amount", 100.0);
+        let req = RenderRequest::fit(w, h);
+        // (on the strand, clear of the masks' area: only the reach makes the window see the hair beside it)
+        let win = crate::PixelWindow { x: 205, y: 180, w: 26, h: 50 };
+        let full = render(&src, &info, &s, &req).image;
+        let before = render(&src, &info, &plain, &req).image;
+        let zoomed = render(&src, &info, &s, &RenderRequest { window: Some(win), ..req }).image;
+        assert_eq!((zoomed.width, zoomed.height), (win.w, win.h));
+        let (mut worst, mut changed) = (0u8, 0);
+        for y in 0..win.h {
+            for x in 0..win.w {
+                let (a, b, c) = (full.get(win.x + x, win.y + y), zoomed.get(x, y), before.get(win.x + x, win.y + y));
+                worst = worst.max((0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0));
+                changed += usize::from(a != c);
+            }
+        }
+        assert!(changed > 20, "the strand is repaired in the window ({changed} changed)");
+        assert!(worst <= 1, "the zoomed window differs from the whole frame by {worst}");
+    }
+
     /// The window grows only for a face whose reads reach it, and not at all with retouching off.
     #[test]
     fn the_window_grows_for_a_retouched_face_it_touches() {

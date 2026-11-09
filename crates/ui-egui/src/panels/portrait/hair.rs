@@ -1,4 +1,6 @@
-//! The Portrait tab's section of the hair feature (`lightcraft_retouch::hair`). Empty until the
-//! feature lands: its issue fills `body` (sliders through [`super::Ctx::slider`]), nothing else in the panel.
+//! The Portrait tab's section of the Stray Hair feature (`lightcraft_retouch::hair`): Amount, for every face or the
+//! picked one.
 
-pub(super) fn body(_cx: &mut super::Ctx<'_>) {}
+pub(super) fn body(cx: &mut super::Ctx<'_>) {
+    cx.slider("retouch.hair.amount");
+}

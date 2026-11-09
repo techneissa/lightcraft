@@ -427,5 +427,6 @@ fn the_feature_reads_its_parts_and_reach() {
     for p in [Part::Hair, Part::FacialSkin, Part::Eyebrows, Part::EyeWhites, Part::Lips, Part::Others] {
         assert!(Hair::PARTS.contains(&p), "{p:?}");
     }
-    assert!(Hair::REACH > 0.3 && Hair::REACH < 0.6, "{}", Hair::REACH);
+    // (the search's band past the hair and its reads past that; the zoom test checks it is enough)
+    const { assert!(Hair::REACH > 0.3 && Hair::REACH < 0.6) };
 }
