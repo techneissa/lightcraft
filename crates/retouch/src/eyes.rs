@@ -77,6 +77,33 @@ impl Feature for Eyes {
         Control { spec: Spec::amount("retouch.eyes.eyeBags", "Eye Bags"), get: |s| s.eye_bags, set: |s, v| s.eye_bags = v },
     ];
 
+    /// The eye whites and the irises, and the crescents under the lower lids where Dark Circles and Eye Bags work
+    /// (on the Facial Skin mask).
+    fn area(scene: &Scene<'_>, faces: &[usize]) -> Option<lightcraft_raster::Plane> {
+        crate::feature::union_area(scene, faces, |f| {
+            let ctx = scene.faces.get(f)?;
+            let mut out = crate::feature::parts_area(scene, &[f], &[Part::EyeWhites, Part::Iris])
+                .unwrap_or_else(|| lightcraft_raster::Plane::filled(scene.width, scene.height, 0.0));
+            if ctx.face.mask(Part::FacialSkin).is_some() {
+                for eye in geom::eyes(ctx) {
+                    let Some([x0, y0, x1, y1]) = eye.pixel_box(weights::UNDER_BOX, 2.0, scene.width, scene.height) else { continue };
+                    for y in y0..y1 {
+                        for x in x0..x1 {
+                            let (a, b) = eye.local(x as f64 + 0.5, y as f64 + 0.5);
+                            let t = eye.below_lid(a, b);
+                            let w =
+                                weights::of(Area::DarkCircles, a, t).max(weights::of(Area::EyeBags, a, t)) * scene.mask_at(f, Part::FacialSkin, x, y);
+                            if let Some(o) = out.data.get_mut(y * scene.width + x) {
+                                *o = o.max(w);
+                            }
+                        }
+                    }
+                }
+            }
+            Some(out)
+        })
+    }
+
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>) {
         let Some(face) = face else { return };
         if img.width == 0 || img.height == 0 || img.data.len() != img.width.saturating_mul(img.height) {

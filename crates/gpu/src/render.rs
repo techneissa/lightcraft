@@ -1083,6 +1083,11 @@ pub fn render(
             lightcraft_pipeline::visualize::sharpen_plane(req.overlay, &plan.settings, &l, band.as_ref(), plan.px_per_long, plan.detail_scale)
         })?
     });
+    // a Portrait slider's area map: made from the faces, never the pixels
+    let overlay_mask = overlay_mask.or_else(|| match req.overlay {
+        lightcraft_pipeline::Overlay::RetouchArea { feature, face } => lightcraft_pipeline::retouch_step::area(info, &plan, feature, face),
+        _ => None,
+    });
     lightcraft_pipeline::visualize::apply(&mut image, req.overlay, &plan, overlay_mask.as_ref(), all_overlay_alphas.as_deref());
     // spots grew the window the render worked on: cut it back to the request
     if let Some(k) = plan.keep {

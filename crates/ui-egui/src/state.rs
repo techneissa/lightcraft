@@ -217,8 +217,12 @@ pub struct UiState {
     /// The develop control whose slider is being dragged (geometry sliders show a grid).
     #[serde(skip)]
     pub dragging_control: Option<String>,
+    /// The face a dragged Portrait slider changes (a place in the photo's faces; `None`: every face): the area an
+    /// ⌥-drag preview shows ([`lightcraft_pipeline::Overlay::RetouchArea`]).
+    #[serde(skip)]
+    pub dragging_face: Option<usize>,
     /// Alt (Option on macOS) is held this frame: a dragged Edit slider shows its temporary
-    /// preview ([`lightcraft_pipeline::Overlay::for_control`]).
+    /// preview ([`lightcraft_pipeline::Overlay::for_control`]; a Portrait slider's shows where its feature works).
     #[serde(skip)]
     pub alt_held: bool,
     pub search: String,
@@ -526,6 +530,7 @@ impl Default for UiState {
             unnamed_focus: false,
             hidden_locations: Vec::new(),
             dragging_control: None,
+            dragging_face: None,
             alt_held: false,
             external_edits: Vec::new(),
             was_focused: true,

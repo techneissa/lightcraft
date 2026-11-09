@@ -65,6 +65,11 @@ impl Feature for Reshape {
     /// No masks: the warp reads the face mesh only.
     const PARTS: &'static [Part] = &[];
 
+    /// The face inside its outline (the mesh's face oval, else the ellipse of the face's box): where the warp works.
+    fn area(scene: &Scene<'_>, faces: &[usize]) -> Option<lightcraft_raster::Plane> {
+        crate::area::outline(scene, faces)
+    }
+
     /// The warp is not a change of the image's pixels: the pipeline builds it from [`Field::build`] and samples the
     /// photo through it. Nothing to do here.
     fn apply(&self, _img: &mut Rgb32f, _scene: &Scene<'_>, _face: Option<usize>) {}

@@ -1107,6 +1107,18 @@ fn camera_jpeg_shown(app: &LightcraftApp, photo: &lightcraft_catalog::Photo, sho
     !drawn.any && (shown == "embedded" || (shown == "thumb" && app.session.embedded_thumb_is_final(photo)))
 }
 
+/// A Portrait slider's area map reads the faces, which a render carries only while some retouching is on (the slider
+/// back at 0 turns it off): give `job` the photo's faces.
+pub(super) fn give_area_faces(app: &LightcraftApp, id: PhotoId, overlay: lightcraft_pipeline::Overlay, job: &mut lightcraft_engine::RenderJob) {
+    if matches!(overlay, lightcraft_pipeline::Overlay::RetouchArea { .. })
+        && job.info.retouch.is_none()
+        && let Some(found) = app.session.retouch_faces_of(id).found
+    {
+        job.key ^= found.input.fingerprint();
+        job.info.retouch = Some(found.input.clone());
+    }
+}
+
 /// Request the loupe's own render at `[rw, rh]` (drafts during drags).
 fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: [usize; 2], whole_draft: bool) {
     let (id, interacting, fit_px, overlay) = (a.id, a.interacting, a.fit_px, a.overlay);
@@ -1126,6 +1138,7 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
         if app.renderer.keep_brush_pixels {
             job.key ^= brush_preview::BRUSH_KEY_SALT;
         }
+        give_area_faces(app, id, overlay, &mut job);
         request_planes(app, (Slot::Alpha, Slot::Main), &job, a.tint);
         app.renderer.request(Slot::Main, job, 100);
         // the photo on screen comes first: background preparation waits while it is being made
