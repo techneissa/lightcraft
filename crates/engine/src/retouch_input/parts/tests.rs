@@ -468,3 +468,35 @@ fn an_override_made_under_yunet_stays_with_its_face_under_the_parse_with_a_lens_
     assert_eq!(own, Some(90.0));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Blemishes' spots are found once, with the parse, on its picture (in linear light, turned like the masks), and
+/// kept with the faces: a red spot on the face's skin is there, and a face without a Facial Skin mask has none.
+#[test]
+fn the_parse_finds_each_faces_spots_once() {
+    use lightcraft_develop::retouch::input::SpotKind;
+    let (w, h) = (400usize, 300usize);
+    let spot = (0.5f32, 0.45f32);
+    let mut data = Vec::with_capacity(w * h * 3);
+    for y in 0..h {
+        for x in 0..w {
+            let d = ((x as f32 + 0.5) / w as f32 - spot.0).hypot(((y as f32 + 0.5) / h as f32 - spot.1) * h as f32 / w as f32);
+            let g = (-(d / 0.004).powi(2)).exp();
+            data.extend([200.0 - 10.0 * g, 150.0 - 60.0 * g, 130.0 - 45.0 * g].map(|v: f32| v as u8));
+        }
+    }
+    let img = lightcraft_parsing::RgbImage { width: w, height: h, data };
+    let parsing = parse_of(&[r(0.3, 0.15, 0.7, 0.8)]);
+    for orient in [Orientation::Normal, Orientation::Rotate90] {
+        let found = super::found(&parsing, &[], &img, orient, &[]);
+        let face = &found.input.faces[0];
+        let spots = face.spots.as_ref().expect("the parse's faces have their spots found");
+        let want = orient.map(f64::from(spot.0), f64::from(spot.1), 1.0, 1.0);
+        let hit = spots.list.iter().find(|s| (s.at.0 - want.0).hypot(s.at.1 - want.1) < 0.02);
+        assert_eq!(hit.map(|s| s.kind), Some(SpotKind::Blemish), "{orient:?}: {:?}", spots.list);
+        assert!(spots.skin > 0.0);
+    }
+    let mut bare = person(r(0.3, 0.15, 0.7, 0.8));
+    bare.parts.clear();
+    let found = super::found(&Parsing { people: vec![bare], ..parse_of(&[]) }, &[], &img, Orientation::Normal, &[]);
+    assert_eq!(found.input.faces[0].spots, None, "no skin mask, no spots looked for");
+}

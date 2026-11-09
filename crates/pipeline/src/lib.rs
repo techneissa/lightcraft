@@ -1133,6 +1133,8 @@ mod tests_nr_scale;
 #[cfg(test)]
 mod tests_recolor_render;
 #[cfg(test)]
+mod tests_retouch_blemish;
+#[cfg(test)]
 mod tests_retouch_teeth_lips;
 #[cfg(test)]
 mod tests_sharpen;
