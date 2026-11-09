@@ -43,6 +43,7 @@ pub const LEFT_OUT: &[(&str, &str)] = &[
     ("maskOp", "the next mask part's mode"),
     ("pointColor", "the sample in use"),
     ("eye", "the correction in use"),
+    ("eyePhoto", "the photo that correction was picked on"),
     ("eyePet", "the correction in use"),
     ("hiddenLocations", "local folders of this Mac"),
     ("localRoots", "local folders of this Mac"),
