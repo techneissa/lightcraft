@@ -494,7 +494,7 @@ fn one_search_runs_per_photo_and_a_render_asking_meanwhile_is_redrawn() {
     let mut s = Session::with_demo();
     s.retouch_faces.set_provider(Arc::new(Slow(go.clone())));
     let id = s.active().unwrap();
-    s.execute("develop.set", &json!({"control": "retouch.skinTone.amount", "value": 40})).unwrap();
+    s.execute("develop.set", &json!({"control": "retouch.skinTone.faceLight", "value": 40})).unwrap();
     let _ = s.render_job(id, 64, 64, false, true).unwrap();
     for (control, value) in [("geometry.vertical", 10.0), ("geometry.vertical", 20.0), ("optics.distortion", 15.0), ("optics.distortion", 30.0)] {
         s.execute("develop.set", &json!({"control": control, "value": value})).unwrap();

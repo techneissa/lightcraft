@@ -54,6 +54,8 @@ example, which writes each person's part masks as grey pictures (`outdir/masks/<
 cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/
 cargo run -p lightcraft-retouch --release --example skin -- in.jpg out.jpg --smoothness 60 --shine 50 \
   --mask outdir/masks/facialSkin-0.png
+cargo run -p lightcraft-retouch --release --example skin_tone -- in.jpg out.jpg --even 60 --redness 50 \
+  --masks outdir/masks --person 0
 ```
 
 For what the app's step gets for each face (box, YuNet's five then the 478 mesh landmarks, the model's part masks,
@@ -92,8 +94,7 @@ crate only reads it.
 
 A feature reads the faces through `Scene`: each `FaceCtx` has the box and landmarks in the image's pixels and
 `size`, the face's size in pixels; `Scene::mask_at` / `Scene::mask_plane` sample a part mask in the image's pixels,
-and `Scene::mask_box` gives the pixels a mask can touch (read and write only those). Skin Tone's Amount is a stand-in
-Face Light (Facial Skin brightened by up to half again) that shows the masks arrive; its feature lane replaces it.
+and `Scene::mask_box` gives the pixels a mask can touch (read and write only those).
 
 ## Rules every feature follows
 
