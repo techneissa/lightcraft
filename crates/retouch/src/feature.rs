@@ -238,8 +238,14 @@ impl<'a> Scene<'a> {
     /// feature reads and writes only these. (The area's edges are followed at 16 points each, so a lens or
     /// transform warp that bends them stays inside, with a pixel to spare.)
     pub fn mask_box(&self, face: usize, part: Part) -> Option<[usize; 4]> {
-        const STEPS: usize = 16;
         let a = self.faces.get(face)?.face.mask(part)?.area;
+        self.area_box(&a)
+    }
+
+    /// The pixels of the image normalised area `a` maps to: `[x0, y0, x1, y1)`, clamped to the image, a pixel to
+    /// spare; `None` when it lies outside the image or is not a box (see [`Scene::mask_box`]).
+    pub fn area_box(&self, a: &crate::input::NormRect) -> Option<[usize; 4]> {
+        const STEPS: usize = 16;
         if !a.is_valid() || self.width == 0 || self.height == 0 {
             return None;
         }

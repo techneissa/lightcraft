@@ -97,6 +97,8 @@ crate only reads it.
 - `Face::landmarks`: normalised points; the first five are always YuNet's (the subject's right eye, left eye,
   nose tip, right and left mouth corner); a provider with more appends them after these.
 - `Face::person`: the name of the photo's named face (People) the face overlaps, trimmed and lower case.
+- `Face::patch`: a repair made outside the render (Glasses Glare's Repair Glare, `fork/glare-repair.md`): a gain
+  per pixel and a weight over an area of the photo, in the frame of the face's masks; `None` until one is made.
 - `Face::masks`: `(Part, PartMask)` pairs, at most one per `Part` (Entire Person, Facial Skin, Body Skin, Hair,
   Eyebrows, Eye Whites, Iris, Lips, Teeth, Clothes Top, Clothes Bottom, Dress, Shoes, Hat, Bag, Others). A
   `PartMask` is a float `Plane` (0…1) at any resolution, covering `area` (a normalised rectangle) of the photo;

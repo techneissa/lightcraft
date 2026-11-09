@@ -72,6 +72,7 @@ pub const TABLE: &[(&str, Class)] = &[
     ("birefnet", Class::Layer(3)),
     ("parsing", Class::Layer(3)),
     ("lama", Class::Layer(3)),
+    ("flux", Class::Layer(3)),
     ("learn", Class::Layer(3)),
     ("engine", Class::Layer(4)),
     ("ui-egui", Class::Layer(5)),

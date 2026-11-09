@@ -1,0 +1,6 @@
+# Glasses Glare: Repair Glare (branch feat/glare-repair-flux)
+cargo test -p lightcraft-flux --lib
+cargo test -p lightcraft-retouch --test glare
+cargo test -p lightcraft-pipeline --lib -- tests_retouch_glare retouch_step
+cargo test -p lightcraft-engine --lib -- glare gpu_run
+cargo test -p lightcraft-ui-egui --lib -- glare

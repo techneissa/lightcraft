@@ -1,0 +1,29 @@
+[package]
+name = "lightcraft-flux"
+version.workspace = true
+edition.workspace = true
+license = "Apache-2.0"
+description = "LightCraft FLUX.1 Fill: masked repainting (glasses glare) with a GGUF-quantised FLUX.1 Fill transformer, T5 and CLIP text encoders and the FLUX VAE, in pure Rust on candle (L3)"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror = { workspace = true }
+log = { workspace = true }
+serde_json = { workspace = true }
+
+# the model runs natively only (the web build has no generative fill)
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+candle-transformers = { workspace = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+candle-core = { workspace = true, features = ["metal"] }
+candle-nn = { workspace = true, features = ["metal"] }
+candle-transformers = { workspace = true, features = ["metal"] }
+
+[dev-dependencies]
+image = { workspace = true }
+lightcraft-testkit = { workspace = true }

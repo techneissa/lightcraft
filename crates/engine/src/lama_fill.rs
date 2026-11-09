@@ -326,6 +326,9 @@ impl crate::Session {
     /// Look for the LaMa model in the shared default folder ([`default_lama_dir`]) and use the fill for every render of
     /// this process. Hosts (the app, the CLI, MCP) ask for it; a bare session has no model, so tests stay hermetic.
     pub fn with_default_lama_model(self) -> Self {
+        // Repair Glare's FLUX model and results (`fork/glare-repair.md`): set up by the same hosts, for the same reason
+        #[cfg(not(target_arch = "wasm32"))]
+        self.glare.set_dirs(crate::glare_repair::default_flux_dir(), crate::config::cache_dir().map(|d| d.join("glare-repair")));
         self.with_lama_dir(default_lama_dir())
     }
 

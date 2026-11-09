@@ -195,6 +195,7 @@ fn face_of(p: &Person, hints: &[FaceHint], orient: Orientation, read: &[Part]) -
         person: None,
         masks,
         key_frame: KeyFrame::Photo,
+        patch: None,
         spots: None,
         strands: None,
     })
