@@ -37,6 +37,17 @@ Face Light at draft 1936 × 1291 3.4 ms, loupe 2560 × 1707 5.9 ms, 24 MP 38.6 m
 Not done: edges are not snapped to the photo with the guided filter `parsing.mask` uses (the step samples the model's
 mask as it is); the face picker's thumbnails and `retouch.faces` boxes ignore lens corrections and transform.
 
+## Fixes to the base (review of #85)
+
+- A photo with a Remove spot is retouched in the cached render and the GPU's scene-linear stage
+  (`crates/pipeline/src/spots_keep.rs` runs the step after red eye, as `crate::lin_cpu` does).
+- Without a usable face model, the reason is kept per photo and shown, instead of the Portrait panel reading (and, for
+  an unreadable file, parsing) the model on the UI thread every frame; installing or removing a face model
+  (`crates/engine/src/cmd/face_models.rs`) forgets it.
+- The tool strip's buttons and gaps shrink alike when the strip is too short for eleven icons (a window near its
+  560 pt minimum), so the top group no longer runs into the two pinned to the bottom (`crates/ui-egui/src/panels/strip.rs`).
+- `tool_strip_order.rs`'s doc: eleven places, five between the dividers, About after the ninth.
+
 ## Branch
 
 `feat/retouch-masks`
@@ -48,7 +59,9 @@ mask as it is); the face picker's thumbnails and `retouch.faces` boxes ignore le
 
 ## Hooks in official files
 
-None in official files. In fork files:
+- `crates/pipeline/src/spots_keep.rs` (the step after red eye), `crates/engine/src/cmd/face_models.rs` (install and
+  remove forget the kept reasons), `crates/ui-egui/src/panels/strip.rs` (`fit`), and the doc of
+  `crates/ui-egui/src/panels/tool_strip_order.rs`. In fork files:
 - `crates/retouch/src/input.rs` (`Input::on_photo`, `Input::new_on_photo`, in the fingerprint), `src/feature.rs`
   (`Scene::mask_box`), `src/skin_tone.rs` (Face Light), `tests/skin_tone.rs`, `README.md` (the contract).
 - `crates/pipeline/src/retouch_step.rs` (`PhotoView`: on-photo faces through the warp).
@@ -67,4 +80,6 @@ the same share by the same amount; pixels away from the mask unchanged (engine, 
 bit for bit); a face's own settings staying with its person and an unnamed face's with its place when the parse comes
 back in another order, and never going to someone else; another model set finding faces anew; merged and turned
 planes; on-photo faces following a lens distortion (fails without the warp mapping) and matching faces after the warp
-when there is none. A fake runner stands in for the models.
+when there is none; a spot not skipping the retouch in the cached render; a missing face model kept until a model is
+installed or removed; the strip's top group clear of the bottom icons from 440 to 700 pt. A fake runner stands in for
+the models.
