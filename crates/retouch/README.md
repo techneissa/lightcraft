@@ -32,11 +32,16 @@ In the module:
 - **Parts**: `PARTS`, the part masks `apply` reads. The face search keeps only the parts some feature lists
   (`parts_read`), so list every part you read. The default, `FACE_PARTS`, is a face's parts and its skin, without
   Entire Person and the clothes.
+- **Reach**: `REACH`, how far past its face's box and the areas of its `PARTS` masks `apply` reads, a fraction of
+  the face's size (`DEFAULT_REACH`, half the face, when it declares none). See the zoom rule below.
 - **`apply`**: retouch the image in place (see the rules below). The panel section draws its sliders with
   `cx.slider("retouch.<KEY>.<field>")`, which writes to every face or to the picked one.
 
 Never edit `lib.rs`, `settings.rs`, `run.rs` or the tab's list of sections (`crates/ui-egui/src/panels/portrait.rs`):
-they already list every feature. The tab's Portrait Presets section (`panels/portrait/presets.rs`) has no module here.
+they already list every feature. The tab's Portrait Presets section (`panels/portrait/presets.rs`) has no module here:
+a portrait preset carries, per feature, the fields that are numbers, switches or short lists of numbers (a colour), so
+a new slider or switch is in presets with no change; lists of points or shapes (Refine strokes, spots) and fields
+named like them never are (`carry` in `crates/engine/src/portrait_presets.rs`, `fork/portrait-presets.md`).
 Clothes recolouring is not one of them: it is a local-mask effect (issue #83), so it works on any mask; the clothes
 parts of `Part` are there for its masks.
 
@@ -54,14 +59,18 @@ example, which writes each person's part masks as grey pictures (`outdir/masks/<
 cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/
 cargo run -p lightcraft-retouch --release --example skin -- in.jpg out.jpg --smoothness 60 --shine 50 \
   --mask outdir/masks/facialSkin-0.png
+cargo run -p lightcraft-retouch --release --example skin_tone -- in.jpg out.jpg --even 60 --redness 50 \
+  --masks outdir/masks --person 0
 ```
 
 For what the app's step gets for each face (box, YuNet's five then the 478 mesh landmarks, the model's part masks,
-merged as the app merges them), the parser's `face_input` example writes `dir/faces.json`; the eyes example reads it:
+merged as the app merges them), the parser's `face_input` example writes `dir/faces.json`; the eyes and wrinkles
+examples read it:
 
 ```bash
 cargo run -p lightcraft-parsing --release --example face_input -- in.jpg dir/
 cargo run -p lightcraft-retouch --release --example eyes -- in.jpg out.jpg --faces dir/faces.json --dark 60
+cargo run -p lightcraft-retouch --release --example wrinkles -- in.jpg out.png --faces dir/faces.json --amount 60
 ```
 
 ## The input contract (`src/input.rs`)
@@ -90,12 +99,19 @@ crate only reads it.
   part the parser found that some feature reads (`Feature::PARTS`), at the resolution the models made them
   (`crates/engine/src/retouch_input/parts.rs`, `fork/retouch-masks.md`); without it, YuNet gives boxes and five
   landmarks and no masks.
+- `Face::spots`: the spots on the face's skin (Blemishes: centre, radius as a fraction of the face, kind, strength
+  and a donor patch), found once per photo by the provider on the picture its masks come from
+  (`blemish::with_spots`; the engine does it with the people parse, so they are kept with the masks). `None`: not
+  looked for, and Blemishes looks on the image it retouches (the examples and tests).
+- `Face::strands`: the stray strands around and across the face (Stray Hair: a grid over an area of the photo, kept
+  only for the tiles holding a strand, each cell a weight, a direction across the strand and a polarity), found once
+  on the picture the masks come from (`hair::with_strands`; the engine does it with the people parse). `None`: not
+  looked for yet; Stray Hair then changes nothing (a render never searches).
 - `Input::fingerprint`: a hash of all of it, in the render cache keys (the engine hashes it on the search's worker).
 
 A feature reads the faces through `Scene`: each `FaceCtx` has the box and landmarks in the image's pixels and
 `size`, the face's size in pixels; `Scene::mask_at` / `Scene::mask_plane` sample a part mask in the image's pixels,
-and `Scene::mask_box` gives the pixels a mask can touch (read and write only those). Skin Tone's Amount is a stand-in
-Face Light (Facial Skin brightened by up to half again) that shows the masks arrive; its feature lane replaces it.
+and `Scene::mask_box` gives the pixels a mask can touch (read and write only those).
 
 ## Rules every feature follows
 
@@ -116,6 +132,12 @@ Face Light (Facial Skin brightened by up to half again) that shows the masks arr
   reduction's halo does), so `apply` sees the same pixels around the face as in a whole-frame render. A feature
   keeps its reads within its `REACH` (clamp what landmarks or masks could throw far away), and works on grids and
   boxes anchored to the face (its box, an eye, a mask's area), never to the image's corner, which a window moves.
+  The window also holds the reads of every face whose reads touch it, in a chain: features run one after another
+  over every face, so a face's later feature reads what an earlier one changed for its neighbour. Within one face
+  the largest `REACH` is enough: the window holds every pixel any of its features reads.
+- **A big face is never skipped.** A feature that caps the pixels it works on at full size (Skin and Wrinkles:
+  `MAX_BOX`, about 67 M) works on a bigger box reduced by a whole factor, as a draft of it, and carries the change
+  back as a gain (`src/reduced.rs`), so a very large export makes the change its draft shows.
 - **Reference stats come from the whole face**, never from the pixels a render happens to hold: a level, a target
   colour or the skin's colour (Eyes: the whites' level, the cheek's colour, the skin's colour; Teeth and Lips: the
   lips' main colour) is measured on a fixed grid over the face's box or a mask's area, in photo coordinates, so a
@@ -136,6 +158,7 @@ A feature lane is checked against this list, and its test file (`tests/<feature>
 - **Texture is kept**: a retouch that smooths keeps the fine detail (the high-frequency energy inside the mask stays
   within a set ratio of the original's).
 - **No halo**: pixels next to the mask's edge do not take the colour of what is outside it.
+- **Zoom**: a render of a window holding part of the face, grown by the reach, equals the whole render inside it.
 - **Edge cases**: no faces, 50 faces, a face cut by the photo's edge, a 1 × 1 photo, a flat grey photo (stays flat
   when nothing in it calls for a change) and a missing model (faces without masks) run without a panic and give the
   expected result.
@@ -197,8 +220,9 @@ pass (they are one per-pixel pass there, so the step sits before all of them). S
 
 1. **Retouch** (tone and colour), features in this order: Blemishes, Skin, Wrinkles, Skin Tone, Eyes, Teeth and
    Lips, Glasses Glare, Stray Hair.
-2. **Geometry**: Face Reshape, a geometry step next to Transform. Its slot is reserved and not run yet; the reshape
-   feature wires it into the pipeline's geometry.
+2. **Geometry**: Face Reshape, a geometry step next to Transform. Not run by the step: `reshape::Field` is a warp
+   of the photo before its lens corrections (`crates/pipeline/src/reshape_step.rs` puts it into the frame's warp),
+   so the one resample, masks drawn on the photo, the faces and their part masks all follow the reshaped face.
 3. **Background**: after every retouch, once for the whole picture.
 
 The step is skipped while the block is off or the Portrait tab's eye is off; the scene-linear stage's key then

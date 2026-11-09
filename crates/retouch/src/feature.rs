@@ -16,8 +16,8 @@ pub enum Stage {
     /// Tone and colour retouching on the scene-linear image, after white balance and before local masks, detail
     /// and effects.
     Retouch,
-    /// Moving pixels (face reshape): a geometry step next to Transform. Reserved: the pipeline does not run it
-    /// yet; the reshape feature wires it in.
+    /// Moving pixels (Face Reshape): a geometry step next to Transform. The step never runs it: the pipeline builds
+    /// the warp from the settings and the faces (`reshape::Field`) and samples the photo through it.
     Geometry,
     /// The background (blur, swap, clean backdrop), after every retouch.
     Background,
@@ -150,6 +150,16 @@ impl<'a> Scene<'a> {
 
     pub fn view(&self) -> &dyn View {
         self.view
+    }
+
+    /// The same faces mapped through `view` into a `width × height` image (a part of this one, reduced:
+    /// `crate::reduced`). A face keeps its [`FaceCtx::index`]; its place in the list may differ.
+    pub(crate) fn through<'b>(&self, view: &'b dyn View, width: usize, height: usize) -> Scene<'b>
+    where
+        'a: 'b,
+    {
+        let faces = self.faces.iter().filter_map(|f| map_face(f.face, f.index, view)).collect();
+        Scene { faces, width, height, view }
     }
 
     /// The mask of `part` of face `face` at pixel (`x`, `y`) of the image; 0 without that mask.

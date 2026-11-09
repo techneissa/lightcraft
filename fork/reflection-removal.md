@@ -82,7 +82,7 @@ RDNet notes: the Space runs inputs resized down to a multiple of 32; this port p
 
 ## Comparison runs
 
-Test photos and their sources: `$WORKSPACE/assets/lightcraft/design/reflection-tests/` (`sources.md`): 8 window and glass reflections and 3 shiny objects, each looked at before it was kept. Sheets: `$WORKSPACE/assets/lightcraft/shots/reflection-compare/`, also on `pr-assets` in `feat/25-reflection-removal/compare/`. Standard quality (long edge 768), Metal, M4 Pro, other lanes running (load about 25); time = one inference after the model is loaded. 
+Test photos and their sources: `$WORKSPACE/assets/lightcraft/design/reflection-tests/` (`sources.md`): 8 window and glass reflections and 3 shiny objects, each looked at before it was kept. Sheets: `$WORKSPACE/assets/lightcraft/shots/reflection-compare/`, also on `pr-assets` in `feat/25-reflection-removal/compare/`. Standard quality (long edge 768), Metal, a test Mac, other lanes running; time = one inference after the model is loaded. 
 | Photo | DSRNet-S 1st / 2nd run | DIRS-MuGI 1st / 2nd run | DIRS-PAIR 1st / 2nd run | RDNet 1st / 2nd run |
 |---|---|---|---|---|
 | amsterdam-glass-wall | 22.4 s / 22.3 s | 17.4 s / 17.6 s | 25.3 s / 25.3 s | 42.7 s / 43.1 s |

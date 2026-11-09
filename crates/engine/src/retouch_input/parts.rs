@@ -12,10 +12,11 @@
 
 use std::sync::Arc;
 
+use lightcraft_color::transfer::decode_srgb8;
 use lightcraft_develop::retouch::{Face, Input, KeyFrame, MAX_FACES, NormRect, Part, PartMask};
 use lightcraft_geom::{Orientation, Rect};
 use lightcraft_parsing::{FaceHint, Landmark, Parsing, Person, RgbImage};
-use lightcraft_raster::{Image, Plane, Rgba8};
+use lightcraft_raster::{Image, Plane, Rgb32f, Rgba8};
 
 use super::{Found, arrange, thumb};
 use crate::people_parsing::{Choice, Outcome, PeopleParsing};
@@ -68,11 +69,31 @@ impl PartsFinder {
 /// The faces of `parsing` (made from `img` with the faces `hints`) for the retouch step, on the photo turned by
 /// `orient`, named after `regions`, with a picker thumbnail each.
 pub(crate) fn found(parsing: &Parsing, hints: &[FaceHint], img: &RgbImage, orient: Orientation, regions: &[(NormRect, String)]) -> Found {
-    let mut faces = faces_of(parsing, hints, orient);
+    let mut faces = with_spots_and_strands(faces_of(parsing, hints, orient), img, orient);
     arrange(&mut faces, regions);
     let shown = oriented(&Rgba8::from_fn(img.width, img.height, |x, y| rgba(img, x, y)), orient);
     let thumbs = faces.iter().map(|f| thumb(&shown, &f.bounds)).collect();
     Found { input: Arc::new(Input::new_on_photo(faces)), thumbs: Arc::new(thumbs) }
+}
+
+/// `faces` with the spots on their skin (Blemishes) and the stray strands around and across them (Stray Hair), found
+/// once here on the parse's picture, in linear light and turned like the masks, and kept with them: a render, and the
+/// Amount sliders, only repair them. (Run on the face search's worker, under its activity row.)
+fn with_spots_and_strands(faces: Vec<Face>, img: &RgbImage, orient: Orientation) -> Vec<Face> {
+    let skin = faces.iter().any(|f| f.mask(Part::FacialSkin).is_some());
+    let hair = faces.iter().any(|f| f.mask(Part::Hair).is_some() || f.mask(Part::FacialSkin).is_some());
+    if !skin && !hair {
+        return faces;
+    }
+    let linear = oriented(
+        &Rgb32f::from_fn(img.width, img.height, |x, y| {
+            let p = rgba(img, x, y);
+            [decode_srgb8(p[0]), decode_srgb8(p[1]), decode_srgb8(p[2])]
+        }),
+        orient,
+    );
+    let faces = if skin { lightcraft_develop::retouch::blemish::with_spots(&linear, faces) } else { faces };
+    lightcraft_develop::retouch::hair::with_strands(&linear, faces)
 }
 
 fn rgba(img: &RgbImage, x: usize, y: usize) -> [u8; 4] {
@@ -122,6 +143,8 @@ fn face_of(p: &Person, hints: &[FaceHint], orient: Orientation, read: &[Part]) -
         masks,
         key_frame: KeyFrame::Photo,
         patch: None,
+        spots: None,
+        strands: None,
     })
 }
 

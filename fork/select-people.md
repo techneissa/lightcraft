@@ -54,7 +54,7 @@ List: Select People masks: Masking ▸ Person / Background / Custom and a picker
 - **Never crashes**: no people (no person part; Background is the whole photo), 50 people, a face past the photo's
   edge, damaged planes, a person who is not there and unknown parts are tested; a failed parse is a message.
 
-How it does (a CC0 photo from Wikimedia Commons and techneissa's A7 V photos, 2026-11-09): faces, hair, lips and
+How it does (a CC0 photo from Wikimedia Commons and private test photos, 2026-11-09): faces, hair, lips and
 irises land on the right places on single portraits and groups of three; clothes and hats follow the parse. What
 the parse gets wrong shows in the mask: on the CC0 couple, the parse's own Clothes Top and Entire Person have a
 thin vertical seam where one person's crop ends (also in `parsing.mask`), and on a group photo parts of a turned-away

@@ -82,6 +82,7 @@ pub mod originals;
 pub mod parse_ahead;
 mod pdf;
 pub mod people_parsing;
+pub mod portrait_presets;
 pub mod prep;
 pub mod preset_import;
 pub mod preset_luminar;
@@ -496,6 +497,9 @@ pub struct Session {
     pub activity: activity::Activity,
     /// The faces portrait retouching works on, per photo (fork, `fork/retouch-foundation.md`).
     pub retouch_faces: retouch_input::FaceStore,
+    /// Portrait presets: the library's named people for matching, and Apply to Every Photo running (fork,
+    /// `fork/portrait-presets.md`).
+    pub(crate) portrait_presets: portrait_presets::matching::State,
     /// The last (or running) slideshow export (`slideshow.export`).
     pub slideshow_export: Option<std::sync::Arc<slideshow_export::ExportRun>>,
     /// The last (or running) animated GIF export (`export.animatedGif`).
@@ -615,6 +619,7 @@ impl Session {
             retouch_faces: retouch_input::FaceStore::with_repairs(glare_repairs.clone()),
             #[cfg(target_arch = "wasm32")]
             retouch_faces: Default::default(),
+            portrait_presets: Default::default(),
             face_shared_dir: None,
             face_downloads: Default::default(),
             lensfun: Default::default(),

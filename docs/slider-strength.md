@@ -113,7 +113,7 @@ and the HDR sliders are not covered yet.
   the blurred background, a 400 x 300 crop at 100 %; the high-pass standard deviation of its luminance, 8-bit
   levels, Gaussian 6 px removed; no sharpening 2.13): V2 Amount 40 / 60 → 2.79 / 3.13 (x1.31 / x1.47); V3 Amount
   40 / 60 → 2.55 / 2.77 (x1.20 / x1.30). V3 at Amount 60 adds about the grain V2 added at 40, and V3 at 40 adds less,
-  so nothing to retune. Pictures: `$WORKSPACE/assets/lightcraft/shots/sharpen-v3/`. GPU against CPU on an Apple M4 Pro
+  so nothing to retune. GPU against CPU on a test Mac
   (Metal), V3 Amount 50 / Radius 1.0 / Detail 25 / Masking 0 with Vignette -50, and Radius 0.5 and 3, Masking 60
   with Detail 0, Detail 100 with Amount 150, each at full size, 1200 px and a 720 px preview of a 6000 px original:
   mean |Δ| at most 0.0002 LSB, max |Δ| 1 LSB (`process_v3_sharpening_and_vignette_match`). The ⌥-drag Masking

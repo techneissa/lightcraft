@@ -42,7 +42,7 @@ Whites mask, the skin's and the cheek's colour from the eye's grid.
 Each effect is a per-pixel gain times one weight per area (`eyes::Area`, made in `eyes::weights`), the place the
 Refine brush (#99) will scale or extend an area.
 
-Speed (the Eyes step alone, all four sliders at 100, best of 20 runs, Apple M4 Pro under load 12–25, faces on the
+Speed (the Eyes step alone, all four sliders at 100, best of 20 runs, a test Mac with other work running, faces on the
 whole photo): a portrait at draft 1936 px 2.5–2.9 ms, loupe 2560 px 2.6–3.8 ms; a 10 MP close-up whose face fills
 the frame 11.4 / 18.4 ms. A slider drag runs no model: it samples the cached masks. No GPU version is needed for the
 16 ms draft budget. In the app, faces from the people parse are mapped through the lens and transform warp per

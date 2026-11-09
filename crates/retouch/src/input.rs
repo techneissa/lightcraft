@@ -147,6 +147,52 @@ impl PartMask {
         let bottom = at(x0, y1) + (at(x1, y1) - at(x0, y1)) * tx;
         top + (bottom - top) * ty
     }
+
+    /// The mask for sampling at many points (a feature's every pixel): the plane's values made finite and clamped
+    /// to 0…1 once, the area's scale worked out once. It gives [`PartMask::sample`]'s value to within rounding.
+    /// `None` for an empty or malformed plane or area (where `sample` gives 0 everywhere).
+    pub fn sampler(&self) -> Option<MaskSampler> {
+        let (w, h) = (self.plane.width, self.plane.height);
+        if w == 0 || h == 0 || self.plane.data.len() != w.saturating_mul(h) || !self.area.is_valid() {
+            return None;
+        }
+        let data = self.plane.data.iter().map(|v| if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }).collect();
+        let a = self.area;
+        Some(MaskSampler { data, w, h, origin: [a.x0, a.y0], scale: [w as f64 / a.width(), h as f64 / a.height()] })
+    }
+}
+
+/// A part mask ready to sample at many points ([`PartMask::sampler`]).
+#[derive(Clone, Debug)]
+pub struct MaskSampler {
+    data: Vec<f32>,
+    w: usize,
+    h: usize,
+    origin: [f64; 2],
+    /// Samples per normalised unit, across and down.
+    scale: [f64; 2],
+}
+
+impl MaskSampler {
+    /// The mask at normalised point (`nx`, `ny`): as [`PartMask::sample`].
+    pub fn at(&self, nx: f64, ny: f64) -> f32 {
+        let (w, h) = (self.w, self.h);
+        let (sx, sy) = ((nx - self.origin[0]) * self.scale[0], (ny - self.origin[1]) * self.scale[1]);
+        // (also false for a point that is not a number)
+        if !((0.0..=w as f64).contains(&sx) && (0.0..=h as f64).contains(&sy)) {
+            return 0.0;
+        }
+        let fx = (sx - 0.5).clamp(0.0, (w - 1) as f64);
+        let fy = (sy - 0.5).clamp(0.0, (h - 1) as f64);
+        let (x0, y0) = (fx as usize, fy as usize);
+        let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+        let (tx, ty) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);
+        let at = |x: usize, y: usize| self.data.get(y * w + x).copied().unwrap_or(0.0);
+        let (a, b, c, d) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
+        let top = a + (b - a) * tx;
+        let bottom = c + (d - c) * tx;
+        top + (bottom - top) * ty
+    }
 }
 
 /// A change made for one face by a model run outside the render (Glasses Glare's repair, `fork/glare-repair.md`):
@@ -275,6 +321,103 @@ pub struct Face {
     pub key_frame: KeyFrame,
     /// The glasses repair made for this face (Glasses Glare), in the frame of its masks; `None` until one is made.
     pub patch: Option<Arc<Patch>>,
+    /// The spots on the face's skin (Blemishes), found once by the provider on the picture its masks come from
+    /// ([`crate::blemish::with_spots`]). `None`: not looked for; Blemishes then looks on the image it retouches.
+    pub spots: Option<Spots>,
+    /// The stray strands around the face and across it (Stray Hair), found once by the provider on the picture its
+    /// masks come from ([`crate::hair::with_strands`]). `None`: not looked for yet; Stray Hair then changes nothing
+    /// (it never searches in a render).
+    pub strands: Option<Strands>,
+}
+
+/// The stray strands found for one face (Stray Hair): a grid of cells over `area`, stored only for the tiles of
+/// [`Strands::TILE`] × [`Strands::TILE`] cells that hold a strand. The render repairs the cells with a weight from
+/// the pixels beside them, across the strand.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Strands {
+    /// The rectangle the grid covers, normalised like the face's box (same frame).
+    pub area: NormRect,
+    /// Cells across and down.
+    pub width: usize,
+    pub height: usize,
+    /// The searched picture's size in pixels: the frame `across` and the distances below are measured in.
+    pub picture: (usize, usize),
+    /// How far across a strand its sides are read, and the spacing of the samples along it, in the searched
+    /// picture's pixels.
+    pub side: f64,
+    pub step: f64,
+    /// Per tile, row by row (`width` and `height` divided by [`Strands::TILE`], rounded up): its place in `cells`
+    /// divided by `TILE²`, or `u32::MAX` for a tile without a strand.
+    pub tiles: Vec<u32>,
+    /// `TILE²` cells per stored tile, row by row: the weight (0…255 for 0…1), the direction across the strand
+    /// (0…255 for 0…π, in the searched picture's pixels, x right and y down) and the polarity (0 none, 1 darker than
+    /// its sides, 2 lighter).
+    pub cells: Vec<[u8; 3]>,
+}
+
+impl Strands {
+    /// A tile's side, in cells.
+    pub const TILE: usize = 16;
+
+    /// The tiles across and down.
+    pub fn tiles_size(&self) -> (usize, usize) {
+        (self.width.div_ceil(Self::TILE), self.height.div_ceil(Self::TILE))
+    }
+
+    /// Cell (`x`, `y`): weight, direction and polarity; `None` outside the grid or in a tile without a strand.
+    pub fn cell(&self, x: usize, y: usize) -> Option<[u8; 3]> {
+        if x >= self.width || y >= self.height {
+            return None;
+        }
+        let (tw, _) = self.tiles_size();
+        let t = *self.tiles.get((y / Self::TILE).saturating_mul(tw).saturating_add(x / Self::TILE))?;
+        if t == u32::MAX {
+            return None;
+        }
+        let i = (t as usize).saturating_mul(Self::TILE * Self::TILE).saturating_add((y % Self::TILE) * Self::TILE + x % Self::TILE);
+        self.cells.get(i).copied()
+    }
+
+    /// Whether no strand was found.
+    pub fn is_empty(&self) -> bool {
+        self.cells.is_empty()
+    }
+}
+
+/// What a spot on the skin is ([`Spot::kind`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SpotKind {
+    /// A blemish: a pimple, a red or dark mark. Always removed.
+    #[default]
+    Blemish,
+    /// A mole: darker, round, sharp-edged and brown. Kept while Keep Moles and Freckles is on.
+    Mole,
+    /// One of many small faint brown spots grouped together. Kept while Keep Moles and Freckles is on.
+    Freckle,
+}
+
+/// One spot on a face's skin. Points are normalised like the face's box (same frame); sizes are fractions of the
+/// face's size ([`crate::FaceCtx::size`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Spot {
+    pub at: (f64, f64),
+    /// The spot's radius, a fraction of the face's size.
+    pub radius: f64,
+    /// Where its skin texture is taken from (the centre of a clean patch of skin next to it); `None` when no patch
+    /// next to it is all skin (the spot is then filled from the skin around it alone).
+    pub donor: Option<(f64, f64)>,
+    pub kind: SpotKind,
+    /// How much it stands out (0…1): a low Amount removes the strongest spots only.
+    pub strength: f32,
+}
+
+/// The spots found on one face, and the area of its skin they were looked for on.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Spots {
+    pub list: Vec<Spot>,
+    /// The face's skin area (its Facial Skin mask's sum), in units of the face's size squared.
+    pub skin: f64,
 }
 
 impl Face {
@@ -355,6 +498,38 @@ impl Input {
                 h.u64(u64::from(f.score.to_bits()));
                 h.bytes(f.person.as_deref().unwrap_or("\u{0}").as_bytes());
                 h.u64(u64::from(f.key_frame == KeyFrame::Photo));
+                match &f.spots {
+                    None => h.u64(u64::MAX),
+                    Some(s) => {
+                        h.u64(s.list.len() as u64);
+                        h.u64(s.skin.to_bits());
+                        for p in &s.list {
+                            let (dx, dy) = p.donor.unwrap_or((f64::NAN, f64::NAN));
+                            for v in [p.at.0, p.at.1, p.radius, dx, dy] {
+                                h.u64(v.to_bits());
+                            }
+                            h.u64(p.kind as u64);
+                            h.u64(u64::from(p.strength.to_bits()));
+                        }
+                    }
+                }
+                match &f.strands {
+                    None => h.u64(u64::MAX),
+                    Some(s) => {
+                        for v in [s.area.x0, s.area.y0, s.area.x1, s.area.y1, s.side, s.step] {
+                            h.u64(v.to_bits());
+                        }
+                        for v in [s.width, s.height, s.picture.0, s.picture.1, s.tiles.len(), s.cells.len()] {
+                            h.u64(v as u64);
+                        }
+                        for t in &s.tiles {
+                            h.u64(u64::from(*t));
+                        }
+                        for c in &s.cells {
+                            h.bytes(c);
+                        }
+                    }
+                }
                 h.u64(f.masks.len() as u64);
                 for (part, m) in &f.masks {
                     h.u64(*part as u64);

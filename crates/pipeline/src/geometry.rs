@@ -160,6 +160,11 @@ impl Frame {
         f
     }
 
+    /// Fork (`fork/retouch-reshape.md`): reshape the photo by `field` (Face Reshape) before its lens corrections.
+    pub fn set_reshape(&mut self, field: std::sync::Arc<lightcraft_develop::retouch::reshape::Field>) {
+        self.warp.get_or_insert_with(|| Warp::identity(self.ow, self.oh)).reshape = Some(field);
+    }
+
     /// Add automatically estimated lateral CA (`[α_R, α_B]`, see [`crate::optics::estimate_lateral_ca`]).
     pub fn add_lateral_ca(&mut self, ca: [f64; 2]) {
         if ca == [0.0; 2] {
@@ -385,6 +390,12 @@ impl Frame {
         };
         match (plan.mode, self.warp.as_ref()) {
             (SampleMode::Copy, _) => base.into_owned(),
+            // (fork, `fork/retouch-reshape.md`: a Face Reshape alone redoes only the faces' areas)
+            (SampleMode::Warp(o2t), Some(warp)) if warp.reshape_only() => {
+                let mut out = affine(Affine::scale(plan.sx, plan.sy) * o2t);
+                crate::reshape_step::resample_faces(&mut out, &base, plan.sx, plan.sy, warp, o2t);
+                out
+            }
             (SampleMode::Warp(o2t), Some(warp)) => sample_warped(&base, plan.sx, plan.sy, warp, o2t, w, h),
             // `sample_plan` plans a warp only when there is one; without it the same mapping is affine
             (SampleMode::Warp(o2t), None) => affine(Affine::scale(plan.sx, plan.sy) * o2t),

@@ -40,6 +40,27 @@
 
 ## 2026-11-09
 
+### Stray Hair in the Portrait Tab
+The Portrait tab's Stray Hair section cleans flyaways around the hair and stray strands across the face, for every
+face or the one you pick. Amount sets how much; beards, eyebrows, lashes, clothes and the hair itself are left alone.
+
+### Portrait Presets That Follow the Person
+- Save a face's portrait settings as a preset from the Portrait tab's Portrait Presets section; it appears in the
+  Presets panel's Portrait group with the name of the person it follows. Tick Save the Whole Look to
+  save the whole look.
+- Applying it changes only the same person's face on each photo, found by name or by face recognition; other people
+  in the photo are left alone. A preset saved from All Faces goes to every face.
+- Apply to Every Photo of a person, from the Portrait tab or from their page in People, gives the look to every
+  photo they are on in one step you can undo.
+
+### Portrait Skin Tone
+- The Portrait tab's Skin Tone section evens blotchy skin colour (Even Tone), lowers red patches (Redness) and lightens or darkens the face against the rest of the photo with a soft edge (Face Light), for every face or one. It works on the skin masks found by people parsing; pores and natural gradients stay, and nothing outside the skin changes.
+
+### Teeth and Lips
+- The Portrait tab whitens teeth and colours lips, per face: Teeth Whitening takes the yellow out and brightens the
+  teeth while keeping their gaps and shading; Lip Color gives the lips a picked colour or one of six lipstick shades
+  and keeps their lines and highlights; Lip Hue and Lip Saturation fine-tune them.
+
 ### Apple Vision Hair Edges
 - Settings ▸ Faces ▸ Hair Edges has a third choice, Apple Vision: the Mac's own person and subject masks draw the
   edge of Entire Person / Background and Subject masks. No download, about a tenth of a second per photo.
