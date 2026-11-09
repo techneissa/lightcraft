@@ -32,6 +32,9 @@ pub(crate) fn person(scene: &Scene<'_>) -> Option<Plane> {
         return None;
     }
     let boxes: Vec<(usize, [usize; 4])> = (0..scene.faces.len()).filter_map(|i| Some((i, scene.mask_box(i, Part::EntirePerson)?))).collect();
+    // (small holes, gaps between curls, are the person: `holes`)
+    let masks: Vec<Option<std::sync::Arc<crate::PartMask>>> =
+        scene.faces.iter().map(|f| f.face.mask(Part::EntirePerson).map(|m| super::holes::filled_kept(m, super::prepare::mask_key(m)))).collect();
     let view = scene.view();
     let mut a = Plane::new(w, h);
     par_rows(&mut a.data, w, |y, row| {
@@ -39,7 +42,7 @@ pub(crate) fn person(scene: &Scene<'_>) -> Option<Plane> {
             if y < b[1] || y >= b[3] {
                 continue;
             }
-            let Some(m) = scene.faces.get(*i).and_then(|f| f.face.mask(Part::EntirePerson)) else { continue };
+            let Some(m) = masks.get(*i).and_then(Option::as_deref) else { continue };
             for x in b[0]..b[2].min(w) {
                 let (nx, ny) = view.to_norm(x as f64 + 0.5, y as f64 + 0.5);
                 if let Some(v) = row.get_mut(x) {

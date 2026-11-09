@@ -184,7 +184,7 @@ fn no_halo_round_the_person() {
 /// A strand of brown hair half over a blue sky, swapped for red: the strand keeps no blue.
 #[test]
 fn swap_puts_the_colour_behind_the_person_and_their_edge_keeps_no_old_background() {
-    let input = Input::new(vec![person(matte(0.5, 0.6, 0.25, 0.4, 0.02), 0.5, 0.6, 0.25, 0.4)]);
+    let input = Input::new(vec![person(matte(0.5, 0.6, 0.25, 0.4, 0.01), 0.5, 0.6, 0.25, 0.4)]);
     let (w, h) = (300, 200);
     let hair = [0.30f32, 0.18, 0.08];
     let sky = [0.10f32, 0.30, 0.80];
@@ -400,4 +400,23 @@ fn the_work_is_kept_for_the_next_slider_move() {
     run(&mut b, &settings(90.0, 0.0, 0.0, Swap::default()), &input, &Win::whole(w, h));
     assert_ne!(a.data, b.data);
     assert!(lightcraft_retouch::background::kept() >= 1);
+}
+
+/// A small gap inside the person (between curls) is the person: Swap leaves it as it is; the background outside
+/// is swapped.
+#[test]
+fn a_small_gap_inside_the_person_is_not_swapped() {
+    let mut plane = matte(0.5, 0.5, 0.3, 0.4, 0.01);
+    for y in 120..124 {
+        for x in 126..130 {
+            plane.data[y * 256 + x] = 0.0;
+        }
+    }
+    let input = Input::new(vec![person(plane, 0.5, 0.5, 0.3, 0.4)]);
+    let (w, h) = (256, 256);
+    let before = Rgb32f::filled(w, h, [0.2, 0.3, 0.4]);
+    let mut after = before.clone();
+    run(&mut after, &settings(0.0, 100.0, 0.0, Swap::from_hex("#FF0000").unwrap_or_default()), &input, &Win::whole(w, h));
+    assert_eq!(after.get(128, 122), before.get(128, 122), "the gap keeps its pixels");
+    assert_ne!(after.get(5, 5), before.get(5, 5), "the background is swapped");
 }

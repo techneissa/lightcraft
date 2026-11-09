@@ -117,11 +117,7 @@ fn key_of(img: &Rgb32f, scene: &Scene<'_>, place: &Place) -> u64 {
     for f in &scene.faces {
         if let Some(m) = f.face.mask(Part::EntirePerson) {
             h.u64(f.index as u64);
-            for v in [m.area.x0, m.area.y0, m.area.x1, m.area.y1] {
-                h.u64(v.to_bits());
-            }
-            h.u64(m.plane.width as u64);
-            h.u64(plane_hash(&m.plane.data));
+            h.u64(mask_key(m));
         }
     }
     h.u64(scene.depth.map_or(0, |d| d.key));
@@ -144,6 +140,18 @@ fn pixels_hash(img: &Rgb32f) -> u64 {
         }
     });
     fold(&rows)
+}
+
+/// A hash of a part mask: its area, size and bits.
+pub(crate) fn mask_key(m: &crate::PartMask) -> u64 {
+    let mut h = Fnv::new();
+    for v in [m.area.x0, m.area.y0, m.area.x1, m.area.y1] {
+        h.u64(v.to_bits());
+    }
+    h.u64(m.plane.width as u64);
+    h.u64(m.plane.height as u64);
+    h.u64(plane_hash(&m.plane.data));
+    h.0
 }
 
 /// A fast hash of a plane's bits (chunks hashed in parallel, then folded).

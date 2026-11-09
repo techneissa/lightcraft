@@ -33,6 +33,7 @@ use crate::{Control, Feature, Part, Scene, Scope, Spec, Stage};
 mod draw;
 pub mod falloff;
 mod grid;
+pub mod holes;
 mod matte;
 mod prepare;
 
