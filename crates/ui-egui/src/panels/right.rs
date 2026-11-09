@@ -75,8 +75,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             }
             return;
         };
-        // the Edit panel's histogram stays above its sliders as they scroll (#2679)
-        if app.ui.right == RightPanel::Edit && app.ui.histogram {
+        // the Edit panel's histogram stays above its sliders as they scroll (#2679); the Portrait tab shows the same one
+        if matches!(app.ui.right, RightPanel::Edit | RightPanel::Portrait) && app.ui.histogram {
             ui.spacing_mut().item_spacing.y = 0.0;
             super::edit::histogram(app, ui, id);
         }

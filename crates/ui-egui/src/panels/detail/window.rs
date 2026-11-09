@@ -9,7 +9,8 @@ pub(crate) fn overlay_supports_window(overlay: lightcraft_pipeline::Overlay) -> 
     use lightcraft_pipeline::Overlay as O;
     match overlay {
         O::None | O::Mask { .. } | O::AllMasks { .. } | O::PointColorRange(_) | O::HdrRange | O::Spots(_) => true,
-        // clipping and greyscale previews act pixel by pixel on the finished image
+        // clipping and greyscale previews act pixel by pixel on the finished image; a Portrait area map is made for
+        // each pixel from the faces, through the window's own view
         o if o.per_pixel() => true,
         _ => false,
     }
@@ -91,6 +92,8 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
     // plain; the After tile carries the same mask overlay as the whole-frame render.
     let job = if c.interacting { job.draft() } else { job };
     let overlay = if v.before { lightcraft_pipeline::Overlay::None } else { c.overlay };
+    let mut job = job;
+    super::give_area_faces(app, c.id, overlay, &mut job);
     let job = if v.before { job } else { job.with_hidden_grading(app.ui.grading_hidden_for(c.id)) };
     // the After window is proofed like the whole-frame render under it; the Before side is
     // never proofed (its whole-frame render isn't either)

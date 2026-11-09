@@ -43,6 +43,7 @@ use lightcraft_raster::{Plane, Rgb32f, par_rows};
 use serde::{Deserialize, Serialize};
 
 pub use areas::Area;
+pub use exclude::OVAL as FACE_OVAL;
 pub use fix::Fix;
 pub use search::{Crop, Fill, Filler, LAMA_FACES, NoFill, Picture, Source, WORK, with_fixes, with_fixes_from};
 
@@ -138,6 +139,11 @@ impl Feature for Wrinkles {
     ];
     const PARTS: &'static [Part] = &[Part::FacialSkin, Part::BodySkin];
     const REACH: f64 = reach();
+
+    /// The four wrinkle areas, cut by their skin masks (`area::wrinkles`).
+    fn area(scene: &Scene<'_>, faces: &[usize]) -> Option<lightcraft_raster::Plane> {
+        crate::area::wrinkles(scene, faces)
+    }
 
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>) {
         self.apply_capped(img, scene, face, MAX_BOX);
