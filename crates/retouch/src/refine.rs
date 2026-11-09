@@ -21,9 +21,12 @@ use crate::input::Fnv;
 
 mod blend;
 mod raster;
+mod saved;
 
 pub(crate) use blend::run_refined;
 pub use raster::{FEATURE_WORK_CAP, TOTAL_WORK_CAP, grids_made, work};
+#[doc(hidden)]
+pub use saved::{spills_made, with_saved_cap};
 
 /// Most strokes one feature keeps (per face); more are not read from settings and not added.
 pub const MAX_STROKES: usize = 2000;

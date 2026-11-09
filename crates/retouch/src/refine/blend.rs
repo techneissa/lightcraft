@@ -9,6 +9,7 @@ use lightcraft_raster::{Plane, Rgb32f, par_rows};
 use super::RefineStroke;
 use super::add_owner;
 use super::raster::{Kind, Shape, grid};
+use super::saved::Saved;
 use crate::feature::{Feature, Scene, View};
 use crate::input::{Face, Fnv, NormRect, PartMask};
 
@@ -18,9 +19,6 @@ const MASK_MAX: usize = 1024;
 const CACHE_ENTRIES: usize = 16;
 /// Memory the widened masks kept may hold.
 const CACHE_BYTES: usize = 64 << 20;
-/// Memory the saved pixels of a Reduce may take (12 bytes a pixel: about 44 megapixels). A render that would need
-/// more leaves Reduce out for that run.
-const SAVED_MAX_BYTES: usize = 512 << 20;
 
 /// Run `s` on `img` for `face` (`None`: the whole picture) with `strokes`, the feature's Refine strokes for it
 /// (`picked`: a picked face's own, so its Add strokes belong to `face`).
@@ -31,7 +29,7 @@ pub(crate) fn run_refined<T: Feature>(img: &mut Rgb32f, scene: &Scene<'_>, s: &T
     };
     let cut = grid(strokes, &|_| true, Kind::Cut, shape).map(|(_, g)| g);
     let widened = widen::<T>(scene, face, strokes, shape, picked);
-    let saved = cut.as_ref().and_then(|g| Saved::take(img, scene.view(), &g.area));
+    let saved = cut.as_ref().and_then(|g| pixel_box(scene.view(), &g.area, img.width, img.height)).and_then(|b| Saved::take(img, b));
     match &widened {
         Some(faces) => {
             let refs: Vec<&Face> = faces.iter().zip(&scene.faces).map(|(w, f)| w.as_deref().unwrap_or(f.face)).collect();
@@ -40,7 +38,7 @@ pub(crate) fn run_refined<T: Feature>(img: &mut Rgb32f, scene: &Scene<'_>, s: &T
         }
         None => s.apply(img, scene, face),
     }
-    if let (Some(g), Some(saved)) = (cut, saved) {
+    if let (Some(g), Some(mut saved)) = (cut, saved) {
         saved.mix_back(img, scene.view(), &g);
     }
 }
@@ -67,48 +65,6 @@ fn pixel_box(view: &dyn View, area: &NormRect, w: usize, h: usize) -> Option<[us
     let clamp = |v: f64, max: usize| v.clamp(0.0, max as f64) as usize;
     let r = [clamp(b[0].floor() - 1.0, w), clamp(b[1].floor() - 1.0, h), clamp(b[2].ceil() + 1.0, w), clamp(b[3].ceil() + 1.0, h)];
     (r[0] < r[2] && r[1] < r[3]).then_some(r)
-}
-
-/// The pixels under a Reduce grid as they were before the feature ran.
-struct Saved {
-    b: [usize; 4],
-    px: Vec<[f32; 3]>,
-}
-
-impl Saved {
-    fn take(img: &Rgb32f, view: &dyn View, area: &NormRect) -> Option<Saved> {
-        let b = pixel_box(view, area, img.width, img.height)?;
-        if (b[2] - b[0]).saturating_mul(b[3] - b[1]).saturating_mul(std::mem::size_of::<[f32; 3]>()) > SAVED_MAX_BYTES {
-            return None;
-        }
-        let mut px = Vec::with_capacity((b[2] - b[0]) * (b[3] - b[1]));
-        for y in b[1]..b[3] {
-            px.extend_from_slice(img.data.get(y * img.width + b[0]..y * img.width + b[2])?);
-        }
-        Some(Saved { b, px })
-    }
-
-    /// Mix each pixel back toward its saved value by the grid's cut there (the saved bits at a full cut).
-    fn mix_back(&self, img: &mut Rgb32f, view: &dyn View, g: &PartMask) {
-        let [x0, y0, x1, y1] = self.b;
-        let (w, bw) = (img.width, x1 - x0);
-        let Some(rows) = img.data.get_mut(y0 * w..y1 * w) else { return };
-        par_rows(rows, w, |ry, row| {
-            let y = y0 + ry;
-            let (Some(dst), Some(src)) = (row.get_mut(x0..x1), self.px.get(ry * bw..(ry + 1) * bw)) else { return };
-            for (i, (d, o)) in dst.iter_mut().zip(src).enumerate() {
-                let (ex, ey) = view.to_edit((x0 + i) as f64 + 0.5, y as f64 + 0.5);
-                let c = g.sample(ex, ey);
-                if c >= 1.0 {
-                    *d = *o;
-                } else if c > 0.0 {
-                    for k in 0..3 {
-                        d[k] += (o[k] - d[k]) * c;
-                    }
-                }
-            }
-        });
-    }
 }
 
 /// The faces of `scene` with the masks `T` widens ([`Feature::ADD_PARTS`]) widened by the Add strokes that work on

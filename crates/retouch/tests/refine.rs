@@ -84,6 +84,31 @@ fn a_full_reduce_gives_back_the_pixels_from_before_the_feature_there_and_nowhere
     }
 }
 
+/// A Reduce over a box bigger than the cap on saved pixels still gives the pixels back: the copy goes through a file
+/// in bands, and the result is the same bits as with the copy in memory, for a full and for a partial Reduce.
+#[test]
+fn a_reduce_over_a_box_bigger_than_the_cap_still_restores_the_pixels() {
+    let img = picture(120, 90);
+    let faces = [half_skin_face()];
+    let smoothed = run(&img, &smooth_skin(), &faces);
+    let mut r = smooth_skin();
+    r.refine.push("skin", stroke(RefineMode::Reduce, &[(0.2, 0.3), (0.4, 0.7)], 0.1));
+    r.refine.push("skin", RefineStroke { strength: 40.0, ..stroke(RefineMode::Reduce, &[(0.45, 0.2), (0.45, 0.8)], 0.05) });
+    let in_memory = run(&img, &r, &faces);
+    let before = lightcraft_retouch::refine::spills_made();
+    // a cap of 3000 bytes: the box is about 100 KB, so a band is a row or two
+    let banded = lightcraft_retouch::refine::with_saved_cap(3000, || run(&img, &r, &faces));
+    assert_eq!(lightcraft_retouch::refine::spills_made() - before, 1, "the copy went through a file");
+    assert!(banded.data.iter().zip(&in_memory.data).all(|(a, b)| same_bits(*a, *b)), "the same pixels as with the copy in memory");
+    let inside = disc(&banded, 0.3, 0.5, 0.04);
+    assert!(
+        !inside.is_empty() && inside.iter().all(|(i, p)| same_bits(*p, img.data[*i])),
+        "a full Reduce gave back the pixels from before the feature"
+    );
+    assert!(inside.iter().any(|(i, _)| !same_bits(smoothed.data[*i], img.data[*i])), "(the feature did change them)");
+    assert!(banded.data != smoothed.data);
+}
+
 #[test]
 fn a_partial_reduce_weakens_and_restore_takes_it_back() {
     let img = picture(120, 90);

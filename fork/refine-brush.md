@@ -33,8 +33,9 @@ those for every face, strokes included); otherwise to every face.
   masks Add widens) defaults to the first of its `PARTS`, so a feature lane changes it with one line when that is
   not the right one (Eyes: Eye Whites; Teeth and Lips: Teeth).
 - **Reduce** saves the pixels under the strokes before the feature runs and mixes the result back toward them by
-  the cut there (1 at a full Reduce: the saved bits, from before this feature). The copy is capped at 512 MiB (about
-  44 megapixels of the Reduce's box); a render that would need more leaves Reduce out. **Restore** lowers the cut and
+  the cut there (1 at a full Reduce: the saved bits, from before this feature). A box over 512 MiB (about 44
+  megapixels) is kept in a temporary file, written and read back a band of rows at a time, so a large export gets the
+  same Reduce as its preview within the same memory (`refine/saved.rs`). **Restore** lowers the cut and
   the added mask. **Add** widens each mask in `ADD_PARTS` (the larger of the mask and the painted coverage) for the
   face the stroke works on, so the feature works there as on its own mask; a face without that mask gets one from
   Add. A stroke painted with a face picked is in that face's own strokes and belongs to that face, whatever its
@@ -83,7 +84,7 @@ of 20 runs, on a test Mac under heavy load from other builds): Skin alone 7.45 m
 
 `fork/tests.d/refine-brush.txt`: `crates/retouch/tests/refine.rs` (full Reduce gives back the pixels from before the feature, a
 partial one mixes half way and Restore takes it back, Add smooths past the mask, every feature gets Reduce, preview
-equals export (every pixel of a draft within a level of the export's), a picked face owns its Add stroke, an Add stroke far from every face does nothing, strokes over the work cap are left out, a face's own strokes stay with it, strokes alone change nothing, JSON round trip and malformed
+equals export (every pixel of a draft within a level of the export's), a Reduce over a box bigger than the cap still restores the pixels (a small cap through a test hook), a picked face owns its Add stroke, an Add stroke far from every face does nothing, strokes over the work cap are left out, a face's own strokes stay with it, strokes alone change nothing, JSON round trip and malformed
 strokes, hostile strokes), `crates/pipeline/src/tests_retouch_refine.rs` (zoom equals the whole frame; a draft and a
 render four times its size agree under a crop and a lens warp with faces before the warp; a window over an Add stroke outside the face box equals the whole frame; a window grows only by the Add strokes of the faces it reaches), `crates/pipeline/src/tests_retouch_cache.rs` (strokes make the write boxes the whole frame, an Add stroke beside the face box changes pixels there),
 `crates/develop/src/retouch.rs` (the Portrait group carries and clears strokes), `crates/catalog` (fork format 8),
