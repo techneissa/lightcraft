@@ -1,6 +1,6 @@
 # Portrait retouching: part masks from the people parse
 
-List: portrait retouching gets each face's part masks (skin, hair, brows, eyes, lips, teeth, clothes) and face mesh from the cached people parse, mapped through rotation, lens corrections and transform; Skin Tone's Amount lights Facial Skin to show them. Branch `feat/retouch-masks`.
+List: portrait retouching gets each face's part masks (skin, hair, brows, eyes, lips, teeth, clothes) and face mesh from the cached people parse, mapped through rotation, lens corrections and transform; Skin Tone's Face Light showed them first. Branch `feat/retouch-masks`.
 
 ## What it does
 
@@ -37,11 +37,11 @@ The link between people parsing (`fork/people-parsing.md`) and the retouch step 
   its frame (`FaceKey::frame`: after lens and transform for YuNet's faces, before them for the parse's); a key and a
   face of different frames are compared through the photo's lens and transform, so settings made under YuNet stay
   with their face once the parse finds it, and never go to the neighbour standing where the YuNet box lay.
-- **Proof feature**: Skin Tone's Amount brightens Facial Skin by up to half again (Face Light); pixels outside the
-  mask never change. The Skin Tone lane replaces it.
+- **Proof feature**: Skin Tone's Amount brightened Facial Skin to show the masks arrive; Skin Tone
+  (`fork/retouch-skin-tone.md`) replaced it with Face Light, and the tests here use Face Light.
 - `Scene::mask_box` (new): the pixels a face's mask can touch, so a feature reads and writes only those.
 
-Mask sampling per render (Apple M4 Pro, release, load ~20; Facial Skin over 30 % × 40 % of the photo, a 512² mask):
+Mask sampling per render (a test Mac, release, other work running; Facial Skin over 30 % × 40 % of the photo, a 512² mask):
 Face Light at draft 1936 × 1291 3.4 ms, loupe 2560 × 1707 5.9 ms, 24 MP 38.6 ms; a full-frame `mask_plane` 8.2 / 13.9
 / 157 ms.
 
