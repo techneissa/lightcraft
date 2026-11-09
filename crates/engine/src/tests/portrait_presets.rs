@@ -245,3 +245,24 @@ fn the_hover_preview_shows_what_a_click_commits() {
     s.execute("preset.apply", &json!({"id": pid, "ids": [vis[1].0]})).unwrap();
     assert_eq!(preview.retouch, retouch(&s, vis[1]));
 }
+
+#[test]
+fn every_photo_of_a_person_includes_the_unnamed_faces_recognised_as_them() {
+    let (mut s, vis, pid) = ann_preset();
+    s.faces.index.reset("stand-in@1", 2, None);
+    // Ann's named face on photo 0 is what she is known by
+    s.faces.index.insert(vis[0].0, &rect(LEFT), vec![1.0, 0.0]);
+    s.faces.index.insert(vis[0].0, &rect(RIGHT), vec![0.0, 1.0]);
+    // photo 1: an unnamed face like hers, next to someone else; photo 2: two unnamed faces like neither
+    regions(&mut s, vis[1], vec![region(LEFT, None), region(RIGHT, Some("Bob"))]);
+    s.faces.index.insert(vis[1].0, &rect(LEFT), vec![0.98, 0.2]);
+    s.faces.index.insert(vis[1].0, &rect(RIGHT), vec![0.0, 1.0]);
+    regions(&mut s, vis[2], vec![region(LEFT, None), region(RIGHT, None)]);
+    s.faces.index.insert(vis[2].0, &rect(LEFT), vec![0.0, 1.0]);
+    s.faces.index.insert(vis[2].0, &rect(RIGHT), vec![-1.0, 0.0]);
+    let r = s.execute("retouch.applyToPerson", &json!({"name": "ann", "preset": pid})).unwrap();
+    let applied: Vec<u64> = r["applied"].as_array().unwrap().iter().map(|v| v.as_u64().unwrap()).collect();
+    assert!(applied.contains(&vis[1].0) && !applied.contains(&vis[2].0), "{r}");
+    assert_eq!(smoothness_of(&s, vis[1], &[parsed(LEFT), face(RIGHT, Some("bob"))]), [70.0, 0.0]);
+    assert!(retouch(&s, vis[2]).faces.is_empty());
+}
