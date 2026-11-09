@@ -107,7 +107,11 @@ fn photo(w: usize, h: usize, input: &Input) -> Rgb32f {
 }
 
 fn settings(blur: f64, swap: f64, clean: f64, with: Swap) -> Retouch {
-    Retouch { global: Features { background: Background { blur, swap, clean, with }, ..Features::default() }, faces: Vec::new() }
+    Retouch {
+        global: Features { background: Background { blur, swap, clean, with }, ..Features::default() },
+        faces: Vec::new(),
+        ..Retouch::default()
+    }
 }
 
 fn run(img: &mut Rgb32f, r: &Retouch, input: &Input, view: &dyn View) {

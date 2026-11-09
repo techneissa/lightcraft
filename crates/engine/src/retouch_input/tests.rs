@@ -111,8 +111,13 @@ fn copy_paste_sync_and_presets_carry_the_block_and_the_faces() {
     s.execute("retouch.detect", &json!({})).unwrap();
     s.execute("retouch.set", &json!({"control": "retouch.eyes.whites", "value": 30})).unwrap();
     s.execute("retouch.set", &json!({"control": "retouch.skin.smoothness", "value": 55, "face": 0})).unwrap();
+    // Refine strokes (#99), for every face and the first face's own
+    s.execute("retouch.refine.stroke", &json!({"feature": "eyes", "points": [[0.2, 0.3], [0.25, 0.3]], "strength": 60})).unwrap();
+    s.execute("retouch.refine.stroke", &json!({"feature": "skin", "mode": "add", "points": [[0.15, 0.4]], "face": 0})).unwrap();
     let want = retouch_of(&s);
     assert_eq!(want.faces.len(), 1);
+    // (the face got its own settings before the first stroke: it keeps its own strokes apart)
+    assert_eq!((want.refine.count(None), want.faces[0].refine.count(None)), (1, 1));
     // copy / paste with Portrait ticked (it is not in the default copy groups)
     s.execute("develop.copy", &json!({"groups": ["portrait"]})).unwrap();
     s.execute("library.select", &json!({"ids": [vis[1].0]})).unwrap();
@@ -184,8 +189,12 @@ fn the_block_round_trips_through_the_sidecar_and_the_catalog() {
     s.execute("retouch.detect", &json!({})).unwrap();
     s.execute("retouch.set", &json!({"control": "retouch.teethLips.teethWhitening", "value": 40})).unwrap();
     s.execute("retouch.set", &json!({"control": "retouch.eyes.whites", "value": 65, "face": 0})).unwrap();
+    let pressure = json!({"feature": "teethLips", "mode": "add", "points": [[0.2, 0.3], [0.22, 0.31]], "pressure": [0.5, 0.75], "face": 0});
+    s.execute("retouch.refine.stroke", &pressure).unwrap();
+    s.execute("retouch.refine.stroke", &json!({"feature": "skin", "points": [[0.4, 0.4]], "size": 0.02, "feather": 10})).unwrap();
     let want = retouch_of(&s);
     assert!(!want.is_off() && want.faces.len() == 1);
+    assert_eq!((want.refine.count(None), want.faces[0].refine.count(None)), (1, 1));
     s.execute("photo.saveMetadataToFile", &json!({})).unwrap();
     let xmp = std::fs::read_to_string(src.join("portrait.xmp")).unwrap();
     assert!(xmp.contains("fork_retouch"), "in lc:settings, under the fork's own key");
@@ -511,4 +520,77 @@ fn one_search_runs_per_photo_and_a_render_asking_meanwhile_is_redrawn() {
     wait_idle(&s, id);
     assert!(s.render_job(id, 64, 64, false, true).unwrap().info.retouch.is_some());
     assert_ne!(s.retouch_salt(&p, &p.develop), 0);
+}
+
+/// The Refine brush's commands (#99): a stroke is one undo step, goes to every face or one face's own, is checked,
+/// and clears and resets with its feature.
+#[test]
+fn refine_strokes_are_commands_with_one_undo_step_each() {
+    let (mut s, _) = demo_with(vec![ann(), bob()]);
+    s.execute("retouch.detect", &json!({})).unwrap();
+    let r = s.execute("retouch.refine.stroke", &json!({"feature": "skin", "points": [[0.2, 0.3], [0.3, 0.3]], "flow": 40})).unwrap();
+    assert_eq!(r["strokes"], 1);
+    s.execute("retouch.refine.stroke", &json!({"feature": "skin", "mode": "restore", "points": [[0.2, 0.3]]})).unwrap();
+    assert_eq!(retouch_of(&s).refine.strokes("skin").len(), 2);
+    s.execute("edit.undo", &json!({})).unwrap();
+    assert_eq!(retouch_of(&s).refine.strokes("skin").len(), 1, "one undo step per stroke");
+    // one face's own
+    s.execute("retouch.refine.stroke", &json!({"feature": "eyes", "mode": "add", "points": [[0.7, 0.3]], "face": 1})).unwrap();
+    let list = s.execute("retouch.refine.list", &json!({"face": 1})).unwrap();
+    let keys: Vec<&str> = list["features"].as_array().unwrap().iter().filter_map(|l| l["feature"].as_str()).collect();
+    assert_eq!(keys, ["skin", "eyes"], "{list}");
+    assert_eq!(s.execute("retouch.refine.list", &json!({"face": 0})).unwrap()["features"].as_array().unwrap().len(), 1);
+    // checked
+    for bad in [
+        json!({"feature": "nope", "points": [[0.1, 0.1]]}),
+        json!({"feature": "skin", "mode": "erase", "points": [[0.1, 0.1]]}),
+        json!({"feature": "skin", "points": []}),
+        json!({"feature": "skin", "points": [[0.1]]}),
+        json!({"feature": "skin", "points": [[0.1, 0.1]], "size": "big"}),
+        json!({"feature": "skin", "points": [[0.1, 0.1]], "face": 9}),
+        json!({"feature": "reshape", "points": [[0.1, 0.1]]}),
+        json!({"feature": "glare", "mode": "add", "points": [[0.1, 0.1]], "face": 7}),
+    ] {
+        assert!(s.execute("retouch.refine.stroke", &bad).is_err(), "{bad}");
+    }
+    // clear and reset take strokes away
+    assert_eq!(s.execute("retouch.refine.clear", &json!({"feature": "eyes", "face": 1})).unwrap()["removed"], true);
+    assert_eq!(s.execute("retouch.refine.clear", &json!({"feature": "eyes", "face": 1})).unwrap()["removed"], false);
+    s.execute("retouch.reset", &json!({"feature": "skin"})).unwrap();
+    assert!(retouch_of(&s).refine.is_empty());
+}
+
+/// Add works on or near a face (#99): a stroke further than a face's size from the face it is for is refused, so is
+/// any Add stroke in a photo without a face, and strokes over the work cap; nothing is saved by a refusal.
+#[test]
+fn add_strokes_are_only_for_faces_and_the_strokes_stay_within_the_work_cap() {
+    let (mut s, _) = demo_with(vec![ann(), bob()]);
+    s.execute("retouch.detect", &json!({})).unwrap();
+    let add = |points: Value, face: Option<usize>| json!({"feature": "skin", "mode": "add", "points": points, "face": face});
+    // beside a face, and a stroke from one face toward the other, centre nearer it
+    s.execute("retouch.refine.stroke", &add(json!([[0.35, 0.3], [0.4, 0.32]]), None)).unwrap();
+    s.execute("retouch.refine.stroke", &add(json!([[0.25, 0.3], [0.65, 0.3]]), Some(0))).unwrap();
+    let kept = retouch_of(&s);
+    // (a size is the longer side of the box: 0.3 here, so 0.3 away is one size)
+    let far = s.execute("retouch.refine.stroke", &add(json!([[0.45, 0.9], [0.5, 0.95]]), None)).unwrap_err().to_string();
+    assert!(far.contains("Add works on or near a face"), "{far}");
+    let far_from_one = s.execute("retouch.refine.stroke", &add(json!([[0.95, 0.35]]), Some(0))).unwrap_err().to_string();
+    assert!(far_from_one.contains("Add works on or near a face"), "{far_from_one}");
+    assert_eq!(retouch_of(&s), kept, "refusals saved nothing");
+    // the same stroke is fine for the face it is near, and Reduce and Restore go anywhere
+    s.execute("retouch.refine.stroke", &add(json!([[0.95, 0.35]]), Some(1))).unwrap();
+    s.execute("retouch.refine.stroke", &json!({"feature": "skin", "points": [[0.45, 0.9]]})).unwrap();
+    // over the work cap: a tiny brush with a huge one zigzagging over the photo
+    s.execute("retouch.refine.stroke", &json!({"feature": "eyes", "points": [[0.5, 0.5], [0.52, 0.5]], "size": 0.001})).unwrap();
+    let zig: Vec<Value> = (0..20_000).map(|i| if i % 2 == 0 { json!([0.1, 0.1]) } else { json!([0.9, 0.9]) }).collect();
+    let before = retouch_of(&s);
+    let over = s.execute("retouch.refine.stroke", &json!({"feature": "eyes", "points": zig, "size": 0.5})).unwrap_err().to_string();
+    assert!(over.contains("too many or too large"), "{over}");
+    assert_eq!(retouch_of(&s), before, "nothing saved");
+    // no face at all: Add errors
+    let (mut none, _) = demo_with(Vec::new());
+    none.execute("retouch.detect", &json!({})).unwrap();
+    let e = none.execute("retouch.refine.stroke", &add(json!([[0.5, 0.5]]), None)).unwrap_err().to_string();
+    assert!(e.contains("Add works on or near a face") && e.contains("no face"), "{e}");
+    none.execute("retouch.refine.stroke", &json!({"feature": "skin", "points": [[0.5, 0.5]]})).unwrap();
 }

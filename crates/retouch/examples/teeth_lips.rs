@@ -119,7 +119,7 @@ fn run(args: &[String]) -> Result<(), String> {
     for (id, v) in set {
         global.set(id, v);
     }
-    let r = Retouch { global, faces: Vec::new() };
+    let r = Retouch::with_global(global);
     let input = Input::new(faces);
     let view = WholePhoto { width: w, height: h };
     if time {
