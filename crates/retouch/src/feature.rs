@@ -82,6 +82,44 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     /// the export match. Pixels outside the feature's mask must not change, and a face without the masks the
     /// feature needs is left alone.
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>);
+
+    /// Where the feature works on `faces` (places in [`Scene::faces`]), as a map over the scene's image: 1 where it
+    /// works fully, 0 where not. The Portrait tab shows it while a slider is dragged with ⌥ held (the grey / white
+    /// map of Lightroom's Masking). By default the union of the faces' [`Feature::PARTS`] masks; a feature whose
+    /// reach is not those masks (spots, strands, the lenses, the face's outline, the background) overrides it.
+    /// `None`: nowhere (no masks to say). It reads the faces' input only, never the image or the settings.
+    fn area(scene: &Scene<'_>, faces: &[usize]) -> Option<Plane> {
+        parts_area(scene, faces, Self::PARTS)
+    }
+}
+
+/// The union (the largest at each pixel) of the planes `per_face` gives for each of `faces`; `None` when it gives none.
+pub fn union_area(scene: &Scene<'_>, faces: &[usize], per_face: impl Fn(usize) -> Option<Plane>) -> Option<Plane> {
+    let mut out: Option<Plane> = None;
+    for p in faces.iter().filter_map(|&f| per_face(f)) {
+        if (p.width, p.height) != (scene.width, scene.height) || p.data.len() != p.width.saturating_mul(p.height) {
+            continue;
+        }
+        match &mut out {
+            None => out = Some(p),
+            Some(o) => o.data.iter_mut().zip(&p.data).for_each(|(o, v)| *o = o.max(*v)),
+        }
+    }
+    out
+}
+
+/// The union of the `parts` masks of `faces` over the scene's image ([`Feature::area`]'s default).
+pub fn parts_area(scene: &Scene<'_>, faces: &[usize], parts: &[Part]) -> Option<Plane> {
+    union_area(scene, faces, |f| {
+        let mut out: Option<Plane> = None;
+        for p in parts.iter().filter_map(|&part| scene.mask_plane(f, part)) {
+            match &mut out {
+                None => out = Some(p),
+                Some(o) => o.data.iter_mut().zip(&p.data).for_each(|(o, v)| *o = o.max(*v)),
+            }
+        }
+        out
+    })
 }
 
 /// The first part of `parts` (none of none): [`Feature::ADD_PARTS`]' default.

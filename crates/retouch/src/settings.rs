@@ -27,6 +27,8 @@ pub struct FeatureInfo {
     pub reach: f64,
     /// The masks a Refine Add stroke widens ([`Feature::ADD_PARTS`]); empty: the panel offers no Add.
     pub add_parts: &'static [crate::Part],
+    /// Where it works on some faces ([`Feature::area`]): the map the Portrait tab's ⌥-drag shows.
+    pub area: for<'a> fn(&crate::Scene<'a>, &[usize]) -> Option<lightcraft_raster::Plane>,
 }
 
 /// What retouching reads around a face: the largest [`Feature::REACH`] of the features on, and the parts whose
@@ -264,6 +266,7 @@ macro_rules! features {
                 parts: <$ty as $crate::Feature>::PARTS,
                 reach: <$ty as $crate::Feature>::REACH,
                 add_parts: <$ty as $crate::Feature>::ADD_PARTS,
+                area: <$ty as $crate::Feature>::area,
             },)*
         ];
 
