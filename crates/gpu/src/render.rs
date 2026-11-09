@@ -656,7 +656,7 @@ fn sample(cx: &mut Cx<'_>, src: &Arc<Rgb32f>, src_buf: Arc<Buf>, plan: &Plan<'_>
         let out = cx.gpu.buffer(sp.ow * sp.oh * 3);
         let mut p = vec![src.width as u32, src.height as u32, sp.ow as u32, sp.oh as u32];
         p.extend(orient_map(fr.orient, src.width, src.height).map(|v| v as u32));
-        cx.run("orient", &p, &[Some(&src_buf), Some(&out), None], groups2(sp.ow, sp.oh, [16, 16]));
+        cx.run("orient", &p, &[Some(&src_buf), Some(&out), None, None], groups2(sp.ow, sp.oh, [16, 16]));
         Arc::new(out)
     };
     let (base, (bw, bh)) = match sp.prefilter {
@@ -667,7 +667,7 @@ fn sample(cx: &mut Cx<'_>, src: &Arc<Rgb32f>, src_buf: Arc<Buf>, plan: &Plan<'_>
         let out = cx.gpu.buffer(w * h * 3);
         let mut p = vec![bw as u32, bh as u32, w as u32, h as u32];
         p.extend(affine_bits(xf));
-        cx.run("sample_affine", &p, &[Some(&base), Some(&out), None], groups2(w, h, [16, 16]));
+        cx.run("sample_affine", &p, &[Some(&base), Some(&out), None, None], groups2(w, h, [16, 16]));
         Arc::new(out)
     };
     match (&sp.mode, fr.warp.as_ref()) {
@@ -681,7 +681,9 @@ fn sample(cx: &mut Cx<'_>, src: &Arc<Rgb32f>, src_buf: Arc<Buf>, plan: &Plan<'_>
             // f32 rounding can cross a source edge. Keep the reference f64
             // framing decision in a bit mask; color sampling stays on the GPU.
             let coverage = cx.gpu.upload(&coverage_mask(wp, o2t, w, h));
-            cx.run("sample_warp", &p, &[Some(&base), Some(&out), Some(&coverage)], groups2(w, h, [16, 16]));
+            // (fork, `fork/retouch-reshape.md`: Face Reshape's grid; without one the kernel reads the zeroed dummy)
+            let field = wp.reshape.as_ref().map(|f| cx.gpu.upload(&f.gpu_table()));
+            cx.run("sample_warp", &p, &[Some(&base), Some(&out), Some(&coverage), field.as_ref()], groups2(w, h, [16, 16]));
             Arc::new(out)
         }
     }
@@ -1806,6 +1808,11 @@ fn prepare(cx: &mut Cx<'_>, lin: &Buf, plan: &Plan<'_>, req: &RenderRequest, pla
     });
     Prep { log_l, base, clarity, texture, sharpen, dark, chroma, air }
 }
+
+// (fork, `fork/retouch-reshape.md`)
+#[cfg(test)]
+#[path = "render/tests_reshape.rs"]
+mod tests_reshape;
 
 #[cfg(test)]
 mod tests {

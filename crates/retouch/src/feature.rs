@@ -16,8 +16,8 @@ pub enum Stage {
     /// Tone and colour retouching on the scene-linear image, after white balance and before local masks, detail
     /// and effects.
     Retouch,
-    /// Moving pixels (face reshape): a geometry step next to Transform. Reserved: the pipeline does not run it
-    /// yet; the reshape feature wires it in.
+    /// Moving pixels (Face Reshape): a geometry step next to Transform. The step never runs it: the pipeline builds
+    /// the warp from the settings and the faces (`reshape::Field`) and samples the photo through it.
     Geometry,
     /// The background (blur, swap, clean backdrop), after every retouch.
     Background,
