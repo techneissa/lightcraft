@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 use lightcraft_color::perceptual::{hsv_to_rgb, lab_to_lch, oklab_from_2020, oklab_to_2020};
 use lightcraft_color::transfer::srgb_to_linear;
 use lightcraft_color::{REC2020, SRGB};
-use lightcraft_develop::{DevelopSettings, MIXER_HUES, ProcessVersion, WbMode, WbScale, controls};
+use lightcraft_develop::{DevelopSettings, MIXER_HUES, Process, ProcessVersion, WbMode, WbScale, controls};
 use lightcraft_raster::blur::gaussian;
 use lightcraft_raster::{Plane, Rgb32f, Rgba8};
 
@@ -343,9 +343,14 @@ pub(crate) fn vignette_effect(ids: &[(&str, f64)]) -> (f32, f32) {
 
 /// Standard deviation (8-bit levels) of the grain on a flat mid-grey picture.
 pub(crate) fn grain_std(ids: &[(&str, f64)]) -> f32 {
+    grain_std_in(Process::LATEST.version(), ids)
+}
+
+/// [`grain_std`] under the rendering process `process`.
+fn grain_std_in(process: ProcessVersion, ids: &[(&str, f64)]) -> f32 {
     let (w, h) = (800, 600);
     let src = Rgb32f::from_fn(w, h, |_, _| [0.18; 3]);
-    let out = encoded_luma(&render_with(&src, &SourceInfo::default(), &settings(ids)));
+    let out = encoded_luma(&render_with(&src, &SourceInfo::default(), &settings_in(process, ids)));
     std_dev(&out.data) * 255.0
 }
 
@@ -590,7 +595,9 @@ fn strong_sliders_stay_strong() {
     // noise reduction and grain
     assert!(nr_effect(&[("detail.nrLuminance", 100.0)]).0 < 0.5);
     assert!(nr_effect(&[("detail.nrColor", 100.0)]).1 < 0.4);
-    assert!(grain_std(&[("grain.amount", 100.0)]) > 8.0);
+    // V1 to V6 keep their value noise (frozen); V7's crystal grain is gentler by design (about 5.8 at 100)
+    assert!(grain_std_in(Process::V6.version(), &[("grain.amount", 100.0)]) > 8.0);
+    assert!(grain_std(&[("grain.amount", 100.0)]) > 5.0);
     // vignette: strong darkening at -100 (-2.75 stops), clearly lighter corners at +100
     assert!(vignette_effect(&[("vignette.amount", -100.0)]).0 < -2.3);
     assert!(vignette_effect(&[("vignette.amount", 100.0)]).0 > 1.0);
