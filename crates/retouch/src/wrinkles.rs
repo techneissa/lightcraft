@@ -44,8 +44,9 @@ pub const MOST: f32 = 0.9;
 pub const DEEP: f32 = 1.0;
 /// The spacing of the lattice an area's weight is measured on, a fraction of the face's size.
 const LATTICE: f64 = 0.004;
-/// Most pixels of a region's box the step works on (2²⁶, about 67 M).
-const MAX_BOX: usize = 1 << 26;
+/// Most pixels of a face's box the step works on at full size (2²⁶, about 67 M: a face filling a 100 MP export).
+/// A bigger box is worked on reduced, as a draft is, and the change carried back ([`Wrinkles::apply_capped`]).
+pub const MAX_BOX: usize = 1 << 26;
 
 impl Area {
     /// The skin mask the area is cut by.
@@ -122,21 +123,40 @@ impl Feature for Wrinkles {
     const REACH: f64 = reach();
 
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>) {
+        self.apply_capped(img, scene, face, MAX_BOX);
+    }
+}
+
+/// The smallest box holding `a` and `b`.
+fn union(a: [usize; 4], b: [usize; 4]) -> [usize; 4] {
+    [a[0].min(b[0]), a[1].min(b[1]), a[2].max(b[2]), a[3].max(b[3])]
+}
+
+impl Wrinkles {
+    /// [`Feature::apply`] with `max_box` the most pixels of the face's areas' box worked on at full size
+    /// ([`MAX_BOX`] in the step): a bigger box is worked on reduced by a whole factor, as a draft of it is, and the
+    /// change is carried back to the full-size skin as a gain, so a huge face is retouched as its draft shows,
+    /// never skipped.
+    pub fn apply_capped(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>, max_box: usize) {
         let Some(face) = face else { return };
         if img.data.len() != img.width.saturating_mul(img.height) {
             return;
         }
         let Some(ctx) = scene.faces.get(face) else { return };
         let plans: Vec<Plan> = Area::ALL.iter().filter_map(|&area| Plan::new(scene, face, area, strength(area.amount(self)))).collect();
+        let Some(all) = plans.iter().map(|p| p.b).reduce(union) else { return };
+        if let Some(f) = crate::reduced::factor(all, max_box) {
+            let parts: Vec<Part> = plans.iter().map(|p| p.area.part()).collect();
+            let keep = |x, y| parts.iter().any(|p| scene.mask_at(face, *p, x, y) > 0.0);
+            crate::reduced::retouch(img, scene, face, all, f, keep, |small, sub, at| self.apply_capped(small, sub, Some(at), usize::MAX));
+            return;
+        }
         // each skin mask is sampled once, over the boxes of every area it cuts
         for part in [Part::FacialSkin, Part::BodySkin] {
             let mine: Vec<&Plan> = plans.iter().filter(|p| p.area.part() == part).collect();
-            let Some(u) = mine.iter().map(|p| p.b).reduce(|u, b| [u[0].min(b[0]), u[1].min(b[1]), u[2].max(b[2]), u[3].max(b[3])]) else {
+            let Some(u) = mine.iter().map(|p| p.b).reduce(union) else {
                 continue;
             };
-            if (u[2] - u[0]).saturating_mul(u[3] - u[1]) > MAX_BOX {
-                continue;
-            }
             let Some(mask) = skin_mask(scene, face, part, u) else { continue };
             for plan in mine {
                 plan.run(img, ctx, &sub_plane(&mask, u, plan.b));
@@ -174,7 +194,7 @@ impl Plan {
             clamp_px(r[2] + margin, mbox[0], mbox[2]),
             clamp_px(r[3] + margin, mbox[1], mbox[3]),
         ];
-        (b[0] < b[2] && b[1] < b[3] && (b[2] - b[0]).saturating_mul(b[3] - b[1]) <= MAX_BOX).then_some(Plan { area, k, regions, r, b })
+        (b[0] < b[2] && b[1] < b[3]).then_some(Plan { area, k, regions, r, b })
     }
 
     /// Lift the area's lines in `img`, cut by the skin mask `m` over the plan's box.

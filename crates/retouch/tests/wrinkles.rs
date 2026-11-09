@@ -376,3 +376,39 @@ fn a_face_with_its_own_settings_is_the_only_one_retouched() {
     let right_changed = (0..h).any(|y| (320..640).any(|x| img.data[y * w + x] != out.data[y * w + x]));
     assert!(left_same && right_changed);
 }
+
+/// A face whose areas' box is past the most pixels Wrinkles works on at full size (a face filling a very large
+/// export) is worked on reduced and the change carried back: never skipped, the lines lifted about as much as at
+/// full size, and the pixels outside the masks keep their bits.
+#[test]
+fn a_face_too_big_for_full_size_work_is_retouched_reduced_not_skipped() {
+    let (w, h) = (640, 800);
+    let img = forehead_lines(w, h, 2.0, 0.03);
+    let face = meshed(FACE);
+    let input = Input::new(vec![face.clone()]);
+    let view = WholePhoto { width: w, height: h };
+    let scene = lightcraft_retouch::Scene::new(&input, &view, w, h);
+    let s = wrinkles(80.0, 50.0, 50.0, 50.0).global.wrinkles;
+    let mut full = img.clone();
+    s.apply_capped(&mut full, &scene, Some(0), usize::MAX);
+    let left = |out: &Rgb32f| line_depth(out, 2.0) / line_depth(&img, 2.0);
+    let skin_at = |x: usize, y: usize| {
+        let (nx, ny) = ((x as f64 + 0.5) / w as f64, (y as f64 + 0.5) / h as f64);
+        [Part::FacialSkin, Part::BodySkin].iter().filter_map(|p| face.mask(*p)).map(|m| m.sample(nx, ny)).fold(0.0f32, f32::max)
+    };
+    for max in [w * h / 4, w * h / 9] {
+        let mut capped = img.clone();
+        s.apply_capped(&mut capped, &scene, Some(0), max);
+        assert!(!same_bits(&capped, &img), "cap {max}: the face is retouched");
+        let (kf, kc) = (left(&full), left(&capped));
+        assert!(kf < 0.6 && (kf - kc).abs() < 0.15, "cap {max}: the share of the lines left, full size {kf:.3}, reduced {kc:.3}");
+        for y in 0..h {
+            for x in 0..w {
+                if skin_at(x, y) == 0.0 {
+                    let i = y * w + x;
+                    assert_eq!(capped.data[i].map(f32::to_bits), img.data[i].map(f32::to_bits), "({x}, {y}) is outside the masks");
+                }
+            }
+        }
+    }
+}
