@@ -1302,10 +1302,11 @@ pub(crate) fn accessible_label<'a>(resp: &egui::Response, tip: &'a str) -> &'a s
 
 /// An icon-only button. `active` draws the selected background (tool strip).
 pub fn icon_button(ui: &mut Ui, id: &str, icon: Icon, size: egui::Vec2, active: bool, enabled: bool, tooltip: &str) -> Response {
-    icon_button_sense(ui, id, icon, size, active, enabled, tooltip, false)
+    icon_button_sense(ui, id, icon, size, active, enabled, false, tooltip, false)
 }
 
-/// [`icon_button`] that can also be dragged (`draggable`, also when it is not enabled).
+/// [`icon_button`] that can also be dragged (`draggable`, also when it is not enabled), and drawn `dimmed` (as a
+/// disabled one is) while it still takes clicks.
 #[allow(clippy::too_many_arguments)]
 pub fn icon_button_sense(
     ui: &mut Ui,
@@ -1314,6 +1315,7 @@ pub fn icon_button_sense(
     size: egui::Vec2,
     active: bool,
     enabled: bool,
+    dimmed: bool,
     tooltip: &str,
     draggable: bool,
 ) -> Response {
@@ -1340,7 +1342,7 @@ pub fn icon_button_sense(
     } else if resp.hovered() && enabled {
         p.rect_filled(sq, 4.0, t.hover.gamma_multiply(0.7));
     }
-    let c = if !enabled {
+    let c = if !enabled || dimmed {
         t.text_disabled
     } else if active {
         t.pick

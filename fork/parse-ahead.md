@@ -34,6 +34,23 @@ branches merge).
   once when the user will count as idle while only photos for an idle user wait.
 - **Power**: nothing in Low Power Mode or on battery below 40 % (`pmset`, read at most once a minute on its own thread).
   On the Mac nothing starts before the first reading is in (`checkingPower`).
+- **The Portrait icon's early check** (`parse_ahead/peek.rs`, issue #167): when a photo opens, it finds out whether
+  the photo has any face, so the Portrait icon is dimmed for a photo of nobody before the tab is opened
+  (`fork/retouch-foundation.md`). The answer is a hint, kept apart from the face search's results
+  (`FaceStore::hint_nobody`, keyed like them) and read only by the icon and the tab: the face search, renders and
+  exports ignore it, so a photo YuNet misses but the people parse finds is still searched and retouched, and the tab's
+  "Search Again" (`retouch.search`) runs the real search, whose answer replaces the hint. A photo with faces keeps
+  nothing, and a photo with face regions in the catalog is left alone. The answer comes from the parse the index
+  already knows for the photo (its people; no model), else from a render of the photo at 640 pixels and only the face
+  detector (YuNet, or the installed provider): not the parse, not the face mesh; the YuNet it loads is the session's
+  (`face_detect::detector_at` keeps it, the session's own call then offers it the GPU), so the net is built once. One
+  photo at a time on a worker of its own that waits before each step while the user drags, types or scrolls, while the
+  loupe waits for its render and while an export runs, and stops when the user moves to another photo (the same photo
+  is checked again when it is open again); a photo is checked once per key, and a pump that has nothing to do for the
+  open photo and the catalog's revision skips it without hashing the photo. It does not wait for a parse going, needs
+  no parse models, and stands still when the setting is off, in Low Power Mode and on battery below 40 %, as the queue
+  does. Threads have no priority knob here (no `unsafe`): "low priority" is the holds, one at a time and the small
+  render.
 - **The setting**: Settings ▸ Performance ▸ People Parts ▸ Masks, "Find people's parts ahead of time", on by default
   (`ui.json` `settings.parseAhead`, kept on each Mac, not synced). Off stops the photo going.
 - **One row**: "Finding people parts ahead" with a count (n of m) in the activity stack while there is work; the
@@ -81,9 +98,9 @@ while other builds were running; 2026-11-09):
 
 ## Own files
 
-`crates/engine/src/parse_ahead.rs`, `crates/engine/src/parse_ahead/{queue,index,power,worker}.rs`,
+`crates/engine/src/parse_ahead.rs`, `crates/engine/src/parse_ahead/{queue,index,peek,power,worker}.rs`,
 `crates/engine/src/people_parsing/ahead.rs`, `crates/engine/src/cmd/parse_ahead.rs`,
-`crates/engine/src/tests/parse_ahead.rs`, `crates/engine/examples/parse_ahead.rs`, `crates/ui-egui/src/parse_ahead.rs`,
+`crates/engine/src/tests/parse_ahead.rs`, `crates/engine/src/tests/parse_ahead_peek.rs`, `crates/engine/examples/parse_ahead.rs`, `crates/ui-egui/src/parse_ahead.rs`,
 `crates/ui-egui/src/tests/parse_ahead.rs`, `fork/parse-ahead.md`, `fork/tests.d/parse-ahead.txt`
 
 ## Hooks in official files

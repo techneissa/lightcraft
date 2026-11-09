@@ -139,6 +139,9 @@ struct Store {
     /// Why no search could start for a key (no face model, or one that can't be read): kept so a panel asking every
     /// frame never reads the model again; forgotten when a model is installed or removed ([`FaceStore::forget_no_model`]).
     no_model: Vec<(String, String)>,
+    /// Photos the early check saw no face in, by key (`parse_ahead::peek`): a hint for the Portrait icon and tab,
+    /// never a result of the face search; dropped when a search of the photo ends with faces.
+    hints: Vec<(String, PhotoId)>,
     /// Keys whose faces a prepared export finds when it runs ([`ExportFaces`]): setting up other renders of them
     /// does not wait.
     deferred: Vec<String>,
@@ -187,6 +190,7 @@ impl FaceStore {
         self.provider = Some(provider);
         let mut st = self.lock();
         st.found.clear();
+        st.hints.clear();
         st.failed.clear();
         st.no_model.clear();
     }
@@ -232,6 +236,31 @@ impl FaceStore {
         Some(found)
     }
 
+    /// Whether anything is known or under way for `key`: faces kept, a search running, a failure or a missing model.
+    /// Reorders nothing (the faces' use order is the cache's).
+    pub(crate) fn knows(&self, key: &str) -> bool {
+        let st = self.lock();
+        st.found.iter().any(|(k, _, _)| k == key)
+            || st.busy.iter().any(|(k, _)| k == key)
+            || st.failed.iter().any(|(k, _)| k == key)
+            || st.no_model.iter().any(|(k, _)| k == key)
+    }
+
+    /// Remember as a hint that photo `id` has no face under `key` (the early check, `parse_ahead::peek`). Not a
+    /// search result: [`Self::get`] and every render and export ignore it, and a search of the photo replaces it.
+    pub(crate) fn hint_nobody(&self, key: &str, id: PhotoId) {
+        let mut st = self.lock();
+        st.hints.retain(|(k, p)| k != key && *p != id);
+        st.hints.push((key.to_string(), id));
+        let extra = st.hints.len().saturating_sub(KEEP);
+        st.hints.drain(..extra);
+    }
+
+    /// Whether the early check saw no face under `key`.
+    pub(crate) fn hinted(&self, key: &str) -> bool {
+        self.lock().hints.iter().any(|(k, _)| k == key)
+    }
+
     /// The salt of photo `id`'s renders while its faces are unknown: [`UNKNOWN`], changed each time one of its
     /// searches ends (even, as [`UNKNOWN`] is, so it is never a fingerprint's; never 0).
     fn unknown_salt(&self, id: PhotoId) -> u64 {
@@ -264,6 +293,8 @@ impl FaceStore {
         *n = n.wrapping_add(1);
         match result {
             Ok(found) => {
+                // (a search's answer, with faces or not, replaces the hint)
+                st.hints.retain(|(k, p)| k != key && *p != id);
                 st.found.push((key.to_string(), id, found));
                 trim(&mut st.found, KEEP_BYTES);
             }
@@ -276,7 +307,7 @@ impl FaceStore {
     }
 
     /// Mark `key` (of photo `id`) as being searched; false when it already is, or another search of the photo is.
-    fn claim(&self, key: &str, id: PhotoId) -> bool {
+    pub(crate) fn claim(&self, key: &str, id: PhotoId) -> bool {
         let mut st = self.lock();
         if st.busy.iter().any(|(k, p)| k == key || *p == id) {
             return false;
@@ -285,7 +316,7 @@ impl FaceStore {
         true
     }
 
-    fn release(&self, key: &str) {
+    pub(crate) fn release(&self, key: &str) {
         self.lock().busy.retain(|(k, _)| k != key);
     }
 
@@ -319,6 +350,22 @@ pub struct FacesState {
     pub busy: bool,
     /// Why the last search failed.
     pub error: Option<String>,
+    /// The early check saw no face ([`FaceStore::hint_nobody`]): a hint, not a search result.
+    pub hint: bool,
+}
+
+impl FacesState {
+    /// Nobody to retouch in the photo, as far as is known: the face search finished and found no face, or (the search
+    /// not having run) the early check ([`FaceStore::hint_nobody`]) saw none. A hint only: the Portrait icon and tab
+    /// go by it, the face search, renders and exports never do. False while the faces are unknown (nothing known,
+    /// the search failed or a cancelled Wrinkles search waits to run again), and once a search found a face.
+    pub fn no_people(&self) -> bool {
+        self.error.is_none()
+            && match &self.found {
+                Some(f) => f.retry.is_none() && f.input.faces.is_empty(),
+                None => self.hint,
+            }
+    }
 }
 
 /// The key of a photo's faces found by a provider: its content, and every setting that moves pixels before the crop
@@ -335,6 +382,23 @@ pub fn key_of(p: &Photo, s: &DevelopSettings) -> String {
         o.distortion,
         s.crop.geometry.angle
     )
+}
+
+/// What the early check for faces ([`crate::parse_ahead`]'s peek) detects with: the installed provider (tests), else
+/// YuNet, read from its file on the worker that runs it.
+pub(crate) enum PeekDetect {
+    Provider(Arc<dyn FaceProvider>),
+    Yunet(std::path::PathBuf),
+}
+
+impl PeekDetect {
+    /// How many faces `img` has.
+    pub(crate) fn count(&self, img: &Rgba8) -> std::result::Result<usize, String> {
+        match self {
+            PeekDetect::Provider(p) => p.faces(img).map(|f| f.len()),
+            PeekDetect::Yunet(path) => Yunet(crate::cmd::face_detect::detector_at(path)?).faces(img).map(|f| f.len()),
+        }
+    }
 }
 
 /// What finds a photo's faces now: a provider (one installed, else YuNet) on the detect render, or the people parse.
@@ -443,7 +507,13 @@ impl Session {
             found: st.found.iter().find(|(k, _, _)| *k == key).map(|(_, _, f)| f.clone()),
             busy: st.busy.iter().any(|(k, _)| *k == key),
             error: st.failed.iter().chain(&st.no_model).find(|(k, _)| *k == key).map(|(_, e)| e.clone()),
+            hint: st.hints.iter().any(|(k, _)| *k == key),
         }
+    }
+
+    /// Whether photo `id`'s face search finished and found no face ([`FacesState::no_people`]); starts nothing.
+    pub fn retouch_no_people(&self, id: PhotoId) -> bool {
+        self.retouch_faces_of(id).no_people()
     }
 
     /// Find photo `id`'s faces on a worker thread (once: nothing happens while they are known or being found, or
@@ -572,6 +642,14 @@ impl Session {
         Some(pending)
     }
 
+    /// What the early check for faces detects with ([`PeekDetect`]); `None` without a provider or an installed YuNet.
+    pub(crate) fn retouch_peek_detector(&self) -> Option<PeekDetect> {
+        if let Some(p) = &self.retouch_faces.provider {
+            return Some(PeekDetect::Provider(p.clone()));
+        }
+        crate::cmd::face_detect::detector_file(self).map(|(path, _)| PeekDetect::Yunet(path))
+    }
+
     /// What finds faces now: an installed provider; else the people parse while its set is downloaded; else YuNet.
     fn retouch_source(&self) -> std::result::Result<Source, String> {
         if let Some(p) = &self.retouch_faces.provider {
@@ -612,7 +690,12 @@ impl Session {
 
     /// The render faces are found on: the photo before its crop, without retouching, at [`DETECT_EDGE`].
     fn retouch_detect_job(&mut self, id: PhotoId) -> std::result::Result<crate::RenderJob, String> {
-        let mut job = self.render_job(id, DETECT_EDGE, DETECT_EDGE, false, false).ok_or("no such photo")?;
+        self.retouch_detect_job_at(id, DETECT_EDGE)
+    }
+
+    /// [`Self::retouch_detect_job`] at long edge `edge`.
+    pub(crate) fn retouch_detect_job_at(&mut self, id: PhotoId, edge: usize) -> std::result::Result<crate::RenderJob, String> {
+        let mut job = self.render_job(id, edge, edge, false, false).ok_or("no such photo")?;
         let mut s = (*job.settings).clone();
         s.retouch = Default::default();
         job.settings = Arc::new(s);
