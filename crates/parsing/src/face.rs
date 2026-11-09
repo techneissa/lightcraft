@@ -140,7 +140,8 @@ impl Job {
 
 /// The mesh's points in fractions of the photo (none when the mesh was not sure it saw a face).
 pub fn landmarks_of(m: &MeshOut, crop: &Crop, img: &RgbImage) -> Vec<Landmark> {
-    if m.presence < 0.5 {
+    // (`!(presence >= 0.5)`: a NaN presence drops the points too)
+    if m.presence.is_nan() || m.presence < 0.5 {
         return Vec::new();
     }
     let (w, h) = (img.width as f32, img.height as f32);
@@ -354,4 +355,18 @@ pub fn run(nets: &Nets, img: &RgbImage, jobs: &[Job], batch: usize, scene: &Scen
         }
     }
     Ok(out)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A mesh the network is not sure of (low or NaN presence) gives no points; a sure one gives them.
+    #[test]
+    fn landmarks_need_a_presence_of_at_least_half() {
+        let img = RgbImage { width: 4, height: 4, data: vec![0; 48] };
+        let crop = Crop { cx: 2.0, cy: 2.0, scale: 1.0, angle: 0.0, side: 4 };
+        let out = |presence: f32| landmarks_of(&MeshOut { points: vec![[1.0, 1.0, 0.0]; 3], presence }, &crop, &img).len();
+        assert_eq!((out(f32::NAN), out(0.2), out(0.5), out(0.9)), (0, 0, 3, 3));
+    }
 }

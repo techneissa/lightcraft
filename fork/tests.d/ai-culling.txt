@@ -1,4 +1,5 @@
 cargo test -p lightcraft-pipeline --lib -- cull
 cargo test -p lightcraft-catalog --lib -- fork_format format_version rules
-cargo test -p lightcraft-engine --lib -- cull_run assisted_culling
+cargo test -p lightcraft-engine --lib -- cull_run assisted_culling cull_parse the_focus_line
 cargo test -p lightcraft-ui-egui --lib -- assisted_culling cull_dialog dialog_copy
+cargo test -p lightcraft-parsing --lib -- landmarks_need_a_presence

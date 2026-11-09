@@ -184,7 +184,6 @@
   "Removed {what} from {name}": "{what} removido de {name}",
   "Renames “{from}” on {n} photo{} (keywords below it too). Use | for levels, e.g. Travel|Italy. An existing name merges the two.": "Renomeia “{from}” em {n} foto{} (incluindo as palavras-chave abaixo dela). Use | para níveis, p. ex. Viagem|Itália. Um nome já existente mescla os dois.",
   "Replace {} with:": "Substituir {} por:",
-  "Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).": "Avalia o foco e a exposição de {scope} e encontra fotos semelhantes tiradas com segundos de diferença (sequências).",
   "Tagged {n} photo{} from the tracklog": "{n} foto{0} marcada{0} pelo tracklog",
   "The SAM 3 download failed: {e}": "Falha no download do SAM 3: {e}",
   "Unknown tag{s} {} stay{} as typed (see Tags)": "Marcador(es) desconhecido(s){s:.0} {} permanece(m) como digitado(s){:.0} (veja Marcadores)",
@@ -346,5 +345,9 @@
   "In use: {url} (up to zoom {zoom})": "Em uso: {url} (até o zoom {zoom})",
   "Bring photos in with File › Import Photos… ({keys}).": "Traga fotos com Arquivo › Importar fotos… ({keys}).",
   "View › Detail View ({keys}).": "Exibir › Exibição de detalhe ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Arquivo › Exportar… · Arquivo › Imprimir… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Arquivo › Exportar… · Arquivo › Imprimir… ({keys}).",
+  "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).": "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).",
+  "Assisted Culling scored {n} photos": "Assisted Culling scored {n} photos",
+  " · {groups} bursts": " · {groups} bursts",
+  "eyes not checked: {why}": "eyes not checked: {why}"
 }

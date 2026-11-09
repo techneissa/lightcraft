@@ -112,13 +112,19 @@ impl Tools {
     }
 
     fn measure_inner(&self, job: EyeJob, cancel: &AtomicBool) -> Result<PhotoEyes, String> {
-        let parse = job.known.as_ref().and_then(|k| k.read(&self.parsing));
+        // (waits for the parse-ahead index when it is still being read, so a parsed photo never runs a model just
+        // because the run started first; a parse made before landmarks existed, or whose faces were never meshed,
+        // has no eyes to read: the models run, or the photo stays "not measured" and is tried again next time)
+        let parse = job.known.as_ref().and_then(|k| k.read_when_loaded(&self.parsing, cancel)).filter(|p| has_landmarks(p));
         if parse.is_none()
             && let Some(why) = self.missing()
         {
             return Err(why);
         }
         let (img, regions) = crate::memory::in_background(|| job.prepare.render())?.into_parts();
+        // the picture and what the eyes make of it, counted against the decode gate (the render itself is counted by
+        // its decode): culling's lanes together never hold more than the gate allows, whatever their number
+        let _held = crate::memory::work_gate().acquire(held_bytes(img.width, img.height));
         if cancel.load(Ordering::Relaxed) {
             return Err("stopped".into());
         }
@@ -187,6 +193,20 @@ fn faces_of_parse(p: &Parsing) -> FacesFound {
         out.2.push(q.landmark_score);
     }
     out
+}
+
+/// Bytes one photo's eye reading holds once its picture is rendered: the 8-bit RGB picture (3 per pixel), its
+/// luminance (4) and the detail maps at full scale (3 × 4). A 2048 × 1365 picture holds about 53 MB, so the four
+/// lanes of a run hold about 210 MB at most, inside the decode gate's quarter of the budget (384 MiB by default).
+fn held_bytes(width: usize, height: usize) -> usize {
+    width.saturating_mul(height).saturating_mul(3 + 4 + 12)
+}
+
+/// Whether a parse has the face mesh of any of its faces (or has no face to mesh): a parse that has faces but no
+/// mesh for any of them was made before landmarks were kept, or never meshed them.
+fn has_landmarks(p: &Parsing) -> bool {
+    let faces: Vec<_> = p.people.iter().filter(|q| q.face.is_some()).collect();
+    faces.is_empty() || faces.iter().any(|q| !q.landmarks.is_empty() || q.landmark_score > 0.0)
 }
 
 /// Set up the eyes of photo `id` (no file is read).

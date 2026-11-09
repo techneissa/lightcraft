@@ -184,7 +184,6 @@
   "Removed {what} from {name}": "已从 {name} 移除{what}",
   "Renames “{from}” on {n} photo{} (keywords below it too). Use | for levels, e.g. Travel|Italy. An existing name merges the two.": "在 {n} 张照片上重命名“{from}”{0:.0}（其下级关键字也一并处理）。用 | 分隔层级，例如 Travel|Italy。改为已有名称时，两者将合并。",
   "Replace {} with:": "将 {0} 替换为：",
-  "Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).": "为{scope}评估对焦和曝光，并找出相隔几秒内拍摄的相似照片（连拍）。",
   "Tagged {n} photo{} from the tracklog": "已根据轨迹日志标记 {n} 张照片{0:.0}",
   "The SAM 3 download failed: {e}": "SAM 3 下载失败：{e}",
   "Unknown tag{s} {} stay{} as typed (see Tags)": "未知标签{s:.0} {0} 将按原样保留{1:.0}（参见“标签”）",
@@ -346,5 +345,9 @@
   "In use: {url} (up to zoom {zoom})": "使用中:{url}(最大缩放 {zoom})",
   "Bring photos in with File › Import Photos… ({keys}).": "通过 文件 › 导入照片… ({keys}) 导入照片。",
   "View › Detail View ({keys}).": "视图 › 详细视图 ({keys})。",
-  "File › Export… · File › Print… ({keys}).": "文件 › 导出… · 文件 › 打印… ({keys})。"
+  "File › Export… · File › Print… ({keys}).": "文件 › 导出… · 文件 › 打印… ({keys})。",
+  "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).": "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).",
+  "Assisted Culling scored {n} photos": "Assisted Culling scored {n} photos",
+  " · {groups} bursts": " · {groups} bursts",
+  "eyes not checked: {why}": "eyes not checked: {why}"
 }

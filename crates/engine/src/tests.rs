@@ -19,6 +19,7 @@ mod color;
 mod constrain_crop;
 mod crop_angle;
 mod crop_aspect;
+mod cull_parse;
 mod dcp;
 mod dcp_corpus;
 mod decontaminate;

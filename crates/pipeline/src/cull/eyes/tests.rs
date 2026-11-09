@@ -219,6 +219,76 @@ fn a_shot_focused_on_the_background_scores_low() {
     assert!(f < Eyes::FOCUS_MIN, "{f}");
 }
 
+#[test]
+fn a_near_flat_frame_has_unknown_focus() {
+    // pixel noise a thousandth of the range: no detail to compare the eyes against
+    let (w, h) = (600usize, 600usize);
+    let lm = mesh(w as f32, h as f32, (300.0, 300.0), 300.0, 0.3, 1.0);
+    let rect = face_rect(w as f32, h as f32, (300.0, 300.0), 300.0);
+    let px: Vec<f32> = (0..w * h).map(|i| 0.5 + 0.001 * (noise(i % w, i / w) - 0.5)).collect();
+    let r = read(&Luma { data: &px, width: w, height: h }, &[FaceIn { rect, landmarks: &lm }])[0];
+    assert_eq!((r.closed, r.focus), (Some(false), None), "{r:?}");
+}
+
+fn face(closed: Option<bool>, focus: Option<f32>) -> FaceEyes {
+    FaceEyes { closed, focus, main: true, ..FaceEyes::default() }
+}
+
+#[test]
+fn an_unreadable_main_face_leaves_the_photo_unknown_unless_another_is_closed() {
+    let open = face(Some(false), Some(80.0));
+    let unknown = face(None, None);
+    let closed = face(Some(true), None);
+    let s = summary(&[open, unknown]);
+    assert_eq!((s.closed, s.focus), (None, None), "one face could not be read: the photo is unknown, not open");
+    let s = summary(&[open, unknown, closed]);
+    assert_eq!(s.closed, Some(true), "a closed main face decides");
+    let s = summary(&[open, open]);
+    assert_eq!((s.closed, s.focus), (Some(false), Some(80.0)));
+    // open eyes whose focus could not be measured
+    let s = summary(&[open, face(Some(false), None)]);
+    assert_eq!((s.closed, s.focus), (Some(false), None));
+    // a soft face decides even when another could not be measured
+    let s = summary(&[face(Some(false), Some(10.0)), face(Some(false), None)]);
+    assert_eq!(s.focus, Some(10.0));
+    // a bystander (not main) is ignored
+    let bystander = FaceEyes { main: false, ..face(None, None) };
+    assert_eq!(summary(&[open, bystander]).closed, Some(false));
+}
+
+#[test]
+fn one_soft_main_face_makes_the_eyes_out_of_focus() {
+    // one sharp face and three soft ones
+    let faces = [face(Some(false), Some(95.0)), face(Some(false), Some(12.0)), face(Some(false), Some(20.0)), face(Some(false), Some(18.0))];
+    let s = summary(&faces);
+    assert!(s.focus.is_some_and(|f| f < FOCUS_MIN), "{s:?}");
+    // all sharp is not flagged
+    let s = summary(&[face(Some(false), Some(95.0)), face(Some(false), Some(70.0))]);
+    assert_eq!(s.focus, Some(70.0));
+    // a closed face has no focus and does not hide the others'
+    let s = summary(&[face(Some(true), None), face(Some(false), Some(60.0))]);
+    assert_eq!(s.focus, Some(60.0));
+}
+
+#[test]
+fn an_eye_that_cannot_be_read_does_not_make_the_other_unknown() {
+    let (w, h) = (2048usize, 1365usize);
+    // eyes read 0.09: closed on the two-eye line (0.11), open on the one-eye line (0.08)
+    for (bad, good) in [(1usize, 0usize), (0, 1)] {
+        let mut lm = mesh(w as f32, h as f32, (1024.0, 680.0), 500.0, 0.09, 1.0);
+        let (_, lids) = &EYES[bad];
+        lm[lids[1][0]] = [f32::NAN, f32::NAN, f32::NAN];
+        let r = read_one(&lm, w, h, 500.0);
+        assert_eq!((r.eyes[bad].ear, r.closed), (None, Some(false)), "bad eye {bad}: {r:?}");
+        assert!(r.eyes[good].ear.is_some(), "{r:?}");
+    }
+    // a corner missing altogether
+    let mut lm = mesh(w as f32, h as f32, (1024.0, 680.0), 500.0, 0.05, 1.0);
+    lm[EYES[1].0[0]] = [f32::NAN; 3];
+    let r = read_one(&lm, w, h, 500.0);
+    assert_eq!((r.eyes[1].ear, r.closed), (None, Some(true)), "{r:?}");
+}
+
 /// The threshold the catalog flags with.
 struct Eyes;
 impl Eyes {

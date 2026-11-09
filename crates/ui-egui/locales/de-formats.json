@@ -125,7 +125,6 @@
   "Restore {} Photo{}": "{} Foto{} wiederherstellen",
   "Restored {} photo{} from Recently Deleted": "{} Foto{} aus „Zuletzt gelöscht“ wiederhergestellt",
   "Saved export preset “{}”": "Exportvorgabe „{}“ gespeichert",
-  "Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).": "Bewertet {scope} nach Schärfe und Belichtung und findet ähnliche Aufnahmen im Abstand weniger Sekunden (Serien).",
   "Show {hidden} hidden location{}": "Ausgeblendete Orte anzeigen: {hidden}{:.0}",
   "Showing {n} of {}": "{n} von {} werden angezeigt",
   "Smart album: {}": "Smart-Album: {}",
@@ -346,5 +345,9 @@
   "In use: {url} (up to zoom {zoom})": "In Verwendung: {url} (bis Zoomstufe {zoom})",
   "Bring photos in with File › Import Photos… ({keys}).": "Fotos holen Sie mit Datei › Fotos importieren… ({keys}) in die Bibliothek.",
   "View › Detail View ({keys}).": "Ansicht › Detailansicht ({keys}).",
-  "File › Export… · File › Print… ({keys}).": "Datei › Exportieren… · Datei › Drucken… ({keys})."
+  "File › Export… · File › Print… ({keys}).": "Datei › Exportieren… · Datei › Drucken… ({keys}).",
+  "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).": "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).",
+  "Assisted Culling scored {n} photos": "Assisted Culling scored {n} photos",
+  " · {groups} bursts": " · {groups} bursts",
+  "eyes not checked: {why}": "eyes not checked: {why}"
 }

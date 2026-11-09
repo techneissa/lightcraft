@@ -154,11 +154,20 @@ fn only_the_ticked_suggestions_are_rejected() {
     let demo: Vec<PhotoId> = h.app.session.visible_cloned().into_iter().take(3).collect();
     h.app.session.commit("t", Op::SetFlag { id: demo[2], flag: Flag::Reject }).unwrap();
     let before = h.app.session.commits();
-    h.app.ui.dialog =
-        Some(Dialog::CullSuggest { closed: vec![demo[0].0], soft: vec![demo[1].0, demo[2].0], reject_closed: false, reject_soft: true });
+    // (as a run offers it: every kind that has photos ticked)
+    let offered = json!({"suggestReject": [
+        {"id": demo[0].0, "why": ["eyesClosed"]},
+        {"id": demo[1].0, "why": ["eyesOutOfFocus"]},
+        {"id": demo[2].0, "why": ["eyesOutOfFocus"]},
+    ]});
+    h.app.ui.dialog = suggestions(&offered);
     h.step();
     h.step();
     shot(&mut h, "cull-suggest.png");
+    // the user unticks Eyes Closed
+    if let Some(Dialog::CullSuggest { reject_closed, .. }) = &mut h.app.ui.dialog {
+        *reject_closed = false;
+    }
     let r = h.request("ui.dialog.confirm", json!({}), T);
     assert_eq!(r["ok"], true, "{r}");
     let flag = |h: &Headless, k: usize| h.app.session.catalog.photo(demo[k]).unwrap().flag;

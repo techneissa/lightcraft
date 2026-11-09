@@ -179,7 +179,6 @@
   "Running on {}.": "Chạy trên {}.",
   "Saved export preset “{}”": "Đã lưu thiết lập sẵn xuất «{}»",
   "Saved template {name}": "Saved template {name}",
-  "Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).": "Chấm điểm {scope} theo tiêu điểm và phơi sáng, tìm ảnh tương tự chụp trong vài giây (burst).",
   "Show {hidden} hidden location{}": "Hiện {hidden} vị trí ẩn{:.0}",
   "Showing {n} of {}": "Hiển thị {n} / {}",
   "Shows the model's terms, then downloads {} from {host}, installs it and starts using it. Nothing else is sent.": "Hiện điều khoản mô hình, rồi tải {} từ {host}, cài và bắt đầu dùng. Không gửi gì khác.",
@@ -322,5 +321,9 @@
   "View › Detail View ({keys}).": "Xem › Chế độ xem chi tiết ({keys}).",
   "File › Export… · File › Print… ({keys}).": "Tệp › Xuất… · Tệp › In… ({keys}).",
   "{n} folder{} could not be read": "Thư mục không đọc được: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "Đã bỏ qua tệp (không phải loại ảnh được hỗ trợ): {n}{:.0}",
+  "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).": "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).",
+  "Assisted Culling scored {n} photos": "Assisted Culling scored {n} photos",
+  " · {groups} bursts": " · {groups} bursts",
+  "eyes not checked: {why}": "eyes not checked: {why}"
 }

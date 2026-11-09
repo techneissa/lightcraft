@@ -5,7 +5,8 @@
 //!
 //! Besides focus, clipping and bursts, each photo's faces are read for closed eyes and eyes out of focus
 //! ([`crate::cull_eyes`]). Eyes already measured are kept (`eyes: "again"` measures them again); a photo whose eyes
-//! could not be read (no detector or mesh yet) is tried again next time. A burst's best frame is the sharpest whose
+//! could not be read (no detector or mesh yet) is tried again next time, and a measure that cannot run keeps the eyes
+//! found before. Eyes that could not be read rank below open, sharp ones. A burst's best frame is the sharpest whose
 //! eyes are open and in focus. Photos with closed or soft eyes are listed as Reject suggestions; nothing is rejected
 //! for them unless the user says so.
 
@@ -25,6 +26,9 @@ pub const KIND: &str = "cull";
 const CLOSED_PENALTY: f32 = 100.0;
 /// What a frame with soft eyes loses.
 const SOFT_EYES_PENALTY: f32 = 30.0;
+/// What a frame whose eyes could not be read loses: it ranks below an open, sharp frame a few points less sharp (it
+/// may be blinking), above a frame known to blink or to have soft eyes.
+const UNKNOWN_EYES_PENALTY: f32 = 15.0;
 
 /// Whether a run can start (one at a time).
 pub fn no_run_going(s: &Session) -> std::result::Result<(), String> {
@@ -52,7 +56,8 @@ struct Params {
 enum EyeWork {
     Skip,
     Kept(Eyes),
-    Measure(Box<EyeJob>),
+    /// Measure them; `Some`: what was measured before, kept when the models are not there to measure again.
+    Measure(Box<EyeJob>, Option<Eyes>),
 }
 
 struct Item {
@@ -145,7 +150,10 @@ pub fn plan(s: &mut Session, p: &Value) -> Result<Plan> {
             // (not measuring keeps what was measured before)
             (EyesMode::Off | EyesMode::Keep, Some(e)) => EyeWork::Kept(e),
             (EyesMode::Off, None) => EyeWork::Skip,
-            _ => crate::cull_eyes::job(s, id).map_or(EyeWork::Skip, |j| EyeWork::Measure(Box::new(j))),
+            _ => match crate::cull_eyes::job(s, id) {
+                Some(j) => EyeWork::Measure(Box::new(j), kept),
+                None => kept.map_or(EyeWork::Skip, EyeWork::Kept),
+            },
         };
         items.push(Item { id, time, thumb, eyes });
     }
@@ -165,13 +173,18 @@ fn read_one(item: Item, tools: Option<&Tools>, cancel: &AtomicBool) -> std::resu
     let mut row = Row { id: item.id, time: item.time, sharp, clip, sig, eyes: None, fresh: None, eye_error: None };
     match (item.eyes, tools) {
         (EyeWork::Kept(e), _) => row.eyes = Some(e),
-        (EyeWork::Measure(job), Some(tools)) if !cancel.load(Ordering::Relaxed) => match tools.measure(*job, cancel) {
+        (EyeWork::Measure(job, before), Some(tools)) if !cancel.load(Ordering::Relaxed) => match tools.measure(*job, cancel) {
             Ok(found) => {
                 row.eyes = Some(found.summary);
                 row.fresh = Some(found);
             }
-            Err(e) => row.eye_error = Some(e),
+            // (a measure that could not run keeps what an earlier one found)
+            Err(e) => {
+                row.eyes = before;
+                row.eye_error = Some(e);
+            }
         },
+        (EyeWork::Measure(_, before), _) => row.eyes = before,
         _ => {}
     }
     Ok(row)
@@ -224,13 +237,19 @@ pub fn measure(plan: Plan, cancel: &AtomicBool, progress: &(dyn Fn(usize) + Sync
     }
 }
 
-/// How good a frame is when a burst's best is chosen: its focus, less [`CLOSED_PENALTY`] for closed eyes and
-/// [`SOFT_EYES_PENALTY`] for soft ones.
+/// How good a frame is when a burst's best is chosen: its focus, less [`CLOSED_PENALTY`] for closed eyes,
+/// [`SOFT_EYES_PENALTY`] for soft ones and [`UNKNOWN_EYES_PENALTY`] for eyes that could not be read, so an open, sharp
+/// frame beats a sharper one whose eyes are unknown.
 fn frame_score(r: &Row) -> f32 {
     let e = r.eyes.unwrap_or_default();
-    let closed = if e.closed == Some(true) { CLOSED_PENALTY } else { 0.0 };
-    let soft = if e.out_of_focus() == Some(true) { SOFT_EYES_PENALTY } else { 0.0 };
-    r.sharp - closed - soft
+    let penalty = match (e.closed, e.out_of_focus()) {
+        (Some(true), _) => CLOSED_PENALTY,
+        (_, Some(true)) => SOFT_EYES_PENALTY,
+        (Some(false), Some(false)) => 0.0,
+        // open eyes whose focus could not be measured, or eyes not read at all
+        _ => UNKNOWN_EYES_PENALTY,
+    };
+    r.sharp - penalty
 }
 
 fn eyes_json(e: &Eyes) -> Value {

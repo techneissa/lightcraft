@@ -666,6 +666,10 @@ pub(crate) fn remember(s: &mut Session, id: PhotoId, filed: Filed) {
     }
 }
 
+/// The longest a worker waits for the index to be read ([`Known::read_when_loaded`]).
+#[cfg(not(target_arch = "wasm32"))]
+const INDEX_WAIT: std::time::Duration = std::time::Duration::from_secs(30);
+
 /// What the index knows of one photo's parse under one version, taken on the calling thread so a worker can read the
 /// parse ([`Known::read`]) and file the one it makes ([`Known::file`]) without the session: portrait retouching's
 /// face search (`crate::retouch_input`) asks for its parse this way, as [`ready`] and [`remember`] do.
@@ -692,6 +696,46 @@ impl Known {
     pub(crate) fn read(&self, parsing: &crate::people_parsing::PeopleParsing) -> Option<Arc<lightcraft_parsing::Parsing>> {
         // (a parse made under a version this one does not name is not taken for it; one of nobody has no edges to draw)
         parsing.cached(self.key.as_deref()?).filter(|p| p.model_version == self.version || p.people.is_empty())
+    }
+
+    /// [`Self::read`] on a worker that may not wait for the UI thread: when the index was not read yet at planning
+    /// time (the worker was still reading it), waits for it, up to [`INDEX_WAIT`], and looks the photo up then, so a
+    /// photo parsed before is never run again because a run started first. Stops waiting when `cancel` is set, when no
+    /// cache folder is wanted, or when the folder wanted changed.
+    pub(crate) fn read_when_loaded(
+        &self,
+        parsing: &crate::people_parsing::PeopleParsing,
+        cancel: &std::sync::atomic::AtomicBool,
+    ) -> Option<Arc<lightcraft_parsing::Parsing>> {
+        let key = match &self.key {
+            Some(k) => Some(k.clone()),
+            None => self.key_when_loaded(cancel),
+        }?;
+        parsing.cached(&key).filter(|p| p.model_version == self.version || p.people.is_empty())
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    fn key_when_loaded(&self, _: &std::sync::atomic::AtomicBool) -> Option<String> {
+        None
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn key_when_loaded(&self, cancel: &std::sync::atomic::AtomicBool) -> Option<String> {
+        // (a guard against a worker that never answers, not a timing the result depends on)
+        let give_up = std::time::Instant::now() + INDEX_WAIT;
+        loop {
+            {
+                let sh = index::lock(&self.slot);
+                if sh.ready() {
+                    return sh.ix.get(self.identity).map(str::to_string);
+                }
+                sh.want.as_ref()?;
+            }
+            if cancel.load(std::sync::atomic::Ordering::Relaxed) || std::time::Instant::now() >= give_up {
+                return None;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
     }
 
     /// The photo was parsed as `filed`: the next request finds it without a render. A parse filed under another

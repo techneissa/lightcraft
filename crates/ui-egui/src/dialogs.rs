@@ -969,6 +969,10 @@ fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut D
         ))
         .color(t.text_dim),
     );
+    ui.label(
+        egui::RichText::new(crate::i18n::tr("Photos with closed or out-of-focus eyes are only offered for rejection after the run."))
+            .color(t.text_dim),
+    );
 }
 
 /// The body of the WhatsNew dialog.

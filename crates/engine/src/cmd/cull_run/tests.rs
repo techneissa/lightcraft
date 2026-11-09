@@ -120,3 +120,37 @@ fn a_stopped_run_changes_nothing() {
     assert!(apply(&mut s, m).is_err());
     assert_eq!(s.commits(), undo);
 }
+
+/// A frame whose eyes could not be read ranks below an open, sharp one that is a few points less sharp.
+#[test]
+fn a_burst_prefers_open_eyes_to_unknown_ones() {
+    let mut s = Session::with_demo();
+    let ids: Vec<PhotoId> = s.visible_cloned().into_iter().take(2).collect();
+    let rows = vec![row(ids[0], 1, 80.0, eyes(None, None)), row(ids[1], 2, 70.0, eyes(Some(false), Some(85.0)))];
+    apply(&mut s, measured(rows)).unwrap();
+    let best = |k: usize| s.catalog.photo(ids[k]).unwrap().analysis.unwrap().best;
+    assert!(best(1) && !best(0));
+    // unknown still beats eyes known to be closed or soft
+    let rows = vec![row(ids[0], 1, 60.0, eyes(None, None)), row(ids[1], 2, 90.0, eyes(Some(true), None))];
+    apply(&mut s, measured(rows)).unwrap();
+    assert!(s.catalog.photo(ids[0]).unwrap().analysis.unwrap().best);
+}
+
+/// Measuring again with no models to do it keeps the eyes found before (and says why it could not).
+#[test]
+fn measuring_again_without_models_keeps_the_eyes_found_before() {
+    let mut s = Session::with_demo();
+    let id = s.visible_cloned()[0];
+    let before = eyes(Some(true), Some(12.0));
+    s.commit("t", Op::SetAnalysis { id, analysis: Some(Analysis { eyes: before, ..Analysis::default() }) }).unwrap();
+    let r = s.execute("photo.analyze", &json!({"ids": [id.0], "eyes": "again"})).unwrap();
+    assert!(r["photos"][0]["eyesError"].is_string(), "{r}");
+    assert_eq!(s.catalog.photo(id).unwrap().analysis.unwrap().eyes, before, "{r}");
+    assert_eq!(r["photos"][0]["eyes"]["closed"], true, "{r}");
+}
+
+/// The pipeline's focus line and the catalog's are the same number.
+#[test]
+fn the_focus_line_is_the_same_in_the_pipeline_and_the_catalog() {
+    assert_eq!(lightcraft_pipeline::cull::eyes::FOCUS_MIN, Eyes::FOCUS_MIN);
+}

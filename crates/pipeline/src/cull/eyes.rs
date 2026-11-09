@@ -27,6 +27,8 @@ pub const MIN_EYE_PX: f32 = 6.0;
 const TURNED: f32 = 0.6;
 /// Both eyes are unknown below this share: the face is in profile.
 const PROFILE: f32 = 0.35;
+/// Below this eye focus a photo's eyes are out of focus (the catalog's `Eyes::FOCUS_MIN`, which has the same value).
+pub const FOCUS_MIN: f32 = 35.0;
 /// The eye width the focus is measured at (the picture is shrunk to it, never enlarged).
 pub const FOCUS_EYE_PX: f32 = 32.0;
 /// Eyes narrower than this many pixels get no focus score.
@@ -39,6 +41,9 @@ const PEAK_SHARE: f32 = 0.1;
 /// The upper face's blocks the eyes are measured against: this quantile of them (the brows and the hairline are
 /// the top few).
 const FACE_QUANTILE: f32 = 0.75;
+/// The detail energy (squared Laplacian of 0..1 luminance) the face and photo must show for a focus score to mean
+/// anything.
+const MIN_REFERENCE: f32 = 1e-5;
 /// A face is a main face when it is at least this share of the largest face's width.
 pub const MAIN_SHARE: f32 = 0.6;
 
@@ -100,9 +105,10 @@ pub struct FaceEyes {
 pub struct Summary {
     pub faces: u32,
     pub main: u32,
-    /// A main face's eyes are closed (`None`: no main face's eyes could be read).
+    /// A main face's eyes are closed (`None`: none is closed and some main face's eyes could not be read).
     pub closed: Option<bool>,
-    /// The best eye focus of the main faces (`None`: none could be measured).
+    /// The weakest eye focus of the main faces with open eyes (`None`: none could be measured, or a face could not and
+    /// no measured one is soft).
     pub focus: Option<f32>,
 }
 
@@ -139,14 +145,16 @@ pub fn eyes_of(lm: &[[f32; 3]], w: f32, h: f32) -> [Eye; 2] {
         (ear.is_finite() && across > 0.0).then_some((ear, dist2(a, b)))
     };
     let got = [read(&EYES[0]), read(&EYES[1])];
-    let widths = got.map(|g| g.map_or(0.0, |(_, w)| w));
-    let wide = widths[0].max(widths[1]);
+    let widths = got.map(|g| g.map(|(_, w)| w));
+    // the turned-face and profile tests compare the eyes, so they need both; one eye that could not be read at all
+    // (a missing or non-finite landmark) says nothing about the other
+    let both = widths[0].zip(widths[1]);
+    let wide = both.map_or(0.0, |(a, b)| a.max(b));
     for (k, g) in got.iter().enumerate() {
         let Some((ear, width)) = *g else { continue };
         let Some(eye) = out.get_mut(k) else { continue };
         eye.width = width;
-        let share = if wide > 0.0 { width / wide } else { 0.0 };
-        let readable = width >= MIN_EYE_PX && share >= TURNED && widths.iter().all(|w| *w >= PROFILE * wide);
+        let readable = width >= MIN_EYE_PX && both.is_none_or(|(a, b)| wide > 0.0 && width / wide >= TURNED && a.min(b) >= PROFILE * wide);
         eye.ear = readable.then_some(ear);
     }
     out
@@ -336,7 +344,8 @@ fn focus(detail: &Detail, lm: &[[f32; 3]], eyes: &[Eye; 2], photo: Option<f32>, 
     let nose = point(lm, NOSE_TIP, w, h)?[1];
     let face = detail.blocks((x0, y0, x1, nose), size, FACE_QUANTILE).unwrap_or(0.0);
     let reference = face.max(PHOTO_WEIGHT * photo.unwrap_or(0.0));
-    if reference.is_nan() || reference <= 1e-9 {
+    // a near-flat frame (a blank wall, a lens cap) has no detail to compare: unknown, not a number made of noise
+    if reference.is_nan() || reference < MIN_REFERENCE {
         return None;
     }
     let f = 100.0 * (eye / reference).clamp(0.0, 1.0);
@@ -344,15 +353,26 @@ fn focus(detail: &Detail, lm: &[[f32; 3]], eyes: &[Eye; 2], photo: Option<f32>, 
 }
 
 /// The photo's result from its faces' (main faces only; see [`Summary`]).
+///
+/// - `closed`: `Some(true)` when any main face's eyes are closed; `Some(false)` only when every main face's eyes
+///   could be read and are open; otherwise `None` (a face we could not read may be blinking).
+/// - `focus`: the weakest main face's eye focus, so one soft face flags the photo as it does for closed eyes. A face
+///   with closed eyes has no focus to measure and is left out (the photo is flagged closed). When a main face with
+///   open eyes could not be measured and no measured face is soft, the focus is `None`.
 pub fn summary(faces: &[FaceEyes]) -> Summary {
     let main: Vec<&FaceEyes> = faces.iter().filter(|f| f.main).collect();
-    let read: Vec<bool> = main.iter().filter_map(|f| f.closed).collect();
-    Summary {
-        faces: u32::try_from(faces.len()).unwrap_or(u32::MAX),
-        main: u32::try_from(main.len()).unwrap_or(u32::MAX),
-        closed: (!read.is_empty()).then(|| read.iter().any(|c| *c)),
-        focus: main.iter().filter_map(|f| f.focus).reduce(f32::max),
-    }
+    let closed = if main.iter().any(|f| f.closed == Some(true)) {
+        Some(true)
+    } else if main.is_empty() || main.iter().any(|f| f.closed.is_none()) {
+        None
+    } else {
+        Some(false)
+    };
+    let to_measure: Vec<&&FaceEyes> = main.iter().filter(|f| f.closed != Some(true)).collect();
+    let weakest = to_measure.iter().filter_map(|f| f.focus).reduce(f32::min);
+    let unknown = to_measure.iter().any(|f| f.focus.is_none());
+    let focus = weakest.filter(|w| !unknown || *w < FOCUS_MIN);
+    Summary { faces: u32::try_from(faces.len()).unwrap_or(u32::MAX), main: u32::try_from(main.len()).unwrap_or(u32::MAX), closed, focus }
 }
 
 /// The sRGB-encoded luminance of 8-bit RGB pixels (`rgb.len()` = 3 × width × height).

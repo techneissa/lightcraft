@@ -181,7 +181,6 @@
   "Removed {what} from {name}": "{what} dihapus dari {name}",
   "Renames “{from}” on {n} photo{} (keywords below it too). Use | for levels, e.g. Travel|Italy. An existing name merges the two.": "Mengganti nama “{from}” di {n} foto{:.0} (termasuk kata kunci di bawahnya). Gunakan | untuk tingkatan, mis. Liburan|Italia. Jika nama sudah ada, keduanya akan digabungkan.",
   "Replace {} with:": "Ganti {} dengan:",
-  "Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).": "Menilai fokus dan eksposur {scope}, lalu mencari bidikan serupa yang diambil berselang beberapa detik (bidikan beruntun).",
   "Tagged {n} photo{} from the tracklog": "{n} foto diberi lokasi dari log jejak GPS{:.0}",
   "The SAM 3 download failed: {e}": "Gagal mengunduh SAM 3: {e}",
   "Unknown tag{s} {} stay{} as typed (see Tags)": "Tag tak dikenal{s:.0} {0} tetap seperti yang diketik{1:.0} (lihat Tag)",
@@ -325,5 +324,9 @@
   "View › Detail View ({keys}).": "Tampilan › Tampilan Detail ({keys}).",
   "File › Export… · File › Print… ({keys}).": "File › Ekspor… · File › Cetak… ({keys}).",
   "{n} folder{} could not be read": "Folder yang tidak bisa dibaca: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "File yang dilewati (bukan jenis foto yang didukung): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "File yang dilewati (bukan jenis foto yang didukung): {n}{:.0}",
+  "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).": "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).",
+  "Assisted Culling scored {n} photos": "Assisted Culling scored {n} photos",
+  " · {groups} bursts": " · {groups} bursts",
+  "eyes not checked: {why}": "eyes not checked: {why}"
 }
