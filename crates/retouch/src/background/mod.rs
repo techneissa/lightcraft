@@ -189,6 +189,9 @@ impl Feature for Background {
         Control { spec: Spec::amount("retouch.background.clean", "Clean Backdrop"), get: |s| s.clean, set: |s, v| s.clean = v },
     ];
     const PARTS: &'static [Part] = &[Part::EntirePerson];
+    /// Nothing past the masks around a face: Background reads around every pixel, faces or not, by fractions of the
+    /// picture ([`reach`]), and the pipeline grows a zoomed window by that (`retouch_step::reach`).
+    const REACH: f64 = 0.0;
 
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, _face: Option<usize>) {
         let k = draw::Strength::of(self);

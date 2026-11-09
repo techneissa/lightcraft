@@ -158,9 +158,24 @@ impl Conv {
     }
 }
 
+/// Whether candle 0.9.2's CPU convolution would read `x` wrongly: its general path takes a contiguous input whose
+/// strides equal channels-last ones as channels-last, which a contiguous NCHW input of one group with as many channels
+/// as rows and columns has (SegFormer-B0's 4 × 4 reduction of 64 channels at 64 × 64). 1 × 1 kernels take another path.
+fn cpu_misreads(x: &Tensor, w: &Tensor, groups: usize) -> candle_core::Result<bool> {
+    let (_, c, h, wd) = x.dims4()?;
+    let (.., kh, kw) = w.dims4()?;
+    Ok(x.device().is_cpu() && x.is_contiguous() && groups == 1 && c == h && h == wd && (kh, kw) != (1, 1))
+}
+
 impl Module for Conv {
     fn forward(&self, x: &Tensor) -> candle_core::Result<Tensor> {
-        let y = x.conv2d(&self.w, self.padding, self.stride, 1, self.groups)?;
+        let y = if cpu_misreads(x, &self.w, self.groups)? {
+            // the same convolution with rows and columns swapped in the input, the kernel and the result: the swapped
+            // input is not contiguous, so candle reads it by its strides
+            x.transpose(2, 3)?.conv2d(&self.w.transpose(2, 3)?, self.padding, self.stride, 1, self.groups)?.transpose(2, 3)?
+        } else {
+            x.conv2d(&self.w, self.padding, self.stride, 1, self.groups)?
+        };
         match &self.b {
             Some(b) => y.broadcast_add(&b.reshape((1, b.dim(0)?, 1, 1))?),
             None => Ok(y),
@@ -180,4 +195,49 @@ pub fn resize(x: &Tensor, h: usize, w: usize, align_corners: bool) -> Result<Ten
 /// Global average pool of an NCHW tensor to N × C × 1 × 1.
 pub fn global_avg(x: &Tensor) -> Result<Tensor> {
     Ok(x.mean_keepdim(3)?.mean_keepdim(2)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A plain convolution (no padding, one group), in f64.
+    fn reference(x: &[f32], (c, h, w): (usize, usize, usize), k: &[f32], (o, kk, s): (usize, usize, usize)) -> Vec<f32> {
+        let (oh, ow) = ((h - kk) / s + 1, (w - kk) / s + 1);
+        let mut out = vec![0.0f32; o * oh * ow];
+        for oi in 0..o {
+            for y in 0..oh {
+                for xx in 0..ow {
+                    let mut acc = 0.0f64;
+                    for ci in 0..c {
+                        for ky in 0..kk {
+                            for kx in 0..kk {
+                                let v = x[(ci * h + y * s + ky) * w + xx * s + kx] * k[((oi * c + ci) * kk + ky) * kk + kx];
+                                acc += f64::from(v);
+                            }
+                        }
+                    }
+                    out[(oi * oh + y) * ow + xx] = acc as f32;
+                }
+            }
+        }
+        out
+    }
+
+    /// candle 0.9.2 on the CPU gave a 64-channel 64 × 64 input's 4 × 4 stride-4 convolution (SegFormer-B0's stage-2
+    /// reduction) and a 3 × 3 one of 16 channels at 16 × 16 other numbers (largest difference about 6 and 4).
+    #[test]
+    fn a_cpu_convolution_with_as_many_channels_as_rows_and_columns_is_right() {
+        for (c, h, w, kk, s) in [(64, 64, 64, 4, 4), (16, 16, 16, 3, 1), (16, 16, 20, 3, 1), (8, 16, 16, 3, 2)] {
+            let x: Vec<f32> = (0..c * h * w).map(|i| ((i * 7919) % 1000) as f32 / 1000.0 - 0.5).collect();
+            let k: Vec<f32> = (0..8 * c * kk * kk).map(|i| ((i * 104_729) % 997) as f32 / 997.0 - 0.5).collect();
+            let want = reference(&x, (c, h, w), &k, (8, kk, s));
+            let conv = Conv::from_parts(Tensor::from_vec(k, (8, c, kk, kk), &Device::Cpu).unwrap(), None, s, 0, 1);
+            let y = conv.forward(&Tensor::from_vec(x, (1, c, h, w), &Device::Cpu).unwrap()).unwrap();
+            let got = y.flatten_all().unwrap().to_vec1::<f32>().unwrap();
+            assert_eq!(got.len(), want.len());
+            let diff = got.iter().zip(&want).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+            assert!(diff < 1e-3, "{c} channels, {h} × {w}, kernel {kk}, stride {s}: largest difference {diff}");
+        }
+    }
 }

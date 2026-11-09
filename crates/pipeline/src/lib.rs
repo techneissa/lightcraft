@@ -52,6 +52,7 @@ pub mod output;
 pub mod profiles;
 pub mod recolor;
 pub mod redeye;
+pub mod reshape_step;
 pub mod residual_look;
 pub mod retouch_step;
 pub mod spot_area;
@@ -356,6 +357,10 @@ pub fn frame_for(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, apply_cro
             frame.constrain_to_image(s.geometry.constrain_crop);
         }
     }
+    // (fork, `fork/retouch-reshape.md`: Face Reshape moves the photo before its lens corrections)
+    if let Some(field) = reshape_step::field(info, s, &frame) {
+        frame.set_reshape(field);
+    }
     frame
 }
 
@@ -611,15 +616,18 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                 let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
                 work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
             }
+            // (fork, `fork/retouch-background.md`: Background reads its blurs around every pixel, faces or not;
+            // first, so the faces it reaches are read whole below)
             let halo = retouch_step::reach(s, px_per_long);
             if halo > 0 {
-                // (fork, `fork/retouch-background.md`: Background reads its blurs around each pixel)
                 let x = work.x.saturating_sub(halo);
                 let y = work.y.saturating_sub(halo);
                 let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
                 let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
                 work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
             }
+            // (fork, `fork/retouch-eyes.md`: portrait retouching reads around a face; the window holds all of it)
+            work = retouch_step::window_for_reads(s, info, &frame, full_w, full_h, work);
             if work != win {
                 keep = Some(PixelWindow { x: win.x - work.x, y: win.y - work.y, ..win });
             }
@@ -1139,6 +1147,10 @@ mod tests_mask_geometry;
 mod tests_nr_scale;
 #[cfg(test)]
 mod tests_recolor_render;
+#[cfg(test)]
+mod tests_retouch_blemish;
+#[cfg(test)]
+mod tests_retouch_teeth_lips;
 #[cfg(test)]
 mod tests_sharpen;
 #[cfg(test)]

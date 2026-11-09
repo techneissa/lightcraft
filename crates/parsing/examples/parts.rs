@@ -4,9 +4,9 @@
 //! [--models DIR] [--edge 2048] [--no-yunet] [--cells 1.5] [--eps 0.0002]`
 //!
 //! Writes `outdir/<part>.png` (the photo dimmed, the part in colour, one colour per person), `outdir/all.png` (every
-//! part in its own colour), `outdir/landmarks.png`, `outdir/people.json` and each person's masks as grey pictures
-//! (`outdir/masks/<part>-<person>.png`, white = the part; the retouch examples read them), and prints the time each
-//! step took.
+//! part in its own colour), `outdir/landmarks.png`, `outdir/people.json` (with each face's mesh points, which the
+//! Face Reshape example reads) and each person's masks as grey pictures (`outdir/masks/<part>-<person>.png`, white =
+//! the part; the retouch examples read them), and prints the time each step took.
 //! Faces come from the YuNet detector in the shared models folder when it is there (as in the app), else from the
 //! body model. `--models` defaults to `LIGHTCRAFT_PARSING_MODELS`, else `~/Library/Application Support/ArtCraft/models`.
 
@@ -174,7 +174,9 @@ fn write(
             let areas: serde_json::Map<String, serde_json::Value> = p.parts.keys().map(|k| (k.id().to_string(), serde_json::json!((p.area(*k) * 1e4).round() / 1e4))).collect();
             let planes: serde_json::Map<String, serde_json::Value> =
                 p.parts.iter().map(|(k, v)| (k.id().to_string(), serde_json::json!(v.iter().map(|q| format!("{}x{} @ {:.3},{:.3}-{:.3},{:.3}", q.width, q.height, q.rect.x0, q.rect.y0, q.rect.x1, q.rect.y1)).collect::<Vec<_>>()))).collect();
-            serde_json::json!({"face": p.face.map(|f| [f.x0, f.y0, f.x1, f.y1]), "faceScore": p.face_score, "landmarks": p.landmarks.len(), "landmarkScore": p.landmark_score, "areas": areas, "planes": planes})
+            // (`mesh`: the face mesh's points, which the Face Reshape example reads)
+            let mesh: Vec<[f32; 2]> = p.landmarks.iter().map(|l| [l.x, l.y]).collect();
+            serde_json::json!({"face": p.face.map(|f| [f.x0, f.y0, f.x1, f.y1]), "faceScore": p.face_score, "landmarks": p.landmarks.len(), "landmarkScore": p.landmark_score, "areas": areas, "planes": planes, "mesh": mesh})
         })
         .collect();
     std::fs::write(

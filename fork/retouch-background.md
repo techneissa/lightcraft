@@ -67,7 +67,7 @@ three CC0 Unsplash photos from Wikimedia Commons):
   `decode_depth` (none without the `heif` feature); `crates/codecs/src/lib.rs`: its `pub use`.
 - `crates/engine/src/lib.rs`, `crates/engine/src/cmd.rs`, `crates/engine/src/tests.rs`, `crates/ui-egui/src/tests.rs`:
   `mod` lines and the command specs. `crates/ui-egui/src/menus/ui_commands.rs`: `portrait.backgroundPicture`.
-- `crates/catalog`: `fork_format.rs` (`VERSION` 6), `journal.rs` (the fork 6 row), `tests_format_version.rs`,
+- `crates/catalog`: `fork_format.rs` (`VERSION` 7), `journal.rs` (the fork 7 row), `tests_format_version.rs`,
   `tests_fork_format.rs`; `fork/catalog-format.md`.
 - Fork files of the foundation: `crates/retouch/src/feature.rs` (`View::place`, `Scene::backdrop` and `Scene::depth`),
   `crates/retouch/src/input.rs` (`Input::backdrop`, `Input::depth`, `with_backdrop`, `with_depth`, in the fingerprint
@@ -88,7 +88,7 @@ light stand and a grain; a flat grey photo staying flat; a draft and an export f
 change (within 15 %); a window drawing what the whole render draws (in the crate, and through the pipeline within 1 of
 255); small gaps inside the person not swapped; the work kept for the next slider move; the command, a library photo
 loaded off the UI thread and reaching the render, an export loading it first; an iPhone depth image read from a HEIC
-(with the `heif` feature) and reaching the render while Blur is on; fork format 6; the section's sliders writing the
+(with the `heif` feature) and reaching the render while Blur is on; fork format 7; the section's sliders writing the
 photo's setting whichever face is picked, and Swap With taking a swatch, a file and a photo of the view.
 
 Pictures: `cargo run -p lightcraft-retouch --release --example background -- in.jpg out.png --mask person.png [--blur N]

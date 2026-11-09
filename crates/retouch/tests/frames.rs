@@ -23,14 +23,14 @@ fn a_key_after_the_lens_matches_its_face_before_it_not_the_neighbour_at_its_plac
     // made under YuNet: A's box after the lens is where B stands on the photo
     let mut r = Retouch::default();
     let yunet = [Face::boxed(b)];
-    r.override_mut(&yunet, 0).unwrap().set("retouch.skinTone.amount", 90.0);
+    r.override_mut(&yunet, 0).unwrap().set("retouch.skinTone.faceLight", 90.0);
     assert_eq!(r.faces[0].face.frame, KeyFrame::Edit);
     let parsed = [on_photo(a), on_photo(b)];
     assert_eq!(resolve_in(&r, &parsed, Some(&Shift)), [Some(0), None], "A keeps it, B doesn't take it");
     assert_eq!(resolve(&r, &parsed), [None, None], "without the map, never by place");
     // and the other way round: made on the parse, matched to YuNet's face after the lens
     let mut r = Retouch::default();
-    r.override_mut(&parsed, 0).unwrap().set("retouch.skinTone.amount", 90.0);
+    r.override_mut(&parsed, 0).unwrap().set("retouch.skinTone.faceLight", 90.0);
     assert_eq!(r.faces[0].face.frame, KeyFrame::Photo);
     assert_eq!(resolve_in(&r, &[Face::boxed(b), Face::boxed(NormRect::new(0.2, 0.2, 0.28, 0.3))], Some(&Shift)), [Some(0), None]);
     // a named face still finds its person's settings across frames, with or without a map

@@ -71,6 +71,7 @@ mod match_look;
 mod merge;
 mod move_to_share;
 mod organize;
+mod parse_ahead;
 mod persist;
 mod prefs;
 mod presets_scale;

@@ -12,10 +12,11 @@
 
 use std::sync::Arc;
 
+use lightcraft_color::transfer::decode_srgb8;
 use lightcraft_develop::retouch::{Face, Input, KeyFrame, MAX_FACES, NormRect, Part, PartMask};
 use lightcraft_geom::{Orientation, Rect};
 use lightcraft_parsing::{FaceHint, Landmark, Parsing, Person, RgbImage};
-use lightcraft_raster::{Image, Plane, Rgba8};
+use lightcraft_raster::{Image, Plane, Rgb32f, Rgba8};
 
 use super::{Found, arrange, thumb};
 use crate::people_parsing::{Choice, Outcome, PeopleParsing};
@@ -34,6 +35,8 @@ const SAME_FACE_IOU: f32 = 0.5;
 /// A face search from the parse: set up on the calling thread, run on a worker.
 pub(crate) struct PartsFinder {
     pub(super) prepare: crate::cmd::parsing::Prepare,
+    /// What the parse-ahead index knows of the photo's parse under `choice` (`None`: the photo has gone).
+    pub(super) known: Option<crate::parse_ahead::Known>,
     pub(super) parsing: PeopleParsing,
     /// The set and hair edges when the search was set up: its faces are kept under their version.
     pub(super) choice: Choice,
@@ -42,14 +45,23 @@ pub(crate) struct PartsFinder {
 }
 
 impl PartsFinder {
-    /// Render the parse's picture, find its YuNet faces, and take the parse from the cache or wait for its run.
+    /// Render the parse's picture and find its YuNet faces (the picker's thumbnails and the faces' five landmarks
+    /// come from them); then take the parse the parse-ahead index knows for the photo (made ahead of time or by
+    /// `parsing.run`, so no model runs), else the cached one, else wait for its run, and file it in the index.
     pub(super) fn find(self) -> Result<Found, String> {
         let (img, hints) = self.prepare.run()?;
-        let parsing = match self.parsing.parse_as(self.choice, img.clone(), hints.clone(), true) {
+        if let Some(parsing) = self.known.as_ref().and_then(|k| k.read(&self.parsing)) {
+            return Ok(found(&parsing, &hints, &img, self.orient, &self.regions));
+        }
+        let (filed, out) = self.parsing.parse_as(self.choice, img.clone(), hints.clone(), true);
+        let parsing = match out {
             Outcome::Ready { parsing, .. } => parsing,
             Outcome::Running => return Err("the people parse is still running".into()),
             Outcome::Failed(e) => return Err(e),
         };
+        if let Some(k) = &self.known {
+            k.file(filed);
+        }
         Ok(found(&parsing, &hints, &img, self.orient, &self.regions))
     }
 }
@@ -57,11 +69,24 @@ impl PartsFinder {
 /// The faces of `parsing` (made from `img` with the faces `hints`) for the retouch step, on the photo turned by
 /// `orient`, named after `regions`, with a picker thumbnail each.
 pub(crate) fn found(parsing: &Parsing, hints: &[FaceHint], img: &RgbImage, orient: Orientation, regions: &[(NormRect, String)]) -> Found {
-    let mut faces = faces_of(parsing, hints, orient);
+    let mut faces = with_spots(faces_of(parsing, hints, orient), img, orient);
     arrange(&mut faces, regions);
     let shown = oriented(&Rgba8::from_fn(img.width, img.height, |x, y| rgba(img, x, y)), orient);
     let thumbs = faces.iter().map(|f| thumb(&shown, &f.bounds)).collect();
     Found { input: Arc::new(Input::new_on_photo(faces)), thumbs: Arc::new(thumbs) }
+}
+
+/// `faces` with the spots on their skin (Blemishes), found once here on the parse's picture, in linear light and
+/// turned like the masks, and kept with them: a render, and the Amount slider, only repairs them.
+fn with_spots(faces: Vec<Face>, img: &RgbImage, orient: Orientation) -> Vec<Face> {
+    if faces.iter().all(|f| f.mask(Part::FacialSkin).is_none()) {
+        return faces;
+    }
+    let linear = Rgb32f::from_fn(img.width, img.height, |x, y| {
+        let p = rgba(img, x, y);
+        [decode_srgb8(p[0]), decode_srgb8(p[1]), decode_srgb8(p[2])]
+    });
+    lightcraft_develop::retouch::blemish::with_spots(&oriented(&linear, orient), faces)
 }
 
 fn rgba(img: &RgbImage, x: usize, y: usize) -> [u8; 4] {
@@ -110,6 +135,7 @@ fn face_of(p: &Person, hints: &[FaceHint], orient: Orientation, read: &[Part]) -
         person: None,
         masks,
         key_frame: KeyFrame::Photo,
+        spots: None,
     })
 }
 

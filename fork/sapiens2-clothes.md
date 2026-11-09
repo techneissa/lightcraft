@@ -27,8 +27,7 @@ List: a third people-parts model set, Sapiens2 (Meta's Sapiens2-seg 0.4B, about 
   Select People: splitting a person into parts is not identifying them, and techneissa uses the app personally. They
   never reach face detection, face recognition or the People catalog (a parse only carries the person id of a face
   region the caller hands in). The weights are never shipped with LightCraft (`NOTICE`).
-- How it does (2048 px photos, second parse with the models loaded, M-series Mac at a load of 12 to 50 while other
-  builds ran):
+- How it does (2048 px photos, second parse with the models loaded, a test Mac while other builds ran):
 
   | Set | Download | Per photo with people | No people | Load |
   | --- | --- | --- | --- | --- |
@@ -37,7 +36,7 @@ List: a third people-parts model set, Sapiens2 (Meta's Sapiens2-seg 0.4B, about 
   | Sapiens2 | 1,022 MB (814 MB more) | 3.5 to 8.1 s | 2.5 s | 2.2 s (8.9 s the first time: the file's SHA-256) |
 
   Sapiens2 is the best of the three on clothes and body skin on every test photo (CC0: a light T-shirt from behind, a
-  dark coverall, a dark suit on dark, a group of three; techneissa's own photos: groups indoors, portraits, a car at
+  dark coverall, a dark suit on dark, a group of three; private test photos: groups indoors, portraits, a car at
   night). Still weak: a man whose face is hidden behind a megaphone is
   only partly found (no face, so no pass of his own); a patterned blanket worn as a scarf is Others.
 - After the fix round (final build, Sapiens2 set, one run each, load about 30): a 26-person group photo (CC0, 960 px)

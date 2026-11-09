@@ -189,6 +189,8 @@ pub struct AppSettings {
     /// leniently: a value this build doesn't know is the defaults, never the other settings lost.
     #[serde(deserialize_with = "lenient")]
     pub background_prep: lightcraft_engine::prep::PrepSettings,
+    /// Settings ▸ Performance: find people's part masks ahead of time (`fork/parse-ahead.md`; on by default).
+    pub parse_ahead: bool,
     /// Shortcuts the user changed (Help ▸ Keyboard Shortcuts): command id → shortcut, `""` = none.
     pub keymap: crate::shortcuts::Keymap,
     /// Auto (follow the system), Dark or Light.
@@ -287,6 +289,7 @@ impl Default for AppSettings {
             dim_rejected: true,
             loupe_messages: true,
             background_prep: Default::default(),
+            parse_ahead: true,
             keymap: Default::default(),
             appearance_mode: AppearanceMode::Dark,
             dark_theme: DarkTheme::Charcoal,

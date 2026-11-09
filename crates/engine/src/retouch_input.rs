@@ -59,6 +59,7 @@ impl FaceProvider for Yunet {
                 person: None,
                 masks: Vec::new(),
                 key_frame: lightcraft_develop::retouch::KeyFrame::Edit,
+                spots: None,
             })
             .collect())
     }
@@ -89,7 +90,8 @@ impl Found {
     pub fn bytes(&self) -> usize {
         let face = |f: &Face| {
             let masks: usize = f.masks.iter().map(|(_, m)| m.plane.data.len().saturating_mul(4)).sum();
-            masks.saturating_add(f.landmarks.len().saturating_mul(16)).saturating_add(std::mem::size_of::<Face>())
+            let spots = f.spots.as_ref().map_or(0, |s| s.list.len().saturating_mul(std::mem::size_of::<lightcraft_develop::retouch::input::Spot>()));
+            masks.saturating_add(f.landmarks.len().saturating_mul(16)).saturating_add(spots).saturating_add(std::mem::size_of::<Face>())
         };
         let faces: usize = self.input.faces.iter().map(face).sum();
         let thumbs: usize = self.thumbs.iter().map(|t| t.data.len().saturating_mul(4)).sum();
@@ -513,13 +515,19 @@ impl Session {
         let regions = named_regions(p);
         Ok(match source {
             Source::Provider(provider) => Finder::Faces { provider, job: self.retouch_detect_job(p.id)?, regions },
-            Source::Parts => Finder::Parts(parts::PartsFinder {
-                prepare: crate::cmd::parsing::prepare_job(self, p.id)?,
-                parsing: self.parsing.clone(),
-                choice: self.parsing.choice(),
-                orient: p.develop.orientation,
-                regions,
-            }),
+            Source::Parts => {
+                let choice = self.parsing.choice();
+                Finder::Parts(parts::PartsFinder {
+                    // (the parse-ahead index, `fork/parse-ahead.md`: a photo parsed before is read, not run again)
+                    known: crate::parse_ahead::known(self, p.id, &choice.version()),
+                    // (YuNet is loaded on the search's worker, never here)
+                    prepare: crate::cmd::parsing::prepare_ahead(self, p.id)?,
+                    parsing: self.parsing.clone(),
+                    choice,
+                    orient: p.develop.orientation,
+                    regions,
+                })
+            }
         })
     }
 

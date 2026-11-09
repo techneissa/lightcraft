@@ -4083,6 +4083,7 @@ dependencies = [
  "candle-core",
  "candle-nn",
  "image",
+ "lightcraft-coreml",
  "lightcraft-faces",
  "lightcraft-testkit",
  "log",
