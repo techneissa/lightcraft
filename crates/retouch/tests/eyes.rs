@@ -231,10 +231,15 @@ fn no_halo_beside_a_dark_line() {
 /// A draft and an export four times its size agree once the export is scaled down (sizes follow the face).
 #[test]
 fn a_draft_and_a_bigger_export_agree_after_scaling() {
-    let r = eyes(70.0, 70.0, 70.0, 70.0);
+    for r in [eyes(70.0, 70.0, 70.0, 70.0), eyes(0.0, 0.0, 100.0, 100.0)] {
+        agree_after_scaling(&r);
+    }
+}
+
+fn agree_after_scaling(r: &Retouch) {
     let (w, h) = (200, 150);
-    let draft = retouched(&picture(w, h), &r, vec![full()]);
-    let big = retouched(&picture(w * 4, h * 4), &r, vec![full()]);
+    let draft = retouched(&picture(w, h), r, vec![full()]);
+    let big = retouched(&picture(w * 4, h * 4), r, vec![full()]);
     let (mut sum, mut n, mut worst) = (0.0f32, 0, 0.0f32);
     for y in 0..h {
         for x in 0..w {
@@ -259,8 +264,33 @@ fn a_draft_and_a_bigger_export_agree_after_scaling() {
         }
     }
     let mean = sum / n as f32;
+    // inside the crescents, away from the eyes' edges: the same cells give the same gains at both sizes
+    let mut inside = 0.0f32;
+    for c in EYES {
+        for y in 0..h {
+            for x in 0..w {
+                let (nx, ny) = ((x as f64 + 0.5) / w as f64, (y as f64 + 0.5) / h as f64);
+                let below = (ny - c.1) / (HALF * 4.0 / 3.0);
+                if (nx - c.0).abs() < 0.6 * HALF && (0.7..1.3).contains(&below) {
+                    let mut avg = [0.0f32; 3];
+                    for dy in 0..4 {
+                        for dx in 0..4 {
+                            let p = big.data[(y * 4 + dy) * w * 4 + x * 4 + dx];
+                            for k in 0..3 {
+                                avg[k] += p[k] / 16.0;
+                            }
+                        }
+                    }
+                    let d = draft.data[y * w + x];
+                    inside = inside.max((0..3).map(|k| (avg[k] - d[k]).abs()).fold(0.0, f32::max));
+                }
+            }
+        }
+    }
     // (the eyes' edges are resolved better in the export than one draft pixel averages them)
-    assert!(mean < 0.002 && worst < 0.12, "mean difference {mean}, worst {worst}");
+    assert!(mean < 0.0004 && worst < 0.12, "mean difference {mean}, worst {worst}");
+    // (0.0067 when the grid's cells followed the pixels, not the eye)
+    assert!(inside < 0.006, "inside the crescents: {inside}")
 }
 
 /// Closed eyes (no whites, no iris): Whites and Iris leave the photo alone; the under-eye sliders still work.
@@ -334,4 +364,115 @@ fn odd_inputs() {
     // flat grey has no dark circle and no shading: under the eyes it stays grey
     let p = at(&out, EYES[0].0, EYES[0].1 + HALF);
     assert!((luma(p) - 0.18).abs() < 0.01, "{p:?}");
+}
+
+/// The face with the 478 face mesh points after YuNet's five: the eyes' corners, lower lids and irises where the
+/// picture has them (every other point on the nose).
+fn mesh_face() -> Face {
+    let mut f = full();
+    let nose = f.landmarks[2];
+    f.landmarks.extend(std::iter::repeat_n(nose, 478));
+    // half an eye's width down the photo, in its fractions (the photo is 4:3)
+    let down = HALF * W as f64 / H as f64;
+    let eyes: [(usize, usize, [usize; 7], usize, [usize; 4]); 2] = [
+        (33, 133, [7, 163, 144, 145, 153, 154, 155], 468, [469, 470, 471, 472]),
+        (263, 362, [249, 390, 373, 374, 380, 381, 382], 473, [474, 475, 476, 477]),
+    ];
+    for (k, (outer, inner, lower, iris, rim)) in eyes.into_iter().enumerate() {
+        let c = EYES[k];
+        // the subject's right eye is on the left: its outer corner is on the left
+        let dir = if k == 0 { 1.0 } else { -1.0 };
+        let at = |a: f64, b: f64| (c.0 + dir * a * HALF, c.1 + b * down);
+        f.landmarks[5 + outer] = at(-1.0, 0.0);
+        f.landmarks[5 + inner] = at(1.0, 0.0);
+        for (j, i) in lower.into_iter().enumerate() {
+            let a = -0.75 + j as f64 * 0.25;
+            f.landmarks[5 + i] = at(a, 0.3 * (1.0 - a * a));
+        }
+        f.landmarks[5 + iris] = c;
+        for (j, i) in rim.into_iter().enumerate() {
+            let t = j as f64 * std::f64::consts::FRAC_PI_2;
+            f.landmarks[5 + i] = at(0.4 * t.cos(), 0.4 * t.sin());
+        }
+    }
+    f
+}
+
+/// A lower lid point the mesh threw far off the photo (1e6 px, 1e20 px) keeps the under-eye areas the eye's size:
+/// no panic, no hang, nothing that is not a number, nothing away from the eyes changed.
+#[test]
+fn a_lid_point_far_off_the_photo_changes_nothing_away_from_the_eyes() {
+    let img = picture(W, H);
+    for far in [1e20, 1e6 / H as f64] {
+        let mut f = mesh_face();
+        f.landmarks[5 + 145] = (EYES[0].0, far);
+        let out = retouched(&img, &eyes(0.0, 0.0, 100.0, 100.0), vec![f]);
+        assert!(out.data.iter().flatten().all(|v| v.is_finite()));
+        for (i, (a, b)) in img.data.iter().zip(&out.data).enumerate() {
+            let (nx, ny) = (((i % W) as f64 + 0.5) / W as f64, ((i / W) as f64 + 0.5) / H as f64);
+            if ny > EYES[0].1 + 3.0 * HALF * 4.0 / 3.0 || (nx - 0.5).abs() > 0.3 {
+                assert!(same(*a, *b), "({nx}, {ny}) changed with a lid point at {far}");
+            }
+        }
+    }
+}
+
+/// A pale, neutral frame (white, silver) across the dark circle stays as it was, whether the parser took it as Facial
+/// Skin or as glasses (Others); the skin beside it is still lifted.
+#[test]
+fn a_pale_frame_under_the_eye_is_not_lifted() {
+    let line = |ny: f64| (ny - (EYES[0].1 + 0.75 * HALF * 4.0 / 3.0)).abs() < 0.006;
+    let img = Rgb32f::from_fn(W, H, |x, y| {
+        let (nx, ny) = ((x as f64 + 0.5) / W as f64, (y as f64 + 0.5) / H as f64);
+        if line(ny) { [0.75, 0.75, 0.75] } else { colour_at(nx, ny) }
+    });
+    let lens = |nx: f64, ny: f64| EYES.iter().map(|c| ellipse(nx, ny, (c.0, c.1 + HALF * 0.3), HALF * 1.9, HALF * 2.0, 0.05)).fold(0.0, f32::max);
+    let mut glasses = full();
+    let bounds = glasses.bounds;
+    glasses.masks = vec![
+        (Part::FacialSkin, mask(bounds, |x, y| (1.0 - lens(x, y)) * (1.0 - whites_at(x, y).max(iris_at(x, y))))),
+        (Part::Others, mask(bounds, |x, y| lens(x, y) * (1.0 - whites_at(x, y).max(iris_at(x, y))))),
+        (Part::EyeWhites, mask(bounds, |x, y| whites_at(x, y) * (1.0 - iris_at(x, y)))),
+    ];
+    for (name, face) in [("as skin", full()), ("as glasses", glasses)] {
+        let out = retouched(&img, &eyes(0.0, 0.0, 100.0, 100.0), vec![face]);
+        for (i, (a, b)) in img.data.iter().zip(&out.data).enumerate() {
+            let ny = ((i / W) as f64 + 0.5) / H as f64;
+            if line(ny) {
+                assert!((luma(*b) / luma(*a) - 1.0).abs() < 0.002, "{name}: the frame changed at row {}: {a:?} → {b:?}", i / W);
+            }
+        }
+        let p = (EYES[0].0 + 0.3 * HALF, EYES[0].1 + 0.45 * HALF * 4.0 / 3.0);
+        assert!(luma(at(&out, p.0, p.1)) > luma(at(&img, p.0, p.1)), "{name}: the skin beside it is lifted");
+    }
+}
+
+/// Dark Circles only lifts: no channel of any pixel gets darker, also where the skin under the eye is as light as
+/// the cheek but redder (blush, make-up).
+#[test]
+fn dark_circles_never_darken_a_channel() {
+    let blush = Rgb32f::from_fn(W, H, |x, y| {
+        let (nx, ny) = ((x as f64 + 0.5) / W as f64, (y as f64 + 0.5) / H as f64);
+        let t = circle_at(nx, ny);
+        let mix = |a: [f32; 3], b: [f32; 3], t: f32| std::array::from_fn(|k| a[k] + (b[k] - a[k]) * t);
+        // as light as the skin (luminance 0.392), redder
+        mix(mix(SKIN, [0.58, 0.33, 0.28], t), WHITES, whites_at(nx, ny))
+    });
+    for img in [picture(W, H), blush] {
+        for face in [full(), mesh_face()] {
+            let out = retouched(&img, &eyes(0.0, 0.0, 100.0, 0.0), vec![face]);
+            for (a, b) in img.data.iter().zip(&out.data) {
+                assert!((0..3).all(|k| b[k] >= a[k]), "{a:?} → {b:?}");
+            }
+        }
+    }
+}
+
+/// Eyes names the masks it reads, so the face search keeps them.
+#[test]
+fn eyes_reads_skin_glasses_whites_and_iris() {
+    use lightcraft_retouch::Feature;
+    assert_eq!(Eyes::PARTS, &[Part::FacialSkin, Part::Others, Part::EyeWhites, Part::Iris]);
+    let kept = lightcraft_retouch::parts_read();
+    assert!(Eyes::PARTS.iter().all(|p| kept.contains(p)));
 }

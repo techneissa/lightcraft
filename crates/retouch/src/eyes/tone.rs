@@ -3,7 +3,7 @@
 use lightcraft_raster::{Image, Rgb32f};
 
 use super::geom::{Eye, smoothstep};
-use super::under::{blur, luma};
+use super::under::{blur, luma, sample};
 use crate::{Part, Scene};
 
 /// How much brighter the whites get at 100 (a factor: about 0.4 of a stop).
@@ -12,6 +12,8 @@ const WHITES_GAIN: f32 = 0.32;
 const WHITES_EVEN: f32 = 0.35;
 /// How much of the whites' colour goes at 100 (veins and a yellow cast fade to a faint grey).
 const WHITES_DESAT: f32 = 0.7;
+/// The grid (across, down) the whites' level is measured on, over the Eye Whites mask's area.
+const LEVEL_GRID: (usize, usize) = (96, 32);
 /// The whites' level: this share of their pixels is darker.
 const WHITES_LEVEL: f32 = 0.9;
 /// A pixel of the whites' mask this much darker than their level (a lash, the lid's edge) is left alone; one at
@@ -49,8 +51,22 @@ fn masked(img: &Rgb32f, scene: &Scene<'_>, face: usize, part: Part) -> Vec<(usiz
 /// Whites, `amount` 0…1.
 pub fn whites(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, amount: f32) {
     let px = masked(img, scene, face, Part::EyeWhites);
-    let mut ys: Vec<f32> =
-        px.iter().filter(|(_, m)| *m >= 0.5).filter_map(|(i, _)| img.data.get(*i).map(|p| luma(*p))).filter(|y| y.is_finite()).collect();
+    let Some(mask) = scene.faces.get(face).and_then(|f| f.face.mask(Part::EyeWhites)) else { return };
+    // the whites' level, from a fixed grid over the whole mask on the photo: the same whatever part of the face a
+    // render (a zoomed loupe) holds, and at every size
+    let a = mask.area;
+    let mut ys = Vec::with_capacity(LEVEL_GRID.0 * LEVEL_GRID.1);
+    for j in 0..LEVEL_GRID.1 {
+        for i in 0..LEVEL_GRID.0 {
+            let (nx, ny) = (a.x0 + (i as f64 + 0.5) / LEVEL_GRID.0 as f64 * a.width(), a.y0 + (j as f64 + 0.5) / LEVEL_GRID.1 as f64 * a.height());
+            if mask.sample(nx, ny) < 0.5 {
+                continue;
+            }
+            if let Some(y) = scene.view().to_px(nx, ny).and_then(|(x, y)| sample(img, x, y)).map(luma).filter(|y| y.is_finite()) {
+                ys.push(y);
+            }
+        }
+    }
     if ys.is_empty() {
         return;
     }

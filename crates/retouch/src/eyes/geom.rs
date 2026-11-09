@@ -28,8 +28,15 @@ const MESH_EYES: [MeshEye; 2] = [
 const HALF_OF_SPACING: f64 = 0.22;
 /// How far below the eye's centre line its lower lid is, in half widths, when only YuNet's points are known.
 const LID_DROP: f64 = 0.3;
-/// The eye's half width is kept within this share of the face's size, whatever the landmarks say.
-const HALF_RANGE: (f64, f64) = (0.03, 0.16);
+/// The eye's half width is kept within this share of the face's size, whatever the landmarks say (a real eye's is
+/// about 0.08).
+pub const HALF_RANGE: (f64, f64) = (0.03, 0.12);
+/// The lower lid is kept within this far below the corners' line, in half widths (a real one: about 0.3), and its
+/// points within this far across.
+pub const LID_MAX: f64 = 0.8;
+const LID_ACROSS: f64 = 1.5;
+/// An eye whose centre is more than this share of the face's size outside the face's box is a bad fit: no eye.
+pub const CENTRE_SLACK: f64 = 0.1;
 /// The half width used for the iris's sharpening when no eye could be placed (a share of the face's size).
 const HALF_DEFAULT: f64 = 0.09;
 
@@ -151,7 +158,7 @@ pub fn eyes(face: &FaceCtx<'_>) -> Vec<Eye> {
     let mesh = face.landmarks.len() >= MESH + MESH_POINTS;
     let placed: Option<Vec<Eye>> = if mesh { MESH_EYES.iter().map(|m| from_mesh(m, &lm, mouth, lo, hi)).collect() } else { None };
     if let Some(e) = placed {
-        return e;
+        return in_face(face, e);
     }
     let (Some(r), Some(l)) = (lm(0), lm(1)) else { return Vec::new() };
     let spacing = len(sub(l, r));
@@ -159,7 +166,16 @@ pub fn eyes(face: &FaceCtx<'_>) -> Vec<Eye> {
         return Vec::new();
     }
     let half = (spacing * HALF_OF_SPACING).clamp(lo, hi);
-    [(r, l), (l, r)].iter().filter_map(|&(c, other)| from_points(c, other, half, mouth)).collect()
+    in_face(face, [(r, l), (l, r)].iter().filter_map(|&(c, other)| from_points(c, other, half, mouth)).collect())
+}
+
+/// `eyes`, or none when one's centre lies outside the face's box (by more than [`CENTRE_SLACK`]): what the eyes
+/// read then stays within the face's reach ([`super::REACH`]).
+fn in_face(face: &FaceCtx<'_>, eyes: Vec<Eye>) -> Vec<Eye> {
+    let slack = face.px(CENTRE_SLACK);
+    let [x0, y0, x1, y1] = face.bounds;
+    let inside = |e: &Eye| e.centre.0 >= x0 - slack && e.centre.0 <= x1 + slack && e.centre.1 >= y0 - slack && e.centre.1 <= y1 + slack;
+    if eyes.len() == 2 && eyes.iter().all(inside) { eyes } else { Vec::new() }
 }
 
 /// The half width used for sizes when no eye is placed, else the eyes' mean.
@@ -194,8 +210,12 @@ fn from_mesh(m: &MeshEye, lm: &dyn Fn(usize) -> Option<P>, mouth: Option<P>, lo:
     for i in std::iter::once(m.outer).chain(m.lower).chain(std::iter::once(m.inner)) {
         let p = at(i)?;
         let (a, b) = eye.local(p.0, p.1);
-        // a lid point above the corners' line is a squint or a bad fit: the lid is never above it
-        lid.push((a, b.max(0.0)));
+        // a lid point above the corners' line is a squint or a bad fit: the lid is never above it, nor far below or
+        // beside the eye (a point thrown off by the mesh, however far, keeps the under-eye areas the eye's size)
+        if !(a.is_finite() && b.is_finite()) {
+            return None;
+        }
+        lid.push((a.clamp(-LID_ACROSS, LID_ACROSS), b.clamp(0.0, LID_MAX)));
     }
     lid.sort_by(|p, q| p.0.total_cmp(&q.0));
     eye.lid = lid;

@@ -11,14 +11,15 @@
 //! - Eye Bags: the gain is the coarse blur of the luminance over the fine one, which flattens the shading between
 //!   those scales (the bag's bulge and crease) and keeps what is finer (pores, fine lines).
 //!
-//! Skin is the Facial Skin mask, less Others, and, through glasses (the parser takes the lenses out of Facial
-//! Skin), any pixel of the Others mask whose colour is the face's skin colour.
+//! Skin is the Facial Skin mask and, through glasses (the parser takes the lenses out of Facial Skin), the Others
+//! mask, either only where a pixel's colour is the face's skin colour: a dark lash or frame and a pale one (white,
+//! silver) are left alone.
 
 use lightcraft_raster::blur::{gauss_taps, gaussian, gaussian_taps};
 use lightcraft_raster::{Image, Rgb32f};
 
 use super::Area;
-use super::geom::{Eye, smoothstep};
+use super::geom::{Eye, LID_MAX, smoothstep};
 use super::weights::{self, LID_GAP, UNDER_BOX};
 use crate::{Part, PartMask, Scene};
 
@@ -45,8 +46,12 @@ const SEEN_HUE: (f64, f64) = (0.045, 0.1);
 const DARK_OUT: (f64, f64) = (0.3, 0.5);
 /// The blur of the skin before it weighs the effects, in half eye widths.
 const GATE_SIGMA: f64 = 0.08;
-/// Grid cells per half eye width (never finer than a pixel).
+/// Grid cells per half eye width.
 const CELLS_PER_HALF: f64 = 16.0;
+/// Most cells along a grid's side (a grid is about 90 a side).
+const MAX_SIDE: usize = 256;
+/// How far, in sigmas of the widest blur, the grid reaches past the under-eye areas.
+pub const PAD_SIGMAS: f64 = 2.5;
 /// Samples averaged per cell, per side.
 const SUB: usize = 3;
 /// Sigmas under this many pixels (or cells) use an exact kernel (the three-box blur can't make them).
@@ -72,6 +77,15 @@ fn grid_blur<const N: usize>(v: &[[f32; N]], w: usize, h: usize, sigma: f64) -> 
     let s = sigma as f32;
     if !(s.is_finite() && s > 0.1) || v.len() != w * h || w == 0 {
         return v.to_vec();
+    }
+    if s >= EXACT_BELOW {
+        // three box passes a side (running sums: the cost does not grow with the sigma)
+        let mut out = v.to_vec();
+        for r in lightcraft_raster::blur::box_radii(s) {
+            out = box_pass(&out, w, h, r, true);
+            out = box_pass(&out, w, h, r, false);
+        }
+        return out;
     }
     let taps = gauss_taps(s);
     let r = (taps.len() / 2) as isize;
@@ -103,8 +117,39 @@ fn grid_blur<const N: usize>(v: &[[f32; N]], w: usize, h: usize, sigma: f64) -> 
     pass(&pass(v, true), false)
 }
 
+/// A box of radius `r` along rows (`horizontal`) or columns of a `w × h` grid, edges held.
+fn box_pass<const N: usize>(v: &[[f32; N]], w: usize, h: usize, r: usize, horizontal: bool) -> Vec<[f32; N]> {
+    if r == 0 {
+        return v.to_vec();
+    }
+    let (lines, len) = if horizontal { (h, w) } else { (w, h) };
+    let at = |line: usize, k: usize| -> [f32; N] {
+        let i = if horizontal { line * w + k } else { k * w + line };
+        v.get(i).copied().unwrap_or([0.0; N])
+    };
+    let mut out = vec![[0.0f32; N]; v.len()];
+    let n = (2 * r + 1) as f32;
+    for line in 0..lines {
+        let held = |k: isize| at(line, k.clamp(0, len as isize - 1) as usize);
+        let mut sum = [0.0f32; N];
+        for k in -(r as isize)..=(r as isize) {
+            let p = held(k);
+            sum = std::array::from_fn(|c| sum[c] + p[c]);
+        }
+        for k in 0..len {
+            let i = if horizontal { line * w + k } else { k * w + line };
+            if let Some(o) = out.get_mut(i) {
+                *o = sum.map(|c| c / n);
+            }
+            let (add, sub) = (held(k as isize + r as isize + 1), held(k as isize - r as isize));
+            sum = std::array::from_fn(|c| sum[c] + add[c] - sub[c]);
+        }
+    }
+    out
+}
+
 /// The image at (`x`, `y`), bilinear between pixel centres; `None` outside it.
-fn sample(img: &Rgb32f, x: f64, y: f64) -> Option<[f32; 3]> {
+pub fn sample(img: &Rgb32f, x: f64, y: f64) -> Option<[f32; 3]> {
     let (w, h) = (img.width, img.height);
     if !(x >= 0.0 && y >= 0.0 && x <= w as f64 && y <= h as f64) || w == 0 || h == 0 {
         return None;
@@ -132,16 +177,18 @@ struct Grid {
 }
 
 impl Grid {
+    /// The grid around `eye`: the same cells, in the eye's frame, at every size and zoom ([`CELLS_PER_HALF`]), at
+    /// most [`MAX_SIDE`] a side.
     fn new(eye: &Eye) -> Option<Grid> {
-        let step = (1.0 / CELLS_PER_HALF).max(1.0 / eye.half);
-        if !(step.is_finite() && step > 0.0) {
-            return None;
-        }
-        let pad = 2.5 * BAG_COARSE.max(DARK_SIGMA);
+        let step = 1.0 / CELLS_PER_HALF;
+        let pad = PAD_SIGMAS * BAG_COARSE.max(DARK_SIGMA);
         let [a0, a1, t0, t1] = UNDER_BOX;
-        let (a0, a1, b0, b1) = (a0 - pad, a1 + pad, t0 - pad, t1 + eye.lid_drop() + pad);
-        let (w, h) = (((a1 - a0) / step).ceil() as usize + 1, ((b1 - b0) / step).ceil() as usize + 1);
-        Some(Grid { a0, b0, step, w, h })
+        let (a0, a1, b0, b1) = (a0 - pad, a1 + pad, t0 - pad, t1 + eye.lid_drop().min(LID_MAX) + pad);
+        let side = |span: f64| {
+            let n = (span / step).ceil();
+            (n.is_finite() && n >= 0.0 && n < MAX_SIDE as f64).then(|| (n as usize).checked_add(1)).flatten()
+        };
+        Some(Grid { a0, b0, step, w: side(a1 - a0)?, h: side(b1 - b0)? })
     }
 
     fn local(&self, i: usize, j: usize) -> (f64, f64) {
@@ -203,6 +250,8 @@ fn gains(img: &Rgb32f, scene: &Scene<'_>, eye: &Eye, masks: &Masks<'_>, grid: &G
     let n = grid.w.checked_mul(grid.h)?;
     let view = scene.view();
     let cell_px = grid.step * eye.half;
+    // (a cell smaller than a pixel needs one sample: the image has no more in it)
+    let sub = if cell_px < 1.0 { 1 } else { SUB };
     // each cell's samples (SUB × SUB over it), masks and place
     let mut cells: Vec<([[f32; 3]; SUB * SUB], usize)> = vec![([[0.0; 3]; SUB * SUB], 0); n];
     let mut at = vec![(0.0f32, 0.0f32, 0.0f32, 0.0f64, 0.0f64); n];
@@ -212,9 +261,9 @@ fn gains(img: &Rgb32f, scene: &Scene<'_>, eye: &Eye, masks: &Masks<'_>, grid: &G
             let (a, b) = grid.local(i, j);
             let (px, py) = eye.to_px(a, b);
             let Some((samples, got)) = cells.get_mut(k) else { continue };
-            for sj in 0..SUB {
-                for si in 0..SUB {
-                    let (da, db) = ((si as f64 + 0.5) / SUB as f64 - 0.5, (sj as f64 + 0.5) / SUB as f64 - 0.5);
+            for sj in 0..sub {
+                for si in 0..sub {
+                    let (da, db) = ((si as f64 + 0.5) / sub as f64 - 0.5, (sj as f64 + 0.5) / sub as f64 - 0.5);
                     let (sa, sb) = (da * cell_px, db * cell_px);
                     let (sx, sy) = (px + sa * eye.across.0 + sb * eye.down.0, py + sa * eye.across.1 + sb * eye.down.1);
                     if let (Some(p), Some(slot)) = (sample(img, sx, sy), samples.get_mut(*got)) {
@@ -286,7 +335,8 @@ fn gains(img: &Rgb32f, scene: &Scene<'_>, eye: &Eye, masks: &Masks<'_>, grid: &G
         if t <= 0.0 || cv <= 0.0 {
             continue;
         }
-        *g = (s * (1.0 - o)).max(o * likeness(c, skin)) * cv * (1.0 - e) * smoothstep(0.0, LID_GAP, t) as f32;
+        // (Facial Skin or a lens, either one only where the colour is skin's: a pale frame, a white or silver one, is not)
+        *g = (s * (1.0 - o)).max(o) * likeness(c, skin) * cv * (1.0 - e) * smoothstep(0.0, LID_GAP, t) as f32;
     }
     // the effects' weights: the skin smoothed (a patchy one, through glasses, gives no blotches), kept off the eye
     let smooth = grid_blur(&gate.iter().map(|g| [*g]).collect::<Vec<_>>(), grid.w, grid.h, GATE_SIGMA / grid.step);
@@ -342,7 +392,8 @@ fn dark_circles(grid: &Grid, colour: &[[f32; 3]], gate: &[f32], at: &[At], gain:
         for c in 0..3 {
             // the channel's share of the luminance, turned toward the cheek's
             let tint = if l[c] > 1e-6 && target[c] > 0.0 { ((target[c] / ty) / (l[c] / ly)).clamp(1.0 / MAX_TINT, MAX_TINT) } else { 1.0 };
-            let g = lift * (1.0 + TINT_SHARE * (tint - 1.0));
+            // (lifting only: no channel darkens)
+            let g = (lift * (1.0 + TINT_SHARE * (tint - 1.0))).max(1.0);
             if g.is_finite() {
                 out[c] *= 1.0 + w * (g - 1.0);
             }
@@ -392,7 +443,7 @@ fn lay(img: &mut Rgb32f, scene: &Scene<'_>, eye: &Eye, masks: &Masks<'_>, grid: 
             let Some(&p) = img.data.get(i) else { continue };
             let (nx, ny) = view.to_norm(px, py);
             let (_, _, e) = masks.at(nx, ny);
-            let keep = (1.0 - e) * smoothstep(0.0, LID_GAP, t) as f32 * not_dark(p, skin);
+            let keep = (1.0 - e) * smoothstep(0.0, LID_GAP, t) as f32 * not_dark(p, skin) * likeness(p, skin);
             if keep.is_nan() || keep <= 0.0 {
                 continue;
             }

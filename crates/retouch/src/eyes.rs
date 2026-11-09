@@ -26,7 +26,7 @@ mod under;
 use lightcraft_raster::Rgb32f;
 use serde::{Deserialize, Serialize};
 
-use crate::{Control, Feature, Scene, Scope, Spec, Stage};
+use crate::{Control, Feature, Part, Scene, Scope, Spec, Stage};
 
 pub use geom::Eye;
 
@@ -63,6 +63,11 @@ impl Feature for Eyes {
     const LABEL: &'static str = "Eyes";
     const STAGE: Stage = Stage::Retouch;
     const SCOPE: Scope = Scope::Face;
+    const PARTS: &'static [Part] = &[Part::FacialSkin, Part::Others, Part::EyeWhites, Part::Iris];
+    /// The under-eye grid reaches about 4.9 half eye widths from an eye's centre (at most 0.12 of the face's size
+    /// each, [`geom::HALF_RANGE`]), and an eye's centre is within [`geom::CENTRE_SLACK`] of the face's box: 0.59 +
+    /// 0.1, rounded up. Whites and Iris read inside their masks' areas (the iris's blur a few pixels past).
+    const REACH: f64 = 0.7;
     const CONTROLS: &'static [Control<Self>] = &[
         Control { spec: Spec::amount("retouch.eyes.whites", "Whites"), get: |s| s.whites, set: |s, v| s.whites = v },
         Control { spec: Spec::amount("retouch.eyes.iris", "Iris"), get: |s| s.iris, set: |s, v| s.iris = v },

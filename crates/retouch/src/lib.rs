@@ -30,9 +30,9 @@ pub mod teeth_lips;
 pub mod wrinkles;
 
 pub use control::{Control, Spec};
-pub use feature::{FACE_PARTS, FaceCtx, Feature, MAX_FACES, Scene, Scope, Stage, View, WholePhoto};
+pub use feature::{DEFAULT_REACH, FACE_PARTS, FaceCtx, Feature, MAX_FACES, Scene, Scope, Stage, View, WholePhoto};
 pub use input::{Face, Input, KeyFrame, KeyMap, NormRect, Part, PartMask};
-pub use settings::{FaceKey, FaceOverride, FeatureInfo, MAX_OVERRIDES, Retouch};
+pub use settings::{FaceKey, FaceOverride, FeatureInfo, MAX_OVERRIDES, Reads, Retouch};
 
 // The render order: tone and colour retouching first (spots before smoothing, skin before colour, the face before
 // what is around it), then the geometry slot, then the background. Each stage runs its features in this order.
