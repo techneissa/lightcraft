@@ -16,8 +16,12 @@ log = { workspace = true }
 # No `exception` feature: it compiles an Objective-C helper with `cc` (README.md).
 objc2 = { workspace = true }
 block2 = { version = "0.6", default-features = false, features = ["std"] }
-objc2-foundation = { workspace = true, features = ["NSString", "NSURL", "NSArray", "NSDictionary", "NSError", "NSValue", "NSSet", "NSEnumerator", "NSAutoreleasePool", "NSObject", "NSProcessInfo"] }
+objc2-foundation = { workspace = true, features = ["NSString", "NSURL", "NSArray", "NSDictionary", "NSError", "NSValue", "NSSet", "NSEnumerator", "NSAutoreleasePool", "NSObject", "NSProcessInfo", "NSIndexSet"] }
 objc2-core-ml = { version = "=0.3.2", default-features = false, features = ["std", "block2", "MLModel", "MLModel_MLModelCompilation", "MLModelConfiguration", "MLMultiArray", "MLFeatureValue", "MLFeatureProvider", "MLDictionaryFeatureProvider", "MLModelDescription", "MLFeatureDescription", "MLFeatureType"] }
+# Apple Vision's person and subject masks (src/vision_macos.rs, issue #115).
+objc2-vision = { version = "=0.3.2", default-features = false, features = ["std", "objc2-core-video", "VNRequestHandler", "VNRequest", "VNStatefulRequest", "VNObservation", "VNGeneratePersonSegmentationRequest", "VNGeneratePersonInstanceMaskRequest", "VNGenerateForegroundInstanceMaskRequest"] }
+objc2-core-video = { version = "=0.3.2", default-features = false, features = ["std", "objc2", "CVBase", "CVBuffer", "CVImageBuffer", "CVPixelBuffer", "CVReturn"] }
+objc2-core-foundation = { version = "0.3", default-features = false, features = ["std", "CFDictionary", "CFString"] }
 
 [dev-dependencies]
 lightcraft-testkit = { workspace = true }

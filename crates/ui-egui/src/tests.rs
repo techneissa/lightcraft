@@ -149,6 +149,7 @@ mod titlebar;
 mod tool_overlay;
 mod unsaved;
 mod view_cost;
+mod vision_edges;
 mod wb_selector;
 mod welcome;
 mod zoom;

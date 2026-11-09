@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::control::Control;
-use crate::input::{Face, Input, Part};
+use crate::input::{Face, Input, KeyMap, Part};
 
 /// Where in the render a feature runs. The step runs the stages in this order; inside a stage, features run in
 /// the order of [`crate::FEATURES`].
@@ -45,6 +45,9 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     const SCOPE: Scope;
     /// Its sliders, in panel order.
     const CONTROLS: &'static [Control<Self>];
+    /// The part masks it reads: the face search keeps only the parts some feature lists, so a mask no feature
+    /// reads takes no memory. By default the parts of a face and its skin ([`FACE_PARTS`]).
+    const PARTS: &'static [Part] = FACE_PARTS;
 
     /// Whether these settings leave the picture alone. By default: every slider at its default.
     fn is_off(&self) -> bool {
@@ -60,12 +63,22 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>);
 }
 
+/// The parts [`Feature::PARTS`] lists by default: a face, its skin, and what is worn on the face (glasses are
+/// [`Part::Others`]); not the clothes (recoloured through local masks, issue #83) nor the whole person.
+pub const FACE_PARTS: &[Part] =
+    &[Part::FacialSkin, Part::BodySkin, Part::Hair, Part::Eyebrows, Part::EyeWhites, Part::Iris, Part::Lips, Part::Teeth, Part::Others];
+
 /// How the pixels of the image being retouched map to normalised photo coordinates ([`crate::input`]).
 pub trait View: Sync {
     /// Pixel position (`x`, `y`; pixel centres at +0.5) → normalised photo coordinates.
     fn to_norm(&self, x: f64, y: f64) -> (f64, f64);
     /// Normalised photo coordinates → pixel position; `None` for a point that has no place in the image.
     fn to_px(&self, nx: f64, ny: f64) -> Option<(f64, f64)>;
+    /// The photo's lens corrections and transform, to match per-face settings kept in the other frame
+    /// ([`crate::overrides::resolve_in`]). `None` (the default): such settings pair by person only.
+    fn key_map(&self) -> Option<&dyn KeyMap> {
+        None
+    }
 }
 
 /// The view of an image that is the whole photo (the examples and tests): normalised × size.

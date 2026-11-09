@@ -43,7 +43,7 @@ pub fn specs() -> impl Iterator<Item = &'static ControlSpec> {
     SPECS.iter()
 }
 
-/// `retouchFace.3.skin.amount` → (3, `retouch.skin.amount`).
+/// `retouchFace.3.skin.smoothness` → (3, `retouch.skin.smoothness`).
 fn split_face(id: &str) -> Option<(usize, String)> {
     let (i, rest) = id.strip_prefix(FACE_PREFIX)?.split_once('.')?;
     if i.is_empty() || !i.bytes().all(|b| b.is_ascii_digit()) {
@@ -76,7 +76,7 @@ pub fn set(s: &mut DevelopSettings, id: &str, v: f64) -> bool {
     }
 }
 
-/// Every per-face control that exists in `s` (id, spec): `retouchFace.0.skin.amount`, …
+/// Every per-face control that exists in `s` (id, spec): `retouchFace.0.skin.smoothness`, …
 pub fn face_instances(s: &DevelopSettings) -> Vec<(String, &'static ControlSpec)> {
     let mut out = Vec::new();
     for i in 0..s.retouch.faces.len() {
@@ -133,19 +133,19 @@ mod tests {
     #[test]
     fn per_face_controls_address_faces_with_their_own_settings() {
         let mut s = DevelopSettings::default();
-        assert_eq!(controls::get(&s, "retouchFace.0.skin.amount"), None);
-        assert!(!controls::set(&mut s, "retouchFace.0.skin.amount", 20.0), "no such face yet");
+        assert_eq!(controls::get(&s, "retouchFace.0.skin.smoothness"), None);
+        assert!(!controls::set(&mut s, "retouchFace.0.skin.smoothness", 20.0), "no such face yet");
         let face = Face::boxed(NormRect::new(0.1, 0.1, 0.3, 0.3));
         s.retouch.override_mut(std::slice::from_ref(&face), 0);
-        assert!(controls::set(&mut s, "retouchFace.0.skin.amount", 250.0));
-        assert_eq!(controls::get(&s, "retouchFace.0.skin.amount"), Some(100.0), "clamped by the spec");
-        assert_eq!(controls::get(&s, "retouch.skin.amount"), Some(0.0), "the global value is apart");
+        assert!(controls::set(&mut s, "retouchFace.0.skin.smoothness", 250.0));
+        assert_eq!(controls::get(&s, "retouchFace.0.skin.smoothness"), Some(100.0), "clamped by the spec");
+        assert_eq!(controls::get(&s, "retouch.skin.smoothness"), Some(0.0), "the global value is apart");
         assert_eq!(controls::find("retouchFace.4.eyes.whites").map(|c| c.id), Some("retouch.eyes.whites"));
-        for bad in ["retouchFace.+0.skin.amount", "retouchFace..skin.amount", "retouchFace.0", "retouchFace.x.skin.amount"] {
+        for bad in ["retouchFace.+0.skin.smoothness", "retouchFace..skin.smoothness", "retouchFace.0", "retouchFace.x.skin.smoothness"] {
             assert!(controls::get(&s, bad).is_none() && controls::find(bad).is_none(), "{bad}");
         }
         let ids: Vec<String> = face_instances(&s).into_iter().map(|(id, _)| id).collect();
-        assert!(ids.contains(&"retouchFace.0.skin.amount".to_string()));
+        assert!(ids.contains(&"retouchFace.0.skin.smoothness".to_string()));
         assert_eq!(ids.len(), specs().count());
     }
 
@@ -156,7 +156,7 @@ mod tests {
         assert_eq!(s.hash64(), DevelopSettings::from_json(&s.to_json()).unwrap().hash64());
         let mut r = s.clone();
         controls::set(&mut r, "retouch.eyes.whites", 40.0);
-        assert_eq!(r.to_json()[KEY]["global"]["eyes"]["whites"], json!(40.0));
+        assert_eq!(r.to_json()[KEY]["global"]["eyes"]["amount"], json!(40.0));
         assert_ne!(r.hash64(), s.hash64());
         assert_eq!(DevelopSettings::from_json(&r.to_json()).unwrap(), r);
     }
@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn a_build_without_the_block_and_a_bad_block_read_as_off() {
         let mut v = DevelopSettings::default().to_json();
-        v[KEY] = json!({"global": {"skin": {"amount": [1, 2]}}, "faces": 4});
+        v[KEY] = json!({"global": {"skin": {"smoothness": [1, 2]}}, "faces": 4});
         let s = DevelopSettings::from_json(&v).unwrap();
         assert!(s.retouch.is_default());
         v[KEY] = json!("garbage");
@@ -175,7 +175,7 @@ mod tests {
     fn the_portrait_group_copies_the_block_and_its_faces() {
         let mut src = DevelopSettings::default();
         let face = Face { person: Some("ann".into()), ..Face::boxed(NormRect::new(0.1, 0.1, 0.3, 0.3)) };
-        src.retouch.override_mut(std::slice::from_ref(&face), 0).map(|f| f.set("retouch.skin.amount", 35.0));
+        src.retouch.override_mut(std::slice::from_ref(&face), 0).map(|f| f.set("retouch.skin.smoothness", 35.0));
         controls::set(&mut src, "retouch.eyes.whites", 25.0);
         let part = crate::extract_groups(&src, &[SettingsGroup::Portrait]);
         let dst = crate::apply_partial(&DevelopSettings::default(), &part, 1.0);

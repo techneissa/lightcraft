@@ -6,7 +6,7 @@
 use lightcraft_raster::Rgb32f;
 use serde::{Deserialize, Serialize};
 
-use crate::{Control, Feature, Scene, Scope, Spec, Stage};
+use crate::{Control, Feature, Part, Scene, Scope, Spec, Stage};
 
 /// The Background settings. A field added here is read as its default from settings saved without it.
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
@@ -23,6 +23,7 @@ impl Feature for Background {
     const SCOPE: Scope = Scope::Picture;
     const CONTROLS: &'static [Control<Self>] =
         &[Control { spec: Spec::amount("retouch.background.amount", "Amount"), get: |s| s.amount, set: |s, v| s.amount = v }];
+    const PARTS: &'static [Part] = &[Part::EntirePerson];
 
     fn apply(&self, _img: &mut Rgb32f, _scene: &Scene<'_>, _face: Option<usize>) {}
 }

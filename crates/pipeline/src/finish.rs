@@ -461,6 +461,31 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
     let preview_light = if exact { None } else { light.as_ref().and_then(|lo| crate::light_v3::PreviewOps::new(lo, &|v| encode_srgb(srgb, v))) };
     let peak = fp.peak;
     let hdr = peak > 1.0;
+    let split_index = crate::decontam::pixel::index(p);
+    // a scene colour after the local tone stage to display linear, before the colour edits
+    let to_display = |mut c: [f32; 3]| -> [f32; 3] {
+        // --- calibration (scene linear, before the tone map)
+        if fp.calib.is_some() || fp.shadow_tint != 0.0 {
+            c = crate::colorops::calibrate(c, fp.calib.as_ref(), fp.shadow_tint);
+        }
+
+        // --- tone map on luminance, highlight desaturation
+        let yl = luminance_2020(c);
+        let o = fp.tone.apply(yl);
+        let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
+        let k = fp.tone.chroma_scale(o);
+        if k != 1.0 {
+            d = d.map(|v| o + (v - o) * k);
+        }
+        let mx = d[0].max(d[1]).max(d[2]);
+        if mx > peak {
+            let t = ((mx - peak) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
+            d = d.map(|v| v + (o - v) * t);
+        }
+
+        // --- process V4: calibrated Contrast, Blacks (ProPhoto with the sRGB transfer)
+        apply_light(d, light.as_ref(), preview_light.as_ref(), exact, srgb)
+    };
     let mut out = vec![T::default(); w * h];
     for_rows(&mut out, w, |y, row| {
         // the masks whose bounds hold this row, in order (the last tinted one wins)
@@ -468,51 +493,44 @@ pub(crate) fn finish_with<T: Copy + Default + Send>(
         for (x, px) in row.iter_mut().enumerate() {
             let i = y * w + x;
             let raw = p.img.data[i];
-            let local = pixel_local_terms(p, &terms, &active, x, y);
-            let l_sat = local.values[11];
-            let l_hue = local.values[12];
+            let local = pixel_local_terms(p, &terms, &active, x, y, None);
             let l_pre = p.log_l.data[i];
             let l0 = l_pre + fp.ev;
-            let (mut c, l1) = adjust_scene_pixel(p, fp, i, raw, &local);
+            let (mut c, mut l1) = adjust_scene_pixel(p, fp, i, raw, &local);
+            // (fork, `fork/decontaminate.md`: at a decontaminated mask's soft edge, its edits made to each colour apart)
+            let hits = crate::decontam::pixel::hits(p, &split_index, x, y);
+            let cx = crate::decontam::pixel::Ctx { p, fp, terms: &terms, active: &active, x, y, i };
+            let layers = if hits.is_empty() {
+                Vec::new()
+            } else {
+                let (composite, shift, layers) = crate::decontam::pixel::scene(&cx, &local, c, &hits);
+                (c, l1) = (composite, l1 + shift);
+                layers
+            };
 
             // --- local tone in log luminance
             let shift = l1 - l0;
             let base = p.base.data[i] + fp.ev + shift;
             let delta = local_tone_delta(p, fp, i, base, l1, &local);
+            let g = if delta != 0.0 { delta.exp2() } else { 1.0 };
             if delta != 0.0 {
-                let g = delta.exp2();
                 c = c.map(|v| v * g);
             }
 
-            // --- calibration (scene linear, before the tone map)
-            if fp.calib.is_some() || fp.shadow_tint != 0.0 {
-                c = crate::colorops::calibrate(c, fp.calib.as_ref(), fp.shadow_tint);
-            }
-
-            // --- tone map on luminance, highlight desaturation
-            let yl = luminance_2020(c);
-            let o = fp.tone.apply(yl);
-            let mut d = if yl > 1e-9 { c.map(|v| v * o / yl) } else { [0.0; 3] };
-            let k = fp.tone.chroma_scale(o);
-            if k != 1.0 {
-                d = d.map(|v| o + (v - o) * k);
-            }
-            let mx = d[0].max(d[1]).max(d[2]);
-            if mx > peak {
-                let t = ((mx - peak) / (mx - o).max(1e-6)).clamp(0.0, 1.0);
-                d = d.map(|v| v + (o - v) * t);
-            }
-
-            // --- process V4: calibrated Contrast, Blacks (ProPhoto with the sRGB transfer)
-            d = apply_light(d, light.as_ref(), preview_light.as_ref(), exact, srgb);
-
             // --- colour
-            d = fp.ops.apply(d, l_sat, l_hue);
-            if let Some((dir, amt)) = local.tint {
-                let lab = lightcraft_color::perceptual::oklab_from_2020(d);
-                d = lightcraft_color::perceptual::oklab_to_2020([lab[0], lab[1] + dir[0] * 0.08 * amt, lab[2] + dir[1] * 0.08 * amt]);
+            let colour = |d: [f32; 3], local: &PixelLocalTerms, over: Option<(usize, f32)>| {
+                let mut d = fp.ops.apply(d, local.values[11], local.values[12]);
+                if let Some((dir, amt)) = local.tint {
+                    let lab = lightcraft_color::perceptual::oklab_from_2020(d);
+                    d = lightcraft_color::perceptual::oklab_to_2020([lab[0], lab[1] + dir[0] * 0.08 * amt, lab[2] + dir[1] * 0.08 * amt]);
+                }
+                recolor_pixel(p, &terms, &active, x, y, d, over)
+            };
+            let pre = to_display(c);
+            let mut d = colour(pre, &local, None);
+            if !hits.is_empty() {
+                d = crate::decontam::pixel::colour(&cx, &hits, &layers, (pre, d, g), &to_display, &colour);
             }
-            d = recolor_pixel(p, &terms, &active, x, y, d);
 
             // --- vignette (display linear, post-crop)
             if let Some(v) = vig {
@@ -696,12 +714,23 @@ pub(crate) fn scaled_terms(p: &Prepared) -> Vec<Option<[f32; MASK_TERMS]>> {
 
 /// The sum of the masks' terms at pixel `(x, y)`: only the `active` masks (those whose bounds hold
 /// the row) are read, and a mask reads nothing outside its bounds.
-pub(crate) fn pixel_local_terms(p: &Prepared, terms: &[Option<[f32; MASK_TERMS]>], active: &[usize], x: usize, y: usize) -> PixelLocalTerms {
+/// `over`: mask `k` reads alpha `v` here instead of its own (a decontaminated edge's layers, `crate::decontam`).
+pub(crate) fn pixel_local_terms(
+    p: &Prepared,
+    terms: &[Option<[f32; MASK_TERMS]>],
+    active: &[usize],
+    x: usize,
+    y: usize,
+    over: Option<(usize, f32)>,
+) -> PixelLocalTerms {
     let mut values = [0.0; MASK_SUMS];
     let mut tint = None;
     for &k in active {
         let (Some(mask), Some(Some(terms))) = (p.masks.get(k), terms.get(k)) else { continue };
-        let alpha = mask.alpha.at(x, y);
+        let alpha = match over {
+            Some((o, v)) if o == k => v,
+            _ => mask.alpha.at(x, y),
+        };
         if alpha <= 0.0 {
             continue;
         }
@@ -716,12 +745,23 @@ pub(crate) fn pixel_local_terms(p: &Prepared, terms: &[Option<[f32; MASK_TERMS]>
 }
 
 /// The masks' Recolor at pixel `(x, y)` on display-linear `d`, in mask order (unchanged, exactly, where none is on).
-fn recolor_pixel(p: &Prepared, terms: &[Option<[f32; MASK_TERMS]>], active: &[usize], x: usize, y: usize, d: [f32; 3]) -> [f32; 3] {
+fn recolor_pixel(
+    p: &Prepared,
+    terms: &[Option<[f32; MASK_TERMS]>],
+    active: &[usize],
+    x: usize,
+    y: usize,
+    d: [f32; 3],
+    over: Option<(usize, f32)>,
+) -> [f32; 3] {
     let mut lab = None;
     for &k in active {
         let (Some(mask), Some(Some(t))) = (p.masks.get(k), terms.get(k)) else { continue };
         let Some(rc) = t.get(MASK_RECOLOR..) else { continue };
-        let alpha = mask.alpha.at(x, y);
+        let alpha = match over {
+            Some((o, v)) if o == k => v,
+            _ => mask.alpha.at(x, y),
+        };
         if rc.first().is_some_and(|k| *k > 0.0) && alpha > 0.0 {
             let l = lab.unwrap_or_else(|| lightcraft_color::perceptual::oklab_from_2020(d));
             lab = Some(crate::recolor::apply_terms(l, rc, alpha));
