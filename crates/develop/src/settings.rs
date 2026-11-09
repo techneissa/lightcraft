@@ -1293,7 +1293,7 @@ impl Default for Mask {
 
 impl DevelopSettings {
     /// Calls `f` for every segmentation grid stored in these settings (the `seg` and `detail`
-    /// of Object and Prompt mask shapes).
+    /// of Object and Prompt mask shapes, and the fork's Select People parts: `fork/select-people.md`).
     pub fn visit_seg_masks(&self, f: &mut impl FnMut(&crate::SegMask)) {
         for mask in &self.masks {
             for component in &mask.components {
@@ -1331,6 +1331,15 @@ fn visit_shape(shape: &MaskShape, f: &mut impl FnMut(&crate::SegMask)) {
                 f(d);
             }
         }
+        // (fork, `fork/select-people.md`: its grids are shared by a snapshot's History steps and copies too)
+        MaskShape::People { seg, detail, .. } => {
+            if let Some(seg) = seg {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
         _ => {}
     }
 }
@@ -1346,6 +1355,15 @@ fn visit_shape_mut(shape: &mut MaskShape, f: &mut impl FnMut(&mut crate::SegMask
             }
         }
         MaskShape::Prompt { seg, detail, .. } => {
+            if let Some(seg) = seg.as_mut() {
+                f(seg);
+            }
+            for d in detail {
+                f(d);
+            }
+        }
+        // (fork, `fork/select-people.md`: its grids are shared by a snapshot's History steps and copies too)
+        MaskShape::People { seg, detail, .. } => {
             if let Some(seg) = seg.as_mut() {
                 f(seg);
             }
