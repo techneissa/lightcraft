@@ -80,6 +80,7 @@ pub mod originals;
 pub mod parse_ahead;
 mod pdf;
 pub mod people_parsing;
+pub mod portrait_presets;
 pub mod prep;
 pub mod preset_import;
 pub mod preset_luminar;

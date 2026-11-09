@@ -1239,11 +1239,14 @@ pub fn specs() -> Vec<CommandSpec> {
             "Apply Preset",
             [],
             None,
-            "{id: presetId, amount?: 0..200 (percent), ids?} → {macosFallback: how many of the photos are on macOS Colour but use Camera Matching colours on this computer}",
+            "{id: presetId, amount?: 0..200 (percent), ids?} → {macosFallback: how many of the photos are on macOS Colour but use Camera Matching colours on this computer, portrait?: {applied: [photo ids], skipped: [{id, why}]}} — a portrait preset (retouch.savePreset) gives its face settings to the same person's face on each photo only",
             has_selection,
             |s, p| {
                 let pid = str_param(p, "id").ok_or_else(|| bad("preset.apply", "missing id"))?;
                 let preset = s.presets.iter().find(|x| x.id == pid).cloned().ok_or_else(|| bad("preset.apply", format!("unknown preset `{pid}`")))?;
+                // a portrait preset's face settings go to the same person's face (fork, `fork/portrait-presets.md`)
+                let mut faces = super::portrait_presets::PresetFaces::new(s, &preset);
+                let preset = crate::portrait_presets::split(&preset).0.into_owned();
                 let amount = f64_or(p, "amount", 100.0).clamp(0.0, 200.0) / 100.0;
                 // `id` names the preset here: the photos are `ids`, else the selection
                 let ids = s.targets(&json!({"ids": p.get("ids")}))?;
@@ -1268,12 +1271,19 @@ pub fn specs() -> Vec<CommandSpec> {
                         if on_kelvin_scale {
                             lightcraft_pipeline::local::normalize_wb(&mut next, &info);
                         }
+                        if let Some(f) = faces.as_mut() {
+                            f.apply(s, id, &mut next, amount);
+                        }
                         s.develop_op(id, next, &format!("Preset: {}", preset.name))
                     })
                     .collect::<Vec<_>>();
                 s.commit(&format!("Preset: {}", preset.name), Op::Batch { ops })?;
                 // photos the preset put on macOS Colour that this computer makes with Camera Matching colours
-                Ok(json!({"macosFallback": super::macos_colour::fallbacks(s, &ids)}))
+                let mut out = json!({"macosFallback": super::macos_colour::fallbacks(s, &ids)});
+                if let (Some(f), Some(o)) = (&faces, out.as_object_mut()) {
+                    o.insert("portrait".into(), f.report());
+                }
+                Ok(out)
             }
         ),
         cmd!("preset.create", "Create Preset", ["Photo"], None, "{name, group?, groups?: [settingsGroup]}", has_active, |s, p| {

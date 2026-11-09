@@ -192,7 +192,14 @@ impl Session {
             }
             _ => &current,
         };
-        Some(preset.apply_on(&current, original, amount))
+        // a portrait preset's face settings go to the same person's face (fork, `fork/portrait-presets.md`)
+        let (rest, portrait) = crate::portrait_presets::split(preset);
+        let mut out = rest.apply_on(&current, original, amount);
+        if let Some(p) = portrait {
+            let m = crate::portrait_presets::Matcher::new(self, &p.who, false, true);
+            let _ = self.portrait_onto(id, &mut out, &p, &m, amount);
+        }
+        Some(out)
     }
 
     /// Add imported presets. Identical presets (same name, group and settings) already present are
