@@ -155,19 +155,19 @@ fn a_person_never_grows_into_the_next_person() {
 #[test]
 fn a_subject_selection_gets_the_matte_at_its_edge_only() {
     let base = lightcraft_develop::SegMask::from_logits(32, &disc(32, 0.5, 0.5, 0.27, 6.0)).made_by("birefnet");
-    let out = crate::hair_edges::subject_edge(&base, &portrait_matte()).expect("a selection");
+    let out = crate::hair_edges::subject_edge(&base, &portrait_matte(), Edge::Matting).expect("a selection");
     assert_eq!(out.model.as_deref(), Some("birefnet+matting"));
     let l = out.logits().unwrap();
     let at = |x: f32, y: f32| l[(y * SIDE as f32) as usize * SIDE + (x * SIDE as f32) as usize];
     assert!(at(0.5, 0.5 - 0.29) > 0.0, "the strand comes in");
     assert!(at(0.08, 0.08) < 0.0, "the lamp stays out");
     let sam = lightcraft_develop::SegMask::from_logits(32, &disc(32, 0.5, 0.5, 0.27, 6.0));
-    assert_eq!(crate::hair_edges::subject_edge(&sam, &portrait_matte()).unwrap().model.as_deref(), Some("sam3+matting"));
+    assert_eq!(crate::hair_edges::subject_edge(&sam, &portrait_matte(), Edge::Matting).unwrap().model.as_deref(), Some("sam3+matting"));
     assert_eq!(crate::segment::birefnet::label_of(Some("sam3+matting")), "SAM 3, BiRefNet Matting Edges");
     assert_eq!(crate::segment::birefnet::label_of(Some("sam3+birefnet+matting")), "SAM 3 + BiRefNet Edges, BiRefNet Matting Edges");
     // a damaged base is no selection, not a panic
     let broken = lightcraft_develop::SegMask { data: "!!".into(), ..sam };
-    assert!(crate::hair_edges::subject_edge(&broken, &portrait_matte()).is_none());
+    assert!(crate::hair_edges::subject_edge(&broken, &portrait_matte(), Edge::Matting).is_none());
 }
 
 #[cfg(feature = "sam")]

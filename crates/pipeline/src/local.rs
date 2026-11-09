@@ -857,7 +857,8 @@ pub(crate) fn prepare(
     let ev = s.light.exposure as f32;
     let (cache, keys) = alphas;
     let masks = timed("masks", || masks::evaluate_cached(&s.masks, frame, img.width, img.height, &img, &log_l, ev, mattes, keys, cache));
-    Prepared { img, log_l, base, clarity_blur, texture_blur, sharpen_blur, dark, chroma_blur, air, masks, px_per_long, recolor: Vec::new() }
+    let (recolor, split) = (Vec::new(), Vec::new());
+    Prepared { img, log_l, base, clarity_blur, texture_blur, sharpen_blur, dark, chroma_blur, air, masks, px_per_long, recolor, split }
 }
 
 /// The airlight of the whole output frame, estimated on a small render of it (`proxy_w` px wide):

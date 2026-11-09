@@ -21,6 +21,7 @@ mod crop_angle;
 mod crop_aspect;
 mod dcp;
 mod dcp_corpus;
+mod decontaminate;
 mod delete_local_rejected;
 mod denoise;
 mod exif_edit;
