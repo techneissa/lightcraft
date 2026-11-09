@@ -102,6 +102,7 @@ mod object_remove;
 mod offline;
 mod open_lightroom;
 pub(super) mod panels;
+mod parse_ahead;
 mod people_parts;
 mod portrait;
 mod preset_favorites;

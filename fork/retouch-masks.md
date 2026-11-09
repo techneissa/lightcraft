@@ -13,7 +13,8 @@ The link between people parsing (`fork/people-parsing.md`) and the retouch step 
   Background; never the clothes). People without a face (seen from behind) are
   not faces. Without the set, faces come from YuNet as before (boxes, no masks).
 - **One parse per photo, shared**: the parse is the one `parsing.run` and `parsing.mask` read (same picture, same
-  faces, same cache on disk). Faces found from it are kept under the parse's version, so another model set or
+  faces, same cache on disk). A photo parsed before (ahead of time or by a request) is read through the parse-ahead
+  index with no model run, and a parse the search makes is filed there (`fork/parse-ahead.md`). Faces found from it are kept under the parse's version, so another model set or
   hair-edge choice finds them anew.
 - **Never in a render**: a preview of a photo without its faces renders on no faces (the original pixels with Face
   Light on) and starts the face search; the search's worker renders the parse picture, runs YuNet and waits for the
@@ -97,7 +98,8 @@ mask as it is); the face picker's thumbnails and `retouch.faces` boxes ignore le
   `retouch_key_map`), `crates/engine/src/cmd/retouch.rs` (matching through the key map),
   `crates/ui-egui/src/panels/portrait.rs` and `portrait/overlay.rs` (faces through the `Arc`, the key map).
 - `crates/engine/src/people_parsing.rs` (`PeopleParsing::version`, `ready`, `choice`, `parse_as`); `crates/engine/src/cmd/parsing.rs`
-  (`prepare` split into `prepare_job` and `Prepare::run`, so a worker makes the very picture `parsing.run` does).
+  (`prepare` split into `prepare_job` and `Prepare::run`, so a worker makes the very picture `parsing.run` does; the
+  search uses `prepare_ahead`, which loads YuNet on its worker).
 
 ## Tests
 
