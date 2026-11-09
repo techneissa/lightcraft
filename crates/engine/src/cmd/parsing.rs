@@ -114,8 +114,9 @@ fn prepare(s: &mut Session, id: lightcraft_catalog::PhotoId) -> std::result::Res
     prepare_job(s, id)?.run()
 }
 
-/// [`prepare`] set up on the calling thread, to run elsewhere (the parse-ahead worker, `fork/parse-ahead.md`), with the
-/// very picture and faces `parsing.run` uses, so both read one cached parse.
+/// [`prepare`] set up on the calling thread, to run elsewhere (the parse-ahead worker, `fork/parse-ahead.md`, and
+/// portrait retouching's face search, `crate::retouch_input`), with the very picture and faces `parsing.run` uses, so
+/// all of them read one cached parse.
 pub(crate) struct Prepare {
     job: crate::RenderJob,
     detector: Detect,
@@ -126,8 +127,8 @@ pub(crate) struct Prepare {
 enum Detect {
     None,
     Loaded(std::sync::Arc<lightcraft_faces::yunet::Detector>),
-    /// Loaded on the thread that runs it (the parse-ahead worker: never on the UI thread). One that does not load
-    /// finds no faces, as [`prepare_job`] without a usable detector.
+    /// Loaded on the thread that runs it (a worker: never on the UI thread), or the session's when it has loaded that
+    /// file. One that does not load finds no faces, as [`prepare_job`] without a usable detector.
     Load(std::path::PathBuf),
 }
 
@@ -136,7 +137,8 @@ pub(crate) fn prepare_job(s: &mut Session, id: lightcraft_catalog::PhotoId) -> s
     prepare_with(s, id, detector)
 }
 
-/// [`prepare_job`] for the parse-ahead worker (`fork/parse-ahead.md`): the detector is read there, not here.
+/// [`prepare_job`] for a worker (the parse-ahead queue, `fork/parse-ahead.md`; the retouch face search): the detector
+/// is read there, not here.
 pub(crate) fn prepare_ahead(s: &mut Session, id: lightcraft_catalog::PhotoId) -> std::result::Result<Prepare, String> {
     let detector = super::face_detect::detector_file(s).map_or(Detect::None, |(path, _)| Detect::Load(path));
     prepare_with(s, id, detector)
@@ -177,7 +179,7 @@ impl Rendered {
         let detector = match detector {
             Detect::None => None,
             Detect::Loaded(d) => Some(d),
-            Detect::Load(path) => super::face_detect::detector_at(&path).map_err(|e| log::info!("parse ahead: {e}")).ok(),
+            Detect::Load(path) => super::face_detect::detector_at(&path).map_err(|e| log::info!("people parsing: no faces found first: {e}")).ok(),
         };
         let Some(detector) = detector else { return Ok((img, Vec::new())) };
         let (w, h) = (img.width, img.height);
@@ -214,7 +216,7 @@ fn parse_photo_with(s: &mut Session, id: lightcraft_catalog::PhotoId, wait: bool
     match prepare(s, id) {
         Ok((img, hints)) => {
             let kept = keep.then(|| img.clone());
-            let (filed, out) = s.parsing.parse_filed(img, hints, wait);
+            let (filed, out) = s.parsing.parse_as(s.parsing.choice(), img, hints, wait);
             if matches!(out, Outcome::Ready { .. }) {
                 crate::parse_ahead::remember(s, id, filed);
             }

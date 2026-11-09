@@ -5,9 +5,9 @@ List: people parsing runs ahead of time in the background (the photos around the
 ## What it does
 
 People parsing (`fork/people-parsing.md`) takes seconds a photo. This queue runs it before the photo is needed, into
-people parsing's own disk cache, so a request finds the parse there and no model runs. On this branch the requests
-are `parsing.run` and `parsing.mask`; portrait retouching and Select People do not ask for a parse yet (see When
-other branches merge).
+people parsing's own disk cache, so a request finds the parse there and no model runs. The requests are `parsing.run`, `parsing.mask` and portrait
+retouching's face search (`fork/retouch-masks.md`); Select People does not ask for a parse yet (see When other
+branches merge).
 
 - **Which photos, in order**: the photo open in the filmstrip and its neighbours (4 ahead in the direction of travel,
   2 behind, nearest first); then photos imported since the library opened that have faces (newest import first); then,
@@ -43,9 +43,17 @@ other branches merge).
   installed YuNet's file, and the version the parse is filed under: the model set's, plus `+matting1` or `+vision1`
   when the People edge is BiRefNet Matting or Apple Vision), so `parsing.run` and `parsing.mask` read the parse
   without rendering the photo or finding its faces first (`parsing.mask` then renders the photo only to draw the
-  mask's edges). One function gives that version (`PeopleParsing::ahead_version`, the one `PeopleParsing::parse`
-  keys on), and a request files the key its parse was made under, so changing the People edge never reads a parse
-  made for the other. A photo whose identity is not listed, or whose parse has left the cache, is parsed as before.
+  mask's edges). One function gives that version (`PeopleParsing::version_of`: `Choice::version`, so
+  `PeopleParsing::parse_as` and the retouch face store's key, and `PeopleParsing::ahead_version`, so the identity and
+  `crate::parse_ahead::ready`, all call it), and a request files the key its parse was made under, so changing the
+  People edge never reads a parse made for the other. A photo whose identity is not listed, or whose parse has left
+  the cache, is parsed as before.
+- **Portrait retouching** asks the same way: its face search takes what the index knows of the photo
+  (`crate::parse_ahead::known`, on the thread that sets the search up, reading nothing but the index in memory) and,
+  on its worker, reads that parse (`Known::read`), even when the picture and faces it found would key it a hair
+  apart; else it parses with `parse_as` and files the key (`Known::file`), so `parsing.mask` and the queue then find
+  it. The worker still renders the photo and runs YuNet (loaded there, never on the UI thread), for the face picker's
+  thumbnails and each face's five landmarks; no people-parsing model runs for a photo parsed before.
 - **Cache budget**: people parsing's 512 MB cap now removes the parses used least recently (each lookup marks the file
   as used). The idle sweep stops at 90 % of the cap, so it never pushes out parses for its own; the neighbours and new
   imports may. A parse file is 100–230 KB, so the cap holds a few thousand photos.
@@ -89,24 +97,24 @@ while other builds kept the load average between 20 and 56; 2026-11-09):
 - `crates/engine/src/cmd/face_detect.rs`: `detector_path` split out of `detector`; `detector_file` (the installed
   YuNet's file and a stamp of it, from the file system only) and `detector_at` (YuNet loaded on a worker thread).
 - Fork files of people parsing: `crates/engine/src/people_parsing.rs` (`mod ahead`; `remembered` marks the file used;
-  `spawn` asks `shown` for its row and keeps no result of a stopped queue run; `version_of`, the version `parse` keys
-  on; `parse_filed` says the version and key a parse was filed under; a request stops the queue's runs of other photos
+  `spawn` asks `shown` for its row and keeps no result of a stopped queue run; `version_of`, the one version function;
+  `parse_as` parses with a `Choice` taken earlier and says the version and key the parse was filed under; a request stops the queue's runs of other photos
   and runs a photo itself when the queue's run it joined stops; a run that finished between the cache lookup and the
   runs' lock is not run again), `crates/engine/src/cmd/parsing.rs` (`prepare` split into `prepare_job` /
   `prepare_ahead` and the steps `Prepare::render` / `Rendered::detect`, so the worker renders and finds faces as a
   request does and waits between the steps; `parse_photo` and `parsing.mask` read a parse the index knows and file
-  the ones they make).
+  the ones they make). `crates/engine/src/retouch_input.rs` (`retouch_finder`: `prepare_ahead`, and `known` for the
+  search) and `crates/engine/src/retouch_input/parts.rs` (`PartsFinder::find` reads and files through `Known`).
 
 ## When other branches merge
 
 Not an upstream feature; everything it touches is in this fork. Hair edges (#113) and Apple Vision edges (#120) are
-merged: their parses are filed under `+matting1` / `+vision1`, and `PeopleParsing::ahead_version` returns the same
-version, so nothing more is needed for them. When PR #122 (portrait retouching from the people parse) merges, its
-`crate::retouch_input` worker must ask for a parse the way `cmd::parsing::parse_photo` does: `crate::parse_ahead::ready`
-first (no render when the photo was parsed ahead), then `PeopleParsing::parse_filed` and
-`crate::parse_ahead::remember` with the key it returns. #122 changes `prepare` too: keep the step split here
-(`Prepare::render`, `Rendered::detect`) and its `prepare_ahead`. Select People masks, once they ask for a parse, go
-the same way.
+merged: their parses are filed under `+matting1` / `+vision1`, the version `PeopleParsing::version_of` gives. Portrait
+retouching from the people parse (#122) is merged and wired: its face search reads and files through
+`crate::parse_ahead::known` (What it does). Select People masks, once they ask for a parse, go the same way:
+`crate::parse_ahead::ready` first (no render when the photo was parsed ahead), then `PeopleParsing::parse_as` and
+`crate::parse_ahead::remember` with the key it returns; keep the step split (`Prepare::render`, `Rendered::detect`)
+and `prepare_ahead` for a worker.
 
 ## Tests
 

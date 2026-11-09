@@ -154,6 +154,45 @@ impl PartMask {
 /// with more landmarks appends them after these five.
 pub const LANDMARKS: [&str; 5] = ["right eye", "left eye", "nose tip", "right mouth corner", "left mouth corner"];
 
+/// The frame a face's key box ([`Face::key_bounds`], [`crate::FaceKey::bounds`]) is in. Both are before the user's
+/// rotation; they differ by the lens corrections and transform.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeyFrame {
+    /// After lens corrections and transform: faces found on the developed photo (YuNet), and every key saved
+    /// before the frame was kept.
+    #[default]
+    Edit,
+    /// Before lens corrections and transform: faces from the people parse ([`Input::on_photo`]).
+    Photo,
+}
+
+impl KeyFrame {
+    pub fn is_edit(&self) -> bool {
+        *self == KeyFrame::Edit
+    }
+}
+
+/// Maps a point of the [`KeyFrame::Edit`] frame to the [`KeyFrame::Photo`] frame (both normalised, before the user's
+/// rotation) through the photo's lens corrections and transform, so keys of both frames can be compared. `None`
+/// for a point the warp can't map.
+pub trait KeyMap: Sync {
+    fn edit_to_photo(&self, x: f64, y: f64) -> Option<(f64, f64)>;
+}
+
+/// The box around `b`'s corners, edge midpoints and centre after `map`; `None` when one doesn't map or the result
+/// is not a box.
+pub fn edit_box_to_photo(map: &dyn KeyMap, b: &NormRect) -> Option<NormRect> {
+    let (cx, cy) = b.centre();
+    let points = [(b.x0, b.y0), (cx, b.y0), (b.x1, b.y0), (b.x0, cy), (cx, cy), (b.x1, cy), (b.x0, b.y1), (cx, b.y1), (b.x1, b.y1)];
+    let mut out = NormRect::new(f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+    for (x, y) in points {
+        let (px, py) = map.edit_to_photo(x, y)?;
+        out = NormRect::new(out.x0.min(px), out.y0.min(py), out.x1.max(px), out.y1.max(py));
+    }
+    out.is_valid().then_some(out)
+}
+
 /// One face (and the person it belongs to).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Face {
@@ -173,6 +212,8 @@ pub struct Face {
     /// The person's part masks, at most one per part. Empty until a people parser has run: every feature that
     /// needs a mask then leaves the picture alone.
     pub masks: Vec<(Part, PartMask)>,
+    /// The frame [`Face::key_bounds`] is in: [`KeyFrame::Photo`] for faces from the people parse.
+    pub key_frame: KeyFrame,
 }
 
 impl Face {
@@ -202,12 +243,16 @@ impl Face {
 #[derive(Clone, Default)]
 pub struct Input {
     pub faces: Vec<Face>,
+    /// The coordinates are on the photo before lens corrections and transform (after the orientation): the frame a
+    /// people parse is made in. The step maps them through the lens and transform warp, as it maps local masks drawn
+    /// on the photo. `false`: after lens corrections and transform (the module docs' frame).
+    pub on_photo: bool,
     fingerprint: OnceLock<u64>,
 }
 
 impl fmt::Debug for Input {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Input").field("faces", &self.faces).finish()
+        f.debug_struct("Input").field("faces", &self.faces).field("on_photo", &self.on_photo).finish()
     }
 }
 
@@ -221,7 +266,12 @@ impl PartialEq for Input {
 
 impl Input {
     pub fn new(faces: Vec<Face>) -> Input {
-        Input { faces, fingerprint: OnceLock::new() }
+        Input { faces, on_photo: false, fingerprint: OnceLock::new() }
+    }
+
+    /// Faces whose coordinates are on the photo before lens corrections and transform ([`Input::on_photo`]).
+    pub fn new_on_photo(faces: Vec<Face>) -> Input {
+        Input { faces, on_photo: true, fingerprint: OnceLock::new() }
     }
 
     /// A stable 64-bit hash of everything here (boxes, landmarks, persons, masks), for render cache keys: a
@@ -230,6 +280,7 @@ impl Input {
         *self.fingerprint.get_or_init(|| {
             let mut h = Fnv::new();
             h.u64(self.faces.len() as u64);
+            h.u64(u64::from(self.on_photo));
             for f in &self.faces {
                 let up = f.key_bounds();
                 for v in [f.bounds.x0, f.bounds.y0, f.bounds.x1, f.bounds.y1, up.x0, up.y0, up.x1, up.y1] {
@@ -242,6 +293,7 @@ impl Input {
                 }
                 h.u64(u64::from(f.score.to_bits()));
                 h.bytes(f.person.as_deref().unwrap_or("\u{0}").as_bytes());
+                h.u64(u64::from(f.key_frame == KeyFrame::Photo));
                 h.u64(f.masks.len() as u64);
                 for (part, m) in &f.masks {
                     h.u64(*part as u64);

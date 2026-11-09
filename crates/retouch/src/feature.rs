@@ -7,7 +7,7 @@ use serde::Serialize;
 use serde::de::DeserializeOwned;
 
 use crate::control::Control;
-use crate::input::{Face, Input, Part};
+use crate::input::{Face, Input, KeyMap, Part};
 
 /// Where in the render a feature runs. The step runs the stages in this order; inside a stage, features run in
 /// the order of [`crate::FEATURES`].
@@ -45,6 +45,9 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     const SCOPE: Scope;
     /// Its sliders, in panel order.
     const CONTROLS: &'static [Control<Self>];
+    /// The part masks it reads: the face search keeps only the parts some feature lists, so a mask no feature
+    /// reads takes no memory. By default the parts of a face and its skin ([`FACE_PARTS`]).
+    const PARTS: &'static [Part] = FACE_PARTS;
 
     /// Whether these settings leave the picture alone. By default: every slider at its default.
     fn is_off(&self) -> bool {
@@ -60,12 +63,22 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>);
 }
 
+/// The parts [`Feature::PARTS`] lists by default: a face, its skin, and what is worn on the face (glasses are
+/// [`Part::Others`]); not the clothes (recoloured through local masks, issue #83) nor the whole person.
+pub const FACE_PARTS: &[Part] =
+    &[Part::FacialSkin, Part::BodySkin, Part::Hair, Part::Eyebrows, Part::EyeWhites, Part::Iris, Part::Lips, Part::Teeth, Part::Others];
+
 /// How the pixels of the image being retouched map to normalised photo coordinates ([`crate::input`]).
 pub trait View: Sync {
     /// Pixel position (`x`, `y`; pixel centres at +0.5) → normalised photo coordinates.
     fn to_norm(&self, x: f64, y: f64) -> (f64, f64);
     /// Normalised photo coordinates → pixel position; `None` for a point that has no place in the image.
     fn to_px(&self, nx: f64, ny: f64) -> Option<(f64, f64)>;
+    /// The photo's lens corrections and transform, to match per-face settings kept in the other frame
+    /// ([`crate::overrides::resolve_in`]). `None` (the default): such settings pair by person only.
+    fn key_map(&self) -> Option<&dyn KeyMap> {
+        None
+    }
 }
 
 /// The view of an image that is the whole photo (the examples and tests): normalised × size.
@@ -136,6 +149,39 @@ impl<'a> Scene<'a> {
         let Some(m) = self.faces.get(face).and_then(|f| f.face.mask(part)) else { return 0.0 };
         let (nx, ny) = self.view.to_norm(x as f64 + 0.5, y as f64 + 0.5);
         m.sample(nx, ny)
+    }
+
+    /// The pixels of the image the mask of `part` of face `face` can touch: `[x0, y0, x1, y1)`, clamped to the image;
+    /// `None` without that mask or when it lies outside the image. Every pixel outside it has the mask at 0, so a
+    /// feature reads and writes only these. (The area's edges are followed at 16 points each, so a lens or
+    /// transform warp that bends them stays inside, with a pixel to spare.)
+    pub fn mask_box(&self, face: usize, part: Part) -> Option<[usize; 4]> {
+        const STEPS: usize = 16;
+        let a = self.faces.get(face)?.face.mask(part)?.area;
+        if !a.is_valid() || self.width == 0 || self.height == 0 {
+            return None;
+        }
+        let (mut x0, mut y0, mut x1, mut y1) = (f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
+        for i in 0..=STEPS {
+            let t = i as f64 / STEPS as f64;
+            let (u, v) = (a.x0 + t * a.width(), a.y0 + t * a.height());
+            for (nx, ny) in [(u, a.y0), (u, a.y1), (a.x0, v), (a.x1, v)] {
+                if let Some((px, py)) = self.view.to_px(nx, ny).filter(|(x, y)| x.is_finite() && y.is_finite()) {
+                    (x0, y0, x1, y1) = (x0.min(px), y0.min(py), x1.max(px), y1.max(py));
+                }
+            }
+        }
+        if x0 > x1 || y0 > y1 {
+            return None;
+        }
+        let clamp = |v: f64, max: usize| v.clamp(0.0, max as f64) as usize;
+        let b = [
+            clamp(x0.floor() - 1.0, self.width),
+            clamp(y0.floor() - 1.0, self.height),
+            clamp(x1.ceil() + 1.0, self.width),
+            clamp(y1.ceil() + 1.0, self.height),
+        ];
+        (b[0] < b[2] && b[1] < b[3]).then_some(b)
     }
 
     /// The mask of `part` of face `face`, resampled to the image's pixels; `None` without that mask.

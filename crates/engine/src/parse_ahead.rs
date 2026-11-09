@@ -654,26 +654,58 @@ fn open_index(s: &mut Session) -> bool {
 /// the cache without rendering the photo. `None`: not known (or made under another model set or People edge); parse
 /// as usual.
 pub(crate) fn ready(s: &mut Session, id: PhotoId) -> Option<Arc<lightcraft_parsing::Parsing>> {
-    if !open_index(s) {
-        return None;
-    }
     let version = s.parsing.ahead_version();
-    let ident = identity(s.catalog.photo(id)?, yunet(s), &version);
-    let key = index::lock(&s.parse_ahead.index).ix.get(ident)?.to_string();
-    // (a parse made under a version this one does not name is not taken for it; one of nobody has no edges to draw)
-    s.parsing.cached(&key).filter(|p| p.model_version == version || p.people.is_empty())
+    let parsing = s.parsing.clone();
+    known(s, id, &version)?.read(&parsing)
 }
 
 /// A request parsed photo `id` as `filed`: the next request finds it without a render.
 pub(crate) fn remember(s: &mut Session, id: PhotoId, filed: Filed) {
-    open_index(s);
-    let yunet = yunet(s);
-    let Some(ident) = s.catalog.photo(id).map(|p| identity(p, yunet, &filed.version)) else { return };
-    let mut sh = index::lock(&s.parse_ahead.index);
-    if let Some(dir) = sh.dir.clone() {
-        sh.listing.add(&dir, &filed.key);
+    if let Some(k) = known(s, id, &filed.version) {
+        k.file(filed);
     }
-    sh.file(ident, filed.key);
+}
+
+/// What the index knows of one photo's parse under one version, taken on the calling thread so a worker can read the
+/// parse ([`Known::read`]) and file the one it makes ([`Known::file`]) without the session: portrait retouching's
+/// face search (`crate::retouch_input`) asks for its parse this way, as [`ready`] and [`remember`] do.
+pub(crate) struct Known {
+    slot: Slot,
+    identity: u128,
+    version: String,
+    /// The cache key the photo's parse is filed under (`None`: not known, or the index is not read yet).
+    key: Option<String>,
+}
+
+/// [`Known`] for photo `id` parsed under `version` (`None`: no such photo). Reads nothing but the index in memory;
+/// asks the worker to read the index when it is not read yet.
+pub(crate) fn known(s: &mut Session, id: PhotoId, version: &str) -> Option<Known> {
+    let open = open_index(s);
+    let identity = identity(s.catalog.photo(id)?, yunet(s), version);
+    let key = if open { index::lock(&s.parse_ahead.index).ix.get(identity).map(str::to_string) } else { None };
+    Some(Known { slot: s.parse_ahead.index.clone(), identity, version: version.to_string(), key })
+}
+
+impl Known {
+    /// The parse filed for the photo, from memory or disk (no run). `None`: not known, gone from the cache, or made
+    /// under another version.
+    pub(crate) fn read(&self, parsing: &crate::people_parsing::PeopleParsing) -> Option<Arc<lightcraft_parsing::Parsing>> {
+        // (a parse made under a version this one does not name is not taken for it; one of nobody has no edges to draw)
+        parsing.cached(self.key.as_deref()?).filter(|p| p.model_version == self.version || p.people.is_empty())
+    }
+
+    /// The photo was parsed as `filed`: the next request finds it without a render. A parse filed under another
+    /// version than this one's identity names is left out (its identity would be another).
+    pub(crate) fn file(&self, filed: Filed) {
+        if filed.version != self.version {
+            return;
+        }
+        let mut sh = index::lock(&self.slot);
+        if let Some(dir) = sh.dir.clone() {
+            sh.listing.add(&dir, &filed.key);
+        }
+        sh.file(self.identity, filed.key);
+    }
 }
 
 impl Session {

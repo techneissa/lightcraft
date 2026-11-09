@@ -689,3 +689,53 @@ fn the_pump_never_reads_the_face_detector_and_a_parsed_photos_mask_needs_no_pars
     assert_eq!(reads(), before, "the mask rendered and looked for faces to find the parse");
     assert_eq!(s.parsing.runs(), 2);
 }
+
+/// Portrait retouching on (Skin Tone's Amount), so a render of the photo finds its faces from the parse.
+fn retouch_on(s: &mut Session, id: PhotoId) {
+    s.selection = crate::Selection::single(id);
+    s.execute("develop.set", &json!({"control": "retouch.skinTone.amount", "value": 100.0})).unwrap();
+}
+
+#[test]
+fn portrait_retouching_reads_the_parse_the_index_knows_and_files_the_one_it_makes() {
+    let (mut s, dir, ids) = library("retouch", 2);
+    let seen: Seen = Arc::default();
+    s.parsing.set_runner(Some(recording_runner(&seen)));
+    // photo 0 was parsed (ahead of time, or by `parsing.run`) under a key this search would not make from its own
+    // picture and faces (a detector on another device finds them a hair apart): read through the index, no model run
+    let version = s.parsing.version();
+    let other = cache::key(&lightcraft_parsing::RgbImage::new(1, 1, vec![9; 3]).unwrap(), &[], &version);
+    let mut two = fake_parse(s.parsing.model_set());
+    two.people.push(Person { face: Some(NormRect::new(0.05, 0.1, 0.25, 0.4)), face_score: 0.8, ..Person::default() });
+    cache::store(&dir.join("cache"), &other, &two).unwrap();
+    crate::parse_ahead::remember(&mut s, ids[0], crate::people_parsing::Filed { version: version.clone(), key: other });
+    retouch_on(&mut s, ids[0]);
+    s.render_now(ids[0], 48, 48).unwrap();
+    assert_eq!(s.retouch_faces_of(ids[0]).found.map(|f| f.input.faces.len()), Some(2), "the faces of the filed parse");
+    assert_eq!(s.parsing.runs(), 0, "a parsed photo opened for retouching ran the model");
+    // photo 1, parsed by the retouch search, is filed: a request reads it without a render, the queue skips it
+    retouch_on(&mut s, ids[1]);
+    s.render_now(ids[1], 48, 48).unwrap();
+    assert_eq!(s.parsing.runs(), 1);
+    assert!(crate::parse_ahead::ready(&mut s, ids[1]).is_some(), "the retouch search's parse is not in the index");
+    let st = settle(&mut s, json!({"pace": "light"}));
+    assert_eq!(st["skipped"], 2, "{st}");
+    assert_eq!(s.parsing.runs(), 1);
+}
+
+#[test]
+fn the_retouch_face_search_never_loads_the_face_detector_on_the_thread_that_sets_it_up() {
+    let (mut s, dir, ids) = library("retouch-yunet", 1);
+    damaged_yunet(&mut s, &dir);
+    let seen: Seen = Arc::default();
+    s.parsing.set_runner(Some(recording_runner(&seen)));
+    retouch_on(&mut s, ids[0]);
+    let reads = || crate::cmd::face_detect::READS.with(std::cell::Cell::get);
+    let before = reads();
+    // a preview without the faces starts the search on its worker
+    let job = s.render_job(ids[0], 48, 48, false, true).unwrap();
+    assert!(job.info.retouch.is_none());
+    until("the faces arriving", || s.retouch_faces_of(ids[0]).found.is_some());
+    assert_eq!(reads(), before, "the search's set-up read the detector here");
+    assert_eq!(s.parsing.runs(), 1);
+}
