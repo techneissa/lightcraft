@@ -36,14 +36,14 @@ drag only mixes them per pixel. A zoomed loupe window is grown by the reach (`ba
 side with every slider on): the blocks are anchored to the whole render, the distances and depth statistics come from
 the whole photo, so a window draws what the whole render draws inside it (within 1 of 255, tested in the pipeline).
 
-How it does (2026-11-09; masks from the people parse with BiRefNet Matting edges; three of techneissa's A7 V photos and
-three CC0 Unsplash photos from Wikimedia Commons):
+How it does (2026-11-09; masks from the people parse with BiRefNet Matting edges; six portraits, among them three CC0
+Unsplash photos from Wikimedia Commons):
 - Blur: sofa, wall and a corrugated wall blur smoothly up to the hair and shoulders with no light or dark rim.
-- Swap: curly hair keeps its strands over a grey or a park photo; the parse's own errors show (on one A7 V photo it
-  counts part of the sofa as the person).
+- Swap: curly hair keeps its strands over a grey or a park photo; the parse's own errors show (on one photo it counts
+  part of the sofa as the person).
 - Clean Backdrop: on studio paper the JPEG's banding rings and blotches go and a fine grain stays; on a room wall it
   smooths the wall and keeps the shelf and its coloured objects.
-- Time (Apple M4 Pro, release, a 2048 × 1365 photo, the Mac at load about 10; one run each, the fastest of 20 renders
+- Time (release, a 2048 × 1365 photo, other work running; one run each, the fastest of 20 renders
   with the work kept): Blur 100 6.5 ms, Swap 100 1.7 ms, Clean Backdrop 100 3.7 ms, Swap with a picture and Blur 7.4 ms,
   all three 9.2 ms. Making the work kept takes 70 to 95 ms once per picture (after white balance or another change
   before the step). The people parse with BiRefNet Matting edges is 8 to 13 s per photo, once (`fork/hair-edges.md`).
