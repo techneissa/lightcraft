@@ -29,6 +29,8 @@ pub const MODEL_FILE: &str = "big-lama.pt";
 
 /// How long the model stays loaded after its last use.
 const KEEP_LOADED: Duration = Duration::from_secs(60);
+/// How long [`LamaFill::term`] trusts what it read from the model's file.
+const TERM_EVERY: Duration = Duration::from_secs(2);
 /// What the fills kept are allowed to take together, bytes (the newest stay).
 const CACHE_BYTES: usize = 256 << 20;
 
@@ -73,6 +75,8 @@ struct Inner {
     message: Mutex<Option<String>>,
     download: Mutex<Download>,
     watcher: AtomicBool,
+    /// [`LamaFill::term`], read from the file at most every [`TERM_EVERY`].
+    term: Mutex<(Option<Instant>, u64)>,
 }
 
 /// The LaMa fill of a session. Cheap to clone; every clone is the same fill.
@@ -94,6 +98,7 @@ impl LamaFill {
                 message: Mutex::new(None),
                 download: Mutex::new(Download::Idle),
                 watcher: AtomicBool::new(false),
+                term: Mutex::new((None, 0)),
             }),
         }
     }
@@ -101,6 +106,7 @@ impl LamaFill {
     /// Look for the model in `dir` (`None`: nowhere).
     pub fn set_dir(&self, dir: Option<PathBuf>) {
         *self.inner.dir.lock().unwrap_or_else(PoisonError::into_inner) = dir;
+        self.inner.term.lock().unwrap_or_else(PoisonError::into_inner).0 = None;
         *self.inner.model.lock().unwrap_or_else(PoisonError::into_inner) = None;
     }
 
@@ -117,6 +123,22 @@ impl LamaFill {
     /// Whether the model file is in place (it is checked when read).
     pub fn installed(&self) -> bool {
         self.model_path().is_some_and(|p| std::fs::metadata(p).is_ok_and(|m| m.is_file() && m.len() > 0))
+    }
+
+    /// What a search that uses LaMa (Wrinkles' face search, `fork/retouch-wrinkles.md`) adds to its key: 0 while the model
+    /// is not there, else a number made of its file's size and time, so installing it (or replacing it) searches the photos
+    /// again. The file is looked at every [`TERM_EVERY`] at most (keys are made on every render).
+    pub fn term(&self) -> u64 {
+        let mut t = self.inner.term.lock().unwrap_or_else(PoisonError::into_inner);
+        if t.0.is_none_or(|at| at.elapsed() >= TERM_EVERY) {
+            let meta = self.model_path().and_then(|p| std::fs::metadata(p).ok()).filter(|m| m.is_file() && m.len() > 0);
+            let stamp = meta.map_or(0, |m| {
+                let secs = m.modified().ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs());
+                (m.len() ^ secs.rotate_left(23)) | 1
+            });
+            *t = (Some(Instant::now()), stamp);
+        }
+        t.1
     }
 
     /// What a render of a photo with LaMa spots adds to its cache key: 0 for every other photo; else it says whether

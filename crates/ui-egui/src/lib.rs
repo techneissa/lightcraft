@@ -32,6 +32,8 @@ pub mod editor_handoff;
 pub mod export_reveal;
 pub mod export_task;
 mod find_similar;
+// fork: Assisted Culling on worker threads, with its eyes (`fork/ai-culling.md`)
+mod assisted_culling;
 mod focus_scan;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod fork_update;

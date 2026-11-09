@@ -151,7 +151,6 @@
   "Running on the processor: {}.": "მუშაობს პროცესორზე: {}.",
   "Running on {}.": "მუშაობს: {}.",
   "Saved export preset “{}”": "ექსპორტის პრესეტი „{}“ შენახულია",
-  "Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).": "აფასებს ფოკუსსა და ექსპოზიციას ({scope}) და პოულობს ერთმანეთისგან რამდენიმე წამში გადაღებულ მსგავს კადრებს (სერიებს).",
   "Show {hidden} hidden location{}": "დამალული მდებარეობების ჩვენება: {hidden}{:.0}",
   "Showing {n} of {}": "ნაჩვენებია {n} / {}",
   "Shows the model's terms, then downloads {} from {host}, installs it and starts using it. Nothing else is sent.": "აჩვენებს მოდელის პირობებს, შემდეგ ჩამოტვირთავს {}-ს {host}-დან, დააყენებს და დაიწყებს მის გამოყენებას. სხვა არაფერი იგზავნება.",
@@ -348,5 +347,9 @@
   "View › Detail View ({keys}).": "ხედი › დეტალური ხედი ({keys}).",
   "File › Export… · File › Print… ({keys}).": "ფაილი › ექსპორტი… · ფაილი › დაბეჭდვა… ({keys}).",
   "{n} folder{} could not be read": "საქაღალდეები, რომლებიც ვერ წაიკითხა: {n}{:.0}",
-  "{n} file{} skipped (not a supported photo type)": "გამოტოვებული ფაილები (მხარდაუჭერელი ფოტოს ტიპია): {n}{:.0}"
+  "{n} file{} skipped (not a supported photo type)": "გამოტოვებული ფაილები (მხარდაუჭერელი ფოტოს ტიპია): {n}{:.0}",
+  "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).": "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).",
+  "Assisted Culling scored {n} photos": "Assisted Culling scored {n} photos",
+  " · {groups} bursts": " · {groups} bursts",
+  "eyes not checked: {why}": "eyes not checked: {why}"
 }

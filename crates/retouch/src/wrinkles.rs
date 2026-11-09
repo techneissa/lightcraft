@@ -1,4 +1,4 @@
-//! Wrinkles: Forehead, Crow's Feet, Smile Lines and Neck. Softens the lines in each area and keeps the skin's pores
+//! Wrinkles: Forehead, Crow's Feet, Cheeks and Smile Lines and Neck. Takes the lines in each area away and keeps the skin's pores
 //! and the face's shape.
 //!
 //! Each area ([`Area`]) is a soft shape built from the face mesh ([`areas`]), cut by a skin mask (Facial Skin, or
@@ -44,7 +44,7 @@ use serde::{Deserialize, Serialize};
 
 pub use areas::Area;
 pub use fix::Fix;
-pub use search::{Fill, Filler, NoFill, WORK, with_fixes};
+pub use search::{Crop, Fill, Filler, LAMA_FACES, NoFill, Picture, Source, WORK, with_fixes, with_fixes_from};
 
 use crate::{Control, FaceCtx, Feature, Part, Scene, Scope, Spec, Stage};
 
@@ -129,7 +129,11 @@ impl Feature for Wrinkles {
     const CONTROLS: &'static [Control<Self>] = &[
         Control { spec: Spec::amount("retouch.wrinkles.forehead", "Forehead"), get: |s| s.forehead, set: |s, v| s.forehead = v },
         Control { spec: Spec::amount("retouch.wrinkles.crowsFeet", "Crow's Feet"), get: |s| s.crows_feet, set: |s, v| s.crows_feet = v },
-        Control { spec: Spec::amount("retouch.wrinkles.smileLines", "Smile Lines"), get: |s| s.smile_lines, set: |s, v| s.smile_lines = v },
+        Control {
+            spec: Spec::amount("retouch.wrinkles.smileLines", "Cheeks and Smile Lines"),
+            get: |s| s.smile_lines,
+            set: |s, v| s.smile_lines = v,
+        },
         Control { spec: Spec::amount("retouch.wrinkles.neck", "Neck"), get: |s| s.neck, set: |s, v| s.neck = v },
     ];
     const PARTS: &'static [Part] = &[Part::FacialSkin, Part::BodySkin];
@@ -146,10 +150,6 @@ fn union(a: [usize; 4], b: [usize; 4]) -> [usize; 4] {
 }
 
 impl Wrinkles {
-    /// How far a window must reach past what it shows for the stored change ([`Fix`]) to give the whole render's pixels:
-    /// the area weight's lattice and soft edges only; the change itself is read at the pixel (a fraction of the face).
-    pub const REACH_OF_FIX: f64 = 0.05;
-
     /// [`Feature::apply`] with `max_box` the most pixels of the face's areas' box worked on at full size
     /// ([`MAX_BOX`] in the step): a bigger box is worked on reduced by a whole factor, as a draft of it is, and the
     /// change is carried back to the full-size skin as a gain, so a huge face is retouched as its draft shows,

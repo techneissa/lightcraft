@@ -147,7 +147,8 @@ pub(crate) fn show(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) {
     title_row(app, ui, &d);
     let mut st = app.session.retouch_faces_of(photo);
     // the faces are found once per photo, when the tab is first open on it (without a face model: why not)
-    if st.found.is_none() && !st.busy && st.error.is_none() {
+    // (and again when its Wrinkles search was cancelled, once that is old enough: `Found::retry`)
+    if (st.found.as_ref().is_none_or(|f| f.retry.is_some())) && !st.busy && st.error.is_none() {
         st.error = app.session.retouch_search(photo, false);
     }
     if st.busy {

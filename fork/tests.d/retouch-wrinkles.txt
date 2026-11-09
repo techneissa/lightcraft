@@ -7,3 +7,4 @@ cargo test -p lightcraft-ui-egui --lib -- portrait
 cargo test -p lightcraft-retouch --test wrinkles_v2
 cargo test -p lightcraft-retouch --lib -- wrinkles
 cargo test -p lightcraft-engine --lib -- retouch_input::wrinkles
+cargo test -p lightcraft-engine --lib -- retouch_input::parts

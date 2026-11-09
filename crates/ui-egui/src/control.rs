@@ -356,6 +356,12 @@ pub fn handle(app: &mut LightcraftApp, ctx: &egui::Context, req: &ControlRequest
                 ctx.request_repaint();
                 return started;
             }
+            if id == "photo.analyze" {
+                // fork (`fork/ai-culling.md`): on worker threads, answered when it is done
+                let started = crate::assisted_culling::ask(app, &params, req.reply.clone());
+                ctx.request_repaint();
+                return started;
+            }
             app.from_control = true;
             let r = app.run(id, params);
             app.from_control = false;

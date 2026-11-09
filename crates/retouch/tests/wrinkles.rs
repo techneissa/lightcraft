@@ -242,11 +242,11 @@ fn changed_rows(r: &Retouch) -> Option<(f64, f64)> {
 #[test]
 fn each_slider_works_on_its_own_area() {
     let (top, bottom) = changed_rows(&wrinkles(100.0, 0.0, 0.0, 0.0)).unwrap_or((9.0, 9.0));
-    assert!(top > -0.25 && bottom < 0.45, "Forehead: above the brows ({top:.2}…{bottom:.2})");
+    assert!(top > -0.25 && bottom < 0.5, "Forehead: above the brows and between them ({top:.2}…{bottom:.2})");
     let (top, bottom) = changed_rows(&wrinkles(0.0, 100.0, 0.0, 0.0)).unwrap_or((9.0, 9.0));
-    assert!(top > 0.3 && bottom < 0.62, "Crow's Feet: beside the eyes ({top:.2}…{bottom:.2})");
+    assert!(top > 0.3 && bottom < 0.62, "Crow's Feet: beside and under the eyes ({top:.2}…{bottom:.2})");
     let (top, bottom) = changed_rows(&wrinkles(0.0, 0.0, 100.0, 0.0)).unwrap_or((9.0, 9.0));
-    assert!(top > 0.5 && bottom < 0.95, "Smile Lines: nose to mouth ({top:.2}…{bottom:.2})");
+    assert!(top > 0.4 && bottom < 1.06, "Cheeks and Smile Lines: under the eyes to the chin ({top:.2}…{bottom:.2})");
     let (top, bottom) = changed_rows(&wrinkles(0.0, 0.0, 0.0, 100.0)).unwrap_or((9.0, 9.0));
     assert!(top > 0.95 && bottom < 1.7, "Neck: under the jaw, on Body Skin ({top:.2}…{bottom:.2})");
 }

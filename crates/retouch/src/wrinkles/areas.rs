@@ -2,9 +2,11 @@
 //! [`crate::Face::landmarks`]), with sizes as fractions of the face's size.
 //!
 //! - **Forehead**: from just above the brows up past the top of the mesh (the hairline is cut by the Facial Skin
-//!   mask).
-//! - **Crow's Feet**: a fan beyond each eye's outer corner, starting a little past the corner so the lash line stays.
-//! - **Smile Lines**: a band from each side of the nose down past the mouth corner, outside the mouth.
+//!   mask), and between the brows (the frown lines down to the bridge of the nose).
+//! - **Crow's Feet**: a fan beyond each eye's outer corner, starting a little past the corner so the lash line stays,
+//!   and a thin crescent under each eye (the lower lid's lines).
+//! - **Smile Lines** (the control keeps its id; the panel says "Cheeks and Smile Lines"): the band from each side of
+//!   the nose down past the mouth corner, each cheek from under the eye to the jaw, and the chin below the lower lip.
 //! - **Neck**: under the jaw line, down to about half a face below it (cut by the Body Skin mask).
 //!
 //! A face without the mesh (YuNet's five points only) has no areas, and is left alone.
@@ -32,6 +34,13 @@ const BROWS: [usize; 10] = [70, 63, 105, 66, 107, 336, 296, 334, 293, 300];
 const OUTLINE_TOP: [usize; 11] = [21, 54, 103, 67, 109, 10, 338, 297, 332, 284, 251];
 /// The jaw line, right to left.
 const JAW: [usize; 15] = [58, 172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397, 288];
+/// The face's outline from beside the eye down to the jaw near the chin, per side (the subject's right, then left):
+/// the cheek's outer edge, running from the jaw up.
+const CHEEK_OUTLINE: [[usize; 9]; 2] = [[149, 150, 136, 172, 58, 132, 93, 234, 127], [378, 379, 365, 397, 288, 361, 323, 454, 356]];
+/// The chin's lower edge, from the subject's right to the left.
+const CHIN_EDGE: [usize; 5] = [176, 148, 152, 377, 400];
+const INNER_BROWS: [usize; 2] = [107, 336];
+const INNER_EYES: [usize; 2] = [EYE_INNER_R, EYE_INNER_L];
 
 /// Every mesh point the areas read (the tests place these).
 pub const USED: [usize; 46] = [
@@ -103,6 +112,24 @@ const FOLD_NOSE_OUT: f64 = 0.03;
 const FOLD_MOUTH_OUT: f64 = 0.045;
 const FOLD_MOUTH_DOWN: f64 = 0.05;
 const FOLD_FEATHER: f64 = 0.025;
+/// Between the brows: a capsule from above the brows' inner ends down to the bridge of the nose (radius, feather).
+const GLABELLA_UP: f64 = 0.03;
+const GLABELLA_DOWN: f64 = 0.015;
+const GLABELLA_RADIUS: f64 = 0.045;
+const GLABELLA_FEATHER: f64 = 0.02;
+/// Under the eye: a crescent centred this far below the line between the eye's corners, a little longer than the
+/// eye, this far across, with this soft edge.
+const LID_DOWN: f64 = 0.05;
+const LID_LONG: f64 = 0.02;
+const LID_ACROSS: f64 = 0.03;
+const LID_FEATHER: f64 = 0.02;
+/// The cheeks and the chin: how far under the eyes the cheek starts, how far outside the nose wing and the mouth
+/// corner its inner edge lies, how far below the mouth corner it reaches, and how far below the corners the chin starts.
+const CHEEK_EYE_DOWN: (f64, f64) = (0.07, 0.09);
+const CHEEK_OUT: f64 = 0.02;
+const CHEEK_MOUTH_DOWN: f64 = 0.12;
+const CHIN_DOWN: f64 = 0.06;
+const CHEEK_FEATHER: f64 = 0.025;
 /// Neck: how far below the jaw it reaches, and its soft edge.
 const NECK_DOWN: f64 = 0.55;
 const NECK_GAP: f64 = 0.01;
@@ -326,35 +353,94 @@ fn build(face: &FaceCtx<'_>, area: Area) -> Option<Vec<Region>> {
             let top: Option<Vec<P>> = OUTLINE_TOP.iter().rev().map(|&i| pt(i).map(|p| shift(p, up, FOREHEAD_UP))).collect();
             let mut poly = brows?;
             poly.extend(top?);
-            vec![Region { shape: Shape::Polygon(poly), feather: FOREHEAD_FEATHER * s, ramp: None }]
+            let mut regions = vec![Region { shape: Shape::Polygon(poly), feather: FOREHEAD_FEATHER * s, ramp: None }];
+            // between the brows: down from above their inner ends to the bridge of the nose
+            let mean = |ids: &[usize]| -> Option<P> {
+                let ps: Option<Vec<P>> = ids.iter().map(|&i| pt(i)).collect();
+                let ps = ps?;
+                let n = ps.len().max(1) as f64;
+                Some((ps.iter().map(|p| p.0).sum::<f64>() / n, ps.iter().map(|p| p.1).sum::<f64>() / n))
+            };
+            if let (Some(brow), Some(eyes)) = (mean(&INNER_BROWS), mean(&INNER_EYES)) {
+                regions.push(Region {
+                    shape: Shape::Capsule { p0: shift(brow, up, GLABELLA_UP), p1: shift(eyes, up, GLABELLA_DOWN), r: GLABELLA_RADIUS * s },
+                    feather: GLABELLA_FEATHER * s,
+                    ramp: None,
+                });
+            }
+            regions
         }
-        Area::CrowsFeet => [(EYE_OUTER_R, EYE_INNER_R), (EYE_OUTER_L, EYE_INNER_L)]
-            .iter()
-            .filter_map(|&(outer, inner)| {
-                let c = pt(outer)?;
-                let out = unit(sub(c, pt(inner)?))?;
-                Some(Region {
-                    shape: Shape::Ellipse { c: shift(c, out, FAN_OUT), axis: out, a: FAN_ALONG * s, b: FAN_ACROSS * s },
-                    feather: FAN_FEATHER * s,
-                    ramp: Some((c, out, FAN_START * s, FAN_FULL * s)),
+        Area::CrowsFeet => {
+            let mut regions: Vec<Region> = [(EYE_OUTER_R, EYE_INNER_R), (EYE_OUTER_L, EYE_INNER_L)]
+                .iter()
+                .filter_map(|&(outer, inner)| {
+                    let c = pt(outer)?;
+                    let out = unit(sub(c, pt(inner)?))?;
+                    Some(Region {
+                        shape: Shape::Ellipse { c: shift(c, out, FAN_OUT), axis: out, a: FAN_ALONG * s, b: FAN_ACROSS * s },
+                        feather: FAN_FEATHER * s,
+                        ramp: Some((c, out, FAN_START * s, FAN_FULL * s)),
+                    })
                 })
-            })
-            .collect(),
+                .collect();
+            // under each eye: a crescent below the lash line, along the eye
+            for (outer, inner) in [(EYE_OUTER_R, EYE_INNER_R), (EYE_OUTER_L, EYE_INNER_L)] {
+                let (Some(o), Some(i)) = (pt(outer), pt(inner)) else { continue };
+                let (Some(axis), mid) = (unit(sub(o, i)), ((o.0 + i.0) / 2.0, (o.1 + i.1) / 2.0)) else { continue };
+                let half = ((o.0 - i.0).powi(2) + (o.1 - i.1).powi(2)).sqrt() / 2.0 + LID_LONG * s;
+                regions.push(Region {
+                    shape: Shape::Ellipse { c: shift(mid, down, LID_DOWN), axis, a: half, b: LID_ACROSS * s },
+                    feather: LID_FEATHER * s,
+                    ramp: None,
+                });
+            }
+            regions
+        }
         Area::SmileLines => {
             let centre = pt(1).or(pt(4))?;
-            [(NOSE_WING_R, MOUTH_R), (NOSE_WING_L, MOUTH_L)]
+            // "out": away from the face's middle line, across the face's "down"
+            let out_of = |w: P| {
+                let side = sub(w, centre);
+                let across = (down.1, -down.0);
+                if side.0 * across.0 + side.1 * across.1 >= 0.0 { across } else { (-across.0, -across.1) }
+            };
+            let mut regions: Vec<Region> = [(NOSE_WING_R, MOUTH_R), (NOSE_WING_L, MOUTH_L)]
                 .iter()
                 .filter_map(|&(wing, corner)| {
                     let (w, c) = (pt(wing)?, pt(corner)?);
-                    // "out": away from the face's middle line, across the face's "down"
-                    let side = sub(w, centre);
-                    let across = (down.1, -down.0);
-                    let out = if side.0 * across.0 + side.1 * across.1 >= 0.0 { across } else { (-across.0, -across.1) };
+                    let out = out_of(w);
                     let p0 = shift(w, out, FOLD_NOSE_OUT);
                     let p1 = shift(shift(c, out, FOLD_MOUTH_OUT), down, FOLD_MOUTH_DOWN);
                     Some(Region { shape: Shape::Capsule { p0, p1, r: FOLD_RADIUS * s }, feather: FOLD_FEATHER * s, ramp: None })
                 })
-                .collect()
+                .collect();
+            // each cheek: from under the eye along the nose and the mouth to below its corner, out to the outline
+            for (k, (eye_outer, eye_inner, wing, corner)) in
+                [(EYE_OUTER_R, EYE_INNER_R, NOSE_WING_R, MOUTH_R), (EYE_OUTER_L, EYE_INNER_L, NOSE_WING_L, MOUTH_L)].into_iter().enumerate()
+            {
+                let (Some(eo), Some(ei), Some(w), Some(c)) = (pt(eye_outer), pt(eye_inner), pt(wing), pt(corner)) else { continue };
+                let out = out_of(w);
+                let outline: Option<Vec<P>> = CHEEK_OUTLINE[k].iter().map(|&i| pt(i)).collect();
+                let Some(outline) = outline else { continue };
+                let mut poly = vec![
+                    shift(eo, down, CHEEK_EYE_DOWN.0),
+                    shift(ei, down, CHEEK_EYE_DOWN.1),
+                    shift(w, out, CHEEK_OUT),
+                    shift(c, out, CHEEK_OUT),
+                    shift(shift(c, out, CHEEK_OUT), down, CHEEK_MOUTH_DOWN),
+                ];
+                poly.extend(outline);
+                regions.push(Region { shape: Shape::Polygon(poly), feather: CHEEK_FEATHER * s, ramp: None });
+            }
+            // the chin: below the mouth's corners, down to the jaw
+            let (mr, ml) = (pt(MOUTH_R)?, pt(MOUTH_L)?);
+            let edge: Option<Vec<P>> = CHIN_EDGE.iter().map(|&i| pt(i)).collect();
+            if let Some(edge) = edge {
+                let mut poly = vec![shift(mr, down, CHIN_DOWN), shift(ml, down, CHIN_DOWN)];
+                poly.extend(edge.into_iter().rev());
+                regions.push(Region { shape: Shape::Polygon(poly), feather: CHEEK_FEATHER * s, ramp: None });
+            }
+            regions
         }
         Area::Neck => {
             let jaw: Option<Vec<P>> = JAW.iter().map(|&i| pt(i).map(|p| shift(p, down, NECK_GAP))).collect();

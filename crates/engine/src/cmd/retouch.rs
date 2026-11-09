@@ -10,6 +10,7 @@ use serde_json::{Value, json};
 use super::{CommandSpec, bad, cmd, has_active, index_req, photo_id, str_param};
 use crate::{Result, Session};
 use lightcraft_catalog::PhotoId;
+use lightcraft_develop::retouch::input::{Searched, Strands};
 use lightcraft_develop::retouch::{FEATURES, Face, KeyMap, Refine, RefineMode, RefineStroke};
 use lightcraft_pipeline::retouch_step::FrameKeyMap;
 
@@ -41,6 +42,18 @@ fn found_faces(s: &Session, id: PhotoId, c: &str) -> Result<std::sync::Arc<light
     }
 }
 
+/// How a face's Stray Hair search went, for `retouch.faces`: `status` is `searched` (`count` strands found, in `ms`
+/// milliseconds, on a face `facePx` pixels tall in the searched picture), `tooSmall`, `noParts` (no Hair or Facial
+/// Skin mask) or `notSearched` (the face came without the people parse, so there is nothing to search with).
+fn strands_json(s: Option<&Strands>) -> Value {
+    let Some(s) = s else { return json!({"status": "notSearched"}) };
+    match s.searched {
+        Searched::Yes => json!({"status": "searched", "count": s.count, "ms": s.ms, "cropMs": s.crop_ms, "facePx": s.face_px}),
+        Searched::TooSmall => json!({"status": "tooSmall", "facePx": s.face_px}),
+        Searched::NoParts => json!({"status": "noParts", "facePx": s.face_px}),
+    }
+}
+
 fn faces_json(s: &Session, id: PhotoId) -> Value {
     let st = s.retouch_faces_of(id);
     let d = s.develop_of(id).unwrap_or_default();
@@ -62,6 +75,7 @@ fn faces_json(s: &Session, id: PhotoId) -> Value {
                 "masks": f.masks.iter().map(|(p, _)| *p).collect::<Vec<_>>(),
                 // the index of its own settings in `retouchFace.<i>.…`, when it has them
                 "own": own.get(i).copied().flatten(),
+                "strands": strands_json(f.strands.as_ref()),
             })
         })
         .collect();
@@ -174,7 +188,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "List Portrait Faces",
             [],
             None,
-            "{id?} → {id, found, busy, error?, faces: [{index, bounds: [x0, y0, x1, y1], landmarks: [[x, y]…], score, person?, masks: [part…], own?}]} — the faces portrait retouching found on the photo (fractions of the photo before its crop); `own` is the index of the face's own settings (`retouchFace.<own>.…`). Starts nothing: see retouch.detect",
+            "{id?} → {id, found, busy, error?, faces: [{index, bounds: [x0, y0, x1, y1], landmarks: [[x, y]…], score, person?, masks: [part…], own?, strands: {status: searched|tooSmall|noParts|notSearched, count?, ms?, cropMs?, facePx?}}]} — the faces portrait retouching found on the photo (fractions of the photo before its crop); `own` is the index of the face's own settings (`retouchFace.<own>.…`); `strands` is how the Stray Hair search went for it (`count` strands found, in `ms` milliseconds after `cropMs` to cut the head's full-size crop, on a face `facePx` pixels tall; `notSearched`: the faces came without the people parse). Starts nothing: see retouch.detect",
             has_active,
             |s, p| {
                 let id = target(s, p, "retouch.faces")?;

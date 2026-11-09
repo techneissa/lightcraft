@@ -184,7 +184,6 @@
   "Removed {what} from {name}": "{what}を{name}から除去しました",
   "Renames “{from}” on {n} photo{} (keywords below it too). Use | for levels, e.g. Travel|Italy. An existing name merges the two.": "{n}枚の写真の「{from}」の名前を変更します{:.0}（下位のキーワードも含む）。階層は | で区切ります（例：旅行|イタリア）。既存の名前にすると2つを統合します",
   "Replace {} with:": "{}を次に置換：",
-  "Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).": "{scope}のピントと露出を評価し、数秒以内に撮影した似た写真（連写）を検出します",
   "Tagged {n} photo{} from the tracklog": "GPS軌跡から{n}枚の写真に位置情報を付けました{:.0}",
   "The SAM 3 download failed: {e}": "SAM 3のダウンロードに失敗しました：{e}",
   "Unknown tag{s} {} stay{} as typed (see Tags)": "不明なタグ{s:.0} {} は入力したまま残ります{:.0}（「タグ」を参照）",
@@ -346,5 +345,9 @@
   "In use: {url} (up to zoom {zoom})": "使用中: {url}(ズーム {zoom} まで)",
   "Bring photos in with File › Import Photos… ({keys}).": "ファイル › 写真を読み込む… ({keys}) で写真を読み込みます。",
   "View › Detail View ({keys}).": "表示 › 詳細表示 ({keys})。",
-  "File › Export… · File › Print… ({keys}).": "ファイル › 書き出す… · ファイル › 印刷… ({keys})。"
+  "File › Export… · File › Print… ({keys}).": "ファイル › 書き出す… · ファイル › 印刷… ({keys})。",
+  "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).": "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).",
+  "Assisted Culling scored {n} photos": "Assisted Culling scored {n} photos",
+  " · {groups} bursts": " · {groups} bursts",
+  "eyes not checked: {why}": "eyes not checked: {why}"
 }

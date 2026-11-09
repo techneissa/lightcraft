@@ -19,7 +19,10 @@ use lightcraft_parsing::{FaceHint, Landmark, Parsing, Person, RgbImage};
 use lightcraft_raster::{Image, Plane, Rgb32f, Rgba8};
 
 use super::{Found, arrange, thumb};
+
+mod crop;
 use crate::people_parsing::{Choice, Outcome, PeopleParsing};
+pub(crate) use crop::Cropper;
 
 /// Most samples in a part mask merged from several planes (one plane is kept as the parser made it).
 const MAX_MERGED: usize = 1 << 20;
@@ -31,6 +34,12 @@ const MAX_MERGED_SIDE: f32 = 1536.0;
 const MESH_FIVE: [usize; 5] = [468, 473, 1, 61, 291];
 /// A parsed face is the YuNet face it was parsed from when their boxes overlap this much.
 const SAME_FACE_IOU: f32 = 0.5;
+
+/// Whether Stray Hair's strands are searched on full-size crops of the original (`crop.rs`) instead of the parse's
+/// picture. Off: on 13 private test faces the crops found 15 to 70 times as many "strands" on noisy small faces
+/// (sensor grain, background lines), so they wait for a noise-aware or model-based detector (`fork/retouch-hair.md`).
+/// The code stays and its tests turn it on by passing crops to `found_with`.
+pub(crate) const FULL_SIZE_CROPS: bool = false;
 
 /// A face search from the parse: set up on the calling thread, run on a worker.
 pub(crate) struct PartsFinder {
@@ -44,6 +53,8 @@ pub(crate) struct PartsFinder {
     pub(super) choice: Choice,
     pub(super) orient: Orientation,
     pub(super) regions: Vec<(NormRect, String)>,
+    /// Cuts the heads' full-size crops the strands are searched on (`None`: on the parse's picture).
+    pub(super) cropper: Option<Box<Cropper>>,
 }
 
 impl PartsFinder {
@@ -51,55 +62,73 @@ impl PartsFinder {
     /// come from them); then take the parse the parse-ahead index knows for the photo (made ahead of time or by
     /// `parsing.run`, so no model runs), else the cached one, else wait for its run, and file it in the index.
     pub(super) fn find(self) -> Result<Found, String> {
-        let (img, hints) = self.prepare.run()?;
-        if let Some(parsing) = self.known.as_ref().and_then(|k| k.read(&self.parsing)) {
-            return Ok(found_with(&parsing, &hints, &img, self.orient, &self.regions, self.wrinkles.as_ref()));
+        let PartsFinder { wrinkles, prepare, known, parsing: store, choice, orient, regions, cropper } = self;
+        let cut = |r| cropper.as_ref()?.crop(r);
+        let crops = || cropper.as_ref().map(|c| Crops { size: c.photo_size(), cut: &cut });
+        let (img, hints) = prepare.run()?;
+        if let Some(parsing) = known.as_ref().and_then(|k| k.read(&store)) {
+            return Ok(found_with(&parsing, &hints, &img, orient, &regions, crops(), wrinkles.as_ref()));
         }
-        let (filed, out) = self.parsing.parse_as(self.choice, img.clone(), hints.clone(), true);
+        let (filed, out) = store.parse_as(choice, img.clone(), hints.clone(), true);
         let parsing = match out {
             Outcome::Ready { parsing, .. } => parsing,
             Outcome::Running => return Err("the people parse is still running".into()),
             Outcome::Failed(e) => return Err(e),
         };
-        if let Some(k) = &self.known {
+        if let Some(k) = &known {
             k.file(filed);
         }
-        Ok(found_with(&parsing, &hints, &img, self.orient, &self.regions, self.wrinkles.as_ref()))
+        Ok(found_with(&parsing, &hints, &img, orient, &regions, crops(), wrinkles.as_ref()))
     }
+}
+
+/// Where Stray Hair's strands are searched: crops of the photo's original (`size`, its pixels, turned like the masks),
+/// cut by `cut`.
+pub(crate) struct Crops<'a> {
+    pub size: (usize, usize),
+    pub cut: &'a dyn Fn(lightcraft_develop::retouch::hair::PhotoRect) -> Option<Rgb32f>,
 }
 
 /// The faces of `parsing` (made from `img` with the faces `hints`) for the retouch step, on the photo turned by
 /// `orient`, named after `regions`, with a picker thumbnail each.
 #[cfg(test)]
 pub(crate) fn found(parsing: &Parsing, hints: &[FaceHint], img: &RgbImage, orient: Orientation, regions: &[(NormRect, String)]) -> Found {
-    found_with(parsing, hints, img, orient, regions, None)
+    found_with(parsing, hints, img, orient, regions, None, None)
 }
 
-/// [`found`] with the Wrinkles search `wrinkles` run on each face too (`None`: not run).
+/// [`found`] with the strands searched on `crops` of the original instead of on `img`, and the Wrinkles search
+/// `wrinkles` run on each face too (`None`: not run).
 pub(crate) fn found_with(
     parsing: &Parsing,
     hints: &[FaceHint],
     img: &RgbImage,
     orient: Orientation,
     regions: &[(NormRect, String)],
+    crops: Option<Crops<'_>>,
     wrinkles: Option<&super::wrinkles::WrinkleSearch>,
 ) -> Found {
-    let mut faces = with_spots_and_strands(faces_of(parsing, hints, orient), img, orient, wrinkles);
+    let (mut faces, cancelled) = with_spots_and_strands(faces_of(parsing, hints, orient), img, orient, crops, wrinkles);
     arrange(&mut faces, regions);
     let shown = oriented(&Rgba8::from_fn(img.width, img.height, |x, y| rgba(img, x, y)), orient);
     let thumbs = faces.iter().map(|f| thumb(&shown, &f.bounds)).collect();
-    Found { input: Arc::new(Input::new_on_photo(faces)), thumbs: Arc::new(thumbs) }
+    Found { retry: cancelled.then(std::time::Instant::now), input: Arc::new(Input::new_on_photo(faces)), thumbs: Arc::new(thumbs) }
 }
 
 /// `faces` with the spots on their skin (Blemishes) and the stray strands around and across them (Stray Hair), found
 /// once here on the parse's picture, in linear light and turned like the masks, and kept with them: a render, and the
 /// Amount sliders, only repair them. Wrinkles' change is found here too ([`super::wrinkles`]) when `wrinkles` is
-/// given. (Run on the face search's worker, under its activity row.)
-fn with_spots_and_strands(faces: Vec<Face>, img: &RgbImage, orient: Orientation, wrinkles: Option<&super::wrinkles::WrinkleSearch>) -> Vec<Face> {
+/// given; the flag says its search was cancelled. (Run on the face search's worker, under its activity row.)
+fn with_spots_and_strands(
+    faces: Vec<Face>,
+    img: &RgbImage,
+    orient: Orientation,
+    crops: Option<Crops<'_>>,
+    wrinkles: Option<&super::wrinkles::WrinkleSearch>,
+) -> (Vec<Face>, bool) {
     let skin = faces.iter().any(|f| f.mask(Part::FacialSkin).is_some());
     let hair = faces.iter().any(|f| f.mask(Part::Hair).is_some() || f.mask(Part::FacialSkin).is_some());
     if !skin && !hair {
-        return faces;
+        return (faces, false);
     }
     let linear = oriented(
         &Rgb32f::from_fn(img.width, img.height, |x, y| {
@@ -109,11 +138,35 @@ fn with_spots_and_strands(faces: Vec<Face>, img: &RgbImage, orient: Orientation,
         orient,
     );
     let faces = if skin { lightcraft_develop::retouch::blemish::with_spots(&linear, faces) } else { faces };
-    let faces = lightcraft_develop::retouch::hair::with_strands(&linear, faces);
+    let faces = with_strands(&linear, faces, crops);
     match wrinkles {
         Some(search) if skin => search.run(faces, &linear),
-        _ => faces,
+        _ => (faces, false),
     }
+}
+
+/// `faces` with their stray strands found, on `crops` of the original when there are any, else on the parse's picture.
+fn with_strands(linear: &Rgb32f, faces: Vec<Face>, crops: Option<Crops<'_>>) -> Vec<Face> {
+    let Some(crops) = crops.filter(|c| same_shape(c.size, (linear.width, linear.height))) else {
+        return lightcraft_develop::retouch::hair::with_strands(linear, faces);
+    };
+    // a head the original can't be cut for is searched on the parse's picture, stretched to the crop's size
+    let mut cut = |r: lightcraft_develop::retouch::hair::PhotoRect| {
+        (crops.cut)(r).or_else(|| {
+            log::warn!("portrait: no full-size crop for stray hair, searching the parse's picture");
+            let (fx, fy) = (linear.width as f32 / crops.size.0.max(1) as f32, linear.height as f32 / crops.size.1.max(1) as f32);
+            Some(Rgb32f::from_fn(r[2].saturating_sub(r[0]), r[3].saturating_sub(r[1]), |x, y| {
+                linear.sample_bilinear((r[0] + x) as f32 * fx, (r[1] + y) as f32 * fy)
+            }))
+        })
+    };
+    lightcraft_develop::retouch::hair::with_strands_on_crops(crops.size, faces, &mut cut)
+}
+
+/// Whether two picture sizes are the same shape (within a pixel of rounding at the smaller one's size).
+fn same_shape(a: (usize, usize), b: (usize, usize)) -> bool {
+    let (ar, br) = (a.0 as f64 / a.1.max(1) as f64, b.0 as f64 / b.1.max(1) as f64);
+    a.0 > 0 && a.1 > 0 && b.0 > 0 && b.1 > 0 && (ar / br - 1.0).abs() < 0.01
 }
 
 fn rgba(img: &RgbImage, x: usize, y: usize) -> [u8; 4] {

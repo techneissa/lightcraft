@@ -5,7 +5,8 @@
 mod common;
 
 use lightcraft_raster::{Plane, Rgb32f};
-use lightcraft_retouch::hair::{Hair, MIN_FACE_PX, with_strands};
+use lightcraft_retouch::hair::{Hair, MIN_FACE_PX, with_strands, with_strands_on_crops};
+use lightcraft_retouch::input::Searched;
 use lightcraft_retouch::{Face, Feature, Input, NormRect, Part, PartMask, Retouch, Stage, View, WholePhoto};
 
 #[test]
@@ -548,4 +549,50 @@ fn the_feature_reads_its_parts_and_reach() {
     }
     // (the search's band past the hair and its reads past that; the zoom test checks it is enough)
     const { assert!(Hair::REACH > 0.3 && Hair::REACH < 0.6) };
+}
+
+/// The strands searched on a crop of the head cut from the full-size photo are in the photo's frame, found as on the
+/// whole picture, and counted: the readout's numbers.
+#[test]
+fn a_head_crop_cut_from_the_full_size_photo_finds_the_strands_and_counts_them() {
+    let (w, h) = (800, 800);
+    let (src, clean) = (picture(w, h, true, false), picture(w, h, false, false));
+    let mut asked = Vec::new();
+    let mut cut = |r: [usize; 4]| {
+        asked.push(r);
+        Some(Rgb32f::from_fn(r[2] - r[0], r[3] - r[1], |x, y| src.get(r[0] + x, r[1] + y)))
+    };
+    let faces = with_strands_on_crops((w, h), vec![face(&every_part())], &mut cut);
+    let strands = faces[0].strands.as_ref().expect("searched");
+    assert_eq!(strands.searched, Searched::Yes);
+    assert!(strands.count >= 2, "the forehead strand and the flyaway: {}", strands.count);
+    assert_eq!(strands.face_px, 320);
+    assert_eq!(asked.len(), 1, "one crop for the one face");
+    assert!(asked.iter().all(|r| r[0] < r[2] && r[1] < r[3] && r[2] <= w && r[3] <= h), "{asked:?}");
+    assert!(strands.area.x0 >= 0.0 && strands.area.x1 <= 1.0 && strands.area.y0 >= 0.0 && strands.area.y1 <= 1.0, "{:?}", strands.area);
+    let after = render(&src, 100.0, &Input::new(faces));
+    for (name, s) in [("forehead", FOREHEAD), ("flyaway", FLYAWAY)] {
+        let left = left_of(&after, &src, &clean, on(s));
+        assert!(left < 0.3, "{name}: {left:.2} of the strand is left");
+    }
+}
+
+/// Why a face was not searched is kept with it, for the readout; a crop that cannot be cut leaves the face with none.
+#[test]
+fn a_face_not_searched_says_why() {
+    let side = 800usize;
+    let src = picture(side, side, true, false);
+    let tiny = Face { masks: face(&every_part()).masks, ..Face::boxed(NormRect::new(0.4, 0.4, 0.4 + 60.0 / side as f64, 0.4 + 60.0 / side as f64)) };
+    let bare = Face::boxed(BOUNDS);
+    let mut cut = |r: [usize; 4]| Some(Rgb32f::from_fn(r[2] - r[0], r[3] - r[1], |x, y| src.get(r[0] + x, r[1] + y)));
+    let faces = with_strands_on_crops((side, side), vec![tiny.clone(), bare.clone(), face(&every_part())], &mut cut);
+    let got: Vec<(Searched, u32)> = faces.iter().map(|f| f.strands.as_ref().map(|s| (s.searched, s.face_px)).unwrap_or((Searched::Yes, 0))).collect();
+    assert_eq!(got, vec![(Searched::TooSmall, 60), (Searched::NoParts, 320), (Searched::Yes, 320)]);
+    // the same on the whole picture
+    let whole = with_strands(&src, vec![tiny, bare]);
+    let got: Vec<Searched> = whole.iter().filter_map(|f| f.strands.as_ref().map(|s| s.searched)).collect();
+    assert_eq!(got, vec![Searched::TooSmall, Searched::NoParts]);
+    // a crop that fails: nothing found, nothing wrong
+    let none = with_strands_on_crops((side, side), vec![face(&every_part())], &mut |_| None);
+    assert!(none[0].strands.as_ref().is_some_and(|s| s.is_empty() && s.count == 0));
 }

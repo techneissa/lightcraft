@@ -5,8 +5,8 @@ use std::sync::Arc;
 
 use lightcraft_raster::blur::gaussian;
 use lightcraft_raster::{Plane, Rgb32f};
-use lightcraft_retouch::wrinkles::{Fill, Filler, Fix, NoFill, areas, with_fixes};
-use lightcraft_retouch::{Face, Input, NormRect, Part, PartMask, Retouch, Stage, View, WholePhoto};
+use lightcraft_retouch::wrinkles::{Fill, Filler, Fix, LAMA_FACES, NoFill, Wrinkles, areas, with_fixes};
+use lightcraft_retouch::{Face, Feature, Input, NormRect, Part, PartMask, Retouch, Stage, View, WholePhoto};
 
 /// The face's box in the test pictures (x0, y0, width, height, as fractions of a 320 × 400 picture): 200 × 200 px.
 const FACE: [f64; 4] = [60.0 / 320.0, 40.0 / 400.0, 200.0 / 320.0, 200.0 / 400.0];
@@ -226,7 +226,7 @@ fn a_window_equals_the_whole_render_inside_it() {
     let face = searched(&img);
     let r = wrinkles(100.0, 80.0, 60.0, 40.0);
     let whole = retouched(&img, &r, vec![face.clone()]);
-    let reach = (lightcraft_retouch::wrinkles::Wrinkles::REACH_OF_FIX * 200.0).ceil() as usize + 4;
+    let reach = (Wrinkles::REACH * 200.0).ceil() as usize + 4;
     for (x, y, ww, wh) in [(160usize, 40usize, 100usize, 70usize), (60, 110, 70, 60), (120, 170, 50, 50), (100, 230, 120, 80)] {
         let (gx, gy) = (x.saturating_sub(reach), y.saturating_sub(reach));
         let (gw, gh) = ((x + ww + reach).min(w) - gx, (y + wh + reach).min(h) - gy);
@@ -245,29 +245,6 @@ fn a_window_equals_the_whole_render_inside_it() {
             assert!(changed > 0, "the forehead window holds changed pixels");
         }
     }
-}
-
-/// A draft and an export four times its size make the same change once scaled (the change is kept in the photo's
-/// normalised coordinates, so a render samples it at its own size).
-#[test]
-fn a_draft_and_a_bigger_export_agree_after_scaling() {
-    let small = forehead_lines(320, 400, 1.0, 0.0);
-    let face = searched(&small);
-    let big = forehead_lines(1280, 1600, 4.0, 0.0);
-    let r = wrinkles(70.0, 0.0, 0.0, 0.0);
-    let depth = |img: &Rgb32f, scale: f64| {
-        let (fx, fy, fs) = (FACE[0] * img.width as f64, FACE[1] * img.height as f64, 200.0 * scale);
-        let row = |v: f64| {
-            let y = (fy + v * fs) as usize;
-            let xs = (fx + 0.35 * fs) as usize..(fx + 0.65 * fs) as usize;
-            let n = xs.len() as f64;
-            xs.map(|x| f64::from(luma(img.data[y * img.width + x]))).sum::<f64>() / n
-        };
-        (row(0.15) + row(0.21)) / 2.0 - LINES.iter().map(|l| row(*l)).sum::<f64>() / LINES.len() as f64
-    };
-    let ka = depth(&retouched(&small, &r, vec![face.clone()]), 1.0) / depth(&small, 1.0);
-    let kb = depth(&retouched(&big, &r, vec![face]), 4.0) / depth(&big, 4.0);
-    assert!((ka - kb).abs() < 0.2, "the same share of the lines is left: draft {ka:.3}, export {kb:.3}");
 }
 
 /// A filler that gives back the clean skin (the picture without the lines), as LaMa would.
@@ -366,4 +343,275 @@ fn no_panic_on_odd_faces_and_pictures() {
             assert!(out.data.iter().flatten().all(|v| v.is_finite()));
         }
     }
+}
+
+// ---- what v2 changes against v1, and what the review asked to pin down ----
+
+/// A faint line (12 % deep) in dark skin, as the float picture and as the 8-bit sRGB picture the people parse renders.
+/// A float crop reads the line as it is (too shallow to be a wrinkle); the 8-bit copy's rounding steps (6 % a code in
+/// the shadows) make it deeper than it is.
+fn faint_line_in_the_dark() -> (Rgb32f, Rgb32f) {
+    let float = Rgb32f::from_fn(320, 400, |x, y| {
+        let (u, v) = (((x as f64 + 0.5) - 60.0) / 200.0, ((y as f64 + 0.5) - 40.0) / 200.0);
+        let line: f64 = if (0.25..0.75).contains(&u) { LINES.iter().map(|l| (-0.5 * ((v - l) / LINE_SIGMA).powi(2)).exp()).sum() } else { 0.0 };
+        let k = (1.0 - 0.12 * line as f32) * 0.02 / 0.3 * (1.0 + 0.01 * noise(x, y));
+        SKIN.map(|c| c * k)
+    });
+    let q = float.map(|p| {
+        p.map(|v| {
+            let e = if v <= 0.003_130_8 { v * 12.92 } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+            let code = (e.clamp(0.0, 1.0) * 255.0).round() / 255.0;
+            if code <= 0.04045 { code / 12.92 } else { ((code + 0.055) / 1.055).powf(2.4) }
+        })
+    });
+    (float, q)
+}
+
+#[test]
+fn an_8_bit_picture_reads_a_faint_line_in_the_shadows_as_a_wrinkle_and_a_float_one_does_not() {
+    let (float, quantised) = faint_line_in_the_dark();
+    let change = |img: &Rgb32f| fix_of(&searched(img)).width * fix_of(&searched(img)).height;
+    assert_eq!(change(&float), 0, "a 12 % line is not a wrinkle: no change");
+    assert!(change(&quantised) > 0, "the same line after 8-bit rounding is read as one");
+}
+
+#[test]
+fn v2_needs_the_stored_change_and_is_not_v1_at_the_same_slider() {
+    let img = forehead_lines(320, 400, 1.0, 0.0);
+    let with = searched(&img);
+    let mut without = with.clone();
+    without.wrinkles = None;
+    let r = wrinkles(100.0, 0.0, 0.0, 0.0);
+    let (v2, v1) = (retouched(&img, &r, vec![with]), retouched(&img, &r, vec![without]));
+    assert!(!same_bits(&v1, &v2), "a face with its stored change is not the old Wrinkles");
+    let (before, d1, d2) = (line_depth(&img), line_depth(&v1), line_depth(&v2));
+    assert!(d2 < d1 && d2 < 0.25 * before, "v1 leaves {d1:.3}, v2 {d2:.3} of {before:.3}");
+}
+
+#[test]
+fn a_draft_and_an_export_four_times_its_size_make_the_same_change_pixel_for_pixel() {
+    let small = forehead_lines(320, 400, 1.0, 0.0);
+    let face = searched(&small);
+    let big = forehead_lines(1280, 1600, 4.0, 0.0);
+    let r = wrinkles(100.0, 0.0, 0.0, 0.0);
+    let (a, b) = (retouched(&small, &r, vec![face.clone()]), retouched(&big, &r, vec![face]));
+    // the gain each render gave (out over in), the export's reduced by 4 to the draft's pixels
+    let gain = |out: &Rgb32f, img: &Rgb32f, x: usize, y: usize| luma(out.data[y * out.width + x]) / luma(img.data[y * img.width + x]);
+    let (mut worst, mut seen) = (0.0f32, 0usize);
+    for y in 45..90usize {
+        for x in 110..210usize {
+            let mean: f32 = (0..16).map(|i| gain(&b, &big, 4 * x + i % 4, 4 * y + i / 4)).sum::<f32>() / 16.0;
+            let g = gain(&a, &small, x, y);
+            worst = worst.max((g - mean).abs());
+            seen += usize::from(g > 1.05);
+        }
+    }
+    assert!(seen > 100, "the lines' pixels are lifted: {seen}");
+    assert!(worst < 0.1, "the gains agree to within 10 %: {worst}");
+}
+
+#[test]
+fn pixels_where_the_stored_change_is_zero_keep_their_bits_and_the_lift_stops_at_the_mask() {
+    let img = forehead_lines(320, 400, 1.0, 0.04);
+    let face = searched(&img);
+    let fix = fix_of(&face);
+    let out = retouched(&img, &wrinkles(100.0, 100.0, 100.0, 100.0), vec![face]);
+    let (mut kept, mut changed) = (0, 0);
+    for y in 0..400 {
+        for x in 0..320 {
+            let d = fix.sample((x as f64 + 0.5) / 320.0, (y as f64 + 0.5) / 400.0);
+            let i = y * 320 + x;
+            if d == [0.0; 3] {
+                assert_eq!(img.data[i].map(f32::to_bits), out.data[i].map(f32::to_bits), "pixel {x},{y} is outside the mask");
+                kept += 1;
+            } else if img.data[i] != out.data[i] {
+                changed += 1;
+            }
+        }
+    }
+    assert!(kept > 100_000 && changed > 200, "kept {kept}, changed {changed}");
+    // no lift past the mask: a change in one cell is not read half a cell into the next
+    let mut delta = Rgb32f::new(16, 16);
+    delta.data[8 * 16 + 8] = [0.3; 3];
+    let fix = Fix::new(NormRect::new(0.0, 0.0, 1.0, 1.0), &delta).expect("one cell has a change");
+    let cell = |i: f64| (i + 0.5) / 16.0;
+    assert!(fix.sample(cell(8.0), cell(8.0))[0] > 0.2, "in the cell");
+    assert_eq!(fix.sample(cell(8.0) + 0.05, cell(8.0)), [0.0; 3], "in the next cell, over the mask's edge");
+    assert_eq!(fix.sample(cell(8.0), cell(8.0) - 0.05), [0.0; 3]);
+}
+
+/// A view that warps the photo as Face Reshape and the lens corrections do: the face is scaled and moved.
+struct Warp;
+
+impl View for Warp {
+    fn to_norm(&self, x: f64, y: f64) -> (f64, f64) {
+        let (nx, ny) = (x / 320.0, y / 400.0);
+        (0.5 + (nx - 0.5) * 0.9 - 0.04, 0.5 + (ny - 0.5) * 1.08 + 0.03)
+    }
+
+    fn to_px(&self, nx: f64, ny: f64) -> Option<(f64, f64)> {
+        Some((((nx + 0.04 - 0.5) / 0.9 + 0.5) * 320.0, ((ny - 0.03 - 0.5) / 1.08 + 0.5) * 400.0))
+    }
+}
+
+#[test]
+fn the_change_follows_a_face_whose_frame_is_warped() {
+    // the picture is the warped photo: the lines sit where the warp puts them
+    let (w, h) = (320usize, 400usize);
+    let plain = forehead_lines(w, h, 1.0, 0.0);
+    let face = searched(&plain);
+    let fix = fix_of(&face);
+    let view = Warp;
+    let img = Rgb32f::from_fn(w, h, |x, y| {
+        let (nx, ny) = view.to_norm(x as f64 + 0.5, y as f64 + 0.5);
+        let (u, v) = ((nx * w as f64 - FACE[0] * w as f64) / 200.0, (ny * h as f64 - FACE[1] * h as f64) / 200.0);
+        let line: f64 = if (0.25..0.75).contains(&u) { LINES.iter().map(|l| (-0.5 * ((v - l) / LINE_SIGMA).powi(2)).exp()).sum() } else { 0.0 };
+        SKIN.map(|c| c * (1.0 - LINE_DEPTH * line as f32))
+    });
+    let out = retouched_in(&img, &wrinkles(100.0, 0.0, 0.0, 0.0), vec![face], &view);
+    let mut lifted = 0;
+    for y in 20..120usize {
+        for x in 100..220usize {
+            let (nx, ny) = view.to_norm(x as f64 + 0.5, y as f64 + 0.5);
+            let d = fix.sample(nx, ny);
+            if d[1] > 0.15 {
+                let (a, b) = (img.data[y * w + x][1], out.data[y * w + x][1]);
+                assert!((b / a - d[1].exp()).abs() < 0.02, "pixel {x},{y}: gain {} for a change of {}", b / a, d[1].exp());
+                lifted += 1;
+            }
+        }
+    }
+    assert!(lifted > 100, "the warped lines are lifted: {lifted}");
+}
+
+/// Skin runs before Wrinkles: what Skin already softened is not lifted again, so nothing ends up brighter than the skin
+/// around it by more than a small margin.
+#[test]
+fn skin_then_wrinkles_does_not_overshoot() {
+    let img = forehead_lines(320, 400, 1.0, 0.03);
+    let face = searched(&img);
+    let mut both = Retouch::default();
+    let mut skin = Retouch::default();
+    for r in [&mut both, &mut skin] {
+        assert!(r.global.set("retouch.skin.smoothness", 100.0));
+    }
+    for id in ["forehead", "crowsFeet", "smileLines", "neck"] {
+        assert!(both.global.set(&format!("retouch.wrinkles.{id}"), 100.0));
+    }
+    let skin_only = retouched(&img, &skin, vec![face.clone()]);
+    let after = retouched(&img, &both, vec![face]);
+    let lum = |im: &Rgb32f| Plane::from_fn(im.width, im.height, |x, y| luma(im.data[y * im.width + x]).ln());
+    let around = gaussian(&lum(&skin_only), 5.0);
+    let after = lum(&after);
+    let mut worst = f32::NEG_INFINITY;
+    for y in 60..110usize {
+        for x in 110..210usize {
+            worst = worst.max(after.data[y * 320 + x] - around.data[y * 320 + x]);
+        }
+    }
+    // (the margin holds the pores, 3 %, the reference blur's own error, and the bound's 4 %; without the bound it is 0.19)
+    assert!(worst < 0.13, "no pixel is much brighter than the skin around it: {worst}");
+}
+
+/// One short dark line (30 % deep) across the skin at these fractions of the face's box, and the sliders that may take it
+/// away: the areas v1 did not cover.
+fn one_line(x0: f64, x1: f64, y0: f64, y1: f64) -> Rgb32f {
+    Rgb32f::from_fn(320, 400, |x, y| {
+        let (u, v) = (((x as f64 + 0.5) - 60.0) / 200.0, ((y as f64 + 0.5) - 40.0) / 200.0);
+        // distance to the segment, in the face's size
+        let (dx, dy) = (x1 - x0, y1 - y0);
+        let t = (((u - x0) * dx + (v - y0) * dy) / (dx * dx + dy * dy)).clamp(0.0, 1.0);
+        let d = ((u - x0 - t * dx).powi(2) + (v - y0 - t * dy).powi(2)).sqrt();
+        let k = 1.0 - LINE_DEPTH * (-0.5 * (d / LINE_SIGMA).powi(2)).exp() as f32;
+        SKIN.map(|c| c * k)
+    })
+}
+
+#[test]
+fn the_widened_areas_take_away_lines_between_the_brows_under_the_eyes_on_the_cheeks_and_the_chin() {
+    // (the slider, the line, the point on its middle as fractions of the face)
+    let cases: [(&str, [f64; 4], (f64, f64)); 4] = [
+        ("forehead", [0.5, 0.5, 0.37, 0.43], (0.5, 0.4)),
+        ("crowsFeet", [0.28, 0.40, 0.5, 0.5], (0.34, 0.5)),
+        ("smileLines", [0.15, 0.30, 0.64, 0.64], (0.225, 0.64)),
+        ("smileLines", [0.42, 0.58, 0.9, 0.9], (0.5, 0.9)),
+    ];
+    for (slider, [x0, x1, y0, y1], (cx, cy)) in cases {
+        let img = one_line(x0, x1, y0, y1);
+        let face = searched(&img);
+        let (px, py) = ((60.0 + cx * 200.0) as usize, (40.0 + cy * 200.0) as usize);
+        let depth = |im: &Rgb32f| {
+            // the middle of the line against the skin four pixels to each side
+            let at = |dx: isize, dy: isize| luma(im.data[((py as isize + dy) as usize) * 320 + (px as isize + dx) as usize]);
+            let side = if (x1 - x0).abs() < (y1 - y0).abs() { (at(-6, 0) + at(6, 0)) / 2.0 } else { (at(0, -6) + at(0, 6)) / 2.0 };
+            ((side - at(0, 0)) / side) as f64
+        };
+        let before = depth(&img);
+        assert!(before > 0.2, "{slider} {cx},{cy}: the line is there: {before}");
+        let mut one = wrinkles(0.0, 0.0, 0.0, 0.0);
+        assert!(one.global.set(&format!("retouch.wrinkles.{slider}"), 100.0));
+        let after = depth(&retouched(&img, &one, vec![face.clone()]));
+        assert!(after < 0.4 * before, "{slider} at {cx},{cy}: {before:.3} → {after:.3}");
+        // the other three sliders at 100 leave the spot alone
+        let mut others = wrinkles(100.0, 100.0, 100.0, 100.0);
+        assert!(others.global.set(&format!("retouch.wrinkles.{slider}"), 0.0));
+        let moved = depth(&retouched(&img, &others, vec![face]));
+        if slider != "smileLines" || cy > 0.8 {
+            assert!((moved - before).abs() < 0.02, "{slider} at {cx},{cy}: other sliders moved it, {before:.3} → {moved:.3}");
+        }
+    }
+}
+
+/// A picture with lines all over it and many faces: only the [`LAMA_FACES`] largest get the model, and every face still gets
+/// a change (the others by the banded heal).
+#[test]
+fn only_the_largest_faces_get_the_model() {
+    struct Count(usize);
+    impl Filler for Count {
+        fn fill(&mut self, _: &Rgb32f, _: &Plane) -> Fill {
+            self.0 += 1;
+            Fill::Unavailable
+        }
+    }
+    let img = Rgb32f::from_fn(1000, 400, |_, y| SKIN.map(|c| c * (1.0 - 0.3 * f32::from(y % 9 == 0))));
+    // ten faces of growing size on two rows
+    let faces: Vec<Face> = (0..10)
+        .map(|i| {
+            let side = 0.28 + 0.01 * i as f64;
+            meshed([(i % 5) as f64 * 0.2 + 0.01, (i / 5) as f64 * 0.5 + 0.02, side * 0.4 * 0.7, side * 0.9 * 0.7 * 0.8])
+        })
+        .collect();
+    let mut count = Count(0);
+    let out = with_fixes(&img, faces, &mut count);
+    assert_eq!(count.0, LAMA_FACES, "the model ran for the eight largest");
+    assert!(out.iter().all(|f| f.wrinkles.is_some()), "every face has a change: the two smallest by the banded heal");
+}
+
+#[test]
+fn a_search_stopped_after_the_first_face_keeps_no_face() {
+    struct StopAfterOne(usize);
+    impl Filler for StopAfterOne {
+        fn fill(&mut self, _: &Rgb32f, _: &Plane) -> Fill {
+            self.0 += 1;
+            Fill::Unavailable
+        }
+
+        fn cancelled(&self) -> bool {
+            self.0 >= 1
+        }
+    }
+    let img = Rgb32f::from_fn(640, 400, |_, y| SKIN.map(|c| c * (1.0 - 0.3 * f32::from(y % 9 == 0))));
+    let faces = vec![meshed([0.02, 0.1, 0.3, 0.5]), meshed([0.55, 0.1, 0.3, 0.5])];
+    let out = with_fixes(&img, faces, &mut StopAfterOne(0));
+    assert!(
+        out.iter().all(|f| f.wrinkles.is_none()),
+        "the first face's finished change is dropped with the rest: {:?}",
+        out.iter().map(|f| f.wrinkles.is_some()).collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn the_sliders_cover_the_widened_areas_by_label_and_id() {
+    let spec = lightcraft_retouch::find("retouch.wrinkles.smileLines").expect("the control keeps its id");
+    assert_eq!(spec.label, "Cheeks and Smile Lines");
 }

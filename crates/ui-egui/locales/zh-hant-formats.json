@@ -184,7 +184,6 @@
   "Removed {what} from {name}": "已從 {name} 移除{what}",
   "Renames “{from}” on {n} photo{} (keywords below it too). Use | for levels, e.g. Travel|Italy. An existing name merges the two.": "在 {n} 張照片上重新命名「{from}」{:.0}（其下層關鍵字一併處理）。以 | 區隔層級，例如 Travel|Italy。改為現有名稱時，兩者會合併。",
   "Replace {} with:": "將 {} 取代為：",
-  "Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).": "為{scope}評估焦點與曝光，並找出相隔數秒內拍攝的相似照片（連拍）。",
   "Tagged {n} photo{} from the tracklog": "已依軌跡記錄標記 {n} 張照片的位置{:.0}",
   "The SAM 3 download failed: {e}": "SAM 3 下載失敗：{e}",
   "Unknown tag{s} {} stay{} as typed (see Tags)": "未知的標籤{s:.0} {} 會保持原樣{:.0}（請參閱「標籤」）",
@@ -346,5 +345,9 @@
   "In use: {url} (up to zoom {zoom})": "使用中:{url}(最大縮放 {zoom})",
   "Bring photos in with File › Import Photos… ({keys}).": "透過 檔案 › 匯入照片… ({keys}) 匯入照片。",
   "View › Detail View ({keys}).": "檢視 › 詳細檢視 ({keys})。",
-  "File › Export… · File › Print… ({keys}).": "檔案 › 匯出… · 檔案 › 列印… ({keys})。"
+  "File › Export… · File › Print… ({keys}).": "檔案 › 匯出… · 檔案 › 列印… ({keys})。",
+  "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).": "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).",
+  "Assisted Culling scored {n} photos": "Assisted Culling scored {n} photos",
+  " · {groups} bursts": " · {groups} bursts",
+  "eyes not checked: {why}": "eyes not checked: {why}"
 }

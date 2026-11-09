@@ -501,6 +501,7 @@ fn dialog_title(app: &LightcraftApp, dlg: &Dialog) -> String {
         Dialog::WhatsNew => "What's New",
         Dialog::Welcome { .. } => WELCOME_TITLE,
         Dialog::Cull { .. } => "Assisted Culling",
+        Dialog::CullSuggest { .. } => "Reject Photos?",
         Dialog::SmartRules { id: None, .. } => "New Smart Album",
         Dialog::SmartRules { .. } => "Edit Smart Album",
         Dialog::AutoStack { .. } => "Auto-Stack by Capture Time",
@@ -652,6 +653,7 @@ fn fixed_ok_label(app: &LightcraftApp, dlg: &Dialog, informational: bool) -> &'s
         Dialog::AutoStack { .. } => "Create Stacks",
         Dialog::CaptureTime { .. } => "Change Time",
         Dialog::Cull { .. } => "Cull",
+        Dialog::CullSuggest { .. } => "Reject",
         Dialog::CopySettings { .. } => "Copy",
         Dialog::PasteSettings { .. } => "Paste",
         Dialog::TextPrompt { command, .. } => prompt_verb(command),
@@ -918,7 +920,7 @@ fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut D
     };
     ui.label(
         egui::RichText::new(crate::i18n::tr_format!(
-            "Scores {scope} for focus and exposure and finds similar shots taken within seconds of each other (bursts).",
+            "Scores {scope} for focus and exposure, checks whether the people in them have their eyes closed or out of focus, and finds similar shots taken within seconds of each other (bursts).",
             scope = scope
         ))
         .color(t.text_label),
@@ -934,7 +936,7 @@ fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut D
         }))
         .color(t.text_dim),
     );
-    let r = ui.checkbox(pick_best, crate::i18n::tr("Pick the sharpest photo of each burst"));
+    let r = ui.checkbox(pick_best, crate::i18n::tr("Pick the best photo of each burst"));
     crate::widgets::register(ui, "check:cullPick", r.rect);
     ui.add_space(6.0);
     // the sliders drag over the usual range; their value fields take whatever
@@ -962,7 +964,13 @@ fn cull_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, dlg: &mut D
     clamp_cull_burst(burst_gap, similarity);
     ui.label(egui::RichText::new(crate::i18n::tr("Lower it when a panning or moving burst splits into several groups.")).color(t.text_dim));
     ui.label(
-        egui::RichText::new(crate::i18n::tr("Scores stay on the photos: filter or make smart albums with Focus and Best of Similar Shots."))
+        egui::RichText::new(crate::i18n::tr(
+            "Scores stay on the photos: filter or make smart albums with Focus, Best of Similar Shots, Eyes Closed and Eyes Out of Focus.",
+        ))
+        .color(t.text_dim),
+    );
+    ui.label(
+        egui::RichText::new(crate::i18n::tr("Photos with closed or out-of-focus eyes are only offered for rejection after the run."))
             .color(t.text_dim),
     );
 }
@@ -2182,6 +2190,7 @@ fn dialog_content(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, body_m
     match dlg {
         Dialog::AutoStack { .. } => auto_stack_body(app, ui, t, dlg),
         Dialog::Cull { .. } => cull_body(app, ui, t, dlg),
+        Dialog::CullSuggest { .. } => cull::cull_suggest_body(ui, t, dlg),
         Dialog::WhatsNew => whats_new_body(ui, t, dlg),
         Dialog::Welcome { page } => welcome_body(app, ui, t, page, close),
         Dialog::DenoiseModel { info, accepted } => crate::panels::denoise::model_dialog(app, ui, t, info, accepted),

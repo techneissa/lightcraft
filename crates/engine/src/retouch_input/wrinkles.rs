@@ -2,18 +2,23 @@
 //!
 //! Next to Blemishes' spots and Stray Hair's strands, once per photo on the face search's worker: for each face with the
 //! face mesh and a Facial Skin mask, the wrinkle mask, LaMa's fill of it (when the model is installed; else the banded
-//! heal) and the change that results, kept in `Face::wrinkles` (`lightcraft_retouch::wrinkles::with_fixes`). A render
-//! only scales it with the sliders; no model runs while one moves. A row in the activity stack (`retouch.wrinkles`)
-//! shows the search, and its ✕ stops it: the faces then keep no change and Wrinkles shows its old result.
+//! heal) and the change that results, kept in `Face::wrinkles` (`lightcraft_retouch::wrinkles::with_fixes_from`). A
+//! render only scales it with the sliders; no model runs while one moves. A row in the activity stack
+//! (`retouch.wrinkles`) shows the search, and its ✕ stops it: no face then keeps a change, Wrinkles shows its old
+//! result, and the photo's faces are kept as "to search again" (`Found::retry`).
+//!
+//! The pixels are floating-point crops of the original with the default settings, rendered at the size the search works
+//! at ([`Cropper::crop_float`]); the 8-bit parse picture is the fallback for a photo the original can't be cut for.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use lightcraft_develop::retouch::wrinkles::{Fill, Filler};
-use lightcraft_develop::retouch::{Face, Part};
+use lightcraft_develop::retouch::wrinkles::{Crop, Fill, Filler, Picture, Source};
+use lightcraft_develop::retouch::{Face, NormRect, Part};
 use lightcraft_pipeline::learned_fill::FillRun;
 use lightcraft_raster::{Plane, Rgb32f};
 
+use super::parts::Cropper;
 use crate::activity::{Activity, Cancel};
 use crate::lama_fill::LamaFill;
 
@@ -23,15 +28,32 @@ use crate::lama_fill::LamaFill;
 pub(crate) struct WrinkleSearch {
     pub lama: LamaFill,
     pub activity: Activity,
+    /// Cuts float crops of the photo's original (`None`: the parse's 8-bit picture is used).
+    pub cropper: Option<Arc<Cropper>>,
+    /// Tests: the search is stopped before it starts, as the row's ✕ would.
+    #[cfg(test)]
+    pub cancel_first: bool,
 }
 
 /// The face mesh's point count and YuNet's five before it: a face with fewer has no areas to search.
 const MESH_LANDMARKS: usize = 5 + 478;
 
 impl WrinkleSearch {
-    /// `faces` with their wrinkle change found on `linear` (the parse's picture in linear light, turned like the
-    /// masks). Faces the search can't use are left as they are.
-    pub(crate) fn run(&self, faces: Vec<Face>, linear: &Rgb32f) -> Vec<Face> {
+    /// A search with no float crops and not cancelled (the engine's own setup adds the cropper).
+    pub(crate) fn new(lama: LamaFill, activity: Activity, cropper: Option<Arc<Cropper>>) -> Self {
+        WrinkleSearch {
+            lama,
+            activity,
+            cropper,
+            #[cfg(test)]
+            cancel_first: false,
+        }
+    }
+
+    /// `faces` with their wrinkle change found, on float crops of the original or else on `linear` (the parse's picture
+    /// in linear light, turned like the masks). Faces the search can't use are left as they are. The flag says the search
+    /// was cancelled: no face then has a change.
+    pub(crate) fn run(&self, faces: Vec<Face>, linear: &Rgb32f) -> (Vec<Face>, bool) {
         self.run_with(faces, linear, |lama, run, stop| Box::new(LamaFiller { lama, run, stop }))
     }
 
@@ -41,17 +63,40 @@ impl WrinkleSearch {
         faces: Vec<Face>,
         linear: &Rgb32f,
         make: impl for<'b> FnOnce(&'b LamaFill, &'b FillRun, &'b AtomicBool) -> Box<dyn Filler + 'b>,
-    ) -> Vec<Face> {
+    ) -> (Vec<Face>, bool) {
         let any = faces.iter().any(|f| f.landmarks.len() >= MESH_LANDMARKS && f.mask(Part::FacialSkin).is_some());
         if !any {
-            return faces;
+            return (faces, false);
         }
-        let stop = Arc::new(AtomicBool::new(false));
+        #[cfg(test)]
+        let first = self.cancel_first;
+        #[cfg(not(test))]
+        let first = false;
+        let stop = Arc::new(AtomicBool::new(first));
         let run = FillRun::with_stop(stop.clone());
         // (the row is held by the run, so LaMa's own row is not added to it)
         run.hold(Box::new(self.activity.start("retouch.wrinkles", "Smoothing Wrinkles", Cancel::Flag(stop.clone()))));
         let mut filler = make(&self.lama, &run, &stop);
-        lightcraft_develop::retouch::wrinkles::with_fixes(linear, faces, filler.as_mut())
+        let source = FloatSource { cropper: self.cropper.as_deref(), picture: Picture(linear) };
+        let faces = lightcraft_develop::retouch::wrinkles::with_fixes_from(&source, faces, filler.as_mut());
+        let cancelled = stop.load(Ordering::Relaxed);
+        (faces, cancelled)
+    }
+}
+
+/// The search's pixels: float crops of the original when there is a cutter and it can, else the 8-bit parse picture.
+struct FloatSource<'a> {
+    cropper: Option<&'a Cropper>,
+    picture: Picture<'a>,
+}
+
+impl Source for FloatSource<'_> {
+    fn size(&self) -> (usize, usize) {
+        self.cropper.map_or_else(|| self.picture.size(), Cropper::photo_size)
+    }
+
+    fn crop(&self, rect: NormRect, max_side: usize) -> Option<Crop> {
+        self.cropper.and_then(|c| c.crop_float(rect, max_side)).or_else(|| self.picture.crop(rect, max_side))
     }
 }
 
@@ -115,7 +160,7 @@ mod tests {
 
     fn search() -> WrinkleSearch {
         let activity = Activity::default();
-        WrinkleSearch { lama: LamaFill::new(activity.clone()), activity }
+        WrinkleSearch::new(LamaFill::new(activity.clone()), activity, None)
     }
 
     /// Without the model the banded heal makes the change, under one row that is gone when the search ends.
@@ -124,7 +169,8 @@ mod tests {
         let (face, img) = face_and_picture();
         let s = search();
         assert!(!s.lama.installed());
-        let faces = s.run(vec![face], &img);
+        let (faces, cancelled) = s.run(vec![face], &img);
+        assert!(!cancelled);
         assert!(faces[0].wrinkles.as_ref().is_some_and(|f| !f.is_empty()), "the banded heal's change is kept");
         assert!(s.activity.list().is_empty(), "the row ends with the search");
     }
@@ -156,7 +202,8 @@ mod tests {
         }
         // (the stop flag is what the row's ✕ sets)
         let (activity, seen2) = (s.activity.clone(), seen.clone());
-        let faces = s.run_with(vec![face], &img, move |_, _, stop| stopper(activity, seen2, stop));
+        let (faces, cancelled) = s.run_with(vec![face], &img, move |_, _, stop| stopper(activity, seen2, stop));
+        assert!(cancelled, "the search says it was cancelled");
         assert_eq!(seen.load(Ordering::SeqCst), 1, "one row while the search ran");
         assert_eq!(faces[0].wrinkles, None, "a cancelled search keeps nothing: Wrinkles shows its old result");
         assert!(s.activity.list().is_empty());
@@ -168,7 +215,8 @@ mod tests {
         let (mut face, img) = face_and_picture();
         face.landmarks.truncate(5);
         let s = search();
-        let faces = s.run(vec![face.clone()], &img);
+        let (faces, cancelled) = s.run(vec![face.clone()], &img);
         assert_eq!(faces, vec![face]);
+        assert!(!cancelled);
     }
 }

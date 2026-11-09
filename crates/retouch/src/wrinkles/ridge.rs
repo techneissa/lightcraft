@@ -22,6 +22,8 @@ const HI: f32 = 0.05;
 const LO: f32 = 0.025;
 /// The shortest wrinkle, a fraction of the face: a stretch of response of fewer pixels than its square is dropped.
 const MIN_LEN: f64 = 0.025;
+/// A width keeps a pixel when its response there is at least this share of the best width's.
+const OWN: f32 = 0.85;
 /// How far a mask grows past a line's crest, in line widths (a width is 2.4 sigma).
 const GROW: f64 = 0.35;
 /// The mask's edge softness (sigma), a fraction of the face.
@@ -39,12 +41,15 @@ pub(super) fn wrinkle_mask(l: &Plane, size: f64, allowed: &Plane) -> Plane {
     // lead a wrinkle into the face
     let inside = allowed.map(|a| if a > 0.5 { 1.0 } else { 0.0 });
     let min_px = ((MIN_LEN * size) * (MIN_LEN * size)).max(4.0) as usize;
-    for s in SIGMAS {
-        let sigma = (s * size).max(1.0) as f32;
-        let response = valley_response(l, sigma).zip_map(&inside, |r, i| r * i);
-        let core = hysteresis(&crest(&response, sigma), LO, HI, min_px);
-        let grow = (GROW * 2.4 * f64::from(sigma)).ceil() as usize + 1;
-        let grown = max_filter(&core, grow);
+    // each width's response, and at each pixel the strongest of them: a thin line also answers at the wider widths, and
+    // would be grown by those into a broad stripe, so a width keeps only the pixels where it is (nearly) the best
+    let sigmas: Vec<f32> = SIGMAS.iter().map(|s| (s * size).max(1.0) as f32).collect();
+    let responses: Vec<Plane> = sigmas.iter().map(|sigma| valley_response(l, *sigma).zip_map(&inside, |r, i| r * i)).collect();
+    let best = responses.iter().fold(Plane::new(w, h), |b, r| b.zip_map(r, f32::max));
+    for (response, sigma) in responses.iter().zip(&sigmas) {
+        let owned = response.zip_map(&best, |r, b| if r >= OWN * b { r } else { 0.0 });
+        let core = hysteresis(&crest(&owned, *sigma), LO, HI, min_px);
+        let grown = max_filter(&core, (GROW * 2.4 * f64::from(*sigma)).ceil() as usize + 1);
         union.data.iter_mut().zip(&grown.data).for_each(|(u, g)| *u = u.max(*g));
     }
     let soft = gaussian(&union, (SOFT * size).max(0.5) as f32).map(|v| smoothstep(0.15, 0.85, v));

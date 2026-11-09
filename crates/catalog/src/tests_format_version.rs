@@ -341,8 +341,9 @@ fn op_variants_are_versioned() {
     /// `detail` and `edge`, its grids in the shared table (#123).
     /// v6: Face Reshape's sliders in the `fork_retouch` block (`fork/retouch-reshape.md`).
     /// v7: Portrait Background's `blur`, `swap`, `clean` and `with` (#141). v8: the Portrait tab's Refine strokes,
-    /// `fork_retouch.refine` and `fork_retouch.faces[].refine` (#99).
-    const NEWEST_FORK_FIELDS: u32 = 8;
+    /// `fork_retouch.refine` and `fork_retouch.faces[].refine` (#99). v9: `Analysis.eyes`, Assisted Culling's eyes
+    /// (`fork/ai-culling.md`).
+    const NEWEST_FORK_FIELDS: u32 = 9;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), crate::fork_format::LEGACY_FORK_MAX, "the newest official-numbered op or field");
     assert_eq!(NEWEST_FORK_FIELDS, VERSION, "the newest fork op's or fields' version must be the current format version");

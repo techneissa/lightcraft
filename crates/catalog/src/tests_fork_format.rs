@@ -435,3 +435,33 @@ fn refine_strokes_are_fork_format_8() {
     assert_eq!(p.develop.retouch, d.retouch);
     assert!(p.history.iter().all(|h| h.settings.retouch == d.retouch), "every History step");
 }
+
+/// Fork 9 (`fork/ai-culling.md`): Assisted Culling's eyes are saved with the photo's other culling scores and read
+/// back, written as fork 9 so an older fork build refuses them instead of dropping them; a fork 8 library, whose
+/// scores have no eyes, opens and is upgraded with nothing lost.
+#[test]
+fn culling_eyes_are_fork_format_9() {
+    const { assert!(VERSION >= 9) };
+    let mut c = Catalog::new();
+    let id = photo(&mut c, DevelopSettings::default(), None);
+    let old = Analysis { sharpness: 61.0, clipped: 0.01, group: Some(3), best: true, eyes: None };
+    c.apply(Op::SetAnalysis { id, analysis: Some(old) }).unwrap();
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snapshot(FORK_FORMAT, 8, 1, &c.to_snapshot()));
+    let (mut j, mut loaded, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!((r.upgraded_from, loaded.photo(id).unwrap().analysis), (Some(8), Some(old)));
+    assert_eq!(header(&m), (FORK_FORMAT.to_string(), u64::from(VERSION)));
+    let eyes = Eyes { faces: 2, main: 1, closed: Some(true), focus: Some(22.5) };
+    let op = Op::SetAnalysis { id, analysis: Some(Analysis { eyes: Some(eyes), ..old }) };
+    loaded.apply(op.clone()).unwrap();
+    j.append(std::slice::from_ref(&op)).unwrap();
+    j.snapshot(&loaded).unwrap();
+    drop(j);
+    let body = String::from_utf8(m.get(SNAPSHOT).unwrap()).unwrap();
+    assert!(body.contains("\"closed\":true") && body.contains("\"focus\":22.5"), "written by name");
+    let (_, again, r) = Journal::open(Box::new(m.clone())).unwrap();
+    assert_eq!(r.upgraded_from, None);
+    assert_eq!(again.photo(id).unwrap().analysis.and_then(|a| a.eyes), Some(eyes));
+    assert_eq!(eyes.out_of_focus(), Some(true));
+    assert_eq!(Eyes { focus: Some(f32::NAN), ..eyes }.out_of_focus(), None, "a NaN score is no score");
+}

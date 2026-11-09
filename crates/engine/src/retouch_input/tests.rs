@@ -441,7 +441,7 @@ fn the_face_cache_keeps_a_byte_budget_and_one_entry_per_photo() {
     let found = |samples: usize| {
         let mask = PartMask { plane: lightcraft_raster::Plane::filled(samples, 1, 1.0), area: NormRect::new(0.1, 0.1, 0.3, 0.3) };
         let face = Face { masks: vec![(Part::FacialSkin, mask)], ..Face::boxed(NormRect::new(0.1, 0.1, 0.3, 0.3)) };
-        super::Found { input: Arc::new(lightcraft_develop::retouch::Input::new(vec![face])), thumbs: Arc::new(Vec::new()) }
+        super::Found { retry: None, input: Arc::new(lightcraft_develop::retouch::Input::new(vec![face])), thumbs: Arc::new(Vec::new()) }
     };
     let store = super::FaceStore::default();
     for i in 0..super::KEEP * 2 {

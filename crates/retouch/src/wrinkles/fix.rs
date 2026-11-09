@@ -7,8 +7,10 @@
 //! is applied, as a gain per channel on the pixels the render has. At 0 a pixel keeps its bits; at 100, inside the
 //! area, it has the stored change. No model runs while a slider moves.
 
+use lightcraft_raster::blur::gaussian;
 use lightcraft_raster::{Plane, Rgb32f, par_rows};
 
+use super::heal::smoothstep;
 use super::{Area, Wrinkles, area_weight, areas, clamp_px, union};
 use crate::input::{Fnv, NormRect};
 use crate::{Part, Scene};
@@ -19,6 +21,11 @@ const SCALE: f32 = 2048.0;
 const BAND_PIXELS: usize = 1 << 22;
 /// Changes smaller than this (log light) are not applied.
 const TINY: f32 = 1e-5;
+/// The skin around a crease is read with this blur (sigma, a fraction of the face), and a lifted pixel may end up this
+/// much above it (log light, about 4 %): Skin runs before Wrinkles and may have softened the crease already, and the
+/// stored change was measured on the picture before it.
+const REF: f64 = 0.02;
+const ROOM: f32 = 0.04;
 
 /// The change a face's wrinkles search found: a grid of `width × height` cells over `area` (normalised like the
 /// face's box, in the same frame), each the log of the light's change per channel. Zero outside the grid.
@@ -99,6 +106,12 @@ impl Fix {
         let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
         let (tx, ty) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);
         let at = |x: usize, y: usize| self.cells.get(y * w + x).copied().unwrap_or([0; 3]);
+        // no lift past the mask: where the cell the point lies in has no change, the reading between cells has none
+        // either (it would only be the neighbour's change leaking half a cell over the mask's edge)
+        let (cx, cy) = (((sx as usize).min(w - 1)), ((sy as usize).min(h - 1)));
+        if at(cx, cy) == [0; 3] {
+            return [0.0; 3];
+        }
         let (a, b, c, d) = (at(x0, y0), at(x1, y0), at(x0, y1), at(x1, y1));
         std::array::from_fn(|k| {
             let v = |q: [i16; 3]| f32::from(q[k]) / SCALE;
@@ -160,6 +173,8 @@ impl Wrinkles {
         let corner = [ctx.bounds[0].floor(), ctx.bounds[1].floor()];
         let step = ctx.px(super::LATTICE);
         let view = scene.view();
+        let sigma = (REF * ctx.size).max(1.0) as f32;
+        let room = (3.0 * sigma).ceil() as usize + 1;
         let w = all[2] - all[0];
         let rows = (BAND_PIXELS / w.max(1)).max(1);
         let mut y = all[1];
@@ -185,6 +200,17 @@ impl Wrinkles {
             let band_h = band[3] - band[1];
             let iw = img.width;
             let (x0, y0) = (band[0], band[1]);
+            // the lift each pixel is asked for, over the band and what the reference blur reads around it
+            let ext = [band[0].saturating_sub(room), band[1].saturating_sub(room), (band[2] + room).min(img.width), (band[3] + room).min(img.height)];
+            let ew = ext[2] - ext[0];
+            let mut lift = Rgb32f::new(ew, ext[3] - ext[1]);
+            par_rows(&mut lift.data, ew.max(1), |ry, row| {
+                for (rx, o) in row.iter_mut().enumerate() {
+                    let (nx, ny) = view.to_norm((ext[0] + rx) as f64 + 0.5, (ext[1] + ry) as f64 + 0.5);
+                    *o = fix.sample(nx, ny);
+                }
+            });
+            let level = reference(img, &lift, ext, sigma);
             par_rows(&mut img.data, iw.max(1), |py, row| {
                 let Some(by) = py.checked_sub(y0).filter(|by| *by < band_h) else { return };
                 let (Some(px), Some(wrow)) = (row.get_mut(x0..x0 + w), weight.data.get(by * w..(by + 1) * w)) else { return };
@@ -192,12 +218,16 @@ impl Wrinkles {
                     if *k <= 0.0 {
                         continue;
                     }
-                    let (nx, ny) = view.to_norm((x0 + dx) as f64 + 0.5, py as f64 + 0.5);
-                    let d = fix.sample(nx, ny);
+                    let at = (py - ext[1]) * ew + (x0 + dx - ext[0]);
+                    let (Some(d), Some(l)) = (lift.data.get(at), level.data.get(at)) else { continue };
                     if d.iter().all(|v| v.abs() < TINY) {
                         continue;
                     }
-                    let new: [f32; 3] = std::array::from_fn(|c| p[c] * (d[c] * *k).exp());
+                    // what Skin (which runs first) softened is not lifted again: never past the skin around, and a
+                    // little more
+                    let want = *k * luma(*d);
+                    let t = if want > 0.0 { ((l[0].max(0.0) + ROOM) / want).min(1.0) } else { 1.0 };
+                    let new: [f32; 3] = std::array::from_fn(|c| p[c] * (d[c] * *k * t).exp());
                     if new.iter().all(|v| v.is_finite()) {
                         *p = new;
                     }
@@ -205,6 +235,33 @@ impl Wrinkles {
             });
         }
     }
+}
+
+/// The luminance of a log change (Rec.2020 weights: the app's working space).
+fn luma(d: [f32; 3]) -> f32 {
+    0.2627 * d[0] + 0.6780 * d[1] + 0.0593 * d[2]
+}
+
+/// For each pixel of the box `ext` of `img`: how far the log luminance of the skin around it lies above the pixel's own
+/// (first value; the others are 0). The blur (Gaussian `sigma` pixels) reads only the pixels
+/// the stored change leaves alone (a lifted crease is not skin around), so a crease is compared with its neighbours.
+fn reference(img: &Rgb32f, lift: &Rgb32f, ext: [usize; 4], sigma: f32) -> Rgb32f {
+    let (ew, eh) = (ext[2] - ext[0], ext[3] - ext[1]);
+    let mut own = Plane::new(ew, eh);
+    par_rows(&mut own.data, ew.max(1), |ry, row| {
+        for (rx, o) in row.iter_mut().enumerate() {
+            let p = img.data.get((ext[1] + ry) * img.width + ext[0] + rx).copied().unwrap_or([0.0; 3]);
+            *o = (0.2627 * p[0] + 0.678 * p[1] + 0.0593 * p[2]).max(1e-4).ln();
+        }
+    });
+    let alone = lift.map(|d| 1.0 - smoothstep(0.01, 0.03, luma(d).abs()));
+    let num = gaussian(&own.zip_map(&alone, |y, q| y * q), sigma);
+    let den = gaussian(&alone, sigma);
+    Rgb32f::from_fn(ew, eh, |x, y| {
+        let (y_own, d) = (own.get(x, y), den.get(x, y));
+        let around = if d > 0.05 { num.get(x, y) / d } else { y_own };
+        [around - y_own, 0.0, 0.0]
+    })
 }
 
 /// A slider (0…100) as the share of the stored change applied (a value that is not a number is 0).

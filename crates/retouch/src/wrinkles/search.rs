@@ -9,7 +9,10 @@
 //!    the fine band (pores) comes back from clean skin nearby either way;
 //! 4. the change from old to new, kept as the face's [`Fix`].
 //!
-//! A cancelled search keeps nothing (the face stays with `None`, and Wrinkles shows the old result).
+//! A cancelled search keeps nothing (every face stays with `None`, and Wrinkles shows the old result).
+//!
+//! The pixels come from a [`Source`]: in the app, float crops of the photo before any retouching (the 8-bit parse picture
+//! would quantise the shadows, where a wrinkle is a step or two deep).
 
 use std::sync::Arc;
 
@@ -22,7 +25,7 @@ use super::heal::{self, smoothstep};
 use super::{Area, area_weight, areas, ridge, union};
 use crate::feature::{Scene, View, WholePhoto};
 use crate::input::{Face, Input, NormRect, Part};
-use crate::reduced::{BoxView, mean_box};
+use crate::reduced::mean_box;
 
 /// The longest side of the crop the search works on, pixels.
 pub const WORK: usize = 768;
@@ -39,7 +42,7 @@ pub enum Fill {
     Done(Rgb32f),
     /// No fill to be had (no model, or it failed): the banded heal stands in.
     Unavailable,
-    /// The user stopped the search: no face is finished from here on.
+    /// The user stopped the search: every face's change is dropped.
     Cancelled,
 }
 
@@ -62,34 +65,124 @@ impl Filler for NoFill {
     }
 }
 
-/// `faces` (normalised to `img`, the whole picture their masks were made from, in linear light) with their wrinkle
-/// change found ([`Face::wrinkles`]): `Some` for a face searched (an empty one when it has no wrinkles), `None` for a
-/// face that can't be (no mesh, no Facial Skin mask, too small) or that was cancelled.
+/// Where a search takes its pixels from: crops of the photo before any retouching, in linear light and in floating
+/// point (the engine renders them from the original; an 8-bit picture quantises the shadows, where a wrinkle's depth
+/// is a step or two, so it is the fallback, [`Picture`]).
+pub trait Source {
+    /// The photo's size in pixels, as far as the faces' masks and boxes (normalised to it) are concerned.
+    fn size(&self) -> (usize, usize);
+    /// The part of the photo inside `rect` (normalised), at most `max_side` pixels on its longer side (never enlarged),
+    /// with the rectangle it covers (a pixel or two off `rect`, by rounding). `None`: no pixels to be had.
+    fn crop(&self, rect: NormRect, max_side: usize) -> Option<Crop>;
+}
+
+/// A crop a [`Source`] gives: its pixels (linear light) and the normalised rectangle they cover.
+pub struct Crop {
+    pub img: Rgb32f,
+    pub rect: NormRect,
+}
+
+/// A whole picture as a [`Source`], reduced by a whole factor as the crop needs.
+pub struct Picture<'a>(pub &'a Rgb32f);
+
+impl Source for Picture<'_> {
+    fn size(&self) -> (usize, usize) {
+        (self.0.width, self.0.height)
+    }
+
+    fn crop(&self, rect: NormRect, max_side: usize) -> Option<Crop> {
+        let (w, h) = self.size();
+        if !rect.is_valid() || w == 0 || h == 0 {
+            return None;
+        }
+        let px = |v: f64, max: usize| if v.is_finite() { (v.max(0.0) as usize).min(max) } else { 0 };
+        let b = [
+            px((rect.x0 * w as f64).floor(), w),
+            px((rect.y0 * h as f64).floor(), h),
+            px((rect.x1 * w as f64).ceil(), w),
+            px((rect.y1 * h as f64).ceil(), h),
+        ];
+        let (cw, ch) = (b[2].saturating_sub(b[0]), b[3].saturating_sub(b[1]));
+        if cw == 0 || ch == 0 {
+            return None;
+        }
+        let f = cw.max(ch).div_ceil(max_side.max(1)).max(1);
+        let img = mean_box(self.0, b, f);
+        let (x1, y1) = (b[0] + img.width * f, b[1] + img.height * f);
+        let rect = NormRect::new(b[0] as f64 / w as f64, b[1] as f64 / h as f64, x1 as f64 / w as f64, y1 as f64 / h as f64);
+        Some(Crop { img, rect })
+    }
+}
+
+/// A crop's pixels (`0..w × 0..h`) as the normalised rectangle `rect`, for mapping faces into them.
+struct NormView {
+    rect: NormRect,
+    w: f64,
+    h: f64,
+}
+
+impl View for NormView {
+    fn to_norm(&self, x: f64, y: f64) -> (f64, f64) {
+        (self.rect.x0 + x / self.w * self.rect.width(), self.rect.y0 + y / self.h * self.rect.height())
+    }
+
+    fn to_px(&self, nx: f64, ny: f64) -> Option<(f64, f64)> {
+        let p = ((nx - self.rect.x0) / self.rect.width() * self.w, (ny - self.rect.y0) / self.rect.height() * self.h);
+        (p.0.is_finite() && p.1.is_finite()).then_some(p)
+    }
+}
+
+/// The faces that get LaMa (the largest of them): the rest get the banded heal, so a group photo's search stays
+/// bounded (LaMa takes about a second a face).
+pub const LAMA_FACES: usize = 8;
+
+/// [`with_fixes_from`] for a whole picture (linear light) the faces are normalised to.
 pub fn with_fixes(img: &Rgb32f, faces: Vec<Face>, filler: &mut dyn Filler) -> Vec<Face> {
-    let view = WholePhoto { width: img.width, height: img.height };
+    with_fixes_from(&Picture(img), faces, filler)
+}
+
+/// `faces` (normalised to the photo `src` cuts) with their wrinkle change found ([`Face::wrinkles`]): `Some` for a face
+/// searched (an empty one when it has no wrinkles), `None` for a face that can't be (no mesh, no Facial Skin mask, too
+/// small). The [`LAMA_FACES`] largest faces are filled by `filler`, the others by the banded heal. A cancelled search
+/// ([`Filler::cancelled`]) drops every change, the ones of faces it had finished too: the photo is then "not searched".
+pub fn with_fixes_from(src: &dyn Source, faces: Vec<Face>, filler: &mut dyn Filler) -> Vec<Face> {
+    let (w, h) = src.size();
+    let view = WholePhoto { width: w, height: h };
     let input = Input::new(faces);
     let mut found: Vec<(usize, Option<Fix>)> = Vec::new();
     {
-        let scene = Scene::new(&input, &view, img.width, img.height);
+        let scene = Scene::new(&input, &view, w, h);
+        // the faces by size, largest first: the first LAMA_FACES get the model
+        let mut by_size: Vec<usize> = (0..scene.faces.len()).collect();
+        by_size.sort_by(|a, b| {
+            let size = |i: &usize| scene.faces.get(*i).map_or(0.0, |f| f.size);
+            size(b).total_cmp(&size(a))
+        });
+        let lama: Vec<usize> = by_size.into_iter().take(LAMA_FACES).collect();
         for (i, f) in scene.faces.iter().enumerate() {
             if filler.cancelled() {
                 break;
             }
-            found.push((f.index, find(img, &scene, i, filler)));
+            let fix = if lama.contains(&i) { find(src, &scene, i, filler) } else { find(src, &scene, i, &mut NoFill) };
+            found.push((f.index, fix));
         }
     }
+    let cancelled = filler.cancelled();
     let mut faces = input.faces;
-    for (i, fix) in found {
-        if let Some(f) = faces.get_mut(i) {
-            f.wrinkles = fix.map(Arc::new);
+    if !cancelled {
+        for (i, fix) in found {
+            if let Some(f) = faces.get_mut(i) {
+                f.wrinkles = fix.map(Arc::new);
+            }
         }
     }
     faces
 }
 
 /// One face's change; `None` when it can't be searched or the search was cancelled.
-fn find(img: &Rgb32f, scene: &Scene<'_>, face: usize, filler: &mut dyn Filler) -> Option<Fix> {
+fn find(src: &dyn Source, scene: &Scene<'_>, face: usize, filler: &mut dyn Filler) -> Option<Fix> {
     let ctx = scene.faces.get(face)?;
+    let (pw, ph) = src.size();
     let facial = scene.mask_box(face, Part::FacialSkin)?;
     let limit = scene.mask_box(face, Part::BodySkin).map_or(facial, |b| union(facial, b));
     // the crop: the four areas, grown, within the masks and the picture
@@ -109,10 +202,13 @@ fn find(img: &Rgb32f, scene: &Scene<'_>, face: usize, filler: &mut dyn Filler) -
     if cw < MIN_SIDE || ch < MIN_SIDE {
         return None;
     }
-    let f = cw.max(ch).div_ceil(WORK).max(1);
-    let work = mean_box(img, crop, f);
+    let wanted = NormRect::new(crop[0] as f64 / pw as f64, crop[1] as f64 / ph as f64, crop[2] as f64 / pw as f64, crop[3] as f64 / ph as f64);
+    let Crop { img: work, rect } = src.crop(wanted, WORK)?;
     let (sw, sh) = (work.width, work.height);
-    let sview = BoxView::new(scene.view(), [crop[0] as f64, crop[1] as f64], f as f64);
+    if sw < MIN_SIDE / 2 || sh < MIN_SIDE / 2 || !rect.is_valid() {
+        return None;
+    }
+    let sview = NormView { rect, w: sw as f64, h: sh as f64 };
     let sub = scene.through(&sview, sw, sh);
     let at = sub.faces.iter().position(|c| c.index == ctx.index)?;
     let sctx = sub.faces.get(at)?;
@@ -159,7 +255,7 @@ fn find(img: &Rgb32f, scene: &Scene<'_>, face: usize, filler: &mut dyn Filler) -
 
     let lum = work.map(|p| (0.2126 * p[0] + 0.7152 * p[1] + 0.0722 * p[2]).max(1e-4).ln());
     let mask = ridge::wrinkle_mask(&lum, size, &allowed);
-    let area = norm_box(&sview, sw, sh)?;
+    let area = rect;
     if !mask.data.iter().any(|m| *m > 0.5) {
         return Some(Fix::default());
     }
@@ -176,13 +272,41 @@ fn find(img: &Rgb32f, scene: &Scene<'_>, face: usize, filler: &mut dyn Filler) -
     }
     let clean = heal::cleanliness(&mask, &any_skin, (0.006 * size) as f32);
     let fine = heal::fine_from_neighbours(&lg, &mask, &clean, size);
-    let delta = heal::delta(&lg, &mask, &low, &fine);
+    let trust = heal::trust(&mask, size);
+    let delta = heal::delta(&lg, &mask, &trust, &low, &fine);
     Some(Fix::new(area, &delta).unwrap_or_default())
 }
 
-/// The crop's rectangle `0..w × 0..h` as a normalised rectangle.
-fn norm_box(view: &dyn View, w: usize, h: usize) -> Option<NormRect> {
-    let (a, b) = (view.to_norm(0.0, 0.0), view.to_norm(w as f64, h as f64));
-    let r = NormRect::new(a.0.min(b.0), a.1.min(b.1), a.0.max(b.0), a.1.max(b.1));
-    r.is_valid().then_some(r)
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_picture_gives_the_crop_asked_for_reduced_by_a_whole_factor_and_never_enlarged() {
+        let img = Rgb32f::from_fn(1000, 500, |x, y| [x as f32, y as f32, 0.0]);
+        let want = NormRect::new(0.2, 0.2, 0.8, 0.9);
+        let crop = Picture(&img).crop(want, 150).expect("a crop");
+        assert!(crop.img.width.max(crop.img.height) <= 150, "{}×{}", crop.img.width, crop.img.height);
+        let (r, v) = (crop.rect, want);
+        assert!(r.x0 <= v.x0 + 1e-9 && r.y0 <= v.y0 + 1e-9 && r.x1 >= v.x1 - 1e-9 && r.y1 >= v.y1 - 1e-9, "covers it: {r:?}");
+        // the first pixel is the mean of its block: the box starts at (200, 100) and the factor is 4
+        assert!((crop.img.data[0][0] - 201.5).abs() < 1e-3 && (crop.img.data[0][1] - 101.5).abs() < 1e-3);
+        // never enlarged: a small crop comes back at its own size
+        let small = Picture(&img).crop(NormRect::new(0.0, 0.0, 0.05, 0.1), 600).expect("a crop");
+        assert_eq!((small.img.width, small.img.height), (50, 50));
+        for bad in [NormRect::new(0.5, 0.5, 0.5, 0.6), NormRect::new(f64::NAN, 0.0, 1.0, 1.0)] {
+            assert!(Picture(&img).crop(bad, 100).is_none());
+        }
+        assert!(Picture(&Rgb32f::new(0, 0)).crop(want, 100).is_none());
+    }
+
+    #[test]
+    fn a_crop_is_mapped_into_the_view_like_the_photo() {
+        let v = NormView { rect: NormRect::new(0.25, 0.5, 0.75, 1.0), w: 100.0, h: 50.0 };
+        assert_eq!(v.to_norm(0.0, 0.0), (0.25, 0.5));
+        assert_eq!(v.to_norm(100.0, 50.0), (0.75, 1.0));
+        let (x, y) = v.to_px(0.5, 0.75).expect("a point");
+        assert!((x - 50.0).abs() < 1e-9 && (y - 25.0).abs() < 1e-9);
+        assert!(v.to_px(f64::NAN, 0.0).is_none());
+    }
 }

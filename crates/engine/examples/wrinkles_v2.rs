@@ -4,7 +4,7 @@
 //!
 //! `LIGHTCRAFT_CONFIG_DIR=<scratch> cargo run --release -p lightcraft-engine --example wrinkles_v2 -- OUT_DIR PHOTO...`
 //!
-//! Writes, per photo, `OUT_DIR/<stem>-{before,v1,v2-100,v2-50}.png` at 2048 px and, cut round the first face's forehead at
+//! Writes, per photo, `OUT_DIR/<stem>-{before,v1,v2-100,v2-50}.png` at 2048 px and, cut round the first searched face's forehead at
 //! 1:1, `OUT_DIR/<stem>-forehead-*.png`; prints the times. Models are the app's defaults (the shared models folder);
 //! `NO_LAMA=1` runs the banded heal. Never touches the photo's own folder.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -73,7 +73,8 @@ fn main() {
             let cells = f.wrinkles.as_ref().map(|w| w.width * w.height);
             println!("{stem}: face {i}: box {:?}, {} landmarks, {} masks, stored change cells {cells:?}", f.bounds, f.landmarks.len(), f.masks.len());
         }
-        let Some(face) = found.input.faces.first() else { continue };
+        // (the first face that was searched: one with the face mesh)
+        let Some(face) = found.input.faces.iter().find(|f| f.wrinkles.is_some()).or(found.input.faces.first()) else { continue };
         let old = {
             let mut faces = found.input.faces.clone();
             faces.iter_mut().for_each(|f| f.wrinkles = None);

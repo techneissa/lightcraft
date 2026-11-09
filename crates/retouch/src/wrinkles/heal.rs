@@ -26,7 +26,7 @@ pub(super) fn fine_sigma(size: f64) -> f32 {
     (FINE * size).max(FINE_MIN_PX) as f32
 }
 /// The widths (sigma, fractions of the face) the banded heal reads the skin around the mask at, widest first.
-const WIDTHS: [f64; 6] = [0.20, 0.10, 0.05, 0.025, 0.0125, 0.006];
+const WIDTHS: [f64; 4] = [0.06, 0.03, 0.0125, 0.006];
 /// A donor's cleanliness (skin all around it, outside the mask) must reach this, and its own mask stay under
 /// [`DONOR_MASK`].
 pub(super) const DONOR_CLEAN: f32 = 0.8;
@@ -95,7 +95,15 @@ pub(super) fn rebuild_low(lg: &Rgb32f, mask: &Plane, skin: &Plane, size: f64) ->
             }),
         });
     }
-    out.unwrap_or(smooth)
+    // where even the widest width finds hardly any skin (a hole as big as the skin around it), there is nothing to rebuild
+    // from: the pixel keeps its own light, not an average of skin far away
+    let Some(level) = out else { return smooth };
+    let den = gaussian(&support, (WIDTHS[0] * size) as f32);
+    Rgb32f::from_fn(lg.width, lg.height, |x, y| {
+        let c = smoothstep(0.03, 0.2, den.get(x, y));
+        let (a, b) = (level.get(x, y), smooth.get(x, y));
+        std::array::from_fn(|k| a[k] * c + b[k] * (1.0 - c))
+    })
 }
 
 /// The low band of a LaMa fill (linear light, the crop's size): its log, blurred to [`LAMA_LOW`].
@@ -157,11 +165,26 @@ pub(super) fn fine_from_neighbours(lg: &Rgb32f, mask: &Plane, clean: &Plane, siz
     })
 }
 
+/// How much of a replacement to trust at each pixel (0…1): where the mask covers most of the skin around (a face as
+/// wrinkled as a walnut), whatever rebuilds it is read from far away or invented, and comes out as a flat patch; there
+/// the change fades toward none, so the wrinkles thin out instead.
+pub(super) fn trust(mask: &Plane, size: f64) -> Plane {
+    let covered = gaussian(&mask.map(|m| if m > 0.5 { 1.0 } else { 0.0 }), (COVER * size) as f32);
+    covered.map(|c| 1.0 - smoothstep(TRUST_FROM, TRUST_TO, c))
+}
+
+/// The neighbourhood [`trust`] counts the mask in (sigma, a fraction of the face), and the share of it from which the
+/// change fades out and is gone.
+const COVER: f64 = 0.04;
+const TRUST_FROM: f32 = 0.72;
+const TRUST_TO: f32 = 0.97;
+
 /// The change at each pixel, in log light per channel: where the mask `m` is 1 the new skin (`low` + `fine`) replaces
-/// the old one (`lg`), fading in with the mask. Not a number becomes 0, and the change is held to a plausible range.
-pub(super) fn delta(lg: &Rgb32f, m: &Plane, low: &Rgb32f, fine: &Rgb32f) -> Rgb32f {
+/// the old one (`lg`), fading in with the mask and with `trust`. Not a number becomes 0, and the change is held to a
+/// plausible range: a crease is lifted, never much deepened.
+pub(super) fn delta(lg: &Rgb32f, m: &Plane, trust: &Plane, low: &Rgb32f, fine: &Rgb32f) -> Rgb32f {
     Rgb32f::from_fn(lg.width, lg.height, |x, y| {
-        let k = m.get(x, y);
+        let k = m.get(x, y) * trust.get(x, y);
         if k <= 0.0 {
             return [0.0; 3];
         }
@@ -174,5 +197,46 @@ pub(super) fn delta(lg: &Rgb32f, m: &Plane, low: &Rgb32f, fine: &Rgb32f) -> Rgb3
 }
 
 /// The most a pixel is darkened or lightened (log light): a crease is lifted, not deepened.
-pub(super) const MOST_DARKER: f32 = -0.4;
-pub(super) const MOST_LIGHTER: f32 = 1.5;
+pub(super) const MOST_DARKER: f32 = -0.05;
+pub(super) const MOST_LIGHTER: f32 = 0.8;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_mask_covering_most_of_the_skin_is_not_trusted_and_a_thin_one_is() {
+        let thin = Plane::from_fn(200, 200, |x, _| if x % 20 < 2 { 1.0 } else { 0.0 });
+        let dense = Plane::from_fn(200, 200, |x, _| if x % 20 < 19 { 1.0 } else { 0.0 });
+        let (t, d) = (trust(&thin, 200.0), trust(&dense, 200.0));
+        let inside = |p: &Plane| -> Vec<f32> { (60..140).flat_map(|y| (60..140).map(move |x| (x, y))).map(|(x, y)| p.get(x, y)).collect() };
+        assert!(inside(&t).iter().all(|v| *v > 0.99), "a few thin lines: trusted");
+        assert!(inside(&d).iter().all(|v| *v < 0.2), "a patch of 95 % mask: the change fades out");
+    }
+
+    #[test]
+    fn the_change_lifts_creases_and_never_deepens_them_much_nor_lifts_past_a_plausible_range() {
+        let lg = Rgb32f::filled(4, 4, [-1.0; 3]);
+        let one = Plane::filled(4, 4, 1.0);
+        let low = Rgb32f::filled(4, 4, [-2.0, 3.0, -0.5]);
+        let d = delta(&lg, &one, &one, &low, &Rgb32f::new(4, 4));
+        assert_eq!(d.data[0], [MOST_DARKER, MOST_LIGHTER, 0.5], "darkening held to {MOST_DARKER}, lifting to {MOST_LIGHTER}");
+        let half = delta(&lg, &Plane::filled(4, 4, 0.5), &one, &Rgb32f::filled(4, 4, [-0.5; 3]), &Rgb32f::new(4, 4));
+        assert!((half.data[0][0] - 0.25).abs() < 1e-6, "the mask's share");
+        let none = delta(&lg, &one, &Plane::new(4, 4), &low, &Rgb32f::new(4, 4));
+        assert_eq!(none.data[0], [0.0; 3], "no trust, no change");
+    }
+
+    #[test]
+    fn where_there_is_no_skin_to_read_the_rebuilt_light_is_the_pixels_own() {
+        // a hole as big as the picture: nothing to rebuild from
+        let lg = Rgb32f::from_fn(60, 60, |x, _| [-1.0 + 0.01 * x as f32; 3]);
+        let mask = Plane::filled(60, 60, 1.0);
+        let skin = Plane::filled(60, 60, 1.0);
+        let low = rebuild_low(&lg, &mask, &skin, 60.0);
+        let smooth = gaussian(&lg, fine_sigma(60.0));
+        for (a, b) in low.data.iter().zip(&smooth.data) {
+            assert!((a[0] - b[0]).abs() < 1e-4, "the pixel's own: {} vs {}", a[0], b[0]);
+        }
+    }
+}

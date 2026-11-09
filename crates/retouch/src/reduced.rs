@@ -134,16 +134,10 @@ pub(crate) fn retouch(
 
 /// A box of a bigger image, reduced by `factor`: its pixel (`x`, `y`) covers the bigger image's pixels from
 /// (`origin` + (`x`, `y`) × `factor`), `factor` on a side.
-pub(crate) struct BoxView<'a> {
+struct BoxView<'a> {
     inner: &'a dyn View,
     origin: [f64; 2],
     factor: f64,
-}
-
-impl<'a> BoxView<'a> {
-    pub(crate) fn new(inner: &'a dyn View, origin: [f64; 2], factor: f64) -> Self {
-        BoxView { inner, origin, factor }
-    }
 }
 
 impl View for BoxView<'_> {
