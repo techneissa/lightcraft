@@ -260,36 +260,50 @@ fn a_face_cut_by_the_edge_is_retouched_inside_the_photo() {
     assert!(one.data[0].iter().all(|v| v.is_finite() && *v >= 0.0));
 }
 
-/// Sizes are fractions of the face: a draft and an export four times its size make the same change once the export
-/// is scaled down.
-#[test]
-fn a_draft_and_a_bigger_export_agree_after_scaling() {
+/// The change `r` makes to a `w`-pixel square draft, against the change it makes to an export four times its size
+/// scaled down (mean absolute difference over the draft's mean absolute change), and the draft's total change.
+/// The face fills 0.9 of the photo; the skin has blotches a tenth of the photo long, sampled at pixel centres.
+fn draft_against_export(r: &Retouch, w: usize) -> (f64, f64) {
     let face = face_with_skin(0.05, 0.05, 0.95, 0.95);
-    let photo = |w: usize| {
-        let p = w as f32 / 10.0;
-        skin_picture(w, w, p, 0.12, 0.0)
-    };
-    let r = skin(80.0, 0.0, 60.0);
-    let (small, big) = (photo(120), photo(480));
-    let (ds, db) = (retouched(&small, &r, vec![face.clone()]), retouched(&big, &r, vec![face.clone()]));
+    let photo = |w: usize| skin_picture(w, w, w as f32 / 10.0, 0.12, 0.0);
+    let (small, big) = (photo(w), photo(w * 4));
+    let (ds, db) = (retouched(&small, r, vec![face.clone()]), retouched(&big, r, vec![face.clone()]));
     let (mut diff, mut change) = (0.0f64, 0.0f64);
-    for y in 0..120 {
-        for x in 0..120 {
-            if mask_at(&face, 120, 120, x, y) < 1.0 {
+    for y in 0..w {
+        for x in 0..w {
+            if mask_at(&face, w, w, x, y) < 1.0 {
                 continue;
             }
             let mut sum = 0.0;
             for k in 0..16 {
-                let i = (y * 4 + k / 4) * 480 + x * 4 + k % 4;
+                let i = (y * 4 + k / 4) * w * 4 + x * 4 + k % 4;
                 sum += luma(db.data[i]) - luma(big.data[i]);
             }
-            let (c_big, c_small) = (sum / 16.0, luma(ds.data[y * 120 + x]) - luma(small.data[y * 120 + x]));
+            let (c_big, c_small) = (sum / 16.0, luma(ds.data[y * w + x]) - luma(small.data[y * w + x]));
             diff += f64::from((c_big - c_small).abs());
             change += f64::from(c_small.abs());
         }
     }
+    (diff / change.max(1e-9), change)
+}
+
+/// Sizes are fractions of the face: a draft and an export four times its size make the same change once the export
+/// is scaled down.
+#[test]
+fn a_draft_and_a_bigger_export_agree_after_scaling() {
+    let (ratio, change) = draft_against_export(&skin(80.0, 0.0, 60.0), 120);
     assert!(change > 1.0, "the draft changed: {change}");
-    assert!(diff < change * 0.15, "the export's change differs from the draft's by {:.1} %", diff / change * 100.0);
+    assert!(ratio < 0.15, "the export's change differs from the draft's by {:.1} %", ratio * 100.0);
+}
+
+/// Texture on a small face (60 px in the draft, its fine blur under a pixel) still does in the draft what it does
+/// in an export four times the size.
+#[test]
+fn texture_on_a_small_face_agrees_between_draft_and_export() {
+    // 67 px photo: the face is 0.9 of it, 60 px (240 px in the export)
+    let (ratio, change) = draft_against_export(&skin(0.0, 100.0, 0.0), 67);
+    assert!(change > 0.01, "Texture changed the draft: {change}");
+    assert!(ratio < 0.25, "the export's change differs from the draft's by {:.1} %", ratio * 100.0);
 }
 
 /// A face with its own settings gets them; the others keep the settings for every face (here: off).

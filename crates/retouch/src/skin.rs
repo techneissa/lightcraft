@@ -25,7 +25,7 @@
 //!
 //! A later Refine brush (#99) paints over the mask: `skin_mask` is where it will be applied.
 
-use lightcraft_raster::blur::gaussian;
+use lightcraft_raster::blur::{gauss_taps, gaussian, gaussian_taps};
 use lightcraft_raster::{Image, Plane, Rgb32f, par_rows};
 use serde::{Deserialize, Serialize};
 
@@ -62,7 +62,7 @@ const SHINE_KEEP: f32 = 0.2;
 /// Shine never takes more than this share of a channel away.
 const SHINE_MOST: f32 = 0.6;
 
-/// Most pixels of the mask's box the step works on (2⁶ M: a face filling a 100 MP export).
+/// Most pixels of the mask's box the step works on (2²⁶, about 67 M: a face filling a 100 MP export).
 const MAX_BOX: usize = 1 << 26;
 
 /// The Skin settings. A field added here is read as its default from settings saved without it.
@@ -312,14 +312,14 @@ impl Reduced {
     /// `weighted` blurred by `sigma` full-size pixels, reduced for it (not copied when it needs no reduction).
     fn blurred(weighted: &Image<[f32; 4]>, sigma: f32) -> Reduced {
         if ((sigma / PER_PIXEL).floor() as usize) < 2 {
-            return Reduced { img: gaussian(weighted, sigma), factor: 1 };
+            return Reduced { img: blur(weighted, sigma), factor: 1 };
         }
         Reduced::new(weighted, sigma).blur(sigma)
     }
 
     /// Blurred by `sigma` full-size pixels.
     fn blur(&self, sigma: f32) -> Reduced {
-        Reduced { img: gaussian(&self.img, sigma / self.factor as f32), factor: self.factor }
+        Reduced { img: blur(&self.img, sigma / self.factor as f32), factor: self.factor }
     }
 
     /// Where full-size pixel (`x`, `y`) reads this reduction: four samples and their bilinear weights. Every blur
@@ -355,6 +355,15 @@ impl Reduced {
         }
         unweight(p, fallback)
     }
+}
+
+/// Blurs under this sigma (pixels) use exact Gaussian taps: the three-box blur snaps a small sigma to whole-pixel
+/// boxes, and leaves the image as it is below about 0.58 px, so Texture did nothing on a face under about 72 px.
+const EXACT_BELOW: f32 = 2.0;
+
+/// `img` blurred by Gaussian `sigma` (pixels): exact taps under [`EXACT_BELOW`], three box passes above.
+fn blur(img: &Image<[f32; 4]>, sigma: f32) -> Image<[f32; 4]> {
+    if sigma < EXACT_BELOW && sigma.is_finite() && sigma > 0.0 { gaussian_taps(img, &gauss_taps(sigma)) } else { gaussian(img, sigma) }
 }
 
 /// Four samples of a reduction and their weights ([`Reduced::taps`]).

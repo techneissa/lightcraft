@@ -47,7 +47,9 @@ None. In fork files:
 - The stub's control `retouch.skin.amount` is now `retouch.skin.smoothness`: renamed in the foundation's tests
   (`crates/retouch/tests/foundation.rs`, `crates/develop/src/retouch.rs`, `crates/engine/src/retouch_input/tests.rs`,
   `crates/mcp/src/tests_retouch.rs`, `crates/pipeline/src/retouch_step.rs`) and in a doc comment of
-  `crates/retouch/src/control.rs`. The stub had no effect, so no saved edit changes.
+  `crates/retouch/src/control.rs`. The stub had no effect, so no saved edit changes. There is no alias, on purpose:
+  a `retouch.skin.amount` value set through MCP, the control channel or a script is not a control any more
+  (`develop.set` reports it unknown), and one in saved settings is dropped when they are read.
 - `crates/ui-egui/src/tests/portrait.rs`: a test of the Skin section.
 - `crates/retouch/README.md`: how the examples get masks.
 - `crates/parsing/examples/parts.rs` also writes each person's masks as grey pictures (`outdir/masks/`), which the
@@ -62,5 +64,6 @@ Smoothness taking away at least 65 % of the blotches' energy and keeping the por
 strengthening the pores and leaving the blotches; Shine lowering a pale highlight and giving it back its colour, and
 lowering light in the skin's own colour far less; a flat grey photo staying flat; no halo next to dark hair at the
 mask's edge; a face cut by the edge retouched inside the photo; a draft and an export four times its size making the
-same change (within 15 %); a face with its own settings being the only one retouched; the Skin section's three
+same change (within 15 %), and Texture on a 60 px face against a 240 px export (fine blurs under 2 px use exact
+Gaussian taps; the box blur left a face under about 72 px untouched); a face with its own settings being the only one retouched; the Skin section's three
 sliders and a click setting Smoothness.

@@ -102,6 +102,25 @@ Face Light (Facial Skin brightened by up to half again) that shows the masks arr
 - A windowed render (the zoomed loupe) gives `apply` a part of the frame: `Scene` maps faces into it, and a feature
   that reads far around a face reads only what the window holds.
 
+## Done means
+
+A feature lane is checked against this list, and its test file (`tests/<feature>.rs`) proves each line:
+
+- **Off is the original**: the feature at its default, and every slider at its default (0), gives back the original
+  pixels bit for bit.
+- **Nothing outside the mask changes**: pixels where the feature's masks are 0 keep their bits, and a face without
+  the masks it needs is left alone.
+- **Preview equals export**: a draft and an export several times its size make the same change once the export is
+  scaled down (sizes are fractions of the face).
+- **Texture is kept**: a retouch that smooths keeps the fine detail (the high-frequency energy inside the mask stays
+  within a set ratio of the original's).
+- **No halo**: pixels next to the mask's edge do not take the colour of what is outside it.
+- **Edge cases**: no faces, 50 faces, a face cut by the photo's edge, a 1 × 1 photo, a flat grey photo (stays flat
+  when nothing in it calls for a change) and a missing model (faces without masks) run without a panic and give the
+  expected result.
+- **Speed**: the PR reports the slider time (see the speed target below); a slider update on cached masks stays
+  within the draft's 16 ms.
+
 ## Speed target
 
 Every feature lane builds to this, and its PR reports both numbers below:
