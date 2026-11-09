@@ -38,7 +38,10 @@ In the module:
   `cx.slider("retouch.<KEY>.<field>")`, which writes to every face or to the picked one.
 
 Never edit `lib.rs`, `settings.rs`, `run.rs` or the tab's list of sections (`crates/ui-egui/src/panels/portrait.rs`):
-they already list every feature. The tab's Portrait Presets section (`panels/portrait/presets.rs`) has no module here.
+they already list every feature. The tab's Portrait Presets section (`panels/portrait/presets.rs`) has no module here:
+a portrait preset carries, per feature, the fields that are numbers, switches or short lists of numbers (a colour), so
+a new slider or switch is in presets with no change; lists of points or shapes (Refine strokes, spots) and fields
+named like them never are (`carry` in `crates/engine/src/portrait_presets.rs`, `fork/portrait-presets.md`).
 Clothes recolouring is not one of them: it is a local-mask effect (issue #83), so it works on any mask; the clothes
 parts of `Part` are there for its masks.
 
