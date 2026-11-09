@@ -21,6 +21,7 @@ mod crop_angle;
 mod crop_aspect;
 mod dcp;
 mod dcp_corpus;
+mod decontaminate;
 mod delete_local_rejected;
 mod denoise;
 mod exif_edit;
@@ -56,6 +57,7 @@ mod location;
 mod people_parsing;
 mod rename_names;
 mod shared_models;
+mod vision_edges;
 // macOS Colour needs macOS's own raw decoder: the test only means something on the Mac (fork is Mac only)
 #[cfg(feature = "sam")]
 mod birefnet;

@@ -28,6 +28,7 @@ pub mod blemish;
 pub mod colorops;
 pub mod cull;
 pub mod curve;
+pub mod decontam;
 pub mod dust;
 pub mod find;
 pub mod finish;
@@ -330,6 +331,8 @@ pub(crate) struct Prepared {
     pub px_per_long: f64,
     /// The recolored masks' references ([`Plan::recolor`]).
     pub recolor: Vec<(u32, recolor::Reference)>,
+    /// Fork (`fork/decontaminate.md`): each decontaminated mask's edge colours ([`decontam::Split`]).
+    pub split: Vec<decontam::Split>,
 }
 
 /// Output size for a source of `src_w × src_h` under `s`, fitting `max_w × max_h`.
@@ -436,6 +439,9 @@ impl StageCache {
             }
             // (the alphas and brush planes, and the spots' patches: each held once by its cache)
             masks_bytes += e.masks.bytes();
+            for (_, edge) in &e.split {
+                add(Arc::as_ptr(edge) as usize, edge.bytes());
+            }
         }
         masks_bytes += self.spots.bytes();
         total + masks_bytes
@@ -480,6 +486,8 @@ struct CacheEntry {
     /// Alphas of the last render's masks, and the brush parts they were built from (kept across
     /// changes to the image: those of masks that don't read it stay valid).
     masks: masks::AlphaCache,
+    /// Fork (`fork/decontaminate.md`): the decontaminated masks' edges of the last render, by what they are estimated from.
+    split: decontam::Kept,
 }
 
 pub(crate) fn hash_of(parts: impl std::hash::Hash) -> u64 {
@@ -588,6 +596,15 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                 // The joint diffusion reads a chain of neighbours across its scales. Keep
                 // those reads outside the requested zoom window, just as spot reads are, at every depth.
                 let halo = params.passes.last().map_or(0, |p| (6.0 * p.sigma).ceil() as usize).saturating_add(4);
+                let x = work.x.saturating_sub(halo);
+                let y = work.y.saturating_sub(halo);
+                let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
+                let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
+                work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
+            }
+            if s.masks.iter().any(decontam::applies) {
+                // (fork, `fork/decontaminate.md`: a decontaminated edge's colours are read from windows around it)
+                let halo = decontam::reach(px_per_long);
                 let x = work.x.saturating_sub(halo);
                 let y = work.y.saturating_sub(halo);
                 let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
@@ -873,6 +890,7 @@ fn render_impl(
     };
     lap("wb/spots/nr", &mut t);
     let mut alphas = cached.as_ref().map(|e| e.masks.clone()).unwrap_or_default();
+    let kept_split = cached.as_ref().map(|e| e.split.clone()).unwrap_or_default();
     let mut planes = match cached.map(|e| e.planes) {
         Some(p) if p.key == lin_key => p,
         // A draft while noise reduction changes (a slider drag): the wide, edge-aware planes of the
@@ -889,9 +907,19 @@ fn render_impl(
         prep.air = a;
     }
     prep.recolor.clone_from(&plan.recolor);
+    let ev = s.light.exposure as f32;
+    let split_key = |m: &lightcraft_develop::Mask| hash_of((lin_key, masks::alpha_key(m, keys, ev), px_per_long.to_bits()));
+    // (a request for mask planes draws nothing: it keeps the edges for the next render)
+    let split = if alphas_out.is_some() {
+        kept_split
+    } else {
+        let (split, used) = decontam::splits(&prep, &s.masks, split_key, &kept_split);
+        prep.split = split;
+        used
+    };
     lap("prepare", &mut t);
     if let Some((a, c)) = shared {
-        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), colour_noise, planes, masks: alphas });
+        c.put(CacheEntry { src: a.clone(), geo, sampled, lin: Some((lin_key, lin)), colour_noise, planes, masks: alphas, split });
     }
     if let Some(job) = alphas_out {
         let signature = masks::planes_signature(&plan, src_img as *const Rgb32f as usize, job.ask.want);
@@ -1080,6 +1108,8 @@ fn plan_preserves_matching_box_size() {
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_decontam;
 #[cfg(test)]
 mod tests_geometry;
 #[cfg(test)]

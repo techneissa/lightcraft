@@ -38,18 +38,18 @@ pub fn refine(parsing: &mut Parsing, matte: &Matte) {
 }
 
 /// The rectangle covering a person's Entire Person planes, grown by the band.
-fn entire_rect(p: &Person) -> Option<NormRect> {
+pub(super) fn entire_rect(p: &Person) -> Option<NormRect> {
     let planes = p.parts.get(&Part::EntirePerson)?;
     let r = planes.iter().filter(|q| q.is_valid()).map(|q| q.rect).reduce(|a, b| a.union(&b))?;
     NormRect::new(r.x0 - BAND, r.y0 - BAND, r.x1 + BAND, r.y1 + BAND).clamped()
 }
 
-struct Refined {
-    entire: Plane,
-    gained: Option<Plane>,
+pub(super) struct Refined {
+    pub(super) entire: Plane,
+    pub(super) gained: Option<Plane>,
 }
 
-fn refine_person(p: &Person, others: &[&Person], r: NormRect, matte: &Matte) -> Option<Refined> {
+pub(super) fn refine_person(p: &Person, others: &[&Person], r: NormRect, matte: &Matte) -> Option<Refined> {
     let n = matte.side as f32;
     let gw = ((r.width() * n).ceil() as usize).clamp(1, MAX_CELLS);
     let gh = ((r.height() * n).ceil() as usize).clamp(1, MAX_CELLS);

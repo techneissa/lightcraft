@@ -15,6 +15,10 @@ pub(crate) mod convert;
 mod cull;
 pub mod curves;
 pub mod dcp_profiles;
+mod decontaminate;
+#[cfg(test)]
+pub(crate) use decontaminate::default_for as decontaminate_default;
+pub use decontaminate::start_value as decontaminate_start;
 pub(crate) mod denoise;
 mod develop;
 mod edit;
@@ -186,6 +190,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(parsing::specs());
         v.extend(select_people::specs());
         v.extend(hair_edges::specs());
+        v.extend(decontaminate::specs());
         v.extend(organize::specs());
         v.extend(keywords::specs());
         v.extend(manage::specs());

@@ -13,17 +13,18 @@ type DeviceKept = Kept<Buf, Buf>;
 type DevicePatch = Option<Arc<Patch<Buf>>>;
 
 /// The image before the spots (`before_spots` makes it, unless `kept` holds this image's last spots) with the spots
-/// drawn: with `kept`, only those an edit reaches. Returns what to keep for the next render (`None` without spots).
+/// drawn: with `kept`, only those an edit reaches. Returns what to keep for the next render (`None` without spots), and
+/// when it started from `kept`, the boxes it rewrote (issue #111).
 pub(crate) fn spots(
     cx: &mut Cx<'_>,
     info: &SourceInfo,
     plan: &Plan<'_>,
     kept: Option<&DeviceKept>,
     before_spots: impl FnOnce(&mut Cx<'_>) -> Buf,
-) -> (Buf, Option<Arc<DeviceKept>>) {
+) -> (Buf, Option<Arc<DeviceKept>>, Option<crate::dirty::Redone>) {
     let s = &*plan.settings;
     if s.spots.is_empty() {
-        return (before_spots(cx), None);
+        return (before_spots(cx), None, None);
     }
     let (w, h) = (plan.w, plan.h);
     let key = keep::key(info, plan, &[]);
@@ -40,8 +41,15 @@ pub(crate) fn spots(
         };
         eprintln!("  gpu spots: {} of {} in {w}×{h}: {why}", new.iter().flatten().count(), new.len());
     }
+    let mut rewrote = None;
     let img = match plan_from {
         Some((k, r)) => {
+            // the boxes this redo writes: the spots taken off, drawn and put back
+            let undone = r.undo.iter().filter_map(|u| k.drawn.get(*u).and_then(Option::as_ref)).map(|d| d.at.write);
+            let steps = r.steps.iter().filter_map(|st| match *st {
+                Step::Draw(i) | Step::Paste { i, .. } => new.get(i).and_then(Option::as_ref).map(|d| d.at.write),
+            });
+            rewrote = Some((Arc::downgrade(&k.post), undone.chain(steps).collect::<Vec<Rect>>()));
             let img = cx.copy(&k.post);
             // (a spot not drawn again keeps its patches: it is the old one, reading the same pixels)
             for (slot, old) in patches.iter_mut().zip(&r.same) {
@@ -75,7 +83,8 @@ pub(crate) fn spots(
     let post = Arc::new(img);
     // (what follows writes its own buffers, but the kept one must never be handed on)
     let out = cx.copy(&post);
-    (out, Some(Arc::new(Kept { key, post, drawn: new, patches, done: Vec::new() })))
+    let redone = rewrote.map(|(from, rects)| crate::dirty::Redone { from, rects });
+    (out, Some(Arc::new(Kept { key, post, drawn: new, patches, done: Vec::new() })), redone)
 }
 
 /// Device bytes `k` holds: its image after the spots and each spot's boxes.

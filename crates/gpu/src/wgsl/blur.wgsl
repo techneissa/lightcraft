@@ -1,6 +1,6 @@
 // Box passes (clamped edges) over an image of NC interleaved channels; three of each approximate a
 // Gaussian (`lightcraft_raster::blur::gaussian`).
-// P: w, h, nc, r, ch (box_v only). Bindings: src, dst.
+// P: w, h, nc, r, ch and first row (box_v only). Bindings: src, dst.
 
 // Pixel `i` (all nc ≤ 3 channels at once: one contiguous read per pixel).
 fn ld(i: u32, nc: u32) -> vec3<f32> {
@@ -49,22 +49,25 @@ fn box_h(@builtin(global_invocation_id) g: vec3<u32>) {
 }
 
 // Vertical: one thread per CH consecutive rows of a column (the CPU re-primes every BAND rows the
-// same way).
+// same way). P[5]: the first row of the image this one is cut from (issue #111): runs start where
+// that row plus the cut's row is a multiple of CH, as in the whole image, so a cut with margin gives
+// the whole image's bits. The first thread then starts mid-run, in the margin.
 @compute @workgroup_size(64, 4)
 fn box_v(@builtin(global_invocation_id) g: vec3<u32>) {
     let w = pu(0u);
     let h = pu(1u);
     let nc = pu(2u);
     let r = i32(pu(3u));
-    let ch = pu(4u);
+    let ch = max(pu(4u), 1u);
+    let start = i32(g.y * ch) - i32(pu(5u) % ch);
     let x = g.x;
-    let y0 = g.y * ch;
+    let y0 = u32(max(start, 0));
     if (x >= w || y0 >= h) {
         return;
     }
     let last = i32(h) - 1;
     let inv = 1.0 / f32(2 * r + 1);
-    let y1 = min(y0 + ch, h);
+    let y1 = min(u32(start + i32(ch)), h);
     var acc = vec3<f32>(0.0);
     for (var k = -r; k <= r; k++) {
         acc += ld(u32(clamp(i32(y0) + k, 0, last)) * w + x, nc);

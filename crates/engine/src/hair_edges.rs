@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use crate::activity::{Activity, Cancel};
 
 pub mod people;
+pub mod vision;
 
 /// The newest mattes kept in memory (4 MB each).
 const IN_MEMORY: usize = 4;
@@ -45,15 +46,21 @@ pub enum Edge {
     Current,
     /// BiRefNet-matting redraws the edge, so flyaway hair stays in.
     Matting,
+    /// Apple Vision's own person and subject masks redraw the edge (`vision`, issue #115).
+    Vision,
+    // Another edge model plugs in here: a variant with its id, label and `suffix`, its `HairEdges::available` arm and
+    // its `HairEdges::make` arm, which returns a `Matte` (logits over the picture stretched to a square). Everything
+    // after that (people, Subject, the cache, Settings, `maskEdges.*`) takes any edge.
 }
 
 impl Edge {
-    pub const ALL: [Edge; 2] = [Edge::Current, Edge::Matting];
+    pub const ALL: [Edge; 3] = [Edge::Current, Edge::Matting, Edge::Vision];
 
     pub fn id(self) -> &'static str {
         match self {
             Edge::Current => "current",
             Edge::Matting => "birefnet-matting",
+            Edge::Vision => "apple-vision",
         }
     }
 
@@ -61,11 +68,21 @@ impl Edge {
         match self {
             Edge::Current => "Current",
             Edge::Matting => "BiRefNet Matting",
+            Edge::Vision => "Apple Vision",
         }
     }
 
     pub fn parse(id: &str) -> Option<Edge> {
         Edge::ALL.into_iter().find(|e| e.id() == id.trim())
+    }
+
+    /// What a Subject part whose edge this drew adds to its model id (`SegMask::model`).
+    pub fn suffix(self) -> &'static str {
+        match self {
+            Edge::Current => "",
+            Edge::Matting => "+matting",
+            Edge::Vision => vision::SUFFIX,
+        }
     }
 }
 
@@ -257,21 +274,31 @@ impl HairEdges {
         }
     }
 
-    /// The edge `kind` masks get now: the choice, or Current when the model it needs is not installed.
-    pub fn edge(&self, kind: EdgeKind) -> Edge {
-        match self.chosen(kind) {
-            Edge::Matting if self.installed() => Edge::Matting,
-            _ => Edge::Current,
+    /// Whether `edge` can draw `kind` masks here (BiRefNet Matting: once downloaded; Apple Vision: on macOS 14 or
+    /// later; the same for both kinds).
+    pub fn available(&self, edge: Edge, _kind: EdgeKind) -> bool {
+        match edge {
+            Edge::Current => true,
+            Edge::Matting => self.installed(),
+            Edge::Vision => vision::available(),
         }
+    }
+
+    /// The edge `kind` masks get now: the choice, or Current when the model it needs is not here.
+    pub fn edge(&self, kind: EdgeKind) -> Edge {
+        let e = self.chosen(kind);
+        if self.available(e, kind) { e } else { Edge::Current }
     }
 
     /// Choose the edge of `kind` masks from now on (kept in the choice file). BiRefNet Matting needs the model.
     pub fn set_edge(&self, kind: EdgeKind, edge: Edge) -> Result<(), String> {
-        if edge == Edge::Matting && !self.installed() {
-            return Err(if Self::AVAILABLE {
-                format!("BiRefNet Matting is not downloaded yet ({} MB; maskEdges.download)", MODEL_BYTES.div_ceil(1_000_000))
-            } else {
-                "BiRefNet Matting is not available in this build".into()
+        if !self.available(edge, kind) {
+            return Err(match edge {
+                Edge::Matting if Self::AVAILABLE => {
+                    format!("BiRefNet Matting is not downloaded yet ({} MB; maskEdges.download)", MODEL_BYTES.div_ceil(1_000_000))
+                }
+                Edge::Vision => "Apple Vision masks need macOS 14 or later on a Mac".into(),
+                _ => format!("{} is not available in this build", edge.label()),
             });
         }
         let path = lock(&self.inner.paths).choice.clone();
@@ -344,21 +371,36 @@ impl HairEdges {
         }
     }
 
-    /// The matte of an 8-bit RGB picture (`w × h`, row-major): from memory when the same pixels were matted before,
-    /// else by the model on this thread, with a row "Refining hair edges" in the activity stack whose ✕ sets `cancel`.
+    /// BiRefNet Matting's matte of an 8-bit RGB picture ([`HairEdges::matte_for`]).
     pub fn matte(&self, rgb: &[u8], w: usize, h: usize, cancel: &Arc<AtomicBool>) -> Result<Arc<Matte>, String> {
+        self.matte_for(Edge::Matting, EdgeKind::People, rgb, w, h, cancel)
+    }
+
+    /// The matte `edge` draws for `kind` masks of an 8-bit RGB picture (`w × h`, row-major): from memory when the same
+    /// pixels were matted the same way before, else made on this thread, with a row "Refining hair edges" in the
+    /// activity stack whose ✕ sets `cancel`.
+    pub fn matte_for(&self, edge: Edge, kind: EdgeKind, rgb: &[u8], w: usize, h: usize, cancel: &Arc<AtomicBool>) -> Result<Arc<Matte>, String> {
         if w == 0 || h == 0 || w.checked_mul(h).and_then(|n| n.checked_mul(3)) != Some(rgb.len()) {
             return Err("the picture to refine is damaged".into());
         }
-        let key = pixel_key(rgb, w, h);
+        if edge == Edge::Current {
+            return Err("the Current edge has no matte".into());
+        }
+        if edge == Edge::Vision {
+            // (Vision's mattes are made in `vision`, off the GPU run lock and with their own memory)
+            return Err("Apple Vision's edge is made by hair_edges::vision".into());
+        }
+        // (BiRefNet's matte is the same for both kinds; an edge model whose matte depends on the kind mixes it in here)
+        let key = pixel_key(rgb, w, h) ^ (edge as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15);
         if let Some(m) = self.remembered(key) {
             return Ok(m);
         }
-        if !self.installed() {
-            return Err(format!("BiRefNet Matting is not downloaded ({} MB; maskEdges.download)", MODEL_BYTES.div_ceil(1_000_000)));
+        if !self.available(edge, kind) {
+            // (another edge model says here what it lacks)
+            return Err(format!("{} is not downloaded ({} MB; maskEdges.download)", edge.label(), MODEL_BYTES.div_ceil(1_000_000)));
         }
         let row = self.inner.activity.start("matting", "Refining hair edges", Cancel::Flag(cancel.clone()));
-        row.detail("BiRefNet Matting");
+        row.detail(edge.label());
         let _one_at_a_time = lock(&self.inner.one_run);
         // (one model on the GPU at a time, people parsing and LaMa included: `crate::gpu_run`)
         let _gpu = crate::gpu_run::turn();
@@ -372,7 +414,7 @@ impl HairEdges {
         }
         self.inner.runs.fetch_add(1, Ordering::Relaxed);
         let t = web_time::Instant::now();
-        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.run(rgb, w, h, cancel)));
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.make(edge, kind, rgb, w, h, cancel)));
         let m = match ran {
             Ok(r) => r?,
             Err(_) => {
@@ -380,16 +422,25 @@ impl HairEdges {
                 {
                     *lock(&self.inner.loaded) = None;
                 }
-                return Err("BiRefNet Matting stopped unexpectedly".into());
+                return Err(format!("{} stopped unexpectedly", edge.label()));
             }
         };
         if !m.is_valid() {
-            return Err("BiRefNet Matting produced an invalid matte".into());
+            return Err(format!("{} produced an invalid matte", edge.label()));
         }
-        log::info!("BiRefNet Matting: {w}×{h} in {:?}", t.elapsed());
+        log::info!("{}: {w}×{h} in {:?}", edge.label(), t.elapsed());
         let m = Arc::new(m);
         self.remember(key, m.clone());
         Ok(m)
+    }
+
+    /// Make `edge`'s matte for `kind` (another edge model adds its arm here).
+    fn make(&self, edge: Edge, _kind: EdgeKind, rgb: &[u8], w: usize, h: usize, cancel: &Arc<AtomicBool>) -> Result<Matte, String> {
+        match edge {
+            Edge::Matting => self.run(rgb, w, h, cancel),
+            Edge::Current => Err("the Current edge has no matte".into()),
+            Edge::Vision => Err("Apple Vision's edge is made by hair_edges::vision".into()),
+        }
     }
 
     fn run(&self, rgb: &[u8], w: usize, h: usize, cancel: &Arc<AtomicBool>) -> Result<Matte, String> {
@@ -449,14 +500,14 @@ pub(crate) fn on_devices(gpu_refused: &AtomicBool, mut attempt: impl FnMut(bool)
 /// within a band around it (`lightcraft_birefnet::combine`). Marked `<base model>+matting`; `None` when it then holds
 /// nothing or `base` is damaged.
 #[cfg(feature = "sam")]
-pub fn subject_edge(base: &lightcraft_develop::SegMask, m: &Matte) -> Option<lightcraft_develop::SegMask> {
+pub fn subject_edge(base: &lightcraft_develop::SegMask, m: &Matte, edge: Edge) -> Option<lightcraft_develop::SegMask> {
     let logits = base.logits()?;
     let matte = lightcraft_birefnet::Matte { side: m.side, logits: m.logits.clone() };
     let mixed = lightcraft_birefnet::combine::refine_edges(&logits, base.side as usize, &matte);
     if !mixed.iter().any(|l| *l > 0.0) {
         return None;
     }
-    let id = format!("{}+matting", base.model.as_deref().unwrap_or("sam3"));
+    let id = format!("{}{}", base.model.as_deref().unwrap_or("sam3"), edge.suffix());
     Some(lightcraft_develop::SegMask::from_logits(m.side, &mixed).made_by(&id))
 }
 

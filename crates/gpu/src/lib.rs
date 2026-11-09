@@ -36,6 +36,8 @@ pub mod bm3d;
 #[cfg(not(target_arch = "wasm32"))]
 mod ctx;
 #[cfg(not(target_arch = "wasm32"))]
+mod dirty;
+#[cfg(not(target_arch = "wasm32"))]
 mod exit;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod faces;
@@ -52,6 +54,8 @@ mod spots_keep;
 #[cfg(not(target_arch = "wasm32"))]
 mod vram;
 
+#[cfg(not(target_arch = "wasm32"))]
+pub use dirty::{FrameNote, HostData, TILE, host_of, keep_host, take_frame_note, tiles_rendered};
 #[cfg(not(target_arch = "wasm32"))]
 pub use render::{DisplayFrame, GpuStages, Output, device_fits};
 /// The wgpu the renderer is built on (the same crate eframe uses: hosts hand over its device).
@@ -159,6 +163,9 @@ pub enum Fault {
     DropWork,
     /// A storage-buffer limit of this many bytes for this render.
     Limit(u64),
+    /// The device fails on another thread while this render runs (its own work completes): what it made can't be
+    /// trusted.
+    BrokenElsewhere,
 }
 
 thread_local! {
@@ -488,7 +495,8 @@ pub fn source_uploads() -> u64 {
     }
 }
 
-/// Device bytes held by a view's GPU stages (kept with its [`StageCache`]); 0 when it has none.
+/// Bytes held by a view's GPU stages (kept with its [`StageCache`]): device buffers and the host images kept with them
+/// ([`keep_host`]); 0 when it has none.
 pub fn stage_bytes(stages: &StageCache) -> usize {
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -699,6 +707,10 @@ fn run(
         if s.spots.iter().any(|sp| sp.mode == lightcraft_develop::SpotMode::Fill || sp.area.is_some()) {
             return Err(Fallback::NotTried);
         }
+        // fork (`fork/decontaminate.md`): a decontaminated mask edge has no GPU kernel yet: the CPU renders the photo
+        if s.masks.iter().any(lightcraft_pipeline::decontam::applies) {
+            return Err(Fallback::NotTried);
+        }
         // in flight until this returns; not tried once the process is ending (issue #620)
         let _work = exit::enter().ok_or(Fallback::NotTried)?;
         let gpu = device().ok_or(Fallback::NotTried)?;
@@ -730,6 +742,7 @@ fn run(
                 if let Some(e) = &ext {
                     e.clear();
                 }
+                dirty::note_frame(None);
                 let what = match &r {
                     Some(Output::Image(r)) => format!("{}×{}", r.image.width, r.image.height),
                     Some(Output::Display { frame, .. }) => format!("{}×{}", frame.width, frame.height),
@@ -758,7 +771,7 @@ fn run(
                 reason
             }
             // a device error on another thread or a lost device during the render
-            (Ok(Some(_)), None) if BROKEN.load(Ordering::Relaxed) => {
+            (Ok(Some(_)), None) if BROKEN.load(Ordering::Relaxed) || fault == Some(Fault::BrokenElsewhere) => {
                 format!("device failure during the render: {}", unavailable_reason().unwrap_or_default())
             }
             (Ok(Some(r)), None) => return Ok(r),
@@ -766,6 +779,12 @@ fn run(
             // not, the CPU renders it rather than nothing
             (Ok(None), None) => "GPU render: no image came back".to_string(),
         };
+        // (every way here: the view's stages may hold what the failed render made, and what it said it changed is no
+        // image anyone gets; issue #111)
+        if let Some(e) = &ext {
+            e.clear();
+        }
+        dirty::note_frame(None);
         record_fallback(reason.clone());
         Err(Fallback::Failed(reason))
     }

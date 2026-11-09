@@ -33,7 +33,9 @@ fn main() {
     let ids: Vec<PhotoId> = r["imported"].as_array().expect("ids").iter().filter_map(|v| v.as_u64()).map(PhotoId).collect();
     assert_eq!(ids.len(), paths.len(), "every photo imports");
     println!("selection model: {}", s.execute("segment.selectionModel", &json!({})).expect("model")["model"]);
-    let edges = ["current", "birefnet-matting"];
+    // (`HAIR_EDGES=current,birefnet-matting,apple-vision` picks the edges; `fork/apple-vision-masks.md`)
+    let list = std::env::var("HAIR_EDGES").unwrap_or_else(|_| "current,birefnet-matting".into());
+    let edges: Vec<&str> = list.split(',').map(str::trim).filter(|e| !e.is_empty()).collect();
     let set = |s: &mut Session, kind: &str, edge: &str| {
         s.execute("maskEdges.edge", &json!({"kind": kind, "edge": edge})).unwrap_or_else(|e| panic!("{kind} {edge}: {e}"));
     };
@@ -41,7 +43,7 @@ fn main() {
     for (k, &id) in ids.iter().enumerate() {
         s.execute("library.select", &json!({"ids": [id.0]})).ok();
         let stem = std::path::Path::new(&args[1 + k]).file_stem().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
-        for edge in edges {
+        for &edge in &edges {
             set(&mut s, "subject", edge);
             let t = Instant::now();
             let made = s.execute("mask.add", &json!({"kind": "subject"}));
@@ -57,7 +59,7 @@ fn main() {
             }
             s.execute("mask.deleteAll", &json!({})).ok();
         }
-        for edge in edges {
+        for &edge in &edges {
             set(&mut s, "people", edge);
             let t = Instant::now();
             let run = s.execute("parsing.run", &json!({"wait": true})).expect("parse");

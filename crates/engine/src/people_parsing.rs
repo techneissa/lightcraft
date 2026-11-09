@@ -182,10 +182,13 @@ impl PeopleParsing {
         self
     }
 
-    /// The hair edges to draw parses with now, if BiRefNet Matting is chosen for people (and installed).
-    fn matting(&self) -> Option<crate::hair_edges::HairEdges> {
+    /// The hair edges to draw parses with now, and their edge model, if one other than Current is chosen for people
+    /// (and here: BiRefNet Matting installed, Apple Vision on a Mac that runs it).
+    fn matting(&self) -> Option<(crate::hair_edges::HairEdges, crate::hair_edges::Edge)> {
         use crate::hair_edges::{Edge, EdgeKind};
-        lock(&self.inner.hair_edges).clone().filter(|e| e.edge(EdgeKind::People) == Edge::Matting)
+        let edges = lock(&self.inner.hair_edges).clone()?;
+        let edge = edges.edge(EdgeKind::People);
+        (edge != Edge::Current).then_some((edges, edge))
     }
 
     /// Use these folders: `models` (each model in its own folder under it), `cache` (parse files), `choice` (the file
@@ -300,8 +303,8 @@ impl PeopleParsing {
         let set = self.model_set();
         let matting = self.matting();
         // (a parse with matting edges is its own version, so switching the edge never reads the other's file)
-        let version = match &matting {
-            Some(_) => format!("{}+{}", set.version(), crate::hair_edges::VERSION),
+        let version = match matting.as_ref().and_then(|(_, e)| crate::hair_edges::vision::version(*e)) {
+            Some(edge) => format!("{}+{edge}", set.version()),
             None => set.version(),
         };
         let key = cache::key(&img, &hints, &version);
@@ -379,7 +382,7 @@ impl PeopleParsing {
         set: ModelSet,
         models: PathBuf,
         (img, hints): (RgbImage, Vec<FaceHint>),
-        matting: Option<crate::hair_edges::HairEdges>,
+        matting: Option<(crate::hair_edges::HairEdges, crate::hair_edges::Edge)>,
         flag: Arc<AtomicBool>,
     ) -> Result<(), String> {
         let row = self.inner.activity.start("parsing", "Finding people parts", Cancel::Flag(flag.clone()));
@@ -394,7 +397,8 @@ impl PeopleParsing {
                 let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let p = this.run(set, &models, &img, &hints, &cancelled)?;
                     match &matting {
-                        Some(edges) => hair_edged(edges, p, &img, &flag),
+                        Some((edges, crate::hair_edges::Edge::Vision)) => crate::hair_edges::vision::people_edged(edges, p, &img, &flag),
+                        Some((edges, edge)) => hair_edged(edges, *edge, p, &img, &flag),
                         None => Ok(p),
                     }
                 }));
@@ -494,11 +498,18 @@ impl PeopleParsing {
 }
 
 /// `p` with its Entire Person edges drawn by BiRefNet Matting from `img` (the picture it was parsed from).
-fn hair_edged(edges: &crate::hair_edges::HairEdges, mut p: Parsing, img: &RgbImage, cancel: &Arc<AtomicBool>) -> Result<Parsing, String> {
+fn hair_edged(
+    edges: &crate::hair_edges::HairEdges,
+    edge: crate::hair_edges::Edge,
+    mut p: Parsing,
+    img: &RgbImage,
+    cancel: &Arc<AtomicBool>,
+) -> Result<Parsing, String> {
     if p.people.is_empty() {
         return Ok(p);
     }
-    let matte = edges.matte(&img.data, img.width, img.height, cancel).map_err(|e| format!("hair edges: {e}"))?;
+    let kind = crate::hair_edges::EdgeKind::People;
+    let matte = edges.matte_for(edge, kind, &img.data, img.width, img.height, cancel).map_err(|e| format!("hair edges: {e}"))?;
     crate::hair_edges::people::refine(&mut p, &matte);
     Ok(p)
 }

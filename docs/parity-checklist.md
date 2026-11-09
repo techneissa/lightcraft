@@ -31,12 +31,12 @@ cited here still exists. Formerly docs/parity.md.
 | C. Views & navigation (VIEW) | 16 | 1 | 1 | 0 | 9/9 (100%) | 4/4 (100%) |
 | D. Search & filter (FILT) | 11 | 1 | 1 | 0 | 4/4 (100%) | 4/4 (100%) |
 | E. Metadata (META) | 5 | 1 | 0 | 0 | 2/2 (100%) | 2/2 (100%) |
-| F. Edit panel — global adjustments (EDIT) | 42 | 5 | 3 | 1 | 25/28 (89%) | 14/15 (93%) |
+| F. Edit panel — global adjustments (EDIT) | 42 | 6 | 3 | 1 | 25/28 (89%) | 14/15 (93%) |
 | G. Profiles (PROF) | 7 | 1 | 3 | 0 | 3/4 (75%) | 3/3 (100%) |
 | H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
 | I. Remove / healing (REM) | 9 | 2 | 1 | 2 | 4/4 (100%) | 3/4 (75%) |
 | J. Red eye (EYE) | 2 | 0 | 0 | 0 | — | 1/1 (100%) |
-| K. Masking (MASK) | 16 | 5 | 5 | 0 | 7/8 (88%) | 7/7 (100%) |
+| K. Masking (MASK) | 16 | 6 | 5 | 0 | 7/8 (88%) | 7/7 (100%) |
 | L. Presets (PRE) | 7 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
 | M. Versions & history (VER) | 5 | 0 | 0 | 0 | 1/1 (100%) | 3/3 (100%) |
 | N. Copy / paste / sync (SYNC) | 5 | 0 | 0 | 0 | 3/3 (100%) | 1/1 (100%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 423 | 71 | 56 | 35 | 193/203 (95%) | 148/164 (90%) |
+| **Total** | 423 | 73 | 56 | 35 | 193/203 (95%) | 148/164 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.4%** of 550 in-scope rows — P0 97.5% of 203 · P1 94.2% of 164 · P2 57.5% of 181.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **83.2%** of 552 in-scope rows — P0 97.5% of 203 · P1 94.2% of 164 · P2 57.4% of 182.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -228,6 +228,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-EDIT-SECTION-SOLO | Solo Mode for Edit sections | P2 | ✅ | `cmd:view.soloSections`, `cmd:section.calibration`, `crates/ui-egui/src/state.rs` (`toggle_section`, `set_single_panel`, `solo_section`), `crates/ui-egui/src/panels/edit.rs` (`section`), `crates/ui-egui/src/tests/solo_sections.rs` | Lightroom Classic's panel Solo Mode: while it is on, opening one Edit section (a header click or ⌘1–⌘5) closes the others. Window ▸ Edit Sections ▸ Solo Mode (checked while on) or a right-click on any section header (`sectionMenu:solo`) turns it on and off; turning it on keeps only the section opened last. ⌥-click on a header opens just that section once, without turning the mode on (agents: `section.<id>` `{solo: true}`, refused for a section the Edit panel has not got; header clicks run `section.<id>` too, Calibration included). `view.soloSections` `{on?}` (no params toggles) answers `{soloSections}`. Kept with the UI state (`singlePanel`) |
 | LR-EDIT-RESET | Reset all / section / slider | P0 | ✅ | `cmd:develop.reset`, `cmd:develop.resetSection`, `cmd:develop.resetControl`, `crates/ui-egui/src/widgets.rs` (double-click) | no "reset to open" |
 | LR-EDIT-SHOWORIG | Show original | P0 | ✅ | `cmd:view.showOriginal` | |
+| LR-EDIT-PORTRAIT | Portrait retouching | — | 🟡 | `cmd:retouch.faces`, `cmd:retouch.detect`, `cmd:retouch.set`, `cmd:retouch.resetFace`, `cmd:retouch.reset`, `ctl:retouch.*`, `crates/retouch/src/lib.rs`, `crates/pipeline/src/retouch_step.rs`, `crates/engine/src/retouch_input.rs`, `crates/ui-egui/src/panels/portrait.rs`, `cmd:panel.portrait` | an extra (the reference app has no portrait retouching): the base only (issue #80). Settings for every face and per face (kept by person or place), one pipeline step, faces from YuNet, the Portrait tab (tool strip, shortcut T) with a face picker and Portrait Presets; every feature (skin, blemishes, wrinkles, skin tone, eyes, teeth and lips, glare, stray hair, reshape, background) is a stub that changes nothing yet. See `fork/retouch-foundation.md` |
 
 ## G. Profiles (PROF)
 
@@ -318,6 +319,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-MASK-SYNC | Copy masks to other photos | P1 | ✅ | `cmd:develop.copy` (`groups`) | |
 | LR-MASK-ADAPTIVE | Adaptive presets | P2 | ⬜ | | |
 | LR-MASK-RECOLOR | Recolor a masked area | P2 | ✅ | `cmd:mask.recolor`, `cmd:mask.recolorPick`, `crates/pipeline/src/recolor/mod.rs`, `crates/ui-egui/src/panels/mask_recolor.rs` | beyond Lightroom (no equivalent): the area takes a picked colour (picker, hex, eyedropper on this or another photo) and keeps its shading, in OkLab against the area's mean measured on a fixed proxy, so preview, export and GPU match |
+| LR-MASK-HAIR-EDGES | Hair-accurate edges for people and subject masks | P2 | 🟡 | `cmd:maskEdges.edge`, `cmd:maskEdges.status`, `cmd:maskEdges.download`, `cmd:maskEdges.cancel`, `crates/engine/src/hair_edges.rs` | fork: BiRefNet-matting redraws the edge of Entire Person / Background (people parsing) and Subject masks within a band around the mask's edge, per mask kind (default Current, unchanged); once per photo, cached by pixels, preview = export; not compared against Lightroom; Select People UI not built yet, so people masks are reached through `parsing.mask` |
 
 ## L. Presets (PRE)
 
