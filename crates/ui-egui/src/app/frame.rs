@@ -105,6 +105,7 @@ impl LightcraftApp {
         panels::faces::pump_background(self, ctx, now);
         crate::learn_edits::pump(self, ctx);
         focus_scan::pump(self, ctx, now);
+        crate::parse_ahead::pump(self, ctx, now);
         // auto import: poll the watched folder every few seconds (on a worker thread: it may be on
         // a network share), list it when it changed, then import what's new like any import (also on a worker thread)
         // a folder that couldn't be read stops being one once another is watched (or none)

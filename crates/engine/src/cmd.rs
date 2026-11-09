@@ -51,6 +51,7 @@ pub mod metadata;
 pub mod missing;
 mod model_runtime;
 mod organize;
+mod parse_ahead;
 pub(crate) mod parsing;
 mod prefs;
 mod preset_files;
@@ -182,6 +183,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(model_runtime::specs());
         v.extend(parsing::specs());
         v.extend(organize::specs());
+        v.extend(parse_ahead::specs());
         v.extend(keywords::specs());
         v.extend(manage::specs());
         v.extend(previews::specs());

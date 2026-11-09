@@ -20,7 +20,9 @@ use lightcraft_parsing::{FaceHint, ModelSet, Parsing, RgbImage, cache};
 
 use crate::activity::{Activity, Cancel};
 
+mod ahead;
 mod download;
+pub(crate) use ahead::{QuietRun, cache_budget};
 pub use download::Download;
 
 /// The newest parses kept in memory.
@@ -252,6 +254,7 @@ impl PeopleParsing {
     }
 
     fn remembered(&self, key: &str) -> Option<Arc<Parsing>> {
+        self.looked_up(key);
         lock(&self.inner.memory).iter().find(|e| e.0 == key).map(|e| e.1.clone())
     }
 
@@ -353,7 +356,7 @@ impl PeopleParsing {
 
     fn spawn(&self, key: String, set: ModelSet, models: PathBuf, img: RgbImage, hints: Vec<FaceHint>, flag: Arc<AtomicBool>) -> Result<(), String> {
         let row = self.inner.activity.start("parsing", "Finding people parts", Cancel::Flag(flag.clone()));
-        row.detail(set.label());
+        let row = self.shown(row, set, &flag);
         let this = self.clone();
         std::thread::Builder::new()
             .name("people-parsing".into())
