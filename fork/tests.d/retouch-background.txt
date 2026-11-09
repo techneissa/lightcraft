@@ -1,0 +1,10 @@
+cargo test -p lightcraft-retouch --test background
+cargo test -p lightcraft-retouch --lib -- background
+cargo test -p lightcraft-retouch --test foundation
+cargo test -p lightcraft-pipeline --lib -- retouch_step
+cargo test -p lightcraft-heif --lib -- depth
+cargo test -p lightcraft-engine --lib -- retouch_background retouch_input
+cargo test -p lightcraft-engine --features lightcraft-codecs/heif --lib -- retouch_background
+cargo test -p lightcraft-catalog --lib -- fork_format tests_format_version
+cargo test -p lightcraft-ui-egui --lib -- portrait
+cargo test -p lightcraft-mcp --lib -- tests_retouch
