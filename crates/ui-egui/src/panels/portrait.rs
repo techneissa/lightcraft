@@ -211,6 +211,9 @@ pub(crate) fn save_right<S: serde::Serializer>(right: &RightPanel, s: S) -> Resu
 /// The tab's UI commands: `portrait.section {section, open?}` opens the Portrait tab and opens or closes one of its
 /// sections (no `open`: toggles). Any other id: an error.
 pub(crate) fn command(app: &mut LightcraftApp, id: &str, p: &Value) -> Result<Value, String> {
+    if id == background::CHOOSE_PICTURE {
+        return background::choose_picture(app, p);
+    }
     if id != "portrait.section" {
         return Err(format!("{id}: unknown command"));
     }
