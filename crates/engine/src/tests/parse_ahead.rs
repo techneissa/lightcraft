@@ -690,10 +690,10 @@ fn the_pump_never_reads_the_face_detector_and_a_parsed_photos_mask_needs_no_pars
     assert_eq!(s.parsing.runs(), 2);
 }
 
-/// Portrait retouching on (Skin Tone's Amount), so a render of the photo finds its faces from the parse.
+/// Portrait retouching on (Skin Tone's Face Light), so a render of the photo finds its faces from the parse.
 fn retouch_on(s: &mut Session, id: PhotoId) {
     s.selection = crate::Selection::single(id);
-    s.execute("develop.set", &json!({"control": "retouch.skinTone.amount", "value": 100.0})).unwrap();
+    s.execute("develop.set", &json!({"control": "retouch.skinTone.faceLight", "value": 100.0})).unwrap();
 }
 
 #[test]
