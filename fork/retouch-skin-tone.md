@@ -32,8 +32,17 @@ Skin and Body Skin masks from the parse): draft (1936 px long edge) 2.8–4.2 ms
 photo's scene-linear stage already runs there), on the parse's cached masks; no model runs while a slider moves. No
 GPU version: the CPU step is within the draft budget.
 
-The stand-in `retouch.skinTone.amount` of `fork/retouch-masks.md` is gone (`retouch.skinTone.faceLight` replaces it in
-the tests that used it); it was never on `custom`, so no saved edit changes.
+The stand-in slider `retouch.skinTone.amount` of `fork/retouch-masks.md` is gone: `retouch.skinTone.faceLight` replaces
+it in the tests that used it, and a saved `amount` reads as Face Light (`#[serde(alias)]`; the stand-in gave about
+0.59 stop at 100, Face Light +100 gives 0.6).
+
+Zoom: every read stays inside the areas of the skin and face masks (each grid covers a mask's box; the blurs run on
+the grid), so `REACH` is 0.02, a pixel of rounding. A zoomed window renders those areas whole
+(`window_for_reads`), so the colour of the skin around a spot comes from the whole face, never from the window.
+
+Small faces: a cell is never under a pixel, so a face under 128 px in the draft has coarser cells than its export.
+Measured on a 38 px face against its export four times larger: mean difference 0.05–0.4 %, worst 2 % (no larger
+than for a 188 px face), so cells stay whole pixels.
 
 ## Branch
 
@@ -53,8 +62,9 @@ No product code outside the own files. Docs and tests only:
   replaced), `crates/ui-egui/src/tests/portrait.rs` (the section's test), and the control id
   `retouch.skinTone.faceLight` in the tests of `crates/pipeline/src/retouch_step.rs`, `tests_spots_keep.rs`,
   `crates/engine/src/retouch_input/tests.rs`, `parts/tests.rs`, `crates/retouch/tests/foundation.rs` and
-  `frames.rs`. The warp test in `retouch_step.rs` asks 95 % of the patch to be lit, not 97 %: Face Light's soft edge
-  leaves the patch's rim barely lit.
+  `frames.rs`. The warp test in `retouch_step.rs` counts the red pixels at least Face Light's edge (`LIGHT_EDGE` of
+  the face) inside the patch, 97 % of them lit (fails with the warp mapping off: 75 %), and its zoom test has a
+  Skin Tone window over a cheek (fails without the step growing the window: 9 levels off).
 
 ## Tests
 
@@ -65,7 +75,8 @@ falling off towards the edge over at least three pixels, nothing outside the fac
 slider on with three faces (one past the photo's edge, one Body Skin only) leaving every pixel outside the masks
 bit for bit; a face without masks (YuNet boxes only) left alone; no halo next to dark hair; a flat grey photo staying flat under Even Tone and Redness; a 1 × 1 photo;
 no faces, 50 faces, faces past the edge and an empty photo; a draft and an export four times its size agreeing after
-scaling (mean difference under 1 %); the grid's cells, rows and bilinear reads; the Portrait tab's Skin Tone section
+scaling (mean difference under 1 %), also for a face under 128 px; a zoomed window over a cheek equal to the whole
+frame within one level; a saved `amount` read as Face Light; `PARTS` holding every part read; the grid's cells, rows and bilinear reads; the Portrait tab's Skin Tone section
 with its three sliders.
 
 ## What's New entry

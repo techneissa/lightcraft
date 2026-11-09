@@ -3,7 +3,8 @@
 mod common;
 
 use lightcraft_raster::{Plane, Rgb32f};
-use lightcraft_retouch::skin_tone::{FACE_LIGHT_STOPS, SkinTone};
+use lightcraft_retouch::Feature;
+use lightcraft_retouch::skin_tone::{self, FACE_AREA, FACE_LIGHT_STOPS, SkinTone};
 use lightcraft_retouch::{Face, Input, NormRect, Part, PartMask, Retouch, Stage, WholePhoto};
 
 #[test]
@@ -299,4 +300,56 @@ fn a_draft_and_a_bigger_export_agree_after_scaling() {
     }
     let mean = sum / (w * h) as f32;
     assert!(mean < 0.01 && worst < 0.08, "mean difference {mean}, worst {worst}");
+}
+
+/// The face search keeps only the masks a feature lists in `PARTS`: every part Skin Tone reads is there.
+#[test]
+fn parts_lists_every_mask_skin_tone_reads() {
+    for p in skin_tone::SKIN.iter().chain(&FACE_AREA) {
+        assert!(SkinTone::PARTS.contains(p), "{p:?} is read but not kept");
+    }
+}
+
+/// Settings saved with the stand-in `amount` slider (the Face Light that showed the masks arrive) read as Face Light.
+#[test]
+fn a_saved_amount_reads_as_face_light() {
+    let old: SkinTone = serde_json::from_str(r#"{"amount": 80}"#).unwrap();
+    assert_eq!(old, SkinTone { face_light: 80.0, ..SkinTone::default() });
+    let new: SkinTone = serde_json::from_str(r#"{"evenTone": 20, "faceLight": -30}"#).unwrap();
+    assert_eq!((new.even_tone, new.face_light), (20.0, -30.0));
+    // and it is written under its own name
+    assert!(serde_json::to_string(&old).unwrap().contains("\"faceLight\":80"));
+}
+
+/// A face under 128 pixels in the draft (its grid's cells are then a whole pixel, coarser than 1/128 of the face)
+/// still makes the change its export four times larger makes.
+#[test]
+fn a_small_face_in_the_draft_agrees_with_the_export() {
+    let face = vec![skin_face(0.1, 0.1, 0.2, 0.225)];
+    let (w, h) = (300, 240);
+    let small = blotchy(w, h);
+    let big = Rgb32f::from_fn(w * 4, h * 4, |x, y| small.data[(y / 4) * w + x / 4]);
+    for r in [with(100.0, 0.0, 0.0), with(0.0, 100.0, 0.0), with(0.0, 0.0, 60.0)] {
+        let (draft, export) = (retouched(&small, &r, face.clone()), retouched(&big, &r, face.clone()));
+        let (mut worst, mut sum, mut n) = (0.0f32, 0.0f32, 0);
+        for y in 0..h {
+            for x in 0..w {
+                let d = draft.data[y * w + x];
+                if d == small.data[y * w + x] {
+                    continue;
+                }
+                let mut acc = [0.0f32; 3];
+                for dy in 0..4 {
+                    for dx in 0..4 {
+                        let p = export.data[(y * 4 + dy) * w * 4 + x * 4 + dx];
+                        acc = [acc[0] + p[0], acc[1] + p[1], acc[2] + p[2]];
+                    }
+                }
+                let e = (0..3).map(|k| (acc[k] / 16.0 / d[k].max(1e-6) - 1.0).abs()).fold(0.0f32, f32::max);
+                (worst, sum, n) = (worst.max(e), sum + e, n + 1);
+            }
+        }
+        let mean = sum / n.max(1) as f32;
+        assert!(n > 200 && mean < 0.01 && worst < 0.05, "{n} changed, mean difference {mean}, worst {worst}");
+    }
 }

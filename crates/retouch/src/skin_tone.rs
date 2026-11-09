@@ -71,7 +71,9 @@ pub struct SkinTone {
     pub even_tone: f64,
     /// 0…100; 0 is off.
     pub redness: f64,
-    /// −100…+100; 0 is off.
+    /// −100…+100; 0 is off. Settings saved with the stand-in `amount` slider of `fork/retouch-masks.md` (Facial Skin
+    /// up to half again brighter at 100, about 0.59 stop) read it as Face Light (0.6 stop at 100).
+    #[serde(alias = "amount")]
     pub face_light: f64,
 }
 
@@ -85,6 +87,9 @@ impl Feature for SkinTone {
         Control { spec: Spec::amount("retouch.skinTone.redness", "Redness"), get: |s| s.redness, set: |s, v| s.redness = v },
         Control { spec: Spec::signed("retouch.skinTone.faceLight", "Face Light"), get: |s| s.face_light, set: |s, v| s.face_light = v },
     ];
+    /// Its reads stay inside the areas of its masks (each grid covers a mask's box, and every blur runs on the grid),
+    /// which the step already renders whole for a zoomed window: only a pixel of rounding past them.
+    const REACH: f64 = 0.02;
     const PARTS: &'static [Part] = &[Part::FacialSkin, Part::BodySkin, Part::Eyebrows, Part::EyeWhites, Part::Iris, Part::Lips, Part::Teeth];
 
     fn apply(&self, img: &mut Rgb32f, scene: &Scene<'_>, face: Option<usize>) {
