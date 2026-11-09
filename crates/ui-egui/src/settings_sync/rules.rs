@@ -197,7 +197,8 @@ pub fn presets_part(presets: &[lightcraft_develop::Preset]) -> Option<Value> {
     if user.is_empty() {
         return None;
     }
-    serde_json::from_str(&lightcraft_engine::presets::to_lcpreset(&user)).ok()
+    // portrait presets keep their person on the user's other Macs, never a face's embedding (fork)
+    serde_json::from_str(&lightcraft_engine::presets::to_lcpreset_synced(&user)).ok()
 }
 
 /// The settings file's JSON (without `savedBy`): `presets` are included when given.

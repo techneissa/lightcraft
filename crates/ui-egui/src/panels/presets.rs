@@ -239,7 +239,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
                         let field = Rect::from_min_max(pos2(text_x, r.top() + 2.0), pos2(r.right() - 30.0, r.bottom() - 2.0));
                         crate::inline_rename::field(app, ui, &kind, field);
                     } else {
-                        ui.painter().text(pos2(text_x, r.center().y), Align2::LEFT_CENTER, &name, t.font(13.0), t.text_label);
+                        let shown = ui.painter().text(pos2(text_x, r.center().y), Align2::LEFT_CENTER, &name, t.font(13.0), t.text_label);
+                        // a portrait preset says whom it follows, or All Faces (fork, `fork/portrait-presets.md`)
+                        if let Some(tag) = super::portrait::preset_tag(&pr) {
+                            ui.painter().text(pos2(shown.right() + 8.0, r.center().y), Align2::LEFT_CENTER, tag, t.font(11.5), t.text_dim);
+                        }
                     }
                     if fav {
                         crate::rating::paint_star(

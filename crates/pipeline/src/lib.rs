@@ -52,6 +52,7 @@ pub mod output;
 pub mod profiles;
 pub mod recolor;
 pub mod redeye;
+pub mod reshape_step;
 pub mod residual_look;
 pub mod retouch_step;
 pub mod spot_area;
@@ -355,6 +356,10 @@ pub fn frame_for(src: &Rgb32f, info: &SourceInfo, s: &DevelopSettings, apply_cro
             // The estimated CA moves the colour planes too: keep the crop inside every one of them.
             frame.constrain_to_image(s.geometry.constrain_crop);
         }
+    }
+    // (fork, `fork/retouch-reshape.md`: Face Reshape moves the photo before its lens corrections)
+    if let Some(field) = reshape_step::field(info, s, &frame) {
+        frame.set_reshape(field);
     }
     frame
 }

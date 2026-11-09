@@ -71,6 +71,7 @@
 //! | fork 3 | Match Look's residual Look (#90) | develop settings `look` (`ResidualLook`: `amount`, `lightness`, `cast`, `chroma`, `bands`), left out while empty |
 //! | fork 4 | a mask's Decontaminate amount (#115) | `Mask.decontaminate` (develop settings), left out at 0 |
 //! | fork 5 | Select People masks (#123) | `MaskShape::People` `face`, `seg`, `detail` and `edge` (develop settings), left out when empty; their grids go in the snapshot's shared grid table |
+//! | fork 6 | Face Reshape (`fork/retouch-reshape.md`) | the `fork_retouch` block's `reshape` (`slimFace`, `jaw`, `chin`, `doubleChin`, `nose`, `forehead`, `eyeSize`), for every face and per face |
 //! | fork 8 | the Portrait tab's Refine brush (#99) | develop settings `fork_retouch.refine` and `fork_retouch.faces[].refine` (`Refine`: per feature, strokes with `mode`, `points`, `size`, `feather`, `flow`, `strength`, `pressure`), left out while empty |
 //!
 //! Versions 1–14 are `"format":"lightcraft-catalog"`; the fork writes `"format":"lightcraft-catalog-fork"` from

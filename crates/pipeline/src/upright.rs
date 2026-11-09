@@ -582,6 +582,8 @@ pub(crate) fn analysis_plane(src: &Rgb32f, info: &SourceInfo, s: &DevelopSetting
     let mut base = s.clone();
     base.geometry = Geometry::default();
     base.crop = Crop::default();
+    // (fork, `fork/retouch-reshape.md`: nor Face Reshape, which `analysis_key` doesn't cover)
+    base.retouch = Default::default();
     let frame = crate::frame_for(src, info, &base, false);
     let (w, h) = frame.fit(ANALYSIS_LONG, ANALYSIS_LONG);
     let img = frame.sample(src, w, h);

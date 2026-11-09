@@ -275,6 +275,52 @@ fn the_blemishes_section_has_amount_the_switch_and_the_report() {
     assert!(!h.app.session.develop_of(photo).unwrap().retouch.global.blemish.keep_moles, "the click turns the switch off");
 }
 
+/// The Face Reshape section (`portrait/reshape.rs`): its seven −100…+100 sliders; a click right of the middle sets
+/// Slim Face for every face.
+#[test]
+fn the_face_reshape_section_has_its_seven_sliders() {
+    let mut session = lightcraft_engine::Session::with_demo();
+    session.retouch_faces.set_provider(Arc::new(TwoFaces));
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 1600.0], 1.0);
+    assert_eq!(h.request("ui.set", json!({"view": "detail"}), T)["ok"], true);
+    click(&mut h, "icon:portrait");
+    click(&mut h, "section:portrait.reshape");
+    h.step();
+    let photo = h.app.session.active().unwrap();
+    for f in ["slimFace", "jaw", "chin", "doubleChin", "nose", "forehead", "eyeSize"] {
+        assert!(rect_of(&mut h, &format!("slider:retouch.reshape.{f}")).is_some(), "{f} is in the Face Reshape section");
+    }
+    let r = h.request("ui.clickWidget", json!({"id": "slider:retouch.reshape.slimFace", "fx": 0.75}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let v = h.app.session.develop_of(photo).unwrap().retouch.global.get("retouch.reshape.slimFace").unwrap_or(0.0);
+    assert!(v > 30.0 && v < 70.0, "Slim Face set by the click: {v}");
+}
+
+/// The Wrinkles section (`portrait/wrinkles.rs`): Forehead, Crow's Feet, Smile Lines and Neck; a click on a track sets
+/// the value for every face.
+#[test]
+fn the_wrinkles_section_has_its_four_sliders() {
+    let mut session = lightcraft_engine::Session::with_demo();
+    session.retouch_faces.set_provider(Arc::new(TwoFaces));
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 1400.0], 1.0);
+    assert_eq!(h.request("ui.set", json!({"view": "detail"}), T)["ok"], true);
+    click(&mut h, "icon:portrait");
+    click(&mut h, "section:portrait.wrinkles");
+    h.step();
+    let photo = h.app.session.active().unwrap();
+    for id in ["retouch.wrinkles.forehead", "retouch.wrinkles.crowsFeet", "retouch.wrinkles.smileLines", "retouch.wrinkles.neck"] {
+        assert!(rect_of(&mut h, &format!("slider:{id}")).is_some(), "{id} is in the Wrinkles section");
+    }
+    let r = h.request("ui.clickWidget", json!({"id": "slider:retouch.wrinkles.forehead", "fx": 0.75}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    h.step();
+    let v = h.app.session.develop_of(photo).unwrap().retouch.global.get("retouch.wrinkles.forehead").unwrap_or(0.0);
+    assert!(v > 40.0, "Forehead set by the click: {v}");
+}
+
 /// The Refine brush (#99, `portrait/refine.rs`): every feature's section has it; Reduce takes the brush, a drag on the
 /// photo paints one stroke (one undo step) for every face or the picked face alone, ⌥ swaps Reduce and Restore,
 /// Clear and the same button again put it away, and Add is offered only where the feature reads a mask.

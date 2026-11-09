@@ -173,3 +173,29 @@ fn the_step_runs_nothing_when_off_even_with_overrides() {
     lightcraft_retouch::run::apply(&mut img, &r, &Input::new(faces), &WholePhoto { width: 32, height: 24 }, Stage::Retouch);
     assert_eq!(img, before);
 }
+
+/// A mask's sampler (for sampling every pixel of a face) gives what `sample` gives, inside and outside its area,
+/// for points that are not numbers, and for planes with values that are not numbers or out of 0…1.
+#[test]
+fn a_mask_sampler_samples_as_the_mask_does() {
+    let plane = Plane::from_fn(7, 5, |x, y| match (x, y) {
+        (2, 1) => f32::NAN,
+        (4, 3) => 1.7,
+        (5, 0) => -0.4,
+        _ => ((x * 3 + y * 5) % 11) as f32 / 10.0,
+    });
+    let m = PartMask { plane, area: NormRect::new(0.2, 0.1, 0.7, 0.6) };
+    let Some(s) = m.sampler() else { panic!("a valid mask") };
+    for j in 0..=60 {
+        for i in 0..=60 {
+            let (nx, ny) = (i as f64 / 60.0, j as f64 / 60.0);
+            let (a, b) = (m.sample(nx, ny), s.at(nx, ny));
+            assert!((a - b).abs() < 1e-5, "({nx}, {ny}): {a} against {b}");
+        }
+    }
+    for (nx, ny) in [(f64::NAN, 0.3), (0.3, f64::INFINITY), (-1e300, 0.3)] {
+        assert_eq!(s.at(nx, ny), 0.0);
+    }
+    assert!(PartMask { plane: Plane::new(0, 0), area: NormRect::new(0.0, 0.0, 1.0, 1.0) }.sampler().is_none());
+    assert!(PartMask { plane: Plane::filled(2, 2, 1.0), area: NormRect::new(0.5, 0.0, 0.5, 1.0) }.sampler().is_none());
+}
