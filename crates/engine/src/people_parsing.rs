@@ -146,10 +146,19 @@ struct Inner {
     /// One model run at a time: runs share one loaded model and its GPU device, whose buffers are safe with one graph
     /// in flight only.
     one_run: Mutex<()>,
+    /// The loaded set. Held only to look or swap, never while a set loads (the Settings window takes it).
     #[cfg(not(target_arch = "wasm32"))]
     loaded: Mutex<Option<Loaded>>,
+    /// Counts the times the loaded set went stale (new folders or runtimes), under `loaded`: a set loaded meanwhile
+    /// serves the run that loaded it and is not kept.
+    #[cfg(not(target_arch = "wasm32"))]
+    stale: std::sync::atomic::AtomicU64,
     /// The engines the face and clothes parsers run on (`fork/coreml.md`).
+    #[cfg(not(target_arch = "wasm32"))]
     runtimes: Mutex<lightcraft_parsing::Runtimes>,
+    /// Called by a run just before it loads the set (tests hold a load there).
+    #[cfg(test)]
+    before_load: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     watcher: AtomicBool,
     runs: std::sync::atomic::AtomicUsize,
     message: Mutex<Option<String>>,
@@ -188,7 +197,12 @@ impl PeopleParsing {
                 one_run: Mutex::new(()),
                 #[cfg(not(target_arch = "wasm32"))]
                 loaded: Mutex::new(None),
+                #[cfg(not(target_arch = "wasm32"))]
+                stale: std::sync::atomic::AtomicU64::new(0),
+                #[cfg(not(target_arch = "wasm32"))]
                 runtimes: Mutex::new(lightcraft_parsing::Runtimes::default()),
+                #[cfg(test)]
+                before_load: Mutex::new(None),
                 watcher: AtomicBool::new(false),
                 runs: std::sync::atomic::AtomicUsize::new(0),
                 message: Mutex::new(None),
@@ -218,9 +232,19 @@ impl PeopleParsing {
         let saved = choice.as_deref().and_then(read_choice);
         *lock(&self.inner.paths) = Paths { models, cache, choice };
         *lock(&self.inner.set) = saved;
+        self.unload();
+    }
+
+    /// Drop the loaded set (the next run loads it again), and keep a load going now from being kept.
+    fn unload(&self) {
         #[cfg(not(target_arch = "wasm32"))]
         {
-            *lock(&self.inner.loaded) = None;
+            // (the set is dropped after the lock is released)
+            let _old = {
+                let mut slot = lock(&self.inner.loaded);
+                self.inner.stale.fetch_add(1, Ordering::AcqRel);
+                slot.take()
+            };
         }
     }
 
@@ -303,28 +327,32 @@ impl PeopleParsing {
     }
 
     /// The engines the face and clothes parsers run on.
+    #[cfg(not(target_arch = "wasm32"))]
     pub fn runtimes(&self) -> lightcraft_parsing::Runtimes {
         *lock(&self.inner.runtimes)
     }
 
     /// Run `model` (a parser's folder id, `lightcraft_parsing::coreml::CONVERTED`) on `runtime` from the next run on
-    /// (the loaded models are dropped). False for a model that is not one of them.
+    /// (the loaded models are dropped). False for a model that is not one of them. Never waits for a load going (the
+    /// Settings window calls it).
     pub fn set_runtime(&self, model: &str, runtime: crate::model_runtime::Runtime) -> bool {
-        {
-            // released before `loaded` is taken: a run holds `loaded` while it reads the runtimes
-            let mut r = lock(&self.inner.runtimes);
-            if model == COREML_MODELS[0] {
-                r.face = runtime;
-            } else if model == COREML_MODELS[1] {
-                r.body = runtime;
-            } else {
-                return false;
-            }
+        let face = model == COREML_MODELS[0];
+        if !face && model != COREML_MODELS[1] {
+            return false;
         }
         #[cfg(not(target_arch = "wasm32"))]
         {
-            *lock(&self.inner.loaded) = None;
+            // the runtimes change before the set goes stale, so a load that read the old ones is not kept
+            let mut r = lock(&self.inner.runtimes);
+            if face {
+                r.face = runtime;
+            } else {
+                r.body = runtime;
+            }
         }
+        #[cfg(target_arch = "wasm32")]
+        let _ = runtime;
+        self.unload();
         true
     }
 
@@ -542,26 +570,51 @@ impl PeopleParsing {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn run_models(&self, set: ModelSet, models: &Path, img: &RgbImage, hints: &[FaceHint], cancelled: &dyn Fn() -> bool) -> Result<Parsing, String> {
-        let parser = {
-            let mut slot = lock(&self.inner.loaded);
-            match slot.as_mut().filter(|l| l.set == set) {
-                Some(l) => {
-                    l.last_used = Instant::now();
-                    l.parser.clone()
+        let parser = match self.loaded_parser(set) {
+            Some(p) => p,
+            None => {
+                // read before the runtimes: a change after this makes the set loaded below stale
+                let stale = self.inner.stale.load(Ordering::Acquire);
+                let runtimes = self.runtimes();
+                #[cfg(test)]
+                if let Some(f) = lock(&self.inner.before_load).clone() {
+                    f();
                 }
-                None => {
-                    *slot = None;
-                    let runtimes = self.runtimes();
-                    let p = Arc::new(
-                        lightcraft_parsing::Parser::load_with(set, models, lightcraft_parsing::best_device(), runtimes).map_err(|e| e.to_string())?,
-                    );
+                // without `loaded` held: the first Core ML load compiles its model (seconds), and the Settings window
+                // reads and changes the loaded set meanwhile
+                let p = Arc::new(
+                    lightcraft_parsing::Parser::load_with(set, models, lightcraft_parsing::best_device(), runtimes).map_err(|e| e.to_string())?,
+                );
+                let mut slot = lock(&self.inner.loaded);
+                if self.inner.stale.load(Ordering::Acquire) == stale {
                     *slot = Some(Loaded { set, parser: p.clone(), last_used: Instant::now() });
-                    p
                 }
+                p
             }
         };
         self.watch();
         parser.parse(img, hints, &lightcraft_parsing::Options::default(), cancelled).map_err(|e| e.to_string())
+    }
+
+    /// The loaded parser of `set`, marked used; another set loaded is dropped (before `set` loads, so both are never
+    /// in memory).
+    #[cfg(not(target_arch = "wasm32"))]
+    fn loaded_parser(&self, set: ModelSet) -> Option<Arc<lightcraft_parsing::Parser>> {
+        let mut slot = lock(&self.inner.loaded);
+        if let Some(l) = slot.as_mut().filter(|l| l.set == set) {
+            l.last_used = Instant::now();
+            return Some(l.parser.clone());
+        }
+        let old = slot.take();
+        drop(slot);
+        drop(old);
+        None
+    }
+
+    /// Hold every load at its start with `f` (it runs on the parse's thread, without `loaded` held).
+    #[cfg(test)]
+    pub(crate) fn set_before_load(&self, f: Option<Arc<dyn Fn() + Send + Sync>>) {
+        *lock(&self.inner.before_load) = f;
     }
 
     #[cfg(target_arch = "wasm32")]

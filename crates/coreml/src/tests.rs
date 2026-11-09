@@ -141,6 +141,27 @@ fn a_new_manifest_is_a_new_cache_key() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// A model or weights file replaced inside a package (the manifest unchanged) is a new key: it compiled from the old
+/// copy before.
+#[test]
+fn a_new_model_or_weights_file_is_a_new_cache_key() {
+    let dir = scratch("key-files");
+    let package = dir.join("m.mlpackage");
+    let data = package.join("Data/com.apple.CoreML");
+    std::fs::create_dir_all(data.join("weights")).unwrap();
+    std::fs::write(package.join("Manifest.json"), br#"{"itemInfoEntries": {"A": {}}}"#).unwrap();
+    std::fs::write(data.join("model.mlmodel"), b"model one").unwrap();
+    std::fs::write(data.join("weights/weight.bin"), b"weights one").unwrap();
+    let first = package_key(&package).unwrap();
+    assert_eq!(package_key(&package).unwrap(), first);
+    std::fs::write(data.join("weights/weight.bin"), b"weights two, longer").unwrap();
+    let second = package_key(&package).unwrap();
+    assert_ne!(second, first);
+    std::fs::write(data.join("model.mlmodel"), b"model two, longer").unwrap();
+    assert_ne!(package_key(&package).unwrap(), second);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// A damaged package next to a stale compiled copy: compiling it fails, nothing is loaded, no key is left behind.
 #[test]
 fn a_damaged_package_is_not_loaded_from_a_stale_copy() {

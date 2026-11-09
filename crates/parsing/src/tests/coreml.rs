@@ -160,3 +160,65 @@ fn a_missing_or_damaged_core_ml_model_falls_back_to_candle() {
         assert_eq!(p.backends(), (Backend::Candle, Backend::Candle));
     }
 }
+
+/// The largest difference between two face parses (crop by crop, group by group).
+fn groups_diff(a: &crate::face::Groups, b: &crate::face::Groups) -> f32 {
+    assert_eq!(a.len(), b.len());
+    a.iter().flatten().zip(b.iter().flatten()).flat_map(|(x, y)| x.iter().zip(y).map(|(p, q)| (p - q).abs())).fold(0.0f32, f32::max)
+}
+
+/// Core ML failing on a photo's first faces hands them to candle, which parses them as the candle runtime does: one
+/// face a call on the GPU. It got them eight at a time, and on Metal candle gives the faces after the first in a call
+/// other numbers.
+#[test]
+fn core_ml_failing_on_the_first_faces_gives_the_masks_of_candle_one_face_at_a_time() {
+    let Some(models) = shared() else {
+        lightcraft_testkit::skip!(Model, "the SegFormer set and its Core ML packages are not in the shared models folder");
+        return;
+    };
+    if !lightcraft_coreml::available() {
+        lightcraft_testkit::skip!(Model, "Core ML runs only on a Mac");
+        return;
+    }
+    let dir = linked("coreml-fails", &models, &CONVERTED);
+    let dev = crate::best_device();
+    let coreml = Parser::load_with(ModelSet::Segformer, &dir, dev.clone(), Runtimes::default()).unwrap();
+    let candle = Parser::load_with(ModelSet::Segformer, &dir, dev, Runtimes { face: Runtime::Candle, body: Runtime::Candle }).unwrap();
+    assert_eq!(coreml.backends().0, Backend::CoreMl);
+    let img = fixture();
+    let crops: Vec<Crop> = [(300.0, 120.0, 0.0), (310.0, 130.0, 0.3), (280.0, 200.0, -0.2)]
+        .iter()
+        .map(|&(cx, cy, angle)| Crop { cx, cy, scale: 0.4, angle, side: crate::face::SIDE })
+        .collect();
+    let alone: crate::face::Groups = crops.iter().flat_map(|c| candle.face_groups(&img, std::slice::from_ref(c)).unwrap()).collect();
+    coreml.fail_next_face_call();
+    let handed_over = coreml.face_groups(&img, &crops).unwrap();
+    assert_eq!(coreml.backends().0, Backend::Candle);
+    let d = groups_diff(&handed_over, &alone);
+    assert!(d < 1e-5, "Core ML's faces handed to candle: largest difference {d} from candle one face at a time");
+    // candle as chosen, with the faces of a step together
+    let d = groups_diff(&candle.face_groups(&img, &crops).unwrap(), &alone);
+    assert!(d < 1e-5, "candle's faces of one step: largest difference {d} from one face at a time");
+}
+
+/// candle's face parser on the CPU (the fallback off a Mac) gives what it gives on the GPU: its stage-2 reduction,
+/// a 4 × 4 stride-4 convolution of 64 channels at 64 × 64, was read channels-last by candle 0.9.2's CPU convolution.
+#[test]
+fn candle_parses_a_face_on_the_cpu_as_on_the_gpu() {
+    let Some(models) = shared() else {
+        lightcraft_testkit::skip!(Model, "the SegFormer set and its Core ML packages are not in the shared models folder");
+        return;
+    };
+    let gpu = crate::best_device();
+    if !gpu.is_metal() {
+        lightcraft_testkit::skip!(Gpu, "no Metal device to compare with");
+        return;
+    }
+    let dir = linked("candle-cpu-gpu", &models, &[]);
+    let on = |dev| Parser::load_with(ModelSet::Segformer, &dir, dev, Runtimes { face: Runtime::Candle, body: Runtime::Candle }).unwrap();
+    let crop = [Crop { cx: 300.0, cy: 120.0, scale: 0.4, angle: 0.1, side: crate::face::SIDE }];
+    let img = fixture();
+    let (cpu, metal) = (on(candle_core::Device::Cpu).face_groups(&img, &crop).unwrap(), on(gpu).face_groups(&img, &crop).unwrap());
+    let d = groups_diff(&cpu, &metal);
+    assert!(d < 1e-3, "largest difference {d}");
+}

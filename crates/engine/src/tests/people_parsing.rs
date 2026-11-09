@@ -319,3 +319,40 @@ fn many_finished_runs_keep_the_newest_and_a_late_waiter_gets_the_cached_parse() 
     let Outcome::Ready { parsing, cached: true } = p.wait_for(&key) else { panic!("the first run was dropped") };
     assert_eq!(parsing.people.len(), 1);
 }
+
+/// Changing a parser's runtime (the Settings window) and asking which engine runs never wait for a set that is
+/// loading: the first Core ML load compiles its model for seconds, and the window froze for it.
+#[test]
+fn a_runtime_change_does_not_wait_for_a_set_that_is_loading() {
+    use crate::people_parsing::COREML_MODELS;
+    use std::sync::mpsc;
+    let (p, dir, _) = parsing("load-unlocked");
+    // the set's files at their sizes (not their contents: the load after the hold fails on the first hash)
+    for f in ModelSet::Segformer.files() {
+        let path = f.path_in(&dir.join("models"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::File::create(&path).unwrap().set_len(f.size).unwrap();
+    }
+    p.set_model_set(ModelSet::Segformer).unwrap();
+    let (loading, started) = mpsc::channel::<()>();
+    let (open, gate) = mpsc::channel::<()>();
+    let held = Arc::new(AtomicBool::new(true));
+    let (loading, gate, h) = (Mutex::new(loading), Mutex::new(gate), held.clone());
+    p.set_before_load(Some(Arc::new(move || {
+        let _ = loading.lock().unwrap().send(());
+        // (the timeout only ends the test when the change waits for the load, as it did)
+        let _ = gate.lock().unwrap().recv_timeout(Duration::from_secs(30));
+        h.store(false, Ordering::SeqCst);
+    })));
+    let run = {
+        let p = p.clone();
+        std::thread::spawn(move || p.parse(picture(30), Vec::new(), true))
+    };
+    started.recv_timeout(Duration::from_secs(30)).expect("the load never started");
+    assert!(p.set_runtime(COREML_MODELS[0], crate::model_runtime::Runtime::Candle));
+    assert_eq!(p.backend(COREML_MODELS[0]), None);
+    assert!(held.load(Ordering::SeqCst), "the runtime change waited for the load");
+    open.send(()).unwrap();
+    assert!(matches!(run.join().unwrap(), Outcome::Failed(_)));
+    assert!(!p.set_runtime("not-a-parser", crate::model_runtime::Runtime::Candle));
+}

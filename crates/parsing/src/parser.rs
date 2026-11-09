@@ -29,7 +29,8 @@ pub struct Options {
     pub max_people: usize,
     /// Faces smaller than this many photo pixels across get no face parse and no mesh (body parts only).
     pub min_face_px: f32,
-    /// Faces per model call on candle (Core ML takes up to [`coreml::FACE_BATCH`]).
+    /// Faces per step on candle (Core ML takes up to [`coreml::FACE_BATCH`]); the mesh takes them together, and the
+    /// face parser too except on the GPU, where it takes them one at a time ([`candle_face_calls`]).
     pub batch: usize,
 }
 
@@ -74,6 +75,9 @@ struct Engine<T> {
     /// Set when Core ML failed on a photo: candle runs from then on.
     failed: AtomicBool,
     candle: OnceLock<std::result::Result<T, String>>,
+    /// Make the next Core ML call fail (tests).
+    #[cfg(test)]
+    fail_next: AtomicBool,
 }
 
 impl<T> Engine<T> {
@@ -97,7 +101,15 @@ impl<T> Engine<T> {
                 }
             },
         };
-        let me = Self { label: file.label, runtime, coreml: loaded, failed: AtomicBool::new(false), candle: OnceLock::new() };
+        let me = Self {
+            label: file.label,
+            runtime,
+            coreml: loaded,
+            failed: AtomicBool::new(false),
+            candle: OnceLock::new(),
+            #[cfg(test)]
+            fail_next: AtomicBool::new(false),
+        };
         if me.coreml.is_none() {
             // loaded now, so a missing or damaged file is the error it always was
             let _ = me.candle.set(Ok(candle()?));
@@ -117,18 +129,43 @@ impl<T> Engine<T> {
         load_candle: impl FnOnce() -> Result<T>,
     ) -> Result<R> {
         if let (Some(model), Backend::CoreMl) = (&self.coreml, self.backend()) {
+            #[cfg(test)]
+            if self.fail_next.swap(false, Ordering::Relaxed) {
+                return self.after_coreml_failed(lightcraft_coreml::Error::Output("made to fail".into()), on_candle, load_candle);
+            }
             match on_coreml(model) {
                 Ok(r) => return Ok(r),
-                Err(e) if self.runtime == Runtime::CoreMl => return Err(Error::Compute(format!("{} (Core ML): {e}", self.label))),
-                Err(e) => {
-                    log::warn!("parsing: Core ML failed on the {} ({e}); using candle from now on", self.label);
-                    self.failed.store(true, Ordering::Relaxed);
-                }
+                Err(e) => return self.after_coreml_failed(e, on_candle, load_candle),
             }
         }
+        self.on_candle(on_candle, load_candle)
+    }
+
+    /// Core ML failed with `e`: the error (Core ML chosen), else candle from now on.
+    fn after_coreml_failed<R>(
+        &self,
+        e: lightcraft_coreml::Error,
+        on_candle: impl FnOnce(&T) -> Result<R>,
+        load_candle: impl FnOnce() -> Result<T>,
+    ) -> Result<R> {
+        if self.runtime == Runtime::CoreMl {
+            return Err(Error::Compute(format!("{} (Core ML): {e}", self.label)));
+        }
+        log::warn!("parsing: Core ML failed on the {} ({e}); using candle from now on", self.label);
+        self.failed.store(true, Ordering::Relaxed);
+        self.on_candle(on_candle, load_candle)
+    }
+
+    fn on_candle<R>(&self, on_candle: impl FnOnce(&T) -> Result<R>, load_candle: impl FnOnce() -> Result<T>) -> Result<R> {
         let candle = self.candle.get_or_init(|| load_candle().map_err(|e| e.to_string())).as_ref().map_err(|e| Error::Model(e.clone()))?;
         on_candle(candle)
     }
+}
+
+/// Faces per candle face-parser call on `dev`, for `n` faces: one on the GPU, where candle 0.9.2 gives every face
+/// after the first in a call other numbers than the same face alone (`fork/coreml.md`); all of them on the CPU.
+pub(crate) fn candle_face_calls(dev: &Device, n: usize) -> usize {
+    if dev.is_metal() { 1 } else { n.max(1) }
 }
 
 /// A loaded model set.
@@ -258,9 +295,22 @@ impl Parser {
                 }
                 Ok(out)
             },
-            |net| face::parse_batch(net, self.face_model, img, crops, &self.dev),
+            |net| {
+                // (also when Core ML failed on these crops: they come here as one chunk of up to `FACE_BATCH`)
+                let mut out = Vec::with_capacity(crops.len());
+                for chunk in crops.chunks(candle_face_calls(&self.dev, crops.len())) {
+                    out.extend(face::parse_batch(net, self.face_model, img, chunk, &self.dev)?);
+                }
+                Ok(out)
+            },
             || load_face_net(self.set, &self.models, &self.dev),
         )
+    }
+
+    /// Make the face parser's next Core ML call fail, as a GPU error on a photo would.
+    #[cfg(test)]
+    pub(crate) fn fail_next_face_call(&self) {
+        self.face.fail_next.store(true, Ordering::Relaxed);
     }
 
     /// Parse a photo. `hints`: faces a detector found (none: the body model's faces are used). `cancelled` is asked
@@ -464,6 +514,16 @@ mod tests {
         assert!((t.sample(0.55, 0.55) - p.sample(0.55, 0.55)).abs() < 1e-5);
         assert!(trim(Plane { data: vec![0.01; 100], ..p.clone() }).is_none());
         assert!(trim(Plane { data: vec![1.0; 3], ..p }).is_none());
+    }
+
+    #[test]
+    fn candle_parses_faces_one_a_call_on_the_gpu_only() {
+        assert_eq!(candle_face_calls(&Device::Cpu, 4), 4);
+        assert_eq!(candle_face_calls(&Device::Cpu, 0), 1);
+        #[cfg(target_os = "macos")]
+        if let Ok(gpu) = Device::new_metal(0) {
+            assert_eq!(candle_face_calls(&gpu, 8), 1);
+        }
     }
 
     #[test]
