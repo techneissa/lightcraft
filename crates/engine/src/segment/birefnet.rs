@@ -65,13 +65,15 @@ pub fn label_of(model: Option<&str>) -> String {
     let plain = |id: &str| SelectionModel::parse(id).map_or_else(|| id.chars().take(60).collect(), |m| m.label().to_string());
     match model {
         None => SelectionModel::Sam3.label().to_string(),
-        // (an edge redrawn by BiRefNet-matting: `fork/hair-edges.md`)
-        Some(id) => match (id.strip_suffix("+matting"), id.strip_suffix(crate::hair_edges::vision::SUFFIX)) {
-            (Some(base), _) => format!("{}, BiRefNet Matting Edges", plain(base)),
-            // (Apple Vision drew the edge: `fork/apple-vision-masks.md`)
-            (_, Some(base)) => format!("{}, Apple Vision Edges", plain(base)),
-            _ => plain(id),
-        },
+        // (an edge redrawn by BiRefNet-matting, Apple Vision or another edge model: `fork/hair-edges.md`)
+        Some(id) => {
+            let redrawn =
+                crate::hair_edges::Edge::ALL.into_iter().filter(|e| !e.suffix().is_empty()).find_map(|e| Some((id.strip_suffix(e.suffix())?, e)));
+            match redrawn {
+                Some((base, e)) => format!("{}, {} Edges", plain(base), e.label()),
+                None => plain(id),
+            }
+        }
     }
 }
 

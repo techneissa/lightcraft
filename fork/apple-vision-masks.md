@@ -75,10 +75,11 @@ Photos (Wikimedia Commons, CC0; 1800–1920 px thumbnails):
 - Fork files of other features: `crates/parsing/src/cache.rs` (`MAX_PLANE_SIDE` public, so the Vision matte keeps to
   it); `crates/coreml/{Cargo.toml,README.md,src/lib.rs,src/stub.rs}` (the `vision` module,
   `Error::Vision`, the Vision and Core Video bindings); `crates/engine/src/hair_edges.rs` (`Edge::Vision`, `mod
-  vision`, `edge` and `set_edge` check Vision runs here); `crates/engine/src/hair_edges/people.rs` (`entire_rect`,
+  vision`, its arms in `suffix` and `available` (so `edge` and `set_edge` check Vision runs here), `matte_for` and
+  `make` refuse it: Vision's mattes are made in `vision`); `crates/engine/src/hair_edges/people.rs` (`entire_rect`,
   `Refined`, `refine_person` visible to `vision`); `crates/engine/src/people_parsing.rs` (the edge chosen goes with
   the parse: its cache version and the Vision step); `crates/engine/src/segment/birefnet.rs` (`subject_matting`
-  takes any edge but Current, `label_of` reads `+vision`); `crates/engine/src/segment/worker/birefnet.rs` (the
+  takes any edge but Current, `label_of` reads `+vision` through `Edge::suffix`); `crates/engine/src/segment/worker/birefnet.rs` (the
   Subject matte by edge); `crates/engine/src/cmd/hair_edges.rs` (`apple-vision` in messages and help,
   `visionAvailable`); `crates/ui-egui/src/dialogs/hair_edges.rs` (the Apple Vision button);
   `crates/engine/examples/hair_edges.rs` (`HAIR_EDGES` picks the edges compared).

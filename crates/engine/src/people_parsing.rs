@@ -182,8 +182,8 @@ impl PeopleParsing {
         self
     }
 
-    /// The hair edges to draw parses with now, and which: BiRefNet Matting (installed) or Apple Vision (this Mac runs
-    /// it) when chosen for people.
+    /// The hair edges to draw parses with now, and their edge model, if one other than Current is chosen for people
+    /// (and here: BiRefNet Matting installed, Apple Vision on a Mac that runs it).
     fn matting(&self) -> Option<(crate::hair_edges::HairEdges, crate::hair_edges::Edge)> {
         use crate::hair_edges::{Edge, EdgeKind};
         let edges = lock(&self.inner.hair_edges).clone()?;
@@ -397,7 +397,7 @@ impl PeopleParsing {
                     let p = this.run(set, &models, &img, &hints, &cancelled)?;
                     match &matting {
                         Some((edges, crate::hair_edges::Edge::Vision)) => crate::hair_edges::vision::people_edged(edges, p, &img, &flag),
-                        Some((edges, _)) => hair_edged(edges, p, &img, &flag),
+                        Some((edges, edge)) => hair_edged(edges, *edge, p, &img, &flag),
                         None => Ok(p),
                     }
                 }));
@@ -497,11 +497,18 @@ impl PeopleParsing {
 }
 
 /// `p` with its Entire Person edges drawn by BiRefNet Matting from `img` (the picture it was parsed from).
-fn hair_edged(edges: &crate::hair_edges::HairEdges, mut p: Parsing, img: &RgbImage, cancel: &Arc<AtomicBool>) -> Result<Parsing, String> {
+fn hair_edged(
+    edges: &crate::hair_edges::HairEdges,
+    edge: crate::hair_edges::Edge,
+    mut p: Parsing,
+    img: &RgbImage,
+    cancel: &Arc<AtomicBool>,
+) -> Result<Parsing, String> {
     if p.people.is_empty() {
         return Ok(p);
     }
-    let matte = edges.matte(&img.data, img.width, img.height, cancel).map_err(|e| format!("hair edges: {e}"))?;
+    let kind = crate::hair_edges::EdgeKind::People;
+    let matte = edges.matte_for(edge, kind, &img.data, img.width, img.height, cancel).map_err(|e| format!("hair edges: {e}"))?;
     crate::hair_edges::people::refine(&mut p, &matte);
     Ok(p)
 }

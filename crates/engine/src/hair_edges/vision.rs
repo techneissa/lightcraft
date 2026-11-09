@@ -8,7 +8,7 @@
 //!   matches keeps the parse's edge. The parse still decides who is where; the matte only redraws a band around each
 //!   person's edge ([`super::people`]).
 //! - **Subject**: the foreground instance masks (every subject together) redraw the Subject part's edge, the same way
-//!   BiRefNet Matting does ([`subject_edge`]); the person segmentation adds the hair of the people who are part of
+//!   BiRefNet Matting does ([`super::subject_edge`]); the person segmentation adds the hair of the people who are part of
 //!   the subject ([`subject_people`], [`with_hair`]).
 //!
 //! Runs on the worker thread that asked (the people-parsing thread, the Subject worker), with a "Refining hair edges"
@@ -153,7 +153,7 @@ impl HairEdges {
     pub(crate) fn subject_matte(&self, edge: Edge, rgb: &[u8], w: usize, h: usize, cancel: &Arc<AtomicBool>) -> Result<Option<Arc<Matte>>, String> {
         match edge {
             Edge::Vision => self.vision_subject(rgb, w, h, cancel),
-            _ => self.matte(rgb, w, h, cancel).map(Some),
+            _ => self.matte_for(edge, super::EdgeKind::Subject, rgb, w, h, cancel).map(Some),
         }
     }
 }
@@ -165,23 +165,6 @@ pub fn version(edge: Edge) -> Option<&'static str> {
         Edge::Matting => Some(super::VERSION),
         Edge::Vision => Some(VERSION),
     }
-}
-
-/// A Subject selection `base` with its edge redrawn by `edge`'s matte `m` (`super::subject_edge` for BiRefNet
-/// Matting; for Apple Vision the same band rule, marked `<base model>+vision`).
-#[cfg(feature = "sam")]
-pub fn subject_edge(edge: Edge, base: &lightcraft_develop::SegMask, m: &Matte) -> Option<lightcraft_develop::SegMask> {
-    if edge != Edge::Vision {
-        return super::subject_edge(base, m);
-    }
-    let logits = base.logits()?;
-    let matte = lightcraft_birefnet::Matte { side: m.side, logits: m.logits.clone() };
-    let mixed = lightcraft_birefnet::combine::refine_edges(&logits, base.side as usize, &matte);
-    if !mixed.iter().any(|l| *l > 0.0) {
-        return None;
-    }
-    let id = format!("{}{SUFFIX}", base.model.as_deref().unwrap_or("sam3"));
-    Some(lightcraft_develop::SegMask::from_logits(m.side, &mixed).made_by(&id))
 }
 
 /// How much `m` and person `p`'s Entire Person overlap (intersection over union, on a coarse grid).

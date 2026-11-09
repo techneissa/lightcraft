@@ -99,14 +99,14 @@ fn a_coverage_matte_becomes_a_logit_grid() {
 fn a_subject_part_vision_drew_is_marked_and_named() {
     let base = lightcraft_develop::SegMask::from_logits(32, &vec![-6.0; 32 * 32]).made_by("birefnet");
     let mut m = to_matte(&disc(64, 64, 0.5, 0.5, 0.3, 1.0), 64);
-    assert!(crate::hair_edges::vision::subject_edge(Edge::Vision, &base, &m).is_none(), "an empty base stays empty");
+    assert!(crate::hair_edges::subject_edge(&base, &m, Edge::Vision).is_none(), "an empty base stays empty");
     let base = lightcraft_develop::SegMask::from_logits(32, &to_matte(&disc(32, 32, 0.5, 0.5, 0.27, 1.0), 32).logits).made_by("birefnet");
-    let out = crate::hair_edges::vision::subject_edge(Edge::Vision, &base, &m).expect("a selection");
+    let out = crate::hair_edges::subject_edge(&base, &m, Edge::Vision).expect("a selection");
     assert_eq!(out.model.as_deref(), Some("birefnet+vision"));
     assert_eq!(crate::segment::birefnet::label_of(Some("birefnet+vision")), "BiRefNet, Apple Vision Edges");
     // BiRefNet Matting keeps its own mark
     m.side = 64;
-    let matted = crate::hair_edges::vision::subject_edge(Edge::Matting, &base, &m).expect("a selection");
+    let matted = crate::hair_edges::subject_edge(&base, &m, Edge::Matting).expect("a selection");
     assert_eq!(matted.model.as_deref(), Some("birefnet+matting"));
 }
 

@@ -14,7 +14,10 @@ fn kinds(h: &HairEdges) -> Value {
     json!(
         EdgeKind::ALL
             .iter()
-            .map(|k| json!({"kind": k.id(), "label": k.label(), "chosen": h.chosen(*k).id(), "edge": h.edge(*k).id()}))
+            .map(|k| {
+                let available: Vec<&str> = Edge::ALL.iter().filter(|e| h.available(**e, *k)).map(|e| e.id()).collect();
+                json!({"kind": k.id(), "label": k.label(), "chosen": h.chosen(*k).id(), "edge": h.edge(*k).id(), "available": available})
+            })
             .collect::<Vec<_>>()
     )
 }
@@ -47,7 +50,7 @@ fn set_edge(s: &mut Session, p: &Value) -> Result<Value> {
         .ok_or_else(|| bad(c, format!("unknown kind `{}` (use people or subject)", kind.chars().take(40).collect::<String>())))?;
     let mut cancelled = 0;
     if let Some(v) = p.get("edge").filter(|v| !v.is_null()) {
-        let id = v.as_str().ok_or_else(|| bad(c, "`edge` must be current, birefnet-matting or apple-vision"))?;
+        let id = v.as_str().ok_or_else(|| bad(c, "`edge` must be an edge id: current, birefnet-matting or apple-vision"))?;
         let edge = Edge::parse(id).ok_or_else(|| {
             bad(c, format!("unknown edge `{}` (use current, birefnet-matting or apple-vision)", id.chars().take(40).collect::<String>()))
         })?;
