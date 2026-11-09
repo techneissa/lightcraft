@@ -58,6 +58,7 @@ pub mod retouch_step;
 // fork: `fork/perf-portrait-draft.md`
 pub mod kept_budget;
 pub mod spot_area;
+pub mod spot_lasso;
 pub mod spots;
 pub mod spots_keep;
 pub mod spots_learned;

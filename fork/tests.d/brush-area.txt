@@ -1,0 +1,4 @@
+cargo test -p lightcraft-pipeline --lib spot_lasso
+cargo test -p lightcraft-develop --lib spot_area
+cargo test -p lightcraft-engine --lib -- tests::brush_area
+cargo test -p lightcraft-ui-egui --lib -- brush_area

@@ -343,7 +343,7 @@ pub fn area_spot(area: SpotArea, expand: f64, fill: SpotFill) -> Spot {
 }
 
 /// The middle of a shape's rectangle (the spot's pin).
-fn centre_of(area: &SpotArea) -> Option<Point> {
+pub(crate) fn centre_of(area: &SpotArea) -> Option<Point> {
     let r = area.bounds()?;
     Some(Point::new((r[0] + r[2]) / 2.0, (r[1] + r[3]) / 2.0))
 }

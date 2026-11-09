@@ -184,6 +184,39 @@ fn object_stroke(s: &mut Session, p: &Value) -> crate::Result<Value> {
     Ok(out)
 }
 
+/// A brushed Remove or Content-Aware stroke that closes on itself (its end within two brush radii of its start, around
+/// more than its own width) becomes a shaped spot covering the loop's inside as well as the stroke's ribbon: the same
+/// footprint as the stroke, filled in, so drawing around an object removes the object. True when `spot` was changed.
+/// Its `size` is then the Expand (a margin as the brush's, no wider than half of it) and the rest of the brush's radius
+/// is in the shape. Heal and Clone need a source and keep their stroke.
+pub(crate) fn lasso(s: &Session, id: crate::PhotoId, d: &lightcraft_develop::DevelopSettings, spot: &mut Spot) -> bool {
+    if !matches!(spot.mode, SpotMode::Remove | SpotMode::Fill) || spot.area.is_some() {
+        return false;
+    }
+    let Some(f) = s.mask_frame(id, d) else { return false };
+    let (ow, oh) = (f.ow, f.oh);
+    if !(ow.is_finite() && oh.is_finite() && ow > 0.0 && oh > 0.0) {
+        return false;
+    }
+    let long = ow.max(oh);
+    let to_long = |p: &Point| Point::new(p.x * ow / long, p.y * oh / long);
+    let in_long: Vec<Point> = spot.points.iter().map(to_long).collect();
+    let r = spot.size;
+    if !lightcraft_pipeline::spot_lasso::is_loop(&in_long, r) {
+        return false;
+    }
+    let expand = DEFAULT_EXPAND.min(r / 2.0).clamp(EXPAND_RANGE.0, EXPAND_RANGE.1);
+    let Some(seg) = lightcraft_pipeline::spot_lasso::lasso_area(&spot.points, ow, oh, (r - expand).max(EXPAND_RANGE.0)) else {
+        return false;
+    };
+    let area = lightcraft_develop::SpotArea::new("lasso", seg);
+    spot.points = vec![crate::spot_area::centre_of(&area).unwrap_or(spot.points.first().copied().unwrap_or(Point::new(0.5, 0.5)))];
+    spot.size = expand;
+    spot.source_offset = None;
+    spot.area = Some(area);
+    true
+}
+
 /// Whether `spot` reads no source: a shaped spot, or a Remove or Content-Aware spot LaMa fills (both rebuild the area
 /// from its surroundings). Heal, Clone and a Classic Remove spot copy from their source.
 pub(super) fn sourceless(spot: &Spot) -> bool {

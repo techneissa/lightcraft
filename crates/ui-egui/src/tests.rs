@@ -7,6 +7,7 @@ mod before_after;
 mod book;
 mod book_preview;
 mod browse_active;
+mod brush_area;
 mod brush_live;
 mod button;
 mod camera_colour;

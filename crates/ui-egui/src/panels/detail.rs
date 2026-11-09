@@ -15,6 +15,7 @@ use crate::theme::Tokens;
 use crate::widgets::{register, register_geometry};
 use lightcraft_engine::media::QuickSource;
 
+mod brush_outline;
 mod brush_panel;
 pub(crate) mod brush_preview;
 pub(crate) mod brush_resize;

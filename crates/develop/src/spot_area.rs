@@ -11,7 +11,7 @@ use crate::{SegMask, Spot};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SpotArea {
     /// What made it: `object` (clicked or brushed in the Remove panel), `mask` (Remove This Area), `person` or `wire`
-    /// (Find People / Find Wires). Only names the spot's row; an unknown name reads as an area.
+    /// (Find People / Find Wires), `lasso` (a brushed stroke that closed on itself, `fork/brush-area.md`). Only names the spot's row; an unknown name reads as an area.
     pub kind: String,
     /// The coverage, in the spot's own coordinates (normalized coordinates of the uncropped picture, as
     /// [`Spot::points`]): a logit above 0 is inside. Its `rect` is the part of the picture it covers.
@@ -25,7 +25,7 @@ pub struct SpotArea {
 }
 
 /// The kinds [`SpotArea::kind`] names.
-pub const AREA_KINDS: [&str; 4] = ["object", "mask", "person", "wire"];
+pub const AREA_KINDS: [&str; 5] = ["object", "mask", "person", "wire", "lasso"];
 
 impl SpotArea {
     /// A shape of `kind` (one of [`AREA_KINDS`]) covering `seg`.
@@ -40,6 +40,7 @@ impl SpotArea {
             "mask" => "Mask",
             "person" => "Person",
             "wire" => "Wire",
+            "lasso" => "Lasso",
             _ => "Area",
         }
     }
@@ -105,7 +106,7 @@ mod tests {
     // Given a shape from a newer build, it still loads; damaged data loads too (and draws nothing)
     #[test]
     fn unknown_kinds_and_damaged_shapes_load() {
-        let v = serde_json::json!({"points": [{"x": 0.5, "y": 0.5}], "area": {"kind": "lasso", "seg": {"side": 99999, "data": "!!"}}});
+        let v = serde_json::json!({"points": [{"x": 0.5, "y": 0.5}], "area": {"kind": "blob", "seg": {"side": 99999, "data": "!!"}}});
         let s: Spot = serde_json::from_value(v).unwrap();
         let a = s.area.unwrap();
         assert_eq!(a.label(), "Area");
