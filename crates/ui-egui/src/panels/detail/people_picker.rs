@@ -1,9 +1,9 @@
 //! Fork (`fork/retouch-foundation.md`): the people picker, a card over the loupe at the top-right corner of the
 //! image view (a fixed margin from the view's edges, the same place for every photo, zoom and aspect ratio).
 //!
-//! One row: the faces ("All", then one round chip per face; one at a time), then a dropdown of parts a caller may
-//! fill (Entire Person, Facial Skin, Hair…; several with ⌘-click; `parts_menu.rs`), absent while it has no items. The card folds into an
-//! overflow button ("⋯") at the same corner, which opens it again. It sits on the view: zooming and panning move
+//! Row one: the faces ("All", then one round chip per face; one at a time) and the overflow button. Row two, under
+//! the faces and left-aligned with them: a dropdown of parts a caller may fill (Entire Person, Facial Skin, Hair…;
+//! several with ⌘-click; `parts_menu.rs`), absent while it has no items. The card folds into an overflow button ("⋯") at the same corner, which opens it again. It sits on the view: zooming and panning move
 //! the photo under it, and clicks on it never reach the photo. The caller decides when it shows and keeps the
 //! folded state and the selections ([`Picker`] in, [`Picked`] out).
 //!
@@ -30,6 +30,8 @@ pub(crate) struct PartItem {
     pub label: String,
     /// The item starts a group of the menu under this header (`""`: a divider only).
     pub group: Option<&'static str>,
+    /// The item already has a mask of its own: the menu shows a small dot after its name (`<id>:partMask:<key>`).
+    pub marked: bool,
 }
 
 /// What the picker shows.
@@ -57,6 +59,8 @@ pub(crate) struct Picked {
     pub face: Option<Option<usize>>,
     /// The new parts selection, when it changed.
     pub parts: Option<Vec<usize>>,
+    /// `parts` came from a ⌘-click (the parts were added to or removed from the selection).
+    pub parts_add: bool,
     /// The overflow button: fold or open the card.
     pub toggle_fold: bool,
 }
@@ -98,20 +102,24 @@ pub(crate) fn show(ui: &mut egui::Ui, canvas: Rect, pk: &Picker<'_>) -> Picked {
     let p = ui.painter().with_clip_rect(canvas);
     let max_w = (canvas.width() * 0.6).max(BUTTON + 2.0 * PAD);
     let font = t.font(11.5);
-    // one row: All + faces, the parts dropdown, then the button (the faces wrap when there are many)
+    // row one: All + faces, then the button (the faces wrap when there are many); row two: the parts dropdown
     let drop_text = parts_menu::summary(pk.parts, pk.selected_parts);
-    let drop_w = if pk.parts.is_empty() { 0.0 } else { parts_menu::button_width(&p, &drop_text, font.clone(), DROP_MAX) + GAP };
+    let drop_w = if pk.parts.is_empty() { 0.0 } else { parts_menu::button_width(&p, &drop_text, font.clone(), DROP_MAX) };
+    let drop_h = if pk.parts.is_empty() { 0.0 } else { GAP + PART_H };
     let items = pk.faces.len() + 1;
-    let room = ((max_w - 2.0 * PAD - BUTTON - GAP - drop_w) / (FACE + GAP)).floor().max(1.0) as usize;
+    let room = ((max_w - 2.0 * PAD - BUTTON - GAP) / (FACE + GAP)).floor().max(1.0) as usize;
     let cols = items.min(room);
     let rows = items.div_ceil(cols.max(1));
-    let row1_w = cols as f32 * (FACE + GAP) + drop_w + BUTTON;
+    let row1_w = cols as f32 * (FACE + GAP) + BUTTON;
     let row1_h = (rows as f32 * (FACE + GAP) - GAP).max(BUTTON);
     let note = pk.note.map(|n| p.layout(crate::i18n::tr(n).to_string(), font.clone(), Color32::from_gray(205), max_w - 2.0 * PAD));
     let note_h = note.as_ref().map_or(0.0, |g| GAP + g.size().y);
     let note_w = note.as_ref().map_or(0.0, |g| g.size().x);
-    let size =
-        if pk.folded { vec2(BUTTON + 2.0 * PAD, BUTTON + 2.0 * PAD) } else { vec2(2.0 * PAD + row1_w.max(note_w), 2.0 * PAD + row1_h + note_h) };
+    let size = if pk.folded {
+        vec2(BUTTON + 2.0 * PAD, BUTTON + 2.0 * PAD)
+    } else {
+        vec2(2.0 * PAD + row1_w.max(note_w).max(drop_w), 2.0 * PAD + row1_h + drop_h + note_h)
+    };
     let mut top = canvas.top() + MARGIN;
     let mut card = Rect::from_min_size(pos2(canvas.right() - MARGIN - size.x, top), size);
     if let Some(badge) = registered(ui.ctx(), "loupe:cameraPreview").filter(|b| b.intersects(card.expand(4.0))) {
@@ -165,17 +173,19 @@ pub(crate) fn show(ui: &mut egui::Ui, canvas: Rect, pk: &Picker<'_>) -> Picked {
             out.face = Some(face);
         }
     }
-    // the note
+    // the note, under the dropdown
     if let Some(g) = note {
-        let y = card.top() + PAD + row1_h + GAP;
+        let y = card.top() + PAD + row1_h + drop_h + GAP;
         register(ui, format!("{}:note", pk.id), Rect::from_min_size(pos2(card.left() + PAD, y), g.size()));
         p.galley(pos2(card.left() + PAD, y), g, Color32::from_gray(205));
     }
-    // the parts dropdown, left of the button
+    // the parts dropdown on its own line under the faces, left-aligned with them
     if !pk.parts.is_empty() {
-        let w = drop_w - GAP;
-        let rect = Rect::from_min_size(pos2(button.left() - GAP - w, card.top() + PAD + (FACE - PART_H) / 2.0), vec2(w, PART_H));
-        out.parts = parts_menu::show(ui, pk, rect, card, &drop_text);
+        let rect = Rect::from_min_size(pos2(card.left() + PAD, card.top() + PAD + row1_h + GAP), vec2(drop_w, PART_H));
+        (out.parts, out.parts_add) = match parts_menu::show(ui, pk, rect, card, &drop_text) {
+            Some((parts, add)) => (Some(parts), add),
+            None => (None, false),
+        };
     } else {
         parts_menu::set_open(ui.ctx(), pk, false);
     }

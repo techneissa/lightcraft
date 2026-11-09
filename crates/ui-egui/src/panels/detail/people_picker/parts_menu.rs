@@ -1,7 +1,8 @@
 //! The parts dropdown of the people picker: one button naming the parts picked ("Entire Person", "Hair + Lips",
 //! "3 Parts"), and the menu it opens below the card, its rows in groups under small headers, a check mark on each
-//! part picked. A click picks one part and closes the menu; ⌘-click adds or removes one and keeps it open. ↑/↓
-//! move a highlight, ↩ picks (⌘↩ adds), Esc closes; while it is open the keyboard is the menu's.
+//! part picked, and a small dot after the name of each part that already has a mask of its own. A click picks one
+//! part and closes the menu; ⌘-click adds or removes one and keeps it open. ↑/↓ move a highlight, ↩ picks (⌘↩ adds),
+//! Esc closes; while it is open the keyboard is the menu's.
 //!
 //! Each row is the widget `<id>:part:<key>`. While the menu is closed, `ui.clickWidget` on a row opens it first
 //! ([`crate::widgets::register_opener`]), so scripts click a part in one request.
@@ -17,6 +18,7 @@ const ROW_H: f32 = 22.0;
 const HEAD_H: f32 = 18.0;
 const PAD: f32 = 4.0;
 const MIN_W: f32 = 170.0;
+const DOT: f32 = 6.0;
 
 /// Where the menu's open state is kept, per picker.
 pub(super) fn open_id(pk: &Picker<'_>) -> egui::Id {
@@ -59,7 +61,7 @@ pub(super) fn button_width(p: &egui::Painter, text: &str, font: egui::FontId, ma
 }
 
 /// Draw the button at `rect` and, when open, the menu below `card`. The new parts selection, when it changed.
-pub(super) fn show(ui: &mut egui::Ui, pk: &Picker<'_>, rect: Rect, card: Rect, text: &str) -> Option<Vec<usize>> {
+pub(super) fn show(ui: &mut egui::Ui, pk: &Picker<'_>, rect: Rect, card: Rect, text: &str) -> Option<(Vec<usize>, bool)> {
     let ctx = ui.ctx().clone();
     let t = Tokens::get(&ctx);
     let font = t.font(11.5);
@@ -107,7 +109,7 @@ pub(super) fn show(ui: &mut egui::Ui, pk: &Picker<'_>, rect: Rect, card: Rect, t
         ctx.data_mut(|d| d.insert_temp(highlight_id(pk), h));
     }
     if enter && let Some(h) = hi.filter(|h| *h < n) {
-        out = Some(select(pk.selected_parts, h, add));
+        out = Some((select(pk.selected_parts, h, add), add));
         if !add {
             set_open(&ctx, pk, false);
             return out;
@@ -121,7 +123,7 @@ pub(super) fn show(ui: &mut egui::Ui, pk: &Picker<'_>, rect: Rect, card: Rect, t
     // the menu: as wide as its widest row, its right edge on the card's
     let widest =
         pk.parts.iter().map(|it| p.layout_no_wrap(crate::i18n::tr(&it.label).to_string(), font.clone(), Color32::WHITE).size().x).fold(0.0, f32::max);
-    let w = (widest + 44.0).max(MIN_W).max(rect.width());
+    let w = (widest + 56.0).max(MIN_W).max(rect.width());
     let at = pos2(card.right() - w, card.bottom() + 4.0);
     let area = egui::Area::new(egui::Id::unique((pk.id, "people-picker-parts-menu"))).order(egui::Order::Foreground).fixed_pos(at).show(&ctx, |ui| {
         let frame = egui::Frame::new().fill(Color32::from_rgba_unmultiplied(28, 28, 28, 240)).corner_radius(6.0).inner_margin(PAD);
@@ -155,9 +157,21 @@ pub(super) fn show(ui: &mut egui::Ui, pk: &Picker<'_>, rect: Rect, card: Rect, t
                 if on {
                     paint(ui.painter(), Rect::from_center_size(pos2(r.left() + 13.0, r.center().y), vec2(14.0, 14.0)), Icon::Check, t.accent);
                 }
-                ui.painter().text(pos2(r.left() + 26.0, r.center().y), Align2::LEFT_CENTER, crate::i18n::tr(&it.label), font.clone(), Color32::WHITE);
+                let label = ui.painter().text(
+                    pos2(r.left() + 26.0, r.center().y),
+                    Align2::LEFT_CENTER,
+                    crate::i18n::tr(&it.label),
+                    font.clone(),
+                    Color32::WHITE,
+                );
+                if it.marked {
+                    // a small dot after the name: this part has a mask of its own
+                    let dot = Rect::from_center_size(pos2(label.right() + 9.0, r.center().y), vec2(DOT, DOT));
+                    ui.painter().circle_filled(dot.center(), DOT / 2.0, t.accent);
+                    register(ui, format!("{}:partMask:{}", pk.id, it.key), dot);
+                }
                 if row.on_hover_text(crate::i18n::tr("⌘-click to select several")).clicked() {
-                    out = Some(select(pk.selected_parts, i, add));
+                    out = Some((select(pk.selected_parts, i, add), add));
                     if !add {
                         set_open(&ctx, pk, false);
                     }

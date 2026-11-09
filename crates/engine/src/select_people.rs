@@ -179,6 +179,19 @@ pub fn current(shape: &lightcraft_develop::MaskShape, parsed: Option<&Parsed>) -
     Some((parts::picks_of(parts), person, face.is_none()))
 }
 
+/// The id of a mask of `d` with a Select People part that is exactly `picks` of person `person` (everyone: `None`);
+/// other parts (a brush, say) do not matter. The picker selects it instead of making
+/// another (`selectPeople.pick`) and marks the part; `except` is a mask not counted.
+pub fn mask_of(d: &lightcraft_develop::DevelopSettings, parsed: &Parsed, picks: &[Pick], person: Option<usize>, except: Option<u32>) -> Option<u32> {
+    let has = |m: &&lightcraft_develop::Mask| {
+        m.components.iter().any(|c| {
+            let Some((have, who, everyone)) = current(&c.shape, Some(parsed)) else { return false };
+            have == picks && if everyone { person.is_none() } else { person.is_some() && who == person }
+        })
+    };
+    d.masks.iter().filter(|m| Some(m.id) != except).find(has).map(|m| m.id)
+}
+
 /// The name a person goes by in the picker: their name in People (in title case), else "Person 2".
 pub fn person_name(q: &Person, i: usize) -> String {
     match q.person_id.as_deref().map(str::trim).filter(|n| !n.is_empty()) {
@@ -351,5 +364,7 @@ fn parse_now(parsing: &crate::people_parsing::PeopleParsing, img: RgbImage, hint
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod tests_pick;
 #[cfg(test)]
 mod tests_round;

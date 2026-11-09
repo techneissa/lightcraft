@@ -10,16 +10,34 @@ List: Select People masks: Masking ▸ Person / Background / Custom and a picker
   says what to do, that people are being found, or why there are none (with Settings… when the models are not
   downloaded). The choice is not saved: the panel opens on Custom.
 - **The picker on the photo**: the people picker of the Portrait tab (`fork/retouch-foundation.md`) at the image
-  view's top-right corner, while Person or Background is chosen or a Select People mask is selected. Row one:
-  one short row: All and a round chip per person (their name from People on hover, else "Person 2"), then a dropdown
-  naming the parts picked ("Entire Person", "Hair + Lips", "3 Parts"). Its menu groups the parts: Person (Entire
-  Person, Entire Face (facial skin, eyebrows, eye whites, irises, lips and teeth together), Facial Skin, Body Skin),
-  Face (Hair, Eyebrows, Eyes (Whites), Iris, Lips, Teeth), Clothes (Clothes (all of them), Top, Bottom, Dress, Shoes,
-  Hat, Bag), Background, a check mark on each one picked. A click picks one part and closes the menu, ⌘-click adds or
-  removes one (the last one stays) and keeps it open; ↑/↓ and ↩ work in it, Esc closes it. A chip picks whose. With a
-  Select People mask selected, a click changes that mask (one undo step, "Select People"); without one, it makes a
-  new mask. It folds into its "⋯" button (kept in the saved `openFlyouts` as `selectPeople.folded`, an existing
-  `ui.json` key), hides with the tool overlay (View ▸ Tool Overlay ▸ Never) and in the full-screen preview.
+  view's top-right corner, while Person or Background is chosen or a Select People mask is selected. Row one: All
+  and a round chip per person (their name from People on hover, else "Person 2"). Row two, under the chips and
+  left-aligned with them: a dropdown naming the parts picked ("Entire Person", "Hair + Lips", "3 Parts"). Its menu
+  groups the parts: Person (Entire Person, Entire Face (facial skin, eyebrows, eye whites, irises, lips and teeth
+  together), Facial Skin, Body Skin), Face (Hair, Eyebrows, Eyes (Whites), Iris, Lips, Teeth), Clothes (Clothes (all of
+  them), Top, Bottom, Dress, Shoes, Hat, Bag), Background, a check mark on each one the selected mask has and a
+  small dot after the name of each one that has a mask of its own (for the face shown). A click picks one part and
+  closes the menu, ⌘-click adds or removes one (the last one stays) and keeps it open; ↑/↓ and ↩ work in it, Esc
+  closes it. A chip picks whose. It folds into its "⋯" button (kept in the saved `openFlyouts` as
+  `selectPeople.folded`, an existing `ui.json` key), hides with the tool overlay (View ▸ Tool Overlay ▸ Never) and
+  in the full-screen preview.
+- **One mask per part pick** (`selectPeople.pick`), so one photo can carry several masks with different edits on
+  different parts (Hair with Exposure, Lips with Saturation). A mask counts as a part's mask when one of its Select
+  People parts is exactly that part and face; other parts (a brush, say) do not matter (they get the dot, and a
+  click selects it). A plain click on a part: when such a mask is on the photo, it is selected (not an edit, no undo
+  step; an empty mask the picker made and had selected is deleted in the same undo step); else a new mask for it is
+  made and selected (one undo step) and the mask selected before keeps its edits. The exception that keeps the
+  list clean: a selected Select People mask the picker made and nobody edited is re-targeted instead of left
+  empty. "Unedited" is strict: visible, one part only (named by nobody, mode Add, not inverted), generated name,
+  the effects a new mask starts with (Recolour and Amount included), no Edge, Refine Edges, Decontaminate or Invert.
+  ⌘-click adds or removes the part in the selected mask (how one mask covers several parts); it is refused with
+  "Hair already has a mask" when the result would be exactly the parts and face of another mask. A face chip
+  changes whose the selected mask is, unless a mask of those parts and that face exists, then that one is selected
+  (the same empty-mask rule); with no mask selected the chip makes an Entire Person mask. A selected mask whose face
+  is not in the photo shows no chip; a plain click then makes the new mask for everyone. Masking ▸ Person and
+  Background always add a mask. `selectPeople.pick` checks its input: `how` must be a string (part, add or face),
+  `add` needs `parts` (the whole new list), `face: null` with `add` keeps the mask's face (`"all"` is everyone's),
+  an unknown part or a face past the people is an error.
 - **An ordinary mask**: the parts become a `MaskShape::People` part with a stored selection, like Subject's: one grid
   over the selection (64 to 1024 cells a side, as fine as the parse's own planes) and up to four finer grids over the
   people it draws too coarsely (small faces in a group), marked `people:<set>`. Every mask slider, Edge, Refine
@@ -52,7 +70,8 @@ List: Select People masks: Masking ▸ Person / Background / Custom and a picker
   people stay in memory. Nothing runs while a slider moves: a mask's grids are drawn once, when its parts or face
   are picked.
 - **Commands**: `selectPeople.people {id?, wait?}`, `selectPeople.add {parts?, face?, name?}`,
-  `selectPeople.set {id?, component?, parts?, face?}` (MCP and the control channel reach them).
+  `selectPeople.set {id?, component?, parts?, face?}`, `selectPeople.pick {parts, face?, how?: part|add|face}` (what a
+  click in the picker does, above; MCP and the control channel reach them).
 - **Never crashes**: no people (no person part; Background is the whole photo), 50 people, a face past the photo's
   edge, damaged planes, a person who is not there and unknown parts are tested; a failed parse is a message.
 
@@ -70,9 +89,9 @@ Mac only, like every fork feature.
 
 ## Own files
 
-`crates/engine/src/select_people.rs`, `crates/engine/src/select_people/{grid,parts,rebase,tests,tests_round}.rs`,
+`crates/engine/src/select_people.rs`, `crates/engine/src/select_people/{grid,parts,rebase,tests,tests_round,tests_pick}.rs`,
 `crates/engine/src/cmd/select_people.rs`, `crates/ui-egui/src/panels/select_people.rs`,
-`crates/ui-egui/src/panels/select_people/{tests,tests_round}.rs`, `crates/pipeline/src/masks/{people,tests_people}.rs`,
+`crates/ui-egui/src/panels/select_people/{tests,tests_round,tests_per_part}.rs`, `crates/pipeline/src/masks/{people,tests_people}.rs`,
 `fork/select-people.md`, `fork/tests.d/select-people.txt`
 
 ## Hooks in official files
@@ -101,7 +120,7 @@ Mac only, like every fork feature.
   `crates/ui-egui/src/panels/detail/people_picker.rs` (`Picker::note`, a line under the faces; a `face` past the
   chips picks none) and its
   callers (`portrait/overlay.rs`, `people_picker/tests.rs`); the parts dropdown in `people_picker/parts_menu.rs`
-  (`PartItem::group` for its headers).
+  (`PartItem::group` for its headers, `PartItem::marked` for the dot; the dropdown on the second row).
 - `crates/ui-egui/src/widgets.rs` (`register_opener`, `open_menu_for`) and `crates/ui-egui/src/app/control.rs`
   (`resolve_pending_gestures`): `ui.clickWidget` on a row of the closed parts menu opens it first.
 
@@ -118,7 +137,12 @@ cargo test -p lightcraft-pipeline --lib masks
 They cover (`tests_round` the review round's: Paste, Sync and Auto Sync on a second photo, a face not there, the
 edge marks, Entire Person with Background, a command waiting for the running search, a renamed face, a click that
 changes nothing, no copy of the main grid, a finer grid's own filter window, and in the picker the missing face,
-a pending mask after another photo, one set of face textures, the search starting on opening): each part makes a mask of its own place, several parts one mask, one face or everyone (and one person's
+a pending mask after another photo, one set of face textures, the search starting on opening; `tests_pick` and
+`tests_per_part` the one-mask-per-part rules, in the engine and through the picker: a plain click after edits makes a
+second mask and leaves the first one's edits, a click on a part that has a mask selects it (also with other parts in
+it), the empty mask deleted with it, ⌘-click adds to the selected mask or is refused as a copy, the unedited-mask
+exception and each edit that stops it, a missing face, the input checks, the face chip, the dot, the dropdown under
+the chips): each part makes a mask of its own place, several parts one mask, one face or everyone (and one person's
 background holding the others), no people, 50 people (at most four finer grids), a face past the edge, damaged
 planes, a turned photo, faces found again by name or place, the commands (add, change, generated names, undo, what
 is refused), preview and export drawing the same mask, the mask after closing and reopening the library, and in the
@@ -132,5 +156,5 @@ closed; `"cmd": true` adds) and `selectPeople:face:<n>`.
 
 ### Select People Masks
 - Masking ▸ Create New Mask now starts with Person, Background and Custom. Person and Background make a mask of people or of everything around them; Custom has the usual tools.
-- A picker on the photo chooses whose (everyone or one face) and which parts: Entire Person, Entire Face, Facial and Body Skin, Hair, Eyebrows, Eyes, Iris, Lips, Teeth, Clothes and its kinds, Background. ⌘-click adds more parts to the same mask.
+- A picker on the photo chooses whose (everyone or one face) and which parts: Entire Person, Entire Face, Facial and Body Skin, Hair, Eyebrows, Eyes, Iris, Lips, Teeth, Clothes and its kinds, Background. Each part you pick gets a mask of its own with its own edits (Hair with Exposure, Lips with Saturation); picking a part that has a mask selects it. ⌘-click adds more parts to the same mask.
 - These are ordinary masks: every mask slider, Refine Edges and Recolour work on them, and exports match the preview.
