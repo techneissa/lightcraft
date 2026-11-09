@@ -57,6 +57,15 @@ pub trait Feature: Clone + Default + PartialEq + Debug + Serialize + Deserialize
     /// none (Add is not offered) for a feature that reads no mask.
     const ADD_PARTS: &'static [Part] = first_part(Self::PARTS);
 
+    /// Whether every pixel these settings change lies in their face's read box: the face's box, the areas of its
+    /// [`Feature::PARTS`] masks and of its spots and strands, grown by [`Feature::REACH`]. A render then redoes only
+    /// those boxes when a slider moves (`crates/pipeline/src/retouch_step.rs`, `write_boxes`). A feature that changes
+    /// pixels elsewhere (the whole picture, or strokes the user paints) returns `false`, and a change redoes the
+    /// whole frame. By default: a [`Scope::Face`] feature stays in its box, a [`Scope::Picture`] one does not.
+    fn writes_near_face(&self) -> bool {
+        matches!(Self::SCOPE, Scope::Face)
+    }
+
     /// Whether these settings leave the picture alone. By default: every slider at its default.
     fn is_off(&self) -> bool {
         Self::CONTROLS.iter().all(|c| c.read(self) == c.spec.default)

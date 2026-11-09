@@ -281,6 +281,11 @@ macro_rules! features {
                 false
             }
 
+            /// A feature that is on may change pixels outside its face's read box ([`Feature::writes_near_face`]).
+            pub fn writes_outside_faces(&self) -> bool {
+                false $(|| (!$crate::Feature::is_off(&self.$key) && !$crate::Feature::writes_near_face(&self.$key)))*
+            }
+
             /// What the features that are on read: the largest [`Feature::REACH`] and the parts' masks
             /// ([`Feature::PARTS`]); `None` while every feature is off.
             pub fn reads(&self) -> Option<$crate::settings::Reads> {
