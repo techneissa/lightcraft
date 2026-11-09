@@ -1,7 +1,9 @@
 # lightcraft-parsing
 
 People parsing: a photo in, people out, each with a face box, 478 face landmarks and part masks. Pure Rust on
-candle (`=0.9.2`, Metal on macOS). A leaf crate: no engine, develop, pipeline, UI or retouch dependency.
+candle (`=0.9.2`, Metal on macOS). On a Mac, the SegFormer face and clothes parsers run through Core ML on the GPU
+when their converted models are in the models folder (`src/coreml.rs`, below). A leaf crate: no engine, develop,
+pipeline, UI or retouch dependency.
 
 ## Output (the contract)
 
@@ -119,7 +121,24 @@ writes `outdir/<part>.png` (one colour per person), `all.png`, `background.png`,
 prints the time of each step (`LIGHTCRAFT_PROFILE=1` for the parse's own steps). Faces come from YuNet in the shared
 models folder when it is there.
 
+`cargo run -p lightcraft-parsing --release --example coreml_compare -- in.jpg` parses with candle and with Core ML
+and prints each one's time and how well their masks agree per part.
+
+## Core ML
+
+`tools/convert-coreml-parsing.py` converts SegFormer-B0 (faces) and SegFormer-B3 (clothes) once, by hand, into
+`<models>/<folder>/coreml/<folder>.mlpackage`; the app compiles each once into `<folder>.mlmodelc` beside it.
+`Runtimes` picks the engine of each (Automatic: Core ML when it is there and loads, candle for good once it fails
+on a photo; Core ML; Candle). The face parser takes up to 8 crops a call and gives the ten face groups at 512² (the
+resize, softmax and group sums are inside it). The clothes parser takes the photo's grid in the top-left of one of
+28 fixed canvases with a fourth channel marking the photo; every layer ignores the padding (zeros for the
+convolutions, masked keys for attention, resizes clamped at the photo's edge), so the result equals the run on the
+photo alone. Both run on the GPU: as fast as the Neural Engine for the face parser and closer to float32, and the
+Neural Engine compiler takes over 15 minutes for one large clothes canvas. BiSeNet, SegFormer-B2, the face mesh and
+Sapiens2 stay on candle.
+
 ## Tests
 
-`cargo test -p lightcraft-parsing --lib`. The model tests read the models from the shared folder (or
+`cargo test -p lightcraft-parsing --lib`. The Core ML tests (`src/tests/coreml.rs`) compare both engines on a made-up
+picture and check the fallback; they read the shared models folder through links and skip without the models. The model tests read the models from the shared folder (or
 `LIGHTCRAFT_PARSING_MODELS`) and skip without them; no test downloads a model.

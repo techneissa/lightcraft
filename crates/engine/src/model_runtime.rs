@@ -21,7 +21,11 @@ pub const FILE: &str = "model-runtimes.json";
 const MAX_FILE: u64 = 64 << 10;
 
 /// The models with a Core ML conversion: (model id, the feature it serves, as Settings names it).
-pub const MODELS: &[(&str, &str)] = &[(lightcraft_learn::ENCODER_ID, "Learn My Edits")];
+pub const MODELS: &[(&str, &str)] = &[
+    (lightcraft_learn::ENCODER_ID, "Learn My Edits"),
+    (crate::people_parsing::COREML_MODELS[0], "People Parts: Faces"),
+    (crate::people_parsing::COREML_MODELS[1], "People Parts: Bodies"),
+];
 
 /// `<config>/model-runtimes.json`.
 pub fn default_file() -> Option<PathBuf> {

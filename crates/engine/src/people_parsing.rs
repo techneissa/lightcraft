@@ -130,6 +130,8 @@ struct Inner {
     one_run: Mutex<()>,
     #[cfg(not(target_arch = "wasm32"))]
     loaded: Mutex<Option<Loaded>>,
+    /// The engines the face and clothes parsers run on (`fork/coreml.md`).
+    runtimes: Mutex<lightcraft_parsing::Runtimes>,
     watcher: AtomicBool,
     runs: std::sync::atomic::AtomicUsize,
     message: Mutex<Option<String>>,
@@ -166,6 +168,7 @@ impl PeopleParsing {
                 one_run: Mutex::new(()),
                 #[cfg(not(target_arch = "wasm32"))]
                 loaded: Mutex::new(None),
+                runtimes: Mutex::new(lightcraft_parsing::Runtimes::default()),
                 watcher: AtomicBool::new(false),
                 runs: std::sync::atomic::AtomicUsize::new(0),
                 message: Mutex::new(None),
@@ -244,6 +247,63 @@ impl PeopleParsing {
                 flag.store(true, Ordering::Relaxed);
             }
         }
+    }
+
+    /// The engines the face and clothes parsers run on.
+    pub fn runtimes(&self) -> lightcraft_parsing::Runtimes {
+        *lock(&self.inner.runtimes)
+    }
+
+    /// Run `model` (a parser's folder id, `lightcraft_parsing::coreml::CONVERTED`) on `runtime` from the next run on
+    /// (the loaded models are dropped). False for a model that is not one of them.
+    pub fn set_runtime(&self, model: &str, runtime: crate::model_runtime::Runtime) -> bool {
+        {
+            // released before `loaded` is taken: a run holds `loaded` while it reads the runtimes
+            let mut r = lock(&self.inner.runtimes);
+            if model == COREML_MODELS[0] {
+                r.face = runtime;
+            } else if model == COREML_MODELS[1] {
+                r.body = runtime;
+            } else {
+                return false;
+            }
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            *lock(&self.inner.loaded) = None;
+        }
+        true
+    }
+
+    /// Whether `model`'s Core ML version is in the models folder.
+    pub fn coreml_installed(&self, model: &str) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        return self.models_dir().is_some_and(|d| {
+            lightcraft_parsing::coreml::CONVERTED.iter().any(|f| f.folder == model && lightcraft_parsing::coreml::installed(&d, f))
+        });
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = model;
+            false
+        }
+    }
+
+    /// The engine `model` runs on in the loaded set (`coreml` or `candle`); `None` before a run has loaded it.
+    pub fn backend(&self, model: &str) -> Option<&'static str> {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let slot = lock(&self.inner.loaded);
+            let l = slot.as_ref()?;
+            let (face, body) = l.parser.backends();
+            if l.set.face_file().folder == model {
+                return Some(face.id());
+            }
+            if l.set.body_file().folder == model {
+                return Some(body.id());
+            }
+        }
+        let _ = model;
+        None
     }
 
     #[cfg(test)]
@@ -415,7 +475,10 @@ impl PeopleParsing {
                 }
                 None => {
                     *slot = None;
-                    let p = Arc::new(lightcraft_parsing::Parser::load(set, models).map_err(|e| e.to_string())?);
+                    let runtimes = self.runtimes();
+                    let p = Arc::new(
+                        lightcraft_parsing::Parser::load_with(set, models, lightcraft_parsing::best_device(), runtimes).map_err(|e| e.to_string())?,
+                    );
                     *slot = Some(Loaded { set, parser: p.clone(), last_used: Instant::now() });
                     p
                 }
@@ -455,6 +518,9 @@ impl PeopleParsing {
     }
 }
 
+/// The parsers with a Core ML version (`fork/coreml.md`): their ids (folders) in `models.runtime` and Settings.
+pub const COREML_MODELS: [&str; 2] = [lightcraft_parsing::models::FACE_SEGFORMER_B0.folder, lightcraft_parsing::models::BODY_SEGFORMER_B3.folder];
+
 fn read_choice(path: &Path) -> Option<ModelSet> {
     let text = std::fs::read_to_string(path).ok()?;
     let v: serde_json::Value = serde_json::from_str(&text).ok()?;
@@ -479,6 +545,10 @@ impl crate::Session {
             crate::config::cache_dir().map(|d| d.join("people-parsing")),
             crate::config::config_dir().map(|d| d.join("parsing-model.json")),
         );
+        // the runtime choices (`with_default_learn` opened their file)
+        for f in COREML_MODELS {
+            self.parsing.set_runtime(f, self.model_runtimes.get(f));
+        }
         self
     }
 }
