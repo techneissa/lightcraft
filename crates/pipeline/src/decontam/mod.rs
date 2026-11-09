@@ -67,6 +67,46 @@ impl Edge {
     pub fn bytes(&self) -> usize {
         self.px.len() * std::mem::size_of::<EdgePx>() + self.rows.len() * std::mem::size_of::<usize>()
     }
+
+    /// The edge as the GPU's finish kernel reads it (fork, `fork/perf-decontam-gpu.md`): `height + 1` row starts
+    /// (pixel indices, as `u32` bits), then [`PX_WORDS`] words a pixel: its column (`u32` bits), its selected and its
+    /// unselected colour. `None` when a count doesn't fit in 32 bits or the edge was estimated for another height.
+    pub fn device_words(&self, height: usize) -> Option<Vec<f32>> {
+        if self.rows.len() != height.checked_add(1)? {
+            return None;
+        }
+        let total = self.rows.len().checked_add(self.px.len().checked_mul(PX_WORDS)?)?;
+        u32::try_from(total).ok()?;
+        let mut w = Vec::with_capacity(total);
+        w.extend(self.rows.iter().map(|&r| f32::from_bits(r as u32)));
+        for p in &self.px {
+            w.push(f32::from_bits(p.x));
+            w.extend_from_slice(&p.selected);
+            w.extend_from_slice(&p.unselected);
+        }
+        Some(w)
+    }
+}
+
+/// Words of one edge pixel on the GPU ([`Edge::device_words`]).
+pub const PX_WORDS: usize = 7;
+
+/// What a decontaminated mask's edge is keyed by in a stage cache (CPU and GPU alike): the image it is estimated
+/// from (`lin_key`), the mask's alpha (`masks::alpha_key`) and the frame's scale; never its Amount or sliders.
+pub fn split_key(lin_key: u64, alpha_key: u64, px_per_long: f64) -> u64 {
+    crate::hash_of((lin_key, alpha_key, px_per_long.to_bits()))
+}
+
+/// Which parts of the finish stage a decontaminated mask with effect terms `t` edits apart: its scene edits, its
+/// colour edits (`crate::finish::effect_terms_with`'s block). The GPU kernel reads them from its descriptor.
+pub fn layers_of(t: &[f32]) -> (bool, bool) {
+    (scene_terms(t), colour_terms(t))
+}
+
+/// [`estimate_edge`], counted in [`estimates`] (the GPU render estimates through this, as the CPU's [`splits`] does).
+pub fn estimate_counted(img: &Rgb32f, alpha: &MaskAlpha, long_px: f64) -> Edge {
+    ESTIMATES.with(|c| c.set(c.get() + 1));
+    estimate_edge(img, alpha, long_px)
 }
 
 /// Below and above these alphas a pixel is wholly in one layer: it is drawn as before.
@@ -143,10 +183,7 @@ pub(crate) fn splits(p: &crate::Prepared, masks: &[Mask], key: impl Fn(&Mask) ->
             let k = key(m);
             let edge = match used.iter().chain(kept).find(|(o, _)| *o == k) {
                 Some((_, edge)) => edge.clone(),
-                None => {
-                    ESTIMATES.with(|c| c.set(c.get() + 1));
-                    Arc::new(estimate_edge(&p.img, &e.alpha, p.px_per_long))
-                }
+                None => Arc::new(estimate_counted(&p.img, &e.alpha, p.px_per_long)),
             };
             if !used.iter().any(|(o, _)| *o == k) {
                 used.push((k, edge.clone()));

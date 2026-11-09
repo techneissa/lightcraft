@@ -34,6 +34,8 @@ pub struct GpuStages {
     spots_cpu: KeptStore<CpuKept>,
     /// What the job that showed the last render made of it on the host, by that render's frame number (issue #111).
     pub(crate) host: Mutex<Option<crate::dirty::HostKept>>,
+    /// Fork (`fork/perf-decontam-gpu.md`): the decontaminated masks' edges of the last render.
+    decontam: crate::decontam::KeptEdges,
 }
 
 const CAPACITY: usize = 2;
@@ -145,6 +147,7 @@ impl GpuStages {
             add(b);
         }
         self.alphas.each(&mut add);
+        self.decontam.each(&mut add);
         patches += self.spots.bytes();
         let host = self.host.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |k| k.bytes);
         total + patches + host
@@ -155,6 +158,7 @@ impl GpuStages {
         self.lock().clear();
         *self.source.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.alphas.clear();
+        self.decontam.clear();
         self.spots.clear();
         self.spots_cpu.clear();
         *self.host.lock().unwrap_or_else(|e| e.into_inner()) = None;
@@ -855,6 +859,8 @@ pub fn render(
     if let Want::MaskPlanes(ask) = want {
         return Some(Output::Masks(mask_planes(&mut cx, masks.as_ref(), &plan, (&lin, &prep.log_l), Arc::as_ptr(src) as usize, ask)));
     }
+    // fork (`fork/perf-decontam-gpu.md`): the decontaminated masks' edges, after the alphas
+    let (masks, dc) = crate::decontam::with_edges(&mut cx, &plan, masks, &terms, &lin, &mut host, stages.map(|c| &c.decontam))?;
 
     // 5. per-pixel stage
     let mut fp = FinishParams::new(FinishParamsInput {
@@ -895,6 +901,7 @@ pub fn render(
         (None, None) => None,
     };
     let (p, aux) = finish_block(&fp, &terms, &present, deep);
+    let (p, aux) = crate::decontam::describe(p, aux, &dc.desc);
     if crate::ctx::failed() {
         return None; // a malformed parameter block failed the render: the CPU fallback redoes it
     }
@@ -902,7 +909,8 @@ pub fn render(
     // the last output where only `t_out` changes (issue #111; never a float render: its output is three words a pixel,
     // and `Rest` holds the request, so a float render never starts from an 8-bit one); else cleared, so that work which
     // never ran cannot pass for an image (see the check below)
-    let from = start.as_ref().zip(t_out.as_ref()).filter(|_| !deep);
+    // (nor when a decontaminated edge was estimated again: what it changes reaches past the tiles that changed)
+    let from = start.as_ref().zip(t_out.as_ref()).filter(|_| !deep).filter(|_| !dc.fresh);
     let out = Arc::new(match from {
         Some((l, _)) => cx.copy(&l.out),
         None => cx.zeroed(if deep { 3 * n } else { n }),
@@ -943,7 +951,7 @@ pub fn render(
             p[y0_at] = y0 as u32;
             p[x0_at] = r[0] as u32;
             cx.run(
-                "main",
+                dc.entry(),
                 &p,
                 &[
                     Some(&lin),

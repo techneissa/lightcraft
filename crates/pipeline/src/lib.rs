@@ -915,7 +915,7 @@ fn render_impl(
     }
     prep.recolor.clone_from(&plan.recolor);
     let ev = s.light.exposure as f32;
-    let split_key = |m: &lightcraft_develop::Mask| hash_of((lin_key, masks::alpha_key(m, keys, ev), px_per_long.to_bits()));
+    let split_key = |m: &lightcraft_develop::Mask| decontam::split_key(lin_key, masks::alpha_key(m, keys, ev), px_per_long);
     // (a request for mask planes draws nothing: it keeps the edges for the next render)
     let split = if alphas_out.is_some() {
         kept_split

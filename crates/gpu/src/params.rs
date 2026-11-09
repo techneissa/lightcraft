@@ -114,6 +114,10 @@ const FIELDS: &[(&str, usize)] = &[
     // a float render (`finish_deep`): the exact sRGB curve, and three words per pixel in `out`, each
     // a linear value with `DEEP_WRITTEN` set
     ("DEEP", 1),
+    // fork (`fork/perf-decontam-gpu.md`): the decontaminated masks (0: none) and their descriptors' offset in `aux`
+    // (`decontam::DESC_WORDS` each)
+    ("DC_N", 1),
+    ("DC_OFF", 1),
 ];
 
 /// `(name, index)` of every field (for the WGSL constants).

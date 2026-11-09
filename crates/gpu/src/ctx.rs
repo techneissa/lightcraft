@@ -13,6 +13,7 @@ struct Module {
 
 const MODULES: &[Module] = &[
     Module {
+        // (fork, `fork/perf-decontam-gpu.md`: `decontam::with_main_dc` adds the decontaminated edge's entry point)
         src: include_str!("wgsl/finish.wgsl"),
         bindings: &[
             ("img", false, "f32"),
@@ -25,7 +26,7 @@ const MODULES: &[Module] = &[
             ("aux", false, "f32"),
             ("out", true, "u32"),
         ],
-        entries: &["main"],
+        entries: &["main", crate::decontam::MAIN_DC],
     },
     Module {
         src: include_str!("wgsl/blur.wgsl"),
@@ -454,6 +455,13 @@ fn constants() -> String {
         s += &format!("const GRAIN_H{i}: u32 = {h}u;\n");
     }
     s += &format!("const DEEP_WRITTEN: u32 = {}u;\n", crate::params::DEEP_WRITTEN);
+    // fork (`fork/perf-decontam-gpu.md`)
+    let (e0, e1) = lightcraft_pipeline::decontam::EDGE;
+    s += &format!(
+        "const DC_E0: f32 = {e0:?};\nconst DC_E1: f32 = {e1:?};\nconst DC_PX: u32 = {}u;\nconst DC_DESC: u32 = {}u;\n",
+        lightcraft_pipeline::decontam::PX_WORDS,
+        crate::decontam::DESC_WORDS
+    );
     for (name, idx) in crate::params::finish_fields() {
         s += &format!("const F_{name}: u32 = {idx}u;\n");
     }
@@ -468,7 +476,12 @@ fn module_source(m: &Module, consts: &str) -> String {
         s += &format!("@group(0) @binding({}) var<storage, {access}> {name}: array<{ty}>;\n", i + 1);
     }
     s += include_str!("wgsl/common.wgsl");
-    s += m.src;
+    if m.entries.contains(&crate::decontam::MAIN_DC) {
+        // (fork, `fork/perf-decontam-gpu.md`)
+        s += &crate::decontam::with_main_dc(m.src);
+    } else {
+        s += m.src;
+    }
     s
 }
 
