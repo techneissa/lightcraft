@@ -12,7 +12,7 @@ List: the Portrait tab's Teeth and Lips section: Teeth Whitening, Lip Color (a p
   colour the way Recolor does (`fork/recolour.md`): their main colour is measured (lightness weighted by the mask,
   hue and chroma also by chroma), and each pixel keeps its lightness and chroma in proportion to it and its own small
   hue offset, so lines, shading and highlights stay. The panel has a swatch with the colour picker and six lipstick
-  shades (nude, rose, red, coral, berry, plum); a shade turns Lip Color on at 60 when it was off, as one undo step.
+  shades (nude, rose, red, coral, berry, plum); a shade turns Lip Color on at 60 when it was off, as one undo step; the feature lists Lips and Teeth as the masks it reads, so the face search keeps them.
 - **Lip Hue** (−100…+100, up to 30° each way) turns the lips' hue; **Lip Saturation** (−100…+100: chroma × 0.3 to
   × 1.5) scales it.
 - **What counts as lips**: the Lips mask less the Teeth mask, held inside the face mesh's outer lip outline and
@@ -35,7 +35,7 @@ List: the Portrait tab's Teeth and Lips section: Teeth Whitening, Lip Color (a p
 
 ## Branch
 
-`feat/retouch-teeth-lips`, from `custom` with `feat/retouch-masks` merged.
+`feat/retouch-teeth-lips`, from `custom` (with PR #122, part masks reaching the retouch step).
 
 ## Own files
 
@@ -58,7 +58,7 @@ Color lands on the picked hue, keeps the shading across the lips and leaves the 
 +100 at the same chroma, Lip Saturation halves or raises chroma; the face mesh keeps a dark-red open mouth out of
 the lips (fails without it); no faces, 50 faces, a face cut by the edge, a 1 × 1 and a flat grey photo (no colour
 from nothing); a draft and a 4× export agree after scaling; the panel's shade colouring the picked face only, one
-undo step.
+undo step; the feature lists Lips and Teeth as the masks it reads, so the face search keeps them.
 
 ## What's New entry
 

@@ -25,7 +25,10 @@ pub(super) fn body(cx: &mut super::Ctx<'_>) {
 /// The value of control `id` for the faces the sliders change.
 fn value(cx: &super::Ctx<'_>, id: &str) -> Option<f64> {
     match cx.face {
-        Some(i) => cx.d.retouch.settings_for(&cx.faces, i).get(id),
+        Some(i) => {
+            let keys = cx.keys.as_ref().map(|k| k as &dyn lightcraft_develop::retouch::KeyMap);
+            cx.d.retouch.settings_for_in(&cx.input.faces, i, keys).get(id)
+        }
         None => cx.d.retouch.global.get(id),
     }
 }

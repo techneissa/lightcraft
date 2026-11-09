@@ -65,6 +65,7 @@ impl Feature for TeethLips {
     const LABEL: &'static str = "Teeth and Lips";
     const STAGE: Stage = Stage::Retouch;
     const SCOPE: Scope = Scope::Face;
+    const PARTS: &'static [Part] = &[Part::Lips, Part::Teeth];
     const CONTROLS: &'static [Control<Self>] = &[
         Control {
             spec: Spec::amount("retouch.teethLips.teethWhitening", "Teeth Whitening"),

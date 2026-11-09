@@ -267,3 +267,12 @@ fn a_draft_and_a_bigger_export_agree_after_scaling() {
     let mean = sum / (w * h * 3) as f32;
     assert!(mean < 0.01 && worst < 0.35, "mean {mean} worst {worst}");
 }
+
+/// The face search keeps only the masks some feature lists: Teeth and Lips list theirs.
+#[test]
+fn the_teeth_and_lips_masks_are_kept_for_this_feature() {
+    use lightcraft_retouch::Feature;
+    assert_eq!(TeethLips::PARTS, &[Part::Lips, Part::Teeth]);
+    let kept = lightcraft_retouch::parts_read();
+    assert!(kept.contains(&Part::Lips) && kept.contains(&Part::Teeth));
+}
