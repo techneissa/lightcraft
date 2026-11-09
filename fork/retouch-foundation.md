@@ -55,7 +55,7 @@ Nothing changes in a photo yet: every feature is an empty stub. What is there fo
   Glare, Background, Stray Hair, and Portrait Presets (no feature module yet). Sections start closed; open ones are
   kept in the saved `openSections` as `portrait.<key>` (a key already there, so no new `ui.json` key; Edit's Solo
   Mode leaves them alone). `ui.json` saves the open Portrait tab as Edit: a build without the tab cannot read
-  `right: "portrait"` and would drop the whole file. Opening the tab finds the photo's faces. **A photo with no people** (the search finished and found
+  `right: "portrait"` and would drop the whole file. Opening the tab finds the photo's faces; so does opening the photo, early, when parsing ahead is on (`fork/parse-ahead.md`, the early check: only "nobody" is kept). **A photo with no people** (the search finished and found
   no face; not while it is unknown, running or failed): the tool strip's Portrait icon is greyed in its place, with the
   hover text "No People in This Photo"; shortcut T (and Window ▸ Portrait) does nothing but toast that text; an open tab
   shows the title row and that one line, with no sections, "Editing" line or face picker; switching photos follows. The

@@ -232,6 +232,22 @@ impl FaceStore {
         Some(found)
     }
 
+    /// Whether anything is known or under way for `key`: faces kept, a search running, a failure or a missing model.
+    /// Reorders nothing (the faces' use order is the cache's).
+    pub(crate) fn knows(&self, key: &str) -> bool {
+        let st = self.lock();
+        st.found.iter().any(|(k, _, _)| k == key)
+            || st.busy.iter().any(|(k, _)| k == key)
+            || st.failed.iter().any(|(k, _)| k == key)
+            || st.no_model.iter().any(|(k, _)| k == key)
+    }
+
+    /// Keep that photo `id` has no face under `key` (found by the early check, `parse_ahead::peek`), as the search
+    /// would have: the Portrait tab reuses it. Ends the claim made by [`Self::claim`].
+    pub(crate) fn put_nobody(&self, key: &str, id: PhotoId) {
+        self.put(key, id, Ok(Found { retry: None, input: Arc::new(Input::new(Vec::new())), thumbs: Arc::new(Vec::new()) }));
+    }
+
     /// The salt of photo `id`'s renders while its faces are unknown: [`UNKNOWN`], changed each time one of its
     /// searches ends (even, as [`UNKNOWN`] is, so it is never a fingerprint's; never 0).
     fn unknown_salt(&self, id: PhotoId) -> u64 {
@@ -276,7 +292,7 @@ impl FaceStore {
     }
 
     /// Mark `key` (of photo `id`) as being searched; false when it already is, or another search of the photo is.
-    fn claim(&self, key: &str, id: PhotoId) -> bool {
+    pub(crate) fn claim(&self, key: &str, id: PhotoId) -> bool {
         let mut st = self.lock();
         if st.busy.iter().any(|(k, p)| k == key || *p == id) {
             return false;
@@ -285,7 +301,7 @@ impl FaceStore {
         true
     }
 
-    fn release(&self, key: &str) {
+    pub(crate) fn release(&self, key: &str) {
         self.lock().busy.retain(|(k, _)| k != key);
     }
 
@@ -344,6 +360,23 @@ pub fn key_of(p: &Photo, s: &DevelopSettings) -> String {
         o.distortion,
         s.crop.geometry.angle
     )
+}
+
+/// What the early check for faces ([`crate::parse_ahead`]'s peek) detects with: the installed provider (tests), else
+/// YuNet, read from its file on the worker that runs it.
+pub(crate) enum PeekDetect {
+    Provider(Arc<dyn FaceProvider>),
+    Yunet(std::path::PathBuf),
+}
+
+impl PeekDetect {
+    /// How many faces `img` has.
+    pub(crate) fn count(&self, img: &Rgba8) -> std::result::Result<usize, String> {
+        match self {
+            PeekDetect::Provider(p) => p.faces(img).map(|f| f.len()),
+            PeekDetect::Yunet(path) => Yunet(crate::cmd::face_detect::detector_at(path)?).faces(img).map(|f| f.len()),
+        }
+    }
 }
 
 /// What finds a photo's faces now: a provider (one installed, else YuNet) on the detect render, or the people parse.
@@ -586,6 +619,14 @@ impl Session {
         Some(pending)
     }
 
+    /// What the early check for faces detects with ([`PeekDetect`]); `None` without a provider or an installed YuNet.
+    pub(crate) fn retouch_peek_detector(&self) -> Option<PeekDetect> {
+        if let Some(p) = &self.retouch_faces.provider {
+            return Some(PeekDetect::Provider(p.clone()));
+        }
+        crate::cmd::face_detect::detector_file(self).map(|(path, _)| PeekDetect::Yunet(path))
+    }
+
     /// What finds faces now: an installed provider; else the people parse while its set is downloaded; else YuNet.
     fn retouch_source(&self) -> std::result::Result<Source, String> {
         if let Some(p) = &self.retouch_faces.provider {
@@ -626,7 +667,12 @@ impl Session {
 
     /// The render faces are found on: the photo before its crop, without retouching, at [`DETECT_EDGE`].
     fn retouch_detect_job(&mut self, id: PhotoId) -> std::result::Result<crate::RenderJob, String> {
-        let mut job = self.render_job(id, DETECT_EDGE, DETECT_EDGE, false, false).ok_or("no such photo")?;
+        self.retouch_detect_job_at(id, DETECT_EDGE)
+    }
+
+    /// [`Self::retouch_detect_job`] at long edge `edge`.
+    pub(crate) fn retouch_detect_job_at(&mut self, id: PhotoId, edge: usize) -> std::result::Result<crate::RenderJob, String> {
+        let mut job = self.render_job(id, edge, edge, false, false).ok_or("no such photo")?;
         let mut s = (*job.settings).clone();
         s.retouch = Default::default();
         job.settings = Arc::new(s);

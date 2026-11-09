@@ -38,6 +38,7 @@ use crate::activity::{Cancel, TaskGuard};
 use crate::people_parsing::{Filed, PARSE_EDGE, QuietRun};
 
 pub(crate) mod index;
+pub(crate) mod peek;
 pub mod power;
 pub(crate) mod queue;
 mod worker;
@@ -147,6 +148,8 @@ pub struct ParseAhead {
     left: usize,
     /// Times the queue was rebuilt from the catalog.
     rebuilds: u64,
+    /// The early check for faces (`peek`).
+    pub(crate) peek: peek::Peek,
 }
 
 impl Default for ParseAhead {
@@ -173,6 +176,7 @@ impl Default for ParseAhead {
             state: "idle",
             left: 0,
             rebuilds: 0,
+            peek: peek::Peek::default(),
         }
     }
 }
@@ -470,6 +474,8 @@ fn holding(s: &Session, pace: Pace, mine: Option<&str>) -> bool {
 /// hand the worker the next photo. Cheap when there is nothing to do.
 pub(crate) fn pump(s: &mut Session, pace: Pace, backward: bool) {
     collect(s);
+    // (the Portrait icon's early check for faces: it needs no parse models, so it goes before the work below stands still)
+    peek::pump(s, pace);
     if s.parse_ahead.row_cancel.swap(false, Ordering::SeqCst) {
         let at = s.active();
         s.parse_ahead.stand_still("stopped");
@@ -753,6 +759,18 @@ impl Known {
 }
 
 impl Session {
+    /// Tests and tools: use `power` instead of the Mac's from now on (`None`: the Mac's again).
+    #[doc(hidden)]
+    pub fn parse_ahead_fix_power(&mut self, power: Option<power::Power>) {
+        self.parse_ahead.power.fix(power);
+    }
+
+    /// Tests and tools: how many early checks for faces (`peek`) have started.
+    #[doc(hidden)]
+    pub fn parse_ahead_peeks(&self) -> usize {
+        self.parse_ahead.peek.started()
+    }
+
     /// Turn parsing ahead on or off (the desktop app's setting; on by default). Off stops the photo going.
     pub fn set_parse_ahead(&mut self, on: bool) {
         self.parse_ahead.enabled = on;

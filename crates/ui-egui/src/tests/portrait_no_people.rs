@@ -156,3 +156,62 @@ fn stored_portrait_settings_stay_when_the_photo_shows_no_face() {
     assert_eq!(before.global.get("retouch.skin.smoothness"), Some(40.0));
     assert_eq!(after.global.get("retouch.skin.smoothness"), Some(40.0), "looking at the collapsed tab changes nothing");
 }
+
+/// A detector that finds nobody and counts its runs.
+struct Counting(Arc<std::sync::atomic::AtomicUsize>);
+
+impl FaceProvider for Counting {
+    fn name(&self) -> &str {
+        "Counting"
+    }
+    fn faces(&self, _img: &lightcraft_raster::Rgba8) -> Result<Vec<Face>, String> {
+        self.0.fetch_add(1, Ordering::SeqCst);
+        Ok(vec![])
+    }
+}
+
+fn counting_app(parse_ahead: bool) -> (Headless, Arc<std::sync::atomic::AtomicUsize>) {
+    let runs = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let mut session = lightcraft_engine::Session::with_demo();
+    session.retouch_faces.set_provider(Arc::new(Counting(runs.clone())));
+    // (mains power: the test does not depend on the Mac it runs on)
+    session.parse_ahead_fix_power(Some(lightcraft_engine::parse_ahead::power::Power::default()));
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 1400.0], 1.0);
+    h.app.ui.settings.parse_ahead = parse_ahead;
+    assert_eq!(h.request("ui.set", json!({"view": "detail"}), T)["ok"], true);
+    (h, runs)
+}
+
+/// A photo without faces greys the Portrait icon as it opens, without the tab ever being opened.
+#[test]
+fn the_icon_is_off_for_a_photo_without_faces_before_the_tab_is_opened() {
+    let (mut h, runs) = counting_app(true);
+    let photo = h.app.session.active().unwrap();
+    assert_ne!(h.app.ui.right, RightPanel::Portrait);
+    let found = h.step_until(Duration::from_secs(60), |h| h.app.session.retouch_no_people(photo));
+    assert!(found, "the photo was never found to have no face");
+    assert_eq!(runs.load(Ordering::SeqCst), 1);
+    settle(&mut h);
+    let r = h.request("ui.clickWidget", json!({"id": "icon:portrait"}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    settle(&mut h);
+    assert_ne!(h.app.ui.right, RightPanel::Portrait, "the greyed icon opened the tab");
+    // the tab later (by another way in): one line, and no search of its own
+    h.app.ui.right = RightPanel::Portrait;
+    settle(&mut h);
+    assert!(rect_of(&mut h, "portrait:noPeople").is_some());
+    assert_eq!(runs.load(Ordering::SeqCst), 1, "the tab searched again");
+}
+
+/// With the setting off in Settings ▸ Performance no check runs: the icon stays on until the tab is opened.
+#[test]
+fn no_check_runs_while_parsing_ahead_is_switched_off() {
+    let (mut h, runs) = counting_app(false);
+    let photo = h.app.session.active().unwrap();
+    for _ in 0..90 {
+        h.step();
+    }
+    assert_eq!((runs.load(Ordering::SeqCst), h.app.session.parse_ahead_peeks()), (0, 0));
+    assert!(!h.app.session.retouch_no_people(photo));
+}
