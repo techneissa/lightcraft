@@ -56,6 +56,18 @@ translated from Python/PyTorch to Rust on candle. The BiRefNet weights are not p
 and are never distributed with it: a user downloads the MIT-licensed ZhengPeng7/BiRefNet files
 only when they choose to.
 
+crates/flux (lightcraft-flux) ports the FLUX model code of candle-transformers 0.9.2
+(https://github.com/huggingface/candle, src/models/flux), Copyright The HuggingFace Team and the
+candle contributors, licensed under the MIT License or the Apache License 2.0, which follows Black
+Forest Labs' reference code (https://github.com/black-forest-labs/flux, Apache License 2.0), and
+adapts the CLIP tokenizer of crates/segment. The port was modified by the LightCraft contributors
+(2026): the FLUX.1 Fill input layout, LoRA layers added at run time, a VAE that reads the diffusers
+layout and convolves in bands; each ported file says so. Because of this, crates/flux is licensed
+under the Apache License 2.0 only. The FLUX.1 Fill dev weights, its text encoders and VAE, and any
+LoRA are not part of LightCraft and are never distributed with it: FLUX.1 [dev] models are under
+Black Forest Labs' FLUX.1 [dev] Non-Commercial License, and a user places them in the models folder
+only when they choose to.
+
 crates/parsing (lightcraft-parsing) runs SegFormer (Xie et al., 2021), BiSeNet (Yu et al., 2018) and
 MediaPipe's face landmark model v2 (Google, Apache-2.0), written for candle from the papers and the
 layouts of the published checkpoints. Their weights are not part of LightCraft and are never

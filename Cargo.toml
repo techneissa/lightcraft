@@ -38,6 +38,7 @@ lightcraft-film = { path = "crates/film" }
 lightcraft-lensdb = { path = "crates/lensdb" }
 lightcraft-inpaint = { path = "crates/inpaint" }
 lightcraft-lama = { path = "crates/lama" }
+lightcraft-flux = { path = "crates/flux" }
 lightcraft-learn = { path = "crates/learn" }
 lightcraft-scenes = { path = "crates/scenes" }
 lightcraft-pipeline = { path = "crates/pipeline" }
@@ -112,6 +113,8 @@ avif-serialize = "0.8.6"
 # Oniguruma C library into candle-core, and the product is pure Rust.
 candle-core = { version = "=0.9.2", default-features = false }
 candle-nn = { version = "=0.9.2", default-features = false }
+# FLUX.1 Fill (lightcraft-flux): its T5 and CLIP text encoders, VAE and GGUF loading; pure Rust at 0.9.2
+candle-transformers = { version = "=0.9.2", default-features = false }
 wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "metal", "vulkan", "dx12", "wgsl"] }
 pollster = "1"
 
