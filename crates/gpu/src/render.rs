@@ -51,6 +51,10 @@ struct Entry {
     planes: Planes,
     /// The finished render these stages made (issue #111): the next starts from it.
     last: Option<crate::dirty::Last>,
+    /// Fork (`fork/perf-portrait-draft.md`): with portrait retouching on, the image before it (`post` then points at its
+    /// device buffer), and the boxes the retouching of `lin` may have written (`None`: anywhere; empty without it).
+    pre_retouch: Option<crate::pre_retouch::PreRetouch>,
+    retouch_boxes: Option<Vec<lightcraft_pipeline::spots_keep::Rect>>,
 }
 
 /// Spatial planes of one linear image (`key` = its `lin_key`), each tagged with its radius.
@@ -82,6 +86,10 @@ impl GpuStages {
     fn put(&self, e: Entry) {
         let mut v = self.lock();
         v.retain(|o| !(o.geo == e.geo && Arc::ptr_eq(&o.src, &e.src)));
+        // (another photo's image before its retouching is of no use to this one's sliders)
+        for o in v.iter_mut().filter(|o| !Arc::ptr_eq(&o.src, &e.src)) {
+            o.pre_retouch = None;
+        }
         v.push(e);
         while v.len() > CAPACITY {
             v.remove(0);
@@ -131,6 +139,10 @@ impl GpuStages {
             }
             if let Some(l) = &e.last {
                 add(&l.out);
+            }
+            if let Some(p) = e.pre_retouch.as_ref().and_then(|p| p.kept.peek()) {
+                add(&p.dev);
+                patches += p.host_bytes();
             }
             let p = &e.planes;
             p.log_l.iter().for_each(&mut add);
@@ -839,14 +851,15 @@ pub fn render(
 
     // 2. white balance, defringe, spots, noise reduction
     let at = ViewAt { stages, src, cached: cached.as_ref(), start: start.as_ref() };
-    let Linear { lin, tiles: t_lin, post, colour_noise } = linear_stage(&mut cx, &at, &sampled, info, &plan, &mut host);
+    let Linear { lin, tiles: t_lin, post, colour_noise, pre_retouch, retouch_boxes } = linear_stage(&mut cx, &at, &sampled, info, &plan, &mut host);
     lap("wb/nr", &mut t, &mut cx);
 
     // 3. spatial planes (`t_out`: the output tiles that change from `start`'s)
     let (planes, prep, t_out) = planes_stage(&mut cx, &at, (&lin, t_lin.as_ref()), &plan, req);
     lap("planes", &mut t, &mut cx);
     if let Some(c) = stages {
-        c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin: Some((plan.lin_key, lin.clone())), post, colour_noise, planes, last: None });
+        let lin = Some((plan.lin_key, lin.clone()));
+        c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin, post, colour_noise, planes, last: None, pre_retouch, retouch_boxes });
     }
 
     // 4. masks
@@ -1093,6 +1106,9 @@ struct Linear {
     post: std::sync::Weak<Buf>,
     /// The joint colour NR's noise model of the whole frame (`Entry::colour_noise`).
     colour_noise: Option<(u64, JointNoise)>,
+    /// `Entry::pre_retouch` and `Entry::retouch_boxes`.
+    pre_retouch: Option<crate::pre_retouch::PreRetouch>,
+    retouch_boxes: Option<Vec<lightcraft_pipeline::spots_keep::Rect>>,
 }
 
 /// The white-balanced, retouched, denoised image and what goes with it ([`Linear`]).
@@ -1101,22 +1117,46 @@ fn linear_stage(cx: &mut Cx<'_>, at: &ViewAt<'_>, sampled: &Buf, info: &SourceIn
     let old_lin = at.cached.and_then(|e| e.lin.clone());
     let old_post = at.cached.map_or_else(std::sync::Weak::new, |e| e.post.clone());
     let mut colour_noise = at.cached.and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key);
+    let old_retouch = at.cached.map_or(Some(Vec::new()), |e| e.retouch_boxes.clone());
     if let Some((_, b)) = old_lin.clone().filter(|(k, _)| *k == plan.lin_key) {
         let same = at.start.is_some_and(|l| l.lin_key == plan.lin_key).then(|| crate::dirty::Tiles::none(size));
-        return Linear { lin: b, tiles: same, post: old_post, colour_noise };
+        let pre_retouch = at.cached.and_then(|e| e.pre_retouch.clone());
+        return Linear { lin: b, tiles: same, post: old_post, colour_noise, pre_retouch, retouch_boxes: old_retouch };
     }
     if colour_noise.is_none() {
         colour_noise = lightcraft_pipeline::colour_noise(src, info, plan).map(|n| (plan.noise_key, n));
     }
     let kept = at.stages.map(|c| (c.spots.get(src, plan.geo), c.spots_cpu.get(src, plan.geo))).unwrap_or_default();
-    let (pre, k, redone) = linear(cx, sampled, info, plan, host, (kept.0.as_deref(), kept.1.as_deref()));
-    let post = k.0.as_ref().map_or_else(std::sync::Weak::new, |k| Arc::downgrade(&k.post));
-    if let Some(c) = at.stages {
-        let device = k.0.as_ref().map_or(0, |k| crate::spots_keep::bytes(k));
-        c.spots.put(src, plan.geo, k.0, device);
-        let host = k.1.as_ref().map_or(0, |k| k.bytes());
-        c.spots_cpu.put(src, plan.geo, k.1, host);
-    }
+    let s = &*plan.settings;
+    let retouch_alone = lightcraft_pipeline::retouch_step::active(s)
+        && !lightcraft_pipeline::local_tone::enabled(info, s)
+        && !s.spots.iter().any(lightcraft_pipeline::spots_learned::is_learned);
+    let (pre, post, redone, pre_retouch, retouch_boxes) = if retouch_alone {
+        // portrait retouching (fork `fork/perf-portrait-draft.md`): from the image before it, redone where it writes
+        let kept_pre = at.cached.and_then(|e| e.pre_retouch.as_ref());
+        let r = crate::pre_retouch::linear(cx, sampled, host.sampled.take(), info, plan, kept_pre, kept.1.as_deref());
+        if let (Some(c), Some(drawn)) = (at.stages, r.spots) {
+            c.spots.put(src, plan.geo, None, 0);
+            let host = drawn.as_ref().map_or(0, |k| k.bytes());
+            c.spots_cpu.put(src, plan.geo, drawn, host);
+        }
+        let from = r.from;
+        let redone =
+            crate::pre_retouch::changed(old_retouch.as_deref(), r.boxes.as_deref()).map(|rects| crate::dirty::Redone { from: from.clone(), rects });
+        (r.img, from, redone, Some(r.pre), r.boxes)
+    } else {
+        let (pre, k, redone) = linear(cx, sampled, info, plan, host, (kept.0.as_deref(), kept.1.as_deref()));
+        let post = k.0.as_ref().map_or_else(std::sync::Weak::new, |k| Arc::downgrade(&k.post));
+        if let Some(c) = at.stages {
+            let device = k.0.as_ref().map_or(0, |k| crate::spots_keep::bytes(k));
+            c.spots.put(src, plan.geo, k.0, device);
+            let host = k.1.as_ref().map_or(0, |k| k.bytes());
+            c.spots_cpu.put(src, plan.geo, k.1, host);
+        }
+        // (no retouching drew on it, or the CPU stage did without saying where)
+        let boxes = (!lightcraft_pipeline::retouch_step::active(s)).then(Vec::new);
+        (pre, post, redone, None, boxes)
+    };
     let noise = colour_noise.as_ref().map(|c| &c.1);
     // only the boxes the spots rewrote, when the kept linear image was made from the image they started from
     let dirty = match (at.start, &redone, &old_lin) {
@@ -1127,9 +1167,17 @@ fn linear_stage(cx: &mut Cx<'_>, at: &ViewAt<'_>, sampled: &Buf, info: &SourceIn
     };
     let (lin, tiles) = match dirty {
         Some((b, tiles)) => (Arc::new(b), Some(tiles)),
-        None => (Arc::new(denoise(cx, pre, plan, noise)), None),
+        None => {
+            let t = profiling().then(std::time::Instant::now);
+            let b = denoise(cx, pre, plan, noise);
+            if let Some(t) = t {
+                cx.sync();
+                eprintln!("    gpu denoise: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+            }
+            (Arc::new(b), None)
+        }
     };
-    Linear { lin, tiles, post, colour_noise }
+    Linear { lin, tiles, post, colour_noise, pre_retouch, retouch_boxes }
 }
 
 /// The planes of `lin` (with its tiles that changed from `start`'s, only there) and the output tiles that change from
@@ -1346,13 +1394,10 @@ fn linear(
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let s = &*plan.settings;
-    let img = if lightcraft_pipeline::local_tone::enabled(info, s)
-        || s.spots.iter().any(lightcraft_pipeline::spots_learned::is_learned)
-        || lightcraft_pipeline::retouch_step::active(s)
-    {
+    let img = if lightcraft_pipeline::local_tone::enabled(info, s) || s.spots.iter().any(lightcraft_pipeline::spots_learned::is_learned) {
         // the camera's local tone mapping (ProRAW gain table, off by default), or a LaMa spot (the
         // learned fill runs on the CPU, before the white balance): the whole scene-linear stage on the CPU
-        // (or portrait retouching, fork `fork/retouch-foundation.md`)
+        // (portrait retouching included, fork `fork/retouch-foundation.md`)
         let mut img = match host.sampled.take() {
             Some(i) => i,
             None => cx.read_rgb(sampled, w, h),

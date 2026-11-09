@@ -12,6 +12,8 @@ mod fit;
 mod gpu_probe;
 mod hidden_spot;
 mod mask_cache;
+// fork: `fork/perf-portrait-draft.md`
+mod portrait_drag;
 mod shaped_spot;
 mod spot_cache;
 mod thumbs_bench;

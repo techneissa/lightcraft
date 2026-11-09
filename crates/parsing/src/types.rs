@@ -152,6 +152,10 @@ pub struct Plane {
     pub width: usize,
     pub height: usize,
     pub data: Vec<f32>,
+    /// Cut from the whole photo's body map, which gives each of its cells to one person: different people's split planes
+    /// share out one parse and add up. Any other plane (a face parsed up close, which may claim cells nobody owns, as
+    /// the next face may too; an edge redrawn by a matte) joins other people's by the larger value (#124).
+    pub split: bool,
 }
 
 impl Plane {
@@ -237,6 +241,18 @@ impl Person {
     }
 }
 
+/// Several people's `part` at a point, joined as [`crate::render::mask`] draws it: their split planes
+/// ([`Plane::split`]) add up across people, the larger within a person; every other plane by the larger value.
+pub fn joined<'a>(people: impl IntoIterator<Item = &'a Person>, part: Part, x: f32, y: f32) -> f32 {
+    let (mut shared, mut rest) = (0.0f32, 0.0f32);
+    for q in people {
+        let planes = q.parts.get(&part).map_or(&[][..], Vec::as_slice);
+        shared += planes.iter().filter(|p| p.split).fold(0.0f32, |a, p| a.max(p.sample(x, y)));
+        rest = planes.iter().filter(|p| !p.split).fold(rest, |a, p| a.max(p.sample(x, y)));
+    }
+    shared.min(1.0).max(rest)
+}
+
 /// The result of parsing one photo.
 #[derive(Clone, Debug, PartialEq, Default)]
 pub struct Parsing {
@@ -251,8 +267,8 @@ pub struct Parsing {
 }
 
 impl Parsing {
-    /// The value at a point that is not any person (1 − the largest Entire Person value).
+    /// The value at a point that is not any person (1 − everybody's Entire Person, joined as [`joined`] does).
     pub fn background(&self, x: f32, y: f32) -> f32 {
-        1.0 - self.people.iter().fold(0.0f32, |a, p| a.max(p.sample(Part::EntirePerson, x, y)))
+        1.0 - joined(&self.people, Part::EntirePerson, x, y)
     }
 }

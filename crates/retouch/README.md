@@ -34,6 +34,9 @@ In the module:
   Entire Person and the clothes.
 - **Reach**: `REACH`, how far past its face's box and the areas of its `PARTS` masks `apply` reads, a fraction of
   the face's size (`DEFAULT_REACH`, half the face, when it declares none). See the zoom rule below.
+- **Where it writes**: a face feature changes only pixels inside its face's read box (the face's box, its parts'
+  masks, its spots and strands, grown by `REACH`), so a slider tick redoes only those boxes. One that writes elsewhere
+  (strokes the user paints, the whole picture) overrides `writes_near_face` to return `false` while it does.
 - **`apply`**: retouch the image in place (see the rules below). The panel section draws its sliders with
   `cx.slider("retouch.<KEY>.<field>")`, which writes to every face or to the picked one.
 
