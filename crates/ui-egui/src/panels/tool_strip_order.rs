@@ -1,9 +1,9 @@
-//! The order of the tool strip's icons (Presets, Edit, Crop, Remove, Masking, Red Eye, Versions,
-//! Activity, Keywords, Info), and the drag that changes it. The fork adds Portrait after Masking
-//! (`fork/retouch-foundation.md`): eleven places, five between the dividers.
+//! The order of the tool strip's icons (Presets, Edit, Crop, Remove, Masking, Portrait, Red Eye,
+//! Versions, Activity, Keywords, Info), and the drag that changes it. Portrait is the fork's
+//! (`fork/retouch-foundation.md`).
 //!
-//! The strip has ten places: two above the first divider, four between the dividers, two below
-//! the second and two pinned to the bottom (the About button stays after the eighth). An icon
+//! The strip has eleven places: two above the first divider, five between the dividers, two below
+//! the second and two pinned to the bottom (the About button stays after the ninth). An icon
 //! moves from place to place; the dividers stay where they are. The order is saved with the UI
 //! state (`ui.json`, key `toolStrip`, a list of icon ids); a state saved before it existed loads
 //! as the usual order, and what a file or an agent says wrongly is repaired: unknown and repeated
