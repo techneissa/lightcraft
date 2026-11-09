@@ -251,8 +251,9 @@ pub struct Parsing {
 }
 
 impl Parsing {
-    /// The value at a point that is not any person (1 − the largest Entire Person value).
+    /// The value at a point that is not any person (1 − the people's Entire Person values added up: they share out one
+    /// parse, as in [`crate::render::mask`]).
     pub fn background(&self, x: f32, y: f32) -> f32 {
-        1.0 - self.people.iter().fold(0.0f32, |a, p| a.max(p.sample(Part::EntirePerson, x, y)))
+        1.0 - self.people.iter().fold(0.0f32, |a, p| a + p.sample(Part::EntirePerson, x, y)).min(1.0)
     }
 }

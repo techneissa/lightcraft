@@ -304,3 +304,21 @@ fn the_mask_survives_closing_and_reopening_the_library() {
     assert!(matches!(&after[0].components[0].shape, MaskShape::People { seg: Some(_), face: Some(_), .. }));
     let _ = std::fs::remove_dir_all(dir);
 }
+
+#[test]
+fn two_people_side_by_side_make_one_top_without_a_line_where_they_meet() {
+    // one shirt across the middle of the photo, the parse's cells 0..4 the first person's and 4..8 the second's, as a
+    // parse shares a part out between people (#124)
+    let half = |mine: &dyn Fn(usize) -> bool| {
+        let data = (0..8 * 4).map(|i| if mine(i % 8) { 1.0 } else { 0.0 }).collect();
+        let mut q = Person::default();
+        q.parts.insert(Part::ClothesTop, vec![Plane { rect: NormRect::new(0.1, 0.4, 0.9, 0.6), width: 8, height: 4, data }]);
+        q
+    };
+    let p = parse(vec![half(&|x| x < 4), half(&|x| x >= 4)]);
+    let (main, detail) = build(&p, &Selection::of(None, &[Pick::Top]), Orientation::Normal).unwrap();
+    for k in 0..=40 {
+        let x = 0.15 + 0.7 * f64::from(k) / 40.0;
+        assert!(at(&main, &detail, x, 0.5) > 0.95, "x {x}: {}", at(&main, &detail, x, 0.5));
+    }
+}

@@ -26,8 +26,8 @@ pub enum Select {
     Background,
 }
 
-/// The planes a selection draws from.
-fn planes(p: &Parsing, sel: Select) -> Vec<&Plane> {
+/// The planes a selection draws from, one list per person.
+fn planes(p: &Parsing, sel: Select) -> Vec<Vec<&Plane>> {
     let part = match sel {
         Select::Person(_, part) | Select::Everyone(part) => part,
         Select::Background => Part::EntirePerson,
@@ -36,15 +36,32 @@ fn planes(p: &Parsing, sel: Select) -> Vec<&Plane> {
         Select::Person(k, _) => p.people.get(k).into_iter().collect(),
         _ => p.people.iter().collect(),
     };
-    people.into_iter().filter_map(|q| q.parts.get(&part)).flatten().collect()
+    people.into_iter().map(|q| q.parts.get(&part).into_iter().flatten().collect()).collect()
 }
 
-/// The mask, `width × height` values 0 to 1 over the whole photo (bilinear, no edge refinement).
+/// The mask, `width × height` values 0 to 1 over the whole photo (bilinear, no edge refinement). A person's planes
+/// (a face parsed up close over their body) overlap, so they join by the larger value; different people's planes
+/// share out one parse, so they add up: the larger of two people's masks would sag where they meet, a thin line
+/// across a part both have (#124).
 pub fn mask(p: &Parsing, sel: Select, width: usize, height: usize) -> Vec<f32> {
     let Some(n) = width.checked_mul(height).filter(|&n| n > 0 && n <= MAX_PIXELS) else { return Vec::new() };
     let mut out = vec![0.0f32; n];
-    for plane in planes(p, sel) {
-        draw_max(&mut out, width, height, plane);
+    let mut one = vec![0.0f32; n];
+    for person in planes(p, sel) {
+        let Some(r) = person.iter().map(|q| q.rect).reduce(|a, b| a.union(&b)).and_then(|r| r.clamped()) else { continue };
+        for plane in &person {
+            draw_max(&mut one, width, height, plane);
+        }
+        // add what this person drew, and clear it for the next, only over their own planes
+        let ((x0, x1), (y0, y1)) = (span(r.x0, r.x1, width), span(r.y0, r.y1, height));
+        for y in y0..y1 {
+            let row = y * width;
+            let (Some(o), Some(v)) = (out.get_mut(row + x0..row + x1), one.get_mut(row + x0..row + x1)) else { continue };
+            for (o, v) in o.iter_mut().zip(v.iter_mut()) {
+                *o = (*o + *v).min(1.0);
+                *v = 0.0;
+            }
+        }
     }
     if sel == Select::Background {
         for v in &mut out {
@@ -54,10 +71,14 @@ pub fn mask(p: &Parsing, sel: Select, width: usize, height: usize) -> Vec<f32> {
     out
 }
 
+/// The frame pixels `a` to `b` (fractions of the frame) cover along a side of `n`.
+fn span(a: f32, b: f32, n: usize) -> (usize, usize) {
+    ((a * n as f32).floor().max(0.0) as usize, ((b * n as f32).ceil().max(0.0) as usize).min(n))
+}
+
 /// Draw `plane` into a frame, keeping the larger value per pixel.
 fn draw_max(out: &mut [f32], width: usize, height: usize, plane: &Plane) {
     let Some(r) = plane.rect.clamped() else { return };
-    let span = |a: f32, b: f32, n: usize| ((a * n as f32).floor().max(0.0) as usize, ((b * n as f32).ceil() as usize).min(n));
     let ((x0, x1), (y0, y1)) = (span(r.x0, r.x1, width), span(r.y0, r.y1, height));
     for y in y0..y1 {
         let fy = (y as f32 + 0.5) / height as f32;
@@ -88,7 +109,7 @@ pub fn refined_with(p: &Parsing, sel: Select, guide: &RgbImage, cells: f32, eps:
 
 /// The filter radius in frame pixels: `cells` of the coarsest plane the selection draws from.
 pub fn radius_px(p: &Parsing, sel: Select, width: usize, height: usize, cells: f32) -> f32 {
-    let coarsest = planes(p, sel).iter().fold(0.0f32, |a, q| {
+    let coarsest = planes(p, sel).into_iter().flatten().fold(0.0f32, |a, q| {
         a.max(q.rect.width() * width as f32 / q.width.max(1) as f32).max(q.rect.height() * height as f32 / q.height.max(1) as f32)
     });
     (coarsest * cells).min(MAX_RADIUS * width.max(height) as f32)
@@ -212,7 +233,7 @@ pub fn bounds(p: &Parsing, sel: Select) -> Option<NormRect> {
     if sel == Select::Background {
         return Some(NormRect::new(0.0, 0.0, 1.0, 1.0));
     }
-    planes(p, sel).iter().map(|q| q.rect).reduce(|a, b| a.union(&b))
+    planes(p, sel).into_iter().flatten().map(|q| q.rect).reduce(|a, b| a.union(&b))
 }
 
 #[cfg(test)]
@@ -225,6 +246,28 @@ mod tests {
         let plane = Plane { rect: NormRect::new(0.25, 0.25, 0.75, 0.75), width: 4, height: 4, data: vec![1.0; 16] };
         person.parts.insert(Part::EntirePerson, vec![plane]);
         Parsing { people: vec![person], width: 100, height: 100, ..Parsing::default() }
+    }
+
+    #[test]
+    fn two_people_side_by_side_make_one_mask_without_a_line_where_they_meet() {
+        // one shirt across the photo, the body map's cells 0..4 the first person's and 4..8 the second's, as the parse
+        // shares a part out between people (#124)
+        let half = |mine: &dyn Fn(usize) -> bool| {
+            let data = (0..8 * 4).map(|i| if mine(i % 8) { 1.0 } else { 0.0 }).collect();
+            let mut person = Person::default();
+            person.parts.insert(Part::ClothesTop, vec![Plane { rect: NormRect::new(0.0, 0.25, 1.0, 0.75), width: 8, height: 4, data }]);
+            person
+        };
+        let p = Parsing { people: vec![half(&|x| x < 4), half(&|x| x >= 4)], width: 100, height: 100, ..Parsing::default() };
+        let m = mask(&p, Select::Everyone(Part::ClothesTop), 64, 64);
+        for x in 0..64 {
+            assert!(m[32 * 64 + x] > 0.99, "x {x}: {}", m[32 * 64 + x]);
+        }
+        let bg = mask(&p, Select::Background, 64, 64);
+        assert!(bg[32 * 64 + 32] == 1.0, "the shirt is not Entire Person");
+        // each person alone still fades where the other begins
+        let first = mask(&p, Select::Person(0, Part::ClothesTop), 64, 64);
+        assert!(first[32 * 64 + 4] > 0.99 && first[32 * 64 + 34] < 0.5 && first[32 * 64 + 60] == 0.0);
     }
 
     #[test]

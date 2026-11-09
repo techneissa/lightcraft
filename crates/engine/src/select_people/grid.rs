@@ -174,16 +174,28 @@ fn draw(rect: &NormRect, side: usize, parts: &[Placed<'_>], bodies: &[Placed<'_>
         let (u, v) = back.map(x, y, 1.0, 1.0);
         (u as f32, v as f32)
     };
+    // a person's planes overlap (a face parsed up close over their body), so they join by the larger value; people
+    // share out one parse, so theirs add up: the larger would sag where two people meet, a thin line (#124)
     let fill = |planes: &[Placed<'_>], out: &mut Vec<f32>| {
-        for q in planes {
-            let Some(r) = cells(rect, side, &q.rect) else { continue };
-            for j in r.2..r.3 {
-                for i in r.0..r.1 {
-                    let (u, v) = at(i, j);
-                    if let Some(o) = out.get_mut(j * side + i) {
-                        *o = o.max(q.plane.sample(u, v));
+        let mut people: Vec<usize> = planes.iter().map(|q| q.person).collect();
+        people.sort_unstable();
+        people.dedup();
+        let mut one = vec![0.0f32; n];
+        for person in people {
+            one.fill(0.0);
+            for q in planes.iter().filter(|q| q.person == person) {
+                let Some(r) = cells(rect, side, &q.rect) else { continue };
+                for j in r.2..r.3 {
+                    for i in r.0..r.1 {
+                        let (u, v) = at(i, j);
+                        if let Some(o) = one.get_mut(j * side + i) {
+                            *o = o.max(q.plane.sample(u, v));
+                        }
                     }
                 }
+            }
+            for (o, v) in out.iter_mut().zip(&one) {
+                *o = (*o + v).min(1.0);
             }
         }
     };
