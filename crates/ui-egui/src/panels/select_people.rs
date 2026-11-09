@@ -77,10 +77,7 @@ fn add(app: &mut LightcraftApp, ctx: &egui::Context, photo: PhotoId, params: Val
 pub(crate) fn mode_row(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoId) -> bool {
     let t = Tokens::get(ui.ctx());
     let now = mode(ui.ctx());
-    let items = [("Person", "person"), ("Background", "background"), ("Custom", "custom")];
-    let active = [Mode::Person, Mode::Background, Mode::Custom].iter().position(|m| *m == now);
-    let tips = ["A mask of people or their parts", "A mask of everything that is not a person", "Object, Subject, Brush and the other masks"];
-    if let Some(i) = crate::widgets::segmented_tips(ui, "maskMode", &items, &tips, active, 3) {
+    if let Some(i) = segments(ui, now) {
         let ctx = ui.ctx().clone();
         match i {
             0 => {
@@ -122,6 +119,50 @@ pub(crate) fn mode_row(app: &mut LightcraftApp, ui: &mut egui::Ui, photo: PhotoI
     }
     ui.add_space(4.0);
     false
+}
+
+/// The three choices in a row sharing the width, each label at 11.5 pt or smaller so the longest fits its third
+/// of a narrow panel (each one `button:maskMode-<key>`). The one clicked, by index.
+fn segments(ui: &mut egui::Ui, now: Mode) -> Option<usize> {
+    const ITEMS: [(&str, &str, &str, Mode); 3] = [
+        ("Person", "person", "A mask of people or their parts", Mode::Person),
+        ("Background", "background", "A mask of everything that is not a person", Mode::Background),
+        ("Custom", "custom", "Object, Subject, Brush and the other masks", Mode::Custom),
+    ];
+    const GAP: f32 = 4.0;
+    let t = Tokens::get(ui.ctx());
+    // (rounded down: the row never reaches past the panel, which would widen what comes below it)
+    let seg_w = ((ui.available_width() - 2.0 * GAP) / 3.0).floor().max(24.0);
+    let widest = |size: f32| {
+        ITEMS.iter().map(|(l, ..)| ui.painter().layout_no_wrap(crate::i18n::tr(l).to_string(), t.semibold(size), t.text).size().x).fold(0.0, f32::max)
+    };
+    let size = [11.5, 11.0, 10.5, 10.0, 9.5, 9.0].into_iter().find(|s| widest(*s) + 8.0 <= seg_w).unwrap_or(9.0);
+    let mut clicked = None;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = GAP;
+        for (i, (label, key, tip, mode)) in ITEMS.iter().enumerate() {
+            let label = crate::i18n::tr(label);
+            let (r, resp) = ui.allocate_exact_size(egui::vec2(seg_w, 24.0), egui::Sense::click());
+            crate::widgets::announce_selected(&resp, label.to_string(), now == *mode);
+            crate::widgets::register(ui, format!("button:maskMode-{key}"), r);
+            let resp = resp.on_hover_text(crate::i18n::tr(tip));
+            let fill = if now == *mode {
+                t.pressed
+            } else if resp.hovered() {
+                t.hover
+            } else {
+                t.button
+            };
+            let p = ui.painter();
+            p.rect(r, egui::CornerRadius::same(4), fill, egui::Stroke::new(1.0, t.button_border), egui::StrokeKind::Inside);
+            let g = crate::widgets::one_line(p, label, t.semibold(size), t.text, seg_w - 6.0);
+            p.galley(r.center() - g.size() / 2.0, g, t.text);
+            if resp.clicked() {
+                clicked = Some(i);
+            }
+        }
+    });
+    clicked
 }
 
 /// The selected mask's Select People part, if it has one: (the mask's id, its shape).
