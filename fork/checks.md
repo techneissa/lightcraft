@@ -33,15 +33,15 @@ on `custom`.
   `target`, outside the lane's worktree) and leaves the folder in place when it finishes, so the next lane on that slot
   rebuilds only what changed. Cargo reuses a target folder across worktree paths. Measured on PhotoCraft (2026-11-02,
   `cargo build -p photocraft`): a new worktree on a used slot recompiled 6 crates in 100 s, against 537 crates and
-  6 min in an empty folder (22 min at load ~100); a one-file change, 10 s. Read-only reviews that must build use
+  6 min in an empty folder (22 min with other work running); a one-file change, 10 s. Read-only reviews that must build use
   `target/review`. Never delete a slot folder while a lane uses it.
 - **No sccache.** Tried and removed on 2026-11-02: a build in another target folder never hits the cache (0 of 49
   hits), and a cold cache made a build slower (46 s against 36 s for `lightcraft-pipeline`).
-- **Load is the biggest cost.** The same clean build takes about 6 min at load 10 and 22 min at load ~100: at most
+- **Load is the biggest cost.** The same clean build takes about 6 min when little else runs and 22 min when much does: at most
   3 lanes build at once.
 - **Build only when it buys something** (techneissa, 2026-11-02): logic tests, AI model runs, and the round's pictures (one build at the end of a round, not after each change). Never rebuild just to see that a button or label is there. Small UI-only changes (a button, a label, hover text, a spacing nudge) are pushed without a local build or test run; `fork-gate` checks them.
 - **Batch the Mac's work.** After a single merge nothing builds or tests on the Mac (Fork CI checks `custom`). Once
   per batch of merges: `fork/sync-docs.py`, `fork/tests.sh` (the Mac-only tests), one push.
-- **Driving the app** (control channel, screenshots): always with a scratch library (`--library <scratch folder>`) and its own `LIGHTCRAFT_CONFIG_DIR`; without `--library` the app opens techneissa's real library (2026-11-02: a lane imported a test photo into it and had to remove it).
+- **Driving the app** (control channel, screenshots): always with a scratch library (`--library <scratch folder>`) and its own `LIGHTCRAFT_CONFIG_DIR`; without `--library` the app opens the real library (2026-11-02: a lane imported a test photo into it and had to remove it).
 - **PR and issue body files** are named after the repo and branch (`$TMPDIR/lightcraft-<branch>-body.md`), never a
   shared `$TMPDIR/body.md`: every session on this Mac uses the same `$TMPDIR`.

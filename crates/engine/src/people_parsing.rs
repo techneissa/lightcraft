@@ -20,7 +20,9 @@ use lightcraft_parsing::{FaceHint, ModelSet, Parsing, RgbImage, cache};
 
 use crate::activity::{Activity, Cancel};
 
+mod ahead;
 mod download;
+pub(crate) use ahead::{Filed, QuietRun, cache_budget};
 pub use download::Download;
 
 /// The newest parses kept in memory.
@@ -46,11 +48,7 @@ pub struct Choice {
 impl Choice {
     /// The version a parse with this choice is filed under: the set's, with the hair edges' when they draw it.
     pub fn version(&self) -> String {
-        // (a parse with matting edges is its own version, so switching the edge never reads the other's file)
-        match self.matting.as_ref().and_then(|(_, e)| crate::hair_edges::vision::version(*e)) {
-            Some(edge) => format!("{}+{edge}", self.set.version()),
-            None => self.set.version(),
-        }
+        PeopleParsing::version_of(self.set, self.matting.as_ref())
     }
 }
 
@@ -89,11 +87,14 @@ struct Jobs {
     map: HashMap<String, Job>,
     waiters: HashMap<String, usize>,
     finished: u64,
+    /// The runs going for the parse-ahead queue (`fork/parse-ahead.md`): a request stops them.
+    quiet: std::collections::HashSet<String>,
 }
 
 impl Jobs {
     /// File a finished run, then let the oldest finished runs nobody waits on go, down to [`KEEP_FINISHED`].
     fn finish(&mut self, key: String, result: Result<Arc<Parsing>, String>) {
+        self.quiet.remove(&key);
         self.finished += 1;
         self.map.insert(key, Job::Done(result, self.finished));
         while self.map.values().filter(|j| matches!(j, Job::Done(..))).count() > KEEP_FINISHED {
@@ -395,6 +396,7 @@ impl PeopleParsing {
     }
 
     fn remembered(&self, key: &str) -> Option<Arc<Parsing>> {
+        self.looked_up(key);
         lock(&self.inner.memory).iter().find(|e| e.0 == key).map(|e| e.1.clone())
     }
 
@@ -424,52 +426,105 @@ impl PeopleParsing {
     /// else a run on a worker thread. With `wait`, the call returns when the run (this one, or one already going for
     /// the same picture) has ended; without, it returns [`Outcome::Running`].
     pub fn parse(&self, img: RgbImage, hints: Vec<FaceHint>, wait: bool) -> Outcome {
-        self.parse_as(self.choice(), img, hints, wait)
+        self.parse_as(self.choice(), img, hints, wait).1
     }
 
-    /// [`PeopleParsing::parse`] with the set and hair edges of `choice` (taken earlier), not those chosen now.
-    pub fn parse_as(&self, choice: Choice, img: RgbImage, hints: Vec<FaceHint>, wait: bool) -> Outcome {
+    /// The version parses with `set` and the hair edges `matting` are filed under: the set's, plus the edge's when an
+    /// edge other than Current draws people's edges (so switching the edge never reads the other's file). The one
+    /// version function: [`Choice::version`] (so [`Self::parse_as`] and [`Self::version`]), the parse-ahead index
+    /// ([`Self::ahead_version`]) and the portrait retouching's face store key on it.
+    fn version_of(set: ModelSet, matting: Option<&(crate::hair_edges::HairEdges, crate::hair_edges::Edge)>) -> String {
+        match matting.and_then(|(_, e)| crate::hair_edges::vision::version(*e)) {
+            Some(edge) => format!("{}+{edge}", set.version()),
+            None => set.version(),
+        }
+    }
+
+    /// [`PeopleParsing::parse`] with the set and hair edges of `choice` (taken earlier: a face search parses with
+    /// those it started with, however the choice changes meanwhile), also saying the version and cache key the parse
+    /// is filed under (what the parse-ahead index files, `fork/parse-ahead.md`).
+    pub(crate) fn parse_as(&self, choice: Choice, img: RgbImage, hints: Vec<FaceHint>, wait: bool) -> (Filed, Outcome) {
         let version = choice.version();
         let Choice { set, matting } = choice;
         let key = cache::key(&img, &hints, &version);
+        let quiet = ahead::quiet();
+        if let Some(q) = &quiet {
+            q.note(&key, &version);
+        }
+        let filed = Filed { version, key: key.clone() };
         if let Some(p) = self.remembered(&key).or_else(|| self.filed(&key)) {
             self.remember(&key, p.clone());
-            return Outcome::Ready { parsing: p, cached: true };
+            return (filed, Outcome::Ready { parsing: p, cached: true });
         }
         let has_runner = lock(&self.inner.runner).is_some();
         let Some(models) = self.models_dir().filter(|d| has_runner || set.installed_in(d)) else {
-            return Outcome::Failed(format!(
-                "the {} people parsing models are not downloaded yet ({} MB; parsing.download)",
-                set.label(),
-                set.size().div_ceil(1_000_000)
-            ));
+            let e =
+                format!("the {} people parsing models are not downloaded yet ({} MB; parsing.download)", set.label(), set.size().div_ceil(1_000_000));
+            return (filed, Outcome::Failed(e));
         };
-        {
-            let mut jobs = lock(&self.inner.jobs);
-            match jobs.map.get(&key) {
-                Some(Job::Running(_)) if !wait => return Outcome::Running,
-                Some(Job::Running(_)) => {}
-                _ => {
-                    let flag = Arc::new(AtomicBool::new(false));
-                    jobs.map.insert(key.clone(), Job::Running(flag.clone()));
-                    drop(jobs);
-                    if let Err(e) = self.spawn(key.clone(), set, models, (img, hints), matting, flag) {
-                        lock(&self.inner.jobs).finish(key.clone(), Err(e.clone()));
-                        self.inner.done.notify_all();
-                        return Outcome::Failed(e);
-                    }
-                    if !wait {
-                        return Outcome::Running;
+        // a request goes before the queue's run of another photo, which holds the models (`fork/parse-ahead.md`)
+        if quiet.is_none() {
+            self.stop_quiet_runs(&key);
+        }
+        let mut picture = Some((img, hints));
+        // (a request that joined the queue's run of this photo, which was stopped, runs it itself: at most once)
+        for _ in 0..2 {
+            {
+                let mut jobs = lock(&self.inner.jobs);
+                match jobs.map.get(&key) {
+                    Some(Job::Running(_)) if !wait => return (filed, Outcome::Running),
+                    Some(Job::Running(_)) => {}
+                    // (finished between the cache check above and this lock: no second run)
+                    Some(Job::Done(Ok(p), _)) => return (filed, Outcome::Ready { parsing: p.clone(), cached: true }),
+                    _ => {
+                        let Some(pic) = picture.take() else { break };
+                        let flag = Arc::new(AtomicBool::new(false));
+                        jobs.map.insert(key.clone(), Job::Running(flag.clone()));
+                        if quiet.is_some() {
+                            jobs.quiet.insert(key.clone());
+                        }
+                        drop(jobs);
+                        if let Err(e) = self.spawn(key.clone(), set, models.clone(), pic, matting.clone(), flag) {
+                            lock(&self.inner.jobs).finish(key.clone(), Err(e.clone()));
+                            self.inner.done.notify_all();
+                            return (filed, Outcome::Failed(e));
+                        }
+                        if !wait {
+                            return (filed, Outcome::Running);
+                        }
                     }
                 }
             }
+            if let Some(out) = self.wait_ended(&key) {
+                return (filed, out);
+            }
+            // the run was dropped: the queue's run stopped (it keeps no result)
+            if quiet.is_some() {
+                return (filed, Outcome::Failed("cancelled".into()));
+            }
         }
-        self.wait_for(&key)
+        (filed, Outcome::Failed("the run was dropped".into()))
+    }
+
+    /// Stop the queue's runs going, but for the one of `key` (a caller that wants it joins it).
+    fn stop_quiet_runs(&self, key: &str) {
+        let jobs = lock(&self.inner.jobs);
+        for k in jobs.quiet.iter().filter(|k| k.as_str() != key) {
+            if let Some(Job::Running(flag)) = jobs.map.get(k) {
+                flag.store(true, Ordering::SeqCst);
+            }
+        }
     }
 
     /// Wait until the run for `key` has ended. Its result stays filed while this waits; a run no longer filed (it
     /// finished long ago) gives its cached parse.
+    #[cfg(test)]
     pub(crate) fn wait_for(&self, key: &str) -> Outcome {
+        self.wait_ended(key).unwrap_or_else(|| Outcome::Failed("the run was dropped".into()))
+    }
+
+    /// [`Self::wait_for`]; `None`: the run is no longer filed and its parse is not cached (a stopped queue run).
+    fn wait_ended(&self, key: &str) -> Option<Outcome> {
         let mut jobs = lock(&self.inner.jobs);
         *jobs.waiters.entry(key.to_string()).or_default() += 1;
         let outcome = loop {
@@ -489,10 +544,7 @@ impl PeopleParsing {
             }
         }
         drop(jobs);
-        outcome.unwrap_or_else(|| match self.remembered(key).or_else(|| self.filed(key)) {
-            Some(parsing) => Outcome::Ready { parsing, cached: true },
-            None => Outcome::Failed("the run was dropped".into()),
-        })
+        outcome.or_else(|| self.remembered(key).or_else(|| self.filed(key)).map(|parsing| Outcome::Ready { parsing, cached: true }))
     }
 
     #[cfg(test)]
@@ -510,7 +562,8 @@ impl PeopleParsing {
         flag: Arc<AtomicBool>,
     ) -> Result<(), String> {
         let row = self.inner.activity.start("parsing", "Finding people parts", Cancel::Flag(flag.clone()));
-        row.detail(set.label());
+        let quiet = ahead::quiet().is_some();
+        let row = self.shown(row, set, &flag);
         let this = self.clone();
         std::thread::Builder::new()
             .name("people-parsing".into())
@@ -538,6 +591,16 @@ impl PeopleParsing {
                         this.remember(&key, p.clone());
                         *lock(&this.inner.message) = None;
                         Ok(p)
+                    }
+                    // (the queue's run stopped, in the model or its hair edges: nothing to tell, nothing kept; a
+                    // request that joined it runs it again)
+                    Ok(Err(_)) if quiet && flag.load(Ordering::Relaxed) => {
+                        let mut jobs = lock(&this.inner.jobs);
+                        jobs.map.remove(&key);
+                        jobs.quiet.remove(&key);
+                        drop(jobs);
+                        this.inner.done.notify_all();
+                        return;
                     }
                     Ok(Err(e)) => {
                         this.say(&e);

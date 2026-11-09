@@ -54,6 +54,16 @@ example, which writes each person's part masks as grey pictures (`outdir/masks/<
 cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/
 cargo run -p lightcraft-retouch --release --example skin -- in.jpg out.jpg --smoothness 60 --shine 50 \
   --mask outdir/masks/facialSkin-0.png
+cargo run -p lightcraft-retouch --release --example skin_tone -- in.jpg out.jpg --even 60 --redness 50 \
+  --masks outdir/masks --person 0
+```
+
+For what the app's step gets for each face (box, YuNet's five then the 478 mesh landmarks, the model's part masks,
+merged as the app merges them), the parser's `face_input` example writes `dir/faces.json`; the eyes example reads it:
+
+```bash
+cargo run -p lightcraft-parsing --release --example face_input -- in.jpg dir/
+cargo run -p lightcraft-retouch --release --example eyes -- in.jpg out.jpg --faces dir/faces.json --dark 60
 ```
 
 ## The input contract (`src/input.rs`)
@@ -84,8 +94,7 @@ crate only reads it.
 
 A feature reads the faces through `Scene`: each `FaceCtx` has the box and landmarks in the image's pixels and
 `size`, the face's size in pixels; `Scene::mask_at` / `Scene::mask_plane` sample a part mask in the image's pixels,
-and `Scene::mask_box` gives the pixels a mask can touch (read and write only those). Skin Tone's Amount is a stand-in
-Face Light (Facial Skin brightened by up to half again) that shows the masks arrive; its feature lane replaces it.
+and `Scene::mask_box` gives the pixels a mask can touch (read and write only those).
 
 ## Rules every feature follows
 
@@ -99,8 +108,17 @@ Face Light (Facial Skin brightened by up to half again) that shows the masks arr
 - **Models run once per photo**, on a worker thread with an activity row, cached; a slider drag never runs a model.
   `apply` itself runs no model. See the speed target below.
 - The image is scene-linear RGB (linear Rec.2020 primaries in the app; the examples use linear sRGB).
-- A windowed render (the zoomed loupe) gives `apply` a part of the frame: `Scene` maps faces into it, and a feature
-  that reads far around a face reads only what the window holds.
+- **Zoom never changes a result.** A feature declares `Feature::REACH`: how far past its face's box and the areas
+  of its `Feature::PARTS` masks it reads pixels, as a fraction of the face's size (`DEFAULT_REACH`, half the face,
+  when it declares none). A zoomed render whose window touches what a face's features read renders all of it and
+  cuts back to the window (`window_for_reads` in `crates/pipeline/src/retouch_step.rs`, as the joint colour noise
+  reduction's halo does), so `apply` sees the same pixels around the face as in a whole-frame render. A feature
+  keeps its reads within its `REACH` (clamp what landmarks or masks could throw far away), and works on grids and
+  boxes anchored to the face (its box, an eye, a mask's area), never to the image's corner, which a window moves.
+- **Reference stats come from the whole face**, never from the pixels a render happens to hold: a level, a target
+  colour or the skin's colour (Eyes: the whites' level, the cheek's colour, the skin's colour; Teeth and Lips: the
+  lips' main colour) is measured on a fixed grid over the face's box or a mask's area, in photo coordinates, so a
+  draft, the loupe and an export measure the same samples.
 
 ## Done means
 
@@ -112,6 +130,8 @@ A feature lane is checked against this list, and its test file (`tests/<feature>
   the masks it needs is left alone.
 - **Preview equals export**: a draft and an export several times its size make the same change once the export is
   scaled down (sizes are fractions of the face).
+- **Zoom equals the whole frame**: a render of a window holding one eye or one face part (the zoomed loupe) equals
+  the whole-frame render inside it (tested in `crates/pipeline/src/retouch_step.rs`, within one 8-bit level).
 - **Texture is kept**: a retouch that smooths keeps the fine detail (the high-frequency energy inside the mask stays
   within a set ratio of the original's).
 - **No halo**: pixels next to the mask's edge do not take the colour of what is outside it.

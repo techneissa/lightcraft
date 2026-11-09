@@ -23,7 +23,7 @@ List: Learn My Edits' image model runs through Apple's Core ML on the Neural Eng
 
 Neither SegFormer licence is on the house allowlist, so their converted files are not on the release: make them on the Mac with `tools/convert-coreml-parsing.py` (a minute each). Publishing them is techneissa's call; it would take uploading the zips and adding a `RELEASES` row each, and `models.downloadCoreml` learning their folders. The face mesh is Apache-2.0 (on the allowlist), so its file could go on the release like DINOv2's; until techneissa decides, it is made locally with `tools/convert-coreml-facemesh.py` (seconds).
 
-Measured on the M4 Pro (macOS 27.0.1), five 384 × 256 photos × 4 rounds after a warm-up, other work running (load 57–83), `cargo run --release -p lightcraft-learn --example coreml_speed -- <shared dinov2-small folder>`:
+Measured on a test Mac (macOS 27.0.1), five 384 × 256 photos × 4 rounds after a warm-up, other work running, `cargo run --release -p lightcraft-learn --example coreml_speed -- <shared dinov2-small folder>`:
 
 | Runtime | Load (ms) | Per photo (ms) |
 | --- | ---: | ---: |
@@ -34,13 +34,13 @@ Measured on the M4 Pro (macOS 27.0.1), five 384 × 256 photos × 4 rounds after 
 
 Core ML against candle on the test photo: cosine 0.99989, largest difference 0.11 on values up to 14 (fp16 against fp32).
 
-People parts, SegFormer set, M4 Pro (macOS 27), other work running, one run each, `cargo run --release -p lightcraft-parsing --example coreml_compare -- <photo>` (photo at 2048 px; faces from YuNet). "First" is the first parse after loading (it holds Core ML's first call per input size, about 1 s each); "then" is the next parse of the same photo.
+People parts, SegFormer set, a test Mac (macOS 27), other work running, one run each, `cargo run --release -p lightcraft-parsing --example coreml_compare -- <photo>` (photo at 2048 px; faces from YuNet). "First" is the first parse after loading (it holds Core ML's first call per input size, about 1 s each); "then" is the next parse of the same photo.
 
 | Photo | Faces | candle, as the app ran it | candle, one face a call | Core ML, first | Core ML, then |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | CC0 portrait (ChidoMpembaYoungAfricanWomanInPolitics, 1638 × 2048) | 1 | 2.4 s / 2.1 s | 1.8 s / 2.0 s | 1.6 s | 0.26 s |
 | CC0 group (Miss World Canada 2012 group photograph, 960 × 720) | 26 | 9.0 s / 7.6 s | 14.2 s / 8.8 s | 3.3 s | 1.7 s |
-| techneissa's A7 V (10261023/A7V04950, 2048 × 1365) | 1 | 1.9 s / 2.2 s | 1.6 s / 2.5 s | 1.0 s | 0.36 s |
+| Private test photo (2048 × 1365) | 1 | 1.9 s / 2.2 s | 1.6 s / 2.5 s | 1.0 s | 0.36 s |
 
 On the group, Core ML's 1.5 s is 0.2 s clothes parser and 1.3 s faces: per 8 faces about 45 ms cutting the crops, 75–240 ms face parser and 170 ms face mesh (still candle), then the planes.
 
@@ -49,13 +49,13 @@ After the review round (candle's face parser one face a call on the GPU on every
 | Photo | Faces | candle, first / then | Core ML parsers, mesh on candle, first / then | Core ML for all three, first / then |
 | --- | ---: | ---: | ---: | ---: |
 | CC0 group (Miss World Canada 2012 group photograph, 960 × 720) | 26 | 6.1 s / 6.1 s | 1.6 s / 1.25 s | 1.2 s / 0.93 s |
-| techneissa's A7 V (10261023/A7V04950, 2048 × 1365) | 1 | 1.3 s / 1.3 s | 0.53 s / 0.20 s | 0.45 s / 0.17 s |
+| Private test photo (2048 × 1365) | 1 | 1.3 s / 1.3 s | 0.53 s / 0.20 s | 0.45 s / 0.17 s |
 
 With everything on Core ML, masks agree with candle's on 99.99–100 % of pixels per part on both photos (intersection over union 0.997–1.000), and the landmarks are within 0.001 px.
 
 Agreement of Core ML with candle (one face a call, the reference: see below), per part over every person, on the masks as the app draws them (guided filter, at 2048 px, on at 0.5): share of pixels the same / intersection over union.
 
-| Part | CC0 portrait | CC0 group | A7 V |
+| Part | CC0 portrait | CC0 group | Private photo |
 | --- | --- | --- | --- |
 | Entire Person | 100.00 % / 1.000 | 99.99 % / 0.999 | 100.00 % / 1.000 |
 | Facial Skin | 100.00 % / 1.000 | 100.00 % / 0.999 | 100.00 % / 1.000 |

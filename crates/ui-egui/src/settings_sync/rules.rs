@@ -118,6 +118,7 @@ pub const LEFT_OUT_SETTINGS: &[(&str, &str)] = &[
     ("previewLimit", "this Mac's graphics and memory"),
     ("memoryMb", "this Mac's memory"),
     ("backgroundPrep", "what this Mac prepares ahead: its speed and memory"),
+    ("parseAhead", "what this Mac prepares ahead: its speed and battery"),
     ("lensDatabase", "a download answered on this Mac"),
     ("displayProfile", "this Mac's monitor"),
     ("smartEditingOffered", "a question asked once on this Mac"),

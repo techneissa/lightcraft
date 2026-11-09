@@ -103,6 +103,7 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
         }
     });
     background_prep(app, ui, t);
+    crate::parse_ahead::setting(app, ui, t);
     heading(ui, t, crate::i18n::tr("Local folders"));
     row(ui, t, crate::i18n::tr("Forget unchanged photos"), |ui| {
         let opts = [(0u32, "Never"), (7, "After 7 days"), (30, "After 30 days"), (90, "After 90 days"), (365, "After a year")];

@@ -31,7 +31,7 @@ List: Apple Vision's own person and subject masks as a third hair edge in Settin
 
 ## How it does
 
-Four CC0 portraits (blue sky ×2, green field, busy garden), M4 Pro, 2048 px on the long side; pictures in the PR
+Four CC0 portraits (blue sky ×2, green field, busy garden), a test Mac, 2048 px on the long side; pictures in the PR
 and in `$WORKSPACE/assets/lightcraft/shots/portrait/hair/apple-vision-*`.
 
 - Entire Person / Background: the tightest edge of the three. The parse's blur of background beside the hair goes,
@@ -40,8 +40,8 @@ and in `$WORKSPACE/assets/lightcraft/shots/portrait/hair/apple-vision-*`.
 - Subject: a hard, clean edge; strands come from the person segmentation.
 - Background colour between strands stays in every edge model: that is colour decontamination (PR #119), not the
   matte.
-- Time (Vision alone, `vision_speed` example, after a warm-up, load 16–18): person segmentation 56–93 ms, per-person
-  masks 27–194 ms, subject masks 23–44 ms. In the app (load 6–15): a Subject part 6.9–8.3 s with Apple Vision against
+- Time (Vision alone, `vision_speed` example, after a warm-up): person segmentation 56–93 ms, per-person
+  masks 27–194 ms, subject masks 23–44 ms. In the app: a Subject part 6.9–8.3 s with Apple Vision against
   7.1–8.0 s Current and 13.9–16.1 s BiRefNet Matting; a people parse 1.9–6.6 s against 1.6–5.4 s Current and
   8.7–12.8 s BiRefNet Matting (the parse and the Subject model dominate; Vision adds about 0.1–0.3 s).
 

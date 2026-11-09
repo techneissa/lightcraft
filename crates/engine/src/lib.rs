@@ -77,6 +77,7 @@ pub mod model_runtime;
 pub mod names;
 pub mod open_path;
 pub mod originals;
+pub mod parse_ahead;
 mod pdf;
 pub mod people_parsing;
 pub mod prep;
@@ -408,6 +409,8 @@ pub struct Session {
     pub object_jobs: spot_area::ObjectJobs,
     /// Learn My Edits: profiles trained on the user's edits (`fork/learn-my-edits.md`).
     pub learn: learn::LearnEdits,
+    /// People parsing ahead of time (`fork/parse-ahead.md`).
+    pub parse_ahead: parse_ahead::ParseAhead,
     /// Which engine runs each AI model that has a Core ML version (`fork/coreml.md`).
     pub model_runtimes: Arc<model_runtime::ModelRuntimes>,
     /// Per-person part masks and face landmarks (`fork/people-parsing.md`).
@@ -635,6 +638,7 @@ impl Session {
             lama: lama_fill::LamaFill::new(activity.clone()),
             object_jobs: Default::default(),
             learn: learn::LearnEdits::new(activity.clone()),
+            parse_ahead: Default::default(),
             model_runtimes: Default::default(),
             parsing: people_parsing::PeopleParsing::new(activity.clone()).with_hair_edges(hair_edges.clone()),
             hair_edges,

@@ -34,6 +34,8 @@ const SAME_FACE_IOU: f32 = 0.5;
 /// A face search from the parse: set up on the calling thread, run on a worker.
 pub(crate) struct PartsFinder {
     pub(super) prepare: crate::cmd::parsing::Prepare,
+    /// What the parse-ahead index knows of the photo's parse under `choice` (`None`: the photo has gone).
+    pub(super) known: Option<crate::parse_ahead::Known>,
     pub(super) parsing: PeopleParsing,
     /// The set and hair edges when the search was set up: its faces are kept under their version.
     pub(super) choice: Choice,
@@ -42,14 +44,23 @@ pub(crate) struct PartsFinder {
 }
 
 impl PartsFinder {
-    /// Render the parse's picture, find its YuNet faces, and take the parse from the cache or wait for its run.
+    /// Render the parse's picture and find its YuNet faces (the picker's thumbnails and the faces' five landmarks
+    /// come from them); then take the parse the parse-ahead index knows for the photo (made ahead of time or by
+    /// `parsing.run`, so no model runs), else the cached one, else wait for its run, and file it in the index.
     pub(super) fn find(self) -> Result<Found, String> {
         let (img, hints) = self.prepare.run()?;
-        let parsing = match self.parsing.parse_as(self.choice, img.clone(), hints.clone(), true) {
+        if let Some(parsing) = self.known.as_ref().and_then(|k| k.read(&self.parsing)) {
+            return Ok(found(&parsing, &hints, &img, self.orient, &self.regions));
+        }
+        let (filed, out) = self.parsing.parse_as(self.choice, img.clone(), hints.clone(), true);
+        let parsing = match out {
             Outcome::Ready { parsing, .. } => parsing,
             Outcome::Running => return Err("the people parse is still running".into()),
             Outcome::Failed(e) => return Err(e),
         };
+        if let Some(k) = &self.known {
+            k.file(filed);
+        }
         Ok(found(&parsing, &hints, &img, self.orient, &self.regions))
     }
 }
