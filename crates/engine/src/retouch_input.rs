@@ -27,7 +27,7 @@ use lightcraft_raster::Rgba8;
 
 use crate::{EngineError, Session};
 
-mod parts;
+pub(crate) mod parts;
 
 /// Finds faces (and their part masks) on a picture.
 pub trait FaceProvider: Send + Sync {
@@ -59,6 +59,7 @@ impl FaceProvider for Yunet {
                 person: None,
                 masks: Vec::new(),
                 key_frame: lightcraft_develop::retouch::KeyFrame::Edit,
+                patch: None,
             })
             .collect())
     }
@@ -89,7 +90,8 @@ impl Found {
     pub fn bytes(&self) -> usize {
         let face = |f: &Face| {
             let masks: usize = f.masks.iter().map(|(_, m)| m.plane.data.len().saturating_mul(4)).sum();
-            masks.saturating_add(f.landmarks.len().saturating_mul(16)).saturating_add(std::mem::size_of::<Face>())
+            let patch = f.patch.as_ref().map_or(0, |p| p.alpha.data.len().saturating_mul(16));
+            masks.saturating_add(patch).saturating_add(f.landmarks.len().saturating_mul(16)).saturating_add(std::mem::size_of::<Face>())
         };
         let faces: usize = self.input.faces.iter().map(face).sum();
         let thumbs: usize = self.thumbs.iter().map(|t| t.data.len().saturating_mul(4)).sum();
@@ -123,9 +125,35 @@ struct Store {
 pub struct FaceStore {
     store: Arc<Mutex<Store>>,
     provider: Option<Arc<dyn FaceProvider>>,
+    /// Repair Glare's results: attached to the faces when they are kept (`fork/glare-repair.md`).
+    #[cfg(not(target_arch = "wasm32"))]
+    repairs: crate::glare_repair::Repairs,
 }
 
 impl FaceStore {
+    /// A store whose faces get the glasses repairs kept in `repairs`.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub fn with_repairs(repairs: crate::glare_repair::Repairs) -> Self {
+        FaceStore { repairs, ..Default::default() }
+    }
+
+    /// Attach the repairs kept for `key` to its faces again (a repair was made or dropped): a new input, so renders
+    /// made before it are redrawn.
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(crate) fn reattach(&self, key: &str) {
+        let current = self.lock().found.iter().find(|(k, _, _)| k == key).map(|(_, _, f)| f.input.clone());
+        let Some(input) = current else { return };
+        let Some(new) = self.repairs.attach(key, &input) else { return };
+        new.fingerprint();
+        let mut st = self.lock();
+        if let Some((_, _, f)) = st.found.iter_mut().find(|(k, _, _)| k == key) {
+            // (only if the faces did not change meanwhile)
+            if Arc::ptr_eq(&f.input, &input) {
+                f.input = Arc::new(new);
+            }
+        }
+    }
+
     /// Find faces with `provider` from now on (instead of YuNet), and forget the faces found so far.
     pub fn set_provider(&mut self, provider: Arc<dyn FaceProvider>) {
         self.provider = Some(provider);
@@ -174,7 +202,14 @@ impl FaceStore {
     }
 
     /// Keep the end of a search of photo `id` under `key`: its faces replace every other entry of the photo.
-    fn put(&self, key: &str, id: PhotoId, result: Result<Found, String>) {
+    fn put(&self, key: &str, id: PhotoId, mut result: Result<Found, String>) {
+        // the glasses repairs made for these faces before (`fork/glare-repair.md`)
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Ok(found) = &mut result
+            && let Some(input) = self.repairs.attach(key, &found.input)
+        {
+            found.input = Arc::new(input);
+        }
         // (hashed here, on the search's worker, not by the first render that asks for the key)
         if let Ok(found) = &result {
             found.input.fingerprint();
@@ -328,7 +363,7 @@ impl Session {
     /// the orientation and the parse's version only (another set, or the set downloaded later, finds them anew):
     /// the parse is made on the photo with default settings, and the step maps it through the lens corrections and
     /// transform, so dragging those, or a preset's thumbnail, finds the same faces.
-    fn retouch_key(&self, p: &Photo, s: &DevelopSettings) -> String {
+    pub(crate) fn retouch_key(&self, p: &Photo, s: &DevelopSettings) -> String {
         match self.retouch_source_is_parts() {
             true => format!("{}|{:?}|parts:{}", crate::media::content_key(p), s.orientation, self.parsing.version()),
             false => key_of(p, s),

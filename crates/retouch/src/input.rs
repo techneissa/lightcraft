@@ -7,9 +7,9 @@
 //! retouching step maps them into the pixels of the image it works on (see [`crate::View`]).
 
 use std::fmt;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
-use lightcraft_raster::Plane;
+use lightcraft_raster::{Plane, Rgb32f};
 use serde::{Deserialize, Serialize};
 
 /// A part of a person a mask can cover. The order is fixed: it is part of the contract with the people parsers.
@@ -149,6 +149,65 @@ impl PartMask {
     }
 }
 
+/// A change made for one face by a model run outside the render (Glasses Glare's repair, `fork/glare-repair.md`):
+/// over `area` of the photo, each pixel is multiplied by `gain` (per channel), weighted by `alpha` (0 = unchanged).
+/// `gain` and `alpha` are the same size and cover `area` as a [`PartMask`] does. A gain (not new pixels) keeps the
+/// user's later edits: exposure and white balance act on the repaired pixels as on the rest.
+#[derive(Clone, PartialEq)]
+pub struct Patch {
+    pub area: NormRect,
+    pub gain: Rgb32f,
+    pub alpha: Plane,
+    /// Names this patch's content (a hash of what made it): part of [`Input::fingerprint`] in place of its pixels.
+    pub stamp: u64,
+}
+
+impl fmt::Debug for Patch {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Patch({}×{} over {:?}, {:016x})", self.alpha.width, self.alpha.height, self.area, self.stamp)
+    }
+}
+
+impl Patch {
+    /// The weight and gain at normalised point (`nx`, `ny`), bilinear between samples; `None` outside the area, for a
+    /// point that is not a number, a malformed patch, or where the weight is 0.
+    pub fn sample(&self, nx: f64, ny: f64) -> Option<(f32, [f32; 3])> {
+        let (w, h) = (self.alpha.width, self.alpha.height);
+        let n = w.checked_mul(h)?;
+        if n == 0 || self.alpha.data.len() != n || self.gain.width != w || self.gain.height != h || self.gain.data.len() != n {
+            return None;
+        }
+        if !self.area.is_valid() || !nx.is_finite() || !ny.is_finite() {
+            return None;
+        }
+        let (u, v) = ((nx - self.area.x0) / self.area.width(), (ny - self.area.y0) / self.area.height());
+        if !(0.0..=1.0).contains(&u) || !(0.0..=1.0).contains(&v) {
+            return None;
+        }
+        let fx = (u * w as f64 - 0.5).clamp(0.0, (w - 1) as f64);
+        let fy = (v * h as f64 - 0.5).clamp(0.0, (h - 1) as f64);
+        let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
+        let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
+        let (tx, ty) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);
+        let wts = [(x0, y0, (1.0 - tx) * (1.0 - ty)), (x1, y0, tx * (1.0 - ty)), (x0, y1, (1.0 - tx) * ty), (x1, y1, tx * ty)];
+        let (mut a, mut g) = (0.0f32, [0.0f32; 3]);
+        for (x, y, k) in wts {
+            let i = y * w + x;
+            let av = self.alpha.data.get(i).copied().filter(|v| v.is_finite()).unwrap_or(0.0).clamp(0.0, 1.0);
+            let gv = self.gain.data.get(i).copied().unwrap_or([1.0; 3]);
+            a += av * k;
+            for c in 0..3 {
+                let v = gv[c];
+                g[c] += if v.is_finite() { v.clamp(0.0, GAIN_MAX) } else { 1.0 } * k;
+            }
+        }
+        (a > 0.0).then_some((a, g))
+    }
+}
+
+/// The largest gain a [`Patch`] applies.
+pub const GAIN_MAX: f32 = 16.0;
+
 /// The landmarks every face has first, in this order (YuNet's): the subject's right eye, left eye, nose tip, right
 /// and left mouth corner ("right" is the subject's, so the right eye is on the left of the picture). A provider
 /// with more landmarks appends them after these five.
@@ -214,6 +273,8 @@ pub struct Face {
     pub masks: Vec<(Part, PartMask)>,
     /// The frame [`Face::key_bounds`] is in: [`KeyFrame::Photo`] for faces from the people parse.
     pub key_frame: KeyFrame,
+    /// The glasses repair made for this face (Glasses Glare), in the frame of its masks; `None` until one is made.
+    pub patch: Option<Arc<Patch>>,
 }
 
 impl Face {
@@ -304,6 +365,16 @@ impl Input {
                     h.u64(m.plane.height as u64);
                     for v in &m.plane.data {
                         h.u64(u64::from(v.to_bits()));
+                    }
+                }
+                match &f.patch {
+                    None => h.u64(0),
+                    Some(p) => {
+                        h.u64(1);
+                        h.u64(p.stamp);
+                        for v in [p.area.x0, p.area.y0, p.area.x1, p.area.y1] {
+                            h.u64(v.to_bits());
+                        }
                     }
                 }
             }

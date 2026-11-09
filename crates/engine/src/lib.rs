@@ -49,6 +49,8 @@ pub mod find_removals;
 #[cfg(not(target_arch = "wasm32"))]
 mod focus_scan;
 pub mod fonts;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod glare_repair;
 mod gpu_run;
 pub mod guard;
 pub mod hair_edges;
@@ -405,6 +407,9 @@ pub struct Session {
     pub spot_sources: spot_source::SpotSources,
     /// The LaMa fill behind Remove spots whose fill is LaMa (`fork/lama-fill.md`).
     pub lama: lama_fill::LamaFill,
+    /// Portrait ▸ Glasses Glare's Repair Glare (`fork/glare-repair.md`).
+    #[cfg(not(target_arch = "wasm32"))]
+    pub glare: glare_repair::GlareRepair,
     /// Object clicks of the Remove tool on their way to SAM 3 (fork, `fork/object-remove.md`).
     pub object_jobs: spot_area::ObjectJobs,
     /// Learn My Edits: profiles trained on the user's edits (`fork/learn-my-edits.md`).
@@ -565,6 +570,9 @@ impl Session {
     pub fn new() -> Session {
         let activity = activity::Activity::default();
         let hair_edges = hair_edges::HairEdges::new(activity.clone());
+        // Repair Glare's results, shared by the face store (renders) and the repair runs
+        #[cfg(not(target_arch = "wasm32"))]
+        let glare_repairs = glare_repair::Repairs::default();
         Session {
             library_generation: LIBRARY_GEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
             auto_sync: false,
@@ -603,6 +611,9 @@ impl Session {
             trasher: Arc::new(file_trash::SystemTrash),
             denoise: Default::default(),
             face_models_dir: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            retouch_faces: retouch_input::FaceStore::with_repairs(glare_repairs.clone()),
+            #[cfg(target_arch = "wasm32")]
             retouch_faces: Default::default(),
             face_shared_dir: None,
             face_downloads: Default::default(),
@@ -636,6 +647,8 @@ impl Session {
             finds: Default::default(),
             spot_sources: Default::default(),
             lama: lama_fill::LamaFill::new(activity.clone()),
+            #[cfg(not(target_arch = "wasm32"))]
+            glare: glare_repair::GlareRepair::new(activity.clone(), glare_repairs),
             object_jobs: Default::default(),
             learn: learn::LearnEdits::new(activity.clone()),
             parse_ahead: Default::default(),

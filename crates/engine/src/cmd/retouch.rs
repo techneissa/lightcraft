@@ -13,17 +13,17 @@ use lightcraft_develop::retouch::{FEATURES, Face, KeyMap};
 use lightcraft_pipeline::retouch_step::FrameKeyMap;
 
 /// `keys` as the matcher takes it.
-fn as_map(keys: &Option<FrameKeyMap>) -> Option<&dyn KeyMap> {
+pub(super) fn as_map(keys: &Option<FrameKeyMap>) -> Option<&dyn KeyMap> {
     keys.as_ref().map(|k| k as &dyn KeyMap)
 }
 
-fn target(s: &Session, p: &Value, c: &str) -> Result<PhotoId> {
+pub(super) fn target(s: &Session, p: &Value, c: &str) -> Result<PhotoId> {
     let id = photo_id(p, c)?.or_else(|| s.active()).ok_or_else(|| bad(c, "no photo"))?;
     s.catalog.photo(id).map(|_| id).ok_or_else(|| bad(c, format!("no photo {}", id.0)))
 }
 
 /// `face`: a face index (of `retouch.faces`), or absent / null for every face.
-fn face_param(p: &Value, c: &str) -> Result<Option<usize>> {
+pub(super) fn face_param(p: &Value, c: &str) -> Result<Option<usize>> {
     match p.get("face") {
         None | Some(Value::Null) => Ok(None),
         Some(_) => index_req(p, "face", c).map(Some),
@@ -31,7 +31,7 @@ fn face_param(p: &Value, c: &str) -> Result<Option<usize>> {
 }
 
 /// The faces of `id` as found, for a face index a command was given.
-fn found_faces(s: &Session, id: PhotoId, c: &str) -> Result<std::sync::Arc<lightcraft_develop::retouch::Input>> {
+pub(super) fn found_faces(s: &Session, id: PhotoId, c: &str) -> Result<std::sync::Arc<lightcraft_develop::retouch::Input>> {
     let st = s.retouch_faces_of(id);
     match st.found {
         Some(f) => Ok(f.input),

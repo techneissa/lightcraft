@@ -63,6 +63,8 @@ fs4 = { workspace = true }
 zip = { version = "7.4", default-features = false }
 # the LaMa fill behind Remove (fork/lama-fill.md); the web build has none
 lightcraft-lama = { workspace = true }
+# Portrait ▸ Glasses Glare's Repair Glare: FLUX.1 Fill (fork/glare-repair.md); the web build has none
+lightcraft-flux = { workspace = true }
 # capture-time parsing for face recognition, and the Mac's time zone for Settings sync's `savedBy` (native only)
 chrono = { workspace = true, features = ["clock"] }
 # Delete Permanently can move the files to the system Trash (no Trash in the browser)
