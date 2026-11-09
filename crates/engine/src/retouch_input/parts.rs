@@ -35,6 +35,12 @@ const MESH_FIVE: [usize; 5] = [468, 473, 1, 61, 291];
 /// A parsed face is the YuNet face it was parsed from when their boxes overlap this much.
 const SAME_FACE_IOU: f32 = 0.5;
 
+/// Whether Stray Hair's strands are searched on full-size crops of the original (`crop.rs`) instead of the parse's
+/// picture. Off: on 13 private test faces the crops found 15 to 70 times as many "strands" on noisy small faces
+/// (sensor grain, background lines), so they wait for a noise-aware or model-based detector (`fork/retouch-hair.md`).
+/// The code stays and its tests turn it on by passing crops to `found_with`.
+pub(crate) const FULL_SIZE_CROPS: bool = false;
+
 /// A face search from the parse: set up on the calling thread, run on a worker.
 pub(crate) struct PartsFinder {
     pub(super) prepare: crate::cmd::parsing::Prepare,

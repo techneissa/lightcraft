@@ -10,8 +10,11 @@ per photo and, in every render, fills each from what is beside it.
 
 **The search, once per photo** (`hair::with_strands_on_crops`), as Blemishes finds its spots: the face search runs it
 with the people parse (`crates/engine/src/retouch_input/parts.rs`, `found_with`), on its worker and under its "Finding
-Faces" row in the activity stack. Per face it searches a **crop of the head cut from the full-size photo** (not the
-2048 px parse picture, where a strand is thinner than a pixel): the pixels the face's grid covers and a margin to read
+Faces" row in the activity stack. **Off for now** (`parts::FULL_SIZE_CROPS`, a constant, no UI): the search runs on the
+parse's picture (the photo before any retouching, 2048 px, in linear light, turned like the masks), as before the
+rework, until a noise-aware or model-based detector exists (see the findings below). The code for the other way is
+kept and tested: per face it searches a **crop of the head cut from the full-size photo** (not the 2048 px parse
+picture, where a strand is thinner than a pixel): the pixels the face's grid covers and a margin to read
 beside them (`PAD`), rendered like the parse picture (default settings, linear light, turned like the masks) as a window
 of the original (`parts/crop.rs`, `Cropper`), reduced to at most 3072 px along its longer side (`MAX_CROP`). Strand
 width stays a face fraction and the result stays in the photo's normalised frame, with the crop's pixels as the
@@ -82,7 +85,7 @@ Speed (on a test Mac with other work running, release, one face, the example's s
 once per photo on the 2048 px picture, 100–360 ms; the repair (a slider drag, or the Stray Hair share of any other
 drag) 2.0–6.4 ms. A Skin drag with Stray Hair on runs Skin and the repair, never the search. No model runs.
 
-## Step 1 of the rework (`feat/stray-hair-v2-step1`): measured on 12 private test portraits
+## Step 1 of the rework (`feat/stray-hair-v2-step1`): measured on 12 private test portraits (crop search kept off)
 
 Test Mac, 33 MP raws, 13 faces (the photos are men with short dark hair and beards: few real flyaways). Search per
 face before (the parse picture, 2048 px) → after (a full-size head crop); strands = the readout's count.
@@ -113,11 +116,12 @@ What it shows:
   only ~1 000 stand out enough. No threshold changed: no photo here showed strands rejected by a gate that I could
   attribute to one (the flyaways visible at 100 % are thin curls, 1 to 2 px wide, that were mostly not found on either
   picture).
-- **The full-size crop finds more, and not only strands.** On the two clean faces few strands change; on noisy,
+- **Decision: the full-size crop search is off** (`FULL_SIZE_CROPS`) until a noise-aware or model-based detector. The
+  table below is with it on. **The full-size crop finds more, and not only strands.** On the two clean faces few strands change; on noisy,
   small faces in a dark hall the count goes up 15 to 70 times: sensor grain and background lines (court bars, wall
   stripes) pass the gates at full size, and a beard's stubble and an ear's rim were already repaired on the parse
   picture too. The cell size was left at 400 across the face: 700 took about a second a face and counted grain.
-- **Speed.** The search is 76–122 ms a face on the crop (it was 66–1165 ms on the parse picture), plus 550–810 ms to
+- **Speed (crop search on).** The search is 76–122 ms a face on the crop (it was 66–1165 ms on the parse picture), plus 550–810 ms to
   render the head's window from the decoded original (once per face; the original decodes once per photo). A face
   stays under 1 s.
 - Pictures (private test portraits, so only in `$WORKSPACE/assets/lightcraft/shots/portrait/hair-stray/v2-step1/`).
