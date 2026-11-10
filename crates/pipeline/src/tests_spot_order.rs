@@ -126,3 +126,23 @@ fn heal_and_clone_match_their_surroundings_in_either_order() {
     let w = worst(&old, &new);
     assert!(w <= 2, "Heal and Clone are {w} levels from the old order");
 }
+
+/// With Portrait's Background on, its analysis image (the whole frame before the retouching, at its own size) keeps
+/// its spots drawn before the white balance too: Temperature and Tint draw none of them again (review F1).
+#[test]
+fn background_s_analysis_draws_no_spot_again_for_temperature_and_tint() {
+    let src = scene();
+    let req = RenderRequest::fit(960, 960);
+    spots_after_wb_here(Some(false));
+    let cache = StageCache::isolated();
+    let mut s = DevelopSettings { spots: spots(), ..Default::default() };
+    s.retouch.global.background.blur = 30.0;
+    assert!(crate::retouch_step::active(&s), "Background is on");
+    assert!(drawn(&cache, &src, &s, &req) > 0, "the first render draws the spots");
+    warm(&mut s, 4300.0, 0.0);
+    let temperature = drawn(&cache, &src, &s, &req);
+    warm(&mut s, 4300.0, 25.0);
+    let tint = drawn(&cache, &src, &s, &req);
+    spots_after_wb_here(None);
+    assert_eq!((temperature, tint), (0, 0), "Temperature and Tint draw no spot, the analysis's included");
+}

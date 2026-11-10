@@ -9,7 +9,10 @@ List: Remove, Heal, Clone and Content-Aware spots are drawn on the resampled pho
 - **One switch for the process**, like the hot pixel limit: `spots_keep::spots_after_wb`, set by `app.spotOrder {afterWhiteBalance}`. A plan reads it once (`Plan::spots_after_wb`), so a render never mixes the orders. Tests use `spots_after_wb_here` (this thread only).
 - **Keys.** `spots_keep::key` and `spots_scale::key` hold the white balance and local tone mapping only in the old order; `Plan::pre_retouch_key` and the Background analysis key hold the order. The engine's render keys (thumbnails, previews, loupe, the region tiles' job keys) take `files::render_key` = hot pixel key ^ `spot_order_key`; `app.spotOrder` forgets the remembered settings hashes. Photos without spots keep their keys.
 - **GPU.** Spots are drawn on a copy of the resampled image, then `wb_k` and defringe. The boxes a spot edit rewrote grow by defringe's radius for the incremental render (`dirty`).
-- **Where it is set:** Settings ▸ Performance ▸ Draw Spots After White Balance (`settings.spotsAfterWhiteBalance`, synced); CLI `render --spots-after-white-balance`; MCP and the control channel through `app.spotOrder`.
+- **Speed of the old order:** with the setting on, Temperature and Tint draw every Classic spot again (Settings shows no help line for it: the label says what it does).
+- **Background's analysis** (Portrait) keeps its proxy with its spots, before the white balance (`retouch_step::spotted_proxy`), so Temperature and Tint draw none there either.
+- **Keys after the update:** `spot_order_key` is non-zero for photos with spots in either order, so a picture cached before this change (old order) is never shown. Flipping the order moves the rendered-preview cache to a new generation (`PreviewCache::advance`), so a render already running saves nothing; Hot Pixel Limit does the same.
+- - **Where it is set:** Settings ▸ Performance ▸ Draw Spots After White Balance (`settings.spotsAfterWhiteBalance`, synced); CLI `render --spots-after-white-balance`; MCP and the control channel through `app.spotOrder`.
 
 Issue #184.
 

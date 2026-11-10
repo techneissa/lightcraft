@@ -1200,7 +1200,13 @@ fn the_spot_order_renders_afresh_only_the_photos_with_spots() {
     s.media.clear_settings_hashes();
     assert_ne!(after[0], before[0], "the photo with spots renders in the old order");
     assert_eq!(after[1], before[1], "the other photo's thumbnail stays valid");
-    assert_eq!(keys(&mut s), before, "the default order keeps the keys it always had");
+    assert_eq!(keys(&mut s), before, "back in the default order, its keys are back");
+    // (review F2: a picture cached before issue #184, spots after the white balance with nothing in its key, is not the
+    // default order's)
+    let spotted = s.develop_of(ids[0]).unwrap();
+    assert_ne!(crate::files::spot_order_key(&spotted, false), 0, "the new order has a key of its own");
+    assert_eq!(crate::files::spot_order_key(&lightcraft_develop::DevelopSettings::default(), false), 0, "photos without spots keep theirs");
+    assert_eq!(crate::files::spot_order_key(&lightcraft_develop::DevelopSettings::default(), true), 0);
 }
 
 #[test]

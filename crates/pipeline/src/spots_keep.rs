@@ -28,7 +28,7 @@ thread_local! {
 }
 
 /// Draw the Classic spots after the white balance, defringe and the camera's local tone mapping, as before issue #184
-/// (Settings ▸ Develop ▸ Spots After White Balance, `app.spotOrder`). Off: they are drawn on the resampled source,
+/// (Settings ▸ Performance ▸ Draw Spots After White Balance, `app.spotOrder`). Off: they are drawn on the resampled source,
 /// with the LaMa spots, so Temperature and Tint draw none again. Process-wide, like the hot pixel limit.
 static AFTER_WB: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 

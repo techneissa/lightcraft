@@ -67,7 +67,6 @@ pub(super) fn performance_tab(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &To
         ),
     );
     check(ui, "settings.spotsAfterWhiteBalance", &mut app.ui.settings.spots_after_white_balance, "Draw Spots After White Balance");
-    hint(ui, t, crate::i18n::tr("The earlier order. Temperature and Tint then redraw every spot."));
     heading(ui, t, crate::i18n::tr("Preview cache"));
     let cur = app.session.cache_mb;
     row(ui, t, crate::i18n::tr("Size limit"), |ui| {

@@ -820,6 +820,20 @@ fn put_at_says_whether_the_image_was_kept() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// `advance` keeps what is stored but refuses a job made before it (issue #184, review F3: a render started before
+/// the spot order flipped saved its picture under the other order's key).
+#[test]
+fn advance_keeps_the_pictures_and_refuses_older_jobs() {
+    let cache = PreviewCache::memory(1 << 20);
+    let (key, img) = (hash_bytes(b"advance"), Arc::new(gradient(8, 8, 3)));
+    assert!(cache.put_at(cache.generation(), key, img.clone()));
+    let old = cache.generation();
+    cache.advance();
+    assert!(cache.get(key).is_some(), "what is stored stays");
+    assert!(!cache.put_at(old, hash_bytes(b"late"), img.clone()), "a job from before keeps nothing");
+    assert!(cache.put_at(cache.generation(), hash_bytes(b"late"), img), "a job made since does");
+}
+
 /// `dims` reads a cached file's first few KiB, and further when its size marker comes later (CodeRabbit on #3080).
 #[test]
 fn dims_finds_a_size_marker_past_the_first_few_kib() {

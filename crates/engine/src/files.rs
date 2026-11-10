@@ -191,14 +191,16 @@ pub fn hot_pixel_key(settings: &lightcraft_develop::DevelopSettings) -> u64 {
     limit.to_bits().wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(29)
 }
 
-/// What [`lightcraft_pipeline::spots_keep::spots_after_wb`] (Settings ▸ Develop, `app.spotOrder`) adds to the render
-/// cache keys of `settings` when it is `after_wb`: nothing in the default order or without spots, so those renders
-/// stay valid whatever the order (issue #184).
+/// What [`lightcraft_pipeline::spots_keep::spots_after_wb`] (Settings ▸ Performance, `app.spotOrder`) adds to the
+/// render cache keys of `settings` when it is `after_wb`: nothing without spots, so those renders stay valid whatever
+/// the order; one value per order with spots, so pictures cached before issue #184 (spots after the white balance,
+/// keyed with nothing) are never shown in the new order (review F2).
 pub fn spot_order_key(settings: &lightcraft_develop::DevelopSettings, after_wb: bool) -> u64 {
-    if !after_wb || settings.spots.is_empty() {
-        return 0;
+    match (settings.spots.is_empty(), after_wb) {
+        (true, _) => 0,
+        (false, false) => 0x9b05_688c_2b3e_6c1f,
+        (false, true) => 0x5be0_cd19_137e_2179,
     }
-    0x5be0_cd19_137e_2179
 }
 
 /// What the app's render settings add to the render cache keys of `settings` ([`hot_pixel_key`] and

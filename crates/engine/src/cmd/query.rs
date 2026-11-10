@@ -304,8 +304,9 @@ pub fn specs() -> Vec<CommandSpec> {
                 let default = lightcraft_raw::HOT_PIXEL_MAX_SHARE;
                 let share = if (percent / 100.0 / default - 1.0).abs() < 1e-6 { default } else { percent / 100.0 };
                 if crate::files::set_hot_pixel_limit(share) {
-                    // decoded with the old limit, and their render keys change
+                    // decoded with the old limit, and their render keys change (renders already running save nothing)
                     s.media.clear_sources();
+                    s.media.rendered.advance();
                 }
             }
             Ok(json!({"percent": crate::files::hot_pixel_limit() * 100.0, "default": lightcraft_raw::HOT_PIXEL_MAX_SHARE * 100.0}))
@@ -316,8 +317,10 @@ pub fn specs() -> Vec<CommandSpec> {
                     return Err(bad("app.spotOrder", "afterWhiteBalance must be true or false"));
                 };
                 if lightcraft_pipeline::spots_keep::set_spots_after_wb(on) {
-                    // (the render keys of photos with spots change: their remembered hashes go)
+                    // (the render keys of photos with spots change: their remembered hashes go, and renders already
+                    // running in the other order save nothing, review F3)
                     s.media.clear_settings_hashes();
+                    s.media.rendered.advance();
                 }
             }
             Ok(json!({"afterWhiteBalance": lightcraft_pipeline::spots_keep::spots_after_wb()}))

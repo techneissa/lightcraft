@@ -975,21 +975,32 @@ pub fn lin_cpu_pre_retouch(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
         spots_keep::lin_cpu_pre_retouch(img, info, p, None);
         return;
     }
-    // LaMa spots first, before the white balance: the learned fill then depends on the picture alone
-    let learned = learned_fill::current().filter(|_| s.spots.iter().any(spots_learned::is_learned));
-    let done = learned
-        .map(|l| spots_learned::apply(img, &s.spots, &p.frame, p.px_per_long, native_long(info, p.src_long) as f64, &*l, p.draft))
-        .unwrap_or_default();
-    // (the Classic spots on what the LaMa ones left, issue #184, or in the old order after the white balance)
     if !p.spots_after_wb {
-        spots::apply_except(img, &s.spots, &done, &p.frame, p.px_per_long);
-    }
-    // (before the white balance: the gain's input is the as-shot development, as in the file)
-    spots_keep::before_classic(img, info, p);
-    if p.spots_after_wb {
+        spots_on_source(img, info, p);
+        // (before the white balance: the gain's input is the as-shot development, as in the file)
+        spots_keep::before_classic(img, info, p);
+    } else {
+        let done = learned_spots(img, info, p);
+        spots_keep::before_classic(img, info, p);
         spots::apply_except(img, &s.spots, &done, &p.frame, p.px_per_long);
     }
     redeye::apply(img, &p.eyes);
+}
+
+/// The LaMa spots on the resampled source, before the white balance (the learned fill then depends on the picture
+/// alone); which of them drew.
+fn learned_spots(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Vec<bool> {
+    let s = &*p.settings;
+    let learned = learned_fill::current().filter(|_| s.spots.iter().any(spots_learned::is_learned));
+    learned
+        .map(|l| spots_learned::apply(img, &s.spots, &p.frame, p.px_per_long, native_long(info, p.src_long) as f64, &*l, p.draft))
+        .unwrap_or_default()
+}
+
+/// Every spot on the resampled source (issue #184's order): the LaMa ones, then the Classic ones on what they left.
+pub(crate) fn spots_on_source(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
+    let done = learned_spots(img, info, p);
+    spots::apply_except(img, &p.settings.spots, &done, &p.frame, p.px_per_long);
 }
 
 /// The settings a render of `s` for `req` uses: the HDR edit for an [`OutputDepth::F32Hdr`]
