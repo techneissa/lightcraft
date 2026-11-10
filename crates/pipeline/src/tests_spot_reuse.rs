@@ -175,3 +175,67 @@ fn the_noise_model_is_keyed_by_the_whole_frame_alone() {
     };
     assert_ne!(key(&plain, &fit), key(&warmer, &fit), "the white balance comes before it");
 }
+
+/// Review F1: a window picks an automatic source for each spot without one from a 512-pixel copy of the whole photo;
+/// a pan or a zoom must not search again, and spots that read no source (Content-Aware, LaMa) are never searched.
+#[test]
+fn a_pan_or_a_zoom_searches_no_source() {
+    // (it renders a LaMa spot: the fill installed is process-wide, so take the learned-fill tests' turn)
+    let _turn = crate::tests_learned_fill::TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let (src, cache) = (scene(), StageCache::isolated());
+    let mut s = DevelopSettings { spots: spots(), ..Default::default() };
+    // every spot without a source: Remove and Heal find one, Content-Aware and LaMa read none
+    // (moved a little: the sources found are kept for the process, and other tests search these spots)
+    for sp in &mut s.spots {
+        sp.source_offset = None;
+        sp.points.iter_mut().for_each(|p| p.y += 0.007);
+    }
+    s.spots.push(Spot { fill: lightcraft_develop::SpotFill::Lama, ..spot(SpotMode::Remove, &[(0.7, 0.2)], None) });
+    let searches = |s: &DevelopSettings, req: &RenderRequest| {
+        let before = crate::spots::sources_picked();
+        render_cached(&src, &SourceInfo::default(), s, req, &cache);
+        crate::spots::sources_picked() - before
+    };
+    let searched = s.spots.iter().filter(|sp| !matches!(sp.mode, SpotMode::Fill) && sp.fill != lightcraft_develop::SpotFill::Lama).count();
+    assert_eq!(searches(&s, &window(100, 100)), searched, "the first window searches each spot that reads a source, once");
+    for (x, y) in [(500, 300), (300, 200), (120, 260)] {
+        assert_eq!(searches(&s, &window(x, y)), 0, "a pan to {x}, {y} searches nothing");
+    }
+    let half = RenderRequest { window: Some(PixelWindow { x: 50, y: 60, w: 240, h: 160 }), ..RenderRequest::fit(720, 720) };
+    assert_eq!(searches(&s, &half), 0, "another scale searches nothing");
+    s.light.exposure = 0.5;
+    assert_eq!(searches(&s, &window(130, 110)), 0, "Exposure searches nothing");
+}
+
+/// Review F2: a render of the whole frame keeps no finished spots (it has no window to say which are exact); a window of
+/// that frame afterwards must still show them.
+#[test]
+fn a_window_after_the_whole_frame_still_shows_its_spots() {
+    let (src, cache) = (scene(), StageCache::isolated());
+    // (every spot with its source: the window's plan then changes nothing in them, and both renders share a key)
+    let mut s = DevelopSettings { spots: spots(), ..Default::default() };
+    for sp in &mut s.spots {
+        sp.source_offset = sp.source_offset.or(Some(Point::new(0.0, 0.05)));
+    }
+    render_cached(&src, &SourceInfo::default(), &s, &RenderRequest::fit(960, 960), &cache);
+    let (drawn, pasted, worst) = view(&cache, &src, &s, &window(100, 100));
+    assert!(drawn > 0 && !pasted, "the window draws its spots: nothing was kept for it");
+    assert!(worst <= 1, "{worst} levels from the whole frame");
+}
+
+/// Review F4: one view renders one photo after another; a second photo of the same size and white balance must measure
+/// its own noise model, not take the first one's.
+#[test]
+fn another_photo_measures_its_own_noise_model() {
+    let cache = StageCache::isolated();
+    let mut s = DevelopSettings { process: lightcraft_develop::ProcessVersion(6), ..Default::default() };
+    s.detail.nr_color = 40.0;
+    let (a, b) = (scene(), Arc::new(lightcraft_scenes::demo_library()[1].render(960, 640)));
+    let measured = |src: &Arc<Rgb32f>| {
+        let before = crate::noise_measured();
+        render_cached(src, &SourceInfo::default(), &s, &window(100, 100), &cache);
+        crate::noise_measured() - before
+    };
+    assert_eq!(measured(&a), 1);
+    assert_eq!(measured(&b), 1, "the second photo measures its own");
+}

@@ -102,13 +102,37 @@ impl KeptFill {
         let at = |x: usize, y: usize, c: usize| {
             self.out.get((y.min(fh.saturating_sub(1)) * fw + x.min(fw.saturating_sub(1))) * 3 + c).copied().unwrap_or(0.0)
         };
+        // a render pixel's centre in fill pixels (between centres)
+        let fill_at = |x: f64, y: f64| {
+            let q = self.to_out.apply(to_norm.apply(lightcraft_geom::Point::new(c0.0 as f64 + x, c0.1 as f64 + y)));
+            ((q.x - self.c0.0) / self.k.0 - 0.5, (q.y - self.c0.1) / self.k.1 - 0.5)
+        };
+        // fill pixels per render pixel: shrinking (a finer render's fill shown at Fit) averages the fill pixels each render
+        // pixel covers, so a textured fill does not alias (review F6); otherwise one bilinear sample
+        let (o, ax, ay) = (fill_at(0.5, 0.5), fill_at(1.5, 0.5), fill_at(0.5, 1.5));
+        let step = |a: (f64, f64)| ((a.0 - o.0).hypot(a.1 - o.1)).clamp(1.0, 64.0);
+        let (sx, sy) = (step(ax), step(ay));
+        let (sx, sy) = (if sx.is_finite() { sx } else { 1.0 }, if sy.is_finite() { sy } else { 1.0 });
+        let max = (fw.saturating_sub(1) as f64, fh.saturating_sub(1) as f64);
         for y in 0..ch {
             for x in 0..cw {
-                let n = to_norm.apply(lightcraft_geom::Point::new((c0.0 + x) as f64 + 0.5, (c0.1 + y) as f64 + 0.5));
-                let q = self.to_out.apply(n);
-                let fx = ((q.x - self.c0.0) / self.k.0 - 0.5).clamp(0.0, fw.saturating_sub(1) as f64);
-                let fy = ((q.y - self.c0.1) / self.k.1 - 0.5).clamp(0.0, fh.saturating_sub(1) as f64);
+                let (fx, fy) = fill_at(x as f64 + 0.5, y as f64 + 0.5);
                 let (fx, fy) = (if fx.is_finite() { fx } else { 0.0 }, if fy.is_finite() { fy } else { 0.0 });
+                if sx > 1.0 + 1e-6 || sy > 1.0 + 1e-6 {
+                    // the fill pixels whose centres fall in this pixel's footprint, [c − s/2, c + s/2) (at least the nearest)
+                    let span = |c: f64, s: f64, hi: f64| {
+                        let (a, b) = ((c - s / 2.0).ceil().clamp(0.0, hi), ((c + s / 2.0).ceil() - 1.0).clamp(0.0, hi));
+                        if b < a { (c.round().clamp(0.0, hi) as usize, c.round().clamp(0.0, hi) as usize) } else { (a as usize, b as usize) }
+                    };
+                    let ((x0, x1), (y0, y1)) = (span(fx, sx, max.0), span(fy, sy, max.1));
+                    let n = ((x1 - x0 + 1) * (y1 - y0 + 1)) as f32;
+                    for c in 0..3 {
+                        let sum: f32 = (y0..=y1).flat_map(|yy| (x0..=x1).map(move |xx| (xx, yy))).map(|(xx, yy)| at(xx, yy, c)).sum();
+                        out.push(sum / n);
+                    }
+                    continue;
+                }
+                let (fx, fy) = (fx.clamp(0.0, max.0), fy.clamp(0.0, max.1));
                 let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
                 let (tx, ty) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);
                 for c in 0..3 {
@@ -139,6 +163,44 @@ pub struct FillAt {
 /// The store every view shares ([`shared`]): a view let go at Fit (the zoom's) finds its spots again when it comes back,
 /// and the source's [`fingerprint`] in every key keeps photos apart.
 static SHARED: std::sync::LazyLock<Arc<FinalsStore>> = std::sync::LazyLock::new(Arc::default);
+
+/// Most automatic sources kept ([`picked`]).
+pub const MAX_PICKS: usize = 4096;
+
+static PICKS: Mutex<Vec<(u64, Option<lightcraft_geom::Point>)>> = Mutex::new(Vec::new());
+
+/// Whether `spot` copies from a source: Remove, Heal and Clone do; a Content-Aware, shaped or LaMa spot is rebuilt from
+/// its surroundings and reads none.
+pub fn reads_source(spot: &lightcraft_develop::Spot) -> bool {
+    spot.mode != lightcraft_develop::SpotMode::Fill && spot.area.is_none() && !crate::spots_learned::is_learned(spot)
+}
+
+/// The key of `spot`'s automatic source on the source fingerprinted `source`: what [`crate::spots::pick_source`] reads
+/// (the source, the settings that place it, the lens the file embeds, the spot), never the window or the scale.
+pub fn pick_key(source: u64, s: &DevelopSettings, info: &SourceInfo, spot: &lightcraft_develop::Spot) -> u64 {
+    crate::hash_of((
+        source,
+        format!("{:?}", (&s.optics, &s.geometry, &s.crop, &s.orientation, &info.lens)),
+        crate::spots_keep::pre_spot_sections(s),
+        format!("{spot:?}"),
+    ))
+}
+
+/// The automatic source kept under `key`, else `pick`'s, kept (issue #176, review F1: every window searched each spot's
+/// source again on a 512-pixel copy of the whole photo).
+pub fn picked(key: u64, pick: impl FnOnce() -> Option<lightcraft_geom::Point>) -> Option<lightcraft_geom::Point> {
+    if let Some((_, o)) = PICKS.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(k, _)| *k == key) {
+        return *o;
+    }
+    let o = pick();
+    let mut v = PICKS.lock().unwrap_or_else(PoisonError::into_inner);
+    v.retain(|(k, _)| *k != key);
+    v.push((key, o));
+    if v.len() > MAX_PICKS {
+        v.remove(0);
+    }
+    o
+}
 
 /// The store views share.
 pub fn shared() -> Arc<FinalsStore> {
@@ -359,15 +421,21 @@ pub fn grow(reach: &[Option<Reach>], work: &PixelWindow, max: usize) -> PixelWin
     PixelWindow { x: r[0], y: r[1], w: r[2] - r[0], h: r[3] - r[1] }
 }
 
-/// Which spots a render of `work` (pixels of the whole frame) drew exactly as the whole frame does: each spot whose
-/// reach lies inside it, unless it reads or writes where a spot that is not exact writes (in either order: an earlier
+/// Which spots a render of `work` (pixels of the whole frame) drew exactly as the whole frame does: each spot that drew
+/// (`drawn`) whose reach lies inside it, unless it reads or writes where a spot that is not exact writes (in either order: an earlier
 /// spot changed what it read, a later one drew over its box).
-pub fn exact(reach: &[Option<Reach>], work: &Rect) -> Vec<bool> {
+pub fn exact(reach: &[Option<Reach>], work: &Rect, drawn: &[bool]) -> Vec<bool> {
     // (each pass is quadratic: past this many spots none is kept, and windows draw them as before)
     if reach.len() > MAX_SPOTS {
         return vec![false; reach.len()];
     }
-    let mut ok: Vec<bool> = reach.iter().map(|r| r.is_some_and(|r| inside(&r.read, work) && inside(&r.write, work))).collect();
+    // (a spot that did not draw, a LaMa spot whose fill has not come, is not exact either: its neighbours read or drew
+    // over pixels the fill will change, review F3)
+    let mut ok: Vec<bool> = reach
+        .iter()
+        .enumerate()
+        .map(|(i, r)| r.is_some_and(|r| inside(&r.read, work) && inside(&r.write, work)) && drawn.get(i).copied().unwrap_or(false))
+        .collect();
     loop {
         let mut changed = false;
         for (i, r) in reach.iter().enumerate() {
@@ -431,18 +499,20 @@ pub fn paste(img: &mut Rgb32f, finals: &Finals, origin: (usize, usize)) {
 /// spots that drew; a LaMa spot whose fill was not ready did not).
 pub fn exact_boxes(at: &At, w: usize, h: usize, drawn: &[bool]) -> Vec<(usize, Rect)> {
     let Some((ox, oy)) = at.origin.filter(|_| at.store.is_some()) else { return Vec::new() };
-    let ok = exact(&at.reach, &[ox, oy, ox + w, oy + h]);
+    let ok = exact(&at.reach, &[ox, oy, ox + w, oy + h], drawn);
     at.reach
         .iter()
         .enumerate()
-        .filter(|(i, _)| ok.get(*i).copied().unwrap_or(false) && drawn.get(*i).copied().unwrap_or(false))
+        .filter(|(i, _)| ok.get(*i).copied().unwrap_or(false))
         .filter_map(|(i, r)| r.map(|r| (i, [r.write[0] - ox, r.write[1] - oy, r.write[2] - ox, r.write[3] - oy])))
         .collect()
 }
 
 /// Keep `found` (spot, its finished pixels) for the view, at `at`'s key.
 pub fn keep(at: &At, found: Vec<(usize, Vec<[f32; 3]>)>) {
-    let Some(store) = &at.store else { return };
+    // (only a window says which spots it drew exactly: a whole frame keeping an empty list would make every window of
+    // its scale paste nothing, review F2)
+    let Some(store) = at.store.as_ref().filter(|_| at.origin.is_some() && !at.reach.is_empty()) else { return };
     let mut px: Vec<Option<Arc<Vec<[f32; 3]>>>> = vec![None; at.reach.len()];
     for (i, p) in found {
         if let Some(slot) = px.get_mut(i) {
@@ -464,4 +534,34 @@ pub fn windows_pasted() -> usize {
 /// Count one window that pasted its spots ([`windows_pasted`]).
 pub fn note_pasted() {
     PASTED.with(|c| c.set(c.get().wrapping_add(1)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Review F6: a fine render's fill shown four times smaller averages its pixels; one bilinear sample of a one-pixel
+    /// checkerboard gave black or white.
+    #[test]
+    fn a_fill_shrunk_averages_its_pixels() {
+        let (fw, fh) = (64, 64);
+        let out: Vec<f32> = (0..fw * fh).flat_map(|i| [((i % fw + i / fw) % 2) as f32; 3]).collect();
+        // the fill at 1:1 with a render at its top-left; a render four times smaller maps 1 pixel to 4 of the fill's
+        let fill = KeptFill {
+            key: 0,
+            ppl: 4.0,
+            // (every render pixel's centre on a fill pixel's: one sample there is black)
+            to_out: lightcraft_geom::Affine::translate(lightcraft_geom::Vec2::new(0.5, 0.5)) * lightcraft_geom::Affine::scale(4.0, 4.0),
+            c0: (0.0, 0.0),
+            k: (1.0, 1.0),
+            size: (fw, fh),
+            out: Arc::new(out),
+        };
+        let small = fill.resample(&lightcraft_geom::Affine::IDENTITY, (0, 0), (16, 16));
+        let worst = small.iter().map(|v| (v - 0.5).abs()).fold(0.0f32, f32::max);
+        assert!(worst < 0.01, "a checkerboard shrunk is grey, not aliased: {worst} off");
+        // at 1:1 it is the fill itself
+        let same = KeptFill { to_out: lightcraft_geom::Affine::IDENTITY, ..fill.clone() };
+        assert_eq!(same.resample(&lightcraft_geom::Affine::IDENTITY, (0, 0), (fw, fh)), *fill.out);
+    }
 }

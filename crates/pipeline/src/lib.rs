@@ -661,10 +661,21 @@ pub fn plan_kept<'a>(
     };
     visualize::adjust_settings(req.overlay, &mut settings);
     // a window must not choose a spot's source from the pixels it happens to hold: fix them
-    // from a fixed-size render of the whole frame first
-    if req.window.is_some() && settings.spots.iter().any(|sp| sp.source_offset.is_none()) {
-        let picked: Vec<Option<lightcraft_geom::Point>> =
-            settings.spots.iter().map(|sp| sp.source_offset.or_else(|| spots::pick_source(src, info, &settings, sp, None))).collect();
+    // from a fixed-size render of the whole frame first (once per spot, kept for every window and scale; a spot that
+    // reads no source is never searched: issue #176)
+    if req.window.is_some() && settings.spots.iter().any(|sp| sp.source_offset.is_none() && spots_scale::reads_source(sp)) {
+        let source = spots_scale::fingerprint(src);
+        let picked: Vec<Option<lightcraft_geom::Point>> = settings
+            .spots
+            .iter()
+            .map(|sp| match sp.source_offset {
+                Some(o) => Some(o),
+                None if !spots_scale::reads_source(sp) => None,
+                None => {
+                    spots_scale::picked(spots_scale::pick_key(source, &settings, info, sp), || spots::pick_source(src, info, &settings, sp, None))
+                }
+            })
+            .collect();
         for (sp, o) in settings.to_mut().spots.iter_mut().zip(picked) {
             sp.source_offset = o;
         }
@@ -784,6 +795,8 @@ pub fn plan_kept<'a>(
     // image itself, spots and all, is never kept under this key: `colour_noise` gives `None` there)
     let noise_key = hash_of((
         hash_of((
+            // (the photo itself: a view renders one photo after another, review F4)
+            spots_scale::fingerprint(src),
             format!("{:?}", full.0),
             full.1,
             full.2,

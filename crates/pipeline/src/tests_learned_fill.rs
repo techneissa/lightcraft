@@ -13,7 +13,7 @@ use crate::learned_fill::{self, FillRun, LearnedFill};
 use crate::{PixelWindow, Quality, RenderRequest, SourceInfo, render, spots, spots_learned};
 
 /// The installed fill is process-wide: tests that install one take turns.
-static TURN: Mutex<()> = Mutex::new(());
+pub(crate) static TURN: Mutex<()> = Mutex::new(());
 
 /// Fills the hole with the mean of the crop's other pixels, and keeps what it was asked.
 #[derive(Default)]
@@ -239,6 +239,42 @@ fn a_pan_or_a_later_edit_asks_the_learned_fill_nothing() {
         let finer = RenderRequest { window: Some(PixelWindow { x: 1000, y: 750, w: 400, h: 300 }), ..RenderRequest::fit(2400, 1800) };
         assert_eq!(asked(&s, &finer).0, 1, "a finer scale asks once");
         assert_eq!(asked(&s, &lower).0, 0, "and the lower one still asks nothing");
+    });
+}
+
+/// Review F3: a Heal spot that copies from a LaMa spot whose fill has not come yet holds pixels that never saw the fill;
+/// a later window must not paste them once the fill is there.
+#[test]
+fn a_spot_beside_a_pending_fill_is_not_kept() {
+    let fill = Arc::new(MeanFill::default());
+    let lama = Spot { points: vec![Point::new(0.5, 0.5)], size: 0.01, ..spot(SpotMode::Remove, SpotFill::Lama) };
+    // a Heal spot to its right, copying from where the LaMa spot is
+    let heal = Spot {
+        mode: SpotMode::Heal,
+        points: vec![Point::new(0.56, 0.5)],
+        size: 0.01,
+        source_offset: Some(Point::new(-0.06, 0.0)),
+        ..Default::default()
+    };
+    let s = with(vec![lama, heal]);
+    let src = Arc::new(scene());
+    let (cache, full) = (crate::StageCache::isolated(), RenderRequest::fit(1600, 1200));
+    let at = |x: usize, y: usize| RenderRequest { window: Some(PixelWindow { x, y, w: 400, h: 300 }), ..full };
+    install(&fill, || {
+        // the fill says nothing yet: the LaMa spot shows the Classic fill
+        *fill.reply.lock().unwrap_or_else(PoisonError::into_inner) = Some(None);
+        crate::render_cached(&src, &SourceInfo::default(), &s, &at(600, 450), &cache);
+        *fill.reply.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        // a window over the Heal spot alone, once the fill comes
+        let (x, y) = (880, 450);
+        let part = crate::render_cached(&src, &SourceInfo::default(), &s, &at(x, y), &cache).image;
+        let whole = render(&src, &SourceInfo::default(), &s, &full).image;
+        let worst = (0..300).flat_map(|r| (0..400).map(move |c| (c, r))).map(|(c, r)| {
+            let (a, b) = (whole.get(x + c, y + r), part.get(c, r));
+            (0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0)
+        });
+        let worst = worst.max().unwrap_or(0);
+        assert!(worst <= 1, "the Heal spot is the whole render's: {worst} levels off");
     });
 }
 
