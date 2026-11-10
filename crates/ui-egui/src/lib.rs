@@ -38,6 +38,7 @@ mod focus_scan;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod fork_update;
 mod frame_rate;
+pub mod full_picture;
 pub mod headless;
 pub mod i18n;
 pub mod icons;

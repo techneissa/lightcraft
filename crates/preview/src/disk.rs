@@ -286,16 +286,16 @@ impl DiskCache {
         kept && self.named(key, full::EXT).is_file()
     }
 
-    /// The full-size picture kept under `key`, when there is one of `size` (width, height) pixels. A file that is
-    /// short, damaged or of another size is removed and reads as nothing.
-    pub fn get_full(&self, key: Hash128, size: (usize, usize)) -> Option<Rgba8> {
+    /// The full-size picture kept under `key`, when there is one of at most `max` (width, height) pixels. A file
+    /// that is short, damaged or bigger is removed and reads as nothing.
+    pub fn get_full(&self, key: Hash128, max: (usize, usize)) -> Option<Rgba8> {
         let p = self.named(key, full::EXT);
         let read = p.parent().is_some_and(is_real_dir).then(|| std::fs::read(&p).ok()).flatten();
         let Some(bytes) = read else {
             self.full_misses.fetch_add(1, Ordering::Relaxed);
             return None;
         };
-        match full::decode(&bytes, size) {
+        match full::decode(&bytes, max) {
             Some(img) => {
                 self.full_hits.fetch_add(1, Ordering::Relaxed);
                 self.read.lock().unwrap_or_else(|e| e.into_inner()).insert(key.0);

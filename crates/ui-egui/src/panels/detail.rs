@@ -310,10 +310,31 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
         look,
         holding: navigating || app.size_hold.holding(now),
     };
+    // the finished full-size picture (#178): once the edit has settled, zoom and pan draw it instead of a window render
+    let single_view = hover_key.is_none() && !split && !show_before && !split_view;
+    let full = crate::full_picture::update(
+        app,
+        ui.ctx(),
+        &crate::full_picture::Ask {
+            id,
+            with_crop: !crop_tool,
+            eligible: single_view && !crop_tool && plain && tint.sel.is_none() && windowable_view,
+            zoomed: window_ctx.frame_edge.is_some(),
+            busy: interacting || window_ctx.holding || settling || ui.input(|i| i.pointer.any_down()),
+            native,
+            texture_side,
+            img_rect,
+            visible: main_area.intersect(canvas),
+            ppp,
+            now,
+        },
+    );
     // (stepping fast: no window is asked for until the photo stays, as for the frame above)
     let window_views = if window_ctx.frame_edge.is_some() && !settling {
         let mode = ViewMode { split, show_before, split_view };
-        window_views(mode, &Views { img_rect, target_rect, before_img, before_target, areas: &areas, main_area, canvas })
+        let views = window_views(mode, &Views { img_rect, target_rect, before_img, before_target, areas: &areas, main_area, canvas });
+        // (the After side drawn from the full-size picture renders no window)
+        views.into_iter().filter(|v| v.before || full.is_none()).collect()
     } else {
         Vec::new()
     };
@@ -356,6 +377,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
             window_ctx: &window_ctx,
             camera_full,
             display_aspect,
+            full,
         },
     );
 }
@@ -390,6 +412,7 @@ fn loupe_paint_and_finish(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
         window_ctx,
         camera_full,
         display_aspect,
+        full,
     } = v;
     let p = ui.painter_at(canvas);
     let draw = |slot: Slot, r: Rect, clip: Rect| draw_slot(app, &p, (id, !crop_tool), ppp, slot, [r, clip]);
@@ -436,6 +459,11 @@ fn loupe_paint_and_finish(app: &mut LightcraftApp, ui: &mut egui::Ui, resp: &egu
     // …and the window renders go over the whole-frame ones, all of them, where they belong in the
     // frame (clipped to their pane, or their side of the line)
     let drawn = draw_windows(app, &p, window_ctx, windows, [canvas, img_rect], (show_before, split), divider.at);
+    // …or, zoomed in once the edit has settled, the finished full-size picture (#178)
+    if let Some(level) = full {
+        crate::full_picture::draw(app, &p, img_rect, level);
+    }
+    let drawn = WindowsDrawn { any: drawn.any || full.is_some(), shown: drawn.shown || full.is_some() };
     let shown = shown_after_windows(shown, camera_full_drawn, drawn);
     app.loupe_shown = Some((id, shown));
     app.loupe_timing.observe(id, shown, now);
@@ -520,6 +548,8 @@ struct LoupePaint<'a> {
     /// The camera JPEG at full size is wanted under the window renders ([`request_camera_full`]).
     camera_full: bool,
     display_aspect: f32,
+    /// The level of the finished full-size picture drawn for the After side (`None`: none, [`crate::full_picture`]).
+    full: Option<u8>,
 }
 
 /// Names the loupe for screen readers as the grid names the same photo (file, rating, flag, label), not

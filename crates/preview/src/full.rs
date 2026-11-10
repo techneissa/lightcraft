@@ -12,7 +12,7 @@
 //!
 //! (little-endian). A file that is short, damaged or of another size than asked for reads as nothing: each band's
 //! zlib checksum is checked, every length is checked against the file before anything is allocated, and the
-//! picture is never bigger than the caller expects.
+//! picture is never bigger than the caller allows.
 
 use lightcraft_raster::Rgba8;
 
@@ -76,11 +76,11 @@ pub fn dims(bytes: &[u8]) -> Option<(usize, usize)> {
     (w > 0 && h > 0 && w.checked_mul(h)? <= MAX_PIXELS).then_some((w, h))
 }
 
-/// The picture in `bytes`, when it is a whole, undamaged file of a `want` (width, height) picture.
-pub fn decode(bytes: &[u8], want: (usize, usize)) -> Option<Rgba8> {
+/// The picture in `bytes`, when it is a whole, undamaged file of a picture of at most `max` (width, height).
+pub fn decode(bytes: &[u8], max: (usize, usize)) -> Option<Rgba8> {
     let (w, h) = dims(bytes)?;
     let bands = read_u32(bytes, 16)?;
-    if (w, h) != want || bands != h.div_ceil(BAND_ROWS) {
+    if w > max.0 || h > max.1 || bands != h.div_ceil(BAND_ROWS) {
         return None;
     }
     // every band's place in the file, checked against its length before anything is unpacked
@@ -158,7 +158,7 @@ mod tests {
     fn a_short_damaged_or_other_sized_file_reads_as_nothing() {
         let img = picture(64, 300);
         let bytes = encode(&img).expect("encoded");
-        assert_eq!(decode(&bytes, (64, 301)), None, "another size");
+        assert_eq!(decode(&bytes, (64, 299)), None, "bigger than allowed");
         for cut in [0, 7, HEADER, HEADER + 5, bytes.len() / 2, bytes.len() - 1] {
             assert_eq!(decode(bytes.get(..cut).unwrap_or_default(), (64, 300)), None, "cut at {cut}");
         }
@@ -188,7 +188,8 @@ mod tests {
         assert!(cache.put_full(key, &img));
         assert_eq!(cache.get_full(key, (120, 90)), Some(img.clone()));
         assert_eq!(cache.get_full(crate::Hash128(key.0 ^ 1), (120, 90)), None, "other settings");
-        assert_eq!(cache.get_full(key, (121, 90)), None, "another size");
+        assert_eq!(cache.get_full(key, (119, 90)), None, "bigger than allowed");
+        assert!(cache.put_full(key, &img));
         assert!(cache.put_full(key, &img));
         let hex = key.to_string();
         let file = dir.join(&hex[..2]).join(format!("{hex}.{EXT}"));
