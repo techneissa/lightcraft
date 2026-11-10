@@ -4339,6 +4339,7 @@ dependencies = [
  "lightcraft-testkit",
  "log",
  "pollster 1.0.1",
+ "rayon",
  "serde",
  "serde_json",
  "toml",

@@ -849,7 +849,7 @@ impl Renderer {
     /// Returns when to look again, if it is waiting.
     fn release_closed_loupe(&mut self, now: web_time::Instant) -> Option<std::time::Duration> {
         // (called at the start of a frame, before the loupe draws: it drew in the last one)
-        if self.loupe_frame + 1 >= self.frame || !self.stages.contains_key(&Slot::Main) {
+        if self.loupe_frame + 1 >= self.frame || !(self.stages.contains_key(&Slot::Main) || self.full.holds_anything()) {
             self.loupe_gone = None;
             return None;
         }
@@ -858,12 +858,15 @@ impl Renderer {
         if waited < LOUPE_RELEASE {
             return Some(LOUPE_RELEASE - waited);
         }
+        // the full-size picture goes, and the build that would make one stops (its disk copy stays)
+        if self.full.holds_anything() {
+            self.cancel_full();
+        }
         if self.is_pending(Slot::Main) {
             return Some(LOUPE_RELEASE);
         }
         self.stages.remove(&Slot::Main);
         self.edited_thumb = None;
-        self.full.clear();
         // (let the idle trim give the GPU's recycled buffers back too)
         #[cfg(not(target_arch = "wasm32"))]
         {
@@ -975,9 +978,10 @@ impl Renderer {
             return;
         }
         let priority = crate::full_picture::PRIORITY;
-        let what = if plan.render { "requested" } else { "looked for on disk" };
+        let render = !plan.bands.is_empty();
+        let what = if render { "requested" } else { "looked for on disk" };
         self.note_request(Slot::Full, job.key, priority, what, || render_subject(Slot::Full, job.photo, Some(&job.origin)));
-        if plan.render {
+        if render {
             self.started += 1;
         }
         self.pending.insert(Slot::Full, (job.key, priority));
@@ -988,10 +992,21 @@ impl Renderer {
             job.key,
             priority,
             Box::new(move || {
-                let (result, full) = crate::full_picture::work(job, &plan);
+                let (result, full) = crate::full_picture::work(job, plan);
                 Finished { look: None, result, color: None, full }
             }),
         );
+    }
+
+    /// Stop the loupe's full-size picture: let go of the one held, drop its job when it hasn't started, and make one
+    /// that is running stop at its next band (its result is dropped when it comes back).
+    pub fn cancel_full(&mut self) {
+        self.full.clear();
+        if self.drop_queued(Slot::Full) {
+            self.full.job_dropped();
+        }
+        self.pending.remove(&Slot::Full);
+        self.requests.remove(&Slot::Full);
     }
 
     /// Whether jobs run through an offload ([`Self::set_offload`]).
@@ -1238,7 +1253,9 @@ impl Renderer {
         self.shown_ids.clear();
         self.epoch = lightcraft_preview::next_tick();
         self.preview_generation = None;
-        self.pool.reprioritize(|_, _| None);
+        if self.pool.reprioritize(|_, _| None).contains(&Slot::Full) {
+            self.full.job_dropped();
+        }
         self.thumb_inputs.clear();
         self.embedded_thumbs.clear();
         self.textures.clear();
@@ -1674,6 +1691,11 @@ impl Renderer {
         let mut changed = false;
         for ((mut slot, mut r, mut color, completed_look, ms), full) in finished {
             self.completed += 1;
+            if slot == Slot::Full {
+                self.accept_full(session, &r, full, ms);
+                changed = true;
+                continue;
+            }
             // made for another display profile than the one in use: obsolete
             if r.display.is_some_and(|id| Some(id) != self.display_id()) {
                 self.decided(|| {
@@ -1706,11 +1728,6 @@ impl Renderer {
                 session.accept(&r);
                 (source, look)
             };
-            if slot == Slot::Full {
-                self.accept_full(&r, full, ms, source.as_ref());
-                changed = true;
-                continue;
-            }
             if slot.is_view() {
                 self.shown_ids.insert(slot, r.request_id);
             }
@@ -1870,11 +1887,18 @@ impl Renderer {
         Some(true)
     }
 
-    /// A [`Slot::Full`] job came back (its request is the current one): its picture, if it made one, is the loupe's.
-    fn accept_full(&mut self, r: &RenderResult, full: Option<crate::full_picture::Built>, ms: f64, source: Option<&lightcraft_catalog::Source>) {
-        if self.pending.get(&Slot::Full).is_some_and(|p| p.0 == r.key) {
+    /// A [`Slot::Full`] job came back: its picture, if it made one, is the loupe's when it is the request now and the
+    /// loupe was drawn in the last frame (a picture that comes back to a closed loupe is not kept; its disk copy is).
+    fn accept_full(&mut self, session: &mut Session, r: &RenderResult, full: Option<crate::full_picture::Built>, ms: f64) {
+        let current = self.requests.get(&Slot::Full).is_some_and(|q| q.id == r.request_id);
+        let source = if current { self.requests.remove(&Slot::Full).and_then(|q| q.source) } else { None };
+        // (the original it decoded serves the loupe's next renders either way)
+        session.accept(r);
+        if current && self.pending.get(&Slot::Full).is_some_and(|p| p.0 == r.key) {
             self.pending.remove(&Slot::Full);
         }
+        let open = self.loupe_frame + 1 >= self.frame;
+        let source = source.as_ref();
         self.decided(|| {
             let how = match &full {
                 Some(b) if b.from_disk => "read from disk".to_string(),
@@ -1883,7 +1907,7 @@ impl Renderer {
             };
             format!("{}: {how}", render_subject(Slot::Full, r.photo, source))
         });
-        self.full.accept(r.photo, r.key, full);
+        self.full.finished(r.photo, r.key, full, current && open);
     }
 
     /// Free the GPU renderer's recycled buffers once nothing has rendered for [`IDLE_TRIM`] (they
@@ -1926,6 +1950,13 @@ impl Renderer {
     /// Clear stage caches, least useful first, until what they hold fits [`Self::stage_budget`].
     fn trim_stages(&mut self) {
         let sizes: Vec<(Slot, usize)> = self.stages.iter().map(|(slot, c)| (*slot, c.bytes() + lightcraft_engine::gpu::stage_bytes(c))).collect();
+        // the full-size picture counts with them and goes first, its disk copy kept: past the point where the open
+        // photo's own view caches would go (a runaway), or alone over the budget (a budget made smaller)
+        let full = self.full.bytes();
+        let held = sizes.iter().map(|(_, b)| *b).fold(full, usize::saturating_add);
+        if full > 0 && (held > self.stage_budget().saturating_mul(HARD_FACTOR) || full > self.stage_budget()) {
+            self.full.free_for_memory();
+        }
         for slot in stage_trim_order(&sizes, self.stage_budget()) {
             if let Some(c) = self.stages.get(&slot) {
                 c.clear();

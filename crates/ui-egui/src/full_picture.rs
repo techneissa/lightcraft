@@ -10,10 +10,14 @@
 //!   a render waits [`SETTLE_SECS`] more, so a quick series of edits renders none. It runs on a render worker at
 //!   the lowest priority ([`PRIORITY`]); the next edit drops it when it is still queued and throws its result away
 //!   when it is running.
-//! - **What.** One render of the whole frame at 100 %, like an export: no window, so no seams. On the worker it is
-//!   cut into textures of at most [`TILE`] px (the GPU's limit, and one upload per frame), with a half and a quarter
-//!   size level ([`levels`]) so a view at 30–100 % is never minified by more than 2×. Each texture carries one
-//!   pixel of its neighbours, so magnified views blend across its edges.
+//! - **What.** The whole frame at 100 %, rendered in horizontal bands of about [`BAND_PX`] pixels, each with the zoom
+//!   window's margin of context above and below ([`crate::region::margin_for`]), so the seams don't show. Between
+//!   bands the build checks whether it is still wanted: an edit, another photo or the closed loupe stops it within
+//!   one band, and a build that was stopped cuts and writes nothing. One build runs at a time. On the worker the
+//!   picture is cut into textures of at most [`TILE`] px (one upload per frame), with smaller levels about 1.41×
+//!   apart made with an area filter ([`build::levels`]), so a view from Fit to 100 % is shrunk by the GPU by less
+//!   than 1.41× (no aliasing). Each texture carries one pixel of its neighbours, so magnified views blend across its
+//!   edges. It holds a row in the activity stack while it renders ("Preparing the full-size view"; ✕ stops it).
 //! - **Never the old edit.** The picture is drawn only while its key is the photo's key now ([`picture_job`]: the
 //!   settings, the file, the size, crop, profiles, denoise, proof, hidden wheels and the display profile), and it is
 //!   freed the moment the key changes. Until the new one is there, zoom and pan work as before it.
@@ -26,174 +30,34 @@
 //!   the display changes.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use egui::{Color32, Rect, pos2, vec2};
 use lightcraft_catalog::PhotoId;
 use lightcraft_engine::RenderJob;
-use lightcraft_engine::media::{QuickSource, RenderResult};
-use lightcraft_preview::{Hash128, Hasher128, PreviewCache};
-use lightcraft_raster::Rgba8;
+use lightcraft_engine::media::QuickSource;
+use lightcraft_preview::Hasher128;
 
 use crate::LightcraftApp;
 use crate::render::Slot;
 
+mod build;
+pub use build::{AtOnce, Band, Built, Plan, TileImage, levels, work};
+
 /// The largest texture of the picture (px a side, before its one-pixel border): about 16 MB, one upload per frame.
 pub const TILE: usize = 2048;
-/// A smaller level is made while it is at least this long: views that need less are drawn from the whole-frame
-/// render (Fit) anyway.
-const LEVEL_MIN_EDGE: usize = 2048;
+/// About this many pixels a band: a 45 MP photo renders in three, and an edit waits for at most one.
+pub const BAND_PX: usize = 16 << 20;
+/// The most a level is shrunk by the GPU: levels are 1.41× apart (and a little rounding).
+const MAX_SHRINK: f32 = 1.42;
+/// The activity row's text while a picture renders.
+pub const ROW: &str = "Preparing the full-size view";
 /// The pool priority of its job: below every other render, thumbnails and prefetches included.
 pub const PRIORITY: u32 = 2;
 /// How long the loupe stays at rest before the picture is rendered (s): a quick series of edits renders none.
 pub const SETTLE_SECS: f64 = 1.0;
 /// Changes when the picture's file or its key changes meaning.
 const FORMAT: u64 = 1;
-
-/// What the worker is asked to do (made on the UI thread).
-#[derive(Clone)]
-pub struct Plan {
-    /// The file it is kept in (`None`: no library, nothing on disk).
-    pub disk: Option<(Arc<PreviewCache>, Hash128)>,
-    /// The picture's size as asked (width, height): what is read from disk is at most a pixel off it.
-    pub size: [usize; 2],
-    /// The largest texture.
-    pub tile: usize,
-    /// Render it when it isn't on disk (`false`: only look on disk).
-    pub render: bool,
-}
-
-/// One texture of the picture as the worker makes it.
-pub struct TileImage {
-    /// 0: full size; 1: half; 2: a quarter…
-    pub level: u8,
-    /// The part of the level it shows, `[x, y, w, h]` in the level's pixels.
-    pub rect: [usize; 4],
-    /// The neighbours' pixels it also holds: left, top, right, bottom.
-    pub border: [usize; 4],
-    pub image: Arc<egui::ColorImage>,
-}
-
-/// The picture, cut into textures on the worker.
-pub struct Built {
-    /// The size of each level (width, height), level 0 first.
-    pub levels: Vec<[usize; 2]>,
-    pub tiles: Vec<TileImage>,
-    pub from_disk: bool,
-}
-
-/// The worker's part: the picture from disk, else (`plan.render`) rendered, kept on disk and cut into textures.
-pub fn work(job: RenderJob, plan: &Plan) -> (RenderResult, Option<Built>) {
-    let max = (plan.size[0].saturating_add(1), plan.size[1].saturating_add(1));
-    let near = |w: usize, h: usize| w.abs_diff(plan.size[0]) <= 1 && h.abs_diff(plan.size[1]) <= 1;
-    if let Some((cache, key)) = &plan.disk
-        && let Some(disk) = cache.disk()
-        && let Some(img) = disk.get_full(*key, max).filter(|img| near(img.width, img.height))
-    {
-        return (job.failed("read from disk".into()), Some(cut(&img, plan.tile, true)));
-    }
-    if !plan.render {
-        return (job.failed("not on disk".into()), None);
-    }
-    let mut r = lightcraft_engine::memory::in_background(|| job.run());
-    let built = match &mut r.rendered {
-        Ok(x) if x.deep.is_none() && near(x.image.width, x.image.height) => {
-            let img = std::mem::replace(&mut x.image, Rgba8 { width: 0, height: 0, data: Vec::new() });
-            let built = cut(&img, plan.tile, false);
-            if let Some((cache, key)) = plan.disk.clone() {
-                keep_on_disk(cache, key, img);
-            }
-            Some(built)
-        }
-        _ => None,
-    };
-    (r, built)
-}
-
-/// Write the picture to the disk cache off the worker: the textures go to the screen first.
-#[cfg(not(target_arch = "wasm32"))]
-fn keep_on_disk(cache: Arc<PreviewCache>, key: Hash128, img: Rgba8) {
-    let spawned = std::thread::Builder::new().name("lc-full-write".into()).spawn(move || {
-        if let Some(disk) = cache.disk() {
-            disk.put_full(key, &img);
-        }
-    });
-    if spawned.is_err() {
-        log::warn!("full-size picture: could not start its disk write");
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn keep_on_disk(_: Arc<PreviewCache>, _: Hash128, _: Rgba8) {}
-
-/// The sizes of the picture's levels: the full size, then each half of the one before while that is at least
-/// [`LEVEL_MIN_EDGE`] long.
-pub fn levels(w: usize, h: usize) -> Vec<[usize; 2]> {
-    let mut out = vec![[w, h]];
-    while let Some(&[lw, lh]) = out.last() {
-        let next = [lw.div_ceil(2), lh.div_ceil(2)];
-        if next[0].max(next[1]) < LEVEL_MIN_EDGE || out.len() >= 8 {
-            break;
-        }
-        out.push(next);
-    }
-    out
-}
-
-/// Half of `img` (2 × 2 average; an odd last row or column is its own pair).
-fn half(img: &Rgba8) -> Rgba8 {
-    let (w, h) = (img.width, img.height);
-    let (nw, nh) = (w.div_ceil(2), h.div_ceil(2));
-    let px = |x: usize, y: usize| img.data.get(y.min(h - 1) * w + x.min(w - 1)).copied().unwrap_or([0; 4]);
-    let mut data = Vec::with_capacity(nw * nh);
-    for y in 0..nh {
-        for x in 0..nw {
-            let q = [px(2 * x, 2 * y), px(2 * x + 1, 2 * y), px(2 * x, 2 * y + 1), px(2 * x + 1, 2 * y + 1)];
-            let c = |i: usize| ((q.iter().map(|p| u32::from(p[i])).sum::<u32>() + 2) / 4) as u8;
-            data.push([c(0), c(1), c(2), c(3)]);
-        }
-    }
-    Rgba8 { width: nw, height: nh, data }
-}
-
-/// Cut `img` and its smaller levels into textures of at most `tile` px a side, each with a pixel of its neighbours.
-pub fn cut(img: &Rgba8, tile: usize, from_disk: bool) -> Built {
-    let tile = tile.max(16);
-    let sizes = levels(img.width, img.height);
-    let mut tiles = Vec::new();
-    let mut smaller: Option<Rgba8> = None;
-    for (level, _) in sizes.iter().enumerate() {
-        let current = match (level, smaller.take()) {
-            (0, _) => None,
-            (_, Some(s)) => Some(s),
-            (_, None) => break,
-        };
-        let src = current.as_ref().unwrap_or(img);
-        if src.width == 0 || src.height == 0 {
-            break;
-        }
-        let (w, h) = (src.width, src.height);
-        for y in (0..h).step_by(tile) {
-            for x in (0..w).step_by(tile) {
-                let (tw, th) = (tile.min(w - x), tile.min(h - y));
-                let border = [usize::from(x > 0), usize::from(y > 0), usize::from(x + tw < w), usize::from(y + th < h)];
-                let (x0, y0) = (x - border[0], y - border[1]);
-                let (x1, y1) = (x + tw + border[2], y + th + border[3]);
-                let mut pixels = Vec::with_capacity((x1 - x0) * (y1 - y0));
-                for row in y0..y1 {
-                    let line = src.data.get(row * w + x0..row * w + x1).unwrap_or_default();
-                    pixels.extend(line.iter().map(|p| Color32::from_rgba_unmultiplied(p[0], p[1], p[2], p[3])));
-                }
-                let size = [x1 - x0, y1 - y0];
-                let image = egui::ColorImage { size, source_size: vec2(size[0] as f32, size[1] as f32), pixels };
-                tiles.push(TileImage { level: level as u8, rect: [x, y, tw, th], border, image: Arc::new(image) });
-            }
-        }
-        if level + 1 < sizes.len() {
-            smaller = Some(half(src));
-        }
-    }
-    Built { levels: sizes, tiles, from_disk }
-}
 
 /// A texture of the picture on the GPU.
 struct Tile {
@@ -216,11 +80,28 @@ struct Picture {
     waiting: Vec<TileImage>,
 }
 
+/// The build running now (one at a time).
+struct Running {
+    photo: PhotoId,
+    key: u64,
+    /// A render (else a look on disk).
+    render: bool,
+    cancel: Arc<AtomicBool>,
+    /// The store stopped it (another look, photo, the closed loupe), as opposed to the activity row's ✕.
+    by_us: bool,
+    /// Its row in the activity stack, while it renders.
+    _row: Option<lightcraft_engine::activity::TaskGuard>,
+}
+
 /// What is known about the picture's making, for `ui.inspect` and the tests.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
     /// Pictures rendered (not read from disk).
     pub rendered: u64,
+    /// Builds that came back after they were stopped, or for a closed loupe: nothing of them was kept.
+    pub dropped: u64,
+    /// Pictures let go to free memory.
+    pub freed_for_memory: u64,
     /// Pictures read from disk.
     pub from_disk: u64,
     /// Looks on disk that found nothing.
@@ -235,8 +116,8 @@ pub struct Store {
     /// Make pictures (off in the crate's tests unless a test turns it on; never on the web).
     pub enabled: bool,
     picture: Option<Picture>,
-    /// The photo and key asked for last, and whether it was a render (else a look on disk).
-    asked: Option<(PhotoId, u64, bool)>,
+    /// The build running (or queued) now.
+    running: Option<Running>,
     /// Keys with nothing on disk, and keys whose render gave no picture (not asked for again).
     disk_missed: Option<u64>,
     refused: Option<u64>,
@@ -246,6 +127,8 @@ pub struct Store {
     last_view: Option<(u8, [f32; 4])>,
     /// The loupe's last frame was drawn from the picture.
     pub on_screen: bool,
+    /// Its builds running at once (never more than one).
+    pub at_once: Arc<AtOnce>,
     pub stats: Stats,
 }
 
@@ -257,12 +140,39 @@ impl Store {
         Store { enabled: !off && !cfg!(test) && !cfg!(target_arch = "wasm32"), ..Default::default() }
     }
 
-    /// Let go of the picture and of what is being asked for.
+    /// Let go of the picture and stop the build running (it stops at its next band and its result is dropped).
     pub fn clear(&mut self) {
         self.picture = None;
-        self.asked = None;
+        self.cancel();
         self.rest = None;
         self.last_view = None;
+    }
+
+    /// Stop the build running, if one is.
+    pub fn cancel(&mut self) {
+        if let Some(r) = self.running.as_mut() {
+            r.by_us = true;
+            r.cancel.store(true, Ordering::Relaxed);
+        }
+    }
+
+    /// The build's job was dropped before it started: none is running.
+    pub fn job_dropped(&mut self) {
+        self.running = None;
+    }
+
+    /// Whether a picture is held or being made.
+    pub fn holds_anything(&self) -> bool {
+        self.picture.is_some() || self.running.is_some()
+    }
+
+    /// Let go of the picture to free memory (its disk copy stays). It is not asked for again until the look changes:
+    /// memory that is short now would be short again.
+    pub fn free_for_memory(&mut self) {
+        if let Some(p) = self.picture.take() {
+            self.refused = Some(p.key);
+            self.stats.freed_for_memory += 1;
+        }
     }
 
     /// The photo and key of the picture held, if one is.
@@ -282,17 +192,28 @@ impl Store {
             .map_or(0, |p| p.tiles.iter().map(|t| t.bytes).sum::<usize>() + p.waiting.iter().map(|t| t.image.pixels.len() * 4).sum::<usize>())
     }
 
-    /// A finished job of key `key` for `photo` (`built`: its picture, if it made one).
-    pub fn accept(&mut self, photo: PhotoId, key: u64, built: Option<Built>) {
-        let asked = self.asked.take();
+    /// A build of key `key` for `photo` came back (`built`: its picture, if it made one). `keep`: it is the request
+    /// now and the loupe is open; else, or when it was stopped, nothing of it is kept.
+    pub fn finished(&mut self, photo: PhotoId, key: u64, built: Option<Built>, keep: bool) {
+        let run = self.running.take();
+        let stopped = run.as_ref().is_none_or(|r| r.key != key || r.photo != photo || r.cancel.load(Ordering::Relaxed));
+        if !keep || stopped {
+            // (the activity row's ✕ on this look: not built again until it changes)
+            if let Some(r) = run.filter(|r| r.key == key && r.cancel.load(Ordering::Relaxed) && !r.by_us) {
+                self.refused = Some(r.key);
+            }
+            if built.is_some() || stopped {
+                self.stats.dropped += 1;
+            }
+            return;
+        }
         let Some(built) = built else {
-            match asked {
-                Some((_, k, false)) if k == key => {
+            match run {
+                Some(r) if !r.render => {
                     self.stats.disk_misses += 1;
                     self.disk_missed = Some(key);
                 }
-                Some((_, k, true)) if k == key => self.refused = Some(key),
-                _ => {}
+                _ => self.refused = Some(key),
             }
             return;
         };
@@ -333,11 +254,13 @@ impl Store {
             "textures": p.map_or(0, |p| p.tiles.len()),
             "waiting": p.map_or(0, |p| p.waiting.len()),
             "bytes": self.bytes(),
-            "asked": self.asked.map(|(_, _, render)| if render { "render" } else { "disk" }),
+            "running": self.running.as_ref().map(|r| if r.render { "render" } else { "disk" }),
             "rendered": self.stats.rendered,
             "fromDisk": self.stats.from_disk,
             "diskMisses": self.stats.disk_misses,
             "framesDrawn": self.stats.drawn,
+            "dropped": self.stats.dropped,
+            "freedForMemory": self.stats.freed_for_memory,
         })
     }
 
@@ -346,23 +269,24 @@ impl Store {
         self.picture.iter().flat_map(|p| p.tiles.iter()).filter_map(|t| Some((t.tex.id(), t.pixels.clone()?))).collect()
     }
 
-    /// The level to draw a picture of `long` px at `drawn` px: the smallest that is at least as big (minified by
-    /// less than 2×), else the full size.
-    fn level_for(levels: &[[usize; 2]], drawn: f32) -> u8 {
+    /// The level to draw at `drawn` px: the smallest that is at least as big, else the full size (magnified).
+    /// `None` when that level would be shrunk by more than [`MAX_SHRINK`] (a canvas smaller than when it was made).
+    fn level_for(levels: &[[usize; 2]], drawn: f32) -> Option<u8> {
         let mut best = 0;
         for (i, &[w, h]) in levels.iter().enumerate() {
-            if w.max(h) as f32 >= drawn {
+            if w.max(h) as f32 >= drawn * 0.999 {
                 best = i;
             }
         }
-        best as u8
+        let long = levels.get(best).map_or(0, |&[w, h]| w.max(h)) as f32;
+        (long <= drawn * MAX_SHRINK || best == 0 && long <= drawn).then_some(best as u8).or((long <= drawn).then_some(0))
     }
 
     /// The level to draw `photo` with `key` at `drawn_long` px, where `view` (fractions of the photo) is on screen:
     /// `Some` only when the picture is that look and every texture of the view is up.
     fn ready_for(&mut self, photo: PhotoId, key: u64, drawn_long: f32, view: [f32; 4]) -> Option<u8> {
         let p = self.picture.as_ref().filter(|p| p.photo == photo && p.key == key)?;
-        let level = Self::level_for(&p.levels, drawn_long);
+        let level = Self::level_for(&p.levels, drawn_long)?;
         self.last_view = Some((level, view));
         let size = *p.levels.get(level as usize)?;
         let covered = covered(p.tiles.iter().filter(|t| t.level == level).map(|t| t.rect), size, view);
@@ -403,10 +327,36 @@ pub fn picture_job(app: &mut LightcraftApp, id: PhotoId, size: [usize; 2], with_
     if job.settings.hdr.enabled {
         return None;
     }
-    let proof = app.ui.soft_proof.then_some(app.ui.proof);
-    let mut job = job.with_hidden_grading(app.ui.grading_hidden_for(id)).with_proof(proof).with_display(app.renderer.display().cloned());
+    let mut job = dress(app, id, job);
     job.key = Hasher128::new().str("full").u64(job.key).u64(app.renderer.display_id().unwrap_or(0)).u64(FORMAT).finish().0 as u64;
     Some(job)
+}
+
+/// `job` as the loupe shows the photo: for the display in use, proofed and with the wheels hidden as the view is.
+fn dress(app: &LightcraftApp, id: PhotoId, job: RenderJob) -> RenderJob {
+    let proof = app.ui.soft_proof.then_some(app.ui.proof);
+    job.with_hidden_grading(app.ui.grading_hidden_for(id)).with_proof(proof).with_display(app.renderer.display().cloned())
+}
+
+/// The bands the picture of `whole` (its job, [`picture_job`]) renders in: about [`BAND_PX`] each, the zoom window's
+/// margin of context above and below. One band, the whole frame, for a small photo, or where a band can't be one
+/// render (what its spots read is too far).
+fn bands(app: &mut LightcraftApp, id: PhotoId, whole: &RenderJob, [w, h]: [usize; 2], with_crop: bool) -> Vec<Band> {
+    let one = || vec![Band { job: whole.clone(), rows: (0, h), top: 0 }];
+    let n = w.saturating_mul(h).div_ceil(BAND_PX).clamp(1, 8).min(h.max(1));
+    if n == 1 {
+        return one();
+    }
+    let margin = crate::region::margin_for(w.max(h));
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let (y0, y1) = (i * h / n, (i + 1) * h / n);
+        let (top, bottom) = (y0.saturating_sub(margin), y1.saturating_add(margin).min(h));
+        let window = lightcraft_pipeline::PixelWindow { x: 0, y: top, w, h: bottom - top };
+        let Some(job) = app.session.region_job(id, w, h, window, with_crop) else { return one() };
+        out.push(Band { job: dress(app, id, job), rows: (y0, y1), top });
+    }
+    out
 }
 
 /// What the loupe tells [`update`] about this frame.
@@ -438,9 +388,8 @@ pub fn update(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask) -> Option<u
         return None;
     }
     let store = &app.renderer.full;
-    if store.held().is_some_and(|(photo, _)| photo != a.id) || store.asked.is_some_and(|(photo, ..)| photo != a.id) {
-        app.renderer.full.clear();
-        app.renderer.forget(Slot::Full);
+    if store.held().is_some_and(|(photo, _)| photo != a.id) || store.running.as_ref().is_some_and(|r| r.photo != a.id) {
+        app.renderer.cancel_full();
     }
     if !a.eligible {
         app.renderer.full.rest = None;
@@ -448,11 +397,10 @@ pub fn update(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask) -> Option<u
     }
     let job = picture_job(app, a.id, a.native, a.with_crop)?;
     let key = job.key;
-    let store = &mut app.renderer.full;
-    // another look: the old picture is never drawn again, and what was being made for it is dropped
-    if store.held().is_some_and(|(_, k)| k != key) || store.asked.is_some_and(|(_, k, _)| k != key) {
-        store.clear();
-        app.renderer.forget(Slot::Full);
+    let store = &app.renderer.full;
+    // another look: the old picture is never drawn again, and what was being made for it stops
+    if store.held().is_some_and(|(_, k)| k != key) || store.running.as_ref().is_some_and(|r| r.key != key && !r.by_us) {
+        app.renderer.cancel_full();
     }
     let drawn_long = a.img_rect.width().max(a.img_rect.height()) * a.ppp;
     let view = fractions(a.img_rect, a.visible);
@@ -479,7 +427,8 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask, job: RenderJob, dr
         store.rest = None;
         return;
     }
-    if drawn || store.held().is_some() || store.asked.is_some() || store.refused == Some(key) {
+    // (one build at a time: a stopped one is waited for)
+    if drawn || store.held().is_some() || store.running.is_some() || store.refused == Some(key) {
         return;
     }
     let since = match store.rest {
@@ -491,7 +440,8 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask, job: RenderJob, dr
     };
     // (the picture's textures within the stage budget; the CPU copies an agent's headless screenshots read are not
     // counted, as for every other texture)
-    let px: usize = levels(a.native[0], a.native[1]).iter().map(|[w, h]| w * h).sum();
+    let fit = fit_long(a);
+    let px: usize = levels(a.native[0], a.native[1], fit).iter().map(|[w, h]| w * h).sum();
     let bytes = px.saturating_mul(4);
     if bytes > app.renderer.stage_budget() {
         return;
@@ -509,9 +459,22 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask, job: RenderJob, dr
         return;
     }
     let tile = TILE.min(a.texture_side.saturating_sub(2)).max(16);
-    store.asked = Some((a.id, key, render));
-    let plan = Plan { disk, size: a.native, tile, render };
+    let bands = if render { bands(app, a.id, &job, a.native, a.with_crop) } else { Vec::new() };
+    let cancel = Arc::new(AtomicBool::new(false));
+    let row = render.then(|| app.session.activity.start("full-picture", ROW, lightcraft_engine::activity::Cancel::Flag(cancel.clone())));
+    app.renderer.full.running = Some(Running { photo: a.id, key, render, cancel: cancel.clone(), by_us: false, _row: row });
+    let at_once = app.renderer.full.at_once.clone();
+    let plan = Plan { disk, size: a.native, tile, min_edge: fit, bands, cancel, at_once };
     app.renderer.request_full(job, plan);
+}
+
+/// The photo's long edge as drawn at Fit in the loupe's view (px): the smallest level kept is the first at least
+/// this long.
+fn fit_long(a: &Ask) -> usize {
+    let [w, h] = a.native;
+    let s = (a.visible.width() * a.ppp / w.max(1) as f32).min(a.visible.height() * a.ppp / h.max(1) as f32).min(1.0);
+    let long = w.max(h) as f32 * s;
+    if long.is_finite() { long.max(1.0) as usize } else { w.max(h) }
 }
 
 /// The part of `img` (the photo as drawn) inside `visible`, as fractions `[x0, y0, x1, y1]` of the photo.

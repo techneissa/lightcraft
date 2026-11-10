@@ -237,17 +237,23 @@ impl DiskCache {
         if made {
             let _ = std::fs::write(self.dir.join(TAG), TAG_TEXT);
         }
-        // Serialize the file replacement and its size accounting. A repeated render of
-        // the same key replaces its file; it must not count as another cache entry.
-        let mut total = self.total.lock().unwrap_or_else(|e| e.into_inner());
-        let used = total.get_or_insert_with(|| self.scan().iter().map(|f| f.1).sum());
-        let old_len = std::fs::metadata(&p).map_or(0, |m| m.len());
+        // The temp file is written before the lock is taken: a full-size picture is some 100 MB, and the size
+        // asked for on the interface's thread ([`Self::size`]) must not wait for it.
         let tmp = p.with_extension(format!("tmp{:?}", std::thread::current().id()).replace(['(', ')'], ""));
         // a new temp file: an entry already under the name (a link planted in the cache would be
         // written through) is removed, never opened
         let _ = std::fs::remove_file(&tmp);
         let written = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp).and_then(|mut f| std::io::Write::write_all(&mut f, bytes));
-        if written.is_err() || std::fs::rename(&tmp, &p).is_err() {
+        if written.is_err() {
+            let _ = std::fs::remove_file(&tmp);
+            return None;
+        }
+        // Serialize the file replacement and its size accounting. A repeated render of
+        // the same key replaces its file; it must not count as another cache entry.
+        let mut total = self.total.lock().unwrap_or_else(|e| e.into_inner());
+        let used = total.get_or_insert_with(|| self.scan().iter().map(|f| f.1).sum());
+        let old_len = std::fs::metadata(&p).map_or(0, |m| m.len());
+        if std::fs::rename(&tmp, &p).is_err() {
             let _ = std::fs::remove_file(&tmp);
             return None;
         }
