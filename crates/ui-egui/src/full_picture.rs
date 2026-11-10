@@ -129,6 +129,11 @@ pub struct Store {
     pub on_screen: bool,
     /// Its builds running at once (never more than one).
     pub at_once: Arc<AtOnce>,
+    /// Bytes of its pictures still being written to disk ([`Plan::writing`]).
+    pub writing: Arc<std::sync::atomic::AtomicUsize>,
+    /// Make the next build's cut fail (tests).
+    #[cfg(test)]
+    pub fail_next: bool,
     pub stats: Stats,
 }
 
@@ -343,16 +348,26 @@ fn dress(app: &LightcraftApp, id: PhotoId, job: RenderJob) -> RenderJob {
     job.with_hidden_grading(app.ui.grading_hidden_for(id)).with_proof(proof).with_display(app.renderer.display().cloned())
 }
 
+/// The rows of context a band renders above and below itself, for a frame `long` px long: the zoom window's margin
+/// ([`crate::region::margin_for`]).
+fn band_margin(long: usize) -> usize {
+    crate::region::margin_for(long)
+}
+
 /// The bands the picture of `whole` (its job, [`picture_job`]) renders in: about [`BAND_PX`] each, the zoom window's
 /// margin of context above and below. One band, the whole frame, for a small photo, or where a band can't be one
 /// render (what its spots read is too far).
 fn bands(app: &mut LightcraftApp, id: PhotoId, whole: &RenderJob, [w, h]: [usize; 2], with_crop: bool) -> Vec<Band> {
-    let one = || vec![Band { job: whole.clone(), rows: (0, h), top: 0 }];
     let n = w.saturating_mul(h).div_ceil(BAND_PX).clamp(1, 8).min(h.max(1));
-    if n == 1 {
+    bands_of(app, id, whole, [w, h], with_crop, (n, band_margin(w.max(h))))
+}
+
+/// [`bands`], `n` of them with `margin` rows of context.
+fn bands_of(app: &mut LightcraftApp, id: PhotoId, whole: &RenderJob, [w, h]: [usize; 2], with_crop: bool, (n, margin): (usize, usize)) -> Vec<Band> {
+    let one = || vec![Band { job: whole.clone(), rows: (0, h), top: 0 }];
+    if n <= 1 {
         return one();
     }
-    let margin = crate::region::margin_for(w.max(h));
     let mut out = Vec::with_capacity(n);
     for i in 0..n {
         let (y0, y1) = (i * h / n, (i + 1) * h / n);
@@ -447,8 +462,13 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask, job: RenderJob, dr
     // counted, as for every other texture)
     let fit = fit_long(a);
     let px: usize = levels(a.native[0], a.native[1], fit).iter().map(|[w, h]| w * h).sum();
-    let bytes = px.saturating_mul(4);
+    // (a full-size copy still being written to disk is memory too)
+    let bytes = px.saturating_mul(4).saturating_add(app.renderer.full.writing.load(Ordering::SeqCst));
     if bytes > app.renderer.stage_budget() {
+        // (once the copy on its way to disk is written, the build may fit)
+        if app.renderer.full.writing.load(Ordering::SeqCst) > 0 {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
+        }
         return;
     }
     let disk = app.session.view_cache_key(a.id, a.with_crop).and_then(|view| {
@@ -474,8 +494,22 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask, job: RenderJob, dr
     let cancel = Arc::new(AtomicBool::new(false));
     let row = render.then(|| app.session.activity.start("full-picture", ROW, lightcraft_engine::activity::Cancel::Flag(cancel.clone())));
     app.renderer.full.running = Some(Running { photo: a.id, key, render, cancel: cancel.clone(), by_us: false, _row: row });
-    let at_once = app.renderer.full.at_once.clone();
-    let plan = Plan { disk, size: a.native, tile, min_edge: fit, bands, cancel, at_once };
+    let store = &mut app.renderer.full;
+    let (at_once, writing) = (store.at_once.clone(), store.writing.clone());
+    #[cfg(test)]
+    let fail_cut = std::mem::take(&mut store.fail_next);
+    let plan = Plan {
+        disk,
+        size: a.native,
+        tile,
+        min_edge: fit,
+        bands,
+        cancel,
+        at_once,
+        writing,
+        #[cfg(test)]
+        fail_cut,
+    };
     app.renderer.request_full(job, plan);
 }
 

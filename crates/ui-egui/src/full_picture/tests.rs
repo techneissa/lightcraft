@@ -246,3 +246,127 @@ fn the_build_waits_for_the_read_ahead_and_decodes_nothing_again() {
     assert_eq!(full.load(Ordering::SeqCst), 1, "the original is decoded once");
     assert_eq!(h.app.renderer.full.stats.rendered, 1);
 }
+
+// Given a build waiting at the memory gate (AI Denoise holds it for its whole run), when the look changes, then the
+// build stops there at once instead of waiting for the gate, and the new look's picture is built once the gate frees
+#[test]
+fn a_build_waiting_at_the_memory_gate_stops_when_the_look_changes() {
+    let fixture = RenderFixture::new("full-picture-gate", 1);
+    let mut h = loupe(&fixture, None);
+    // (the whole gate, as AI Denoise holds it; the loupe's own renders go past it, as interactive work does)
+    let gate = lightcraft_engine::memory::work_gate();
+    let held = gate.acquire(gate.usage().1.max(1));
+    assert!(h.step_until(SETTLE, row), "a build starts, and waits at the gate");
+    exec(&mut h, "develop.set", json!({"values": {"light.exposure": 0.5}}));
+    let stopped = h.step_until(SETTLE, |h| h.app.renderer.full.stats.dropped >= 1);
+    drop(held);
+    assert!(stopped, "the stopped build ended with the gate still held: {}", h.app.renderer.full.to_json());
+    until_ready(&mut h);
+    assert_eq!(h.app.renderer.full.stats.rendered, 1, "the new look's picture");
+}
+
+// Given a build whose cut panics, when it fails, then its row ends and nothing is held, and the next look builds
+#[test]
+fn a_build_that_panics_ends_its_row_and_the_next_look_builds() {
+    let fixture = RenderFixture::new("full-picture-panic", 1);
+    let mut h = loupe(&fixture, None);
+    h.app.renderer.full.fail_next = true;
+    assert!(h.step_until(SETTLE, row), "a build starts");
+    assert!(h.step_until(SETTLE, |h| !h.app.renderer.full.holds_anything()), "the failed build ends");
+    assert!(!row(&h), "its row ends");
+    exec(&mut h, "develop.set", json!({"values": {"light.exposure": 0.4}}));
+    until_ready(&mut h);
+    assert_eq!(h.app.renderer.full.stats.rendered, 1);
+}
+
+/// A small photo full of fine detail (leaves of noise, thin lines, hard edges), as a PNG in `dir`: `w × h` px.
+fn detailed_photo(dir: &std::path::Path, w: u32, h: u32) -> String {
+    let mut bytes = Vec::with_capacity((w * h * 4) as usize);
+    let mut seed = 0x2545_f491_4f6c_dd1du64;
+    for y in 0..h {
+        for x in 0..w {
+            seed ^= seed << 13;
+            seed ^= seed >> 7;
+            seed ^= seed << 17;
+            let noise = (seed & 0x3f) as f32 - 32.0;
+            let lines = if (x / 3 + y / 5) % 7 == 0 { 70.0 } else { 0.0 };
+            let block = if (x / 96 + y / 64) % 2 == 0 { 40.0 } else { -20.0 };
+            let base = 90.0 + 60.0 * (x as f32 / w as f32) + block + lines;
+            let c = |v: f32| v.clamp(0.0, 255.0) as u8;
+            bytes.extend_from_slice(&[c(base + noise), c(base * 0.8 + noise * 0.5 + 30.0 * (y as f32 / h as f32)), c(base * 0.6 - noise), 255]);
+        }
+    }
+    let image = lightcraft_codecs::EncodeImage::new(w, h, 4, lightcraft_codecs::Samples::U8(&bytes));
+    let png = lightcraft_codecs::encode_png(&image, &lightcraft_codecs::EncodeMeta::default()).expect("encode the PNG");
+    let path = dir.join("detailed.png");
+    std::fs::write(&path, png).expect("write the PNG");
+    path.to_string_lossy().into_owned()
+}
+
+// Given a photo with strong Clarity, Dehaze and Texture, a feathered mask and a spot across a band edge, when its
+// picture is rendered in bands, at the narrowest margin bands get (4.5 % of the long edge, about 2.25 σ of the wide
+// planes) and at the margin they use here, then no band edge shows: the step from the row above it to the row below
+// is the whole frame's, give or take a fraction of a code over the row. (A band is a window render: Dehaze and Clarity
+// come from the whole frame at reduced size there, as in a zoom window, so single pixels differ from the whole frame
+// by as much inside a band as at its edge, whatever the margin.)
+#[test]
+fn bands_match_the_whole_frame_at_their_seams() {
+    let dir = std::env::temp_dir().join(format!("lc-full-seams-{}-{}", std::process::id(), lightcraft_preview::next_tick()));
+    std::fs::create_dir_all(&dir).expect("a scratch folder");
+    let size = [1536usize, 1024];
+    let path = detailed_photo(&dir, size[0] as u32, size[1] as u32);
+    let mut session = lightcraft_engine::Session::new().with_fs();
+    let id = session.catalog.alloc_photo_id();
+    let photo =
+        lightcraft_catalog::Photo::new(id, lightcraft_catalog::Source::File { path }, "DETAILED.PNG", "PNG", 1536, 1024, "2026-01-01T10:00:00");
+    session.catalog.apply(lightcraft_catalog::Op::AddPhoto { photo: Box::new(photo) }).expect("add the photo");
+    session.keep_active_in_view();
+    session.selection = lightcraft_engine::Selection::single(id);
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    let r = h.request("ui.set", json!({"view": "detail", "right": "none", "filmstrip": false}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    exec(&mut h, "develop.set", json!({"values": {"effects.clarity": 100, "effects.dehaze": 80, "effects.texture": 100}}));
+    // (three bands, edges at rows 341 and 682: the mask's feather and the spot cross them)
+    exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.333], "feather": 80}));
+    exec(&mut h, "mask.adjust", json!({"values": {"exposure": 1.0, "clarity": 60}}));
+    exec(&mut h, "spot.add", json!({"mode": "heal", "points": [[0.4, 0.666]], "size": 0.03, "source": [0.0, 0.08]}));
+    assert!(h.settle(SETTLE), "the edits settle");
+    let whole = super::picture_job(&mut h.app, id, size, true).expect("the picture's job");
+    let reference = whole.clone().run().rendered.expect("the whole frame").image;
+    let long = size[0].max(size[1]);
+    for margin in [(long as f64 * 0.045).round() as usize, super::band_margin(long)] {
+        let bands = super::bands_of(&mut h.app, id, &whole, size, true, (3, margin));
+        let edges: Vec<usize> = bands.iter().skip(1).map(|b| b.rows.0).collect();
+        assert_eq!(edges, [341, 682], "three bands");
+        let plan = super::Plan {
+            disk: None,
+            size,
+            tile: super::TILE,
+            min_edge: long,
+            bands,
+            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            at_once: Arc::default(),
+            writing: Arc::default(),
+            fail_cut: false,
+        };
+        let banded = super::build::render(&plan).1.expect("the banded picture");
+        let px = |img: &lightcraft_raster::Rgba8, x: usize, y: usize, c: usize| f64::from(img.data[y * size[0] + x][c]);
+        // the step a band edge adds, per pixel and as the mean over its row (a seam is a step in tone along the row)
+        let (mut most, mut tone) = (0f64, 0f64);
+        for &e in &edges {
+            for c in 0..3 {
+                let steps: Vec<f64> = (0..size[0])
+                    .map(|x| (px(&banded, x, e, c) - px(&banded, x, e - 1, c)) - (px(&reference, x, e, c) - px(&reference, x, e - 1, c)))
+                    .collect();
+                most = steps.iter().fold(most, |m, d| m.max(d.abs()));
+                tone = tone.max((steps.iter().sum::<f64>() / size[0] as f64).abs());
+            }
+        }
+        eprintln!(
+            "band margin {margin} px: the step at a band edge differs from the whole frame's by {tone:.2} codes over the row, {most} at most in one pixel"
+        );
+        assert!(tone <= 0.5, "margin {margin}: a band edge shows, a step of {tone:.2} codes over the row");
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

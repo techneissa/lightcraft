@@ -38,6 +38,11 @@ pub struct Plan {
     pub cancel: Arc<AtomicBool>,
     /// The builds of this store running now, and the most that ever ran at once (never two).
     pub at_once: Arc<AtOnce>,
+    /// Bytes of full-size pictures waiting to be written to disk (counted in the memory a new build may take).
+    pub writing: Arc<std::sync::atomic::AtomicUsize>,
+    /// Make the cut fail (tests: a build that panics).
+    #[cfg(test)]
+    pub fail_cut: bool,
 }
 
 /// Builds running at once ([`Plan::at_once`]).
@@ -68,11 +73,14 @@ pub struct Built {
 
 /// The worker's part: the picture from disk, else rendered band by band, kept on disk and cut into textures. `job`
 /// stands for the whole picture (its key and photo; the result of a picture read from disk or not made).
+///
+/// A panic inside is a failed build (the activity row ends, and the next look builds), not a dead worker.
 pub fn work(job: RenderJob, plan: Plan) -> (RenderResult, Option<Built>) {
     let at_once = plan.at_once.clone();
     let now = at_once.now.fetch_add(1, Ordering::SeqCst) + 1;
     at_once.most.fetch_max(now, Ordering::SeqCst);
-    let out = make(job, plan);
+    let failed = job.clone();
+    let out = lightcraft_engine::guard::catch("the full-size view", || make(job, plan)).unwrap_or_else(|e| (failed.failed(e), None));
     at_once.now.fetch_sub(1, Ordering::SeqCst);
     out
 }
@@ -92,7 +100,7 @@ fn make(job: RenderJob, plan: Plan) -> (RenderResult, Option<Built>) {
     if plan.bands.is_empty() {
         return (job.failed("not on disk".into()), None);
     }
-    let (first, img) = lightcraft_engine::memory::in_background(|| render(&plan));
+    let (first, img) = render(&plan);
     // (the result stands for the whole picture: its request, key and photo, with the original the first band decoded)
     let first = match first {
         Some(mut r) => {
@@ -110,7 +118,7 @@ fn make(job: RenderJob, plan: Plan) -> (RenderResult, Option<Built>) {
         return (first, None);
     }
     if let Some((cache, key)) = plan.disk.clone() {
-        keep_on_disk(cache, key, img);
+        keep_on_disk(cache, key, img, plan.writing.clone());
     }
     (first, Some(built))
 }
@@ -121,7 +129,7 @@ fn near(img: &Rgba8, size: [usize; 2]) -> bool {
 
 /// Render the bands into one picture, stopping at the first band after a cancel. Returns the first band's result
 /// (it carries the original it decoded, for the session's cache) and the picture, if every band made its part.
-fn render(plan: &Plan) -> (Option<RenderResult>, Option<Rgba8>) {
+pub(super) fn render(plan: &Plan) -> (Option<RenderResult>, Option<Rgba8>) {
     let [w, h] = plan.size;
     let mut first: Option<RenderResult> = None;
     let mut out: Option<Rgba8> = None;
@@ -134,6 +142,12 @@ fn render(plan: &Plan) -> (Option<RenderResult>, Option<Rgba8>) {
         // (the original the first band decoded serves the others: decoded once)
         if let Some(src) = &decoded {
             job.source = src.clone();
+        }
+        // A band that reads the file first waits its turn at the memory gate, like other background work, and gives
+        // up there once the build is stopped: AI Denoise holds the gate for its whole run, and a build stopped by an
+        // edit must not wait for it. Past the gate the load takes its own place without queueing again.
+        if !wait_at_gate(&job, &plan.cancel) {
+            return (first, None);
         }
         let mut r = job.run();
         if decoded.is_none()
@@ -170,21 +184,39 @@ fn render(plan: &Plan) -> (Option<RenderResult>, Option<Rgba8>) {
     (first, out)
 }
 
-/// Write the picture to the disk cache off the worker: the textures go to the screen first.
+/// What a file load weighs at the memory gate per byte of the file (as the file loader weighs a full-size load).
+const GATE_WEIGHT: usize = 6;
+
+/// Wait at the memory gate for `job`'s file load, when it reads a file; `false` when `cancel` was set meanwhile.
+fn wait_at_gate(job: &RenderJob, cancel: &AtomicBool) -> bool {
+    let SourceRef::File { path, .. } = &job.source else { return true };
+    let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
+    // (held only for the wait: the load takes its own place, as interactive work, once it is this one's turn)
+    lightcraft_engine::memory::work_gate().acquire_unless(len.saturating_mul(GATE_WEIGHT), || cancel.load(Ordering::Relaxed)).is_some()
+}
+
+/// Write the picture to the disk cache off the worker: the textures go to the screen first. Its bytes count in
+/// `writing` until written.
 #[cfg(not(target_arch = "wasm32"))]
-fn keep_on_disk(cache: Arc<PreviewCache>, key: Hash128, img: Rgba8) {
+fn keep_on_disk(cache: Arc<PreviewCache>, key: Hash128, img: Rgba8, writing: Arc<std::sync::atomic::AtomicUsize>) {
+    let bytes = img.data.len().saturating_mul(4);
+    writing.fetch_add(bytes, Ordering::SeqCst);
+    let counted = writing.clone();
     let spawned = std::thread::Builder::new().name("lc-full-write".into()).spawn(move || {
         if let Some(disk) = cache.disk() {
             disk.put_full(key, &img);
         }
+        drop(img);
+        counted.fetch_sub(bytes, Ordering::SeqCst);
     });
     if spawned.is_err() {
+        writing.fetch_sub(bytes, Ordering::SeqCst);
         log::warn!("full-size picture: could not start its disk write");
     }
 }
 
 #[cfg(target_arch = "wasm32")]
-fn keep_on_disk(_: Arc<PreviewCache>, _: Hash128, _: Rgba8) {}
+fn keep_on_disk(_: Arc<PreviewCache>, _: Hash128, _: Rgba8, _: Arc<std::sync::atomic::AtomicUsize>) {}
 
 /// The sizes of the picture's levels: the full size, then each about 1.41× smaller than the one before, down to the
 /// first that is at least `min_edge` long. A view between two levels is drawn from the larger one, shrunk by the
@@ -255,6 +287,11 @@ pub fn shrink(img: &Rgba8, w: usize, h: usize) -> Rgba8 {
 /// Cut `img` and its smaller levels into textures of at most `plan.tile` px a side, each with a pixel of its
 /// neighbours. Stops (fewer levels) when the build is cancelled meanwhile.
 pub fn cut(img: &Rgba8, plan: &Plan, from_disk: bool) -> Built {
+    #[cfg(test)]
+    #[allow(clippy::panic)]
+    if plan.fail_cut {
+        panic!("a forced failure in the cut");
+    }
     let tile = plan.tile.max(16);
     let sizes = levels(img.width, img.height, plan.min_edge);
     let mut tiles = Vec::new();
