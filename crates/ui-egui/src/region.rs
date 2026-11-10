@@ -388,6 +388,13 @@ impl SizeHold {
         }
     }
 
+    /// The plan last applied for `photo` and the display fit last asked for (the sizes the loupe renders at now),
+    /// left as they are: while the finished full-size picture is drawn the whole frame is hidden under it and keeps
+    /// its sizes (#178).
+    pub fn held(&self, photo: lightcraft_catalog::PhotoId) -> Option<(LoupePlan, Option<[usize; 2]>)> {
+        self.plan.filter(|_| self.photo == Some(photo)).map(|plan| (plan, self.fit))
+    }
+
     /// Whether sizes are being held at `now` (the caller asks for a repaint when it ends).
     pub fn holding(&self, now: f64) -> bool {
         now < self.until

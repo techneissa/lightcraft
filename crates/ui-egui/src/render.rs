@@ -79,6 +79,8 @@ pub enum Slot {
     Alpha,
     /// The same for [`Slot::Region`].
     RegionAlpha,
+    /// The loupe's finished full-size picture (no texture of its own: [`crate::full_picture`]).
+    Full,
 }
 
 /// Settings that can change the rendered frame. Colour-only edits, including temporarily
@@ -161,6 +163,8 @@ struct Finished {
     look: Option<(u64, bool)>,
     result: RenderResult,
     color: Option<Arc<egui::ColorImage>>,
+    /// A [`Slot::Full`] job's picture, cut into textures.
+    full: Option<crate::full_picture::Built>,
 }
 
 /// Immutable identity captured when a request is submitted, not when its result is collected.
@@ -360,6 +364,11 @@ pub struct Renderer {
     draft_keys: std::collections::HashSet<u64>,
     /// Jobs finished since start (for inspect/perf).
     pub completed: u64,
+    /// Jobs started since start (each request that was not already current or pending): a view that only draws what
+    /// it has starts none.
+    pub started: u64,
+    /// The loupe's finished full-size picture (#178).
+    pub full: crate::full_picture::Store,
     /// Finished jobs thrown away because a newer request for their slot had replaced them.
     pub discarded: u64,
     /// Photos given a grid thumbnail since start (a render replacing a stand-in isn't counted again):
@@ -526,6 +535,8 @@ impl Renderer {
             last_full_ms: None,
             draft_keys: Default::default(),
             completed: 0,
+            started: 0,
+            full: crate::full_picture::Store::new(),
             discarded: 0,
             thumbs_made: 0,
             thumbs_counted: Default::default(),
@@ -786,7 +797,7 @@ impl Renderer {
                 stamp()
             );
         }
-        Finished { look: None, result: r, color }
+        Finished { look: None, result: r, color, full: None }
     }
 
     fn request_needed(&self, slot: Slot, key: u64, priority: u32) -> bool {
@@ -838,7 +849,7 @@ impl Renderer {
     /// Returns when to look again, if it is waiting.
     fn release_closed_loupe(&mut self, now: web_time::Instant) -> Option<std::time::Duration> {
         // (called at the start of a frame, before the loupe draws: it drew in the last one)
-        if self.loupe_frame + 1 >= self.frame || !self.stages.contains_key(&Slot::Main) {
+        if self.loupe_frame + 1 >= self.frame || !(self.stages.contains_key(&Slot::Main) || self.full.holds_anything()) {
             self.loupe_gone = None;
             return None;
         }
@@ -846,6 +857,10 @@ impl Renderer {
         let waited = now.saturating_duration_since(since);
         if waited < LOUPE_RELEASE {
             return Some(LOUPE_RELEASE - waited);
+        }
+        // the full-size picture goes, and the build that would make one stops (its disk copy stays)
+        if self.full.holds_anything() {
+            self.cancel_full();
         }
         if self.is_pending(Slot::Main) {
             return Some(LOUPE_RELEASE);
@@ -888,6 +903,7 @@ impl Renderer {
         if !self.request_needed(slot, job.key, priority) {
             return;
         }
+        self.started += 1;
         self.note_request(slot, job.key, priority, "requested", || render_subject(slot, job.photo, Some(&job.origin)));
         self.pending.insert(slot, (job.key, priority));
         if slot == Slot::Main && job.request.quality == lightcraft_engine::pipeline::Quality::Draft {
@@ -953,6 +969,49 @@ impl Renderer {
                 Finished { look, ..Self::run_for(run, &display) }
             }),
         );
+    }
+
+    /// Ask for the loupe's finished full-size picture (#178): `job` renders it, `plan` says where it is kept and
+    /// whether to render it or only look on disk. Its key is the picture's; one already asked for is not asked again.
+    pub fn request_full(&mut self, mut job: RenderJob, plan: crate::full_picture::Plan) {
+        if self.offload.is_some() || self.pending.get(&Slot::Full).is_some_and(|p| p.0 == job.key) {
+            return;
+        }
+        let priority = crate::full_picture::PRIORITY;
+        let render = !plan.bands.is_empty();
+        let what = if render { "requested" } else { "looked for on disk" };
+        self.note_request(Slot::Full, job.key, priority, what, || render_subject(Slot::Full, job.photo, Some(&job.origin)));
+        if render {
+            self.started += 1;
+        }
+        self.pending.insert(Slot::Full, (job.key, priority));
+        job.request_id = lightcraft_preview::next_tick();
+        self.requests.insert(Slot::Full, Requested { look: None, id: job.request_id, source: Some(job.origin.clone()) });
+        self.pool.submit(
+            Slot::Full,
+            job.key,
+            priority,
+            Box::new(move || {
+                let (result, full) = crate::full_picture::work(job, plan);
+                Finished { look: None, result, color: None, full }
+            }),
+        );
+    }
+
+    /// Stop the loupe's full-size picture: let go of the one held, drop its job when it hasn't started, and make one
+    /// that is running stop at its next band (its result is dropped when it comes back).
+    pub fn cancel_full(&mut self) {
+        self.full.clear();
+        if self.drop_queued(Slot::Full) {
+            self.full.job_dropped();
+        }
+        self.pending.remove(&Slot::Full);
+        self.requests.remove(&Slot::Full);
+    }
+
+    /// Whether jobs run through an offload ([`Self::set_offload`]).
+    pub fn has_offload(&self) -> bool {
+        self.offload.is_some()
     }
 
     /// Prepare a visible import preview at its size bucket, retaining a sharper existing texture.
@@ -1148,7 +1207,7 @@ impl Renderer {
             slot,
             key,
             priority,
-            Box::new(move || Finished { look: None, result: lightcraft_engine::memory::in_background(|| job.run()), color: None }),
+            Box::new(move || Finished { look: None, result: lightcraft_engine::memory::in_background(|| job.run()), color: None, full: None }),
         );
     }
 
@@ -1194,10 +1253,13 @@ impl Renderer {
         self.shown_ids.clear();
         self.epoch = lightcraft_preview::next_tick();
         self.preview_generation = None;
-        self.pool.reprioritize(|_, _| None);
+        if self.pool.reprioritize(|_, _| None).contains(&Slot::Full) {
+            self.full.job_dropped();
+        }
         self.thumb_inputs.clear();
         self.embedded_thumbs.clear();
         self.textures.clear();
+        self.full.clear();
         self.stages.clear();
         self.quick_tried.clear();
         self.failed.clear();
@@ -1466,7 +1528,12 @@ impl Renderer {
         };
         #[cfg(not(target_arch = "wasm32"))]
         let inline_ms = 0.0;
-        let changed = self.collect(ctx, session, inline_ms);
+        let mut changed = self.collect(ctx, session, inline_ms);
+        // (the full-size picture's textures go up one a frame: a frame that uploaded them all would stall)
+        if self.full.upload_some(ctx, self.keep_pixels) {
+            ctx.request_repaint();
+            changed = true;
+        }
         self.evict_variants();
         #[cfg(not(target_arch = "wasm32"))]
         self.trim_when_idle(ctx);
@@ -1502,17 +1569,22 @@ impl Renderer {
         }
     }
 
-    /// The jobs the pool and the offload finished: (slot, result, texture pixels, look, ms).
+    /// The jobs the pool and the offload finished: (slot, result, texture pixels, look, ms), and a full-size
+    /// picture's textures.
     #[allow(clippy::type_complexity)]
-    fn take_finished(&mut self, inline_ms: f64) -> Vec<(Slot, RenderResult, Option<Arc<egui::ColorImage>>, Option<(u64, bool)>, f64)> {
+    fn take_finished(
+        &mut self,
+        inline_ms: f64,
+    ) -> Vec<((Slot, RenderResult, Option<Arc<egui::ColorImage>>, Option<(u64, bool)>, f64), Option<crate::full_picture::Built>)> {
         let mut finished = Vec::new();
         while let Some(done) = self.pool.try_recv() {
-            finished.push((done.slot, done.result.result, done.result.color, done.result.look, if done.ms > 0.0 { done.ms } else { inline_ms }));
+            let ms = if done.ms > 0.0 { done.ms } else { inline_ms };
+            finished.push(((done.slot, done.result.result, done.result.color, done.result.look, ms), done.result.full));
         }
         if let Some(off) = self.offload.as_mut() {
             finished.extend(off.finished().into_iter().map(|(slot, r, ms)| {
                 let look = self.offload_looks.remove(&r.request_id);
-                (slot, r, None, look, ms)
+                ((slot, r, None, look, ms), None)
             }));
         }
         finished
@@ -1617,8 +1689,13 @@ impl Renderer {
         let finished = self.take_finished(inline_ms);
         self.dispatch();
         let mut changed = false;
-        for (mut slot, mut r, mut color, completed_look, ms) in finished {
+        for ((mut slot, mut r, mut color, completed_look, ms), full) in finished {
             self.completed += 1;
+            if slot == Slot::Full {
+                self.accept_full(session, &r, full, ms);
+                changed = true;
+                continue;
+            }
             // made for another display profile than the one in use: obsolete
             if r.display.is_some_and(|id| Some(id) != self.display_id()) {
                 self.decided(|| {
@@ -1700,21 +1777,8 @@ impl Renderer {
             if matches!(slot, Slot::Prefetch(_)) {
                 continue;
             }
-            // the planes a tint is drawn from: no texture
-            if let Some(shown) = match slot {
-                Slot::Alpha => Some(Slot::Main),
-                Slot::RegionAlpha => Some(Slot::Region),
-                _ => None,
-            } {
-                self.tints.note(shown, r.key, r.mask_planes.clone());
-                changed = true;
-                continue;
-            }
-            if slot == Slot::HdrHistogram {
-                if rendered.histogram.hdr.is_some() {
-                    self.live_hdr_histogram = Some((r.photo, r.key, rendered.histogram));
-                    changed = true;
-                }
+            if let Some(shown) = self.take_textureless(slot, (r.photo, r.key), &r.mask_planes, &rendered) {
+                changed |= shown;
                 continue;
             }
             if let Slot::ThumbQuick(id) = slot {
@@ -1796,6 +1860,56 @@ impl Renderer {
         changed
     }
 
+    /// A result that makes no texture: the planes a tint is drawn from, a live HDR histogram. `Some(whether it
+    /// changed what is shown)` for those, `None` for every other slot.
+    fn take_textureless(
+        &mut self,
+        slot: Slot,
+        (photo, key): (PhotoId, u64),
+        planes: &Option<Arc<lightcraft_engine::media::MaskPlanes>>,
+        rendered: &lightcraft_pipeline::Rendered,
+    ) -> Option<bool> {
+        if let Some(shown) = match slot {
+            Slot::Alpha => Some(Slot::Main),
+            Slot::RegionAlpha => Some(Slot::Region),
+            _ => None,
+        } {
+            self.tints.note(shown, key, planes.clone());
+            return Some(true);
+        }
+        if slot != Slot::HdrHistogram {
+            return None;
+        }
+        if rendered.histogram.hdr.is_none() {
+            return Some(false);
+        }
+        self.live_hdr_histogram = Some((photo, key, rendered.histogram.clone()));
+        Some(true)
+    }
+
+    /// A [`Slot::Full`] job came back: its picture, if it made one, is the loupe's when it is the request now and the
+    /// loupe was drawn in the last frame (a picture that comes back to a closed loupe is not kept; its disk copy is).
+    fn accept_full(&mut self, session: &mut Session, r: &RenderResult, full: Option<crate::full_picture::Built>, ms: f64) {
+        let current = self.requests.get(&Slot::Full).is_some_and(|q| q.id == r.request_id);
+        let source = if current { self.requests.remove(&Slot::Full).and_then(|q| q.source) } else { None };
+        // (the original it decoded serves the loupe's next renders either way)
+        session.accept(r);
+        if current && self.pending.get(&Slot::Full).is_some_and(|p| p.0 == r.key) {
+            self.pending.remove(&Slot::Full);
+        }
+        let open = self.loupe_frame + 1 >= self.frame;
+        let source = source.as_ref();
+        self.decided(|| {
+            let how = match &full {
+                Some(b) if b.from_disk => "read from disk".to_string(),
+                Some(_) => format!("produced in {ms:.0} ms"),
+                None => r.rendered.as_ref().err().cloned().unwrap_or_default(),
+            };
+            format!("{}: {how}", render_subject(Slot::Full, r.photo, source))
+        });
+        self.full.finished(r.photo, r.key, full, current && open);
+    }
+
     /// Free the GPU renderer's recycled buffers once nothing has rendered for [`IDLE_TRIM`] (they
     /// are reallocated by the next render; while working, renders reuse them). A zoomed view
     /// showing its windows is not idle: the device copy of the original they are cut from stays for
@@ -1836,6 +1950,13 @@ impl Renderer {
     /// Clear stage caches, least useful first, until what they hold fits [`Self::stage_budget`].
     fn trim_stages(&mut self) {
         let sizes: Vec<(Slot, usize)> = self.stages.iter().map(|(slot, c)| (*slot, c.bytes() + lightcraft_engine::gpu::stage_bytes(c))).collect();
+        // the full-size picture counts with them and goes first, its disk copy kept: past the point where the open
+        // photo's own view caches would go (a runaway), or alone over the budget (a budget made smaller)
+        let full = self.full.bytes();
+        let held = sizes.iter().map(|(_, b)| *b).fold(full, usize::saturating_add);
+        if full > 0 && (held > self.stage_budget().saturating_mul(HARD_FACTOR) || full > self.stage_budget()) {
+            self.full.free_for_memory();
+        }
         for slot in stage_trim_order(&sizes, self.stage_budget()) {
             if let Some(c) = self.stages.get(&slot) {
                 c.clear();
@@ -1853,6 +1974,7 @@ impl Renderer {
         serde_json::json!({
             "stageCaches": {"count": self.stages.len(), "cpuBytes": cpu, "gpuBytes": gpu, "budgetBytes": self.stage_budget(), "trimmed": self.stages_trimmed, "sharedSourceBytes": lightcraft_engine::gpu::shared_source_bytes()},
             "textures": {"count": self.textures.len(), "bytes": tex, "cpuCopyBytes": copies, "maskTintBytes": self.tints.bytes()},
+            "fullPicture": self.full.to_json(),
         })
     }
 
@@ -1869,6 +1991,7 @@ impl Renderer {
                 };
                 Some((t.id(), crate::softpaint::CpuTexture::linear(pixels)))
             })
+            .chain(self.full.cpu_textures().into_iter().map(|(id, pixels)| (id, crate::softpaint::CpuTexture::linear(pixels))))
             .collect()
     }
 

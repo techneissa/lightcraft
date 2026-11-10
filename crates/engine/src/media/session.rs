@@ -369,6 +369,17 @@ impl crate::Session {
         Some(job)
     }
 
+    /// The key the loupe's view render of photo `id` is kept under for its settings now ([`Self::loupe_job`]): its
+    /// file's content, settings, crop, process version and the camera, local, lens and denoise inputs. Stable across
+    /// sessions; the loupe's finished full-size picture is kept on disk under it and its render's own key (#178).
+    pub fn view_cache_key(&mut self, id: PhotoId, apply_crop: bool) -> Option<Hash128> {
+        let p = self.catalog.photo(id)?;
+        let profile_salt = self.media.camera_profile_salt(&p.develop.profile.id);
+        let hash = self.media.settings_hashes.get(id, &p.develop);
+        let salt = self.media.denoise_salt(id, &p.develop) ^ self.retouch_salt(p, &p.develop).rotate_left(53);
+        Some(Self::view_key_with(p, hash, apply_crop, profile_salt, salt))
+    }
+
     /// A render of one window of the loupe's frame, for a view zoomed past what one whole-frame
     /// render can hold: the frame is `full_w × full_h` (the size the loupe would draw it at) and
     /// the result is `window`'s pixels of it, at that scale, from the source level that size needs.

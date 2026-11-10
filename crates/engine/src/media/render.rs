@@ -287,7 +287,8 @@ impl RenderJob {
     }
 
     /// This job's result when it fails with `e`.
-    fn failed(&self, e: String) -> RenderResult {
+    /// A result of this job without a picture: `e` says why.
+    pub fn failed(&self, e: String) -> RenderResult {
         RenderResult {
             request_id: self.request_id,
             source_key: self.source_key,

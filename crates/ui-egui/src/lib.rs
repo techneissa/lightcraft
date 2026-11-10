@@ -39,6 +39,7 @@ mod focus_scan;
 pub mod fork_update;
 mod frame_rate;
 pub mod full_decode;
+pub mod full_picture;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
