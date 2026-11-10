@@ -178,6 +178,10 @@ impl RawImage {
                     noise.sigma(0.01 * range),
                     n_cand - kept.len()
                 );
+            }
+            // Full-image sweeps for tuning the detector, one thread each: several times the pass itself, so kept
+            // out of `LIGHTCRAFT_PROFILE`, whose timings they would swamp (#182).
+            if std::env::var_os("LIGHTCRAFT_HOT_PIXEL_DEBUG").is_some() {
                 // the strongest excesses below the threshold, to see how far the dots are
                 let mut hist = [0usize; 12];
                 let mut buf2 = Vec::with_capacity(8);
@@ -306,18 +310,45 @@ fn noise_model(v: &View<'_>, (x0, x1, y0, y1): (usize, usize, usize, usize), bla
 }
 
 /// Photosites far above every same-colour neighbour, with the value to replace them by.
+///
+/// This visits every photosite, so it is written for speed (#182): the neighbours are read as `u16` through
+/// offsets into the row-major mosaic, most photosites stop at `s <= max`, and the rest stop at a bound before
+/// their neighbours are sorted. σ grows with the level and the median lies between the neighbours' minimum and
+/// maximum, so `s - max <= K_HOT · σ(min)` already means `s - max <= K_HOT · σ(median)`: the bound rejects only
+/// photosites the full test would reject, and the result is the same as [`candidates_reference`]'s.
 fn candidates(v: &View<'_>, (x0, x1, y0, y1): (usize, usize, usize, usize), black: f32, noise: Noise) -> Vec<(usize, usize, u16)> {
+    let w = v.w as isize;
     (y0..y1)
         .into_par_iter()
         .flat_map_iter(|y| {
+            // per column phase of this row: the neighbours' offsets from the photosite, in the mosaic
+            let offsets: Vec<Vec<isize>> =
+                (0..v.pw).map(|i| v.phases[(y % v.ph) * v.pw + i].same.iter().map(|&(dx, dy)| dy * w + dx).collect()).collect();
             let mut buf = Vec::with_capacity(8);
             let mut out = Vec::new();
+            let mut px = x0 % v.pw;
             for x in x0..x1 {
-                let s = v.at(x as isize, y as isize);
-                let max = v.neighbours(x, y, &mut buf);
+                let at = (y * v.w + x) as isize;
+                let offs = &offsets[px];
+                px += 1;
+                if px == v.pw {
+                    px = 0;
+                }
+                let Some(&s) = v.d.get(at as usize) else { continue };
+                let (mut max, mut min) = (0u16, u16::MAX);
+                for &o in offs {
+                    let n = v.d.get((at + o) as usize).copied().unwrap_or(0);
+                    max = max.max(n);
+                    min = min.min(n);
+                }
                 if s <= max {
                     continue;
                 }
+                let (s, max) = (s as f32, max as f32);
+                if s - max <= K_HOT * noise.sigma(min as f32 - black) {
+                    continue;
+                }
+                v.neighbours(x, y, &mut buf);
                 let m = median(&mut buf);
                 if s - max > K_HOT * noise.sigma(m - black) {
                     out.push((x, y, m.round().clamp(0.0, u16::MAX as f32) as u16));
@@ -326,6 +357,27 @@ fn candidates(v: &View<'_>, (x0, x1, y0, y1): (usize, usize, usize, usize), blac
             out
         })
         .collect()
+}
+
+/// [`candidates`] the plain way, one photosite at a time: the reference its result must equal.
+#[cfg(test)]
+fn candidates_reference(v: &View<'_>, (x0, x1, y0, y1): (usize, usize, usize, usize), black: f32, noise: Noise) -> Vec<(usize, usize, u16)> {
+    let mut buf = Vec::with_capacity(8);
+    let mut out = Vec::new();
+    for y in y0..y1 {
+        for x in x0..x1 {
+            let s = v.at(x as isize, y as isize);
+            let max = v.neighbours(x, y, &mut buf);
+            if s <= max {
+                continue;
+            }
+            let m = median(&mut buf);
+            if s - max > K_HOT * noise.sigma(m - black) {
+                out.push((x, y, m.round().clamp(0.0, u16::MAX as f32) as u16));
+            }
+        }
+    }
+    out
 }
 
 /// Are at least [`MIN_LIT`] direct neighbours of `(x, y)` clearly above their own same-colour surroundings
@@ -502,6 +554,43 @@ mod tests {
         assert_eq!(r.data, before);
         assert_eq!(r.suppress_hot_pixels_with(1e-4), 4);
         assert_eq!(r.clone().suppress_hot_pixels_with(f64::NAN), 0, "a limit that is not a number replaces nothing");
+    }
+
+    /// The fast candidate search (#182) finds the same photosites, with the same values, as the plain one: on noise
+    /// at several levels, a dark patch near black, hot photosites, a pair and a star, on two Bayer layouts.
+    #[test]
+    fn the_fast_search_finds_what_the_plain_one_does() {
+        for pattern in ["RGGB", "GBRG"] {
+            let mut r = mosaic(300, 260);
+            r.cfa = Cfa::bayer(pattern);
+            for y in 0..260 {
+                for x in 0..300 {
+                    let v = get(&r, x, y);
+                    // a gradient from near black to bright, so σ varies across the frame
+                    let scaled = 512.0 + (v as f32 - 512.0) * (0.02 + x as f32 / 120.0);
+                    set(&mut r, x, y, scaled.clamp(0.0, 16383.0) as u16);
+                }
+            }
+            for &(x, y, v) in &[(20, 20, 3000), (101, 60, 9000), (151, 151, 15000), (250, 200, 1200), (80, 80, 9000), (80, 81, 8000)] {
+                set(&mut r, x, y, v);
+            }
+            for dy in -1i32..=1 {
+                for dx in -1i32..=1 {
+                    set(&mut r, (200 + dx) as usize, (90 + dy) as usize, if dx == 0 && dy == 0 { 12000 } else { 5000 });
+                }
+            }
+            let Some(cfa) = r.cfa.clone() else { panic!("no CFA") };
+            let phases = super::phases(&cfa);
+            let RawData::U16(d) = &r.data else { panic!("not u16") };
+            let v = super::View { d, w: r.width, pw: cfa.width, ph: cfa.height, phases: &phases };
+            let area = (4, 296, 4, 256);
+            let range = 16383.0 - 512.0;
+            let Some(noise) = super::noise_model(&v, area, 512.0, range) else { panic!("no noise model") };
+            let fast = super::candidates(&v, area, 512.0, noise);
+            let plain = super::candidates_reference(&v, area, 512.0, noise);
+            assert!(fast.len() >= 6, "{pattern}: {} candidates", fast.len());
+            assert_eq!(fast, plain, "{pattern}");
+        }
     }
 
     #[test]
