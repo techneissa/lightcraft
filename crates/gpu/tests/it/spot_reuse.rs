@@ -89,7 +89,7 @@ fn temperature_and_tint_draw_no_spot_on_the_device() {
             lightcraft_pipeline::spots_keep::spots_after_wb_here(Some(after_wb));
             let cache = StageCache::default();
             let mut s = DevelopSettings { spots: spots(false), ..Default::default() };
-            let mut drawn = |s: &DevelopSettings| {
+            let drawn = |s: &DevelopSettings| {
                 let before = spots_drawn();
                 let img = lightcraft_gpu::render(&src, &info, s, &req, Some(&cache)).expect("gpu").image;
                 (spots_drawn() - before, img)
