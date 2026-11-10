@@ -51,6 +51,7 @@ mod fixed_slider_labels;
 mod focus_point;
 mod folder_drop;
 mod fork_update;
+mod full_decode;
 mod grading;
 mod grid;
 mod grid_drag;

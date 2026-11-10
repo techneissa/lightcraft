@@ -146,6 +146,7 @@ impl LightcraftApp {
             handoffs: Vec::new(),
             macos_job: None,
             tasks: Default::default(),
+            full_decode: Default::default(),
             last_export_result: None,
             slideshow_export_reported: true,
             animated_gif_reported: true,

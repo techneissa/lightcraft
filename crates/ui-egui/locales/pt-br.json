@@ -2443,5 +2443,6 @@
   "Clean Backdrop": "Limpar fundo",
   "Loading background picture": "Carregando a imagem de fundo",
   "Reading depth map": "Lendo o mapa de profundidade",
-  "Preparing the full-size view": "Preparando a visualização em tamanho real"
+  "Preparing the full-size view": "Preparando a visualização em tamanho real",
+  "Reading the full-size photo": "Lendo a foto em tamanho real"
 }

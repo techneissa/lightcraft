@@ -3858,5 +3858,6 @@
   "Clean Backdrop": "ფონის გასუფთავება",
   "Loading background picture": "ფონის სურათი იტვირთება",
   "Reading depth map": "სიღრმის რუკის წაკითხვა",
-  "Preparing the full-size view": "სრული ზომის ხედის მომზადება"
+  "Preparing the full-size view": "სრული ზომის ხედის მომზადება",
+  "Reading the full-size photo": "სრული ზომის ფოტო იკითხება"
 }
