@@ -32,7 +32,8 @@ struct Inner {
     /// store never keeps a photo alive, and a dropped source's address can't be taken again while this is held.
     source: Option<std::sync::Weak<Rgb32f>>,
     mattes: Option<Arc<Mattes>>,
-    slots: Vec<(u64, Arc<Buf>)>,
+    /// The alphas by key, with the frame (`plan.geo`) each was evaluated for.
+    slots: Vec<(u64, u64, Arc<Buf>)>,
     brushes: Vec<BrushPart>,
     /// The edges a stored selection follows (`masks::guide_plane` of the resampled photo) for the frame `plan.geo` keys.
     guide: Option<(u64, Arc<lightcraft_raster::Plane>)>,
@@ -59,7 +60,7 @@ impl AlphaStore {
     /// Hand every device buffer held to `add` (the caller counts each once).
     pub(crate) fn each(&self, mut add: impl FnMut(&Arc<Buf>)) {
         let g = self.lock();
-        g.slots.iter().for_each(|(_, b)| add(b));
+        g.slots.iter().for_each(|(_, _, b)| add(b));
         g.brushes.iter().for_each(|p| add(&p.plane));
     }
 }
@@ -261,7 +262,7 @@ pub(crate) fn masks(
     let keys = AlphaKeys { geo: plan.geo, image: plan.lin_key };
     for (mi, m) in list.iter().enumerate() {
         let key = alpha_key(m, keys, ev);
-        if let Some((_, buf)) = old.iter().find(|(k, _)| *k == key) {
+        if let Some((_, _, buf)) = old.iter().find(|(k, _, _)| *k == key) {
             cx.copy_into(buf, &alpha, mi * n);
             if !used.iter().any(|(k, _)| *k == key) {
                 used.push((key, buf.clone()));
@@ -389,7 +390,22 @@ pub(crate) fn masks(
     // (a render that failed is redone on the CPU: what it left on the device is not kept)
     if !crate::ctx::failed() {
         held.mattes = plan.mattes.clone();
-        held.slots = used;
+        // and after this render's, the alphas of earlier windows and scales (most recent first) up to the caps: a pan back
+        // or a zoom to a scale seen before finds its masks (issue #175)
+        // (of this frame only what the render used: an edited mask's earlier alpha goes)
+        let mut kept: Vec<(u64, u64, Arc<Buf>)> = used.into_iter().map(|(k, b)| (k, plan.geo, b)).collect();
+        let mut bytes = kept.iter().map(|(_, _, b)| b.len * 4).fold(0usize, usize::saturating_add);
+        for (k, g, b) in old {
+            if kept.len() >= lightcraft_pipeline::masks::KEPT_ALPHAS {
+                break;
+            }
+            if g == plan.geo || kept.iter().any(|(q, ..)| *q == k) || bytes.saturating_add(b.len * 4) > lightcraft_pipeline::masks::KEPT_ALPHA_BYTES {
+                continue;
+            }
+            bytes += b.len * 4;
+            kept.push((k, g, b));
+        }
+        held.slots = kept;
     }
     let terms = list
         .iter()

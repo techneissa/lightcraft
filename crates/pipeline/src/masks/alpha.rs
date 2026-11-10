@@ -177,6 +177,8 @@ pub struct AlphaKeys {
 pub struct AlphaCache {
     mattes: Option<Arc<Mattes>>,
     slots: Vec<(u64, Arc<MaskAlpha>)>,
+    /// The frame (`AlphaKeys::geo`) each of `slots` was evaluated for, by its key.
+    frames: Vec<(u64, u64)>,
     pub(super) brushes: BrushCache,
     /// The picture a stored selection's edges follow ([`guide_plane`]), and what it is made from.
     guide: Option<Guide>,
@@ -240,17 +242,48 @@ impl AlphaCache {
         if same { slots } else { Vec::new() }
     }
 
-    /// Hold `slots` (the alphas a render with `mattes` used), dropping everything else.
-    pub(super) fn keep(&mut self, mattes: Option<&Arc<Mattes>>, slots: Vec<(u64, Arc<MaskAlpha>)>) {
+    /// Hold `used` (the alphas a render of frame `geo` with `mattes` used) and, after them, the earlier ones in `rest` (most
+    /// recent first) of other frames, up to [`KEPT_ALPHAS`] and [`KEPT_ALPHA_BYTES`]: a pan back to an earlier window, or a
+    /// zoom back to an earlier scale, finds its masks (issue #175). Of this frame only what the render used is kept (an
+    /// edited mask's earlier alpha goes).
+    pub(super) fn keep(&mut self, mattes: Option<&Arc<Mattes>>, geo: u64, used: Vec<(u64, Arc<MaskAlpha>)>, rest: Vec<(u64, Arc<MaskAlpha>)>) {
         self.mattes = mattes.cloned();
+        let frame_of = |k: u64| self.frames.iter().find(|(q, _)| *q == k).map(|(_, g)| *g);
+        let mut frames: Vec<(u64, u64)> = used.iter().map(|(k, _)| (*k, geo)).collect();
+        let mut bytes = used.iter().map(|(_, a)| a.bytes()).fold(0usize, usize::saturating_add);
+        let mut slots = used;
+        for (k, a) in rest {
+            if slots.len() >= KEPT_ALPHAS {
+                break;
+            }
+            let b = a.bytes();
+            let Some(g) = frame_of(k).filter(|g| *g != geo) else { continue };
+            if slots.iter().any(|(q, _)| *q == k) || bytes.saturating_add(b) > KEPT_ALPHA_BYTES {
+                continue;
+            }
+            bytes += b;
+            slots.push((k, a));
+            frames.push((k, g));
+        }
         self.slots = slots;
+        self.frames = frames;
+    }
+
+    /// Each alpha held (its address and bytes): a cache counts an alpha shared by several of its entries once.
+    pub fn each_alpha(&self, mut f: impl FnMut(usize, usize)) {
+        self.slots.iter().for_each(|(_, a)| f(Arc::as_ptr(a) as usize, a.bytes()));
     }
 
     /// Memory held (bytes): the alphas and the brush parts' planes. A plane shared with a render in
     /// progress is counted here as well.
     pub fn bytes(&self) -> usize {
+        self.other_bytes() + self.slots.iter().map(|(_, a)| a.bytes()).sum::<usize>()
+    }
+
+    /// [`Self::bytes`] without the alphas ([`Self::each_alpha`]).
+    pub fn other_bytes(&self) -> usize {
         let guide = self.guide.as_ref().and_then(|g| g.plane.as_ref()).map_or(0, |p| p.data.len() * std::mem::size_of::<f32>());
-        self.slots.iter().map(|(_, a)| a.bytes()).sum::<usize>() + self.brushes.bytes() + guide
+        self.brushes.bytes() + guide
     }
 
     pub fn len(&self) -> usize {
@@ -261,6 +294,11 @@ impl AlphaCache {
         self.slots.is_empty()
     }
 }
+
+/// The most alphas a cache keeps: the last render's and the ones of earlier windows and scales of the view.
+pub const KEPT_ALPHAS: usize = 48;
+/// The most bytes of alphas a cache keeps (the last render's are kept whatever their size).
+pub const KEPT_ALPHA_BYTES: usize = 384 << 20;
 
 /// Whether the alpha of mask `m` reads the image (`.0`) and the global exposure (`.1`), beyond its
 /// own definition and the frame. Errs towards yes: a mask said to read something it doesn't is

@@ -21,7 +21,7 @@ mod people;
 mod planes;
 
 pub use alpha::note_evaluation;
-pub use alpha::{AlphaCache, AlphaKeys, MaskAlpha, alpha_key, guide_plane, mask_evaluations, reads, uses_guide};
+pub use alpha::{AlphaCache, AlphaKeys, KEPT_ALPHA_BYTES, KEPT_ALPHAS, MaskAlpha, alpha_key, guide_plane, mask_evaluations, reads, uses_guide};
 use alpha::{map_rows, zip_rows};
 pub use brush::{BRUSH_ENTRIES, BrushCache, BrushCtx, auto_pixels_filtered, brush_base, brush_chain, note_filtered, note_stroke, strokes_rasterized};
 pub use planes::{MaskWant, PlanesAsk, PlanesOut, planes_signature, wanted};
@@ -223,7 +223,8 @@ pub fn evaluate_cached(
             Evaluated { id: m.id, alpha, amount: amount_of(m), adjust: m.adjust }
         })
         .collect();
-    cache.keep(mattes, used);
+    let rest = old.into_iter().filter(|(k, _)| !used.iter().any(|(u, _)| u == k)).collect();
+    cache.keep(mattes, keys.geo, used, rest);
     out
 }
 

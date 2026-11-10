@@ -593,3 +593,54 @@ fn edits_after_the_masks_are_applied_build_no_alpha() {
     }
     assert!(failed.is_empty(), "{failed:#?}");
 }
+
+/// The masks survive a pan and a zoom: after windows elsewhere and another scale, a pan back to a window, or a zoom back to a
+/// scale, builds no mask again, on the device and on the CPU (issue #175: the cache held the last render's masks only), and
+/// the picture equals a fresh render.
+#[test]
+fn a_pan_back_or_a_zoom_back_builds_no_mask() {
+    use lightcraft_pipeline::PixelWindow;
+    let src = scene(1200, 800);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let subject =
+        lightcraft_develop::SegMask::from_logits(8, &(0..64).map(|i| if (2..6).contains(&(i % 8)) { 3.0 } else { -3.0 }).collect::<Vec<f32>>());
+    let s = with_masks(vec![
+        Mask {
+            id: 1,
+            components: vec![comp(MaskOp::Add, MaskShape::Brush { strokes: strokes(20, false, false) })],
+            adjust: adjust(),
+            ..Default::default()
+        },
+        Mask {
+            id: 2,
+            components: vec![comp(MaskOp::Add, MaskShape::Subject { seg: Some(subject), detail: Vec::new(), edge: 0.0 })],
+            adjust: adjust(),
+            ..Default::default()
+        },
+    ]);
+    let at = |long: usize, x: usize, y: usize| RenderRequest { window: Some(PixelWindow { x, y, w: 300, h: 200 }), ..RenderRequest::fit(long, long) };
+    // two windows at one scale, one at another, then back to each
+    let views = [at(1200, 100, 100), at(1200, 600, 400), at(2400, 900, 700), at(1200, 100, 100), at(2400, 900, 700), at(1200, 600, 400)];
+    for device in [false, true] {
+        if device && !gpu() {
+            continue;
+        }
+        let name = if device { "GPU" } else { "CPU" };
+        let cache = StageCache::default();
+        let run = |req: &RenderRequest, cache: Option<&StageCache>| -> Rgba8 {
+            match (device, cache) {
+                (true, c) => lightcraft_gpu::render(&src, &info, &s, req, c).expect("gpu").image,
+                (false, Some(c)) => lightcraft_pipeline::render_cached(&src, &info, &s, req, c).image,
+                (false, None) => render(&src, &info, &s, req).image,
+            }
+        };
+        for (k, req) in views.iter().enumerate() {
+            let before = mask_evaluations();
+            let warm = run(req, Some(&cache));
+            let built = mask_evaluations() - before;
+            assert_eq!(built, if k < 3 { 2 } else { 0 }, "{name}: view {k} built {built} masks");
+            let (mean, max) = diff(&warm, &run(req, None));
+            assert!(mean < 0.01 && max <= 1, "{name}: view {k} differs from a fresh render ({mean:.4}, {max})");
+        }
+    }
+}
