@@ -1471,17 +1471,40 @@ fn linear(
         keep.1 = lightcraft_pipeline::spots_keep::lin_cpu(&mut img, info, plan, kept.1);
         cx.gpu.upload(rgb_words(&img))
     } else {
-        // `lin_cpu`'s order: white balance, defringe, spots, red eye
-        let (out, k, r) = crate::spots_keep::spots(cx, info, plan, kept.0, |cx| {
+        // `lin_cpu`'s order: spots, white balance, defringe, red eye (issue #184); or in the old order, white balance,
+        // defringe, spots, red eye
+        let balanced = |cx: &mut Cx<'_>, img: &Buf| {
             let m = local::wb_matrix_for(info, s);
             let mut p = vec![m.is_some() as u32];
             p.extend(m.unwrap_or_default().iter().flatten().map(|v| v.to_bits()));
             let out = cx.gpu.buffer(n * 3);
-            map(cx, "wb_k", n, &p, [Some(sampled), None, None], &out);
+            map(cx, "wb_k", n, &p, [Some(img), None, None], &out);
             defringe(cx, out, plan)
-        });
-        keep.0 = k;
-        redone = r;
+        };
+        let out = if plan.spots_after_wb {
+            let (out, k, r) = crate::spots_keep::spots(cx, info, plan, kept.0, |cx| balanced(cx, sampled));
+            keep.0 = k;
+            redone = r;
+            out
+        } else {
+            let (spotted, k, r) = crate::spots_keep::spots(cx, info, plan, kept.0, |cx| cx.copy(sampled));
+            keep.0 = k;
+            // (what the spots rewrote changes after the white balance where they wrote, and defringe's radius around it)
+            let reach = lightcraft_pipeline::optics::defringe_params(s, plan.px_per_long / lightcraft_pipeline::optics::DEFRINGE_REF_LONG)
+                .map_or(0, |d| d.radius.saturating_add(1));
+            redone = r.map(|mut r| {
+                for b in &mut r.rects {
+                    *b = [
+                        b[0].saturating_sub(reach),
+                        b[1].saturating_sub(reach),
+                        b[2].saturating_add(reach).min(w),
+                        b[3].saturating_add(reach).min(h),
+                    ];
+                }
+                r
+            });
+            balanced(cx, &spotted)
+        };
         if plan.eyes.is_empty() {
             out
         } else {

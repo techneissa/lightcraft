@@ -602,6 +602,9 @@ pub struct Plan<'a> {
     /// The view's spots finished at this scale (issue #176, [`spots_scale`]): kept by a window that draws them, pasted
     /// by one whose spots are all kept.
     pub spots_at: spots_scale::At,
+    /// The Classic spots are drawn after the white balance, defringe and the local tone mapping, as before issue #184
+    /// ([`spots_keep::spots_after_wb`] when the plan was made); otherwise on the resampled source, with the LaMa spots.
+    pub spots_after_wb: bool,
 }
 
 /// The original's long edge in pixels (an original reported smaller than the source is the source).
@@ -688,6 +691,8 @@ pub fn plan_kept<'a>(
         }
     }
     let s = &*settings;
+    // (read once: every stage of this render draws its spots in one order)
+    let spots_after_wb = spots_keep::spots_after_wb();
     let frame = frame_for(src, info, s, req.apply_crop);
     let recolor =
         recolor::measure::references(src, info, s, &frame, req.space, native_long(info, src.width.max(src.height)), req.quality == Quality::Draft);
@@ -708,7 +713,15 @@ pub fn plan_kept<'a>(
         spots_at.store = Some(store.clone());
         // (the source's fingerprint keeps photos apart: views share the store)
         let source = spots_scale::fingerprint(src);
-        let at_scale = spots_scale::key(info, s, &frame, (full_w, full_h), px_per_long, (src_long, native_long), req.quality == Quality::Draft);
+        let at_scale = spots_scale::key(
+            info,
+            s,
+            &frame,
+            (full_w, full_h),
+            px_per_long,
+            (src_long, native_long),
+            (req.quality == Quality::Draft, spots_after_wb),
+        );
         spots_at.key = hash_of((at_scale, source));
         if s.spots.iter().any(spots_learned::is_learned) {
             spots_at.fill_base = spots_scale::fill_base(source, s, native_long);
@@ -785,6 +798,8 @@ pub fn plan_kept<'a>(
         req.quality == Quality::Draft && s.spots.iter().any(spots_learned::is_learned),
         // and the size a learned fill sees its crops at
         s.spots.iter().any(spots_learned::is_learned).then_some(native_long),
+        // and the order of the Classic spots and the white balance (issue #184)
+        spots_after_wb && !s.spots.is_empty(),
     ));
     let pre_nr_key = hash_of((pre_retouch_key, retouch_step::key(s, info)));
     let nr_key = hash_of((
@@ -843,6 +858,7 @@ pub fn plan_kept<'a>(
         full,
         retouch_analysis: None,
         spots_at,
+        spots_after_wb,
     };
     plan.retouch_analysis = retouch_step::analysis(src, info, &plan);
     plan
@@ -959,17 +975,32 @@ pub fn lin_cpu_pre_retouch(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
         spots_keep::lin_cpu_pre_retouch(img, info, p, None);
         return;
     }
-    // LaMa spots first, before the white balance: the learned fill then depends on the picture alone
-    let learned = learned_fill::current().filter(|_| s.spots.iter().any(spots_learned::is_learned));
-    let done = learned
-        .map(|l| spots_learned::apply(img, &s.spots, &p.frame, p.px_per_long, native_long(info, p.src_long) as f64, &*l, p.draft))
-        .unwrap_or_default();
-    // (before the white balance: the gain's input is the as-shot development, as in the file)
-    local_tone::apply(img, info, p);
-    local::white_balance(img, info, s);
-    optics::defringe(img, s, p.px_per_long / optics::DEFRINGE_REF_LONG);
-    spots::apply_except(img, &s.spots, &done, &p.frame, p.px_per_long);
+    if !p.spots_after_wb {
+        spots_on_source(img, info, p);
+        // (before the white balance: the gain's input is the as-shot development, as in the file)
+        spots_keep::before_classic(img, info, p);
+    } else {
+        let done = learned_spots(img, info, p);
+        spots_keep::before_classic(img, info, p);
+        spots::apply_except(img, &s.spots, &done, &p.frame, p.px_per_long);
+    }
     redeye::apply(img, &p.eyes);
+}
+
+/// The LaMa spots on the resampled source, before the white balance (the learned fill then depends on the picture
+/// alone); which of them drew.
+fn learned_spots(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Vec<bool> {
+    let s = &*p.settings;
+    let learned = learned_fill::current().filter(|_| s.spots.iter().any(spots_learned::is_learned));
+    learned
+        .map(|l| spots_learned::apply(img, &s.spots, &p.frame, p.px_per_long, native_long(info, p.src_long) as f64, &*l, p.draft))
+        .unwrap_or_default()
+}
+
+/// Every spot on the resampled source (issue #184's order): the LaMa ones, then the Classic ones on what they left.
+pub(crate) fn spots_on_source(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
+    let done = learned_spots(img, info, p);
+    spots::apply_except(img, &p.settings.spots, &done, &p.frame, p.px_per_long);
 }
 
 /// The settings a render of `s` for `req` uses: the HDR edit for an [`OutputDepth::F32Hdr`]
@@ -1419,6 +1450,8 @@ mod tests_sharpen_mask;
 mod tests_slider_strength;
 #[cfg(test)]
 mod tests_spot_hidden;
+#[cfg(test)]
+mod tests_spot_order;
 #[cfg(test)]
 mod tests_spot_reuse;
 #[cfg(test)]

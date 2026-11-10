@@ -168,6 +168,9 @@ pub struct AppSettings {
     /// Remove Hot Pixels leaves a raw alone when more than this share of its photosites, in percent, would be
     /// replaced (`app.hotPixelLimit`).
     pub hot_pixel_limit: f32,
+    /// Draw the Remove, Heal, Clone and Content-Aware spots after the white balance, as before issue #184
+    /// (`app.spotOrder`); off, they are drawn before it and Temperature and Tint draw none of them again.
+    pub spots_after_white_balance: bool,
     /// The Info panel's metadata fields with several photos selected: true (the default) shows the
     /// values the selected photos share and marks each field where they differ (Selected Photos),
     /// false shows the active photo's values (Target Photo) (`view.infoSelectedPhotos`).
@@ -282,6 +285,7 @@ impl Default for AppSettings {
             map_start_on_osm: false,
             smart_editing_offered: false,
             hot_pixel_limit: HOT_PIXEL_LIMIT_DEFAULT,
+            spots_after_white_balance: false,
             info_selected_photos: true,
             film_names: true,
             film_badges: true,

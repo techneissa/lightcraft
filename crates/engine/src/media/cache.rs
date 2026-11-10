@@ -102,6 +102,11 @@ impl MediaCache {
         }
     }
 
+    /// Forget the photos' remembered settings hashes: an app setting that [`crate::files::render_key`] holds changed.
+    pub fn clear_settings_hashes(&mut self) {
+        self.settings_hashes = SettingsHashes::default();
+    }
+
     /// Forget every decoded source (photo ids changed meaning, e.g. another library was opened).
     pub fn clear_sources(&mut self) {
         self.settings_hashes = SettingsHashes::default();

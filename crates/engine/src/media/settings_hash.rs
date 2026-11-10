@@ -23,7 +23,7 @@ impl SettingsHashes {
         {
             return *hash;
         }
-        let hash = settings.hash64() ^ crate::files::hot_pixel_key(settings);
+        let hash = settings.hash64() ^ crate::files::render_key(settings);
         #[cfg(test)]
         {
             self.computations += 1;

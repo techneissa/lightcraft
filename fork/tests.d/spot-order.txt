@@ -1,0 +1,5 @@
+# Classic spots before the white balance, the old order behind Settings ▸ Performance (issue #184)
+cargo test -p lightcraft-pipeline --lib -- tests_spot_order
+cargo test -p lightcraft-gpu --test it -- spot_reuse::temperature_and_tint
+cargo test -p lightcraft-engine --lib -- the_spot_order
+cargo test -p lightcraft-ui-egui --lib -- settings_sync

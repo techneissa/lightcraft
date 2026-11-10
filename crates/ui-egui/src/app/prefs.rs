@@ -56,6 +56,11 @@ impl LightcraftApp {
             // (a value the engine refuses, from a hand-edited file, leaves its limit as it was)
             let _ = self.session.execute("app.hotPixelLimit", &serde_json::json!({"percent": limit}));
         }
+        let after_wb = self.ui.settings.spots_after_white_balance;
+        if self.spot_order_applied != Some(after_wb) {
+            self.spot_order_applied = Some(after_wb);
+            let _ = self.session.execute("app.spotOrder", &serde_json::json!({"afterWhiteBalance": after_wb}));
+        }
         // the monitor profile (Settings ▸ Display): previews follow it from the next frame
         if self.display_applied.as_ref() != Some(&self.ui.settings.display_profile) {
             let path = self.ui.settings.display_profile.clone();

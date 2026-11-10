@@ -62,6 +62,8 @@ USAGE:
         --preset ID          apply a preset (see `commands`/presets.list)
         --size N             long edge in pixels (default: full size, cropped)
         --quality Q          JPEG/AVIF/JPEG XL quality 1..100 (default 92)
+        --spots-after-white-balance
+                             draw the spots after the white balance (the app's setting, `app.spotOrder`)
         --opt KEY=VALUE      any export option of `app.export`, repeatable (VALUE is JSON or a
                              string), e.g. --opt colorSpace=displayP3 --opt bitDepth=16
                              --opt percent=50 --opt shortEdge=1080 --opt ppi=300
@@ -754,10 +756,12 @@ fn render(args: &[String]) -> Result<(), String> {
     let mut size: Option<u64> = None;
     let mut quality = 92u8;
     let mut opts = serde_json::Map::new();
+    let mut after_wb = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
             "-o" | "--output" => output = Some(take_value(args, &mut i, "-o")?.to_string()),
+            "--spots-after-white-balance" => after_wb = true,
             "--set" => {
                 let kv = take_value(args, &mut i, "--set")?;
                 let (k, v) = kv.split_once('=').ok_or_else(|| format!("--set expects control=value, got `{kv}`"))?;
@@ -790,6 +794,7 @@ fn render(args: &[String]) -> Result<(), String> {
     let id = r["imported"][0].as_u64().ok_or_else(|| format!("{input}: not a readable photo"))?;
     let run = |s: &mut Session, cmd: &str, p: Value| s.execute(cmd, &p).map(|_| ()).map_err(|e| e.to_string());
     run(&mut s, "library.select", json!({"ids": [id], "active": id}))?;
+    run(&mut s, "app.spotOrder", json!({"afterWhiteBalance": after_wb}))?;
     if let Some(p) = preset {
         run(&mut s, "preset.apply", json!({"id": p}))?;
     }

@@ -304,11 +304,26 @@ pub fn specs() -> Vec<CommandSpec> {
                 let default = lightcraft_raw::HOT_PIXEL_MAX_SHARE;
                 let share = if (percent / 100.0 / default - 1.0).abs() < 1e-6 { default } else { percent / 100.0 };
                 if crate::files::set_hot_pixel_limit(share) {
-                    // decoded with the old limit, and their render keys change
+                    // decoded with the old limit, and their render keys change (renders already running save nothing)
                     s.media.clear_sources();
+                    s.media.rendered.advance();
                 }
             }
             Ok(json!({"percent": crate::files::hot_pixel_limit() * 100.0, "default": lightcraft_raw::HOT_PIXEL_MAX_SHARE * 100.0}))
+        }),
+        cmd!(query "app.spotOrder", "Spot Order", [], None, "{afterWhiteBalance?: bool} — draw Remove, Heal, Clone and Content-Aware spots after the white balance (the order before issue #184; Temperature and Tint then draw them again) or, by default, before it; returns {afterWhiteBalance}", always, |s, p| {
+            if let Some(v) = p.get("afterWhiteBalance").filter(|v| !v.is_null()) {
+                let Some(on) = v.as_bool() else {
+                    return Err(bad("app.spotOrder", "afterWhiteBalance must be true or false"));
+                };
+                if lightcraft_pipeline::spots_keep::set_spots_after_wb(on) {
+                    // (the render keys of photos with spots change: their remembered hashes go, and renders already
+                    // running in the other order save nothing, review F3)
+                    s.media.clear_settings_hashes();
+                    s.media.rendered.advance();
+                }
+            }
+            Ok(json!({"afterWhiteBalance": lightcraft_pipeline::spots_keep::spots_after_wb()}))
         }),
         cmd!(query "journal.list", "Command Journal", [], None, "{limit?}", always, |s, p| {
             let lim = p.get("limit").and_then(Value::as_u64).unwrap_or(100) as usize;

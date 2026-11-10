@@ -17,7 +17,7 @@ List: once Remove, Heal, Clone, Content-Aware and LaMa spots are drawn, a later 
 
 ## Not done
 
-- **Temperature and Tint** draw the Classic spots again: they are drawn after the white balance. Drawing them before it, as LaMa spots are, would change pictures a little.
+- **Temperature and Tint** draw no spot again since issue #184 (`fork/spot-order.md`), unless Settings asks for the old order.
 - **A drag's first draft** draws every spot at the draft's size once (later drafts and drags reuse it; LaMa takes its kept fill).
 - **A new scale** (a pinch level) draws its Classic spots once.
 
