@@ -71,37 +71,129 @@ impl Finals {
     }
 }
 
-/// A view's [`Finals`] (one scale at a time: the zoom's).
+/// Most scales a view keeps finished spots for (the zoom's 100 %, a pinch level or two, a draft's).
+pub const MAX_SCALES: usize = 4;
+
+/// Most bytes of LaMa fills a view keeps ([`KeptFill`]); past it the oldest is forgotten.
+pub const FILL_BYTES: usize = 256 << 20;
+
+/// A LaMa spot's fill as the model gave it, at the size it saw the crop (the original's pixels), with where that crop
+/// lay: a render of the spot at this scale or below takes it, resampled to its own crop, and never asks the model.
+#[derive(Clone, Debug)]
+pub struct KeptFill {
+    key: u64,
+    /// Output pixels per long edge of the render that asked for it.
+    ppl: f64,
+    /// That render's normalized coordinates to its pixels, and its crop's top-left there.
+    to_out: lightcraft_geom::Affine,
+    c0: (f64, f64),
+    /// Render pixels per fill pixel, across and down, and the fill's size.
+    k: (f64, f64),
+    size: (usize, usize),
+    out: Arc<Vec<f32>>,
+}
+
+impl KeptFill {
+    /// The fill of a `cw × ch` crop at `c0` of a render whose pixels `to_norm` maps to normalized coordinates, sampled
+    /// from this one between pixel centres.
+    pub fn resample(&self, to_norm: &lightcraft_geom::Affine, c0: (usize, usize), (cw, ch): (usize, usize)) -> Vec<f32> {
+        let (fw, fh) = self.size;
+        let mut out = Vec::with_capacity(cw * ch * 3);
+        let at = |x: usize, y: usize, c: usize| {
+            self.out.get((y.min(fh.saturating_sub(1)) * fw + x.min(fw.saturating_sub(1))) * 3 + c).copied().unwrap_or(0.0)
+        };
+        for y in 0..ch {
+            for x in 0..cw {
+                let n = to_norm.apply(lightcraft_geom::Point::new((c0.0 + x) as f64 + 0.5, (c0.1 + y) as f64 + 0.5));
+                let q = self.to_out.apply(n);
+                let fx = ((q.x - self.c0.0) / self.k.0 - 0.5).clamp(0.0, fw.saturating_sub(1) as f64);
+                let fy = ((q.y - self.c0.1) / self.k.1 - 0.5).clamp(0.0, fh.saturating_sub(1) as f64);
+                let (fx, fy) = (if fx.is_finite() { fx } else { 0.0 }, if fy.is_finite() { fy } else { 0.0 });
+                let (x0, y0) = (fx.floor() as usize, fy.floor() as usize);
+                let (tx, ty) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);
+                for c in 0..3 {
+                    let top = at(x0, y0, c) * (1.0 - tx) + at(x0 + 1, y0, c) * tx;
+                    let bottom = at(x0, y0 + 1, c) * (1.0 - tx) + at(x0 + 1, y0 + 1, c) * tx;
+                    out.push(top * (1.0 - ty) + bottom * ty);
+                }
+            }
+        }
+        out
+    }
+
+    fn bytes(&self) -> usize {
+        self.out.len() * 4
+    }
+}
+
+/// Where a render asked for a LaMa fill: its output pixels per long edge, its normalized coordinates to its pixels, its
+/// crop's top-left there, and render pixels per fill pixel across and down.
+#[derive(Clone, Copy, Debug)]
+pub struct FillAt {
+    pub ppl: f64,
+    pub to_out: lightcraft_geom::Affine,
+    pub c0: (usize, usize),
+    pub k: (f64, f64),
+}
+
+/// A view's [`Finals`], a few scales of them, and its LaMa fills ([`KeptFill`]).
 #[derive(Debug, Default)]
 pub struct FinalsStore {
-    v: Mutex<Option<Arc<Finals>>>,
+    v: Mutex<Vec<Arc<Finals>>>,
+    fills: Mutex<Vec<KeptFill>>,
 }
 
 impl FinalsStore {
-    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Arc<Finals>>> {
+    fn lock(&self) -> std::sync::MutexGuard<'_, Vec<Arc<Finals>>> {
         self.v.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    fn lock_fills(&self) -> std::sync::MutexGuard<'_, Vec<KeptFill>> {
+        self.fills.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     /// The finals kept under `key`.
     pub fn get(&self, key: u64) -> Option<Arc<Finals>> {
-        self.lock().clone().filter(|f| f.key == key)
+        self.lock().iter().find(|f| f.key == key).cloned()
     }
 
-    /// Forget them.
+    /// Forget them, and the fills.
     pub fn clear(&self) {
-        *self.lock() = None;
+        self.lock().clear();
+        self.lock_fills().clear();
     }
 
     /// Bytes held.
     pub fn bytes(&self) -> usize {
-        self.lock().as_ref().map_or(0, |f| f.bytes)
+        self.lock().iter().map(|f| f.bytes).sum::<usize>() + self.lock_fills().iter().map(KeptFill::bytes).sum::<usize>()
+    }
+
+    /// The fill kept for the LaMa spot `key` from a render at `ppl` or finer.
+    pub fn fill(&self, key: u64, ppl: f64) -> Option<KeptFill> {
+        self.lock_fills().iter().find(|f| f.key == key && f.ppl >= ppl * (1.0 - 1e-9)).cloned()
+    }
+
+    /// Keep the fill `out` (`size`, as the model gave it) of LaMa spot `key`, asked by a render `at`.
+    pub fn keep_fill(&self, key: u64, at: FillAt, size: (usize, usize), out: Arc<Vec<f32>>) {
+        let FillAt { ppl, to_out, c0, k } = at;
+        let f = KeptFill { key, ppl, to_out, c0: (c0.0 as f64, c0.1 as f64), k, size, out };
+        let mut v = self.lock_fills();
+        v.retain(|o| o.key != key);
+        if f.bytes() <= FILL_BYTES {
+            v.push(f);
+        }
+        while v.iter().map(KeptFill::bytes).sum::<usize>() > FILL_BYTES {
+            v.remove(0);
+        }
     }
 
     /// Add what a render found (`reach` of every spot, and the finished pixels of those it drew exactly) to what is kept
-    /// under `key` (pixels of one key are the same whichever render made them); another key replaces it.
+    /// under `key` (pixels of one key are the same whichever render made them); the oldest of more than [`MAX_SCALES`]
+    /// keys, or past [`MAX_BYTES`], is forgotten.
     fn merge(&self, key: u64, reach: &[Option<Reach>], found: Vec<Option<Arc<Vec<[f32; 3]>>>>) {
         let mut g = self.lock();
-        let old = g.clone().filter(|f| f.key == key && f.entries.len() == reach.len());
+        let old = g.iter().position(|f| f.key == key && f.entries.len() == reach.len()).map(|i| g.remove(i));
+        g.retain(|f| f.key != key);
         let entries: Vec<Entry> = reach
             .iter()
             .zip(found)
@@ -116,7 +208,12 @@ impl FinalsStore {
             })
             .collect();
         let bytes = entries.iter().map(|e| if let Entry::Exact(_, px) = e { px.len() * 12 } else { 0 }).sum();
-        *g = (bytes <= MAX_BYTES).then(|| Arc::new(Finals { key, entries, bytes }));
+        if bytes <= MAX_BYTES {
+            g.push(Arc::new(Finals { key, entries, bytes }));
+        }
+        while g.len() > MAX_SCALES || g.iter().map(|f| f.bytes).sum::<usize>() > MAX_BYTES {
+            g.remove(0);
+        }
     }
 }
 
@@ -132,6 +229,33 @@ pub struct At {
     pub origin: Option<(usize, usize)>,
     /// The finals this window pastes instead of drawing its spots.
     pub paste: Option<Arc<Finals>>,
+    /// What a LaMa spot's fill depends on besides the spots: the source and the geometry, never the scale ([`fill_key`]).
+    pub fill_base: u64,
+}
+
+/// [`At::fill_base`]: a fingerprint of the source (its size and a grid of its pixels) and the settings that place
+/// it (optics, geometry, crop, orientation, the sections' eyes), and the original's size.
+pub fn fill_base(src: &Rgb32f, s: &DevelopSettings, native_long: usize) -> u64 {
+    let (w, h) = (src.width, src.height);
+    let grid: Vec<[u32; 3]> = (0..64)
+        .filter_map(|i| src.data.get((i / 8 * h / 8 + h / 16).min(h.saturating_sub(1)) * w + (i % 8 * w / 8 + w / 16).min(w.saturating_sub(1))))
+        .map(|p| p.map(f32::to_bits))
+        .collect();
+    crate::hash_of((
+        (w, h),
+        grid,
+        format!("{:?}", (&s.optics, &s.geometry, &s.crop, &s.orientation)),
+        crate::spots_keep::pre_spot_sections(s),
+        native_long,
+    ))
+}
+
+/// The key of learned spot `i`'s fill: [`At::fill_base`] and the learned spots up to it (each is drawn on what the earlier
+/// ones left).
+pub fn fill_key(base: u64, spots: &[lightcraft_develop::Spot], i: usize) -> u64 {
+    let learned: Vec<String> =
+        spots.iter().take(i.saturating_add(1)).filter(|sp| crate::spots_learned::is_learned(sp)).map(|sp| format!("{sp:?}")).collect();
+    crate::hash_of((base, learned))
 }
 
 fn overlaps(a: &Rect, b: &Rect) -> bool {

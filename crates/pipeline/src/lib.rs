@@ -674,6 +674,16 @@ pub fn plan_kept<'a>(
     let mut fixed_air = None;
     let mut keep = None;
     let mut spots_at = spots_scale::At::default();
+    // (issue #176: a view keeps its spots' finished pixels per scale, and its LaMa fills for every scale)
+    let spotted = req.depth == OutputDepth::U8 && !s.spots.is_empty();
+    let store = kept.filter(|_| spotted);
+    if let Some(store) = store {
+        spots_at.store = Some(store.clone());
+        spots_at.key = spots_scale::key(info, s, &frame, (full_w, full_h), px_per_long, (src_long, native_long), req.quality == Quality::Draft);
+        if s.spots.iter().any(spots_learned::is_learned) {
+            spots_at.fill_base = spots_scale::fill_base(src, s, native_long);
+        }
+    }
     let full = (frame.clone(), full_w, full_h);
     let (frame, w, h) = match req.window {
         Some(win) => {
@@ -685,15 +695,8 @@ pub fn plan_kept<'a>(
             }
             // (spots grow the rendered window of 8-bit renders; a grown window is cut back to the request; a window
             // whose spots are kept at this scale pastes them instead, issue #176)
-            let spotted = req.depth == OutputDepth::U8 && !s.spots.is_empty();
-            let store = kept.filter(|_| spotted);
             if spotted {
                 spots_at.reach = Arc::new(spots_scale::reach(s, &frame, full_w, full_h, px_per_long));
-            }
-            if let Some(store) = store {
-                spots_at.store = Some(store.clone());
-                spots_at.key =
-                    spots_scale::key(info, s, &frame, (full_w, full_h), px_per_long, (src_long, native_long), req.quality == Quality::Draft);
             }
             let finals = store.and_then(|st| st.get(spots_at.key));
             let pasted = finals.as_ref().and_then(|f| {

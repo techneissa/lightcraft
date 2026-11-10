@@ -458,7 +458,10 @@ pub fn lin_cpu_pre_retouch(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, ke
             |_| {},
             |img, i| {
                 let (Some(pr), Some(sp)) = (provider.as_ref(), s.spots.get(i)) else { return false };
-                crate::spots_learned::apply_one(img, sp, &at, &**pr, &run)
+                // (the view's fills, for every scale and window: issue #176)
+                let base = p.spots_at.fill_base;
+                let kept = p.spots_at.store.as_deref().filter(|_| base != 0).map(|st| (st, crate::spots_scale::fill_key(base, &s.spots, i)));
+                crate::spots_learned::apply_one_kept(img, sp, &at, &**pr, &run, kept)
             },
         )
     });

@@ -232,6 +232,13 @@ fn a_pan_or_a_later_edit_asks_the_learned_fill_nothing() {
         }
         s.light.exposure = 0.7;
         assert_eq!(asked(&s, &at(610, 440)).0, 0, "Exposure, in a new window, asks nothing");
+        // a lower scale (a pinch level, the whole frame) takes the fill the finer one got; a finer one asks once
+        let lower = RenderRequest { window: Some(PixelWindow { x: 400, y: 300, w: 400, h: 300 }), ..RenderRequest::fit(1200, 900) };
+        assert_eq!(asked(&s, &lower).0, 0, "a window at a lower scale asks nothing");
+        assert_eq!(asked(&s, &RenderRequest::fit(800, 600)).0, 0, "the whole frame at a lower scale asks nothing");
+        let finer = RenderRequest { window: Some(PixelWindow { x: 1000, y: 750, w: 400, h: 300 }), ..RenderRequest::fit(2400, 1800) };
+        assert_eq!(asked(&s, &finer).0, 1, "a finer scale asks once");
+        assert_eq!(asked(&s, &lower).0, 0, "and the lower one still asks nothing");
     });
 }
 

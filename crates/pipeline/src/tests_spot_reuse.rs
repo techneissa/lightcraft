@@ -90,6 +90,25 @@ fn panning_and_zooming_at_one_scale_draws_no_spot_again() {
 }
 
 #[test]
+fn a_pan_back_and_another_scale_keep_the_spots() {
+    let (src, cache) = (scene(), StageCache::default());
+    let s = DevelopSettings { spots: spots(), ..Default::default() };
+    let small = |x: usize, y: usize| RenderRequest { window: Some(PixelWindow { x, y, w: 240, h: 160 }), ..RenderRequest::fit(720, 720) };
+    view(&cache, &src, &s, &window(100, 100));
+    view(&cache, &src, &s, &window(500, 300));
+    // another scale (a pinch level): its own spots, once
+    assert!(view(&cache, &src, &s, &small(50, 60)).0 > 0, "a new scale draws its spots once");
+    view(&cache, &src, &s, &small(380, 230));
+    assert_eq!(view(&cache, &src, &s, &small(60, 70)).0, 0, "and pans in it draw none");
+    // back at the first scale, after the stage cache let its windows go
+    for (x, y) in [(100, 100), (500, 300), (110, 95)] {
+        let (drawn, pasted, worst) = view(&cache, &src, &s, &window(x, y));
+        assert_eq!((drawn, pasted), (0, true), "back to {x}, {y}: the spots are pasted");
+        assert!(worst <= 1, "back to {x}, {y}: {worst} levels from the whole frame");
+    }
+}
+
+#[test]
 fn a_window_draws_its_spots_as_the_whole_frame_does() {
     // (a Content-Aware spot near a window's edge used to read a few pixels past the grown window: 34 levels off)
     let (src, s) = (scene(), DevelopSettings { spots: spots(), ..Default::default() });
