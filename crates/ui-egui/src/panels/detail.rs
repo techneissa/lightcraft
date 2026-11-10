@@ -246,7 +246,11 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let drawn_px = |points: f32| (points * ppp).round().clamp(0.0, 65_536.0) as usize;
     // (under a window the whole frame is hidden: its fit stays what it was, see `display_fit`)
     let covered = plan.window_edge.is_some();
-    let fit_px = app.size_hold.display_fit(now, navigating, covered, [drawn_px(target_rect.width()), drawn_px(target_rect.height())]);
+    let drawn = [drawn_px(target_rect.width()), drawn_px(target_rect.height())];
+    let fit_px = app.size_hold.display_fit(now, navigating, covered, drawn);
+    // the hover stand-in renders anew anyway and is drawn without a window: the drawn size (held only during a
+    // gesture), so a preset hovered at 100 % is not the Fit-sized render stretched
+    let stand_in_fit = if navigating || app.size_hold.holding(now) { fit_px } else { drawn };
     if app.size_hold.holding(now) {
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(crate::region::HOLD_SECS));
     }
@@ -264,7 +268,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // hover and before renders are stand-ins: the preview size is plenty and keeps them cheap
     let se = app.ui.settings.stand_in_edge(want, texture_side);
     let (sw, sh) = if aspect >= 1.0 { (se, short(se, aspect)) } else { (short(se, 1.0 / aspect), se) };
-    let ask = LoupeAsk { id, with_crop: !crop_tool, interacting, fit_px, overlay, tint: tint.sel };
+    let ask = LoupeAsk { id, with_crop: !crop_tool, interacting, fit_px, stand_in_fit, overlay, tint: tint.sel };
     app.renderer.loupe_drawn();
     let settling = request_main_or_settle(app, ui, &ask, [rw, rh], plan.window_edge.is_none(), now);
     let plain = overlay == lightcraft_pipeline::Overlay::None;
@@ -850,6 +854,8 @@ fn request_windows(app: &mut LightcraftApp, ctx: &WindowCtx, views: Vec<WindowVi
             }
         }
     }
+    // (the idle trim waits longer while a window is kept but not drawn)
+    app.renderer.window_on_screen = !windows.is_empty();
     windows
 }
 
@@ -1004,6 +1010,8 @@ struct LoupeAsk {
     with_crop: bool,
     interacting: bool,
     fit_px: [usize; 2],
+    /// The display fit of the hover stand-in: the drawn size, not the whole frame's held one (it has no window).
+    stand_in_fit: [usize; 2],
     overlay: lightcraft_pipeline::Overlay,
 }
 
@@ -1229,7 +1237,7 @@ fn request_hover(app: &mut LightcraftApp, a: &LoupeAsk, [sw, sh]: [usize; 2]) ->
     let label = h.label.clone();
     app.session.preview_job_shared(a.id, sw.max(8), sh.max(8), a.with_crop, &settings, hash).map(|job| {
         // (the same display fit as the After view, drawn texel for texel like it)
-        let job = fitted(job, a.fit_px, [sw, sh]);
+        let job = fitted(job, a.stand_in_fit, [sw, sh]);
         let key = job.key;
         app.renderer.request(Slot::Hover, job, 105);
         (key, label)
@@ -1240,6 +1248,7 @@ fn request_hover(app: &mut LightcraftApp, a: &LoupeAsk, [sw, sh]: [usize; 2]) ->
 fn request_before(app: &mut LightcraftApp, a: &LoupeAsk, [sw, sh]: [usize; 2]) {
     if let Some(job) = app.session.render_job(a.id, sw.max(8), sh.max(8), true, a.with_crop) {
         // (the same display fit as the After view, so both panes are the same texture size)
+        // (under a window, like the After view's: the Before side has its own window then)
         let job = if a.interacting { job } else { fitted(job, a.fit_px, [sw, sh]) };
         app.renderer.request(Slot::Before, job, 90);
     }

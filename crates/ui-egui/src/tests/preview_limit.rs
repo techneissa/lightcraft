@@ -443,7 +443,7 @@ mod in_the_loupe {
     // Given a zoomed view with a window render, when I zoom back to Fit, then the window is kept, not drawn (zooming
     // back in draws it again: #174), and when I go to the next photo, then its texture is freed
     #[test]
-    fn the_window_texture_is_freed_when_it_is_not_needed() {
+    fn the_window_is_kept_at_fit_and_freed_for_the_next_photo() {
         let (_fx, mut h, _) = detail();
         h.app.ui.settings.preview_limit = 1600;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
