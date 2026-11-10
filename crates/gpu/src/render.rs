@@ -36,6 +36,11 @@ pub struct GpuStages {
     pub(crate) host: Mutex<Option<crate::dirty::HostKept>>,
     /// Fork (`fork/perf-decontam-gpu.md`): the decontaminated masks' edges of the last render.
     decontam: crate::decontam::KeptEdges,
+    /// The spots finished per scale and the LaMa fills, on the host, shared by every view (issue #176,
+    /// `lightcraft_pipeline::spots_scale`).
+    spot_finals: lightcraft_pipeline::spots_scale::Shared,
+    /// The whole frame's noise model, for every window of it (issue #176).
+    noise: lightcraft_pipeline::NoiseMemo,
 }
 
 const CAPACITY: usize = 2;
@@ -173,6 +178,7 @@ impl GpuStages {
         self.decontam.clear();
         self.spots.clear();
         self.spots_cpu.clear();
+        self.noise.clear();
         *self.host.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
@@ -821,7 +827,7 @@ pub fn render(
         }
         None => cx.flush(),
     };
-    let plan = lightcraft_pipeline::plan(src, info, s, req);
+    let plan = lightcraft_pipeline::plan_kept(src, info, s, req, stages.map(|g| &g.spot_finals.0));
     let (w, h) = (plan.w, plan.h);
     let Some(n) = w.checked_mul(h).filter(|n| n.checked_mul(12).is_some()) else {
         fail(FailKind::Limit, format!("{w}×{h} output is too large"));
@@ -1159,7 +1165,8 @@ fn linear_stage(cx: &mut Cx<'_>, at: &ViewAt<'_>, sampled: &Buf, info: &SourceIn
     let (src, size) = (at.src, (plan.w, plan.h));
     let old_lin = at.cached.and_then(|e| e.lin.clone());
     let old_post = at.cached.map_or_else(std::sync::Weak::new, |e| e.post.clone());
-    let mut colour_noise = at.cached.and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key);
+    let mut colour_noise =
+        at.cached.and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key).or_else(|| at.stages.and_then(|g| g.noise.get(plan.noise_key)));
     let old_retouch = at.cached.map_or(Some(Vec::new()), |e| e.retouch_boxes.clone());
     if let Some((_, b)) = old_lin.clone().filter(|(k, _)| *k == plan.lin_key) {
         let same = at.start.is_some_and(|l| l.lin_key == plan.lin_key).then(|| crate::dirty::Tiles::none(size));
@@ -1168,6 +1175,9 @@ fn linear_stage(cx: &mut Cx<'_>, at: &ViewAt<'_>, sampled: &Buf, info: &SourceIn
     }
     if colour_noise.is_none() {
         colour_noise = lightcraft_pipeline::colour_noise(src, info, plan).map(|n| (plan.noise_key, n));
+        if let (Some(g), Some(n)) = (at.stages, colour_noise) {
+            g.noise.put(n);
+        }
     }
     let kept = at.stages.map(|c| (c.spots.get(src, plan.geo), c.spots_cpu.get(src, plan.geo))).unwrap_or_default();
     let s = &*plan.settings;
@@ -1437,9 +1447,11 @@ fn linear(
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let s = &*plan.settings;
-    let img = if lightcraft_pipeline::local_tone::enabled(info, s) || s.spots.iter().any(lightcraft_pipeline::spots_learned::is_learned) {
-        // the camera's local tone mapping (ProRAW gain table, off by default), or a LaMa spot (the
-        // learned fill runs on the CPU, before the white balance): the whole scene-linear stage on the CPU
+    // (a window that pastes its finished spots draws none, so it stays on the device: issue #176)
+    let cpu_spots = plan.spots_at.paste.is_none() && s.spots.iter().any(lightcraft_pipeline::spots::drawn_on_cpu);
+    let img = if lightcraft_pipeline::local_tone::enabled(info, s) || cpu_spots {
+        // the camera's local tone mapping (ProRAW gain table, off by default), or a spot with no GPU kernel (LaMa,
+        // Content-Aware, a shaped spot: `spots::drawn_on_cpu`): the whole scene-linear stage on the CPU
         // (portrait retouching included, fork `fork/retouch-foundation.md`)
         let mut img = match host.sampled.take() {
             Some(i) => i,

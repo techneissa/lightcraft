@@ -13,7 +13,7 @@ use crate::learned_fill::{self, FillRun, LearnedFill};
 use crate::{PixelWindow, Quality, RenderRequest, SourceInfo, render, spots, spots_learned};
 
 /// The installed fill is process-wide: tests that install one take turns.
-static TURN: Mutex<()> = Mutex::new(());
+pub(crate) static TURN: Mutex<()> = Mutex::new(());
 
 /// Fills the hole with the mean of the crop's other pixels, and keeps what it was asked.
 #[derive(Default)]
@@ -158,7 +158,7 @@ fn a_draft_render_tells_the_fill_so_and_a_full_one_does_not_reuse_its_image() {
     // (the draft's answer is "no fill yet": the Classic one is drawn)
     *fill.reply.lock().unwrap_or_else(PoisonError::into_inner) = Some(None);
     let src = Arc::new(scene());
-    let cache = crate::StageCache::default();
+    let cache = crate::StageCache::isolated();
     let (d, f) = install(&fill, || {
         let d = crate::render_cached(&src, &SourceInfo::default(), &s, &draft, &cache).image;
         *fill.reply.lock().unwrap_or_else(PoisonError::into_inner) = None;
@@ -201,6 +201,81 @@ fn a_window_matches_the_whole_render() {
         }
     }
     assert!(worst <= 1, "the window differs from the whole render by up to {worst}");
+}
+
+/// Issue #176: zoomed in, a pan to another window of the same scale, or an edit after the spots (Exposure), asks the
+/// learned fill nothing again: the window pastes the spot it finished.
+#[test]
+fn a_pan_or_a_later_edit_asks_the_learned_fill_nothing() {
+    let fill = Arc::new(MeanFill::default());
+    let mut s = with(vec![Spot { points: vec![Point::new(0.5, 0.5), Point::new(0.51, 0.5)], size: 0.01, ..spot(SpotMode::Remove, SpotFill::Lama) }]);
+    let src = Arc::new(scene());
+    // (a frame much wider than what a window grows to for the spot, so each pan is another window)
+    let (cache, full) = (crate::StageCache::isolated(), RenderRequest::fit(1600, 1200));
+    let at = |x: usize, y: usize| RenderRequest { window: Some(PixelWindow { x, y, w: 400, h: 300 }), ..full };
+    let asked = |s: &DevelopSettings, req: &RenderRequest| {
+        let before = fill.asked.lock().unwrap_or_else(PoisonError::into_inner).len();
+        let img = crate::render_cached(&src, &SourceInfo::default(), s, req, &cache).image;
+        (fill.asked.lock().unwrap_or_else(PoisonError::into_inner).len() - before, img)
+    };
+    install(&fill, || {
+        assert!(asked(&s, &at(600, 450)).0 > 0, "the first window asks for its fill");
+        for (x, y) in [(650, 480), (560, 430), (620, 470)] {
+            let (n, part) = asked(&s, &at(x, y));
+            assert_eq!(n, 0, "a pan to {x}, {y} asks nothing");
+            let whole = render(&src, &SourceInfo::default(), &s, &full).image;
+            let worst = (0..300).flat_map(|r| (0..400).map(move |c| (c, r))).map(|(c, r)| {
+                let (a, b) = (whole.get(x + c, y + r), part.get(c, r));
+                (0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0)
+            });
+            assert!(worst.max().unwrap_or(0) <= 1, "the pasted fill is the whole render's");
+        }
+        s.light.exposure = 0.7;
+        assert_eq!(asked(&s, &at(610, 440)).0, 0, "Exposure, in a new window, asks nothing");
+        // a lower scale (a pinch level, the whole frame) takes the fill the finer one got; a finer one asks once
+        let lower = RenderRequest { window: Some(PixelWindow { x: 400, y: 300, w: 400, h: 300 }), ..RenderRequest::fit(1200, 900) };
+        assert_eq!(asked(&s, &lower).0, 0, "a window at a lower scale asks nothing");
+        assert_eq!(asked(&s, &RenderRequest::fit(800, 600)).0, 0, "the whole frame at a lower scale asks nothing");
+        let finer = RenderRequest { window: Some(PixelWindow { x: 1000, y: 750, w: 400, h: 300 }), ..RenderRequest::fit(2400, 1800) };
+        assert_eq!(asked(&s, &finer).0, 1, "a finer scale asks once");
+        assert_eq!(asked(&s, &lower).0, 0, "and the lower one still asks nothing");
+    });
+}
+
+/// Review F3: a Heal spot that copies from a LaMa spot whose fill has not come yet holds pixels that never saw the fill;
+/// a later window must not paste them once the fill is there.
+#[test]
+fn a_spot_beside_a_pending_fill_is_not_kept() {
+    let fill = Arc::new(MeanFill::default());
+    let lama = Spot { points: vec![Point::new(0.5, 0.5)], size: 0.01, ..spot(SpotMode::Remove, SpotFill::Lama) };
+    // a Heal spot to its right, copying from where the LaMa spot is
+    let heal = Spot {
+        mode: SpotMode::Heal,
+        points: vec![Point::new(0.56, 0.5)],
+        size: 0.01,
+        source_offset: Some(Point::new(-0.06, 0.0)),
+        ..Default::default()
+    };
+    let s = with(vec![lama, heal]);
+    let src = Arc::new(scene());
+    let (cache, full) = (crate::StageCache::isolated(), RenderRequest::fit(1600, 1200));
+    let at = |x: usize, y: usize| RenderRequest { window: Some(PixelWindow { x, y, w: 400, h: 300 }), ..full };
+    install(&fill, || {
+        // the fill says nothing yet: the LaMa spot shows the Classic fill
+        *fill.reply.lock().unwrap_or_else(PoisonError::into_inner) = Some(None);
+        crate::render_cached(&src, &SourceInfo::default(), &s, &at(600, 450), &cache);
+        *fill.reply.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        // a window over the Heal spot alone, once the fill comes
+        let (x, y) = (880, 450);
+        let part = crate::render_cached(&src, &SourceInfo::default(), &s, &at(x, y), &cache).image;
+        let whole = render(&src, &SourceInfo::default(), &s, &full).image;
+        let worst = (0..300).flat_map(|r| (0..400).map(move |c| (c, r))).map(|(c, r)| {
+            let (a, b) = (whole.get(x + c, y + r), part.get(c, r));
+            (0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0)
+        });
+        let worst = worst.max().unwrap_or(0);
+        assert!(worst <= 1, "the Heal spot is the whole render's: {worst} levels off");
+    });
 }
 
 #[test]
@@ -309,7 +384,7 @@ fn a_lama_spot_edit_asks_the_fill_only_for_the_spots_it_reaches() {
     let mut s = with((0..12).map(|i| at(0.1 + 0.2 * (i % 5) as f64, 0.15 + 0.3 * (i / 5) as f64)).collect());
     let src = Arc::new(scene());
     let (info, req) = (SourceInfo::default(), RenderRequest::fit(400, 300));
-    let cache = crate::StageCache::default();
+    let cache = crate::StageCache::isolated();
     let asked = || fill.asked.lock().unwrap_or_else(PoisonError::into_inner).len();
     let edit = |s: &DevelopSettings, req: &RenderRequest| {
         let before = asked();
@@ -353,7 +428,7 @@ fn a_shaped_lama_spot_is_filled_over_its_whole_shape_in_the_preview_and_the_expo
     let s = with(vec![shaped]);
     let src = Arc::new(scene());
     let (info, req) = (SourceInfo::default(), RenderRequest::fit(400, 300));
-    let cache = crate::StageCache::default();
+    let cache = crate::StageCache::isolated();
     install(&fill, || {
         let plain = render(&src, &info, &with(vec![]), &req).image;
         let export = render(&src, &info, &s, &req).image;

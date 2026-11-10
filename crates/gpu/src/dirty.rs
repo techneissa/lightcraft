@@ -294,11 +294,11 @@ pub(crate) struct Redone {
 }
 
 /// Whether a render may start from the view's last one: no fault asked for, nothing on the CPU before the planes
-/// (LaMa spots, the camera's local tone map), no red eye, and no visible mask that reads the image.
+/// (spots drawn on the CPU, the camera's local tone map), no red eye, and no visible mask that reads the image.
 pub(crate) fn eligible(info: &SourceInfo, plan: &Plan<'_>) -> bool {
     let s = &*plan.settings;
     !lightcraft_pipeline::local_tone::enabled(info, s)
-        && !s.spots.iter().any(lightcraft_pipeline::spots_learned::is_learned)
+        && !s.spots.iter().any(lightcraft_pipeline::spots::drawn_on_cpu)
         && plan.eyes.is_empty()
         && !s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).any(|m| lightcraft_pipeline::masks::reads(m).0)
 }
