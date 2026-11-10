@@ -1,0 +1,3 @@
+# Remove, Heal and Clone: spots finished once per scale, reused by every window, edit and view (issue #176)
+cargo test -p lightcraft-pipeline --lib -- tests_spot_reuse tests_learned_fill
+cargo test -p lightcraft-gpu --test it -- spot_reuse shaped_spot

@@ -79,11 +79,17 @@ pub(super) fn request(app: &mut LightcraftApp, ui: &egui::Ui, a: &Ask) {
     let key = MemoKey { id, settings: app.session.settings_hash(id).unwrap_or_default(), mask: app.session.active_mask, part, erase, fresh };
     let made = match &app.renderer.brush_settings {
         Some((k, made)) if *k == key => made.clone(),
-        _ => {
+        last => {
             // (the settings are a function of what the key holds, so their identity is a hash of it: hashing the settings
             // themselves writes every stroke of every mask to JSON, once per committed stroke)
             let hash = key_hash(&key);
-            let made = target::settings_in(&d, key.mask, part, erase, fresh).map(|s| (Arc::new(s), hash));
+            let made = target::settings_in(&d, key.mask, part, erase, fresh);
+            // a stroke into the part being painted changes the photo's settings, not these (the part is covered whole):
+            // the full-coverage render stays the one made, and the next stroke blends at once (issue #175: it was
+            // rendered again after each stroke, ~200 ms on a 45 MP photo, and a stroke started meanwhile showed no adjustment).
+            // Only this photo's: another photo with the same settings is another picture
+            let kept = last.as_ref().filter(|(k, _)| k.id == id).and_then(|(_, m)| m.as_ref()).filter(|(s, _)| made.as_ref() == Some(&**s)).cloned();
+            let made = kept.or_else(|| made.map(|s| (Arc::new(s), hash)));
             app.renderer.brush_settings = Some((key, made.clone()));
             made
         }
@@ -102,7 +108,7 @@ pub(super) fn request(app: &mut LightcraftApp, ui: &egui::Ui, a: &Ask) {
 
 /// The two finished pictures a live stroke blends, when both are the current renders of the open
 /// photo (not drafts, stand-ins or stale).
-pub(super) fn images(app: &LightcraftApp, id: PhotoId, img_rect: Rect) -> Option<LiveImages> {
+pub(crate) fn images(app: &LightcraftApp, id: PhotoId, img_rect: Rect) -> Option<LiveImages> {
     let r = &app.renderer;
     let ready = |slot: Slot, key: Option<u64>| {
         r.textures.get(&slot).filter(|t| t.photo == id && key.is_some() && Some(t.key) == key && !r.is_pending(slot) && t.quick.is_none())

@@ -128,6 +128,15 @@ pub fn auto_source(img: &Rgb32f, target: (f32, f32), r: f32) -> (f32, f32) {
     ranked_sources(img, target, r).first().copied().unwrap_or_else(|| fallback_source(r))
 }
 
+thread_local! {
+    static PICKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Source searches ([`pick_source`]) run on this thread so far (a test counts them).
+pub fn sources_picked() -> usize {
+    PICKED.with(std::cell::Cell::get)
+}
+
 /// A source offset (normalized, as [`Spot::source_offset`]) for `spot` on `src` developed with
 /// `s`: the best match, or with `avoid` (the current offset) the best one at least a spot radius
 /// away from it ("refresh source"). `None` when no candidate fits in the image.
@@ -138,6 +147,7 @@ pub fn pick_source(
     spot: &Spot,
     avoid: Option<Point>,
 ) -> Option<Point> {
+    PICKED.with(|c| c.set(c.get().wrapping_add(1)));
     let frame = crate::frame_for(src, info, s, true);
     let (w, h) = frame.fit(512, 512);
     if w == 0 || h == 0 {
@@ -158,7 +168,7 @@ pub fn pick_source(
 }
 
 /// The most a window grows to take in the spots that touch it.
-const MAX_SPOT_SPAN: usize = if cfg!(target_arch = "wasm32") { 4096 } else { 8192 };
+pub(crate) const MAX_SPOT_SPAN: usize = if cfg!(target_arch = "wasm32") { 4096 } else { 8192 };
 /// Strokes with more dabs than this are not examined dab by dab (the render would be too slow anyway).
 const MAX_DABS_CONSIDERED: usize = 200_000;
 
@@ -386,6 +396,13 @@ fn fill_box(src: &mut [[f32; 3]], tgt: &[[f32; 3]], alpha: &[f32], bw: usize, bh
     for (d, v) in src.iter_mut().zip(pixels) {
         *d = *v;
     }
+}
+
+/// Whether `spot` is drawn on the CPU by every renderer: a content-aware Fill ([`fill_box`]), a shaped spot
+/// ([`crate::spot_area`]) or a learned (LaMa) one have no GPU kernel. The GPU renderer then runs its spot stage on
+/// the CPU and the rest of the photo on the GPU (issue #176: such a spot used to send the whole photo to the CPU).
+pub fn drawn_on_cpu(spot: &Spot) -> bool {
+    spot.mode == SpotMode::Fill || spot.area.is_some() || crate::spots_learned::is_learned(spot)
 }
 
 /// Apply all spots to `img` (output resolution). `ppl` = output pixels per long-edge unit.

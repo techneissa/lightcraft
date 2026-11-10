@@ -4,6 +4,7 @@ use super::*;
 /// a draft, and a render no larger than the drawn size, are left as rendered.
 #[test]
 fn a_display_fit_shrinks_the_loupe_render_to_the_drawn_size() {
+    let _turn = DEVICE_FIT_COUNT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut s = crate::Session::with_demo();
     let id = s.active().unwrap();
     let plain = s.loupe_job(id, 1024, 1024, true).unwrap().run().rendered.unwrap().image;
@@ -715,10 +716,15 @@ fn saving_an_edit_does_not_copy_the_strokes() {
     assert!(Arc::ptr_eq(&held, &step), "the History step shares them");
 }
 
+/// The tests that count `lightcraft_gpu::device_fits` (a counter of the whole process), and those that make fits on the
+/// device beside them, take turns.
+pub(super) static DEVICE_FIT_COUNT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 // Given a loupe job with a display fit on a machine with a GPU, the fit is made on the device before the readback, and the picture is
 // the CPU's fit of the full render within a level of rounding; where the device makes none (an overlay drawn on the CPU) the CPU fits
 #[test]
 fn the_display_fit_is_made_on_the_device_when_it_can_be() {
+    let _turn = DEVICE_FIT_COUNT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if !lightcraft_gpu::available() {
         lightcraft_testkit::skip!(Gpu, "no GPU adapter");
         return;
@@ -742,6 +748,37 @@ fn the_display_fit_is_made_on_the_device_when_it_can_be() {
     let on_cpu = fresh(&mut s).with_overlay(spots).with_display_fit(fw, fh).run().rendered.unwrap().image;
     assert_eq!(lightcraft_gpu::device_fits(), before, "an overlay render was fitted on the device");
     assert_eq!((on_cpu.width, on_cpu.height), (want.width, want.height));
+}
+
+// Given a loupe job shown through a monitor profile (every Mac's screen has one) with a display fit, the fit is still made on
+// the device, and the picture is the CPU's fit of the converted full render within a level or two of rounding (issue #175:
+// it was fitted on the CPU, about 70 ms per render at rest)
+#[test]
+fn the_display_fit_is_made_on_the_device_through_a_monitor_profile() {
+    let _turn = DEVICE_FIT_COUNT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !lightcraft_gpu::available() {
+        lightcraft_testkit::skip!(Gpu, "no GPU adapter");
+        return;
+    }
+    let p3 = crate::display::Display::from_bytes("p3.icc", &lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::DisplayP3))
+        .map(Arc::new)
+        .unwrap();
+    let mut s = crate::Session::with_demo();
+    let id = s.active().unwrap();
+    let fresh = |s: &mut crate::Session| RenderJob { view_cache: None, ..s.loupe_job(id, 1024, 1024, true).unwrap() }.with_display(Some(p3.clone()));
+    let full = fresh(&mut s).run();
+    assert_eq!(full.display, Some(p3.id()), "the render is converted for the monitor");
+    let full = full.rendered.unwrap().image;
+    let (fw, fh) = (full.width * 9 / 10, full.height * 9 / 10);
+    let before = lightcraft_gpu::device_fits();
+    let fitted = fresh(&mut s).with_display_fit(fw, fh).run();
+    assert!(lightcraft_gpu::device_fits() > before, "the fit was not made on the device");
+    assert_eq!(fitted.display, Some(p3.id()));
+    let fitted = fitted.rendered.unwrap().image;
+    let want = fit_for_display(&full, fw, fh);
+    assert_eq!((fitted.width, fitted.height), (want.width, want.height));
+    let worst = fitted.data.iter().zip(&want.data).flat_map(|(p, q)| (0..4).map(move |c| p[c].abs_diff(q[c]))).max().unwrap();
+    assert!(worst <= 2, "the device's converted fit differs from the CPU's fit of the converted render by {worst}");
 }
 
 #[test]
