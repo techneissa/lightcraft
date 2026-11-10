@@ -1178,6 +1178,31 @@ fn the_hot_pixel_limit_renders_afresh_only_the_photos_that_remove_hot_pixels() {
     assert_eq!(keys(&mut s), before, "the default limit keeps the keys it always had");
 }
 
+/// Issue #184: the spot order (`app.spotOrder`) is part of the render keys of photos with spots, and of no other.
+#[test]
+fn the_spot_order_renders_afresh_only_the_photos_with_spots() {
+    use lightcraft_catalog::PhotoId;
+    use lightcraft_pipeline::spots_keep::spots_after_wb_here;
+    let mut s = demo();
+    let ids: Vec<PhotoId> = s.catalog.photos().take(2).map(|p| p.id).collect();
+    let mut d = (*s.develop_of(ids[0]).unwrap()).clone();
+    d.spots.push(lightcraft_develop::Spot { points: vec![lightcraft_geom::Point::new(0.5, 0.5)], size: 0.02, ..Default::default() });
+    s.set_develop(ids[0], d, "Setup").unwrap();
+    let keys = |s: &mut crate::Session| ids.iter().map(|id| s.thumb_job(*id, 256).unwrap().cache.unwrap().1).collect::<Vec<_>>();
+    assert_eq!(s.execute("app.spotOrder", &json!({})).unwrap()["afterWhiteBalance"], false);
+    assert!(s.execute("app.spotOrder", &json!({"afterWhiteBalance": 1})).is_err());
+    // (this thread's order: the process's would change the other tests' renders)
+    let before = keys(&mut s);
+    spots_after_wb_here(Some(true));
+    s.media.clear_settings_hashes();
+    let after = keys(&mut s);
+    spots_after_wb_here(None);
+    s.media.clear_settings_hashes();
+    assert_ne!(after[0], before[0], "the photo with spots renders in the old order");
+    assert_eq!(after[1], before[1], "the other photo's thumbnail stays valid");
+    assert_eq!(keys(&mut s), before, "the default order keeps the keys it always had");
+}
+
 #[test]
 fn auto_sync_camera_local_tone_off_preserves_other_settings() {
     use lightcraft_catalog::PhotoId;

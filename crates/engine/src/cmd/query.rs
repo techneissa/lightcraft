@@ -310,6 +310,18 @@ pub fn specs() -> Vec<CommandSpec> {
             }
             Ok(json!({"percent": crate::files::hot_pixel_limit() * 100.0, "default": lightcraft_raw::HOT_PIXEL_MAX_SHARE * 100.0}))
         }),
+        cmd!(query "app.spotOrder", "Spot Order", [], None, "{afterWhiteBalance?: bool} — draw Remove, Heal, Clone and Content-Aware spots after the white balance (the order before issue #184; Temperature and Tint then draw them again) or, by default, before it; returns {afterWhiteBalance}", always, |s, p| {
+            if let Some(v) = p.get("afterWhiteBalance").filter(|v| !v.is_null()) {
+                let Some(on) = v.as_bool() else {
+                    return Err(bad("app.spotOrder", "afterWhiteBalance must be true or false"));
+                };
+                if lightcraft_pipeline::spots_keep::set_spots_after_wb(on) {
+                    // (the render keys of photos with spots change: their remembered hashes go)
+                    s.media.clear_settings_hashes();
+                }
+            }
+            Ok(json!({"afterWhiteBalance": lightcraft_pipeline::spots_keep::spots_after_wb()}))
+        }),
         cmd!(query "journal.list", "Command Journal", [], None, "{limit?}", always, |s, p| {
             let lim = p.get("limit").and_then(Value::as_u64).unwrap_or(100) as usize;
             let start = s.journal.len().saturating_sub(lim);

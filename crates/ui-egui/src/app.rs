@@ -159,6 +159,7 @@ impl LightcraftApp {
             memory_applied: None,
             smart_editing_applied: None,
             hot_pixels_applied: None,
+            spot_order_applied: None,
             display_applied: None,
             display_error: None,
             screen_profile: None,

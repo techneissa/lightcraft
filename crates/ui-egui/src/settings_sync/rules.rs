@@ -162,6 +162,8 @@ pub const SYNCED_SETTINGS: &[&str] = &[
     "topBarHidden",
     // (how many hot pixels Remove Hot Pixels may replace: the same raw renders alike on every Mac)
     "hotPixelLimit",
+    // (the order of the spots and the white balance: the same edit renders alike on every Mac)
+    "spotsAfterWhiteBalance",
 ];
 
 /// Why `key` of the UI state stays on one Mac; `None` when it goes into the file.

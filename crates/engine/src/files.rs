@@ -191,5 +191,22 @@ pub fn hot_pixel_key(settings: &lightcraft_develop::DevelopSettings) -> u64 {
     limit.to_bits().wrapping_mul(0x9e37_79b9_7f4a_7c15).rotate_left(29)
 }
 
+/// What [`lightcraft_pipeline::spots_keep::spots_after_wb`] (Settings ▸ Develop, `app.spotOrder`) adds to the render
+/// cache keys of `settings` when it is `after_wb`: nothing in the default order or without spots, so those renders
+/// stay valid whatever the order (issue #184).
+pub fn spot_order_key(settings: &lightcraft_develop::DevelopSettings, after_wb: bool) -> u64 {
+    if !after_wb || settings.spots.is_empty() {
+        return 0;
+    }
+    0x5be0_cd19_137e_2179
+}
+
+/// What the app's render settings add to the render cache keys of `settings` ([`hot_pixel_key`] and
+/// [`spot_order_key`]): every thumbnail, preview and loupe key takes it, so a photo never shows a render made under
+/// other app settings.
+pub fn render_key(settings: &lightcraft_develop::DevelopSettings) -> u64 {
+    hot_pixel_key(settings) ^ spot_order_key(settings, lightcraft_pipeline::spots_keep::spots_after_wb())
+}
+
 #[cfg(test)]
 pub(crate) mod tests;
