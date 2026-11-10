@@ -17,4 +17,5 @@ mod mask_cache;
 mod portrait_drag;
 mod shaped_spot;
 mod spot_cache;
+mod spot_reuse;
 mod thumbs_bench;

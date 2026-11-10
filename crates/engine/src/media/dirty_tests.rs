@@ -115,6 +115,8 @@ fn a_job_keeps_only_the_images_the_next_one_starts_from() {
 /// rectangles changed (the picture equals the last one outside them).
 #[test]
 fn a_loupe_job_after_a_spot_edit_gives_a_whole_job_s_picture_and_says_what_changed() {
+    // (its fit through a monitor profile is made on the device: not beside a test that counts those)
+    let _turn = crate::media::tests::DEVICE_FIT_COUNT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if !lightcraft_gpu::available() {
         lightcraft_testkit::skip!(Gpu, "no GPU adapter");
         return;

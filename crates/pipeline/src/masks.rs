@@ -21,7 +21,7 @@ mod people;
 mod planes;
 
 pub use alpha::note_evaluation;
-pub use alpha::{AlphaCache, AlphaKeys, MaskAlpha, alpha_key, mask_evaluations, reads};
+pub use alpha::{AlphaCache, AlphaKeys, KEPT_ALPHA_BYTES, KEPT_ALPHAS, MaskAlpha, alpha_key, guide_plane, mask_evaluations, reads, uses_guide};
 use alpha::{map_rows, zip_rows};
 pub use brush::{BRUSH_ENTRIES, BrushCache, BrushCtx, auto_pixels_filtered, brush_base, brush_chain, note_filtered, note_stroke, strokes_rasterized};
 pub use planes::{MaskWant, PlanesAsk, PlanesOut, planes_signature, wanted};
@@ -211,8 +211,9 @@ pub fn evaluate_cached(
             let alpha = match old.iter().find(|(k, _)| *k == key) {
                 Some((_, a)) => a.clone(),
                 None => {
+                    let guide = m.components.iter().any(|c| uses_guide(&c.shape)).then(|| cache.guide(w, h)).flatten();
                     let brush = Some(BrushCtx { cache: &mut cache.brushes, geo: keys.geo, image: keys.image });
-                    Arc::new(evaluate_alpha(m, frame, w, h, img, log_l, ev, mattes.map(|a| &**a), brush))
+                    Arc::new(evaluate_alpha_guided(m, frame, w, h, (img, log_l, guide.as_deref()), ev, mattes.map(|a| &**a), brush))
                 }
             };
             // (a mask twice with the same definition holds one alpha)
@@ -222,7 +223,8 @@ pub fn evaluate_cached(
             Evaluated { id: m.id, alpha, amount: amount_of(m), adjust: m.adjust }
         })
         .collect();
-    cache.keep(mattes, used);
+    let rest = old.into_iter().filter(|(k, _)| !used.iter().any(|(u, _)| u == k)).collect();
+    cache.keep(mattes, keys.geo, used, rest);
     out
 }
 
@@ -256,6 +258,21 @@ pub fn evaluate_alpha(
     log_l: &Plane,
     ev: f32,
     mattes: Option<&Mattes>,
+    brush: Option<BrushCtx<'_>>,
+) -> MaskAlpha {
+    evaluate_alpha_guided(m, frame, w, h, (img, log_l, None), ev, mattes, brush)
+}
+
+/// [`evaluate_alpha`] with the picture a stored selection's edges follow (`guide`, [`guide_plane`]; `None`: `log_l`).
+#[allow(clippy::too_many_arguments)]
+pub fn evaluate_alpha_guided(
+    m: &Mask,
+    frame: &Frame,
+    w: usize,
+    h: usize,
+    (img, log_l, guide): (&Rgb32f, &Plane, Option<&Plane>),
+    ev: f32,
+    mattes: Option<&Mattes>,
     mut brush: Option<BrushCtx<'_>>,
 ) -> MaskAlpha {
     note_evaluation();
@@ -264,7 +281,7 @@ pub fn evaluate_alpha(
     let mut alpha = Plane::new(w, h);
     let mut first = true;
     for comp in &m.components {
-        let mut c = shape_alpha_in(&comp.shape, frame, w, h, img, log_l, ev, mattes, brush.as_mut());
+        let mut c = shape_alpha_in(&comp.shape, frame, w, h, (img, log_l, guide), ev, mattes, brush.as_mut());
         if comp.invert != (first && m.invert) {
             map_rows(&mut c, |v| *v = 1.0 - *v);
         }
@@ -312,7 +329,21 @@ fn for_each_pos(frame: &Frame, w: usize, h: usize, out: &mut Plane, f: impl Fn(P
 /// else a stored segmentation; else a classical heuristic.
 #[allow(clippy::too_many_arguments)]
 pub fn shape_alpha(shape: &MaskShape, frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Plane {
-    shape_alpha_in(shape, frame, w, h, img, log_l, ev, mattes, None)
+    shape_alpha_in(shape, frame, w, h, (img, log_l, None), ev, mattes, None)
+}
+
+/// [`shape_alpha`] with the picture a stored selection's edges follow (`guide`, [`guide_plane`]; `None`: `log_l`).
+#[allow(clippy::too_many_arguments)]
+pub fn shape_alpha_guided(
+    shape: &MaskShape,
+    frame: &Frame,
+    w: usize,
+    h: usize,
+    (img, log_l, guide): (&Rgb32f, &Plane, Option<&Plane>),
+    ev: f32,
+    mattes: Option<&Mattes>,
+) -> Plane {
+    shape_alpha_in(shape, frame, w, h, (img, log_l, guide), ev, mattes, None)
 }
 
 /// [`shape_alpha`] keeping and reusing the planes of brush parts in `brush`.
@@ -322,8 +353,7 @@ fn shape_alpha_in(
     frame: &Frame,
     w: usize,
     h: usize,
-    img: &Rgb32f,
-    log_l: &Plane,
+    (img, log_l, guide): (&Rgb32f, &Plane, Option<&Plane>),
     ev: f32,
     mattes: Option<&Mattes>,
     brush: Option<&mut BrushCtx<'_>>,
@@ -399,7 +429,9 @@ fn shape_alpha_in(
             // 2 % of the long edge, so previews and exports match)
             let e = (*edge / 100.0).clamp(-1.0, 1.0) as f32;
             let gain = if e < 0.0 { 1.0 - 7.0 * e } else { 1.0 };
-            sample_seg(seg.as_ref(), detail, gain, frame, w, h, log_l, &mut out);
+            // (the edges of the resampled photo: no later edit moves them, `uses_guide`)
+            let guide = guide.filter(|g| (g.width, g.height) == (w, h)).unwrap_or(log_l);
+            sample_seg(seg.as_ref(), detail, gain, frame, w, h, guide, &mut out);
             if e > 0.0 {
                 smooth_plane(&mut out, e * 0.02 * frame_px(frame, w));
             }

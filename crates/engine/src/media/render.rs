@@ -508,8 +508,10 @@ impl RenderJob {
                     }
                     Some(OnScreen::Pixels(r)) => (r, None),
                     None => {
-                        // the display fit is made on the device before the readback when nothing is converted for a monitor after it
-                        let fit = self.display_fit.filter(|_| self.request.quality == Quality::Full && self.display.is_none());
+                        // the display fit is made on the device before the readback; a picture converted for a monitor after it
+                        // has its fit converted the same way (below). (It used to fit on the CPU then, about 70 ms at rest for a
+                        // 45 MP photo on a Mac, which shows every photo through the screen's profile: issue #175.)
+                        let fit = self.display_fit.filter(|_| self.request.quality == Quality::Full);
                         let t = crate::media::dirty::clock();
                         let (r, fallback, f) = develop_reporting_fit(src, &info, &self.settings, &request, self.stages.as_deref(), gpu, fit);
                         if lightcraft_pipeline::profiling() {
@@ -533,13 +535,27 @@ impl RenderJob {
                     // a diagnostic view: the histogram stays the photo's (taken before the overlay
                     // was drawn), and nothing goes to the view cache
                     (Some(d), Some(_)) if self.request.overlay != lightcraft_pipeline::Overlay::None => {
-                        let converted = if clip_view { d.profile.from_srgb(&mut rendered.image) } else { d.profile.correct(&mut rendered.image) };
-                        if let Err(e) = converted {
-                            log::warn!("display profile: {e}");
+                        let convert = |img: &mut Rgba8| {
+                            let converted = if clip_view { d.profile.from_srgb(img) } else { d.profile.correct(img) };
+                            if let Err(e) = converted {
+                                log::warn!("display profile: {e}");
+                            }
+                        };
+                        convert(&mut rendered.image);
+                        if let Some(f) = fitted.as_mut() {
+                            convert(f);
                         }
                         Some(d.id())
                     }
                     (Some(d), Some(_)) => {
+                        // (the device's fit of the render, converted as the render is: the fit of the converted render within
+                        // a level of rounding)
+                        if let Some(f) = fitted.as_mut()
+                            && let Err(e) = d.profile.correct(f)
+                        {
+                            log::warn!("display profile: {e}");
+                            fitted = None;
+                        }
                         let keep = self.view_cache.is_some() && self.request.quality == Quality::Full;
                         // (only the rectangles the render changed, when the last job's images are kept)
                         let patched = patch.as_ref().and_then(|p| p.convert(&mut rendered.image, d, keep));
