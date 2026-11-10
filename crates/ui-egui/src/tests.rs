@@ -162,6 +162,7 @@ mod wb_selector;
 mod welcome;
 mod zoom;
 mod zoom_keys;
+mod zoom_reuse;
 
 pub(super) mod fixtures;
 pub(super) mod render_fixtures;

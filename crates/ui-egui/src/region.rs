@@ -330,6 +330,14 @@ pub fn plan(settings: &crate::state::AppSettings, v: ViewSizes) -> LoupePlan {
     LoupePlan { main_edge: edge_at(scale), window_edge }
 }
 
+/// The display fit to ask for with a whole-frame render of `size` px drawn at `drawn` px: `None`
+/// when the drawn size holds the whole render. The worker only ever shrinks a render to its fit,
+/// so such a fit changes nothing but the render's key, and a key that followed the zoom started a
+/// whole-frame render at every zoom step past it, hidden under the window (#174).
+pub fn display_fit(drawn: [usize; 2], size: [usize; 2]) -> Option<[usize; 2]> {
+    (size[0] > drawn[0].max(1) || size[1] > drawn[1].max(1)).then_some(drawn)
+}
+
 /// How long the render sizes stay as they were after a pinch or two-finger scroll stops (s).
 pub const HOLD_SECS: f64 = 0.25;
 
@@ -366,10 +374,13 @@ impl SizeHold {
     }
 
     /// The size the whole frame is shrunk to at rest (the drawn size): the one from before the
-    /// gesture while sizes are held (call after [`Self::apply`] in the same frame), else `fresh`.
-    pub fn display_fit(&mut self, now: f64, gesturing: bool, fresh: [usize; 2]) -> [usize; 2] {
+    /// gesture while sizes are held (call after [`Self::apply`] in the same frame), and while a
+    /// window covers the whole frame (`covered`), else `fresh`. Under a window the whole frame is
+    /// hidden: a fit that followed the zoom rendered it again at each zoom step, and once more on
+    /// the way back to Fit (#174).
+    pub fn display_fit(&mut self, now: f64, gesturing: bool, covered: bool, fresh: [usize; 2]) -> [usize; 2] {
         match self.fit {
-            Some(held) if gesturing || now < self.until => held,
+            Some(held) if gesturing || covered || now < self.until => held,
             _ => {
                 self.fit = Some(fresh);
                 fresh
@@ -442,6 +453,26 @@ pub fn defer_window(window_pending: bool, original_held: bool) -> bool {
 /// is the frame (an unsupported raw's embedded JPEG may be cropped differently).
 pub fn same_aspect(shown: f32, frame: f32) -> bool {
     shown.is_finite() && frame.is_finite() && frame > 0.0 && (shown / frame - 1.0).abs() <= 0.02
+}
+
+/// Whether `held`, a window of a `full` frame already rendered, still serves a view whose visible pixels are `visible`
+/// (`(x0, y0, x1, y1)` in the frame's pixels): they lie inside it, at least a margin ([`margin_for`]) from each of its
+/// edges that isn't the frame's (the margin's own pixels have less context around them). Such a window is drawn
+/// again rather than a new one rendered: zooming from 100 % to 200 % or back, or a pan inside it, then builds no mask
+/// and draws no spot again (#174).
+pub fn covers(held: &PixelWindow, full: (usize, usize), visible: (f32, f32, f32, f32)) -> bool {
+    if [visible.0, visible.1, visible.2, visible.3].iter().any(|v| !v.is_finite()) {
+        return false;
+    }
+    let margin = margin_for(full.0.max(full.1));
+    let axis = |lo: f32, hi: f32, at: usize, len: usize, full: usize| {
+        let (lo, hi) = (lo.max(0.0), hi.min(full as f32));
+        let end = at.saturating_add(len);
+        let inner_lo = if at == 0 { 0 } else { at.saturating_add(margin) };
+        let inner_hi = if end >= full { full } else { end.saturating_sub(margin) };
+        hi > lo && lo >= inner_lo as f32 && hi <= inner_hi as f32
+    };
+    axis(visible.0, visible.2, held.x, held.w, full.0) && axis(visible.1, visible.3, held.y, held.h, full.1)
 }
 
 /// The window of a `full_w × full_h` frame to render so that `visible` — `(x0, y0, x1, y1)` in the
