@@ -170,3 +170,23 @@ fn committing_a_stroke_hashes_the_settings_once() {
     let calls = lightcraft_develop::hash64_calls() - before;
     assert_eq!(calls, 1, "committing a stroke hashed the settings {calls} times");
 }
+
+/// Strokes into the part being painted change the photo but not the full-coverage render the next stroke blends toward
+/// (the part is covered whole there): it is kept, so the next stroke shows its adjustment at once (issue #175: it was
+/// rendered again after every stroke). A change of the mask's effect does render it again.
+#[test]
+fn a_committed_stroke_keeps_the_full_coverage_render() {
+    let mut h = brush_ready();
+    let target = h.app.renderer.brush_target.expect("the full-coverage render");
+    for k in 0..3 {
+        let y = 0.3 + 0.1 * k as f64;
+        pointer(&mut h, json!([{"kind": "down", "x": 0.3, "y": y}, {"kind": "drag", "x": 0.5, "y": y}, {"kind": "drag", "x": 0.7, "y": y}]));
+        h.step();
+        pointer(&mut h, json!([{"kind": "up", "x": 0.7, "y": y}]));
+        settle_previews(&mut h);
+        assert_eq!(h.app.renderer.brush_target, Some(target), "stroke {k} asked for another full-coverage render");
+    }
+    exec(&mut h, "mask.adjust", json!({"values": {"exposure": -1.0}}));
+    settle_previews(&mut h);
+    assert_ne!(h.app.renderer.brush_target, Some(target), "the mask's effect changed: the full-coverage render is made again");
+}
