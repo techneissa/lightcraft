@@ -63,6 +63,7 @@ pub mod spot_lasso;
 pub mod spots;
 pub mod spots_keep;
 pub mod spots_learned;
+pub mod spots_scale;
 pub mod straighten;
 pub mod tone;
 pub mod transform;
@@ -383,20 +384,42 @@ pub struct StageCache {
     ext: Mutex<Option<Arc<dyn Any + Send + Sync>>>,
     /// The spots of the last renders (`spots_keep`): a spot edit draws only what it reaches.
     spots: spots_keep::KeptStore<spots_keep::CpuKept>,
+    /// The spots finished at the zoom's scale (`spots_scale`): every window of it pastes them (issue #176).
+    spot_finals: Arc<spots_scale::FinalsStore>,
+    /// The whole frame's noise model, for every window of it (issue #176).
+    pub noise: NoiseMemo,
 }
 
 impl Default for StageCache {
     fn default() -> Self {
-        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None), spots: Default::default() }
+        StageCache {
+            entries: Mutex::new(Vec::new()),
+            capacity: 2,
+            ext: Mutex::new(None),
+            spots: Default::default(),
+            spot_finals: spots_scale::shared(),
+            noise: Default::default(),
+        }
     }
 }
 
 impl StageCache {
+    /// A cache whose finished spots and LaMa fills are its own, not the store views share (a test counts its work).
+    pub fn isolated() -> Self {
+        StageCache { spot_finals: Arc::default(), ..Default::default() }
+    }
+
+    /// The finished spots and LaMa fills this view uses (`spots_scale`).
+    pub fn spot_finals(&self) -> &Arc<spots_scale::FinalsStore> {
+        &self.spot_finals
+    }
+
     /// Drop everything (e.g. when memory is needed).
     pub fn clear(&self) {
         self.lock().clear();
         *self.ext.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.spots.clear();
+        self.noise.clear();
     }
 
     /// Per-view state of type `T` kept alongside this cache (created on first use). Lets another
@@ -576,6 +599,9 @@ pub struct Plan<'a> {
     /// Fork (`fork/retouch-background.md`): Background's analysis image of the whole frame before the retouch step
     /// ([`retouch_step::analysis`]); `None` while Background is off.
     pub retouch_analysis: Option<Arc<lightcraft_develop::retouch::background::Analysis>>,
+    /// The view's spots finished at this scale (issue #176, [`spots_scale`]): kept by a window that draws them, pasted
+    /// by one whose spots are all kept.
+    pub spots_at: spots_scale::At,
 }
 
 /// The original's long edge in pixels (an original reported smaller than the source is the source).
@@ -583,21 +609,80 @@ pub(crate) fn native_long(info: &SourceInfo, src_long: usize) -> usize {
     info.native_long.unwrap_or(0).max(src_long).max(1)
 }
 
+/// `work` (a window of the `full_w × full_h` output of `frame`) grown by what joint colour noise reduction, edge
+/// decontamination and portrait retouching read around it.
+fn window_halos(
+    s: &DevelopSettings,
+    info: &SourceInfo,
+    frame: &geometry::Frame,
+    (full_w, full_h): (usize, usize),
+    detail_scale: f32,
+    px_per_long: f64,
+    mut work: PixelWindow,
+) -> PixelWindow {
+    if local::joint_colour_nr(s)
+        && let Some(params) = local::nrc_params(s, detail_scale)
+    {
+        // The joint diffusion reads a chain of neighbours across its scales. Keep
+        // those reads outside the requested zoom window, just as spot reads are, at every depth.
+        let halo = params.passes.last().map_or(0, |p| (6.0 * p.sigma).ceil() as usize).saturating_add(4);
+        let x = work.x.saturating_sub(halo);
+        let y = work.y.saturating_sub(halo);
+        let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
+        let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
+        work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
+    }
+    if s.masks.iter().any(decontam::applies) {
+        // (fork, `fork/decontaminate.md`: a decontaminated edge's colours are read from windows around it)
+        let halo = decontam::reach(px_per_long);
+        let x = work.x.saturating_sub(halo);
+        let y = work.y.saturating_sub(halo);
+        let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
+        let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
+        work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
+    }
+    // (fork, `fork/retouch-eyes.md`: portrait retouching reads around a face; the window holds all of it)
+    retouch_step::window_for_reads(s, info, frame, full_w, full_h, work)
+}
+
 /// Long edge of the small render a windowed render estimates the whole frame's airlight from.
 const AIRLIGHT_PROXY_EDGE: usize = 384;
 
 /// Resolve `s` against `src` for `req` (see [`Plan`]).
 pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &RenderRequest) -> Plan<'a> {
+    plan_kept(src, info, s, req, None)
+}
+
+/// [`plan`] for a view that keeps its spots' finished pixels in `kept` ([`spots_scale`]): a window whose spots are all
+/// kept does not grow for them and pastes them; any other window of an 8-bit render keeps what it draws.
+pub fn plan_kept<'a>(
+    src: &Rgb32f,
+    info: &SourceInfo,
+    s: &'a DevelopSettings,
+    req: &RenderRequest,
+    kept: Option<&Arc<spots_scale::FinalsStore>>,
+) -> Plan<'a> {
     let mut settings: Cow<'a, DevelopSettings> = match profiles::effective(s) {
         Cow::Borrowed(b) => upright::resolve(src, info, b),
         Cow::Owned(o) => Cow::Owned(upright::resolve(src, info, &o).into_owned()),
     };
     visualize::adjust_settings(req.overlay, &mut settings);
     // a window must not choose a spot's source from the pixels it happens to hold: fix them
-    // from a fixed-size render of the whole frame first
-    if req.window.is_some() && settings.spots.iter().any(|sp| sp.source_offset.is_none()) {
-        let picked: Vec<Option<lightcraft_geom::Point>> =
-            settings.spots.iter().map(|sp| sp.source_offset.or_else(|| spots::pick_source(src, info, &settings, sp, None))).collect();
+    // from a fixed-size render of the whole frame first (once per spot, kept for every window and scale; a spot that
+    // reads no source is never searched: issue #176)
+    if req.window.is_some() && settings.spots.iter().any(|sp| sp.source_offset.is_none() && spots_scale::reads_source(sp)) {
+        let source = spots_scale::fingerprint(src);
+        let picked: Vec<Option<lightcraft_geom::Point>> = settings
+            .spots
+            .iter()
+            .map(|sp| match sp.source_offset {
+                Some(o) => Some(o),
+                None if !spots_scale::reads_source(sp) => None,
+                None => {
+                    spots_scale::picked(spots_scale::pick_key(source, &settings, info, sp), || spots::pick_source(src, info, &settings, sp, None))
+                }
+            })
+            .collect();
         for (sp, o) in settings.to_mut().spots.iter_mut().zip(picked) {
             sp.source_offset = o;
         }
@@ -615,6 +700,20 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let detail_scale = local::detail_scale(px_per_long, native_long);
     let mut fixed_air = None;
     let mut keep = None;
+    let mut spots_at = spots_scale::At::default();
+    // (issue #176: a view keeps its spots' finished pixels per scale, and its LaMa fills for every scale)
+    let spotted = req.depth == OutputDepth::U8 && !s.spots.is_empty();
+    let store = kept.filter(|_| spotted);
+    if let Some(store) = store {
+        spots_at.store = Some(store.clone());
+        // (the source's fingerprint keeps photos apart: views share the store)
+        let source = spots_scale::fingerprint(src);
+        let at_scale = spots_scale::key(info, s, &frame, (full_w, full_h), px_per_long, (src_long, native_long), req.quality == Quality::Draft);
+        spots_at.key = hash_of((at_scale, source));
+        if s.spots.iter().any(spots_learned::is_learned) {
+            spots_at.fill_base = spots_scale::fill_base(source, s, native_long);
+        }
+    }
     let full = (frame.clone(), full_w, full_h);
     let (frame, w, h) = match req.window {
         Some(win) => {
@@ -624,31 +723,42 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
                 let (pw, ph) = (((full_w as f64 * k).round() as usize).max(1), ((full_h as f64 * k).round() as usize).max(1));
                 fixed_air = Some(local::frame_airlight(src, info, s, &frame, pw, ph));
             }
-            // (spots grow the rendered window of 8-bit renders; a grown window is cut back to the request)
-            let mut work = if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win };
-            if local::joint_colour_nr(s)
-                && let Some(params) = local::nrc_params(s, detail_scale)
-            {
-                // The joint diffusion reads a chain of neighbours across its scales. Keep
-                // those reads outside the requested zoom window, just as spot reads are, at every depth.
-                let halo = params.passes.last().map_or(0, |p| (6.0 * p.sigma).ceil() as usize).saturating_add(4);
-                let x = work.x.saturating_sub(halo);
-                let y = work.y.saturating_sub(halo);
-                let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
-                let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
-                work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
+            // (spots grow the rendered window of 8-bit renders; a grown window is cut back to the request; a window
+            // whose spots are kept at this scale pastes them instead, issue #176)
+            if spotted {
+                spots_at.reach = Arc::new(spots_scale::reach(s, &frame, full_w, full_h, px_per_long));
             }
-            if s.masks.iter().any(decontam::applies) {
-                // (fork, `fork/decontaminate.md`: a decontaminated edge's colours are read from windows around it)
-                let halo = decontam::reach(px_per_long);
-                let x = work.x.saturating_sub(halo);
-                let y = work.y.saturating_sub(halo);
-                let right = work.x.saturating_add(work.w).saturating_add(halo).min(full_w);
-                let bottom = work.y.saturating_add(work.h).saturating_add(halo).min(full_h);
-                work = PixelWindow { x, y, w: right.saturating_sub(x), h: bottom.saturating_sub(y) }.clamped(full_w, full_h);
+            let finals = store.and_then(|st| st.get(spots_at.key));
+            let pasted = finals.as_ref().and_then(|f| {
+                // (Auto Mask strokes still grow the window for what they read)
+                let unspotted = DevelopSettings { spots: Vec::new(), ..s.clone() };
+                let work = window_halos(
+                    &unspotted,
+                    info,
+                    &frame,
+                    (full_w, full_h),
+                    detail_scale,
+                    px_per_long,
+                    spots::window_for_reads(&unspotted, &frame, full_w, full_h, px_per_long, win),
+                );
+                f.covers(&spots_scale::rect(&work)).then_some(work)
+            });
+            let work = match pasted {
+                Some(work) => {
+                    spots_at.paste = finals;
+                    work
+                }
+                None => {
+                    let grown = if req.depth == OutputDepth::U8 { spots::window_for_reads(s, &frame, full_w, full_h, px_per_long, win) } else { win };
+                    // (and to the spots' whole reach, a few pixels more for a source read between pixels: what it
+                    // draws is then the whole frame's, and a store keeps it)
+                    let grown = if spotted { spots_scale::grow(&spots_at.reach, &grown, spots::MAX_SPOT_SPAN) } else { grown };
+                    window_halos(s, info, &frame, (full_w, full_h), detail_scale, px_per_long, grown)
+                }
+            };
+            if store.is_some() {
+                spots_at.origin = Some((work.x, work.y));
             }
-            // (fork, `fork/retouch-eyes.md`: portrait retouching reads around a face; the window holds all of it)
-            work = retouch_step::window_for_reads(s, info, &frame, full_w, full_h, work);
             if work != win {
                 keep = Some(PixelWindow { x: win.x - work.x, y: win.y - work.y, ..win });
             }
@@ -687,8 +797,28 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
     let edge_lin_key = hash_of((pre_retouch_key, nr_key));
     // (the noise model leaves the retouching out: a Portrait slider never measures it again; but whether a one-tile
     // frame is measured apart from the retouching, `colour_noise`, is part of it)
-    let noise_key =
-        hash_of((pre_retouch_key, [d.nr_luminance, d.nr_detail].map(f64::to_bits), detail_scale.to_bits(), retouch_step::touches(s, info)));
+    // (issue #176: and it leaves the spots, red eye and the window out, as [`colour_noise`] does: it measures tiles of the
+    // whole frame before them, so a spot edit or a pan never measures it again; a one-tile frame measured on the
+    // image itself, spots and all, is never kept under this key: `colour_noise` gives `None` there)
+    let noise_key = hash_of((
+        hash_of((
+            // (the photo itself: a view renders one photo after another, review F4)
+            spots_scale::fingerprint(src),
+            format!("{:?}", full.0),
+            full.1,
+            full.2,
+            [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
+            format!("{:?}", s.optics),
+            spots_keep::pre_spot_sections(s),
+            local_tone::enabled(info, s),
+            src_long,
+        )),
+        [d.nr_luminance, d.nr_detail].map(f64::to_bits),
+        detail_scale.to_bits(),
+        retouch_step::touches(s, info),
+        // (the whole frame may be measured on itself, a window never is)
+        (w, h) == (full.1, full.2),
+    ));
     let mut plan = Plan {
         settings,
         frame,
@@ -712,9 +842,41 @@ pub fn plan<'a>(src: &Rgb32f, info: &SourceInfo, s: &'a DevelopSettings, req: &R
         recolor,
         full,
         retouch_analysis: None,
+        spots_at,
     };
     plan.retouch_analysis = retouch_step::analysis(src, info, &plan);
     plan
+}
+
+thread_local! {
+    static NOISE_MEASURED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Noise models [`colour_noise`] measured on this thread so far (a test counts them).
+pub fn noise_measured() -> usize {
+    NOISE_MEASURED.with(std::cell::Cell::get)
+}
+
+/// The last noise model ([`colour_noise`]) a view measured, by [`Plan::noise_key`]: the key holds nothing of the window,
+/// so every window and pan of a frame takes it (issue #176: each new window measured it again).
+#[derive(Debug, Default)]
+pub struct NoiseMemo(Mutex<Option<(u64, nrc_joint::JointNoise)>>);
+
+impl NoiseMemo {
+    /// The model kept under `key`.
+    pub fn get(&self, key: u64) -> Option<(u64, nrc_joint::JointNoise)> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).filter(|(k, _)| *k == key)
+    }
+
+    /// Keep `model` (with its key).
+    pub fn put(&self, model: (u64, nrc_joint::JointNoise)) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(model);
+    }
+
+    /// Forget it.
+    pub fn clear(&self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
 }
 
 /// The joint colour NR's noise model of the whole frame, measured on fixed tiles of it
@@ -735,6 +897,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
     if (p.w, p.h) == (*fw, *fh) && windows.len() == 1 && !retouch_step::touches(s, info) {
         return None;
     }
+    NOISE_MEASURED.with(|c| c.set(c.get().wrapping_add(1)));
     let t = profiling().then(std::time::Instant::now);
     let (lum, _) = local::nr_params(s, p.detail_scale);
     // the source oriented and prefiltered once for all tiles
@@ -756,6 +919,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
                 recolor: Vec::new(),
                 full: p.full.clone(),
                 retouch_analysis: None,
+                spots_at: spots_scale::At::default(),
                 ..*p
             };
             local_tone::apply(&mut img, info, &tile);
@@ -790,6 +954,11 @@ pub fn lin_cpu(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
 pub fn lin_cpu_pre_retouch(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     retouch_step::note_pre_retouch_run();
     let s = &*p.settings;
+    if p.spots_at.paste.is_some() {
+        // (a window whose spots are kept pastes them, issue #176)
+        spots_keep::lin_cpu_pre_retouch(img, info, p, None);
+        return;
+    }
     // LaMa spots first, before the white balance: the learned fill then depends on the picture alone
     let learned = learned_fill::current().filter(|_| s.spots.iter().any(spots_learned::is_learned));
     let done = learned
@@ -911,7 +1080,7 @@ fn render_impl(
         Src::Borrowed(r) => r,
         Src::Shared(a) => a,
     };
-    let plan = plan(src_img, info, s, req);
+    let plan = plan_kept(src_img, info, s, req, cache.map(|c| &c.spot_finals));
     let Plan { ref frame, w, h, px_per_long, detail_scale, geo, lin_key, .. } = plan;
     let s = &*plan.settings;
 
@@ -926,7 +1095,11 @@ fn render_impl(
     };
     lap("sample", &mut t);
 
-    let mut colour_noise = cached.as_ref().and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key);
+    let mut colour_noise = cached
+        .as_ref()
+        .and_then(|e| e.colour_noise)
+        .filter(|(k, _)| *k == plan.noise_key)
+        .or_else(|| cache.and_then(|c| c.noise.get(plan.noise_key)));
     // (with retouching on, the image before it is kept: a Portrait slider starts from it, fork
     // `fork/perf-portrait-draft.md`)
     let kept_pre_retouch = cached
@@ -969,6 +1142,9 @@ fn render_impl(
             retouch_step::apply(&mut img, info, &plan);
             if colour_noise.is_none() {
                 colour_noise = self::colour_noise(src_img, info, &plan).map(|n| (plan.noise_key, n));
+                if let (Some(c), Some(n)) = (cache, colour_noise) {
+                    c.noise.put(n);
+                }
             }
             local::denoise(&mut img, s, detail_scale, colour_noise.as_ref().map(|c| &c.1));
             Arc::new(img)
@@ -1243,6 +1419,8 @@ mod tests_sharpen_mask;
 mod tests_slider_strength;
 #[cfg(test)]
 mod tests_spot_hidden;
+#[cfg(test)]
+mod tests_spot_reuse;
 #[cfg(test)]
 mod tests_tone;
 #[cfg(test)]

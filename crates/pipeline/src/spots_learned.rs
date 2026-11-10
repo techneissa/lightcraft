@@ -157,6 +157,20 @@ pub fn footprint(spot: &Spot, frame: &Frame, w: usize, h: usize, ppl: f64) -> Op
 
 /// Draw one learned spot on `img` (see [`apply`]), sharing `run` with the render's other spots: whether it is done.
 pub fn apply_one(img: &mut Rgb32f, spot: &Spot, at: &Where<'_>, provider: &dyn LearnedFill, run: &FillRun) -> bool {
+    apply_one_kept(img, spot, at, provider, run, None)
+}
+
+/// [`apply_one`] for a view that keeps its LaMa fills (`kept`: the store and this spot's key, issue #176): a fill kept
+/// from a render at this scale or finer is taken, resampled to this render, without asking the model; one asked for is
+/// kept.
+pub fn apply_one_kept(
+    img: &mut Rgb32f,
+    spot: &Spot,
+    at: &Where<'_>,
+    provider: &dyn LearnedFill,
+    run: &FillRun,
+    kept: Option<(&crate::spots_scale::FinalsStore, u64)>,
+) -> bool {
     let (w, h) = (img.width, img.height);
     if w == 0 || h == 0 || !is_learned(spot) || run.stopped() {
         // (stopped: ✕ on the fill's row; the rest of this render's spots show the Classic fill)
@@ -173,7 +187,23 @@ pub fn apply_one(img: &mut Rgb32f, spot: &Spot, at: &Where<'_>, provider: &dyn L
         return true;
     }
     let job = Job { alpha: &alpha, b, c, k };
-    let Some(filled) = fill_crop(img, &job, run, provider, at.draft) else { return false };
+    let filled = match kept.and_then(|(store, key)| store.fill(key, ppl)) {
+        Some(f) => f.resample(&at.frame.out_to_norm(w, h), (c.x0, c.y0), (c.w(), c.h())),
+        None => {
+            let Some((filled, (size, out))) = fill_crop(img, &job, run, provider, at.draft) else { return false };
+            // (kept unless a draft's, or a crop a window's edge cut: its fill saw less than the whole frame's)
+            let cut = at.frame.view.is_some() && (c.x0 == 0 || c.y0 == 0 || c.x1 == w || c.y1 == h);
+            if let Some((store, key)) = kept.filter(|_| !at.draft && !cut) {
+                let per = (c.w() as f64 / size.0.max(1) as f64, c.h() as f64 / size.1.max(1) as f64);
+                let fat = crate::spots_scale::FillAt { ppl, to_out: at.frame.norm_to_out(w, h), c0: (c.x0, c.y0), k: per };
+                store.keep_fill(key, fat, size, out);
+            }
+            filled
+        }
+    };
+    if filled.len() != c.w() * c.h() * 3 {
+        return false;
+    }
     blend(img, &job, &filled);
     true
 }
@@ -190,7 +220,8 @@ struct Job<'a> {
 
 /// The learned fill of the job's crop (hole: its alpha), as a picture of the crop's size; handed over and taken back at
 /// the size `k` gives (see the module notes).
-fn fill_crop(img: &Rgb32f, job: &Job<'_>, run: &FillRun, provider: &dyn LearnedFill, draft: bool) -> Option<Vec<f32>> {
+/// With the fill as the model gave it (its size and pixels).
+fn fill_crop(img: &Rgb32f, job: &Job<'_>, run: &FillRun, provider: &dyn LearnedFill, draft: bool) -> Option<(Vec<f32>, Model)> {
     let Job { alpha, b, c, k } = *job;
     let (cw, ch) = (c.w(), c.h());
     let mut rgb = Vec::with_capacity(cw * ch * 3);
@@ -215,8 +246,11 @@ fn fill_crop(img: &Rgb32f, job: &Job<'_>, run: &FillRun, provider: &dyn LearnedF
         return None;
     }
     let back = if same { theirs.as_ref().clone() } else { scale(&theirs, (fw, fh), (cw, ch), 3) };
-    (back.len() == cw * ch * 3).then_some(back)
+    (back.len() == cw * ch * 3).then_some((back, ((fw, fh), theirs)))
 }
+
+/// A fill as the model gave it: its size and pixels.
+type Model = ((usize, usize), std::sync::Arc<Vec<f32>>);
 
 /// Draw `filled` (the job's crop) over `img` under the job's alpha.
 fn blend(img: &mut Rgb32f, job: &Job<'_>, filled: &[f32]) {
