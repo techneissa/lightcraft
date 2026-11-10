@@ -487,6 +487,7 @@ pub fn prepare(app: &mut LightcraftApp) {
         app.region_tiles.clear();
         app.renderer.release(Slot::Region);
         app.renderer.release(Slot::RegionBefore);
+        app.renderer.window_on_screen = false;
     }
     // Reference with no live pin draws no panes: release them as other views do.
     let reference_shown = app.ui.reference.is_some_and(|r| live(app, PhotoId(r)));
