@@ -122,7 +122,8 @@ pub fn analysis(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<Arc<Ana
         crate::spots_keep::pre_spot_sections(&before),
         crate::local_tone::enabled(info, &before),
         p.src_long,
-        p.native_long,
+        // (and the order of the Classic spots and the white balance, issue #184)
+        (p.native_long, p.spots_after_wb && !before.spots.is_empty()),
     ));
     let found = |c: &[(u64, Arc<Analysis>)]| c.iter().find(|(k, _)| *k == key).map(|(_, a)| a.clone());
     if let Some(a) = found(&ANALYSES.lock().unwrap_or_else(PoisonError::into_inner)) {
