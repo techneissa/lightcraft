@@ -2593,5 +2593,6 @@
   "Blur": "Розмиття",
   "Clean Backdrop": "Очистити фон",
   "Loading background picture": "Завантаження фонового зображення",
-  "Reading depth map": "Читання карти глибини"
+  "Reading depth map": "Читання карти глибини",
+  "Reading the full-size photo": "Читання фото в повному розмірі"
 }

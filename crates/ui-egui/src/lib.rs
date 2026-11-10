@@ -38,6 +38,7 @@ mod focus_scan;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod fork_update;
 mod frame_rate;
+pub mod full_decode;
 pub mod headless;
 pub mod i18n;
 pub mod icons;
@@ -405,6 +406,8 @@ pub struct LightcraftApp {
     pub handoffs: Vec<editor_handoff::Handoff>,
     /// Background file-system work of other commands (Find Missing Photos, auto import…).
     pub tasks: tasks::Tasks,
+    /// The open photo's original, read in the background ahead of the first zoom (#182).
+    pub full_decode: full_decode::FullDecodeAhead,
     /// The files of the last finished background export (`ui.inspect` → `export.last`).
     pub last_export_result: Option<Value>,
     /// The last slideshow export's end has been told (a toast).

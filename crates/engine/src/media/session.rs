@@ -1,7 +1,9 @@
 use super::quick::{QuickJob, content_key, embedded_thumb_key, source_info};
 use super::render::{RenderJob, RenderResult};
 use super::settings_hash::with_process;
-use super::source::{PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket};
+use super::source::{
+    DecodedSource, PreviewLoader, RENDER_CACHE_VERSION, SourceLevel, SourceRef, THUMB_SIZES, face_edge, source_edge_needed, thumb_bucket,
+};
 use super::{
     Arc, DevelopSettings, Hash128, Hasher128, LoadOptions, MediaKind, Op, Photo, PhotoId, RenderRequest, Rendered, Rgb32f, Source, SourceInfo,
 };
@@ -590,16 +592,21 @@ impl crate::Session {
     /// Accept a finished job's loaded source into the cache. What the decode learnt about the file that the catalog
     /// has wrong is corrected too ([`Self::learn_as_shot_wb`]).
     pub fn accept(&mut self, r: &RenderResult) {
-        if let Some(src) = &r.loaded
-            && r.source_key.is_none_or(|key| self.catalog.photo(r.photo).is_some_and(|p| super::quick::source_identity(p) == key))
-            // (not a source decoded with settings the photo no longer has: one decoded for them replaces it)
-            && self.catalog.photo(r.photo).is_none_or(|p| src.serves(LoadOptions::of(&p.develop)))
-        {
-            if let Some(info) = &src.info {
-                self.learn_as_shot_wb(r.photo, info);
-            }
-            self.media.insert_source(r.photo, r.level, src.clone());
+        if let Some(src) = &r.loaded {
+            self.accept_loaded(r.photo, r.level, r.source_key, src);
         }
+    }
+
+    /// [`Self::accept`] of a source decoded for photo `id` at `level`: kept when it still serves the photo. Whether it was.
+    pub(super) fn accept_loaded(&mut self, id: PhotoId, level: SourceLevel, source_key: Option<Hash128>, src: &DecodedSource) -> bool {
+        if !self.loaded_serves(id, source_key, src) {
+            return false;
+        }
+        if let Some(info) = &src.info {
+            self.learn_as_shot_wb(id, info);
+        }
+        self.media.insert_source(id, level, src.clone());
+        true
     }
 
     /// Record the as-shot white balance a decode of photo `id`'s file read (`info`) when the catalog has another:
