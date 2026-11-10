@@ -511,3 +511,85 @@ fn the_kept_chroma_plane_counts_with_the_stages() {
     let with = lightcraft_gpu::stage_bytes(&cache);
     assert!(with >= without + 3 * 4 * w * h, "the chroma plane (3 floats a pixel) is counted: {without} → {with} bytes");
 }
+
+/// Applied masks (a brush of many strokes, a Subject from a stored selection, a gradient), then edits that change none of
+/// their shapes: Exposure, Temperature, Texture, one mask's Exposure and Saturation, a spot. Each is the edits after the
+/// masks are made (issue #175): no mask's alpha is built again, on the device or on the CPU, and the picture equals a
+/// fresh render. A change to one mask's shape builds that mask alone.
+#[test]
+fn edits_after_the_masks_are_applied_build_no_alpha() {
+    use lightcraft_develop::{SegMask, Spot, SpotMode, WbMode};
+    let src = scene(960, 640);
+    let info = SourceInfo { raw: true, ..Default::default() };
+    let subject = SegMask::from_logits(8, &(0..64).map(|i| if (2..6).contains(&(i % 8)) && i / 8 > 2 { 3.0 } else { -3.0 }).collect::<Vec<f32>>());
+    let masks = vec![
+        Mask {
+            id: 1,
+            components: vec![comp(MaskOp::Add, MaskShape::Brush { strokes: strokes(30, false, false) })],
+            adjust: adjust(),
+            ..Default::default()
+        },
+        Mask {
+            id: 2,
+            components: vec![comp(MaskOp::Add, MaskShape::Subject { seg: Some(subject), detail: Vec::new(), edge: 0.0 })],
+            adjust: adjust(),
+            ..Default::default()
+        },
+        Mask {
+            id: 3,
+            components: vec![comp(MaskOp::Add, MaskShape::Linear { start: Point::new(0.5, 0.0), end: Point::new(0.5, 0.6) })],
+            adjust: adjust(),
+            ..Default::default()
+        },
+    ];
+    let start = with_masks(masks);
+    type Edit = fn(&mut DevelopSettings);
+    let edits: [(&str, Edit); 7] = [
+        ("Exposure", |s| s.light.exposure = 0.4),
+        ("Temperature", |s| {
+            s.wb.mode = WbMode::Custom;
+            s.wb.temp = 4300.0;
+        }),
+        ("Texture", |s| s.effects.texture = 30.0),
+        ("a mask's Exposure", |s| s.masks[1].adjust.exposure = -0.7),
+        ("a mask's Saturation", |s| s.masks[2].adjust.saturation = 35.0),
+        ("a spot", |s| s.spots.push(Spot { mode: SpotMode::Heal, points: vec![Point::new(0.8, 0.8)], size: 0.02, ..Default::default() })),
+        ("a second spot", |s| s.spots.push(Spot { mode: SpotMode::Clone, points: vec![Point::new(0.2, 0.85)], size: 0.02, ..Default::default() })),
+    ];
+    let mut failed = Vec::new();
+    let full = RenderRequest::fit(720, 720);
+    let draft = RenderRequest { quality: lightcraft_pipeline::Quality::Draft, ..full };
+    for (device, req) in [(false, full), (false, draft), (true, full), (true, draft)] {
+        if device && !gpu() {
+            continue;
+        }
+        let path = format!("{} {}", if device { "GPU" } else { "CPU" }, if req.quality == full.quality { "full" } else { "draft" });
+        let cache = StageCache::default();
+        let run = |s: &DevelopSettings, cache: Option<&StageCache>| -> Rgba8 {
+            match (device, cache) {
+                (true, c) => lightcraft_gpu::render(&src, &info, s, &req, c).expect("gpu").image,
+                (false, Some(c)) => lightcraft_pipeline::render_cached(&src, &info, s, &req, c).image,
+                (false, None) => render(&src, &info, s, &req).image,
+            }
+        };
+        let mut s = start.clone();
+        run(&s, Some(&cache));
+        for (name, edit) in edits {
+            edit(&mut s);
+            let before = mask_evaluations();
+            let warm = run(&s, Some(&cache));
+            let built = mask_evaluations() - before;
+            if built != 0 {
+                failed.push(format!("{path} {name}: {built} alphas built"));
+            }
+            let (mean, max) = diff(&warm, &run(&s, None));
+            assert!(mean < 0.01 && max <= 1, "{path} {name}: the warm render differs from a fresh one ({mean:.4}, {max})");
+        }
+        // moving the gradient builds the gradient's alpha and no other
+        s.masks[2].components[0].shape = MaskShape::Linear { start: Point::new(0.5, 0.1), end: Point::new(0.5, 0.7) };
+        let before = mask_evaluations();
+        run(&s, Some(&cache));
+        assert_eq!(mask_evaluations() - before, 1, "{path}: moving one gradient");
+    }
+    assert!(failed.is_empty(), "{failed:#?}");
+}

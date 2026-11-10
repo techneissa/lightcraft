@@ -980,6 +980,8 @@ fn render_impl(
         _ => local::Planes { key: lin_key, pre_nr: plan.pre_nr_key, ..Default::default() },
     };
     let keys = masks::AlphaKeys { geo, image: lin_key };
+    // (a stored selection's edges follow the resampled photo: a later edit builds no AI mask again, issue #175)
+    alphas.guide_from(geo, &sampled);
     let mut prep =
         local::prepare(lin.clone(), s, frame, px_per_long, plan.detail_scale, req.quality, &mut planes, plan.mattes.as_ref(), (&mut alphas, keys));
     if let Some(a) = plan.fixed_air {

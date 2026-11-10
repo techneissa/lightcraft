@@ -178,9 +178,56 @@ pub struct AlphaCache {
     mattes: Option<Arc<Mattes>>,
     slots: Vec<(u64, Arc<MaskAlpha>)>,
     pub(super) brushes: BrushCache,
+    /// The picture a stored selection's edges follow ([`guide_plane`]), and what it is made from.
+    guide: Option<Guide>,
+}
+
+/// The resampled photo of a render (before white balance, spots, noise reduction or any other edit) and, once a mask
+/// needed it, its log luminance: the edges a stored AI selection follows ([`uses_guide`]).
+#[derive(Clone)]
+struct Guide {
+    geo: u64,
+    sampled: Arc<lightcraft_raster::Rgb32f>,
+    plane: Option<Arc<Plane>>,
+}
+
+/// The log luminance of the resampled photo `sampled`: what a stored selection's edges follow ([`uses_guide`]). The
+/// photo's own pixels, before any edit: a later edit (white balance, a spot, noise reduction, the lens corrections' colour
+/// steps) changes nothing a selection was made of, so its alpha is kept (issue #175).
+pub fn guide_plane(sampled: &lightcraft_raster::Rgb32f) -> Plane {
+    sampled.map(crate::local::log_lum)
+}
+
+/// Whether `shape` reads the photo only as the edges its stored selection follows ([`guide_plane`]): an AI mask with a
+/// stored segmentation. The heuristics, ranges, Auto Mask and Refine Edges read the edited photo.
+pub fn uses_guide(shape: &MaskShape) -> bool {
+    match shape {
+        MaskShape::Object { seg, detail, .. }
+        | MaskShape::Prompt { seg, detail, .. }
+        | MaskShape::Subject { seg, detail, .. }
+        | MaskShape::Sky { seg, detail, .. }
+        | MaskShape::Background { seg, detail, .. }
+        | MaskShape::People { seg, detail, .. } => seg.is_some() || !detail.is_empty(),
+        _ => false,
+    }
 }
 
 impl AlphaCache {
+    /// The render's resampled photo (frame `geo`): a stored selection's edges follow it ([`uses_guide`]). Without one they
+    /// follow the edited photo the masks are evaluated on.
+    pub fn guide_from(&mut self, geo: u64, sampled: &Arc<lightcraft_raster::Rgb32f>) {
+        if self.guide.as_ref().is_some_and(|g| g.geo == geo && Arc::ptr_eq(&g.sampled, sampled)) {
+            return;
+        }
+        self.guide = Some(Guide { geo, sampled: sampled.clone(), plane: None });
+    }
+
+    /// The guide's plane for a `w × h` evaluation, made on first need (`None`: no guide, or one of another size).
+    pub(super) fn guide(&mut self, w: usize, h: usize) -> Option<Arc<Plane>> {
+        let g = self.guide.as_mut().filter(|g| (g.sampled.width, g.sampled.height) == (w, h))?;
+        Some(g.plane.get_or_insert_with(|| Arc::new(guide_plane(&g.sampled))).clone())
+    }
+
     /// The alphas held for a render with `mattes` (none when the mattes changed), taken out of the
     /// cache: hand back the ones the render used with [`Self::keep`].
     pub(super) fn take(&mut self, mattes: Option<&Arc<Mattes>>) -> Vec<(u64, Arc<MaskAlpha>)> {
@@ -202,7 +249,8 @@ impl AlphaCache {
     /// Memory held (bytes): the alphas and the brush parts' planes. A plane shared with a render in
     /// progress is counted here as well.
     pub fn bytes(&self) -> usize {
-        self.slots.iter().map(|(_, a)| a.bytes()).sum::<usize>() + self.brushes.bytes()
+        let guide = self.guide.as_ref().and_then(|g| g.plane.as_ref()).map_or(0, |p| p.data.len() * std::mem::size_of::<f32>());
+        self.slots.iter().map(|(_, a)| a.bytes()).sum::<usize>() + self.brushes.bytes() + guide
     }
 
     pub fn len(&self) -> usize {
@@ -224,12 +272,14 @@ pub fn reads(m: &Mask) -> (bool, bool) {
             MaskShape::Linear { .. } | MaskShape::Radial { .. } | MaskShape::DepthRange { .. } | MaskShape::Landscape { .. } => (false, false),
             // a stored segmentation is guided-filtered by the photo's log luminance (`sample_seg`);
             // clicks without one take the heuristic; no clicks and no segmentation read nothing
-            MaskShape::Prompt { seg, detail, .. } => (seg.is_some() || !detail.is_empty(), false),
-            MaskShape::Object { hint, seg, detail, .. } => (!hint.is_empty() || seg.is_some() || !detail.is_empty(), false),
+            // (a stored segmentation follows the resampled photo, not the edited one: `uses_guide`; that picture is the
+            // frame's, in the key already. A source matte reads nothing)
+            s if uses_guide(s) => (false, false),
+            MaskShape::Prompt { .. } => (false, false),
+            MaskShape::Object { hint, .. } => (!hint.is_empty(), false),
             MaskShape::Brush { strokes } => (strokes.iter().any(|s| s.auto_mask), false),
-            // Sky: the heuristic reads the exposure (`shape_alpha`); a stored segmentation is filtered by the log
-            // luminance before exposure and doesn't (a source matte doesn't either: counted as if it did)
-            MaskShape::Sky { seg, detail, .. } => (true, seg.is_none() && detail.is_empty()),
+            // Sky: the heuristic reads the exposure (`shape_alpha`)
+            MaskShape::Sky { .. } => (true, true),
             MaskShape::LuminanceRange { .. } | MaskShape::ColorRange { .. } => (true, true),
             MaskShape::Subject { .. } | MaskShape::Background { .. } | MaskShape::People { .. } => (true, false),
         };

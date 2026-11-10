@@ -891,11 +891,22 @@ pub fn render(
     let edge_boxes = retouch_boxes.clone();
     if let Some(c) = stages {
         let lin = Some((plan.lin_key, lin.clone()));
-        c.put(Entry { src: src.clone(), geo: plan.geo, sampled, lin, post, colour_noise, planes, last: None, pre_retouch, retouch_boxes });
+        c.put(Entry {
+            src: src.clone(),
+            geo: plan.geo,
+            sampled: sampled.clone(),
+            lin,
+            post,
+            colour_noise,
+            planes,
+            last: None,
+            pre_retouch,
+            retouch_boxes,
+        });
     }
 
     // 4. masks
-    let (masks, terms) = crate::masks::masks(&mut cx, &lin, &prep, &plan, &mut host, stages.map(|c| (&c.alphas, src)));
+    let (masks, terms) = crate::masks::masks(&mut cx, (&lin, &sampled), &prep, &plan, &mut host, stages.map(|c| (&c.alphas, src)));
     lap("masks", &mut t, &mut cx);
     if let Want::MaskPlanes(ask) = want {
         return Some(Output::Masks(mask_planes(&mut cx, masks.as_ref(), &plan, (&lin, &prep.log_l), Arc::as_ptr(src) as usize, ask)));

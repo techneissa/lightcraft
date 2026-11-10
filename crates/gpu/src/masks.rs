@@ -34,6 +34,8 @@ struct Inner {
     mattes: Option<Arc<Mattes>>,
     slots: Vec<(u64, Arc<Buf>)>,
     brushes: Vec<BrushPart>,
+    /// The edges a stored selection follows (`masks::guide_plane` of the resampled photo) for the frame `plan.geo` keys.
+    guide: Option<(u64, Arc<lightcraft_raster::Plane>)>,
 }
 
 /// A brush part's plane and the strokes it holds (`masks::brush_chain`).
@@ -214,7 +216,7 @@ fn guided_cross(cx: &mut Cx<'_>, guide: &Buf, p: &Buf, w: usize, h: usize, sigma
 /// `store`: the view's alphas of the last render (see [`AlphaStore`]); without one every mask is evaluated.
 pub(crate) fn masks(
     cx: &mut Cx<'_>,
-    lin: &Buf,
+    (lin, sampled): (&Buf, &Buf),
     prep: &Prep,
     plan: &Plan<'_>,
     host: &mut Host,
@@ -331,6 +333,29 @@ pub(crate) fn masks(
                     let aux = (!aux.is_empty()).then(|| cx.gpu.upload(&aux));
                     cx.run("shape", &p, &[Some(lin), Some(&prep.log_l), aux.as_ref(), Some(&comp_plane), Some(&alpha)], groups2(w, h, [16, 16]));
                     None
+                }
+                None if lightcraft_pipeline::masks::uses_guide(&comp.shape) => {
+                    // a stored selection, on the CPU: it follows the resampled photo's edges (made once per frame and kept), and
+                    // reads nothing of the edited photo (issue #175)
+                    if held.guide.as_ref().is_none_or(|(geo, g)| *geo != plan.geo || (g.width, g.height) != (w, h)) {
+                        let img = cx.read_rgb(sampled, w, h);
+                        held.guide = Some((plan.geo, Arc::new(lightcraft_pipeline::masks::guide_plane(&img))));
+                    }
+                    let guide = held.guide.as_ref().map(|(_, g)| g.clone());
+                    let (img, l) = (Rgb32f::new(0, 0), lightcraft_raster::Plane::new(0, 0));
+                    let mut v = lightcraft_pipeline::masks::shape_alpha_guided(
+                        &comp.shape,
+                        frame,
+                        w,
+                        h,
+                        (&img, &l, guide.as_deref()),
+                        ev,
+                        plan.mattes.as_deref(),
+                    );
+                    if inverted {
+                        v.data.iter_mut().for_each(|x| *x = 1.0 - *x);
+                    }
+                    Some(cx.gpu.upload(&v.data))
                 }
                 None => {
                     // no kernel: evaluate on the CPU
