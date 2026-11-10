@@ -250,8 +250,11 @@ pub struct Store {
 }
 
 impl Store {
+    /// On in the app (`LIGHTCRAFT_FULL_PICTURE=0` turns it off, to compare with the loupe without it), off in the
+    /// crate's tests and on the web.
     pub fn new() -> Self {
-        Store { enabled: !cfg!(test) && !cfg!(target_arch = "wasm32"), ..Default::default() }
+        let off = std::env::var("LIGHTCRAFT_FULL_PICTURE").is_ok_and(|v| v.trim() == "0");
+        Store { enabled: !off && !cfg!(test) && !cfg!(target_arch = "wasm32"), ..Default::default() }
     }
 
     /// Let go of the picture and of what is being asked for.
@@ -267,11 +270,16 @@ impl Store {
         self.picture.as_ref().map(|p| (p.photo, p.key))
     }
 
+    /// Whether a picture is held with all its textures up.
+    pub fn ready(&self) -> bool {
+        self.picture.as_ref().is_some_and(|p| p.waiting.is_empty())
+    }
+
     /// Bytes of the textures uploaded and waiting.
     pub fn bytes(&self) -> usize {
-        self.picture.as_ref().map_or(0, |p| {
-            p.tiles.iter().map(|t| t.bytes).sum::<usize>() + p.waiting.iter().map(|t| t.image.pixels.len() * 4).sum::<usize>()
-        })
+        self.picture
+            .as_ref()
+            .map_or(0, |p| p.tiles.iter().map(|t| t.bytes).sum::<usize>() + p.waiting.iter().map(|t| t.image.pixels.len() * 4).sum::<usize>())
     }
 
     /// A finished job of key `key` for `photo` (`built`: its picture, if it made one).
