@@ -38,6 +38,8 @@ pub struct GpuStages {
     decontam: crate::decontam::KeptEdges,
     /// The spots finished at the zoom's scale, on the host (issue #176, `lightcraft_pipeline::spots_scale`).
     spot_finals: Arc<lightcraft_pipeline::spots_scale::FinalsStore>,
+    /// The whole frame's noise model, for every window of it (issue #176).
+    noise: lightcraft_pipeline::NoiseMemo,
 }
 
 const CAPACITY: usize = 2;
@@ -176,6 +178,7 @@ impl GpuStages {
         self.spots.clear();
         self.spots_cpu.clear();
         self.spot_finals.clear();
+        self.noise.clear();
         *self.host.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
@@ -1162,7 +1165,8 @@ fn linear_stage(cx: &mut Cx<'_>, at: &ViewAt<'_>, sampled: &Buf, info: &SourceIn
     let (src, size) = (at.src, (plan.w, plan.h));
     let old_lin = at.cached.and_then(|e| e.lin.clone());
     let old_post = at.cached.map_or_else(std::sync::Weak::new, |e| e.post.clone());
-    let mut colour_noise = at.cached.and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key);
+    let mut colour_noise =
+        at.cached.and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key).or_else(|| at.stages.and_then(|g| g.noise.get(plan.noise_key)));
     let old_retouch = at.cached.map_or(Some(Vec::new()), |e| e.retouch_boxes.clone());
     if let Some((_, b)) = old_lin.clone().filter(|(k, _)| *k == plan.lin_key) {
         let same = at.start.is_some_and(|l| l.lin_key == plan.lin_key).then(|| crate::dirty::Tiles::none(size));
@@ -1171,6 +1175,9 @@ fn linear_stage(cx: &mut Cx<'_>, at: &ViewAt<'_>, sampled: &Buf, info: &SourceIn
     }
     if colour_noise.is_none() {
         colour_noise = lightcraft_pipeline::colour_noise(src, info, plan).map(|n| (plan.noise_key, n));
+        if let (Some(g), Some(n)) = (at.stages, colour_noise) {
+            g.noise.put(n);
+        }
     }
     let kept = at.stages.map(|c| (c.spots.get(src, plan.geo), c.spots_cpu.get(src, plan.geo))).unwrap_or_default();
     let s = &*plan.settings;

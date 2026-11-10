@@ -386,11 +386,20 @@ pub struct StageCache {
     spots: spots_keep::KeptStore<spots_keep::CpuKept>,
     /// The spots finished at the zoom's scale (`spots_scale`): every window of it pastes them (issue #176).
     spot_finals: Arc<spots_scale::FinalsStore>,
+    /// The whole frame's noise model, for every window of it (issue #176).
+    pub noise: NoiseMemo,
 }
 
 impl Default for StageCache {
     fn default() -> Self {
-        StageCache { entries: Mutex::new(Vec::new()), capacity: 2, ext: Mutex::new(None), spots: Default::default(), spot_finals: Default::default() }
+        StageCache {
+            entries: Mutex::new(Vec::new()),
+            capacity: 2,
+            ext: Mutex::new(None),
+            spots: Default::default(),
+            spot_finals: Default::default(),
+            noise: Default::default(),
+        }
     }
 }
 
@@ -401,6 +410,7 @@ impl StageCache {
         *self.ext.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.spots.clear();
         self.spot_finals.clear();
+        self.noise.clear();
     }
 
     /// Per-view state of type `T` kept alongside this cache (created on first use). Lets another
@@ -803,6 +813,37 @@ pub fn plan_kept<'a>(
     plan
 }
 
+thread_local! {
+    static NOISE_MEASURED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Noise models [`colour_noise`] measured on this thread so far (a test counts them).
+pub fn noise_measured() -> usize {
+    NOISE_MEASURED.with(std::cell::Cell::get)
+}
+
+/// The last noise model ([`colour_noise`]) a view measured, by [`Plan::noise_key`]: the key holds nothing of the window,
+/// so every window and pan of a frame takes it (issue #176: each new window measured it again).
+#[derive(Debug, Default)]
+pub struct NoiseMemo(Mutex<Option<(u64, nrc_joint::JointNoise)>>);
+
+impl NoiseMemo {
+    /// The model kept under `key`.
+    pub fn get(&self, key: u64) -> Option<(u64, nrc_joint::JointNoise)> {
+        self.0.lock().unwrap_or_else(|e| e.into_inner()).filter(|(k, _)| *k == key)
+    }
+
+    /// Keep `model` (with its key).
+    pub fn put(&self, model: (u64, nrc_joint::JointNoise)) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = Some(model);
+    }
+
+    /// Forget it.
+    pub fn clear(&self) {
+        *self.0.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    }
+}
+
 /// The joint colour NR's noise model of the whole frame, measured on fixed tiles of it
 /// ([`nrc_joint::tiles`]) so that every window of it is filtered alike. The tiles are resampled,
 /// tone-mapped, white-balanced and luminance-denoised like the frame; the retouching and defringing
@@ -821,6 +862,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
     if (p.w, p.h) == (*fw, *fh) && windows.len() == 1 && !retouch_step::touches(s, info) {
         return None;
     }
+    NOISE_MEASURED.with(|c| c.set(c.get().wrapping_add(1)));
     let t = profiling().then(std::time::Instant::now);
     let (lum, _) = local::nr_params(s, p.detail_scale);
     // the source oriented and prefiltered once for all tiles
@@ -1018,7 +1060,11 @@ fn render_impl(
     };
     lap("sample", &mut t);
 
-    let mut colour_noise = cached.as_ref().and_then(|e| e.colour_noise).filter(|(k, _)| *k == plan.noise_key);
+    let mut colour_noise = cached
+        .as_ref()
+        .and_then(|e| e.colour_noise)
+        .filter(|(k, _)| *k == plan.noise_key)
+        .or_else(|| cache.and_then(|c| c.noise.get(plan.noise_key)));
     // (with retouching on, the image before it is kept: a Portrait slider starts from it, fork
     // `fork/perf-portrait-draft.md`)
     let kept_pre_retouch = cached
@@ -1061,6 +1107,9 @@ fn render_impl(
             retouch_step::apply(&mut img, info, &plan);
             if colour_noise.is_none() {
                 colour_noise = self::colour_noise(src_img, info, &plan).map(|n| (plan.noise_key, n));
+                if let (Some(c), Some(n)) = (cache, colour_noise) {
+                    c.noise.put(n);
+                }
             }
             local::denoise(&mut img, s, detail_scale, colour_noise.as_ref().map(|c| &c.1));
             Arc::new(img)

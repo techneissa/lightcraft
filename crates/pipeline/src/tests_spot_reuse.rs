@@ -101,6 +101,26 @@ fn a_window_draws_its_spots_as_the_whole_frame_does() {
 }
 
 #[test]
+fn a_pan_or_a_spot_edit_measures_the_noise_model_once() {
+    let (src, cache) = (scene(), StageCache::default());
+    let mut s = DevelopSettings { spots: spots(), process: lightcraft_develop::ProcessVersion(6), ..Default::default() };
+    s.detail.nr_color = 40.0;
+    let measured = |s: &DevelopSettings, req: &RenderRequest| {
+        let before = crate::noise_measured();
+        render_cached(&src, &SourceInfo::default(), s, req, &cache);
+        crate::noise_measured() - before
+    };
+    assert_eq!(measured(&s, &window(100, 100)), 1, "the first window measures it");
+    for (x, y) in [(500, 300), (300, 200), (150, 150)] {
+        assert_eq!(measured(&s, &window(x, y)), 0, "a pan to {x}, {y} takes it");
+    }
+    s.spots[0].size = 0.02;
+    assert_eq!(measured(&s, &window(100, 100)), 0, "a spot edit takes it");
+    s.light.exposure = 0.5;
+    assert_eq!(measured(&s, &window(120, 100)), 0, "Exposure takes it");
+}
+
+#[test]
 fn the_noise_model_is_keyed_by_the_whole_frame_alone() {
     let src = scene();
     let info = SourceInfo::default();
