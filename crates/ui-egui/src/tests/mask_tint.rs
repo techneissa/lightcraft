@@ -256,6 +256,15 @@ fn with_a_monitor_profile_the_overlay_still_starts_no_render() {
         assert_eq!(renders, 0, "selecting mask {id} rendered the photo");
     }
     assert_eq!(main_tex(&h).1, k, "the photo's render is the one it was");
+    // the tint is the chosen colour as the monitor shows it: converted through the profile, as the photo under it is
+    let chosen = h.app.ui.mask_overlay_color;
+    let mut px = lightcraft_raster::Rgba8 { width: 1, height: 1, data: vec![[chosen[0], chosen[1], chosen[2], 255]] };
+    h.app.renderer.display().expect("the profile").profile.from_srgb(&mut px).expect("converted");
+    let want = [px.data[0][0], px.data[0][1], px.data[0][2]];
+    assert_ne!(want, chosen, "(the profile changes the colour: Display P3 is wider than sRGB)");
+    let d = h.app.session.develop_of(photo).expect("settings");
+    let sel = crate::panels::detail::mask_tint(&h.app, &d, 0, lightcraft_pipeline::Overlay::None).sel.expect("the tint is shown");
+    assert_eq!(sel.color, want, "the tint's colour is the chosen one converted for the monitor");
     let _ = std::fs::remove_dir_all(&dir);
 }
 

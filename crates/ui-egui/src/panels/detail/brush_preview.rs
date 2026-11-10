@@ -86,8 +86,9 @@ pub(super) fn request(app: &mut LightcraftApp, ui: &egui::Ui, a: &Ask) {
             let made = target::settings_in(&d, key.mask, part, erase, fresh);
             // a stroke into the part being painted changes the photo's settings, not these (the part is covered whole):
             // the full-coverage render stays the one made, and the next stroke blends at once (issue #175: it was
-            // rendered again after each stroke, ~200 ms on a 45 MP photo, and a stroke started meanwhile showed no adjustment)
-            let kept = last.as_ref().and_then(|(_, m)| m.as_ref()).filter(|(s, _)| made.as_ref() == Some(&**s)).cloned();
+            // rendered again after each stroke, ~200 ms on a 45 MP photo, and a stroke started meanwhile showed no adjustment).
+            // Only this photo's: another photo with the same settings is another picture
+            let kept = last.as_ref().filter(|(k, _)| k.id == id).and_then(|(_, m)| m.as_ref()).filter(|(s, _)| made.as_ref() == Some(&**s)).cloned();
             let made = kept.or_else(|| made.map(|s| (Arc::new(s), hash)));
             app.renderer.brush_settings = Some((key, made.clone()));
             made
@@ -107,7 +108,7 @@ pub(super) fn request(app: &mut LightcraftApp, ui: &egui::Ui, a: &Ask) {
 
 /// The two finished pictures a live stroke blends, when both are the current renders of the open
 /// photo (not drafts, stand-ins or stale).
-pub(super) fn images(app: &LightcraftApp, id: PhotoId, img_rect: Rect) -> Option<LiveImages> {
+pub(crate) fn images(app: &LightcraftApp, id: PhotoId, img_rect: Rect) -> Option<LiveImages> {
     let r = &app.renderer;
     let ready = |slot: Slot, key: Option<u64>| {
         r.textures.get(&slot).filter(|t| t.photo == id && key.is_some() && Some(t.key) == key && !r.is_pending(slot) && t.quick.is_none())
