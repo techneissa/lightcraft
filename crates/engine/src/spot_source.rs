@@ -57,6 +57,9 @@ pub struct SpotSources {
     /// The next spot's place, and the next place to add.
     next: u64,
     added: u64,
+    /// Test-only: the search with this place in the order waits until the test lets it go. Each session has its own.
+    #[cfg(test)]
+    pub(crate) gate: Arc<Mutex<Option<(u64, std::sync::mpsc::Receiver<()>)>>>,
 }
 
 impl SpotSources {
@@ -107,11 +110,13 @@ impl Session {
         let source = self.catalog.photo(id).cloned().map(|p| self.media.source_ref(&p, SourceLevel::Thumb));
         let info = self.source_info(id);
         let (running, done, waker) = (self.spot_sources.running.clone(), self.spot_sources.done.clone(), self.spot_sources.waker.clone());
+        #[cfg(test)]
+        let gate = self.spot_sources.gate.clone();
         running.fetch_add(1, Ordering::SeqCst);
         let failed = Found { seq, spot: spot.clone(), source: None, decoded: None };
         let work = move || {
             #[cfg(test)]
-            test_gate(seq);
+            test_gate(&gate, seq);
             let found = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 let source = source?;
                 let made = !matches!(source, SourceRef::Loaded(_));
@@ -218,18 +223,10 @@ impl Session {
     }
 }
 
-/// Test-only: tests that hold a search take turns (the gate is process-wide).
 #[cfg(test)]
-pub(crate) static TURN: Mutex<()> = Mutex::new(());
-
-/// Test-only: the search with this place in the order waits here until the test lets it go.
-#[cfg(test)]
-pub(crate) static GATE: Mutex<Option<(u64, std::sync::mpsc::Receiver<()>)>> = Mutex::new(None);
-
-#[cfg(test)]
-fn test_gate(seq: u64) {
+fn test_gate(gate: &Mutex<Option<(u64, std::sync::mpsc::Receiver<()>)>>, seq: u64) {
     let rx = {
-        let mut g = GATE.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut g = gate.lock().unwrap_or_else(PoisonError::into_inner);
         if g.as_ref().is_some_and(|(s, _)| *s == seq) { g.take() } else { None }
     };
     if let Some((_, rx)) = rx {

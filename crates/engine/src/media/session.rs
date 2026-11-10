@@ -65,7 +65,7 @@ impl crate::Session {
         let decoder = super::quick::decoder_key(&p);
         // Temporary "before" settings must not replace the photo's cached develop hash.
         let settings_hash =
-            if before { settings.hash64() ^ crate::files::hot_pixel_key(&settings) } else { self.media.settings_hashes.get(id, &settings) };
+            if before { settings.hash64() ^ crate::files::render_key(&settings) } else { self.media.settings_hashes.get(id, &settings) };
         let salt = self.media.denoise_salt(id, &settings) ^ self.lama.cache_salt(&settings);
         let profile_salt = self.media.camera_profile_salt(&settings.profile.id);
         let lens = super::quick::lens_key(&p);
@@ -171,7 +171,7 @@ impl crate::Session {
         let lens = self.catalog.photo(id).map_or(0, |p| super::quick::lens_key(p));
         let decoder = super::quick::decoder_key(&p);
         job.key = settings_hash
-            ^ crate::files::hot_pixel_key(settings)
+            ^ crate::files::render_key(settings)
             ^ ((max_w as u64) << 40)
             ^ ((max_h as u64) << 20)
             ^ (apply_crop as u64)
@@ -186,11 +186,7 @@ impl crate::Session {
     /// `profile_salt`: [`MediaCache::camera_profile_salt`] of `settings`' profile.
     pub fn variant_key(p: &Photo, settings: &DevelopSettings, edge: usize, profile_salt: u64) -> Hash128 {
         let mut k = Hasher128::new();
-        k.str(&content_key(p))
-            .str("variant")
-            .u64(settings.hash64() ^ crate::files::hot_pixel_key(settings))
-            .u64(edge as u64)
-            .u64(RENDER_CACHE_VERSION);
+        k.str(&content_key(p)).str("variant").u64(settings.hash64() ^ crate::files::render_key(settings)).u64(edge as u64).u64(RENDER_CACHE_VERSION);
         with_process(&mut k, settings).u64(crate::camera_profiles::cache_key());
         if let Some(local) = LoadOptions::of(settings).profile_key {
             k.u64(local as u64).u64((local >> 64) as u64);
@@ -327,7 +323,7 @@ impl crate::Session {
     /// not shown as the denoised one.
     #[cfg(test)]
     pub(crate) fn view_key(&self, p: &Photo, apply_crop: bool) -> Hash128 {
-        let hash = self.media.settings_hashes.peek(p.id, &p.develop).unwrap_or_else(|| p.develop.hash64() ^ crate::files::hot_pixel_key(&p.develop));
+        let hash = self.media.settings_hashes.peek(p.id, &p.develop).unwrap_or_else(|| p.develop.hash64() ^ crate::files::render_key(&p.develop));
         let salt = self.media.denoise_salt(p.id, &p.develop) ^ self.retouch_salt(p, &p.develop).rotate_left(53);
         Self::view_key_with(p, hash, apply_crop, self.media.camera_profile_salt(&p.develop.profile.id), salt)
     }
@@ -499,7 +495,7 @@ impl crate::Session {
     pub fn quick_view_key(&self, id: PhotoId, apply_crop: bool, camera_jpeg: bool) -> Option<u64> {
         let p = self.catalog.photo(id)?;
         // (the loupe's render job for this frame has just remembered the hash: a frame draws without hashing the settings)
-        let hash = self.media.settings_hashes.peek(id, &p.develop).unwrap_or_else(|| p.develop.hash64() ^ crate::files::hot_pixel_key(&p.develop));
+        let hash = self.media.settings_hashes.peek(id, &p.develop).unwrap_or_else(|| p.develop.hash64() ^ crate::files::render_key(&p.develop));
         Some(
             Self::quick_key(p, hash, apply_crop, camera_jpeg, self.media.camera_profile_salt(&p.develop.profile.id))
                 ^ self.retouch_salt(p, &p.develop).rotate_left(53),

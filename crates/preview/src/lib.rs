@@ -251,6 +251,16 @@ impl PreviewCache {
         Some(tx)
     }
 
+    /// A new generation, keeping what is stored: jobs made before it write nothing (an app setting their keys did
+    /// not hold changed while they ran; keys made since hold it). Does nothing once [`Self::retire`]d.
+    pub fn advance(&self) {
+        let mut generation = self.generation.write().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(g) = generation.as_mut() {
+            // (never reaches u64::MAX, which stands for "retired")
+            *g = g.wrapping_add(1) % u64::MAX;
+        }
+    }
+
     /// Drop everything (memory and disk). Does nothing once [`Self::retire`]d.
     pub fn clear(&self) {
         let mut generation = self.generation.write().unwrap_or_else(std::sync::PoisonError::into_inner);

@@ -443,6 +443,8 @@ pub struct LightcraftApp {
     smart_editing_applied: Option<bool>,
     /// The hot pixel limit last applied (percent).
     hot_pixels_applied: Option<f32>,
+    /// The spot order last applied (`app.spotOrder`).
+    spot_order_applied: Option<bool>,
     /// The display profile setting last applied (`app.displayProfile`).
     pub(crate) display_applied: Option<String>,
     /// Why the display profile setting could not be applied (shown in Settings ▸ Display).

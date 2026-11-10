@@ -122,7 +122,8 @@ pub fn analysis(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<Arc<Ana
         crate::spots_keep::pre_spot_sections(&before),
         crate::local_tone::enabled(info, &before),
         p.src_long,
-        p.native_long,
+        // (and the order of the Classic spots and the white balance, issue #184)
+        (p.native_long, p.spots_after_wb && !before.spots.is_empty()),
     ));
     let found = |c: &[(u64, Arc<Analysis>)]| c.iter().find(|(k, _)| *k == key).map(|(_, a)| a.clone());
     if let Some(a) = found(&ANALYSES.lock().unwrap_or_else(PoisonError::into_inner)) {
@@ -151,8 +152,34 @@ pub fn analysis(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<Arc<Ana
         spots_at: crate::spots_scale::At::default(),
         ..*p
     };
-    let mut img = Rgb32f::clone(&crate::local::frame_proxy(src, full, aw, ah));
-    crate::lin_cpu(&mut img, info, &sub);
+    let img = if sub.spots_after_wb || sub.settings.spots.is_empty() {
+        let mut img = Rgb32f::clone(&crate::local::frame_proxy(src, full, aw, ah));
+        crate::lin_cpu(&mut img, info, &sub);
+        img
+    } else {
+        // (the spots are drawn before the white balance, issue #184: the proxy with its spots is kept apart, so
+        // Temperature and Tint draw none of them again here either; review F1)
+        let spot_key = crate::hash_of((
+            crate::optics::fingerprint(src),
+            format!("{full:?}"),
+            (aw, ah),
+            format!("{:?}", sub.settings.spots),
+            format!("{:?}", sub.settings.optics),
+            crate::spots_keep::pre_spot_sections(&sub.settings),
+            (p.src_long, p.native_long),
+        ));
+        let spotted = spotted_proxy(spot_key, || {
+            let mut img = Rgb32f::clone(&crate::local::frame_proxy(src, full, aw, ah));
+            crate::spots_on_source(&mut img, info, &sub);
+            img
+        });
+        let mut img = Rgb32f::clone(&spotted);
+        note_pre_retouch_run();
+        crate::spots_keep::before_classic(&mut img, info, &sub);
+        crate::redeye::apply(&mut img, &sub.eyes);
+        apply(&mut img, info, &sub);
+        img
+    };
     let a = Arc::new(Analysis::new(Arc::new(img), key));
     if let Some(t) = t {
         eprintln!("    retouch background analysis {aw}×{ah}: {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
@@ -167,6 +194,21 @@ pub fn analysis(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<Arc<Ana
 /// Analysis images kept (a draft's source and the full source's, or two photos).
 const ANALYSES_KEPT: usize = 2;
 static ANALYSES: Mutex<Vec<(u64, Arc<Analysis>)>> = Mutex::new(Vec::new());
+/// The analysis proxies with their spots, before the white balance, by key (as many as [`ANALYSES`]).
+static SPOTTED: Mutex<Vec<(u64, Arc<Rgb32f>)>> = Mutex::new(Vec::new());
+
+/// The proxy with its spots kept under `key`, else `make`'s, kept.
+fn spotted_proxy(key: u64, make: impl FnOnce() -> Rgb32f) -> Arc<Rgb32f> {
+    if let Some((_, img)) = SPOTTED.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(k, _)| *k == key) {
+        return img.clone();
+    }
+    let img = Arc::new(make());
+    let mut c = SPOTTED.lock().unwrap_or_else(PoisonError::into_inner);
+    c.retain(|(k, _)| *k != key);
+    c.insert(0, (key, img.clone()));
+    c.truncate(ANALYSES_KEPT);
+    img
+}
 
 /// Where the plan's pixels lie in the whole render: its window's top-left pixel and the whole render's size.
 fn place_of(p: &Plan<'_>) -> Place {

@@ -1,7 +1,8 @@
 //! Spots drawn again only where an edit reaches (issue #82).
 //!
-//! Spots are drawn one after another on the white-balanced image, each reading the image as the earlier ones left
-//! it, so every spot edit used to draw every spot again: adding the 101st spot cost a hundred times the first, and
+//! Spots are drawn one after another on the resampled source, before the white balance (issue #184: Temperature and
+//! Tint then draw none of them again; [`spots_after_wb`] restores the old order, after it), each reading the image as
+//! the earlier ones left it, so every spot edit used to draw every spot again: adding the 101st spot cost a hundred times the first, and
 //! moving one redrew all of them. A view now keeps the image after its spots ([`Kept::post`]) and, for each spot, its
 //! box as it was before the spot drew and after ([`Patch`]). On the next render [`redo`] compares the old spots with
 //! the new ones. Only the spots added or changed are drawn, and the later spots whose box or source reads pixels a
@@ -23,6 +24,29 @@ use crate::{Plan, SourceInfo, spots};
 
 thread_local! {
     static DRAWN: Cell<usize> = const { Cell::new(0) };
+    static AFTER_WB_HERE: Cell<Option<bool>> = const { Cell::new(None) };
+}
+
+/// Draw the Classic spots after the white balance, defringe and the camera's local tone mapping, as before issue #184
+/// (Settings ▸ Performance ▸ Draw Spots After White Balance, `app.spotOrder`). Off: they are drawn on the resampled source,
+/// with the LaMa spots, so Temperature and Tint draw none again. Process-wide, like the hot pixel limit.
+static AFTER_WB: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Whether renders planned now draw the Classic spots after the white balance ([`set_spots_after_wb`]); a plan keeps
+/// the answer ([`Plan::spots_after_wb`]), so one render never mixes the orders.
+pub fn spots_after_wb() -> bool {
+    AFTER_WB_HERE.with(Cell::get).unwrap_or_else(|| AFTER_WB.load(std::sync::atomic::Ordering::Relaxed))
+}
+
+/// Set [`spots_after_wb`]; true when it changed.
+pub fn set_spots_after_wb(on: bool) -> bool {
+    AFTER_WB.swap(on, std::sync::atomic::Ordering::Relaxed) != on
+}
+
+/// Test hook: renders planned on this thread take `on` as [`spots_after_wb`] (`None`: the process's), so a test of one
+/// order does not change another test's renders.
+pub fn spots_after_wb_here(on: Option<bool>) {
+    AFTER_WB_HERE.with(|c| c.set(on));
 }
 
 /// Spots drawn on this thread so far, by either renderer (a test counts the work of one edit with it).
@@ -281,23 +305,24 @@ pub fn pre_spot_sections(s: &lightcraft_develop::DevelopSettings) -> [bool; 2] {
     ["optics", "geometry"].map(|section| s.section_enabled(section))
 }
 
-/// Key of the image the Classic spots are drawn on: everything [`Plan::pre_nr_key`] holds but those spots and the
-/// red eye corrections (drawn after them). The LaMa spots are drawn before the white balance and so are part of it,
-/// with which of them got their fill (`done`).
+/// Key of the image the Classic spots are drawn on: the resampled source after the LaMa spots (with which of them got
+/// their fill, `done`), and when they are drawn after the white balance ([`Plan::spots_after_wb`]), everything
+/// [`Plan::pre_nr_key`] holds before them too (white balance, defringe, the local tone mapping). Red eye is drawn after
+/// them either way.
 pub fn key(info: &SourceInfo, p: &Plan<'_>, done: &[bool]) -> u64 {
     let s = &*p.settings;
-    let (wb_t, wb_tint) = crate::local::effective_wb(info, s);
     let learned: Vec<(usize, String)> =
         s.spots.iter().enumerate().filter(|(_, sp)| crate::spots_learned::is_learned(sp)).map(|(i, sp)| (i, format!("{sp:?}"))).collect();
-    crate::hash_of((
-        learned_key(p),
-        [wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits),
-        format!("{:?}", s.optics),
-        pre_spot_sections(s),
-        crate::local_tone::enabled(info, s),
-        learned,
-        done,
-    ))
+    crate::hash_of((learned_key(p), before_spots(info, s, p.spots_after_wb), format!("{:?}", s.optics), pre_spot_sections(s), learned, done))
+}
+
+/// What the image the Classic spots read holds beyond the resampled source: in the old order ([`spots_after_wb`]), the
+/// white balance and whether the local tone mapping ran (`None` in the new one, where neither has run yet).
+pub(crate) fn before_spots(info: &SourceInfo, s: &lightcraft_develop::DevelopSettings, after_wb: bool) -> Option<([u64; 4], bool)> {
+    after_wb.then(|| {
+        let (wb_t, wb_tint) = crate::local::effective_wb(info, s);
+        ([wb_t, wb_tint, info.as_shot_temp, info.as_shot_tint].map(f64::to_bits), crate::local_tone::enabled(info, s))
+    })
 }
 
 /// Key of the image the LaMa spots are drawn on (the resampled source) and of the size their fill sees it at.
@@ -331,7 +356,8 @@ type CpuPatch = Option<Arc<Patch<Vec<[f32; 3]>>>>;
 type CpuLayer = Kept<Rgb32f, Vec<[f32; 3]>>;
 
 /// What the CPU renderer keeps of a view's spots: the LaMa spots (drawn on the resampled source, before the white
-/// balance) and the Classic ones (after it), each a layer of its own.
+/// balance) and the Classic ones (after them, before or after the white balance: [`spots_after_wb`]), each a layer of
+/// its own.
 pub struct CpuKept {
     pub learned: Option<CpuLayer>,
     pub classic: CpuLayer,
@@ -428,11 +454,14 @@ pub fn lin_cpu_pre_retouch(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, ke
     crate::retouch_step::note_pre_retouch_run();
     // a window whose spots are all finished at this scale pastes them (issue #176, `spots_scale`)
     if let (Some(f), Some(origin)) = (&p.spots_at.paste, p.spots_at.origin) {
-        crate::local_tone::apply(img, info, p);
-        crate::local::white_balance(img, info, s);
-        crate::optics::defringe(img, s, p.px_per_long / crate::optics::DEFRINGE_REF_LONG);
+        if p.spots_after_wb {
+            before_classic(img, info, p);
+        }
         crate::spots_scale::paste(img, f, origin);
         crate::spots_scale::note_pasted();
+        if !p.spots_after_wb {
+            before_classic(img, info, p);
+        }
         crate::redeye::apply(img, &p.eyes);
         return None;
     }
@@ -466,13 +495,12 @@ pub fn lin_cpu_pre_retouch(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, ke
         )
     });
     let done: Vec<bool> = learned.as_ref().map(|k| k.drawn.iter().map(Option::is_some).collect()).unwrap_or_default();
-    // 2. the Classic spots (and the LaMa ones that got no fill), after the white balance
+    // 2. the Classic spots (and the LaMa ones that got no fill): on what the LaMa spots left, or after the white balance
     let cnew = entries(&s.spots, &done, &p.frame, w, h, ppl);
     let prepare = |img: &mut Rgb32f| {
-        // (`crate::lin_cpu`'s order between its LaMa and Classic spots)
-        crate::local_tone::apply(img, info, p);
-        crate::local::white_balance(img, info, s);
-        crate::optics::defringe(img, s, ppl / crate::optics::DEFRINGE_REF_LONG);
+        if p.spots_after_wb {
+            before_classic(img, info, p);
+        }
     };
     let classic = layer(img, key(info, p, &done), kept.map(|k| &k.classic), cnew, prepare, |img, i| {
         if let Some(sp) = s.spots.get(i) {
@@ -486,8 +514,21 @@ pub fn lin_cpu_pre_retouch(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, ke
             s.spots.iter().enumerate().map(|(i, sp)| !crate::spots_learned::is_learned(sp) || done.get(i).copied().unwrap_or(false)).collect();
         crate::spots_scale::capture(&p.spots_at, img, &drawn);
     }
+    if !p.spots_after_wb {
+        before_classic(img, info, p);
+    }
     crate::redeye::apply(img, &p.eyes);
     Some(Arc::new(CpuKept { learned, classic }))
+}
+
+/// What runs between the LaMa spots and the red eye besides the Classic spots: the camera's local tone mapping, the
+/// white balance and defringe (`crate::lin_cpu`'s order). The Classic spots come before it ([`spots_after_wb`] off) or
+/// after.
+pub(crate) fn before_classic(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
+    let s = &*p.settings;
+    crate::local_tone::apply(img, info, p);
+    crate::local::white_balance(img, info, s);
+    crate::optics::defringe(img, s, p.px_per_long / crate::optics::DEFRINGE_REF_LONG);
 }
 
 #[cfg(test)]
