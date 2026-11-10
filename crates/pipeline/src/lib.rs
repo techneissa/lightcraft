@@ -397,19 +397,28 @@ impl Default for StageCache {
             capacity: 2,
             ext: Mutex::new(None),
             spots: Default::default(),
-            spot_finals: Default::default(),
+            spot_finals: spots_scale::shared(),
             noise: Default::default(),
         }
     }
 }
 
 impl StageCache {
+    /// A cache whose finished spots and LaMa fills are its own, not the store views share (a test counts its work).
+    pub fn isolated() -> Self {
+        StageCache { spot_finals: Arc::default(), ..Default::default() }
+    }
+
+    /// The finished spots and LaMa fills this view uses (`spots_scale`).
+    pub fn spot_finals(&self) -> &Arc<spots_scale::FinalsStore> {
+        &self.spot_finals
+    }
+
     /// Drop everything (e.g. when memory is needed).
     pub fn clear(&self) {
         self.lock().clear();
         *self.ext.lock().unwrap_or_else(|e| e.into_inner()) = None;
         self.spots.clear();
-        self.spot_finals.clear();
         self.noise.clear();
     }
 
@@ -469,7 +478,7 @@ impl StageCache {
                 add(Arc::as_ptr(edge) as usize, edge.bytes());
             }
         }
-        masks_bytes += self.spots.bytes() + self.spot_finals.bytes();
+        masks_bytes += self.spots.bytes();
         total + masks_bytes
     }
 
@@ -679,9 +688,12 @@ pub fn plan_kept<'a>(
     let store = kept.filter(|_| spotted);
     if let Some(store) = store {
         spots_at.store = Some(store.clone());
-        spots_at.key = spots_scale::key(info, s, &frame, (full_w, full_h), px_per_long, (src_long, native_long), req.quality == Quality::Draft);
+        // (the source's fingerprint keeps photos apart: views share the store)
+        let source = spots_scale::fingerprint(src);
+        let at_scale = spots_scale::key(info, s, &frame, (full_w, full_h), px_per_long, (src_long, native_long), req.quality == Quality::Draft);
+        spots_at.key = hash_of((at_scale, source));
         if s.spots.iter().any(spots_learned::is_learned) {
-            spots_at.fill_base = spots_scale::fill_base(src, s, native_long);
+            spots_at.fill_base = spots_scale::fill_base(source, s, native_long);
         }
     }
     let full = (frame.clone(), full_w, full_h);

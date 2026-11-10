@@ -26,7 +26,7 @@ use crate::spots_keep::Rect;
 use crate::{PixelWindow, SourceInfo};
 
 /// Most bytes of finished spot pixels a view keeps; past it nothing is kept and windows draw their spots.
-pub const MAX_BYTES: usize = 256 << 20;
+pub const MAX_BYTES: usize = 128 << 20;
 
 /// Most spots whose pixels are kept.
 pub const MAX_SPOTS: usize = 2000;
@@ -71,11 +71,11 @@ impl Finals {
     }
 }
 
-/// Most scales a view keeps finished spots for (the zoom's 100 %, a pinch level or two, a draft's).
-pub const MAX_SCALES: usize = 4;
+/// Most scales finished spots are kept for (the zoom's 100 %, a pinch level or two, another photo's).
+pub const MAX_SCALES: usize = 6;
 
 /// Most bytes of LaMa fills a view keeps ([`KeptFill`]); past it the oldest is forgotten.
-pub const FILL_BYTES: usize = 256 << 20;
+pub const FILL_BYTES: usize = 128 << 20;
 
 /// A LaMa spot's fill as the model gave it, at the size it saw the crop (the original's pixels), with where that crop
 /// lay: a render of the spot at this scale or below takes it, resampled to its own crop, and never asks the model.
@@ -136,7 +136,26 @@ pub struct FillAt {
     pub k: (f64, f64),
 }
 
-/// A view's [`Finals`], a few scales of them, and its LaMa fills ([`KeptFill`]).
+/// The store every view shares ([`shared`]): a view let go at Fit (the zoom's) finds its spots again when it comes back,
+/// and the source's [`fingerprint`] in every key keeps photos apart.
+static SHARED: std::sync::LazyLock<Arc<FinalsStore>> = std::sync::LazyLock::new(Arc::default);
+
+/// The store views share.
+pub fn shared() -> Arc<FinalsStore> {
+    SHARED.clone()
+}
+
+/// The shared store as a field whose default is it (another renderer's per-view state).
+#[derive(Debug)]
+pub struct Shared(pub Arc<FinalsStore>);
+
+impl Default for Shared {
+    fn default() -> Self {
+        Shared(shared())
+    }
+}
+
+/// [`Finals`] of a few scales, and LaMa fills ([`KeptFill`]).
 #[derive(Debug, Default)]
 pub struct FinalsStore {
     v: Mutex<Vec<Arc<Finals>>>,
@@ -233,21 +252,20 @@ pub struct At {
     pub fill_base: u64,
 }
 
-/// [`At::fill_base`]: a fingerprint of the source (its size and a grid of its pixels) and the settings that place
-/// it (optics, geometry, crop, orientation, the sections' eyes), and the original's size.
-pub fn fill_base(src: &Rgb32f, s: &DevelopSettings, native_long: usize) -> u64 {
+/// [`At::fill_base`]: the source's [`fingerprint`], the settings that place it (optics, geometry, crop, orientation, the
+/// sections' eyes), and the original's size.
+pub fn fill_base(source: u64, s: &DevelopSettings, native_long: usize) -> u64 {
+    crate::hash_of((source, format!("{:?}", (&s.optics, &s.geometry, &s.crop, &s.orientation)), crate::spots_keep::pre_spot_sections(s), native_long))
+}
+
+/// A fingerprint of `src`: its size and a grid of 64 of its pixels.
+pub fn fingerprint(src: &Rgb32f) -> u64 {
     let (w, h) = (src.width, src.height);
     let grid: Vec<[u32; 3]> = (0..64)
         .filter_map(|i| src.data.get((i / 8 * h / 8 + h / 16).min(h.saturating_sub(1)) * w + (i % 8 * w / 8 + w / 16).min(w.saturating_sub(1))))
         .map(|p| p.map(f32::to_bits))
         .collect();
-    crate::hash_of((
-        (w, h),
-        grid,
-        format!("{:?}", (&s.optics, &s.geometry, &s.crop, &s.orientation)),
-        crate::spots_keep::pre_spot_sections(s),
-        native_long,
-    ))
+    crate::hash_of(((w, h), grid))
 }
 
 /// The key of learned spot `i`'s fill: [`At::fill_base`] and the learned spots up to it (each is drawn on what the earlier

@@ -36,8 +36,9 @@ pub struct GpuStages {
     pub(crate) host: Mutex<Option<crate::dirty::HostKept>>,
     /// Fork (`fork/perf-decontam-gpu.md`): the decontaminated masks' edges of the last render.
     decontam: crate::decontam::KeptEdges,
-    /// The spots finished at the zoom's scale, on the host (issue #176, `lightcraft_pipeline::spots_scale`).
-    spot_finals: Arc<lightcraft_pipeline::spots_scale::FinalsStore>,
+    /// The spots finished per scale and the LaMa fills, on the host, shared by every view (issue #176,
+    /// `lightcraft_pipeline::spots_scale`).
+    spot_finals: lightcraft_pipeline::spots_scale::Shared,
     /// The whole frame's noise model, for every window of it (issue #176).
     noise: lightcraft_pipeline::NoiseMemo,
 }
@@ -164,7 +165,7 @@ impl GpuStages {
         }
         self.alphas.each(&mut add);
         self.decontam.each(&mut add);
-        patches += self.spots.bytes() + self.spot_finals.bytes();
+        patches += self.spots.bytes();
         let host = self.host.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |k| k.bytes);
         total + patches + host
     }
@@ -177,7 +178,6 @@ impl GpuStages {
         self.decontam.clear();
         self.spots.clear();
         self.spots_cpu.clear();
-        self.spot_finals.clear();
         self.noise.clear();
         *self.host.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
@@ -827,7 +827,7 @@ pub fn render(
         }
         None => cx.flush(),
     };
-    let plan = lightcraft_pipeline::plan_kept(src, info, s, req, stages.map(|g| &g.spot_finals));
+    let plan = lightcraft_pipeline::plan_kept(src, info, s, req, stages.map(|g| &g.spot_finals.0));
     let (w, h) = (plan.w, plan.h);
     let Some(n) = w.checked_mul(h).filter(|n| n.checked_mul(12).is_some()) else {
         fail(FailKind::Limit, format!("{w}×{h} output is too large"));

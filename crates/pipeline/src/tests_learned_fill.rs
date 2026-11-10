@@ -158,7 +158,7 @@ fn a_draft_render_tells_the_fill_so_and_a_full_one_does_not_reuse_its_image() {
     // (the draft's answer is "no fill yet": the Classic one is drawn)
     *fill.reply.lock().unwrap_or_else(PoisonError::into_inner) = Some(None);
     let src = Arc::new(scene());
-    let cache = crate::StageCache::default();
+    let cache = crate::StageCache::isolated();
     let (d, f) = install(&fill, || {
         let d = crate::render_cached(&src, &SourceInfo::default(), &s, &draft, &cache).image;
         *fill.reply.lock().unwrap_or_else(PoisonError::into_inner) = None;
@@ -211,7 +211,7 @@ fn a_pan_or_a_later_edit_asks_the_learned_fill_nothing() {
     let mut s = with(vec![Spot { points: vec![Point::new(0.5, 0.5), Point::new(0.51, 0.5)], size: 0.01, ..spot(SpotMode::Remove, SpotFill::Lama) }]);
     let src = Arc::new(scene());
     // (a frame much wider than what a window grows to for the spot, so each pan is another window)
-    let (cache, full) = (crate::StageCache::default(), RenderRequest::fit(1600, 1200));
+    let (cache, full) = (crate::StageCache::isolated(), RenderRequest::fit(1600, 1200));
     let at = |x: usize, y: usize| RenderRequest { window: Some(PixelWindow { x, y, w: 400, h: 300 }), ..full };
     let asked = |s: &DevelopSettings, req: &RenderRequest| {
         let before = fill.asked.lock().unwrap_or_else(PoisonError::into_inner).len();
@@ -348,7 +348,7 @@ fn a_lama_spot_edit_asks_the_fill_only_for_the_spots_it_reaches() {
     let mut s = with((0..12).map(|i| at(0.1 + 0.2 * (i % 5) as f64, 0.15 + 0.3 * (i / 5) as f64)).collect());
     let src = Arc::new(scene());
     let (info, req) = (SourceInfo::default(), RenderRequest::fit(400, 300));
-    let cache = crate::StageCache::default();
+    let cache = crate::StageCache::isolated();
     let asked = || fill.asked.lock().unwrap_or_else(PoisonError::into_inner).len();
     let edit = |s: &DevelopSettings, req: &RenderRequest| {
         let before = asked();
@@ -392,7 +392,7 @@ fn a_shaped_lama_spot_is_filled_over_its_whole_shape_in_the_preview_and_the_expo
     let s = with(vec![shaped]);
     let src = Arc::new(scene());
     let (info, req) = (SourceInfo::default(), RenderRequest::fit(400, 300));
-    let cache = crate::StageCache::default();
+    let cache = crate::StageCache::isolated();
     install(&fill, || {
         let plain = render(&src, &info, &with(vec![]), &req).image;
         let export = render(&src, &info, &s, &req).image;

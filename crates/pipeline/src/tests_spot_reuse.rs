@@ -69,7 +69,7 @@ fn off_whole(src: &Arc<Rgb32f>, s: &DevelopSettings, req: &RenderRequest, img: &
 
 #[test]
 fn panning_and_zooming_at_one_scale_draws_no_spot_again() {
-    let (src, cache) = (scene(), StageCache::default());
+    let (src, cache) = (scene(), StageCache::isolated());
     let mut s = DevelopSettings { spots: spots(), ..Default::default() };
     let (a, b) = (window(100, 100), window(500, 300));
     let (drawn, pasted, _) = view(&cache, &src, &s, &a);
@@ -91,7 +91,7 @@ fn panning_and_zooming_at_one_scale_draws_no_spot_again() {
 
 #[test]
 fn a_pan_back_and_another_scale_keep_the_spots() {
-    let (src, cache) = (scene(), StageCache::default());
+    let (src, cache) = (scene(), StageCache::isolated());
     let s = DevelopSettings { spots: spots(), ..Default::default() };
     let small = |x: usize, y: usize| RenderRequest { window: Some(PixelWindow { x, y, w: 240, h: 160 }), ..RenderRequest::fit(720, 720) };
     view(&cache, &src, &s, &window(100, 100));
@@ -109,6 +109,25 @@ fn a_pan_back_and_another_scale_keep_the_spots() {
 }
 
 #[test]
+fn a_view_let_go_finds_its_spots_again_and_another_photo_never_takes_them() {
+    let s = DevelopSettings { spots: spots(), ..Default::default() };
+    let first = StageCache::isolated();
+    let src = scene();
+    view(&first, &src, &s, &window(100, 100));
+    let store = first.spot_finals.clone();
+    drop(first);
+    // (the zoom's view let go at Fit, and made again)
+    let again = StageCache { spot_finals: store.clone(), ..StageCache::isolated() };
+    assert_eq!(view(&again, &src, &s, &window(110, 105)).0, 0, "a new view of the photo pastes its spots");
+    // another photo of the same size with the same settings draws its own
+    let other = Arc::new(lightcraft_scenes::demo_library()[1].render(960, 640));
+    let theirs = StageCache { spot_finals: store, ..StageCache::isolated() };
+    let (drawn, pasted, worst) = view(&theirs, &other, &s, &window(110, 105));
+    assert!(drawn > 0 && !pasted, "another photo draws its spots");
+    assert!(worst <= 1, "with its own pixels: {worst} levels from its whole frame");
+}
+
+#[test]
 fn a_window_draws_its_spots_as_the_whole_frame_does() {
     // (a Content-Aware spot near a window's edge used to read a few pixels past the grown window: 34 levels off)
     let (src, s) = (scene(), DevelopSettings { spots: spots(), ..Default::default() });
@@ -121,7 +140,7 @@ fn a_window_draws_its_spots_as_the_whole_frame_does() {
 
 #[test]
 fn a_pan_or_a_spot_edit_measures_the_noise_model_once() {
-    let (src, cache) = (scene(), StageCache::default());
+    let (src, cache) = (scene(), StageCache::isolated());
     let mut s = DevelopSettings { spots: spots(), process: lightcraft_develop::ProcessVersion(6), ..Default::default() };
     s.detail.nr_color = 40.0;
     let measured = |s: &DevelopSettings, req: &RenderRequest| {
