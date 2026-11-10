@@ -170,3 +170,46 @@ fn committing_a_stroke_hashes_the_settings_once() {
     let calls = lightcraft_develop::hash64_calls() - before;
     assert_eq!(calls, 1, "committing a stroke hashed the settings {calls} times");
 }
+
+/// Strokes into the part being painted change the photo but not the full-coverage render the next stroke blends toward
+/// (the part is covered whole there): it is kept, so the next stroke shows its adjustment at once (issue #175: it was
+/// rendered again after every stroke). A change of the mask's effect does render it again.
+#[test]
+fn a_committed_stroke_keeps_the_full_coverage_render() {
+    let mut h = brush_ready();
+    let target = h.app.renderer.brush_target.expect("the full-coverage render");
+    for k in 0..3 {
+        let y = 0.3 + 0.1 * k as f64;
+        pointer(&mut h, json!([{"kind": "down", "x": 0.3, "y": y}, {"kind": "drag", "x": 0.5, "y": y}, {"kind": "drag", "x": 0.7, "y": y}]));
+        h.step();
+        pointer(&mut h, json!([{"kind": "up", "x": 0.7, "y": y}]));
+        settle_previews(&mut h);
+        assert_eq!(h.app.renderer.brush_target, Some(target), "stroke {k} asked for another full-coverage render");
+    }
+    exec(&mut h, "mask.adjust", json!({"values": {"exposure": -1.0}}));
+    settle_previews(&mut h);
+    assert_ne!(h.app.renderer.brush_target, Some(target), "the mask's effect changed: the full-coverage render is made again");
+}
+
+/// A virtual copy (the same file and settings), opened with the brush in hand: its full-coverage render is its own, not the
+/// one kept for the photo before (the memo that keeps that render between strokes is the photo's: the copy's request had the
+/// same key and was skipped, and its first stroke showed no adjustment).
+#[test]
+fn a_virtual_copy_gets_its_own_full_coverage_render() {
+    let mut h = brush_ready();
+    let a = h.app.session.active().expect("a photo");
+    let r = h.request("engine.execute", json!({"command": "photo.virtualCopy", "params": {"ids": [a.0]}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let b = r["result"]["ids"][0].as_u64().expect("the copy's id");
+    assert_ne!(b, a.0);
+    // (the copy opens with the same mask selected, between two frames: its masks have the ids of the original's)
+    let mask = h.app.session.active_mask.expect("the mask being painted");
+    h.app.run("library.select", json!({"ids": [b]})).expect("the copy is opened");
+    h.app.session.active_mask = Some(mask);
+    settle_previews(&mut h);
+    let full = h.app.renderer.textures.get(&Slot::BrushFull).expect("the full-coverage render");
+    assert_eq!(full.photo.0, b, "the full-coverage render on screen is the photo before's");
+    let id = h.app.session.active().expect("the copy");
+    let rect = h.app.image_rect.expect("the photo on screen");
+    assert!(crate::panels::detail::brush_preview::images(&h.app, id, rect).is_some(), "the copy's first stroke blends its adjustment");
+}

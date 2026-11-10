@@ -473,7 +473,9 @@ impl StageCache {
                 add(Arc::as_ptr(c) as usize, size(c));
             }
             // (the alphas and brush planes, and the spots' patches: each held once by its cache)
-            masks_bytes += e.masks.bytes();
+            // (an alpha kept by several entries, one per window or scale, is counted once)
+            masks_bytes += e.masks.other_bytes();
+            e.masks.each_alpha(&mut add);
             for (_, edge) in &e.split {
                 add(Arc::as_ptr(edge) as usize, edge.bytes());
             }
@@ -493,6 +495,11 @@ impl StageCache {
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Vec<CacheEntry>> {
         self.entries.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// The mask cache of the last entry made from `src` (of any frame).
+    fn latest_masks(&self, src: &Arc<Rgb32f>) -> Option<masks::AlphaCache> {
+        self.lock().iter().rev().find(|e| Arc::ptr_eq(&e.src, src)).map(|e| e.masks.clone())
     }
 
     fn get(&self, src: &Arc<Rgb32f>, geo: u64) -> Option<CacheEntry> {
@@ -1144,7 +1151,9 @@ fn render_impl(
         }
     };
     lap("wb/spots/nr", &mut t);
-    let mut alphas = cached.as_ref().map(|e| e.masks.clone()).unwrap_or_default();
+    // (the masks of the view's last render, whatever its window or scale: they hold the earlier windows' and scales' too, so a
+    // pan back or a zoom to a scale seen before finds them; the alpha key holds the frame, issue #175)
+    let mut alphas = shared.and_then(|(a, c)| c.latest_masks(a)).or_else(|| cached.as_ref().map(|e| e.masks.clone())).unwrap_or_default();
     let kept_split = cached.as_ref().map(|e| e.split.clone()).unwrap_or_default();
     let mut planes = match cached.map(|e| e.planes) {
         Some(p) if p.key == lin_key => p,
@@ -1156,6 +1165,8 @@ fn render_impl(
         _ => local::Planes { key: lin_key, pre_nr: plan.pre_nr_key, ..Default::default() },
     };
     let keys = masks::AlphaKeys { geo, image: lin_key };
+    // (a stored selection's edges follow the resampled photo: a later edit builds no AI mask again, issue #175)
+    alphas.guide_from(geo, &sampled);
     let mut prep =
         local::prepare(lin.clone(), s, frame, px_per_long, plan.detail_scale, req.quality, &mut planes, plan.mattes.as_ref(), (&mut alphas, keys));
     if let Some(a) = plan.fixed_air {

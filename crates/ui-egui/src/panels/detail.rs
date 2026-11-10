@@ -1171,8 +1171,9 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
             job.key ^= brush_preview::BRUSH_KEY_SALT;
         }
         give_area_faces(app, id, overlay, &mut job);
-        request_planes(app, (Slot::Alpha, Slot::Main), &job, a.tint);
+        let planes_for = job.clone();
         app.renderer.request(Slot::Main, job, 100);
+        request_planes(app, (Slot::Alpha, Slot::Main), &planes_for, a.tint);
         // the photo on screen comes first: background preparation waits while it is being made
         // (only then: this runs every loupe frame, and a render already shown asks for nothing)
         if app.renderer.is_pending(Slot::Main) {
@@ -1201,6 +1202,11 @@ pub(super) fn request_planes(
     tint: Option<crate::mask_tint::TintSel>,
 ) {
     let Some(tint) = tint.filter(|_| app.ui.dragging_control.is_none()) else { return };
+    // (asked once the photo's render is in: the ask finds the alphas and stages it kept. Asked beside it, the two ran at
+    // once and each made everything, the noise model and every mask included: 2 s for a window at 100 %, issue #175)
+    if app.renderer.is_pending(shown) {
+        return;
+    }
     let Some(ask) = app.renderer.tints.ask(shown, job.photo, job.key, tint.pick) else { return };
     let alpha = job.clone().for_mask_planes(ask);
     app.renderer.tints.asked(shown, job.photo, job.key, tint.pick, alpha.key);
@@ -1450,10 +1456,22 @@ fn targeted_drag(app: &mut LightcraftApp, resp: &egui::Response, map: &CanvasMap
 }
 
 /// Whether the mask overlay is drawn over the loupe's plain render ([`crate::mask_tint`]) instead of rendered into it: not in
-/// the browser build (its renders run in workers that don't carry the masks' alphas) and not with a display profile (the
-/// render's colours are converted for the monitor, a tint drawn over them would not be).
-fn tint_outside_render(app: &LightcraftApp) -> bool {
-    cfg!(not(target_arch = "wasm32")) && app.renderer.display_id().is_none()
+/// the browser build (its renders run in workers that don't carry the masks' alphas). With a display profile too: the tint's
+/// colour is converted for the monitor as the photo is ([`display_color`]). (Every Mac shows previews through its screen's
+/// profile: rendering the tint there made `O`, the opacity and each mask switch render the photo again, issue #175.)
+fn tint_outside_render(_app: &LightcraftApp) -> bool {
+    cfg!(not(target_arch = "wasm32"))
+}
+
+/// The overlay colour `c` (sRGB) as the monitor profile the photo is converted with shows it, so the tint drawn over the
+/// converted photo has the colour chosen; `c` itself without a profile, or when it can't be converted.
+fn display_color(app: &LightcraftApp, c: [u8; 3]) -> [u8; 3] {
+    let Some(d) = app.renderer.display() else { return c };
+    let mut px = lightcraft_raster::Rgba8 { width: 1, height: 1, data: vec![[c[0], c[1], c[2], 255]] };
+    match d.profile.from_srgb(&mut px) {
+        Ok(()) => px.data.first().map_or(c, |p| [p[0], p[1], p[2]]),
+        Err(_) => c,
+    }
 }
 
 /// What the loupe asks of the masks for the view it paints this frame.
@@ -1479,7 +1497,7 @@ pub(crate) fn mask_tint(app: &LightcraftApp, d: &DevelopSettings, frame: u64, re
     if render_overlay != Overlay::None || clip_shadows || clip_highlights {
         return MaskTintAsk { open: true, sel: None };
     }
-    let (view, color) = (MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default(), app.ui.mask_overlay_color);
+    let (view, color) = (MaskView::parse(&app.ui.mask_overlay_mode).unwrap_or_default(), display_color(app, app.ui.mask_overlay_color));
     let opacity = app.ui.mask_overlay_opacity.clamp(0.0, 100.0).round() as u8;
     let pick = if app.ui.mask_overlay_all {
         Some(Pick::All)

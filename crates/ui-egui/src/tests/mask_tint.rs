@@ -222,3 +222,74 @@ fn a_hidden_selected_mask_still_shows_its_overlay() {
     assert!(held.planes[0].1.iter().any(|a| *a > 0));
     assert!(h.app.renderer.tints.drawn(Slot::Main, photo, k), "its overlay is drawn");
 }
+
+// Given a monitor profile (every Mac shows previews through its screen's profile), the overlay is still drawn over the photo:
+// O, the opacity and selecting another mask start no render of the photo, and the tint's colour is the chosen one as the
+// monitor shows it (issue #175: the tint was rendered into the photo, so each of these rendered it again)
+#[test]
+fn with_a_monitor_profile_the_overlay_still_starts_no_render() {
+    let mut h = masking();
+    let dir = std::env::temp_dir().join(format!("lightcraft-tint-display-{}-{:?}", std::process::id(), std::thread::current().id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("p3.icc");
+    std::fs::write(&path, lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::DisplayP3)).expect("profile written");
+    let r = h.request("engine.execute", json!({"command": "app.displayProfile", "params": {"path": path.to_string_lossy()}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.settle(SETTLE));
+    assert!(h.app.renderer.display_id().is_some(), "the profile is in use");
+    let (photo, k) = main_tex(&h);
+    assert!(h.app.renderer.tints.drawn(Slot::Main, photo, k), "the tint is drawn over the photo");
+    for flip in 0..4 {
+        let (renders, _) = during(&mut h, |h| key(h, "o"));
+        assert_eq!(renders, 0, "flip {flip} of O rendered the photo");
+    }
+    for opacity in [80.0, 30.0, 100.0] {
+        let (renders, _) = during(&mut h, |h| h.app.ui.mask_overlay_opacity = opacity);
+        assert_eq!(renders, 0, "opacity {opacity} rendered the photo");
+    }
+    let masks: Vec<u32> = h.app.session.develop_of(photo).expect("settings").masks.iter().map(|m| m.id).collect();
+    for id in masks {
+        let (renders, _) = during(&mut h, |h| {
+            let r = h.request("engine.execute", json!({"command": "mask.select", "params": {"id": id}}), T);
+            assert_eq!(r["ok"], true, "{r}");
+        });
+        assert_eq!(renders, 0, "selecting mask {id} rendered the photo");
+    }
+    assert_eq!(main_tex(&h).1, k, "the photo's render is the one it was");
+    // the tint is the chosen colour as the monitor shows it: converted through the profile, as the photo under it is
+    let chosen = h.app.ui.mask_overlay_color;
+    let mut px = lightcraft_raster::Rgba8 { width: 1, height: 1, data: vec![[chosen[0], chosen[1], chosen[2], 255]] };
+    h.app.renderer.display().expect("the profile").profile.from_srgb(&mut px).expect("converted");
+    let want = [px.data[0][0], px.data[0][1], px.data[0][2]];
+    assert_ne!(want, chosen, "(the profile changes the colour: Display P3 is wider than sRGB)");
+    let d = h.app.session.develop_of(photo).expect("settings");
+    let sel = crate::panels::detail::mask_tint(&h.app, &d, 0, lightcraft_pipeline::Overlay::None).sel.expect("the tint is shown");
+    assert_eq!(sel.color, want, "the tint's colour is the chosen one converted for the monitor");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Given the overlay shown, an edit renders the photo first and asks for the planes after: the ask finds what the render kept.
+// Asked beside it, the two ran at once and each made the stages and every mask (issue #175: 2 s for a window at 100 %)
+#[test]
+fn the_planes_are_asked_for_once_the_photos_render_is_in() {
+    let mut h = masking();
+    let asks = h.app.renderer.tints.answers;
+    let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.6}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let mut rendered = false;
+    for frame in 0..400 {
+        h.step();
+        let (main, planes) = (h.app.renderer.is_pending(Slot::Main), h.app.renderer.is_pending(Slot::Alpha));
+        assert!(!(main && planes), "frame {frame}: the planes were asked for while the photo's render was on its way");
+        rendered |= main;
+        if rendered && !main && !planes && h.app.renderer.tints.answers > asks {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(rendered, "the edit rendered the photo");
+    assert!(h.settle(SETTLE));
+    assert!(h.app.renderer.tints.answers > asks, "the planes were asked for after it");
+    let (photo, k) = main_tex(&h);
+    assert!(h.app.renderer.tints.drawn(Slot::Main, photo, k), "and the tint is drawn");
+}
