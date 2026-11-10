@@ -4,6 +4,7 @@ use super::*;
 /// a draft, and a render no larger than the drawn size, are left as rendered.
 #[test]
 fn a_display_fit_shrinks_the_loupe_render_to_the_drawn_size() {
+    let _turn = DEVICE_FIT_COUNT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let mut s = crate::Session::with_demo();
     let id = s.active().unwrap();
     let plain = s.loupe_job(id, 1024, 1024, true).unwrap().run().rendered.unwrap().image;
@@ -715,10 +716,15 @@ fn saving_an_edit_does_not_copy_the_strokes() {
     assert!(Arc::ptr_eq(&held, &step), "the History step shares them");
 }
 
+/// The tests that count `lightcraft_gpu::device_fits` (a counter of the whole process), and those that make fits on the
+/// device beside them, take turns.
+pub(super) static DEVICE_FIT_COUNT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 // Given a loupe job with a display fit on a machine with a GPU, the fit is made on the device before the readback, and the picture is
 // the CPU's fit of the full render within a level of rounding; where the device makes none (an overlay drawn on the CPU) the CPU fits
 #[test]
 fn the_display_fit_is_made_on_the_device_when_it_can_be() {
+    let _turn = DEVICE_FIT_COUNT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if !lightcraft_gpu::available() {
         lightcraft_testkit::skip!(Gpu, "no GPU adapter");
         return;
@@ -749,6 +755,7 @@ fn the_display_fit_is_made_on_the_device_when_it_can_be() {
 // it was fitted on the CPU, about 70 ms per render at rest)
 #[test]
 fn the_display_fit_is_made_on_the_device_through_a_monitor_profile() {
+    let _turn = DEVICE_FIT_COUNT.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     if !lightcraft_gpu::available() {
         lightcraft_testkit::skip!(Gpu, "no GPU adapter");
         return;
