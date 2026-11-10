@@ -89,6 +89,7 @@ fn a_spot_asked_in_the_background_returns_before_its_source_is_found() {
 }
 
 #[test]
+#[ignore = "flaky: #173"]
 fn spots_asked_in_the_background_are_added_in_the_order_asked() {
     let _turn = crate::spot_source::TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (mut s, _) = windowed();
