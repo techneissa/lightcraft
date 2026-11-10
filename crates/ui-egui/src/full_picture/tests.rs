@@ -1,6 +1,7 @@
 //! The finished full-size picture in the loupe (#178): once it is there, zoom and pan render nothing; an edit never
 //! shows the old one; going back to a photo reads it from disk.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::json;
@@ -65,8 +66,7 @@ fn zoom_and_pan_draw_the_finished_picture_and_start_no_render() {
         let x = 0.42 + 0.04 * i as f64;
         exec(&mut h, "spot.add", json!({"mode": mode, "points": [[x, 0.5]], "size": 0.006, "source": [0.0, 0.03]}));
     }
-    assert!(h.settle(SETTLE), "Fit settles");
-    // while it renders, the activity stack has its row
+    // while it renders, the activity stack has its row (looked for from the first frame: a settle could run it whole)
     assert!(h.step_until(SETTLE, row), "the build's activity row");
     until_ready(&mut h);
     assert!(!row(&h), "no row once it is made");
@@ -159,7 +159,6 @@ fn going_back_to_a_photo_reads_its_picture_from_disk_and_a_new_look_does_not() {
 fn an_edit_stops_the_build_under_way_and_no_two_run_at_once() {
     let fixture = RenderFixture::new("full-picture-stop", 1);
     let mut h = loupe(&fixture, None);
-    assert!(h.settle(SETTLE), "Fit settles");
     assert!(h.step_until(SETTLE, row), "a build starts");
     exec(&mut h, "develop.set", json!({"values": {"light.exposure": 0.6}}));
     until_ready(&mut h);
@@ -205,4 +204,45 @@ fn short_memory_lets_go_of_the_picture() {
     }
     let full = &h.app.renderer.full;
     assert_eq!((full.held(), full.stats.freed_for_memory, full.holds_anything()), (None, 1, false), "{}", full.to_json());
+}
+
+// Given a photo open in the Edit view whose original is being read ahead (#182), when its finished picture is due,
+// then the build waits for the read-ahead and renders from the original it decoded: the file is decoded once
+#[test]
+fn the_build_waits_for_the_read_ahead_and_decodes_nothing_again() {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    let fixture = RenderFixture::new("full-picture-read-ahead", 1);
+    let mut session = fixture.session();
+    let plain = session.media.file_loader.clone().expect("the fixture session reads files");
+    let full = Arc::new(AtomicUsize::new(0));
+    let held = Arc::new(AtomicBool::new(true));
+    let (f, hold) = (full.clone(), held.clone());
+    session.media.file_loader = Some(Arc::new(move |path: &str, max_edge, options, with| {
+        if max_edge == usize::MAX {
+            f.fetch_add(1, Ordering::SeqCst);
+            // (a guard against a hung test, not a timing)
+            let until = std::time::Instant::now() + SETTLE;
+            while hold.load(Ordering::SeqCst) && std::time::Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+        }
+        plain(path, max_edge, options, with)
+    }));
+    session.media.set_budget(2 << 30);
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1400.0, 900.0], 1.0);
+    h.app.renderer.full.enabled = true;
+    let r = h.request("ui.set", json!({"view": "detail", "right": "edit", "filmstrip": false}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let id = h.app.session.active().expect("a photo");
+    assert!(h.step_until(SETTLE, |h| h.app.full_decode.running_for(id)), "the original is read ahead");
+    // well past the build's settle time: it waits while the read-ahead runs
+    for _ in 0..240 {
+        h.step();
+        assert!(!h.app.renderer.full.renders(id), "no build while the original is read ahead");
+    }
+    held.store(false, Ordering::SeqCst);
+    until_ready(&mut h);
+    assert_eq!(full.load(Ordering::SeqCst), 1, "the original is decoded once");
+    assert_eq!(h.app.renderer.full.stats.rendered, 1);
 }

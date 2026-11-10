@@ -161,6 +161,11 @@ impl Store {
         self.running = None;
     }
 
+    /// Whether a build of photo `id` is rendering (it decodes the original if it isn't held).
+    pub fn renders(&self, id: PhotoId) -> bool {
+        self.running.as_ref().is_some_and(|r| r.render && r.photo == id)
+    }
+
     /// Whether a picture is held or being made.
     pub fn holds_anything(&self) -> bool {
         self.picture.is_some() || self.running.is_some()
@@ -456,6 +461,12 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask, job: RenderJob, dr
     let render = disk.is_none() || store.disk_missed == Some(key);
     if render && a.now - since < SETTLE_SECS {
         ctx.request_repaint_after(std::time::Duration::from_secs_f64((SETTLE_SECS - (a.now - since)).max(0.01)));
+        return;
+    }
+    // the original is being read ahead (#182): the build waits for it rather than decoding it a second time, and then
+    // renders from it
+    if render && app.full_decode.coming_for(app.ui.right, a.id) {
+        ctx.request_repaint_after(std::time::Duration::from_millis(100));
         return;
     }
     let tile = TILE.min(a.texture_side.saturating_sub(2)).max(16);

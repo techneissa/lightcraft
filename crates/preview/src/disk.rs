@@ -238,7 +238,9 @@ impl DiskCache {
             let _ = std::fs::write(self.dir.join(TAG), TAG_TEXT);
         }
         // The temp file is written before the lock is taken: a full-size picture is some 100 MB, and the size
-        // asked for on the interface's thread ([`Self::size`]) must not wait for it.
+        // asked for on the interface's thread ([`Self::size`]) must not wait for it. (The cache is counted first,
+        // when it isn't yet: a count made with the temp file there would count it too.)
+        self.size();
         let tmp = p.with_extension(format!("tmp{:?}", std::thread::current().id()).replace(['(', ')'], ""));
         // a new temp file: an entry already under the name (a link planted in the cache would be
         // written through) is removed, never opened

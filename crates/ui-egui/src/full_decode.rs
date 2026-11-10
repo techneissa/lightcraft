@@ -56,6 +56,12 @@ impl FullDecodeAhead {
         self.running.as_ref().is_some_and(|r| r.photo == id && !r.state.is_stopped())
     }
 
+    /// Whether photo `id`'s original is being read ahead, or will be once the photo has rested in the Edit view
+    /// (`right`) and not been tried yet: another job that would decode it (the loupe's full-size picture, #178) waits.
+    pub fn coming_for(&self, right: RightPanel, id: PhotoId) -> bool {
+        self.running_for(id) || (!cfg!(target_arch = "wasm32") && editing(right) && self.tried != Some(id))
+    }
+
     /// Whether a decode, stopped or not, is still on its worker.
     pub fn busy(&self) -> bool {
         self.running.is_some()
@@ -116,7 +122,8 @@ pub(crate) fn tick(app: &mut LightcraftApp, ctx: &egui::Context, id: PhotoId, at
     }
     // once the photo is on screen (its first render goes first), and while no window job decodes the original itself
     let shown = !app.renderer.is_pending(Slot::Main) && app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.photo == id);
-    let windowing = app.renderer.is_pending(Slot::Region) || app.renderer.is_pending(Slot::RegionBefore);
+    // (the loupe's full-size picture rendering decodes it too, #178)
+    let windowing = app.renderer.is_pending(Slot::Region) || app.renderer.is_pending(Slot::RegionBefore) || app.renderer.full.renders(id);
     if cfg!(target_arch = "wasm32") || !editing(app.ui.right) || !at_rest || !shown || windowing {
         app.full_decode.resting = None;
         return;
