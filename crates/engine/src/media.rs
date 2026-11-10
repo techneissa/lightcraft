@@ -40,7 +40,7 @@ mod source;
 pub use cache::DenoiseIndex;
 #[cfg(test)]
 pub(crate) use cache::rendered_budget;
-pub use full_decode::{FullDecodeJob, FullDecoded};
+pub use full_decode::{FullDecodeJob, FullDecodeState, FullDecoded};
 pub use quick::{QuickJob, QuickSource, content_key, source_info};
 pub use render::{MaskPlanes, RenderJob, RenderResult, ScreenFrame, develop, develop_reporting, fit_cached, fit_for_display, planes_made};
 #[cfg(test)]

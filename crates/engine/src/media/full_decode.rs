@@ -6,8 +6,49 @@
 //! on screen; its result goes into the same cache the window jobs read ([`crate::Session::accept_full_decode`]), so
 //! the first zoom finds it there. The job only decodes: nothing is rendered.
 
+use std::sync::atomic::{AtomicU8, Ordering};
+
 use super::source::{DecodedSource, LoadOptions, SourceRef};
 use super::{Hash128, PhotoId, SourceLevel};
+
+/// Where a [`FullDecodeJob`] is: waiting at the memory gate, decoding, or stopped. Shared by the job and whoever
+/// started it; each move happens once, so a window that stops a queued job and the job that starts decoding never
+/// both win.
+#[derive(Debug, Default)]
+pub struct FullDecodeState(AtomicU8);
+
+const QUEUED: u8 = 0;
+const DECODING: u8 = 1;
+const STOPPED: u8 = 2;
+
+impl FullDecodeState {
+    /// Stop the job: a queued one never decodes, a decoding one's result is dropped.
+    pub fn stop(&self) {
+        self.0.store(STOPPED, Ordering::SeqCst);
+    }
+
+    /// Stop the job if it is still waiting at the memory gate. Whether it was (and is now stopped).
+    pub fn stop_if_queued(&self) -> bool {
+        self.0.compare_exchange(QUEUED, STOPPED, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+    }
+
+    /// Past the memory gate and decoding (not stopped).
+    pub fn is_decoding(&self) -> bool {
+        self.0.load(Ordering::SeqCst) == DECODING
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.0.load(Ordering::SeqCst) == STOPPED
+    }
+
+    /// Queued → decoding, unless it was stopped first.
+    fn begin(&self) -> bool {
+        self.0.compare_exchange(QUEUED, DECODING, Ordering::SeqCst, Ordering::SeqCst).is_ok()
+    }
+}
+
+/// The memory gate weight of a full-size load, per byte of the file (as the file system's loader weighs it).
+const GATE_WEIGHT: usize = 6;
 
 /// Decodes photo `photo`'s original at full size ([`crate::Session::full_decode_job`]).
 pub struct FullDecodeJob {
@@ -24,11 +65,25 @@ pub struct FullDecoded {
 }
 
 impl FullDecodeJob {
-    /// Decode (on a worker: seconds for a large raw). Held back like other background work
-    /// ([`crate::memory::in_background`]), so a render the user waits for goes first.
-    pub fn run(self) -> FullDecoded {
-        let loaded = crate::memory::in_background(|| self.source.load_source());
-        FullDecoded { photo: self.photo, source_key: self.source_key, loaded }
+    /// Decode (on a worker: seconds for a large raw), as `state` allows; `None` when it was stopped.
+    ///
+    /// It first waits at the memory gate like other background work, weighing what a full-size load of the file
+    /// does, so a render the user waits for (or AI Denoise holding the gate) goes first; stopped meanwhile, it gives
+    /// up at once. Past the gate it is `decoding` (a window waits for it from then on) and loads without queueing
+    /// again.
+    pub fn run(self, state: &FullDecodeState) -> Option<FullDecoded> {
+        let len = match &self.source {
+            SourceRef::File { path, .. } => std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0),
+            _ => 0,
+        };
+        let permit = crate::memory::work_gate().acquire_unless(len.saturating_mul(GATE_WEIGHT), || state.is_stopped())?;
+        if !state.begin() {
+            return None;
+        }
+        // (the load takes its own place at the gate, as interactive work: this one has waited its turn)
+        drop(permit);
+        let loaded = self.source.load_source();
+        (!state.is_stopped()).then_some(FullDecoded { photo: self.photo, source_key: self.source_key, loaded })
     }
 }
 

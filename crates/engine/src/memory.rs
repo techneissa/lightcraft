@@ -143,6 +143,19 @@ impl WorkGate {
         Permit { gate: self, bytes }
     }
 
+    /// [`Self::acquire`] that gives up (`None`) once `stop` says so: a wait that may outlast the work's point.
+    pub fn acquire_unless(&self, bytes: usize, stop: impl Fn() -> bool) -> Option<Permit<'_>> {
+        let mut g = self.lock();
+        while g.0 > 0 && g.0.saturating_add(bytes as u128) > g.1 as u128 {
+            if stop() {
+                return None;
+            }
+            g = self.cv.wait_timeout(g, std::time::Duration::from_millis(50)).unwrap_or_else(|e| e.into_inner()).0;
+        }
+        g.0 = g.0.saturating_add(bytes as u128);
+        Some(Permit { gate: self, bytes })
+    }
+
     /// Hold `bytes` without waiting (interactive work): counted, so background work waits for it.
     pub fn acquire_urgent(&self, bytes: usize) -> Permit<'_> {
         let mut g = self.lock();

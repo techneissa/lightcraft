@@ -75,10 +75,12 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
         Some(win) => win,
         None => crate::region::window_for(fw, fh, visible, crate::region::max_span(c.texture_side))?,
     };
-    // a window waits for the original another window job, or the read-ahead (`full_decode`), is decoding (see
-    // `defer_window`)
+    // a window waits for the original another window job, or the read-ahead past the memory gate
+    // (`full_decode::window_waits`), is decoding (see `defer_window`)
     let original_held = app.session.media.has_source(c.id, lightcraft_engine::SourceLevel::for_size(fw.max(fh)));
-    let window_pending = app.renderer.is_pending(Slot::Region) || app.renderer.is_pending(Slot::RegionBefore) || app.full_decode.running_for(c.id);
+    let window_pending = app.renderer.is_pending(Slot::Region)
+        || app.renderer.is_pending(Slot::RegionBefore)
+        || (!original_held && crate::full_decode::window_waits(app, c.id));
     if crate::region::defer_window(window_pending, original_held) {
         return if v.before { app.region_before_view } else { app.region_view }.filter(|w| w.photo == c.id);
     }

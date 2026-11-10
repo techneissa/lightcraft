@@ -68,6 +68,10 @@ impl LightcraftApp {
         self.background_prep(ctx);
         panels::notices::logic(self, ctx);
         // closing the window (or Quit) with changes only in memory: retry, else ask first
+        if ctx.input(|i| i.viewport().close_requested()) {
+            // a read-ahead of the open photo's original never holds up quitting: it just stops
+            self.full_decode.stop();
+        }
         if ctx.input(|i| i.viewport().close_requested()) && !panels::notices::may_close(self) {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
@@ -93,6 +97,7 @@ impl LightcraftApp {
         recheck::tick(self);
         crate::settings_sync::offer_at_start(self);
         tasks::poll(self, ctx);
+        crate::full_decode::frame(self);
         // after the poll: a lookup that just finished is cleared, so photos queued meanwhile are looked up now
         crate::lens_db::tick(self);
         updates_ui::tick(self, ctx);
