@@ -455,6 +455,26 @@ pub fn same_aspect(shown: f32, frame: f32) -> bool {
     shown.is_finite() && frame.is_finite() && frame > 0.0 && (shown / frame - 1.0).abs() <= 0.02
 }
 
+/// Whether `held`, a window of a `full` frame already rendered, still serves a view whose visible pixels are `visible`
+/// (`(x0, y0, x1, y1)` in the frame's pixels): they lie inside it, at least a margin ([`margin_for`]) from each of its
+/// edges that isn't the frame's (the margin's own pixels have less context around them). Such a window is drawn
+/// again rather than a new one rendered: zooming from 100 % to 200 % or back, or a pan inside it, then builds no mask
+/// and draws no spot again (#174).
+pub fn covers(held: &PixelWindow, full: (usize, usize), visible: (f32, f32, f32, f32)) -> bool {
+    if [visible.0, visible.1, visible.2, visible.3].iter().any(|v| !v.is_finite()) {
+        return false;
+    }
+    let margin = margin_for(full.0.max(full.1));
+    let axis = |lo: f32, hi: f32, at: usize, len: usize, full: usize| {
+        let (lo, hi) = (lo.max(0.0), hi.min(full as f32));
+        let end = at.saturating_add(len);
+        let inner_lo = if at == 0 { 0 } else { at.saturating_add(margin) };
+        let inner_hi = if end >= full { full } else { end.saturating_sub(margin) };
+        hi > lo && lo >= inner_lo as f32 && hi <= inner_hi as f32
+    };
+    axis(visible.0, visible.2, held.x, held.w, full.0) && axis(visible.1, visible.3, held.y, held.h, full.1)
+}
+
 /// The window of a `full_w × full_h` frame to render so that `visible` — `(x0, y0, x1, y1)` in the
 /// frame's pixels, as much of the frame as is on screen — is covered: expanded by a margin,
 /// snapped outwards to the [`SNAP`] grid (margin: see [`margin_for`]) and clamped into the frame,

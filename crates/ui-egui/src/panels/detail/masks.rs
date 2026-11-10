@@ -817,7 +817,7 @@ fn brush_tool(
         let images = app
             .session
             .active()
-            .filter(|_| !app.renderer.textures.contains_key(&crate::render::Slot::Region))
+            .filter(|_| app.region_view.is_none())
             .and_then(|id| super::brush_preview::images(app, id, map.rect));
         // (the live adjustment shows with the overlay hidden too: only the tint follows `shown`, issue #2549)
         let look = crate::brush_live::Look {

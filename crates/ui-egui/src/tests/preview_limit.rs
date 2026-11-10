@@ -440,7 +440,8 @@ mod in_the_loupe {
         assert_eq!(region_tile(&h), None);
     }
 
-    // Given a zoomed view with a window render, when I zoom back to Fit, then the window's texture is freed
+    // Given a zoomed view with a window render, when I zoom back to Fit, then the window is kept, not drawn (zooming
+    // back in draws it again: #174), and when I go to the next photo, then its texture is freed
     #[test]
     fn the_window_texture_is_freed_when_it_is_not_needed() {
         let (_fx, mut h, _) = detail();
@@ -450,7 +451,11 @@ mod in_the_loupe {
         assert!(region_tile(&h).is_some());
         h.request("engine.execute", json!({"command": "view.zoomFit"}), T);
         h.settle(SETTLE);
-        assert_eq!(region_tile(&h), None);
+        assert!(region_tile(&h).is_some(), "kept at Fit for this photo");
+        assert_eq!(h.app.region_view, None, "and not drawn");
+        h.request("engine.execute", json!({"command": "library.next"}), T);
+        h.settle(SETTLE);
+        assert_eq!(region_tile(&h), None, "freed for the next photo");
         assert_eq!(h.app.region_view, None);
     }
 
@@ -962,7 +967,7 @@ mod in_the_loupe {
     }
 
     // Given a picture on screen that is not the frame (an unsupported raw's embedded JPEG cropped
-    // differently, #280), no window is rendered: its coordinates are the frame's
+    // differently, #280), no window is drawn: its coordinates are the frame's (the one rendered stays for the photo, #174)
     #[test]
     fn no_window_over_a_picture_that_is_not_the_frame() {
         let (_fx, mut h, _) = detail();
@@ -973,7 +978,7 @@ mod in_the_loupe {
         t.size = [t.size[0], t.size[1] / 2];
         h.step();
         assert_eq!(h.app.region_view, None);
-        assert_eq!(region_tile(&h), None);
+        assert!(!h.app.renderer.is_pending(Slot::Region), "and none is rendered");
     }
 
     /// `cargo test -p lightcraft-ui-egui --release profile_slider_drag -- --ignored --nocapture`:

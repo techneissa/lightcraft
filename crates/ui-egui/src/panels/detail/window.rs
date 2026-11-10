@@ -70,7 +70,11 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
         to_px * (v.visible.right() - v.target.left()),
         to_px * (v.visible.bottom() - v.target.top()),
     );
-    let win = crate::region::window_for(fw, fh, visible, crate::region::max_span(c.texture_side))?;
+    // a window already rendered of this frame that holds the view is drawn again (#174); else the one for the view
+    let win = match held_window(app, c.id, v, (fw, fh), visible) {
+        Some(win) => win,
+        None => crate::region::window_for(fw, fh, visible, crate::region::max_span(c.texture_side))?,
+    };
     // a window waits for the original another window job is decoding (see `defer_window`)
     let original_held = app.session.media.has_source(c.id, lightcraft_engine::SourceLevel::for_size(fw.max(fh)));
     let window_pending = app.renderer.is_pending(Slot::Region) || app.renderer.is_pending(Slot::RegionBefore);
@@ -127,6 +131,21 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
     }
     app.renderer.request(v.slot, job, 99);
     Some(view)
+}
+
+/// The window of a tile held for `v`'s side of photo `id` in a frame of `full` px that still covers `visible`
+/// ([`crate::region::covers`]): the one on screen first. Its look may be older (an edit): the same window is then
+/// rendered again, with the stage caches it left.
+fn held_window(app: &LightcraftApp, id: PhotoId, v: &WindowView, full: (usize, usize), visible: (f32, f32, f32, f32)) -> Option<lightcraft_pipeline::PixelWindow> {
+    let on_screen = app.renderer.textures.get(&v.slot).filter(|t| t.photo == id).map(|t| t.key);
+    let mut held: Vec<(&(bool, u64), &crate::region::RegionView)> = app
+        .region_tiles
+        .iter()
+        .filter(|((before, _), t)| *before == v.before && t.photo == id && t.full == full && crate::region::covers(&t.window, full, visible))
+        .collect();
+    // (the tile on screen, then the smallest: a stable choice whatever the map's order)
+    held.sort_by_key(|((_, key), t)| (Some(*key) != on_screen, t.window.w * t.window.h, t.window.x, t.window.y));
+    held.first().map(|(_, t)| t.window)
 }
 
 /// Draw `v`'s window texture over the whole-frame render, if it is the one asked for (or, in a

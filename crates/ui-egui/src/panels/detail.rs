@@ -832,7 +832,10 @@ fn request_windows(app: &mut LightcraftApp, ctx: &WindowCtx, views: Vec<WindowVi
         } else {
             app.region_view = shown;
         }
-        if shown.is_none() {
+        // The After window stays while the photo does (at Fit, say), with its texture and stage caches: zooming
+        // back in draws it again, or renders it again with them after an edit (#174). The Before one goes.
+        let keep = !before && app.renderer.textures.get(&slot).is_some_and(|t| t.photo == ctx.id);
+        if shown.is_none() && !keep {
             app.region_tiles.retain(|(b, _), _| *b != before);
             app.renderer.release(slot);
         }

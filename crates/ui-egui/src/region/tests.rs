@@ -694,3 +694,17 @@ fn a_display_fit_is_asked_only_when_it_shrinks() {
     assert_eq!(display_fit([6000, 4000], [2560, 1707]), None);
     assert_eq!(display_fit([3000, 1500], [2560, 1707]), Some([3000, 1500]), "shrinks along one axis");
 }
+
+// A window held for a 6000 × 4000 frame serves a view inside it, a margin (512 px) from its inner edges; at the frame's
+// own edge no margin is needed (#174)
+#[test]
+fn a_held_window_covers_a_view_inside_its_margins() {
+    let held = PixelWindow { x: 1024, y: 512, w: 3072, h: 2048 };
+    let full = (6000, 4000);
+    assert!(covers(&held, full, (1536.0, 1024.0, 3584.0, 2048.0)), "well inside");
+    assert!(!covers(&held, full, (1400.0, 1024.0, 3584.0, 2048.0)), "into its left margin");
+    assert!(!covers(&held, full, (1536.0, 1024.0, 3700.0, 2048.0)), "into its right margin");
+    let corner = PixelWindow { x: 0, y: 0, w: 2048, h: 1536 };
+    assert!(covers(&corner, full, (0.0, 0.0, 1536.0, 1024.0)), "at the frame's edge no margin");
+    assert!(!covers(&held, full, (f32::NAN, 0.0, 1.0, 1.0)));
+}
