@@ -222,3 +222,39 @@ fn a_hidden_selected_mask_still_shows_its_overlay() {
     assert!(held.planes[0].1.iter().any(|a| *a > 0));
     assert!(h.app.renderer.tints.drawn(Slot::Main, photo, k), "its overlay is drawn");
 }
+
+// Given a monitor profile (every Mac shows previews through its screen's profile), the overlay is still drawn over the photo:
+// O, the opacity and selecting another mask start no render of the photo, and the tint's colour is the chosen one as the
+// monitor shows it (issue #175: the tint was rendered into the photo, so each of these rendered it again)
+#[test]
+fn with_a_monitor_profile_the_overlay_still_starts_no_render() {
+    let mut h = masking();
+    let dir = std::env::temp_dir().join(format!("lightcraft-tint-display-{}-{:?}", std::process::id(), std::thread::current().id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let path = dir.join("p3.icc");
+    std::fs::write(&path, lightcraft_codecs::icc::write_named(lightcraft_codecs::NamedSpace::DisplayP3)).expect("profile written");
+    let r = h.request("engine.execute", json!({"command": "app.displayProfile", "params": {"path": path.to_string_lossy()}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    assert!(h.settle(SETTLE));
+    assert!(h.app.renderer.display_id().is_some(), "the profile is in use");
+    let (photo, k) = main_tex(&h);
+    assert!(h.app.renderer.tints.drawn(Slot::Main, photo, k), "the tint is drawn over the photo");
+    for flip in 0..4 {
+        let (renders, _) = during(&mut h, |h| key(h, "o"));
+        assert_eq!(renders, 0, "flip {flip} of O rendered the photo");
+    }
+    for opacity in [80.0, 30.0, 100.0] {
+        let (renders, _) = during(&mut h, |h| h.app.ui.mask_overlay_opacity = opacity);
+        assert_eq!(renders, 0, "opacity {opacity} rendered the photo");
+    }
+    let masks: Vec<u32> = h.app.session.develop_of(photo).expect("settings").masks.iter().map(|m| m.id).collect();
+    for id in masks {
+        let (renders, _) = during(&mut h, |h| {
+            let r = h.request("engine.execute", json!({"command": "mask.select", "params": {"id": id}}), T);
+            assert_eq!(r["ok"], true, "{r}");
+        });
+        assert_eq!(renders, 0, "selecting mask {id} rendered the photo");
+    }
+    assert_eq!(main_tex(&h).1, k, "the photo's render is the one it was");
+    let _ = std::fs::remove_dir_all(&dir);
+}
