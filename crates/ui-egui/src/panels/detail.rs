@@ -1145,8 +1145,9 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
             job.key ^= brush_preview::BRUSH_KEY_SALT;
         }
         give_area_faces(app, id, overlay, &mut job);
-        request_planes(app, (Slot::Alpha, Slot::Main), &job, a.tint);
+        let planes_for = job.clone();
         app.renderer.request(Slot::Main, job, 100);
+        request_planes(app, (Slot::Alpha, Slot::Main), &planes_for, a.tint);
         // the photo on screen comes first: background preparation waits while it is being made
         // (only then: this runs every loupe frame, and a render already shown asks for nothing)
         if app.renderer.is_pending(Slot::Main) {
@@ -1175,6 +1176,11 @@ pub(super) fn request_planes(
     tint: Option<crate::mask_tint::TintSel>,
 ) {
     let Some(tint) = tint.filter(|_| app.ui.dragging_control.is_none()) else { return };
+    // (asked once the photo's render is in: the ask finds the alphas and stages it kept. Asked beside it, the two ran at
+    // once and each made everything, the noise model and every mask included: 2 s for a window at 100 %, issue #175)
+    if app.renderer.is_pending(shown) {
+        return;
+    }
     let Some(ask) = app.renderer.tints.ask(shown, job.photo, job.key, tint.pick) else { return };
     let alpha = job.clone().for_mask_planes(ask);
     app.renderer.tints.asked(shown, job.photo, job.key, tint.pick, alpha.key);

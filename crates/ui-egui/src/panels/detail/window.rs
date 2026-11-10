@@ -122,10 +122,11 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
         *before != v.before || t.is_current(c.id, (fw, fh), look, c.interacting) || (Some(*key) == on_screen && t.stands_in(c.id, (fw, fh), shown_as))
     });
     app.region_tiles.insert((v.before, job.key), view);
-    if !v.before {
+    let planes_for = (!v.before).then(|| job.clone());
+    app.renderer.request(v.slot, job, 99);
+    if let Some(job) = planes_for {
         super::request_planes(app, (Slot::RegionAlpha, Slot::Region), &job, c.tint);
     }
-    app.renderer.request(v.slot, job, 99);
     Some(view)
 }
 

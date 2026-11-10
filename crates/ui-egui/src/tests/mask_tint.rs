@@ -258,3 +258,29 @@ fn with_a_monitor_profile_the_overlay_still_starts_no_render() {
     assert_eq!(main_tex(&h).1, k, "the photo's render is the one it was");
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+// Given the overlay shown, an edit renders the photo first and asks for the planes after: the ask finds what the render kept.
+// Asked beside it, the two ran at once and each made the stages and every mask (issue #175: 2 s for a window at 100 %)
+#[test]
+fn the_planes_are_asked_for_once_the_photos_render_is_in() {
+    let mut h = masking();
+    let asks = h.app.renderer.tints.answers;
+    let r = h.request("engine.execute", json!({"command": "develop.set", "params": {"control": "light.exposure", "value": 0.6}}), T);
+    assert_eq!(r["ok"], true, "{r}");
+    let mut rendered = false;
+    for frame in 0..400 {
+        h.step();
+        let (main, planes) = (h.app.renderer.is_pending(Slot::Main), h.app.renderer.is_pending(Slot::Alpha));
+        assert!(!(main && planes), "frame {frame}: the planes were asked for while the photo's render was on its way");
+        rendered |= main;
+        if rendered && !main && !planes && h.app.renderer.tints.answers > asks {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    assert!(rendered, "the edit rendered the photo");
+    assert!(h.settle(SETTLE));
+    assert!(h.app.renderer.tints.answers > asks, "the planes were asked for after it");
+    let (photo, k) = main_tex(&h);
+    assert!(h.app.renderer.tints.drawn(Slot::Main, photo, k), "and the tint is drawn");
+}
