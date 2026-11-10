@@ -36,6 +36,8 @@ pub struct GpuStages {
     pub(crate) host: Mutex<Option<crate::dirty::HostKept>>,
     /// Fork (`fork/perf-decontam-gpu.md`): the decontaminated masks' edges of the last render.
     decontam: crate::decontam::KeptEdges,
+    /// The spots finished at the zoom's scale, on the host (issue #176, `lightcraft_pipeline::spots_scale`).
+    spot_finals: Arc<lightcraft_pipeline::spots_scale::FinalsStore>,
 }
 
 const CAPACITY: usize = 2;
@@ -160,7 +162,7 @@ impl GpuStages {
         }
         self.alphas.each(&mut add);
         self.decontam.each(&mut add);
-        patches += self.spots.bytes();
+        patches += self.spots.bytes() + self.spot_finals.bytes();
         let host = self.host.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or(0, |k| k.bytes);
         total + patches + host
     }
@@ -173,6 +175,7 @@ impl GpuStages {
         self.decontam.clear();
         self.spots.clear();
         self.spots_cpu.clear();
+        self.spot_finals.clear();
         *self.host.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
@@ -821,7 +824,7 @@ pub fn render(
         }
         None => cx.flush(),
     };
-    let plan = lightcraft_pipeline::plan(src, info, s, req);
+    let plan = lightcraft_pipeline::plan_kept(src, info, s, req, stages.map(|g| &g.spot_finals));
     let (w, h) = (plan.w, plan.h);
     let Some(n) = w.checked_mul(h).filter(|n| n.checked_mul(12).is_some()) else {
         fail(FailKind::Limit, format!("{w}×{h} output is too large"));
@@ -1437,9 +1440,11 @@ fn linear(
     let (w, h) = (plan.w, plan.h);
     let n = w * h;
     let s = &*plan.settings;
-    let img = if lightcraft_pipeline::local_tone::enabled(info, s) || s.spots.iter().any(lightcraft_pipeline::spots_learned::is_learned) {
-        // the camera's local tone mapping (ProRAW gain table, off by default), or a LaMa spot (the
-        // learned fill runs on the CPU, before the white balance): the whole scene-linear stage on the CPU
+    // (a window that pastes its finished spots draws none, so it stays on the device: issue #176)
+    let cpu_spots = plan.spots_at.paste.is_none() && s.spots.iter().any(lightcraft_pipeline::spots::drawn_on_cpu);
+    let img = if lightcraft_pipeline::local_tone::enabled(info, s) || cpu_spots {
+        // the camera's local tone mapping (ProRAW gain table, off by default), or a spot with no GPU kernel (LaMa,
+        // Content-Aware, a shaped spot: `spots::drawn_on_cpu`): the whole scene-linear stage on the CPU
         // (portrait retouching included, fork `fork/retouch-foundation.md`)
         let mut img = match host.sampled.take() {
             Some(i) => i,

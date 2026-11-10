@@ -203,6 +203,38 @@ fn a_window_matches_the_whole_render() {
     assert!(worst <= 1, "the window differs from the whole render by up to {worst}");
 }
 
+/// Issue #176: zoomed in, a pan to another window of the same scale, or an edit after the spots (Exposure), asks the
+/// learned fill nothing again: the window pastes the spot it finished.
+#[test]
+fn a_pan_or_a_later_edit_asks_the_learned_fill_nothing() {
+    let fill = Arc::new(MeanFill::default());
+    let mut s = with(vec![Spot { points: vec![Point::new(0.5, 0.5), Point::new(0.51, 0.5)], size: 0.01, ..spot(SpotMode::Remove, SpotFill::Lama) }]);
+    let src = Arc::new(scene());
+    // (a frame much wider than what a window grows to for the spot, so each pan is another window)
+    let (cache, full) = (crate::StageCache::default(), RenderRequest::fit(1600, 1200));
+    let at = |x: usize, y: usize| RenderRequest { window: Some(PixelWindow { x, y, w: 400, h: 300 }), ..full };
+    let asked = |s: &DevelopSettings, req: &RenderRequest| {
+        let before = fill.asked.lock().unwrap_or_else(PoisonError::into_inner).len();
+        let img = crate::render_cached(&src, &SourceInfo::default(), s, req, &cache).image;
+        (fill.asked.lock().unwrap_or_else(PoisonError::into_inner).len() - before, img)
+    };
+    install(&fill, || {
+        assert!(asked(&s, &at(600, 450)).0 > 0, "the first window asks for its fill");
+        for (x, y) in [(650, 480), (560, 430), (620, 470)] {
+            let (n, part) = asked(&s, &at(x, y));
+            assert_eq!(n, 0, "a pan to {x}, {y} asks nothing");
+            let whole = render(&src, &SourceInfo::default(), &s, &full).image;
+            let worst = (0..300).flat_map(|r| (0..400).map(move |c| (c, r))).map(|(c, r)| {
+                let (a, b) = (whole.get(x + c, y + r), part.get(c, r));
+                (0..3).map(|k| a[k].abs_diff(b[k])).max().unwrap_or(0)
+            });
+            assert!(worst.max().unwrap_or(0) <= 1, "the pasted fill is the whole render's");
+        }
+        s.light.exposure = 0.7;
+        assert_eq!(asked(&s, &at(610, 440)).0, 0, "Exposure, in a new window, asks nothing");
+    });
+}
+
 #[test]
 fn feather_and_opacity_blend_the_learned_fill() {
     let fill = Arc::new(MeanFill::default());

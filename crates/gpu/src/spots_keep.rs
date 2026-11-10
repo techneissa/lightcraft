@@ -27,6 +27,19 @@ pub(crate) fn spots(
         return (before_spots(cx), None, None);
     }
     let (w, h) = (plan.w, plan.h);
+    // a window whose spots are finished at this scale pastes them over its own image (issue #176)
+    if let (Some(f), Some(origin)) = (&plan.spots_at.paste, plan.spots_at.origin) {
+        let img = before_spots(cx);
+        for (r, px) in lightcraft_pipeline::spots_scale::pieces(f, origin, w, h) {
+            let p = cx.gpu.upload(bytemuck::cast_slice::<[f32; 3], f32>(&px));
+            patch(cx, &img, &p, &r, w, h, true);
+        }
+        lightcraft_pipeline::spots_scale::note_pasted();
+        if crate::render::profiling() {
+            eprintln!("  gpu spots: {} of {} in {w}×{h}: pasted the finished spots", f.kept(), s.spots.len());
+        }
+        return (img, None, None);
+    }
     let key = keep::key(info, plan, &[]);
     let new = keep::entries(&s.spots, &[], &plan.frame, w, h, plan.px_per_long);
     let mut patches: Vec<DevicePatch> = vec![None; new.len()];
@@ -80,6 +93,20 @@ pub(crate) fn spots(
             img
         }
     };
+    // (a window keeps the finished pixels of the spots it drew exactly, for the next window of its scale)
+    let boxes = lightcraft_pipeline::spots_scale::exact_boxes(&plan.spots_at, w, h, &vec![true; new.len()]);
+    if !boxes.is_empty() {
+        let found = boxes
+            .into_iter()
+            .map(|(i, r)| {
+                let (bw, bh) = (r[2] - r[0], r[3] - r[1]);
+                let p = cx.gpu.buffer(bw * bh * 3);
+                patch(cx, &img, &p, &r, w, h, false);
+                (i, cx.read_rgb(&p, bw, bh).data)
+            })
+            .collect();
+        lightcraft_pipeline::spots_scale::keep(&plan.spots_at, found);
+    }
     let post = Arc::new(img);
     // (what follows writes its own buffers, but the kept one must never be handed on)
     let out = cx.copy(&post);

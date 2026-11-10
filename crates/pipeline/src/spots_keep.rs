@@ -426,6 +426,16 @@ pub fn lin_cpu_pre_retouch(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, ke
         return None;
     }
     crate::retouch_step::note_pre_retouch_run();
+    // a window whose spots are all finished at this scale pastes them (issue #176, `spots_scale`)
+    if let (Some(f), Some(origin)) = (&p.spots_at.paste, p.spots_at.origin) {
+        crate::local_tone::apply(img, info, p);
+        crate::local::white_balance(img, info, s);
+        crate::optics::defringe(img, s, p.px_per_long / crate::optics::DEFRINGE_REF_LONG);
+        crate::spots_scale::paste(img, f, origin);
+        crate::spots_scale::note_pasted();
+        crate::redeye::apply(img, &p.eyes);
+        return None;
+    }
     let (w, h, ppl) = (img.width, img.height, p.px_per_long);
     // 1. LaMa spots, on the resampled source: each asks its fill (and the fill's cache) only when it is drawn again
     let lnew: Vec<Option<Drawn>> = s
@@ -467,6 +477,12 @@ pub fn lin_cpu_pre_retouch(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, ke
         }
         true
     });
+    // (a window keeps the spots it drew exactly, for the next window of its scale: a LaMa spot counts once its fill came)
+    if p.spots_at.store.is_some() {
+        let drawn: Vec<bool> =
+            s.spots.iter().enumerate().map(|(i, sp)| !crate::spots_learned::is_learned(sp) || done.get(i).copied().unwrap_or(false)).collect();
+        crate::spots_scale::capture(&p.spots_at, img, &drawn);
+    }
     crate::redeye::apply(img, &p.eyes);
     Some(Arc::new(CpuKept { learned, classic }))
 }

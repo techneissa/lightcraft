@@ -148,6 +148,7 @@ pub fn analysis(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<Arc<Ana
         recolor: Vec::new(),
         full: (full.clone(), aw, ah),
         retouch_analysis: None,
+        spots_at: crate::spots_scale::At::default(),
         ..*p
     };
     let mut img = Rgb32f::clone(&crate::local::frame_proxy(src, full, aw, ah));

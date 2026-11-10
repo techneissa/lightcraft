@@ -158,7 +158,7 @@ pub fn pick_source(
 }
 
 /// The most a window grows to take in the spots that touch it.
-const MAX_SPOT_SPAN: usize = if cfg!(target_arch = "wasm32") { 4096 } else { 8192 };
+pub(crate) const MAX_SPOT_SPAN: usize = if cfg!(target_arch = "wasm32") { 4096 } else { 8192 };
 /// Strokes with more dabs than this are not examined dab by dab (the render would be too slow anyway).
 const MAX_DABS_CONSIDERED: usize = 200_000;
 
@@ -386,6 +386,13 @@ fn fill_box(src: &mut [[f32; 3]], tgt: &[[f32; 3]], alpha: &[f32], bw: usize, bh
     for (d, v) in src.iter_mut().zip(pixels) {
         *d = *v;
     }
+}
+
+/// Whether `spot` is drawn on the CPU by every renderer: a content-aware Fill ([`fill_box`]), a shaped spot
+/// ([`crate::spot_area`]) or a learned (LaMa) one have no GPU kernel. The GPU renderer then runs its spot stage on
+/// the CPU and the rest of the photo on the GPU (issue #176: such a spot used to send the whole photo to the CPU).
+pub fn drawn_on_cpu(spot: &Spot) -> bool {
+    spot.mode == SpotMode::Fill || spot.area.is_some() || crate::spots_learned::is_learned(spot)
 }
 
 /// Apply all spots to `img` (output resolution). `ppl` = output pixels per long-edge unit.

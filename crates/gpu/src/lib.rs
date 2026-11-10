@@ -713,11 +713,7 @@ fn run(
             return Err(Fallback::NotTried);
         }
         let s = &*lightcraft_pipeline::settings_for(s, req);
-        // content-aware Fill spots (`spots::fill_box`) and shaped spots (`spot_area`, fork) have no GPU kernel: the
-        // CPU renders the photo
-        if s.spots.iter().any(|sp| sp.mode == lightcraft_develop::SpotMode::Fill || sp.area.is_some()) {
-            return Err(Fallback::NotTried);
-        }
+        // (content-aware Fill and shaped spots have no GPU kernel: the spot stage runs on the CPU, `render::linear`)
         // in flight until this returns; not tried once the process is ending (issue #620)
         let _work = exit::enter().ok_or(Fallback::NotTried)?;
         let gpu = device().ok_or(Fallback::NotTried)?;
