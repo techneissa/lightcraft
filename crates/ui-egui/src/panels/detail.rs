@@ -244,14 +244,16 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let plan = app.size_hold.apply(id, now, navigating, plan);
     // the drawn size in pixels, clamped first: a NaN or negative float must not become a size
     let drawn_px = |points: f32| (points * ppp).round().clamp(0.0, 65_536.0) as usize;
-    let fit_px = app.size_hold.display_fit(now, navigating, [drawn_px(target_rect.width()), drawn_px(target_rect.height())]);
+    // (under a window the whole frame is hidden: its fit stays what it was, see `display_fit`)
+    let covered = plan.window_edge.is_some();
+    let fit_px = app.size_hold.display_fit(now, navigating, covered, [drawn_px(target_rect.width()), drawn_px(target_rect.height())]);
     if app.size_hold.holding(now) {
         ui.ctx().request_repaint_after(std::time::Duration::from_secs_f64(crate::region::HOLD_SECS));
     }
     // At rest the whole frame renders at no less than the preview source level: the source is then
     // copied 1:1 (no resample in the pipeline, whose prefilter and bilinear pass soften detail near
     // the output's limit) and shrunk once, by the Lanczos display fit below.
-    // (zoomed in under a window render, the whole frame is hidden: it stays canvas-sized)
+    // (zoomed in under a window render it keeps this size: hidden there, a size of its own rendered it again)
     let want = whole_frame_edge(app, interacting, &plan, native_long, texture_side);
     // The short side is rounded, not truncated: a truncated box (2560 x 1706 for a 2560 x 1707
     // source) made the render a slightly anisotropic resample of its source, a 2-tap blur along
@@ -967,8 +969,11 @@ fn loupe_plan(app: &LightcraftApp, id: PhotoId, look: u64, sizes: crate::region:
     plan
 }
 
+/// The whole-frame render's long edge. Zoomed in under a window it stays the size it is at Fit:
+/// it is hidden there, and a size of its own made every zoom in and back out render the whole
+/// photo twice (#174).
 fn whole_frame_edge(app: &LightcraftApp, interacting: bool, plan: &crate::region::LoupePlan, native_long: usize, texture_side: usize) -> usize {
-    if interacting || plan.window_edge.is_some() {
+    if interacting {
         plan.main_edge
     } else {
         // (a user's explicit Preview size below the preview level still caps it)
@@ -1138,7 +1143,7 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
         // at rest the render is shrunk to exactly the size it is drawn at with a Lanczos filter on
         // the worker, so the window draws it texel for texel instead of shrinking it with 2-tap
         // sampling (the render is up to a 64 px step larger, or the preview level)
-        let job = if interacting { job } else { job.with_display_fit(fit_px[0], fit_px[1]) };
+        let job = if interacting { job } else { fitted(job, fit_px, [rw, rh]) };
         let job = job.with_overlay(overlay).with_proof(app.ui.soft_proof.then_some(app.ui.proof));
         let mut job = job.with_hidden_grading(app.ui.grading_hidden_for(id));
         if app.renderer.keep_brush_pixels {
@@ -1211,7 +1216,7 @@ fn request_hover(app: &mut LightcraftApp, a: &LoupeAsk, [sw, sh]: [usize; 2]) ->
     let label = h.label.clone();
     app.session.preview_job_shared(a.id, sw.max(8), sh.max(8), a.with_crop, &settings, hash).map(|job| {
         // (the same display fit as the After view, drawn texel for texel like it)
-        let job = job.with_display_fit(a.fit_px[0], a.fit_px[1]);
+        let job = fitted(job, a.fit_px, [sw, sh]);
         let key = job.key;
         app.renderer.request(Slot::Hover, job, 105);
         (key, label)
@@ -1222,8 +1227,17 @@ fn request_hover(app: &mut LightcraftApp, a: &LoupeAsk, [sw, sh]: [usize; 2]) ->
 fn request_before(app: &mut LightcraftApp, a: &LoupeAsk, [sw, sh]: [usize; 2]) {
     if let Some(job) = app.session.render_job(a.id, sw.max(8), sh.max(8), true, a.with_crop) {
         // (the same display fit as the After view, so both panes are the same texture size)
-        let job = if a.interacting { job } else { job.with_display_fit(a.fit_px[0], a.fit_px[1]) };
+        let job = if a.interacting { job } else { fitted(job, a.fit_px, [sw, sh]) };
         app.renderer.request(Slot::Before, job, 90);
+    }
+}
+
+/// `job`, a whole-frame render of `size` px, shrunk to the `drawn` size where that is smaller
+/// ([`crate::region::display_fit`]).
+fn fitted(job: lightcraft_engine::RenderJob, drawn: [usize; 2], size: [usize; 2]) -> lightcraft_engine::RenderJob {
+    match crate::region::display_fit(drawn, size) {
+        Some([w, h]) => job.with_display_fit(w, h),
+        None => job,
     }
 }
 

@@ -462,24 +462,24 @@ fn a_pinch_holds_the_display_fit_size() {
     let mut hold = SizeHold::default();
     let p = PhotoId(1);
     hold.apply(p, 0.0, false, fit);
-    assert_eq!(hold.display_fit(0.0, false, [1000, 800]), [1000, 800]);
+    assert_eq!(hold.display_fit(0.0, false, false, [1000, 800]), [1000, 800]);
     for k in 1..60 {
         let now = k as f64 / 60.0;
         hold.apply(p, now, true, zoomed);
-        assert_eq!(hold.display_fit(now, true, [1000 + k, 800 + k]), [1000, 800], "frame {k}");
+        assert_eq!(hold.display_fit(now, true, false, [1000 + k, 800 + k]), [1000, 800], "frame {k}");
     }
     // stopped at t = 59/60: still held within the hold time…
     hold.apply(p, 1.1, false, zoomed);
-    assert_eq!(hold.display_fit(1.1, false, [2560, 2048]), [1000, 800]);
+    assert_eq!(hold.display_fit(1.1, false, false, [2560, 2048]), [1000, 800]);
     // …then the size it ended at is taken, and kept while nothing moves
     hold.apply(p, 1.3, false, zoomed);
-    assert_eq!(hold.display_fit(1.3, false, [2560, 2048]), [2560, 2048]);
-    assert_eq!(hold.display_fit(1.4, false, [2561, 2049]), [2561, 2049]);
+    assert_eq!(hold.display_fit(1.3, false, false, [2560, 2048]), [2560, 2048]);
+    assert_eq!(hold.display_fit(1.4, false, false, [2561, 2049]), [2561, 2049]);
     // another photo forgets the held size
     hold.apply(p, 1.5, true, zoomed);
-    hold.display_fit(1.5, true, [2561, 2049]);
+    hold.display_fit(1.5, true, false, [2561, 2049]);
     hold.apply(PhotoId(2), 1.6, true, zoomed);
-    assert_eq!(hold.display_fit(1.6, true, [640, 480]), [640, 480]);
+    assert_eq!(hold.display_fit(1.6, true, false, [640, 480]), [640, 480]);
 }
 
 // The plan and display fit become fresh on the exact quiet deadline, in the same frame.
@@ -491,16 +491,16 @@ fn the_display_fit_and_plan_release_at_the_exact_deadline() {
     let fit = LoupePlan { main_edge: 800, window_edge: None };
     let zoomed = LoupePlan { main_edge: 1600, window_edge: Some(6000) };
     assert_eq!(hold.apply(photo, 0.0, false, fit), fit);
-    assert_eq!(hold.display_fit(0.0, false, [508, 762]), [508, 762]);
+    assert_eq!(hold.display_fit(0.0, false, false, [508, 762]), [508, 762]);
     assert_eq!(hold.apply(photo, 1.0, true, zoomed), fit);
-    assert_eq!(hold.display_fit(1.0, true, [549, 823]), [508, 762]);
+    assert_eq!(hold.display_fit(1.0, true, false, [549, 823]), [508, 762]);
     let before_deadline = 1.0 + HOLD_SECS / 2.0;
     assert_eq!(hold.apply(photo, before_deadline, false, zoomed), fit);
-    assert_eq!(hold.display_fit(before_deadline, false, [549, 823]), [508, 762]);
+    assert_eq!(hold.display_fit(before_deadline, false, false, [549, 823]), [508, 762]);
     assert!(hold.holding(before_deadline));
     let deadline = 1.0 + HOLD_SECS;
     assert_eq!(hold.apply(photo, deadline, false, zoomed), zoomed);
-    assert_eq!(hold.display_fit(deadline, false, [549, 823]), [549, 823]);
+    assert_eq!(hold.display_fit(deadline, false, false, [549, 823]), [549, 823]);
     assert!(!hold.holding(deadline));
 }
 
@@ -683,4 +683,14 @@ fn a_moved_wipe_line_cuts_the_windows_there() {
     assert_eq!(wipe_line_at(img, canvas, -1.0).x, 100.0);
     assert_eq!(wipe_line_at(img, canvas, f32::NAN).x, 500.0);
     assert_eq!(window_clip_at(Off, false, canvas, canvas, img, 0.25), canvas);
+}
+
+// A display fit at or above the render's size would shrink nothing: none is asked for, so the
+// render's key doesn't change with each zoom step past it (#174)
+#[test]
+fn a_display_fit_is_asked_only_when_it_shrinks() {
+    assert_eq!(display_fit([1300, 867], [2560, 1707]), Some([1300, 867]));
+    assert_eq!(display_fit([2560, 1707], [2560, 1707]), None);
+    assert_eq!(display_fit([6000, 4000], [2560, 1707]), None);
+    assert_eq!(display_fit([3000, 1500], [2560, 1707]), Some([3000, 1500]), "shrinks along one axis");
 }

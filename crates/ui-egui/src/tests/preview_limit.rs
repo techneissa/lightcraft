@@ -454,6 +454,24 @@ mod in_the_loupe {
         assert_eq!(h.app.region_view, None);
     }
 
+    // Given a photo at Fit, when I zoom to 1:1 and back to Fit, twice, then the whole-frame render
+    // is never made again: hidden under the window, it keeps the size and fit it has at Fit (#174)
+    #[test]
+    fn zooming_in_and_back_out_keeps_the_whole_frame_render() {
+        let (_fx, mut h, _) = detail();
+        let main = |h: &Headless| h.app.renderer.wanted(Slot::Main);
+        let fit = main(&h).expect("the whole frame at Fit");
+        for round in 0..2 {
+            h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+            h.settle(SETTLE);
+            assert!(h.app.region_view.is_some(), "round {round}: a window at 1:1");
+            assert_eq!(main(&h), Some(fit), "round {round}: zoomed in, the same whole-frame render");
+            h.request("engine.execute", json!({"command": "view.zoomFit"}), T);
+            h.settle(SETTLE);
+            assert_eq!(main(&h), Some(fit), "round {round}: back at Fit, the same whole-frame render");
+        }
+    }
+
     // Given a zoomed view with a window render, when I go to the grid, then its windows are freed
     // too (while one is held the app never counts as idle and keeps the GPU copy of the original)
     #[test]
@@ -795,7 +813,8 @@ mod in_the_loupe {
         assert_eq!(region.full.0.max(region.full.1), native);
         assert_eq!(h.app.renderer.textures.get(&Slot::Region).unwrap().key, region.key);
         assert!(!h.app.renderer.is_pending(Slot::Main) && !h.app.renderer.is_pending(Slot::Region));
-        assert_ne!(h.app.renderer.wanted(Slot::Main), Some(original_key));
+        // (hidden under the window, the whole frame keeps the render it had before the pinch: #174)
+        assert_eq!(h.app.renderer.wanted(Slot::Main), Some(original_key));
     }
 
     fn complete_pinch_jobs(h: &mut Headless, work: &std::rc::Rc<std::cell::RefCell<PinchWork>>) {

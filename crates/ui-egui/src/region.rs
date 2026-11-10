@@ -330,6 +330,14 @@ pub fn plan(settings: &crate::state::AppSettings, v: ViewSizes) -> LoupePlan {
     LoupePlan { main_edge: edge_at(scale), window_edge }
 }
 
+/// The display fit to ask for with a whole-frame render of `size` px drawn at `drawn` px: `None`
+/// when the drawn size holds the whole render. The worker only ever shrinks a render to its fit,
+/// so such a fit changes nothing but the render's key, and a key that followed the zoom started a
+/// whole-frame render at every zoom step past it, hidden under the window (#174).
+pub fn display_fit(drawn: [usize; 2], size: [usize; 2]) -> Option<[usize; 2]> {
+    (size[0] > drawn[0].max(1) || size[1] > drawn[1].max(1)).then_some(drawn)
+}
+
 /// How long the render sizes stay as they were after a pinch or two-finger scroll stops (s).
 pub const HOLD_SECS: f64 = 0.25;
 
@@ -366,10 +374,13 @@ impl SizeHold {
     }
 
     /// The size the whole frame is shrunk to at rest (the drawn size): the one from before the
-    /// gesture while sizes are held (call after [`Self::apply`] in the same frame), else `fresh`.
-    pub fn display_fit(&mut self, now: f64, gesturing: bool, fresh: [usize; 2]) -> [usize; 2] {
+    /// gesture while sizes are held (call after [`Self::apply`] in the same frame), and while a
+    /// window covers the whole frame (`covered`), else `fresh`. Under a window the whole frame is
+    /// hidden: a fit that followed the zoom rendered it again at each zoom step, and once more on
+    /// the way back to Fit (#174).
+    pub fn display_fit(&mut self, now: f64, gesturing: bool, covered: bool, fresh: [usize; 2]) -> [usize; 2] {
         match self.fit {
-            Some(held) if gesturing || now < self.until => held,
+            Some(held) if gesturing || covered || now < self.until => held,
             _ => {
                 self.fit = Some(fresh);
                 fresh
