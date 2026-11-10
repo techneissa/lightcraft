@@ -4189,6 +4189,8 @@ dependencies = [
  "jpeg-encoder",
  "lightcraft-raster",
  "log",
+ "miniz_oxide 0.9.1",
+ "rayon",
  "siphasher",
  "zune-core",
  "zune-jpeg",

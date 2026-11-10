@@ -38,8 +38,12 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use lightcraft_raster::Rgba8;
 
 use crate::Hash128;
+use crate::full;
 
 const QUALITY: u8 = 90;
+
+/// The loupe's full-size pictures may take this fraction (1 / n) of the budget ([`DiskCache::put_full`]).
+pub const FULL_SHARE: u64 = 2;
 
 /// What a cached thumbnail's file is named after its key: not a picture's ending, so that
 /// nothing that looks for the person's photos takes the cache for them.
@@ -76,6 +80,12 @@ pub struct DiskCache {
     pub hits: AtomicU64,
     pub misses: AtomicU64,
     pub writes: AtomicU64,
+    /// The same for the loupe's full-size pictures ([`Self::get_full`], [`Self::put_full`]).
+    pub full_hits: AtomicU64,
+    pub full_misses: AtomicU64,
+    pub full_writes: AtomicU64,
+    /// Bytes of full-size pictures on disk (`None` until first counted): they may take [`FULL_SHARE`] of the budget.
+    full_total: Mutex<Option<u64>>,
     /// The thumbnails read in this session: a full cache lets them go last ([`Self::prune`]).
     read: Mutex<std::collections::HashSet<u128>>,
 }
@@ -89,6 +99,10 @@ impl DiskCache {
             hits: AtomicU64::new(0),
             misses: AtomicU64::new(0),
             writes: AtomicU64::new(0),
+            full_hits: AtomicU64::new(0),
+            full_misses: AtomicU64::new(0),
+            full_writes: AtomicU64::new(0),
+            full_total: Mutex::new(None),
             read: Mutex::new(Default::default()),
         }
     }
@@ -202,19 +216,29 @@ impl DiskCache {
     /// gives `false`; the cache is unchanged then).
     pub fn put(&self, key: Hash128, img: &Rgba8) -> bool {
         let Some(bytes) = encode_jpeg(img) else { return false };
-        let p = self.path(key);
-        let Some(parent) = p.parent() else { return false };
+        let written = self.write_file(key, EXT, &bytes);
+        if written.is_some() {
+            self.writes.fetch_add(1, Ordering::Relaxed);
+        }
+        written.unwrap_or(false)
+    }
+
+    /// Write `bytes` as the file of `key` named `ext`, counted in the cache's size; prune when that goes over the
+    /// budget. `None`: not written; `Some(kept)`: written, and whether it is still there after pruning.
+    fn write_file(&self, key: Hash128, ext: &str, bytes: &[u8]) -> Option<bool> {
+        let p = self.named(key, ext);
+        let parent = p.parent()?;
         // a folder the cache makes for itself says that it is a cache; one that was there
         // already may hold somebody's files, and is not declared one
         let made = !self.dir.exists();
         if std::fs::create_dir_all(parent).is_err() || !is_real_dir(parent) {
-            return false;
+            return None;
         }
         if made {
             let _ = std::fs::write(self.dir.join(TAG), TAG_TEXT);
         }
         // Serialize the file replacement and its size accounting. A repeated render of
-        // the same key replaces its JPEG; it must not count as another cache entry.
+        // the same key replaces its file; it must not count as another cache entry.
         let mut total = self.total.lock().unwrap_or_else(|e| e.into_inner());
         let used = total.get_or_insert_with(|| self.scan().iter().map(|f| f.1).sum());
         let old_len = std::fs::metadata(&p).map_or(0, |m| m.len());
@@ -222,21 +246,108 @@ impl DiskCache {
         // a new temp file: an entry already under the name (a link planted in the cache would be
         // written through) is removed, never opened
         let _ = std::fs::remove_file(&tmp);
-        let written = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp).and_then(|mut f| std::io::Write::write_all(&mut f, &bytes));
+        let written = std::fs::OpenOptions::new().write(true).create_new(true).open(&tmp).and_then(|mut f| std::io::Write::write_all(&mut f, bytes));
         if written.is_err() || std::fs::rename(&tmp, &p).is_err() {
             let _ = std::fs::remove_file(&tmp);
-            return false;
+            return None;
         }
-        self.writes.fetch_add(1, Ordering::Relaxed);
         *used = used.saturating_sub(old_len).saturating_add(bytes.len() as u64);
         let over = *used > self.budget();
         drop(total);
+        if ext == full::EXT {
+            let mut full = self.full_total.lock().unwrap_or_else(|e| e.into_inner());
+            let held = full.get_or_insert_with(|| self.scan().iter().filter(|f| is_full(&f.0)).map(|f| f.1).sum());
+            *held = held.saturating_sub(old_len).saturating_add(bytes.len() as u64);
+        }
         if over {
             self.prune();
             // (a picture bigger than the room pruning leaves goes too: it was not kept)
-            return p.is_file();
+            return Some(p.is_file());
         }
-        true
+        Some(true)
+    }
+
+    /// Keep the loupe's finished full-size picture `img` under `key` (lossless, [`full`]). Full-size pictures share
+    /// the budget with the thumbnails but may take only [`FULL_SHARE`] of it: past that the oldest of them go, so a
+    /// few big photos never push out the thumbnails of the whole library. Returns whether it was kept.
+    pub fn put_full(&self, key: Hash128, img: &Rgba8) -> bool {
+        let Some(bytes) = full::encode(img) else { return false };
+        let share = self.budget() / FULL_SHARE;
+        // (a picture that alone is more than the share is not written: it would push out every other)
+        if bytes.len() as u64 > share {
+            return false;
+        }
+        let Some(kept) = self.write_file(key, full::EXT, &bytes) else { return false };
+        self.full_writes.fetch_add(1, Ordering::Relaxed);
+        let held = self.full_total.lock().unwrap_or_else(|e| e.into_inner()).unwrap_or(0);
+        if held > share {
+            self.prune_full(share / 5 * 4);
+        }
+        kept && self.named(key, full::EXT).is_file()
+    }
+
+    /// The full-size picture kept under `key`, when there is one of `size` (width, height) pixels. A file that is
+    /// short, damaged or of another size is removed and reads as nothing.
+    pub fn get_full(&self, key: Hash128, size: (usize, usize)) -> Option<Rgba8> {
+        let p = self.named(key, full::EXT);
+        let read = p.parent().is_some_and(is_real_dir).then(|| std::fs::read(&p).ok()).flatten();
+        let Some(bytes) = read else {
+            self.full_misses.fetch_add(1, Ordering::Relaxed);
+            return None;
+        };
+        match full::decode(&bytes, size) {
+            Some(img) => {
+                self.full_hits.fetch_add(1, Ordering::Relaxed);
+                self.read.lock().unwrap_or_else(|e| e.into_inner()).insert(key.0);
+                // (its date says when it was last used: the oldest go first when the share is full)
+                if let Ok(f) = std::fs::File::options().write(true).open(&p) {
+                    let _ = f.set_modified(std::time::SystemTime::now());
+                }
+                Some(img)
+            }
+            None => {
+                log::warn!("preview cache: dropping unreadable full-size picture {}", p.display());
+                if std::fs::remove_file(&p).is_ok() {
+                    self.forget(bytes.len() as u64);
+                    self.forget_full(bytes.len() as u64);
+                }
+                self.full_misses.fetch_add(1, Ordering::Relaxed);
+                None
+            }
+        }
+    }
+
+    /// Bytes of full-size pictures on disk (counts them the first time).
+    pub fn full_size(&self) -> u64 {
+        let mut full = self.full_total.lock().unwrap_or_else(|e| e.into_inner());
+        *full.get_or_insert_with(|| self.scan().iter().filter(|f| is_full(&f.0)).map(|f| f.1).sum())
+    }
+
+    /// Remove the full-size pictures used longest ago until they hold at most `target` bytes (those read in this
+    /// session last).
+    fn prune_full(&self, target: u64) {
+        let mut files: Vec<_> = self.scan().into_iter().filter(|f| is_full(&f.0)).collect();
+        let mut held: u64 = files.iter().map(|f| f.1).sum();
+        let read = self.read.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        files.sort_by_cached_key(|f| (key_of(&f.0).is_some_and(|k| read.contains(&k)), f.2));
+        let mut gone = 0u64;
+        for (p, len, _) in files {
+            if held <= target {
+                break;
+            }
+            if std::fs::remove_file(&p).is_ok() {
+                held = held.saturating_sub(len);
+                gone = gone.saturating_add(len);
+            }
+        }
+        self.forget(gone);
+        *self.full_total.lock().unwrap_or_else(|e| e.into_inner()) = Some(held);
+    }
+
+    fn forget_full(&self, bytes: u64) {
+        if let Some(total) = self.full_total.lock().unwrap_or_else(|e| e.into_inner()).as_mut() {
+            *total = total.saturating_sub(bytes);
+        }
     }
 
     /// All cache files (only names of the cache's own shape, see [`is_cache_file`]):
@@ -397,6 +508,8 @@ impl DiskCache {
             }
         }
         *self.total.lock().unwrap_or_else(|e| e.into_inner()) = Some(total);
+        // (the full-size pictures among them are counted again when next written)
+        *self.full_total.lock().unwrap_or_else(|e| e.into_inner()) = None;
     }
 
     /// Bytes on disk (scans if not yet known).
@@ -416,7 +529,13 @@ impl DiskCache {
             let _ = std::fs::remove_file(p);
         }
         *self.total.lock().unwrap_or_else(|e| e.into_inner()) = Some(0);
+        *self.full_total.lock().unwrap_or_else(|e| e.into_inner()) = Some(0);
     }
+}
+
+/// Whether `path` is a full-size picture's file ([`full::EXT`]).
+fn is_full(path: &Path) -> bool {
+    path.extension().is_some_and(|ext| ext == full::EXT)
 }
 
 /// Whether `p` is a directory itself, not a symlink or Windows reparse point to one.
@@ -439,7 +558,7 @@ fn is_shard_name(s: &str) -> bool {
 }
 
 /// Whether `name` inside shard directory `shard` is a file this cache wrote: `<32 hex>.lcthumb`
-/// (whose first two digits are the shard), the `<32 hex>.jpg` it wrote before, or a
+/// (whose first two digits are the shard), a full-size picture's `<32 hex>.lcfull`, the `<32 hex>.jpg` it wrote before, or a
 /// `<32 hex>.tmp<alphanumeric>` temp file of [`DiskCache::put`]. Anything else in the cache
 /// directory belongs to someone else.
 pub fn is_cache_file(shard: &str, name: &str) -> bool {
@@ -450,7 +569,10 @@ pub fn is_cache_file(shard: &str, name: &str) -> bool {
     if stem.len() != 32 || !is_lower_hex(stem) || !stem.starts_with(shard) {
         return false;
     }
-    ext == EXT || ext == OLD_EXT || ext.strip_prefix("tmp").is_some_and(|t| !t.is_empty() && t.bytes().all(|b| b.is_ascii_alphanumeric()))
+    ext == EXT
+        || ext == full::EXT
+        || ext == OLD_EXT
+        || ext.strip_prefix("tmp").is_some_and(|t| !t.is_empty() && t.bytes().all(|b| b.is_ascii_alphanumeric()))
 }
 
 /// Encode a thumbnail as the cache stores it (JPEG, RGB, 4:2:0).
