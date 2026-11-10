@@ -432,6 +432,10 @@ pub struct Renderer {
     /// Since when nothing has been pending, and whether the GPU pool was trimmed since.
     #[cfg(not(target_arch = "wasm32"))]
     idle: Option<(std::time::Instant, bool)>,
+    /// How often the idle trim ran.
+    pub idle_trims: u64,
+    /// Whether the loupe drew a zoom window in its last frame (a window kept at Fit isn't drawn: #174).
+    pub window_on_screen: bool,
     /// Draws GPU-resident renders; with it, interactive drafts of views stay on the GPU.
     screen: Option<Box<dyn ScreenTextures>>,
     /// The texture id each view slot shows GPU-resident renders under (one per slot, reused).
@@ -451,6 +455,10 @@ pub const AHEAD_SLOTS: u8 = 6;
 /// After this long without renders the GPU renderer's pool of recycled buffers is freed.
 #[cfg(not(target_arch = "wasm32"))]
 const IDLE_TRIM: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// The idle trim's wait while a zoom window is kept but not drawn (at Fit, for the next zoom: #174): the trim lets go
+/// of the GPU copy of the original, which that zoom then uploads again. The window's texture and stage caches stay.
+const KEPT_WINDOW_IDLE_TRIM: std::time::Duration = std::time::Duration::from_secs(30);
 
 impl Slot {
     /// An interactive view of the open photo: slider drags redo only the stages they feed, and a
@@ -548,6 +556,8 @@ impl Renderer {
             display: None,
             #[cfg(not(target_arch = "wasm32"))]
             idle: None,
+            idle_trims: 0,
+            window_on_screen: false,
             screen: None,
             natives: HashMap::new(),
             native_frames: HashMap::new(),
@@ -795,6 +805,14 @@ impl Renderer {
         self.tints.release(slot);
         self.stages.remove(&slot);
         // and its GPU-resident texture, which can be window-sized (review of PR #1065)
+        self.free_native(slot);
+    }
+
+    /// Free a view slot's texture but keep its stage cache: the view is hidden, and when it is shown again its
+    /// render reuses the stages (a zoom window kept at Fit after an edit, #174).
+    pub fn drop_texture(&mut self, slot: Slot) {
+        self.textures.remove(&slot);
+        self.tints.release(slot);
         self.free_native(slot);
     }
 
@@ -1784,22 +1802,25 @@ impl Renderer {
     /// the next pan (a 64 MP raw is 800 MB to upload again, over a second).
     #[cfg(not(target_arch = "wasm32"))]
     fn trim_when_idle(&mut self, ctx: &egui::Context) {
-        if !self.pending.is_empty() || self.textures.contains_key(&Slot::Region) || self.textures.contains_key(&Slot::RegionBefore) {
+        let window = self.textures.contains_key(&Slot::Region) || self.textures.contains_key(&Slot::RegionBefore);
+        if !self.pending.is_empty() || (window && self.window_on_screen) {
             self.idle = None;
             return;
         }
+        let wait = if window { KEPT_WINDOW_IDLE_TRIM } else { IDLE_TRIM };
         let now = std::time::Instant::now();
         let (since, trimmed) = *self.idle.get_or_insert((now, false));
         if trimmed {
             return;
         }
         let waited = now.duration_since(since);
-        if waited >= IDLE_TRIM {
+        if waited >= wait {
             lightcraft_engine::gpu::trim_pool(0);
             lightcraft_engine::memory::release();
             self.idle = Some((since, true));
+            self.idle_trims += 1;
         } else {
-            ctx.request_repaint_after(IDLE_TRIM - waited);
+            ctx.request_repaint_after(wait - waited);
         }
     }
 
@@ -2040,6 +2061,7 @@ mod stage_budget_tests {
             Tex { look: None, key: 1, photo: PhotoId(1), tex, native: None, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
         );
         let long_ago = std::time::Instant::now().checked_sub(IDLE_TRIM * 2).unwrap();
+        r.window_on_screen = true;
         r.idle = Some((long_ago, false));
         r.trim_when_idle(&ctx);
         assert_eq!(r.idle, None, "a zoomed view is not idle");
@@ -2047,6 +2069,29 @@ mod stage_budget_tests {
         r.idle = Some((long_ago, false));
         r.trim_when_idle(&ctx);
         assert_eq!(r.idle, Some((long_ago, true)), "trimmed once the window is gone");
+    }
+
+    // Given a zoom window kept at Fit for the next zoom (not drawn, #174), the idle trim waits longer, then runs
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn a_window_kept_at_fit_is_trimmed_after_a_longer_idle() {
+        let ctx = egui::Context::default();
+        let mut r = Renderer::default();
+        let tex = ctx.load_texture("window", egui::ColorImage::new([1, 1], vec![egui::Color32::BLACK]), Default::default());
+        r.textures.insert(
+            Slot::Region,
+            Tex { look: None, key: 1, photo: PhotoId(1), tex, native: None, size: [1, 1], histogram: None, ms: 0.0, quick: None, pixels: None },
+        );
+        let now = std::time::Instant::now();
+        let short = now.checked_sub(IDLE_TRIM * 2).unwrap();
+        r.idle = Some((short, false));
+        r.trim_when_idle(&ctx);
+        assert_eq!(r.idle_trims, 0, "not after the usual idle");
+        let long = now.checked_sub(KEPT_WINDOW_IDLE_TRIM + IDLE_TRIM).unwrap();
+        r.idle = Some((long, false));
+        r.trim_when_idle(&ctx);
+        assert_eq!(r.idle_trims, 1, "after the longer one");
+        assert!(r.textures.contains_key(&Slot::Region), "the kept window stays");
     }
 
     // Given views drawn from GPU-resident frames, freeing those frames (the screen can't show one any more) drops

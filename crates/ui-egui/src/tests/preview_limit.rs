@@ -440,9 +440,10 @@ mod in_the_loupe {
         assert_eq!(region_tile(&h), None);
     }
 
-    // Given a zoomed view with a window render, when I zoom back to Fit, then the window's texture is freed
+    // Given a zoomed view with a window render, when I zoom back to Fit, then the window is kept, not drawn (zooming
+    // back in draws it again: #174), and when I go to the next photo, then its texture is freed
     #[test]
-    fn the_window_texture_is_freed_when_it_is_not_needed() {
+    fn the_window_is_kept_at_fit_and_freed_for_the_next_photo() {
         let (_fx, mut h, _) = detail();
         h.app.ui.settings.preview_limit = 1600;
         h.request("engine.execute", json!({"command": "view.zoom100"}), T);
@@ -450,8 +451,30 @@ mod in_the_loupe {
         assert!(region_tile(&h).is_some());
         h.request("engine.execute", json!({"command": "view.zoomFit"}), T);
         h.settle(SETTLE);
-        assert_eq!(region_tile(&h), None);
+        assert!(region_tile(&h).is_some(), "kept at Fit for this photo");
+        assert_eq!(h.app.region_view, None, "and not drawn");
+        h.request("engine.execute", json!({"command": "library.next"}), T);
+        h.settle(SETTLE);
+        assert_eq!(region_tile(&h), None, "freed for the next photo");
         assert_eq!(h.app.region_view, None);
+    }
+
+    // Given a photo at Fit, when I zoom to 1:1 and back to Fit, twice, then the whole-frame render
+    // is never made again: hidden under the window, it keeps the size and fit it has at Fit (#174)
+    #[test]
+    fn zooming_in_and_back_out_keeps_the_whole_frame_render() {
+        let (_fx, mut h, _) = detail();
+        let main = |h: &Headless| h.app.renderer.wanted(Slot::Main);
+        let fit = main(&h).expect("the whole frame at Fit");
+        for round in 0..2 {
+            h.request("engine.execute", json!({"command": "view.zoom100"}), T);
+            h.settle(SETTLE);
+            assert!(h.app.region_view.is_some(), "round {round}: a window at 1:1");
+            assert_eq!(main(&h), Some(fit), "round {round}: zoomed in, the same whole-frame render");
+            h.request("engine.execute", json!({"command": "view.zoomFit"}), T);
+            h.settle(SETTLE);
+            assert_eq!(main(&h), Some(fit), "round {round}: back at Fit, the same whole-frame render");
+        }
     }
 
     // Given a zoomed view with a window render, when I go to the grid, then its windows are freed
@@ -795,7 +818,8 @@ mod in_the_loupe {
         assert_eq!(region.full.0.max(region.full.1), native);
         assert_eq!(h.app.renderer.textures.get(&Slot::Region).unwrap().key, region.key);
         assert!(!h.app.renderer.is_pending(Slot::Main) && !h.app.renderer.is_pending(Slot::Region));
-        assert_ne!(h.app.renderer.wanted(Slot::Main), Some(original_key));
+        // (hidden under the window, the whole frame keeps the render it had before the pinch: #174)
+        assert_eq!(h.app.renderer.wanted(Slot::Main), Some(original_key));
     }
 
     fn complete_pinch_jobs(h: &mut Headless, work: &std::rc::Rc<std::cell::RefCell<PinchWork>>) {
@@ -943,7 +967,7 @@ mod in_the_loupe {
     }
 
     // Given a picture on screen that is not the frame (an unsupported raw's embedded JPEG cropped
-    // differently, #280), no window is rendered: its coordinates are the frame's
+    // differently, #280), no window is drawn: its coordinates are the frame's (the one rendered stays for the photo, #174)
     #[test]
     fn no_window_over_a_picture_that_is_not_the_frame() {
         let (_fx, mut h, _) = detail();
@@ -954,7 +978,7 @@ mod in_the_loupe {
         t.size = [t.size[0], t.size[1] / 2];
         h.step();
         assert_eq!(h.app.region_view, None);
-        assert_eq!(region_tile(&h), None);
+        assert!(!h.app.renderer.is_pending(Slot::Region), "and none is rendered");
     }
 
     /// `cargo test -p lightcraft-ui-egui --release profile_slider_drag -- --ignored --nocapture`:

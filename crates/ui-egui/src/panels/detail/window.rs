@@ -70,7 +70,11 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
         to_px * (v.visible.right() - v.target.left()),
         to_px * (v.visible.bottom() - v.target.top()),
     );
-    let win = crate::region::window_for(fw, fh, visible, crate::region::max_span(c.texture_side))?;
+    // a window already rendered of this frame that holds the view is drawn again (#174); else the one for the view
+    let win = match held_window(app, c.id, v, (fw, fh), visible) {
+        Some(win) => win,
+        None => crate::region::window_for(fw, fh, visible, crate::region::max_span(c.texture_side))?,
+    };
     // a window waits for the original another window job is decoding (see `defer_window`)
     let original_held = app.session.media.has_source(c.id, lightcraft_engine::SourceLevel::for_size(fw.max(fh)));
     let window_pending = app.renderer.is_pending(Slot::Region) || app.renderer.is_pending(Slot::RegionBefore);
@@ -106,14 +110,12 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
     let proof_key = if v.before { 0 } else { proof.map_or(0, |p| p.key()) };
     // (the photo's remembered hash, with the wheels hidden for viewing: hashing the settings every frame writes every
     // stroke of every mask to JSON. The Before side renders other settings, hashed here: it is only on screen on request)
-    let hidden = app.ui.grading_hidden_for(c.id);
-    let settings = if v.before {
-        job.settings.hash64()
+    let (look, shown_as) = if v.before {
+        let shown_as = overlay.key().rotate_left(17) ^ proof_key.rotate_left(41);
+        (job.settings.hash64() ^ shown_as, shown_as)
     } else {
-        c.look ^ hidden.iter().enumerate().fold(0u64, |b, (i, h)| b | ((*h as u64) << i)).wrapping_mul(0xd6e8_feb8_6659_fd93)
+        after_look(app, c)
     };
-    let shown_as = overlay.key().rotate_left(17) ^ proof_key.rotate_left(41);
-    let look = settings ^ shown_as;
     let view = crate::region::RegionView { photo: c.id, before: v.before, key: job.key, full: (fw, fh), window: win, settings: look, view: shown_as };
     // windows of other photos, looks and zooms of this side can't be drawn any more; the one on screen stays while the
     // window of a new edit renders
@@ -128,6 +130,38 @@ pub(super) fn request_window(app: &mut LightcraftApp, c: &WindowCtx, v: &WindowV
         super::request_planes(app, (Slot::RegionAlpha, Slot::Region), &job, c.tint);
     }
     Some(view)
+}
+
+/// The look of the After window ([`crate::region::RegionView::settings`]) and the part of it that is how the photo
+/// is viewed (`view`): the photo's remembered settings hash with the wheels hidden for viewing (hashing the settings
+/// every frame writes every stroke of every mask to JSON), the mask overlay and the soft proof.
+pub(super) fn after_look(app: &LightcraftApp, c: &WindowCtx) -> (u64, u64) {
+    let hidden = app.ui.grading_hidden_for(c.id);
+    let settings = c.look ^ hidden.iter().enumerate().fold(0u64, |b, (i, h)| b | ((*h as u64) << i)).wrapping_mul(0xd6e8_feb8_6659_fd93);
+    let proof_key = app.ui.soft_proof.then_some(app.ui.proof).map_or(0, |p| p.key());
+    let shown_as = c.overlay.key().rotate_left(17) ^ proof_key.rotate_left(41);
+    (settings ^ shown_as, shown_as)
+}
+
+/// The window of a tile held for `v`'s side of photo `id` in a frame of `full` px that still covers `visible`
+/// ([`crate::region::covers`]): the one on screen first. Its look may be older (an edit): the same window is then
+/// rendered again, with the stage caches it left.
+fn held_window(
+    app: &LightcraftApp,
+    id: PhotoId,
+    v: &WindowView,
+    full: (usize, usize),
+    visible: (f32, f32, f32, f32),
+) -> Option<lightcraft_pipeline::PixelWindow> {
+    let on_screen = app.renderer.textures.get(&v.slot).filter(|t| t.photo == id).map(|t| t.key);
+    let mut held: Vec<(&(bool, u64), &crate::region::RegionView)> = app
+        .region_tiles
+        .iter()
+        .filter(|((before, _), t)| *before == v.before && t.photo == id && t.full == full && crate::region::covers(&t.window, full, visible))
+        .collect();
+    // (the tile on screen, then the smallest: a stable choice whatever the map's order)
+    held.sort_by_key(|((_, key), t)| (Some(*key) != on_screen, t.window.w * t.window.h, t.window.x, t.window.y));
+    held.first().map(|(_, t)| t.window)
 }
 
 /// Draw `v`'s window texture over the whole-frame render, if it is the one asked for (or, in a
