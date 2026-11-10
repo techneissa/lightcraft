@@ -52,16 +52,16 @@ fn bg(x: f64) -> serde_json::Value {
     json!({"mode": "remove", "points": [[x, 0.5]], "size": 0.03, "background": true})
 }
 
-/// Hold the session's first search on its worker until the sender says go.
-fn hold_first_search() -> std::sync::mpsc::Sender<()> {
+/// Hold the session's first search on its worker until the sender says go. The hold belongs to this session only, so
+/// another test's session (tests run in parallel) can't take it (#173).
+fn hold_first_search(s: &Session) -> std::sync::mpsc::Sender<()> {
     let (go, wait) = std::sync::mpsc::channel();
-    *crate::spot_source::GATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((0, wait));
+    *s.spot_sources.gate.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some((0, wait));
     go
 }
 
 #[test]
 fn a_spot_asked_in_the_background_returns_before_its_source_is_found() {
-    let _turn = crate::spot_source::TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let add = json!({"mode": "heal", "points": [[0.4, 0.5]], "size": 0.03});
     // the same spot found the old way, here and now, to compare with
     let mut sync = Session::with_demo();
@@ -70,7 +70,7 @@ fn a_spot_asked_in_the_background_returns_before_its_source_is_found() {
     assert!(want.source_offset.is_some());
 
     let (mut s, woken) = windowed();
-    let go = hold_first_search();
+    let go = hold_first_search(&s);
     let mut bg = add.clone();
     bg["background"] = json!(true);
     let r = s.execute("spot.add", &bg).unwrap();
@@ -89,12 +89,10 @@ fn a_spot_asked_in_the_background_returns_before_its_source_is_found() {
 }
 
 #[test]
-#[ignore = "flaky: #173"]
 fn spots_asked_in_the_background_are_added_in_the_order_asked() {
-    let _turn = crate::spot_source::TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (mut s, _) = windowed();
     // the first search waits, the second answers first
-    let go = hold_first_search();
+    let go = hold_first_search(&s);
     for x in [0.3, 0.6] {
         s.execute("spot.add", &bg(x)).unwrap();
     }
@@ -109,10 +107,26 @@ fn spots_asked_in_the_background_are_added_in_the_order_asked() {
 }
 
 #[test]
+fn a_held_search_is_not_taken_by_another_session() {
+    // #173: the hold was process-wide, so another session's first search could take it and the held one ran free
+    let (mut held, _) = windowed();
+    let go = hold_first_search(&held);
+    let (mut other, _) = windowed();
+    other.execute("spot.add", &bg(0.7)).unwrap();
+    answered(&other, 1);
+    assert_eq!(other.poll_spot_sources(), 1, "the other session's search is not held");
+    held.execute("spot.add", &bg(0.3)).unwrap();
+    assert_eq!(held.poll_spot_sources(), 0, "the held search is still held");
+    assert_eq!(held.spot_sources.answered(), 0);
+    go.send(()).unwrap();
+    settle(&mut held);
+    assert_eq!(spots(&held).len(), 1);
+}
+
+#[test]
 fn a_content_aware_spot_asked_behind_pending_ones_keeps_its_place() {
-    let _turn = crate::spot_source::TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (mut s, _) = windowed();
-    let go = hold_first_search();
+    let go = hold_first_search(&s);
     s.execute("spot.add", &bg(0.3)).unwrap();
     let r = s.execute("spot.add", &json!({"mode": "fill", "points": [[0.5, 0.5]], "size": 0.03, "background": true})).unwrap();
     assert_eq!(r, json!({"pending": true}), "it waits behind the spot clicked before it");
@@ -134,9 +148,8 @@ fn without_a_window_a_background_spot_is_searched_at_once() {
 
 #[test]
 fn an_answer_landing_during_a_drag_waits_and_is_its_own_undo_step() {
-    let _turn = crate::spot_source::TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (mut s, _) = windowed();
-    let go = hold_first_search();
+    let go = hold_first_search(&s);
     s.execute("spot.add", &bg(0.4)).unwrap();
     // a slider drag starts before the search answers
     s.begin_interaction("Exposure").unwrap();
@@ -156,9 +169,8 @@ fn an_answer_landing_during_a_drag_waits_and_is_its_own_undo_step() {
 
 #[test]
 fn a_spot_asked_before_a_cancelled_drag_is_still_added() {
-    let _turn = crate::spot_source::TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (mut s, _) = windowed();
-    let go = hold_first_search();
+    let go = hold_first_search(&s);
     s.execute("spot.add", &bg(0.4)).unwrap();
     s.begin_interaction("Exposure").unwrap();
     s.execute("develop.set", &json!({"control": "light.exposure", "value": 1.0})).unwrap();
@@ -173,9 +185,8 @@ fn a_spot_asked_before_a_cancelled_drag_is_still_added() {
 
 #[test]
 fn a_spot_asked_during_a_drag_that_is_cancelled_is_dropped() {
-    let _turn = crate::spot_source::TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (mut s, _) = windowed();
-    let go = hold_first_search();
+    let go = hold_first_search(&s);
     s.begin_interaction("Remove").unwrap();
     s.execute("spot.add", &bg(0.4)).unwrap();
     s.cancel_interaction().unwrap();
@@ -201,9 +212,8 @@ fn undo_right_after_a_click_undoes_the_new_spot() {
 
 #[test]
 fn an_answer_for_a_library_closed_since_is_dropped() {
-    let _turn = crate::spot_source::TURN.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let (mut s, _) = windowed();
-    let go = hold_first_search();
+    let go = hold_first_search(&s);
     s.execute("spot.add", &bg(0.4)).unwrap();
     // what opening a library does (a photo id there may name another photo)
     s.library_identity = Arc::new(());
