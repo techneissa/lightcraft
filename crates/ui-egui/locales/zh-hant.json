@@ -2597,5 +2597,6 @@
   "Blur": "模糊",
   "Clean Backdrop": "清理背景",
   "Loading background picture": "正在載入背景圖片",
-  "Reading depth map": "正在讀取深度圖"
+  "Reading depth map": "正在讀取深度圖",
+  "Reading the full-size photo": "正在讀取全尺寸照片"
 }

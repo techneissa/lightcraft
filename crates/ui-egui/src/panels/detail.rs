@@ -276,6 +276,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // hovering a preset or profile: the photo with that look, shown instead of the loupe render
     // once it is ready (nothing is committed)
     let hover_key = request_hover(app, &ask, [sw, sh]);
+    // the original, read ahead in the Edit view so the first zoom to 100 % finds it decoded
+    crate::full_decode::tick(app, ui.ctx(), id, !interacting);
     if !interacting {
         prefetch_neighbours(app, id, main_area, ppp, texture_side, !crop_tool);
     }

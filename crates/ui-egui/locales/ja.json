@@ -2595,5 +2595,6 @@
   "Blur": "ぼかし",
   "Clean Backdrop": "背景をきれいにする",
   "Loading background picture": "背景画像を読み込み中",
-  "Reading depth map": "深度マップを読み込み中"
+  "Reading depth map": "深度マップを読み込み中",
+  "Reading the full-size photo": "フルサイズの写真を読み込み中"
 }
