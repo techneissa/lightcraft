@@ -48,8 +48,8 @@ fn view(h: &mut Headless, zoom: serde_json::Value, pan: [f32; 2]) {
 }
 
 // Given a 24 MP photo with a brush, a linear and a radial mask and ten spots (Heal, Clone and Fill), zoomed to 100 %
-// once, when I zoom to 200 % and back, go to Fit and back to 100 %, and pan a little, then no mask is built again and
-// no spot is drawn again: each view reuses the window already rendered
+// once, when I zoom to 200 % and back, go to Fit and back to 100 %, pan a little, or change Exposure at Fit and zoom in
+// again, then no mask is built again and no spot is drawn again: each view reuses the window already rendered
 #[test]
 fn zooming_and_panning_a_photo_with_masks_and_spots_redoes_none_of_them() {
     let fixture = RenderFixture::new("zoom-reuse", 1);
@@ -91,5 +91,15 @@ fn zooming_and_panning_a_photo_with_masks_and_spots_redoes_none_of_them() {
         let after = work();
         redone.push((name, after.0 - before.0, after.1 - before.1));
     }
+    // an edit at Fit that neither the masks nor the spots read: zooming back in renders the window held, with what it
+    // keeps of its masks and spots
+    view(&mut h, json!("fit"), [0.52, 0.51]);
+    let before = work();
+    exec(&mut h, "develop.set", json!({"values": {"light.exposure": 0.3}}));
+    assert!(h.settle(SETTLE), "the edit settles");
+    assert!(!h.app.renderer.textures.contains_key(&Slot::Region), "the held window's old look is not kept to be shown");
+    view(&mut h, json!({"percent": 100}), [0.52, 0.51]);
+    let after = work();
+    redone.push(("Exposure at Fit, then 100 %", after.0 - before.0, after.1 - before.1));
     assert!(redone.iter().all(|(_, masks, spots)| (*masks, *spots) == (0, 0)), "masks built and spots drawn again: {redone:?}");
 }

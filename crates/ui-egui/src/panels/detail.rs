@@ -834,10 +834,20 @@ fn request_windows(app: &mut LightcraftApp, ctx: &WindowCtx, views: Vec<WindowVi
         }
         // The After window stays while the photo does (at Fit, say), with its texture and stage caches: zooming
         // back in draws it again, or renders it again with them after an edit (#174). The Before one goes.
-        let keep = !before && app.renderer.textures.get(&slot).is_some_and(|t| t.photo == ctx.id);
+        let keep = !before
+            && (app.renderer.textures.get(&slot).is_some_and(|t| t.photo == ctx.id)
+                || app.region_tiles.iter().any(|((b, _), t)| !*b && t.photo == ctx.id));
         if shown.is_none() && !keep {
             app.region_tiles.retain(|(b, _), _| *b != before);
             app.renderer.release(slot);
+        } else if shown.is_none() {
+            // an edit made meanwhile: its pixels go (zooming in must not show the old look for a moment); the tile
+            // keeps the window's place for the render with the stage caches
+            let look = window::after_look(app, ctx).0;
+            let on_screen = app.renderer.textures.get(&slot).map(|t| t.key);
+            if on_screen.is_some() && on_screen.and_then(|key| app.region_tiles.get(&(false, key))).is_none_or(|t| t.settings != look) {
+                app.renderer.drop_texture(slot);
+            }
         }
     }
     windows

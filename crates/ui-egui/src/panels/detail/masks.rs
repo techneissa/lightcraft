@@ -814,11 +814,7 @@ fn brush_tool(
             opacity: opacity.clamp(0.0, 1.0),
         };
         // zoomed in, the window render (not the whole-frame one the blend is made of) is on screen
-        let images = app
-            .session
-            .active()
-            .filter(|_| app.region_view.is_none())
-            .and_then(|id| super::brush_preview::images(app, id, map.rect));
+        let images = app.session.active().filter(|_| app.region_view.is_none()).and_then(|id| super::brush_preview::images(app, id, map.rect));
         // (the live adjustment shows with the overlay hidden too: only the tint follows `shown`, issue #2549)
         let look = crate::brush_live::Look {
             images: images.as_ref(),

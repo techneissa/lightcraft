@@ -798,6 +798,14 @@ impl Renderer {
         self.free_native(slot);
     }
 
+    /// Free a view slot's texture but keep its stage cache: the view is hidden, and when it is shown again its
+    /// render reuses the stages (a zoom window kept at Fit after an edit, #174).
+    pub fn drop_texture(&mut self, slot: Slot) {
+        self.textures.remove(&slot);
+        self.tints.release(slot);
+        self.free_native(slot);
+    }
+
     /// Let go of `slot`'s GPU-resident texture: its registration with the window, and the frame
     /// kept for headless screenshots.
     fn free_native(&mut self, slot: Slot) {
