@@ -115,6 +115,9 @@ fn without_image(pre: &Rgb32f, info: &SourceInfo, p: &Plan<'_>, without: &Develo
         format!("{:?}", p.full.0),
         (p.full.1, p.full.2),
         p.retouch_analysis.as_ref().map(|a| a.key),
+        // (a sample of `pre`'s own pixels: the CPU and the GPU make it a few levels apart from the same settings, and
+        // a map from one compared with a `without` from the other would light up where nothing changed)
+        pre.data.iter().step_by((pre.data.len() / 64).max(1)).map(|c| c.map(f32::to_bits)).collect::<Vec<_>>(),
     ));
     let kept = WITHOUT.lock().unwrap_or_else(PoisonError::into_inner).as_ref().filter(|(k, _)| *k == key).and_then(|(_, kept)| kept.get());
     if let Some(img) = kept {
@@ -150,7 +153,7 @@ fn looks_apart(a: &Rgb32f, b: &Rgb32f, gain: f32, sigma: f32) -> Plane {
         }
     });
     // (the box round the pixels that changed: a face's part of the frame; the rest stays 0)
-    let Some([bx, by, bw, bh]) = lit_box(&out, (3.0 * sigma.max(0.0)).ceil() as usize + 1) else { return out };
+    let Some([bx, by, bw, bh]) = lit_box(&out, ((3.0 * sigma.max(0.0)).ceil() as usize).saturating_add(1)) else { return out };
     if sigma.is_finite() && sigma >= 0.3 {
         let part = lightcraft_raster::blur::gaussian(&out.crop(bx, by, bw, bh), sigma);
         crate::for_rows(&mut out.data, w, |y, row| {
