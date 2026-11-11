@@ -149,8 +149,8 @@ impl GrainModel {
                     seed: g.seed,
                 })
             }),
-            Process::V7 if draft => crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal),
-            Process::V7 => crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal),
+            Process::V7 | Process::V8 if draft => crate::crystal::CrystalGrain::draft(g, px_per_long).map(GrainModel::Crystal),
+            Process::V7 | Process::V8 => crate::crystal::CrystalGrain::new(g, px_per_long).map(GrainModel::Crystal),
         }
     }
 }
@@ -407,7 +407,7 @@ pub fn base_tone(s: &DevelopSettings, info: &SourceInfo, peak: f32) -> ToneMap {
         // V2 changes the Highlights/Shadows base (`local::tone_base`), not the tone map
         Process::V1 | Process::V2 => SliderModel::Legacy,
         // V3: Contrast, Whites and Blacks as strong on every path as on `ToneMap::hdr`; V4 and later keep that
-        Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 => SliderModel::Unified,
+        Process::V3 | Process::V4 | Process::V5 | Process::V6 | Process::V7 | Process::V8 => SliderModel::Unified,
     };
     // V5 and later: a raw's tone curve rolls off into white in stops, a camera curve past its last knot, the
     // generic curve from half a stop below its white point instead of clipping (issue #1632)

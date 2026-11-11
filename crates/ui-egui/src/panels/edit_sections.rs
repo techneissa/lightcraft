@@ -13,7 +13,7 @@
 //!
 //! Agents use `view.editSections {order?, hidden?}` (no params reads it), `view.editSectionShow
 //! {section, show?}`, `view.editSectionMove {section, direction | before}` and
-//! `view.editSectionsReset`. Only the six top-level sections are arranged here; Curve, Color
+//! `view.editSectionsReset`. Only the seven top-level sections are arranged here; Curve, Color
 //! Mixer, Point Color and Color Grading stay inside their sections.
 
 use serde::{Deserialize, Serialize};
@@ -35,13 +35,21 @@ pub enum EditSection {
     Effects,
     Detail,
     Optics,
+    LensBlur,
     Calibration,
 }
 
 impl EditSection {
     /// Every section, in the order the panel starts with.
-    pub const ALL: [EditSection; 6] =
-        [EditSection::Light, EditSection::Color, EditSection::Effects, EditSection::Detail, EditSection::Optics, EditSection::Calibration];
+    pub const ALL: [EditSection; 7] = [
+        EditSection::Light,
+        EditSection::Color,
+        EditSection::Effects,
+        EditSection::Detail,
+        EditSection::Optics,
+        EditSection::LensBlur,
+        EditSection::Calibration,
+    ];
 
     /// The name commands, the saved state and the `section.<id>` commands use.
     pub const fn id(self) -> &'static str {
@@ -51,6 +59,7 @@ impl EditSection {
             EditSection::Effects => "effects",
             EditSection::Detail => "detail",
             EditSection::Optics => "optics",
+            EditSection::LensBlur => "lensBlur",
             EditSection::Calibration => "calibration",
         }
     }
@@ -63,6 +72,7 @@ impl EditSection {
             EditSection::Effects => "Effects",
             EditSection::Detail => "Detail",
             EditSection::Optics => "Optics",
+            EditSection::LensBlur => "Lens Blur",
             EditSection::Calibration => "Calibration",
         }
     }

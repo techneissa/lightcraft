@@ -275,7 +275,7 @@ pub(super) fn cancelled(backend: &dyn Backend) -> bool {
 
 /// The bytes of `path` again, after a render from the path failed and the Camera Matching decode needs them.
 pub(super) fn reread(path: &Path) -> Result<Cow<'static, [u8]>, String> {
-    std::fs::read(path).map(Cow::Owned).map_err(|e| format!("{}: {e}", path.display()))
+    crate::read_file::read_regular(path, crate::read_file::MAX_MEDIA_BYTES).map(Cow::Owned).map_err(|e| format!("{}: {e}", path.display()))
 }
 
 /// The decoder's picture as LightCraft's image; `None` when it is empty, the wrong length or its white is not a colour.

@@ -64,6 +64,7 @@
 //! | 10 | masks stay on the photo under lens corrections, Upright and Transform | `Mask.on_photo` (develop settings) |
 //! | 11 | lens database profiles named in the Optics panel | `EmbeddedLens.source` |
 //! | 12 | history steps and versions share segmentation grids (#2154) | `Catalog.grids`, `SegMask.grid` |
+//! | 13 | Lens Blur (official) | `DevelopSettings.lens_blur`, `Mask.adjust.lens_blur` |
 //! | 13 | local camera profiles and macOS Colour (fork; its builds wrote them as 12 before 2026-11-08) | develop settings `profile.camera_colour = local` / `macos` (`CameraColour::{Local, Macos}`) and `profile.camera_profile` |
 //! | 14 | edited camera / lens / exposure values (fork; written as 13 before 2026-11-08) | `Meta.exif` (`ExifOverrides`: `camera`, `lens`, `focal_mm`, `aperture`, `shutter`, `iso`), in `SetMeta` and `AddPhoto` bodies |
 //! | fork 1 | the fork's own format name `lightcraft-catalog-fork` (2026-11-09) | nothing new: official 12 with the fork's 13 and 14 |
@@ -75,8 +76,10 @@
 //! | fork 7 | Portrait Background: Blur, Swap and Clean Backdrop (#141) | `fork_retouch.global.background` `blur`, `swap`, `clean` and `with` (develop settings; the block is left out while it is the default) |
 //! | fork 8 | the Portrait tab's Refine brush (#99) | develop settings `fork_retouch.refine` and `fork_retouch.faces[].refine` (`Refine`: per feature, strokes with `mode`, `points`, `size`, `feather`, `flow`, `strength`, `pressure`), left out while empty |
 //! | fork 9 | Assisted Culling's eyes (`fork/ai-culling.md`) | `Analysis.eyes` (`Eyes`: `faces`, `main`, `closed`, `focus`), in `SetAnalysis` bodies and `Photo.analysis`, left out when not measured |
+//! | fork 10 | the official format 13's Lens Blur (official update of 2026-11-12) | `DevelopSettings.lens_blur`, `Mask.adjust.lens_blur` |
 //!
-//! Versions 1–14 are `"format":"lightcraft-catalog"`; the fork writes `"format":"lightcraft-catalog-fork"` from
+//! Versions 1–14 are `"format":"lightcraft-catalog"` (13 means the official Lens Blur or the fork's camera
+//! profiles; their fields differ, so either reads exactly); the fork writes `"format":"lightcraft-catalog-fork"` from
 //! its version 1 on, with its own counter, so an official build refuses a fork library untouched and the same
 //! number never means two formats again ([`crate::fork_format`] says how each header reads). The first upgrade of
 //! an older snapshot keeps it as it was in `catalog.snap.before-upgrade`.

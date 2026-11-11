@@ -438,6 +438,7 @@ impl Headless {
             || self.app.session.sidecar_writes_pending() > 0
             || self.app.session.denoise_busy()
             || self.app.session.adaptive_busy()
+            || self.app.survey_motion.moving(self.time)
             || !self.app.tasks.is_empty()
             || !self.app.synthetic.is_empty()
             || !self.app.pending_gestures.is_empty()

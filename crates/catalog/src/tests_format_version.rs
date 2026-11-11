@@ -330,7 +330,8 @@ fn op_variants_are_versioned() {
         }
     }
     /// In `lightcraft-catalog` numbers: v14: `Meta.exif`, the edited camera / lens / exposure values (fork; v13:
-    /// `profile.camera_colour = local | macos` and `profile.camera_profile` in the develop settings; v12:
+    /// `profile.camera_colour = local | macos` and `profile.camera_profile` in the develop settings; official v13:
+    /// Lens Blur in develop settings and mask adjustments; v12:
     /// `Catalog.grids` and `SegMask.grid`, shared by a snapshot's masks (#2154); v11: `EmbeddedLens.source`; v10:
     /// `Mask.on_photo`).
     const NEWEST_FIELDS: u32 = 14;
@@ -342,8 +343,8 @@ fn op_variants_are_versioned() {
     /// v6: Face Reshape's sliders in the `fork_retouch` block (`fork/retouch-reshape.md`).
     /// v7: Portrait Background's `blur`, `swap`, `clean` and `with` (#141). v8: the Portrait tab's Refine strokes,
     /// `fork_retouch.refine` and `fork_retouch.faces[].refine` (#99). v9: `Analysis.eyes`, Assisted Culling's eyes
-    /// (`fork/ai-culling.md`).
-    const NEWEST_FORK_FIELDS: u32 = 9;
+    /// (`fork/ai-culling.md`). v10: the official v13's Lens Blur fields.
+    const NEWEST_FORK_FIELDS: u32 = 10;
     let newest = since(&Op::SetHistoryCursor { id: PhotoId(1), cursor: None });
     assert_eq!(newest.max(NEWEST_FIELDS), crate::fork_format::LEGACY_FORK_MAX, "the newest official-numbered op or field");
     assert_eq!(NEWEST_FORK_FIELDS, VERSION, "the newest fork op's or fields' version must be the current format version");

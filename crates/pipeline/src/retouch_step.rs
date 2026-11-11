@@ -148,6 +148,8 @@ pub fn analysis(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<Arc<Ana
         mattes: p.mattes.clone(),
         draft: true,
         recolor: Vec::new(),
+        // (an analysis of the image before the retouching: no lens blur reaches it)
+        lens_subject: None,
         full: (full.clone(), aw, ah),
         retouch_analysis: None,
         spots_at: crate::spots_scale::At::default(),

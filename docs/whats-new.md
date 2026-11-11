@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Export Effect Presets leaves your originals alone
+- Export Effect Presets… (`mask.exportEffects`) now refuses a path that is a photo's original or its XMP sidecar, as
+  the other exports do, and writes the file atomically. It used to write the presets over whatever file it was given,
+  and a failed write (a full disk) could leave a cut-off file where an earlier export was.
+
 ### Film grain that looks like film (process V7)
 - Grain now comes from a simulated emulsion of crystal layers (after Aurélien Pierre's model): dense, soft and cloudy
   rather than dots on top of the photo. It fades out towards black and white as on a print, so shadows keep their depth
@@ -269,6 +274,16 @@ The Keyboard Shortcuts window is one resizable window that remembers its size. C
 
 ### Shared SAM 3 Model Folder
 - AI masks look for the SAM 3 model in `~/Library/Application Support/ArtCraft/models/sam3` (shared with PhotoCraft) first, and a download goes there.
+
+## 2026-11-01
+
+### Import a Lightroom catalog backup as it is
+- File ▸ Import Lightroom Catalog… also takes the `.zip` backups Lightroom Classic writes in its `Backups` folder
+  (issue #2592), for when Lightroom and its catalog are gone and only the backups and the photos are left. LightCraft
+  unpacks the catalog into a temporary folder in the library, imports it and deletes the copy; the zip is not
+  changed. Open Library given a `Backups` folder, or one of its dated folders, offers to import the backup.
+- Importing a backup of a catalog you already imported no longer adds every collection a second time: collections
+  are matched by the catalog's own id, which its backups keep, instead of by the catalog file's path.
 
 ## 2026-10-30
 

@@ -168,6 +168,26 @@ fn a_fork_v13_library_with_a_log_opens_exactly() {
     assert_eq!(loaded.photo(a).unwrap().rating, 4);
 }
 
+/// An official 13 (Lens Blur in develop settings and a mask's adjustments, `"format":"lightcraft-catalog"`, official
+/// update of 2026-11-12): its Lens Blur reads whole, beside the fork's own 13 that means camera profiles.
+#[test]
+fn an_official_v13_library_with_lens_blur_opens_exactly() {
+    let mut s = masked(seg());
+    s.lens_blur.enabled = true;
+    s.lens_blur.amount = 60.0;
+    s.lens_blur.focus_mask = Some(1);
+    s.masks[0].adjust.lens_blur = 40.0;
+    let mut c = Catalog::new();
+    let id = photo(&mut c, s, None);
+    let m = MemStore::new();
+    m.set(SNAPSHOT, snapshot(OFFICIAL_FORMAT, 13, 1, &body_with_shared_grids(&c)));
+    assert_upgrades_exactly(&m, &c, 13);
+    let (_, loaded, _) = Journal::open(Box::new(m)).unwrap();
+    let d = &loaded.photo(id).unwrap().develop;
+    assert_eq!((d.lens_blur.enabled, d.lens_blur.amount, d.lens_blur.focus_mask), (true, 60.0, Some(1)));
+    assert_eq!(d.masks[0].adjust.lens_blur, 40.0);
+}
+
 /// This build's format opens as it is: no upgrade, no copy.
 #[test]
 fn the_fork_format_opens_without_an_upgrade() {

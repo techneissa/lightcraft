@@ -64,6 +64,12 @@ pub enum Kind {
         /// The engine BiRefNet runs on (issue #264): Core ML when its package is there, else candle.
         runtime: lightcraft_coreml::Runtime,
     },
+    /// The photo's subject among its people and animals (`Sam3::segment_subject`); `focus`: where
+    /// the camera focused (normalized), when the file records it. No result: the subject is
+    /// something else.
+    Subject {
+        focus: Option<(f32, f32)>,
+    },
     /// A zoomed-in pass over `region` (normalized) of the photo, rendered by the job's `render`.
     Detail {
         prompt: Prompt,
@@ -577,6 +583,7 @@ fn remote_job(state: &mut State, shared: &Shared, job: &mut Job, endpoint: &str)
         Kind::Clicks(clicks) | Kind::ObjectClicks(clicks) => {
             Operation::Clicks(clicks.iter().map(|c| [c.x, c.y, if c.positive { 1.0 } else { 0.0 }]).collect())
         }
+        Kind::Subject { focus } => Operation::Subject(focus.map(|(x, y)| [x, y])),
         Kind::Detail { prompt, region: r } => {
             region = Some(r);
             let (rw, rh) = (r[2] - r[0], r[3] - r[1]);
@@ -656,6 +663,11 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
             Ok(text_logits(m, enc, &text, CONCEPT_THRESHOLD, main)?.map(|l| SegMask::from_logits(side, &l)))
         }
         Kind::BiRefNet { .. } => Err("BiRefNet is run before this point".into()),
+        Kind::Subject { focus } => {
+            let (m, enc) = encoded(state, shared, job, placement)?;
+            // (the reference score threshold, as Describe uses)
+            Ok(m.segment_subject(enc, focus, 0.5)?.map(|p| SegMask::from_logits(side, &p.logits)))
+        }
         #[cfg(test)]
         #[allow(clippy::panic)]
         Kind::Panic => panic!("a test panic"),

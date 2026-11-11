@@ -36,6 +36,7 @@ pub mod finish;
 pub mod geometry;
 pub mod learned_fill;
 mod learned_resample;
+pub mod lens_blur;
 pub mod light_v3;
 // generated (`light_v3_params.rs`), kept in its own compact layout
 #[rustfmt::skip]
@@ -601,6 +602,8 @@ pub struct Plan<'a> {
     /// The references of the masks whose Recolor is on, by mask id ([`recolor::measure::references`]): measured on the whole
     /// frame, the same for every render of the edit.
     pub recolor: Vec<(u32, recolor::Reference)>,
+    /// The whole photo's subject estimate a lens blur focuses on ([`lens_blur::subject_estimate`]).
+    pub lens_subject: Option<Arc<lens_blur::SubjectEstimate>>,
     /// The whole frame and its output size (a windowed render's [`Self::frame`] is part of it).
     pub full: (geometry::Frame, usize, usize),
     /// Fork (`fork/retouch-background.md`): Background's analysis image of the whole frame before the retouch step
@@ -619,8 +622,8 @@ pub(crate) fn native_long(info: &SourceInfo, src_long: usize) -> usize {
     info.native_long.unwrap_or(0).max(src_long).max(1)
 }
 
-/// `work` (a window of the `full_w × full_h` output of `frame`) grown by what joint colour noise reduction, edge
-/// decontamination and portrait retouching read around it.
+/// `work` (a window of the `full_w × full_h` output of `frame`) grown by what the lens blur, joint colour noise
+/// reduction, edge decontamination and portrait retouching read around it.
 fn window_halos(
     s: &DevelopSettings,
     info: &SourceInfo,
@@ -628,8 +631,10 @@ fn window_halos(
     (full_w, full_h): (usize, usize),
     detail_scale: f32,
     px_per_long: f64,
-    mut work: PixelWindow,
+    work: PixelWindow,
 ) -> PixelWindow {
+    // the lens blur reads around the window at every depth (after the spots' growth, before the halos below)
+    let mut work = lens_blur::window_for_reads(s, full_w, full_h, px_per_long, work);
     if local::joint_colour_nr(s)
         && let Some(params) = local::nrc_params(s, detail_scale)
     {
@@ -814,6 +819,9 @@ pub fn plan_kept<'a>(
         detail_scale.to_bits(),
         // the process picks the colour filter (Update to Current Process, undo)
         local::joint_colour_nr(s),
+        // and the lens blur, which runs right after noise reduction (in the image both `lin_key` and `edge_lin_key`
+        // name; left out of `pre_retouch_key`, so a Lens Blur slider keeps the image before the retouching)
+        lens_blur::key(s),
     ));
     let lin_key = hash_of((pre_nr_key, nr_key));
     let edge_lin_key = hash_of((pre_retouch_key, nr_key));
@@ -841,6 +849,7 @@ pub fn plan_kept<'a>(
         // (the whole frame may be measured on itself, a window never is)
         (w, h) == (full.1, full.2),
     ));
+    let lens_subject = lens_blur::subject_estimate(src, s, info.mattes.as_deref()).map(Arc::new);
     let mut plan = Plan {
         settings,
         frame,
@@ -862,6 +871,7 @@ pub fn plan_kept<'a>(
         mattes: info.mattes.clone(),
         draft: req.quality == Quality::Draft,
         recolor,
+        lens_subject,
         full,
         retouch_analysis: None,
         spots_at,
@@ -940,6 +950,7 @@ pub fn colour_noise(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<nrc
                 keep: None,
                 mattes: None,
                 recolor: Vec::new(),
+                lens_subject: None,
                 full: p.full.clone(),
                 retouch_analysis: None,
                 spots_at: spots_scale::At::default(),
@@ -1194,6 +1205,7 @@ fn render_impl(
                 }
             }
             local::denoise(&mut img, s, detail_scale, colour_noise.as_ref().map(|c| &c.1));
+            lens_blur::apply_with(&mut img, s, frame, px_per_long, plan.mattes.as_deref(), plan.lens_subject.as_deref());
             Arc::new(img)
         }
     };

@@ -15,19 +15,22 @@
 //! | `lightcraft-catalog-fork` | 1 ..= [`VERSION`] | the fork from 2026-11-09 | the fork's format of that number |
 //! | `lightcraft-catalog` | 0 ..= 11 | official and fork builds alike (shared history) | older format, upgraded |
 //! | `lightcraft-catalog` | 12 | official builds (shared grids) or fork builds (local camera profiles) | older format, upgraded |
-//! | `lightcraft-catalog` | 13, 14 | fork builds only (camera profiles, then edited camera values) | older format, upgraded |
+//! | `lightcraft-catalog` | 13 | official builds (Lens Blur) or fork builds (local camera profiles) | older format, upgraded |
+//! | `lightcraft-catalog` | 14 | fork builds only (edited camera values) | older format, upgraded |
 //! | `lightcraft-catalog` | 15 and up | a newer official build | refused, untouched |
 //!
 //! Why 12, 13 and 14 need no guess: a snapshot is read field by field, by name, and every field any of those
 //! formats wrote is known to this build under the name it was written with. The two meanings of 12 use different
-//! fields (`grids` and `SegMask.grid`; `profile.camera_colour = local | macos` and `profile.camera_profile`), so a
-//! file of either, or one holding both, reads exactly. The official counter is at [`OFFICIAL_VERSION`] (12); no
-//! official build has written 13 or 14.
+//! fields (`grids` and `SegMask.grid`; `profile.camera_colour = local | macos` and `profile.camera_profile`), and
+//! so do the two meanings of 13 (the official `lens_blur` in develop settings and mask adjustments; the fork's
+//! camera profiles), so a file of either, or one holding both, reads exactly. The official counter is at
+//! [`OFFICIAL_VERSION`] (13, official update of 2026-11-12); no official build has written 14.
 //!
-//! **When the official format passes 12** (an official update changes its `VERSION` in `journal.rs`, which
-//! clashes with the fork's line there): raise [`OFFICIAL_VERSION`], read the official fields, and decide
-//! `lightcraft-catalog` 13 and 14 by content, refusing what is still unclear rather than guessing — an official 13
-//! read as the fork's would drop the official fields this build doesn't know.
+//! **When the official format passes 13** (an official update changes its `VERSION` in `journal.rs`, which
+//! clashes with the fork's line there): raise [`OFFICIAL_VERSION`] and the fork's [`VERSION`] (the fork now writes
+//! the official fields too), read the official fields, and decide `lightcraft-catalog` 14 by content, refusing what
+//! is still unclear rather than guessing — an official 14 read as the fork's would drop the official fields this
+//! build doesn't know.
 
 use crate::CatalogError;
 
@@ -37,9 +40,9 @@ pub const FORK_FORMAT: &str = "lightcraft-catalog-fork";
 pub const OFFICIAL_FORMAT: &str = "lightcraft-catalog";
 /// The fork format this build writes (and the newest it reads). Bump it whenever an `Op` variant or a serialized
 /// field is added, and add a row to `journal.rs` → *Format versions*.
-pub const VERSION: u32 = 9;
-/// The newest official format this build reads (official update of 2026-11-08: shared segmentation grids).
-pub const OFFICIAL_VERSION: u32 = 12;
+pub const VERSION: u32 = 10;
+/// The newest official format this build reads (official update of 2026-11-12: Lens Blur).
+pub const OFFICIAL_VERSION: u32 = 13;
 /// The highest `lightcraft-catalog` version a fork build wrote, before the fork had its own name.
 pub const LEGACY_FORK_MAX: u32 = 14;
 

@@ -22,6 +22,7 @@ mod curve;
 mod grading;
 mod hdr_flow;
 mod histogram;
+mod lens_blur;
 mod mixer;
 mod profile_search;
 mod sliders;
@@ -33,6 +34,7 @@ pub(crate) use grading::wheel_pointer_frame_end;
 pub(crate) use grading::{WheelGrab, WheelLock, WheelMods, wheel_pick};
 pub(crate) use histogram::histogram;
 use histogram::soft_proofing;
+use lens_blur::lens_blur;
 use mixer::{mixer, point_color};
 use sliders::{REL_TEMP, REL_TINT, hdr_row, header_buttons, k_to_rel, profile_menu, quick_develop, rel_to_k, reset_tip, section};
 pub use sliders::{apply_slider_out, sub_title};
@@ -432,6 +434,13 @@ fn show_sections(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             ui.add_space(8.0);
         })
     };
+    // Lens Blur (official 2026-11-12), between Optics and Calibration as there
+    let lens_blur_section = |app: &mut LightcraftApp, ui: &mut egui::Ui| {
+        section(app, ui, &d, "lensBlur", "Lens Blur", |app, ui, d| {
+            lens_blur(app, ui, d);
+            ui.add_space(8.0);
+        })
+    };
     // Lightroom Classic's Calibration panel (the cloud app hides it): last, like there.
     let calibration = |app: &mut LightcraftApp, ui: &mut egui::Ui| {
         section(app, ui, &d, "calibration", "Calibration", |app, ui, d| {
@@ -455,6 +464,7 @@ fn show_sections(app: &mut LightcraftApp, ui: &mut egui::Ui, id: PhotoId) {
             EditSection::Effects => effects(app, ui),
             EditSection::Detail => detail(app, ui),
             EditSection::Optics => optics(app, ui),
+            EditSection::LensBlur => lens_blur_section(app, ui),
             EditSection::Calibration => calibration(app, ui),
         }
     }

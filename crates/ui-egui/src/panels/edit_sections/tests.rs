@@ -78,7 +78,7 @@ fn requests_are_read_strictly() {
     assert_eq!(order(&next), [Optics, Light, Color, Effects, Detail, Calibration]);
     assert_eq!(next.shown(), [Optics, Light, Color, Detail, Calibration]);
     // a key left out keeps what is there
-    assert_eq!(next.with_request(None, Some(&json!([]))).unwrap().shown().len(), 6);
+    assert_eq!(next.with_request(None, Some(&json!([]))).unwrap().shown().len(), 7);
     assert_eq!(order(&next.with_request(None, Some(&json!(["color"]))).unwrap()), order(&next));
     for (o, h, says) in [
         (json!("light"), json!(null), "must be a list"),

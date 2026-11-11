@@ -89,8 +89,18 @@ pub type Result<T> = std::result::Result<T, Error>;
 pub const INPUT: usize = 1008;
 /// Side of the low-resolution masks the model predicts.
 pub const MASK_SIDE: usize = 288;
+/// Most clicks one Object selection may carry (the engine's `MAX_CLICKS`).
+pub const MAX_CLICKS: usize = 64;
+/// (fork: the Core ML decoder's click slots hold every click the engine allows, so a selection never falls back to
+/// candle, or fails, for its number of clicks)
+#[cfg(not(target_arch = "wasm32"))]
+const _: () = assert!(coreml::MAX_CLICKS >= MAX_CLICKS);
 #[cfg(not(target_arch = "wasm32"))]
 const _: () = assert!(MASK_SIDE == tracker::LOW_RES && INPUT == vit::IMAGE);
+
+/// What a photo's subject usually is, as concept prompts ([`Sam3::segment_subject`]); anything else
+/// (an object, a landscape's feature) is selected at the focus point instead.
+pub const SUBJECT_CONCEPTS: &[&str] = &["person", "animal"];
 
 /// The files of a model directory.
 pub const WEIGHTS_FILE: &str = "model.safetensors";
@@ -414,6 +424,11 @@ impl Sam3 {
         if clicks.is_empty() {
             return Err(Error::Model("no clicks".into()));
         }
+        // the prompt grows with every click: the editor takes at most this many (the engine's `MAX_CLICKS`), on
+        // candle and on Core ML alike (its slots hold at least as many)
+        if clicks.len() > MAX_CLICKS {
+            return Err(Error::Model(format!("at most {MAX_CLICKS} clicks, not {}", clicks.len())));
+        }
         // one click: SAM's three alternatives, best by predicted IoU; more: the single mask
         let multimask = clicks.len() == 1;
         let p = match self.coreml_heads(enc, clicks)? {
@@ -524,6 +539,15 @@ impl Sam3 {
             return Ok(None);
         };
         Ok(detector::merge(&out, threshold, main_only))
+    }
+
+    /// The photo's subject among its people and animals ([`detector::subject`]): the ones the
+    /// camera's focus (`focus`, normalized; `None` when the file doesn't record it) falls on, or
+    /// without it the most prominent, with whoever is about as large. `None` when the subject is
+    /// neither (a focus on something else, or nobody in the photo): select what is at the point.
+    pub fn segment_subject(&mut self, enc: &mut Encoded, focus: Option<(f32, f32)>, threshold: f32) -> Result<Option<Prediction>> {
+        let outs = SUBJECT_CONCEPTS.iter().map(|c| self.detect(enc, c)).collect::<Result<Vec<_>>>()?;
+        Ok(detector::subject(&outs, threshold, focus))
     }
 
     /// Raw detector outputs for `text` (tests and tools).

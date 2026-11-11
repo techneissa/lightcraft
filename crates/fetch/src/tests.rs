@@ -454,3 +454,10 @@ fn a_callers_user_agent_replaces_the_default() {
     assert_eq!(user_agents(&[]), vec![format!("LightCraft/{}", env!("CARGO_PKG_VERSION"))]);
     assert_eq!(user_agents(&[("User-Agent", "LightCraft/1 (+https://example.org)".into())]), vec!["LightCraft/1 (+https://example.org)"]);
 }
+
+#[test]
+fn names_differing_only_in_case_are_one_file() {
+    let spec = |name| FileSpec { name, size: Some(1), sha256: None, max: 1 };
+    assert!(super::validate_files(&[spec("Model.bin")]).is_ok());
+    assert!(super::validate_files(&[spec("Model.bin"), spec("model.BIN")]).is_err());
+}

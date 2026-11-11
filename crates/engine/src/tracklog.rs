@@ -151,14 +151,16 @@ pub(crate) fn read_gpx(cmd: &str, p: &Value) -> Result<Option<(String, Option<St
             Ok(Some((t.clone(), None)))
         }
         (None | Some(Value::Null), Some(Value::String(path))) => {
-            let meta = std::fs::metadata(path).map_err(|e| bad(cmd, format!("can't read {path}: {e}")))?;
+            // (the opened file is checked and read, under the cap: a path swapped in between can't grow the read)
+            let file = crate::read_file::open_for_read(path).map_err(|e| bad(cmd, format!("can't read {path}: {e}")))?;
+            let meta = file.metadata().map_err(|e| bad(cmd, format!("can't read {path}: {e}")))?;
             if !meta.is_file() {
                 return Err(bad(cmd, format!("{path} is not a file")));
             }
             if meta.len() > MAX_GPX_BYTES {
                 return Err(bad(cmd, format!("{path} is larger than {} MB: too big for a track log", MAX_GPX_BYTES >> 20)));
             }
-            let bytes = std::fs::read(path).map_err(|e| bad(cmd, format!("can't read {path}: {e}")))?;
+            let bytes = crate::read_file::read_open(file, MAX_GPX_BYTES).map_err(|e| bad(cmd, format!("can't read {path}: {e}")))?;
             let text = String::from_utf8(bytes).map_err(|_| bad(cmd, format!("{path} is not a text (GPX) file")))?;
             Ok(Some((text, Some(path.clone()))))
         }

@@ -14,16 +14,17 @@ This build reads:
 | `lightcraft-catalog-fork` | higher | refused, untouched (newer) |
 | `lightcraft-catalog` | 0 to 11 | shared history, upgraded |
 | `lightcraft-catalog` | 12 | official (shared grids) or fork (camera profiles): read whole, upgraded |
-| `lightcraft-catalog` | 13, 14 | fork builds before the rename, upgraded |
+| `lightcraft-catalog` | 13 | official (Lens Blur) or fork (camera profiles): read whole, upgraded |
+| `lightcraft-catalog` | 14 | fork builds before the rename, upgraded |
 | `lightcraft-catalog` | 15 and up | refused, untouched (newer) |
 
-12, 13 and 14 need no guess: a snapshot is read field by field by name, and the two meanings of 12 use different fields, so a file of either (or one holding both) reads exactly. No official build has written 13 or 14.
+12, 13 and 14 need no guess: a snapshot is read field by field by name, and the two meanings of 12 (and of 13) use different fields, so a file of either (or one holding both) reads exactly. The official 13 (Lens Blur, official update of 2026-11-12) is `lens_blur` in develop settings and mask adjustments. No official build has written 14.
 
 Every upgrade first keeps the snapshot as it was in `catalog.snap.before-upgrade`; when one exists from an earlier upgrade, it stays. If the copy can't be written, the library is not opened and nothing changes (the error says so). A failed upgrade write leaves the old file as it was (temp file, then rename).
 
-**A new fork format** (an `Op` variant or serialized field): raise `fork_format::VERSION` and add a row to the format table in `journal.rs`. PR #101 (journal deltas) takes fork version 2; Match Look's residual Look (#90, develop settings `look`) takes 3; a mask's Decontaminate amount (#115, `Mask.decontaminate`) takes 4; Select People's saved selection (#123, `MaskShape::People` `face`, `seg`, `detail`, `edge`) takes 5; Face Reshape (`fork/retouch-reshape.md`, the `fork_retouch` block's `reshape`) takes 6; Portrait Background (#141, `fork_retouch.global.background` `blur`, `swap`, `clean`, `with`) takes 7; the Portrait tab's Refine strokes (#99, `fork_retouch.refine`, `fork_retouch.faces[].refine`) take 8. Assisted Culling's eyes (`fork/ai-culling.md`, `Analysis.eyes`) take 9.
+**A new fork format** (an `Op` variant or serialized field): raise `fork_format::VERSION` and add a row to the format table in `journal.rs`. PR #101 (journal deltas) takes fork version 2; Match Look's residual Look (#90, develop settings `look`) takes 3; a mask's Decontaminate amount (#115, `Mask.decontaminate`) takes 4; Select People's saved selection (#123, `MaskShape::People` `face`, `seg`, `detail`, `edge`) takes 5; Face Reshape (`fork/retouch-reshape.md`, the `fork_retouch` block's `reshape`) takes 6; Portrait Background (#141, `fork_retouch.global.background` `blur`, `swap`, `clean`, `with`) takes 7; the Portrait tab's Refine strokes (#99, `fork_retouch.refine`, `fork_retouch.faces[].refine`) take 8. Assisted Culling's eyes (`fork/ai-culling.md`, `Analysis.eyes`) take 9. The official 13's Lens Blur fields (official update of 2026-11-12) take 10.
 
-**An official format past 12** (an official update changes `VERSION` in `journal.rs`, which clashes with the fork's line there): raise `fork_format::OFFICIAL_VERSION`, read the new official fields, and decide `lightcraft-catalog` 13 and 14 by content. Refuse what is still unclear rather than guess: an official 13 read as the fork's would drop the official fields.
+**An official format past 13** (an official update changes `VERSION` in `journal.rs`, which clashes with the fork's line there): raise `fork_format::OFFICIAL_VERSION` and the fork's `VERSION`, read the new official fields, and decide `lightcraft-catalog` 14 by content. Refuse what is still unclear rather than guess: an official 14 read as the fork's would drop the official fields. The official 13 (2026-11-12) went this way: fork 10.
 
 ## Branch
 
