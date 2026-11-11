@@ -3,3 +3,5 @@ cargo test -p lightcraft-learn --lib -- image_encoder
 cargo test -p lightcraft-engine --lib -- model_runtime
 cargo test -p lightcraft-parsing --lib -- coreml
 cargo test -p lightcraft-birefnet --lib -- run
+cargo test -p lightcraft-segment
+cargo test -p lightcraft-engine --features sam --lib -- segment::worker
