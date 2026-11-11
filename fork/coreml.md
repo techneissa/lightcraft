@@ -130,6 +130,15 @@ Masks as the app makes them (`crates/engine/examples/mask_edges_audit.rs`, Hair 
 | Subject (BiRefNet + Matting + refine) | 18.9 s / 19.2 s | 7.8 s / 4.3 s |
 | Person (people parse + Matting + refine) | 10.5 s / 10.1 s | 4.0 s / 2.7 s |
 
+Compute units (for #267, which picks them per Mac; `BiRefNet::load_with_units`, default `CpuAndGpu`), one process each at 1024² on m04, one run each, load average 14–19 (`cargo run --release -p lightcraft-birefnet --example coreml_units -- <models> <model> <units> <photo>`):
+
+| Engine | BiRefNet: load / first run / second run | BiRefNet Matting: load / first run / second run |
+| --- | --- | --- |
+| candle (Metal) | 0.3 s / 8.0 s / 8.1 s | 0.2 s / 8.3 s / 8.7 s |
+| Core ML, CPU and GPU | 5.2 s / 2.6 s / 1.3 s | 5.8 s / 2.5 s / 1.3 s |
+| Core ML, all units | load over 2 minutes, stopped | load over 2 minutes, stopped |
+| Core ML, CPU and Neural Engine | load over 2 minutes, stopped | load over 2 minutes, stopped |
+
 An earlier single-photo run at load average 45–53 gave Subject 12.7 s on candle against 33.1 s on Core ML: the first run after loading both models, whose GPU planning took most of it under that load; Person 7.2 s against 3.4 s.
 
 **BiSeNet's face parser** (ResNet-18, fixed 512² crops) is still candle: converting it needs its network written in PyTorch from `crates/parsing/src/bisenet.rs` (MLX weights, kernels stored out × h × w × in) and a face-groups head in its class order. It is 94 ms of a BiSeNet parse (wall, mostly the GPU), so not done here.
