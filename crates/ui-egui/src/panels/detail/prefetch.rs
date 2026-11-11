@@ -6,6 +6,10 @@
 //! - **Plan** ([`plan`]): from the pace and how long a prefetch takes, how far ahead to prepare, how many at once, and
 //!   from which photo on. A photo the user will reach before a render started now could finish is started after the
 //!   ones that can still be ready on arrival: chasing the nearest photo left every photo a little late.
+//! - **The photo on screen** waits for the user to stop while they step faster than a photo renders ([`outpaced`]):
+//!   its own render would finish after they had left it, and those renders, piling up on the workers, starved the
+//!   photos ahead and even the stand-ins. A photo prepared ahead shows at once all the same (its stand-in is the kept
+//!   view); this is the loupe's rule for a held arrow key, at the pace the machine can render.
 //! - **No waste.** A photo whose kept view already covers what the loupe draws is not rendered again (#223); prefetches
 //!   still queued for photos stepped past are dropped; and the loupe takes over a prefetch running for the photo it
 //!   lands on instead of decoding it a second time ([`crate::render::Renderer::adopt_prefetch`]).
@@ -27,9 +31,11 @@ const PRIORITY: u32 = 4;
 /// photo the user steps to next finds a worker free.
 const CALM_AT_ONCE: usize = 2;
 /// At most, stepping fast.
-const MOST_AT_ONCE: usize = 4;
-/// Render workers prefetches leave free: the photo on screen and the thumbnails.
-const FREE_WORKERS: usize = 2;
+const MOST_AT_ONCE: usize = 3;
+/// Render workers prefetches leave free, for what the photo on screen needs at once: its render, its stand-in and the
+/// thumbnails ahead. A running prefetch can't be stopped, so with fewer free a step found every worker busy and showed
+/// nothing of the photo until one finished.
+const FREE_WORKERS: usize = 3;
 /// How far ahead stepping fast prepares at most, unless Settings ▸ Performance asks for more.
 const FAST_DEPTH: usize = 12;
 /// Prepared-ahead slots, by the photo's place in the view: a step keeps the photos still ahead in
@@ -87,6 +93,11 @@ impl Pace {
         self.step.filter(|_| now - since <= PAUSE_SECS)
     }
 
+    /// How long photo `id` has been on screen at `now` (s), once [`Self::observe`] has seen it.
+    pub fn dwell(&self, id: PhotoId, now: f64) -> Option<f64> {
+        self.at.filter(|(shown, _, _)| *shown == id).map(|(_, _, since)| now - since)
+    }
+
     /// Whether the last step went back.
     pub fn backward(&self) -> bool {
         self.backward
@@ -131,6 +142,32 @@ pub(crate) fn plan(ahead: usize, step_secs: Option<f64>, render_secs: Option<f64
     Plan { depth, at_once, lead: passed.min(depth) }
 }
 
+/// Whether the loupe's own render of the photo on screen waits: the user steps faster than a photo renders (the plan
+/// races), and has not stayed on this one as long as a step takes (`dwell`, `None`: not seen yet). Once they stay
+/// longer, they have stopped to look, and it renders.
+pub(crate) fn outpaced(plan: Plan, step_secs: Option<f64>, dwell: Option<f64>) -> bool {
+    match (step_secs, dwell) {
+        (Some(step), Some(dwell)) => plan.racing() && dwell < step,
+        _ => false,
+    }
+}
+
+/// Note the photo the loupe shows (in the frame at `now`, s) for the pace, before anything is asked for it. Whether
+/// its own render waits ([`outpaced`]): never while editing, or with nothing prepared ahead.
+pub(super) fn observe(app: &mut LightcraftApp, id: PhotoId, now: f64) -> bool {
+    let (_, ids) = app.session.visible_shared();
+    let Some(i) = ids.iter().position(|p| *p == id) else { return false };
+    app.look_ahead.pace.observe(id, i, now);
+    let mode = prep_mode(app);
+    let ahead = app.session.prep_settings().ahead(mode);
+    if mode == lightcraft_engine::prep::Mode::Develop || ahead == 0 {
+        return false;
+    }
+    let pace = &app.look_ahead.pace;
+    let step = pace.step_secs(now);
+    outpaced(plan(ahead, step, app.renderer.prefetch_secs(), app.renderer.live_workers()), step, pace.dwell(id, now))
+}
+
 /// The photos to prefetch around place `i` of `ids`, as (place, photo), in the order to start them: from the plan's
 /// lead to its depth in the direction of travel, then the nearer ones (they will be late, but less late than a render
 /// started on arrival), then [`BEHIND`] the other way.
@@ -150,7 +187,6 @@ pub(crate) fn order(ids: &[PhotoId], i: usize, backward: bool, plan: Plan) -> Ve
 pub(super) fn prefetch_neighbours(app: &mut LightcraftApp, id: PhotoId, main_area: Rect, ppp: f32, texture_side: usize, with_crop: bool, now: f64) {
     let (_, ids) = app.session.visible_shared();
     let Some(i) = ids.iter().position(|p| *p == id) else { return };
-    app.look_ahead.pace.observe(id, i, now);
     let mode = prep_mode(app);
     let prep = app.session.prep_settings();
     let ahead = prep.ahead(mode);
@@ -262,6 +298,18 @@ mod tests {
     }
 
     #[test]
+    fn the_photo_on_screen_waits_only_while_the_user_outpaces_the_renders() {
+        let render = Some(0.75);
+        let racing = plan(5, Some(0.5), render, WORKERS);
+        assert!(outpaced(racing, Some(0.5), Some(0.1)), "stepping on: the photos ahead come first");
+        assert!(!outpaced(racing, Some(0.5), Some(0.6)), "stayed longer than a step: stopped to look");
+        assert!(!outpaced(racing, Some(0.5), None), "not seen yet");
+        let calm = plan(5, Some(1.5), render, WORKERS);
+        assert!(!outpaced(calm, Some(1.5), Some(0.1)), "slower than a render: rendered at once");
+        assert!(!outpaced(plan(5, None, render, WORKERS), None, Some(0.1)), "not stepping");
+    }
+
+    #[test]
     fn the_pace_follows_a_run_of_steps() {
         let mut p = Pace::default();
         p.observe(PhotoId(1), 0, 10.0);
@@ -273,6 +321,7 @@ mod tests {
         let s = p.step_secs(11.4).unwrap();
         assert!(s > 0.3 && s < 0.5, "smoothed: {s}");
         assert!(!p.backward());
+        assert!((p.dwell(PhotoId(4), 11.5).unwrap() - 0.2).abs() < 1e-9 && p.dwell(PhotoId(3), 11.5).is_none());
         assert_eq!(p.step_secs(11.3 + PAUSE_SECS + 0.1), None, "a pause on this photo: not stepping");
         p.observe(PhotoId(5), 4, 20.0);
         assert_eq!(p.step_secs(20.1), Some(s), "a step after a pause goes on at the run's pace");

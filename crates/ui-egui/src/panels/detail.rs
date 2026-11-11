@@ -306,7 +306,8 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (sw, sh) = if aspect >= 1.0 { (se, short(se, aspect)) } else { (short(se, 1.0 / aspect), se) };
     let ask = LoupeAsk { id, with_crop: !crop_tool, interacting, fit_px, stand_in_fit, overlay, tint: tint.sel };
     app.renderer.loupe_drawn();
-    let settling = request_main_or_settle(app, ui, &ask, [rw, rh], plan.window_edge.is_none(), now);
+    let outpaced = !interacting && prefetch::observe(app, id, now);
+    let settling = request_main_or_settle(app, ui, &ask, [rw, rh], plan.window_edge.is_none(), now, outpaced);
     let plain = overlay == lightcraft_pipeline::Overlay::None;
     brush_preview::request(app, ui, &brush_preview::Ask { id, size: [rw, rh], with_crop: !crop_tool, fit_px, interacting, plain });
     // hovering a preset or profile: the photo with that look, shown instead of the loupe render
@@ -1008,11 +1009,19 @@ struct LoupeAsk {
     overlay: lightcraft_pipeline::Overlay,
 }
 
-/// Stepping fast (an arrow held down): the render waits until the photo stays, the camera JPEG or
-/// thumbnail shows meanwhile, and a render queued for a photo already left is dropped. Otherwise
-/// the loupe's own render is requested. Whether the photo is still settling.
-fn request_main_or_settle(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, size: [usize; 2], whole_draft: bool, now: f64) -> bool {
-    let settling = !a.interacting && app.loupe_timing.settling(a.id, now);
+/// Stepping fast (an arrow held down, or `outpaced`: faster than a photo renders, see [`prefetch::outpaced`]): the
+/// render waits until the photo stays, its kept view or thumbnail shows meanwhile, and a render queued for a photo
+/// already left is dropped. Otherwise the loupe's own render is requested. Whether the photo is still settling.
+fn request_main_or_settle(
+    app: &mut LightcraftApp,
+    ui: &egui::Ui,
+    a: &LoupeAsk,
+    size: [usize; 2],
+    whole_draft: bool,
+    now: f64,
+    outpaced: bool,
+) -> bool {
+    let settling = !a.interacting && (outpaced || app.loupe_timing.settling(a.id, now));
     if !settling {
         request_main(app, ui, a, size, whole_draft);
         return false;
