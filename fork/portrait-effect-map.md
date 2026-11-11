@@ -33,7 +33,7 @@ Measured on the CPU in both renderers, from the image before the step the render
 on). The image with the slider at its default is kept between ticks (one, under the host budget), so a tick retouches
 once more. Only the box round the changed pixels is blurred and curved. On a test
 Mac under load, a 1920 × 1280 draft: the view's own work 5–14 ms for tone sliders, about 1 ms for Face Reshape; a
-whole ⌥ tick 12–25 ms against 8–16 ms plain (GPU), so the view updates live. `LIGHTCRAFT_PROFILE=1` prints
+whole ⌥ tick 16–25 ms against 7–11 ms plain on the GPU (12–24 ms against 10–16 ms on the CPU), so the view updates live. `LIGHTCRAFT_PROFILE=1` prints
 `retouch effect map: <ms>`.
 
 Zoomed windows show the same as the whole frame (the window holds a face's retouch reads), to within a level.
