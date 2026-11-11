@@ -356,6 +356,22 @@ pub enum SourceRef {
 }
 
 impl SourceRef {
+    /// What makes a plain decode of a [`SourceRef::File`] this one: the file, the size, the settings it is decoded
+    /// with and the loader (two sessions' loaders, in tests, decode differently). 0 for the other kinds.
+    fn decode_key(&self) -> u128 {
+        let SourceRef::File { path, max_edge, loader, camera_profile, outliers, reduced, options, .. } = self else { return 0 };
+        let address = |p: Option<*const ()>| p.map_or(0, |p| p as usize as u64);
+        let mut h = super::Hasher128::new();
+        h.str(path).u64(*max_edge as u64).u64(options.colour as u64);
+        match options.profile_key {
+            Some(k) => h.u64(1).u64(k as u64).u64((k >> 64) as u64),
+            None => h.u64(0),
+        };
+        h.u64(u64::from(*outliers)).str(camera_profile.as_ref().map_or("", |(id, _)| id.as_str()));
+        h.u64(address(loader.as_ref().map(|l| Arc::as_ptr(l).cast::<()>()))).u64(address(reduced.as_ref().map(|l| Arc::as_ptr(l).cast::<()>())));
+        h.finish().0
+    }
+
     pub fn load(&self) -> Result<Arc<Rgb32f>, String> {
         self.load_source().map(|s| s.image)
     }
@@ -424,7 +440,8 @@ impl SourceRef {
                             plain()
                         }
                     }
-                    None => plain(),
+                    // (a decode of this file at this size with these settings that another job runs now is shared)
+                    None => super::shared_decode::decode_shared(self.decode_key(), plain),
                 };
                 // An offline original renders from its smart preview (no decoder facts: header ones).
                 return match (r, fallback) {

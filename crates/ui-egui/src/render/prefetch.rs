@@ -99,7 +99,13 @@ impl Renderer {
             slot,
             key,
             priority,
-            Box::new(move || Finished { look: None, result: lightcraft_engine::memory::in_background(|| job.run()), color: None, full: None }),
+            Box::new(move || Finished {
+                look: None,
+                result: lightcraft_engine::memory::in_background(|| job.run()),
+                color: None,
+                full: None,
+                then: None,
+            }),
             panicked,
         );
     }

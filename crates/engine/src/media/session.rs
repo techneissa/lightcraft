@@ -30,6 +30,44 @@ impl crate::Session {
         Some(job)
     }
 
+    /// [`Self::thumb_job`] for a grid or filmstrip cell. A raw whose thumbnail is decoded from its file makes the
+    /// photo's view preview from the same decode ([`RenderJob::view_after`]), when this view's previews are built in
+    /// the background (Settings ▸ Performance): the preview build would decode the photo again for it, and the loupe
+    /// once more when it got there first (issue #221: of 37 raws decoded for the grid, the build decoded 33 again).
+    pub fn grid_thumb_job(&mut self, id: PhotoId, long_edge: usize) -> Option<RenderJob> {
+        let mut job = self.thumb_job(id, long_edge)?;
+        job.view_after = self.view_alongside(id, &job).map(Box::new);
+        Some(job)
+    }
+
+    /// The view preview a preview build would make of photo `id` ([`crate::cmd::previews::jobs_for`]), to make from
+    /// the decode of its grid thumbnail `thumb`: only for a raw (a JPEG decodes faster at a smaller size, a raw
+    /// doesn't) whose thumbnail decodes its file at the preview level's size or less, without a denoised picture
+    /// (which a thumbnail doesn't keep), in a library on disk whose background preparation builds this photo's
+    /// previews.
+    fn view_alongside(&mut self, id: PhotoId, thumb: &RenderJob) -> Option<super::render::ViewAlongside> {
+        let p = self.catalog.photo(id)?;
+        if p.kind != MediaKind::Raw || !matches!(thumb.source, SourceRef::File { .. }) || self.media.denoise.spec(id).is_some() {
+            return None;
+        }
+        let want = self.prep_settings().mode(crate::prep::Mode::of(self));
+        let in_scope = match want.scope {
+            crate::prep::Scope::All => true,
+            crate::prep::Scope::Marked => crate::prep::marked(self, id),
+            crate::prep::Scope::OnScreen => false,
+        };
+        if !want.previews || !in_scope || self.library.as_ref().is_none_or(|l| !l.on_disk) {
+            return None;
+        }
+        // (the build's view: the standard edge, never past the photo's own size)
+        let full = p.width.max(p.height) as usize;
+        let edge = crate::cmd::previews::standard_edge(self).min(full.max(1)).max(1);
+        let view = self.loupe_job(id, edge, edge, true)?;
+        let decodes = matches!(view.source, SourceRef::File { .. }) && view.level == SourceLevel::Preview;
+        let loupe = crate::cmd::previews::loupe_box(self);
+        (decodes && view.view_cache.is_some()).then_some(super::render::ViewAlongside { job: view, loupe })
+    }
+
     fn build_job(
         &mut self,
         id: PhotoId,
@@ -134,6 +172,7 @@ impl crate::Session {
             preview_cut: None,
             display_fit: None,
             mask_ask: None,
+            view_after: None,
             stop: None,
         })
     }
@@ -242,6 +281,7 @@ impl crate::Session {
             preview_cut: None,
             display_fit: None,
             mask_ask: None,
+            view_after: None,
             stop: None,
         })
     }
@@ -300,6 +340,7 @@ impl crate::Session {
             preview_cut,
             display_fit: None,
             mask_ask: None,
+            view_after: None,
             stop: None,
         })
     }

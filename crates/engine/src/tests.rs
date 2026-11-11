@@ -22,6 +22,7 @@ mod crop_aspect;
 mod cull_parse;
 mod dcp;
 mod dcp_corpus;
+mod decode_once;
 mod decontaminate;
 mod delete_local_rejected;
 mod denoise;

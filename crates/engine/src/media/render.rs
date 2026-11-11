@@ -4,6 +4,39 @@ use super::{
     Arc, DevelopSettings, Hash128, Histogram, PhotoId, PreviewCache, Quality, RenderRequest, Rendered, Rgb32f, Rgba8, Source, SourceInfo, StageCache,
 };
 
+/// The view preview a grid thumbnail makes from its decode ([`RenderJob::view_after`]): the preview build's view job of
+/// the photo, and the loupe's canvas the build judges it by (`cmd::previews::already_built`).
+#[derive(Clone)]
+pub struct ViewAlongside {
+    pub job: RenderJob,
+    pub loupe: (usize, usize),
+}
+
+/// A grid thumbnail's photo's view preview, from the decode the thumbnail was cut from ([`RenderJob::run_then`]).
+pub struct ViewAfter(RenderJob);
+
+impl ViewAfter {
+    /// Render the view and keep it in its view cache, written to disk now as a preview build writes it (a deferred
+    /// write is skipped when the writer falls behind, and the build would then decode the photo again). A panic is
+    /// this preview's failure only: the build makes it later.
+    pub fn run(self) {
+        let mut view = self.0;
+        let Some(((cache, key), generation)) = view.view_cache.take().map(|v| (v, view.cache_generation)) else { return };
+        // (a view of this look at least as big is kept already, the loupe's own: not rendered, never replaced: #223)
+        let (w, h) = (view.request.max_w, view.request.max_h);
+        // (the render would be the kept one's size times this scale: no bigger, nothing to make)
+        if cache.dims(key).is_some_and(|(kw, kh)| kw > 0 && kh > 0 && (w as f64 / kw as f64).min(h as f64 / kh as f64) <= 1.0) {
+            return;
+        }
+        let rendered = crate::guard::catch("the view preview", || view.run_unguarded().rendered);
+        if let Ok(Ok(rendered)) = rendered
+            && !cache.put_at(generation, key, Arc::new(rendered.image))
+        {
+            log::debug!("grid thumbnail: its photo's view preview could not be kept");
+        }
+    }
+}
+
 /// Everything needed to render one photo, detached from the session.
 #[derive(Clone)]
 pub struct RenderJob {
@@ -48,6 +81,10 @@ pub struct RenderJob {
     /// Not a render of the photo: only the planes of masks this asks for ([`RenderResult::mask_planes`]), so a frontend can tint
     /// a mask over the photo it draws ([`Self::for_mask_planes`]).
     pub mask_ask: Option<lightcraft_pipeline::masks::PlanesAsk>,
+    /// A grid thumbnail's photo's view preview, made after the thumbnail from the same decode and kept in the view
+    /// cache, when the thumbnail is rendered from the file and that view isn't built yet (issue #221,
+    /// [`crate::Session::grid_thumb_job`]). `None` for every other job.
+    pub view_after: Option<Box<ViewAlongside>>,
     /// Set once nobody will show this render (the loupe has moved to another photo): the job stops at its next check,
     /// before the source is read and once it is decoded, with the error [`STOPPED`] ([`Self::with_stop`]).
     pub stop: Option<Arc<std::sync::atomic::AtomicBool>>,
@@ -309,8 +346,25 @@ impl RenderJob {
     /// for it is told, instead of waiting forever on a worker that died (the pool doesn't replace
     /// it, so a few such panics used to stop every render).
     pub fn run(self) -> RenderResult {
+        let (r, after) = self.run_then();
+        if let Some(view) = after {
+            view.run();
+        }
+        r
+    }
+
+    /// [`Self::run`], handing back the view preview a grid thumbnail leaves for after it ([`Self::view_after`]) instead
+    /// of making it first: a frontend shows the thumbnail, then runs [`ViewAfter::run`] on the same worker.
+    pub fn run_then(self) -> (RenderResult, Option<ViewAfter>) {
         let failed = self.failed(String::new());
-        crate::guard::catch("the render", || self.run_unguarded()).unwrap_or_else(|e| RenderResult { rendered: Err(e), ..failed })
+        crate::guard::catch("the render", || self.run_split()).unwrap_or_else(|e| (RenderResult { rendered: Err(e), ..failed }, None))
+    }
+
+    fn run_split(mut self) -> (RenderResult, Option<ViewAfter>) {
+        match self.view_after.take() {
+            Some(view) => self.run_with_view(*view),
+            None => (self.run_unguarded(), None),
+        }
     }
 
     /// This job's result when it fails with `e`.
@@ -379,6 +433,27 @@ impl RenderJob {
             let s = (fw as f64 / w.max(1) as f64).min(fh as f64 / h.max(1) as f64);
             (w > 0 && h > 0 && fw > 0 && fh > 0 && s <= 1.0 + VIEW_REUSE_SLACK).then(|| Arc::unwrap_or_clone(img))
         })
+    }
+
+    /// This grid thumbnail and `view`, its photo's view preview, from one decode (issue #221). A raw costs about the
+    /// same to decode at any size below its full one (the Mac's decoder 361 ms at 512 px, 345 ms at 2560 on the same 36
+    /// raws), so the thumbnail is cut from the view's source, as a preview build cuts it, and the view is rendered from
+    /// it and kept where the build and the loupe look for it: neither decodes the photo again. The thumbnail is
+    /// rendered first and handed back; the view is what is left for after it, only when the thumbnail had to be
+    /// rendered, the view isn't built and the GPU is ready (a render that would wait for the device is left to the
+    /// build). Otherwise, or when the view's source can't be read, the thumbnail renders as any other.
+    fn run_with_view(self, along: ViewAlongside) -> (RenderResult, Option<ViewAfter>) {
+        let ViewAlongside { job: mut view, loupe } = along;
+        let thumbnail_kept = self.cache.as_ref().is_some_and(|(cache, key)| cache.dims(*key).is_some());
+        if thumbnail_kept || !lightcraft_gpu::ready() || crate::cmd::previews::already_built(std::slice::from_ref(&view), loupe) {
+            return (self.run_unguarded(), None);
+        }
+        let Ok(source) = view.source.load_source() else { return (self.run_unguarded(), None) };
+        let max_edge = self.level.max_edge();
+        let thumbnail = RenderJob { source: SourceRef::Fit { from: Box::new(source.clone()), max_edge }, ..self };
+        let r = thumbnail.run_unguarded();
+        view.source = SourceRef::Loaded(Box::new(source));
+        (r, Some(ViewAfter(view)))
     }
 
     /// The photo's render (without slide composition).

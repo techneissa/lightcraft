@@ -165,6 +165,9 @@ struct Finished {
     color: Option<Arc<egui::ColorImage>>,
     /// A [`Slot::Full`] job's picture, cut into textures.
     full: Option<crate::full_picture::Built>,
+    /// What the job left for after its result: a grid thumbnail's photo's view preview, made from the same decode
+    /// once the thumbnail is handed over ([`lightcraft_engine::media::RenderJob::run_then`]).
+    then: Option<lightcraft_preview::Then>,
 }
 
 /// Immutable identity captured when a request is submitted, not when its result is collected.
@@ -347,6 +350,10 @@ pub struct Renderer {
     thumb_inputs: HashMap<PhotoId, (std::sync::Weak<lightcraft_catalog::Photo>, usize, u64, bool, u32)>,
     /// Photos whose grid thumbnail is the camera's embedded preview itself (no render behind it).
     embedded_thumbs: HashMap<PhotoId, (std::sync::Weak<lightcraft_catalog::Photo>, usize, u64)>,
+    /// Grid thumbnails that make their photo's view preview after them, and whether that view is still wanted: a cell
+    /// scrolled out of view clears its flag, and the worker drops the view (and its preview-size picture) instead of
+    /// rendering it.
+    view_wanted: HashMap<PhotoId, Arc<std::sync::atomic::AtomicBool>>,
     pool: JobPool<Slot, Finished>,
     /// Jobs run elsewhere (see [`RenderOffload`]); `queue` holds the ones not started yet.
     offload: Option<Box<dyn RenderOffload>>,
@@ -536,6 +543,7 @@ impl Renderer {
             pool: JobPool::new(threads),
             thumb_inputs: HashMap::new(),
             embedded_thumbs: HashMap::new(),
+            view_wanted: HashMap::new(),
             offload: None,
             queue: Vec::new(),
             seq: 0,
@@ -815,7 +823,7 @@ impl Renderer {
                 stamp()
             );
         }
-        Finished { look: None, result: r, color, full: None }
+        Finished { look: None, result: r, color, full: None, then: None }
     }
 
     /// A result without a picture, for a job that has no `RenderJob::failed` of its own.
@@ -840,7 +848,7 @@ impl Renderer {
     /// What the pool sends for a job that panicked (issue #227): `failed` with the panic's message, so the
     /// slot's `pending` entry clears like any failed render's.
     fn panicked(failed: RenderResult) -> lightcraft_preview::Failure<Finished> {
-        Box::new(move |e| Finished { look: None, result: RenderResult { rendered: Err(e), ..failed }, color: None, full: None })
+        Box::new(move |e| Finished { look: None, result: RenderResult { rendered: Err(e), ..failed }, color: None, full: None, then: None })
     }
 
     fn request_needed(&self, slot: Slot, key: u64, priority: u32) -> bool {
@@ -1003,7 +1011,15 @@ impl Renderer {
         if lightcraft_pipeline::profiling() && !background {
             eprintln!("  ui: {slot:?} submitted (at {:.1})", stamp());
         }
-        self.pool.submit_or(
+        let wanted = match slot {
+            Slot::Thumb(id) if job.view_after.is_some() => {
+                let flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
+                self.view_wanted.insert(id, flag.clone());
+                Some(flag)
+            }
+            _ => None,
+        };
+        self.pool.submit_or_then(
             slot,
             key,
             priority,
@@ -1012,10 +1028,27 @@ impl Renderer {
                     eprintln!("  worker: {slot:?} waited {:.1} ms in the queue (at {:.1})", ms(queued, clock()), stamp());
                 }
                 let look = Some((geometry_look(&job.settings), job.request.apply_crop));
-                let run = || if background { lightcraft_engine::memory::in_background(|| job.run()) } else { job.run() };
-                Finished { look, ..Self::run_for(run, &display) }
+                // (a grid thumbnail of a raw leaves its photo's view preview, made from the same decode, for after it
+                // is shown: the worker makes it before its next job)
+                let mut after = None;
+                let run = || {
+                    let (r, view) = if background { lightcraft_engine::memory::in_background(|| job.run_then()) } else { job.run_then() };
+                    after = view;
+                    r
+                };
+                let finished = Finished { look, ..Self::run_for(run, &display) };
+                // (a cell scrolled away since: the view and its picture are dropped, not rendered)
+                let then = after.map(|view| -> lightcraft_preview::Then {
+                    Box::new(move || {
+                        if wanted.is_none_or(|w| w.load(std::sync::atomic::Ordering::Relaxed)) {
+                            lightcraft_engine::memory::in_background(|| view.run());
+                        }
+                    })
+                });
+                Finished { then, ..finished }
             }),
             panicked,
+            |f| f.then.take(),
         );
     }
 
@@ -1042,7 +1075,7 @@ impl Renderer {
             priority,
             Box::new(move || {
                 let (result, full) = crate::full_picture::work(job, plan);
-                Finished { look: None, result, color: None, full }
+                Finished { look: None, result, color: None, full, then: None }
             }),
             panicked,
         );
@@ -2062,6 +2095,14 @@ impl Renderer {
     pub fn evict_thumbs(&mut self, keep: &std::collections::HashSet<PhotoId>, max: usize) {
         self.thumb_inputs.retain(|id, _| keep.contains(id));
         self.embedded_thumbs.retain(|id, _| keep.contains(id));
+        // (a view still to be made from a thumbnail's decode is not made for a photo scrolled away)
+        self.view_wanted.retain(|id, wanted| {
+            let kept = keep.contains(id);
+            if !kept {
+                wanted.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            kept
+        });
         // (a thumbnail that failed is tried again when its photo comes back on screen)
         self.failed.retain(|s, _| !matches!(s, Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id)));
         let dropped = self.pool.reprioritize(|s, p| match s {

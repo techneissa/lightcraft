@@ -229,6 +229,31 @@ fn pool_runs_inline() {
     assert_eq!(p.try_recv().map(|d| d.result), Some(1));
 }
 
+/// A job's result is handed over before the work it leaves for after it (a grid thumbnail is shown while its photo's
+/// view preview is still being made from the same decode), and that work runs on the same worker before its next job.
+#[test]
+fn pool_hands_over_a_result_before_the_work_left_after_it() {
+    /// A result with the work it leaves for after it.
+    struct Carry(u8, Option<crate::pool::Then>);
+    let mut p: JobPool<u8, Carry> = JobPool::new(1);
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let (after, ran_after) = std::sync::mpsc::channel::<()>();
+    let then: crate::pool::Then = Box::new(move || {
+        let _ = released.recv_timeout(std::time::Duration::from_secs(60));
+        let _ = after.send(());
+    });
+    let take: fn(&mut Carry) -> Option<crate::pool::Then> = |c| c.1.take();
+    p.submit_or_then(1, 0, 1, Box::new(move || Carry(7, Some(then))), Box::new(|_| Carry(0, None)), take);
+    assert!(p.wait(std::time::Duration::from_secs(60)), "the result comes while the work after it is held");
+    assert_eq!(p.try_recv().map(|d| d.result.0), Some(7));
+    p.submit(2, 0, 1, Box::new(|| Carry(8, None)));
+    assert!(p.try_recv().is_none(), "the one worker is still on the work left after the first job");
+    release.send(()).unwrap();
+    assert_eq!(ran_after.recv_timeout(std::time::Duration::from_secs(60)), Ok(()), "the work after it runs");
+    assert!(p.wait(std::time::Duration::from_secs(60)));
+    assert_eq!(p.try_recv().map(|d| d.result.0), Some(8), "then the next job");
+}
+
 /// A pool with one worker that is inside a job until the returned sender is used or dropped.
 fn pool_with_a_running_job() -> (JobPool<u8, ()>, std::sync::mpsc::Sender<()>) {
     let mut p: JobPool<u8, ()> = JobPool::new(1);
