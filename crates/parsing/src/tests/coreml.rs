@@ -323,7 +323,7 @@ fn the_models_give_in_one_input_shape_what_they_gave_in_the_shapes_before() {
     let dir = linked("coreml-one-shape", &models, &SEGFORMER_SET);
     let img = fixture();
 
-    let body = crate::coreml::load_body(&dir, &BODY_SEGFORMER_B3).unwrap();
+    let body = crate::coreml::load_body(&dir, &BODY_SEGFORMER_B3, lightcraft_coreml::UnitOrder::one(crate::coreml::DEFAULT_UNITS)).unwrap();
     for side in [768, 1024] {
         let (w, h, px) = crate::body::pixels(&img, side);
         let tight = crate::coreml::BODY_CANVASES.iter().copied().filter(|&(ch, cw)| ch >= h && cw >= w).min_by_key(|&(ch, cw)| ch * cw).unwrap();
@@ -334,7 +334,7 @@ fn the_models_give_in_one_input_shape_what_they_gave_in_the_shapes_before() {
         assert!(agree >= 0.999 && mean < 0.002, "body at {side}: {agree} agree, mean difference {mean}");
     }
 
-    let face = crate::coreml::load_face(&dir).unwrap();
+    let face = crate::coreml::load_face(&dir, lightcraft_coreml::UnitOrder::one(crate::coreml::DEFAULT_UNITS)).unwrap();
     let n = crate::coreml::FACE_BATCH;
     let crops: Vec<Crop> = (0..n)
         .map(|k| Crop { cx: 260.0 + 10.0 * k as f32, cy: 110.0 + 8.0 * k as f32, scale: 0.4, angle: 0.1 * k as f32 - 0.3, side: crate::face::SIDE })
@@ -350,7 +350,7 @@ fn the_models_give_in_one_input_shape_what_they_gave_in_the_shapes_before() {
     }
 
     // (the mesh's own call fills the batch up; a direct call of two is the shape it had before)
-    let mesh = crate::coreml::load_mesh(&dir).unwrap();
+    let mesh = crate::coreml::load_mesh(&dir, lightcraft_coreml::UnitOrder::one(crate::coreml::DEFAULT_UNITS)).unwrap();
     let side = crate::facemesh::SIDE;
     let two: Vec<Crop> = crops.iter().take(2).map(|c| Crop { scale: 0.3, side, ..*c }).collect();
     let px = crate::face::batch_pixels(&img, &two, false);

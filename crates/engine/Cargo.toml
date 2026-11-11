@@ -88,6 +88,10 @@ name = "birefnet_compare"
 required-features = ["sam"]
 
 [[example]]
+name = "model_units"
+required-features = ["sam"]
+
+[[example]]
 name = "hair_edges"
 required-features = ["sam"]
 

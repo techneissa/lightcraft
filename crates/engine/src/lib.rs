@@ -78,6 +78,7 @@ pub mod memory;
 pub mod merge;
 mod model_download;
 pub mod model_runtime;
+pub mod model_units;
 pub mod names;
 pub mod open_path;
 pub mod originals;

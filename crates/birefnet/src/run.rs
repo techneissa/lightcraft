@@ -83,6 +83,37 @@ impl BiRefNet {
         Self::load_with_side(dir, side, device)
     }
 
+    /// [`BiRefNet::load_with_units`] trying each of `units` in turn (issue #267): the first that loads runs the model.
+    /// On Automatic, candle on `device` when none does; on Core ML, the last one's error.
+    pub fn load_in_order(dir: &Path, variant: Variant, runtime: Runtime, units: lightcraft_coreml::UnitOrder, device: Device) -> Result<Self> {
+        let no_coreml = runtime == Runtime::Automatic && (!crate::coreml::installed(dir, variant) || !lightcraft_coreml::available());
+        if runtime == Runtime::Candle || no_coreml {
+            return Self::load_with_units(dir, variant, Runtime::Candle, units.first(), device).map(|mut m| {
+                m.runtime = runtime;
+                m
+            });
+        }
+        let mut last = None;
+        for u in units.iter() {
+            match Self::load_with_units(dir, variant, Runtime::CoreMl, u, device.clone()) {
+                Ok(mut m) => {
+                    m.runtime = runtime;
+                    return Ok(m);
+                }
+                // (a missing package or weights: no other units would find them)
+                Err(e @ Error::Missing(_)) => return Err(e),
+                Err(e) => {
+                    log::info!("{} did not load on Core ML's {} ({e})", variant.label(), u.id());
+                    last = Some(e);
+                }
+            }
+        }
+        match (runtime, last) {
+            (Runtime::CoreMl, Some(e)) => Err(e),
+            _ => Self::load_with_units(dir, variant, Runtime::Candle, units.first(), device),
+        }
+    }
+
     /// candle on `device` with the input side given (tests run the network on small squares).
     pub fn load_with_side(dir: &Path, side: usize, device: Device) -> Result<Self> {
         if !is_model_dir(dir) {

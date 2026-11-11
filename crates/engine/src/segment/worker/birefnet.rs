@@ -42,7 +42,11 @@ fn model<'a>(
         let t = web_time::Instant::now();
         let variant = lightcraft_birefnet::Variant::General;
         let m = match placement {
-            Placement::Gpu => BiRefNet::load_with(dir, variant, runtime, lightcraft_birefnet::best_device())?,
+            Placement::Gpu => {
+                // (the units measured fastest on this Mac, issue #267)
+                let plan = crate::model_units::probes::plan(crate::model_units::probes::birefnet(dir, false), runtime);
+                BiRefNet::load_in_order(dir, variant, plan.runtime(runtime), plan.coreml, lightcraft_birefnet::best_device())?
+            }
             Placement::Cpu => BiRefNet::load_cpu(dir, variant)?,
         };
         log::info!("BiRefNet loaded in {:?} ({}, {})", t.elapsed(), m.backend(), if m.device().is_cpu() { "CPU" } else { "GPU" });

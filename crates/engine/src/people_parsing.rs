@@ -726,8 +726,12 @@ impl PeopleParsing {
                 }
                 // without `loaded` held: the first Core ML load compiles its model (seconds), and the Settings window
                 // reads and changes the loaded set meanwhile
+                let mut used = vec![set.face_file().folder, set.body_file().folder, lightcraft_parsing::models::FACE_MESH.folder];
+                used.extend(set.parts_file().map(|f| f.folder));
+                let (runtimes, units) = measured_units(models, runtimes, &used);
                 let p = Arc::new(
-                    lightcraft_parsing::Parser::load_with(set, models, lightcraft_parsing::best_device(), runtimes).map_err(|e| e.to_string())?,
+                    lightcraft_parsing::Parser::load_with_units(set, models, lightcraft_parsing::best_device(), runtimes, units)
+                        .map_err(|e| e.to_string())?,
                 );
                 let mut slot = lock(&self.inner.loaded);
                 if self.inner.stale.load(Ordering::Acquire) == stale {
@@ -835,6 +839,28 @@ pub fn default_models_dir() -> Option<PathBuf> {
     crate::shared_models::default_shared_models_dir().or_else(|| crate::config::config_dir().map(|c| c.join("models")))
 }
 
+/// The Core ML units each of the people-parts models `used` (their folders) tries, as measured on this Mac (issue
+/// #267), and the runtimes with Automatic made Candle where candle was measured fastest. Only models in use are
+/// measured.
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) fn measured_units(
+    models: &Path,
+    mut runtimes: lightcraft_parsing::Runtimes,
+    used: &[&str],
+) -> (lightcraft_parsing::Runtimes, lightcraft_parsing::Units) {
+    let mut units = lightcraft_parsing::Units::default();
+    for model in COREML_MODELS.into_iter().filter(|m| used.contains(m)) {
+        let (Some(runtime), Some(order), Some(spec)) = (runtimes.slot(model), units.slot(model), crate::model_units::probes::parsing(models, model))
+        else {
+            continue;
+        };
+        let plan = crate::model_units::probes::plan(spec, *runtime);
+        *runtime = plan.runtime(*runtime);
+        *order = plan.coreml;
+    }
+    (runtimes, units)
+}
+
 impl crate::Session {
     /// Use the default models folder, cache folder and choice file for people parsing. Hosts (the app, MCP) ask for
     /// it; a bare session has none, so tests stay hermetic.
@@ -852,6 +878,12 @@ impl crate::Session {
         let models = std::env::var_os("LIGHTCRAFT_BIREFNET_DIR").filter(|v| !v.is_empty()).map(PathBuf::from).or_else(default_models_dir);
         self.hair_edges.set_paths(models, crate::config::config_dir().map(|d| d.join(crate::hair_edges::CHOICE_FILE)));
         self.hair_edges.set_runtime(self.model_runtimes.get(crate::hair_edges::MODEL_DIR));
+        // (each model's fastest unit on this Mac, measured in the background: issue #267)
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(dir) = default_models_dir() {
+            crate::model_units::shared().open(Some(dir.join(crate::model_units::FILE)));
+            crate::model_units::probes::attach(self.activity.clone(), self.prep.foreground.clone());
+        }
         self
     }
 }

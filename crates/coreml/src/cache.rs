@@ -20,7 +20,7 @@ const MAX_KEY_DEPTH: usize = 8;
 /// The key of `package`: its `Manifest.json` (coremltools writes new identifiers into it at every save, so a new
 /// conversion has a new key) and the path, size and time of each of its files (the model and its weights, so a file
 /// replaced inside the package compiles again too), or the bytes of a single `.mlmodel` file.
-pub(crate) fn package_key(package: &Path) -> Result<String> {
+pub fn package_key(package: &Path) -> Result<String> {
     let file = if package.is_dir() { package.join("Manifest.json") } else { package.to_path_buf() };
     let meta = std::fs::metadata(&file).map_err(|e| Error::Io(format!("{}: {e}", file.display())))?;
     if meta.len() > MAX_KEY_FILE {

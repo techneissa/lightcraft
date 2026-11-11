@@ -35,6 +35,13 @@ pub fn installed(dir: &Path, variant: Variant) -> bool {
     package.is_dir() || compiled.is_dir()
 }
 
+/// The call a measurement of `variant`'s Core ML version in its folder `dir` makes (issue #267): one photo's pixels.
+pub fn sample(dir: &Path, variant: Variant) -> lightcraft_coreml::Sample {
+    let (package, compiled) = paths(dir, variant);
+    let side = variant.input();
+    lightcraft_coreml::Sample { package, compiled, function: None, input: INPUT, shape: vec![1, 3, side, side], output: OUTPUT }
+}
+
 /// A loaded Core ML BiRefNet.
 pub(crate) struct CoreMlNet {
     model: Model,

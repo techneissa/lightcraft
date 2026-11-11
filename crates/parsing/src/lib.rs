@@ -57,7 +57,7 @@ mod weights;
 pub use image::RgbImage;
 pub use models::{ModelFile, ModelSet};
 #[cfg(not(target_arch = "wasm32"))]
-pub use parser::{Backend, Options, Parser, Runtimes, best_device};
+pub use parser::{Backend, Options, Parser, Runtimes, Units, best_device};
 pub use types::{FaceHint, Landmark, NormRect, Parsing, Part, Person, Plane, joined};
 
 /// The version of how parts are made from the models' outputs; part of every cached parse's key.

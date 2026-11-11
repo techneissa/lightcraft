@@ -19,6 +19,7 @@ use crate::segformer::Segformer;
 use crate::types::{FaceHint, NormRect, Parsing, Part, Person, Plane};
 use crate::weights::Weights;
 use crate::{Error, Result};
+use lightcraft_coreml::UnitOrder;
 
 /// How a parse runs.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -78,6 +79,48 @@ impl Runtimes {
     pub fn of(&self, file: &ModelFile) -> Runtime {
         let mut copy = *self;
         copy.slot(file.folder).map_or(Runtime::Automatic, |r| *r)
+    }
+}
+
+/// The Core ML units each model with a Core ML version tries, in turn (issue #267: the app measures them per Mac; by
+/// default each its one unit of old, [`coreml::DEFAULT_UNITS`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Units {
+    pub face: UnitOrder,
+    /// SegFormer-B3.
+    pub body: UnitOrder,
+    /// SegFormer-B2.
+    pub body_b2: UnitOrder,
+    /// Sapiens2 (its three models).
+    pub parts: UnitOrder,
+    pub mesh: UnitOrder,
+}
+
+impl Default for Units {
+    fn default() -> Self {
+        let one = UnitOrder::one(coreml::DEFAULT_UNITS);
+        Self { face: one, body: one, body_b2: one, parts: one, mesh: one }
+    }
+}
+
+impl Units {
+    /// The units for the model in `folder` (its id), when it has a Core ML version.
+    pub fn slot(&mut self, folder: &str) -> Option<&mut UnitOrder> {
+        use crate::models::{BODY_SAPIENS2, BODY_SEGFORMER_B2, BODY_SEGFORMER_B3, FACE_MESH, FACE_SEGFORMER_B0};
+        Some(match folder {
+            f if f == FACE_SEGFORMER_B0.folder => &mut self.face,
+            f if f == BODY_SEGFORMER_B3.folder => &mut self.body,
+            f if f == BODY_SEGFORMER_B2.folder => &mut self.body_b2,
+            f if f == BODY_SAPIENS2.folder => &mut self.parts,
+            f if f == FACE_MESH.folder => &mut self.mesh,
+            _ => return None,
+        })
+    }
+
+    /// The units for `file` (the default for a model without a Core ML version).
+    pub fn of(&self, file: &ModelFile) -> UnitOrder {
+        let mut copy = *self;
+        copy.slot(file.folder).map_or(UnitOrder::one(coreml::DEFAULT_UNITS), |u| *u)
     }
 }
 
@@ -267,8 +310,8 @@ fn load_parts_net(file: &ModelFile, models: &Path, dev: &Device) -> Result<Sapie
 }
 
 /// Sapiens2 on Core ML: its three models, and the rotary periods from its weights (which candle reads too).
-fn load_parts_coreml(file: &ModelFile, models: &Path) -> CoreMlResult<coreml::sapiens::Models> {
-    let loaded = coreml::sapiens::load(models)?;
+fn load_parts_coreml(file: &ModelFile, models: &Path, units: UnitOrder) -> CoreMlResult<coreml::sapiens::Models> {
+    let loaded = coreml::sapiens::load(models, units)?;
     let periods = open(file, models)
         .and_then(|w| crate::sapiens::periods(&Params::new(w, Device::Cpu, Layout::Ohwi)))
         .map_err(|e| lightcraft_coreml::Error::Load(format!("{}: {e}", file.label)))?;
@@ -296,9 +339,14 @@ impl Parser {
 
     /// Load `set` with its models on the engines `runtimes` asks for; candle's models run on `dev`.
     pub fn load_with(set: ModelSet, models: &Path, dev: Device, runtimes: Runtimes) -> Result<Self> {
+        Self::load_with_units(set, models, dev, runtimes, Units::default())
+    }
+
+    /// [`Parser::load_with`], each Core ML model on the first of its `units` that loads it.
+    pub fn load_with_units(set: ModelSet, models: &Path, dev: Device, runtimes: Runtimes, units: Units) -> Result<Self> {
         let (face_file, body_file) = (set.face_file(), set.body_file());
-        let face_coreml = || coreml::load_face(models);
-        let body_coreml = || coreml::load_body(models, &body_file);
+        let face_coreml = || coreml::load_face(models, units.face);
+        let body_coreml = || coreml::load_body(models, &body_file, units.of(&body_file));
         let has = |f: &ModelFile| coreml::CONVERTED.contains(f);
         let face_loader: Option<&dyn Fn() -> CoreMlResult<lightcraft_coreml::Model>> = has(&face_file).then_some(&face_coreml);
         let body_loader: Option<&dyn Fn() -> CoreMlResult<lightcraft_coreml::Model>> = has(&body_file).then_some(&body_coreml);
@@ -310,13 +358,13 @@ impl Parser {
         crate::profile::mark("load body");
         let parts = match set.parts_file() {
             Some(f) => {
-                let parts_coreml = || load_parts_coreml(&f, models);
+                let parts_coreml = || load_parts_coreml(&f, models, units.parts);
                 let loader: &dyn Fn() -> CoreMlResult<coreml::sapiens::Models> = &parts_coreml;
                 Some(Engine::load(&f, runtimes.parts, Some(loader), || load_parts_net(&f, models, &dev))?)
             }
             None => None,
         };
-        let mesh_coreml = || coreml::load_mesh(models);
+        let mesh_coreml = || coreml::load_mesh(models, units.mesh);
         let mesh_loader: &dyn Fn() -> CoreMlResult<lightcraft_coreml::Model> = &mesh_coreml;
         crate::profile::mark("load parts");
         let mesh = Engine::load(&crate::models::FACE_MESH, runtimes.mesh, Some(mesh_loader), || load_mesh_net(models, &dev))?;

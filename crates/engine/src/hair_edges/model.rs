@@ -37,7 +37,11 @@ impl HairEdges {
                 // candle's)
                 let model = match cpu {
                     true => BiRefNet::load_cpu(&dir, Variant::Matting),
-                    false => BiRefNet::load_with(&dir, Variant::Matting, runtime, lightcraft_birefnet::best_device()),
+                    false => {
+                        // (the units measured fastest on this Mac, issue #267)
+                        let plan = crate::model_units::probes::plan(crate::model_units::probes::birefnet(&dir, true), runtime);
+                        BiRefNet::load_in_order(&dir, Variant::Matting, plan.runtime(runtime), plan.coreml, lightcraft_birefnet::best_device())
+                    }
                 };
                 let model = match model {
                     Ok(m) => m,

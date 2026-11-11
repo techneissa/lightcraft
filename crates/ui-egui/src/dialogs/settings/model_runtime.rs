@@ -31,7 +31,41 @@ pub(super) fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
         if cfg!(target_os = "macos") && !installed {
             download_row(app, ui, t, model);
         }
+        if cfg!(target_os = "macos") && installed && value != Runtime::Candle {
+            units_row(app, ui, t, model);
+        }
     }
+}
+
+/// The unit measured fastest for `model` on this Mac and its time, or that it is being measured, and Measure Again
+/// (issue #267).
+fn units_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, model: &str) {
+    let units = lightcraft_engine::model_units::shared();
+    let measuring = units.measuring(model);
+    let record = units.record(model);
+    let chosen = record.as_ref().and_then(|r| lightcraft_engine::model_units::chosen(&r.options));
+    ui.horizontal(|ui| {
+        ui.add_space(LABEL_W);
+        let text = match (measuring, chosen) {
+            (true, _) => crate::i18n::tr("Measuring each unit…").to_string(),
+            (false, Some((unit, ms))) if ms < 1000.0 => format!("{}, {ms:.0} ms", crate::i18n::tr(unit.label())),
+            (false, Some((unit, ms))) => format!("{}, {:.2} s", crate::i18n::tr(unit.label()), ms / 1000.0),
+            (false, None) if record.is_some() => crate::i18n::tr("No unit matched; runs as before").to_string(),
+            (false, None) => crate::i18n::tr("Not measured yet").to_string(),
+        };
+        ui.label(RichText::new(text).size(11.0).color(t.text_dim));
+        if measuring {
+            ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));
+            return;
+        }
+        let r = ui.button(crate::i18n::tr("Measure Again"));
+        register(ui, format!("button:settingsMeasureUnits-{model}"), r.rect);
+        if r.clicked()
+            && let Err(e) = app.run("models.measure", json!({"model": model}))
+        {
+            app.toast(ui.ctx(), e);
+        }
+    });
 }
 
 /// "Download Core ML Model (43 MB)", then the question, then its progress or why it failed.
