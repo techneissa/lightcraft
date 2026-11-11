@@ -1449,6 +1449,16 @@ mod in_the_loupe {
         let (_fx, mut h, _) = detail();
         h.app.ui.zoom = crate::state::Zoom::Percent(100.0);
         h.settle(SETTLE);
+        // the zoom window's views are part of what the open photo holds, and the budget is a share of it: wait for the
+        // window to be drawn, not for a quiet spell (a loaded machine is quiet for 12 frames before the window has been
+        // asked for, and one that lands during the drag then pushes the views over the runaway limit)
+        assert!(
+            h.step_until(SETTLE, |h| h.app.region_view.is_some()
+                && h.app.renderer.textures.contains_key(&Slot::Region)
+                && !h.app.renderer.is_pending(Slot::Region)),
+            "the zoom window was never drawn"
+        );
+        h.settle(SETTLE);
         let held = |h: &Headless| {
             let m = h.app.renderer.memory();
             (m["stageCaches"]["gpuBytes"].as_u64().unwrap() + m["stageCaches"]["cpuBytes"].as_u64().unwrap()) as usize

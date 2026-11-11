@@ -10,7 +10,7 @@
 //! tab's eye is off ([`active`]).
 
 use std::borrow::Cow;
-use std::sync::{Arc, Mutex, PoisonError};
+use std::sync::Arc;
 
 use lightcraft_develop::DevelopSettings;
 use lightcraft_develop::retouch::background::{ANALYSIS_LONG, Analysis, Place};
@@ -127,7 +127,7 @@ pub fn analysis(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<Arc<Ana
         (p.native_long, p.spots_after_wb && !before.spots.is_empty()),
     ));
     let found = |c: &[(u64, Arc<Analysis>)]| c.iter().find(|(k, _)| *k == key).map(|(_, a)| a.clone());
-    if let Some(a) = found(&ANALYSES.lock().unwrap_or_else(PoisonError::into_inner)) {
+    if let Some(a) = with_analyses(|c| found(c)) {
         return Some(a);
     }
     let t = crate::profiling().then(std::time::Instant::now);
@@ -185,29 +185,64 @@ pub fn analysis(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Option<Arc<Ana
     if let Some(t) = t {
         eprintln!("    retouch background analysis {aw}×{ah}: {:.0} ms", t.elapsed().as_secs_f64() * 1e3);
     }
-    let mut c = ANALYSES.lock().unwrap_or_else(PoisonError::into_inner);
-    c.retain(|(k, _)| *k != key);
-    c.insert(0, (key, a.clone()));
-    c.truncate(ANALYSES_KEPT);
+    with_analyses(|c| {
+        c.retain(|(k, _)| *k != key);
+        c.insert(0, (key, a.clone()));
+        c.truncate(ANALYSES_KEPT);
+    });
     Some(a)
 }
 
 /// Analysis images kept (a draft's source and the full source's, or two photos).
 const ANALYSES_KEPT: usize = 2;
-static ANALYSES: Mutex<Vec<(u64, Arc<Analysis>)>> = Mutex::new(Vec::new());
-/// The analysis proxies with their spots, before the white balance, by key (as many as [`ANALYSES`]).
-static SPOTTED: Mutex<Vec<(u64, Arc<Rgb32f>)>> = Mutex::new(Vec::new());
+/// Newest first, at most [`ANALYSES_KEPT`].
+type Newest<T> = Vec<(u64, Arc<T>)>;
+
+/// Defines `$name(f)`, which runs `f` on a process-wide list of kept `$t`s. In the crate's tests the list is the
+/// calling thread's own instead: each test runs on its own thread, and a process-wide list that holds only the newest
+/// two let a test running at the same time push another test's analysis out between its render and its plan.
+macro_rules! newest_store {
+    ($(#[$doc:meta])* $name:ident, $t:ty) => {
+        $(#[$doc])*
+        #[cfg(not(test))]
+        fn $name<R>(f: impl FnOnce(&mut Newest<$t>) -> R) -> R {
+            static STORE: std::sync::Mutex<Newest<$t>> = std::sync::Mutex::new(Vec::new());
+            f(&mut STORE.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+        }
+
+        $(#[$doc])*
+        #[cfg(test)]
+        fn $name<R>(f: impl FnOnce(&mut Newest<$t>) -> R) -> R {
+            thread_local! {
+                static STORE: std::cell::RefCell<Newest<$t>> = const { std::cell::RefCell::new(Vec::new()) };
+            }
+            STORE.with(|c| f(&mut c.borrow_mut()))
+        }
+    };
+}
+
+newest_store!(
+    /// The analysis images by key.
+    with_analyses,
+    Analysis
+);
+newest_store!(
+    /// The analysis proxies with their spots, before the white balance, by key (as many as the analyses).
+    with_spotted,
+    Rgb32f
+);
 
 /// The proxy with its spots kept under `key`, else `make`'s, kept.
 fn spotted_proxy(key: u64, make: impl FnOnce() -> Rgb32f) -> Arc<Rgb32f> {
-    if let Some((_, img)) = SPOTTED.lock().unwrap_or_else(PoisonError::into_inner).iter().find(|(k, _)| *k == key) {
-        return img.clone();
+    if let Some(img) = with_spotted(|c| c.iter().find(|(k, _)| *k == key).map(|(_, img)| img.clone())) {
+        return img;
     }
     let img = Arc::new(make());
-    let mut c = SPOTTED.lock().unwrap_or_else(PoisonError::into_inner);
-    c.retain(|(k, _)| *k != key);
-    c.insert(0, (key, img.clone()));
-    c.truncate(ANALYSES_KEPT);
+    with_spotted(|c| {
+        c.retain(|(k, _)| *k != key);
+        c.insert(0, (key, img.clone()));
+        c.truncate(ANALYSES_KEPT);
+    });
     img
 }
 
@@ -843,6 +878,32 @@ mod tests {
         }
         let plain = DevelopSettings::default();
         assert!(crate::plan(&src, &info, &plain, &fit).retouch_analysis.is_none(), "none while Background is off");
+    }
+
+    /// Issue #258: analyses other tests made at the same time (the cache kept only the newest two, process-wide) pushed
+    /// this one's out between its render and its plan, so its work looked never made.
+    #[test]
+    fn another_threads_analyses_do_not_push_this_threads_out() {
+        let src = lightcraft_scenes::demo_library()[0].render(480, 320);
+        let info = a_person();
+        let mut s = DevelopSettings::default();
+        controls::set(&mut s, "retouch.background.blur", 80.0);
+        let s = Arc::new(s);
+        let fit = RenderRequest::fit(480, 320);
+        render(&src, &info, &s, &fit);
+        let others = {
+            let (info, s) = (a_person(), s.clone());
+            std::thread::spawn(move || {
+                // (other photos: the analysis is made per source)
+                for photo in [1, 2, 3] {
+                    let other = lightcraft_scenes::demo_library()[photo].render(480, 320);
+                    assert!(crate::plan(&other, &info, &s, &fit).retouch_analysis.is_some());
+                }
+            })
+        };
+        others.join().expect("the other thread's plans");
+        let kept = crate::plan(&src, &info, &s, &fit).retouch_analysis.as_deref().map(Analysis::kept);
+        assert_eq!(kept, Some(1), "the work this thread's render made is still kept");
     }
 
     /// An on-photo face under a crop and a lens distortion: a draft and a render four times its size light the same
