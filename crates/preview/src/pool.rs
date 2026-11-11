@@ -292,7 +292,11 @@ fn run_guarded<R>(job: Job<R>, fail: Option<Failure<R>>) -> Option<R> {
         Err(payload) => payload,
     };
     let message = format!("a job panicked: {}", panic_message(payload.as_ref()));
-    log::error!("job pool: {message}");
+    // (a job with a fallback hands the message to its result, which the caller reports; only a job without one is
+    // logged here)
+    if fail.is_none() {
+        log::error!("job pool: {message}");
+    }
     catch_unwind(AssertUnwindSafe(move || fail.map(|f| f(message)))).unwrap_or(None)
 }
 
