@@ -70,7 +70,7 @@ fn dng_with_camera_jpeg(seed: f32) -> Vec<u8> {
 fn key_of(file: &[u8], options: LoadOptions, outliers: bool) -> u128 {
     let raw = lightcraft_raw::decode(file).unwrap();
     let lens = crate::lens_profiles::for_raw(&raw.info(), || lightcraft_meta::extract(file));
-    super::key(file, options, outliers, false, lens.as_ref())
+    super::key(file, options, outliers.then(crate::files::hot_pixel_limit), false, lens.as_ref())
 }
 
 fn decode(file: &[u8], edge: usize, options: LoadOptions) -> (lightcraft_raster::Rgb32f, lightcraft_pipeline::SourceInfo) {

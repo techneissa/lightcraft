@@ -43,8 +43,9 @@ static FITS: Mutex<VecDeque<Arc<Entry>>> = Mutex::new(VecDeque::new());
 #[cfg(test)]
 static MADE: Mutex<Vec<(u128, usize)>> = Mutex::new(Vec::new());
 
-/// The key of a fit of `bytes` (the whole file) with the inputs that are not in the file.
-pub(super) fn key(bytes: &[u8], options: LoadOptions, outliers: bool, reduced: bool, lens: Option<&lightcraft_develop::EmbeddedLens>) -> u128 {
+/// The key of a fit of `bytes` (the whole file) with the inputs that are not in the file. `outliers`: the limit single
+/// outlier photosites were replaced with (`None`: not replaced), the value the decode used.
+pub(super) fn key(bytes: &[u8], options: LoadOptions, outliers: Option<f64>, reduced: bool, lens: Option<&lightcraft_develop::EmbeddedLens>) -> u128 {
     use rayon::prelude::*;
     let t = web_time::Instant::now();
     // the whole file, in pieces hashed side by side (a 50 MB raw in a few milliseconds): CRC-32 per piece, and the
@@ -60,7 +61,7 @@ pub(super) fn key(bytes: &[u8], options: LoadOptions, outliers: bool, reduced: b
         Some(k) => h.u64(1).u64(k as u64).u64((k >> 64) as u64),
         None => h.u64(0),
     };
-    h.u64(u64::from(outliers)).u64(if outliers { crate::files::hot_pixel_limit().to_bits() } else { 0 }).u64(u64::from(reduced));
+    h.u64(u64::from(outliers.is_some())).u64(outliers.map_or(0, f64::to_bits)).u64(u64::from(reduced));
     // the lens correction (the file's own, or a database profile that can change while the app runs)
     h.str(&lens.and_then(|l| serde_json::to_string(l).ok()).unwrap_or_default());
     if lightcraft_pipeline::profiling() {

@@ -182,9 +182,11 @@ pub(super) fn load_bytes_now(
             Err(Err(e)) => return Err(e),
         };
         // single outlier photosites, replaced in the mosaic before anything is developed from it (#1345)
-        if with.outliers {
+        // (the limit read once: the replacement and the kept fit's key below use the same value)
+        let outliers = with.outliers.then(super::hot_pixel_limit);
+        if let Some(limit) = outliers {
             let t = std::time::Instant::now();
-            let n = raw.suppress_hot_pixels_with(super::hot_pixel_limit());
+            let n = raw.suppress_hot_pixels_with(limit);
             if lightcraft_pipeline::profiling() {
                 eprintln!("[profile] raw outliers: {n} photosites replaced in {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
             }
@@ -208,7 +210,7 @@ pub(super) fn load_bytes_now(
         // The fit of the starting colour to the camera JPEG is kept for the session under the file and what else it
         // reads, so the photo's next decode (another size, the full size) reuses it (#220). Only a raw that is fitted
         // is keyed: one with colour matrices and a tone curve of its own is not.
-        let fit_key = fitted_at_all(&raw).then(|| super::look_cache::key(&bytes, options, with.outliers, used_reduced, lens.as_ref()));
+        let fit_key = fitted_at_all(&raw).then(|| super::look_cache::key(&bytes, options, outliers, used_reduced, lens.as_ref()));
         let kept_tone = match dcp {
             Some(p) if p.color.profile.tone_curve.is_none() => raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve).or_else(|| {
                 let own = raw.color.clone();
