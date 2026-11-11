@@ -129,7 +129,11 @@ impl Cropper {
             .u64(window.h as u64)
             .finish()
             .0 as u64;
+        let t = lightcraft_pipeline::profiling().then(std::time::Instant::now);
         let deep = job.run().rendered.ok()?.deep?;
+        if let Some(t) = t {
+            eprintln!("    portrait search: float crop {}×{}: {:.1} ms", window.w, window.h, t.elapsed().as_secs_f64() * 1e3);
+        }
         let DeepSamples::F32(samples) = &deep.samples else { return None };
         if (deep.width, deep.height) != (window.w, window.h) || samples.len() != window.w * window.h * 3 {
             return None;

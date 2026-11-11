@@ -65,11 +65,11 @@ impl PartsFinder {
         let PartsFinder { wrinkles, prepare, known, parsing: store, choice, orient, regions, cropper } = self;
         let cut = |r| cropper.as_ref()?.crop(r);
         let crops = || cropper.as_ref().map(|c| Crops { size: c.photo_size(), cut: &cut });
-        let (img, hints) = prepare.run()?;
+        let (img, hints) = timed("portrait search: picture and faces", || prepare.run())?;
         if let Some(parsing) = known.as_ref().and_then(|k| k.read(&store)) {
             return Ok(found_with(&parsing, &hints, &img, orient, &regions, crops(), wrinkles.as_ref()));
         }
-        let (filed, out) = store.parse_as(choice, img.clone(), hints.clone(), true);
+        let (filed, out) = timed("portrait search: people parse", || store.parse_as(choice, img.clone(), hints.clone(), true));
         let parsing = match out {
             Outcome::Ready { parsing, .. } => parsing,
             Outcome::Running => return Err("the people parse is still running".into()),
@@ -138,15 +138,41 @@ fn with_spots_and_strands(
         orient,
     );
     // strands first: Blemishes leaves the spots that lie on a strand (a hair stump in stubble, a crease)
-    let faces = with_strands(&linear, faces, crops);
-    let faces = if skin { lightcraft_develop::retouch::blemish::with_spots(&linear, faces) } else { faces };
-    match wrinkles {
-        Some(search) if skin => search.run(faces, &linear),
-        _ => (faces, false),
+    let spotted = |faces: Vec<Face>| {
+        let faces = timed("portrait search: stray hair", || with_strands(&linear, faces, crops));
+        if skin { timed("portrait search: spots", || lightcraft_develop::retouch::blemish::with_spots(&linear, faces)) } else { faces }
+    };
+    let Some(search) = wrinkles.filter(|_| skin) else { return (spotted(faces), false) };
+    let wrinkled = |faces: Vec<Face>| timed("portrait search: wrinkles", || search.run(faces, &linear));
+    // The Wrinkles search reads only the faces' mesh and masks, not their strands or spots (issue #241): it runs on a
+    // thread of its own beside them, and its change joins the faces they give, in the same order.
+    let (faces, found) = std::thread::scope(|scope| {
+        let mine = faces.clone();
+        let worker = std::thread::Builder::new().name("retouch-wrinkles".into()).spawn_scoped(scope, move || wrinkled(mine));
+        let faces = spotted(faces);
+        (faces, worker.ok().map(std::thread::ScopedJoinHandle::join))
+    });
+    match found {
+        Some(Ok((found, cancelled))) if found.len() == faces.len() => {
+            let faces = faces.into_iter().zip(found).map(|(f, w)| Face { wrinkles: w.wrinkles, ..f }).collect();
+            (faces, cancelled)
+        }
+        // (the thread could not start or stopped early: the search runs here)
+        _ => wrinkled(faces),
     }
 }
 
 /// `faces` with their stray strands found, on `crops` of the original when there are any, else on the parse's picture.
+/// Run `f`, printing its duration under `LIGHTCRAFT_PROFILE`.
+fn timed<R>(what: &str, f: impl FnOnce() -> R) -> R {
+    let t = lightcraft_pipeline::profiling().then(std::time::Instant::now);
+    let r = f();
+    if let Some(t) = t {
+        eprintln!("    {what}: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+    }
+    r
+}
+
 fn with_strands(linear: &Rgb32f, faces: Vec<Face>, crops: Option<Crops<'_>>) -> Vec<Face> {
     let Some(crops) = crops.filter(|c| same_shape(c.size, (linear.width, linear.height))) else {
         return lightcraft_develop::retouch::hair::with_strands(linear, faces);
