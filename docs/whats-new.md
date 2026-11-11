@@ -51,6 +51,18 @@
   process 5: new photos (and Reset) get it, photos you already edited keep their look until you choose Photo ▸ Update
   to Current Process. See [process versions](process-versions.md).
 
+## 2026-11-12
+
+### Adaptive AI Masks
+- Presets, Paste Settings and Sync now carry what an AI mask selects, not the first photo's selection. Copy a look with a subject mask and a background mask from one portrait, paste it to 200 others, and each photo gets its own subject and background.
+- The edit shows at once; the masks are found in the background, with a ring in the top bar. Brush and gradient parts of a mask stay as they were.
+- Photo ▸ Update AI Masks finds a photo's AI masks again, after a crop or an edit that moved the subject.
+
+### Subject, Background and Person Masks Right at 1:1
+- Masks follow fingers, arm gaps and hair at full size: the background between fingers and in gaps is left out, strands stay in, and edges sit on the photo's own edges without a halo.
+- BiRefNet Matting is now the default hair edge when it is installed; Settings ▸ Faces ▸ Hair Edges still offers Current.
+- New masks take a few more seconds to make, once per photo; sliders stay as fast.
+
 ## 2026-11-09
 
 ### Remove Draws One Outline and Fills Loops
