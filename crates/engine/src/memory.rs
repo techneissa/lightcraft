@@ -180,10 +180,16 @@ thread_local! {
 /// Run `f` as background work (grid thumbnails, neighbour prefetch): its decodes wait at the
 /// [`work_gate`] while interactive work holds the memory.
 pub fn in_background<R>(f: impl FnOnce() -> R) -> R {
-    let was = BACKGROUND.with(|b| b.replace(true));
-    let r = f();
-    BACKGROUND.with(|b| b.set(was));
-    r
+    /// Puts the thread's flag back when `f` returns or unwinds: a pool worker that survives a panicking job must not
+    /// run its next, interactive job as background work.
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            BACKGROUND.with(|b| b.set(self.0));
+        }
+    }
+    let _restore = Restore(BACKGROUND.with(|b| b.replace(true)));
+    f()
 }
 
 /// Is this thread running background work ([`in_background`])?
@@ -333,5 +339,16 @@ impl crate::Session {
         let b = set_budget(bytes);
         self.media.set_budget(cache_share(b));
         b
+    }
+}
+
+#[cfg(test)]
+mod background_flag_tests {
+    /// A pool worker survives a panicking background job (#227); its next job must not run as background work.
+    #[test]
+    fn a_panicking_background_job_leaves_the_thread_interactive() {
+        let r = std::panic::catch_unwind(|| super::in_background(|| panic!("a background job failed")));
+        assert!(r.is_err());
+        assert!(!super::is_background());
     }
 }

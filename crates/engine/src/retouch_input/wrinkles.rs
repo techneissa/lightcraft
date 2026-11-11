@@ -181,16 +181,20 @@ mod tests {
         struct Stopper<'a>(Activity, Arc<std::sync::atomic::AtomicUsize>, &'a AtomicBool);
         impl Filler for Stopper<'_> {
             fn fill(&mut self, _: &Rgb32f, _: &Plane) -> Fill {
-                let rows = self.0.list();
-                self.1.store(rows.len(), Ordering::SeqCst);
-                assert_eq!(rows.iter().filter(|r| r.kind == "retouch.wrinkles").count(), 1, "{rows:?}");
-                for r in &rows {
-                    self.0.cancel(r.id).expect("the row can be cancelled");
-                }
                 Fill::Unavailable
             }
 
+            // (the search no longer fills with LaMa (#201), so the row is checked and its ✕ pressed the first time the
+            // search asks whether it should stop)
             fn cancelled(&self) -> bool {
+                if self.1.load(Ordering::SeqCst) == 0 {
+                    let rows = self.0.list();
+                    self.1.store(rows.len(), Ordering::SeqCst);
+                    assert_eq!(rows.iter().filter(|r| r.kind == "retouch.wrinkles").count(), 1, "{rows:?}");
+                    for r in &rows {
+                        self.0.cancel(r.id).expect("the row can be cancelled");
+                    }
+                }
                 self.2.load(Ordering::Relaxed)
             }
         }

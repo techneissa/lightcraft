@@ -295,14 +295,30 @@ fn pool_drop_is_bounded_when_a_job_never_ends() {
     drop(p);
 }
 
+// issue #227: a job that panicked never sent its result, so whoever waited for it waited for ever
+#[test]
+fn a_job_that_panics_sends_a_failed_result_and_the_slot_runs_its_next_job() {
+    let mut p: JobPool<u8, Result<u32, String>> = JobPool::new(1);
+    p.submit_or(1, 7, 1, Box::new(|| panic!("a job panics (expected in this test)")), Box::new(Err));
+    assert!(p.wait(std::time::Duration::from_secs(30)), "the failed result arrives");
+    let done = p.try_recv().expect("the failed result");
+    assert_eq!((done.slot, done.key), (1, 7));
+    let message = done.result.expect_err("a panicking job fails");
+    assert!(message.contains("a job panics"), "{message}");
+
+    // the slot is free and the worker lives on: a later job for the same slot runs
+    p.submit_or(1, 8, 1, Box::new(|| Ok(5)), Box::new(Err));
+    assert!(p.wait(std::time::Duration::from_secs(30)), "the next job's result arrives");
+    let done = p.try_recv().expect("the next result");
+    assert_eq!((done.slot, done.key, done.result), (1, 8, Ok(5)));
+    assert_eq!(p.live_workers(), 1);
+}
+
 #[test]
 fn pool_stops_after_a_job_panicked_and_when_dropped_by_its_own_job() {
-    // a worker that unwound is not waited for
+    // a worker that survived a panic is stopped like any other
     let mut p: JobPool<u8, ()> = JobPool::new(1);
     p.submit(1, 0, 1, Box::new(|| panic!("a job panics (expected in this test)")));
-    while p.live_workers() > 0 {
-        std::thread::yield_now();
-    }
     assert!(p.shutdown(std::time::Duration::from_secs(30)));
 
     // the last owner of a pool is one of its jobs: the worker must not wait for (or join) itself
@@ -743,12 +759,12 @@ fn a_slot_runs_one_job_at_a_time() {
     assert_eq!(most.load(Ordering::SeqCst), 1, "slot 1 ran two jobs at once");
 }
 
-/// A job that panics still frees its slot: the slot's next job runs (on another worker).
+/// A job that panics still frees its slot: the slot's next job runs, and no worker is lost.
 #[test]
 fn a_panicking_job_frees_its_slot() {
     let mut p: JobPool<u8, u32> = JobPool::new(2);
     p.submit(1, 1, 9, Box::new(|| panic!("simulated render panic")));
-    assert!(eventually(10, || !p.is_queued(1) && p.live_workers() == 1));
+    assert!(eventually(10, || !p.is_queued(1)));
     p.submit(1, 2, 9, Box::new(|| 2));
     let mut got = None;
     assert!(eventually(10, || {
@@ -756,6 +772,7 @@ fn a_panicking_job_frees_its_slot() {
         got.is_some()
     }));
     assert_eq!(got, Some(2));
+    assert_eq!(p.live_workers(), 2, "the panic didn't end its worker");
 }
 
 /// Deferred disk writes go through one writer with a byte budget: a burst of big renders can't queue more than the

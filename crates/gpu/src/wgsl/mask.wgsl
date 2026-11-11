@@ -1,8 +1,32 @@
 // Mask evaluation (`lightcraft_pipeline::masks`): one component shape → `c`, then combined into
 // the mask's alpha plane. Bindings: img (rgb, pre-exposure), log_l, aux (shape data), c, alpha.
 
-// Position of output pixel (x, y) in long-edge units: P[4..10] = affine (a, b, c, d, e, f).
+// Point k of the position grid in aux (long-edge units).
+fn grid_point(k: u32) -> vec2<f32> {
+    return vec2<f32>(aux[2u * k], aux[2u * k + 1u]);
+}
+
+// Position of output pixel (x, y) in long-edge units through a warp, from the position grid
+// (`masks::grid::PosGrid::fill`, `gpu_table`): P[19..25] = ox, oy, i0, j0, points per row, cell.
+fn grid_pos(x: u32, y: u32) -> vec2<f32> {
+    let cell = pu(24u);
+    let gx = x + pu(19u);
+    let gy = y + pu(20u);
+    let s = pu(23u);
+    let k = (gy / cell - pu(22u)) * s + gx / cell - pu(21u);
+    let fx = (f32(gx % cell) + 0.5) / f32(cell);
+    let fy = (f32(gy % cell) + 0.5) / f32(cell);
+    let a = grid_point(k) + (grid_point(k + s) - grid_point(k)) * fy;
+    let b = grid_point(k + 1u) + (grid_point(k + s + 1u) - grid_point(k + 1u)) * fy;
+    return a + (b - a) * fx;
+}
+
+// Position of output pixel (x, y) in long-edge units: P[4..10] = affine (a, b, c, d, e, f), or with
+// P[18] ≠ 0 the position grid.
 fn pos(x: u32, y: u32) -> vec2<f32> {
+    if (pu(18u) != 0u) {
+        return grid_pos(x, y);
+    }
     let px = f32(x) + 0.5;
     let py = f32(y) + 0.5;
     return vec2<f32>(pf(4u) * px + pf(6u) * py + pf(8u), pf(5u) * px + pf(7u) * py + pf(9u));
@@ -10,6 +34,7 @@ fn pos(x: u32, y: u32) -> vec2<f32> {
 
 // P: w, h, kind, invert, affine[6], then per kind:
 //   0 linear: a.xy, d.xy, |d|²         1 radial: centre.xy, cos, sin, rx, ry, feather, invert
+//   (0 and 1: then P[18] = grid, P[19..25] its table: see `grid_pos`)
 //   2 luminance range: lo, hi, lo feather, hi feather, ev
 //   3 colour range: tol, gain, sample count (OkLab triples in aux)
 //   (brush strokes: see `stroke`)
