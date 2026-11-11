@@ -1,5 +1,5 @@
-//! The worker's side of the finished full-size picture ([`super`]): read it from disk, or render it band by band,
-//! make its smaller levels and cut every level into textures.
+//! The worker's side of the finished full-size picture ([`super`]): read it from disk, or render it in one
+//! whole-frame render, make its smaller levels and cut every level into textures.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -9,15 +9,6 @@ use lightcraft_engine::RenderJob;
 use lightcraft_engine::media::{RenderResult, SourceRef};
 use lightcraft_preview::{Hash128, PreviewCache};
 use lightcraft_raster::Rgba8;
-
-/// One band of the frame to render: its job renders the band with `margin` rows of context above and below
-/// (fewer at the frame's edges), and the band itself is rows `rows.0..rows.1` of the frame.
-pub struct Band {
-    pub job: RenderJob,
-    pub rows: (usize, usize),
-    /// The first row of the frame the job renders.
-    pub top: usize,
-}
 
 /// What the worker is asked to do (made on the UI thread).
 pub struct Plan {
@@ -30,11 +21,10 @@ pub struct Plan {
     /// The smallest level kept is the first at least this long (the photo's long edge as drawn at Fit): smaller
     /// views are drawn from the whole-frame render.
     pub min_edge: usize,
-    /// The bands to render, top to bottom, when it isn't on disk (empty: only look on disk). One band with no
-    /// margin is the whole frame in one render.
-    pub bands: Vec<Band>,
+    /// Render the picture when it isn't on disk (else only look there).
+    pub render: bool,
     /// Set when the picture is no longer wanted (an edit, another photo, the loupe closed, the activity row's ✕):
-    /// the build stops at the next band and nothing is cut or written.
+    /// the build stops before its render (or gives up its place at the memory gate), and nothing is cut or written.
     pub cancel: Arc<AtomicBool>,
     /// The builds of this store running now, and the most that ever ran at once (never two).
     pub at_once: Arc<AtOnce>,
@@ -71,8 +61,8 @@ pub struct Built {
     pub from_disk: bool,
 }
 
-/// The worker's part: the picture from disk, else rendered band by band, kept on disk and cut into textures. `job`
-/// stands for the whole picture (its key and photo; the result of a picture read from disk or not made).
+/// The worker's part: the picture from disk, else rendered (`job`, the whole frame at its own size), kept on disk and
+/// cut into textures.
 ///
 /// A panic inside is a failed build (the activity row ends, and the next look builds), not a dead worker.
 pub fn work(job: RenderJob, plan: Plan) -> (RenderResult, Option<Built>) {
@@ -97,91 +87,50 @@ fn make(job: RenderJob, plan: Plan) -> (RenderResult, Option<Built>) {
         }
         return (job.failed("read from disk".into()), Some(cut(&img, &plan, true)));
     }
-    if plan.bands.is_empty() {
+    if !plan.render {
         return (job.failed("not on disk".into()), None);
     }
-    let (first, img) = render(&plan);
-    // (the result stands for the whole picture: its request, key and photo, with the original the first band decoded)
-    let first = match first {
-        Some(mut r) => {
-            r.request_id = job.request_id;
-            r.key = job.key;
-            r.photo = job.photo;
-            r
-        }
-        None => job.failed("cancelled".into()),
-    };
+    let (r, img) = render(job, &plan);
     // (an edit or another photo while it rendered: nothing of it is cut or kept)
-    let Some(img) = img.filter(|_| !cancelled()) else { return (first, None) };
+    let Some(img) = img.filter(|_| !cancelled()) else { return (r, None) };
     let built = cut(&img, &plan, false);
     if cancelled() {
-        return (first, None);
+        return (r, None);
     }
     if let Some((cache, key)) = plan.disk.clone() {
         keep_on_disk(cache, key, img, plan.writing.clone());
     }
-    (first, Some(built))
+    (r, Some(built))
 }
 
 fn near(img: &Rgba8, size: [usize; 2]) -> bool {
     img.width.abs_diff(size[0]) <= 1 && img.height.abs_diff(size[1]) <= 1
 }
 
-/// Render the bands into one picture, stopping at the first band after a cancel. Returns the first band's result
-/// (it carries the original it decoded, for the session's cache) and the picture, if every band made its part.
-pub(super) fn render(plan: &Plan) -> (Option<RenderResult>, Option<Rgba8>) {
-    let [w, h] = plan.size;
-    let mut first: Option<RenderResult> = None;
-    let mut out: Option<Rgba8> = None;
-    let mut decoded: Option<SourceRef> = None;
-    for band in &plan.bands {
-        if plan.cancel.load(Ordering::Relaxed) {
-            return (first, None);
-        }
-        let mut job = band.job.clone();
-        // (the original the first band decoded serves the others: decoded once)
-        if let Some(src) = &decoded {
-            job.source = src.clone();
-        }
-        // A band that reads the file first waits its turn at the memory gate, like other background work, and gives
-        // up there once the build is stopped: AI Denoise holds the gate for its whole run, and a build stopped by an
-        // edit must not wait for it. Past the gate the load takes its own place without queueing again.
-        if !wait_at_gate(&job, &plan.cancel) {
-            return (first, None);
-        }
-        let mut r = job.run();
-        if decoded.is_none()
-            && let Some(src) = &r.loaded
-        {
-            decoded = Some(SourceRef::Loaded(Box::new(src.clone())));
-        }
-        let part = match &mut r.rendered {
-            Ok(x) if x.deep.is_none() => std::mem::replace(&mut x.image, Rgba8 { width: 0, height: 0, data: Vec::new() }),
-            _ => return (first.or(Some(r)), None),
-        };
-        // one band, the whole frame: the picture is the render
-        if plan.bands.len() == 1 && band.rows == (0, h) && band.top == 0 && near(&part, plan.size) {
-            return (first.or(Some(r)), Some(part));
-        }
-        let skip = band.rows.0.saturating_sub(band.top);
-        let rows = band.rows.1.saturating_sub(band.rows.0);
-        if part.width != w || part.height < skip + rows {
-            return (first.or(Some(r)), None);
-        }
-        let img = out.get_or_insert_with(|| Rgba8 { width: w, height: h, data: vec![[0; 4]; w * h] });
-        let src = part.data.get(skip * w..(skip + rows) * w).unwrap_or_default();
-        if let Some(dst) = img.data.get_mut(band.rows.0 * w..band.rows.1 * w)
-            && dst.len() == src.len()
-        {
-            dst.copy_from_slice(src);
-        } else {
-            return (first.or(Some(r)), None);
-        }
-        if first.is_none() {
-            first = Some(r);
-        }
+/// Render the whole frame in one render, unless the build was stopped first. Returns the render's result (it carries
+/// the original it decoded, for the session's cache) and the picture, when it made one of the size asked for.
+///
+/// One render, not bands: a band is a window render, and each repeats work done for the whole frame (the source's
+/// upload and sampling, the reduced whole frame the wide planes come from, the noise model) besides its margins of
+/// context. Three bands of a 45 MP photo took about twice the GPU and CPU time of the one render (#199).
+pub(super) fn render(job: RenderJob, plan: &Plan) -> (RenderResult, Option<Rgba8>) {
+    if plan.cancel.load(Ordering::Relaxed) {
+        return (job.failed("cancelled".into()), None);
     }
-    (first, out)
+    // A render that reads the file first waits its turn at the memory gate, like other background work, and gives up
+    // there once the build is stopped: AI Denoise holds the gate for its whole run, and a build stopped by an edit must
+    // not wait for it. Past the gate the load takes its own place without queueing again.
+    if !wait_at_gate(&job, &plan.cancel) {
+        return (job.failed("cancelled".into()), None);
+    }
+    let mut r = job.run();
+    let img = match &mut r.rendered {
+        Ok(x) if x.deep.is_none() && near(&x.image, plan.size) => {
+            Some(std::mem::replace(&mut x.image, Rgba8 { width: 0, height: 0, data: Vec::new() }))
+        }
+        _ => None,
+    };
+    (r, img)
 }
 
 /// What a file load weighs at the memory gate per byte of the file (as the file loader weighs a full-size load).

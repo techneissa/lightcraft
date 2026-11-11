@@ -978,7 +978,7 @@ impl Renderer {
             return;
         }
         let priority = crate::full_picture::PRIORITY;
-        let render = !plan.bands.is_empty();
+        let render = plan.render;
         let what = if render { "requested" } else { "looked for on disk" };
         self.note_request(Slot::Full, job.key, priority, what, || render_subject(Slot::Full, job.photo, Some(&job.origin)));
         if render {
@@ -999,7 +999,7 @@ impl Renderer {
     }
 
     /// Stop the loupe's full-size picture: let go of the one held, drop its job when it hasn't started, and make one
-    /// that is running stop at its next band (its result is dropped when it comes back).
+    /// that is running stop before its render (its result is dropped when it comes back).
     pub fn cancel_full(&mut self) {
         self.full.clear();
         if self.drop_queued(Slot::Full) {
