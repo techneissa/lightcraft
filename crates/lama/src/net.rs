@@ -145,48 +145,67 @@ impl Lama {
     /// the picture with the hole replaced, same layout. Sides are padded to a multiple of [`MODULO`]
     /// by mirroring and cut back.
     pub fn inpaint(&self, rgb: &[f32], hole: &[f32], w: usize, h: usize, cancel: &dyn Fn() -> bool) -> Result<Vec<f32>> {
-        let n = w.checked_mul(h).ok_or_else(|| Error::Input("picture too large".into()))?;
-        if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE {
-            return Err(Error::Input(format!("cannot fill a {w}×{h} picture (1 to {MAX_SIDE} pixels a side)")));
-        }
-        if rgb.len() != n * 3 || hole.len() != n {
-            return Err(Error::Input(format!("buffers hold {} and {} values for {w}×{h} pixels", rgb.len(), hole.len())));
-        }
-        if rgb.iter().chain(hole).any(|v| !v.is_finite()) {
-            return Err(Error::Input("the picture or hole has a value that is not a number".into()));
-        }
+        check_input(rgb, hole, w, h)?;
         let (pw, ph) = (w.max(MIN_SIDE).div_ceil(MODULO) * MODULO, h.max(MIN_SIDE).div_ceil(MODULO) * MODULO);
-        let (px, py) = (mirror_index(pw, w), mirror_index(ph, h));
-        let mut planes = vec![0f32; 4 * pw * ph];
-        for y in 0..ph {
-            for x in 0..pw {
-                let src = py[y] * w + px[x];
-                let m = hole[src].clamp(0.0, 1.0);
-                for c in 0..3 {
-                    // the model sees the picture with the hole blanked
-                    planes[c * pw * ph + y * pw + x] = rgb[src * 3 + c].clamp(0.0, 1.0) * (1.0 - m);
-                }
-                planes[3 * pw * ph + y * pw + x] = m;
-            }
-        }
-        let input = Tensor::from_vec(planes, (1, 4, ph, pw), &self.device)?;
+        let input = Tensor::from_vec(planes(rgb, hole, (w, h), (pw, ph)), (1, 4, ph, pw), &self.device)?;
+        // rows (h·w, 3)
         let out = self.generate(&input, cancel)?.to_device(&Device::Cpu)?.flatten_all()?.to_vec1::<f32>()?;
-        let mut result = rgb.to_vec();
-        for y in 0..h {
-            for x in 0..w {
-                let m = hole[y * w + x].clamp(0.0, 1.0);
-                if m > 0.0 {
-                    for c in 0..3 {
-                        let pred = out.get((y * pw + x) * 3 + c).copied().unwrap_or(0.0);
-                        if let Some(r) = result.get_mut((y * w + x) * 3 + c) {
-                            *r = m * pred + (1.0 - m) * *r;
-                        }
+        Ok(put_back(rgb, hole, w, h, |x, y, c| out.get((y * pw + x) * 3 + c).copied().unwrap_or(0.0)))
+    }
+}
+
+/// Whether `rgb` and `hole` are a picture of `w × h` pixels the model can fill: 1 to [`MAX_SIDE`] a side, the
+/// buffers' lengths right, every value a number.
+pub(crate) fn check_input(rgb: &[f32], hole: &[f32], w: usize, h: usize) -> Result<()> {
+    let n = w.checked_mul(h).ok_or_else(|| Error::Input("picture too large".into()))?;
+    if w == 0 || h == 0 || w > MAX_SIDE || h > MAX_SIDE {
+        return Err(Error::Input(format!("cannot fill a {w}×{h} picture (1 to {MAX_SIDE} pixels a side)")));
+    }
+    if rgb.len() != n * 3 || hole.len() != n {
+        return Err(Error::Input(format!("buffers hold {} and {} values for {w}×{h} pixels", rgb.len(), hole.len())));
+    }
+    if rgb.iter().chain(hole).any(|v| !v.is_finite()) {
+        return Err(Error::Input("the picture or hole has a value that is not a number".into()));
+    }
+    Ok(())
+}
+
+/// The model's input, channel-first `(4, ph, pw)`: the picture with the hole blanked, then the hole, mirrored at the
+/// right and bottom edges from `w × h` up to `pw × ph` (`np.pad(.., "symmetric")`). Inputs checked by [`check_input`].
+pub(crate) fn planes(rgb: &[f32], hole: &[f32], (w, h): (usize, usize), (pw, ph): (usize, usize)) -> Vec<f32> {
+    let (px, py) = (mirror_index(pw, w), mirror_index(ph, h));
+    let mut planes = vec![0f32; 4 * pw * ph];
+    for (y, sy) in py.iter().enumerate() {
+        for (x, sx) in px.iter().enumerate() {
+            let src = sy * w + sx;
+            let m = hole.get(src).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+            for c in 0..3 {
+                // the model sees the picture with the hole blanked
+                planes[c * pw * ph + y * pw + x] = rgb.get(src * 3 + c).copied().unwrap_or(0.0).clamp(0.0, 1.0) * (1.0 - m);
+            }
+            planes[3 * pw * ph + y * pw + x] = m;
+        }
+    }
+    planes
+}
+
+/// `rgb` (`w × h`) with the hole's pixels taken from the model's prediction `pred(x, y, channel)`, blended by the hole's
+/// value.
+pub(crate) fn put_back(rgb: &[f32], hole: &[f32], w: usize, h: usize, pred: impl Fn(usize, usize, usize) -> f32) -> Vec<f32> {
+    let mut result = rgb.to_vec();
+    for y in 0..h {
+        for x in 0..w {
+            let m = hole.get(y * w + x).copied().unwrap_or(0.0).clamp(0.0, 1.0);
+            if m > 0.0 {
+                for c in 0..3 {
+                    if let Some(r) = result.get_mut((y * w + x) * 3 + c) {
+                        *r = m * pred(x, y, c) + (1.0 - m) * *r;
                     }
                 }
             }
         }
-        Ok(result)
     }
+    result
 }
 
 /// For each of `padded` positions, the source index in `0..n`, mirrored at the end (`np.pad(.., "symmetric")`).

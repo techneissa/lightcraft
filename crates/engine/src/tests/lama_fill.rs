@@ -269,3 +269,37 @@ fn one_row_serves_all_the_spots_of_a_render_and_its_cross_stops_them_all() {
     // another render is not stopped
     assert!(!FillRun::new().stopped());
 }
+
+/// LaMa's Core ML version (issue #268) missing or damaged: on Automatic the fill goes on to candle (here candle's own
+/// "could not read" of a damaged `big-lama.pt`), on Core ML it is Core ML's error; never a crash. Runs everywhere (off
+/// the Mac Core ML is unavailable).
+#[test]
+fn without_a_working_core_ml_model_the_fill_goes_to_candle() {
+    use lightcraft_coreml::Runtime;
+    let (fill, dir, _activity) = fill_with_dir("coreml-fallback");
+    std::fs::write(dir.join(MODEL_FILE), b"this is not a model").unwrap();
+    let (rgb, hole) = picture(160, 120);
+    let ask = |fill: &LamaFill| {
+        fill.fill(&FillRun::new(), &rgb, &hole, 160, 120, false);
+        fill.message().unwrap_or_default()
+    };
+    // no package
+    assert!(!fill.coreml_installed());
+    assert!(ask(&fill).contains("could not read the LaMa model"), "{:?}", fill.message());
+    fill.set_runtime(Runtime::CoreMl);
+    assert!(ask(&fill).contains("Core ML"), "{:?}", fill.message());
+    // a package that is not one
+    let (package, _) = lightcraft_lama::coreml::paths(&dir);
+    std::fs::create_dir_all(&package).unwrap();
+    std::fs::write(package.join("Manifest.json"), b"not a manifest").unwrap();
+    assert!(fill.coreml_installed());
+    fill.set_runtime(Runtime::Automatic);
+    assert!(ask(&fill).contains("could not read the LaMa model"), "{:?}", fill.message());
+    fill.set_runtime(Runtime::CoreMl);
+    assert!(ask(&fill).contains("Core ML"), "{:?}", fill.message());
+    assert!(!fill.coreml_ready());
+    // Candle never looks at it
+    fill.set_runtime(Runtime::Candle);
+    assert!(ask(&fill).contains("could not read the LaMa model"), "{:?}", fill.message());
+    let _ = std::fs::remove_dir_all(dir);
+}

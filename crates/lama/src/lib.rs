@@ -7,6 +7,9 @@
 //! - [`region`] fills a hole in a bigger picture: it works on a crop around the hole, at most 512
 //!   pixels on a side, and puts only the hole's pixels back.
 //!
+//! - [`coreml`] runs the same network through Apple's Core ML on the Neural Engine, when its converted package is in
+//!   the model's folder (issue #268); candle stays the reference and the fallback.
+//!
 //! The Fourier units' `rfft2` / `irfft2` ([`fft`]) are matrix products on the model's device. Metal
 //! on macOS (when a GPU is available), else the CPU ([`best_device`]).
 //!
@@ -18,6 +21,7 @@
 
 mod checkpoint;
 mod cl;
+pub mod coreml;
 mod error;
 pub mod fft;
 mod layers;
