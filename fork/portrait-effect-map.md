@@ -29,8 +29,9 @@ the same blob whatever the value, and the same for every slider of a feature. No
 ## Speed
 
 Measured on the CPU in both renderers, from the image before the step the render keeps (`StageCache`'s
-`pre_retouch`, the GPU's host copy). The image with the slider at its default is kept between ticks (one, under the
-host budget), so a tick retouches once more. Only the box round the changed pixels is blurred and curved. On a test
+`pre_retouch`, the GPU's host copy; made and kept here when there is none, as on the GPU with a raw's local tone map
+on). The image with the slider at its default is kept between ticks (one, under the host budget), so a tick retouches
+once more. Only the box round the changed pixels is blurred and curved. On a test
 Mac under load, a 1920 × 1280 draft: the view's own work 5–14 ms for tone sliders, about 1 ms for Face Reshape; a
 whole ⌥ tick 12–25 ms against 8–16 ms plain (GPU), so the view updates live. `LIGHTCRAFT_PROFILE=1` prints
 `retouch effect map: <ms>`.

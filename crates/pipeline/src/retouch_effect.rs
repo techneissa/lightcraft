@@ -8,7 +8,6 @@
 //! map shows what the feature does on this face as its algorithm is now, grows with the value, and is 0 everywhere
 //! with the slider at its default.
 
-use std::borrow::Cow;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use lightcraft_color::perceptual::oklab_from_2020;
@@ -50,13 +49,17 @@ pub fn effect(src: &Rgb32f, pre: Option<&Rgb32f>, info: &SourceInfo, p: &Plan<'_
     Some(crate::timed("retouch effect map", || match f.stage {
         Stage::Geometry => moves(info, p, &without, face),
         Stage::Retouch | Stage::Background => {
+            let made;
             let pre = match pre.filter(|i| (i.width, i.height) == (p.w, p.h)) {
-                Some(i) => Cow::Borrowed(i),
-                None => Cow::Owned(before_step(src, info, p)),
+                Some(i) => i,
+                None => {
+                    made = before_step(src, info, p);
+                    &*made
+                }
             };
-            let mut with = pre.as_ref().clone();
+            let mut with = pre.clone();
             retouch_step::apply_with(&mut with, info, p, &p.settings);
-            let gone = without_image(&pre, info, p, &without);
+            let gone = without_image(pre, info, p, &without);
             let gain = (p.settings.light.exposure as f32).exp2();
             let sigma = (BLUR * p.px_per_long) as f32;
             looks_apart(&with, &gone, if gain.is_finite() { gain } else { 1.0 }, sigma)
@@ -78,13 +81,24 @@ fn without(s: &DevelopSettings, id: &str, default: f64, input: &Input, face: u8,
     Some(out)
 }
 
-/// The image before the retouch step for `p`, made from the source (a renderer that keeps none, or a render without
-/// a stage cache).
-fn before_step(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Rgb32f {
+/// The image before the retouch step for `p`, made from the source when the renderer kept none (a render without a
+/// stage cache, or the GPU's with the local tone map on), and kept for the next tick.
+fn before_step(src: &Rgb32f, info: &SourceInfo, p: &Plan<'_>) -> Arc<Rgb32f> {
+    let key = crate::hash_of((p.pre_retouch_key, (p.w, p.h), crate::optics::fingerprint(src), format!("{:?}", p.frame)));
+    let kept = PRE.lock().unwrap_or_else(PoisonError::into_inner).as_ref().filter(|(k, _)| *k == key).and_then(|(_, kept)| kept.get());
+    if let Some(img) = kept {
+        return img;
+    }
     let mut img = p.frame.sample(src, p.w, p.h);
     crate::lin_cpu_pre_retouch(&mut img, info, p);
+    let img = Arc::new(img);
+    let bytes = img.data.len() * std::mem::size_of::<[f32; 3]>();
+    *PRE.lock().unwrap_or_else(PoisonError::into_inner) = Some((key, Kept::new(img.clone(), &[(&HOST, bytes)])));
     img
 }
+
+/// The last image [`before_step`] made, by what it is made from.
+static PRE: Mutex<Option<(u64, Kept<Rgb32f>)>> = Mutex::new(None);
 
 /// The last image retouched with the slider at its default, by what it is made from: a drag of one slider moves only
 /// the settings it is compared with, so each tick retouches once more, not twice.
