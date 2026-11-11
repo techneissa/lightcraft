@@ -120,7 +120,9 @@ fn tile(img: &Rgb<'_>, a: &[f32], (x0, y0, x1, y1): (usize, usize, usize, usize)
     }
     let ma: Vec<Vec<f64>> = ca.iter().map(|c| mean(c)).collect();
     let mb = mean(&cb);
-    let sides = Sides::of(&ch, &p, rw, rh, SIDES * r);
+    // (the colours of the sure sides only where the background around this tile is plain: elsewhere they are never
+    // trusted, so they are not worth working out)
+    let sides = plain_background(&ch, &p).then(|| Sides::of(&ch, &p, rw, rh, SIDES * r));
     let (tw, th) = (x1 - x0, y1 - y0);
     let mut out = Vec::with_capacity(tw * th);
     for y in 0..th {
@@ -134,7 +136,7 @@ fn tile(img: &Rgb<'_>, a: &[f32], (x0, y0, x1, y1): (usize, usize, usize, usize)
                 // photo's colours can't explain the edge (a busy background) it would blur an edge already crisp)
                 let q = old + unsure(old) * (q - old);
                 // against a plain background, the pixel's place between the two sides' colours
-                let (c, k) = sides.split(i, [ch[0][i], ch[1][i], ch[2][i]]);
+                let (c, k) = sides.as_ref().map_or((0.0, 0.0), |s| s.split(i, [ch[0][i], ch[1][i], ch[2][i]]));
                 k * c + (1.0 - k) * q
             } else {
                 old
@@ -143,6 +145,27 @@ fn tile(img: &Rgb<'_>, a: &[f32], (x0, y0, x1, y1): (usize, usize, usize, usize)
         }
     }
     out
+}
+
+/// Whether some of the region's sure background is one plain colour: the spread of its colours under twice what
+/// [`Sides::split`] still trusts somewhere, measured over the whole region (a busy or blurred background is far over).
+fn plain_background(ch: &[Vec<f64>; 3], p: &[f64]) -> bool {
+    let (mut n, mut s, mut s2) = (0.0f64, [0.0f64; 3], 0.0f64);
+    for (i, v) in p.iter().enumerate() {
+        if *v < 0.02 {
+            n += 1.0;
+            for (c, acc) in s.iter_mut().enumerate() {
+                let x = ch[c].get(i).copied().unwrap_or(0.0);
+                *acc += x;
+                s2 += x * x;
+            }
+        }
+    }
+    if n < 16.0 {
+        return false;
+    }
+    let spread = (s2 / n - s.iter().map(|a| (a / n) * (a / n)).sum::<f64>()).max(0.0).sqrt();
+    spread < 0.12
 }
 
 /// How far around a pixel the colours of the sure sides are read, in radii of the filter.
