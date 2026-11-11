@@ -437,6 +437,7 @@ impl Headless {
             || self.app.macos_job.is_some()
             || self.app.session.sidecar_writes_pending() > 0
             || self.app.session.denoise_busy()
+            || self.app.session.adaptive_busy()
             || !self.app.tasks.is_empty()
             || !self.app.synthetic.is_empty()
             || !self.app.pending_gestures.is_empty()

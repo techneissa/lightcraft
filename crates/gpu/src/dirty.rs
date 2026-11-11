@@ -300,7 +300,7 @@ pub(crate) fn eligible(info: &SourceInfo, plan: &Plan<'_>) -> bool {
     !lightcraft_pipeline::local_tone::enabled(info, s)
         && !s.spots.iter().any(lightcraft_pipeline::spots::drawn_on_cpu)
         && plan.eyes.is_empty()
-        && !s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).any(|m| lightcraft_pipeline::masks::reads(m).0)
+        && !s.masks.iter().filter(|m| m.renders()).any(|m| lightcraft_pipeline::masks::reads(m).0)
 }
 
 /// The kept linear image `old` with the tiles `spots` (where the image after the spots changed) and as far as noise

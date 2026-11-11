@@ -753,7 +753,7 @@ pub fn plane_sigmas(s: &DevelopSettings, px_per_long: f64, detail_scale: f32, _q
     let ppl = px_per_long as f32;
     // A hidden mask, or one with no components, does not change the picture. Its sliders must
     // not pick the tone base Clarity reads (#1214).
-    let live = |m: &&lightcraft_develop::Mask| m.visible && !m.components.is_empty();
+    let live = |m: &&lightcraft_develop::Mask| m.renders();
     let local_any = |f: fn(&lightcraft_develop::LocalAdjustments) -> f64| s.masks.iter().filter(live).any(|m| f(&m.adjust) != 0.0);
     let tone_active = s.light.highlights != 0.0
         || s.light.shadows != 0.0

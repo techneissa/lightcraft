@@ -25,7 +25,6 @@ use crate::people_parsing::{Outcome, PARSE_EDGE};
 
 pub mod grid;
 pub mod parts;
-mod rebase;
 
 /// The parser's types, for hosts that show or fake a parse (the UI's tests).
 pub use lightcraft_parsing as parsing;
@@ -291,6 +290,11 @@ impl Session {
     /// Find photo `id`'s people on a worker thread, once (nothing starts while they are known, being found, or
     /// failed, unless `again`).
     pub fn people_find(&mut self, id: PhotoId, again: bool) {
+        self.people_find_under(id, again, None);
+    }
+
+    /// [`Session::people_find`], its row under row `parent` when given (one photo of a batch: `crate::adaptive`).
+    pub(crate) fn people_find_under(&mut self, id: PhotoId, again: bool, parent: Option<u64>) {
         let Some(key) = self.people_key(id) else { return };
         match self.select_people.get(&key) {
             Some(Entry::Busy(_)) => return,
@@ -306,7 +310,10 @@ impl Session {
         {
             let store = self.select_people.clone();
             let parsing = self.parsing.clone();
-            let row = self.activity.start("selectPeople", "Finding people", crate::activity::Cancel::No);
+            let row = match parent {
+                Some(p) => self.activity.start_child(p, "selectPeople", "Finding people", crate::activity::Cancel::No),
+                None => self.activity.start("selectPeople", "Finding people", crate::activity::Cancel::No),
+            };
             let spawned = std::thread::Builder::new().name("select-people".into()).spawn({
                 let key = key.clone();
                 let store = store.clone();
@@ -332,7 +339,7 @@ impl Session {
         }
         #[cfg(target_arch = "wasm32")]
         {
-            let _ = prep;
+            let _ = (prep, parent);
             self.select_people.finish(&key, ticket, Entry::Failed("the web build has no people parsing".into()));
         }
     }

@@ -2596,5 +2596,7 @@
   "Reading depth map": "Читання карти глибини",
   "Preparing the full-size view": "Підготовка повнорозмірного перегляду",
   "Reading the full-size photo": "Читання фото в повному розмірі",
-  "Preparing photos in the background": "Підготовка фото у фоновому режимі"
+  "Preparing photos in the background": "Підготовка фото у фоновому режимі",
+  "Finding AI masks": "Пошук масок ШІ",
+  "Update AI Masks": "Оновити маски ШІ"
 }

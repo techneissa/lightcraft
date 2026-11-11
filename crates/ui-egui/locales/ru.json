@@ -2806,5 +2806,7 @@
   "Reading depth map": "Чтение карты глубины",
   "Preparing the full-size view": "Подготовка полноразмерного просмотра",
   "Reading the full-size photo": "Чтение фото в полном размере",
-  "Preparing photos in the background": "Подготовка фото в фоновом режиме"
+  "Preparing photos in the background": "Подготовка фото в фоновом режиме",
+  "Finding AI masks": "Поиск ИИ-масок",
+  "Update AI Masks": "Обновить ИИ-маски"
 }

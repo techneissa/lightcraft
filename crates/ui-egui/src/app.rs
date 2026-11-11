@@ -589,7 +589,8 @@ impl LightcraftApp {
         }
         let seg = &self.session.segmenter;
         // (Object clicks of the Remove tool too, `fork/object-remove.md`)
-        if seg.busy() || seg.pending_clicks().is_some() || self.session.object_jobs.busy() {
+        // (and AI mask parts found again on pasted photos, `fork/adaptive-masks.md`)
+        if seg.busy() || seg.pending_clicks().is_some() || self.session.object_jobs.busy() || self.session.adaptive_busy() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
         let download = seg.download_status();

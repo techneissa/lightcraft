@@ -2540,5 +2540,7 @@
   "Reading depth map": "Läser djupkarta",
   "Preparing the full-size view": "Förbereder vy i full storlek",
   "Reading the full-size photo": "Läser fotot i full storlek",
-  "Preparing photos in the background": "Förbereder foton i bakgrunden"
+  "Preparing photos in the background": "Förbereder foton i bakgrunden",
+  "Finding AI masks": "Söker AI-masker",
+  "Update AI Masks": "Uppdatera AI-masker"
 }

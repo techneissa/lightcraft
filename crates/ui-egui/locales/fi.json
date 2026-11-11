@@ -2437,5 +2437,7 @@
   "Reading depth map": "Luetaan syvyyskarttaa",
   "Preparing the full-size view": "Valmistellaan täysikokoista näkymää",
   "Reading the full-size photo": "Luetaan täysikokoista kuvaa",
-  "Preparing photos in the background": "Valokuvia valmistellaan taustalla"
+  "Preparing photos in the background": "Valokuvia valmistellaan taustalla",
+  "Finding AI masks": "Tekoälymaskeja etsitään",
+  "Update AI Masks": "Päivitä tekoälymaskit"
 }

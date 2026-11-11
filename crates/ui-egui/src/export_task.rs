@@ -47,6 +47,12 @@ pub fn start(app: &mut LightcraftApp, items: Vec<PreparedExport>, opts: ExportOp
     if app.export.is_some() {
         return Err("an export is already running".into());
     }
+    // AI masks still being found on pasted photos would export as nothing (fork, `fork/adaptive-masks.md`)
+    let ids: Vec<_> = items.iter().map(|i| i.photo).collect();
+    let waiting = app.session.adaptive_find(&ids);
+    if waiting > 0 {
+        return Err(format!("AI masks are still being found on {waiting} of these photos: export when the ring in the top bar is done"));
+    }
     let write = app.services.write_shared.clone().ok_or("no background writer")?;
     let total = items.len();
     let progress = Arc::new(Mutex::new((0, String::new())));
