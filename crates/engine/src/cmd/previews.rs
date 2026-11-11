@@ -45,6 +45,13 @@ pub struct PreviewBuild {
     pub order: Vec<u64>,
     pub focus: AtomicUsize,
     pub backward: AtomicBool,
+    /// Photos ahead of the focus the loupe prepares itself (0: none, or not in the loupe): a background build
+    /// leaves them, the photo on screen and the one behind it to the loupe and comes back to them last
+    /// ([`PreviewBuild::next_index`]), so the two never decode the same file at once.
+    pub loupe_ahead: AtomicUsize,
+    /// The loupe's canvas (px; 0: not known, or a size was asked for): a view the loupe made that covers it counts as
+    /// built ([`already_built`]).
+    pub loupe_box: (usize, usize),
     /// Test-only: the gate this build's lanes wait at before a photo's first render (see
     /// [`test_gate`]). Captured by `build` on the calling thread; production builds never have one.
     #[cfg(test)]
@@ -81,16 +88,25 @@ impl PreviewBuild {
     }
 
     /// Index of the next photo to build in `queue` (`None`: none left): the first one still there
-    /// from the focus on in the direction of travel, then the rest the other way.
+    /// from the focus on in the direction of travel, then the rest the other way. The loupe's own photos
+    /// ([`Self::loupe_ahead`]) come last: by then the loupe has usually made them, and they are skipped.
     pub(crate) fn next_index<T>(&self, queue: &[Option<T>]) -> Option<usize> {
         let n = queue.len();
         let at = self.focus.load(Ordering::Relaxed).min(n.saturating_sub(1));
-        let there = |i: &usize| queue.get(*i).is_some_and(Option::is_some);
-        if self.backward.load(Ordering::Relaxed) {
-            (0..=at).rev().find(there).or_else(|| (at..n).find(there))
-        } else {
-            (at..n).find(there).or_else(|| (0..at).rev().find(there))
-        }
+        let backward = self.backward.load(Ordering::Relaxed);
+        let ahead = self.loupe_ahead.load(Ordering::Relaxed);
+        // the photo on screen, the one behind it and `ahead` in the direction of travel (as the loupe prepares them)
+        let (from, to) = if backward { (at.saturating_sub(ahead), at.saturating_add(1)) } else { (at.saturating_sub(1), at.saturating_add(ahead)) };
+        let loupes = |i: usize| ahead > 0 && (from..=to).contains(&i);
+        let pick = |leave: bool| {
+            let there = |i: &usize| queue.get(*i).is_some_and(Option::is_some) && !(leave && loupes(*i));
+            if backward {
+                (0..=at).rev().find(there).or_else(|| (at..n).find(there))
+            } else {
+                (at..n).find(there).or_else(|| (0..at).rev().find(there))
+            }
+        };
+        pick(true).or_else(|| pick(false))
     }
 
     pub fn error(&self) -> Option<String> {
@@ -112,15 +128,19 @@ pub(crate) fn jobs_for(s: &mut Session, id: lightcraft_catalog::PhotoId, edge: O
 }
 
 /// The previews the build of one photo would make are all there already, big enough: its view
-/// render at least as large as asked for (`view_cache` of the view job) and its grid thumbnail
-/// (`cache` of the thumbnail job), on disk when the cache has one: a render the loupe kept only in
-/// memory (its deferred disk write skipped) is built again, and written. Only file headers are read.
-pub(crate) fn already_built(jobs: &[RenderJob]) -> bool {
+/// render at least as large as asked for (`view_cache` of the view job), or as large as the loupe shows it on its
+/// canvas `loupe` (width and height; the photo's fit there, as the loupe renders the photos it prepares ahead: it
+/// shows those as they are, #196), and its grid thumbnail (`cache` of the thumbnail job), on disk when the cache has
+/// one: a render the loupe kept only in memory (its deferred disk write skipped) is built again, and written. Only
+/// file headers are read.
+pub(crate) fn already_built(jobs: &[RenderJob], loupe: (usize, usize)) -> bool {
+    // (an image touching the canvas on one side is at least the photo's fit in it)
+    let covers = |(w, h): (usize, usize)| loupe.0 > 0 && loupe.1 > 0 && (w as f64 >= loupe.0 as f64 * 0.99 || h as f64 >= loupe.1 as f64 * 0.99);
     !jobs.is_empty()
         && jobs.iter().all(|j| {
             if let Some((cache, key)) = &j.view_cache {
                 let want = j.request.max_w.max(j.request.max_h) as f64;
-                cache.stored_dims(*key).is_some_and(|(w, h)| w.max(h) as f64 >= want * 0.99)
+                cache.stored_dims(*key).is_some_and(|(w, h)| w.max(h) as f64 >= want * 0.99 || covers((w, h)))
             } else if let Some((cache, key)) = &j.cache {
                 cache.stored_dims(*key).is_some()
             } else {
@@ -427,12 +447,12 @@ fn run_all(jobs: Vec<PhotoJobs>, state: &PreviewBuild, task: Option<&TaskGuard>,
             if state.cancel.load(Ordering::Relaxed) {
                 break;
             }
-            if !force && already_built(&photo_jobs) {
+            if !force && already_built(&photo_jobs, state.loupe_box) {
                 state.skipped.fetch_add(1, Ordering::Relaxed);
             } else if let Some((held, shared)) = Building::wait(id, &photo_jobs, &state.cancel) {
                 // another build was rendering this photo: what it made counts, if it made it (not
                 // for a forced build, which renders every photo itself)
-                if !force && shared && (held.is_none() || already_built(&photo_jobs)) {
+                if !force && shared && (held.is_none() || already_built(&photo_jobs, state.loupe_box)) {
                     state.shared.fetch_add(1, Ordering::Relaxed);
                     let done = state.done.fetch_add(1, Ordering::Relaxed).saturating_add(1);
                     if let Some(task) = task {
@@ -484,6 +504,18 @@ pub fn standard_edge(s: &Session) -> usize {
     STANDARD_EDGE.max(s.loupe_edge.min(8192))
 }
 
+/// The loupe's canvas on this screen ([`Session::loupe_canvas`]), scaled up when its long side is below
+/// [`STANDARD_EDGE`] (standard previews are never smaller); `(0, 0)` when not known.
+pub(crate) fn loupe_box(s: &Session) -> (usize, usize) {
+    let (w, h) = s.loupe_canvas;
+    let long = w.max(h);
+    if w == 0 || h == 0 || long > 8192 {
+        return (0, 0);
+    }
+    let scale = (STANDARD_EDGE as f64 / long as f64).max(1.0);
+    ((w as f64 * scale).round() as usize, (h as f64 * scale).round() as usize)
+}
+
 fn build(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "library.buildPreviews";
     // tests: this invocation's gate, consumed here so an early error cannot attach it to a later build
@@ -523,8 +555,10 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     // start leaves it running and in place: CodeRabbit on #3544)
     let previous = s.preview_build.clone();
     let order = jobs.iter().map(|j| j.0).collect();
+    // (standard previews at the loupe's size: its own renders of this screen are as good; an `edge` asked for is not)
+    let loupe_box = if p.get("edge").is_none() && edge.is_some() { loupe_box(s) } else { (0, 0) };
     #[cfg_attr(not(test), allow(unused_mut))]
-    let mut build_state = PreviewBuild { total: jobs.len(), background, order, ..Default::default() };
+    let mut build_state = PreviewBuild { total: jobs.len(), background, order, loupe_box, ..Default::default() };
     #[cfg(test)]
     {
         build_state.gate = gate;

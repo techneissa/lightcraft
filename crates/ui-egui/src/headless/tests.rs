@@ -5137,8 +5137,8 @@ fn editing_renders_the_loupe_from_its_source_not_a_built_preview() {
     assert_ne!(main.quick, Some(QuickSource::Cached), "rendered from the source while editing");
 }
 
-/// The loupe holds background preparation back only while its render is on the way (CodeRabbit on
-/// #3077): once the photo is shown, the frames that follow don't renew the hold.
+/// The loupe holds background preparation back only while its render, or the photos it prepares ahead, are on the
+/// way (CodeRabbit on #3077, #196): once they are made, the frames that follow don't renew the hold.
 #[test]
 fn a_shown_loupe_render_does_not_hold_background_preparation() {
     use crate::render::Slot;
@@ -5148,9 +5148,9 @@ fn a_shown_loupe_render_does_not_hold_background_preparation() {
     let id = h.app.session.active().expect("an active photo");
     let signals = || crate::panels::detail::FOREGROUND_SIGNALS.with(std::cell::Cell::get);
     let before = signals();
-    assert!(
-        h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.photo == id) && !h.app.renderer.is_pending(Slot::Main))
-    );
+    assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.photo == id)
+        && !h.app.renderer.is_pending(Slot::Main)
+        && h.app.renderer.prefetches_pending() == 0));
     assert!(signals() > before, "the hold was asked for while the render was on its way");
     let shown = signals();
     for _ in 0..10 {
