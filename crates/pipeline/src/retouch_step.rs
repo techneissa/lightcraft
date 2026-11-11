@@ -24,13 +24,14 @@ thread_local! {
     static PRE_RETOUCH_RUNS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
-/// How many times this thread made the image before the retouch step (white balance, defringe, spots, red eye) on
-/// the CPU, by either renderer: a test counts what a Portrait slider tick redoes with it.
+/// How many times this thread made the image before the retouch step (white balance, defringe, spots, red eye), by
+/// either renderer (the GPU's on the device): a test counts what a Portrait slider tick redoes with it.
 pub fn pre_retouch_runs() -> usize {
     PRE_RETOUCH_RUNS.with(std::cell::Cell::get)
 }
 
-pub(crate) fn note_pre_retouch_run() {
+/// Count one making of the image before the step ([`pre_retouch_runs`]).
+pub fn note_pre_retouch_run() {
     PRE_RETOUCH_RUNS.with(|c| c.set(c.get().wrapping_add(1)));
 }
 
@@ -384,18 +385,36 @@ pub fn apply(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>) {
     apply_with(img, info, p, &p.settings);
 }
 
+/// [`apply`] on rows `y0 .. y0 + img.height` of the plan's output, all of its width. Mapped as a zoomed window is
+/// (through the whole frame, moved by a whole number of rows), so where the band holds everything the step reads for
+/// each face ([`write_boxes`]: the rows of every box) it gets the pixels [`apply`] gives there. The GPU reads back and
+/// retouches only that band (`fork/perf-portrait-gpu.md`).
+pub fn apply_rows(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, y0: usize) {
+    apply_at(img, info, p, &p.settings, y0);
+}
+
 /// [`apply`] with settings `s` in place of the plan's (the same photo, frame and size): the ⌥-drag map retouches
 /// with a slider at its default too (`crate::retouch_effect`).
 pub(crate) fn apply_with(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, s: &DevelopSettings) {
+    apply_at(img, info, p, s, 0);
+}
+
+/// [`apply_with`] on the rows from `y0` ([`apply_rows`]).
+fn apply_at(img: &mut Rgb32f, info: &SourceInfo, p: &Plan<'_>, s: &DevelopSettings, y0: usize) {
     if !active(s) {
         return;
     }
     let none = Input::default();
     let input: &Input = info.retouch.as_deref().unwrap_or(&none);
     let o = s.orientation;
-    let place = place_of(p);
+    let mut place = place_of(p);
     let analysis = p.retouch_analysis.clone();
-    let m = Mapping::of(p);
+    let mut m = Mapping::of(p);
+    // (`shift` keeps a position to the bit at 0)
+    if y0 > 0 {
+        m.at.1 += y0 as f64;
+        place.y = place.y.saturating_add(i64::try_from(y0).unwrap_or(i64::MAX));
+    }
     let view: Box<dyn View> = if input.on_photo {
         Box::new(PhotoView { place, analysis, ..PhotoView::of(&m, o) })
     } else {
@@ -1043,6 +1062,46 @@ mod tests {
                 failures.push(format!("{name}: the retouch does not reach the window"));
             }
         }
+        assert!(failures.is_empty(), "{}", failures.join("\n"));
+    }
+
+    /// The GPU retouches only the band of rows that holds every face's boxes ([`apply_rows`]): for each slider of each
+    /// face feature, on a face with five points and on one with a mesh, the band's rows are the whole frame's to the
+    /// bit, and the whole frame's step changes no row outside the band.
+    #[test]
+    fn a_band_of_rows_gives_the_whole_frames_retouch() {
+        use lightcraft_develop::retouch::{FEATURES, Scope};
+        let (w, h) = (360, 720);
+        let (src, five) = face_photo(w, h);
+        let mesh = with_mesh(&five);
+        let req = RenderRequest::fit(w, h);
+        let (mut failures, mut cut) = (Vec::new(), false);
+        let sliders = FEATURES.iter().filter(|f| f.scope == Scope::Face && f.stage == Stage::Retouch).flat_map(|f| (f.specs)());
+        for spec in sliders.filter(|s| s.max > 0.0) {
+            for (with, info) in [("five points", &five), ("a mesh", &mesh)] {
+                let mut s = DevelopSettings::default();
+                controls::set(&mut s, spec.id, spec.max);
+                let p = crate::plan(&src, info, &s, &req);
+                let Some(boxes) = write_boxes(info, &p) else {
+                    failures.push(format!("{} ({with}): no boxes", spec.id));
+                    continue;
+                };
+                let (Some(y0), Some(y1)) = (boxes.iter().map(|b| b[1]).min(), boxes.iter().map(|b| b[3]).max()) else { continue };
+                cut |= y0 > 0 && y1 < h;
+                let mut whole = src.clone();
+                apply(&mut whole, info, &p);
+                let mut band = Rgb32f { width: w, height: y1 - y0, data: src.data[y0 * w..y1 * w].to_vec() };
+                apply_rows(&mut band, info, &p, y0);
+                let bits = |d: &[[f32; 3]]| d.iter().map(|p| p.map(f32::to_bits)).collect::<Vec<_>>();
+                if bits(&band.data) != bits(&whole.data[y0 * w..y1 * w]) {
+                    failures.push(format!("{} ({with}): the band [{y0}, {y1}) differs from the whole frame", spec.id));
+                }
+                if whole.data[..y0 * w] != src.data[..y0 * w] || whole.data[y1 * w..] != src.data[y1 * w..] {
+                    failures.push(format!("{} ({with}): the whole frame's step writes outside the band", spec.id));
+                }
+            }
+        }
+        assert!(cut, "some band is a part of the frame");
         assert!(failures.is_empty(), "{}", failures.join("\n"));
     }
 

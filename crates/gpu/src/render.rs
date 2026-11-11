@@ -149,7 +149,6 @@ impl GpuStages {
             }
             if let Some(p) = e.pre_retouch.as_ref().and_then(|p| p.kept.peek()) {
                 add(&p.dev);
-                patches += p.host_bytes();
             }
             let p = &e.planes;
             p.log_l.iter().for_each(&mut add);
@@ -890,8 +889,8 @@ pub fn render(
     let at = ViewAt { stages, src, cached: cached.as_ref(), start: start.as_ref() };
     let Linear { lin, tiles: t_lin, post, colour_noise, pre_retouch, retouch_boxes } = linear_stage(&mut cx, &at, &sampled, info, &plan, &mut host);
     lap("wb/nr", &mut t, &mut cx);
-    // (a Portrait slider's ⌥-drag map retouches the image before the step again: the one kept on the host)
-    let effect_pre = effect_pre(req.overlay, pre_retouch.as_ref());
+    // (a Portrait slider's ⌥-drag map retouches the image before the step again: the one kept on the device)
+    let effect_pre = effect_pre(&mut cx, req.overlay, pre_retouch.as_ref(), &plan);
 
     // 3. spatial planes (`t_out`: the output tiles that change from `start`'s)
     let (planes, prep, t_out) = planes_stage(&mut cx, &at, (&lin, t_lin.as_ref()), &plan, req);
@@ -1130,7 +1129,7 @@ pub fn render(
             lightcraft_pipeline::visualize::sharpen_plane(req.overlay, &plan.settings, &l, band.as_ref(), plan.px_per_long, plan.detail_scale)
         })?
     });
-    let overlay_mask = overlay_mask.or_else(|| retouch_effect(req.overlay, src, effect_pre.as_deref(), info, &plan));
+    let overlay_mask = overlay_mask.or_else(|| retouch_effect(req.overlay, src, effect_pre.as_ref(), info, &plan));
     lightcraft_pipeline::visualize::apply(&mut image, req.overlay, &plan, overlay_mask.as_ref(), all_overlay_alphas.as_deref());
     // spots grew the window the render worked on: cut it back to the request
     if let Some(k) = plan.keep {
@@ -1146,22 +1145,26 @@ pub fn render(
 }
 
 /// The image before the retouch step a Portrait slider's ⌥-drag view (`Overlay::RetouchEffect`) retouches again: the
-/// one kept on the host. `None` for any other overlay.
-fn effect_pre(o: lightcraft_pipeline::Overlay, kept: Option<&crate::pre_retouch::PreRetouch>) -> Option<Arc<crate::pre_retouch::Images>> {
-    matches!(o, lightcraft_pipeline::Overlay::RetouchEffect { .. }).then(|| kept.and_then(|p| p.kept.get())).flatten()
+/// one kept on the device, read back. `None` for any other overlay.
+fn effect_pre(cx: &mut Cx<'_>, o: lightcraft_pipeline::Overlay, kept: Option<&crate::pre_retouch::PreRetouch>, plan: &Plan<'_>) -> Option<Rgb32f> {
+    if !matches!(o, lightcraft_pipeline::Overlay::RetouchEffect { .. }) {
+        return None;
+    }
+    let images = kept.and_then(|p| p.kept.get())?;
+    (images.dev.len == plan.w * plan.h * 3).then(|| cx.read_rgb(&images.dev, plan.w, plan.h))
 }
 
 /// What a Portrait slider changes (`Overlay::RetouchEffect`): measured on the CPU, from the image before the retouch
-/// step the render kept on the host (`pre`; made again from `src` without it). `None` for any other overlay.
+/// step the render kept (`pre`; made again from `src` without it). `None` for any other overlay.
 fn retouch_effect(
     o: lightcraft_pipeline::Overlay,
     src: &Rgb32f,
-    pre: Option<&crate::pre_retouch::Images>,
+    pre: Option<&Rgb32f>,
     info: &SourceInfo,
     plan: &Plan<'_>,
 ) -> Option<lightcraft_raster::Plane> {
     let lightcraft_pipeline::Overlay::RetouchEffect { feature, control, face } = o else { return None };
-    lightcraft_pipeline::retouch_effect::effect(src, pre.map(|i| &i.host), info, plan, feature, control, face)
+    lightcraft_pipeline::retouch_effect::effect(src, pre, info, plan, feature, control, face)
 }
 
 /// A view's stages and what they kept for this render's size: the entry, and the last render when this one differs
@@ -1215,11 +1218,12 @@ fn linear_stage(cx: &mut Cx<'_>, at: &ViewAt<'_>, sampled: &Buf, info: &SourceIn
     let (pre, post, redone, pre_retouch, retouch_boxes) = if retouch_alone {
         // portrait retouching (fork `fork/perf-portrait-draft.md`): from the image before it, redone where it writes
         let kept_pre = at.cached.and_then(|e| e.pre_retouch.as_ref());
-        let r = crate::pre_retouch::linear(cx, sampled, host.sampled.take(), info, plan, kept_pre, kept.1.as_deref());
+        let r = crate::pre_retouch::linear(cx, sampled, host.sampled.take(), info, plan, kept_pre, (kept.0.as_deref(), kept.1.as_deref()));
         if let (Some(c), Some(drawn)) = (at.stages, r.spots) {
-            c.spots.put(src, plan.geo, None, 0);
-            let host = drawn.as_ref().map_or(0, |k| k.bytes());
-            c.spots_cpu.put(src, plan.geo, drawn, host);
+            let device = drawn.0.as_ref().map_or(0, |k| crate::spots_keep::bytes(k));
+            c.spots.put(src, plan.geo, drawn.0, device);
+            let host = drawn.1.as_ref().map_or(0, |k| k.bytes());
+            c.spots_cpu.put(src, plan.geo, drawn.1, host);
         }
         let from = r.from;
         let redone =
@@ -1458,7 +1462,7 @@ fn unwritten(data: &[[u8; 4]]) -> usize {
 }
 
 /// What a view keeps of its last render's spots, on the device and on the host.
-type KeptSpots = (Option<Arc<Kept<Buf, Buf>>>, Option<Arc<CpuKept>>);
+pub(crate) type KeptSpots = (Option<Arc<Kept<Buf, Buf>>>, Option<Arc<CpuKept>>);
 
 /// The white-balanced, retouched image before noise reduction, drawing only the spots an edit reaches when `kept` (the
 /// view's last spots) allows; with what to keep for the next render, and what the spots redrew (issue #111).
@@ -1473,11 +1477,8 @@ fn linear(
     let mut keep: KeptSpots = (None, None);
     let mut redone = None;
     let (w, h) = (plan.w, plan.h);
-    let n = w * h;
     let s = &*plan.settings;
-    // (a window that pastes its finished spots draws none, so it stays on the device: issue #176)
-    let cpu_spots = plan.spots_at.paste.is_none() && s.spots.iter().any(lightcraft_pipeline::spots::drawn_on_cpu);
-    let img = if lightcraft_pipeline::local_tone::enabled(info, s) || cpu_spots {
+    let img = if lightcraft_pipeline::local_tone::enabled(info, s) || cpu_spots(plan) {
         // the camera's local tone mapping (ProRAW gain table, off by default), or a spot with no GPU kernel (LaMa,
         // Content-Aware, a shaped spot: `spots::drawn_on_cpu`): the whole scene-linear stage on the CPU
         // (portrait retouching included, fork `fork/retouch-foundation.md`)
@@ -1488,49 +1489,67 @@ fn linear(
         keep.1 = lightcraft_pipeline::spots_keep::lin_cpu(&mut img, info, plan, kept.1);
         cx.gpu.upload(rgb_words(&img))
     } else {
-        // `lin_cpu`'s order: spots, white balance, defringe, red eye (issue #184); or in the old order, white balance,
-        // defringe, spots, red eye
-        let balanced = |cx: &mut Cx<'_>, img: &Buf| {
-            let m = local::wb_matrix_for(info, s);
-            let mut p = vec![m.is_some() as u32];
-            p.extend(m.unwrap_or_default().iter().flatten().map(|v| v.to_bits()));
-            let out = cx.gpu.buffer(n * 3);
-            map(cx, "wb_k", n, &p, [Some(img), None, None], &out);
-            defringe(cx, out, plan)
-        };
-        let out = if plan.spots_after_wb {
-            let (out, k, r) = crate::spots_keep::spots(cx, info, plan, kept.0, |cx| balanced(cx, sampled));
-            keep.0 = k;
-            redone = r;
-            out
-        } else {
-            let (spotted, k, r) = crate::spots_keep::spots(cx, info, plan, kept.0, |cx| cx.copy(sampled));
-            keep.0 = k;
-            // (what the spots rewrote changes after the white balance where they wrote, and defringe's radius around it)
-            let reach = lightcraft_pipeline::optics::defringe_params(s, plan.px_per_long / lightcraft_pipeline::optics::DEFRINGE_REF_LONG)
-                .map_or(0, |d| d.radius.saturating_add(1));
-            redone = r.map(|mut r| {
-                for b in &mut r.rects {
-                    *b = [
-                        b[0].saturating_sub(reach),
-                        b[1].saturating_sub(reach),
-                        b[2].saturating_add(reach).min(w),
-                        b[3].saturating_add(reach).min(h),
-                    ];
-                }
-                r
-            });
-            balanced(cx, &spotted)
-        };
-        if plan.eyes.is_empty() {
-            out
-        } else {
-            let mut p = vec![w as u32, plan.eyes.len() as u32];
-            p.extend(plan.eyes.iter().flat_map(|e| e.words()).map(f32::to_bits));
-            let eyed = cx.gpu.buffer(n * 3);
-            map(cx, "redeye_k", n, &p, [Some(&out), None, None], &eyed);
-            eyed
-        }
+        let (img, k, r) = linear_on_device(cx, sampled, info, plan, kept.0);
+        keep.0 = k;
+        redone = r;
+        img
+    };
+    (img, keep, redone)
+}
+
+/// Whether a spot of the plan has no GPU kernel (LaMa, Content-Aware, a shaped spot: `spots::drawn_on_cpu`), so the
+/// spots are drawn on the CPU. (A window that pastes its finished spots draws none, so it stays on the device: issue
+/// #176.)
+pub(crate) fn cpu_spots(plan: &Plan<'_>) -> bool {
+    plan.spots_at.paste.is_none() && plan.settings.spots.iter().any(lightcraft_pipeline::spots::drawn_on_cpu)
+}
+
+/// The scene-linear stage before the retouch step on the device: white balance, defringe, the spots (each drawn
+/// again only where an edit reaches it when `kept`, the view's last ones, allows) and red eye; with what to keep of the
+/// spots and what they redrew. Spots with no GPU kernel (`spots::drawn_on_cpu`) are not drawn here.
+pub(crate) fn linear_on_device(
+    cx: &mut Cx<'_>,
+    sampled: &Buf,
+    info: &SourceInfo,
+    plan: &Plan<'_>,
+    kept: Option<&Kept<Buf, Buf>>,
+) -> (Buf, Option<Arc<Kept<Buf, Buf>>>, Option<crate::dirty::Redone>) {
+    let (w, h) = (plan.w, plan.h);
+    let n = w * h;
+    let s = &*plan.settings;
+    // `lin_cpu`'s order: spots, white balance, defringe, red eye (issue #184); or in the old order, white balance,
+    // defringe, spots, red eye
+    let balanced = |cx: &mut Cx<'_>, img: &Buf| {
+        let m = local::wb_matrix_for(info, s);
+        let mut p = vec![m.is_some() as u32];
+        p.extend(m.unwrap_or_default().iter().flatten().map(|v| v.to_bits()));
+        let out = cx.gpu.buffer(n * 3);
+        map(cx, "wb_k", n, &p, [Some(img), None, None], &out);
+        defringe(cx, out, plan)
+    };
+    let (out, keep, redone) = if plan.spots_after_wb {
+        crate::spots_keep::spots(cx, info, plan, kept, |cx| balanced(cx, sampled))
+    } else {
+        let (spotted, k, r) = crate::spots_keep::spots(cx, info, plan, kept, |cx| cx.copy(sampled));
+        // (what the spots rewrote changes after the white balance where they wrote, and defringe's radius around it)
+        let reach = lightcraft_pipeline::optics::defringe_params(s, plan.px_per_long / lightcraft_pipeline::optics::DEFRINGE_REF_LONG)
+            .map_or(0, |d| d.radius.saturating_add(1));
+        let redone = r.map(|mut r| {
+            for b in &mut r.rects {
+                *b = [b[0].saturating_sub(reach), b[1].saturating_sub(reach), b[2].saturating_add(reach).min(w), b[3].saturating_add(reach).min(h)];
+            }
+            r
+        });
+        (balanced(cx, &spotted), k, redone)
+    };
+    let img = if plan.eyes.is_empty() {
+        out
+    } else {
+        let mut p = vec![w as u32, plan.eyes.len() as u32];
+        p.extend(plan.eyes.iter().flat_map(|e| e.words()).map(f32::to_bits));
+        let eyed = cx.gpu.buffer(n * 3);
+        map(cx, "redeye_k", n, &p, [Some(&out), None, None], &eyed);
+        eyed
     };
     (img, keep, redone)
 }
