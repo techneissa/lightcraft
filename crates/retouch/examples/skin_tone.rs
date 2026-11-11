@@ -1,7 +1,7 @@
 //! Try the skin tone feature on a picture without building the app:
 //!
 //! `cargo run -p lightcraft-retouch --release --example skin_tone -- in.jpg out.jpg [--even 50] [--redness 50]
-//! [--light 30] [--masks DIR --person 0]... [--face x0,y0,x1,y1] [--fit 1936] [--runs 1]`
+//! [--light 30] [--masks DIR [--people FILE] --person 0]... [--face x0,y0,x1,y1] [--fit 1936] [--runs 1]`
 //!
 //! - `--amount` sets Even Tone (as every feature's example does); `--even`, `--redness` and `--light` set each
 //!   slider (Face Light is −100…+100).
@@ -9,7 +9,9 @@
 //!   (`cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/`, then `outdir/masks`):
 //!   `facialSkin-K.png`, `bodySkin-K.png`, `eyebrows-K.png` … (grey, white = the part), each missing one skipped.
 //!   The face's box is Facial Skin's pixels above half, unless a `--face` comes before `--masks`. Repeat both for
-//!   more faces.
+//!   more faces. `--people FILE` before `--person K` reads that person's face box and face mesh from the parser
+//!   example's `people.json` (in `outdir`), as the app gets them.
+//! - `--sweep even|redness|light 0,25,50,75,100` writes one picture per value (`out-<value>.png`) instead of one.
 //! - `--fit` shrinks the photo to that long edge first (1936 is the draft's size of a 3:2 photo, about 2.5 MP);
 //!   `--runs` repeats the step and prints the fastest run.
 //!
@@ -35,7 +37,7 @@ fn main() -> ExitCode {
 }
 
 const USAGE: &str = "usage: skin_tone in.jpg out.jpg [--amount N] [--even N] [--redness N] [--light N] [--face x0,y0,x1,y1] \
-                     [--masks DIR --person K] [--fit EDGE] [--runs N]";
+                     [--masks DIR [--people FILE] --person K] [--fit EDGE] [--runs N] [--sweep SLIDER V,V…]";
 
 /// The parts the feature reads, with the file names the parser's example gives them.
 const PARTS: [(&str, Part); 7] = [
@@ -54,6 +56,8 @@ fn run(args: &[String]) -> Result<(), String> {
     let mut boxes: Vec<NormRect> = Vec::new();
     let mut faces: Vec<Face> = Vec::new();
     let mut dir: Option<String> = None;
+    let mut people: Option<String> = None;
+    let mut sweep: Option<(String, Vec<f64>)> = None;
     let (mut fit, mut runs) = (0usize, 1usize);
     let mut it = args.iter();
     while let Some(a) = it.next() {
@@ -76,11 +80,29 @@ fn run(args: &[String]) -> Result<(), String> {
                 boxes.push(NormRect::new(*x0, *y0, *x1, *y1));
             }
             "--masks" => dir = Some(value()?.clone()),
+            "--people" => people = Some(value()?.clone()),
             "--person" => {
                 let k = value()?.clone();
                 let d = dir.clone().ok_or("--masks DIR comes before --person")?;
-                let given = if boxes.len() > faces.len() { boxes.pop() } else { None };
-                faces.push(person(Path::new(&d), &k, given)?);
+                let mut given = if boxes.len() > faces.len() { boxes.pop() } else { None };
+                let mut landmarks = Vec::new();
+                if let Some(file) = &people {
+                    let (bounds, marks) = parsed(file, &k)?;
+                    given = given.or(bounds);
+                    landmarks = marks;
+                }
+                let mut face = person(Path::new(&d), &k, given)?;
+                face.landmarks = landmarks;
+                faces.push(face);
+            }
+            "--sweep" => {
+                let field = match value()?.as_str() {
+                    "redness" => "redness",
+                    "light" => "faceLight",
+                    _ => "evenTone",
+                };
+                let values = value()?.split(',').filter_map(|v| v.trim().parse().ok()).collect();
+                sweep = Some((field.to_string(), values));
             }
             "--fit" => fit = value()?.parse().map_err(|_| USAGE.to_string())?,
             "--runs" => runs = value()?.parse::<usize>().map_err(|_| USAGE.to_string())?.max(1),
@@ -100,21 +122,62 @@ fn run(args: &[String]) -> Result<(), String> {
     for (px, p) in original.data.iter_mut().zip(rgb.pixels()) {
         *px = [decode_srgb8(p.0[0]), decode_srgb8(p.0[1]), decode_srgb8(p.0[2])];
     }
-    let r = Retouch::with_global(global);
     let input = Input::new(faces);
+    let Some((field, values)) = sweep else {
+        return render(&original, &Retouch::with_global(global), &input, runs, output);
+    };
+    let path = Path::new(output);
+    let stem = path.with_extension("");
+    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("png");
+    for v in values {
+        let mut g = global.clone();
+        if !g.set(&format!("retouch.skinTone.{field}"), v) {
+            return Err(format!("no slider retouch.skinTone.{field}"));
+        }
+        render(&original, &Retouch::with_global(g), &input, runs, &format!("{}-{v}.{ext}", stem.display()))?;
+    }
+    Ok(())
+}
+
+/// `original` retouched by `r` (the fastest of `runs`), written to `output`.
+fn render(original: &Rgb32f, r: &Retouch, input: &Input, runs: usize, output: &str) -> Result<(), String> {
+    let (w, h) = (original.width, original.height);
     let view = WholePhoto { width: w, height: h };
     let mut best = f64::INFINITY;
     let mut img = original.clone();
     for _ in 0..runs {
         img = original.clone();
         let t = std::time::Instant::now();
-        lightcraft_retouch::run::apply(&mut img, &r, &input, &view, Stage::Retouch);
+        lightcraft_retouch::run::apply(&mut img, r, input, &view, Stage::Retouch);
         best = best.min(t.elapsed().as_secs_f64() * 1e3);
     }
     eprintln!("skin_tone: {w}×{h}, {} faces, {best:.1} ms", input.faces.len());
     let bytes: Vec<u8> = img.data.iter().flat_map(|p| p.map(encode_srgb8)).collect();
     let out = image::RgbImage::from_raw(w as u32, h as u32, bytes).ok_or("the picture's size changed")?;
     out.save(output).map_err(|e| format!("{output}: {e}"))
+}
+
+/// Person `k`'s face box and landmarks (YuNet's five, then the face mesh) from the parser example's `people.json`.
+fn parsed(path: &str, k: &str) -> Result<(Option<NormRect>, Vec<(f64, f64)>), String> {
+    let text = std::fs::read_to_string(path).map_err(|e| format!("{path}: {e}"))?;
+    let v: serde_json::Value = serde_json::from_str(&text).map_err(|e| format!("{path}: {e}"))?;
+    let i: usize = k.parse().map_err(|_| format!("person {k} is not a number"))?;
+    let p = v.get("people").and_then(|p| p.get(i)).ok_or_else(|| format!("{path}: no person {k}"))?;
+    let bounds = p.get("face").and_then(|f| f.as_array()).and_then(|f| {
+        let v: Vec<f64> = f.iter().filter_map(|x| x.as_f64()).collect();
+        let [x0, y0, x1, y1] = v.as_slice() else { return None };
+        Some(NormRect::new(*x0, *y0, *x1, *y1))
+    });
+    let mesh: Vec<(f64, f64)> = p
+        .get("mesh")
+        .and_then(|m| m.as_array())
+        .map(|m| m.iter().filter_map(|q| Some((q.get(0)?.as_f64()?, q.get(1)?.as_f64()?))).collect())
+        .unwrap_or_default();
+    if mesh.len() < 478 {
+        return Ok((bounds, Vec::new()));
+    }
+    let five = [468, 473, 1, 61, 291].map(|i| mesh.get(i).copied().unwrap_or((0.5, 0.5)));
+    Ok((bounds, five.into_iter().chain(mesh).collect()))
 }
 
 /// Person `k`'s masks from `dir`, each cut to where it is above 0 (as the app's masks cover their face, not the

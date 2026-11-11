@@ -1,28 +1,30 @@
 //! Skin Tone: Even Tone, Redness and Face Light.
 //!
-//! - **Even Tone** (0…100) evens blotchy colour in the face's Facial Skin and Body Skin: where the skin's colour
-//!   over a small area (an [`EVEN_FINE`] blur) differs from its colour over a wider one ([`EVEN_BROAD`]), the
-//!   difference is taken away (all of it at 100). Facial Skin and Body Skin are each measured against themselves. Mostly colour, a little brightness ([`EVEN_LUMA`]). Differences
-//!   much larger than blotches (a beard, a nostril's shadow, the line where skin meets lips) fade out of the
-//!   correction ([`EVEN_KEEP`]), so the face keeps its shape and its natural gradients.
-//! - **Redness** (0…100) lowers red patches (cheeks, nose, acne): where the skin over a spot ([`RED_SPOT`]) is
-//!   redder than the skin around it ([`RED_AROUND`]), its colour is drawn towards that skin's, up to
-//!   [`RED_CUT`] of the way (from nothing at [`RED_START`] redder to all of that from [`RED_FULL`]); its other colour and its brightness stay.
+//! - **Even Tone** (0…100) evens blotchy skin in the face's Facial Skin and Body Skin: age and sun spots, darker and
+//!   lighter patches and colour blotches move towards the skin around them, while the face keeps its shading (the
+//!   light across it, the nose's sides, the folds, the eyes' and lips' rims, the nostrils), its pores, freckles and
+//!   stubble. Facial Skin and Body Skin are each measured against themselves.
+//! - **Redness** (0…100) calms red skin (flushed cheeks, a red nose, red spots): a cell redder than the skin around
+//!   it, or than the face's own calm skin, moves towards it, fully at 100; its brightness stays, and the skin keeps
+//!   its own hue (it is not greyed).
 //! - **Face Light** (−100…+100) lightens or darkens the face against the rest of the photo, up to
 //!   [`FACE_LIGHT_STOPS`]: the face's area (Facial Skin, Eyebrows, Eye Whites, Iris, Lips, Teeth) with a soft edge
 //!   that falls to nothing at the area's border ([`LIGHT_EDGE`]), so nothing outside it changes.
 //!
-//! Every size is a fraction of the face. Colour is measured on a grid of cells ([`CELLS_PER_FACE`] across the face)
-//! from the skin's pixels only (each cell is the mask-weighted mean, each blur divides by the blurred mask), so hair,
-//! eyes, lips and the background never bleed in: no halo at the mask's edge. The correction is a smooth gain per
-//! cell, read back bilinearly and multiplied in, so the texture finer than a cell (pores, hair, grain) keeps its
-//! contrast. It is weighted by the mask: a pixel outside the masks never changes, and a face without them is left
-//! alone. A slider move samples the cached masks once per pixel of their box and blurs the grid; no model runs.
+//! How Even Tone and Redness tell a blotch from the face's form: [`model`]. Every size is a fraction of the face.
+//! Colour is measured on a grid of cells ([`CELLS_PER_FACE`] across the face) from the skin's pixels only (each
+//! cell is the mask-weighted mean, each blur divides by the blurred mask), so hair, eyes, lips and the background
+//! never bleed in: no halo at the mask's edge. The correction is a smooth gain per cell, read back bilinearly and
+//! multiplied in, so the texture finer than a cell (pores, hair, grain) keeps its contrast. It is weighted by the
+//! mask: a pixel outside the masks never changes, and a face without them is left alone. A slider move samples the
+//! cached masks once per pixel of their box and works on the grid; no model runs.
 
 mod grid;
+pub mod model;
+mod zones;
 
 use lightcraft_raster::blur::gaussian;
-use lightcraft_raster::{Image, Plane, Rgb32f, par_rows};
+use lightcraft_raster::{Plane, Rgb32f, par_rows};
 use serde::{Deserialize, Serialize};
 
 use crate::{Control, Feature, Part, PartMask, Scene, Scope, Spec, Stage, View};
@@ -30,26 +32,10 @@ use grid::{Grid, smoothstep, union};
 
 /// How much Face Light ±100 changes the face, in stops.
 pub const FACE_LIGHT_STOPS: f32 = 0.6;
-/// Cells across the face's size in the colour grid (a cell is never smaller than a pixel).
-pub const CELLS_PER_FACE: f64 = 128.0;
-/// Even Tone: the blotch scale, a fraction of the face (Gaussian sigma).
-pub const EVEN_FINE: f64 = 0.012;
-/// Even Tone: the scale of the skin's natural colour, a fraction of the face.
-pub const EVEN_BROAD: f64 = 0.12;
-/// Even Tone: the share of a brightness blotch taken away at 100 (colour: all of it).
-pub const EVEN_LUMA: f32 = 0.35;
-/// Even Tone: a difference (natural log) this large is mostly kept, as structure, not a blotch: colour, brightness.
-pub const EVEN_KEEP: [f32; 2] = [0.4, 0.18];
-/// Redness: the size of a red spot, a fraction of the face.
-pub const RED_SPOT: f64 = 0.008;
-/// Redness: the skin a spot is compared with, a fraction of the face.
-pub const RED_AROUND: f64 = 0.25;
-/// Redness: how much redder (natural log of red over green) than the skin around a spot must be to count at all,
-/// and to count fully.
-pub const RED_START: f32 = 0.02;
-pub const RED_FULL: f32 = 0.1;
-/// Redness: how far towards the skin around it a red spot's colour goes at 100.
-pub const RED_CUT: f32 = 0.75;
+/// Cells across the face's size in the colour grid of Facial Skin, and of Body Skin (a body's blotches are larger,
+/// and its mask can be many faces large). A cell is never smaller than a pixel.
+pub const CELLS_PER_FACE: f64 = 160.0;
+pub const BODY_CELLS_PER_FACE: f64 = 64.0;
 /// Face Light: the soft edge's width, a fraction of the face.
 pub const LIGHT_EDGE: f64 = 0.035;
 /// Face Light: cells across the face's size (the light is smooth, so its grid is coarser).
@@ -138,7 +124,8 @@ fn region(scene: &Scene<'_>, face: usize, parts: &[Part]) -> Option<[usize; 4]> 
 
 /// Even Tone and Redness on one face's skin `part`.
 fn tone(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, part: Part, size: f64, even: f32, red: f32) {
-    let Some(grid) = scene.mask_box(face, part).and_then(|r| Grid::new(r, size, CELLS_PER_FACE)) else { return };
+    let per_face = if part == Part::FacialSkin { CELLS_PER_FACE } else { BODY_CELLS_PER_FACE };
+    let Some(grid) = scene.mask_box(face, part).and_then(|r| Grid::new(r, size, per_face)) else { return };
     let (iw, masks, view) = (img.width, masks_of(scene, face, &[part]), scene.view());
     // the skin mask at every pixel of the region, sampled once
     let mut mask = Plane::new(grid.w, grid.h);
@@ -147,11 +134,11 @@ fn tone(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, part: Part, size: f64,
             *m = mask_of(view, &masks, grid.x0 + px, grid.y0 + py);
         }
     });
-    // each cell: the mask-weighted sum of the skin's colour, and of the mask
-    let mut sums = Image::<[f32; 4]>::new(grid.gw, grid.gh);
+    // each cell: the mask-weighted sums of the skin's colour, the mask, and the luminance and its square (texture)
+    let mut sums = vec![[0.0f32; 6]; grid.gw * grid.gh];
     {
         let (pixels, mask) = (&img.data, &mask);
-        par_rows(&mut sums.data, grid.gw, |gy, cells| {
+        par_rows(&mut sums, grid.gw, |gy, cells| {
             for py in grid.start(gy)..grid.start(gy + 1) {
                 let (Some(row), Some(mrow)) = (pixels.get((grid.y0 + py) * iw + grid.x0..), mask.data.get(py * grid.w..)) else { continue };
                 for (px, (p, m)) in row.iter().zip(mrow).take(grid.w).enumerate() {
@@ -160,30 +147,19 @@ fn tone(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, part: Part, size: f64,
                     }
                     if let Some(c) = cells.get_mut(grid.cell_of(px, grid.gw)) {
                         let v = p.map(|v| if v.is_finite() { v.clamp(0.0, 64.0) } else { 0.0 });
-                        *c = [c[0] + m * v[0], c[1] + m * v[1], c[2] + m * v[2], c[3] + m];
+                        let y = LUMA[0] * v[0] + LUMA[1] * v[1] + LUMA[2] * v[2];
+                        *c = [c[0] + m * v[0], c[1] + m * v[1], c[2] + m * v[2], c[3] + m, c[4] + m * y, c[5] + m * y * y];
                     }
                 }
             }
         });
     }
-    // the wide blurs run on cells COARSE times larger
-    let coarse = reduce(&sums, COARSE);
-    let blur = |fraction: f64| gaussian(&sums, grid.sigma(fraction, size));
-    let wide = |fraction: f64| gaussian(&coarse, grid.sigma(fraction, size) / COARSE as f32);
-    let none = Image::<[f32; 4]>::new(0, 0);
-    let (fine, broad) = if even > 0.0 { (blur(EVEN_FINE), wide(EVEN_BROAD)) } else { (none.clone(), none.clone()) };
-    let (spot, around) = if red > 0.0 { (blur(RED_SPOT), wide(RED_AROUND)) } else { (none.clone(), none.clone()) };
-    let mut gains = Image::<[f32; 3]>::new(grid.gw, grid.gh);
-    par_rows(&mut gains.data, grid.gw, |y, row| {
-        for (x, g) in row.iter_mut().enumerate() {
-            let i = y * grid.gw + x;
-            let at = |g: &Image<[f32; 4]>| g.data.get(i).copied().unwrap_or([0.0; 4]);
-            let up = |g: &Image<[f32; 4]>| if g.data.is_empty() { [0.0; 4] } else { enlarged(g, COARSE, x, y) };
-            let fine = at(&fine);
-            let spot = if spot.data.is_empty() { fine } else { at(&spot) };
-            *g = cell_gain([fine, up(&broad), spot, up(&around)], even, red);
-        }
-    });
+    let shapes = scene.faces.get(face).and_then(zones::Shapes::of);
+    let zone = |r: &zones::Reaches| shapes.as_ref().map(|s| s.cells(&grid, r)).unwrap_or_default();
+    let (even_zone, red_zone) = (zone(&zones::EVEN), zone(&zones::RED));
+    let cells = model::Cells { gw: grid.gw, gh: grid.gh, sums, area: (grid.cell * grid.cell) as f32 };
+    let inputs = model::Inputs { even, red, per_face: (size / grid.cell) as f32, even_zone: &even_zone, red_zone: &red_zone };
+    let gains = model::gains(&cells, &inputs);
     par_rows(&mut img.data, iw, |y, row| {
         let Some(py) = y.checked_sub(grid.y0).filter(|py| *py < grid.h) else { return };
         let Some(mrow) = mask.data.get(py * grid.w..) else { return };
@@ -197,88 +173,6 @@ fn tone(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, part: Part, size: f64,
             }
         }
     });
-}
-
-/// How many fine cells across one coarse cell of the wide blurs.
-const COARSE: usize = 4;
-
-/// `g` with each `f × f` block of cells summed into one.
-fn reduce(g: &Image<[f32; 4]>, f: usize) -> Image<[f32; 4]> {
-    let (w, h) = (g.width.div_ceil(f).max(1), g.height.div_ceil(f).max(1));
-    let mut out = Image::<[f32; 4]>::new(w, h);
-    for (i, v) in g.data.iter().enumerate() {
-        let (x, y) = (i % g.width.max(1) / f, i / g.width.max(1) / f);
-        if let Some(o) = out.data.get_mut(y * w + x) {
-            *o = [o[0] + v[0], o[1] + v[1], o[2] + v[2], o[3] + v[3]];
-        }
-    }
-    out
-}
-
-/// Coarse cells `g` (each `f` fine cells across) read at fine cell (`x`, `y`), bilinear between coarse centres.
-fn enlarged(g: &Image<[f32; 4]>, f: usize, x: usize, y: usize) -> [f32; 4] {
-    let axis = |p: usize, n: usize| {
-        let c = ((p as f32 + 0.5) / f as f32 - 0.5).clamp(0.0, n.saturating_sub(1) as f32);
-        let i = c.floor() as usize;
-        (i, (i + 1).min(n.saturating_sub(1)), c - i as f32)
-    };
-    let ((x0, x1, tx), (y0, y1, ty)) = (axis(x, g.width), axis(y, g.height));
-    let v = |x: usize, y: usize| g.data.get(y * g.width + x).copied().unwrap_or([0.0; 4]);
-    let w = [(1.0 - tx) * (1.0 - ty), tx * (1.0 - ty), (1.0 - tx) * ty, tx * ty];
-    let p = [v(x0, y0), v(x1, y0), v(x0, y1), v(x1, y1)];
-    std::array::from_fn(|k| p.iter().zip(w).map(|(p, w)| p[k] * w).sum())
-}
-
-/// A cell's mean colour as log chroma (each channel's log less the log luminance) and log luminance; `None`
-/// where the cell holds no skin.
-fn logs(s: [f32; 4]) -> Option<([f32; 3], f32)> {
-    if s[3].is_nan() || s[3] <= 1e-9 {
-        return None;
-    }
-    let c = [s[0] / s[3], s[1] / s[3], s[2] / s[3]].map(|v| v.max(1e-6));
-    let y = (LUMA[0] * c[0] + LUMA[1] * c[1] + LUMA[2] * c[2]).max(1e-6).ln();
-    Some((c.map(|v| v.ln() - y), y))
-}
-
-/// `d`, fading out as it grows past `keep` (a blotch is corrected, structure is kept).
-fn soft(d: f32, keep: f32) -> f32 {
-    d * (-(d / keep) * (d / keep)).exp()
-}
-
-/// The gain per channel of one cell, from its blurred sums `[fine, broad, spot, around]`.
-fn cell_gain(s: [[f32; 4]; 4], even: f32, red: f32) -> [f32; 3] {
-    let [fine, broad, spot, around] = s;
-    let mut chroma = [0.0f32; 3];
-    let mut luma = 0.0f32;
-    if even > 0.0
-        && let (Some((cf, lf)), Some((cb, lb))) = (logs(fine), logs(broad))
-    {
-        for (k, d) in chroma.iter_mut().enumerate() {
-            *d = even * soft(cb[k] - cf[k], EVEN_KEEP[0]);
-        }
-        luma = even * EVEN_LUMA * soft(lb - lf, EVEN_KEEP[1]);
-    }
-    let Some((cs, _)) = logs(spot) else { return [1.0; 3] };
-    if red > 0.0
-        && let Some((ca, _)) = logs(around)
-    {
-        // the spot as Even Tone leaves it
-        let cs: [f32; 3] = std::array::from_fn(|k| cs[k] + chroma[k]);
-        let redder = (cs[0] - cs[1]) - (ca[0] - ca[1]);
-        // a spot redder than its skin is drawn towards that skin's colour (all three channels, so the hue stays a
-        // skin hue), the more the redder it is
-        let g = red * RED_CUT * smoothstep(RED_START, RED_FULL, redder);
-        for (k, d) in chroma.iter_mut().enumerate() {
-            *d -= g * (cs[k] - ca[k]);
-        }
-    }
-    // shift the chroma, then put the spot's luminance back, so only `luma` changes brightness
-    let spot_c = [spot[0], spot[1], spot[2]].map(|v| v / spot[3].max(1e-9));
-    let shifted: [f32; 3] = std::array::from_fn(|k| spot_c[k] * chroma[k].clamp(-0.7, 0.7).exp());
-    let lum = |c: [f32; 3]| LUMA[0] * c[0] + LUMA[1] * c[1] + LUMA[2] * c[2];
-    let keep = if lum(shifted) > 1e-9 { lum(spot_c) / lum(shifted) } else { 1.0 };
-    let gain: [f32; 3] = std::array::from_fn(|k| chroma[k].clamp(-0.7, 0.7).exp() * keep * luma.clamp(-0.5, 0.5).exp());
-    if gain.iter().all(|g| g.is_finite()) { gain } else { [1.0; 3] }
 }
 
 /// Face Light on one face's area.
@@ -310,59 +204,4 @@ fn face_light(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, size: f64, light
             }
         }
     });
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    fn cell(c: [f32; 3]) -> [f32; 4] {
-        [c[0], c[1], c[2], 1.0]
-    }
-
-    #[test]
-    fn a_blotch_moves_to_the_skin_around_it_and_keeps_its_brightness() {
-        let skin = [0.40, 0.28, 0.20];
-        let blotch = [0.44, 0.27, 0.20];
-        let g = cell_gain([cell(blotch), cell(skin), cell(blotch), cell(skin)], 1.0, 0.0);
-        let out: [f32; 3] = std::array::from_fn(|k| blotch[k] * g[k]);
-        // redder than before, less red than the blotch: closer to the skin's colour
-        let ratio = |c: [f32; 3]| c[0] / c[1];
-        assert!(ratio(out) < ratio(blotch) && (ratio(out) - ratio(skin)).abs() < (ratio(blotch) - ratio(skin)).abs() * 0.3);
-        // no change where there is none, and none at 0
-        assert_eq!(cell_gain([cell(skin); 4], 1.0, 1.0), [1.0; 3]);
-        assert_eq!(cell_gain([cell(blotch), cell(skin), cell(blotch), cell(skin)], 0.0, 0.0), [1.0; 3]);
-    }
-
-    #[test]
-    fn redness_lowers_red_spots_only() {
-        let skin = [0.40, 0.28, 0.20];
-        let red = [0.48, 0.25, 0.19];
-        let pale = [0.36, 0.30, 0.22];
-        let g = cell_gain([cell(red), cell(red), cell(red), cell(skin)], 0.0, 1.0);
-        assert!(red[0] * g[0] / (red[1] * g[1]) < red[0] / red[1] * 0.9, "{g:?}");
-        // a spot less red than the skin around it is not touched
-        let g = cell_gain([cell(pale), cell(pale), cell(pale), cell(skin)], 0.0, 1.0);
-        assert!(g.iter().all(|v| (v - 1.0).abs() < 1e-6), "{g:?}");
-        // brightness is kept
-        let g = cell_gain([cell(red), cell(red), cell(red), cell(skin)], 0.0, 1.0);
-        let lum = |c: [f32; 3]| LUMA[0] * c[0] + LUMA[1] * c[1] + LUMA[2] * c[2];
-        assert!((lum(std::array::from_fn(|k| red[k] * g[k])) - lum(red)).abs() < 1e-4);
-    }
-
-    #[test]
-    fn large_differences_are_structure_and_mostly_kept() {
-        let skin = [0.40, 0.28, 0.20];
-        let beard = [0.05, 0.04, 0.035];
-        let g = cell_gain([cell(beard), cell(skin), cell(beard), cell(skin)], 1.0, 0.0);
-        let lum = |c: [f32; 3]| LUMA[0] * c[0] + LUMA[1] * c[1] + LUMA[2] * c[2];
-        let out: [f32; 3] = std::array::from_fn(|k| beard[k] * g[k]);
-        assert!((lum(out) / lum(beard) - 1.0).abs() < 0.02, "{g:?}");
-    }
-
-    #[test]
-    fn empty_cells_change_nothing() {
-        assert_eq!(cell_gain([[0.0; 4]; 4], 1.0, 1.0), [1.0; 3]);
-        assert_eq!(cell_gain([[f32::NAN; 4]; 4], 1.0, 1.0), [1.0; 3]);
-    }
 }
