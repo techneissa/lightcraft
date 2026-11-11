@@ -165,10 +165,13 @@ fn predict(model: &mut Sam3, enc: &mut Encoded, operation: Operation) -> Result<
 fn serve_client(stream: &mut TcpStream, dir: &Path, device: candle_core::Device) -> Result<(), String> {
     stream.set_read_timeout(Some(Duration::from_secs(10 * 60))).map_err(|e| e.to_string())?;
     stream.set_write_timeout(Some(Duration::from_secs(30))).map_err(|e| e.to_string())?;
-    let mut model = None;
+    let mut model: Option<Sam3> = None;
     let mut cache = None;
+    let mut warming = Warming::default();
     loop {
         let frame = read_frame(stream, CONTROL_LIMIT).map_err(|e| e.to_string())?;
+        // a request: the warm-up stops after the part it is on
+        warming.pause();
         let request: Request = serde_json::from_slice(&frame).map_err(|e| e.to_string())?;
         request.validate()?;
         let rgb = read_frame(stream, request.width * request.height * 3).map_err(|e| e.to_string())?;
@@ -181,15 +184,6 @@ fn serve_client(stream: &mut TcpStream, dir: &Path, device: candle_core::Device)
                 // Core ML when its conversion is beside the model folder (issue #268), else candle on Metal
                 let m = Sam3::load_with(dir, device.clone(), crate::Runtime::Automatic).map_err(|e| e.to_string())?;
                 eprintln!("SAM3 loaded on {}", m.backend());
-                if let Some(warm) = m.warm_up() {
-                    let _ = std::thread::Builder::new().name("sam3-warm-up".into()).spawn(move || {
-                        let t = std::time::Instant::now();
-                        match warm.run(&std::sync::atomic::AtomicBool::new(false)) {
-                            Ok(()) => eprintln!("SAM3 Core ML warmed up in {:.1}s", t.elapsed().as_secs_f64()),
-                            Err(e) => eprintln!("SAM3 Core ML warm-up failed: {e}"),
-                        }
-                    });
-                }
                 model = Some(m);
             }
             let m = model.as_mut().ok_or("SAM model unavailable")?;
@@ -218,6 +212,45 @@ fn serve_client(stream: &mut TcpStream, dir: &Path, device: candle_core::Device)
         if result.is_err() {
             return Err("SAM inference failed; session released".into());
         }
+        // waiting for the next request: plan Core ML's parts not run yet
+        warming.resume(model.as_ref().and_then(Sam3::warm_up));
+    }
+}
+
+/// Core ML's warm-up between requests (issue #268): one at a time, started after a reply, stopped between parts when
+/// the next request comes (and when the session ends), so a request never waits for more than the part it is on.
+#[derive(Default)]
+struct Warming {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+impl Warming {
+    fn pause(&self) {
+        self.stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    fn resume(&mut self, warm: Option<crate::WarmUp>) {
+        let Some(warm) = warm.filter(|w| !w.done()) else { return };
+        if self.thread.as_ref().is_some_and(|t| !t.is_finished()) {
+            return;
+        }
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        self.stop = stop.clone();
+        let spawned = std::thread::Builder::new().name("sam3-warm-up".into()).spawn(move || {
+            let t = std::time::Instant::now();
+            match warm.run(&stop) {
+                Ok(()) => eprintln!("SAM3 Core ML warm-up: {:.1}s{}", t.elapsed().as_secs_f64(), if warm.done() { ", done" } else { "" }),
+                Err(e) => eprintln!("SAM3 Core ML warm-up failed: {e}"),
+            }
+        });
+        self.thread = spawned.ok();
+    }
+}
+
+impl Drop for Warming {
+    fn drop(&mut self) {
+        self.pause();
     }
 }
 

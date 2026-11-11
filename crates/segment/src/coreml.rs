@@ -23,8 +23,9 @@
 //! that matches nothing never runs `textmask`. Every output is checked for its size and for numbers that are not
 //! finite: such an output is an error, and on Automatic candle takes the run over.
 //!
-//! Core ML plans each part on the GPU at its first run after loading (1.6–5.6 s once per launch); [`Parts::warm_up`]
-//! runs each part once on made-up inputs, off the thread that runs the user's clicks.
+//! Core ML plans each part on the GPU at its first run after loading (1.6–5.6 s once per launch); [`Parts::warm_next`]
+//! runs one part not run yet on made-up inputs, off the thread that runs the user's clicks, never waiting for a run of
+//! the user's (the caller runs it while the user is idle and stops between parts when a request comes).
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -341,16 +342,25 @@ impl Parts {
         Ok(Masks { masks: take(&mut out)?, semantic: take(&mut out)? })
     }
 
-    /// Run each part once on made-up inputs, so Core ML plans it on the GPU now and not in the user's first click or
-    /// prompt: the click decoder first, then the encoder and the prompt parts. A part that already ran is skipped;
-    /// `stop` is checked between parts. Returns the first error (the parts after it are not warmed).
-    pub fn warm_up(&self, stop: &AtomicBool) -> Result<(), Error> {
-        let order = [Part::ClickDec, Part::Encoder, Part::ClickFeat, Part::TextFeat, Part::TextScore, Part::TextMask];
-        for part in order {
-            if stop.load(Ordering::Relaxed) {
-                return Ok(());
-            }
-            let mut warm = self.lock(part);
+    /// The order the parts are warmed up in: the click decoder first (the user's next step after a photo is ready),
+    /// then the prompt parts; the encoder and the click features run when a photo is analysed.
+    const WARM_ORDER: [Part; 6] = [Part::ClickDec, Part::TextFeat, Part::TextScore, Part::TextMask, Part::Encoder, Part::ClickFeat];
+
+    /// Whether every part has run once since loading. A part running right now counts as not run yet.
+    pub fn warmed(&self) -> bool {
+        Part::ALL.iter().all(|p| self.slot(*p).warm.try_lock().is_ok_and(|w| *w))
+    }
+
+    /// Run the next part that has not run yet on made-up inputs, so Core ML plans it on the GPU now and not in the
+    /// user's first click or prompt. Never waits for a user's run: a part running right now is skipped (that run
+    /// plans it), and so is a part that has run. One prediction at most; `Ok(false)` when no part was left to run.
+    pub fn warm_next(&self) -> Result<bool, Error> {
+        for part in Self::WARM_ORDER {
+            let mut warm = match self.slot(part).warm.try_lock() {
+                Ok(w) => w,
+                Err(std::sync::TryLockError::Poisoned(p)) => p.into_inner(),
+                Err(std::sync::TryLockError::WouldBlock) => continue,
+            };
             if *warm {
                 continue;
             }
@@ -377,7 +387,14 @@ impl Parts {
             let names: Vec<&str> = part.outputs().iter().map(|(n, _)| *n).collect();
             model.predict_many(&inputs, &names)?;
             *warm = true;
+            return Ok(true);
         }
+        Ok(false)
+    }
+
+    /// [`Parts::warm_next`] until every part has run or `stop` is raised (checked between parts).
+    pub fn warm_up(&self, stop: &AtomicBool) -> Result<(), Error> {
+        while !stop.load(Ordering::Relaxed) && self.warm_next()? {}
         Ok(())
     }
 }

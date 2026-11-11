@@ -152,12 +152,25 @@ struct CoreMlFeatures {
 }
 
 #[cfg(not(target_arch = "wasm32"))]
-/// Runs each Core ML part once so its first real run is fast ([`Sam3::warm_up`]); `Send`, for another thread.
+/// Runs each Core ML part once so its first real run is fast ([`Sam3::warm_up`]); `Send` and `Sync`, for another
+/// thread. Cheap to clone.
+#[derive(Clone)]
 pub struct WarmUp(Arc<coreml::Parts>);
 
 #[cfg(not(target_arch = "wasm32"))]
 impl WarmUp {
-    /// Plan every part on the GPU now; `stop` is checked between parts.
+    /// Plan the next part not run yet on the GPU (one prediction at most; a part the user is running is skipped);
+    /// `false` when none was left.
+    pub fn step(&self) -> Result<bool> {
+        self.0.warm_next().map_err(|e| Error::CoreMl(e.to_string()))
+    }
+
+    /// Whether every part has run once.
+    pub fn done(&self) -> bool {
+        self.0.warmed()
+    }
+
+    /// [`WarmUp::step`] until every part has run or `stop` is raised (checked between parts).
     pub fn run(&self, stop: &std::sync::atomic::AtomicBool) -> Result<()> {
         self.0.warm_up(stop).map_err(|e| Error::CoreMl(e.to_string()))
     }
