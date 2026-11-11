@@ -683,12 +683,21 @@ impl Session {
             }
             _ => None,
         };
+        // (…and its matte is made from the picture a people parse uses, so the two share one matte)
+        let plain = match (&kind, region) {
+            (worker::Kind::BiRefNet { .. }, None) => {
+                let edge = crate::people_parsing::PARSE_EDGE;
+                self.preview_job(id, edge, edge, false, &lightcraft_develop::DevelopSettings::default())
+            }
+            _ => None,
+        };
         let job_id = self.segmenter.next_job_id;
         self.segmenter.next_job_id = self.segmenter.next_job_id.wrapping_add(1).max(1);
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let remote = self.segmenter.remote_endpoint();
         Ok(worker::Job {
             refine,
+            plain,
             detail: Vec::new(),
             id: job_id,
             cancel,

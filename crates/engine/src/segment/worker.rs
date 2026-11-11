@@ -97,6 +97,10 @@ pub struct Job {
     pub remote: Option<String>,
     /// Renders the photo at the size a Subject or Background selection's edge is refined at (fork, issue #240).
     pub refine: Option<RenderJob>,
+    /// Renders the photo as people parsing sees it (upright, uncropped, default settings, `PARSE_EDGE` long): BiRefNet
+    /// Matting mattes this picture for a Subject or Background, so its matte is the one a people parse of the photo
+    /// makes, made once for both (fork, issue #240).
+    pub plain: Option<RenderJob>,
     /// The finer grids over the selection's edge the job made (fork, issue #240), sent with its result.
     pub detail: Vec<SegMask>,
 }
@@ -645,6 +649,7 @@ mod tests {
             reply: reply.clone(),
             remote: None,
             refine: None,
+            plain: None,
             detail: Vec::new(),
         }
     }

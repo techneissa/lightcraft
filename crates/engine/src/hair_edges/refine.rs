@@ -28,9 +28,9 @@ const COARSE_SIDE: usize = 1024;
 
 /// A Subject selection `base` (a grid over the whole photo) refined on the photo `rgb` (`w × h`, the oriented,
 /// uncropped photo at the working size): the grid over the whole photo and the finer grids over its edge, all marked
-/// `<base model>+refined`. `None` when it can't be refined (sizes that don't add up, a damaged grid, stopped): the
-/// caller keeps `base`.
-pub fn subject(base: &SegMask, rgb: &[u8], w: usize, h: usize, cancel: &Arc<AtomicBool>) -> Option<(SegMask, Vec<SegMask>)> {
+/// `<base model>+refined`. `None` when it can't be refined (sizes that don't add up, a damaged grid, `stop` said
+/// so): the caller keeps `base`.
+pub fn subject(base: &SegMask, rgb: &[u8], w: usize, h: usize, stop: &(dyn Fn() -> bool + Sync)) -> Option<(SegMask, Vec<SegMask>)> {
     let img = Rgb { data: rgb, w, h };
     if !img.is_valid() || base.rect.is_some() {
         return None;
@@ -48,8 +48,7 @@ pub fn subject(base: &SegMask, rgb: &[u8], w: usize, h: usize, cancel: &Arc<Atom
         sigmoid(top * (1.0 - ty) + bot * ty)
     });
     let cell = (w.max(h) as f32 / side.max(1) as f32).max(1.0);
-    let stop = || cancel.load(Ordering::Relaxed);
-    snap(&img, &mut alpha, radius_for(cell), &stop).ok()?;
+    snap(&img, &mut alpha, radius_for(cell), stop).ok()?;
     let (coarse, tiles) = store(&alpha, COARSE_SIDE)?;
     let id = format!("{}{SUFFIX}", base.model.as_deref().unwrap_or("sam3"));
     let main = SegMask::from_logits(coarse.side, &coarse.logits).made_by(&id);
