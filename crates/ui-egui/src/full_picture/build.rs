@@ -33,6 +33,20 @@ pub struct Plan {
     /// Make the cut fail (tests: a build that panics).
     #[cfg(test)]
     pub fail_cut: bool,
+    /// Tests: the memory gate this build waits at instead of the process's (`None`: the process's). Every test of the
+    /// crate shares one process, so a test that holds the process's gate holds up every other test's loads.
+    #[cfg(test)]
+    pub gate: Option<&'static lightcraft_engine::memory::WorkGate>,
+}
+
+/// The memory gate a build waits at: the process's, or the test's own ([`Plan::gate`]).
+fn gate_of(plan: &Plan) -> &'static lightcraft_engine::memory::WorkGate {
+    #[cfg(test)]
+    if let Some(own) = plan.gate {
+        return own;
+    }
+    let _ = plan;
+    lightcraft_engine::memory::work_gate()
 }
 
 /// Builds running at once ([`Plan::at_once`]).
@@ -124,7 +138,7 @@ pub(super) fn render(mut job: RenderJob, plan: &Plan) -> (RenderResult, Option<R
     // so no permit of the build's may be held across it: that wait would be for the build itself.
     let mut loaded = None;
     if !matches!(job.source, SourceRef::Loaded(_)) {
-        if !wait_at_gate(&job, &plan.cancel) {
+        if !wait_at_gate(gate_of(plan), &job, &plan.cancel) {
             return (job.failed("cancelled".into()), None);
         }
         match job.source.load_source() {
@@ -141,7 +155,7 @@ pub(super) fn render(mut job: RenderJob, plan: &Plan) -> (RenderResult, Option<R
     let [w, h] = plan.size;
     let px = w.saturating_mul(h);
     let weight = lightcraft_engine::export::render_weight(px, w.max(h), job.level, px);
-    let Some(held) = lightcraft_engine::memory::work_gate().acquire_unless(weight, stopped) else {
+    let Some(held) = gate_of(plan).acquire_unless(weight, stopped) else {
         return (job.failed("cancelled".into()), None);
     };
     let mut r = job.run();
@@ -163,11 +177,11 @@ pub(super) fn render(mut job: RenderJob, plan: &Plan) -> (RenderResult, Option<R
 const GATE_WEIGHT: usize = 6;
 
 /// Wait at the memory gate for `job`'s file load, when it reads a file; `false` when `cancel` was set meanwhile.
-fn wait_at_gate(job: &RenderJob, cancel: &AtomicBool) -> bool {
+fn wait_at_gate(gate: &lightcraft_engine::memory::WorkGate, job: &RenderJob, cancel: &AtomicBool) -> bool {
     let SourceRef::File { path, .. } = &job.source else { return true };
     let len = std::fs::metadata(path).map(|m| usize::try_from(m.len()).unwrap_or(usize::MAX)).unwrap_or(0);
     // (held only for the wait: the load takes its own place, as interactive work, once it is this one's turn)
-    lightcraft_engine::memory::work_gate().acquire_unless(len.saturating_mul(GATE_WEIGHT), || cancel.load(Ordering::Relaxed)).is_some()
+    gate.acquire_unless(len.saturating_mul(GATE_WEIGHT), || cancel.load(Ordering::Relaxed)).is_some()
 }
 
 /// Write the picture to the disk cache off the worker: the textures go to the screen first. Its bytes count in

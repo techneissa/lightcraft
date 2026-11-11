@@ -270,14 +270,21 @@ fn the_build_waits_for_the_read_ahead_and_decodes_nothing_again() {
 
 // Given a build waiting at the memory gate (AI Denoise holds it for its whole run), when the look changes, then the
 // build stops there at once instead of waiting for the gate, and the new look's picture is built once the gate frees
+//
+// (The gate is this app's own, not the process's: every test of the crate shares one process, and holding its gate for
+// as long as a failing test waits held up the loads of every other test running then. The build is waited for at the
+// gate, not only for its row: a build still queued when the look changes is dropped from the queue, which ends
+// nothing at the gate and is not counted.)
 #[test]
 fn a_build_waiting_at_the_memory_gate_stops_when_the_look_changes() {
     let fixture = RenderFixture::new("full-picture-gate", 1);
     let mut h = loupe(&fixture, None);
-    // (the whole gate, as AI Denoise holds it; the loupe's own renders go past it, as interactive work does)
-    let gate = lightcraft_engine::memory::work_gate();
-    let held = gate.acquire(gate.usage().1.max(1));
-    assert!(h.step_until(SETTLE, row), "a build starts, and waits at the gate");
+    let gate: &'static lightcraft_engine::memory::WorkGate = Box::leak(Box::new(lightcraft_engine::memory::WorkGate::new(1 << 30)));
+    h.app.renderer.full.gate = Some(gate);
+    let held = gate.acquire(gate.usage().1);
+    assert!(h.step_until(SETTLE, row), "a build is asked for");
+    let at_once = h.app.renderer.full.at_once.clone();
+    assert!(h.step_until(SETTLE, |_| at_once.now.load(std::sync::atomic::Ordering::SeqCst) == 1), "the build runs, and waits at the gate");
     exec(&mut h, "develop.set", json!({"values": {"light.exposure": 0.5}}));
     let stopped = h.step_until(SETTLE, |h| h.app.renderer.full.stats.dropped >= 1);
     drop(held);
@@ -362,6 +369,7 @@ fn the_picture_is_the_whole_frame_render_pixel_for_pixel() {
         at_once: Arc::default(),
         writing: Arc::default(),
         fail_cut: false,
+        gate: None,
     };
     let built = super::work(whole, plan).1.expect("the picture");
     assert_eq!(built.levels.first(), Some(&size));
