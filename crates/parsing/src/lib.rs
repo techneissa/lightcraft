@@ -19,6 +19,7 @@
 pub mod cache;
 pub mod image;
 pub mod models;
+pub mod profile;
 pub mod render;
 mod types;
 

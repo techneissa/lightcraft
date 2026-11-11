@@ -400,6 +400,15 @@ impl PeopleParsing {
         lock(&self.inner.memory).iter().find(|e| e.0 == key).map(|e| e.1.clone())
     }
 
+    /// Tests and tools: forget the parses kept in memory (the disk cache stays), so the next parse of a photo reads its
+    /// file or runs the models.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn forget_kept(&self) {
+        lock(&self.inner.memory).clear();
+        lock(&self.inner.jobs).map.retain(|_, j| matches!(j, Job::Running(_)));
+    }
+
     fn remember(&self, key: &str, p: Arc<Parsing>) {
         let mut m = lock(&self.inner.memory);
         m.retain(|e| e.0 != key);
@@ -573,11 +582,13 @@ impl PeopleParsing {
                 let cancelled = || flag.load(Ordering::Relaxed) || lightcraft_gpu::shutting_down();
                 let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let p = this.run(set, &models, &img, &hints, &cancelled)?;
-                    match &matting {
+                    let p = match &matting {
                         Some((edges, crate::hair_edges::Edge::Vision)) => crate::hair_edges::vision::people_edged(edges, p, &img, &flag),
                         Some((edges, edge)) => hair_edged(edges, *edge, p, &img, &flag),
                         None => Ok(p),
-                    }
+                    };
+                    lightcraft_parsing::profile::mark("people edges");
+                    p
                 }));
                 let result = match ran {
                     Ok(Ok(p)) => {
@@ -586,7 +597,9 @@ impl PeopleParsing {
                             if let Err(e) = cache::store(&dir, &key, &p) {
                                 log::warn!("people parsing: {e}");
                             }
+                            lightcraft_parsing::profile::mark("cache write");
                             cache::prune(&dir, CACHE_BYTES);
+                            lightcraft_parsing::profile::mark("cache prune");
                         }
                         this.remember(&key, p.clone());
                         *lock(&this.inner.message) = None;
@@ -622,6 +635,7 @@ impl PeopleParsing {
         let _one_at_a_time = lock(&self.inner.one_run);
         // (one model on the GPU at a time, hair edges and LaMa included: `crate::gpu_run`)
         let _gpu = crate::gpu_run::turn();
+        lightcraft_parsing::profile::mark("gpu wait");
         if cancelled() {
             return Err("cancelled".into());
         }
@@ -654,6 +668,7 @@ impl PeopleParsing {
                 if self.inner.stale.load(Ordering::Acquire) == stale {
                     *slot = Some(Loaded { set, parser: p.clone(), last_used: Instant::now() });
                 }
+                lightcraft_parsing::profile::mark("model load");
                 p
             }
         };

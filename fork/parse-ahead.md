@@ -92,6 +92,56 @@ while other builds were running; 2026-11-09):
 - After a restart: all 6 skipped without a render, and opening each read its parse from disk in 0.1–4 ms.
 - A parse file is 100–230 KB (132 bytes for a photo with nobody in it).
 
+## What one parse costs (issue #200)
+
+`crates/engine/examples/parse_profile.rs` parses photos as the worker does (`Session::parse_ahead_one`, test hooks
+only) and splits each parse at the marks of `lightcraft_parsing::profile` (the render, the face detection, the model
+load, each model, the post-processing, the cache write), in wall and CPU time (CPU: the whole process, every thread):
+
+```bash
+LIGHTCRAFT_CONFIG_DIR=<scratch> cargo run --release -p lightcraft-engine --features test-hooks \
+    --example parse_profile -- OUT_DIR [--set segformer|bisenet|sapiens2] [--rounds N] PHOTO...
+```
+
+A test Mac, other builds running (load average 8–48), 7 CC0 portraits (18–24 MP JPEGs) and 2 CC0 raws (Sony, 24 and
+33 MP), models warm (the second round), mean per photo, before the change below. Wall / CPU in ms:
+
+| Step | SegFormer (Core ML) | BiSeNet (candle, mesh on Core ML) | Sapiens2 (candle, B0 and B3 on Core ML) |
+| --- | ---: | ---: | ---: |
+| Render at 2048 px (JPEG 54–300, raw 600–690 wall) | 224 / 271 | 167 / 242 | 159 / 258 |
+| Face detection (YuNet) | 51 / 13 | 39 / 7 | 22 / 7 |
+| Clothes parser: resize to its grid | 31 / 31 | 27 / 27 | 28 / 28 |
+| Clothes parser: model | 172 / 133 | 700 / 586 | 157 / 118 |
+| Sapiens2 | — | — | 1165 / 322 |
+| Telling people apart, body planes | 9 / 8 | 8 / 8 | 8 / 8 |
+| Face parser, face mesh, face planes | 59 / 58 | 94 / 49 | 48 / 47 |
+| Cache write and prune | 1 / 1 | 1 / 1 | 1 / 1 |
+| Loading the set (once a minute of use) | 484 / 352 | 318 / 313 | 2211 / 2193 |
+
+- The models cost little on Core ML except for one thing: Core ML plans a model on the GPU again whenever its input
+  shape changes from the call before. The clothes parser's canvas follows the photo's shape, so a portrait after a
+  landscape (or a 4:3 photo after a 3:2 one) paid about 300 ms of wall and CPU time, more than four runs of the model:
+  68 ms and 28 ms CPU in one shape, 98–134 ms and 100–172 ms CPU a call when two shapes alternate
+  (`crates/parsing/examples/coreml_shapes.rs`). The face parser and mesh did the same with their batch size. Fixed:
+  each model keeps one input shape (`fork/coreml.md`).
+- After that, the render is the largest step: the raw decode (macOS's, 570–670 ms for a 24–33 MP Sony raw at the
+  2560 px preview size) or the JPEG decode (240–300 ms for 24 MP). The parse of the open photo already reuses the
+  decode the loupe made; the neighbours' are decoded for the parse and dropped.
+- BiSeNet's clothes parser (SegFormer-B2) runs on candle at 700 ms; Sapiens2 at 1.2 s. Converting them to Core ML is
+  the next step for those sets.
+
+After the change (same Mac and photos plus 5 CC0 group photos of 2 to 26 people, before and after run in turn three
+times, load average 25–39), mean per photo over 14 photos, CPU: 565–623 ms → 490–521 ms. By step, CPU: clothes parser
+139–157 → 80–83 ms, face parser 63–72 → 48–50 ms, face mesh 29–33 → 14 ms. On the 9 photos without the groups, the
+clothes parser went from 191–207 ms wall and 127–134 ms CPU to 113–116 ms and 30–41 ms. Wall times swung with the other
+builds (the render alone moved 125–330 ms between runs); CPU time held.
+
+Masks against the parses before (`crates/parsing/examples/parse_agree.rs` on the two cache folders; each part over
+everyone at the parse's size, cut at 0.5): at least 99.97 % of pixels the same in every part, IoU at least 0.997 for
+every part covering more than 0.5 % of the photo (0.94 for a shoe of a few hundred pixels), the same people, landmarks
+within 0.001 px. Two runs of the code before give identical parses. Sapiens2: 99.994 % and IoU 0.9995 at worst;
+BiSeNet: identical.
+
 ## Branch
 
 `perf/masks-ahead-of-time`
@@ -100,11 +150,14 @@ while other builds were running; 2026-11-09):
 
 `crates/engine/src/parse_ahead.rs`, `crates/engine/src/parse_ahead/{queue,index,peek,power,worker}.rs`,
 `crates/engine/src/people_parsing/ahead.rs`, `crates/engine/src/cmd/parse_ahead.rs`,
-`crates/engine/src/tests/parse_ahead.rs`, `crates/engine/src/tests/parse_ahead_peek.rs`, `crates/engine/examples/parse_ahead.rs`, `crates/ui-egui/src/parse_ahead.rs`,
+`crates/engine/src/tests/parse_ahead.rs`, `crates/engine/src/tests/parse_ahead_peek.rs`, `crates/engine/examples/parse_ahead.rs`,
+`crates/engine/examples/parse_profile.rs`, `crates/ui-egui/src/parse_ahead.rs`,
 `crates/ui-egui/src/tests/parse_ahead.rs`, `fork/parse-ahead.md`, `fork/tests.d/parse-ahead.txt`
 
 ## Hooks in official files
 
+- `crates/engine/Cargo.toml`: the `parse_profile` example (`test-hooks`) and `rustix` (its CPU clock) as a
+  dev-dependency.
 - `crates/engine/src/lib.rs`: `pub mod parse_ahead`, field `Session::parse_ahead`. `crates/engine/src/cmd.rs`:
   `mod parse_ahead`, its specs. The `mod` lines of `crates/engine/src/tests.rs`, `crates/ui-egui/src/tests.rs` and
   `crates/ui-egui/src/lib.rs`.

@@ -172,8 +172,10 @@ impl Prepare {
     /// The first step: render the picture.
     pub(crate) fn render(self) -> std::result::Result<Rendered, String> {
         let image = self.job.run().rendered?.image;
+        lightcraft_parsing::profile::mark("render");
         let rgb: Vec<u8> = image.data.iter().flat_map(|px| [px[0], px[1], px[2]]).collect();
         let img = RgbImage::new(image.width, image.height, rgb).map_err(|e| e.to_string())?;
+        lightcraft_parsing::profile::mark("to rgb");
         Ok(Rendered { img, detector: self.detector, regions: self.regions })
     }
 }
@@ -192,7 +194,9 @@ impl Rendered {
             Detect::Loaded(d) => Some(d),
             Detect::Load(path) => super::face_detect::detector_at(&path).map_err(|e| log::info!("people parsing: no faces found first: {e}")).ok(),
         };
+        lightcraft_parsing::profile::mark("detector load");
         let hints = hints_for(detector.as_deref(), &img, &regions)?;
+        lightcraft_parsing::profile::mark("face detect");
         Ok((img, hints))
     }
 }

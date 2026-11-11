@@ -74,6 +74,10 @@ trash = { workspace = true }
 lightcraft-reflections = { workspace = true }
 
 [[example]]
+name = "parse_profile"
+required-features = ["test-hooks"]
+
+[[example]]
 name = "birefnet_compare"
 required-features = ["sam"]
 
@@ -107,6 +111,8 @@ jxl-oxide = { workspace = true }
 # Lossless synthetic HEIC files (the import test; decoded when the codecs' `heif` feature is on).
 lightcraft-heif = { workspace = true, features = ["testdata"] }
 libc = { workspace = true }
+# the parse profile reads the process's CPU time (issue #200)
+rustix = { version = "1", default-features = false, features = ["std", "time"] }
 lightcraft-tiff = { workspace = true }
 # animated GIF tests decode the frames written
 gif = { workspace = true }
