@@ -317,6 +317,53 @@ fn the_face_reshape_section_has_its_seven_sliders() {
     assert!(v > 30.0 && v < 70.0, "Slim Face set by the click: {v}");
 }
 
+/// Two faces that are found only once `open` is set: the search stays running as long as a test wants.
+struct GatedFaces {
+    open: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl FaceProvider for GatedFaces {
+    fn name(&self) -> &str {
+        "Gated Faces"
+    }
+    fn faces(&self, img: &lightcraft_raster::Rgba8) -> Result<Vec<Face>, String> {
+        // (a hang guard, not a timing check)
+        let until = std::time::Instant::now() + T;
+        while !self.open.load(std::sync::atomic::Ordering::SeqCst) && std::time::Instant::now() < until {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        TwoFaces.faces(img)
+    }
+}
+
+/// The face search finishing (#189) does not move the sections: a slider a person is about to press stays where it
+/// was while the search ran, so a press and its release land on the same slider.
+#[test]
+fn the_sections_do_not_move_when_the_face_search_finishes() {
+    let open = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let mut session = lightcraft_engine::Session::with_demo();
+    session.retouch_faces.set_provider(Arc::new(GatedFaces { open: open.clone() }));
+    let app = LightcraftApp::new(session, Services { png: None, ..Default::default() });
+    let mut h = Headless::new(app, [1200.0, 1600.0], 1.0);
+    assert_eq!(h.request("ui.set", json!({"view": "detail"}), T)["ok"], true);
+    click(&mut h, "icon:portrait");
+    click(&mut h, "section:portrait.reshape");
+    h.step();
+    let photo = h.app.session.active().unwrap();
+    assert!(h.app.session.retouch_faces_of(photo).busy, "the search is running");
+    let before = rect_of(&mut h, "slider:retouch.reshape.slimFace").expect("the slider shows while the search runs");
+    open.store(true, std::sync::atomic::Ordering::SeqCst);
+    // (a hang guard, not a timing check)
+    let until = std::time::Instant::now() + T;
+    while h.app.session.retouch_faces_of(photo).found.is_none() {
+        assert!(std::time::Instant::now() < until, "the faces were never found");
+        h.step();
+    }
+    h.step();
+    h.step();
+    assert_eq!(rect_of(&mut h, "slider:retouch.reshape.slimFace"), Some(before), "the slider stayed where it was");
+}
+
 /// The Wrinkles section (`portrait/wrinkles.rs`): Forehead, Crow's Feet, Smile Lines and Neck; a click on a track sets
 /// the value for every face.
 #[test]
