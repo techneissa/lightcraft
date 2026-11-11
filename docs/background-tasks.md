@@ -66,9 +66,12 @@ let guard = session.activity.start_background("faces", "Finding faces", Cancel::
 - `Activity::start_background` is `start` with the flag; `TaskInfo::background` (`activity.list`, `ui.inspect`) reports
   it, and a child row of a background batch is background too. From the UI, `tasks::spawn_background` does the same
   for a worker thread.
-- Marked today: the app's own preview preparation ("Preparing photos in the background"), the face scan and its GPU
-  check, "Finding people parts ahead", reading focus points, the full-size view and its read-ahead, the colour check
-  of new imports, the thumbnail-cache tidy, and the raw recheck when a library opens.
+- Marked today: the app's own preview preparation ("Preparing photos in the background"), the face scan, "Finding people
+  parts ahead", the automatic focus-point read (not Photo ▸ Read Focus Points), the full-size view and its read-ahead,
+  the thumbnail-cache tidy, and the raw recheck when a library opens.
+- **Check before marking:** a task is background only when no command a person runs reaches it. One start shared by an
+  automatic and a user path (focus points) takes a `background` argument; the GPU check for faces and the macOS colour
+  check are reached from user commands, so they keep their row.
 - **Not background:** anything a person starts or waits for. Export, import, scan, synchronize, Build Previews and Build
   Smart Previews, downloads, merges, AI Denoise, LaMa and masking jobs, Edit In and Find Missing Photos keep their row
   in the stack, with their ✕.

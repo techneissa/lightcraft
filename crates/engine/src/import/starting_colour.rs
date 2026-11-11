@@ -223,7 +223,7 @@ pub(crate) fn check_later(activity: &crate::activity::Activity, gate: GateRef, u
     if todo.is_empty() {
         return;
     }
-    let task = activity.start_background("macosCheck", CHECKING_LABEL, crate::activity::Cancel::No);
+    let task = activity.start("macosCheck", CHECKING_LABEL, crate::activity::Cancel::No);
     let keys: Vec<Key> = todo.iter().map(|(k, _)| k.clone()).collect();
     let worker = gate.clone();
     let spawned = std::thread::Builder::new().name("lc-macos-check".into()).spawn(move || {
