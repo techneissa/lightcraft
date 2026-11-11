@@ -11,7 +11,10 @@ use crate::state::{Dialog, UiState};
 use crate::{LightcraftApp, Services};
 use lightcraft_engine::import::ImportCandidate;
 
-const T: Duration = Duration::from_secs(30);
+/// A hang guard, not a budget: a wait ends as soon as the previews are made. The suite runs these tests among
+/// thousands of others on a machine that may be loaded many times over, where six copies of this file at once
+/// already stretch its settles from under a second to ten and more.
+const T: Duration = Duration::from_secs(180);
 
 /// Size buckets follow physical pixels, with finite fallbacks and a fixed allocation ceiling.
 #[test]
@@ -33,9 +36,11 @@ struct Review {
 }
 
 impl Review {
-    /// Open sixty candidates at the requested display density, including duplicate/error badges.
+    /// Open sixty candidates at the requested display density, including duplicate/error badges. The source is
+    /// as big as the largest preview the density asks for needs (1024 px at scale 2 and up, 384 px below), no
+    /// bigger: each tile's preview decodes it.
     fn new(scale: f32) -> Self {
-        Self::with_dimensions(scale, 1600, 1200)
+        if scale > 1.0 { Self::with_dimensions(scale, 1600, 1200) } else { Self::with_dimensions(scale, 640, 480) }
     }
 
     fn with_dimensions(scale: f32, width: usize, height: usize) -> Self {
