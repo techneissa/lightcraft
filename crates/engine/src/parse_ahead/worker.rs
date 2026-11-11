@@ -84,6 +84,8 @@ pub struct Holds {
     pub hold: Arc<AtomicBool>,
     pub parsing: PeopleParsing,
     pub activity: Activity,
+    /// The session's photo on screen being made.
+    pub foreground: crate::prep::Foreground,
 }
 
 impl Worker {
@@ -141,7 +143,7 @@ pub fn exporting(activity: &Activity) -> bool {
 
 /// Whether the worker must wait now.
 fn held(h: &Holds) -> bool {
-    h.hold.load(Ordering::SeqCst) || crate::prep::foreground_busy() || h.parsing.others_running(None) || exporting(&h.activity)
+    h.hold.load(Ordering::SeqCst) || h.foreground.busy() || h.parsing.others_running(None) || exporting(&h.activity)
 }
 
 /// Wait while held; `false`: the task was dropped meanwhile.

@@ -119,7 +119,7 @@ pub(super) fn pump(s: &mut Session, pace: Pace) {
         return;
     }
     // (a check going waits too: its worker reads this; nothing is checked while the user culls, issue #200)
-    let held = pace == Pace::Pause || s.parse_ahead.culling || crate::prep::foreground_busy() || worker::exporting(&s.activity);
+    let held = pace == Pace::Pause || s.parse_ahead.culling || s.prep.foreground.busy() || worker::exporting(&s.activity);
     peek.hold.store(held, Ordering::SeqCst);
     let Some(id) = active else { return };
     if held || peek.running.is_some() || peek.settled == Some((id, revision)) {
@@ -158,7 +158,7 @@ fn start(s: &mut Session, id: PhotoId) -> bool {
     }
     let peek = &mut s.parse_ahead.peek;
     let (cancel, ended) = (Arc::new(AtomicBool::new(false)), Arc::new(AtomicU8::new(RUNNING)));
-    let gate = Gate { hold: peek.hold.clone(), cancel: cancel.clone(), activity: s.activity.clone() };
+    let gate = Gate { hold: peek.hold.clone(), cancel: cancel.clone(), activity: s.activity.clone(), foreground: s.prep.foreground.clone() };
     let task = Task { gate, parsing: s.parsing.clone(), known, detect: detect.zip(job) };
     #[cfg(not(target_arch = "wasm32"))]
     {
@@ -203,6 +203,7 @@ struct Gate {
     hold: Arc<AtomicBool>,
     cancel: Arc<AtomicBool>,
     activity: Activity,
+    foreground: crate::prep::Foreground,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -220,7 +221,7 @@ enum Ended {
 impl Gate {
     /// Wait while the work is held back; `false`: the check was dropped meanwhile.
     fn wait(&self) -> bool {
-        while self.hold.load(Ordering::SeqCst) || crate::prep::foreground_busy() || worker::exporting(&self.activity) {
+        while self.hold.load(Ordering::SeqCst) || self.foreground.busy() || worker::exporting(&self.activity) {
             if self.cancel.load(Ordering::SeqCst) {
                 return false;
             }

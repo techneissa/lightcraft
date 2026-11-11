@@ -1173,7 +1173,7 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
             && let Some((_, view)) = &job.view_cache
             && app.renderer.adopt_prefetch(id, *view, fit_px)
         {
-            signal_foreground();
+            signal_foreground(&app.session);
             return;
         }
         let planes_for = job.clone();
@@ -1183,7 +1183,7 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
         // while they are being made (only then: this runs every loupe frame, and renders already made ask for
         // nothing). Stepping through photos keeps it waiting; it goes on once they are ready.
         if app.renderer.is_pending(Slot::Main) || app.renderer.prefetches_pending() > 0 {
-            signal_foreground();
+            signal_foreground(&app.session);
         }
         // a drag's draft that renders in a few ms (GPU) is drawn in this frame, not the next (zoomed
         // in, what changes on screen is the window's draft)
@@ -1219,11 +1219,11 @@ pub(super) fn request_planes(
     app.renderer.request(ask_slot, alpha, 99);
 }
 
-/// Tell background preparation the loupe is waiting for its render ([`lightcraft_engine::prep::foreground`]).
-fn signal_foreground() {
+/// Tell this session's background preparation the loupe is waiting for its render ([`lightcraft_engine::prep::Foreground::signal`]).
+fn signal_foreground(session: &lightcraft_engine::Session) {
     #[cfg(test)]
     FOREGROUND_SIGNALS.with(|n| n.set(n.get() + 1));
-    lightcraft_engine::prep::foreground();
+    session.prep.foreground.signal();
 }
 
 #[cfg(test)]

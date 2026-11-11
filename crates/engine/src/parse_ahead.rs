@@ -10,7 +10,7 @@
 //!
 //! Never in the way:
 //! - The frontend's per-frame pump (`parsing.ahead.pump`) gives the pace: nothing new while the user drags, types or
-//!   scrolls, or while the photo on screen is being made ([`crate::prep::foreground_busy`]); a model run going then is
+//!   scrolls, or while the photo on screen is being made ([`crate::prep::Foreground::busy`]); a model run going then is
 //!   stopped (unless someone waits for it) and run again later. Another parse (a request) always goes first.
 //! - One photo at a time, so the GPU turn is given up between photos.
 //! - Nothing in Low Power Mode or on battery below [`power::MIN_BATTERY`] %; nothing when the setting is off
@@ -530,7 +530,7 @@ fn change(s: &Session, stamp: &Stamp) -> Change {
 /// Whether the work is held back now (nothing new starts), before the power and the setting: the pace, the photo on
 /// screen being made, another parse (a request), an export.
 fn holding(s: &Session, pace: Pace, mine: Option<&str>) -> bool {
-    pace == Pace::Pause || crate::prep::foreground_busy() || s.parsing.others_running(mine) || worker::exporting(&s.activity)
+    pace == Pace::Pause || s.prep.foreground.busy() || s.parsing.others_running(mine) || worker::exporting(&s.activity)
 }
 
 /// One pump: take in finished photos, follow the pace, rebuild the queue when what it was built from changed, and
@@ -663,7 +663,12 @@ fn ask_save(ahead: &mut ParseAhead) {
 fn ensure_worker(s: &mut Session) -> Option<&worker::Worker> {
     let ahead = &mut s.parse_ahead;
     if ahead.worker.is_none() {
-        let holds = worker::Holds { hold: ahead.hold.clone(), parsing: s.parsing.clone(), activity: s.activity.clone() };
+        let holds = worker::Holds {
+            hold: ahead.hold.clone(),
+            parsing: s.parsing.clone(),
+            activity: s.activity.clone(),
+            foreground: s.prep.foreground.clone(),
+        };
         match worker::Worker::start(holds, ahead.index.clone()) {
             Ok(w) => ahead.worker = Some(w),
             Err(e) => log::warn!("parse ahead: {e}"),
