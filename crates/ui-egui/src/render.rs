@@ -421,12 +421,14 @@ pub struct Renderer {
     prefetched: HashMap<Slot, prefetch::Asked>,
     /// How long a prefetch render takes (ms), averaged ([`Self::prefetch_secs`]).
     prefetch_ms: Option<f64>,
-    /// The loupe's renders sent to the workers that have not come back: (photo, request id, when), oldest first. A
-    /// step replaces the one queued, but one running finishes, and writes the photo's kept view ([`Self::main_rendering`]).
-    main_out: Vec<(PhotoId, u64, web_time::Instant)>,
+    /// The loupe's renders sent to the workers that have not come back, oldest first ([`prefetch::MainOut`]).
+    main_out: Vec<prefetch::MainOut>,
     /// Tests: per photo, the renders asked of the workers (prefetches sent, and loupe renders that did not come from a kept view).
     #[cfg(test)]
     pub(crate) renders_asked: HashMap<PhotoId, usize>,
+    /// Tests: how long a prefetch takes, instead of the measured time ([`Self::prefetch_secs`]).
+    #[cfg(test)]
+    pub(crate) render_secs_for_test: Option<f64>,
     /// Variant key → frame it was last asked for (LRU of [`Slot::Variant`] textures).
     variant_used: HashMap<u64, u64>,
     /// How many variants the last frame's views showed at once (see [`Self::want_variants`]).
@@ -568,6 +570,8 @@ impl Renderer {
             main_out: Vec::new(),
             #[cfg(test)]
             renders_asked: HashMap::new(),
+            #[cfg(test)]
+            render_secs_for_test: None,
             variant_used: HashMap::new(),
             variant_want: 0,
             frame: 0,
@@ -953,7 +957,7 @@ impl Renderer {
         }
         job.request_id = lightcraft_preview::next_tick();
         if slot == Slot::Main {
-            self.note_main_out(job.photo, job.request_id);
+            job = self.note_main_out(job);
         }
         self.requests.insert(
             slot,

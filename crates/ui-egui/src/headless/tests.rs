@@ -5204,6 +5204,33 @@ fn the_loupe_prepares_the_photos_ahead_the_settings_ask_for() {
     assert_eq!(h.app.renderer.prefetch_slots_asked(), 0, "off: nothing prepared ahead");
 }
 
+/// Culling at a steady pace faster than a photo renders, the loupe asks for the render of the photo it lands on in
+/// the frame it lands, at every step (it once waited until the user stayed longer than a step, so a photo never
+/// rendered before they left it), and the render it asked for the photo left is dropped, not kept waiting.
+#[test]
+fn at_a_steady_pace_each_photo_is_rendered_at_once_and_the_one_left_dropped() {
+    use std::{cell::Cell, rc::Rc};
+    let mut h = demo([1000.0, 700.0]);
+    let t = Duration::from_secs(10);
+    h.request("engine.execute", json!({"command": "prefs.setBackgroundPrep", "params": {"settings": {"library": {"previews": false}}}}), t);
+    h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
+    let ids = h.app.session.visible_cloned();
+    // the loupe's renders never finish, prefetches only wait in the queue (no workers), and a photo takes 2 s to
+    // render: every step outpaces it
+    h.app.renderer = crate::render::Renderer::with_worker_threads(0);
+    h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::new(Rc::new(Cell::new(false)))));
+    h.app.renderer.render_secs_for_test = Some(2.0);
+    for &id in &ids[..6] {
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), t);
+        h.step();
+        assert_eq!(h.app.renderer.main_asked(), vec![id], "the photo stepped to is asked for at once, and only it");
+        // half a second on it (30 frames)
+        for _ in 0..29 {
+            h.step();
+        }
+    }
+}
+
 /// #223: the loupe's prefetch rendered photos it had already shown again (the photo behind, at its smaller fit), over the
 /// larger view kept for them. Stepping forward and back over three photos asks the workers for no photo again once it
 /// has been shown.

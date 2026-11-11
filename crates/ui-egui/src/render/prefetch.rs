@@ -2,6 +2,9 @@
 //! the user has stepped past, the loupe taking over one already running for the photo it lands on, and how long a
 //! prefetch takes. What to prefetch, and when, is `panels::detail::prefetch`.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use lightcraft_catalog::PhotoId;
 use lightcraft_engine::media::{QuickSource, RenderJob, RenderResult};
 use lightcraft_preview::Hash128;
@@ -22,6 +25,18 @@ const TIME_WEIGHT: f64 = 0.3;
 /// A kept view smaller than what is asked for by at most this share still covers it (the engine's own slack for a
 /// cached view: rounding of the fitted size).
 const COVER_SLACK: f64 = 0.01;
+
+/// A loupe render on the workers ([`Renderer::note_main_out`]).
+#[derive(Debug)]
+pub(crate) struct MainOut {
+    photo: PhotoId,
+    /// Its request id.
+    id: u64,
+    /// When it was sent.
+    at: web_time::Instant,
+    /// Set: stop, nobody will show it.
+    stop: Arc<AtomicBool>,
+}
 
 /// What a [`Slot::Prefetch`] was last asked for.
 #[derive(Clone, Copy, Debug)]
@@ -143,19 +158,36 @@ impl Renderer {
     /// How long a prefetch render takes (s), averaged over the recent ones (`None` before the first): the loupe plans how
     /// far ahead to prepare with it. Prefetches answered from a kept view don't count.
     pub fn prefetch_secs(&self) -> Option<f64> {
+        #[cfg(test)]
+        if let Some(secs) = self.render_secs_for_test {
+            return Some(secs);
+        }
         self.prefetch_ms.map(|ms| ms / 1000.0)
     }
 
-    /// A loupe render of `photo` went to the workers as request `id`. The one still queued, if any, is replaced by it
-    /// and never comes back.
-    pub(super) fn note_main_out(&mut self, photo: PhotoId, id: u64) {
+    /// Tests: the photos of the loupe's renders asked for and not told to stop, oldest first.
+    #[cfg(test)]
+    pub(crate) fn main_asked(&self) -> Vec<PhotoId> {
+        self.main_out.iter().filter(|o| !o.stop.load(Ordering::Relaxed)).map(|o| o.photo).collect()
+    }
+
+    /// A loupe render (`job`, its request id set) goes to the workers: the job to send, which stops when told to. The
+    /// one still queued, if any, is replaced by it and never comes back; the ones running for other photos are told to
+    /// stop (nobody will show them: their results are dropped), so the workers go to the photo on screen. A running
+    /// job stops at its next check (before the read, after the decode); one past those finishes.
+    pub(super) fn note_main_out(&mut self, job: RenderJob) -> RenderJob {
         if self.is_queued(Slot::Main) {
             self.main_out.pop();
+        }
+        for out in self.main_out.iter().filter(|o| o.photo != job.photo) {
+            out.stop.store(true, Ordering::Relaxed);
         }
         if self.main_out.len() >= MAIN_OUT_KEPT {
             self.main_out.remove(0);
         }
-        self.main_out.push((photo, id, web_time::Instant::now()));
+        let stop = Arc::new(AtomicBool::new(false));
+        self.main_out.push(MainOut { photo: job.photo, id: job.request_id, at: web_time::Instant::now(), stop: stop.clone() });
+        job.with_stop(stop)
     }
 
     /// A job of `slot` came back after `ms` on its worker: what the loupe's renders and the prefetches keep track of.
@@ -169,7 +201,7 @@ impl Renderer {
 
     /// A loupe render came back (shown, superseded or failed).
     fn main_back(&mut self, r: &RenderResult) {
-        self.main_out.retain(|(_, id, _)| *id != r.request_id);
+        self.main_out.retain(|o| o.id != r.request_id);
         #[cfg(test)]
         if r.rendered.is_ok() && r.quick.is_none() {
             *self.renders_asked.entry(r.photo).or_default() += 1;
@@ -179,7 +211,7 @@ impl Renderer {
     /// Whether a loupe render of `photo` is on the workers (also one the user stepped away from: it still finishes and
     /// keeps its view). Not prefetched meanwhile: two renders of one look (#223). One out too long doesn't count.
     pub fn main_rendering(&self, photo: PhotoId) -> bool {
-        self.main_out.iter().any(|(p, _, at)| *p == photo && at.elapsed().as_secs_f64() < ADOPT_LIMIT_SECS)
+        self.main_out.iter().any(|o| o.photo == photo && o.at.elapsed().as_secs_f64() < ADOPT_LIMIT_SECS)
     }
 
     /// A prefetch finished in `ms` on its worker.
@@ -248,6 +280,36 @@ mod tests {
         assert!(r.adopt_prefetch(PhotoId(1), view, [900, 600]), "running: its view is the loupe's picture");
         assert!(!r.adopt_prefetch(PhotoId(1), view, [1800, 1200]), "smaller than the loupe draws: not waited for");
         assert!(!r.adopt_prefetch(PhotoId(2), view, [900, 600]), "another photo");
+    }
+
+    /// The loupe's renders asked for, as (photo, told to stop), oldest first.
+    fn out(r: &Renderer) -> Vec<(u64, bool)> {
+        r.main_out.iter().map(|o| (o.photo.0, o.stop.load(Ordering::Relaxed))).collect()
+    }
+
+    /// Stepping at a steady pace, each step asks for the new photo's render at once; the last photo's render goes:
+    /// dropped while it waits, told to stop once it runs (and it does, at its next check).
+    #[test]
+    fn each_step_renders_the_new_photo_at_once_and_stops_the_one_left() {
+        let (mut session, mut r) = fixture();
+        r.request(Slot::Main, job(&mut session, 1), 100);
+        // the step came before photo 1's render started: replaced, never run
+        r.request(Slot::Main, job(&mut session, 2), 100);
+        assert_eq!(out(&r), vec![(2, false)]);
+        assert_eq!(r.pending.get(&Slot::Main).map(|p| p.1), Some(100));
+        // photo 2's render runs; the step to photo 3 tells it to stop
+        start_queued(&r);
+        r.request(Slot::Main, job(&mut session, 3), 100);
+        assert_eq!(out(&r), vec![(2, true), (3, false)]);
+        assert!(r.pool.is_queued(Slot::Main), "photo 3's render is asked for at once");
+        // a job told to stop doesn't read its photo (this one's file isn't there: it would fail on that instead)
+        let stop = Arc::new(AtomicBool::new(true));
+        let stopped = job(&mut session, 2).with_stop(stop).run();
+        assert_eq!(stopped.rendered.err().as_deref(), Some(lightcraft_engine::media::STOPPED));
+        // a re-render of the photo on screen (an edit) doesn't stop its own earlier one
+        start_queued(&r);
+        r.request(Slot::Main, job(&mut session, 3).draft(), 100);
+        assert!(out(&r).iter().filter(|(p, _)| *p == 3).all(|(_, stop)| !stop), "{:?}", out(&r));
     }
 
     #[test]

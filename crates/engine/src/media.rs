@@ -42,7 +42,7 @@ pub use cache::DenoiseIndex;
 pub(crate) use cache::rendered_budget;
 pub use full_decode::{FullDecodeJob, FullDecodeState, FullDecoded};
 pub use quick::{QuickJob, QuickSource, content_key, source_info};
-pub use render::{MaskPlanes, RenderJob, RenderResult, ScreenFrame, develop, develop_reporting, fit_cached, fit_for_display, planes_made};
+pub use render::{MaskPlanes, RenderJob, RenderResult, STOPPED, ScreenFrame, develop, develop_reporting, fit_cached, fit_for_display, planes_made};
 #[cfg(test)]
 use settings_hash::SETTINGS_HASH_ENTRIES;
 use settings_hash::SettingsHashes;
