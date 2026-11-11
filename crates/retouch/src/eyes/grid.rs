@@ -26,7 +26,7 @@ pub fn blur<T: lightcraft_raster::resample::Pixel>(img: &Image<T>, sigma: f64) -
 /// thread (a grid is a few thousand cells; handing it to the thread pool costs more than the blur).
 pub fn grid_blur<const N: usize>(v: &[[f32; N]], w: usize, h: usize, sigma: f64) -> Vec<[f32; N]> {
     let s = sigma as f32;
-    if !(s.is_finite() && s > 0.1) || v.len() != w * h || w == 0 {
+    if !(s.is_finite() && s > 0.1) || v.len() != w.saturating_mul(h) || w == 0 || h == 0 {
         return v.to_vec();
     }
     if s >= EXACT_BELOW {
