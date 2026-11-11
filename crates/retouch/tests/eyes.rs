@@ -148,12 +148,53 @@ fn whites_get_brighter_and_lose_their_colour_veins_fade() {
     }
 }
 
+/// Iris brightens between the pupil and the rim, its lower part (where light enters) more than its upper one, and
+/// leaves the pupil at its centre as it was.
 #[test]
-fn iris_gets_brighter() {
+fn iris_gets_brighter_below_and_keeps_its_pupil() {
     let img = picture(W, H);
     let out = retouched(&img, &eyes(0.0, 100.0, 0.0, 0.0), vec![full()]);
-    let (a, b) = (at(&img, EYES[1].0, EYES[1].1), at(&out, EYES[1].0, EYES[1].1));
-    assert!(luma(b) > luma(a) * 1.3, "{a:?} → {b:?}");
+    // the iris's radius in photo heights
+    let r = HALF * 0.4 * 4.0 / 3.0;
+    let c = EYES[1];
+    let gain = |dy: f64| luma(at(&out, c.0, c.1 + dy * r)) / luma(at(&img, c.0, c.1 + dy * r));
+    assert!(gain(0.55) > 1.4, "lower iris: × {}", gain(0.55));
+    assert!(gain(-0.55) > 1.0 && gain(-0.55) < gain(0.55), "upper iris × {} against lower × {}", gain(-0.55), gain(0.55));
+    assert!(same(at(&img, c.0, c.1), at(&out, c.0, c.1)), "the pupil changed");
+}
+
+/// Issue #202: a reddish eye white in shadow (40 % grey) is lifted to at least 60 % and loses most of its colour at
+/// Whites 100, while the lids and the skin around the eye keep every bit.
+#[test]
+fn whites_at_100_lift_a_shadowed_reddish_white_and_keep_lids_and_skin() {
+    // linear; about 40 % grey once encoded, a red cast of a white with veins
+    const RED_WHITE: [f32; 3] = [0.2, 0.115, 0.105];
+    let encode = |v: f32| if v <= 0.003_130_8 { 12.92 * v } else { 1.055 * v.powf(1.0 / 2.4) - 0.055 };
+    let img = Rgb32f::from_fn(W, H, |x, y| {
+        let (nx, ny) = ((x as f64 + 0.5) / W as f64, (y as f64 + 0.5) / H as f64);
+        let (w, i) = (whites_at(nx, ny), iris_at(nx, ny));
+        let mix = |a: [f32; 3], b: [f32; 3], t: f32| std::array::from_fn(|k| a[k] + (b[k] - a[k]) * t);
+        mix(mix(SKIN, RED_WHITE, w), IRIS, i)
+    });
+    assert!((encode(luma(RED_WHITE)) - 0.4).abs() < 0.01, "the white is {} grey", encode(luma(RED_WHITE)));
+    let out = retouched(&img, &eyes(100.0, 0.0, 0.0, 0.0), vec![full()]);
+    let saturation = |p: [f32; 3]| chroma(p) / luma(p);
+    for c in EYES {
+        let p = (c.0 - HALF * 0.6, c.1);
+        let (a, b) = (at(&img, p.0, p.1), at(&out, p.0, p.1));
+        assert!(encode(luma(b)) >= 0.6, "the white at {:.2} grey → {:.2}", encode(luma(a)), encode(luma(b)));
+        assert!(saturation(b) < 0.4 * saturation(a), "its colour: {:.2} → {:.2}", saturation(a), saturation(b));
+    }
+    // every pixel off the eyes' whites and irises (the lids, the skin) keeps its bits
+    for y in 0..H {
+        for x in 0..W {
+            let (nx, ny) = ((x as f64 + 0.5) / W as f64, (y as f64 + 0.5) / H as f64);
+            let off = EYES.iter().all(|c| (((nx - c.0) / (HALF * 0.95)).powi(2) + ((ny - c.1) / (HALF * 0.45)).powi(2)).sqrt() > 1.4);
+            if off {
+                assert!(same(img.data[y * W + x], out.data[y * W + x]), "({x}, {y}) is lid or skin and changed");
+            }
+        }
+    }
 }
 
 #[test]

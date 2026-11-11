@@ -1,16 +1,19 @@
 //! Eyes: Whites, Iris, Dark Circles and Eye Bags (fork feature, `fork/retouch-eyes.md`).
 //!
 //! Four sliders, 0…100, each off at 0, per face:
-//! - **Whites** brightens the Eye Whites mask and takes most of its colour out (a yellow or red cast, veins), so
+//! - **Whites** brightens the eye whites, more when they sit in shadow, keeping their shading (the corners and the
+//!   shadow under the upper lid stay darker), and takes most of their colour out (a yellow or red cast, veins), so
 //!   veins stay as faint grey lines rather than vanishing.
-//! - **Iris** brightens the Iris mask and sharpens its texture (luminance only, so no colour fringes).
+//! - **Iris** brings out the iris's pattern (its fibres' contrast, a little clarity), brightens it between the pupil
+//!   and the limbal ring, more where light enters below, and adds a little of its own colour; the pupil, the ring and
+//!   the catchlight stay.
 //! - **Dark Circles** lifts the shadow under each eye and turns its colour (blue, purple, brown) toward the cheek's
 //!   below it, keeping the skin's texture.
 //! - **Eye Bags** flattens the shading of the bag under each eye (the bulge and the crease below it), keeping the
 //!   skin's fine texture.
 //!
-//! Where: Whites and Iris on their part masks (a face without them, closed eyes, is left alone), the iris cut to the
-//! mesh's iris circle when the face has the 478 mesh landmarks; Dark Circles and Eye Bags in crescents under the
+//! Where: Whites and Iris on their part masks (a face without them, closed eyes, is left alone), cut to the eye's
+//! opening between the lids and the iris to the mesh's iris circle when the face has the 478 mesh landmarks; Dark Circles and Eye Bags in crescents under the
 //! lower lids, placed from the landmarks ([`geom`]) and limited to the Facial Skin mask, never on the eye, lashes or
 //! glasses (Others). A face without Facial Skin or without both eye landmarks gets no under-eye change. Every size is
 //! a fraction of the eye's width, which comes from the landmarks and is kept within a range of the face's size, so
@@ -121,11 +124,11 @@ impl Feature for Eyes {
         }
         let whites = unit(self.whites);
         if whites > 0.0 {
-            tone::whites(img, scene, face, whites);
+            tone::whites(img, scene, face, &eyes, whites);
         }
         let iris = unit(self.iris);
         if iris > 0.0 {
-            tone::iris(img, scene, face, &eyes, geom::eye_scale(ctx, &eyes), iris);
+            tone::iris(img, scene, face, &eyes, iris);
         }
     }
 }
