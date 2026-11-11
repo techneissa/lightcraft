@@ -128,8 +128,9 @@ impl Plan {
 /// a time, nearest first.
 pub(crate) fn plan(ahead: usize, step_secs: Option<f64>, render_secs: Option<f64>, workers: usize) -> Plan {
     let ahead = ahead.clamp(1, MOST_DEPTH);
-    // (never every worker: on a 2–3 core Mac, with two, one stays for the photo on screen)
-    let most = workers.saturating_sub(FREE_WORKERS).clamp(CALM_AT_ONCE, MOST_AT_ONCE).min(workers.saturating_sub(1)).max(1);
+    // (never every worker: on a 2–3 core Mac, with two, one stays for the photo on screen; with one, no prefetch
+    // runs at all; 0 is web or a pool not started yet, which keeps one)
+    let most = workers.saturating_sub(FREE_WORKERS).clamp(CALM_AT_ONCE, MOST_AT_ONCE).min(workers.saturating_sub(1)).max(usize::from(workers == 0));
     let render = render_secs.filter(|r| r.is_finite() && *r > 0.0).unwrap_or(RENDER_GUESS_SECS);
     let Some(step) = step_secs.filter(|s| s.is_finite() && *s > 0.0) else {
         return Plan { depth: ahead, at_once: CALM_AT_ONCE.min(most), lead: 1 };
@@ -267,6 +268,10 @@ mod tests {
         assert_eq!(plan(5, Some(0.03), render, 2).at_once, 1);
         assert_eq!(plan(5, None, render, 2).at_once, 1);
         assert_eq!(plan(5, None, render, 3).at_once, 2);
+        // one worker: it stays for the photo on screen, so nothing is prepared ahead (0: web, or a pool not started)
+        assert_eq!(plan(5, None, render, 1).at_once, 0);
+        assert_eq!(plan(5, Some(0.2), render, 1).at_once, 0);
+        assert_eq!(plan(5, None, render, 0).at_once, 1);
     }
 
     #[test]

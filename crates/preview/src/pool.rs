@@ -156,13 +156,17 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
                         // the slot is free again when the job ends, also if it panics
                         let _free = Free(&shared, e.slot, run);
                         let Some(result) = run_guarded(e.job, e.fail) else { continue };
-                        // (let go of: nobody waits for it)
-                        if is_released(&shared, run) {
-                            continue;
-                        }
                         let done = Done { slot: e.slot, key: e.key, result, ms: t0.elapsed().as_secs_f64() * 1000.0 };
-                        if tx.send(done).is_err() {
-                            break;
+                        {
+                            // (let go of: nobody waits for it. Checked and sent under the one lock, so a
+                            // `release_running` can't fall between them and let its result through.)
+                            let released = shared.released.lock().unwrap_or_else(|e| e.into_inner());
+                            if released.contains(&run) {
+                                continue;
+                            }
+                            if tx.send(done).is_err() {
+                                break;
+                            }
                         }
                         // (the result is on the channel first: the woken frame finds it)
                         let waker = shared.waker.lock().unwrap_or_else(|e| e.into_inner()).clone();
