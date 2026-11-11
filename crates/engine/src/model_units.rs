@@ -2,9 +2,13 @@
 //! Mac (the GPU, the Neural Engine, Core ML's own mix, or candle on the GPU), chosen by measuring and remembered.
 //!
 //! - **Measured once** per model file, input shape, macOS version and chip ([`key`]), in the background as a row in
-//!   the activity ring, never while the photo on screen is being made ([`measure::measure`]). Each option loads the
-//!   model (capped at [`LOAD_CAP`]: a Neural Engine load can take minutes; an option over the cap is remembered as
-//!   such), runs it once to warm it, then once timed, on the same made-up input.
+//!   the activity ring, waiting while the photo on screen is being made or a job waits on a model
+//!   ([`measure::measure`]). Each option loads the model (capped at [`LOAD_CAP`]: a Neural Engine load can take
+//!   minutes; an option over the cap is remembered as such), runs it once to warm it, then is timed, on the same
+//!   made-up input. Each option is filed as it finishes, so a quit loses at most the one under way.
+//! - **One Neural Engine compile at a time:** no Neural Engine option loads while a load left behind past the cap is
+//!   still going, and a large model's ([`LARGE_PACKAGE`]) only when the app has been idle a while on mains power;
+//!   until then they wait for later and the rest is used.
 //! - **Checked:** the first option is today's unit for the model (the reference, which the model's own tests hold equal
 //!   to candle); another counts only when its output matches the reference's within the model's tolerance
 //!   ([`probes`]).
@@ -28,6 +32,8 @@ use serde::{Deserialize, Serialize};
 pub mod measure;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod probes;
+#[cfg(not(target_arch = "wasm32"))]
+mod worker;
 
 /// The choices file's name in the models folder.
 pub const FILE: &str = "model-units.json";
@@ -35,6 +41,11 @@ pub const FILE: &str = "model-units.json";
 const MAX_FILE: u64 = 256 << 10;
 /// Longest a measured load may take before its option is dropped (BiRefNet took 257 s on the Neural Engine).
 pub const LOAD_CAP: Duration = Duration::from_secs(90);
+/// A Core ML package at least this large (its files) has its Neural Engine options measured only when the app has been
+/// idle for [`IDLE_FOR`] on mains power: one such load took 21 GB.
+pub const LARGE_PACKAGE: u64 = 150 << 20;
+/// How long the app must have been idle (parsing ahead at full pace) before a large model's Neural Engine options load.
+pub const IDLE_FOR: Duration = Duration::from_secs(60);
 
 /// Where a model can run.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -142,6 +153,9 @@ pub struct Record {
     /// [`key`]: a measurement of another key is not used.
     pub key: String,
     pub options: Vec<Timing>,
+    /// Every option is in (a measurement stopped midway, or with options left for later, goes on from here).
+    #[serde(default)]
+    pub complete: bool,
 }
 
 /// The fastest option that matched the reference, and its time.
@@ -149,19 +163,20 @@ pub fn chosen(options: &[Timing]) -> Option<(Unit, f64)> {
     options.iter().filter(|t| t.outcome == Outcome::Ok).filter_map(|t| Some((t.unit()?, t.run_ms?))).min_by(|a, b| a.1.total_cmp(&b.1))
 }
 
-/// The options a load tries, in turn: when `record` was measured for `key`, its options that matched the reference,
-/// fastest first; then `default` (the model's unit of old, how it loaded before any measurement, so it is never
-/// dropped); then candle on the GPU, then candle on the CPU, always last. An option that failed, missed the reference
-/// or hit the load cap is not tried.
+/// The options a load tries, in turn: when `record` was measured for `key` (wholly or in part), its options that
+/// matched the reference, fastest first; then `default` (the model's unit of old, how it loaded before any
+/// measurement); then candle on the GPU, then candle on the CPU, always last. A Core ML option that hit the load cap is
+/// never tried, `default` included; one that failed or missed the reference comes only as `default`.
 pub fn order(record: Option<&Record>, key: &str, default: Unit) -> Vec<Unit> {
+    let record = record.filter(|r| r.key == key);
     let mut ok: Vec<(Unit, f64)> = record
-        .filter(|r| r.key == key)
         .map(|r| r.options.iter().filter(|t| t.outcome == Outcome::Ok).filter_map(|t| Some((t.unit()?, t.run_ms?))).collect())
         .unwrap_or_default();
     ok.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let capped = |u: Unit| record.is_some_and(|r| r.options.iter().any(|t| t.outcome == Outcome::LoadCap && t.unit() == Some(u)));
     let mut out: Vec<Unit> = ok.into_iter().map(|(u, _)| u).filter(|&u| u != Unit::CandleCpu).collect();
     for u in [default, Unit::CandleGpu, Unit::CandleCpu] {
-        if !out.contains(&u) {
+        if !out.contains(&u) && !(u == default && capped(u)) {
             out.push(u);
         }
     }
@@ -268,8 +283,23 @@ pub struct ModelUnits {
     records: Mutex<BTreeMap<String, Record>>,
     /// Models waiting for or under measurement.
     pending: Mutex<BTreeSet<String>>,
+    /// Models whose Neural Engine options wait for later ([`measure::End::Later`]).
+    later: Mutex<BTreeSet<String>>,
+    /// Since when the app has been idle (the frontend's pace is full), `None` while it is not.
+    idle_since: Mutex<Option<web_time::Instant>>,
+    /// Jobs waiting on or running a model for the user: a measurement waits while there is one.
+    user_jobs: std::sync::atomic::AtomicUsize,
     #[cfg(not(target_arch = "wasm32"))]
-    worker: Mutex<Option<probes::Worker>>,
+    worker: Mutex<Option<worker::Worker>>,
+}
+
+/// A job that needs a model, counted while it lives ([`ModelUnits::user_job`]).
+pub struct UserJob;
+
+impl Drop for UserJob {
+    fn drop(&mut self) {
+        shared().user_jobs.fetch_sub(1, std::sync::atomic::Ordering::AcqRel);
+    }
 }
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -295,9 +325,14 @@ impl ModelUnits {
         lock(&self.records).get(model).cloned()
     }
 
-    /// Whether `model` was measured for `key`.
+    /// Whether `model` was measured for `key`, every option.
     pub fn measured(&self, model: &str, key: &str) -> bool {
-        lock(&self.records).get(model).is_some_and(|r| r.key == key)
+        lock(&self.records).get(model).is_some_and(|r| r.key == key && r.complete)
+    }
+
+    /// The options measured for `key` so far (to go on from).
+    pub fn done(&self, model: &str, key: &str) -> Vec<Timing> {
+        lock(&self.records).get(model).filter(|r| r.key == key).map(|r| r.options.clone()).unwrap_or_default()
     }
 
     /// The options a load of `model` tries ([`order`]).
@@ -305,9 +340,51 @@ impl ModelUnits {
         order(lock(&self.records).get(model), key, default)
     }
 
-    /// Whether `model` waits for or is under measurement.
+    /// Whether `model` is under measurement or waits for its turn (not when only its Neural Engine options wait for
+    /// later).
     pub fn measuring(&self, model: &str) -> bool {
-        lock(&self.pending).contains(model)
+        lock(&self.pending).contains(model) && !lock(&self.later).contains(model)
+    }
+
+    /// Whether `model`'s Neural Engine options wait for later.
+    pub fn waits_for_later(&self, model: &str) -> bool {
+        lock(&self.later).contains(model)
+    }
+
+    #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
+    pub(crate) fn set_later(&self, model: &str, later: bool) {
+        let mut set = lock(&self.later);
+        if later {
+            set.insert(model.to_string());
+        } else {
+            set.remove(model);
+        }
+    }
+
+    /// The frontend's pace, each frame: `idle` when the user is away (full pace).
+    pub fn note_idle(&self, idle: bool) {
+        let mut since = lock(&self.idle_since);
+        match (idle, *since) {
+            (true, None) => *since = Some(web_time::Instant::now()),
+            (false, Some(_)) => *since = None,
+            _ => {}
+        }
+    }
+
+    /// How long the app has been idle.
+    pub fn idle_for(&self) -> Duration {
+        lock(&self.idle_since).map_or(Duration::ZERO, |t| t.elapsed())
+    }
+
+    /// Count a job that waits on or runs a model for the user until the guard drops.
+    pub fn user_job(&self) -> UserJob {
+        self.user_jobs.fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        UserJob
+    }
+
+    /// Jobs waiting on or running a model for the user now.
+    pub fn user_jobs(&self) -> usize {
+        self.user_jobs.load(std::sync::atomic::Ordering::Acquire)
     }
 
     /// Mark `model` as waiting for measurement: `false` when it already was.
@@ -319,12 +396,14 @@ impl ModelUnits {
     #[cfg_attr(target_arch = "wasm32", allow(dead_code))]
     pub(crate) fn end(&self, model: &str) {
         lock(&self.pending).remove(model);
+        self.set_later(model, false);
     }
 
-    /// File `model`'s measurement for `key` (saved when there is a file; kept in memory when the save fails).
-    pub fn store(&self, model: &str, key: &str, options: Vec<Timing>) {
+    /// File `model`'s measurement for `key`, `complete` when every option is in (saved when there is a file; kept in
+    /// memory when the save fails).
+    pub fn store(&self, model: &str, key: &str, options: Vec<Timing>, complete: bool) {
         let mut records = lock(&self.records);
-        records.insert(model.to_string(), Record { key: key.to_string(), options });
+        records.insert(model.to_string(), Record { key: key.to_string(), options, complete });
         if let Some(path) = lock(&self.file).as_deref()
             && let Err(e) = write(path, &records)
         {

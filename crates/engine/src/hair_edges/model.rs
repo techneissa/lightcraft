@@ -16,6 +16,8 @@ fn damaged(e: impl std::fmt::Display) -> String {
 
 impl HairEdges {
     pub(super) fn run_model(&self, rgb: &[u8], w: usize, h: usize, cancel: &Arc<AtomicBool>) -> Result<Matte, String> {
+        // (a model measurement waits while this runs: issue #267)
+        let _job = crate::model_units::shared().user_job();
         let stop = || cancel.load(Ordering::Relaxed) || lightcraft_gpu::shutting_down();
         let dir = self.model_dir().ok_or("no folder is set for the BiRefNet Matting model")?;
         let file = dir.join(lightcraft_birefnet::WEIGHTS_FILE);

@@ -58,6 +58,8 @@ fn model<'a>(
 
 /// BiRefNet's cut-out of the job's photo.
 fn matte(state: &mut State, shared: &Shared, job: &mut Job, req: &Request, placement: Placement) -> Result<Matte, Failure> {
+    // (a model measurement waits while this runs: issue #267)
+    let _job = crate::model_units::shared().user_job();
     // (SAM 3's encode renders the photo too when it must; keep the render job for it)
     let saved = job.render.clone();
     let input = render(job)?;

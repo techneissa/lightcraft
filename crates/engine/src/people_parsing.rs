@@ -697,6 +697,8 @@ impl PeopleParsing {
     }
 
     fn run(&self, set: ModelSet, models: &Path, img: &RgbImage, hints: &[FaceHint], cancelled: &dyn Fn() -> bool) -> Result<Parsing, String> {
+        // (a model measurement waits while this waits or runs: issue #267)
+        let _job = crate::model_units::shared().user_job();
         let _one_at_a_time = lock(&self.inner.one_run);
         // (one model on the GPU at a time, hair edges and LaMa included: `crate::gpu_run`)
         let _gpu = crate::gpu_run::turn();
@@ -882,7 +884,7 @@ impl crate::Session {
         #[cfg(not(target_arch = "wasm32"))]
         if let Some(dir) = default_models_dir() {
             crate::model_units::shared().open(Some(dir.join(crate::model_units::FILE)));
-            crate::model_units::probes::attach(self.activity.clone(), self.prep.foreground.clone());
+            crate::model_units::probes::attach(self.activity.clone(), self.prep.foreground.clone(), self.parse_ahead.power.clone());
         }
         self
     }

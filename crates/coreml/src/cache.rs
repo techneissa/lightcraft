@@ -1,7 +1,9 @@
 //! The compiled copy of a package, kept next to it and keyed by the package's manifest and files: a changed model
 //! compiles again, and a cached copy that no longer loads compiles again once.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use crate::{ComputeUnits, Error, Model, Result, compile};
 
@@ -71,6 +73,13 @@ pub(crate) fn key_path(compiled: &Path) -> PathBuf {
     PathBuf::from(p)
 }
 
+/// The lock of `package`'s compiled copy: two loads of one package (the app's and a measurement's) never compile into
+/// the same folder at once.
+fn package_lock(package: &Path) -> Arc<Mutex<()>> {
+    static LOCKS: Mutex<BTreeMap<PathBuf, Arc<Mutex<()>>>> = Mutex::new(BTreeMap::new());
+    LOCKS.lock().unwrap_or_else(PoisonError::into_inner).entry(package.to_path_buf()).or_default().clone()
+}
+
 fn compile_keyed(package: &Path, compiled: &Path, key: &str) -> Result<()> {
     let _ = std::fs::remove_file(key_path(compiled));
     compile(package, compiled)?;
@@ -98,15 +107,24 @@ pub fn load_package_function(package: &Path, compiled: &Path, units: ComputeUnit
         return if compiled.is_dir() { load() } else { Err(Error::Missing(package.to_path_buf())) };
     }
     let key = package_key(package)?;
-    let cached = compiled.is_dir() && std::fs::read_to_string(key_path(compiled)).is_ok_and(|k| k == key);
-    if !cached {
-        compile_keyed(package, compiled, &key)?;
+    let cached = || compiled.is_dir() && std::fs::read_to_string(key_path(compiled)).is_ok_and(|k| k == key);
+    if !cached() {
+        let lock = package_lock(package);
+        let _compiling = lock.lock().unwrap_or_else(PoisonError::into_inner);
+        // (another load may have compiled it while this one waited)
+        if !cached() {
+            compile_keyed(package, compiled, &key)?;
+        }
+        drop(_compiling);
         return load();
     }
     match load() {
         Err(Error::Load(why)) => {
             log::warn!("coreml: the compiled copy of {} does not load ({why}); compiling it again", package.display());
+            let lock = package_lock(package);
+            let _compiling = lock.lock().unwrap_or_else(PoisonError::into_inner);
             compile_keyed(package, compiled, &key)?;
+            drop(_compiling);
             load()
         }
         other => other,

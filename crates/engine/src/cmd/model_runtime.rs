@@ -84,6 +84,7 @@ fn units_json(model: &str) -> Value {
         "chosen": chosen.map(|(u, _)| u.id()),
         "runMs": chosen.map(|(_, ms)| ms),
         "measuring": units.measuring(model),
+        "neuralEngineLater": units.waits_for_later(model),
         "options": record.map(|r| r.options),
     })
 }
@@ -189,7 +190,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "AI Model Runtime",
             [],
             None,
-            "{model?: \"dinov2-small\"|\"face-parsing-segformer-b0\"|\"human-parsing-segformer-b3\"|\"birefnet\"|\"birefnet-matting\"|…, runtime?: \"automatic\"|\"coreml\"|\"candle\"} — sets the engine a model runs on (Automatic: Core ML on a Mac when its model is installed, on the units measured fastest on this Mac, else candle), or with no `runtime` lists them → {models: [{model, feature, runtime, coremlAvailable, coremlInstalled, backend: \"coreml\"|\"candle\"|null, coremlBytes, license, download: {state, bytes?, total?, error?}, units: {chosen: \"coreml-gpu\"|\"coreml-all\"|\"coreml-neural-engine\"|\"candle-gpu\"|null, runMs, measuring, options: [{unit, outcome: \"ok\"|\"mismatch\"|\"load-cap\"|\"failed\", loadMs?, runMs?, error?}]|null}}]}",
+            "{model?: \"dinov2-small\"|\"face-parsing-segformer-b0\"|\"human-parsing-segformer-b3\"|\"birefnet\"|\"birefnet-matting\"|…, runtime?: \"automatic\"|\"coreml\"|\"candle\"} — sets the engine a model runs on (Automatic: Core ML on a Mac when its model is installed, on the units measured fastest on this Mac, else candle), or with no `runtime` lists them → {models: [{model, feature, runtime, coremlAvailable, coremlInstalled, backend: \"coreml\"|\"candle\"|null, coremlBytes, license, download: {state, bytes?, total?, error?}, units: {chosen: \"coreml-gpu\"|\"coreml-all\"|\"coreml-neural-engine\"|\"candle-gpu\"|null, runMs, measuring, neuralEngineLater, options: [{unit, outcome: \"ok\"|\"mismatch\"|\"load-cap\"|\"failed\", loadMs?, runMs?, error?}]|null}}]}",
             always,
             run
         ),

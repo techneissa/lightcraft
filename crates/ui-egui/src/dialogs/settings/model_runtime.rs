@@ -46,13 +46,16 @@ fn units_row(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, model: &str
     let chosen = record.as_ref().and_then(|r| lightcraft_engine::model_units::chosen(&r.options));
     ui.horizontal(|ui| {
         ui.add_space(LABEL_W);
-        let text = match (measuring, chosen) {
+        let mut text = match (measuring, chosen) {
             (true, _) => crate::i18n::tr("Measuring each unit…").to_string(),
             (false, Some((unit, ms))) if ms < 1000.0 => format!("{}, {ms:.0} ms", crate::i18n::tr(unit.label())),
             (false, Some((unit, ms))) => format!("{}, {:.2} s", crate::i18n::tr(unit.label()), ms / 1000.0),
             (false, None) if record.is_some() => crate::i18n::tr("No unit matched; runs as before").to_string(),
             (false, None) => crate::i18n::tr("Not measured yet").to_string(),
         };
+        if units.waits_for_later(model) {
+            text = format!("{text}; {}", crate::i18n::tr("Neural Engine when the Mac is idle"));
+        }
         ui.label(RichText::new(text).size(11.0).color(t.text_dim));
         if measuring {
             ui.ctx().request_repaint_after(std::time::Duration::from_millis(500));

@@ -1,6 +1,6 @@
 //! Each model's measurement (issue #267): its Core ML call ([`lightcraft_coreml::Sample`]), its candle run where candle
 //! gives the same numbers from the same input, its unit of old, and how close an option's output must be to the
-//! reference's. Also the background worker that measures, and [`plan`], which every load asks.
+//! reference's. The worker that measures, and the `plan` every load asks, are in `worker.rs`.
 //!
 //! Tolerances, on the made-up input (`Sample::input_data`):
 //! - Learn My Edits' image model (DINOv2): cosine of the features at least 0.995 (its tests hold Core ML to 0.999 of
@@ -15,15 +15,13 @@
 //! unmeasured fallback, 5–8× slower than Core ML on the GPU when it was last timed.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
-use std::sync::{Arc, mpsc};
+use std::sync::Arc;
 
-use lightcraft_coreml::{ComputeUnits, Runtime, Sample};
+use lightcraft_coreml::{ComputeUnits, Sample};
 
-use super::measure::{self, Probe, Runner, Wall, max_abs, mean_abs};
-use super::{LOAD_CAP, Plan, Unit, shared};
-use crate::activity::{Activity, Cancel};
-use crate::prep::Foreground;
+use super::Unit;
+use super::measure::{Probe, Runner, max_abs, mean_abs};
+pub use super::worker::{attach, measure_again, measure_now, plan};
 
 /// How close an option's output must be to the reference's.
 #[derive(Clone, Copy, Debug)]
@@ -176,19 +174,45 @@ pub fn birefnet(dir: &Path, matting: bool) -> Spec {
 
 #[cfg(feature = "sam")]
 fn candle_birefnet(dir: &Path, variant: lightcraft_birefnet::Variant) -> Result<CandleRun, String> {
-    let mut net =
-        lightcraft_birefnet::BiRefNet::load_with(dir, variant, Runtime::Candle, lightcraft_birefnet::best_device()).map_err(|e| e.to_string())?;
+    let mut net = lightcraft_birefnet::BiRefNet::load_with(dir, variant, lightcraft_coreml::Runtime::Candle, lightcraft_birefnet::best_device())
+        .map_err(|e| e.to_string())?;
     Ok(Box::new(move |x: &[f32]| net.matte_pixels(x.to_vec()).map(|m| m.logits).map_err(|e| e.to_string())))
 }
 
 /// A [`Spec`] as the measurement runs it, with its made-up input.
-struct ModelProbe {
-    spec: Spec,
+pub(super) struct ModelProbe {
+    pub(super) spec: Spec,
     input: Vec<f32>,
 }
 
+impl ModelProbe {
+    pub(super) fn new(spec: Spec) -> Result<Arc<Self>, String> {
+        let input = spec.sample.input_data().map_err(|e| e.to_string())?;
+        Ok(Arc::new(Self { spec, input }))
+    }
+
+    /// Whether its Core ML package is a large one ([`super::LARGE_PACKAGE`]).
+    pub(super) fn large(&self) -> bool {
+        dir_bytes(&self.spec.sample.package, 0) >= super::LARGE_PACKAGE
+    }
+}
+
+/// The bytes of the files under `path` (a package: a few folders deep, a few files).
+fn dir_bytes(path: &Path, depth: usize) -> u64 {
+    let Ok(meta) = std::fs::metadata(path) else { return 0 };
+    if !meta.is_dir() {
+        return meta.len();
+    }
+    if depth > 8 {
+        return 0;
+    }
+    std::fs::read_dir(path)
+        .map(|entries| entries.flatten().take(1024).map(|e| dir_bytes(&e.path(), depth + 1)).fold(0u64, u64::saturating_add))
+        .unwrap_or(0)
+}
+
 /// The probe, shared with the runners it makes (each lives on the measuring thread).
-struct SharedProbe(Arc<ModelProbe>);
+pub(super) struct SharedProbe(pub(super) Arc<ModelProbe>);
 
 struct CoreMlRunner {
     model: lightcraft_coreml::Model,
@@ -215,13 +239,18 @@ impl Runner for CandleRunner {
 }
 
 impl Probe for SharedProbe {
+    /// The reference, then the others that load quickly (the GPU, candle), then the Neural Engine ones (which may
+    /// wait for later).
     fn options(&self) -> Vec<Unit> {
         let spec = &self.0.spec;
-        let mut v = vec![Unit::coreml(spec.default)];
-        v.extend(ComputeUnits::MEASURED.into_iter().filter(|u| *u != spec.default).map(Unit::coreml));
+        let reference = Unit::coreml(spec.default);
+        let others: Vec<Unit> = ComputeUnits::MEASURED.into_iter().map(Unit::coreml).filter(|u| *u != reference).collect();
+        let mut v = vec![reference];
+        v.extend(others.iter().copied().filter(|u| !u.neural_engine()));
         if spec.candle.is_some() && has_metal() {
             v.push(Unit::CandleGpu);
         }
+        v.extend(others.iter().copied().filter(|u| u.neural_engine()));
         v
     }
 
@@ -240,105 +269,4 @@ impl Probe for SharedProbe {
     fn matches(&self, reference: &[f32], output: &[f32]) -> bool {
         self.0.spec.tolerance.matches(reference, output)
     }
-}
-
-/// A model to measure for `key`.
-struct Job {
-    spec: Spec,
-    key: String,
-}
-
-/// The thread that measures, one model at a time.
-pub(crate) struct Worker {
-    tx: mpsc::Sender<Job>,
-}
-
-/// Measure from now on, with rows in `activity` and waiting while `foreground` says the photo on screen is being made
-/// (the app and MCP hosts do this; a bare session, as in tests, never measures). Once per process.
-pub fn attach(activity: Activity, foreground: Foreground) {
-    let mut worker = super::lock(&shared().worker);
-    if worker.is_some() {
-        return;
-    }
-    let (tx, rx) = mpsc::channel::<Job>();
-    let spawned = std::thread::Builder::new().name("model-units".into()).spawn(move || {
-        for job in rx {
-            let model = job.spec.model;
-            run(job, &activity, &foreground);
-            shared().end(model);
-        }
-    });
-    match spawned {
-        Ok(_) => *worker = Some(Worker { tx }),
-        Err(e) => log::warn!("model units: no measuring thread ({e})"),
-    }
-}
-
-fn run(job: Job, activity: &Activity, foreground: &Foreground) {
-    let model = job.spec.model;
-    let feature = crate::model_runtime::MODELS.iter().find(|(id, _)| *id == model).map_or(model, |(_, f)| f);
-    let cancel = Arc::new(AtomicBool::new(false));
-    let _row = activity.start_background("modelUnits", &format!("Finding the fastest unit for {feature}"), Cancel::Flag(cancel.clone()));
-    let wait = || foreground.wait(&cancel) || lightcraft_gpu::shutting_down();
-    let t = web_time::Instant::now();
-    match measure_now(job.spec, &wait) {
-        Ok(Some(options)) => {
-            log::info!("model units: {model} measured in {:?}: {options:?}", t.elapsed());
-            shared().store(model, &job.key, options);
-        }
-        Ok(None) => log::info!("model units: measuring {model} was stopped"),
-        Err(e) => log::warn!("model units: {model}: {e}"),
-    }
-}
-
-/// Measure `spec`'s model now, on this thread, with the real clock ([`measure::measure`]; `wait` as there). Nothing
-/// is filed (the `model_units` example prints it).
-pub fn measure_now(spec: Spec, wait: &dyn Fn() -> bool) -> Result<Option<Vec<super::Timing>>, String> {
-    let input = spec.sample.input_data().map_err(|e| e.to_string())?;
-    let probe: Arc<dyn Probe> = Arc::new(SharedProbe(Arc::new(ModelProbe { spec, input })));
-    Ok(measure::measure(probe, Arc::new(Wall::default()), LOAD_CAP, wait))
-}
-
-/// Queue `spec` for measurement unless it is queued already or nothing measures.
-fn request(spec: Spec, key: String) -> bool {
-    let units = shared();
-    let model = spec.model;
-    if !units.begin(model) {
-        return true;
-    }
-    let sent = super::lock(&units.worker).as_ref().is_some_and(|w| w.tx.send(Job { spec, key }).is_ok());
-    if !sent {
-        units.end(model);
-    }
-    sent
-}
-
-/// How a load of `spec`'s model on `runtime` (the Settings choice) goes: the measured order, or the unit of old while
-/// the model has not been measured for its files on this Mac, which queues its measurement.
-pub fn plan(spec: Spec, runtime: Runtime) -> Plan {
-    let old = Plan::default_for(spec.default);
-    if runtime == Runtime::Candle || !spec.coreml_ready() {
-        return old;
-    }
-    let key = spec.key();
-    let units = shared();
-    let plan = Plan::from_order(&units.order(spec.model, &key, Unit::coreml(spec.default)), spec.default);
-    if !units.measured(spec.model, &key) {
-        request(spec, key);
-    }
-    // (Core ML only, as Settings asked: no candle first)
-    if runtime == Runtime::CoreMl { Plan { candle_first: false, ..plan } } else { plan }
-}
-
-/// Measure `spec`'s model again (Settings' Measure Again, `models.measure`).
-pub fn measure_again(spec: Spec) -> Result<(), String> {
-    if !spec.coreml_ready() {
-        return Err("this model's Core ML version is not installed".into());
-    }
-    if super::lock(&shared().worker).is_none() {
-        return Err("models are measured only in the app".into());
-    }
-    let key = spec.key();
-    shared().forget(spec.model);
-    if request(spec, key) { Ok(()) } else { Err("the measuring thread stopped".into()) }
 }

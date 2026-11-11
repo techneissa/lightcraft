@@ -26,9 +26,8 @@ fn main() {
             println!("| {model} | (no Core ML version here) | | | |");
             continue;
         }
-        let options = match probes::measure_now(spec, &|| false) {
-            Ok(Some(o)) => o,
-            Ok(None) => continue,
+        let options = match probes::measure_now(spec) {
+            Ok(o) => o,
             Err(e) => {
                 println!("| {model} | {e} | | | |");
                 continue;
