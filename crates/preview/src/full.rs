@@ -4,7 +4,10 @@
 //! A thumbnail is a JPEG ([`crate::disk`]); this is the photo at 100 %, where JPEG's chroma subsampling would show
 //! on fine coloured detail. The file is the picture's 8-bit RGBA, each row stored as the difference from the pixel
 //! to its left (photos compress far better that way), cut into bands of [`BAND_ROWS`] rows that are compressed
-//! (zlib) one by one, so they are written and read on all cores:
+//! (zlib streams) one by one, so they are written and read on all cores. The streams are made and read with
+//! `fdeflate`, a deflate made for such differences: on a 45 MP photo a third of the CPU time zlib's fastest level took
+//! to write, a third to read, and a file within about a tenth of its size (#199). Any zlib reader reads them, so files
+//! written before read as they did:
 //!
 //! ```text
 //! "LCFULL" 0 1 | width u32 | height u32 | bands u32 | bands × compressed length u32 | the bands
@@ -27,10 +30,6 @@ pub const BAND_ROWS: usize = 256;
 /// The largest picture a file may hold (pixels): 268 MP.
 pub const MAX_PIXELS: usize = 1 << 28;
 
-/// zlib level: the fastest. The picture is written once per finished edit, in the background, and read back
-/// whenever the photo is opened again; a higher level takes several times longer for a few per cent.
-const LEVEL: u8 = 1;
-
 const HEADER: usize = 8 + 4 + 4 + 4;
 
 /// `img` as a full-size picture's file. `None`: empty, or larger than [`MAX_PIXELS`].
@@ -40,7 +39,7 @@ pub fn encode(img: &Rgba8) -> Option<Vec<u8>> {
         return None;
     }
     let bands = h.div_ceil(BAND_ROWS);
-    let packed: Vec<Vec<u8>> = map_bands(bands, |b| {
+    let packed: Vec<Option<Vec<u8>>> = map_bands(bands, |b| {
         let rows = img.data.get(b * BAND_ROWS * w..((b + 1) * BAND_ROWS).min(h) * w).unwrap_or_default();
         let mut filtered = Vec::with_capacity(rows.len() * 4);
         for row in rows.chunks(w) {
@@ -50,8 +49,11 @@ pub fn encode(img: &Rgba8) -> Option<Vec<u8>> {
                 left = *p;
             }
         }
-        miniz_oxide::deflate::compress_to_vec_zlib(&filtered, LEVEL)
+        let mut zlib = fdeflate::Compressor::new(Vec::with_capacity(filtered.len() / 2)).ok()?;
+        zlib.write_data(&filtered).ok()?;
+        zlib.finish().ok()
     });
+    let packed: Vec<Vec<u8>> = packed.into_iter().collect::<Option<_>>()?;
     let data: usize = packed.iter().map(Vec::len).sum();
     let mut out = Vec::with_capacity(HEADER + bands * 4 + data);
     out.extend_from_slice(MAGIC);
@@ -97,10 +99,7 @@ pub fn decode(bytes: &[u8], max: (usize, usize)) -> Option<Rgba8> {
     }
     let rows: Vec<Option<Vec<[u8; 4]>>> = map_bands(bands, |b| {
         let n = (((b + 1) * BAND_ROWS).min(h) - b * BAND_ROWS) * w;
-        let raw = miniz_oxide::inflate::decompress_to_vec_zlib_with_limit(spans.get(b)?, n * 4).ok()?;
-        if raw.len() != n * 4 {
-            return None;
-        }
+        let raw = inflate(spans.get(b)?, n * 4)?;
         let mut px = Vec::with_capacity(n);
         for row in raw.as_chunks::<4>().0.chunks(w) {
             let mut left = [0u8; 4];
@@ -117,6 +116,23 @@ pub fn decode(bytes: &[u8], max: (usize, usize)) -> Option<Rgba8> {
         data.extend(band?);
     }
     Some(Rgba8 { width: w, height: h, data })
+}
+
+/// The zlib stream `span` unpacked, when it is whole, its checksum matches and it holds exactly `len` bytes.
+fn inflate(span: &[u8], len: usize) -> Option<Vec<u8>> {
+    let mut out = vec![0u8; len];
+    let mut z = fdeflate::Decompressor::new();
+    let (mut read, mut made) = (0, 0);
+    while !z.is_done() {
+        let (used, produced) = z.read(span.get(read..)?, &mut out, made, true).ok()?;
+        // (no progress: the stream wants more room than `len`, or more input than the span holds)
+        if used == 0 && produced == 0 {
+            return None;
+        }
+        read += used;
+        made += produced;
+    }
+    (made == len && read == span.len()).then_some(out)
 }
 
 fn read_u32(bytes: &[u8], at: usize) -> Option<usize> {
@@ -175,6 +191,37 @@ mod tests {
         huge[8..12].copy_from_slice(&u32::MAX.to_le_bytes());
         assert_eq!(decode(&huge, (64, 300)), None);
         assert_eq!(decode(b"LCFULL\x00\x01garbage", (64, 300)), None);
+    }
+
+    // Given a full-size picture's file written before #199 (zlib's fastest level, by miniz), when it is read now, then
+    // it reads back exactly: the photos kept on disk then are not rendered again
+    #[test]
+    fn a_file_written_by_the_old_encoder_reads_back_exactly() {
+        let img = picture(300, BAND_ROWS + 40);
+        let mut old = encode(&img).expect("encoded");
+        let bands = img.height.div_ceil(BAND_ROWS);
+        let packed: Vec<Vec<u8>> = (0..bands)
+            .map(|b| {
+                let rows = &img.data[b * BAND_ROWS * img.width..((b + 1) * BAND_ROWS).min(img.height) * img.width];
+                let mut filtered = Vec::new();
+                for row in rows.chunks(img.width) {
+                    let mut left = [0u8; 4];
+                    for p in row {
+                        filtered.extend(p.iter().zip(left).map(|(v, l)| v.wrapping_sub(l)));
+                        left = *p;
+                    }
+                }
+                miniz_oxide::deflate::compress_to_vec_zlib(&filtered, 1)
+            })
+            .collect();
+        old.truncate(HEADER);
+        for band in &packed {
+            old.extend_from_slice(&(band.len() as u32).to_le_bytes());
+        }
+        for band in &packed {
+            old.extend_from_slice(band);
+        }
+        assert_eq!(decode(&old, (img.width, img.height)), Some(img));
     }
 
     // Given a full-size picture kept in the disk cache, when the same key asks for it it reads back exactly; another

@@ -7,8 +7,9 @@ List: the Portrait tab's Blemishes section: Amount removes spots and acne from e
 The Blemishes feature of portrait retouching (`fork/retouch-foundation.md`), on the Facial Skin mask of the people
 parse (`fork/retouch-masks.md`). For every face or the picked one:
 
-- **Amount** (0…100, off at 0) removes the spots found on the face's skin, the strongest first: at 50 a strong spot
-  is gone and a faint one stays; at 100 every spot found is gone.
+- **Amount** (0…100, off at 0) removes the spots found on the face's skin, the most visible first (darkness times
+  size), each one fully as its turn comes: at 25 about the most visible quarter is gone, at 50 every obvious spot,
+  at 100 every spot found. Each step of the slider shows (#204).
 - **Keep Moles and Freckles** (on by default) leaves moles and freckles where they are. Off, they are removed too.
 - Under them, how many spots the settings remove, the share of the skin repaired, and how many moles and freckles
   they keep.
@@ -18,35 +19,61 @@ How (`crates/retouch/src/blemish.rs`, `blemish/find.rs`):
 - **Finding, once per photo.** On the Facial Skin mask's box, with the face at most 640 pixels: skin-only blurs
   (the picture weighted by the mask, divided by the blurred mask) of a mostly green channel at seven sizes, 0.3–3 %
   of the face across. A spot is a place darker than the skin around it by 6 % or more at its best size, darker than
-  every neighbour, round (a line or a wrinkle is not), with skin all around, standing out from the texture around it
-  (a beard or stubble is too busy), on lit skin (not a beard, the hairline or deep shadow), and with red darkening
-  less than the rest (a shadow or a hair darkens every colour alike). A spot whose red darkens nearly as much as the
-  rest is brown: brown, dark and round is a mole; small brown spots in a group are freckles when faint and moles
-  when dark; the rest are blemishes. Each spot gets a strength and a donor: a clean patch of skin next to it. On a
-  black-and-white photo colour can't tell spots from shadows; shape and contrast decide alone.
+  every neighbour, round (a line or a wrinkle is not), with skin all around, standing out from the texture around
+  it (2.5 times; a beard is too busy), on lit skin. A face under 160 pixels is not looked at. Then each spot's look
+  is measured up close (`find/traits.rs`): its darkening per colour, how its darkness falls off (sharp or soft
+  edge), a red halo, and the darkness 2–3.5 radii out. Not a spot: a crease or a hair through it (dark both ways),
+  the edge of something larger and darker (a nostril, a fold), a large soft greyish dip (the face's shading), or a
+  strand Stray Hair's search found under it (`find/strands.rs`; the engine now searches strands first).
+- **Kinds** (`find/classify.rs`), the same rules on any skin tone (on dark or tanned skin every spot is brown, so
+  no rule asks how brown a spot is):
+  - **blemish (red)**: blood darkens green and blue and leaves red; or an inflamed halo. Always removed.
+  - **mole**: round, sharp-edged, at least 0.44 % of the face across and much darker (1.7 times) than the spots
+    around it.
+  - **freckle**: one of a field of like spots (four or more within 9 % of the face, of about its size and
+    darkness, the field's spots at least about 0.5 % of the face across), in a linked field of 20 or more. A smaller
+    group of brown spots is an older face's age spots, removed; a field of smaller dots is pores or texture. On a
+    freckled face the field is searched again, finer, so its faint freckles go too when the switch is off.
+  - **not a spot, where stubble grows** (chin, jaw and upper lip, from the face's five landmarks): a field of dots
+    smaller than freckles, a small spot much greyer than the face's others (a hair stump), and any spot on textured
+    skin. A mole there is still a mole, a red spot still a blemish.
+  - everything else is a **blemish**: dark marks, scabs, age spots.
 - **Kept with the masks.** The engine finds the spots with the people parse, on the parse's picture (2048 px, in
   linear light, turned like the masks), and keeps them with each face (`Face::spots`). A render, the loupe and an
   export all repair the same spots; the Amount slider only changes each spot's weight.
-- **Repair, every render.** Each spot is filled from a ring of skin samples three radii out (a smooth fill), times
-  the texture of its donor patch (borrowed as a ratio, at whole-pixel offsets, so the pores stay sharp), faded in from
-  1.7 to 2.6 radii and weighted by the mask. Every ring sample and donor pixel is weighted by the mask where it is
-  read, and ring samples inside another spot count for nothing, so no colour from hair, brows, lips or the
-  background comes in at the hairline or the jaw. Spots are repaired in parallel and blended in, in order.
+- **Repair, every render** (`blemish/heal.rs`), in two layers split at the pore scale (a Gaussian of 0.2 % of the
+  face, the split Skin Smoothness uses): the **tone** inside the spot is rebuilt from the ring of skin 2.6 radii
+  out, each pixel interpolated along eight lines through it between the two points where each meets the ring,
+  weighted towards lines whose ends match, so a crease or gradient through the spot carries on through it; ring
+  points off the skin or on another spot are filled from their neighbours on the ring. The **texture** (pores,
+  fine lines, grain: the skin over its tone) comes from the donor patch, made as strong as the skin's around the
+  spot (at most 1.25 times either way); without a donor from the finder, the first clean place 3.4 radii away;
+  without any, the spot's own finest grain. The healed skin replaces the spot out to 1.7 radii and its texture
+  fades into the skin's own by 2.6, where its tone meets the ring. The tone is the skin's colour weighted by the
+  mask, and donor pixels count as far as they are skin, so no colour from hair, brows, lips or the background
+  comes in at the hairline or the jaw. Spots whose repairs read apart heal together in parallel; a spot near an
+  earlier one heals from the skin as that one left it, so overlapping repairs never undo each other.
+- **Donor** (found with the spots): of 16 places 3 and 3.5 radii away (so the copied patch never takes in the spot),
+  the one with skin all around, clear of other spots' heals, answering least at the spot's size, and closest to
+  the skin around the spot in tone and in fine texture.
 - **Zoom never changes a repair.** A spot's radius is held to 1.6 % of the face and a donor farther than 3.6 radii
-  is not used, so a repair reads at most 0.11 of the face around a spot; Blemishes declares
+  (plus a pixel and a half for rounding) is not used, so a repair reads at most about 0.11 of the face around a spot; Blemishes declares
   `REACH` 0.14, and a zoomed loupe renders what the face's repairs read (`crates/pipeline/src/retouch_step.rs`).
 
-Speed (a test Mac, release): finding the spots of one face on the 2048 px parse picture 23–124 ms (private test
-portraits 23–64 ms; a face covered in 240 dark spots 124 ms). Repair (the slider): 0.16–0.91 ms on a 1936 px draft
-of a head-and-shoulders portrait, 4.2 ms with 242 spots, 6.6 ms for a synthetic face filling a 1780 × 1936 draft
-with 238 spots. The repair walks only each spot's neighbourhood, never the whole face. No model runs.
+Speed (a test Mac, release, measured while other builds loaded it, so rough): finding the spots of one face on the
+2048 px parse picture 20–400 ms on the seven CC0 audit portraits (#204; the freckled face, 800 spots, 86–370 ms),
+after Stray Hair's strand search, which the face search runs anyway. Repair (the slider): 9–15 ms on a 1936 px
+draft of p1, p2 and p4 (180–200 spots), 44 ms for p3's 807 spots with Keep Moles and Freckles off. The repair walks only each spot's neighbourhood, never the whole face. No model
+runs.
 
 A Refine brush per feature comes later (#99): `Blemish::weights` gives one weight per spot, which its strokes will
 scale.
 
-Not done: in a dense cluster of dark spots (one spot every few pores), the cluster reads as textured skin, so Keep
-Moles and Freckles off removes only part of it. Spots smaller than about 2 pixels of the 2048 px parse picture
-(about 0.3 % of a head-and-shoulders face) are not looked for.
+Not done: spots smaller than about 2 pixels of the 2048 px parse picture (about 0.3 % of a head-and-shoulders face)
+are not looked for, nor faces under 160 pixels there. Raised skin-coloured bumps (lighter than the skin) are not
+spots. A small group of real freckles (under 20) is taken for age spots and removed. Stubble on the lower cheeks
+outside the chin, jaw and upper lip is told only by Stray Hair's strands. Large soft brown patches (age spots
+wider than 3 % of the face) are left to Even Tone.
 
 ## Branch
 
@@ -54,7 +81,8 @@ Moles and Freckles off removes only part of it. Spots smaller than about 2 pixel
 
 ## Own files
 
-`crates/retouch/src/blemish.rs`, `crates/retouch/src/blemish/find.rs`, `crates/retouch/examples/blemish.rs`,
+`crates/retouch/src/blemish.rs`, `crates/retouch/src/blemish/find.rs`, `crates/retouch/src/blemish/find/` (`traits.rs`,
+`classify.rs`, `strands.rs`), `crates/retouch/examples/blemish.rs`,
 `crates/retouch/tests/blemish.rs`, `crates/pipeline/src/tests_retouch_blemish.rs`,
 `crates/ui-egui/src/panels/portrait/blemish.rs`, `fork/retouch-blemish.md`,
 `fork/tests.d/retouch-blemish.txt`
@@ -65,7 +93,8 @@ Moles and Freckles off removes only part of it. Spots smaller than about 2 pixel
 
 In fork files:
 - `crates/retouch/src/input.rs`: `Face::spots`, `Spot`, `SpotKind`, `Spots`, in the fingerprint.
-- `crates/engine/src/retouch_input/parts.rs`: `with_spots` in `found` (the parse's faces get their spots);
+- `crates/engine/src/retouch_input/parts.rs`: `with_spots` in `found` (the parse's faces get their spots, after
+  Stray Hair's strands, which Blemishes reads);
   `crates/engine/src/retouch_input.rs`: `spots: None` for YuNet's faces and the spots in the store's byte count.
 - `crates/retouch/README.md`: `Face::spots` in the input contract.
 - `crates/ui-egui/src/tests/portrait.rs`: a test of the Blemishes section.
@@ -75,7 +104,8 @@ In fork files:
 
 `fork/tests.d/retouch-blemish.txt`. They cover: off and Amount 0 give back the original bits (the switch alone
 changes nothing); the switch on by default, a control, and on for settings saved without it; pimples, moles and
-freckles found and told apart on a synthetic face with pores, and pores not taken for spots; pimples removed and
+a field of freckles found and told apart on a synthetic face with pores; on dark skin, a group of brown marks and a
+pimple removed and a freckle field kept with the switch on (#204), and pores not taken for spots; pimples removed and
 moles and freckles kept with the switch on, removed with it off; the healed skin keeping about the pores' texture of
 clean skin; pixels outside the mask keeping their bits, and a face without the mask left alone; a spot at a soft
 skin edge next to black hair, its ring and donor reaching over the edge, repaired as if the hair were skin (no

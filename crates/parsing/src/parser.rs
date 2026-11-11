@@ -257,15 +257,20 @@ impl Parser {
         let has = |f: &ModelFile| coreml::CONVERTED.contains(f);
         let face_loader: Option<&dyn Fn() -> CoreMlResult<lightcraft_coreml::Model>> = has(&face_file).then_some(&face_coreml);
         let body_loader: Option<&dyn Fn() -> CoreMlResult<lightcraft_coreml::Model>> = has(&body_file).then_some(&body_coreml);
+        crate::profile::mark("load start");
         let face = Engine::load(&face_file, runtimes.face, face_loader, || load_face_net(set, models, &dev))?;
+        crate::profile::mark("load face");
         let body = Engine::load(&body_file, runtimes.body, body_loader, || load_body_net(set, models, &dev))?;
+        crate::profile::mark("load body");
         let parts = match set.parts_file() {
             Some(f) => Some(Sapiens2::load(&Params::new(open(&f, models)?, dev.clone(), Layout::Ohwi)).map_err(|e| named(&f, e))?),
             None => None,
         };
         let mesh_coreml = || coreml::load_mesh(models);
         let mesh_loader: &dyn Fn() -> CoreMlResult<lightcraft_coreml::Model> = &mesh_coreml;
+        crate::profile::mark("load parts");
         let mesh = Engine::load(&crate::models::FACE_MESH, runtimes.mesh, Some(mesh_loader), || load_mesh_net(models, &dev))?;
+        crate::profile::mark("load mesh");
         Ok(Self { set, models: models.to_path_buf(), face, face_model: set.face_model(), body, parts, mesh, dev })
     }
 
@@ -305,19 +310,25 @@ impl Parser {
     /// The clothes parser's map of the photo at long side `side`.
     pub(crate) fn body_map(&self, img: &crate::RgbImage, side: usize) -> Result<body::BodyMap> {
         let (w, h, px) = body::pixels(img, side);
-        self.body.run(
+        crate::profile::mark("body resize");
+        let map = self.body.run(
             |m| coreml::body_probs(m, &px, w, h).map(|probs| body::BodyMap { w, h, probs }),
             |net| body::run(net, (w, h, px.clone()), &self.dev),
             || load_body_net(self.set, &self.models, &self.dev),
-        )
+        );
+        crate::profile::mark("body model");
+        map
     }
 
     /// The face parser's groups for `crops`.
     pub(crate) fn face_groups(&self, img: &crate::RgbImage, crops: &[Crop]) -> Result<Groups> {
         self.face.run(
             |m| {
+                // (a full batch in one call, any other number one crop a call: the model sees two input shapes only,
+                // and a photo of a few faces never changes it, `coreml`)
+                let per_call = if crops.len().is_multiple_of(coreml::FACE_BATCH) { coreml::FACE_BATCH } else { 1 };
                 let mut out = Vec::with_capacity(crops.len());
-                for chunk in crops.chunks(coreml::FACE_BATCH) {
+                for chunk in crops.chunks(per_call) {
                     out.extend(coreml::face_groups(m, &face::batch_pixels(img, chunk, true), chunk.len())?);
                 }
                 Ok(out)
@@ -371,6 +382,7 @@ impl Parser {
             Some(net) => {
                 let m = crate::crops::parts_map(&|x| net.forward(x), map, img, &rects, &self.dev, cancelled)?;
                 prof.step("people up close");
+                crate::profile::mark("sapiens2");
                 m
             }
             None => map,
@@ -399,6 +411,7 @@ impl Parser {
                 add(p, part, plane);
             }
         }
+        crate::profile::mark("people split");
         let parse = |img: &crate::RgbImage, crops: &[Crop]| self.face_groups(img, crops);
         let mesh = |img: &crate::RgbImage, crops: &[Crop]| self.meshes(img, crops);
         let nets = Nets { parse: &parse, mesh: &mesh };
@@ -421,6 +434,7 @@ impl Parser {
         people.retain(|p| p.face.is_some() || !p.parts.is_empty());
         people.sort_by(|a, b| b.area(Part::EntirePerson).total_cmp(&a.area(Part::EntirePerson)));
         out.people = people;
+        crate::profile::mark("finish");
         Ok(out)
     }
 }

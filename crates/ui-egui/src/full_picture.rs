@@ -6,14 +6,16 @@
 //! and is what every zoom past Fit and every pan shows from then on.
 //!
 //! - **When.** Only at rest: no slider drag, no brush stroke or pointer held, no pinch, no photo being stepped
-//!   through, and the loupe's own renders done (the screen is sharp first). A look already on disk is read at once;
-//!   a render waits [`SETTLE_SECS`] more, so a quick series of edits renders none. It runs on a render worker at
-//!   the lowest priority ([`PRIORITY`]); the next edit drops it when it is still queued and throws its result away
-//!   when it is running.
-//! - **What.** The whole frame at 100 %, rendered in horizontal bands of about [`BAND_PX`] pixels, each with the zoom
-//!   window's margin of context above and below ([`crate::region::margin_for`]), so the seams don't show. Between
-//!   bands the build checks whether it is still wanted: an edit, another photo or the closed loupe stops it within
-//!   one band, and a build that was stopped cuts and writes nothing. One build runs at a time. On the worker the
+//!   through, and the loupe's own renders done (the screen is sharp first). A look already on disk is read at once.
+//!   A render is made only for a photo zoomed into or panned since it was opened (#199): only zoom and pan draw from
+//!   the picture, so photos stepped past while culling (at Fit, or at a zoom kept from the photo before) or edited at
+//!   Fit render none. It waits [`SETTLE_SECS`] at rest after the zoom or the last edit, so a quick series of edits
+//!   renders none. It runs on a render worker at the
+//!   lowest priority ([`PRIORITY`]); the next edit drops it when it is still queued and throws its result away when
+//!   it is running.
+//! - **What.** The whole frame at 100 %, in one render (bands cost about twice as much, [`build::render`]). An edit,
+//!   another photo or the closed loupe stops a build that has not started its render, and a build that was stopped
+//!   cuts and writes nothing. One build runs at a time. On the worker the
 //!   picture is cut into textures of at most [`TILE`] px (one upload per frame), with smaller levels about 1.41×
 //!   apart made with an area filter ([`build::levels`]), so a view from Fit to 100 % is shrunk by the GPU by less
 //!   than 1.41× (no aliasing). Each texture carries one pixel of its neighbours, so magnified views blend across its
@@ -42,12 +44,10 @@ use crate::LightcraftApp;
 use crate::render::Slot;
 
 mod build;
-pub use build::{AtOnce, Band, Built, Plan, TileImage, levels, work};
+pub use build::{AtOnce, Built, Plan, TileImage, levels, work};
 
 /// The largest texture of the picture (px a side, before its one-pixel border): about 16 MB, one upload per frame.
 pub const TILE: usize = 2048;
-/// About this many pixels a band: a 45 MP photo renders in three, and an edit waits for at most one.
-pub const BAND_PX: usize = 16 << 20;
 /// The most a level is shrunk by the GPU: levels are 1.41× apart (and a little rounding).
 const MAX_SHRINK: f32 = 1.42;
 /// The activity row's text while a picture renders.
@@ -93,6 +93,16 @@ struct Running {
     _row: Option<lightcraft_engine::activity::TaskGuard>,
 }
 
+/// The photo open in the loupe, its zoom and pan in the last frame, and whether it has been zoomed into since it
+/// opened: the zoom or the pan changed from one frame to the next, to a view past Fit. Only such a photo gets a picture rendered: zoom and pan are all
+/// that draw from it, and a zoom kept from the photo before, while photos are stepped through, does not count.
+struct Opened {
+    photo: PhotoId,
+    zoom: crate::state::Zoom,
+    pan: (f32, f32),
+    zoomed: bool,
+}
+
 /// What is known about the picture's making, for `ui.inspect` and the tests.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Stats {
@@ -123,6 +133,8 @@ pub struct Store {
     refused: Option<u64>,
     /// The key the loupe has been at rest with, and since when (the host's clock, s).
     rest: Option<(u64, f64)>,
+    /// The photo open in the loupe and how it was zoomed when it opened ([`Opened`]).
+    opened: Option<Opened>,
     /// The level and the part of the photo (fractions `[x0, y0, x1, y1]`) the loupe showed last: uploaded first.
     last_view: Option<(u8, [f32; 4])>,
     /// The loupe's last frame was drawn from the picture.
@@ -145,7 +157,7 @@ impl Store {
         Store { enabled: !off && !cfg!(test) && !cfg!(target_arch = "wasm32"), ..Default::default() }
     }
 
-    /// Let go of the picture and stop the build running (it stops at its next band and its result is dropped).
+    /// Let go of the picture and stop the build running (it stops before its render, or its result is dropped).
     pub fn clear(&mut self) {
         self.picture = None;
         self.cancel();
@@ -348,37 +360,6 @@ fn dress(app: &LightcraftApp, id: PhotoId, job: RenderJob) -> RenderJob {
     job.with_hidden_grading(app.ui.grading_hidden_for(id)).with_proof(proof).with_display(app.renderer.display().cloned())
 }
 
-/// The rows of context a band renders above and below itself, for a frame `long` px long: the zoom window's margin
-/// ([`crate::region::margin_for`]).
-fn band_margin(long: usize) -> usize {
-    crate::region::margin_for(long)
-}
-
-/// The bands the picture of `whole` (its job, [`picture_job`]) renders in: about [`BAND_PX`] each, the zoom window's
-/// margin of context above and below. One band, the whole frame, for a small photo, or where a band can't be one
-/// render (what its spots read is too far).
-fn bands(app: &mut LightcraftApp, id: PhotoId, whole: &RenderJob, [w, h]: [usize; 2], with_crop: bool) -> Vec<Band> {
-    let n = w.saturating_mul(h).div_ceil(BAND_PX).clamp(1, 8).min(h.max(1));
-    bands_of(app, id, whole, [w, h], with_crop, (n, band_margin(w.max(h))))
-}
-
-/// [`bands`], `n` of them with `margin` rows of context.
-fn bands_of(app: &mut LightcraftApp, id: PhotoId, whole: &RenderJob, [w, h]: [usize; 2], with_crop: bool, (n, margin): (usize, usize)) -> Vec<Band> {
-    let one = || vec![Band { job: whole.clone(), rows: (0, h), top: 0 }];
-    if n <= 1 {
-        return one();
-    }
-    let mut out = Vec::with_capacity(n);
-    for i in 0..n {
-        let (y0, y1) = (i * h / n, (i + 1) * h / n);
-        let (top, bottom) = (y0.saturating_sub(margin), y1.saturating_add(margin).min(h));
-        let window = lightcraft_pipeline::PixelWindow { x: 0, y: top, w, h: bottom - top };
-        let Some(job) = app.session.region_job(id, w, h, window, with_crop) else { return one() };
-        out.push(Band { job: dress(app, id, job), rows: (y0, y1), top });
-    }
-    out
-}
-
 /// What the loupe tells [`update`] about this frame.
 pub struct Ask {
     pub id: PhotoId,
@@ -410,6 +391,16 @@ pub fn update(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask) -> Option<u
     let store = &app.renderer.full;
     if store.held().is_some_and(|(photo, _)| photo != a.id) || store.running.as_ref().is_some_and(|r| r.photo != a.id) {
         app.renderer.cancel_full();
+    }
+    let (zoom, pan) = (app.ui.zoom, app.ui.pan);
+    let store = &mut app.renderer.full;
+    match store.opened.as_mut() {
+        Some(o) if o.photo == a.id => {
+            o.zoomed |= a.zoomed && (o.zoom != zoom || o.pan != pan);
+            // (compared frame to frame: Z to Fit and Z back to the same zoom and pan is a zoom too)
+            (o.zoom, o.pan) = (zoom, pan);
+        }
+        _ => store.opened = Some(Opened { photo: a.id, zoom, pan, zoomed: false }),
     }
     if !a.eligible {
         app.renderer.full.rest = None;
@@ -479,6 +470,12 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask, job: RenderJob, dr
     });
     let store = &mut app.renderer.full;
     let render = disk.is_none() || store.disk_missed == Some(key);
+    // (a render only for a photo zoomed into: one stepped past or only seen whole renders nothing, and the settle time
+    // counts from the zoom)
+    if render && !store.opened.as_ref().is_some_and(|o| o.photo == a.id && o.zoomed) {
+        store.rest = None;
+        return;
+    }
     if render && a.now - since < SETTLE_SECS {
         ctx.request_repaint_after(std::time::Duration::from_secs_f64((SETTLE_SECS - (a.now - since)).max(0.01)));
         return;
@@ -490,7 +487,6 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask, job: RenderJob, dr
         return;
     }
     let tile = TILE.min(a.texture_side.saturating_sub(2)).max(16);
-    let bands = if render { bands(app, a.id, &job, a.native, a.with_crop) } else { Vec::new() };
     let cancel = Arc::new(AtomicBool::new(false));
     let row = render.then(|| app.session.activity.start_background("full-picture", ROW, lightcraft_engine::activity::Cancel::Flag(cancel.clone())));
     app.renderer.full.running = Some(Running { photo: a.id, key, render, cancel: cancel.clone(), by_us: false, _row: row });
@@ -503,7 +499,7 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask, job: RenderJob, dr
         size: a.native,
         tile,
         min_edge: fit,
-        bands,
+        render,
         cancel,
         at_once,
         writing,

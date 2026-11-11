@@ -1,6 +1,6 @@
 //! Fork feature (`fork/parse-ahead.md`): `parsing.ahead.*`, people parsing ahead of time.
 //!
-//! - `parsing.ahead.pump {pace, backward?, enabled?, wait?, timeoutMs?}`: the frontend's per-frame call (cheap when
+//! - `parsing.ahead.pump {pace, backward?, culling?, enabled?, wait?, timeoutMs?}`: the frontend's per-frame call (cheap when
 //!   there is nothing to do); `wait` keeps going until the queue is done or a few seconds have passed (for agents and
 //!   scripts, which call again while the state is `working`, `paused` or `loading`: the call runs on the UI thread).
 //! - `parsing.ahead.status`: the state, the queue and the counts.
@@ -26,6 +26,7 @@ fn wait_limit(p: &Value) -> Duration {
 fn run_pump(s: &mut Session, p: &Value) -> Result<Value> {
     let pace = Pace::parse(p.get("pace").and_then(Value::as_str));
     let backward = p.get("backward").and_then(Value::as_bool).unwrap_or(false);
+    s.set_parse_ahead_culling(p.get("culling").and_then(Value::as_bool).unwrap_or(false));
     if let Some(on) = p.get("enabled").and_then(Value::as_bool)
         && on != s.parse_ahead.enabled()
     {
@@ -52,7 +53,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "Find People Parts Ahead",
             [],
             None,
-            "{pace: \"pause\"|\"light\"|\"normal\" (what the user is doing: pause while they drag, type or scroll; light while they are around; normal when idle), backward?: bool (the user steps towards the start), enabled?: bool, wait?: bool, timeoutMs?} — people parsing ahead of time, one photo at a time on a worker thread, into the people parsing cache: the photos around the open one, new imports with faces, and (at the normal pace) every other photo with faces, newest first. Nothing in Low Power Mode, on battery below 40 %, or when off. Cheap to call every frame; `wait` keeps pumping until the queue is done, for 3 s at most (`timeoutMs` may ask for less): call again while the state is working, paused or loading → {enabled, state: off|battery|lowPower|checkingPower|noModels|noCache|stopped|loading|paused|working|done|idle, active, queued, left (queued photos the pace allows now), queue, working, parsed, cached, skipped, failed, power, indexFile}",
+            "{pace: \"pause\"|\"light\"|\"normal\" (what the user is doing: pause while they drag, type or scroll; light while they are around; normal when idle), backward?: bool (the user steps towards the start), culling?: bool (no Edit panel open: nothing near the open photo is parsed), enabled?: bool, wait?: bool, timeoutMs?} — people parsing ahead of time, one photo at a time on a worker thread, into the people parsing cache, for photos likely to be retouched: the open photo (and, once the user has edited it, the 4 photos ahead of it), photos with portrait settings, and (at the normal pace) photos with faces that are picked or starred, newest first; a photo only stepped past is never parsed. Nothing in Low Power Mode, on battery below 40 %, or when off. Cheap to call every frame; `wait` keeps pumping until the queue is done, for 3 s at most (`timeoutMs` may ask for less): call again while the state is working, paused or loading → {enabled, culling, editing (the user has edited since they came to the Edit panel), state: off|battery|lowPower|checkingPower|noModels|noCache|stopped|loading|paused|working|done|idle, active, queued, left (queued photos the pace allows now), queue, working, parsed, cached, skipped, failed, power, indexFile}",
             always,
             run_pump
         ),

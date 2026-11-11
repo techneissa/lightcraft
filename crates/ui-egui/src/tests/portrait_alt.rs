@@ -1,6 +1,6 @@
-//! The Portrait tab's histogram and its ⌥-drag preview (issue #164): ⌥ held while a Portrait slider is dragged turns
-//! the photo into a grey / white map of where the feature works on the face(s) it changes, until ⌥ or the mouse is
-//! let go. A plain drag shows the photo.
+//! The Portrait tab's histogram and its ⌥-drag preview (issues #164, #208): ⌥ held while a Portrait slider is dragged
+//! shows what that slider changes on the face(s) it is for (the photo dark and grey, the change glowing), until ⌥ or
+//! the mouse is let go. A plain drag shows the photo.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -83,35 +83,39 @@ fn drag(h: &mut Headless, control: &str, modifiers: Modifiers) -> (egui::Pos2, e
     (from, step)
 }
 
-fn skin() -> u8 {
-    FEATURES.iter().position(|f| f.key == "skin").unwrap() as u8
+/// The ⌥-drag view of Skin Smoothness on `face`.
+fn smoothness(face: u8) -> Overlay {
+    let feature = FEATURES.iter().position(|f| f.key == "skin").unwrap();
+    let control = (FEATURES[feature].specs)().iter().position(|s| s.id == "retouch.skin.smoothness").unwrap();
+    Overlay::RetouchEffect { feature: feature as u8, control: control as u8, face }
 }
 
-/// (black, white, grey that is neither) shares of the loupe render's pixels, and whether every pixel is grey.
-fn tones(h: &Headless) -> (f64, f64, bool) {
+/// The share of the loupe render's pixels that glow, and whether it is the effect view: every pixel dark grey or
+/// warm (the glow), none of the photo's own colours.
+fn tones(h: &Headless) -> (f64, bool) {
     let t = h.app.renderer.textures.get(&crate::render::Slot::Main).expect("loupe render");
     let px = &t.pixels.as_ref().expect("pixels kept").pixels;
     let n = px.len().max(1) as f64;
-    let grey = px.iter().all(|c| c.r() == c.g() && c.g() == c.b());
-    let black = px.iter().filter(|c| c.r() == 0).count() as f64 / n;
-    let white = px.iter().filter(|c| c.r() == 255).count() as f64 / n;
-    (black, white, grey)
+    let dim = (255.0 * 0.36_f32).ceil() as u8 + 1;
+    let effect = px.iter().all(|c| if c.r() == c.b() { c.r() == c.g() && c.r() <= dim } else { c.r() >= c.g() && c.g() >= c.b() });
+    let glow = px.iter().filter(|c| c.r() > c.b()).count() as f64 / n;
+    (glow, effect)
 }
 
-/// ⌥-drag on Skin Smoothness shows the skin's area for every face, ⌥ let go brings the photo back (the drag goes on),
+/// ⌥-drag on Skin Smoothness shows what it changes on every face, ⌥ let go brings the photo back (the drag goes on),
 /// ⌥ again shows it, and the release of the mouse ends it.
 #[test]
-fn alt_drag_on_a_portrait_slider_shows_the_features_area_until_released() {
+fn alt_drag_on_a_portrait_slider_shows_its_change_until_released() {
     let mut h = portrait();
     assert_eq!(shown(&h), Overlay::None);
     let control = "retouch.skin.smoothness";
     let (from, step) = drag(&mut h, control, Modifiers::ALT);
     assert_eq!(h.app.ui.dragging_control.as_deref(), Some(control), "the drag is going");
-    assert_eq!(shown(&h), Overlay::RetouchArea { feature: skin(), face: Overlay::ALL_FACES });
-    // (the map: grey, white on the two faces' skin, black elsewhere)
+    assert_eq!(shown(&h), smoothness(Overlay::ALL_FACES));
+    // (the view: the photo dark and grey, the smoothing on the faces' skin glowing)
     h.settle(SETTLE);
-    let (black, white, grey) = tones(&h);
-    assert!(grey && white > 0.01 && black > 0.5, "a grey map with the faces white: black {black}, white {white}, grey {grey}");
+    let (glow, effect) = tones(&h);
+    assert!(effect && glow > 0.005 && glow < 0.5, "the faces' skin glows on a grey photo: glow {glow}, effect view {effect}");
     // ⌥ let go with the mouse still down: the photo again
     h.app.synthetic.push(Event::ModifiersChanged(Modifiers::NONE));
     h.app.synthetic.push(Event::PointerMoved(from + step * 5.0));
@@ -119,12 +123,12 @@ fn alt_drag_on_a_portrait_slider_shows_the_features_area_until_released() {
     assert!(h.app.ui.dragging_control.is_some(), "the drag goes on");
     assert_eq!(shown(&h), Overlay::None);
     h.settle(SETTLE);
-    assert!(!tones(&h).2, "the photo is no grey map");
+    assert!(!tones(&h).1, "the photo, not the effect view");
     // ⌥ again, then the mouse released with ⌥ still down
     h.app.synthetic.push(Event::ModifiersChanged(Modifiers::ALT));
     h.app.synthetic.push(Event::PointerMoved(from + step * 6.0));
     frames(&mut h, 10);
-    assert_eq!(shown(&h), Overlay::RetouchArea { feature: skin(), face: Overlay::ALL_FACES });
+    assert_eq!(shown(&h), smoothness(Overlay::ALL_FACES));
     h.app.synthetic.push(Event::PointerButton { pos: from + step * 6.0, button: PointerButton::Primary, pressed: false, modifiers: Modifiers::ALT });
     h.settle(SETTLE);
     assert!(h.app.ui.dragging_control.is_none());
@@ -143,7 +147,7 @@ fn a_plain_portrait_drag_shows_the_photo() {
     assert_eq!(shown(&h), Overlay::None);
 }
 
-/// With a face picked, the map is that face's.
+/// With a face picked, the view is that face's change.
 #[test]
 fn the_preview_is_the_picked_faces() {
     let mut h = portrait();
@@ -151,7 +155,7 @@ fn the_preview_is_the_picked_faces() {
     assert_eq!(r["ok"], true, "{r}");
     h.step();
     drag(&mut h, "retouch.skin.smoothness", Modifiers::ALT);
-    assert_eq!(shown(&h), Overlay::RetouchArea { feature: skin(), face: 1 });
+    assert_eq!(shown(&h), smoothness(1));
 }
 
 /// The Portrait tab shows the Edit tab's histogram above its sections, and hides it with View ▸ Histogram.
@@ -165,30 +169,30 @@ fn the_portrait_tab_has_the_histogram() {
     assert!(!h.app.widgets.iter().any(|(w, _)| w == "histogram"), "and goes with the setting");
 }
 
-/// The histogram is the photo's, not the grey map's: while ⌥ shows the map, the Portrait tab's histogram is the one the
-/// photo has with ⌥ let go (nothing else changed), and the map's own pixels would give another.
+/// The histogram is the photo's, not the effect view's: while ⌥ shows the view, the Portrait tab's histogram is the one
+/// the photo has with ⌥ let go (nothing else changed), and the view's own pixels would give another.
 #[test]
 fn the_histogram_stays_the_photos_during_an_alt_drag() {
     let mut h = portrait();
     drag(&mut h, "retouch.skin.smoothness", Modifiers::ALT);
     h.settle(SETTLE);
-    assert!(matches!(shown(&h), Overlay::RetouchArea { .. }) && tones(&h).2, "the map is on screen");
+    assert!(matches!(shown(&h), Overlay::RetouchEffect { .. }) && tones(&h).1, "the view is on screen");
     let histogram = |h: &Headless| h.app.renderer.textures.get(&crate::render::Slot::Main).and_then(|t| t.histogram.clone()).expect("a histogram");
     let during = histogram(&h);
-    // the grey map's own pixels give a histogram with identical channels: not this one
-    assert_ne!(during.r, during.g, "not the grey map's (a photo's channels differ)");
+    // the view's own pixels are grey but for the glow, whose blue is lower than its green: not this one
+    assert_ne!(during.r, during.g, "not the effect view's (a photo's channels differ)");
     // ⌥ let go, the pointer not moved: the same settings, the photo
     h.app.synthetic.push(Event::ModifiersChanged(Modifiers::NONE));
     frames(&mut h, 10);
     h.settle(SETTLE);
     assert_eq!(shown(&h), Overlay::None);
-    assert!(!tones(&h).2, "the photo again");
+    assert!(!tones(&h).1, "the photo again");
     assert_eq!(histogram(&h), during, "the histogram is the photo's all along");
 }
 
-/// The loupe renders the map as a window when zoomed in (it is made per pixel from the faces), so it is as sharp as
-/// the zoom.
+/// The loupe renders the view as a window when zoomed in (the window holds all a face's retouch reads), so it is as
+/// sharp as the zoom.
 #[test]
-fn the_area_map_renders_as_a_zoom_window() {
-    assert!(crate::panels::detail::overlay_supports_window(Overlay::RetouchArea { feature: skin(), face: Overlay::ALL_FACES }));
+fn the_effect_view_renders_as_a_zoom_window() {
+    assert!(crate::panels::detail::overlay_supports_window(smoothness(Overlay::ALL_FACES)));
 }

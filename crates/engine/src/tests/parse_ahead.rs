@@ -136,6 +136,8 @@ pub(super) fn library(tag: &str, n: usize) -> (Session, PathBuf, Vec<PhotoId>) {
 fn attach(s: &mut Session, dir: &Path) {
     s.parsing.set_paths(Some(dir.join("models")), Some(dir.join("cache")), None);
     s.parse_ahead.power.fix(Some(Power::default()));
+    // (a photo open in the Edit view is parsed at once; the dwell has its own test)
+    s.parse_ahead_test_dwell(Duration::ZERO);
     index_read(s);
 }
 
@@ -199,60 +201,159 @@ fn row(s: &Session) -> Option<crate::activity::TaskInfo> {
     s.activity.list().into_iter().find(|t| t.kind == "parseAhead")
 }
 
+/// Open photo `id` in the Edit panel and edit it (as the user does before the photos ahead are parsed): one pump sees
+/// the photo, then its exposure changes.
+fn edit_open(s: &mut Session, id: PhotoId) {
+    open(s, id);
+    pump(s, json!({"pace": "pause"}));
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.3})).unwrap();
+}
+
 #[test]
-fn the_open_photos_neighbours_go_first_then_new_imports_then_the_rest_while_idle() {
-    let (mut s, dir, ids) = library("order", 10);
+fn the_open_photo_goes_first_and_once_the_user_edits_the_photos_ahead_never_those_behind() {
+    let (mut s, _dir, ids) = library("order", 10);
     for id in &ids {
         add_face(&mut s, *id, None);
     }
     let seen: Seen = Arc::default();
     s.parsing.set_runner(Some(recording_runner(&seen)));
-    let mut pixels = first_pixels(&mut s, &ids);
+    let pixels = first_pixels(&mut s, &ids);
+    // looking at a photo in the Edit panel: that photo alone
     open(&mut s, ids[4]);
-    // the user is around: only the photos near the open one, nearest first, ahead before behind
     let st = settle(&mut s, json!({"pace": "light"}));
     assert_eq!(st["state"], "done", "{st}");
-    let near: Vec<PhotoId> = [4, 5, 3, 6, 2, 7, 8].iter().map(|i| ids[*i]).collect();
-    assert_eq!(order_seen(&seen, &pixels), near);
-    assert_eq!(st["parsed"], 7);
-    assert!(st["queued"].as_u64().unwrap() > 0, "the rest wait for the user to be idle: {st}");
-    // a photo imported now, with a face, goes before the rest, also while the user is around
-    let new = write_photo(&dir, 10);
-    import(&mut s, &[new]);
-    let new_id = *s.visible_cloned().iter().find(|id| !ids.contains(id)).unwrap();
-    add_face(&mut s, new_id, None);
-    pixels.extend(first_pixels(&mut s, &[new_id]));
-    // (an import opens the new photo; the user goes back to the one they were on)
-    open(&mut s, ids[4]);
+    assert_eq!(order_seen(&seen, &pixels), vec![ids[4]]);
+    assert_eq!(st["editing"], false, "{st}");
+    // the user edits it: the photos ahead, nearest first; none behind (they were stepped past)
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.3})).unwrap();
     let st = settle(&mut s, json!({"pace": "light"}));
-    assert_eq!(order_seen(&seen, &pixels).last(), Some(&new_id), "{st} {:?}", s.active());
-    // idle: every other photo with faces, newest first
+    assert_eq!(st["state"], "done", "{st}");
+    assert_eq!(st["editing"], true, "{st}");
+    let want: Vec<PhotoId> = [4, 5, 6, 7, 8].iter().map(|i| ids[*i]).collect();
+    assert_eq!(order_seen(&seen, &pixels), want);
+    // the user idle: nothing else, they kept none of the others
     let st = settle(&mut s, json!({"pace": "normal"}));
-    assert_eq!(st["state"], "done", "{st}");
-    let mut rest: Vec<PhotoId> = [0, 1, 9].iter().map(|i| ids[*i]).collect();
-    let date = |s: &Session, id: PhotoId| {
-        let p = s.catalog.photo(id).unwrap();
-        p.captured.clone().unwrap_or_else(|| p.imported.clone())
-    };
-    rest.sort_by(|a, b| date(&s, *b).cmp(&date(&s, *a)).then(b.0.cmp(&a.0)));
-    assert_eq!(order_seen(&seen, &pixels)[8..], rest[..]);
-    assert_eq!(st["queued"], 0);
-    // all parsed once
-    assert_eq!(s.parsing.runs(), 11);
-    // stepping backward: the photo before the open one is "ahead"
-    let fresh = crate::parse_ahead::queue::near(&ids, ids[4], true);
-    assert_eq!(fresh[1], ids[3]);
+    assert_eq!((st["parsed"].as_u64(), st["queued"].as_u64()), (Some(5), Some(0)), "{st}");
+    // still editing, the next photo: the photos ahead of it (one new); stepping backward, "ahead" is before
+    open(&mut s, ids[5]);
+    settle(&mut s, json!({"pace": "light"}));
+    assert_eq!(order_seen(&seen, &pixels).last(), Some(&ids[9]));
+    open(&mut s, ids[4]);
+    settle(&mut s, json!({"pace": "light", "backward": true}));
+    let got = order_seen(&seen, &pixels);
+    assert_eq!(got[got.len() - 4..], [ids[3], ids[2], ids[1], ids[0]]);
+    assert_eq!(s.parsing.runs(), 10);
 }
 
 #[test]
-fn photos_without_faces_wait_for_the_face_scan_except_near_the_open_photo() {
+fn while_culling_no_photo_stepped_past_is_parsed() {
+    let (mut s, _dir, ids) = library("culling", 6);
+    for id in &ids {
+        add_face(&mut s, *id, None);
+    }
+    let seen: Seen = Arc::default();
+    s.parsing.set_runner(Some(recording_runner(&seen)));
+    // stepping through the photos outside the Edit panel, rating some, waiting on each as long as it takes
+    for (k, id) in ids.iter().enumerate() {
+        open(&mut s, *id);
+        if k % 2 == 0 {
+            s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.2})).unwrap();
+        }
+        let st = settle(&mut s, json!({"pace": "light", "culling": true}));
+        assert_eq!((st["state"].as_str(), st["culling"].as_bool()), (Some("done"), Some(true)), "{st}");
+    }
+    let st = settle(&mut s, json!({"pace": "normal", "culling": true}));
+    assert_eq!(st["state"], "done", "{st}");
+    assert_eq!(s.parsing.runs(), 0, "a photo stepped past was parsed: {st}");
+    // to the Edit panel: the photo open there; the edits made while culling don't count as editing in it
+    let st = settle(&mut s, json!({"pace": "light"}));
+    assert_eq!((st["parsed"].as_u64(), st["editing"].as_bool()), (Some(1), Some(false)), "{st}");
+}
+
+#[test]
+fn stepping_through_photos_in_the_edit_view_parses_none_and_drops_the_run_of_one_stepped_past() {
+    let (mut s, _dir, ids) = library("dwell", 4);
+    for id in &ids {
+        add_face(&mut s, *id, None);
+    }
+    let gate = Gate::default();
+    s.parsing.set_runner(Some(gate.runner()));
+    // each photo shorter than the dwell: none parsed, no row, frames keep coming ("paused")
+    s.parse_ahead_test_dwell(Duration::from_secs(3600));
+    for id in &ids {
+        open(&mut s, *id);
+        for _ in 0..20 {
+            let st = pump(&mut s, json!({"pace": "light"}));
+            assert_eq!(st["state"], "paused", "{st}");
+        }
+    }
+    assert_eq!(gate.entered.load(Ordering::SeqCst), 0, "a photo stepped past was parsed");
+    assert!(row(&s).is_none());
+    // a photo that stays open is parsed; stepping on before it is done stops its run, which is not run again
+    s.parse_ahead_test_dwell(Duration::ZERO);
+    open(&mut s, ids[0]);
+    pump_until(&mut s, json!({"pace": "light"}), "the open photo's run starts", || gate.entered.load(Ordering::SeqCst) == 1);
+    s.parse_ahead_test_dwell(Duration::from_secs(3600));
+    open(&mut s, ids[1]);
+    pump(&mut s, json!({"pace": "light"}));
+    until("the run of the photo stepped past stops", || gate.stopped.load(Ordering::SeqCst) == 1);
+    gate.open(5);
+    for _ in 0..40 {
+        pump(&mut s, json!({"pace": "light"}));
+        std::thread::sleep(POLL);
+    }
+    assert_eq!(gate.entered.load(Ordering::SeqCst), 1, "the photo stepped past ran again");
+    assert_eq!(s.parse_ahead.counts().parsed, 0);
+    // an edit counts as staying: parsed at once, the photos ahead too
+    s.execute("develop.set", &json!({"control": "light.exposure", "value": 0.3})).unwrap();
+    let st = settle(&mut s, json!({"pace": "light"}));
+    assert_eq!((st["state"].as_str(), st["parsed"].as_u64()), (Some("done"), Some(3)), "{st}");
+}
+
+#[test]
+fn photos_with_portrait_settings_go_while_the_user_is_around_and_kept_photos_only_while_idle() {
+    let (mut s, _dir, ids) = library("kept", 7);
+    for id in &ids {
+        add_face(&mut s, *id, None);
+    }
+    let seen: Seen = Arc::default();
+    s.parsing.set_runner(Some(recording_runner(&seen)));
+    let pixels = first_pixels(&mut s, &ids);
+    // 1: portrait settings; 2: picked; 3: two stars; 4: three stars but rejected; 6: picked, no faces
+    retouch_on(&mut s, ids[1]);
+    s.apply_system(lightcraft_catalog::Op::SetFlag { id: ids[2], flag: lightcraft_catalog::Flag::Pick }).unwrap();
+    s.apply_system(lightcraft_catalog::Op::SetRating { id: ids[3], rating: 2 }).unwrap();
+    s.apply_system(lightcraft_catalog::Op::SetRating { id: ids[4], rating: 3 }).unwrap();
+    s.apply_system(lightcraft_catalog::Op::SetFlag { id: ids[4], flag: lightcraft_catalog::Flag::Reject }).unwrap();
+    s.apply_system(lightcraft_catalog::Op::SetFlag { id: ids[6], flag: lightcraft_catalog::Flag::Pick }).unwrap();
+    let mut meta = s.catalog.photo(ids[6]).unwrap().meta.clone();
+    meta.regions.clear();
+    s.apply_system(lightcraft_catalog::Op::SetMeta { id: ids[6], meta: Box::new(meta) }).unwrap();
+    s.selection = crate::Selection::default();
+    // the user around (culling, nothing open in the Edit panel): the photo with portrait settings
+    let st = settle(&mut s, json!({"pace": "light", "culling": true}));
+    assert_eq!(order_seen(&seen, &pixels), vec![ids[1]], "{st}");
+    // idle: the kept photos with faces, newest first; never the rejected one, one without faces or one not kept
+    let st = settle(&mut s, json!({"pace": "normal", "culling": true}));
+    assert_eq!(st["state"], "done", "{st}");
+    let got = order_seen(&seen, &pixels);
+    assert_eq!(got.first(), Some(&ids[1]), "{st}");
+    let mut kept: Vec<PhotoId> = got[1..].to_vec();
+    kept.sort_by_key(|id| id.0);
+    let mut want = vec![ids[2], ids[3]];
+    want.sort_by_key(|id| id.0);
+    assert_eq!(kept, want, "{st}");
+}
+
+#[test]
+fn photos_without_faces_wait_for_the_face_scan_except_near_the_open_photo_while_editing() {
     let (mut s, _dir, ids) = library("faces", 4);
     let seen: Seen = Arc::default();
     s.parsing.set_runner(Some(recording_runner(&seen)));
     add_face(&mut s, ids[3], None);
     // the face scan looked at photo 1 and found no face: not parsed even beside the open photo
     s.faces.scanned.insert(ids[1].0);
-    open(&mut s, ids[0]);
+    edit_open(&mut s, ids[0]);
     let st = settle(&mut s, json!({"pace": "normal"}));
     assert_eq!(st["state"], "done", "{st}");
     let pixels = first_pixels(&mut s, &ids);
@@ -269,7 +370,7 @@ fn the_user_working_pauses_the_queue_and_stops_the_model_run_which_runs_again_af
     let (mut s, _dir, ids) = library("pause", 3);
     let gate = Gate::default();
     s.parsing.set_runner(Some(gate.runner()));
-    open(&mut s, ids[0]);
+    edit_open(&mut s, ids[0]);
     pump_until(&mut s, json!({"pace": "light"}), "the model run starts", || gate.entered.load(Ordering::SeqCst) == 1);
     let st = s.execute("parsing.ahead.status", &json!({})).unwrap();
     assert_eq!(st["working"]["id"], ids[0].0, "{st}");
@@ -299,7 +400,7 @@ fn the_photo_on_screen_being_made_and_a_request_go_first() {
     let (mut s, _dir, ids) = library("foreground", 2);
     let gate = Gate::default();
     s.parsing.set_runner(Some(gate.runner()));
-    open(&mut s, ids[0]);
+    edit_open(&mut s, ids[0]);
     {
         // the loupe waits for its render: nothing starts
         let _hold = crate::prep::TestHold::new();
@@ -326,7 +427,7 @@ fn the_rows_cross_stops_the_run_and_empties_the_queue_until_another_photo_is_ope
     let (mut s, _dir, ids) = library("cancel", 3);
     let gate = Gate::default();
     s.parsing.set_runner(Some(gate.runner()));
-    open(&mut s, ids[0]);
+    edit_open(&mut s, ids[0]);
     pump_until(&mut s, json!({"pace": "light"}), "the model run starts", || gate.entered.load(Ordering::SeqCst) == 1);
     let r = row(&s).expect("a row");
     assert!(r.cancellable);
@@ -342,11 +443,11 @@ fn the_rows_cross_stops_the_run_and_empties_the_queue_until_another_photo_is_ope
         pump(&mut s, json!({"pace": "normal"}));
     }
     assert_eq!(gate.entered.load(Ordering::SeqCst), 1, "nothing runs after ✕");
-    // another photo opened: parsing ahead starts again
-    open(&mut s, ids[2]);
+    // another photo opened: parsing ahead starts again (it and the one ahead; the stopped one is behind)
+    open(&mut s, ids[1]);
     let st = settle(&mut s, json!({"pace": "light"}));
     assert_eq!(st["state"], "done", "{st}");
-    assert_eq!(st["parsed"], 3);
+    assert_eq!(st["parsed"], 2);
 }
 
 #[test]
@@ -354,7 +455,7 @@ fn the_setting_off_and_low_power_stop_everything() {
     let (mut s, _dir, ids) = library("off", 2);
     let gate = Gate::default();
     s.parsing.set_runner(Some(gate.runner()));
-    open(&mut s, ids[0]);
+    edit_open(&mut s, ids[0]);
     let st = pump(&mut s, json!({"pace": "normal", "enabled": false}));
     assert_eq!(st["state"], "off", "{st}");
     assert_eq!(st["enabled"], false);
@@ -385,7 +486,7 @@ fn a_parsed_photo_opens_without_a_model_run_and_cached_photos_are_skipped_after_
     let (mut s, dir, ids) = library("skip", 3);
     let seen: Seen = Arc::default();
     s.parsing.set_runner(Some(recording_runner(&seen)));
-    open(&mut s, ids[1]);
+    edit_open(&mut s, ids[0]);
     let st = settle(&mut s, json!({"pace": "normal"}));
     assert_eq!(st["parsed"], 3, "{st}");
     assert_eq!(s.parsing.runs(), 3);
@@ -402,7 +503,7 @@ fn a_parsed_photo_opens_without_a_model_run_and_cached_photos_are_skipped_after_
     attach(&mut s, &dir);
     s.parsing.set_runner(Some(recording_runner(&seen)));
     let ids = s.visible_cloned();
-    open(&mut s, ids[1]);
+    edit_open(&mut s, ids[0]);
     let st = settle(&mut s, json!({"pace": "normal"}));
     assert_eq!((st["parsed"].as_u64(), st["skipped"].as_u64()), (Some(0), Some(3)), "{st}");
     assert_eq!(s.parsing.runs(), 0);
@@ -460,7 +561,11 @@ fn the_cache_keeps_the_parses_used_last_and_the_idle_sweep_leaves_room() {
     for id in &ids {
         add_face(&mut s, *id, None);
     }
-    open(&mut s, ids[0]);
+    // (5 and 6 kept: photos for the idle sweep)
+    for id in &ids[5..] {
+        s.apply_system(lightcraft_catalog::Op::SetRating { id: *id, rating: 3 }).unwrap();
+    }
+    edit_open(&mut s, ids[0]);
     let st = settle(&mut s, json!({"pace": "normal"}));
     assert_eq!(st["state"], "done", "{st}");
     // 0 open, 1 to 4 ahead; 5 and 6 are only for the idle sweep
@@ -477,7 +582,7 @@ fn a_photo_a_request_parsed_is_skipped_and_opens_again_without_a_render() {
     // the user opened photo 0 before parsing ahead ran: a request parsed it
     let r = s.execute("parsing.run", &json!({"ids": [ids[0].0], "wait": true})).unwrap();
     assert_eq!(r["photos"][0]["cached"], false, "{r}");
-    open(&mut s, ids[0]);
+    edit_open(&mut s, ids[0]);
     let st = settle(&mut s, json!({"pace": "normal"}));
     assert_eq!((st["parsed"].as_u64(), st["skipped"].as_u64()), (Some(1), Some(1)), "{st}");
     assert_eq!(s.parsing.runs(), 2);
@@ -525,7 +630,7 @@ fn an_export_print_book_or_slideshow_holds_the_work_back_and_stops_the_model_run
     let (mut s, _dir, ids) = library("export", 2);
     let gate = Gate::default();
     s.parsing.set_runner(Some(gate.runner()));
-    open(&mut s, ids[0]);
+    edit_open(&mut s, ids[0]);
     {
         // (print, book and slideshow output share the export rows' kind)
         let _export = s.activity.start("export", "Printing to PDF", crate::activity::Cancel::No);
@@ -546,7 +651,7 @@ fn an_export_print_book_or_slideshow_holds_the_work_back_and_stops_the_model_run
 }
 
 #[test]
-fn edits_leave_the_queue_as_it_is_and_face_changes_rebuild_it_but_not_while_the_user_works() {
+fn labels_leave_the_queue_as_it_is_and_face_changes_rebuild_it_but_not_while_the_user_works() {
     let (mut s, _dir, ids) = library("aspects", 3);
     let seen: Seen = Arc::default();
     s.parsing.set_runner(Some(recording_runner(&seen)));
@@ -556,8 +661,8 @@ fn edits_leave_the_queue_as_it_is_and_face_changes_rebuild_it_but_not_while_the_
     open(&mut s, ids[0]);
     settle(&mut s, json!({"pace": "light"}));
     let built = s.parse_ahead.rebuilds();
-    // a rating (as any edit) changes nothing the queue reads: no rebuild, however long ago it was built
-    s.apply_system(lightcraft_catalog::Op::SetRating { id: ids[1], rating: 3 }).unwrap();
+    // a colour label changes nothing the queue reads: no rebuild, however long ago it was built
+    s.apply_system(lightcraft_catalog::Op::SetLabel { id: ids[1], label: Some(lightcraft_catalog::ColorLabel::Red) }).unwrap();
     s.parse_ahead_test_age();
     pump(&mut s, json!({"pace": "light"}));
     assert_eq!(s.parse_ahead.rebuilds(), built, "an edit rebuilt the queue");
@@ -575,7 +680,7 @@ fn a_request_for_another_photo_stops_the_queues_model_run_and_goes_first() {
     let (mut s, _dir, ids) = library("first", 2);
     let gate = Gate::default();
     s.parsing.set_runner(Some(gate.runner()));
-    open(&mut s, ids[0]);
+    edit_open(&mut s, ids[0]);
     pump_until(&mut s, json!({"pace": "light"}), "the queue's run starts", || gate.entered.load(Ordering::SeqCst) == 1);
     // a synchronous request (the UI thread waits, so nothing pumps): the queue's run gives way at once
     let parsing = s.parsing.clone();
@@ -673,7 +778,7 @@ fn the_pump_never_reads_the_face_detector_and_a_parsed_photos_mask_needs_no_pars
     damaged_yunet(&mut s, &dir);
     let seen: Seen = Arc::default();
     s.parsing.set_runner(Some(recording_runner(&seen)));
-    open(&mut s, ids[0]);
+    edit_open(&mut s, ids[0]);
     let reads = || crate::cmd::face_detect::READS.with(std::cell::Cell::get);
     let before = reads();
     let st = settle(&mut s, json!({"pace": "light"}));

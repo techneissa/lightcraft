@@ -118,8 +118,8 @@ pub(super) fn pump(s: &mut Session, pace: Pace) {
         peek.stop();
         return;
     }
-    // (a check going waits too: its worker reads this)
-    let held = pace == Pace::Pause || crate::prep::foreground_busy() || worker::exporting(&s.activity);
+    // (a check going waits too: its worker reads this; nothing is checked while the user culls, issue #200)
+    let held = pace == Pace::Pause || s.parse_ahead.culling || crate::prep::foreground_busy() || worker::exporting(&s.activity);
     peek.hold.store(held, Ordering::SeqCst);
     let Some(id) = active else { return };
     if held || peek.running.is_some() || peek.settled == Some((id, revision)) {

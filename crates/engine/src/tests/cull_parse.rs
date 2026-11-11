@@ -29,9 +29,15 @@ fn meshed_parse(set: ModelSet) -> Parsing {
 fn restarted(tag: &str, runner: Runner) -> (Session, Vec<lightcraft_catalog::PhotoId>) {
     let (mut s, dir, ids) = library(tag, 2);
     s.parsing.set_runner(Some(runner));
-    open(&mut s, ids[0]);
-    let st = settle(&mut s, json!({"pace": "normal"}));
-    assert_eq!(st["parsed"], 2, "{st}");
+    // (each photo opened in turn: the queue parses the photo open in the Edit view, not its neighbours)
+    let mut parsed = 0;
+    for id in &ids {
+        open(&mut s, *id);
+        let st = settle(&mut s, json!({"pace": "normal"}));
+        parsed += st["parsed"].as_u64().unwrap_or(0);
+    }
+    // (the tests below check both photos' parses are read: `fromParse` is 2)
+    assert!(parsed >= 2, "both photos parsed: {parsed}");
     drop(s);
     let mut s = Session::new().with_fs();
     let paths: Vec<String> = (0..2).map(|i| dir.join(format!("photo-{i:02}.png")).to_string_lossy().into_owned()).collect();

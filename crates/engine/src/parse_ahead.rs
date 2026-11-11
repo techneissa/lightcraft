@@ -1,10 +1,12 @@
 //! Fork feature (`fork/parse-ahead.md`): people parsing ahead of time, so opening a photo or applying a portrait
 //! preset finds its part masks ready instead of waiting seconds for the models.
 //!
-//! A low-priority queue ([`queue`]) parses, one photo at a time on a worker thread ([`worker`]): the photos around the
-//! open one in the filmstrip's order, photos imported since the library opened that have faces, and, while the user is
-//! idle, every other photo with faces, newest first. Parses go into people parsing's own disk cache, the same file a
-//! later request reads.
+//! A low-priority queue ([`queue`]) parses, one photo at a time on a worker thread ([`worker`]), only photos likely to
+//! be retouched (issue #200): the photo open in the Edit panel and, once the user edits there, the photos ahead of it in
+//! the filmstrip's order; photos with portrait settings; and, while the user is idle, photos with faces they kept
+//! (picked or starred), newest first. While culling (the frontend says `culling`: no Edit panel) nothing near the open
+//! photo is parsed, and a photo only stepped past never is. Parses go into people parsing's own disk cache, the same
+//! file a later request reads.
 //!
 //! Never in the way:
 //! - The frontend's per-frame pump (`parsing.ahead.pump`) gives the pace: nothing new while the user drags, types or
@@ -21,6 +23,8 @@
 //! photo already parsed for the current model set and People edge is skipped without being rendered: an index beside
 //! the cache ([`index`]) files each parse's key by what the parse depends on ([`identity`]). The worker reads and
 //! writes that index; the pump queues nothing until it is read.
+//!
+//! What a parse costs, step by step: `fork/parse-ahead.md` (What one parse costs).
 
 use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
@@ -48,18 +52,28 @@ use queue::Why;
 
 /// The share of the cache's size limit the idle sweep fills at most.
 pub const IDLE_FILL: f64 = 0.9;
+/// How long a photo stays open in the Edit view before it is parsed, unless the user edits it (or it has portrait
+/// settings): stepping through photos with the arrow keys there parses none of them (issue #200).
+const DWELL: Duration = Duration::from_secs(4);
 /// How often the queue is rebuilt after the catalog changed (the photos around the open one: at once).
 const REBUILD_EVERY: Duration = Duration::from_secs(3);
 /// What of a photo the queue reads: its faces and the rest of its metadata, its dates, its file, whether it is in the
-/// library. Other changes (edits, ratings) leave the queue as it is.
-const READS: Aspects = Aspects::META.with(Aspects::CAPTURED).with(Aspects::FILE).with(Aspects::PRESENCE);
+/// library, its rating and flag (a kept photo) and its develop settings (portrait settings). Other changes (labels,
+/// analysis) leave the queue as it is.
+const READS: Aspects = Aspects::META
+    .with(Aspects::CAPTURED)
+    .with(Aspects::FILE)
+    .with(Aspects::PRESENCE)
+    .with(Aspects::RATING)
+    .with(Aspects::FLAG)
+    .with(Aspects::DEVELOP);
 
 /// How hard parsing ahead may work, from what the user is doing (the frontend says, as for the face scan).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Pace {
     /// Start nothing; stop a model run going.
     Pause,
-    /// The user is around: the photos near the open one and new imports.
+    /// The user is around: the photos near the open one and those with portrait settings.
     Light,
     /// The user is idle: everything.
     Normal,
@@ -78,7 +92,7 @@ impl Pace {
     fn allows(self, why: Why) -> bool {
         match self {
             Pace::Pause => false,
-            Pace::Light => why != Why::Idle,
+            Pace::Light => why != Why::Kept,
             Pace::Normal => true,
         }
     }
@@ -125,13 +139,23 @@ pub struct ParseAhead {
     queue: VecDeque<(Why, PhotoId)>,
     /// The photos around the open one the queue was built with.
     near: Vec<PhotoId>,
-    /// New imports and the idle sweep, in order, with their identities (rebuilt when the catalog changes; the photos
-    /// around the open one are put in front of it whenever the open photo changes).
+    /// Photos with portrait settings and kept photos, in order, with their identities (rebuilt when the catalog
+    /// changes; the photos around the open one are put in front of it whenever the open photo changes).
     rest: Vec<(Why, PhotoId, u128)>,
     stamp: Option<Stamp>,
     built_at: Option<Instant>,
-    /// The library opening, and the photos it had when parsing ahead first looked (the rest are new imports).
-    known: Option<(usize, HashSet<PhotoId>)>,
+    /// The frontend says the user culls (no Edit panel): nothing near the open photo is parsed.
+    culling: bool,
+    /// The user has edited in the Edit panel since they came to it: the photos ahead of the open one are parsed too.
+    worked: bool,
+    /// The open photo and the address of its develop settings at the last pump (an edit replaces them).
+    seen_open: Option<(PhotoId, usize)>,
+    /// The open photo and when it was opened.
+    opened: Option<(PhotoId, Instant)>,
+    /// [`DWELL`] (tests shorten it).
+    dwell: Duration,
+    /// The open photo waits for its [`DWELL`]: frames keep coming, without a row.
+    dwelling: bool,
     /// Photos done since the app started (parsed or failed), by identity: a photo that changes is done again.
     tried: HashSet<u128>,
     in_flight: Option<InFlight>,
@@ -164,7 +188,12 @@ impl Default for ParseAhead {
             rest: Vec::new(),
             stamp: None,
             built_at: None,
-            known: None,
+            culling: false,
+            worked: false,
+            seen_open: None,
+            opened: None,
+            dwell: DWELL,
+            dwelling: false,
             tried: HashSet::new(),
             in_flight: None,
             index: Slot::default(),
@@ -269,6 +298,17 @@ fn parseable(p: &Photo) -> bool {
     p.in_library() && !p.is_video()
 }
 
+/// Whether the photo has portrait settings: drawing it needs its parse.
+fn has_portrait(p: &Photo) -> bool {
+    !p.develop.retouch.is_default()
+}
+
+/// Whether the user kept the photo: picked or starred, and not rejected.
+fn kept(p: &Photo) -> bool {
+    use lightcraft_catalog::Flag;
+    p.flag != Flag::Reject && (p.flag == Flag::Pick || p.rating >= 1)
+}
+
 /// The newest-first date of a photo: when it was taken, else when it was imported.
 fn taken(p: &Photo) -> String {
     p.captured.clone().unwrap_or_else(|| p.imported.clone())
@@ -290,24 +330,48 @@ fn face_scanned(s: &Session, id: PhotoId) -> bool {
     };
 }
 
-/// The photos around the open one worth parsing: those with faces, and those the face scan has not looked at yet.
+/// The photos around the open one worth parsing: those with faces, and those the face scan has not looked at yet. None
+/// while culling, nor while the open photo has been open less than [`DWELL`]; the open photo alone until the user edits
+/// in the Edit panel (or it has portrait settings).
 fn near_photos(s: &mut Session, backward: bool) -> Vec<PhotoId> {
+    s.parse_ahead.dwelling = false;
     let Some(at) = s.active() else { return Vec::new() };
-    queue::near(s.visible(), at, backward)
+    if s.parse_ahead.culling {
+        return Vec::new();
+    }
+    let ahead = editing(s, at);
+    let a = &mut s.parse_ahead;
+    if a.opened.is_none_or(|(id, _)| id != at) {
+        a.opened = Some((at, Instant::now()));
+    }
+    a.dwelling = !ahead && a.opened.is_some_and(|(_, t)| t.elapsed() < a.dwell);
+    if a.dwelling {
+        return Vec::new();
+    }
+    queue::near(s.visible(), at, backward, ahead)
         .into_iter()
         .filter(|id| s.catalog.photo(*id).is_some_and(|p| parseable(p) && (has_faces(p) || !face_scanned(s, *id))))
         .collect()
 }
 
-/// Rebuild the photos after the open one's neighbours: new imports with faces and (while the cache has room) every
-/// other photo with faces, minus those whose parse is in the cache. Hashes each photo with faces: done when what the
-/// queue reads of the catalog changed, not when the user steps to another photo. The worker then lists the cache
-/// folder again, for the next rebuild.
-fn rebuild_rest(s: &mut Session, stamp: &Stamp) {
-    if s.parse_ahead.known.as_ref().is_none_or(|(lib, _)| *lib != stamp.library) {
-        let ids = s.catalog.photos().map(|p| p.id).collect();
-        s.parse_ahead.known = Some((stamp.library, ids));
+/// Whether the user edits in the Edit panel: an edit to the open photo seen since they came to it (the develop settings
+/// were replaced between two pumps), or the open photo has portrait settings.
+fn editing(s: &mut Session, at: PhotoId) -> bool {
+    let Some(p) = s.catalog.photo(at) else { return s.parse_ahead.worked };
+    let (settings, portrait) = (Arc::as_ptr(&p.develop) as usize, has_portrait(p));
+    let ahead = &mut s.parse_ahead;
+    if ahead.seen_open.is_some_and(|(id, was)| id == at && was != settings) {
+        ahead.worked = true;
     }
+    ahead.seen_open = Some((at, settings));
+    ahead.worked || portrait
+}
+
+/// Rebuild the photos after the open one's neighbours: photos with portrait settings and (while the cache has room)
+/// kept photos with faces, minus those whose parse is in the cache. Hashes each of them: done when what the queue reads
+/// of the catalog changed, not when the user steps to another photo. The worker then lists the cache folder again, for
+/// the next rebuild.
+fn rebuild_rest(s: &mut Session, stamp: &Stamp) {
     let room = {
         let mut sh = index::lock(&s.parse_ahead.index);
         let room = (sh.listing.bytes as f64) < crate::people_parsing::cache_budget() as f64 * IDLE_FILL;
@@ -318,16 +382,15 @@ fn rebuild_rest(s: &mut Session, stamp: &Stamp) {
         }
         room
     };
-    let (mut imported, mut idle) = (Vec::new(), Vec::new());
-    let known = s.parse_ahead.known.as_ref().map(|k| &k.1);
-    for p in s.catalog.photos().filter(|p| parseable(p) && has_faces(p)) {
-        if known.is_some_and(|k| !k.contains(&p.id)) {
-            imported.push((p.id, p.imported.clone()));
-        } else if room {
-            idle.push((p.id, taken(p)));
+    let (mut portrait, mut kept_photos) = (Vec::new(), Vec::new());
+    for p in s.catalog.photos().filter(|p| parseable(p)) {
+        if has_portrait(p) {
+            portrait.push((p.id, taken(p)));
+        } else if room && has_faces(p) && kept(p) {
+            kept_photos.push((p.id, taken(p)));
         }
     }
-    let order = queue::order(&[], imported, idle);
+    let order = queue::order(&[], portrait, kept_photos);
     let mut rest = Vec::with_capacity(order.len());
     for (why, id) in order {
         let Some(p) = s.catalog.photo(id) else { continue };
@@ -400,8 +463,8 @@ fn collect(s: &mut Session) {
                 // the cache filled up: the idle sweep ends here
                 if (sh.listing.bytes as f64) >= crate::people_parsing::cache_budget() as f64 * IDLE_FILL {
                     drop(sh);
-                    ahead.queue.retain(|(why, _)| *why != Why::Idle);
-                    ahead.rest.retain(|(why, _, _)| *why != Why::Idle);
+                    ahead.queue.retain(|(why, _)| *why != Why::Kept);
+                    ahead.rest.retain(|(why, _, _)| *why != Why::Kept);
                 }
             }
             worker::Ended::Failed(e) => {
@@ -508,6 +571,13 @@ pub(crate) fn pump(s: &mut Session, pace: Pace, backward: bool) {
         f.run.stop();
     }
     let near = near_photos(s, backward);
+    // (a photo near the one open before, left behind: the user stepped past it, its run ends)
+    if let Some(f) = &s.parse_ahead.in_flight
+        && f.why == Why::Near
+        && !near.contains(&f.id)
+    {
+        s.parse_ahead.drop_in_flight();
+    }
     let stamp = Stamp {
         library: Arc::as_ptr(&s.library_identity) as usize,
         photos: s.catalog.len(),
@@ -550,6 +620,13 @@ fn show(s: &mut Session, pace: Pace, held: bool) {
     let left = ahead.queue.iter().filter(|(why, _)| pace == Pace::Pause || pace.allows(*why)).count();
     ahead.left = left;
     let busy = ahead.in_flight.is_some() || left > 0;
+    // (the open photo waits for its dwell: the frontend keeps pumping, no row shows)
+    if !busy && ahead.dwelling {
+        ahead.state = "paused";
+        ahead.row = None;
+        ahead.row_done = 0;
+        return;
+    }
     ahead.state = if !busy {
         "done"
     } else if held {
@@ -775,6 +852,30 @@ impl Session {
         self.parse_ahead.peek.started()
     }
 
+    /// Tests and tools (the profile of issue #200): parse photo `id` on this thread as the queue's worker does (render,
+    /// face detection, model run), waiting for the run. `Ok(true)`: the models ran; `Ok(false)`: the parse was cached.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn parse_ahead_one(&mut self, id: PhotoId) -> Result<bool, String> {
+        let (img, hints) = crate::cmd::parsing::prepare_ahead(self, id)?.render()?.detect()?;
+        match self.parsing.parse_as(self.parsing.choice(), img, hints, true).1 {
+            crate::people_parsing::Outcome::Ready { cached, .. } => Ok(!cached),
+            crate::people_parsing::Outcome::Failed(e) => Err(e),
+            crate::people_parsing::Outcome::Running => Err("the parse did not finish".into()),
+        }
+    }
+
+    /// The frontend says whether the user culls (no Edit panel open; issue #200): nothing near the open photo is parsed
+    /// then, and coming back to the Edit panel waits for an edit before the photos ahead are parsed.
+    pub fn set_parse_ahead_culling(&mut self, culling: bool) {
+        let ahead = &mut self.parse_ahead;
+        if culling {
+            ahead.worked = false;
+            ahead.seen_open = None;
+        }
+        ahead.culling = culling;
+    }
+
     /// Turn parsing ahead on or off (the desktop app's setting; on by default). Off stops the photo going.
     pub fn set_parse_ahead(&mut self, on: bool) {
         self.parse_ahead.enabled = on;
@@ -792,6 +893,8 @@ pub(crate) fn status(s: &Session) -> Value {
     json!({
         "enabled": a.enabled,
         "state": a.state,
+        "culling": a.culling,
+        "editing": a.worked,
         "active": a.in_flight.is_some() || !a.queue.is_empty(),
         "queued": a.queue.len(),
         "queue": a.queue.iter().take(50).map(|(why, id)| json!({"id": id.0, "why": why.id()})).collect::<Vec<_>>(),
@@ -821,6 +924,11 @@ impl Session {
     /// Tests: the queue was built long ago (a change it reads rebuilds it at the next pump).
     pub(crate) fn parse_ahead_test_age(&mut self) {
         self.parse_ahead.built_at = None;
+    }
+
+    /// Tests: how long a photo stays open in the Edit view before it is parsed without an edit.
+    pub(crate) fn parse_ahead_test_dwell(&mut self, dwell: Duration) {
+        self.parse_ahead.dwell = dwell;
     }
 
     /// Tests: the model run going, if any.

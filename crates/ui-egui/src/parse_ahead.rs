@@ -4,7 +4,7 @@
 //! The pace is the face scan's ([`crate::panels::faces::background_pace`]), held back further: nothing new while a
 //! slider is dragged, or for [`QUIET_SECS`] after the user last dragged, typed or scrolled (edits come in bursts), also
 //! in a window without the keyboard. The engine also waits while the loupe waits for its render and while an export
-//! runs.
+//! runs. Outside the Edit view the user culls: the engine parses nothing near the open photo then.
 
 use serde_json::json;
 
@@ -69,7 +69,9 @@ pub fn pump(app: &mut LightcraftApp, ctx: &egui::Context, now: f64) {
     if now < due && pace != "pause" {
         return;
     }
-    let p = json!({"pace": pace, "backward": app.look_ahead.backward(), "enabled": app.ui.settings.parse_ahead});
+    // (outside the Edit view the user culls: nothing near the open photo is parsed, issue #200)
+    let culling = !(app.ui.view == crate::state::ViewMode::Detail && crate::full_decode::editing(app.ui.right));
+    let p = json!({"pace": pace, "backward": app.look_ahead.backward(), "culling": culling, "enabled": app.ui.settings.parse_ahead});
     let again = match app.session.execute("parsing.ahead.pump", &p) {
         Ok(v) => {
             repaint_in(v["state"].as_str().unwrap_or(""), v["left"].as_u64().unwrap_or(0), v["queued"].as_u64().unwrap_or(0), idle_in(app, ctx, now))

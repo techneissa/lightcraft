@@ -24,8 +24,8 @@ fn view(h: &mut Headless, zoom: serde_json::Value, pan: [f32; 2]) {
     assert!(h.settle(SETTLE), "the view settles");
 }
 
-/// The loupe on the fixture's first photo, with full-size pictures on (and, with `disk`, a disk cache there).
-fn loupe(fixture: &RenderFixture, disk: Option<&std::path::Path>) -> Headless {
+/// The loupe at Fit on the fixture's first photo, with full-size pictures on (and, with `disk`, a disk cache there).
+fn at_fit(fixture: &RenderFixture, disk: Option<&std::path::Path>) -> Headless {
     let mut session = fixture.session();
     if let Some(dir) = disk {
         session.media.attach_disk_cache(dir, 4 << 30);
@@ -35,7 +35,24 @@ fn loupe(fixture: &RenderFixture, disk: Option<&std::path::Path>) -> Headless {
     h.app.renderer.full.enabled = true;
     let r = h.request("ui.set", json!({"view": "detail", "right": "none", "filmstrip": false}), T);
     assert_eq!(r["ok"], true, "{r}");
+    // (the loupe's first frames: the photo is open at Fit before anything zooms)
+    for _ in 0..3 {
+        h.step();
+    }
     h
+}
+
+/// [`at_fit`], zoomed into at 100 %: a photo the finished picture is made for.
+fn loupe(fixture: &RenderFixture, disk: Option<&std::path::Path>) -> Headless {
+    let mut h = at_fit(fixture, disk);
+    look_closer(&mut h, [0.5, 0.5]);
+    h
+}
+
+/// Zoom the photo open to 100 % with the centre at `pan` (without waiting for it to render).
+fn look_closer(h: &mut Headless, pan: [f32; 2]) {
+    exec(h, "view.navigate", json!({"zoom": {"percent": 100}, "pan": pan}));
+    h.step();
 }
 
 /// Whether the activity stack shows the build's row.
@@ -134,6 +151,7 @@ fn going_back_to_a_photo_reads_its_picture_from_disk_and_a_new_look_does_not() {
     assert!(h.step_until(SETTLE, |h| written(h) >= 1), "the picture is written to disk");
     exec(&mut h, "library.next", json!({}));
     assert_ne!(h.app.session.active(), Some(first));
+    look_closer(&mut h, [0.4, 0.4]);
     assert!(h.settle(SETTLE), "the other photo settles");
     until_ready(&mut h);
     let stats = h.app.renderer.full.stats;
@@ -144,6 +162,7 @@ fn going_back_to_a_photo_reads_its_picture_from_disk_and_a_new_look_does_not() {
     until_ready(&mut h);
     let stats = h.app.renderer.full.stats;
     assert_eq!((stats.rendered, stats.from_disk), (2, 1), "read back, not rendered: {stats:?}");
+    look_closer(&mut h, [0.6, 0.6]);
     exec(&mut h, "develop.set", json!({"values": {"light.exposure": -0.4}}));
     assert!(h.settle(SETTLE), "the edit settles");
     until_ready(&mut h);
@@ -236,6 +255,8 @@ fn the_build_waits_for_the_read_ahead_and_decodes_nothing_again() {
     assert_eq!(r["ok"], true, "{r}");
     let id = h.app.session.active().expect("a photo");
     assert!(h.step_until(SETTLE, |h| h.app.full_decode.running_for(id)), "the original is read ahead");
+    // (zoomed into while it is read: the zoom's window waits for it, and the photo is one the picture is made for)
+    look_closer(&mut h, [0.5, 0.5]);
     // well past the build's settle time: it waits while the read-ahead runs
     for _ in 0..240 {
         h.step();
@@ -303,15 +324,12 @@ fn detailed_photo(dir: &std::path::Path, w: u32, h: u32) -> String {
     path.to_string_lossy().into_owned()
 }
 
-// Given a photo with strong Clarity, Dehaze and Texture, a feathered mask and a spot across a band edge, when its
-// picture is rendered in bands, at the narrowest margin bands get (4.5 % of the long edge, about 2.25 σ of the wide
-// planes) and at the margin they use here, then no band edge shows: the step from the row above it to the row below
-// is the whole frame's, give or take a fraction of a code over the row. (A band is a window render: Dehaze and Clarity
-// come from the whole frame at reduced size there, as in a zoom window, so single pixels differ from the whole frame
-// by as much inside a band as at its edge, whatever the margin.)
+// Given a photo with strong Clarity, Dehaze and Texture, a feathered mask and a spot, when its finished picture is
+// built, then its full size is the whole frame's render pixel for pixel, across every texture edge: what zoom and pan
+// show is what the photo exports as (bands of window renders, before #199, were up to 21 codes off it)
 #[test]
-fn bands_match_the_whole_frame_at_their_seams() {
-    let dir = std::env::temp_dir().join(format!("lc-full-seams-{}-{}", std::process::id(), lightcraft_preview::next_tick()));
+fn the_picture_is_the_whole_frame_render_pixel_for_pixel() {
+    let dir = std::env::temp_dir().join(format!("lc-full-whole-{}-{}", std::process::id(), lightcraft_preview::next_tick()));
     std::fs::create_dir_all(&dir).expect("a scratch folder");
     let size = [1536usize, 1024];
     let path = detailed_photo(&dir, size[0] as u32, size[1] as u32);
@@ -327,46 +345,105 @@ fn bands_match_the_whole_frame_at_their_seams() {
     let r = h.request("ui.set", json!({"view": "detail", "right": "none", "filmstrip": false}), T);
     assert_eq!(r["ok"], true, "{r}");
     exec(&mut h, "develop.set", json!({"values": {"effects.clarity": 100, "effects.dehaze": 80, "effects.texture": 100}}));
-    // (three bands, edges at rows 341 and 682: the mask's feather and the spot cross them)
     exec(&mut h, "mask.add", json!({"kind": "radial", "center": [0.5, 0.333], "feather": 80}));
     exec(&mut h, "mask.adjust", json!({"values": {"exposure": 1.0, "clarity": 60}}));
     exec(&mut h, "spot.add", json!({"mode": "heal", "points": [[0.4, 0.666]], "size": 0.03, "source": [0.0, 0.08]}));
     assert!(h.settle(SETTLE), "the edits settle");
     let whole = super::picture_job(&mut h.app, id, size, true).expect("the picture's job");
     let reference = whole.clone().run().rendered.expect("the whole frame").image;
-    let long = size[0].max(size[1]);
-    for margin in [(long as f64 * 0.045).round() as usize, super::band_margin(long)] {
-        let bands = super::bands_of(&mut h.app, id, &whole, size, true, (3, margin));
-        let edges: Vec<usize> = bands.iter().skip(1).map(|b| b.rows.0).collect();
-        assert_eq!(edges, [341, 682], "three bands");
-        let plan = super::Plan {
-            disk: None,
-            size,
-            tile: super::TILE,
-            min_edge: long,
-            bands,
-            cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            at_once: Arc::default(),
-            writing: Arc::default(),
-            fail_cut: false,
-        };
-        let banded = super::build::render(&plan).1.expect("the banded picture");
-        let px = |img: &lightcraft_raster::Rgba8, x: usize, y: usize, c: usize| f64::from(img.data[y * size[0] + x][c]);
-        // the step a band edge adds, per pixel and as the mean over its row (a seam is a step in tone along the row)
-        let (mut most, mut tone) = (0f64, 0f64);
-        for &e in &edges {
-            for c in 0..3 {
-                let steps: Vec<f64> = (0..size[0])
-                    .map(|x| (px(&banded, x, e, c) - px(&banded, x, e - 1, c)) - (px(&reference, x, e, c) - px(&reference, x, e - 1, c)))
-                    .collect();
-                most = steps.iter().fold(most, |m, d| m.max(d.abs()));
-                tone = tone.max((steps.iter().sum::<f64>() / size[0] as f64).abs());
+    // (textures of 500 px: the full size is cut into 4 × 3 of them, each with a pixel of its neighbours)
+    let plan = super::Plan {
+        disk: None,
+        size,
+        tile: 500,
+        min_edge: size[0],
+        render: true,
+        cancel: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        at_once: Arc::default(),
+        writing: Arc::default(),
+        fail_cut: false,
+    };
+    let built = super::work(whole, plan).1.expect("the picture");
+    assert_eq!(built.levels.first(), Some(&size));
+    let full: Vec<_> = built.tiles.iter().filter(|t| t.level == 0).collect();
+    assert_eq!(full.len(), 12, "textures of the full size");
+    let mut seen = vec![0u8; size[0] * size[1]];
+    let mut differ = 0usize;
+    for t in full {
+        let [x0, y0, tw, th] = t.rect;
+        for y in 0..th {
+            for x in 0..tw {
+                let got = t.image.pixels[(y + t.border[1]) * t.image.size[0] + x + t.border[0]];
+                let want = reference.data[(y0 + y) * size[0] + x0 + x];
+                differ += usize::from(got.to_array() != want);
+                seen[(y0 + y) * size[0] + x0 + x] += 1;
             }
         }
-        eprintln!(
-            "band margin {margin} px: the step at a band edge differs from the whole frame's by {tone:.2} codes over the row, {most} at most in one pixel"
-        );
-        assert!(tone <= 0.5, "margin {margin}: a band edge shows, a step of {tone:.2} codes over the row");
     }
+    assert_eq!(differ, 0, "pixels that differ from the whole frame's render");
+    assert!(seen.iter().all(|&n| n == 1), "every pixel in exactly one texture");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// Given photos culled with the arrow keys, when they are only stepped past (at Fit, or at a zoom kept from the photo
+// before), then no full-size picture is rendered for them, however long each stays on screen; once a photo is zoomed
+// into or panned, its picture is built
+#[test]
+fn photos_only_stepped_past_render_no_picture() {
+    let fixture = RenderFixture::new("full-picture-culling", 3);
+    let mut h = at_fit(&fixture, None);
+    // well past the settle time on each, the loupe sharp and at rest
+    let linger = |h: &mut Headless, what: &str| {
+        assert!(h.settle(SETTLE), "{what}: the photo settles");
+        let id = h.app.session.active().expect("a photo");
+        for _ in 0..180 {
+            h.step();
+            assert!(!h.app.renderer.full.renders(id) && !row(h), "{what}: no build");
+        }
+    };
+    linger(&mut h, "the first photo at Fit");
+    assert_eq!(h.app.renderer.full.stats.rendered, 0, "the first photo at Fit");
+    exec(&mut h, "library.next", json!({}));
+    linger(&mut h, "the second photo at Fit");
+    assert_eq!(h.app.renderer.full.stats.rendered, 0);
+    look_closer(&mut h, [0.5, 0.5]);
+    until_ready(&mut h);
+    assert_eq!(h.app.renderer.full.stats.rendered, 1, "the photo zoomed into");
+    exec(&mut h, "library.next", json!({}));
+    linger(&mut h, "the third photo, at the zoom kept from the second");
+    assert_eq!(h.app.renderer.full.stats.rendered, 1);
+    look_closer(&mut h, [0.3, 0.6]);
+    until_ready(&mut h);
+    assert_eq!(h.app.renderer.full.stats.rendered, 2, "the photo panned");
+}
+
+// Given a photo opened at the zoom kept from the photo before, when I press Z to Fit and Z again, back to that same
+// zoom and pan, then it counts as zoomed into: its picture is built
+#[test]
+fn z_to_fit_and_back_on_a_photo_opened_zoomed_builds_its_picture() {
+    let fixture = RenderFixture::new("full-picture-z-toggle", 2);
+    let mut h = at_fit(&fixture, None);
+    let z = |h: &mut Headless| {
+        let r = h.request("ui.key", json!({"key": "z"}), T);
+        assert_eq!(r["ok"], true, "{r}");
+        h.step();
+    };
+    z(&mut h);
+    let kept = (h.app.ui.zoom, h.app.ui.pan);
+    assert_ne!(kept.0, crate::state::Zoom::Fit, "Z zooms in");
+    exec(&mut h, "library.next", json!({}));
+    assert!(h.settle(SETTLE), "the second photo settles, at the zoom kept");
+    let id = h.app.session.active().expect("a photo");
+    for _ in 0..120 {
+        h.step();
+        assert!(!h.app.renderer.full.renders(id), "stepped to at a kept zoom: no build");
+    }
+    let rendered = h.app.renderer.full.stats.rendered;
+    z(&mut h);
+    assert_eq!(h.app.ui.zoom, crate::state::Zoom::Fit);
+    assert!(h.settle(SETTLE), "Fit settles");
+    z(&mut h);
+    assert_eq!((h.app.ui.zoom, h.app.ui.pan), kept, "back to the same zoom and pan");
+    until_ready(&mut h);
+    assert_eq!(h.app.renderer.full.stats.rendered, rendered + 1, "the photo zoomed into with Z");
 }

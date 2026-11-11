@@ -890,6 +890,8 @@ pub fn render(
     let at = ViewAt { stages, src, cached: cached.as_ref(), start: start.as_ref() };
     let Linear { lin, tiles: t_lin, post, colour_noise, pre_retouch, retouch_boxes } = linear_stage(&mut cx, &at, &sampled, info, &plan, &mut host);
     lap("wb/nr", &mut t, &mut cx);
+    // (a Portrait slider's ⌥-drag map retouches the image before the step again: the one kept on the host)
+    let effect_pre = effect_pre(req.overlay, pre_retouch.as_ref());
 
     // 3. spatial planes (`t_out`: the output tiles that change from `start`'s)
     let (planes, prep, t_out) = planes_stage(&mut cx, &at, (&lin, t_lin.as_ref()), &plan, req);
@@ -1128,11 +1130,7 @@ pub fn render(
             lightcraft_pipeline::visualize::sharpen_plane(req.overlay, &plan.settings, &l, band.as_ref(), plan.px_per_long, plan.detail_scale)
         })?
     });
-    // a Portrait slider's area map: made from the faces, never the pixels
-    let overlay_mask = overlay_mask.or_else(|| match req.overlay {
-        lightcraft_pipeline::Overlay::RetouchArea { feature, face } => lightcraft_pipeline::retouch_step::area(info, &plan, feature, face),
-        _ => None,
-    });
+    let overlay_mask = overlay_mask.or_else(|| retouch_effect(req.overlay, src, effect_pre.as_deref(), info, &plan));
     lightcraft_pipeline::visualize::apply(&mut image, req.overlay, &plan, overlay_mask.as_ref(), all_overlay_alphas.as_deref());
     // spots grew the window the render worked on: cut it back to the request
     if let Some(k) = plan.keep {
@@ -1145,6 +1143,25 @@ pub fn render(
         return None;
     }
     Some(Output::ImageFit(rendered, Some(Rgba8 { width: fw, height: fh, data })))
+}
+
+/// The image before the retouch step a Portrait slider's ⌥-drag view (`Overlay::RetouchEffect`) retouches again: the
+/// one kept on the host. `None` for any other overlay.
+fn effect_pre(o: lightcraft_pipeline::Overlay, kept: Option<&crate::pre_retouch::PreRetouch>) -> Option<Arc<crate::pre_retouch::Images>> {
+    matches!(o, lightcraft_pipeline::Overlay::RetouchEffect { .. }).then(|| kept.and_then(|p| p.kept.get())).flatten()
+}
+
+/// What a Portrait slider changes (`Overlay::RetouchEffect`): measured on the CPU, from the image before the retouch
+/// step the render kept on the host (`pre`; made again from `src` without it). `None` for any other overlay.
+fn retouch_effect(
+    o: lightcraft_pipeline::Overlay,
+    src: &Rgb32f,
+    pre: Option<&crate::pre_retouch::Images>,
+    info: &SourceInfo,
+    plan: &Plan<'_>,
+) -> Option<lightcraft_raster::Plane> {
+    let lightcraft_pipeline::Overlay::RetouchEffect { feature, control, face } = o else { return None };
+    lightcraft_pipeline::retouch_effect::effect(src, pre.map(|i| &i.host), info, plan, feature, control, face)
 }
 
 /// A view's stages and what they kept for this render's size: the entry, and the last render when this one differs

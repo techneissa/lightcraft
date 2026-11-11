@@ -13,8 +13,9 @@
 //!   modifier held; [`Overlay::for_control`] picks one per control): shadow / highlight clipping
 //!   (white or black, with the clipped channels shown), greyscale (Sharpening Amount), the fine
 //!   detail band sharpening works on (Radius / Detail) and the sharpening mask (Masking). The
-//!   sharpening views read the render's own detail planes ([`sharpen_plane`]). A Portrait slider shows a grey / white
-//!   map of where its feature works on the face or faces it changes ([`Overlay::RetouchArea`]).
+//!   sharpening views read the render's own detail planes ([`sharpen_plane`]). A Portrait slider shows what it
+//!   changes on the face or faces it is for, and how much: the photo dark and grey, the change glowing
+//!   ([`Overlay::RetouchEffect`], measured by `crate::retouch_effect`).
 
 use std::borrow::Cow;
 
@@ -61,10 +62,11 @@ pub enum Overlay {
     /// Clipping warnings (J): the photo with every pixel that has a channel at 255 painted
     /// [`CLIP_HIGH`] and every other pixel with a channel at 0 painted [`CLIP_LOW`].
     ClipWarnings,
-    /// Where Portrait retouching feature `feature` (a place in `lightcraft_develop::retouch::FEATURES`) works, as a
-    /// grey / white map, for face `face` (a place in the photo's faces; [`Overlay::ALL_FACES`] for every face)
-    /// (Alt-drag on a Portrait slider).
-    RetouchArea { feature: u8, face: u8 },
+    /// What Portrait slider `control` (a place in the sliders of feature `feature`, a place in
+    /// `lightcraft_develop::retouch::FEATURES`) changes on face `face` (a place in the photo's faces;
+    /// [`Overlay::ALL_FACES`]: the settings for every face) at its value: the photo dark and grey, the change glowing in
+    /// [`EFFECT_GLOW`], brighter where it changes more (Alt-drag on a Portrait slider).
+    RetouchEffect { feature: u8, control: u8, face: u8 },
 }
 
 /// [`Overlay::ClipWarnings`] colour of clipped highlights.
@@ -162,7 +164,7 @@ impl Overlay {
             Overlay::SharpenDetail => (9, 0.0),
             Overlay::SharpenMask => (10, 0.0),
             Overlay::ClipWarnings => (11, 0.0),
-            Overlay::RetouchArea { feature, face } => (12, (feature as u32 | (face as u32) << 8) as f64),
+            Overlay::RetouchEffect { feature, control, face } => (12, (feature as u32 | (face as u32) << 8 | (control as u32) << 16) as f64),
         }
     }
 
@@ -187,7 +189,10 @@ impl Overlay {
             9 => Overlay::SharpenDetail,
             10 => Overlay::SharpenMask,
             11 => Overlay::ClipWarnings,
-            12 if v.is_finite() && v >= 0.0 => Overlay::RetouchArea { feature: v as u32 as u8, face: (v as u32 >> 8) as u8 },
+            12 if v.is_finite() && v >= 0.0 => {
+                let v = v as u32;
+                Overlay::RetouchEffect { feature: v as u8, face: (v >> 8) as u8, control: (v >> 16) as u8 }
+            }
             _ => Overlay::None,
         }
     }
@@ -207,7 +212,7 @@ impl Overlay {
             Overlay::SharpenDetail => 0x5003,
             Overlay::SharpenMask => 0x5004,
             Overlay::ClipWarnings => 0x5005,
-            Overlay::RetouchArea { feature, face } => 0x1_0000 + ((feature as u64) << 8 | face as u64),
+            Overlay::RetouchEffect { feature, control, face } => 0x1_0000_0000 + ((feature as u64) << 16 | (control as u64) << 8 | face as u64),
         }
     }
 
@@ -224,7 +229,7 @@ impl Overlay {
         }
     }
 
-    /// [`Overlay::RetouchArea`]'s `face` for every face.
+    /// [`Overlay::RetouchEffect`]'s `face` for every face.
     pub const ALL_FACES: u8 = u8::MAX;
 
     /// The clipping previews, which test the sRGB values the histogram counts (a render for a
@@ -238,8 +243,9 @@ impl Overlay {
         matches!(self, Overlay::SharpenDetail | Overlay::SharpenMask)
     }
 
-    /// Whether the overlay works pixel by pixel on the finished image (a [`Overlay::RetouchArea`] map is made for each
-    /// pixel from the faces, through the render's own view), so a window render shows the same as the whole frame would.
+    /// Whether the overlay works pixel by pixel on the finished image (a [`Overlay::RetouchEffect`] map is measured
+    /// on the render's own pixels, which hold all a face's retouch reads), so a window render shows the same as the
+    /// whole frame would.
     pub fn per_pixel(self) -> bool {
         matches!(
             self,
@@ -249,7 +255,7 @@ impl Overlay {
                 | Overlay::ClipHighlights
                 | Overlay::ClipWarnings
                 | Overlay::Grayscale
-                | Overlay::RetouchArea { .. }
+                | Overlay::RetouchEffect { .. }
         )
     }
 
@@ -334,18 +340,7 @@ pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, plane: Option<&Plane>
         Overlay::ClipShadows => clipping(img, false),
         Overlay::ClipHighlights => clipping(img, true),
         Overlay::ClipWarnings => clip_warnings(img),
-        Overlay::RetouchArea { .. } => {
-            // the map where the feature has one; black where it has none (no faces, no masks)
-            let plane = plane.filter(|a| (a.width, a.height) == (img.width, img.height));
-            let w = img.width;
-            for_rows(&mut img.data, w, |y, row| {
-                for (x, px) in row.iter_mut().enumerate() {
-                    let v = plane.and_then(|p| p.data.get(y * w + x)).copied().unwrap_or(0.0);
-                    let g = (255.0 * if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 }).round() as u8;
-                    *px = [g, g, g, 255];
-                }
-            });
-        }
+        Overlay::RetouchEffect { .. } => retouch_effect(img, plane.filter(|a| (a.width, a.height) == (img.width, img.height))),
         Overlay::Grayscale => grayscale(img),
         Overlay::SharpenDetail | Overlay::SharpenMask => {
             if let Some(p) = plane.filter(|a| (a.width, a.height) == (img.width, img.height)) {
@@ -376,6 +371,28 @@ pub fn apply(img: &mut Rgba8, o: Overlay, plan: &Plan<'_>, plane: Option<&Plane>
             }
         }
     }
+}
+
+/// [`Overlay::RetouchEffect`]'s glow (sRGB): a warm amber, apart from the grey photo under it and from skin.
+pub const EFFECT_GLOW: [u8; 3] = [255, 172, 48];
+/// [`Overlay::RetouchEffect`]: how bright the grey photo stays where nothing changes.
+const EFFECT_DIM: f32 = 0.36;
+
+/// [`Overlay::RetouchEffect`]: the photo dark and grey, mixed toward [`EFFECT_GLOW`] by the map `plane` (0…1; none:
+/// nothing changes), the glow shaded by the photo's own lightness so the face stays readable under it.
+fn retouch_effect(img: &mut Rgba8, plane: Option<&Plane>) {
+    let w = img.width;
+    for_rows(&mut img.data, w, |y, row| {
+        for (x, px) in row.iter_mut().enumerate() {
+            let v = plane.and_then(|p| p.data.get(y * w + x)).copied().unwrap_or(0.0);
+            let v = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+            let l = (0.2126 * px[0] as f32 + 0.7152 * px[1] as f32 + 0.0722 * px[2] as f32) / 255.0;
+            let grey = 255.0 * EFFECT_DIM * l;
+            let shade = 0.45 + 0.55 * l;
+            let mix = |glow: u8| (grey + (glow as f32 * shade - grey) * v).round().clamp(0.0, 255.0) as u8;
+            *px = [mix(EFFECT_GLOW[0]), mix(EFFECT_GLOW[1]), mix(EFFECT_GLOW[2]), 255];
+        }
+    });
 }
 
 /// [`Overlay::ClipHighlights`] (`high`) or [`Overlay::ClipShadows`]: each channel shows only

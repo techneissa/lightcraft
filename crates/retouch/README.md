@@ -40,11 +40,10 @@ In the module:
 - **`apply`**: retouch the image in place (see the rules below). The panel section draws its sliders with
   `cx.slider("retouch.<KEY>.<field>")`, which writes to every face or to the picked one.
 
-- **Area**: nothing to do. `Feature::area` says where the feature works, as a map over the picture (1 where fully, 0
-  where not): the grey / white view the Portrait tab shows while a slider is dragged with ⌥ held
-  (`Overlay::RetouchArea`). The default is the union of the `PARTS` masks. Override it only when the feature's reach
-  is something else (`src/area.rs` has spots, wrinkle areas, strands, lenses and the face outline); read the faces'
-  input only, never the image or the settings.
+- **⌥-drag view**: nothing to do. The Portrait tab's ⌥-drag shows what a slider changes by running the step with
+  the slider as it is and at its default and measuring the difference (`crates/pipeline/src/retouch_effect.rs`,
+  `Overlay::RetouchEffect`), so it follows `apply` as it is. `Feature::area` (where a feature can work, from the
+  faces' input) is no longer drawn.
 - **Refine**: nothing to do. Every feature gets the Refine brush (Reduce, Restore, Add; `src/refine.rs`,
   `fork/refine-brush.md`) from the step and the tab's section loop. Add widens `Feature::ADD_PARTS`, by default the
   first of `PARTS`; set it when another part is the one a missed spot belongs to (one line).

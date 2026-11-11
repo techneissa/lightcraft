@@ -93,8 +93,9 @@ pub(crate) fn window_waits(app: &mut LightcraftApp, id: PhotoId) -> bool {
     run.state.is_decoding()
 }
 
-/// Is the right panel one of the Edit view's (where a zoom to 100 % comes next)?
-fn editing(right: RightPanel) -> bool {
+/// Is the right panel one of the Edit view's (where a zoom to 100 % comes next)? (Also what tells parsing ahead the user
+/// edits rather than culls, `crate::parse_ahead`.)
+pub(crate) fn editing(right: RightPanel) -> bool {
     matches!(right, RightPanel::Edit | RightPanel::Crop | RightPanel::Remove | RightPanel::Masking | RightPanel::RedEye | RightPanel::Portrait)
 }
 

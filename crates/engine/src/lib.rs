@@ -516,6 +516,9 @@ pub struct Session {
     /// The long edge (px) the loupe renders at on this screen, as the frontend last said
     /// (0: not known). Standard previews are built at least this big, so the loupe can use them.
     pub loupe_edge: usize,
+    /// The loupe's canvas on this screen (px, width and height; 0: not known), as the frontend last said: a view the
+    /// loupe rendered that covers it is the size the loupe shows, and a build counts it as built (#196).
+    pub loupe_canvas: (usize, usize),
     /// Develop defaults applied on import (persisted in prefs.json).
     pub import_defaults: import::ImportDefaults,
     /// Disk budget of the library's thumbnail cache in MB (0 = default; persisted in prefs.json).
@@ -698,6 +701,7 @@ impl Session {
             preview_build: None,
             prep: Default::default(),
             loupe_edge: 0,
+            loupe_canvas: (0, 0),
             slideshow_export: None,
             animated_gif: None,
             import_defaults: import::ImportDefaults::default(),

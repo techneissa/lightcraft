@@ -12,6 +12,14 @@
 //! one of [`BODY_CANVASES`] with a fourth channel marking where the photo is, and gives the class probabilities over
 //! the canvas; the model ignores the padding, so the photo's part equals candle's run on the photo alone. The face mesh
 //! takes up to [`FACE_BATCH`] crops of 256² and gives each one's 478 points and face score in one row, in float32.
+//!
+//! Each model is called with one input shape (issue #200): Core ML re-plans a model on the GPU whenever the shape of
+//! its input changes from the call before, about 300 ms of wall and CPU time for the clothes parser and 40 ms a call
+//! for the face parser, which is more than the run itself. So the clothes parser always gets the square canvas of its
+//! long side ([`canvas`]: a portrait after a landscape, or a 4:3 photo after a 3:2 one, keeps the shape), the face
+//! parser [`FACE_BATCH`] crops a call for each full batch and one crop a call for the rest (a photo of a few faces
+//! never changes its shape), and the face mesh always [`FACE_BATCH`] crops (the unused ones blank: eight cost less
+//! than one at a time).
 
 use std::path::{Path, PathBuf};
 
@@ -80,9 +88,10 @@ pub fn installed(models: &Path, file: &ModelFile) -> bool {
     CONVERTED.contains(file) && (package.is_dir() || compiled.is_dir())
 }
 
-/// The smallest canvas that holds a `w × h` grid.
+/// The canvas a `w × h` grid is run in: the smallest square that holds it, so photos of every shape with the same
+/// long side share one input shape (a change of shape costs Core ML more than the run).
 pub(crate) fn canvas(w: usize, h: usize) -> Option<(usize, usize)> {
-    BODY_CANVASES.iter().copied().filter(|&(ch, cw)| ch >= h && cw >= w).min_by_key(|&(ch, cw)| ch * cw)
+    BODY_CANVASES.iter().copied().filter(|&(ch, cw)| ch == cw && ch >= h && cw >= w).min_by_key(|&(ch, cw)| ch * cw)
 }
 
 /// Load `file`'s Core ML model, checked to have the input and output the parser sends and reads.
@@ -122,15 +131,24 @@ pub(crate) fn load_mesh(models: &Path) -> Result<Model, Error> {
 }
 
 /// The face mesh of `n` crops of [`crate::facemesh::SIDE`]² (`n × 3 × side × side`, values 0 to 1), `n` at most
-/// [`FACE_BATCH`].
+/// [`FACE_BATCH`]. The call always holds [`FACE_BATCH`] crops, the ones past `n` blank, so the model keeps one input
+/// shape (each crop gives what it gives alone).
 pub(crate) fn meshes(model: &Model, px: &[f32], n: usize) -> Result<Vec<MeshOut>, Error> {
     let side = crate::facemesh::SIDE;
     let row = crate::facemesh::POINTS * 3 + 1;
-    let out = model.predict(INPUT, &[n, 3, side, side], px, MESH_OUTPUT)?;
-    if out.shape != [n, row] || out.data.len() != n * row {
-        return Err(Error::Output(format!("the face mesh gave {:?}, not [{n}, {row}]", out.shape)));
+    let crop = 3 * side * side;
+    if n == 0 || n > FACE_BATCH || px.len() != n * crop {
+        return Err(Error::Input(format!("{} numbers for {n} face mesh crops", px.len())));
     }
-    out.data.chunks_exact(row).map(|r| MeshOut::from_row(r).ok_or_else(|| Error::Output("a face mesh row of another size".into()))).collect()
+    let mut all = vec![0.0f32; FACE_BATCH * crop];
+    if let Some(d) = all.get_mut(..px.len()) {
+        d.copy_from_slice(px);
+    }
+    let out = model.predict(INPUT, &[FACE_BATCH, 3, side, side], &all, MESH_OUTPUT)?;
+    if out.shape != [FACE_BATCH, row] || out.data.len() != FACE_BATCH * row {
+        return Err(Error::Output(format!("the face mesh gave {:?}, not [{FACE_BATCH}, {row}]", out.shape)));
+    }
+    out.data.chunks_exact(row).take(n).map(|r| MeshOut::from_row(r).ok_or_else(|| Error::Output("a face mesh row of another size".into()))).collect()
 }
 
 /// The face groups of `n` crops of [`crate::face::SIDE`]² (`n × 3 × side × side` normalised pixels), `n` at most
@@ -148,7 +166,15 @@ pub(crate) fn face_groups(model: &Model, px: &[f32], n: usize) -> Result<crate::
 
 /// The clothes parser's class probabilities (`CLASSES × h × w`) for the grid `px` (three `w × h` planes).
 pub(crate) fn body_probs(model: &Model, px: &[f32], w: usize, h: usize) -> Result<Vec<f32>, Error> {
-    let (ch, cw) = canvas(w, h).ok_or_else(|| Error::Input(format!("no canvas holds a {w} × {h} grid")))?;
+    let at = canvas(w, h).ok_or_else(|| Error::Input(format!("no canvas holds a {w} × {h} grid")))?;
+    body_probs_in(model, px, w, h, at)
+}
+
+/// [`body_probs`] in the canvas `(ch, cw)` (one of [`BODY_CANVASES`] that holds the grid).
+pub(crate) fn body_probs_in(model: &Model, px: &[f32], w: usize, h: usize, (ch, cw): (usize, usize)) -> Result<Vec<f32>, Error> {
+    if ch < h || cw < w || !BODY_CANVASES.contains(&(ch, cw)) {
+        return Err(Error::Input(format!("a {w} × {h} grid does not go in a {cw} × {ch} canvas")));
+    }
     let (n, grid) = (ch * cw, w * h);
     if px.len() != 3 * grid {
         return Err(Error::Input(format!("{} numbers for a {w} × {h} grid", px.len())));
@@ -184,7 +210,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_body_grid_has_a_canvas_and_gets_the_smallest() {
+    fn every_body_grid_has_a_canvas_and_gets_the_square_of_its_long_side() {
         for long in (768..=1536).step_by(32) {
             for short in (32..=long).step_by(32) {
                 for (w, h) in [(long, short), (short, long)] {
@@ -193,10 +219,13 @@ mod tests {
                 }
             }
         }
-        assert_eq!(canvas(768, 512), Some((512, 768)));
-        assert_eq!(canvas(512, 768), Some((768, 512)));
-        assert_eq!(canvas(1536, 1024), Some((1024, 1536)));
-        assert_eq!(canvas(1024, 672), Some((704, 1024)));
+        // (one square per long side: landscape, portrait and every aspect share the input shape)
+        assert_eq!(canvas(768, 512), Some((768, 768)));
+        assert_eq!(canvas(512, 768), Some((768, 768)));
+        assert_eq!(canvas(768, 576), Some((768, 768)));
+        assert_eq!(canvas(1536, 1024), Some((1536, 1536)));
+        assert_eq!(canvas(1024, 672), Some((1024, 1024)));
+        assert_eq!(canvas(896, 600), Some((1024, 1024)));
         assert_eq!(canvas(1568, 32), None);
     }
 

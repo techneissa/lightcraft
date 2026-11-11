@@ -1,0 +1,3 @@
+cargo test -p lightcraft-pipeline --lib -- retouch_effect retouch_step visualize reshape_step
+cargo test -p lightcraft-ui-egui --lib -- tests::portrait_alt panels::clipping
+cargo test -p lightcraft-gpu --test it -- retouch_effect_overlay_matches

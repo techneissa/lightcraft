@@ -63,7 +63,7 @@ How it does on photos (private test photos and CC0 photos, 2026-11-08):
 
 ## Own files
 
-`crates/parsing/` (`src/{lib,types,models,image,weights,nn,segformer,bisenet,facemesh,eyes,body,people,face,parser,render,cache,tests}.rs`, `src/tests/models.rs`, `examples/parts.rs`, `README.md`, `testdata/README.md`), `crates/engine/src/people_parsing.rs`, `crates/engine/src/people_parsing/download.rs`, `crates/engine/src/cmd/parsing.rs`, `crates/engine/src/tests/people_parsing.rs`, `crates/ui-egui/src/dialogs/people_parts.rs`, `crates/ui-egui/src/tests/people_parts.rs`, `fork/people-parsing.md`, `fork/tests.d/people-parsing.txt`
+`crates/parsing/` (`src/{lib,types,models,image,weights,nn,segformer,bisenet,facemesh,eyes,body,people,face,parser,profile,render,cache,tests}.rs`, `src/tests/models.rs`, `examples/parts.rs`, `README.md`, `testdata/README.md`), `crates/engine/src/people_parsing.rs`, `crates/engine/src/people_parsing/download.rs`, `crates/engine/src/cmd/parsing.rs`, `crates/engine/src/tests/people_parsing.rs`, `crates/ui-egui/src/dialogs/people_parts.rs`, `crates/ui-egui/src/tests/people_parts.rs`, `fork/people-parsing.md`, `fork/tests.d/people-parsing.txt`
 
 ## Hooks in official files
 
