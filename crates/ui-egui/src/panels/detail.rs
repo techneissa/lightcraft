@@ -1185,10 +1185,10 @@ fn camera_jpeg_shown(app: &LightcraftApp, photo: &lightcraft_catalog::Photo, sho
     !drawn.any && (shown == "embedded" || (shown == "thumb" && app.session.embedded_thumb_is_final(photo)))
 }
 
-/// A Portrait slider's area map reads the faces, which a render carries only while some retouching is on (the slider
+/// A Portrait slider's effect map reads the faces, which a render carries only while some retouching is on (the slider
 /// back at 0 turns it off): give `job` the photo's faces.
 pub(super) fn give_area_faces(app: &LightcraftApp, id: PhotoId, overlay: lightcraft_pipeline::Overlay, job: &mut lightcraft_engine::RenderJob) {
-    if matches!(overlay, lightcraft_pipeline::Overlay::RetouchArea { .. })
+    if matches!(overlay, lightcraft_pipeline::Overlay::RetouchEffect { .. })
         && job.info.retouch.is_none()
         && let Some(found) = app.session.retouch_faces_of(id).found
     {

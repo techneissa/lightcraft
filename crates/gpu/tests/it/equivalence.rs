@@ -1022,10 +1022,11 @@ fn overlays_match() {
     }
 }
 
-/// A Portrait slider's ⌥-drag map (`Overlay::RetouchArea`) is made from the faces alone, so the GPU render's map must
-/// equal the CPU render's, pixel for pixel, for features with masks, without and with a person.
+/// A Portrait slider's ⌥-drag view (`Overlay::RetouchEffect`, issue #208) is measured on the CPU from the image before
+/// the retouch step, which the GPU render keeps on the host: its view must be the CPU render's, to within the few
+/// levels the two renderers' photos differ by, for a face feature and a picture one, every face and one.
 #[test]
-fn retouch_area_overlay_matches() {
+fn retouch_effect_overlay_matches() {
     use lightcraft_develop::retouch::{FEATURES, Face, Input, NormRect, Part, PartMask};
     use lightcraft_pipeline::Overlay;
     if !gpu() {
@@ -1045,15 +1046,19 @@ fn retouch_area_overlay_matches() {
     };
     let faces = vec![face(NormRect::new(0.15, 0.2, 0.4, 0.55)), face(NormRect::new(0.58, 0.25, 0.82, 0.6))];
     let info = SourceInfo { retouch: Some(Arc::new(Input::new_on_photo(faces))), ..Default::default() };
-    let s = DevelopSettings::default();
-    for key in ["skin", "reshape", "background"] {
-        let feature = FEATURES.iter().position(|f| f.key == key).expect("a feature") as u8;
+    for (id, value) in [("retouch.skin.smoothness", 80.0), ("retouch.background.blur", 80.0)] {
+        let feature = FEATURES.iter().position(|f| id.starts_with(&format!("retouch.{}.", f.key))).expect("a feature");
+        let control = (FEATURES[feature].specs)().iter().position(|c| c.id == id).expect("a control") as u8;
+        let mut s = DevelopSettings::default();
+        s.retouch.global.set(id, value);
         for face in [Overlay::ALL_FACES, 1] {
-            let req = RenderRequest { overlay: Overlay::RetouchArea { feature, face }, ..RenderRequest::fit(640, 640) };
+            let req = RenderRequest { overlay: Overlay::RetouchEffect { feature: feature as u8, control, face }, ..RenderRequest::fit(640, 640) };
             let cpu = render(&src, &info, &s, &req).image;
             let gpu = lightcraft_gpu::render(&src, &info, &s, &req, None).expect("gpu").image;
-            assert!(cpu.data.iter().any(|p| p[0] == 255) && cpu.data.iter().any(|p| p[0] == 0), "{key} face {face}: a map");
-            assert_eq!(cpu.data, gpu.data, "{key} face {face}: the GPU map equals the CPU map");
+            let glow = |img: &lightcraft_raster::Rgba8| img.data.iter().filter(|p| p[0] > p[2] + 8).count();
+            assert!(glow(&cpu) > 1000, "{id} face {face}: the CPU view glows somewhere: {}", glow(&cpu));
+            let off = cpu.data.iter().zip(&gpu.data).filter(|(a, b)| a.iter().zip(b.iter()).any(|(x, y)| x.abs_diff(*y) > 4)).count();
+            assert!(off * 200 < cpu.data.len(), "{id} face {face}: {off} pixels differ by more than 4 levels");
         }
     }
 }
