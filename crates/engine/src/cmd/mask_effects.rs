@@ -422,12 +422,12 @@ fn apply_effect(s: &mut Session, p: &Value) -> Result<Value> {
     Ok(json!({"name": effect.name, "masks": ids, "photos": photos, "brush": effect.brush}))
 }
 
-/// Keep the selected mask's sliders in the session (what a preset saved with All sliders holds), for
-/// [`paste_mask_effect`], on this photo or another.
+/// Keep the selected mask's sliders and Amount in the session (what a preset saved with All sliders and Amount
+/// holds), for [`paste_mask_effect`], on this photo or another: the pasted mask then looks as strong as the copied one.
 fn copy_mask_effect(s: &mut Session, p: &Value) -> Result<Value> {
     const C: &str = "mask.copyEffect";
     let adjust = selected_mask(s, p, C)?.adjust;
-    s.mask_effect_clipboard = Some(MaskEffect { adjust, ..Default::default() }.normalized());
+    s.mask_effect_clipboard = Some(MaskEffect { adjust, with_amount: true, ..Default::default() }.normalized());
     Ok(json!({"copied": true}))
 }
 
@@ -685,7 +685,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Copy Mask Effect",
             [],
             None,
-            "{id?} — keep the mask's sliders (not its shape or Amount) in the session, to paste into a mask of this or another photo",
+            "{id?} — keep the mask's sliders and Amount (not its shape) in the session, to paste into a mask of this or another photo",
             has_active,
             copy_mask_effect
         ),
@@ -694,7 +694,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Paste Mask Effect",
             [],
             None,
-            "{id?} — set the mask's sliders to the copied ones (as mask.applyEffect; shape, name, visibility, invert and Amount stay), one undo step → {id}; an error when nothing is copied",
+            "{id?} — set the mask's sliders and Amount to the copied ones (as mask.applyEffect; shape, name, visibility and invert stay), one undo step → {id}; an error when nothing is copied",
             has_mask_effect,
             paste_mask_effect
         ),

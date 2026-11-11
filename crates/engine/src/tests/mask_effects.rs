@@ -314,7 +314,7 @@ fn copying_a_mask_effect_and_pasting_it_into_another_mask() {
     assert!(s.execute("mask.pasteEffect", &json!({"id": 9999})).is_err(), "no such mask");
     s.execute("mask.pasteEffect", &json!({"id": b})).unwrap();
     let after = mask(&s, b);
-    assert_eq!((after.adjust.exposure, after.adjust.shadows, after.adjust.clarity, after.adjust.amount), (1.0, 30.0, 0.0, 80.0));
+    assert_eq!((after.adjust.exposure, after.adjust.shadows, after.adjust.clarity, after.adjust.amount), (1.0, 30.0, 0.0, 60.0));
     assert_eq!(format!("{:?}", after.components), format!("{:?}", before.components));
     assert_eq!((&after.name, after.invert, after.visible), (&before.name, before.invert, before.visible));
     // one undo step
@@ -328,7 +328,7 @@ fn copying_a_mask_effect_and_pasting_it_into_another_mask() {
     let c_before = mask(&s, c);
     s.execute("mask.pasteEffect", &json!({"id": c})).unwrap();
     let c_after = mask(&s, c);
-    assert_eq!((c_after.adjust.exposure, c_after.adjust.shadows), (1.0, 30.0));
+    assert_eq!((c_after.adjust.exposure, c_after.adjust.shadows, c_after.adjust.amount), (1.0, 30.0, 60.0));
     assert_eq!(format!("{:?}", c_after.components), format!("{:?}", c_before.components));
     assert_eq!(c_after.name, "Other");
 }
