@@ -2595,5 +2595,6 @@
   "Loading background picture": "Завантаження фонового зображення",
   "Reading depth map": "Читання карти глибини",
   "Preparing the full-size view": "Підготовка повнорозмірного перегляду",
-  "Reading the full-size photo": "Читання фото в повному розмірі"
+  "Reading the full-size photo": "Читання фото в повному розмірі",
+  "Preparing photos in the background": "Підготовка фото у фоновому режимі"
 }

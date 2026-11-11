@@ -562,7 +562,9 @@ fn show(s: &mut Session, pace: Pace, held: bool) {
         ahead.row_done = 0;
         return;
     }
-    let row = ahead.row.get_or_insert_with(|| s.activity.start("parseAhead", "Finding people parts ahead", Cancel::Flag(ahead.row_cancel.clone())));
+    let row = ahead
+        .row
+        .get_or_insert_with(|| s.activity.start_background("parseAhead", "Finding people parts ahead", Cancel::Flag(ahead.row_cancel.clone())));
     let total = ahead.row_done + left as u64 + u64::from(ahead.in_flight.is_some());
     row.progress(ahead.row_done, total);
 }

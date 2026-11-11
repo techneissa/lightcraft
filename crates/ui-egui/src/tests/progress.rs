@@ -279,6 +279,7 @@ fn an_activity_bar_is_named_after_its_task() {
         parent: None,
         batch: false,
         failed: 0,
+        background: false,
         eta_ms: None,
     };
     let (nodes, _, _) = frames(Vec::new(), |ui| crate::panels::activity::bar(ui, &task, 200.0).rect.width());

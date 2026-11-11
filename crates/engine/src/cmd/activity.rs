@@ -11,7 +11,7 @@ pub fn specs() -> Vec<CommandSpec> {
             "Background Tasks",
             [],
             None,
-            "{} → {tasks: [{id, kind, label, done, total, unit: count|bytes|percent, detail, cancellable, cancelling, ageMs, parent?, batch, failed, etaMs?}], finished: [{id, seq, kind, label, done, failed, total, cancelled, reasons, seconds}]} — the long-running tasks in flight (imports, exports, preview builds, downloads, the face scan…), oldest first; total 0 = not known yet. A batch (AI Denoise, AI masks, export, Remove Dust on many photos) is one row with `batch: true`, the photos done and `failed`, and `etaMs` (time left, from the time per photo so far); its per-photo rows name it as `parent`. `finished`: what the last batches did when they ended (newest last)",
+            "{} → {tasks: [{id, kind, label, done, total, unit: count|bytes|percent, detail, cancellable, cancelling, ageMs, parent?, batch, failed, background, etaMs?}], finished: [{id, seq, kind, label, done, failed, total, cancelled, reasons, seconds}]} — the long-running tasks in flight (imports, exports, preview builds, downloads, the face scan…), oldest first; total 0 = not known yet. `background: true` marks work the app started by itself to get photos ready (preview preparation, the face scan, reading focus points, the full-size view): the desktop app shows those as the ring in the top bar and not in the activity stack, and every other task as a row. A batch (AI Denoise, AI masks, export, Remove Dust on many photos) is one row with `batch: true`, the photos done and `failed`, and `etaMs` (time left, from the time per photo so far); its per-photo rows name it as `parent`. `finished`: what the last batches did when they ended (newest last)",
             always,
             |s, _| Ok(json!({"tasks": s.activity.list(), "finished": s.activity.finished()}))
         ),
@@ -52,6 +52,16 @@ mod tests {
         let r = s.execute("activity.cancel", &json!({"id": g.id()})).unwrap();
         assert_eq!(r["cancelled"], 1);
         assert!(g.is_cancelled());
+    }
+
+    #[test]
+    fn list_marks_the_background_tasks() {
+        let mut s = Session::new();
+        let _prep = s.activity.start_background("faces", "Finding faces", Cancel::No);
+        let _export = s.activity.start("export", "Exporting", Cancel::Yes);
+        let r = s.execute("activity.list", &json!({})).unwrap();
+        assert_eq!(r["tasks"][0]["background"], true);
+        assert_eq!(r["tasks"][1]["background"], false);
     }
 
     #[test]

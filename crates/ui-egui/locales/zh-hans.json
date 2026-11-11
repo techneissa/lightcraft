@@ -2598,5 +2598,6 @@
   "Loading background picture": "正在载入背景图片",
   "Reading depth map": "正在读取深度图",
   "Preparing the full-size view": "正在准备全尺寸视图",
-  "Reading the full-size photo": "正在读取全尺寸照片"
+  "Reading the full-size photo": "正在读取全尺寸照片",
+  "Preparing photos in the background": "正在后台准备照片"
 }

@@ -202,7 +202,13 @@ pub(crate) fn task_for(s: &Session, state: &PreviewBuild) -> TaskGuard {
         "smart previews" => ("smartPreviews", "Building smart previews"),
         _ => ("smartPreviews", "Discarding smart previews"),
     };
-    let task = s.activity.start(kind, label, Cancel::Flag(state.cancel.clone()));
+    let cancel = Cancel::Flag(state.cancel.clone());
+    // only the app's own preparation is background work; a build somebody asked for keeps its row
+    let task = if state.what.is_empty() && state.background {
+        s.activity.start_background(kind, label, cancel)
+    } else {
+        s.activity.start(kind, label, cancel)
+    };
     task.progress(0, state.total as u64);
     task
 }

@@ -2436,5 +2436,6 @@
   "Loading background picture": "Ladataan taustakuvaa",
   "Reading depth map": "Luetaan syvyyskarttaa",
   "Preparing the full-size view": "Valmistellaan täysikokoista näkymää",
-  "Reading the full-size photo": "Luetaan täysikokoista kuvaa"
+  "Reading the full-size photo": "Luetaan täysikokoista kuvaa",
+  "Preparing photos in the background": "Valokuvia valmistellaan taustalla"
 }

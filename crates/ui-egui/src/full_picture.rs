@@ -492,7 +492,7 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask, job: RenderJob, dr
     let tile = TILE.min(a.texture_side.saturating_sub(2)).max(16);
     let bands = if render { bands(app, a.id, &job, a.native, a.with_crop) } else { Vec::new() };
     let cancel = Arc::new(AtomicBool::new(false));
-    let row = render.then(|| app.session.activity.start("full-picture", ROW, lightcraft_engine::activity::Cancel::Flag(cancel.clone())));
+    let row = render.then(|| app.session.activity.start_background("full-picture", ROW, lightcraft_engine::activity::Cancel::Flag(cancel.clone())));
     app.renderer.full.running = Some(Running { photo: a.id, key, render, cancel: cancel.clone(), by_us: false, _row: row });
     let store = &mut app.renderer.full;
     let (at_once, writing) = (store.at_once.clone(), store.writing.clone());

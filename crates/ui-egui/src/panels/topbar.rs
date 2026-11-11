@@ -66,7 +66,10 @@ fn top_bar_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, left: i8
     // The field stops short of the filter icon (when shown) and the icons on the right;
     // centred, it is twice the room between the window's centre and them.
     let filter_room = if shown(app, "filter") { 30.0 } else { 0.0 };
-    let mut sw = 640.0f32.min(2.0 * (full.right() - filter_room - 40.0 * right.len() as f32 - bar.center().x)).max(190.0);
+    // the ring of background work sits left of the icons, while there is some
+    let ring = crate::panels::activity_ring::tasks(app);
+    let slots = right.len() + usize::from(!ring.is_empty());
+    let mut sw = 640.0f32.min(2.0 * (full.right() - filter_room - 40.0 * slots as f32 - bar.center().x)).max(190.0);
     if !app.native_menu {
         // leave room for the in-window menus left of the (centred) search field
         let menus_right = full.left() + 140.0 + crate::menubar::bar_width(ui) + 24.0;
@@ -88,8 +91,13 @@ fn top_bar_body(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens, left: i8
         filter_button(app, ui, t, sr);
     }
     let x = right_icons(app, ui, t, full, &right);
+    let mut x = x;
     if right.contains(&"appearance") {
         appearance_button(app, ui, t, full, x);
+        x -= 40.0;
+    }
+    if !ring.is_empty() {
+        crate::panels::activity_ring::show(app, ui, t, full, x, &ring);
     }
     crate::panels::topbar_items::bar_menu(app, &background);
 }
