@@ -146,6 +146,9 @@ pub struct Store {
     /// Make the next build's cut fail (tests).
     #[cfg(test)]
     pub fail_next: bool,
+    /// Tests: the gate the next builds wait at ([`Plan::gate`]).
+    #[cfg(test)]
+    pub gate: Option<&'static lightcraft_engine::memory::WorkGate>,
     pub stats: Stats,
 }
 
@@ -494,6 +497,8 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask, job: RenderJob, dr
     let (at_once, writing) = (store.at_once.clone(), store.writing.clone());
     #[cfg(test)]
     let fail_cut = std::mem::take(&mut store.fail_next);
+    #[cfg(test)]
+    let gate = store.gate;
     let plan = Plan {
         disk,
         size: a.native,
@@ -505,6 +510,8 @@ fn ask(app: &mut LightcraftApp, ctx: &egui::Context, a: &Ask, job: RenderJob, dr
         writing,
         #[cfg(test)]
         fail_cut,
+        #[cfg(test)]
+        gate,
     };
     app.renderer.request_full(job, plan);
 }
