@@ -1,7 +1,7 @@
 //! Try the blemish feature on a picture without building the app:
 //!
 //! `cargo run -p lightcraft-retouch --release --example blemish -- in.jpg out.jpg [--amount 100] [--keep 1]
-//! [--mask facialSkin-0.png] [--face x0,y0,x1,y1] [--people people.json] [--fit 2048] [--marks marks.png] [--spots spots.csv] [--runs 1]`
+//! [--mask facialSkin-0.png] [--face x0,y0,x1,y1] [--people people.json] [--fit 2048] [--marks marks.png] [--spots spots.csv] [--runs 1] [--drag]`
 //!
 //! - `--amount` (0…100) and `--keep` (1: Keep Moles and Freckles, the default; 0: remove them too).
 //! - `--mask` is a grey picture of the Facial Skin mask over the whole photo, at any size (white = skin): the
@@ -17,7 +17,9 @@
 //! - `--marks` writes the photo with each spot circled: red a blemish, blue a mole, green a freckle; thin when it
 //!   is kept at these settings.
 //! - `--spots` writes each spot (place, radius, kind, weight at these settings) to a CSV file.
-//! - `--runs` repeats the repair (the slider's work) and prints the fastest run.
+//! - `--runs` repeats the repair (the slider's work) and prints the fastest run. With `--drag`, the runs are the
+//!   ticks of a drag of Amount up to its value: it prints the first (which makes the kept work) and the fastest of
+//!   the others.
 //!
 //! Runs Stray Hair's strand search first, as the app does (a spot on a strand is a hair stump or a crease).
 //! Prints the time spots took to find, each face's spots by kind, how many are removed and the share of the skin
@@ -47,7 +49,7 @@ fn main() -> ExitCode {
 const MESH_FIVE: [usize; 5] = [468, 473, 1, 61, 291];
 
 const USAGE: &str = "usage: blemish in.jpg out.jpg [--amount N] [--keep 0|1] [--face x0,y0,x1,y1] [--mask mask.png] [--people people.json] [--fit EDGE] \
-                     [--marks marks.png] [--spots spots.csv] [--runs N]";
+                     [--marks marks.png] [--spots spots.csv] [--runs N] [--drag]";
 
 fn run(args: &[String]) -> Result<(), String> {
     let mut files = Vec::new();
@@ -55,7 +57,7 @@ fn run(args: &[String]) -> Result<(), String> {
     let _ = global.set("retouch.blemish.amount", 100.0);
     let mut boxes: Vec<NormRect> = Vec::new();
     let mut faces: Vec<Face> = Vec::new();
-    let (mut fit, mut runs, mut marks) = (0usize, 1usize, None);
+    let (mut fit, mut runs, mut marks, mut drag) = (0usize, 1usize, None, false);
     let mut meshes: Vec<Vec<(f64, f64)>> = Vec::new();
     let mut spots_csv: Option<String> = None;
     let mut it = args.iter();
@@ -104,6 +106,7 @@ fn run(args: &[String]) -> Result<(), String> {
             }
             "--fit" => fit = value()?.parse().map_err(|_| USAGE.to_string())?,
             "--runs" => runs = value()?.parse::<usize>().map_err(|_| USAGE.to_string())?.max(1),
+            "--drag" => drag = true,
             "--marks" => marks = Some(value()?.clone()),
             "--spots" => spots_csv = Some(value()?.clone()),
             _ => files.push(a.clone()),
@@ -128,18 +131,32 @@ fn run(args: &[String]) -> Result<(), String> {
     eprintln!("strands: {strands_ms:.1} ms (Stray Hair's search, which the app runs anyway)");
     let settings = global.blemish.clone();
     report(&faces, &settings, find_ms, parse.width, parse.height);
-    let r = Retouch::with_global(global);
+    let amount = global.blemish.amount;
+    let mut r = Retouch::with_global(global);
     let input = Input::new(faces);
     let view = WholePhoto { width: w, height: h };
-    let mut best = f64::INFINITY;
+    let (mut first, mut best) = (0.0, f64::INFINITY);
     let mut img = src.clone();
-    for _ in 0..runs {
+    for i in 0..runs {
+        if drag {
+            r.global.blemish.amount = amount * (i + 1) as f64 / runs as f64;
+        }
         img = src.clone();
         let t = std::time::Instant::now();
         lightcraft_retouch::run::apply(&mut img, &r, &input, &view, Stage::Retouch);
-        best = best.min(t.elapsed().as_secs_f64() * 1e3);
+        let ms = t.elapsed().as_secs_f64() * 1e3;
+        if i == 0 {
+            first = ms;
+        }
+        if i > 0 || runs == 1 {
+            best = best.min(ms);
+        }
     }
-    eprintln!("repair: {w}×{h} ({:.1} MP), {best:.2} ms (fastest of {runs})", (w * h) as f64 / 1e6);
+    if drag {
+        eprintln!("repair: {w}×{h} ({:.1} MP), drag of {runs} ticks: first {first:.2} ms, then {best:.2} ms (fastest)", (w * h) as f64 / 1e6);
+    } else {
+        eprintln!("repair: {w}×{h} ({:.1} MP), {best:.2} ms (fastest of {runs})", (w * h) as f64 / 1e6);
+    }
     save(&img, output)?;
     if let Some(path) = spots_csv {
         write_spots(&input, &settings, &path)?;

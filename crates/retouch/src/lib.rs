@@ -17,6 +17,7 @@ mod area;
 pub mod control;
 pub mod feature;
 pub mod input;
+mod memo;
 pub mod overrides;
 mod reduced;
 pub mod refine;
@@ -53,6 +54,13 @@ settings::features! {
     hair: hair::Hair,
     reshape: reshape::Reshape,
     background: background::Background,
+}
+
+/// Drop the work Skin and Blemishes keep between renders of a photo (`memo`): call it when another photo is open,
+/// so the old photo's work (up to about 350 MB) is not held until later renders push it out.
+pub fn forget_kept() {
+    skin::forget_kept();
+    blemish::forget_kept();
 }
 
 /// Every slider of every feature, in panel order.

@@ -511,12 +511,18 @@ impl StageCache {
         let mut v = self.lock();
         v.retain(|o| !(o.geo == e.geo && Arc::ptr_eq(&o.src, &e.src)));
         // (another photo's image before its retouching is of no use to this one's sliders)
+        let mut left = false;
         for o in v.iter_mut().filter(|o| !Arc::ptr_eq(&o.src, &e.src)) {
-            o.pre_retouch = None;
+            left |= o.pre_retouch.take().is_some();
         }
         v.push(e);
         while v.len() > self.capacity {
             v.remove(0);
+        }
+        drop(v);
+        // Fork (#234): nor is the work Skin and Blemishes kept for its sliders
+        if left {
+            lightcraft_develop::retouch::forget_kept();
         }
     }
 }

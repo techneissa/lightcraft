@@ -10,17 +10,18 @@
 //!   shape and darkness against the spots around it, and whether it is one of a freckle field), how much it shows
 //!   and a donor (a clean patch of skin next to it, of the same texture and tone). A face whose provider did not
 //!   look ([`crate::Face::spots`] `None`: the examples, the tests) is looked at on the image being retouched.
-//! - **Repair** (`apply`, every render, `heal`): each spot's tone is rebuilt from the ring of skin [`FEATHER`] radii
-//!   out, following a crease or gradient through it, and its texture (pores and grain) comes from its donor patch,
-//!   or without one its own finest grain; it replaces the spot out to [`CORE`] radii and fades into the skin by
-//!   [`FEATHER`], weighted by the skin mask. The Amount slider only changes each spot's weight
-//!   ([`Blemish::weights`]: the most visible spots first, each fully): no detection runs while it moves.
+//! - **Repair** (`apply`, `heal`): each spot's tone is rebuilt from the ring of skin [`FEATHER`] radii out,
+//!   following a crease or gradient through it, and its texture (pores and grain) comes from its donor patch, or
+//!   without one its own finest grain; it replaces the spot out to [`CORE`] radii and fades into the skin by
+//!   [`FEATHER`], weighted by the skin mask. Every spot the settings can remove is healed once, at full strength,
+//!   and kept (`repair`); the Amount slider only changes the weight each spot's repair is blended in by
+//!   ([`Blemish::weights`]: the most visible spots first, each fully): no detection or healing runs while it moves.
 //!
 //! Sizes are fractions of the face's size, so the draft, the loupe and an export repair the same spots the same way.
 //! The repair reads skin only (the tone is the skin's colour weighted by the mask, and donor pixels count as far as
 //! they are skin), so no colour from hair, brows or lips bleeds in: no halo. Pixels where the mask is 0 never change.
 
-use lightcraft_raster::{Rgb32f, par_rows};
+use lightcraft_raster::Rgb32f;
 use serde::{Deserialize, Serialize};
 
 use crate::input::{Face, Input, Spot, SpotKind, Spots};
@@ -28,10 +29,14 @@ use crate::{Control, Feature, Part, Scene, Scope, Spec, Stage, WholePhoto};
 
 mod find;
 mod heal;
-
-use heal::{Healed, Healer};
+mod repair;
 
 pub use find::find;
+
+/// Drop the repairs kept between renders (another photo is open).
+pub(crate) fn forget_kept() {
+    repair::forget();
+}
 
 /// Amount reaches the least visible spot at this share of the slider ([`Blemish::weights`]) …
 pub const ORDER: f32 = 0.85;
@@ -128,8 +133,12 @@ impl Feature for Blemish {
                 &looked
             }
         };
-        let weights = self.weights(&spots.list);
-        repair(img, scene, face, &spots.list, &weights);
+        // every spot these settings can remove is healed once at full strength and kept (`repair`); Amount only
+        // blends each one in by its weight
+        let Some(b) = scene.mask_box(face, Part::FacialSkin) else { return };
+        let removable: Vec<bool> = Blemish { amount: 100.0, keep_moles: self.keep_moles }.weights(&spots.list).iter().map(|w| *w > 0.0).collect();
+        let Some(patches) = repair::patches(img, scene, face, b, &spots.list, &removable) else { return };
+        patches.blend(img, &self.weights(&spots.list));
     }
 }
 
@@ -240,50 +249,4 @@ pub(crate) fn place(scene: &Scene<'_>, size: f64, b: [usize; 4], s: &Spot) -> Op
         .map(|d| ((d.0 - c.0).round(), (d.1 - c.1).round()))
         .filter(|o| o.0.is_finite() && o.1.is_finite() && (o.0 * o.0 + o.1 * o.1).sqrt() <= MAX_DONOR * r + ROUNDING);
     Some(Placed { c, r, offset })
-}
-
-/// Repair each spot of `spots` with weight above 0, in order, in place. Spots whose repairs read apart from each
-/// other ([`READS`] radii) are healed together in parallel; a spot near an earlier one waits for it and heals from
-/// the skin as that one left it, so overlapping repairs never undo each other. The batches depend only on the
-/// spots, so a draft and an export heal the same way.
-fn repair(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, spots: &[Spot], weights: &[f32]) {
-    let Some(size) = scene.faces.get(face).map(|f| f.size) else { return };
-    let Some(b) = scene.mask_box(face, Part::FacialSkin) else { return };
-    let placed: Vec<Option<Placed>> = spots.iter().map(|s| place(scene, size, b, s)).collect();
-    let h = Healer { scene, face, b, all: &placed, pores: heal::TEXTURE * size };
-    let mut batches: Vec<Vec<usize>> = Vec::new();
-    for (k, p) in placed.iter().enumerate() {
-        let Some(p) = p else { continue };
-        if !weights.get(k).is_some_and(|w| *w > 0.0) {
-            continue;
-        }
-        let apart = |j: &usize| {
-            placed.get(*j).and_then(Option::as_ref).is_none_or(|q| ((p.c.0 - q.c.0).powi(2) + (p.c.1 - q.c.1).powi(2)).sqrt() > (p.r + q.r) * READS)
-        };
-        match batches.iter_mut().find(|b| b.iter().all(apart)) {
-            Some(b) => b.push(k),
-            None => batches.push(vec![k]),
-        }
-    }
-    for batch in batches {
-        let mut patches: Vec<Vec<Healed>> = vec![Vec::new(); batch.len()];
-        {
-            let src: &Rgb32f = img;
-            par_rows(&mut patches, 1, |n, slot| {
-                if let (Some(k), Some(out)) = (batch.get(n), slot.first_mut())
-                    && let (Some(Some(p)), Some(w)) = (placed.get(*k), weights.get(*k))
-                {
-                    *out = h.heal(src, p, *w, *k);
-                }
-            });
-        }
-        for (i, new, k) in patches.into_iter().flatten() {
-            if let Some(d) = img.data.get_mut(i) {
-                let v: [f32; 3] = std::array::from_fn(|c| d[c] + k * (new[c] - d[c]));
-                if v.iter().all(|v| v.is_finite()) {
-                    *d = v;
-                }
-            }
-        }
-    }
 }
