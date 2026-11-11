@@ -22,6 +22,12 @@ impl ViewAfter {
     pub fn run(self) {
         let mut view = self.0;
         let Some(((cache, key), generation)) = view.view_cache.take().map(|v| (v, view.cache_generation)) else { return };
+        // (a view of this look at least as big is kept already, the loupe's own: not rendered, never replaced: #223)
+        let (w, h) = (view.request.max_w, view.request.max_h);
+        // (the render would be the kept one's size times this scale: no bigger, nothing to make)
+        if cache.dims(key).is_some_and(|(kw, kh)| kw > 0 && kh > 0 && (w as f64 / kw as f64).min(h as f64 / kh as f64) <= 1.0) {
+            return;
+        }
         let rendered = crate::guard::catch("the view preview", || view.run_unguarded().rendered);
         if let Ok(Ok(rendered)) = rendered
             && !cache.put_at(generation, key, Arc::new(rendered.image))
@@ -79,7 +85,23 @@ pub struct RenderJob {
     /// cache, when the thumbnail is rendered from the file and that view isn't built yet (issue #221,
     /// [`crate::Session::grid_thumb_job`]). `None` for every other job.
     pub view_after: Option<Box<ViewAlongside>>,
+    /// Set once nobody will show this render (the loupe has moved to another photo): the job stops at its next check,
+    /// before the source is read and once it is decoded, with the error [`STOPPED`] ([`Self::with_stop`]).
+    pub stop: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
+
+/// Keep `img` as the view of `key` (a job of `generation`), unless the cache holds one of this look at least as big
+/// already: a smaller render that finishes later, such as a prefetch held at the memory gate behind the loupe's own,
+/// would replace the bigger view, and the next visit would render the photo again (#223).
+pub(crate) fn keep_view(cache: &Arc<PreviewCache>, generation: u64, key: Hash128, img: Arc<Rgba8>) {
+    if cache.dims(key).is_some_and(|(w, h)| w >= img.width && h >= img.height) {
+        return;
+    }
+    cache.put_deferred_at(generation, key, img);
+}
+
+/// The error of a render stopped because nobody would show it ([`RenderJob::stop`]).
+pub const STOPPED: &str = "stopped: no longer shown";
 
 /// The alpha of each visible mask that has components (its Amount applied), 8-bit, at the size of the render it came with
 /// (the window's for a window render): what a mask overlay draws over the photo.
@@ -285,6 +307,17 @@ impl RenderJob {
         self.view_cache = None;
         self.preview_cut = None;
         self
+    }
+
+    /// Stop at the next check once `stop` is set ([`Self::stop`]).
+    pub fn with_stop(mut self, stop: Arc<std::sync::atomic::AtomicBool>) -> Self {
+        self.stop = Some(stop);
+        self
+    }
+
+    /// Whether the job was told to stop ([`Self::stop`]).
+    fn stopped(&self) -> bool {
+        self.stop.as_ref().is_some_and(|s| s.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// Reuse `stages` across this view's renders.
@@ -497,6 +530,10 @@ impl RenderJob {
             };
         }
         let was_loaded = matches!(self.source, SourceRef::Loaded(_));
+        // nobody will show it any more: neither read nor developed (a running job can't be taken off its worker)
+        if self.stopped() {
+            return self.failed(STOPPED.to_string());
+        }
         // The app is closing (issue #620): nobody is left to show this, and quitting waits for the
         // jobs that are running. Without this, one that lost the GPU mid-way would render on the CPU.
         let closing = || lightcraft_gpu::shutting_down().then(|| "LightCraft is closing".to_string());
@@ -504,6 +541,10 @@ impl RenderJob {
             Some(e) => Err(e),
             None => self.source.load_source().and_then(|s| closing().map_or(Ok(s), Err)),
         };
+        // (stepped past while it was decoded: the develop, as long again, is not made)
+        if source.is_ok() && self.stopped() {
+            return self.failed(STOPPED.to_string());
+        }
         // Fork feature (fork/reflection-removal.md): validate and load the reflection correction before entering the
         // pipeline; errors stay visible, exports included, instead of silently producing an uncorrected picture.
         let source = source.and_then(|source| {
@@ -647,7 +688,7 @@ impl RenderJob {
                     && self.request.quality == Quality::Full
                     && (display.is_none() || srgb.is_some())
                 {
-                    cache.put_deferred_at(self.cache_generation, *key, srgb.clone().unwrap_or_else(|| Arc::new(rendered.image.clone())));
+                    keep_view(cache, self.cache_generation, *key, srgb.clone().unwrap_or_else(|| Arc::new(rendered.image.clone())));
                 }
                 let t_fit = crate::media::dirty::clock();
                 // the display fit, after the caches have the full render

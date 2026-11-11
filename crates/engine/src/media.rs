@@ -44,7 +44,8 @@ pub(crate) use cache::rendered_budget;
 pub use full_decode::{FullDecodeJob, FullDecodeState, FullDecoded};
 pub use quick::{QuickJob, QuickSource, content_key, source_info};
 pub use render::{
-    MaskPlanes, RenderJob, RenderResult, ScreenFrame, ViewAfter, ViewAlongside, develop, develop_reporting, fit_cached, fit_for_display, planes_made,
+    MaskPlanes, RenderJob, RenderResult, STOPPED, ScreenFrame, ViewAfter, ViewAlongside, develop, develop_reporting, fit_cached, fit_for_display,
+    planes_made,
 };
 #[cfg(test)]
 use settings_hash::SETTINGS_HASH_ENTRIES;

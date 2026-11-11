@@ -781,6 +781,21 @@ fn the_display_fit_is_made_on_the_device_through_a_monitor_profile() {
     assert!(worst <= 2, "the device's converted fit differs from the CPU's fit of the converted render by {worst}");
 }
 
+// #223: a smaller render of a look that finishes after a bigger one (a prefetch held at the memory gate behind the
+// loupe's own render) does not replace the bigger view; a bigger one does replace a smaller
+#[test]
+fn a_smaller_view_never_replaces_a_bigger_one_of_the_same_look() {
+    let cache = Arc::new(lightcraft_preview::PreviewCache::memory(64 << 20));
+    let key = lightcraft_preview::Hash128(7);
+    let image = |w: usize, h: usize| Arc::new(Rgba8 { width: w, height: h, data: vec![[9, 9, 9, 255]; w * h] });
+    let generation = cache.generation();
+    super::render::keep_view(&cache, generation, key, image(256, 171));
+    super::render::keep_view(&cache, generation, key, image(218, 145));
+    assert_eq!(cache.dims(key), Some((256, 171)), "the bigger view stays");
+    super::render::keep_view(&cache, generation, key, image(300, 200));
+    assert_eq!(cache.dims(key), Some((300, 200)), "a bigger one is kept");
+}
+
 #[test]
 fn a_thumbnail_is_cut_from_the_decoded_full_source() {
     let mut s = crate::Session::new();
