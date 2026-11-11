@@ -8,11 +8,37 @@ Four sliders in the Portrait tab's Eyes section, 0 to 100, off at 0, for every f
 (`retouch.eyes.whites`, `retouch.eyes.iris`, `retouch.eyes.darkCircles`, `retouch.eyes.eyeBags`; per face
 `retouchFace.<i>.eyes.<field>`):
 
-- **Whites**: the Eye Whites mask gets brighter (darker spots such as veins a little more) and loses most of its
-  colour, so a yellow or red cast goes and veins stay as faint grey lines. Lashes and the lid's edge inside the mask
-  (much darker than the whites) are left alone.
-- **Iris**: the Iris mask gets brighter and its texture sharper (luminance only; noise under a threshold is left as
-  it is, and a catchlight's dark rim is held back). Cut to the face mesh's iris circles when the face has them.
+- **Whites** (issue #202): the eye whites get brighter by a gain in stops, so their shading keeps its ratios: the
+  corners and the shadow under the upper lid stay darker and the eye stays round. The gain at 100 is 1 stop plus
+  half the way (in stops) from the whites' level to 0.85 of the face's lit skin, within 1–1.8 stops: whites in
+  shadow (deep-set eyes, a low-key photo) get more, bright ones less. A soft shoulder from 0.45 (linear) toward 0.86
+  keeps them under paper white, the brightest channel rolls off from 0.7 toward 0.92 so the warm tint never clips,
+  and nothing gets darker. Veins and blotches (darker than the white around them at 0.05 half eye widths) lose 60 % of
+  their depth (as a power), and 75 % of the colour goes, toward a neutral that keeps 35 % of the lit skin's colour,
+  so a red or yellow cast turns a clean white that doesn't look grey-lilac beside warm skin. Left alone: lashes and
+  the lid's edge (a pixel under 0.12–0.3 of the whites' level, read on a slightly blurred copy so grain in a dark,
+  noisy white is lifted with the white around it); by the lids, any pixel as saturated as the lit skin (the lid's
+  rim); and toward the inner corner (from 0.4 to 0.6 across the eye) the caruncle and the pink fold beside it:
+  tissue whose colour, read at 0.05 half eye widths so thin veins don't count, is 1.25–1.7 times redder (green over
+  red) than the lit white in the middle of the eye, or under 0.25–0.45 of the whites' level. The change also fades
+  out toward both corners (whole from −0.7 to 0.6 across the eye, gone at −1.02 and 0.88).
+- **Iris** (issue #202): the iris's own pattern comes out: its fibres' contrast (the band between 0.02 and 0.05 of
+  the iris's radius, so pixel grain is not raised) and a little clarity (0.05 to 0.2 radii), each measured against
+  the iris alone, so the pupil, the sclera and a catchlight don't halo into it. Each iris is raised toward the same
+  spread of detail (0.08 for the fibres, 0.2 for clarity; the mean size of its detail against its surroundings), up
+  to 3 times the usual raise, so a dark iris, whose pattern is small against its level, shows it at 50 and more at
+  100; the noise floor is a share of that spread. A pixel changes by 0.7–1.8× at most, rolled off softly. It gets
+  brighter between the pupil and the limbal ring (up to 1.2 stops for a dark iris, 0.85 for a light one, half that
+  for an iris with no colour, which would only turn grey), the lower part most (where light enters) and the upper
+  part 40 % of it, and gains 20 % of its own colour. The pupil (its radius read from the iris's profile out from the
+  centre, else 0.36 of the iris) and the limbal ring stay as they are, and so does anything much brighter than the
+  iris (a catchlight, a reflection) or much darker (a lid's shadow, a lash), and a lid's wet rim near the lids. The
+  circle is the face mesh's, else the Iris mask's centre and width.
+- Both are cut to the eye's opening between the lids when the face has the 478 mesh points (`eyes/tone/opening.rs`:
+  the mesh's eye contour from the eye landmarks). Whites fades out 0.03 half eye widths past the upper lid's outline
+  and starts 0.16 inside the lower one's (Iris: at the outline and 0.12 inside the lower one): the lower lid's pale
+  wet rim lies inside the mesh's outline, on a squinting eye well inside it. The sliders' 0…1 goes through a power
+  of 0.8, so 25 and 50 show clearly.
 - **Dark Circles**: under each eye, the skin darker than the skin just outside the circle is lifted toward that
   skin's lightness, the slider's share of the way in lightness (L*): 25 closes a quarter of the gap, 50 half, 100 all
   of it, and no value lifts past it. That level is measured on the original pixels, in a ring below the circle and
@@ -63,7 +89,9 @@ past its face's box and its masks' areas it reads (Eyes 0.7 of the face's size, 
 feature that declares none). A zoomed render whose window touches what a retouched face reads renders all of it and
 cuts back to the window (`window_for_reads` in `crates/pipeline/src/retouch_step.rs`). Reference levels come from
 the whole face on fixed grids, never from the window's pixels: the whites' level from a 96 × 32 grid over the Eye
-Whites mask, the skin's and the cheek's colour from the eye's grid.
+Whites mask (where it is at least 0.8), the lit skin's level and colour from a 48 × 48 grid over the Facial Skin
+mask, the iris's level, colour and pupil from a polar grid over each iris, the skin's and the cheek's colour from the
+eye's grid. Every blur's size is a fraction of the eye's width or the iris's radius.
 
 Each effect is a per-pixel gain times one weight per area (`eyes::Area`, made in `eyes::weights`), the place the
 Refine brush (#99) will scale or extend an area.
@@ -75,6 +103,8 @@ code before it): on the CC0 test portraits, draft 3.9–6.6 ms, and 13.9 ms at d
 third of the frame. A slider drag runs no model: it samples the cached masks. No GPU version is needed for the
 16 ms draft budget. In the app, faces from the people parse are mapped through the lens and transform warp per
 sample, which these numbers leave out; a zoomed loupe on a retouched face now also renders the face's whole read area.
+Whites and Iris of issue #202 (both at 100, the same Mac, best of 20): draft 1936 px 6.6–7.0 ms, loupe 2560 px
+10.1–10.8 ms (1.6 ms at draft before).
 
 The parsing crate's `face_input` example writes what the retouch step gets for each face (box, YuNet's five then the
 478 mesh points, the model's part masks merged as the app merges them); `examples/eyes.rs --faces dir/faces.json`
@@ -86,7 +116,7 @@ tries the sliders on a picture with them.
 
 ## Own files
 
-`crates/retouch/src/eyes.rs`, `crates/retouch/src/eyes/{geom,tone,under}.rs`, `crates/retouch/examples/eyes.rs`,
+`crates/retouch/src/eyes.rs`, `crates/retouch/src/eyes/{geom,tone,under}.rs`, `crates/retouch/src/eyes/tone/{whites,iris,opening}.rs`, `crates/retouch/examples/eyes.rs`,
 `crates/retouch/tests/eyes.rs`, `crates/ui-egui/src/panels/portrait/eyes.rs`, `crates/parsing/examples/face_input.rs`,
 `fork/retouch-eyes.md`, `fork/tests.d/retouch-eyes.txt`
 
@@ -106,7 +136,9 @@ tries the sliders on a picture with them.
 
 `fork/tests.d/retouch-eyes.txt`. They cover: off and every slider at 0 giving the original pixels bit for bit; each
 slider keeping to its own area, and every pixel away from the eyes keeping its bits with all four at 100; whites
-brighter and greyer with a vein fading but still there; a brighter iris; dark circles lifted and turned toward the
+brighter and greyer with a vein fading but still there; a reddish white at 40 % grey lifted to at least 60 % at
+Whites 100 with its saturation cut to under half, every lid and skin pixel kept (issue #202: 48 % before); the
+iris brighter below than above and its pupil kept (the pupil got brighter before); dark circles lifted and turned toward the
 skin, never darkening a channel; a deep purple circle at 0.4 of the cheek's luminance under one-pixel dark lashes lifted
 to at least 0.8 of it with its colour's distance halved, every lash pixel kept (issue #203: the circle was left as it
 was before); Dark Circles closing a quarter, half and three quarters of the circle's gap in lightness at 25, 50 and
@@ -123,7 +155,8 @@ levels apart before), and the window grows only for a retouched face it touches.
 
 ### Eyes Retouching in the Portrait Tab
 The Portrait tab's Eyes section has four sliders, for every face or the one you pick: Whites brightens the eye whites
-and takes out their yellow or red, Iris brightens and sharpens the iris, Dark Circles lifts the shadow under each eye
+and takes out their yellow or red while keeping the eye's shading, Iris brings out the iris's pattern and brightens it
+where light enters while its pupil and dark rim stay, Dark Circles lifts the shadow under each eye
 toward your cheek's colour, and Eye Bags softens the bag's shading. Each keeps the skin's texture and works through
 clear glasses.
 
