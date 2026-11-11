@@ -2765,5 +2765,7 @@
   "Reading depth map": "Đang đọc bản đồ độ sâu",
   "Preparing the full-size view": "Đang chuẩn bị chế độ xem kích thước đầy đủ",
   "Reading the full-size photo": "Đang đọc ảnh kích thước đầy đủ",
-  "Preparing photos in the background": "Đang chuẩn bị ảnh trong nền"
+  "Preparing photos in the background": "Đang chuẩn bị ảnh trong nền",
+  "Finding AI masks": "Đang tìm mặt nạ AI",
+  "Update AI Masks": "Cập nhật mặt nạ AI"
 }

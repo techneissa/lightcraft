@@ -165,6 +165,9 @@ struct Finished {
     color: Option<Arc<egui::ColorImage>>,
     /// A [`Slot::Full`] job's picture, cut into textures.
     full: Option<crate::full_picture::Built>,
+    /// What the job left for after its result: a grid thumbnail's photo's view preview, made from the same decode
+    /// once the thumbnail is handed over ([`lightcraft_engine::media::RenderJob::run_then`]).
+    then: Option<lightcraft_preview::Then>,
 }
 
 /// Immutable identity captured when a request is submitted, not when its result is collected.
@@ -210,6 +213,8 @@ fn upload(
 }
 
 use lightcraft_engine::media::dirty::{clock, ms};
+
+pub(crate) mod prefetch;
 
 /// The rectangle `[x0, y0, x1, y1)` of `img`, as an image (a partial texture upload).
 pub(crate) fn sub_image(img: &egui::ColorImage, r: &[usize; 4]) -> egui::ColorImage {
@@ -345,6 +350,10 @@ pub struct Renderer {
     thumb_inputs: HashMap<PhotoId, (std::sync::Weak<lightcraft_catalog::Photo>, usize, u64, bool, u32)>,
     /// Photos whose grid thumbnail is the camera's embedded preview itself (no render behind it).
     embedded_thumbs: HashMap<PhotoId, (std::sync::Weak<lightcraft_catalog::Photo>, usize, u64)>,
+    /// Grid thumbnails that make their photo's view preview after them, and whether that view is still wanted: a cell
+    /// scrolled out of view clears its flag, and the worker drops the view (and its preview-size picture) instead of
+    /// rendering it.
+    view_wanted: HashMap<PhotoId, Arc<std::sync::atomic::AtomicBool>>,
     pool: JobPool<Slot, Finished>,
     /// Jobs run elsewhere (see [`RenderOffload`]); `queue` holds the ones not started yet.
     offload: Option<Box<dyn RenderOffload>>,
@@ -415,8 +424,18 @@ pub struct Renderer {
     /// The catalog revision seen at the last poll: a failure is retried once the catalog changes
     /// its photo (a relinked or re-imported file), see [`Self::follow_catalog`].
     catalog_rev: u64,
-    /// Prefetch slot → key of the last job submitted (each runs once).
-    prefetched: HashMap<Slot, u64>,
+    /// Prefetch slot → what it was last asked for (each job runs once; see [`prefetch`]).
+    prefetched: HashMap<Slot, prefetch::Asked>,
+    /// How long a prefetch render takes (ms), averaged ([`Self::prefetch_secs`]).
+    prefetch_ms: Option<f64>,
+    /// The loupe's renders sent to the workers that have not come back, oldest first ([`prefetch::MainOut`]).
+    main_out: Vec<prefetch::MainOut>,
+    /// Tests: per photo, the renders asked of the workers (prefetches sent, and loupe renders that did not come from a kept view).
+    #[cfg(test)]
+    pub(crate) renders_asked: HashMap<PhotoId, usize>,
+    /// Tests: how long a prefetch takes, instead of the measured time ([`Self::prefetch_secs`]).
+    #[cfg(test)]
+    pub(crate) render_secs_for_test: Option<f64>,
     /// Variant key → frame it was last asked for (LRU of [`Slot::Variant`] textures).
     variant_used: HashMap<u64, u64>,
     /// How many variants the last frame's views showed at once (see [`Self::want_variants`]).
@@ -524,6 +543,7 @@ impl Renderer {
             pool: JobPool::new(threads),
             thumb_inputs: HashMap::new(),
             embedded_thumbs: HashMap::new(),
+            view_wanted: HashMap::new(),
             offload: None,
             queue: Vec::new(),
             seq: 0,
@@ -554,6 +574,12 @@ impl Renderer {
             failed: HashMap::new(),
             catalog_rev: 0,
             prefetched: HashMap::new(),
+            prefetch_ms: None,
+            main_out: Vec::new(),
+            #[cfg(test)]
+            renders_asked: HashMap::new(),
+            #[cfg(test)]
+            render_secs_for_test: None,
             variant_used: HashMap::new(),
             variant_want: 0,
             frame: 0,
@@ -797,7 +823,7 @@ impl Renderer {
                 stamp()
             );
         }
-        Finished { look: None, result: r, color, full: None }
+        Finished { look: None, result: r, color, full: None, then: None }
     }
 
     /// A result without a picture, for a job that has no `RenderJob::failed` of its own.
@@ -822,7 +848,7 @@ impl Renderer {
     /// What the pool sends for a job that panicked (issue #227): `failed` with the panic's message, so the
     /// slot's `pending` entry clears like any failed render's.
     fn panicked(failed: RenderResult) -> lightcraft_preview::Failure<Finished> {
-        Box::new(move |e| Finished { look: None, result: RenderResult { rendered: Err(e), ..failed }, color: None, full: None })
+        Box::new(move |e| Finished { look: None, result: RenderResult { rendered: Err(e), ..failed }, color: None, full: None, then: None })
     }
 
     fn request_needed(&self, slot: Slot, key: u64, priority: u32) -> bool {
@@ -938,6 +964,9 @@ impl Renderer {
             self.draft_keys.insert(job.key);
         }
         job.request_id = lightcraft_preview::next_tick();
+        if slot == Slot::Main {
+            job = self.note_main_out(job);
+        }
         self.requests.insert(
             slot,
             Requested { look: Some((geometry_look(&job.settings), job.request.apply_crop)), id: job.request_id, source: Some(job.origin.clone()) },
@@ -982,7 +1011,15 @@ impl Renderer {
         if lightcraft_pipeline::profiling() && !background {
             eprintln!("  ui: {slot:?} submitted (at {:.1})", stamp());
         }
-        self.pool.submit_or(
+        let wanted = match slot {
+            Slot::Thumb(id) if job.view_after.is_some() => {
+                let flag = Arc::new(std::sync::atomic::AtomicBool::new(true));
+                self.view_wanted.insert(id, flag.clone());
+                Some(flag)
+            }
+            _ => None,
+        };
+        self.pool.submit_or_then(
             slot,
             key,
             priority,
@@ -991,10 +1028,27 @@ impl Renderer {
                     eprintln!("  worker: {slot:?} waited {:.1} ms in the queue (at {:.1})", ms(queued, clock()), stamp());
                 }
                 let look = Some((geometry_look(&job.settings), job.request.apply_crop));
-                let run = || if background { lightcraft_engine::memory::in_background(|| job.run()) } else { job.run() };
-                Finished { look, ..Self::run_for(run, &display) }
+                // (a grid thumbnail of a raw leaves its photo's view preview, made from the same decode, for after it
+                // is shown: the worker makes it before its next job)
+                let mut after = None;
+                let run = || {
+                    let (r, view) = if background { lightcraft_engine::memory::in_background(|| job.run_then()) } else { job.run_then() };
+                    after = view;
+                    r
+                };
+                let finished = Finished { look, ..Self::run_for(run, &display) };
+                // (a cell scrolled away since: the view and its picture are dropped, not rendered)
+                let then = after.map(|view| -> lightcraft_preview::Then {
+                    Box::new(move || {
+                        if wanted.is_none_or(|w| w.load(std::sync::atomic::Ordering::Relaxed)) {
+                            lightcraft_engine::memory::in_background(|| view.run());
+                        }
+                    })
+                });
+                Finished { then, ..finished }
             }),
             panicked,
+            |f| f.then.take(),
         );
     }
 
@@ -1021,7 +1075,7 @@ impl Renderer {
             priority,
             Box::new(move || {
                 let (result, full) = crate::full_picture::work(job, plan);
-                Finished { look: None, result, color: None, full }
+                Finished { look: None, result, color: None, full, then: None }
             }),
             panicked,
         );
@@ -1220,46 +1274,6 @@ impl Renderer {
         self.pool.submit_or(slot, key, priority, Box::new(move || Self::run_for(|| compose.result(request_id), &display)), panicked);
     }
 
-    /// Prepare a photo in the background (a [`Slot::Prefetch`] job runs once per key; a newer one
-    /// replaces it while queued). Memory stays bounded by the engine's source caches.
-    pub fn prefetch(&mut self, slot: Slot, mut job: RenderJob, priority: u32) {
-        if self.prefetched.get(&slot) == Some(&job.key) {
-            return;
-        }
-        self.prefetched.insert(slot, job.key);
-        self.note_request(slot, job.key, priority, "prefetch requested", || render_subject(slot, job.photo, Some(&job.origin)));
-        self.pending.insert(slot, (job.key, priority));
-        job.request_id = lightcraft_preview::next_tick();
-        self.requests.insert(
-            slot,
-            Requested { look: Some((geometry_look(&job.settings), job.request.apply_crop)), id: job.request_id, source: Some(job.origin.clone()) },
-        );
-        let key = job.key;
-        let panicked = Self::panicked(job.failed(String::new()));
-        self.pool.submit_or(
-            slot,
-            key,
-            priority,
-            Box::new(move || Finished { look: None, result: lightcraft_engine::memory::in_background(|| job.run()), color: None, full: None }),
-            panicked,
-        );
-    }
-
-    /// Prepared-ahead jobs ([`Slot::Prefetch`]) queued or running.
-    pub fn prefetches_pending(&self) -> usize {
-        self.pending.keys().filter(|s| matches!(s, Slot::Prefetch(_))).count()
-    }
-
-    /// Prepared-ahead slots asked for since the renderer last forgot everything.
-    pub fn prefetch_slots_asked(&self) -> usize {
-        self.prefetched.keys().filter(|s| matches!(s, Slot::Prefetch(_))).count()
-    }
-
-    /// Whether `slot` was last asked for the job of `key` (queued, running or done).
-    pub fn prefetch_asked(&self, slot: Slot, key: u64) -> bool {
-        self.prefetched.get(&slot) == Some(&key)
-    }
-
     /// Drop the slideshow slides other than `keep`: their textures and their requests that have
     /// not started (a slide that is no longer near is not worth rendering).
     pub fn release_slides(&mut self, keep: &[lightcraft_engine::slideshow::Item]) {
@@ -1298,6 +1312,7 @@ impl Renderer {
         self.quick_tried.clear();
         self.failed.clear();
         self.prefetched.clear();
+        self.main_out.clear();
         self.pending.clear();
         self.queue.clear();
         self.free_natives();
@@ -1725,6 +1740,7 @@ impl Renderer {
         let mut changed = false;
         for ((mut slot, mut r, mut color, completed_look, ms), full) in finished {
             self.completed += 1;
+            self.note_back(slot, &r, ms);
             if slot == Slot::Full {
                 self.accept_full(session, &r, full, ms);
                 changed = true;
@@ -2048,6 +2064,10 @@ impl Renderer {
         if any {
             self.pending.remove(&slot);
             self.requests.remove(&slot);
+            if slot == Slot::Main {
+                // (the one queued is the latest sent)
+                self.main_out.pop();
+            }
         }
         any
     }
@@ -2075,6 +2095,14 @@ impl Renderer {
     pub fn evict_thumbs(&mut self, keep: &std::collections::HashSet<PhotoId>, max: usize) {
         self.thumb_inputs.retain(|id, _| keep.contains(id));
         self.embedded_thumbs.retain(|id, _| keep.contains(id));
+        // (a view still to be made from a thumbnail's decode is not made for a photo scrolled away)
+        self.view_wanted.retain(|id, wanted| {
+            let kept = keep.contains(id);
+            if !kept {
+                wanted.store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            kept
+        });
         // (a thumbnail that failed is tried again when its photo comes back on screen)
         self.failed.retain(|s, _| !matches!(s, Slot::Thumb(id) | Slot::ThumbQuick(id) if !keep.contains(id)));
         let dropped = self.pool.reprioritize(|s, p| match s {

@@ -47,7 +47,9 @@ List: a third people-parts model set, Sapiens2 (Meta's Sapiens2-seg 0.4B, about 
   candle's Metal buffer pool keeps a pass's intermediate buffers until its next flush. Splitting the head's
   convolutions into bands of rows and smaller attention chunks did not lower it measurably.
 - Speed: candle's Metal matrix multiply is the limit (a full 1024 × 768 pass is about 2.3 s of transformer blocks,
-  half precision gives nothing; Core ML is the next step, in its own lane). The head's four 2× transposed
+  half precision gives nothing). Since #216 Sapiens2 runs through Core ML on the GPU when its three converted packages
+  are there (`fork/coreml.md`): a portrait's Sapiens2 step 780–860 ms instead of about 1690 ms, peak memory 5.2 GB
+  instead of 11.8 GB, masks the same to 99.997 % of pixels. The head's four 2× transposed
   convolutions run as 3 × 3 convolutions and a pixel shuffle (4 s → 0.7 s per pass); a person's pass is sized to the
   body map cells it fills.
 - Try it: `cargo run -p lightcraft-parsing --release --example parts -- in.jpg outdir/ --set sapiens2`.

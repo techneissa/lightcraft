@@ -96,6 +96,14 @@ MODELS = {
         "kind": "body",
         "license": "MIT per the model card (sayeed99/segformer_b3_clothes); MiT-b3 encoder under the NVIDIA Source Code License for SegFormer (non-commercial)",
     },
+    # the BiSeNet set's clothes parser: the same network with fewer blocks per stage (read from the weights)
+    "segformer-b2": {
+        "folder": "human-parsing-segformer-b2",
+        "sha256": "8f86fd90c567afd4370b3cc3a7e81ed767a632b2832a738331af660acc0c4c68",
+        "classes": 18,
+        "kind": "body",
+        "license": "other per the model card (mattmdjaga/segformer_b2_clothes): the NVIDIA Source Code License for SegFormer (non-commercial); fine-tuned from NVIDIA MiT-b2",
+    },
 }
 
 

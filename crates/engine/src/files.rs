@@ -18,6 +18,7 @@ use crate::media::{DenoiseSpec, FileLoader, FileProbe, LoadOptions, PairLoader, 
 mod colour;
 mod fs;
 mod load;
+mod look_cache;
 mod macos;
 pub(crate) use macos::with_job_cancel;
 mod preview;

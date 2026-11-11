@@ -25,6 +25,9 @@ pub type Job<R> = Box<dyn FnOnce() -> R + Send>;
 /// panic's message (see [`JobPool::submit_or`]).
 pub type Failure<R> = Box<dyn FnOnce(String) -> R + Send>;
 
+/// Work a job leaves for after its result is handed over ([`JobPool::submit_or_then`]).
+pub type Then = Box<dyn FnOnce() + Send>;
+
 /// What a worker calls when a job has finished (a frontend's "repaint now").
 pub type Waker = Arc<dyn Fn() + Send + Sync>;
 
@@ -35,6 +38,8 @@ struct Entry<S, R> {
     seq: u64,
     job: Job<R>,
     fail: Option<Failure<R>>,
+    /// Takes out of the result the work left for after it ([`JobPool::submit_or_then`]).
+    then_of: Option<fn(&mut R) -> Option<Then>>,
 }
 
 struct Shared<S, R> {
@@ -42,8 +47,13 @@ struct Shared<S, R> {
     /// Slots with a job running: their next job waits until it ends, so a slot never has two at
     /// once (a slider drag submits faster than renders finish; overlapping renders of one view
     /// were mostly thrown away, and took the GPU from the one that is shown). Locked inside
-    /// `queue`.
-    busy: Mutex<Vec<S>>,
+    /// `queue`. Each with its run's number (see `released`).
+    busy: Mutex<Vec<(S, u64)>>,
+    /// Runs let go of their slot while they go on ([`JobPool::release_running`]): the slot's next job starts beside
+    /// them, and their results are dropped. Locked inside `queue`.
+    released: Mutex<Vec<u64>>,
+    /// The number the next run takes.
+    runs: std::sync::atomic::AtomicU64,
     cv: Condvar,
     /// Called by a worker after each finished job (see [`JobPool::set_waker`]).
     waker: Mutex<Option<Waker>>,
@@ -92,6 +102,8 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
             shared: Arc::new(Shared {
                 queue: Mutex::new(Vec::new()),
                 busy: Mutex::new(Vec::new()),
+                released: Mutex::new(Vec::new()),
+                runs: std::sync::atomic::AtomicU64::new(0),
                 cv: Condvar::new(),
                 waker: Mutex::new(None),
                 shutdown: AtomicBool::new(false),
@@ -144,20 +156,32 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
                 let tx = self.tx.clone();
                 let spawned = std::thread::Builder::new().name(format!("lc-job-{i}")).spawn(move || {
                     let _ended = Ended(&shared);
-                    while let Some(e) = take(&shared, true) {
+                    while let Some((e, run)) = take(&shared, true) {
                         let t0 = std::time::Instant::now();
                         // the slot is free again when the job ends, also if it panics
-                        let _free = Free(&shared, e.slot);
-                        let Some(result) = run_guarded(e.job, e.fail) else { continue };
+                        let _free = Free(&shared, e.slot, run);
+                        let Some(mut result) = run_guarded(e.job, e.fail) else { continue };
+                        let then = e.then_of.and_then(|f| f(&mut result));
                         let done = Done { slot: e.slot, key: e.key, result, ms: t0.elapsed().as_secs_f64() * 1000.0 };
-                        if tx.send(done).is_err() {
-                            break;
+                        {
+                            // (let go of: nobody waits for it. Checked and sent under the one lock, so a
+                            // `release_running` can't fall between them and let its result through.)
+                            let released = shared.released.lock().unwrap_or_else(|e| e.into_inner());
+                            if released.contains(&run) {
+                                continue;
+                            }
+                            if tx.send(done).is_err() {
+                                break;
+                            }
                         }
                         // (the result is on the channel first: the woken frame finds it)
                         let waker = shared.waker.lock().unwrap_or_else(|e| e.into_inner()).clone();
                         if let Some(wake) = waker {
                             wake();
                         }
+                        // what the job left for after its result, before this worker takes another job (its slot
+                        // stays busy); not once the pool is stopping
+                        run_then(then.filter(|_| !shared.shutdown.load(Ordering::Relaxed)));
                     }
                 });
                 match spawned {
@@ -205,17 +229,24 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
     /// panics, nothing is sent (see [`Self::submit_or`]): for a caller that waits for the result,
     /// use that instead.
     pub fn submit(&mut self, slot: S, key: u64, priority: u32, job: Job<R>) {
-        self.queue_job(slot, key, priority, job, None);
+        self.queue_job(slot, key, priority, job, None, None);
     }
 
     /// [`Self::submit`], and if `job` panics the slot still gets a result: `fail(message)` is sent
     /// under the same slot and key, so whoever waits for the job learns it failed instead of
     /// waiting for ever. The worker lives on and the slot is free for its next job.
     pub fn submit_or(&mut self, slot: S, key: u64, priority: u32, job: Job<R>, fail: Failure<R>) {
-        self.queue_job(slot, key, priority, job, Some(fail));
+        self.queue_job(slot, key, priority, job, Some(fail), None);
     }
 
-    fn queue_job(&mut self, slot: S, key: u64, priority: u32, job: Job<R>, fail: Option<Failure<R>>) {
+    /// [`Self::submit_or`] for a job that leaves work for after its result: `then_of` takes that work out of the
+    /// result, and the worker runs it once the result is handed over, before it takes another job (a grid thumbnail
+    /// shown at once, and the photo's view preview made from the same decode after it). A panic in it is logged.
+    pub fn submit_or_then(&mut self, slot: S, key: u64, priority: u32, job: Job<R>, fail: Failure<R>, then_of: fn(&mut R) -> Option<Then>) {
+        self.queue_job(slot, key, priority, job, Some(fail), Some(then_of));
+    }
+
+    fn queue_job(&mut self, slot: S, key: u64, priority: u32, job: Job<R>, fail: Option<Failure<R>>, then_of: Option<fn(&mut R) -> Option<Then>>) {
         if self.stopped {
             return; // nothing runs it any more
         }
@@ -224,7 +255,7 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
         let (lock, cv) = (&self.shared.queue, &self.shared.cv);
         let mut q = lock.lock().unwrap_or_else(|e| e.into_inner());
         q.retain(|e| e.slot != slot);
-        q.push(Entry { slot, key, priority, seq: self.seq, job, fail });
+        q.push(Entry { slot, key, priority, seq: self.seq, job, fail, then_of });
         cv.notify_one();
     }
 
@@ -244,6 +275,33 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
             }
         });
         dropped
+    }
+
+    /// Let the job running for `slot` go on without its slot: the slot's next job starts at once beside it, instead of
+    /// waiting for it to end, and its result is dropped when it does. For a job whose result nobody will use, told to
+    /// stop by its caller, that can't stop until it reaches its next check (a decode in progress). At most `most` let go
+    /// of are running at once, so stepping fast can't pile them up. Whether one was let go of (not: no job of `slot` is
+    /// running, or `most` already are).
+    pub fn release_running(&self, slot: S, most: usize) -> bool {
+        {
+            // (under the queue lock, as `take` looks at `busy`)
+            let _q = self.shared.queue.lock().unwrap_or_else(|e| e.into_inner());
+            let mut busy = self.shared.busy.lock().unwrap_or_else(|e| e.into_inner());
+            let mut released = self.shared.released.lock().unwrap_or_else(|e| e.into_inner());
+            let Some(i) = busy.iter().position(|(s, _)| *s == slot) else { return false };
+            if released.len() >= most {
+                return false;
+            }
+            let (_, run) = busy.swap_remove(i);
+            released.push(run);
+        }
+        self.shared.cv.notify_all();
+        true
+    }
+
+    /// Jobs let go of ([`Self::release_running`]) still running.
+    pub fn released_running(&self) -> usize {
+        self.shared.released.lock().map(|r| r.len()).unwrap_or(0)
     }
 
     /// Queued (not started) jobs.
@@ -273,10 +331,14 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
     pub fn run_inline(&mut self, n: usize) -> usize {
         let mut ran = 0;
         while ran < n {
-            let Some(e) = take(&self.shared, false) else { break };
-            let _free = Free(&self.shared, e.slot);
-            if let Some(result) = run_guarded(e.job, e.fail) {
+            let Some((e, run)) = take(&self.shared, false) else { break };
+            let _free = Free(&self.shared, e.slot, run);
+            if let Some(mut result) = run_guarded(e.job, e.fail)
+                && !is_released(&self.shared, run)
+            {
+                let then = e.then_of.and_then(|f| f(&mut result));
                 let _ = self.tx.send(Done { slot: e.slot, key: e.key, result, ms: 0.0 });
+                run_then(then);
             }
             ran += 1;
         }
@@ -300,6 +362,15 @@ fn run_guarded<R>(job: Job<R>, fail: Option<Failure<R>>) -> Option<R> {
     catch_unwind(AssertUnwindSafe(move || fail.map(|f| f(message)))).unwrap_or(None)
 }
 
+/// Run the work a job left for after its result; a panic in it is logged (the result was handed over already).
+fn run_then(then: Option<Then>) {
+    if let Some(then) = then
+        && let Err(payload) = catch_unwind(AssertUnwindSafe(then))
+    {
+        log::error!("job pool: the work after a job panicked: {}", panic_message(payload.as_ref()));
+    }
+}
+
 /// The text of a panic payload (`panic!("…")` gives a `&str` or a `String`).
 fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     match (payload.downcast_ref::<&str>(), payload.downcast_ref::<String>()) {
@@ -309,9 +380,9 @@ fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
     }
 }
 
-/// Pop the best job (highest priority, newest first). Blocks when `wait` until one is queued or
-/// the pool shuts down.
-fn take<S: PartialEq + Copy, R>(shared: &Shared<S, R>, wait: bool) -> Option<Entry<S, R>> {
+/// Pop the best job (highest priority, newest first), with its run's number. Blocks when `wait` until one is queued
+/// or the pool shuts down.
+fn take<S: PartialEq + Copy, R>(shared: &Shared<S, R>, wait: bool) -> Option<(Entry<S, R>, u64)> {
     let mut q = shared.queue.lock().unwrap_or_else(|e| e.into_inner());
     loop {
         if shared.shutdown.load(Ordering::Relaxed) {
@@ -320,12 +391,13 @@ fn take<S: PartialEq + Copy, R>(shared: &Shared<S, R>, wait: bool) -> Option<Ent
         // (a slot with a job running waits for it: see `Shared::busy`)
         let best = {
             let busy = shared.busy.lock().unwrap_or_else(|e| e.into_inner());
-            q.iter().enumerate().filter(|(_, e)| !busy.contains(&e.slot)).max_by_key(|(_, e)| (e.priority, e.seq)).map(|(i, _)| i)
+            q.iter().enumerate().filter(|(_, e)| !busy.iter().any(|(s, _)| *s == e.slot)).max_by_key(|(_, e)| (e.priority, e.seq)).map(|(i, _)| i)
         };
         if let Some(i) = best {
             let e = q.swap_remove(i);
-            shared.busy.lock().unwrap_or_else(|e| e.into_inner()).push(e.slot);
-            return Some(e);
+            let run = shared.runs.fetch_add(1, Ordering::Relaxed);
+            shared.busy.lock().unwrap_or_else(|e| e.into_inner()).push((e.slot, run));
+            return Some((e, run));
         }
         if !wait {
             return None;
@@ -334,13 +406,21 @@ fn take<S: PartialEq + Copy, R>(shared: &Shared<S, R>, wait: bool) -> Option<Ent
     }
 }
 
-/// The job for `slot` ended: a job queued for it may start.
-fn finished<S: PartialEq, R>(shared: &Shared<S, R>, slot: &S) {
+/// Whether run `run` was let go of ([`JobPool::release_running`]): its result is dropped.
+fn is_released<S, R>(shared: &Shared<S, R>, run: u64) -> bool {
+    shared.released.lock().map(|r| r.contains(&run)).unwrap_or(false)
+}
+
+/// Run `run` of `slot` ended: a job queued for the slot may start (one let go of had freed it already).
+fn finished<S: PartialEq, R>(shared: &Shared<S, R>, slot: &S, run: u64) {
     {
         // under the queue lock: a worker is either before its look at `busy` or waiting
         let _q = shared.queue.lock().unwrap_or_else(|e| e.into_inner());
         let mut busy = shared.busy.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(i) = busy.iter().position(|s| s == slot) {
+        let mut released = shared.released.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(i) = released.iter().position(|r| *r == run) {
+            released.swap_remove(i);
+        } else if let Some(i) = busy.iter().position(|(s, r)| s == slot && *r == run) {
             busy.swap_remove(i);
         }
     }
@@ -348,11 +428,11 @@ fn finished<S: PartialEq, R>(shared: &Shared<S, R>, slot: &S) {
 }
 
 /// Frees a job's slot when the job ends (see [`finished`]).
-struct Free<'a, S: PartialEq, R>(&'a Shared<S, R>, S);
+struct Free<'a, S: PartialEq, R>(&'a Shared<S, R>, S, u64);
 
 impl<S: PartialEq, R> Drop for Free<'_, S, R> {
     fn drop(&mut self) {
-        finished(self.0, &self.1);
+        finished(self.0, &self.1, self.2);
     }
 }
 

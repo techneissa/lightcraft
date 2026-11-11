@@ -345,7 +345,7 @@ pub(crate) fn attach(
         return None;
     }
     let h = plan.h;
-    let list: Vec<_> = s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();
+    let list: Vec<_> = s.masks.iter().filter(|m| m.renders()).collect();
     let (full, loose) = (AlphaKeys { geo: plan.geo, image: plan.lin_key }, AlphaKeys { geo: plan.geo, image: plan.edge_lin_key });
     let ev = s.light.exposure as f32;
     let mut held = kept.map(|(k, src)| k.take(src, plan.mattes.as_ref())).unwrap_or_default();

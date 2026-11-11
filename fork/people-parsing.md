@@ -16,7 +16,7 @@ Edit view uses it yet; the Select People masks and the Portrait features build o
   | Set | Face parser | Body parser | Landmarks | Download | Licence |
   | --- | --- | --- | --- | --- | --- |
   | SegFormer (default) | SegFormer-B0, 19 face classes ([alexkrz/segformer-b0-celebamask_hq](https://huggingface.co/alexkrz/segformer-b0-celebamask_hq) @ `e1e6109`, 14.9 MB) | SegFormer-B3, 18 clothes classes ([sayeed99/segformer_b3_clothes](https://huggingface.co/sayeed99/segformer_b3_clothes) @ `6c12f0e`, 189.0 MB) | MediaPipe face mesh v2 ([SceneWorks/mp-facemesh-v2](https://huggingface.co/SceneWorks/mp-facemesh-v2) @ `4e65de9`, 5.0 MB) | 209 MB | B0: "other" (NVIDIA MiT, non-commercial; CelebAMask-HQ, non-commercial research); B3: MIT on the card, NVIDIA MiT underneath; mesh: Apache-2.0 |
-  | BiSeNet | BiSeNet ResNet-18, 19 face classes ([mlx-community/face-parsing-bisenet-bf16](https://huggingface.co/mlx-community/face-parsing-bisenet-bf16) @ `5f2aa21`, 26.6 MB) | SegFormer-B2, 18 clothes classes ([mattmdjaga/segformer_b2_clothes](https://huggingface.co/mattmdjaga/segformer_b2_clothes) @ `584abc1`, 109.5 MB) | the same face mesh | 141 MB | BiSeNet: MIT (CelebAMask-HQ, non-commercial research); B2: MIT on the card, NVIDIA MiT underneath |
+  | BiSeNet | BiSeNet ResNet-18, 19 face classes ([mlx-community/face-parsing-bisenet-bf16](https://huggingface.co/mlx-community/face-parsing-bisenet-bf16) @ `5f2aa21`, 26.6 MB) | SegFormer-B2, 18 clothes classes ([mattmdjaga/segformer_b2_clothes](https://huggingface.co/mattmdjaga/segformer_b2_clothes) @ `584abc1`, 109.5 MB) | the same face mesh | 141 MB | BiSeNet: MIT (CelebAMask-HQ, non-commercial research); B2: "other" on the card, linking NVIDIA's SegFormer licence (non-commercial) |
 
   Sizes and SHA-256 are pinned in `crates/parsing/src/models.rs`. Not wired: the SegFormer-B5 face parser
   (`jonathandinu/face-parsing`, 339 MB). A third set, Sapiens2, is in [sapiens2-clothes.md](sapiens2-clothes.md).
@@ -29,7 +29,8 @@ Edit view uses it yet; the Select People masks and the Portrait features build o
   photo is rendered upright, uncropped, with default settings at 2048 px (the frame face regions use); faces come
   from YuNet when it is installed (Settings ▸ Faces), else from the body model. The result is cached on disk by the
   pixels and the set's version (`~/Library/Caches/LightCraft/people-parsing`, 512 MB, oldest first) and the newest
-  four in memory. One model run at a time (runs share one model on the GPU). A caller that needs the masks now (an export) waits for the run already going instead of starting a
+  four in memory. A new parse is used as its file holds it (masks at 8 bits), so a photo renders the same from a
+  parse made now as from its file read back later (issue #244). One model run at a time (runs share one model on the GPU). A caller that needs the masks now (an export) waits for the run already going instead of starting a
   second one (`PeopleParsing::parse(.., wait: true)`). The models stay loaded for a minute after their last use.
 - **Resolution independent**: masks are planes in fractions of the photo at the model's resolution (face crops at
   512², the body at 768 to 1536 px); `lightcraft_parsing::render` draws them at any size and snaps their edges to the

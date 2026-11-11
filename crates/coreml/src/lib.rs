@@ -25,7 +25,7 @@ pub mod vision;
 #[allow(unsafe_code)]
 mod vision_macos;
 
-pub use cache::load_package;
+pub use cache::{load_package, load_package_function};
 #[cfg(target_os = "macos")]
 use macos as imp;
 #[cfg(not(target_os = "macos"))]
@@ -148,6 +148,11 @@ pub fn available() -> bool {
     imp::available()
 }
 
+/// Whether one function of a model with several can be loaded ([`Model::load_function`]): macOS 15 or later.
+pub fn functions_available() -> bool {
+    imp::available() && imp::functions_available()
+}
+
 /// Compile a `.mlpackage` (or `.mlmodel`) for this Mac and put the compiled `.mlmodelc` folder at `dest`, replacing
 /// what was there. Takes seconds; run it once after a download, off the UI thread.
 pub fn compile(package: &Path, dest: &Path) -> Result<()> {
@@ -177,10 +182,16 @@ impl std::fmt::Debug for Model {
 impl Model {
     /// Load a compiled `.mlmodelc` folder.
     pub fn load(compiled: &Path, units: ComputeUnits) -> Result<Self> {
+        Self::load_function(compiled, units, None)
+    }
+
+    /// Load `function` of a compiled model with several (`None`: its default; macOS 15 or later for another). The
+    /// functions of one model share its weights on disk and in memory.
+    pub fn load_function(compiled: &Path, units: ComputeUnits, function: Option<&str>) -> Result<Self> {
         if !compiled.is_dir() {
             return Err(Error::Missing(compiled.to_path_buf()));
         }
-        let (handle, inputs, outputs) = imp::load(compiled, units)?;
+        let (handle, inputs, outputs) = imp::load(compiled, units, function)?;
         Ok(Self { handle: Mutex::new(handle), inputs, outputs })
     }
 

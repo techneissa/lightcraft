@@ -2451,5 +2451,7 @@
   "Reading depth map": "Membaca peta kedalaman",
   "Preparing the full-size view": "Menyiapkan tampilan ukuran penuh",
   "Reading the full-size photo": "Membaca foto ukuran penuh",
-  "Preparing photos in the background": "Menyiapkan foto di latar belakang"
+  "Preparing photos in the background": "Menyiapkan foto di latar belakang",
+  "Finding AI masks": "Mencari masker AI",
+  "Update AI Masks": "Perbarui Masker AI"
 }

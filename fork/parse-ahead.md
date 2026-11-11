@@ -139,8 +139,9 @@ A test Mac, other builds running (load average 8–48), 7 CC0 portraits (18–24
 - After that, the render is the largest step: the raw decode (macOS's, 570–670 ms for a 24–33 MP Sony raw at the
   2560 px preview size) or the JPEG decode (240–300 ms for 24 MP). The parse of the open photo already reuses the
   decode the loupe made; the neighbours' are decoded for the parse and dropped.
-- BiSeNet's clothes parser (SegFormer-B2) runs on candle at 700 ms; Sapiens2 at 1.2 s. Converting them to Core ML is
-  the next step for those sets.
+- BiSeNet's clothes parser (SegFormer-B2) ran on candle at 700 ms; Sapiens2 at 1.2 s. Both run on Core ML since #216
+  (`fork/coreml.md`, What #216 changed): B2 877 → 122 ms wall, 752 → 42 ms CPU; Sapiens2's step 1352 → 751 ms wall,
+  339 → 251 ms CPU.
 
 Culling, measured with `crates/engine/examples/parse_cull.rs` (the 14 photos below, faces found first, a step every
 2 s as the arrow keys do, pumped as the app pumps: paused 1.5 s after each key, then light), same Mac, load average

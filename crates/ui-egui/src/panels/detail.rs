@@ -28,6 +28,8 @@ mod info;
 mod look_ahead;
 pub(crate) mod masks;
 mod object_remove;
+// fork: the prefetch while culling (#224, #223)
+mod prefetch;
 // fork: the people picker over the loupe (`fork/retouch-foundation.md`)
 pub(crate) mod people_picker;
 mod retouch;
@@ -58,10 +60,10 @@ use info::{
     preview_only_pill, quick_name,
 };
 pub(crate) use info::{draw_focus_point, failed_pill, loupe_pill, rendering_overdue};
-use look_ahead::BEHIND;
 pub use look_ahead::LookAhead;
 pub(crate) use look_ahead::{Prepare, look_ahead};
 use masks::{RegionContext, RegionEdit, color_range_pick, mask_overlay, region_overlay};
+use prefetch::prefetch_neighbours;
 use retouch::{eye_overlay, remove_overlay};
 pub(crate) use window::overlay_supports_window;
 use window::{WindowCtx, WindowView, draw_window, request_window};
@@ -304,6 +306,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     let (sw, sh) = if aspect >= 1.0 { (se, short(se, aspect)) } else { (short(se, 1.0 / aspect), se) };
     let ask = LoupeAsk { id, with_crop: !crop_tool, interacting, fit_px, stand_in_fit, overlay, tint: tint.sel };
     app.renderer.loupe_drawn();
+    prefetch::observe(app, id, now);
     let settling = request_main_or_settle(app, ui, &ask, [rw, rh], plan.window_edge.is_none(), now);
     let plain = overlay == lightcraft_pipeline::Overlay::None;
     brush_preview::request(app, ui, &brush_preview::Ask { id, size: [rw, rh], with_crop: !crop_tool, fit_px, interacting, plain });
@@ -313,7 +316,7 @@ pub fn show(app: &mut LightcraftApp, ui: &mut egui::Ui) {
     // the original, read ahead in the Edit view so the first zoom to 100 % finds it decoded
     crate::full_decode::tick(app, ui.ctx(), id, !interacting);
     if !interacting {
-        prefetch_neighbours(app, id, main_area, ppp, texture_side, !crop_tool);
+        prefetch_neighbours(app, id, main_area, ppp, texture_side, !crop_tool, now);
     }
     // until the loupe has this photo: show its cached render / embedded preview / a thumbnail
     request_stand_in(app, id, want, !crop_tool);
@@ -678,64 +681,6 @@ fn draw_wipe_before(app: &LightcraftApp, p: &egui::Painter, id: PhotoId, img_rec
         let top = Rect::from_min_max(before_rect.min, pos2(before_rect.right(), before_rect.top() + v * before_rect.height()));
         p.image(tex.id(), top, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, v)), Color32::WHITE);
     }
-}
-
-/// Once a photo is on screen, prepare its neighbours in filmstrip order (source decoded and kept,
-/// view render cached) so stepping to them is instant.
-fn prefetch_neighbours(app: &mut LightcraftApp, id: PhotoId, main_area: Rect, ppp: f32, texture_side: usize, with_crop: bool) {
-    // only once this photo is on screen
-    if app.renderer.is_pending(Slot::Main) || app.renderer.textures.get(&Slot::Main).is_none_or(|t| t.photo != id) {
-        return;
-    }
-    let ids = app.session.visible_cloned();
-    let mode = prep_mode(app);
-    let prep = app.session.prep_settings();
-    let ahead = prep.ahead(mode);
-    // editing: the next photos are decoded and kept, ready for their edits (their view render is not
-    // what is wanted, and a cached one would leave the photo undecoded)
-    let develop = mode == lightcraft_engine::prep::Mode::Develop;
-    let Some(i) = ids.iter().position(|p| *p == id).filter(|_| ahead > 0) else { return };
-    let mut targets = app.look_ahead.targets_n(&ids, i, ahead, BEHIND);
-    if prep.scope(mode) == lightcraft_engine::prep::Scope::Marked {
-        targets.retain(|t| lightcraft_engine::prep::marked(&app.session, *t));
-    }
-    // a few at a time, nearest first (the pool keeps workers free for the photo the user goes to)
-    let mut room = PREFETCH_AT_ONCE.saturating_sub(app.renderer.prefetches_pending());
-    let todo: Vec<(usize, PhotoId)> = targets.into_iter().filter_map(|nid| ids.iter().position(|p| *p == nid).map(|at| (at, nid))).collect();
-    for (at, nid) in todo {
-        if room == 0 {
-            break;
-        }
-        let n = prefetch_slot(at);
-        let Some(mut job) = neighbour_job(app, nid, main_area, ppp, texture_side, with_crop) else { continue };
-        if develop {
-            job.view_cache = None;
-        }
-        // (asked for already, in this slot: queued, running or made)
-        if app.renderer.prefetch_asked(n, job.key) {
-            continue;
-        }
-        room -= 1;
-        app.renderer.prefetch(n, job, PREFETCH_PRIORITY);
-    }
-}
-
-/// The render a neighbour is prepared with: its loupe render at the size it will be drawn at.
-fn neighbour_job(
-    app: &mut LightcraftApp,
-    nid: PhotoId,
-    main_area: Rect,
-    ppp: f32,
-    texture_side: usize,
-    with_crop: bool,
-) -> Option<lightcraft_engine::media::RenderJob> {
-    let np = app.session.catalog.photo(nid)?;
-    let nf = Frame::with_lens(np.width.max(1) as usize, np.height.max(1) as usize, &np.develop, with_crop, np.embedded_lens.as_ref());
-    let na = nf.aspect() as f32;
-    let nr = fit_rect(main_area, na, app.ui.zoom, output_px(&nf), ppp, app.ui.pan);
-    let nw = app.ui.settings.prefetch_edge(nr.width().max(nr.height()) * ppp, output_px(&nf).into_iter().max().unwrap_or(1), texture_side);
-    let (w, h) = if na >= 1.0 { (nw, (nw as f32 / na) as usize) } else { ((nw as f32 * na) as usize, nw) };
-    app.session.loupe_job(nid, w.max(8), h.max(8), with_crop)
 }
 
 /// What Settings ▸ Performance lets the mode the user is in prepare ahead.
@@ -1220,6 +1165,17 @@ fn request_main(app: &mut LightcraftApp, ui: &egui::Ui, a: &LoupeAsk, [rw, rh]: 
             job.key ^= brush_preview::BRUSH_KEY_SALT;
         }
         give_area_faces(app, id, overlay, &mut job);
+        // landed on a photo whose prefetch is running: wait for it rather than decode the photo a second time (#223);
+        // its view is then the loupe's picture
+        if !interacting
+            && overlay == lightcraft_pipeline::Overlay::None
+            && !app.renderer.is_current(Slot::Main, job.key)
+            && let Some((_, view)) = &job.view_cache
+            && app.renderer.adopt_prefetch(id, *view, fit_px)
+        {
+            signal_foreground();
+            return;
+        }
         let planes_for = job.clone();
         app.renderer.request(Slot::Main, job, 100);
         request_planes(app, (Slot::Alpha, Slot::Main), &planes_for, a.tint);
@@ -1448,20 +1404,6 @@ fn request_stand_in(app: &mut LightcraftApp, id: PhotoId, edge: usize, with_crop
     {
         app.renderer.request_quick(Slot::Preview, q, 110);
     }
-}
-
-/// Neighbour prefetch: below on-screen thumbnails, above background thumbnail refreshes.
-const PREFETCH_PRIORITY: u32 = 4;
-/// Photos prepared ahead at once (each render spreads over the cores already): the others wait,
-/// so the photo the user steps to next finds a worker free.
-const PREFETCH_AT_ONCE: usize = 2;
-/// Prepared-ahead slots, by the photo's place in the view: a step keeps the photos still ahead in
-/// the slots they have (nothing is asked for twice), and the jump to another part of the shoot
-/// replaces what was waiting.
-const PREFETCH_SLOTS: usize = 32;
-
-fn prefetch_slot(at: usize) -> Slot {
-    Slot::Prefetch((at % PREFETCH_SLOTS) as u8)
 }
 
 /// What the user is doing, for the background preparation: editing (a tool panel open), else

@@ -521,6 +521,8 @@ impl Session {
             preview_cut: None,
             display_fit: None,
             mask_ask: None,
+            view_after: None,
+            stop: None,
         };
         let embedded = match (&self.media.preview_loader, c.kind) {
             (Some(l), MediaKind::Raw) => Some((c.path.clone(), l.clone(), edge)),

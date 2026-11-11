@@ -702,3 +702,58 @@ fn installing_lama_searches_the_photo_again() {
     assert_eq!(s.retouch_key(&p, &p.develop), before);
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Issue #244: a photo renders the same whether its parse was just made or read back from the cache. The parse
+/// file keeps masks at 8 bits; a fresh parse used its masks at full precision, so the first render of a portrait
+/// differed from every later one.
+#[test]
+fn a_fresh_parse_and_its_cached_file_render_the_same() {
+    let face = r(0.2, 0.15, 0.6, 0.8);
+    // a soft Facial Skin mask, its values between the file's 8-bit steps
+    let soft: Runner = Arc::new(move |_, _, _, _, _| {
+        let mut p = person(face);
+        let data = (0..32 * 32)
+            .map(|i| {
+                let (dx, dy) = ((i % 32) as f32 - 15.5, (i / 32) as f32 - 15.5);
+                (1.0 - (dx * dx + dy * dy).sqrt() / 16.0).clamp(0.0, 1.0) * 0.987 + 0.0013
+            })
+            .collect();
+        p.parts.insert(Part::FacialSkin, vec![Plane { rect: face, width: 32, height: 32, data, split: false }]);
+        Ok(Parsing { model_set: "fake".into(), model_version: "1".into(), width: 1, height: 1, people: vec![p] })
+    });
+    let dir = crate::tests::xmp::temp_dir("retouch-parts-fresh-cached");
+    let png = dir.join("ramp.png");
+    let img = Rgba8::from_fn(300, 240, |x, y| {
+        let v = (60 + (x * 120 / 300) + (y * 40 / 240)) as u8;
+        [v, v.saturating_sub(12), v.saturating_sub(25), 255]
+    });
+    std::fs::write(&png, lightcraft_codecs::encode_png(&lightcraft_codecs::EncodeImage::rgba8(&img), &Default::default()).unwrap()).unwrap();
+    let session = |runner: Runner| {
+        let mut s = Session::new().with_fs();
+        s.execute("library.import", &json!({"paths": [png.to_string_lossy()]})).unwrap();
+        let id = s.catalog.photos().next().unwrap().id;
+        s.execute("library.select", &json!({"ids": [id.0]})).unwrap();
+        s.parsing.set_paths(Some(dir.join("models")), Some(dir.join("cache")), None);
+        s.parsing.set_runner(Some(runner));
+        for (control, value) in [
+            ("retouch.skinTone.evenTone", 100.0),
+            ("retouch.skinTone.redness", 100.0),
+            ("retouch.skinTone.faceLight", 50.0),
+            ("retouch.skin.smoothness", 60.0),
+        ] {
+            s.execute("develop.set", &json!({"control": control, "value": value})).unwrap();
+        }
+        (s, id)
+    };
+    let (mut first, id) = session(soft);
+    let fresh = render(&mut first, id, 300);
+    assert_eq!(first.parsing.runs(), 1, "the first session parses the photo");
+    // a new session (a second app start or CLI run): the parse comes from its file, no model runs
+    let (mut second, id) = session(Arc::new(|_, _, _, _, _| Err("the cached parse was not read".to_string())));
+    let cached = render(&mut second, id, 300);
+    assert_eq!(second.parsing.runs(), 0, "the second session reads the cache");
+    assert!(second.retouch_faces_of(id).found.is_some_and(|f| f.input.faces.len() == 1), "the cached parse's face reached the step");
+    let differ = fresh.data.iter().zip(&cached.data).filter(|(a, b)| a != b).count();
+    assert_eq!(differ, 0, "{differ} pixels differ between the render from a fresh parse and from its cached file");
+    let _ = std::fs::remove_dir_all(dir);
+}

@@ -229,6 +229,31 @@ fn pool_runs_inline() {
     assert_eq!(p.try_recv().map(|d| d.result), Some(1));
 }
 
+/// A job's result is handed over before the work it leaves for after it (a grid thumbnail is shown while its photo's
+/// view preview is still being made from the same decode), and that work runs on the same worker before its next job.
+#[test]
+fn pool_hands_over_a_result_before_the_work_left_after_it() {
+    /// A result with the work it leaves for after it.
+    struct Carry(u8, Option<crate::pool::Then>);
+    let mut p: JobPool<u8, Carry> = JobPool::new(1);
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let (after, ran_after) = std::sync::mpsc::channel::<()>();
+    let then: crate::pool::Then = Box::new(move || {
+        let _ = released.recv_timeout(std::time::Duration::from_secs(60));
+        let _ = after.send(());
+    });
+    let take: fn(&mut Carry) -> Option<crate::pool::Then> = |c| c.1.take();
+    p.submit_or_then(1, 0, 1, Box::new(move || Carry(7, Some(then))), Box::new(|_| Carry(0, None)), take);
+    assert!(p.wait(std::time::Duration::from_secs(60)), "the result comes while the work after it is held");
+    assert_eq!(p.try_recv().map(|d| d.result.0), Some(7));
+    p.submit(2, 0, 1, Box::new(|| Carry(8, None)));
+    assert!(p.try_recv().is_none(), "the one worker is still on the work left after the first job");
+    release.send(()).unwrap();
+    assert_eq!(ran_after.recv_timeout(std::time::Duration::from_secs(60)), Ok(()), "the work after it runs");
+    assert!(p.wait(std::time::Duration::from_secs(60)));
+    assert_eq!(p.try_recv().map(|d| d.result.0), Some(8), "then the next job");
+}
+
 /// A pool with one worker that is inside a job until the returned sender is used or dropped.
 fn pool_with_a_running_job() -> (JobPool<u8, ()>, std::sync::mpsc::Sender<()>) {
     let mut p: JobPool<u8, ()> = JobPool::new(1);
@@ -757,6 +782,49 @@ fn a_slot_runs_one_job_at_a_time() {
     }));
     assert!(!done.contains(&2), "the replaced job never runs");
     assert_eq!(most.load(Ordering::SeqCst), 1, "slot 1 ran two jobs at once");
+}
+
+/// The loupe steps on while its render of the photo left is still decoding (a job that can't stop mid-way): let go of,
+/// that render keeps running but no longer holds the slot, so the new photo's render starts at once beside it, not
+/// after it; its result is dropped. Only `most` let go of run at once: past that, the next job waits as before.
+#[test]
+fn a_job_let_go_of_frees_its_slot_at_once_and_its_result_is_dropped() {
+    let mut p: JobPool<u8, u32> = JobPool::new(4);
+    let (started, has_started) = std::sync::mpsc::channel();
+    // a render longer than the step: it runs until the test lets it end
+    let long = |n: u32, wait: std::sync::mpsc::Receiver<()>| -> crate::pool::Job<u32> {
+        let started = started.clone();
+        Box::new(move || {
+            let _ = started.send(n);
+            let _ = wait.recv_timeout(std::time::Duration::from_secs(30));
+            n
+        })
+    };
+    let (end_1, wait_1) = std::sync::mpsc::channel::<()>();
+    p.submit(1, 1, 9, long(1, wait_1));
+    assert_eq!(has_started.recv_timeout(std::time::Duration::from_secs(10)), Ok(1));
+    // a step: the job of the photo left is let go of, the new photo's starts while it still runs
+    assert!(p.release_running(1, 1));
+    let (end_2, wait_2) = std::sync::mpsc::channel::<()>();
+    p.submit(1, 2, 9, long(2, wait_2));
+    assert_eq!(has_started.recv_timeout(std::time::Duration::from_secs(10)), Ok(2), "the new job started at once");
+    assert_eq!(p.released_running(), 1);
+    // another step: one let go of is already running, so this one keeps its slot and the next job waits
+    assert!(!p.release_running(1, 1));
+    p.submit(1, 3, 9, Box::new(|| 3));
+    std::thread::sleep(std::time::Duration::from_millis(50));
+    assert!(p.is_queued(1), "past the cap, the next job waits for the slot");
+    drop(end_1);
+    drop(end_2);
+    let mut done = Vec::new();
+    assert!(eventually(10, || {
+        done.extend(std::iter::from_fn(|| p.try_recv()).map(|d| d.result));
+        done.contains(&3)
+    }));
+    assert!(eventually(10, || p.released_running() == 0));
+    done.extend(std::iter::from_fn(|| p.try_recv()).map(|d| d.result));
+    assert!(!done.contains(&1), "the result of the job let go of is dropped: {done:?}");
+    assert!(done.contains(&2));
 }
 
 /// A job that panics still frees its slot: the slot's next job runs, and no worker is lost.

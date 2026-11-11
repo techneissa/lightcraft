@@ -16,6 +16,7 @@
 extern crate lightcraft_denoise_core as lightcraft_denoise;
 
 pub mod activity;
+pub mod adaptive;
 pub mod animated_gif;
 #[cfg(not(target_arch = "wasm32"))]
 pub mod apple_photos;
@@ -429,6 +430,8 @@ pub struct Session {
     pub hair_edges: hair_edges::HairEdges,
     /// Each photo's people for Select People masks (`fork/select-people.md`).
     pub select_people: select_people::SelectPeople,
+    /// AI mask parts being found again on the photos a preset, paste or sync reached (`fork/adaptive-masks.md`).
+    pub adaptive: adaptive::Adaptive,
     /// The persistent library this session writes to (`None` = in-memory only).
     pub library: Option<library::Library>,
     /// Identity of current library opening; refreshed only after a successful open.
@@ -669,6 +672,7 @@ impl Session {
             parsing: people_parsing::PeopleParsing::new(activity.clone()).with_hair_edges(hair_edges.clone()),
             hair_edges,
             select_people: Default::default(),
+            adaptive: Default::default(),
             library: None,
             library_identity: Arc::new(()),
             xmp: sidecar::XmpPrefs::default(),
@@ -776,6 +780,10 @@ impl Session {
             if clear_ai {
                 self.segmenter.cancel_all();
             }
+            // AI mask parts that came from another photo, or wait on the photo just opened, are found on it
+            // (fork, `fork/adaptive-masks.md`)
+            let opened = self.active().filter(|_| self.active() != was_active);
+            self.adaptive_after(log_start, opened);
         }
         if self.depth == 0 && was_active.is_some() && self.active() != was_active {
             self.previous_active = was_active;
@@ -1296,8 +1304,8 @@ impl Session {
             if wb_changed {
                 sync_same::synced_wb(&ainfo, &old, new, &self.source_info(x), &d, own_auto.get(&x).copied(), &mut synced);
             }
-            // (fork, `fork/select-people.md`: a Select People part is drawn from this photo's own people)
-            let synced = self.people_rebased(x, &d, synced);
+            // (fork, `fork/adaptive-masks.md`: an AI part is found on this photo, after the command)
+            let synced = self.adapted(&d, synced);
             let synced = self.fit_constrained_crop(x, synced);
             if synced != *d {
                 ops.extend(self.develop_op(x, synced, label));

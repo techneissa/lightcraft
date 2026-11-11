@@ -17,10 +17,12 @@ use crate::{Error, Result};
 /// The classes, in the model's order.
 pub const CLASSES: usize = 29;
 pub const PATCH: usize = 16;
+/// The class token and the storage tokens before the patches (the 0.4B checkpoint has 8 storage tokens).
+pub const PREFIX: usize = 9;
 /// The input the model was trained on (height × width).
 pub const TRAIN_H: usize = 1024;
 pub const TRAIN_W: usize = 768;
-const HEAD_DIM: usize = 64;
+pub const HEAD_DIM: usize = 64;
 const EPS: f32 = 1e-6;
 /// PyTorch's `InstanceNorm2d` epsilon.
 const IN_EPS: f64 = 1e-5;
@@ -75,7 +77,7 @@ fn bf16(x: f32) -> f32 {
 /// The rotary table for an `h × w` patch grid: `(sin, cos)`, each `h·w × head_dim`. Coordinates are the patch centres
 /// in −1 to 1 along each axis ("separate"); each of the `head_dim / 4` periods turns the y coordinate in the first
 /// quarter and the x coordinate in the second, and the half repeats. Rounded to bf16 at each step, as trained.
-fn rope_table(periods: &[f32], h: usize, w: usize) -> (Vec<f32>, Vec<f32>) {
+pub(crate) fn rope_table(periods: &[f32], h: usize, w: usize) -> (Vec<f32>, Vec<f32>) {
     let q = periods.len();
     let d = q * 4;
     let (mut sin, mut cos) = (vec![0.0f32; h * w * d], vec![0.0f32; h * w * d]);
@@ -263,10 +265,7 @@ impl Sapiens2 {
         };
         let cls = bb.tensor("cls_token", &[1, 1, c])?;
         let regs = bb.tensor("storage_tokens", &[1, storage, c])?;
-        let periods = bb.tensor("rope_embed.periods", &[HEAD_DIM / 4])?.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
-        if periods.iter().any(|p| !p.is_finite() || *p <= 0.0) {
-            return Err(Error::Model("Sapiens2: bad rotary periods".into()));
-        }
+        let periods = periods(p)?;
         let blocks = (0..depth).map(|i| Block::load(&bb.pp(&format!("blocks.{i}")), c, hidden)).collect::<Result<Vec<_>>>()?;
         let head = p.pp("decode_head");
         let mut deconvs = Vec::new();
@@ -338,6 +337,15 @@ impl Sapiens2 {
         }
         Ok(self.seg.forward(&y)?)
     }
+}
+
+/// The rotary table's periods of a Sapiens2 checkpoint (`p`: its root).
+pub(crate) fn periods(p: &Params) -> Result<Vec<f32>> {
+    let periods = p.pp("backbone").tensor("rope_embed.periods", &[HEAD_DIM / 4])?.to_device(&Device::Cpu)?.to_vec1::<f32>()?;
+    if periods.iter().any(|p| !p.is_finite() || *p <= 0.0) {
+        return Err(Error::Model("Sapiens2: bad rotary periods".into()));
+    }
+    Ok(periods)
 }
 
 /// A transposed convolution with a 4 × 4 kernel, stride 2 and padding 1 (`k`: out, kh, kw, in, as MLX stores it) as

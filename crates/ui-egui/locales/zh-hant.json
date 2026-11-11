@@ -2600,5 +2600,7 @@
   "Reading depth map": "正在讀取深度圖",
   "Preparing the full-size view": "正在準備全尺寸檢視",
   "Reading the full-size photo": "正在讀取全尺寸照片",
-  "Preparing photos in the background": "正在背景準備照片"
+  "Preparing photos in the background": "正在背景準備照片",
+  "Finding AI masks": "正在尋找 AI 遮色片",
+  "Update AI Masks": "更新 AI 遮色片"
 }

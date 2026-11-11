@@ -1,0 +1,2 @@
+cargo test -p lightcraft-develop --lib adaptive
+cargo test -p lightcraft-engine --lib -- adaptive select_people::tests_round

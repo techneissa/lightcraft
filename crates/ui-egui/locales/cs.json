@@ -2646,5 +2646,7 @@
   "Reading depth map": "Čtení hloubkové mapy",
   "Preparing the full-size view": "Připravuje se zobrazení v plné velikosti",
   "Reading the full-size photo": "Načítání fotky v plné velikosti",
-  "Preparing photos in the background": "Příprava fotografií na pozadí"
+  "Preparing photos in the background": "Příprava fotografií na pozadí",
+  "Finding AI masks": "Hledání masek AI",
+  "Update AI Masks": "Aktualizovat masky AI"
 }
