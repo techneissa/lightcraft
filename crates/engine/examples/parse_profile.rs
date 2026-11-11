@@ -29,9 +29,17 @@ struct Clock {
 
 static CLOCK: Mutex<Option<Clock>> = Mutex::new(None);
 
+/// Process CPU time in ms (all threads); 0 where the platform has no such clock (Windows).
 fn cpu_ms() -> f64 {
-    let t = rustix::time::clock_gettime(rustix::time::ClockId::ProcessCPUTime);
-    t.tv_sec as f64 * 1e3 + t.tv_nsec as f64 / 1e6
+    #[cfg(unix)]
+    {
+        let t = rustix::time::clock_gettime(rustix::time::ClockId::ProcessCPUTime);
+        t.tv_sec as f64 * 1e3 + t.tv_nsec as f64 / 1e6
+    }
+    #[cfg(not(unix))]
+    {
+        0.0
+    }
 }
 
 fn mark(stage: &'static str) {
