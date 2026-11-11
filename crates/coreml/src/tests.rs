@@ -1,6 +1,6 @@
 use crate::cache::{key_path, package_key};
-use crate::layout::{Elem, check_shape, contiguous, f16_to_f32, gather, replace_dir};
-use crate::{ComputeUnits, Error, Model, compile, load_package};
+use crate::layout::{Elem, check_io, check_shape, contiguous, f16_to_f32, gather, replace_dir};
+use crate::{ComputeUnits, Error, Model, Tensor, compile, load_package};
 
 fn scratch(name: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("lightcraft-coreml-{name}-{}", std::process::id()));
@@ -19,6 +19,26 @@ fn shapes_are_checked_before_any_call() {
     assert!(matches!(check_shape(&[usize::MAX, 2], 0), Err(Error::Input(_))));
     assert!(matches!(check_shape(&[crate::MAX_ELEMENTS + 1], crate::MAX_ELEMENTS + 1), Err(Error::Input(_))));
     assert_eq!(contiguous(&[2, 3, 4]), vec![12, 4, 1]);
+}
+
+/// A call with several tensors is checked before Core ML sees it: each input of the model given once with a shape that
+/// fits, each output known and asked for once.
+#[test]
+fn several_tensors_are_checked_before_any_call() {
+    let have_in: Vec<String> = ["image", "labels"].map(String::from).to_vec();
+    let have_out: Vec<String> = ["masks", "iou"].map(String::from).to_vec();
+    let (image, labels) = ([0f32; 6], [1i32, -1]);
+    let ok = [Tensor::f32("image", &[1, 2, 3], &image), Tensor::i32("labels", &[1, 2], &labels)];
+    assert_eq!(check_io(&have_in, &have_out, &ok, &["iou", "masks"]), Ok(()));
+    let input_err = |inputs: &[Tensor<'_>]| matches!(check_io(&have_in, &have_out, inputs, &["masks"]), Err(Error::Input(_)));
+    assert!(input_err(&ok[..1]), "a model input left out");
+    assert!(input_err(&[ok[0], ok[1], ok[1]]), "an input given twice");
+    assert!(input_err(&[ok[0], Tensor::i32("labels", &[1, 3], &labels)]), "a shape that doesn't fit its numbers");
+    assert!(input_err(&[ok[0], ok[1], Tensor::f32("other", &[1], &[0.0])]), "a name the model lacks");
+    assert!(input_err(&[]));
+    let output_err = |outputs: &[&str]| matches!(check_io(&have_in, &have_out, &ok, outputs), Err(Error::Output(_)));
+    assert!(output_err(&["masks", "score"]) && output_err(&["iou", "iou"]));
+    assert!(matches!(check_io(&have_in, &have_out, &ok, &[]), Err(Error::Input(_))));
 }
 
 #[test]

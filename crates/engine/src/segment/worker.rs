@@ -30,6 +30,7 @@ use lightcraft_segment::{
 };
 
 mod birefnet;
+mod warm;
 
 use super::{Input, Prompt, Tag};
 use crate::media::RenderJob;
@@ -105,6 +106,11 @@ pub struct Job {
     pub plain: Option<RenderJob>,
     /// The finer grids over the selection's edge the job made (fork, issue #240), sent with its result.
     pub detail: Vec<SegMask>,
+    /// The engine SAM 3 runs on (issue #268): Core ML when its conversion is installed, else candle. A change loads
+    /// the model again.
+    pub runtime: lightcraft_coreml::Runtime,
+    /// Where Core ML's warm-up after a load shows (issue #268).
+    pub activity: Option<crate::activity::Activity>,
 }
 
 /// A finished request: the segmentation (`None`: nothing selected / nothing to report).
@@ -202,6 +208,10 @@ pub struct Shared {
     pub encoding: AtomicBool,
     /// The engine the loaded BiRefNet runs on (`coreml` or `candle`; issue #264).
     pub birefnet_backend: std::sync::Mutex<Option<&'static str>>,
+    /// The engine SAM 3 ran its last job on (`coreml` or `candle`; issue #268).
+    pub sam3_backend: std::sync::Mutex<Option<&'static str>>,
+    /// Core ML's warm-up while the worker is idle (issue #268): [`Worker::submit`] pauses it.
+    pub warm: warm::Flags,
 }
 
 /// Decrements a counter when dropped (also when unwinding).
@@ -272,6 +282,11 @@ impl Worker {
         *self.shared.birefnet_backend.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// The engine SAM 3 ran on last (`coreml` or `candle`); `None` before its first run.
+    pub fn sam3_backend(&self) -> Option<&'static str> {
+        *self.shared.sam3_backend.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Queue `job`; returns at once.
     pub fn submit(&mut self, job: Job) -> Result<(), String> {
         if self.dead() {
@@ -283,7 +298,11 @@ impl Worker {
         self.counter(&job).fetch_add(1, Ordering::SeqCst);
         let job = match &self.tx {
             Some(tx) => match tx.send(job) {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    // (after counting the request: the worker reads the count after lowering the flag)
+                    self.shared.warm.pause();
+                    return Ok(());
+                }
                 Err(mpsc::SendError(job)) => job,
             },
             None => job,
@@ -295,7 +314,9 @@ impl Worker {
             Ok(t) => {
                 self.thread = Some(t);
                 self.tx = Some(tx.clone());
-                tx.send(job).map_err(|_| "the AI mask worker stopped".to_string())
+                let sent = tx.send(job).map_err(|_| "the AI mask worker stopped".to_string());
+                self.shared.warm.pause();
+                sent
             }
             Err(e) => {
                 let _ = self.counter(&job).try_update(Ordering::SeqCst, Ordering::SeqCst, |n| Some(n.saturating_sub(1)));
@@ -308,7 +329,9 @@ impl Worker {
 /// The model and the last encoded photo.
 #[derive(Default)]
 struct State {
-    model: Option<(PathBuf, Sam3)>,
+    model: Option<(PathBuf, lightcraft_coreml::Runtime, Sam3)>,
+    /// Core ML's warm-up of the loaded model, and where its row shows (issue #268).
+    warm: Option<(Arc<dyn warm::Steps>, Option<crate::activity::Activity>)>,
     birefnet: Option<(PathBuf, lightcraft_coreml::Runtime, lightcraft_birefnet::BiRefNet)>,
     cache: Option<(u64, Encoded)>,
     remote: Option<(String, remote::Client)>,
@@ -331,15 +354,38 @@ fn supersedes(later: &Job, job: &Job) -> bool {
     }
 }
 
+/// How often an idle worker looks whether Core ML's warm-up can go on (one ran meanwhile, or a user's run held a part).
+const WARM_RETRY: Duration = Duration::from_millis(250);
+
+/// Resume Core ML's warm-up of the loaded model when no request waits ([`warm::Flags::resume`]).
+fn warm_if_idle(state: &mut State, shared: &Shared) {
+    if shared.warm.take_given_up() {
+        state.warm = None;
+    }
+    if let Some((steps, activity)) = &state.warm {
+        let busy = || shared.pending.load(Ordering::SeqCst) + shared.detail.load(Ordering::SeqCst) > 0;
+        shared.warm.resume(steps, activity.as_ref(), busy);
+    }
+}
+
 fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement: Placement) {
     let mut state = State::default();
     let mut queue: VecDeque<Job> = VecDeque::new();
+    let mut last = web_time::Instant::now();
     loop {
         if queue.is_empty() {
-            match rx.recv_timeout(idle) {
+            let left = idle.saturating_sub(last.elapsed());
+            let warming = state.warm.as_ref().is_some_and(|(s, _)| !s.done());
+            match rx.recv_timeout(if warming { left.min(WARM_RETRY) } else { left }) {
                 Ok(j) => queue.push_back(j),
+                Err(RecvTimeoutError::Timeout) if last.elapsed() < idle => {
+                    warm_if_idle(&mut state, shared);
+                    continue;
+                }
                 Err(RecvTimeoutError::Timeout) => {
+                    last = web_time::Instant::now();
                     if state.loaded() {
+                        shared.warm.pause();
                         state = State::default();
                         shared.loaded.store(false, Ordering::SeqCst);
                         log::info!("SAM 3 unloaded after {} minutes without use", idle.as_secs() / 60);
@@ -408,10 +454,21 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
         if result.is_err() && !is_detail {
             state.cache = None;
         }
+        if let Some((_, _, m)) = &state.model {
+            // (Core ML hands the model to candle when it fails on Automatic)
+            *shared.sam3_backend.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(m.backend());
+        }
         shared.loaded.store(state.loaded(), Ordering::SeqCst);
         drop(done);
         let detail = if result.as_ref().is_ok_and(Option::is_some) { std::mem::take(&mut job.detail) } else { Vec::new() };
         let _ = job.reply.send(Outcome { id: job.id, tag: job.tag, result, superseded: false, notice, detail });
+        last = web_time::Instant::now();
+        while let Ok(j) = rx.try_recv() {
+            queue.push_back(j);
+        }
+        if queue.is_empty() {
+            warm_if_idle(&mut state, shared);
+        }
     }
 }
 
@@ -430,22 +487,27 @@ fn attempt(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
     }
 }
 
-/// The model for `dir`, loading it on `placement` when needed.
-fn model<'a>(state: &'a mut State, shared: &Shared, dir: &std::path::Path, placement: Placement) -> Result<&'a mut Sam3, Failure> {
-    if state.model.as_ref().is_none_or(|(d, _)| d != dir) {
+/// The model for the job's folder and runtime, loading it on `placement` (candle's device) when needed.
+fn model<'a>(state: &'a mut State, shared: &Shared, job: &Job, placement: Placement) -> Result<&'a mut Sam3, Failure> {
+    let (dir, runtime) = (job.dir.as_path(), job.runtime);
+    if state.model.as_ref().is_none_or(|(d, r, _)| d != dir || *r != runtime) {
         state.model = None;
         state.cache = None;
+        // (a running warm-up of the model before was paused by this job's `submit`)
+        state.warm = None;
         let _busy = Flag::raise(&shared.encoding);
         let t = web_time::Instant::now();
-        let m = match placement {
-            Placement::Gpu => Sam3::load(dir)?,
-            Placement::Cpu => Sam3::load_cpu(dir)?,
+        let device = match placement {
+            Placement::Gpu => lightcraft_segment::best_device(),
+            Placement::Cpu => lightcraft_segment::Device::Cpu,
         };
-        log::info!("SAM 3 loaded in {:?} ({})", t.elapsed(), if m.device().is_cpu() { "CPU" } else { "GPU" });
-        state.model = Some((dir.to_path_buf(), m));
+        let m = Sam3::load_with(dir, device, runtime)?;
+        log::info!("SAM 3 loaded in {:?} ({}, candle on the {})", t.elapsed(), m.backend(), if m.device().is_cpu() { "CPU" } else { "GPU" });
+        state.warm = m.warm_up().map(|w| (Arc::new(w) as Arc<dyn warm::Steps>, job.activity.clone()));
+        state.model = Some((dir.to_path_buf(), runtime, m));
         shared.loaded.store(true, Ordering::SeqCst);
     }
-    state.model.as_mut().map(|(_, m)| m).ok_or_else(|| "the model did not load".into())
+    state.model.as_mut().map(|(_, _, m)| m).ok_or_else(|| "the model did not load".into())
 }
 
 /// Render the model input.
@@ -471,7 +533,7 @@ fn encoded<'a>(state: &'a mut State, shared: &Shared, job: &mut Job, placement: 
     if job.cancel.load(Ordering::Relaxed) {
         return Err(Failure::Cancelled);
     }
-    model(state, shared, &job.dir, placement)?;
+    model(state, shared, job, placement)?;
     if job.cancel.load(Ordering::Relaxed) {
         return Err(Failure::Cancelled);
     }
@@ -482,7 +544,7 @@ fn encoded<'a>(state: &'a mut State, shared: &Shared, job: &mut Job, placement: 
             return Err(Failure::Cancelled);
         }
         let _busy = Flag::raise(&shared.encoding);
-        let m = state.model.as_mut().map(|(_, m)| m).ok_or("the model did not load")?;
+        let m = state.model.as_mut().map(|(_, _, m)| m).ok_or("the model did not load")?;
         m.set_cancel(Some(job.cancel.clone()));
         let t = web_time::Instant::now();
         let mut enc = m.encode(&input.rgb, input.w, input.h)?;
@@ -492,7 +554,7 @@ fn encoded<'a>(state: &'a mut State, shared: &Shared, job: &mut Job, placement: 
     }
     let State { model, cache, .. } = state;
     match (model.as_mut(), cache.as_mut()) {
-        (Some((_, m)), Some((_, e))) => {
+        (Some((_, _, m)), Some((_, e))) => {
             m.set_cancel(Some(job.cancel.clone()));
             Ok((m, e))
         }
@@ -609,7 +671,7 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
             if job.cancel.load(Ordering::Relaxed) {
                 return Err(Failure::Cancelled);
             }
-            let m = model(state, shared, &job.dir, placement)?;
+            let m = model(state, shared, job, placement)?;
             m.set_cancel(Some(job.cancel.clone()));
             let t = web_time::Instant::now();
             let mut enc = m.encode(&input.rgb, input.w, input.h)?;
@@ -643,6 +705,87 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
 mod tests {
     use super::*;
 
+    /// Wait (with a generous guard against a hang only) until `done`.
+    fn wait_until(what: &str, done: impl Fn() -> bool) {
+        let started = std::time::Instant::now();
+        while !done() {
+            assert!(started.elapsed() < Duration::from_secs(600), "{what} never happened");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    /// Core ML's warm-up after a load shows in the top bar's ring (a row marked background, as the app starts it)
+    /// until it ends, and plans every part (issue #268). Needs SAM 3 and its compiled Core ML copy in the shared
+    /// models folder (the app makes it at its first load, so nothing is compiled or written here); skipped without.
+    #[test]
+    fn core_mls_warm_up_shows_in_the_ring_until_it_ends() {
+        use lightcraft_segment::coreml;
+        let dir = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/ArtCraft/models/sam3"));
+        let compiled = |d: &PathBuf| coreml::folder(d).is_some_and(|f| coreml::Part::ALL.iter().all(|p| coreml::paths(&f, *p).1.is_dir()));
+        let Some(dir) = dir.filter(|d| lightcraft_coreml::available() && lightcraft_segment::is_model_dir(d) && compiled(d)) else {
+            lightcraft_testkit::skip!(Model, "SAM 3 and its compiled Core ML copy are not in the shared models folder");
+            return;
+        };
+        let m = Sam3::load_with(&dir, lightcraft_segment::Device::Cpu, lightcraft_coreml::Runtime::CoreMl).unwrap();
+        let steps: Arc<dyn warm::Steps> = Arc::new(m.warm_up().expect("Core ML warms up"));
+        let (flags, activity) = (warm::Flags::default(), crate::activity::Activity::default());
+        assert!(flags.resume(&steps, Some(&activity), || false));
+        let rows = activity.list();
+        let row = rows.iter().find(|t| t.kind == "sam3-warm-up").expect("the warm-up has a row");
+        assert!(row.background, "the app started it: the ring, not a stack row");
+        assert!(!flags.resume(&steps, Some(&activity), || false), "one warm-up at a time");
+        wait_until("the end of the warm-up", || !flags.running());
+        assert!(steps.done(), "every part planned");
+        assert!(activity.list().iter().all(|t| t.kind != "sam3-warm-up"));
+    }
+
+    /// Parts that each take as long as the test says.
+    struct Gated {
+        entered: mpsc::Sender<usize>,
+        release: std::sync::Mutex<mpsc::Receiver<()>>,
+        ran: AtomicUsize,
+    }
+
+    impl warm::Steps for Gated {
+        fn step(&self) -> Result<bool, String> {
+            let n = self.ran.fetch_add(1, Ordering::SeqCst) + 1;
+            let _ = self.entered.send(n);
+            // (a part after the first returns at once: the test has hung up)
+            let _ = self.release.lock().unwrap().recv_timeout(Duration::from_secs(600));
+            Ok(n < 5)
+        }
+
+        fn done(&self) -> bool {
+            self.ran.load(Ordering::SeqCst) >= 5
+        }
+    }
+
+    /// A request submitted while the warm-up plans a part is answered without waiting for it, and the warm-up stops
+    /// after that part instead of going on with the four left (issue #268); it won't start while a request waits.
+    #[test]
+    fn a_request_during_the_warm_up_is_not_held_behind_its_parts() {
+        let (entered_tx, entered) = mpsc::channel();
+        let (release, release_rx) = mpsc::channel();
+        let gated = Arc::new(Gated { entered: entered_tx, release: std::sync::Mutex::new(release_rx), ran: AtomicUsize::new(0) });
+        let steps: Arc<dyn warm::Steps> = gated.clone();
+        let mut worker = Worker::default();
+        let activity = crate::activity::Activity::default();
+        assert!(!worker.shared.warm.resume(&steps, Some(&activity), || true), "a request waits: no warm-up");
+        assert!(worker.shared.warm.resume(&steps, Some(&activity), || false));
+        assert_eq!(entered.recv_timeout(Duration::from_secs(600)).unwrap(), 1, "the first part is being planned");
+        // a request comes (it fails at once: no model files) and is answered while that part still runs
+        let (tx, rx) = mpsc::channel();
+        worker.submit(job(Tag::Wait, &tx)).unwrap();
+        let outcome = rx.recv_timeout(Duration::from_secs(600)).unwrap();
+        assert!(outcome.result.is_err());
+        assert!(worker.shared.warm.running(), "the part was still being planned");
+        release.send(()).unwrap();
+        drop(release);
+        wait_until("the warm-up stopping", || !worker.shared.warm.running());
+        assert_eq!(gated.ran.load(Ordering::SeqCst), 1, "no part after the request");
+        assert!(activity.list().iter().all(|t| t.kind != "sam3-warm-up"), "its row went");
+    }
+
     fn job(tag: Tag, reply: &mpsc::Sender<Outcome>) -> Job {
         // an empty folder: loading fails with an error (no model files)
         let dir = std::env::temp_dir().join(format!("lc-sam3-worker-none-{}", std::process::id()));
@@ -660,6 +803,8 @@ mod tests {
             refine: None,
             plain: None,
             detail: Vec::new(),
+            runtime: lightcraft_coreml::Runtime::Automatic,
+            activity: None,
         }
     }
 

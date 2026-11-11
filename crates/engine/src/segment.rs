@@ -370,6 +370,22 @@ impl Segmenter {
         false
     }
 
+    /// Whether SAM 3's Core ML version is beside its folder (`tools/convert-coreml-sam3.py`, issue #268).
+    pub fn sam3_coreml_installed(&self) -> bool {
+        #[cfg(feature = "sam")]
+        return self.dir.as_deref().is_some_and(lightcraft_segment::coreml::installed);
+        #[cfg(not(feature = "sam"))]
+        false
+    }
+
+    /// The engine SAM 3 ran on last (`coreml` or `candle`, issue #268); `None` before its first run.
+    pub fn sam3_backend(&self) -> Option<&'static str> {
+        #[cfg(feature = "sam")]
+        return self.worker.sam3_backend();
+        #[cfg(not(feature = "sam"))]
+        None
+    }
+
     /// The engine BiRefNet ran on last (`coreml` or `candle`, issue #264); `None` before its first run.
     pub fn birefnet_backend(&self) -> Option<&'static str> {
         #[cfg(feature = "sam")]
@@ -725,6 +741,8 @@ impl Session {
             tag,
             reply,
             remote,
+            runtime: self.model_runtimes.get(crate::model_runtime::SAM3),
+            activity: Some(self.activity.clone()),
         })
     }
 

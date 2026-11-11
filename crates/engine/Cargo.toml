@@ -92,6 +92,10 @@ name = "model_units"
 required-features = ["sam"]
 
 [[example]]
+name = "sam3_runtime_timing"
+required-features = ["sam"]
+
+[[example]]
 name = "hair_edges"
 required-features = ["sam"]
 

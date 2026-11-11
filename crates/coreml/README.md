@@ -7,7 +7,9 @@ The candle port of each model stays the reference and the fallback (`fork/coreml
 API: `available()`, `compile(package, dest)` (an `.mlpackage` to a compiled `.mlmodelc`), `load_package(package,
 compiled, units)` (compiles when the copy is missing or was made from another package, keyed by its `Manifest.json`
 in `<compiled>.key`, and again once when a cached copy fails to load),
-`Model::load(compiled, ComputeUnits)`, `Model::predict(input, shape, data, output)` on `f32` tensors. Every failure
+`Model::load(compiled, ComputeUnits)`, `Model::predict(input, shape, data, output)` on `f32` tensors, and
+`Model::predict_many(inputs, outputs)` for several named `f32` or `i32` tensors (`Tensor::f32`, `Tensor::i32`) and
+several outputs (at most 16 each; every input of the model given once, every output known and asked for once). Every failure
 is an `Error`, never a panic. `Model::load_function` and `load_package_function` load one function of a model with
 several (`MLModelConfiguration.functionName`, macOS 15 or later: `setFunctionName:` is checked with
 `respondsToSelector:` first, and its absence is a load error); the functions of one package share its weights.
@@ -18,7 +20,7 @@ Objective-C helper with `cc`, and LightCraft is pure Rust (CLAUDE.md). Core ML i
 - `available()` checks macOS 13 or later and, with `respondsToSelector:`, every selector used:
   `compileModelAtURL:error:`, `modelWithContentsOfURL:configuration:error:`, `predictionFromFeatures:error:`,
   `modelDescription`, `inputDescriptionsByName`, `outputDescriptionsByName`, `setComputeUnits:`,
-  `initWithShape:dataType:error:`, `getBytesWithHandler:`, `getMutableBytesWithHandler:`,
+  `initWithShape:dataType:error:` (Float32 or Int32 inputs), `getBytesWithHandler:`, `getMutableBytesWithHandler:`,
   `initWithDictionary:error:`, `featureValueWithMultiArray:`.
 - Every object a call may return as nil is received as an `Option` and checked; failures come back through an
   `NSError` out-parameter (`compileModelAtURL:error:`, `modelWithContentsOfURL:configuration:error:`,

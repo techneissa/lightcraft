@@ -5,3 +5,5 @@ cargo test -p lightcraft-parsing --lib -- coreml
 cargo test -p lightcraft-birefnet --lib -- run
 cargo test -p lightcraft-lama --lib -- coreml
 cargo test -p lightcraft-engine --lib -- lama_fill
+cargo test -p lightcraft-segment
+cargo test -p lightcraft-engine --features sam --lib -- segment::worker

@@ -5,7 +5,7 @@
 //! the Python/PyTorch SAM 3 code of Hugging Face Transformers (`models/sam3_tracker/modeling_sam3_tracker.py`), Copyright The HuggingFace
 //! Team and Meta Platforms, Inc.; translated to Rust on candle and restructured. See NOTICE.
 
-use candle_core::{DType, Device, IndexOp, Module, Tensor};
+use candle_core::{Device, IndexOp, Module, Tensor};
 use candle_nn::{Conv2d, Conv2dConfig, ConvTranspose2d, ConvTranspose2dConfig, LayerNorm, VarBuilder};
 
 use crate::nn::{Attention, FeedForward, TORCH_LN_EPS, ln, ln_channels};
@@ -40,6 +40,60 @@ pub struct Prediction {
     pub logits: Vec<f32>,
     pub iou: f32,
     pub object_score: f32,
+}
+
+/// The decoder's outputs for some clicks, on the CPU: four masks (`4 × 288²` logits, row-major), their predicted
+/// IoUs and the object score. candle's and Core ML's decoders give the same, and the mask is picked from them here.
+pub struct Heads {
+    pub masks: Vec<f32>,
+    pub iou: Vec<f32>,
+    pub object_score: f32,
+}
+
+impl Heads {
+    fn mask(&self, i: usize) -> Result<&[f32]> {
+        let n = LOW_RES * LOW_RES;
+        self.masks.get(i * n..(i + 1) * n).ok_or_else(|| crate::Error::Model(format!("the decoder gave no mask {i}")))
+    }
+
+    fn take(&self, i: usize) -> Result<Prediction> {
+        Ok(Prediction { logits: self.mask(i)?.to_vec(), iou: self.iou.get(i).copied().unwrap_or(0.0), object_score: self.object_score })
+    }
+
+    /// `multimask`: the best of the three alternatives by predicted IoU; else the single-mask output unless it is
+    /// unstable (its area changes over 2 % when the threshold moves ±0.05), then the best alternative.
+    pub fn pick(&self, multimask: bool) -> Result<Prediction> {
+        let best_multi =
+            (1..MASK_TOKENS).max_by(|a, b| self.iou.get(*a).partial_cmp(&self.iou.get(*b)).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(1);
+        if multimask {
+            return self.take(best_multi);
+        }
+        let single = self.mask(0)?;
+        let inter = single.iter().filter(|v| **v > 0.05).count();
+        let union = single.iter().filter(|v| **v > -0.05).count();
+        let stability = if union > 0 { inter as f32 / union as f32 } else { 1.0 };
+        if stability >= 0.98 { self.take(0) } else { self.take(best_multi) }
+    }
+
+    /// The alternative of the three that covers the whole object ([`crate::whole::whole_object`]).
+    pub fn whole(&self) -> Result<Prediction> {
+        let inside = |i: usize| -> Result<Vec<bool>> { Ok(self.mask(i)?.iter().map(|v| *v > 0.0).collect()) };
+        let insides: Vec<Vec<bool>> = (1..MASK_TOKENS).map(inside).collect::<Result<_>>()?;
+        let scores: Vec<(usize, f32)> =
+            insides.iter().enumerate().map(|(k, m)| (m.iter().filter(|v| **v).count(), self.iou.get(1 + k).copied().unwrap_or(0.0))).collect();
+        let best = crate::whole::best(&scores).unwrap_or(0);
+        let best_in = insides.get(best).ok_or_else(|| crate::Error::Model("the decoder gave no alternatives".into()))?;
+        let alts: Vec<crate::whole::Alternative> = insides
+            .iter()
+            .zip(&scores)
+            .map(|(m, (area, score))| crate::whole::Alternative {
+                area: *area,
+                score: *score,
+                holds: m.iter().zip(best_in).filter(|(a, b)| **a && **b).count(),
+            })
+            .collect();
+        self.take(1 + crate::whole::whole_object(&alts, best))
+    }
 }
 
 /// Random-Fourier positional encoding of points normalized to 0..1 (`Sam3TrackerPositionalEmbedding`).
@@ -211,39 +265,19 @@ impl Tracker {
     /// Predict masks for `clicks`. `multimask`: the three alternatives (best by predicted IoU is
     /// returned), else the single-mask output with SAM 2's stability fallback.
     pub fn predict(&self, f: &Features, clicks: &[Click], multimask: bool) -> Result<Prediction> {
-        let (masks, iou, object_score) = self.heads(f, clicks)?;
-        let pick = |i: usize| -> Result<Prediction> {
-            Ok(Prediction { logits: to_vec(&masks.i((0, i))?)?, iou: iou.get(i).copied().unwrap_or(0.0), object_score })
-        };
-        let best_multi = || (1..MASK_TOKENS).max_by(|a, b| iou.get(*a).partial_cmp(&iou.get(*b)).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(1);
-        if multimask {
-            return pick(best_multi());
-        }
-        // single-mask output unless it is unstable (area changes > 2 % when the threshold moves ±0.05)
-        let single = masks.i((0, 0))?;
-        let inter = single.gt(0.05)?.to_dtype(DType::F32)?.sum_all()?.to_scalar::<f32>()?;
-        let union = single.gt(-0.05)?.to_dtype(DType::F32)?.sum_all()?.to_scalar::<f32>()?;
-        let stability = if union > 0.0 { inter / union } else { 1.0 };
-        if stability >= 0.98 { pick(0) } else { pick(best_multi()) }
+        self.heads_on_cpu(f, clicks)?.pick(multimask)
     }
 
     /// The alternative of the three that covers the whole object (fork, `fork/object-remove.md`:
     /// [`crate::whole::whole_object`]), for a click that removes it.
     pub fn predict_whole(&self, f: &Features, clicks: &[Click]) -> Result<Prediction> {
+        self.heads_on_cpu(f, clicks)?.whole()
+    }
+
+    /// [`Tracker::heads`] read to the CPU.
+    fn heads_on_cpu(&self, f: &Features, clicks: &[Click]) -> Result<Heads> {
         let (masks, iou, object_score) = self.heads(f, clicks)?;
-        let inside = |i: usize| -> Result<Tensor> { Ok(masks.i((0, i))?.gt(0.0)?.to_dtype(DType::F32)?) };
-        let count = |t: &Tensor| -> Result<usize> { Ok(t.sum_all()?.to_scalar::<f32>()?.max(0.0) as usize) };
-        let scores: Vec<(usize, f32)> =
-            (1..MASK_TOKENS).map(|i| Ok((count(&inside(i)?)?, iou.get(i).copied().unwrap_or(0.0)))).collect::<Result<_>>()?;
-        let best = crate::whole::best(&scores).unwrap_or(0);
-        let best_in = inside(1 + best)?;
-        let mut alts = Vec::with_capacity(scores.len());
-        for (k, (area, score)) in scores.iter().enumerate() {
-            let holds = count(&(inside(1 + k)? * &best_in)?)?;
-            alts.push(crate::whole::Alternative { area: *area, score: *score, holds });
-        }
-        let i = 1 + crate::whole::whole_object(&alts, best);
-        Ok(Prediction { logits: to_vec(&masks.i((0, i))?)?, iou: iou.get(i).copied().unwrap_or(0.0), object_score })
+        Ok(Heads { masks: to_vec(&masks)?, iou, object_score })
     }
 
     /// The decoder's masks `[1, 4, side, side]`, their predicted IoUs and the object score for `clicks`.
