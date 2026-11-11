@@ -52,6 +52,8 @@ pub struct PreviewBuild {
     /// The loupe's canvas (px; 0: not known, or a size was asked for): a view the loupe made that covers it counts as
     /// built ([`already_built`]).
     pub loupe_box: (usize, usize),
+    /// The session's photo on screen being made: a background build waits while it is.
+    pub foreground: crate::prep::Foreground,
     /// Test-only: the gate this build's lanes wait at before a photo's first render (see
     /// [`test_gate`]). Captured by `build` on the calling thread; production builds never have one.
     #[cfg(test)]
@@ -440,7 +442,7 @@ fn run_all(jobs: Vec<PhotoJobs>, state: &PreviewBuild, task: Option<&TaskGuard>,
                 break;
             }
             // the background preparation waits while the photo on screen is being made
-            if state.background && crate::prep::wait_for_foreground(&state.cancel) {
+            if state.background && state.foreground.wait(&state.cancel) {
                 break;
             }
             let next = {
@@ -564,7 +566,8 @@ fn build(s: &mut Session, p: &Value) -> Result<Value> {
     // (standard previews at the loupe's size: its own renders of this screen are as good; an `edge` asked for is not)
     let loupe_box = if p.get("edge").is_none() && edge.is_some() { loupe_box(s) } else { (0, 0) };
     #[cfg_attr(not(test), allow(unused_mut))]
-    let mut build_state = PreviewBuild { total: jobs.len(), background, order, loupe_box, ..Default::default() };
+    let mut build_state =
+        PreviewBuild { total: jobs.len(), background, order, loupe_box, foreground: s.prep.foreground.clone(), ..Default::default() };
     #[cfg(test)]
     {
         build_state.gate = gate;

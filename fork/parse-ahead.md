@@ -26,7 +26,7 @@ branches merge).
   photo whose file or faces change is done again).
 - **Never in the way**: one photo at a time on one worker thread, so the GPU turn is given up between photos. Nothing
   new starts while a slider is dragged, for 1.5 s after the user last dragged, typed or scrolled (also in a window
-  without the keyboard), while the loupe waits for its render (`prep::foreground_busy`), while an export, print, book
+  without the keyboard), while the loupe waits for its render (the session's `prep.foreground`, `Foreground::busy`), while an export, print, book
   or slideshow output runs (an `export` row in the activity stack), or while another parse (a request) runs; a model
   run going then is stopped (unless a request waits for that very photo) and run again once the user lets go. The
   worker waits again before each step (the render, the face detection, the model run), since a render can't be

@@ -15,7 +15,7 @@
 //!
 //! The whole-view build is the preview build ([`crate::cmd::previews`]) in its background form: two
 //! lanes, waiting whenever the photo on screen or the photos the loupe prepares ahead are being made
-//! ([`foreground`]), nearest photos to the user first and re-aimed as they move
+//! ([`Foreground::signal`]), nearest photos to the user first and re-aimed as they move
 //! ([`crate::cmd::previews::PreviewBuild::focus_on`]) but past the loupe's own photos, which it builds
 //! last (#196: the two never decode one file at once), photos with previews skipped (the loupe's own
 //! renders of them too), one row in the activity stack that can be cancelled. It starts once the
@@ -210,6 +210,8 @@ pub const RETRY_AFTER: std::time::Duration = std::time::Duration::from_secs(30);
 /// The background preparation's state in a session.
 #[derive(Default)]
 pub struct PrepState {
+    /// The photo on screen being made: background work waits ([`Foreground`]).
+    pub foreground: Foreground,
     /// App-wide settings.
     pub app: PrepSettings,
     /// This library's own (`None`: it uses the app-wide ones).
@@ -244,9 +246,6 @@ impl PrepState {
     }
 }
 
-/// Until when (ms on [`clock_ms`]) the photo on screen is being made: background work waits.
-static FOREGROUND_UNTIL: AtomicU64 = AtomicU64::new(0);
-
 /// How long a foreground signal holds background work back (ms): a little more than a frame
 /// apart, so a frontend saying it every frame holds it back the whole time.
 const FOREGROUND_HOLD_MS: u64 = 250;
@@ -256,19 +255,42 @@ fn clock_ms() -> u64 {
     u64::try_from(START.get_or_init(web_time::Instant::now).elapsed().as_millis()).unwrap_or(u64::MAX)
 }
 
-/// The frontend says the photo on screen is being made (a render it waits for is on its way):
-/// background preparation waits until it has been quiet for a moment.
-pub fn foreground() {
-    FOREGROUND_UNTIL.store(clock_ms().saturating_add(FOREGROUND_HOLD_MS), Ordering::Relaxed);
+/// Whether the photo on screen is being made, in one session. The session owns it and hands a clone to
+/// the work that waits on it (the builds, the face check, the parse worker), so a second session in the
+/// same process (a test's) never holds this one's background work back.
+#[derive(Clone, Debug, Default)]
+pub struct Foreground {
+    /// Until when (ms on [`clock_ms`]) the photo on screen is being made: background work waits.
+    until: Arc<AtomicU64>,
 }
 
-/// Whether the photo on screen is being made now.
-pub fn foreground_busy() -> bool {
-    #[cfg(test)]
-    if TEST_HOLD.load(Ordering::Relaxed) > 0 {
-        return true;
+impl Foreground {
+    /// The frontend says the photo on screen is being made (a render it waits for is on its way):
+    /// background preparation waits until it has been quiet for a moment.
+    pub fn signal(&self) {
+        self.until.store(clock_ms().saturating_add(FOREGROUND_HOLD_MS), Ordering::Relaxed);
     }
-    clock_ms() < FOREGROUND_UNTIL.load(Ordering::Relaxed)
+
+    /// Whether the photo on screen is being made now.
+    pub fn busy(&self) -> bool {
+        #[cfg(test)]
+        if TEST_HOLD.load(Ordering::Relaxed) > 0 {
+            return true;
+        }
+        clock_ms() < self.until.load(Ordering::Relaxed)
+    }
+
+    /// Wait while the photo on screen is being made. `true`: `cancel` was set meanwhile.
+    pub fn wait(&self, cancel: &AtomicBool) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        while self.busy() {
+            if cancel.load(Ordering::Relaxed) {
+                return true;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(30));
+        }
+        cancel.load(Ordering::Relaxed)
+    }
 }
 
 /// Tests: hold every background build at its foreground wait until released (a synchronization
@@ -295,18 +317,6 @@ impl Drop for TestHold {
         // (one release per hold made: never below 0)
         TEST_HOLD.fetch_sub(1, Ordering::Relaxed);
     }
-}
-
-/// Wait while the photo on screen is being made. `true`: `cancel` was set meanwhile.
-pub fn wait_for_foreground(cancel: &AtomicBool) -> bool {
-    #[cfg(not(target_arch = "wasm32"))]
-    while foreground_busy() {
-        if cancel.load(Ordering::Relaxed) {
-            return true;
-        }
-        std::thread::sleep(std::time::Duration::from_millis(30));
-    }
-    cancel.load(Ordering::Relaxed)
 }
 
 /// Photos the background build renders side by side: each render spreads over the cores already,
@@ -522,20 +532,32 @@ mod tests {
         let a = TestHold::new();
         let b = TestHold::new();
         drop(a);
-        assert!(TEST_HOLD.load(Ordering::Relaxed) > 0 && foreground_busy(), "the other hold still holds");
+        assert!(TEST_HOLD.load(Ordering::Relaxed) > 0 && Foreground::default().busy(), "the other hold still holds");
         drop(b);
     }
 
     #[test]
     fn the_photo_on_screen_holds_background_work_back() {
         let cancel = AtomicBool::new(false);
-        foreground();
-        assert!(foreground_busy());
+        let fg = Foreground::default();
+        fg.signal();
+        assert!(fg.busy());
         let t = web_time::Instant::now();
-        assert!(!wait_for_foreground(&cancel));
+        assert!(!fg.wait(&cancel));
         assert!(t.elapsed().as_millis() >= 100, "waited for the foreground to go quiet");
         cancel.store(true, Ordering::Relaxed);
-        foreground();
-        assert!(wait_for_foreground(&cancel), "a cancel ends the wait");
+        fg.signal();
+        assert!(fg.wait(&cancel), "a cancel ends the wait");
+    }
+
+    /// Issue #262: a photo on screen in one session held back another session's background work (the
+    /// signal was one static for the process, and the UI tests' sessions all share a process).
+    #[test]
+    fn one_sessions_foreground_does_not_hold_back_another_session() {
+        let (a, b) = (Foreground::default(), Foreground::default());
+        a.signal();
+        assert!(a.busy());
+        assert!(!b.busy(), "the other session's work is not held back");
+        assert!(a.clone().busy(), "a clone given to a worker is the same session's signal");
     }
 }

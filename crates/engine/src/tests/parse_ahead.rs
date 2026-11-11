@@ -422,6 +422,33 @@ fn the_photo_on_screen_being_made_and_a_request_go_first() {
     assert_eq!(st["parsed"], 2, "{st}");
 }
 
+/// Issue #262: the photo on screen in another session of the process (the UI tests' sessions share one) holds
+/// this session's queue back for no reason.
+#[test]
+fn another_sessions_photo_on_screen_does_not_hold_this_sessions_queue_back() {
+    let (mut s, _dir, ids) = library("foreground-other", 2);
+    s.parsing.set_runner(Some(recording_runner(&Seen::default())));
+    edit_open(&mut s, ids[0]);
+    // (the other session's loupe says it every frame, the whole time this one's queue runs)
+    let other = Session::new().prep.foreground.clone();
+    other.signal();
+    assert!(other.busy());
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let keeps_signalling = {
+        let stop = stop.clone();
+        std::thread::spawn(move || {
+            while !stop.load(Ordering::SeqCst) {
+                other.signal();
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        })
+    };
+    let st = settle(&mut s, json!({"pace": "normal"}));
+    stop.store(true, Ordering::SeqCst);
+    keeps_signalling.join().unwrap();
+    assert_eq!(st["parsed"], 2, "{st}");
+}
+
 #[test]
 fn the_rows_cross_stops_the_run_and_empties_the_queue_until_another_photo_is_opened() {
     let (mut s, _dir, ids) = library("cancel", 3);
