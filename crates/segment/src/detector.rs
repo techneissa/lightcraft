@@ -284,12 +284,10 @@ impl Detector {
         let logits = (pq.matmul(&pt.unsqueeze(2)?)? / (HIDDEN as f64).sqrt())?.clamp(-12f32, 12f32)?;
         let logits_vec = to_vec(&logits)?;
         let presence_val = to_vec(&presence)?.first().copied().unwrap_or(-10.0);
-        if let Some(thresh) = threshold {
-            let s = |x: f32| 1.0 / (1.0 + (-x).exp());
-            let p = s(presence_val);
-            if !logits_vec.iter().any(|l| s(*l) * p > thresh) {
-                return Ok(None);
-            }
+        if let Some(thresh) = threshold
+            && !any_above(&logits_vec, presence_val, thresh)
+        {
+            return Ok(None);
         }
         check()?;
 
@@ -358,15 +356,36 @@ pub fn main_instances(areas: &[usize]) -> Vec<bool> {
     areas.iter().map(|a| *a as f32 >= largest as f32 * MAIN_AREA).collect()
 }
 
+/// Whether any query scores above `threshold` (sigmoid(logit) × sigmoid(presence)): when none does, the masks are not
+/// worth making.
+pub fn any_above(logits: &[f32], presence: f32, threshold: f32) -> bool {
+    let s = |x: f32| 1.0 / (1.0 + (-x).exp());
+    let p = s(presence);
+    logits.iter().any(|l| s(*l) * p > threshold)
+}
+
 /// The instances of `out` scoring above `threshold` (sigmoid(logit) × sigmoid(presence)),
 /// merged into one mask: each its share of the semantic mask ([`share`]), then the per-pixel
 /// maximum of their probabilities, as logits. With `main_only`, only the main subject's instances
 /// ([`main_instances`], by the area each one's own mask selects) take part.
 pub fn merge(out: &Output, threshold: f32, main_only: bool) -> Option<Prediction> {
+    merge_with(&out.logits, out.presence, &out.semantic, threshold, main_only, |i| out.masks.i(i).ok().and_then(|t| to_vec(&t).ok()))
+}
+
+/// [`merge`] on the scores, the semantic mask and the instance masks (`mask(i)`: query `i`'s logits) of either
+/// engine.
+pub fn merge_with(
+    logits: &[f32],
+    presence: f32,
+    semantic: &[f32],
+    threshold: f32,
+    main_only: bool,
+    mask: impl Fn(usize) -> Option<Vec<f32>>,
+) -> Option<Prediction> {
     let s = |x: f32| 1.0 / (1.0 + (-x).exp());
-    let presence = s(out.presence);
-    let keep: Vec<(usize, f32)> = out.logits.iter().enumerate().map(|(i, l)| (i, s(*l) * presence)).filter(|(_, p)| *p > threshold).collect();
-    let mut masks: Vec<Vec<f32>> = keep.iter().map(|(i, _)| out.masks.i(*i).ok().and_then(|t| to_vec(&t).ok())).collect::<Option<_>>()?;
+    let presence = s(presence);
+    let keep: Vec<(usize, f32)> = logits.iter().enumerate().map(|(i, l)| (i, s(*l) * presence)).filter(|(_, p)| *p > threshold).collect();
+    let mut masks: Vec<Vec<f32>> = keep.iter().map(|(i, _)| mask(*i)).collect::<Option<_>>()?;
     let keep: Vec<(usize, f32)> = if main_only {
         let areas: Vec<usize> = masks.iter().map(|m| m.iter().filter(|l| **l > 0.0).count()).collect();
         let main = main_instances(&areas);
@@ -376,7 +395,7 @@ pub fn merge(out: &Output, threshold: f32, main_only: bool) -> Option<Prediction
         keep
     };
     let best = keep.iter().map(|k| k.1).fold(0f32, f32::max);
-    share(&mut masks, &out.semantic);
+    share(&mut masks, semantic);
     let merged = masks.into_iter().reduce(|acc, m| acc.iter().zip(&m).map(|(a, b)| a.max(*b)).collect());
     merged.map(|logits| Prediction { logits, score: best })
 }

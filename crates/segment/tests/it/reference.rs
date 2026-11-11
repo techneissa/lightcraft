@@ -45,7 +45,7 @@ fn matches_reference() {
     eprintln!("device: {:?}", model.device());
     let t = std::time::Instant::now();
     let mut enc = model.encode_pixels(&r["pixel_values"]).unwrap();
-    let backbone = enc.backbone().permute((0, 2, 3, 1)).unwrap();
+    let backbone = enc.backbone().unwrap().permute((0, 2, 3, 1)).unwrap();
     assert!(rel_err("backbone", &vec(&backbone), &vec(&r["backbone"])) < 1e-3);
     eprintln!("backbone: {:?}", t.elapsed());
 

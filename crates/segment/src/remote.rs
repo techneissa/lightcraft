@@ -178,7 +178,19 @@ fn serve_client(stream: &mut TcpStream, dir: &Path, device: candle_core::Device)
         let started = std::time::Instant::now();
         let result = (|| {
             if model.is_none() {
-                model = Some(Sam3::load_on(dir, device.clone()).map_err(|e| e.to_string())?);
+                // Core ML when its conversion is beside the model folder (issue #268), else candle on Metal
+                let m = Sam3::load_with(dir, device.clone(), crate::Runtime::Automatic).map_err(|e| e.to_string())?;
+                eprintln!("SAM3 loaded on {}", m.backend());
+                if let Some(warm) = m.warm_up() {
+                    let _ = std::thread::Builder::new().name("sam3-warm-up".into()).spawn(move || {
+                        let t = std::time::Instant::now();
+                        match warm.run(&std::sync::atomic::AtomicBool::new(false)) {
+                            Ok(()) => eprintln!("SAM3 Core ML warmed up in {:.1}s", t.elapsed().as_secs_f64()),
+                            Err(e) => eprintln!("SAM3 Core ML warm-up failed: {e}"),
+                        }
+                    });
+                }
+                model = Some(m);
             }
             let m = model.as_mut().ok_or("SAM model unavailable")?;
             let mut temporary = None;

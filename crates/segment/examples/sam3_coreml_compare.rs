@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             model.prepare_clicks(&mut enc)?;
             lightcraft_segment::sync(&model)?;
             rec["prepare_clicks_ms"].as_array_mut().ok_or("a")?.push(ms(t).into());
-            let backbone: Vec<f32> = enc.backbone().flatten_all()?.to_vec1()?;
+            let backbone: Vec<f32> = enc.backbone().ok_or("candle encoded no backbone")?.flatten_all()?.to_vec1()?;
             write_f32(&od.join(format!("backbone-r{round}.f32")), &backbone)?;
             for (ci, c) in p["clicks"].as_array().ok_or("clicks")?.iter().enumerate() {
                 let click = Click { x: c[0].as_f64().ok_or("x")? as f32, y: c[1].as_f64().ok_or("y")? as f32, positive: true };
