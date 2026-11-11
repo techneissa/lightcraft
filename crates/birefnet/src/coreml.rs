@@ -81,6 +81,10 @@ impl CoreMlNet {
         if out.data.len() != side * side {
             return Err(Error::Output(format!("{} numbers, not {side}²", out.data.len())));
         }
+        // (fp16 can overflow on some photos: an output error, so Automatic hands the run to candle)
+        if let Some(i) = out.data.iter().position(|v| !v.is_finite()) {
+            return Err(Error::Output(format!("a number that is not finite at {i}")));
+        }
         Ok(out.data)
     }
 }
