@@ -25,6 +25,9 @@ pub type Job<R> = Box<dyn FnOnce() -> R + Send>;
 /// panic's message (see [`JobPool::submit_or`]).
 pub type Failure<R> = Box<dyn FnOnce(String) -> R + Send>;
 
+/// Work a job leaves for after its result is handed over ([`JobPool::submit_or_then`]).
+pub type Then = Box<dyn FnOnce() + Send>;
+
 /// What a worker calls when a job has finished (a frontend's "repaint now").
 pub type Waker = Arc<dyn Fn() + Send + Sync>;
 
@@ -35,6 +38,8 @@ struct Entry<S, R> {
     seq: u64,
     job: Job<R>,
     fail: Option<Failure<R>>,
+    /// Takes out of the result the work left for after it ([`JobPool::submit_or_then`]).
+    then_of: Option<fn(&mut R) -> Option<Then>>,
 }
 
 struct Shared<S, R> {
@@ -148,7 +153,8 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
                         let t0 = std::time::Instant::now();
                         // the slot is free again when the job ends, also if it panics
                         let _free = Free(&shared, e.slot);
-                        let Some(result) = run_guarded(e.job, e.fail) else { continue };
+                        let Some(mut result) = run_guarded(e.job, e.fail) else { continue };
+                        let then = e.then_of.and_then(|f| f(&mut result));
                         let done = Done { slot: e.slot, key: e.key, result, ms: t0.elapsed().as_secs_f64() * 1000.0 };
                         if tx.send(done).is_err() {
                             break;
@@ -158,6 +164,9 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
                         if let Some(wake) = waker {
                             wake();
                         }
+                        // what the job left for after its result, before this worker takes another job (its slot
+                        // stays busy); not once the pool is stopping
+                        run_then(then.filter(|_| !shared.shutdown.load(Ordering::Relaxed)));
                     }
                 });
                 match spawned {
@@ -205,17 +214,24 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
     /// panics, nothing is sent (see [`Self::submit_or`]): for a caller that waits for the result,
     /// use that instead.
     pub fn submit(&mut self, slot: S, key: u64, priority: u32, job: Job<R>) {
-        self.queue_job(slot, key, priority, job, None);
+        self.queue_job(slot, key, priority, job, None, None);
     }
 
     /// [`Self::submit`], and if `job` panics the slot still gets a result: `fail(message)` is sent
     /// under the same slot and key, so whoever waits for the job learns it failed instead of
     /// waiting for ever. The worker lives on and the slot is free for its next job.
     pub fn submit_or(&mut self, slot: S, key: u64, priority: u32, job: Job<R>, fail: Failure<R>) {
-        self.queue_job(slot, key, priority, job, Some(fail));
+        self.queue_job(slot, key, priority, job, Some(fail), None);
     }
 
-    fn queue_job(&mut self, slot: S, key: u64, priority: u32, job: Job<R>, fail: Option<Failure<R>>) {
+    /// [`Self::submit_or`] for a job that leaves work for after its result: `then_of` takes that work out of the
+    /// result, and the worker runs it once the result is handed over, before it takes another job (a grid thumbnail
+    /// shown at once, and the photo's view preview made from the same decode after it). A panic in it is logged.
+    pub fn submit_or_then(&mut self, slot: S, key: u64, priority: u32, job: Job<R>, fail: Failure<R>, then_of: fn(&mut R) -> Option<Then>) {
+        self.queue_job(slot, key, priority, job, Some(fail), Some(then_of));
+    }
+
+    fn queue_job(&mut self, slot: S, key: u64, priority: u32, job: Job<R>, fail: Option<Failure<R>>, then_of: Option<fn(&mut R) -> Option<Then>>) {
         if self.stopped {
             return; // nothing runs it any more
         }
@@ -224,7 +240,7 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
         let (lock, cv) = (&self.shared.queue, &self.shared.cv);
         let mut q = lock.lock().unwrap_or_else(|e| e.into_inner());
         q.retain(|e| e.slot != slot);
-        q.push(Entry { slot, key, priority, seq: self.seq, job, fail });
+        q.push(Entry { slot, key, priority, seq: self.seq, job, fail, then_of });
         cv.notify_one();
     }
 
@@ -275,8 +291,10 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
         while ran < n {
             let Some(e) = take(&self.shared, false) else { break };
             let _free = Free(&self.shared, e.slot);
-            if let Some(result) = run_guarded(e.job, e.fail) {
+            if let Some(mut result) = run_guarded(e.job, e.fail) {
+                let then = e.then_of.and_then(|f| f(&mut result));
                 let _ = self.tx.send(Done { slot: e.slot, key: e.key, result, ms: 0.0 });
+                run_then(then);
             }
             ran += 1;
         }
@@ -298,6 +316,15 @@ fn run_guarded<R>(job: Job<R>, fail: Option<Failure<R>>) -> Option<R> {
         log::error!("job pool: {message}");
     }
     catch_unwind(AssertUnwindSafe(move || fail.map(|f| f(message)))).unwrap_or(None)
+}
+
+/// Run the work a job left for after its result; a panic in it is logged (the result was handed over already).
+fn run_then(then: Option<Then>) {
+    if let Some(then) = then
+        && let Err(payload) = catch_unwind(AssertUnwindSafe(then))
+    {
+        log::error!("job pool: the work after a job panicked: {}", panic_message(payload.as_ref()));
+    }
 }
 
 /// The text of a panic payload (`panic!("…")` gives a `&str` or a `String`).

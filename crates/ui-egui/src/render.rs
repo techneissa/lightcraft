@@ -165,6 +165,9 @@ struct Finished {
     color: Option<Arc<egui::ColorImage>>,
     /// A [`Slot::Full`] job's picture, cut into textures.
     full: Option<crate::full_picture::Built>,
+    /// What the job left for after its result: a grid thumbnail's photo's view preview, made from the same decode
+    /// once the thumbnail is handed over ([`lightcraft_engine::media::RenderJob::run_then`]).
+    then: Option<lightcraft_preview::Then>,
 }
 
 /// Immutable identity captured when a request is submitted, not when its result is collected.
@@ -797,7 +800,7 @@ impl Renderer {
                 stamp()
             );
         }
-        Finished { look: None, result: r, color, full: None }
+        Finished { look: None, result: r, color, full: None, then: None }
     }
 
     /// A result without a picture, for a job that has no `RenderJob::failed` of its own.
@@ -822,7 +825,7 @@ impl Renderer {
     /// What the pool sends for a job that panicked (issue #227): `failed` with the panic's message, so the
     /// slot's `pending` entry clears like any failed render's.
     fn panicked(failed: RenderResult) -> lightcraft_preview::Failure<Finished> {
-        Box::new(move |e| Finished { look: None, result: RenderResult { rendered: Err(e), ..failed }, color: None, full: None })
+        Box::new(move |e| Finished { look: None, result: RenderResult { rendered: Err(e), ..failed }, color: None, full: None, then: None })
     }
 
     fn request_needed(&self, slot: Slot, key: u64, priority: u32) -> bool {
@@ -982,7 +985,7 @@ impl Renderer {
         if lightcraft_pipeline::profiling() && !background {
             eprintln!("  ui: {slot:?} submitted (at {:.1})", stamp());
         }
-        self.pool.submit_or(
+        self.pool.submit_or_then(
             slot,
             key,
             priority,
@@ -991,10 +994,21 @@ impl Renderer {
                     eprintln!("  worker: {slot:?} waited {:.1} ms in the queue (at {:.1})", ms(queued, clock()), stamp());
                 }
                 let look = Some((geometry_look(&job.settings), job.request.apply_crop));
-                let run = || if background { lightcraft_engine::memory::in_background(|| job.run()) } else { job.run() };
-                Finished { look, ..Self::run_for(run, &display) }
+                // (a grid thumbnail of a raw leaves its photo's view preview, made from the same decode, for after it
+                // is shown: the worker makes it before its next job)
+                let mut after = None;
+                let run = || {
+                    let (r, view) = if background { lightcraft_engine::memory::in_background(|| job.run_then()) } else { job.run_then() };
+                    after = view;
+                    r
+                };
+                let finished = Finished { look, ..Self::run_for(run, &display) };
+                let then =
+                    after.map(|view| -> lightcraft_preview::Then { Box::new(move || lightcraft_engine::memory::in_background(|| view.run())) });
+                Finished { then, ..finished }
             }),
             panicked,
+            |f| f.then.take(),
         );
     }
 
@@ -1021,7 +1035,7 @@ impl Renderer {
             priority,
             Box::new(move || {
                 let (result, full) = crate::full_picture::work(job, plan);
-                Finished { look: None, result, color: None, full }
+                Finished { look: None, result, color: None, full, then: None }
             }),
             panicked,
         );
@@ -1240,7 +1254,13 @@ impl Renderer {
             slot,
             key,
             priority,
-            Box::new(move || Finished { look: None, result: lightcraft_engine::memory::in_background(|| job.run()), color: None, full: None }),
+            Box::new(move || Finished {
+                look: None,
+                result: lightcraft_engine::memory::in_background(|| job.run()),
+                color: None,
+                full: None,
+                then: None,
+            }),
             panicked,
         );
     }
