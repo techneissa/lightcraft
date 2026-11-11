@@ -734,7 +734,7 @@ pub fn request_thumb(app: &mut LightcraftApp, id: PhotoId, size: usize, priority
     {
         return;
     }
-    let Some(job) = app.session.thumb_job(id, size) else { return };
+    let Some(job) = app.session.grid_thumb_job(id, size) else { return };
     #[cfg(test)]
     {
         app.renderer.thumb_jobs_built += 1;

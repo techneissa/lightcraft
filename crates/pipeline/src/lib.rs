@@ -1358,7 +1358,7 @@ fn overlay_alphas_all(o: Overlay, plan: &Plan<'_>, prep: &Prepared) -> Option<Ve
     }
     let ev = plan.settings.light.exposure as f32;
     let mut out = Vec::new();
-    for m in plan.settings.masks.iter().filter(|m| m.visible && !m.components.is_empty()) {
+    for m in plan.settings.masks.iter().filter(|m| m.renders()) {
         if let Some(e) = prep.masks.iter().find(|e| e.id == m.id) {
             out.push(e.plane());
         } else {

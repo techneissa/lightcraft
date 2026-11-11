@@ -29,7 +29,8 @@ Edit view uses it yet; the Select People masks and the Portrait features build o
   photo is rendered upright, uncropped, with default settings at 2048 px (the frame face regions use); faces come
   from YuNet when it is installed (Settings ▸ Faces), else from the body model. The result is cached on disk by the
   pixels and the set's version (`~/Library/Caches/LightCraft/people-parsing`, 512 MB, oldest first) and the newest
-  four in memory. One model run at a time (runs share one model on the GPU). A caller that needs the masks now (an export) waits for the run already going instead of starting a
+  four in memory. A new parse is used as its file holds it (masks at 8 bits), so a photo renders the same from a
+  parse made now as from its file read back later (issue #244). One model run at a time (runs share one model on the GPU). A caller that needs the masks now (an export) waits for the run already going instead of starting a
   second one (`PeopleParsing::parse(.., wait: true)`). The models stay loaded for a minute after their last use.
 - **Resolution independent**: masks are planes in fractions of the photo at the model's resolution (face crops at
   512², the body at 768 to 1536 px); `lightcraft_parsing::render` draws them at any size and snaps their edges to the

@@ -2445,5 +2445,7 @@
   "Reading depth map": "Lendo o mapa de profundidade",
   "Preparing the full-size view": "Preparando a visualização em tamanho real",
   "Reading the full-size photo": "Lendo a foto em tamanho real",
-  "Preparing photos in the background": "Preparando as fotos em segundo plano"
+  "Preparing photos in the background": "Preparando as fotos em segundo plano",
+  "Finding AI masks": "Procurando máscaras de IA",
+  "Update AI Masks": "Atualizar máscaras de IA"
 }

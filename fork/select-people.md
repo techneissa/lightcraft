@@ -55,12 +55,11 @@ List: Select People masks: Masking ▸ Person / Background / Custom and a picker
   centre within half the box, never as someone named otherwise. A face named or renamed in People since its people
   were found makes them be found again (the names are part of the key they are kept under). When the photo's people
   don't have the mask's face, the picker picks no chip and says "Face not in this photo".
-- **Another photo** (Paste Settings, Paste from Previous, Sync Settings, Auto Sync): each Select People part that
-  reaches a photo is drawn again from that photo's own people, its face found there by name or place (everyone's
-  stays everyone's). A part the photo already had (same mask, parts, face and rotation) keeps its own grids. People
-  not found yet on that photo are found first, waiting for the parse (from its cache when it ran before), so a
-  paste onto many new photos takes a parse per photo. When the face is not there, or its people can't be found, the
-  part selects nothing on that photo.
+- **Another photo** (Paste Settings, Paste from Previous, Sync Settings, Auto Sync, a preset): each Select People part
+  that reaches a photo is drawn again from that photo's own people, its face found there by name or place (everyone's
+  stays everyone's), in the background in the app (`fork/adaptive-masks.md`). A part the photo already had (same mask,
+  parts, face and rotation) keeps its own grids. When the face is not there, or its people can't be found, the part
+  selects nothing on that photo.
 - **People are found** once per photo off the main thread: the photo is rendered as the parse sees it and its
   faces found (a row "Finding people"), then the people parse runs with its own row or comes from its cache
   (`fork/people-parsing.md`). The search starts when the Masking panel opens on the photo (with Person or Background
@@ -89,7 +88,7 @@ Mac only, like every fork feature.
 
 ## Own files
 
-`crates/engine/src/select_people.rs`, `crates/engine/src/select_people/{grid,parts,rebase,tests,tests_round,tests_pick}.rs`,
+`crates/engine/src/select_people.rs`, `crates/engine/src/select_people/{grid,parts,tests,tests_round,tests_pick}.rs`,
 `crates/engine/src/cmd/select_people.rs`, `crates/ui-egui/src/panels/select_people.rs`,
 `crates/ui-egui/src/panels/select_people/{tests,tests_round,tests_per_part}.rs`, `crates/pipeline/src/masks/{people,tests_people}.rs`,
 `fork/select-people.md`, `fork/tests.d/select-people.txt`
@@ -105,9 +104,8 @@ Mac only, like every fork feature.
   mattes do not replace it), and its grids are filtered by `masks/people.rs`. `crates/pipeline/src/masks/key.rs`: its alpha key hashes the selection.
   `crates/pipeline/src/mask_space.rs`: Rotate Left / Right resamples it. `masks/tests.rs`, `masks/tests_cache.rs`:
   `MaskShape::people(..)`.
-- `crates/engine/src/lib.rs`: `pub mod select_people`, field `Session::select_people`; Auto Sync (`auto_sync_ops`,
-  now `&mut self`) draws Select People parts from each photo's people. `crates/engine/src/cmd/develop.rs`: Paste,
-  Paste from Previous and Sync go through `pasted`, which does the same. `crates/engine/src/cmd.rs`:
+- `crates/engine/src/lib.rs`: `pub mod select_people`, field `Session::select_people`. Paste, Sync, Auto Sync and
+  presets draw Select People parts from each photo's people through `fork/adaptive-masks.md` (`crate::adaptive`). `crates/engine/src/cmd.rs`:
   `mod select_people`, its specs.
 - `crates/ui-egui/src/panels.rs` (`pub mod select_people`), `crates/ui-egui/src/panels/masking.rs` (the mode row
   under Create New Mask, the tiles only under Custom, the Edge slider for a Select People part),

@@ -594,9 +594,18 @@ impl PeopleParsing {
                 }));
                 let result = match ran {
                     Ok(Ok(p)) => {
+                        // used as its file holds it, so a photo renders the same from this parse as from the file
+                        // read back later (issue #244)
+                        let (p, bytes) = match cache::settle(&p) {
+                            Ok(s) => (s.parsing, Some(s.bytes)),
+                            Err(e) => {
+                                log::warn!("people parsing: {e}");
+                                (p, None)
+                            }
+                        };
                         let p = Arc::new(p);
                         if let Some(dir) = this.cache_dir() {
-                            if let Err(e) = cache::store(&dir, &key, &p) {
+                            if let Some(Err(e)) = bytes.map(|b| cache::store_bytes(&dir, &key, &b)) {
                                 log::warn!("people parsing: {e}");
                             }
                             lightcraft_parsing::profile::mark("cache write");

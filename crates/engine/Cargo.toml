@@ -37,6 +37,8 @@ lightcraft-look = { workspace = true }
 lightcraft-geocode = { workspace = true }
 lightcraft-map = { workspace = true }
 lightcraft-slideshow = { workspace = true }
+# the content key of a raw's kept camera-look fit (files::look_cache, issue #220)
+crc32fast = { workspace = true }
 rayon = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }

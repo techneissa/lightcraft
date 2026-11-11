@@ -3782,5 +3782,7 @@
   "Reading depth map": "Lecture de la carte de profondeur",
   "Preparing the full-size view": "Préparation de la vue en taille réelle",
   "Reading the full-size photo": "Lecture de la photo en pleine taille",
-  "Preparing photos in the background": "Préparation des photos en arrière-plan"
+  "Preparing photos in the background": "Préparation des photos en arrière-plan",
+  "Finding AI masks": "Recherche des masques IA",
+  "Update AI Masks": "Mettre à jour les masques IA"
 }

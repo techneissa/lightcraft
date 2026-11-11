@@ -243,13 +243,32 @@ pub fn load(dir: &Path, key: &str) -> Result<Option<Parsing>> {
     decode(&bytes).map(Some)
 }
 
+/// A parse ready to file: its file's bytes and the parse they read back as.
+pub struct Settled {
+    pub bytes: Vec<u8>,
+    pub parsing: Parsing,
+}
+
+/// `p` as its file holds it (planes at 8 bits), with the file's bytes for [`store_bytes`]. A caller uses this parse
+/// rather than `p`, so a photo renders the same from a parse made now as from the file read back later (issue #244:
+/// the first render of a portrait differed from every later one).
+pub fn settle(p: &Parsing) -> Result<Settled> {
+    let bytes = encode(p)?;
+    let parsing = decode(&bytes)?;
+    Ok(Settled { bytes, parsing })
+}
+
 /// File a parse under `key` in `dir` (written to a temporary file first, then moved, so a reader never sees half).
 pub fn store(dir: &Path, key: &str, p: &Parsing) -> Result<()> {
+    store_bytes(dir, key, &encode(p)?)
+}
+
+/// [`store`] of a parse's bytes ([`settle`]).
+pub fn store_bytes(dir: &Path, key: &str, bytes: &[u8]) -> Result<()> {
     std::fs::create_dir_all(dir).map_err(|e| Error::Cache(format!("{}: {e}", dir.display())))?;
-    let bytes = encode(p)?;
     let dest = path(dir, key);
     let tmp = dir.join(format!(".{key}.{}.tmp", std::process::id()));
-    if let Err(e) = std::fs::write(&tmp, &bytes) {
+    if let Err(e) = std::fs::write(&tmp, bytes) {
         // a half-written file (a full disk) is not left behind
         let _ = std::fs::remove_file(&tmp);
         return Err(Error::Cache(format!("{}: {e}", tmp.display())));

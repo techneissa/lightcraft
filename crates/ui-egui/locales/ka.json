@@ -3860,5 +3860,7 @@
   "Reading depth map": "სიღრმის რუკის წაკითხვა",
   "Preparing the full-size view": "სრული ზომის ხედის მომზადება",
   "Reading the full-size photo": "სრული ზომის ფოტო იკითხება",
-  "Preparing photos in the background": "ფოტოები ფონურ რეჟიმში მზადდება"
+  "Preparing photos in the background": "ფოტოები ფონურ რეჟიმში მზადდება",
+  "Finding AI masks": "AI ნიღბების ძებნა",
+  "Update AI Masks": "AI ნიღბების განახლება"
 }
