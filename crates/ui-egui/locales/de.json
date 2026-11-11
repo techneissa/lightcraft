@@ -3681,5 +3681,7 @@
   "Reading depth map": "Tiefenkarte wird gelesen",
   "Preparing the full-size view": "Ansicht in voller Größe wird vorbereitet",
   "Reading the full-size photo": "Foto in voller Größe wird gelesen",
-  "Preparing photos in the background": "Fotos werden im Hintergrund vorbereitet"
+  "Preparing photos in the background": "Fotos werden im Hintergrund vorbereitet",
+  "Finding AI masks": "KI-Masken werden gesucht",
+  "Update AI Masks": "KI-Masken aktualisieren"
 }

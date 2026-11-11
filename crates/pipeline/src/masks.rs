@@ -177,7 +177,7 @@ fn smooth(e0: f32, e1: f32, x: f32) -> f32 {
 pub fn evaluate(masks: &[Mask], frame: &Frame, w: usize, h: usize, img: &Rgb32f, log_l: &Plane, ev: f32, mattes: Option<&Mattes>) -> Vec<Evaluated> {
     masks
         .iter()
-        .filter(|m| m.visible && !m.components.is_empty())
+        .filter(|m| m.renders())
         .map(|m| Evaluated {
             id: m.id,
             alpha: Arc::new(evaluate_alpha(m, frame, w, h, img, log_l, ev, mattes, None)),
@@ -206,7 +206,7 @@ pub fn evaluate_cached(
     let mut used = Vec::new();
     let out = masks
         .iter()
-        .filter(|m| m.visible && !m.components.is_empty())
+        .filter(|m| m.renders())
         .map(|m| {
             let key = alpha_key(m, keys, ev);
             let alpha = match old.iter().find(|(k, _)| *k == key) {

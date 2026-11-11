@@ -15,6 +15,7 @@
 //! commands return at once and [`Session::segment_poll`] applies the results; without it (CLI,
 //! MCP, tests) they wait for the worker.
 
+pub(crate) mod adaptive_jobs;
 pub mod birefnet;
 pub(crate) mod clicks_request;
 #[cfg(feature = "sam")]
@@ -872,6 +873,8 @@ impl Session {
         let mut polled = Polled { messages: std::mem::take(&mut self.segmenter.messages), ..Default::default() };
         // Object clicks of the Remove tool (fork, `fork/object-remove.md`)
         polled.changed |= self.poll_object_jobs(&mut polled.messages);
+        // AI mask parts found again on the photos a preset, paste or sync reached (fork, `fork/adaptive-masks.md`)
+        polled.changed |= self.adaptive_poll();
         #[cfg(feature = "sam")]
         {
             // (before draining: a worker that is idle now has sent everything)

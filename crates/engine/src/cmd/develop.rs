@@ -178,13 +178,13 @@ pub(crate) fn merge_settings_for_photo(
 }
 
 /// `v` as a list of numbers; `None` unless it is an array of nothing but numbers.
-/// The ops that merge `partial` into each of `ids`' settings (Paste, Paste from Previous, Sync), each Select People part
-/// drawn again from that photo's own people (fork, `fork/select-people.md`).
+/// The ops that merge `partial` into each of `ids`' settings (Paste, Paste from Previous, Sync), each AI mask part
+/// waiting to be found on that photo, unless it has the same part found already (fork, `fork/adaptive-masks.md`).
 fn pasted(s: &mut Session, ids: &[PhotoId], partial: &Value, label: &str) -> Vec<Op> {
     let mut ops = Vec::new();
     for &id in ids {
         let Some(d) = s.develop_of(id) else { continue };
-        let merged = s.people_rebased(id, &d, lightcraft_develop::apply_partial(&d, partial, 1.0));
+        let merged = s.adapted(&d, lightcraft_develop::apply_partial(&d, partial, 1.0));
         ops.extend(s.develop_op(id, merged, label));
     }
     ops

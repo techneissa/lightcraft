@@ -149,7 +149,7 @@ pub fn edits_apart(j: &LocalAdjustments) -> bool {
 /// Whether mask `m` is decontaminated in a render: visible, Decontaminate above 0, an Amount, and an edit the split
 /// changes ([`edits_apart`]). The GPU render falls back to the CPU for it; a windowed render reads around itself.
 pub fn applies(m: &Mask) -> bool {
-    m.visible && m.decontaminate.is_finite() && m.decontaminate > 0.0 && m.adjust.amount > 0.0 && edits_apart(&m.adjust)
+    m.visible && !m.is_waiting() && m.decontaminate.is_finite() && m.decontaminate > 0.0 && m.adjust.amount > 0.0 && edits_apart(&m.adjust)
 }
 
 /// How far (output pixels) a decontaminated edge reads around a pixel in a frame whose long side is `long_px`: the
