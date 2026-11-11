@@ -15,6 +15,10 @@ use super::{Finished, Renderer, Requested, Slot, geometry_look, render_subject};
 /// up (at the memory gate, on a slow drive) or far slower than a render of the loupe's own, which then starts.
 const ADOPT_LIMIT_SECS: f64 = 3.0;
 
+/// Loupe renders of photos left that may go on beside the photo on screen's ([`lightcraft_preview::JobPool::release_running`]):
+/// a decode can't stop half-way, so each one still costs a share of the cores. Past this, the next one keeps the slot.
+const STOPPED_RUNNING: usize = 1;
+
 /// The loupe renders still out that are remembered ([`Renderer::main_rendering`]): a step replaces the queued one, so
 /// a few running at once is the most there can be.
 const MAIN_OUT_KEPT: usize = 8;
@@ -182,6 +186,11 @@ impl Renderer {
         for out in self.main_out.iter().filter(|o| o.photo != job.photo) {
             out.stop.store(true, Ordering::Relaxed);
         }
+        // the one holding the loupe's slot (the newest still out) lets go of it, so this render starts at once instead
+        // of after its decode; its result is dropped. Not one of this photo (an edit's earlier render).
+        if self.main_out.last().is_some_and(|o| o.photo != job.photo) && self.pool.release_running(Slot::Main, STOPPED_RUNNING) {
+            self.main_out.pop();
+        }
         if self.main_out.len() >= MAIN_OUT_KEPT {
             self.main_out.remove(0);
         }
@@ -208,10 +217,10 @@ impl Renderer {
         }
     }
 
-    /// Whether a loupe render of `photo` is on the workers (also one the user stepped away from: it still finishes and
-    /// keeps its view). Not prefetched meanwhile: two renders of one look (#223). One out too long doesn't count.
+    /// Whether a loupe render of `photo` is on the workers, and will make its view. Not prefetched meanwhile: two
+    /// renders of one look (#223). One told to stop, or out too long, doesn't count.
     pub fn main_rendering(&self, photo: PhotoId) -> bool {
-        self.main_out.iter().any(|o| o.photo == photo && o.at.elapsed().as_secs_f64() < ADOPT_LIMIT_SECS)
+        self.main_out.iter().any(|o| o.photo == photo && !o.stop.load(Ordering::Relaxed) && o.at.elapsed().as_secs_f64() < ADOPT_LIMIT_SECS)
     }
 
     /// A prefetch finished in `ms` on its worker.
@@ -313,19 +322,19 @@ mod tests {
     }
 
     #[test]
-    fn a_loupe_render_stepped_away_from_still_counts_until_it_comes_back() {
+    fn a_loupe_render_counts_until_it_is_told_to_stop_or_dropped() {
         let (mut session, mut r) = fixture();
         r.request(Slot::Main, job(&mut session, 1), 100);
         assert!(r.main_rendering(PhotoId(1)));
-        // a step before it started: replaced
+        // an edit's render of the same photo: the earlier one goes on
+        start_queued(&r);
+        r.request(Slot::Main, job(&mut session, 1).draft(), 100);
+        assert!(r.main_rendering(PhotoId(1)));
+        // a step: photo 1's renders are told to stop, and make no view
         r.request(Slot::Main, job(&mut session, 2), 100);
         assert!(!r.main_rendering(PhotoId(1)) && r.main_rendering(PhotoId(2)));
-        // a step after it started: it finishes all the same
-        start_queued(&r);
-        r.request(Slot::Main, job(&mut session, 3), 100);
-        assert!(r.main_rendering(PhotoId(2)) && r.main_rendering(PhotoId(3)));
         assert!(r.drop_queued(Slot::Main));
-        assert!(r.main_rendering(PhotoId(2)) && !r.main_rendering(PhotoId(3)), "a dropped one never runs");
+        assert!(!r.main_rendering(PhotoId(2)), "a dropped one never runs");
     }
 
     #[test]

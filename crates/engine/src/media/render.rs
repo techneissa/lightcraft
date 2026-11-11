@@ -53,6 +53,16 @@ pub struct RenderJob {
     pub stop: Option<Arc<std::sync::atomic::AtomicBool>>,
 }
 
+/// Keep `img` as the view of `key` (a job of `generation`), unless the cache holds one of this look at least as big
+/// already: a smaller render that finishes later, such as a prefetch held at the memory gate behind the loupe's own,
+/// would replace the bigger view, and the next visit would render the photo again (#223).
+pub(crate) fn keep_view(cache: &Arc<PreviewCache>, generation: u64, key: Hash128, img: Arc<Rgba8>) {
+    if cache.dims(key).is_some_and(|(w, h)| w >= img.width && h >= img.height) {
+        return;
+    }
+    cache.put_deferred_at(generation, key, img);
+}
+
 /// The error of a render stopped because nobody would show it ([`RenderJob::stop`]).
 pub const STOPPED: &str = "stopped: no longer shown";
 
@@ -603,7 +613,7 @@ impl RenderJob {
                     && self.request.quality == Quality::Full
                     && (display.is_none() || srgb.is_some())
                 {
-                    cache.put_deferred_at(self.cache_generation, *key, srgb.clone().unwrap_or_else(|| Arc::new(rendered.image.clone())));
+                    keep_view(cache, self.cache_generation, *key, srgb.clone().unwrap_or_else(|| Arc::new(rendered.image.clone())));
                 }
                 let t_fit = crate::media::dirty::clock();
                 // the display fit, after the caches have the full render

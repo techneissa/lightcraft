@@ -5220,7 +5220,12 @@ fn at_a_steady_pace_each_photo_is_rendered_at_once_and_the_one_left_dropped() {
     h.app.renderer = crate::render::Renderer::with_worker_threads(0);
     h.app.renderer.set_offload(Box::new(crate::headless::RenderGate::new(Rc::new(Cell::new(false)))));
     h.app.renderer.render_secs_for_test = Some(2.0);
-    for &id in &ids[..6] {
+    // on the first photo half a second first: a step right after the loupe opened is a held arrow's, which waits
+    h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [ids[0].0], "active": ids[0].0}}), t);
+    for _ in 0..30 {
+        h.step();
+    }
+    for &id in &ids[1..7] {
         h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), t);
         h.step();
         assert_eq!(h.app.renderer.main_asked(), vec![id], "the photo stepped to is asked for at once, and only it");

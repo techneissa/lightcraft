@@ -128,13 +128,14 @@ impl Plan {
 /// a time, nearest first.
 pub(crate) fn plan(ahead: usize, step_secs: Option<f64>, render_secs: Option<f64>, workers: usize) -> Plan {
     let ahead = ahead.clamp(1, MOST_DEPTH);
-    let most = workers.saturating_sub(FREE_WORKERS).clamp(CALM_AT_ONCE, MOST_AT_ONCE);
+    // (never every worker: on a 2–3 core Mac, with two, one stays for the photo on screen)
+    let most = workers.saturating_sub(FREE_WORKERS).clamp(CALM_AT_ONCE, MOST_AT_ONCE).min(workers.saturating_sub(1)).max(1);
     let render = render_secs.filter(|r| r.is_finite() && *r > 0.0).unwrap_or(RENDER_GUESS_SECS);
     let Some(step) = step_secs.filter(|s| s.is_finite() && *s > 0.0) else {
-        return Plan { depth: ahead, at_once: CALM_AT_ONCE, lead: 1 };
+        return Plan { depth: ahead, at_once: CALM_AT_ONCE.min(most), lead: 1 };
     };
     let passed = (render / step).ceil().clamp(1.0, FAST_DEPTH as f64) as usize;
-    let at_once = (passed + 1).clamp(CALM_AT_ONCE, most);
+    let at_once = (passed + 1).max(CALM_AT_ONCE).min(most);
     let depth = ahead.max((passed + at_once - 1).min(FAST_DEPTH));
     Plan { depth, at_once, lead: passed.min(depth) }
 }
@@ -262,8 +263,10 @@ mod tests {
         }
         // a slower render is the same as faster stepping
         assert_eq!(plan(5, Some(1.0), Some(1.5), WORKERS), plan(5, Some(0.5), Some(0.75), WORKERS));
-        // two workers (tests, a small machine): never more than two at once
-        assert_eq!(plan(5, Some(0.03), render, 2).at_once, 2);
+        // two workers (a 2–3 core Mac): one prefetch at a time, the other worker stays for the photo on screen
+        assert_eq!(plan(5, Some(0.03), render, 2).at_once, 1);
+        assert_eq!(plan(5, None, render, 2).at_once, 1);
+        assert_eq!(plan(5, None, render, 3).at_once, 2);
     }
 
     #[test]
