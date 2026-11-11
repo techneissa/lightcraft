@@ -259,9 +259,10 @@ fn editing_line(ui: &mut egui::Ui, st: &lightcraft_engine::retouch_input::FacesS
     egui::Frame::NONE.inner_margin(egui::Margin { left: 24, right: 22, top: 0, bottom: 2 }).show(ui, |ui| {
         let r = ui.label(egui::RichText::new(crate::i18n::tr_format!("Editing: {who}", who = who)).size(12.5).color(t.text_label));
         register(ui, "portrait:editing", r.rect);
-        if let Some(note) = note {
-            ui.add(egui::Label::new(egui::RichText::new(note).size(11.5).color(t.text_dim)).wrap());
-        }
+        // The note's line is kept when there is no note: the search finishing (or starting) must not move the
+        // sections below it, under the pointer of someone about to press a slider.
+        let note = note.unwrap_or_else(|| " ".to_string());
+        ui.add(egui::Label::new(egui::RichText::new(note).size(11.5).color(t.text_dim)).wrap());
     });
 }
 
