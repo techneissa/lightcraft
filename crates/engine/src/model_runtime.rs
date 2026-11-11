@@ -30,11 +30,16 @@ pub const MODELS: &[(&str, &str)] = &[
     (crate::people_parsing::COREML_MODELS[4], "People Parts: Sapiens2"),
     (BIREFNET, "Subject Masks: BiRefNet"),
     (crate::hair_edges::MODEL_DIR, "Hair Edges: BiRefNet Matting"),
+    (SAM3, "Object and Describe Masks: SAM 3"),
 ];
 
 /// BiRefNet's id (its folder), the Subject and Background model (issue #264); BiRefNet Matting's is
 /// [`crate::hair_edges::MODEL_DIR`].
 pub const BIREFNET: &str = "birefnet";
+
+/// SAM 3's id (its folder; issue #268). Its Core ML version is converted on this Mac into the sibling folder
+/// `sam3-coreml` (`tools/convert-coreml-sam3.py`) and never published: SAM 3's licence is not on the allowlist.
+pub const SAM3: &str = "sam3";
 
 /// `<config>/model-runtimes.json`.
 pub fn default_file() -> Option<PathBuf> {

@@ -38,6 +38,7 @@ fn coreml_installed(s: &Session, model: &str) -> bool {
         lightcraft_learn::ENCODER_ID => s.learn.coreml_installed(),
         crate::model_runtime::BIREFNET => s.segmenter.birefnet_coreml_installed(),
         crate::hair_edges::MODEL_DIR => s.hair_edges.coreml_installed(),
+        crate::model_runtime::SAM3 => s.segmenter.sam3_coreml_installed(),
         _ => s.parsing.coreml_installed(model),
     }
 }
@@ -48,6 +49,7 @@ fn backend(s: &Session, model: &str) -> Option<&'static str> {
         lightcraft_learn::ENCODER_ID => s.learn.backend(),
         crate::model_runtime::BIREFNET => s.segmenter.birefnet_backend(),
         crate::hair_edges::MODEL_DIR => s.hair_edges.backend(),
+        crate::model_runtime::SAM3 => s.segmenter.sam3_backend(),
         _ => s.parsing.backend(model),
     }
 }
@@ -80,8 +82,8 @@ fn run(s: &mut Session, p: &Value) -> crate::Result<Value> {
         s.model_runtimes.set(model, runtime).map_err(|e| bad(ID, e))?;
         match model {
             lightcraft_learn::ENCODER_ID => s.learn.set_runtime(runtime),
-            // (BiRefNet's jobs read it when they are queued)
-            crate::model_runtime::BIREFNET => {}
+            // (BiRefNet's and SAM 3's jobs read it when they are queued; SAM 3 loads again on a change)
+            crate::model_runtime::BIREFNET | crate::model_runtime::SAM3 => {}
             crate::hair_edges::MODEL_DIR => s.hair_edges.set_runtime(runtime),
             _ => {
                 s.parsing.set_runtime(model, runtime);
@@ -142,7 +144,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "AI Model Runtime",
             [],
             None,
-            "{model?: \"dinov2-small\"|\"face-parsing-segformer-b0\"|\"human-parsing-segformer-b3\"|\"birefnet\"|\"birefnet-matting\"|…, runtime?: \"automatic\"|\"coreml\"|\"candle\"} — sets the engine a model runs on (Automatic: Core ML on a Mac when its model is installed, else candle), or with no `runtime` lists them → {models: [{model, feature, runtime, coremlAvailable, coremlInstalled, backend: \"coreml\"|\"candle\"|null, coremlBytes, license, download: {state, bytes?, total?, error?}}]}",
+            "{model?: \"dinov2-small\"|\"face-parsing-segformer-b0\"|\"human-parsing-segformer-b3\"|\"birefnet\"|\"birefnet-matting\"|\"sam3\"|…, runtime?: \"automatic\"|\"coreml\"|\"candle\"} — sets the engine a model runs on (Automatic: Core ML on a Mac when its model is installed, else candle), or with no `runtime` lists them → {models: [{model, feature, runtime, coremlAvailable, coremlInstalled, backend: \"coreml\"|\"candle\"|null, coremlBytes, license, download: {state, bytes?, total?, error?}}]}",
             always,
             run
         ),
@@ -175,7 +177,7 @@ mod tests {
         assert_eq!(reopened.get("dinov2-small"), Runtime::Candle);
 
         assert!(s.execute("models.runtime", &json!({"model": "dinov2-small", "runtime": "fast"})).is_err());
-        assert!(s.execute("models.runtime", &json!({"model": "sam3", "runtime": "coreml"})).is_err());
+        assert!(s.execute("models.runtime", &json!({"model": "lama", "runtime": "coreml"})).is_err());
         assert!(s.execute("models.runtime", &json!({"runtime": "coreml"})).is_err());
 
         // the people-parsing SegFormers have a row each, and their choice reaches the parser
@@ -200,6 +202,13 @@ mod tests {
         assert_eq!(s.learn.runtime(), Runtime::Candle);
         reopened.open(Some(file.clone()));
         assert_eq!(reopened.get("human-parsing-segformer-b3"), Runtime::Candle);
+
+        // SAM 3 has a row (issue #268); its choice is kept and read by its jobs
+        let sam3 = listed["models"].as_array().unwrap().iter().find(|m| m["model"] == "sam3").unwrap();
+        assert_eq!((sam3["runtime"].as_str(), sam3["coremlInstalled"].as_bool()), (Some("automatic"), Some(false)));
+        s.execute("models.runtime", &json!({"model": "sam3", "runtime": "candle"})).unwrap();
+        reopened.open(Some(file.clone()));
+        assert_eq!(reopened.get(crate::model_runtime::SAM3), Runtime::Candle);
         std::fs::write(&file, b"{ damaged").unwrap();
         reopened.open(Some(file));
         assert_eq!(reopened.get("dinov2-small"), Runtime::Automatic);

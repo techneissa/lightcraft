@@ -105,6 +105,11 @@ pub struct Job {
     pub plain: Option<RenderJob>,
     /// The finer grids over the selection's edge the job made (fork, issue #240), sent with its result.
     pub detail: Vec<SegMask>,
+    /// The engine SAM 3 runs on (issue #268): Core ML when its conversion is installed, else candle. A change loads
+    /// the model again.
+    pub runtime: lightcraft_coreml::Runtime,
+    /// Where Core ML's warm-up after a load shows (issue #268).
+    pub activity: Option<crate::activity::Activity>,
 }
 
 /// A finished request: the segmentation (`None`: nothing selected / nothing to report).
@@ -202,6 +207,8 @@ pub struct Shared {
     pub encoding: AtomicBool,
     /// The engine the loaded BiRefNet runs on (`coreml` or `candle`; issue #264).
     pub birefnet_backend: std::sync::Mutex<Option<&'static str>>,
+    /// The engine SAM 3 ran its last job on (`coreml` or `candle`; issue #268).
+    pub sam3_backend: std::sync::Mutex<Option<&'static str>>,
 }
 
 /// Decrements a counter when dropped (also when unwinding).
@@ -272,6 +279,11 @@ impl Worker {
         *self.shared.birefnet_backend.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 
+    /// The engine SAM 3 ran on last (`coreml` or `candle`); `None` before its first run.
+    pub fn sam3_backend(&self) -> Option<&'static str> {
+        *self.shared.sam3_backend.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Queue `job`; returns at once.
     pub fn submit(&mut self, job: Job) -> Result<(), String> {
         if self.dead() {
@@ -308,10 +320,20 @@ impl Worker {
 /// The model and the last encoded photo.
 #[derive(Default)]
 struct State {
-    model: Option<(PathBuf, Sam3)>,
+    model: Option<(PathBuf, lightcraft_coreml::Runtime, Sam3)>,
+    /// Stops Core ML's warm-up of the loaded model when the model goes.
+    warm_up: Option<Arc<AtomicBool>>,
     birefnet: Option<(PathBuf, lightcraft_coreml::Runtime, lightcraft_birefnet::BiRefNet)>,
     cache: Option<(u64, Encoded)>,
     remote: Option<(String, remote::Client)>,
+}
+
+impl Drop for State {
+    fn drop(&mut self) {
+        if let Some(stop) = &self.warm_up {
+            stop.store(true, Ordering::Relaxed);
+        }
+    }
 }
 
 impl State {
@@ -408,6 +430,10 @@ fn run(rx: &mpsc::Receiver<Job>, shared: &Shared, idle: Duration, mut placement:
         if result.is_err() && !is_detail {
             state.cache = None;
         }
+        if let Some((_, _, m)) = &state.model {
+            // (Core ML hands the model to candle when it fails on Automatic)
+            *shared.sam3_backend.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(m.backend());
+        }
         shared.loaded.store(state.loaded(), Ordering::SeqCst);
         drop(done);
         let detail = if result.as_ref().is_ok_and(Option::is_some) { std::mem::take(&mut job.detail) } else { Vec::new() };
@@ -430,22 +456,51 @@ fn attempt(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
     }
 }
 
-/// The model for `dir`, loading it on `placement` when needed.
-fn model<'a>(state: &'a mut State, shared: &Shared, dir: &std::path::Path, placement: Placement) -> Result<&'a mut Sam3, Failure> {
-    if state.model.as_ref().is_none_or(|(d, _)| d != dir) {
+/// The model for the job's folder and runtime, loading it on `placement` (candle's device) when needed.
+fn model<'a>(state: &'a mut State, shared: &Shared, job: &Job, placement: Placement) -> Result<&'a mut Sam3, Failure> {
+    let (dir, runtime) = (job.dir.as_path(), job.runtime);
+    if state.model.as_ref().is_none_or(|(d, r, _)| d != dir || *r != runtime) {
         state.model = None;
         state.cache = None;
+        if let Some(stop) = state.warm_up.take() {
+            stop.store(true, Ordering::Relaxed);
+        }
         let _busy = Flag::raise(&shared.encoding);
         let t = web_time::Instant::now();
-        let m = match placement {
-            Placement::Gpu => Sam3::load(dir)?,
-            Placement::Cpu => Sam3::load_cpu(dir)?,
+        let device = match placement {
+            Placement::Gpu => lightcraft_segment::best_device(),
+            Placement::Cpu => lightcraft_segment::Device::Cpu,
         };
-        log::info!("SAM 3 loaded in {:?} ({})", t.elapsed(), if m.device().is_cpu() { "CPU" } else { "GPU" });
-        state.model = Some((dir.to_path_buf(), m));
+        let m = Sam3::load_with(dir, device, runtime)?;
+        log::info!("SAM 3 loaded in {:?} ({}, candle on the {})", t.elapsed(), m.backend(), if m.device().is_cpu() { "CPU" } else { "GPU" });
+        state.warm_up = warm_up(&m, job.activity.as_ref());
+        state.model = Some((dir.to_path_buf(), runtime, m));
         shared.loaded.store(true, Ordering::SeqCst);
     }
-    state.model.as_mut().map(|(_, m)| m).ok_or_else(|| "the model did not load".into())
+    state.model.as_mut().map(|(_, _, m)| m).ok_or_else(|| "the model did not load".into())
+}
+
+/// Plan Core ML's parts on the GPU on a thread of their own, with a row in the activity stack, so the user's first
+/// click and prompt don't wait for it (issue #268). Returns the flag that stops it; `None` on candle.
+fn warm_up(m: &Sam3, activity: Option<&crate::activity::Activity>) -> Option<Arc<AtomicBool>> {
+    let warm = m.warm_up()?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let row = activity.map(|a| a.start("sam3-warm-up", "Getting AI masks ready", crate::activity::Cancel::Flag(stop.clone())));
+    let flag = stop.clone();
+    let spawned = std::thread::Builder::new().name("sam3-warm-up".into()).spawn(move || {
+        let _row = row;
+        let t = web_time::Instant::now();
+        match warm.run(&flag) {
+            Ok(()) if flag.load(Ordering::Relaxed) => log::info!("SAM 3's Core ML warm-up stopped"),
+            Ok(()) => log::info!("SAM 3 on Core ML warmed up in {:?}", t.elapsed()),
+            // the part's next real run reports (and on Automatic hands the model to candle)
+            Err(e) => log::warn!("SAM 3's Core ML warm-up failed: {e}"),
+        }
+    });
+    if let Err(e) = spawned {
+        log::warn!("could not start SAM 3's Core ML warm-up: {e}");
+    }
+    Some(stop)
 }
 
 /// Render the model input.
@@ -471,7 +526,7 @@ fn encoded<'a>(state: &'a mut State, shared: &Shared, job: &mut Job, placement: 
     if job.cancel.load(Ordering::Relaxed) {
         return Err(Failure::Cancelled);
     }
-    model(state, shared, &job.dir, placement)?;
+    model(state, shared, job, placement)?;
     if job.cancel.load(Ordering::Relaxed) {
         return Err(Failure::Cancelled);
     }
@@ -482,7 +537,7 @@ fn encoded<'a>(state: &'a mut State, shared: &Shared, job: &mut Job, placement: 
             return Err(Failure::Cancelled);
         }
         let _busy = Flag::raise(&shared.encoding);
-        let m = state.model.as_mut().map(|(_, m)| m).ok_or("the model did not load")?;
+        let m = state.model.as_mut().map(|(_, _, m)| m).ok_or("the model did not load")?;
         m.set_cancel(Some(job.cancel.clone()));
         let t = web_time::Instant::now();
         let mut enc = m.encode(&input.rgb, input.w, input.h)?;
@@ -492,7 +547,7 @@ fn encoded<'a>(state: &'a mut State, shared: &Shared, job: &mut Job, placement: 
     }
     let State { model, cache, .. } = state;
     match (model.as_mut(), cache.as_mut()) {
-        (Some((_, m)), Some((_, e))) => {
+        (Some((_, _, m)), Some((_, e))) => {
             m.set_cancel(Some(job.cancel.clone()));
             Ok((m, e))
         }
@@ -609,7 +664,7 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
             if job.cancel.load(Ordering::Relaxed) {
                 return Err(Failure::Cancelled);
             }
-            let m = model(state, shared, &job.dir, placement)?;
+            let m = model(state, shared, job, placement)?;
             m.set_cancel(Some(job.cancel.clone()));
             let t = web_time::Instant::now();
             let mut enc = m.encode(&input.rgb, input.w, input.h)?;
@@ -643,6 +698,32 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
 mod tests {
     use super::*;
 
+    /// Core ML's warm-up after a load has a row in the activity stack until it ends (issue #268). Needs SAM 3 and its
+    /// compiled Core ML copy in the shared models folder (the app makes it at its first load, so nothing is compiled
+    /// or written here); skipped without them.
+    #[test]
+    fn core_mls_warm_up_has_a_row_until_it_ends() {
+        use lightcraft_segment::coreml;
+        let dir = std::env::var_os("HOME").map(|h| PathBuf::from(h).join("Library/Application Support/ArtCraft/models/sam3"));
+        let compiled = |d: &PathBuf| coreml::folder(d).is_some_and(|f| coreml::Part::ALL.iter().all(|p| coreml::paths(&f, *p).1.is_dir()));
+        let Some(dir) = dir.filter(|d| lightcraft_coreml::available() && lightcraft_segment::is_model_dir(d) && compiled(d)) else {
+            lightcraft_testkit::skip!(Model, "SAM 3 and its compiled Core ML copy are not in the shared models folder");
+            return;
+        };
+        let m = Sam3::load_with(&dir, lightcraft_segment::Device::Cpu, lightcraft_coreml::Runtime::CoreMl).unwrap();
+        let activity = crate::activity::Activity::default();
+        let running = |a: &crate::activity::Activity| a.list().iter().any(|t| t.kind == "sam3-warm-up");
+        let stop = warm_up(&m, Some(&activity)).expect("Core ML warms up");
+        assert!(running(&activity), "the warm-up has a row");
+        let started = std::time::Instant::now();
+        while running(&activity) {
+            // (only a guard against a hang)
+            assert!(started.elapsed() < Duration::from_secs(600), "the warm-up never ended");
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert!(!stop.load(Ordering::Relaxed));
+    }
+
     fn job(tag: Tag, reply: &mpsc::Sender<Outcome>) -> Job {
         // an empty folder: loading fails with an error (no model files)
         let dir = std::env::temp_dir().join(format!("lc-sam3-worker-none-{}", std::process::id()));
@@ -660,6 +741,8 @@ mod tests {
             refine: None,
             plain: None,
             detail: Vec::new(),
+            runtime: lightcraft_coreml::Runtime::Automatic,
+            activity: None,
         }
     }
 

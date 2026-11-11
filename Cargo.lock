@@ -4287,6 +4287,7 @@ version = "0.18.0"
 dependencies = [
  "candle-core",
  "candle-nn",
+ "lightcraft-coreml",
  "lightcraft-fetch",
  "lightcraft-testkit",
  "log",

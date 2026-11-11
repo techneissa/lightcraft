@@ -277,6 +277,8 @@ mod tests {
             refine: None,
             plain: None,
             detail: Vec::new(),
+            runtime: lightcraft_coreml::Runtime::Automatic,
+            activity: None,
         };
         let mut stub = Stub { matte_saw_render: false };
         let seg = combined(&mut stub, &mut job).unwrap().expect("a selection");
@@ -306,6 +308,8 @@ mod tests {
             refine: Some(s.render_job(id, 96, 64, false, true).unwrap()),
             plain: None,
             detail: Vec::new(),
+            runtime: lightcraft_coreml::Runtime::Automatic,
+            activity: None,
         };
         let side = 16;
         let decided = SegMask::from_logits(side, &(0..side * side).map(|i| if (i % side) < side / 2 { 8.0 } else { -8.0 }).collect::<Vec<_>>())

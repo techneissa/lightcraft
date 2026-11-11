@@ -63,9 +63,8 @@ impl Heads {
     /// `multimask`: the best of the three alternatives by predicted IoU; else the single-mask output unless it is
     /// unstable (its area changes over 2 % when the threshold moves ±0.05), then the best alternative.
     pub fn pick(&self, multimask: bool) -> Result<Prediction> {
-        let best_multi = (1..MASK_TOKENS)
-            .max_by(|a, b| self.iou.get(*a).partial_cmp(&self.iou.get(*b)).unwrap_or(std::cmp::Ordering::Equal))
-            .unwrap_or(1);
+        let best_multi =
+            (1..MASK_TOKENS).max_by(|a, b| self.iou.get(*a).partial_cmp(&self.iou.get(*b)).unwrap_or(std::cmp::Ordering::Equal)).unwrap_or(1);
         if multimask {
             return self.take(best_multi);
         }
@@ -87,7 +86,11 @@ impl Heads {
         let alts: Vec<crate::whole::Alternative> = insides
             .iter()
             .zip(&scores)
-            .map(|(m, (area, score))| crate::whole::Alternative { area: *area, score: *score, holds: m.iter().zip(best_in).filter(|(a, b)| **a && **b).count() })
+            .map(|(m, (area, score))| crate::whole::Alternative {
+                area: *area,
+                score: *score,
+                holds: m.iter().zip(best_in).filter(|(a, b)| **a && **b).count(),
+            })
             .collect();
         self.take(1 + crate::whole::whole_object(&alts, best))
     }

@@ -26,6 +26,7 @@ pub(super) fn section(app: &mut LightcraftApp, ui: &mut egui::Ui, t: &Tokens) {
             lightcraft_learn::ENCODER_ID => app.session.learn.coreml_installed(),
             lightcraft_engine::model_runtime::BIREFNET => app.session.segmenter.birefnet_coreml_installed(),
             lightcraft_engine::hair_edges::MODEL_DIR => app.session.hair_edges.coreml_installed(),
+            lightcraft_engine::model_runtime::SAM3 => app.session.segmenter.sam3_coreml_installed(),
             _ => app.session.parsing.coreml_installed(model),
         };
         if cfg!(target_os = "macos") && !installed {
