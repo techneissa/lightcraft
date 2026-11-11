@@ -13,12 +13,17 @@
 //! discard the queued jobs and wait, bounded, for the running ones.
 
 use std::hash::Hash;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::Duration;
 
 pub type Job<R> = Box<dyn FnOnce() -> R + Send>;
+
+/// What a slot gets instead of a result when its job panics: the result of a failed job, given the
+/// panic's message (see [`JobPool::submit_or`]).
+pub type Failure<R> = Box<dyn FnOnce(String) -> R + Send>;
 
 /// What a worker calls when a job has finished (a frontend's "repaint now").
 pub type Waker = Arc<dyn Fn() + Send + Sync>;
@@ -29,6 +34,7 @@ struct Entry<S, R> {
     priority: u32,
     seq: u64,
     job: Job<R>,
+    fail: Option<Failure<R>>,
 }
 
 struct Shared<S, R> {
@@ -142,7 +148,7 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
                         let t0 = std::time::Instant::now();
                         // the slot is free again when the job ends, also if it panics
                         let _free = Free(&shared, e.slot);
-                        let result = (e.job)();
+                        let Some(result) = run_guarded(e.job, e.fail) else { continue };
                         let done = Done { slot: e.slot, key: e.key, result, ms: t0.elapsed().as_secs_f64() * 1000.0 };
                         if tx.send(done).is_err() {
                             break;
@@ -195,8 +201,21 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
         }
     }
 
-    /// Queue `job` for `slot`, replacing a queued (not yet running) job for the same slot.
+    /// Queue `job` for `slot`, replacing a queued (not yet running) job for the same slot. If the job
+    /// panics, nothing is sent (see [`Self::submit_or`]): for a caller that waits for the result,
+    /// use that instead.
     pub fn submit(&mut self, slot: S, key: u64, priority: u32, job: Job<R>) {
+        self.queue_job(slot, key, priority, job, None);
+    }
+
+    /// [`Self::submit`], and if `job` panics the slot still gets a result: `fail(message)` is sent
+    /// under the same slot and key, so whoever waits for the job learns it failed instead of
+    /// waiting for ever. The worker lives on and the slot is free for its next job.
+    pub fn submit_or(&mut self, slot: S, key: u64, priority: u32, job: Job<R>, fail: Failure<R>) {
+        self.queue_job(slot, key, priority, job, Some(fail));
+    }
+
+    fn queue_job(&mut self, slot: S, key: u64, priority: u32, job: Job<R>, fail: Option<Failure<R>>) {
         if self.stopped {
             return; // nothing runs it any more
         }
@@ -205,7 +224,7 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
         let (lock, cv) = (&self.shared.queue, &self.shared.cv);
         let mut q = lock.lock().unwrap_or_else(|e| e.into_inner());
         q.retain(|e| e.slot != slot);
-        q.push(Entry { slot, key, priority, seq: self.seq, job });
+        q.push(Entry { slot, key, priority, seq: self.seq, job, fail });
         cv.notify_one();
     }
 
@@ -256,11 +275,37 @@ impl<S: Copy + Eq + Hash + Send + 'static, R: Send + 'static> JobPool<S, R> {
         while ran < n {
             let Some(e) = take(&self.shared, false) else { break };
             let _free = Free(&self.shared, e.slot);
-            let result = (e.job)();
-            let _ = self.tx.send(Done { slot: e.slot, key: e.key, result, ms: 0.0 });
+            if let Some(result) = run_guarded(e.job, e.fail) {
+                let _ = self.tx.send(Done { slot: e.slot, key: e.key, result, ms: 0.0 });
+            }
             ran += 1;
         }
         ran
+    }
+}
+
+/// Run `job`; a panic is its failure: `fail`'s result (none without one, or when that panics too).
+/// On wasm32 (built with `panic = "abort"`) nothing can be caught and this just runs the job.
+fn run_guarded<R>(job: Job<R>, fail: Option<Failure<R>>) -> Option<R> {
+    let payload = match catch_unwind(AssertUnwindSafe(job)) {
+        Ok(result) => return Some(result),
+        Err(payload) => payload,
+    };
+    let message = format!("a job panicked: {}", panic_message(payload.as_ref()));
+    // (a job with a fallback hands the message to its result, which the caller reports; only a job without one is
+    // logged here)
+    if fail.is_none() {
+        log::error!("job pool: {message}");
+    }
+    catch_unwind(AssertUnwindSafe(move || fail.map(|f| f(message)))).unwrap_or(None)
+}
+
+/// The text of a panic payload (`panic!("…")` gives a `&str` or a `String`).
+fn panic_message(payload: &(dyn std::any::Any + Send)) -> String {
+    match (payload.downcast_ref::<&str>(), payload.downcast_ref::<String>()) {
+        (Some(s), _) => (*s).to_string(),
+        (_, Some(s)) => s.clone(),
+        _ => "unknown panic".into(),
     }
 }
 
