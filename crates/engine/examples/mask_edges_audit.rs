@@ -89,6 +89,23 @@ fn main() {
                 });
                 let img = job.run().rendered.expect("render").image;
                 save(&img, &out.join(format!("{stem}.{mask}{tag}.png")), true);
+                if mask == "person" && std::env::var("PARSE_MASK").is_ok() {
+                    // (the parse's own Entire Person, before Select People draws its grids)
+                    let path = out.join(format!("{stem}.parse{tag}.png"));
+                    let r = s.execute("parsing.mask", &json!({"part": "entirePerson", "path": path.to_string_lossy(), "edge": w.max(h)}));
+                    println!("  parse mask: {:?}", r.err());
+                    let run = s.execute("parsing.run", &json!({"wait": true})).unwrap_or_default();
+                    let people = &run["photos"][0]["parse"]["people"];
+                    for q in people.as_array().into_iter().flatten() {
+                        let parts: Vec<String> =
+                            q["parts"].as_array().into_iter().flatten().map(|v| v.to_string().chars().take(160).collect()).collect();
+                        println!("  person {} bounds {} parts {}", q["index"], q["bounds"], parts.len());
+                        for p in parts.iter().filter(|p| p.contains("ntire")) {
+                            println!("    {p}");
+                        }
+                    }
+                    println!("  version {}", run["photos"][0]["parse"]["version"]);
+                }
                 println!("{stem:28} {mask:10} {edge:17} {secs:6.2} s  {model:?}");
                 seconds.push(json!({"photo": stem, "mask": mask, "edge": edge, "seconds": secs, "grid": model}));
             }

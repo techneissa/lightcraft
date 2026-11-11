@@ -130,6 +130,9 @@ fn tile(img: &Rgb<'_>, a: &[f32], (x0, y0, x1, y1): (usize, usize, usize, usize)
             let v = if near_edge.get(i).copied().unwrap_or(0.0) > 0.0 {
                 let q = ma[0][i] * ch[0][i] + ma[1][i] * ch[1][i] + ma[2][i] * ch[2][i] + mb[i];
                 let q = if q.is_finite() { q.clamp(0.0, 1.0) } else { old };
+                // (only as far as the pixel itself is uncertain: the filter averages over its window, so where the
+                // photo's colours can't explain the edge (a busy background) it would blur an edge already crisp)
+                let q = old + unsure(old) * (q - old);
                 // against a plain background, the pixel's place between the two sides' colours
                 let (c, k) = sides.split(i, [ch[0][i], ch[1][i], ch[2][i]]);
                 k * c + (1.0 - k) * q
@@ -144,6 +147,11 @@ fn tile(img: &Rgb<'_>, a: &[f32], (x0, y0, x1, y1): (usize, usize, usize, usize)
 
 /// How far around a pixel the colours of the sure sides are read, in radii of the filter.
 const SIDES: usize = 3;
+
+/// How uncertain a coverage is: 1 between 15 % and 85 %, falling to 0 at fully in or out.
+fn unsure(a: f64) -> f64 {
+    smooth(0.0, 0.15, a.min(1.0 - a))
+}
 
 fn smooth(e0: f64, e1: f64, x: f64) -> f64 {
     let t = ((x - e0) / (e1 - e0)).clamp(0.0, 1.0);

@@ -12,6 +12,8 @@ use super::Matte;
 /// Half-width of the band where the matte decides, as a fraction of the photo's side (3 % ≈ 31 matte cells at 1024):
 /// wide enough for the parse's soft edge and for loose hair.
 pub const BAND: f32 = 0.03;
+/// Seams in the parse up to this many cells either side of a line are closed (about 40 px on a 24 MP photo).
+const SEAM_CELLS: usize = 3;
 /// The largest a gap the matte opens inside a person may be, as a fraction of the person (a hand on a hip leaves a
 /// gap of 1 to 3 %; a held bag or a second person the matte drops is larger and stays).
 const GAP_CAP: f32 = 0.05;
@@ -68,6 +70,11 @@ pub(super) fn refine_person(p: &Person, others: &[&Person], r: NormRect, matte: 
             p.sample(Part::EntirePerson, x, y)
         })
         .collect();
+    // (issue #240: a thin seam or dip inside the parse, where two of its crops meet or along a dark fold, is no edge:
+    // closed first, so the matte is not asked about it; a real gap the matte is sure of is opened again below)
+    let mut closed = lightcraft_edgerefine::Alpha { w: gw, h: gh, data: old };
+    lightcraft_edgerefine::close_seams(&mut closed, SEAM_CELLS);
+    let old = closed.data;
     let inside: Vec<bool> = old.iter().map(|v| *v > 0.5).collect();
     if !inside.iter().any(|v| *v) {
         return None;
@@ -107,7 +114,9 @@ pub(super) fn refine_person(p: &Person, others: &[&Person], r: NormRect, matte: 
         gained.push(g);
     }
     let gained = gained.iter().any(|g| *g > 0.05).then_some(Plane { rect: r, width: gw, height: gh, data: gained, split: false });
-    Some(Refined { entire: Plane { rect: r, width: gw, height: gh, data: entire, split: false }, gained })
+    // (split as the parse's were, issue #240: two people sharing one body add up along their shared line)
+    let split = super::refine::was_split(p);
+    Some(Refined { entire: Plane { rect: r, width: gw, height: gh, data: entire, split }, gained })
 }
 
 /// Which cells lie within `band` cells of the person's `part` (none when they have no such part).

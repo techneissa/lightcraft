@@ -15,9 +15,10 @@ const GAP_GROW: u32 = 2;
 /// don't add up give `base` enlarged.
 ///
 /// With `keep_base` (a coarse selection that is itself a fine cut-out, as BiRefNet's is) the matte only corrects it
-/// in the band: where both agree the sharper of the two stands (a matte's softer edge never blurs a crisp one), what
-/// the matte adds stands (strands the cut-out missed), and what it takes away only as far as it is sure (a blob of
-/// background goes, a defocused hand the matte half doubts stays).
+/// in the band: where both agree the sharper of the two stands (a matte's softer edge never blurs a crisp one), and
+/// where they disagree the matte adds or takes away only as far as it is sure (a strand the cut-out missed and a
+/// blob of background it kept are corrected; a glow round a finger and a defocused hand the matte half doubts are
+/// not).
 pub fn decide(base: &[f32], base_side: usize, matte: &[f32], n: usize, band: f32, gap_cap: Option<f32>, keep_base: bool) -> Vec<f32> {
     let s = upsample(base, base_side, n);
     if matte.len() != n * n || n == 0 {
@@ -64,7 +65,11 @@ fn fuse(b: f32, m: f32) -> f32 {
         let t = t * t * (3.0 - 2.0 * t);
         return t * m + (1.0 - t) * b;
     }
-    m
+    // (the matte adds: as far as it is sure, from a logit of 0.5 to 3, so a strand comes in and a glow round a
+    // finger does not)
+    let t = ((m - 0.5) / 2.5).clamp(0.0, 1.0);
+    let t = t * t * (3.0 - 2.0 * t);
+    t * m + (1.0 - t) * b
 }
 
 /// `side × side` logits resampled bilinearly (half-pixel centres) to `n × n`.

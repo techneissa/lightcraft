@@ -57,78 +57,71 @@ pub fn subject(base: &SegMask, rgb: &[u8], w: usize, h: usize, cancel: &Arc<Atom
     Some((main, detail))
 }
 
-/// Every person's Entire Person edge in `p` snapped to `img` (the picture `p` was parsed from): each person's coverage
-/// over their box at the picture's size, filtered, and kept as their one Entire Person plane at that size. A person
-/// never grows into another one. Marks the parse's version; `Err` when stopped.
+/// Every person's Entire Person edge in `p` snapped to `img` (the picture `p` was parsed from). The people are
+/// snapped together: their joined coverage (one body a parse splits into pieces, a person and their hands found as
+/// people of their own, adds up again) has its thin seams closed and its edge snapped at the picture's size, and each
+/// person keeps their share of it over their box, as their one Entire Person plane. A seam between two pieces of one
+/// body therefore never opens into a cut. Marks the parse's version; `Err` when stopped.
 pub fn people(mut p: Parsing, img: &RgbImage, cancel: &Arc<AtomicBool>) -> Result<Parsing, String> {
     let (w, h) = (img.width, img.height);
     let ok = w > 0 && h > 0 && w.checked_mul(h).and_then(|n| n.checked_mul(3)) == Some(img.data.len());
     if ok && !p.people.is_empty() {
-        let before = p.people.clone();
+        let col = |i: usize| (i as f32 + 0.5) / w as f32;
+        let row = |j: usize| (j as f32 + 0.5) / h as f32;
+        let people = p.people.clone();
+        let union = Alpha::from_fn(w, h, |fx, fy| lightcraft_parsing::joined(people.iter(), Part::EntirePerson, fx, fy));
+        // (the parse's own cells, the coarsest of anyone's planes: its edge is uncertain over about one of them)
+        let cell = people
+            .iter()
+            .flat_map(|q| q.parts.get(&Part::EntirePerson).into_iter().flatten())
+            .filter(|q| q.is_valid())
+            .map(|q| (q.rect.width() * w as f32 / q.width as f32).max(q.rect.height() * h as f32 / q.height as f32))
+            .fold(1.0f32, f32::max);
+        let mut snapped = union.clone();
+        lightcraft_edgerefine::close_seams(&mut snapped, (cell.ceil() as usize + 1).clamp(2, 4));
+        let stop = || cancel.load(Ordering::Relaxed);
+        snap(&Rgb { data: &img.data, w, h }, &mut snapped, radius_for(cell), &stop).map_err(|_| "cancelled".to_string())?;
         for (k, person) in p.people.iter_mut().enumerate() {
             if cancel.load(Ordering::Relaxed) {
                 return Err("cancelled".into());
             }
             let Some(rect) = super::people::entire_rect(person) else { continue };
-            let others: Vec<&lightcraft_parsing::Person> = before.iter().enumerate().filter(|(j, _)| *j != k).map(|(_, q)| q).collect();
-            if let Some(plane) = person_plane(person, &others, rect, img, cancel) {
-                person.parts.insert(Part::EntirePerson, vec![plane]);
+            let Some(q) = people.get(k) else { continue };
+            let x0 = ((rect.x0 * w as f32).floor().max(0.0) as usize).min(w - 1);
+            let y0 = ((rect.y0 * h as f32).floor().max(0.0) as usize).min(h - 1);
+            let x1 = ((rect.x1 * w as f32).ceil() as usize).clamp(x0 + 1, w);
+            let y1 = ((rect.y1 * h as f32).ceil() as usize).clamp(y0 + 1, h);
+            let (cw, ch) = (x1 - x0, y1 - y0);
+            let mut share = Vec::with_capacity(cw * ch);
+            for j in y0..y1 {
+                for i in x0..x1 {
+                    let mine = q.sample(Part::EntirePerson, col(i), row(j));
+                    let (u, s) = (union.data.get(j * w + i).copied().unwrap_or(0.0), snapped.data.get(j * w + i).copied().unwrap_or(0.0));
+                    // (their part of the snapped union: as much as they held of the union; what the union gained where
+                    // nobody was goes to the person whose box it is in, when it is no one else's)
+                    let v = if u > 1e-3 {
+                        s * (mine / u).min(1.0)
+                    } else if people
+                        .iter()
+                        .enumerate()
+                        .all(|(o, r)| o == k || r.bounds.is_none_or(|b| !(b.x0..=b.x1).contains(&col(i)) || !(b.y0..=b.y1).contains(&row(j))))
+                    {
+                        s
+                    } else {
+                        0.0
+                    };
+                    share.push(v.clamp(0.0, 1.0));
+                }
             }
+            let a = Alpha { w: cw, h: ch, data: share };
+            let r = NormRect::new(x0 as f32 / w as f32, y0 as f32 / h as f32, x1 as f32 / w as f32, y1 as f32 / h as f32);
+            // (a parse file keeps planes of at most 1536 cells a side; split as the parse's were, so they add up again)
+            let (pw, ph, data) = shrink(&a, lightcraft_parsing::cache::MAX_PLANE_SIDE as usize);
+            person.parts.insert(Part::EntirePerson, vec![Plane { rect: r, width: pw, height: ph, data, split: was_split(q) }]);
         }
     }
     p.model_version = format!("{}+{VERSION}", p.model_version);
     Ok(p)
-}
-
-/// One person's refined Entire Person plane over `r` at the picture's pixels.
-fn person_plane(
-    person: &lightcraft_parsing::Person,
-    others: &[&lightcraft_parsing::Person],
-    r: NormRect,
-    img: &RgbImage,
-    cancel: &Arc<AtomicBool>,
-) -> Option<Plane> {
-    let (w, h) = (img.width, img.height);
-    let x0 = ((r.x0 * w as f32).floor().max(0.0) as usize).min(w - 1);
-    let y0 = ((r.y0 * h as f32).floor().max(0.0) as usize).min(h - 1);
-    let x1 = ((r.x1 * w as f32).ceil() as usize).clamp(x0 + 1, w);
-    let y1 = ((r.y1 * h as f32).ceil() as usize).clamp(y0 + 1, h);
-    let (cw, ch) = (x1 - x0, y1 - y0);
-    let mut crop = Vec::with_capacity(cw * ch * 3);
-    for y in y0..y1 {
-        crop.extend_from_slice(img.data.get((y * w + x0) * 3..(y * w + x1) * 3)?);
-    }
-    let col = |i: usize| ((x0 + i) as f32 + 0.5) / w as f32;
-    let row = |j: usize| ((y0 + j) as f32 + 0.5) / h as f32;
-    let old = Alpha::from_fn(cw, ch, |fx, fy| {
-        let (i, j) = ((fx * cw as f32) as usize, (fy * ch as f32) as usize);
-        person.sample(Part::EntirePerson, col(i), row(j))
-    });
-    let mut alpha = old.clone();
-    // (the parse's own cells: its planes are at most as fine as the picture)
-    let cell = person
-        .parts
-        .get(&Part::EntirePerson)
-        .into_iter()
-        .flatten()
-        .filter(|q| q.is_valid())
-        .map(|q| (q.rect.width() * w as f32 / q.width as f32).max(q.rect.height() * h as f32 / q.height as f32))
-        .fold(1.0f32, f32::max);
-    // (a seam the parse leaves where two of its crops meet is closed first: snapped, it would become a crisp cut)
-    lightcraft_edgerefine::close_seams(&mut alpha, (cell.ceil() as usize).clamp(1, 3));
-    let stop = || cancel.load(Ordering::Relaxed);
-    snap(&Rgb { data: &crop, w: cw, h: ch }, &mut alpha, radius_for(cell), &stop).ok()?;
-    // (never into another person: where someone else is, this person may only lose)
-    for (k, (v, o)) in alpha.data.iter_mut().zip(&old.data).enumerate() {
-        let (i, j) = (k % cw, k / cw);
-        if *v > *o && lightcraft_parsing::joined(others.iter().copied(), Part::EntirePerson, col(i), row(j)) > 0.5 {
-            *v = *o;
-        }
-    }
-    let rect = NormRect::new(x0 as f32 / w as f32, y0 as f32 / h as f32, x1 as f32 / w as f32, y1 as f32 / h as f32);
-    // (a parse file keeps planes of at most 1536 cells a side)
-    let (pw, ph, data) = shrink(&alpha, lightcraft_parsing::cache::MAX_PLANE_SIDE as usize);
-    Some(Plane { rect, width: pw, height: ph, data, split: false })
 }
 
 /// `a` area-averaged down so neither side is over `most` (as it is when it fits).
@@ -151,4 +144,10 @@ fn shrink(a: &Alpha, most: usize) -> (usize, usize, Vec<f32>) {
         }
     }
     (tw, th, out)
+}
+
+/// Whether a person's Entire Person planes were all cut from the whole photo's body map (they add up with other
+/// people's at a shared line, `lightcraft_parsing::Plane::split`).
+pub(super) fn was_split(person: &lightcraft_parsing::Person) -> bool {
+    person.parts.get(&Part::EntirePerson).is_some_and(|planes| !planes.is_empty() && planes.iter().all(|q| q.split))
 }

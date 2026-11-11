@@ -1,6 +1,6 @@
 use super::*;
 
-/// A 480 × 320 photo: a dark brown hand (a palm and two fingers 60 px wide, 12 px apart and joined at the tips, so the
+/// A 480 × 320 photo: a dark brown hand (a palm and two fingers 60 px wide, 30 px apart and joined at the tips, so the
 /// gap between them is enclosed, as between an arm on a hip and the body) and a lock of hair 5 px wide and 24 px long (a strand the 6 px matte cells see as one row)
 /// leaving the palm, on a light green background. Returns the picture and the true coverage.
 fn hand() -> (Vec<u8>, Vec<f32>, usize, usize) {
@@ -9,8 +9,8 @@ fn hand() -> (Vec<u8>, Vec<f32>, usize, usize) {
     for y in 0..h {
         for x in 0..w {
             let palm = (100..300).contains(&x) && (150..280).contains(&y);
-            let finger = (30..150).contains(&y) && ((100..160).contains(&x) || (172..232).contains(&x));
-            let tip = (30..60).contains(&y) && (100..232).contains(&x);
+            let finger = (30..150).contains(&y) && ((100..160).contains(&x) || (190..250).contains(&x));
+            let tip = (30..60).contains(&y) && (100..250).contains(&x);
             let wisp = (178..183).contains(&y) && (300..324).contains(&x);
             if palm || finger || tip || wisp {
                 truth[y * w + x] = 1.0;
@@ -57,30 +57,34 @@ fn alpha_of(logits: &[f32], n: usize, w: usize, h: usize) -> Alpha {
 fn measure(a: &Alpha) -> (f32, f32, f32) {
     let w = a.w;
     let at = |x: usize, y: usize| a.data[y * w + x];
-    let gap = (75..135).map(|y| at(165, y).max(at(166, y))).fold(0.0, f32::max);
+    let gap = (75..135).map(|y| at(174, y).max(at(175, y))).fold(0.0, f32::max);
     let wisp = (302..318).map(|x| at(x, 180)).sum::<f32>() / 16.0;
     let solid = (1.0 - at(200, 220)).max(at(30, 300)).max(at(450, 20));
     (gap, wisp, solid)
 }
 
-/// The photo, today's coarse selection (a model whose cells are 40 px: a people parse or SAM 3's grid on a large
+/// The photo, today's coarse selection (a model whose cells are 60 px: a people parse or SAM 3's grid on a large
 /// photo) and an edge model's matte (6 px cells: BiRefNet Matting's 1024² on a 24 MP photo).
 fn scene() -> (Vec<u8>, usize, usize, Vec<f32>, Vec<f32>) {
     let (rgb, truth, w, h) = hand();
-    (rgb, w, h, grid_of(&truth, w, h, 12, 8.0), grid_of(&truth, w, h, 80, 10.0))
+    (rgb, w, h, grid_of(&truth, w, h, 8, 8.0), grid_of(&truth, w, h, 80, 10.0))
 }
+
+/// The largest gap opened, as a fraction of the selection: this hand is all the selection, so its gap is 6 % of it
+/// (on a whole person a gap between the fingers or an arm and the body is 1 to 3 %).
+const GAP_CAP: f32 = 0.1;
 
 #[test]
 fn refining_opens_the_finger_gap_and_keeps_the_wisp() {
     let (rgb, w, h, base, matte) = scene();
     // today, Current edge: the coarse selection fills the gap and loses the wisp
-    let (gap, wisp, _) = measure(&alpha_of(&upsample(&base, 12, 80), 80, w, h));
+    let (gap, wisp, _) = measure(&alpha_of(&upsample(&base, 8, 80), 80, w, h));
     assert!(gap > 0.5 && wisp < 0.3, "the coarse mask fills the gap ({gap:.2}) and loses the wisp ({wisp:.2})");
     // today, BiRefNet Matting edge: the matte decides only in a band around the coarse edge, which misses the gap
-    let (gap, ..) = measure(&alpha_of(&decide(&base, 12, &matte, 80, 0.1, None, false), 80, w, h));
+    let (gap, ..) = measure(&alpha_of(&decide(&base, 8, &matte, 80, 0.1, None, false), 80, w, h));
     assert!(gap > 0.5, "matting in the band alone leaves the enclosed gap filled ({gap:.2})");
     // refined: the matte also opens the gap, and the edge is snapped to the photo
-    let decided = decide(&base, 12, &matte, 80, 0.1, Some(0.05), false);
+    let decided = decide(&base, 8, &matte, 80, 0.1, Some(GAP_CAP), false);
     let mut a = alpha_of(&decided, 80, w, h);
     let changed = snap(&Rgb { data: &rgb, w, h }, &mut a, radius_for(6.0), &|| false).unwrap();
     assert!(changed > 0);
@@ -95,7 +99,7 @@ fn refining_opens_the_finger_gap_and_keeps_the_wisp() {
 fn snapping_leaves_everything_away_from_the_edge_alone_and_can_stop() {
     let (rgb, w, h, base, matte) = scene();
     let img = Rgb { data: &rgb, w, h };
-    let before = alpha_of(&decide(&base, 12, &matte, 80, 0.1, Some(0.05), false), 80, w, h);
+    let before = alpha_of(&decide(&base, 8, &matte, 80, 0.1, Some(GAP_CAP), false), 80, w, h);
     let mut after = before.clone();
     snap(&img, &mut after, 9, &|| false).unwrap();
     for (b, a) in before.data.iter().zip(&after.data) {
@@ -140,6 +144,32 @@ fn gaps_finds_small_sure_background_inside_the_selection_only() {
     assert!(!g[20 * w + 20], "a large region (44 % of the selection) is not");
     assert!(!g[30 * w + 6], "one unsure cell is not");
     assert!(!g[0], "outside the selection is never a gap");
+    // a thin line of sure background (a zipper) is no gap
+    let line: Vec<f32> = (0..w * h)
+        .map(|i| {
+            if inside[i] && (i % w == 20 || i % w == 21) {
+                -9.0
+            } else if inside[i] {
+                8.0
+            } else {
+                -9.0
+            }
+        })
+        .collect();
+    assert!(gaps(&inside, &line, w, h, 0.5).iter().all(|v| !v), "a 2-cell line is not a gap");
+    // nor is a strip three cells wide and thirty long (a fold)
+    let strip: Vec<f32> = (0..w * h)
+        .map(|i| {
+            if inside[i] && (19..22).contains(&(i % w)) && (6..34).contains(&(i / w)) {
+                -9.0
+            } else if inside[i] {
+                8.0
+            } else {
+                -9.0
+            }
+        })
+        .collect();
+    assert!(gaps(&inside, &strip, w, h, 0.5).iter().all(|v| !v), "a long strip is not a gap");
     assert!(gaps(&inside, &matte[..5], w, h, 0.05).iter().all(|v| !v));
     assert!(gaps(&[], &[], 0, 0, 0.05).is_empty());
 }
@@ -147,7 +177,7 @@ fn gaps_finds_small_sure_background_inside_the_selection_only() {
 #[test]
 fn store_keeps_every_edge_pixel_in_finer_grids_that_redraw_it() {
     let (rgb, w, h, base, matte) = scene();
-    let mut a = alpha_of(&decide(&base, 12, &matte, 80, 0.1, Some(0.05), false), 80, w, h);
+    let mut a = alpha_of(&decide(&base, 8, &matte, 80, 0.1, Some(GAP_CAP), false), 80, w, h);
     snap(&Rgb { data: &rgb, w, h }, &mut a, radius_for(6.0), &|| false).unwrap();
     let (main, tiles) = store(&a, 64).unwrap();
     assert_eq!((main.side, main.logits.len(), main.rect), (64, 64 * 64, [0.0, 0.0, 1.0, 1.0]));
@@ -182,9 +212,9 @@ fn a_fine_base_keeps_its_crisp_edge_and_what_the_matte_doubts() {
     // a crisp base (±12) and a soft matte that agrees on the edge but is blurred, doubts part of the subject (-1), is
     // sure a blob is background (-9) and adds a strand (+4)
     let n = 8;
-    let base = vec![12.0, 12.0, -12.0, 12.0, -12.0, -12.0, -12.0, -12.0];
+    let base = [12.0, 12.0, -12.0, 12.0, -12.0, -12.0, -12.0, -12.0];
     let base: Vec<f32> = (0..n * n).map(|i| base[i % n]).collect();
-    let matte = vec![3.0, -1.0, -2.0, -9.0, 4.0, -12.0, -12.0, -12.0];
+    let matte = [3.0, -1.0, -2.0, -9.0, 4.0, -12.0, -12.0, -12.0];
     let matte: Vec<f32> = (0..n * n).map(|i| matte[i % n]).collect();
     let d = decide(&base, n, &matte, n, 1.0, None, true);
     assert!(d[0] > 11.0, "both say in: the crisp base stands ({})", d[0]);
@@ -201,7 +231,7 @@ fn closing_seams_fills_thin_dips_inside_and_keeps_wide_gaps() {
     let (w, h) = (80usize, 40usize);
     let mut a = Alpha::from_fn(w, h, |x, _| {
         let x = (x * w as f32) as usize;
-        if (19..21).contains(&x) || (40..60).contains(&x) || x >= 75 || x < 5 { 0.0 } else { 1.0 }
+        if (19..21).contains(&x) || (40..60).contains(&x) || !(5..75).contains(&x) { 0.0 } else { 1.0 }
     });
     close_seams(&mut a, 2);
     assert!(a.data[20 * w + 19] > 0.99 && a.data[20 * w + 20] > 0.99, "the seam is closed");
