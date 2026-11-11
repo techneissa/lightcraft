@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 use lightcraft_raster::blur::gaussian;
 use lightcraft_raster::morph::min_filter;
-use lightcraft_raster::{Plane, Rgb32f};
+use lightcraft_raster::{Plane, Rgb32f, par_rows};
 
 use super::fix::Fix;
 use super::heal::{self, smoothstep};
@@ -207,8 +207,10 @@ fn find(src: &dyn Source, scene: &Scene<'_>, face: usize, filler: &mut dyn Fille
     // the face at most FACE_PX across, the crop at most WORK on its longer side
     let scale = (FACE_PX / ctx.size).min(1.0);
     let side = ((cw.max(ch) as f64 * scale).ceil() as usize).clamp(MIN_SIDE, WORK);
+    let mut lap = Lap::start();
     let Crop { img: work, rect } = src.crop(wanted, side)?;
     let (sw, sh) = (work.width, work.height);
+    lap.mark(&format!("crop {sw}×{sh}"));
     if sw < MIN_SIDE / 2 || sh < MIN_SIDE / 2 || !rect.is_valid() {
         return None;
     }
@@ -227,25 +229,32 @@ fn find(src: &dyn Source, scene: &Scene<'_>, face: usize, filler: &mut dyn Fille
         None => facial,
     };
     let body = sub.mask_plane(at, Part::BodySkin);
-    let excluded = super::exclude::excluded(sctx, sw, sh)?;
     let corner = [sctx.bounds[0].floor(), sctx.bounds[1].floor()];
     let zones = zones::zones(sctx, sw, sh, corner, sctx.px(super::LATTICE))?;
+    lap.mark(&format!("skin, glasses, zones (face {size:.0} px)"));
 
     // where a wrinkle may be: eroded skin inside an area, not an ear, a nostril, an eye or the face's edge
     let erode = (ERODE * size).ceil().max(1.0) as usize;
     let core = |p: &Plane| min_filter(&p.map(|s| smoothstep(0.5, 0.9, s)), erode);
     let face_core = core(&skin);
     let body_core = body.as_ref().map(core);
-    let allowed = Plane::from_fn(sw, sh, |x, y| {
-        let a = (zones.weight.get(x, y) * 4.0).min(1.0);
-        let s = match zones.at(x, y) {
-            Some(z) if z.area == Area::Neck => body_core.as_ref().map_or(0.0, |b| b.get(x, y)),
-            Some(_) => face_core.get(x, y),
-            None => 0.0,
-        };
-        a * s * (1.0 - excluded.get(x, y))
+    let mut inside = Plane::new(sw, sh);
+    par_rows(&mut inside.data, sw, |y, row| {
+        for (x, v) in row.iter_mut().enumerate() {
+            let a = (zones.weight.get(x, y) * 4.0).min(1.0);
+            let s = match zones.at(x, y) {
+                Some(z) if z.area == Area::Neck => body_core.as_ref().map_or(0.0, |b| b.get(x, y)),
+                Some(_) => face_core.get(x, y),
+                None => 0.0,
+            };
+            *v = a * s;
+        }
     });
-    drop((face_core, body_core, excluded));
+    // (the exclusions only where the skin and an area let a line be: elsewhere nothing is allowed whatever they say)
+    let excluded = super::exclude::excluded_where(sctx, sw, sh, Some(&inside))?;
+    lap.mark("excluded");
+    let allowed = inside.zip_map(&excluded, |v, e| v * (1.0 - e));
+    drop((face_core, body_core, excluded, inside));
 
     // a hair across the skin is left as it is: no line is looked for or read on it
     let any_skin = match &body {
@@ -256,6 +265,7 @@ fn find(src: &dyn Source, scene: &Scene<'_>, face: usize, filler: &mut dyn Fille
     let hair = hairlike::hair_like(&lg, &any_skin, size);
     let within = allowed.zip_map(&hair, |a, hl| a * (1.0 - hl));
     drop(allowed);
+    lap.mark("allowed, hair-like");
     if filler.cancelled() {
         return None;
     }
@@ -271,8 +281,10 @@ fn find(src: &dyn Source, scene: &Scene<'_>, face: usize, filler: &mut dyn Fille
         lightcraft_raster::morph::max_filter(&lum.zip_map(&near_skin, |l, a| smoothstep(DARK.0, DARK.1, a - l)), 1)
     };
     let allowed = within.zip_map(&dark, |a, d| a * (1.0 - d));
+    lap.mark("dark");
     let ridge::Found { centres, spots } = ridge::centres(&lum, size, &zones, &allowed);
     drop((lum, zones));
+    lap.mark(&format!("lines ({} centre points)", centres.len()));
     // a spot that matters is pigment (a freckle, an age spot: browner than the skin around), not a pore (only darker)
     let spots = {
         let pigment = lg.map(|p| p[0] - p[2]);
@@ -282,6 +294,7 @@ fn find(src: &dyn Source, scene: &Scene<'_>, face: usize, filler: &mut dyn Fille
         let on_line = flatten::cores(&centres, sw, sh);
         gaussian(&lightcraft_raster::morph::max_filter(&spots.zip_map(&on_line, |s, l| s * (1.0 - l)), 1), 1.0)
     };
+    lap.mark("pigment spots");
     if centres.is_empty() {
         return Some(Fix::default());
     }
@@ -294,15 +307,35 @@ fn find(src: &dyn Source, scene: &Scene<'_>, face: usize, filler: &mut dyn Fille
     drop((clear, hair, any_skin));
     let changeable = allowed.zip_map(&spots, |a, sp| a * (1.0 - sp));
     drop(allowed);
+    lap.mark("presence");
     let delta = flatten::flatten(&lg, &field, &readable, &changeable, size);
     drop((lg, field, readable, changeable));
+    lap.mark("evening");
     let held = spots.zip_map(&dark, f32::max);
     drop((spots, dark));
     let delta = carry_over(&delta, &held, &within);
     if filler.cancelled() {
         return None;
     }
-    Some(Fix::new(rect, &delta).unwrap_or_default())
+    let fix = Fix::new(rect, &delta).unwrap_or_default();
+    lap.mark("carry over, stored");
+    Some(fix)
+}
+
+/// Under `LIGHTCRAFT_PROFILE`, the time of each step of a face's search.
+struct Lap(Option<std::time::Instant>);
+
+impl Lap {
+    fn start() -> Self {
+        Lap(crate::run::profiling().then(std::time::Instant::now))
+    }
+
+    fn mark(&mut self, what: &str) {
+        if let Some(t) = self.0.as_mut() {
+            eprintln!("      wrinkles: {what}: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+            *t = std::time::Instant::now();
+        }
+    }
 }
 
 /// How far a held pixel takes its neighbours' change (pixels, Gaussian sigma), and the share of its neighbourhood that
@@ -339,6 +372,58 @@ fn carry_over(delta: &Rgb32f, held: &Plane, within: &Plane) -> Rgb32f {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::input::PartMask;
+
+    /// Issue #253: the search skips work that can't change its result (the exclusions and the hair test only where a
+    /// line may be, a width's direction only where it may win, the evening's medians only where they are read). With
+    /// and without the skips, a lined synthetic face (lines across the forehead, a crease by the eye, a grey hair,
+    /// freckles, pores, glasses' Others part and a neck) gets the same change, to the bit.
+    #[test]
+    fn skipping_the_idle_work_leaves_the_change_as_it_was() {
+        use std::sync::atomic::Ordering;
+        let (w, h) = (400usize, 520usize);
+        let b = [100.0, 60.0, 200.0, 200.0];
+        let norm = |x: f64, y: f64| (x / w as f64, y / h as f64);
+        let at = |(fx, fy): (f64, f64)| norm(b[0] + fx * b[2], b[1] + fy * b[3]);
+        let five = [(0.33, 0.45), (0.67, 0.45), (0.5, 0.62), (0.38, 0.78), (0.62, 0.78)];
+        let mask = |x0: f64, y0: f64, x1: f64, y1: f64| {
+            let (a, c) = (norm(x0, y0), norm(x1, y1));
+            PartMask { plane: Plane::filled(16, 16, 1.0), area: NormRect::new(a.0, a.1, c.0, c.1) }
+        };
+        let face = Face {
+            landmarks: five.into_iter().map(at).chain((0..areas::MESH).map(|i| at(areas::frontal(i)))).collect(),
+            masks: vec![
+                (Part::FacialSkin, mask(90.0, 30.0, 310.0, 270.0)),
+                (Part::Others, mask(140.0, 135.0, 260.0, 165.0)),
+                (Part::BodySkin, mask(120.0, 260.0, 280.0, 420.0)),
+            ],
+            ..Face::boxed(NormRect::new(b[0] / w as f64, b[1] / h as f64, (b[0] + b[2]) / w as f64, (b[1] + b[3]) / h as f64))
+        };
+        let img = Rgb32f::from_fn(w, h, |x, y| {
+            let (xf, yf) = (x as f32 + 0.5, y as f32 + 0.5);
+            let dip = |d: f32, s: f32| (-0.5 * (d / s).powi(2)).exp();
+            // lines across the forehead, a crease by the right eye, freckles on the cheek, a grey hair over the brow
+            let lines = [80.0, 92.0, 104.0].iter().map(|c| dip(yf - c, 1.4)).fold(0.0f32, f32::max);
+            let crease = dip((xf - 118.0) + 0.6 * (yf - 150.0), 1.2) * if (130.0..170.0).contains(&yf) { 1.0 } else { 0.0 };
+            let freckle = [(170.0, 190.0), (180.0, 196.0), (230.0, 192.0)]
+                .iter()
+                .map(|(cx, cy)| dip(((xf - cx).powi(2) + (yf - cy).powi(2)).sqrt(), 2.0))
+                .fold(0.0f32, f32::max);
+            let hair = dip(yf - 0.15 * xf - 95.0, 0.7);
+            let pore = ((x * 7919 + y * 104_729) % 97) as f32 / 97.0 - 0.5;
+            let k = (1.0 - 0.28 * lines.max(crease)) * (1.0 + 0.02 * pore);
+            let skin = [0.45 * k, 0.3 * k * (1.0 - 0.15 * freckle), 0.24 * k * (1.0 - 0.3 * freckle)];
+            skin.map(|v| v * (1.0 - hair) + 0.62 * hair)
+        });
+        let search = || with_fixes(&img, vec![face.clone()], &mut NoFill);
+        let skipped = search();
+        super::super::SKIP_IDLE.store(false, Ordering::Relaxed);
+        let every = search();
+        super::super::SKIP_IDLE.store(true, Ordering::Relaxed);
+        let fix = skipped[0].wrinkles.as_ref().expect("the face is searched");
+        assert!(!fix.is_empty(), "the lines are found");
+        assert_eq!(skipped[0].wrinkles, every[0].wrinkles, "the same change with and without the skips");
+    }
 
     #[test]
     fn a_picture_gives_the_crop_asked_for_reduced_by_a_whole_factor_and_never_enlarged() {

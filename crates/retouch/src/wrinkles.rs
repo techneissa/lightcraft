@@ -52,6 +52,26 @@ pub use search::{Crop, Fill, Filler, NoFill, Picture, Source, WORK, with_fixes, 
 
 use crate::{Control, FaceCtx, Feature, Part, Scene, Scope, Spec, Stage};
 
+/// Tests: whether the search skips the work that can't change its result (issue #253: the exclusions and the hair test
+/// only where a line may be, a width's direction only where it may win, the evening's medians only where they are
+/// read). Turned off, every pixel is worked out, to show the result is the same; the result does not depend on it, so a
+/// test running beside one that turns it off is not disturbed.
+#[cfg(test)]
+pub(crate) static SKIP_IDLE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+/// Whether the search skips the work that can't change its result (always, outside the tests: [`SKIP_IDLE`]).
+#[inline]
+fn skip_idle() -> bool {
+    #[cfg(test)]
+    {
+        SKIP_IDLE.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    #[cfg(not(test))]
+    {
+        true
+    }
+}
+
 /// The fine band's blur, a fraction of the face's size: what is finer than it is texture and is kept.
 pub const FINE: f64 = 0.0025;
 /// The share of a line's depth an area at 100 lifts.

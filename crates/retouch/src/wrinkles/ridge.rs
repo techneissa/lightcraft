@@ -121,16 +121,24 @@ pub(super) fn centres(l: &Plane, size: f64, zones: &Zones, allowed: &Plane) -> F
                 if i <= SPOT_WIDEST && ratio > SPOT_RATIO {
                     b.spot = b.spot.max(s2 * l2 / SPOT_PEAK);
                 }
+                let peak = s2 * l1 / PEAK;
+                // far deeper than a wrinkle: a frame's wire, a lash line, a fold of the lid
+                // (and no deeper than what a finer width found here: the damping and the fit only take from it, so the
+                // direction and the fit are worked out only for a pixel this width may win; issue #253)
+                let skip = super::skip_idle();
+                if peak > DEEPEST || (skip && peak <= b.depth) {
+                    continue;
+                }
                 let round = (-(ratio * ratio) / (2.0 * ROUND * ROUND)).exp();
+                let most = peak * round;
+                if skip && most <= b.depth {
+                    continue;
+                }
                 // the direction across the line is the first curvature's: θ = ½·atan2(2b, a − d)
                 let theta = 0.5 * (2.0 * bxy).atan2(a - d);
                 let t = (-f64::from(theta.sin()), f64::from(theta.cos()));
                 let fit = zone.fits((x as f64 + 0.5, y as f64 + 0.5), t);
-                let depth = s2 * l1 / PEAK * round * fit;
-                // far deeper than a wrinkle: a frame's wire, a lash line, a fold of the lid
-                if s2 * l1 / PEAK > DEEPEST {
-                    continue;
-                }
+                let depth = most * fit;
                 if depth > b.depth {
                     *b = Best { depth, theta, width: i, spot: b.spot };
                 }

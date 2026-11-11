@@ -757,3 +757,30 @@ fn a_fresh_parse_and_its_cached_file_render_the_same() {
     assert_eq!(differ, 0, "{differ} pixels differ between the render from a fresh parse and from its cached file");
     let _ = std::fs::remove_dir_all(dir);
 }
+
+/// Issue #253: the face search decodes the photo once for its picture and once for the Wrinkles crops of all its faces
+/// (each face's crop decoded the whole original again), and a photo without people is never decoded at full size.
+#[test]
+fn the_wrinkle_crops_of_every_face_come_from_one_decode() {
+    for (tag, rects) in [("three", vec![r(0.05, 0.2, 0.3, 0.6), r(0.4, 0.1, 0.6, 0.45), r(0.7, 0.5, 0.95, 0.9)]), ("nobody", Vec::new())] {
+        let fake = Fake::new(rects.clone());
+        let (mut s, id, dir) = grey(&format!("decodes-{tag}"), 400, 300, &fake);
+        let inner = s.media.file_loader.clone().expect("the file loader");
+        let decodes = Arc::new(Mutex::new(Vec::new()));
+        let seen = decodes.clone();
+        s.media.file_loader = Some(Arc::new(move |path: &str, edge: usize, options, with| {
+            seen.lock().unwrap().push(edge);
+            inner(path, edge, options, with)
+        }));
+        let found = s.retouch_detect_now(id, false).expect("the faces are found");
+        assert_eq!(found.input.faces.len(), rects.len(), "{tag}");
+        assert!(found.input.faces.iter().all(|f| f.wrinkles.is_some()), "{tag}: every face was searched for wrinkles");
+        let edges = decodes.lock().unwrap().clone();
+        let picture = crate::media::SourceLevel::Preview.max_edge();
+        let others: Vec<usize> = edges.iter().copied().filter(|e| *e != picture).collect();
+        assert_eq!(edges.len() - others.len(), 1, "{tag}: the picture decoded once: {edges:?}");
+        // (the crops' decode is at the photo's own size: for this small photo, the thumbnail level's)
+        assert_eq!(others.len(), usize::from(!rects.is_empty()), "{tag}: one decode for every face's crop, none without a face: {edges:?}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+}

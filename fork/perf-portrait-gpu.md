@@ -55,8 +55,8 @@ Where the time goes now (face-filling portrait, after, the parse cached):
 | Export: reading the frame back and uploading it | about 75 ms |
 
 What is next: Background's draw on the GPU (the largest per-pixel step, and the reason for the whole-frame readback),
-then the face features on the GPU so the band is not read back at all; the photo decoded once for the face search's
-picture and the wrinkle search's crop.
+then the face features on the GPU so the band is not read back at all. The wrinkle crops' decode is now made once and
+early (`fork/perf-portrait-analyses.md`).
 
 ## Branch
 
