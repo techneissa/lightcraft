@@ -1,6 +1,6 @@
 # People parts ahead of time
 
-List: people parsing runs ahead of time in the background (the photos around the open one, new imports with faces, then every photo with faces while idle), so opening a photo finds its part masks ready in milliseconds; paused while you work, on low battery and in Low Power Mode; Settings ▸ Performance ▸ People Parts (issue #125). Branch `perf/masks-ahead-of-time`.
+List: people parsing runs ahead of time in the background for photos likely to be retouched (the photo open in Edit and, once you edit, the photos ahead of it; photos with portrait settings; picked or starred photos with faces while idle; nothing while culling), so opening a photo finds its part masks ready in milliseconds; paused while you work, on low battery and in Low Power Mode; Settings ▸ Performance ▸ People Parts (issues #125, #200). Branch `perf/masks-ahead-of-time`.
 
 ## What it does
 
@@ -9,11 +9,21 @@ people parsing's own disk cache, so a request finds the parse there and no model
 retouching's face search (`fork/retouch-masks.md`); Select People does not ask for a parse yet (see When other
 branches merge).
 
-- **Which photos, in order**: the photo open in the filmstrip and its neighbours (4 ahead in the direction of travel,
-  2 behind, nearest first); then photos imported since the library opened that have faces (newest import first); then,
-  while the user is idle, every other photo with faces, newest first. A neighbour without faces is parsed only while
-  the face scan has not looked at it yet. A photo is parsed once per model set and People edge, and once per app
-  start (a failure is not retried until the next start; a photo whose file or faces change is done again).
+- **Which photos, in order** (issue #200: only photos likely to be retouched): the photo open in the Edit view (the
+  loupe with an Edit, Crop, Remove, Masking, Red Eye or Portrait panel) once it has stayed open 4 s (stepping on
+  sooner parses nothing, and a run going for a photo stepped past ends; a portrait tool opened sooner asks for the
+  parse itself), and, once the user has edited there since
+  coming to it (an edit replaces the open photo's develop settings) or the open photo has portrait settings, the 4
+  photos ahead of it in the direction of travel, nearest first; none behind (stepped past already). Then photos with
+  portrait settings, whose drawing needs the parse (newest first, also while the user is around). Then, while the user
+  is idle, photos with faces they kept: picked, or one star or more, and not rejected (newest first). Nothing else: a
+  new import, a photo with faces nobody picked or starred, a rejected photo. While culling (any other view: the
+  grid, the loupe without an Edit panel, Compare, Survey) nothing near the open photo is parsed and the early check
+  for faces (below) waits; leaving the Edit view forgets the edits, so coming back parses the open photo alone until
+  the next edit; an edit, or portrait settings on the open photo, count as staying (no 4 s wait). While the open
+  photo waits, `state` is `paused` (the app keeps pumping) and no row shows. A neighbour without faces is parsed only while the face scan has not looked at it yet. A photo is
+  parsed once per model set and People edge, and once per app start (a failure is not retried until the next start; a
+  photo whose file or faces change is done again).
 - **Never in the way**: one photo at a time on one worker thread, so the GPU turn is given up between photos. Nothing
   new starts while a slider is dragged, for 1.5 s after the user last dragged, typed or scrolled (also in a window
   without the keyboard), while the loupe waits for its render (`prep::foreground_busy`), while an export, print, book
@@ -29,8 +39,8 @@ branches merge).
 - **Light on the UI thread**: the pump never loads YuNet (it reads only whether the file is there, and its size and
   time); the worker loads it. The worker also reads, lists and writes the index beside the cache. The queue is
   rebuilt only when what it reads of the catalog changes (faces and other metadata, dates, files, photos added or
-  removed: `Catalog::aspects_since`), at most every 3 s, never while the work is held back; edits and ratings leave it
-  as it is. The app asks for a frame only while there is work the pace allows, now and then while it is held back, and
+  removed, ratings, flags, develop settings: `Catalog::aspects_since`), at most every 3 s, never while the work is held
+  back; labels and analysis leave it as it is. The app asks for a frame only while there is work the pace allows, now and then while it is held back, and
   once when the user will count as idle while only photos for an idle user wait.
 - **Power**: nothing in Low Power Mode or on battery below 40 % (`pmset`, read at most once a minute on its own thread).
   On the Mac nothing starts before the first reading is in (`checkingPower`).
@@ -74,10 +84,12 @@ branches merge).
 - **Cache budget**: people parsing's 512 MB cap now removes the parses used least recently (each lookup marks the file
   as used). The idle sweep stops at 90 % of the cap, so it never pushes out parses for its own; the neighbours and new
   imports may. A parse file is 100–230 KB, so the cap holds a few thousand photos.
-- **Commands**: `parsing.ahead.pump {pace, backward?, enabled?, wait?, timeoutMs?}` (the app calls it every frame;
+- **Commands**: `parsing.ahead.pump {pace, backward?, culling?, enabled?, wait?, timeoutMs?}` (the app calls it every frame,
+  with `culling` outside the Edit view;
   `wait` keeps going until the queue is done, for 3 s at most, since it holds the UI thread: an agent calls again while
-  the state is `working`, `paused` or `loading`) and `parsing.ahead.status` → `{enabled, state, active, queued, left,
-  queue, working, parsed, cached, skipped, failed, power, indexFile}` (`left`: the queued photos the pace allows now);
+  the state is `working`, `paused` or `loading`) and `parsing.ahead.status` → `{enabled, culling, editing, state, active,
+  queued, left, queue, working, parsed, cached, skipped, failed, power, indexFile}` (`editing`: the user has edited
+  since coming to the Edit view) (`left`: the queued photos the pace allows now);
   `state` is one of `off`, `battery`, `lowPower`, `checkingPower`, `noModels`, `noCache`, `stopped`, `loading` (the
   worker is reading the index), `paused`, `working`, `done`, `idle`.
 - **Never crashes**: a damaged or hostile index is started afresh (keys that could leave the folder are refused); a
@@ -130,6 +142,16 @@ A test Mac, other builds running (load average 8–48), 7 CC0 portraits (18–24
 - BiSeNet's clothes parser (SegFormer-B2) runs on candle at 700 ms; Sapiens2 at 1.2 s. Converting them to Core ML is
   the next step for those sets.
 
+Culling, measured with `crates/engine/examples/parse_cull.rs` (the 14 photos below, faces found first, a step every
+2 s as the arrow keys do, pumped as the app pumps: paused 1.5 s after each key, then light), same Mac, load average
+14–25:
+
+| Walk | Before | After |
+| --- | --- | --- |
+| Outside the Edit view, a step every 2 s | 17 model runs started (12 finished), 6.9 s CPU | none, 0.1 s CPU |
+| In the Edit view, no edit, a step every 2 s | 17 started (11 finished), 7.2 s CPU | none, 1.3 s CPU (the early face check on two photos without face regions) |
+| In the Edit view, no edit, a step every 6 s | 14 started, 14 finished, 8.4 s CPU | 14 and 14, 9.3 s CPU |
+
 After the change (same Mac and photos plus 5 CC0 group photos of 2 to 26 people, before and after run in turn three
 times, load average 25–39), mean per photo over 14 photos, CPU: 565–623 ms → 490–521 ms. By step, CPU: clothes parser
 139–157 → 80–83 ms, face parser 63–72 → 48–50 ms, face mesh 29–33 → 14 ms. On the 9 photos without the groups, the
@@ -151,16 +173,17 @@ BiSeNet: identical.
 `crates/engine/src/parse_ahead.rs`, `crates/engine/src/parse_ahead/{queue,index,peek,power,worker}.rs`,
 `crates/engine/src/people_parsing/ahead.rs`, `crates/engine/src/cmd/parse_ahead.rs`,
 `crates/engine/src/tests/parse_ahead.rs`, `crates/engine/src/tests/parse_ahead_peek.rs`, `crates/engine/examples/parse_ahead.rs`,
-`crates/engine/examples/parse_profile.rs`, `crates/ui-egui/src/parse_ahead.rs`,
+`crates/engine/examples/parse_profile.rs`, `crates/engine/examples/parse_cull.rs`, `crates/ui-egui/src/parse_ahead.rs`,
 `crates/ui-egui/src/tests/parse_ahead.rs`, `fork/parse-ahead.md`, `fork/tests.d/parse-ahead.txt`
 
 ## Hooks in official files
 
-- `crates/engine/Cargo.toml`: the `parse_profile` example (`test-hooks`) and `rustix` (its CPU clock) as a
-  dev-dependency.
+- `crates/engine/Cargo.toml`: the `parse_profile` (`test-hooks`) and `parse_cull` examples, and `rustix` (their CPU
+  clock) as a dev-dependency.
 - `crates/engine/src/lib.rs`: `pub mod parse_ahead`, field `Session::parse_ahead`. `crates/engine/src/cmd.rs`:
   `mod parse_ahead`, its specs. The `mod` lines of `crates/engine/src/tests.rs`, `crates/ui-egui/src/tests.rs` and
   `crates/ui-egui/src/lib.rs`.
+- `crates/ui-egui/src/full_decode.rs`: `editing` is `pub(crate)` (the pump's `culling`).
 - `crates/ui-egui/src/app/frame.rs` (the per-frame pump), `crates/ui-egui/src/dialogs/settings/performance.rs` (the
   switch), `crates/ui-egui/src/state/settings.rs` (`parse_ahead`, on by default),
   `crates/ui-egui/src/settings_sync/rules.rs` (`parseAhead` left out of sync).
@@ -200,5 +223,5 @@ lightcraft-engine --example parse_ahead -- OUT_DIR PHOTO...` (give it copies: it
 ## What's New entry
 
 ### People Parts Ahead of Time
-- People's part masks (skin, hair, eyes, lips, clothes) are found in the background before you need them: for the photos around the one you have open, for new imports with faces, and, while the computer is idle, for every photo with faces. Opening such a photo finds its masks ready at once.
+- People's part masks (skin, hair, eyes, lips, clothes) are found in the background before you need them, for the photos you are likely to retouch: the photo open in Edit and, once you edit, the next ones; photos with portrait settings; and, while the computer is idle, picked or starred photos with faces. Opening such a photo finds its masks ready at once. Nothing is done for photos you only step past while culling.
 - It pauses while you edit, and stops on battery below 40 % and in Low Power Mode. Settings ▸ Performance ▸ People Parts turns it off.

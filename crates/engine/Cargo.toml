@@ -78,6 +78,9 @@ name = "parse_profile"
 required-features = ["test-hooks"]
 
 [[example]]
+name = "parse_cull"
+
+[[example]]
 name = "birefnet_compare"
 required-features = ["sam"]
 
