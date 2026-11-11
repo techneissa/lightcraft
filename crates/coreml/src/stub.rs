@@ -11,6 +11,10 @@ pub(crate) fn available() -> bool {
     false
 }
 
+pub(crate) fn functions_available() -> bool {
+    false
+}
+
 pub(crate) fn compile(_package: &Path) -> Result<PathBuf> {
     Err(Error::Unavailable)
 }

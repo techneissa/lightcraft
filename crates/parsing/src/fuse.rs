@@ -84,9 +84,9 @@ pub fn input_size(width: usize, height: usize) -> (usize, usize) {
 }
 
 /// Sapiens2's pass over the whole photo, its class probabilities wanted on the clothes parser's `w × h` grid.
-pub fn whole_pass(run: &dyn crate::crops::Runner, img: &RgbImage, w: usize, h: usize) -> crate::crops::Pass {
+pub fn whole_pass(fit: crate::crops::Fit, img: &RgbImage, w: usize, h: usize) -> crate::crops::Pass {
     let (iw, ih) = input_size(img.width, img.height);
-    let (iw, ih) = run.fit(iw, ih);
+    let (iw, ih) = fit(iw, ih);
     let (sx, sy) = (img.width as f32 / iw as f32, img.height as f32 / ih as f32);
     let px = sample_grid(img, iw, ih, sx.max(sy), [0.485, 0.456, 0.406], |u, v| (u * sx, v * sy));
     crate::crops::Pass { px, iw, ih, w, h }

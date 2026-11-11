@@ -38,17 +38,32 @@ fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
     m.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// The set and hair edges a parse uses ([`PeopleParsing::choice`]).
+/// The set, hair edges and Sapiens2 engine a parse uses ([`PeopleParsing::choice`]).
 #[derive(Clone)]
 pub struct Choice {
     set: ModelSet,
     matting: Option<(crate::hair_edges::HairEdges, crate::hair_edges::Edge)>,
+    /// Sapiens2 runs on Core ML (the Sapiens2 set only): its parse is filed apart from candle's (#216).
+    parts_coreml: bool,
 }
 
 impl Choice {
-    /// The version a parse with this choice is filed under: the set's, with the hair edges' when they draw it.
+    /// The version a parse with this choice is filed under: the set's, with the Sapiens2 engine's and the hair edges'
+    /// when they differ from the default.
     pub fn version(&self) -> String {
-        PeopleParsing::version_of(self.set, self.matting.as_ref())
+        PeopleParsing::version_of(self.set, self.parts_coreml, self.matting.as_ref())
+    }
+
+    /// The version in the cache key of a parse of `img`: [`Self::version`], marked when Core ML's Sapiens2 sees the
+    /// whole photo smaller than candle does (a wide photo: `lightcraft_parsing::coreml::sapiens2_shrinks`).
+    pub fn key_version(&self, img: &RgbImage) -> String {
+        let version = self.version();
+        #[cfg(not(target_arch = "wasm32"))]
+        if self.parts_coreml && lightcraft_parsing::coreml::sapiens2_shrinks(img.width, img.height) {
+            return format!("{version}-fit");
+        }
+        let _ = img;
+        version
     }
 }
 
@@ -288,7 +303,32 @@ impl PeopleParsing {
     /// The set and hair edges a parse made now uses: a search taking it when it starts parses with them however the
     /// choice changes meanwhile ([`PeopleParsing::parse_as`]).
     pub fn choice(&self) -> Choice {
-        Choice { set: self.model_set(), matting: self.matting() }
+        let set = self.model_set();
+        Choice { set, matting: self.matting(), parts_coreml: self.parts_on_coreml(set) }
+    }
+
+    /// Whether `set`'s Sapiens2 runs on Core ML now: as the loaded set's does, else as its runtime choice says
+    /// (Automatic: Core ML when its packages are in the models folder).
+    fn parts_on_coreml(&self, set: ModelSet) -> bool {
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let Some(file) = set.parts_file() else { return false };
+            if let Some(l) = lock(&self.inner.loaded).as_ref().filter(|l| l.set == set) {
+                return l.parser.parts_backend() == Some(lightcraft_parsing::Backend::CoreMl);
+            }
+            match self.runtimes().parts {
+                crate::model_runtime::Runtime::Candle => false,
+                crate::model_runtime::Runtime::CoreMl => true,
+                crate::model_runtime::Runtime::Automatic => {
+                    lightcraft_coreml::available() && self.models_dir().is_some_and(|d| lightcraft_parsing::coreml::installed(&d, &file))
+                }
+            }
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            let _ = set;
+            false
+        }
     }
 
     /// Whether a parse can run now: the chosen set is downloaded (or a test runner stands in for it).
@@ -444,11 +484,20 @@ impl PeopleParsing {
     /// edge other than Current draws people's edges (so switching the edge never reads the other's file). The one
     /// version function: [`Choice::version`] (so [`Self::parse_as`] and [`Self::version`]), the parse-ahead index
     /// ([`Self::ahead_version`]) and the portrait retouching's face store key on it.
-    fn version_of(set: ModelSet, matting: Option<&(crate::hair_edges::HairEdges, crate::hair_edges::Edge)>) -> String {
-        match matting.and_then(|(_, e)| crate::hair_edges::vision::version(*e)) {
-            Some(edge) => format!("{}+{edge}", set.version()),
-            None => set.version(),
+    ///
+    /// Sapiens2 on Core ML adds `+coreml` (#216): its masks match candle's closely but not to the bit, and a wide
+    /// photo's whole-photo pass is smaller there ([`Choice::key_version`]), so one engine's parse is never served for
+    /// the other. Candle's version is the one parses had before.
+    fn version_of(set: ModelSet, parts_coreml: bool, matting: Option<&(crate::hair_edges::HairEdges, crate::hair_edges::Edge)>) -> String {
+        let mut v = set.version();
+        if parts_coreml {
+            v.push_str("+coreml");
         }
+        if let Some(edge) = matting.and_then(|(_, e)| crate::hair_edges::vision::version(*e)) {
+            v.push('+');
+            v.push_str(edge);
+        }
+        v
     }
 
     /// [`PeopleParsing::parse`] with the set and hair edges of `choice` (taken earlier: a face search parses with
@@ -456,8 +505,8 @@ impl PeopleParsing {
     /// is filed under (what the parse-ahead index files, `fork/parse-ahead.md`).
     pub(crate) fn parse_as(&self, choice: Choice, img: RgbImage, hints: Vec<FaceHint>, wait: bool) -> (Filed, Outcome) {
         let version = choice.version();
-        let Choice { set, matting } = choice;
-        let key = cache::key(&img, &hints, &version);
+        let key = cache::key(&img, &hints, &choice.key_version(&img));
+        let Choice { set, matting, .. } = choice;
         let quiet = ahead::quiet();
         if let Some(q) = &quiet {
             q.note(&key, &version);

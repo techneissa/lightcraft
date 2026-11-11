@@ -89,6 +89,10 @@ pub fn load_package_function(package: &Path, compiled: &Path, units: ComputeUnit
     if !crate::available() {
         return Err(Error::Unavailable);
     }
+    // before any compiling: on macOS 14 the load would fail after it, and the next launch would compile again
+    if function.is_some() && !crate::functions_available() {
+        return Err(Error::Load("this macOS can't load one function of a model (macOS 15 or later)".into()));
+    }
     let load = || Model::load_function(compiled, units, function);
     if !package.exists() {
         return if compiled.is_dir() { load() } else { Err(Error::Missing(package.to_path_buf())) };

@@ -215,6 +215,7 @@ fn grow(r: &NormRect, by: f32) -> NormRect {
 
 /// One Sapiens2 pass: the picture it sees (three planes of values 0 to 1, `iw × ih`, sides multiples of the patch) and
 /// the grid its class probabilities are wanted on (`w × h`).
+#[derive(Clone)]
 pub struct Pass {
     pub px: Vec<f32>,
     pub iw: usize,
@@ -223,15 +224,22 @@ pub struct Pass {
     pub h: usize,
 }
 
+/// The input size a pass wanted at `w × h` pixels gets: the same on candle ([`same`]), within the canvas on Core ML.
+pub type Fit<'a> = &'a dyn Fn(usize, usize) -> (usize, usize);
+
+/// Makes a photo's passes, each at the input size a [`Fit`] gives it.
+pub type Make<'a> = &'a dyn Fn(Fit) -> Vec<Pass>;
+
+/// Every pass at the size it wanted (candle's).
+pub fn same(w: usize, h: usize) -> (usize, usize) {
+    (w, h)
+}
+
 /// Runs Sapiens2's passes over a photo.
 pub trait Runner {
-    /// The input a pass wanted at `w × h` gets (Core ML's canvas holds passes up to a size).
-    fn fit(&self, w: usize, h: usize) -> (usize, usize) {
-        (w, h)
-    }
-
-    /// Each pass's class probabilities on its grid (class-major), in order; fewer only when `cancelled`.
-    fn probs(&self, passes: &[Pass], cancelled: &dyn Fn() -> bool) -> Result<Vec<Vec<f32>>>;
+    /// Each pass `make` makes, sized for the engine that runs it (again at candle's own sizes when Core ML fails on
+    /// them), and its class probabilities on its grid (class-major), in order; fewer only when `cancelled`.
+    fn probs(&self, make: Make, cancelled: &dyn Fn() -> bool) -> Result<Vec<Vec<f32>>>;
 }
 
 /// Sapiens2 on candle (or a stand-in in tests), one pass at a time.
@@ -241,7 +249,14 @@ pub struct OnCandle<'a> {
 }
 
 impl Runner for OnCandle<'_> {
-    fn probs(&self, passes: &[Pass], cancelled: &dyn Fn() -> bool) -> Result<Vec<Vec<f32>>> {
+    fn probs(&self, make: Make, cancelled: &dyn Fn() -> bool) -> Result<Vec<Vec<f32>>> {
+        self.run(&make(&same), cancelled)
+    }
+}
+
+impl OnCandle<'_> {
+    /// Each of `passes` as it is.
+    pub(crate) fn run(&self, passes: &[Pass], cancelled: &dyn Fn() -> bool) -> Result<Vec<Vec<f32>>> {
         let mut out = Vec::with_capacity(passes.len());
         for p in passes {
             if cancelled() {
@@ -285,30 +300,29 @@ fn parts_map_with(run: &dyn Runner, map: BodyMap, img: &RgbImage, faces: &[NormR
     let whole = owner.iter().flatten().any(uncropped);
     let mine: Vec<(usize, &NormRect)> = people.iter().enumerate().filter(|(k, _)| !uncropped(k)).collect();
     let samples = samples(mine.iter().map(|(_, b)| cells(b, w, h)), CELL_SAMPLES);
-    let mut passes = Vec::with_capacity(mine.len() + 1);
-    if whole {
-        passes.push(crate::fuse::whole_pass(run, img, w, h));
-    }
-    let mut boxes = Vec::with_capacity(mine.len());
-    for (k, b) in mine {
-        let at = cells(b, w, h);
-        if at.2 < 2 || at.3 < 2 {
-            continue;
+    let boxes: Vec<(usize, (usize, usize, usize, usize))> =
+        mine.into_iter().map(|(k, b)| (k, cells(b, w, h))).filter(|(_, at)| at.2 >= 2 && at.3 >= 2).collect();
+    // (made by the runner for its engine: a Core ML failure makes them again at candle's sizes)
+    let make = |fit: Fit| {
+        let mut passes = Vec::with_capacity(boxes.len() + 1);
+        if whole {
+            passes.push(crate::fuse::whole_pass(fit, img, w, h));
         }
-        passes.push(box_pass(run, img, (w, h), samples, at));
-        boxes.push((k, at));
-    }
+        passes.extend(boxes.iter().map(|&(_, at)| box_pass(fit, img, (w, h), samples, at)));
+        crate::profile::mark("sapiens2 inputs");
+        passes
+    };
     if cancelled() {
         return Err(Error::Cancelled);
     }
-    crate::profile::mark("sapiens2 inputs");
-    let out = run.probs(&passes, cancelled)?;
+    let out = run.probs(&make, cancelled)?;
     crate::profile::mark("sapiens2 passes");
     if cancelled() {
         return Err(Error::Cancelled);
     }
-    if out.len() != passes.len() {
-        return Err(Error::Model(format!("Sapiens2 gave {} passes, not {}", out.len(), passes.len())));
+    let wanted = boxes.len() + usize::from(whole);
+    if out.len() != wanted {
+        return Err(Error::Model(format!("Sapiens2 gave {} passes, not {wanted}", out.len())));
     }
     let mut out = out.into_iter();
     let n = w * h;
@@ -344,12 +358,12 @@ fn place(probs: &mut [f32], local: &[f32], (w, h): (usize, usize), at: (usize, u
 
 /// The pass over the grid cells `at` (`x0, y0, width, height`) of a `grid` over `img`, at `samples` model pixels a
 /// cell: that part of the photo alone, its probabilities wanted on those cells.
-fn box_pass(run: &dyn Runner, img: &RgbImage, grid: (usize, usize), samples: f32, at: (usize, usize, usize, usize)) -> Pass {
+fn box_pass(fit: Fit, img: &RgbImage, grid: (usize, usize), samples: f32, at: (usize, usize, usize, usize)) -> Pass {
     let (gx0, gy0, cw, ch) = at;
     let (sx, sy) = (img.width as f32 / grid.0 as f32, img.height as f32 / grid.1 as f32);
     let (px0, py0, pw, ph) = (gx0 as f32 * sx, gy0 as f32 * sy, cw as f32 * sx, ch as f32 * sy);
     let (iw, ih) = input_size(cw as f32 * samples, ch as f32 * samples);
-    let (iw, ih) = run.fit(iw, ih);
+    let (iw, ih) = fit(iw, ih);
     let (ux, uy) = (pw / iw as f32, ph / ih as f32);
     let px = sample_grid(img, iw, ih, ux.max(uy), [0.485, 0.456, 0.406], |u, v| (px0 + u * ux, py0 + v * uy));
     Pass { px, iw, ih, w: cw, h: ch }

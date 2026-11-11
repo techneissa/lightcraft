@@ -101,6 +101,14 @@ pub fn installed(models: &Path, file: &ModelFile) -> bool {
     CONVERTED.contains(file) && packages(models, file).iter().all(|(package, compiled)| package.is_dir() || compiled.is_dir())
 }
 
+/// Whether Sapiens2 on Core ML sees a `width × height` photo's whole-photo pass smaller than candle does (a photo
+/// wider or taller than about 2.7:1: the pass is made to fit the head's canvas). A parse's cache key says so, as it
+/// says the engine (`fork/coreml.md`).
+pub fn sapiens2_shrinks(width: usize, height: usize) -> bool {
+    let (w, h) = crate::fuse::input_size(width, height);
+    sapiens::fit(w, h) != (w, h)
+}
+
 /// The canvas a `w × h` grid is run in: the smallest square that holds it, so photos of every shape with the same
 /// long side share one input shape (a change of shape costs Core ML more than the run).
 pub(crate) fn canvas(w: usize, h: usize) -> Option<(usize, usize)> {

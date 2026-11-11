@@ -148,6 +148,11 @@ pub fn available() -> bool {
     imp::available()
 }
 
+/// Whether one function of a model with several can be loaded ([`Model::load_function`]): macOS 15 or later.
+pub fn functions_available() -> bool {
+    imp::available() && imp::functions_available()
+}
+
 /// Compile a `.mlpackage` (or `.mlmodel`) for this Mac and put the compiled `.mlmodelc` folder at `dest`, replacing
 /// what was there. Takes seconds; run it once after a download, off the UI thread.
 pub fn compile(package: &Path, dest: &Path) -> Result<()> {

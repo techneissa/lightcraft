@@ -405,7 +405,7 @@ impl Parser {
     pub(crate) fn parts_probs(&self, passes: &[crate::crops::Pass]) -> Result<Vec<Vec<f32>>> {
         use crate::crops::Runner;
         let engine = self.parts.as_ref().ok_or_else(|| Error::Model("the set has no Sapiens2".into()))?;
-        PartsRunner { engine, parser: self }.probs(passes, &|| false)
+        PartsRunner { engine, parser: self }.probs(&|_| passes.to_vec(), &|| false)
     }
 
     /// Make the face parser's next Core ML call fail, as a GPU error on a photo would.
@@ -510,15 +510,13 @@ struct PartsRunner<'a> {
 }
 
 impl crate::crops::Runner for PartsRunner<'_> {
-    fn fit(&self, w: usize, h: usize) -> (usize, usize) {
-        if self.engine.backend() == Backend::CoreMl { coreml::sapiens::fit(w, h) } else { (w, h) }
-    }
-
-    fn probs(&self, passes: &[crate::crops::Pass], cancelled: &dyn Fn() -> bool) -> Result<Vec<Vec<f32>>> {
+    fn probs(&self, make: crate::crops::Make, cancelled: &dyn Fn() -> bool) -> Result<Vec<Vec<f32>>> {
         let dev = &self.parser.dev;
         self.engine.run(
-            |m| coreml::sapiens::probs(m, passes, cancelled),
-            |net| crate::crops::OnCandle { net: &|x| net.forward(x), dev }.probs(passes, cancelled),
+            // (each engine makes the passes at its own sizes: a Core ML failure runs candle on candle's, so the parse
+            // is candle's as a whole, never shrunk passes)
+            |m| coreml::sapiens::probs(m, &make(&coreml::sapiens::fit), cancelled),
+            |net| crate::crops::OnCandle { net: &|x| net.forward(x), dev }.probs(make, cancelled),
             || match self.parser.set.parts_file() {
                 Some(f) => load_parts_net(&f, &self.parser.models, dev),
                 None => Err(Error::Model("the set has no Sapiens2".into())),

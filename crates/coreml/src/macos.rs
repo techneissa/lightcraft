@@ -112,7 +112,7 @@ fn names(dict: Option<Retained<NSDictionary<NSString, AnyObject>>>) -> Vec<Strin
 }
 
 /// Whether `MLModelConfiguration` can pick one function of a model with several (macOS 15 or later).
-fn functions_available() -> bool {
+pub(crate) fn functions_available() -> bool {
     AnyClass::get(c"MLModelConfiguration").is_some_and(|c| c.responds_to(sel!(setFunctionName:)))
 }
 

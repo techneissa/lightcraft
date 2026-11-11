@@ -150,7 +150,7 @@ impl PeopleParsing {
     /// The version a parse is filed under now: the chosen set's, with the People edge's when it is not Current (the
     /// one [`Self::parse`] keys on).
     pub(crate) fn ahead_version(&self) -> String {
-        Self::version_of(self.model_set(), self.matting().as_ref())
+        self.choice().version()
     }
 
     /// Tests: file a finished run of `key` without caching its parse (a run that ended a moment ago).
