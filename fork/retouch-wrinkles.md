@@ -7,34 +7,40 @@ List: the Portrait tab's Wrinkles section: Forehead, Crow's Feet, Smile Lines an
 v1 (below) only lifts a crease by part of its depth, so deep wrinkles stayed. v2 takes them away:
 
 - **Once per photo**, in the face search next to Blemishes' spots and Stray Hair's strands (`crates/engine/src/retouch_input/wrinkles.rs`,
-  `crates/retouch/src/wrinkles/search.rs`), for each face with the mesh and a Facial Skin mask, on a crop of the areas at
-  most 768 px:
+  `crates/retouch/src/wrinkles/search.rs`), for each face with the mesh and a Facial Skin mask, on a crop of the areas
+  where the face is at most 1280 px across (crop at most 2560 px; #201: at 768 px a 3 px crease was under a pixel wide):
   0. **The pixels** are a floating-point crop of the original with the default settings (no retouching), rendered at the
      size the search works at (`Cropper::crop_float`, `OutputDepth::F32Linear`, a window of the reduced render), not the 8-bit
      parse picture, which quantises the shadows (a wrinkle in dark skin is a step or two deep: the same faint line reads as a
      wrinkle in the 8-bit copy and not in the float one, tested). When the original can't be cut, the 8-bit picture is the
      fallback. The thresholds (ridge 0.025 / 0.05 log light) were re-checked on float crops of both CC0 faces and three private
      test portraits.
-  1. **Where a wrinkle may be**: eroded skin (0.6 % of the face) inside an area, and not an ear, a nostril or the face's edge
-     (`exclude.rs`, from the mesh's outline and nostril points), and not a hair across the skin (`hairlike.rs`: a thin
-     bright line that is greyer than the skin; a skin-coloured lit ridge is skin).
-  2. **The mask** (`ridge.rs`): valleys of the log luminance at four widths (0.25–1.8 % of the face; a Hessian ridge filter), each
-     width keeping only the pixels where it is the best, so a thin line is not grown into a stripe by the wider widths; crests
-     only, kept when they connect to a strong response and are long enough, grown 0.35 line widths, soft edge 0.35 %.
-  3. **The replacement** (`heal.rs`): LaMa fills the mask (the engine's `lama_fill` runner, crop at 768 px, little context)
-     and only its low band is used (blurred to twice the fine blur); without LaMa the **banded heal** rebuilds the low band
-     from the skin around the mask (normalised convolution at 6, 3, 1.25 and 0.6 % of the face; where even 6 % finds hardly
-     any skin the pixel keeps its own light, never an average of skin far away). The mid band (the crease and its flanks) is not
-     put back. The **fine band** (pores, sigma 0.2 % of the face, at least 2 px) comes back from clean skin nearby (first of 14
-     shifts whose source is outside the mask, with skin all around it weighted by the Facial Skin mask), held to 3 times the
-     skin's own typical fine band so a stray hair or speck is not copied whole.
-  4. **The change** (log light per channel, new over old; never more than 0.05 darker nor 0.8 lighter) is faded out where the
-     mask covers most of the skin around (over 72–97 % within 4 % of the face: a face as wrinkled as a walnut would come out as
-     flat patches, so the wrinkles thin out there instead), and kept in `Face::wrinkles` (`wrinkles::Fix`: a grid over the
-     crop, normalised like the masks, 16-bit cells, trimmed to where there is a change), in the face store and the input's
-     fingerprint. No new saved field: it lives with the faces, not in the settings.
-  - **LaMa runs for the 8 largest faces** of a photo (`LAMA_FACES`); the rest get the banded heal, so a group photo's search stays
-    bounded (about a second a face).
+  1. **The skin**: Facial Skin, plus the skin seen through and beside a pair of glasses (`glasses.rs`): the parse puts the
+     lenses and the skin beside them in Others, so crow's feet behind glasses had no skin. Inside Others, a pixel with the
+     skin's colour and light is skin; the rest (non-skin colour, or far lighter: a reflection) is the frame, opened by 0.4 %
+     of the face (thinner dark lines are folds) and kept out with a 0.6 % margin.
+  2. **Where a wrinkle may be**: that skin eroded (0.6 %), inside an area, not an ear, a nostril, the face's edge or an eye
+     (`exclude.rs`: a band round each eye and a disc at each corner, so the lash line and the eye's dark corner stay), not a
+     hair (`hairlike.rs`: thin, long, bright and greyer than the skin; a lit skin ridge is thicker and is skin), and not
+     far darker than the skin around (a lash line, a deep shadow).
+  3. **The lines** (`zones.rs`, `ridge.rs`): each pixel's zone is the region that weighs most there, with its widths (out of
+     eight from 0.12 to 2 % of the face) and its lines' direction: the forehead across (and up and down in a band round the
+     middle: frown lines), crow's feet and cheeks any way, the nose-to-mouth fold along itself (softened to 60 %, never
+     taken away), the neck across. A Hessian valley filter at those widths, damped for round shapes (a freckle, a pore) and
+     averaged along the line; the crest kept by non-maximum suppression across the line, then hysteresis with each zone's
+     shortest line (3 % of the face on the forehead and neck, 2.5 % elsewhere). Round pigment spots (browner than the skin
+     around: freckles, age spots) are found too and left as they are, except on a line's core.
+  4. **The change** (`flatten.rs`): near the lines, each skin pixel's median along the line (13 samples), then the weighted
+     median of those across the line (a Gaussian of 1.6 times the zone's widest line or 4 times the line's own width): the
+     skin the pixel would have without the lines. Change = that less its own, smoothed 2 px along the line, scaled by how
+     near a line it is, the zone's keep and the allowed part. Creases come up and the lit ridges between them come down, so a
+     lined forehead does not turn paler than the skin around it; pores and grain stay. A freckle or a dark pit inside a
+     crease takes the crease's change (it comes up with it and stays a freckle, not a dark dot). Kept in `Face::wrinkles`
+     (`wrinkles::Fix`: a grid over the crop, normalised like the masks, 16-bit cells in 16 × 16 tiles, only the changed
+     tiles stored), in the face store and the input's fingerprint. No new saved field.
+  - **Approaches weighed** (#201): a two-sided fill along each cross-section from the skin on both sides (weak, blocky
+    edges), the old banded heal with LaMa's low band (removed only 14–16 % of a forehead's line depth even at its own size,
+    and brightened), and evening across the lines (kept: the pictures were the cleanest). LaMa is no longer called.
 - **The areas are wider than v1's** (same four controls and ids, `areas.rs`): Forehead also covers between the brows (the
   frown lines down to the bridge of the nose); Crow's Feet also covers a thin crescent under each eye; Smile Lines (label "Cheeks
   and Smile Lines", id `retouch.wrinkles.smileLines`) is the nose-to-mouth band plus each cheek from under the eye to the jaw
@@ -48,8 +54,8 @@ v1 (below) only lifts a crease by part of its depth, so deep wrinkles stayed. v2
   had finished too) and the photo's faces are kept as "to search again" (`Found::retry`): Wrinkles shows v1's result, and the
   photo is searched again after 30 s by a render or the Portrait tab opening on it, and at once by an export (an export must
   match what the preview will show). Neither is a failure, and the other searches' results (spots, strands) stay.
-- **The key** the faces are kept under includes whether LaMa is installed (`LamaFill::term`: its file's size and time, read at
-  most every 2 s), so installing LaMa searches the photo again, with LaMa.
+- **The key** the faces are kept under still includes whether LaMa is installed (`LamaFill::term`), though the search no
+  longer uses it (left for a follow-up that removes the plumbing).
 - **A slider tick** scales the stored change (`fix.rs`): in each area, slider/100 times the area's weight (`areas.rs`, the
   strongest where areas overlap) is how much of the change is applied, as an additive change in log light (a gain per channel)
   on the pixels the render has. Slider 0 keeps every bit; 100 gives the stored change inside the area. No model runs. The
@@ -64,15 +70,22 @@ v1 (below) only lifts a crease by part of its depth, so deep wrinkles stayed. v2
   A face whose frame is warped (Face Reshape, lens corrections) is read through the view: tested with a scaling and shifting view.
 - The Refine brush (`fork/refine-brush.md`) runs over Wrinkles as over every feature; `wrinkles::area_weight` is unchanged.
 
-Time (release, a test Mac, a lighter load): the face search per photo with the parse known 0.3 s without LaMa and 0.7–1.4 s with
-it (cold) for one face, including Blemishes' and Stray Hair's searches and the float crop; the wrinkles part alone about 40 ms
-with the banded heal on a 1936 px draft. A slider tick (the retouch step on a 1936 px draft, all four sliders at 100): 5.6 ms on a
-head-and-shoulders portrait, 2.3 ms for Forehead alone; the old Wrinkles 6.3 ms on the same frame.
+Time (release, a test Mac with other work running): the wrinkles search is about 1–1.8 s per face at 1280 px (it was
+about 0.8 s with the banded heal at 768 px); on a 1936 px draft 92 ms (was 71 ms). A slider tick (the retouch step on a
+1936 × 1290 draft of a face filling the frame, all four sliders at 100, fastest of 20): 12.6 ms (was 10.2 ms), under the
+16 ms budget. Memory (peak footprint, the `wrinkles` example with and without `--search`, seven CC0 portraits): the
+search adds 50–350 MB per photo, the most for a tall crop with the neck (1119 × 2117 px); a photo with seven faces adds
+178 MB (faces are searched one after another). Each full-crop buffer is dropped once used (it added up to 514 MB before);
+a face keeps at most 80,000 crest points (the most lined portrait has about 22,000), the deepest first.
 
-Not done: lit ridges beside a deep crease stay as pale streaks (taking them too gave a flat, wet look); a very wrinkled face keeps
-part of its wrinkles where the mask covers most of the skin (see 4); a face crop over 768 px is searched reduced, so pores at an
-export's size come from the photo itself; stubble in Cheeks and Smile Lines can be softened (the parse has no beard class);
-the 9th and later faces of a photo get the banded heal, not LaMa.
+Measured (#201, seven CC0 portraits, `crates/retouch/examples/wrinkles_sheet.rs`; line depth = elongated valleys 0.15–0.6 %
+of the face; band = the issue's measure, the dark side of the 0.25–3 % band, which also counts spots and mottling): at 100,
+the most lined face's forehead 13 → 27 % of line depth (band 16 → 23 %), crow's feet 3 → 21 % (4 → 19 %); crow's feet behind
+glasses 0 → 15 %. The area's mean L* stays within 0.3 of slider 0 at every step. The issue's 70 % band target is not met.
+
+Not done: the 70 % band target (#201); faint crow's feet behind glasses come up only a little (below the line threshold); a
+faint pale streak on the top line of a deeply lined forehead; stubble in Cheeks and Smile Lines can be softened (the parse
+has no beard class); the unused LaMa plumbing for Wrinkles in the engine (`fill_wrinkles`, the key's LaMa term).
 
 ## What it does (v1, kept for a face without a search)
 
@@ -133,8 +146,9 @@ level.
 
 ## Own files
 
-v2: `crates/retouch/src/wrinkles/{search,ridge,heal,hairlike,exclude,fix}.rs`, `crates/retouch/tests/wrinkles_v2.rs`,
-`crates/engine/src/retouch_input/wrinkles.rs`, `crates/engine/examples/wrinkles_v2.rs`.
+v2: `crates/retouch/src/wrinkles/{search,zones,ridge,flatten,glasses,heal,hairlike,exclude,fix}.rs`,
+`crates/retouch/tests/wrinkles_v2.rs`, `crates/retouch/examples/wrinkles_sheet.rs`, `crates/engine/src/retouch_input/wrinkles.rs`,
+`crates/engine/examples/wrinkles_v2.rs`.
 
 v1: `crates/retouch/src/wrinkles.rs`, `crates/retouch/src/wrinkles/areas.rs`, `crates/retouch/src/wrinkles/lines.rs`,
 `crates/retouch/examples/wrinkles.rs`, `crates/retouch/tests/wrinkles.rs`, `crates/ui-egui/src/panels/portrait/wrinkles.rs`,
@@ -162,11 +176,14 @@ In fork files:
 
 ## Tests
 
-v2 (`crates/retouch/tests/wrinkles_v2.rs`, the unit tests in `crates/retouch/src/wrinkles/`, `crates/engine/src/retouch_input/wrinkles.rs` and `parts/tests.rs`): the float crop keeps a 16-bit ramp's levels; an 8-bit picture reads a faint line in the shadows as a wrinkle and the float one does not; a cancelled search drops every face and leaves the photo to be searched again (a render after the wait, an export at once); installing LaMa changes the key; only the 8 largest faces get LaMa; Skin 100 with Wrinkles 100 leaves no pixel much brighter than the skin around it (it overshoots by 0.19 without the bound); the widened areas (between the brows, under the eyes, cheek, chin) take their lines away and the other sliders do not; v2 differs from v1 at the same slider; pixels where the stored change is zero keep their bits and no lift passes the mask; the change follows a warped frame; a draft and an export agree pixel for pixel; a mask covering most of the skin is not trusted;
+v2 (`crates/retouch/tests/wrinkles_v2.rs`, the unit tests in `crates/retouch/src/wrinkles/`, `crates/engine/src/retouch_input/wrinkles.rs` and `parts/tests.rs`): the float crop keeps a 16-bit ramp's levels; an 8-bit picture reads a faint line in the shadows as a wrinkle and the float one does not; a cancelled search drops every face and leaves the photo to be searched again (a render after the wait, an export at once); installing LaMa changes the key; Skin 100 with Wrinkles 100 leaves no pixel much brighter than the skin around it (it overshoots by 0.19 without the bound); the widened areas (between the brows, under the eyes, cheek, chin) take their lines away and the other sliders do not; v2 differs from v1 at the same slider; pixels where the stored change is zero keep their bits and no lift passes the mask; the change follows a warped frame; a draft and an export agree pixel for pixel;
 slider 0 and the other areas' sliders leave every bit; at 100 a pixel has the stored change and at 50 half of it; Forehead 100
-takes away most of the lines' depth and the pores come back inside them; a window equals the whole render inside it; a draft and
-an export four times its size leave the same share; a filler's fill and the banded heal both remove the lines (no filler = the
-banded heal; a cancelled search keeps nothing and v1 shows); faces without the mesh or the skin mask get none, a face without
+takes away most of the lines' depth and the pores come back inside them; Forehead 100 takes thin 3 px creases away and keeps
+the light's gradient and level (#201; failed before at 0.18 of 0.22); the lines even out in light and colour at the clear
+skin's level; a spot and a line down the forehead are not found as lines; skin seen through a lens counts and the frame and
+its margin don't; a freckle in a crease comes up with it and a big dark patch keeps its pixels; a face keeps its deepest crest points up to the cap; the tiles give back every cell; a window equals the whole render inside it; a draft and
+an export four times its size leave the same share; a cancelled search keeps nothing and v1 shows (stopped after
+the first, third or fourth check); faces without the mesh or the skin mask get none, a face without
 wrinkles an empty change; the exclusions cover a synthetic ear, nostril and face edge and not the forehead, cheek or neck; a hair
 is not hair-like unless thin, bright and grey; the search's row is there and its cancel stops it; no panic on odd faces.
 

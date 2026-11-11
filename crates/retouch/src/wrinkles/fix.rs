@@ -28,15 +28,24 @@ const REF: f64 = 0.02;
 const ROOM: f32 = 0.04;
 
 /// The change a face's wrinkles search found: a grid of `width × height` cells over `area` (normalised like the
-/// face's box, in the same frame), each the log of the light's change per channel. Zero outside the grid.
+/// face's box, in the same frame), each the log of the light's change per channel. Zero outside the grid. Kept in tiles
+/// of [`TILE`] × [`TILE`] cells, only the tiles that hold a change: the grid is as fine as the search (a face 1280 px
+/// across), and most of it is skin without a line.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Fix {
     pub area: NormRect,
     pub width: usize,
     pub height: usize,
-    /// Row by row; `width · height` cells.
+    /// Per tile, row by row: the index of its cells in `cells` (a multiple of `TILE²`), or [`EMPTY`].
+    tiles: Vec<u32>,
+    /// The kept tiles' cells, each tile row by row.
     cells: Vec<[i16; 3]>,
 }
+
+/// A tile's side, cells.
+const TILE: usize = 16;
+/// A tile with no change.
+const EMPTY: u32 = u32::MAX;
 
 impl Fix {
     /// The change `delta` (log light per channel) over `area`, trimmed to the cells that have one (and a cell of
@@ -46,7 +55,8 @@ impl Fix {
         if !area.is_valid() || w == 0 || h == 0 || delta.data.len() != w.saturating_mul(h) {
             return None;
         }
-        let has = |p: &[f32; 3]| p.iter().any(|v| v.is_finite() && v.abs() >= TINY);
+        let q = |v: f32| if v.is_finite() { (v * SCALE).round().clamp(-32000.0, 32000.0) as i16 } else { 0 };
+        let has = |p: &[f32; 3]| p.iter().any(|v| q(*v) != 0 && v.abs() >= TINY);
         let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0, 0);
         for (i, p) in delta.data.iter().enumerate() {
             if has(p) {
@@ -61,12 +71,26 @@ impl Fix {
         let (cx0, cy0) = (x0.saturating_sub(1), y0.saturating_sub(1));
         let (cx1, cy1) = ((x1 + 1).min(w), (y1 + 1).min(h));
         let (nw, nh) = (cx1 - cx0, cy1 - cy0);
-        let q = |v: f32| if v.is_finite() { (v * SCALE).round().clamp(-32000.0, 32000.0) as i16 } else { 0 };
-        let mut cells = Vec::with_capacity(nw * nh);
-        for y in cy0..cy1 {
-            for x in cx0..cx1 {
-                let p = delta.data.get(y * w + x).copied().unwrap_or([0.0; 3]);
-                cells.push(p.map(q));
+        let (tw, th) = (nw.div_ceil(TILE), nh.div_ceil(TILE));
+        let mut tiles = vec![EMPTY; tw * th];
+        let mut cells = Vec::new();
+        for ty in 0..th {
+            for tx in 0..tw {
+                let at = |x: usize, y: usize| -> [i16; 3] {
+                    let (gx, gy) = (cx0 + tx * TILE + x, cy0 + ty * TILE + y);
+                    if gx >= cx1 || gy >= cy1 {
+                        return [0; 3];
+                    }
+                    delta.data.get(gy * w + gx).copied().unwrap_or([0.0; 3]).map(q)
+                };
+                let tile: Vec<[i16; 3]> = (0..TILE * TILE).map(|i| at(i % TILE, i / TILE)).collect();
+                if tile.iter().all(|c| *c == [0; 3]) {
+                    continue;
+                }
+                if let (Some(slot), Ok(start)) = (tiles.get_mut(ty * tw + tx), u32::try_from(cells.len())) {
+                    *slot = start;
+                    cells.extend(tile);
+                }
             }
         }
         let (aw, ah) = (area.width(), area.height());
@@ -76,7 +100,17 @@ impl Fix {
             area.x0 + aw * cx1 as f64 / w as f64,
             area.y0 + ah * cy1 as f64 / h as f64,
         );
-        Some(Fix { area: sub, width: nw, height: nh, cells })
+        Some(Fix { area: sub, width: nw, height: nh, tiles, cells })
+    }
+
+    /// The cell at (`x`, `y`) of the grid; zero in a tile with no change or past the grid.
+    fn cell(&self, x: usize, y: usize) -> [i16; 3] {
+        let tw = self.width.div_ceil(TILE);
+        let Some(&start) = self.tiles.get((y / TILE) * tw + x / TILE) else { return [0; 3] };
+        if start == EMPTY || x >= self.width || y >= self.height {
+            return [0; 3];
+        }
+        self.cells.get(start as usize + (y % TILE) * TILE + x % TILE).copied().unwrap_or([0; 3])
     }
 
     /// Whether the search found nothing to change.
@@ -86,13 +120,13 @@ impl Fix {
 
     /// About what it takes in memory.
     pub fn bytes(&self) -> usize {
-        self.cells.len().saturating_mul(6)
+        self.cells.len().saturating_mul(6).saturating_add(self.tiles.len().saturating_mul(4))
     }
 
     /// The change at normalised point (`nx`, `ny`), read bilinearly between cell centres; 0 outside the grid.
     pub fn sample(&self, nx: f64, ny: f64) -> [f32; 3] {
         let (w, h) = (self.width, self.height);
-        if w == 0 || h == 0 || self.cells.len() != w.saturating_mul(h) || !self.area.is_valid() {
+        if w == 0 || h == 0 || self.tiles.len() != w.div_ceil(TILE).saturating_mul(h.div_ceil(TILE)) || !self.area.is_valid() {
             return [0.0; 3];
         }
         let (sx, sy) = ((nx - self.area.x0) / self.area.width() * w as f64, (ny - self.area.y0) / self.area.height() * h as f64);
@@ -105,7 +139,7 @@ impl Fix {
         let (x0, y0) = (fx as usize, fy as usize);
         let (x1, y1) = ((x0 + 1).min(w - 1), (y0 + 1).min(h - 1));
         let (tx, ty) = ((fx - x0 as f64) as f32, (fy - y0 as f64) as f32);
-        let at = |x: usize, y: usize| self.cells.get(y * w + x).copied().unwrap_or([0; 3]);
+        let at = |x: usize, y: usize| self.cell(x, y);
         // no lift past the mask: where the cell the point lies in has no change, the reading between cells has none
         // either (it would only be the neighbour's change leaking half a cell over the mask's edge)
         let (cx, cy) = (((sx as usize).min(w - 1)), ((sy as usize).min(h - 1)));
@@ -128,6 +162,9 @@ impl Fix {
         }
         h.u64(self.width as u64);
         h.u64(self.height as u64);
+        for t in &self.tiles {
+            h.u64(u64::from(*t));
+        }
         for c in &self.cells {
             for v in c {
                 h.u64(u64::from(*v as u16));
@@ -267,4 +304,34 @@ fn reference(img: &Rgb32f, lift: &Rgb32f, ext: [usize; 4], sigma: f32) -> Rgb32f
 /// A slider (0…100) as the share of the stored change applied (a value that is not a number is 0).
 fn share(v: f64) -> f32 {
     if v.is_finite() { (v.clamp(0.0, 100.0) / 100.0) as f32 } else { 0.0 }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A change over 100 × 93 cells, zero over a block in the middle and outside a ring: every cell reads back as it was
+    /// stored, and the tiles of the empty middle keep nothing.
+    #[test]
+    fn the_tiles_give_back_every_cell_and_keep_only_the_changed_ones() {
+        let (w, h) = (100usize, 93usize);
+        let delta = Rgb32f::from_fn(w, h, |x, y| {
+            if (2..98).contains(&x) && (1..92).contains(&y) && !((20..80).contains(&x) && (20..75).contains(&y)) {
+                [0.004 * (x as f32 - 50.0), 0.003 * y as f32, -0.02]
+            } else {
+                [0.0; 3]
+            }
+        });
+        let fix = Fix::new(NormRect::new(0.0, 0.0, 1.0, 1.0), &delta).expect("a change");
+        assert!(fix.cells.len() < fix.tiles.len() * TILE * TILE, "the empty tiles in the middle keep nothing");
+        for y in 0..h {
+            for x in 0..w {
+                let got = fix.sample((x as f64 + 0.5) / w as f64, (y as f64 + 0.5) / h as f64);
+                let want = delta.data[y * w + x];
+                for c in 0..3 {
+                    assert!((got[c] - want[c]).abs() <= 0.5 / SCALE + 1e-6, "cell {x},{y} channel {c}: {} ≠ {}", got[c], want[c]);
+                }
+            }
+        }
+    }
 }
