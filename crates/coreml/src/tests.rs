@@ -182,3 +182,21 @@ fn a_damaged_package_is_not_loaded_from_a_stale_copy() {
     ));
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Issue #267: units that don't load hand the model to the next in the order; a missing model stops at once.
+#[test]
+fn the_next_units_take_over_when_the_first_do_not_load() {
+    use crate::{UnitOrder, first_that_loads};
+    let order = UnitOrder::new(&[ComputeUnits::CpuAndNeuralEngine, ComputeUnits::CpuAndGpu, ComputeUnits::CpuAndNeuralEngine]);
+    assert_eq!(order.iter().collect::<Vec<_>>(), [ComputeUnits::CpuAndNeuralEngine, ComputeUnits::CpuAndGpu]);
+    let mut tried = Vec::new();
+    let got = first_that_loads(order, |u| {
+        tried.push(u);
+        if u == ComputeUnits::CpuAndNeuralEngine { Err(Error::Load("no".into())) } else { Ok(u.id()) }
+    });
+    assert_eq!(got, Ok(("gpu", ComputeUnits::CpuAndGpu)));
+    assert_eq!(tried, [ComputeUnits::CpuAndNeuralEngine, ComputeUnits::CpuAndGpu]);
+    let missing = first_that_loads(order, |_| Err::<(), _>(Error::Missing("x".into())));
+    assert!(matches!(missing, Err(Error::Missing(_))));
+    assert_eq!(UnitOrder::new(&[]).first(), ComputeUnits::CpuAndGpu);
+}

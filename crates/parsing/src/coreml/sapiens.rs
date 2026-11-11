@@ -22,7 +22,7 @@ use std::ops::Range;
 use std::path::Path;
 
 use candle_core::{Device, Tensor};
-use lightcraft_coreml::{ComputeUnits, Error, Model};
+use lightcraft_coreml::{Error, Model, Sample, UnitOrder};
 
 use crate::crops::Pass;
 use crate::models::BODY_SAPIENS2;
@@ -72,21 +72,29 @@ impl Models {
     }
 }
 
-/// Load the three models, on the GPU: the Neural Engine ran the backbone in 1.43 s against 0.75 s on the GPU and was
-/// further from float32 (97 % of pixels the same class against 99.9 %).
-pub(crate) fn load(models: &Path) -> Result<Models, Error> {
+/// Load the three models on `units` (by default the GPU: the Neural Engine ran the backbone in 1.43 s against 0.75 s on
+/// the GPU and was further from float32, 97 % of pixels the same class against 99.9 %).
+pub(crate) fn load(models: &Path, units: UnitOrder) -> Result<Models, Error> {
     let names = names();
     let (first, rest) = names.split_first().ok_or_else(|| Error::Load("no Sapiens2 models".into()))?;
     let backbones = BACKBONES
         .iter()
-        .map(|&(n, f)| Ok((n, super::load_named(models, &BODY_SAPIENS2, first, Some(f), BACKBONE_OUTPUT, ComputeUnits::CpuAndGpu)?)))
+        .map(|&(n, f)| Ok((n, super::load_named(models, &BODY_SAPIENS2, first, Some(f), BACKBONE_OUTPUT, units)?)))
         .collect::<Result<Vec<_>, Error>>()?;
     let heads = HEAD_CANVASES
         .iter()
         .zip(rest)
-        .map(|(&c, n)| Ok((c, super::load_named(models, &BODY_SAPIENS2, n, None, HEAD_OUTPUT, ComputeUnits::CpuAndGpu)?)))
+        .map(|(&c, n)| Ok((c, super::load_named(models, &BODY_SAPIENS2, n, None, HEAD_OUTPUT, units)?)))
         .collect::<Result<Vec<_>, Error>>()?;
     Ok(Models { backbones, heads, periods: Vec::new() })
+}
+
+/// A measurement's call (issue #267): the backbone's smaller function, which takes most of a parse's time.
+pub(crate) fn sample(models: &Path) -> Sample {
+    let names = names();
+    let (package, compiled) = super::named(models, &BODY_SAPIENS2, names.first().map_or("", String::as_str));
+    let (rows, function) = BACKBONES[0];
+    Sample { package, compiled, function: Some(function.to_string()), input: INPUT, shape: vec![1, rows, ROW], output: BACKBONE_OUTPUT }
 }
 
 /// The input a pass wanted at `w × h` pixels gets: the same when the largest canvas and a call hold it, else smaller,

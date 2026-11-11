@@ -10,6 +10,7 @@ use crate::model_runtime::{MODELS, Runtime};
 
 const ID: &str = "models.runtime";
 const DOWNLOAD_ID: &str = "models.downloadCoreml";
+const MEASURE_ID: &str = "models.measure";
 
 fn download_json(d: Download) -> Value {
     match d {
@@ -69,10 +70,57 @@ fn rows(s: &Session) -> Value {
                 "coremlBytes": published(model).map(|(b, _)| b),
                 "license": published(model).map(|(_, l)| l),
                 "download": download_json(s.model_runtimes.download_state(model)),
+                "units": units_json(model),
             })
         })
         .collect();
     json!({"models": models})
+}
+
+/// `model`'s measured units (issue #267): the chosen one and its time, each option's, and whether it is being measured.
+fn units_json(model: &str) -> Value {
+    let units = crate::model_units::shared();
+    let record = units.record(model);
+    let chosen = record.as_ref().and_then(|r| crate::model_units::chosen(&r.options));
+    json!({
+        "chosen": chosen.map(|(u, _)| u.id()),
+        "runMs": chosen.map(|(_, ms)| ms),
+        "measuring": units.measuring(model),
+        "neuralEngineLater": units.waits_for_later(model),
+        "options": record.map(|r| r.options),
+    })
+}
+
+/// The measurement of `model` in this session's folders.
+#[cfg(not(target_arch = "wasm32"))]
+fn measure_spec(s: &Session, model: &str) -> Option<crate::model_units::probes::Spec> {
+    use crate::model_units::probes;
+    match model {
+        lightcraft_learn::ENCODER_ID => s.learn.model_dir().map(|d| probes::learn(&d)),
+        #[cfg(feature = "sam")]
+        crate::model_runtime::BIREFNET => s.segmenter.birefnet_dir().map(|d| probes::birefnet(&d, false)),
+        #[cfg(feature = "sam")]
+        crate::hair_edges::MODEL_DIR => s.hair_edges.model_dir().map(|d| probes::birefnet(&d, true)),
+        _ => s.parsing.models_dir().and_then(|d| probes::parsing(&d, model)),
+    }
+}
+
+fn measure(s: &mut Session, p: &Value) -> crate::Result<Value> {
+    let model = str_param(p, "model").ok_or_else(|| bad(MEASURE_ID, "missing `model`"))?;
+    if !MODELS.iter().any(|(id, _)| *id == model) {
+        return Err(bad(MEASURE_ID, format!("no model `{model}` has a Core ML version")));
+    }
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        let spec = measure_spec(s, model).ok_or_else(|| bad(MEASURE_ID, format!("`{model}` has no model folder on this computer")))?;
+        crate::model_units::probes::measure_again(spec).map_err(|e| bad(MEASURE_ID, e))?;
+        Ok(rows(s))
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = s;
+        Err(bad(MEASURE_ID, "the web build measures no models"))
+    }
 }
 
 fn run(s: &mut Session, p: &Value) -> crate::Result<Value> {
@@ -145,9 +193,18 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "AI Model Runtime",
             [],
             None,
-            "{model?: \"dinov2-small\"|\"face-parsing-segformer-b0\"|\"human-parsing-segformer-b3\"|\"birefnet\"|\"birefnet-matting\"|\"lama\"|…, runtime?: \"automatic\"|\"coreml\"|\"candle\"} — sets the engine a model runs on (Automatic: Core ML on a Mac when its model is installed, else candle), or with no `runtime` lists them → {models: [{model, feature, runtime, coremlAvailable, coremlInstalled, backend: \"coreml\"|\"candle\"|null, coremlBytes, license, download: {state, bytes?, total?, error?}}]}",
+            "{model?: \"dinov2-small\"|\"face-parsing-segformer-b0\"|\"human-parsing-segformer-b3\"|\"birefnet\"|\"birefnet-matting\"|\"lama\"|…, runtime?: \"automatic\"|\"coreml\"|\"candle\"} — sets the engine a model runs on (Automatic: Core ML on a Mac when its model is installed, on the units measured fastest on this Mac, else candle), or with no `runtime` lists them → {models: [{model, feature, runtime, coremlAvailable, coremlInstalled, backend: \"coreml\"|\"candle\"|null, coremlBytes, license, download: {state, bytes?, total?, error?}, units: {chosen: \"coreml-gpu\"|\"coreml-all\"|\"coreml-neural-engine\"|\"candle-gpu\"|null, runMs, measuring, neuralEngineLater, options: [{unit, outcome: \"ok\"|\"mismatch\"|\"load-cap\"|\"failed\", loadMs?, runMs?, error?}]|null}}]}",
             always,
             run
+        ),
+        cmd!(
+            "models.measure",
+            "Measure AI Model Again",
+            [],
+            None,
+            "{model: \"birefnet\"} — times the model once on each unit it can run on here (Core ML on the GPU, all units, the Neural Engine; candle on the GPU), in the background with a row in the activity stack, and keeps the fastest whose output matches its unit of old; loads use it from then on. A Mac with the model's Core ML version only → the models' rows, as `models.runtime`",
+            always,
+            measure
         ),
     ]
 }

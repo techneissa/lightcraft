@@ -163,7 +163,11 @@ impl Tools {
         let mesher = loaded
             .mesher
             .get_or_insert_with(|| {
-                lightcraft_parsing::mesher::Mesher::load(&models, lightcraft_parsing::best_device(), runtime).map_err(|e| e.to_string())
+                // (the units measured fastest for the face mesh on this Mac, issue #267)
+                let runtimes = lightcraft_parsing::Runtimes { mesh: runtime, ..Default::default() };
+                let (runtimes, units) = crate::people_parsing::measured_units(&models, runtimes, &[lightcraft_parsing::models::FACE_MESH.folder]);
+                lightcraft_parsing::mesher::Mesher::load_on_units(&models, lightcraft_parsing::best_device(), runtimes.mesh, units.mesh)
+                    .map_err(|e| e.to_string())
             })
             .as_ref()
             .map_err(Clone::clone)?;

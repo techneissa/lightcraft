@@ -536,6 +536,8 @@ fn holding(s: &Session, pace: Pace, mine: Option<&str>) -> bool {
 /// One pump: take in finished photos, follow the pace, rebuild the queue when what it was built from changed, and
 /// hand the worker the next photo. Cheap when there is nothing to do.
 pub(crate) fn pump(s: &mut Session, pace: Pace, backward: bool) {
+    // (a large model's Neural Engine measurement waits for the app to be idle a while: issue #267)
+    crate::model_units::shared().note_idle(pace == Pace::Normal);
     collect(s);
     // (the Portrait icon's early check for faces: it needs no parse models, so it goes before the work below stands still)
     peek::pump(s, pace);

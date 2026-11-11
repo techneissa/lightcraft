@@ -16,6 +16,8 @@ fn damaged(e: impl std::fmt::Display) -> String {
 
 impl HairEdges {
     pub(super) fn run_model(&self, rgb: &[u8], w: usize, h: usize, cancel: &Arc<AtomicBool>) -> Result<Matte, String> {
+        // (a model measurement waits while this runs: issue #267)
+        let _job = crate::model_units::shared().user_job();
         let stop = || cancel.load(Ordering::Relaxed) || lightcraft_gpu::shutting_down();
         let dir = self.model_dir().ok_or("no folder is set for the BiRefNet Matting model")?;
         let file = dir.join(lightcraft_birefnet::WEIGHTS_FILE);
@@ -37,7 +39,11 @@ impl HairEdges {
                 // candle's)
                 let model = match cpu {
                     true => BiRefNet::load_cpu(&dir, Variant::Matting),
-                    false => BiRefNet::load_with(&dir, Variant::Matting, runtime, lightcraft_birefnet::best_device()),
+                    false => {
+                        // (the units measured fastest on this Mac, issue #267)
+                        let plan = crate::model_units::probes::plan(crate::model_units::probes::birefnet(&dir, true), runtime);
+                        BiRefNet::load_in_order(&dir, Variant::Matting, plan.runtime(runtime), plan.coreml, lightcraft_birefnet::best_device())
+                    }
                 };
                 let model = match model {
                     Ok(m) => m,

@@ -25,7 +25,7 @@
 use std::path::{Path, PathBuf};
 
 pub use lightcraft_coreml::Runtime;
-use lightcraft_coreml::{ComputeUnits, Error, Model};
+use lightcraft_coreml::{ComputeUnits, Error, Model, Sample, UnitOrder};
 
 use crate::facemesh::MeshOut;
 use crate::models::{BODY_SAPIENS2, BODY_SEGFORMER_B2, BODY_SEGFORMER_B3, FACE_MESH, FACE_SEGFORMER_B0, ModelFile};
@@ -40,6 +40,8 @@ const BODY_OUTPUT: &str = "probs";
 const MESH_OUTPUT: &str = "mesh";
 /// Most face crops per call (the converted face parser and face mesh take 1 to 8).
 pub const FACE_BATCH: usize = 8;
+/// Where every people-parts model runs until the app has measured this Mac (issue #267): the GPU.
+pub const DEFAULT_UNITS: ComputeUnits = ComputeUnits::CpuAndGpu;
 
 /// The canvases (height, width) the converted clothes parser takes, as `tools/convert-coreml-parsing.py`
 /// `BODY_CANVASES` lists them: for each long side 768, 1024, 1280, 1536, the square and the short sides ¾, ⅔ and ½
@@ -116,24 +118,25 @@ pub(crate) fn canvas(w: usize, h: usize) -> Option<(usize, usize)> {
 }
 
 /// Load `file`'s Core ML model, checked to have the input and output the parser sends and reads.
-fn load(models: &Path, file: &ModelFile, output: &str, units: ComputeUnits) -> Result<Model, Error> {
+fn load(models: &Path, file: &ModelFile, output: &str, units: UnitOrder) -> Result<Model, Error> {
     load_named(models, file, file.folder, None, output, units)
 }
 
-/// Load the Core ML model `name` of `file` (`function`: one of its functions), checked as [`load`] does.
+/// Load the Core ML model `name` of `file` (`function`: one of its functions) on the first of `units` that loads it,
+/// checked as [`load`] does.
 pub(crate) fn load_named(
     models: &Path,
     file: &ModelFile,
     name: &str,
     function: Option<&str>,
     output: &str,
-    units: ComputeUnits,
+    units: UnitOrder,
 ) -> Result<Model, Error> {
     if !lightcraft_coreml::available() {
         return Err(Error::Unavailable);
     }
     let (package, compiled) = named(models, file, name);
-    let model = lightcraft_coreml::load_package_function(&package, &compiled, units, function)?;
+    let (model, _) = lightcraft_coreml::first_that_loads(units, |u| lightcraft_coreml::load_package_function(&package, &compiled, u, function))?;
     if !model.inputs().iter().any(|n| n == INPUT) || !model.outputs().iter().any(|n| n == output) {
         return Err(Error::Load(format!(
             "{} is not the converted {} (it takes {:?} and gives {:?})",
@@ -146,25 +149,41 @@ pub(crate) fn load_named(
     Ok(model)
 }
 
-/// The converted face parser, on the GPU: as fast as the Neural Engine for it (about 11 ms a face on an M4 Pro) and
-/// about ten times closer to float32 (the Neural Engine's float16 moved a made-up crop's person mask by 0.4–1.4 %).
-pub(crate) fn load_face(models: &Path) -> Result<Model, Error> {
-    load(models, &FACE_SEGFORMER_B0, FACE_OUTPUT, ComputeUnits::CpuAndGpu)
+/// The converted face parser, on `units` ([`DEFAULT_UNITS`] by default: the GPU was as fast as the Neural Engine for
+/// it, about 11 ms a face, and about ten times closer to float32: the Neural Engine's float16 moved a made-up crop's
+/// person mask by 0.4–1.4 %).
+pub(crate) fn load_face(models: &Path, units: UnitOrder) -> Result<Model, Error> {
+    load(models, &FACE_SEGFORMER_B0, FACE_OUTPUT, units)
 }
 
-/// The converted clothes parser `file` (SegFormer-B3 or -B2: the same network and canvases), on the GPU: the Neural
-/// Engine compiler takes over 15 minutes for one large canvas.
-pub(crate) fn load_body(models: &Path, file: &ModelFile) -> Result<Model, Error> {
+/// The converted clothes parser `file` (SegFormer-B3 or -B2: the same network and canvases), on `units` (by default
+/// the GPU: the Neural Engine compiler takes over 15 minutes for one large canvas).
+pub(crate) fn load_body(models: &Path, file: &ModelFile, units: UnitOrder) -> Result<Model, Error> {
     if ![BODY_SEGFORMER_B3, BODY_SEGFORMER_B2].contains(file) {
         return Err(Error::Missing(paths(models, file).0));
     }
-    load(models, file, BODY_OUTPUT, ComputeUnits::CpuAndGpu)
+    load(models, file, BODY_OUTPUT, units)
 }
 
-/// The converted face mesh, on the GPU in float32: as fast as float16 for this small network and equal to float32
-/// PyTorch to 0.001 px (float16 moved points by up to 0.5 px, the Neural Engine by 3.5 px).
-pub(crate) fn load_mesh(models: &Path) -> Result<Model, Error> {
-    load(models, &FACE_MESH, MESH_OUTPUT, ComputeUnits::CpuAndGpu)
+/// The converted face mesh, in float32 on `units` (by default the GPU: as fast as float16 for this small network and
+/// equal to float32 PyTorch to 0.001 px; float16 moved points by up to 0.5 px, the Neural Engine by 3.5 px).
+pub(crate) fn load_mesh(models: &Path, units: UnitOrder) -> Result<Model, Error> {
+    load(models, &FACE_MESH, MESH_OUTPUT, units)
+}
+
+/// The call a measurement of `file`'s Core ML version makes (issue #267), at the one input shape the app runs it in:
+/// the face parser on one crop, the clothes parsers on the 768² canvas, the face mesh on [`FACE_BATCH`] crops, and
+/// Sapiens2's backbone at its smaller size (its heads run on the same units). `None` for a file without one.
+pub fn sample(models: &Path, file: &ModelFile) -> Option<Sample> {
+    let (name, function, shape, output) = match *file {
+        f if f == FACE_SEGFORMER_B0 => (f.folder.to_string(), None, vec![1, 3, crate::face::SIDE, crate::face::SIDE], FACE_OUTPUT),
+        f if f == BODY_SEGFORMER_B3 || f == BODY_SEGFORMER_B2 => (f.folder.to_string(), None, vec![1, 4, 768, 768], BODY_OUTPUT),
+        f if f == FACE_MESH => (f.folder.to_string(), None, vec![FACE_BATCH, 3, crate::facemesh::SIDE, crate::facemesh::SIDE], MESH_OUTPUT),
+        f if f == BODY_SAPIENS2 => return Some(sapiens::sample(models)),
+        _ => return None,
+    };
+    let (package, compiled) = named(models, file, &name);
+    Some(Sample { package, compiled, function, input: INPUT, shape, output })
 }
 
 /// The face mesh of `n` crops of [`crate::facemesh::SIDE`]² (`n × 3 × side × side`, values 0 to 1), `n` at most

@@ -134,6 +134,8 @@ impl LearnEdits {
         cancel: &AtomicBool,
         total: u64,
     ) -> Result<Option<Vec<(Item, Result<Arc<Vec<f32>>, String>)>>, String> {
+        // (a model measurement waits while this runs: issue #267)
+        let _job = crate::model_units::shared().user_job();
         #[cfg(not(target_arch = "wasm32"))]
         let encoder = if items.iter().all(|i| i.cached.is_some()) { None } else { self.encoder()? };
         let mut out = Vec::with_capacity(items.len());

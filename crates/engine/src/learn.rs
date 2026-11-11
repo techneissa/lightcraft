@@ -211,7 +211,12 @@ impl LearnEdits {
             ));
         }
         let dir = self.model_dir().ok_or("no model folder")?;
-        let e = Arc::new(lightcraft_learn::image_encoder::ImageEncoder::load(&dir, self.runtime()).map_err(|e| e.to_string())?);
+        // (the units measured fastest on this Mac, issue #267)
+        let plan = crate::model_units::probes::plan(crate::model_units::probes::learn(&dir), self.runtime());
+        let e = Arc::new(
+            lightcraft_learn::image_encoder::ImageEncoder::load_on_units(&dir, plan.runtime(self.runtime()), plan.coreml)
+                .map_err(|e| e.to_string())?,
+        );
         *lock(&self.inner.encoder) = Some(e.clone());
         Ok(Some(e))
     }

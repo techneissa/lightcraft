@@ -18,6 +18,7 @@ mod layout;
 #[cfg(target_os = "macos")]
 #[allow(unsafe_code)]
 mod macos;
+mod order;
 #[cfg_attr(target_os = "macos", allow(dead_code))]
 mod stub;
 pub mod vision;
@@ -25,9 +26,10 @@ pub mod vision;
 #[allow(unsafe_code)]
 mod vision_macos;
 
-pub use cache::{load_package, load_package_function};
+pub use cache::{load_package, load_package_function, package_key};
 #[cfg(target_os = "macos")]
 use macos as imp;
+pub use order::{Sample, UnitOrder, first_that_loads};
 #[cfg(not(target_os = "macos"))]
 use stub as imp;
 #[cfg(not(target_os = "macos"))]
@@ -44,7 +46,7 @@ pub const MAX_ELEMENTS: usize = 64 << 20;
 pub const MAX_RANK: usize = 5;
 
 /// Where Core ML may run a model.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash)]
 pub enum ComputeUnits {
     /// Neural Engine, GPU and CPU: Core ML picks per layer.
     #[default]

@@ -40,7 +40,12 @@ pub struct Mesher {
 impl Mesher {
     /// Load the face mesh from the models folder: Core ML as `runtime` asks, candle on `dev` otherwise.
     pub fn load(models: &Path, dev: Device, runtime: Runtime) -> Result<Self> {
-        let mesh_coreml = || coreml::load_mesh(models);
+        Self::load_on_units(models, dev, runtime, lightcraft_coreml::UnitOrder::one(coreml::DEFAULT_UNITS))
+    }
+
+    /// [`Mesher::load`] with Core ML on the first of `units` that loads it (issue #267).
+    pub fn load_on_units(models: &Path, dev: Device, runtime: Runtime, units: lightcraft_coreml::UnitOrder) -> Result<Self> {
+        let mesh_coreml = || coreml::load_mesh(models, units);
         let loader: &dyn Fn() -> CoreMlResult<lightcraft_coreml::Model> = &mesh_coreml;
         let mesh = Engine::load(&crate::models::FACE_MESH, runtime, Some(loader), || load_mesh_net(models, &dev))?;
         Ok(Self { mesh, models: models.to_path_buf(), dev })
