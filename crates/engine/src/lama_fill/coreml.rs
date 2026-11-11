@@ -2,11 +2,15 @@
 //! Engine's load in the background, and which engine fills a crop.
 //!
 //! The Neural Engine's first load on a Mac takes about a minute (it plans each of the package's functions for it), later
-//! ones a few seconds, so the model is loaded on a thread of its own, with a row in the activity stack, as soon as the
-//! model's folder and runtime are known ([`LamaFill::set_dir`], [`LamaFill::set_runtime`]); on Automatic every fill
-//! until it is ready runs on candle, and so do crops under [`MIN_SIDE`]. A Core ML fill that fails hands that fill and
-//! every later one to candle (Automatic) or is the fill's error (Core ML). The loaded model is kept: on the Neural
-//! Engine it holds little of the process's memory.
+//! ones a few seconds, so the model is loaded on a thread of its own, as background preparation (the top bar's ring),
+//! when it is first needed: the first fill, or a tool that fills being shown ([`LamaFill::prepare`]: the Remove panel
+//! with the LaMa fill, Repair Glare's LaMa method, Wrinkles). On Automatic every fill until it is ready runs on candle,
+//! and so do crops under [`MIN_SIDE`]. A Core ML fill that fails hands that fill and every later one to candle
+//! (Automatic) or is the fill's error (Core ML).
+//!
+//! The loaded model is kept, not released after [`super::KEEP_LOADED`] like candle's: it holds 50–100 MB of the
+//! process (130 MB at its peak, against candle's 2.8 GB), dropping it gave none of that back, and a reload takes 2–3 s,
+//! or a minute when macOS has dropped its Neural Engine plan, during which the fills would go to candle (#268).
 
 use std::sync::{Arc, PoisonError};
 
@@ -32,6 +36,9 @@ pub(super) struct CoreMl {
     pub(super) runtime: Runtime,
     pub(super) units: ComputeUnits,
     pub(super) state: State,
+    /// A load thread is running (perhaps of an older generation): no second one starts, so two never compile into the
+    /// same folder at once. [`reset`] leaves it alone.
+    pub(super) loading: bool,
     /// Bumped by every change of runtime, units or folder: a load that finishes after one is not kept.
     pub(super) generation: u64,
     /// The engine of the last fill (`coreml` or `candle`).
@@ -40,7 +47,7 @@ pub(super) struct CoreMl {
 
 impl Default for CoreMl {
     fn default() -> Self {
-        Self { runtime: Runtime::Automatic, units: DEFAULT_UNITS, state: State::Off, generation: 0, backend: None }
+        Self { runtime: Runtime::Automatic, units: DEFAULT_UNITS, state: State::Off, loading: false, generation: 0, backend: None }
     }
 }
 
@@ -49,17 +56,13 @@ impl LamaFill {
         self.inner.coreml.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
-    /// Run LaMa on `runtime` from the next fill on, loading Core ML in the background when it may run.
+    /// Run LaMa on `runtime` from the next fill on (Core ML loads at the next need).
     pub fn set_runtime(&self, runtime: Runtime) {
-        {
-            let mut c = self.coreml();
-            if c.runtime == runtime {
-                return;
-            }
+        let mut c = self.coreml();
+        if c.runtime != runtime {
             c.runtime = runtime;
             reset(&mut c);
         }
-        self.warm();
     }
 
     /// The engine chosen.
@@ -68,16 +71,18 @@ impl LamaFill {
     }
 
     /// Run Core ML on `units` (the Neural Engine by default; issue #267 picks them per Mac): the model is loaded again
-    /// on them.
+    /// on them at the next need.
     pub fn set_coreml_units(&self, units: ComputeUnits) {
-        {
-            let mut c = self.coreml();
-            if c.units == units {
-                return;
-            }
+        let mut c = self.coreml();
+        if c.units != units {
             c.units = units;
             reset(&mut c);
         }
+    }
+
+    /// A tool that fills with LaMa is shown: start loading Core ML in the background, so it is ready by the first fill.
+    /// Cheap to call every frame.
+    pub fn prepare(&self) {
         self.warm();
     }
 
@@ -100,25 +105,40 @@ impl LamaFill {
         self.dir().is_some_and(|d| lightcraft_lama::coreml::installed(&d))
     }
 
-    /// Start loading Core ML on a thread of its own, with a row in the activity stack, when it may run here, is
-    /// installed, and is neither loaded nor loading.
+    /// Start loading Core ML on a thread of its own, as background preparation, when it may run here, is installed,
+    /// is not loaded, and no load is running.
     pub(super) fn warm(&self) {
         let (units, generation) = {
             let mut c = self.coreml();
-            if c.runtime == Runtime::Candle || !matches!(c.state, State::Off) || !lightcraft_coreml::available() || !self.coreml_installed() {
+            if c.runtime == Runtime::Candle
+                || c.loading
+                || !matches!(c.state, State::Off)
+                || !lightcraft_coreml::available()
+                || !self.coreml_installed()
+            {
                 return;
             }
             c.state = State::Loading;
+            c.loading = true;
             (c.units, c.generation)
         };
-        let Some(dir) = self.dir() else { return };
+        let Some(dir) = self.dir() else {
+            let mut c = self.coreml();
+            c.loading = false;
+            if c.generation == generation {
+                c.state = State::Off;
+            }
+            return;
+        };
         let me = self.clone();
         let spawned = std::thread::Builder::new().name("lama-coreml".into()).spawn(move || {
-            let _row = me.inner.activity.start("lamaCoreml", "Preparing LaMa for the Neural Engine", Cancel::No);
+            // (the app starts it by itself and no one can act on it: background preparation, docs/background-tasks.md)
+            let _row = me.inner.activity.start_background("lamaCoreml", "Preparing LaMa for the Neural Engine", Cancel::No);
             let t = std::time::Instant::now();
             let loaded = std::panic::catch_unwind(|| CoreMlLama::load(&dir, units))
                 .unwrap_or_else(|_| Err(lightcraft_coreml::Error::Load("the load stopped unexpectedly".into())));
             let mut c = me.coreml();
+            c.loading = false;
             if c.generation != generation {
                 return;
             }
@@ -135,6 +155,7 @@ impl LamaFill {
         });
         if spawned.is_err() {
             let mut c = self.coreml();
+            c.loading = false;
             if c.generation == generation {
                 c.state = State::Failed("could not start the Core ML load".into());
             }
@@ -147,13 +168,19 @@ impl LamaFill {
         if runtime == Runtime::Candle {
             return Ok(None);
         }
-        self.warm();
         loop {
-            let state = self.coreml().state.clone();
+            self.warm();
+            let (state, loading) = {
+                let c = self.coreml();
+                (c.state.clone(), c.loading)
+            };
             match state {
                 State::Ready(m) => return Ok(Some(m)),
                 _ if runtime == Runtime::Automatic => return Ok(None),
                 State::Failed(e) => return Err(e),
+                // (an older load still running: wait for it, then start ours)
+                State::Off if loading && cancel() => return Err("cancelled".into()),
+                State::Off if loading => std::thread::sleep(std::time::Duration::from_millis(100)),
                 State::Off => {
                     return Err(match self.coreml_installed() {
                         true => "Core ML runs only on a Mac".to_string(),
@@ -182,6 +209,8 @@ impl LamaFill {
                     return Err(lightcraft_lama::Error::Cancelled);
                 }
                 match model.inpaint(rgb, hole, w, h) {
+                    // (✕ during the fill, which can't be stopped midway)
+                    Ok(_) if cancel() => return Err(lightcraft_lama::Error::Cancelled),
                     Ok(out) => {
                         self.set_backend("coreml");
                         return Ok(out);
@@ -197,14 +226,47 @@ impl LamaFill {
                 }
             }
         }
+        // (one model on the GPU at a time: `crate::gpu_run`; the Neural Engine above needs no turn)
+        let _gpu = crate::gpu_run::turn();
         let model = self.model().map_err(lightcraft_lama::Error::Model)?;
         self.set_backend("candle");
         model.inpaint(rgb, hole, w, h, cancel)
     }
 }
 
-/// Forget the loaded model and any failure: the next [`LamaFill::warm`] loads again.
+/// Forget the loaded model and any failure: the next [`LamaFill::warm`] loads again (once a load still running ends).
 pub(super) fn reset(c: &mut CoreMl) {
     c.generation = c.generation.wrapping_add(1);
     c.state = State::Off;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// While a load runs, changing the runtime and back and asking again starts no second load into the same compiled
+    /// folder; once it has ended, the next need starts one.
+    #[test]
+    fn a_running_load_is_never_doubled() {
+        let dir = std::env::temp_dir().join(format!("lc-lama-coreml-twice-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (package, _) = lightcraft_lama::coreml::paths(&dir);
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(package.join("Manifest.json"), b"not a manifest").unwrap();
+        let fill = LamaFill::new(crate::activity::Activity::default());
+        fill.set_dir(Some(dir.clone()));
+        // a load of the first generation is running
+        fill.coreml().loading = true;
+        fill.set_runtime(Runtime::Candle);
+        fill.set_runtime(Runtime::Automatic);
+        fill.prepare();
+        let c = fill.coreml();
+        assert!(c.loading && matches!(c.state, State::Off), "a second load started");
+        drop(c);
+        // it ended: the next need starts one (only where Core ML exists)
+        fill.coreml().loading = false;
+        fill.prepare();
+        assert_eq!(!matches!(fill.coreml().state, State::Off), lightcraft_coreml::available());
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

@@ -118,10 +118,7 @@ impl LamaFill {
         self.inner.term.lock().unwrap_or_else(PoisonError::into_inner).0 = None;
         *self.inner.model.lock().unwrap_or_else(PoisonError::into_inner) = None;
         #[cfg(not(target_arch = "wasm32"))]
-        {
-            coreml::reset(&mut self.inner.coreml.lock().unwrap_or_else(PoisonError::into_inner));
-            self.warm();
-        }
+        coreml::reset(&mut self.inner.coreml.lock().unwrap_or_else(PoisonError::into_inner));
     }
 
     /// The folder the model lives in (or goes to when downloaded).
@@ -277,6 +274,9 @@ impl LamaFill {
     }
 
     #[cfg(target_arch = "wasm32")]
+    pub fn prepare(&self) {}
+
+    #[cfg(target_arch = "wasm32")]
     fn run_model(&self, _: &[f32], _: &[f32], _: usize, _: usize, _: Crop, _: &dyn Fn() -> bool) -> Result<Vec<f32>, String> {
         Err("the web build has no LaMa fill".into())
     }
@@ -295,8 +295,7 @@ impl LamaFill {
             return None;
         }
         let _one_at_a_time = self.inner.run.lock().unwrap_or_else(PoisonError::into_inner);
-        // (one model on the GPU at a time: `crate::gpu_run`)
-        let _gpu = crate::gpu_run::turn();
+        // (the GPU turn, `crate::gpu_run`, is taken only for a candle fill: `coreml::fill_crop`)
         // another render may have made it while this one waited
         if let Some(hit) = self.cached(key) {
             return Some(hit);

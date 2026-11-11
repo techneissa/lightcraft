@@ -2,6 +2,8 @@
 //! Lines and Neck, for every face or the picked one.
 
 pub(super) fn body(cx: &mut super::Ctx<'_>) {
+    // (the face search fills with LaMa: its Core ML version loads in the background, `lama_fill::coreml`)
+    cx.app.session.lama.prepare();
     for id in ["retouch.wrinkles.forehead", "retouch.wrinkles.crowsFeet", "retouch.wrinkles.smileLines", "retouch.wrinkles.neck"] {
         cx.slider(id);
     }
