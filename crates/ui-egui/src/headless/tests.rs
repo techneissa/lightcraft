@@ -5204,6 +5204,38 @@ fn the_loupe_prepares_the_photos_ahead_the_settings_ask_for() {
     assert_eq!(h.app.renderer.prefetch_slots_asked(), 0, "off: nothing prepared ahead");
 }
 
+/// #223: the loupe's prefetch rendered photos it had already shown again (the photo behind, at its smaller fit), over the
+/// larger view kept for them. Stepping forward and back over three photos asks the workers for no photo again once it
+/// has been shown.
+#[test]
+fn stepping_forward_and_back_renders_no_shown_photo_again() {
+    use crate::render::Slot;
+    let mut h = demo([1000.0, 700.0]);
+    let t = Duration::from_secs(10);
+    h.request(
+        "engine.execute",
+        json!({"command": "prefs.setBackgroundPrep", "params": {"settings": {"library": {"ahead": 2, "previews": false}}}}),
+        t,
+    );
+    h.request("ui.set", json!({"view": "detail", "right": "none"}), t);
+    let ids = h.app.session.visible_cloned();
+    assert!(ids.len() >= 5, "the demo has photos to step through");
+    let mut shown: std::collections::HashMap<lightcraft_catalog::PhotoId, usize> = Default::default();
+    for k in [0, 1, 2, 1, 0] {
+        let id = ids[k];
+        h.request("engine.execute", json!({"command": "library.select", "params": {"ids": [id.0], "active": id.0}}), t);
+        assert!(h.step_until(SETTLE, |h| h.app.renderer.textures.get(&Slot::Main).is_some_and(|t| t.photo == id)
+            && !h.app.renderer.is_pending(Slot::Main)
+            && h.app.renderer.prefetches_pending() == 0));
+        h.settle(SETTLE);
+        let asked = h.app.renderer.renders_asked.clone();
+        for (p, before) in &shown {
+            assert_eq!(asked.get(p).copied().unwrap_or(0), *before, "{p:?} was rendered again after it was shown: {asked:?}");
+        }
+        shown.entry(id).or_insert_with(|| asked.get(&id).copied().unwrap_or(0));
+    }
+}
+
 /// A size typed in the Export dialog is the size exported: the pixel fields kept only multiples
 /// of 16, so 1080 became 1088 and 3000 became 3008 (issue #3300).
 #[test]

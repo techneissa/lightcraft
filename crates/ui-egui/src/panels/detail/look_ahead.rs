@@ -27,6 +27,8 @@ pub struct LookAhead {
     /// requests were made for: a new source, filter or sort changes the neighbours without an edit,
     /// and a change of the preparation settings what may be made.
     made_for: Option<(PhotoId, i8, u64, u64, usize, bool, Prepare, u64)>,
+    /// How fast and which way the user steps, for the full renders made ahead ([`super::prefetch`]).
+    pub(super) pace: super::prefetch::Pace,
 }
 
 /// Which photos the look-ahead may prepare, from Settings ▸ Performance for what the user is doing

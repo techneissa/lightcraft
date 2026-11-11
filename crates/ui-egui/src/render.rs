@@ -211,6 +211,8 @@ fn upload(
 
 use lightcraft_engine::media::dirty::{clock, ms};
 
+pub(crate) mod prefetch;
+
 /// The rectangle `[x0, y0, x1, y1)` of `img`, as an image (a partial texture upload).
 pub(crate) fn sub_image(img: &egui::ColorImage, r: &[usize; 4]) -> egui::ColorImage {
     let [w, h] = img.size;
@@ -415,8 +417,16 @@ pub struct Renderer {
     /// The catalog revision seen at the last poll: a failure is retried once the catalog changes
     /// its photo (a relinked or re-imported file), see [`Self::follow_catalog`].
     catalog_rev: u64,
-    /// Prefetch slot → key of the last job submitted (each runs once).
-    prefetched: HashMap<Slot, u64>,
+    /// Prefetch slot → what it was last asked for (each job runs once; see [`prefetch`]).
+    prefetched: HashMap<Slot, prefetch::Asked>,
+    /// How long a prefetch render takes (ms), averaged ([`Self::prefetch_secs`]).
+    prefetch_ms: Option<f64>,
+    /// The loupe's renders sent to the workers that have not come back: (photo, request id, when), oldest first. A
+    /// step replaces the one queued, but one running finishes, and writes the photo's kept view ([`Self::main_rendering`]).
+    main_out: Vec<(PhotoId, u64, web_time::Instant)>,
+    /// Tests: per photo, the renders asked of the workers (prefetches sent, and loupe renders that did not come from a kept view).
+    #[cfg(test)]
+    pub(crate) renders_asked: HashMap<PhotoId, usize>,
     /// Variant key → frame it was last asked for (LRU of [`Slot::Variant`] textures).
     variant_used: HashMap<u64, u64>,
     /// How many variants the last frame's views showed at once (see [`Self::want_variants`]).
@@ -554,6 +564,10 @@ impl Renderer {
             failed: HashMap::new(),
             catalog_rev: 0,
             prefetched: HashMap::new(),
+            prefetch_ms: None,
+            main_out: Vec::new(),
+            #[cfg(test)]
+            renders_asked: HashMap::new(),
             variant_used: HashMap::new(),
             variant_want: 0,
             frame: 0,
@@ -938,6 +952,9 @@ impl Renderer {
             self.draft_keys.insert(job.key);
         }
         job.request_id = lightcraft_preview::next_tick();
+        if slot == Slot::Main {
+            self.note_main_out(job.photo, job.request_id);
+        }
         self.requests.insert(
             slot,
             Requested { look: Some((geometry_look(&job.settings), job.request.apply_crop)), id: job.request_id, source: Some(job.origin.clone()) },
@@ -1220,46 +1237,6 @@ impl Renderer {
         self.pool.submit_or(slot, key, priority, Box::new(move || Self::run_for(|| compose.result(request_id), &display)), panicked);
     }
 
-    /// Prepare a photo in the background (a [`Slot::Prefetch`] job runs once per key; a newer one
-    /// replaces it while queued). Memory stays bounded by the engine's source caches.
-    pub fn prefetch(&mut self, slot: Slot, mut job: RenderJob, priority: u32) {
-        if self.prefetched.get(&slot) == Some(&job.key) {
-            return;
-        }
-        self.prefetched.insert(slot, job.key);
-        self.note_request(slot, job.key, priority, "prefetch requested", || render_subject(slot, job.photo, Some(&job.origin)));
-        self.pending.insert(slot, (job.key, priority));
-        job.request_id = lightcraft_preview::next_tick();
-        self.requests.insert(
-            slot,
-            Requested { look: Some((geometry_look(&job.settings), job.request.apply_crop)), id: job.request_id, source: Some(job.origin.clone()) },
-        );
-        let key = job.key;
-        let panicked = Self::panicked(job.failed(String::new()));
-        self.pool.submit_or(
-            slot,
-            key,
-            priority,
-            Box::new(move || Finished { look: None, result: lightcraft_engine::memory::in_background(|| job.run()), color: None, full: None }),
-            panicked,
-        );
-    }
-
-    /// Prepared-ahead jobs ([`Slot::Prefetch`]) queued or running.
-    pub fn prefetches_pending(&self) -> usize {
-        self.pending.keys().filter(|s| matches!(s, Slot::Prefetch(_))).count()
-    }
-
-    /// Prepared-ahead slots asked for since the renderer last forgot everything.
-    pub fn prefetch_slots_asked(&self) -> usize {
-        self.prefetched.keys().filter(|s| matches!(s, Slot::Prefetch(_))).count()
-    }
-
-    /// Whether `slot` was last asked for the job of `key` (queued, running or done).
-    pub fn prefetch_asked(&self, slot: Slot, key: u64) -> bool {
-        self.prefetched.get(&slot) == Some(&key)
-    }
-
     /// Drop the slideshow slides other than `keep`: their textures and their requests that have
     /// not started (a slide that is no longer near is not worth rendering).
     pub fn release_slides(&mut self, keep: &[lightcraft_engine::slideshow::Item]) {
@@ -1298,6 +1275,7 @@ impl Renderer {
         self.quick_tried.clear();
         self.failed.clear();
         self.prefetched.clear();
+        self.main_out.clear();
         self.pending.clear();
         self.queue.clear();
         self.free_natives();
@@ -1725,6 +1703,7 @@ impl Renderer {
         let mut changed = false;
         for ((mut slot, mut r, mut color, completed_look, ms), full) in finished {
             self.completed += 1;
+            self.note_back(slot, &r, ms);
             if slot == Slot::Full {
                 self.accept_full(session, &r, full, ms);
                 changed = true;
@@ -2048,6 +2027,10 @@ impl Renderer {
         if any {
             self.pending.remove(&slot);
             self.requests.remove(&slot);
+            if slot == Slot::Main {
+                // (the one queued is the latest sent)
+                self.main_out.pop();
+            }
         }
         any
     }
