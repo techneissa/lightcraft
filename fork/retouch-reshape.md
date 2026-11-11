@@ -10,18 +10,36 @@ The Face Reshape feature of portrait retouching (`fork/retouch-foundation.md`), 
 - **Slim Face**: + draws the cheeks and the jaw's sides in, − widens them.
 - **Jaw**: + widens the jaw at its corners, − narrows it.
 - **Chin**: + lengthens the chin, − shortens it.
-- **Double Chin**: + lifts the soft area under the chin toward the jaw line, − lets it down.
-- **Nose**: + widens the nose's wings, − narrows them.
+- **Double Chin**: + pulls the soft area under the jaw line up toward it, all along the jaw, while the line itself
+  stays: the jaw to neck contour is tightened. − lets it down.
+- **Nose**: + widens the lower nose about its middle, − narrows it: ±9 % of its width at ±50, ±18 % at ±100.
 - **Forehead**: + raises the top of the forehead, − lowers it.
-- **Eye Size**: + enlarges the eyes, − makes them smaller.
+- **Eye Size**: + enlarges the eyes, − makes them smaller: corners, lids and iris alike, ±9 % at ±50, ±18 % at ±100.
 
-How (`crates/retouch/src/reshape/field.rs`): each slider moves a few face-mesh points (the cheek contour, the jaw's
-corners, the chin, a band under it, the nose's wings, the top of the forehead) by a fraction of the face's width or
-height, or scales each eye about its centre. Each move spreads through a Wendland bump (smooth, zero past a radius
-that is a fraction of the face), so pixels away from the face never move and a straight line there stays straight.
-The moves are summed on a grid of cells a fortieth of the face and read back bilinearly. Each cell is checked to stay
-a convex quadrilateral the same way round, with at least a quarter of its area at every corner; when one would not,
-that face's moves are scaled down until all hold. So the warp never folds. A move across the photo's edge fades to
+How (`crates/retouch/src/reshape/kernels.rs`, `reshape/field.rs`): Slim Face, Jaw, Chin and Forehead move a few
+face-mesh points (the cheek contour, the jaw's corners, the chin, the top of the forehead) by a fraction of the
+face's width or height, each move spreading through a Wendland bump (smooth, zero past a radius that is a fraction of
+the face). Eye Size scales each eye evenly inside an ellipse 1.15 times its half width along it and 0.6 times across
+it, fading out (a smootherstep) by 1.85 times that, below the brows. Nose scales the lower nose across its middle
+line inside an ellipse about its widest wings (1.15 times their half width, narrowing upward by 40 % as the bridge
+does; up 45 % of the way to the bridge's top, down to the nose's base), fading out by 1.9 times that: below the
+glasses' bridge and the eyes' inner corners, before the upper lip and the mouth's corners. Double Chin places a pull
+at each of the 13 mesh points of the jaw line from one corner to the other (less toward the corners): nothing at the
+line, the full pull 7 % of the face's height below it, fading out by 28 %, and along the jaw over twice the points'
+spacing. Pixels away from the face never move, and a straight line there stays straight. The moves are summed on a
+grid of cells a fortieth of the face and read back bilinearly. Each cell is checked to stay a convex quadrilateral
+the same way round, with at least a quarter of its area at every corner; when one would not, each slider's moves are
+first scaled down alone until they hold (so Double Chin −100, which would fold, does not weaken Eye Size), then the
+face's moves together. So the warp never folds.
+
+Issue #209 (the audit in #195 rated Nose, Eye Size and Double Chin too weak), measured on the seven audit portraits:
+Eye Size was a bump about each eye's centre that faded out inside the eye, so at 100 the iris grew 9 %, the eye's
+opening 10–14 % and its width 3 %. Nose pushed the wings out or in with two bumps, partly held back by their own
+fold limit: the widest wings changed 5–12 % at −100 and 3.5–7 % at +100. Double Chin moved a patch of neck under the
+chin's middle (0.035–0.05 of the face's height, 0.1–0.15 below the chin), lifted the chin itself a little and left
+the jaw's sides alone (under 0.004 at 100). Now the band 0.1 below the jaw's side moves 0.013–0.025 at 100 and the
+chin under 0.001. On p1 and p2 the neck is out of the frame, and Double Chin changes nothing there. Glasses frames
+right beside the eyes (p6) bend a little at Eye Size 100: the warp reads the face mesh only, not the glasses mask. A move across the photo's edge fades to
 nothing at it (over 15 % of the face), so the border maps onto itself: a face cut by the edge never reads from past
 it, and the warp can always be inverted there. A face without the mesh (YuNet alone) is left alone.
 
@@ -50,7 +68,7 @@ face sits a few pixels off what it covers; spots do not follow a reshape made af
 
 ## Own files
 
-`crates/retouch/src/reshape.rs`, `crates/retouch/src/reshape/field.rs`, `crates/retouch/examples/reshape.rs`,
+`crates/retouch/src/reshape.rs`, `crates/retouch/src/reshape/field.rs`, `crates/retouch/src/reshape/kernels.rs`, `crates/retouch/examples/reshape.rs`,
 `crates/retouch/tests/reshape.rs`, `crates/pipeline/src/reshape_step.rs`, `crates/pipeline/src/reshape_step/tests.rs`,
 `crates/gpu/tests/reshape.rs`, `crates/gpu/src/render/tests_reshape.rs`, `crates/ui-egui/src/panels/portrait/reshape.rs`, `fork/retouch-reshape.md`,
 `fork/tests.d/retouch-reshape.txt`
@@ -89,7 +107,10 @@ until they hold; every point away from the face unmoved, bit for bit, in the war
 far from the face stays straight); the warp the same from 600 × 400 to 6000 × 4000; a face with its own settings
 moving alone; 50 faces, a face cut by the edge, a collapsed or not-a-number mesh, five landmarks only, a 1 × 1 photo;
 a local mask drawn on the photo staying on the content it covers under Slim Face (it misses five times more without
-the warp); a landmark moving with Chin; a draft of a small copy and a render four times its size reading from the same
+the warp); a landmark moving with Chin; Eye Size scaling each eye's width and opening alike, 9 % at 50 and 18 % at 100,
+the brow unmoved; Nose changing the widest wings 9 % at −50 and 18 % at ±100, the mouth's corners unmoved; Double
+Chin keeping the jaw line and lifting the band under the chin and under the jaw's side, more at 100 than at 50; Double
+Chin −100 leaving Eye Size as strong as alone (each fails on the version before issue #209); a draft of a small copy and a render four times its size reading from the same
 places; a loupe window matching the whole render; fine texture keeping 96 % of its energy inside a face with every
 slider at ±100; the warp inverting (`Warp::from_source`) at every point of a face cut by each edge, every slider at
 ±100, and every landmark finding its place (failed before the edge fade); Upright's analysis image unchanged by a

@@ -1,4 +1,4 @@
-//! The reshape warp: what each slider moves ([`kernels`]) and the sampled warp the pipeline reads ([`Field`]).
+//! The reshape warp the pipeline reads ([`Field`]): what each slider moves ([`super::kernels`]), summed and sampled.
 //!
 //! Units: points are in *photo units*, the normalised photo scaled by its aspect so both axes have the same scale
 //! (`x · width / long`, `y · height / long`). A circle stays a circle, and a size that is a fraction of the face is the
@@ -7,12 +7,9 @@
 use std::fmt;
 
 use super::Reshape;
+use super::kernels::{FaceGeom, Kernel, MESH, MESH_POINTS, add, kernels};
+use crate::Feature;
 use crate::input::Fnv;
-
-/// Where the face mesh starts in [`crate::Face::landmarks`]: after YuNet's five.
-pub const MESH: usize = 5;
-/// The face mesh's points (MediaPipe's order: 468 face points, then 5 per iris).
-pub const MESH_POINTS: usize = 478;
 
 /// The cell of the sampled warp, a fraction of the face's smaller side (width or height).
 const CELL: f64 = 1.0 / 40.0;
@@ -21,67 +18,6 @@ const MAX_SIDE: usize = 400;
 /// Each cell keeps at least this share of its area, at every corner: the warp never folds or pinches.
 const MIN_AREA: f64 = 0.25;
 
-/// How far each slider moves the face at ±100: a fraction of the face's width (`W`) or height (`H`).
-const SLIM: f64 = 0.05; // the cheeks and the jaw's sides, each, of W
-const JAW: f64 = 0.045; // the jaw's corners, each, of W
-const CHIN: f64 = 0.07; // the chin, of H
-const DOUBLE_CHIN: f64 = 0.05; // under the chin, of H
-const NOSE: f64 = 0.035; // each wing of the nose, of W
-const FOREHEAD: f64 = 0.07; // the top of the forehead, of H
-const EYES: f64 = 0.16; // the eye's centre is enlarged by 1 / (1 − this)
-
-/// The radius each move fades out at: a fraction of the face's width, or for the eyes of the eye's half width.
-const SLIM_R: f64 = 0.28;
-const JAW_R: f64 = 0.22;
-const CHIN_R: f64 = 0.22;
-const DOUBLE_CHIN_R: f64 = 0.2;
-const NOSE_R: f64 = 0.09;
-const FOREHEAD_R: f64 = 0.32;
-const EYES_R: f64 = 2.0;
-/// How far below the jaw line the soft area Double Chin lifts lies, a fraction of H.
-const UNDER_CHIN: f64 = 0.10;
-/// How far above the mesh's top (mid forehead) Forehead's moves sit, a fraction of H: nearer the hairline, so the
-/// brows stay.
-const ABOVE_FOREHEAD: f64 = 0.04;
-
-/// Mesh points (MediaPipe face mesh indices). "Right" is the subject's: on the left of a frontal photo.
-mod point {
-    pub const TOP: usize = 10;
-    pub const CHIN: usize = 152;
-    pub const RIGHT_CHEEK: usize = 234;
-    pub const LEFT_CHEEK: usize = 454;
-    pub const NOSE_TIP: usize = 1;
-    /// The subject's right eye's outer and inner corners, then the left eye's inner and outer.
-    pub const EYE_CORNERS: [usize; 4] = [33, 133, 362, 263];
-    /// The face's contour on each side, cheekbone to jaw corner (Slim Face).
-    pub const CHEEKS: [[usize; 4]; 2] = [[234, 93, 132, 58], [454, 323, 361, 288]];
-    /// The jaw's corners (Jaw).
-    pub const JAW: [[usize; 3]; 2] = [[172, 136, 150], [397, 365, 379]];
-    /// The chin (Chin, and below it Double Chin).
-    pub const CHIN_LINE: [usize; 3] = [152, 148, 377];
-    pub const UNDER_CHIN: [usize; 5] = [152, 148, 377, 176, 400];
-    /// The nose's wings (Nose).
-    pub const NOSE_WINGS: [[usize; 2]; 2] = [[64, 98], [294, 327]];
-    /// The top of the face's contour (Forehead).
-    pub const FOREHEAD: [usize; 3] = [10, 109, 338];
-}
-
-/// One move of a slider: around `centre`, fading out at `radius`.
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Kernel {
-    pub centre: [f64; 2],
-    pub radius: f64,
-    pub kind: Kind,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub enum Kind {
-    /// The pixels at the centre move by this (photo units).
-    Move([f64; 2]),
-    /// The pixels about the centre are enlarged by `1 / (1 − k)` at the centre (`k` < 0 makes them smaller).
-    Scale(f64),
-}
-
 /// How far from the photo's edge a move across it is faded out, a fraction of the face's smaller side.
 const EDGE_MARGIN: f64 = 0.15;
 
@@ -89,173 +25,6 @@ const EDGE_MARGIN: f64 = 0.15;
 fn edge_ramp(t: f64) -> f64 {
     let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
     t * t * (3.0 - 2.0 * t)
-}
-
-/// The Wendland bump: 1 at the centre, 0 from `q = 1` on, smooth (C²) all the way.
-fn bump(q: f64) -> f64 {
-    if q >= 1.0 {
-        return 0.0;
-    }
-    let a = 1.0 - q;
-    a * a * a * a * (4.0 * q + 1.0)
-}
-
-impl Kernel {
-    /// Where the output point `p` reads from, less `p`: the inverse of the move (a pixel the move takes to `c + m`
-    /// is read at `c + m` from `c`).
-    fn back(&self, p: [f64; 2]) -> [f64; 2] {
-        let (dx, dy) = (p[0] - self.centre[0], p[1] - self.centre[1]);
-        let r2 = self.radius * self.radius;
-        let q2 = (dx * dx + dy * dy) / r2;
-        if q2.is_nan() || q2 >= 1.0 {
-            return [0.0, 0.0];
-        }
-        let w = bump(q2.sqrt());
-        match self.kind {
-            Kind::Move(m) => [-m[0] * w, -m[1] * w],
-            Kind::Scale(k) => [-k * dx * w, -k * dy * w],
-        }
-    }
-}
-
-fn sub(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
-    [a[0] - b[0], a[1] - b[1]]
-}
-
-fn add(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
-    [a[0] + b[0], a[1] + b[1]]
-}
-
-fn scale(a: [f64; 2], k: f64) -> [f64; 2] {
-    [a[0] * k, a[1] * k]
-}
-
-fn len(a: [f64; 2]) -> f64 {
-    a[0].hypot(a[1])
-}
-
-fn mid(a: [f64; 2], b: [f64; 2]) -> [f64; 2] {
-    [(a[0] + b[0]) / 2.0, (a[1] + b[1]) / 2.0]
-}
-
-fn dot(a: [f64; 2], b: [f64; 2]) -> f64 {
-    a[0] * b[0] + a[1] * b[1]
-}
-
-/// A slider's value as a share (−1…1); 0 for a value that is not a number.
-fn share(v: f64) -> f64 {
-    if v.is_finite() { (v / 100.0).clamp(-1.0, 1.0) } else { 0.0 }
-}
-
-/// A face as the moves see it: its mesh, its axes and its size.
-struct FaceGeom<'a> {
-    mesh: &'a [[f64; 2]],
-    /// Across the face (from the subject's right eye to the left) and down it (forehead to chin).
-    across: [f64; 2],
-    down: [f64; 2],
-    /// The face's width (cheek to cheek) and height (mesh top to chin).
-    w: f64,
-    h: f64,
-    /// A point on the face's middle line, between the cheeks.
-    middle: [f64; 2],
-}
-
-impl<'a> FaceGeom<'a> {
-    fn new(mesh: &'a [[f64; 2]]) -> Option<FaceGeom<'a>> {
-        if mesh.len() < MESH_POINTS || mesh.iter().any(|p| !(p[0].is_finite() && p[1].is_finite())) {
-            return None;
-        }
-        let m = |i: usize| mesh.get(i).copied();
-        let [a, b, c, d] = point::EYE_CORNERS.map(m);
-        let (right_eye, left_eye) = (mid(a?, b?), mid(c?, d?));
-        let eyes = sub(left_eye, right_eye);
-        let (rc, lc) = (m(point::RIGHT_CHEEK)?, m(point::LEFT_CHEEK)?);
-        let (top, chin) = (m(point::TOP)?, m(point::CHIN)?);
-        let (w, h) = (len(sub(lc, rc)), len(sub(chin, top)));
-        let span = len(eyes);
-        // a mesh that is not a face (collapsed, or far from a face's proportions) is left alone
-        if !(w > 1e-6 && h > 1e-6 && span > 0.1 * w && (0.4..=3.0).contains(&(h / w))) {
-            return None;
-        }
-        let across = scale(eyes, 1.0 / span);
-        let mut down = [-across[1], across[0]];
-        if dot(down, sub(chin, top)) < 0.0 {
-            down = scale(down, -1.0);
-        }
-        Some(FaceGeom { mesh, across, down, w, h, middle: mid(rc, lc) })
-    }
-
-    fn at(&self, i: usize) -> Option<[f64; 2]> {
-        self.mesh.get(i).copied()
-    }
-
-    /// The unit vector from `p` toward the face's middle line, across the face.
-    fn inward(&self, p: [f64; 2]) -> [f64; 2] {
-        if dot(sub(p, self.middle), self.across) > 0.0 { scale(self.across, -1.0) } else { self.across }
-    }
-}
-
-/// Moves of `amount` (photo units) at mesh points `points`, each toward `dir(point)`, fading out at `radius`: shared
-/// out so that a point where several overlap still moves by about `amount`.
-fn moves(g: &FaceGeom<'_>, points: &[usize], radius: f64, amount: f64, dir: impl Fn([f64; 2]) -> [f64; 2], out: &mut Vec<Kernel>) {
-    let at: Vec<[f64; 2]> = points.iter().filter_map(|&i| g.at(i)).collect();
-    if at.is_empty() || amount == 0.0 || radius.is_nan() || radius <= 0.0 {
-        return;
-    }
-    let overlap = at.iter().map(|p| at.iter().map(|q| bump(len(sub(*p, *q)) / radius)).sum::<f64>()).sum::<f64>() / at.len() as f64;
-    let each = amount / overlap.max(1.0);
-    out.extend(at.iter().map(|&p| Kernel { centre: p, radius, kind: Kind::Move(scale(dir(p), each)) }));
-}
-
-/// What `s` moves on the face of mesh `mesh` (photo units, [`MESH_POINTS`] points); empty for a mesh that is not a
-/// face or settings that move nothing.
-pub fn kernels(mesh: &[[f64; 2]], s: &Reshape) -> Vec<Kernel> {
-    let mut out = Vec::new();
-    let Some(g) = FaceGeom::new(mesh) else { return out };
-    let (w, h) = (g.w, g.h);
-    let up = scale(g.down, -1.0);
-    for side in point::CHEEKS {
-        moves(&g, &side, SLIM_R * w, SLIM * w * share(s.slim_face), |p| g.inward(p), &mut out);
-    }
-    for side in point::JAW {
-        moves(&g, &side, JAW_R * w, JAW * w * share(s.jaw), |p| scale(g.inward(p), -1.0), &mut out);
-    }
-    moves(&g, &point::CHIN_LINE, CHIN_R * w, CHIN * h * share(s.chin), |_| g.down, &mut out);
-    let under = share(s.double_chin);
-    if under != 0.0 {
-        let centres: Vec<[f64; 2]> = point::UNDER_CHIN.iter().filter_map(|&i| g.at(i)).map(|p| add(p, scale(g.down, UNDER_CHIN * h))).collect();
-        let shifted = FaceGeom { mesh: &centres, ..g };
-        let all: Vec<usize> = (0..centres.len()).collect();
-        moves(&shifted, &all, DOUBLE_CHIN_R * w, DOUBLE_CHIN * h * under, |_| up, &mut out);
-    }
-    for side in point::NOSE_WINGS {
-        let tip = g.at(point::NOSE_TIP);
-        let outward = |p: [f64; 2]| match tip {
-            Some(t) if dot(sub(p, t), g.across) < 0.0 => scale(g.across, -1.0),
-            _ => g.across,
-        };
-        moves(&g, &side, NOSE_R * w, NOSE * w * share(s.nose), outward, &mut out);
-    }
-    let top = share(s.forehead);
-    if top != 0.0 {
-        let centres: Vec<[f64; 2]> = point::FOREHEAD.iter().filter_map(|&i| g.at(i)).map(|p| add(p, scale(up, ABOVE_FOREHEAD * h))).collect();
-        let shifted = FaceGeom { mesh: &centres, ..g };
-        let all: Vec<usize> = (0..centres.len()).collect();
-        moves(&shifted, &all, FOREHEAD_R * w, FOREHEAD * h * top, |_| up, &mut out);
-    }
-    let k = EYES * share(s.eye_size);
-    if k != 0.0 {
-        for pair in [[0, 1], [2, 3]] {
-            let [a, b] = pair.map(|i| point::EYE_CORNERS.get(i).and_then(|&j| g.at(j)));
-            if let (Some(a), Some(b)) = (a, b) {
-                let half = len(sub(a, b)) / 2.0;
-                if half > 1e-9 {
-                    out.push(Kernel { centre: mid(a, b), radius: EYES_R * half, kind: Kind::Scale(k) });
-                }
-            }
-        }
-    }
-    out
 }
 
 /// One face's warp, sampled: where each grid point reads from, less the point.
@@ -402,10 +171,27 @@ impl Field {
             }
             let Some(mesh) = landmarks.get(MESH..MESH + MESH_POINTS) else { continue };
             let mesh: Vec<[f64; 2]> = mesh.iter().map(|(x, y)| [x * sx, y * sy]).collect();
-            let ks = kernels(&mesh, s);
             let Some(g) = FaceGeom::new(&mesh) else { continue };
             let size = g.w.min(g.h);
-            if let Some(mut p) = Patch::sample(&ks, size * CELL, Some(([sx, sy], EDGE_MARGIN * size))) {
+            let photo = Some(([sx, sy], EDGE_MARGIN * size));
+            // each slider is first scaled down alone until it holds, so one that would fold (a move across the
+            // photo's edge, a double chin out of the frame) does not take the others down with it
+            let mut ks = Vec::new();
+            for c in Reshape::CONTROLS {
+                let v = c.read(s);
+                if v == 0.0 {
+                    continue;
+                }
+                let mut one = Reshape::default();
+                c.write(&mut one, v);
+                let mut own = kernels(&mesh, &one);
+                if let Some(mut p) = Patch::sample(&own, size * CELL, photo) {
+                    let t = p.unfold();
+                    own = own.into_iter().map(|k| k.scaled(t)).collect();
+                }
+                ks.extend(own);
+            }
+            if let Some(mut p) = Patch::sample(&ks, size * CELL, photo) {
                 p.unfold();
                 if p.back.iter().any(|d| d[0] != 0.0 || d[1] != 0.0) {
                     patches.push(p);
@@ -515,15 +301,21 @@ pub fn sketch_mesh(b: crate::NormRect) -> Vec<(f64, f64)> {
         (365, 0.73, 0.87),
         (150, 0.32, 0.91),
         (379, 0.68, 0.91),
+        (149, 0.345, 0.925),
+        (378, 0.655, 0.925),
         (176, 0.37, 0.94),
         (400, 0.63, 0.94),
         (148, 0.42, 0.96),
         (377, 0.58, 0.96),
         (1, 0.5, 0.6),
-        (64, 0.41, 0.63),
-        (98, 0.43, 0.65),
-        (294, 0.59, 0.63),
-        (327, 0.57, 0.65),
+        (64, 0.366, 0.63),
+        (98, 0.39, 0.655),
+        (294, 0.634, 0.63),
+        (327, 0.61, 0.655),
+        (129, 0.357, 0.64),
+        (358, 0.643, 0.64),
+        (168, 0.5, 0.40),
+        (2, 0.5, 0.68),
         (109, 0.38, 0.10),
         (338, 0.62, 0.10),
         (33, 0.22, 0.42),
@@ -546,16 +338,10 @@ pub fn sketch_mesh(b: crate::NormRect) -> Vec<(f64, f64)> {
     five.into_iter().chain(mesh).collect()
 }
 
-impl Reshape {
-    /// Every slider at 0 (or not a number): the face does not move.
-    pub(crate) fn is_off_shape(&self) -> bool {
-        [self.slim_face, self.jaw, self.chin, self.double_chin, self.nose, self.forehead, self.eye_size].iter().all(|v| share(*v) == 0.0)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::reshape::Kind;
 
     /// Two strong moves the other way round, close together, would fold the grid: they are scaled down until every
     /// cell holds, and the warp keeps most of what can be kept.
@@ -575,13 +361,5 @@ mod tests {
             assert_eq!(p.d(i, 0), [0.0, 0.0]);
             assert_eq!(p.d(i, p.ny - 1), [0.0, 0.0]);
         }
-    }
-
-    #[test]
-    fn the_bump_is_one_at_the_centre_and_nothing_past_its_radius() {
-        assert_eq!(bump(0.0), 1.0);
-        assert_eq!(bump(1.0), 0.0);
-        assert_eq!(bump(f64::NAN.max(2.0)), 0.0);
-        assert!((0..100).all(|i| bump(i as f64 / 100.0) >= bump((i + 1) as f64 / 100.0)));
     }
 }

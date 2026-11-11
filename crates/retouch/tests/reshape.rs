@@ -203,3 +203,97 @@ fn each_face_moves_alone() {
     assert_eq!(alone.source(q.0, q.1), q, "the other face did not move");
     assert_ne!(both.source(q.0, q.1), q);
 }
+
+/// Where content at `p` (normalised) ends up in the reshaped photo: the point the warp reads `p` at.
+fn moved_to(f: &Field, p: (f64, f64)) -> (f64, f64) {
+    let mut q = p;
+    for _ in 0..400 {
+        let s = f.source(q.0, q.1);
+        q = (q.0 + 0.5 * (p.0 - s.0), q.1 + 0.5 * (p.1 - s.1));
+    }
+    q
+}
+
+/// The distance between `a` and `b` (normalised) in pixels of a `w × h` photo.
+fn px(a: (f64, f64), b: (f64, f64), w: f64, h: f64) -> f64 {
+    ((a.0 - b.0) * w).hypot((a.1 - b.1) * h)
+}
+
+/// Issue #209: Eye Size scales the whole eye evenly, corners, lids and iris alike (a bump that faded out inside the
+/// eye grew its middle by 12 % and its width by 3 % at 100), 50 by half as much, and leaves the brow alone.
+#[test]
+fn eye_size_scales_the_whole_eye() {
+    let (w, h) = (300.0, 200.0);
+    let (outer, inner) = (point(33), point(133));
+    let centre = ((outer.0 + inner.0) / 2.0, (outer.1 + inner.1) / 2.0);
+    let half = px(outer, inner, w, h) / 2.0;
+    let lid = (centre.0, centre.1 - 0.4 * half / h);
+    let brow = (centre.0, centre.1 - 2.0 * half / h);
+    for (v, grow) in [(50.0, 0.09), (100.0, 0.18), (-100.0, -0.18)] {
+        let f = field(&with(|s| s.eye_size = v), w, h).expect("it moves");
+        let width = px(moved_to(&f, outer), moved_to(&f, inner), w, h) / (2.0 * half) - 1.0;
+        let open = px(moved_to(&f, lid), moved_to(&f, centre), w, h) / (0.4 * half) - 1.0;
+        assert!((width - grow).abs() < 0.02 && (open - grow).abs() < 0.02, "Eye Size {v}: width {width:+.3}, opening {open:+.3}");
+        assert!(px(moved_to(&f, brow), brow, w, h) < 0.05 * half, "Eye Size {v} moved the brow");
+    }
+}
+
+/// Issue #209: Nose narrows the lower nose evenly about its middle, its widest wings by 9 % at −50 and 18 % at
+/// −100 (two pushes at the wings moved them 5 % at 100), and leaves the mouth's corners where they are.
+#[test]
+fn nose_narrows_the_wings_and_leaves_the_mouth() {
+    let (w, h) = (300.0, 200.0);
+    let (a, b) = (point(129), point(358));
+    let wings = px(a, b, w, h);
+    for (v, change) in [(-50.0, -0.09), (-100.0, -0.18), (100.0, 0.18)] {
+        let f = field(&with(|s| s.nose = v), w, h).expect("it moves");
+        let now = px(moved_to(&f, a), moved_to(&f, b), w, h) / wings - 1.0;
+        assert!((now - change).abs() < 0.02, "Nose {v}: the wings' width changed {now:+.3}");
+        for corner in [point(61), point(291)] {
+            assert!(px(moved_to(&f, corner), corner, w, h) < 0.002 * w, "Nose {v} moved a mouth corner");
+        }
+    }
+}
+
+/// Issue #209: Double Chin tightens the jaw to neck contour: the band under the jaw line moves up toward it at
+/// every point of the jaw, more at 100 than at 50, while the jaw line itself stays where it is.
+#[test]
+fn double_chin_lifts_the_band_under_the_jaw_and_keeps_the_jaw_line() {
+    let (w, h) = (300.0, 200.0);
+    let face = px(point(10), point(152), w, h);
+    let below = |p: (f64, f64), t: f64| (p.0, p.1 + t * face / h);
+    let mut last = 0.0;
+    for v in [50.0, 100.0] {
+        let f = field(&with(|s| s.double_chin = v), w, h).expect("it moves");
+        for i in [152, 176, 400, 150, 379] {
+            let p = point(i);
+            assert!(px(moved_to(&f, p), p, w, h) < 0.001 * face, "Double Chin {v} moved the jaw line at {i}");
+        }
+        let q = below(point(152), 0.12);
+        let lift = (q.1 - moved_to(&f, q).1) * h / face;
+        assert!(lift > 0.018 * v / 50.0 && lift > last, "Double Chin {v}: the band under the chin moved up {lift:.4} of the face");
+        last = lift;
+        let side = below(point(150), 0.1);
+        let side_lift = (side.1 - moved_to(&f, side).1) * h / face;
+        assert!(side_lift > 0.008 * v / 50.0, "Double Chin {v}: under the jaw's side {side_lift:.4}");
+    }
+}
+
+/// A slider that would fold is scaled down alone: Double Chin −100 (which stretches the band under the jaw) left
+/// Eye Size weaker too, as the whole face's moves were scaled down together.
+#[test]
+fn a_slider_that_would_fold_does_not_weaken_the_others() {
+    let (w, h) = (300.0, 200.0);
+    let mesh = sketch_mesh(FACE);
+    let eye = |s: &Reshape| {
+        let f = Field::build(&[(&mesh, s)], w, h).expect("it moves");
+        let (a, b) = (mesh[MESH + 33], mesh[MESH + 133]);
+        px(moved_to(&f, a), moved_to(&f, b), w, h) / px(a, b, w, h) - 1.0
+    };
+    let alone = eye(&with(|s| s.eye_size = 100.0));
+    let both = eye(&with(|s| {
+        s.eye_size = 100.0;
+        s.double_chin = -100.0;
+    }));
+    assert!(alone > 0.01 && (both - alone).abs() < 0.05 * alone, "Eye Size alone {alone:+.3}, with Double Chin −100 {both:+.3}");
+}

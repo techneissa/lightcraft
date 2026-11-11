@@ -262,6 +262,40 @@ fn shine_lowers_oily_highlights() {
     assert!(lit_drop < pale_drop * 0.4, "light in the skin's colour lowered {lit_drop:.3}, shine {pale_drop:.3}");
 }
 
+/// Issue #209: real shine is the light's colour (often a little blue) on skin that is lit from one side. Shine
+/// brings the spot down toward the skin around it, in that skin's colour (taking grey light away left it lilac),
+/// and leaves the lit side without the spot alone (a blur a tenth of the face wide counted it as shine). 50 is
+/// plainly a step toward 100.
+#[test]
+fn shine_lowers_a_bluish_spot_on_lit_skin_and_keeps_the_light() {
+    let (w, h) = (300, 300);
+    let face = face_with_skin(0.0, 0.0, 0.95, 0.95);
+    // lit from the right: a smooth ramp in the skin's own colour, 1.0× to 1.6× across the face
+    let lit = |x: usize| 1.0 + 0.6 * (x as f32 / w as f32);
+    let spot = [0.85, 0.92, 1.0];
+    let (cx, cy, s) = (110.0f32, 150.0f32, 0.035 * 285.0);
+    let img = Rgb32f::from_fn(w, h, |x, y| {
+        let d2 = (x as f32 - cx).powi(2) + (y as f32 - cy).powi(2);
+        let g = 0.35 * (-d2 / (2.0 * s * s)).exp();
+        std::array::from_fn(|c| SKIN[c] * lit(x) + g * spot[c])
+    });
+    let (i, beside) = (150 * w + 110, 150 * w + 250);
+    let skin_there = SKIN.map(|c| c * lit(110));
+    let excess = |p: [f32; 3]| (luma(p) / luma(skin_there)).ln();
+    // blue over red, against the skin's
+    let tint = |p: [f32; 3]| (p[2] / p[0]) / (SKIN[2] / SKIN[0]) - 1.0;
+    let half = retouched(&img, &skin(0.0, 0.0, 50.0), vec![face.clone()]);
+    let full = retouched(&img, &skin(0.0, 0.0, 100.0), vec![face.clone()]);
+    let (e0, e50, e100) = (excess(img.data[i]), excess(half.data[i]), excess(full.data[i]));
+    assert!(e100 < e0 * 0.5, "the spot's excess at 100: {e0:.3} → {e100:.3}");
+    assert!(e100 > e0 * 0.1, "some sheen stays at 100: {e0:.3} → {e100:.3}");
+    assert!(e0 - e50 > (e0 - e100) * 0.45 && e50 > e100, "50 is a plain step: {e0:.3} / {e50:.3} / {e100:.3}");
+    let (t0, t100) = (tint(img.data[i]), tint(full.data[i]));
+    assert!(t100.abs() < t0.abs() * 0.5, "the spot takes the skin's colour: blue over red {t0:+.3} → {t100:+.3}");
+    let lit_change = (luma(full.data[beside]) / luma(img.data[beside])).ln().abs();
+    assert!(lit_change < 0.02, "the lit side without shine changed by {lit_change:.3} (log)");
+}
+
 /// A flat grey photo has no unevenness, texture or shine: every slider at 100 leaves it flat.
 #[test]
 fn flat_grey_stays_flat() {

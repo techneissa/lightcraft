@@ -13,10 +13,9 @@
 //!   grid ([`TONE`]) takes larger blotches down a little; a change of colour past [`COLOUR_EDGE`] is held back
 //!   (the grid tells edges by light only); and the change fades in over [`FEATHER`] from the mask's edge.
 //!
-//! Shine lowers oily highlights: where the smoothed skin is brighter than the skin around it ([`SHINE_BASE`]
-//! blur) by more than [`SHINE_START`], and paler (light on top of the skin's colour, unlike the light on one side
-//! of a face), the excess is compressed by taking away neutral light, which gives the skin its colour back; the
-//! pores on top keep their contrast.
+//! Shine (`shine`) brings oily highlights down toward the skin right around them, in that skin's light and colour:
+//! skin brighter than the skin around it and paler than it, measured without the shine, beard or shadows, so a lit
+//! cheek or side of the face stays.
 //!
 //! Every blur reads only the skin (a blur of the picture weighted by the mask, divided by the blur of the mask), so
 //! no colour from hair, eyes, lips or the background bleeds in: no halo at the mask's edge. The change is weighted
@@ -32,6 +31,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Control, Feature, Part, Scene, Scope, Spec, Stage};
 
 mod grid;
+mod shine;
 
 use grid::{Grid, Reduced};
 
@@ -50,8 +50,7 @@ pub const COLOUR_EDGE: f32 = 0.08;
 pub const FEATHER: f64 = 0.01;
 /// The tone band's coarse end, a fraction of the face's size: what is coarser is the face's shape and light.
 pub const TONE: f64 = 0.07;
-/// The blur Shine measures highlights against, a fraction of the face's size.
-pub const SHINE_BASE: f64 = 0.1;
+pub use shine::{AROUND as SHINE_AROUND, KEEP as SHINE_KEEP, SOFT as SHINE_SOFT};
 
 /// The share of the grid at [`TONE`] mixed into the grid at [`SMOOTH`]: how much of the blotches between the two
 /// sizes Smoothness 100 takes away.
@@ -69,19 +68,6 @@ pub const TEXTURE_SOFTEN: f32 = 0.8;
 /// Texture changes pores less where their own contrast reaches this (natural log; half at it): an edge's fine
 /// detail, such as a nostril's rim, is not texture.
 const TEXTURE_EDGE: f32 = 0.3;
-/// Shine: skin brighter than the skin around it ([`SHINE_BASE`]) by more than this (natural log: 1.1×) is a
-/// highlight.
-pub const SHINE_START: f32 = 0.1;
-/// Shine: a highlight as saturated as the skin around it counts this much (the light falling on one side of the
-/// face is not shine); one that has lost a quarter of the skin's saturation or more counts fully.
-const SHINE_SAME_COLOUR: f32 = 0.25;
-/// Skin around a highlight with less saturation than this is taken as grey (a black-and-white photo): there,
-/// brightness alone finds the shine.
-const GREY: f32 = 0.04;
-/// Shine 100 keeps this share of a highlight's excess (in log brightness).
-const SHINE_KEEP: f32 = 0.2;
-/// Shine never takes more than this share of a channel away.
-const SHINE_MOST: f32 = 0.6;
 
 /// Most pixels of the mask's box the step works on at full size (2²⁶, about 67 M: a face filling a 100 MP export).
 /// A bigger box is worked on reduced, as a draft is, and the change carried back ([`Skin::apply_capped`]).
@@ -252,8 +238,7 @@ fn retouch(mut c: Rgb32f, m: &Plane, size: f64, k: Strength) -> Rgb32f {
     });
     drop(pores);
     let even = if k.smooth > 0.0 { Even::new(&base, [px(SMOOTH), px(TONE), px(FEATHER)], k.smooth) } else { None };
-    let around = if k.shine > 0.0 { Some(Reduced::of_skin(&base, px(SMOOTH)).blur(px(SHINE_BASE))) } else { None };
-    let wide = |x: usize, y: usize, own: [f32; 3]| around.as_ref().map_or(own, |r| r.read(&r.taps(x, y), own));
+    let shine = shine::Shine::new(&base, [px(SHINE_AROUND), px(SHINE_SOFT)], k.shine);
     par_rows(&mut c.data, w.max(1), |y, row| {
         for (x, o) in row.iter_mut().enumerate() {
             let Some(b) = base.data.get(y * w + x) else { continue };
@@ -262,7 +247,8 @@ fn retouch(mut c: Rgb32f, m: &Plane, size: f64, k: Strength) -> Rgb32f {
             }
             let (src, smooth) = (*o, [b[0], b[1], b[2]]);
             let even = even.as_ref().map(|e| e.at(x, y, smooth));
-            let new = pixel(src, smooth, even, wide(x, y, smooth), k);
+            let shine = shine.as_ref().map(|s| s.at(x, y, smooth));
+            let new = pixel(src, smooth, even, shine, k);
             *o = std::array::from_fn(|c| src[c] + b[3] * (new[c] - src[c]));
         }
     });
@@ -316,9 +302,9 @@ fn curve(s: f32) -> (f32, f32) {
     (1.0 - (1.0 - s).powf(1.6), EDGE * (EDGE_LOW + (1.0 - EDGE_LOW) * s))
 }
 
-/// One pixel: `src`, its skin without pores `smooth` ([`split`]), the even skin there
-/// and how much of it to take (`None` with Smoothness off) and the skin around it at [`SHINE_BASE`].
-fn pixel(src: [f32; 3], smooth: [f32; 3], even: Option<([f32; 3], f32)>, around: [f32; 3], k: Strength) -> [f32; 3] {
+/// One pixel: `src`, its skin without pores `smooth` ([`split`]), the even skin there and how much of it to take
+/// (`None` with Smoothness off) and what Shine changes there (`None` with Shine off).
+fn pixel(src: [f32; 3], smooth: [f32; 3], even: Option<([f32; 3], f32)>, shine: Option<shine::Change>, k: Strength) -> [f32; 3] {
     if luma(src) <= DARK || src.iter().any(|v| !v.is_finite()) {
         return src;
     }
@@ -328,13 +314,14 @@ fn pixel(src: [f32; 3], smooth: [f32; 3], even: Option<([f32; 3], f32)>, around:
     if let Some((even, take)) = even {
         low = std::array::from_fn(|c| smooth[c] + take * (even[c] - smooth[c]));
     }
-    if k.shine > 0.0 {
-        let (lit, _) = deshine(join(low), join(around), k.shine);
-        low = split(lit);
+    let mut calm = 1.0;
+    if let Some(s) = shine {
+        low = std::array::from_fn(|c| low[c] + s.shift[c]);
+        calm = s.pores;
     }
     // Texture: the pores' brightness stronger or softer, less where it is an edge's own fine detail
     let gain = if k.texture > 0.0 { k.texture * TEXTURE_GAIN } else { k.texture * TEXTURE_SOFTEN } * soft(pores[0].abs(), TEXTURE_EDGE);
-    let out = [(low[0] + pores[0] * (1.0 + gain)).min(l[0] + MOST_LOG), low[1] + pores[1], low[2] + pores[2]];
+    let out = [(low[0] + pores[0] * (1.0 + gain) * calm).min(l[0] + MOST_LOG), low[1] + pores[1], low[2] + pores[2]];
     let new = join(out);
     // never below black, unless the source already was
     std::array::from_fn(|c| if new[c].is_finite() { new[c].max(src[c].min(0.0)) } else { src[c] })
@@ -367,30 +354,3 @@ fn join(v: [f32; 3]) -> [f32; 3] {
 
 /// The largest ratio of a channel to luminance [`split`] keeps (pure blue is about 17).
 const RATIO: f32 = 32.0;
-
-/// `low` with its shine lowered by `amount` (0…1), against the face's wide average `base`, and the factor its
-/// luminance changed by (the texture on top is scaled by it).
-fn deshine(low: [f32; 3], base: [f32; 3], amount: f32) -> ([f32; 3], f32) {
-    let (y, yb) = (luma(low), luma(base));
-    if amount <= 0.0 || y <= DARK || yb <= DARK {
-        return (low, 1.0);
-    }
-    let over = (y / yb).ln() - SHINE_START;
-    if over <= 0.0 || !over.is_finite() {
-        return (low, 1.0);
-    }
-    // oily shine is paler than the skin around it (white light on top of the skin's colour)
-    let sat = |p: [f32; 3]| {
-        let (hi, lo) = (p[0].max(p[1]).max(p[2]), p[0].min(p[1]).min(p[2]));
-        if hi > DARK { (hi - lo) / hi } else { 0.0 }
-    };
-    let around = sat(base);
-    let pale = if around < GREY { 1.0 } else { (SHINE_SAME_COLOUR + (1.0 - sat(low) / around) * 3.0).clamp(SHINE_SAME_COLOUR, 1.0) };
-    let target = yb * (SHINE_START + over * (1.0 - amount * pale * (1.0 - SHINE_KEEP))).exp();
-    // take neutral light away (a specular highlight is the light's colour on the skin's), at most SHINE_MOST of a
-    // channel
-    let neutral = (y - target).max(0.0);
-    let lit: [f32; 3] = std::array::from_fn(|c| (low[c] - neutral).max(low[c] * (1.0 - SHINE_MOST)));
-    let scale = (luma(lit) / y).clamp(0.0, 1.0);
-    (lit, scale)
-}
