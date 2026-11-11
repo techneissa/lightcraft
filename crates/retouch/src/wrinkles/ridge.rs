@@ -154,7 +154,9 @@ pub(super) fn centres(l: &Plane, size: f64, zones: &Zones, allowed: &Plane) -> F
             for k in -half..=half {
                 let (qx, qy) = (px + k as f32 * tx, py + k as f32 * ty);
                 // a point counts when its own valley runs the same way (dense dots have valleys every way)
-                let near = (qx >= 0.0 && qy >= 0.0).then(|| best.get(qy as usize * w + qx as usize)).flatten();
+                // (held at the crop's edge, as `bilinear` holds it: past the right edge the next row is not this one)
+                let (cx, cy) = (qx.clamp(0.0, (w - 1) as f32) as usize, qy.clamp(0.0, (h - 1) as f32) as usize);
+                let near = best.get(cy * w + cx);
                 let same = near.map_or(0.0, |o| super::heal::smoothstep(SAME.0, SAME.1, (o.theta - b.theta).cos().abs()));
                 let v = bilinear(&raw, qx, qy) * same;
                 sum += v;
@@ -183,7 +185,7 @@ pub(super) fn centres(l: &Plane, size: f64, zones: &Zones, allowed: &Plane) -> F
     let spots = Plane { width: w, height: h, data: best.iter().map(|b| super::heal::smoothstep(SPOT_FROM, SPOT_FULL, b.spot)).collect() };
     let grow = ((SPOT_GROW * size).ceil() as usize).max(1);
     let spots = gaussian(&lightcraft_raster::morph::max_filter(&spots, grow), 1.0);
-    let mut out = Vec::new();
+    let mut out: Vec<(f32, Centre)> = Vec::new();
     for (i, k) in kept.data.iter().enumerate() {
         if *k <= 0.0 {
             continue;
@@ -192,18 +194,42 @@ pub(super) fn centres(l: &Plane, size: f64, zones: &Zones, allowed: &Plane) -> F
         let (Some(b), Some(zone)) = (best.get(i), zones.at(x, y)) else { continue };
         let frac = LADDER.get(b.width).copied().unwrap_or(0.0);
         let wide = smooth(0.006, 0.0135, frac);
-        out.push(Centre {
-            x: x as f32 + 0.5,
-            y: y as f32 + 0.5,
-            n: (b.theta.cos(), b.theta.sin()),
-            sigma: ((frac * size) as f32).max(MIN_SIGMA),
-            keep: zone.keep * (1.0 - WIDE_KEEP * wide as f32),
-            reach: (REACH * LADDER.get(zone.widths.1).copied().unwrap_or(0.0) * size) as f32 + REACH_PX,
-            across: ((LADDER.get(zone.widths.1).copied().unwrap_or(0.0) * size) as f32 * super::flatten::ACROSS)
-                .max(super::flatten::ACROSS_LINE * ((frac * size) as f32).max(MIN_SIGMA)),
-        });
+        out.push((
+            depth.data.get(i).copied().unwrap_or(0.0),
+            Centre {
+                x: x as f32 + 0.5,
+                y: y as f32 + 0.5,
+                n: (b.theta.cos(), b.theta.sin()),
+                sigma: ((frac * size) as f32).max(MIN_SIGMA),
+                keep: zone.keep * (1.0 - WIDE_KEEP * wide as f32),
+                reach: (REACH * LADDER.get(zone.widths.1).copied().unwrap_or(0.0) * size) as f32 + REACH_PX,
+                across: ((LADDER.get(zone.widths.1).copied().unwrap_or(0.0) * size) as f32 * super::flatten::ACROSS)
+                    .max(super::flatten::ACROSS_LINE * ((frac * size) as f32).max(MIN_SIGMA)),
+            },
+        ));
     }
-    Found { centres: out, spots }
+    Found { centres: strongest(out, MAX_CENTRES), spots }
+}
+
+/// The most centre points a face keeps: the most lined of the test portraits have about 22,000 at the search's size, so a
+/// face never comes near it, but a picture that is all lines (a fabric, a screen's moiré) cannot make the evening slow.
+const MAX_CENTRES: usize = 80_000;
+
+/// The `most` deepest of `found` (depth, centre), in the order they were found.
+fn strongest(mut found: Vec<(f32, Centre)>, most: usize) -> Vec<Centre> {
+    if found.len() > most {
+        let mut by_depth: Vec<(f32, usize)> = found.iter().enumerate().map(|(i, (d, _))| (*d, i)).collect();
+        by_depth.select_nth_unstable_by(most, |a, b| b.0.total_cmp(&a.0).then(a.1.cmp(&b.1)));
+        let mut keep = vec![false; found.len()];
+        for (_, i) in by_depth.iter().take(most) {
+            if let Some(k) = keep.get_mut(*i) {
+                *k = true;
+            }
+        }
+        let mut k = keep.into_iter();
+        found.retain(|_| k.next().unwrap_or(false));
+    }
+    found.into_iter().map(|(_, c)| c).collect()
 }
 
 /// The share of the widest lines (past 1.35 % of the face) left: a deep crease is softened a little less than a fine one.
@@ -333,5 +359,15 @@ mod tests {
         assert!(centres(&l, 1000.0, &zones, &Plane::filled(400, 400, 1.0)).centres.is_empty());
         assert!(centres(&l, 1000.0, &zones, &Plane::new(3, 3)).centres.is_empty());
         assert!(centres(&Plane::new(0, 0), 10.0, &forehead(0, 0), &Plane::new(0, 0)).centres.is_empty());
+    }
+
+    #[test]
+    fn a_face_keeps_its_deepest_centres_up_to_the_cap() {
+        let at = |x: f32| Centre { x, y: 0.5, n: (0.0, 1.0), sigma: 1.0, keep: 1.0, reach: 3.0, across: 4.0 };
+        let found = vec![(0.02, at(0.5)), (0.09, at(1.5)), (0.05, at(2.5)), (0.07, at(3.5))];
+        let kept = strongest(found.clone(), 2);
+        assert_eq!(kept.iter().map(|c| c.x).collect::<Vec<_>>(), [1.5, 3.5], "the two deepest, in order");
+        assert_eq!(strongest(found, 10).len(), 4, "under the cap all stay");
+        assert!(strongest(Vec::new(), 0).is_empty());
     }
 }

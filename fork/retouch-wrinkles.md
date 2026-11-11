@@ -73,7 +73,10 @@ v1 (below) only lifts a crease by part of its depth, so deep wrinkles stayed. v2
 Time (release, a test Mac with other work running): the wrinkles search is about 1–1.8 s per face at 1280 px (it was
 about 0.8 s with the banded heal at 768 px); on a 1936 px draft 92 ms (was 71 ms). A slider tick (the retouch step on a
 1936 × 1290 draft of a face filling the frame, all four sliders at 100, fastest of 20): 12.6 ms (was 10.2 ms), under the
-16 ms budget.
+16 ms budget. Memory (peak footprint, the `wrinkles` example with and without `--search`, seven CC0 portraits): the
+search adds 50–350 MB per photo, the most for a tall crop with the neck (1119 × 2117 px); a photo with seven faces adds
+178 MB (faces are searched one after another). Each full-crop buffer is dropped once used (it added up to 514 MB before);
+a face keeps at most 80,000 crest points (the most lined portrait has about 22,000), the deepest first.
 
 Measured (#201, seven CC0 portraits, `crates/retouch/examples/wrinkles_sheet.rs`; line depth = elongated valleys 0.15–0.6 %
 of the face; band = the issue's measure, the dark side of the 0.25–3 % band, which also counts spots and mottling): at 100,
@@ -178,7 +181,7 @@ slider 0 and the other areas' sliders leave every bit; at 100 a pixel has the st
 takes away most of the lines' depth and the pores come back inside them; Forehead 100 takes thin 3 px creases away and keeps
 the light's gradient and level (#201; failed before at 0.18 of 0.22); the lines even out in light and colour at the clear
 skin's level; a spot and a line down the forehead are not found as lines; skin seen through a lens counts and the frame and
-its margin don't; a freckle in a crease comes up with it and a big dark patch keeps its pixels; the tiles give back every cell; a window equals the whole render inside it; a draft and
+its margin don't; a freckle in a crease comes up with it and a big dark patch keeps its pixels; a face keeps its deepest crest points up to the cap; the tiles give back every cell; a window equals the whole render inside it; a draft and
 an export four times its size leave the same share; a cancelled search keeps nothing and v1 shows (stopped after
 the first, third or fourth check); faces without the mesh or the skin mask get none, a face without
 wrinkles an empty change; the exclusions cover a synthetic ear, nostril and face edge and not the forehead, cheek or neck; a hair

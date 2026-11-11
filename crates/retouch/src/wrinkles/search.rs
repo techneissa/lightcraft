@@ -218,6 +218,8 @@ fn find(src: &dyn Source, scene: &Scene<'_>, face: usize, filler: &mut dyn Fille
     let sctx = sub.faces.get(at)?;
     let size = sctx.size;
     let lg = heal::log_image(&work);
+    // (each full-crop buffer is dropped once used: a tall crop with the neck is a few million pixels, tens of planes)
+    drop(work);
     // the skin: Facial Skin, and the skin the people parse gave to a pair of glasses (behind and beside the lenses)
     let facial = sub.mask_plane(at, Part::FacialSkin)?;
     let skin = match sub.mask_plane(at, Part::Others) {
@@ -243,14 +245,17 @@ fn find(src: &dyn Source, scene: &Scene<'_>, face: usize, filler: &mut dyn Fille
         };
         a * s * (1.0 - excluded.get(x, y))
     });
+    drop((face_core, body_core, excluded));
 
     // a hair across the skin is left as it is: no line is looked for or read on it
     let any_skin = match &body {
         Some(b) => skin.zip_map(b, f32::max),
         None => skin.clone(),
     };
+    drop((skin, body));
     let hair = hairlike::hair_like(&lg, &any_skin, size);
-    let allowed = allowed.zip_map(&hair, |a, hl| a * (1.0 - hl));
+    let within = allowed.zip_map(&hair, |a, hl| a * (1.0 - hl));
+    drop(allowed);
     if filler.cancelled() {
         return None;
     }
@@ -258,33 +263,41 @@ fn find(src: &dyn Source, scene: &Scene<'_>, face: usize, filler: &mut dyn Fille
     let lum = lg.map(|p| 0.2627 * p[0] + 0.678 * p[1] + 0.0593 * p[2]);
     // far darker than the skin around (a lash line, an eye's dark corner past where the mesh puts it, a deep fold): not
     // skin to read or to change
-    let near_skin = {
+    let dark = {
         let sigma = (DARK_AROUND * size) as f32;
         let num = gaussian(&lum.zip_map(&any_skin, |l, s| l * s), sigma);
         let den = gaussian(&any_skin, sigma);
-        num.zip_map(&den, |n, d| if d > 1e-3 { n / d } else { 0.0 })
+        let near_skin = num.zip_map(&den, |n, d| if d > 1e-3 { n / d } else { 0.0 });
+        lightcraft_raster::morph::max_filter(&lum.zip_map(&near_skin, |l, a| smoothstep(DARK.0, DARK.1, a - l)), 1)
     };
-    let dark = lightcraft_raster::morph::max_filter(&lum.zip_map(&near_skin, |l, a| smoothstep(DARK.0, DARK.1, a - l)), 1);
-    let within = allowed.clone();
-    let allowed = allowed.zip_map(&dark, |a, d| a * (1.0 - d));
+    let allowed = within.zip_map(&dark, |a, d| a * (1.0 - d));
     let ridge::Found { centres, spots } = ridge::centres(&lum, size, &zones, &allowed);
+    drop((lum, zones));
     // a spot that matters is pigment (a freckle, an age spot: browner than the skin around), not a pore (only darker)
-    let pigment = lg.map(|p| p[0] - p[2]);
-    let around = gaussian(&pigment, (PIGMENT_AROUND * size) as f32);
-    let spots = spots.zip_map(&pigment.zip_map(&around, |p, a| p - a), |s, d| s * smoothstep(PIGMENT.0, PIGMENT.1, d));
-    // a dark pit inside a crease is the crease's, not a spot to keep
-    let on_line = flatten::cores(&centres, sw, sh);
-    let spots = gaussian(&lightcraft_raster::morph::max_filter(&spots.zip_map(&on_line, |s, l| s * (1.0 - l)), 1), 1.0);
+    let spots = {
+        let pigment = lg.map(|p| p[0] - p[2]);
+        let around = gaussian(&pigment, (PIGMENT_AROUND * size) as f32);
+        let spots = spots.zip_map(&pigment.zip_map(&around, |p, a| p - a), |s, d| s * smoothstep(PIGMENT.0, PIGMENT.1, d));
+        // a dark pit inside a crease is the crease's, not a spot to keep
+        let on_line = flatten::cores(&centres, sw, sh);
+        gaussian(&lightcraft_raster::morph::max_filter(&spots.zip_map(&on_line, |s, l| s * (1.0 - l)), 1), 1.0)
+    };
     if centres.is_empty() {
         return Some(Fix::default());
     }
     // the profiles are read on the picture blurred by a little less than a pixel, so a single noisy pixel is no side
     let field = flatten::presence(&centres, sw, sh, size);
+    drop(centres);
     // the skin the evening reads: not a hair, not a spot; and a spot is not changed
     let clear = hair.zip_map(&spots, |hl, sp| (1.0 - hl) * (1.0 - sp)).zip_map(&dark, |c, d| c * (1.0 - d));
     let readable = any_skin.zip_map(&clear, |s, c| smoothstep(0.5, 0.9, s) * c);
-    let delta = flatten::flatten(&lg, &field, &readable, &allowed.zip_map(&spots, |a, sp| a * (1.0 - sp)), size);
+    drop((clear, hair, any_skin));
+    let changeable = allowed.zip_map(&spots, |a, sp| a * (1.0 - sp));
+    drop(allowed);
+    let delta = flatten::flatten(&lg, &field, &readable, &changeable, size);
+    drop((lg, field, readable, changeable));
     let held = spots.zip_map(&dark, f32::max);
+    drop((spots, dark));
     let delta = carry_over(&delta, &held, &within);
     if filler.cancelled() {
         return None;
