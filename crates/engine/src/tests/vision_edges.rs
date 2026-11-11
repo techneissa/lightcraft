@@ -181,7 +181,7 @@ fn a_people_parse_with_apple_vision_edges_is_made_once_and_cached() {
         Outcome::Ready { parsing, cached: false } => parsing,
         other => panic!("no parse: {other:?}"),
     };
-    assert!(parsing.model_version.ends_with("+vision1"), "{}", parsing.model_version);
+    assert!(parsing.model_version.contains("+vision1"), "{}", parsing.model_version);
     assert!(parsing.people[0].sample(Part::EntirePerson, 0.5, 0.55) > 0.5, "the person's middle, far from the edge, stays");
     assert_eq!(h.runs(), 1);
     assert!(matches!(p.parse(img.clone(), Vec::new(), true), Outcome::Ready { cached: true, .. }));

@@ -74,6 +74,9 @@ fn with_the_model_one_click_chooses_matting_for_one_kind() {
         return;
     }
     let (mut h, dir) = settings("choose", true);
+    // (installed, both kinds start on Matting: pick Current for Subject so the check below can see a change)
+    click(&mut h, "button:maskEdges.subject-current");
+    assert_eq!(h.app.session.hair_edges.chosen(EdgeKind::Subject), Edge::Current);
     click(&mut h, "button:maskEdges.people-matting");
     assert!(!has(&mut h, "button:maskEdgesDownload"), "installed: no question");
     let e = h.app.session.hair_edges.clone();
