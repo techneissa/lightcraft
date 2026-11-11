@@ -75,6 +75,7 @@ it adds a dated section to that issue (the official commits waiting, a trial mer
 risk). It follows the "Daily run" section of the `craftupdate` skill. To stop it: switch it off under Scheduled
 Tasks in T3, or ask any agent to "turn off the daily LightCraft update".
 
-The official project's own workflows (CI, Nix, Packaging lint, SonarCloud) are switched off in this fork:
+The official project's own workflows (CI, CI (Windows), Windows ARM64, FreeBSD, Nix, Packaging lint, SonarCloud) are
+switched off in this fork, which only ships the Mac app;
 the official project runs them. A workflow the official project adds later starts switched on; switch it off
 in Actions unless it is wanted here.
