@@ -3857,6 +3857,7 @@ dependencies = [
  "ab_glyph",
  "chrono",
  "craft-docpath",
+ "crc32fast",
  "fs4",
  "gif",
  "harfrust 0.13.3",

@@ -205,12 +205,26 @@ pub(super) fn load_bytes_now(
         // keeps the contrast the photo has without it: the file's own DNG tone curve, else the tone of the look fitted
         // to its camera JPEG. (A chart pins colour, not a rendering: its curve would be a choice, and this one is the
         // camera's.)
+        // The fit of the starting colour to the camera JPEG is kept for the session under the file and what else it
+        // reads, so the photo's next decode (another size, the full size) reuses it (#220). Only a raw that is fitted
+        // is keyed: one with colour matrices and a tone curve of its own is not.
+        let fit_key = fitted_at_all(&raw).then(|| super::look_cache::key(&bytes, options, with.outliers, used_reduced, lens.as_ref()));
         let kept_tone = match dcp {
             Some(p) if p.color.profile.tone_curve.is_none() => raw.color.profile.tone_curve.as_ref().and_then(dng_tone_curve).or_else(|| {
                 let own = raw.color.clone();
                 // the same proxy as the starting colour's fit below: the DNG's lens opcodes back in, no embedded lens
-                let tone = with_dng_lens_ops(&mut raw, dng_lens_ops.as_ref(), lens.as_ref(), list3, |raw, embedded| {
-                    crate::camera_preview::starting_colour_choice(raw, &bytes, lens_geometry.as_ref(), embedded, options.colour, options.profile_key)
+                // (and the file's own colour, so the same fit as a decode without the profile: one key)
+                let tone = super::look_cache::fitted(&mut raw, fit_key, |raw| {
+                    with_dng_lens_ops(raw, dng_lens_ops.as_ref(), lens.as_ref(), list3, |raw, embedded| {
+                        crate::camera_preview::starting_colour_choice(
+                            raw,
+                            &bytes,
+                            lens_geometry.as_ref(),
+                            embedded,
+                            options.colour,
+                            options.profile_key,
+                        )
+                    })
                 })
                 .2
                 .map(|look| look.tone);
@@ -239,10 +253,20 @@ pub(super) fn load_bytes_now(
         // never with an imported camera profile, whose matrices replace the file's)
         let colorimetric = crate::camera_preview::colour_choice_offered(&raw);
         // the source's segmentation mattes (DNG semantic masks), read while the starting colour is fitted
+        // (with an imported camera profile the fit sees the profile's colour: not kept)
         let ((xy, t, camera_look, local), mattes) = rayon::join(
             || {
-                with_dng_lens_ops(&mut raw, dng_lens_ops.as_ref(), lens.as_ref(), list3, |raw, embedded| {
-                    crate::camera_preview::starting_colour_choice(raw, &bytes, lens_geometry.as_ref(), embedded, options.colour, options.profile_key)
+                super::look_cache::fitted(&mut raw, fit_key.filter(|_| dcp.is_none()), |raw| {
+                    with_dng_lens_ops(raw, dng_lens_ops.as_ref(), lens.as_ref(), list3, |raw, embedded| {
+                        crate::camera_preview::starting_colour_choice(
+                            raw,
+                            &bytes,
+                            lens_geometry.as_ref(),
+                            embedded,
+                            options.colour,
+                            options.profile_key,
+                        )
+                    })
                 })
             },
             || dng_mattes(&bytes, &info),
@@ -575,6 +599,14 @@ pub(crate) fn dng_tone_curve(curve: &lightcraft_raw::profile::ToneCurve) -> Opti
         [x, curve.eval(x).min(0.9995)]
     });
     lightcraft_pipeline::tone::CameraTone::new(knots)
+}
+
+/// Whether the starting colour of `raw` is fitted to its camera JPEG at all (else it comes from the file's own colour
+/// matrices and tone curve, and there is no fit to keep): it has no colour matrices of its own, or it is a DNG whose
+/// tone is fitted (`camera_preview::dng_tone_eligible`).
+fn fitted_at_all(raw: &lightcraft_raw::RawImage) -> bool {
+    let t = lightcraft_raw::color::camera_transform(raw, lightcraft_raw::color::as_shot_white_xy(raw));
+    t.matrix_is_fallback || crate::camera_preview::dng_tone_eligible(raw, &t)
 }
 
 /// A raw's `OpcodeList3`.
