@@ -13,21 +13,41 @@ pub const MESH_POINTS: usize = 478;
 const SLIM: f64 = 0.05; // the cheeks and the jaw's sides, each, of W
 const JAW: f64 = 0.045; // the jaw's corners, each, of W
 const CHIN: f64 = 0.07; // the chin, of H
-const DOUBLE_CHIN: f64 = 0.05; // under the chin, of H
-const NOSE: f64 = 0.035; // each wing of the nose, of W
+const DOUBLE_CHIN: f64 = 0.06; // the soft area under the jaw line, toward it, of H
+const NOSE: f64 = 0.18; // the lower nose's width, × (1 ± this)
 const FOREHEAD: f64 = 0.07; // the top of the forehead, of H
-const EYES: f64 = 0.16; // the eye's centre is enlarged by 1 / (1 − this)
+const EYES: f64 = 0.18; // each eye's size, × (1 ± this)
 
 /// The radius each move fades out at: a fraction of the face's width, or for the eyes of the eye's half width.
 const SLIM_R: f64 = 0.28;
 const JAW_R: f64 = 0.22;
 const CHIN_R: f64 = 0.22;
-const DOUBLE_CHIN_R: f64 = 0.2;
-const NOSE_R: f64 = 0.09;
 const FOREHEAD_R: f64 = 0.32;
-const EYES_R: f64 = 2.0;
-/// How far below the jaw line the soft area Double Chin lifts lies, a fraction of H.
-const UNDER_CHIN: f64 = 0.10;
+
+/// Nose: the part narrowed or widened evenly, an ellipse about the middle of the nose's wings: across, this many
+/// times the wings' half width, narrowing upward by [`NOSE_TAPER`] as the bridge does; up, this share of the way
+/// to the top of the bridge; down, to the base of the nose. The change fades out from it to [`NOSE_OUTER`] times
+/// its size: below the eyes' inner corners and the glasses' bridge above, before the upper lip below and the
+/// mouth's corners beside.
+const NOSE_ACROSS: f64 = 1.15;
+const NOSE_TAPER: f64 = 0.4;
+const NOSE_UP: f64 = 0.45;
+const NOSE_DOWN: f64 = 1.0;
+const NOSE_OUTER: f64 = 1.9;
+/// Eye Size: the part scaled evenly, an ellipse about the eye's corners: along the eye, this many times its half
+/// width; above and below, this many half widths (the lids and lashes). The change fades out from it to
+/// [`EYES_OUTER`] times its size, below the brows.
+const EYES_ALONG: f64 = 1.15;
+const EYES_ACROSS: f64 = 0.6;
+const EYES_OUTER: f64 = 1.85;
+/// Double Chin: the band under the jaw line it pulls toward the line, fractions of H: nothing at the line, the full
+/// pull from [`TUCK_NEAR`] below it, fading out by [`TUCK_FAR`]; along the jaw each pull spreads over
+/// [`TUCK_SIDE`] times the spacing of the jaw line's points.
+const TUCK_NEAR: f64 = 0.07;
+const TUCK_FAR: f64 = 0.28;
+const TUCK_SIDE: f64 = 2.0;
+/// Double Chin pulls the jaw's corners this share of the pull under the chin, rising smoothly toward the chin.
+const TUCK_CORNERS: f64 = 0.35;
 /// How far above the mesh's top (mid forehead) Forehead's moves sit, a fraction of H: nearer the hairline, so the
 /// brows stay.
 const ABOVE_FOREHEAD: f64 = 0.04;
@@ -38,23 +58,25 @@ mod point {
     pub const CHIN: usize = 152;
     pub const RIGHT_CHEEK: usize = 234;
     pub const LEFT_CHEEK: usize = 454;
-    pub const NOSE_TIP: usize = 1;
     /// The subject's right eye's outer and inner corners, then the left eye's inner and outer.
     pub const EYE_CORNERS: [usize; 4] = [33, 133, 362, 263];
     /// The face's contour on each side, cheekbone to jaw corner (Slim Face).
     pub const CHEEKS: [[usize; 4]; 2] = [[234, 93, 132, 58], [454, 323, 361, 288]];
     /// The jaw's corners (Jaw).
     pub const JAW: [[usize; 3]; 2] = [[172, 136, 150], [397, 365, 379]];
-    /// The chin (Chin, and below it Double Chin).
+    /// The chin (Chin).
     pub const CHIN_LINE: [usize; 3] = [152, 148, 377];
-    pub const UNDER_CHIN: [usize; 5] = [152, 148, 377, 176, 400];
-    /// The nose's wings (Nose).
-    pub const NOSE_WINGS: [[usize; 2]; 2] = [[64, 98], [294, 327]];
+    /// The jaw line from one corner under the chin to the other (Double Chin).
+    pub const JAW_LINE: [usize; 13] = [172, 136, 150, 149, 176, 148, 152, 377, 400, 378, 379, 365, 397];
+    /// The nose's wings at their widest, the top of its bridge (between the eyes) and its base (Nose).
+    pub const NOSE_WINGS: [usize; 2] = [129, 358];
+    pub const NOSE_TOP: usize = 168;
+    pub const NOSE_BASE: usize = 2;
     /// The top of the face's contour (Forehead).
     pub const FOREHEAD: [usize; 3] = [10, 109, 338];
 }
 
-/// One move of a slider: around `centre`, fading out at `radius`.
+/// One move of a slider: around `centre`, nothing past `radius`.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Kernel {
     pub centre: [f64; 2],
@@ -66,8 +88,34 @@ pub struct Kernel {
 pub enum Kind {
     /// The pixels at the centre move by this (photo units).
     Move([f64; 2]),
-    /// The pixels about the centre are enlarged by `1 / (1 − k)` at the centre (`k` < 0 makes them smaller).
-    Scale(f64),
+    /// The pixels inside an ellipse about the centre are scaled about it by `by` (along `axes[0]`, along
+    /// `axes[1]`; 1 leaves them), evenly all over it, so its shape and texture are kept. `half`: the ellipse's half
+    /// size along `axes[0]`, and along `axes[1]` before the centre and past it; before the centre its size along
+    /// `axes[0]` narrows smoothly by up to `taper` (a share). Outside it the change fades out smoothly (C²), to
+    /// nothing at `outer` times its size.
+    Zoom { axes: [[f64; 2]; 2], half: [f64; 3], taper: f64, outer: f64, by: [f64; 2] },
+    /// The pixels on the far side of a line through the centre (along `normal` from it) are pulled toward the line
+    /// by `lift` (photo units): nothing at the line, so it stays where it is, the full pull at `near` from it,
+    /// fading out by `far`; along the line the pull fades out over `side` each way.
+    Tuck { normal: [f64; 2], lift: f64, near: f64, far: f64, side: f64 },
+}
+
+/// 1 up to 1, 0 from `outer` on, smooth (C²: a smootherstep) between.
+fn falloff(q: f64, outer: f64) -> f64 {
+    if q.is_nan() || q >= outer {
+        return 0.0;
+    }
+    if q <= 1.0 {
+        return 1.0;
+    }
+    let t = (q - 1.0) / (outer - 1.0);
+    1.0 - t * t * t * (t * (6.0 * t - 15.0) + 10.0)
+}
+
+/// 0 at 0 and below, 1 at 1 and above, smooth (C²) between.
+fn rise(t: f64) -> f64 {
+    let t = if t.is_nan() { 0.0 } else { t.clamp(0.0, 1.0) };
+    t * t * t * (t * (6.0 * t - 15.0) + 10.0)
 }
 
 /// The Wendland bump: 1 at the centre, 0 from `q = 1` on, smooth (C²) all the way.
@@ -89,11 +137,43 @@ impl Kernel {
         if q2.is_nan() || q2 >= 1.0 {
             return [0.0, 0.0];
         }
-        let w = bump(q2.sqrt());
+        let d = [dx, dy];
         match self.kind {
-            Kind::Move(m) => [-m[0] * w, -m[1] * w],
-            Kind::Scale(k) => [-k * dx * w, -k * dy * w],
+            Kind::Move(m) => {
+                let w = bump(q2.sqrt());
+                [-m[0] * w, -m[1] * w]
+            }
+            Kind::Zoom { axes: [a, b], half, taper, outer, by } => {
+                let (u, v) = (dot(d, a), dot(d, b));
+                let (hu, hv) = if v < 0.0 { (half[0] * (1.0 - taper * rise(-v / half[1])), half[1]) } else { (half[0], half[2]) };
+                let q = ((u / hu).powi(2) + (v / hv).powi(2)).sqrt();
+                let f = falloff(q, outer);
+                // a point shows what was 1 / by as far from the centre
+                let (ku, kv) = ((1.0 / by[0] - 1.0) * u * f, (1.0 / by[1] - 1.0) * v * f);
+                let out = add(scale(a, ku), scale(b, kv));
+                if out[0].is_finite() && out[1].is_finite() { out } else { [0.0, 0.0] }
+            }
+            Kind::Tuck { normal, lift, near, far, side } => {
+                let (s, t) = (dot(d, normal), dot(d, [-normal[1], normal[0]]));
+                if s <= 0.0 || s >= far || side <= 0.0 {
+                    return [0.0, 0.0];
+                }
+                let g = if s < near { rise(s / near) } else { 1.0 - rise((s - near) / (far - near)) };
+                // a point shows what was further from the line
+                let w = lift * g * bump(t.abs() / side);
+                if w.is_finite() { scale(normal, w) } else { [0.0, 0.0] }
+            }
         }
+    }
+
+    /// This move with its strength scaled by `t` (0…1).
+    pub(super) fn scaled(self, t: f64) -> Kernel {
+        let kind = match self.kind {
+            Kind::Move(m) => Kind::Move(scale(m, t)),
+            Kind::Zoom { axes, half, taper, outer, by } => Kind::Zoom { axes, half, taper, outer, by: by.map(|b| 1.0 + (b - 1.0) * t) },
+            Kind::Tuck { normal, lift, near, far, side } => Kind::Tuck { normal, lift: lift * t, near, far, side },
+        };
+        Kernel { kind, ..self }
     }
 }
 
@@ -200,21 +280,8 @@ pub fn kernels(mesh: &[[f64; 2]], s: &Reshape) -> Vec<Kernel> {
         moves(&g, &side, JAW_R * w, JAW * w * share(s.jaw), |p| scale(g.inward(p), -1.0), &mut out);
     }
     moves(&g, &point::CHIN_LINE, CHIN_R * w, CHIN * h * share(s.chin), |_| g.down, &mut out);
-    let under = share(s.double_chin);
-    if under != 0.0 {
-        let centres: Vec<[f64; 2]> = point::UNDER_CHIN.iter().filter_map(|&i| g.at(i)).map(|p| add(p, scale(g.down, UNDER_CHIN * h))).collect();
-        let shifted = FaceGeom { mesh: &centres, ..g };
-        let all: Vec<usize> = (0..centres.len()).collect();
-        moves(&shifted, &all, DOUBLE_CHIN_R * w, DOUBLE_CHIN * h * under, |_| up, &mut out);
-    }
-    for side in point::NOSE_WINGS {
-        let tip = g.at(point::NOSE_TIP);
-        let outward = |p: [f64; 2]| match tip {
-            Some(t) if dot(sub(p, t), g.across) < 0.0 => scale(g.across, -1.0),
-            _ => g.across,
-        };
-        moves(&g, &side, NOSE_R * w, NOSE * w * share(s.nose), outward, &mut out);
-    }
+    tuck(&g, DOUBLE_CHIN * h * share(s.double_chin), &mut out);
+    nose(&g, share(s.nose), &mut out);
     let top = share(s.forehead);
     if top != 0.0 {
         let centres: Vec<[f64; 2]> = point::FOREHEAD.iter().filter_map(|&i| g.at(i)).map(|p| add(p, scale(up, ABOVE_FOREHEAD * h))).collect();
@@ -222,19 +289,79 @@ pub fn kernels(mesh: &[[f64; 2]], s: &Reshape) -> Vec<Kernel> {
         let all: Vec<usize> = (0..centres.len()).collect();
         moves(&shifted, &all, FOREHEAD_R * w, FOREHEAD * h * top, |_| up, &mut out);
     }
-    let k = EYES * share(s.eye_size);
-    if k != 0.0 {
+    let by = 1.0 + EYES * share(s.eye_size);
+    if by != 1.0 {
         for pair in [[0, 1], [2, 3]] {
             let [a, b] = pair.map(|i| point::EYE_CORNERS.get(i).and_then(|&j| g.at(j)));
             if let (Some(a), Some(b)) = (a, b) {
                 let half = len(sub(a, b)) / 2.0;
                 if half > 1e-9 {
-                    out.push(Kernel { centre: mid(a, b), radius: EYES_R * half, kind: Kind::Scale(k) });
+                    let along = scale(sub(b, a), 0.5 / half);
+                    let half = [EYES_ALONG * half, EYES_ACROSS * half, EYES_ACROSS * half];
+                    let kind = Kind::Zoom { axes: [along, [-along[1], along[0]]], half, taper: 0.0, outer: EYES_OUTER, by: [by, by] };
+                    out.push(Kernel { centre: mid(a, b), radius: EYES_OUTER * half[0].max(half[1]), kind });
                 }
             }
         }
     }
     out
+}
+
+/// Nose: the lower nose narrowed (`amount` < 0) or widened about its middle line, evenly across the wings, so the
+/// nostrils and the tip keep their shape; the bridge above follows a little less, and nothing below the nose's
+/// base moves.
+fn nose(g: &FaceGeom<'_>, amount: f64, out: &mut Vec<Kernel>) {
+    let [a, b] = point::NOSE_WINGS.map(|i| g.at(i));
+    let (Some(a), Some(b), Some(top), Some(base)) = (a, b, g.at(point::NOSE_TOP), g.at(point::NOSE_BASE)) else { return };
+    if amount == 0.0 {
+        return;
+    }
+    let centre = mid(a, b);
+    let wings = dot(sub(b, a), g.across).abs() / 2.0;
+    let (up, down) = (dot(sub(centre, top), g.down), dot(sub(base, centre), g.down));
+    // a mesh with the wings, the bridge or the base out of place is left alone
+    if !(wings > 0.02 * g.w && up > 0.02 * g.h && down > 0.005 * g.h) {
+        return;
+    }
+    let half = [NOSE_ACROSS * wings, NOSE_UP * up, NOSE_DOWN * down];
+    let kind = Kind::Zoom { axes: [g.across, g.down], half, taper: NOSE_TAPER, outer: NOSE_OUTER, by: [1.0 + NOSE * amount, 1.0] };
+    out.push(Kernel { centre, radius: NOSE_OUTER * half[0].max(half[1]).max(half[2]), kind });
+}
+
+/// Double Chin: along the jaw line, from one corner under the chin to the other, the soft area under it is pulled
+/// up toward it by `lift` (photo units; less toward the corners), while the line itself stays: the jaw to neck
+/// contour is tightened. A negative `lift` lets it down.
+fn tuck(g: &FaceGeom<'_>, lift: f64, out: &mut Vec<Kernel>) {
+    let at: Vec<[f64; 2]> = point::JAW_LINE.iter().filter_map(|&i| g.at(i)).collect();
+    let n = at.len();
+    if n < 3 || lift == 0.0 || !lift.is_finite() {
+        return;
+    }
+    let spacing = at.windows(2).map(|w| len(sub(w[1], w[0]))).sum::<f64>() / (n - 1) as f64;
+    let side = TUCK_SIDE * spacing;
+    if side.is_nan() || side <= 1e-9 {
+        return;
+    }
+    let centre = mid(g.middle, at[n / 2]);
+    for (i, &p) in at.iter().enumerate() {
+        let (prev, next) = (at[i.saturating_sub(1)], at[(i + 1).min(n - 1)]);
+        let tangent = sub(next, prev);
+        let l = len(tangent);
+        if l.is_nan() || l <= 1e-12 {
+            continue;
+        }
+        // the normal away from the face
+        let mut normal = [-tangent[1] / l, tangent[0] / l];
+        if dot(normal, sub(p, centre)) < 0.0 {
+            normal = scale(normal, -1.0);
+        }
+        let x = (i as f64 - (n - 1) as f64 / 2.0) / ((n - 1) as f64 / 2.0);
+        let c = (x * std::f64::consts::FRAC_PI_2).cos();
+        let weight = TUCK_CORNERS + (1.0 - TUCK_CORNERS) * c * c;
+        let overlap: f64 = at.iter().map(|q| bump(len(sub(p, *q)) / side)).sum();
+        let kind = Kind::Tuck { normal, lift: lift * weight / overlap.max(1.0), near: TUCK_NEAR * g.h, far: TUCK_FAR * g.h, side };
+        out.push(Kernel { centre: p, radius: (TUCK_FAR * g.h).hypot(side), kind });
+    }
 }
 
 impl Reshape {

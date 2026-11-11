@@ -8,6 +8,7 @@ use std::fmt;
 
 use super::Reshape;
 use super::kernels::{FaceGeom, Kernel, MESH, MESH_POINTS, add, kernels};
+use crate::Feature;
 use crate::input::Fnv;
 
 /// The cell of the sampled warp, a fraction of the face's smaller side (width or height).
@@ -170,10 +171,27 @@ impl Field {
             }
             let Some(mesh) = landmarks.get(MESH..MESH + MESH_POINTS) else { continue };
             let mesh: Vec<[f64; 2]> = mesh.iter().map(|(x, y)| [x * sx, y * sy]).collect();
-            let ks = kernels(&mesh, s);
             let Some(g) = FaceGeom::new(&mesh) else { continue };
             let size = g.w.min(g.h);
-            if let Some(mut p) = Patch::sample(&ks, size * CELL, Some(([sx, sy], EDGE_MARGIN * size))) {
+            let photo = Some(([sx, sy], EDGE_MARGIN * size));
+            // each slider is first scaled down alone until it holds, so one that would fold (a move across the
+            // photo's edge, a double chin out of the frame) does not take the others down with it
+            let mut ks = Vec::new();
+            for c in Reshape::CONTROLS {
+                let v = c.read(s);
+                if v == 0.0 {
+                    continue;
+                }
+                let mut one = Reshape::default();
+                c.write(&mut one, v);
+                let mut own = kernels(&mesh, &one);
+                if let Some(mut p) = Patch::sample(&own, size * CELL, photo) {
+                    let t = p.unfold();
+                    own = own.into_iter().map(|k| k.scaled(t)).collect();
+                }
+                ks.extend(own);
+            }
+            if let Some(mut p) = Patch::sample(&ks, size * CELL, photo) {
                 p.unfold();
                 if p.back.iter().any(|d| d[0] != 0.0 || d[1] != 0.0) {
                     patches.push(p);
@@ -283,15 +301,21 @@ pub fn sketch_mesh(b: crate::NormRect) -> Vec<(f64, f64)> {
         (365, 0.73, 0.87),
         (150, 0.32, 0.91),
         (379, 0.68, 0.91),
+        (149, 0.345, 0.925),
+        (378, 0.655, 0.925),
         (176, 0.37, 0.94),
         (400, 0.63, 0.94),
         (148, 0.42, 0.96),
         (377, 0.58, 0.96),
         (1, 0.5, 0.6),
-        (64, 0.41, 0.63),
-        (98, 0.43, 0.65),
-        (294, 0.59, 0.63),
-        (327, 0.57, 0.65),
+        (64, 0.366, 0.63),
+        (98, 0.39, 0.655),
+        (294, 0.634, 0.63),
+        (327, 0.61, 0.655),
+        (129, 0.357, 0.64),
+        (358, 0.643, 0.64),
+        (168, 0.5, 0.40),
+        (2, 0.5, 0.68),
         (109, 0.38, 0.10),
         (338, 0.62, 0.10),
         (33, 0.22, 0.42),

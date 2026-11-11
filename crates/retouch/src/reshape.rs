@@ -6,14 +6,17 @@
 //! the photo, the face's part masks and every retouch then follow the reshaped face, and the preview, the loupe and
 //! the export agree, as they do under Upright.
 //!
-//! How a slider moves the face ([`kernels`]): it moves a few of the face mesh's points (the face's contour, the jaw,
-//! the chin, the nose's wings, the top of the forehead) by a fraction of the face's width or height, or scales the
-//! eyes about their centres. Each move spreads to the pixels around it through a smooth bump that falls to nothing at
-//! a radius that is a fraction of the face (a Wendland function, C², zero past its radius), so the warp is local:
-//! pixels far from the face never move, and a straight line there stays straight. All moves are added, sampled on a
-//! grid of cells a fortieth of the face, and read back bilinearly; the grid is checked cell by cell so the warp never
-//! folds (each cell stays a convex, same-way-round quadrilateral, which makes the bilinear warp one to one), and the
-//! whole face's moves are scaled down until it holds.
+//! How a slider moves the face ([`kernels`]): Slim Face, Jaw, Chin and Forehead move a few of the face mesh's points
+//! (the face's contour, the jaw's corners, the chin, the top of the forehead) by a fraction of the face's width or
+//! height, each move spreading through a smooth bump that falls to nothing at a radius that is a fraction of the face
+//! (a Wendland function, C², zero past its radius). Eye Size and Nose scale a part evenly (each eye; the lower nose
+//! across its middle line) inside an ellipse from the mesh, fading out smoothly past it, so its shape and texture
+//! are kept. Double Chin pulls the band under the jaw line up toward it, all along the jaw, while the line itself
+//! stays. Every move reaches a fraction of the face only, so pixels far from the face never move and a straight line
+//! there stays straight. All moves are added, sampled on a grid of cells a fortieth of the face, and read back
+//! bilinearly; the grid is checked cell by cell so the warp never folds (each cell stays a convex, same-way-round
+//! quadrilateral, which makes the bilinear warp one to one): each slider's moves are scaled down alone until they
+//! hold, then the face's moves together.
 //!
 //! A face without the face mesh (478 points after YuNet's five) is left alone: the box and five points alone don't
 //! say where the jaw is.
@@ -40,9 +43,9 @@ pub struct Reshape {
     pub jaw: f64,
     /// + lengthens the chin; − shortens it.
     pub chin: f64,
-    /// + lifts the soft area under the chin toward the jaw line; − lets it down.
+    /// + pulls the soft area under the jaw line up toward it (the line stays); − lets it down.
     pub double_chin: f64,
-    /// + widens the nose's wings; − narrows them.
+    /// + widens the lower nose about its middle; − narrows it.
     pub nose: f64,
     /// + raises the top of the forehead; − lowers it.
     pub forehead: f64,
