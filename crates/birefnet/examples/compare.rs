@@ -23,7 +23,7 @@ fn main() {
     let cpu = std::env::var("CPU").is_ok();
     let t = Instant::now();
     let dev = if cpu { candle_core_cpu() } else { lightcraft_birefnet::best_device() };
-    let model = BiRefNet::load_with_side(dir, side, dev).unwrap();
+    let mut model = BiRefNet::load_with_side(dir, side, dev).unwrap();
     println!("loaded in {:.2}s on {:?}", t.elapsed().as_secs_f32(), model.device().location());
     let input = read(&refdir.join("input.f32"));
     let want = read(&refdir.join("logits.f32"));

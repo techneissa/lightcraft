@@ -28,7 +28,13 @@ pub const MODELS: &[(&str, &str)] = &[
     (crate::people_parsing::COREML_MODELS[2], "People Parts: Face Mesh"),
     (crate::people_parsing::COREML_MODELS[3], "People Parts: Bodies (BiSeNet Set)"),
     (crate::people_parsing::COREML_MODELS[4], "People Parts: Sapiens2"),
+    (BIREFNET, "Subject Masks: BiRefNet"),
+    (crate::hair_edges::MODEL_DIR, "Hair Edges: BiRefNet Matting"),
 ];
+
+/// BiRefNet's id (its folder), the Subject and Background model (issue #264); BiRefNet Matting's is
+/// [`crate::hair_edges::MODEL_DIR`].
+pub const BIREFNET: &str = "birefnet";
 
 /// `<config>/model-runtimes.json`.
 pub fn default_file() -> Option<PathBuf> {
