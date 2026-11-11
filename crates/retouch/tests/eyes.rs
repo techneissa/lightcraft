@@ -477,18 +477,33 @@ fn eyes_reads_skin_glasses_whites_and_iris() {
     assert!(Eyes::PARTS.iter().all(|p| kept.contains(p)));
 }
 
-/// Issue #203: Dark Circles shows at every step of the slider, not only at the top. In lightness (L*), 25 closes at
-/// least a third of the circle's gap to the cheek that 100 closes, and 50 at least 0.6 of it (with the slider's value
-/// used as it is, they closed 0.22 and 0.46: the change showed only near the top).
+/// Issue #203: Dark Circles closes the circle's gap in lightness (L*) to the skin around it in even steps (25 a
+/// quarter of what 100 closes, 50 half, 75 three quarters) and never lifts past that skin: at no slider value is a
+/// changed pixel lighter than the skin around the circle. (Lifting toward the cheek further down overshot: at 50 the
+/// circle was already lighter than the skin beside it.)
 #[test]
-fn dark_circles_show_across_the_slider() {
+fn dark_circles_close_the_gap_in_even_steps_and_never_overshoot() {
     let img = deep_circle_face(&|_, _| false);
-    let lstar = |y: f32| 116.0 * y.cbrt() - 16.0;
+    let lstar = |y: f32| 116.0 * y.max(0.0).cbrt() - 16.0;
+    let reference = lstar(luma(SKIN));
     let p = (EYES[0].0, EYES[0].1 + 0.75 * HALF * W as f64 / H as f64);
-    let gap = |v: f64| lstar(luma(SKIN)) - lstar(luma(at(&retouched(&img, &eyes(0.0, 0.0, v, 0.0), vec![full()]), p.0, p.1)));
-    let (g0, g25, g50, g100) = (lstar(luma(SKIN)) - lstar(luma(at(&img, p.0, p.1))), gap(25.0), gap(50.0), gap(100.0));
-    let closed = |g: f32| (g0 - g) / (g0 - g100);
-    assert!(closed(g25) >= 0.33 && closed(g50) >= 0.6, "25 closes {} and 50 {} of what 100 closes", closed(g25), closed(g50));
+    let mut gaps = Vec::new();
+    for v in (0..=100).step_by(10) {
+        let out = retouched(&img, &eyes(0.0, 0.0, f64::from(v), 0.0), vec![full()]);
+        for (i, (a, b)) in img.data.iter().zip(&out.data).enumerate() {
+            // (skin only: the eye's masks, whose whites are lighter than any skin, are another slider's)
+            let (nx, ny) = (((i % W) as f64 + 0.5) / W as f64, ((i / W) as f64 + 0.5) / H as f64);
+            if !same(*a, *b) && whites_at(nx, ny) <= 0.0 && iris_at(nx, ny) <= 0.0 {
+                assert!(lstar(luma(*b)) <= reference + 0.5, "at {v}, pixel {i} lifted past the skin around: L* {} > {reference}", lstar(luma(*b)));
+            }
+        }
+        gaps.push(reference - lstar(luma(at(&out, p.0, p.1))));
+    }
+    let closed = |k: usize| (gaps[0] - gaps[k]) / (gaps[0] - gaps[10]);
+    assert!(gaps[10] < 2.0, "at 100 the circle is {} L* darker than the skin around", gaps[10]);
+    for (k, want) in [(2, 0.25), (5, 0.5), (7, 0.75)] {
+        assert!((closed(k) - want).abs() < 0.1, "{}0 closes {} of what 100 closes", k, closed(k));
+    }
 }
 
 const PURPLE: [f32; 3] = [0.21, 0.13, 0.18];

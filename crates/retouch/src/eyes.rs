@@ -65,8 +65,8 @@ impl Feature for Eyes {
     const STAGE: Stage = Stage::Retouch;
     const SCOPE: Scope = Scope::Face;
     const PARTS: &'static [Part] = &[Part::FacialSkin, Part::Others, Part::EyeWhites, Part::Iris];
-    /// The under-eye grid reaches about 4.9 half eye widths from an eye's centre (at most 0.12 of the face's size
-    /// each, [`geom::HALF_RANGE`]), and an eye's centre is within [`geom::CENTRE_SLACK`] of the face's box: 0.59 +
+    /// The under-eye grid reaches about 4.7 half eye widths from an eye's centre (at most 0.12 of the face's size
+    /// each, [`geom::HALF_RANGE`]), and an eye's centre is within [`geom::CENTRE_SLACK`] of the face's box: 0.56 +
     /// 0.1, rounded up. Whites and Iris read inside their masks' areas (the iris's blur a few pixels past).
     const REACH: f64 = 0.7;
     /// Refine Add paints more of the eye whites.
@@ -146,12 +146,15 @@ pub mod weights {
         let w = match area {
             Area::Whites | Area::Iris => 1.0,
             Area::DarkCircles => {
-                // a crescent from just below the lashes: deepest under the middle and the inner corner (the tear
-                // trough), shallow at the sides; the skin's own level decides how much of it is lifted
+                // a crescent from just below the lashes, deepest under the middle, shallow at the sides, at full
+                // weight past where a circle ends: the skin's own level decides what is lifted (skin as light as
+                // the skin outside the circle is not), so the circle's edge, however sharp, is lifted whole
                 // (beside the corners it starts lower: the lid's dark rim and the corner's shadow reach below them)
-                let deep = 1.3 * (1.0 - 0.3 * a * a).max(0.25);
+                let deep = dark_deep(a);
                 let corner = 0.3 * smoothstep(0.8, 1.2, a.abs());
-                window(a, -1.3, -0.65, 0.95, 1.4) * smoothstep(LID_GAP + corner, LID_GAP + 0.18 + corner, t) * (1.0 - smoothstep(0.6 * deep, deep, t))
+                window(a, -1.3, -0.65, 0.95, 1.4)
+                    * smoothstep(LID_GAP + corner, LID_GAP + 0.18 + corner, t)
+                    * (1.0 - smoothstep(deep, deep + 0.15, t))
             }
             Area::EyeBags => {
                 let deep = 1.45 * (1.0 - 0.3 * a * a).max(0.25);
@@ -161,13 +164,22 @@ pub mod weights {
         w as f32
     }
 
-    /// The cheek patch Dark Circles takes its target colour from, below the dark circle.
-    pub fn cheek(a: f64, t: f64) -> f32 {
-        (window(a, -0.9, -0.5, 0.5, 0.9) * window(t, 1.25, 1.45, 1.85, 2.1)) as f32
+    /// How far below the lid (in half widths) Dark Circles' crescent reaches at `a`: deepest under the middle.
+    fn dark_deep(a: f64) -> f64 {
+        (1.0 - 0.3 * a * a).max(0.25)
     }
 
-    /// The local box (in `a`, `t`) every under-eye weight and the cheek lie in: `[a0, a1, t0, t1]`.
-    pub const UNDER_BOX: [f64; 4] = [-1.4, 1.5, -0.1, 2.15];
+    /// The skin just outside Dark Circles' crescent, below it and beside it, whose lightness the circle is lifted to:
+    /// a band from the crescent's lower edge down 0.55 half widths, and the skin beside the eye's corners.
+    pub fn ring(a: f64, t: f64) -> f32 {
+        let deep = dark_deep(a);
+        let below = window(a, -1.3, -0.65, 0.95, 1.4) * window(t, deep, deep + 0.15, deep + 0.4, deep + 0.55);
+        let beside = window(a, -1.8, -1.65, -1.45, -1.3).max(window(a, 1.4, 1.5, 1.7, 1.85)) * window(t, 0.15, 0.25, 0.7, 0.9);
+        below.max(beside) as f32
+    }
+
+    /// The local box (in `a`, `t`) every under-eye weight and the ring lie in: `[a0, a1, t0, t1]`.
+    pub const UNDER_BOX: [f64; 4] = [-1.85, 1.9, -0.1, 1.55];
     /// The part of it the effects reach (Dark Circles and Eye Bags are 0 outside it).
     pub const EFFECT_BOX: [f64; 4] = [-1.4, 1.5, -0.1, 1.5];
 }
