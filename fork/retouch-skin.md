@@ -1,33 +1,51 @@
 # Portrait retouching: Skin
 
-List: the Portrait tab's Skin section: Smoothness evens the skin and keeps its pores, Texture strengthens the pores, Shine lowers oily highlights; on each face's Facial Skin mask, sizes in fractions of the face. Branch `feat/retouch-skin`.
+List: the Portrait tab's Skin section: Smoothness evens the skin and keeps its pores, Texture softens or strengthens the pores, Shine lowers oily highlights; on each face's Facial Skin mask, sizes in fractions of the face. Branch `feat/retouch-skin`.
 
 ## What it does
 
 The Skin feature of portrait retouching (`fork/retouch-foundation.md`), on the part masks of the people parse
-(`fork/retouch-masks.md`). Three sliders, 0…100, off at 0, for every face or the picked one:
+(`fork/retouch-masks.md`). Three sliders, off at 0, for every face or the picked one:
 
-- **Smoothness** takes away the skin's unevenness: bumps, small marks and fine lines (up to 90 %), blotches and
-  uneven colour (up to 60 %). Pores, fine hairs and grain are kept as they are.
-- **Texture** strengthens the pores and fine detail, up to 60 % more.
-- **Shine** lowers oily highlights: skin brighter than the skin around it and paler than it (white light on the skin's
-  colour) is brought down, which gives it back its colour. Light falling on one side of a face keeps its colour, so
-  it stays. On a black-and-white photo brightness alone finds the shine, so a strongly lit side is lowered a little
-  too.
+- **Smoothness** (0…100) evens the skin: bumps, small marks, fine unevenness and blotches go, while the pores, fine
+  hairs and grain stay (about 90 % kept), and so do edges: eyes, brows, lips, nostrils, lash lines, folds, glasses,
+  stubble and the face's own shading. Every step shows: low values even gentle unevenness almost fully and leave
+  stronger marks, higher values reach marks of more contrast too. Of the cheek's unevenness between 0.2 % and 3 % of
+  the face on portraits p1–p4 of the audit in #195, 25 takes away 20–31 %, 50 38–58 % (a plainly visible, natural
+  retouch), 75 53–77 % and 100 61–85 % (a strong retouch that keeps the pores); on the low-key p5, whose cheek's
+  unevenness at that size is mostly its shading, 7 / 15 / 24 / 29 %.
+- **Texture** (−100…100) softens the pores (−100 takes most of their contrast away) or makes them crisper (+100
+  doubles their contrast).
+- **Shine** (0…100) lowers oily highlights: skin brighter than the skin around it and paler than it (white light on
+  the skin's colour) is brought down, which gives it back its colour. Light falling on one side of a face keeps its
+  colour, so it stays. On a black-and-white photo brightness alone finds the shine, so a strongly lit side is
+  lowered a little too.
 
-How (`crates/retouch/src/skin.rs`): frequency separation inside the Facial Skin mask. Gaussian blurs of 0.8 %, 3 %
-and 7 % of the face's size split the skin into fine (texture), mid (unevenness), tone (blotches) and base (the face's
-shape and light) bands; Smoothness scales the mid and tone bands down, Texture the fine band up, and each change
-fades out where a band's contrast is high (a nostril, a lash line), so the face keeps its shape. Shine compares the
-smoothed skin with a 10 % blur. Every blur reads the skin only (the picture weighted by the mask, divided by the
-blurred mask), so hair, eyes, lips and background never bleed in: no halo at the mask's edge. The change is weighted
-by the mask; pixels outside it never change. The blurs run on the mask's box reduced so each is at least 2.5 reduced
-pixels wide, and are read back bilinearly.
+How (`crates/retouch/src/skin.rs`, `skin/grid.rs`): frequency separation inside the Facial Skin mask, in log
+luminance and colour ratios (each channel over luminance: calm where a channel is near 0, as blue is on warm skin
+in low light). The pores are what is finer than a blur of 0.2 % of the face; Smoothness keeps them and Texture
+scales them. The rest goes through a bilateral grid (Chen, Paris and Durand, 2007): the skin gathered into cells of
+about 1.6 % of the face and bins of light, blurred by 4 % of the face in space and by up to 0.4 in log light, and read
+back at each pixel's own place and light. A pixel is averaged only with skin of about its own brightness, so a
+bump or a blotch is evened right up to a nostril or a fold without crossing it, and with no halo. 15 % of a wider
+grid (7 % of the face) is mixed in for larger blotches. The slider sets how much of the even skin is taken
+(`1 − (1 − s)^1.6`: two thirds at 50) and the difference of light it evens across (0.16 just above 0, 0.4 at 100). A colour change larger than about 8 % of a channel's share
+is held back, because the grid tells edges by light only (a lit nose wing beside a cheek of another colour keeps
+its colour). Smoothness fades in over 1 % of the face from the mask's edge, so there is no seam against hair, beard
+or background. Shine compares the smoothed skin with a 10 % blur. Every blur reads the skin only (weighted by the
+mask), the change is weighted by the mask, and pixels outside it never change. The grid's size is a fixed fraction
+of the face, so a draft and an export make the same change.
 
-Speed (a test Mac, release, one face, all three sliders on, fastest of 20, other work running): draft
-(1936 px long edge) 3.3–4.7 ms on portraits framed head and shoulders, 13.6 ms on a face filling the frame; loupe
-(2560 px) 4.6–7.0 ms and 22 ms. The step runs on the CPU (on the GPU, a retouched photo's scene-linear stage already
-runs on the CPU), on the parse's cached masks; no model runs while a slider moves.
+Tried and dropped (issue #206): a guided filter on log luminance with a window variance as the edge test. A
+nostril or the face's shadow anywhere in the 3 % window marked the flat cheek beside it as an edge, so the skin
+next to every edge stayed uneven, and the low-key p5 hardly changed. A log per colour channel turned the near-zero
+blue of warm skin into noise.
+
+Speed (a test Mac under heavy load from other work, release, one face, all three sliders on, fastest of 30, draft
+1936 px): about 2× the earlier version's work. 7.8 ms on a head-and-shoulders portrait (earlier 3.5 ms), 22 ms on a
+face filling a portrait frame (13 ms), 44 ms on a face filling a landscape frame (20 ms); single-threaded 18 / 71 /
+151 ms (8 / 35 / 86 ms). The step runs on the CPU (on the GPU, a retouched photo's scene-linear stage already runs
+on the CPU), on the parse's cached masks; no model runs while a slider moves.
 
 A Refine brush per feature comes later (#99): `skin_mask` in `skin.rs` is where its strokes will be applied to the
 mask.
@@ -38,7 +56,7 @@ mask.
 
 ## Own files
 
-`crates/retouch/src/skin.rs`, `crates/retouch/examples/skin.rs`, `crates/retouch/tests/skin.rs`,
+`crates/retouch/src/skin.rs`, `crates/retouch/src/skin/grid.rs`, `crates/retouch/examples/skin.rs`, `crates/retouch/tests/skin.rs`,
 `crates/ui-egui/src/panels/portrait/skin.rs`, `fork/retouch-skin.md`, `fork/tests.d/retouch-skin.txt`
 
 ## Hooks in official files
@@ -60,10 +78,12 @@ None. In fork files:
 `fork/tests.d/retouch-skin.txt`. They cover: off and every slider at 0 give back the original bits; pixels outside
 every Facial Skin mask keep their bits (three faces, one past the photo's edge); no faces, 50 faces, faces past the
 edge, a 1 × 1 and an empty photo; a face without the Facial Skin mask (no model, YuNet boxes only) left alone;
-Smoothness taking away at least 65 % of the blotches' energy and keeping the pores' within 15 %; Texture
-strengthening the pores and leaving the blotches; Shine lowering a pale highlight and giving it back its colour, and
-lowering light in the skin's own colour far less; a flat grey photo staying flat; no halo next to dark hair at the
-mask's edge; a face cut by the edge retouched inside the photo; a draft and an export four times its size making the
-same change (within 15 %), and Texture on a 60 px face against a 240 px export (fine blurs under 2 px use exact
-Gaussian taps; the box blur left a face under about 72 px untouched); a face with its own settings being the only one retouched; the Skin section's three
-sliders and a click setting Smoothness.
+Smoothness taking away at least 65 % of the blotches' energy and keeping the pores'; Smoothness 100 taking away at
+least 60 % of bumps 0.4 % of the face across (between 0.2 % and 3 % of the face in log luminance) and keeping at
+least 70 % of the pores (issue #206: the earlier version took 35 %); Texture strengthening the pores and leaving the
+blotches; Shine lowering a pale highlight and giving it back its colour, and lowering light in the skin's own colour
+far less; a flat grey photo staying flat; no halo next to dark hair at the mask's edge; a face cut by the edge
+retouched inside the photo; a draft and an export four times its size making the same change (within 15 %), and
+Texture on a 250 px face, its pores half a pixel wide, against a 1000 px export (fine blurs under 2 px use exact
+Gaussian taps); a face with its own settings being the only one retouched; a face too big for full-size work
+retouched reduced; the Skin section's three sliders and a click setting Smoothness.

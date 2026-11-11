@@ -137,7 +137,7 @@ fn a_face_without_the_facial_skin_mask_is_left_alone() {
 }
 
 /// Smoothness takes the blotches away and keeps the pores: the band between the fine and the tone blur loses most of
-/// its energy, the finest band keeps its own within a set ratio.
+/// its energy, the pores (finer than 0.2 % of the face) keep most of their own.
 #[test]
 fn smoothness_evens_the_skin_and_keeps_its_texture() {
     let (w, h) = (400, 400);
@@ -145,14 +145,71 @@ fn smoothness_evens_the_skin_and_keeps_its_texture() {
     let face = face_with_skin(0.0, 0.0, 0.95, 0.95);
     let img = skin_picture(w, h, 40.0, 0.12, 0.08);
     let out = retouched(&img, &skin(100.0, 0.0, 0.0), vec![face.clone()]);
-    let (blotches, pores) = (|i: &Rgb32f| band_energy(i, &face, 3.0, Some(30.0), 10), |i: &Rgb32f| band_energy(i, &face, 1.0, None, 10));
+    let (blotches, pores) = (|i: &Rgb32f| band_energy(i, &face, 3.0, Some(30.0), 10), |i: &Rgb32f| band_energy(i, &face, 0.76, None, 10));
     let (b0, b1) = (blotches(&img), blotches(&out));
     assert!(b1 < b0 * 0.35, "blotch energy {b0:.2e} → {b1:.2e}");
     let ratio = pores(&out) / pores(&img);
-    assert!((0.85..=1.15).contains(&ratio), "pore energy kept: ratio {ratio:.3}");
+    assert!((0.7..=1.15).contains(&ratio), "pore energy kept: ratio {ratio:.3}");
     // and on average the skin keeps its brightness
     let mean = |i: &Rgb32f| i.data.iter().map(|p| f64::from(luma(*p))).sum::<f64>() / i.data.len() as f64;
     assert!((mean(&out) / mean(&img) - 1.0).abs() < 0.02, "{} → {}", mean(&img), mean(&out));
+}
+
+/// Skin with bumps and small marks about 0.4 % of the face across (a smooth noise, ±`bumps`) and pores (per-pixel
+/// noise, ±`pores`).
+fn bumpy_skin(w: usize, h: usize, size: f32, bumps: f32, pores: f32) -> Rgb32f {
+    let raw = Plane::from_fn(w, h, |x, y| noise(x + 7919, y + 104_729));
+    let soft = gaussian(&raw, 0.004 * size);
+    let spread = (soft.data.iter().map(|v| v * v).sum::<f32>() / soft.data.len() as f32).sqrt().max(1e-6);
+    Rgb32f::from_fn(w, h, |x, y| {
+        let k = (bumps * soft.data[y * w + x] / spread).exp() * (1.0 + pores * noise(x, y));
+        SKIN.map(|c| c * k)
+    })
+}
+
+/// The mean square of `img`'s log luminance between blurs of `fine` and `coarse` pixels (without `coarse`: less
+/// its blur by `fine`), over the pixels where the mask is 1 and `margin` pixels from the picture's edge.
+fn log_band(img: &Rgb32f, face: &Face, fine: f32, coarse: Option<f32>, margin: usize) -> f64 {
+    let log = Plane::from_fn(img.width, img.height, |x, y| luma(img.data[y * img.width + x]).max(1e-6).ln());
+    let a = gaussian(&log, fine);
+    let b = coarse.map(|c| gaussian(&log, c));
+    let (w, h) = (img.width, img.height);
+    let (mut sum, mut n) = (0.0f64, 0usize);
+    for py in margin..h - margin {
+        for px in margin..w - margin {
+            if mask_at(face, w, h, px, py) < 1.0 {
+                continue;
+            }
+            let i = py * w + px;
+            let v = match &b {
+                Some(b) => a.data[i] - b.data[i],
+                None => log.data[i] - a.data[i],
+            };
+            sum += f64::from(v * v);
+            n += 1;
+        }
+    }
+    assert!(n > 1000, "{n} pixels measured");
+    sum / n as f64
+}
+
+/// Issue #206: Smoothness 100 takes away most of the bumps and small marks finer than the old fine band (0.8 % of
+/// the face, which Smoothness never touched), and keeps most of the pores finer than 0.2 % of the face.
+#[test]
+fn smoothness_takes_away_bumps_finer_than_a_hundredth_of_the_face() {
+    let (w, size) = (400, 380.0);
+    let face = face_with_skin(0.0, 0.0, 0.95, 0.95);
+    let img = bumpy_skin(w, w, size, 0.08, 0.04);
+    let out = retouched(&img, &skin(100.0, 0.0, 0.0), vec![face.clone()]);
+    // the issue's bands: 0.2 % to 3 % of the face (unevenness), and finer than 0.2 % (pores)
+    let uneven = |i: &Rgb32f| log_band(i, &face, 0.002 * size, Some(0.03 * size), 12);
+    let pores = |i: &Rgb32f| log_band(i, &face, 0.002 * size, None, 12);
+    let (u0, u1) = (uneven(&img), uneven(&out));
+    assert!(u1 < u0 * 0.4, "unevenness {u0:.2e} → {u1:.2e}: {:.0} % taken away", 100.0 * (1.0 - u1 / u0));
+    // the pores alone (the bumps' finest part, which goes with them, would count as pores here)
+    let plain = bumpy_skin(w, w, size, 0.0, 0.04);
+    let kept = pores(&retouched(&plain, &skin(100.0, 0.0, 0.0), vec![face.clone()])) / pores(&plain);
+    assert!(kept > 0.7, "pores keep {:.0} % of their energy", kept * 100.0);
 }
 
 /// Texture strengthens the pores and leaves the blotches as they are.
@@ -262,10 +319,10 @@ fn a_face_cut_by_the_edge_is_retouched_inside_the_photo() {
 
 /// The change `r` makes to a `w`-pixel square draft, against the change it makes to an export four times its size
 /// scaled down (mean absolute difference over the draft's mean absolute change), and the draft's total change.
-/// The face fills 0.9 of the photo; the skin has blotches a tenth of the photo long, sampled at pixel centres.
-fn draft_against_export(r: &Retouch, w: usize) -> (f64, f64) {
+/// The face fills 0.9 of the photo; the skin has blotches `period` of the photo long, sampled at pixel centres.
+fn draft_against_export(r: &Retouch, w: usize, period: f32) -> (f64, f64) {
     let face = face_with_skin(0.05, 0.05, 0.95, 0.95);
-    let photo = |w: usize| skin_picture(w, w, w as f32 / 10.0, 0.12, 0.0);
+    let photo = |w: usize| skin_picture(w, w, w as f32 * period, 0.12, 0.0);
     let (small, big) = (photo(w), photo(w * 4));
     let (ds, db) = (retouched(&small, r, vec![face.clone()]), retouched(&big, r, vec![face.clone()]));
     let (mut diff, mut change) = (0.0f64, 0.0f64);
@@ -291,17 +348,18 @@ fn draft_against_export(r: &Retouch, w: usize) -> (f64, f64) {
 /// is scaled down.
 #[test]
 fn a_draft_and_a_bigger_export_agree_after_scaling() {
-    let (ratio, change) = draft_against_export(&skin(80.0, 0.0, 60.0), 120);
+    let (ratio, change) = draft_against_export(&skin(80.0, 0.0, 60.0), 120, 0.1);
     assert!(change > 1.0, "the draft changed: {change}");
     assert!(ratio < 0.15, "the export's change differs from the draft's by {:.1} %", ratio * 100.0);
 }
 
-/// Texture on a small face (60 px in the draft, its fine blur under a pixel) still does in the draft what it does
-/// in an export four times the size.
+/// Texture on a face whose pores are under a pixel wide in the draft (250 px: 0.2 % of it is half a pixel) does in
+/// the draft what it does in an export four times the size (fine blurs under 2 px use exact Gaussian taps: the box
+/// blur leaves a picture as it is below about 0.58 px).
 #[test]
 fn texture_on_a_small_face_agrees_between_draft_and_export() {
-    // 67 px photo: the face is 0.9 of it, 60 px (240 px in the export)
-    let (ratio, change) = draft_against_export(&skin(0.0, 100.0, 0.0), 67);
+    // 278 px photo: the face is 0.9 of it, 250 px (1000 px in the export); detail 1.5 % of the photo long
+    let (ratio, change) = draft_against_export(&skin(0.0, 100.0, 0.0), 278, 0.015);
     assert!(change > 0.01, "Texture changed the draft: {change}");
     assert!(ratio < 0.25, "the export's change differs from the draft's by {:.1} %", ratio * 100.0);
 }
@@ -343,10 +401,11 @@ fn a_face_too_big_for_full_size_work_is_retouched_reduced_not_skipped() {
     for max in [w * w / 4, w * w / 16] {
         let mut capped = img.clone();
         s.apply_capped(&mut capped, &scene, Some(0), max);
-        let (mut diff, mut change, mut changed) = (0.0f64, 0.0f64, 0usize);
+        let (mut diff, mut change, mut changed, mut inside) = (0.0f64, 0.0f64, 0usize, 0usize);
         for y in 0..w {
             for x in 0..w {
                 let i = y * w + x;
+                inside += usize::from(mask_at(&face, w, w, x, y) > 0.0);
                 if mask_at(&face, w, w, x, y) == 0.0 {
                     assert_eq!(capped.data[i].map(f32::to_bits), img.data[i].map(f32::to_bits), "({x}, {y}) is outside the mask");
                     continue;
@@ -357,7 +416,7 @@ fn a_face_too_big_for_full_size_work_is_retouched_reduced_not_skipped() {
                 changed += usize::from(capped.data[i] != img.data[i]);
             }
         }
-        assert!(changed > w * w / 2, "cap {max}: the face is retouched ({changed} pixels changed)");
+        assert!(changed * 10 > inside * 9, "cap {max}: the face is retouched ({changed} of {inside} pixels changed)");
         let ratio = diff / change.max(1e-9);
         assert!(ratio < 0.2, "cap {max}: the reduced change differs from the full-size one by {:.1} %", ratio * 100.0);
     }

@@ -4,7 +4,7 @@
 //! [--texture 0] [--shine 0] [--mask facialSkin-0.png] [--face x0,y0,x1,y1] [--fit 1936] [--runs 1]`
 //!
 //! - `--amount` sets Smoothness (as every feature's example does); `--smoothness`, `--texture` and `--shine` set
-//!   each slider (0…100).
+//!   each slider (0…100; Texture −100…100).
 //! - `--mask` is a grey picture of the Facial Skin mask over the whole photo, at any size (white = skin): the
 //!   people parser's example writes one per person (`cargo run -p lightcraft-parsing --release --example parts --
 //!   in.jpg outdir/`, then `outdir/masks/facialSkin-0.png`). Repeat it, each after its `--face`, for more faces.
