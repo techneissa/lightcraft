@@ -1,15 +1,16 @@
-//! BiRefNet and BiRefNet Matting through Apple's Core ML on the GPU (issue #264, `fork/coreml.md`), converted once by
+//! BiRefNet and BiRefNet Matting through Apple's Core ML (issue #264, `fork/coreml.md`), converted once by
 //! `tools/convert-coreml-birefnet.py` from the weights in the model's folder.
 //!
 //! The package lives beside the candle weights: `<dir>/coreml/<folder>.mlpackage` (`birefnet` or `birefnet-matting`),
 //! compiled once for this Mac into `<folder>.mlmodelc` next to it. It takes the same preprocessed pixels as candle
 //! (`pixels` [1, 3, 1024, 1024]) and gives the same logits (`logits` [1, 1, 1024, 1024]), so a [`crate::Matte`] from
 //! either engine is used the same way. One fixed input shape: Core ML plans a model on the GPU again on every new
-//! shape (#200). On the GPU (`CpuAndGpu`), not the Neural Engine: there it took 11 s a run and minutes to load (#115).
+//! shape (#200). On the GPU by default ([`DEFAULT_UNITS`]); a caller may pass other units at load.
 
 use std::path::{Path, PathBuf};
 
-use lightcraft_coreml::{ComputeUnits, Error, Model};
+pub use lightcraft_coreml::ComputeUnits;
+use lightcraft_coreml::{Error, Model};
 
 use crate::Variant;
 
@@ -17,6 +18,9 @@ use crate::Variant;
 pub const COREML_DIR: &str = "coreml";
 const INPUT: &str = "pixels";
 const OUTPUT: &str = "logits";
+/// Where the models run unless a caller picks other units: the GPU (the Neural Engine took 11 s a run and minutes to
+/// load, #115). Issue #267 picks the units per Mac.
+pub const DEFAULT_UNITS: ComputeUnits = ComputeUnits::CpuAndGpu;
 
 /// Where `variant`'s Core ML package and compiled model are in its folder `dir`.
 pub fn paths(dir: &Path, variant: Variant) -> (PathBuf, PathBuf) {
@@ -38,14 +42,14 @@ pub(crate) struct CoreMlNet {
 }
 
 impl CoreMlNet {
-    /// Load `variant`'s converted model from its folder `dir` on the GPU, compiling it first when needed, checked to
+    /// Load `variant`'s converted model from its folder `dir` on `units`, compiling it first when needed, checked to
     /// take and give what [`CoreMlNet::run`] sends and reads.
-    pub(crate) fn load(dir: &Path, variant: Variant) -> Result<Self, Error> {
+    pub(crate) fn load(dir: &Path, variant: Variant, units: ComputeUnits) -> Result<Self, Error> {
         if !lightcraft_coreml::available() {
             return Err(Error::Unavailable);
         }
         let (package, compiled) = paths(dir, variant);
-        let model = lightcraft_coreml::load_package(&package, &compiled, ComputeUnits::CpuAndGpu)?;
+        let model = lightcraft_coreml::load_package(&package, &compiled, units)?;
         if !model.inputs().iter().any(|n| n == INPUT) || !model.outputs().iter().any(|n| n == OUTPUT) {
             return Err(Error::Load(format!(
                 "{} is not the converted {} (it takes {:?} and gives {:?})",

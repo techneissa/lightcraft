@@ -60,12 +60,17 @@ impl BiRefNet {
     /// Load on `runtime`: Automatic is Core ML when the package is there and loads, else candle on `device`; Core ML
     /// is an error when it can't load ([`Error::CoreMl`]); Candle is candle on `device`.
     pub fn load_with(dir: &Path, variant: Variant, runtime: Runtime, device: Device) -> Result<Self> {
+        Self::load_with_units(dir, variant, runtime, crate::coreml::DEFAULT_UNITS, device)
+    }
+
+    /// [`BiRefNet::load_with`] with Core ML on `units` (all, the GPU, the Neural Engine or the CPU; issue #267).
+    pub fn load_with_units(dir: &Path, variant: Variant, runtime: Runtime, units: crate::coreml::ComputeUnits, device: Device) -> Result<Self> {
         if !is_model_dir(dir) {
             return Err(Error::Missing(dir.to_path_buf()));
         }
         let side = variant.input();
         if runtime != Runtime::Candle {
-            match CoreMlNet::load(dir, variant) {
+            match CoreMlNet::load(dir, variant, units) {
                 Ok(net) => {
                     let side = net.side();
                     return Ok(Self { engine: Engine::CoreMl(net), device, dir: dir.to_path_buf(), runtime, side, cancel: None });
