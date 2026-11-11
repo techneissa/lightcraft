@@ -11,7 +11,7 @@
 
 use lightcraft_raster::blur::gaussian;
 use lightcraft_raster::morph::max_filter;
-use lightcraft_raster::{Plane, Rgb32f};
+use lightcraft_raster::{Plane, Rgb32f, par_rows};
 
 use super::heal::smoothstep;
 
@@ -50,44 +50,66 @@ pub(super) fn hair_like(lg: &Rgb32f, skin: &Plane, size: f64) -> Plane {
     // thin bright lines: valleys of the negated brightness
     let lum = lg.map(|p| -(0.2126 * p[0].exp() + 0.7152 * p[1].exp() + 0.0722 * p[2].exp()).max(1e-4).ln());
     let sigma = ((LINE_SIGMA * size) as f32).max(1.5);
-    let (line, wide) = (valley_response(&lum, sigma), valley_response(&lum, WIDE * sigma));
-    let raw = Plane::from_fn(w, h, |x, y| {
-        let i = y * w + x;
-        let r = line.data.get(i).copied().unwrap_or(0.0);
-        let narrow = r > THIN * wide.data.get(i).copied().unwrap_or(0.0);
-        let thin = if narrow { smoothstep(LINE_FROM, LINE_FULL, r) } else { 0.0 };
-        let grey = if median.is_finite() {
+    let grey_at = |i: usize| {
+        if median.is_finite() {
             let d = median - chroma.data.get(i).copied().unwrap_or(median);
             smoothstep(GREY_FROM, GREY_FULL, d)
         } else {
             0.0
-        };
-        thin * grey
+        }
+    };
+    // (the valleys are measured only where a hair could be: a pixel that is not greyer than the skin, or whose thin
+    // line is too faint, is no hair whatever the wider width says; issue #253)
+    let line = gaussian(&lum, sigma);
+    let mut raw = Plane::new(w, h);
+    par_rows(&mut raw.data, w, |y, row| {
+        for (x, o) in row.iter_mut().enumerate() {
+            let grey = grey_at(y * w + x);
+            if grey > 0.0 || !super::skip_idle() {
+                // (the line's response for now; the wider one decides below whether it is thin)
+                *o = valley_at(&line, x, y, sigma);
+            }
+        }
     });
+    let wide_wanted: Vec<bool> = raw.data.iter().map(|r| *r > LINE_FROM || !super::skip_idle()).collect();
+    if wide_wanted.iter().any(|v| *v) {
+        let wide = gaussian(&lum, WIDE * sigma);
+        par_rows(&mut raw.data, w, |y, row| {
+            for (x, o) in row.iter_mut().enumerate() {
+                let i = y * w + x;
+                if !wide_wanted.get(i).copied().unwrap_or(false) {
+                    *o = 0.0;
+                    continue;
+                }
+                let r = *o;
+                let narrow = r > THIN * valley_at(&wide, x, y, WIDE * sigma);
+                let thin = if narrow { smoothstep(LINE_FROM, LINE_FULL, r) } else { 0.0 };
+                *o = thin * grey_at(i);
+            }
+        });
+    } else {
+        raw.data.fill(0.0);
+    }
     // one long strand, not a short pale streak
     let strands = super::ridge::hysteresis(&raw, 0.3, 0.6, |_| ((2.0 * MIN_LEN * size) as usize).max(8));
     gaussian(&max_filter(&raw.zip_map(&strands, |r, s| r * s), 1), 0.7)
 }
 
-/// How much of a valley (dark line) of width `sigma` there is at each pixel, in log-light depth: the larger Hessian
-/// eigenvalue of the blurred picture times `sigma²`, damped where the second one is as large (a dark spot).
-fn valley_response(l: &Plane, sigma: f32) -> Plane {
-    let g = gaussian(l, sigma);
-    let (w, h) = (g.width, g.height);
-    let s2 = sigma * sigma;
-    Plane::from_fn(w, h, |x, y| {
-        let at = |dx: isize, dy: isize| g.get_clamped(x as isize + dx, y as isize + dy);
-        let c = at(0, 0);
-        let (a, d) = (at(1, 0) - 2.0 * c + at(-1, 0), at(0, 1) - 2.0 * c + at(0, -1));
-        let b = (at(1, 1) - at(-1, 1) - at(1, -1) + at(-1, -1)) / 4.0;
-        let (mean, spread) = ((a + d) / 2.0, (((a - d) / 2.0).powi(2) + b * b).sqrt());
-        let (l1, l2) = (mean + spread, mean - spread);
-        if l1 <= 0.0 || !l1.is_finite() {
-            return 0.0;
-        }
-        let ratio = l2 / l1;
-        s2 * l1 * (-(ratio * ratio) / (2.0 * 0.5 * 0.5)).exp()
-    })
+/// How much of a valley (dark line) of width `sigma` there is at pixel (`x`, `y`) of `g` (the picture blurred by
+/// `sigma`), in log-light depth: the larger Hessian eigenvalue times `sigma²`, damped where the second one is as large
+/// (a dark spot).
+fn valley_at(g: &Plane, x: usize, y: usize, sigma: f32) -> f32 {
+    let at = |dx: isize, dy: isize| g.get_clamped(x as isize + dx, y as isize + dy);
+    let c = at(0, 0);
+    let (a, d) = (at(1, 0) - 2.0 * c + at(-1, 0), at(0, 1) - 2.0 * c + at(0, -1));
+    let b = (at(1, 1) - at(-1, 1) - at(1, -1) + at(-1, -1)) / 4.0;
+    let (mean, spread) = ((a + d) / 2.0, (((a - d) / 2.0).powi(2) + b * b).sqrt());
+    let (l1, l2) = (mean + spread, mean - spread);
+    if l1 <= 0.0 || !l1.is_finite() {
+        return 0.0;
+    }
+    let ratio = l2 / l1;
+    sigma * sigma * l1 * (-(ratio * ratio) / (2.0 * 0.5 * 0.5)).exp()
 }
 
 #[cfg(test)]

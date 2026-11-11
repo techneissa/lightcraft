@@ -1,0 +1,5 @@
+# Performance: a portrait's analyses (branch perf/253-portrait-analyses)
+cargo test -p lightcraft-retouch --lib -- wrinkles
+cargo test -p lightcraft-retouch --test wrinkles_v2 --test wrinkles
+cargo test -p lightcraft-engine --lib -- retouch_input
+cargo test -p lightcraft-pipeline --lib -- retouch_step tests_retouch tests_window

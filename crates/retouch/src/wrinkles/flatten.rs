@@ -79,13 +79,19 @@ pub(super) fn presence(centres: &[Centre], w: usize, h: usize, size: f64) -> Fie
     let peak = 1.0 / ((2.0 * std::f32::consts::PI).sqrt() * spread);
     let presence = count.map(|c| smoothstep(0.05 * peak, 0.6 * peak, c));
     let at = |p: &Plane, i: usize| p.data.get(i).copied().unwrap_or(0.0);
-    let n = (0..w * h)
-        .map(|i| {
+    let mut n = vec![(1.0, 0.0); w * h];
+    par_rows(&mut n, w.max(1), |y, row| {
+        for (x, o) in row.iter_mut().enumerate() {
+            let i = y * w + x;
             let (a, b, d) = (at(&xx, i), at(&xy, i), at(&yy, i));
+            // (no line near: θ = ½·atan2(0, 0) = 0, the value it is given, without the trigonometry)
+            if a == 0.0 && b == 0.0 && d == 0.0 {
+                continue;
+            }
             let theta = 0.5 * (2.0 * b).atan2(a - d);
-            (theta.cos(), theta.sin())
-        })
-        .collect();
+            *o = (theta.cos(), theta.sin());
+        }
+    });
     let mean = |p: &Plane| p.zip_map(&count, |v, c| if c > 1e-6 { v / c } else { 0.0 });
     Field { presence, n, sigma: mean(&sg), across: mean(&ac), keep: mean(&kp) }
 }
@@ -113,6 +119,51 @@ pub(super) fn cores(centres: &[Centre], w: usize, h: usize) -> Plane {
 
 /// A line's core, in line widths each side of its centre.
 const CORE: f32 = 1.5;
+
+/// 1 at every pixel of a `w × h` crop the evening's second step reads (bilinearly, at `j·step` across the line from
+/// each skin pixel `changed` says it changes, `steps_at` giving the spacing and count), 0 elsewhere: the pixels whose
+/// median along the line the first step must make.
+fn read_across(
+    field: &Field,
+    skin: &Plane,
+    w: usize,
+    h: usize,
+    changed: impl Fn(usize) -> bool + Sync,
+    steps_at: impl Fn(usize) -> (f32, f32, i32) + Sync,
+) -> Plane {
+    if !super::skip_idle() {
+        return Plane::filled(w, h, 1.0);
+    }
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let marks: Vec<AtomicBool> = (0..w.saturating_mul(h)).map(|_| AtomicBool::new(false)).collect();
+    // (rows side by side: a row marks pixels of other rows, hence the atomic marks)
+    let mut rows = vec![(); h];
+    par_rows(&mut rows, 1, |y, _| {
+        for x in 0..w {
+            let i = y * w + x;
+            if skin.data.get(i).is_none_or(|s| *s < 0.5) || !changed(i) {
+                continue;
+            }
+            let (nx, ny) = field.n.get(i).copied().unwrap_or((0.0, 1.0));
+            let (_, step, steps) = steps_at(i);
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            for j in -steps..=steps {
+                let u = j as f32 * step;
+                let (qx, qy) = (px + u * nx, py + u * ny);
+                if !(qx.is_finite() && qy.is_finite()) {
+                    continue;
+                }
+                // the top-left pixel of the four a bilinear read takes (the others are one step on: the dilation below)
+                let at = |q: f32, n: usize| ((q - 0.5).floor().max(0.0) as usize).min(n.saturating_sub(1));
+                if let Some(m) = marks.get(at(qy, h) * w + at(qx, w)) {
+                    m.store(true, Ordering::Relaxed);
+                }
+            }
+        }
+    });
+    let seeds = Plane { width: w, height: h, data: marks.iter().map(|m| if m.load(Ordering::Relaxed) { 1.0 } else { 0.0 }).collect() };
+    lightcraft_raster::morph::max_filter(&seeds, 1)
+}
 
 /// The change (log light per channel) that evens the log picture `lg` out across the lines of `field`, reading skin only
 /// where `skin` (0…1) is, and changing a pixel only as far as `allowed` (0…1) lets it.
@@ -148,12 +199,26 @@ pub(super) fn flatten(lg: &Rgb32f, field: &Field, skin: &Plane, allowed: &Plane,
         picked.sort_by(|a, b| a.1.total_cmp(&b.1));
         picked.get(k / 2).map(|p| p.0)
     };
-    // 1. every skin pixel: the median along the lines' direction there (the field spreads it past the lines)
+    // how much of a pixel's change goes (0: none, and nothing is read for it)
+    let share = |i: usize| {
+        field.presence.data.get(i).copied().unwrap_or(0.0)
+            * field.keep.data.get(i).copied().unwrap_or(0.0)
+            * allowed.data.get(i).copied().unwrap_or(0.0)
+    };
+    // the steps across the line at a pixel: their spacing and count each side (the profile is read at `u = j·step`)
+    let steps_at = |i: usize| {
+        let sigma = field.across.data.get(i).copied().unwrap_or(0.0).max(1.0);
+        let step = (sigma / ACROSS_STEPS).max(1.0);
+        (sigma, step, (3.0 * sigma / step).ceil() as i32)
+    };
+    let needed = read_across(field, skin, w, h, |i| share(i) > 0.0, steps_at);
+    // 1. every skin pixel the evening reads: the median along the lines' direction there (the field spreads it past
+    // the lines). (Only those: on a lined face most skin is too far from a line to be read, issue #253.)
     let mut med: Vec<Option<[f32; 3]>> = vec![None; n];
     par_rows(&mut med, w, |y, row| {
         for (x, o) in row.iter_mut().enumerate() {
             let i = y * w + x;
-            if skin.data.get(i).is_none_or(|s| *s < 0.5) {
+            if skin.data.get(i).is_none_or(|s| *s < 0.5) || needed.data.get(i).is_none_or(|v| *v <= 0.0) {
                 continue;
             }
             let (nx, ny) = field.n.get(i).copied().unwrap_or((0.0, 1.0));
@@ -165,31 +230,33 @@ pub(super) fn flatten(lg: &Rgb32f, field: &Field, skin: &Plane, allowed: &Plane,
     let medians = Rgb32f { width: w, height: h, data: med.iter().map(|m| m.unwrap_or([0.0; 3])).collect() };
     // 2. each pixel near a line: the Gaussian mean of those medians across the line (skin only), less its own
     par_rows(&mut out.data, w, |y, row| {
+        // (one list of picks for the row's pixels)
+        let mut picks: Vec<([f32; 3], f32, f32)> = Vec::new();
         for (x, o) in row.iter_mut().enumerate() {
             let i = y * w + x;
-            let k = field.presence.data.get(i).copied().unwrap_or(0.0)
-                * field.keep.data.get(i).copied().unwrap_or(0.0)
-                * allowed.data.get(i).copied().unwrap_or(0.0);
+            let k = share(i);
             let Some(Some(own)) = med.get(i).copied() else { continue };
             if k <= 0.0 {
                 continue;
             }
             let (nx, ny) = field.n.get(i).copied().unwrap_or((0.0, 1.0));
-            let sigma = field.across.data.get(i).copied().unwrap_or(0.0).max(1.0);
-            let step = (sigma / ACROSS_STEPS).max(1.0);
-            let steps = (3.0 * sigma / step).ceil() as i32;
+            let (sigma, step, steps) = steps_at(i);
             let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
             // the profile's weighted median by light (each step weighed by a Gaussian and by its skin): for a lone line in
             // clear skin that is the clear skin, for creases between lit ridges the level between them, on a slope the
             // middle of it
-            let mut picks: Vec<([f32; 3], f32, f32)> = Vec::with_capacity(2 * steps as usize + 1);
+            picks.clear();
             let mut total = 0.0f32;
             for j in -steps..=steps {
                 let u = j as f32 * step;
                 let (qx, qy) = (px + u * nx, py + u * ny);
                 let on = bilinear(&weight, qx, qy);
+                // (off the skin first: its weight is not needed there)
+                if on < 0.5 {
+                    continue;
+                }
                 let g = (-0.5 * (u / sigma).powi(2)).exp() * on;
-                if g <= 1e-4 || on < 0.5 {
+                if g <= 1e-4 {
                     continue;
                 }
                 // (the medians are zero off the skin: a point between skin and none is divided back by its share)

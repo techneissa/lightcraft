@@ -61,25 +61,62 @@ impl PartsFinder {
     /// Render the parse's picture and find its YuNet faces (the picker's thumbnails and the faces' five landmarks
     /// come from them); then take the parse the parse-ahead index knows for the photo (made ahead of time or by
     /// `parsing.run`, so no model runs), else the cached one, else wait for its run, and file it in the index.
+    ///
+    /// The original the Wrinkles crops are cut from is decoded once (issue #253), on a thread of its own as soon as a
+    /// face is known to be there: at once when the index knows the parse and it has a face with skin (the picture and
+    /// YuNet then run beside the decode), else once YuNet finds a face (beside the parse), else when the first crop is
+    /// cut. A photo without people is never decoded at full size.
     pub(super) fn find(self) -> Result<Found, String> {
         let PartsFinder { wrinkles, prepare, known, parsing: store, choice, orient, regions, cropper } = self;
         let cut = |r| cropper.as_ref()?.crop(r);
         let crops = || cropper.as_ref().map(|c| Crops { size: c.photo_size(), cut: &cut });
-        let (img, hints) = timed("portrait search: picture and faces", || prepare.run())?;
-        if let Some(parsing) = known.as_ref().and_then(|k| k.read(&store)) {
-            return Ok(found_with(&parsing, &hints, &img, orient, &regions, crops(), wrinkles.as_ref()));
-        }
-        let (filed, out) = timed("portrait search: people parse", || store.parse_as(choice, img.clone(), hints.clone(), true));
-        let parsing = match out {
-            Outcome::Ready { parsing, .. } => parsing,
-            Outcome::Running => return Err("the people parse is still running".into()),
-            Outcome::Failed(e) => return Err(e),
-        };
-        if let Some(k) = &known {
-            k.file(filed);
-        }
-        Ok(found_with(&parsing, &hints, &img, orient, &regions, crops(), wrinkles.as_ref()))
+        let original = wrinkles.as_ref().and_then(|w| w.cropper.clone());
+        std::thread::scope(|scope| {
+            let mut decode = Early { scope, cropper: original };
+            let ahead = known.as_ref().and_then(|k| k.read(&store));
+            if ahead.as_ref().is_some_and(|p| has_skin(p)) {
+                decode.start();
+            }
+            let (img, hints) = timed("portrait search: picture and faces", || prepare.run())?;
+            if let Some(parsing) = ahead {
+                return Ok(found_with(&parsing, &hints, &img, orient, &regions, crops(), wrinkles.as_ref()));
+            }
+            if !hints.is_empty() {
+                decode.start();
+            }
+            let (filed, out) = timed("portrait search: people parse", || store.parse_as(choice, img.clone(), hints.clone(), true));
+            let parsing = match out {
+                Outcome::Ready { parsing, .. } => parsing,
+                Outcome::Running => return Err("the people parse is still running".into()),
+                Outcome::Failed(e) => return Err(e),
+            };
+            if let Some(k) = &known {
+                k.file(filed);
+            }
+            Ok(found_with(&parsing, &hints, &img, orient, &regions, crops(), wrinkles.as_ref()))
+        })
     }
+}
+
+/// The original's decode for the crops, started once on a thread of the face search's scope.
+struct Early<'scope, 'env> {
+    scope: &'scope std::thread::Scope<'scope, 'env>,
+    /// `None` once started (or with nothing to decode).
+    cropper: Option<Arc<Cropper>>,
+}
+
+impl Early<'_, '_> {
+    fn start(&mut self) {
+        if let Some(c) = self.cropper.take() {
+            // (a thread that can't start leaves the first crop to decode it)
+            let _ = std::thread::Builder::new().name("retouch-decode".into()).spawn_scoped(self.scope, move || c.decode());
+        }
+    }
+}
+
+/// Whether a parse has a face the Wrinkles search reads (a face box and Facial Skin).
+fn has_skin(parsing: &Parsing) -> bool {
+    parsing.people.iter().any(|p| p.face.is_some() && p.parts.contains_key(&lightcraft_parsing::Part::FacialSkin))
 }
 
 /// Where Stray Hair's strands are searched: crops of the photo's original (`size`, its pixels, turned like the masks),

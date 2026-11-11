@@ -2,7 +2,8 @@
 //! the 2048 px people-parse picture, in which a strand is thinner than a pixel.
 //!
 //! The crop is rendered like the parse picture (the photo with default settings, so the masks fit), as a window of the
-//! full-size frame ([`lightcraft_pipeline::PixelWindow`]): the original is decoded once and every head cut from it.
+//! full-size frame ([`lightcraft_pipeline::PixelWindow`]): the original is decoded once and every head cut from it
+//! (Wrinkles' float crops too, [`Cropper::crop_float`]).
 
 use lightcraft_color::transfer::decode_srgb8;
 use lightcraft_develop::DevelopSettings;
@@ -14,6 +15,9 @@ use lightcraft_pipeline::{DeepSamples, OutputDepth, PixelWindow, RenderRequest};
 use lightcraft_raster::Rgb32f;
 
 use super::oriented;
+use std::sync::OnceLock;
+
+use crate::media::{DecodedSource, SourceRef};
 use crate::{RenderJob, Session};
 
 /// Cuts crops of one photo's original, as the faces' frame has it (turned by the photo's orientation).
@@ -22,6 +26,9 @@ pub(crate) struct Cropper {
     /// The original's size as stored (before the orientation).
     frame: (usize, usize),
     orient: Orientation,
+    /// The original, decoded once for every crop ([`Cropper::decode`]; issue #253): each face's crop decoded the whole
+    /// photo again. `None` inside: the decode failed, and each crop tries its own as before.
+    decoded: OnceLock<Option<DecodedSource>>,
 }
 
 impl Session {
@@ -38,11 +45,41 @@ impl Session {
         job.cache = None;
         job.view_cache = None;
         job.info.retouch = None;
-        Some(Cropper { job, frame: (w, h), orient })
+        Some(Cropper { job, frame: (w, h), orient, decoded: OnceLock::new() })
     }
 }
 
 impl Cropper {
+    /// Decode the original now, once for every crop cut afterwards (the face search starts it beside its picture, YuNet
+    /// and the parse, so the crops don't wait for it). A source the session already had decoded (the loupe at full
+    /// size) is taken as it is, and one the loupe is decoding now is shared ([`crate::media`]'s shared decode). A crop
+    /// cut while it runs waits for it.
+    pub(crate) fn decode(&self) {
+        self.decoded();
+    }
+
+    fn decoded(&self) -> Option<&DecodedSource> {
+        self.decoded
+            .get_or_init(|| {
+                let t = lightcraft_pipeline::profiling().then(std::time::Instant::now);
+                let source = self.job.source.load_source().map_err(|e| log::info!("portrait: the original is not decoded for its crops: {e}")).ok();
+                if let Some(t) = t {
+                    eprintln!("    portrait search: the original decoded for the crops: {:.1} ms", t.elapsed().as_secs_f64() * 1e3);
+                }
+                source
+            })
+            .as_ref()
+    }
+
+    /// The crops' render job, reading the decoded original.
+    fn job(&self) -> RenderJob {
+        let mut job = self.job.clone();
+        if let Some(source) = self.decoded() {
+            job.source = SourceRef::Loaded(Box::new(source.clone()));
+        }
+        job
+    }
+
     /// The size of the photo as the faces see it (turned by the orientation).
     pub(crate) fn photo_size(&self) -> (usize, usize) {
         if self.orient.swaps_axes() { (self.frame.1, self.frame.0) } else { self.frame }
@@ -63,7 +100,7 @@ impl Cropper {
         let (x0, y0) = (a.0.min(b.0).floor().max(0.0) as usize, a.1.min(b.1).floor().max(0.0) as usize);
         let (x1, y1) = (a.0.max(b.0).floor().max(0.0) as usize + 1, a.1.max(b.1).floor().max(0.0) as usize + 1);
         let window = PixelWindow { x: x0, y: y0, w: x1.saturating_sub(x0), h: y1.saturating_sub(y0) };
-        let mut job = self.job.clone();
+        let mut job = self.job();
         job.request.window = Some(window);
         // (its own key: a window is not the whole frame's picture)
         job.key = lightcraft_preview::Hasher128::new()
@@ -116,7 +153,7 @@ impl Cropper {
         if window.w == 0 || window.h == 0 {
             return None;
         }
-        let mut job = self.job.clone();
+        let mut job = self.job();
         job.request = RenderRequest { max_w: ow, max_h: oh, depth: OutputDepth::F32Linear, window: Some(window), ..job.request };
         job.key = lightcraft_preview::Hasher128::new()
             .u64(job.key)

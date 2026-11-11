@@ -5,7 +5,9 @@
 //! `LIGHTCRAFT_CONFIG_DIR=<scratch> LIGHTCRAFT_PROFILE=1 cargo run --release -p lightcraft-engine --example portrait_open_profile -- OUT_DIR PHOTO`
 //!
 //! `LIGHTCRAFT_PROFILE=1` prints each search step, each feature's run (`retouch <feature>`) and the GPU's copies
-//! (`gpu retouch on the CPU`). `GPU_ONLY=1` / `LIGHTCRAFT_GPU=0` pick one renderer; `NO_EXPORT=1` skips the export.
+//! (`gpu retouch on the CPU`). `GPU_ONLY=1` / `LIGHTCRAFT_GPU=0` pick one renderer; `NO_EXPORT=1` skips the export;
+//! `PARSE_FIRST=1` parses the photo before the search, as parsing ahead does (the search then reads the parse from the
+//! index).
 //! Models are the app's defaults (the shared models folder); the parse cache is a new folder in `OUT_DIR`, so the
 //! parse runs. Never touches the photo's own folder.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -48,6 +50,10 @@ fn main() {
     let r = s.execute("library.import", &json!({"paths": [abs]})).expect("import");
     let id = PhotoId(r["imported"][0].as_u64().expect("id"));
     s.execute("library.select", &json!({"ids": [id.0]})).expect("select");
+    // (`PARSE_FIRST=1`: the photo parsed before the search, as parsing ahead does: the search reads it from the index)
+    if std::env::var_os("PARSE_FIRST").is_some() {
+        s.execute("parsing.run", &json!({"ids": [id.0], "wait": true})).expect("parse");
+    }
     eprintln!("--- face search");
     let t = Instant::now();
     s.execute("retouch.detect", &json!({"id": id.0})).expect("detect");

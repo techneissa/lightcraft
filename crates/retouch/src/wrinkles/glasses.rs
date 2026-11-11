@@ -47,7 +47,8 @@ pub(super) fn seen_through(lg: &Rgb32f, skin: &Plane, others: &Plane, size: f64)
         let s = *d.select_nth_unstable_by(mid, f32::total_cmp).1 * 1.4826;
         (m, s.max(MIN_SPREAD))
     };
-    let (rg, bg, l) = (stat(|c| c.0), stat(|c| c.1), stat(|c| c.2));
+    // (three medians of a few hundred thousand samples each: side by side)
+    let (rg, (bg, l)) = lightcraft_raster::par_join(|| stat(|c| c.0), || lightcraft_raster::par_join(|| stat(|c| c.1), || stat(|c| c.2)));
     // per pixel: whether its colour is the skin's, and whether its light is
     let parts: Vec<(f32, f32)> = lg
         .data

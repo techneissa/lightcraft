@@ -45,10 +45,19 @@ const RING_OUT: f64 = 0.016;
 /// The nostril's disc: full inside `NOSTRIL_IN`, none past `NOSTRIL` (fractions of the face).
 const NOSTRIL_IN: f64 = 0.03;
 const NOSTRIL: f64 = 0.05;
+/// The side of the tiles whose depth inside the outline is measured once, pixels.
+const TILE: usize = 16;
 
 /// 1 where a wrinkle is never searched (0…1, soft), for a `w × h` crop whose face is `ctx` (mapped into the crop).
 /// `None` without the face mesh.
+#[cfg(test)]
 pub(super) fn excluded(ctx: &FaceCtx<'_>, w: usize, h: usize) -> Option<Plane> {
+    excluded_where(ctx, w, h, None)
+}
+
+/// [`excluded`] worked out only where `only` (a `w × h` plane) is above 0, and 0 elsewhere: the search needs it only
+/// inside the wrinkle areas (issue #253).
+pub(super) fn excluded_where(ctx: &FaceCtx<'_>, w: usize, h: usize, only: Option<&Plane>) -> Option<Plane> {
     let pt = |i: usize| ctx.landmarks.get(areas::FIRST + i).copied().flatten();
     let oval: Option<Vec<P>> = OVAL.iter().map(|&i| pt(i)).collect();
     let oval = oval?;
@@ -89,17 +98,45 @@ pub(super) fn excluded(ctx: &FaceCtx<'_>, w: usize, h: usize) -> Option<Plane> {
     let corners: Vec<P> = EYE_RINGS.iter().flat_map(|r| [r[0], r[8]]).filter_map(pt).collect();
     let (brow_top, brow_in, mouth_in, mouth_out) =
         (t_brow as f32 - f(0.08), t_brow as f32 - f(0.03), t_mouth as f32 + f(0.10), t_mouth as f32 + f(0.16));
+    // (Most pixels lie well inside the outline, where the ears and the face's edge add nothing: the outline's distance
+    // moves by at most a pixel a pixel, so one distance per tile shows a whole tile that far in. Issue #253.)
+    let tiles_x = w.div_ceil(TILE);
+    let deep: Vec<bool> = (0..tiles_x * h.div_ceil(TILE))
+        .map(|i| {
+            let half = TILE as f64 / 2.0;
+            let c = (((i % tiles_x) * TILE) as f64 + half, ((i / tiles_x) * TILE) as f64 + half);
+            super::skip_idle() && areas::polygon_inside(&oval, c) - half * std::f64::consts::SQRT_2 >= f64::from(ring_out) + 1e-3
+        })
+        .collect();
+    // (an eye adds nothing to a pixel this far outside its box)
+    let eye_boxes: Vec<[f64; 4]> = eyes_open
+        .iter()
+        .map(|e| {
+            let far = f64::from(lid_out) + 1e-3;
+            e.iter().fold([f64::INFINITY, f64::INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY], |b, p| {
+                [b[0].min(p.0 - far), b[1].min(p.1 - far), b[2].max(p.0 + far), b[3].max(p.1 + far)]
+            })
+        })
+        .collect();
     let mut out = Plane::new(w, h);
     par_rows(&mut out.data, w.max(1), |y, row| {
         for (x, v) in row.iter_mut().enumerate() {
+            if super::skip_idle() && only.is_some_and(|o| o.data.get(y * w + x).is_none_or(|v| *v <= 0.0)) {
+                continue;
+            }
             let p = (x as f64 + 0.5, y as f64 + 0.5);
             let t = along(p) as f32;
-            let d = areas::polygon_inside(&oval, p) as f32;
-            // the ears: beyond the outline, between the brows and the mouth
-            let band = smoothstep(brow_top, brow_in, t) * (1.0 - smoothstep(mouth_in, mouth_out, t));
-            let ear = band * (1.0 - smoothstep(-ring_in, ring_in, d));
-            // the face's edge, below the brows
-            let ring = (1.0 - smoothstep(ring_in, ring_out, d.abs())) * smoothstep(t_brow as f32, t_brow as f32 + f(0.03), t);
+            let (ear, ring) = if deep.get((y / TILE) * tiles_x + x / TILE).copied().unwrap_or(false) {
+                (0.0, 0.0)
+            } else {
+                let d = areas::polygon_inside(&oval, p) as f32;
+                // the ears: beyond the outline, between the brows and the mouth
+                let band = smoothstep(brow_top, brow_in, t) * (1.0 - smoothstep(mouth_in, mouth_out, t));
+                let ear = band * (1.0 - smoothstep(-ring_in, ring_in, d));
+                // the face's edge, below the brows
+                let ring = (1.0 - smoothstep(ring_in, ring_out, d.abs())) * smoothstep(t_brow as f32, t_brow as f32 + f(0.03), t);
+                (ear, ring)
+            };
             let nose = nostrils
                 .iter()
                 .map(|n| {
@@ -107,7 +144,12 @@ pub(super) fn excluded(ctx: &FaceCtx<'_>, w: usize, h: usize) -> Option<Plane> {
                     1.0 - smoothstep(nostril_in, nostril, dist)
                 })
                 .fold(0.0f32, f32::max);
-            let eye = eyes_open.iter().map(|e| 1.0 - smoothstep(lid_in, lid_out, -(areas::polygon_inside(e, p) as f32))).fold(0.0f32, f32::max);
+            let eye = eyes_open
+                .iter()
+                .zip(&eye_boxes)
+                .filter(|(_, b)| !super::skip_idle() || (p.0 > b[0] && p.1 > b[1] && p.0 < b[2] && p.1 < b[3]))
+                .map(|(e, _)| 1.0 - smoothstep(lid_in, lid_out, -(areas::polygon_inside(e, p) as f32)))
+                .fold(0.0f32, f32::max);
             let corner = corners
                 .iter()
                 .map(|c| 1.0 - smoothstep(corner_in, corner_out, (((p.0 - c.0).powi(2) + (p.1 - c.1).powi(2)).sqrt()) as f32))

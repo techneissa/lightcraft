@@ -314,10 +314,14 @@ impl<'a> Scene<'a> {
     pub fn mask_plane(&self, face: usize, part: Part) -> Option<Plane> {
         let m = self.faces.get(face)?.face.mask(part)?;
         let view = self.view;
-        Some(Plane::from_fn(self.width, self.height, |x, y| {
-            let (nx, ny) = view.to_norm(x as f64 + 0.5, y as f64 + 0.5);
-            m.sample(nx, ny)
-        }))
+        let mut out = Plane::new(self.width, self.height);
+        lightcraft_raster::par_rows(&mut out.data, self.width, |y, row| {
+            for (x, v) in row.iter_mut().enumerate() {
+                let (nx, ny) = view.to_norm(x as f64 + 0.5, y as f64 + 0.5);
+                *v = m.sample(nx, ny);
+            }
+        });
+        Some(out)
     }
 }
 

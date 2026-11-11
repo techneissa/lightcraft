@@ -70,6 +70,8 @@ v1 (below) only lifts a crease by part of its depth, so deep wrinkles stayed. v2
   A face whose frame is warped (Face Reshape, lens corrections) is read through the view: tested with a scaling and shifting view.
 - The Refine brush (`fork/refine-brush.md`) runs over Wrinkles as over every feature; `wrinkles::area_weight` is unchanged.
 
+The search's speed work (one decode for every face's crop, idle work skipped with the same result): `fork/perf-portrait-analyses.md`.
+
 Time (release, a test Mac with other work running): the wrinkles search is about 1–1.8 s per face at 1280 px (it was
 about 0.8 s with the banded heal at 768 px); on a 1936 px draft 92 ms (was 71 ms). A slider tick (the retouch step on a
 1936 × 1290 draft of a face filling the frame, all four sliders at 100, fastest of 20): 12.6 ms (was 10.2 ms), under the
