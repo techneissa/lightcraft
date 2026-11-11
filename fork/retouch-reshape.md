@@ -35,7 +35,7 @@ face's moves together. So the warp never folds.
 Issue #209 (the audit in #195 rated Nose, Eye Size and Double Chin too weak), measured on the seven audit portraits:
 Eye Size was a bump about each eye's centre that faded out inside the eye, so at 100 the iris grew 9 %, the eye's
 opening 10–14 % and its width 3 %. Nose pushed the wings out or in with two bumps, partly held back by their own
-fold limit: the widest wings changed 5–11 % at −100 and 4–7 % at +100. Double Chin moved a patch of neck under the
+fold limit: the widest wings changed 5–12 % at −100 and 3.5–7 % at +100. Double Chin moved a patch of neck under the
 chin's middle (0.035–0.05 of the face's height, 0.1–0.15 below the chin), lifted the chin itself a little and left
 the jaw's sides alone (under 0.004 at 100). Now the band 0.1 below the jaw's side moves 0.013–0.025 at 100 and the
 chin under 0.001. On p1 and p2 the neck is out of the frame, and Double Chin changes nothing there. Glasses frames
