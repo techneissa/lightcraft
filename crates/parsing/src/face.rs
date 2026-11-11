@@ -345,14 +345,18 @@ pub fn run(nets: &Nets, img: &RgbImage, jobs: &[Job], batch: usize, scene: &Scen
         }
         let parse_crops: Vec<Crop> = chunk.iter().map(|j| j.crop(img, PARSE_CROP, SIDE)).collect();
         let mesh_crops: Vec<Crop> = chunk.iter().map(|j| j.mesh_crop(img)).collect();
+        crate::profile::mark("face crops");
         let groups = parse(img, &parse_crops)?;
+        crate::profile::mark("face parser");
         let meshes = mesh(img, &mesh_crops)?;
+        crate::profile::mark("face mesh");
         for (((job, pc), mc), (g, m)) in chunk.iter().zip(&parse_crops).zip(&mesh_crops).zip(groups.iter().zip(&meshes)) {
             let eyes = MeshEyes::from_mesh(m, mc);
             let p = job.person;
             let planes = planes(img, pc, g, &eyes, scene, p);
             out.push(FaceOut { person: p, planes, landmarks: landmarks_of(m, mc, img), landmark_score: m.presence });
         }
+        crate::profile::mark("face planes");
     }
     Ok(out)
 }

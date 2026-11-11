@@ -109,7 +109,7 @@ fn core_ml_parses_as_candle_does() {
     assert_eq!(candle.backends(), (Backend::Candle, Backend::Candle));
     let img = fixture();
 
-    // the clothes parser, on a grid smaller than its canvas (768 × 512 in 768 × 512; 800 × 544 in 1024 × 704)
+    // the clothes parser, on a grid smaller than its canvas (768 × 512 in 768²; 800 × 544 in 1024²)
     for side in [768, 800] {
         let (a, b) = (coreml.body_map(&img, side).unwrap(), candle.body_map(&img, side).unwrap());
         assert_eq!((a.w, a.h, a.probs.len()), (b.w, b.h, b.probs.len()));
@@ -119,7 +119,7 @@ fn core_ml_parses_as_candle_does() {
         assert!(diff < 0.25, "body at {side}: largest difference {diff}");
     }
 
-    // the face parser, a batch of three crops (one turned)
+    // the face parser, three crops (one turned), each a call of its own
     let crops: Vec<Crop> = [(300.0, 120.0, 0.0), (310.0, 130.0, 0.3), (280.0, 200.0, -0.2)]
         .iter()
         .map(|&(cx, cy, angle)| Crop { cx, cy, scale: 0.4, angle, side: crate::face::SIDE })
@@ -288,5 +288,63 @@ fn the_core_ml_face_mesh_gives_the_points_candle_gives() {
         assert_eq!(x.landmarks.len(), y.landmarks.len());
         let d = x.landmarks.iter().zip(&y.landmarks).map(|(p, q)| (p.x - q.x).abs().max((p.y - q.y).abs())).fold(0.0f32, f32::max);
         assert!(d < 1e-4 && (x.landmark_score - y.landmark_score).abs() < 1e-3, "landmarks differ by {d} of the photo");
+    }
+}
+
+/// Each converted model is called with one input shape (issue #200): the clothes parser's photo in the square canvas of
+/// its long side gives what it gave in the tightest canvas, the face parser's crops in a full batch of eight give what
+/// each gives alone, and the face mesh's crops in a batch filled up with blank ones give what they give in a call of
+/// their own number.
+#[test]
+fn the_models_give_in_one_input_shape_what_they_gave_in_the_shapes_before() {
+    let Some(models) = shared_with(&CONVERTED) else {
+        lightcraft_testkit::skip!(Model, "the SegFormer set and its Core ML packages are not in the shared models folder");
+        return;
+    };
+    if !lightcraft_coreml::available() {
+        lightcraft_testkit::skip!(Model, "Core ML runs only on a Mac");
+        return;
+    }
+    let dir = linked("coreml-one-shape", &models, &CONVERTED);
+    let img = fixture();
+
+    let body = crate::coreml::load_body(&dir).unwrap();
+    for side in [768, 1024] {
+        let (w, h, px) = crate::body::pixels(&img, side);
+        let tight = crate::coreml::BODY_CANVASES.iter().copied().filter(|&(ch, cw)| ch >= h && cw >= w).min_by_key(|&(ch, cw)| ch * cw).unwrap();
+        assert_ne!(Some(tight), crate::coreml::canvas(w, h), "the grid {w} × {h} has a tighter canvas than its square");
+        let (a, b) = (crate::coreml::body_probs(&body, &px, w, h).unwrap(), crate::coreml::body_probs_in(&body, &px, w, h, tight).unwrap());
+        let agree = argmax_agreement(&a, &b, w * h);
+        let mean = a.iter().zip(&b).map(|(x, y)| (x - y).abs()).sum::<f32>() / a.len().max(1) as f32;
+        assert!(agree >= 0.999 && mean < 0.002, "body at {side}: {agree} agree, mean difference {mean}");
+    }
+
+    let face = crate::coreml::load_face(&dir).unwrap();
+    let n = crate::coreml::FACE_BATCH;
+    let crops: Vec<Crop> = (0..n)
+        .map(|k| Crop { cx: 260.0 + 10.0 * k as f32, cy: 110.0 + 8.0 * k as f32, scale: 0.4, angle: 0.1 * k as f32 - 0.3, side: crate::face::SIDE })
+        .collect();
+    let batch = crate::coreml::face_groups(&face, &crate::face::batch_pixels(&img, &crops, true), n).unwrap();
+    for (k, c) in crops.iter().enumerate() {
+        let alone = crate::coreml::face_groups(&face, &crate::face::batch_pixels(&img, std::slice::from_ref(c), true), 1).unwrap().remove(0);
+        for (g, (ga, gb)) in batch[k].iter().zip(&alone).enumerate() {
+            let agree = mask_agreement(ga, gb);
+            let mean = ga.iter().zip(gb).map(|(x, y)| (x - y).abs()).sum::<f32>() / ga.len().max(1) as f32;
+            assert!(agree >= 0.999 && mean < 0.002, "face {k}, group {g}: {agree} agree, mean difference {mean}");
+        }
+    }
+
+    // (the mesh's own call fills the batch up; a direct call of two is the shape it had before)
+    let mesh = crate::coreml::load_mesh(&dir).unwrap();
+    let side = crate::facemesh::SIDE;
+    let two: Vec<Crop> = crops.iter().take(2).map(|c| Crop { scale: 0.3, side, ..*c }).collect();
+    let px = crate::face::batch_pixels(&img, &two, false);
+    let filled = crate::coreml::meshes(&mesh, &px, 2).unwrap();
+    let row = crate::facemesh::POINTS * 3 + 1;
+    let out = mesh.predict("pixels", &[2, 3, side, side], &px, "mesh").unwrap();
+    for (k, (m, r)) in filled.iter().zip(out.data.chunks_exact(row)).enumerate() {
+        let own = crate::facemesh::MeshOut::from_row(r).unwrap();
+        let d = m.points.iter().zip(&own.points).flat_map(|(p, q)| p.iter().zip(q).map(|(x, y)| (x - y).abs())).fold(0.0f32, f32::max);
+        assert!(d < 1e-3, "mesh face {k}: {d} px from a call of two");
     }
 }

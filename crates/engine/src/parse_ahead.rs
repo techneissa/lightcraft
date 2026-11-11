@@ -775,6 +775,19 @@ impl Session {
         self.parse_ahead.peek.started()
     }
 
+    /// Tests and tools (the profile of issue #200): parse photo `id` on this thread as the queue's worker does (render,
+    /// face detection, model run), waiting for the run. `Ok(true)`: the models ran; `Ok(false)`: the parse was cached.
+    #[doc(hidden)]
+    #[cfg(any(test, feature = "test-hooks"))]
+    pub fn parse_ahead_one(&mut self, id: PhotoId) -> Result<bool, String> {
+        let (img, hints) = crate::cmd::parsing::prepare_ahead(self, id)?.render()?.detect()?;
+        match self.parsing.parse_as(self.parsing.choice(), img, hints, true).1 {
+            crate::people_parsing::Outcome::Ready { cached, .. } => Ok(!cached),
+            crate::people_parsing::Outcome::Failed(e) => Err(e),
+            crate::people_parsing::Outcome::Running => Err("the parse did not finish".into()),
+        }
+    }
+
     /// Turn parsing ahead on or off (the desktop app's setting; on by default). Off stops the photo going.
     pub fn set_parse_ahead(&mut self, on: bool) {
         self.parse_ahead.enabled = on;

@@ -29,9 +29,17 @@ candle-nn = { workspace = true, features = ["metal"] }
 [dev-dependencies]
 lightcraft-testkit = { workspace = true }
 lightcraft-faces = { workspace = true }
+# the Core ML shapes example reads the process's CPU time (issue #200)
+rustix = { version = "1", default-features = false, features = ["std", "time"] }
 
 [[example]]
 name = "parts"
 
 [[example]]
 name = "coreml_compare"
+
+[[example]]
+name = "coreml_shapes"
+
+[[example]]
+name = "parse_agree"
