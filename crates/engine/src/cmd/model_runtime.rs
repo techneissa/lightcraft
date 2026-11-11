@@ -38,6 +38,7 @@ fn coreml_installed(s: &Session, model: &str) -> bool {
         lightcraft_learn::ENCODER_ID => s.learn.coreml_installed(),
         crate::model_runtime::BIREFNET => s.segmenter.birefnet_coreml_installed(),
         crate::hair_edges::MODEL_DIR => s.hair_edges.coreml_installed(),
+        crate::model_runtime::LAMA => s.lama.coreml_installed(),
         _ => s.parsing.coreml_installed(model),
     }
 }
@@ -48,6 +49,7 @@ fn backend(s: &Session, model: &str) -> Option<&'static str> {
         lightcraft_learn::ENCODER_ID => s.learn.backend(),
         crate::model_runtime::BIREFNET => s.segmenter.birefnet_backend(),
         crate::hair_edges::MODEL_DIR => s.hair_edges.backend(),
+        crate::model_runtime::LAMA => s.lama.backend(),
         _ => s.parsing.backend(model),
     }
 }
@@ -83,6 +85,7 @@ fn run(s: &mut Session, p: &Value) -> crate::Result<Value> {
             // (BiRefNet's jobs read it when they are queued)
             crate::model_runtime::BIREFNET => {}
             crate::hair_edges::MODEL_DIR => s.hair_edges.set_runtime(runtime),
+            crate::model_runtime::LAMA => s.lama.set_runtime(runtime),
             _ => {
                 s.parsing.set_runtime(model, runtime);
             }
@@ -142,7 +145,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "AI Model Runtime",
             [],
             None,
-            "{model?: \"dinov2-small\"|\"face-parsing-segformer-b0\"|\"human-parsing-segformer-b3\"|\"birefnet\"|\"birefnet-matting\"|…, runtime?: \"automatic\"|\"coreml\"|\"candle\"} — sets the engine a model runs on (Automatic: Core ML on a Mac when its model is installed, else candle), or with no `runtime` lists them → {models: [{model, feature, runtime, coremlAvailable, coremlInstalled, backend: \"coreml\"|\"candle\"|null, coremlBytes, license, download: {state, bytes?, total?, error?}}]}",
+            "{model?: \"dinov2-small\"|\"face-parsing-segformer-b0\"|\"human-parsing-segformer-b3\"|\"birefnet\"|\"birefnet-matting\"|\"lama\"|…, runtime?: \"automatic\"|\"coreml\"|\"candle\"} — sets the engine a model runs on (Automatic: Core ML on a Mac when its model is installed, else candle), or with no `runtime` lists them → {models: [{model, feature, runtime, coremlAvailable, coremlInstalled, backend: \"coreml\"|\"candle\"|null, coremlBytes, license, download: {state, bytes?, total?, error?}}]}",
             always,
             run
         ),

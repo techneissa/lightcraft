@@ -135,6 +135,9 @@ fn repair(cx: &mut super::Ctx<'_>) {
         }
         ui.ctx().data_mut(|d| d.insert_temp(choice_id(), choice));
         let ready = if choice.flux { flux_ready } else { lama_ready };
+        if !choice.flux && lama_ready {
+            cx.app.session.lama.prepare();
+        }
         let faces = &cx.input.faces;
         let repaired = match cx.face {
             Some(i) => faces.get(i).is_some_and(|f| f.patch.is_some()),

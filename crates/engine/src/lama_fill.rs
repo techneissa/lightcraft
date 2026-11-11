@@ -9,6 +9,8 @@
 //! (the spot shows the Classic fill) and a message ([`LamaFill::message`]) the Remove panel shows.
 //!
 //! One run at a time (the model is large); the model stays loaded for a minute after its last use.
+//!
+//! On a Mac with LaMa's Core ML version in the model's folder, fills run on the Neural Engine (issue #268, `coreml`).
 
 use std::collections::VecDeque;
 use std::hash::{DefaultHasher, Hasher};
@@ -21,6 +23,8 @@ use lightcraft_pipeline::learned_fill::{FillRun, LearnedFill};
 
 use crate::activity::{Activity, Cancel};
 
+#[cfg(not(target_arch = "wasm32"))]
+mod coreml;
 mod download;
 pub use download::{DOWNLOAD_BYTES, DOWNLOAD_URL, Download};
 
@@ -77,6 +81,9 @@ struct Inner {
     watcher: AtomicBool,
     /// [`LamaFill::term`], read from the file at most every [`TERM_EVERY`].
     term: Mutex<(Option<Instant>, u64)>,
+    /// The engine choice and the Core ML model (`coreml`).
+    #[cfg(not(target_arch = "wasm32"))]
+    coreml: Mutex<coreml::CoreMl>,
 }
 
 /// The LaMa fill of a session. Cheap to clone; every clone is the same fill.
@@ -99,6 +106,8 @@ impl LamaFill {
                 download: Mutex::new(Download::Idle),
                 watcher: AtomicBool::new(false),
                 term: Mutex::new((None, 0)),
+                #[cfg(not(target_arch = "wasm32"))]
+                coreml: Mutex::new(coreml::CoreMl::default()),
             }),
         }
     }
@@ -108,6 +117,8 @@ impl LamaFill {
         *self.inner.dir.lock().unwrap_or_else(PoisonError::into_inner) = dir;
         self.inner.term.lock().unwrap_or_else(PoisonError::into_inner).0 = None;
         *self.inner.model.lock().unwrap_or_else(PoisonError::into_inner) = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        coreml::reset(&mut self.inner.coreml.lock().unwrap_or_else(PoisonError::into_inner));
     }
 
     /// The folder the model lives in (or goes to when downloaded).
@@ -235,13 +246,35 @@ impl LamaFill {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn run_model(&self, rgb: &[f32], hole: &[f32], w: usize, h: usize, params: Crop, cancel: &dyn Fn() -> bool) -> Result<Vec<f32>, String> {
-        let model = self.model()?;
         let params = lightcraft_lama::region::Params { work: params.work, context: params.context, grow: params.grow };
-        model.fill_region(rgb, hole, w, h, &params, cancel).map_err(|e| match e {
+        // (the crop goes to Core ML or candle: `coreml`)
+        lightcraft_lama::region::fill(rgb, hole, w, h, &params, &|img, m, ww, wh| self.fill_crop(img, m, ww, wh, cancel)).map_err(|e| match e {
             lightcraft_lama::Error::Cancelled => "cancelled".to_string(),
             other => other.to_string(),
         })
     }
+
+    /// The web build has no Core ML: LaMa's engine choice is kept and does nothing.
+    #[cfg(target_arch = "wasm32")]
+    pub fn set_runtime(&self, _runtime: lightcraft_coreml::Runtime) {}
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn runtime(&self) -> lightcraft_coreml::Runtime {
+        lightcraft_coreml::Runtime::Candle
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn backend(&self) -> Option<&'static str> {
+        None
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn coreml_installed(&self) -> bool {
+        false
+    }
+
+    #[cfg(target_arch = "wasm32")]
+    pub fn prepare(&self) {}
 
     #[cfg(target_arch = "wasm32")]
     fn run_model(&self, _: &[f32], _: &[f32], _: usize, _: usize, _: Crop, _: &dyn Fn() -> bool) -> Result<Vec<f32>, String> {
@@ -262,8 +295,7 @@ impl LamaFill {
             return None;
         }
         let _one_at_a_time = self.inner.run.lock().unwrap_or_else(PoisonError::into_inner);
-        // (one model on the GPU at a time: `crate::gpu_run`)
-        let _gpu = crate::gpu_run::turn();
+        // (the GPU turn, `crate::gpu_run`, is taken only for a candle fill: `coreml::fill_crop`)
         // another render may have made it while this one waited
         if let Some(hit) = self.cached(key) {
             return Some(hit);
@@ -404,6 +436,9 @@ impl crate::Session {
         // Repair Glare's FLUX model and results (`fork/glare-repair.md`): set up by the same hosts, for the same reason
         #[cfg(not(target_arch = "wasm32"))]
         self.glare.set_dirs(crate::glare_repair::default_flux_dir(), crate::config::cache_dir().map(|d| d.join("glare-repair")));
+        // the engine chosen in Settings, before the folder starts the Core ML load (`coreml`)
+        self.model_runtimes.open(crate::model_runtime::default_file());
+        self.lama.set_runtime(self.model_runtimes.get(crate::model_runtime::LAMA));
         self.with_lama_dir(default_lama_dir())
     }
 

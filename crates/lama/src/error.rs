@@ -15,6 +15,9 @@ pub enum Error {
     /// The tensor library failed (out of memory, a missing GPU op).
     #[error("LaMa compute: {0}")]
     Compute(String),
+    /// Core ML could not load or run the model, or gave a fill that can't be used: the caller may run candle instead.
+    #[error("LaMa on Core ML: {0}")]
+    CoreMl(String),
 }
 
 impl From<candle_core::Error> for Error {

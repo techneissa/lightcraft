@@ -16,6 +16,7 @@ log = { workspace = true }
 zip = { version = "7.4", default-features = false }
 candle-core = { workspace = true }
 candle-nn = { workspace = true }
+lightcraft-coreml = { workspace = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 candle-core = { workspace = true, features = ["metal"] }
