@@ -15,7 +15,7 @@
 //!
 //! The whole-view build is the preview build ([`crate::cmd::previews`]) in its background form: two
 //! lanes, waiting whenever the photo on screen or the photos the loupe prepares ahead are being made
-//! ([`foreground`]), nearest photos to the user first and re-aimed as they move
+//! ([`Foreground::signal`]), nearest photos to the user first and re-aimed as they move
 //! ([`crate::cmd::previews::PreviewBuild::focus_on`]) but past the loupe's own photos, which it builds
 //! last (#196: the two never decode one file at once), photos with previews skipped (the loupe's own
 //! renders of them too), one row in the activity stack that can be cancelled. It starts once the
