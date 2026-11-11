@@ -3,7 +3,7 @@
 use lightcraft_raster::{Image, Rgb32f};
 
 use super::geom::{Eye, smoothstep};
-use super::under::{blur, luma, sample};
+use super::grid::{blur, luma, sample};
 use crate::{Part, Scene};
 
 /// How much brighter the whites get at 100 (a factor: about 0.4 of a stop).

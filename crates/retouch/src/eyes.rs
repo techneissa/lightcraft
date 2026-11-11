@@ -20,6 +20,7 @@
 //! brush (#99) can scale or extend an area's weight there without touching the effects.
 
 mod geom;
+mod grid;
 mod tone;
 mod under;
 
