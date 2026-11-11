@@ -142,8 +142,8 @@ fn tone(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, part: Part, size: f64,
             *m = mask_of(view, &masks, grid.x0 + px, grid.y0 + py);
         }
     });
-    // each cell: the mask-weighted sums of the skin's colour, the mask, and the luminance and its square (texture)
-    let mut sums = vec![[0.0f32; 6]; grid.gw * grid.gh];
+    // each cell: the mask-weighted sums of the skin's colour, and of the mask
+    let mut sums = vec![[0.0f32; 4]; grid.gw * grid.gh];
     {
         let (pixels, mask) = (&img.data, &mask);
         par_rows(&mut sums, grid.gw, |gy, cells| {
@@ -155,8 +155,7 @@ fn tone(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, part: Part, size: f64,
                     }
                     if let Some(c) = cells.get_mut(grid.cell_of(px, grid.gw)) {
                         let v = p.map(|v| if v.is_finite() { v.clamp(0.0, 64.0) } else { 0.0 });
-                        let y = LUMA[0] * v[0] + LUMA[1] * v[1] + LUMA[2] * v[2];
-                        *c = [c[0] + m * v[0], c[1] + m * v[1], c[2] + m * v[2], c[3] + m, c[4] + m * y, c[5] + m * y * y];
+                        *c = [c[0] + m * v[0], c[1] + m * v[1], c[2] + m * v[2], c[3] + m];
                     }
                 }
             }

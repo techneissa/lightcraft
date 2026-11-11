@@ -345,10 +345,7 @@ fn a_draft_and_a_bigger_export_agree_after_scaling() {
             }
         }
         let mean = sum / (w * h) as f32;
-        // The faces are 64 and 48 pixels tall in the draft: its cells are a whole pixel, coarser than 1/160 of the face
-        // the export gets, so single pixels in a blotch differ by up to about 9 % (Even Tone); on the real portraits
-        // the draft's and the export's changes correlate at 0.98 to 0.998.
-        assert!(mean < 0.01 && worst < 0.1, "mean difference {mean}, worst {worst}");
+        assert!(mean < 0.01 && worst < 0.08, "mean difference {mean}, worst {worst}");
     }
 }
 
@@ -402,4 +399,55 @@ fn a_small_face_in_the_draft_agrees_with_the_export() {
         let mean = sum / n.max(1) as f32;
         assert!(n > 200 && mean < 0.01 && worst < 0.05, "{n} changed, mean difference {mean}, worst {worst}");
     }
+}
+
+/// A face about 100 pixels tall in the draft with stubble (dense dark hairs finer than a draft pixel): the draft is
+/// the export scaled down, and Even Tone at 100 keeps the stubble in both alike (issue #230: the draft's one-pixel
+/// cells had no variance, so its stubble guard was off and the stubble's shadow was evened there only).
+#[test]
+fn a_small_face_keeps_its_stubble_alike_in_the_draft_and_the_export() {
+    let (w, h) = (160, 128);
+    let face = vec![skin_face(0.2, 0.1, 0.8, 0.9)];
+    // the export: skin with grain, and stubble over the lower half of the face (2 × 2 pixel hairs, darker and
+    // cooler than the skin, on about a third of the places)
+    let big = Rgb32f::from_fn(w * 4, h * 4, |x, y| {
+        let g = grain(x / 4, y / 4);
+        let (u, v) = (x as f32 / (w * 4) as f32, y as f32 / (h * 4) as f32);
+        let hair = v > 0.55 && v < 0.85 && (u - 0.5).abs() < 0.22 && {
+            let k = ((x / 2) as u32).wrapping_mul(2_654_435_761) ^ ((y / 2) as u32).wrapping_mul(40_503);
+            k.is_multiple_of(3)
+        };
+        let p = [SKIN[0] * g, SKIN[1] * g, SKIN[2] * g];
+        if hair { [p[0] * 0.3, p[1] * 0.33, p[2] * 0.42] } else { p }
+    });
+    // the draft: the export averaged over 4 × 4 pixels
+    let small = Rgb32f::from_fn(w, h, |x, y| {
+        let mut acc = [0.0f32; 3];
+        for dy in 0..4 {
+            for dx in 0..4 {
+                let p = big.data[(y * 4 + dy) * w * 4 + x * 4 + dx];
+                acc = [acc[0] + p[0], acc[1] + p[1], acc[2] + p[2]];
+            }
+        }
+        acc.map(|v| v / 16.0)
+    });
+    let r = with(100.0, 0.0, 0.0);
+    let (draft, export) = (retouched(&small, &r, face.clone()), retouched(&big, &r, face));
+    let (mut worst, mut sum) = (0.0f32, 0.0f32);
+    for y in 0..h {
+        for x in 0..w {
+            let mut acc = [0.0f32; 3];
+            for dy in 0..4 {
+                for dx in 0..4 {
+                    let p = export.data[(y * 4 + dy) * w * 4 + x * 4 + dx];
+                    acc = [acc[0] + p[0], acc[1] + p[1], acc[2] + p[2]];
+                }
+            }
+            let d = draft.data[y * w + x];
+            let e = (0..3).map(|k| (acc[k] / 16.0 / d[k].max(1e-6) - 1.0).abs()).fold(0.0f32, f32::max);
+            (worst, sum) = (worst.max(e), sum + e);
+        }
+    }
+    let mean = sum / (w * h) as f32;
+    assert!(mean < 0.01 && worst < 0.08, "mean difference {mean}, worst {worst}");
 }

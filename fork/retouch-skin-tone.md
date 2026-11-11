@@ -27,9 +27,12 @@ apart; shape and place can:
   the plane counts for nothing), so it follows the light and the face's slopes but not a blotch.
 - What is left at the blotch scale (0.8 % of the face) is evened where it is round. Where it is long and narrow (the
   coherence of its gradients over 1.5 % of the face), within the mesh's zones (eyes, lips' edge, nostrils, the folds
-  from the nose's wings to the mouth's corners: `skin_tone/zones.rs`), deeper than 0.6 (log), or in dense fine
-  texture (stubble: 2.5 times the face's typical in-cell variance), it is the face's form and stays. 95 % of a dark
-  blotch goes at 100, half of a light one, almost none of a highlight.
+  from the nose's wings to the mouth's corners: `skin_tone/zones.rs`), deeper than 0.6 (log), or stubble, it is the
+  face's form and stays. 95 % of a dark blotch goes at 100, half of a light one, almost none of a highlight.
+- Stubble is found on the cells, never inside one, so a draft and an export find the same (#230: a pixel variance
+  inside a cell changed with how many pixels the cell held). Its shadow is darker and cooler than the skin around it
+  (pigment is warmer); and dense cell-to-cell detail (each cell's log luminance against its neighbourhood over 0.6 %
+  of the face, squared and gathered over 2.5 %, 2.5 times the face's typical) keeps the skin as it is.
 - A lightened blotch moves along the face's own shading direction (how this photo's skin colour changes with its
   brightness over large scales), so it takes the colour the skin around it has at that brightness, not a greyer one.
 - Colour, with the shading's colour taken out, moves 85 % of the way to the skin's colour over 15 % of the face.
@@ -65,9 +68,10 @@ the grid), so `REACH` is 0.02, a pixel of rounding. A zoomed window renders thos
 (`window_for_reads`), so the colour of the skin around a spot comes from the whole face, never from the window.
 
 Small faces: a cell is never under a pixel, so a face under 160 px in the draft has coarser cells than its export.
-On the synthetic test faces (48–64 px in the draft) the export four times larger differs by 0.5 % on average and
-9 % at worst in a blotch; on the audit portraits the draft's change and the full-size export's correlate at 0.998
-(p2, a 1119 px face in the draft) and 0.978 (p7, 137 px).
+Measured on the synthetic test picture, Even Tone at 100 against the export four times larger, worst pixel (mean):
+faces of 60 px 4.3 % (0.21 %), 90 px 3.1 %, 120 px 5.2 %, 163 px 2.6 %, 244 px 3.6 %, 326 px 2.7 %, 435 px 2.6 %
+(0.06 %); with every slider on, at most 5.3 %. On the audit portraits the draft's change and the full-size
+export's correlate at 0.998 (p2, a 1119 px face in the draft) and 0.978 (p7, 137 px).
 
 ## Branch
 
@@ -97,7 +101,8 @@ No product code outside the own files. Docs and tests only:
 `fork/tests.d/retouch-skin-tone.txt`. They cover: off and every slider at 0 changing no bit; Even Tone halving
 blotches with the texture kept within 5 %; on a face lit from one side, Even Tone and Redness at 100 taking a blotch
 35 % darker down to under 40 % of its darkness and a red patch to under 10 % of its excess red (the code before #205: 20 %), the light across the
-face kept within 0.03 (log) (#205); the shading fit following a ramp and ignoring a blotch; a line counted as form
+face kept within 0.03 (log) (#205); a 100 px face with stubble finer than a draft pixel made alike in the draft
+and its export (#230); the shading fit following a ramp and ignoring a blotch; a line counted as form
 and a disc not; the shading direction falling back to grey on nonsense; the mesh zones' distances; Redness lowering a red patch's excess red by more than half with its
 brightness kept and the skin away from it unchanged; Face Light lighting the middle and the eyes by 0.6 stops,
 falling off towards the edge over at least three pixels, nothing outside the face, −100 darkening by as much; every

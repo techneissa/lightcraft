@@ -16,9 +16,10 @@
 //!    that brightness, not a greyer or pinker one.
 //! 4. The luminance left over is a blotch where it is round; where it is long and narrow ([`FORM_TENSOR`],
 //!    [`FORM_COHERENCE`]), near the eyes, lips and nostrils or along the nose-to-mouth folds ([`super::zones`]), or
-//!    deeper than [`EVEN_KEEP`], it is the face's form and stays. Stubble and other dense fine texture
-//!    ([`TEXTURE_KEEP`]) stay too, and Even Tone takes only part of a lighter patch ([`EVEN_LIGHT`]) and almost none
-//!    of a highlight ([`EVEN_HIGHLIGHT`]).
+//!    deeper than [`EVEN_KEEP`], it is the face's form and stays. Stubble stays too: its shadow is darker and cooler
+//!    than the skin ([`STUBBLE_COOL`]; pigment is warmer), and dense detail from cell to cell ([`TEXTURE_KEEP`]) keeps
+//!    the skin as it is. Both read the cells, a fixed fraction of the face, so a draft and an export agree. Even Tone
+//!    takes only part of a lighter patch ([`EVEN_LIGHT`]) and almost none of a highlight ([`EVEN_HIGHLIGHT`]).
 //! 5. **Colour** (with the shading's colour taken out) moves towards the skin's colour over [`EVEN_COLOUR`] of the
 //!    face.
 //! 6. **Redness**: colour with a quarter of the shading's colour taken out ([`RED_SHADING`]). A cell redder than
@@ -60,10 +61,17 @@ pub const SHADING_DIRECTION: [f64; 2] = [0.03, 0.15];
 /// from which a difference counts as long and narrow (form), fully from the second.
 pub const FORM_TENSOR: f64 = 0.015;
 pub const FORM_COHERENCE: [f32; 2] = [0.25, 0.65];
-/// Texture: the scale it is gathered over, a fraction of the face, and how many times the face's typical fine
-/// texture starts to keep the skin as it is (stubble), fully from the second.
-pub const TEXTURE_SCALE: f64 = 0.02;
+/// Texture: the scale cell-to-cell detail is gathered over, a fraction of the face; the neighbourhood a cell's detail
+/// is measured against; and how many times the face's typical detail starts to keep the skin as it is (stubble, a
+/// beard's edge), fully from the second.
+pub const TEXTURE_SCALE: f64 = 0.025;
+pub const TEXTURE_FINE: f64 = 0.006;
 pub const TEXTURE_KEEP: [f32; 2] = [2.5, 4.5];
+/// Stubble's shadow: skin cooler (natural log of blue against red and green, the shading's colour taken out) than
+/// the skin around it by the first value starts to be kept, by the second fully, when it is also darker (fully from
+/// [`STUBBLE_DARK`] darker). Pigment blotches are warmer, so they are evened.
+pub const STUBBLE_COOL: [f32; 2] = [0.03, 0.08];
+pub const STUBBLE_DARK: f32 = 0.1;
 /// Redness: the share of the shading's colour that counts as redness (the rest is the photo's tone curve, and
 /// keeps shadows warm).
 pub const RED_SHADING: f32 = 0.75;
@@ -79,11 +87,11 @@ pub const RED_MOST: f32 = 0.6;
 /// The largest change per channel (natural log), so a cell never jumps.
 const MAX_LOG: f32 = 0.7;
 
-/// The cells of one skin mask: each one's mask-weighted sums (red, green, blue, the mask, luminance, luminance²).
+/// The cells of one skin mask: each one's mask-weighted sums (red, green, blue, the mask).
 pub(super) struct Cells {
     pub gw: usize,
     pub gh: usize,
-    pub sums: Vec<[f32; 6]>,
+    pub sums: Vec<[f32; 4]>,
     /// A cell's area in pixels (a full cell's mask sum).
     pub area: f32,
 }
@@ -125,20 +133,24 @@ pub(super) fn gains(c: &Cells, inp: &Inputs<'_>) -> Image<V3> {
         let base = shading(&lum, &w, c.gw, c.gh, sigma(EVEN_SHADING));
         let t: Vec<f32> = lum.iter().zip(&base).map(|(l, b)| l - b).collect();
         let form = form(&t, &w, c.gw, c.gh, sigma(FORM_TENSOR));
-        let keep = texture(c, &w, sigma(TEXTURE_SCALE));
+        let cell_lum: Vec<f32> = logc.iter().map(|l| dot(*l, LUMA)).collect();
+        let keep = texture(&cell_lum, &w, c.gw, c.gh, sigma(TEXTURE_FINE), sigma(TEXTURE_SCALE));
         for (i, k) in corr.iter_mut().enumerate() {
             let (Some(t), Some(f), Some(wd)) = (t.get(i), fine.get(i), wide.get(i)) else { continue };
             let z = inp.even_zone.get(i).copied().unwrap_or(0.0);
             let share = if *t < 0.0 { EVEN_DARK } else { EVEN_LIGHT * (-(t / EVEN_HIGHLIGHT).powi(2)).exp() };
             let share = share * ((EVEN_KEEP[1] - t.abs()) / (EVEN_KEEP[1] - EVEN_KEEP[0])).clamp(0.0, 1.0);
-            let structure = form.get(i).copied().unwrap_or(1.0).max(z);
-            let tl = t * share * (1.0 - structure);
             // colour against the skin's own, without the shading's colour
             let d: V3 = std::array::from_fn(|k| f[k] - wd[k]);
             let dl = dot(d, LUMA);
             let r: V3 = std::array::from_fn(|k| d[k] - dl * sd[k]);
             let rn = dot(r, r).sqrt();
-            let rs = EVEN_COLOUR_SHARE * (-(rn / EVEN_COLOUR_KEEP).powi(2)).exp() * (1.0 - z);
+            // dark and cooler than the skin: a beard's shadow under the skin, not pigment (which is warmer)
+            let cool = r[2] - 0.5 * (r[0] + r[1]);
+            let shadow = smoothstep(STUBBLE_COOL[0], STUBBLE_COOL[1], cool) * smoothstep(0.0, STUBBLE_DARK, -dl);
+            let structure = form.get(i).copied().unwrap_or(1.0).max(z).max(shadow);
+            let tl = t * share * (1.0 - structure);
+            let rs = EVEN_COLOUR_SHARE * (-(rn / EVEN_COLOUR_KEEP).powi(2)).exp() * (1.0 - z.max(shadow));
             let g = inp.even * keep.get(i).copied().unwrap_or(0.0);
             *k = std::array::from_fn(|ch| -g * (r[ch] * rs + tl * sd[ch]));
         }
@@ -388,27 +400,20 @@ fn form(t: &[f32], w: &[f32], gw: usize, gh: usize, sigma: f32) -> Vec<f32> {
 }
 
 /// How much of the correction each cell takes (1 everywhere but dense fine texture: stubble, a beard's edge), from
-/// the luminance variance inside each cell against the face's typical one.
-fn texture(c: &Cells, w: &[f32], sigma: f32) -> Vec<f32> {
-    let cv: Vec<f32> = c
-        .sums
-        .iter()
-        .map(|s| {
-            if s[3] <= 1e-9 || s[4] <= 1e-12 {
-                return 0.0;
-            }
-            let (m, m2) = (s[4] / s[3], s[5] / s[3]);
-            (m2 / (m * m) - 1.0).clamp(0.0, 4.0)
-        })
-        .collect();
-    let cv = blur1(&cv, w, c.gw, c.gh, sigma);
-    let mut typical: Vec<f32> = cv.iter().zip(w).filter(|(_, w)| **w > 0.9).map(|(v, _)| *v).collect();
+/// the cells' own detail: each cell's log luminance less its neighbourhood's ([`TEXTURE_FINE`]), squared and gathered
+/// over `sigma` cells, against the face's typical. Cells are a fixed fraction of the face, so this reads the same in
+/// a draft and in an export (a pixel's variance inside a cell does not: a draft's cell holds a few pixels).
+fn texture(lum: &[f32], w: &[f32], gw: usize, gh: usize, fine: f32, sigma: f32) -> Vec<f32> {
+    let smooth = blur1(lum, w, gw, gh, fine);
+    let detail: Vec<f32> = lum.iter().zip(&smooth).map(|(l, s)| (l - s).powi(2).min(1.0)).collect();
+    let energy = blur1(&detail, w, gw, gh, sigma);
+    let mut typical: Vec<f32> = energy.iter().zip(w).filter(|(_, w)| **w > 0.9).map(|(v, _)| *v).collect();
     let mid = typical.len() / 2;
     let typical = if typical.is_empty() { 0.0 } else { *typical.select_nth_unstable_by(mid, f32::total_cmp).1 };
-    if typical.is_nan() || typical <= 1e-6 {
-        return vec![1.0; cv.len()];
+    if typical.is_nan() || typical <= 1e-9 {
+        return vec![1.0; energy.len()];
     }
-    cv.iter().map(|v| (1.0 - (v / typical - TEXTURE_KEEP[0]) / (TEXTURE_KEEP[1] - TEXTURE_KEEP[0])).clamp(0.0, 1.0)).collect()
+    energy.iter().map(|v| (1.0 - (v / typical - TEXTURE_KEEP[0]) / (TEXTURE_KEEP[1] - TEXTURE_KEEP[0])).clamp(0.0, 1.0)).collect()
 }
 
 #[cfg(test)]
