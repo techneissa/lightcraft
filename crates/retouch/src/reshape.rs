@@ -24,8 +24,10 @@ use serde::{Deserialize, Serialize};
 use crate::{Control, Feature, Part, Scene, Scope, Spec, Stage};
 
 mod field;
+mod kernels;
 
-pub use field::{Field, Kernel, Kind, MESH, MESH_POINTS, kernels, sketch_mesh};
+pub use field::{Field, sketch_mesh};
+pub use kernels::{Kernel, Kind, MESH, MESH_POINTS, kernels};
 
 /// The Face Reshape settings, each −100…+100 and 0 for none. A field added here is read as its default from
 /// settings saved without it.
