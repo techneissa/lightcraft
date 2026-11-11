@@ -40,7 +40,8 @@ of the face, so a draft and an export make the same change.
 Kept between renders (`skin/prepared.rs`, issue #234): what no slider changes (the mask over the box, the
 pore-free skin, Shine's map per pixel, the fade from the mask's edge) is made once for the pixels the step gets, the
 mask and where the image lies (`crates/retouch/src/memo.rs`: a hash of the box's pixels and of the mask), and kept
-(six boxes, 256 MB; a box past half of that, such as a large export's, is made and dropped). A tick of Texture or
+(256 MB, one entry per face's box, however many faces; a box past half of that, such as a large export's, is made
+and dropped; all of it is dropped when another photo is rendered). A tick of Texture or
 Shine then runs only the last per-pixel pass; a tick of Smoothness also rebuilds its grid, which is small. The result
 is the same, bit for bit, as making everything each render (the seven audit portraits, two settings each).
 
@@ -82,8 +83,11 @@ its strokes will be applied to the mask.
 
 ## Hooks in official files
 
-None. In fork files:
-- `crates/retouch/src/lib.rs`: `mod memo` (the work Skin and Blemishes keep between renders).
+- `crates/pipeline/src/lib.rs`: the render cache's `put` calls `retouch::forget_kept` when it drops another photo's
+  image before the retouch step (the kept work of Skin and Blemishes goes with it).
+
+In fork files:
+- `crates/retouch/src/lib.rs`: `mod memo` and `forget_kept` (the work Skin and Blemishes keep between renders).
 - The stub's control `retouch.skin.amount` is now `retouch.skin.smoothness`: renamed in the foundation's tests
   (`crates/retouch/tests/foundation.rs`, `crates/develop/src/retouch.rs`, `crates/engine/src/retouch_input/tests.rs`,
   `crates/mcp/src/tests_retouch.rs`, `crates/pipeline/src/retouch_step.rs`) and in a doc comment of

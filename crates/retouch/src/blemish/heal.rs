@@ -307,6 +307,8 @@ impl Healer<'_> {
                 }
             }
         }
+        // kept between renders: no room past what it holds
+        out.shrink_to_fit();
         out
     }
 

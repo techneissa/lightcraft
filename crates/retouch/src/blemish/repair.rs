@@ -16,12 +16,16 @@ use crate::input::Spot;
 use crate::memo::{self, Memo};
 use crate::{Part, Scene};
 
-/// Patches kept: at most this many faces' (a draft's, a loupe window's and a few more) …
-const KEPT: usize = 8;
-/// … and this much memory (24 bytes a repaired pixel: 800 spots on a draft take about 6 MB).
+/// The memory the kept patches may hold (24 bytes a repaired pixel: 800 spots on a draft take about 6 MB), for every
+/// face of the photo, the draft's and the loupe's.
 const KEPT_BYTES: usize = 96 << 20;
 
-static MEMO: Memo<Patches> = Memo::new(KEPT, KEPT_BYTES);
+static MEMO: Memo<Patches> = Memo::new(KEPT_BYTES);
+
+/// Drop the kept patches (another photo is open).
+pub(super) fn forget() {
+    MEMO.clear();
+}
 
 /// Every removable spot of one face healed at full strength: per batch (in the order they heal), each spot's index
 /// and its repaired pixels, with how much of each to blend in at full strength (the mask there).
@@ -61,7 +65,7 @@ impl Patches {
     }
 
     fn bytes(&self) -> usize {
-        self.batches.iter().flatten().map(|(_, p)| p.len() * std::mem::size_of::<Healed>()).sum()
+        self.batches.iter().flatten().map(|(_, p)| p.capacity() * std::mem::size_of::<Healed>()).sum()
     }
 
     /// Blend each spot's patch into `img` by its weight in `weights` (none for a weight of 0), in the order they
@@ -278,33 +282,46 @@ mod tests {
     }
 
     /// A drag of Amount on the kept patches gives the bits a fresh heal of the spots gives at each step, for both
-    /// settings of Keep Moles and Freckles.
+    /// settings of Keep Moles and Freckles, and a changed pixel is not answered from the patches kept for the old ones.
     #[test]
     fn a_drag_on_kept_patches_equals_a_fresh_heal() {
-        let (img, input) = photo();
+        let (mut img, input) = photo();
         let view = WholePhoto { width: img.width, height: img.height };
-        let scene = Scene::new(&input, &view, img.width, img.height);
-        let (Some(b), Some(spots)) = (scene.mask_box(0, Part::FacialSkin), input.faces.first().and_then(|f| f.spots.as_ref())) else {
-            panic!("the face maps into the photo");
-        };
-        for keep_moles in [false, true] {
-            let removable: Vec<bool> = Blemish { amount: 100.0, keep_moles }.weights(&spots.list).iter().map(|w| *w > 0.0).collect();
-            let Some(p) = Patches::new(&img, &scene, 0, b, &spots.list, &removable) else { panic!("healed") };
-            assert!(p.batches.len() > 1, "some spots heal after others");
-            for amount in [30.0, 80.0, 100.0, 55.0] {
-                let s = Blemish { amount, keep_moles };
-                let mut kept = img.clone();
-                s.apply(&mut kept, &scene, Some(0));
-                let mut fresh = img.clone();
-                p.blend(&mut fresh, &s.weights(&spots.list));
-                assert!(kept.data.iter().zip(&fresh.data).all(|(a, b)| a.map(f32::to_bits) == b.map(f32::to_bits)), "{s:?}");
-                assert!(kept.data != img.data, "{s:?} removes spots");
+        let Some(spots) = input.faces.first().and_then(|f| f.spots.as_ref()) else { panic!("the face has spots") };
+        let mut before: Vec<Arc<Patches>> = Vec::new();
+        for change in [false, true] {
+            if change {
+                // a pixel where the first spot's repair fades into the skin: its texture is in the patch
+                let Some(s) = spots.list.first() else { panic!("spots") };
+                let (n, size) = (img.width as f64, img.width as f64 * 0.9);
+                let (x, y) = ((s.at.0 * n + 2.2 * s.radius * size) as usize, (s.at.1 * n) as usize);
+                if let Some(p) = img.data.get_mut(y * img.width + x) {
+                    *p = p.map(|v| v * 1.4);
+                }
             }
-            let (Some(a), Some(c)) = (patches(&img, &scene, 0, b, &spots.list, &removable), patches(&img, &scene, 0, b, &spots.list, &removable))
-            else {
-                panic!("kept");
-            };
-            assert!(Arc::ptr_eq(&a, &c), "a tick reuses the patches");
+            let scene = Scene::new(&input, &view, img.width, img.height);
+            let Some(b) = scene.mask_box(0, Part::FacialSkin) else { panic!("the face maps into the photo") };
+            for keep_moles in [false, true] {
+                let removable: Vec<bool> = Blemish { amount: 100.0, keep_moles }.weights(&spots.list).iter().map(|w| *w > 0.0).collect();
+                let Some(p) = Patches::new(&img, &scene, 0, b, &spots.list, &removable) else { panic!("healed") };
+                assert!(p.batches.len() > 1, "some spots heal after others");
+                for amount in [30.0, 80.0, 100.0, 55.0] {
+                    let s = Blemish { amount, keep_moles };
+                    let mut kept = img.clone();
+                    s.apply(&mut kept, &scene, Some(0));
+                    let mut fresh = img.clone();
+                    p.blend(&mut fresh, &s.weights(&spots.list));
+                    assert!(kept.data.iter().zip(&fresh.data).all(|(a, b)| a.map(f32::to_bits) == b.map(f32::to_bits)), "{s:?}, changed {change}");
+                    assert!(kept.data != img.data, "{s:?} removes spots");
+                }
+                let (Some(a), Some(c)) = (patches(&img, &scene, 0, b, &spots.list, &removable), patches(&img, &scene, 0, b, &spots.list, &removable))
+                else {
+                    panic!("kept");
+                };
+                assert!(Arc::ptr_eq(&a, &c), "a tick reuses the patches");
+                assert!(before.iter().all(|old| !Arc::ptr_eq(old, &a)), "a changed pixel makes new patches");
+                before.push(a);
+            }
         }
     }
 

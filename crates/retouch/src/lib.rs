@@ -56,6 +56,13 @@ settings::features! {
     background: background::Background,
 }
 
+/// Drop the work Skin and Blemishes keep between renders of a photo (`memo`): call it when another photo is open,
+/// so the old photo's work (up to about 350 MB) is not held until later renders push it out.
+pub fn forget_kept() {
+    skin::forget_kept();
+    blemish::forget_kept();
+}
+
 /// Every slider of every feature, in panel order.
 pub fn controls() -> impl Iterator<Item = &'static Spec> {
     FEATURES.iter().flat_map(|f| (f.specs)())

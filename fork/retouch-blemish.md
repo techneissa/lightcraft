@@ -55,7 +55,7 @@ How (`crates/retouch/src/blemish.rs`, `blemish/find.rs`):
   earlier one heals from the skin as that one left it, so overlapping repairs never undo each other.
 - **Amount only blends** (issue #234). Every spot the switch lets Amount remove is healed once, at full strength,
   and the repairs are kept (`blemish/repair.rs`, `crates/retouch/src/memo.rs`: by a hash of the box's pixels, the
-  mask, where the image lies and the spots; eight faces, 96 MB). A render blends each spot's repair in by its weight,
+  mask, where the image lies and the spots; 96 MB, one entry per face; dropped when another photo is rendered). A render blends each spot's repair in by its weight,
   so a drag of Amount heals nothing again. At 100 the result is the same, bit for bit, as healing at each render;
   below 100 a spot next to one only partly removed has healed from that one's skin fully healed, not partly. On the
   seven audit portraits at Amount 25, 50 and 75 with the switch off and 60 with it on, the 8-bit pictures differ by
@@ -101,7 +101,8 @@ wider than 3 % of the face) are left to Even Tone.
 
 ## Hooks in official files
 
-- `crates/pipeline/src/lib.rs`: `mod tests_retouch_blemish` (tests only).
+- `crates/pipeline/src/lib.rs`: `mod tests_retouch_blemish` (tests only), and the render cache's `put` dropping the
+  kept repairs with another photo's image before the retouch step (`retouch::forget_kept`, #234).
 
 In fork files:
 - `crates/retouch/src/input.rs`: `Face::spots`, `Spot`, `SpotKind`, `Spots`, in the fingerprint.

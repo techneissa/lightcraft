@@ -12,16 +12,22 @@ use lightcraft_raster::{Rgb32f, par_rows};
 
 use crate::{Part, Scene};
 
-/// Kept work of one kind, the most recent last, within a number of entries and of bytes.
+/// Kept work of one kind, the most recent last, within a number of bytes (no cap on entries: a group photo keeps one
+/// per face, and a cap below the faces would have them push each other out on every tick).
 pub(crate) struct Memo<T> {
     entries: Mutex<Vec<(u64, Arc<T>, usize)>>,
-    most: usize,
     bytes: usize,
 }
 
 impl<T> Memo<T> {
-    pub(crate) const fn new(most: usize, bytes: usize) -> Memo<T> {
-        Memo { entries: Mutex::new(Vec::new()), most, bytes }
+    pub(crate) const fn new(bytes: usize) -> Memo<T> {
+        Memo { entries: Mutex::new(Vec::new()), bytes }
+    }
+
+    /// Drop everything kept (another photo is open: its work is of no use, and would stay until later work pushes
+    /// it out).
+    pub(crate) fn clear(&self) {
+        self.entries.lock().unwrap_or_else(PoisonError::into_inner).clear();
     }
 
     /// The work kept for `key`, or `make`'s (kept when it takes at most half the byte limit, which `size` measures:
@@ -43,7 +49,7 @@ impl<T> Memo<T> {
             let mut c = self.entries.lock().unwrap_or_else(PoisonError::into_inner);
             c.retain(|(k, _, _)| *k != key);
             c.push((key, made.clone(), bytes));
-            while c.len() > self.most || c.iter().map(|e| e.2).sum::<usize>() > self.bytes {
+            while c.iter().map(|e| e.2).sum::<usize>() > self.bytes {
                 c.remove(0);
             }
         }

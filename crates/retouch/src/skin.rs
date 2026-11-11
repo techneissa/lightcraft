@@ -36,6 +36,11 @@ mod grid;
 mod prepared;
 mod shine;
 
+/// Drop the work kept between renders (another photo is open).
+pub(crate) fn forget_kept() {
+    prepared::forget();
+}
+
 /// The pores' size, a fraction of the face: what is finer (pores, fine hairs, grain) is the skin's texture, which
 /// Smoothness keeps and Texture scales.
 pub const PORES: f64 = 0.002;

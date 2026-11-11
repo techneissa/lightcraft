@@ -33,6 +33,11 @@ mod repair;
 
 pub use find::find;
 
+/// Drop the repairs kept between renders (another photo is open).
+pub(crate) fn forget_kept() {
+    repair::forget();
+}
+
 /// Amount reaches the least visible spot at this share of the slider ([`Blemish::weights`]) …
 pub const ORDER: f32 = 0.85;
 /// … and each spot fades in over this share of it.

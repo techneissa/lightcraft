@@ -16,13 +16,17 @@ use super::{COLOUR_EDGE, FEATHER, PORES, SHINE_AROUND, SHINE_SOFT, SMOOTH, Stren
 use crate::memo::{self, Memo};
 use crate::{Part, Scene};
 
-/// Skin work kept: at most this many boxes (a draft, a loupe window and a few more faces) …
-const KEPT: usize = 6;
-/// … and this much memory (about 40 bytes a pixel of the box: two 2.5 MP draft boxes, or six head-and-shoulders
-/// faces; a box past half of it, such as a large export's, is made and not kept).
+/// The memory Skin's kept work may hold, for every face of the photo, the draft's and the loupe's (about 40 bytes a
+/// pixel of a face's box: two 2.5 MP draft boxes, or many head-and-shoulders faces; a box past half of it, such as a
+/// large export's, is made and not kept).
 const KEPT_BYTES: usize = 256 << 20;
 
-static MEMO: Memo<Prepared> = Memo::new(KEPT, KEPT_BYTES);
+static MEMO: Memo<Prepared> = Memo::new(KEPT_BYTES);
+
+/// Drop the kept work (another photo is open).
+pub(super) fn forget() {
+    MEMO.clear();
+}
 
 /// What no Skin slider changes, for one face's box.
 pub(super) struct Prepared {
