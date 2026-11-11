@@ -13,17 +13,33 @@ Four sliders in the Portrait tab's Eyes section, 0 to 100, off at 0, for every f
   (much darker than the whites) are left alone.
 - **Iris**: the Iris mask gets brighter and its texture sharper (luminance only; noise under a threshold is left as
   it is, and a catchlight's dark rim is held back). Cut to the face mesh's iris circles when the face has them.
-- **Dark Circles**: under each eye, the skin's colour, blurred, is taken toward the cheek's mean colour below it:
-  lifting only (at most 1.6×) and turning the colour part of the way, so make-up stays make-up.
-- **Eye Bags**: under each eye, the shading between a fine and a coarse scale (the bag's bulge and the crease below
-  it) is flattened; pores and fine lines are kept.
+- **Dark Circles**: under each eye, the skin's luminance, blurred, is lifted to about the cheek's below it (0.95 of
+  it at 100, at most 6×: a deep circle on dark skin needs 4–5×), and its hue (blue, purple, brown) turned most of the
+  way to the skin's: half the cheek's, half the clean skin's around the place (so a fold beside warm, lit skin takes
+  that colour, not a cooler cheek's). The skin's texture is kept, compressed as the lift grows (a shadow lifted 5×
+  would show its noise 5× as strong). A deep shadow (under 0.15–0.35 of the cheek's luminance) has lost its texture
+  and colour to the camera's noise and compression: as it is lifted it takes the texture of the clean skin 0.7 half
+  eye widths below it, as a healing brush would, and the skin's colour around it, so it never turns into a flat grey
+  patch. The hue turns sooner than the light (by the square root of the slider), so a half-lifted shadow is not grey.
+- **Eye Bags**: under each eye, the shading between a fine (0.025 half eye widths) and a coarse (0.45) scale (the
+  bag's bulge and the crease below it) is flattened; pores are kept. A crease it lifts also takes the colour of the
+  skin around it, as far as its luminance is taken toward that skin's (a shadow in skin is more saturated than the lit
+  skin: lifted alone it would be an orange band, given the lit skin's colour while still dark, a grey one).
 
 Where: Whites and Iris on their part masks (a face without them, closed eyes, is left alone). Dark Circles and Eye
 Bags in crescents under the lower lids, placed from the 478 face mesh points (corners, lower lid, iris) or, without
 the mesh, from YuNet's two eye points, and limited to skin: the Facial Skin mask and, through glasses (the parser puts
-the lenses in Others and takes them out of Facial Skin), the Others mask, either only where a pixel's colour is the
-face's skin colour. Dark lashes, liner and frames, and pale ones (white, silver), are left out of every blur and every
-change, so nothing halos at their edges. A face without Facial Skin, or without both eye points, gets no under-eye
+the lenses in Others and takes them out of Facial Skin), the Others mask. On Facial Skin, every colour counts as skin
+however dark or off-colour it is (a dark circle is skin; issue #203: the old darkness and hue checks took the circle
+itself for lashes and left it alone); through glasses only colours like the skin's (a frame is far darker or off-hue),
+and with no plain skin under the eye (the lens covers it all), the skin seen through the lens gives the skin's colour.
+Lashes, liner and a frame's edge are kept out by their shape and place, not their darkness: in a cell, a sample far
+darker than the cell's other samples; across cells, a line up to two cells wide much darker than a closing of the
+skin around it (and the cells beside it, which blur into it); on a pixel, near the lid (up to 0.3–0.5 half eye widths
+below it) or through glasses, a line (dark along one of four directions, not a speck of grain) under 0.3–0.55 of the
+skin's level around it. Pale, off-hue colours (a white or silver frame, a highlight) are left out too. The eye's masks
+and the lid line from the mesh keep the eye out; beside the corners the crescent starts lower, below the lid's dark
+rim. So nothing halos at their edges, and lashes keep their pixels. A face without Facial Skin, or without both eye points, gets no under-eye
 change; nor does a face whose eyes the landmarks put outside its box. A lid point the mesh throws far away is held
 within the eye's size.
 
@@ -79,7 +95,9 @@ tries the sliders on a picture with them.
 `fork/tests.d/retouch-eyes.txt`. They cover: off and every slider at 0 giving the original pixels bit for bit; each
 slider keeping to its own area, and every pixel away from the eyes keeping its bits with all four at 100; whites
 brighter and greyer with a vein fading but still there; a brighter iris; dark circles lifted and turned toward the
-skin, never darkening a channel (also under-eye skin as light as the cheek but redder); the bag's shading flattened;
+skin, never darkening a channel; a deep purple circle at 0.4 of the cheek's luminance under one-pixel dark lashes lifted
+to at least 0.8 of it with its colour's distance halved, every lash pixel kept (issue #203: the circle was left as it
+was before) (also under-eye skin as light as the cheek but redder); the bag's shading flattened;
 no halo beside a dark line (a lash, a frame); a pale neutral frame not lifted, as Facial Skin or as glasses; a lid
 point at 1e6 and 1e20 px (overflowed before); a draft and an export four times its size agreeing after scaling,
 tighter inside the crescents; closed eyes; glasses (skin through the lens lifted, a dark frame unchanged); no faces,

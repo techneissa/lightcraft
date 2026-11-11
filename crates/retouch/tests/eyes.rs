@@ -476,3 +476,64 @@ fn eyes_reads_skin_glasses_whites_and_iris() {
     let kept = lightcraft_retouch::parts_read();
     assert!(Eyes::PARTS.iter().all(|p| kept.contains(p)));
 }
+
+/// Issue #203: a purple dark circle at about 0.4 of the cheek's luminance, under dark lower lashes. Dark Circles at
+/// 100 lifts the circle to at least 0.8 of the cheek's luminance and halves its colour's distance to the cheek's,
+/// and leaves every lash pixel as it was. (Before, the circle was taken for "not skin", too dark and off-colour,
+/// and was left as it was.)
+#[test]
+fn a_deep_purple_circle_is_lifted_and_the_lashes_kept() {
+    const PURPLE: [f32; 3] = [0.21, 0.13, 0.18];
+    const LASH: [f32; 3] = [0.02, 0.015, 0.012];
+    // in pixels: the eye's half width, and how far below the eye's centre the lid is at `a` (YuNet's lid: 0.3 at the
+    // middle)
+    let half = HALF * W as f64;
+    let lid = |a: f64| 0.3 * (1.0 - a * a).max(0.0) * half;
+    let band = |nx: f64, ny: f64| {
+        EYES.iter().map(|c| ellipse(nx, ny, (c.0, c.1 + 0.75 * half / H as f64), HALF * 0.85, 0.3 * half / H as f64, 0.3)).fold(0.0, f32::max)
+    };
+    // lower lashes: one pixel wide, from the lid down 0.22 half widths, every 0.15 half widths across the middle
+    let lash = |x: usize, y: usize| {
+        EYES.iter().any(|c| {
+            let a = (x as f64 + 0.5 - c.0 * W as f64) / half;
+            let below = y as f64 + 0.5 - c.1 * H as f64 - lid(a);
+            let k = (a / 0.15).round();
+            a.abs() < 0.8 && ((a - k * 0.15) * half).abs() < 0.5 && (0.0..0.22 * half).contains(&below)
+        })
+    };
+    let img = Rgb32f::from_fn(W, H, |x, y| {
+        let (nx, ny) = ((x as f64 + 0.5) / W as f64, (y as f64 + 0.5) / H as f64);
+        if lash(x, y) {
+            return LASH;
+        }
+        let t = band(nx, ny);
+        let skin: [f32; 3] = std::array::from_fn(|k| SKIN[k] + (PURPLE[k] - SKIN[k]) * t);
+        let (w, i) = (whites_at(nx, ny), iris_at(nx, ny));
+        let mix = |a: [f32; 3], b: [f32; 3], t: f32| std::array::from_fn(|k| a[k] + (b[k] - a[k]) * t);
+        mix(mix(skin, WHITES, w), IRIS, i)
+    });
+    let out = retouched(&img, &eyes(0.0, 0.0, 100.0, 0.0), vec![full()]);
+    let hue = |q: [f32; 3]| {
+        let (n, m) = (q.iter().sum::<f32>(), SKIN.iter().sum::<f32>());
+        (0..3).map(|k| (q[k] / n - SKIN[k] / m).powi(2)).sum::<f32>().sqrt()
+    };
+    for c in EYES {
+        // the circle's middle, under the lashes
+        let p = (c.0, c.1 + 0.75 * half / H as f64);
+        let (a, b) = (at(&img, p.0, p.1), at(&out, p.0, p.1));
+        assert!(luma(a) < 0.45 * luma(SKIN), "the test's circle is deep: {a:?}");
+        assert!(luma(b) >= 0.8 * luma(SKIN), "circle {a:?} → {b:?}, cheek {SKIN:?}");
+        assert!(hue(b) <= 0.5 * hue(a), "colour's distance to the cheek's: {} → {}", hue(a), hue(b));
+    }
+    let mut lashes = 0;
+    for y in 0..H {
+        for x in 0..W {
+            if lash(x, y) {
+                let i = y * W + x;
+                assert!(same(img.data[i], out.data[i]), "lash pixel ({x}, {y}) changed: {:?} → {:?}", img.data[i], out.data[i]);
+                lashes += 1;
+            }
+        }
+    }
+    assert!(lashes > 50, "{lashes} lash pixels");
+}

@@ -145,9 +145,12 @@ pub mod weights {
         let w = match area {
             Area::Whites | Area::Iris => 1.0,
             Area::DarkCircles => {
-                // a crescent: deepest under the middle and the inner corner (the tear trough), shallow at the sides
-                let deep = 0.95 * (1.0 - 0.35 * a * a).max(0.2);
-                window(a, -1.25, -0.6, 0.95, 1.4) * smoothstep(LID_GAP, LID_GAP + 0.3, t) * (1.0 - smoothstep(0.45 * deep, deep, t))
+                // a crescent from just below the lashes: deepest under the middle and the inner corner (the tear
+                // trough), shallow at the sides; the skin's own level decides how much of it is lifted
+                // (beside the corners it starts lower: the lid's dark rim and the corner's shadow reach below them)
+                let deep = 1.3 * (1.0 - 0.3 * a * a).max(0.25);
+                let corner = 0.3 * smoothstep(0.8, 1.2, a.abs());
+                window(a, -1.3, -0.65, 0.95, 1.4) * smoothstep(LID_GAP + corner, LID_GAP + 0.18 + corner, t) * (1.0 - smoothstep(0.6 * deep, deep, t))
             }
             Area::EyeBags => {
                 let deep = 1.45 * (1.0 - 0.3 * a * a).max(0.25);
