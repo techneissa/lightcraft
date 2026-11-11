@@ -1059,7 +1059,7 @@ pub fn render(
     }
     // the alpha a mask overlay shows: copied out before the readback below submits
     let overlay_mask = req.overlay.mask(s).map(|m| {
-        let list = s.masks.iter().filter(|m| m.visible && !m.components.is_empty());
+        let list = s.masks.iter().filter(|m| m.renders());
         match (list.map(|m| m.id).position(|id| id == m.id), masks.as_ref()) {
             (Some(mi), Some(all)) => Ok(cx.slice(all, mi * n, n)),
             _ => Err(m),
@@ -1071,7 +1071,7 @@ pub fn render(
     // on the CPU, instead of one synchronous readback per mask (which stalls the pipeline N times).
     let all_overlay_alphas: Option<Vec<Plane>> = if matches!(req.overlay, lightcraft_pipeline::Overlay::AllMasks { .. }) {
         masks.as_ref().map(|all| {
-            let list: Vec<_> = s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();
+            let list: Vec<_> = s.masks.iter().filter(|m| m.renders()).collect();
             if list.is_empty() {
                 return Vec::new();
             }
@@ -1351,7 +1351,7 @@ fn mask_planes(
         return PlanesOut { signature, planes: Some(Vec::new()) };
     }
     // the device's stack holds the visible masks, in order
-    let visible: Vec<_> = plan.settings.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();
+    let visible: Vec<_> = plan.settings.masks.iter().filter(|m| m.renders()).collect();
     let mut out = Vec::new();
     let mut host: Option<(Rgb32f, Plane)> = None;
     for m in wanted(&plan.settings.masks, ask.want) {

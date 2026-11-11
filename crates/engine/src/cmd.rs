@@ -5,6 +5,7 @@
 //! `edit.*` (undo/redo), and queries (`catalog.query`, `photo.inspect`, `develop.get`…).
 
 mod activity;
+mod adaptive;
 mod before;
 mod birefnet;
 mod book;
@@ -199,6 +200,7 @@ pub fn command_specs() -> &'static [CommandSpec] {
         v.extend(select_people::specs());
         v.extend(hair_edges::specs());
         v.extend(decontaminate::specs());
+        v.extend(adaptive::specs());
         v.extend(organize::specs());
         v.extend(parse_ahead::specs());
         v.extend(keywords::specs());

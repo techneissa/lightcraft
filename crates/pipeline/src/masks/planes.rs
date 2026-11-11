@@ -40,7 +40,7 @@ pub fn wanted(masks: &[Mask], want: MaskWant) -> impl Iterator<Item = &Mask> {
     masks.iter().filter(move |m| {
         !m.components.is_empty()
             && match want {
-                MaskWant::All => m.visible,
+                MaskWant::All => m.visible && !m.is_waiting(),
                 MaskWant::One(id) => id == m.id,
             }
     })

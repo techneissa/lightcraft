@@ -310,6 +310,16 @@ pub struct Preset {
 
 impl Preset {
     pub fn from_settings(id: &str, name: &str, group: &str, s: &DevelopSettings, groups: &[SettingsGroup]) -> Preset {
+        // (fork, `fork/adaptive-masks.md`: an AI mask part carries what it selects, never this photo's selection)
+        let stripped;
+        let s = if s.masks.iter().any(|m| m.components.iter().any(|c| c.shape.is_detected())) {
+            let mut d = s.clone();
+            crate::adaptive::strip_found(&mut d.masks);
+            stripped = d;
+            &stripped
+        } else {
+            s
+        };
         let mut settings = extract_groups(s, groups);
         // (fork, `fork/retouch-background.md`: a preset never carries a Background Swap picture of this library)
         if let Some(r) = settings.get_mut(crate::retouch::KEY) {
@@ -347,12 +357,18 @@ impl Preset {
 }
 
 /// The preset's masks, added to the photo's own (ones it already has are skipped), their effect
-/// scaled by the amount.
+/// scaled by the amount. Their AI parts wait to be found on this photo (fork, `fork/adaptive-masks.md`): a preset
+/// saved before carries the selection of the photo it was made from, which is not this one's.
 fn add_masks(out: &mut DevelopSettings, masks: &[Value], amount: f64) {
     for m in masks {
         let Ok(mut m) = serde_json::from_value::<crate::Mask>(m.clone()) else { continue };
-        if out.masks.iter().any(|q| q.name == m.name && q.components == m.components) {
+        if out.masks.iter().any(|q| q.name == m.name && crate::adaptive::same_parts(&q.components, &m.components)) {
             continue;
+        }
+        for c in &mut m.components {
+            if c.shape.is_detected() {
+                c.shape.set_waiting();
+            }
         }
         m.id = out.next_mask_id();
         m.adjust.amount = (m.adjust.amount * amount).clamp(0.0, 200.0);

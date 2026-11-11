@@ -250,7 +250,7 @@ pub(crate) fn masks(
 ) -> (Option<Buf>, Vec<[f32; MASK_TERMS]>) {
     use lightcraft_develop::{MaskOp, MaskShape};
     let s = &*plan.settings;
-    let list: Vec<_> = s.masks.iter().filter(|m| m.visible && !m.components.is_empty()).collect();
+    let list: Vec<_> = s.masks.iter().filter(|m| m.renders()).collect();
     if list.is_empty() {
         return (None, Vec::new());
     }

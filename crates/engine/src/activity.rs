@@ -317,6 +317,12 @@ impl Activity {
         self.register(kind, label, cancel, None, true, false)
     }
 
+    /// [`Activity::start_batch`] for work the app starts by itself over many photos ([`Activity::start_background`]):
+    /// shown in the ring, its photos counted (fork: AI masks found again on pasted photos, `fork/adaptive-masks.md`).
+    pub fn start_background_batch(&self, kind: &'static str, label: &str, cancel: Cancel) -> TaskGuard {
+        self.register(kind, label, cancel, None, true, true)
+    }
+
     /// Register a row under row `parent` (one photo of a batch), background when its parent is. A `parent` that has
     /// ended meanwhile makes it a row of its own.
     pub fn start_child(&self, parent: u64, kind: &'static str, label: &str, cancel: Cancel) -> TaskGuard {

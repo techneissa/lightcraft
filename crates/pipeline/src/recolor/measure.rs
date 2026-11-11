@@ -149,7 +149,7 @@ pub(crate) fn references(
 ) -> Vec<(u32, Reference)> {
     type Entry = (u64, u64, Vec<(u32, Reference)>);
     static CACHE: Mutex<Vec<Entry>> = Mutex::new(Vec::new());
-    let on: Vec<&Mask> = s.masks.iter().filter(|m| m.visible && !m.components.is_empty() && is_on(&m.adjust) && m.adjust.amount > 0.0).collect();
+    let on: Vec<&Mask> = s.masks.iter().filter(|m| m.renders() && is_on(&m.adjust) && m.adjust.amount > 0.0).collect();
     if on.is_empty() || src.width == 0 || src.height == 0 {
         return Vec::new();
     }
