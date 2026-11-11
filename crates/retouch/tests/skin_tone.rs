@@ -158,6 +158,52 @@ fn redness_lowers_a_red_patch_and_leaves_the_skin_around_it() {
     assert!(img.data[j].iter().zip(&out.data[j]).all(|(a, b)| (a / b - 1.0).abs() < 0.01), "{:?} → {:?}", img.data[j], out.data[j]);
 }
 
+/// A face lit from one side with a dark blotch (35 % darker at its middle) and a red patch: at 100, Even Tone takes
+/// most of the blotch away and Redness most of the red, while the light across the face stays (issue #205: the
+/// blotch was kept as "structure" and only half the red went).
+#[test]
+fn top_even_tone_and_redness_remove_a_blotch_and_a_red_patch_and_keep_the_shading() {
+    let (w, h) = (240, 240);
+    let bump = |x: usize, y: usize, cx: f32, cy: f32, s: f32| {
+        let (dx, dy) = (x as f32 - cx, y as f32 - cy);
+        (-(dx * dx + dy * dy) / (2.0 * s * s)).exp()
+    };
+    // the light: from 0.6 on the left to 1.2 on the right of the face
+    let light = |x: usize| 0.6 + 0.6 * x as f32 / w as f32;
+    let img = Rgb32f::from_fn(w, h, |x, y| {
+        let dark = 1.0 - 0.35 * bump(x, y, 90.0, 100.0, 6.0);
+        let red = bump(x, y, 150.0, 140.0, 7.0);
+        let g = grain(x, y) * light(x) * dark;
+        [SKIN[0] * (1.0 + 0.25 * red) * g, SKIN[1] * (1.0 - 0.12 * red) * g, SKIN[2] * (1.0 - 0.1 * red) * g]
+    });
+    let out = retouched(&img, &with(100.0, 100.0, 0.0), vec![skin_face(0.0, 0.0, 1.0, 1.0)]);
+    let lum = |p: [f32; 3]| 0.2627 * p[0] + 0.678 * p[1] + 0.0593 * p[2];
+    // mean log luminance and log red over green in a disc, and in the ring round it
+    let disc = |i: &Rgb32f, cx: usize, cy: usize, r0: f32, r1: f32| {
+        let (mut l, mut rg, mut n) = (0.0f32, 0.0f32, 0.0f32);
+        for y in cy - 30..cy + 30 {
+            for x in cx - 30..cx + 30 {
+                let d = ((x as f32 - cx as f32).powi(2) + (y as f32 - cy as f32).powi(2)).sqrt();
+                if d >= r0 && d < r1 {
+                    let p = i.data[y * w + x];
+                    (l, rg, n) = (l + lum(p).ln(), rg + (p[0] / p[1]).ln(), n + 1.0);
+                }
+            }
+        }
+        (l / n, rg / n)
+    };
+    let contrast = |i: &Rgb32f| disc(i, 90, 100, 15.0, 22.0).0 - disc(i, 90, 100, 0.0, 4.0).0;
+    let redness = |i: &Rgb32f| disc(i, 150, 140, 0.0, 4.0).1 - disc(i, 150, 140, 18.0, 25.0).1;
+    let (c0, c1) = (contrast(&img), contrast(&out));
+    assert!(c1 < c0 * 0.4, "the blotch's darkness: {c0} → {c1}");
+    let (r0, r1) = (redness(&img), redness(&out));
+    assert!(r1 < r0 * 0.1, "the patch's excess red: {r0} → {r1}");
+    // the light across the face: left against right, away from both
+    let side = |i: &Rgb32f| disc(i, 200, 60, 0.0, 10.0).0 - disc(i, 45, 190, 0.0, 10.0).0;
+    let (s0, s1) = (side(&img), side(&out));
+    assert!((s1 - s0).abs() < 0.03, "the shading: {s0} → {s1}");
+}
+
 #[test]
 fn face_light_lights_the_face_with_a_soft_edge_and_nothing_outside_it() {
     let (w, h) = (200, 200);
@@ -277,29 +323,30 @@ fn a_flat_grey_photo_and_a_one_pixel_photo() {
 fn a_draft_and_a_bigger_export_agree_after_scaling() {
     let faces = vec![skin_face(0.1, 0.1, 0.6, 0.9), skin_face(0.55, 0.2, 0.95, 0.8)];
     let (w, h) = (100, 80);
-    let r = with(100.0, 100.0, 60.0);
     // the same picture at both sizes: the export's pixels are 4 × 4 copies of the draft's
     let small = blotchy(w, h);
     let big = Rgb32f::from_fn(w * 4, h * 4, |x, y| small.data[(y / 4) * w + x / 4]);
-    let (draft, export) = (retouched(&small, &r, faces.clone()), retouched(&big, &r, faces));
-    let (mut worst, mut sum) = (0.0f32, 0.0f32);
-    for y in 0..h {
-        for x in 0..w {
-            let mut acc = [0.0f32; 3];
-            for dy in 0..4 {
-                for dx in 0..4 {
-                    let p = export.data[(y * 4 + dy) * w * 4 + x * 4 + dx];
-                    acc = [acc[0] + p[0], acc[1] + p[1], acc[2] + p[2]];
+    for r in [with(100.0, 0.0, 0.0), with(0.0, 100.0, 0.0), with(0.0, 0.0, 60.0), with(100.0, 100.0, 60.0)] {
+        let (draft, export) = (retouched(&small, &r, faces.clone()), retouched(&big, &r, faces.clone()));
+        let (mut worst, mut sum) = (0.0f32, 0.0f32);
+        for y in 0..h {
+            for x in 0..w {
+                let mut acc = [0.0f32; 3];
+                for dy in 0..4 {
+                    for dx in 0..4 {
+                        let p = export.data[(y * 4 + dy) * w * 4 + x * 4 + dx];
+                        acc = [acc[0] + p[0], acc[1] + p[1], acc[2] + p[2]];
+                    }
                 }
+                let d = draft.data[y * w + x];
+                let e = (0..3).map(|k| (acc[k] / 16.0 / d[k].max(1e-6) - 1.0).abs()).fold(0.0f32, f32::max);
+                worst = worst.max(e);
+                sum += e;
             }
-            let d = draft.data[y * w + x];
-            let e = (0..3).map(|k| (acc[k] / 16.0 / d[k].max(1e-6) - 1.0).abs()).fold(0.0f32, f32::max);
-            worst = worst.max(e);
-            sum += e;
         }
+        let mean = sum / (w * h) as f32;
+        assert!(mean < 0.01 && worst < 0.08, "mean difference {mean}, worst {worst}");
     }
-    let mean = sum / (w * h) as f32;
-    assert!(mean < 0.01 && worst < 0.08, "mean difference {mean}, worst {worst}");
 }
 
 /// The face search keeps only the masks a feature lists in `PARTS`: every part Skin Tone reads is there.
@@ -321,7 +368,7 @@ fn a_saved_amount_reads_as_face_light() {
     assert!(serde_json::to_string(&old).unwrap().contains("\"faceLight\":80"));
 }
 
-/// A face under 128 pixels in the draft (its grid's cells are then a whole pixel, coarser than 1/128 of the face)
+/// A face under 160 pixels in the draft (its grid's cells are then a whole pixel, coarser than 1/160 of the face)
 /// still makes the change its export four times larger makes.
 #[test]
 fn a_small_face_in_the_draft_agrees_with_the_export() {
@@ -352,4 +399,55 @@ fn a_small_face_in_the_draft_agrees_with_the_export() {
         let mean = sum / n.max(1) as f32;
         assert!(n > 200 && mean < 0.01 && worst < 0.05, "{n} changed, mean difference {mean}, worst {worst}");
     }
+}
+
+/// A face about 100 pixels tall in the draft with stubble (dense dark hairs finer than a draft pixel): the draft is
+/// the export scaled down, and Even Tone at 100 keeps the stubble in both alike (issue #230: the draft's one-pixel
+/// cells had no variance, so its stubble guard was off and the stubble's shadow was evened there only).
+#[test]
+fn a_small_face_keeps_its_stubble_alike_in_the_draft_and_the_export() {
+    let (w, h) = (160, 128);
+    let face = vec![skin_face(0.2, 0.1, 0.8, 0.9)];
+    // the export: skin with grain, and stubble over the lower half of the face (2 × 2 pixel hairs, darker and
+    // cooler than the skin, on about a third of the places)
+    let big = Rgb32f::from_fn(w * 4, h * 4, |x, y| {
+        let g = grain(x / 4, y / 4);
+        let (u, v) = (x as f32 / (w * 4) as f32, y as f32 / (h * 4) as f32);
+        let hair = v > 0.55 && v < 0.85 && (u - 0.5).abs() < 0.22 && {
+            let k = ((x / 2) as u32).wrapping_mul(2_654_435_761) ^ ((y / 2) as u32).wrapping_mul(40_503);
+            k.is_multiple_of(3)
+        };
+        let p = [SKIN[0] * g, SKIN[1] * g, SKIN[2] * g];
+        if hair { [p[0] * 0.3, p[1] * 0.33, p[2] * 0.42] } else { p }
+    });
+    // the draft: the export averaged over 4 × 4 pixels
+    let small = Rgb32f::from_fn(w, h, |x, y| {
+        let mut acc = [0.0f32; 3];
+        for dy in 0..4 {
+            for dx in 0..4 {
+                let p = big.data[(y * 4 + dy) * w * 4 + x * 4 + dx];
+                acc = [acc[0] + p[0], acc[1] + p[1], acc[2] + p[2]];
+            }
+        }
+        acc.map(|v| v / 16.0)
+    });
+    let r = with(100.0, 0.0, 0.0);
+    let (draft, export) = (retouched(&small, &r, face.clone()), retouched(&big, &r, face));
+    let (mut worst, mut sum) = (0.0f32, 0.0f32);
+    for y in 0..h {
+        for x in 0..w {
+            let mut acc = [0.0f32; 3];
+            for dy in 0..4 {
+                for dx in 0..4 {
+                    let p = export.data[(y * 4 + dy) * w * 4 + x * 4 + dx];
+                    acc = [acc[0] + p[0], acc[1] + p[1], acc[2] + p[2]];
+                }
+            }
+            let d = draft.data[y * w + x];
+            let e = (0..3).map(|k| (acc[k] / 16.0 / d[k].max(1e-6) - 1.0).abs()).fold(0.0f32, f32::max);
+            (worst, sum) = (worst.max(e), sum + e);
+        }
+    }
+    let mean = sum / (w * h) as f32;
+    assert!(mean < 0.01 && worst < 0.08, "mean difference {mean}, worst {worst}");
 }

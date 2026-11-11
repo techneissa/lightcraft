@@ -5,7 +5,7 @@ use lightcraft_raster::Image;
 use lightcraft_raster::resample::Pixel;
 
 /// Most cells a grid may have (a face far larger than the picture, or a huge body mask, gets coarser cells).
-const MAX_CELLS: f64 = (1 << 20) as f64;
+const MAX_CELLS: f64 = (1 << 18) as f64;
 
 /// A grid of `gw × gh` cells of `cell` pixels over the image region `[x0, x0 + w) × [y0, y0 + h)`.
 #[derive(Clone, Copy, Debug, PartialEq)]
