@@ -19,3 +19,4 @@ mod shaped_spot;
 mod spot_cache;
 mod spot_reuse;
 mod thumbs_bench;
+mod warped_masks;

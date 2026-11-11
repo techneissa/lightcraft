@@ -229,7 +229,15 @@ impl Warp {
 
     /// Transformed px → source px for plane `ch`.
     pub fn to_source(&self, p: Point, ch: usize) -> Point {
-        self.corrected_to_source(self.to_corrected(p), ch)
+        self.reshaped(self.to_source_unreshaped(p, ch))
+    }
+
+    /// [`Warp::to_source`] without the Face Reshape: the smooth lens and perspective part alone, which a mask's position
+    /// grid interpolates (`masks::grid`).
+    pub fn to_source_unreshaped(&self, p: Point, ch: usize) -> Point {
+        let c = self.to_corrected(p);
+        let (x, y) = self.corrected_to_source_real(c.x, c.y, ch);
+        Point::new(x, y)
     }
 
     /// Source px → transformed px (green plane): the inverse of [`Warp::to_source`], by Newton's

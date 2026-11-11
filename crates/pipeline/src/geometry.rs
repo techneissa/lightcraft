@@ -435,6 +435,16 @@ pub struct MaskMap {
 }
 
 impl MaskMap {
+    /// The warp's source position (px, before a Face Reshape) for output position `p`; `None` without a warp.
+    pub(crate) fn warped_px(&self, p: Point) -> Option<Point> {
+        self.warp.as_ref().map(|w| w.to_source_unreshaped(self.o2t.apply(p), 1))
+    }
+
+    /// The warp positions go through, if any.
+    pub(crate) fn warp(&self) -> Option<&Warp> {
+        self.warp.as_ref()
+    }
+
     /// The mask coordinates at output position `p` (px; pixel centres at `x + 0.5`).
     #[inline]
     pub fn apply(&self, p: Point) -> Point {
