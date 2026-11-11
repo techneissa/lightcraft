@@ -37,6 +37,13 @@ or background. Every blur reads the skin only (weighted by the
 mask), the change is weighted by the mask, and pixels outside it never change. The grid's size is a fixed fraction
 of the face, so a draft and an export make the same change.
 
+Kept between renders (`skin/prepared.rs`, issue #234): what no slider changes (the mask over the box, the
+pore-free skin, Shine's map per pixel, the fade from the mask's edge) is made once for the pixels the step gets, the
+mask and where the image lies (`crates/retouch/src/memo.rs`: a hash of the box's pixels and of the mask), and kept
+(six boxes, 256 MB; a box past half of that, such as a large export's, is made and dropped). A tick of Texture or
+Shine then runs only the last per-pixel pass; a tick of Smoothness also rebuilds its grid, which is small. The result
+is the same, bit for bit, as making everything each render (the seven audit portraits, two settings each).
+
 Shine (`skin/shine.rs`, issue #209): the skin around each pixel is a blur over 5 % of the face that counts only skin
 within about the usual spread of light of that place (a first blur gives the usual light and its spread), so the
 shine itself, a beard or a shadow does not pull it up or down. A pixel 1.08× brighter than it starts to count, 1.5×
@@ -52,14 +59,16 @@ nostril or the face's shadow anywhere in the 3 % window marked the flat cheek be
 next to every edge stayed uneven, and the low-key p5 hardly changed. A log per colour channel turned the near-zero
 blue of warm skin into noise.
 
-Speed (a test Mac under heavy load from other work, release, one face, all three sliders on, fastest of 30, draft
-1936 px): about 2× the earlier version's work. 7.8 ms on a head-and-shoulders portrait (earlier 3.5 ms), 22 ms on a
-face filling a portrait frame (13 ms), 44 ms on a face filling a landscape frame (20 ms); single-threaded 18 / 71 /
-151 ms (8 / 35 / 86 ms). The step runs on the CPU (on the GPU, a retouched photo's scene-linear stage already runs
-on the CPU), on the parse's cached masks; no model runs while a slider moves.
+Speed (a test Mac under heavy load from other work, load average 24–33, release, draft 1936 px, p1 of the audit,
+the largest face: its mask's box 1229 × 1289): with all three sliders on, a render took 62 ms (fastest of 10) before
+the work was kept; a tick of a drag now takes 19 ms for Smoothness, 9 ms for Texture and 18 ms for Shine (fastest
+of 9 ticks); the first render of a photo still takes the full time. A profile of a Smoothness tick: the last
+per-pixel pass is about nine tenths of it, the grid and the two hashes the rest. The step runs on the CPU (on the
+GPU, a retouched photo's scene-linear stage already runs on the CPU), on the parse's cached masks; no model runs
+while a slider moves.
 
-A Refine brush per feature comes later (#99): `skin_mask` in `skin.rs` is where its strokes will be applied to the
-mask.
+A Refine brush per feature comes later (#99): `Prepared::new` in `skin/prepared.rs`, where the mask is read, is where
+its strokes will be applied to the mask.
 
 ## Branch
 
@@ -67,12 +76,14 @@ mask.
 
 ## Own files
 
-`crates/retouch/src/skin.rs`, `crates/retouch/src/skin/grid.rs`, `crates/retouch/src/skin/shine.rs`, `crates/retouch/examples/skin.rs`, `crates/retouch/tests/skin.rs`,
+`crates/retouch/src/skin.rs`, `crates/retouch/src/skin/grid.rs`, `crates/retouch/src/skin/shine.rs`,
+`crates/retouch/src/skin/prepared.rs`, `crates/retouch/src/memo.rs` (with Blemishes), `crates/retouch/examples/skin.rs`, `crates/retouch/tests/skin.rs`,
 `crates/ui-egui/src/panels/portrait/skin.rs`, `fork/retouch-skin.md`, `fork/tests.d/retouch-skin.txt`
 
 ## Hooks in official files
 
 None. In fork files:
+- `crates/retouch/src/lib.rs`: `mod memo` (the work Skin and Blemishes keep between renders).
 - The stub's control `retouch.skin.amount` is now `retouch.skin.smoothness`: renamed in the foundation's tests
   (`crates/retouch/tests/foundation.rs`, `crates/develop/src/retouch.rs`, `crates/engine/src/retouch_input/tests.rs`,
   `crates/mcp/src/tests_retouch.rs`, `crates/pipeline/src/retouch_step.rs`) and in a doc comment of
@@ -98,4 +109,5 @@ far less; Shine bringing a bluish spot on skin lit from one side toward the skin
 retouched inside the photo; a draft and an export four times its size making the same change (within 15 %), and
 Texture on a 250 px face, its pores half a pixel wide, against a 1000 px export (fine blurs under 2 px use exact
 Gaussian taps); a face with its own settings being the only one retouched; a face too big for full-size work
-retouched reduced; the Skin section's three sliders and a click setting Smoothness.
+retouched reduced; a drag of every slider on the kept work giving the bits of a fresh run, and a changed pixel not
+answered from the work kept for the old ones; the Skin section's three sliders and a click setting Smoothness.

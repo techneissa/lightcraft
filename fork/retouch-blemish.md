@@ -41,7 +41,7 @@ How (`crates/retouch/src/blemish.rs`, `blemish/find.rs`):
 - **Kept with the masks.** The engine finds the spots with the people parse, on the parse's picture (2048 px, in
   linear light, turned like the masks), and keeps them with each face (`Face::spots`). A render, the loupe and an
   export all repair the same spots; the Amount slider only changes each spot's weight.
-- **Repair, every render** (`blemish/heal.rs`), in two layers split at the pore scale (a Gaussian of 0.2 % of the
+- **Repair, once per photo and setting of the switch** (`blemish/heal.rs`, `blemish/repair.rs`), in two layers split at the pore scale (a Gaussian of 0.2 % of the
   face, the split Skin Smoothness uses): the **tone** inside the spot is rebuilt from the ring of skin 2.6 radii
   out, each pixel interpolated along eight lines through it between the two points where each meets the ring,
   weighted towards lines whose ends match, so a crease or gradient through the spot carries on through it; ring
@@ -53,6 +53,14 @@ How (`crates/retouch/src/blemish.rs`, `blemish/find.rs`):
   mask, and donor pixels count as far as they are skin, so no colour from hair, brows, lips or the background
   comes in at the hairline or the jaw. Spots whose repairs read apart heal together in parallel; a spot near an
   earlier one heals from the skin as that one left it, so overlapping repairs never undo each other.
+- **Amount only blends** (issue #234). Every spot the switch lets Amount remove is healed once, at full strength,
+  and the repairs are kept (`blemish/repair.rs`, `crates/retouch/src/memo.rs`: by a hash of the box's pixels, the
+  mask, where the image lies and the spots; eight faces, 96 MB). A render blends each spot's repair in by its weight,
+  so a drag of Amount heals nothing again. At 100 the result is the same, bit for bit, as healing at each render;
+  below 100 a spot next to one only partly removed has healed from that one's skin fully healed, not partly. On the
+  seven audit portraits at Amount 25, 50 and 75 with the switch off and 60 with it on, the 8-bit pictures differ by
+  at most 0.003 levels on average, more than 2 levels on at most 0.04 % of the pixels, and by at most 45 levels
+  on a few pixels of one spot's pores (p2 at 25); at 1:1 the two look the same.
 - **Donor** (found with the spots): of 16 places 3 and 3.5 radii away (so the copied patch never takes in the spot),
   the one with skin all around, clear of other spots' heals, answering least at the spot's size, and closest to
   the skin around the spot in tone and in fine texture.
@@ -62,9 +70,12 @@ How (`crates/retouch/src/blemish.rs`, `blemish/find.rs`):
 
 Speed (a test Mac, release, measured while other builds loaded it, so rough): finding the spots of one face on the
 2048 px parse picture 20–400 ms on the seven CC0 audit portraits (#204; the freckled face, 800 spots, 86–370 ms),
-after Stray Hair's strand search, which the face search runs anyway. Repair (the slider): 9–15 ms on a 1936 px
-draft of p1, p2 and p4 (180–200 spots), 44 ms for p3's 807 spots with Keep Moles and Freckles off. The repair walks only each spot's neighbourhood, never the whole face. No model
-runs.
+after Stray Hair's strand search, which the face search runs anyway. Repair: healing p3's 771 spots with Keep Moles
+and Freckles off took 53 ms per render on a 1936 px draft (load average about 30); now a tick of Amount takes
+about 2 ms, and only the first render of the photo heals. Healing looks for the other spots near a point in a grid of
+cells (`repair::Near`) and reads the mask from one plane over the box, instead of asking every spot and sampling
+the mask for each pixel, which took about two fifths of it. The repair walks only each spot's neighbourhood, never
+the whole face. No model runs.
 
 A Refine brush per feature comes later (#99): `Blemish::weights` gives one weight per spot, which its strokes will
 scale.
@@ -81,8 +92,9 @@ wider than 3 % of the face) are left to Even Tone.
 
 ## Own files
 
-`crates/retouch/src/blemish.rs`, `crates/retouch/src/blemish/find.rs`, `crates/retouch/src/blemish/find/` (`traits.rs`,
-`classify.rs`, `strands.rs`), `crates/retouch/examples/blemish.rs`,
+`crates/retouch/src/blemish.rs`, `crates/retouch/src/blemish/heal.rs`, `crates/retouch/src/blemish/repair.rs`,
+`crates/retouch/src/memo.rs` (with Skin), `crates/retouch/src/blemish/find.rs`, `crates/retouch/src/blemish/find/`
+(`traits.rs`, `classify.rs`, `strands.rs`), `crates/retouch/examples/blemish.rs`,
 `crates/retouch/tests/blemish.rs`, `crates/pipeline/src/tests_retouch_blemish.rs`,
 `crates/ui-egui/src/panels/portrait/blemish.rs`, `fork/retouch-blemish.md`,
 `fork/tests.d/retouch-blemish.txt`
@@ -115,4 +127,6 @@ repairing the same spots the same way,
 and the same spots found at both sizes; a face whose provider found no spots left alone (no detection in a render)
 and a larger Amount removing at least as much; the report's counts and area; a flat grey photo staying flat; a face
 cut by the photo's edge; no faces, 50 faces, a 1 × 1 and an empty photo; the parse's faces getting their spots
-(also on a turned photo) and none without a skin mask; the section's slider, switch and report.
+(also on a turned photo) and none without a skin mask; a drag of Amount on the kept repairs giving the bits of a fresh
+heal, with the switch on and off; the spot grid finding what a look at every spot finds (batches and points inside
+other spots); the section's slider, switch and report.

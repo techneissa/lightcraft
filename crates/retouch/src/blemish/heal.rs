@@ -11,8 +11,9 @@
 //! Inside [`CORE`] radii the healed skin replaces the spot; out to [`FEATHER`] its texture fades back into the
 //! skin's own, and its tone meets the ring there, so no edge shows.
 
-use lightcraft_raster::Rgb32f;
+use lightcraft_raster::{Plane, Rgb32f};
 
+use super::repair::Near;
 use super::{CORE, FEATHER, Placed};
 use crate::{Part, Scene};
 
@@ -53,8 +54,12 @@ pub(super) struct Healer<'a> {
     pub(super) face: usize,
     /// The mask's box: nothing outside it is read or written.
     pub(super) b: [usize; 4],
-    /// Every spot, placed (a ring point inside another spot is filled from its neighbours).
+    /// Every spot, placed (a ring point inside another spot is filled from its neighbours) …
     pub(super) all: &'a [Option<Placed>],
+    /// … and by where they are.
+    pub(super) near: &'a Near,
+    /// The skin mask over the box `b` (outside it, read from the scene).
+    pub(super) mask: &'a Plane,
     /// [`TEXTURE`] in the image's pixels.
     pub(super) pores: f64,
 }
@@ -184,15 +189,22 @@ impl Healer<'_> {
         if !(x >= 0.0 && y >= 0.0) {
             return 0.0;
         }
-        self.scene.mask_at(self.face, Part::FacialSkin, x as usize, y as usize)
+        let (x, y) = (x as usize, y as usize);
+        let [x0, y0, x1, y1] = self.b;
+        if (x0..x1).contains(&x)
+            && (y0..y1).contains(&y)
+            && let Some(v) = self.mask.data.get((y - y0) * self.mask.width + (x - x0))
+        {
+            return *v;
+        }
+        self.scene.mask_at(self.face, Part::FacialSkin, x, y)
     }
 
     /// Whether point `q` lies inside a spot other than the `me`-th.
     fn in_other(&self, q: (f64, f64), me: usize) -> bool {
-        self.all
-            .iter()
-            .enumerate()
-            .any(|(k, o)| k != me && o.as_ref().is_some_and(|o| ((o.c.0 - q.0).powi(2) + (o.c.1 - q.1).powi(2)).sqrt() < o.r * CORE))
+        self.near.any(q, self.near.most() * CORE, |k| {
+            k != me && self.all.get(k).and_then(Option::as_ref).is_some_and(|o| ((o.c.0 - q.0).powi(2) + (o.c.1 - q.1).powi(2)).sqrt() < o.r * CORE)
+        })
     }
 
     /// The tone on the ring of radius `r` around `c`, with points off the skin or on another spot filled from their

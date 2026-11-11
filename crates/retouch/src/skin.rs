@@ -20,20 +20,21 @@
 //! Every blur reads only the skin (a blur of the picture weighted by the mask, divided by the blur of the mask), so
 //! no colour from hair, eyes, lips or the background bleeds in: no halo at the mask's edge. The change is weighted
 //! by the mask, so a pixel outside it never changes. The wide blurs run on the region reduced so that each is at
-//! least `PER_PIXEL` reduced pixels wide, and are read back bilinearly, which keeps a slider drag within the draft
-//! budget.
+//! least `PER_PIXEL` reduced pixels wide, and are read back bilinearly. What no slider changes (the pore-free skin,
+//! Shine's map, the fade from the mask's edge) is made once for the photo and kept (`prepared`), so a slider tick
+//! runs only the last pass, and for Smoothness its grid.
 //!
-//! A later Refine brush (#99) paints over the mask: `skin_mask` is where it will be applied.
+//! A later Refine brush (#99) paints over the mask: `prepared::Prepared::new`, where the mask is read, is where it
+//! will be applied.
 
-use lightcraft_raster::{Image, Plane, Rgb32f, par_rows};
+use lightcraft_raster::Rgb32f;
 use serde::{Deserialize, Serialize};
 
 use crate::{Control, Feature, Part, Scene, Scope, Spec, Stage};
 
 mod grid;
+mod prepared;
 mod shine;
-
-use grid::{Grid, Reduced};
 
 /// The pores' size, a fraction of the face: what is finer (pores, fine hairs, grain) is the skin's texture, which
 /// Smoothness keeps and Texture scales.
@@ -122,9 +123,9 @@ impl Skin {
             crate::reduced::retouch(img, scene, face, b, f, keep, |small, sub, at| self.apply_capped(small, sub, Some(at), usize::MAX));
             return;
         }
-        let Some(m) = skin_mask(scene, face, b) else { return };
-        let out = retouch(crop(img, b), &m, size, k);
-        paste(img, b, &out, &m);
+        // what no slider changes is kept between renders (`prepared`); a slider tick runs the last pass only
+        let Some(p) = prepared::prepared(img, scene, face, b, size) else { return };
+        prepared::finish(img, &p, k);
     }
 }
 
@@ -147,51 +148,6 @@ impl Strength {
     }
 }
 
-/// The skin mask of `face` over the box `b` (0…1); `None` when it is 0 everywhere there. The Refine brush (#99)
-/// will add and take away its strokes here.
-fn skin_mask(scene: &Scene<'_>, face: usize, b: [usize; 4]) -> Option<Plane> {
-    let mask = scene.faces.get(face)?.face.mask(Part::FacialSkin)?;
-    let view = scene.view();
-    let [x0, y0, x1, y1] = b;
-    let w = x1 - x0;
-    let mut m = Plane::new(w, y1 - y0);
-    par_rows(&mut m.data, w, |y, row| {
-        for (x, v) in row.iter_mut().enumerate() {
-            let (nx, ny) = view.to_norm((x0 + x) as f64 + 0.5, (y0 + y) as f64 + 0.5);
-            *v = mask.sample(nx, ny).clamp(0.0, 1.0);
-        }
-    });
-    m.data.iter().any(|v| *v > 0.0).then_some(m)
-}
-
-fn crop(img: &Rgb32f, b: [usize; 4]) -> Rgb32f {
-    let [x0, y0, x1, y1] = b;
-    let w = x1 - x0;
-    let mut c = Rgb32f::new(w, y1 - y0);
-    par_rows(&mut c.data, w, |y, row| {
-        let start = (y0 + y) * img.width + x0;
-        if let Some(src) = img.data.get(start..start + w) {
-            row.copy_from_slice(src);
-        }
-    });
-    c
-}
-
-/// Write `out` into `img` over the box `b`, only where the mask is above 0.
-fn paste(img: &mut Rgb32f, b: [usize; 4], out: &Rgb32f, m: &Plane) {
-    let [x0, y0, x1, _] = b;
-    let (w, iw) = (x1 - x0, img.width);
-    for (y, (orow, mrow)) in out.data.chunks(w.max(1)).zip(m.data.chunks(w.max(1))).enumerate() {
-        let start = (y0 + y) * iw + x0;
-        let Some(dst) = img.data.get_mut(start..start + w) else { return };
-        for ((d, o), mv) in dst.iter_mut().zip(orow).zip(mrow) {
-            if *mv > 0.0 {
-                *d = *o;
-            }
-        }
-    }
-}
-
 /// Luminance weights (Rec.2020; close enough for the sRGB of the examples: only contrast is measured).
 const Y: [f32; 3] = [0.2627, 0.678, 0.0593];
 
@@ -206,91 +162,6 @@ const DARK: f32 = 1e-4;
 fn soft(c: f32, e: f32) -> f32 {
     let r = c / e;
     1.0 / (1.0 + r * r)
-}
-
-/// The retouched skin over the region, weighted by the mask `m` (pixels where it is 0 are left as they are).
-fn retouch(mut c: Rgb32f, m: &Plane, size: f64, k: Strength) -> Rgb32f {
-    let px = |f: f64| {
-        let v = (f * size) as f32;
-        if v.is_finite() { v.max(0.0) } else { 0.0 }
-    };
-    let w = c.width;
-    // the skin (split) weighted by the mask, then without its pores: [log luminance, red, blue, mask]
-    let mut base = Image::<[f32; 4]>::new(w, c.height);
-    par_rows(&mut base.data, w.max(1), |y, row| {
-        for (x, o) in row.iter_mut().enumerate() {
-            let i = y * w + x;
-            let (p, mv) = (c.data.get(i).copied().unwrap_or_default(), m.data.get(i).copied().unwrap_or(0.0));
-            let l = split(p);
-            *o = [l[0] * mv, l[1] * mv, l[2] * mv, mv];
-        }
-    });
-    let pores = Reduced::blurred(&base, px(PORES));
-    par_rows(&mut base.data, w.max(1), |y, row| {
-        for (x, o) in row.iter_mut().enumerate() {
-            if o[3] <= 0.0 {
-                continue;
-            }
-            let own = [o[0] / o[3], o[1] / o[3], o[2] / o[3]];
-            let p = pores.read(&pores.taps(x, y), own);
-            *o = [p[0], p[1], p[2], o[3]];
-        }
-    });
-    drop(pores);
-    let even = if k.smooth > 0.0 { Even::new(&base, [px(SMOOTH), px(TONE), px(FEATHER)], k.smooth) } else { None };
-    let shine = shine::Shine::new(&base, [px(SHINE_AROUND), px(SHINE_SOFT)], k.shine);
-    par_rows(&mut c.data, w.max(1), |y, row| {
-        for (x, o) in row.iter_mut().enumerate() {
-            let Some(b) = base.data.get(y * w + x) else { continue };
-            if b[3] <= 0.0 {
-                continue;
-            }
-            let (src, smooth) = (*o, [b[0], b[1], b[2]]);
-            let even = even.as_ref().map(|e| e.at(x, y, smooth));
-            let shine = shine.as_ref().map(|s| s.at(x, y, smooth));
-            let new = pixel(src, smooth, even, shine, k);
-            *o = std::array::from_fn(|c| src[c] + b[3] * (new[c] - src[c]));
-        }
-    });
-    c
-}
-
-/// The even skin Smoothness 100 gives: the pore-free skin through the bilateral grid ([`Grid`]) at [`SMOOTH`],
-/// with [`TONE_CUT`] of the grid at [`TONE`] mixed in (blotches up to that size).
-struct Even {
-    /// The grid at [`SMOOTH`] with [`TONE_CUT`] of the grid at [`TONE`] mixed in.
-    grid: Grid,
-    /// How much of the even skin the slider takes ([`curve`]).
-    amount: f32,
-    /// The mask blurred by [`FEATHER`]: Smoothness fades in from the mask's edge over about that much.
-    fade: Reduced,
-}
-
-impl Even {
-    /// The even skin of `base` for Smoothness `smooth` (0…1), with the grid at `sigma`, the tone grid at `tone`
-    /// and the fade from the mask's edge over `feather` (pixels).
-    fn new(base: &Image<[f32; 4]>, [sigma, tone, feather]: [f32; 3], smooth: f32) -> Option<Even> {
-        let (amount, range) = curve(smooth);
-        let grid = Grid::new(base, sigma, range)?;
-        let fade = Reduced::of_skin(base, feather).blur(feather);
-        Some(Even { grid: grid.blurred(sigma, range).mix(&grid.blurred(tone, range), TONE_CUT), amount, fade })
-    }
-
-    /// The even skin at (`x`, `y`) and how much of it to take there (0 at the mask's edge, 1 a [`FEATHER`]
-    /// inside it).
-    fn at(&self, x: usize, y: usize, own: [f32; 3]) -> ([f32; 3], f32) {
-        let even = self.grid.read(x, y, own);
-        let inside = self.fade.weight(&self.fade.taps(x, y));
-        let fade = ((inside - 0.5) / 0.4).clamp(0.0, 1.0);
-        // colour: the grid tells edges by light only, so skin of another colour but the same light (a lit nose
-        // wing beside a cheek) can be averaged in; a change of colour past COLOUR_EDGE is held back
-        let ce = COLOUR_EDGE;
-        let colour = |c: usize| {
-            let d = even[c] - own[c];
-            d * soft(d.abs() / own[c].abs().max(0.05), ce)
-        };
-        ([even[0], own[1] + colour(1), own[2] + colour(2)], self.amount * fade * fade * (3.0 - 2.0 * fade))
-    }
 }
 
 /// Smoothness `s` (0…1) as how much of the even skin it takes and the difference of light (natural log) it evens

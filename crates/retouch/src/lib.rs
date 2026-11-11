@@ -17,6 +17,7 @@ mod area;
 pub mod control;
 pub mod feature;
 pub mod input;
+mod memo;
 pub mod overrides;
 mod reduced;
 pub mod refine;

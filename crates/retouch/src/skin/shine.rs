@@ -43,15 +43,14 @@ pub const SOFT: f64 = 0.008;
 /// its usual light is counted in the second blur even where it is very even.
 const SPREAD: f32 = 0.04;
 
-/// The skin around each pixel without its shine, where the shine is, and the slider's strength.
+/// The skin around each pixel without its shine and where the shine is (no slider changes them: the slider sets
+/// how much of it is taken, [`curve`]).
 pub(super) struct Shine {
     /// `[log luminance, red, blue]` of the skin around (weighted, read with [`Reduced::read`]).
     around: Reduced,
     /// How much each pixel is shine (0…1, in the first channel), blurred by [`SOFT`] so its edge follows the
     /// highlight's without drawing a line where a pale highlight meets skin of a deeper colour.
     shine: Reduced,
-    /// How much of a full highlight's excess is taken away (0…1 − [`KEEP`]).
-    take: f32,
 }
 
 /// What Shine does to one pixel: the change of its pore-free skin (`[log luminance, red, blue]`) and the factor its
@@ -62,10 +61,10 @@ pub(super) struct Change {
 }
 
 impl Shine {
-    /// Shine `amount` (0…1) over `base`, the pore-free skin (`[log luminance, red, blue, mask]`, not weighted), with
-    /// the skin around measured over `sigma` pixels and the shine's edge softened over `soft` pixels. `None` at 0.
-    pub(super) fn new(base: &Image<[f32; 4]>, [sigma, soft]: [f32; 2], amount: f32) -> Option<Shine> {
-        if amount.is_nan() || amount <= 0.0 || !sigma.is_finite() {
+    /// Shine over `base`, the pore-free skin (`[log luminance, red, blue, mask]`, not weighted), with the skin
+    /// around measured over `sigma` pixels and the shine's edge softened over `soft` pixels.
+    pub(super) fn new(base: &Image<[f32; 4]>, [sigma, soft]: [f32; 2]) -> Option<Shine> {
+        if !sigma.is_finite() {
             return None;
         }
         let w = base.width.max(1);
@@ -108,19 +107,40 @@ impl Shine {
             }
         });
         let shine = Reduced::blurred(&shine, soft);
-        Some(Shine { around, shine, take: curve(amount) })
+        Some(Shine { around, shine })
     }
 
-    /// The change at pixel (`x`, `y`), whose pore-free skin is `own` (`[log luminance, red, blue]`).
-    pub(super) fn at(&self, x: usize, y: usize, own: [f32; 3]) -> Change {
-        let around = self.around.read(&self.around.taps(x, y), own);
-        let over = own[0] - around[0];
-        let k = self.take * self.shine.read(&self.shine.taps(x, y), [0.0; 3])[0].clamp(0.0, 1.0);
-        if over.is_nan() || k.is_nan() || over <= 0.0 || k <= 0.0 {
-            return Change { shift: [0.0; 3], pores: 1.0 };
-        }
-        Change { shift: [-k * over, k * (around[1] - own[1]), k * (around[2] - own[2])], pores: 1.0 - PORES_CALM * k / (1.0 - KEEP) }
+    /// What no slider changes of Shine's change at each pixel of `base` (the pore-free skin, as given to
+    /// [`Shine::new`]): `[shine, excess, red, blue]`, how much the pixel is shine, its light over the skin around and
+    /// that skin's colour less its own ([`change`] makes the change from them).
+    pub(super) fn map(&self, base: &Image<[f32; 4]>) -> Image<[f32; 4]> {
+        let w = base.width.max(1);
+        let mut out = Image::<[f32; 4]>::new(base.width, base.height);
+        par_rows(&mut out.data, w, |y, row| {
+            for (x, o) in row.iter_mut().enumerate() {
+                let p = base.data.get(y * w + x).copied().unwrap_or_default();
+                if p[3] <= 0.0 {
+                    continue;
+                }
+                let own = [p[0], p[1], p[2]];
+                let around = self.around.read(&self.around.taps(x, y), own);
+                let shine = self.shine.read(&self.shine.taps(x, y), [0.0; 3])[0].clamp(0.0, 1.0);
+                *o = [shine, own[0] - around[0], around[1] - own[1], around[2] - own[2]];
+            }
+        });
+        out
     }
+}
+
+/// What Shine does to a pixel whose [`Shine::map`] is `v`, taking `take` of a full highlight's excess away
+/// ([`curve`]).
+pub(super) fn change(v: [f32; 4], take: f32) -> Change {
+    let [shine, over, red, blue] = v;
+    let k = take * shine;
+    if over.is_nan() || k.is_nan() || over <= 0.0 || k <= 0.0 {
+        return Change { shift: [0.0; 3], pores: 1.0 };
+    }
+    Change { shift: [-k * over, k * red, k * blue], pores: 1.0 - PORES_CALM * k / (1.0 - KEEP) }
 }
 
 /// How much skin `own` (`[log luminance, red, blue]`) is shine against the skin `around` it: 0…1, rising from
@@ -139,7 +159,7 @@ fn how_much(own: [f32; 3], around: [f32; 3]) -> f32 {
 
 /// The slider (0…1) as the share of a highlight's excess taken away: fast at first (`1 − (1 − s)^1.5`, 65 % of the
 /// way at 50), up to all but [`KEEP`] at 100.
-fn curve(s: f32) -> f32 {
+pub(super) fn curve(s: f32) -> f32 {
     let s = s.clamp(0.0, 1.0);
     (1.0 - (1.0 - s).powf(1.5)) * (1.0 - KEEP)
 }

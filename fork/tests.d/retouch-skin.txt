@@ -1,4 +1,5 @@
 cargo test -p lightcraft-retouch --test skin
+cargo test -p lightcraft-retouch --lib -- skin::prepared
 cargo test -p lightcraft-retouch --test foundation
 cargo test -p lightcraft-develop --lib -- retouch
 cargo test -p lightcraft-mcp --lib -- tests_retouch

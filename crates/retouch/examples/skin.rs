@@ -1,7 +1,7 @@
 //! Try the skin feature on a picture without building the app:
 //!
 //! `cargo run -p lightcraft-retouch --release --example skin -- in.jpg out.jpg [--amount 50] [--smoothness 50]
-//! [--texture 0] [--shine 0] [--mask facialSkin-0.png] [--face x0,y0,x1,y1] [--fit 1936] [--runs 1]`
+//! [--texture 0] [--shine 0] [--mask facialSkin-0.png] [--face x0,y0,x1,y1] [--fit 1936] [--runs 1] [--drag smoothness]`
 //!
 //! - `--amount` sets Smoothness (as every feature's example does); `--smoothness`, `--texture` and `--shine` set
 //!   each slider (0…100; Texture −100…100).
@@ -11,7 +11,9 @@
 //! - `--face` is the face's box in fractions of the photo; without one, a mask's face is the box of its pixels
 //!   above half.
 //! - `--fit` shrinks the photo to that long edge first (1936 is the draft's size of a 3:2 photo, about 2.5 MP);
-//!   `--runs` repeats the step and prints the fastest run.
+//!   `--runs` repeats the step and prints the fastest run. With `--drag smoothness` (or `texture`, `shine`), the
+//!   runs are the ticks of a drag of that slider up to its value: it prints the first (which makes the kept work)
+//!   and the fastest of the others.
 //!
 //! The picture is worked on in linear light (sRGB primaries; the app works in linear Rec.2020).
 #![forbid(unsafe_code)]
@@ -34,14 +36,14 @@ fn main() -> ExitCode {
 }
 
 const USAGE: &str = "usage: skin in.jpg out.jpg [--amount N] [--smoothness N] [--texture N] [--shine N] [--face x0,y0,x1,y1] \
-                     [--mask mask.png] [--fit EDGE] [--runs N]";
+                     [--mask mask.png] [--fit EDGE] [--runs N] [--drag SLIDER]";
 
 fn run(args: &[String]) -> Result<(), String> {
     let mut files = Vec::new();
     let mut global = Features::default();
     let mut boxes: Vec<NormRect> = Vec::new();
     let mut faces: Vec<Face> = Vec::new();
-    let (mut fit, mut runs) = (0usize, 1usize);
+    let (mut fit, mut runs, mut drag) = (0usize, 1usize, None::<String>);
     let mut it = args.iter();
     while let Some(a) = it.next() {
         let mut value = || it.next().ok_or_else(|| USAGE.to_string());
@@ -74,6 +76,7 @@ fn run(args: &[String]) -> Result<(), String> {
             }
             "--fit" => fit = value()?.parse().map_err(|_| USAGE.to_string())?,
             "--runs" => runs = value()?.parse::<usize>().map_err(|_| USAGE.to_string())?.max(1),
+            "--drag" => drag = Some(format!("retouch.skin.{}", value()?)),
             _ => files.push(a.clone()),
         }
     }
@@ -91,18 +94,34 @@ fn run(args: &[String]) -> Result<(), String> {
     for (px, p) in src.data.iter_mut().zip(rgb.pixels()) {
         *px = [decode_srgb8(p.0[0]), decode_srgb8(p.0[1]), decode_srgb8(p.0[2])];
     }
-    let r = Retouch::with_global(global);
+    let end = drag.as_deref().and_then(|id| global.get(id));
+    let mut r = Retouch::with_global(global);
     let input = Input::new(faces);
     let view = WholePhoto { width: w, height: h };
-    let mut best = f64::INFINITY;
+    let (mut first, mut best) = (0.0, f64::INFINITY);
     let mut img = src.clone();
-    for _ in 0..runs {
+    for i in 0..runs {
+        if let (Some(id), Some(end)) = (&drag, end) {
+            r.global.set(id, end * (i + 1) as f64 / runs as f64);
+        }
         img = src.clone();
         let t = std::time::Instant::now();
         lightcraft_retouch::run::apply(&mut img, &r, &input, &view, Stage::Retouch);
-        best = best.min(t.elapsed().as_secs_f64() * 1e3);
+        let ms = t.elapsed().as_secs_f64() * 1e3;
+        if i == 0 {
+            first = ms;
+        }
+        if i > 0 || runs == 1 {
+            best = best.min(ms);
+        }
     }
-    eprintln!("skin: {w}×{h} ({:.1} MP), {} faces, {best:.1} ms (fastest of {runs})", (w * h) as f64 / 1e6, input.faces.len());
+    let (mp, n) = ((w * h) as f64 / 1e6, input.faces.len());
+    match &drag {
+        Some(id) => {
+            eprintln!("skin: {w}×{h} ({mp:.1} MP), {n} faces, drag of {id} in {runs} ticks: first {first:.1} ms, then {best:.1} ms (fastest)")
+        }
+        None => eprintln!("skin: {w}×{h} ({mp:.1} MP), {n} faces, {best:.1} ms (fastest of {runs})"),
+    }
     let bytes: Vec<u8> = img.data.iter().flat_map(|p| p.map(encode_srgb8)).collect();
     let out = image::RgbImage::from_raw(w as u32, h as u32, bytes).ok_or("the picture's size changed")?;
     out.save(output).map_err(|e| format!("{output}: {e}"))
