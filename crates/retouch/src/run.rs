@@ -52,9 +52,15 @@ pub(crate) fn run_one<'a, T: Feature>(
     if T::STAGE != stage {
         return;
     }
-    let run = |img: &mut Rgb32f, s: &T, layer: Layer<'_>, face: Option<usize>| match layer.strokes.strokes(T::KEY) {
-        [] => s.apply(img, scene, face),
-        strokes => crate::refine::run_refined(img, scene, s, face, strokes, layer.picked),
+    let run = |img: &mut Rgb32f, s: &T, layer: Layer<'_>, face: Option<usize>| {
+        let t = profiling().then(std::time::Instant::now);
+        match layer.strokes.strokes(T::KEY) {
+            [] => s.apply(img, scene, face),
+            strokes => crate::refine::run_refined(img, scene, s, face, strokes, layer.picked),
+        }
+        if let Some(t) = t {
+            eprintln!("      retouch {} (face {face:?}): {:.1} ms", T::KEY, t.elapsed().as_secs_f64() * 1e3);
+        }
     };
     match T::SCOPE {
         Scope::Picture => {
@@ -70,4 +76,10 @@ pub(crate) fn run_one<'a, T: Feature>(
             }
         }
     }
+}
+
+/// Whether `LIGHTCRAFT_PROFILE` is set: each feature's run then prints its time.
+pub(crate) fn profiling() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LIGHTCRAFT_PROFILE").is_some())
 }

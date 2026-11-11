@@ -1,0 +1,5 @@
+# Performance: Portrait where it is fastest (branch perf/241-portrait-gpu)
+cargo test -p lightcraft-pipeline --lib -- retouch_step tests_retouch tests_window
+cargo test -p lightcraft-gpu --lib -- pre_retouch
+cargo test -p lightcraft-gpu --test it -- portrait_gpu portrait_drag retouch_effect decontam::a_portrait
+cargo test -p lightcraft-engine --lib -- retouch_input
