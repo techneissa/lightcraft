@@ -237,7 +237,7 @@ mod tests {
         assert_eq!(reopened.get("dinov2-small"), Runtime::Candle);
 
         assert!(s.execute("models.runtime", &json!({"model": "dinov2-small", "runtime": "fast"})).is_err());
-        assert!(s.execute("models.runtime", &json!({"model": "lama", "runtime": "coreml"})).is_err());
+        assert!(s.execute("models.runtime", &json!({"model": "no-such-model", "runtime": "coreml"})).is_err());
         assert!(s.execute("models.runtime", &json!({"runtime": "coreml"})).is_err());
 
         // the people-parsing SegFormers have a row each, and their choice reaches the parser
