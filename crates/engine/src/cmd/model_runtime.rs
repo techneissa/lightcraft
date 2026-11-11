@@ -34,12 +34,22 @@ fn published(model: &str) -> Option<(u64, &'static str)> {
 
 /// Whether `model`'s Core ML file is installed.
 fn coreml_installed(s: &Session, model: &str) -> bool {
-    if model == lightcraft_learn::ENCODER_ID { s.learn.coreml_installed() } else { s.parsing.coreml_installed(model) }
+    match model {
+        lightcraft_learn::ENCODER_ID => s.learn.coreml_installed(),
+        crate::model_runtime::BIREFNET => s.segmenter.birefnet_coreml_installed(),
+        crate::hair_edges::MODEL_DIR => s.hair_edges.coreml_installed(),
+        _ => s.parsing.coreml_installed(model),
+    }
 }
 
 /// The engine `model` runs on, once loaded.
 fn backend(s: &Session, model: &str) -> Option<&'static str> {
-    if model == lightcraft_learn::ENCODER_ID { s.learn.backend() } else { s.parsing.backend(model) }
+    match model {
+        lightcraft_learn::ENCODER_ID => s.learn.backend(),
+        crate::model_runtime::BIREFNET => s.segmenter.birefnet_backend(),
+        crate::hair_edges::MODEL_DIR => s.hair_edges.backend(),
+        _ => s.parsing.backend(model),
+    }
 }
 
 /// The models' rows: their runtime, whether Core ML can run here and its file is there, and the engine in use.
@@ -68,10 +78,14 @@ fn run(s: &mut Session, p: &Value) -> crate::Result<Value> {
         let runtime = Runtime::from_id(id).ok_or_else(|| bad(ID, format!("unknown runtime `{id}`: automatic, coreml or candle")))?;
         let model = str_param(p, "model").ok_or_else(|| bad(ID, "missing `model`"))?;
         s.model_runtimes.set(model, runtime).map_err(|e| bad(ID, e))?;
-        if model == lightcraft_learn::ENCODER_ID {
-            s.learn.set_runtime(runtime);
-        } else {
-            s.parsing.set_runtime(model, runtime);
+        match model {
+            lightcraft_learn::ENCODER_ID => s.learn.set_runtime(runtime),
+            // (BiRefNet's jobs read it when they are queued)
+            crate::model_runtime::BIREFNET => {}
+            crate::hair_edges::MODEL_DIR => s.hair_edges.set_runtime(runtime),
+            _ => {
+                s.parsing.set_runtime(model, runtime);
+            }
         }
     }
     Ok(rows(s))
@@ -128,7 +142,7 @@ pub(super) fn specs() -> Vec<CommandSpec> {
             "AI Model Runtime",
             [],
             None,
-            "{model?: \"dinov2-small\"|\"face-parsing-segformer-b0\"|\"human-parsing-segformer-b3\", runtime?: \"automatic\"|\"coreml\"|\"candle\"} — sets the engine a model runs on (Automatic: Core ML on a Mac when its model is installed, else candle), or with no `runtime` lists them → {models: [{model, feature, runtime, coremlAvailable, coremlInstalled, backend: \"coreml\"|\"candle\"|null, coremlBytes, license, download: {state, bytes?, total?, error?}}]}",
+            "{model?: \"dinov2-small\"|\"face-parsing-segformer-b0\"|\"human-parsing-segformer-b3\"|\"birefnet\"|\"birefnet-matting\"|…, runtime?: \"automatic\"|\"coreml\"|\"candle\"} — sets the engine a model runs on (Automatic: Core ML on a Mac when its model is installed, else candle), or with no `runtime` lists them → {models: [{model, feature, runtime, coremlAvailable, coremlInstalled, backend: \"coreml\"|\"candle\"|null, coremlBytes, license, download: {state, bytes?, total?, error?}}]}",
             always,
             run
         ),

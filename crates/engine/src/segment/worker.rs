@@ -60,6 +60,8 @@ pub enum Kind {
         matting: Option<crate::hair_edges::HairEdges>,
         /// Where the edge refinement shows (fork, issue #240).
         activity: Option<crate::activity::Activity>,
+        /// The engine BiRefNet runs on (issue #264): Core ML when its package is there, else candle.
+        runtime: lightcraft_coreml::Runtime,
     },
     /// A zoomed-in pass over `region` (normalized) of the photo, rendered by the job's `render`.
     Detail {
@@ -198,6 +200,8 @@ pub struct Shared {
     pub loaded: AtomicBool,
     /// Loading the model or encoding a photo right now (the slow parts).
     pub encoding: AtomicBool,
+    /// The engine the loaded BiRefNet runs on (`coreml` or `candle`; issue #264).
+    pub birefnet_backend: std::sync::Mutex<Option<&'static str>>,
 }
 
 /// Decrements a counter when dropped (also when unwinding).
@@ -263,6 +267,11 @@ impl Worker {
         !self.dead() && self.shared.loaded.load(Ordering::SeqCst)
     }
 
+    /// The engine BiRefNet ran on last (`coreml` or `candle`); `None` before its first run.
+    pub fn birefnet_backend(&self) -> Option<&'static str> {
+        *self.shared.birefnet_backend.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     /// Queue `job`; returns at once.
     pub fn submit(&mut self, job: Job) -> Result<(), String> {
         if self.dead() {
@@ -300,7 +309,7 @@ impl Worker {
 #[derive(Default)]
 struct State {
     model: Option<(PathBuf, Sam3)>,
-    birefnet: Option<(PathBuf, lightcraft_birefnet::BiRefNet)>,
+    birefnet: Option<(PathBuf, lightcraft_coreml::Runtime, lightcraft_birefnet::BiRefNet)>,
     cache: Option<(u64, Encoded)>,
     remote: Option<(String, remote::Client)>,
 }
@@ -548,8 +557,8 @@ fn run_job(state: &mut State, shared: &Shared, job: &mut Job, placement: Placeme
         return Err(Failure::Cancelled);
     }
     // BiRefNet runs here, whatever worker SAM 3 would use
-    if let Kind::BiRefNet { model, text, main, dir, matting, activity } = job.kind.clone() {
-        let req = birefnet::Request { model, text: &text, main, dir: &dir, matting: matting.as_ref(), activity: activity.as_ref() };
+    if let Kind::BiRefNet { model, text, main, dir, matting, activity, runtime } = job.kind.clone() {
+        let req = birefnet::Request { model, text: &text, main, dir: &dir, matting: matting.as_ref(), activity: activity.as_ref(), runtime };
         return birefnet::run(state, shared, job, placement, &req);
     }
     let remote_target = job.remote.clone().or_else(remote::configured);

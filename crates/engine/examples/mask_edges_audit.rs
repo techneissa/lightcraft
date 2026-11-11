@@ -7,6 +7,8 @@
 //! Writes `OUT_DIR/<stem>.photo.png`, `OUT_DIR/<stem>.<subject|background|person>.png` (grey masks, white =
 //! selected) and `OUT_DIR/seconds.json` (how long each mask took to make). `MASK_EDGES=default,current,birefnet-matting`
 //! picks the Hair Edges settings to try (`default`: the ones a new user gets; the default list) (one set of files per edge after the first, named `<stem>.<mask>.<edge>.png`).
+//! `BIREFNET_RUNTIME=candle|coreml|automatic` runs BiRefNet and BiRefNet Matting on that engine (issue #264; default
+//! automatic: Core ML when their packages are there).
 use std::time::Instant;
 
 use lightcraft_engine::Session;
@@ -32,6 +34,11 @@ fn main() {
     std::fs::create_dir_all(&out).expect("out dir");
     let mut s = Session::new().with_fs().with_default_sam3_model().with_default_parsing_models();
     s.segmenter.background = false;
+    if let Ok(runtime) = std::env::var("BIREFNET_RUNTIME") {
+        for model in ["birefnet", "birefnet-matting"] {
+            s.execute("models.runtime", &json!({"model": model, "runtime": runtime})).expect("runtime");
+        }
+    }
     s.parsing.set_paths(s.parsing.models_dir(), Some(out.join("parse-cache")), None);
     let paths: Vec<String> = args[1..].iter().map(|p| std::fs::canonicalize(p).expect("photo").to_string_lossy().to_string()).collect();
     let r = s.execute("library.import", &json!({"paths": paths})).expect("import");

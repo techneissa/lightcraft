@@ -28,29 +28,44 @@ impl HairEdges {
             if stop() {
                 return Attempt::Fail("cancelled".into());
             }
+            let runtime = self.runtime();
             let mut slot = lock(&self.inner.loaded);
-            if slot.as_ref().is_none_or(|l| l.model.device().is_cpu() != cpu) {
+            if slot.as_ref().is_none_or(|l| l.model.device().is_cpu() != cpu || l.runtime != runtime) {
                 *slot = None;
                 let t = web_time::Instant::now();
-                let model = if cpu { BiRefNet::load_cpu(&dir, Variant::Matting) } else { BiRefNet::load(&dir, Variant::Matting) };
+                // (on the GPU through the chosen engine, Core ML when its package is there: issue #264; the CPU is
+                // candle's)
+                let model = match cpu {
+                    true => BiRefNet::load_cpu(&dir, Variant::Matting),
+                    false => BiRefNet::load_with(&dir, Variant::Matting, runtime, lightcraft_birefnet::best_device()),
+                };
                 let model = match model {
                     Ok(m) => m,
                     // (the GPU could not take it: the CPU next)
                     Err(lightcraft_birefnet::Error::Candle(e)) if !cpu => return Attempt::Gpu(e.to_string()),
+                    Err(e @ lightcraft_birefnet::Error::CoreMl(_)) => return Attempt::Fail(e.to_string()),
                     Err(e) => return Attempt::Fail(damaged(e)),
                 };
-                log::info!("BiRefNet Matting loaded in {:?} ({})", t.elapsed(), if model.device().is_cpu() { "CPU" } else { "GPU" });
-                *slot = Some(Loaded { model, last_used: std::time::Instant::now() });
+                log::info!(
+                    "BiRefNet Matting loaded in {:?} ({}, {})",
+                    t.elapsed(),
+                    model.backend(),
+                    if model.device().is_cpu() { "CPU" } else { "GPU" }
+                );
+                *slot = Some(Loaded { model, runtime, last_used: std::time::Instant::now() });
             }
             let Some(l) = slot.as_mut() else { return Attempt::Fail("the BiRefNet Matting model did not load".into()) };
             l.last_used = std::time::Instant::now();
             l.model.set_cancel(Some(cancel.clone()));
             let out = l.model.matte(rgb, w, h);
             l.model.set_cancel(None);
+            // (Automatic hands a failed Core ML run to candle: the engine is read after the run)
+            *lock(&self.inner.backend) = Some(l.model.backend());
             match out {
                 Ok(m) => Attempt::Done(Matte { side: m.side, logits: m.logits }),
                 Err(lightcraft_birefnet::Error::Cancelled) => Attempt::Fail("cancelled".into()),
                 Err(lightcraft_birefnet::Error::Candle(e)) if !cpu => Attempt::Gpu(e.to_string()),
+                Err(e @ lightcraft_birefnet::Error::CoreMl(_)) => Attempt::Fail(e.to_string()),
                 Err(e) => Attempt::Fail(damaged(e)),
             }
         };
