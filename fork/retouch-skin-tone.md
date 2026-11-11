@@ -96,7 +96,7 @@ No product code outside the own files. Docs and tests only:
 
 `fork/tests.d/retouch-skin-tone.txt`. They cover: off and every slider at 0 changing no bit; Even Tone halving
 blotches with the texture kept within 5 %; on a face lit from one side, Even Tone and Redness at 100 taking a blotch
-35 % darker down to under 40 % of its darkness and a red patch to under 30 % of its excess red, the light across the
+35 % darker down to under 40 % of its darkness and a red patch to under 10 % of its excess red (the code before #205: 20 %), the light across the
 face kept within 0.03 (log) (#205); the shading fit following a ramp and ignoring a blotch; a line counted as form
 and a disc not; the shading direction falling back to grey on nonsense; the mesh zones' distances; Redness lowering a red patch's excess red by more than half with its
 brightness kept and the skin away from it unchanged; Face Light lighting the middle and the eyes by 0.6 stops,

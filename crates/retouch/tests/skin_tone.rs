@@ -197,7 +197,7 @@ fn top_even_tone_and_redness_remove_a_blotch_and_a_red_patch_and_keep_the_shadin
     let (c0, c1) = (contrast(&img), contrast(&out));
     assert!(c1 < c0 * 0.4, "the blotch's darkness: {c0} → {c1}");
     let (r0, r1) = (redness(&img), redness(&out));
-    assert!(r1 < r0 * 0.3, "the patch's excess red: {r0} → {r1}");
+    assert!(r1 < r0 * 0.1, "the patch's excess red: {r0} → {r1}");
     // the light across the face: left against right, away from both
     let side = |i: &Rgb32f| disc(i, 200, 60, 0.0, 10.0).0 - disc(i, 45, 190, 0.0, 10.0).0;
     let (s0, s1) = (side(&img), side(&out));
@@ -371,7 +371,7 @@ fn a_saved_amount_reads_as_face_light() {
     assert!(serde_json::to_string(&old).unwrap().contains("\"faceLight\":80"));
 }
 
-/// A face under 128 pixels in the draft (its grid's cells are then a whole pixel, coarser than 1/128 of the face)
+/// A face under 160 pixels in the draft (its grid's cells are then a whole pixel, coarser than 1/160 of the face)
 /// still makes the change its export four times larger makes.
 #[test]
 fn a_small_face_in_the_draft_agrees_with_the_export() {
