@@ -30,14 +30,18 @@ const SKIN_LEVEL: f32 = 0.9;
 /// The whites aim for this share of the lit skin's level.
 const TARGET: f32 = 0.85;
 /// The lift at 100, in stops: `LIFT_BASE` plus `LIFT_PULL` of the way (in stops) to the aim, within `LIFT_RANGE`.
-const LIFT_BASE: f32 = 0.85;
+const LIFT_BASE: f32 = 1.0;
 const LIFT_PULL: f32 = 0.5;
-const LIFT_RANGE: (f32, f32) = (0.85, 1.75);
+const LIFT_RANGE: (f32, f32) = (1.0, 1.8);
 /// The lift of a face without Facial Skin, in stops at 100.
-const LIFT_NO_SKIN: f32 = 0.85;
+const LIFT_NO_SKIN: f32 = 1.0;
 /// Above this linear level the lifted whites roll off toward `CEILING` (about 238 of 255): bright, never paper white.
 const KNEE: f32 = 0.45;
 const CEILING: f32 = 0.86;
+/// The brightest channel of a cleaned white rolls off from this linear level toward the second (about 245 of 255),
+/// so the warm tint never clips a channel.
+const CHANNEL_KNEE: f32 = 0.7;
+const CHANNEL_CEILING: f32 = 0.92;
 /// A pixel this share of the whites' level (a lash, the lid's edge) is left alone; one at the upper share is wholly
 /// changed. The shadowed white under the lid is well above the lower one.
 const GATE: (f64, f64) = (0.12, 0.3);
@@ -48,14 +52,29 @@ const EVEN: f32 = 0.6;
 /// A spot darker than this share of its surround is not a vein (a lash, the iris's edge): not evened.
 const VEIN_DEPTH: (f32, f32) = (0.35, 0.6);
 /// How much of the whites' colour goes at 100.
-const DESAT: f32 = 0.85;
+const DESAT: f32 = 0.75;
 /// Across the eye (in half widths, −1 the outer corner, +1 the inner), where the change is whole and where it has
 /// faded out: the corners stay as they were, the caruncle at the inner one too.
-const ACROSS: (f64, f64, f64, f64) = (-1.08, -0.72, 0.62, 0.95);
+const ACROSS: (f64, f64, f64, f64) = (-1.02, -0.7, 0.6, 0.88);
 /// The opening's edge for the whites ([`opening::Fade`]), at the upper lid and at the lower one: the lower lid's wet
-/// rim is pale and lies just inside the mesh's outline, so the change starts further in there.
-const FADE: opening::Fade = (0.03, 0.04);
-const FADE_LOWER: opening::Fade = (0.0, 0.1);
+/// rim is pale and lies inside the mesh's outline (on a squinting eye, well inside), so the change starts further in
+/// there.
+const FADE: opening::Fade = (0.03, 0.05);
+const FADE_LOWER: opening::Fade = (0.0, 0.16);
+/// Toward the inner corner (from the first to the second, across the eye in half widths), tissue much redder than
+/// the white in the middle of the eye (its green over red this many times lower: from the first, wholly at the
+/// second) is the caruncle or the pink fold beside it, and is left alone. Read at `PINK_SIGMA` half eye widths, so a
+/// thin red vein, which is to fade, doesn't count.
+const PINK_ACROSS: (f64, f64) = (0.4, 0.6);
+const PINK_RED: (f64, f64) = (1.25, 1.7);
+const PINK_SIGMA: f64 = 0.05;
+/// There too, tissue under this share of the whites' level (wholly under the first) is not white: the caruncle in
+/// warm light can have the white's own hue but is much darker.
+const PINK_DARK: (f64, f64) = (0.25, 0.45);
+/// The middle of the eye, across (in half widths), whose white is the reference for the corners' colour.
+const MIDDLE: f64 = 0.45;
+/// Only its lit part counts: at least this share of the whites' level.
+const MIDDLE_LIT: f32 = 0.6;
 /// The scale (in half eye widths, at least a pixel) the gate reads the luminance at: grain in a dark, noisy white
 /// gets the same change as the white around it instead of staying behind as dark specks.
 const GATE_SIGMA: f64 = 0.02;
@@ -66,7 +85,7 @@ const LID_ZONE: (f64, f64) = (0.04, 0.12);
 const SKIN_LIKE: (f64, f64) = (0.75, 1.0);
 /// How much of the face's light (the lit skin's colour) a cleaned white keeps: a white in warm light stays a little
 /// warm instead of turning grey-blue beside the skin.
-const TINT: f32 = 0.15;
+const TINT: f32 = 0.35;
 
 /// Whites, `amount` 0…1.
 pub fn whites(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, eyes: &[Eye], amount: f32) {
@@ -79,6 +98,7 @@ pub fn whites(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, eyes: &[Eye], am
     // render (a zoomed loupe) holds, and at every size
     let a = mask.area;
     let mut ys = Vec::with_capacity(LEVEL_GRID.0 * LEVEL_GRID.1);
+    let mut middle = Vec::new();
     for j in 0..LEVEL_GRID.1 {
         for i in 0..LEVEL_GRID.0 {
             let (nx, ny) = (a.x0 + (i as f64 + 0.5) / LEVEL_GRID.0 as f64 * a.width(), a.y0 + (j as f64 + 0.5) / LEVEL_GRID.1 as f64 * a.height());
@@ -89,12 +109,18 @@ pub fn whites(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, eyes: &[Eye], am
             if opening::fade(opening::depth(&openings, x, y), FADE, FADE_LOWER) < 0.5 {
                 continue;
             }
-            if let Some(v) = sample(img, x, y).map(luma).filter(|v| v.is_finite()) {
-                ys.push(v);
+            let Some(p) = sample(img, x, y).filter(|p| p.iter().all(|v| v.is_finite())) else { continue };
+            ys.push(luma(p));
+            if across_at(eyes, x, y).is_some_and(|a| a.abs() < MIDDLE) && p[0] > 1e-6 {
+                middle.push((luma(p), p[1] / p[0]));
             }
         }
     }
     let Some(level) = quantile(&mut ys, WHITES_LEVEL).filter(|l| *l > 1e-6) else { return };
+    // the white's own colour (green over red) in the middle of the eye, where it is lit (a shadowed edge, a lash or
+    // the lid's rim there is redder); none: no colour check at the corner
+    let mut lit: Vec<f32> = middle.iter().filter(|(l, _)| *l >= MIDDLE_LIT * level).map(|(_, gr)| *gr).collect();
+    let white_gr = quantile(&mut lit, 0.5).filter(|v| *v > 1e-3);
     let k = response(amount);
     let light = lit_skin(img, scene, face);
     let stops = light.map_or(LIFT_NO_SKIN, |(l, _)| lift(level, l));
@@ -115,6 +141,7 @@ pub fn whites(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, eyes: &[Eye], am
         img.data.get(patch.image_index(y * patch.w + x, img.width)).copied().filter(|p| p.iter().all(|v| v.is_finite())).unwrap_or([0.0; 3])
     });
     let soft = blur(&rgb, (GATE_SIGMA * half).max(1.0)).data;
+    let coarse = blur(&rgb, (PINK_SIGMA * half).max(1.0)).data;
     let skin_sat = light.map(|(_, c)| spread(c));
     let wgt: Vec<f32> = (0..n)
         .map(|j| {
@@ -136,7 +163,20 @@ pub fn whites(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, eyes: &[Eye], am
                 let sat = spread(q.map(|v| v / l)) / ss;
                 gate *= 1.0 - (near * smoothstep(SKIN_LIKE.0, SKIN_LIKE.1, sat as f64)) as f32;
             }
-            let w = m * gate * opening::fade(depth, FADE, FADE_LOWER) * across(eyes, x, y);
+            let a = across_at(eyes, x, y);
+            // toward the inner corner, the caruncle and the fold beside it are not white: redder than the white in the
+            // middle of the eye, or much darker than the whites' level
+            if let (Some(a), Some(c)) = (a, coarse.get(j)) {
+                let inner = smoothstep(PINK_ACROSS.0, PINK_ACROSS.1, a);
+                let red = match white_gr {
+                    Some(gr) if c[0] > 1e-6 && c[1] > 1e-6 => smoothstep(PINK_RED.0, PINK_RED.1, (gr / (c[1] / c[0])) as f64),
+                    _ => 0.0,
+                };
+                let dark = 1.0 - smoothstep(PINK_DARK.0, PINK_DARK.1, (luma(*c) / level) as f64);
+                gate *= 1.0 - (inner * red.max(dark)) as f32;
+            }
+            let fade = a.map_or(1.0, |a| window(a, ACROSS.0, ACROSS.1, ACROSS.2, ACROSS.3) as f32);
+            let w = m * gate * opening::fade(depth, FADE, FADE_LOWER) * fade;
             if w.is_finite() { w.clamp(0.0, 1.0) } else { 0.0 }
         })
         .collect();
@@ -153,11 +193,16 @@ pub fn whites(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, eyes: &[Eye], am
         let s = shoulder(l * gain * vein).max(l) / l;
         let lit = p.map(|c| c * s);
         let ly = luma(lit);
-        let out: [f32; 3] = std::array::from_fn(|c| {
+        let clean: [f32; 3] = std::array::from_fn(|c| {
             let white = ly * tint[c];
-            let clean = white + (lit[c] - white) * keep;
-            p[c] + w * (clean - p[c])
+            white + (lit[c] - white) * keep
         });
+        // the warm tint can push a channel past the luminance's shoulder: the brightest channel rolls off too (never
+        // below what the pixel's brightest channel was)
+        let top = clean.iter().fold(0.0f32, |a, v| a.max(*v));
+        let was = p.iter().fold(0.0f32, |a, v| a.max(*v));
+        let cap = if top > CHANNEL_KNEE { roll_off(top, CHANNEL_KNEE, CHANNEL_CEILING).max(was) / top } else { 1.0 };
+        let out: [f32; 3] = std::array::from_fn(|c| p[c] + w * (clean[c] * cap - p[c]));
         if out.iter().all(|v| v.is_finite()) {
             *p = out;
         }
@@ -200,13 +245,10 @@ fn lift(level: f32, skin: f32) -> f32 {
     if s.is_finite() { s.clamp(LIFT_RANGE.0, LIFT_RANGE.1) } else { LIFT_NO_SKIN }
 }
 
-/// The weight across the eye at pixel (`x`, `y`): 1 in the middle, fading out at the corners (by the nearer eye).
-fn across(eyes: &[Eye], x: f64, y: f64) -> f32 {
-    let nearest = eyes.iter().map(|e| e.local(x, y)).min_by(|p, q| (p.0.abs() + p.1.abs()).total_cmp(&(q.0.abs() + q.1.abs())));
-    match nearest {
-        Some((a, _)) => window(a, ACROSS.0, ACROSS.1, ACROSS.2, ACROSS.3) as f32,
-        None => 1.0,
-    }
+/// Where pixel (`x`, `y`) lies across the nearer eye, in half widths (−1 the outer corner, +1 the inner); `None`
+/// without eyes.
+fn across_at(eyes: &[Eye], x: f64, y: f64) -> Option<f64> {
+    eyes.iter().map(|e| e.local(x, y)).min_by(|p, q| (p.0.abs() + p.1.abs()).total_cmp(&(q.0.abs() + q.1.abs()))).map(|p| p.0)
 }
 
 /// The spread of a colour's channels (its saturation, for a colour over its luminance).
@@ -216,9 +258,14 @@ fn spread(c: [f32; 3]) -> f32 {
 
 /// A soft roll-off above [`KNEE`] toward [`CEILING`].
 fn shoulder(v: f32) -> f32 {
-    if v <= KNEE {
+    roll_off(v, KNEE, CEILING)
+}
+
+/// A soft roll-off of `v` above `knee` toward `ceiling`.
+fn roll_off(v: f32, knee: f32, ceiling: f32) -> f32 {
+    if v <= knee {
         return v;
     }
-    let room = CEILING - KNEE;
-    KNEE + room * (1.0 - (-(v - KNEE) / room).exp())
+    let room = ceiling - knee;
+    knee + room * (1.0 - (-(v - knee) / room).exp())
 }

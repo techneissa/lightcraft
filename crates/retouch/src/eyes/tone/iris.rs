@@ -46,8 +46,15 @@ const SIGMAS: (f64, f64, f64) = (0.02, 0.05, 0.2);
 /// How much the fibres' and the clarity's contrast is raised at 100 (1 doubles it).
 const FINE: f32 = 2.4;
 const CLARITY: f32 = 1.0;
-/// Detail under this share of its surroundings is noise: left as it is.
+/// Detail under this share of its surroundings is noise: left as it is; for an iris whose detail is small (a dark
+/// one), under `CORE_SHARE` of its own spread instead.
 const CORE: f32 = 0.015;
+const CORE_SHARE: f32 = 0.35;
+/// Each iris's pattern is raised toward this spread of detail (the mean size of its detail against its surroundings),
+/// fibres then clarity, by up to `MAX_BOOST` times the usual raise: a dark iris, whose pattern is small against its
+/// level, shows it too. (A grainy dark iris's fine band is mostly grain, so its clarity band carries the lift.)
+const SPREAD: (f32, f32) = (0.08, 0.2);
+const MAX_BOOST: f32 = 3.0;
 /// Near the lids (within this many half eye widths of the opening's outline, fading out at the second), a pixel
 /// much brighter than the iris and of another colour is the lid's wet rim, not iris: left alone.
 const RIM_ZONE: (f64, f64) = (0.06, 0.16);
@@ -61,10 +68,10 @@ const LID_SHADOW: (f64, f64) = (0.3, 0.55);
 /// There, a pixel this much brighter than the iris is not iris whatever its colour (a rim of the iris's own hue).
 const RIM_BRIGHTER: (f64, f64) = (1.8, 2.6);
 /// Most a detail darkens or brightens, as a share of its surroundings, before raising.
-const DETAIL: (f32, f32) = (-0.2, 0.25);
+const DETAIL: (f32, f32) = (-0.3, 0.35);
 /// The most the raised pattern darkens or brightens a pixel (a factor), whatever its detail: an edge the masks let in
 /// (a lid's, a reflection's) is never blown up.
-const DETAIL_GAIN: (f32, f32) = (0.75, 1.8);
+const DETAIL_GAIN: (f32, f32) = (0.7, 1.8);
 /// The brightening at 100, in stops: for a dark iris and a light one (by the iris's level, linear).
 const LIGHT: (f32, f32) = (1.2, 0.85);
 /// An iris with no colour to speak of (a near-black or grey one, its chroma as a share of its level under the first
@@ -144,20 +151,48 @@ pub fn iris(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, eyes: &[Eye], amou
         }
     }
     let bands = [SIGMAS.0, SIGMAS.1, SIGMAS.2].map(|s| weighted_blur(&lum, &region, patch.w, patch.h, s * r_mean));
-    let core = |d: f32| (d.signum() * (d.abs() - CORE).max(0.0)).clamp(DETAIL.0, DETAIL.1);
+    // each band's detail, as a share of its surroundings
+    let detail = |j: usize| -> (f32, f32) {
+        let (Some(&b0), Some(&b1), Some(&b2)) = (bands[0].get(j), bands[1].get(j), bands[2].get(j)) else { return (0.0, 0.0) };
+        (if b1 > 1e-6 { (b0 - b1) / b1 } else { 0.0 }, if b2 > 1e-6 { (b1 - b2) / b2 } else { 0.0 })
+    };
+    // each iris's own spread of detail, over the pixels the change reaches: a dark iris's fibres are as real as a
+    // light one's but smaller, so its pattern is raised toward the same spread
+    let mut sums = vec![[0.0f64; 3]; circles.len()];
+    for j in 0..n {
+        let (Some(&w), Some(&(_, _, ci))) = (change.get(j), at.get(j)) else { continue };
+        let (f, c) = detail(j);
+        if let Some(t) = sums.get_mut(ci)
+            && w > 0.0
+            && f.is_finite()
+            && c.is_finite()
+        {
+            *t = [t[0] + f64::from(w), t[1] + f64::from(w * f.abs()), t[2] + f64::from(w * c.abs())];
+        }
+    }
+    let lifts: Vec<(f32, f32, f32, f32)> = sums
+        .iter()
+        .map(|t| {
+            let spread = |v: f64| if t[0] > 0.0 { (v / t[0]) as f32 } else { 0.0 };
+            let (sf, sc) = (spread(t[1]), spread(t[2]));
+            let boost = |sp: f32, target: f32| if sp > 1e-6 { (target / sp).clamp(1.0, MAX_BOOST) } else { 1.0 };
+            (boost(sf, SPREAD.0), boost(sc, SPREAD.1), (CORE_SHARE * sf).min(CORE), (CORE_SHARE * sc).min(CORE))
+        })
+        .collect();
     let sat = 1.0 + SATURATION * k;
     for j in 0..n {
         let (Some(&w), Some(&l), Some(&(rho, down, ci))) = (change.get(j), lum.get(j), at.get(j)) else { continue };
-        let (Some(&b0), Some(&b1), Some(&b2)) = (bands[0].get(j), bands[1].get(j), bands[2].get(j)) else { continue };
         if w <= 0.0 || l <= 0.0 {
             continue;
         }
         let Some(c) = circles.get(ci) else { continue };
-        let fine_d = if b1 > 1e-6 { core((b0 - b1) / b1) } else { 0.0 };
-        let clar_d = if b2 > 1e-6 { core((b1 - b2) / b2) } else { 0.0 };
+        let Some(&(boost_f, boost_c, core_f, core_c)) = lifts.get(ci) else { continue };
+        let core = |d: f32, floor: f32, boost: f32| (d.signum() * (d.abs() - floor).max(0.0) * boost).clamp(DETAIL.0, DETAIL.1);
+        let (f, cl) = detail(j);
+        let (fine_d, clar_d) = (core(f, core_f, boost_f), core(cl, core_c, boost_c));
         let lower = UPPER + (1.0 - UPPER) * smoothstep(-0.5, 0.45, down) as f32;
         let ring = (smoothstep(c.pupil + LIGHT_IN.0, c.pupil + LIGHT_IN.1, rho) * (1.0 - smoothstep(LIGHT_OUT.0, LIGHT_OUT.1, rho))) as f32;
-        let pattern = ((1.0 + FINE * k * fine_d) * (1.0 + CLARITY * k * clar_d)).clamp(DETAIL_GAIN.0, DETAIL_GAIN.1);
+        let pattern = limit((1.0 + FINE * k * fine_d) * (1.0 + CLARITY * k * clar_d));
         let gain = (k * light(c) * lower * ring).exp2() * pattern;
         if !(gain.is_finite() && gain > 0.0) {
             continue;
@@ -174,6 +209,13 @@ pub fn iris(img: &mut Rgb32f, scene: &Scene<'_>, face: usize, eyes: &[Eye], amou
             *p = out;
         }
     }
+}
+
+/// The pattern's factor rolled off softly toward [`DETAIL_GAIN`] (so a stronger slider still does a little more,
+/// never past it).
+fn limit(x: f32) -> f32 {
+    let (lo, hi) = DETAIL_GAIN;
+    if x >= 1.0 { 1.0 + (hi - 1.0) * ((x - 1.0) / (hi - 1.0)).tanh() } else { 1.0 - (1.0 - lo) * ((1.0 - x) / (1.0 - lo)).tanh() }
 }
 
 /// The brightening at 100 for iris `c`, in stops: less for a light iris, and for one with no colour.

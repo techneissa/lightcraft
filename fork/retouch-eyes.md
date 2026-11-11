@@ -9,29 +9,36 @@ Four sliders in the Portrait tab's Eyes section, 0 to 100, off at 0, for every f
 `retouchFace.<i>.eyes.<field>`):
 
 - **Whites** (issue #202): the eye whites get brighter by a gain in stops, so their shading keeps its ratios: the
-  corners and the shadow under the upper lid stay darker and the eye stays round. The gain at 100 is 0.85 stop plus
-  half the way (in stops) from the whites' level to 0.85 of the face's lit skin, within 0.85–1.75 stops: whites in
+  corners and the shadow under the upper lid stay darker and the eye stays round. The gain at 100 is 1 stop plus
+  half the way (in stops) from the whites' level to 0.85 of the face's lit skin, within 1–1.8 stops: whites in
   shadow (deep-set eyes, a low-key photo) get more, bright ones less. A soft shoulder from 0.45 (linear) toward 0.86
-  keeps them under paper white, and nothing gets darker. Veins and blotches (darker than the white around them at
-  0.05 half eye widths) lose 60 % of their depth (as a power), and 85 % of the colour goes, toward a neutral that
-  keeps 15 % of the lit skin's colour, so a red or yellow cast turns a clean white that doesn't look grey-blue beside
-  warm skin. The change fades out toward both corners (the inner one's pink caruncle stays), leaves lashes and the
-  lid's edge alone (a pixel under 0.12–0.3 of the whites' level, read on a slightly blurred copy so grain in a dark,
-  noisy white is lifted with the white around it), and, by the lids, any pixel as saturated as the lit skin (the
-  lid's rim).
+  keeps them under paper white, the brightest channel rolls off from 0.7 toward 0.92 so the warm tint never clips,
+  and nothing gets darker. Veins and blotches (darker than the white around them at 0.05 half eye widths) lose 60 % of
+  their depth (as a power), and 75 % of the colour goes, toward a neutral that keeps 35 % of the lit skin's colour,
+  so a red or yellow cast turns a clean white that doesn't look grey-lilac beside warm skin. Left alone: lashes and
+  the lid's edge (a pixel under 0.12–0.3 of the whites' level, read on a slightly blurred copy so grain in a dark,
+  noisy white is lifted with the white around it); by the lids, any pixel as saturated as the lit skin (the lid's
+  rim); and toward the inner corner (from 0.4 to 0.6 across the eye) the caruncle and the pink fold beside it:
+  tissue whose colour, read at 0.05 half eye widths so thin veins don't count, is 1.25–1.7 times redder (green over
+  red) than the lit white in the middle of the eye, or under 0.25–0.45 of the whites' level. The change also fades
+  out toward both corners (whole from −0.7 to 0.6 across the eye, gone at −1.02 and 0.88).
 - **Iris** (issue #202): the iris's own pattern comes out: its fibres' contrast (the band between 0.02 and 0.05 of
   the iris's radius, so pixel grain is not raised) and a little clarity (0.05 to 0.2 radii), each measured against
-  the iris alone, so the pupil, the sclera and a catchlight don't halo into it, and each capped (a pixel changes by
-  0.75–1.8× at most). It gets brighter between the pupil and the limbal ring (up to 1.2 stops for a dark iris, 0.85
-  for a light one, half that for an iris with no colour, which would only turn grey), the lower part most (where
-  light enters) and the upper part 40 % of it, and gains 20 % of its own colour. The pupil (its radius read from the
-  iris's profile out from the centre, else 0.36 of the iris) and the limbal ring stay as they are, and so does
-  anything much brighter than the iris (a catchlight, a reflection) or much darker (a lid's shadow, a lash), and a
-  lid's wet rim near the lids. The circle is the face mesh's, else the Iris mask's centre and width.
+  the iris alone, so the pupil, the sclera and a catchlight don't halo into it. Each iris is raised toward the same
+  spread of detail (0.08 for the fibres, 0.2 for clarity; the mean size of its detail against its surroundings), up
+  to 3 times the usual raise, so a dark iris, whose pattern is small against its level, shows it at 50 and more at
+  100; the noise floor is a share of that spread. A pixel changes by 0.7–1.8× at most, rolled off softly. It gets
+  brighter between the pupil and the limbal ring (up to 1.2 stops for a dark iris, 0.85 for a light one, half that
+  for an iris with no colour, which would only turn grey), the lower part most (where light enters) and the upper
+  part 40 % of it, and gains 20 % of its own colour. The pupil (its radius read from the iris's profile out from the
+  centre, else 0.36 of the iris) and the limbal ring stay as they are, and so does anything much brighter than the
+  iris (a catchlight, a reflection) or much darker (a lid's shadow, a lash), and a lid's wet rim near the lids. The
+  circle is the face mesh's, else the Iris mask's centre and width.
 - Both are cut to the eye's opening between the lids when the face has the 478 mesh points (`eyes/tone/opening.rs`:
-  the mesh's eye contour; the change fades out 0.03 half eye widths past the upper lid's outline and starts 0.1
-  inside the lower one's, whose pale wet rim lies just inside it). The sliders' 0…1 goes through a power of 0.8, so
-  25 and 50 show clearly.
+  the mesh's eye contour from the eye landmarks). Whites fades out 0.03 half eye widths past the upper lid's outline
+  and starts 0.16 inside the lower one's (Iris: at the outline and 0.12 inside the lower one): the lower lid's pale
+  wet rim lies inside the mesh's outline, on a squinting eye well inside it. The sliders' 0…1 goes through a power
+  of 0.8, so 25 and 50 show clearly.
 - **Dark Circles**: under each eye, the skin darker than the skin just outside the circle is lifted toward that
   skin's lightness, the slider's share of the way in lightness (L*): 25 closes a quarter of the gap, 50 half, 100 all
   of it, and no value lifts past it. That level is measured on the original pixels, in a ring below the circle and
@@ -130,7 +137,7 @@ tries the sliders on a picture with them.
 `fork/tests.d/retouch-eyes.txt`. They cover: off and every slider at 0 giving the original pixels bit for bit; each
 slider keeping to its own area, and every pixel away from the eyes keeping its bits with all four at 100; whites
 brighter and greyer with a vein fading but still there; a reddish white at 40 % grey lifted to at least 60 % at
-Whites 100 with its saturation cut to under 0.4 of it, every lid and skin pixel kept (issue #202: 48 % before); the
+Whites 100 with its saturation cut to under half, every lid and skin pixel kept (issue #202: 48 % before); the
 iris brighter below than above and its pupil kept (the pupil got brighter before); dark circles lifted and turned toward the
 skin, never darkening a channel; a deep purple circle at 0.4 of the cheek's luminance under one-pixel dark lashes lifted
 to at least 0.8 of it with its colour's distance halved, every lash pixel kept (issue #203: the circle was left as it
