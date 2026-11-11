@@ -370,6 +370,8 @@ pub struct Session {
     pub(crate) match_look: cmd::match_look::MatchLook,
     /// Copied develop settings (partial JSON) for Paste.
     pub clipboard: Option<Value>,
+    /// One mask's effect copied by `mask.copyEffect`, for `mask.pasteEffect` (kept while the app runs, across photos).
+    pub mask_effect_clipboard: Option<cmd::mask_effects::MaskEffect>,
     /// The folder on disk the [`LibrarySource::Folder`] view browses.
     pub browse: Option<Browse>,
     /// The folder the [`LibrarySource::LibraryFolder`] view shows: the library's photos imported
@@ -634,6 +636,7 @@ impl Session {
             focus_scan: Default::default(),
             match_look: Default::default(),
             clipboard: None,
+            mask_effect_clipboard: None,
             meta_clipboard: None,
             browse: None,
             library_folder: None,

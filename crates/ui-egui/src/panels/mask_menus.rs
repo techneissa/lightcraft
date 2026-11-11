@@ -93,6 +93,10 @@ pub fn mask_menu(app: &mut LightcraftApp, ui: &mut egui::Ui, id: u32, name: &str
     run(app, ui, menu_label(if visible { "Hide Mask" } else { "Show Mask" }), true, "mask.visible", json!({"id": id}));
     crate::panels::right::remove_object::remove_this_area(app, ui, id);
     ui.separator();
+    let can_paste = app.session.mask_effect_clipboard.is_some();
+    run(app, ui, menu_label("Copy Mask Effect"), true, "mask.copyEffect", json!({"id": id}));
+    run(app, ui, menu_label("Paste Mask Effect"), can_paste, "mask.pasteEffect", json!({"id": id}));
+    ui.separator();
     for (label, op) in [("Add to Mask", MaskOp::Add), ("Subtract from Mask", MaskOp::Subtract), ("Intersect Mask with", MaskOp::Intersect)] {
         let button = crate::widgets::menu_button(ui, crate::i18n::tr(label), |ui| kinds_menu(app, ui, id, op));
         register(ui, format!("maskMenu:{}", op_name(op)), button.response.rect);

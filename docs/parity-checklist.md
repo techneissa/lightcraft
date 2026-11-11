@@ -36,7 +36,7 @@ cited here still exists. Formerly docs/parity.md.
 | H. Crop & rotate (CROP) | 10 | 1 | 0 | 1 | 8/8 (100%) | 2/3 (67%) |
 | I. Remove / healing (REM) | 9 | 2 | 1 | 2 | 4/4 (100%) | 3/4 (75%) |
 | J. Red eye (EYE) | 2 | 0 | 0 | 0 | — | 1/1 (100%) |
-| K. Masking (MASK) | 17 | 8 | 4 | 0 | 7/8 (88%) | 7/7 (100%) |
+| K. Masking (MASK) | 18 | 8 | 4 | 0 | 7/8 (88%) | 7/7 (100%) |
 | L. Presets (PRE) | 7 | 0 | 1 | 1 | 2/2 (100%) | 2/2 (100%) |
 | M. Versions & history (VER) | 5 | 0 | 0 | 0 | 1/1 (100%) | 3/3 (100%) |
 | N. Copy / paste / sync (SYNC) | 5 | 0 | 0 | 0 | 3/3 (100%) | 1/1 (100%) |
@@ -53,9 +53,9 @@ cited here still exists. Formerly docs/parity.md.
 | Y. Menus | 85 | 0 | 4 | 8 | 47/47 (100%) | 23/23 (100%) |
 | Z. Keyboard shortcuts (desktop) | 77 | 5 | 2 | 1 | 49/52 (94%) | 24/26 (92%) |
 | Lightroom Classic extras | 41 | 26 | 21 | 8 | — | 24/27 (89%) |
-| **Total** | 425 | 82 | 55 | 35 | 193/203 (95%) | 148/164 (90%) |
+| **Total** | 426 | 82 | 55 | 35 | 193/203 (95%) | 148/164 (90%) |
 
-Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **82.9%** of 562 in-scope rows — P0 97.5% of 203 · P1 94.2% of 164 · P2 57.9% of 184.
+Weighted completion (✅ = 1, 🟡 = ½, 🚫 left out): **82.9%** of 563 in-scope rows — P0 97.5% of 203 · P1 94.2% of 164 · P2 58.1% of 185.
 <!-- /parity:summary -->
 
 ## Top gaps and shortcut notes
@@ -325,6 +325,7 @@ differences and missing bindings are in [ui-parity.md](ui-parity.md#shortcuts).
 | LR-MASK-PINS | Pins | P1 | ✅ | `cmd:view.maskPins`, `cmd:view.toolOverlay`, `crates/ui-egui/src/panels/detail.rs`, `crates/ui-egui/src/tests/tool_overlay.rs`, `crates/ui-egui/src/tests/masking.rs` | a pin per radial/linear/brush component: click selects its mask, drag moves it; Object (at its first click) and Describe (on what it found) components have pins too: click selects, drag changes nothing (issue #3049); Show Pins on follows the Tool Overlay mode (Auto: while the pointer is over the photo, hidden while brushing; Always; Selected: the selected mask's; Never; ⇧H cycles, #224); no pins for range components or Subject, Sky, Background, People and Landscape |
 | LR-MASK-UPDATE | Recompute AI masks | P2 | ⬜ | | |
 | LR-MASK-SYNC | Copy masks to other photos | P1 | ✅ | `cmd:develop.copy` (`groups`) | |
+| LR-MASK-COPYEFFECT | Copy one mask's effect, paste it into another mask | P2 | ✅ | `cmd:mask.copyEffect`, `cmd:mask.pasteEffect`, `crates/engine/src/cmd/mask_effects.rs`, `crates/ui-egui/src/panels/mask_menus.rs` | fork extra (issue #194): right-click a mask in the Masks list ▸ Copy Mask Effect, then right-click another mask, on this photo or another one, ▸ Paste Mask Effect (greyed out until something is copied); copies the sliders and Amount (what a preset saved with All sliders and Amount holds), not the shape; paste sets them the way Apply Effect does, one undo step; kept while the app runs, not saved |
 | LR-MASK-ADAPTIVE | Adaptive presets | P2 | ⬜ | | |
 | LR-MASK-RECOLOR | Recolor a masked area | P2 | ✅ | `cmd:mask.recolor`, `cmd:mask.recolorPick`, `crates/pipeline/src/recolor/mod.rs`, `crates/ui-egui/src/panels/mask_recolor.rs` | beyond Lightroom (no equivalent): the area takes a picked colour (picker, hex, eyedropper on this or another photo) and keeps its shading, in OkLab against the area's mean measured on a fixed proxy, so preview, export and GPU match |
 | LR-MASK-HAIR-EDGES | Hair-accurate edges for people and subject masks | P2 | 🟡 | `cmd:maskEdges.edge`, `cmd:maskEdges.status`, `cmd:maskEdges.download`, `cmd:maskEdges.cancel`, `crates/engine/src/hair_edges.rs` | fork: BiRefNet-matting redraws the edge of Entire Person / Background (people parsing) and Subject masks within a band around the mask's edge, per mask kind (default Current, unchanged); once per photo, cached by pixels, preview = export; not compared against Lightroom; Select People UI not built yet, so people masks are reached through `parsing.mask` |
