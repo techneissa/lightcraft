@@ -38,19 +38,27 @@ struct Found {
     seg: Option<SegMask>,
     detail: Vec<SegMask>,
     why: Option<String>,
+    /// It selects nothing: a part that kept its selection for the search (Update AI Masks) gets that back.
+    empty: bool,
 }
 
 impl Found {
     fn classical() -> Found {
-        Found { seg: None, detail: Vec::new(), why: None }
+        Found { seg: None, detail: Vec::new(), why: None, empty: false }
     }
 
     fn of(seg: SegMask, detail: Vec<SegMask>) -> Found {
-        Found { seg: Some(seg), detail, why: None }
+        Found { seg: Some(seg), detail, why: None, empty: false }
     }
 
     fn nothing(why: String) -> Found {
-        Found { seg: Some(SegMask::nothing()), detail: Vec::new(), why: Some(why) }
+        Found { seg: Some(SegMask::nothing()), detail: Vec::new(), why: Some(why), empty: true }
+    }
+
+    /// A Select People part that selects nothing (`why`: a failure, else the face is simply not there).
+    fn no_people(why: Option<String>) -> Found {
+        let seg = crate::select_people::grid::nothing("people");
+        Found { seg: Some(seg), detail: Vec::new(), why, empty: true }
     }
 }
 
@@ -77,6 +85,8 @@ struct Running {
     parts: Vec<Part>,
     /// Stops its model requests.
     cancels: Vec<Arc<AtomicBool>>,
+    /// Its parts changed while they were being found (a command reached it): it is done again afterwards.
+    again: bool,
 }
 
 /// The photos waiting for their AI parts, and the one being done (`Session::adaptive`).
@@ -108,12 +118,17 @@ impl Adaptive {
         self.finder.is_some()
     }
 
-    fn stop(&mut self) {
+    /// Stop: the running photo's requests, the photos waiting their turn, the row. A model's answer still on its way
+    /// goes to a channel nobody reads any more, so it never lands on a photo (another library's may have the same id).
+    pub(crate) fn stop(&mut self) {
         if let Some(r) = self.running.take() {
             r.cancels.iter().for_each(|c| c.store(true, Ordering::Relaxed));
         }
         self.queue.clear();
-        self.batch = None;
+        self.replies = Replies::default();
+        if let Some(b) = self.batch.take() {
+            b.reports_itself();
+        }
         (self.total, self.failed) = (0, 0);
     }
 }
@@ -147,20 +162,31 @@ fn people_found(people: Result<&Parsed, &String>, shape: &MaskShape, orient: Ori
     let MaskShape::People { parts, face, .. } = shape else { return Found::classical() };
     let p = match people {
         Ok(p) => p,
-        Err(e) => return Found { seg: Some(grid::nothing("people")), detail: Vec::new(), why: Some(e.clone()) },
+        Err(e) => return Found::no_people(Some(e.clone())),
     };
     let picks = crate::select_people::parts::picks_of(parts);
     let person = match face {
         None => None,
         Some(k) => match crate::select_people::find_person(&p.parsing, k) {
             Some(i) => Some(i),
-            None => return Found { seg: Some(grid::nothing("people")), detail: Vec::new(), why: None },
+            None => return Found::no_people(None),
         },
     };
     match grid::build(&p.parsing, &Selection::of(person, &picks), orient) {
         Some((main, fine)) => Found::of(main, fine),
-        None => Found { seg: Some(grid::nothing("people")), detail: Vec::new(), why: None },
+        None => Found::no_people(None),
     }
+}
+
+/// What [`Session::adaptive_fill`] did.
+#[derive(Default)]
+struct Filled {
+    /// The photo's settings changed.
+    changed: bool,
+    /// Why parts selected nothing.
+    failed: Vec<String>,
+    /// A part waits for something other than what was found (its recipe changed, or the photo was turned).
+    rejected: bool,
 }
 
 /// Every photo an op changes.
@@ -220,7 +246,12 @@ impl Session {
         let a = &mut self.adaptive;
         let mut added = 0;
         for id in ids {
-            if a.running.as_ref().is_some_and(|r| r.id == id) || a.queue.contains(&id) {
+            if let Some(r) = a.running.as_mut().filter(|r| r.id == id) {
+                // (done again once this round ends: what is found now is for the parts as they were)
+                r.again = true;
+                continue;
+            }
+            if a.queue.contains(&id) {
                 continue;
             }
             a.queue.push_back(id);
@@ -249,8 +280,8 @@ impl Session {
             };
             found.push((w, f));
         }
-        let (_, failed) = self.adaptive_fill(id, d.orientation, found);
-        if let Some(why) = failed.first() {
+        let filled = self.adaptive_fill(id, d.orientation, found);
+        if let Some(why) = filled.failed.first() {
             log::info!("AI masks found again: {why}");
         }
     }
@@ -271,31 +302,53 @@ impl Session {
     }
 
     /// Put what was found into photo `id`'s settings, where its part still waits for it and selects the same; without
-    /// an undo step (`apply_system`). Whether anything changed, and why parts selected nothing.
-    fn adaptive_fill(&mut self, id: PhotoId, orientation: Orientation, found: Vec<(Waiting, Found)>) -> (bool, Vec<String>) {
-        let Some(p) = self.catalog.photo(id) else { return (false, Vec::new()) };
+    /// an undo step (`apply_system`). A part that kept its selection for the search gets it back when nothing was
+    /// found ([`SegMask::previous`]): a failed search never loses a selection the user had.
+    fn adaptive_fill(&mut self, id: PhotoId, orientation: Orientation, found: Vec<(Waiting, Found)>) -> Filled {
+        let mut out = Filled::default();
+        let Some(p) = self.catalog.photo(id) else { return out };
         let (now, edited) = (p.develop.clone(), p.edited.clone());
         // (turned since: what was found is the other way round; the parts wait to be found again)
         if now.orientation != orientation {
-            return (false, Vec::new());
+            out.rejected = true;
+            return out;
         }
         let mut d = (*now).clone();
-        let mut changed = false;
-        let mut failed = Vec::new();
         for (w, f) in found {
             let Some(c) = d.masks.iter_mut().find(|m| m.id == w.mask).and_then(|m| m.components.get_mut(w.component)) else { continue };
-            if !c.shape.is_waiting() || c.shape.recipe().as_ref() != Some(&w.recipe) {
+            if !c.shape.is_waiting() {
                 continue;
             }
-            c.shape.set_found(f.seg, f.detail);
-            failed.extend(f.why);
-            changed = true;
+            // (it selects something else now: found again for that)
+            if c.shape.recipe().as_ref() != Some(&w.recipe) {
+                out.rejected = true;
+                continue;
+            }
+            out.failed.extend(f.why);
+            match c.shape.seg().and_then(SegMask::previous).filter(|_| f.empty) {
+                Some(prev) => {
+                    let detail = match &c.shape {
+                        MaskShape::Subject { detail, .. }
+                        | MaskShape::Sky { detail, .. }
+                        | MaskShape::Background { detail, .. }
+                        | MaskShape::Object { detail, .. }
+                        | MaskShape::Prompt { detail, .. }
+                        | MaskShape::People { detail, .. } => detail.clone(),
+                        _ => Vec::new(),
+                    };
+                    c.shape.set_found(Some(prev), detail);
+                }
+                None => c.shape.set_found(f.seg, f.detail),
+            }
+            out.changed = true;
         }
-        if changed && let Err(e) = self.apply_system(Op::SetDevelop { id, settings: Arc::new(d), label: "AI Masks".into(), edited }) {
+        if out.changed
+            && let Err(e) = self.apply_system(Op::SetDevelop { id, settings: Arc::new(d), label: "AI Masks".into(), edited })
+        {
             log::warn!("AI masks found again: {e}");
-            return (false, failed);
+            out.changed = false;
         }
-        (changed, failed)
+        out
     }
 
     /// The desktop app's per-frame step (from [`Session::segment_poll`]): collect the answers for the photo being
@@ -357,15 +410,15 @@ impl Session {
                 _ => None,
             })
             .collect();
-        let (id, orientation) = (r.id, r.orientation);
-        let mut out = (false, Vec::new());
+        let (id, orientation, again) = (r.id, r.orientation, r.again);
+        let mut filled = Filled::default();
         let _ = self.execute_fn("adaptive.fill", |s| {
-            out = s.adaptive_fill(id, orientation, found);
+            filled = s.adaptive_fill(id, orientation, found);
             Ok(serde_json::Value::Null)
         });
-        let (changed, failed) = out;
-        // turned meanwhile: found again the new way round
-        if self.develop_of(id).is_some_and(|d| d.orientation != orientation && d.masks.iter().any(lightcraft_develop::Mask::is_waiting)) {
+        let Filled { changed, failed, rejected } = filled;
+        // its parts changed or it was turned meanwhile, and some still wait: found again as they are now
+        if (again || rejected) && self.develop_of(id).is_some_and(|d| d.masks.iter().any(lightcraft_develop::Mask::is_waiting)) {
             if !self.adaptive.queue.contains(&id) {
                 self.adaptive.queue.push_back(id);
             }
@@ -394,7 +447,7 @@ impl Session {
         if let (Some(b), Some(p)) = (&self.adaptive.batch, self.catalog.photo(id)) {
             b.detail(&p.file_name);
         }
-        let mut r = Running { id, orientation: d.orientation, parts: Vec::new(), cancels: Vec::new() };
+        let mut r = Running { id, orientation: d.orientation, parts: Vec::new(), cancels: Vec::new(), again: false };
         for w in waiting {
             let state = match &w.recipe {
                 MaskShape::People { .. } => State::People,

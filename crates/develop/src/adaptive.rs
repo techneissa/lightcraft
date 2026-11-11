@@ -24,11 +24,28 @@ impl SegMask {
         SegMask::from_logits(2, &[-16.0; 4])
     }
 
-    /// Whether this selection is still to be found ([`SegMask::waiting`]).
+    /// A selection still to be found again on the photo it was found on (Update AI Masks): it keeps this one, which
+    /// comes back when the new search fails or finds nothing ([`SegMask::previous`]), so a selection the user had is
+    /// never lost. A build that doesn't know the mark draws the kept selection.
+    pub fn waiting_over(self) -> SegMask {
+        let model = format!("{WAITING}+{}", self.model.as_deref().unwrap_or_default());
+        SegMask { model: Some(model), ..self }
+    }
+
+    /// Whether this selection is still to be found ([`SegMask::waiting`], [`SegMask::waiting_over`]).
     pub fn is_waiting(&self) -> bool {
-        self.model.as_deref() == Some(WAITING)
+        self.model.as_deref().is_some_and(|m| m == WAITING || m.starts_with(KEPT))
+    }
+
+    /// The selection a [`SegMask::waiting_over`] mark keeps.
+    pub fn previous(&self) -> Option<SegMask> {
+        let rest = self.model.as_deref()?.strip_prefix(KEPT)?;
+        Some(SegMask { model: (!rest.is_empty()).then(|| rest.to_string()), ..self.clone() })
     }
 }
+
+/// How the [`SegMask::model`] of a [`SegMask::waiting_over`] mark starts.
+const KEPT: &str = "waiting+";
 
 impl MaskShape {
     /// Whether a model finds what this part selects, on each photo: Subject, Sky, Background, Object, Describe and
@@ -68,6 +85,19 @@ impl MaskShape {
     /// Mark this AI part as still to be found on its photo (nothing for other parts).
     pub fn set_waiting(&mut self) {
         self.set_found(Some(SegMask::waiting()), Vec::new());
+    }
+
+    /// Mark this AI part as still to be found again on its own photo (Update AI Masks), keeping what it has: a
+    /// search that fails gives it back ([`SegMask::waiting_over`]). One with nothing found yet just waits.
+    pub fn set_waiting_again(&mut self) {
+        match self.seg().filter(|s| !s.is_waiting()).cloned() {
+            Some(prev) => {
+                if let Some((seg, _, _)) = self.found_mut() {
+                    *seg = Some(prev.waiting_over());
+                }
+            }
+            None => self.set_waiting(),
+        }
     }
 
     /// Store what a model found for this AI part (`None`: drawn the classical way; nothing for other parts).
@@ -135,14 +165,15 @@ impl DevelopSettings {
         out
     }
 
-    /// Mark every AI part as still to be found (Update AI Masks); `keep` says which parts may be (a part no model on
-    /// this computer can find keeps what it has). How many were marked.
+    /// Mark every AI part as still to be found again (Update AI Masks), each keeping what it has until then
+    /// ([`MaskShape::set_waiting_again`]); `keep` says which parts may be (a part no model on this computer can find
+    /// keeps what it has). How many were marked.
     pub fn set_ai_waiting(&mut self, keep: impl Fn(&MaskShape) -> bool) -> usize {
         let mut n = 0;
         for m in &mut self.masks {
             for c in &mut m.components {
                 if c.shape.is_detected() && keep(&c.shape) {
-                    c.shape.set_waiting();
+                    c.shape.set_waiting_again();
                     n += 1;
                 }
             }

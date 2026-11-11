@@ -1376,7 +1376,10 @@ pub fn specs() -> Vec<CommandSpec> {
             |s, p| {
                 let c = "preset.update";
                 let id = active(s, c)?;
-                let current = s.develop_of(id).unwrap_or_default().to_json_for_merge();
+                // (fork, `fork/adaptive-masks.md`: an AI mask part carries what it selects, never this photo's selection)
+                let mut d = (*s.develop_of(id).unwrap_or_default()).clone();
+                lightcraft_develop::adaptive::strip_found(&mut d.masks);
+                let current = d.to_json_for_merge();
                 let groups = groups_param(p, c)?;
                 let pr = user_preset(s, p, c)?;
                 pr.settings = match groups {

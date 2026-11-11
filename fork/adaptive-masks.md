@@ -23,13 +23,15 @@ List: Presets, Paste, Sync and Auto Sync carry what an AI mask selects (Subject,
   nothing again.
 - **Undo.** The paste, sync or preset is one undo step, also when the parts are found later: what is found goes into
   the photo's settings without an undo step of its own, and the step's redo brings back the found parts. A part that
-  no longer waits, or now selects something else (undone, edited), is left alone. A photo turned while its parts
-  were being found is done again the new way round.
+  no longer waits is left alone. A part that changed while its photo was being found (another paste, a new
+  description), or a photo turned meanwhile, is found again as it is now once that search ends. Opening another
+  library stops the search: photo ids are per library, so no answer for the old library lands on the new one.
 - **Nothing found** selects nothing on that photo (the face is not there, no subject, no SAM 3 for an Object or
   Describe part). The ring's summary lists the photos where a model found nothing, with why.
 - **Update AI Masks** (Photo menu, `mask.updateAi {ids?}`) finds each AI part of the photos (the selection) again on
   that photo, after a crop, a retouch or an edit that moved the subject; one undo step. A part no model on this
-  computer can find keeps what it has.
+  computer can find keeps what it has, and a part whose new search fails or finds nothing gets its selection back
+  (the ring still names the photo): a selection the user had is never lost.
 - **Old catalogs and presets** that carry a selection read as before. Applied to another photo, their parts are found
   there. A waiting part is saved as a selection of nothing marked `waiting`: another build draws it as nothing.
   Parts that still wait when the app quits are found when their photo is opened, or by Update AI Masks.
@@ -51,7 +53,7 @@ Mac only, like every fork feature.
 ## Hooks in official files
 
 - `crates/develop/src/lib.rs`: `pub mod adaptive`. `crates/develop/src/presets.rs`: `Preset::from_settings` strips
-  the found selections; `add_masks` marks a preset's AI parts waiting and compares parts with `same_parts`.
+  the found selections (and `preset.update` in `crates/engine/src/cmd/develop.rs`); `add_masks` marks a preset's AI parts waiting and compares parts with `same_parts`.
 - `crates/pipeline/src/masks.rs`, `local.rs`, `lib.rs`, `recolor/measure.rs`, `decontam/mod.rs`, `masks/planes.rs`
   and `crates/gpu/src/render.rs`, `masks.rs`, `decontam.rs`, `dirty.rs`: the masks a render draws are
   `Mask::renders()` (visible, with parts, none waiting) instead of `visible && !components.is_empty()`. CPU and GPU
@@ -60,7 +62,8 @@ Mac only, like every fork feature.
   depth 0 (the photos the command changed, and the photo it opened); `auto_sync_ops` calls `adapted`.
 - `crates/engine/src/cmd/develop.rs` (`pasted`): `adapted` for Paste, Paste from Previous and Sync.
 - `crates/engine/src/segment.rs`: `mod adaptive_jobs`; `segment_poll` calls `adaptive_poll`.
-- `crates/engine/src/activity.rs`: `Activity::start_background_batch`.
+- `crates/engine/src/activity.rs`: `Activity::start_background_batch`. `crates/engine/src/library.rs`: opening a library
+  calls `adaptive.stop()`.
 - `crates/engine/src/cmd.rs`: `mod adaptive`, its specs.
 - `crates/ui-egui/src/app.rs` (`ai_mask_detail`): repaints while `adaptive_busy`. `crates/ui-egui/src/headless.rs`
   (`busy`): `ui.settle` waits for it too. `crates/ui-egui/src/export_task.rs` (`start`): refuses while photos wait. `crates/ui-egui/locales/*.json`: two
@@ -75,7 +78,8 @@ Mac only, like every fork feature.
 parser's test runner. They cover a preset with a Subject mask applied to a second photo (its own subject and
 background, the brush part and the edits as they were), an old preset that carries a selection, Paste to two photos
 in the background (the masks waiting and not drawn, the ring's row, one undo step, redo with the found parts), Update
-AI Masks, nothing found and a photo keeping its own part; in the develop crate the recipe in a preset, waiting parts,
+AI Masks, a failed Update keeping the selections, nothing found and a photo keeping its own part, another library
+opened mid-search, a part changed mid-search, Update Preset saving no selection; in the develop crate the recipe in a preset, waiting parts,
 `adapt` and a saved waiting part.
 
 ## What's New entry

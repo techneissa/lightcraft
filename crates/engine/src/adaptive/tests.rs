@@ -178,3 +178,122 @@ fn nothing_found_selects_nothing_and_a_photos_own_part_is_kept() {
     let seg = found(&d, is_subject);
     assert!(!seg.is_waiting() && seg.logits().unwrap().iter().all(|l| *l < 0.0));
 }
+
+/// A small PNG for a library on disk.
+fn png(dir: &std::path::Path, name: &str) -> String {
+    let (w, h) = (64, 48);
+    let data: Vec<[u8; 4]> = (0..w * h).map(|i| if (i % w) * 2 < w { [60, 50, 40, 255] } else { [200, 190, 180, 255] }).collect();
+    let png = lightcraft_codecs::encode_png(
+        &lightcraft_codecs::EncodeImage::rgba8(&lightcraft_raster::Rgba8 { width: w, height: h, data }),
+        &Default::default(),
+    )
+    .unwrap();
+    let path = dir.join(name);
+    std::fs::write(&path, png).unwrap();
+    path.to_string_lossy().into_owned()
+}
+
+/// Library `name` in `dir` with one photo whose Subject mask waits (set without a command, so nothing finds it).
+fn library_with_a_waiting_subject(s: &mut Session, dir: &std::path::Path, name: &str) -> PhotoId {
+    s.open_library(dir.join(name), false).unwrap();
+    s.execute("library.import", &json!({"paths": [png(dir, &format!("{name}.png"))]})).unwrap();
+    let id = s.catalog.photos().map(|p| p.id).min().unwrap();
+    let mut d = (*s.develop_of(id).unwrap()).clone();
+    let mut subject = MaskShape::subject();
+    subject.set_waiting();
+    d.masks = vec![Mask { id: 1, name: "Subject Mask 1".into(), components: vec![part(MaskOp::Add, subject)], ..Default::default() }];
+    s.set_develop(id, d, "Look").unwrap();
+    id
+}
+
+/// Opening another library stops the masks being found in the one left: photo ids are per library, so an answer for
+/// the old photo must never land on the new library's photo with the same id, mask and part.
+#[test]
+fn opening_another_library_stops_finding_the_old_ones_masks() {
+    let dir = std::env::temp_dir().join(format!("lc-adaptive-libraries-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Session::new().with_fs();
+    s.segmenter.background = true;
+    s.adaptive.set_finder(Some(Arc::new(|id, _| Ok(Some(subject_of(id))))));
+    let old = library_with_a_waiting_subject(&mut s, &dir, "first");
+    assert_eq!(s.adaptive_find(&[old]), 1);
+    s.segment_poll(); // the old photo's search runs (its answer is in)
+    assert!(s.adaptive_busy());
+    let new = library_with_a_waiting_subject(&mut s, &dir, "second");
+    assert_eq!(new, old, "the same id in the new library");
+    assert!(!s.adaptive_busy(), "stopped");
+    for _ in 0..5 {
+        s.segment_poll();
+    }
+    assert!(s.develop_of(new).unwrap().masks[0].is_waiting(), "nothing of the old library's search landed here");
+    let _ = std::fs::remove_dir_all(dir);
+}
+
+/// A part that changes while its photo's masks are being found (another paste, a new description) is found as it is
+/// now, once the running search ends.
+#[test]
+fn a_part_changed_while_its_photo_is_being_found_is_found_as_it_is_now() {
+    let (mut s, [a, b, _]) = session();
+    s.segmenter.background = true;
+    let describe = |id: PhotoId| subject_of(PhotoId(id.0 + 7));
+    s.adaptive.set_finder(Some(Arc::new(move |id, shape| match shape {
+        MaskShape::Prompt { .. } => Ok(Some(describe(id))),
+        _ => Ok(Some(subject_of(id))),
+    })));
+    give_look(&mut s, a);
+    // one AI mask only: nothing else of B's is put in when its search ends, so nothing else starts it again
+    let mut d = (*s.develop_of(a).unwrap()).clone();
+    d.masks.truncate(1);
+    s.set_develop(a, d, "One mask").unwrap();
+    s.execute("develop.copy", &json!({"groups": ["masks"]})).unwrap();
+    s.execute("develop.paste", &json!({"ids": [b.0]})).unwrap();
+    s.segment_poll(); // B's search runs
+    assert!(s.adaptive_busy());
+    // A's first mask now selects what a description names; pasted to B while B's search runs
+    let mut d = (*s.develop_of(a).unwrap()).clone();
+    d.masks[0].components[0].shape = MaskShape::Prompt { text: "dog".into(), seg: Some(describe(a)), detail: vec![], edge: 0.0 };
+    s.set_develop(a, d, "Describe").unwrap();
+    s.execute("develop.copy", &json!({"groups": ["masks"]})).unwrap();
+    s.execute("develop.paste", &json!({"ids": [b.0]})).unwrap();
+    for _ in 0..10 {
+        s.segment_poll();
+    }
+    assert!(!s.adaptive_busy());
+    let on_b = s.develop_of(b).unwrap();
+    assert!(on_b.masks.iter().all(|m| !m.is_waiting()), "nothing left waiting");
+    let MaskShape::Prompt { seg, .. } = &on_b.masks[0].components[0].shape else { panic!("{:?}", on_b.masks[0]) };
+    assert_eq!(seg.as_ref(), Some(&describe(b)), "B's own find of the description");
+}
+
+/// Update AI Masks that finds nothing (the model fails) keeps the selections the photo had; the ring names the photo.
+#[test]
+fn a_failed_update_keeps_the_selection_the_photo_had() {
+    let (mut s, [a, _, _]) = session();
+    s.segmenter.background = true;
+    give_look(&mut s, a);
+    let before = s.develop_of(a).unwrap();
+    s.adaptive.set_finder(Some(Arc::new(|_, _| Err("the model failed".into()))));
+    s.execute("mask.updateAi", &json!({"ids": [a.0]})).unwrap();
+    for _ in 0..10 {
+        s.segment_poll();
+    }
+    assert!(!s.adaptive_busy());
+    assert_eq!(s.develop_of(a).unwrap().masks, before.masks, "the selections it had");
+    let summary = s.activity.finished().into_iter().rev().find(|b| b.kind == "adaptiveMasks").expect("a summary");
+    assert_eq!(summary.failed, 1);
+    assert!(summary.reasons[0].contains("the model failed"), "{:?}", summary.reasons);
+}
+
+/// Update Preset saves what each AI part selects, never the photo's selection.
+#[test]
+fn updating_a_preset_keeps_no_selection() {
+    let (mut s, [a, _, _]) = session();
+    s.execute("preset.create", &json!({"name": "Look", "groups": ["masks"]})).unwrap();
+    let pid = s.presets.last().unwrap().id.clone();
+    give_look(&mut s, a);
+    s.execute("preset.update", &json!({"id": pid})).unwrap();
+    let saved = &s.presets.iter().find(|p| p.id == pid).unwrap().settings;
+    assert!(saved["masks"][0]["components"][0]["shape"].is_object(), "{saved}");
+    assert!(saved["masks"][0]["components"][0]["shape"].get("seg").is_none(), "{saved}");
+}
