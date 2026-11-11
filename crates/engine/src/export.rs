@@ -41,11 +41,12 @@ pub use params::{
 use place::Placer;
 pub use place::{write_file, write_file_durable, write_file_new};
 pub(crate) use prepare::for_dng;
+#[cfg(test)]
+use prepare::too_big_for_memory;
 pub use prepare::{
     AfterExport, Destination, DngCompression, Exported, PreparedExport, export_batch, export_photo, output_size, prepare_batch, prepare_export,
+    render_weight,
 };
-#[cfg(test)]
-use prepare::{render_weight, too_big_for_memory};
 #[cfg(test)]
 use watermark::watermark_coverage;
 pub(crate) use watermark::watermark_logo;

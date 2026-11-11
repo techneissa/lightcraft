@@ -86,6 +86,7 @@ dhat = "0.3" # opt-in heap profiling (lightcraft-cli --features dhat-heap) and h
 # formats
 quick-xml = "0.41"
 miniz_oxide = "0.9"
+fdeflate = "0.3" # MIT OR Apache-2.0; fast deflate for the full-size pictures in the preview cache (already in the tree via png)
 
 # codecs
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "tiff", "webp"] }
@@ -202,6 +203,7 @@ jpeg-decoder = { opt-level = 3 }
 jpeg-encoder = { opt-level = 3 }
 png = { opt-level = 3 }
 miniz_oxide = { opt-level = 3 }
+fdeflate = { opt-level = 3 }
 
 # Keep the complete egui family and native event bridge on reviewed fork commits.
 [patch.crates-io]

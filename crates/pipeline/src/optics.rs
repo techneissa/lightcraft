@@ -113,7 +113,7 @@ impl Warp {
         self.persp != Homography::IDENTITY
             || self.k1 != 0.0
             || self.ca.iter().any(|c| *c != 0.0)
-            || (self.lens_dist != 0.0 && self.lens.is_some_and(|l| l.warp.is_some() || l.has_stages()))
+            || (self.lens_dist != 0.0 && self.lens.as_ref().is_some_and(|l| l.warp.is_some() || l.has_stages()))
     }
 
     /// Whether a Face Reshape is all the warp does (fork, `fork/retouch-reshape.md`): no lens part, perspective or
@@ -137,20 +137,21 @@ impl Warp {
     /// Whether the embedded lens warp is a `WarpRectilinear2` chain, whose degree-14 polynomials are ill-conditioned
     /// in `f32` (terms of 1e5 cancelling to 1): a renderer that works in `f32` must sample on the CPU.
     pub fn needs_f64(&self) -> bool {
-        self.lens_dist != 0.0 && self.lens.is_some_and(|l| l.has_stages())
+        self.lens_dist != 0.0 && self.lens.as_ref().is_some_and(|l| l.has_stages())
     }
 
     /// Whether the colour planes are sampled at different positions.
     pub fn per_channel(&self) -> bool {
         self.ca[0] != self.ca[1]
             || self.ca[1] != self.ca[2]
-            || (self.lens_dist != 0.0 && self.lens.and_then(|l| l.warp).is_some_and(|w| w.planes[0] != w.planes[1] || w.planes[1] != w.planes[2]))
             || (self.lens_dist != 0.0
-                && self.lens.is_some_and(|l| l.stages.iter().flatten().any(|s| s.planes[0] != s.planes[1] || s.planes[1] != s.planes[2])))
+                && self.lens.as_ref().and_then(|l| l.warp.as_ref()).is_some_and(|w| w.planes[0] != w.planes[1] || w.planes[1] != w.planes[2]))
+            || (self.lens_dist != 0.0
+                && self.lens.as_ref().is_some_and(|l| l.stages.iter().flatten().any(|s| s.planes[0] != s.planes[1] || s.planes[1] != s.planes[2])))
     }
 
     pub fn has_gain(&self) -> bool {
-        self.vig_stops != 0.0 || (self.lens_vig != 0.0 && self.lens.is_some_and(|l| l.vignette.is_some()))
+        self.vig_stops != 0.0 || (self.lens_vig != 0.0 && self.lens.as_ref().is_some_and(|l| l.vignette.is_some()))
     }
 
     pub fn is_identity(&self) -> bool {
@@ -190,6 +191,9 @@ impl Warp {
     }
 
     /// [`Warp::corrected_to_source`] for any [`Real`].
+    ///
+    /// The lens data is borrowed, never copied: an [`EmbeddedLens`] is about 1.5 KB (three warp stages), and this runs
+    /// for every pixel and colour plane. Copying it here was most of the lens warp's CPU time (#199).
     fn corrected_to_source_real<T: Real>(&self, x: T, y: T, ch: usize) -> (T, T) {
         let c = self.centre();
         let hd = (self.w.hypot(self.h) / 2.0).max(1e-9);
@@ -201,13 +205,13 @@ impl Warp {
             (qx, qy) = (dx * f + c.x, dy * f + c.y);
         }
         if self.lens_dist != 0.0
-            && let Some(wp) = self.lens.and_then(|l| l.warp)
+            && let Some(wp) = self.lens.as_ref().and_then(|l| l.warp.as_ref())
         {
-            let (sx, sy) = embedded_warp_real(&wp, qx, qy, ch, self.w, self.h);
+            let (sx, sy) = embedded_warp_real(wp, qx, qy, ch, self.w, self.h);
             (qx, qy) = (qx + (sx - qx) * self.lens_dist, qy + (sy - qy) * self.lens_dist);
         }
         if self.lens_dist != 0.0
-            && let Some(l) = self.lens.filter(|l| l.has_stages())
+            && let Some(l) = self.lens.as_ref().filter(|l| l.has_stages())
         {
             // each opcode warps the image the one before it made, so the last one maps the output position first
             let (mut sx, mut sy) = (qx, qy);
@@ -270,9 +274,9 @@ impl Warp {
             g *= (self.vig_stops * r.powf(self.vig_power)).exp2();
         }
         if self.lens_vig != 0.0
-            && let Some(v) = self.lens.and_then(|l| l.vignette)
+            && let Some(v) = self.lens.as_ref().and_then(|l| l.vignette.as_ref())
         {
-            g *= 1.0 + (embedded_vignette_gain(&v, src, self.w, self.h) - 1.0) * self.lens_vig;
+            g *= 1.0 + (embedded_vignette_gain(v, src, self.w, self.h) - 1.0) * self.lens_vig;
         }
         g as f32
     }

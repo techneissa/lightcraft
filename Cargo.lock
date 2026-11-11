@@ -4186,6 +4186,7 @@ dependencies = [
 name = "lightcraft-preview"
 version = "0.18.0"
 dependencies = [
+ "fdeflate",
  "jpeg-encoder",
  "lightcraft-raster",
  "log",
